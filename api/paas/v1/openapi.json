@@ -2727,6 +2727,7 @@
         "oneOf": [
           {
             "properties": {
+              "accessKeyId": false,
               "type": {
                 "const": "ROLE"
               }
@@ -2739,8 +2740,16 @@
             "properties": {
               "roleSession": false,
               "type": {
+                "const": "USER"
+              }
+            }
+          },
+          {
+            "properties": {
+              "accessKeyId": false,
+              "roleSession": false,
+              "type": {
                 "enum": [
-                  "USER",
                   "SERVICE_ACCOUNT",
                   "AGENT",
                   "SYSTEM_USER"
@@ -2750,6 +2759,9 @@
           }
         ],
         "properties": {
+          "accessKeyId": {
+            "$ref": "#/components/schemas/ID"
+          },
           "id": {
             "$ref": "#/components/schemas/ID"
           },

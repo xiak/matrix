@@ -17,6 +17,7 @@ import (
 )
 
 var _ port.Authorizer = (*Client)(nil)
+var _ port.AccessKeyAuthorizer = (*Client)(nil)
 var _ verifyinstallation.IAM = (*Client)(nil)
 
 type Config struct {
@@ -121,6 +122,49 @@ func (client *Client) Authorize(
 		return port.Authorization{}, err
 	}
 	if port.ValidateAuthorizationForRequest(authorization, request) != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	return authorization, nil
+}
+
+func (client *Client) AuthorizeAccessKey(
+	ctx context.Context,
+	request port.AccessKeyAuthorizationRequest,
+) (port.Authorization, error) {
+	if client == nil || client.http == nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	if ctx == nil || port.ValidateAccessKeyAuthorizationRequest(request) != nil {
+		return port.Authorization{}, port.ErrUnauthenticated
+	}
+	iamRequest, err := port.NewIAMAccessKeyAuthorizationRequest(request)
+	if err != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	input := iamv1.AccessKeyAuthorizationRequest{Authorization: iamRequest, SignedRequest: request.SignedRequest}
+	body, err := iamv1.EncodeAccessKeyAuthorizationRequest(input)
+	if err != nil {
+		return port.Authorization{}, port.ErrUnauthenticated
+	}
+	defer clear(body)
+	response, err := client.http.Do(ctx, http.MethodPost, "/v1/authorize:access-key",
+		bytes.NewReader(body), "application/json", client.serviceCredential, iamv1.Secret{})
+	if err != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return port.Authorization{}, authorizationStatusError(response.StatusCode)
+	}
+	result, err := iamv1.DecodeAccessKeyAuthorization(response.Body)
+	if err != nil || iamv1.CheckAccessKeyAuthorizationForRequest(result, input) != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	authorization, err := authorizationFromDecision(result.Decision)
+	if err != nil {
+		return port.Authorization{}, err
+	}
+	if port.ValidateAccessKeyAuthorizationForRequest(authorization, request) != nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	return authorization, nil
@@ -270,7 +314,7 @@ func toPaaSSubject(value iamv1.Subject) (paasv1.SubjectRef, error) {
 	if err != nil {
 		return paasv1.SubjectRef{}, err
 	}
-	result := paasv1.SubjectRef{Type: subjectType, ID: value.ID}
+	result := paasv1.SubjectRef{Type: subjectType, ID: value.ID, AccessKeyID: string(value.AccessKeyID)}
 	if value.RoleSession != nil {
 		if (value.RoleSession.SourceUserID == "") == (value.RoleSession.SourceServicePrincipalID == "") {
 			return paasv1.SubjectRef{}, errors.New("role source cannot map to apphosting")
@@ -322,6 +366,8 @@ func authorizationStatusError(status int) error {
 		return port.ErrUnauthenticated
 	case http.StatusForbidden:
 		return port.ErrPermissionDenied
+	case http.StatusConflict:
+		return port.ErrAuthorizationReplay
 	default:
 		return port.ErrAuthorizationUnavailable
 	}

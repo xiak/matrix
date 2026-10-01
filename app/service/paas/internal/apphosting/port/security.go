@@ -14,6 +14,7 @@ import (
 var (
 	ErrUnauthenticated          = errors.New("IAM authentication failed")
 	ErrPermissionDenied         = errors.New("IAM authorization denied")
+	ErrAuthorizationReplay      = errors.New("IAM signed request was already consumed")
 	ErrAuthorizationUnavailable = errors.New("IAM authorization unavailable")
 )
 
@@ -59,6 +60,21 @@ type AuthorizationRequest struct {
 	RequestID       string
 }
 
+// AccessKeyAuthorizationRequest carries the exact external request extracted
+// by the product HTTP boundary. It is neither a bearer credential nor a
+// reusable permit and must be sent to IAM at most once.
+type AccessKeyAuthorizationRequest struct {
+	Action          iamv1.Action
+	Resource        paasv1.ResourceRef
+	ResourceMode    iamv1.AuthorizationResourceMode
+	CollectionUsage iamv1.AuthorizationCollectionUsage
+	SourceIP        string
+	RequestLabels   map[string]string
+	ResourceLabels  map[string]string
+	RequestID       string
+	SignedRequest   iamv1.AccessKeySignedRequest
+}
+
 // Authorization is the trusted IAM result consumed by apphosting. Tenant and
 // subject are never reconstructed from HTTP headers or request documents.
 type Authorization struct {
@@ -96,6 +112,12 @@ type Authorizer interface {
 	ResolveSubject(context.Context, SubjectResolutionRequest) (AuthorizationSubjectContext, error)
 }
 
+// AccessKeyAuthorizer is a separate capability so products cannot silently
+// reinterpret a signed request as a login bearer.
+type AccessKeyAuthorizer interface {
+	AuthorizeAccessKey(context.Context, AccessKeyAuthorizationRequest) (Authorization, error)
+}
+
 func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	var problems []error
 	if value.Credential == "" || strings.TrimSpace(value.Credential) != value.Credential ||
@@ -107,48 +129,105 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	return errors.Join(problems...)
 }
 
+func ValidateAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) error {
+	_, err := NewIAMAccessKeyAuthorizationRequest(value)
+	if err != nil {
+		return errors.New("access-key authorization request is invalid")
+	}
+	return nil
+}
+
+// NewIAMAccessKeyAuthorizationRequest maps the product-owned business shape
+// without inventing a bearer credential. The SignedRequest remains a distinct
+// authentication proof in IAM's AccessKey request.
+func NewIAMAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) (iamv1.AuthorizationRequest, error) {
+	request, err := newIAMAuthorizationRequest(value.Action, value.Resource, value.ResourceMode,
+		value.CollectionUsage, value.SourceIP, value.RequestLabels, value.ResourceLabels, value.RequestID)
+	if err != nil || iamv1.ValidateAccessKeySignedRequest(value.SignedRequest) != nil ||
+		request.Profile.Product != value.SignedRequest.Parameters.Audience ||
+		iamv1.CheckAuthorizationProfileUserAuthentication(
+			authorizationProfile(), request.Profile, value.Action, iamv1.UserAuthenticationAccessKey,
+		) != nil {
+		return iamv1.AuthorizationRequest{}, errors.New("access-key authorization request is invalid")
+	}
+	return request, nil
+}
+
+func ValidateAccessKeyAuthorizationForRequest(value Authorization, request AccessKeyAuthorizationRequest) error {
+	problems := []error{ValidateAuthorization(value), ValidateAccessKeyAuthorizationRequest(request)}
+	if value.RequestID != request.RequestID || value.Subject.AccessKeyID == "" ||
+		value.Subject.AccessKeyID != string(request.SignedRequest.Parameters.AccessKeyID) {
+		problems = append(problems, errors.New("IAM access-key authorization binding mismatch"))
+	}
+	iamRequest, err := NewIAMAccessKeyAuthorizationRequest(request)
+	if err != nil || !slices.Equal(value.RequestTags, iamRequest.RequestTags) ||
+		!slices.Equal(value.ResourceTags, iamRequest.ResourceTags) {
+		problems = append(problems, errors.New("IAM access-key authorization tags mismatch"))
+	}
+	return errors.Join(problems...)
+}
+
+func authorizationProfile() iamv1.AuthorizationProfile {
+	profile, _ := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	return profile
+}
+
 // NewIAMAuthorizationRequest is the single PaaS-to-IAM vocabulary adapter.
 // The release-owned Profile remains the authority for actions, shapes,
 // conditions and caller purpose; this function only translates PaaS resource
 // names and binds the network fact observed by the PEP.
 func NewIAMAuthorizationRequest(value AuthorizationRequest) (iamv1.AuthorizationRequest, error) {
-	if !isAppHostingAction(value.Action) {
+	return newIAMAuthorizationRequest(value.Action, value.Resource, value.ResourceMode,
+		value.CollectionUsage, value.SourceIP, value.RequestLabels, value.ResourceLabels, value.RequestID)
+}
+
+func newIAMAuthorizationRequest(
+	action iamv1.Action,
+	resource paasv1.ResourceRef,
+	resourceMode iamv1.AuthorizationResourceMode,
+	collectionUsage iamv1.AuthorizationCollectionUsage,
+	sourceIP string,
+	requestLabels map[string]string,
+	resourceLabels map[string]string,
+	requestID string,
+) (iamv1.AuthorizationRequest, error) {
+	if !isAppHostingAction(action) {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization action is outside apphosting")
 	}
-	if value.RequestLabels != nil && value.Action != AuthorizeApplicationCreate &&
-		value.Action != AuthorizeApplicationLabelSet && value.Action != AuthorizeApplicationLabelDelete {
+	if requestLabels != nil && action != AuthorizeApplicationCreate &&
+		action != AuthorizeApplicationLabelSet && action != AuthorizeApplicationLabelDelete {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization labels are outside application creation")
 	}
-	if value.ResourceLabels != nil && value.Action != AuthorizeApplicationRead &&
-		value.Action != AuthorizeApplicationLabelSet && value.Action != AuthorizeApplicationLabelDelete {
+	if resourceLabels != nil && action != AuthorizeApplicationRead &&
+		action != AuthorizeApplicationLabelSet && action != AuthorizeApplicationLabelDelete {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization resource labels are outside application read")
 	}
-	if err := paasv1.ValidateLabels(value.RequestLabels); err != nil {
+	if err := paasv1.ValidateLabels(requestLabels); err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization labels are invalid")
 	}
-	if err := paasv1.ValidateLabels(value.ResourceLabels); err != nil {
+	if err := paasv1.ValidateLabels(resourceLabels); err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization resource labels are invalid")
 	}
-	resource, err := iamResourceReference(value.Resource)
+	iamResource, err := iamResourceReference(resource)
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, err
 	}
-	request, err := iamv1.NewAuthorizationRequest(value.Action, resource,
-		value.ResourceMode, value.CollectionUsage, value.RequestID, value.RequestID)
+	request, err := iamv1.NewAuthorizationRequest(action, iamResource,
+		resourceMode, collectionUsage, requestID, requestID)
 	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
 	if err != nil || !known || iamv1.CheckAuthorizationProfileReference(profile, request.Profile) != nil ||
 		profile.CallingService != iamv1.ServicePaaS {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization request is outside the PaaS profile")
 	}
-	request, err = iamv1.BindAuthorizationSourceIP(request, value.SourceIP)
+	request, err = iamv1.BindAuthorizationSourceIP(request, sourceIP)
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization network context is invalid")
 	}
-	request, err = iamv1.BindAuthorizationRequestTags(request, value.RequestLabels)
+	request, err = iamv1.BindAuthorizationRequestTags(request, requestLabels)
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization request tags are invalid")
 	}
-	request, err = iamv1.BindAuthorizationResourceTags(request, value.ResourceLabels)
+	request, err = iamv1.BindAuthorizationResourceTags(request, resourceLabels)
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization resource tags are invalid")
 	}

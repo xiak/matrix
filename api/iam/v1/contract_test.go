@@ -3118,7 +3118,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 		current, found := LookupAuthorizationProfile(product)
 		expectedRevision := uint64(2)
 		if product == ProductPaaS {
-			expectedRevision = 6
+			expectedRevision = 7
 		}
 		if !found || current.Revision != expectedRevision {
 			t.Fatal("missing explicit new product revision")
@@ -3941,8 +3941,8 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 6 {
-		t.Fatal("missing current PaaS role and request/resource-tag capable declaration")
+	if !found || profile.Revision != 7 {
+		t.Fatal("missing current PaaS role, tag, and AccessKey-capable declaration")
 	}
 	expected := map[Action]struct {
 		kind       ResourceKind
@@ -4430,6 +4430,12 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 			if loginSessionRequired {
 				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{UserAuthenticationLoginSession}) {
 					t.Fatal("current-session action widened its authentication carrier", declared.Action)
+				}
+			} else if source.Product == ProductPaaS && declared.Action == ActionPaaSApplicationCreate {
+				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{
+					UserAuthenticationAccessKey, UserAuthenticationLoginSession,
+				}) {
+					t.Fatal("application creation has the wrong authentication carriers")
 				}
 			} else if declared.UserAuthenticationMethods != nil {
 				t.Fatal("unrelated product admission changed")

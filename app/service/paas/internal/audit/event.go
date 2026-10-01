@@ -113,7 +113,9 @@ func ToV1(value Event) (auditv1.Event, error) {
 	if correlationID == "" {
 		correlationID = value.RequestID
 	}
-	actor := auditv1.ActorReference{Type: actorType, ID: auditv1.ActorID(value.Actor.ID)}
+	actor := auditv1.ActorReference{
+		Type: actorType, ID: auditv1.ActorID(value.Actor.ID), AccessKeyID: value.Actor.AccessKeyID,
+	}
 	if value.Actor.RoleSession != nil {
 		actor.RoleSession = &auditv1.RoleSessionReference{SessionID: value.Actor.RoleSession.SessionID,
 			SourceUserID:             auditv1.ActorID(value.Actor.RoleSession.SourceUserID),

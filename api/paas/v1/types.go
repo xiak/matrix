@@ -416,6 +416,7 @@ type SubjectRef struct {
 	Type        SubjectType           `json:"type"`
 	ID          string                `json:"id"`
 	RoleSession *RoleSessionReference `json:"roleSession,omitempty"`
+	AccessKeyID string                `json:"accessKeyId,omitempty"`
 }
 
 type RoleSessionReference struct {
@@ -425,7 +426,8 @@ type RoleSessionReference struct {
 }
 
 func (subject SubjectRef) Equal(other SubjectRef) bool {
-	if subject.Type != other.Type || subject.ID != other.ID || (subject.RoleSession == nil) != (other.RoleSession == nil) {
+	if subject.Type != other.Type || subject.ID != other.ID || subject.AccessKeyID != other.AccessKeyID ||
+		(subject.RoleSession == nil) != (other.RoleSession == nil) {
 		return false
 	}
 	return subject.RoleSession == nil || *subject.RoleSession == *other.RoleSession
@@ -442,7 +444,9 @@ func (subject *SubjectRef) UnmarshalJSON(source []byte) error {
 		return contractjson.ErrInvalidDocument
 	}
 	_, hasLineage := fields["roleSession"]
-	if (decoded.Type == SubjectRole) != hasLineage || ValidateSubjectRef(SubjectRef(decoded)) != nil {
+	_, hasAccessKey := fields["accessKeyId"]
+	if (decoded.Type == SubjectRole) != hasLineage || hasAccessKey && decoded.AccessKeyID == "" ||
+		ValidateSubjectRef(SubjectRef(decoded)) != nil {
 		return contractjson.ErrInvalidDocument
 	}
 	*subject = SubjectRef(decoded)

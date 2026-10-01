@@ -1753,7 +1753,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	// condition in the future build. Even a resource-nonmatching old Deny must
 	// then fail closed, rather than disappear behind another Allow.
 	replacement, err := parser.ParseExpr(fmt.Sprintf(`func() AuthorizationProfile {
-		profile := paasProfileRevisionSix
+		profile := paasProfileRevisionSeven
 		profile.Revision = %d
 		var added AuthorizationProfileAction
 		for index, action := range profile.Actions {
@@ -1784,7 +1784,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 		}
 		for index, element := range catalog.Elts {
 			current, ok := element.(*ast.Ident)
-			if ok && current.Name == "paasProfileRevisionSix" {
+			if ok && current.Name == "paasProfileRevisionSeven" {
 				catalog.Elts[index] = replacement
 				replaced++
 			}
@@ -2165,6 +2165,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE=" + paasCredentialPath,
 		"MATRIX_PAAS_LISTEN_ADDRESS=" + paasAddress,
 		"MATRIX_PAAS_INSTALLATION_ID=" + bootstrap.InstallationID,
+		"MATRIX_PAAS_NORTHBOUND_ORIGIN=https://api.matrix.test:443",
 		"MATRIX_PAAS_RELEASE_ID=matrix-v0.1.0-process",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
@@ -5794,7 +5795,7 @@ func expireIAMSession(
 	}
 }
 
-func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, home, customer string,
+func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, paasEndpoint, home, customer string,
 	withAuditOutage func(func()), restartIAM func()) []string {
 	t.Helper()
 	call := func(server, method, path, bearer string, body any, status int, result any) {
@@ -5874,15 +5875,8 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	call(endpoint, http.MethodGet, "/v1/account/security-settings", string(secret), nil, http.StatusUnauthorized, nil)
 	call(endpoint, http.MethodGet, "/v1/users/"+string(a.target.ID)+"/password-resets/key-cannot-query?resourceVersion=1", string(secret), nil, http.StatusUnauthorized, nil)
 	clear(secret)
-	// Exercise the actual internal RPC in both IAM executables, without
-	// pretending a fixture is a product PEP or enabling a source Profile.
-	sign := func(account *accountFixture, requestID string) iamv1.AccessKeyAuthorizationRequest {
+	signHTTP := func(account *accountFixture, requestHTTP iamv1.AccessKeyHTTPRequest) iamv1.AccessKeySignedRequest {
 		t.Helper()
-		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
-			iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "program-signed-application"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
-		if err != nil {
-			t.Fatal(err)
-		}
 		var now time.Time
 		if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
 			t.Fatal(err)
@@ -5891,12 +5885,10 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		if _, err := rand.Read(nonce); err != nil {
 			t.Fatal("generate process signature nonce")
 		}
-		bodyHash := sha256.Sum256(nil)
 		signed := iamv1.AccessKeySignedRequest{Parameters: iamv1.AccessKeySignatureParameters{
 			AccessKeyID: account.key.Key.ID, InstallationID: "installation-process", Audience: iamv1.ProductPaaS, SignedAt: now.Unix(),
 			Nonce: processSecret(t, base64.RawURLEncoding.EncodeToString(nonce))},
-			HTTP: iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "program-process.invalid:443",
-				EscapedPath: "/api/paas/v1/applications/program-signed-application", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])}}
+			HTTP: requestHTTP}
 		canonical, err := iamv1.AccessKeySigningBytes(signed.Parameters, signed.HTTP)
 		if err != nil {
 			t.Fatal(err)
@@ -5914,6 +5906,21 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 		signed.Signature = processSecret(t, signature)
 		sensitive = append(sensitive, base64.RawURLEncoding.EncodeToString(nonce), signature)
+		return signed
+	}
+	// Exercise the actual internal RPC in both IAM executables. Application
+	// read intentionally remains an AccessKey Deny because only create is in
+	// the current product declaration; the positive product path is below.
+	sign := func(account *accountFixture, requestID string) iamv1.AccessKeyAuthorizationRequest {
+		t.Helper()
+		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "program-signed-application"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodyHash := sha256.Sum256(nil)
+		signed := signHTTP(account, iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "program-process.invalid:443",
+			EscapedPath: "/api/paas/v1/applications/program-signed-application", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])})
 		return iamv1.AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: signed}
 	}
 	encode := func(request iamv1.AccessKeyAuthorizationRequest) []byte {
@@ -5936,7 +5943,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		}
 		return values
 	}
-	denied := map[iamv1.AccessKeyID]map[iamv1.DecisionID]bool{}
+	decisions := map[iamv1.AccessKeyID]map[iamv1.DecisionID]bool{}
 	checkDeny := func(request iamv1.AccessKeyAuthorizationRequest, response processResponse) {
 		t.Helper()
 		result, err := iamv1.DecodeAccessKeyAuthorization(bytes.NewReader(response.Body))
@@ -5945,13 +5952,13 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			t.Fatalf("signed process did not return exact sanitized Deny: status=%d", response.Status)
 		}
 		key := request.SignedRequest.Parameters.AccessKeyID
-		if denied[key] == nil {
-			denied[key] = map[iamv1.DecisionID]bool{}
+		if decisions[key] == nil {
+			decisions[key] = map[iamv1.DecisionID]bool{}
 		}
-		if denied[key][result.Decision.ID] {
+		if decisions[key][result.Decision.ID] {
 			t.Fatal("duplicate signed process decision")
 		}
-		denied[key][result.Decision.ID] = true
+		decisions[key][result.Decision.ID] = true
 		for _, value := range sensitive {
 			if bytes.Contains(response.Body, []byte(value)) {
 				t.Fatal("signed process response disclosed private material")
@@ -5974,6 +5981,69 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		account := &accounts[index]
 		prefix := fmt.Sprintf("program-signature-%d", index)
 		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyPaaSDeveloper, prefix+"-grant")
+		application := paasv1.CreateApplicationRequest{ID: "program-key-application", Name: "program-key-application",
+			Labels: map[string]string{"environment": "production", "team": "programmatic"}}
+		applicationBody, err := json.Marshal(application)
+		if err != nil {
+			t.Fatal(err)
+		}
+		applicationDigest := sha256.Sum256(applicationBody)
+		idempotencyKey := prefix + "-application-create"
+		signedApplication := signHTTP(account, iamv1.AccessKeyHTTPRequest{
+			Method: http.MethodPost, Scheme: "https", Authority: "api.matrix.test:443",
+			EscapedPath: "/api/paas/v1/applications", ContentType: "application/json", IdempotencyKey: idempotencyKey,
+			BodyDigest: "sha256:" + hex.EncodeToString(applicationDigest[:]),
+		})
+		invokeProduct := func(status int) processResponse {
+			t.Helper()
+			header, err := iamv1.EncodeAccessKeyAuthorization(signedApplication.Parameters, signedApplication.Signature)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain := header.CopyBytes()
+			defer clear(plain)
+			request, err := http.NewRequestWithContext(ctx, http.MethodPost, paasEndpoint+"/v1/applications", bytes.NewReader(applicationBody))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Authorization", string(plain))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Idempotency-Key", idempotencyKey)
+			request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
+			request.Header.Set("X-Matrix-External-Request-Target", "/api/paas/v1/applications")
+			response, err := processHTTPClient().Do(request)
+			if err != nil {
+				t.Fatal("invoke signed PaaS request", err)
+			}
+			defer response.Body.Close()
+			body, err := io.ReadAll(io.LimitReader(response.Body, iamv1.MaxRequestBytes+1))
+			if err != nil || response.StatusCode != status {
+				t.Fatalf("signed PaaS create status=%d want=%d body=%s err=%v", response.StatusCode, status, body, err)
+			}
+			return processResponse{Status: response.StatusCode, Body: body}
+		}
+		created := invokeProduct(http.StatusCreated)
+		var operation paasv1.Operation
+		if iamv1.DecodeRequest(bytes.NewReader(created.Body), &operation) != nil || paasv1.ValidateOperation(operation) != nil ||
+			operation.Scope.TenantID != paasv1.TenantID(account.target.AccountID) || operation.Target.ID != application.ID ||
+			operation.RequestedBy.Type != paasv1.SubjectUser || operation.RequestedBy.ID != string(account.target.ID) ||
+			operation.RequestedBy.AccessKeyID != string(account.key.Key.ID) {
+			t.Fatalf("signed PaaS Operation lost Account/USER/key attribution: %#v", operation)
+		}
+		invokeProduct(http.StatusConflict)
+		waitAllPaaSOutboxDelivered(t, ctx, database)
+		actor := auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(account.target.ID), AccessKeyID: string(account.key.Key.ID)}
+		page := queryAudit(t, auditEndpoint, account.owner, auditv1.QueryRecordsRequest{
+			PageSize: 10, Action: auditv1.ActionPaaSApplicationCreated, Actor: &actor,
+		}, http.StatusOK)
+		if len(page.Records) != 1 || page.Records[0].Event.Actor != actor ||
+			page.Records[0].Event.Target.ID != string(application.ID) || page.Records[0].Event.OperationID != auditv1.OperationID(operation.ID) {
+			t.Fatalf("signed PaaS Audit lost exact USER/key/Operation attribution: %#v", page.Records)
+		}
+		if decisions[account.key.Key.ID] == nil {
+			decisions[account.key.Key.ID] = map[iamv1.DecisionID]bool{}
+		}
+		decisions[account.key.Key.ID][iamv1.DecisionID(page.Records[0].Event.IAMDecisionID)] = true
 		request := sign(account, prefix+"-deny")
 		loginRequest := request.Authorization
 		loginRequest.RequestID, loginRequest.CorrelationID = prefix+"-login", prefix+"-login"
@@ -6158,7 +6228,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	for index := range accounts {
 		account := &accounts[index]
 		key := account.key.Key.ID
-		want := len(denied[key])
+		want := len(decisions[key])
 		if counts(key) != [3]int{want, want, want} {
 			t.Fatal("signed processes left partial/duplicate private evidence or facts")
 		}
@@ -6169,7 +6239,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			t.Fatal("signed historical facts did not survive deletion/outage/restart")
 		}
 		for _, record := range page.Records {
-			if record.Event.Actor != actor || !denied[key][iamv1.DecisionID(record.Event.IAMDecisionID)] {
+			if record.Event.Actor != actor || !decisions[key][iamv1.DecisionID(record.Event.IAMDecisionID)] {
 				t.Fatal("signed Audit history lost original USER/key/decision attribution")
 			}
 			duplicate := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", iamServiceCredential, record.Event)
@@ -6296,7 +6366,7 @@ func proveTenantAccountProcesses(
 	roleOperator := loginIAM(t, endpoint, "customer.primary", changed, "process-role-operator-login")
 	sensitive = append(sensitive, roleOperator.Credential)
 	sensitive = append(sensitive, proveRoleManagementProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, roleOperator.Credential, withAuditOutage, restartIAM)...)
-	sensitive = append(sensitive, proveAccessKeyProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
+	sensitive = append(sensitive, proveAccessKeyProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	sensitive = append(sensitive, proveOwnSessionProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	sensitive = append(sensitive, proveOtherSessionProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, primary.Credential, withAuditOutage, restartIAM)...)
 	readAccount := func(id string) iamv1.Account {
@@ -10611,8 +10681,13 @@ func authorityPlaintextLocationWithStructural(document string, beforeOTP map[str
 					"requestDigest", "requestId", "correlationId", "occurredAt", "iamDecisionId", "operationId", "data":
 					field = key
 				}
-				ignoreCode := (validEvent && (key == "requestDigest" || key == "occurredAt")) ||
-					(earlierEvent && (key == "eventId" || key == "iamDecisionId")) || (earlierIdentity && key == "id")
+				// eventId and iamDecisionId are validated, server-generated structural
+				// identities. A random identifier may contain a later six-digit OTP
+				// substring without persisting that OTP; an exact six-digit value is
+				// still rejected. Request/correlation/operation and actor/target IDs
+				// are not exempt because a caller or business payload can influence them.
+				ignoreCode := validEvent && (key == "requestDigest" || key == "occurredAt" ||
+					key == "eventId" || key == "iamDecisionId") || (earlierIdentity && key == "id")
 				if location := inspect(child, ignoreCode, earlierEvent && (key == "actor" || key == "target"), path+"."+field); location != "" {
 					return location
 				}
@@ -10662,6 +10737,12 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	identifierEvent := event
+	identifierEvent.EventID = auditv1.EventID("event-" + code + "-structural")
+	identifierEncoded, err := json.Marshal(identifierEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name, document, plaintext string
 		present, invalid          bool
@@ -10669,6 +10750,7 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 		{"code-in-request-digest", string(encoded), code, false, false},
 		{"code-in-canonical-request-digest", canonical, code, false, false},
 		{"code-in-occurred-at", string(timestampEncoded), code, false, false},
+		{"code-in-server-event-id", string(identifierEncoded), code, false, false},
 		{"plaintext-code", `{"code":"123456"}`, code, true, false},
 		{"numeric-code", `{"code":123456}`, code, true, false},
 		{"embedded-code", `{"message":"received code 123456"}`, code, true, false},

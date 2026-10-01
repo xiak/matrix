@@ -507,6 +507,7 @@ func resourceCreationFingerprint[T any](creation resourceCreation[T]) (string, e
 		TargetID:       creation.id,
 		IdempotencyKey: creation.idempotencyKey,
 		RoleSession:    creation.authorization.Subject.RoleSession,
+		AccessKeyID:    creation.authorization.Subject.AccessKeyID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode resource idempotency identity: %w", err)

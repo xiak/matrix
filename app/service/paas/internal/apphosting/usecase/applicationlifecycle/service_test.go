@@ -55,6 +55,38 @@ func TestRoleSessionSeparatesBothBusinessIdempotencySpaces(t *testing.T) {
 	}
 }
 
+func TestAccessKeySeparatesBusinessIdempotencySpace(t *testing.T) {
+	original := lifecycleAuthorization()
+	original.Subject = paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-a", AccessKeyID: "key-a"}
+	fingerprint := func(authorization port.Authorization) (string, error) {
+		return resourceCreationFingerprint(resourceCreation[paasv1.Application]{
+			authorization: authorization, id: "same-resource",
+			action: paasv1.OperationCreateApplication, idempotencyKey: "same-key",
+		})
+	}
+	want, err := fingerprint(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, subject := range []paasv1.SubjectRef{
+		{Type: paasv1.SubjectUser, ID: "user-a", AccessKeyID: "key-b"},
+		{Type: paasv1.SubjectUser, ID: "user-a"},
+		{Type: paasv1.SubjectUser, ID: "user-b", AccessKeyID: "key-a"},
+	} {
+		changed := original
+		changed.Subject = subject
+		got, err := fingerprint(changed)
+		if err != nil || got == want {
+			t.Fatal("different AccessKey subject could replay the accepted command", err)
+		}
+	}
+	same := original
+	got, err := fingerprint(same)
+	if err != nil || got != want {
+		t.Fatal("same AccessKey subject lost exact replay", err)
+	}
+}
+
 func TestSubmitCreatesDeploymentGenerationAndOperationAtomically(t *testing.T) {
 	transaction := lifecycleTransaction()
 	repository := &fakeLifecycleRepository{transaction: transaction}

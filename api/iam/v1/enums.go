@@ -454,7 +454,7 @@ func AllServicePurposes() []ServicePurpose {
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
 	iamServiceRoleProfile(),
-	paasProfileRevisionSix,
+	paasProfileRevisionSeven,
 	managedServiceProfileRevisionFour,
 	roleBusinessProfile(auditProfileRevisionOne),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
@@ -508,7 +508,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -562,6 +562,21 @@ var paasProfileRevisionThree = networkConditionProfile(paasProfileRevisionTwo)
 var paasProfileRevisionFour = applicationRequestTagProfile(paasProfileRevisionThree)
 var paasProfileRevisionFive = applicationResourceTagProfile(paasProfileRevisionFour)
 var paasProfileRevisionSix = applicationLabelMutationProfile(paasProfileRevisionFive)
+var paasProfileRevisionSeven = applicationCreateAccessKeyProfile(paasProfileRevisionSix)
+
+func applicationCreateAccessKeyProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	for index := range profile.Actions {
+		if profile.Actions[index].Action == ActionPaaSApplicationCreate {
+			profile.Actions[index].UserAuthenticationMethods = []UserAuthenticationMethod{
+				UserAuthenticationAccessKey, UserAuthenticationLoginSession,
+			}
+			return profile
+		}
+	}
+	panic("PaaS Application create declaration is missing")
+}
 
 var auditProfileRevisionOne = declaredProductProfile(ProductAudit, ServiceAudit, 1,
 	declaredProfileAction(ActionAuditRecordRead, ResourceAuditRecord, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),

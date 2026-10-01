@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已固定为`a7f2e83b`，可信创建请求标签及Audit目录修复累计固定为`49aaf216`并通过14项独立CI；既有Application资源标签读取和写入已累计固定到`e9ea19e6`并通过本地真实PG18、独立进程及唯一滚动前驱门禁，最新独立CI尚未登记。其他资源接入、LIVE UI和发布组合仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已固定为`a7f2e83b`，可信创建请求标签及Audit目录修复累计固定为`49aaf216`并通过14项独立CI；既有Application资源标签读取和写入已累计固定到`e9ea19e6`并通过本地真实PG18、独立进程及唯一滚动前驱门禁。首个AccessKey产品消费候选已接入Application创建并通过本地真库/独立进程，尚待固定提交与独立CI；其他签名动作、LIVE UI和发布组合仍未完成，整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -194,6 +194,18 @@ PaaS Profile下一修订增加`paas.application-label.set`和`paas.application-l
 当前固定实现把PaaS Profile推进到revision 6，保留授权决定contract 7并把开发数据库形状推进到IAM59/Audit31/PaaS3；发布profile仍不匹配且继续在安装副作用前关闭。PaaS API角色没有取得表级UPDATE权限：目的限定的`load_application_for_update`只在当前事务Account内锁定真实Application，`update_application_label`再次核对expected resourceVersion、不可变字段以及恰好一个标签键的设置/删除差异，再原子写入新文档、终态Operation和Audit outbox。受限worker不能调用两个入口，直接额外修改第二个标签的攻击由数据库以`22023`拒绝。
 
 本任务独占PostgreSQL 18中，PaaS迁移双次应用/verify及真实事务门禁以4.534秒通过同ID双Account、等值/变体重放、并发设置与删除只有一个成功、RLS、数据库第二标签攻击和故障注入整单回滚；Audit31完整catalog以11.939秒逐项接受新事实并验证USER、ROLE和AccessKey actor边界。独立IAM59/Audit31/PaaS3、双IAM和双dispatcher进程以223.721秒通过真实策略发布、`PUT`/`DELETE`、当前/目标标签决定证据、更新后下一次读取立即403、一次性Operation/Audit事实及链验证。唯一滚动前驱已替换为固定`e3c137ba0ed80d8d90f893192d343d89d2d917f5`的IAM58；实际旧binary产生requestTags、resourceTags、Profile/Decision、账号、MFA、会话和恢复事实后，IAM59双迁移、等值bootstrap和重启门禁以137.786秒通过，历史字节、proof和撤销状态未复活或改写，不再保留IAM57测试窗口。全仓默认测试、vet、模块校验、Linux amd64构建、聚焦race和两次API生成稳定均通过。实现固定推送为`e9ea19e65a4cc67a42edca05112221d195c18284`；最新独立CI尚未登记，因此UI仍只能使用MOCK验证交互，不能标记LIVE。
+
+## 当前纵向切片：AccessKey签名创建Application
+
+本片只把`POST /v1/applications`接入已固定的Matrix AccessKey签名与IAM当前PDP，不同时开放Application读取、标签修改、Configuration、Revision、Deployment、Operation或Audit查询。PaaS Profile revision 7仅将`paas.application.create`的USER认证方法声明为规范集合`[ACCESS_KEY, LOGIN_SESSION]`；其他动作的载体集合不变。签名入口必须命中精确method和内部route，产品前缀、任意resource kind或调用者提交的Action都不能扩大映射。
+
+边缘必须删除caller提供的外部请求头，再覆盖一个实际NorthboundOrigin和一个原始request-target。PaaS以显式配置`MATRIX_PAAS_NORTHBOUND_ORIGIN`、两个可信边缘头、实际内部路由和socket source IP重建唯一`SignedRequest`，并核对外部`/api/paas/`到内部`/v1/`的逐字节映射；配置缺失、来源/目标歧义、未覆盖的语义header或其他route均在调用IAM和业务用例前关闭。配置只定义部署权威，不授予调用者Account、主体或动作。
+
+PaaS通过独立AccessKey authorizer调用IAM `POST /v1/authorize:access-key`；服务Bearer只证明当前PaaS服务，不能替代最终USER/key。adapter核对响应的request digest、Profile/Action/资源、USER及`accessKeyId`与原签名完全一致，不能在失败时回退登录bearer。Allow进入原Application创建事务，Account仍从决定推导；最终Operation、PaaS outbox及Audit actor保存同一USER和key ID，资源归Account而非key。业务幂等身份包含key ID：同一key的新nonce可重试原业务意图，另一把key不能借用原完成结果。
+
+公开错误边界为：结构非法、未知key或错误MAC返回`401 UNAUTHENTICATED`且不泄漏key状态；有效MAC但当前策略拒绝返回`403 PERMISSION_DENIED`并消费nonce；已消费nonce返回`409 CONFLICT`且不进入业务；IAM不可用、回包不可信或绑定不完整返回`503 IDENTITY_UNAVAILABLE`。固定route上的非法业务JSON在IAM前返回400且不消费nonce，调用方修正body后须重新签名。PaaS不缓存Allow；key/User/Account/附件/策略变化在下一受保护请求由IAM当前状态判定。
+
+当前候选在独占PostgreSQL 18的PaaS存储race门禁以5.841秒通过新增USER+AccessKey约束、跨Account同ID和既有载体回归。独立双IAM、Audit、PaaS和双dispatcher进程以测试222.57秒、包226.037秒通过两个Account各自key签名创建同名同IDApplication、准确Operation归因、nonce重放409、PaaS outbox投递、租户Audit查询及链验证；普通bearer路径和既有标签/Role/服务会话回归仍在同一门禁执行，末端全库敏感信息扫描也通过。固定提交、独立CI、真实APISIX覆盖和签名安装包尚未完成，因此该片仍是候选，控制台只能按契约准备交互而不能标记LIVE。
 
 ## 验收
 

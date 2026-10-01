@@ -309,7 +309,14 @@ RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path=pg_catalog,
           AND subject#>>'{roleSession,sourceUserId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         ELSE jsonb_typeof(subject#>'{roleSession,sourceServicePrincipalId}')='string'
           AND subject#>>'{roleSession,sourceServicePrincipalId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' END
-      ELSE subject->>'type' IN ('USER','SERVICE_ACCOUNT','AGENT','SYSTEM_USER') AND subject-ARRAY['type','id']='{}'::jsonb END,false)
+      ELSE CASE WHEN subject->>'type'='USER' THEN
+        subject-ARRAY['type','id','accessKeyId']='{}'::jsonb
+        AND CASE WHEN subject ? 'accessKeyId' THEN
+          jsonb_typeof(subject->'accessKeyId')='string'
+          AND subject->>'accessKeyId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        ELSE true END
+      ELSE subject->>'type' IN ('SERVICE_ACCOUNT','AGENT','SYSTEM_USER')
+        AND subject-ARRAY['type','id']='{}'::jsonb END END,false)
 $function$;
 REVOKE ALL ON FUNCTION paas.subject_reference_valid(jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.subject_reference_valid(jsonb) TO matrix_paas_api,matrix_paas_worker;

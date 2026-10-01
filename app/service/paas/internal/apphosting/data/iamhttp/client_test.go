@@ -76,6 +76,75 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 	}
 }
 
+func TestClientAuthorizesExactAccessKeyRequestWithoutSubjectBearer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/authorize:access-key" || request.URL.RawQuery != "" ||
+			request.Header.Get("Authorization") != "Bearer "+testServiceCredential ||
+			request.Header.Get("Matrix-Subject-Credential") != "" {
+			t.Fatalf("IAM AccessKey request path=%s query=%q headers=%#v", request.URL.Path, request.URL.RawQuery, request.Header)
+		}
+		body, err := iamv1.DecodeAccessKeyAuthorizationRequest(request.Body)
+		if err != nil || body.Authorization.Action != iamv1.ActionPaaSApplicationCreate ||
+			body.Authorization.Resource != (iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}) ||
+			body.Authorization.NetworkContext == nil || body.Authorization.NetworkContext.SourceIP != "192.0.2.10" ||
+			!reflect.DeepEqual(body.Authorization.RequestTags, []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}) ||
+			body.SignedRequest.Parameters.AccessKeyID != "key-one" ||
+			body.SignedRequest.HTTP.EscapedPath != "/api/paas/v1/applications" {
+			t.Fatalf("IAM AccessKey authorization request=%#v err=%v", body.Authorization, err)
+		}
+		digest, err := iamv1.AccessKeySignedRequestDigest(body.SignedRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := iamv1.AccessKeyAuthorization{
+			APIVersion: iamv1.APIVersion, Kind: "AccessKeyAuthorization", SignedRequestDigest: digest,
+			Decision: iamv1.AuthorizationDecision{
+				APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
+				ID: "decision-access-key", Allowed: true, Reason: iamv1.DecisionAllowed,
+				TenantID: "organization-a",
+				Subject:  &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer", AccessKeyID: "key-one"},
+				Action:   body.Authorization.Action, Resource: body.Authorization.Resource,
+				Profile: &body.Authorization.Profile, ResourceMode: body.Authorization.ResourceMode,
+				CollectionUsage: body.Authorization.CollectionUsage, NetworkContext: body.Authorization.NetworkContext,
+				RequestTags: body.Authorization.RequestTags, ResourceTags: body.Authorization.ResourceTags,
+				RequestID: body.Authorization.RequestID, CorrelationID: body.Authorization.CorrelationID,
+				DecidedAt: time.Date(2026, 10, 1, 1, 2, 3, 456_000, time.UTC),
+			},
+		}
+		if iamv1.CheckAccessKeyAuthorizationForRequest(result, body) != nil {
+			t.Fatal("fixture AccessKey response is not bound to the exact request")
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(result)
+	}))
+	defer server.Close()
+
+	request := testAccessKeyAuthorizationRequest(t)
+	authorization, err := newTestClient(t, server.URL).AuthorizeAccessKey(context.Background(), request)
+	wantSubject := paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "principal-developer", AccessKeyID: "key-one"}
+	if err != nil || authorization.TenantID != "organization-a" || !authorization.Subject.Equal(wantSubject) ||
+		authorization.DecisionID != "decision-access-key" || authorization.RequestID != request.RequestID ||
+		!reflect.DeepEqual(authorization.RequestTags, []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}) {
+		t.Fatalf("PaaS AccessKey authorization=%#v err=%v", authorization, err)
+	}
+}
+
+func TestClientMapsConsumedAccessKeyNonceWithoutRetryingAsBearer(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		calls++
+		if request.URL.Path != "/v1/authorize:access-key" || request.Header.Get("Matrix-Subject-Credential") != "" {
+			t.Fatalf("unexpected AccessKey replay request path=%s headers=%#v", request.URL.Path, request.Header)
+		}
+		response.WriteHeader(http.StatusConflict)
+	}))
+	defer server.Close()
+	result, err := newTestClient(t, server.URL).AuthorizeAccessKey(context.Background(), testAccessKeyAuthorizationRequest(t))
+	if calls != 1 || !errors.Is(err, port.ErrAuthorizationReplay) || !reflect.DeepEqual(result, port.Authorization{}) {
+		t.Fatalf("AccessKey replay calls=%d result=%#v err=%v", calls, result, err)
+	}
+}
+
 func TestClientResolvesProfileBoundSubjectWithoutAuthoritySelectors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/internal/authorization-subject:resolve" || request.URL.RawQuery != "" ||
@@ -438,5 +507,34 @@ func testAuthorizationRequest() port.AuthorizationRequest {
 			"environment": "production", "team": "payments",
 		},
 		RequestID: "request-paas-authorize",
+	}
+}
+
+func testAccessKeyAuthorizationRequest(t *testing.T) port.AccessKeyAuthorizationRequest {
+	t.Helper()
+	nonce, err := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port.AccessKeyAuthorizationRequest{
+		Action:       port.AuthorizeApplicationCreate,
+		Resource:     paasv1.ResourceRef{Kind: "Application", ID: "collection"},
+		ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionCreate,
+		SourceIP: "192.0.2.10", RequestLabels: map[string]string{
+			"environment": "production", "team": "payments",
+		},
+		RequestID: "request-paas-access-key",
+		SignedRequest: iamv1.AccessKeySignedRequest{
+			Parameters: iamv1.AccessKeySignatureParameters{AccessKeyID: "key-one", InstallationID: "installation-one",
+				Audience: iamv1.ProductPaaS, SignedAt: 1800000000, Nonce: nonce},
+			HTTP: iamv1.AccessKeyHTTPRequest{Method: http.MethodPost, Scheme: "https", Authority: "api.example.test:443",
+				EscapedPath: "/api/paas/v1/applications", ContentType: "application/json", IdempotencyKey: "create-application-key",
+				BodyDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			Signature: signature,
+		},
 	}
 }

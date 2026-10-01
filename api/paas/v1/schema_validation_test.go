@@ -26,6 +26,7 @@ func TestRoleSubjectLineageIsStrictAndIdentityBearing(t *testing.T) {
 		valid bool
 	}{
 		{`{"type":"USER","id":"user-a"}`, true},
+		{`{"type":"USER","id":"user-a","accessKeyId":"key-a"}`, true},
 		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"session-a","sourceUserId":"user-a"}}`, true},
 		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"session-a","sourceServicePrincipalId":"service-paas"}}`, true},
 		{`{"type":"ROLE","id":"role-a"}`, false},
@@ -35,6 +36,8 @@ func TestRoleSubjectLineageIsStrictAndIdentityBearing(t *testing.T) {
 		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"session-a","sourceUserId":"user-a","sourceSessionId":"private"}}`, false},
 		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"","sourceUserId":"user-a"}}`, false},
 		{`{"type":"USER","id":"user-a","roleSession":null}`, false},
+		{`{"type":"USER","id":"user-a","accessKeyId":""}`, false},
+		{`{"type":"SERVICE_ACCOUNT","id":"service-a","accessKeyId":"key-a"}`, false},
 		{`{"type":"SERVICE_ACCOUNT","id":"service-a","roleSession":{"sessionId":"session-a","sourceUserId":"user-a"}}`, false},
 		{`{"type":"AGENT","id":"agent-a","roleSession":null}`, false},
 		{`{"type":"SYSTEM_USER","id":"system-a","roleSession":null}`, false},
@@ -57,6 +60,11 @@ func TestRoleSubjectLineageIsStrictAndIdentityBearing(t *testing.T) {
 				other.RoleSession.SessionID = "session-b"
 				if subject.Equal(other) {
 					t.Fatal("another role session reused the same identity")
+				}
+			} else if other.AccessKeyID != "" {
+				other.AccessKeyID = "key-b"
+				if subject.Equal(other) {
+					t.Fatal("another access key reused the same identity")
 				}
 			}
 		}

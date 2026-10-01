@@ -45,6 +45,7 @@ type idempotencyIdentity struct {
 	TargetID       paasv1.ResourceID            `json:"targetId"`
 	IdempotencyKey string                       `json:"idempotencyKey"`
 	RoleSession    *paasv1.RoleSessionReference `json:"roleSession,omitempty"`
+	AccessKeyID    string                       `json:"accessKeyId,omitempty"`
 }
 
 func NewUsecase(repository Repository, config Config) (*Usecase, error) {
@@ -359,6 +360,7 @@ func idempotencyFingerprint(command mutation) (string, error) {
 		SubjectID: command.authorization.Subject.ID, CommandKind: command.kind,
 		TargetID: command.deploymentID, IdempotencyKey: command.idempotencyKey,
 		RoleSession: command.authorization.Subject.RoleSession,
+		AccessKeyID: command.authorization.Subject.AccessKeyID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode idempotency identity: %w", err)

@@ -224,10 +224,13 @@ func assertRoleSubjectStorage(t *testing.T, ctx context.Context, admin *pgx.Conn
 		valid   bool
 	}{
 		{`{"type":"USER","id":"storage-user"}`, true},
+		{`{"type":"USER","id":"storage-user","accessKeyId":"storage-key"}`, true},
 		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":"storage-user"}}`, true},
 		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceServicePrincipalId":"service-paas"}}`, true},
 		{`null`, false}, {`{}`, false}, {`{"type":"ROLE","id":"storage-role"}`, false},
 		{`{"type":"USER","id":"storage-user","roleSession":null}`, false},
+		{`{"type":"USER","id":"storage-user","accessKeyId":""}`, false},
+		{`{"type":"SERVICE_ACCOUNT","id":"storage-service","accessKeyId":"storage-key"}`, false},
 		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":""}}`, false},
 		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":"storage-user","sourceSessionId":"private"}}`, false},
 		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":"storage-user","sourceServicePrincipalId":"service-paas"}}`, false},

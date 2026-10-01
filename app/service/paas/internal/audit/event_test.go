@@ -32,6 +32,19 @@ func TestRoleAuditLineagePreservesExactlyOneOriginalSubject(t *testing.T) {
 	}
 }
 
+func TestAccessKeyAuditActorPreservesCredentialAttribution(t *testing.T) {
+	event := Event{SchemaVersion: "v1", EventID: "audit-event-key",
+		TenantID: "organization-example", Actor: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-one", AccessKeyID: "key-one"},
+		IAMDecisionID: "decision-example", Action: ApplicationCreated,
+		Target: TargetReference{Kind: "Application", ID: "application-example"}, OperationID: "operation-example",
+		RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Result:        Succeeded, RequestID: "request-example", OccurredAt: time.Date(2026, 8, 27, 8, 0, 0, 0, time.UTC)}
+	public, err := ToV1(event)
+	if err != nil || public.Actor.Type != auditv1.ActorUser || public.Actor.ID != "user-one" || public.Actor.AccessKeyID != "key-one" {
+		t.Fatalf("access-key attribution changed while mapping PaaS Audit: %#v err=%v", public.Actor, err)
+	}
+}
+
 func TestManagedServiceEventsMapToClosedAuditContracts(t *testing.T) {
 	now := time.Date(2026, 8, 27, 8, 0, 0, 123_000, time.UTC)
 	tests := []struct {

@@ -978,6 +978,14 @@ func ValidateSubjectRef(value SubjectRef) error {
 	if (value.Type == SubjectRole) != (value.RoleSession != nil) {
 		return errors.New("only a ROLE requires exact role session lineage")
 	}
+	if value.AccessKeyID != "" && value.Type != SubjectUser {
+		return errors.New("only a USER can carry access-key lineage")
+	}
+	if value.AccessKeyID != "" {
+		if err := ValidateID("subject.accessKeyId", value.AccessKeyID); err != nil {
+			return err
+		}
+	}
 	if value.RoleSession != nil {
 		if (value.RoleSession.SourceUserID == "") == (value.RoleSession.SourceServicePrincipalID == "") {
 			return errors.New("role session source is invalid")
@@ -1045,6 +1053,9 @@ func ValidateOperation(value Operation) error {
 	problems = append(problems, ValidateSubjectRef(value.RequestedBy))
 	if value.RequestedBy.Type == SubjectRole && value.Scope.Kind != AuthorityTenant {
 		problems = append(problems, errors.New("role operation requires tenant scope"))
+	}
+	if value.RequestedBy.AccessKeyID != "" && value.Scope.Kind != AuthorityTenant {
+		problems = append(problems, errors.New("access-key operation requires tenant scope"))
 	}
 	if value.UpdatedAt.Before(value.CreatedAt) {
 		problems = append(problems, errors.New("operation.updatedAt cannot precede createdAt"))

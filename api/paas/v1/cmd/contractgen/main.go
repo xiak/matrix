@@ -464,8 +464,9 @@ func structSchema(contract reflect.Type) schema {
 	}
 	if contract.Name() == "SubjectRef" {
 		result["oneOf"] = []any{
-			schema{"properties": schema{"type": schema{"const": string(paasv1.SubjectRole)}}, "required": []string{"roleSession"}},
-			schema{"properties": schema{"type": schema{"enum": stringsOf(paasv1.SubjectUser, paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser)}, "roleSession": false}},
+			schema{"properties": schema{"type": schema{"const": string(paasv1.SubjectRole)}, "accessKeyId": false}, "required": []string{"roleSession"}},
+			schema{"properties": schema{"type": schema{"const": string(paasv1.SubjectUser)}, "roleSession": false}},
+			schema{"properties": schema{"type": schema{"enum": stringsOf(paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser)}, "roleSession": false, "accessKeyId": false}},
 		}
 	}
 	if contract.Name() == "RoleSessionReference" {

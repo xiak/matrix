@@ -408,6 +408,7 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"RollbackDeploymentRequest":          reflect.TypeOf(RollbackDeploymentRequest{}),
 		"DeploymentGeneration":               reflect.TypeOf(DeploymentGeneration{}),
 		"SubjectRef":                         reflect.TypeOf(SubjectRef{}),
+		"RoleSessionReference":               reflect.TypeOf(RoleSessionReference{}),
 		"ResourceRef":                        reflect.TypeOf(ResourceRef{}),
 		"FieldViolation":                     reflect.TypeOf(FieldViolation{}),
 		"Readiness":                          reflect.TypeOf(Readiness{}),

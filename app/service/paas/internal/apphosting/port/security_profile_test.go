@@ -92,6 +92,59 @@ func TestApplicationCreateAuthorizationBindsOnlyProfileDeclaredLabels(t *testing
 	}
 }
 
+func TestAccessKeyAdmissionIsLimitedToDeclaredCreateAndExactCredential(t *testing.T) {
+	nonce, err := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := AccessKeyAuthorizationRequest{
+		Action:       AuthorizeApplicationCreate,
+		Resource:     paasv1.ResourceRef{Kind: ResourceApplication, ID: "collection"},
+		ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionCreate,
+		SourceIP: "192.0.2.23", RequestID: "request-key",
+		RequestLabels: map[string]string{"environment": "production"},
+		SignedRequest: iamv1.AccessKeySignedRequest{
+			Parameters: iamv1.AccessKeySignatureParameters{AccessKeyID: "key-one", InstallationID: "installation-one",
+				Audience: iamv1.ProductPaaS, SignedAt: 1800000000, Nonce: nonce},
+			HTTP: iamv1.AccessKeyHTTPRequest{Method: "POST", Scheme: "https", Authority: "api.example.test:443",
+				EscapedPath: "/api/paas/v1/applications", ContentType: "application/json", IdempotencyKey: "create-key",
+				BodyDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			Signature: signature,
+		},
+	}
+	if ValidateAccessKeyAuthorizationRequest(request) != nil {
+		t.Fatal("declared AccessKey create was rejected")
+	}
+	result := Authorization{TenantID: "tenant-a",
+		Subject:    paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-a", AccessKeyID: "key-one"},
+		DecisionID: "decision-key", RequestID: request.RequestID,
+		RequestTags: []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}}
+	if ValidateAccessKeyAuthorizationForRequest(result, request) != nil {
+		t.Fatal("exact AccessKey result was rejected")
+	}
+	changed := result
+	changed.Subject.AccessKeyID = "key-two"
+	if ValidateAccessKeyAuthorizationForRequest(changed, request) == nil {
+		t.Fatal("another AccessKey was accepted as the signed credential")
+	}
+	read := request
+	read.Action, read.ResourceMode, read.CollectionUsage = AuthorizeApplicationRead, iamv1.AuthorizationResourceInstance, ""
+	read.Resource.ID = "application-one"
+	read.RequestLabels = nil
+	read.SignedRequest.HTTP.Method = "GET"
+	read.SignedRequest.HTTP.EscapedPath = "/api/paas/v1/applications/application-one"
+	read.SignedRequest.HTTP.ContentType = ""
+	read.SignedRequest.HTTP.IdempotencyKey = ""
+	read.SignedRequest.HTTP.BodyDigest = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	if ValidateAccessKeyAuthorizationRequest(read) == nil {
+		t.Fatal("an undeclared tagged read borrowed AccessKey admission")
+	}
+}
+
 func TestApplicationReadAuthorizationBindsOnlyProfileDeclaredResourceLabels(t *testing.T) {
 	request := AuthorizationRequest{
 		Credential: "Bearer subject", Action: AuthorizeApplicationRead,

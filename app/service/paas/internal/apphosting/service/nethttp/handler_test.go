@@ -14,6 +14,7 @@ import (
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
@@ -193,6 +194,81 @@ func TestHandlerBindsOnlyDeclaredApplicationLabelsBeforeIAM(t *testing.T) {
 	if response.Code != http.StatusBadRequest || workflow.createApplicationCalls != 1 {
 		t.Fatalf("invalid label reached IAM/workflow: status=%d calls=%d", response.Code, workflow.createApplicationCalls)
 	}
+}
+
+func TestHandlerCreatesApplicationThroughExactAccessKeyBoundary(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	workflow := &fakeWorkflow{}
+	handler := mustAccessKeyHandler(t, authorizer, workflow)
+	body := paasv1.CreateApplicationRequest{ID: "application-key", Name: "application-key", Labels: map[string]string{
+		"environment": "production", "team": "payments",
+	}}
+	request := jsonRequest(t, http.MethodPost, "/v1/applications", body)
+	request.Header.Set("Idempotency-Key", "create-application-key")
+	setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/applications")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("AccessKey create status=%d body=%s", response.Code, response.Body.String())
+	}
+	if authorizer.accessKeyCalls != 1 || authorizer.authorizeCalls != 0 || workflow.createApplicationCalls != 1 {
+		t.Fatalf("AccessKey boundary calls key=%d bearer=%d workflow=%d", authorizer.accessKeyCalls, authorizer.authorizeCalls, workflow.createApplicationCalls)
+	}
+	signed := authorizer.accessKeyRequest.SignedRequest
+	if signed.Parameters.AccessKeyID != "key-one" || signed.Parameters.InstallationID != "installation-one" ||
+		signed.Parameters.Audience != iamv1.ProductPaaS || signed.HTTP.Method != http.MethodPost ||
+		signed.HTTP.Scheme != "https" || signed.HTTP.Authority != "api.example.test:443" ||
+		signed.HTTP.EscapedPath != "/api/paas/v1/applications" || signed.HTTP.RawQuery != "" ||
+		signed.HTTP.ContentType != "application/json" || signed.HTTP.IdempotencyKey != "create-application-key" {
+		t.Fatalf("reconstructed signed request=%#v parameters=%#v", signed.HTTP, signed.Parameters)
+	}
+	if authorizer.accessKeyRequest.Action != port.AuthorizeApplicationCreate ||
+		authorizer.accessKeyRequest.Resource != (paasv1.ResourceRef{Kind: "Application", ID: "collection"}) ||
+		authorizer.accessKeyRequest.SourceIP != "192.0.2.1" ||
+		!reflect.DeepEqual(authorizer.accessKeyRequest.RequestLabels, body.Labels) ||
+		!reflect.DeepEqual(workflow.createApplicationCommand.Request, body) ||
+		workflow.createApplicationCommand.Authorization.Subject.AccessKeyID != "key-one" {
+		t.Fatalf("AccessKey PEP or workflow binding changed: request=%#v command=%#v", authorizer.accessKeyRequest, workflow.createApplicationCommand)
+	}
+	var operation paasv1.Operation
+	if json.NewDecoder(response.Body).Decode(&operation) != nil ||
+		!operation.RequestedBy.Equal(paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized", AccessKeyID: "key-one"}) {
+		t.Fatalf("AccessKey Operation attribution=%#v", operation.RequestedBy)
+	}
+}
+
+func TestHandlerKeepsAccessKeyAdmissionClosedAndMapsNonceReplay(t *testing.T) {
+	t.Run("route outside closed mapping", func(t *testing.T) {
+		authorizer := &fakeAuthorizer{}
+		workflow := &fakeWorkflow{}
+		handler := mustAccessKeyHandler(t, authorizer, workflow)
+		request := httptest.NewRequest(http.MethodGet, "/v1/applications/application-a", nil)
+		setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/applications/application-a")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized || authorizer.accessKeyCalls != 0 ||
+			authorizer.authorizeCalls != 0 || workflow.getApplicationCalls != 0 {
+			t.Fatalf("closed AccessKey route status=%d key=%d bearer=%d workflow=%d body=%s",
+				response.Code, authorizer.accessKeyCalls, authorizer.authorizeCalls, workflow.getApplicationCalls, response.Body.String())
+		}
+	})
+
+	t.Run("consumed nonce", func(t *testing.T) {
+		authorizer := &fakeAuthorizer{accessKeyErr: port.ErrAuthorizationReplay}
+		workflow := &fakeWorkflow{}
+		handler := mustAccessKeyHandler(t, authorizer, workflow)
+		request := jsonRequest(t, http.MethodPost, "/v1/applications", paasv1.CreateApplicationRequest{
+			ID: "application-replay", Name: "application-replay",
+		})
+		request.Header.Set("Idempotency-Key", "create-application-replay")
+		setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/applications")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusConflict || authorizer.accessKeyCalls != 1 || workflow.createApplicationCalls != 0 {
+			t.Fatalf("AccessKey replay status=%d calls=%d workflow=%d body=%s",
+				response.Code, authorizer.accessKeyCalls, workflow.createApplicationCalls, response.Body.String())
+		}
+	})
 }
 
 func TestHandlerMutatesApplicationLabelsWithCurrentAndRequestedEvidence(t *testing.T) {
@@ -614,13 +690,18 @@ func TestHandlerFailsClosedWithoutCanonicalSocketPeer(t *testing.T) {
 }
 
 type fakeAuthorizer struct {
-	request        port.AuthorizationRequest
-	resolveRequest port.SubjectResolutionRequest
-	resolveCalls   int
-	err            error
-	resolveErr     error
-	result         *port.Authorization
-	resolveResult  *port.AuthorizationSubjectContext
+	request          port.AuthorizationRequest
+	accessKeyRequest port.AccessKeyAuthorizationRequest
+	resolveRequest   port.SubjectResolutionRequest
+	resolveCalls     int
+	authorizeCalls   int
+	accessKeyCalls   int
+	err              error
+	accessKeyErr     error
+	resolveErr       error
+	result           *port.Authorization
+	accessKeyResult  *port.Authorization
+	resolveResult    *port.AuthorizationSubjectContext
 }
 
 func (authorizer *fakeAuthorizer) ResolveSubject(
@@ -650,6 +731,7 @@ func (authorizer *fakeAuthorizer) Authorize(
 	_ context.Context,
 	request port.AuthorizationRequest,
 ) (port.Authorization, error) {
+	authorizer.authorizeCalls++
 	authorizer.request = request
 	if authorizer.err != nil {
 		return port.Authorization{}, authorizer.err
@@ -668,6 +750,32 @@ func (authorizer *fakeAuthorizer) Authorize(
 		RequestTags:  iamRequest.RequestTags,
 		ResourceTags: iamRequest.ResourceTags,
 		AuditID:      "audit-authorized",
+	}, nil
+}
+
+func (authorizer *fakeAuthorizer) AuthorizeAccessKey(
+	_ context.Context,
+	request port.AccessKeyAuthorizationRequest,
+) (port.Authorization, error) {
+	authorizer.accessKeyCalls++
+	authorizer.accessKeyRequest = request
+	if authorizer.accessKeyErr != nil {
+		return port.Authorization{}, authorizer.accessKeyErr
+	}
+	if authorizer.accessKeyResult != nil {
+		return *authorizer.accessKeyResult, nil
+	}
+	iamRequest, err := port.NewIAMAccessKeyAuthorizationRequest(request)
+	if err != nil {
+		return port.Authorization{}, err
+	}
+	return port.Authorization{
+		TenantID: "tenant-authorized",
+		Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized",
+			AccessKeyID: string(request.SignedRequest.Parameters.AccessKeyID)},
+		DecisionID: "decision-authorized", RequestID: request.RequestID,
+		RequestTags: iamRequest.RequestTags, ResourceTags: iamRequest.ResourceTags,
+		AuditID: "audit-authorized",
 	}, nil
 }
 
@@ -716,7 +824,9 @@ func (workflow *fakeWorkflow) CreateApplication(
 	workflow.createApplicationCalls++
 	workflow.createApplicationCommand = command
 	resource := paasv1.Application{Metadata: testMetadata(command.Request.ID, command.Request.Name)}
-	return resource, testOperation("Application", resource.Metadata.ID, paasv1.OperationCreateApplication, paasv1.OperationSucceeded), false, nil
+	operation := testOperation("Application", resource.Metadata.ID, paasv1.OperationCreateApplication, paasv1.OperationSucceeded)
+	operation.RequestedBy = command.Authorization.Subject
+	return resource, operation, false, nil
 }
 
 func (workflow *fakeWorkflow) SetApplicationLabel(
@@ -859,6 +969,22 @@ func mustHandler(t *testing.T, authorizer port.Authorizer, workflow Workflow) ht
 	return mustHandlerWithVerifier(t, authorizer, workflow, &fakeInstallationVerifier{})
 }
 
+func mustAccessKeyHandler(t *testing.T, authorizer port.Authorizer, workflow Workflow) http.Handler {
+	t.Helper()
+	handler, err := NewHandler(authorizer, workflow, &fakeInstallationVerifier{}, Config{
+		NorthboundOrigin: "https://api.example.test:443", InstallationID: "installation-one",
+		NewRequestID: func() (string, error) { return "request-test", nil },
+		Readiness: func(context.Context) (paasv1.Readiness, error) {
+			return paasv1.Readiness{APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
+				SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 0, time.UTC)}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("create AccessKey HTTP handler: %v", err)
+	}
+	return handler
+}
+
 func mustHandlerWithVerifier(
 	t *testing.T,
 	authorizer port.Authorizer,
@@ -890,6 +1016,30 @@ func jsonRequest(t *testing.T, method, target string, value any) *http.Request {
 	request := httptest.NewRequest(method, target, bytes.NewReader(encoded))
 	request.Header.Set("Content-Type", "application/json")
 	return request
+}
+
+func setAccessKeyEdgeHeaders(t *testing.T, request *http.Request, externalTarget string) {
+	t.Helper()
+	nonce, err := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := iamv1.EncodeAccessKeyAuthorization(iamv1.AccessKeySignatureParameters{
+		AccessKeyID: "key-one", InstallationID: "installation-one", Audience: iamv1.ProductPaaS,
+		SignedAt: 1800000000, Nonce: nonce,
+	}, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := header.CopyBytes()
+	request.Header.Set("Authorization", string(plain))
+	clear(plain)
+	request.Header.Set(externalrequest.HeaderExternalOrigin, "https://api.example.test:443")
+	request.Header.Set(externalrequest.HeaderExternalRequestTarget, externalTarget)
 }
 
 func testMetadata(id paasv1.ResourceID, name string) paasv1.ResourceMetadata {

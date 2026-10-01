@@ -3,6 +3,7 @@
 package nethttp
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -19,6 +20,7 @@ import (
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
@@ -59,6 +61,8 @@ type Workflow interface {
 
 type Config struct {
 	MaximumBodyBytes int64
+	NorthboundOrigin string
+	InstallationID   string
 	NewRequestID     func() (string, error)
 	Readiness        func(context.Context) (paasv1.Readiness, error)
 }
@@ -74,6 +78,7 @@ type handler struct {
 	authorizer           port.Authorizer
 	workflow             Workflow
 	installationVerifier InstallationVerifier
+	accessKeyBoundary    *externalrequest.Boundary
 	config               Config
 	routes               *http.ServeMux
 }
@@ -99,9 +104,19 @@ func NewHandler(
 	if config.NewRequestID == nil {
 		config.NewRequestID = newRequestID
 	}
+	var accessKeyBoundary *externalrequest.Boundary
+	if config.NorthboundOrigin != "" {
+		var err error
+		accessKeyBoundary, err = externalrequest.NewBoundary(
+			config.NorthboundOrigin, "/api/paas", config.InstallationID, iamv1.ProductPaaS,
+		)
+		if err != nil {
+			return nil, errors.New("AccessKey northbound boundary is invalid")
+		}
+	}
 	value := &handler{
 		authorizer: authorizer, workflow: workflow,
-		installationVerifier: installationVerifier, config: config,
+		installationVerifier: installationVerifier, accessKeyBoundary: accessKeyBoundary, config: config,
 	}
 	routes := http.NewServeMux()
 	routes.HandleFunc("GET /ready", value.ready)
@@ -212,7 +227,54 @@ func (value *handler) ready(response http.ResponseWriter, request *http.Request)
 func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("X-Content-Type-Options", "nosniff")
+	if externalrequest.IsAccessKeyAuthorization(request) {
+		if !value.prepareAccessKeyRequest(response, request) {
+			return
+		}
+	}
 	value.routes.ServeHTTP(response, request)
+}
+
+type accessKeyContextKey struct{}
+
+func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, request *http.Request) bool {
+	if value.accessKeyBoundary == nil || request.Method != http.MethodPost ||
+		request.URL == nil || request.URL.Path != "/v1/applications" || request.URL.RawQuery != "" {
+		requestID, ok := value.beginRequest(response)
+		if !ok {
+			return false
+		}
+		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated,
+			"Unauthenticated", "access keys are not accepted for this route", false)
+		return false
+	}
+	bodyReader := http.MaxBytesReader(response, request.Body, value.config.MaximumBodyBytes)
+	body, err := io.ReadAll(bodyReader)
+	_ = bodyReader.Close()
+	if err != nil {
+		requestID, ok := value.beginRequest(response)
+		if !ok {
+			return false
+		}
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument,
+			"Invalid argument", "signed request body is invalid or too large", false)
+		return false
+	}
+	signed, err := value.accessKeyBoundary.SignedRequest(request, body)
+	if err != nil {
+		clear(body)
+		requestID, ok := value.beginRequest(response)
+		if !ok {
+			return false
+		}
+		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated,
+			"Unauthenticated", "signed request authentication is invalid", false)
+		return false
+	}
+	request.Body = io.NopCloser(bytes.NewReader(bytes.Clone(body)))
+	*request = *request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, signed))
+	clear(body)
+	return true
 }
 
 func (value *handler) createApplication(response http.ResponseWriter, request *http.Request) {
@@ -712,6 +774,33 @@ func (value *handler) authorizeRequestWithLabels(
 		ResourceLabels: maps.Clone(resourceLabels),
 		RequestID:      requestID,
 	}
+	if signed, present := request.Context().Value(accessKeyContextKey{}).(iamv1.AccessKeySignedRequest); present {
+		accessKeyAuthorizer, ok := value.authorizer.(port.AccessKeyAuthorizer)
+		if !ok {
+			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+			return port.Authorization{}, false
+		}
+		accessKeyRequest := port.AccessKeyAuthorizationRequest{
+			Action: action, Resource: authorizationRequest.Resource,
+			ResourceMode: mode, CollectionUsage: usage, SourceIP: sourceIP,
+			RequestLabels: maps.Clone(requestLabels), ResourceLabels: maps.Clone(resourceLabels),
+			RequestID: requestID, SignedRequest: signed,
+		}
+		if port.ValidateAccessKeyAuthorizationRequest(accessKeyRequest) != nil {
+			writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
+			return port.Authorization{}, false
+		}
+		authorization, err := accessKeyAuthorizer.AuthorizeAccessKey(request.Context(), accessKeyRequest)
+		if err != nil {
+			writeAuthorizationError(response, requestID, err)
+			return port.Authorization{}, false
+		}
+		if port.ValidateAccessKeyAuthorizationForRequest(authorization, accessKeyRequest) != nil {
+			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+			return port.Authorization{}, false
+		}
+		return authorization, true
+	}
 	if err := port.ValidateAuthorizationRequest(authorizationRequest); err != nil {
 		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "a valid IAM credential is required", false)
 		return port.Authorization{}, false
@@ -897,6 +986,8 @@ func writeAuthorizationError(response http.ResponseWriter, requestID string, err
 		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "IAM authentication failed", false)
 	case errors.Is(err, port.ErrPermissionDenied):
 		writeProblem(response, requestID, http.StatusForbidden, paasv1.ErrorPermissionDenied, "Permission denied", "IAM denied this action", false)
+	case errors.Is(err, port.ErrAuthorizationReplay):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Signed request conflict", "the signed request nonce was already consumed", false)
 	default:
 		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "IAM authorization is unavailable", true)
 	}
