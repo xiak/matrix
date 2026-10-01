@@ -7,6 +7,7 @@
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
 - Pushed source/embed milestone: `ccdb94c9`
+- Pushed strict-contract test follow-up: `160b6be4`
 - Pushed documentation milestone: `27bf4def`
 
 ## Authoritative route
@@ -35,7 +36,9 @@ authors only policy syntax; it never submits or overrides trusted resource
 facts and does not present resource-tag mutation as policy authoring.
 
 Source and synchronized 233-file embed are pushed at `ccdb94c9`; FEAT evidence
-is pushed at `27bf4def`. The milestone passed 57 frontend files / 920 tests,
+is pushed at `27bf4def`. Strict negative coverage at `160b6be4` rejects unknown
+resource-tag keys, wrong trusted sources, wrong value types and invalid tag
+values without changing production behavior. The milestone passed 57 frontend files / 920 tests,
 three normalization cases, type/lint/architecture checks, 228 theme contrast
 pairs, a 42-route static export, embed equality and repository Go test/vet.
 Desktop and `430 x 900` DEV verified the exact Action, resource-tag condition
