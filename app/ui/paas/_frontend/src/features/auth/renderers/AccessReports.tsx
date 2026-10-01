@@ -31,6 +31,8 @@ const trustEntryStatus: Record<AccessAnalysisTrustEntry["configuration"], "info"
   disabled: "neutral"
 };
 
+const accountSecurityReportFailureBoundaries = ["overLimit", "retainedReportLimit", "expired", "revoked"] as const;
+
 export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: {
   workspace: AccessWorkspace;
   scene: AccountAccessScene;
@@ -273,7 +275,7 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
         <Card>
           <Card.Header><Typography.Title as="h2" level={3}>{t("failureTitle")}</Typography.Title></Card.Header>
           <Card.Body><dl className={styles.activityEvidence} aria-label={t("failureTitle")}>
-            {(["overLimit", "expired", "revoked"] as const).map((boundary) => <div key={boundary}><dt>{t(`failures.${boundary}.title`)}</dt><dd><Badge status="neutral">{t(`failures.${boundary}.status`)}</Badge><span>{t(`failures.${boundary}.hint`)}</span></dd></div>)}
+            {accountSecurityReportFailureBoundaries.map((boundary) => <div key={boundary}><dt>{t(`failures.${boundary}.title`)}</dt><dd><Badge status="neutral">{t(`failures.${boundary}.status`)}</Badge><span>{t(`failures.${boundary}.hint`)}</span></dd></div>)}
           </dl></Card.Body>
         </Card>
       </Tabs.Content>
@@ -314,7 +316,7 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
     <Card>
       <Card.Header><Typography.Title as="h2" level={3}>{t("failureTitle")}</Typography.Title></Card.Header>
       <Card.Body><dl className={styles.activityEvidence} aria-label={t("failureTitle")}>
-        {(["overLimit", "expired", "revoked"] as const).map((boundary) => <div key={boundary}><dt>{t(`failures.${boundary}.title`)}</dt><dd><Badge status="neutral">{t(`failures.${boundary}.status`)}</Badge><span>{t(`failures.${boundary}.hint`)}</span></dd></div>)}
+        {accountSecurityReportFailureBoundaries.map((boundary) => <div key={boundary}><dt>{t(`failures.${boundary}.title`)}</dt><dd><Badge status="neutral">{t(`failures.${boundary}.status`)}</Badge><span>{t(`failures.${boundary}.hint`)}</span></dd></div>)}
       </dl></Card.Body>
     </Card>
     </>}

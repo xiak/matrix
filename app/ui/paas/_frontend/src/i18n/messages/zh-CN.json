@@ -4506,6 +4506,7 @@
       "failureTitle": "失败关闭语义",
       "failures": {
         "overLimit": { "title": "资源或正文超限", "status": "整体拒绝", "hint": "不自动缩小范围、不截断数据，也不改用另一个 requestId 静默重试。" },
+        "retainedReportLimit": { "title": "未到期报告已达 20 份", "status": "拒绝新建", "hint": "服务不会自动覆盖或删除最旧报告；需等待报告到期并由服务端清理后，再以新的生成意图重试。" },
         "expired": { "title": "报告超过 7 天", "status": "不可读取", "hint": "详情与 CSV 都不可访问；清理正文不会制造新的完成事实。" },
         "revoked": { "title": "读取或下载权限被撤回", "status": "重新鉴权", "hint": "已有 reportId 不能绕过 iam.security-report.read 或 iam.security-report.download。" }
       }

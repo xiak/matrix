@@ -4034,6 +4034,10 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("org-xiak")).toBeTruthy();
     expect(screen.getByText(/POST 只携带 requestId 和固定 formatVersion=1/)).toBeTruthy();
     expect(screen.getByText(/整个生成请求失败/)).toBeTruthy();
+    expect(screen.getByText("未到期报告已达 20 份")).toBeTruthy();
+    expect(screen.getByText("拒绝新建")).toBeTruthy();
+    expect(screen.getByText(/不会自动覆盖或删除最旧报告/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /删除.*报告|覆盖.*报告/ })).toBeNull();
     expect((screen.getByRole("button", { name: "下载 CSV v1" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole("button", { name: "生成报告" }));
     expect(screen.getByRole("heading", { name: "账号安全报告" })).toBeTruthy();
