@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `f5364f6a7`
-- Pushed documentation milestone: `7996f07ab`
+- Pushed source/embed milestone: `ae91fd572`
+- Pushed documentation milestone: `339d25044`
 
 ## Authoritative route
 
@@ -29,19 +29,21 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The read-only capability
-directory and User-scoped AccessKey workspace carry the isolated fixed Audit
-r3 declaration and its public query/integrity result boundaries. A labelled
-operation selector now mounts only one PaaS/Audit outcome table at a time. The
-browser still does not sign, retain Secret material or send a product request;
-the pending backend verification keeps this outside LIVE acceptance.
+login verification remains disabled for UX review. The Role SSO provider
+preview now presents protocol-specific SAML and OIDC fields, help text and
+detail semantics. Switching protocol preserves two isolated drafts instead of
+reinterpreting XML, JWKS, URL or Audience values. The page states that it only
+checks local shape in the current browser session and performs no external
+discovery, signature/token validation, exchange, login or session issuance.
 
-Source and synchronized embed are pushed at `f5364f6a7`; shared-console and
-IAM-client FEAT evidence is pushed through `7996f07ab`. The complete frontend
-gate passed 57 files/940 cases plus three normalization cases,
+Source and synchronized embed are pushed at `ae91fd572`; shared-console and
+IAM-client FEAT evidence is pushed through `339d25044`. The complete frontend
+gate passed 57 files/941 cases plus three normalization cases,
 typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
 embed equality and repository Go test/vet. Desktop and `390 x 844` DEV checks
-found no Dialog or horizontal overflow and no browser warning/error logs.
+found no Dialog or horizontal overflow and no browser warning/error logs. IAM
+confirmed that no fixed consumable SSO backend contract exists, so this remains
+explicitly isolated MOCK UX.
 
 Earlier Deployment lifecycle, AccessKey carrier, same-User permission-source
 handoff, Application tag recovery, service authorization, policy
