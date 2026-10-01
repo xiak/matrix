@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `b8c73ae4`
-- Pushed documentation milestone: `19540aa8`
+- Pushed source/embed milestone: `7269ce6a`
+- Pushed documentation milestone: `3a361fc9`
 
 ## Authoritative route
 
@@ -26,25 +26,25 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. MOCK and LIVE AccessKey
-entry now reuse one User-owner directory. Complete User snapshots search and
-page locally; partial snapshots state that search covers only the loaded page,
-follow the opaque IAM cursor and do not invent an Account-wide total. Keys are
-still loaded only after choosing one User. The directory takes loading, busy
-and page-read behavior as explicit inputs instead of subscribing to the whole
-IAM Provider.
+login verification remains disabled for UX review. Policy permission uses and
+permission-boundary uses now keep separate semantics while sharing searchable,
+locally paged table controls and the common footer. Filtering is deferred,
+stale identity links are disabled during transitions, and derived relationship
+snapshots are memoized. The page explicitly describes a complete MOCK snapshot
+and does not imply a LIVE server total or cursor contract.
 
-Source and synchronized 233-file embed are pushed at `b8c73ae4`; FEAT evidence
-is pushed at `19540aa8`. The milestone passed 57 frontend files / 914 tests,
-three normalization cases, type/lint/architecture checks, 228 theme contrast
-pairs, a 42-route static export, embed equality and repository Go test/vet.
-Desktop and `390 × 844` DEV checks covered search, User selection and responsive
-labelled rows with no page overflow or browser warning/error.
+Source and synchronized 233-file embed are pushed at `7269ce6a`; FEAT evidence
+is pushed at `3a361fc9`. A 13-owner fixture proves first/second-page behavior,
+search counts and exact Role navigation. The milestone passed 57 frontend
+files / 915 tests, three normalization cases, type/lint/architecture checks,
+228 theme contrast pairs, a 42-route static export, embed equality and
+repository Go test/vet. Desktop DEV verified search and empty-result recovery
+with no browser warning/error.
 
-The previously pushed policy-compilation provenance, service-authorization,
-policy-coverage, Audit, cross-service loading/navigation and other console
-milestones remain owned and indexed by FEAT-007; load only the relevant row
-when resuming that work.
+The previously pushed AccessKey owner directory, policy-compilation provenance,
+service-authorization, policy-coverage, Audit, cross-service loading/navigation
+and other console milestones remain owned and indexed by FEAT-007; load only
+the relevant row when resuming that work.
 
 ## Continuation boundary
 
