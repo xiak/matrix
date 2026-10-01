@@ -6,8 +6,8 @@
 - Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `6857313d7`
-- Pushed documentation milestone: `3978f8d94`
+- Pushed source/embed milestone: `3193acde5`
+- Pushed documentation milestone: `d4b728592`
 
 ## Authoritative route
 
@@ -29,22 +29,21 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Cross-service navigation
-now keeps the destination title and a route-specific content boundary mounted
-immediately; Overview, Catalog, Quotas, Regions, delivery environments, Log
-search and IAM no longer fall back to a generic page-wide skeleton. Only the
-provider-owned rows/cards paint after 200ms, and shimmer uses a paint-contained
-transform instead of `background-position`.
+login verification remains disabled for UX review. The Account security report
+preview now applies its fixed User, AccessKey and total-row limits before
+submission, disables generation when a complete MOCK inventory is too large,
+and names the breached boundary instead of silently ignoring the action or
+truncating evidence. Server authority and the canonical CSV byte limit remain
+explicitly outside this client preflight.
 
-Source and synchronized embed are pushed at `6857313d7`; shared-console
-evidence is pushed through `3978f8d94`. The complete frontend gate passed 58
-files/967 cases plus three normalization cases, typecheck/lint/architecture/
+Source and synchronized embed are pushed at `3193acde5`; shared-console
+evidence is pushed through `d4b728592`. The complete frontend gate passed 58
+files/968 cases plus three normalization cases, typecheck/lint/architecture/
 228-pair style checks, 42-route export, 233-file embed equality and repository
-Go test/vet. A fresh `390 x 844` browser path through Catalog, IAM, Logs and Log
-search showed immediate destination content, no horizontal overflow and empty
-warning/error logs. The prior Account security report and content-area IAM
-workflows remain owned by FEAT-007 and FEAT-IAM-010; no new LIVE IAM wire was
-added.
+Go test/vet. A fresh desktop browser tab entered the preview and generated the
+immutable report with no Dialog or browser warning/error. The earlier regional
+loading and cross-service navigation behavior remains owned by FEAT-007; no new
+LIVE IAM wire was added.
 
 Earlier federation replacement, Deployment lifecycle, AccessKey carrier,
 same-User permission-source handoff, Application tag recovery, service
@@ -76,7 +75,7 @@ IAM-009 S4a has a pushed signed-release candidate at
 `e012e446055c26136396efc5da28557b6cbb796f`; it does not change the report
 API/HTTP/use-case shape fixed by `57cb28d7`. Verification `36919226231` remains
 queued, while signed-install/backup-restore composition and explicit consumable
-confirmation remain open. Keep `8e6a66718` as information architecture only;
+confirmation remain open. Keep `3193acde5` as information architecture only;
 do not mount create/read/content adapters or enable CSV until IAM explicitly
 marks the fixed SHA consumable.
 External assertions remain configuration-only: do not reintroduce a persistent
