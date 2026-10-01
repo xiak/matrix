@@ -191,12 +191,17 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
   const t = useTranslations("IamWorkspace.securityReportPreview");
   const [requestId] = useState(() => `mock-${Date.now().toString(36)}`);
   const [report, setReport] = useState<AccountSecurityReportPreviewModel | null>(null);
+  const plannedUsers = scene.users.length + 1;
   const plannedScopes = [
     { id: "account" as const, rows: 1 },
-    { id: "users" as const, rows: scene.users.length },
+    { id: "users" as const, rows: plannedUsers },
     { id: "accessKeys" as const, rows: workspace.keys.length }
   ];
-  const scopes = report?.scopes ?? plannedScopes;
+  const scopes = report ? [
+    { id: "account" as const, rows: 1 },
+    { id: "users" as const, rows: report.totals.users },
+    { id: "accessKeys" as const, rows: report.totals.accessKeys }
+  ] : plannedScopes;
   const totalRows = scopes.reduce((total, scope) => total + scope.rows, 0);
   const generate = () => {
     const result = createAccountSecurityReportPreview(workspace, scene, new Date().toISOString(), requestId, currentSession);
@@ -224,8 +229,9 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
           <div><dt>{t("requestId")}</dt><dd><code>{requestId}</code></dd></div>
           {report ? <>
             <div><dt>{t("reportId")}</dt><dd><code>{report.reportId}</code></dd></div>
-            <div><dt>{t("generatedAt")}</dt><dd><WorkspaceTime value={report.generatedAt} /></dd></div>
+            <div><dt>{t("observedAt")}</dt><dd><WorkspaceTime value={report.observedAt} /></dd></div>
             <div><dt>{t("expiresAt")}</dt><dd><WorkspaceTime value={report.expiresAt} /></dd></div>
+            <div><dt>{t("settingsVersion")}</dt><dd>v{report.accountSecuritySettingsVersion}</dd></div>
           </> : null}
           <div><dt>{t("format")}</dt><dd>{t("formatV1")}</dd></div>
           <div><dt>{t("retention")}</dt><dd>{t("retentionValue", { days: accountSecurityReportLimits.retainedDays, reports: accountSecurityReportLimits.retainedReports })}</dd></div>
@@ -233,11 +239,63 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
         </dl>
       </Card.Body>
     </Card>
+    {report ? <Tabs.Root defaultValue="overview">
+      <Tabs.List aria-label={t("reportSections")}>
+        <Tabs.Trigger value="overview">{t("overviewTab")}</Tabs.Trigger>
+        <Tabs.Trigger value="users">{t("usersTab", { count: report.users.length })}</Tabs.Trigger>
+        <Tabs.Trigger value="accessKeys">{t("accessKeysTab", { count: report.accessKeys.length })}</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content className={styles.stack} value="overview">
+        <Card>
+          <Card.Header><div><Typography.Title as="h2" level={3}>{t("scopeTitle")}</Typography.Title><Typography.Text tone="muted">{t("scopeHint")}</Typography.Text></div><Badge status="info">{t("immutable")}</Badge></Card.Header>
+          <Card.Body className={styles.securityReportBody}>
+            <dl className={styles.securityReportSummary} aria-label={t("limitsTitle")}>
+              <div><dt>{t("users")}</dt><dd>{report.totals.users} / {accountSecurityReportLimits.users}</dd></div>
+              <div><dt>{t("accessKeys")}</dt><dd>{report.totals.accessKeys} / {accountSecurityReportLimits.accessKeys}</dd></div>
+              <div><dt>{t("rows")}</dt><dd>{report.totals.rows} / {accountSecurityReportLimits.rows}</dd></div>
+              <div><dt>{t("content")}</dt><dd>≤ 4 MiB</dd></div>
+            </dl>
+            <ul className={styles.securityChecks}>
+              {scopes.map((scope) => <li key={scope.id}><div className={styles.securityCheckCopy}><div className={styles.securityCheckHeading}><strong>{t(`scopes.${scope.id}.title`)}</strong><Badge status="info">{t("rowCount", { count: scope.rows })}</Badge></div><p>{t(`scopes.${scope.id}.fields`)}</p><span className={styles.securityEvidenceState}>{t(`scopes.${scope.id}.csv`)}</span></div></li>)}
+            </ul>
+            <Alert status="warning">{t("commitmentBoundary")}</Alert>
+          </Card.Body>
+        </Card>
+        <Card>
+          <Card.Header><div><Typography.Title as="h2" level={3}>{t("evidenceTitle")}</Typography.Title><Typography.Text tone="muted">{t("evidenceHint")}</Typography.Text></div></Card.Header>
+          <Card.Body className={styles.securityReportBody}>
+            <ul className={styles.securityChecks}>
+              {report.coverage.map((coverage) => <li key={coverage.source}><div className={styles.securityCheckCopy}><div className={styles.securityCheckHeading}><strong>{t(`coverageSources.${coverage.source}.title`)}</strong><Badge status={coverage.state === "COMPLETE" ? "success" : "neutral"}>{t(`coverage.${coverage.state}`)}</Badge></div><p>{t(`coverageSources.${coverage.source}.hint`)}</p></div></li>)}
+            </ul>
+          </Card.Body>
+        </Card>
+        <Card>
+          <Card.Header><Typography.Title as="h2" level={3}>{t("failureTitle")}</Typography.Title></Card.Header>
+          <Card.Body><dl className={styles.activityEvidence} aria-label={t("failureTitle")}>
+            {(["overLimit", "expired", "revoked"] as const).map((boundary) => <div key={boundary}><dt>{t(`failures.${boundary}.title`)}</dt><dd><Badge status="neutral">{t(`failures.${boundary}.status`)}</Badge><span>{t(`failures.${boundary}.hint`)}</span></dd></div>)}
+          </dl></Card.Body>
+        </Card>
+      </Tabs.Content>
+      <Tabs.Content value="users">
+        <WorkspaceCollection embedded title={t("userEvidenceTitle")} description={t("userEvidenceHint")} items={report.users}
+          columns={[t("user"), t("status"), t("rootIdentity"), t("mfa"), t("passwordLogin")]}
+          keywords={(user) => `${user.loginName} ${user.displayName} ${user.status} ${user.mfaState} ${user.lastPasswordLogin.state}`}
+          row={(user) => <><td><strong>{user.displayName}</strong><small><code>{user.loginName}</code> · {user.id}</small></td><td><Badge status={user.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${user.status}`)}</Badge>{user.mustChangePassword ? <small>{t("mustChangePassword")}</small> : null}</td><td>{user.root ? <Badge status="info">{t("root")}</Badge> : t("member")}</td><td><span>{t(`mfaStates.${user.mfaState}`)}</span><small>{user.resourceVersion ? t("resourceVersion", { version: user.resourceVersion }) : t("versionUnavailable")}</small></td><td><Badge status={user.lastPasswordLogin.state === "OBSERVED" ? "success" : user.lastPasswordLogin.state === "UNKNOWN" ? "warning" : "neutral"}>{t(`observations.${user.lastPasswordLogin.state}`)}</Badge>{user.lastPasswordLogin.observedAt ? <small><WorkspaceTime value={user.lastPasswordLogin.observedAt} /></small> : null}</td></>}
+          footerNote={t("userEvidenceHint")} />
+      </Tabs.Content>
+      <Tabs.Content value="accessKeys">
+        <WorkspaceCollection embedded title={t("keyEvidenceTitle")} description={t("keyEvidenceHint")} items={report.accessKeys}
+          columns={[t("accessKey"), t("owner"), t("status"), t("network"), t("authorizationObservation")]}
+          keywords={(key) => `${key.id} ${key.userId} ${key.status} ${key.allowedSourceCidrs.join(" ")} ${key.authorization.product ?? ""} ${key.authorization.action ?? ""}`}
+          row={(key) => <><td><code>{key.id}</code><small>{t("resourceVersion", { version: key.resourceVersion })} · <WorkspaceTime value={key.createdAt} /></small></td><td><code>{key.userId}</code></td><td><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(`keyStates.${key.status}`)}</Badge></td><td>{key.allowedSourceCidrs.length ? key.allowedSourceCidrs.map((cidr) => <code key={cidr}>{cidr}</code>) : t("allNetworks")}</td><td><Badge status={key.authorization.state === "OBSERVED" ? key.authorization.allowed ? "success" : "warning" : "neutral"}>{key.authorization.state === "OBSERVED" ? t(key.authorization.allowed ? "allowed" : "denied") : t(`observations.${key.authorization.state}`)}</Badge>{key.authorization.action ? <small>{key.authorization.product} · <code>{key.authorization.action}</code></small> : null}{key.authorization.sourceIp ? <small>{t("sourceIp")} · <code>{key.authorization.sourceIp}</code></small> : null}{key.authorization.observedAt ? <small><WorkspaceTime value={key.authorization.observedAt} /></small> : null}</td></>}
+          footerNote={t("keyEvidenceHint")} />
+      </Tabs.Content>
+    </Tabs.Root> : <>
     <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{t("scopeTitle")}</Typography.Title><Typography.Text tone="muted">{t("scopeHint")}</Typography.Text></div><Badge status="info">{t("immutable")}</Badge></Card.Header>
       <Card.Body className={styles.securityReportBody}>
         <dl className={styles.securityReportSummary} aria-label={t("limitsTitle")}>
-          <div><dt>{t("users")}</dt><dd>{scene.users.length} / {accountSecurityReportLimits.users}</dd></div>
+          <div><dt>{t("users")}</dt><dd>{plannedUsers} / {accountSecurityReportLimits.users}</dd></div>
           <div><dt>{t("accessKeys")}</dt><dd>{workspace.keys.length} / {accountSecurityReportLimits.accessKeys}</dd></div>
           <div><dt>{t("rows")}</dt><dd>{totalRows} / {accountSecurityReportLimits.rows}</dd></div>
           <div><dt>{t("content")}</dt><dd>≤ 4 MiB</dd></div>
@@ -248,23 +306,17 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
         <Alert status="warning">{t("limitBoundary")}</Alert>
       </Card.Body>
     </Card>
-    {report ? <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>{t("evidenceTitle")}</Typography.Title><Typography.Text tone="muted">{t("evidenceHint")}</Typography.Text></div></Card.Header>
-      <Card.Body className={styles.securityReportBody}>
-        <ul className={styles.securityChecks}>
-          {report.evidence.map((evidence) => <li key={evidence.id}><div className={styles.securityCheckCopy}><div className={styles.securityCheckHeading}><strong>{t(`evidence.${evidence.id}.title`)}</strong><Badge status={evidence.coverage === "INCLUDED" ? "info" : "neutral"}>{t(`coverage.${evidence.coverage}`)}</Badge></div><p>{evidence.coverage === "INCLUDED" ? t(`evidence.${evidence.id}.included`, { observed: evidence.observed, notObserved: evidence.notObserved, unknown: evidence.unknown }) : t(`evidence.${evidence.id}.notIncluded`)}</p></div></li>)}
-        </ul>
-      </Card.Body>
-    </Card> : <Card>
+    <Card>
       <Card.Header><Typography.Title as="h2" level={3}>{t("beforeGenerateTitle")}</Typography.Title></Card.Header>
       <Card.Body className={styles.securityReportBody}><p className={styles.note}>{t("beforeGenerateHint")}</p><Alert status="warning">{t("noRealtimeConclusion")}</Alert></Card.Body>
-    </Card>}
+    </Card>
     <Card>
       <Card.Header><Typography.Title as="h2" level={3}>{t("failureTitle")}</Typography.Title></Card.Header>
       <Card.Body><dl className={styles.activityEvidence} aria-label={t("failureTitle")}>
         {(["overLimit", "expired", "revoked"] as const).map((boundary) => <div key={boundary}><dt>{t(`failures.${boundary}.title`)}</dt><dd><Badge status="neutral">{t(`failures.${boundary}.status`)}</Badge><span>{t(`failures.${boundary}.hint`)}</span></dd></div>)}
       </dl></Card.Body>
     </Card>
+    </>}
   </WorkspaceDetail>;
 }
 

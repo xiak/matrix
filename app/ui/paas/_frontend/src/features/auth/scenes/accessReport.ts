@@ -305,17 +305,52 @@ export const accountSecurityReportLimits = {
   retainedReports: 20
 } as const;
 
-export type AccountSecurityReportScope = {
-  id: "account" | "users" | "accessKeys";
-  rows: number;
+export type AccountSecurityReportObservationState = "OBSERVED" | "NOT_OBSERVED_IN_RETAINED_IAM_STATE" | "UNKNOWN";
+export type AccountSecurityReportCoverageSource =
+  | "IAM_ACCOUNT"
+  | "IAM_USERS"
+  | "IAM_LOGIN_SESSIONS"
+  | "IAM_ACCESS_KEYS"
+  | "IAM_ROLE_ACTIVITY"
+  | "PAAS_RESULTS"
+  | "AUDIT_STATISTICS"
+  | "NOTIFICATION_DELIVERY"
+  | "EXTERNAL_RISK";
+
+export type AccountSecurityReportCoverage = {
+  source: AccountSecurityReportCoverageSource;
+  state: "COMPLETE" | "NOT_INCLUDED";
 };
 
-export type AccountSecurityReportEvidence = {
-  id: "passwordLoginSession" | "accessKeyAuthorization" | "roleActivity" | "paasOutcomes" | "auditStatistics" | "notificationDelivery" | "externalRisk";
-  coverage: "INCLUDED" | "NOT_INCLUDED";
-  observed: number;
-  notObserved: number;
-  unknown: number;
+export type AccountSecurityReportUserPreview = {
+  id: string;
+  name: string;
+  loginName: string;
+  displayName: string;
+  status: "ACTIVE" | "DISABLED";
+  root: boolean;
+  mustChangePassword: boolean;
+  resourceVersion: number | null;
+  mfaState: "NEVER_BOUND" | "BOUND" | "REMOVED" | "UNKNOWN";
+  lastPasswordLogin: { state: AccountSecurityReportObservationState; observedAt: string | null };
+};
+
+export type AccountSecurityReportAccessKeyPreview = {
+  id: string;
+  name: string;
+  userId: string;
+  status: "ENABLED" | "DISABLED";
+  resourceVersion: number;
+  createdAt: string;
+  allowedSourceCidrs: string[];
+  authorization: {
+    state: AccountSecurityReportObservationState;
+    observedAt: string | null;
+    allowed: boolean | null;
+    product: string | null;
+    action: string | null;
+    sourceIp: string | null;
+  };
 };
 
 export type AccountSecurityReportPreview = {
@@ -324,11 +359,13 @@ export type AccountSecurityReportPreview = {
   requestId: string;
   reportId: string;
   formatVersion: 1;
-  generatedAt: string;
+  observedAt: string;
   expiresAt: string;
   immutable: true;
-  scopes: AccountSecurityReportScope[];
-  evidence: AccountSecurityReportEvidence[];
+  accountSecuritySettingsVersion: number;
+  coverage: AccountSecurityReportCoverage[];
+  users: AccountSecurityReportUserPreview[];
+  accessKeys: AccountSecurityReportAccessKeyPreview[];
   totals: { users: number; accessKeys: number; rows: number };
 };
 
@@ -347,20 +384,80 @@ export function createAccountSecurityReportPreview(
   currentSession: SessionSummary | null = null
 ): AccountSecurityReportCreation {
   assertReportAccount(workspace, scene);
-  const users = scene.users.length;
+  const users = scene.users.length + 1;
   const accessKeys = workspace.keys.length;
   const rows = 1 + users + accessKeys;
   if (users > accountSecurityReportLimits.users) return { outcome: "REJECTED", reason: "USER_LIMIT" };
   if (accessKeys > accountSecurityReportLimits.accessKeys) return { outcome: "REJECTED", reason: "ACCESS_KEY_LIMIT" };
   if (rows > accountSecurityReportLimits.rows) return { outcome: "REJECTED", reason: "ROW_LIMIT" };
-  const issuedSessionObserved = currentSession?.organizationId === workspace.accountId
+  const validCurrentSession = currentSession?.organizationId === workspace.accountId
     && currentSession.principalId === scene.currentUserId
     && currentSession.status === "ACTIVE"
-    && Number.isFinite(Date.parse(currentSession.issuedAt));
-  const observedKeyAuthorizations = workspace.keys.filter((key) => key.usage.lastAuthorization).length;
+    && Number.isFinite(Date.parse(currentSession.issuedAt))
+    ? currentSession
+    : null;
   const generated = new Date(generatedAt);
   if (!requestId || !Number.isFinite(generated.getTime())) throw new Error("INVALID_IAM_REPORT");
   const expiresAt = new Date(generated.getTime() + accountSecurityReportLimits.retainedDays * 24 * 60 * 60 * 1000).toISOString();
+  const rootMfaState = scene.accountOwner.isCurrent
+    ? workspace.personalMfa.factorState === "bound" ? "BOUND" as const
+      : workspace.personalMfa.factorState === "removed" ? "REMOVED" as const
+        : "NEVER_BOUND" as const
+    : "UNKNOWN" as const;
+  const reportUsers: AccountSecurityReportUserPreview[] = [
+    {
+      id: scene.accountOwner.id,
+      name: scene.accountOwner.loginName,
+      loginName: scene.accountOwner.loginName,
+      displayName: scene.accountOwner.name ?? scene.accountOwner.loginName,
+      status: scene.accountOwner.state === "disabled" ? "DISABLED" as const : "ACTIVE" as const,
+      root: true,
+      mustChangePassword: scene.accountOwner.state === "passwordChangeRequired",
+      resourceVersion: scene.accountOwner.isCurrent ? scene.permissionBoundary.resourceVersion : null,
+      mfaState: rootMfaState,
+      lastPasswordLogin: validCurrentSession?.principalId === scene.accountOwner.id
+        ? { state: "OBSERVED" as const, observedAt: validCurrentSession.issuedAt }
+        : { state: "NOT_OBSERVED_IN_RETAINED_IAM_STATE" as const, observedAt: null }
+    },
+    ...scene.users.map((user) => ({
+      id: user.id,
+      name: user.loginName,
+      loginName: user.loginName,
+      displayName: user.name,
+      status: user.enabled ? "ACTIVE" as const : "DISABLED" as const,
+      root: false,
+      mustChangePassword: user.state === "passwordChangeRequired",
+      resourceVersion: user.resourceVersion,
+      mfaState: "UNKNOWN" as const,
+      lastPasswordLogin: validCurrentSession?.principalId === user.id
+        ? { state: "OBSERVED" as const, observedAt: validCurrentSession.issuedAt }
+        : { state: "NOT_OBSERVED_IN_RETAINED_IAM_STATE" as const, observedAt: null }
+    }))
+  ].sort((left, right) => left.id.localeCompare(right.id, "en"));
+  const reportKeys: AccountSecurityReportAccessKeyPreview[] = workspace.keys.map((key) => ({
+    id: key.id,
+    name: key.id,
+    userId: key.ownerId,
+    status: key.status,
+    resourceVersion: key.resourceVersion,
+    createdAt: key.createdAt,
+    allowedSourceCidrs: [...key.networkRestrictions.allowedSourceCidrs],
+    authorization: key.usage.lastAuthorization ? {
+      state: "OBSERVED" as const,
+      observedAt: key.usage.lastAuthorization.evaluatedAt,
+      allowed: key.usage.lastAuthorization.allowed,
+      product: key.usage.lastAuthorization.product,
+      action: key.usage.lastAuthorization.action,
+      sourceIp: key.usage.lastAuthorization.sourceIp
+    } : {
+      state: "NOT_OBSERVED_IN_RETAINED_IAM_STATE" as const,
+      observedAt: null,
+      allowed: null,
+      product: null,
+      action: null,
+      sourceIp: null
+    }
+  })).sort((left, right) => left.id.localeCompare(right.id, "en"));
   return {
     outcome: "COMPLETED",
     report: {
@@ -369,19 +466,23 @@ export function createAccountSecurityReportPreview(
       requestId,
       reportId: `security-report-${requestId}`,
       formatVersion: 1,
-      generatedAt: generated.toISOString(),
+      observedAt: generated.toISOString(),
       expiresAt,
       immutable: true,
-      scopes: [
-        { id: "account", rows: 1 },
-        { id: "users", rows: users },
-        { id: "accessKeys", rows: accessKeys }
+      accountSecuritySettingsVersion: workspace.settings.accountRuleVersion,
+      coverage: [
+        { source: "IAM_ACCOUNT", state: "COMPLETE" },
+        { source: "IAM_USERS", state: "COMPLETE" },
+        { source: "IAM_LOGIN_SESSIONS", state: "COMPLETE" },
+        { source: "IAM_ACCESS_KEYS", state: "COMPLETE" },
+        { source: "IAM_ROLE_ACTIVITY", state: "NOT_INCLUDED" },
+        { source: "PAAS_RESULTS", state: "NOT_INCLUDED" },
+        { source: "AUDIT_STATISTICS", state: "NOT_INCLUDED" },
+        { source: "NOTIFICATION_DELIVERY", state: "NOT_INCLUDED" },
+        { source: "EXTERNAL_RISK", state: "NOT_INCLUDED" }
       ],
-      evidence: [
-        { id: "passwordLoginSession", coverage: "INCLUDED", observed: issuedSessionObserved ? 1 : 0, notObserved: Math.max(0, users - (issuedSessionObserved ? 1 : 0)), unknown: 0 },
-        { id: "accessKeyAuthorization", coverage: "INCLUDED", observed: observedKeyAuthorizations, notObserved: 0, unknown: Math.max(0, accessKeys - observedKeyAuthorizations) },
-        ...(["roleActivity", "paasOutcomes", "auditStatistics", "notificationDelivery", "externalRisk"] as const).map((id) => ({ id, coverage: "NOT_INCLUDED" as const, observed: 0, notObserved: 0, unknown: 0 }))
-      ],
+      users: reportUsers,
+      accessKeys: reportKeys,
       totals: { users, accessKeys, rows }
     }
   };

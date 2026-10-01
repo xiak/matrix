@@ -4394,8 +4394,9 @@
       "account": "Current account",
       "requestId": "Request ID",
       "reportId": "Report ID",
-      "generatedAt": "Generated",
+      "observedAt": "Observed at",
       "expiresAt": "Expires",
+      "settingsVersion": "Account security settings version",
       "format": "Format version",
       "formatV1": "CSV v1 · server canonicalized",
       "retention": "Retention boundary",
@@ -4410,6 +4411,10 @@
       "rows": "Total data rows",
       "content": "Canonical CSV",
       "rowCount": "{count} rows",
+      "reportSections": "Report content",
+      "overviewTab": "Report summary",
+      "usersTab": "User evidence ({count})",
+      "accessKeysTab": "Access-key evidence ({count})",
       "scopes": {
         "account": {
           "title": "ACCOUNT",
@@ -4428,31 +4433,56 @@
         }
       },
       "limitBoundary": "If any count limit or the 4 MiB content limit is exceeded, generation fails as a whole. It never truncates, samples, or leaves an incomplete report marked successful.",
+      "commitmentBoundary": "MOCK does not fabricate document digests, CSV digests, or exact byte counts. Those integrity commitments must come from a LIVE server response.",
       "beforeGenerateTitle": "Pre-generation boundary",
       "beforeGenerateHint": "POST carries only requestId and fixed formatVersion=1. The route and media type define the API version; no account, user, time, product, or source selector is accepted.",
       "noRealtimeConclusion": "The report is not a real-time watermark, current permit, risk score, or automatic-disable authorization. Generating it changes no user, key, or policy.",
       "evidenceTitle": "Evidence coverage",
-      "evidenceHint": "Not observed, unknown, and not included are distinct facts and must never collapse into “never happened.”",
+      "evidenceHint": "Coverage states identify which authoritative sources the report read. Not included never means no such activity occurred.",
       "coverage": {
-        "INCLUDED": "Included",
+        "COMPLETE": "Complete",
         "NOT_INCLUDED": "Not included"
       },
-      "evidence": {
-        "passwordLoginSession": {
-          "title": "Committed password-session issuance",
-          "included": "OBSERVED {observed}; NOT_OBSERVED_IN_RETAINED_IAM_STATE {notObserved}; UNKNOWN {unknown}. No retained record does not mean the user never signed in.",
-          "notIncluded": "This evidence is outside the current format."
-        },
-        "accessKeyAuthorization": {
-          "title": "Latest AccessKey authorization observation",
-          "included": "OBSERVED {observed}; NOT_OBSERVED_IN_RETAINED_IAM_STATE {notObserved}; UNKNOWN {unknown}. Missing legacy lineage remains UNKNOWN.",
-          "notIncluded": "This evidence is outside the current format."
-        },
-        "roleActivity": { "title": "Role / RoleSession business activity", "included": "Included.", "notIncluded": "NOT_INCLUDED · This IAM-only report does not infer role business activity." },
-        "paasOutcomes": { "title": "PaaS business outcomes", "included": "Included.", "notIncluded": "NOT_INCLUDED · The report does not read across into the PaaS database." },
-        "auditStatistics": { "title": "Audit statistics", "included": "Included.", "notIncluded": "NOT_INCLUDED · Audit aggregation is not presented as an IAM-consistent snapshot." },
-        "notificationDelivery": { "title": "Security-notification delivery", "included": "Included.", "notIncluded": "NOT_INCLUDED · Email and external delivery are outside this report." },
-        "externalRisk": { "title": "External risk and exposure", "included": "Included.", "notIncluded": "NOT_INCLUDED · No cross-product risk score or external-exposure conclusion is generated." }
+      "coverageSources": {
+        "IAM_ACCOUNT": { "title": "Account security settings", "hint": "Seals the current account ID and security-settings version." },
+        "IAM_USERS": { "title": "IAM users", "hint": "Includes the one Root identity and every subuser in the same point-in-time state." },
+        "IAM_LOGIN_SESSIONS": { "title": "Password login sessions", "hint": "Records only password-session issuance that IAM still retains and can prove." },
+        "IAM_ACCESS_KEYS": { "title": "Access keys and authorization observations", "hint": "Includes non-secret key metadata, source-network restrictions, and the latest immutable authorization result." },
+        "IAM_ROLE_ACTIVITY": { "title": "Role / RoleSession business activity", "hint": "The current IAM-only report does not infer role business activity." },
+        "PAAS_RESULTS": { "title": "PaaS business outcomes", "hint": "The report does not read or infer PaaS results across databases." },
+        "AUDIT_STATISTICS": { "title": "Audit statistics", "hint": "Audit aggregation is not presented as an IAM-consistent snapshot." },
+        "NOTIFICATION_DELIVERY": { "title": "Security-notification delivery", "hint": "Email and external delivery are outside this report." },
+        "EXTERNAL_RISK": { "title": "External risk and exposure", "hint": "No cross-product risk score or external-exposure conclusion is generated." }
+      },
+      "userEvidenceTitle": "User evidence",
+      "userEvidenceHint": "Root and subusers come from the same immutable report. A login not observed in retained state does not mean it never happened.",
+      "keyEvidenceTitle": "Access-key evidence",
+      "keyEvidenceHint": "Only non-secret metadata is shown. Allow and Deny are authorization results, not business-execution outcomes.",
+      "user": "User",
+      "status": "Status",
+      "rootIdentity": "Identity type",
+      "mfa": "MFA eligibility",
+      "passwordLogin": "Password-login observation",
+      "accessKey": "Access key",
+      "owner": "Owner",
+      "network": "Allowed source networks",
+      "authorizationObservation": "Latest authorization observation",
+      "root": "Root",
+      "member": "Subuser",
+      "mustChangePassword": "Must change password at next sign-in",
+      "resourceVersion": "Resource version v{version}",
+      "versionUnavailable": "Resource version not held by MOCK",
+      "allNetworks": "Any source network",
+      "allowed": "Allow",
+      "denied": "Deny",
+      "sourceIp": "Source IP",
+      "states": { "ACTIVE": "Active", "DISABLED": "Disabled" },
+      "keyStates": { "ENABLED": "Enabled", "DISABLED": "Disabled" },
+      "mfaStates": { "NEVER_BOUND": "Never bound", "BOUND": "Bound", "REMOVED": "Removed", "UNKNOWN": "Unknown" },
+      "observations": {
+        "OBSERVED": "Observed",
+        "NOT_OBSERVED_IN_RETAINED_IAM_STATE": "Not observed in retained IAM state",
+        "UNKNOWN": "Unknown"
       },
       "failureTitle": "Fail-closed semantics",
       "failures": {

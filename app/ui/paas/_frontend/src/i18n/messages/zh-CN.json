@@ -4408,8 +4408,9 @@
       "account": "当前账号",
       "requestId": "请求标识",
       "reportId": "报告 ID",
-      "generatedAt": "生成时间",
+      "observedAt": "观测时点",
       "expiresAt": "到期时间",
+      "settingsVersion": "账号安全设置版本",
       "format": "格式版本",
       "formatV1": "CSV v1 · 服务端规范化",
       "retention": "保留边界",
@@ -4424,6 +4425,10 @@
       "rows": "总数据行",
       "content": "规范 CSV",
       "rowCount": "{count} 行",
+      "reportSections": "报告内容",
+      "overviewTab": "报告摘要",
+      "usersTab": "用户证据 ({count})",
+      "accessKeysTab": "访问密钥证据 ({count})",
       "scopes": {
         "account": {
           "title": "ACCOUNT",
@@ -4442,31 +4447,56 @@
         }
       },
       "limitBoundary": "任一上限或 4 MiB 正文上限被超过时，整个生成请求失败；不会截断、抽样或留下“成功但不完整”的报告。",
+      "commitmentBoundary": "MOCK 不伪造文档摘要、CSV 摘要或精确字节数；这些完整性承诺只能来自 LIVE 服务端响应。",
       "beforeGenerateTitle": "生成前边界",
       "beforeGenerateHint": "POST 只携带 requestId 和固定 formatVersion=1；API 版本由路由与媒体类型确定，不携带账号、用户、时间、产品或来源选择器。",
       "noRealtimeConclusion": "报告不是实时水位、当前许可、风险评分或自动停用依据；生成报告不会改变任何用户、密钥或策略。",
       "evidenceTitle": "证据覆盖",
-      "evidenceHint": "未观测、未知与未纳入是三种不同事实，不能合并成“从未发生”。",
+      "evidenceHint": "覆盖声明说明报告读取了哪些权威来源；未纳入不能解释为没有相关活动。",
       "coverage": {
-        "INCLUDED": "已纳入",
+        "COMPLETE": "完整纳入",
         "NOT_INCLUDED": "未纳入"
       },
-      "evidence": {
-        "passwordLoginSession": {
-          "title": "已提交的密码登录 Session 发行",
-          "included": "OBSERVED {observed} 条；NOT_OBSERVED_IN_RETAINED_IAM_STATE {notObserved} 条；UNKNOWN {unknown} 条。没有保留记录不代表该用户从未登录。",
-          "notIncluded": "当前格式未纳入此证据。"
-        },
-        "accessKeyAuthorization": {
-          "title": "AccessKey 最近授权观测",
-          "included": "OBSERVED {observed} 条；NOT_OBSERVED_IN_RETAINED_IAM_STATE {notObserved} 条；UNKNOWN {unknown} 条。缺少旧谱系保持 UNKNOWN。",
-          "notIncluded": "当前格式未纳入此证据。"
-        },
-        "roleActivity": { "title": "Role / RoleSession 业务活动", "included": "已纳入。", "notIncluded": "NOT_INCLUDED · 当前 IAM-only 报告不推断角色业务活动。" },
-        "paasOutcomes": { "title": "PaaS 业务结果", "included": "已纳入。", "notIncluded": "NOT_INCLUDED · 不跨数据库读取 PaaS 结果。" },
-        "auditStatistics": { "title": "Audit 统计", "included": "已纳入。", "notIncluded": "NOT_INCLUDED · 不把审计聚合伪装成 IAM 一致快照。" },
-        "notificationDelivery": { "title": "安全通知送达", "included": "已纳入。", "notIncluded": "NOT_INCLUDED · 邮件或外部通知送达不属于本报告。" },
-        "externalRisk": { "title": "外部风险与暴露", "included": "已纳入。", "notIncluded": "NOT_INCLUDED · 不生成跨产品风险分或外部暴露结论。" }
+      "coverageSources": {
+        "IAM_ACCOUNT": { "title": "账号安全设置", "hint": "封存当前账号标识和安全设置版本。" },
+        "IAM_USERS": { "title": "IAM 用户", "hint": "包含唯一 Root 与当前账号全部子用户的同一时点状态。" },
+        "IAM_LOGIN_SESSIONS": { "title": "密码登录 Session", "hint": "只记录仍由 IAM 保留并能证明的密码登录发行观测。" },
+        "IAM_ACCESS_KEYS": { "title": "访问密钥与授权观测", "hint": "包含非秘密密钥元数据、来源网络限制及最近不可变授权结果。" },
+        "IAM_ROLE_ACTIVITY": { "title": "Role / RoleSession 业务活动", "hint": "当前 IAM-only 报告不推断角色业务活动。" },
+        "PAAS_RESULTS": { "title": "PaaS 业务结果", "hint": "不跨数据库读取或推断 PaaS 操作结果。" },
+        "AUDIT_STATISTICS": { "title": "Audit 统计", "hint": "不把审计聚合伪装成 IAM 一致快照。" },
+        "NOTIFICATION_DELIVERY": { "title": "安全通知送达", "hint": "邮件或外部通知送达不属于本报告。" },
+        "EXTERNAL_RISK": { "title": "外部风险与暴露", "hint": "不生成跨产品风险分或外部暴露结论。" }
+      },
+      "userEvidenceTitle": "用户证据",
+      "userEvidenceHint": "Root 与子用户来自同一不可变报告；未观测登录不等于从未登录。",
+      "keyEvidenceTitle": "访问密钥证据",
+      "keyEvidenceHint": "仅展示非秘密元数据；Allow / Deny 是授权求值结果，不代表业务执行结果。",
+      "user": "用户",
+      "status": "状态",
+      "rootIdentity": "身份类型",
+      "mfa": "MFA 资格",
+      "passwordLogin": "密码登录观测",
+      "accessKey": "访问密钥",
+      "owner": "所属用户",
+      "network": "允许来源网络",
+      "authorizationObservation": "最近授权观测",
+      "root": "Root",
+      "member": "子用户",
+      "mustChangePassword": "下次登录必须修改密码",
+      "resourceVersion": "资源版本 v{version}",
+      "versionUnavailable": "MOCK 未持有资源版本",
+      "allNetworks": "未限制来源网络",
+      "allowed": "Allow",
+      "denied": "Deny",
+      "sourceIp": "来源 IP",
+      "states": { "ACTIVE": "正常", "DISABLED": "已停用" },
+      "keyStates": { "ENABLED": "已启用", "DISABLED": "已停用" },
+      "mfaStates": { "NEVER_BOUND": "从未绑定", "BOUND": "已绑定", "REMOVED": "已移除", "UNKNOWN": "未知" },
+      "observations": {
+        "OBSERVED": "已观测",
+        "NOT_OBSERVED_IN_RETAINED_IAM_STATE": "保留的 IAM 状态中未观测",
+        "UNKNOWN": "未知"
       },
       "failureTitle": "失败关闭语义",
       "failures": {

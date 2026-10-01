@@ -3882,14 +3882,22 @@ describe("CAM-style access workspace", () => {
     if (created.outcome !== "COMPLETED") throw new Error("report not created");
     expect(created.report).toMatchObject({
       mode: "MOCK", accountId: "org-xiak", requestId: "request-one", reportId: "security-report-request-one",
-      formatVersion: 1, generatedAt: "2026-09-09T00:00:00.000Z", expiresAt: "2026-09-16T00:00:00.000Z", immutable: true,
-      totals: { users: 2, accessKeys: workspace.keys.length, rows: 3 + workspace.keys.length }
+      formatVersion: 1, observedAt: "2026-09-09T00:00:00.000Z", expiresAt: "2026-09-16T00:00:00.000Z", immutable: true,
+      accountSecuritySettingsVersion: workspace.settings.accountRuleVersion,
+      totals: { users: 3, accessKeys: workspace.keys.length, rows: 4 + workspace.keys.length }
     });
-    expect(created.report.evidence.find((item) => item.id === "passwordLoginSession")).toMatchObject({ coverage: "INCLUDED", observed: 1, notObserved: 1, unknown: 0 });
-    expect(created.report.evidence.filter((item) => item.coverage === "NOT_INCLUDED")).toHaveLength(5);
+    expect(created.report.users).toHaveLength(3);
+    expect(created.report.users.filter((item) => item.root)).toEqual([expect.objectContaining({ id: "admin", lastPasswordLogin: { state: "OBSERVED", observedAt: session.issuedAt } })]);
+    expect(created.report.users.filter((item) => !item.root).every((item) => item.lastPasswordLogin.state === "NOT_OBSERVED_IN_RETAINED_IAM_STATE")).toBe(true);
+    expect(created.report.accessKeys).toEqual(workspace.keys.map((key) => expect.objectContaining({ id: key.id, userId: key.ownerId })));
+    expect(created.report.coverage.filter((item) => item.state === "COMPLETE").map((item) => item.source)).toEqual(["IAM_ACCOUNT", "IAM_USERS", "IAM_LOGIN_SESSIONS", "IAM_ACCESS_KEYS"]);
+    expect(created.report.coverage.filter((item) => item.state === "NOT_INCLUDED")).toHaveLength(5);
     expect(() => createAccountSecurityReportPreview(workspace, { ...scene, accountId: "org-foreign" }, "2026-09-09T00:00:00Z", "request-one")).toThrow("INVALID_IAM_TENANT");
 
-    const oversized = { ...scene, users: Array.from({ length: accountSecurityReportLimits.users + 1 }, (_, index) => ({ ...scene.users[0]!, id: `principal-${index}` })) };
+    const atUserLimit = { ...scene, users: Array.from({ length: accountSecurityReportLimits.users - 1 }, (_, index) => ({ ...scene.users[0]!, id: `principal-${index}` })) };
+    expect(createAccountSecurityReportPreview(workspace, atUserLimit, "2026-09-09T00:00:00Z", "request-limit").outcome).toBe("COMPLETED");
+
+    const oversized = { ...scene, users: Array.from({ length: accountSecurityReportLimits.users }, (_, index) => ({ ...scene.users[0]!, id: `principal-${index}` })) };
     expect(createAccountSecurityReportPreview(workspace, oversized, "2026-09-09T00:00:00Z", "request-two")).toEqual({ outcome: "REJECTED", reason: "USER_LIMIT" });
   });
   it("separates review, configured, unknown, and not-applicable security evidence", async () => {
@@ -4031,8 +4039,18 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "账号安全报告" })).toBeTruthy();
     expect(screen.getByText("不可变报告已封存")).toBeTruthy();
     expect(screen.getByText(/security-report-mock-/)).toBeTruthy();
-    expect(screen.getAllByText(/NOT_OBSERVED_IN_RETAINED_IAM_STATE/)).toHaveLength(2);
-    expect(screen.getAllByText(/NOT_INCLUDED/)).toHaveLength(5);
+    expect(screen.getByText(`v${workspace.settings.accountRuleVersion}`)).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "报告摘要" })).toBeTruthy();
+    expect(screen.getByText("IAM 用户")).toBeTruthy();
+    expect(screen.getAllByText("未纳入")).toHaveLength(5);
+    await user.click(screen.getByRole("tab", { name: "用户证据 (3)" }));
+    const userEvidence = screen.getByRole("table", { name: "用户证据" });
+    expect(within(userEvidence).getByText("Root")).toBeTruthy();
+    expect(screen.getAllByText("保留的 IAM 状态中未观测")).toHaveLength(2);
+    await user.click(screen.getByRole("tab", { name: "访问密钥证据 (1)" }));
+    const keyEvidence = screen.getByRole("table", { name: "访问密钥证据" });
+    expect(within(keyEvidence).getByText(workspace.keys[0]!.id)).toBeTruthy();
+    expect(within(keyEvidence).queryByText(/secret/i)).toBeNull();
     expect((screen.getByRole("button", { name: "生成报告" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "下载 CSV v1" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("dialog")).toBeNull();
