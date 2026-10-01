@@ -3852,16 +3852,22 @@ describe("CAM-style access workspace", () => {
   it("keeps enterprise member provisioning separate from SSO configuration", async () => {
     const { user, extension } = await open("federations");
     await user.click(await screen.findByRole("button", { name: "模拟关联企业微信" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 3, name: "模拟关联企业微信" })).toBe(document.activeElement);
     await user.type(screen.getByLabelText("企业名称"), "Preview Enterprise");
     await user.click(screen.getByRole("checkbox", { name: /Dev Member/ }));
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
+    await user.click(screen.getByRole("button", { name: "保存" }));
     const directory = await screen.findByRole("table", { name: "企业微信" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "模拟关联企业微信" })).toBe(document.activeElement));
     expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
     expect(within(directory).queryByRole("button", { name: "导入为子用户" })).toBeNull();
     await user.click(within(directory).getByRole("button", { name: "Preview Enterprise" }));
     await user.click(await screen.findByRole("button", { name: "导入为子用户" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 3, name: "导入为子用户 · Preview Enterprise" })).toBe(document.activeElement);
     await user.click(screen.getByRole("checkbox", { name: /Dev Member/ }));
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "导入为子用户" }));
+    await user.click(screen.getByRole("button", { name: "导入为子用户" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "导入为子用户" })).toBe(document.activeElement));
     const state = await extension.read("preview");
     expect(state.enterprises[0]?.importedMemberIds).toEqual(["dev01"]);
     expect(state.settings.userSsoEnabled).toBe(false);

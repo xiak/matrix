@@ -4644,7 +4644,9 @@
     "enterpriseHint": "Connect WeCom and import members from the authorized visibility scope as subusers. Member provisioning and SSO are separate configurations.",
     "enterpriseFlow": "Connect enterprise → set visible scope → import members → assign permissions",
     "enterpriseMock": "This demo does not scan QR codes, install WeCom apps, connect directories or send invitations. Use mock enterprise information only.",
-    "importHint": "Import creates mock users in this preview session with no permissions. Assign access afterward through users or groups."
+    "importHint": "Import creates mock users in this preview session with no permissions. Assign access afterward through users or groups.",
+    "backToEnterpriseDirectory": "Back to enterprise member access",
+    "backToEnterpriseDetails": "Back to enterprise details"
   },
   "PolicyWorkspace": {
     "createCustomPolicy": "Create custom policy",

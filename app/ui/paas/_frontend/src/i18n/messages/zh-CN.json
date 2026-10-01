@@ -4658,7 +4658,9 @@
     "enterpriseHint": "关联企业微信后，从授权可见范围中选择成员导入为子用户。成员接入与 SSO 配置分别管理。",
     "enterpriseFlow": "关联企业 → 设置可见范围 → 导入成员 → 分配权限",
     "enterpriseMock": "演示不会扫码、安装企业微信应用、连接通讯录或发送邀请。请只使用模拟企业信息。",
-    "importHint": "导入只创建当前体验会话中的模拟用户，默认不授予任何权限。之后在用户或用户组中授权。"
+    "importHint": "导入只创建当前体验会话中的模拟用户，默认不授予任何权限。之后在用户或用户组中授权。",
+    "backToEnterpriseDirectory": "返回企业成员接入",
+    "backToEnterpriseDetails": "返回企业详情"
   },
   "PolicyWorkspace": {
     "createCustomPolicy": "新建自定义策略",
