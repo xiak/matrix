@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `87ad088e`
-- Pushed documentation milestone: `bc930eb5`
+- Pushed source/embed milestone: `60b60619`
+- Pushed documentation milestone: `8aeed58b`
 
 ## Authoritative route
 
@@ -78,10 +78,15 @@ draft across collapse/reopen, no overflow and no browser warning/error. The
 contract is owned by FEAT-007 at `960c7ef9`.
 
 The fixed administrator RoleSession northbound contract is consumed only by
-Role detail. The service-authorization MOCK reuses its public fields but sends
-no query/revoke request and keeps final submission disabled. Product-side LIVE
-bind/unbind, Account-relation revoke and real product-PEP evidence remain
-closed. Exact behavioral evidence and limits are owned by FEAT-IAM-010.
+Role detail. The service-authorization MOCK still reuses its public fields
+without sending real requests. Product-side LIVE bind/unbind now uses only the
+fixed managed-services northbound contract from an exact installation, with a
+content-area review and preserved same-key retry for unknown results; the IAM
+directory remains read-only and the browser never calls IAM internal routes.
+Account-relation revoke, product runtime-session observation and real integrated
+product-PEP browser evidence remain closed. Source/embed `60b60619` passed the
+full 55-file/899-test frontend, export/embed and focused Go UI host gates; its
+contract and limitations are owned by FEAT-IAM-010 at `8aeed58b`.
 
 The earlier navigation stress gate remains unchanged: 200 alternating suspended
 IAM Group and Role destinations preserve the latest click and clear pending
