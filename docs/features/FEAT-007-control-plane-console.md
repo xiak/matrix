@@ -1837,19 +1837,24 @@ identity, Action, state, target, requester, completion time and replacement
 ETag. It does not surface idempotency fingerprints, request digests or an
 invented Audit event ID. LIVE will distinguish no-change and idempotency
 conflicts, reload before retry after a 412 version conflict, and never invent a
-422 branch. The backend SHA remains a fixed candidate until its independent CI
-is registered, so no LIVE adapter consumes it yet. Source and synchronized
-embed are pushed at `dc9ee5f8e`. The complete
-57-file/924-case frontend suite and three export-normalization cases,
+422 branch. A collapsed MOCK-only response selector now proves those recovery
+rules without cluttering the default success path: no-change, idempotency
+conflict and denial offer no blind retry; a 412 replaces the reviewed snapshot
+and ETag and requires a newly confirmed request identity; IAM unavailability
+and response loss retain the original intent for an equal safe replay. The
+backend SHA remains a fixed candidate until its independent CI is registered,
+so no LIVE adapter consumes it yet. Source and synchronized embed are pushed at
+`2ea35d477`. The complete
+57-file/927-case frontend suite and three export-normalization cases,
 typecheck/lint, architecture and 228-pair style gates, 42-route static export,
 233-file embed equality and UI-host Go test/vet passed. Fresh desktop and
-`430 × 900` DEV walked view → edit → review → simulated result with focus
-restoration, no operational Dialog and viewport/document/body width all 430px;
-a fresh validation tab emitted no warning or error. The original long-lived DEV
-tab still retains historical HMR translation errors from before the message
-catalog landed; they are not current-runtime evidence. This is application-side
-MOCK UX evidence, not real resource-tag mutation, backend CI or authorization
-acceptance.
+`430 × 900` DEV walked view → edit → stale-version response → refreshed review
+→ newly confirmed terminal result with focus restoration, no operational Dialog
+and viewport/document/body width all 430px; a fresh validation tab emitted no
+warning or error. The original long-lived DEV tab still retains historical HMR
+translation errors from before the message catalog landed; they are not
+current-runtime evidence. This is application-side MOCK UX evidence, not real
+resource-tag mutation, backend CI or authorization acceptance.
 
 Same-path detail-query tests retain encoded IDs, draft-leave protection and
 replace semantics without a Next page-tree navigation. Real static deep links
