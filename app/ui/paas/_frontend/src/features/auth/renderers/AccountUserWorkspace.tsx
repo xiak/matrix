@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Badge, Button, EmptyState, FormField, Input, TableSkeleton, Tabs } from "@ui/xiak";
 import { useAccountAccess, type UserBoundarySnapshot } from "../application/AccountAccessProvider";
@@ -7,7 +7,7 @@ import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import { containsDenyStatement } from "../domain/policyDocument";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
-import { AuthorizationOverview, WorkspaceDelete, WorkspaceDetail, WorkspaceDialog, WorkspaceRelationshipDirectory } from "./AccessWorkspaceUi";
+import { AuthorizationOverview, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceRelationshipDirectory } from "./AccessWorkspaceUi";
 import { AccessCredentials } from "./AccessCredentials";
 import { UserAccessDialog, UserAccessManagement } from "./AccountUserDialogs";
 import { LivePermissionBoundary, PermissionBoundary } from "./PermissionBoundary";
@@ -101,7 +101,7 @@ function UserEditor({ user, onClose }: { user: AccountUserScene; onClose(): void
   const access = useAccountAccess();
   const id = useId();
   const [name, setName] = useState(user.name);
-  return <WorkspaceDialog title={t("edit") + " · " + user.loginName} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "update-user", principalId: user.id, displayName: name }))}><FormField id={id} label={t("name")}><Input id={id} required maxLength={128} value={name} onChange={(event) => setName(event.target.value)} /></FormField></WorkspaceDialog>;
+  return <WorkspaceInlineForm title={t("edit") + " · " + user.loginName} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "update-user", principalId: user.id, displayName: name }))}><FormField id={id} label={t("name")}><Input id={id} required maxLength={128} value={name} onChange={(event) => setName(event.target.value)} /></FormField></WorkspaceInlineForm>;
 }
 
 export function AccountUserWorkspace({ user, scene, workspace, initialTab = "identity", onBack, onOpen }: { user: AccountUserScene; scene: AccountAccessScene; workspace: AccessWorkspace; initialTab?: AccountUserDetailTab; onBack(): void; onOpen(view: AccountAccessView, id?: string): void }) {
@@ -111,6 +111,8 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
   const relationship = useTranslations("RelationshipDirectory");
   const access = useAccountAccess();
   const [dialog, setDialog] = useState<"security" | "edit" | "delete" | null>(null);
+  const editActionFocus = useRef<{ focus(): void }>(null);
+  const previousEditing = useRef(false);
   const [association, setAssociation] = useState<"groups" | "policies" | null>(null);
   const groups = workspace.groups.filter((group) => group.memberIds.includes(user.id));
   const direct = workspace.userPolicies[user.id] ?? [];
@@ -122,8 +124,14 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
   }).map((policy) => policy.id));
   const boundary = workspace.userBoundaries[user.id];
   const profile = workspace.userProfiles[user.id];
+  useLayoutEffect(() => {
+    const wasEditing = previousEditing.current;
+    previousEditing.current = dialog === "edit";
+    if (wasEditing && dialog !== "edit") editActionFocus.current?.focus();
+  }, [dialog]);
   if (association) return <UserAssociationWorkflow user={user} workspace={workspace} kind={association} onBack={() => setAssociation(null)} />;
-  return <><WorkspaceDetail title={user.loginName} onBack={onBack} actions={{ primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setDialog("edit") }, secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: user.protected, disabledReason: user.protected ? a("protectedHint") : undefined, onSelect: () => setDialog("delete") }] }}>
+  return <><WorkspaceDetail title={user.loginName} onBack={onBack} actionFocusRef={editActionFocus} actions={dialog === "edit" ? undefined : { primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setDialog("edit") }, secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: user.protected, disabledReason: user.protected ? a("protectedHint") : undefined, onSelect: () => setDialog("delete") }] }}>
+    {dialog === "edit" ? <UserEditor user={user} onClose={() => setDialog(null)} /> : <>
     <div className={styles.userSummary}><div><strong>{user.name}</strong><span className={styles.note}>{user.qualifiedName}</span></div><div className={styles.roleTags}><Badge>{a("child")}</Badge><Badge status={user.enabled ? "success" : "neutral"}>{a(`states.${user.state}`)}</Badge></div></div>
     <Tabs.Root defaultValue={initialTab}><Tabs.List aria-label={user.loginName}><Tabs.Trigger value="identity">{a("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{a("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("userGroups")}</Tabs.Trigger><Tabs.Trigger value="security">{t("securitySettings")}</Tabs.Trigger><Tabs.Trigger value="keys">{t("keys")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content className={styles.stack} value="identity"><dl className={styles.facts}>
@@ -153,9 +161,9 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
       <Tabs.Content className={styles.stack} value="security"><dl className={styles.facts}><div><dt>{a("status")}</dt><dd>{a(`states.${user.state}`)}</dd></div>{profile ? <><div><dt>{wizard("forceReset")}</dt><dd>{wizard(profile.passwordResetRequired ? "enabled" : "disabled")}</dd></div><div><dt>{wizard("loginProtection")}</dt><dd>{wizard(profile.loginProtection ? "enabled" : "disabled")}</dd></div></> : null}<div><dt>{a("directPolicyAttachments")}</dt><dd>{user.attachments.map((attachment) => attachment.label).join(" · ") || a("noGrantLabel")}</dd></div></dl><p className={styles.note}>{wizard("mockSecurity")}</p>{user.protected ? <p className={styles.note}>{a("protectedHint")}</p> : null}<div><Button variant="secondary" onClick={() => setDialog("security")}>{a("manage")}</Button></div></Tabs.Content>
       <Tabs.Content value="keys"><AccessCredentials embedded scene={{ ...scene, users: [user] }} workspace={{ ...workspace, keys: workspace.keys.filter((key) => key.ownerId === user.id) }} /></Tabs.Content>
     </Tabs.Root>
+    </>}
   </WorkspaceDetail>
   {dialog === "security" ? <UserAccessDialog user={user} onClose={() => setDialog(null)} /> : null}
-  {dialog === "edit" ? <UserEditor user={user} onClose={() => setDialog(null)} /> : null}
   {dialog === "delete" ? <WorkspaceDelete name={user.loginName} onClose={() => setDialog(null)} onConfirm={async () => { const result = await access.executeWorkspace({ kind: "delete-user", principalId: user.id }); if (result) onBack(); return result; }} /> : null}
   </>;
 }

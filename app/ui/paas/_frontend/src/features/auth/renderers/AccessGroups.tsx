@@ -8,7 +8,7 @@ import type { AccountAccessView } from "../domain/accounts";
 import type { AccessGroup, AccessWorkspace } from "../domain/accessWorkspace";
 import { containsDenyStatement } from "../domain/policyDocument";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { WorkspaceDelete, WorkspaceDialog, WorkspaceInlineForm, WorkspaceSelection } from "./AccessWorkspaceUi";
+import { WorkspaceDelete, WorkspaceInlineForm, WorkspaceSelection } from "./AccessWorkspaceUi";
 import {
   GroupDetail,
   GroupDirectory,
@@ -23,13 +23,15 @@ type GroupUser = AccountAccessScene["users"][number];
 
 function GroupMetadataEditor({ group, onClose }: { group: AccessGroup; onClose(): void }) {
   const t = useTranslations("IamWorkspace");
+  const g = useTranslations("GroupWorkspace");
   const access = useAccountAccess();
   const id = useId();
   const [name, setName] = useState(group.name);
   const [description, setDescription] = useState(group.description);
 
-  return <WorkspaceDialog
+  return <WorkspaceInlineForm
     title={`${t("edit")} · ${group.name}`}
+    backLabel={g("backToGroupDetails")}
     onClose={onClose}
     onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "update-group", id: group.id, name, description }))}
   >
@@ -39,7 +41,7 @@ function GroupMetadataEditor({ group, onClose }: { group: AccessGroup; onClose()
     <FormField id={`${id}-description`} label={t("description")}>
       <TextArea id={`${id}-description`} maxLength={256} rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
     </FormField>
-  </WorkspaceDialog>;
+  </WorkspaceInlineForm>;
 }
 
 function GroupAssociationEditor({ group, workspace, scene, change, onClose }: {
@@ -145,6 +147,8 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
   const [deleting, setDeleting] = useState<AccessGroup | null>(null);
   const [change, setChange] = useState<GroupChange | null>(null);
   const editTrigger = useRef<HTMLButtonElement>(null);
+  const pageActionFocus = useRef<{ focus(): void }>(null);
+  const previousEditing = useRef(false);
   const addMemberTrigger = useRef<HTMLButtonElement>(null);
   const removeMemberTrigger = useRef<HTMLButtonElement>(null);
   const addPolicyTrigger = useRef<HTMLButtonElement>(null);
@@ -211,6 +215,12 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
     (target?.disabled ? editTrigger.current : target)?.focus({ preventScroll: true });
   }, [change]);
 
+  useLayoutEffect(() => {
+    const wasEditing = previousEditing.current;
+    previousEditing.current = Boolean(editing);
+    if (wasEditing && !editing) pageActionFocus.current?.focus();
+  }, [editing]);
+
   if (entityId && !selected) {
     return <EmptyState
       title={t("entityUnavailable")}
@@ -222,7 +232,7 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
   return <>
     {selected && selectedRecord ? <GroupDetail
       group={selectedRecord}
-      workflow={changing && change ? <GroupAssociationEditor group={changing} workspace={workspace} scene={scene} change={change} onClose={() => setChange(null)} /> : undefined}
+      workflow={editing ? <GroupMetadataEditor group={editing} onClose={() => setEditing(null)} /> : changing && change ? <GroupAssociationEditor group={changing} workspace={workspace} scene={scene} change={change} onClose={() => setChange(null)} /> : undefined}
       controls={{
         edit: { disabled: busy, onInvoke: () => setEditing(selected) },
         delete: { disabled: busy, onInvoke: () => setDeleting(selected) },
@@ -232,6 +242,7 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
         removePolicy: { disabled: busy || !selected.policyIds.length, onInvoke: () => setChange({ groupId: selected.id, kind: "policies", mode: "remove" }) }
       }}
       editTriggerRef={editTrigger}
+      actionFocusRef={pageActionFocus}
       addMemberTriggerRef={addMemberTrigger}
       removeMemberTriggerRef={removeMemberTrigger}
       addPolicyTriggerRef={addPolicyTrigger}
@@ -244,7 +255,6 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
       create={{ disabled: busy, onInvoke: onCreate }}
       onOpen={(groupId) => onOpen("groups", groupId)}
     />}
-    {editing ? <GroupMetadataEditor group={editing} onClose={() => setEditing(null)} /> : null}
     {deleting ? <WorkspaceDelete
       name={deleting.name}
       impact={<Alert status="warning">

@@ -176,11 +176,12 @@ function GroupActionButton({ control, triggerRef, children, variant }: {
   >{children}</Button>;
 }
 
-export function GroupDetail({ group, controls, workflow, editTriggerRef, addMemberTriggerRef, removeMemberTriggerRef, addPolicyTriggerRef, removePolicyTriggerRef, onBack, onOpenMember, onOpenPolicy }: {
+export function GroupDetail({ group, controls, workflow, editTriggerRef, actionFocusRef, addMemberTriggerRef, removeMemberTriggerRef, addPolicyTriggerRef, removePolicyTriggerRef, onBack, onOpenMember, onOpenPolicy }: {
   group: GroupDetailRecord;
   controls: GroupDetailControls;
   workflow?: ReactNode;
   editTriggerRef?: RefObject<HTMLButtonElement | null>;
+  actionFocusRef?: RefObject<{ focus(): void } | null>;
   addMemberTriggerRef?: RefObject<HTMLButtonElement | null>;
   removeMemberTriggerRef?: RefObject<HTMLButtonElement | null>;
   addPolicyTriggerRef?: RefObject<HTMLButtonElement | null>;
@@ -199,6 +200,7 @@ export function GroupDetail({ group, controls, workflow, editTriggerRef, addMemb
     title={group.name}
     onBack={onBack}
     primaryActionRef={editTriggerRef}
+    actionFocusRef={actionFocusRef}
     actions={workflow ? undefined : {
       primary: controls.edit ? { id: "edit", label: t("edit"), variant: "secondary", disabled: controls.edit.disabled, disabledReason: controls.edit.disabled ? controls.edit.reason : undefined, onSelect: controls.edit.onInvoke } : undefined,
       secondary: controls.delete ? [{ id: "delete", label: t("delete"), danger: true, disabled: controls.delete.disabled, disabledReason: controls.delete.disabled ? controls.delete.reason : undefined, onSelect: controls.delete.onInvoke }] : undefined

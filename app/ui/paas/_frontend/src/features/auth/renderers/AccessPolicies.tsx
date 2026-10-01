@@ -7,7 +7,7 @@ import { useAccountAccess } from "../application/AccountAccessProvider";
 import { policyUsageCounts, policyVersionLimit, type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { WorkspaceDelete, WorkspaceDetail, WorkspaceDialog, WorkspaceTime } from "./AccessWorkspaceUi";
+import { WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceTime } from "./AccessWorkspaceUi";
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import { PolicyAuthoringWizard } from "./PolicyAuthoringWizard";
 import { PolicyDirectory, usePolicyDescription } from "./PolicyDirectory";
@@ -25,10 +25,10 @@ function PolicyDescriptionEditor({ policy, onClose }: { policy: AccessPolicy; on
   const access = useAccountAccess();
   const id = useId();
   const [description, setDescription] = useState(policy.description);
-  return <WorkspaceDialog title={t("editDescription")} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "update-policy-description", id: policy.id, description }))}>
+  return <WorkspaceInlineForm title={t("editDescription")} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "update-policy-description", id: policy.id, description }))}>
     <p className={styles.note}>{t("descriptionOnly")}</p>
     <FormField id={id} label={t("description")}><TextArea id={id} rows={3} maxLength={256} value={description} onChange={(event) => setDescription(event.target.value)} /></FormField>
-  </WorkspaceDialog>;
+  </WorkspaceInlineForm>;
 }
 
 type PolicyVersionIntent = { action: "inspect" | "activate" | "delete"; version: number };
@@ -173,16 +173,23 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
   const [deleting, setDeleting] = useState<AccessPolicy | null>(null);
   const [associating, setAssociating] = useState<{ policies: AccessPolicy[]; additive?: boolean } | null>(null);
   const [editingDescription, setEditingDescription] = useState(false);
+  const descriptionTrigger = useRef<HTMLButtonElement>(null);
+  const previousDescriptionEditing = useRef(false);
   const [choosingMethod, setChoosingMethod] = useState(false);
   const [versionWorkflow, setVersionWorkflow] = useState(false);
   const selected = workspace.policies.find((policy) => policy.id === entityId);
   const usage = selected ? policyUsageCounts(workspace, selected.id) : null;
+  useLayoutEffect(() => {
+    const wasEditing = previousDescriptionEditing.current;
+    previousDescriptionEditing.current = editingDescription;
+    if (wasEditing && !editingDescription) descriptionTrigger.current?.focus({ preventScroll: true });
+  }, [editingDescription]);
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("policies")}>{t("back")}</Button>} />;
   if (editing) return <PolicyAuthoringWizard {...editing} workspace={workspace} scene={scene} onBack={() => setEditing(null)} onDone={(id) => { setEditing(null); onOpen("policies", id); }} />;
   if (associating) return <PolicyAssociationWizard {...associating} workspace={workspace} scene={scene} onBack={() => setAssociating(null)} />;
   return <>
     {access.workspaceError && !deleting && !editingDescription && !versionWorkflow ? <Alert status="danger">{t(`errors.${access.workspaceError}`)}</Alert> : null}
-    {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("policies")} actions={{
+    {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("policies")} actions={editingDescription ? undefined : {
       primary: { id: "associate", label: t("associateTargets"), onSelect: () => setAssociating({ policies: [selected] }) },
       secondary: [
         ...(selected.kind === "custom" ? [{ id: "edit", label: t("edit"), onSelect: () => setEditing({ policy: selected }) }] : []),
@@ -190,10 +197,11 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
         ...(selected.kind === "custom" ? [{ id: "delete", label: t("delete"), danger: true, onSelect: () => setDeleting(selected) }] : [])
       ]
     }}>
+      {editingDescription ? <PolicyDescriptionEditor policy={selected} onClose={() => setEditingDescription(false)} /> : <>
       <div className={policyStyles.policyOverview}>
         <div className={policyStyles.policyIntro}>
           <div className={policyStyles.policyLead}><Badge>{t(selected.kind)}</Badge><p className={policyStyles.policyDescription}>{describe(selected) || "—"}</p></div>
-          {selected.kind === "custom" ? <Button className={policyStyles.policyEditAction} variant="ghost" size="small" onClick={() => setEditingDescription(true)}>{t("editDescription")}</Button> : null}
+          {selected.kind === "custom" ? <Button ref={descriptionTrigger} className={policyStyles.policyEditAction} variant="ghost" size="small" onClick={() => setEditingDescription(true)}>{t("editDescription")}</Button> : null}
         </div>
         <dl className={policyStyles.policyFacts}>
           <div><dt>{summary("policyId")}</dt><dd><code className={policyStyles.policyIdentifier}>{selected.id}</code></dd></div>
@@ -209,9 +217,9 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
         <Tabs.Content value="versions"><PolicyVersionHistory policy={selected} usageCount={usage!.total} workspace={workspace} scene={scene} onWorkflowChange={setVersionWorkflow} /></Tabs.Content>
         <Tabs.Content value="usage"><PolicyUses policyId={selected.id} workspace={workspace} scene={scene} onOpen={onOpen} /></Tabs.Content>
       </Tabs.Root>
+      </>}
     </WorkspaceDetail> : <PolicyDirectory workspace={workspace} onCreate={() => setChoosingMethod(true)} onOpen={(id) => onOpen("policies", id)} onAssociate={(policies, additive) => setAssociating({ policies, additive })} onPreviewLanguage={() => onOpen("policy-language")} />}
     {choosingMethod ? <PolicyCreationMethods onClose={() => setChoosingMethod(false)} onSelect={(method) => { setChoosingMethod(false); onCreate(method); }} /> : null}
     {deleting ? <WorkspaceDelete name={deleting.name} onClose={() => setDeleting(null)} onConfirm={async () => { const result = await access.executeWorkspace({ kind: "delete-policy", id: deleting.id }); if (result && entityId === deleting.id) onOpen("policies"); return result; }} /> : null}
-    {selected && editingDescription ? <PolicyDescriptionEditor policy={selected} onClose={() => setEditingDescription(false)} /> : null}
   </>;
 }

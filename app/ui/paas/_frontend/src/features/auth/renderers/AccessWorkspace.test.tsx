@@ -1623,6 +1623,20 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("combobox", { name: "用户" }).textContent).toContain("qiao");
     expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-qiao");
   });
+  it("edits mock user metadata in the content area and restores the page action", async () => {
+    const { user } = await open("users", { entityId: "principal-lin" });
+    const edit = await screen.findByRole("button", { name: "编辑" });
+    await user.click(edit);
+    const workflow = screen.getByRole("group", { name: "编辑 · lin" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const field = within(workflow).getByLabelText("名称");
+    await user.clear(field);
+    await user.type(field, "林工程师 · 更新");
+    await user.click(within(workflow).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "编辑 · lin" })).toBeNull());
+    expect(screen.getByText("操作已完成。")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "编辑" })));
+  });
   it("searches and paginates complete user policy and group relationship snapshots", async () => {
     const policies = relationshipPolicies(12, "UserRelationPolicy");
     const { user } = await open("users", { entityId: "principal-lin", seed: async (extension) => {
@@ -2236,11 +2250,13 @@ describe("CAM-style access workspace", () => {
   it("changes group policies only after review and keeps metadata edits independent", async () => {
     const { user, extension } = await open("groups", { entityId: "group-delivery" });
     await user.click(await screen.findByRole("button", { name: "编辑" }));
-    const metadata = within(screen.getByRole("dialog"));
+    const metadata = within(screen.getByRole("group", { name: "编辑 · DeliveryTeam" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(metadata.queryByRole("checkbox")).toBeNull();
     await user.type(metadata.getByLabelText("描述"), " updated");
     await user.click(metadata.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("group", { name: "编辑 · DeliveryTeam" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "编辑" })));
     const before = await extension.read("preview");
     await user.click(screen.getByRole("tab", { name: "直接关联策略 (1)" }));
     await user.click(screen.getByRole("button", { name: "关联策略" }));
@@ -2673,9 +2689,13 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("table", { name: "策略摘要" })).toBeTruthy();
     const before = (await extension.read("preview")).policies.find((policy) => policy.id === "policy-prod-logs")!;
     await user.click(screen.getByRole("button", { name: "编辑描述" }));
+    const workflow = screen.getByRole("group", { name: "编辑描述" });
+    expect(screen.queryByRole("dialog")).toBeNull();
     const editor = screen.getByLabelText("描述");
     await user.clear(editor); await user.paste("Only an updated description");
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
+    await user.click(within(workflow).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "编辑描述" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "编辑描述" })));
     const saved = (await extension.read("preview")).policies.find((policy) => policy.id === before.id)!;
     expect(saved).toEqual({ ...before, description: "Only an updated description", updatedAt: expect.any(String) });
     expect(Date.parse(saved.updatedAt)).toBeGreaterThan(Date.parse(before.updatedAt));
