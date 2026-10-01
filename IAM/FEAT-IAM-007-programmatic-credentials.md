@@ -1,6 +1,6 @@
 # FEAT-IAM-007：访问密钥与程序访问
 
-- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。首个实际产品消费者候选已将AccessKey接入PaaS Application创建，并通过本地真实PG18和独立IAM/Audit/PaaS进程；该消费者尚待固定提交、独立CI及签名安装组合验收。其他PaaS动作、生产入口托管/备份、UI及最终发布仍未完成，整体未验收。
+- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。首个实际产品消费者已固定为`40adf6d828180050992a8a6c139f05a83afc753f`，将AccessKey接入PaaS Application创建并通过本地真实PG18、独立IAM/Audit/PaaS进程、滚动前驱及全仓检查；其独立CI仍在运行，签名安装组合尚未验收。其他PaaS动作、生产入口托管/备份、UI及最终发布仍未完成，整体未验收。
 - 依赖：003、005；临时凭据与 006 协作。
 - Owner：IAM credential；各产品 HTTP 签名消费归其 PEP。
 
@@ -229,7 +229,7 @@ IAM已保留原登录`SubjectContext`约束，并用独立`AccessKeyContext`进�
 - 原子验签/拒绝、nonce与历史证据已通过累计回归、独立进程和精确CI，固定`644fff09`被当前PaaS消费者选择性采用。K1继续使用真实无key的USER登录管理决定，不因新增程序载体取得额外权限。
 - 当前消费者只为PaaS Profile revision 7中的`paas.application.create`声明`USER`可使用`ACCESS_KEY`和`LOGIN_SESSION`；其他动作保持原载体集合。PaaS只在精确`POST /v1/applications`路由重建外部请求并调用专用AccessKey authorizer，任何其他签名路由在调用IAM或业务用例前拒绝，不以产品前缀泛化开放。
 - PaaS从实际连接、配置的NorthboundOrigin和边缘覆盖的`X-Matrix-External-Origin`/`X-Matrix-External-Request-Target`取得签名字段；请求方不能提交AuthorizationRequest、Account、Subject或已规范摘要。决定必须回绑实际request digest、Action、资源集合、USER和key ID，PaaS的Operation、outbox、Audit actor与业务幂等身份继续保留同一key ID。相同USER的另一把key不能借用原业务幂等完成结果。
-- 当前本地候选在独占PostgreSQL 18上通过PaaS真实存储race门禁（5.841秒），并以独立双IAM、Audit、PaaS和双dispatcher进程通过两Account签名创建、同ID隔离、nonce重放、Operation/outbox/Audit归因及链验证（测试222.57秒、包226.037秒）。这些是本分支候选证据，固定提交和独立CI完成前不登记为已接受实现。
+- 固定`40adf6d828180050992a8a6c139f05a83afc753f`在独占PostgreSQL 18上通过PaaS真实存储race门禁（5.841秒），并以独立双IAM、Audit、PaaS和双dispatcher进程通过两Account签名创建、同ID隔离、nonce重放、Operation/outbox/Audit归因及链验证（测试222.57秒、包226.037秒）。同一源码的IAM58→59真实前驱门禁以109.25秒通过，最终全仓race、vet、模块校验、生成稳定和Linux amd64构建通过；[独立CI 36842829292](https://github.com/xiak/matrix/actions/runs/36842829292)尚未完成，不能登记为独立CI或发布验收通过。
 - 安装/APISIX尚未生成和注入NorthboundOrigin或两个可信边缘头，因此签名安装包中的外部调用仍未开放。产品安装owner后续只能消费固定对象并用真实网关证明覆盖、原始编码及重复query保真；不能把进程门禁冒充签名安装验收。可信来源IP、Account/key网络限制、使用摘要及UI仍分别保留原验收，不以header转交或HMAC通过代替。
 - 已有Application读取需要先安全解析Account并预读资源标签，不能借用创建集合的无目标上下文；它及Configuration、Revision、Deployment、Operation、Audit query/verify均在各自精确映射完成前继续拒绝AccessKey。后继扩展逐动作修改同一Profile和PEP，不建立平行消费者或宽泛兼容层。
 
