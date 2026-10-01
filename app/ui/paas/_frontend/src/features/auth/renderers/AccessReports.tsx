@@ -8,7 +8,7 @@ import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { SessionSummary } from "../domain/session";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessReport, buildAccessSecuritySnapshot, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type UnusedAccessFindingPreview } from "../scenes/accessReport";
+import { accountSecurityReportLimits, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -136,18 +136,15 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
   </WorkspaceDetail>;
 }
 
-export function AccessReportPreview({ kind, workspace, scene, currentSession = null, onBack }: {
-  kind: "credentials" | "security";
+function CredentialReportPreview({ workspace, scene, onBack }: {
   workspace: AccessWorkspace;
   scene: AccountAccessScene;
-  currentSession?: SessionSummary | null;
   onBack(): void;
 }) {
   const t = useTranslations("IamWorkspace.reportPreview");
   const workspaceT = useTranslations("IamWorkspace");
   const [generatedAt] = useState(() => new Date().toISOString());
-  const scopedSession = currentSession?.principalId === scene.currentUserId ? currentSession : null;
-  const report = buildAccessReport(kind, workspace, scene, generatedAt, scopedSession);
+  const report = buildCredentialReport(workspace, scene, generatedAt);
   const members = report.users.map((user) => ({ ...user, id: user.loginName, name: user.loginName }));
   const accessLabel = (value: boolean | string) => t(value === true ? "enabled" : value === false ? "disabled" : value === "NOT_APPLICABLE" ? "notApplicable" : "unknown");
   const passwordLabel = (value: boolean | string) => t(value === true ? "resetRequired" : value === false ? "current" : value === "NOT_APPLICABLE" ? "notApplicable" : "unknown");
@@ -156,7 +153,7 @@ export function AccessReportPreview({ kind, workspace, scene, currentSession = n
     UNOBSERVED: t("coverage.UNOBSERVED"), UNAVAILABLE: t("coverage.UNAVAILABLE")
   };
   const actions = { secondary: [{ id: "export", label: t("exportCsv"), disabledReason: t("exportUnavailable"), onSelect: () => undefined }] };
-  return <WorkspaceDetail key={`report:${kind}:${workspace.accountId}`} title={workspaceT(kind === "credentials" ? "credentialReport" : "securityReport")} onBack={onBack} actions={actions}>
+  return <WorkspaceDetail key={`report:credentials:${workspace.accountId}`} title={workspaceT("credentialReport")} onBack={onBack} actions={actions}>
     <Alert status="info">{t("previewBoundary")}</Alert>
     <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{t("coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("coverageHint")}</Typography.Text></div><Badge status="info">{t("mock")}</Badge></Card.Header>
@@ -182,14 +179,105 @@ export function AccessReportPreview({ kind, workspace, scene, currentSession = n
       keywords={(user) => `${user.status} ${String(user.consoleAccess)} ${String(user.programmaticAccess)}`}
       row={(user) => <><td><strong>{user.loginName}</strong></td><td>{t(`states.${user.status}`)}</td><td><span>{t("consoleAccess")} · {accessLabel(user.consoleAccess)}</span><small>{t("programmaticAccess")} · {accessLabel(user.programmaticAccess)}</small></td><td><span>{t("password")} · {passwordLabel(user.passwordResetRequired)}</span><small>{t("authenticator")} · {accessLabel(user.authenticatorEnrollment)}</small></td><td>{user.directPolicyIds.length}</td><td><span>{t("keyCount", { count: user.accessKeys.active })}</span><small>{t("keyTotal", { count: user.accessKeys.total })}</small></td></>}
       footerNote={t("membersHint")} />
-    {kind === "security" && report.checks && report.activity ? <Card>
-      <Card.Header><Typography.Title as="h2" level={3}>{t("securityEvidence")}</Typography.Title></Card.Header>
-      <Card.Body className={styles.securityReportBody}>
-        <ul className={styles.securityChecks}>{report.checks.map((check) => <li key={check.id}><div className={styles.securityCheckCopy}><div className={styles.securityCheckHeading}><strong>{workspaceT(`securityChecks.${check.id}.title`)}</strong><Badge status={badgeStatus[check.state]}>{workspaceT(`securityStates.${check.state}`)}</Badge></div><span className={styles.securityEvidenceState}>{workspaceT("securityEvidenceLabel")}: {workspaceT(`securityEvidenceStates.${check.evidence}`)}</span></div></li>)}</ul>
-        <dl className={styles.activityEvidence} aria-label={workspaceT("activityEvidenceTitle")}>{report.activity.observations.map((observation) => <div key={observation.id}><dt>{workspaceT(`activityObservations.${observation.id}.title`)}</dt><dd><Badge status={observation.state === "observed" ? "info" : "neutral"}>{workspaceT(`activityStates.${observation.state}`)}</Badge>{observation.occurredAt ? <WorkspaceTime value={observation.occurredAt} /> : <span>{t("unavailable")}</span>}</dd></div>)}</dl>
-      </Card.Body>
-    </Card> : null}
   </WorkspaceDetail>;
+}
+
+function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack }: {
+  workspace: AccessWorkspace;
+  scene: AccountAccessScene;
+  currentSession: SessionSummary | null;
+  onBack(): void;
+}) {
+  const t = useTranslations("IamWorkspace.securityReportPreview");
+  const [requestId] = useState(() => `mock-${Date.now().toString(36)}`);
+  const [report, setReport] = useState<AccountSecurityReportPreviewModel | null>(null);
+  const plannedScopes = [
+    { id: "account" as const, rows: 1 },
+    { id: "users" as const, rows: scene.users.length },
+    { id: "accessKeys" as const, rows: workspace.keys.length }
+  ];
+  const scopes = report?.scopes ?? plannedScopes;
+  const totalRows = scopes.reduce((total, scope) => total + scope.rows, 0);
+  const generate = () => {
+    const result = createAccountSecurityReportPreview(workspace, scene, new Date().toISOString(), requestId, currentSession);
+    if (result.outcome === "COMPLETED") setReport(result.report);
+  };
+  const actions = {
+    primary: {
+      id: "generate",
+      label: t("generate"),
+      disabledReason: report ? t("alreadyGenerated") : undefined,
+      onSelect: generate
+    },
+    secondary: [{ id: "download", label: t("download"), disabledReason: t("downloadUnavailable"), onSelect: () => undefined }]
+  };
+  return <WorkspaceDetail key={`report:security:${workspace.accountId}`} title={t(report ? "detailTitle" : "createTitle")} onBack={onBack} actions={actions}>
+    <Alert status="info">{t("mockBoundary")}</Alert>
+    <Card>
+      <Card.Header>
+        <div><Typography.Title as="h2" level={3}>{t(report ? "sealedTitle" : "reviewTitle")}</Typography.Title><Typography.Text tone="muted">{t(report ? "sealedHint" : "reviewHint")}</Typography.Text></div>
+        <Badge status={report ? "success" : "info"}>{t(report ? "available" : "review")}</Badge>
+      </Card.Header>
+      <Card.Body className={styles.detail}>
+        <dl className={styles.facts}>
+          <div><dt>{t("account")}</dt><dd><code>{workspace.accountId}</code></dd></div>
+          <div><dt>{t("requestId")}</dt><dd><code>{requestId}</code></dd></div>
+          {report ? <>
+            <div><dt>{t("reportId")}</dt><dd><code>{report.reportId}</code></dd></div>
+            <div><dt>{t("generatedAt")}</dt><dd><WorkspaceTime value={report.generatedAt} /></dd></div>
+            <div><dt>{t("expiresAt")}</dt><dd><WorkspaceTime value={report.expiresAt} /></dd></div>
+          </> : null}
+          <div><dt>{t("format")}</dt><dd>{t("formatV1")}</dd></div>
+          <div><dt>{t("retention")}</dt><dd>{t("retentionValue", { days: accountSecurityReportLimits.retainedDays, reports: accountSecurityReportLimits.retainedReports })}</dd></div>
+          <div><dt>{t("permissions")}</dt><dd className={styles.reportPermissions}><code>iam.security-report.create</code><code>iam.security-report.read</code><code>iam.security-report.download</code></dd></div>
+        </dl>
+      </Card.Body>
+    </Card>
+    <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{t("scopeTitle")}</Typography.Title><Typography.Text tone="muted">{t("scopeHint")}</Typography.Text></div><Badge status="info">{t("immutable")}</Badge></Card.Header>
+      <Card.Body className={styles.securityReportBody}>
+        <dl className={styles.securityReportSummary} aria-label={t("limitsTitle")}>
+          <div><dt>{t("users")}</dt><dd>{scene.users.length} / {accountSecurityReportLimits.users}</dd></div>
+          <div><dt>{t("accessKeys")}</dt><dd>{workspace.keys.length} / {accountSecurityReportLimits.accessKeys}</dd></div>
+          <div><dt>{t("rows")}</dt><dd>{totalRows} / {accountSecurityReportLimits.rows}</dd></div>
+          <div><dt>{t("content")}</dt><dd>≤ 4 MiB</dd></div>
+        </dl>
+        <ul className={styles.securityChecks}>
+          {scopes.map((scope) => <li key={scope.id}><div className={styles.securityCheckCopy}><div className={styles.securityCheckHeading}><strong>{t(`scopes.${scope.id}.title`)}</strong><Badge status="info">{t("rowCount", { count: scope.rows })}</Badge></div><p>{t(`scopes.${scope.id}.fields`)}</p><span className={styles.securityEvidenceState}>{t(`scopes.${scope.id}.csv`)}</span></div></li>)}
+        </ul>
+        <Alert status="warning">{t("limitBoundary")}</Alert>
+      </Card.Body>
+    </Card>
+    {report ? <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{t("evidenceTitle")}</Typography.Title><Typography.Text tone="muted">{t("evidenceHint")}</Typography.Text></div></Card.Header>
+      <Card.Body className={styles.securityReportBody}>
+        <ul className={styles.securityChecks}>
+          {report.evidence.map((evidence) => <li key={evidence.id}><div className={styles.securityCheckCopy}><div className={styles.securityCheckHeading}><strong>{t(`evidence.${evidence.id}.title`)}</strong><Badge status={evidence.coverage === "INCLUDED" ? "info" : "neutral"}>{t(`coverage.${evidence.coverage}`)}</Badge></div><p>{evidence.coverage === "INCLUDED" ? t(`evidence.${evidence.id}.included`, { observed: evidence.observed, notObserved: evidence.notObserved, unknown: evidence.unknown }) : t(`evidence.${evidence.id}.notIncluded`)}</p></div></li>)}
+        </ul>
+      </Card.Body>
+    </Card> : <Card>
+      <Card.Header><Typography.Title as="h2" level={3}>{t("beforeGenerateTitle")}</Typography.Title></Card.Header>
+      <Card.Body className={styles.securityReportBody}><p className={styles.note}>{t("beforeGenerateHint")}</p><Alert status="warning">{t("noRealtimeConclusion")}</Alert></Card.Body>
+    </Card>}
+    <Card>
+      <Card.Header><Typography.Title as="h2" level={3}>{t("failureTitle")}</Typography.Title></Card.Header>
+      <Card.Body><dl className={styles.activityEvidence} aria-label={t("failureTitle")}>
+        {(["overLimit", "expired", "revoked"] as const).map((boundary) => <div key={boundary}><dt>{t(`failures.${boundary}.title`)}</dt><dd><Badge status="neutral">{t(`failures.${boundary}.status`)}</Badge><span>{t(`failures.${boundary}.hint`)}</span></dd></div>)}
+      </dl></Card.Body>
+    </Card>
+  </WorkspaceDetail>;
+}
+
+export function AccessReportPreview({ kind, workspace, scene, currentSession = null, onBack }: {
+  kind: "credentials" | "security";
+  workspace: AccessWorkspace;
+  scene: AccountAccessScene;
+  currentSession?: SessionSummary | null;
+  onBack(): void;
+}) {
+  return kind === "security"
+    ? <AccountSecurityReportPreview workspace={workspace} scene={scene} currentSession={currentSession} onBack={onBack} />
+    : <CredentialReportPreview workspace={workspace} scene={scene} onBack={onBack} />;
 }
 
 export function AccessReports({ workspace, scene, currentSession = null, onNavigate, onOpenAccessAnalysis, onOpenReport, accessAnalysisTriggerRef, reportTriggerRef }: {

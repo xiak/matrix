@@ -266,11 +266,11 @@ export function buildAccessSecuritySnapshot(workspace: AccessWorkspace, director
 }
 
 // Allowlist report fields: neither credentials nor metadata may enter a report.
-export function buildAccessReport(kind: "credentials" | "security", workspace: AccessWorkspace, scene: AccountAccessScene, generatedAt: string, currentSession: SessionSummary | null = null) {
+// This is the older credential inventory preview, not AccountSecurityReport.
+export function buildCredentialReport(workspace: AccessWorkspace, scene: AccountAccessScene, generatedAt: string) {
   assertReportAccount(workspace, scene);
-  const snapshot = buildAccessSecuritySnapshot(workspace, scene.directoryComplete);
   return {
-    mode: "MOCK", kind, accountId: workspace.accountId, generatedAt,
+    mode: "MOCK", kind: "credentials" as const, accountId: workspace.accountId, generatedAt,
     coverage: {
       directory: scene.directoryComplete ? "COMPLETE" : "PARTIAL",
       authenticatorEnrollment: "UNOBSERVED",
@@ -292,14 +292,97 @@ export function buildAccessReport(kind: "credentials" | "security", workspace: A
         directPolicyIds: user.attachments.map((attachment) => attachment.policyId),
         accessKeys: { total: keys.length, active: keys.filter((key) => key.status === "ENABLED").length }
       };
-    }),
-    ...(kind === "security" ? {
-      protections: { login: workspace.settings.loginProtection, userSso: workspace.settings.userSsoEnabled },
-      counts: { groups: workspace.groups.length, policies: workspace.policies.length, roles: workspace.roles.length, providers: workspace.providers.length },
-      evidenceCounts: snapshot.evidenceCounts,
-      checks: snapshot.checks.map(({ id, state, evidence, count }) => ({ id, state, evidence, count })),
-      activity: { observedAt: generatedAt, accountId: workspace.accountId, observations: buildAccessActivityObservations(workspace, currentSession?.principalId === scene.currentUserId ? currentSession : null) },
-      events: workspace.events.map(({ action, target, at }) => ({ action, target, at }))
-    } : {})
+    })
+  };
+}
+
+export const accountSecurityReportLimits = {
+  users: 1000,
+  accessKeys: 2000,
+  rows: 3001,
+  contentBytes: 4 * 1024 * 1024,
+  retainedDays: 7,
+  retainedReports: 20
+} as const;
+
+export type AccountSecurityReportScope = {
+  id: "account" | "users" | "accessKeys";
+  rows: number;
+};
+
+export type AccountSecurityReportEvidence = {
+  id: "passwordLoginSession" | "accessKeyAuthorization" | "roleActivity" | "paasOutcomes" | "auditStatistics" | "notificationDelivery" | "externalRisk";
+  coverage: "INCLUDED" | "NOT_INCLUDED";
+  observed: number;
+  notObserved: number;
+  unknown: number;
+};
+
+export type AccountSecurityReportPreview = {
+  mode: "MOCK";
+  accountId: string;
+  requestId: string;
+  reportId: string;
+  formatVersion: 1;
+  generatedAt: string;
+  expiresAt: string;
+  immutable: true;
+  scopes: AccountSecurityReportScope[];
+  evidence: AccountSecurityReportEvidence[];
+  totals: { users: number; accessKeys: number; rows: number };
+};
+
+export type AccountSecurityReportCreation =
+  | { outcome: "COMPLETED"; report: AccountSecurityReportPreview }
+  | { outcome: "REJECTED"; reason: "USER_LIMIT" | "ACCESS_KEY_LIMIT" | "ROW_LIMIT" };
+
+// This preview owns information architecture only. The server candidate remains
+// authoritative for the immutable JSON/CSV documents, byte limit and permission
+// checks; the browser never creates a report file or a LIVE success fact.
+export function createAccountSecurityReportPreview(
+  workspace: AccessWorkspace,
+  scene: AccountAccessScene,
+  generatedAt: string,
+  requestId: string,
+  currentSession: SessionSummary | null = null
+): AccountSecurityReportCreation {
+  assertReportAccount(workspace, scene);
+  const users = scene.users.length;
+  const accessKeys = workspace.keys.length;
+  const rows = 1 + users + accessKeys;
+  if (users > accountSecurityReportLimits.users) return { outcome: "REJECTED", reason: "USER_LIMIT" };
+  if (accessKeys > accountSecurityReportLimits.accessKeys) return { outcome: "REJECTED", reason: "ACCESS_KEY_LIMIT" };
+  if (rows > accountSecurityReportLimits.rows) return { outcome: "REJECTED", reason: "ROW_LIMIT" };
+  const issuedSessionObserved = currentSession?.organizationId === workspace.accountId
+    && currentSession.principalId === scene.currentUserId
+    && currentSession.status === "ACTIVE"
+    && Number.isFinite(Date.parse(currentSession.issuedAt));
+  const observedKeyAuthorizations = workspace.keys.filter((key) => key.usage.lastAuthorization).length;
+  const generated = new Date(generatedAt);
+  if (!requestId || !Number.isFinite(generated.getTime())) throw new Error("INVALID_IAM_REPORT");
+  const expiresAt = new Date(generated.getTime() + accountSecurityReportLimits.retainedDays * 24 * 60 * 60 * 1000).toISOString();
+  return {
+    outcome: "COMPLETED",
+    report: {
+      mode: "MOCK",
+      accountId: workspace.accountId,
+      requestId,
+      reportId: `security-report-${requestId}`,
+      formatVersion: 1,
+      generatedAt: generated.toISOString(),
+      expiresAt,
+      immutable: true,
+      scopes: [
+        { id: "account", rows: 1 },
+        { id: "users", rows: users },
+        { id: "accessKeys", rows: accessKeys }
+      ],
+      evidence: [
+        { id: "passwordLoginSession", coverage: "INCLUDED", observed: issuedSessionObserved ? 1 : 0, notObserved: Math.max(0, users - (issuedSessionObserved ? 1 : 0)), unknown: 0 },
+        { id: "accessKeyAuthorization", coverage: "INCLUDED", observed: observedKeyAuthorizations, notObserved: 0, unknown: Math.max(0, accessKeys - observedKeyAuthorizations) },
+        ...(["roleActivity", "paasOutcomes", "auditStatistics", "notificationDelivery", "externalRisk"] as const).map((id) => ({ id, coverage: "NOT_INCLUDED" as const, observed: 0, notObserved: 0, unknown: 0 }))
+      ],
+      totals: { users, accessKeys, rows }
+    }
   };
 }

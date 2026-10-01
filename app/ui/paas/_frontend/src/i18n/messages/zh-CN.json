@@ -4382,15 +4382,98 @@
         "passwordChangeRequired": "待修改初始密码",
         "active": "正常"
       },
-      "securityEvidence": "安全证据与活动观测",
       "exportCsv": "导出 CSV（MOCK）",
-      "exportUnavailable": "IAM-009 S4 的 CSV 字段、转义、格式版本和服务器封存下载契约尚未冻结；当前页面不会伪造文件。"
+      "exportUnavailable": "用户凭证报告仍是隔离 MOCK 字段白名单，尚无可消费的服务端封存下载契约；当前页面不会伪造文件。"
+    },
+    "securityReportPreview": {
+      "mockBoundary": "MOCK · 本页只验证 AccountSecurityReport 的信息架构与操作顺序，不调用 LIVE API、不生成文件，也不代表当前身份已经获得报告权限。",
+      "createTitle": "生成账号安全报告",
+      "detailTitle": "账号安全报告",
+      "generate": "生成报告",
+      "alreadyGenerated": "本次 MOCK 意图已经封存；同一页面不会生成第二份报告。",
+      "download": "下载 CSV v1",
+      "downloadUnavailable": "MOCK 不生成文件；CSV 还需要通过真实表格程序门禁，且正式下载必须重新校验 iam.security-report.download。",
+      "reviewTitle": "确认生成范围",
+      "reviewHint": "服务端同步封存当前账号同一数据库中的 IAM 一致快照；不是后台任务，也不能选择用户、时间或产品范围。",
+      "sealedTitle": "不可变报告已封存",
+      "sealedHint": "这份 MOCK 只演示完成后的页面；正式报告读取和下载仍会按准确报告资源重新鉴权。",
+      "review": "待确认",
+      "available": "可读取",
+      "account": "当前账号",
+      "requestId": "请求标识",
+      "reportId": "报告 ID",
+      "generatedAt": "生成时间",
+      "expiresAt": "到期时间",
+      "format": "格式版本",
+      "formatV1": "CSV v1 · 服务端规范化",
+      "retention": "保留边界",
+      "retentionValue": "保留 {days} 天；每个账号最多 {reports} 份未过期报告",
+      "permissions": "准确权限",
+      "scopeTitle": "记录范围与容量",
+      "scopeHint": "每种资源保持稳定行类型；不把 AccessKey 展开成 Key1、Key2 列，也不跨库拼接其他产品数据。",
+      "immutable": "同一时点快照",
+      "limitsTitle": "报告容量",
+      "users": "USER",
+      "accessKeys": "AccessKey",
+      "rows": "总数据行",
+      "content": "规范 CSV",
+      "rowCount": "{count} 行",
+      "scopes": {
+        "account": {
+          "title": "ACCOUNT",
+          "fields": "账号标识、账号状态及账号安全设置版本；一份报告固定一行。",
+          "csv": "CSV 只使用受限字符集的标识、枚举、版本和时间。"
+        },
+        "users": {
+          "title": "USER",
+          "fields": "用户 ID、登录名、状态、版本、Root 标记、MFA 资格及保留的密码登录会话发行观测。JSON 详情可以显示 displayName。",
+          "csv": "CSV v1 不导出自由 displayName、标签或描述，避免把任意文本带入表格。"
+        },
+        "accessKeys": {
+          "title": "ACCESS_KEY",
+          "fields": "密钥 ID、Owner、状态、版本、创建时间、规范来源 CIDR 和最近不可变 Allow/Deny 授权观测。",
+          "csv": "Allow 只说明授权求值结果，不代表对应业务操作成功。"
+        }
+      },
+      "limitBoundary": "任一上限或 4 MiB 正文上限被超过时，整个生成请求失败；不会截断、抽样或留下“成功但不完整”的报告。",
+      "beforeGenerateTitle": "生成前边界",
+      "beforeGenerateHint": "POST 只携带 requestId 和固定 formatVersion=1；API 版本由路由与媒体类型确定，不携带账号、用户、时间、产品或来源选择器。",
+      "noRealtimeConclusion": "报告不是实时水位、当前许可、风险评分或自动停用依据；生成报告不会改变任何用户、密钥或策略。",
+      "evidenceTitle": "证据覆盖",
+      "evidenceHint": "未观测、未知与未纳入是三种不同事实，不能合并成“从未发生”。",
+      "coverage": {
+        "INCLUDED": "已纳入",
+        "NOT_INCLUDED": "未纳入"
+      },
+      "evidence": {
+        "passwordLoginSession": {
+          "title": "已提交的密码登录 Session 发行",
+          "included": "OBSERVED {observed} 条；NOT_OBSERVED_IN_RETAINED_IAM_STATE {notObserved} 条；UNKNOWN {unknown} 条。没有保留记录不代表该用户从未登录。",
+          "notIncluded": "当前格式未纳入此证据。"
+        },
+        "accessKeyAuthorization": {
+          "title": "AccessKey 最近授权观测",
+          "included": "OBSERVED {observed} 条；NOT_OBSERVED_IN_RETAINED_IAM_STATE {notObserved} 条；UNKNOWN {unknown} 条。缺少旧谱系保持 UNKNOWN。",
+          "notIncluded": "当前格式未纳入此证据。"
+        },
+        "roleActivity": { "title": "Role / RoleSession 业务活动", "included": "已纳入。", "notIncluded": "NOT_INCLUDED · 当前 IAM-only 报告不推断角色业务活动。" },
+        "paasOutcomes": { "title": "PaaS 业务结果", "included": "已纳入。", "notIncluded": "NOT_INCLUDED · 不跨数据库读取 PaaS 结果。" },
+        "auditStatistics": { "title": "Audit 统计", "included": "已纳入。", "notIncluded": "NOT_INCLUDED · 不把审计聚合伪装成 IAM 一致快照。" },
+        "notificationDelivery": { "title": "安全通知送达", "included": "已纳入。", "notIncluded": "NOT_INCLUDED · 邮件或外部通知送达不属于本报告。" },
+        "externalRisk": { "title": "外部风险与暴露", "included": "已纳入。", "notIncluded": "NOT_INCLUDED · 不生成跨产品风险分或外部暴露结论。" }
+      },
+      "failureTitle": "失败关闭语义",
+      "failures": {
+        "overLimit": { "title": "资源或正文超限", "status": "整体拒绝", "hint": "不自动缩小范围、不截断数据，也不改用另一个 requestId 静默重试。" },
+        "expired": { "title": "报告超过 7 天", "status": "不可读取", "hint": "详情与 CSV 都不可访问；清理正文不会制造新的完成事实。" },
+        "revoked": { "title": "读取或下载权限被撤回", "status": "重新鉴权", "hint": "已有 reportId 不能绕过 iam.security-report.read 或 iam.security-report.download。" }
+      }
     },
     "reviewSecurityCheck": "查看{name}",
     "reviewReports": "审阅报告",
     "credentialReport": "用户凭证报告",
-    "securityReport": "安全分析报告",
-    "reportHint": "先在内容区审阅当前 MOCK 快照；未知、不适用、未观测与覆盖不完整会明确区分。正式 CSV 由未来 IAM 服务端封存并在下载时重新鉴权。",
+    "securityReport": "账号安全报告",
+    "reportHint": "凭证快照与账号安全报告在内容区独立审阅；安全报告先确认范围，再由 IAM 服务端同步封存。正式读取和下载都会重新鉴权。",
     "noAudit": "暂无操作记录",
     "event": "操作事件",
     "target": "操作对象",

@@ -16,7 +16,7 @@ import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import type { AccountUserDetailTab } from "./AccountUserWorkspace";
 import { GroupDetail, GroupDirectory } from "./GroupAccessWorkspace";
 import { AccessAnalysisPreview, AccessReportPreview, AccessReports } from "./AccessReports";
-import { buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessReport, buildAccessSecuritySnapshot } from "../scenes/accessReport";
+import { accountSecurityReportLimits, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildCredentialReport, createAccountSecurityReportPreview } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 import { previewAccountRepository, previewCredential, previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
@@ -3787,26 +3787,30 @@ describe("CAM-style access workspace", () => {
     expect(state.settings.userSsoEnabled).toBe(false);
     expect(state.providers).toHaveLength(1);
   });
-  it("allowlists report fields instead of exporting a raw account snapshot", async () => {
+  it("keeps the credential snapshot separate from the immutable account security report", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
     const workspace = await extension.read("preview");
     const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
-    const report = buildAccessReport("security", workspace, scene, "2026-09-09T00:00:00Z");
-    expect(report.mode).toBe("MOCK");
-    expect(report.coverage.authenticatorEnrollment).toBe("UNOBSERVED");
-    expect(report.checks?.find((check) => check.id === "mfaEvidence")?.state).toBe("unknown");
-    expect(report.checks?.find((check) => check.id === "mfaEvidence")?.evidence).toBe("unobserved");
-    expect(report.coverage).toMatchObject({ activityWindow: "UNAVAILABLE", collectionStart: null, sourceWatermarks: { successfulLogin: null, accessKeyUse: null, roleUse: null, businessOutcome: null } });
-    expect(report.activity).toMatchObject({ accountId: "org-xiak", observedAt: "2026-09-09T00:00:00Z" });
-    expect(report.activity?.observations.find((item) => item.id === "successfulLogin")).toMatchObject({ state: "unknown", occurredAt: null, source: null });
-    expect(report.activity?.observations.find((item) => item.id === "accessKeyUse")).toMatchObject({ state: "unknown", occurredAt: null });
-    const otherUserSession = { id: "another-session", organizationId: "org-xiak", principalId: "principal-other", status: "ACTIVE" as const, issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" };
-    const foreignReport = buildAccessReport("security", workspace, scene, "2026-09-09T00:00:00Z", otherUserSession);
-    expect(foreignReport.activity?.observations.find((item) => item.id === "successfulLogin")).toMatchObject({ state: "unknown", occurredAt: null, source: null });
-    expect(JSON.stringify(report)).not.toContain("EntityDescriptor");
-    expect(JSON.stringify(report)).not.toContain("preview-only");
-    expect(report.users).toHaveLength(2);
-    expect(() => buildAccessReport("security", workspace, { ...scene, accountId: "org-foreign" }, "2026-09-09T00:00:00Z")).toThrow("INVALID_IAM_TENANT");
+    const credentials = buildCredentialReport(workspace, scene, "2026-09-09T00:00:00Z");
+    expect(credentials).toMatchObject({ mode: "MOCK", kind: "credentials", accountId: "org-xiak" });
+    expect(credentials.users).toHaveLength(2);
+    expect(JSON.stringify(credentials)).not.toContain("EntityDescriptor");
+
+    const session = { id: "preview-session", organizationId: "org-xiak", principalId: scene.currentUserId, status: "ACTIVE" as const, issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" };
+    const created = createAccountSecurityReportPreview(workspace, scene, "2026-09-09T00:00:00Z", "request-one", session);
+    expect(created.outcome).toBe("COMPLETED");
+    if (created.outcome !== "COMPLETED") throw new Error("report not created");
+    expect(created.report).toMatchObject({
+      mode: "MOCK", accountId: "org-xiak", requestId: "request-one", reportId: "security-report-request-one",
+      formatVersion: 1, generatedAt: "2026-09-09T00:00:00.000Z", expiresAt: "2026-09-16T00:00:00.000Z", immutable: true,
+      totals: { users: 2, accessKeys: workspace.keys.length, rows: 3 + workspace.keys.length }
+    });
+    expect(created.report.evidence.find((item) => item.id === "passwordLoginSession")).toMatchObject({ coverage: "INCLUDED", observed: 1, notObserved: 1, unknown: 0 });
+    expect(created.report.evidence.filter((item) => item.coverage === "NOT_INCLUDED")).toHaveLength(5);
+    expect(() => createAccountSecurityReportPreview(workspace, { ...scene, accountId: "org-foreign" }, "2026-09-09T00:00:00Z", "request-one")).toThrow("INVALID_IAM_TENANT");
+
+    const oversized = { ...scene, users: Array.from({ length: accountSecurityReportLimits.users + 1 }, (_, index) => ({ ...scene.users[0]!, id: `principal-${index}` })) };
+    expect(createAccountSecurityReportPreview(workspace, oversized, "2026-09-09T00:00:00Z", "request-two")).toEqual({ outcome: "REJECTED", reason: "USER_LIMIT" });
   });
   it("separates review, configured, unknown, and not-applicable security evidence", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
@@ -3931,20 +3935,26 @@ describe("CAM-style access workspace", () => {
     expect(onNavigate).toHaveBeenCalledWith(first.target.view, first.target.id);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
-  it("reviews the account-bound security report in content before any formal CSV exists", async () => {
+  it("confirms and seals the IAM-only account security report without a dialog or fabricated CSV", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
     const workspace = await extension.read("preview");
     const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
-    render(<LocaleProvider><AccessReportPreview kind="security" workspace={workspace} scene={scene} onBack={vi.fn()} /></LocaleProvider>);
-    expect(screen.getByRole("heading", { name: "安全分析报告" })).toBeTruthy();
-    expect(screen.getByText(/不是 IAM-009 S4 的正式报告或下载契约/)).toBeTruthy();
+    const user = userEvent.setup();
+    render(<LocaleProvider><AccessReportPreview kind="security" workspace={workspace} scene={scene} currentSession={{ id: "preview-session", organizationId: "org-xiak", principalId: scene.currentUserId, status: "ACTIVE", issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" }} onBack={vi.fn()} /></LocaleProvider>);
+    expect(screen.getByRole("heading", { name: "生成账号安全报告" })).toBeTruthy();
+    expect(screen.getByText(/只验证 AccountSecurityReport 的信息架构与操作顺序/)).toBeTruthy();
     expect(screen.getByText("org-xiak")).toBeTruthy();
-    expect(screen.getByText("当前 MOCK 目录完整")).toBeTruthy();
-    expect(screen.getAllByText("未提供").length).toBeGreaterThanOrEqual(5);
-    const table = screen.getByRole("table", { name: "成员凭证快照" });
-    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
-    expect(within(table).getByText("lin")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "导出 CSV（MOCK）" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/POST 只携带 requestId 和固定 formatVersion=1/)).toBeTruthy();
+    expect(screen.getByText(/整个生成请求失败/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "下载 CSV v1" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "生成报告" }));
+    expect(screen.getByRole("heading", { name: "账号安全报告" })).toBeTruthy();
+    expect(screen.getByText("不可变报告已封存")).toBeTruthy();
+    expect(screen.getByText(/security-report-mock-/)).toBeTruthy();
+    expect(screen.getAllByText(/NOT_OBSERVED_IN_RETAINED_IAM_STATE/)).toHaveLength(2);
+    expect(screen.getAllByText(/NOT_INCLUDED/)).toHaveLength(5);
+    expect((screen.getByRole("button", { name: "生成报告" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "下载 CSV v1" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

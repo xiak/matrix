@@ -4368,15 +4368,98 @@
         "passwordChangeRequired": "Initial password change required",
         "active": "Active"
       },
-      "securityEvidence": "Security evidence and activity observations",
       "exportCsv": "Export CSV (MOCK)",
-      "exportUnavailable": "IAM-009 S4 has not frozen the CSV fields, escaping, format version or server-sealed download contract. This page does not fabricate a file."
+      "exportUnavailable": "The user credential report remains an isolated MOCK allowlist without a consumable server-sealed download contract. This page does not fabricate a file."
+    },
+    "securityReportPreview": {
+      "mockBoundary": "MOCK · This page validates AccountSecurityReport information architecture and action order only. It calls no LIVE API, creates no file, and does not imply that the current identity has report permissions.",
+      "createTitle": "Generate account security report",
+      "detailTitle": "Account security report",
+      "generate": "Generate report",
+      "alreadyGenerated": "This MOCK intent is already sealed; this page will not create a second report.",
+      "download": "Download CSV v1",
+      "downloadUnavailable": "MOCK creates no file. CSV still requires real spreadsheet-program gates, and formal download must reauthorize iam.security-report.download.",
+      "reviewTitle": "Confirm generation scope",
+      "reviewHint": "The server synchronously seals a consistent IAM snapshot from the current account and database. This is not a background job and offers no user, time, or product selector.",
+      "sealedTitle": "Immutable report sealed",
+      "sealedHint": "This MOCK demonstrates the completed view only. Formal reads and downloads still reauthorize the exact report resource.",
+      "review": "Review",
+      "available": "Readable",
+      "account": "Current account",
+      "requestId": "Request ID",
+      "reportId": "Report ID",
+      "generatedAt": "Generated",
+      "expiresAt": "Expires",
+      "format": "Format version",
+      "formatV1": "CSV v1 · server canonicalized",
+      "retention": "Retention boundary",
+      "retentionValue": "Retained for {days} days; at most {reports} unexpired reports per account",
+      "permissions": "Exact permissions",
+      "scopeTitle": "Record scope and capacity",
+      "scopeHint": "Every resource keeps a stable row type. Access keys never become Key1/Key2 columns, and no other product database is joined.",
+      "immutable": "Point-in-time snapshot",
+      "limitsTitle": "Report capacity",
+      "users": "USER",
+      "accessKeys": "AccessKey",
+      "rows": "Total data rows",
+      "content": "Canonical CSV",
+      "rowCount": "{count} rows",
+      "scopes": {
+        "account": {
+          "title": "ACCOUNT",
+          "fields": "Account ID, account state, and account-security-settings version; exactly one row per report.",
+          "csv": "CSV uses only constrained identifiers, enums, versions, and timestamps."
+        },
+        "users": {
+          "title": "USER",
+          "fields": "User ID, login name, state, version, root flag, MFA eligibility, and retained password-session issuance observations. JSON detail may display displayName.",
+          "csv": "CSV v1 omits free-form displayName, labels, and descriptions so arbitrary text never enters the spreadsheet."
+        },
+        "accessKeys": {
+          "title": "ACCESS_KEY",
+          "fields": "Key ID, owner, state, version, creation time, canonical source CIDRs, and the latest immutable Allow or Deny authorization observation.",
+          "csv": "Allow proves only an authorization result, never that the business operation succeeded."
+        }
+      },
+      "limitBoundary": "If any count limit or the 4 MiB content limit is exceeded, generation fails as a whole. It never truncates, samples, or leaves an incomplete report marked successful.",
+      "beforeGenerateTitle": "Pre-generation boundary",
+      "beforeGenerateHint": "POST carries only requestId and fixed formatVersion=1. The route and media type define the API version; no account, user, time, product, or source selector is accepted.",
+      "noRealtimeConclusion": "The report is not a real-time watermark, current permit, risk score, or automatic-disable authorization. Generating it changes no user, key, or policy.",
+      "evidenceTitle": "Evidence coverage",
+      "evidenceHint": "Not observed, unknown, and not included are distinct facts and must never collapse into “never happened.”",
+      "coverage": {
+        "INCLUDED": "Included",
+        "NOT_INCLUDED": "Not included"
+      },
+      "evidence": {
+        "passwordLoginSession": {
+          "title": "Committed password-session issuance",
+          "included": "OBSERVED {observed}; NOT_OBSERVED_IN_RETAINED_IAM_STATE {notObserved}; UNKNOWN {unknown}. No retained record does not mean the user never signed in.",
+          "notIncluded": "This evidence is outside the current format."
+        },
+        "accessKeyAuthorization": {
+          "title": "Latest AccessKey authorization observation",
+          "included": "OBSERVED {observed}; NOT_OBSERVED_IN_RETAINED_IAM_STATE {notObserved}; UNKNOWN {unknown}. Missing legacy lineage remains UNKNOWN.",
+          "notIncluded": "This evidence is outside the current format."
+        },
+        "roleActivity": { "title": "Role / RoleSession business activity", "included": "Included.", "notIncluded": "NOT_INCLUDED · This IAM-only report does not infer role business activity." },
+        "paasOutcomes": { "title": "PaaS business outcomes", "included": "Included.", "notIncluded": "NOT_INCLUDED · The report does not read across into the PaaS database." },
+        "auditStatistics": { "title": "Audit statistics", "included": "Included.", "notIncluded": "NOT_INCLUDED · Audit aggregation is not presented as an IAM-consistent snapshot." },
+        "notificationDelivery": { "title": "Security-notification delivery", "included": "Included.", "notIncluded": "NOT_INCLUDED · Email and external delivery are outside this report." },
+        "externalRisk": { "title": "External risk and exposure", "included": "Included.", "notIncluded": "NOT_INCLUDED · No cross-product risk score or external-exposure conclusion is generated." }
+      },
+      "failureTitle": "Fail-closed semantics",
+      "failures": {
+        "overLimit": { "title": "Resource or content limit exceeded", "status": "Rejected as a whole", "hint": "The server does not narrow scope, truncate data, or silently retry under another requestId." },
+        "expired": { "title": "Report older than 7 days", "status": "Unreadable", "hint": "Neither detail nor CSV remains accessible; content cleanup does not create another completion fact." },
+        "revoked": { "title": "Read or download permission revoked", "status": "Reauthorized", "hint": "An existing reportId cannot bypass iam.security-report.read or iam.security-report.download." }
+      }
     },
     "reviewSecurityCheck": "View {name}",
     "reviewReports": "Review reports",
     "credentialReport": "User credential report",
-    "securityReport": "Security analysis report",
-    "reportHint": "Review the current MOCK snapshot in the content area first. Unknown, not applicable, unobserved and incomplete coverage remain distinct. A future IAM server will seal the formal CSV and reauthorize every download.",
+    "securityReport": "Account security report",
+    "reportHint": "Review credential snapshots and account security reports independently in the content area. Confirm the security-report scope before IAM synchronously seals it; formal reads and downloads are reauthorized.",
     "noAudit": "No operations yet",
     "event": "Event",
     "target": "Target",
