@@ -4,6 +4,11 @@
 .reviewHeading h3, .reviewHeading h4, .reviewSummary h4, .reviewSummary h5 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); overflow-wrap: anywhere; }
 .reviewHeading span, .reviewSummary p { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .reviewSummary p { margin: 0; }
+.catalogSnapshot { display: grid; min-width: 0; gap: var(--xiak-spacing-tight); border-inline-start: 3px solid var(--xiak-color-accent-primary); padding: var(--xiak-spacing-tight) var(--xiak-spacing-default); background: var(--xiak-color-bg-panel-hover); }
+.catalogSnapshot > strong { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-small); }
+.catalogSnapshot > div { display: flex; min-width: 0; flex-wrap: wrap; gap: var(--xiak-spacing-tight); }
+.catalogSnapshot code { border-radius: var(--xiak-radius-small); padding: 2px var(--xiak-spacing-tight); background: var(--xiak-color-bg-panel); color: var(--xiak-color-text-strong); font-family: var(--xiak-font-mono); font-size: var(--xiak-font-size-caption); overflow-wrap: anywhere; }
+.catalogSnapshot p { margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.55; }
 .reviewFields { display: grid; gap: var(--xiak-spacing-default); margin: 0; }
 .reviewFields > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
 .reviewFields dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }

@@ -6,7 +6,7 @@ import { Plus } from "lucide-react";
 import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess, type AccountPolicyReadClient, type AccountPolicyReadLoad, type AccountPolicyVersionDirectoryLoad, type PolicyVersionMutationClient, type PolicyVersionMutationResult } from "../application/AccountAccessProvider";
-import type { AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion } from "../domain/accounts";
+import type { AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AuthorizationProfileDirectory } from "../domain/accounts";
 import { visualDraftHasIncompleteFields } from "../domain/accountPolicyVisualAuthoring";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
@@ -142,11 +142,13 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
   const heading = useRef<HTMLHeadingElement>(null);
   const [initialText] = useState(() => JSON.stringify(defaultVersion.document, null, 2));
   const [text, setText] = useState(initialText);
-  const [review, setReview] = useState<{ document: AccountPolicyDocument; resourceVersion: number; defaultVersionId: string } | null>(null);
+  const [review, setReview] = useState<{ document: AccountPolicyDocument; resourceVersion: number; defaultVersionId: string;
+    directory?: AuthorizationProfileDirectory } | null>(null);
   const reviewing = Boolean(review);
   const [error, setError] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<PolicyAuthorMode>("json");
   const [visualReady, setVisualReady] = useState(false);
+  const [visualDirectory, setVisualDirectory] = useState<AuthorizationProfileDirectory | null>(null);
   const [busy, setBusy] = useState(false);
   const requestLeave = useAccessDraft({ dirty: text !== initialText, busy, title: t("publishCancelTitle"),
     description: t("publishCancelHint"), form: heading });
@@ -155,7 +157,7 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
     setError(null);
     if (new TextEncoder().encode(text).length > 64 * 1024) { setError(t("publishTooLarge")); return; }
     if (editorMode === "visual") {
-      if (!visualReady) { setError(t("visualDraftIncomplete")); return; }
+      if (!visualReady || !visualDirectory) { setError(t("visualDraftIncomplete")); return; }
       let visual: AccountPolicyDocument;
       try { visual = JSON.parse(text) as AccountPolicyDocument; } catch { setError(t("visualDraftIncomplete")); return; }
       if (visualDraftHasIncompleteFields(visual)) {
@@ -170,7 +172,8 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
         !Array.isArray((parsed as Record<string, unknown>).statements)) {
       setError(t("publishShapeInvalid")); return;
     }
-    setReview({ document: parsed as AccountPolicyDocument, resourceVersion: policy.resourceVersion, defaultVersionId: policy.defaultVersionId });
+    setReview({ document: parsed as AccountPolicyDocument, resourceVersion: policy.resourceVersion, defaultVersionId: policy.defaultVersionId,
+      directory: editorMode === "visual" ? visualDirectory! : undefined });
   };
   const publish = async () => {
     if (!review || busy) return;
@@ -197,7 +200,7 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
         <div><dt>{t("currentDefault")}</dt><dd><code>{review.defaultVersionId}</code></dd></div>
         <div><dt>{t("statementCount")}</dt><dd>{review.document.statements.length}</dd></div>
       </dl>
-      {editorMode === "visual" ? <PolicyVisualReview document={review.document} headingLevel={4} /> : null}
+      {editorMode === "visual" && review.directory ? <PolicyVisualReview document={review.document} directory={review.directory} headingLevel={4} /> : null}
       {editorMode === "visual" ? <details className={styles.policyRawDocument}><summary>{t("compareDocuments")}</summary><div className={styles.policyComparison}>
         <section><h4>{t("currentDocument", { version: defaultVersion.versionId })}</h4><pre tabIndex={0}>{JSON.stringify(defaultVersion.document, null, 2)}</pre></section>
         <section><h4>{t("proposedDocument")}</h4><pre tabIndex={0}>{JSON.stringify(review.document, null, 2)}</pre></section>
@@ -207,7 +210,7 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
       </div>}
     </> : null}
     <div hidden={Boolean(review)}><AccountPolicyDocumentAuthor text={text} onChange={setText} error={Boolean(error)} onClearError={() => setError(null)}
-      mode={editorMode} onModeChange={setEditorMode} onVisualReadyChange={setVisualReady}
+      mode={editorMode} onModeChange={setEditorMode} onVisualReadyChange={setVisualReady} onVisualDirectoryChange={setVisualDirectory}
       label={t("proposedDocument")} hint={t("publishEditorHint")} /></div>
     {error ? <Alert status="danger">{error}</Alert> : null}
     <div className={styles.actions}>

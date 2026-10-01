@@ -33,7 +33,26 @@ function operatorsFor(condition: AuthorizationProfileCondition) {
   return stringOperators;
 }
 
-export function PolicyVisualReview({ document, headingLevel = 3 }: { document: AccountPolicyDocument; headingLevel?: 3 | 4 }) {
+function CatalogSnapshot({ document, directory, review = false }: {
+  document: AccountPolicyDocument; directory: AuthorizationProfileDirectory; review?: boolean;
+}) {
+  const t = useTranslations("PolicyVisualAuthoring");
+  const actions = new Set(document.statements.flatMap((statement) => statement.actions));
+  const profiles = directory.items.filter((entry) => entry.profile.actions.some((action) => actions.has(action.action)));
+  if (!profiles.length) return null;
+  const title = t(review ? "reviewCatalogSnapshotTitle" : "catalogSnapshotTitle");
+  return <section className={styles.catalogSnapshot} aria-label={title}>
+    <strong>{title}</strong>
+    <div>{profiles.map((entry) => <code key={`${entry.profile.product}\0${entry.profile.revision}`}>{t("catalogSnapshotItem", {
+      product: entry.profile.product, revision: entry.profile.revision
+    })}</code>)}</div>
+    <p>{t(review ? "reviewCatalogSnapshotHint" : "catalogSnapshotHint")}</p>
+  </section>;
+}
+
+export function PolicyVisualReview({ document, directory, headingLevel = 3 }: {
+  document: AccountPolicyDocument; directory: AuthorizationProfileDirectory; headingLevel?: 3 | 4;
+}) {
   const t = useTranslations("PolicyVisualAuthoring");
   const id = useId();
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -46,6 +65,7 @@ export function PolicyVisualReview({ document, headingLevel = 3 }: { document: A
       <SummaryHeading>{t("reviewSummary")}</SummaryHeading>
       <span>{t("reviewStatementCount", { count: document.statements.length })}</span>
     </div>
+    <CatalogSnapshot document={document} directory={directory} review />
     {document.statements.length > 1 ? <FormField id={id + "-statement"} label={t("reviewChooseStatement")}>
       <Select id={id + "-statement"} value={String(selectedIndex)} onValueChange={(value) => setSelectedIndex(Number(value))}
         options={document.statements.map((item, at) => ({ value: String(at), label: t("statementOption", { number: at + 1, sid: item.sid }) }))} />
@@ -252,6 +272,7 @@ export function AccountPolicyVisualEditor({ document, directory, onChange }: {
   };
   return <div className={styles.editor}>
     <Alert status="info">{t("catalogNotice")}</Alert>
+    <CatalogSnapshot document={document} directory={directory} />
     {statement ? <div className={styles.statementToolbar}>
       <FormField id={id + "-statement"} label={t("statement")}>
         <Select id={id + "-statement"} value={String(index)} onValueChange={(value) => { setSelectedIndex(Number(value)); setRemovePending(false); setAdding(false); }}

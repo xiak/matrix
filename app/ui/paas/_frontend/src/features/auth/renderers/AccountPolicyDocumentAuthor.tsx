@@ -11,9 +11,10 @@ import styles from "./AccountAccessRenderer.module.css";
 
 export type PolicyAuthorMode = "json" | "visual";
 
-export function AccountPolicyDocumentAuthor({ text, onChange, error, onClearError, mode, onModeChange, onVisualReadyChange, allowEmpty = false, label, hint }: {
+export function AccountPolicyDocumentAuthor({ text, onChange, error, onClearError, mode, onModeChange, onVisualReadyChange, onVisualDirectoryChange, allowEmpty = false, label, hint }: {
   text: string; onChange(text: string): void; error: boolean; onClearError(): void;
   mode: PolicyAuthorMode; onModeChange(mode: PolicyAuthorMode): void; onVisualReadyChange(ready: boolean): void;
+  onVisualDirectoryChange(directory: AuthorizationProfileDirectory | null): void;
   allowEmpty?: boolean; label: string; hint: string;
 }) {
   const t = useTranslations("AccountPolicyDirectory");
@@ -26,11 +27,11 @@ export function AccountPolicyDocumentAuthor({ text, onChange, error, onClearErro
   useEffect(() => () => { catalogRequest.current += 1; }, []);
   const setVisualFromCatalog = (directory: AuthorizationProfileDirectory) => {
     const result = visualDraftFromJSON(text, directory, allowEmpty);
-    if (result.status !== "ready") { onVisualReadyChange(false); setVisualError(t(`visualErrors.${result.status}`)); return; }
-    setVisualError(null); setVisualDocument(result.document); onVisualReadyChange(true); onModeChange("visual");
+    if (result.status !== "ready") { onVisualReadyChange(false); onVisualDirectoryChange(null); setVisualError(t(`visualErrors.${result.status}`)); return; }
+    setVisualError(null); setVisualDocument(result.document); onVisualDirectoryChange(directory); onVisualReadyChange(true); onModeChange("visual");
   };
   const openVisual = () => {
-    onClearError(); setVisualError(null); onVisualReadyChange(false);
+    onClearError(); setVisualError(null); onVisualReadyChange(false); onVisualDirectoryChange(null);
     if (catalog.status === "ready") { setVisualFromCatalog(catalog.directory); return; }
     if (!access.authorizationProfiles) { setVisualError(t("visualCatalogUnavailable")); return; }
     onModeChange("visual"); setCatalog({ status: "loading" });
@@ -38,11 +39,11 @@ export function AccountPolicyDocumentAuthor({ text, onChange, error, onClearErro
     void access.authorizationProfiles.load().then((result) => {
       if (current !== catalogRequest.current) return;
       setCatalog(result);
-      if (result.status === "ready") setVisualFromCatalog(result.directory);
+      if (result.status === "ready") setVisualFromCatalog(result.directory); else onVisualDirectoryChange(null);
     });
   };
   return <>
-    <Tabs.Root value={mode} onValueChange={(next) => { if (next === "json") { catalogRequest.current += 1; onModeChange("json"); onVisualReadyChange(false); setVisualError(null); } else if (next === "visual") openVisual(); }}>
+    <Tabs.Root value={mode} onValueChange={(next) => { if (next === "json") { catalogRequest.current += 1; onModeChange("json"); onVisualReadyChange(false); onVisualDirectoryChange(null); setVisualError(null); } else if (next === "visual") openVisual(); }}>
       <Tabs.List aria-label={t("editorModes")}><Tabs.Trigger value="json">{t("jsonMode")}</Tabs.Trigger><Tabs.Trigger value="visual">{t("visualMode")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content value="visual">{catalog.status === "ready" && visualDocument ?
         <AccountPolicyVisualEditor document={visualDocument} directory={catalog.directory} onChange={(document) => {

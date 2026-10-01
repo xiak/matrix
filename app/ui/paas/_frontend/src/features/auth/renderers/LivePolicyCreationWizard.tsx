@@ -4,7 +4,7 @@ import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Button, Card, FormField, Input } from "@ui/xiak";
 import type { PolicyCreateClient, PolicyCreateIntent } from "../application/AccountAccessProvider";
-import type { AccountPolicyDocument } from "../domain/accounts";
+import type { AccountPolicyDocument, AuthorizationProfileDirectory } from "../domain/accounts";
 import { visualDraftHasIncompleteFields } from "../domain/accountPolicyVisualAuthoring";
 import { AccountPolicyDocumentAuthor, type PolicyAuthorMode } from "./AccountPolicyDocumentAuthor";
 import { PolicyVisualReview } from "./AccountPolicyVisualEditor";
@@ -63,7 +63,8 @@ export function LivePolicyCreationWizard(props: {
   const [text, setText] = useState(initialText);
   const [mode, setMode] = useState<PolicyAuthorMode>("json");
   const [visualReady, setVisualReady] = useState(false);
-  const [review, setReview] = useState<{ name: string; document: AccountPolicyDocument } | null>(null);
+  const [visualDirectory, setVisualDirectory] = useState<AuthorizationProfileDirectory | null>(null);
+  const [review, setReview] = useState<{ name: string; document: AccountPolicyDocument; directory?: AuthorizationProfileDirectory } | null>(null);
   const [createdId, setCreatedId] = useState<string | null>(null);
   const [previewComplete, setPreviewComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,11 +105,11 @@ export function LivePolicyCreationWizard(props: {
         !('statements' in parsed) || !Array.isArray(parsed.statements) || !parsed.statements.length || parsed.statements.length > 64) {
       setError(t("invalidDocument")); return;
     }
-    if (mode === "visual" && (!visualReady || visualDraftHasIncompleteFields(parsed as AccountPolicyDocument))) { setError(t("incompleteVisual")); return; }
+    if (mode === "visual" && (!visualReady || !visualDirectory || visualDraftHasIncompleteFields(parsed as AccountPolicyDocument))) { setError(t("incompleteVisual")); return; }
     const document = parsed as AccountPolicyDocument;
     const bytes = new TextEncoder().encode(JSON.stringify({ displayName, document, requestId: `ui-policy-create-${"x".repeat(36)}` })).length;
     if (bytes > 64 * 1024) { setError(t("tooLarge")); return; }
-    setReview({ name: displayName, document });
+    setReview({ name: displayName, document, directory: mode === "visual" ? visualDirectory! : undefined });
   };
   const create = async () => {
     if (!review || busy) return;
@@ -129,7 +130,7 @@ export function LivePolicyCreationWizard(props: {
           <h2 ref={reviewHeading} tabIndex={-1} className={styles.stepTitle}>{t("reviewTitle")}</h2>
           <dl className={styles.catalogFacts}><div><dt>{t("name")}</dt><dd>{review.name}</dd></div><div><dt>{t("scope")}</dt><dd>{t("tenant")}</dd></div></dl>
           <Alert status={props.preview ? "info" : "warning"}>{t(props.preview ? "previewReviewNotice" : "reviewNotice")}</Alert>
-          {mode === "visual" ? <PolicyVisualReview document={review.document} /> : null}
+          {mode === "visual" && review.directory ? <PolicyVisualReview document={review.document} directory={review.directory} /> : null}
           <section className={styles.policyRawDocument}><h3>{t("document")}</h3>{mode === "visual" ? <details><summary>{t("reviewShowJson")}</summary>
             <pre tabIndex={0}>{JSON.stringify(review.document, null, 2)}</pre></details> : <pre tabIndex={0}>{JSON.stringify(review.document, null, 2)}</pre>}</section>
         </> : null}
@@ -138,7 +139,8 @@ export function LivePolicyCreationWizard(props: {
             <Input ref={nameInput} id={id + "-name"} maxLength={128} value={name} onChange={(event) => { setName(event.target.value); setError(null); }} />
           </FormField>
           <AccountPolicyDocumentAuthor text={text} onChange={setText} error={Boolean(error)} onClearError={() => setError(null)}
-            mode={mode} onModeChange={setMode} onVisualReadyChange={setVisualReady} allowEmpty label={t("document")} hint={t(props.preview ? "previewDocumentHint" : "documentHint")} />
+            mode={mode} onModeChange={setMode} onVisualReadyChange={setVisualReady} onVisualDirectoryChange={setVisualDirectory}
+            allowEmpty label={t("document")} hint={t(props.preview ? "previewDocumentHint" : "documentHint")} />
         </div>
         {error ? <Alert status="danger" tabIndex={-1}>{error}</Alert> : null}
         <div className={styles.actions}>

@@ -1382,6 +1382,9 @@ describe("account access", () => {
     expect(listAuthorizationProfiles).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
     expect(await screen.findByRole("checkbox", { name: /paas.application.read/ })).toBeTruthy();
+    const authoringSnapshot = screen.getByRole("region", { name: "当前声明依赖的产品目录" });
+    expect(within(authoringSnapshot).getByText("paas @ r1", { selector: "code" })).toBeTruthy();
+    expect(within(authoringSnapshot).getByText(/提交时 IAM 会重新校验目录并冻结精确 Action 集/)).toBeTruthy();
     expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("combobox", { name: "授权效果" }));
     await user.click(screen.getByRole("option", { name: "拒绝" }));
@@ -1398,6 +1401,9 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "审阅变更" }));
     expect(screen.getByRole("heading", { name: "审阅待发布版本" })).toBeTruthy();
     const summary = screen.getByRole("region", { name: "声明摘要" });
+    const reviewSnapshot = within(summary).getByRole("region", { name: "待 IAM 校验的产品声明" });
+    expect(within(reviewSnapshot).getByText("paas @ r1", { selector: "code" })).toBeTruthy();
+    expect(within(reviewSnapshot).getByText(/后续 Profile 新增 Action 不会自动扩大已发布版本/)).toBeTruthy();
     expect(within(summary).getByText("拒绝")).toBeTruthy();
     expect(within(summary).getByText("paas.application.read", { selector: "code" })).toBeTruthy();
     expect(within(summary).getByText("app-prod", { selector: "code" })).toBeTruthy();
@@ -1470,6 +1476,8 @@ describe("account access", () => {
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
     const action = await screen.findByRole("radio", { name: /paas.application.read/ });
     await user.click(action);
+    expect(within(screen.getByRole("region", { name: "当前声明依赖的产品目录" }))
+      .getByText("paas @ r1", { selector: "code" })).toBeTruthy();
     expect(screen.getAllByText("paas.application.read", { selector: "code" }).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByText(/可视化声明还有未完成/)).toBeTruthy();
@@ -1479,6 +1487,7 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
     const summary = screen.getByRole("region", { name: "声明摘要" });
+    expect(within(summary).getByRole("region", { name: "待 IAM 校验的产品声明" })).toBeTruthy();
     expect(within(summary).getByText("paas.application.read", { selector: "code" })).toBeTruthy();
     expect(within(summary).getByText("app-prod", { selector: "code" })).toBeTruthy();
     expect(within(summary).getByText("当前账号 ID", { exact: false })).toBeTruthy();
@@ -1522,6 +1531,8 @@ describe("account access", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Production application creator" } });
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
     await user.click(await screen.findByRole("radio", { name: /paas.application.create/ }));
+    expect(within(screen.getByRole("region", { name: "当前声明依赖的产品目录" }))
+      .getByText("paas @ r4", { selector: "code" })).toBeTruthy();
     expect(screen.getByText("可信请求上下文")).toBeTruthy();
     expect(screen.getByText(/来源 IP 由调用服务的受信网络边界提供/)).toBeTruthy();
     expect(screen.getByText(/浏览器输入和转发请求头不能证明真实来源/)).toBeTruthy();

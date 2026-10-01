@@ -1881,6 +1881,11 @@
   },
   "PolicyVisualAuthoring": {
     "catalogNotice": "只使用当前目录中的租户级精确 Action；兼容操作可合并在同一声明中，不兼容时请添加声明。目录不是授权结果，最终有效性由 IAM 校验。",
+    "catalogSnapshotTitle": "当前声明依赖的产品目录",
+    "catalogSnapshotItem": "{product} @ r{revision}",
+    "catalogSnapshotHint": "这是本次编辑使用的目录快照，不是授权结果；提交时 IAM 会重新校验目录并冻结精确 Action 集。",
+    "reviewCatalogSnapshotTitle": "待 IAM 校验的产品声明",
+    "reviewCatalogSnapshotHint": "确认提交后，IAM 会按服务端目录重新校验并冻结精确 Action 集；后续 Profile 新增 Action 不会自动扩大已发布版本。",
     "reviewSummary": "声明摘要",
     "reviewStatementCount": "共 {count} 条声明",
     "reviewChooseStatement": "选择要核对的声明",
