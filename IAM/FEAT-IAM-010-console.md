@@ -658,18 +658,17 @@ IAM 工程师随后固定并推送来源 `cb62ed2f6c307f5a50aa27480f89c8c58cf081
 
 ### 安全报告证据覆盖 MOCK 的开发验收证据
 
-2026-09-24，隔离 MOCK 的当前实现固定在已推送的
-[`a2366dda`](https://github.com/xiak/matrix/commit/a2366dda)；IAM-009 S4 的设计参照固定来源 `fea7a772a3af5a31b3b790f79689a1843bcf70d7`，不继承其尚未完成的 LIVE/CI 验收。
+2026-10-02，账号安全报告的信息架构、隔离 MOCK 计算与同步嵌入资源固定在已推送的
+[`90a5f0184`](https://github.com/xiak/matrix/commit/90a5f0184)。它替换浏览器打开页面时动态拼装“安全报告”的旧草稿，但不替换独立的用户凭证清单。IAM-009 S4a 后端当前只有未提交的纯契约 WIP，没有 HTTP/SQL 运行时或可消费提交；因此本片不建立 LIVE 适配，也不把预览结果称为真实报告。
+
+- 入口先立即打开稳定内容区，再由用户确认生成；固定标题、范围、权限、限制和失败语义直接渲染，只有生成结果区随本地状态变化。生成是同步、全有或全无的单次操作；没有 Dialog、报告目录、分页、`PENDING`、任务轮询、共享链接或自动修复。
+- 请求语义只展示 `requestId` 与固定 `formatVersion=1`，范围恒为当前 Account，不接受账号、用户、产品、时间或来源选择器。创建、读取、下载分别要求当前 Account 上的 `iam.security-report.create` 以及目标 `SECURITY_REPORT` 上的 `iam.security-report.read`、`iam.security-report.download`；Root 也不获得隐式豁免，平台运营身份、服务身份、RoleSession 与 AccessKey 不能代替当前有效 USER LOGIN_SESSION。
+- 成功后只读展示不可变 `AccountSecurityReport` 的 `reportId`、生成时间、七天到期时间、格式版本、资源行数与证据覆盖。上限固定显示为 1000 User、2000 AccessKey、含 ACCOUNT 行在内 3001 行、4 MiB 规范 CSV、同 Account 最多 20 份未到期报告；任何上限失败都拒绝整个请求，不截断、不抽样，也不把部分结果伪装成成功。字节限制仍由服务端负责，浏览器不声称已经计算真实 CSV 大小。
+- 报告范围只含同一 IAM 数据库一致快照中的 ACCOUNT、USER 与 ACCESS_KEY。保留的登录会话签发观察明确使用 `NOT_OBSERVED_IN_RETAINED_IAM_STATE`，不能翻译为“从未登录”；历史 lineage 不足时为 `UNKNOWN`。AccessKey 的最新 Allow/Deny 授权观察不等于业务成功。Role/RoleSession 活动、PaaS 结果、Audit 统计、通知投递及外部风险一律标为 `NOT_INCLUDED`，不产生风险分、实时许可结论或自动停用许可。
+- JSON 详情可承载受控显示字段；CSV v1 不接收自由文本 displayName、标签或描述，且不采用 Key1/Key2 之类随数量增长的列。当前页面不生成文件，下载按钮保持稳定但禁用；真实内容开放前仍需服务端规范转义、防公式注入输入域与真实表格程序验收。读取和下载必须重新核对 Account、有效 Session 与精确权限，报告不提供公开 URL，并要求 `no-store`。
+- 定向用例覆盖凭证清单与账号报告分离、确认后封存、跨 Account 拒绝、上限全量失败、证据状态和无 Dialog。完整前端 58 文件/954 条用例、三条静态归一化、类型/lint/架构/228 组主题对比、42 页导出、233 个嵌入文件等价及完整 Go test/vet 通过。新建浏览器会话完成登录、打开与生成，桌面和 `390 × 844` 均无横向溢出；窄屏 document/body/client/scroll 宽度均为 390px，完整流程没有 warning/error。共享门禁归 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 所有。
 
 2026-10-01，访问分析信息架构与同步嵌入资源固定在 `23f09eb7`。本次只扩展隔离 MOCK 的配置清点与证据边界，不建立新的 IAM LIVE 读取、分析、处置或跨账号契约。
-
-- 身份安全概览保留原有建议状态，并新增独立证据覆盖摘要。每一项检查都同时展示结论和证据状态，当前 DEV 快照明确显示四项已观测、一项未观测；没有以风险分压平信息来源。
-- 用户目录存在下一页时，用户直接授权、登录保护适用范围与待修改密码只标记覆盖不完整；即使已加载的非空目录内可见数量为零，仍保持未知，不能把当前页的零外推到整个 Account。仅已加载范围内出现的正向发现可以标记待审阅，并明确它只是下界。当目录尚未证明没有适用身份时，状态保持未知而不是不适用。认证器目录未接入时 MFA 证据始终标记未观测，不能推断未绑定或安全。
-- 活动区分别显示当前模拟 Session 签发、Key 使用、Role 活动和业务结果。普通“登录”操作事件不充当成功会话证据；仅匹配当前 Account 与身份的 Session 能展示其样例签发时间，不能外推为其他成员的最近登录。Key 状态/创建时间、RoleSession 存在和 IAM Allow 均不转译成真实使用或业务成功。缺少完整窗口和来源水位时明确为未知，不得从没有记录推导闲置或从未使用。
-- 导出的 allowlist 报告只包含当前 MOCK 快照、观察时间与逐来源采集缺口，区分目录 `COMPLETE/PARTIAL`、认证器未观测、AccessKey 模拟清单已观测、活动窗口缺失和来源水位缺失；不包含密码、Secret、原始实体描述或虚构 last-used/在线/来源/风险字段。
-- 报告入口不再从概览直接拼装并下载 JSON，而是先进入稳定内容区审阅同一 Account 的快照生成时间、目录覆盖、采集起点、四个来源水位、成员凭证摘要、安全检查和活动观测；`workspace.accountId` 与 `scene.accountId` 不一致时生成器失败关闭。成员目录在窄屏使用带字段标签的堆叠表格，返回后焦点回到“审阅报告”触发器。
-- IAM-009 S4 的正式导出目标是服务器封存的版本化 CSV。当前 MOCK 只展示禁用的“导出 CSV（MOCK）”及未冻结原因，不生成 JSON 或伪造 CSV；未来下载必须读取同一不可变报告，并在每次下载时重新校验 Account、Session 与权限。页面已打开、reportId 存在或先前可读都不能替代下载时的 permit。
-- 定向用例覆盖活动来源、跨 Account/跨身份 Session 拒绝及报告字段白名单。真实 DEV 在 `390 × 844` 观察活动区，document/body 均为 390px，无新增 warning/error；完整共享门禁归 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 所有。
 - 身份安全概览另提供整页的访问分析 MOCK。该页面沿用稳定内容区而非 Dialog；固定标题、范围边界与页签立即呈现，数据表格在窄屏改为带字段标签的堆叠行。第一组只清点当前隔离租户中已经存在的 IdP、联合身份映射、provider 信任 Role 与 service principal Role，并把配置完整、不完整和停用严格限定为本地配置关系状态；它们都不代表身份已签发、Role 可承担、策略已允许、资源可达或入口曾被使用。详情只进入既有身份提供商或 Role 配置核对，不提供自动撤权。
 - 同一页面在读取任何入口结论前先呈现来源覆盖：联合身份与服务工作负载仅为 MOCK 配置已清点；资源策略/ACL 与跨账号委托当前不受预览支持；真实活动窗口仍未观测。未显示的资源侧或跨账号路径不能解释为不存在。现有 Role 契约仅覆盖 same-account 用户、服务和身份提供商；控制台不为尚未固定的跨账号语义伪造主体、授权或暴露状态。
 - 第二组保留未使用访问审阅样例，使用显式合成的完整 90 天窗口，只演示控制台密码、访问密钥和 Role 三类发现；当前真实数据缺少完整窗口与来源水位，因此不把任何真实身份判定为闲置。
