@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `ce444fad`
-- Pushed documentation milestone: `d4475c09`
+- Pushed source/embed milestone: `88bcf2d7`
+- Pushed documentation milestone: `0b29cedc`
 
 ## Authoritative route
 
@@ -26,21 +26,21 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Group member and direct
-policy tabs now share the searchable, locally paged table grammar and common
-footer. Complete snapshots show exact totals; a cursor-backed member prefix
-shows only loaded records, preserves the continuation across refresh and never
-turns an empty loaded page into an empty-Group claim. Filtering is deferred and
-temporarily blocks stale relationship links.
+login verification remains disabled for UX review. One feature-owned
+relationship directory now serves Group members/policies, User
+policies/groups and MOCK Role policies. It owns deferred search, ten-row local
+pagination, responsive labelled rows, empty recovery and footer grammar while
+callers retain their domain columns and commands. Complete snapshots show exact
+totals; the cursor-backed Group member prefix alone exposes loaded-only scope
+and its opaque continuation.
 
-Source and synchronized 233-file embed are pushed at `ce444fad`; FEAT evidence
-is pushed at `d4475c09`. Fixtures prove an 11-member first page plus a two-item
-continuation, local search/page behavior and a complete 12-policy directory.
-The milestone passed 57 frontend files / 917 tests, three normalization cases,
+Source and synchronized 233-file embed are pushed at `88bcf2d7`; FEAT evidence
+is pushed at `0b29cedc`. Fixtures prove 12-item User policy, User group and Role
+policy snapshots plus the existing 11+2 Group continuation. The milestone
+passed 57 frontend files / 919 tests, three normalization cases,
 type/lint/architecture checks, 228 theme contrast pairs, a 42-route static
-export, embed equality and repository Go test/vet. Desktop DEV verified both
-relationship tabs; compact stacked-table behavior is covered by the shared
-behavior case.
+export, embed equality and repository Go test/vet. Desktop DEV verified the
+User and Role relationship tabs; compact layout remains behavior-covered.
 
 The previously pushed AccessKey owner directory, policy-compilation provenance,
 service-authorization, policy-coverage, Audit, cross-service loading/navigation
