@@ -6,8 +6,8 @@
 - Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `f055d732b`
-- Pushed documentation milestone: `98e8ac922`
+- Pushed source/embed milestone: `05fe4a74c`
+- Pushed documentation milestone: `02b449055`
 
 ## Authoritative route
 
@@ -36,18 +36,22 @@ authorization observation without turning it into a current permit or
 safe-delete signal. Account editing reuses the existing settings version,
 personal-factor step-up and reauthentication boundary; key editing remains a
 separate versioned content-area flow. Strict CIDR normalization is owned by one
-pure domain module. No LIVE repository, HTTP decoder or Action was added.
+pure domain module. Key creation now freezes the exact User version, requestId
+and canonical key-layer networks in one intent instead of creating an
+unrestricted key and patching it later. Unknown-result recovery retains that
+scope and never reissues the Secret. No LIVE repository, HTTP decoder or
+Action was added.
 
-Source and synchronized embed are pushed at `f055d732b`; shared-console and
-IAM-client FEAT evidence is pushed through `98e8ac922`. The complete frontend
+Source and synchronized embed are pushed at `05fe4a74c`; shared-console and
+IAM-client FEAT evidence is pushed through `02b449055`. The complete frontend
 gate passed 58 files/954 cases plus three normalization cases,
 typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
 embed equality and repository Go test/vet. Desktop and `390 x 844` DEV checks
-confirmed the two-layer information hierarchy and historical observation. An
-anonymous container query replaced the prior non-matching named query, so key
-facts and layer grids stack cleanly on narrow screens. A fresh browser tab had
-no warning/error log. IAM confirmed all preview semantics while also confirming
-that the backend candidate has no fixed consumable SHA.
+confirmed the two-layer hierarchy, atomic creation receipt and responsive
+single-column form with no horizontal overflow. A fresh browser tab had no
+warning/error log. IAM fixed candidate
+`472596b1edf5fc0fa3f908294bae0624d581dc4f`, but its independent CI and explicit
+consumable confirmation remain open.
 
 Earlier federation replacement, Deployment lifecycle, AccessKey carrier,
 same-User permission-source handoff, Application tag recovery, service
@@ -69,11 +73,11 @@ fixed or pushed and therefore remain absent from the UI; the browser must not co
 or submit a client IP for this decision. Product
 Profile publication, service-related roles and permission boundaries already
 have backend-owned contracts and must not receive parallel frontend models.
-The IAM owner confirmed that the AccessKey network/usage candidate currently
-uses Account plus key restriction layers and historical observations, but has
-not produced a fixed consumable SHA. Keep `f055d732b` browser-memory-only and
-replace its preview shape atomically when the fixed contract arrives; do not
-add a parallel LIVE model or infer a wire from the preview.
+The IAM AccessKey network/usage candidate is fixed at
+`472596b1edf5fc0fa3f908294bae0624d581dc4f` and includes atomic create-time
+network restrictions, but an `authority-storage` CI failure was still under
+investigation and no explicit consumable confirmation has arrived. Keep
+`05fe4a74c` browser-memory-only; add no parallel LIVE model or inferred wire.
 External assertions remain configuration-only: do not reintroduce a persistent
 federated-account/external-subject object, HTTP adapter, successful assumption
 path, RoleSession issuance or authorization claim until IAM publishes and
