@@ -16,7 +16,16 @@ func (service *Service) QueryRecords(
 	requestID string,
 	request auditv1.QueryRecordsRequest,
 ) (auditv1.RecordPage, error) {
-	return service.queryRecords(ctx, subjectCredential, requestID, request, false)
+	return service.queryRecords(ctx, requestAuthentication{subjectCredential: subjectCredential}, requestID, request, false)
+}
+
+func (service *Service) QueryRecordsAccessKey(
+	ctx context.Context,
+	signedRequest iamv1.AccessKeySignedRequest,
+	requestID string,
+	request auditv1.QueryRecordsRequest,
+) (auditv1.RecordPage, error) {
+	return service.queryRecords(ctx, requestAuthentication{signedRequest: &signedRequest}, requestID, request, false)
 }
 
 func (service *Service) QueryPlatformRecords(
@@ -25,12 +34,12 @@ func (service *Service) QueryPlatformRecords(
 	requestID string,
 	request auditv1.QueryRecordsRequest,
 ) (auditv1.RecordPage, error) {
-	return service.queryRecords(ctx, subjectCredential, requestID, request, true)
+	return service.queryRecords(ctx, requestAuthentication{subjectCredential: subjectCredential}, requestID, request, true)
 }
 
 func (service *Service) queryRecords(
 	ctx context.Context,
-	subjectCredential iamv1.Secret,
+	authentication requestAuthentication,
 	requestID string,
 	request auditv1.QueryRecordsRequest,
 	platform bool,
@@ -45,7 +54,7 @@ func (service *Service) queryRecords(
 	}
 	decision, err := service.authorize(
 		ctx,
-		subjectCredential,
+		authentication,
 		requestID,
 		action,
 		iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "collection"},
@@ -138,7 +147,16 @@ func (service *Service) VerifyChain(
 	requestID string,
 	request auditv1.VerifyChainRequest,
 ) (auditv1.ChainVerification, error) {
-	return service.verifyChain(ctx, subjectCredential, requestID, request, false)
+	return service.verifyChain(ctx, requestAuthentication{subjectCredential: subjectCredential}, requestID, request, false)
+}
+
+func (service *Service) VerifyChainAccessKey(
+	ctx context.Context,
+	signedRequest iamv1.AccessKeySignedRequest,
+	requestID string,
+	request auditv1.VerifyChainRequest,
+) (auditv1.ChainVerification, error) {
+	return service.verifyChain(ctx, requestAuthentication{signedRequest: &signedRequest}, requestID, request, false)
 }
 
 func (service *Service) VerifyPlatformChain(
@@ -147,12 +165,12 @@ func (service *Service) VerifyPlatformChain(
 	requestID string,
 	request auditv1.VerifyChainRequest,
 ) (auditv1.ChainVerification, error) {
-	return service.verifyChain(ctx, subjectCredential, requestID, request, true)
+	return service.verifyChain(ctx, requestAuthentication{subjectCredential: subjectCredential}, requestID, request, true)
 }
 
 func (service *Service) verifyChain(
 	ctx context.Context,
-	subjectCredential iamv1.Secret,
+	authentication requestAuthentication,
 	requestID string,
 	request auditv1.VerifyChainRequest,
 	platform bool,
@@ -167,7 +185,7 @@ func (service *Service) verifyChain(
 	}
 	decision, err := service.authorize(
 		ctx,
-		subjectCredential,
+		authentication,
 		requestID,
 		action,
 		iamv1.ResourceReference{Kind: iamv1.ResourceAuditChain, ID: "collection"},
@@ -271,7 +289,7 @@ func (service *Service) verifyChain(
 
 func (service *Service) authorize(
 	ctx context.Context,
-	subjectCredential iamv1.Secret,
+	authentication requestAuthentication,
 	requestID string,
 	action iamv1.Action,
 	resource iamv1.ResourceReference,
@@ -280,9 +298,29 @@ func (service *Service) authorize(
 	if err != nil {
 		return iamv1.AuthorizationDecision{}, ErrUnavailable
 	}
-	decision, err := service.iam.Authorize(ctx, subjectCredential, request)
-	if err != nil {
-		return iamv1.AuthorizationDecision{}, err
+	var decision iamv1.AuthorizationDecision
+	if authentication.signedRequest != nil {
+		input := iamv1.AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: *authentication.signedRequest}
+		if iamv1.ValidateAccessKeyAuthorizationRequest(input) != nil {
+			return iamv1.AuthorizationDecision{}, ErrInvalidArgument
+		}
+		result, err := service.iam.AuthorizeAccessKey(ctx, input)
+		if err != nil {
+			return iamv1.AuthorizationDecision{}, err
+		}
+		if iamv1.CheckAccessKeyAuthorizationForRequest(result, input) != nil {
+			return iamv1.AuthorizationDecision{}, ErrUnavailable
+		}
+		decision = result.Decision
+	} else {
+		if !authentication.subjectCredential.Present() {
+			return iamv1.AuthorizationDecision{}, ErrUnauthenticated
+		}
+		var err error
+		decision, err = service.iam.Authorize(ctx, authentication.subjectCredential, request)
+		if err != nil {
+			return iamv1.AuthorizationDecision{}, err
+		}
 	}
 	if iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil {
 		return iamv1.AuthorizationDecision{}, ErrUnavailable
@@ -291,6 +329,11 @@ func (service *Service) authorize(
 		return iamv1.AuthorizationDecision{}, ErrForbidden
 	}
 	return decision, nil
+}
+
+type requestAuthentication struct {
+	subjectCredential iamv1.Secret
+	signedRequest     *iamv1.AccessKeySignedRequest
 }
 
 // Audited reads also append to the selected chain. Acquire the same event ->

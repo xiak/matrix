@@ -1235,6 +1235,29 @@ func (client *integrationIAM) Authorize(
 	return decision, nil
 }
 
+func (client *integrationIAM) AuthorizeAccessKey(
+	ctx context.Context,
+	request iamv1.AccessKeyAuthorizationRequest,
+) (iamv1.AccessKeyAuthorization, error) {
+	credential, err := iamv1.NewSecret(readerCredentialA)
+	if err != nil {
+		return iamv1.AccessKeyAuthorization{}, auditlog.ErrUnavailable
+	}
+	decision, err := client.Authorize(ctx, credential, request.Authorization)
+	if err != nil {
+		return iamv1.AccessKeyAuthorization{}, err
+	}
+	if decision.Subject != nil {
+		decision.Subject.AccessKeyID = request.SignedRequest.Parameters.AccessKeyID
+	}
+	digest, err := iamv1.AccessKeySignedRequestDigest(request.SignedRequest)
+	if err != nil {
+		return iamv1.AccessKeyAuthorization{}, err
+	}
+	return iamv1.AccessKeyAuthorization{APIVersion: iamv1.APIVersion, Kind: "AccessKeyAuthorization",
+		Decision: decision, SignedRequestDigest: digest}, nil
+}
+
 func (client *integrationIAM) VerifyInstallation(
 	_ context.Context,
 	credential iamv1.Secret,

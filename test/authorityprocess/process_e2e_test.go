@@ -2149,6 +2149,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE=" + auditCredentialPath,
 		"MATRIX_AUDIT_CURSOR_KEY_FILE=" + cursorKeyPath,
 		"MATRIX_AUDIT_LISTEN_ADDRESS=" + auditAddress,
+		"MATRIX_AUDIT_INSTALLATION_ID=" + bootstrap.InstallationID,
+		"MATRIX_AUDIT_NORTHBOUND_ORIGIN=https://api.matrix.test:443",
 	}
 	iamDispatcherEnvironment := func(credentialPath string, workerID string) []string {
 		return []string{
@@ -6080,6 +6082,71 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		}
 		return processResponse{Status: response.StatusCode, Body: body, Header: response.Header.Clone()}
 	}
+	prepareAudit := func(account *accountFixture, route string, payload any) signedProductRequest {
+		t.Helper()
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal("encode signed Audit request", err)
+		}
+		digest := sha256.Sum256(body)
+		externalPath := "/api/audit" + route
+		return signedProductRequest{
+			method: http.MethodPost, body: string(body), route: route, externalPath: externalPath,
+			contentType: "application/json",
+			signed: signHTTPFor(account, iamv1.ProductAudit, iamv1.AccessKeyHTTPRequest{
+				Method: http.MethodPost, Scheme: "https", Authority: "api.matrix.test:443",
+				EscapedPath: externalPath, ContentType: "application/json",
+				BodyDigest: "sha256:" + hex.EncodeToString(digest[:]),
+			}),
+		}
+	}
+	invokeAudit := func(value signedProductRequest, status int) processResponse {
+		t.Helper()
+		header, err := iamv1.EncodeAccessKeyAuthorization(value.signed.Parameters, value.signed.Signature)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plain := header.CopyBytes()
+		defer clear(plain)
+		request, err := http.NewRequestWithContext(ctx, value.method, auditEndpoint+value.route, strings.NewReader(value.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", string(plain))
+		request.Header.Set("Content-Type", value.contentType)
+		request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
+		request.Header.Set("X-Matrix-External-Request-Target", value.externalPath)
+		response, err := processHTTPClient().Do(request)
+		if err != nil {
+			t.Fatal("invoke signed Audit request", err)
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(response.Body, auditv1.MaxRequestBytes+1))
+		if err != nil || response.StatusCode != status {
+			t.Fatalf("signed Audit %s status=%d want=%d body=%s err=%v", value.route, response.StatusCode, status, body, err)
+		}
+		return processResponse{Status: response.StatusCode, Body: body, Header: response.Header.Clone()}
+	}
+	recordAuditDecision := func(account *accountFixture, response processResponse, action iamv1.Action, kind iamv1.ResourceKind) {
+		t.Helper()
+		requestID := response.Header.Get("Matrix-Request-ID")
+		if requestID == "" {
+			t.Fatal("signed Audit request omitted request identity")
+		}
+		var decisionID iamv1.DecisionID
+		var exact bool
+		if err := database.QueryRow(ctx, `SELECT id,allowed AND contract_version=7 AND principal_id=$2 AND access_key_id=$3
+			AND action_name=$4 AND target_kind=$5 AND target_id='collection'
+			AND NOT (document ? 'requestTags') AND NOT (document ? 'resourceTags')
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$6`,
+			account.target.AccountID, account.target.ID, account.key.Key.ID, action, kind, requestID).Scan(&decisionID, &exact); err != nil || !exact {
+			t.Fatal("signed Audit decision lost exact Account/key/collection binding", err)
+		}
+		if decisions[account.key.Key.ID] == nil {
+			decisions[account.key.Key.ID] = map[iamv1.DecisionID]bool{}
+		}
+		decisions[account.key.Key.ID][decisionID] = true
+	}
 	resolveProductSubject := func(server string, account *accountFixture, signed iamv1.AccessKeySignedRequest, status int) processResponse {
 		t.Helper()
 		profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
@@ -6251,11 +6318,14 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		return deployment
 	}
 	var restartReplay iamv1.AccessKeyAuthorizationRequest
+	auditPages := make([]auditv1.RecordPage, len(accounts))
+	var deletedAuditPacket signedProductRequest
 	for index := range accounts {
 		account := &accounts[index]
 		prefix := fmt.Sprintf("program-signature-%d", index)
 		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyPaaSDeveloper, prefix+"-grant")
 		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyManagedServiceInstallationReader, prefix+"-managedservice-grant")
+		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyAuditReader, prefix+"-audit-grant")
 		environment := "production"
 		if index == 1 {
 			environment = "staging"
@@ -6536,6 +6606,45 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		} {
 			assertProductAudit(account, operations[operationIndex], action)
 		}
+		auditQuery := prepareAudit(account, "/v1/records:query", auditv1.QueryRecordsRequest{PageSize: 1})
+		auditQueryResponse := invokeAudit(auditQuery, http.StatusOK)
+		if iamv1.DecodeRequest(bytes.NewReader(auditQueryResponse.Body), &auditPages[index]) != nil ||
+			auditv1.ValidateRecordPage(auditPages[index]) != nil ||
+			auditPages[index].TenantID != auditv1.TenantID(account.target.AccountID) || len(auditPages[index].Records) != 1 ||
+			auditPages[index].NextCursor == "" {
+			t.Fatal("signed Audit query crossed Account ownership or returned an invalid page")
+		}
+		recordAuditDecision(account, auditQueryResponse, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord)
+		invokeAudit(auditQuery, http.StatusConflict)
+		tamperedAuditQuery := auditQuery
+		tamperedAuditQuery.body = `{"pageSize":2}`
+		invokeAudit(tamperedAuditQuery, http.StatusUnauthorized)
+		platformAuditQuery := auditQuery
+		platformAuditQuery.route = "/v1/platform/records:query"
+		platformAuditQuery.externalPath = "/api/audit/v1/platform/records:query"
+		invokeAudit(platformAuditQuery, http.StatusUnauthorized)
+
+		auditVerify := prepareAudit(account, "/v1/integrity:verify", auditv1.VerifyChainRequest{
+			FromSequence: 1, MaximumRecords: auditv1.MaxVerifyRecords,
+		})
+		auditVerifyResponse := invokeAudit(auditVerify, http.StatusOK)
+		var signedVerification auditv1.ChainVerification
+		if iamv1.DecodeRequest(bytes.NewReader(auditVerifyResponse.Body), &signedVerification) != nil ||
+			auditv1.ValidateChainVerification(signedVerification) != nil ||
+			signedVerification.TenantID != auditv1.TenantID(account.target.AccountID) || !signedVerification.Complete {
+			t.Fatal("signed Audit verification crossed Account ownership or returned an invalid chain")
+		}
+		recordAuditDecision(account, auditVerifyResponse, iamv1.ActionAuditIntegrityVerify, iamv1.ResourceAuditChain)
+		actor := auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(account.target.ID), AccessKeyID: string(account.key.Key.ID)}
+		for _, action := range []auditv1.Action{auditv1.ActionAuditRecordsRead, auditv1.ActionAuditIntegrityVerified} {
+			page := queryAudit(t, auditEndpoint, account.owner, auditv1.QueryRecordsRequest{PageSize: 100, Action: action, Actor: &actor}, http.StatusOK)
+			if len(page.Records) != 1 || page.Records[0].Event.Actor != actor || page.Records[0].Event.IAMDecisionID == "" {
+				t.Fatalf("signed Audit access fact lost exact USER/key attribution for action=%s", action)
+			}
+		}
+		if index == 1 {
+			deletedAuditPacket = prepareAudit(account, "/v1/records:query", auditv1.QueryRecordsRequest{PageSize: 1})
+		}
 		request := sign(account, prefix+"-deny")
 		loginRequest := request.Authorization
 		loginRequest.RequestID, loginRequest.CorrelationID = prefix+"-login", prefix+"-login"
@@ -6566,6 +6675,17 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			restartReplay = request
 		}
 	}
+	continuedAuditQuery := prepareAudit(a, "/v1/records:query", auditv1.QueryRecordsRequest{PageSize: 1, Cursor: auditPages[0].NextCursor})
+	continuedAuditResponse := invokeAudit(continuedAuditQuery, http.StatusOK)
+	var continuedAuditPage auditv1.RecordPage
+	if iamv1.DecodeRequest(bytes.NewReader(continuedAuditResponse.Body), &continuedAuditPage) != nil ||
+		auditv1.ValidateRecordPage(continuedAuditPage) != nil || continuedAuditPage.TenantID != auditv1.TenantID(a.target.AccountID) {
+		t.Fatal("signed Audit cursor did not continue within its original Account")
+	}
+	recordAuditDecision(a, continuedAuditResponse, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord)
+	crossAccountAuditQuery := prepareAudit(b, "/v1/records:query", auditv1.QueryRecordsRequest{PageSize: 1, Cursor: auditPages[0].NextCursor})
+	crossAccountAuditResponse := invokeAudit(crossAccountAuditQuery, http.StatusUnprocessableEntity)
+	recordAuditDecision(b, crossAccountAuditResponse, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord)
 	resourceTagKey, err := iamv1.NewResourceTagConditionKey("environment")
 	if err != nil {
 		t.Fatal(err)
@@ -6753,6 +6873,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		call(replica, http.MethodPost, b.path, b.manager, b.intent, http.StatusForbidden, nil)
 		waitIAMOutboxRetry(t, ctx, database)
 	})
+	invokeAudit(deletedAuditPacket, http.StatusUnauthorized)
 	waitAllIAMOutboxDelivered(t, ctx, database)
 	for action, count := range map[auditv1.Action]int{auditv1.ActionIAMAccessKeyCreated: 3, auditv1.ActionIAMAccessKeyDisabled: 2, auditv1.ActionIAMAccessKeyEnabled: 1, auditv1.ActionIAMAccessKeyDeleted: 3} {
 		page := queryAudit(t, auditEndpoint, b.owner, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)

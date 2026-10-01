@@ -456,7 +456,7 @@ var authorizationProfiles = [...]AuthorizationProfile{
 	iamServiceRoleProfile(),
 	paasProfileRevisionTwelve,
 	managedServiceProfileRevisionFour,
-	roleBusinessProfile(auditProfileRevisionOne),
+	auditProfileRevisionThree,
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
 		declaredProfileAction(ActionInstallationVerify, ResourceInstallation, AuthorityScopeInstallationProbe, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 	),
@@ -508,7 +508,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -698,6 +698,31 @@ var auditProfileRevisionOne = declaredProductProfile(ProductAudit, ServiceAudit,
 	declaredProfileAction(ActionAuditPlatformRecordRead, ResourceAuditRecord, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
 	declaredProfileAction(ActionAuditPlatformIntegrityVerify, ResourceAuditChain, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
 )
+
+var auditProfileRevisionTwo = roleBusinessProfile(auditProfileRevisionOne)
+var auditProfileRevisionThree = auditAccessKeyProfile(auditProfileRevisionTwo)
+
+func auditAccessKeyProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	pending := map[Action]struct{}{
+		ActionAuditRecordRead:      {},
+		ActionAuditIntegrityVerify: {},
+	}
+	for index := range profile.Actions {
+		if _, expected := pending[profile.Actions[index].Action]; !expected {
+			continue
+		}
+		profile.Actions[index].UserAuthenticationMethods = []UserAuthenticationMethod{
+			UserAuthenticationAccessKey, UserAuthenticationLoginSession,
+		}
+		delete(pending, profile.Actions[index].Action)
+	}
+	if len(pending) != 0 {
+		panic("Audit tenant query declaration is missing")
+	}
+	return profile
+}
 
 func roleBusinessProfile(previous AuthorizationProfile) AuthorizationProfile {
 	profile := cloneAuthorizationProfile(previous)

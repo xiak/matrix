@@ -8014,9 +8014,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
+                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
                     "product": "audit",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "requestTags": false,
@@ -8030,7 +8030,6 @@
                 "resourceTags": false,
                 "subject": {
                   "properties": {
-                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -8081,9 +8080,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
+                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
                     "product": "audit",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "requestTags": false,
@@ -8097,7 +8096,6 @@
                 "resourceTags": false,
                 "subject": {
                   "properties": {
-                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -8148,9 +8146,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
+                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
                     "product": "audit",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "requestTags": false,
@@ -8214,9 +8212,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
+                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
                     "product": "audit",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "requestTags": false,
@@ -14029,9 +14027,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
+                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
                     "product": "audit",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "requestTags": false,
@@ -14085,9 +14083,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
+                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
                     "product": "audit",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "requestTags": false,
@@ -14141,9 +14139,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
+                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
                     "product": "audit",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "requestTags": false,
@@ -14197,9 +14195,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
+                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
                     "product": "audit",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "requestTags": false,

@@ -32,6 +32,10 @@ type IAM interface {
 		iamv1.Secret,
 		iamv1.AuthorizationRequest,
 	) (iamv1.AuthorizationDecision, error)
+	AuthorizeAccessKey(
+		context.Context,
+		iamv1.AccessKeyAuthorizationRequest,
+	) (iamv1.AccessKeyAuthorization, error)
 	VerifyInstallation(
 		context.Context,
 		iamv1.Secret,

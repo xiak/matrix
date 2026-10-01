@@ -65,6 +65,28 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 				Profile:    &authorization.Profile, ResourceMode: authorization.ResourceMode, CollectionUsage: authorization.CollectionUsage, CorrelationID: authorization.CorrelationID,
 				DecidedAt: now,
 			})
+		case "/v1/authorize:access-key":
+			if request.Method != http.MethodPost || request.URL.RawQuery != "" ||
+				request.Header.Get("Authorization") != "Bearer audit-service-credential" ||
+				request.Header.Get("Matrix-Subject-Credential") != "" ||
+				request.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("IAM AccessKey request method=%s url=%s headers=%#v", request.Method, request.URL, request.Header)
+			}
+			input, err := iamv1.DecodeAccessKeyAuthorizationRequest(request.Body)
+			if err != nil {
+				t.Errorf("decode IAM AccessKey request: %v", err)
+			}
+			digest, _ := iamv1.AccessKeySignedRequestDigest(input.SignedRequest)
+			_ = json.NewEncoder(response).Encode(iamv1.AccessKeyAuthorization{
+				APIVersion: iamv1.APIVersion, Kind: "AccessKeyAuthorization", SignedRequestDigest: digest,
+				Decision: iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
+					ID: "decision-key", Allowed: true, Reason: iamv1.DecisionAllowed, TenantID: "organization-example",
+					Subject: &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-reader", AccessKeyID: input.SignedRequest.Parameters.AccessKeyID},
+					Action:  input.Authorization.Action, Resource: input.Authorization.Resource,
+					RequestID: input.Authorization.RequestID, Profile: &input.Authorization.Profile,
+					ResourceMode: input.Authorization.ResourceMode, CollectionUsage: input.Authorization.CollectionUsage,
+					CorrelationID: input.Authorization.CorrelationID, DecidedAt: now},
+			})
 		case "/v1/installation:verify":
 			if request.Method != http.MethodPost || request.URL.RawQuery != "" ||
 				request.Header.Get("Authorization") != "Bearer installation-verifier-credential" ||
@@ -124,6 +146,14 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 	if err != nil || !decision.Allowed || decision.Action != authorization.Action ||
 		decision.RequestID != authorization.RequestID {
 		t.Fatalf("IAM authorization decision=%#v err=%v", decision, err)
+	}
+	signed := clientAccessKeyRequest(t)
+	keyResult, err := client.AuthorizeAccessKey(context.Background(), iamv1.AccessKeyAuthorizationRequest{
+		Authorization: authorization, SignedRequest: signed,
+	})
+	if err != nil || !keyResult.Decision.Allowed || keyResult.Decision.Subject == nil ||
+		keyResult.Decision.Subject.AccessKeyID != "key-audit" {
+		t.Fatalf("IAM AccessKey authorization=%#v err=%v", keyResult, err)
 	}
 	verificationRequest, err := iamv1.NewAuthorizationRequest(iamv1.ActionInstallationVerify,
 		iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: "mxi-0123456789abcdef0123456789abcdef"},
@@ -221,4 +251,20 @@ func clientSecret(t *testing.T, value string) iamv1.Secret {
 		t.Fatalf("create IAM HTTP client secret: %v", err)
 	}
 	return secret
+}
+
+func clientAccessKeyRequest(t *testing.T) iamv1.AccessKeySignedRequest {
+	t.Helper()
+	value := iamv1.AccessKeySignedRequest{
+		Parameters: iamv1.AccessKeySignatureParameters{AccessKeyID: "key-audit", InstallationID: "installation-example",
+			Audience: iamv1.ProductAudit, SignedAt: 1800000000, Nonce: clientSecret(t, "AAAAAAAAAAAAAAAAAAAAAA")},
+		HTTP: iamv1.AccessKeyHTTPRequest{Method: http.MethodPost, Scheme: "https", Authority: "api.example.test:443",
+			EscapedPath: "/api/audit/v1/records:query", ContentType: "application/json",
+			BodyDigest: "sha256:" + strings.Repeat("1", 64)},
+		Signature: clientSecret(t, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+	}
+	if iamv1.ValidateAccessKeySignedRequest(value) != nil {
+		t.Fatal("invalid Audit AccessKey request fixture")
+	}
+	return value
 }

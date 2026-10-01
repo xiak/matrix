@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -210,6 +211,61 @@ func TestAuditUsecasesBindIAMAndAuditEveryAuthorizedRead(t *testing.T) {
 		readiness.CheckedAt != transaction.now || readiness.SchemaVersion != SchemaVersion {
 		t.Fatalf("read Audit readiness: readiness=%#v err=%v", readiness, err)
 	}
+}
+
+func TestAuditAccessKeyReadUsesCurrentPDPAndPreservesCredentialLineage(t *testing.T) {
+	transaction := newAuditTransaction()
+	iam := &auditIAM{now: transaction.now}
+	service, err := NewService(&auditRepository{transaction: transaction}, iam, Config{
+		CursorKey: bytes.Repeat([]byte{0x73}, 32),
+		NewID:     func(prefix string) (string, error) { return prefix + "-access-key", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := auditAccessKeySignedRequest(t, "/api/audit/v1/records:query")
+	page, err := service.QueryRecordsAccessKey(context.Background(), signed, "request-key-query", auditv1.QueryRecordsRequest{PageSize: 10})
+	if err != nil || page.TenantID != "organization-example" || len(page.Records) != 0 {
+		t.Fatalf("AccessKey Audit page=%#v err=%v", page, err)
+	}
+	records := transaction.records[authority.TenantChain("organization-example")]
+	if len(records) != 1 || records[0].Event.Action != auditv1.ActionAuditRecordsRead ||
+		records[0].Event.Actor != (auditv1.ActorReference{Type: auditv1.ActorUser, ID: "principal-reader", AccessKeyID: "key-audit"}) {
+		t.Fatalf("AccessKey Audit lineage=%#v", records)
+	}
+
+	serviceRole := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
+		ID: "decision-service-role", Allowed: true, Reason: iamv1.DecisionAllowed, TenantID: "organization-example",
+		Subject: &iamv1.Subject{Type: iamv1.SubjectRole, ID: "role-audit", RoleSession: &iamv1.RoleSessionReference{
+			SessionID: "role-session-audit", SourceServicePrincipalID: "service-audit",
+		}}, Action: iamv1.ActionAuditRecordRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "collection"},
+		ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionList,
+		RequestID: "request-service-role", CorrelationID: "request-service-role", DecidedAt: transaction.now}
+	profile, _ := iamv1.LookupAuthorizationProfile(iamv1.ProductAudit)
+	_, digest, _ := iamv1.CanonicalizeAuthorizationProfile(profile)
+	serviceRole.Profile = &iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+	actor, err := actorForDecision(serviceRole)
+	if err != nil || actor.RoleSession == nil || actor.RoleSession.SourceUserID != "" ||
+		actor.RoleSession.SourceServicePrincipalID != "service-audit" {
+		t.Fatalf("service RoleSession Audit lineage=%#v err=%v", actor, err)
+	}
+}
+
+func auditAccessKeySignedRequest(t *testing.T, path string) iamv1.AccessKeySignedRequest {
+	t.Helper()
+	nonce := auditSecret(t, "AAAAAAAAAAAAAAAAAAAAAA")
+	signature := auditSecret(t, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	value := iamv1.AccessKeySignedRequest{
+		Parameters: iamv1.AccessKeySignatureParameters{AccessKeyID: "key-audit", InstallationID: "installation-audit",
+			Audience: iamv1.ProductAudit, SignedAt: 1800000000, Nonce: nonce},
+		HTTP: iamv1.AccessKeyHTTPRequest{Method: http.MethodPost, Scheme: "https", Authority: "api.example.test:443",
+			EscapedPath: path, ContentType: "application/json", BodyDigest: testDigest},
+		Signature: signature,
+	}
+	if iamv1.ValidateAccessKeySignedRequest(value) != nil {
+		t.Fatal("invalid AccessKey Audit fixture")
+	}
+	return value
 }
 
 func TestAuditUsecasesFailClosedBeforeMutation(t *testing.T) {
@@ -506,6 +562,27 @@ func (client *auditIAM) Authorize(
 		decision.RequestID = "request-substituted"
 	}
 	return decision, nil
+}
+
+func (client *auditIAM) AuthorizeAccessKey(
+	ctx context.Context,
+	request iamv1.AccessKeyAuthorizationRequest,
+) (iamv1.AccessKeyAuthorization, error) {
+	decision, err := client.Authorize(ctx, iamv1.Secret{}, request.Authorization)
+	if err != nil {
+		return iamv1.AccessKeyAuthorization{}, err
+	}
+	if decision.Subject != nil {
+		decision.Subject.AccessKeyID = request.SignedRequest.Parameters.AccessKeyID
+	}
+	digest, err := iamv1.AccessKeySignedRequestDigest(request.SignedRequest)
+	if err != nil {
+		return iamv1.AccessKeyAuthorization{}, err
+	}
+	return iamv1.AccessKeyAuthorization{
+		APIVersion: iamv1.APIVersion, Kind: "AccessKeyAuthorization",
+		Decision: decision, SignedRequestDigest: digest,
+	}, nil
 }
 
 func (client *auditIAM) VerifyInstallation(

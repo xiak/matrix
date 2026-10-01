@@ -26,6 +26,8 @@ const (
 	serviceCredentialFileEnvironment = "MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE"
 	cursorKeyFileEnvironment         = "MATRIX_AUDIT_CURSOR_KEY_FILE"
 	listenAddressEnvironment         = "MATRIX_AUDIT_LISTEN_ADDRESS"
+	installationIDEnvironment        = "MATRIX_AUDIT_INSTALLATION_ID"
+	northboundOriginEnvironment      = "MATRIX_AUDIT_NORTHBOUND_ORIGIN"
 )
 
 type configuration struct {
@@ -34,6 +36,8 @@ type configuration struct {
 	serviceCredentialFile string
 	cursorKeyFile         string
 	listenAddress         string
+	installationID        string
+	northboundOrigin      string
 }
 
 func main() {
@@ -106,7 +110,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	handler, err := audithttp.NewHandler(workflow, audithttp.Config{})
+	handler, err := audithttp.NewHandler(workflow, audithttp.Config{
+		NorthboundOrigin: config.northboundOrigin,
+		InstallationID:   config.installationID,
+	})
 	if err != nil {
 		return err
 	}
@@ -120,11 +127,16 @@ func loadConfiguration() (configuration, error) {
 		serviceCredentialFile: os.Getenv(serviceCredentialFileEnvironment),
 		cursorKeyFile:         os.Getenv(cursorKeyFileEnvironment),
 		listenAddress:         os.Getenv(listenAddressEnvironment),
+		installationID:        os.Getenv(installationIDEnvironment),
+		northboundOrigin:      os.Getenv(northboundOriginEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.iamEndpoint == "" ||
 		config.serviceCredentialFile == "" || config.cursorKeyFile == "" ||
 		config.listenAddress == "" {
 		return configuration{}, errors.New("Audit process configuration is incomplete")
+	}
+	if (config.installationID == "") != (config.northboundOrigin == "") {
+		return configuration{}, errors.New("Audit AccessKey configuration is incomplete")
 	}
 	return config, nil
 }

@@ -162,11 +162,16 @@ func actorForDecision(decision iamv1.AuthorizationDecision) (auditv1.ActorRefere
 		return auditv1.ActorReference{}, ErrUnavailable
 	}
 	actor := auditv1.ActorReference{
-		Type: actorType,
-		ID:   auditv1.ActorID(decision.Subject.ID),
+		Type:        actorType,
+		ID:          auditv1.ActorID(decision.Subject.ID),
+		AccessKeyID: string(decision.Subject.AccessKeyID),
 	}
 	if decision.Subject.RoleSession != nil {
-		actor.RoleSession = &auditv1.RoleSessionReference{SessionID: string(decision.Subject.RoleSession.SessionID), SourceUserID: auditv1.ActorID(decision.Subject.RoleSession.SourceUserID)}
+		actor.RoleSession = &auditv1.RoleSessionReference{
+			SessionID:                string(decision.Subject.RoleSession.SessionID),
+			SourceUserID:             auditv1.ActorID(decision.Subject.RoleSession.SourceUserID),
+			SourceServicePrincipalID: auditv1.ActorID(decision.Subject.RoleSession.SourceServicePrincipalID),
+		}
 	}
 	if auditv1.ValidateActor(actor) != nil {
 		return auditv1.ActorReference{}, ErrUnavailable

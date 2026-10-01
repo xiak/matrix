@@ -3171,21 +3171,27 @@ func TestRoleSessionAdministrationDoesNotReinterpretRegisteredProfiles(t *testin
 }
 
 func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
-	for product, digest := range map[ProductID]string{
+	registeredDigests := map[ProductID]string{
 		ProductPaaS:  "sha256:f2409682d451b564cbd55b2b315543c2f4b333e3f027f3b4377b103ecc1e2876",
-		ProductAudit: "sha256:6bae9c16c05ad781662190c02ab2adb1e552ef2889c0a05d78de7d4553147052",
+		ProductAudit: "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
+	}
+	for product, archivedRevision := range map[ProductID]uint64{
+		ProductPaaS:  1,
+		ProductAudit: 2,
 	} {
 		archives := HistoricalAuthorizationProfiles()
-		index := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool { return profile.Product == product && profile.Revision == 1 })
+		index := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
+			return profile.Product == product && profile.Revision == archivedRevision
+		})
 		if index < 0 {
 			t.Fatal("missing previously registered product")
 		}
 		_, original, err := CanonicalizeAuthorizationProfile(archives[index])
-		if err != nil || original != digest {
+		if err != nil || original != registeredDigests[product] {
 			t.Fatal("registered product bytes changed")
 		}
 		current, found := LookupAuthorizationProfile(product)
-		expectedRevision := uint64(2)
+		expectedRevision := uint64(3)
 		if product == ProductPaaS {
 			expectedRevision = 12
 		}
@@ -3207,7 +3213,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 			if network != (product == ProductPaaS && action.Scope == AuthorityScopeTenant) {
 				t.Fatal("product network capability is not explicit", action.Action)
 			}
-			old := AuthorizationProfileReference{Product: product, Revision: 1, ContentDigest: original}
+			old := AuthorizationProfileReference{Product: product, Revision: archivedRevision, ContentDigest: original}
 			if slices.IndexFunc(archives[index].Actions, func(value AuthorizationProfileAction) bool {
 				return value.Action == action.Action
 			}) < 0 {
@@ -3216,7 +3222,8 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 				}
 				continue
 			}
-			if CheckAuthorizationProfileSubject(archives[index], old, action.Action, SubjectRole) == nil ||
+			oldRoleAllowed := product == ProductAudit && action.Scope == AuthorityScopeTenant
+			if (CheckAuthorizationProfileSubject(archives[index], old, action.Action, SubjectRole) == nil) != oldRoleAllowed ||
 				CheckAuthorizationProfileSubject(archives[index], old, action.Action, SubjectUser) != nil {
 				t.Fatal("old declaration gained ROLE or lost USER semantics")
 			}
@@ -4117,7 +4124,7 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 
 func TestAuditProfileDeclaresAuthorityWideReadAndVerification(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductAudit)
-	if !found || profile.Revision != 2 || profile.CallingService != ServiceAudit {
+	if !found || profile.Revision != 3 || profile.CallingService != ServiceAudit {
 		t.Fatal("invalid current Audit role-capable declaration")
 	}
 	expected := map[Action]struct {
@@ -4134,6 +4141,13 @@ func TestAuditProfileDeclaresAuthorityWideReadAndVerification(t *testing.T) {
 		if !exists || action.ResourceKind != want.kind || action.Scope != want.scope || action.ResultResourceKind != "" ||
 			len(action.ResourceShapes) != 1 || action.ResourceShapes[0] != (AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}) {
 			t.Fatal("Audit complete-chain verification cannot select a caller-chosen instance")
+		}
+		wantMethods := []UserAuthenticationMethod(nil)
+		if action.Scope == AuthorityScopeTenant {
+			wantMethods = []UserAuthenticationMethod{UserAuthenticationAccessKey, UserAuthenticationLoginSession}
+		}
+		if !slices.Equal(action.UserAuthenticationMethods, wantMethods) {
+			t.Fatal("Audit action has the wrong authentication carriers", action.Action)
 		}
 		delete(expected, action.Action)
 	}
@@ -4548,7 +4562,7 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{UserAuthenticationLoginSession}) {
 					t.Fatal("current-session action widened its authentication carrier", declared.Action)
 				}
-			} else if source.Product == ProductPaaS && slices.Contains([]Action{
+			} else if (source.Product == ProductPaaS && slices.Contains([]Action{
 				ActionPaaSApplicationCreate, ActionPaaSConfigurationCreate,
 				ActionPaaSConfigurationRevisionCreate, ActionPaaSApplicationRevisionCreate,
 				ActionPaaSDeploymentCreate, ActionPaaSApplicationRead,
@@ -4557,7 +4571,9 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 				ActionPaaSApplicationRevisionRead, ActionPaaSDeploymentRead,
 				ActionPaaSOperationRead, ActionPaaSDeploymentUpdate,
 				ActionPaaSDeploymentStop, ActionPaaSDeploymentRollback,
-			}, declared.Action) {
+			}, declared.Action)) || (source.Product == ProductAudit && slices.Contains([]Action{
+				ActionAuditRecordRead, ActionAuditIntegrityVerify,
+			}, declared.Action)) {
 				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{
 					UserAuthenticationAccessKey, UserAuthenticationLoginSession,
 				}) {
@@ -4661,7 +4677,11 @@ func TestAuthorizationProfileSubjectTypesAreBoundedCommittedSets(t *testing.T) {
 	for _, source := range AllAuthorizationProfiles() {
 		_, sourceDigest, _ := CanonicalizeAuthorizationProfile(source)
 		changed := cloneAuthorizationProfile(source)
-		changed.Actions[0].SubjectTypes = []SubjectType{SubjectRole}
+		if slices.Contains(changed.Actions[0].UserAuthenticationMethods, UserAuthenticationAccessKey) {
+			changed.Actions[0].SubjectTypes = []SubjectType{SubjectUser}
+		} else {
+			changed.Actions[0].SubjectTypes = []SubjectType{SubjectRole}
+		}
 		got, gotDigest, gotErr := CanonicalizeAuthorizationProfile(changed)
 		want, wantDigest, wantErr := canonicalizeAuthorizationProfile(changed)
 		if gotErr != nil || wantErr != nil || got != want || gotDigest != wantDigest || gotDigest == sourceDigest {
