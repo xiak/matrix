@@ -1828,17 +1828,27 @@ is the resource ID plus authoritative input ETag, so a server version change
 replaces only this local workflow without an effect-driven synchronization
 render. Unknown query identifiers and absent snapshots still fail closed.
 Policy authoring never mutates persisted resource tags, and the MOCK apply never
-calls a backend, changes a real resource or invents Audit proof. IAM/PaaS later
-pushed the independent backend candidate `e9ea19e65`; no LIVE adapter consumes
-it here until its exact HTTP, Action, concurrency, error and Audit contract is
-adopted. Source and synchronized embed are pushed at `af4793cac`. The complete
+calls a backend, changes a real resource or invents Audit proof. The workflow
+now adopts the exact fixed candidate `e9ea19e65` as UI contract evidence without
+claiming LIVE integration: review names `paas.application-label.set` or
+`paas.application-label.delete` and the strong current ETag used by `If-Match`;
+the simulated terminal result exposes only the returned Operation's safe
+identity, Action, state, target, requester, completion time and replacement
+ETag. It does not surface idempotency fingerprints, request digests or an
+invented Audit event ID. LIVE will distinguish no-change and idempotency
+conflicts, reload before retry after a 412 version conflict, and never invent a
+422 branch. The backend SHA remains a fixed candidate until its independent CI
+is registered, so no LIVE adapter consumes it yet. Source and synchronized
+embed are pushed at `dc9ee5f8e`. The complete
 57-file/924-case frontend suite and three export-normalization cases,
 typecheck/lint, architecture and 228-pair style gates, 42-route static export,
 233-file embed equality and UI-host Go test/vet passed. Fresh desktop and
 `430 × 900` DEV walked view → edit → review → simulated result with focus
 restoration, no operational Dialog and viewport/document/body width all 430px;
-a fresh validation tab emitted no warning or error. This is application-side
-MOCK UX evidence, not real resource-tag mutation or backend authorization
+a fresh validation tab emitted no warning or error. The original long-lived DEV
+tab still retains historical HMR translation errors from before the message
+catalog landed; they are not current-runtime evidence. This is application-side
+MOCK UX evidence, not real resource-tag mutation, backend CI or authorization
 acceptance.
 
 Same-path detail-query tests retain encoded IDs, draft-leave protection and
