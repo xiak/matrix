@@ -7,7 +7,8 @@
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
 - Pushed source/embed milestone: `3193acde5`
-- Pushed documentation milestone: `d4b728592`
+- Pushed capacity regression: `fccd0847f`
+- Pushed documentation milestone: `8803aa1ea`
 
 ## Authoritative route
 
@@ -36,9 +37,10 @@ and names the breached boundary instead of silently ignoring the action or
 truncating evidence. Server authority and the canonical CSV byte limit remain
 explicitly outside this client preflight.
 
-Source and synchronized embed are pushed at `3193acde5`; shared-console
-evidence is pushed through `d4b728592`. The complete frontend gate passed 58
-files/968 cases plus three normalization cases, typecheck/lint/architecture/
+Source and synchronized embed are pushed at `3193acde5`; a maximum-size
+1000-User/2000-AccessKey paging regression is pushed at `fccd0847f`, and
+shared-console evidence is pushed through `8803aa1ea`. The complete frontend
+gate passed 58 files/969 cases plus three normalization cases, typecheck/lint/architecture/
 228-pair style checks, 42-route export, 233-file embed equality and repository
 Go test/vet. A fresh desktop browser tab entered the preview and generated the
 immutable report with no Dialog or browser warning/error. The earlier regional
