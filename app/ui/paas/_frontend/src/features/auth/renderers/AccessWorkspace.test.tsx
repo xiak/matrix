@@ -2695,6 +2695,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("button", { name: "查看日志服务的允许操作" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看日志服务的拒绝操作" })).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "策略版本" }));
+    expect(within(screen.getByRole("table", { name: "策略版本" })).queryByRole("columnheader", { name: "操作" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "查看版本 v1" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { name: "查看版本 v1" })).toBeTruthy();

@@ -104,11 +104,10 @@ function PolicyVersionHistory({ policy, usageCount, workspace, scene, onWorkflow
     <p className={styles.note}>{t("versionHistoryHint", { count: policy.versions.length, limit: policyVersionLimit })}</p>
     {policy.kind === "custom" && policy.versions.length >= policyVersionLimit ? <Alert status="warning">{t("errors.versionLimit")}</Alert> : null}
     <Table aria-label={t("versions")} mobileLayout="stack">
-      <thead><tr><th scope="col">{t("version")}</th><th scope="col">{t("created")}</th><th scope="col">{t("actions")}</th></tr></thead>
+      <thead><tr><th scope="col">{t("version")}</th><th scope="col">{t("created")}</th></tr></thead>
       <tbody>{[...policy.versions].reverse().map((item) => <tr key={item.id}>
-        <td data-label={t("version")}><button className={styles.userLink} data-version-inspect={item.id} aria-label={t("inspectVersion", { version: item.id })} onClick={() => open({ action: "inspect", version: item.id })}>v{item.id}</button> {item.id === policy.defaultVersion ? <Badge status="success">{t("defaultVersion")}</Badge> : null}</td>
+        <td data-label={t("version")}><div className={styles.rowActionCell}><span><button className={styles.userLink} data-version-inspect={item.id} aria-label={t("inspectVersion", { version: item.id })} onClick={() => open({ action: "inspect", version: item.id })}>v{item.id}</button> {item.id === policy.defaultVersion ? <Badge status="success">{t("defaultVersion")}</Badge> : null}</span>{policy.kind === "custom" && item.id !== policy.defaultVersion ? <PolicyVersionActions version={item.id} onIntent={open} /> : null}</div></td>
         <td data-label={t("created")}><WorkspaceTime value={item.createdAt} /></td>
-        <td data-label={t("actions")}>{policy.kind === "custom" && item.id !== policy.defaultVersion ? <PolicyVersionActions version={item.id} onIntent={open} /> : <span aria-hidden="true">—</span>}</td>
       </tr>)}</tbody>
     </Table>
   </div>;

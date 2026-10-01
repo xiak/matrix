@@ -1326,6 +1326,7 @@ describe("account access", () => {
 
     await user.click(screen.getByRole("tab", { name: "策略版本" }));
     const table = await screen.findByRole("table", { name: "策略版本目录" });
+    expect(within(table).queryByRole("columnheader", { name: "操作" })).toBeNull();
     expect(within(table).getByText("当前默认")).toBeTruthy();
     expect(screen.getByText("当前可管理版本：2 / 5")).toBeTruthy();
     expect(listPolicyVersions).toHaveBeenCalledWith(credential, account.id, customer.id);

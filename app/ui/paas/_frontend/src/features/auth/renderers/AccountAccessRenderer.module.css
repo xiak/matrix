@@ -53,7 +53,7 @@
   align-items: flex-start;
 }
 
-.sessionState {
+.rowActionCell {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -61,7 +61,7 @@
   min-width: 0;
 }
 
-.sessionState > span:last-child {
+.rowActionCell > :last-child:not(:only-child) {
   flex: none;
 }
 

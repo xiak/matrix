@@ -361,16 +361,15 @@ function AccountPolicyVersions({ policy, listVersions, readVersion, mutation, on
           {mutation?.canPublish && state.directory.items.length < 5 ? <Button ref={publishButton} variant="secondary" disabled={Boolean(mutation.pending)} onClick={() => { setPublished(null); setMutationError(null); setPublisherOpen(true); }}>{t("publishVersion")}</Button> : null}
         </div>
         <Table aria-label={t("versionTable")} mobileLayout="stack" className={styles.policyVersionTable}>
-          <thead><tr><th scope="col">{t("versionId")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("versionContract")}</th><th scope="col">{t("digest")}</th>{mutation ? <th scope="col">{t("actions")}</th> : null}</tr></thead>
+          <thead><tr><th scope="col">{t("versionId")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("versionContract")}</th><th scope="col">{t("digest")}</th></tr></thead>
           <tbody>{state.directory.items.map((item) => <tr key={item.versionId}>
-            <td data-label={t("versionId")}><button className={styles.userLink} data-version-id={item.versionId} onClick={() => { opener.current = item.versionId; setSelected({ status: "loading" }); setSelectedId(item.versionId); }}>{item.versionId}</button></td>
+            <td data-label={t("versionId")}><div className={styles.rowActionCell}><button className={styles.userLink} data-version-id={item.versionId} onClick={() => { opener.current = item.versionId; setSelected({ status: "loading" }); setSelectedId(item.versionId); }}>{item.versionId}</button>{mutation && item.versionId !== state.directory.policy.defaultVersionId ? <ActionMenu iconOnly label={t("versionActions", { version: item.versionId })} actions={[
+              { id: "set-default", label: t("setDefault"), disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "set-default", versionId: item.versionId }); } },
+              { id: "retire", label: t("retireVersion"), danger: true, disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "retire", versionId: item.versionId }); } }
+            ]} /> : null}</div></td>
             <td data-label={t("defaultVersion")}>{item.versionId === state.directory.policy.defaultVersionId ? <Badge status="success">{t("currentDefault")}</Badge> : "—"}</td>
             <td data-label={t("versionContract")}>{t("contractVersion", { version: item.contractVersion })}</td>
             <td data-label={t("digest")}><code>{item.contentDigest}</code></td>
-            {mutation ? <td data-label={t("actions")}>{item.versionId !== state.directory.policy.defaultVersionId ? <ActionMenu iconOnly label={t("versionActions", { version: item.versionId })} actions={[
-              { id: "set-default", label: t("setDefault"), disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "set-default", versionId: item.versionId }); } },
-              { id: "retire", label: t("retireVersion"), danger: true, disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "retire", versionId: item.versionId }); } }
-            ]} /> : <span aria-hidden="true">—</span>}</td> : null}
           </tr>)}</tbody>
         </Table>
       </>}
