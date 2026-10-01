@@ -13,6 +13,7 @@
 | IAM/Audit foundation and delivery donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
 | Matrix authority-profile increment | `c29f9e3f065af4a6dcfc06596ee9a49a5c671774` | Same-repository fixed patch; adapt only release/lifecycle mechanisms, excluding Phase 3 host implementation, checkpoint and acceptance state. |
+| Matrix security-mail installation slice | `7d002ea2ff7afafc961974123fb4e16f23945a23` | Same-repository fixed patch; adapt the private configuration and installed notification-consumer boundary only, excluding donor profile values, host/node work and acceptance state. |
 
 The FEAT-005 supported host, signed bundle, fixed inventory, lifecycle,
 upgrade/rollback semantics, CLI surface, and real offline gates were committed
@@ -58,6 +59,8 @@ Matrix authority-profile increment as follows:
 | `c29f9e3` manifest v2, exact profile comparison, sealed backup/recovery binding and support output | `ADAPT` | Keep independent authority versions plus the code-owned contract revision. Retain this branch's own service composition and coordinated revision, owned by FEAT-005, rather than importing the donor's host composition. Also close unproved cross-profile recovery before journal or provider changes, while preserving same-profile recovery. |
 | `c29f9e3` published v1 canonical/signature/backup preservation and pre-effect rejection gates | `REUSE` | Preserve evidence for real published formats without inventing cross-profile N-1 support. Run the gates on this branch and extend its existing process owner, never inherit the donor's acceptance result. |
 | `c29f9e3` PaaS2/host expectations and FEAT-008 status | `REJECT` for this slice | IAM release verification does not authorize importing host admission, changing another Phase or asserting its release acceptance. |
+| `7d002ea2` canonical `SecurityMailConfiguration` private-file contract | `ADAPT` | Keep the strict, redacted operator input and bind it later to this installation's sealed IAM bootstrap before writing the purpose-only channel. It is not an HTTP API, journal payload, support artifact or caller-selected authority scope. |
+| `7d002ea2` donor release profile, host/node topology and foreign gate status | `REJECT` | This branch owns its exact authority profile and must prove its own notification consumer, SMTP custody and signed runtime; importing another branch's numbers or evidence would not validate the combined IAM source. |
 
 1. Own the compact lifecycle in an `installation` context and keep one
    user-facing `mx` command tree. Do not import the legacy bootstrap aggregate
