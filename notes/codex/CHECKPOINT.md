@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `9f6dd42c`
-- Pushed documentation milestone: `9f6dd42c`
+- Pushed source/embed milestone: `6f4ac7c2`
+- Pushed documentation milestone: `6f4ac7c2`
 
 ## Authoritative route
 
@@ -88,22 +88,21 @@ product-PEP browser evidence remain closed. Source/embed `60b60619` passed the
 full 55-file/899-test frontend, export/embed and focused Go UI host gates; its
 contract and limitations are owned by FEAT-IAM-010 at `8aeed58b`.
 
-The shared LIVE/isolated-MOCK visual policy author now derives condition choices
-from the selected Actions' exact Profile capability intersection. Fixed IAM
-source `710c1557f48611179715671cac76ff4dfe447c1b` adds trusted
-`request.source-ip` to the PaaS revision-4 Profile and adds
-`request.tag/environment` only to `paas.application.create`. Strict parsing,
-authoring and review enforce the fixed operators, CIDR/tag value bounds and
-missing-tag semantics without accepting arbitrary request tags or sending an
-internal AuthorizationRequest. One compact trusted-context region distinguishes
-the calling service's trusted network boundary from product-derived request
-tags; browser input and forwarded headers prove neither fact. Resource-tag ABAC
-and tag mutation remain disabled because their contract is not frozen.
-Source/embed/docs `9f6dd42c`
-passed 57 frontend files / 913 tests, static normalization,
-type/lint/architecture, 228 theme contrast pairs, 40-page export, 233-file
-embed equality and Go web test/vet. A `390 × 844` DEV flow displayed both
-trusted producers without horizontal overflow. FEAT-007 owns the UX evidence
+The shared LIVE/isolated-MOCK visual policy author derives conditions from the
+selected Actions' exact Profile capability intersection and keeps the catalog
+snapshot used for that edit. Edit and review now show the selected Actions'
+product/Profile revision while making clear that this is not an authorization
+result: the browser submits no Profile, digest, compilation or resolved Action
+set, and only the server-returned `PolicyVersion.compilation` is authoritative
+after publication. Fixed IAM source `710c1557f48611179715671cac76ff4dfe447c1b`
+owns trusted request context; cumulative source
+`49aaf21657ef71cb83b1b9b51d835f3600f6ce9d` confirms the publication boundary.
+Resource-tag ABAC and tag mutation remain disabled because their contract is
+not frozen. Source/embed/docs `6f4ac7c2` passed 57 frontend files / 913 tests,
+static normalization, type/lint/architecture, 228 theme contrast pairs,
+42-route export, 233-file embed equality and repository Go test/vet. Desktop
+and `390 × 844` DEV flows displayed catalog provenance in edit and review
+without a Dialog or horizontal layout failure. FEAT-007 owns the UX evidence
 and FEAT-IAM-010 owns the backend semantics and exclusions.
 
 Audit is now an independent console product rather than an IAM submenu. The
