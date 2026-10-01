@@ -6,9 +6,9 @@
 - Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `03283423f`
+- Pushed source/embed milestone: `63ae1e08f`
 - Pushed capacity regression: `fccd0847f`
-- Pushed documentation milestone: `bf0eeeb89`
+- Pushed documentation milestone: `2b26cd0f5`
 
 ## Authoritative route
 
@@ -40,9 +40,11 @@ does not invent a report directory, a delete action or a current retained
 count. Server authority, retained-count truth and the canonical CSV byte limit
 remain explicitly outside this client preflight.
 
-Source and synchronized embed are pushed at `03283423f`; a maximum-size
+Source and synchronized embed are pushed at `63ae1e08f`; a maximum-size
 1000-User/2000-AccessKey paging regression is pushed at `fccd0847f`, and
-shared-console evidence is pushed through `bf0eeeb89`. The complete frontend
+shared-console evidence is pushed through `2b26cd0f5`. The retained-report
+conflict title consumes the same domain limit as the rule instead of duplicating
+`20` in translation copy. The complete frontend
 gate passed 58 files/969 cases plus three normalization cases, typecheck/lint/architecture/
 228-pair style checks, 42-route export, 233-file embed equality and repository
 Go test/vet. A fresh desktop browser tab entered the preview and confirmed the
@@ -84,7 +86,7 @@ installation, upgrade, rollback, selected-backup recovery and restart evidence
 recorded by IAM at `2830952dc`. Its exact Verification `36925315891` was
 cancelled by a superseding commit, and the current `983e33e63701db95895804d7e0bed9bbad72211d`
 Verification `36929260286` remains queued. Explicit consumable confirmation is
-still absent. Keep `03283423f` as information architecture only;
+still absent. Keep `63ae1e08f` as information architecture only;
 do not mount create/read/content adapters or enable CSV until IAM explicitly
 marks the fixed SHA consumable.
 External assertions remain configuration-only: do not reintroduce a persistent
