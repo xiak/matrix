@@ -36,6 +36,52 @@ function labelCollectionCells(content: ReactNode, columns: readonly string[]) {
     : cell);
 }
 
+export function WorkspaceRelationshipDirectory<T extends { id: string; name: string }>({ title, searchLabel, items, columns, row, keywords, status, footerNote, loadMore, emptyTitle, emptyDescription, busy = false }: {
+  title: string;
+  searchLabel: string;
+  items: T[];
+  columns: string[];
+  row(item: T, blocked: boolean): ReactNode;
+  keywords?(item: T): string;
+  status(shown: number, loaded: number): string;
+  footerNote: ReactNode;
+  loadMore?: { label: string; disabled?: boolean; reason?: string; onClick(): void };
+  emptyTitle: string;
+  emptyDescription?: string;
+  busy?: boolean;
+}) {
+  const t = useTranslations("IamWorkspace");
+  const relationship = useTranslations("RelationshipDirectory");
+  const toolbarLabels = useTableToolbarLabels();
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const deferredQuery = useDeferredValue(query);
+  const filtering = deferredQuery !== query;
+  const filtered = useMemo(() => {
+    const words = deferredQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return items.filter((item) => words.every((word) => [item.name, item.id, keywords?.(item) ?? ""].join(" ").normalize("NFKC").toLowerCase().includes(word)));
+  }, [deferredQuery, items, keywords]);
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const blocked = busy || filtering;
+  const clearSearch = () => { setQuery(""); setPage(1); };
+
+  return <>
+    <TableToolbar labels={toolbarLabels} search={{ label: searchLabel, placeholder: relationship("searchPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }} status={status(filtered.length, items.length)} />
+    {visible.length ? <Table aria-label={title} aria-busy={blocked || undefined} mobileLayout="stack">
+      <thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead>
+      <tbody>{visible.map((item) => <tr key={item.id}>{labelCollectionCells(row(item, blocked), columns)}</tr>)}</tbody>
+    </Table> : <EmptyState title={query ? t("noResults") : emptyTitle} description={query ? t("noResultsHint") : emptyDescription}
+      action={query ? <Button onClick={clearSearch} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} />}
+    <Table.Footer note={footerNote}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={blocked}
+      onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+      trailing={loadMore ? <Button disabled={loadMore.disabled} title={loadMore.reason} onClick={loadMore.onClick} size="small" variant="secondary">{loadMore.label}</Button> : null}
+      labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+  </>;
+}
+
 export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, secondaryActions = [], keywords, filter, embedded = false, status, loadMore, footerNote, workflow, loading, unavailable, createActionRef, createFocusRef }: {
   title: string; description: string; items: T[]; columns: string[];
   row(item: T): ReactNode; create?: { label: string; disabled?: boolean; reason?: string; onClick(): void }; embedded?: boolean;

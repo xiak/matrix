@@ -1,14 +1,14 @@
 "use client";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, EmptyState, FormField, Table, Tabs, TextArea, type PageCommandsHandle } from "@ui/xiak";
+import { Alert, Badge, Button, Card, EmptyState, FormField, Tabs, TextArea, type PageCommandsHandle } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessRole, AccessWorkspace } from "../domain/accessWorkspace";
 import { containsDenyStatement } from "../domain/policyDocument";
 import { roleTrustPreview, validateRoleTrust, type RoleTrust } from "../domain/roleTrust";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { AuthorizationOverview, WorkspaceCollection, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceSelection, WorkspaceTime } from "./AccessWorkspaceUi";
+import { AuthorizationOverview, WorkspaceCollection, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceRelationshipDirectory, WorkspaceSelection, WorkspaceTime } from "./AccessWorkspaceUi";
 import { RoleSessionSettings, RoleTags, RoleTrustFields } from "./RoleConfiguration";
 import { PermissionBoundary } from "./PermissionBoundary";
 import { RoleSessions } from "./RoleSessions";
@@ -88,7 +88,7 @@ function RolePolicyEditor({ role, workspace, mode, onClose }: { role: AccessRole
 }
 
 export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
-  const t = useTranslations("IamWorkspace"), r = useTranslations("RoleWorkspace"), access = useAccountAccess();
+  const t = useTranslations("IamWorkspace"), r = useTranslations("RoleWorkspace"), relationship = useTranslations("RelationshipDirectory"), access = useAccountAccess();
   const [workflow, setWorkflow] = useState<"metadata" | "trust" | "settings" | "add" | "remove" | null>(null);
   const [serviceAuthorizationOpen, setServiceAuthorizationOpen] = useState(false);
   const [tab, setTab] = useState("policies");
@@ -114,6 +114,7 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("roles")}>{t("back")}</Button>} />;
   const principalLabel = (role: AccessRole) => role.principalType === "provider" ? workspace.providers.find((provider) => provider.id === role.principal)?.name ?? role.principal : role.principal;
   const selectedPolicies = selected?.policyIds.map((id) => workspace.policies.find((policy) => policy.id === id)).filter((policy) => policy !== undefined) ?? [];
+  const selectedPolicyRows = selected?.policyIds.map((id) => { const policy = workspace.policies.find((item) => item.id === id); return { id, name: policy?.name ?? id, policy }; }) ?? [];
   const policiesWithDeny = new Set(selectedPolicies.filter((policy) => {
     const document = policy.versions.find((version) => version.id === policy.defaultVersion)?.document;
     return document ? containsDenyStatement(document) : false;
@@ -137,7 +138,11 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
         { label: t("permissionBoundary"), value: t(selected.boundaryPolicyId ? "configured" : "notConfigured") }
       ]} />
       <Tabs.Root value={tab} onValueChange={setTab}><Tabs.List aria-label={selected.name}><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="trust">{t("trust")}</Tabs.Trigger><Tabs.Trigger value="sessions">{r("sessions")}</Tabs.Trigger><Tabs.Trigger value="settings">{r("sessionSettings")}</Tabs.Trigger></Tabs.List>
-        <Tabs.Content className={styles.stack} value="policies"><div className={styles.actions}><Button ref={addTrigger} variant="secondary" onClick={() => openWorkflow("add")}>{r("addPolicies")}</Button><Button ref={removeTrigger} variant="ghost" disabled={!selected.policyIds.length} onClick={() => openWorkflow("remove")}>{r("removePolicies")}</Button></div><p className={styles.note}>{r("permissionsHint")}</p><Table aria-label={t("permissions")} mobileLayout="stack"><thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th><th scope="col">{r("effectiveVersion")}</th><th scope="col">{t("documentEffect")}</th></tr></thead><tbody>{selected.policyIds.map((id) => { const policy = workspace.policies.find((policy) => policy.id === id); return <tr key={id}><td data-label={t("name")}><button className={styles.userLink} onClick={() => onOpen("policies", id)}>{policy?.name ?? id}</button><small>{policy?.description}</small></td><td data-label={t("type")}>{policy ? t(policy.kind) : "—"}</td><td data-label={r("effectiveVersion")}>{policy ? "v" + policy.defaultVersion : "—"}</td><td data-label={t("documentEffect")}>{policy ? <Badge status={policiesWithDeny.has(policy.id) ? "danger" : "neutral"}>{t(policiesWithDeny.has(policy.id) ? "containsDeny" : "allowStatementsOnly")}</Badge> : "—"}</td></tr>; })}</tbody></Table>{!selected.policyIds.length ? <p className={styles.note}>{r("noPermissions")}</p> : null}
+        <Tabs.Content className={styles.stack} value="policies"><div className={styles.actions}><Button ref={addTrigger} variant="secondary" onClick={() => openWorkflow("add")}>{r("addPolicies")}</Button><Button ref={removeTrigger} variant="ghost" disabled={!selected.policyIds.length} onClick={() => openWorkflow("remove")}>{r("removePolicies")}</Button></div><p className={styles.note}>{r("permissionsHint")}</p><WorkspaceRelationshipDirectory title={t("permissions")} searchLabel={r("searchAttachedPolicies")} items={selectedPolicyRows}
+          columns={[t("name"), t("type"), r("effectiveVersion"), t("documentEffect")]} emptyTitle={r("noPermissions")}
+          status={(shown) => relationship("completeResults", { shown, total: selectedPolicyRows.length })} footerNote={relationship("completeScope")}
+          keywords={(item) => [item.policy?.description ?? "", item.policy ? t(item.policy.kind) : ""].join(" ")}
+          row={(item, blocked) => <><td><button className={styles.userLink} disabled={blocked} onClick={() => onOpen("policies", item.id)}>{item.name}</button><small>{item.policy?.description}</small></td><td>{item.policy ? t(item.policy.kind) : "—"}</td><td>{item.policy ? "v" + item.policy.defaultVersion : "—"}</td><td>{item.policy ? <Badge status={policiesWithDeny.has(item.policy.id) ? "danger" : "neutral"}>{t(policiesWithDeny.has(item.policy.id) ? "containsDeny" : "allowStatementsOnly")}</Badge> : "—"}</td></>} />
           <PermissionBoundary owner="role" workspace={workspace} value={selected.boundaryPolicyId} onOpen={(id) => onOpen("policies", id)} onSave={(policyId) => access.executeWorkspace({ kind: "set-role-boundary", id: selected.id, policyId })} />
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="trust"><div><Button ref={trustTrigger} variant="secondary" onClick={() => openWorkflow("trust")}>{r("editTrust")}</Button></div><Alert>{r(`trustHints.${selected.principalType}`)}</Alert><dl className={styles.facts}><div><dt>{t("principal")}</dt><dd>{principalLabel(selected)}</dd></div>{selected.principalType === "account" ? <div><dt>{r("trustedUsers")}</dt><dd><div className={styles.actions}>{selected.trustedUserIds.map((id) => <button key={id} className={styles.userLink} onClick={() => onOpen("users", id)}>{scene.users.find((user) => user.id === id)?.loginName ?? id}</button>)}</div></dd></div> : null}</dl><pre className={styles.code} role="region" aria-label={r(selected.principalType === "account" ? "trustDocument" : "syntheticTrust")} tabIndex={0}>{JSON.stringify(roleTrustPreview(selected), null, 2)}</pre>{selected.principalType === "account" ? <p className={styles.note}>{r("requiredAction")} <code>iam.role.assume</code> · <code>{selected.id}</code></p> : null}</Tabs.Content>

@@ -1,10 +1,9 @@
 "use client";
 
-import { useDeferredValue, useMemo, useState, type ReactNode, type RefObject } from "react";
+import { useState, type ReactNode, type RefObject } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
-import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
-import { AuthorizationOverview, WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { Alert, Badge, Button, EmptyState, TableSkeleton, Tabs } from "@ui/xiak";
+import { AuthorizationOverview, WorkspaceCollection, WorkspaceDetail, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
 export type GroupActionControl = {
@@ -106,54 +105,6 @@ export function GroupDirectory({ groups, create, loadMore, status, footerNote, l
   />;
 }
 
-function GroupRelationDirectory<T extends { id: string; name: string }>({ label, searchLabel, items, columns, row, keywords, authoritativeTotal, partial, loadMore, emptyTitle, emptyDescription }: {
-  label: string;
-  searchLabel: string;
-  items: T[];
-  columns: string[];
-  row(item: T, blocked: boolean): ReactNode;
-  keywords?(item: T): string;
-  authoritativeTotal?: number;
-  partial?: boolean;
-  loadMore?: GroupActionControl;
-  emptyTitle: string;
-  emptyDescription?: string;
-}) {
-  const t = useTranslations("IamWorkspace");
-  const g = useTranslations("GroupWorkspace");
-  const toolbarLabels = useTableToolbarLabels();
-  const [query, setQuery] = useState("");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const deferredQuery = useDeferredValue(query);
-  const filtering = deferredQuery !== query;
-  const filtered = useMemo(() => {
-    const words = deferredQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
-    return items.filter((item) => words.every((word) => [item.name, item.id, keywords?.(item) ?? ""].join(" ").normalize("NFKC").toLowerCase().includes(word)));
-  }, [deferredQuery, items, keywords]);
-  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const currentPage = Math.min(page, pages);
-  const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const blocked = filtering || Boolean(loadMore?.disabled);
-  const clearSearch = () => { setQuery(""); setPage(1); };
-
-  return <>
-    <TableToolbar labels={toolbarLabels} search={{ label: searchLabel, placeholder: g("relationSearchPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
-      status={partial && authoritativeTotal !== undefined
-        ? g("partialRelationResults", { shown: filtered.length, loaded: items.length, total: authoritativeTotal })
-        : authoritativeTotal === undefined ? g("loadedRelationResults", { shown: filtered.length, loaded: items.length }) : g("completeRelationResults", { shown: filtered.length, total: authoritativeTotal })} />
-    {visible.length ? <Table aria-label={label} aria-busy={filtering || undefined} mobileLayout="stack">
-      <thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead>
-      <tbody>{visible.map((item) => <tr key={item.id}>{row(item, blocked)}</tr>)}</tbody>
-    </Table> : <EmptyState title={query ? t("noResults") : emptyTitle} description={query ? t("noResultsHint") : emptyDescription}
-      action={query ? <Button onClick={clearSearch} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} />}
-    <Table.Footer note={g(partial ? "loadedRelationScope" : "completeRelationScope")}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={blocked}
-      onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
-      trailing={loadMore ? <Button disabled={loadMore.disabled} title={loadMore.reason} onClick={loadMore.onInvoke} size="small" variant="secondary">{g("loadMoreMembers")}</Button> : null}
-      labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
-  </>;
-}
-
 function GroupMemberTable({ members, authoritativeTotal, directoryComplete = true, loadMore, onOpen }: {
   members: GroupMemberRecord[];
   authoritativeTotal?: number;
@@ -164,8 +115,14 @@ function GroupMemberTable({ members, authoritativeTotal, directoryComplete = tru
   const t = useTranslations("IamWorkspace");
   const a = useTranslations("AccountAccess");
   const g = useTranslations("GroupWorkspace");
-  return <GroupRelationDirectory label={t("members")} searchLabel={g("searchMembers")} items={members} authoritativeTotal={authoritativeTotal}
-    partial={!directoryComplete} loadMore={loadMore} emptyTitle={g(directoryComplete ? "noMembers" : "noLoadedMembers")} emptyDescription={g(directoryComplete ? "noMembersHint" : "noLoadedMembersHint")}
+  const relationship = useTranslations("RelationshipDirectory");
+  return <WorkspaceRelationshipDirectory title={t("members")} searchLabel={g("searchMembers")} items={members}
+    status={(shown, loaded) => !directoryComplete && authoritativeTotal !== undefined
+      ? relationship("partialResults", { shown, loaded, total: authoritativeTotal })
+      : authoritativeTotal === undefined ? relationship("loadedResults", { shown, loaded }) : relationship("completeResults", { shown, total: authoritativeTotal })}
+    footerNote={relationship(directoryComplete ? "completeScope" : "loadedScope")}
+    busy={Boolean(loadMore?.disabled)} loadMore={loadMore ? { label: g("loadMoreMembers"), disabled: loadMore.disabled, reason: loadMore.reason, onClick: loadMore.onInvoke } : undefined}
+    emptyTitle={g(directoryComplete ? "noMembers" : "noLoadedMembers")} emptyDescription={g(directoryComplete ? "noMembersHint" : "noLoadedMembersHint")}
     keywords={(member) => [member.userId, member.description ?? "", a(member.identityType), member.state ? a(`states.${member.state}`) : ""].join(" ")}
     columns={[t("name"), a("userType"), t("state")]} row={(member, blocked) => <>
       <td data-label={t("name")}>
@@ -185,9 +142,11 @@ function GroupPolicyTable({ policies, onOpen }: {
 }) {
   const t = useTranslations("IamWorkspace");
   const g = useTranslations("GroupWorkspace");
+  const relationship = useTranslations("RelationshipDirectory");
   const showDocumentEffect = policies.some((policy) => policy.documentEffect !== undefined);
   const columns = [t("name"), t("type"), t("version"), ...(showDocumentEffect ? [t("documentEffect")] : [])];
-  return <GroupRelationDirectory label={t("permissions")} searchLabel={g("searchPolicies")} items={policies} authoritativeTotal={policies.length}
+  return <WorkspaceRelationshipDirectory title={t("permissions")} searchLabel={g("searchPolicies")} items={policies}
+    status={(shown) => relationship("completeResults", { shown, total: policies.length })} footerNote={relationship("completeScope")}
     emptyTitle={g("noPolicies")} keywords={(policy) => [policy.policyId, policy.description ?? "", policy.kind ? t(policy.kind) : ""].join(" ")} columns={columns} row={(policy, blocked) => <>
       <td data-label={t("name")}>
         <button className={styles.userLink} disabled={blocked} onClick={() => onOpen(policy.policyId)}>{policy.name}</button>

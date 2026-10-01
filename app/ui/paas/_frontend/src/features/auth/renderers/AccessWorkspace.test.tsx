@@ -7,6 +7,7 @@ import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
 import { accountAccessViews, type AccountAccessView, type AccountIdentity, type ActionCapability, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
+import type { AccessPolicy } from "../domain/accessWorkspace";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorkspace";
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
@@ -53,6 +54,18 @@ const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT
 const users: UserAccess[] = ["lin", "chen"].map(userAccess);
 const reviewUsers: UserAccess[] = [...users, ...["qiao", "wu"].map(userAccess)];
 const login: IamRepository = { login: async () => ({ outcome: "AUTHENTICATED", credential: "preview-only", mustChangePassword: false, session: { id: "session", organizationId: "org-xiak", principalId: "admin", status: "ACTIVE", issuedAt: "2026-09-09T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" } }), changePassword: async () => {}, logout: async () => {} };
+const relationshipPolicies = (count: number, prefix: string): AccessPolicy[] => Array.from({ length: count }, (_, index) => ({
+  id: `${prefix.toLowerCase()}-${index + 1}`,
+  name: `${prefix}${String(index + 1).padStart(2, "0")}`,
+  description: `Relationship policy ${index + 1}`,
+  kind: "custom",
+  tags: [],
+  versions: [{ id: 1, document: { version: "1", statement: [{ effect: "allow", action: ["logs:search"], resource: ["*"] }] }, createdAt: "2026-09-01T00:00:00Z" }],
+  defaultVersion: 1,
+  lastVersion: 1,
+  createdAt: "2026-09-01T00:00:00Z",
+  updatedAt: "2026-09-01T00:00:00Z"
+}));
 
 function AccountRefresh() {
   const access = useAccountAccess();
@@ -1288,6 +1301,27 @@ describe("CAM-style access workspace", () => {
     fireEvent.submit(workflow.querySelector("form")!);
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
+  it("searches and paginates the complete role policy relationship snapshot", async () => {
+    const policies = relationshipPolicies(12, "RoleRelationPolicy");
+    const { user } = await open("roles", { entityId: "role-pipeline", seed: async (extension) => {
+      extension.transact((source) => ({ workspace: {
+        ...source,
+        policies: [...source.policies, ...policies],
+        roles: source.roles.map((role) => role.id === "role-pipeline" ? { ...role, policyIds: policies.map((policy) => policy.id) } : role)
+      } }));
+    } });
+    const table = await screen.findByRole("table", { name: "权限策略" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("显示 12 / 共 12 条")).toBeTruthy();
+    const search = screen.getByRole("searchbox", { name: "搜索角色关联策略" });
+    await user.type(search, "RoleRelationPolicy12");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+    await user.clear(search);
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    await user.click(within(table).getByRole("button", { name: "RoleRelationPolicy12" }));
+    expect(await screen.findByRole("heading", { name: "RoleRelationPolicy12" })).toBeTruthy();
+  });
   it("retains role metadata through a pending command and retry, locking dismissal only until it settles", async () => {
     const { user, repository, extension } = await open("roles", { entityId: "role-pipeline" });
     const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-pipeline")!;
@@ -1560,6 +1594,40 @@ describe("CAM-style access workspace", () => {
     expect(await screen.findByRole("button", { name: "生成本地检查表" })).toBeTruthy();
     expect(screen.getByRole("combobox", { name: "用户" }).textContent).toContain("qiao");
     expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-qiao");
+  });
+  it("searches and paginates complete user policy and group relationship snapshots", async () => {
+    const policies = relationshipPolicies(12, "UserRelationPolicy");
+    const { user } = await open("users", { entityId: "principal-lin", seed: async (extension) => {
+      extension.transact((source) => ({ workspace: {
+        ...source,
+        policies: [...source.policies, ...policies],
+        userPolicies: { ...source.userPolicies, "principal-lin": policies.map((policy) => policy.id) },
+        groups: [...source.groups.map((group) => ({ ...group, memberIds: group.memberIds.filter((id) => id !== "principal-lin") })), ...Array.from({ length: 12 }, (_, index) => ({ id: `user-group-${index + 1}`, name: `UserGroup${String(index + 1).padStart(2, "0")}`, description: `Membership ${index + 1}`, memberIds: ["principal-lin"], policyIds: [], createdAt: "2026-09-01T00:00:00Z" }))]
+      } }));
+    } });
+    await user.click(await screen.findByRole("tab", { name: "权限策略" }));
+    const policyTable = screen.getByRole("table", { name: "用户关联策略（模拟）" });
+    expect(policyTable.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(policyTable).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("显示 12 / 共 12 条")).toBeTruthy();
+    const policySearch = screen.getByRole("searchbox", { name: "搜索用户关联策略" });
+    await user.type(policySearch, "UserRelationPolicy12");
+    await waitFor(() => expect(within(policyTable).getAllByRole("row")).toHaveLength(2));
+    await user.clear(policySearch);
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    await user.click(within(policyTable).getByRole("button", { name: "UserRelationPolicy12" }));
+    expect(await screen.findByRole("heading", { name: "UserRelationPolicy12" })).toBeTruthy();
+
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await user.click(await screen.findByRole("tab", { name: "所属用户组" }));
+    const groupTable = screen.getByRole("table", { name: "所属用户组" });
+    expect(groupTable.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(groupTable).getAllByRole("row")).toHaveLength(11);
+    await user.type(screen.getByRole("searchbox", { name: "搜索所属用户组" }), "UserGroup12");
+    await waitFor(() => expect(within(groupTable).getAllByRole("row")).toHaveLength(2));
+    await user.click(within(groupTable).getByRole("button", { name: "UserGroup12" }));
+    expect(await screen.findByRole("heading", { name: "UserGroup12" })).toBeTruthy();
   });
   it.each([
     { tab: "权限策略", trigger: "关联策略", title: "管理直接关联策略", option: "MatrixReadOnlyAccess", change: "新增关联", kind: "policies" },
