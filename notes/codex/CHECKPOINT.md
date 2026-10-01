@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `1fd55d773`
-- Pushed documentation milestone: `7ff9fd2b5`
+- Pushed source/embed milestone: `682e27702`
+- Pushed documentation milestone: `3fbe4208d`
 
 ## Authoritative route
 
@@ -29,23 +29,24 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The cross-product Operation
-center now projects the public PaaS `SubjectRef` instead of an ambiguous actor
-string. Its stable collapsed row shows only product, typed initiating identity
-and time; the content-area disclosure separates exact identity, non-secret
-AccessKey attribution, Role-session identity and Role-session source. Search
-includes those public identifiers. Secret, signature, nonce, request digest,
-internal evidence and Account selectors remain absent.
+login verification remains disabled for UX review. The Audit directory now
+keeps its title, tenant boundary and last successful table stable while its
+structured query form stays collapsed by default. The persistent query trigger
+shows the applied-condition count; refresh remains fixed at the opposite edge.
+Apply/reset closes the form and restores focus, while invalid Role-session
+lineage remains open for correction. Later queries retain the current table
+with `aria-busy` and localized refresh status instead of briefly replacing the
+content region with a whole-table skeleton.
 
-This milestone consumes only the already fixed public Operation shape from IAM
-implementation `b6d15c89a`; it does not add a LIVE Operation client or adopt an
-unfinished Profile revision. Source and synchronized embed are pushed at
-`1fd55d773`; FEAT evidence is pushed at `7ff9fd2b5`. The focused renderer passed
-7 cases and the complete frontend gate passed 57 files/933 cases plus three
-normalization cases, typecheck/lint/architecture/228-pair style checks,
-42-route export, 233-file embed equality and repository Go test/vet. Desktop
-and `390 x 844` DEV verified the disclosure hierarchy with viewport, document
-and body all 390px, no Dialog, overflow or browser warning/error.
+The UI consumes only the fixed Audit query contract and does not invent an
+`operationId` filter from the record shape. Source and synchronized embed are
+pushed at `682e27702`; FEAT evidence is pushed at `3fbe4208d`. The focused
+renderer passed 4 cases and the complete frontend gate passed 57 files/933
+cases plus three normalization cases, typecheck/lint/architecture/228-pair
+style checks, 42-route export, 233-file embed equality and repository Go
+test/vet. Desktop and `390 x 844` DEV verified collapsed and expanded states
+with viewport, document and body all 390px, no Dialog, overflow or browser
+warning/error.
 
 Earlier AccessKey carrier, same-User permission-source handoff, Application tag
 recovery, service authorization, policy compilation/provenance and shared
@@ -55,10 +56,12 @@ the relevant evidence row when resuming them.
 ## Continuation boundary
 
 Keep the inspectable MOCK available and consume IAM changes only from fixed,
-pushed commits. IAM revision 10 was still an unpushed candidate at this
-checkpoint; do not add its Configuration/Revision/Deployment/Operation reads
-to an accepted carrier set until the IAM owner publishes the fixed commit and
-independent gate. Do not label programmatic product access LIVE or add a browser
-signature/test-request flow. Continue without reintroducing whole-page loading,
-hidden broad Context subscriptions, fabricated totals, duplicate components or
-login verification before UX acceptance.
+pushed commits with an explicit consumable confirmation. The IAM owner is
+running the independent revision-10 gate; do not add its
+Configuration/Revision/Deployment/Operation reads to an accepted carrier set
+until the owner confirms the final pushed SHAs and CI outcome. Deployment
+update/stop/rollback is a later candidate and may only appear as isolated MOCK
+before that boundary is fixed. Do not label programmatic product access LIVE or
+add a browser signature/test-request flow. Continue without reintroducing
+whole-page loading, hidden broad Context subscriptions, fabricated totals,
+duplicate components or login verification before UX acceptance.
