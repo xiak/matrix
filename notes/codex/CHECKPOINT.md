@@ -6,9 +6,8 @@
 - Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `63ae1e08f`
-- Pushed capacity regression: `fccd0847f`
-- Pushed documentation milestone: `2b26cd0f5`
+- Pushed source/embed milestone: `8e3361a84`
+- Pushed documentation milestone: `de7fb4217`
 
 ## Authoritative route
 
@@ -29,72 +28,46 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 
 ## Latest pushed milestone
 
-The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The Account security report
-preview now applies its fixed User, AccessKey and total-row limits before
-submission, disables generation when a complete MOCK inventory is too large,
-and names the breached boundary instead of silently ignoring the action or
-truncating evidence. It also explains that the service rejects a 21st
-unexpired report without deleting or overwriting the oldest report. The UI
-does not invent a report directory, a delete action or a current retained
-count. Server authority, retained-count truth and the canonical CSV byte limit
-remain explicitly outside this client preflight.
+The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
+login verification remains disabled for UX review. Existing enterprise
+connection, visibility editing and member import now use the shared content-area
+workflow instead of large Dialogs. Entry focuses the workflow heading; cancel
+or completion restores the exact directory, detail or import trigger. Only the
+destructive disconnect keeps a short confirmation Dialog.
 
-Source and synchronized embed are pushed at `63ae1e08f`; a maximum-size
-1000-User/2000-AccessKey paging regression is pushed at `fccd0847f`, and
-shared-console evidence is pushed through `2b26cd0f5`. The retained-report
-conflict title consumes the same domain limit as the rule instead of duplicating
-`20` in translation copy. The complete frontend
-gate passed 58 files/969 cases plus three normalization cases, typecheck/lint/architecture/
-228-pair style checks, 42-route export, 233-file embed equality and repository
-Go test/vet. A fresh desktop browser tab entered the preview and confirmed the
-retained-report conflict boundary without a delete/overwrite affordance or
-browser warning/error. The earlier regional
-loading and cross-service navigation behavior remains owned by FEAT-007; no new
-LIVE IAM wire was added.
+This remains browser-memory UX only: it scans no QR code, installs no app,
+connects no external directory, sends no invitation, grants no permission and
+does not imply SSO. LIVE still exposes no entry, repository, HTTP contract or
+successful receipt. Source and synchronized embed are pushed at `8e3361a84`;
+documentation is pushed at `de7fb4217`. The focused enterprise case and
+complete frontend gate passed 58 files/969 cases plus three normalization
+cases, typecheck, lint, architecture, 228-pair style checks, 42-route export,
+233-file embed equality and repository Go test/vet. Desktop and `390 × 844`
+DEV confirmed the same content-area semantics, no workflow Dialog, heading
+focus and cancel focus restoration.
 
-Earlier federation replacement, Deployment lifecycle, AccessKey carrier,
-same-User permission-source handoff, Application tag recovery, service
-authorization, policy compilation/provenance and shared navigation/loading
-milestones remain owned and indexed by FEAT-007; load only the relevant
-evidence row when resuming them.
+Earlier Account security report, federation replacement, Deployment lifecycle,
+AccessKey carrier, Application tag recovery, service authorization, policy
+compilation/provenance and shared navigation/loading milestones remain owned
+and indexed by FEAT-IAM-010 and FEAT-007; load only the relevant evidence row.
 
 ## Continuation boundary
 
 Keep the inspectable MOCK available and consume IAM changes only from fixed,
-pushed commits with an explicit consumable confirmation. The IAM engineer has
-fixed Audit Profile r3 at implementation `620960989`, FEAT/head
-`0c688302b9dea1050653eded2b9442a6b1322155`, digest
-`sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186`
-and independent run `36876149921`; that run remains pending, so the Audit
-AccessKey carrier is not yet an accepted LIVE console dependency. Product
-Audit Profile r4 and its trusted-edge `request.source-ip` condition are not
-fixed or pushed and therefore remain absent from the UI; the browser must not collect
-or submit a client IP for this decision. Product
-Profile publication, service-related roles and permission boundaries already
-have backend-owned contracts and must not receive parallel frontend models.
-The IAM AccessKey network/usage successor candidate is fixed at
-`4e79ef783410bbb596232763a9be80412b5e0846` and leaves the frontend contract
-unchanged. Verification `36897183328` has passed go, node-process and
-authority-storage, while the remaining authority matrix is still running and
-no explicit consumable confirmation has arrived. Keep `05fe4a74c`
-browser-memory-only; add no parallel LIVE model or inferred wire.
-IAM-009 S4a now has fixed source
-`67a2a19cf42f76cff7c24abddc830dd7bc093039`; it retains the report
-API/HTTP/use-case shape fixed by `57cb28d7` and has local signed `61/31/3+r6`
-installation, upgrade, rollback, selected-backup recovery and restart evidence
-recorded by IAM at `2830952dc`. Its exact Verification `36925315891` was
-cancelled by a superseding commit, and the current `983e33e63701db95895804d7e0bed9bbad72211d`
-Verification `36929260286` remains queued. Explicit consumable confirmation is
-still absent. Keep `63ae1e08f` as information architecture only;
-do not mount create/read/content adapters or enable CSV until IAM explicitly
-marks the fixed SHA consumable.
-External assertions remain configuration-only: do not reintroduce a persistent
-federated-account/external-subject object, HTTP adapter, successful assumption
-path, RoleSession issuance or authorization claim until IAM publishes and
-explicitly exposes a fixed IdP/Role trust contract.
-An authoritative effective-access/policy-simulator API does not exist; keep the
-configuration review non-evaluating and do not create a decision-shaped MOCK.
+pushed commits after the IAM owner explicitly marks the contract consumable.
+The IAM engineer is currently completing signed same-source A/B installation
+plus real PostgreSQL and SMTP receipt gates. SMTP installation settings are
+operator-private configuration, not a tenant IAM browser object; do not add
+host, password, CA or dispatcher controls to the tenant console.
+
+The IAM engineer has been asked for the next backend-not-yet-implemented areas
+that are safe to prototype, with actor/owner, planned contract, allowed MOCK
+states and forbidden inferences. Until that answer is fixed, new UX may explain
+responsibilities and content flow only; it must not add a parallel domain model,
+decision-shaped authorization result, LIVE adapter, publish action or fabricated
+success. External assertions remain configuration-only, and the Account security
+report remains information architecture rather than a mounted LIVE client.
+
 Continue without reintroducing whole-page loading, hidden broad Context
 subscriptions, fabricated totals, duplicate components or login verification
 before UX acceptance.
