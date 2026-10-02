@@ -3756,6 +3756,28 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 			t.Fatal("same-name account completion/fact isolation differs", err)
 		}
 	})
+	t.Run("wrong_current_password_does_not_prove_bearer_revocation", func(t *testing.T) {
+		request := iamv1.StartNotificationContactVerificationRequest{
+			Email: "unused@mail.example.test", Password: iamHTTPSecret(t, "Wrong-Notification-Password-531!"),
+			RequestID: "mail-wrong-current-password",
+		}
+		body, err := iamv1.EncodeStartNotificationContactVerificationRequest(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequest(handlers[0], http.MethodPost, path+"/verifications", string(login.Credential.CopyBytes()), body)
+		var problem iamv1.Problem
+		if response.Code != http.StatusUnauthorized || response.Header().Get("WWW-Authenticate") != `Bearer realm="matrix-iam"` ||
+			response.Header().Get("Cache-Control") != "no-store" || json.Unmarshal(response.Body.Bytes(), &problem) != nil ||
+			problem.Status != http.StatusUnauthorized || problem.Code != "iam.authentication.failed" {
+			t.Fatalf("wrong current password response=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+		}
+		var retained iamv1.NotificationContact
+		call(1, http.MethodGet, path, login.Credential, nil, http.StatusOK, &retained)
+		if retained.State != "VERIFIED" || retained.AccountID != pending.AccountID || retained.UserID != pending.UserID {
+			t.Fatal("wrong current password revoked or changed the valid bearer/contact")
+		}
+	})
 	t.Run("schema_and_privilege_damage_fails_closed", func(t *testing.T) {
 		for _, attack := range []string{
 			"GRANT SELECT ON iam.notification_contacts TO matrix_iam_api",

@@ -127,6 +127,15 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("tenant-primary-member-revocation-baseline")
+	contact, err := value.verifySecurityMail(ctx, bearer, newPassword, state.InstallationID)
+	if err != nil {
+		return err
+	}
+	value.retainedIAM.AdministratorContact = contact
+	if err := value.persistTenantRetention(); err != nil {
+		return err
+	}
+	emit("security-mail-contact-verification")
 
 	secret, secretDigest, err := value.provisionSecret()
 	if err != nil {
@@ -214,7 +223,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("automatic-upgrade-rollback")
-	if err := value.assertTenantRetention(ctx); err != nil {
+	if err := value.assertTenantRetention(ctx, true); err != nil {
 		return err
 	}
 
@@ -254,7 +263,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := value.assertTenantRetention(ctx); err != nil {
+	if err := value.assertTenantRetention(ctx, true); err != nil {
 		return err
 	}
 	postUpgrade, err := value.writePostUpgradeTenantResource(ctx)
@@ -286,7 +295,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertSecurityReportSnapshot(ctx, bearer, postUpgradeReport, true); err != nil {
 		return err
 	}
-	if err := value.assertTenantRetention(ctx); err != nil {
+	if err := value.assertTenantRetention(ctx, true); err != nil {
 		return err
 	}
 	if err := value.assertPostUpgradeTenantResource(ctx, postUpgrade, true); err != nil {
@@ -326,7 +335,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.edge.securityReportMissing(ctx, bearer, postUpgradeReport.metadata.ID); err != nil {
 		return fail("security-report-recovery-boundary")
 	}
-	if err := value.assertTenantRetention(ctx); err != nil {
+	if err := value.assertTenantRetention(ctx, true); err != nil {
 		return err
 	}
 	if err := value.assertPostUpgradeTenantResource(ctx, postUpgrade, false); err != nil {
@@ -466,7 +475,7 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if err := value.readTenantRetention(state.InstallationID); err != nil {
 		return err
 	}
-	if err := value.assertTenantRetention(ctx); err != nil {
+	if err := value.assertTenantRetention(ctx, true); err != nil {
 		return err
 	}
 	if err := value.restorePausedTenant(ctx); err != nil {
@@ -634,8 +643,17 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		}
 		value.retainedIAM.Tenants = append(value.retainedIAM.Tenants, tenant)
 	}
-	if err := value.assertTenantRetention(ctx); err != nil {
+	if err := value.assertTenantRetention(ctx, false); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (value *gate) persistTenantRetention() error {
+	if value.retainedIAM == nil ||
+		iamv1.ValidateNotificationContact(value.retainedIAM.AdministratorContact) != nil ||
+		value.retainedIAM.AdministratorContact.State != "VERIFIED" {
+		return fail("tenant-retention-contact")
 	}
 	encoded, err := json.Marshal(value.retainedIAM)
 	if err != nil || len(encoded) > 64*1024 {
@@ -666,7 +684,8 @@ func (value *gate) readTenantRetention(installationID string) error {
 	}
 	defer clear(content)
 	var retained iamRetention
-	if decodeOne(content, &retained) != nil || retained.InstallationID != installationID || len(retained.Tenants) != 2 || len(retained.AdministratorPassword) == 0 {
+	if decodeOne(content, &retained) != nil || retained.InstallationID != installationID || len(retained.Tenants) != 2 || len(retained.AdministratorPassword) == 0 ||
+		iamv1.ValidateNotificationContact(retained.AdministratorContact) != nil || retained.AdministratorContact.State != "VERIFIED" {
 		return fail("tenant-retention-fixture-identity")
 	}
 	value.retainedIAM = &retained
@@ -679,7 +698,7 @@ func (value *gate) readTenantRetention(installationID string) error {
 	return nil
 }
 
-func (value *gate) assertTenantRetention(ctx context.Context) error {
+func (value *gate) assertTenantRetention(ctx context.Context, requireContact bool) error {
 	operator, err := value.edge.login(ctx, value.retainedIAM.AdministratorPassword, "phase1-retained-operator")
 	if err != nil {
 		return fail("tenant-retained-operator-login")
@@ -687,6 +706,16 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 	defer clear(operator)
 	value.edge.addForbidden(operator)
 	defer func() { _ = value.edge.logout(ctx, operator) }()
+	if requireContact {
+		if iamv1.ValidateNotificationContact(value.retainedIAM.AdministratorContact) != nil ||
+			value.retainedIAM.AdministratorContact.State != "VERIFIED" {
+			return fail("tenant-retained-notification-contact")
+		}
+		contact, err := value.edge.notificationContact(ctx, operator)
+		if err != nil || !sameNotificationContact(contact, value.retainedIAM.AdministratorContact) {
+			return fail("tenant-retained-notification-contact")
+		}
+	}
 	if err := value.assertPlatformAuditRetention(ctx, operator); err != nil {
 		return err
 	}
@@ -802,6 +831,17 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func sameNotificationContact(left, right iamv1.NotificationContact) bool {
+	if iamv1.ValidateNotificationContact(left) != nil || iamv1.ValidateNotificationContact(right) != nil ||
+		left.APIVersion != right.APIVersion || left.Kind != right.Kind || left.AccountID != right.AccountID ||
+		left.UserID != right.UserID || left.State != right.State || left.ResourceVersion != right.ResourceVersion ||
+		left.Email != right.Email || left.PendingVerificationID != right.PendingVerificationID ||
+		(left.VerifiedAt == nil) != (right.VerifiedAt == nil) {
+		return false
+	}
+	return left.VerifiedAt == nil || left.VerifiedAt.Equal(*right.VerifiedAt)
 }
 
 func (value *gate) assertTenantResources(ctx context.Context, tenant *tenantRetention, bearer []byte, capture bool) error {

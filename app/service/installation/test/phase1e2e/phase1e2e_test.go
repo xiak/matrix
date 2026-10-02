@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
@@ -54,6 +56,38 @@ func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
 	}
 }
 
+func TestNotificationContactRetentionRequiresExactVerifiedState(t *testing.T) {
+	verifiedAt := time.Date(2026, time.October, 3, 1, 2, 3, 456000000, time.UTC)
+	want := iamv1.NotificationContact{
+		APIVersion: iamv1.APIVersion, Kind: "NotificationContact",
+		AccountID: "account-retained", UserID: "principal-admin",
+		State: "VERIFIED", ResourceVersion: 1, Email: "receiver@matrix.test", VerifiedAt: &verifiedAt,
+	}
+	if !sameNotificationContact(want, want) {
+		t.Fatal("exact verified contact was not retained")
+	}
+	for name, mutate := range map[string]func(*iamv1.NotificationContact){
+		"account":          func(value *iamv1.NotificationContact) { value.AccountID = "account-other" },
+		"user":             func(value *iamv1.NotificationContact) { value.UserID = "principal-other" },
+		"state":            func(value *iamv1.NotificationContact) { value.State = "NONE" },
+		"resource-version": func(value *iamv1.NotificationContact) { value.ResourceVersion++ },
+		"address":          func(value *iamv1.NotificationContact) { value.Email = "other@matrix.test" },
+		"verification-time": func(value *iamv1.NotificationContact) {
+			changed := value.VerifiedAt.Add(time.Microsecond)
+			value.VerifiedAt = &changed
+		},
+		"missing-time": func(value *iamv1.NotificationContact) { value.VerifiedAt = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			observed := want
+			mutate(&observed)
+			if sameNotificationContact(observed, want) {
+				t.Fatal("changed notification contact was accepted as retained")
+			}
+		})
+	}
+}
+
 func TestOptionsRequirePrivateSecurityMailOnlyForEffectfulLifecycle(t *testing.T) {
 	root := t.TempDir()
 	for name, value := range map[string]string{
@@ -70,11 +104,21 @@ func TestOptionsRequirePrivateSecurityMailOnlyForEffectfulLifecycle(t *testing.T
 	}
 	securityMail := filepath.Join(root, "security-mail.json")
 	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_CONFIGURATION", securityMail)
+	fixture := filepath.Join(root, "postfix-fixture.tar")
+	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_ARCHIVE", fixture)
+	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256", "sha256:"+strings.Repeat("a", 64))
+	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_IMAGE_ID", "sha256:"+strings.Repeat("b", 64))
 	t.Setenv("MATRIX_PHASE1_EDGE", "http://127.0.0.1:49123")
 	config, err := optionsFromEnvironment()
-	if err != nil || config.securityMail != securityMail || config.edge != "http://127.0.0.1:49123" {
+	if err != nil || config.securityMail != securityMail || config.securityMailFixture != fixture ||
+		config.edge != "http://127.0.0.1:49123" {
 		t.Fatalf("effectful lifecycle options = %#v / %v", config, err)
 	}
+	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256", strings.Repeat("a", 64))
+	if _, err := optionsFromEnvironment(); err == nil {
+		t.Fatal("fixture archive admitted without an exact SHA-256 identity")
+	}
+	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256", "sha256:"+strings.Repeat("a", 64))
 	t.Setenv("MATRIX_PHASE1_EDGE", "http://example.test:49123")
 	if _, err := optionsFromEnvironment(); err == nil {
 		t.Fatal("non-loopback lifecycle endpoint admitted")
@@ -84,6 +128,9 @@ func TestOptionsRequirePrivateSecurityMailOnlyForEffectfulLifecycle(t *testing.T
 	t.Setenv("MATRIX_PHASE1_E2E_PHASE", "after-restart")
 	t.Setenv("MATRIX_PHASE1_RELEASE_B", "")
 	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_CONFIGURATION", "")
+	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_ARCHIVE", "")
+	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256", "")
+	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_IMAGE_ID", "")
 	if _, err := optionsFromEnvironment(); err != nil {
 		t.Fatalf("read-only after-restart lifecycle requires removed private input: %v", err)
 	}
@@ -138,13 +185,16 @@ func optionsFromEnvironment() (options, error) {
 		return options{}, fail("command-input")
 	}
 	config := options{
-		root:         os.Getenv("MATRIX_PHASE1_ROOT"),
-		releaseA:     os.Getenv("MATRIX_PHASE1_RELEASE_A"),
-		releaseB:     os.Getenv("MATRIX_PHASE1_RELEASE_B"),
-		trustKey:     os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
-		securityMail: os.Getenv("MATRIX_PHASE1_SECURITY_MAIL_CONFIGURATION"),
-		edge:         edge,
-		afterStart:   phase == "after-restart",
+		root:                   os.Getenv("MATRIX_PHASE1_ROOT"),
+		releaseA:               os.Getenv("MATRIX_PHASE1_RELEASE_A"),
+		releaseB:               os.Getenv("MATRIX_PHASE1_RELEASE_B"),
+		trustKey:               os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
+		securityMail:           os.Getenv("MATRIX_PHASE1_SECURITY_MAIL_CONFIGURATION"),
+		securityMailFixture:    os.Getenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_ARCHIVE"),
+		securityMailFixtureSHA: os.Getenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256"),
+		securityMailFixtureID:  os.Getenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_IMAGE_ID"),
+		edge:                   edge,
+		afterStart:             phase == "after-restart",
 	}
 	for _, path := range []string{config.root, config.releaseA, config.trustKey} {
 		if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
@@ -152,10 +202,13 @@ func optionsFromEnvironment() (options, error) {
 		}
 	}
 	if !config.afterStart {
-		for _, path := range []string{config.releaseB, config.securityMail} {
+		for _, path := range []string{config.releaseB, config.securityMail, config.securityMailFixture} {
 			if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 				return options{}, fail("command-input")
 			}
+		}
+		if !validSHA256(config.securityMailFixtureSHA) || !validSHA256(config.securityMailFixtureID) {
+			return options{}, fail("command-input")
 		}
 	}
 	return config, nil

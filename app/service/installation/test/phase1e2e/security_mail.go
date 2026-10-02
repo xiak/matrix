@@ -1,0 +1,350 @@
+package phase1e2e
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/mail"
+	"os"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
+
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
+)
+
+const (
+	securityMailRecipient = "receiver@matrix.test"
+)
+
+var (
+	providerIDPattern = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
+	mailPathPattern   = regexp.MustCompile(`^/home/receiver/Maildir/(new|cur)/[a-zA-Z0-9_.,:=+-]+$`)
+	mailCodePattern   = regexp.MustCompile(`(?m)^Verification code: ([0-9]{8})\r?$`)
+	mailRefPattern    = regexp.MustCompile(`(?m)^Notification reference: [A-Za-z0-9][A-Za-z0-9._:-]{0,127}\r?$`)
+)
+
+type securityMailFixture struct {
+	containerID string
+	imageID     string
+	alias       string
+	sender      string
+}
+
+func validSHA256(value string) bool {
+	if len(value) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	decoded, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	return err == nil && len(decoded) == sha256.Size
+}
+
+func verifyFixtureArchive(path, expected string) error {
+	if path == "" || !validSHA256(expected) {
+		return errors.New("mail fixture identity is invalid")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+		info.Size() <= 0 || info.Size() > 256*1024*1024 {
+		return errors.New("mail fixture archive is unsafe")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return errors.New("open mail fixture archive failed")
+	}
+	defer file.Close()
+	hasher := sha256.New()
+	written, copyErr := io.Copy(hasher, io.LimitReader(file, 256*1024*1024+1))
+	opened, statErr := file.Stat()
+	want, decodeErr := hex.DecodeString(strings.TrimPrefix(expected, "sha256:"))
+	if copyErr != nil || written != info.Size() || statErr != nil || !os.SameFile(info, opened) ||
+		opened.Size() != info.Size() || decodeErr != nil || subtle.ConstantTimeCompare(hasher.Sum(nil), want) != 1 {
+		return errors.New("mail fixture archive authentication failed")
+	}
+	return nil
+}
+
+func startSecurityMailFixture(
+	ctx context.Context,
+	config options,
+	installationID string,
+) (*securityMailFixture, error) {
+	if !validSHA256(config.securityMailFixtureID) ||
+		verifyFixtureArchive(config.securityMailFixture, config.securityMailFixtureSHA) != nil {
+		return nil, fail("security-mail-fixture-archive")
+	}
+	privateInput, err := os.Open(config.securityMail)
+	if err != nil {
+		return nil, fail("security-mail-fixture-channel-input")
+	}
+	mailConfig, decodeErr := installationv1.DecodeSecurityMailConfiguration(privateInput)
+	closeErr := privateInput.Close()
+	if decodeErr != nil || closeErr != nil {
+		mailConfig.Clear()
+		return nil, fail("security-mail-fixture-channel-input")
+	}
+	defer mailConfig.Clear()
+	networks, err := dockerLines(
+		ctx, "network", "ls", "--quiet",
+		"--filter", "label=com.xiak.matrix.managed=true",
+		"--filter", "label=com.xiak.matrix.installation="+installationID,
+		"--filter", "label=com.xiak.matrix.role=network-mail-egress",
+	)
+	if err != nil || len(networks) != 1 || !providerIDPattern.MatchString(networks[0]) {
+		return nil, fail("security-mail-fixture-network-discovery")
+	}
+	var network struct {
+		ID, Name string
+		Labels   map[string]string
+	}
+	projection := `{"ID":{{json .Id}},"Name":{{json .Name}},"Labels":{{json .Labels}}}`
+	encoded, err := docker(ctx, "network", "inspect", "--format", projection, networks[0])
+	if err != nil || json.Unmarshal(encoded, &network) != nil || network.ID == "" || network.Name == "" ||
+		network.Labels["com.xiak.matrix.managed"] != "true" ||
+		network.Labels["com.xiak.matrix.installation"] != installationID ||
+		network.Labels["com.xiak.matrix.role"] != "network-mail-egress" {
+		return nil, fail("security-mail-fixture-network-metadata")
+	}
+	if _, err := docker(ctx, "image", "load", "--quiet", "--input", config.securityMailFixture); err != nil {
+		return nil, fail("security-mail-fixture-image-load")
+	}
+	fixture := &securityMailFixture{
+		imageID: config.securityMailFixtureID,
+		alias:   mailConfig.Host,
+		sender:  mailConfig.From,
+	}
+	failFixture := func(step string) (*securityMailFixture, error) {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_ = fixture.close(cleanupCtx)
+		return nil, fail(step)
+	}
+	identity, inspectErr := docker(
+		ctx, "image", "inspect", "--format", "{{.Id}}|{{.Os}}|{{.Architecture}}", config.securityMailFixtureID,
+	)
+	if inspectErr != nil || strings.TrimSpace(string(identity)) != config.securityMailFixtureID+"|linux|amd64" {
+		return failFixture("security-mail-fixture-image-identity")
+	}
+	name := "matrix-phase1-mailbox-" + strings.TrimPrefix(installationID, "mxi-")
+	started, err := docker(
+		ctx, "run", "--detach", "--pull", "never", "--restart", "no",
+		"--name", name,
+		"--label", "com.xiak.matrix.test=phase1-security-mail",
+		"--label", "com.xiak.matrix.installation="+installationID,
+		"--network", network.ID,
+		"--network-alias", fixture.alias,
+		"--cpus", "1", "--memory", "536870912", "--memory-swap", "536870912", "--pids-limit", "128",
+		config.securityMailFixtureID,
+	)
+	if err != nil {
+		return failFixture("security-mail-fixture-container-start")
+	}
+	fixture.containerID = strings.TrimSpace(string(started))
+	if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(fixture.containerID) {
+		return failFixture("security-mail-fixture-container-identity")
+	}
+	var observed struct {
+		ID, Name, Image, NetworkMode, Restart string
+		Running                               bool
+		Labels                                map[string]string
+		NanoCPUs, Memory, MemorySwap, Pids    int64
+		Ports                                 map[string][]struct{ HostIP, HostPort string }
+		Mounts                                []json.RawMessage
+		Networks                              map[string]struct{ Aliases []string }
+	}
+	projection = `{"ID":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Image}},"Running":{{json .State.Running}},"Labels":{{json .Config.Labels}},"NetworkMode":{{json .HostConfig.NetworkMode}},"Restart":{{json .HostConfig.RestartPolicy.Name}},"NanoCPUs":{{json .HostConfig.NanoCpus}},"Memory":{{json .HostConfig.Memory}},"MemorySwap":{{json .HostConfig.MemorySwap}},"Pids":{{json .HostConfig.PidsLimit}},"Ports":{{json .NetworkSettings.Ports}},"Mounts":{{json .Mounts}},"Networks":{{json .NetworkSettings.Networks}}}`
+	encoded, err = docker(ctx, "container", "inspect", "--format", projection, fixture.containerID)
+	if err != nil || json.Unmarshal(encoded, &observed) != nil || observed.ID != fixture.containerID ||
+		observed.Name != "/"+name || observed.Image != fixture.imageID || !observed.Running ||
+		observed.Labels["com.xiak.matrix.test"] != "phase1-security-mail" ||
+		observed.Labels["com.xiak.matrix.installation"] != installationID || observed.Restart != "no" ||
+		observed.NetworkMode != network.ID ||
+		observed.NanoCPUs != 1_000_000_000 || observed.Memory != 536870912 || observed.MemorySwap != 536870912 ||
+		observed.Pids != 128 || len(observed.Mounts) != 0 || len(observed.Networks) != 1 {
+		return failFixture("security-mail-fixture-runtime-boundary")
+	}
+	for _, bindings := range observed.Ports {
+		if len(bindings) != 0 {
+			return failFixture("security-mail-fixture-host-port")
+		}
+	}
+	attached, found := observed.Networks[network.Name]
+	if !found || !slices.Contains(attached.Aliases, fixture.alias) {
+		return failFixture("security-mail-fixture-network-attachment")
+	}
+	ready := false
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := docker(
+			ctx, "exec", fixture.containerID, "sh", "-lc", "postfix status >/dev/null 2>&1",
+		); err == nil {
+			ready = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !ready {
+		return failFixture("security-mail-fixture-readiness")
+	}
+	return fixture, nil
+}
+
+func (fixture *securityMailFixture) close(ctx context.Context) error {
+	if fixture == nil {
+		return nil
+	}
+	var result error
+	if fixture.containerID != "" {
+		if _, err := docker(ctx, "container", "rm", "--force", fixture.containerID); err != nil {
+			result = errors.Join(result, errors.New("mail fixture container cleanup failed"))
+		}
+	}
+	if fixture.imageID != "" {
+		if _, err := docker(ctx, "image", "rm", "--no-prune", fixture.imageID); err != nil {
+			result = errors.Join(result, errors.New("mail fixture image cleanup failed"))
+		}
+	}
+	containers, err := dockerLines(ctx, "container", "ls", "--all", "--quiet", "--filter", "label=com.xiak.matrix.test=phase1-security-mail")
+	if err != nil || len(containers) != 0 {
+		result = errors.Join(result, errors.New("mail fixture container remains"))
+	}
+	return result
+}
+
+func (fixture *securityMailFixture) receive(
+	ctx context.Context,
+	subject string,
+	forbidden [][]byte,
+) ([]byte, string, error) {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		files, err := dockerLines(
+			ctx, "exec", fixture.containerID, "find", "/home/receiver/Maildir/new", "/home/receiver/Maildir/cur",
+			"-maxdepth", "1", "-type", "f", "-print",
+		)
+		if err != nil || len(files) > 100 {
+			return nil, "", errors.New("mail fixture mailbox observation failed")
+		}
+		for _, path := range files {
+			if !mailPathPattern.MatchString(path) {
+				return nil, "", errors.New("mail fixture mailbox path is unsafe")
+			}
+			encoded, err := docker(ctx, "exec", fixture.containerID, "head", "-c", "16385", "--", path)
+			if err != nil || len(encoded) == 0 || len(encoded) > 16384 ||
+				bytes.Contains(encoded, []byte("smtp-test-password")) {
+				clear(encoded)
+				return nil, "", errors.New("mail fixture message is unsafe")
+			}
+			message, err := mail.ReadMessage(bytes.NewReader(encoded))
+			if err != nil {
+				clear(encoded)
+				return nil, "", errors.New("mail fixture message is invalid")
+			}
+			body, readErr := io.ReadAll(io.LimitReader(message.Body, 16385))
+			if readErr != nil || len(body) > 16384 {
+				clear(encoded)
+				clear(body)
+				return nil, "", errors.New("mail fixture body is invalid")
+			}
+			if message.Header.Get("Subject") != subject {
+				clear(encoded)
+				clear(body)
+				continue
+			}
+			if message.Header.Get("To") != securityMailRecipient || message.Header.Get("From") != fixture.sender ||
+				message.Header.Get("Received") == "" || message.Header.Get("Message-ID") == "" ||
+				!mailRefPattern.Match(body) || containsAny(encoded, forbidden) || containsAny(body, forbidden) {
+				clear(encoded)
+				clear(body)
+				return nil, "", errors.New("mail fixture envelope or body differs")
+			}
+			clear(encoded)
+			return body, message.Header.Get("Message-ID"), nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil, "", errors.New("mail fixture did not receive the message")
+}
+
+func (value *gate) verifySecurityMail(
+	ctx context.Context,
+	bearer, password []byte,
+	installationID string,
+) (iamv1.NotificationContact, error) {
+	fixture, err := startSecurityMailFixture(ctx, value.config, installationID)
+	if err != nil {
+		return iamv1.NotificationContact{}, err
+	}
+	var verifiedContact iamv1.NotificationContact
+	verifyErr := func() error {
+		verification, err := value.edge.startNotificationContactVerification(ctx, bearer, password)
+		if err != nil {
+			return fail("security-mail-verification-start")
+		}
+		deadline := time.Now().Add(30 * time.Second)
+		for verification.Delivery.State != "ACCEPTED" && time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+			verification, err = value.edge.readNotificationContactVerification(ctx, bearer, verification.ID)
+			if err != nil {
+				return fail("security-mail-delivery-observation")
+			}
+		}
+		if verification.Delivery.State != "ACCEPTED" || verification.Delivery.LastOutcome != "ACCEPTED" ||
+			verification.Delivery.LastSMTPCode != 250 || verification.Delivery.Attempts == 0 {
+			return fail("security-mail-delivery-not-accepted")
+		}
+		body, verificationMessageID, err := fixture.receive(
+			ctx, "MATRIX notification address verification", value.edge.forbidden,
+		)
+		if err != nil {
+			return fail("security-mail-verification-mailbox")
+		}
+		match := mailCodePattern.FindSubmatch(body)
+		if len(match) != 2 {
+			clear(body)
+			return fail("security-mail-verification-code")
+		}
+		code := bytes.Clone(match[1])
+		clear(body)
+		defer clear(code)
+		value.edge.addForbidden(code)
+		completed, err := value.edge.confirmNotificationContactVerification(ctx, bearer, code, verification.ID)
+		if err != nil || completed.AccountID != verification.AccountID || completed.UserID != verification.UserID {
+			return fail("security-mail-verification-confirm")
+		}
+		contact, err := value.edge.notificationContact(ctx, bearer)
+		if err != nil || contact.State != "VERIFIED" || contact.Email != securityMailRecipient ||
+			contact.ResourceVersion != 1 || contact.AccountID != verification.AccountID ||
+			contact.UserID != verification.UserID || contact.VerifiedAt == nil {
+			return fail("security-mail-contact-state")
+		}
+		verifiedContact = contact
+		notice, noticeMessageID, err := fixture.receive(
+			ctx, "MATRIX notification address verified", value.edge.forbidden,
+		)
+		if err != nil || noticeMessageID == verificationMessageID || bytes.Contains(notice, []byte("Verification code:")) ||
+			bytes.Contains(notice, code) {
+			clear(notice)
+			return fail("security-mail-security-notice")
+		}
+		clear(notice)
+		return nil
+	}()
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cleanupErr := fixture.close(cleanupCtx)
+	if verifyErr != nil {
+		return iamv1.NotificationContact{}, verifyErr
+	}
+	if cleanupErr != nil {
+		return iamv1.NotificationContact{}, fail("security-mail-fixture-cleanup")
+	}
+	return verifiedContact, nil
+}

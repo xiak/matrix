@@ -3,7 +3,7 @@
 - Status: Accepted foundation; IAM security-mail topology candidate is in verification
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current isolated-IAM candidate is manifest `v2` with the exact `61/31/3` revision 7 profile and remains unaccepted until the exact source passes independent CI and signed A/B lifecycle gates
+- Release contract: accepted foundation `v1`; current isolated-IAM candidate is manifest `v2` with the exact `61/31/3` revision 7 profile. Its local signed A/B lifecycle gate has passed; the combination remains unaccepted until the final exact source passes independent CI
 
 ## Outcome
 
@@ -249,10 +249,46 @@ Revision 6 is not an upgrade, rollback or recovery predecessor for revision 7.
 The existing complete-profile admission rejects both directions before journal
 advancement or lifecycle effects, and a revision-6 topology digest is not a
 revision-7 release. Focused contract, lifecycle, journal, local-machine,
-topology and release-build tests currently pass, including configuration
-substitution and cross-installation attacks. Independent CI, a signed fresh
-revision-7 A/B lifecycle, real PostgreSQL least-privilege process identities,
-notification readiness and real SMTP receipt are still required before this
+topology and release-build tests pass, including configuration substitution and
+cross-installation attacks.
+
+The exact signed source `823a665e8d24b21c180134ab7893dc189d55599d`
+assembled fresh revision-7 A/B releases and passed the full lifecycle in a new
+network-none Docker 27.5.1 classic-image-store engine limited to 2 CPUs, 4 GiB
+memory and 768 PIDs. The final 362.63-second gate proved real restricted PostgreSQL
+process identities, install/status/verify, the APISIX IAM path, tenant primary
+and member revocation, a purpose-only notification dispatcher, and the real
+security-mail flow: start contact verification, authenticated STARTTLS/SASL
+submission to a task-owned Postfix fixture, Maildir-only retrieval of the
+eight-digit code, HTTP confirmation, and a second security notice that did not
+contain the code or other protected values. It then passed two application
+generations, Audit query/chain integrity, protected backup, failed-candidate
+automatic rollback, B upgrade, explicit platform rollback, selected-backup
+recovery, workload rollback/stop/capacity release and bounded support scans.
+The verified notification contact's exact account, user, address, state,
+resource version and verification time were re-read after the failed upgrade
+rollback, B upgrade, explicit rollback and selected-backup recovery; the
+private retained-state fixture was not written until that contact had been
+verified. Missing or malformed retained contact state fails closed.
+The fixture container and image were removed by the gate. Restarting only that
+task-owned outer engine followed by the read-only retained-state/status/verify/
+support gate re-read the same contact and passed in 16.88 seconds.
+
+The fixture archive was authenticated as
+`sha256:68960426f3d59e6a8732485cd13521b6618bc81b1abf46a6a057e1e4b6b29612`
+and loaded to the classic Docker image identity
+`sha256:c4a3d9c41ba180cb8748865badc712c909ffb6f4e2b09a4efde7c6aed76bd028`.
+An earlier run correctly exposed a missing SASL runtime module in the fixture;
+another exposed that successful `postfix status` writes to stderr and therefore
+must be silenced inside the fixture rather than weakening the gate's global
+no-stderr rule. Neither failure is counted as a pass.
+
+Docker 29.6.2 with the containerd image store exposes the loaded OCI manifest
+identity rather than the classic portable config identity authenticated by the
+current signed release contract. The same bundles therefore fail closed at
+image verification. This is an explicit unsupported runtime/store combination,
+not a reason to loosen image identity or claim Docker 29 support. Independent
+CI for the final evidence commit is still required before this revision-7
 combination can be accepted.
 
 ### Historical multi-tenant authority-profile evidence
