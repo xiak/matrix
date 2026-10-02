@@ -951,6 +951,10 @@
       "policy-configuration": {
         "label": "策略配置检查",
         "hint": "主体、策略来源与权限边界清单"
+      },
+      "access-diagnosis": {
+        "label": "当前访问诊断",
+        "hint": "合成场景与非授权解释"
       }
     }
   },
@@ -3859,6 +3863,7 @@
     "directPolicyCount": "直接 {count} 项",
     "groupPolicyCount": "用户组 {count} 项",
     "policyConfigurationReview": "检查策略配置",
+    "currentAccessDiagnosis": "当前访问诊断",
     "previewNote": "访问管理体验 · 用户组、策略、角色、SSO 与密钥为 MOCK，仅在当前浏览器会话中生效，不授予真实权限。",
     "notConnected": "此能力尚未接入后端",
     "notConnectedHint": "真实账号暂不提供此操作。请从登录页进入 MOCK 体验查看完整流程。",
@@ -5260,6 +5265,108 @@
       "enrollmentConfirm": "无法确认动态验证码。请检查验证码；结果不明确时不要创建第二个绑定意图。",
       "cancel": "无法取消当前绑定流程。请保留当前页面并重试。"
     }
+  },
+  "CurrentAccessDiagnosis": {
+    "unavailableTitle": "当前访问诊断尚未接入",
+    "unavailableHint": "真实账号不会在浏览器中本地计算授权结果。等待产品服务携带真实主体、资源和请求上下文调用统一 IAM 诊断能力。",
+    "unavailableBoundary": "未接入期间不显示 MOCK 结果、不把策略配置清单当作授权判断，也不会向 LIVE 路由发送诊断请求。",
+    "emptyTitle": "暂无合成诊断场景",
+    "emptyHint": "当前隔离工作区没有可用的本地场景；这不表示真实 IAM 没有授权数据。",
+    "previewTitle": "隔离 MOCK · 当前访问诊断体验",
+    "previewBoundary": "本页只对预置合成身份、资源和请求上下文运行本地解释器。结果不是 Decision、permit、授权凭证或资源存在性证明，不能用于执行操作、审计定责或自动修复。",
+    "step": "第 {number} 步",
+    "requestTitle": "确认诊断证据",
+    "scenario": "合成场景",
+    "scenarioHint": "场景仅用于预演未来诊断信息架构；不能选择任意真实主体，也不会读取产品资源。",
+    "scenarios": {
+      "path": { "label": "资源路径允许样例", "hint": "使用日志主题路径 fixture，观察匹配策略及其来源；不证明真实主题存在。" },
+      "duplicate": { "label": "直接与用户组重复来源", "hint": "展示同一允许策略经直接关联与用户组继承进入解释证据。" },
+      "tags": { "label": "资源标签条件样例", "hint": "使用预置资源标签 fixture，观察条件证据；浏览器不会读取真实标签。" },
+      "deny": { "label": "显式拒绝样例", "hint": "展示本地策略声明中的匹配 Deny 如何优先于 Allow；不是线上拒绝记录。" },
+      "boundary": { "label": "权限边界限制样例", "hint": "展示身份策略与权限边界的限制层；边界不会单独授予权限。" },
+      "ungranted": { "label": "没有匹配允许样例", "hint": "展示合成身份未找到允许来源时的默认拒绝解释；不代表真实用户状态。" }
+    },
+    "subject": "主体证据",
+    "serviceAction": "产品与 Action",
+    "resource": "资源证据",
+    "requestContext": "请求上下文",
+    "syntheticIdentity": "合成身份 fixture",
+    "staticProfile": "静态 Profile · {version}",
+    "syntheticResource": "合成资源 fixture",
+    "syntheticContext": "预置合成上下文",
+    "contextNotProvided": "该场景未提供网络或时间条件",
+    "contextBoundary": "不读取浏览器 IP、代理头或系统时间作为可信事实。",
+    "notObserved": "未观测真实请求",
+    "run": "生成 MOCK 诊断",
+    "runHint": "只计算当前预置场景，不发送后端请求，也不会保存结果。",
+    "resultTitle": "诊断解释",
+    "decisions": {
+      "allow": "ALLOWED · 样例",
+      "explicitDeny": "DENIED · 显式拒绝样例",
+      "implicitDeny": "DENIED · 默认拒绝样例",
+      "indeterminate": "INDETERMINATE",
+      "invalidRequest": "NOT_EVALUATED"
+    },
+    "reasons": {
+      "matchingAllow": "合成策略与当前 fixture 形成允许样例",
+      "explicitDeny": "存在匹配的显式拒绝声明",
+      "noMatchingAllow": "没有形成匹配的允许证据",
+      "boundaryNotAllowing": "权限边界没有与身份允许形成交集",
+      "indeterminate": "请求事实或策略文档不足，无法形成稳定解释"
+    },
+    "errors": {
+      "unknownIdentity": "合成身份不存在或不属于当前 fixture。",
+      "unknownResource": "合成资源不存在或引用无效。",
+      "crossTenant": "合成资源不属于当前租户。",
+      "unknownAction": "Action 不在当前静态 Profile fixture 中。",
+      "actionResourceMismatch": "Action 与合成资源类型不一致。",
+      "requiresRoleTrust": "承担角色需要独立的信任与调用方权限诊断。",
+      "authorityRequired": "当前合成身份缺少诊断所需的权限约束。",
+      "expiredSession": "合成 RoleSession 已过期。",
+      "revokedSession": "合成 RoleSession 已撤销。",
+      "unavailableSession": "合成 RoleSession 不可用。"
+    },
+    "resultBoundary": "这是本地合成解释，不是授权凭证。即使显示 ALLOWED，产品服务仍必须携带真实上下文调用统一 PDP，并自行校验资源存在性和业务前置条件。",
+    "layersTitle": "限制层",
+    "layersHint": "把授权策略、权限上限和产品执行边界分开，避免把一条结果误读为完整业务许可。",
+    "layers": { "identity": "身份授权策略", "boundary": "权限边界", "session": "SessionPolicy", "execution": "资源与产品执行" },
+    "layerStates": {
+      "allow": "ALLOW · 样例",
+      "explicitDeny": "EXPLICIT_DENY",
+      "implicitDeny": "IMPLICIT_DENY",
+      "indeterminate": "INDETERMINATE",
+      "notEvaluated": "NOT_EVALUATED",
+      "notConfigured": "未配置",
+      "notApplicable": "不适用"
+    },
+    "layerHints": {
+      "identity": "汇总直接策略与用户组继承来源；显式拒绝优先。",
+      "boundary": "边界只限制可允许集合，不会单独授予权限。",
+      "boundaryAbsent": "该用户 fixture 未配置权限边界；这不是无限权限证明。",
+      "session": "当前场景使用用户主体，没有构造 RoleSession 或临时 SessionPolicy。",
+      "execution": "资源存在性、资源策略、产品 PEP、账号／凭证状态和业务结果均未评估。"
+    },
+    "inspectSubject": "查看主体 {name}",
+    "resultProvenance": "结果仅来自当前浏览器内的隔离 MOCK 快照；切换场景或刷新数据后必须重新生成。",
+    "evidenceTitle": "合成策略证据",
+    "policy": "策略 / 版本",
+    "source": "授权来源",
+    "statement": "声明",
+    "evidenceState": "匹配状态",
+    "sources": { "direct": "直接关联", "group": "用户组继承", "role": "Role 策略", "boundary": "权限边界" },
+    "evidenceReasons": {
+      "matched": "MATCHED",
+      "actionMismatch": "Action 不匹配",
+      "resourceMismatch": "资源不匹配",
+      "conditionMismatch": "条件不匹配",
+      "missingContext": "请求事实缺失",
+      "invalidPolicy": "策略不可解析"
+    },
+    "missingFacts": "缺失事实：{conditions}",
+    "facts": { "sourceIp": "受信来源 IP", "time": "IAM 事务时间", "resourceTags": "产品资源标签" },
+    "noEvidenceTitle": "没有可展示的策略证据",
+    "noEvidenceHint": "当前合成场景没有载入策略声明，或输入在求值前已被拒绝。",
+    "beforeRun": "选择一个预置场景后生成解释。固定输入立即显示，只有诊断结果区域会在操作后出现。"
   },
   "PolicyConfigurationReview": {
     "example": "查看本地配置场景",

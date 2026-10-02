@@ -951,6 +951,10 @@
       "policy-configuration": {
         "label": "Policy configuration review",
         "hint": "Subject, policy-source and permission-boundary inventory"
+      },
+      "access-diagnosis": {
+        "label": "Current access diagnosis",
+        "hint": "Synthetic scenarios and non-authoritative explanations"
       }
     }
   },
@@ -3859,6 +3863,7 @@
     "directPolicyCount": "{count} direct",
     "groupPolicyCount": "{count} from groups",
     "policyConfigurationReview": "Review policy configuration",
+    "currentAccessDiagnosis": "Current access diagnosis",
     "previewNote": "Access preview · Groups, policies, roles, SSO and keys are MOCK, session-only and grant no real permissions.",
     "notConnected": "This capability is not connected",
     "notConnectedHint": "This operation is not available for live accounts. Use MOCK preview from the sign-in page to explore the complete workflow.",
@@ -5246,6 +5251,108 @@
       "enrollmentConfirm": "The authenticator code could not be confirmed. Check it; do not create a second intent when the outcome is uncertain.",
       "cancel": "The enrollment could not be cancelled. Keep this page open and retry."
     }
+  },
+  "CurrentAccessDiagnosis": {
+    "unavailableTitle": "Current access diagnosis is not connected",
+    "unavailableHint": "A live account never computes authorization locally in the browser. The owning product service must send the real subject, resource and request context to the shared IAM diagnostic capability.",
+    "unavailableBoundary": "Until that contract is connected, the live surface shows no MOCK result, never treats the policy inventory as an authorization decision, and sends no diagnostic request to a live route.",
+    "emptyTitle": "No synthetic diagnostic scenarios",
+    "emptyHint": "This isolated workspace has no local scenarios. That says nothing about authorization data in live IAM.",
+    "previewTitle": "Isolated MOCK · current access diagnosis experience",
+    "previewBoundary": "This page runs a local explainer only over predefined synthetic identities, resources and request context. Its output is not a Decision, permit, authorization credential or proof that a resource exists; it cannot drive execution, audit attribution or automatic remediation.",
+    "step": "Step {number}",
+    "requestTitle": "Confirm diagnostic evidence",
+    "scenario": "Synthetic scenario",
+    "scenarioHint": "Scenarios preview the future diagnostic information architecture only. You cannot choose an arbitrary live subject, and no product resource is read.",
+    "scenarios": {
+      "path": { "label": "Resource-path allow example", "hint": "Uses a log-topic path fixture to expose matching policy sources; it does not prove that a live topic exists." },
+      "duplicate": { "label": "Duplicate direct and group sources", "hint": "Shows the same allowing policy arriving through a direct attachment and group inheritance." },
+      "tags": { "label": "Resource-tag condition example", "hint": "Uses predefined resource-tag fixtures to expose condition evidence; the browser reads no live tags." },
+      "deny": { "label": "Explicit-deny example", "hint": "Shows a matching Deny taking precedence over Allow in local policy statements; it is not a production denial record." },
+      "boundary": { "label": "Permission-boundary limit example", "hint": "Shows identity policy and permission-boundary layers. A boundary never grants permissions by itself." },
+      "ungranted": { "label": "No matching allow example", "hint": "Shows default denial when a synthetic identity has no allowing source; it says nothing about a live user." }
+    },
+    "subject": "Subject evidence",
+    "serviceAction": "Product and Action",
+    "resource": "Resource evidence",
+    "requestContext": "Request context",
+    "syntheticIdentity": "Synthetic identity fixture",
+    "staticProfile": "Static Profile · {version}",
+    "syntheticResource": "Synthetic resource fixture",
+    "syntheticContext": "Predefined synthetic context",
+    "contextNotProvided": "This scenario provides no network or time condition",
+    "contextBoundary": "Browser IP, proxy headers and system time are not read as trusted facts.",
+    "notObserved": "No live request observed",
+    "run": "Generate MOCK diagnosis",
+    "runHint": "Evaluates only the current predefined scenario, sends no backend request and stores no result.",
+    "resultTitle": "Diagnostic explanation",
+    "decisions": {
+      "allow": "ALLOWED · example",
+      "explicitDeny": "DENIED · explicit-deny example",
+      "implicitDeny": "DENIED · default-deny example",
+      "indeterminate": "INDETERMINATE",
+      "invalidRequest": "NOT_EVALUATED"
+    },
+    "reasons": {
+      "matchingAllow": "Synthetic policy and the current fixture form an allow example",
+      "explicitDeny": "A matching explicit-deny statement exists",
+      "noMatchingAllow": "No matching allow evidence was formed",
+      "boundaryNotAllowing": "The permission boundary does not intersect the identity allow",
+      "indeterminate": "Request facts or policy documents are insufficient for a stable explanation"
+    },
+    "errors": {
+      "unknownIdentity": "The synthetic identity is missing or outside the current fixture.",
+      "unknownResource": "The synthetic resource is missing or has an invalid reference.",
+      "crossTenant": "The synthetic resource belongs to another tenant.",
+      "unknownAction": "The Action is absent from the current static Profile fixture.",
+      "actionResourceMismatch": "The Action and synthetic resource type do not match.",
+      "requiresRoleTrust": "Role assumption requires a separate trust and caller-authority diagnosis.",
+      "authorityRequired": "The synthetic identity lacks the authority constraint needed for diagnosis.",
+      "expiredSession": "The synthetic RoleSession has expired.",
+      "revokedSession": "The synthetic RoleSession has been revoked.",
+      "unavailableSession": "The synthetic RoleSession is unavailable."
+    },
+    "resultBoundary": "This is a local synthetic explanation, not an authorization credential. Even an ALLOWED example still requires the product service to call the shared PDP with real context and enforce resource existence and business preconditions.",
+    "layersTitle": "Limiting layers",
+    "layersHint": "Separate grants, permission ceilings and product execution boundaries so one output is not mistaken for complete business authorization.",
+    "layers": { "identity": "Identity permission policies", "boundary": "Permission boundary", "session": "SessionPolicy", "execution": "Resource and product execution" },
+    "layerStates": {
+      "allow": "ALLOW · example",
+      "explicitDeny": "EXPLICIT_DENY",
+      "implicitDeny": "IMPLICIT_DENY",
+      "indeterminate": "INDETERMINATE",
+      "notEvaluated": "NOT_EVALUATED",
+      "notConfigured": "Not configured",
+      "notApplicable": "Not applicable"
+    },
+    "layerHints": {
+      "identity": "Combines direct policies and group inheritance; explicit deny wins.",
+      "boundary": "The boundary only limits the allow set and never grants on its own.",
+      "boundaryAbsent": "This user fixture has no permission boundary. That is not proof of unlimited permissions.",
+      "session": "This scenario uses a user subject and constructs no RoleSession or temporary SessionPolicy.",
+      "execution": "Resource existence, resource policies, product PEP, account or credential state and business outcome are not evaluated."
+    },
+    "inspectSubject": "Inspect subject {name}",
+    "resultProvenance": "The result comes only from the isolated MOCK snapshot in this browser. Changing the scenario or refreshing data requires a new diagnosis.",
+    "evidenceTitle": "Synthetic policy evidence",
+    "policy": "Policy / version",
+    "source": "Grant source",
+    "statement": "Statement",
+    "evidenceState": "Match state",
+    "sources": { "direct": "Direct attachment", "group": "Group inheritance", "role": "Role policy", "boundary": "Permission boundary" },
+    "evidenceReasons": {
+      "matched": "MATCHED",
+      "actionMismatch": "Action mismatch",
+      "resourceMismatch": "Resource mismatch",
+      "conditionMismatch": "Condition mismatch",
+      "missingContext": "Request fact missing",
+      "invalidPolicy": "Policy could not be parsed"
+    },
+    "missingFacts": "Missing facts: {conditions}",
+    "facts": { "sourceIp": "trusted source IP", "time": "IAM transaction time", "resourceTags": "product resource tags" },
+    "noEvidenceTitle": "No policy evidence to display",
+    "noEvidenceHint": "The current synthetic scenario loaded no policy statement, or the input was rejected before evaluation.",
+    "beforeRun": "Choose a predefined scenario, then generate its explanation. Fixed evidence renders immediately; only the diagnostic result appears after the action."
   },
   "PolicyConfigurationReview": {
     "example": "Inspect a local configuration scenario",

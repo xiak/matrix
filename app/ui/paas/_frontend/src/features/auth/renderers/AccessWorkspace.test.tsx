@@ -1863,7 +1863,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "返回列表" }));
     expect(screen.getByRole("button", { name: "查看全部记录" })).toBeTruthy();
   });
-  it.each(["groups", "policies", "policy-configuration", "roles", "providers", "user-sso", "federations", "keys", "settings"] as const)("renders %s with consistent localized controls", async (view) => {
+  it.each(["groups", "policies", "policy-configuration", "access-diagnosis", "roles", "providers", "user-sso", "federations", "keys", "settings"] as const)("renders %s with consistent localized controls", async (view) => {
     const { user } = await open(view);
     expect(screen.getByRole("region", { name: "账号与权限" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Language" }));
@@ -2369,6 +2369,47 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("本地输入需要修正")).toBeTruthy();
     expect(screen.getAllByText(/找不到该用户 fixture/).length).toBeGreaterThan(0);
     expect(screen.getByText("NOT_EVALUATED")).toBeTruthy();
+  });
+  it("keeps fixed evidence visible and generates a clearly non-authoritative access diagnosis", async () => {
+    const { user, repository, extension } = await open("access-diagnosis", { users: reviewUsers });
+    const before = await extension.read("preview");
+    expect(screen.getByText(/结果不是 Decision、permit、授权凭证或资源存在性证明/)).toBeTruthy();
+    expect(screen.getByText("合成身份 fixture")).toBeTruthy();
+    expect(screen.getByText("未观测真实请求")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "诊断解释" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "生成 MOCK 诊断" }));
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "诊断解释" }));
+    expect(screen.getByText("ALLOWED · 样例")).toBeTruthy();
+    expect(screen.getByText(/不是授权凭证/)).toBeTruthy();
+    const layers = screen.getByRole("region", { name: "限制层" });
+    expect(within(layers).getByText("身份授权策略")).toBeTruthy();
+    expect(within(layers).getByText("权限边界")).toBeTruthy();
+    expect(within(layers).getByText("SessionPolicy")).toBeTruthy();
+    expect(within(layers).getByText("NOT_EVALUATED")).toBeTruthy();
+    expect(screen.getByRole("table", { name: "合成策略证据" })).toBeTruthy();
+    expect(await extension.read("preview")).toEqual(before);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("replaces a stale diagnosis when the synthetic scenario changes and explains deny sources", async () => {
+    const { user } = await open("access-diagnosis", { users: reviewUsers });
+    await user.click(screen.getByRole("button", { name: "生成 MOCK 诊断" }));
+    expect(screen.getByText("ALLOWED · 样例")).toBeTruthy();
+    await select(user, "合成场景", "显式拒绝样例");
+    expect(screen.queryByRole("heading", { name: "诊断解释" })).toBeNull();
+    expect(screen.getByText("合成资源 fixture")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "生成 MOCK 诊断" }));
+    expect(screen.getByText("DENIED · 显式拒绝样例")).toBeTruthy();
+    expect(screen.getByText("存在匹配的显式拒绝声明")).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "合成策略证据" })).getAllByText("MATCHED").length).toBeGreaterThan(0);
+  });
+  it("does not expose the local diagnosis evaluator to a live account before the contract is connected", async () => {
+    const { repository } = await open("access-diagnosis", { live: true });
+    expect(screen.getByText("LIVE · NOT_CONNECTED")).toBeTruthy();
+    expect(screen.getByText("当前访问诊断尚未接入")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "生成 MOCK 诊断" })).toBeNull();
+    expect(screen.queryByText(/ALLOWED · 样例/)).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
   });
   it("keeps a visual policy draft editable and creates a version only on save", async () => {
     const { user, extension } = await open("policies");
