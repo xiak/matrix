@@ -16,7 +16,7 @@ import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import type { AccountUserDetailTab } from "./AccountUserWorkspace";
 import { GroupDetail, GroupDirectory } from "./GroupAccessWorkspace";
 import { AccessAnalysisPreview, AccessReportPreview, AccessReports } from "./AccessReports";
-import { accountSecurityReportLimits, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildCredentialReport, createAccountSecurityReportPreview } from "../scenes/accessReport";
+import { accountSecurityReportLimits, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildAccountSecurityReportDirectoryPreview, buildCredentialReport, createAccountSecurityReportPreview } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 import { previewAccountRepository, previewCredential, previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
@@ -1863,7 +1863,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "返回列表" }));
     expect(screen.getByRole("button", { name: "查看全部记录" })).toBeTruthy();
   });
-  it.each(["groups", "policies", "policy-configuration", "access-diagnosis", "roles", "providers", "user-sso", "federations", "keys", "settings"] as const)("renders %s with consistent localized controls", async (view) => {
+  it.each(["groups", "policies", "policy-configuration", "access-diagnosis", "security-reports", "roles", "providers", "user-sso", "federations", "keys", "settings"] as const)("renders %s with consistent localized controls", async (view) => {
     const { user } = await open(view);
     expect(screen.getByRole("region", { name: "账号与权限" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Language" }));
@@ -3978,6 +3978,11 @@ describe("CAM-style access workspace", () => {
     expect(created.report.accessKeys).toEqual(workspace.keys.map((key) => expect.objectContaining({ id: key.id, userId: key.ownerId })));
     expect(created.report.coverage.filter((item) => item.state === "COMPLETE").map((item) => item.source)).toEqual(["IAM_ACCOUNT", "IAM_USERS", "IAM_LOGIN_SESSIONS", "IAM_ACCESS_KEYS"]);
     expect(created.report.coverage.filter((item) => item.state === "NOT_INCLUDED")).toHaveLength(5);
+    expect(buildAccountSecurityReportDirectoryPreview(workspace, scene, "2026-09-09T12:00:00Z", session).map((entry) => ({ id: entry.id, status: entry.status }))).toEqual([
+      { id: "security-report-mock-directory-recent", status: "available" },
+      { id: "security-report-mock-directory-expiring", status: "expiringSoon" },
+      { id: "security-report-mock-directory-expired", status: "expired" }
+    ]);
     expect(() => createAccountSecurityReportPreview(workspace, { ...scene, accountId: "org-foreign" }, "2026-09-09T00:00:00Z", "request-one")).toThrow("INVALID_IAM_TENANT");
 
     const atUserLimit = { ...scene, users: Array.from({ length: accountSecurityReportLimits.users - 1 }, (_, index) => ({ ...scene.users[0]!, id: `principal-${index}` })) };
@@ -4054,8 +4059,47 @@ describe("CAM-style access workspace", () => {
     await user.click(within(card).getByRole("button", { name: "审阅报告" }));
     await user.click(screen.getByRole("menuitem", { name: "用户凭证报告" }));
     expect(onOpenReport).toHaveBeenCalledWith("credentials");
+    await user.click(within(card).getByRole("button", { name: "审阅报告" }));
+    await user.click(screen.getByRole("menuitem", { name: "账号安全报告" }));
+    expect(onNavigate).toHaveBeenCalledWith("security-reports");
     await user.click(within(card).getByRole("button", { name: "查看长期访问密钥" }));
     expect(onNavigate).toHaveBeenCalledWith("keys");
+  });
+  it("keeps the security-report directory synthetic while validating retention and detail flows", async () => {
+    const { user, repository, extension } = await open("security-reports");
+    const before = await extension.read("preview");
+    expect(screen.getByRole("heading", { name: "安全报告" })).toBeTruthy();
+    expect(screen.getByText(/没有报告列表 API/)).toBeTruthy();
+    const directory = screen.getByRole("table", { name: "安全报告" });
+    expect(directory.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(directory).getByText("可读取")).toBeTruthy();
+    expect(within(directory).getByText("即将到期")).toBeTruthy();
+    expect(within(directory).getByText("已到期")).toBeTruthy();
+
+    await select(user, "保留状态", "已到期");
+    expect(within(directory).getAllByRole("row")).toHaveLength(2);
+    await user.click(within(directory).getByRole("button", { name: "security-report-mock-directory-expired" }));
+    expect(screen.getByRole("heading", { name: "报告已到期" })).toBeTruthy();
+    expect(screen.getByText(/详情正文和下载入口均不可用/)).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "报告摘要" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "下载 CSV v1" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+
+    await select(user, "保留状态", "可读取");
+    await user.click(within(screen.getByRole("table", { name: "安全报告" })).getByRole("button", { name: "security-report-mock-directory-recent" }));
+    expect(screen.getByRole("heading", { name: "账号安全报告" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "报告摘要" })).toBeTruthy();
+    expect(await extension.read("preview")).toEqual(before);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("does not fabricate a live security-report directory before a list contract exists", async () => {
+    const { repository } = await open("security-reports", { live: true });
+    expect(screen.getByText(/LIVE · NOT_CONNECTED/)).toBeTruthy();
+    expect(screen.getByText("安全报告目录尚未接入")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "安全报告" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "生成报告（MOCK）" })).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
   });
   it("reviews configured trust entry points and synthetic unused access without inventing effective access", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);

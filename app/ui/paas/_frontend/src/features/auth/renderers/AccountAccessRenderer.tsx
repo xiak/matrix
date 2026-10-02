@@ -19,6 +19,7 @@ import { PolicyAuthoringWizard } from "./PolicyAuthoringWizard";
 import { policyCreationMethod, type PolicyCreationMethod } from "./PolicyCreationMethods";
 import { PolicyConfigurationReview } from "./PolicyConfigurationReview";
 import { CurrentAccessDiagnosisPreview } from "./CurrentAccessDiagnosisPreview";
+import { SecurityReportDirectoryPreview } from "./AccessReports";
 import { AccessRoles } from "./AccessRoles";
 import { RoleCreationWizard } from "./RoleCreationWizard";
 import { AccessProviders, AccessRoleSsoMappings } from "./AccessIdentity";
@@ -35,6 +36,7 @@ import { LiveAccountSecuritySettings } from "./LiveAccountSecuritySettings";
 import { RoleSelfServicePreview } from "./RoleSelfServicePreview";
 import { LiveRoleSelfService } from "./LiveRoleSelfService";
 import { useRoleSession } from "../application/RoleSessionProvider";
+import { useSession } from "../application/SessionProvider";
 import { AccountLiveRoles } from "./AccountLiveRoles";
 import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
 import type { AccountUserDetailTab } from "./AccountUserWorkspace";
@@ -140,6 +142,7 @@ function AccountAccessInitialLoading({ entityId, view }: { entityId?: string; vi
     roles: w("roles"),
     "policy-configuration": w("policyConfigurationReview"),
     "access-diagnosis": w("currentAccessDiagnosis"),
+    "security-reports": w("securityReportDirectory.title"),
     providers: w("providers"),
     federations: w("federations"),
     keys: w("keys"),
@@ -174,6 +177,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const access = useAccountAccess();
+  const session = useSession();
   const capabilities = useAccountCapabilities();
   const scene = access.scene;
   const workspace = access.workspace;
@@ -182,7 +186,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   const clearFeedback = access.clearFeedback;
   const workflow = view === "create-user" || view === "create-policy" || view === "policy-language" || view === "create-group" || view === "create-role";
   useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
-  const previewOnly = ["create-policy", "policy-language", "policy-configuration", "access-diagnosis", "roles", "create-role", "providers", "user-sso", "federations", "keys"].includes(view);
+  const previewOnly = ["create-policy", "policy-language", "policy-configuration", "access-diagnosis", "security-reports", "roles", "create-role", "providers", "user-sso", "federations", "keys"].includes(view);
   const denied = scene && (
     (view === "users" && !scene.canListUsers) ||
     (view === "create-user" && !scene.canCreateUsers) ||
@@ -228,6 +232,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "keys" && !workspace && access.accessKeys ? <LiveAccessCredentials authorizationProfiles={access.authorizationProfiles} client={access.accessKeys} scene={scene} createIntent={access.accessKeyCreateIntent}
         userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} onInspectPermissions={(ownerId) => onNavigate("users", ownerId, undefined, "policies")} /> :
       view === "access-diagnosis" ? <CurrentAccessDiagnosisPreview workspace={workspace ?? undefined} scene={scene} onOpen={onNavigate} /> :
+      view === "security-reports" ? <SecurityReportDirectoryPreview workspace={workspace ?? undefined} scene={scene} currentSession={session.current?.session} /> :
       !workspace ? <EmptyState title={w("notConnected")} description={w("notConnectedHint")} /> :
       view === "create-policy" ? <PolicyAuthoringWizard method={policyCreationMethod(policyMethod)} workspace={workspace} scene={scene} doneLabel={w("finishBack")} onBack={() => onNavigate("policies")} onDone={() => onNavigate("policies")} /> :
       view === "create-role" ? <RoleCreationWizard workspace={workspace} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :

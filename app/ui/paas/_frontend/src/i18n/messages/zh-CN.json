@@ -948,6 +948,10 @@
         "label": "登录会话",
         "hint": "本人会话与安全退出"
       },
+      "security-reports": {
+        "label": "安全报告",
+        "hint": "IAM 快照、覆盖范围与保留期"
+      },
       "policy-configuration": {
         "label": "策略配置检查",
         "hint": "主体、策略来源与权限边界清单"
@@ -4438,6 +4442,42 @@
       },
       "exportCsv": "导出 CSV（MOCK）",
       "exportUnavailable": "用户凭证报告仍是隔离 MOCK 字段白名单，尚无可消费的服务端封存下载契约；当前页面不会伪造文件。"
+    },
+    "securityReportDirectory": {
+      "title": "安全报告",
+      "description": "审阅账号级 IAM 安全快照、证据覆盖和保留状态。",
+      "create": "生成报告（MOCK）",
+      "mockBoundary": "MOCK · 当前后端只有按 reportId 创建、读取和下载，没有报告列表 API。下面的目录、筛选和状态均为本地合成样例，不代表服务器持有这些报告。",
+      "liveBoundary": "LIVE · NOT_CONNECTED · 当前没有可调用的安全报告列表契约；页面不会请求不存在的接口，也不会回退到 MOCK 数据。",
+      "liveUnavailableTitle": "安全报告目录尚未接入",
+      "liveUnavailableHint": "后端固定列表与分页契约后再连接；现有按 ID 读取和下载能力不能推导出账号报告目录。",
+      "summary": "报告目录摘要",
+      "readable": "可读取样例",
+      "expiringSoon": "24 小时内到期",
+      "expired": "已到期样例",
+      "retentionLimit": "样例 / 保留上限",
+      "report": "报告",
+      "reportId": "报告 ID",
+      "account": "当前账号",
+      "observedAt": "观测时点",
+      "expiresAt": "到期时间",
+      "coverage": "证据覆盖",
+      "rows": "数据行",
+      "retentionStatus": "保留状态",
+      "format": "格式版本",
+      "formatValue": "CSV v{version}",
+      "coverageValue": "{count} / {total} 个来源完整纳入",
+      "iamOnly": "仅 IAM 权威来源",
+      "fixtureCount": "{count} 份本地样例",
+      "directoryBoundary": "目录用于验证大量报告下的搜索、筛选、状态和到期体验；它不是服务器列表、后台任务队列或跨产品安全态势。",
+      "statuses": {
+        "available": "可读取",
+        "expiringSoon": "即将到期",
+        "expired": "已到期"
+      },
+      "detailTitle": "报告已到期",
+      "expiredBoundary": "该样例已超过 7 天保留期。详情正文和下载入口均不可用；已知 reportId 也不能绕过到期与重新鉴权。",
+      "expiredHint": "仅保留用于说明到期体验的合成元数据，不展示报告正文。"
     },
     "securityReportPreview": {
       "mockBoundary": "MOCK · 本页只验证 AccountSecurityReport 的信息架构与操作顺序，不调用 LIVE API、不生成文件，也不代表当前身份已经获得报告权限。",

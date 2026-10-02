@@ -375,6 +375,15 @@ export type AccountSecurityReportCreation =
   | { outcome: "COMPLETED"; report: AccountSecurityReportPreview }
   | { outcome: "REJECTED"; reason: AccountSecurityReportRejectionReason };
 
+export type AccountSecurityReportDirectoryStatus = "available" | "expiringSoon" | "expired";
+
+export type AccountSecurityReportDirectoryEntry = {
+  id: string;
+  name: string;
+  status: AccountSecurityReportDirectoryStatus;
+  report: AccountSecurityReportPreview;
+};
+
 export function accountSecurityReportLimitViolation(users: number, accessKeys: number): AccountSecurityReportRejectionReason | null {
   if (users > accountSecurityReportLimits.users) return "USER_LIMIT";
   if (accessKeys > accountSecurityReportLimits.accessKeys) return "ACCESS_KEY_LIMIT";
@@ -494,4 +503,35 @@ export function createAccountSecurityReportPreview(
       totals: { users, accessKeys, rows }
     }
   };
+}
+
+// The service currently exposes create/read/download by reportId, but no list
+// contract. Keep this directory a deterministic, synthetic UX fixture until a
+// server-owned collection exists; callers must never merge it with LIVE data.
+export function buildAccountSecurityReportDirectoryPreview(
+  workspace: AccessWorkspace,
+  scene: AccountAccessScene,
+  referenceAt: string,
+  currentSession: SessionSummary | null = null
+): AccountSecurityReportDirectoryEntry[] {
+  assertReportAccount(workspace, scene);
+  const reference = new Date(referenceAt);
+  if (!Number.isFinite(reference.getTime())) throw new Error("INVALID_IAM_REPORT");
+  const hour = 60 * 60 * 1000;
+  const fixtures = [
+    { requestId: "mock-directory-recent", ageHours: 36 },
+    { requestId: "mock-directory-expiring", ageHours: accountSecurityReportLimits.retainedDays * 24 - 6 },
+    { requestId: "mock-directory-expired", ageHours: (accountSecurityReportLimits.retainedDays + 1) * 24 }
+  ] as const;
+
+  return fixtures.flatMap(({ requestId, ageHours }) => {
+    const observedAt = new Date(reference.getTime() - ageHours * hour).toISOString();
+    const created = createAccountSecurityReportPreview(workspace, scene, observedAt, requestId, currentSession);
+    if (created.outcome !== "COMPLETED") return [];
+    const remaining = Date.parse(created.report.expiresAt) - reference.getTime();
+    const status: AccountSecurityReportDirectoryStatus = remaining <= 0
+      ? "expired"
+      : remaining <= 24 * hour ? "expiringSoon" : "available";
+    return [{ id: created.report.reportId, name: created.report.reportId, status, report: created.report }];
+  });
 }

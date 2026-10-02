@@ -65,6 +65,7 @@ export const serviceNavigation = {
     { id: "user-sso", section: "access", view: "user-sso", icon: "sso", group: "identityProviders" },
     { id: "keys", section: "access", view: "keys", icon: "key", group: "security" },
     { id: "sessions", section: "access", view: "sessions", icon: "sessions", group: "security" },
+    { id: "security-reports", section: "access", view: "security-reports", icon: "audit", group: "security" },
     { id: "settings", section: "access", view: "settings", icon: "settings", group: "security" },
     { id: "tenants", section: "access", view: "tenants", icon: "tenants", group: "administration" }
   ]

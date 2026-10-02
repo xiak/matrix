@@ -948,6 +948,10 @@
         "label": "Login sessions",
         "hint": "Own sessions and secure sign-out"
       },
+      "security-reports": {
+        "label": "Security reports",
+        "hint": "IAM snapshots, coverage, and retention"
+      },
       "policy-configuration": {
         "label": "Policy configuration review",
         "hint": "Subject, policy-source and permission-boundary inventory"
@@ -4424,6 +4428,42 @@
       },
       "exportCsv": "Export CSV (MOCK)",
       "exportUnavailable": "The user credential report remains an isolated MOCK allowlist without a consumable server-sealed download contract. This page does not fabricate a file."
+    },
+    "securityReportDirectory": {
+      "title": "Security reports",
+      "description": "Review account-level IAM security snapshots, evidence coverage, and retention state.",
+      "create": "Generate report (MOCK)",
+      "mockBoundary": "MOCK · The backend currently supports create, read, and download by reportId, but has no report-list API. This directory, its filters, and every state below are local synthetic fixtures—not reports held by the server.",
+      "liveBoundary": "LIVE · NOT_CONNECTED · There is no callable security-report collection contract. This page neither requests a nonexistent endpoint nor falls back to MOCK data.",
+      "liveUnavailableTitle": "Security report directory is not connected",
+      "liveUnavailableHint": "Connect it only after the backend fixes a list and pagination contract. Existing read-by-ID and download capabilities cannot be used to infer an account report directory.",
+      "summary": "Report directory summary",
+      "readable": "Readable fixtures",
+      "expiringSoon": "Expires within 24 hours",
+      "expired": "Expired fixtures",
+      "retentionLimit": "Fixtures / retention limit",
+      "report": "Report",
+      "reportId": "Report ID",
+      "account": "Current account",
+      "observedAt": "Observed at",
+      "expiresAt": "Expires",
+      "coverage": "Evidence coverage",
+      "rows": "Rows",
+      "retentionStatus": "Retention state",
+      "format": "Format version",
+      "formatValue": "CSV v{version}",
+      "coverageValue": "{count} / {total} sources complete",
+      "iamOnly": "Authoritative IAM sources only",
+      "fixtureCount": "{count} local fixtures",
+      "directoryBoundary": "The directory validates search, filters, states, and expiry behavior at scale. It is not a server list, background job queue, or cross-product security posture.",
+      "statuses": {
+        "available": "Readable",
+        "expiringSoon": "Expiring soon",
+        "expired": "Expired"
+      },
+      "detailTitle": "Report expired",
+      "expiredBoundary": "This fixture is beyond the seven-day retention window. Detail content and download are unavailable; knowing the reportId never bypasses expiry or reauthorization.",
+      "expiredHint": "Only synthetic metadata needed to demonstrate the expiry experience remains; report content is not displayed."
     },
     "securityReportPreview": {
       "mockBoundary": "MOCK · This page validates AccountSecurityReport information architecture and action order only. It calls no LIVE API, creates no file, and does not imply that the current identity has report permissions.",

@@ -1,14 +1,14 @@
 "use client";
 
-import { useState, type RefObject } from "react";
+import { useMemo, useState, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { ArrowRight } from "lucide-react";
-import { ActionMenu, Alert, Badge, Button, Card, Tabs, Typography } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, Tabs, Typography } from "@ui/xiak";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { SessionSummary } from "../domain/session";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { accountSecurityReportLimits, accountSecurityReportLimitViolation, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
+import { accountSecurityReportLimits, accountSecurityReportLimitViolation, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildAccountSecurityReportDirectoryPreview, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type AccountSecurityReportDirectoryEntry, type AccountSecurityReportDirectoryStatus, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -32,6 +32,12 @@ const trustEntryStatus: Record<AccessAnalysisTrustEntry["configuration"], "info"
 };
 
 const accountSecurityReportFailureBoundaries = ["overLimit", "retainedReportLimit", "expired", "revoked"] as const;
+
+const reportDirectoryStatus: Record<AccountSecurityReportDirectoryStatus, "success" | "warning" | "neutral"> = {
+  available: "success",
+  expiringSoon: "warning",
+  expired: "neutral"
+};
 
 export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: {
   workspace: AccessWorkspace;
@@ -184,18 +190,19 @@ function CredentialReportPreview({ workspace, scene, onBack }: {
   </WorkspaceDetail>;
 }
 
-function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack }: {
+function AccountSecurityReportPreview({ workspace, scene, currentSession, initialReport = null, onBack }: {
   workspace: AccessWorkspace;
   scene: AccountAccessScene;
   currentSession: SessionSummary | null;
+  initialReport?: AccountSecurityReportPreviewModel | null;
   onBack(): void;
 }) {
   const t = useTranslations("IamWorkspace.securityReportPreview");
   const failureTitle = (boundary: typeof accountSecurityReportFailureBoundaries[number]) => boundary === "retainedReportLimit"
     ? t(`failures.${boundary}.title`, { reports: accountSecurityReportLimits.retainedReports })
     : t(`failures.${boundary}.title`);
-  const [requestId] = useState(() => `mock-${Date.now().toString(36)}`);
-  const [report, setReport] = useState<AccountSecurityReportPreviewModel | null>(null);
+  const [requestId] = useState(() => initialReport?.requestId ?? `mock-${Date.now().toString(36)}`);
+  const [report, setReport] = useState<AccountSecurityReportPreviewModel | null>(initialReport);
   const plannedUsers = scene.users.length + 1;
   const plannedScopes = [
     { id: "account" as const, rows: 1 },
@@ -338,6 +345,78 @@ export function AccessReportPreview({ kind, workspace, scene, currentSession = n
     : <CredentialReportPreview workspace={workspace} scene={scene} onBack={onBack} />;
 }
 
+function ExpiredSecurityReportPreview({ entry, onBack }: { entry: AccountSecurityReportDirectoryEntry; onBack(): void }) {
+  const t = useTranslations("IamWorkspace.securityReportDirectory");
+  const report = entry.report;
+  return <WorkspaceDetail title={t("detailTitle")} onBack={onBack}>
+    <Alert status="warning">{t("expiredBoundary")}</Alert>
+    <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{report.reportId}</Typography.Title><Typography.Text tone="muted">{t("expiredHint")}</Typography.Text></div><Badge status="neutral">{t("statuses.expired")}</Badge></Card.Header>
+      <Card.Body className={styles.detail}>
+        <dl className={styles.facts}>
+          <div><dt>{t("account")}</dt><dd><code>{report.accountId}</code></dd></div>
+          <div><dt>{t("reportId")}</dt><dd><code>{report.reportId}</code></dd></div>
+          <div><dt>{t("observedAt")}</dt><dd><WorkspaceTime value={report.observedAt} /></dd></div>
+          <div><dt>{t("expiresAt")}</dt><dd><WorkspaceTime value={report.expiresAt} /></dd></div>
+          <div><dt>{t("format")}</dt><dd>CSV v{report.formatVersion}</dd></div>
+          <div><dt>{t("rows")}</dt><dd>{report.totals.rows}</dd></div>
+        </dl>
+      </Card.Body>
+    </Card>
+  </WorkspaceDetail>;
+}
+
+export function SecurityReportDirectoryPreview({ workspace, scene, currentSession = null }: {
+  workspace?: AccessWorkspace;
+  scene: AccountAccessScene;
+  currentSession?: SessionSummary | null;
+}) {
+  const t = useTranslations("IamWorkspace.securityReportDirectory");
+  const [referenceAt] = useState(() => new Date().toISOString());
+  const [selected, setSelected] = useState<AccountSecurityReportDirectoryEntry | null>(null);
+  const [creating, setCreating] = useState(false);
+  const reports = useMemo(() => workspace
+    ? buildAccountSecurityReportDirectoryPreview(workspace, scene, referenceAt, currentSession)
+    : [], [currentSession, referenceAt, scene, workspace]);
+
+  if (!workspace) return <div className={styles.stack}>
+    <ContentPage.Heading title={t("title")} scrollKey="security-report-directory-live" />
+    <Alert status="info">{t("liveBoundary")}</Alert>
+    <EmptyState title={t("liveUnavailableTitle")} description={t("liveUnavailableHint")} />
+  </div>;
+  if (creating) return <AccountSecurityReportPreview workspace={workspace} scene={scene} currentSession={currentSession} onBack={() => setCreating(false)} />;
+  if (selected) return selected.status === "expired"
+    ? <ExpiredSecurityReportPreview entry={selected} onBack={() => setSelected(null)} />
+    : <AccountSecurityReportPreview workspace={workspace} scene={scene} currentSession={currentSession} initialReport={selected.report} onBack={() => setSelected(null)} />;
+
+  const available = reports.filter((entry) => entry.status !== "expired").length;
+  const expiringSoon = reports.filter((entry) => entry.status === "expiringSoon").length;
+  const expired = reports.filter((entry) => entry.status === "expired").length;
+  return <WorkspaceCollection title={t("title")} description={t("description")} items={reports}
+    create={{ label: t("create"), onClick: () => setCreating(true) }}
+    columns={[t("report"), t("observedAt"), t("coverage"), t("rows"), t("retentionStatus")]}
+    keywords={(entry) => `${entry.status} ${entry.report.accountId} ${entry.report.formatVersion}`}
+    filter={{ label: t("retentionStatus"), options: (["available", "expiringSoon", "expired"] as const).map((status) => ({ value: status, label: t(`statuses.${status}`) })), matches: (entry, status) => entry.status === status }}
+    intro={<div className={styles.stack}>
+      <Alert status="info">{t("mockBoundary")}</Alert>
+      <dl className={styles.securityReportSummary} aria-label={t("summary")}>
+        <div><dt>{t("readable")}</dt><dd>{available}</dd></div>
+        <div><dt>{t("expiringSoon")}</dt><dd>{expiringSoon}</dd></div>
+        <div><dt>{t("expired")}</dt><dd>{expired}</dd></div>
+        <div><dt>{t("retentionLimit")}</dt><dd>{reports.length} / {accountSecurityReportLimits.retainedReports}</dd></div>
+      </dl>
+    </div>}
+    row={(entry) => <>
+      <td><button className={styles.userLink} onClick={() => setSelected(entry)}>{entry.report.reportId}</button><small>{t("formatValue", { version: entry.report.formatVersion })}</small></td>
+      <td><WorkspaceTime value={entry.report.observedAt} /></td>
+      <td><span>{t("coverageValue", { count: entry.report.coverage.filter((item) => item.state === "COMPLETE").length, total: entry.report.coverage.length })}</span><small>{t("iamOnly")}</small></td>
+      <td>{entry.report.totals.rows}</td>
+      <td><Badge status={reportDirectoryStatus[entry.status]}>{t(`statuses.${entry.status}`)}</Badge><small><WorkspaceTime value={entry.report.expiresAt} /></small></td>
+    </>}
+    status={t("fixtureCount", { count: reports.length })}
+    footerNote={t("directoryBoundary")} />;
+}
+
 export function AccessReports({ workspace, scene, currentSession = null, onNavigate, onOpenAccessAnalysis, onOpenReport, accessAnalysisTriggerRef, reportTriggerRef }: {
   workspace: AccessWorkspace;
   scene: AccountAccessScene;
@@ -414,7 +493,7 @@ export function AccessReports({ workspace, scene, currentSession = null, onNavig
       <p className={styles.note}>{t("reportHint")}</p>
       {onOpenReport ? <ActionMenu triggerRef={reportTriggerRef} label={t("reviewReports")} actions={[
         { id: "credentials", label: t("credentialReport"), onSelect: () => onOpenReport("credentials") },
-        { id: "security", label: t("securityReport"), onSelect: () => onOpenReport("security") }
+        { id: "security", label: t("securityReport"), onSelect: () => onNavigate("security-reports") }
       ]} /> : null}
     </Card.Footer>
   </Card>;
