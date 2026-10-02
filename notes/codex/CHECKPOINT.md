@@ -6,8 +6,8 @@
 - Updated: 2026-10-03
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `d4d36fecf`
-- Pushed documentation milestone: `c52121d15`
+- Pushed source/embed milestone: `d8232a1a8`
+- Pushed documentation milestone: `48c61de09`
 
 ## Authoritative route
 
@@ -29,22 +29,22 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The remaining all-service
-loading mismatch is closed: preview `/console/` keeps the cloud-overview title
-and welcome identity visible immediately instead of briefly rendering the
-managed-database Overview placeholder. Only data-owned metric, product,
-resource, attention and readiness regions receive delayed, structurally aligned
-placeholders; the outgoing page is hidden and only the declared Region slice is
-read.
+login verification remains disabled for UX review. Capability-gated User batch
+association now uses the shared content area for Add to groups and Attach
+policies, with explicit targets and select/review/submit stages. Cancel keeps
+the directory selection and restores More actions; confirmed completion waits
+for the authoritative refresh before clearing selection and restoring Create
+user. User status and delete operations remain focused confirmations. This is
+still isolated MOCK only and adds no LIVE repository or wire contract.
 
-Source and synchronized embed are committed at `d4d36fecf`; FEAT evidence is
-committed at `c52121d15`. The complete frontend gate passed 58 files/972 cases
+Source and synchronized embed are committed at `d8232a1a8`; FEAT evidence is
+committed at `48c61de09`. The complete frontend gate passed 58 files/974 cases
 plus three normalization cases, typecheck, lint, architecture, 228-pair style
 checks, 42-route export, 233-file embed equality and repository Go test/vet.
-Desktop and `390 × 844` DEV rendered `控制台总览 / 欢迎使用 Matrix Cloud`
-without a Dialog, horizontal overflow or browser warning/error. The earlier
-shared page-command and enterprise content-workflow milestones remain owned by
-FEAT-007 and FEAT-IAM-010.
+Desktop and `390 × 844` DEV showed no association Dialog or horizontal
+overflow; a fresh browser tab had no warning/error. Earlier shared loading,
+page-command and content-workflow milestones remain owned by FEAT-007 and
+FEAT-IAM-010.
 
 Earlier Account security report, federation replacement, Deployment lifecycle,
 AccessKey carrier, Application tag recovery, service authorization, policy
