@@ -1,6 +1,6 @@
 # FEAT-IAM-012：外部身份、通知与组织治理
 
-- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。当前installation候选已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像构建，使用`61/31/3+r7`；本地签名A/B、受限PostgreSQL运行身份、真实联系人验证和SMTP/Maildir实收已通过，最终精确源码独立CI仍未成功。MFA安全事件的签名安装组合、已有地址替换及真实UI也未完成；其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
+- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。当前installation候选已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像构建，使用`61/31/3+r7`；本地签名A/B、受限PostgreSQL运行身份、真实联系人验证、SMTP/Maildir实收以及TOTP绑定后的`AUTHENTICATOR_BOUND`实收与生命周期保留已通过，最终精确源码独立CI仍未成功。已有地址替换及真实UI未完成；其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
 - Owner：IAM负责S1的地址验证、目的限定通知意图/投递和重试；installation负责受保护SMTP及必要私有材料配置，UX/UI负责本人交互。其他外部来源与计费保持各自业务边界。
 - S1a不等于完整S1或其他外部能力已实现；缺少前置时不提供假入口或伪成功。
 

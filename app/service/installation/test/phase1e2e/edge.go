@@ -215,12 +215,13 @@ func (client *edgeClient) changePassword(
 func (client *edgeClient) startNotificationContactVerification(
 	ctx context.Context,
 	bearer, password []byte,
+	requestID string,
 ) (iamv1.NotificationContactVerification, error) {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/notification-contact/verifications", bearer,
 		startNotificationContactWire{
 			Email: "receiver@matrix.test", Password: string(password),
-			RequestID: "phase1-security-mail-contact",
+			RequestID: requestID,
 		}, nil, http.StatusOK,
 	)
 	if err != nil {
@@ -230,7 +231,7 @@ func (client *edgeClient) startNotificationContactVerification(
 	var result iamv1.NotificationContactVerification
 	if response.header.Get("Cache-Control") != "no-store" || decodeOne(response.body, &result) != nil ||
 		iamv1.ValidateNotificationContactVerification(result) != nil || result.Email != "receiver@matrix.test" ||
-		result.RequestID != "phase1-security-mail-contact" || result.State != "PENDING" {
+		result.RequestID != requestID || result.State != "PENDING" {
 		return iamv1.NotificationContactVerification{}, errors.New("IAM notification contact start response failed")
 	}
 	return result, nil
@@ -260,11 +261,11 @@ func (client *edgeClient) readNotificationContactVerification(
 func (client *edgeClient) confirmNotificationContactVerification(
 	ctx context.Context,
 	bearer, code []byte,
-	id string,
+	id, requestID string,
 ) (iamv1.NotificationContactVerification, error) {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/notification-contact/verifications/"+id+":confirm", bearer,
-		confirmNotificationContactWire{Code: string(code), RequestID: "phase1-security-mail-confirm"},
+		confirmNotificationContactWire{Code: string(code), RequestID: requestID},
 		nil, http.StatusOK,
 	)
 	if err != nil {

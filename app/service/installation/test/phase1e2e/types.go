@@ -43,8 +43,23 @@ type iamRetention struct {
 	InstallationID        string
 	AdministratorPassword []byte
 	AdministratorContact  iamv1.NotificationContact
+	MFA                   mfaRetention
 	Tenants               []tenantRetention
 	PlatformAuditHashes   map[string]struct{}
+}
+
+// mfaRetention is a mode-0600 test-only fixture outside both the signed
+// release and installation backup. It lets the after-restart gate prove the
+// same enrolled identity with a fresh OTP instead of inferring MFA retention
+// from database rows or a still-valid bearer.
+type mfaRetention struct {
+	User             iamv1.User
+	Password         []byte
+	Seed             []byte
+	Credential       []byte
+	Contact          iamv1.NotificationContact
+	State            iamv1.AuthenticatorState
+	LastConsumedStep int64
 }
 
 type tenantRetention struct {

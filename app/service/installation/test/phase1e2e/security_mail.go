@@ -282,9 +282,32 @@ func (value *gate) verifySecurityMail(
 	if err != nil {
 		return iamv1.NotificationContact{}, err
 	}
+	verifiedContact, verifyErr := value.verifySecurityMailWithFixture(
+		ctx, bearer, password, fixture, "phase1-security-mail",
+	)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cleanupErr := fixture.close(cleanupCtx)
+	if verifyErr != nil {
+		return iamv1.NotificationContact{}, verifyErr
+	}
+	if cleanupErr != nil {
+		return iamv1.NotificationContact{}, fail("security-mail-fixture-cleanup")
+	}
+	return verifiedContact, nil
+}
+
+func (value *gate) verifySecurityMailWithFixture(
+	ctx context.Context,
+	bearer, password []byte,
+	fixture *securityMailFixture,
+	requestPrefix string,
+) (iamv1.NotificationContact, error) {
 	var verifiedContact iamv1.NotificationContact
 	verifyErr := func() error {
-		verification, err := value.edge.startNotificationContactVerification(ctx, bearer, password)
+		verification, err := value.edge.startNotificationContactVerification(
+			ctx, bearer, password, requestPrefix+"-contact",
+		)
 		if err != nil {
 			return fail("security-mail-verification-start")
 		}
@@ -315,7 +338,9 @@ func (value *gate) verifySecurityMail(
 		clear(body)
 		defer clear(code)
 		value.edge.addForbidden(code)
-		completed, err := value.edge.confirmNotificationContactVerification(ctx, bearer, code, verification.ID)
+		completed, err := value.edge.confirmNotificationContactVerification(
+			ctx, bearer, code, verification.ID, requestPrefix+"-confirm",
+		)
 		if err != nil || completed.AccountID != verification.AccountID || completed.UserID != verification.UserID {
 			return fail("security-mail-verification-confirm")
 		}
@@ -337,14 +362,8 @@ func (value *gate) verifySecurityMail(
 		clear(notice)
 		return nil
 	}()
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	cleanupErr := fixture.close(cleanupCtx)
 	if verifyErr != nil {
 		return iamv1.NotificationContact{}, verifyErr
-	}
-	if cleanupErr != nil {
-		return iamv1.NotificationContact{}, fail("security-mail-fixture-cleanup")
 	}
 	return verifiedContact, nil
 }

@@ -252,7 +252,7 @@ revision-7 release. Focused contract, lifecycle, journal, local-machine,
 topology and release-build tests pass, including configuration substitution and
 cross-installation attacks.
 
-The exact signed source `823a665e8d24b21c180134ab7893dc189d55599d`
+The exact signed product source `823a665e8d24b21c180134ab7893dc189d55599d`
 assembled fresh revision-7 A/B releases and passed the full lifecycle in a new
 network-none Docker 27.5.1 classic-image-store engine limited to 2 CPUs, 4 GiB
 memory and 768 PIDs. The final 362.63-second gate proved real restricted PostgreSQL
@@ -273,6 +273,24 @@ verified. Missing or malformed retained contact state fails closed.
 The fixture container and image were removed by the gate. Restarting only that
 task-owned outer engine followed by the read-only retained-state/status/verify/
 support gate re-read the same contact and passed in 16.88 seconds.
+
+The current `phase1e2e` candidate reused those exact authenticated A/B bits and
+extended the same owner with a real MFA consumer rather than changing the
+release profile. A normal User verified its own notification address, bound a
+TOTP factor from one-time provisioning, observed the old Session rejected,
+waited for a fresh 30-second step, completed password plus TOTP login, and
+received a separate `AUTHENTICATOR_BOUND` message through the restricted
+dispatcher and Postfix/Maildir fixture. The 350.46-second lifecycle retained
+the exact User, contact, factor state and MFA Session across failed-upgrade
+rollback, B upgrade, explicit rollback and selected-backup recovery. After
+restarting only the exact task-owned outer engine, a new password plus fresh
+TOTP login and logout passed together with the retained-state/status/verify/
+support checks in 16.53 seconds. Test-only seed and Session material remained
+in a mode-0600 fixture outside both the signed bundle and installation backup,
+were included in the support leakage deny-list, and were not printed. This is
+local candidate evidence until its exact source passes independent CI; it does
+not admit a new release profile, cross-profile transition or production SMTP
+provider.
 
 The fixture archive was authenticated as
 `sha256:68960426f3d59e6a8732485cd13521b6618bc81b1abf46a6a057e1e4b6b29612`

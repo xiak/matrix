@@ -132,10 +132,16 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	value.retainedIAM.AdministratorContact = contact
+	mfa, err := value.verifySignedMFA(ctx, bearer, state.InstallationID)
+	if err != nil {
+		return err
+	}
+	value.retainedIAM.MFA = mfa
 	if err := value.persistTenantRetention(); err != nil {
 		return err
 	}
 	emit("security-mail-contact-verification")
+	emit("signed-mfa-binding-login-and-security-notice")
 
 	secret, secretDigest, err := value.provisionSecret()
 	if err != nil {
@@ -478,6 +484,10 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if err := value.assertTenantRetention(ctx, true); err != nil {
 		return err
 	}
+	if err := value.assertMFARetention(ctx, true); err != nil {
+		return err
+	}
+	emit("restart-retained-mfa-fresh-login")
 	if err := value.restorePausedTenant(ctx); err != nil {
 		return err
 	}
@@ -652,7 +662,7 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 func (value *gate) persistTenantRetention() error {
 	if value.retainedIAM == nil ||
 		iamv1.ValidateNotificationContact(value.retainedIAM.AdministratorContact) != nil ||
-		value.retainedIAM.AdministratorContact.State != "VERIFIED" {
+		value.retainedIAM.AdministratorContact.State != "VERIFIED" || !validMFARetention(value.retainedIAM.MFA) {
 		return fail("tenant-retention-contact")
 	}
 	encoded, err := json.Marshal(value.retainedIAM)
@@ -685,11 +695,12 @@ func (value *gate) readTenantRetention(installationID string) error {
 	defer clear(content)
 	var retained iamRetention
 	if decodeOne(content, &retained) != nil || retained.InstallationID != installationID || len(retained.Tenants) != 2 || len(retained.AdministratorPassword) == 0 ||
-		iamv1.ValidateNotificationContact(retained.AdministratorContact) != nil || retained.AdministratorContact.State != "VERIFIED" {
+		iamv1.ValidateNotificationContact(retained.AdministratorContact) != nil || retained.AdministratorContact.State != "VERIFIED" ||
+		!validMFARetention(retained.MFA) {
 		return fail("tenant-retention-fixture-identity")
 	}
 	value.retainedIAM = &retained
-	value.edge.addForbidden(retained.AdministratorPassword)
+	value.edge.addForbidden(retained.AdministratorPassword, retained.MFA.Password, retained.MFA.Seed, retained.MFA.Credential)
 	for _, tenant := range retained.Tenants {
 		value.edge.addForbidden(tenant.InitialPassword, tenant.PrimaryPassword, tenant.ChildPassword, tenant.RecoveryPassword,
 			tenant.FinalPrimaryPassword, tenant.OldChildCredential, tenant.OldPrimaryCredential, tenant.PreviousPrimaryPassword,
@@ -714,6 +725,9 @@ func (value *gate) assertTenantRetention(ctx context.Context, requireContact boo
 		contact, err := value.edge.notificationContact(ctx, operator)
 		if err != nil || !sameNotificationContact(contact, value.retainedIAM.AdministratorContact) {
 			return fail("tenant-retained-notification-contact")
+		}
+		if err := value.assertMFARetention(ctx, false); err != nil {
+			return err
 		}
 	}
 	if err := value.assertPlatformAuditRetention(ctx, operator); err != nil {
@@ -1143,13 +1157,17 @@ func (value *gate) pathLeakage() [][]byte {
 		[]byte(value.config.trustKey), []byte(value.config.securityMail),
 	}
 	if value.retainedIAM != nil {
-		result = append(result, value.retainedIAM.AdministratorPassword)
+		result = append(result, value.retainedIAM.AdministratorPassword, value.retainedIAM.MFA.Password,
+			value.retainedIAM.MFA.Seed, value.retainedIAM.MFA.Credential)
 		for _, tenant := range value.retainedIAM.Tenants {
 			result = append(result, tenant.InitialPassword, tenant.PrimaryPassword, tenant.ChildPassword,
 				tenant.RecoveryPassword, tenant.FinalPrimaryPassword, tenant.OldPrimaryCredential, tenant.OldChildCredential,
 				tenant.PreviousPrimaryPassword, tenant.TemporaryPrimaryCredential, tenant.TemporaryChildCredential, tenant.RetainedPrimaryCredential,
 				[]byte(string(tenant.Account.ID)+"-private-value"))
 		}
+	}
+	if value.edge != nil {
+		result = append(result, value.edge.forbidden...)
 	}
 	return append(result, value.sensitive...)
 }

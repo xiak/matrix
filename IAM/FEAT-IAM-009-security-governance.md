@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话管理、S3a共享密码尝试、S2分项及S3b密码规则/历史与管理员重置完成查询已有固定实现和真实证据。S3c后端累计固定`b9483f82`的[Verification36532338140](https://github.com/xiak/matrix/actions/runs/36532338140)已核对精确SHA、completed/success，13项全部通过；实际一天观察的固定`87e1c143`及[Verification36545493632](https://github.com/xiak/matrix/actions/runs/36545493632)也已核对精确SHA、completed/success，13项全部通过，但它只证明截止前准备和现有回归，截止后门禁尚未发生。Session idle源码候选已完成API/SQL、双副本、真实最低五分钟、固定前驱和五进程本地门禁，独立CI、LIVE UI及发布组合未完成。S4a账号安全报告后端固定`57cb28d7`已推送，完成公开契约、同事务快照、受限持久化、HTTP、真实PG18纵向门禁、唯一固定前驱和独立多进程本地门禁；后继已在原owner补真实双向设置竞争、Excel打开重存及独立PostgreSQL七天到期清理门禁。固定`67a2a19c`的IAM61/Audit31/PaaS3+r6签名A/B已在原`phase1e2e` owner完成报告receipt、正文、CSV与Audit事实的安装、升级、回滚、选定备份恢复及任务自有引擎重启门禁；精确源码独立CI和LIVE UI仍未完成，因此S4a尚未标记最终验收。S4其余诊断/治理、资格变化的旧备份恢复及009完整发布仍未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性，签名安装及通知/恢复组合由对应owner另验。
+- 状态：S1本人会话管理、S3a共享密码尝试、S2分项及S3b密码规则/历史与管理员重置完成查询已有固定实现和真实证据。S2的当前签名安装候选已在真实邮箱前置后完成TOTP绑定、旧会话撤销、MFA登录、安全通知、A/B升级/回滚/备份恢复及任务自有引擎重启后的新鲜MFA登录；精确源码独立CI和LIVE UI仍未完成，因此S2及本FEAT尚未最终验收。S3c后端累计固定`b9483f82`的[Verification36532338140](https://github.com/xiak/matrix/actions/runs/36532338140)已核对精确SHA、completed/success，13项全部通过；实际一天观察的固定`87e1c143`及[Verification36545493632](https://github.com/xiak/matrix/actions/runs/36545493632)也已核对精确SHA、completed/success，13项全部通过，但它只证明截止前准备和现有回归，截止后门禁尚未发生。Session idle源码候选已完成API/SQL、双副本、真实最低五分钟、固定前驱和五进程本地门禁，独立CI、LIVE UI及发布组合未完成。S4a账号安全报告后端固定`57cb28d7`已推送，完成公开契约、同事务快照、受限持久化、HTTP、真实PG18纵向门禁、唯一固定前驱和独立多进程本地门禁；后继已在原owner补真实双向设置竞争、Excel打开重存及独立PostgreSQL七天到期清理门禁。固定`67a2a19c`的IAM61/Audit31/PaaS3+r6签名A/B已在原`phase1e2e` owner完成报告receipt、正文、CSV与Audit事实的安装、升级、回滚、选定备份恢复及任务自有引擎重启门禁；精确源码独立CI和LIVE UI仍未完成，因此S4a尚未标记最终验收。S4其余诊断/治理、资格变化的旧备份恢复及009完整发布仍未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -163,7 +163,7 @@ S1仅在本分支实施，release contractRevision不提前分配。不变更Pha
 
 标准OTP构造采用固定`github.com/pquerna/otp v1.5.0`（上游`5971b1ef1d6652fec2caed37f11e5cacd9249f78`），只调用`hotp.ValidateCustom`的固定SHA1/六位/十进制分支；删除本地HMAC组装、动态截断和数字生成实现，不保留双实现。Go标准库仍是上游HMAC的底层原语；库不负责MATRIX的密钥、认证挑战、共享预算、事务、通知或恢复。原Secret与canonical Base32/ASCII校验先于上游，拒绝大小写归一化、空白裁剪和宽松padding。只对数据库当前时刻的有界三个候选counter求值，检查全部匹配与已消费水位，返回最高未消费匹配；不用本机时钟的布尔TOTP捷径，不把返回true解释为已原子消费。
 
-架构门禁只允许IAM authority导入经过复核的`otp`与`otp/hotp`，不为其他外部SDK、Audit域或API开放依赖。模块间接带入barcode/QR代码，但本片不调用其URI/图片/Key对象，不将其秘密类型暴露为公开契约；独立向量仍是测试预期，不改为由被测库生成答案。版本与模块checksum固定在go.mod/go.sum，沿现有依赖更新机制维护；采用开源库不是安全审计或“最安全”证明。该纯算法替换不变更SQL、API、材料格式或发布profile，也不开放MFA登录。
+生产架构门禁只允许IAM authority导入经过复核的`otp`与`otp/hotp`，不为其他业务上下文、Audit域或API开放依赖。签名生命周期门禁使用仓库`test/totpauthenticator`中唯一的软件认证器客户端；它只根据一次性provisioning seed和当前时刻生成标准码，只能由installation的`phase1e2e`消费，不能取得Matrix身份、Session、权限或进入发布镜像。这样既不在installation复制HMAC实现，也不把测试客户端变成生产OTP owner。模块间接带入barcode/QR代码，但本片不调用其URI/图片/Key对象，不将其秘密类型暴露为公开契约；独立向量仍是测试预期，不改为由被测库生成答案。版本与模块checksum固定在go.mod/go.sum，沿现有依赖更新机制维护；采用开源库不是安全审计或“最安全”证明。该纯算法替换不变更SQL、API、材料格式或发布profile，也不开放额外MFA入口。
 
 替换在已推送`07aa5062`之后进行。本地固定参数/RFC4226及6238/独立边界和相邻步碰撞回归通过race，严格输入20秒/2-worker fuzz通过；库的宽松空白/大小写行为没有改变MATRIX输入边界。Go1.26.7进程级工具链完成全仓默认race/architecture、vet、模块校验、122文件API重新生成集合/哈希一致性及Linux amd64构建，未改全局Go。`govulncheck v1.8.0`对实际IAM入口报告0已知可达、0已导入package告警，3项仅依赖module级未调用；这是当次静态分析，不是无漏洞证明。原本机Go1.26.3对同入口报告7项标准库可达公告，不能据纯OTP包扫描无告警掩盖；构建工具链差异已同步安装owner，具体签名包仍须核对自身工具链和验收。
 
@@ -923,6 +923,8 @@ TOTP最后额度竞争增量继续归同一个三库门禁：在上述真实恢�
 - 绑定/替换/恢复与change/reset/logout、User/Account停用、平台附件写入双向竞争；旧单因子Session不升级、旧Role来源关闭、独立AccessKey不被虚假MFA事实放行。因子缺失/损坏/代际未知失败关闭，不按时间猜测认证强度。
 - 实际受限PG登录、RLS/函数越权、种子跨安装/主体互换、仅IAM材料挂载与日志/审计/支持输出秘密扫描；恢复码单向存储、一次性返回/消费、批次更换和备份回退攻击。
 - UX/UI owner完成真实绑定、登录挑战、换码等待、丢失回包、合法恢复和权限拒绝流程；不通过假OTP服务、空页面或截图代替运行。原密码/Session/Role/K2历史和canonical回归保留。
+
+当前工作树在固定签名产品源码`823a665e8d24b21c180134ab7893dc189d55599d`的`61/31/3+r7` A/B上扩展原`phase1e2e` owner，并在新的本任务Docker 27.5.1经典镜像存储、外层`network=none`、2CPU/4GiB/Pids768环境中完成350.46秒全生命周期。真实普通USER正常改密并验证自己的通知地址，随后从一次性provisioning取得seed，由上述测试认证器提交真实六位TOTP；确认原子绑定因子并返回十条一次性恢复码，旧Session立即401，等待下一个真实30秒时间步后密码登录只返回LOGIN/TOTP challenge，消费新码才取得`PASSWORD_TOTP` Session。受限dispatcher向实际Postfix/Maildir另投递`AUTHENTICATOR_BOUND`通知，正文不含seed、OTP、恢复码、密码或Session。该MFA身份的精确USER、联系人、因子状态、保留Session和测试私有seed在失败升级自动回退、B升级、显式平台回滚及选定备份恢复后逐次核对；只有mode-0600、位于安装/备份外的测试保留夹具持有跨门禁材料，support扫描继续禁止这些值，包括一次性恢复码和实际OTP。只重启已核对ID/标签的本任务外层引擎后，旧MFA Session仍能读取原状态，另一次等待新鲜时间步的完整密码+TOTP登录及logout在16.53秒门禁中通过。该结果不证明LIVE浏览器、真实硬件认证器、任意SMTP供应商、跨profile兼容或最终独立CI；后者完成前保持候选。
 
 #### 验收矩阵、分片与未决交付
 
