@@ -6,8 +6,8 @@
 - Updated: 2026-10-03
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Source/embed milestone pending push: `d4d36fecf`
-- Documentation milestone pending push: `c52121d15`
+- Pushed source/embed milestone: `d4d36fecf`
+- Pushed documentation milestone: `c52121d15`
 
 ## Authoritative route
 
