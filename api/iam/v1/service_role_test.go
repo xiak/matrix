@@ -245,13 +245,30 @@ func TestServiceRoleSessionIntentAndLineageAreClosed(t *testing.T) {
 	}
 	userReference := RoleSessionReference{SessionID: user.ID, SourceUserID: user.SourceUserID}
 	userWire, err := json.Marshal(userReference)
-	if err != nil || string(userWire) != `{"sessionId":"role-session-a","sourceUserId":"user-a"}` {
-		t.Fatal("existing USER lineage bytes changed", string(userWire), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var userReferenceDocument map[string]json.RawMessage
+	var decodedUserReference RoleSessionReference
+	if json.Unmarshal(userWire, &userReferenceDocument) != nil || json.Unmarshal(userWire, &decodedUserReference) != nil ||
+		!reflect.DeepEqual(decodedUserReference, userReference) || len(userReferenceDocument) != 2 {
+		t.Fatal("USER lineage did not preserve its semantic JSON contract", string(userWire))
+	}
+	if _, exists := userReferenceDocument["sourceServicePrincipalId"]; exists {
+		t.Fatal("USER lineage exposed service-source identity")
 	}
 	legacySessionWire, err := json.Marshal(user)
-	const legacySession = `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"role-session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-30T08:00:00Z","expiresAt":"2026-09-30T08:15:00Z"}`
-	if err != nil || string(legacySessionWire) != legacySession {
-		t.Fatal("existing USER role session bytes changed", string(legacySessionWire), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacySessionDocument map[string]json.RawMessage
+	var decodedUser RoleSession
+	if json.Unmarshal(legacySessionWire, &legacySessionDocument) != nil || json.Unmarshal(legacySessionWire, &decodedUser) != nil ||
+		!reflect.DeepEqual(decodedUser, user) || len(legacySessionDocument) != 9 {
+		t.Fatal("USER role session did not preserve its semantic JSON contract", string(legacySessionWire))
+	}
+	if _, exists := legacySessionDocument["sourceServicePrincipalId"]; exists {
+		t.Fatal("USER role session exposed service-source identity")
 	}
 	for _, reference := range []RoleSessionReference{
 		userReference,

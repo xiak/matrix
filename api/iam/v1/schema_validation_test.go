@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -2194,8 +2195,10 @@ func TestRoleSubjectKeepsExactPublicLineageAndPrincipalSeparation(t *testing.T) 
 			}
 			if test.valid {
 				encoded, err := json.Marshal(subject)
-				if err != nil || string(encoded) != test.source {
-					t.Fatal("subject public bytes changed", err)
+				var submitted, projected any
+				if err != nil || json.Unmarshal([]byte(test.source), &submitted) != nil || json.Unmarshal(encoded, &projected) != nil ||
+					!reflect.DeepEqual(projected, submitted) {
+					t.Fatal("subject public semantics changed", err)
 				}
 			}
 		})

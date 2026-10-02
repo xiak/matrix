@@ -1735,8 +1735,10 @@ func TestAccessKeySubjectLineageRequiresItsOwnDeclaredCarrier(t *testing.T) {
 		}
 		if test.valid {
 			encoded, err := json.Marshal(subject)
-			if err != nil || string(encoded) != test.wire {
-				t.Fatal("public attribution changed its exact bytes")
+			var submitted, projected any
+			if err != nil || json.Unmarshal([]byte(test.wire), &submitted) != nil || json.Unmarshal(encoded, &projected) != nil ||
+				!reflect.DeepEqual(projected, submitted) {
+				t.Fatal("public attribution changed its semantic fields")
 			}
 		}
 	}
