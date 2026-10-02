@@ -702,16 +702,21 @@ Resource-based policies, ACLs, cross-account delegation and provider-specific
 exceptions are outside this preview evaluator and must not be labelled
 compatible or inferred from the simple identity-policy rule.
 
-The resource-access preview is a diagnostic, not a login or authorization
-switch. The administrator selects a synthetic user/role, action, resource and
-request context; the result shows allow/explicit-deny/implicit-deny or an
-unsupported/indeterminate reason, matched statement and revision, direct or
-group origin, trust/boundary outcome, and what change would alter the result.
-It performs no business mutation and never replaces the current session.
-Unknown or cross-tenant resources are rejected before wildcard evaluation.
-Future live enforcement must occur in IAM and every owning backend's read,
-list and mutation path; hiding a button, a route guard or this simulator is
-not a security boundary. FEAT-006's closed live role/action contract remains
+The isolated current-access diagnosis is an explanation preview, not a login,
+authorization switch, `Decision`, permit or proof that a resource exists. It
+accepts only predefined synthetic scenarios; the browser cannot nominate an
+arbitrary real subject, claim a product resource or manufacture trusted
+network/time context. Fixed identity, Action, resource and provenance facts
+render before the operator requests an explanation. The result then separates
+identity-policy evidence, an optional permission boundary, SessionPolicy and
+the unobserved product-execution boundary. Even an `ALLOWED` sample cannot
+authorize an operation, be cached as authority or replace the current session.
+Unknown or cross-tenant fixture resources are rejected before wildcard
+evaluation. A future live diagnosis must be mediated by the owning product
+service, carry its real request/resource context to the single IAM PDP and
+remain non-authoritative. Enforcement still belongs to every owning backend's
+read, list and mutation path; a hidden button, route guard or browser diagnosis
+is not a security boundary. FEAT-006's closed live role/action contract remains
 unchanged by this UX work.
 
 #### Fixed IAM console contract
@@ -729,55 +734,23 @@ future fixed-contract integration; its one-click DEV entry remains available
 for ongoing UX review. Backend candidates without a fixed, accepted revision
 are not integration evidence and never cause automatic fallback to MOCK.
 
-The independent access-explanation slice uses a coherent synthetic
-set covering an ungranted console user, duplicate direct/group grants,
-resource-path versus resource-tag rules, a matching explicit deny, boundary
-intersection, immutable policy revisions and a same-account assumable role.
-Existing simple examples remain valid; added examples use registered actions
-and synthetic resources, not copied cloud inventory or a fake large catalog.
-Example requests only fill diagnostic inputs: they neither alter associations
-nor supply a canned verdict. Results always resolve current workspace facts.
+The independent explanation slice uses a coherent six-scenario set covering
+an ungranted console User, duplicate direct/group sources, resource-path and
+resource-tag conditions, a matching explicit deny and permission-boundary
+intersection. Examples select complete input fixtures; they never alter
+associations or carry a canned result. Each run resolves the current isolated
+workspace snapshot. Changing the scenario removes the prior explanation so a
+stale result cannot be displayed beside new evidence.
 
-The simulator keeps a compatible operation when changing resource and clears
-the old result when any request input or workspace truth changes. Initial
-selection comes from the supplied diagnostic inventory, not a service name
-hardcoded in the renderer. It distinguishes policy decision from account,
-credential and real-session availability; checks not performed are explicitly
-not evaluated. Decisive evidence precedes optional nonmatching details, with
-links to the exact policy and group. Local MOCK role expiry/revocation must
-remain explicit and cannot silently fall back to the original user identity.
-Acceptance adds executable fixture cases, input-retention and scope-label
-interaction tests, linked evidence, compact layout and theme verification.
-
-Local UX verification on 2026-09-11: all six seeded request cases resolve from
-the current workspace; removing one of two grant sources, changing a default
-policy revision, a nonmatching deny and a restrictive boundary produce their
-documented distinct results. The user permission table labels these relations
-as grant sources. The scenario picker is limited to user diagnostics so it
-cannot unexpectedly replace a selected role-session identity. Its explanation
-is associated with the labelled control for assistive technology.
-
-The browser on the existing DEV port 4317 verified one-click MOCK entry,
-duplicate-source evidence, resource-tag authorization, explicit denial,
-English/light and Chinese/dark presentation. At 360px, content width remains
-360px and the 640px evidence table scrolls within its own region. An explicit
-same-account MOCK session for the log-review role permitted log search but
-rejected a staging deployment that its caller could perform; revocation then
-rejected that session's diagnostic request. No real credentials, cloud
-mutations, scan flow or payment was used. The temporary session was revoked.
-
-Verification passed: 465 frontend tests with two workers, the subsequent
-five affected interaction regressions, three static-export normalization
-tests, type checking, lint, architecture, 228 theme contrast pairs, production
-static generation, and the existing Go UI-host tests/vet. The initial
-default concurrent test run had five-second harness timeouts; limiting
-workers resolved them without raising timeouts. This evidence verifies the
-local preview slice, not the pending fixed-contract IAM integration or an
-accepted release. The production export was synchronized into the existing Go
-embed owner; a clean follow-up build matched all 213 generated files, and the
-Go UI-host tests/vet passed against that boundary. Product-directory
-provenance and the new backend attachment model still require their own
-aligned integration gate.
+The request region renders stable facts and their provenance immediately.
+Only the local result region appears after the explicit action and receives
+focus. It exposes the sample `ALLOWED`, `DENIED`, `INDETERMINATE` or
+`NOT_EVALUATED` state, a stable high-level reason, statement/source evidence
+and four separate limiting layers. Resource existence, resource policies,
+product PEP, account/credential state and business execution always remain
+`NOT_EVALUATED`. The LIVE route has no local evaluator, no fallback and no
+submit action before a fixed accepted backend contract exists; it renders an
+explicit `LIVE · NOT_CONNECTED` state instead.
 
 Overview shortcuts identify the exact referenced policy. High-privilege review
 uses allowed permission-management actions from the closed catalog, including
@@ -1722,8 +1695,8 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-Verified through 2026-10-02 against the current all-service navigation,
-IAM policy-version authoring, group relationship refresh and authorization hierarchy, isolated first-enrollment,
+Verified through 2026-10-03 against the current all-service navigation,
+IAM policy-version authoring, current-access diagnosis, group relationship refresh and authorization hierarchy, isolated first-enrollment,
 account-rule and session-expiry previews.
 
 | Gate | Evidence |
@@ -1732,6 +1705,7 @@ account-rule and session-expiry previews.
 | IAM customer policy creation | The LIVE content-area author reuses the JSON and catalog-driven visual editor, requires an explicit Action and exact instance target by default, supports compatible multi-Action statements, then separates review, creation and attachment. The strict response parser accepts only the current Account's matching CUSTOMER/TENANT Policy and default document; uncertain transport/protocol outcomes retain the original request across IAM navigation, with byte-equivalent retry and explicit acknowledgement. The four-method MOCK author remains isolated; the same editor has a separate zero-write preview route. The current UX source passed a real IAM browser visual creation with an exact product Action and resource in an isolated synthetic fixture; cross-login unknown-outcome recovery and real attachment to a principal remain unaccepted. Contract and UX evidence belong to [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#live-自定义策略新建的开发验收证据). |
 | Compact policy editor modes | At a 360px viewport the four MOCK document modes now form two visible rows instead of clipping the final mode behind horizontal scrolling. The Product features mode was opened through its visible tab; the tab list and document both measured 360px without horizontal overflow. The existing statement picker and sticky footer did not overlap during top/mid/end scrolling. Desktop tabs and JSON draft ownership are unchanged. This is DEV visual evidence, not LIVE policy or IAM-process acceptance. |
 | IAM policy diagnostic hierarchy | The isolated four-method MOCK policy author now separates security warnings, blocking errors, general warnings and optional suggestions instead of presenting every broad-permission pattern as one generic warning. Parse/contract errors retain first priority and block review; permission-management Actions, Action wildcards and unrestricted write or permission scope require explicit security review without claiming a final verdict about real resource exposure. Every group explains its effect and retains exact JSON-path focus. At `390 × 844`, the four diagnostic destinations form a visible 2 × 2 grid instead of hiding the final tab behind horizontal scroll; viewport, document and body were all 390px, with no Dialog or browser warning/error. The focused 74-case run and complete 54-file/884-case frontend suite passed with three normalization tests, type/lint/architecture/228-pair style gates, 41-page export, 228-file embed equality and repository Go test/vet. Source and synchronized embed are pushed at `a8f6dbbb`; this is local authoring guidance, not IAM validation, PDP execution or product-PEP exposure evidence. Exact IAM boundary ownership remains in [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#策略版本-mock-的开发验收证据). |
+| IAM current-access diagnosis preview | The new bookmarkable `access-diagnosis` route is separate from `policy-configuration`: the latter remains a zero-evaluation configuration inventory, while this isolated MOCK runs the existing local explainer only over six predefined scenarios. Stable subject, Action, resource and provenance facts render before the action; the result appears locally, receives focus and is discarded on scenario change. It shows the sample state, stable reason, statement/source evidence and separate identity-policy, boundary, SessionPolicy and product-execution layers. Every surface says that it is not a `Decision`, permit, authorization credential or resource-existence proof; real resource, network, credential and business facts remain unobserved. LIVE exposes only `LIVE · NOT_CONNECTED`, mounts no local evaluator and sends no request. Source and synchronized embed are pushed at `6347c91ab`; 195 focused translation/workspace cases and the complete 58-file/1000-case frontend suite passed with three normalization cases, type/lint/architecture/228-pair style gates, 43 static routes, 239 embedded files and full repository Go test/vet. Desktop and `390 × 844` DEV checks verified the evidence-first flow, result focus, zero page overflow and empty warning/error logs. This is UX evidence only; a future live diagnosis remains product-service mediated, uses the single IAM PDP with real context and is non-authoritative. |
 | IAM trusted-context authoring | The shared LIVE/isolated-MOCK visual policy author derives condition choices from the exact intersection of the selected Actions' Profile capabilities instead of a hard-coded condition list. It accepts the fixed PaaS revision-5 declarations for `request.source-ip` (`CALLING_SERVICE_NETWORK`, `IP`), `request.tag/environment` on `paas.application.create` (`CALLING_SERVICE_REQUEST_TAG`, `STRING`) and `resource.tag/environment` on `paas.application.read` (`CALLING_SERVICE_RESOURCE_TAG`, `STRING`). CIDR, operator, unique-value and cardinality checks fail closed; tag values are limited to 1–128 UTF-8 bytes, reject leading/trailing Unicode whitespace and control characters, and arbitrary tag keys never appear. One compact trusted-context region separates the producers: source IP comes from the calling service's trusted network boundary, request tags come from its business request, and resource tags come from the target resource's persisted state. Browser input and forwarded headers prove none of those facts and the author submits only policy syntax, never an internal authorization request or trusted fact. The resource-tag copy additionally states that a missing tag does not match, each real target must be checked again, and collection access does not imply access to every instance; the author therefore requires the selected Action's exact instance resource and never presents tag mutation as policy authoring. Review shows the exact key/operator/values. Resource-tag update/delete/CAS, arbitrary caller attributes and raw decision/debug surfaces remain unavailable. The revision-5 resource-tag candidate is isolated to MOCK until its IAM storage/authority gates are green; LIVE continues to expose only declarations returned by the strict Profile endpoint. IAM sources `e9b4989871e45a0fcd39a82327da4b124ee08ee5` and `355b12c4b67f3f88f464b055241eabf414e151b0` own the candidate semantics and fixture correction. The initial source and synchronized embed are pushed at `ccdb94c9`; wording-alignment source/embed are pushed at `d42b3b06`. The four-method preview now scopes its request-tag omission to that isolated experience and directs catalog behavior to the selected Profile instead of claiming a platform-wide limitation. The 57-file/920-case frontend suite, three normalization cases, type/lint/architecture/228-pair style gates, 42-page export, 233-file embed equality and repository Go test/vet passed. The wording follow-up independently passed the 174-case access-workspace suite, typecheck/lint, export/embed equality and UI host Go test/vet. Desktop and `430 × 900` DEV flows selected the exact Action, displayed the resource-fact boundary and completed review without a Dialog or horizontal overflow; a fresh `430 × 900` check of the aligned four-method copy kept viewport, document and body width at 430px with no Dialog. Exact backend semantics and LIVE acceptance remain owned by [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md). |
 | IAM policy catalog provenance | The shared LIVE/isolated-MOCK visual author now keeps the exact authorization-profile directory used for the current edit and shows only the product and revision that supply selected Actions. The final review labels these declarations as pending IAM validation and explains that the server revalidates its own directory, freezes the exact Action set and does not retroactively expand published versions when a Profile later grows. Product Profiles remain read-only authoring metadata: the browser cannot select or submit a Profile, digest, compilation, trusted request/resource facts or resolved Action expansion, and create/publish commands remain the authored document plus their existing concurrency/idempotency fields. After publication, the policy-version detail treats only the returned `PolicyVersion.compilation` as authoritative: a dedicated read-only provenance region shows the compilation contract and each exact product, revision and content digest, while the statement table independently distinguishes author syntax from the returned frozen Action expansion. Versions predating that contract show an explicit legacy state and are never reconstructed from the current catalog. The copy states that provenance is neither current catalog state nor an allow decision for the signed-in identity. The author exposes request- or resource-tag conditions only when the exact returned Profile declares the corresponding key, source and value type; it never infers a generic tag namespace. The 57-file/920-case frontend suite, three normalization cases, type/lint/architecture/228-pair style gates, 42-route static export, 233-file synchronized embed, and repository Go test/vet passed; focused behavior coverage verifies both fixed provenance and strict condition parsing. Desktop and compact DEV flows verified the authoring provenance block in edit and review without replacing the declaration content or introducing a Dialog. Exact publication semantics remain owned by [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#策略版本读取与变更的开发验收证据). |
 | IAM selected-Action declaration inspection | The shared LIVE/isolated-MOCK visual author now reuses the catalog's `AuthorizationActionTable` in both editing and final review. A default-collapsed content-area disclosure explains each selected Action's declared scope, resource and target shape, admitted subject and USER credential carriers, and trusted condition sources without opening a Dialog. It mounts only after an explicit request, renders at most the current ten-row page, and uses the shared `Table.Footer`; the author therefore does not mount all 128 possible selections or move stable actions while loading. The copy states that this current catalog declaration is neither the signed-in user's authorization result nor a policy compilation result, and no Profile, digest, compilation, trusted context or expanded Action set enters create/publish commands. This separation matches the capability-reference boundary documented by the [AWS Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/reference_policies_actions-resources-contextkeys.html) and [Azure role definitions](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-definitions), rather than copying either console's visual design. Resource-tag conditions appear only on Actions whose exact Profile declares a trusted resource-tag source; tag mutation remains outside policy authoring. Source and synchronized embed are pushed at `d141f6e2`; the focused 97-case IAM run and complete 57-file/920-case frontend suite passed with three normalization tests, type/lint/architecture/228-pair style gates, 42-route static export, 233-file embed equality and repository Go test/vet. Desktop edit/review and compact review verified the lazy disclosure, stacked table and no Dialog. Exact catalog and publication ownership remains in [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#权限能力目录片的开发验收证据). |
