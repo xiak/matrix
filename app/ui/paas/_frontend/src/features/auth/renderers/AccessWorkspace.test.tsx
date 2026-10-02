@@ -1463,9 +1463,9 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     const workflow = screen.getByRole("group", { name: "修改权限边界" }), panel = within(workflow);
     expect(panel.getByRole("button", { name: "返回角色详情" })).toBeTruthy();
-    await select(user, "权限边界", mode === "set" ? "ProductionLogReader" : "未设置权限边界");
+    await select(user, "权限边界", mode === "set" ? "ProductionLogReader" : "不设置权限上限 · 角色承担关闭");
     await user.click(panel.getByRole("button", { name: "审阅变更" }));
-    expect(panel.getByText(/已有的角色体验会话/)).toBeTruthy();
+    expect(panel.getByText(/已有体验会话也会失败关闭/)).toBeTruthy();
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
     await user.click(panel.getByRole("button", { name: "保存" }));
     await expectRetainedFailure(workflow);

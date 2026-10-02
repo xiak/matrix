@@ -78,6 +78,7 @@ function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
     createRestrictionReason: null,
     list: vi.fn().mockResolvedValue(directory),
     read: vi.fn().mockResolvedValue(access),
+    readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, resourceVersion: 2, policy: { policyId: "policy-role-ceiling", versionId: "v3", contentDigest: `sha256:${"c".repeat(64)}` } }),
     listTrustVersions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, items: [previousTrustVersion, access.trustVersion], nextAfter: null }),
     create: vi.fn().mockResolvedValue(role),
     listSessions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, observedAt: timestamp, items: [], nextAfter: null }),
@@ -161,6 +162,40 @@ describe("AccountLiveRoles", () => {
     expect(within(detail).getByText(previousTrustVersion.contentDigest)).toBeTruthy();
     expect(within(detail).getByText(/user-sam/)).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps role facts mounted while the mandatory permission boundary loads and treats null as closed", async () => {
+    let resolveBoundary!: (value: { accountId: string; roleId: string; resourceVersion: number; policy: null }) => void;
+    const api = client({ readPermissionBoundary: vi.fn().mockImplementation(() => new Promise((resolve) => { resolveBoundary = resolve; })) });
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    expect(await screen.findByRole("heading", { name: role.name })).toBeTruthy();
+    expect(screen.getByText(role.id)).toBeTruthy();
+    expect(screen.getByRole("status", { name: "正在读取角色权限边界" })).toBeTruthy();
+    await act(async () => { resolveBoundary({ accountId: role.accountId, roleId: role.id, resourceVersion: 2, policy: null }); });
+
+    expect(await screen.findByText("未设置权限上限 · 角色承担已关闭")).toBeTruthy();
+    expect(screen.getByText("空的角色权限边界不是无限权限；IAM 会拒绝新的角色承担。")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps a boundary read failure local and never presents it as no boundary", async () => {
+    const user = userEvent.setup();
+    const readPermissionBoundary = vi.fn()
+      .mockRejectedValueOnce(new Error("unavailable"))
+      .mockResolvedValueOnce({ accountId: role.accountId, roleId: role.id, resourceVersion: 3,
+        policy: { policyId: "policy-role-ceiling", versionId: "v3", contentDigest: `sha256:${"c".repeat(64)}` } });
+    render(<LocaleProvider><RolesHarness api={client({ readPermissionBoundary })} entityId={role.id} /></LocaleProvider>);
+
+    expect(await screen.findByText("边界状态未知")).toBeTruthy();
+    expect(screen.getByText("IAM 暂时无法确认角色权限边界；这不表示角色没有边界，也不表示可以承担。", { exact: false })).toBeTruthy();
+    expect(screen.queryByText("未配置 · 承担已关闭")).toBeNull();
+    expect(screen.getByText(role.id)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+
+    expect(await screen.findByText("policy-role-ceiling")).toBeTruthy();
+    expect(screen.getByText("策略版本 v3 · 边界修订 v3")).toBeTruthy();
+    expect(readPermissionBoundary).toHaveBeenCalledTimes(2);
   });
 
   it("keeps platform template, account consent, and workload binding visibly independent", async () => {

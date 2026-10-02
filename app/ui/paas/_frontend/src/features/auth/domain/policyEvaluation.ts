@@ -15,7 +15,7 @@ export type AccessPolicyDecision = "allow" | "explicitDeny" | "implicitDeny" | "
 export type AccessTestResult = {
   decision: AccessPolicyDecision | "invalidRequest";
   evidence: AccessTestEvidence[];
-  error?: "unknownIdentity" | "unknownResource" | "crossTenant" | "unknownAction" | "actionResourceMismatch" | "requiresRoleTrust" | "expiredSession" | "revokedSession" | "unavailableSession";
+  error?: "unknownIdentity" | "unknownResource" | "crossTenant" | "unknownAction" | "actionResourceMismatch" | "requiresRoleTrust" | "authorityRequired" | "expiredSession" | "revokedSession" | "unavailableSession";
   principalPolicyDecision?: AccessPolicyDecision;
   boundary?: { policyId: string; decision: AccessPolicyDecision };
 };
@@ -101,7 +101,7 @@ export function evaluateUserAccess(workspace: AccessWorkspace, userIds: readonly
   return evaluateResource(workspace, request, userSources(workspace, request.principalId), workspace.userBoundaries[request.principalId]);
 }
 export type RoleAssumptionRequest = { roleId: string; caller: RoleSessionCaller; at: string; sourceIp?: string };
-export type RoleAssumptionResult = { allowed: boolean; reason: "allowed" | "unknownRole" | "trustDenied" | "callerDenied"; callerDecision?: AccessTestResult };
+export type RoleAssumptionResult = { allowed: boolean; reason: "allowed" | "unknownRole" | "trustDenied" | "callerDenied" | "authorityRequired"; callerDecision?: AccessTestResult };
 export function evaluateRoleAssumption(workspace: AccessWorkspace, userIds: readonly string[], request: RoleAssumptionRequest): RoleAssumptionResult {
   const role = workspace.roles.find((entry) => entry.id === request.roleId);
   if (!role) return { allowed: false, reason: "unknownRole" };
@@ -113,6 +113,10 @@ export function evaluateRoleAssumption(workspace: AccessWorkspace, userIds: read
   // published IdP/session contract exists, so this evaluator must not turn a
   // local mapping sample into a successful role assumption.
   if (!trusted || !utcTimeValid(request.at)) return { allowed: false, reason: "trustDenied" };
+  // The fixed IAM contract treats a null Role boundary as a closed assumption
+  // state, never as an unlimited ceiling. This preview reason is intentionally
+  // coarse and does not expose or promise the backend's internal check order.
+  if (!role.boundaryPolicyId) return { allowed: false, reason: "authorityRequired" };
   if (caller.type !== "user") return { allowed: true, reason: "allowed" };
   const resource: PolicyResource = { service: "iam", tenant: workspace.accountId, region: "global", type: "role", id: role.id };
   const callerDecision = evaluatePolicies(workspace, { principalId: caller.id, action: "iam:assumeRole", resourceId: role.id, at: request.at, sourceIp: request.sourceIp }, resource, Object.fromEntries(role.tags.map((tag) => [tag.key, tag.value])), userSources(workspace, caller.id), workspace.userBoundaries[caller.id]);
@@ -125,5 +129,9 @@ export function evaluateRoleSessionAccess(workspace: AccessWorkspace, userIds: r
   const status = roleSessionStatus(workspace, session, userIds, now);
   if (status !== "active") return invalid(status === "expired" ? "expiredSession" : status === "revoked" ? "revokedSession" : "unavailableSession");
   const role = workspace.roles.find((entry) => entry.id === session.roleId)!;
+  // The preview re-evaluates current Role configuration. Removing the
+  // mandatory ceiling must fail closed instead of turning an existing sample
+  // session into an unbounded one.
+  if (!role.boundaryPolicyId) return invalid("authorityRequired");
   return evaluateResource(workspace, request, role.policyIds.map((policyId) => ({ policyId, source: "role" })), role.boundaryPolicyId);
 }

@@ -10,19 +10,19 @@ import type { AccessWorkspace } from "../domain/accessWorkspace";
 import { WorkspaceInlineForm } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
-export function BoundarySelector({ workspace, value, onChange, autoFocus = false }: { workspace: AccessWorkspace; value?: string; onChange(id: string | undefined): void; autoFocus?: boolean }) {
-  const t = useTranslations("RoleWorkspace");
-  const id = useId();
-  return <FormField id={id} label={t("boundary")} hint={t("boundaryHint")}><Select autoFocus={autoFocus} id={id} value={value ?? ""} aria-describedby={id + "-hint"} options={[{ value: "", label: t("noBoundary") }, ...workspace.policies.map((policy) => ({ value: policy.id, label: policy.name }))]} onValueChange={(id) => onChange(id || undefined)} /></FormField>;
-}
 type BoundaryOwner = "user" | "role";
+export function BoundarySelector({ owner, workspace, value, onChange, autoFocus = false }: { owner: BoundaryOwner; workspace: AccessWorkspace; value?: string; onChange(id: string | undefined): void; autoFocus?: boolean }) {
+  const t = useTranslations("RoleWorkspace"), u = useTranslations("UserBoundary");
+  const id = useId();
+  return <FormField id={id} label={t("boundary")} hint={owner === "role" ? t("boundaryHint") : u("hint")}><Select autoFocus={autoFocus} id={id} value={value ?? ""} aria-describedby={id + "-hint"} options={[{ value: "", label: owner === "role" ? t("noBoundaryClosed") : u("none") }, ...workspace.policies.map((policy) => ({ value: policy.id, label: policy.name }))]} onValueChange={(id) => onChange(id || undefined)} /></FormField>;
+}
 function BoundaryEditor({ owner, workspace, current, onSave, onClose }: { owner: BoundaryOwner; workspace: AccessWorkspace; current?: string; onSave(id: string | undefined): Promise<unknown>; onClose(): void }) {
   const t = useTranslations("RoleWorkspace"), u = useTranslations("UserBoundary"), w = useTranslations("IamWorkspace");
   const [value, setValue] = useState(current);
   const [review, setReview] = useState(false);
-  const label = (id?: string) => workspace.policies.find((policy) => policy.id === id)?.name ?? id ?? t("noBoundary");
+  const label = (id?: string) => workspace.policies.find((policy) => policy.id === id)?.name ?? id ?? (owner === "role" ? t("boundaryClosed") : u("none"));
   return <WorkspaceInlineForm title={t("editBoundary")} backLabel={owner === "user" ? u("backToUserDetails") : t("backToRoleDetails")} onClose={onClose} submitDisabled={value === current} submitLabel={review ? w("save") : t("reviewChange")} onSubmit={async () => { if (!review) { setReview(true); return false; } return Boolean(await onSave(value)); }}>
-    {review ? <><Alert status="warning">{owner === "user" ? u("changeHint") : t("boundaryChangeHint")}</Alert><dl className={styles.facts}><div><dt>{t("before")}</dt><dd>{label(current)}</dd></div><div><dt>{t("after")}</dt><dd>{label(value)}</dd></div></dl><Button variant="ghost" onClick={() => setReview(false)}>{t("backToSelection")}</Button></> : <BoundarySelector workspace={workspace} value={value} onChange={setValue} />}
+    {review ? <><Alert status="warning">{owner === "user" ? u("changeHint") : t("boundaryChangeHint")}</Alert><dl className={styles.facts}><div><dt>{t("before")}</dt><dd>{label(current)}</dd></div><div><dt>{t("after")}</dt><dd>{label(value)}</dd></div></dl><Button variant="ghost" onClick={() => setReview(false)}>{t("backToSelection")}</Button></> : <BoundarySelector owner={owner} workspace={workspace} value={value} onChange={setValue} />}
   </WorkspaceInlineForm>;
 }
 export function PermissionBoundary({ owner, workspace, value, onSave, onOpen }: { owner: BoundaryOwner; workspace: AccessWorkspace; value?: string; onSave(id: string | undefined): Promise<unknown>; onOpen(id: string): void }) {
@@ -34,7 +34,7 @@ export function PermissionBoundary({ owner, workspace, value, onSave, onOpen }: 
     previousEditing.current = editing;
   }, [editing]);
   if (editing) return <BoundaryEditor owner={owner} workspace={workspace} current={value} onSave={onSave} onClose={() => setEditing(false)} />;
-  return <section className={styles.stack} aria-label={t("boundary")}><div className={styles.actionHeader}><h3>{t("boundary")}</h3><Button ref={editTrigger} variant="ghost" onClick={() => setEditing(true)}>{t("editBoundary")}</Button></div><p className={styles.note}>{owner === "user" ? u("hint") : t("boundaryHint")}</p>{value ? <div><button className={styles.userLink} onClick={() => onOpen(value)}>{workspace.policies.find((policy) => policy.id === value)?.name ?? value}</button></div> : <p className={styles.note}>{t("noBoundary")}</p>}</section>;
+  return <section className={styles.stack} aria-label={t("boundary")}><div className={styles.actionHeader}><h3>{t("boundary")}</h3><Button ref={editTrigger} variant="ghost" onClick={() => setEditing(true)}>{t("editBoundary")}</Button></div><p className={styles.note}>{owner === "user" ? u("hint") : t("boundaryHint")}</p>{value ? <div><button className={styles.userLink} onClick={() => onOpen(value)}>{workspace.policies.find((policy) => policy.id === value)?.name ?? value}</button></div> : <p className={styles.note}>{owner === "role" ? t("boundaryClosedHint") : u("none")}</p>}</section>;
 }
 
 export function UserBoundarySummary({ boundary }: { boundary: UserPermissionBoundary }) {

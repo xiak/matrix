@@ -1,4 +1,4 @@
-import type { CapabilityRestriction } from "./accounts";
+import type { CapabilityRestriction, PolicyVersionReference } from "./accounts";
 import type { ServicePrincipalReference } from "./serviceAuthorization";
 
 export type RoleStatus = "ACTIVE" | "DISABLED";
@@ -68,6 +68,16 @@ export type RoleTrustVersionDirectory = {
   roleId: string;
   items: RoleTrustVersion[];
   nextAfter: string | null;
+};
+
+// A role boundary is a mandatory ceiling for assumption. Unlike a user
+// boundary, an explicit null policy closes assumption instead of meaning an
+// unlimited ceiling.
+export type RolePermissionBoundary = {
+  accountId: string;
+  roleId: string;
+  resourceVersion: number;
+  policy: PolicyVersionReference | null;
 };
 
 export type CreateRoleCommand = {

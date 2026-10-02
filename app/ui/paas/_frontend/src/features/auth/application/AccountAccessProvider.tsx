@@ -32,7 +32,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
-import type { CreateRoleCommand, Role, RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory } from "../domain/roles";
+import type { CreateRoleCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory } from "../domain/roles";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
@@ -206,6 +206,7 @@ export type RoleAccessClient = {
   createRestrictionReason: CapabilityRestriction | null;
   list(after?: string): Promise<RoleDirectory>;
   read(roleId: string): Promise<RoleAccess>;
+  readPermissionBoundary(roleId: string): Promise<RolePermissionBoundary>;
   listTrustVersions(roleId: string, after?: string): Promise<RoleTrustVersionDirectory>;
   create(command: CreateRoleCommand): Promise<Role>;
   listSessions(roleId: string, filter: RoleSessionFilter, after?: string): Promise<RoleSessionDirectory>;
@@ -1119,6 +1120,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       createRestrictionReason: scene.createRolesRestrictionReason,
       list: (after) => scoped(roleRepository.list(credential, accountId, after)),
       read: (roleId) => scoped(roleRepository.read(credential, accountId, roleId)),
+      readPermissionBoundary: (roleId) => scoped(roleRepository.readPermissionBoundary(credential, accountId, roleId)),
       listTrustVersions: (roleId, after) => scoped(roleRepository.listTrustVersions(credential, accountId, roleId, after)),
       create: (command) => protectedMutation(() => scoped(roleRepository.create(credential, accountId, command))),
       listSessions: (roleId, filter, after) => scoped(roleRepository.listSessions(credential, accountId, roleId, filter, after)),

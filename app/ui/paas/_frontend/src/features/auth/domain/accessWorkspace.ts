@@ -423,7 +423,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       const role = exists(state.roles, command.roleId);
       if (!Number.isFinite(Date.parse(context.at)) || !Number.isInteger(command.sessionMinutes) || command.sessionMinutes < 15 || command.sessionMinutes > role.sessionMinutes) invalid();
       const result = evaluateRoleAssumption(state, context.userIds, { roleId: role.id, caller: command.caller, sourceIp: command.sourceIp, at: context.at });
-      if (!result.allowed) throw new AccessWorkspaceError(result.reason === "callerDenied" ? "callerDenied" : "trustDenied");
+      if (!result.allowed) throw new AccessWorkspaceError(result.reason === "callerDenied" ? "callerDenied" : result.reason === "authorityRequired" ? "authorityRequired" : "trustDenied");
       if (state.roleSessions.filter((session) => !session.revokedAt && Date.parse(session.expiresAt) > Date.parse(context.at)).length >= 100) throw new AccessWorkspaceError("sessionLimit");
       state.roleSessions.push({ id, roleId: role.id, caller: structuredClone(command.caller), createdAt, expiresAt: new Date(Date.parse(context.at) + command.sessionMinutes * 60000).toISOString() });
       target = role.name; break;

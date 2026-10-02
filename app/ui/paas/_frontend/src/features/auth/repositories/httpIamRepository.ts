@@ -67,7 +67,7 @@ import type {
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
-import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
+import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
 import { sourceCidrValid } from "../domain/policyLanguage";
 
 function accountRecord(value: unknown): Record<string, unknown> {
@@ -971,6 +971,23 @@ async function parseRoleTrustVersionDirectory(value: unknown, accountId: string,
   const nextAfter = orderedDirectoryPage(items.map((item) => item.id), wire.nextAfter, after);
   if (new TextEncoder().encode(JSON.stringify(wire)).length > 4 * 1024 * 1024) throw new Error("INVALID_IAM_RESPONSE");
   return { accountId, roleId, items, nextAfter };
+}
+
+function parseRolePermissionBoundary(value: unknown, accountId: string, roleId: string): RolePermissionBoundary {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "roleId", "resourceVersion", "policy"]);
+  requireAccountKind(wire, "RolePermissionBoundary");
+  if (accountIdentifier(wire.accountId) !== accountId || accountIdentifier(wire.roleId) !== roleId) throw new Error("INVALID_IAM_RESPONSE");
+  const resourceVersion = accountVersion(wire.resourceVersion);
+  if (wire.policy === null) return { accountId, roleId, resourceVersion, policy: null };
+  const policy = accountRecord(wire.policy);
+  exactKeys(policy, ["policyId", "versionId", "contentDigest"]);
+  if (typeof policy.contentDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(policy.contentDigest)) throw new Error("INVALID_IAM_RESPONSE");
+  return { accountId, roleId, resourceVersion, policy: {
+    policyId: accountIdentifier(policy.policyId),
+    versionId: accountIdentifier(policy.versionId),
+    contentDigest: policy.contentDigest
+  } };
 }
 
 function parseRoleAccess(value: unknown, accountId: string, roleId: string): RoleAccess {
@@ -2146,6 +2163,13 @@ export const httpAccountRepository: AccountRepository = {
       ), accountIdentifier(accountId), target);
       await verifyRoleTrustDigest(access.trustVersion);
       return access;
+    },
+    async readPermissionBoundary(credential, accountId, roleId) {
+      const target = accountIdentifier(roleId);
+      return parseRolePermissionBoundary(await requestJSON<unknown>(
+        `/api/iam/v1/roles/${encodeURIComponent(target)}/permission-boundary`,
+        { headers: accountHeaders(credential) }
+      ), accountIdentifier(accountId), target);
     },
     async listTrustVersions(credential, accountId, roleId, after) {
       const target = accountIdentifier(roleId);

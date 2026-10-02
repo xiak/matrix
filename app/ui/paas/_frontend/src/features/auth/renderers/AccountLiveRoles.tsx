@@ -3,12 +3,12 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
+import { Alert, Badge, Button, Card, ContentPage, EmptyState, Skeleton, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent, type ServiceLinkedRoleClient, type ServiceRoleTemplateClient } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
-import type { RoleAccess, RoleCapability, RoleListing, RoleTrustVersion, RoleTrustVersionDirectory } from "../domain/roles";
-import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import type { RoleAccess, RoleCapability, RoleListing, RolePermissionBoundary, RoleTrustVersion, RoleTrustVersionDirectory } from "../domain/roles";
+import { AuthorizationOverview, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { LiveRoleSessions } from "./LiveRoleSessions";
 import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
 import styles from "./AccountAccessRenderer.module.css";
@@ -26,6 +26,44 @@ function capabilityState(capability: RoleCapability) {
 
 function trustPrincipalCount(version: RoleTrustVersion): number {
   return version.document.statements.reduce((count, statement) => count + statement.principals.length, 0);
+}
+
+function LiveRoleAuthorizationOverview({ access, client }: { access: RoleAccess; client: RoleAccessClient }) {
+  const t = useTranslations("RoleWorkspace"), a = useTranslations("AccountAccess");
+  const [boundary, setBoundary] = useState<RolePermissionBoundary | null>(null);
+  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [error, setError] = useState<string | null>(null), [refresh, setRefresh] = useState(0);
+  const requests = useRef(0);
+
+  useEffect(() => {
+    const request = ++requests.current;
+    client.readPermissionBoundary(access.role.id).then((value) => {
+      if (request !== requests.current) return;
+      setBoundary(value); setPhase("ready");
+    }, (failure: unknown) => {
+      if (request !== requests.current) return;
+      setError(a(`errors.${accountError(failure)}`)); setPhase("error");
+    });
+    return () => { requests.current += 1; };
+  }, [a, access.role.id, client, refresh]);
+
+  const retry = () => {
+    setBoundary(null); setError(null); setPhase("loading");
+    setRefresh((value) => value + 1);
+  };
+  const boundaryValue = phase === "loading" ? <span aria-label={t("boundaryLoading")} role="status"><Skeleton /></span>
+    : phase === "error" ? <Badge status="neutral">{t("boundaryUnknown")}</Badge>
+      : boundary?.policy ? <span><strong>{boundary.policy.policyId}</strong><small>{t("boundaryPolicyVersion", { version: boundary.policy.versionId, revision: boundary.resourceVersion })}</small></span>
+        : <span><Badge status="warning">{t("boundaryClosed")}</Badge><small>{t("boundaryClosedHint")}</small></span>;
+  return <>
+    <AuthorizationOverview title={t("authorizationOverview")} hint={t("liveAuthorizationOverviewHint")} items={[
+      { label: t("trustAdmission"), value: t("trustedUserCount", { count: trustPrincipalCount(access.trustVersion) }) },
+      { label: t("livePermissions"), value: t("attachedPolicyCount", { count: access.policyAttachments.length }) },
+      { label: t("boundary"), value: boundaryValue },
+      { label: t("maximumSession"), value: durationLabel(access.role.maxSessionDurationSeconds) }
+    ]} />
+    {phase === "error" ? <Alert status="warning"><div className={styles.confirmation}><span>{t("boundaryUnavailable")}{error ? ` ${error}` : ""}</span><Button size="small" variant="secondary" onClick={retry}>{t("retry")}</Button></div></Alert> : null}
+  </>;
 }
 
 function LiveRoleTrustHistory({ client, roleId, currentVersionId }: { client: RoleAccessClient; roleId: string; currentVersionId: string }) {
@@ -143,6 +181,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
       </div>
       <p className={styles.note}>{access.role.description || w("none")}</p>
       <Alert>{t("liveTrustExplanation")}</Alert>
+      <LiveRoleAuthorizationOverview key={`${client.sessionRevision}:${access.role.id}`} access={access} client={client} />
       <dl className={styles.facts}>
         <div><dt>{t("roleId")}</dt><dd><code>{access.role.id}</code></dd></div>
         <div><dt>{t("resourceVersion")}</dt><dd>v{access.role.resourceVersion}</dd></div>

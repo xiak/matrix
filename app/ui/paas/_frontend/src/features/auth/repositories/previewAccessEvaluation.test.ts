@@ -173,6 +173,15 @@ describe("role trust, boundaries and temporary session diagnostics", () => {
     workspace.userBoundaries["principal-lin"] = "policy-read";
     expect(evaluateRoleAssumption(workspace, userIds, assumption)).toMatchObject({ allowed: false, callerDecision: { decision: "implicitDeny", boundary: { decision: "implicitDeny" } } });
   });
+  it("fails closed when a role has no mandatory permission ceiling", () => {
+    let workspace = roleWorkspace();
+    workspace.userPolicies["principal-lin"] = ["policy-admin"];
+    workspace = issueSession(workspace);
+    workspace.roles.find((role) => role.id === roleContext.id)!.boundaryPolicyId = undefined;
+    expect(evaluateRoleAssumption(workspace, userIds, assumption)).toEqual({ allowed: false, reason: "authorityRequired" });
+    expect(() => issueSession(workspace)).toThrow("authorityRequired");
+    expect(evaluateRoleSessionAccess(workspace, userIds, "session-logs", request, request.at!)).toMatchObject({ decision: "invalidRequest", error: "authorityRequired" });
+  });
   it("checks resource-specific assumption grants and caller conditions including group denies", () => {
     const workspace = roleWorkspace();
     const policy = workspace.policies.find((policy) => policy.id === "policy-prod-logs")!;

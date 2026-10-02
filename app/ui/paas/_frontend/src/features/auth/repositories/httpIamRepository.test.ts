@@ -225,6 +225,22 @@ describe("IAM HTTP role boundary", () => {
     await expect(httpAccountRepository.roles!.listTrustVersions("bearer", account.id, role.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
+  it("reads the exact mandatory role permission boundary without treating null as unlimited", async () => {
+    const digest = `sha256:${"c".repeat(64)}`;
+    const fetcher = reply({ apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: role.id, resourceVersion: 4,
+      policy: { policyId: "policy-role-ceiling", versionId: "v3", contentDigest: digest } });
+    const result = await httpAccountRepository.roles!.readPermissionBoundary("bearer", account.id, role.id);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/permission-boundary`);
+    expect(result).toEqual({ accountId: account.id, roleId: role.id, resourceVersion: 4,
+      policy: { policyId: "policy-role-ceiling", versionId: "v3", contentDigest: digest } });
+
+    reply({ apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: role.id, resourceVersion: 5, policy: null });
+    await expect(httpAccountRepository.roles!.readPermissionBoundary("bearer", account.id, role.id)).resolves.toEqual({ accountId: account.id, roleId: role.id, resourceVersion: 5, policy: null });
+    reply({ apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: role.id, resourceVersion: 5,
+      policy: { policyId: "policy-role-ceiling", versionId: "v3", contentDigest: `sha256:${"C".repeat(64)}` } });
+    await expect(httpAccountRepository.roles!.readPermissionBoundary("bearer", account.id, role.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
   it("creates a role with only metadata, USER trust and one retained request ID", async () => {
     const trustPolicy = { languageVersion: "1" as const, statements: [{ sid: "trusted-users", effect: "ALLOW" as const, principals: [{ type: "USER" as const, id: user.id }] }] };
     const fetcher = reply(role);

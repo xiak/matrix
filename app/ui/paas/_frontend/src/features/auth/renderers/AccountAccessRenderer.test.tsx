@@ -2207,6 +2207,7 @@ describe("account access", () => {
       roles: {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
+        readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
         listTrustVersions: vi.fn(),
         create: vi.fn().mockResolvedValue(managedRole),
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
@@ -2253,6 +2254,7 @@ describe("account access", () => {
       roles: {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
+        readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
         listTrustVersions: vi.fn(),
         create: vi.fn().mockResolvedValue(managedRole),
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
@@ -2286,6 +2288,7 @@ describe("account access", () => {
       roles: {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
+        readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
         listTrustVersions: vi.fn(),
         create,
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
@@ -2338,6 +2341,7 @@ describe("account access", () => {
       createRestrictionReason: null,
       list: vi.fn().mockResolvedValue(managedRoleDirectory),
       read: vi.fn().mockResolvedValue(managedRoleAccess),
+      readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
       listTrustVersions: vi.fn(),
       create: operation,
       listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
@@ -2382,6 +2386,7 @@ describe("account access", () => {
       roles: {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
+        readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
         listTrustVersions: vi.fn(),
         create: vi.fn().mockResolvedValue(managedRole),
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [managedRoleSessionItem], nextAfter: null }),
