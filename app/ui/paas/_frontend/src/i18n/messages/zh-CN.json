@@ -5084,6 +5084,7 @@
       "verifiedAt": "验证时间",
       "firstOnly": "当前真实接口只支持首次登记。替换与移除将在相应契约冻结后开放。",
       "send": "发送验证码",
+      "passwordRejected": "当前密码不正确。输入已清空，请重新输入后再试。",
       "deliveryMeaning": "“已接受”仅代表邮件服务器接受投递，不代表收件人已收到或阅读。",
       "expiresAt": "有效期至",
       "attempts": "投递尝试",

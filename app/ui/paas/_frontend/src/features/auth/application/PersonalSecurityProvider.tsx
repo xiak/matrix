@@ -45,6 +45,13 @@ export type PersonalSecurityClient = {
   clearRecoveryCodeRegenerationIntent(requestId: string): void;
 };
 
+export class NotificationContactPasswordRejected extends Error {
+  constructor() {
+    super("NOTIFICATION_CONTACT_PASSWORD_REJECTED");
+    this.name = "NotificationContactPasswordRejected";
+  }
+}
+
 const PersonalSecurityContext = createContext<PersonalSecurityClient | null>(null);
 
 export function PersonalSecurityProvider({ children, repository, credential, current, sessionRevision, isCurrentSession, expire, completeEnrollment }: {
@@ -93,18 +100,6 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
         throw failure;
       }
     };
-    const scopedAfterBearerCheck = async <T,>(request: Promise<T>): Promise<T> => {
-      try { return await request; }
-      catch (failure) {
-        if (failure instanceof HttpProblem && failure.status === 401 && isCurrentSession(expectedCredential, expectedRevision)) {
-          try { await security.notificationContact(expectedCredential); }
-          catch (observation) {
-            if (observation instanceof HttpProblem && observation.status === 401 && isCurrentSession(expectedCredential, expectedRevision)) expire(expectedCredential);
-          }
-        }
-        throw failure;
-      }
-    };
     const ownedContact = (value: NotificationContact) => {
       if (value.accountId !== accountId || value.userId !== userId) throw new Error("INVALID_IAM_RESPONSE");
       return value;
@@ -112,6 +107,23 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
     const ownedVerification = (value: NotificationContactVerification) => {
       if (value.accountId !== accountId || value.userId !== userId) throw new Error("INVALID_IAM_RESPONSE");
       return value;
+    };
+    const scopedAfterBearerCheck = async <T,>(request: Promise<T>, classifyPasswordRejection = false): Promise<T> => {
+      try { return await request; }
+      catch (failure) {
+        if (failure instanceof HttpProblem && failure.status === 401 && isCurrentSession(expectedCredential, expectedRevision)) {
+          try {
+            ownedContact(await security.notificationContact(expectedCredential));
+            if (classifyPasswordRejection && isCurrentSession(expectedCredential, expectedRevision)) {
+              throw new NotificationContactPasswordRejected();
+            }
+          } catch (observation) {
+            if (observation instanceof NotificationContactPasswordRejected) throw observation;
+            if (observation instanceof HttpProblem && observation.status === 401 && isCurrentSession(expectedCredential, expectedRevision)) expire(expectedCredential);
+          }
+        }
+        throw failure;
+      }
     };
     const recoveryCodes = security.recoveryCodes;
     const replaceRegeneration = (requestId: string, update: (value: RecoveryCodeRegenerationIntent) => RecoveryCodeRegenerationIntent) => {
@@ -145,7 +157,7 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
       recoveryCodeRegenerationAvailable: Boolean(recoveryCodes),
       recoveryCodeRegenerationIntent: currentRegeneration,
       notificationContact: async () => ownedContact(await scoped(security.notificationContact(expectedCredential))),
-      startNotificationVerification: async (command) => ownedVerification(await scopedAfterBearerCheck(security.startNotificationVerification(expectedCredential, command))),
+      startNotificationVerification: async (command) => ownedVerification(await scopedAfterBearerCheck(security.startNotificationVerification(expectedCredential, command), true)),
       notificationVerification: async (verificationId) => ownedVerification(await scoped(security.notificationVerification(expectedCredential, verificationId))),
       confirmNotificationVerification: async (verificationId, command) => ownedVerification(await scopedAfterBearerCheck(security.confirmNotificationVerification(expectedCredential, verificationId, command))),
       authenticatorState: () => scoped(security.authenticatorState(expectedCredential)),

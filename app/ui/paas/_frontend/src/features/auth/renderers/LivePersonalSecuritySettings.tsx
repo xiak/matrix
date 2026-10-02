@@ -5,7 +5,7 @@ import { useFormatter, useTranslations } from "next-intl";
 import { KeyRound, Mail, RefreshCcw, ShieldCheck, Smartphone } from "lucide-react";
 import { Alert, Badge, Button, Card, FormField, Input, PasswordInput, Skeleton, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
-import { usePersonalSecurity, type PersonalSecurityClient } from "../application/PersonalSecurityProvider";
+import { NotificationContactPasswordRejected, usePersonalSecurity, type PersonalSecurityClient } from "../application/PersonalSecurityProvider";
 import type { AuthenticatorState, NotificationContact, NotificationContactVerification, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import { LiveRecoveryCodeRegeneration } from "./LiveRecoveryCodeRegeneration";
 import styles from "./MfaPreviewExperience.module.css";
@@ -31,8 +31,10 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
   const clientRef = useRef(client);
   const clientScope = client ? `${client.accountId}:${client.userId}:${client.sessionId}:${client.sessionRevision}` : null;
   const emailId = useId();
+  const contactPasswordId = `${emailId}-password`;
   const contactCodeId = useId();
   const contactCodeRef = useRef<HTMLInputElement>(null);
+  const contactPasswordRef = useRef<HTMLInputElement>(null);
   const passwordId = useId();
   const totpCodeId = useId();
   const requestRevision = useRef(0);
@@ -47,6 +49,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
   const [enrollment, setEnrollment] = useState<TOTPEnrollmentStart | null>(null);
   const [email, setEmail] = useState("");
   const [contactPassword, setContactPassword] = useState("");
+  const [contactPasswordIssue, setContactPasswordIssue] = useState(false);
   const [contactCode, setContactCode] = useState("");
   const [contactCodeIssue, setContactCodeIssue] = useState<"invalid" | "attemptsExhausted" | null>(null);
   const [factorPassword, setFactorPassword] = useState("");
@@ -90,12 +93,16 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
   async function startContact(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!client) return;
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setContactPasswordIssue(false);
     try {
       const next = await client.startNotificationVerification({ email, password: contactPassword, requestId: contactRequest.current });
       setVerification(next); setContactPassword(""); setContactCode(""); setContactCodeIssue(null);
       contactConfirmRequest.current = requestToken("ui-security-contact-confirm-");
-    } catch { setError("contactStart"); }
+    } catch (failure) {
+      if (failure instanceof NotificationContactPasswordRejected) {
+        setContactPassword(""); setContactPasswordIssue(true); contactPasswordRef.current?.focus();
+      } else setError("contactStart");
+    }
     finally { setBusy(false); }
   }
 
@@ -202,7 +209,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
           {loadState === "ready" && contact?.state === "NONE" && !verification ? <form className={styles.form} onSubmit={(event) => void startContact(event)}>
             <Alert>{t("contact.firstOnly")}</Alert>
             <FormField id={emailId} label={t("contact.address")}><Input autoComplete="email" id={emailId} inputMode="email" onChange={(event) => { setEmail(event.target.value); contactRequest.current = requestToken("ui-security-contact-"); }} required type="email" value={email} /></FormField>
-            <FormField id={`${emailId}-password`} label={t("currentPassword")}><PasswordInput autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={`${emailId}-password`} onChange={(event) => { setContactPassword(event.target.value); contactRequest.current = requestToken("ui-security-contact-"); }} required showLabel={auth("showPassword")} value={contactPassword} /></FormField>
+            <FormField id={contactPasswordId} label={t("currentPassword")} error={contactPasswordIssue ? t("contact.passwordRejected") : undefined}><PasswordInput aria-describedby={contactPasswordIssue ? `${contactPasswordId}-error` : undefined} autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={contactPasswordId} invalid={contactPasswordIssue} onChange={(event) => { setContactPassword(event.target.value); setContactPasswordIssue(false); contactRequest.current = requestToken("ui-security-contact-"); }} ref={contactPasswordRef} required showLabel={auth("showPassword")} value={contactPassword} /></FormField>
             <div className={styles.flowActions}><Button disabled={busy || !email || !contactPassword} type="submit">{busy ? t("saving") : t("contact.send")}</Button></div>
           </form> : null}
           {loadState === "ready" && verification ? <form className={styles.form} onSubmit={(event) => void confirmContact(event)}>

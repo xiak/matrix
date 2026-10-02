@@ -1079,7 +1079,7 @@ describe("account access", () => {
     expect(security.confirmNotificationVerification).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the login session after a contact password rejection when a bearer-only read still succeeds", async () => {
+  it("marks only the password field invalid after a contact password rejection when a bearer-only read still succeeds", async () => {
     const none = { accountId: account.id, userId: rootUser.id, state: "NONE" as const, resourceVersion: 0 as const, pendingVerificationId: null };
     const security = {
       notificationContact: vi.fn().mockResolvedValue(none),
@@ -1092,14 +1092,44 @@ describe("account access", () => {
     const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
     await within(securityRegion).findByLabelText("邮箱地址");
     await user.type(within(securityRegion).getByLabelText("邮箱地址"), "admin@example.com");
-    await user.type(within(securityRegion).getAllByLabelText("当前密码")[0]!, "Wrong-Password-49!");
+    const password = within(securityRegion).getAllByLabelText("当前密码")[0]! as HTMLInputElement;
+    await user.type(password, "Wrong-Password-49!");
     await user.click(screen.getByRole("button", { name: "发送验证码" }));
 
-    expect(await within(securityRegion).findByText(/无法开始邮箱验证/)).toBeTruthy();
+    expect(await within(securityRegion).findByText(/当前密码不正确/)).toBeTruthy();
+    expect(within(securityRegion).queryByText(/无法开始邮箱验证/)).toBeNull();
+    expect(password.getAttribute("aria-invalid")).toBe("true");
+    expect(password).toBe(document.activeElement);
+    expect(password.value).toBe("");
     expect(within(securityRegion).getByLabelText("邮箱地址")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "登录控制台" })).toBeNull();
     expect(security.notificationContact).toHaveBeenCalledTimes(2);
     expect(security.startNotificationVerification).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an ambiguous contact rejection generic when the bearer-only observation is unavailable", async () => {
+    const none = { accountId: account.id, userId: rootUser.id, state: "NONE" as const, resourceVersion: 0 as const, pendingVerificationId: null };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValueOnce(none).mockRejectedValue(new HttpProblem(503, "iam.unavailable")),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null }),
+      startNotificationVerification: vi.fn().mockRejectedValue(new HttpProblem(401, "iam.authentication.failed")),
+      notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByLabelText("邮箱地址");
+    await user.type(within(securityRegion).getByLabelText("邮箱地址"), "admin@example.com");
+    const password = within(securityRegion).getAllByLabelText("当前密码")[0]! as HTMLInputElement;
+    await user.type(password, "Private-Password-49!");
+    await user.click(screen.getByRole("button", { name: "发送验证码" }));
+
+    expect(await within(securityRegion).findByText(/无法开始邮箱验证/)).toBeTruthy();
+    expect(within(securityRegion).queryByText(/当前密码不正确/)).toBeNull();
+    expect(password.getAttribute("aria-invalid")).toBeNull();
+    expect(password.value).toBe("Private-Password-49!");
+    expect(screen.queryByRole("heading", { name: "登录控制台" })).toBeNull();
+    expect(security.notificationContact).toHaveBeenCalledTimes(2);
   });
 
   it("expires the login session only after the contact rejection and bearer-only read both return 401", async () => {

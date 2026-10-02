@@ -5070,6 +5070,7 @@
       "verifiedAt": "Verified at",
       "firstOnly": "The live contract currently supports first registration only. Replacement and removal will open after their contracts are frozen.",
       "send": "Send verification code",
+      "passwordRejected": "The current password is incorrect. The field was cleared; enter it again to retry.",
       "deliveryMeaning": "Accepted means only that the mail server accepted delivery; it does not prove receipt or reading.",
       "expiresAt": "Expires at",
       "attempts": "Delivery attempts",
