@@ -1827,24 +1827,34 @@ Go test/vet passed. Real-IAM browser and release acceptance remain separate;
 exact semantics are owned by
 [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#role-管理与管理员会话-live-客户端的开发验收证据).
 
-The same LIVE Role detail now reads the fixed mandatory permission-boundary
-projection from IAM source `c53abadc98b28a192ec676bf279a0b6c52343ce2`.
-Stable Role facts remain mounted while only the boundary value loads or retries;
-strict parsing rejects a mismatched Account or Role, unknown fields, invalid
-resource version, noncanonical policy reference, or non-lowercase SHA-256
-digest. A null Role boundary is rendered as “no permission ceiling; role
+The same LIVE Role detail owns the fixed mandatory permission-boundary read and
+mutation lifecycle from IAM source
+`c53abadc98b28a192ec676bf279a0b6c52343ce2`. Stable Role facts remain mounted
+while only the boundary value loads or retries; strict parsing rejects a
+mismatched Account or Role, unknown fields, invalid resource version,
+noncanonical policy reference, non-lowercase SHA-256 digest and non-concurrent
+write outcome. A null Role boundary is rendered as “no permission ceiling; role
 assumption closed,” never as an unlimited ceiling or a generic missing setting;
 a read failure stays unknown and cannot be converted into that null state. The
-isolated MOCK keeps this same fail-closed invariant: a Role may be created
-without a boundary, but it cannot issue a new preview session, and removing the
-boundary cannot turn an existing preview session into an unbounded one. This
-client exposes no backend check order, does not add a LIVE boundary mutation,
-and does not change the distinct User-boundary null semantics. Source and
-synchronized embed are pushed at `2febfb268`; the focused 352-case run and
-complete 58-file/985-case frontend suite plus three normalization cases,
-type/lint/architecture/228-pair style gates, 42-route export and full repository
-Go test/vet passed. Real-IAM browser and release acceptance remain separate;
-exact Role-boundary semantics remain owned by
+inline editor is controlled by the exact server-returned set/remove
+capabilities, loads a fresh tenant policy directory only after opening, and
+freezes policy version, boundary revision and request ID across review. A `503`
+keeps the exact original command for byte-for-byte retry; a `409` rereads the
+Role, boundary and eligible policy directory before requiring a new review; an
+acknowledged write followed by failed readback is labelled applied and retries
+only the authoritative read. No Dialog, optimistic success, inferred grant or
+new backend error is introduced. The isolated MOCK remains available and keeps
+the same fail-closed invariant: a Role may be created without a boundary, but it
+cannot issue a new preview session, and removing the boundary cannot turn an
+existing preview session into an unbounded one. Distinct User-boundary null
+semantics are unchanged. Read-only source/embed began at `2febfb268`; the
+complete GET/PUT/DELETE content-area workflow and synchronized embed are pushed
+at `f366cdcd7`. The focused 221-case run and complete 58-file/995-case frontend
+suite plus three normalization cases, type/lint/architecture/228-pair style
+gates, 42-route export, 233-file embedded equality and full repository Go
+test/vet passed. The DEV MOCK Role detail retained its inline editor with no
+Dialog or browser warning/error. Real-IAM browser and release acceptance remain
+separate; exact Role-boundary semantics remain owned by
 [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#role-管理与管理员会话-live-客户端的开发验收证据).
 
 The Profile-driven Action selector now keeps its existing fail-closed statement
