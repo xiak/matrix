@@ -158,9 +158,12 @@ func evaluateUserBoundary(value *ResolvedUserBoundary, context policyEvaluationC
 }
 
 type PolicyEvaluation struct {
-	Allowed         bool
-	ExplicitDeny    bool
-	MatchedVersions []iamv1.PolicyVersionReference
+	Allowed              bool
+	HasAllow             bool
+	ExplicitDeny         bool
+	MatchedVersions      []iamv1.PolicyVersionReference
+	MatchedAllowVersions []iamv1.PolicyVersionReference
+	MatchedDenyVersions  []iamv1.PolicyVersionReference
 }
 
 // Constructed from the owner-validated snapshot, never decoded from a request.
@@ -366,8 +369,14 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 		if err != nil {
 			return PolicyEvaluation{}, err
 		}
-		hasAllow = hasAllow || part.Allowed
+		hasAllow = hasAllow || part.HasAllow
 		result.ExplicitDeny = result.ExplicitDeny || part.ExplicitDeny
+		if part.HasAllow {
+			result.MatchedAllowVersions = append(result.MatchedAllowVersions, reference)
+		}
+		if part.ExplicitDeny {
+			result.MatchedDenyVersions = append(result.MatchedDenyVersions, reference)
+		}
 		if part.Allowed || part.ExplicitDeny {
 			result.MatchedVersions = append(result.MatchedVersions, reference)
 		}
@@ -375,7 +384,10 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 	// Do not return early for ALLOW or DENY: another record may reveal a corrupt
 	// snapshot or an explicit denial. Source order never changes the outcome.
 	result.Allowed = hasAllow && !result.ExplicitDeny
+	result.HasAllow = hasAllow
 	slices.SortFunc(result.MatchedVersions, func(left, right iamv1.PolicyVersionReference) int { return cmp.Compare(left.PolicyID, right.PolicyID) })
+	slices.SortFunc(result.MatchedAllowVersions, func(left, right iamv1.PolicyVersionReference) int { return cmp.Compare(left.PolicyID, right.PolicyID) })
+	slices.SortFunc(result.MatchedDenyVersions, func(left, right iamv1.PolicyVersionReference) int { return cmp.Compare(left.PolicyID, right.PolicyID) })
 	return result, nil
 }
 
@@ -445,13 +457,13 @@ func evaluateCompiledStatements(context policyEvaluationContext, document iamv1.
 				return PolicyEvaluation{}, ErrInvalidPolicyState
 			}
 			if resourceMatches {
-				result.Allowed = result.Allowed || statement.Effect == iamv1.PolicyAllow
+				result.HasAllow = result.HasAllow || statement.Effect == iamv1.PolicyAllow
 				result.ExplicitDeny = result.ExplicitDeny || statement.Effect == iamv1.PolicyDeny
 				break
 			}
 		}
 	}
-	result.Allowed = result.Allowed && !result.ExplicitDeny
+	result.Allowed = result.HasAllow && !result.ExplicitDeny
 	return result, nil
 }
 

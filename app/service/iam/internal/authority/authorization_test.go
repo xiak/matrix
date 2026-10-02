@@ -244,12 +244,23 @@ func TestServiceRoleDecisionUsesOnePDPAndExactWorkloadConsent(t *testing.T) {
 			t.Fatalf("service evidence fabricated USER field %s: %s", forbidden, private)
 		}
 	}
+	diagnosisSubject := *result.Subject
+	diagnosis, err := CurrentAccessDiagnosis(result, value.Session.AccountID, value.Service.Identity.InstallationID, diagnosisSubject, request)
+	if err != nil || diagnosis.Outcome != iamv1.AccessDiagnosisAllowed || len(diagnosis.Sources) != 1 ||
+		diagnosis.Sources[0].Kind != iamv1.AccessDiagnosisSourceServiceRole || diagnosis.Sources[0].AttachmentID != "" ||
+		len(diagnosis.Restrictions) != 0 {
+		t.Fatalf("service-role diagnosis=%#v err=%v", diagnosis, err)
+	}
 
 	other := request
 	other.Resource.ID = "service-installation-b"
 	denied, err := DecideRole(value, iamv1.ServicePaaS, other, "service-role-denied", now)
 	if err != nil || denied.Allowed || denied.Subject != nil || denied.TenantID != "" || denied.RoleEvidence == nil {
 		t.Fatalf("another workload was not a recordable authority-free Deny: %#v err=%v", denied.AuthorizationDecision, err)
+	}
+	diagnosis, err = CurrentAccessDiagnosis(denied, value.Session.AccountID, value.Service.Identity.InstallationID, diagnosisSubject, other)
+	if err != nil || !slices.Contains(diagnosis.Reasons, iamv1.AccessDiagnosisResourceContextUnsupported) {
+		t.Fatalf("service-role workload denial diagnosis=%#v err=%v", diagnosis, err)
 	}
 	if _, err := DecideRole(value, iamv1.ServiceAudit, request, "service-role-wrong-purpose", now); !errors.Is(err, ErrAuthorityUnavailable) {
 		t.Fatalf("another service purpose used the session: %v", err)
@@ -537,6 +548,31 @@ func TestRoleDecisionIntersectsThreeSourcesWithoutUserPermissionInheritance(t *t
 			if err != nil {
 				return
 			}
+			subject := iamv1.Subject{Type: iamv1.SubjectRole, ID: string(value.Role.ID), RoleSession: &iamv1.RoleSessionReference{
+				SessionID: value.Session.ID, SourceUserID: value.Session.SourceUserID,
+			}}
+			diagnosis, diagnosisErr := CurrentAccessDiagnosis(result, value.Session.AccountID, "installation-role", subject, request)
+			if diagnosisErr != nil || (diagnosis.Outcome == iamv1.AccessDiagnosisAllowed) != test.want ||
+				len(diagnosis.Sources) > 0 && diagnosis.Sources[0].Kind != iamv1.AccessDiagnosisSourceRole || len(diagnosis.Restrictions) != 2 {
+				t.Fatalf("role diagnosis=%#v err=%v", diagnosis, diagnosisErr)
+			}
+			if test.name != "source administrator is not a role grant" && len(diagnosis.Sources) == 0 {
+				t.Fatal("role policy source disappeared from diagnosis")
+			}
+			switch test.name {
+			case "boundary misses resource", "boundary deny":
+				if !slices.Contains(diagnosis.Reasons, iamv1.AccessDiagnosisRolePermissionBoundary) ||
+					diagnosis.Restrictions[0].Kind != iamv1.AccessDiagnosisRestrictionRoleBoundary ||
+					diagnosis.Restrictions[0].State != iamv1.AccessDiagnosisRestrictionBlocked {
+					t.Fatal("role boundary denial was not explained")
+				}
+			case "session misses resource", "session deny":
+				if !slices.Contains(diagnosis.Reasons, iamv1.AccessDiagnosisSessionPolicy) ||
+					diagnosis.Restrictions[1].Kind != iamv1.AccessDiagnosisRestrictionSessionPolicy ||
+					diagnosis.Restrictions[1].State != iamv1.AccessDiagnosisRestrictionBlocked {
+					t.Fatal("session restriction denial was not explained")
+				}
+			}
 			if result.RoleEvidence == nil || result.RoleEvidence.AssumeDecisionID != value.AssumeDecisionID || result.RoleEvidence.SourceSessionID != value.Source.Session.ID ||
 				result.BoundaryEvidence.State != "NOT_APPLICABLE" || result.RoleEvidence.Boundary.Version.VersionID != value.Boundary.Version.ID ||
 				result.RoleEvidence.AuthorityContractVersion != 2 || result.RoleEvidence.SourceAuthorizationGeneration != value.SourceAuthorizationGeneration ||
@@ -644,6 +680,74 @@ func TestSystemPolicyAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testin
 	mustChange, err := Decide(context, iamv1.ServicePaaS, request, "decision-must-change", now)
 	if err != nil || mustChange.Allowed {
 		t.Fatalf("initial administrator used PaaS before password change: decision=%#v err=%v", mustChange, err)
+	}
+}
+
+func TestCurrentAccessDiagnosisExplainsTheSameEvaluationWithoutASecondPDP(t *testing.T) {
+	now := authorityTestTime()
+	context := authoritySubject(now, iamv1.SystemPolicyPaaSViewer)
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{
+		Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-one"},
+		RequestID: "diagnose-access", CorrelationID: "diagnose-access",
+	}, iamv1.AuthorizationResourceInstance, "")
+	evaluation, err := Decide(context, iamv1.ServicePaaS, request, "diagnosis-evaluation", now)
+	if err != nil || !evaluation.Allowed {
+		t.Fatalf("authorize fixture: allowed=%v err=%v", evaluation.Allowed, err)
+	}
+	subject := iamv1.Subject{Type: iamv1.SubjectUser, ID: string(context.Principal.ID)}
+	diagnosis, err := CurrentAccessDiagnosis(evaluation, context.Organization.ID, context.InstallationID, subject, request)
+	if err != nil || iamv1.ValidateCurrentAccessDiagnosis(diagnosis) != nil || diagnosis.Outcome != iamv1.AccessDiagnosisAllowed ||
+		len(diagnosis.Reasons) != 0 || len(diagnosis.Sources) != 1 || diagnosis.Sources[0].Kind != iamv1.AccessDiagnosisSourceDirect ||
+		diagnosis.Sources[0].Effect != iamv1.AccessDiagnosisEffectAllow || len(diagnosis.Restrictions) != 1 ||
+		diagnosis.Restrictions[0].State != iamv1.AccessDiagnosisRestrictionNotApplicable {
+		t.Fatalf("allowed diagnosis=%#v err=%v", diagnosis, err)
+	}
+	encoded, err := json.Marshal(diagnosis)
+	if err != nil || bytes.Contains(encoded, []byte("decisionId")) || bytes.Contains(encoded, []byte("compilation")) ||
+		bytes.Contains(encoded, []byte("statement")) {
+		t.Fatalf("diagnosis leaked private decision or policy state: %s err=%v", encoded, err)
+	}
+	mixed := policyVersionForTest(t, "policy-diagnosis-mixed", iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceAnyInAuthority, "")
+	mixed.Document.Statements = append(mixed.Document.Statements, iamv1.PolicyStatement{SID: "deny-diagnosis", Effect: iamv1.PolicyDeny,
+		Actions: []iamv1.Action{request.Action}, Resources: []iamv1.PolicyResourceSelector{{Kind: request.Resource.Kind, Match: iamv1.PolicyResourceExact, ID: request.Resource.ID}}})
+	compilePolicyVersionForTest(t, &mixed)
+	row := context.Policies[0]
+	row.Policy.ID, row.Policy.DefaultVersionID, row.Policy.Management, row.Policy.AccountID = mixed.PolicyID, mixed.ID, iamv1.PolicyCustomerManaged, context.Organization.ID
+	row.Attachment.ID, row.Attachment.PolicyID, row.Version = "attachment-diagnosis-mixed", mixed.PolicyID, mixed
+	context.Policies = []AttachedPolicy{row}
+	evaluation, err = Decide(context, iamv1.ServicePaaS, request, "diagnosis-explicit-deny", now)
+	diagnosis, diagnosisErr := CurrentAccessDiagnosis(evaluation, context.Organization.ID, context.InstallationID, subject, request)
+	if err != nil || diagnosisErr != nil || evaluation.Allowed ||
+		!slices.Contains(diagnosis.Reasons, iamv1.AccessDiagnosisExplicitDeny) || len(diagnosis.Sources) != 2 ||
+		diagnosis.Sources[0].Effect != iamv1.AccessDiagnosisEffectAllow || diagnosis.Sources[1].Effect != iamv1.AccessDiagnosisEffectDeny {
+		t.Fatalf("mixed-effect diagnosis=%#v evaluation=%#v err=%v/%v", diagnosis, evaluation, err, diagnosisErr)
+	}
+
+	context = authoritySubject(now, iamv1.SystemPolicyPaaSViewer)
+	context.Principal.MustChangePassword = true
+	evaluation, err = Decide(context, iamv1.ServicePaaS, request, "diagnosis-restricted", now)
+	if err != nil || evaluation.Allowed {
+		t.Fatalf("restricted evaluation=%#v err=%v", evaluation, err)
+	}
+	diagnosis, err = CurrentAccessDiagnosis(evaluation, context.Organization.ID, context.InstallationID, subject, request)
+	if err != nil || diagnosis.Outcome != iamv1.AccessDiagnosisDenied ||
+		!slices.Contains(diagnosis.Reasons, iamv1.AccessDiagnosisCredentialRestricted) ||
+		slices.Contains(diagnosis.Reasons, iamv1.AccessDiagnosisNoMatchingAllow) {
+		t.Fatalf("credential restriction diagnosis=%#v err=%v", diagnosis, err)
+	}
+
+	context.Principal.MustChangePassword = false
+	boundary := policyVersionForTest(t, "policy-diagnosis-boundary", iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceExact, "another-application")
+	context.Boundary = userBoundaryForTest(context, boundary)
+	evaluation, err = Decide(context, iamv1.ServicePaaS, request, "diagnosis-boundary", now)
+	if err != nil || evaluation.Allowed {
+		t.Fatalf("boundary evaluation=%#v err=%v", evaluation, err)
+	}
+	diagnosis, err = CurrentAccessDiagnosis(evaluation, context.Organization.ID, context.InstallationID, subject, request)
+	if err != nil || !slices.Contains(diagnosis.Reasons, iamv1.AccessDiagnosisUserPermissionBoundary) ||
+		len(diagnosis.Restrictions) != 1 || diagnosis.Restrictions[0].State != iamv1.AccessDiagnosisRestrictionBlocked ||
+		diagnosis.Restrictions[0].Version == nil || diagnosis.Restrictions[0].Version.PolicyID != boundary.PolicyID {
+		t.Fatalf("boundary diagnosis=%#v err=%v", diagnosis, err)
 	}
 }
 
@@ -1861,6 +1965,16 @@ func TestPolicyEvaluationDefaultsToDenyAndExplicitDenyWins(t *testing.T) {
 	}
 	if result, err := evaluatePolicies(policyContextForTest(authorityTestTime()), []iamv1.PolicyVersion{allow}, policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationCreate, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-open"})); err != nil || result.Allowed {
 		t.Fatal("read permission allowed a write")
+	}
+	mixed := allow
+	mixed.Document.Statements = append(mixed.Document.Statements, iamv1.PolicyStatement{SID: "deny-same-version", Effect: iamv1.PolicyDeny,
+		Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "application-open"}}})
+	compilePolicyVersionForTest(t, &mixed)
+	mixedResult, err := evaluatePolicies(policyContextForTest(authorityTestTime()), []iamv1.PolicyVersion{mixed}, policyEvaluationRequestForTest(t,
+		iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-open"}))
+	if err != nil || mixedResult.Allowed || !mixedResult.HasAllow || !mixedResult.ExplicitDeny ||
+		len(mixedResult.MatchedAllowVersions) != 1 || len(mixedResult.MatchedDenyVersions) != 1 {
+		t.Fatalf("mixed-effect source lost diagnostic effects: result=%#v err=%v", mixedResult, err)
 	}
 }
 

@@ -934,6 +934,31 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		iamv1.CheckAuthorizationDecisionForRequest(profileDecision, profileRequest) != nil || !profileDecision.Allowed || profileDecision.Subject == nil {
 		t.Fatal("current authority did not issue the product-profile fixture's exact decision")
 	}
+	var decisionsBeforeDiagnosis, outboxBeforeDiagnosis int
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.authorization_decisions").Scan(&decisionsBeforeDiagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.audit_outbox").Scan(&outboxBeforeDiagnosis); err != nil {
+		t.Fatal(err)
+	}
+	diagnosisResponse := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize:diagnose", paasServiceCredential, "", profileRequest,
+		map[string]string{"Matrix-Subject-Credential": primary.Credential})
+	var diagnosis iamv1.CurrentAccessDiagnosis
+	if diagnosisResponse.Status != http.StatusOK || json.Unmarshal(diagnosisResponse.Body, &diagnosis) != nil ||
+		iamv1.ValidateCurrentAccessDiagnosis(diagnosis) != nil || diagnosis.Outcome != iamv1.AccessDiagnosisAllowed ||
+		diagnosis.TenantID != profileDecision.TenantID || diagnosis.Subject != *profileDecision.Subject || len(diagnosis.Sources) == 0 {
+		t.Fatalf("current authority diagnosis status=%d diagnosis=%#v", diagnosisResponse.Status, diagnosis)
+	}
+	var decisionsAfterDiagnosis, outboxAfterDiagnosis int
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.authorization_decisions").Scan(&decisionsAfterDiagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.audit_outbox").Scan(&outboxAfterDiagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if decisionsAfterDiagnosis != decisionsBeforeDiagnosis || outboxAfterDiagnosis != outboxBeforeDiagnosis {
+		t.Fatal("read-only current access diagnosis persisted a decision or Audit outbox fact")
+	}
 	profileFact := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "retained-profile-business-event",
 		TenantID: auditv1.TenantID(profileDecision.TenantID), Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(profileDecision.Subject.ID)},
 		IAMDecisionID: auditv1.DecisionID(profileDecision.ID), Action: auditv1.ActionPaaSApplicationCreated,
@@ -2431,15 +2456,11 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	assertIAMEventsStoredOnce(t, ctx, admin)
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
-	// This source tree intentionally leads the last accepted release profile.
-	// Exercise the exact source services together without weakening install
-	// admission: the workflow separately proves the published installer rejects
-	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 61, Audit: 31, PaaS: 3}
+	// The source authorities now form the published release composition. Prove
+	// each real process reports the exact independently versioned authority
+	// profile rather than retaining the obsolete pre-publication mismatch gate.
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
-	if publishedProfile.Authorities == sourceProfile {
-		t.Fatal("unreleased authority source shape was published without a final profile gate")
-	}
+	sourceProfile := publishedProfile.Authorities
 	for _, authority := range []struct {
 		name, endpoint string
 		version        uint64
@@ -2539,6 +2560,47 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, replicaEndpoint, adminLogin.Credential, "principal-admin", "request-replica-existing-session", true))
+	diagnosisRequest, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-diagnosis"}, iamv1.AuthorizationResourceInstance,
+		"", "request-replica-access-diagnosis", "request-replica-access-diagnosis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decisionsBeforeDiagnosis, outboxBeforeDiagnosis int
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.authorization_decisions").Scan(&decisionsBeforeDiagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.audit_outbox").Scan(&outboxBeforeDiagnosis); err != nil {
+		t.Fatal(err)
+	}
+	diagnose := func(endpoint string) iamv1.CurrentAccessDiagnosis {
+		t.Helper()
+		response := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize:diagnose", paasServiceCredential, "", diagnosisRequest,
+			map[string]string{"Matrix-Subject-Credential": adminLogin.Credential})
+		var diagnosis iamv1.CurrentAccessDiagnosis
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &diagnosis) != nil ||
+			iamv1.ValidateCurrentAccessDiagnosis(diagnosis) != nil || diagnosis.Outcome != iamv1.AccessDiagnosisAllowed || len(diagnosis.Sources) == 0 {
+			t.Fatalf("current access diagnosis endpoint=%s status=%d diagnosis=%#v", endpoint, response.Status, diagnosis)
+		}
+		return diagnosis
+	}
+	primaryDiagnosis := diagnose(iamEndpoint)
+	replicaDiagnosis := diagnose(replicaEndpoint)
+	primaryDiagnosis.EvaluatedAt = time.Time{}
+	replicaDiagnosis.EvaluatedAt = time.Time{}
+	if !reflect.DeepEqual(primaryDiagnosis, replicaDiagnosis) {
+		t.Fatalf("simultaneous IAM processes disagreed on the same committed access state: primary=%#v replica=%#v", primaryDiagnosis, replicaDiagnosis)
+	}
+	var decisionsAfterDiagnosis, outboxAfterDiagnosis int
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.authorization_decisions").Scan(&decisionsAfterDiagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.audit_outbox").Scan(&outboxAfterDiagnosis); err != nil {
+		t.Fatal(err)
+	}
+	if decisionsAfterDiagnosis != decisionsBeforeDiagnosis || outboxAfterDiagnosis != outboxBeforeDiagnosis {
+		t.Fatal("two-process current access diagnosis persisted a decision or Audit outbox fact")
+	}
 	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential,
 		func(admit func()) {
 			auditProcess.stop()

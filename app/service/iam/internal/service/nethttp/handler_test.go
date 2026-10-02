@@ -84,6 +84,42 @@ func TestIAMHTTPExposesOnlyCredentialBoundCoreRoutes(t *testing.T) {
 	if err := json.Unmarshal(authorizeResponse.Body.Bytes(), &decision); err != nil || !reflect.DeepEqual(decision, workflow.decision) {
 		t.Fatalf("decode authorization decision: decision=%#v err=%v", decision, err)
 	}
+	workflow.diagnosis = iamv1.CurrentAccessDiagnosis{
+		APIVersion: iamv1.APIVersion, Kind: "CurrentAccessDiagnosis", Outcome: iamv1.AccessDiagnosisAllowed,
+		TenantID: workflow.decision.TenantID, Subject: *workflow.decision.Subject,
+		Action: authorizeValue.Action, Resource: authorizeValue.Resource, Profile: authorizeValue.Profile,
+		ResourceMode: authorizeValue.ResourceMode, RequestID: authorizeValue.RequestID, CorrelationID: authorizeValue.CorrelationID,
+		EvaluatedAt: workflow.decision.DecidedAt, Sources: []iamv1.AccessDiagnosisSource{}, Restrictions: []iamv1.AccessDiagnosisRestriction{},
+		ResourceExistence: iamv1.AccessDiagnosisNotEvaluated, BusinessOutcome: iamv1.AccessDiagnosisNotEvaluated,
+	}
+	diagnoseRequest := httptest.NewRequest(http.MethodPost, "/v1/authorize:diagnose", strings.NewReader(authorizeBody))
+	diagnoseRequest.Header.Set("Content-Type", "application/json")
+	diagnoseRequest.Header.Set("Authorization", "Bearer service-credential")
+	diagnoseRequest.Header.Set("Matrix-Subject-Credential", "subject-credential")
+	diagnoseResponse := httptest.NewRecorder()
+	handler.ServeHTTP(diagnoseResponse, diagnoseRequest)
+	var diagnosis iamv1.CurrentAccessDiagnosis
+	if diagnoseResponse.Code != http.StatusOK || workflow.diagnoseCalls != 1 ||
+		json.Unmarshal(diagnoseResponse.Body.Bytes(), &diagnosis) != nil || !reflect.DeepEqual(diagnosis, workflow.diagnosis) {
+		t.Fatalf("diagnose status=%d calls=%d diagnosis=%#v body=%s", diagnoseResponse.Code, workflow.diagnoseCalls, diagnosis, diagnoseResponse.Body.String())
+	}
+	for name, mutate := range map[string]func(*http.Request){
+		"missing subject": func(request *http.Request) { request.Header.Del("Matrix-Subject-Credential") },
+		"tenant selector": func(request *http.Request) { request.URL.RawQuery = "tenantId=forged" },
+	} {
+		t.Run("diagnose "+name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/v1/authorize:diagnose", strings.NewReader(authorizeBody))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer service-credential")
+			request.Header.Set("Matrix-Subject-Credential", "subject-credential")
+			mutate(request)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized && response.Code != http.StatusBadRequest || workflow.diagnoseCalls != 1 {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, workflow.diagnoseCalls, response.Body.String())
+			}
+		})
+	}
 
 	batchRequestValue := iamv1.AuthorizationBatchRequest{Requests: make([]iamv1.AuthorizationRequest, 2)}
 	for index, sample := range []struct{ resource, requestID string }{{"offering-a", "request-batch-a"}, {"offering-b", "request-batch-b"}} {
@@ -2177,6 +2213,7 @@ type httpWorkflow struct {
 	identity                         iamv1.ServiceIdentity
 	login                            iamv1.LoginResponse
 	decision                         iamv1.AuthorizationDecision
+	diagnosis                        iamv1.CurrentAccessDiagnosis
 	batchDecision                    iamv1.AuthorizationBatchDecision
 	authorizationBatchRequest        iamv1.AuthorizationBatchRequest
 	verificationDecision             iamv1.AuthorizationDecision
@@ -2207,6 +2244,7 @@ type httpWorkflow struct {
 	updateUser                       iamv1.UpdateUserRequest
 	deleteUser                       iamv1.DeleteUserRequest
 	authorizeCalls                   int
+	diagnoseCalls                    int
 	authorizeBatchCalls              int
 	keyCalls                         int
 	keyResolveCalls                  int
@@ -2906,6 +2944,16 @@ func (workflow *httpWorkflow) Authorize(
 ) (iamv1.AuthorizationDecision, error) {
 	workflow.authorizeCalls++
 	return workflow.decision, nil
+}
+
+func (workflow *httpWorkflow) DiagnoseAuthorization(
+	_ context.Context,
+	_ iamv1.Secret,
+	_ iamv1.Secret,
+	_ iamv1.AuthorizationRequest,
+) (iamv1.CurrentAccessDiagnosis, error) {
+	workflow.diagnoseCalls++
+	return workflow.diagnosis, nil
 }
 
 func (workflow *httpWorkflow) AuthorizeBatch(

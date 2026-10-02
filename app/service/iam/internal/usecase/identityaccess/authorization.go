@@ -13,6 +13,7 @@ import (
 
 type authorizationActor struct {
 	organizationID    iamv1.AccountID
+	installationID    string
 	subject           iamv1.Subject
 	accessKeyEvidence *AccessKeyAuthorizationEvidence
 }
@@ -251,6 +252,7 @@ func (service *Authority) Authorize(
 			now,
 			authorizationActor{
 				organizationID: subject.Subject.Organization.ID,
+				installationID: subject.Subject.InstallationID,
 				subject:        iamv1.Subject{Type: iamv1.SubjectType(subject.Subject.Principal.Type), ID: string(subject.Subject.Principal.ID)},
 			},
 			func(decisionID iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
@@ -315,6 +317,50 @@ func (service *Authority) ResolveAuthorizationSubject(
 	}
 	if iamv1.CheckAuthorizationSubjectContextForRequest(result, request) != nil {
 		return iamv1.AuthorizationSubjectContext{}, ErrUnavailable
+	}
+	return result, nil
+}
+
+// DiagnoseAuthorization explains the current evaluation without allocating or
+// recording an authorization decision. Its result is never a permit.
+func (service *Authority) DiagnoseAuthorization(
+	ctx context.Context,
+	serviceCredential iamv1.Secret,
+	subjectCredential iamv1.Secret,
+	request iamv1.AuthorizationRequest,
+) (iamv1.CurrentAccessDiagnosis, error) {
+	if iamv1.ValidateAuthorizationRequest(request) != nil {
+		return iamv1.CurrentAccessDiagnosis{}, ErrInvalidArgument
+	}
+	var result iamv1.CurrentAccessDiagnosis
+	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		now, err := transactionTime(transactionContext, transaction)
+		if err != nil {
+			return err
+		}
+		caller, err := service.authenticateService(transactionContext, transaction, serviceCredential)
+		if err != nil {
+			return err
+		}
+		actor, decide, err := service.batchAuthorizationActor(transactionContext, transaction, caller, subjectCredential, now)
+		if err != nil {
+			return err
+		}
+		if err := transaction.CheckCurrentAuthorizationProfiles(transactionContext); err != nil {
+			return err
+		}
+		evaluation, err := decide(request, iamv1.DecisionID("diagnosis-current-access"))
+		if err != nil {
+			return ErrUnavailable
+		}
+		result, err = authority.CurrentAccessDiagnosis(evaluation, actor.organizationID, actor.installationID, actor.subject, request)
+		return err
+	})
+	if err != nil {
+		return iamv1.CurrentAccessDiagnosis{}, err
+	}
+	if iamv1.ValidateCurrentAccessDiagnosis(result) != nil {
+		return iamv1.CurrentAccessDiagnosis{}, ErrUnavailable
 	}
 	return result, nil
 }
@@ -397,6 +443,7 @@ func (service *Authority) batchAuthorizationActor(
 	if err == nil {
 		actor := authorizationActor{
 			organizationID: subject.Subject.Organization.ID,
+			installationID: subject.Subject.InstallationID,
 			subject:        iamv1.Subject{Type: iamv1.SubjectType(subject.Subject.Principal.Type), ID: string(subject.Subject.Principal.ID)},
 		}
 		return actor, func(request iamv1.AuthorizationRequest, id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
@@ -419,6 +466,7 @@ func (service *Authority) batchAuthorizationActor(
 	}
 	actor := authorizationActor{
 		organizationID: role.Subject.Session.AccountID,
+		installationID: caller.Identity.InstallationID,
 		subject:        iamv1.Subject{Type: iamv1.SubjectRole, ID: string(role.Subject.Role.ID), RoleSession: &reference},
 	}
 	return actor, func(request iamv1.AuthorizationRequest, id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {

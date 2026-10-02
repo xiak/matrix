@@ -1407,6 +1407,20 @@ S4a不提供报告目录、共享链接、自动规则、后台停用、详细�
 
 历史拒绝以原decisionId/requestId及当时封存证据解释，不用今天的策略重新计算并覆盖旧理由。当前预检查另标“当前”，必须限定真实Action/资源和有权查看的账号范围，不伪造用户会话、可执行Decision或签名Key请求。详细理由需要区分显式Deny、缺Allow及上限不满足等实际求值分支；当前仅ALLOWED/DENIED不足，准确安全理由/证据投影在实施时冻结。不从错误信息泄露另一租户对象是否存在，不自动生成并附加“修复用全权限策略”。
 
+##### S4b执行片：当前访问诊断
+
+首片只诊断一个当前、准确的业务授权请求，不查询历史决定，也不模拟任意主体。入口为内部服务边界`POST /v1/authorize:diagnose`：认证方式与`/v1/authorize`相同，`Authorization`承载当前产品服务凭据，`Matrix-Subject-Credential`承载一个当前LOGIN_SESSION或ROLE_SESSION；请求体复用严格`AuthorizationRequest`。Account、安装、主体、调用服务和当前Profile均由凭据及受信注册取得，不能由body/header/query/cursor覆盖。AccessKey、SERVICE_ACCOUNT probe及匿名浏览器不进入首片；产品控制面可以代表当前真实请求调用，浏览器不得直接提交自称可信的网络、标签或资源归属。
+
+诊断在同一只读事务快照中验证当前Profile head、主体资格、策略附件、组关系、User/Role Boundary、SessionPolicy及调用服务，并调用唯一authority求值器。它返回独立`CurrentAccessDiagnosis`，不返回或持久化`AuthorizationDecision`、decisionId、permit、bearer、nonce、私有编译结果或Audit proof；重复请求只重新观察当前状态，不形成可重放完成。真正读写业务资源仍须重新调用原授权入口并由产品事务保存其准确决定，因此“诊断允许”不能被任何PEP、outbox或Audit producer接受为授权证据。
+
+响应固定包含当前scope（TENANT时`tenantId`、INSTALLATION时`installationId`二选一）、真实Subject、原Profile/action/resource/mode/usage、`evaluatedAt`、`outcome=ALLOWED|DENIED`、稳定排序的`reasons`、匹配来源及限制层。拒绝原因封闭为`EXPLICIT_DENY`、`NO_MATCHING_ALLOW`、`USER_PERMISSION_BOUNDARY`、`ROLE_PERMISSION_BOUNDARY`、`SESSION_POLICY`、`CREDENTIAL_RESTRICTED`、`SUBJECT_UNSUPPORTED`、`CALLING_SERVICE_UNSUPPORTED`和`RESOURCE_CONTEXT_UNSUPPORTED`；多个独立限制同时存在时全部返回，顺序不表达内部短路。权威状态损坏、证据不完整或数据库不确定返回503，不能伪装成普通Deny。
+
+匹配来源只投影`DIRECT|GROUP|ROLE|SERVICE_ROLE`、ALLOW/DENY、不可变PolicyVersion引用及必要的attachment/membership引用；限制层只投影`USER_BOUNDARY|ROLE_BOUNDARY|SESSION_POLICY`、`MATCHED|BLOCKED|NOT_APPLICABLE`及已有公开版本/digest引用。不返回Policy正文、条件实际值、编译结构、服务lookup digest、凭据代际或内部锁序。诊断只说明“给定受信上下文下当前PDP结果”，明确`resourceExistence=NOT_EVALUATED`、`businessOutcome=NOT_EVALUATED`；另一账号同名/同ID资源不能由响应推断存在。
+
+最低验收沿现有API、authority、HTTP、真实PostgreSQL和独立进程owner增量完成：USER直接/组来源的Allow与Deny、显式Deny优先、无Allow、User Boundary；USER来源ROLE的角色附件、Role Boundary和SessionPolicy交集；服务角色的模板/工作负载限制；错产品服务、错Profile、伪造网络/标签、停用/撤权/过期凭据及跨账号同ID攻击。每次诊断前后决定表、outbox和Audit事实数量必须不变；诊断后变更策略或撤权，真实业务授权必须按新状态重新判断，旧诊断不能被接受或重放。两个IAM副本对同一已提交快照给出相同语义，Profile推进、数据库失联和不完整证据失败关闭；不得为此增加缓存权威或第二套策略解释器。历史决定解释、管理员模拟其他主体和自动生成修复策略继续关闭，另行设计前不能借本入口实现。
+
+当前后端执行片已经落到同一授权拥有者：公开契约新增`CurrentAccessDiagnosis`及严格OpenAPI，HTTP入口继续使用服务凭据和主体Bearer；authority只在原`PolicyEvaluation`中保留匹配Allow/Deny版本及三类上限结果，再投影已验证attachment/membership/Role证据，没有解析第二遍Policy。用例事务只检查当前Profile并调用该求值器，不分配ID、不调用`RecordAuthorization`、不产生Audit outbox；本片没有SQL或schema变化。API、authority、usecase、HTTP、架构及全仓Go测试/race/vet已通过；独立PostgreSQL 18的实际IAM60 executable→IAM61迁移、双迁移、bootstrap/restart、冻结Profile推进门禁也已通过，并在真实进程中证明诊断前后`iam.authorization_decisions`和`iam.audit_outbox`计数不变。`TestIndependentIAMAuditAndPaaSProcesses`又在全新独立PostgreSQL 18上串行race-p2通过253.97秒：两个同时存活的IAM进程以同一服务凭据、Subject Session及已提交策略快照返回除各自事务`evaluatedAt`外完全相同的诊断语义，前后决定表和IAM outbox计数不变；原门禁仍完整覆盖双租户、MFA、恢复、重启、PaaS/Audit和历史重放。该次实跑还暴露进程门禁仍要求源码authority版本不得等于已发布IAM61/Audit31/PaaS3+r7的过期前置条件，现已替换为三个真实进程readiness必须精确匹配`CurrentDatabaseProfile`，没有放宽完整profile比较或安装准入。固定`14248c4f`的旧[Verification37073584728](https://github.com/xiak/matrix/actions/runs/37073584728)因此在`authority-runtime`失败，不能算成功；修复与本片的独立GitHub CI仍待固定提交后完成，不能用本地门禁替代。
+
 #### 闲置发现和处置
 
 闲置资格必须绑定规则修订、对象resourceVersion、真实活动修订和完整观察窗口。采集缺口、审计积压/死信、对象新建后不足阈值或仅没有浏览器登录时都不能断言User/Key闲置；程序Key和Role的真实活动必须按准确主体归因，不能忽略非浏览器使用。阈值以数据库时间和已冻结产品范围计算，不借外部地域/风险来源造结论。

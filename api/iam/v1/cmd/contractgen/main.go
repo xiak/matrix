@@ -338,6 +338,10 @@ func buildPaths() object {
 			"authorize", "Authorize a transient subject for one action", "AuthorizationRequest", "AuthorizationDecision", "200",
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
 		)},
+		"/v1/authorize:diagnose": object{"post": mutationOperation(
+			"diagnoseAuthorization", "Explain one current credential-bound authorization evaluation without issuing or recording a permit", "AuthorizationRequest", "CurrentAccessDiagnosis", "200",
+			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
+		)},
 		"/v1/internal/authorization-subject:resolve": object{"post": mutationOperation(
 			"resolveAuthorizationSubject", "Authenticate one transient USER or ROLE bearer for the exact current calling-service Profile; returns identity context, never a permit", "ResolveAuthorizationSubjectRequest", "AuthorizationSubjectContext", "200",
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
@@ -569,12 +573,18 @@ func enumSchemas() map[string][]string {
 			string(iamv1.ResourceAuditChain), string(iamv1.ResourceInstallation),
 			string(iamv1.ResourceExecutionPool), string(iamv1.ResourceExecutionTarget), string(iamv1.ResourceNodeEnrollment),
 		},
-		"DecisionReason":      {string(iamv1.DecisionAllowed), string(iamv1.DecisionDenied)},
-		"BootstrapState":      {string(iamv1.BootstrapUninitialized), string(iamv1.BootstrapReady)},
-		"ServicePurpose":      openapi31.StringValues(iamv1.AllServicePurposes()),
-		"ReadinessState":      {string(iamv1.ReadinessReady), string(iamv1.ReadinessNotReady)},
-		"LoginOutcome":        {string(iamv1.LoginAuthenticated), string(iamv1.LoginChallengeRequired), string(iamv1.LoginAdminResetRequired)},
-		"PasswordResetReason": {string(iamv1.PasswordResetExpired), string(iamv1.PasswordResetAgeUnknown)},
+		"DecisionReason":                  {string(iamv1.DecisionAllowed), string(iamv1.DecisionDenied)},
+		"AccessDiagnosisOutcome":          {string(iamv1.AccessDiagnosisAllowed), string(iamv1.AccessDiagnosisDenied)},
+		"AccessDiagnosisReason":           {string(iamv1.AccessDiagnosisExplicitDeny), string(iamv1.AccessDiagnosisNoMatchingAllow), string(iamv1.AccessDiagnosisUserPermissionBoundary), string(iamv1.AccessDiagnosisRolePermissionBoundary), string(iamv1.AccessDiagnosisSessionPolicy), string(iamv1.AccessDiagnosisCredentialRestricted), string(iamv1.AccessDiagnosisSubjectUnsupported), string(iamv1.AccessDiagnosisCallingServiceUnsupported), string(iamv1.AccessDiagnosisResourceContextUnsupported)},
+		"AccessDiagnosisSourceKind":       {string(iamv1.AccessDiagnosisSourceDirect), string(iamv1.AccessDiagnosisSourceGroup), string(iamv1.AccessDiagnosisSourceRole), string(iamv1.AccessDiagnosisSourceServiceRole)},
+		"AccessDiagnosisEffect":           {string(iamv1.AccessDiagnosisEffectAllow), string(iamv1.AccessDiagnosisEffectDeny)},
+		"AccessDiagnosisRestrictionKind":  {string(iamv1.AccessDiagnosisRestrictionUserBoundary), string(iamv1.AccessDiagnosisRestrictionRoleBoundary), string(iamv1.AccessDiagnosisRestrictionSessionPolicy)},
+		"AccessDiagnosisRestrictionState": {string(iamv1.AccessDiagnosisRestrictionMatched), string(iamv1.AccessDiagnosisRestrictionBlocked), string(iamv1.AccessDiagnosisRestrictionNotApplicable)},
+		"BootstrapState":                  {string(iamv1.BootstrapUninitialized), string(iamv1.BootstrapReady)},
+		"ServicePurpose":                  openapi31.StringValues(iamv1.AllServicePurposes()),
+		"ReadinessState":                  {string(iamv1.ReadinessReady), string(iamv1.ReadinessNotReady)},
+		"LoginOutcome":                    {string(iamv1.LoginAuthenticated), string(iamv1.LoginChallengeRequired), string(iamv1.LoginAdminResetRequired)},
+		"PasswordResetReason":             {string(iamv1.PasswordResetExpired), string(iamv1.PasswordResetAgeUnknown)},
 	}
 }
 
@@ -790,6 +800,9 @@ func structContracts() map[string]reflect.Type {
 		"AuthorizationTag":                              openapi31.StructType[iamv1.AuthorizationTag](),
 		"AuthorizationRequest":                          openapi31.StructType[iamv1.AuthorizationRequest](),
 		"AuthorizationDecision":                         openapi31.StructType[iamv1.AuthorizationDecision](),
+		"AccessDiagnosisSource":                         openapi31.StructType[iamv1.AccessDiagnosisSource](),
+		"AccessDiagnosisRestriction":                    openapi31.StructType[iamv1.AccessDiagnosisRestriction](),
+		"CurrentAccessDiagnosis":                        openapi31.StructType[iamv1.CurrentAccessDiagnosis](),
 		"ResolveAuthorizationSubjectRequest":            openapi31.StructType[iamv1.ResolveAuthorizationSubjectRequest](),
 		"AuthorizationSubjectContext":                   openapi31.StructType[iamv1.AuthorizationSubjectContext](),
 		"AuthorizationBatchRequest":                     openapi31.StructType[iamv1.AuthorizationBatchRequest](),
@@ -1170,6 +1183,18 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	}
 	if (owner == "AuthorizationRequest" || owner == "AuthorizationDecision") && (jsonName == "requestTags" || jsonName == "resourceTags") {
 		base["minItems"], base["maxItems"], base["uniqueItems"] = 1, iamv1.MaxAuthorizationTags, true
+	}
+	if owner == "CurrentAccessDiagnosis" {
+		switch jsonName {
+		case "requestTags", "resourceTags":
+			base["minItems"], base["maxItems"], base["uniqueItems"] = 1, iamv1.MaxAuthorizationTags, true
+		case "reasons":
+			base["maxItems"], base["uniqueItems"] = 9, true
+		case "sources":
+			base["maxItems"], base["uniqueItems"] = iamv1.MaxAccessDiagnosisSources, true
+		case "restrictions":
+			base["maxItems"], base["uniqueItems"] = 3, true
+		}
 	}
 	if owner == "AuthorizationBatchRequest" && jsonName == "requests" || owner == "AuthorizationBatchDecision" && jsonName == "decisions" {
 		base["minItems"], base["maxItems"] = 1, iamv1.MaxAuthorizationBatchItems
@@ -1725,6 +1750,7 @@ func applySemanticOverlays(schemas object) {
 		"ServiceIdentity":             "ServiceIdentity",
 		"AuditProducerAuthorization":  "AuditProducerAuthorization",
 		"AuthorizationSubjectContext": "AuthorizationSubjectContext",
+		"CurrentAccessDiagnosis":      "CurrentAccessDiagnosis",
 		"Revocation":                  "Revocation", "AuthorizationDecision": "AuthorizationDecision", "AuthorizationBatchDecision": "AuthorizationBatchDecision",
 		"Readiness": "Readiness",
 	}
@@ -1824,6 +1850,42 @@ func applySemanticOverlays(schemas object) {
 	})
 	decision["allOf"] = append(decisionRules, authorizationTargetRules(true)...)
 	schemas["AuthorizationRequest"].(object)["allOf"] = authorizationTargetRules(false)
+	diagnosis := schemas["CurrentAccessDiagnosis"].(object)
+	diagnosis["properties"].(object)["resourceExistence"] = object{"const": iamv1.AccessDiagnosisNotEvaluated}
+	diagnosis["properties"].(object)["businessOutcome"] = object{"const": iamv1.AccessDiagnosisNotEvaluated}
+	diagnosis["properties"].(object)["subject"] = object{"allOf": []any{openapi31.Ref("Subject"), object{"properties": object{
+		"type": object{"enum": []string{string(iamv1.SubjectUser), string(iamv1.SubjectRole)}}, "accessKeyId": false,
+	}}}}
+	diagnosisRules := authorizationTargetRules(false)
+	for _, definition := range iamv1.AllActionDefinitions() {
+		then := object{"required": []string{"tenantId"}, "properties": object{"installationId": false}}
+		if definition.AuthorityScope != iamv1.AuthorityScopeTenant {
+			then = object{"required": []string{"installationId"}, "properties": object{"tenantId": false}}
+		}
+		diagnosisRules = append(diagnosisRules, object{"if": object{"properties": object{"action": object{"const": string(definition.Action)}}, "required": []string{"action"}}, "then": then})
+	}
+	diagnosis["allOf"] = diagnosisRules
+	diagnosis["oneOf"] = []any{
+		object{"properties": object{"outcome": object{"const": string(iamv1.AccessDiagnosisAllowed)}, "reasons": object{"maxItems": 0}}},
+		object{"properties": object{"outcome": object{"const": string(iamv1.AccessDiagnosisDenied)}, "reasons": object{"minItems": 1}}},
+	}
+	schemas["AccessDiagnosisSource"].(object)["oneOf"] = []any{
+		object{"required": []string{"attachmentId"}, "properties": object{"kind": object{"const": string(iamv1.AccessDiagnosisSourceDirect)}, "membershipId": false}},
+		object{"required": []string{"attachmentId", "membershipId"}, "properties": object{"kind": object{"const": string(iamv1.AccessDiagnosisSourceGroup)}}},
+		object{"required": []string{"attachmentId"}, "properties": object{"kind": object{"const": string(iamv1.AccessDiagnosisSourceRole)}, "membershipId": false}},
+		object{"properties": object{"kind": object{"const": string(iamv1.AccessDiagnosisSourceServiceRole)}, "attachmentId": false, "membershipId": false}},
+	}
+	restriction := schemas["AccessDiagnosisRestriction"].(object)
+	restriction["allOf"] = []any{
+		object{"if": object{"properties": object{"kind": object{"const": string(iamv1.AccessDiagnosisRestrictionSessionPolicy)}}},
+			"then": object{"properties": object{"version": false}}, "else": object{"properties": object{"contentDigest": false}}},
+		object{"if": object{"properties": object{"state": object{"const": string(iamv1.AccessDiagnosisRestrictionNotApplicable)}}},
+			"then": object{"properties": object{"version": false, "contentDigest": false}},
+			"else": object{"oneOf": []any{
+				object{"required": []string{"contentDigest"}, "properties": object{"kind": object{"const": string(iamv1.AccessDiagnosisRestrictionSessionPolicy)}}},
+				object{"required": []string{"version"}, "properties": object{"kind": object{"enum": []string{string(iamv1.AccessDiagnosisRestrictionUserBoundary), string(iamv1.AccessDiagnosisRestrictionRoleBoundary)}}}},
+			}}},
+	}
 	batchDecision := schemas["AuthorizationBatchDecision"].(object)
 	batchDecision["properties"].(object)["subject"] = object{"allOf": []any{
 		openapi31.Ref("Subject"),

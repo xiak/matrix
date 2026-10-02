@@ -8250,6 +8250,26 @@ func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	if len(requirement) != 2 || requirement["ServiceCredential"] == nil || requirement["SubjectCredential"] == nil {
 		t.Fatalf("authorize security = %#v, want service and subject credentials", requirement)
 	}
+	diagnosePath := mustIAMObject(t, paths["/v1/authorize:diagnose"], "diagnose path")
+	diagnose := mustIAMObject(t, diagnosePath["post"], "diagnose operation")
+	diagnoseSecurity, ok := diagnose["security"].([]any)
+	if !ok || len(diagnoseSecurity) != 1 {
+		t.Fatalf("diagnose security = %#v, want one AND requirement", diagnose["security"])
+	}
+	diagnoseRequirement := mustIAMObject(t, diagnoseSecurity[0], "diagnose security requirement")
+	if len(diagnoseRequirement) != 2 || diagnoseRequirement["ServiceCredential"] == nil || diagnoseRequirement["SubjectCredential"] == nil {
+		t.Fatalf("diagnose security = %#v, want service and subject credentials", diagnoseRequirement)
+	}
+	if _, exists := diagnose["parameters"]; exists {
+		t.Fatal("diagnose exposes an account, subject or authority selector")
+	}
+	diagnosisSchema := mustIAMObject(t, iamOpenAPISchemas(t, document)["CurrentAccessDiagnosis"], "diagnosis schema")
+	diagnosisProperties := mustIAMObject(t, diagnosisSchema["properties"], "diagnosis properties")
+	for _, forbidden := range []string{"id", "decisionId", "allowed", "permit", "nonce", "policyDocument", "compilation"} {
+		if _, exists := diagnosisProperties[forbidden]; exists {
+			t.Fatalf("diagnosis exposes permit/private field %q", forbidden)
+		}
+	}
 	bindingPath := mustIAMObject(t, paths["/v1/internal/workload-role-bindings"], "workload role binding path")
 	bindingOperation := mustIAMObject(t, bindingPath["post"], "workload role binding operation")
 	bindingSecurity, ok := bindingOperation["security"].([]any)

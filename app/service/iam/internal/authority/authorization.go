@@ -261,9 +261,17 @@ func validateServiceRoleSessionContext(value RoleSessionContext) error {
 // sanitized public decision. Only the decision is returned to a caller.
 type AuthorizationEvaluation struct {
 	iamv1.AuthorizationDecision
-	PolicyEvidence   []PolicyAttachmentEvidence `json:"-"`
-	BoundaryEvidence UserBoundaryEvidence       `json:"-"`
-	RoleEvidence     *RoleAuthorizationEvidence `json:"-"`
+	PolicyEvidence           []PolicyAttachmentEvidence `json:"-"`
+	BoundaryEvidence         UserBoundaryEvidence       `json:"-"`
+	RoleEvidence             *RoleAuthorizationEvidence `json:"-"`
+	PolicyEvaluation         PolicyEvaluation           `json:"-"`
+	UserBoundaryEvaluation   *PolicyEvaluation          `json:"-"`
+	RoleBoundaryEvaluation   *PolicyEvaluation          `json:"-"`
+	SessionPolicyEvaluation  *PolicyEvaluation          `json:"-"`
+	CredentialRestricted     bool                       `json:"-"`
+	SubjectSupported         bool                       `json:"-"`
+	CallingServiceSupported  bool                       `json:"-"`
+	ResourceContextSupported bool                       `json:"-"`
 }
 
 // This reference resolves to the immutable issuance ledger, which owns the
@@ -546,6 +554,8 @@ func DecideRole(value RoleSessionContext, callingService iamv1.ServicePurpose, r
 	if policies == nil {
 		policies = []PolicyAttachmentEvidence{}
 	}
+	policyEvaluation := grant
+	var boundaryEvaluation, sessionEvaluation *PolicyEvaluation
 	if supported {
 		context := policyEvaluationContext{databaseTime: now, accountID: value.Session.AccountID, subject: subject,
 			profiles: make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)}
@@ -561,6 +571,7 @@ func DecideRole(value RoleSessionContext, callingService iamv1.ServicePurpose, r
 			return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 		}
 		grant.Allowed = grant.Allowed && boundary.Allowed && session.Allowed
+		boundaryEvaluation, sessionEvaluation = &boundary, &session
 	}
 	proof := &RoleAuthorizationEvidence{AuthorityContractVersion: value.AuthorityContractVersion,
 		SourceAuthorizationGeneration: value.SourceAuthorizationGeneration, SourceGroupGenerations: append([]RoleSourceGroupGeneration{}, value.SourceGroupGenerations...),
@@ -573,12 +584,15 @@ func DecideRole(value RoleSessionContext, callingService iamv1.ServicePurpose, r
 	if value.SessionPolicy != nil {
 		proof.SessionPolicy = &RoleSessionPolicyEvidence{ContentDigest: value.SessionPolicy.ContentDigest, Compilation: value.SessionPolicy.Compilation}
 	}
-	allowed := supported && grant.Allowed && ServiceCanRequest(callingService, request.Action)
+	serviceSupported := ServiceCanRequest(callingService, request.Action)
+	allowed := supported && grant.Allowed && serviceSupported
 	decision, err := authorizationDecision(value.Session.AccountID, "", subject, request, decisionID, now, allowed)
 	if err != nil {
 		return AuthorizationEvaluation{}, err
 	}
-	return AuthorizationEvaluation{AuthorizationDecision: decision, PolicyEvidence: policies, BoundaryEvidence: UserBoundaryEvidence{State: "NOT_APPLICABLE"}, RoleEvidence: proof}, nil
+	return AuthorizationEvaluation{AuthorizationDecision: decision, PolicyEvidence: policies, BoundaryEvidence: UserBoundaryEvidence{State: "NOT_APPLICABLE"}, RoleEvidence: proof,
+		PolicyEvaluation: policyEvaluation, RoleBoundaryEvaluation: boundaryEvaluation, SessionPolicyEvaluation: sessionEvaluation,
+		SubjectSupported: supported, CallingServiceSupported: serviceSupported, ResourceContextSupported: true}, nil
 }
 
 func decideServiceRole(value RoleSessionContext, callingService iamv1.ServicePurpose, request iamv1.AuthorizationRequest,
@@ -601,8 +615,9 @@ func decideServiceRole(value RoleSessionContext, callingService iamv1.ServicePur
 	if err != nil && supported {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
-	allowed := supported && grant.Allowed && request.Resource == service.Workload &&
-		ServiceCanRequest(callingService, request.Action)
+	serviceSupported := ServiceCanRequest(callingService, request.Action)
+	resourceSupported := request.Resource == service.Workload
+	allowed := supported && grant.Allowed && resourceSupported && serviceSupported
 	decision, err := authorizationDecision(value.Session.AccountID, "", subject, request, decisionID, now, allowed)
 	if err != nil {
 		return AuthorizationEvaluation{}, err
@@ -616,7 +631,8 @@ func decideServiceRole(value RoleSessionContext, callingService iamv1.ServicePur
 			Template: service.Template.Reference(), Workload: service.Workload, PermissionVersion: permission,
 			ContractVersion: service.PermissionVersion.ContractVersion, Compilation: service.PermissionVersion.Compilation}}
 	return AuthorizationEvaluation{AuthorizationDecision: decision, PolicyEvidence: []PolicyAttachmentEvidence{},
-		BoundaryEvidence: UserBoundaryEvidence{State: "NOT_APPLICABLE"}, RoleEvidence: proof}, nil
+		BoundaryEvidence: UserBoundaryEvidence{State: "NOT_APPLICABLE"}, RoleEvidence: proof, PolicyEvaluation: grant,
+		SubjectSupported: supported, CallingServiceSupported: serviceSupported, ResourceContextSupported: resourceSupported}, nil
 }
 
 func decide(
@@ -650,7 +666,9 @@ func decide(
 		// grants, not missing provenance that makes the transaction unavailable.
 		evidence = []PolicyAttachmentEvidence{}
 	}
+	policyEvaluation := evaluation
 	boundaryEvidence := UserBoundaryEvidence{State: "NOT_APPLICABLE"}
+	var boundaryEvaluation *PolicyEvaluation
 	definition, _ := iamv1.LookupActionDefinition(request.Action)
 	if subject.Type == iamv1.SubjectUser && definition.AuthorityScope == iamv1.AuthorityScopeTenant {
 		limit, proof, err := evaluateUserBoundary(boundary, policyEvaluationContext{databaseTime: databaseTime, accountID: tenantID, subject: subject}, request)
@@ -659,17 +677,22 @@ func decide(
 		}
 		evaluation.Allowed = evaluation.Allowed && limit.Allowed
 		boundaryEvidence = proof
+		boundaryEvaluation = &limit
 	}
 	platform := iamv1.IsPlatformAction(request.Action)
 	platformContext := !platform || subject.Type == iamv1.SubjectUser && subject.AccessKeyID == "" && iamv1.ValidateID("installationId", installationID) == nil
 	probeContext := request.Action != iamv1.ActionInstallationVerify ||
 		subject.Type == iamv1.SubjectServiceAccount && request.Resource.ID == installationID
-	allowed := subjectSupported && evaluation.Allowed && !credentialRestricted && platformContext && probeContext && ServiceCanRequest(callingService, request.Action)
+	serviceSupported := ServiceCanRequest(callingService, request.Action)
+	resourceSupported := platformContext && probeContext
+	allowed := subjectSupported && evaluation.Allowed && !credentialRestricted && resourceSupported && serviceSupported
 	decision, err := authorizationDecision(tenantID, installationID, subject, request, decisionID, databaseTime, allowed)
 	if err != nil {
 		return AuthorizationEvaluation{}, err
 	}
-	return AuthorizationEvaluation{AuthorizationDecision: decision, PolicyEvidence: evidence, BoundaryEvidence: boundaryEvidence}, nil
+	return AuthorizationEvaluation{AuthorizationDecision: decision, PolicyEvidence: evidence, BoundaryEvidence: boundaryEvidence,
+		PolicyEvaluation: policyEvaluation, UserBoundaryEvaluation: boundaryEvaluation, CredentialRestricted: credentialRestricted,
+		SubjectSupported: subjectSupported, CallingServiceSupported: serviceSupported, ResourceContextSupported: resourceSupported}, nil
 }
 
 func authorizationDecision(tenantID iamv1.AccountID, installationID string, subject iamv1.Subject, request iamv1.AuthorizationRequest, decisionID iamv1.DecisionID, databaseTime time.Time, allowed bool) (iamv1.AuthorizationDecision, error) {

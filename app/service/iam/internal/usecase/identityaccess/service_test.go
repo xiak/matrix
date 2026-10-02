@@ -3005,6 +3005,19 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 		decision.Subject == nil || decision.Subject.ID != "principal-admin" {
 		t.Fatalf("PaaS decision = %#v err=%v, want allowed", decision, err)
 	}
+	beforeDiagnosis := len(repository.transaction.authorizations)
+	diagnosis, err := service.DiagnoseAuthorization(context.Background(), paasCredential, login.Credential, request)
+	if err != nil || diagnosis.Outcome != iamv1.AccessDiagnosisAllowed || diagnosis.TenantID != "organization-example" ||
+		diagnosis.Subject != (iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-admin"}) ||
+		len(diagnosis.Sources) == 0 || len(repository.transaction.authorizations) != beforeDiagnosis {
+		t.Fatalf("current access diagnosis=%#v mutations=%d err=%v", diagnosis, len(repository.transaction.authorizations)-beforeDiagnosis, err)
+	}
+	diagnosis, err = service.DiagnoseAuthorization(context.Background(), coreServiceCredential(t, document, iamv1.ServiceAudit), login.Credential, request)
+	if err != nil || diagnosis.Outcome != iamv1.AccessDiagnosisDenied ||
+		!slices.Contains(diagnosis.Reasons, iamv1.AccessDiagnosisCallingServiceUnsupported) ||
+		len(repository.transaction.authorizations) != beforeDiagnosis {
+		t.Fatalf("wrong-service diagnosis=%#v mutations=%d err=%v", diagnosis, len(repository.transaction.authorizations)-beforeDiagnosis, err)
+	}
 	batch := iamv1.AuthorizationBatchRequest{Requests: make([]iamv1.AuthorizationRequest, 2)}
 	for index, sample := range []struct{ resource, requestID string }{{"offering-a", "request-batch-a"}, {"offering-b", "request-batch-b"}} {
 		batch.Requests[index], err = iamv1.NewAuthorizationRequest(
