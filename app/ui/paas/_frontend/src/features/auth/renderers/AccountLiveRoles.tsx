@@ -1,13 +1,13 @@
 "use client";
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent, type ServiceLinkedRoleClient, type ServiceRoleTemplateClient } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
-import type { RoleAccess, RoleCapability, RoleListing } from "../domain/roles";
+import type { RoleAccess, RoleCapability, RoleListing, RoleTrustVersion, RoleTrustVersionDirectory } from "../domain/roles";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { LiveRoleSessions } from "./LiveRoleSessions";
 import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
@@ -22,6 +22,74 @@ function durationLabel(seconds: number): string {
 
 function capabilityState(capability: RoleCapability) {
   return capability.available ? "available" : "restricted";
+}
+
+function trustPrincipalCount(version: RoleTrustVersion): number {
+  return version.document.statements.reduce((count, statement) => count + statement.principals.length, 0);
+}
+
+function LiveRoleTrustHistory({ client, roleId, currentVersionId }: { client: RoleAccessClient; roleId: string; currentVersionId: string }) {
+  const t = useTranslations("RoleWorkspace"), w = useTranslations("IamWorkspace"), a = useTranslations("AccountAccess");
+  const [directory, setDirectory] = useState<RoleTrustVersionDirectory | null>(null);
+  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [error, setError] = useState<string | null>(null), [loadingMore, setLoadingMore] = useState(false);
+  const [selected, setSelected] = useState<RoleTrustVersion | null>(null), [page, setPage] = useState(1), [pageSize, setPageSize] = useState(10);
+  const requests = useRef(0), pageRequests = useRef(0);
+  const [refresh, setRefresh] = useState(0);
+
+  useEffect(() => {
+    const request = ++requests.current;
+    pageRequests.current += 1;
+    client.listTrustVersions(roleId).then((result) => {
+      if (request !== requests.current) return;
+      setDirectory(result); setPhase("ready");
+    }, (failure: unknown) => {
+      if (request !== requests.current) return;
+      setError(a(`errors.${accountError(failure)}`)); setPhase("error");
+    });
+    return () => { requests.current += 1; pageRequests.current += 1; };
+  }, [a, client, refresh, roleId]);
+
+  const retry = () => {
+    setPhase("loading"); setDirectory(null); setSelected(null); setError(null); setPage(1);
+    setRefresh((value) => value + 1);
+  };
+
+  const loadMore = async () => {
+    if (!directory?.nextAfter || loadingMore) return;
+    const request = ++pageRequests.current, listRequest = requests.current;
+    setLoadingMore(true); setError(null);
+    try {
+      const next = await client.listTrustVersions(roleId, directory.nextAfter);
+      if (request !== pageRequests.current || listRequest !== requests.current) return;
+      if (next.items.some((item) => directory.items.some((known) => known.id === item.id))) throw new Error("INVALID_IAM_RESPONSE");
+      setDirectory({ ...next, items: [...directory.items, ...next.items] });
+    } catch (failure) {
+      if (request === pageRequests.current && listRequest === requests.current) setError(a(`errors.${accountError(failure)}`));
+    } finally {
+      if (request === pageRequests.current) setLoadingMore(false);
+    }
+  };
+
+  if (selected) return <section aria-label={t("trustVersionDetail")} className={styles.stack} role="group">
+    <div className={styles.sectionHeading}><Button variant="ghost" onClick={() => setSelected(null)}>{t("backToTrustHistory")}</Button><h3 className={styles.detailTitle}>{t("trustVersionDetail")}</h3></div>
+    <div className={styles.sectionHeading}><Badge status={selected.id === currentVersionId ? "success" : "neutral"}>{t(selected.id === currentVersionId ? "currentTrust" : "historicalTrust")}</Badge><code>{selected.id}</code></div>
+    <dl className={styles.facts}><div><dt>{w("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div><div><dt>{t("statementCount")}</dt><dd>{selected.document.statements.length}</dd></div><div><dt>{t("principalCount")}</dt><dd>{trustPrincipalCount(selected)}</dd></div><div><dt>{t("verifiedDigest")}</dt><dd><code>{selected.contentDigest}</code></dd></div></dl>
+    <pre className={styles.code}>{JSON.stringify(selected.document, null, 2)}</pre>
+  </section>;
+
+  if (phase === "loading") return <TableSkeleton label={t("loadingTrustHistory")} rows={4} />;
+  if (phase === "error") return <EmptyState title={t("trustHistoryUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={retry}>{t("retry")}</Button>} />;
+  const items = directory?.items ?? [], pages = Math.max(1, Math.ceil(items.length / pageSize)), current = Math.min(page, pages);
+  return <div className={styles.stack} aria-busy={loadingMore}>
+    <Alert>{t("trustHistoryHint")}</Alert>
+    {items.length ? <><Table aria-label={t("trustHistory")} mobileLayout="stack"><thead><tr><th scope="col">{t("trustVersion")}</th><th scope="col">{w("created")}</th><th scope="col">{t("trustedUsers")}</th><th scope="col">{w("state")}</th></tr></thead><tbody>{items.slice((current - 1) * pageSize, current * pageSize).map((version) => <tr key={version.id}>
+      <td data-label={t("trustVersion")}><button className={styles.userLink} onClick={() => setSelected(version)}>{version.id}</button><small>{version.contentDigest}</small></td>
+      <td data-label={w("created")}><WorkspaceTime value={version.createdAt} /></td><td data-label={t("trustedUsers")}>{trustPrincipalCount(version)}</td>
+      <td data-label={w("state")}><Badge status={version.id === currentVersionId ? "success" : "neutral"}>{t(version.id === currentVersionId ? "currentTrust" : "historicalTrust")}</Badge></td>
+    </tr>)}</tbody></Table><Table.Footer note={t("trustHistoryPageHint")}><TablePagination page={current} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} trailing={directory?.nextAfter ? <Button size="small" variant="secondary" disabled={loadingMore} onClick={() => void loadMore()}>{t("loadMore")}</Button> : null} labels={{ summary: w("page", { page: current, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer></> : <EmptyState title={t("noTrustHistory")} description={t("noTrustHistoryHint")} />}
+    {error ? <Alert status="warning">{error}</Alert> : null}
+  </div>;
 }
 
 function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange }: {
@@ -88,6 +156,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
         <Tabs.List aria-label={access.role.name}>
           <Tabs.Trigger value="permissions">{t("livePermissions")} ({access.policyAttachments.length})</Tabs.Trigger>
           <Tabs.Trigger value="trust">{t("liveTrust")} ({access.trustVersion.document.statements.length})</Tabs.Trigger>
+          <Tabs.Trigger value="trustHistory">{t("trustHistory")}</Tabs.Trigger>
           <Tabs.Trigger value="sessions">{t("liveSessions")}</Tabs.Trigger>
           <Tabs.Trigger value="capabilities">{t("availableOperations")}</Tabs.Trigger>
         </Tabs.List>
@@ -118,6 +187,9 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
             <pre className={styles.code}>{JSON.stringify(access.trustVersion.document, null, 2)}</pre>
           </details>
           <p className={styles.note}>{t("verifiedDigest")}: <code>{access.trustVersion.contentDigest}</code></p>
+        </Tabs.Content>
+        <Tabs.Content className={styles.stack} value="trustHistory">
+          {section === "trustHistory" ? <LiveRoleTrustHistory client={client} roleId={roleId} currentVersionId={access.role.currentTrustVersionId} /> : null}
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="sessions">
           {section === "sessions" ? <LiveRoleSessions client={client} roleId={roleId} listCapability={access.capabilities.find((capability) => capability.action === "iam.role-session.list")!} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} /> : null}

@@ -2207,6 +2207,7 @@ describe("account access", () => {
       roles: {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
+        listTrustVersions: vi.fn(),
         create: vi.fn().mockResolvedValue(managedRole),
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
         readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
@@ -2252,6 +2253,7 @@ describe("account access", () => {
       roles: {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
+        listTrustVersions: vi.fn(),
         create: vi.fn().mockResolvedValue(managedRole),
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
         readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
@@ -2284,6 +2286,7 @@ describe("account access", () => {
       roles: {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
+        listTrustVersions: vi.fn(),
         create,
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
         readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
@@ -2330,10 +2333,12 @@ describe("account access", () => {
     const create = vi.fn(() => new Promise<typeof managedRole>((resolve) => { resolveCreate = resolve; }));
     const roleClient = (operation: RoleAccessClient["create"]): RoleAccessClient => ({
       accountId: account.id,
+      sessionRevision: 1,
       canCreate: true,
       createRestrictionReason: null,
       list: vi.fn().mockResolvedValue(managedRoleDirectory),
       read: vi.fn().mockResolvedValue(managedRoleAccess),
+      listTrustVersions: vi.fn(),
       create: operation,
       listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
       readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
@@ -2377,6 +2382,7 @@ describe("account access", () => {
       roles: {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
+        listTrustVersions: vi.fn(),
         create: vi.fn().mockResolvedValue(managedRole),
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [managedRoleSessionItem], nextAfter: null }),
         readSession: vi.fn().mockResolvedValue({ observedAt: timestamp, item: managedRoleSessionItem }),

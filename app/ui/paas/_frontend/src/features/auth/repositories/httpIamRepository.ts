@@ -67,7 +67,7 @@ import type {
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
-import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, UserRoleSession } from "../domain/roles";
+import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
 import { sourceCidrValid } from "../domain/policyLanguage";
 
 function accountRecord(value: unknown): Record<string, unknown> {
@@ -957,6 +957,20 @@ async function verifyRoleTrustDigest(version: RoleTrustVersion): Promise<void> {
   const digest = await crypto.subtle.digest("SHA-256", source);
   const actual = `sha256:${Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("")}`;
   if (actual !== version.contentDigest) throw new Error("INVALID_IAM_RESPONSE");
+}
+
+async function parseRoleTrustVersionDirectory(value: unknown, accountId: string, roleId: string, after?: string): Promise<RoleTrustVersionDirectory> {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "roleId", "items"], ["nextAfter"]);
+  requireAccountKind(wire, "RoleTrustVersionList");
+  if (accountIdentifier(wire.accountId) !== accountId || accountIdentifier(wire.roleId) !== roleId ||
+      !Array.isArray(wire.items) || wire.items.length > 100) throw new Error("INVALID_IAM_RESPONSE");
+  const items = wire.items.map(parseRoleTrustVersion);
+  if (items.some((item) => item.accountId !== accountId || item.roleId !== roleId)) throw new Error("INVALID_IAM_RESPONSE");
+  await Promise.all(items.map(verifyRoleTrustDigest));
+  const nextAfter = orderedDirectoryPage(items.map((item) => item.id), wire.nextAfter, after);
+  if (new TextEncoder().encode(JSON.stringify(wire)).length > 4 * 1024 * 1024) throw new Error("INVALID_IAM_RESPONSE");
+  return { accountId, roleId, items, nextAfter };
 }
 
 function parseRoleAccess(value: unknown, accountId: string, roleId: string): RoleAccess {
@@ -2132,6 +2146,13 @@ export const httpAccountRepository: AccountRepository = {
       ), accountIdentifier(accountId), target);
       await verifyRoleTrustDigest(access.trustVersion);
       return access;
+    },
+    async listTrustVersions(credential, accountId, roleId, after) {
+      const target = accountIdentifier(roleId);
+      return parseRoleTrustVersionDirectory(await requestJSON<unknown>(
+        `/api/iam/v1/roles/${encodeURIComponent(target)}/trust-versions${pageQuery(after)}`,
+        { headers: accountHeaders(credential) }
+      ), accountIdentifier(accountId), target, after);
     },
     async create(credential, accountId, command) {
       const owner = accountIdentifier(accountId);

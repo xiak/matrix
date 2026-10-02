@@ -211,6 +211,20 @@ describe("IAM HTTP role boundary", () => {
     expect(result.policyAttachments[0]?.target).toEqual({ kind: "ROLE", id: role.id });
   });
 
+  it("lists only digest-verified immutable trust versions for the exact role", async () => {
+    const current = (await roleAccess()).trustVersion;
+    const previousDocument = { languageVersion: "1", statements: [{ sid: "initial-review", effect: "ALLOW", principals: [{ type: "USER", id: user.id }] }] };
+    const previous = { ...current, id: "trust-reviewer-v1", document: previousDocument, contentDigest: await trustDigest(previousDocument), createdAt: "2026-09-20T08:00:00Z" };
+    const fetcher = reply({ apiVersion, kind: "RoleTrustVersionList", accountId: account.id, roleId: role.id, items: [previous, current] });
+
+    const result = await httpAccountRepository.roles!.listTrustVersions("bearer", account.id, role.id);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/trust-versions`);
+    expect(result).toMatchObject({ accountId: account.id, roleId: role.id, nextAfter: null, items: [{ id: previous.id }, { id: current.id }] });
+
+    reply({ apiVersion, kind: "RoleTrustVersionList", accountId: account.id, roleId: role.id, items: [{ ...previous, contentDigest: `sha256:${"0".repeat(64)}` }] });
+    await expect(httpAccountRepository.roles!.listTrustVersions("bearer", account.id, role.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
   it("creates a role with only metadata, USER trust and one retained request ID", async () => {
     const trustPolicy = { languageVersion: "1" as const, statements: [{ sid: "trusted-users", effect: "ALLOW" as const, principals: [{ type: "USER" as const, id: user.id }] }] };
     const fetcher = reply(role);

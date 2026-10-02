@@ -39,6 +39,11 @@ const access: RoleAccess = {
     action: "iam.role-policy-attachment.revoke", resource: { kind: "POLICY_ATTACHMENT", id: "attachment-reviewer" }, available: true, restrictionReason: null
   }]
 };
+const previousTrustVersion = {
+  id: "trust-reviewer-v1", accountId: role.accountId, roleId: role.id, createdAt: "2026-09-20T08:00:00Z",
+  contentDigest: `sha256:${"b".repeat(64)}`,
+  document: { languageVersion: "1" as const, statements: [{ sid: "initial-review", effect: "ALLOW" as const, principals: [{ type: "USER" as const, id: "user-sam" }] }] }
+};
 const liveSession = {
   id: "rs1.incident-review", accountId: role.accountId, roleId: role.id, sourceUserId: "user-alex", status: "ACTIVE" as const,
   issuedAt: timestamp, expiresAt: "2026-09-21T09:00:00Z", revokedAt: null
@@ -68,10 +73,12 @@ const serviceSessionItem = {
 function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
   return {
     accountId: role.accountId,
+    sessionRevision: 1,
     canCreate: true,
     createRestrictionReason: null,
     list: vi.fn().mockResolvedValue(directory),
     read: vi.fn().mockResolvedValue(access),
+    listTrustVersions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, items: [previousTrustVersion, access.trustVersion], nextAfter: null }),
     create: vi.fn().mockResolvedValue(role),
     listSessions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, observedAt: timestamp, items: [], nextAfter: null }),
     readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
@@ -133,6 +140,26 @@ describe("AccountLiveRoles", () => {
     await user.click(screen.getByRole("tab", { name: "当前操作能力" }));
     expect(screen.getByText("iam.role.assume")).toBeTruthy();
     expect(api.listSessions).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("loads immutable trust history only on demand and opens a version inline", async () => {
+    const user = userEvent.setup();
+    const api = client();
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    expect(await screen.findByRole("heading", { name: role.name })).toBeTruthy();
+    expect(api.listTrustVersions).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("tab", { name: "信任版本" }));
+
+    const table = await screen.findByRole("table", { name: "信任版本" });
+    expect(api.listTrustVersions).toHaveBeenCalledWith(role.id);
+    expect(within(table).getByText("当前版本")).toBeTruthy();
+    expect(within(table).getByText("历史版本")).toBeTruthy();
+    await user.click(within(table).getByRole("button", { name: previousTrustVersion.id }));
+    const detail = screen.getByRole("group", { name: "信任版本详情" });
+    expect(within(detail).getByText(previousTrustVersion.contentDigest)).toBeTruthy();
+    expect(within(detail).getByText(/user-sam/)).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 

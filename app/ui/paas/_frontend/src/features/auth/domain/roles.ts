@@ -63,6 +63,13 @@ export type RoleTrustVersion = {
   createdAt: string;
 };
 
+export type RoleTrustVersionDirectory = {
+  accountId: string;
+  roleId: string;
+  items: RoleTrustVersion[];
+  nextAfter: string | null;
+};
+
 export type CreateRoleCommand = {
   name: string;
   description: string;
