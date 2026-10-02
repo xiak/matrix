@@ -95,6 +95,25 @@ describe("ContentPage context heading", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Create role" }));
   });
 
+  it("restores focus to the stable selection trigger after a content-area batch workflow", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const commands = useRef<PageCommandsHandle>(null);
+      return <><ContentPage.Commands label="Page actions" focusRef={commands}
+        primary={{ id: "create", label: "Create user", onSelect() {} }}
+        selection={{ label: "More actions", clearLabel: "Clear selection", onClear() {}, actions: [
+          { id: "add-groups", label: "Add to groups", onSelect() {} },
+          { id: "authorize", label: "Attach policies", onSelect() {} },
+        ] }} />
+        <button onClick={() => commands.current?.focus("add-groups")}>Return from batch workflow</button></>;
+    }
+    render(<Harness />);
+
+    await user.click(screen.getByRole("button", { name: "Return from batch workflow" }));
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "More actions" }));
+  });
+
   it("keeps one standalone secondary command direct and groups multiple peers in one desktop menu", async () => {
     const user = userEvent.setup(), refresh = vi.fn(), revoke = vi.fn();
     const view = render(<ContentPage.Commands label="Page actions" moreLabel="More actions"

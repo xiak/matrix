@@ -325,16 +325,18 @@ describe("selection-driven user directory", () => {
     const { user, repository } = await openBatch();
     await user.click(screen.getByRole("checkbox", { name: "选择当前筛选页的全部用户" }));
     await action(user, "添加到用户组");
-    let dialog = within(screen.getByRole("dialog"));
-    expect(dialog.getByRole("table", { name: "本次操作的用户" })).toBeTruthy();
-    await user.click(dialog.getByRole("checkbox", { name: "DeliveryTeam" }));
-    await user.click(dialog.getByRole("button", { name: "审阅变更" }));
+    let workflow = within(screen.getByRole("group", { name: "添加到用户组 · 4 位用户" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
+    expect(workflow.getByRole("table", { name: "本次操作的用户" })).toBeTruthy();
+    await user.click(workflow.getByRole("checkbox", { name: "DeliveryTeam" }));
+    await user.click(workflow.getByRole("button", { name: "审阅变更" }));
     expect(repository.executeUserBatch).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Language" }));
-    dialog = within(screen.getByRole("dialog"));
-    expect(dialog.getByText(/The account owner is not a group member/)).toBeTruthy();
-    await user.click(dialog.getByRole("button", { name: "Confirm action" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    workflow = within(screen.getByRole("group", { name: "Add to user groups · 4 users" }));
+    expect(workflow.getByText(/The account owner is not a group member/)).toBeTruthy();
+    await user.click(workflow.getByRole("button", { name: "Confirm action" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Add to user groups · 4 users" })).toBeNull());
     expect(repository.executeUserBatch).toHaveBeenCalledTimes(1);
     expect(repository.execute).not.toHaveBeenCalled();
     const state = await previewAccountRepository.workspace!.read(previewCredential);
@@ -343,6 +345,20 @@ describe("selection-driven user directory", () => {
     expect(state.groups[1]?.memberIds).toContain("principal-chen");
     expect(within(screen.getByRole("region", { name: "Account owner" })).getByRole("button", { name: "View user admin" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "More actions" }).hasAttribute("disabled")).toBe(true);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Create user" })));
+  });
+  it("returns a cancelled association workflow to the stable selection command", async () => {
+    const { user, repository } = await openBatch();
+    await user.click(screen.getByRole("checkbox", { name: "选择用户 lin" }));
+    await action(user, "关联策略");
+    const workflow = within(screen.getByRole("group", { name: "关联策略 · 1 位用户" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(workflow.getByRole("button", { name: "取消" }));
+
+    expect(screen.getByText("已选 1 位用户")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "更多操作" })));
+    expect(repository.executeUserBatch).not.toHaveBeenCalled();
   });
   it("preserves targets on failure, locks duplicate submissions and requires explicit destructive acknowledgement", async () => {
     const { user, repository } = await openBatch();

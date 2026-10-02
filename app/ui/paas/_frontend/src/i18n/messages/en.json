@@ -1410,6 +1410,7 @@
     "review": "Review changes",
     "confirm": "Confirm action",
     "back": "Back to selection",
+    "backToUsers": "Back to users",
     "atomicHint": "MOCK data only. All targets are revalidated before submission. If any target is ineligible or changed, nothing is committed.",
     "acknowledge": "I confirm {action} for the {count} users listed above.",
     "actions": {

@@ -3,14 +3,14 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Table, TableSelectionCell, TableToolbar, TablePagination, ContentPage, EmptyState, Badge, Button, Card } from "@ui/xiak";
+import { Table, TableSelectionCell, TableToolbar, TablePagination, ContentPage, EmptyState, Badge, Button, Card, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { AccountLiveUserWorkspace, AccountPrimaryWorkspace, AccountUserAccessMethods, AccountUserWorkspace, type AccountUserDetailTab } from "./AccountUserWorkspace";
-import { UserBatchDialog, type DirectoryUser } from "./UserBatchDialog";
+import { isUserBatchAssociationAction, UserBatchConfirmationDialog, UserBatchWorkflow, type DirectoryUser } from "./UserBatchOperation";
 import { userBatchActions, userBatchDisabledReason, userBatchLimit, type UserBatchAction } from "../domain/userBatch";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -79,10 +79,29 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
   const filtering = deferredQuery !== query;
   useEffect(() => { if (!entityId) userDirectoryView.remember({ query, state, role }); }, [userDirectoryView, query, state, role, entityId]);
   const createRef = useRef<HTMLButtonElement>(null);
+  const batchActionFocus = useRef<PageCommandsHandle>(null);
+  const restoreBatchAction = useRef<string | null>(null);
   const [selection, setSelection] = useState<{ scene: AccountAccessScene; ids: string[] }>({ scene, ids: [] });
-  const [batchDialog, setBatchDialog] = useState<{ action: UserBatchAction; users: DirectoryUser[] } | null>(null);
+  const [batchOperation, setBatchOperation] = useState<{ action: UserBatchAction; users: DirectoryUser[] } | null>(null);
   const checkedIds = new Set(selection.scene === scene ? selection.ids : []);
   const clearSelection = () => setSelection({ scene, ids: [] });
+  const closeBatch = () => {
+    if (batchOperation && !restoreBatchAction.current) restoreBatchAction.current = batchOperation.action;
+    setBatchOperation(null);
+  };
+  const completeBatch = () => {
+    restoreBatchAction.current = "create";
+    clearSelection();
+  };
+  useEffect(() => {
+    if (batchOperation || access.loading || access.busy || !restoreBatchAction.current) return;
+    const action = restoreBatchAction.current;
+    const timer = window.setTimeout(() => {
+      batchActionFocus.current?.focus(action);
+      restoreBatchAction.current = null;
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [access.busy, access.loading, batchOperation]);
   const changeFilter = (change: () => void) => { clearSelection(); setPage(1); change(); };
   const detail = scene.users.find((user) => user.id === entityId);
   const words = useMemo(() => deferredQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean), [deferredQuery]);
@@ -122,12 +141,15 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
   if (entityId && !detail) return <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
   if (detail && access.workspace) return <AccountUserWorkspace user={detail} workspace={access.workspace} scene={scene} initialTab={initialDetailTab} onBack={() => onOpen("users")} onOpen={onOpen} />;
   if (detail) return detail.canRead ? <AccountLiveUserWorkspace key={`${detail.id}:${detail.resourceVersion}`} summary={detail} onBack={() => onOpen("users")} /> : <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
+  if (batchOperation && isUserBatchAssociationAction(batchOperation.action)) return <div className={styles.userDirectory}><Card><Card.Body>
+    <UserBatchWorkflow action={batchOperation.action} users={batchOperation.users} onClose={closeBatch} onCompleted={completeBatch} />
+  </Card.Body></Card></div>;
   return <div className={styles.userDirectory}>
     <Card>
-      <ContentPage.Heading title={t("usersTitle")} scrollKey="user-directory" actions={<ContentPage.Commands label={collection("pageActions")} primaryRef={createRef}
+      <ContentPage.Heading title={t("usersTitle")} scrollKey="user-directory" actions={<ContentPage.Commands label={collection("pageActions")} primaryRef={createRef} focusRef={batchActionFocus}
         selection={{ label: batch("more"), disabled: blocked || !checkedUsers.length, hint: batch(access.supportsUserBatch ? "selectHint" : "unsupportedHint"),
           selectionLabel: checkedUsers.length ? batch("selected", { count: checkedUsers.length }) : undefined, clearLabel: batch("clear"), onClear: clearSelection,
-          actions: userBatchActions.map((action) => { const reason = userBatchDisabledReason(action, batchContext); return { id: action, label: batch(`actions.${action}`), danger: action === "delete", disabledReason: reason ? batch(`reasons.${reason}`) : undefined, onSelect: () => setBatchDialog({ action, users: checkedUsers }) }; }) }}
+          actions: userBatchActions.map((action) => { const reason = userBatchDisabledReason(action, batchContext); return { id: action, label: batch(`actions.${action}`), danger: action === "delete", disabledReason: reason ? batch(`reasons.${reason}`) : undefined, onSelect: () => setBatchOperation({ action, users: checkedUsers }) }; }) }}
         primary={scene.canCreateUsers ? { id: "create", label: t("createUser"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: onCreate } : undefined}
       />} />
       <AccountOwnerSummary scene={scene} onOpen={() => onOpen("users", scene.accountOwner.id)} />
@@ -153,6 +175,6 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
             labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} />}
       </Table.Footer>
     </Card>
-    {batchDialog ? <UserBatchDialog action={batchDialog.action} users={batchDialog.users} fallbackFocusRef={createRef} onClose={() => setBatchDialog(null)} onCompleted={clearSelection} /> : null}
+    {batchOperation && !isUserBatchAssociationAction(batchOperation.action) ? <UserBatchConfirmationDialog action={batchOperation.action} users={batchOperation.users} fallbackFocusRef={createRef} onClose={closeBatch} onCompleted={completeBatch} /> : null}
   </div>;
 }

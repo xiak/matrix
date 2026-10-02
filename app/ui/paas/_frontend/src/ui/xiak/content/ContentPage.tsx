@@ -97,13 +97,16 @@ function Commands({ label, moreLabel = label, primary, secondary = [], selection
   const desktopActions = useRef(new Map<string, HTMLButtonElement>());
   const desktopOverflowAction = useRef<HTMLButtonElement>(null);
   const desktopOverflowActions = useRef(new Set<string>());
+  const desktopSelectionAction = useRef<HTMLButtonElement>(null);
+  const desktopSelectionActions = useRef(new Set<string>());
   const desktopCommands = useRef<HTMLDivElement>(null);
   const compactAction = useRef<HTMLButtonElement>(null);
   useImperativeHandle(focusRef, () => ({ focus(actionId?: string) {
     const compact = desktopCommands.current && getComputedStyle(desktopCommands.current).display === "none";
     const requested = actionId ? desktopActions.current.get(actionId) : undefined;
     const overflow = actionId && desktopOverflowActions.current.has(actionId) ? desktopOverflowAction.current : undefined;
-    (compact ? compactAction.current : requested ?? overflow ?? desktopAction.current ?? desktopOverflowAction.current)?.focus({ preventScroll: true });
+    const selectionAction = actionId && desktopSelectionActions.current.has(actionId) ? desktopSelectionAction.current : undefined;
+    (compact ? compactAction.current : requested ?? overflow ?? selectionAction ?? desktopAction.current ?? desktopOverflowAction.current)?.focus({ preventScroll: true });
   } }), []);
   const items = primary ? [primary, ...secondary] : secondary;
   // A page header has one stable, high-frequency command. Additional commands
@@ -114,8 +117,9 @@ function Commands({ label, moreLabel = label, primary, secondary = [], selection
   const hasAvailableDirect = Boolean(firstAvailable);
   useLayoutEffect(() => {
     desktopOverflowActions.current = new Set(desktopOverflowItems.filter((item) => !item.disabled && !item.disabledReason).map((item) => item.id));
+    desktopSelectionActions.current = new Set(selection?.disabled ? [] : selection?.actions.filter((item) => !item.disabled && !item.disabledReason).map((item) => item.id));
     if (!hasAvailableDirect) desktopAction.current = null;
-  }, [desktopOverflowItems, hasAvailableDirect]);
+  }, [desktopOverflowItems, hasAvailableDirect, selection?.actions, selection?.disabled]);
   const compactItems: ActionMenuItem[] = [...items, ...(selection?.actions.map((action, index) => ({
     ...action, separatorBefore: index === 0, disabled: selection.disabled || action.disabled,
     disabledReason: action.disabledReason ?? (selection.disabled ? selection.hint : undefined),
@@ -123,7 +127,7 @@ function Commands({ label, moreLabel = label, primary, secondary = [], selection
   if (!compactItems.length) return null;
   return <div className={styles.commandBar}>
     <div className={styles.expandedCommands} ref={desktopCommands}>
-      {selection ? <TableActions {...selection} /> : null}
+      {selection ? <TableActions {...selection} triggerRef={desktopSelectionAction} /> : null}
       {directItems.map((action) => <Button key={action.id} ref={(element) => {
         if (element && !action.disabled && !action.disabledReason) desktopActions.current.set(action.id, element);
         else desktopActions.current.delete(action.id);

@@ -1410,6 +1410,7 @@
     "review": "审阅变更",
     "confirm": "确认执行",
     "back": "返回选择",
+    "backToUsers": "返回用户列表",
     "atomicHint": "仅修改 MOCK 数据。提交前会重新校验全部对象；任一对象不可操作或已变化，整批不提交。",
     "acknowledge": "我已确认对以上 {count} 位用户执行「{action}」。",
     "actions": {
