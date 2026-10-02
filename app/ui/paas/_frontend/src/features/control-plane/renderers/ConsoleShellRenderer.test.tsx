@@ -273,6 +273,24 @@ describe("ConsoleShellRenderer", () => {
     expect(status.querySelector("[aria-hidden]")).not.toBeNull();
   });
 
+  it("keeps the cloud overview identity stable instead of showing database loading chrome", () => {
+    vi.useFakeTimers();
+    render(<LocaleProvider><ConsoleContentLoadingRenderer experience label="正在打开控制台总览…" selection={{ section: "overview" }} /></LocaleProvider>);
+
+    expect(screen.getByRole("heading", { level: 2, name: "欢迎使用 Matrix Cloud" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "最近服务实例" })).toBeNull();
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("正在打开控制台总览…");
+    expect(status.querySelector("[aria-hidden]")).toBeNull();
+
+    act(() => vi.advanceTimersByTime(200));
+
+    expect(status.querySelector("[aria-hidden]")).not.toBeNull();
+    expect(screen.getByText("常用产品")).toBeTruthy();
+    expect(screen.getByText("最近资源")).toBeTruthy();
+    expect(screen.getByText("待处理事项")).toBeTruthy();
+  });
+
   it.each([
     { section: "applications", table: "统一资源列表" },
     { section: "installations", table: "服务实例列表" },
@@ -770,6 +788,31 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.getByLabelText("全局导航")).toBe(header);
     expect(repository.load).toHaveBeenCalledTimes(reads);
+  });
+
+  it("keeps the cloud overview identity while its route and region data are pending", async () => {
+    let resolveSnapshot!: (value: ControlPlaneSnapshot) => void;
+    let releaseRoute!: () => void;
+    const load = vi.fn(() => new Promise<ControlPlaneSnapshot>((resolve) => { resolveSnapshot = resolve; }));
+    const heldRoute = { href: "/console/", ready: false, promise: new Promise<void>((resolve) => { releaseRoute = resolve; }) };
+    const { user, repository } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot, heldRoute, load });
+    const oldResource = await screen.findByRole("link", { name: "订单主库" });
+
+    await user.click(screen.getByRole("link", { name: "Matrix Cloud 控制台首页" }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByRole("heading", { level: 1, name: "控制台总览" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "欢迎使用 Matrix Cloud" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "最近服务实例" })).toBeNull();
+    expect(oldResource.closest("[hidden]")).toBeTruthy();
+    expect(repository.load).toHaveBeenCalledWith("renderer-test-memory-only-session", ["regions"]);
+
+    await act(async () => resolveSnapshot(snapshot));
+    expect(await screen.findByText("常用产品")).toBeTruthy();
+
+    await act(async () => { heldRoute.ready = true; releaseRoute(); });
+    await waitFor(() => expect(screen.getByRole("heading", { level: 2, name: "欢迎使用 Matrix Cloud" }).closest("[inert]")).toBeNull());
+    expect(repository.load).toHaveBeenCalledTimes(1);
   });
 
   it("uses the same cached transition between pages of one database service", async () => {

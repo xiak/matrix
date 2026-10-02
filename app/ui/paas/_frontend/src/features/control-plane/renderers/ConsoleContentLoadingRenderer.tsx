@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Card, CardGridSkeleton, TableSkeleton, Typography } from "@ui/xiak";
+import { Card, CardGridSkeleton, ContentLayout, LoadingFeedback, Skeleton, TableSkeleton, Typography } from "@ui/xiak";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import styles from "./ConsoleContentLoadingRenderer.module.css";
 
@@ -25,9 +25,69 @@ function TableRegion({ label, title }: { label: string; title: string }) {
   return <Card aria-label={title}><TableSkeleton header={false} label={label} labelVisible={false} rows={5} /></Card>;
 }
 
+function PlaceholderPanel({ description, rows = 3, title }: { description?: string; rows?: number; title: string }) {
+  return (
+    <Card>
+      <Card.Header>
+        <div>
+          <Typography.Title as="h2" level={3}>{title}</Typography.Title>
+          {description ? <Typography.Text tone="muted">{description}</Typography.Text> : null}
+        </div>
+      </Card.Header>
+      <TableSkeleton header={false} rows={rows} />
+    </Card>
+  );
+}
+
+function CloudOverviewLoading({ label }: { label: string }) {
+  const cloud = useTranslations("CloudExperience");
+  const directory = useTranslations("ServiceDirectory");
+  return (
+    <div className={styles.stack}>
+      <section aria-label={cloud("welcome")} className={styles.identity}>
+        <div>
+          <Typography.Eyebrow>{cloud("welcomeEyebrow")}</Typography.Eyebrow>
+          <Typography.Title as="h2" level={2}>{cloud("welcome")}</Typography.Title>
+        </div>
+      </section>
+      <LoadingFeedback label={label} labelVisible={false}>
+        <div aria-hidden="true" className={styles.dashboardPlaceholder}>
+          <div className={styles.metricGrid}>
+            {Array.from({ length: 4 }, (_, index) => (
+              <Card key={index}>
+                <Card.Body className={styles.metricPlaceholder}>
+                  <Skeleton className={styles.metricLabel} />
+                  <Skeleton className={styles.metricValue} />
+                  <Skeleton className={styles.metricHint} />
+                </Card.Body>
+              </Card>
+            ))}
+          </div>
+          <ContentLayout>
+            <ContentLayout.Main>
+              <PlaceholderPanel description={directory("commonHint")} title={directory("common")} />
+              <PlaceholderPanel description={cloud("recentResourcesHint")} rows={4} title={cloud("recentResources")} />
+            </ContentLayout.Main>
+            <ContentLayout.Aside>
+              <PlaceholderPanel description={cloud("attentionHint")} rows={2} title={cloud("attention")} />
+              <Card>
+                <Card.Body className={styles.readinessPlaceholder}>
+                  <Skeleton className={styles.metricLabel} />
+                  <Skeleton className={styles.metricValue} />
+                  <Skeleton className={styles.metricHint} />
+                </Card.Body>
+              </Card>
+            </ContentLayout.Aside>
+          </ContentLayout>
+        </div>
+      </LoadingFeedback>
+    </div>
+  );
+}
+
 // Route identity and stable page chrome render synchronously. Only the region
 // whose rows/cards still depend on a provider uses delayed placeholder paint.
-export function ConsoleContentLoadingRenderer({ label, selection }: { label: string; selection: ControlPlaneRouteSelection }) {
+export function ConsoleContentLoadingRenderer({ experience = false, label, selection }: { experience?: boolean; label: string; selection: ControlPlaneRouteSelection }) {
   const managed = useTranslations("ManagedService");
   const cloud = useTranslations("CloudExperience");
   const logs = useTranslations("LogService");
@@ -75,7 +135,7 @@ export function ConsoleContentLoadingRenderer({ label, selection }: { label: str
   if (section === "catalog" || section === "quotas" || section === "regions") {
     return <CardCollection label={label} title={navigation(`items.${section}.label`)} />;
   }
-  if (section === "overview") return <DataPanel description={managed("recentHint")} label={label} title={managed("recentInstances")} />;
+  if (section === "overview") return experience ? <CloudOverviewLoading label={label} /> : <DataPanel description={managed("recentHint")} label={label} title={managed("recentInstances")} />;
   const item = section === "access" && !view ? "access" : view ?? section;
   return <TableRegion label={label} title={navigation(`items.${item}.label`)} />;
 }

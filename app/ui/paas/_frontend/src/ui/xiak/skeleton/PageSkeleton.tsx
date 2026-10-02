@@ -10,7 +10,7 @@ export const LOADING_FEEDBACK_DELAY_MS = 200;
 
 // A destination/region acknowledges the wait immediately. Placeholder DOM and
 // animation are local and delayed, never the page identity or navigation shell.
-function LoadingFeedback({ label, labelVisible = true, children }: { label: string; labelVisible?: boolean; children: ReactNode }) {
+export function LoadingFeedback({ label, labelVisible = true, children }: { label: string; labelVisible?: boolean; children: ReactNode }) {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => setVisible(true), LOADING_FEEDBACK_DELAY_MS);
