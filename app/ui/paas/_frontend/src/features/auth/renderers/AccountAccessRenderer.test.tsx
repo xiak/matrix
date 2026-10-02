@@ -1011,6 +1011,78 @@ describe("account access", () => {
     expect(security.confirmNotificationVerification).toHaveBeenCalledWith(credential, "verification-one", expect.objectContaining({ code: "12345678" }));
   });
 
+  it("refreshes the original notification delivery without creating or resending an intent", async () => {
+    const none = { accountId: account.id, userId: rootUser.id, state: "NONE" as const, resourceVersion: 0 as const, pendingVerificationId: null };
+    const pending = { id: "verification-one", accountId: account.id, userId: rootUser.id, requestId: "request-one", email: "admin@example.com", state: "PENDING" as const, issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z", completedAt: null, delivery: { state: "PENDING" as const, attempts: 0, lastOutcome: null, lastSmtpCode: null, updatedAt: timestamp } };
+    const accepted = { ...pending, delivery: { state: "ACCEPTED" as const, attempts: 1, lastOutcome: "ACCEPTED" as const, lastSmtpCode: 250, updatedAt: "2026-09-11T08:00:05Z" } };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(none),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null }),
+      startNotificationVerification: vi.fn().mockResolvedValue(pending),
+      notificationVerification: vi.fn().mockResolvedValue(accepted),
+      confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByLabelText("邮箱地址");
+    await user.type(within(securityRegion).getByLabelText("邮箱地址"), "admin@example.com");
+    await user.type(within(securityRegion).getAllByLabelText("当前密码")[0]!, "Private-Password-49!");
+    await user.click(screen.getByRole("button", { name: "发送验证码" }));
+    expect(await screen.findByText(/等待投递/)).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "刷新发送状态" }));
+    expect(await screen.findByText(/邮件服务器已接受/)).toBeTruthy();
+    expect(screen.getByText("状态更新时间")).toBeTruthy();
+    expect(screen.getByText(/不会重发邮件、延长有效期或创建新的验证码/)).toBeTruthy();
+    expect(security.startNotificationVerification).toHaveBeenCalledTimes(1);
+    expect(security.notificationVerification).toHaveBeenCalledWith(credential, "verification-one");
+    expect(security.confirmNotificationVerification).not.toHaveBeenCalled();
+  });
+
+  it("keeps the login session after a contact password rejection when a bearer-only read still succeeds", async () => {
+    const none = { accountId: account.id, userId: rootUser.id, state: "NONE" as const, resourceVersion: 0 as const, pendingVerificationId: null };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(none),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null }),
+      startNotificationVerification: vi.fn().mockRejectedValue(new HttpProblem(401, "iam.authentication.failed")),
+      notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByLabelText("邮箱地址");
+    await user.type(within(securityRegion).getByLabelText("邮箱地址"), "admin@example.com");
+    await user.type(within(securityRegion).getAllByLabelText("当前密码")[0]!, "Wrong-Password-49!");
+    await user.click(screen.getByRole("button", { name: "发送验证码" }));
+
+    expect(await within(securityRegion).findByText(/无法开始邮箱验证/)).toBeTruthy();
+    expect(within(securityRegion).getByLabelText("邮箱地址")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "登录控制台" })).toBeNull();
+    expect(security.notificationContact).toHaveBeenCalledTimes(2);
+    expect(security.startNotificationVerification).toHaveBeenCalledTimes(1);
+  });
+
+  it("expires the login session only after the contact rejection and bearer-only read both return 401", async () => {
+    const none = { accountId: account.id, userId: rootUser.id, state: "NONE" as const, resourceVersion: 0 as const, pendingVerificationId: null };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValueOnce(none).mockRejectedValue(new HttpProblem(401, "iam.authentication.failed")),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null }),
+      startNotificationVerification: vi.fn().mockRejectedValue(new HttpProblem(401, "iam.authentication.failed")),
+      notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByLabelText("邮箱地址");
+    await user.type(within(securityRegion).getByLabelText("邮箱地址"), "admin@example.com");
+    await user.type(within(securityRegion).getAllByLabelText("当前密码")[0]!, "Private-Password-49!");
+    await user.click(screen.getByRole("button", { name: "发送验证码" }));
+
+    expect(await screen.findByRole("heading", { name: "登录控制台" })).toBeTruthy();
+    expect(security.notificationContact).toHaveBeenCalledTimes(2);
+  });
+
   it("never renders TOTP provisioning or confirmation controls for an equal replay", async () => {
     const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
     const enrollment = { id: "enrollment-one", requestId: "request-one", factorRevision: 1, state: "PENDING" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", completedAt: null };

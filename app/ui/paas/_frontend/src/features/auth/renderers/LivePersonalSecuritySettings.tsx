@@ -11,7 +11,7 @@ import { LiveRecoveryCodeRegeneration } from "./LiveRecoveryCodeRegeneration";
 import styles from "./MfaPreviewExperience.module.css";
 
 type LoadState = "loading" | "ready" | "error";
-type FlowError = "load" | "contactStart" | "contactConfirm" | "enrollmentStart" | "enrollmentOutcomeUnknown"
+type FlowError = "load" | "contactStart" | "contactInspect" | "contactConfirm" | "enrollmentStart" | "enrollmentOutcomeUnknown"
   | "enrollmentInspect" | "enrollmentNotFound" | "enrollmentConfirm" | "cancel" | null;
 
 function localTime(value: string, format: ReturnType<typeof useFormatter>) {
@@ -50,6 +50,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
   const [factorPassword, setFactorPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [busy, setBusy] = useState(false);
+  const [contactRefreshing, setContactRefreshing] = useState(false);
   const [error, setError] = useState<FlowError>(null);
 
   useEffect(() => {
@@ -106,6 +107,17 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
       await load();
     } catch { setError("contactConfirm"); }
     finally { setBusy(false); }
+  }
+
+  async function inspectContactVerification() {
+    if (!client || !verification) return;
+    setContactRefreshing(true); setError(null);
+    try {
+      const next = await client.notificationVerification(verification.id);
+      if (next.state === "PENDING") setVerification(next);
+      else await load();
+    } catch { setError("contactInspect"); }
+    finally { setContactRefreshing(false); }
   }
 
   async function startEnrollment(event: FormEvent<HTMLFormElement>) {
@@ -187,9 +199,13 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
           </form> : null}
           {loadState === "ready" && verification ? <form className={styles.form} onSubmit={(event) => void confirmContact(event)}>
             <Alert status={verification.delivery.state === "FAILED" || verification.delivery.state === "EXPIRED" ? "warning" : "info"}>{t(deliveryKey!)} {t("contact.deliveryMeaning")}</Alert>
-            <dl className={styles.facts}><div><dt>{t("contact.address")}</dt><dd>{verification.email}</dd></div><div><dt>{t("contact.expiresAt")}</dt><dd>{localTime(verification.expiresAt, format)}</dd></div><div><dt>{t("contact.attempts")}</dt><dd>{verification.delivery.attempts}</dd></div></dl>
+            <dl className={styles.facts}><div><dt>{t("contact.address")}</dt><dd>{verification.email}</dd></div><div><dt>{t("contact.expiresAt")}</dt><dd>{localTime(verification.expiresAt, format)}</dd></div><div><dt>{t("contact.attempts")}</dt><dd>{verification.delivery.attempts}</dd></div><div><dt>{t("contact.deliveryUpdatedAt")}</dt><dd>{localTime(verification.delivery.updatedAt, format)}</dd></div></dl>
             <FormField id={contactCodeId} label={t("contact.code")} hint={t("contact.codeHint")}><Input autoComplete="one-time-code" id={contactCodeId} inputMode="numeric" maxLength={8} onChange={(event) => setContactCode(event.target.value.replace(/\D/g, ""))} pattern="[0-9]{8}" required value={contactCode} /></FormField>
-            <div className={styles.flowActions}><Button disabled={busy || contactCode.length !== 8} type="submit">{busy ? t("saving") : t("contact.confirm")}</Button></div>
+            <div className={styles.flowActions}>
+              <Button disabled={busy || contactRefreshing} onClick={() => void inspectContactVerification()} type="button" variant="secondary"><RefreshCcw aria-hidden="true" />{contactRefreshing ? t("contact.refreshingDelivery") : t("contact.refreshDelivery")}</Button>
+              <Button disabled={busy || contactRefreshing || contactCode.length !== 8} type="submit">{busy ? t("saving") : t("contact.confirm")}</Button>
+            </div>
+            <p className={styles.boundary}>{t("contact.refreshBoundary")}</p>
           </form> : null}
         </Card.Body>
       </Card>

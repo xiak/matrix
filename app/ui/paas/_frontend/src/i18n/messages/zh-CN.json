@@ -5087,6 +5087,10 @@
       "deliveryMeaning": "“已接受”仅代表邮件服务器接受投递，不代表收件人已收到或阅读。",
       "expiresAt": "有效期至",
       "attempts": "投递尝试",
+      "deliveryUpdatedAt": "状态更新时间",
+      "refreshDelivery": "刷新发送状态",
+      "refreshingDelivery": "正在刷新…",
+      "refreshBoundary": "这里只读取原验证意图，不会重发邮件、延长有效期或创建新的验证码。",
       "code": "8 位邮箱验证码",
       "codeHint": "验证码在本次验证窗口内有效。请勿把邮箱验证码当作 MFA。",
       "confirm": "验证通知地址"
@@ -5204,6 +5208,7 @@
     "errors": {
       "load": "无法读取当前安全状态。固定内容仍可使用；只有数据区域加载失败。",
       "contactStart": "无法开始邮箱验证。请检查密码、邮箱格式或稍后按原意图重试。",
+      "contactInspect": "暂时无法刷新原验证意图。页面不会重新发送邮件或创建新意图；请保留当前页面后重试。",
       "contactConfirm": "无法确认邮箱验证码。验证码可能错误、已使用或已过期。",
       "enrollmentStart": "无法开始首次绑定。请确认通知地址已验证且安全版本没有变化。",
       "enrollmentOutcomeUnknown": "首次绑定的提交结果未知。页面已保留原 requestId；请先查询原请求，不要重复提交。",

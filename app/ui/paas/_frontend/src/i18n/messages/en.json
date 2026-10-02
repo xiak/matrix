@@ -5073,6 +5073,10 @@
       "deliveryMeaning": "Accepted means only that the mail server accepted delivery; it does not prove receipt or reading.",
       "expiresAt": "Expires at",
       "attempts": "Delivery attempts",
+      "deliveryUpdatedAt": "Status updated at",
+      "refreshDelivery": "Refresh delivery status",
+      "refreshingDelivery": "Refreshing…",
+      "refreshBoundary": "This reads only the original verification intent. It does not resend the message, extend the expiry, or create another code.",
       "code": "8-digit email code",
       "codeHint": "The code is valid only in this verification window. An email code is not MFA.",
       "confirm": "Verify notification address"
@@ -5190,6 +5194,7 @@
     "errors": {
       "load": "The current security state could not be loaded. Fixed content remains visible; only the data region failed.",
       "contactStart": "Email verification could not start. Check the password and address, or retry the original intent later.",
+      "contactInspect": "The original verification intent cannot be refreshed right now. This page will not resend the message or create another intent; keep the page and try again.",
       "contactConfirm": "The email code could not be confirmed. It may be incorrect, used, or expired.",
       "enrollmentStart": "First enrollment could not start. Confirm the notification address is verified and the security revision is current.",
       "enrollmentOutcomeUnknown": "The enrollment submission outcome is unknown. This page kept the original requestId; query it before doing anything else and do not resubmit.",
