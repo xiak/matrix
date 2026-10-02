@@ -32,6 +32,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
   const clientScope = client ? `${client.accountId}:${client.userId}:${client.sessionId}:${client.sessionRevision}` : null;
   const emailId = useId();
   const contactCodeId = useId();
+  const contactCodeRef = useRef<HTMLInputElement>(null);
   const passwordId = useId();
   const totpCodeId = useId();
   const requestRevision = useRef(0);
@@ -47,6 +48,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
   const [email, setEmail] = useState("");
   const [contactPassword, setContactPassword] = useState("");
   const [contactCode, setContactCode] = useState("");
+  const [contactCodeIssue, setContactCodeIssue] = useState<"invalid" | "attemptsExhausted" | null>(null);
   const [factorPassword, setFactorPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -91,7 +93,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
     setBusy(true); setError(null);
     try {
       const next = await client.startNotificationVerification({ email, password: contactPassword, requestId: contactRequest.current });
-      setVerification(next); setContactPassword(""); setContactCode("");
+      setVerification(next); setContactPassword(""); setContactCode(""); setContactCodeIssue(null);
       contactConfirmRequest.current = requestToken("ui-security-contact-confirm-");
     } catch { setError("contactStart"); }
     finally { setBusy(false); }
@@ -103,9 +105,15 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
     setBusy(true); setError(null);
     try {
       const next = await client.confirmNotificationVerification(verification.id, { code: contactCode, requestId: contactConfirmRequest.current });
-      setVerification(next); setContactCode("");
+      setVerification(next); setContactCode(""); setContactCodeIssue(null);
       await load();
-    } catch { setError("contactConfirm"); }
+    } catch (failure) {
+      if (failure instanceof HttpProblem && failure.status === 422) {
+        setContactCode(""); setContactCodeIssue("invalid"); contactCodeRef.current?.focus();
+      } else if (failure instanceof HttpProblem && failure.status === 429) {
+        setContactCode(""); setContactCodeIssue("attemptsExhausted");
+      } else setError("contactConfirm");
+    }
     finally { setBusy(false); }
   }
 
@@ -200,10 +208,10 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
           {loadState === "ready" && verification ? <form className={styles.form} onSubmit={(event) => void confirmContact(event)}>
             <Alert status={verification.delivery.state === "FAILED" || verification.delivery.state === "EXPIRED" ? "warning" : "info"}>{t(deliveryKey!)} {t("contact.deliveryMeaning")}</Alert>
             <dl className={styles.facts}><div><dt>{t("contact.address")}</dt><dd>{verification.email}</dd></div><div><dt>{t("contact.expiresAt")}</dt><dd>{localTime(verification.expiresAt, format)}</dd></div><div><dt>{t("contact.attempts")}</dt><dd>{verification.delivery.attempts}</dd></div><div><dt>{t("contact.deliveryUpdatedAt")}</dt><dd>{localTime(verification.delivery.updatedAt, format)}</dd></div></dl>
-            <FormField id={contactCodeId} label={t("contact.code")} hint={t("contact.codeHint")}><Input autoComplete="one-time-code" id={contactCodeId} inputMode="numeric" maxLength={8} onChange={(event) => setContactCode(event.target.value.replace(/\D/g, ""))} pattern="[0-9]{8}" required value={contactCode} /></FormField>
+            <FormField id={contactCodeId} label={t("contact.code")} hint={t("contact.codeHint")} error={contactCodeIssue ? t(`contact.codeErrors.${contactCodeIssue}`) : undefined}><Input aria-describedby={`${contactCodeId}-hint${contactCodeIssue ? ` ${contactCodeId}-error` : ""}`} autoComplete="one-time-code" disabled={contactCodeIssue === "attemptsExhausted"} id={contactCodeId} inputMode="numeric" invalid={Boolean(contactCodeIssue)} maxLength={8} onChange={(event) => { setContactCode(event.target.value.replace(/\D/g, "")); if (contactCodeIssue === "invalid") setContactCodeIssue(null); }} pattern="[0-9]{8}" ref={contactCodeRef} required value={contactCode} /></FormField>
             <div className={styles.flowActions}>
               <Button disabled={busy || contactRefreshing} onClick={() => void inspectContactVerification()} type="button" variant="secondary"><RefreshCcw aria-hidden="true" />{contactRefreshing ? t("contact.refreshingDelivery") : t("contact.refreshDelivery")}</Button>
-              <Button disabled={busy || contactRefreshing || contactCode.length !== 8} type="submit">{busy ? t("saving") : t("contact.confirm")}</Button>
+              <Button disabled={busy || contactRefreshing || contactCodeIssue === "attemptsExhausted" || contactCode.length !== 8} type="submit">{busy ? t("saving") : t("contact.confirm")}</Button>
             </div>
             <p className={styles.boundary}>{t("contact.refreshBoundary")}</p>
           </form> : null}

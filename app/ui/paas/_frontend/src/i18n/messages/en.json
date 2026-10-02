@@ -5079,6 +5079,10 @@
       "refreshBoundary": "This reads only the original verification intent. It does not resend the message, extend the expiry, or create another code.",
       "code": "8-digit email code",
       "codeHint": "The code is valid only in this verification window. An email code is not MFA.",
+      "codeErrors": {
+        "invalid": "The code is incorrect. The field was cleared; use the 8-digit code from this verification message.",
+        "attemptsExhausted": "This verification has exhausted its code-attempt budget and cannot accept another submission. You can still refresh the original status; this page will not send a new code."
+      },
       "confirm": "Verify notification address"
     },
     "delivery": {
