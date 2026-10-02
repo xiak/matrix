@@ -3,11 +3,11 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-10-02
+- Updated: 2026-10-03
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `6ce077f73`
-- Pushed documentation milestone: `457451eea`
+- Source/embed milestone pending push: `d4d36fecf`
+- Documentation milestone pending push: `c52121d15`
 
 ## Authoritative route
 
@@ -29,21 +29,22 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Shared page commands now
-keep one high-frequency action direct on desktop and group secondary peers under
-one More menu. Pages without a primary keep a lone secondary action direct; all
-commands move into one Page actions menu on compact layouts. The composition is
-used by IAM collections/details, account live roles and own sessions without
-changing feature-owned capabilities, disabled reasons or callbacks.
+login verification remains disabled for UX review. The remaining all-service
+loading mismatch is closed: preview `/console/` keeps the cloud-overview title
+and welcome identity visible immediately instead of briefly rendering the
+managed-database Overview placeholder. Only data-owned metric, product,
+resource, attention and readiness regions receive delayed, structurally aligned
+placeholders; the outgoing page is hidden and only the declared Region slice is
+read.
 
-Source and synchronized embed are pushed at `6ce077f73`; FEAT evidence is pushed
-at `457451eea`. The complete frontend gate passed 58 files/970 cases plus three
-normalization cases, typecheck, lint,
-architecture, 228-pair style checks, 42-route export, 233-file embed equality
-and repository Go test/vet. Desktop and `390 × 844` DEV confirmed policy detail
-keeps Associate users / groups / roles direct while Edit, Copy and Delete share
-More, and compact mode exposes the same four commands from Page actions. Earlier
-enterprise content workflows remain owned by FEAT-IAM-010 and FEAT-007.
+Source and synchronized embed are committed at `d4d36fecf`; FEAT evidence is
+committed at `c52121d15`. The complete frontend gate passed 58 files/972 cases
+plus three normalization cases, typecheck, lint, architecture, 228-pair style
+checks, 42-route export, 233-file embed equality and repository Go test/vet.
+Desktop and `390 × 844` DEV rendered `控制台总览 / 欢迎使用 Matrix Cloud`
+without a Dialog, horizontal overflow or browser warning/error. The earlier
+shared page-command and enterprise content-workflow milestones remain owned by
+FEAT-007 and FEAT-IAM-010.
 
 Earlier Account security report, federation replacement, Deployment lifecycle,
 AccessKey carrier, Application tag recovery, service authorization, policy
