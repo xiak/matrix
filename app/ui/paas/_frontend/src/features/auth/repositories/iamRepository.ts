@@ -38,7 +38,7 @@ import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWo
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
-import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CurrentRoleIdentity, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
+import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CurrentRoleIdentity, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, UserRoleSession } from "../domain/roles";
 
 export type LoginCommand = { loginName: string; password: string };
 export type ChangePasswordCommand = { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean };
@@ -174,6 +174,8 @@ export interface AccountRepository {
     list(credential: string, accountId: string, after?: string): Promise<RoleDirectory>;
     read(credential: string, accountId: string, roleId: string): Promise<RoleAccess>;
     readPermissionBoundary(credential: string, accountId: string, roleId: string): Promise<RolePermissionBoundary>;
+    setPermissionBoundary(credential: string, accountId: string, roleId: string, command: SetRolePermissionBoundaryCommand): Promise<RolePermissionBoundary>;
+    removePermissionBoundary(credential: string, accountId: string, roleId: string, command: RemoveRolePermissionBoundaryCommand): Promise<RolePermissionBoundary>;
     listTrustVersions(credential: string, accountId: string, roleId: string, after?: string): Promise<RoleTrustVersionDirectory>;
     create(credential: string, accountId: string, command: CreateRoleCommand): Promise<Role>;
     listSessions(credential: string, accountId: string, roleId: string, filter: RoleSessionFilter, after?: string): Promise<RoleSessionDirectory>;

@@ -32,7 +32,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
-import type { CreateRoleCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory } from "../domain/roles";
+import type { CreateRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand } from "../domain/roles";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
@@ -207,6 +207,9 @@ export type RoleAccessClient = {
   list(after?: string): Promise<RoleDirectory>;
   read(roleId: string): Promise<RoleAccess>;
   readPermissionBoundary(roleId: string): Promise<RolePermissionBoundary>;
+  listBoundaryPolicies(): Promise<{ items: AccountPolicy[]; available: boolean }>;
+  setPermissionBoundary(roleId: string, command: SetRolePermissionBoundaryCommand): Promise<RolePermissionBoundary>;
+  removePermissionBoundary(roleId: string, command: RemoveRolePermissionBoundaryCommand): Promise<RolePermissionBoundary>;
   listTrustVersions(roleId: string, after?: string): Promise<RoleTrustVersionDirectory>;
   create(command: CreateRoleCommand): Promise<Role>;
   listSessions(roleId: string, filter: RoleSessionFilter, after?: string): Promise<RoleSessionDirectory>;
@@ -1121,6 +1124,15 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       list: (after) => scoped(roleRepository.list(credential, accountId, after)),
       read: (roleId) => scoped(roleRepository.read(credential, accountId, roleId)),
       readPermissionBoundary: (roleId) => scoped(roleRepository.readPermissionBoundary(credential, accountId, roleId)),
+      listBoundaryPolicies: () => scoped((async () => {
+        if (!scene.tenantPoliciesAvailable) return { items: [], available: false };
+        const directory = await readWhenAuthorized(() => repository.listPolicies(credential, false));
+        if (!directory) return { items: [], available: false };
+        if (directory.accountId !== accountId || directory.scope !== "TENANT" || directory.installationId !== null) throw new Error("INVALID_IAM_TENANT");
+        return { items: directory.items, available: true };
+      })()),
+      setPermissionBoundary: (roleId, command) => protectedMutation(() => scoped(roleRepository.setPermissionBoundary(credential, accountId, roleId, command))),
+      removePermissionBoundary: (roleId, command) => protectedMutation(() => scoped(roleRepository.removePermissionBoundary(credential, accountId, roleId, command))),
       listTrustVersions: (roleId, after) => scoped(roleRepository.listTrustVersions(credential, accountId, roleId, after)),
       create: (command) => protectedMutation(() => scoped(roleRepository.create(credential, accountId, command))),
       listSessions: (roleId, filter, after) => scoped(roleRepository.listSessions(credential, accountId, roleId, filter, after)),

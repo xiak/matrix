@@ -2171,6 +2171,42 @@ export const httpAccountRepository: AccountRepository = {
         { headers: accountHeaders(credential) }
       ), accountIdentifier(accountId), target);
     },
+    async setPermissionBoundary(credential, accountId, roleId, command) {
+      const owner = accountIdentifier(accountId);
+      const target = accountIdentifier(roleId);
+      const resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+      const policyId = accountIdentifier(command.policyId);
+      const result = parseRolePermissionBoundary(await requestJSON<unknown>(
+        `/api/iam/v1/roles/${encodeURIComponent(target)}/permission-boundary`, {
+          method: "PUT",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({
+            policyId,
+            policyResourceVersion: accountVersion(command.policyResourceVersion),
+            resourceVersion,
+            requestId: accountIdentifier(command.requestId)
+          })
+        }
+      ), owner, target);
+      if (result.resourceVersion !== resourceVersion + 1 || result.policy?.policyId !== policyId) throw new Error("INVALID_IAM_RESPONSE");
+      return result;
+    },
+    async removePermissionBoundary(credential, accountId, roleId, command) {
+      const owner = accountIdentifier(accountId);
+      const target = accountIdentifier(roleId);
+      const resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+      const result = parseRolePermissionBoundary(await requestJSON<unknown>(
+        `/api/iam/v1/roles/${encodeURIComponent(target)}/permission-boundary`, {
+          method: "DELETE",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ resourceVersion, requestId: accountIdentifier(command.requestId) })
+        }
+      ), owner, target);
+      if (result.resourceVersion !== resourceVersion + 1 || result.policy !== null) throw new Error("INVALID_IAM_RESPONSE");
+      return result;
+    },
     async listTrustVersions(credential, accountId, roleId, after) {
       const target = accountIdentifier(roleId);
       return parseRoleTrustVersionDirectory(await requestJSON<unknown>(

@@ -2208,6 +2208,8 @@ describe("account access", () => {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
         readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
+        setPermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary set")),
+        removePermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary removal")),
         listTrustVersions: vi.fn(),
         create: vi.fn().mockResolvedValue(managedRole),
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
@@ -2255,6 +2257,8 @@ describe("account access", () => {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
         readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
+        setPermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary set")),
+        removePermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary removal")),
         listTrustVersions: vi.fn(),
         create: vi.fn().mockResolvedValue(managedRole),
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
@@ -2289,6 +2293,8 @@ describe("account access", () => {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
         readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
+        setPermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary set")),
+        removePermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary removal")),
         listTrustVersions: vi.fn(),
         create,
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
@@ -2325,6 +2331,55 @@ describe("account access", () => {
     expect(create.mock.calls[1]?.[2]).toEqual(original);
   });
 
+  it("loads a fresh tenant policy directory only when inline role-boundary editing opens", async () => {
+    const roleIdentity: AccountIdentity = { ...identity, capabilities: [
+      ...identity.capabilities,
+      capability("iam.role.list", "ACCOUNT", account.id)
+    ] };
+    const closed = { accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null };
+    const applied = { accountId: account.id, roleId: managedRole.id, resourceVersion: 2,
+      policy: { policyId: tenantPolicy.id, versionId: tenantPolicy.defaultVersionId, contentDigest: `sha256:${"d".repeat(64)}` } };
+    const listPolicies = vi.fn(async (_credential: string, platform: boolean) => directory(platform));
+    const readPermissionBoundary = vi.fn().mockResolvedValueOnce(closed).mockResolvedValue(applied);
+    const setPermissionBoundary = vi.fn().mockResolvedValue(applied);
+    const repository = accounts({
+      currentIdentity: vi.fn().mockResolvedValue(roleIdentity),
+      listPolicies,
+      roles: {
+        list: vi.fn().mockResolvedValue(managedRoleDirectory),
+        read: vi.fn().mockResolvedValue(managedRoleAccess),
+        readPermissionBoundary,
+        setPermissionBoundary,
+        removePermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary removal")),
+        listTrustVersions: vi.fn(),
+        create: vi.fn().mockResolvedValue(managedRole),
+        listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
+        readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
+        revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke"))
+      }
+    });
+    const { user } = await openAccess(repository, iam(), "roles");
+
+    await user.click(await screen.findByRole("button", { name: managedRole.name }));
+    expect(await screen.findByText("未设置权限上限 · 角色承担已关闭")).toBeTruthy();
+    const initialTenantReads = listPolicies.mock.calls.filter((call) => call[1] === false).length;
+    await user.click(screen.getByRole("button", { name: "修改权限边界" }));
+    await waitFor(() => expect(listPolicies.mock.calls.filter((call) => call[1] === false)).toHaveLength(initialTenantReads + 1));
+    await user.click(screen.getByRole("combobox", { name: "权限边界" }));
+    await user.click(await screen.findByRole("option", { name: `${tenantPolicy.displayName} · ${tenantPolicy.id}` }));
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+
+    await waitFor(() => expect(setPermissionBoundary).toHaveBeenCalledWith(credential, account.id, managedRole.id, expect.objectContaining({
+      policyId: tenantPolicy.id,
+      policyResourceVersion: tenantPolicy.resourceVersion,
+      resourceVersion: closed.resourceVersion,
+      requestId: expect.stringMatching(/^role-boundary-/)
+    })));
+    expect(await screen.findByText("IAM 已确认权限上限变更，并完成权威状态回读。")).toBeTruthy();
+    expect(readPermissionBoundary).toHaveBeenCalledTimes(2);
+  });
+
   it("discards a late role creation result when the Session-scoped client changes", async () => {
     const roleIdentity: AccountIdentity = { ...identity, capabilities: [
       ...identity.capabilities,
@@ -2342,6 +2397,9 @@ describe("account access", () => {
       list: vi.fn().mockResolvedValue(managedRoleDirectory),
       read: vi.fn().mockResolvedValue(managedRoleAccess),
       readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
+      listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [], available: true }),
+      setPermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary set")),
+      removePermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary removal")),
       listTrustVersions: vi.fn(),
       create: operation,
       listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
@@ -2387,6 +2445,8 @@ describe("account access", () => {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
         readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
+        setPermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary set")),
+        removePermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary removal")),
         listTrustVersions: vi.fn(),
         create: vi.fn().mockResolvedValue(managedRole),
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [managedRoleSessionItem], nextAfter: null }),

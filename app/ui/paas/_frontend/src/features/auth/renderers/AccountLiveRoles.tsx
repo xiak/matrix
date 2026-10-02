@@ -1,16 +1,18 @@
 "use client";
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Alert, Badge, Button, Card, ContentPage, EmptyState, Skeleton, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
+import { Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, Select, Skeleton, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
+import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent, type ServiceLinkedRoleClient, type ServiceRoleTemplateClient } from "../application/AccountAccessProvider";
-import type { AccountAccessView } from "../domain/accounts";
-import type { RoleAccess, RoleCapability, RoleListing, RolePermissionBoundary, RoleTrustVersion, RoleTrustVersionDirectory } from "../domain/roles";
+import type { AccountAccessView, AccountPolicy } from "../domain/accounts";
+import type { RoleAccess, RoleCapability, RoleCapabilityAction, RoleListing, RolePermissionBoundary, RoleTrustVersion, RoleTrustVersionDirectory } from "../domain/roles";
 import { AuthorizationOverview, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { LiveRoleSessions } from "./LiveRoleSessions";
 import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
+import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
 
 type OpenRoleEntity = (view: AccountAccessView, id?: string) => void;
@@ -28,18 +30,35 @@ function trustPrincipalCount(version: RoleTrustVersion): number {
   return version.document.statements.reduce((count, statement) => count + statement.principals.length, 0);
 }
 
-function LiveRoleAuthorizationOverview({ access, client }: { access: RoleAccess; client: RoleAccessClient }) {
-  const t = useTranslations("RoleWorkspace"), a = useTranslations("AccountAccess");
+type RoleBoundaryIntent =
+  | { kind: "set"; policyId: string; policyResourceVersion: number; resourceVersion: number; requestId: string; versionId: string }
+  | { kind: "remove"; resourceVersion: number; requestId: string };
+type RoleBoundaryOperation = { state: "idle" | "pending" | "uncertain" | "conflict" | "refreshFailed" | "completed"; error?: ReturnType<typeof accountError> };
+
+function roleCapability(access: RoleAccess, action: RoleCapabilityAction): RoleCapability | null {
+  return access.capabilities.find((candidate) => candidate.action === action && candidate.resource.kind === "ROLE" && candidate.resource.id === access.role.id) ?? null;
+}
+
+function LiveRoleAuthorizationOverview({ access, client, onAccessChanged }: { access: RoleAccess; client: RoleAccessClient; onAccessChanged(access: RoleAccess): void }) {
+  const t = useTranslations("RoleWorkspace"), a = useTranslations("AccountAccess"), w = useTranslations("IamWorkspace");
+  const selectId = useId();
+  const form = useRef<HTMLFormElement>(null), editTrigger = useRef<HTMLButtonElement>(null), restoreEditFocus = useRef(false);
+  const mounted = useRef(true), requests = useRef(0), policyRequests = useRef(0), intent = useRef<RoleBoundaryIntent | null>(null);
   const [boundary, setBoundary] = useState<RolePermissionBoundary | null>(null);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
-  const [error, setError] = useState<string | null>(null), [refresh, setRefresh] = useState(0);
-  const requests = useRef(0);
+  const [error, setError] = useState<string | null>(null), [refresh, setRefresh] = useState(0), [editing, setEditing] = useState(false);
+  const [policies, setPolicies] = useState<AccountPolicy[]>([]), [policiesAvailable, setPoliciesAvailable] = useState(true);
+  const [policyPhase, setPolicyPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [value, setValue] = useState(""), [review, setReview] = useState(false), [reviewedVersion, setReviewedVersion] = useState<string | null>(null);
+  const [operation, setOperation] = useState<RoleBoundaryOperation>({ state: "idle" });
+
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   useEffect(() => {
     const request = ++requests.current;
     client.readPermissionBoundary(access.role.id).then((value) => {
       if (request !== requests.current) return;
-      setBoundary(value); setPhase("ready");
+      setBoundary(value); setValue(value.policy?.policyId ?? ""); setPhase("ready");
     }, (failure: unknown) => {
       if (request !== requests.current) return;
       setError(a(`errors.${accountError(failure)}`)); setPhase("error");
@@ -51,6 +70,94 @@ function LiveRoleAuthorizationOverview({ access, client }: { access: RoleAccess;
     setBoundary(null); setError(null); setPhase("loading");
     setRefresh((value) => value + 1);
   };
+  const setCapability = roleCapability(access, "iam.role.permission-boundary.set");
+  const removeCapability = roleCapability(access, "iam.role.permission-boundary.remove");
+  const canSet = setCapability?.available === true, canRemove = removeCapability?.available === true;
+  const canChange = phase === "ready" && (canSet || (boundary?.policy !== null && canRemove));
+  const activePolicies = policies.filter((policy) => policy.status === "ACTIVE" && policy.scope === "TENANT" && (policy.accountId === null || policy.accountId === client.accountId));
+  const selected = activePolicies.find((policy) => policy.id === value);
+  const currentPolicyId = boundary?.policy?.policyId ?? "";
+  const eligible = phase === "ready" && value !== currentPolicyId && (value ? Boolean(selected && canSet) : Boolean(boundary?.policy && canRemove));
+  const locked = operation.state === "pending" || operation.state === "conflict" || operation.state === "refreshFailed";
+  const restrictionReason = setCapability?.restrictionReason ?? removeCapability?.restrictionReason ?? "AUTHORITY_REQUIRED";
+  useAccessDraft({ dirty: editing && (value !== currentPolicyId || review || operation.state === "uncertain"), busy: operation.state === "pending", title: t("editBoundary"), description: t("boundaryChangeHint"), form });
+  useLayoutEffect(() => {
+    if (!editing && restoreEditFocus.current) {
+      restoreEditFocus.current = false;
+      editTrigger.current?.focus({ preventScroll: true });
+    }
+  }, [editing, operation.state]);
+
+  const loadPolicies = useCallback(async () => {
+    const request = ++policyRequests.current;
+    setPolicyPhase("loading"); setPoliciesAvailable(true);
+    try {
+      const directory = await client.listBoundaryPolicies();
+      if (!mounted.current || request !== policyRequests.current) return;
+      setPolicies(directory.items); setPoliciesAvailable(directory.available); setPolicyPhase("ready");
+    } catch {
+      if (!mounted.current || request !== policyRequests.current) return;
+      setPolicies([]); setPoliciesAvailable(false); setPolicyPhase("error");
+    }
+  }, [client]);
+
+  const openEditor = () => {
+    if (!boundary || !canChange) return;
+    setValue(boundary.policy?.policyId ?? ""); setReview(false); setReviewedVersion(null); intent.current = null;
+    setOperation({ state: "idle" }); setEditing(true);
+    if (canSet && (policyPhase === "idle" || policyPhase === "error")) void loadPolicies();
+  };
+
+  const refreshAuthoritative = async (purpose: "conflict" | "confirmed") => {
+    setOperation({ state: "pending" });
+    try {
+      const [latestAccess, latestBoundary] = await Promise.all([client.read(access.role.id), client.readPermissionBoundary(access.role.id)]);
+      if (!mounted.current) return;
+      onAccessChanged(latestAccess); setBoundary(latestBoundary); setValue(latestBoundary.policy?.policyId ?? "");
+      intent.current = null; setReview(false); setReviewedVersion(null);
+      if (purpose === "confirmed") { restoreEditFocus.current = true; setEditing(false); setOperation({ state: "completed" }); }
+      else {
+        const latestCanSet = roleCapability(latestAccess, "iam.role.permission-boundary.set")?.available === true;
+        if (latestCanSet) await loadPolicies();
+        if (mounted.current) setOperation({ state: "idle" });
+      }
+    } catch (failure) {
+      if (!mounted.current) return;
+      setOperation({ state: purpose === "confirmed" ? "refreshFailed" : "conflict", error: accountError(failure) });
+    }
+  };
+
+  const submit = async () => {
+    if (!boundary || locked) return;
+    if (!review) {
+      if (!eligible) return;
+      intent.current = selected && value
+        ? { kind: "set", policyId: selected.id, policyResourceVersion: selected.resourceVersion, resourceVersion: boundary.resourceVersion, requestId: requestToken("role-boundary-"), versionId: selected.defaultVersionId }
+        : { kind: "remove", resourceVersion: boundary.resourceVersion, requestId: requestToken("role-boundary-") };
+      setReviewedVersion(selected?.defaultVersionId ?? null); setReview(true); setOperation({ state: "idle" });
+      return;
+    }
+    const original = intent.current;
+    if (!original) return;
+    setOperation({ state: "pending" });
+    try {
+      const result = original.kind === "set"
+        ? await client.setPermissionBoundary(access.role.id, { policyId: original.policyId, policyResourceVersion: original.policyResourceVersion, resourceVersion: original.resourceVersion, requestId: original.requestId })
+        : await client.removePermissionBoundary(access.role.id, { resourceVersion: original.resourceVersion, requestId: original.requestId });
+      if (!mounted.current) return;
+      if (original.kind === "set" && result.policy?.versionId !== original.versionId) throw new Error("INVALID_IAM_RESPONSE");
+      setBoundary(result); setValue(result.policy?.policyId ?? ""); intent.current = null; setReview(false); setReviewedVersion(null);
+    } catch (failure) {
+      if (!mounted.current) return;
+      const next = accountError(failure);
+      if (next === "expired") { intent.current = null; setEditing(false); setReview(false); }
+      else if (next !== "unavailable" && next !== "conflict") { intent.current = null; setReview(false); }
+      setOperation({ state: next === "unavailable" ? "uncertain" : next === "conflict" ? "conflict" : "idle", error: next });
+      return;
+    }
+    await refreshAuthoritative("confirmed");
+  };
+
   const boundaryValue = phase === "loading" ? <span aria-label={t("boundaryLoading")} role="status"><Skeleton /></span>
     : phase === "error" ? <Badge status="neutral">{t("boundaryUnknown")}</Badge>
       : boundary?.policy ? <span><strong>{boundary.policy.policyId}</strong><small>{t("boundaryPolicyVersion", { version: boundary.policy.versionId, revision: boundary.resourceVersion })}</small></span>
@@ -63,6 +170,35 @@ function LiveRoleAuthorizationOverview({ access, client }: { access: RoleAccess;
       { label: t("maximumSession"), value: durationLabel(access.role.maxSessionDurationSeconds) }
     ]} />
     {phase === "error" ? <Alert status="warning"><div className={styles.confirmation}><span>{t("boundaryUnavailable")}{error ? ` ${error}` : ""}</span><Button size="small" variant="secondary" onClick={retry}>{t("retry")}</Button></div></Alert> : null}
+    {phase === "ready" && boundary ? <section className={styles.identitySection} aria-label={t("boundaryManagement")}>
+      <div className={styles.actionHeader}><div><h3>{t("boundaryManagement")}</h3><p className={styles.note}>{t("boundaryManagementHint")}</p></div>{!editing && canChange ? <Button ref={editTrigger} variant="secondary" disabled={locked} onClick={openEditor}>{t("editBoundary")}</Button> : null}</div>
+      {!canChange ? <Alert>{t("boundaryReadOnly")} {a(`restrictions.${restrictionReason}`)}</Alert> : null}
+      {operation.state === "completed" ? <Alert status="success">{t("boundaryUpdated")}</Alert> : null}
+      {operation.state === "uncertain" || operation.state === "conflict" || operation.state === "refreshFailed" || operation.error ? <Alert status="warning">
+        {operation.state === "uncertain" ? t("boundaryOutcomeUnknown") : operation.state === "conflict" ? t("boundaryConflict") : operation.state === "refreshFailed" ? t("boundaryRefreshFailed") : a(`errors.${operation.error!}`)}
+        {operation.state === "conflict" || operation.state === "refreshFailed" ? <div className={styles.actions}><Button variant="secondary" onClick={() => void refreshAuthoritative(operation.state === "conflict" ? "conflict" : "confirmed")}>{t(operation.state === "conflict" ? "boundaryRefreshReview" : "boundaryRetryRead")}</Button></div> : null}
+      </Alert> : null}
+      {editing ? <form ref={form} className={styles.stack} aria-label={t("editBoundary")} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+        {review ? <><Alert status="warning">{value ? t("boundarySetReviewHint") : t("boundaryRemoveReviewHint")}</Alert><dl className={styles.facts}>
+          <div><dt>{t("before")}</dt><dd>{boundary.policy?.policyId ?? t("boundaryClosed")}</dd></div>
+          <div><dt>{t("after")}</dt><dd>{value || t("boundaryClosed")}</dd></div>
+          {reviewedVersion ? <div><dt>{t("effectiveVersion")}</dt><dd>{reviewedVersion}</dd></div> : null}
+        </dl></> : <FormField id={selectId} label={t("boundary")} hint={t("boundarySelectorHint")}>
+          <Select autoFocus id={selectId} disabled={locked} value={value} aria-describedby={`${selectId}-hint`} options={[
+            { value: "", label: t("noBoundaryClosed"), disabled: boundary.policy !== null && !canRemove },
+            ...activePolicies.map((policy) => ({ value: policy.id, label: `${policy.displayName} · ${policy.id}`, disabled: !canSet })),
+            ...(!selected && value ? [{ value, label: value, disabled: true }] : [])
+          ]} onValueChange={(next) => { setValue(next); intent.current = null; setOperation({ state: "idle" }); }} />
+        </FormField>}
+        {policyPhase === "loading" ? <p className={styles.note} role="status">{t("boundaryDirectoryLoading")}</p> : null}
+        {policyPhase === "error" || !policiesAvailable ? <p className={styles.note}>{t("boundaryDirectoryUnavailable")}</p> : null}
+        <div className={styles.actions}>
+          <Button type="submit" disabled={locked || (!review && !eligible)}>{operation.state === "pending" ? t("boundarySaving") : operation.state === "uncertain" ? t("boundaryRetryOriginal") : review ? t("boundaryConfirm") : t("reviewChange")}</Button>
+          {review ? <Button variant="secondary" disabled={locked} onClick={() => { intent.current = null; setReview(false); setOperation({ state: "idle" }); }}>{t("backToSelection")}</Button> : null}
+          <Button variant="ghost" disabled={locked} onClick={() => { intent.current = null; restoreEditFocus.current = true; setEditing(false); setReview(false); setOperation({ state: "idle" }); }}>{w("cancel")}</Button>
+        </div>
+      </form> : null}
+    </section> : null}
   </>;
 }
 
@@ -181,7 +317,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
       </div>
       <p className={styles.note}>{access.role.description || w("none")}</p>
       <Alert>{t("liveTrustExplanation")}</Alert>
-      <LiveRoleAuthorizationOverview key={`${client.sessionRevision}:${access.role.id}`} access={access} client={client} />
+      <LiveRoleAuthorizationOverview key={`${client.sessionRevision}:${access.role.id}`} access={access} client={client} onAccessChanged={setAccess} />
       <dl className={styles.facts}>
         <div><dt>{t("roleId")}</dt><dd><code>{access.role.id}</code></dd></div>
         <div><dt>{t("resourceVersion")}</dt><dd>v{access.role.resourceVersion}</dd></div>

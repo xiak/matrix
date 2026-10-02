@@ -2,9 +2,11 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
+import { UnsavedChangesProvider } from "@ui/xiak";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { RoleAccessClient, RoleSessionRevokeIntent, ServiceRoleTemplateClient } from "../application/AccountAccessProvider";
-import type { AccountAccessView } from "../domain/accounts";
+import type { AccountAccessView, AccountPolicy } from "../domain/accounts";
 import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/roles";
 import { AccountLiveRoles } from "./AccountLiveRoles";
 
@@ -21,6 +23,10 @@ const roleActions: RoleCapabilityAction[] = [
 const capabilities = roleActions.map((action) => ({
   action, resource: { kind: "ROLE" as const, id: role.id }, available: action !== "iam.role.delete", restrictionReason: action === "iam.role.delete" ? "AUTHORITY_REQUIRED" as const : null
 }));
+const boundaryPolicy: AccountPolicy = {
+  id: "policy-role-boundary-v2", management: "CUSTOMER", accountId: role.accountId, displayName: "Production role ceiling",
+  scope: "TENANT", status: "ACTIVE", defaultVersionId: "v8", resourceVersion: 7, createdAt: timestamp, updatedAt: timestamp
+};
 const directory: RoleDirectory = { accountId: role.accountId, items: [{ role, capabilities }], nextAfter: null };
 const access: RoleAccess = {
   role,
@@ -59,6 +65,10 @@ async function openServiceAuthorization(user: ReturnType<typeof userEvent.setup>
   await user.click(await screen.findByRole("button", { name: "更多操作" }));
   await user.click(within(await screen.findByRole("menu", { name: "更多操作" })).getByRole("menuitem", { name: "服务授权" }));
 }
+async function chooseRoleBoundary(user: ReturnType<typeof userEvent.setup>, label: string) {
+  await user.click(screen.getByRole("combobox", { name: "权限边界" }));
+  await user.click(await screen.findByRole("option", { name: label }));
+}
 const serviceSession = {
   id: "rs1.service-read", accountId: role.accountId, roleId: role.id, sourceServicePrincipalId: "service-paas-runtime", status: "ACTIVE" as const,
   issuedAt: timestamp, expiresAt: "2026-09-21T08:15:00Z", revokedAt: null
@@ -79,6 +89,9 @@ function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
     list: vi.fn().mockResolvedValue(directory),
     read: vi.fn().mockResolvedValue(access),
     readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, resourceVersion: 2, policy: { policyId: "policy-role-ceiling", versionId: "v3", contentDigest: `sha256:${"c".repeat(64)}` } }),
+    listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [], available: true }),
+    setPermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary set")),
+    removePermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary removal")),
     listTrustVersions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, items: [previousTrustVersion, access.trustVersion], nextAfter: null }),
     create: vi.fn().mockResolvedValue(role),
     listSessions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, observedAt: timestamp, items: [], nextAfter: null }),
@@ -94,7 +107,7 @@ function RolesHarness({ api, serviceRoleTemplates, entityId, onOpen = vi.fn() }:
     if (expectedRequestId === null) return current ?? next;
     return current?.requestId === expectedRequestId ? next : current;
   });
-  return <AccountLiveRoles client={api} serviceRoleTemplates={serviceRoleTemplates} entityId={entityId} onCreate={vi.fn()} onOpen={onOpen} revokeIntent={intent} onRevokeIntentChange={changeIntent} />;
+  return <UnsavedChangesProvider><AccountLiveRoles client={api} serviceRoleTemplates={serviceRoleTemplates} entityId={entityId} onCreate={vi.fn()} onOpen={onOpen} revokeIntent={intent} onRevokeIntentChange={changeIntent} /></UnsavedChangesProvider>;
 }
 
 afterEach(cleanup);
@@ -179,6 +192,18 @@ describe("AccountLiveRoles", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("uses the exact server capabilities to keep role-boundary management read-only", async () => {
+    const restricted: RoleAccess = { ...access, capabilities: access.capabilities.map((candidate) =>
+      candidate.action === "iam.role.permission-boundary.set" || candidate.action === "iam.role.permission-boundary.remove"
+        ? { ...candidate, available: false, restrictionReason: "AUTHORITY_REQUIRED" }
+        : candidate) };
+    render(<LocaleProvider><RolesHarness api={client({ read: vi.fn().mockResolvedValue(restricted) })} entityId={role.id} /></LocaleProvider>);
+
+    expect(await screen.findByText("当前边界为只读。", { exact: false })).toBeTruthy();
+    expect(screen.getByText("当前身份没有执行此操作所需的权限。", { exact: false })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "修改权限边界" })).toBeNull();
+  });
+
   it("keeps a boundary read failure local and never presents it as no boundary", async () => {
     const user = userEvent.setup();
     const readPermissionBoundary = vi.fn()
@@ -196,6 +221,140 @@ describe("AccountLiveRoles", () => {
     expect(await screen.findByText("policy-role-ceiling")).toBeTruthy();
     expect(screen.getByText("策略版本 v3 · 边界修订 v3")).toBeTruthy();
     expect(readPermissionBoundary).toHaveBeenCalledTimes(2);
+  });
+
+  it("loads eligible policies only after inline editing opens, then sets and authoritatively rereads the role boundary", async () => {
+    const user = userEvent.setup();
+    const closed = { accountId: role.accountId, roleId: role.id, resourceVersion: 2, policy: null };
+    const applied = { accountId: role.accountId, roleId: role.id, resourceVersion: 3,
+      policy: { policyId: boundaryPolicy.id, versionId: boundaryPolicy.defaultVersionId, contentDigest: `sha256:${"d".repeat(64)}` } };
+    const listBoundaryPolicies = vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true });
+    const setPermissionBoundary = vi.fn().mockResolvedValue(applied);
+    const readPermissionBoundary = vi.fn().mockResolvedValueOnce(closed).mockResolvedValue(applied);
+    const api = client({ listBoundaryPolicies, setPermissionBoundary, readPermissionBoundary });
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    expect(await screen.findByText("未设置权限上限 · 角色承担已关闭")).toBeTruthy();
+    expect(listBoundaryPolicies).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "修改权限边界" }));
+    await waitFor(() => expect(listBoundaryPolicies).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await chooseRoleBoundary(user, `${boundaryPolicy.displayName} · ${boundaryPolicy.id}`);
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(setPermissionBoundary).not.toHaveBeenCalled();
+    expect(screen.getByText("请核对新的权限上限", { exact: false })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+
+    await waitFor(() => expect(setPermissionBoundary).toHaveBeenCalledTimes(1));
+    expect(setPermissionBoundary).toHaveBeenCalledWith(role.id, expect.objectContaining({
+      policyId: boundaryPolicy.id,
+      policyResourceVersion: boundaryPolicy.resourceVersion,
+      resourceVersion: closed.resourceVersion,
+      requestId: expect.stringMatching(/^role-boundary-/)
+    }));
+    expect(await screen.findByText("IAM 已确认权限上限变更，并完成权威状态回读。")).toBeTruthy();
+    expect(readPermissionBoundary).toHaveBeenCalledTimes(2);
+    expect(api.read).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps one uncertain role-boundary intent and retries it byte-for-byte", async () => {
+    const user = userEvent.setup();
+    const closed = { accountId: role.accountId, roleId: role.id, resourceVersion: 2, policy: null };
+    const applied = { accountId: role.accountId, roleId: role.id, resourceVersion: 3,
+      policy: { policyId: boundaryPolicy.id, versionId: boundaryPolicy.defaultVersionId, contentDigest: `sha256:${"e".repeat(64)}` } };
+    const setPermissionBoundary = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE")).mockResolvedValue(applied);
+    const api = client({
+      listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }),
+      readPermissionBoundary: vi.fn().mockResolvedValueOnce(closed).mockResolvedValue(applied),
+      setPermissionBoundary
+    });
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
+    await chooseRoleBoundary(user, `${boundaryPolicy.displayName} · ${boundaryPolicy.id}`);
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+    expect(await screen.findByText("提交结果尚未确认", { exact: false })).toBeTruthy();
+    const original = setPermissionBoundary.mock.calls[0];
+    await user.click(screen.getByRole("button", { name: "重试原请求" }));
+
+    await waitFor(() => expect(setPermissionBoundary).toHaveBeenCalledTimes(2));
+    expect(setPermissionBoundary.mock.calls[1]).toEqual(original);
+    expect(await screen.findByText("IAM 已确认权限上限变更，并完成权威状态回读。")).toBeTruthy();
+  });
+
+  it("can remove an existing role boundary when the policy directory is unavailable and states that assumption closes", async () => {
+    const user = userEvent.setup();
+    const current = { accountId: role.accountId, roleId: role.id, resourceVersion: 2,
+      policy: { policyId: "policy-old-ceiling", versionId: "v2", contentDigest: `sha256:${"3".repeat(64)}` } };
+    const closed = { accountId: role.accountId, roleId: role.id, resourceVersion: 3, policy: null };
+    const removePermissionBoundary = vi.fn().mockResolvedValue(closed);
+    const api = client({
+      listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [], available: false }),
+      readPermissionBoundary: vi.fn().mockResolvedValueOnce(current).mockResolvedValue(closed),
+      removePermissionBoundary
+    });
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
+    await chooseRoleBoundary(user, "不设置权限上限 · 角色承担关闭");
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByText("移除权限上限后，角色承担将关闭；这不是改为无限权限。", { exact: false })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+
+    await waitFor(() => expect(removePermissionBoundary).toHaveBeenCalledWith(role.id, expect.objectContaining({
+      resourceVersion: current.resourceVersion,
+      requestId: expect.stringMatching(/^role-boundary-/)
+    })));
+    expect(await screen.findByText("未设置权限上限 · 角色承担已关闭")).toBeTruthy();
+  });
+
+  it("refreshes a conflicting role boundary and requires a fresh review", async () => {
+    const user = userEvent.setup();
+    const original = { accountId: role.accountId, roleId: role.id, resourceVersion: 2,
+      policy: { policyId: "policy-old-ceiling", versionId: "v2", contentDigest: `sha256:${"f".repeat(64)}` } };
+    const latest = { accountId: role.accountId, roleId: role.id, resourceVersion: 3,
+      policy: { policyId: boundaryPolicy.id, versionId: boundaryPolicy.defaultVersionId, contentDigest: `sha256:${"1".repeat(64)}` } };
+    const setPermissionBoundary = vi.fn().mockRejectedValue(new HttpProblem(409, "IAM_ROLE_REVISION_CHANGED"));
+    const readPermissionBoundary = vi.fn().mockResolvedValueOnce(original).mockResolvedValue(latest);
+    const api = client({ listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }), readPermissionBoundary, setPermissionBoundary });
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
+    await chooseRoleBoundary(user, `${boundaryPolicy.displayName} · ${boundaryPolicy.id}`);
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+    expect(await screen.findByText("权限上限已被其他操作修改", { exact: false })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "刷新并重新审阅" }));
+
+    expect((await screen.findByRole("combobox", { name: "权限边界" })).textContent).toContain(boundaryPolicy.displayName);
+    expect((screen.getByRole("button", { name: "审阅变更" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(setPermissionBoundary).toHaveBeenCalledTimes(1);
+    expect(readPermissionBoundary).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats a failed readback after an acknowledged role-boundary write as a read failure only", async () => {
+    const user = userEvent.setup();
+    const closed = { accountId: role.accountId, roleId: role.id, resourceVersion: 2, policy: null };
+    const applied = { accountId: role.accountId, roleId: role.id, resourceVersion: 3,
+      policy: { policyId: boundaryPolicy.id, versionId: boundaryPolicy.defaultVersionId, contentDigest: `sha256:${"2".repeat(64)}` } };
+    const read = vi.fn().mockResolvedValueOnce(access).mockRejectedValueOnce(new Error("readback unavailable")).mockResolvedValue(access);
+    const readPermissionBoundary = vi.fn().mockResolvedValueOnce(closed).mockResolvedValue(applied);
+    const setPermissionBoundary = vi.fn().mockResolvedValue(applied);
+    const api = client({ read, readPermissionBoundary, listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }), setPermissionBoundary });
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
+    await chooseRoleBoundary(user, `${boundaryPolicy.displayName} · ${boundaryPolicy.id}`);
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+    expect(await screen.findByText("IAM 已确认写入，但后续权威回读失败", { exact: false })).toBeTruthy();
+    expect(screen.queryByText("提交结果尚未确认", { exact: false })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "重试权威读取" }));
+
+    expect(await screen.findByText("IAM 已确认权限上限变更，并完成权威状态回读。")).toBeTruthy();
+    expect(setPermissionBoundary).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(3);
   });
 
   it("keeps platform template, account consent, and workload binding visibly independent", async () => {

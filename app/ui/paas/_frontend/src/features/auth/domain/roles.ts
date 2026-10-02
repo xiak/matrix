@@ -80,6 +80,18 @@ export type RolePermissionBoundary = {
   policy: PolicyVersionReference | null;
 };
 
+export type SetRolePermissionBoundaryCommand = {
+  policyId: string;
+  policyResourceVersion: number;
+  resourceVersion: number;
+  requestId: string;
+};
+
+export type RemoveRolePermissionBoundaryCommand = {
+  resourceVersion: number;
+  requestId: string;
+};
+
 export type CreateRoleCommand = {
   name: string;
   description: string;

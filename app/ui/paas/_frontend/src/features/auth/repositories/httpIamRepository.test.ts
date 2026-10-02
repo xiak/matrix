@@ -241,6 +241,54 @@ describe("IAM HTTP role boundary", () => {
     await expect(httpAccountRepository.roles!.readPermissionBoundary("bearer", account.id, role.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
+  it("sets and removes the exact role boundary with explicit concurrency and request identity", async () => {
+    const client = httpAccountRepository.roles!;
+    const reference = { policyId: "policy-role-ceiling", versionId: "v3", contentDigest: `sha256:${"d".repeat(64)}` };
+    const set = { policyId: reference.policyId, policyResourceVersion: 7, resourceVersion: 4, requestId: "request-role-boundary-set" };
+    let fetcher = reply({ apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: role.id, resourceVersion: 5, policy: reference });
+    expect((await client.setPermissionBoundary("bearer", account.id, role.id, { ...set, accountId: "forged" } as typeof set)).policy).toEqual(reference);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/permission-boundary`);
+    expect(firstRequest(fetcher)[1].method).toBe("PUT");
+    expect(requestBody(fetcher)).toEqual(set);
+
+    const remove = { resourceVersion: 5, requestId: "request-role-boundary-remove" };
+    fetcher = reply({ apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: role.id, resourceVersion: 6, policy: null });
+    expect((await client.removePermissionBoundary("bearer", account.id, role.id, remove)).policy).toBeNull();
+    expect(firstRequest(fetcher)[1].method).toBe("DELETE");
+    expect(requestBody(fetcher)).toEqual(remove);
+  });
+
+  it("rejects foreign or non-concurrent role boundary write outcomes", async () => {
+    const client = httpAccountRepository.roles!;
+    const reference = { policyId: "policy-role-ceiling", versionId: "v3", contentDigest: `sha256:${"e".repeat(64)}` };
+    const command = { policyId: reference.policyId, policyResourceVersion: 7, resourceVersion: 4, requestId: "request-role-boundary-invalid" };
+    for (const result of [
+      { apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: role.id, resourceVersion: 4, policy: reference },
+      { apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: role.id, resourceVersion: 6, policy: reference },
+      { apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: role.id, resourceVersion: 5, policy: null },
+      { apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: "role-other", resourceVersion: 5, policy: reference },
+      { apiVersion, kind: "RolePermissionBoundary", accountId: "account-other", roleId: role.id, resourceVersion: 5, policy: reference },
+      { apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: role.id, resourceVersion: 5, policy: { ...reference, policyId: "policy-other" } }
+    ]) {
+      reply(result);
+      await expect(client.setPermissionBoundary("bearer", account.id, role.id, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    reply({ apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: role.id, resourceVersion: 5, policy: reference });
+    await expect(client.removePermissionBoundary("bearer", account.id, role.id, { resourceVersion: 4, requestId: "request-role-boundary-remove-invalid" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("retries an uncertain role boundary request byte-for-byte", async () => {
+    const reference = { policyId: "policy-role-ceiling", versionId: "v3", contentDigest: `sha256:${"f".repeat(64)}` };
+    const response = { apiVersion, kind: "RolePermissionBoundary", accountId: account.id, roleId: role.id, resourceVersion: 5, policy: reference };
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ code: "IAM_UNAVAILABLE" }), { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }));
+    vi.stubGlobal("fetch", fetcher);
+    const command = { policyId: reference.policyId, policyResourceVersion: 7, resourceVersion: 4, requestId: "request-role-boundary-uncertain" };
+    await expect(httpAccountRepository.roles!.setPermissionBoundary("bearer", account.id, role.id, command)).rejects.toMatchObject({ status: 503 });
+    await httpAccountRepository.roles!.setPermissionBoundary("bearer", account.id, role.id, command);
+    expect(fetcher.mock.calls[0]).toEqual(fetcher.mock.calls[1]);
+  });
+
   it("creates a role with only metadata, USER trust and one retained request ID", async () => {
     const trustPolicy = { languageVersion: "1" as const, statements: [{ sid: "trusted-users", effect: "ALLOW" as const, principals: [{ type: "USER" as const, id: user.id }] }] };
     const fetcher = reply(role);
