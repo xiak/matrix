@@ -1,6 +1,6 @@
 # FEAT-IAM-012：外部身份、通知与组织治理
 
-- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。当前installation候选已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像构建，使用`61/31/3+r7`；本地签名A/B、受限PostgreSQL运行身份、真实联系人验证、SMTP/Maildir实收以及TOTP绑定后的`AUTHENTICATOR_BOUND`实收与生命周期保留已通过，最终精确源码独立CI仍未成功。已有地址替换及真实UI未完成；其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
+- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。installation已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像；首条联系人验证、SMTP/Maildir实收、MFA安全通知和同profile生命周期累计进入`64/34/3+r11`签名组合，并由`ed2835db`完整独立CI确认。该首地址/渠道切片已验收；已有地址替换及真实UI未完成，其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
 - Owner：IAM负责S1的地址验证、目的限定通知意图/投递和重试；installation负责受保护SMTP及必要私有材料配置，UX/UI负责本人交互。其他外部来源与计费保持各自业务边界。
 - S1a不等于完整S1或其他外部能力已实现；缺少前置时不提供假入口或伪成功。
 
@@ -160,9 +160,9 @@ IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`�
 
 本片的签名installation联系人验证路径已有本地真实运行证据：固定源码`823a665e8d24b21c180134ab7893dc189d55599d`的`61/31/3+r7`签名A/B，在新的Docker 27.5.1经典镜像存储、外层`network=none`、2CPU/4GiB/Pids768环境中完成最终362.63秒全生命周期。真实APISIX请求发起首条地址验证，独立受限dispatcher通过仅其持有的SMTP通道向本任务Postfix提交；门禁只从真实Maildir取得8位验证码后确认地址，再观察`CONTACT_VERIFIED`安全通知，核对两条不同Message-ID、验证邮件的SMTP250持久观察、两封邮件的准确收发件人与通知引用，并证明第二封不含验证码、SMTP口令及已有受保护值。联系人验证后才写入独立保留夹具，并在失败升级自动回退、B升级、显式平台回滚、指定备份恢复中逐次重新读取和精确核对Account/USER、地址、状态、resourceVersion及验证时间；缺失或畸形状态失败关闭。只重启任务自有外层引擎后，再次读取同一联系人及其余保留状态的status/verify/support门禁16.88秒通过。fixture归档及经典镜像ID分别为`sha256:68960426f3d59e6a8732485cd13521b6618bc81b1abf46a6a057e1e4b6b29612`和`sha256:c4a3d9c41ba180cb8748865badc712c909ffb6f4e2b09a4efde7c6aed76bd028`，门禁结束已移除fixture容器与镜像。该证据只证明本地合成邮箱的渠道受理和实收，不声称公网最终送达、用户已读或任意SMTP供应商兼容。
 
-同一归档在Docker 29.6.2 containerd image store呈现OCI manifest身份，而当前签名发布契约认证经典Docker加载后的portable config身份，因而在任何安装效果前以`IMAGE_VERIFICATION_FAILED`关闭。当前不放宽摘要比较，也不把Docker最低版本数字替代实际image-store兼容契约；本片的已验证运行时仍是Docker 27.5.1经典存储。修正后的最终测试/证据提交及独立CI尚未完成，因此完整S1仍未验收。
+同一归档在Docker 29.6.2 containerd image store呈现OCI manifest身份，而当前签名发布契约认证经典Docker加载后的portable config身份，因而在任何安装效果前以`IMAGE_VERIFICATION_FAILED`关闭。当前不放宽摘要比较，也不把Docker最低版本数字替代实际image-store兼容契约；本片的已验证运行时仍是Docker 27.5.1经典存储。后继`64/34/3+r11`签名恢复组合继续携带同一私有SMTP、联系人及安全通知边界；最终断言固定`ed2835db362de0a4a1ef3ca9145ee56801ae2436`的[Verification 37144670484](https://github.com/xiak/matrix/actions/runs/37144670484)已核实精确SHA，15项全部completed/success。因此首地址、实际本地SMTP渠道、受限worker及同profile生命周期切片按本节边界验收；Docker 29.6.2 OCI store仍保持效果前拒绝，不能将经典存储证据泛化为任意引擎兼容。
 
-本片仍需最终独立CI与UI消费者验收；后继MFA/账号配置交错与业务安全事件接入、运维聚合告警和受控恢复后的联系/在途意图隔离仍按上述需求逐片证明。当前不把联系人验证和一个安全通知描述为已交付聚合告警。现有邮件证据不声称已有地址替换、ENROLLMENT/STEP_UP、旧备份重新开放或完整S1验收。
+本片后端与签名本地渠道的最终独立CI已经完成；UI消费者仍须由010做真实浏览器验收。后继已有地址替换、运维聚合告警和更广外部渠道继续按上述需求逐片证明。当前不把联系人验证和安全通知描述为已交付消息中心或聚合告警；现有邮件证据也不声称已有地址替换、任意SMTP供应商兼容、用户已读或跨profile恢复。
 
 009在线治理消费五个封闭通知：`RECOVERY_STARTED`、`AUTHENTICATOR_RECOVERED`、`RECOVERY_CODES_REGENERATED`、`SECURITY_SETTINGS_CHANGED`、`AUTHENTICATOR_REPLACED`。原安全事务绑定原已验证地址/联系修订与各自不可变IAM事实，worker只投递该历史通知，不重做原USER今天的认证。没有扩大18列claim、私有FILE、角色权限、收件人输入或模板协议；这些通知不持有验证码密文，也不能发放认证或恢复能力。dispatcher与模板必须同时识别准确kind，未知类型及夹带验证秘密仍失败关闭，不能以数据库入队或模板单测代替真正经过worker的投递。各自真实Maildir、worker停止/重启、停用USER后的历史投递及秘密排除证据由[009](./FEAT-IAM-009-security-governance.md)拥有，不继承为安装通道或完整S1验收。
 
