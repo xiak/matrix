@@ -697,13 +697,13 @@ IAM 工程师随后固定并推送来源 `cb62ed2f6c307f5a50aa27480f89c8c58cf081
 
 ### 访问分析 LIVE 与隔离 MOCK 的开发验收证据
 
-2026-10-03，访问分析继续保留提交 `3612597e7` 起的隔离 MOCK 规模与人工复核体验，同时新增严格的 LIVE 消费路径。LIVE 契约对齐 IAM S4c-b 候选 `91649497a0c53be1174d8835326a2df51fe74a55`；该提交相对生产实现候选只修复备份测试 fixture，访问分析 API 与 OpenAPI 无差异。页面使用可收藏的稳定内容区而非 Dialog；标题、边界和页签先同步呈现，只有 Analyzer、来源覆盖和 Finding 目录等数据区显示骨架。当前 IAM 独立 CI 及真实 IAM 浏览器仍待完成，因此本节只接受客户端契约和隔离 MOCK，不继承后端发布结论。
+2026-10-03，访问分析继续保留提交 `3612597e7` 起的隔离 MOCK 规模与人工复核体验，同时新增严格的 LIVE 消费路径。LIVE 契约固定于 IAM S4c-b `91649497a0c53be1174d8835326a2df51fe74a55`；该提交相对生产实现候选只修复备份测试 fixture，访问分析 API 与 OpenAPI 无差异。IAM 独立 [Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260) 已由 GitHub API 核实精确 head SHA，15 个任务全部 `completed/success`，且 `failure`、`cancelled`、`timed_out`、`skipped` 均为 0。页面使用可收藏的稳定内容区而非 Dialog；标题、边界和页签先同步呈现，只有 Analyzer、来源覆盖和 Finding 目录等数据区显示骨架。真实 IAM 浏览器仍待完成，因此本节接受固定服务端契约和客户端边界，但不继承安装运行或发布结论。
 - LIVE repository 严格消费 `GET|POST /api/iam/v1/account/access-analyzers`、`GET /api/iam/v1/account/access-analyzers/{id}`、`POST .../{id}:update`、Finding 列表/详情以及 `:archive|:unarchive`。请求不携带 Account selector，当前凭据决定 Account；响应必须满足固定 `apiVersion/kind`、当前 Account/Analyzer 所有权、目标 kind 与 Finding type 绑定、正整数版本、时间/恢复/解决不变量和无未知字段。`401` 只使原 Session 代次失效；`403`、`404`、`409`、输入错误或不可用均留在当前页面，不切换身份、不退出其他 IAM 页面，也绝不回退到 MOCK 数据。
 - Analyzer 目录按当前 Account 展示固定 `type=UNUSED_ACCESS`、`resourceVersion`、1–365 天阈值（创建缺省 90）与 `ACTIVE / DISABLED`。权威空目录提供显式创建动作；加载失败不能伪装为空目录。更新调用 `:update` 并携带原 `resourceVersion` 与一次请求 ID；冲突后重新读取权威状态，不能静默覆盖并发修改。当前登录能力投影尚不包含这些 Action，UI 不从角色名称或本地能力猜测权限，始终尝试服务端并在局部处理 `403`。
 - 来源覆盖固定按 `IAM_PASSWORD_SESSIONS`、`IAM_ACCESS_KEY_AUTHORIZATIONS`、`IAM_ROLE_SESSIONS`、`IAM_ROLE_AUTHORIZATIONS`、`PAAS_RESULTS`、`EXTERNAL_FEDERATION` 排序。LIVE 接受 `COMPLETE`、`INSUFFICIENT_COVERAGE` 与 `NOT_INCLUDED` 的封闭组合；完整/不足覆盖必须携带合法时间窗，未纳入必须没有时间窗并说明 `SOURCE_NOT_IMPLEMENTED`。恢复缺口、观察窗口不足、历史谱系未知和来源未就绪均保持各自原因，不能翻译为没有风险、没有使用或扫描完成。隔离 MOCK 仍固定展示四项 IAM 证据不足及两项未纳入，用于提前检查文案和布局。
 - Finding 目录把 `ALL / ACTIVE / ARCHIVED / RESOLVED` 作为服务端过滤器，透传绑定 Session、Account、Analyzer revision、恢复 epoch 与查询的 opaque cursor；客户端不指定排序/pageSize、不推测总数，页脚只显示当前页及前后游标。目录错误与权威空结果分开呈现。详情在内容区打开；归档/取消归档使用 Finding 的准确 `resourceVersion` 和一次请求 ID，并在当前过滤器不再匹配时从本页移除。`RESOLVED` 只读且只能由扫描器产生；归档仅表示人工已复核，任何状态都不会自动停用 User、AccessKey、Role，亦不会改变 Policy、Session、权限或业务资源。真正处置仍进入对应对象生命周期，并由其服务端重新鉴权及校验版本。
 - 隔离 MOCK 保留三条对象关联样例与 120 条确定生成的显式假数据：默认 `ACTIVE` 为 41 条/5 个本地分页，全状态为 123 条/13 个本地分页，每页只挂载 10 行。它继续验证失败扫描保留上一份成功证据、状态时间线、内容区归档/取消归档、对象跳转与窄屏布局，但明确不证明服务端总数、排序、游标、容量、Audit 事实或自动处置。自动修复、动作级闲置权限、PaaS 结果和外部联合身份仍未成为 LIVE 能力，不在租户 UI 中伪装为可用功能。
-- 新增严格 HTTP 适配的五项契约用例以及 LIVE 渲染的五项行为用例，覆盖固定壳层先显示、服务端过滤与游标、准确 CAS 归档、局部无权且无 MOCK 回退、权威空目录创建；完整共享门禁及当前总数由 FEAT-007 唯一记录。真实 IAM 登录、后端独立 CI、安装/升级/恢复组合和发布验收仍是开放门禁。
+- 新增严格 HTTP 适配的五项契约用例以及 LIVE 渲染的五项行为用例，覆盖固定壳层先显示、服务端过滤与游标、准确 CAS 归档、局部无权且无 MOCK 回退、权威空目录创建；完整共享门禁及当前总数由 FEAT-007 唯一记录。IAM 固定契约的独立 CI 已关闭；真实 IAM 登录、安装/升级/恢复组合和发布验收仍是开放门禁。
 
 公共 UI、生产导出、完整前端及 Go 回归证据只归
 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence)
