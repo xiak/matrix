@@ -27,6 +27,7 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
     const target = previousStage.current === stage ? heading.current : stageHeading.current;
     previousStage.current = stage;
     target?.focus({ preventScroll: true });
+    target?.scrollIntoView?.({ block: "start", inline: "nearest" });
   }, [stage]);
 
   const profile = entry.profile;

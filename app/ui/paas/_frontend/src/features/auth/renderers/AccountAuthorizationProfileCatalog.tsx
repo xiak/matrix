@@ -73,6 +73,7 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
     if (publishingPreview || !restorePublishingFocus.current) return;
     restorePublishingFocus.current = false;
     publishingTrigger.current?.focus();
+    publishingTrigger.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [publishingPreview]);
   const entries = useMemo(() => state.status === "ready" ? state.directory.items : [], [state]);
   const selected = useMemo(() => entries.find((entry) => entry.profile.product === selectedProduct) ?? null, [entries, selectedProduct]);

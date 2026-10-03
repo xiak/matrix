@@ -174,7 +174,10 @@ async function expectRetainedFailure(dialog: HTMLElement) {
   await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain("重试"));
   expect(document.activeElement).toBe(within(dialog).getByRole("alert"));
 }
-afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); resetPreviewEnvironment(); });
+const scrollIntoView = vi.fn();
+Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+
+afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); resetPreviewEnvironment(); scrollIntoView.mockReset(); });
 
 describe("selection-driven user directory", () => {
   it("opens MOCK user security management in the content area and restores its source action", async () => {
@@ -656,10 +659,12 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.getByText("校验契约并受信发布")).toBeTruthy();
     expect(screen.getByText("消费目录并分配权限")).toBeTruthy();
     const trigger = screen.getByRole("button", { name: "查看内部接入流程（MOCK）" });
+    scrollIntoView.mockClear();
     await user.click(trigger);
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { level: 2, name: "产品接入审阅 · paas" })).toBe(document.activeElement);
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "start", inline: "nearest" });
     expect(screen.getByText(/不是租户自助发布入口/)).toBeTruthy();
     expect(screen.getByText(`sha256:${"a".repeat(64)}`)).toBeTruthy();
     expect(screen.getByText("责任人：产品研发团队")).toBeTruthy();
@@ -694,6 +699,7 @@ describe("policy creation entry and directory contract", () => {
 
     await user.click(screen.getByRole("button", { name: "结束体验" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" })).toBe(document.activeElement));
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest", inline: "nearest" });
   });
   it("pages action evidence instead of mounting an unbounded onboarding review", async () => {
     const actions = Array.from({ length: 1202 }, (_, index) => ({
