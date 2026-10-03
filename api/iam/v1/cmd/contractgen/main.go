@@ -80,6 +80,9 @@ func buildPaths() object {
 		"/v1/account/access-analyzers/{analyzerId}:update": object{
 			"post": mutationOperation("updateAccessAnalyzer", "Update status or unused-access age at the expected analyzer revision", "UpdateAccessAnalyzerRequest", "AccessAnalyzer", "200", nil, []any{openapi31.PathIDParameter("analyzerId")}),
 		},
+		"/v1/account/access-analyzers/{analyzerId}:set-disposition": object{
+			"post": mutationOperation("setAccessDisposition", "Explicitly configure review-only or delayed unused AccessKey disabling at the expected analyzer revision", "SetAccessDispositionRequest", "AccessAnalyzer", "200", nil, []any{openapi31.PathIDParameter("analyzerId")}),
+		},
 		"/v1/account/access-analyzers/{analyzerId}/findings": object{
 			"get": readOperation("listAccessFindings", "List only evidence-backed findings; incomplete observation returns explicit coverage and no invented findings", "AccessFindingList", nil,
 				append(append([]any{openapi31.PathIDParameter("analyzerId")}, accountPageParameters()...), accessFindingStatusParameter())),
@@ -571,8 +574,10 @@ func enumSchemas() map[string][]string {
 		"SecurityReportCoverageState":     {string(iamv1.SecurityReportCoverageComplete), string(iamv1.SecurityReportCoverageNotIncluded)},
 		"AccessAnalyzerType":              {string(iamv1.AccessAnalyzerUnusedAccess)},
 		"AccessAnalyzerStatus":            {string(iamv1.AccessAnalyzerActive), string(iamv1.AccessAnalyzerDisabled)},
+		"AccessDispositionMode":           {string(iamv1.AccessDispositionReviewOnly), string(iamv1.AccessDispositionDisableAccessKeys)},
 		"AccessFindingType":               {string(iamv1.AccessFindingUnusedPassword), string(iamv1.AccessFindingUnusedAccessKey), string(iamv1.AccessFindingUnusedRole)},
 		"AccessFindingStatus":             {string(iamv1.AccessFindingActive), string(iamv1.AccessFindingArchived), string(iamv1.AccessFindingResolved)},
+		"AccessFindingResolutionReason":   {string(iamv1.AccessFindingResolutionConditionCleared), string(iamv1.AccessFindingResolutionAutomaticDisposition)},
 		"AccessObservationCoverageState":  {string(iamv1.AccessObservationComplete), string(iamv1.AccessObservationInsufficientCoverage), string(iamv1.AccessObservationNotIncluded)},
 		"AccessObservationCoverageReason": {string(iamv1.AccessObservationWindowIncomplete), string(iamv1.AccessObservationHistoricalUnknown), string(iamv1.AccessObservationRestoreGap), string(iamv1.AccessObservationSourceNotReady), string(iamv1.AccessObservationSourceNotImplemented)},
 		"RoleManagement":                  {string(iamv1.RoleCustomerManaged), string(iamv1.RoleServiceLinked)},
@@ -768,12 +773,14 @@ func structContracts() map[string]reflect.Type {
 		"CreateAccountSecurityReportRequest":            openapi31.StructType[iamv1.CreateAccountSecurityReportRequest](),
 		"CreateAccountSecurityReportResponse":           openapi31.StructType[iamv1.CreateAccountSecurityReportResponse](),
 		"AccessAnalyzer":                                openapi31.StructType[iamv1.AccessAnalyzer](),
+		"AccessDispositionRule":                         openapi31.StructType[iamv1.AccessDispositionRule](),
 		"AccessObservationCoverage":                     openapi31.StructType[iamv1.AccessObservationCoverage](),
 		"AccessFinding":                                 openapi31.StructType[iamv1.AccessFinding](),
 		"AccessAnalyzerList":                            openapi31.StructType[iamv1.AccessAnalyzerList](),
 		"AccessFindingList":                             openapi31.StructType[iamv1.AccessFindingList](),
 		"CreateAccessAnalyzerRequest":                   openapi31.StructType[iamv1.CreateAccessAnalyzerRequest](),
 		"UpdateAccessAnalyzerRequest":                   openapi31.StructType[iamv1.UpdateAccessAnalyzerRequest](),
+		"SetAccessDispositionRequest":                   openapi31.StructType[iamv1.SetAccessDispositionRequest](),
 		"AccessFindingDispositionRequest":               openapi31.StructType[iamv1.AccessFindingDispositionRequest](),
 		"RootIdentity":                                  openapi31.StructType[iamv1.RootIdentity](),
 		"Account":                                       openapi31.StructType[iamv1.Account](),
@@ -1249,6 +1256,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			base["default"] = iamv1.DefaultUnusedAccessAgeDays
 		}
 	}
+	if owner == "AccessDispositionRule" && jsonName == "findingDelayDays" {
+		base["minimum"], base["maximum"] = 0, iamv1.MaxAccessDispositionDelayDays
+	}
 	if (owner == "AccessAnalyzerList" || owner == "AccessFindingList") && jsonName == "items" {
 		base["maxItems"] = iamv1.DirectoryPageSize
 	}
@@ -1376,10 +1386,21 @@ func applySemanticOverlays(schemas object) {
 		"type": "array", "minItems": len(accessCoverage), "maxItems": len(accessCoverage), "prefixItems": accessCoverage, "items": false,
 	}
 	schemas["AccessAnalyzer"].(object)["description"] = "Current-account governance configuration. It is not a Policy, decision, report, finding, or write permit."
+	schemas["AccessDispositionRule"].(object)["description"] = "Explicit Account-owned governance consent. REVIEW_ONLY has no write effect; automatic disposition is limited to delayed unused AccessKey disabling and is never a cached authorization decision."
+	schemas["AccessDispositionRule"].(object)["oneOf"] = []any{
+		object{"properties": object{"mode": object{"const": string(iamv1.AccessDispositionReviewOnly)}, "findingDelayDays": object{"const": 0}}},
+		object{"properties": object{"mode": object{"const": string(iamv1.AccessDispositionDisableAccessKeys)}, "findingDelayDays": object{"minimum": iamv1.MinAccessDispositionDelayDays, "maximum": iamv1.MaxAccessDispositionDelayDays}}},
+	}
 	schemas["AccessFinding"].(object)["description"] = "Evidence-bound review state. It never authorizes mutation of its target; lifecycle commands must recheck current authority and resource state."
 	schemas["AccessFinding"].(object)["oneOf"] = []any{
-		object{"properties": object{"recoveryEpoch": object{"const": 0}, "recoveryCommandId": false, "recoveryCompletedAt": false}},
-		object{"required": []string{"recoveryCommandId", "recoveryCompletedAt"}, "properties": object{"recoveryEpoch": object{"minimum": 1}}},
+		object{"required": []string{"resolvedAt", "resolutionReason"}, "properties": object{"status": object{"const": string(iamv1.AccessFindingResolved)}}},
+		object{"properties": object{"status": object{"enum": []string{string(iamv1.AccessFindingActive), string(iamv1.AccessFindingArchived)}}, "resolvedAt": false, "resolutionReason": false}},
+	}
+	schemas["AccessFinding"].(object)["allOf"] = []any{
+		object{"oneOf": []any{
+			object{"properties": object{"recoveryEpoch": object{"const": 0}, "recoveryCommandId": false, "recoveryCompletedAt": false}},
+			object{"required": []string{"recoveryCommandId", "recoveryCompletedAt"}, "properties": object{"recoveryEpoch": object{"minimum": 1}}},
+		}},
 	}
 	schemas["AccessFindingList"].(object)["description"] = "A bounded account/analyzer directory with explicit source coverage. Incomplete coverage produces no invented idle findings."
 	schemas["SecurityReportTimeObservation"].(object)["oneOf"] = []any{

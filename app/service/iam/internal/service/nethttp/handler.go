@@ -37,6 +37,7 @@ type Workflow interface {
 	ListAccessAnalyzers(context.Context, iamv1.Secret, string, string) (iamv1.AccessAnalyzerList, error)
 	AccessAnalyzer(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, string) (iamv1.AccessAnalyzer, error)
 	UpdateAccessAnalyzer(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.UpdateAccessAnalyzerRequest) (iamv1.AccessAnalyzer, error)
+	SetAccessDisposition(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.SetAccessDispositionRequest) (iamv1.AccessAnalyzer, error)
 	ListAccessFindings(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingFilter, string, string) (iamv1.AccessFindingList, error)
 	AccessFinding(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingID, string) (iamv1.AccessFinding, error)
 	ArchiveAccessFinding(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingID, iamv1.AccessFindingDispositionRequest) (iamv1.AccessFinding, error)
@@ -1488,6 +1489,8 @@ func (value *handler) accessAnalyzer(response http.ResponseWriter, request *http
 	switch {
 	case strings.HasSuffix(request.URL.Path, ":update"):
 		suffix = ":update"
+	case strings.HasSuffix(request.URL.Path, ":set-disposition"):
+		suffix = ":set-disposition"
 	case strings.HasSuffix(request.URL.Path, "/findings"):
 		suffix = "/findings"
 	}
@@ -1509,6 +1512,23 @@ func (value *handler) accessAnalyzer(response http.ResponseWriter, request *http
 			return
 		}
 		result, err := value.workflow.UpdateAccessAnalyzer(request.Context(), credential, iamv1.AccessAnalyzerID(id), body)
+		if err == nil {
+			err = iamv1.ValidateAccessAnalyzer(result)
+		}
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+	case ":set-disposition":
+		if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+			return
+		}
+		body, ok := decodeJSON[iamv1.SetAccessDispositionRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.SetAccessDisposition(request.Context(), credential, iamv1.AccessAnalyzerID(id), body)
 		if err == nil {
 			err = iamv1.ValidateAccessAnalyzer(result)
 		}

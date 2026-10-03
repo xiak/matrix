@@ -2165,6 +2165,7 @@ func TestIAMHTTPAccessAnalyzerRoutesAreCredentialBoundAndStrict(t *testing.T) {
 	now := time.Date(2026, 10, 3, 2, 0, 0, 0, time.UTC)
 	analyzer := iamv1.AccessAnalyzer{APIVersion: iamv1.APIVersion, Kind: "AccessAnalyzer", ID: "analyzer-one", AccountID: "account-one",
 		Type: iamv1.AccessAnalyzerUnusedAccess, Status: iamv1.AccessAnalyzerActive, UnusedAccessAgeDays: 90,
+		Disposition:     iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly},
 		ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
 	through := now.Add(time.Hour)
 	coverage := make([]iamv1.AccessObservationCoverage, 0, 6)
@@ -2225,6 +2226,14 @@ func TestIAMHTTPAccessAnalyzerRoutesAreCredentialBoundAndStrict(t *testing.T) {
 		!strings.Contains(updated.Body.String(), `"resourceVersion":2`) {
 		t.Fatal("access analyzer update was not preserved")
 	}
+	workflow.accessAnalyzer.Disposition = iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionDisableAccessKeys, FindingDelayDays: 7}
+	workflow.accessAnalyzer.ResourceVersion = 3
+	disposition := call(http.MethodPost, "/v1/account/access-analyzers/analyzer-one:set-disposition",
+		`{"disposition":{"mode":"DISABLE_UNUSED_ACCESS_KEYS","findingDelayDays":7},"resourceVersion":2,"requestId":"analyzer-disposition"}`, http.StatusOK)
+	if workflow.accessDispositionCalls != 1 || workflow.accessDispositionRequest.Disposition != workflow.accessAnalyzer.Disposition ||
+		workflow.accessDispositionRequest.ResourceVersion != 2 || !strings.Contains(disposition.Body.String(), `"DISABLE_UNUSED_ACCESS_KEYS"`) {
+		t.Fatal("access disposition update was not preserved")
+	}
 	findings := call(http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings?status=ARCHIVED", "", http.StatusOK)
 	if findings.Header().Get("Cache-Control") != "no-store" || workflow.accessFindingListCalls != 1 ||
 		workflow.accessFindingFilter.Status != iamv1.AccessFindingStatusFilter(iamv1.AccessFindingArchived) ||
@@ -2255,6 +2264,7 @@ func TestIAMHTTPAccessAnalyzerRoutesAreCredentialBoundAndStrict(t *testing.T) {
 		{http.MethodGet, "/v1/account/access-analyzers?accountId=other", "", http.StatusBadRequest},
 		{http.MethodPost, "/v1/account/access-analyzers", `{"type":"UNUSED_ACCESS","requestId":"x","accountId":"other"}`, http.StatusBadRequest},
 		{http.MethodGet, "/v1/account/access-analyzers/analyzer-one?tenantId=other", "", http.StatusBadRequest},
+		{http.MethodPost, "/v1/account/access-analyzers/analyzer-one:set-disposition", `{"disposition":{"mode":"DISABLE_UNUSED_ACCESS_KEYS","findingDelayDays":7},"resourceVersion":3,"requestId":"invalid","userId":"forged"}`, http.StatusBadRequest},
 		{http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings?status=UNKNOWN", "", http.StatusBadRequest},
 		{http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings?status=ACTIVE&status=ARCHIVED", "", http.StatusBadRequest},
 		{http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings/finding-one/nested", "", http.StatusNotFound},
@@ -2388,10 +2398,12 @@ type httpWorkflow struct {
 	accessAnalyzerID                 iamv1.AccessAnalyzerID
 	accessAnalyzerCreateRequest      iamv1.CreateAccessAnalyzerRequest
 	accessAnalyzerUpdateRequest      iamv1.UpdateAccessAnalyzerRequest
+	accessDispositionRequest         iamv1.SetAccessDispositionRequest
 	accessAnalyzerCreateCalls        int
 	accessAnalyzerListCalls          int
 	accessAnalyzerReadCalls          int
 	accessAnalyzerUpdateCalls        int
+	accessDispositionCalls           int
 	accessFindingListCalls           int
 	accessFindingReadCalls           int
 	accessFindingArchiveCalls        int
@@ -2462,6 +2474,12 @@ func (value *httpWorkflow) AccessAnalyzer(_ context.Context, credential iamv1.Se
 func (value *httpWorkflow) UpdateAccessAnalyzer(_ context.Context, credential iamv1.Secret, id iamv1.AccessAnalyzerID, request iamv1.UpdateAccessAnalyzerRequest) (iamv1.AccessAnalyzer, error) {
 	value.accessAnalyzerUpdateCalls++
 	value.accessAnalyzerCredential, value.accessAnalyzerID, value.accessAnalyzerUpdateRequest = credential, id, request
+	return value.accessAnalyzer, value.accessAnalyzerErr
+}
+
+func (value *httpWorkflow) SetAccessDisposition(_ context.Context, credential iamv1.Secret, id iamv1.AccessAnalyzerID, request iamv1.SetAccessDispositionRequest) (iamv1.AccessAnalyzer, error) {
+	value.accessDispositionCalls++
+	value.accessAnalyzerCredential, value.accessAnalyzerID, value.accessDispositionRequest = credential, id, request
 	return value.accessAnalyzer, value.accessAnalyzerErr
 }
 

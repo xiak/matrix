@@ -47,6 +47,7 @@ func (service *Authority) CreateAccessAnalyzer(ctx context.Context, credential i
 			}
 			analyzer := iamv1.AccessAnalyzer{APIVersion: iamv1.APIVersion, Kind: "AccessAnalyzer", ID: analyzerID,
 				AccountID: subject.Subject.Organization.ID, Type: analyzerType, Status: iamv1.AccessAnalyzerActive,
+				Disposition:         iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly},
 				UnusedAccessAgeDays: age, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
 			event, err := service.newManagementEvent(subject, auditv1.ActionIAMAccessAnalyzerCreated, auditv1.TargetAccessAnalyzer,
 				string(analyzerID), decision.ID, digest, requestID, now)
@@ -134,6 +135,38 @@ func (service *Authority) UpdateAccessAnalyzer(ctx context.Context, credential i
 				return iamv1.AccessAnalyzer{}, err
 			}
 			if iamv1.ValidateAccessAnalyzer(result) != nil || result.ID != analyzerID || result.AccountID != subject.Subject.Organization.ID {
+				return iamv1.AccessAnalyzer{}, ErrUnavailable
+			}
+			return result, nil
+		})
+}
+
+func (service *Authority) SetAccessDisposition(ctx context.Context, credential iamv1.Secret, analyzerID iamv1.AccessAnalyzerID, request iamv1.SetAccessDispositionRequest) (iamv1.AccessAnalyzer, error) {
+	if iamv1.ValidateID("accessAnalyzerId", string(analyzerID)) != nil || iamv1.ValidateSetAccessDispositionRequest(request) != nil {
+		return iamv1.AccessAnalyzer{}, ErrInvalidArgument
+	}
+	digest, err := digestSanitized("access-analyzer.set-disposition", struct {
+		AnalyzerID iamv1.AccessAnalyzerID            `json:"analyzerId"`
+		Request    iamv1.SetAccessDispositionRequest `json:"request"`
+	}{analyzerID, request})
+	if err != nil {
+		return iamv1.AccessAnalyzer{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccessAnalyzerSetDisposition, iamv1.AuthorizationResourceInstance, "",
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccessAnalyzer, ID: string(analyzerID)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.AccessAnalyzer, error) {
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMAccessAnalyzerDispositionUpdated, auditv1.TargetAccessAnalyzer,
+				string(analyzerID), decision.ID, digest, request.RequestID, now)
+			if err != nil {
+				return iamv1.AccessAnalyzer{}, err
+			}
+			result, err := tx.SetAccessDisposition(ctx, AccessDispositionMutation{AccessAnalyzerRead: AccessAnalyzerRead{
+				AccountRead: accountRead(subject, decision), AnalyzerID: analyzerID}, Session: subject.Subject.Session,
+				RequestID: request.RequestID, RequestDigest: digest, Request: request, AuditEvent: event})
+			if err != nil {
+				return iamv1.AccessAnalyzer{}, err
+			}
+			if iamv1.ValidateAccessAnalyzer(result) != nil || result.ID != analyzerID || result.AccountID != subject.Subject.Organization.ID || result.Disposition != request.Disposition {
 				return iamv1.AccessAnalyzer{}, ErrUnavailable
 			}
 			return result, nil

@@ -117,7 +117,8 @@ func fixture(t *testing.T) Snapshot {
 	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
 	analyzer := iamv1.AccessAnalyzer{APIVersion: iamv1.APIVersion, Kind: "AccessAnalyzer", ID: "analyzer-one", AccountID: "account-one",
 		Type: iamv1.AccessAnalyzerUnusedAccess, Status: iamv1.AccessAnalyzerActive, UnusedAccessAgeDays: 90, ResourceVersion: 3,
-		CreatedAt: now.Add(-200 * 24 * time.Hour), UpdatedAt: now.Add(-100 * 24 * time.Hour)}
+		Disposition: iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly},
+		CreatedAt:   now.Add(-200 * 24 * time.Hour), UpdatedAt: now.Add(-100 * 24 * time.Hour)}
 	sources := iamv1.AccessObservationCoverageSources()
 	coverage := make([]iamv1.AccessObservationCoverage, 0, len(sources))
 	for index, source := range sources {

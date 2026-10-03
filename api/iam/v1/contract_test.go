@@ -4599,7 +4599,7 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 				ActionIAMAccessKeySetNetworkRestrictions,
 				ActionIAMSecurityReportCreate, ActionIAMSecurityReportRead, ActionIAMSecurityReportDownload,
 				ActionIAMAccessAnalyzerCreate, ActionIAMAccessAnalyzerList, ActionIAMAccessAnalyzerRead,
-				ActionIAMAccessAnalyzerUpdate, ActionIAMAccessFindingList, ActionIAMAccessFindingRead,
+				ActionIAMAccessAnalyzerUpdate, ActionIAMAccessAnalyzerSetDisposition, ActionIAMAccessFindingList, ActionIAMAccessFindingRead,
 				ActionIAMAccessFindingArchive, ActionIAMAccessFindingUnarchive,
 				ActionIAMServiceRoleTemplateList, ActionIAMServiceLinkedRoleList,
 				ActionIAMServiceLinkedRoleRead, ActionIAMServiceLinkedRoleCreate,
@@ -8566,7 +8566,7 @@ func TestAccountSecurityReportContractIsBoundedAndExplicit(t *testing.T) {
 
 func TestSecurityReportActionsAreCurrentLoginSessionCapabilities(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || profile.Revision != 12 {
+	if !found || profile.Revision != 13 {
 		t.Fatal("security report profile revision is not current")
 	}
 	wants := map[Action]struct {
@@ -8591,21 +8591,22 @@ func TestSecurityReportActionsAreCurrentLoginSessionCapabilities(t *testing.T) {
 
 func TestAccessAnalyzerActionsAreCurrentLoginSessionCapabilities(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || profile.Revision != 12 {
+	if !found || profile.Revision != 13 {
 		t.Fatal("access analyzer profile revision is not current")
 	}
 	wants := map[Action]struct {
 		resource ResourceKind
 		result   ResourceKind
 	}{
-		ActionIAMAccessAnalyzerCreate:   {resource: ResourceAccount, result: ResourceAccessAnalyzer},
-		ActionIAMAccessAnalyzerList:     {resource: ResourceAccount},
-		ActionIAMAccessAnalyzerRead:     {resource: ResourceAccessAnalyzer},
-		ActionIAMAccessAnalyzerUpdate:   {resource: ResourceAccessAnalyzer},
-		ActionIAMAccessFindingList:      {resource: ResourceAccessAnalyzer},
-		ActionIAMAccessFindingRead:      {resource: ResourceAccessFinding},
-		ActionIAMAccessFindingArchive:   {resource: ResourceAccessFinding},
-		ActionIAMAccessFindingUnarchive: {resource: ResourceAccessFinding},
+		ActionIAMAccessAnalyzerCreate:         {resource: ResourceAccount, result: ResourceAccessAnalyzer},
+		ActionIAMAccessAnalyzerList:           {resource: ResourceAccount},
+		ActionIAMAccessAnalyzerRead:           {resource: ResourceAccessAnalyzer},
+		ActionIAMAccessAnalyzerUpdate:         {resource: ResourceAccessAnalyzer},
+		ActionIAMAccessAnalyzerSetDisposition: {resource: ResourceAccessAnalyzer},
+		ActionIAMAccessFindingList:            {resource: ResourceAccessAnalyzer},
+		ActionIAMAccessFindingRead:            {resource: ResourceAccessFinding},
+		ActionIAMAccessFindingArchive:         {resource: ResourceAccessFinding},
+		ActionIAMAccessFindingUnarchive:       {resource: ResourceAccessFinding},
 	}
 	for action, want := range wants {
 		definition, known := LookupActionDefinition(action)

@@ -94,6 +94,27 @@ func (value *transaction) UpdateAccessAnalyzer(ctx context.Context, mutation ide
 	return decodeAccessAnalyzer(encoded, mutation.AccountID, mutation.AnalyzerID)
 }
 
+func (value *transaction) SetAccessDisposition(ctx context.Context, mutation identityaccess.AccessDispositionMutation) (iamv1.AccessAnalyzer, error) {
+	if iamv1.ValidateSetAccessDispositionRequest(mutation.Request) != nil || iamv1.ValidateID("actorSessionId", string(mutation.Session.ID)) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		return iamv1.AccessAnalyzer{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.AccessAnalyzer{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, "SELECT iam.set_access_disposition($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)",
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.ActorSessionID, mutation.DecisionID, mutation.AnalyzerID,
+		mutation.RequestID, mutation.RequestDigest, mutation.Request.Disposition.Mode, mutation.Request.Disposition.FindingDelayDays,
+		mutation.Request.ResourceVersion, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.AccessAnalyzer{}, mapAccessAnalyzerError("set IAM access disposition", err)
+	}
+	return decodeAccessAnalyzer(encoded, mutation.AccountID, mutation.AnalyzerID)
+}
+
 func (value *transaction) ListAccessFindings(ctx context.Context, read identityaccess.AccessFindingRead) (iamv1.AccessFindingList, error) {
 	filter, err := iamv1.NormalizeAccessFindingFilter(read.Filter)
 	if err != nil || filter != read.Filter {

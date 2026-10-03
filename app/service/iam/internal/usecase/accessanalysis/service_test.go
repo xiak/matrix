@@ -47,6 +47,34 @@ func TestScannerCommitsEvidenceBoundTransitionsAfterClaim(t *testing.T) {
 	}
 }
 
+func TestScannerCompletesClosedAccessKeyDisposition(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	claim := DispositionClaim{AttemptID: "generated-1", WorkerID: "scanner-one", Fence: 4,
+		LeaseExpiresAt: now.Add(30 * time.Second), SnapshotDigest: testSnapshotDigest,
+		Snapshot: DispositionSnapshot{AccountID: "account-one", AnalyzerID: "analyzer-one", AnalyzerRevision: 5,
+			FindingID: "finding-one", FindingResourceVersion: 2, FindingCreatedAt: now.Add(-8 * 24 * time.Hour),
+			ConditionGeneration: 1, TargetResourceVersion: 3, ActivityRevision: 1, AccessKeyID: "key-one",
+			AccessKeyResourceVersion: 3, UserID: "user-one", EvaluatedAt: now}}
+	repository := &scannerRepository{dispositionClaims: []DispositionClaim{claim}}
+	sequence := 0
+	scanner, err := NewScanner(repository, func(string) (string, error) {
+		sequence++
+		return fmt.Sprintf("generated-%d", sequence), nil
+	}, "scanner-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := scanner.DisposeOnce(t.Context())
+	if err != nil || !result.Claimed || !result.Applied || len(repository.dispositionCompletions) != 1 {
+		t.Fatal("disposition result differs", result, err)
+	}
+	completion := repository.dispositionCompletions[0]
+	if completion.KeyEventID != "generated-2" || completion.KeyRequestID != "generated-3" ||
+		completion.FindingEventID != "generated-4" || completion.FindingRequestID != "generated-5" {
+		t.Fatal("disposition identifiers differ", completion)
+	}
+}
+
 func TestScannerFailsClosedAcrossClaimAndCompletionUncertainty(t *testing.T) {
 	for _, scenario := range []string{"claim-commit-unknown", "bad-claim", "incomplete-snapshot", "completion-conflict", "completion-unknown"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -183,16 +211,19 @@ func TestScannerBoundsSerializableRetriesAndHonorsCancellation(t *testing.T) {
 }
 
 type scannerRepository struct {
-	claims              []Claim
-	claimCommitError    error
-	completeError       error
-	completeCommitError error
-	transactionErrors   map[int]error
-	completions         []Completion
-	claimAttemptIDs     []string
-	calls               int
-	cancel              context.CancelFunc
-	cancelOnCall        int
+	claims                 []Claim
+	dispositionClaims      []DispositionClaim
+	claimCommitError       error
+	completeError          error
+	completeCommitError    error
+	transactionErrors      map[int]error
+	completions            []Completion
+	dispositionCompletions []DispositionCompletion
+	claimAttemptIDs        []string
+	dispositionAttemptIDs  []string
+	calls                  int
+	cancel                 context.CancelFunc
+	cancelOnCall           int
 }
 
 func (*scannerRepository) Ready(context.Context) error { return nil }
@@ -218,16 +249,24 @@ func (repository *scannerRepository) WithinTransaction(ctx context.Context, call
 	if tx.completed != nil {
 		repository.completions = append(repository.completions, *tx.completed)
 	}
+	if tx.dispositionCompleted != nil {
+		repository.dispositionCompletions = append(repository.dispositionCompletions, *tx.dispositionCompleted)
+	}
 	if tx.claimed {
 		repository.claims = repository.claims[1:]
+	}
+	if tx.dispositionClaimed {
+		repository.dispositionClaims = repository.dispositionClaims[1:]
 	}
 	return nil
 }
 
 type scannerTransaction struct {
-	repository *scannerRepository
-	completed  *Completion
-	claimed    bool
+	repository           *scannerRepository
+	completed            *Completion
+	claimed              bool
+	dispositionCompleted *DispositionCompletion
+	dispositionClaimed   bool
 }
 
 func (tx *scannerTransaction) Claim(_ context.Context, _ string, attempt string) (Claim, bool, error) {
@@ -245,5 +284,20 @@ func (tx *scannerTransaction) Complete(_ context.Context, _ Claim, completion Co
 		return tx.repository.completeError
 	}
 	tx.completed = &completion
+	return nil
+}
+
+func (tx *scannerTransaction) ClaimDisposition(_ context.Context, _ string, attempt string) (DispositionClaim, bool, error) {
+	tx.repository.dispositionAttemptIDs = append(tx.repository.dispositionAttemptIDs, attempt)
+	if len(tx.repository.dispositionClaims) == 0 {
+		return DispositionClaim{}, false, nil
+	}
+	claim := tx.repository.dispositionClaims[0]
+	tx.dispositionClaimed = true
+	return claim, true, nil
+}
+
+func (tx *scannerTransaction) CompleteDisposition(_ context.Context, _ DispositionClaim, completion DispositionCompletion) error {
+	tx.dispositionCompleted = &completion
 	return nil
 }

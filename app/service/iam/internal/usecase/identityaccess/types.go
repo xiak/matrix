@@ -134,6 +134,7 @@ type Transaction interface {
 	ListAccessAnalyzers(context.Context, AccountRead) (iamv1.AccessAnalyzerList, error)
 	ReadAccessAnalyzer(context.Context, AccessAnalyzerRead) (iamv1.AccessAnalyzer, error)
 	UpdateAccessAnalyzer(context.Context, AccessAnalyzerMutation) (iamv1.AccessAnalyzer, error)
+	SetAccessDisposition(context.Context, AccessDispositionMutation) (iamv1.AccessAnalyzer, error)
 	ReadAccessFindingDirectoryRevision(context.Context, AccessFindingRead) (authority.AccessFindingDirectoryRevision, error)
 	ListAccessFindings(context.Context, AccessFindingRead) (iamv1.AccessFindingList, error)
 	ReadAccessFinding(context.Context, AccessFindingRead) (iamv1.AccessFinding, error)
@@ -269,6 +270,15 @@ type AccessAnalyzerMutation struct {
 	RequestID     string
 	RequestDigest string
 	Request       iamv1.UpdateAccessAnalyzerRequest
+	AuditEvent    auditv1.Event
+}
+
+type AccessDispositionMutation struct {
+	AccessAnalyzerRead
+	Session       iamv1.Session
+	RequestID     string
+	RequestDigest string
+	Request       iamv1.SetAccessDispositionRequest
 	AuditEvent    auditv1.Event
 }
 

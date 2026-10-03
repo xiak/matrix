@@ -1737,7 +1737,8 @@ func TestAccessAnalyzerUsesCurrentAuthorityAndNeverInventsFindings(t *testing.T)
 	}
 	request := iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "analyzer-create"}
 	created, err := service.CreateAccessAnalyzer(t.Context(), login.Credential, request)
-	if err != nil || created.UnusedAccessAgeDays != iamv1.DefaultUnusedAccessAgeDays || created.ResourceVersion != 1 || len(tx.accessAnalyzerCreations) != 1 {
+	if err != nil || created.UnusedAccessAgeDays != iamv1.DefaultUnusedAccessAgeDays || created.ResourceVersion != 1 ||
+		created.Disposition != (iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}) || len(tx.accessAnalyzerCreations) != 1 {
 		t.Fatal("create access analyzer", created, err)
 	}
 	creation := tx.accessAnalyzerCreations[0]
@@ -1768,6 +1769,22 @@ func TestAccessAnalyzerUsesCurrentAuthorityAndNeverInventsFindings(t *testing.T)
 	if auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil ||
 		mutation.AuditEvent.Action != auditv1.ActionIAMAccessAnalyzerUpdated || mutation.AuditEvent.Target.ID != string(created.ID) {
 		t.Fatal("access analyzer update lost its precise audit fact")
+	}
+	dispositionRequest := iamv1.SetAccessDispositionRequest{Disposition: iamv1.AccessDispositionRule{
+		Mode: iamv1.AccessDispositionDisableAccessKeys, FindingDelayDays: iamv1.DefaultAccessDispositionDelayDays},
+		ResourceVersion: updated.ResourceVersion, RequestID: "analyzer-disposition"}
+	disposed, err := service.SetAccessDisposition(t.Context(), login.Credential, created.ID, dispositionRequest)
+	if err != nil || disposed.Disposition != dispositionRequest.Disposition || disposed.ResourceVersion != 3 || len(tx.accessDispositionMutations) != 1 {
+		t.Fatal("set access disposition", disposed, err)
+	}
+	if mutation := tx.accessDispositionMutations[0]; auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil ||
+		mutation.AuditEvent.Action != auditv1.ActionIAMAccessAnalyzerDispositionUpdated || mutation.AuditEvent.Target.ID != string(created.ID) ||
+		mutation.AuditEvent.IAMDecisionID == "" {
+		t.Fatal("access disposition update lost its precise user decision fact")
+	}
+	replayedDisposition, err := service.SetAccessDisposition(t.Context(), login.Credential, created.ID, dispositionRequest)
+	if err != nil || replayedDisposition != disposed || len(tx.accessDispositionMutations) != 1 {
+		t.Fatal("access disposition exact replay changed the result", replayedDisposition, err)
 	}
 	findings, err := service.ListAccessFindings(t.Context(), login.Credential, created.ID,
 		iamv1.AccessFindingFilter{Status: iamv1.AccessFindingStatusAll}, "", "finding-list")
@@ -3472,11 +3489,12 @@ type coreTransaction struct {
 		Digest   string
 		Analyzer iamv1.AccessAnalyzer
 	}
-	accessAnalyzerCreations []AccessAnalyzerCreation
-	accessAnalyzerMutations []AccessAnalyzerMutation
-	accessFindings          map[iamv1.AccessFindingID]iamv1.AccessFinding
-	accessFindingMutations  []AccessFindingMutation
-	accessFindingRequests   map[string]struct {
+	accessAnalyzerCreations    []AccessAnalyzerCreation
+	accessAnalyzerMutations    []AccessAnalyzerMutation
+	accessDispositionMutations []AccessDispositionMutation
+	accessFindings             map[iamv1.AccessFindingID]iamv1.AccessFinding
+	accessFindingMutations     []AccessFindingMutation
+	accessFindingRequests      map[string]struct {
 		Digest  string
 		Finding iamv1.AccessFinding
 	}
@@ -3889,6 +3907,33 @@ func (transaction *coreTransaction) UpdateAccessAnalyzer(_ context.Context, muta
 	analyzer.ResourceVersion++
 	analyzer.UpdatedAt = transaction.now
 	transaction.accessAnalyzerMutations = append(transaction.accessAnalyzerMutations, mutation)
+	transaction.accessAnalyzers[analyzer.ID] = analyzer
+	transaction.accessAnalyzerRequests[key] = struct {
+		Digest   string
+		Analyzer iamv1.AccessAnalyzer
+	}{mutation.RequestDigest, analyzer}
+	return analyzer, nil
+}
+
+func (transaction *coreTransaction) SetAccessDisposition(_ context.Context, mutation AccessDispositionMutation) (iamv1.AccessAnalyzer, error) {
+	key := "disposition:" + mutation.RequestID
+	if previous, found := transaction.accessAnalyzerRequests[key]; found {
+		if previous.Digest != mutation.RequestDigest {
+			return iamv1.AccessAnalyzer{}, ErrConflict
+		}
+		return previous.Analyzer, nil
+	}
+	analyzer, err := transaction.ReadAccessAnalyzer(context.Background(), mutation.AccessAnalyzerRead)
+	if err != nil {
+		return iamv1.AccessAnalyzer{}, err
+	}
+	if analyzer.ResourceVersion != mutation.Request.ResourceVersion {
+		return iamv1.AccessAnalyzer{}, ErrConflict
+	}
+	analyzer.Disposition = mutation.Request.Disposition
+	analyzer.ResourceVersion++
+	analyzer.UpdatedAt = transaction.now
+	transaction.accessDispositionMutations = append(transaction.accessDispositionMutations, mutation)
 	transaction.accessAnalyzers[analyzer.ID] = analyzer
 	transaction.accessAnalyzerRequests[key] = struct {
 		Digest   string

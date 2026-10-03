@@ -91,7 +91,11 @@ func runScanLoops(ctx context.Context, scanner *accessanalysis.Scanner) error {
 		workers.Go(func() {
 			for ctx.Err() == nil {
 				cycle, cancel := context.WithTimeout(ctx, 90*time.Second)
-				result, err := scanner.ScanOnce(cycle)
+				scanResult, err := scanner.ScanOnce(cycle)
+				var dispositionResult accessanalysis.DispositionResult
+				if err == nil {
+					dispositionResult, err = scanner.DisposeOnce(cycle)
+				}
 				cancel()
 				if ctx.Err() != nil {
 					return
@@ -99,7 +103,7 @@ func runScanLoops(ctx context.Context, scanner *accessanalysis.Scanner) error {
 				if err != nil {
 					_, _ = fmt.Fprintln(os.Stderr, "IAM_ACCESS_ANALYSIS_CYCLE_UNAVAILABLE")
 				}
-				if err == nil && result.Claimed {
+				if err == nil && (scanResult.Claimed || dispositionResult.Claimed) {
 					continue
 				}
 				timer := time.NewTimer(time.Second)

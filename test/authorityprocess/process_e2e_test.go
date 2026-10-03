@@ -111,9 +111,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "bbb2f7ee48d61f4c7a16de6edd457ef5640a675a"
-	const sourceSchema uint64 = 62
-	const currentSchema uint64 = 63
+	const source = "91649497a0c53be1174d8835326a2df51fe74a55"
+	const sourceSchema uint64 = 63
+	const currentSchema uint64 = 64
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -177,7 +177,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		child := startChild(t, baseline, oldMigrator, migrationEnvironment, action)
 		children = append(children, child)
 		if err := child.wait(30 * time.Second); err != nil {
-			t.Fatalf("actual IAM%d migrator failed", sourceSchema)
+			t.Fatalf("actual IAM%d migrator failed: action=%s err=%v output=%q", sourceSchema, action, err, child.output())
 		}
 	}
 	bootstrapDocument := processBootstrap(t)
@@ -516,8 +516,26 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "retained-access-analyzer-create"})
 	var retainedAccessAnalyzer iamv1.AccessAnalyzer
 	if accessAnalyzerResponse.Status != http.StatusCreated || json.Unmarshal(accessAnalyzerResponse.Body, &retainedAccessAnalyzer) != nil ||
-		iamv1.ValidateAccessAnalyzer(retainedAccessAnalyzer) != nil || retainedAccessAnalyzer.AccountID != primary.Session.AccountID {
+		retainedAccessAnalyzer.AccountID != primary.Session.AccountID || retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{}) {
 		t.Fatalf("actual predecessor did not create its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
+	}
+	retainedCreatedAnalyzer := retainedAccessAnalyzer
+	retainedAnalyzerUpdate := iamv1.UpdateAccessAnalyzerRequest{Status: iamv1.AccessAnalyzerActive, UnusedAccessAgeDays: 91,
+		ResourceVersion: retainedAccessAnalyzer.ResourceVersion, RequestID: "retained-access-analyzer-update"}
+	accessAnalyzerResponse = performJSON(t, http.MethodPost,
+		endpoint+"/v1/account/access-analyzers/"+string(retainedAccessAnalyzer.ID)+":update", primary.Credential, retainedAnalyzerUpdate)
+	if accessAnalyzerResponse.Status != http.StatusOK || json.Unmarshal(accessAnalyzerResponse.Body, &retainedAccessAnalyzer) != nil ||
+		retainedAccessAnalyzer.UnusedAccessAgeDays != 91 || retainedAccessAnalyzer.ResourceVersion != 2 ||
+		retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{}) {
+		t.Fatalf("actual predecessor did not update its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
+	}
+	// IAM63 predates explicit disposition. IAM64 owns the only pre-v1
+	// replacement rule: retained analyzers become REVIEW_ONLY and do not gain
+	// automatic authority merely by migration or restart.
+	migratedAccessAnalyzerExpected := retainedAccessAnalyzer
+	migratedAccessAnalyzerExpected.Disposition = iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}
+	if iamv1.ValidateAccessAnalyzer(migratedAccessAnalyzerExpected) != nil {
+		t.Fatal("predecessor analyzer differs beyond the intentional REVIEW_ONLY default")
 	}
 	originalState := identityState()
 	var originalFacts []auditv1.Event
@@ -651,8 +669,27 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		endpoint+"/v1/account/access-analyzers/"+string(retainedAccessAnalyzer.ID), primary.Credential, nil)
 	var migratedAccessAnalyzer iamv1.AccessAnalyzer
 	if accessAnalyzerResponse.Status != http.StatusOK || json.Unmarshal(accessAnalyzerResponse.Body, &migratedAccessAnalyzer) != nil ||
-		migratedAccessAnalyzer != retainedAccessAnalyzer {
+		migratedAccessAnalyzer != migratedAccessAnalyzerExpected {
 		t.Fatal("migration changed the predecessor access analyzer")
+	}
+	// The immutable IAM63 receipt deliberately keeps its original bytes. An
+	// exact create replay through IAM64 must project the new safe default at the
+	// read boundary instead of mutating history or returning an obsolete wire
+	// shape that the current contract cannot decode.
+	accessAnalyzerResponse = performJSON(t, http.MethodPost, endpoint+"/v1/account/access-analyzers", primary.Credential,
+		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "retained-access-analyzer-create"})
+	var replayedAccessAnalyzer iamv1.AccessAnalyzer
+	migratedCreatedAnalyzerExpected := retainedCreatedAnalyzer
+	migratedCreatedAnalyzerExpected.Disposition = iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}
+	if accessAnalyzerResponse.Status != http.StatusCreated || json.Unmarshal(accessAnalyzerResponse.Body, &replayedAccessAnalyzer) != nil ||
+		replayedAccessAnalyzer != migratedCreatedAnalyzerExpected {
+		t.Fatal("current authority did not preserve the predecessor analyzer completion", accessAnalyzerResponse.Status)
+	}
+	accessAnalyzerResponse = performJSON(t, http.MethodPost,
+		endpoint+"/v1/account/access-analyzers/"+string(retainedAccessAnalyzer.ID)+":update", primary.Credential, retainedAnalyzerUpdate)
+	if accessAnalyzerResponse.Status != http.StatusOK || json.Unmarshal(accessAnalyzerResponse.Body, &replayedAccessAnalyzer) != nil ||
+		replayedAccessAnalyzer != migratedAccessAnalyzerExpected {
+		t.Fatal("current authority did not preserve the predecessor analyzer update completion", accessAnalyzerResponse.Status)
 	}
 	createRetainedReport := func(requestID string) iamv1.AccountSecurityReport {
 		t.Helper()
@@ -855,7 +892,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		endpoint+"/v1/account/access-analyzers/"+string(retainedAccessAnalyzer.ID), primary.Credential, nil)
 	var restartedAccessAnalyzer iamv1.AccessAnalyzer
 	if accessAnalyzerResponse.Status != http.StatusOK || json.Unmarshal(accessAnalyzerResponse.Body, &restartedAccessAnalyzer) != nil ||
-		restartedAccessAnalyzer != retainedAccessAnalyzer {
+		restartedAccessAnalyzer != migratedAccessAnalyzerExpected {
 		t.Fatal("schema replay or restart changed the explicit access analyzer")
 	}
 	var afterAttempt []byte
@@ -7357,8 +7394,9 @@ func proveSecurityReportProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	}
 }
 
-func proveAccessAnalyzerProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint, replicaEndpoint, auditEndpoint, home, customer string, restartIAM func()) {
+func proveAccessAnalyzerProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint, replicaEndpoint, auditEndpoint, home, customer string, restartIAM func()) []string {
 	t.Helper()
+	sensitive := []string{}
 	type fixture struct {
 		owner   string
 		account iamv1.AccountID
@@ -7433,12 +7471,164 @@ func proveAccessAnalyzerProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			t.Fatalf("cross-Account access analyzer attack status=%d", response.Status)
 		}
 	}
+
+	// Prove the production processes keep REVIEW_ONLY as a real no-op, then
+	// require an explicit rule revision and a fresh observed condition before
+	// the two competing workers may disable one unused AccessKey. The test only
+	// backdates clocks/coverage; identity, key material, policy, decisions,
+	// worker claims and Audit delivery all use their real owners.
+	manager := createIAMUser(t, endpoint, home, "analysis.manager", "Analysis manager", initialReaderPassword, "analysis-manager")
+	target := createIAMUser(t, endpoint, home, "analysis.target", "Analysis target", initialReaderPassword, "analysis-target")
+	managerLogin := loginIAM(t, endpoint, manager.LoginName+"@"+string(manager.AccountID), initialReaderPassword, "analysis-manager-login")
+	changePasswordIAM(t, endpoint, managerLogin.Credential, initialReaderPassword, changedReaderPassword, "analysis-manager-password")
+	targetLogin := loginIAM(t, endpoint, target.LoginName+"@"+string(target.AccountID), initialReaderPassword, "analysis-target-login")
+	changePasswordIAM(t, endpoint, targetLogin.Credential, initialReaderPassword, changedReaderPassword, "analysis-target-password")
+	sensitive = append(sensitive, managerLogin.Credential, targetLogin.Credential)
+	policyResponse := performJSON(t, http.MethodPost, endpoint+"/v1/policies", home, iamv1.CreatePolicyRequest{
+		DisplayName: "Access analysis key manager", RequestID: "analysis-key-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant, Statements: []iamv1.PolicyStatement{
+			{SID: "users", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}},
+			{SID: "keys", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMAccessKeySetStatus},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccessKey, Match: iamv1.PolicyResourceAnyInAuthority}}},
+		}},
+	})
+	var policy iamv1.PolicyDetail
+	if policyResponse.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(policyResponse.Body), &policy) != nil || iamv1.ValidatePolicyDetail(policy) != nil {
+		t.Fatal("create process access analysis key policy")
+	}
+	createIAMPolicyAttachment(t, endpoint, home, manager.ID, policy.Policy.ID, "analysis-key-policy-grant")
+	keyPath := "/v1/users/" + string(target.ID) + "/access-keys"
+	directoryResponse := performJSON(t, http.MethodGet, replicaEndpoint+keyPath, managerLogin.Credential, nil)
+	var keyDirectory iamv1.AccessKeyList
+	if directoryResponse.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(directoryResponse.Body), &keyDirectory) != nil || iamv1.ValidateAccessKeyList(keyDirectory) != nil {
+		t.Fatal("read process access analysis key directory")
+	}
+	keyResponse := performJSON(t, http.MethodPost, endpoint+keyPath, managerLogin.Credential, iamv1.CreateAccessKeyRequest{
+		UserResourceVersion: keyDirectory.UserResourceVersion,
+		NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: "analysis-unused-key"})
+	var key iamv1.CreateAccessKeyResponse
+	if keyResponse.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(keyResponse.Body), &key) != nil || iamv1.ValidateCreateAccessKeyResponse(key) != nil {
+		t.Fatal("create process access analysis key")
+	}
+	keySecret := key.Secret.CopyBytes()
+	sensitive = append(sensitive, string(keySecret))
+	clear(keySecret)
+	if _, err := admin.Exec(ctx, `ALTER TABLE iam.access_keys DISABLE TRIGGER access_key_transition`); err != nil {
+		t.Fatal("open process unused AccessKey clock fixture", err)
+	}
+	keyGuardRestored := false
+	defer func() {
+		if !keyGuardRestored {
+			if _, err := admin.Exec(context.Background(), `ALTER TABLE iam.access_keys ENABLE ALWAYS TRIGGER access_key_transition`); err != nil {
+				t.Error("restore process AccessKey transition guard", err)
+			}
+		}
+	}()
+	if _, err := admin.Exec(ctx, `UPDATE iam.access_keys
+		SET created_at=transaction_timestamp()-interval '91 days',updated_at=transaction_timestamp()-interval '91 days'
+		WHERE tenant_id=$1 AND id=$2`, target.AccountID, key.Key.ID); err != nil {
+		t.Fatal("backdate process unused AccessKey", err)
+	}
+	if _, err := admin.Exec(ctx, `ALTER TABLE iam.access_keys ENABLE ALWAYS TRIGGER access_key_transition`); err != nil {
+		t.Fatal("restore process AccessKey transition guard", err)
+	}
+	keyGuardRestored = true
+	if _, err := admin.Exec(ctx, `UPDATE iam.access_analyzer_observations
+		SET observed_from=clock_timestamp()-interval '91 days',state='INSUFFICIENT_COVERAGE',reason='OBSERVATION_WINDOW_INCOMPLETE'
+		WHERE tenant_id=$1 AND analyzer_id=$2 AND source IN
+		 ('IAM_PASSWORD_SESSIONS','IAM_ACCESS_KEY_AUTHORIZATIONS','IAM_ROLE_SESSIONS','IAM_ROLE_AUTHORIZATIONS');
+		UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$2`, fixtures[0].account, fixtures[0].result.ID); err != nil {
+		t.Fatal("make process unused AccessKey observable", err)
+	}
+	waitFinding := func(excluded iamv1.AccessFindingID, revision uint64) iamv1.AccessFindingID {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			var id iamv1.AccessFindingID
+			var status string
+			var observedRevision uint64
+			err := admin.QueryRow(ctx, `SELECT finding_id,status,analyzer_revision FROM iam.access_findings
+				WHERE tenant_id=$1 AND analyzer_id=$2 AND target_kind='ACCESS_KEY' AND target_id=$3 AND finding_id<>$4
+				ORDER BY condition_generation DESC LIMIT 1`, fixtures[0].account, fixtures[0].result.ID, key.Key.ID, excluded).
+				Scan(&id, &status, &observedRevision)
+			if err == nil && status == string(iamv1.AccessFindingActive) && observedRevision == revision {
+				return id
+			}
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatal("read process AccessKey Finding", err)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Fatal("production analysis workers did not establish AccessKey Finding")
+		return ""
+	}
+	reviewFinding := waitFinding("", fixtures[0].result.ResourceVersion)
+	if _, err := admin.Exec(ctx, `UPDATE iam.access_findings SET created_at=clock_timestamp()-interval '2 days'
+		WHERE tenant_id=$1 AND finding_id=$2`, fixtures[0].account, reviewFinding); err != nil {
+		t.Fatal("age process REVIEW_ONLY Finding", err)
+	}
+	time.Sleep(2200 * time.Millisecond)
+	var reviewEnabled bool
+	var reviewAttempts int
+	if err := admin.QueryRow(ctx, `SELECT status='ENABLED',
+		(SELECT count(*) FROM iam.access_disposition_attempts WHERE tenant_id=$1 AND finding_id=$3)
+		FROM iam.access_keys WHERE tenant_id=$1 AND id=$2`, fixtures[0].account, key.Key.ID, reviewFinding).
+		Scan(&reviewEnabled, &reviewAttempts); err != nil || !reviewEnabled || reviewAttempts != 0 {
+		t.Fatal("production REVIEW_ONLY worker changed AccessKey", reviewEnabled, reviewAttempts, err)
+	}
+	dispositionResponse := performJSON(t, http.MethodPost,
+		replicaEndpoint+"/v1/account/access-analyzers/"+string(fixtures[0].result.ID)+":set-disposition", home,
+		iamv1.SetAccessDispositionRequest{Disposition: iamv1.AccessDispositionRule{
+			Mode: iamv1.AccessDispositionDisableAccessKeys, FindingDelayDays: 1},
+			ResourceVersion: fixtures[0].result.ResourceVersion, RequestID: "process-access-analyzer-disposition"})
+	if dispositionResponse.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(dispositionResponse.Body), &fixtures[0].result) != nil ||
+		fixtures[0].result.Disposition.Mode != iamv1.AccessDispositionDisableAccessKeys || fixtures[0].result.ResourceVersion != 2 {
+		t.Fatal("set production access analyzer disposition")
+	}
+	if _, err := admin.Exec(ctx, `UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$2`, fixtures[0].account, fixtures[0].result.ID); err != nil {
+		t.Fatal("make production disposition scan eligible", err)
+	}
+	automaticFinding := waitFinding(reviewFinding, fixtures[0].result.ResourceVersion)
+	if _, err := admin.Exec(ctx, `UPDATE iam.access_findings SET created_at=clock_timestamp()-interval '2 days'
+		WHERE tenant_id=$1 AND finding_id=$2`, fixtures[0].account, automaticFinding); err != nil {
+		t.Fatal("age production disposition Finding", err)
+	}
+	dispositionDeadline := time.Now().Add(15 * time.Second)
+	for {
+		var keyStatus, findingStatus, reason string
+		err := admin.QueryRow(ctx, `SELECT key.status,finding.status,COALESCE(finding.resolution_reason,'')
+			FROM iam.access_keys key JOIN iam.access_findings finding
+			ON finding.tenant_id=key.tenant_id AND finding.target_id=key.id
+			WHERE key.tenant_id=$1 AND key.id=$2 AND finding.finding_id=$3`,
+			fixtures[0].account, key.Key.ID, automaticFinding).Scan(&keyStatus, &findingStatus, &reason)
+		if err == nil && keyStatus == string(iamv1.AccessKeyDisabled) && findingStatus == string(iamv1.AccessFindingResolved) &&
+			reason == string(iamv1.AccessFindingResolutionAutomaticDisposition) {
+			break
+		}
+		if err != nil {
+			t.Fatal("read production automatic disposition", err)
+		}
+		if time.Now().After(dispositionDeadline) {
+			t.Fatal("production workers did not apply explicit access disposition", keyStatus, findingStatus, reason)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	automaticFacts := queryAudit(t, auditEndpoint, home,
+		auditv1.QueryRecordsRequest{PageSize: 10, Action: auditv1.ActionIAMAccessKeyAutomaticallyDisabled}, http.StatusOK)
+	if len(automaticFacts.Records) != 1 || automaticFacts.Records[0].Event.Target.ID != string(key.Key.ID) ||
+		automaticFacts.Records[0].Event.Actor != (auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "iam.access-analyzer"}) {
+		t.Fatal("automatic AccessKey fact did not reach the Account Audit chain")
+	}
 	update := iamv1.UpdateAccessAnalyzerRequest{Status: iamv1.AccessAnalyzerDisabled, UnusedAccessAgeDays: 60,
 		ResourceVersion: fixtures[0].result.ResourceVersion, RequestID: "process-access-analyzer-disable"}
 	updated := performJSON(t, http.MethodPost,
 		replicaEndpoint+"/v1/account/access-analyzers/"+string(fixtures[0].result.ID)+":update", home, update)
 	if updated.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(updated.Body), &fixtures[0].result) != nil ||
-		fixtures[0].result.Status != iamv1.AccessAnalyzerDisabled || fixtures[0].result.ResourceVersion != 2 {
+		fixtures[0].result.Status != iamv1.AccessAnalyzerDisabled || fixtures[0].result.ResourceVersion != 3 {
 		t.Fatal("replica did not atomically disable the access analyzer")
 	}
 	restartIAM()
@@ -7472,6 +7662,7 @@ func proveAccessAnalyzerProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			t.Fatal("access analyzer facts broke the Account Audit chain")
 		}
 	}
+	return sensitive
 }
 
 func proveTenantAccountProcesses(
@@ -7572,7 +7763,7 @@ func proveTenantAccountProcesses(
 	sensitive = append(sensitive, proveRoleManagementProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, roleOperator.Credential, withAuditOutage, restartIAM)...)
 	sensitive = append(sensitive, proveAccessKeyProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	proveSecurityReportProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, restartIAM)
-	proveAccessAnalyzerProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, restartIAM)
+	sensitive = append(sensitive, proveAccessAnalyzerProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, restartIAM)...)
 	sensitive = append(sensitive, proveOwnSessionProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	sensitive = append(sensitive, proveOtherSessionProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, primary.Credential, withAuditOutage, restartIAM)...)
 	readAccount := func(id string) iamv1.Account {

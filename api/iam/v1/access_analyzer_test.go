@@ -10,6 +10,7 @@ func TestAccessAnalyzerAndFindingContractsRejectInventedAuthority(t *testing.T) 
 	created := now.Add(-180 * 24 * time.Hour)
 	analyzer := AccessAnalyzer{APIVersion: APIVersion, Kind: "AccessAnalyzer", ID: "analyzer-one", AccountID: "account-one",
 		Type: AccessAnalyzerUnusedAccess, Status: AccessAnalyzerActive, UnusedAccessAgeDays: DefaultUnusedAccessAgeDays,
+		Disposition:     AccessDispositionRule{Mode: AccessDispositionReviewOnly},
 		ResourceVersion: 1, CreatedAt: created, UpdatedAt: created}
 	if err := ValidateAccessAnalyzer(analyzer); err != nil {
 		t.Fatal("validate access analyzer", err)
@@ -44,8 +45,17 @@ func TestAccessAnalyzerAndFindingContractsRejectInventedAuthority(t *testing.T) 
 	resolvedAt := now.Add(2 * time.Minute)
 	resolved := archived
 	resolved.Status, resolved.ResourceVersion, resolved.ObservedAt, resolved.UpdatedAt, resolved.ResolvedAt = AccessFindingResolved, 3, resolvedAt, resolvedAt, &resolvedAt
+	resolved.ResolutionReason = AccessFindingResolutionConditionCleared
 	if ValidateAccessFinding(resolved) != nil {
 		t.Fatal("valid resolved finding was rejected")
+	}
+	resolved.ResolutionReason = AccessFindingResolutionAutomaticDisposition
+	if ValidateAccessFinding(resolved) != nil {
+		t.Fatal("valid automatically disposed finding was rejected")
+	}
+	resolved.ResolutionReason = ""
+	if ValidateAccessFinding(resolved) == nil {
+		t.Fatal("resolved finding without a reason was accepted")
 	}
 	recoveredAt := finding.WindowStartedAt.Add(-time.Hour)
 	finding.RecoveryEpoch, finding.RecoveryCommandID, finding.RecoveryCompletedAt = 2, "recovery-command", &recoveredAt
@@ -96,6 +106,7 @@ func TestAccessAnalyzerDirectoriesAreAccountBoundAndOrdered(t *testing.T) {
 	start := now.Add(-90 * 24 * time.Hour)
 	analyzer := AccessAnalyzer{APIVersion: APIVersion, Kind: "AccessAnalyzer", ID: "analyzer-one", AccountID: "account-one",
 		Type: AccessAnalyzerUnusedAccess, Status: AccessAnalyzerActive, UnusedAccessAgeDays: DefaultUnusedAccessAgeDays,
+		Disposition:     AccessDispositionRule{Mode: AccessDispositionReviewOnly},
 		ResourceVersion: 1, CreatedAt: start, UpdatedAt: start}
 	coverage := []AccessObservationCoverage{
 		{Source: "IAM_PASSWORD_SESSIONS", State: AccessObservationComplete, ObservedFrom: &start, ObservedThrough: &now},
@@ -139,6 +150,24 @@ func TestAccessAnalyzerMutationContractsAreVersionedAndBounded(t *testing.T) {
 		ValidateAccessFindingDispositionRequest(AccessFindingDispositionRequest{ResourceVersion: 0, RequestID: "archive-finding"}) == nil ||
 		ValidateAccessFindingDispositionRequest(AccessFindingDispositionRequest{ResourceVersion: 1}) == nil {
 		t.Fatal("access finding disposition concurrency contract differs")
+	}
+	if ValidateSetAccessDispositionRequest(SetAccessDispositionRequest{Disposition: AccessDispositionRule{
+		Mode: AccessDispositionDisableAccessKeys, FindingDelayDays: DefaultAccessDispositionDelayDays},
+		ResourceVersion: 1, RequestID: "enable-key-disposition"}) != nil ||
+		ValidateSetAccessDispositionRequest(SetAccessDispositionRequest{Disposition: AccessDispositionRule{
+			Mode: AccessDispositionReviewOnly}, ResourceVersion: 2, RequestID: "disable-key-disposition"}) != nil {
+		t.Fatal("valid access disposition contract was rejected")
+	}
+	for _, rule := range []AccessDispositionRule{
+		{},
+		{Mode: AccessDispositionReviewOnly, FindingDelayDays: 1},
+		{Mode: AccessDispositionDisableAccessKeys},
+		{Mode: AccessDispositionDisableAccessKeys, FindingDelayDays: MaxAccessDispositionDelayDays + 1},
+		{Mode: "DISABLE_USERS", FindingDelayDays: 7},
+	} {
+		if ValidateAccessDispositionRule(rule) == nil {
+			t.Fatal("invalid access disposition rule was accepted", rule)
+		}
 	}
 	for _, status := range []AccessFindingStatusFilter{AccessFindingStatusAll, AccessFindingStatusFilter(AccessFindingActive),
 		AccessFindingStatusFilter(AccessFindingArchived), AccessFindingStatusFilter(AccessFindingResolved)} {

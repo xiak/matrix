@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1会话自管理、S2 TOTP MFA/安全通知/恢复、S3密码与共享尝试治理及S4a账号安全报告均已有固定实现和所属段落的真实证据；未完成的LIVE UI或发布组合仍按各段边界保留。S4b当前访问诊断已固定于`ef4483e2`；S4c-a账号级闲置访问分析器已固定于`bbb2f7ee`并通过独立CI。S4c-b真实观测扫描和Finding生命周期正在本分支收口，自动处置及009完整发布尚未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性。
+- 状态：S1会话自管理、S2 TOTP MFA/安全通知/恢复、S3密码与共享尝试治理及S4a账号安全报告均已有固定实现和所属段落的真实证据；未完成的LIVE UI或发布组合仍按各段边界保留。S4b当前访问诊断已固定于`ef4483e2`；S4c-a账号级闲置访问分析器已固定于`bbb2f7ee`；S4c-b真实观测扫描和Finding生命周期已固定于`91649497`并通过独立CI。S4c-c显式自动处置及009完整发布尚未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -1467,6 +1467,8 @@ S4c-a不可变事实只有用户管理动作`iam.access-analyzer.created/updated
 
 Linux权限测试修复提交`4f53122b44be26036ef27b5ec56c245d799a159e`的[Verification 37102922494](https://github.com/xiak/matrix/actions/runs/37102922494)中，`go`、`node-process`、`authority-storage`、恢复存储和Role/STS分片均成功；`authority-runtime`的实际会话/TOTP步骤成功后，`TestIAMTOTPBackupProcesses`因沿用旧迁移文件清单、未提供新增scanner专用DSN而失败。完整CI日志确认唯一失败为一次性备份fixture的`actual backup-capability migration failed`；同一固定源码的独立IAM/Audit/PaaS多进程门禁在本任务PG18通过315.66秒。现有备份测试owner已补入`MATRIX_MIGRATION_IAM_ACCESS_ANALYSIS_DSN_FILE`，不改变备份、迁移或scanner生产权限；修复后的聚焦门禁和新独立CI仍待完成。
 
+最终修复提交`91649497a0c53be1174d8835326a2df51fe74a55`只为上述既有备份迁移fixture提供实际`matrix_iam_access_analysis_worker_login`专用DSN，不改变公开API、OpenAPI、生产SQL或worker权限。其[Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260)已由GitHub API按精确SHA核实：`go`、`node-process`、`authority-process`汇总及十二项拆分authority门禁共十五个job全部`completed/success`，无失败、取消、超时或跳过。S4c-b后端据此接受；UX/UI的LIVE组合、自动处置和完整009发布仍分别验收，不能继承本结论。
+
 第一片最低真门禁覆盖两个Account相同对象ID、1/90/365日边界、对象年龄不足、旧谱系与恢复缺口；成功/失败密码登录、有效/坏签名/重放Key、RoleSession发行及Allow/Deny使用；归档、取消归档、活动后自动RESOLVED和后继再次闲置的新generation；策略/目标版本变更、账号或操作者停用、两个扫描副本的租约/fence及未知提交；Finding前后原User/Key/Role、Session、权限和业务资源不变。容量门禁必须证明有界分页和索引计划，不在每次请求扫描全部不可变决定；完整发布还须实跑安装恢复epoch衔接，否则只能交付观察与Finding后端候选，不能启用自动治理。
 
 闲置资格必须绑定规则修订、对象resourceVersion、真实活动修订和完整观察窗口。采集缺口、审计积压/死信、对象新建后不足阈值或仅没有浏览器登录时都不能断言User/Key闲置；程序Key和Role的真实活动必须按准确主体归因，不能忽略非浏览器使用。阈值以数据库时间和已冻结产品范围计算，不借外部地域/风险来源造结论。
@@ -1476,6 +1478,22 @@ Linux权限测试修复提交`4f53122b44be26036ef27b5ec56c245d799a159e`的[Verif
 停用Key只关闭该程序凭据的新请求，不删除User或业务资源；停用User影响其各认证载体，但不停止已接受工作负载或销毁Operation/outbox。启用是新的显式当前管理操作，不复活原登录/Role会话，不撤销删除终态；人工决定长期Key重新启用不等于自动恢复旧签名报文。RootIdentity及有未撤销平台附件的USER不由普通闲置任务接管，受保护身份不能通过先停用再恢复绕过。
 
 自动执行需要账号显式启用的闭合规则、执行目的/目标范围、当前有效执行身份与撤销边界，不能把创建规则者的过期Session存入worker、伪造USER决定或复用verifier权限。执行者、账号同意和服务受托仍服从008的边界；没有对应当前权限证明时只报告、不变更。不先添加一个拥有所有租户写权的通用治理服务主体；安装purpose本身不授予目标tenant权限。
+
+##### S4c-c：显式自动处置
+
+自动处置默认关闭；创建分析器只能得到`REVIEW_ONLY`，不能在创建请求中顺带开启写效果。账号管理员必须通过独立动作`iam.access-analyzer.set-disposition`和`POST /v1/account/access-analyzers/{analyzerId}:set-disposition`显式设置闭合规则，不能沿用普通`iam.access-analyzer.update`权限。请求只包含期望Analyzer版本、`requestId`及固定规则；首次规则只有`REVIEW_ONLY`或`DISABLE_UNUSED_ACCESS_KEYS`，后者要求1–30日的Finding观察宽限期，默认7日。规则是Account拥有的治理配置，不是Policy、Decision、Finding permit或创建者Session的延长授权；设置产生真实USER+当前精确Decision的`iam.access-analyzer.disposition-updated`事实，并推进Analyzer版本，使旧Finding不能直接取得新写资格。
+
+首片只允许自动停用`UNUSED_ACCESS_KEY`。`UNUSED_PASSWORD`和`UNUSED_ROLE`继续报告并由当前管理员调用原User/Role生命周期入口：自动停用User会同时影响密码、Key、Session及最后管理员/平台受保护身份，自动停用Role会影响未知工作负载，二者不能共用一个“闲置”开关隐式启用。服务相关Role仍不进入Finding。后续扩展必须新增明确目标范围和验收，不能把现有`DISABLE_UNUSED_ACCESS_KEYS`解释为任意资源处置。
+
+扫描进程继续使用专用`matrix_iam_access_analysis_worker_login`，但只能新增调用封闭的自动处置claim/complete函数；不给它User、AccessKey或Role北向API、表写权限、通用Policy Decision或跨租户selector。claim只选择当前ACTIVE Analyzer、当前`DISABLE_UNUSED_ACCESS_KEYS`规则、ACTIVE Finding和已过宽限期的ENABLED AccessKey，并保存不可变attempt、租约及fence。complete在同一事务重新锁定Account、Analyzer/规则、Finding、目标USER/Key和活动水位，核对当前恢复epoch、完整覆盖窗口、Analyzer/目标版本、condition generation、activity revision、宽限期、账号及执行登录仍有效；规则停用、Analyzer变化、新活动、Key先被修改、owner是RootIdentity或仍有未撤销平台附件、租约丢失及不确定数据均失败关闭。Finding和历史报告均不是permit。
+
+成功处置只将准确AccessKey从ENABLED改为DISABLED并推进其版本；不删除Key/User、撤销Policy、停止工作负载、销毁Operation/outbox或自动恢复其他资源。它在同一事务把原Finding标为`RESOLVED/AUTOMATIC_DISPOSITION`，写`iam.access-key.automatically-disabled`和原`iam.access-finding.resolved`两个封闭SYSTEM事实及outbox，并保存准确完成结果。系统actor仍固定为`SYSTEM/iam.access-analyzer`，不伪造USER Decision；Audit必须分别约束AccessKey和Finding target。人工重新启用Key是新的当前授权操作，不撤销历史事实、不恢复旧Session或签名请求；若后续再次满足条件，只能生成新的condition generation。
+
+普通扫描关闭Finding时使用`RESOLVED/CONDITION_CLEARED`；迁移只把真实前驱中已RESOLVED的旧记录解释为该原因，不为ACTIVE/ARCHIVED记录补造结果。未知提交按原attempt查询准确完成；两个执行副本、人工停用/启用、Key认证决定、规则更新/关闭、Analyzer停复用、账号/USER停复用、恢复epoch推进和平台附件授予分别按既有稳定锁序验证双向次序，不能靠SERIALIZABLE重试掩盖死锁或把失败重做成新意图。受支持备份恢复后，在新epoch重新取得完整窗口前不得claim；旧库回滚不能复活已完成attempt或已停用Key，仍依赖009既有安装侧不可回退恢复边界，数据库内记录不冒充整机防回滚。
+
+本片当前源码形状为IAM64/Audit34/PaaS3+r10。`TestIAMAccessAnalyzerPostgres`在本任务独立PG18、真实受限分析进程和race-p1下以当前精确源码通过33.852秒：默认`REVIEW_ONLY`面对已过期Finding持续无claim/无Key变化；显式启用后必须由新Analyzer修订重新观察条件，旧Finding先以`CONDITION_CLEARED`关闭，新代际才可自动停用Key。两个数据库worker并发领取允许一方先遇到SERIALIZABLE冲突并按生产循环重试，最终恰一持有单调fence；领取后管理员先改Key时完成失败关闭，Key/Finding/attempt/事实均无部分自动结果。普通USER Key唯一产生一次SYSTEM停用和一次Finding关闭；原主账号的Key入口本身拒绝，普通USER在Key创建后取得未撤销`PLATFORM_OPERATOR`附件时仍保持ENABLED、无attempt和自动事实。真库运行发现并修正四项生产缺口：受限worker未绑定目标tenant时被RLS隐藏、完成事实时间不是严格UTC canonical、规则修订同一轮先插新Finding再关旧Finding会撞唯一未解决条件、处置先锁User/Key再等待认证恢复全局屏障会与恢复事务形成反向锁序；修正后的完成路径先取得恢复屏障再按Account、USER、Policy、Key次序锁定并显式拒绝缺失权威行，未放宽RLS、目标唯一性或actor边界。
+
+同一候选在独立库完成Audit HTTP不可变链4.052秒、双authority/RLS 9.06秒及固定旧tenant链保留升级0.32秒。滚动前驱已替换为已验收IAM63固定`91649497a0c53be1174d8835326a2df51fe74a55`，实际旧migrator/程序创建并更新Analyzer、写入两类不可变receipt及其余保留数据后，IAM64双迁移、运行、恢复历史、重启和等值重放门禁以当前精确源码120.885秒通过；旧Analyzer仅取得确定的`REVIEW_ONLY`默认，原create/update完成在不改写历史receipt的前提下投影成当前安全响应并精确重放，不迁移即扩权，也不继续累积更早未发布schema矩阵。独立多进程门禁在另一空白PG18集群以当前精确源码通过226.568秒：两个IAM副本、两个分析worker、IAM dispatcher、Audit及PaaS保留原双租户/签名攻击/断链/重启矩阵，并实跑默认无效果、显式启用、竞争处置、唯一SYSTEM事实投递和完整tenant Audit链。全仓默认race（含architecture）、全仓vet、IAM/Audit OpenAPI重新生成及生成器稳定检查、Linux amd64全仓构建均通过。以上仍是后端候选证据；固定提交的独立CI、UX/UI LIVE组合和签名安装A/B尚未完成，不能据此把S4c-c或完整009标记为发布验收。
 
 #### S4验收与衔接
 

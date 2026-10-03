@@ -49,9 +49,48 @@ type Completion struct {
 	Resolutions []ResolutionResult `json:"resolutions"`
 }
 
+// DispositionSnapshot is the closed evidence returned by the authority for a
+// single automatic action. It is not a lifecycle permit: completion locks and
+// recomputes the same evidence before applying any effect.
+type DispositionSnapshot struct {
+	AccountID                iamv1.AccountID        `json:"accountId"`
+	AnalyzerID               iamv1.AccessAnalyzerID `json:"analyzerId"`
+	AnalyzerRevision         uint64                 `json:"analyzerRevision"`
+	FindingID                iamv1.AccessFindingID  `json:"findingId"`
+	FindingResourceVersion   uint64                 `json:"findingResourceVersion"`
+	FindingCreatedAt         time.Time              `json:"findingCreatedAt"`
+	ConditionGeneration      uint64                 `json:"conditionGeneration"`
+	TargetResourceVersion    uint64                 `json:"targetResourceVersion"`
+	ActivityRevision         uint64                 `json:"activityRevision"`
+	RecoveryEpoch            uint64                 `json:"recoveryEpoch"`
+	AccessKeyID              string                 `json:"accessKeyId"`
+	AccessKeyResourceVersion uint64                 `json:"accessKeyResourceVersion"`
+	UserID                   iamv1.PrincipalID      `json:"userId"`
+	LastActivityAt           *time.Time             `json:"lastActivityAt,omitempty"`
+	EvaluatedAt              time.Time              `json:"evaluatedAt"`
+}
+
+type DispositionClaim struct {
+	AttemptID      string
+	WorkerID       string
+	Fence          uint64
+	LeaseExpiresAt time.Time
+	SnapshotDigest string
+	Snapshot       DispositionSnapshot
+}
+
+type DispositionCompletion struct {
+	KeyEventID       auditv1.EventID `json:"keyEventId"`
+	KeyRequestID     string          `json:"keyRequestId"`
+	FindingEventID   auditv1.EventID `json:"findingEventId"`
+	FindingRequestID string          `json:"findingRequestId"`
+}
+
 type Transaction interface {
 	Claim(context.Context, string, string) (Claim, bool, error)
 	Complete(context.Context, Claim, Completion) error
+	ClaimDisposition(context.Context, string, string) (DispositionClaim, bool, error)
+	CompleteDisposition(context.Context, DispositionClaim, DispositionCompletion) error
 }
 
 type Repository interface {
@@ -71,6 +110,11 @@ type Result struct {
 	Claimed     bool
 	Detections  int
 	Resolutions int
+}
+
+type DispositionResult struct {
+	Claimed bool
+	Applied bool
 }
 
 func NewScanner(repository Repository, newID IDGenerator, workerID string) (*Scanner, error) {
@@ -128,6 +172,87 @@ func (service *Scanner) ScanOnce(ctx context.Context) (Result, error) {
 		return Result{Claimed: true}, err
 	}
 	return Result{Claimed: true, Detections: len(completion.Detections), Resolutions: len(completion.Resolutions)}, nil
+}
+
+func (service *Scanner) DisposeOnce(ctx context.Context) (DispositionResult, error) {
+	if service == nil || ctx == nil {
+		return DispositionResult{}, ErrUnavailable
+	}
+	attemptID, err := service.identifier("access-disposition-attempt")
+	if err != nil {
+		return DispositionResult{}, err
+	}
+	var claim DispositionClaim
+	var found bool
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		var err error
+		claim, found, err = tx.ClaimDisposition(ctx, service.workerID, attemptID)
+		return err
+	})
+	if err != nil {
+		return DispositionResult{}, err
+	}
+	if !found {
+		return DispositionResult{}, nil
+	}
+	if !validDispositionClaim(claim, attemptID, service.workerID) {
+		return DispositionResult{Claimed: true}, ErrUnavailable
+	}
+	completion, err := service.dispositionCompletion()
+	if err != nil {
+		return DispositionResult{Claimed: true}, err
+	}
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		return tx.CompleteDisposition(ctx, claim, completion)
+	})
+	if err != nil {
+		return DispositionResult{Claimed: true}, err
+	}
+	return DispositionResult{Claimed: true, Applied: true}, nil
+}
+
+func (service *Scanner) dispositionCompletion() (DispositionCompletion, error) {
+	keyEvent, err := service.identifier("audit-event")
+	if err != nil {
+		return DispositionCompletion{}, err
+	}
+	keyRequest, err := service.identifier("access-disposition-request")
+	if err != nil {
+		return DispositionCompletion{}, err
+	}
+	findingEvent, err := service.identifier("audit-event")
+	if err != nil {
+		return DispositionCompletion{}, err
+	}
+	findingRequest, err := service.identifier("access-disposition-request")
+	if err != nil {
+		return DispositionCompletion{}, err
+	}
+	return DispositionCompletion{KeyEventID: auditv1.EventID(keyEvent), KeyRequestID: keyRequest,
+		FindingEventID: auditv1.EventID(findingEvent), FindingRequestID: findingRequest}, nil
+}
+
+func validDispositionClaim(claim DispositionClaim, attempt, worker string) bool {
+	const maxVersion = uint64(1<<53 - 1)
+	snapshot := claim.Snapshot
+	validTime := func(value time.Time) bool { return value.Location() == time.UTC && !value.IsZero() }
+	if claim.AttemptID != attempt || claim.WorkerID != worker || claim.Fence == 0 || claim.Fence > maxVersion ||
+		!validDigest(claim.SnapshotDigest) || !validTime(claim.LeaseExpiresAt) || !validTime(snapshot.FindingCreatedAt) ||
+		!validTime(snapshot.EvaluatedAt) || !claim.LeaseExpiresAt.After(snapshot.EvaluatedAt) ||
+		iamv1.ValidateID("accountId", string(snapshot.AccountID)) != nil ||
+		iamv1.ValidateID("analyzerId", string(snapshot.AnalyzerID)) != nil ||
+		iamv1.ValidateID("findingId", string(snapshot.FindingID)) != nil ||
+		iamv1.ValidateID("accessKeyId", snapshot.AccessKeyID) != nil ||
+		iamv1.ValidateID("userId", string(snapshot.UserID)) != nil {
+		return false
+	}
+	for _, version := range []uint64{snapshot.AnalyzerRevision, snapshot.FindingResourceVersion, snapshot.ConditionGeneration,
+		snapshot.TargetResourceVersion, snapshot.ActivityRevision, snapshot.AccessKeyResourceVersion} {
+		if version == 0 || version > maxVersion {
+			return false
+		}
+	}
+	return snapshot.LastActivityAt == nil || (validTime(*snapshot.LastActivityAt) && !snapshot.LastActivityAt.After(snapshot.EvaluatedAt))
 }
 
 func (service *Scanner) withinTransaction(ctx context.Context, callback func(context.Context, Transaction) error) error {

@@ -88,6 +88,43 @@ func (value *accessAnalysisTransaction) Complete(ctx context.Context, claim acce
 	return mapAccessAnalysisError(err)
 }
 
+func (value *accessAnalysisTransaction) ClaimDisposition(ctx context.Context, worker, attempt string) (accessanalysis.DispositionClaim, bool, error) {
+	var claim accessanalysis.DispositionClaim
+	var encoded []byte
+	err := value.tx.QueryRow(ctx, `SELECT attempt_id,worker_id,fence,lease_expires_at,snapshot_digest,snapshot_document
+		FROM iam.claim_access_disposition($1,$2)`, worker, attempt).Scan(&claim.AttemptID, &claim.WorkerID, &claim.Fence,
+		&claim.LeaseExpiresAt, &claim.SnapshotDigest, &encoded)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return claim, false, nil
+	}
+	if err != nil {
+		return accessanalysis.DispositionClaim{}, false, mapAccessAnalysisError(err)
+	}
+	if contractjson.DecodeObjectBytes(encoded, 64*1024, &claim.Snapshot) != nil {
+		return accessanalysis.DispositionClaim{}, false, accessanalysis.ErrUnavailable
+	}
+	claim.LeaseExpiresAt = claim.LeaseExpiresAt.UTC()
+	claim.Snapshot.FindingCreatedAt = claim.Snapshot.FindingCreatedAt.UTC()
+	claim.Snapshot.EvaluatedAt = claim.Snapshot.EvaluatedAt.UTC()
+	if claim.Snapshot.LastActivityAt != nil {
+		value := claim.Snapshot.LastActivityAt.UTC()
+		claim.Snapshot.LastActivityAt = &value
+	}
+	return claim, true, nil
+}
+
+func (value *accessAnalysisTransaction) CompleteDisposition(ctx context.Context, claim accessanalysis.DispositionClaim,
+	completion accessanalysis.DispositionCompletion) error {
+	encoded, err := json.Marshal(completion)
+	if err != nil || len(encoded) > 16*1024 {
+		return accessanalysis.ErrUnavailable
+	}
+	defer clear(encoded)
+	_, err = value.tx.Exec(ctx, "SELECT iam.complete_access_disposition($1,$2,$3,$4,$5::jsonb)",
+		claim.AttemptID, claim.WorkerID, claim.Fence, claim.Snapshot.AccountID, encoded)
+	return mapAccessAnalysisError(err)
+}
+
 func normalizeAnalysisSnapshot(snapshot *accessanalysis.Snapshot) {
 	snapshot.ObservedAt = snapshot.ObservedAt.UTC()
 	snapshot.Analyzer.CreatedAt, snapshot.Analyzer.UpdatedAt = snapshot.Analyzer.CreatedAt.UTC(), snapshot.Analyzer.UpdatedAt.UTC()

@@ -17530,7 +17530,8 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 	var analyzer iamv1.AccessAnalyzer
 	call(http.MethodPost, "/v1/account/access-analyzers", root, create, http.StatusCreated, &analyzer)
 	if iamv1.ValidateAccessAnalyzer(analyzer) != nil || analyzer.AccountID != document.Organization.ID ||
-		analyzer.Status != iamv1.AccessAnalyzerActive || analyzer.UnusedAccessAgeDays != iamv1.DefaultUnusedAccessAgeDays || analyzer.ResourceVersion != 1 {
+		analyzer.Status != iamv1.AccessAnalyzerActive || analyzer.UnusedAccessAgeDays != iamv1.DefaultUnusedAccessAgeDays || analyzer.ResourceVersion != 1 ||
+		analyzer.Disposition != (iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}) {
 		t.Fatal("access analyzer creation did not use the current Account and default threshold")
 	}
 	var replay iamv1.AccessAnalyzer
@@ -17768,6 +17769,323 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 		t.Fatal("access finding audit facts differ", detectedFacts, resolvedFacts, err)
 	}
 
+	var keyUser iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "access-analyzer-key-user", "displayName": "Unused key owner",
+		"initialPassword": initialDeveloperPassword, "requestId": "access-analyzer-key-user-create"}, http.StatusCreated, &keyUser)
+	keyUserBearer := localRecoveryLogin(t, handler, keyUser.LoginName+"@"+string(keyUser.AccountID), initialDeveloperPassword, true)
+	_ = localRecoveryChangePassword(t, handler, keyUserBearer, initialDeveloperPassword, changedDeveloperPassword)
+	var keyManager iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "access-analyzer-key-manager", "displayName": "Unused key manager",
+		"initialPassword": initialDeveloperPassword, "requestId": "access-analyzer-key-manager-create"}, http.StatusCreated, &keyManager)
+	keyManagerBearer := localRecoveryLogin(t, handler, keyManager.LoginName+"@"+string(keyManager.AccountID), initialDeveloperPassword, true)
+	keyManagerBearer = localRecoveryChangePassword(t, handler, keyManagerBearer, initialDeveloperPassword, changedDeveloperPassword)
+	var keyManagerPolicy iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Access analyzer key fixture",
+		RequestID: "access-analyzer-key-manager-policy", Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "keys", Effect: iamv1.PolicyAllow,
+				Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}},
+				{SID: "key-status", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMAccessKeySetStatus},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccessKey, Match: iamv1.PolicyResourceAnyInAuthority}}}}}},
+		http.StatusCreated, &keyManagerPolicy)
+	var keyManagerAttachment iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(keyManager.ID)}, PolicyID: keyManagerPolicy.Policy.ID,
+		PolicyResourceVersion: keyManagerPolicy.Policy.ResourceVersion, RequestID: "access-analyzer-key-manager-grant"},
+		http.StatusOK, &keyManagerAttachment)
+	keyPath := "/v1/users/" + string(keyUser.ID) + "/access-keys"
+	var keyDirectory iamv1.AccessKeyList
+	call(http.MethodGet, keyPath, keyManagerBearer, nil, http.StatusOK, &keyDirectory)
+	var keyCreated iamv1.CreateAccessKeyResponse
+	call(http.MethodPost, keyPath, keyManagerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: keyDirectory.UserResourceVersion,
+		NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+		RequestID:           "access-analyzer-unused-key-create"}, http.StatusCreated, &keyCreated)
+	if iamv1.ValidateCreateAccessKeyResponse(keyCreated) != nil || keyCreated.Key.UserID != keyUser.ID || keyCreated.Key.Status != iamv1.AccessKeyEnabled {
+		t.Fatal("real unused AccessKey fixture differs")
+	}
+	automaticKeyID := keyCreated.Key.ID
+	stopAnalysisProcess()
+	// The production scanner intentionally requires the key to have existed for
+	// the complete observation window. The public create above proves the real
+	// authorization, intent, material and Audit workflow. Backdate only its
+	// immutable clock columns under the test administrator, then restore the
+	// ALWAYS guard before the worker can make a lifecycle change.
+	if _, err := database.Exec(ctx, `ALTER TABLE iam.access_keys DISABLE TRIGGER access_key_transition`); err != nil {
+		t.Fatal("open bounded old AccessKey clock fixture", err)
+	}
+	keyGuardRestored := false
+	defer func() {
+		if !keyGuardRestored {
+			if _, err := database.Exec(context.Background(), `ALTER TABLE iam.access_keys ENABLE ALWAYS TRIGGER access_key_transition`); err != nil {
+				t.Error("restore AccessKey transition guard", err)
+			}
+		}
+	}()
+	if _, err := database.Exec(ctx, `UPDATE iam.access_keys
+		SET created_at=transaction_timestamp()-interval '31 days',updated_at=transaction_timestamp()-interval '31 days'
+		WHERE tenant_id=$1 AND id=$2`, document.Organization.ID, automaticKeyID); err != nil {
+		t.Fatal("backdate unused AccessKey fixture", err)
+	}
+	if _, err := database.Exec(ctx, `ALTER TABLE iam.access_keys ENABLE ALWAYS TRIGGER access_key_transition`); err != nil {
+		t.Fatal("restore AccessKey transition guard", err)
+	}
+	keyGuardRestored = true
+	if _, err := database.Exec(ctx, `UPDATE iam.principals SET created_at=clock_timestamp()-interval '31 days'
+		WHERE tenant_id=$1 AND id=$2;
+		UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$3`, document.Organization.ID, keyUser.ID, analyzer.ID); err != nil {
+		t.Fatal("establish old unused AccessKey fixture", err)
+	}
+	stopDispositionProcess := iamAccessAnalysisProcess(t, ctx, database, dsn)
+	defer stopDispositionProcess()
+	var keyFindingID iamv1.AccessFindingID
+	keyFindingDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(keyFindingDeadline) {
+		var observed string
+		err := database.QueryRow(ctx, `SELECT finding_id,status FROM iam.access_findings
+			WHERE tenant_id=$1 AND analyzer_id=$2 AND target_kind='ACCESS_KEY' AND target_id=$3
+			ORDER BY condition_generation DESC LIMIT 1`, document.Organization.ID, analyzer.ID, automaticKeyID).Scan(&keyFindingID, &observed)
+		if err == nil && observed == string(iamv1.AccessFindingActive) {
+			break
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal("read unused AccessKey finding", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if keyFindingID == "" {
+		t.Fatal("access analysis process did not detect the unused AccessKey")
+	}
+	if _, err := database.Exec(ctx, `UPDATE iam.access_findings SET created_at=clock_timestamp()-interval '2 days'
+		WHERE tenant_id=$1 AND finding_id=$2`, document.Organization.ID, keyFindingID); err != nil {
+		t.Fatal("age automatic disposition Finding", err)
+	}
+	// REVIEW_ONLY is the persisted default and must remain a runtime no-op even
+	// when a qualifying AccessKey Finding is already older than the maximum
+	// worker poll interval. It is not merely an API display default.
+	time.Sleep(2200 * time.Millisecond)
+	var reviewOnlyKeyStatus string
+	var reviewOnlyAttempts int
+	if err := database.QueryRow(ctx, `SELECT key.status,
+			(SELECT count(*) FROM iam.access_disposition_attempts attempt
+			 WHERE attempt.tenant_id=key.tenant_id AND attempt.finding_id=$3)
+		FROM iam.access_keys key WHERE key.tenant_id=$1 AND key.id=$2`,
+		document.Organization.ID, automaticKeyID, keyFindingID).Scan(&reviewOnlyKeyStatus, &reviewOnlyAttempts); err != nil ||
+		reviewOnlyKeyStatus != string(iamv1.AccessKeyEnabled) || reviewOnlyAttempts != 0 {
+		t.Fatal("default REVIEW_ONLY performed an automatic disposition", reviewOnlyKeyStatus, reviewOnlyAttempts, err)
+	}
+
+	// Automatic disposition is a separate, explicit rule. It can disable only
+	// a currently unused AccessKey after the configured Finding delay; the
+	// scanner itself still has no generic lifecycle authority.
+	setDisposition := iamv1.SetAccessDispositionRequest{Disposition: iamv1.AccessDispositionRule{
+		Mode: iamv1.AccessDispositionDisableAccessKeys, FindingDelayDays: 1},
+		ResourceVersion: enabled.ResourceVersion, RequestID: "access-analyzer-enable-key-disposition"}
+	var dispositionAnalyzer iamv1.AccessAnalyzer
+	call(http.MethodPost, path+":set-disposition", root, setDisposition, http.StatusOK, &dispositionAnalyzer)
+	if dispositionAnalyzer.Disposition != setDisposition.Disposition || dispositionAnalyzer.ResourceVersion != enabled.ResourceVersion+1 {
+		t.Fatal("explicit access disposition rule was not persisted with CAS")
+	}
+	var dispositionReplay iamv1.AccessAnalyzer
+	call(http.MethodPost, path+":set-disposition", root, setDisposition, http.StatusOK, &dispositionReplay)
+	if dispositionReplay != dispositionAnalyzer {
+		t.Fatal("access disposition exact replay changed its original result")
+	}
+	call(http.MethodPost, path+":set-disposition", root, iamv1.SetAccessDispositionRequest{
+		Disposition:     iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionDisableAccessKeys, FindingDelayDays: 2},
+		ResourceVersion: enabled.ResourceVersion, RequestID: setDisposition.RequestID}, http.StatusConflict, nil)
+	enabled = dispositionAnalyzer
+	// Enabling automatic disposition is intentionally non-retroactive. Force a
+	// fresh observation under the new analyzer revision; the REVIEW_ONLY
+	// Finding must resolve normally and only its successor may be actionable.
+	if _, err := database.Exec(ctx, `UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$2`, document.Organization.ID, analyzer.ID); err != nil {
+		t.Fatal("make explicit disposition scan eligible", err)
+	}
+	var dispositionFindingID iamv1.AccessFindingID
+	dispositionFindingDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(dispositionFindingDeadline) {
+		var status string
+		var analyzerRevision uint64
+		err := database.QueryRow(ctx, `SELECT finding_id,status,analyzer_revision FROM iam.access_findings
+			WHERE tenant_id=$1 AND analyzer_id=$2 AND target_kind='ACCESS_KEY' AND target_id=$3 AND finding_id<>$4
+			ORDER BY condition_generation DESC LIMIT 1`, document.Organization.ID, analyzer.ID, automaticKeyID, keyFindingID).
+			Scan(&dispositionFindingID, &status, &analyzerRevision)
+		if err == nil && status == string(iamv1.AccessFindingActive) && analyzerRevision == dispositionAnalyzer.ResourceVersion {
+			break
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal("read explicit disposition Finding", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if dispositionFindingID == "" {
+		t.Fatal("explicit disposition rule did not produce a fresh observed condition")
+	}
+	if _, err := database.Exec(ctx, `UPDATE iam.access_findings SET created_at=clock_timestamp()-interval '2 days'
+		WHERE tenant_id=$1 AND finding_id=$2`, document.Organization.ID, dispositionFindingID); err != nil {
+		t.Fatal("age explicit disposition Finding", err)
+	}
+	automaticApplied := false
+	automaticDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(automaticDeadline) {
+		var keyStatus, findingStatus string
+		var reason *string
+		err := database.QueryRow(ctx, `SELECT key.status,finding.status,finding.resolution_reason
+			FROM iam.access_keys key JOIN iam.access_findings finding
+			  ON finding.tenant_id=key.tenant_id AND finding.target_id=key.id
+			WHERE key.tenant_id=$1 AND key.id=$2 AND finding.finding_id=$3`,
+			document.Organization.ID, automaticKeyID, dispositionFindingID).Scan(&keyStatus, &findingStatus, &reason)
+		if err == nil && keyStatus == string(iamv1.AccessKeyDisabled) && findingStatus == string(iamv1.AccessFindingResolved) && reason != nil &&
+			*reason == string(iamv1.AccessFindingResolutionAutomaticDisposition) {
+			automaticApplied = true
+			break
+		}
+		if err != nil {
+			t.Fatal("read automatic access disposition", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !automaticApplied {
+		t.Fatal("explicit access disposition did not disable the eligible AccessKey")
+	}
+	var automaticKeyFacts, automaticFindingFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-key.automatically-disabled'
+		  AND event_document#>>'{target,id}'=$2 AND event_document#>>'{actor,type}'='SYSTEM'),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-finding.resolved'
+		  AND event_document#>>'{target,id}'=$3 AND event_document#>>'{actor,type}'='SYSTEM')`,
+		document.Organization.ID, automaticKeyID, dispositionFindingID).Scan(&automaticKeyFacts, &automaticFindingFacts); err != nil ||
+		automaticKeyFacts != 1 || automaticFindingFacts != 1 {
+		t.Fatal("automatic access disposition facts differ", automaticKeyFacts, automaticFindingFacts, err)
+	}
+
+	// Re-enabling the key is an explicit administrator action and creates a new
+	// target version. Let the production scanner establish a fresh condition,
+	// then stop this worker before changing the key again after disposition
+	// claim. Completion must revalidate the locked key state and leave no
+	// partial automatic effects. Keep this scenario ahead of the independent
+	// 101-role pagination fixture so scan pagination cannot mask its outcome.
+	keyStatusPath := keyPath + "/" + string(automaticKeyID) + ":set-status"
+	var reenabledKey iamv1.SetAccessKeyStatusResponse
+	call(http.MethodPost, keyStatusPath, keyManagerBearer, iamv1.SetAccessKeyStatusRequest{
+		AccessKeyResourceVersion: 2, Status: iamv1.AccessKeyEnabled, RequestID: "access-analyzer-key-reenable"},
+		http.StatusOK, &reenabledKey)
+	if reenabledKey.Key.ResourceVersion != 3 || reenabledKey.Key.Status != iamv1.AccessKeyEnabled {
+		t.Fatal("explicit AccessKey re-enable did not create a new target version")
+	}
+	if _, err := database.Exec(ctx, `UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$2`, document.Organization.ID, analyzer.ID); err != nil {
+		t.Fatal("make revalidation scan eligible", err)
+	}
+	var revalidationFindingID iamv1.AccessFindingID
+	revalidationReady := false
+	revalidationDeadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(revalidationDeadline) {
+		var status string
+		var targetVersion uint64
+		err := database.QueryRow(ctx, `SELECT finding_id,status,target_resource_version FROM iam.access_findings
+			WHERE tenant_id=$1 AND analyzer_id=$2 AND target_kind='ACCESS_KEY' AND target_id=$3 AND finding_id<>$4
+			ORDER BY condition_generation DESC LIMIT 1`, document.Organization.ID, analyzer.ID, automaticKeyID, dispositionFindingID).
+			Scan(&revalidationFindingID, &status, &targetVersion)
+		if err == nil && status == string(iamv1.AccessFindingActive) && targetVersion == reenabledKey.Key.ResourceVersion {
+			revalidationReady = true
+			break
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal("read revalidation AccessKey finding", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !revalidationReady {
+		t.Fatal("scanner did not establish a new condition for the re-enabled AccessKey")
+	}
+	stopDispositionProcess()
+	if _, err := database.Exec(ctx, `UPDATE iam.access_findings SET created_at=clock_timestamp()-interval '2 days'
+		WHERE tenant_id=$1 AND finding_id=$2`, document.Organization.ID, revalidationFindingID); err != nil {
+		t.Fatal("age revalidation Finding", err)
+	}
+	type dispositionClaimResult struct {
+		claim accessanalysis.DispositionClaim
+		found bool
+		err   error
+	}
+	claimStart := make(chan struct{})
+	claimResults := make(chan dispositionClaimResult, 2)
+	for index := range 2 {
+		index := index
+		go func() {
+			<-claimStart
+			var result dispositionClaimResult
+			for retry := range 3 {
+				result.err = analysisRepository.WithinTransaction(ctx, func(ctx context.Context, tx accessanalysis.Transaction) error {
+					var err error
+					result.claim, result.found, err = tx.ClaimDisposition(ctx,
+						fmt.Sprintf("access-disposition-revalidation-worker-%d", index),
+						fmt.Sprintf("access-disposition-revalidation-attempt-%d-%d", index, retry))
+					return err
+				})
+				if !errors.Is(result.err, accessanalysis.ErrRetryableTransaction) {
+					break
+				}
+			}
+			claimResults <- result
+		}()
+	}
+	close(claimStart)
+	var staleDispositionClaim accessanalysis.DispositionClaim
+	claimWinners := 0
+	for range 2 {
+		result := <-claimResults
+		if result.err != nil {
+			t.Fatal("race disposition claim", result.err)
+		}
+		if result.found {
+			claimWinners++
+			staleDispositionClaim = result.claim
+		}
+	}
+	if claimWinners != 1 || staleDispositionClaim.Snapshot.FindingID != revalidationFindingID {
+		t.Fatal("two disposition workers did not elect exactly one fenced claimant", claimWinners, staleDispositionClaim.Snapshot.FindingID)
+	}
+	var manuallyDisabled iamv1.SetAccessKeyStatusResponse
+	call(http.MethodPost, keyStatusPath, keyManagerBearer, iamv1.SetAccessKeyStatusRequest{
+		AccessKeyResourceVersion: reenabledKey.Key.ResourceVersion, Status: iamv1.AccessKeyDisabled,
+		RequestID: "access-analyzer-key-disable-after-claim"}, http.StatusOK, &manuallyDisabled)
+	if manuallyDisabled.Key.ResourceVersion != 4 || manuallyDisabled.Key.Status != iamv1.AccessKeyDisabled {
+		t.Fatal("manual AccessKey change after disposition claim differs")
+	}
+	staleCompletion := accessanalysis.DispositionCompletion{
+		KeyEventID:       "audit-event-revalidation-key",
+		KeyRequestID:     "access-disposition-revalidation-key",
+		FindingEventID:   "audit-event-revalidation-finding",
+		FindingRequestID: "access-disposition-revalidation-finding",
+	}
+	err = analysisRepository.WithinTransaction(ctx, func(ctx context.Context, tx accessanalysis.Transaction) error {
+		return tx.CompleteDisposition(ctx, staleDispositionClaim, staleCompletion)
+	})
+	if !errors.Is(err, accessanalysis.ErrRetryableTransaction) {
+		t.Fatal("changed AccessKey escaped disposition revalidation", err)
+	}
+	var revalidationKeyStatus, revalidationFindingStatus string
+	var revalidationReason *string
+	var revalidationCompleted bool
+	if err := database.QueryRow(ctx, `SELECT key.status,finding.status,finding.resolution_reason,
+			disposition.completed_at IS NOT NULL
+		FROM iam.access_keys key
+		JOIN iam.access_findings finding ON (finding.tenant_id,finding.target_id)=(key.tenant_id,key.id)
+		JOIN iam.access_disposition_attempts disposition ON disposition.tenant_id=finding.tenant_id AND disposition.finding_id=finding.finding_id
+		WHERE key.tenant_id=$1 AND key.id=$2 AND finding.finding_id=$3 AND disposition.attempt_id=$4`,
+		document.Organization.ID, automaticKeyID, revalidationFindingID, staleDispositionClaim.AttemptID).
+		Scan(&revalidationKeyStatus, &revalidationFindingStatus, &revalidationReason, &revalidationCompleted); err != nil ||
+		revalidationKeyStatus != string(iamv1.AccessKeyDisabled) || revalidationFindingStatus != string(iamv1.AccessFindingActive) ||
+		revalidationReason != nil || revalidationCompleted {
+		t.Fatal("failed disposition left partial state", revalidationKeyStatus, revalidationFindingStatus, revalidationReason, revalidationCompleted, err)
+	}
+
+	paginationAnalysisProcess := iamAccessAnalysisProcess(t, ctx, database, dsn)
+	defer paginationAnalysisProcess()
+
 	// Start from one role created by the public workflow, then create a bounded
 	// old-state fixture by copying its already-validated metadata/trust bytes.
 	// The production scanner and completion contract still produce every
@@ -17844,7 +18162,17 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 	call(http.MethodGet, path+"/findings?status=RESOLVED&after="+url.QueryEscape(activeFirst.NextAfter), root, nil, http.StatusUnprocessableEntity, nil)
 	var resolvedOnly iamv1.AccessFindingList
 	call(http.MethodGet, path+"/findings?status=RESOLVED", root, nil, http.StatusOK, &resolvedOnly)
-	if len(resolvedOnly.Items) != 1 || resolvedOnly.Items[0].ID != detectedFinding.ID || resolvedOnly.Items[0].Status != iamv1.AccessFindingResolved {
+	resolvedReasons := make(map[iamv1.AccessFindingID]iamv1.AccessFindingResolutionReason, len(resolvedOnly.Items))
+	for _, item := range resolvedOnly.Items {
+		if item.Status != iamv1.AccessFindingResolved {
+			t.Fatal("resolved finding directory included an active lifecycle")
+		}
+		resolvedReasons[item.ID] = item.ResolutionReason
+	}
+	if len(resolvedOnly.Items) != 4 || resolvedReasons[detectedFinding.ID] != iamv1.AccessFindingResolutionConditionCleared ||
+		resolvedReasons[keyFindingID] != iamv1.AccessFindingResolutionConditionCleared ||
+		resolvedReasons[dispositionFindingID] != iamv1.AccessFindingResolutionAutomaticDisposition ||
+		resolvedReasons[revalidationFindingID] != iamv1.AccessFindingResolutionConditionCleared {
 		t.Fatal("resolved finding filter included another lifecycle")
 	}
 	planTx, err := database.Begin(ctx)
@@ -17875,7 +18203,6 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 	if planRows.Err() != nil || !strings.Contains(plan.String(), "access_findings_status_directory_idx") {
 		t.Fatalf("access finding status directory has no usable bounded index: %v\n%s", planRows.Err(), plan.String())
 	}
-	stopAnalysisProcess()
 
 	// Two independent HTTP authority instances race the same expected version.
 	// The database CAS must commit exactly one review fact and one receipt.
@@ -17956,20 +18283,21 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 	otherRoot = localRecoveryLogin(t, handler, "access-analyzer-other-root", changedDeveloperPassword, false)
 	call(http.MethodGet, "/v1/account/access-analyzers/"+string(otherAnalyzer.ID), otherRoot, nil, http.StatusOK, &read)
 
-	var receipts, createdFacts, updatedFacts, findingReceipts, archivedFacts, unarchivedFacts int
+	var receipts, createdFacts, updatedFacts, dispositionFacts, findingReceipts, archivedFacts, unarchivedFacts int
 	if err := database.QueryRow(ctx, `SELECT
 	  (SELECT count(*) FROM iam.access_analyzer_receipts WHERE tenant_id=$1),
 	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-analyzer.created'),
 	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-analyzer.updated'),
+	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-analyzer.disposition-updated'),
 	  (SELECT count(*) FROM iam.access_finding_receipts WHERE tenant_id=$1),
 	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-finding.archived'),
 	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-finding.unarchived')`,
-		document.Organization.ID).Scan(&receipts, &createdFacts, &updatedFacts, &findingReceipts, &archivedFacts, &unarchivedFacts); err != nil {
+		document.Organization.ID).Scan(&receipts, &createdFacts, &updatedFacts, &dispositionFacts, &findingReceipts, &archivedFacts, &unarchivedFacts); err != nil {
 		t.Fatal("read access analyzer durable state", err)
 	}
-	if receipts != 4 || createdFacts != 1 || updatedFacts != 3 || findingReceipts != 3 || archivedFacts != 2 || unarchivedFacts != 1 {
-		t.Fatalf("access analyzer replay or rejection changed durable state: receipts=%d created=%d updated=%d findingReceipts=%d archived=%d unarchived=%d",
-			receipts, createdFacts, updatedFacts, findingReceipts, archivedFacts, unarchivedFacts)
+	if receipts != 5 || createdFacts != 1 || updatedFacts != 3 || dispositionFacts != 1 || findingReceipts != 3 || archivedFacts != 2 || unarchivedFacts != 1 {
+		t.Fatalf("access analyzer replay or rejection changed durable state: receipts=%d created=%d updated=%d disposition=%d findingReceipts=%d archived=%d unarchived=%d",
+			receipts, createdFacts, updatedFacts, dispositionFacts, findingReceipts, archivedFacts, unarchivedFacts)
 	}
 	restrictedConfig := config.Copy()
 	restrictedConfig.User, restrictedConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
@@ -18020,6 +18348,101 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 	assertReceiptMutationRejected("UPDATE iam.access_finding_receipts SET completed_at=completed_at+interval '1 second' WHERE tenant_id=$1", document.Organization.ID)
 	assertReceiptMutationRejected("DELETE FROM iam.access_finding_receipts WHERE tenant_id=$1", document.Organization.ID)
 	assertReceiptMutationRejected("TRUNCATE iam.access_finding_receipts")
+
+	// Automatic disposition is intentionally narrower than ordinary AccessKey
+	// administration. The Account root and any USER with an unrevoked platform
+	// attachment remain protected even when their keys satisfy the same observed
+	// inactivity rule; absence of a claim is itself the fail-closed result.
+	var platformUser iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "access-analyzer-platform", "displayName": "Protected platform user",
+		"initialPassword": initialDeveloperPassword, "requestId": "access-analyzer-platform-create"}, http.StatusCreated, &platformUser)
+	platformBearer := localRecoveryLogin(t, handler, platformUser.LoginName+"@"+string(platformUser.AccountID), initialDeveloperPassword, true)
+	platformBearer = localRecoveryChangePassword(t, handler, platformBearer, initialDeveloperPassword, changedDeveloperPassword)
+	rootKeyPath := "/v1/users/" + string(document.Administrator.ID) + "/access-keys"
+	call(http.MethodGet, rootKeyPath, root, nil, http.StatusForbidden, nil)
+	createProtectedKey := func(user iamv1.PrincipalID, request string) iamv1.AccessKeyID {
+		t.Helper()
+		protectedPath := "/v1/users/" + string(user) + "/access-keys"
+		var protectedDirectory iamv1.AccessKeyList
+		call(http.MethodGet, protectedPath, keyManagerBearer, nil, http.StatusOK, &protectedDirectory)
+		var protected iamv1.CreateAccessKeyResponse
+		call(http.MethodPost, protectedPath, keyManagerBearer, iamv1.CreateAccessKeyRequest{
+			UserResourceVersion: protectedDirectory.UserResourceVersion,
+			NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: request},
+			http.StatusCreated, &protected)
+		if iamv1.ValidateCreateAccessKeyResponse(protected) != nil || protected.Key.UserID != user || protected.Key.Status != iamv1.AccessKeyEnabled {
+			t.Fatal("protected AccessKey fixture differs", user)
+		}
+		return protected.Key.ID
+	}
+	platformKeyID := createProtectedKey(platformUser.ID, "access-analyzer-platform-key")
+	var platformAttachment iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(platformUser.ID)},
+		PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "access-analyzer-platform-protect"},
+		http.StatusOK, &platformAttachment)
+	call(http.MethodGet, "/v1/auth/me", platformBearer, nil, http.StatusUnauthorized, nil)
+	if _, err := database.Exec(ctx, `ALTER TABLE iam.access_keys DISABLE TRIGGER access_key_transition`); err != nil {
+		t.Fatal("open bounded protected AccessKey clock fixture", err)
+	}
+	protectedKeyGuardRestored := false
+	defer func() {
+		if !protectedKeyGuardRestored {
+			if _, err := database.Exec(context.Background(), `ALTER TABLE iam.access_keys ENABLE ALWAYS TRIGGER access_key_transition`); err != nil {
+				t.Error("restore protected AccessKey transition guard", err)
+			}
+		}
+	}()
+	if _, err := database.Exec(ctx, `UPDATE iam.access_keys
+		SET created_at=transaction_timestamp()-interval '31 days',updated_at=transaction_timestamp()-interval '31 days'
+		WHERE tenant_id=$1 AND id=$2`, document.Organization.ID, platformKeyID); err != nil {
+		t.Fatal("backdate protected AccessKeys", err)
+	}
+	if _, err := database.Exec(ctx, `ALTER TABLE iam.access_keys ENABLE ALWAYS TRIGGER access_key_transition`); err != nil {
+		t.Fatal("restore protected AccessKey transition guard", err)
+	}
+	protectedKeyGuardRestored = true
+	if _, err := database.Exec(ctx, `UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$2`, document.Organization.ID, analyzer.ID); err != nil {
+		t.Fatal("make protected AccessKey scan eligible", err)
+	}
+	protectedFindingDeadline := time.Now().Add(10 * time.Second)
+	for {
+		var protectedFindings int
+		if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.access_findings
+			WHERE tenant_id=$1 AND analyzer_id=$2 AND target_kind='ACCESS_KEY' AND target_id=$3 AND status='ACTIVE'`,
+			document.Organization.ID, analyzer.ID, platformKeyID).Scan(&protectedFindings); err != nil {
+			t.Fatal("read protected AccessKey Findings", err)
+		}
+		if protectedFindings == 1 {
+			break
+		}
+		if time.Now().After(protectedFindingDeadline) {
+			t.Fatal("scanner did not observe both protected AccessKeys", protectedFindings)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := database.Exec(ctx, `UPDATE iam.access_findings SET created_at=clock_timestamp()-interval '2 days'
+		WHERE tenant_id=$1 AND analyzer_id=$2 AND target_kind='ACCESS_KEY' AND target_id=$3 AND status='ACTIVE'`,
+		document.Organization.ID, analyzer.ID, platformKeyID); err != nil {
+		t.Fatal("age protected AccessKey Findings", err)
+	}
+	time.Sleep(2200 * time.Millisecond)
+	var protectedEnabled, protectedAttempts, protectedAutomaticFacts, platformBindings int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.access_keys WHERE tenant_id=$1 AND id=$2 AND status='ENABLED'),
+		(SELECT count(*) FROM iam.access_disposition_attempts attempt JOIN iam.access_findings finding
+		  ON (finding.tenant_id,finding.finding_id)=(attempt.tenant_id,attempt.finding_id)
+		  WHERE finding.tenant_id=$1 AND finding.target_id=$2),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-key.automatically-disabled'
+		  AND event_document#>>'{target,id}'=$2),
+		(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND target_kind='USER' AND target_id=$3
+		  AND policy_id='system.platform-operator' AND revoked_at IS NULL)`,
+		document.Organization.ID, platformKeyID, platformUser.ID).
+		Scan(&protectedEnabled, &protectedAttempts, &protectedAutomaticFacts, &platformBindings); err != nil ||
+		protectedEnabled != 1 || protectedAttempts != 0 || protectedAutomaticFacts != 0 || platformBindings != 1 {
+		t.Fatal("automatic disposition crossed a protected identity boundary", protectedEnabled, protectedAttempts, protectedAutomaticFacts, platformBindings, err)
+	}
 
 	applyIAMSchema(t, ctx, database)
 	var afterReplay iamv1.AccessAnalyzer

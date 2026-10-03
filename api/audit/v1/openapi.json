@@ -64,10 +64,12 @@
           "iam.security-report.download-started",
           "iam.access-analyzer.created",
           "iam.access-analyzer.updated",
+          "iam.access-analyzer.disposition-updated",
           "iam.access-finding.detected",
           "iam.access-finding.resolved",
           "iam.access-finding.archived",
           "iam.access-finding.unarchived",
+          "iam.access-key.automatically-disabled",
           "iam.policy.created",
           "iam.policy-version.created",
           "iam.policy-version.deleted",
@@ -1482,6 +1484,32 @@
                 "event": {
                   "properties": {
                     "action": {
+                      "const": "iam.access-analyzer.disposition-updated"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
                       "const": "iam.access-finding.detected"
                     }
                   },
@@ -1561,6 +1589,32 @@
                   "properties": {
                     "action": {
                       "const": "iam.access-finding.unarchived"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-key.automatically-disabled"
                     }
                   },
                   "required": [
@@ -5508,6 +5562,52 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "iam.access-analyzer.disposition-updated"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCESS_ANALYZER"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "iam.access-finding.detected"
                 }
               },
@@ -5691,6 +5791,55 @@
               "required": [
                 "tenantId",
                 "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.access-key.automatically-disabled"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "id": {
+                      "const": "iam.access-analyzer"
+                    },
+                    "type": {
+                      "const": "SYSTEM"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCESS_KEY"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
               ]
             }
           },

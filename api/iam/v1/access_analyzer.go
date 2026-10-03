@@ -11,6 +11,8 @@ type AccessAnalyzerType string
 type AccessAnalyzerStatus string
 type AccessFindingType string
 type AccessFindingStatus string
+type AccessDispositionMode string
+type AccessFindingResolutionReason string
 
 // AccessFindingStatusFilter is a closed directory filter. ALL is a query
 // value, never a persisted finding state.
@@ -32,6 +34,12 @@ const (
 	AccessFindingArchived AccessFindingStatus = "ARCHIVED"
 	AccessFindingResolved AccessFindingStatus = "RESOLVED"
 
+	AccessDispositionReviewOnly        AccessDispositionMode = "REVIEW_ONLY"
+	AccessDispositionDisableAccessKeys AccessDispositionMode = "DISABLE_UNUSED_ACCESS_KEYS"
+
+	AccessFindingResolutionConditionCleared     AccessFindingResolutionReason = "CONDITION_CLEARED"
+	AccessFindingResolutionAutomaticDisposition AccessFindingResolutionReason = "AUTOMATIC_DISPOSITION"
+
 	AccessFindingStatusAll AccessFindingStatusFilter = "ALL"
 
 	AccessObservationComplete             AccessObservationCoverageState = "COMPLETE"
@@ -47,6 +55,10 @@ const (
 	MinUnusedAccessAgeDays     uint16 = 1
 	DefaultUnusedAccessAgeDays uint16 = 90
 	MaxUnusedAccessAgeDays     uint16 = 365
+
+	MinAccessDispositionDelayDays     uint16 = 1
+	DefaultAccessDispositionDelayDays uint16 = 7
+	MaxAccessDispositionDelayDays     uint16 = 30
 )
 
 var accessObservationSources = [...]string{
@@ -65,16 +77,25 @@ func AccessObservationCoverageSources() []string {
 // AccessAnalyzer is Account-owned governance configuration. It is neither a
 // Policy nor an authorization decision and cannot be used as a write permit.
 type AccessAnalyzer struct {
-	APIVersion          string               `json:"apiVersion"`
-	Kind                string               `json:"kind"`
-	ID                  AccessAnalyzerID     `json:"id"`
-	AccountID           AccountID            `json:"accountId"`
-	Type                AccessAnalyzerType   `json:"type"`
-	Status              AccessAnalyzerStatus `json:"status"`
-	UnusedAccessAgeDays uint16               `json:"unusedAccessAgeDays"`
-	ResourceVersion     uint64               `json:"resourceVersion"`
-	CreatedAt           time.Time            `json:"createdAt"`
-	UpdatedAt           time.Time            `json:"updatedAt"`
+	APIVersion          string                `json:"apiVersion"`
+	Kind                string                `json:"kind"`
+	ID                  AccessAnalyzerID      `json:"id"`
+	AccountID           AccountID             `json:"accountId"`
+	Type                AccessAnalyzerType    `json:"type"`
+	Status              AccessAnalyzerStatus  `json:"status"`
+	UnusedAccessAgeDays uint16                `json:"unusedAccessAgeDays"`
+	Disposition         AccessDispositionRule `json:"disposition"`
+	ResourceVersion     uint64                `json:"resourceVersion"`
+	CreatedAt           time.Time             `json:"createdAt"`
+	UpdatedAt           time.Time             `json:"updatedAt"`
+}
+
+// AccessDispositionRule is an Account-owned opt-in rule. It is not authority,
+// a cached IAM decision or permission for a finding to mutate its target.
+// REVIEW_ONLY is the default and has no delay because it has no write effect.
+type AccessDispositionRule struct {
+	Mode             AccessDispositionMode `json:"mode"`
+	FindingDelayDays uint16                `json:"findingDelayDays"`
 }
 
 type AccessObservationCoverage struct {
@@ -89,28 +110,29 @@ type AccessObservationCoverage struct {
 // target. TargetResourceVersion and ActivityRevision make stale evidence
 // explicit to a later lifecycle command.
 type AccessFinding struct {
-	APIVersion            string              `json:"apiVersion"`
-	Kind                  string              `json:"kind"`
-	ID                    AccessFindingID     `json:"id"`
-	AccountID             AccountID           `json:"accountId"`
-	AnalyzerID            AccessAnalyzerID    `json:"analyzerId"`
-	AnalyzerRevision      uint64              `json:"analyzerRevision"`
-	Type                  AccessFindingType   `json:"type"`
-	Status                AccessFindingStatus `json:"status"`
-	Target                ResourceReference   `json:"target"`
-	TargetResourceVersion uint64              `json:"targetResourceVersion"`
-	ConditionGeneration   uint64              `json:"conditionGeneration"`
-	ActivityRevision      uint64              `json:"activityRevision"`
-	RecoveryEpoch         uint64              `json:"recoveryEpoch"`
-	RecoveryCommandID     string              `json:"recoveryCommandId,omitempty"`
-	RecoveryCompletedAt   *time.Time          `json:"recoveryCompletedAt,omitempty"`
-	WindowStartedAt       time.Time           `json:"windowStartedAt"`
-	ObservedAt            time.Time           `json:"observedAt"`
-	LastActivityAt        *time.Time          `json:"lastActivityAt,omitempty"`
-	ResourceVersion       uint64              `json:"resourceVersion"`
-	CreatedAt             time.Time           `json:"createdAt"`
-	UpdatedAt             time.Time           `json:"updatedAt"`
-	ResolvedAt            *time.Time          `json:"resolvedAt,omitempty"`
+	APIVersion            string                        `json:"apiVersion"`
+	Kind                  string                        `json:"kind"`
+	ID                    AccessFindingID               `json:"id"`
+	AccountID             AccountID                     `json:"accountId"`
+	AnalyzerID            AccessAnalyzerID              `json:"analyzerId"`
+	AnalyzerRevision      uint64                        `json:"analyzerRevision"`
+	Type                  AccessFindingType             `json:"type"`
+	Status                AccessFindingStatus           `json:"status"`
+	Target                ResourceReference             `json:"target"`
+	TargetResourceVersion uint64                        `json:"targetResourceVersion"`
+	ConditionGeneration   uint64                        `json:"conditionGeneration"`
+	ActivityRevision      uint64                        `json:"activityRevision"`
+	RecoveryEpoch         uint64                        `json:"recoveryEpoch"`
+	RecoveryCommandID     string                        `json:"recoveryCommandId,omitempty"`
+	RecoveryCompletedAt   *time.Time                    `json:"recoveryCompletedAt,omitempty"`
+	WindowStartedAt       time.Time                     `json:"windowStartedAt"`
+	ObservedAt            time.Time                     `json:"observedAt"`
+	LastActivityAt        *time.Time                    `json:"lastActivityAt,omitempty"`
+	ResourceVersion       uint64                        `json:"resourceVersion"`
+	CreatedAt             time.Time                     `json:"createdAt"`
+	UpdatedAt             time.Time                     `json:"updatedAt"`
+	ResolvedAt            *time.Time                    `json:"resolvedAt,omitempty"`
+	ResolutionReason      AccessFindingResolutionReason `json:"resolutionReason,omitempty"`
 }
 
 type AccessAnalyzerList struct {
@@ -152,6 +174,12 @@ type UpdateAccessAnalyzerRequest struct {
 	RequestID           string               `json:"requestId"`
 }
 
+type SetAccessDispositionRequest struct {
+	Disposition     AccessDispositionRule `json:"disposition"`
+	ResourceVersion uint64                `json:"resourceVersion"`
+	RequestID       string                `json:"requestId"`
+}
+
 // AccessFindingDispositionRequest supplies the concurrency and idempotency
 // preconditions for a human review transition. The route selects ARCHIVED or
 // ACTIVE; callers cannot use this contract to manufacture RESOLVED findings.
@@ -167,6 +195,7 @@ func ValidateAccessAnalyzer(value AccessAnalyzer) error {
 		value.Type != AccessAnalyzerUnusedAccess ||
 		(value.Status != AccessAnalyzerActive && value.Status != AccessAnalyzerDisabled) ||
 		validateUnusedAccessAge(value.UnusedAccessAgeDays) != nil ||
+		ValidateAccessDispositionRule(value.Disposition) != nil ||
 		validatePositiveVersion(value.ResourceVersion) != nil ||
 		validateTime("accessAnalyzer.createdAt", value.CreatedAt) != nil ||
 		validateTime("accessAnalyzer.updatedAt", value.UpdatedAt) != nil || value.UpdatedAt.Before(value.CreatedAt) {
@@ -252,12 +281,13 @@ func ValidateAccessFinding(value AccessFinding) error {
 	}
 	switch value.Status {
 	case AccessFindingActive, AccessFindingArchived:
-		if value.ResolvedAt != nil {
+		if value.ResolvedAt != nil || value.ResolutionReason != "" {
 			return errors.New("unresolved access finding has a resolution time")
 		}
 	case AccessFindingResolved:
 		if value.ResolvedAt == nil || validateTime("accessFinding.resolvedAt", *value.ResolvedAt) != nil ||
-			value.ResolvedAt.Before(value.CreatedAt) || !value.ResolvedAt.Equal(value.UpdatedAt) || value.ObservedAt != value.UpdatedAt {
+			value.ResolvedAt.Before(value.CreatedAt) || !value.ResolvedAt.Equal(value.UpdatedAt) || value.ObservedAt != value.UpdatedAt ||
+			(value.ResolutionReason != AccessFindingResolutionConditionCleared && value.ResolutionReason != AccessFindingResolutionAutomaticDisposition) {
 			return errors.New("resolved access finding is invalid")
 		}
 	default:
@@ -307,6 +337,30 @@ func ValidateUpdateAccessAnalyzerRequest(value UpdateAccessAnalyzerRequest) erro
 		validateUnusedAccessAge(value.UnusedAccessAgeDays) != nil || validatePositiveVersion(value.ResourceVersion) != nil ||
 		ValidateID("requestId", value.RequestID) != nil {
 		return errors.New("access analyzer update request is invalid")
+	}
+	return nil
+}
+
+func ValidateAccessDispositionRule(value AccessDispositionRule) error {
+	switch value.Mode {
+	case AccessDispositionReviewOnly:
+		if value.FindingDelayDays != 0 {
+			return errors.New("review-only access disposition has a write delay")
+		}
+	case AccessDispositionDisableAccessKeys:
+		if value.FindingDelayDays < MinAccessDispositionDelayDays || value.FindingDelayDays > MaxAccessDispositionDelayDays {
+			return errors.New("access disposition delay is out of range")
+		}
+	default:
+		return errors.New("access disposition mode is invalid")
+	}
+	return nil
+}
+
+func ValidateSetAccessDispositionRequest(value SetAccessDispositionRequest) error {
+	if ValidateAccessDispositionRule(value.Disposition) != nil || validatePositiveVersion(value.ResourceVersion) != nil ||
+		ValidateID("requestId", value.RequestID) != nil {
+		return errors.New("access disposition request is invalid")
 	}
 	return nil
 }

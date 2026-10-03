@@ -442,7 +442,7 @@ func TestServiceRoleConsentFactsRequireTenantUserDecisions(t *testing.T) {
 }
 
 func TestAccessAnalyzerFactsRequireTenantUserDecisions(t *testing.T) {
-	for _, action := range []Action{ActionIAMAccessAnalyzerCreated, ActionIAMAccessAnalyzerUpdated} {
+	for _, action := range []Action{ActionIAMAccessAnalyzerCreated, ActionIAMAccessAnalyzerUpdated, ActionIAMAccessAnalyzerDispositionUpdated} {
 		event := Event{
 			APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-access-analyzer",
 			TenantID: "account-example", Actor: ActorReference{Type: ActorUser, ID: "user-example"},
@@ -471,6 +471,35 @@ func TestAccessAnalyzerFactsRequireTenantUserDecisions(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAutomaticAccessKeyDispositionRequiresTenantAnalyzerSystemActor(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-access-key-disposition",
+		TenantID: "account-example", Actor: ActorReference{Type: ActorSystem, ID: "iam.access-analyzer"},
+		Action: ActionIAMAccessKeyAutomaticallyDisabled, Target: TargetReference{Kind: TargetAccessKey, ID: "key-example"}, Result: ResultSucceeded,
+		RequestDigest: "sha256:" + strings.Repeat("3", 64), RequestID: "disposition-example", CorrelationID: "disposition-example",
+		OccurredAt: time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC),
+	}
+	if err := ValidateEventForSource(SourceIAM, event); err != nil {
+		t.Fatal("valid automatic access key disposition fact was rejected", err)
+	}
+	for name, mutate := range map[string]func(*Event){
+		"user actor":       func(value *Event) { value.Actor = ActorReference{Type: ActorUser, ID: "user-example"} },
+		"wrong system":     func(value *Event) { value.Actor.ID = "iam" },
+		"decision":         func(value *Event) { value.IAMDecisionID = "decision-example" },
+		"installation":     func(value *Event) { value.InstallationID, value.TenantID = "mxi-11111111111111111111111111111111", "" },
+		"finding target":   func(value *Event) { value.Target.Kind = TargetAccessFinding },
+		"different result": func(value *Event) { value.Result = ResultDenied },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := event
+			mutate(&changed)
+			if ValidateEventForSource(SourceIAM, changed) == nil {
+				t.Fatal("automatic access key disposition accepted forged authority")
+			}
+		})
 	}
 }
 

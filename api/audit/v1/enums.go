@@ -73,10 +73,12 @@ const (
 	ActionIAMSecurityReportDownloadStarted          Action = "iam.security-report.download-started"
 	ActionIAMAccessAnalyzerCreated                  Action = "iam.access-analyzer.created"
 	ActionIAMAccessAnalyzerUpdated                  Action = "iam.access-analyzer.updated"
+	ActionIAMAccessAnalyzerDispositionUpdated       Action = "iam.access-analyzer.disposition-updated"
 	ActionIAMAccessFindingDetected                  Action = "iam.access-finding.detected"
 	ActionIAMAccessFindingResolved                  Action = "iam.access-finding.resolved"
 	ActionIAMAccessFindingArchived                  Action = "iam.access-finding.archived"
 	ActionIAMAccessFindingUnarchived                Action = "iam.access-finding.unarchived"
+	ActionIAMAccessKeyAutomaticallyDisabled         Action = "iam.access-key.automatically-disabled"
 	ActionIAMGroupCreated                           Action = "iam.group.created"
 	ActionIAMPolicyCreated                          Action = "iam.policy.created"
 	ActionIAMPolicyVersionCreated                   Action = "iam.policy-version.created"
@@ -283,10 +285,12 @@ var allActions = []Action{
 	ActionIAMSecurityReportDownloadStarted,
 	ActionIAMAccessAnalyzerCreated,
 	ActionIAMAccessAnalyzerUpdated,
+	ActionIAMAccessAnalyzerDispositionUpdated,
 	ActionIAMAccessFindingDetected,
 	ActionIAMAccessFindingResolved,
 	ActionIAMAccessFindingArchived,
 	ActionIAMAccessFindingUnarchived,
+	ActionIAMAccessKeyAutomaticallyDisabled,
 	ActionIAMPolicyCreated,
 	ActionIAMPolicyVersionCreated,
 	ActionIAMPolicyVersionDeleted,
@@ -428,10 +432,12 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMSecurityReportDownloadStarted:       {Source: SourceIAM, Target: TargetSecurityReport, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessAnalyzerCreated:               {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessAnalyzerUpdated:               {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessAnalyzerDispositionUpdated:    {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessFindingDetected:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, SystemActorID: "iam.access-analyzer"},
 	ActionIAMAccessFindingResolved:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, SystemActorID: "iam.access-analyzer"},
 	ActionIAMAccessFindingArchived:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessFindingUnarchived:             {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyAutomaticallyDisabled:      {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, SystemActorID: "iam.access-analyzer"},
 	ActionIAMPolicyCreated: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},

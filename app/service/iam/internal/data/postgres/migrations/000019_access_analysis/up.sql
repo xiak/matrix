@@ -340,6 +340,40 @@ BEGIN
     IF actual_count<>expected_count OR actual_count<>(SELECT count(DISTINCT item->>'findingId') FROM jsonb_array_elements(result->'resolutions') item) THEN
       RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='access analysis resolutions differ'; END IF;
 
+    -- A configuration or target revision may end an unresolved condition and
+    -- establish its successor in the same completed scan. Resolve the exact
+    -- old generation first so the one-unresolved-condition invariant remains
+    -- continuously enforced; this ordering never turns a stale Finding into
+    -- an actionable Finding under a newly enabled disposition rule.
+    FOR resolution IN SELECT value FROM jsonb_array_elements(result->'resolutions') LOOP
+      IF jsonb_typeof(resolution)<>'object' OR NOT resolution ?& ARRAY['findingId','expectedResourceVersion','event']
+        OR resolution-ARRAY['findingId','expectedResourceVersion','event']<>'{}'::jsonb
+        OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements(expected->'resolutions') item
+          WHERE item->>'findingId'=resolution->>'findingId'
+            AND (item->>'resourceVersion')::bigint=(resolution->>'expectedResourceVersion')::bigint) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='access analysis resolution evidence differs'; END IF;
+      event:=resolution->'event';
+      PERFORM iam.assert_audit_event(event,tenant,'iam.access-finding.resolved','ACCESS_FINDING',resolution->>'findingId','SUCCEEDED');
+      expected_event_digest:='sha256:'||encode(sha256(convert_to('matrix.iam.access-analysis-event.v1|'
+        ||octet_length(event->>'action')||':'||(event->>'action')||'|'
+        ||octet_length(attempt)||':'||attempt||'|'
+        ||octet_length(resolution->>'findingId')||':'||(resolution->>'findingId')||'|'
+        ||octet_length(original.snapshot_digest)||':'||original.snapshot_digest||'|','UTF8')),'hex');
+      IF event->'actor' IS DISTINCT FROM jsonb_build_object('type','SYSTEM','id','iam.access-analyzer')
+        OR event ?| ARRAY['iamDecisionId','installationId','operationId'] OR event->>'correlationId' IS DISTINCT FROM attempt
+        OR (event->>'occurredAt')::timestamptz IS DISTINCT FROM (current_snapshot->>'observedAt')::timestamptz
+        OR event->>'requestDigest' IS DISTINCT FROM expected_event_digest THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='access analysis resolution fact differs'; END IF;
+      UPDATE iam.access_findings f SET status='RESOLVED',resource_version=f.resource_version+1,
+        observed_at=(current_snapshot->>'observedAt')::timestamptz,updated_at=(current_snapshot->>'observedAt')::timestamptz,
+        resolved_at=(current_snapshot->>'observedAt')::timestamptz
+        WHERE f.tenant_id=tenant AND f.analyzer_id=original.analyzer_id AND f.finding_id=resolution->>'findingId'
+          AND f.status<>'RESOLVED' AND f.resource_version=(resolution->>'expectedResourceVersion')::bigint;
+      IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='access finding changed'; END IF;
+      INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+        VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
+    END LOOP;
+
     FOR detection IN SELECT value FROM jsonb_array_elements(result->'detections') LOOP
       IF jsonb_typeof(detection)<>'object' OR NOT detection ?& ARRAY['finding','event'] OR detection-ARRAY['finding','event']<>'{}'::jsonb THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='access analysis detection shape differs'; END IF;
@@ -382,35 +416,6 @@ BEGIN
           finding->>'recoveryCommandId',(finding->>'recoveryCompletedAt')::timestamptz,(finding->>'windowStartedAt')::timestamptz,
           (finding->>'observedAt')::timestamptz,(finding->>'lastActivityAt')::timestamptz,1,
           (finding->>'createdAt')::timestamptz,(finding->>'updatedAt')::timestamptz);
-      INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
-        VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
-    END LOOP;
-
-    FOR resolution IN SELECT value FROM jsonb_array_elements(result->'resolutions') LOOP
-      IF jsonb_typeof(resolution)<>'object' OR NOT resolution ?& ARRAY['findingId','expectedResourceVersion','event']
-        OR resolution-ARRAY['findingId','expectedResourceVersion','event']<>'{}'::jsonb
-        OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements(expected->'resolutions') item
-          WHERE item->>'findingId'=resolution->>'findingId'
-            AND (item->>'resourceVersion')::bigint=(resolution->>'expectedResourceVersion')::bigint) THEN
-        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='access analysis resolution evidence differs'; END IF;
-      event:=resolution->'event';
-      PERFORM iam.assert_audit_event(event,tenant,'iam.access-finding.resolved','ACCESS_FINDING',resolution->>'findingId','SUCCEEDED');
-      expected_event_digest:='sha256:'||encode(sha256(convert_to('matrix.iam.access-analysis-event.v1|'
-        ||octet_length(event->>'action')||':'||(event->>'action')||'|'
-        ||octet_length(attempt)||':'||attempt||'|'
-        ||octet_length(resolution->>'findingId')||':'||(resolution->>'findingId')||'|'
-        ||octet_length(original.snapshot_digest)||':'||original.snapshot_digest||'|','UTF8')),'hex');
-      IF event->'actor' IS DISTINCT FROM jsonb_build_object('type','SYSTEM','id','iam.access-analyzer')
-        OR event ?| ARRAY['iamDecisionId','installationId','operationId'] OR event->>'correlationId' IS DISTINCT FROM attempt
-        OR (event->>'occurredAt')::timestamptz IS DISTINCT FROM (current_snapshot->>'observedAt')::timestamptz
-        OR event->>'requestDigest' IS DISTINCT FROM expected_event_digest THEN
-        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='access analysis resolution fact differs'; END IF;
-      UPDATE iam.access_findings f SET status='RESOLVED',resource_version=f.resource_version+1,
-        observed_at=(current_snapshot->>'observedAt')::timestamptz,updated_at=(current_snapshot->>'observedAt')::timestamptz,
-        resolved_at=(current_snapshot->>'observedAt')::timestamptz
-        WHERE f.tenant_id=tenant AND f.analyzer_id=original.analyzer_id AND f.finding_id=resolution->>'findingId'
-          AND f.status<>'RESOLVED' AND f.resource_version=(resolution->>'expectedResourceVersion')::bigint;
-      IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='access finding changed'; END IF;
       INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
         VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
     END LOOP;
