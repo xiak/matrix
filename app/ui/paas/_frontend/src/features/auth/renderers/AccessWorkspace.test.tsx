@@ -4039,6 +4039,18 @@ describe("CAM-style access workspace", () => {
     expect(state.settings.userSsoEnabled).toBe(false);
     expect(state.providers).toHaveLength(1);
   });
+  it("explains bilateral cross-account collaboration without inventing an invitation command", async () => {
+    const { user, repository } = await open("federations");
+    await user.click(await screen.findByRole("tab", { name: "跨账号协作" }));
+    const preview = screen.getByRole("region", { name: "跨账号协作信任链路" });
+    expect(within(preview).getByText(/不发送邀请、不创建账号关系、不签发会话/)).toBeTruthy();
+    expect(within(preview).getByText("org-xiak")).toBeTruthy();
+    expect(within(preview).getByText("外部账号确认主体与意图")).toBeTruthy();
+    expect(within(preview).getByText(/Role trust 与外部主体的承担权限都必须满足/)).toBeTruthy();
+    expect(within(preview).getByText(/任一账号撤销协作后/)).toBeTruthy();
+    expect(within(preview).queryByRole("button")).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
   it("keeps the credential snapshot separate from the immutable account security report", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
     const workspace = await extension.read("preview");

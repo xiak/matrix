@@ -5045,7 +5045,49 @@
     "enterpriseMock": "This demo does not scan QR codes, install WeCom apps, connect directories or send invitations. Use mock enterprise information only.",
     "importHint": "Import creates mock users in this preview session with no permissions. Assign access afterward through users or groups.",
     "backToEnterpriseDirectory": "Back to enterprise member access",
-    "backToEnterpriseDetails": "Back to enterprise details"
+    "backToEnterpriseDetails": "Back to enterprise details",
+    "externalCollaborationSections": "External identities and collaboration",
+    "enterpriseMemberAccess": "Enterprise member access",
+    "crossAccountCollaboration": {
+      "tab": "Cross-account collaboration",
+      "title": "Cross-account collaboration trust path",
+      "description": "Let an identity from another independent account access resources here without transferring resource ownership.",
+      "concept": "Concept preview",
+      "boundary": "IAM-EXT-06 concept preview · No backend contract exists yet for cross-account invitations, external-subject confirmation, trust, role assumption, or revocation. This page sends no invitation, creates no account relationship, issues no session, and generates no request ID.",
+      "resourceOwner": "Resource-owning account",
+      "state": "Integration state",
+      "notConnected": "Backend not connected",
+      "prerequisite": "Real acceptance prerequisite",
+      "twoAccounts": "Two independent real accounts and a verifiable external subject",
+      "required": "Must be closed",
+      "revocationBoundary": "Revocation by either account must stop new role assumptions. The fixed backend contract must still define whether existing short-lived sessions are revoked or expire. This preview does not assume that deleting one local record completes bilateral revocation.",
+      "steps": {
+        "invite": {
+          "title": "Resource account starts a constrained invitation",
+          "detail": "An invitation expresses collaboration intent and the target external account; it grants no resource permission. A real implementation must prevent substitution of the account identifier, external ID, or target scope."
+        },
+        "accept": {
+          "title": "External account confirms the subject and intent",
+          "detail": "The recipient must confirm the original subject and invitation in its own account context. One local record cannot impersonate consent by the other side."
+        },
+        "trust": {
+          "title": "Resource account establishes exact Role trust",
+          "detail": "Trust must bind the confirmed external account and subject. It cannot reuse the same-account User selector or allow arbitrary accounts, wildcard subjects, or a wrong external ID."
+        },
+        "authorize": {
+          "title": "Both sides authorize independently",
+          "detail": "The resource account Role trust and the external subject's permission to assume it must both pass; either side alone is insufficient."
+        },
+        "session": {
+          "title": "Issue an auditable short-lived session",
+          "detail": "The session must retain the source account, original subject, and target Role. Resources remain owned by this account; the collaborator does not become its root identity or resource owner."
+        },
+        "revoke": {
+          "title": "Either side can revoke collaboration",
+          "detail": "Revocation must stop new assumptions and leave a bilateral auditable fact. The frontend cannot guess how an existing session terminates."
+        }
+      }
+    }
   },
   "PolicyWorkspace": {
     "createCustomPolicy": "Create custom policy",

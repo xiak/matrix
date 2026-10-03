@@ -5066,7 +5066,49 @@
     "enterpriseMock": "演示不会扫码、安装企业微信应用、连接通讯录或发送邀请。请只使用模拟企业信息。",
     "importHint": "导入只创建当前体验会话中的模拟用户，默认不授予任何权限。之后在用户或用户组中授权。",
     "backToEnterpriseDirectory": "返回企业成员接入",
-    "backToEnterpriseDetails": "返回企业详情"
+    "backToEnterpriseDetails": "返回企业详情",
+    "externalCollaborationSections": "外部身份与协作",
+    "enterpriseMemberAccess": "企业成员接入",
+    "crossAccountCollaboration": {
+      "tab": "跨账号协作",
+      "title": "跨账号协作信任链路",
+      "description": "把另一个独立账号中的身份接入当前账号资源，但不转移资源所有权。",
+      "concept": "概念预览",
+      "boundary": "IAM-EXT-06 概念预览 · 当前没有跨账号邀请、外部主体确认、信任、角色承担或撤销后端。本页不发送邀请、不创建账号关系、不签发会话，也不生成请求号。",
+      "resourceOwner": "资源所有账号",
+      "state": "接入状态",
+      "notConnected": "未接入后端",
+      "prerequisite": "真实验收前提",
+      "twoAccounts": "两个独立真实账号与可核对的外部主体",
+      "required": "必须闭合",
+      "revocationBoundary": "任一账号撤销协作后，都必须停止新的角色承担；已有短期会话的撤销或到期语义仍需由固定后端契约明确。本预览不假定删除一侧记录即可完成双边撤销。",
+      "steps": {
+        "invite": {
+          "title": "资源账号发起受限邀请",
+          "detail": "邀请只表达协作意图和目标外部账号，不授予资源权限；真实实现必须防止账号标识、外部 ID 或目标范围被替换。"
+        },
+        "accept": {
+          "title": "外部账号确认主体与意图",
+          "detail": "接受方必须在自己的账号上下文确认原始主体和邀请内容。单边创建本地记录不能冒充对方同意。"
+        },
+        "trust": {
+          "title": "资源账号建立精确 Role 信任",
+          "detail": "信任必须绑定已确认的外部账号与主体；不能复用同账号 User 选择器，也不能允许任意账号、通配主体或错误外部 ID。"
+        },
+        "authorize": {
+          "title": "两侧分别完成授权",
+          "detail": "资源账号的 Role trust 与外部主体的承担权限都必须满足；任一侧单独允许都不能得到访问。"
+        },
+        "session": {
+          "title": "签发可审计的短期会话",
+          "detail": "会话必须保留来源账号、原始主体和目标 Role，资源仍归当前账号所有；协作者不会因此成为主账号或资源所有者。"
+        },
+        "revoke": {
+          "title": "任一侧都能撤销协作",
+          "detail": "撤销必须关闭新的承担并留下双边可核对的审计事实；旧会话如何终止不能由前端自行猜测。"
+        }
+      }
+    }
   },
   "PolicyWorkspace": {
     "createCustomPolicy": "新建自定义策略",

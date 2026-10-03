@@ -1,10 +1,11 @@
 "use client";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, EmptyState, FormField, Input, Table, Typography } from "@ui/xiak";
+import { Alert, Badge, Button, Card, EmptyState, FormField, Input, Table, Tabs, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccessWorkspace, EnterpriseAccount } from "../domain/accessWorkspace";
 import { WorkspaceCollection, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceSelection } from "./AccessWorkspaceUi";
+import { CrossAccountCollaborationPreview } from "./CrossAccountCollaborationPreview";
 import styles from "./AccountAccessRenderer.module.css";
 
 function EnterpriseEditor({ enterprise, workspace, onClose }: { enterprise?: EnterpriseAccount; workspace: AccessWorkspace; onClose(): void }) {
@@ -38,6 +39,7 @@ export function AccessEnterpriseAccounts({ workspace, onUsers }: { workspace: Ac
   const [deleting, setDeleting] = useState<EnterpriseAccount | null>(null);
   const [importing, setImporting] = useState<EnterpriseAccount | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [section, setSection] = useState<"enterprise" | "cross-account">("enterprise");
   const createAction = useRef<{ focus(): void }>(null);
   const emptyCreateAction = useRef<HTMLButtonElement>(null);
   const detailActions = useRef<{ focus(): void }>(null);
@@ -58,14 +60,22 @@ export function AccessEnterpriseAccounts({ workspace, onUsers }: { workspace: Ac
     previousImporting.current = importing;
     if (!importing && previous) importAction.current?.focus();
   }, [importing]);
-  return <>
-    {selected ? <WorkspaceDetail title={selected.name} onBack={() => setSelectedId(null)} primaryActionRef={importAction} actionFocusRef={detailActions} actions={editing || importing ? undefined : { primary: { id: "import", label: t("importMembers"), onSelect: () => setImporting(selected) }, secondary: [{ id: "members", label: t("visibleMembers"), onSelect: () => setEditing(selected) }, { id: "disconnect", label: t("disconnectEnterprise"), danger: true, onSelect: () => setDeleting(selected) }] }}>
+  const enterpriseView = selected ? <WorkspaceDetail title={selected.name} onBack={() => setSelectedId(null)} primaryActionRef={importAction} actionFocusRef={detailActions} actions={editing || importing ? undefined : { primary: { id: "import", label: t("importMembers"), onSelect: () => setImporting(selected) }, secondary: [{ id: "members", label: t("visibleMembers"), onSelect: () => setEditing(selected) }, { id: "disconnect", label: t("disconnectEnterprise"), danger: true, onSelect: () => setDeleting(selected) }] }}>
       {editing && editing !== "new" ? <EnterpriseEditor enterprise={editing} workspace={workspace} onClose={() => setEditing(null)} /> : importing ? <EnterpriseImport enterprise={importing} workspace={workspace} onClose={() => setImporting(null)} /> : <>
         <dl className={styles.facts}><div><dt>{t("corporationId")}</dt><dd>{selected.corporationId}</dd></div><div><dt>{t("type")}</dt><dd>{t("wecom")}</dd></div></dl><p className={styles.note}>{t("enterpriseMock")}</p>
         <Table aria-label={t("visibleMembers")} mobileLayout="stack"><thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("department")}</th><th scope="col">{t("state")}</th></tr></thead><tbody>{workspace.enterpriseMembers.filter((member) => selected.visibleMemberIds.includes(member.id)).map((member) => <tr key={member.id}><td data-label={t("name")}>{member.name}</td><td data-label={t("department")}>{member.department}</td><td data-label={t("state")}><Badge status={selected.importedMemberIds.includes(member.id) ? "success" : "neutral"}>{t(selected.importedMemberIds.includes(member.id) ? "imported" : "notImported")}</Badge></td></tr>)}</tbody></Table><div><Button variant="secondary" onClick={onUsers}>{t("subusers")}</Button></div>
       </>}
     </WorkspaceDetail> : workspace.enterprises.length ? <WorkspaceCollection title={t("wecom")} description={t("enterpriseHint")} items={workspace.enterprises} keywords={(enterprise) => enterprise.corporationId} createFocusRef={createAction} create={{ label: t("connectEnterprise"), onClick: () => setEditing("new") }} workflow={editing === "new" ? <EnterpriseEditor workspace={workspace} onClose={() => setEditing(null)} /> : undefined} columns={[t("enterpriseName"), t("corporationId"), t("visibleMembers"), t("imported")]} row={(enterprise) => <><td><button className={styles.userLink} onClick={() => setSelectedId(enterprise.id)}>{enterprise.name}</button></td><td>{enterprise.corporationId}</td><td>{enterprise.visibleMemberIds.length}</td><td>{enterprise.importedMemberIds.length}</td></>} /> :
-      <Card><Card.Header><Typography.Title as="h2" level={3}>{t("federations")} · {t("wecom")}</Typography.Title></Card.Header><Card.Body className={styles.stack}>{editing === "new" ? <EnterpriseEditor workspace={workspace} onClose={() => setEditing(null)} /> : <><p className={styles.note}>{t("enterpriseHint")}</p><p className={styles.flow}>{t("enterpriseFlow")}</p><EmptyState title={t("enterpriseStart")} description={t("enterpriseMock")} action={<Button ref={emptyCreateAction} onClick={() => setEditing("new")}>{t("connectEnterprise")}</Button>} /></>}</Card.Body></Card>}
+      <Card><Card.Header><Typography.Title as="h2" level={3}>{t("federations")} · {t("wecom")}</Typography.Title></Card.Header><Card.Body className={styles.stack}>{editing === "new" ? <EnterpriseEditor workspace={workspace} onClose={() => setEditing(null)} /> : <><p className={styles.note}>{t("enterpriseHint")}</p><p className={styles.flow}>{t("enterpriseFlow")}</p><EmptyState title={t("enterpriseStart")} description={t("enterpriseMock")} action={<Button ref={emptyCreateAction} onClick={() => setEditing("new")}>{t("connectEnterprise")}</Button>} /></>}</Card.Body></Card>;
+  return <>
+    {selected || editing || importing ? enterpriseView : <Tabs.Root value={section} onValueChange={(value) => setSection(value as typeof section)}>
+      <Tabs.List aria-label={t("externalCollaborationSections")}>
+        <Tabs.Trigger value="enterprise">{t("enterpriseMemberAccess")}</Tabs.Trigger>
+        <Tabs.Trigger value="cross-account">{t("crossAccountCollaboration.tab")}</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content value="enterprise">{enterpriseView}</Tabs.Content>
+      <Tabs.Content value="cross-account"><CrossAccountCollaborationPreview accountId={workspace.accountId} /></Tabs.Content>
+    </Tabs.Root>}
     {deleting ? <WorkspaceDelete name={deleting.name} onClose={() => setDeleting(null)} onConfirm={() => access.executeWorkspace({ kind: "delete-enterprise", id: deleting.id })} /> : null}
   </>;
 }
