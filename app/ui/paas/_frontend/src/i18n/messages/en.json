@@ -4084,6 +4084,41 @@
     "roleSsoMappingEnableReviewHint": "Enabling only saves a local mapping between an identity provider, an exact subject sample, and a target role. The caller still requires real assertion verification, role trust, and a separate role-assumption authorization check.",
     "roleSsoMappingDisableReviewHint": "On a real platform, disabling the mapping should normally stop new matches; existing sessions, role policies, and grants are not automatically revoked. This MOCK applies none of those effects.",
     "roleSsoMappingReviewBoundary": "Saving creates no IAM user or long-lived account, changes no target-role policy or permission boundary, accepts no assertion, issues no session, and makes no effective-access decision.",
+    "roleSsoJourney": {
+      "title": "Role SSO sign-in path",
+      "concept": "Concept preview",
+      "boundary": "IAM-EXT-03 concept preview · This page only explains the security boundaries from an enterprise identity source to a short-lived role session. It accepts no real assertion or token, discovers no remote IdP, creates no request ID, and issues or stores no RoleSession.",
+      "states": {
+        "configuration": "Configuration sample",
+        "untrusted": "Untrusted until verified",
+        "candidate": "Candidate mapping",
+        "disabled": "Mapping disabled",
+        "notVerified": "Awaiting real verification",
+        "notIssued": "Not issued"
+      },
+      "steps": {
+        "provider": {
+          "title": "Verify the enterprise identity provider",
+          "detail": "The current identity source is only a local configuration sample. A real entry point must validate the signature, issuer, audience/recipient, time window, and replay."
+        },
+        "assertion": {
+          "title": "Verify and parse the external assertion",
+          "detail": "An external subject is untrusted until signature, time, and replay checks complete. It does not create a local IAM user, password, or long-lived credential."
+        },
+        "mapping": {
+          "title": "Build the set of selectable candidate roles",
+          "detail": "A mapping can only constrain a verified subject to an existing role. A real multi-role choice must come from the verified mapping set; the caller cannot type an arbitrary role."
+        },
+        "trust": {
+          "title": "Evaluate the Role TrustPolicy independently",
+          "detail": "The target role must independently verify that it trusts the identity provider. A mapping is not a grant and changes no role policy, permission boundary, or final Allow result."
+        },
+        "session": {
+          "title": "Issue a bounded STS RoleSession",
+          "detail": "The session duration is only the ceiling configured on the target role. A real session must preserve the original external subject and source identity for audit; this preview issues no session or credential."
+        }
+      }
+    },
     "roleSsoMappingIssues": {
       "name": "Enter a valid name of no more than 64 characters.",
       "duplicate": "An assertion mapping with this name already exists.",

@@ -5,6 +5,7 @@ import { Alert, Badge, Checkbox, FormField, Input, Select, TextArea } from "@ui/
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { identityProviderConfigurationIssue, roleSsoMappingPreviewIssue, type AccessWorkspace, type IdentityProvider, type IdentityProviderConfigurationIssue, type RoleSsoMappingPreview, type RoleSsoMappingPreviewIssue } from "../domain/accessWorkspace";
 import { WorkspaceCollection, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceTime } from "./AccessWorkspaceUi";
+import { RoleSsoJourneyPreview } from "./RoleSsoJourneyPreview";
 import styles from "./AccountAccessRenderer.module.css";
 
 function ProviderEditor({ provider, workspace, onClose }: { provider?: IdentityProvider; workspace: AccessWorkspace; onClose(): void }) {
@@ -111,8 +112,10 @@ function RoleSsoMappingPreviewEditor({ mapping, workspace, onClose }: { mapping?
   const [providerId, setProviderId] = useState(mapping?.providerId ?? "");
   const [roleId, setRoleId] = useState(mapping?.roleId ?? "");
   const [enabled, setEnabled] = useState(mapping?.enabled ?? true);
-  const providerName = workspace.providers.find((provider) => provider.id === providerId)?.name ?? providerId;
-  const roleName = workspace.roles.find((role) => role.id === roleId)?.name ?? roleId;
+  const provider = workspace.providers.find((entry) => entry.id === providerId);
+  const role = workspace.roles.find((entry) => entry.id === roleId);
+  const providerName = provider?.name ?? providerId;
+  const roleName = role?.name ?? roleId;
   const clearIssue = (field: RoleSsoMappingPreviewIssue) => setIssue((current) => current === field || (field === "name" && current === "duplicate") ? null : current);
   const fieldId = issue === "duplicate" ? "name" : issue === "assertionSubject" ? "subject" : issue === "providerId" ? "provider" : issue === "roleId" ? "role" : issue;
   const issueMessage = issue ? t(issue === "name" ? "roleSsoMappingIssues.name" : issue === "duplicate" ? "roleSsoMappingIssues.duplicate" : issue === "assertionSubject" ? "roleSsoMappingIssues.assertionSubject" : issue === "providerId" ? "roleSsoMappingIssues.providerId" : "roleSsoMappingIssues.roleId") : undefined;
@@ -150,7 +153,7 @@ function RoleSsoMappingPreviewEditor({ mapping, workspace, onClose }: { mapping?
         <div><dt>{t("userSsoPreviousState")}</dt><dd>{mapping ? t(mapping.enabled ? "enabled" : "disabled") : t("none")}</dd></div>
         <div><dt>{t("userSsoNewState")}</dt><dd>{t(enabled ? "enabled" : "disabled")}</dd></div>
       </dl>
-      <p className={styles.flow}>{providerName} → {assertionSubject} → {roleName}</p>
+      <RoleSsoJourneyPreview provider={provider} mapping={{ name, assertionSubject, enabled }} role={role} />
       <p className={styles.note}>{t("roleSsoMappingReviewBoundary")}</p>
     </>}
   </WorkspaceInlineForm>;
@@ -166,6 +169,8 @@ export function AccessRoleSsoMappings({ workspace }: { workspace: AccessWorkspac
   const editTrigger = useRef<{ focus(): void }>(null);
   const previousEditing = useRef<RoleSsoMappingPreview | "new" | null>(null);
   const selected = workspace.roleSsoMappings.find((entry) => entry.id === selectedId);
+  const provider = (entry: RoleSsoMappingPreview) => workspace.providers.find((candidate) => candidate.id === entry.providerId);
+  const role = (entry: RoleSsoMappingPreview) => workspace.roles.find((candidate) => candidate.id === entry.roleId);
   const providerName = (entry: RoleSsoMappingPreview) => workspace.providers.find((provider) => provider.id === entry.providerId)?.name ?? entry.providerId;
   const roleName = (entry: RoleSsoMappingPreview) => workspace.roles.find((role) => role.id === entry.roleId)?.name ?? entry.roleId;
   useLayoutEffect(() => {
@@ -175,7 +180,7 @@ export function AccessRoleSsoMappings({ workspace }: { workspace: AccessWorkspac
   }, [editing]);
   return <>
     {selected ? <WorkspaceDetail title={selected.name} onBack={() => setSelectedId(null)} actionFocusRef={editTrigger} actions={editing ? undefined : { primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setEditing(selected) }, secondary: [{ id: "delete", label: t("delete"), danger: true, onSelect: () => setDeleting(selected) }] }}>
-      {editing && editing !== "new" ? <RoleSsoMappingPreviewEditor mapping={editing} workspace={workspace} onClose={() => setEditing(null)} /> : <><Alert status="info">{t("roleSsoMappingPreviewBoundary")}</Alert><dl className={styles.facts}><div><dt>{t("roleSsoAssertionSubject")}</dt><dd>{selected.assertionSubject}</dd></div><div><dt>{t("provider")}</dt><dd>{providerName(selected)}</dd></div><div><dt>{t("roleSsoTargetRole")}</dt><dd>{roleName(selected)}</dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.enabled ? "success" : "neutral"}>{t(selected.enabled ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl><p className={styles.flow}>{providerName(selected)} → {selected.assertionSubject} → {roleName(selected)}</p></>}
+      {editing && editing !== "new" ? <RoleSsoMappingPreviewEditor mapping={editing} workspace={workspace} onClose={() => setEditing(null)} /> : <><Alert status="info">{t("roleSsoMappingPreviewBoundary")}</Alert><dl className={styles.facts}><div><dt>{t("roleSsoAssertionSubject")}</dt><dd>{selected.assertionSubject}</dd></div><div><dt>{t("provider")}</dt><dd>{providerName(selected)}</dd></div><div><dt>{t("roleSsoTargetRole")}</dt><dd>{roleName(selected)}</dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.enabled ? "success" : "neutral"}>{t(selected.enabled ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl><RoleSsoJourneyPreview provider={provider(selected)} mapping={selected} role={role(selected)} /></>}
     </WorkspaceDetail> : <WorkspaceCollection title={t("roleSsoMappings")} description={t("roleSsoMappingHint")} intro={<Alert status="info">{t("roleSsoMappingPreviewBoundary")}</Alert>} items={workspace.roleSsoMappings} keywords={(entry) => [entry.assertionSubject, providerName(entry), roleName(entry)].join(" ")} createFocusRef={createTrigger} create={{ label: t("createRoleSsoMappingPreview"), onClick: () => setEditing("new") }} workflow={editing === "new" ? <RoleSsoMappingPreviewEditor workspace={workspace} onClose={() => setEditing(null)} /> : undefined} columns={[t("name"), t("provider"), t("roleSsoTargetRole"), t("state")]} row={(entry) => <><td><button className={styles.userLink} onClick={() => setSelectedId(entry.id)}>{entry.name}</button><small>{entry.assertionSubject}</small></td><td>{providerName(entry)}</td><td>{roleName(entry)}</td><td><Badge status={entry.enabled ? "success" : "neutral"}>{t(entry.enabled ? "enabled" : "disabled")}</Badge></td></>} />}
     {deleting ? <WorkspaceDelete name={deleting.name} onClose={() => setDeleting(null)} onConfirm={() => access.executeWorkspace({ kind: "delete-role-sso-mapping-preview", id: deleting.id })} /> : null}
   </>;

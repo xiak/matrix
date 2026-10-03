@@ -3081,7 +3081,12 @@ describe("CAM-style access workspace", () => {
     await user.type(mappingName, "PreviewAssertionRule");
     await user.click(within(editor).getByRole("button", { name: "审阅配置" }));
     expect(within(editor).getByRole("heading", { name: "审阅断言映射 · PreviewAssertionRule" })).toBe(document.activeElement);
-    expect(within(editor).getByText("EnterpriseSSO → preview@example.invalid → ExternalAuditRole")).toBeTruthy();
+    const journey = within(editor).getByRole("region", { name: "角色 SSO 登录链路" });
+    expect(within(journey).getByText("验证并解析外部断言")).toBeTruthy();
+    expect(within(journey).getByText(/外部主体在签名、时效和重放校验完成前/)).toBeTruthy();
+    expect(within(journey).getByText(/目标角色仍须独立验证/)).toBeTruthy();
+    expect(within(journey).getByText(/会话时长只是目标角色设置的上限/)).toBeTruthy();
+    expect(within(journey).getByText(/不接收真实断言或 Token/)).toBeTruthy();
     expect(within(editor).getByText(/不修改目标角色的策略或权限边界/)).toBeTruthy();
     await user.click(within(editor).getByRole("button", { name: "保存 MOCK 配置" }));
     await waitFor(() => expect(screen.queryByRole("group", { name: "审阅断言映射 · PreviewAssertionRule" })).toBeNull());

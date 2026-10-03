@@ -4084,6 +4084,41 @@
     "roleSsoMappingEnableReviewHint": "启用只保存身份提供商、精确主体样例与目标角色之间的本地映射。调用者仍需通过真实断言验证、角色信任和独立承担权限检查。",
     "roleSsoMappingDisableReviewHint": "若真实平台停用映射，新的匹配通常应停止；已有会话、角色策略和授权不会自动撤销。本 MOCK 不执行这些影响。",
     "roleSsoMappingReviewBoundary": "保存不创建 IAM 用户或长期账号，不修改目标角色的策略或权限边界，也不接收断言、签发会话或作出有效权限判定。",
+    "roleSsoJourney": {
+      "title": "角色 SSO 登录链路",
+      "concept": "概念预览",
+      "boundary": "IAM-EXT-03 概念预览 · 本页只解释企业身份源到短期角色会话的安全边界，不接收真实断言或 Token，不发现远端 IdP，不生成请求号，也不签发或保存 RoleSession。",
+      "states": {
+        "configuration": "配置样例",
+        "untrusted": "验证前不可信",
+        "candidate": "候选映射",
+        "disabled": "映射已停用",
+        "notVerified": "待真实校验",
+        "notIssued": "未签发"
+      },
+      "steps": {
+        "provider": {
+          "title": "验证企业身份提供商",
+          "detail": "当前身份源只是本地配置样例；真实入口必须校验签名、issuer、audience/recipient、时窗以及重放。"
+        },
+        "assertion": {
+          "title": "验证并解析外部断言",
+          "detail": "外部主体在签名、时效和重放校验完成前是不可信输入；它不会因此创建本地 IAM User、密码或长期凭据。"
+        },
+        "mapping": {
+          "title": "形成允许选择的候选角色",
+          "detail": "映射只能把已验证主体约束到既有角色。真实多角色选择必须来自已验证映射集合，不能让调用者任意填写角色。"
+        },
+        "trust": {
+          "title": "独立检查 Role TrustPolicy",
+          "detail": "目标角色仍须独立验证其是否信任该身份提供商；映射不是授权，不会修改角色策略、权限边界或最终 Allow 结果。"
+        },
+        "session": {
+          "title": "签发有界 STS RoleSession",
+          "detail": "会话时长只是目标角色设置的上限。真实会话必须保留外部原始主体与来源身份供审计；本预览不签发会话或凭据。"
+        }
+      }
+    },
     "roleSsoMappingIssues": {
       "name": "请输入不超过 64 个字符的有效名称。",
       "duplicate": "已有同名映射规则，请使用其他名称。",
