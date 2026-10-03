@@ -21,6 +21,7 @@ describe("AuditWorkspace", () => {
     expect(within(table).getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual(["事件", "操作者", "目标资源", "结果"]);
     expect(within(table).getByRole("button", { name: "audit.records.read" })).toBeTruthy();
     expect(within(table).getByText("用户密钥 key-audit-preview")).toBeTruthy();
+    expect(screen.getByText(/已接受不等于异步操作完成/)).toBeTruthy();
     expect(screen.queryByRole("searchbox")).toBeNull();
     expect(screen.queryByLabelText("开始时间")).toBeNull();
     expect(screen.getByRole("button", { name: "查询条件" }).getAttribute("aria-expanded")).toBe("false");
@@ -40,6 +41,7 @@ describe("AuditWorkspace", () => {
     await user.click(opener);
     expect(screen.getByRole("heading", { level: 1, name: /审计记录 #114/ })).toBeTruthy();
     expect(screen.getByText("哈希链证据")).toBeTruthy();
+    expect(screen.getByText(/来源服务记录该事件已按自身语义完成/)).toBeTruthy();
     const source = screen.getByText("事件来源").closest("div")!;
     expect(within(source).getByText("AUDIT")).toBeTruthy();
     expect(within(source).getByText("audit.records.read")).toBeTruthy();
@@ -53,6 +55,25 @@ describe("AuditWorkspace", () => {
     await user.click(screen.getByRole("button", { name: "开始校验" }));
     expect(await screen.findByText("已校验到当前链尾")).toBeTruthy();
     expect(screen.getByText("1–114")).toBeTruthy();
+  });
+
+  it("explains every audit result without turning evidence into a business outcome", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><AuditWorkspace preview /></LocaleProvider>);
+    await screen.findByRole("table", { name: "审计记录" });
+    const cases = [
+      { action: "audit.records.read", occurrence: 0, meaning: /不证明相关异步业务的最终结果/ },
+      { action: "iam.authorization.decided", occurrence: 0, meaning: /不证明产品已执行请求/ },
+      { action: "paas.deployment.created", occurrence: 0, meaning: /不证明 Operation 已完成/ },
+      { action: "iam.authorization.decided", occurrence: 1, meaning: /不证明目标资源存在与否/ }
+    ] as const;
+    for (const item of cases) {
+      const table = screen.getByRole("table", { name: "审计记录" });
+      await user.click(within(table).getAllByRole("button", { name: item.action })[item.occurrence]!);
+      expect(screen.getByText(item.meaning)).toBeTruthy();
+      await user.click(screen.getByRole("button", { name: "返回审计记录" }));
+      await screen.findByRole("table", { name: "审计记录" });
+    }
   });
 
   it("rejects a preview verification range that starts after the current chain tail", async () => {

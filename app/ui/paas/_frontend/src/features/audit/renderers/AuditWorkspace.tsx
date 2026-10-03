@@ -105,6 +105,10 @@ function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void 
         <span>{format.dateTime(new Date(event.occurredAt), { dateStyle: "medium", timeStyle: "long" })}</span>
       </Card.Header>
       <Card.Body className={styles.stack}>
+        <div className={styles.resultMeaning} data-result={event.result}>
+          <strong>{t("detail.resultMeaningTitle")}</strong>
+          <span>{t(`detail.resultMeaning.${event.result}`)}</span>
+        </div>
         <section aria-labelledby="audit-event-context">
           <h3 id="audit-event-context" className={styles.sectionTitle}>{t("detail.context")}</h3>
           <dl className={styles.facts}>
@@ -330,6 +334,7 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
         {!error && !page ? <TableSkeleton label={t("directory.loading")} labelVisible={false} rows={6} header={false} /> : null}
         {!error && page ? <div className={styles.collection} aria-busy={loading || undefined}>
           <div className={styles.collectionStatus}><span role="status">{status}</span>{loading ? <span>{t("directory.refreshing")}</span> : null}</div>
+          <p className={styles.resultGuide}>{t("directory.resultGuide")}</p>
           {page.records.length ? <Table aria-label={t("directory.table")} className={styles.auditTable} mobileLayout="stack">
             <thead><tr><th scope="col">{t("columns.action")}</th><th scope="col">{t("columns.actor")}</th><th scope="col">{t("columns.target")}</th><th scope="col">{t("columns.result")}</th></tr></thead>
             <tbody>{page.records.map((record) => <tr key={record.sequence}>

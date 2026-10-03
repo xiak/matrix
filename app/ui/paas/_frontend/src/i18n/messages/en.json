@@ -2735,6 +2735,7 @@
       "table": "Audit records",
       "empty": "No matching audit records",
       "emptyHint": "Adjust the structured filters and try again. An empty result is not an authorization decision.",
+      "resultGuide": "A result describes only this event: accepted is not completed, allowed is not business success, and denied does not prove whether a resource exists.",
       "footer": "{authority}: {id} · cursors are service-signed and bound to the active filters",
       "page": "Page {page}"
     },
@@ -2778,6 +2779,13 @@
       "retention": "Retention",
       "indefinite": "Retained indefinitely",
       "ingested": "Ingested: {time}",
+      "resultMeaningTitle": "How to interpret this result",
+      "resultMeaning": {
+        "ACCEPTED": "The source service accepted this asynchronous operation. It does not prove that the Operation completed or the target reached its desired state.",
+        "SUCCEEDED": "The source service recorded this event as complete under its own semantics. It grants no later access and does not prove the final result of related asynchronous work.",
+        "ALLOWED": "IAM allowed this authorization request. It does not prove that the product executed the request, that the resource exists, or that the business outcome succeeded.",
+        "DENIED": "IAM denied this authorization request. It does not prove whether the target resource exists and says nothing about another request or identity."
+      },
       "requestEvidence": "Request and authorization evidence",
       "eventId": "Event ID",
       "requestId": "Request ID",

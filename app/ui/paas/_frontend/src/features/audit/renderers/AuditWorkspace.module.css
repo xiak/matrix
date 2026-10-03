@@ -13,6 +13,7 @@
 .filterActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); }
 .collection { min-width: 0; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); overflow: hidden; }
 .collectionStatus { display: flex; min-height: var(--xiak-control-height); flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-tight); padding: var(--xiak-spacing-tight) var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.resultGuide { margin: 0; padding: var(--xiak-spacing-tight) var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
 .auditTable { min-width: 820px; table-layout: fixed; }
 .auditTable th:first-child { width: 310px; }
 .auditTable th:last-child { width: 100px; }
@@ -25,6 +26,12 @@
 .recordLink:hover { text-decoration: underline; }
 .recordLink:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 2px; }
 .sectionTitle { margin: 0 0 var(--xiak-spacing-default); color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); }
+.resultMeaning { display: grid; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); border-inline-start: 3px solid var(--xiak-color-status-neutral); background: var(--xiak-color-bg-panel-hover); }
+.resultMeaning[data-result="ACCEPTED"] { border-inline-start-color: var(--xiak-color-status-info); }
+.resultMeaning[data-result="SUCCEEDED"], .resultMeaning[data-result="ALLOWED"] { border-inline-start-color: var(--xiak-color-status-success); }
+.resultMeaning[data-result="DENIED"] { border-inline-start-color: var(--xiak-color-status-danger); }
+.resultMeaning strong { color: var(--xiak-color-text-strong); }
+.resultMeaning span { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
 .facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; }
 .facts > div { display: grid; align-content: start; min-width: 0; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); }
 .facts dt, .evidence dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
