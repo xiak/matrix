@@ -6,8 +6,8 @@
 - Updated: 2026-10-03
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `5e124ab49`
-- Pushed documentation milestone: `d6bf2209b`
+- Pushed source/embed milestone: `1dcc20702`
+- Pushed documentation milestone: `13e4b09e6`
 
 ## Authoritative route
 
@@ -29,30 +29,26 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Access Analysis Finding
-details now expose the exact recovery epoch, recovery command, completion time
-and the new generation's observation start through one reusable boundary.
-Epoch zero must omit recovery command/time; a post-recovery epoch must bind a
-nonblank command and cannot start observing before recovery completed. A
-`RESTORE_GAP` is elevated above individual coverage rows: pre-recovery Findings
-are not current conclusions and the new epoch must not create, migrate or
-automatically remediate Findings until every required IAM source rebuilds the
-complete threshold window. The first MOCK Finding uses an explicitly synthetic
-epoch 2 and cannot be interpreted as installation or backend evidence.
+login verification remains disabled for UX review. Role assertion mapping
+review and detail now reuse one read-only five-stage SSO journey: IdP
+verification, untrusted assertion verification, candidate Role mapping,
+independent Role TrustPolicy evaluation and bounded STS RoleSession issuance.
+It is explicitly an IAM-EXT-03 concept preview and adds no backend resource,
+state, command, repository, HTTP wire, request ID, verified assertion or issued
+session.
 
-Source and synchronized embed are pushed at `5e124ab49`; FEAT evidence is
-pushed at `d6bf2209b`. The affected four-file run passed 218 tests; after adding
-the blank-command rejection, the pure domain file's 7 tests passed again.
-Typecheck, lint, architecture, 228-pair style checks, 45-route production
-export, 249-file embed equality and repository Go test/vet passed. The full
-Vitest run was stopped after extended silent execution and is not claimed as
-evidence. Desktop and `390 × 844` DEV showed the recovery boundary without
-horizontal overflow or browser warning/error.
+Source and synchronized embed are pushed at `1dcc20702`; FEAT evidence is
+pushed at `13e4b09e6`. The targeted mapping workflow and bilingual message tests,
+typecheck, lint, architecture, 228-pair style checks, 45-route production
+export, 249-file embed equality and repository Go test/vet passed. Desktop and
+`390 × 844` DEV showed the journey without horizontal overflow or browser
+warning/error.
 
-Earlier Account security report, federation replacement, Deployment lifecycle,
-AccessKey carrier, Application tag recovery, service authorization, policy
-compilation/provenance and shared navigation/loading milestones remain owned
-and indexed by FEAT-IAM-010 and FEAT-007; load only the relevant evidence row.
+Earlier Access Analyzer recovery trust, Account security report, federation
+replacement, Deployment lifecycle, AccessKey carrier, Application tag recovery,
+service authorization, policy compilation/provenance and shared navigation/
+loading milestones remain owned and indexed by FEAT-IAM-010 and FEAT-007; load
+only the relevant evidence row.
 
 ## Continuation boundary
 
