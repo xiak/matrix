@@ -39,6 +39,42 @@ const reportDirectoryStatus: Record<AccountSecurityReportDirectoryStatus, "succe
   expired: "neutral"
 };
 
+type UnusedFindingReviewOverride = {
+  lifecycle: Extract<UnusedAccessFindingPreview["lifecycle"], "ACTIVE" | "ARCHIVED">;
+  occurredAt: string;
+};
+
+function unusedFindingKey(finding: Pick<UnusedAccessFindingPreview, "accountId" | "id">) {
+  return `${finding.accountId}:${finding.id}`;
+}
+
+function UnusedFindingLifecycleWorkflow({ finding, nextLifecycle, onBack, onApply }: {
+  finding: UnusedAccessFindingPreview;
+  nextLifecycle: UnusedFindingReviewOverride["lifecycle"];
+  onBack(): void;
+  onApply(nextLifecycle: UnusedFindingReviewOverride["lifecycle"]): void;
+}) {
+  const t = useTranslations("IamWorkspace.accessAnalysis.unused");
+  const archive = nextLifecycle === "ARCHIVED";
+  return <WorkspaceDetail title={t(archive ? "transition.archiveTitle" : "transition.reopenTitle", { name: finding.name })} onBack={onBack}>
+    <Alert status="info">{t("transition.previewBoundary")}</Alert>
+    <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{finding.name}</Typography.Title><Typography.Text tone="muted">{finding.subjectId}</Typography.Text></div><Badge status="info">{t("mockSample")}</Badge></Card.Header>
+      <Card.Body className={styles.detail}>
+        <dl className={styles.facts}>
+          <div><dt>{t("findingId")}</dt><dd><code>{finding.id}</code></dd></div>
+          <div><dt>{t("transition.currentStatus")}</dt><dd><Badge status={unusedFindingStatus[finding.lifecycle]} title={finding.lifecycle}>{t(`lifecycle.${finding.lifecycle}`)}</Badge></dd></div>
+          <div><dt>{t("transition.nextStatus")}</dt><dd><Badge status={unusedFindingStatus[nextLifecycle]} title={nextLifecycle}>{t(`lifecycle.${nextLifecycle}`)}</Badge></dd></div>
+          <div><dt>{t("principalType")}</dt><dd>{t(`subjects.${finding.subjectKind}`)}</dd></div>
+        </dl>
+        <Alert status="warning">{t(archive ? "transition.archiveMeaning" : "transition.reopenMeaning")}</Alert>
+        <Alert status="info">{t("transition.noObjectChange")}</Alert>
+      </Card.Body>
+      <Card.Footer><div className={styles.actions}><Button onClick={() => onApply(nextLifecycle)}>{t(archive ? "transition.confirmArchive" : "transition.confirmReopen")}</Button><Button variant="secondary" onClick={onBack}>{t("transition.cancel")}</Button></div></Card.Footer>
+    </Card>
+  </WorkspaceDetail>;
+}
+
 function AccessAnalysisRuleWorkflow({ rule, onBack, onApply }: {
   rule: AccessAnalysisRulePreview;
   onBack(): void;
@@ -95,8 +131,24 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
   const [editingRule, setEditingRule] = useState(false);
   const [ruleOverride, setRuleOverride] = useState<AccessAnalysisRulePreview | null>(null);
   const [ruleSaved, setRuleSaved] = useState(false);
+  const [unusedReviewOverrides, setUnusedReviewOverrides] = useState<Record<string, UnusedFindingReviewOverride[]>>({});
+  const [unusedTransition, setUnusedTransition] = useState<UnusedFindingReviewOverride["lifecycle"] | null>(null);
+  const [unusedTransitionNotice, setUnusedTransitionNotice] = useState<{ key: string; lifecycle: UnusedFindingReviewOverride["lifecycle"] } | null>(null);
   const analysis = useMemo(() => workspace ? buildAccessAnalysisPreview(workspace, scene) : null, [scene, workspace]);
-  const unusedFindings = analysis?.unusedFindings ?? [];
+  const unusedFindings = useMemo(() => (analysis?.unusedFindings ?? []).map((finding) => {
+    const overrides = unusedReviewOverrides[unusedFindingKey(finding)] ?? [];
+    const latest = overrides.at(-1);
+    if (!latest) return finding;
+    return {
+      ...finding,
+      lifecycle: latest.lifecycle,
+      lifecycleEvidence: [...finding.lifecycleEvidence, ...overrides.map((override) => ({
+        lifecycle: override.lifecycle,
+        occurredAt: override.occurredAt,
+        source: "SYNTHETIC_HUMAN_REVIEW" as const
+      }))]
+    };
+  }), [analysis, unusedReviewOverrides]);
   const rule = ruleOverride?.accountId === workspace?.accountId ? ruleOverride : analysis?.rule ?? null;
   const selectedTrust = selectedTrustEntry?.accountId === workspace?.accountId ? selectedTrustEntry : null;
   const selectedUnusedId = selectedUnusedFinding && selectedUnusedFinding.accountId === workspace?.accountId ? selectedUnusedFinding.id : null;
@@ -136,7 +188,28 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
 
   if (editingRule && rule) return <AccessAnalysisRuleWorkflow rule={rule} onBack={() => setEditingRule(false)} onApply={(next) => { setRuleOverride(next); setRuleSaved(true); setEditingRule(false); setSection("rule"); }} />;
 
-  if (selectedUnused) return <WorkspaceDetail key={selectedUnused.id} title={t("unused.detailTitle", { name: selectedUnused.name })} onBack={() => setSelectedUnusedFinding(null)}>
+  if (unusedTransition && selectedUnused) return <UnusedFindingLifecycleWorkflow finding={selectedUnused} nextLifecycle={unusedTransition} onBack={() => setUnusedTransition(null)} onApply={(nextLifecycle) => {
+    const key = unusedFindingKey(selectedUnused);
+    setUnusedReviewOverrides((current) => ({ ...current, [key]: [...(current[key] ?? []), { lifecycle: nextLifecycle, occurredAt: new Date().toISOString() }] }));
+    setUnusedTransitionNotice({ key, lifecycle: nextLifecycle });
+    setUnusedTransition(null);
+  }} />;
+
+  if (selectedUnused) {
+    const selectedKey = unusedFindingKey(selectedUnused);
+    const lifecycleAction = selectedUnused.lifecycle === "RESOLVED" ? undefined : {
+      id: selectedUnused.lifecycle === "ACTIVE" ? "archive" : "reopen",
+      label: t(selectedUnused.lifecycle === "ACTIVE" ? "unused.transition.archiveAction" : "unused.transition.reopenAction"),
+      onSelect: () => setUnusedTransition(selectedUnused.lifecycle === "ACTIVE" ? "ARCHIVED" : "ACTIVE")
+    };
+    return <WorkspaceDetail key={selectedUnused.id} title={t("unused.detailTitle", { name: selectedUnused.name })} onBack={() => { setSelectedUnusedFinding(null); setUnusedTransitionNotice(null); }} actions={{
+      primary: lifecycleAction,
+      secondary: [
+        { id: "target", label: t("unused.reviewTarget"), onSelect: () => onNavigate(selectedUnused.target.view, selectedUnused.target.id) },
+        { id: "analyzer", label: t("unused.reviewAnalyzer"), onSelect: () => { setSelectedUnusedFinding(null); setSection("rule"); } }
+      ]
+    }}>
+    {unusedTransitionNotice?.key === selectedKey ? <Alert status="success">{t(unusedTransitionNotice.lifecycle === "ARCHIVED" ? "unused.transition.archived" : "unused.transition.reopened")}</Alert> : null}
     <Alert status="info">{t("unused.sampleEvidence")}</Alert>
     <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{selectedUnused.name}</Typography.Title><Typography.Text tone="muted">{selectedUnused.subjectId}</Typography.Text></div><span className={styles.badgeRow}><Badge status="info">{t("unused.mockSample")}</Badge><Badge status={unusedFindingStatus[selectedUnused.lifecycle]} title={selectedUnused.lifecycle}>{t(`unused.lifecycle.${selectedUnused.lifecycle}`)}</Badge></span></Card.Header>
@@ -157,9 +230,9 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
         <Alert status="info">{t("unused.correlationBoundary")}</Alert>
         <section aria-labelledby="unused-lifecycle-evidence" className={styles.stack}>
           <Typography.Title as="h3" id="unused-lifecycle-evidence" level={3}>{t("unused.lifecycleEvidenceTitle")}</Typography.Title>
-          <ol className={styles.securityChecks}>{selectedUnused.lifecycleEvidence.map((event) => <li key={`${event.lifecycle}:${event.occurredAt}`}>
+          <ol className={styles.securityChecks}>{selectedUnused.lifecycleEvidence.map((event, index) => <li key={`${event.lifecycle}:${event.occurredAt}:${index}`}>
             <Badge status={unusedFindingStatus[event.lifecycle]} title={event.lifecycle}>{t(`unused.lifecycle.${event.lifecycle}`)}</Badge>
-            <div className={styles.securityCheckCopy}><strong>{t(`unused.lifecycleEvents.${event.lifecycle}`)}</strong><p><WorkspaceTime value={event.occurredAt} /> · {t(`unused.lifecycleSources.${event.source}`)}</p></div>
+            <div className={styles.securityCheckCopy}><strong>{t(`unused.lifecycleEvents.${event.lifecycle === "ACTIVE" && event.source === "SYNTHETIC_HUMAN_REVIEW" ? "REOPENED" : event.lifecycle}`)}</strong><p><WorkspaceTime value={event.occurredAt} /> · {t(`unused.lifecycleSources.${event.source}`)}</p></div>
           </li>)}</ol>
           <Alert status="info">{t("unused.lifecycleEvidenceBoundary")}</Alert>
         </section>
@@ -170,9 +243,9 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           <Alert status="warning">{t("unused.noAutomaticAction")}</Alert>
         </section>
       </Card.Body>
-      <Card.Footer><div className={styles.actions}><Button variant="secondary" onClick={() => { setSelectedUnusedFinding(null); setSection("rule"); }}>{t("unused.reviewAnalyzer")}</Button><Button onClick={() => onNavigate(selectedUnused.target.view, selectedUnused.target.id)}>{t("unused.reviewTarget")}<ArrowRight aria-hidden="true" /></Button></div></Card.Footer>
     </Card>
   </WorkspaceDetail>;
+  }
   const content = <>
     <Alert status="info">{t("previewBoundary")}</Alert>
     <Tabs.Root value={section} onValueChange={(value) => setSection(value as "external" | "unused" | "rule")}>

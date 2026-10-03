@@ -4439,7 +4439,7 @@
         "reviewAnalyzer": "Review analyzer rule",
         "lifecycle": { "ACTIVE": "Needs review", "ARCHIVED": "Archived", "RESOLVED": "Resolved" },
         "lifecycleEvidenceTitle": "State evidence timeline",
-        "lifecycleEvents": { "ACTIVE": "Backend scan produced a Finding that needs review", "ARCHIVED": "Human review completed and archived the Finding", "RESOLVED": "A later authoritative scan confirmed the condition disappeared" },
+        "lifecycleEvents": { "ACTIVE": "Backend scan produced a Finding that needs review", "REOPENED": "Human review unarchived the Finding and returned it to active review", "ARCHIVED": "Human review completed and archived the Finding", "RESOLVED": "A later authoritative scan confirmed the condition disappeared" },
         "lifecycleSources": { "SYNTHETIC_ANALYZER": "Synthetic scan evidence", "SYNTHETIC_HUMAN_REVIEW": "Synthetic human-review evidence" },
         "lifecycleEvidenceBoundary": "The timeline explains only the synthetic sample's state source. It is not an Audit fact, server receipt, or replayable remediation credential.",
         "lifecycleBoundaries": {
@@ -4450,6 +4450,23 @@
         "recommendationTitle": "Recommended remediation path",
         "noAutomaticAction": "An unused-access finding must not directly delete an identity or permission. Verify ownership, workloads, authorization sources and business impact first; a real change still requires separate capability checks, review and an authoritative server result.",
         "reviewTarget": "View corresponding object",
+        "transition": {
+          "archiveAction": "Archive finding",
+          "reopenAction": "Unarchive finding",
+          "archiveTitle": "Archive finding · {name}",
+          "reopenTitle": "Unarchive finding · {name}",
+          "previewBoundary": "Isolated MOCK · This review changes only the Finding state in the current browser session. It calls no backend and creates no real Audit fact.",
+          "currentStatus": "Current status",
+          "nextStatus": "Target status",
+          "archiveMeaning": "Archive means the Finding was reviewed and the current risk was accepted. It leaves the active queue without deleting the Finding.",
+          "reopenMeaning": "Unarchive returns the Finding to the active review queue for further investigation. It does not rerun analysis.",
+          "noObjectChange": "This action changes no user, sign-in password, access key, role, policy, session, or permission. Real remediation requires a separate review on the corresponding object.",
+          "confirmArchive": "Confirm archive (MOCK)",
+          "confirmReopen": "Confirm unarchive (MOCK)",
+          "cancel": "Back to Finding details",
+          "archived": "The Finding is archived in this browser session; the object and its permissions are unchanged.",
+          "reopened": "The Finding is unarchived and returned to active review in this browser session; scan evidence and object permissions are unchanged."
+        },
         "subjects": { "user": "User sign-in credential", "accessKey": "Access key", "role": "Role" },
         "types": { "unusedPassword": "Unused console password", "unusedAccessKey": "Unused access key", "unusedRole": "Unused role" },
         "recommendations": {

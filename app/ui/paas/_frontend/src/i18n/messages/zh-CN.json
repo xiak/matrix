@@ -4456,7 +4456,7 @@
         "reviewAnalyzer": "查看分析规则",
         "lifecycle": { "ACTIVE": "待复核", "ARCHIVED": "已归档", "RESOLVED": "已解决" },
         "lifecycleEvidenceTitle": "状态证据时间线",
-        "lifecycleEvents": { "ACTIVE": "后端扫描形成待复核 Finding", "ARCHIVED": "人工完成复核并归档", "RESOLVED": "后继权威扫描确认条件消失" },
+        "lifecycleEvents": { "ACTIVE": "后端扫描形成待复核 Finding", "REOPENED": "人工取消归档并恢复待复核", "ARCHIVED": "人工完成复核并归档", "RESOLVED": "后继权威扫描确认条件消失" },
         "lifecycleSources": { "SYNTHETIC_ANALYZER": "合成扫描证据", "SYNTHETIC_HUMAN_REVIEW": "合成人工复核证据" },
         "lifecycleEvidenceBoundary": "时间线只解释合成样例的状态来源，不是 Audit 事实、服务端回执或可用于重放的处置凭证。",
         "lifecycleBoundaries": {
@@ -4467,6 +4467,23 @@
         "recommendationTitle": "建议处置路径",
         "noAutomaticAction": "不能从一条未使用发现直接删除身份或权限。先核对所有者、工作负载、授权来源和业务影响；真实变更还需独立能力校验、审阅及服务端结果。",
         "reviewTarget": "查看对应对象",
+        "transition": {
+          "archiveAction": "归档发现",
+          "reopenAction": "取消归档",
+          "archiveTitle": "归档发现 · {name}",
+          "reopenTitle": "取消归档 · {name}",
+          "previewBoundary": "隔离 MOCK · 此审阅只改变当前浏览器会话中的 Finding 状态，不调用后端，也不生成真实 Audit 事实。",
+          "currentStatus": "当前状态",
+          "nextStatus": "目标状态",
+          "archiveMeaning": "归档表示该 Finding 已经人工复核且当前风险被接受；它会从待复核队列移出，但不会删除 Finding。",
+          "reopenMeaning": "取消归档会把 Finding 恢复到待复核队列，供后续继续调查；它不会重新运行扫描。",
+          "noObjectChange": "此操作不修改用户、登录密码、访问密钥、角色、策略、会话或任何权限。真实资源处置必须在对应对象页面独立审阅。",
+          "confirmArchive": "确认归档（MOCK）",
+          "confirmReopen": "确认取消归档（MOCK）",
+          "cancel": "返回发现详情",
+          "archived": "已在当前浏览器会话中归档该 Finding；对象与权限均未改变。",
+          "reopened": "已在当前浏览器会话中取消归档并恢复待复核；扫描证据与对象权限均未改变。"
+        },
         "subjects": { "user": "用户登录凭证", "accessKey": "访问密钥", "role": "角色" },
         "types": { "unusedPassword": "未使用的控制台密码", "unusedAccessKey": "未使用的访问密钥", "unusedRole": "未使用的角色" },
         "recommendations": {
