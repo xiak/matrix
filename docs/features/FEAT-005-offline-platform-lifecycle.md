@@ -215,15 +215,40 @@ another authority tuple or another revision for recovery. Historical v1/v2
 backup metadata remains bounded and decodable for diagnosis, but current
 recovery rejects it before destructive effects.
 
-Focused race gates currently prove the lifecycle/journal transition rules,
-recovery preflight ordering, purpose-only container boundary, response-loss
-replay, exact completion-anchor sequence and release-builder inventory. This
-is source-level candidate evidence only. Acceptance still requires the exact
-source to run a task-owned PostgreSQL 18 backup/restore, signed same-profile
-Release A/B lifecycle, authentication closure/reconciliation/reopen, stale
-Session/TOTP/AccessKey rejection, access-analysis `RESTORE_GAP`, restart and
-independent CI gates. Until those pass, revision 11 is not an accepted release
-combination and cannot inherit earlier revision 10 or donor evidence.
+The exact product source `ddac6992c60ea267e8b2992b05de4487c14314f5`
+assembled signed A=`matrix-v0.1.0-iam-r11.1-ddac6992c60e` and immediate
+B=`matrix-v0.1.0-iam-r11.2-ddac6992c60e`, both with the identical
+`64/34/3+r11` profile and topology digest. A task-owned, network-none Docker
+27.5.1 engine limited to 2 CPUs, 4 GiB and 768 PIDs completed the 553.71-second
+pre-restart lifecycle: fresh A installation, actual restricted PostgreSQL
+roles, IAM and tenant paths through APISIX, TOTP and real SMTP/Maildir receipt,
+access analysis, two application generations, Audit chain verification,
+protected backup, failed-candidate automatic rollback, B upgrade, explicit
+platform rollback and selected-backup recovery. Recovery restored the
+backup-owned application, IAM, Audit and security state; removed post-backup
+state; advanced the installation recovery epoch; and required fresh password
+or TOTP authentication because every pre-recovery USER/Role Session was
+revoked. Normal same-profile upgrade and data-preserving rollback continued to
+retain valid sessions. The gate did not infer either behavior from service
+health or database timestamps.
+
+Only that task-owned nested engine was stopped and started. Its persistent
+Docker, installation and runtime volumes then completed the 68.84-second
+post-restart gate, including fresh MFA login, retained tenant primary recovery
+and revocation state, status/verify/support and the complete offline lifecycle.
+No shared engine, remote host or another Phase resource was restarted. The
+SMTP fixture was a task-only archive with SHA-256
+`e90419f560f9b484dd5125961e097b54ec98adb48e8660a5f7c5fd516e88abb6`
+and portable image ID
+`sha256:2976d5e49e940f05f720969403d1cf6531892b4816c0be4ccca403b554f50732`;
+it proves the configured local delivery path, not an external provider SLA or
+recipient reading the message.
+
+This is accepted local signed-runtime evidence for the exact production
+source and test contract. Revision 11 remains a release candidate until the
+commit that records the final gate assertions passes its own independent CI.
+It does not admit revision 10, another authority profile, an earlier backup
+wire or arbitrary host-level snapshot rollback.
 
 ### Signed IAM security-report precursor
 

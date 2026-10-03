@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -324,40 +325,54 @@ func (value *gate) verifySignedMFA(
 	return result, nil
 }
 
-func (value *gate) assertMFARetention(ctx context.Context, freshLogin bool) error {
+func (value *gate) assertMFARetention(ctx context.Context, authenticationRecovered bool) error {
 	if value.retainedIAM == nil || !validMFARetention(value.retainedIAM.MFA) {
 		return fail("signed-mfa-retention-fixture")
 	}
 	retained := &value.retainedIAM.MFA
-	state, err := value.edge.authenticatorState(ctx, retained.Credential)
-	if err != nil || !sameAuthenticatorState(state, retained.State) {
-		return fail("signed-mfa-retained-session")
-	}
-	contact, err := value.edge.notificationContact(ctx, retained.Credential)
-	if err != nil || !sameNotificationContact(contact, retained.Contact) {
-		return fail("signed-mfa-retained-contact")
-	}
-	if !freshLogin {
+	if !authenticationRecovered {
+		state, err := value.edge.authenticatorState(ctx, retained.Credential)
+		if err != nil || !sameAuthenticatorState(state, retained.State) {
+			return fail("signed-mfa-retained-session")
+		}
+		contact, err := value.edge.notificationContact(ctx, retained.Credential)
+		if err != nil || !sameNotificationContact(contact, retained.Contact) {
+			return fail("signed-mfa-retained-contact")
+		}
 		return nil
 	}
+	if err := value.edge.authenticatorBearerRejected(ctx, retained.Credential); err != nil {
+		return fail("signed-mfa-recovery-old-session")
+	}
 	loginName := retained.User.LoginName + "@" + string(retained.User.AccountID)
+	minimumStep := retained.LastConsumedStep
+	if currentStep := time.Now().Unix() / 30; currentStep > minimumStep {
+		// Recovery fences the current wall-clock step as well as the backed-up
+		// last-consumed step. Wait for a strictly newer code instead of probing
+		// the fenced value and consuming a real failed-attempt budget.
+		minimumStep = currentStep
+	}
 	authenticated, step, err := value.edge.loginWithTOTP(
 		ctx, loginName, retained.Password, retained.Seed, retained.User.AccountID, retained.User.ID,
-		"phase1-signed-mfa-restart", retained.LastConsumedStep,
+		"phase1-signed-mfa-recovered-"+strconv.FormatInt(minimumStep, 10), minimumStep,
 	)
 	if err != nil {
-		return fail("signed-mfa-restart-login")
+		return fail("signed-mfa-recovery-login")
 	}
 	credential := authenticated.Credential.CopyBytes()
 	defer clear(credential)
 	value.edge.addForbidden(bytes.Clone(credential))
 	retained.LastConsumedStep = step
-	state, err = value.edge.authenticatorState(ctx, credential)
+	state, err := value.edge.authenticatorState(ctx, credential)
 	if err != nil || !sameAuthenticatorState(state, retained.State) {
-		return fail("signed-mfa-restart-state")
+		return fail("signed-mfa-recovery-state")
+	}
+	contact, err := value.edge.notificationContact(ctx, credential)
+	if err != nil || !sameNotificationContact(contact, retained.Contact) {
+		return fail("signed-mfa-recovery-contact")
 	}
 	if err := value.edge.logout(ctx, credential); err != nil {
-		return fail("signed-mfa-restart-logout")
+		return fail("signed-mfa-recovery-logout")
 	}
 	return nil
 }

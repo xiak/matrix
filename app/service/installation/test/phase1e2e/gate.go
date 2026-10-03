@@ -237,7 +237,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("automatic-upgrade-rollback")
-	if err := value.assertTenantRetention(ctx, true); err != nil {
+	if err := value.assertTenantRetention(ctx, true, false); err != nil {
 		return err
 	}
 
@@ -277,7 +277,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := value.assertTenantRetention(ctx, true); err != nil {
+	if err := value.assertTenantRetention(ctx, true, false); err != nil {
 		return err
 	}
 	postUpgrade, err := value.writePostUpgradeTenantResource(ctx)
@@ -309,7 +309,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertSecurityReportSnapshot(ctx, bearer, postUpgradeReport, true); err != nil {
 		return err
 	}
-	if err := value.assertTenantRetention(ctx, true); err != nil {
+	if err := value.assertTenantRetention(ctx, true, false); err != nil {
 		return err
 	}
 	if err := value.assertPostUpgradeTenantResource(ctx, postUpgrade, true); err != nil {
@@ -327,6 +327,21 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
 		return err
 	}
+	rejected, err := value.edge.json(
+		ctx, http.MethodGet, "/api/iam/v1/auth/me", bearer, nil, nil, http.StatusUnauthorized,
+	)
+	clear(rejected.body)
+	if err != nil {
+		return fail("backup-recovery-old-session")
+	}
+	recoveredBearer, err := value.edge.login(ctx, newPassword, "phase1-login-after-backup-recovery")
+	if err != nil {
+		return fail("backup-recovery-login")
+	}
+	defer clear(recoveredBearer)
+	value.edge.addForbidden(recoveredBearer)
+	bearer = recoveredBearer
+	emit("backup-recovery-session-reissuance")
 	recovered, err := value.readDeployment(ctx, bearer)
 	if err != nil || recovered.Generation != 2 || recovered.Status.ObservedGeneration != 2 ||
 		recovered.Status.Phase != paasv1.DeploymentReady {
@@ -354,7 +369,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.edge.securityReportMissing(ctx, bearer, postUpgradeReport.metadata.ID); err != nil {
 		return fail("security-report-recovery-boundary")
 	}
-	if err := value.assertTenantRetention(ctx, true); err != nil {
+	if err := value.assertTenantRetention(ctx, true, true); err != nil {
 		return err
 	}
 	if err := value.assertPostUpgradeTenantResource(ctx, postUpgrade, false); err != nil {
@@ -566,7 +581,7 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if err := value.readTenantRetention(state.InstallationID); err != nil {
 		return err
 	}
-	if err := value.assertTenantRetention(ctx, true); err != nil {
+	if err := value.assertTenantRetention(ctx, true, true); err != nil {
 		return err
 	}
 	if err := value.assertMFARetention(ctx, true); err != nil {
@@ -738,7 +753,7 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		}
 		value.retainedIAM.Tenants = append(value.retainedIAM.Tenants, tenant)
 	}
-	if err := value.assertTenantRetention(ctx, false); err != nil {
+	if err := value.assertTenantRetention(ctx, false, false); err != nil {
 		return err
 	}
 	return nil
@@ -795,7 +810,11 @@ func (value *gate) readTenantRetention(installationID string) error {
 	return nil
 }
 
-func (value *gate) assertTenantRetention(ctx context.Context, requireContact bool) error {
+func (value *gate) assertTenantRetention(
+	ctx context.Context,
+	requireContact bool,
+	authenticationRecovered bool,
+) error {
 	operator, err := value.edge.login(ctx, value.retainedIAM.AdministratorPassword, "phase1-retained-operator")
 	if err != nil {
 		return fail("tenant-retained-operator-login")
@@ -812,7 +831,7 @@ func (value *gate) assertTenantRetention(ctx context.Context, requireContact boo
 		if err != nil || !sameNotificationContact(contact, value.retainedIAM.AdministratorContact) {
 			return fail("tenant-retained-notification-contact")
 		}
-		if err := value.assertMFARetention(ctx, false); err != nil {
+		if err := value.assertMFARetention(ctx, authenticationRecovered); err != nil {
 			return err
 		}
 		if err := value.assertAccessAnalyzer(ctx, operator, value.retainedIAM.AccessAnalyzer, ""); err != nil {
@@ -868,12 +887,23 @@ func (value *gate) assertTenantRetention(ctx context.Context, requireContact boo
 			}
 			continue
 		}
-		var retainedIdentity iamv1.CurrentIdentity
-		if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", tenant.RetainedPrimaryCredential, &retainedIdentity); err != nil ||
-			iamv1.ValidateCurrentIdentity(retainedIdentity) != nil || retainedIdentity.User.ID != account.RootIdentity.PrincipalID ||
-			retainedIdentity.User.AccountID != id || retainedIdentity.User.MustChangePassword ||
-			!slices.ContainsFunc(retainedIdentity.PolicySources, accountAdministratorPolicySource) || slices.ContainsFunc(retainedIdentity.PolicySources, installationPolicySource) {
-			return fail("tenant-valid-password-session-not-retained")
+		if authenticationRecovered {
+			response, err := value.edge.json(
+				ctx, http.MethodGet, "/api/iam/v1/auth/me", tenant.RetainedPrimaryCredential,
+				nil, nil, http.StatusUnauthorized,
+			)
+			clear(response.body)
+			if err != nil {
+				return fail("tenant-valid-password-session-survived-recovery")
+			}
+		} else {
+			var retainedIdentity iamv1.CurrentIdentity
+			if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", tenant.RetainedPrimaryCredential, &retainedIdentity); err != nil ||
+				iamv1.ValidateCurrentIdentity(retainedIdentity) != nil || retainedIdentity.User.ID != account.RootIdentity.PrincipalID ||
+				retainedIdentity.User.AccountID != id || retainedIdentity.User.MustChangePassword ||
+				!slices.ContainsFunc(retainedIdentity.PolicySources, accountAdministratorPolicySource) || slices.ContainsFunc(retainedIdentity.PolicySources, installationPolicySource) {
+				return fail("tenant-valid-password-session-not-retained")
+			}
 		}
 		primary, err := value.edge.loginNamed(ctx, account.RootIdentity.LoginName, tenant.PrimaryPassword, id, account.RootIdentity.PrincipalID, "phase1-retained-primary")
 		if err != nil || primary.MustChangePassword {
