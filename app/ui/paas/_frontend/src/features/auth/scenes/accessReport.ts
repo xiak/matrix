@@ -28,10 +28,22 @@ export type UnusedAccessFindingPreview = {
   subjectKind: "user" | "accessKey" | "role";
   findingType: "unusedPassword" | "unusedAccessKey" | "unusedRole";
   lifecycle: "ACTIVE" | "ARCHIVED" | "RESOLVED";
+  lifecycleEvidence: {
+    lifecycle: "ACTIVE" | "ARCHIVED" | "RESOLVED";
+    occurredAt: string;
+    source: "SYNTHETIC_ANALYZER" | "SYNTHETIC_HUMAN_REVIEW";
+  }[];
   lastObservedAt: string;
   generatedAt: string;
   windowDays: 90;
   target: { view: Extract<AccountAccessView, "users" | "keys" | "roles">; id?: string };
+};
+
+export type AccessAnalysisScanPreview = {
+  state: "FAILED";
+  evidence: "PREVIOUS_SNAPSHOT_STALE";
+  lastSucceededAt: string;
+  lastAttemptedAt: string;
 };
 
 export type AccessAnalysisRulePreview = {
@@ -98,6 +110,9 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       subjectKind: "user",
       findingType: "unusedPassword",
       lifecycle: "ACTIVE",
+      lifecycleEvidence: [
+        { lifecycle: "ACTIVE", occurredAt: "2026-09-09T03:00:00Z", source: "SYNTHETIC_ANALYZER" }
+      ],
       lastObservedAt: "2026-05-18T08:15:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
       windowDays: 90,
@@ -111,6 +126,10 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       subjectKind: "accessKey",
       findingType: "unusedAccessKey",
       lifecycle: "ARCHIVED",
+      lifecycleEvidence: [
+        { lifecycle: "ACTIVE", occurredAt: "2026-09-09T03:00:00Z", source: "SYNTHETIC_ANALYZER" },
+        { lifecycle: "ARCHIVED", occurredAt: "2026-09-10T02:20:00Z", source: "SYNTHETIC_HUMAN_REVIEW" }
+      ],
       lastObservedAt: "2026-05-04T11:30:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
       windowDays: 90,
@@ -124,6 +143,10 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       subjectKind: "role",
       findingType: "unusedRole",
       lifecycle: "RESOLVED",
+      lifecycleEvidence: [
+        { lifecycle: "ACTIVE", occurredAt: "2026-09-09T03:00:00Z", source: "SYNTHETIC_ANALYZER" },
+        { lifecycle: "RESOLVED", occurredAt: "2026-09-12T05:10:00Z", source: "SYNTHETIC_ANALYZER" }
+      ],
       lastObservedAt: "2026-04-21T01:45:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
       windowDays: 90,
@@ -140,6 +163,7 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
   coverage: AccessAnalysisCoverage[];
   trustEntries: AccessAnalysisTrustEntry[];
   unusedFindings: UnusedAccessFindingPreview[];
+  scanPreview: AccessAnalysisScanPreview;
   rule: AccessAnalysisRulePreview;
 } {
   assertReportAccount(workspace, scene);
@@ -194,6 +218,12 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
     ],
     trustEntries: [...mappingEntries, ...serviceEntries],
     unusedFindings: buildUnusedAccessFindingPreview(workspace, scene),
+    scanPreview: {
+      state: "FAILED",
+      evidence: "PREVIOUS_SNAPSHOT_STALE",
+      lastSucceededAt: "2026-09-09T03:00:00Z",
+      lastAttemptedAt: "2026-09-10T03:00:00Z"
+    },
     rule: {
       id: "access-analyzer-preview",
       accountId: workspace.accountId,

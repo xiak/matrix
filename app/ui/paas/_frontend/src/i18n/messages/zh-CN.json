@@ -4411,6 +4411,19 @@
         }
       },
       "unused": {
+        "scan": {
+          "title": "扫描与证据新鲜度",
+          "hint": "合成失败场景用于验证局部加载与旧证据保留；不是后端扫描运行记录。",
+          "mockFailure": "MOCK · 最近尝试失败",
+          "summary": "扫描与证据状态",
+          "lastSucceeded": "上一份成功证据",
+          "lastAttempted": "最近一次尝试",
+          "currentAttempt": "当前尝试",
+          "displayedEvidence": "当前展示",
+          "states": { "FAILED": "失败（合成）" },
+          "evidence": { "PREVIOUS_SNAPSHOT_STALE": "上一份证据 · 非最新" },
+          "failureBoundary": "新的扫描尝试失败时，页面保留上一份已成功证据并明确标记为非最新；不能闪成空列表，也不能把失败解释成没有风险或扫描成功。"
+        },
         "sampleAnalyzer": "分析器样例",
         "sampleAnalyzerHint": "合成的 90 天完整观测窗口，只用于检查只读信息结构；固定 S4c-a 的真实 Finding 列表当前必须为空。",
         "mock": "MOCK 分析器",
@@ -4436,6 +4449,10 @@
         "detailTitle": "审阅 · {name}",
         "sampleEvidence": "本页展示合成的完整窗口证据。真实 Matrix 活动数据仍是未知，不能据此对同名对象执行处置。",
         "lifecycle": { "ACTIVE": "待复核", "ARCHIVED": "已归档", "RESOLVED": "已解决" },
+        "lifecycleEvidenceTitle": "状态证据时间线",
+        "lifecycleEvents": { "ACTIVE": "后端扫描形成待复核 Finding", "ARCHIVED": "人工完成复核并归档", "RESOLVED": "后继权威扫描确认条件消失" },
+        "lifecycleSources": { "SYNTHETIC_ANALYZER": "合成扫描证据", "SYNTHETIC_HUMAN_REVIEW": "合成人工复核证据" },
+        "lifecycleEvidenceBoundary": "时间线只解释合成样例的状态来源，不是 Audit 事实、服务端回执或可用于重放的处置凭证。",
         "lifecycleBoundaries": {
           "ACTIVE": "待复核只表示合成样例中的闲置条件仍成立；它不是处置许可，也不会自动停用对象。",
           "ARCHIVED": "归档只表示人工已复核并从待处理列表移出；它不改变身份、凭证、角色或权限。",

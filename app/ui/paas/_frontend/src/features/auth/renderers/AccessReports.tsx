@@ -151,6 +151,14 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           <div><dt>{t("unused.findingCreated")}</dt><dd><WorkspaceTime value={selectedUnused.generatedAt} /></dd></div>
           <div><dt>{t("unused.evidenceCoverage")}</dt><dd>{t("unused.completeSample")}</dd></div>
         </dl>
+        <section aria-labelledby="unused-lifecycle-evidence" className={styles.stack}>
+          <Typography.Title as="h3" id="unused-lifecycle-evidence" level={3}>{t("unused.lifecycleEvidenceTitle")}</Typography.Title>
+          <ol className={styles.securityChecks}>{selectedUnused.lifecycleEvidence.map((event) => <li key={`${event.lifecycle}:${event.occurredAt}`}>
+            <Badge status={unusedFindingStatus[event.lifecycle]} title={event.lifecycle}>{t(`unused.lifecycle.${event.lifecycle}`)}</Badge>
+            <div className={styles.securityCheckCopy}><strong>{t(`unused.lifecycleEvents.${event.lifecycle}`)}</strong><p><WorkspaceTime value={event.occurredAt} /> · {t(`unused.lifecycleSources.${event.source}`)}</p></div>
+          </li>)}</ol>
+          <Alert status="info">{t("unused.lifecycleEvidenceBoundary")}</Alert>
+        </section>
         <section aria-labelledby="unused-access-recommendation" className={styles.stack}>
           <Typography.Title as="h3" id="unused-access-recommendation" level={3}>{t("unused.recommendationTitle")}</Typography.Title>
           <p className={styles.note}>{t(`unused.recommendations.${selectedUnused.findingType}`)}</p>
@@ -180,6 +188,18 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           footerNote={t("external.directoryHint")} />
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="unused">
+        <Card>
+          <Card.Header><div><Typography.Title as="h2" level={3}>{t("unused.scan.title")}</Typography.Title><Typography.Text tone="muted">{t("unused.scan.hint")}</Typography.Text></div><Badge status="warning">{t("unused.scan.mockFailure")}</Badge></Card.Header>
+          <Card.Body className={styles.securityReportBody}>
+            <dl className={`${styles.securityReportSummary} ${styles.scanSummary}`} aria-label={t("unused.scan.summary")}>
+              <div><dt>{t("unused.scan.lastSucceeded")}</dt><dd><WorkspaceTime value={analysis.scanPreview.lastSucceededAt} /></dd></div>
+              <div><dt>{t("unused.scan.lastAttempted")}</dt><dd><WorkspaceTime value={analysis.scanPreview.lastAttemptedAt} /></dd></div>
+              <div><dt>{t("unused.scan.currentAttempt")}</dt><dd>{t(`unused.scan.states.${analysis.scanPreview.state}`)}</dd></div>
+              <div><dt>{t("unused.scan.displayedEvidence")}</dt><dd>{t(`unused.scan.evidence.${analysis.scanPreview.evidence}`)}</dd></div>
+            </dl>
+            <Alert status="warning">{t("unused.scan.failureBoundary")}</Alert>
+          </Card.Body>
+        </Card>
         <Card>
           <Card.Header><div><Typography.Title as="h2" level={3}>{t("unused.sampleAnalyzer")}</Typography.Title><Typography.Text tone="muted">{t("unused.sampleAnalyzerHint")}</Typography.Text></div><Badge status="info">{t("unused.mock")}</Badge></Card.Header>
           <Card.Body className={styles.securityReportBody}>

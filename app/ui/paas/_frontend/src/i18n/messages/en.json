@@ -4394,6 +4394,19 @@
         }
       },
       "unused": {
+        "scan": {
+          "title": "Scan and evidence freshness",
+          "hint": "A synthetic failure scenario validates local loading and retained evidence. It is not a backend scan record.",
+          "mockFailure": "MOCK · Latest attempt failed",
+          "summary": "Scan and evidence state",
+          "lastSucceeded": "Last successful evidence",
+          "lastAttempted": "Latest attempt",
+          "currentAttempt": "Current attempt",
+          "displayedEvidence": "Currently displayed",
+          "states": { "FAILED": "Failed (synthetic)" },
+          "evidence": { "PREVIOUS_SNAPSHOT_STALE": "Previous evidence · not current" },
+          "failureBoundary": "When a new scan attempt fails, the page retains the last successful evidence and marks it as not current. It must not flash to an empty list or translate failure into no risk or scan success."
+        },
         "sampleAnalyzer": "Analyzer sample",
         "sampleAnalyzerHint": "A synthetic complete 90-day observation window for evaluating read-only information structure. The fixed S4c-a real Finding list must currently be empty.",
         "mock": "MOCK analyzer",
@@ -4419,6 +4432,10 @@
         "detailTitle": "Review · {name}",
         "sampleEvidence": "This page shows synthetic complete-window evidence. Real Matrix activity remains unknown and cannot justify action against an object with the same name.",
         "lifecycle": { "ACTIVE": "Needs review", "ARCHIVED": "Archived", "RESOLVED": "Resolved" },
+        "lifecycleEvidenceTitle": "State evidence timeline",
+        "lifecycleEvents": { "ACTIVE": "Backend scan produced a Finding that needs review", "ARCHIVED": "Human review completed and archived the Finding", "RESOLVED": "A later authoritative scan confirmed the condition disappeared" },
+        "lifecycleSources": { "SYNTHETIC_ANALYZER": "Synthetic scan evidence", "SYNTHETIC_HUMAN_REVIEW": "Synthetic human-review evidence" },
+        "lifecycleEvidenceBoundary": "The timeline explains only the synthetic sample's state source. It is not an Audit fact, server receipt, or replayable remediation credential.",
         "lifecycleBoundaries": {
           "ACTIVE": "Needs review means only that the synthetic sample's unused condition still holds. It is not a remediation permit and does not disable the object.",
           "ARCHIVED": "Archived means only that a human reviewed and removed the Finding from the active queue. It changes no identity, credential, role, or permission.",

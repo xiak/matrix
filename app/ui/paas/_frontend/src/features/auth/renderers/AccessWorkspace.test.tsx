@@ -4156,6 +4156,16 @@ describe("CAM-style access workspace", () => {
       { accountId: "org-xiak", findingType: "unusedAccessKey", lifecycle: "ARCHIVED" },
       { accountId: "org-xiak", findingType: "unusedRole", lifecycle: "RESOLVED" }
     ]);
+    expect(analysis.unusedFindings[1]?.lifecycleEvidence.map(({ lifecycle, source }) => `${lifecycle}:${source}`)).toEqual([
+      "ACTIVE:SYNTHETIC_ANALYZER", "ARCHIVED:SYNTHETIC_HUMAN_REVIEW"
+    ]);
+    expect(analysis.unusedFindings[2]?.lifecycleEvidence.map(({ lifecycle, source }) => `${lifecycle}:${source}`)).toEqual([
+      "ACTIVE:SYNTHETIC_ANALYZER", "RESOLVED:SYNTHETIC_ANALYZER"
+    ]);
+    expect(analysis.scanPreview).toEqual({
+      state: "FAILED", evidence: "PREVIOUS_SNAPSHOT_STALE",
+      lastSucceededAt: "2026-09-09T03:00:00Z", lastAttemptedAt: "2026-09-10T03:00:00Z"
+    });
     expect(analysis.rule).toEqual({
       id: "access-analyzer-preview",
       accountId: "org-xiak",
@@ -4188,6 +4198,10 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "返回列表" }));
     await user.click(screen.getByRole("tab", { name: "未使用访问 (3)" }));
     expect(screen.getByText(/当前真实数据不满足该前提/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "扫描与证据新鲜度" })).toBeTruthy();
+    expect(screen.getByText("上一份证据 · 非最新")).toBeTruthy();
+    expect(screen.getByText(/不能闪成空列表/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /开始扫描|重新扫描|重试扫描/ })).toBeNull();
     const table = screen.getByRole("table", { name: "未使用访问发现样例" });
     expect(table.getAttribute("data-mobile-layout")).toBe("stack");
     await user.click(screen.getByRole("button", { name: /^筛选/ }));
@@ -4204,6 +4218,9 @@ describe("CAM-style access workspace", () => {
     await user.click(within(table).getByRole("button", { name: first.name }));
     expect(screen.getByRole("heading", { name: `审阅 · ${first.name}` })).toBeTruthy();
     expect(screen.getByText("完整窗口（合成样例）")).toBeTruthy();
+    const lifecycleEvidence = screen.getByRole("region", { name: "状态证据时间线" });
+    expect(within(lifecycleEvidence).getByText("待复核")).toBeTruthy();
+    expect(within(lifecycleEvidence).getByText(/合成扫描证据/)).toBeTruthy();
     expect(screen.getByText(/不是处置许可/)).toBeTruthy();
     expect(screen.getByText(/不能从一条未使用发现直接删除身份或权限/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看对应对象" }));
