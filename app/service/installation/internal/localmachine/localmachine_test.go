@@ -847,6 +847,9 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	if err := effects.CreateBackup(context.Background(), request); err != nil {
 		t.Fatalf("create protected backup: %v", err)
 	}
+	if runtimeBoundary.backupCustodyRuns != 1 {
+		t.Fatalf("TOTP backup custody runs = %d, want 1", runtimeBoundary.backupCustodyRuns)
+	}
 	backupRoot := filepath.Join(
 		plan.Root, filepath.FromSlash(layout.BackupDirectory), request.BackupID,
 	)
@@ -901,6 +904,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		t.Fatalf("workload secret snapshot differs: read=%v close=%v", err, closeErr)
 	}
 	streams := runtimeBoundary.backupStreams
+	custodyRuns := runtimeBoundary.backupCustodyRuns
 	if streams == 0 || runtimeBoundary.restoreChecks == 0 ||
 		len(runtimeBoundary.migrationRuns) != len(platformMigrations) {
 		t.Fatal("backup did not verify the schema and PostgreSQL custom dump")
@@ -910,6 +914,9 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	}
 	if runtimeBoundary.backupStreams != streams {
 		t.Fatal("backup replay streamed a second database snapshot")
+	}
+	if runtimeBoundary.backupCustodyRuns != custodyRuns {
+		t.Fatal("backup replay acquired a second TOTP custody snapshot")
 	}
 	for _, scalar := range []string{"0", "null"} {
 		ambiguous := append([]byte(`{"schemaVersion":`+scalar+`,`), manifestContent[1:]...)
@@ -1000,6 +1007,17 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 		Target:       plan,
 		BackupID:     source.BackupID,
 		BackupDigest: source.BackupDigest,
+		AuthenticationIntent: installationv1.AuthenticationRecoveryIntent{
+			APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:           installationv1.AuthenticationRecoveryIntentKind,
+			Purpose:        installationv1.AuthenticationRecoveryPurpose,
+			InstallationID: plan.InstallationID, Epoch: 1, CommandID: plan.CorrelationID,
+			BackupID: source.BackupID, BackupDigest: source.BackupDigest,
+			SourceReleaseID: plan.Bundle.Manifest.Release.ID, SourceReleaseDigest: plan.Bundle.ManifestSHA256,
+			TargetReleaseID: plan.Bundle.Manifest.Release.ID, TargetReleaseDigest: plan.Bundle.ManifestSHA256,
+			TOTPCustodyDigest:         source.TOTPCustodyDigest,
+			AuthenticationStateDigest: source.AuthenticationStateDigest,
+		},
 	}
 	for _, phase := range []lifecycle.Phase{
 		lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying,
@@ -1103,7 +1121,11 @@ func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *test
 		t.Skip("local-machine backup effects target Linux")
 	}
 	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
-	plan, expectation := configuredPlatformStartFixture(t, legacy)
+	// Produce the backup through the current private snapshot protocol, then
+	// rewrite only its published v1 manifest bytes below. Supporting a sealed
+	// legacy manifest does not make the legacy runtime profile executable by
+	// the current backup-custody helper.
+	plan, expectation := configuredPlatformStartFixture(t)
 	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
 	runtimeBoundary.started = true
 	effects := &Effects{runtime: runtimeBoundary, entropy: rand.Reader, verifier: &recordingInstallationVerifier{}}
@@ -1124,6 +1146,9 @@ func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *test
 		t.Fatal(err)
 	}
 	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = legacyBackupAPIVersion, 1, release.DatabaseProfile{}
+	manifest.AccessKeyWrapping = nil
+	manifest.TOTPBackupCustody = nil
+	manifest.AuthenticationStateDigest = ""
 	key, err := loadBackupSealKey(plan.Root, nil, false)
 	if err != nil {
 		t.Fatal(err)
@@ -1148,19 +1173,23 @@ func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *test
 	if err := os.WriteFile(backupPath, sealed, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	source, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID)
-	if err != nil || source.Database != legacy {
-		t.Fatalf("read published backup: %#v / %v", source.Database, err)
+	legacyManifest, _, err := readVerifiedBackupDirectory(
+		plan.Root, plan.InstallationID, request.BackupID,
+		filepath.Join(filepath.FromSlash(layout.BackupDirectory), request.BackupID), key,
+	)
+	profile, profileErr := legacyManifest.databaseProfile()
+	if err != nil || profileErr != nil || profile != legacy {
+		t.Fatalf("read published backup: %#v / %v / %v", profile, err, profileErr)
 	}
-	if err := effects.CreateBackup(context.Background(), request); err != nil {
-		t.Fatalf("replay published backup: %v", err)
+	if err := effects.CreateBackup(context.Background(), request); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("legacy backup replay was not rejected by the current runtime: %v", err)
 	}
 	retained, err := os.ReadFile(backupPath)
 	if err != nil || !bytes.Equal(retained, sealed) {
 		t.Fatal("legacy backup replay rewrote its sealed bytes")
 	}
 
-	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = backupAPIVersion, 0, release.CurrentDatabaseProfile()
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = legacyBackupAPIVersion, 2, release.DatabaseProfile{}
 	substituted, err := sealBackupManifest(manifest, key)
 	if err != nil {
 		t.Fatal(err)
@@ -1168,8 +1197,14 @@ func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *test
 	if err := os.WriteFile(backupPath, substituted, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID); !errors.Is(err, platformcommand.ErrEffectVerification) {
-		t.Fatalf("validly sealed different profile masked the backup release: %v", err)
+	if different, _, err := readVerifiedBackupDirectory(
+		plan.Root, plan.InstallationID, request.BackupID,
+		filepath.Join(filepath.FromSlash(layout.BackupDirectory), request.BackupID), key,
+	); err != nil || different.SchemaVersion != 2 {
+		t.Fatalf("read validly sealed alternate legacy profile: %v", err)
+	}
+	if err := effects.CreateBackup(context.Background(), request); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("validly sealed different profile masked the installed release: %v", err)
 	}
 }
 
@@ -1803,6 +1838,13 @@ type migrationRuntime struct {
 type platformStartRuntime struct {
 	expectation               platformComposeExpectation
 	images                    map[string]bool
+	root                      string
+	installationID            string
+	correlationID             string
+	releaseID                 string
+	iamImageID                string
+	authenticationRecovery    platformContainerInspection
+	authenticationPresent     bool
 	started                   bool
 	resourceDriftService      string
 	userDriftService          string
@@ -1816,6 +1858,7 @@ type platformStartRuntime struct {
 	migrationRuns             [][]string
 	databaseDump              []byte
 	backupStreams             int
+	backupCustodyRuns         int
 	restoreChecks             int
 	recoveryRestores          int
 	postgresOnly              bool
@@ -1846,12 +1889,25 @@ func newPlatformStartRuntime(
 	expectation platformComposeExpectation,
 ) *platformStartRuntime {
 	images := make(map[string]bool, len(plan.Bundle.Manifest.Images))
+	iamImageID := ""
+	iamImages := 0
 	for _, image := range plan.Bundle.Manifest.Images {
 		images[image.ImageID] = true
+		if image.Component == "iam" {
+			iamImages++
+			iamImageID = image.ImageID
+		}
+	}
+	if iamImages != 1 {
+		iamImageID = ""
 	}
 	return &platformStartRuntime{
-		expectation: expectation, images: images,
-		databaseDump: []byte("matrix-postgresql-custom-backup-fixture"),
+		expectation: expectation, images: images, root: plan.Root,
+		installationID: plan.InstallationID,
+		correlationID:  plan.CorrelationID,
+		releaseID:      plan.Bundle.Manifest.Release.ID,
+		iamImageID:     iamImageID,
+		databaseDump:   []byte("matrix-postgresql-custom-backup-fixture"),
 	}
 }
 
@@ -2047,6 +2103,9 @@ func (runtimeBoundary *platformStartRuntime) Run(
 	if input != nil {
 		return nil, false, errors.New("platform start Docker invocation has unexpected stdin")
 	}
+	if output, started, handled, err := runtimeBoundary.runAuthenticationRecovery(arguments); handled {
+		return output, started, err
+	}
 	if arguments[0] == "exec" && slices.Contains(arguments, "psql") {
 		if !slices.Contains(arguments, "--no-password") {
 			return nil, false, errors.New("platform database observation may prompt for a password")
@@ -2057,6 +2116,9 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		imageID := arguments[4]
 		if !runtimeBoundary.images[imageID] {
 			return nil, true, errors.New("platform image is absent")
+		}
+		if arguments[3] == "{{json .Config.Env}}" {
+			return []byte(`["PATH=/usr/bin"]`), true, nil
 		}
 		return []byte(imageID + "|linux|amd64\n"), true, nil
 	}
@@ -2197,13 +2259,16 @@ func (runtimeBoundary *platformStartRuntime) Run(
 }
 
 func (runtimeBoundary *platformStartRuntime) RunTo(
-	_ context.Context,
+	ctx context.Context,
 	input io.Reader,
 	output io.Writer,
 	arguments ...string,
 ) (bool, error) {
 	if output == nil {
 		return false, errors.New("platform backup streaming invocation is invalid")
+	}
+	if hasArgumentPair(arguments, "--entrypoint", totpBackupCustodyEntrypoint) {
+		return runtimeBoundary.runTOTPBackupCustody(ctx, input, output, arguments)
 	}
 	if slices.Contains(arguments, "pg_restore") {
 		if input == nil {
@@ -2251,6 +2316,392 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 	return true, err
 }
 
+func (runtimeBoundary *platformStartRuntime) runAuthenticationRecovery(
+	arguments []string,
+) ([]byte, bool, bool, error) {
+	if len(arguments) < 2 || arguments[0] != "container" {
+		return nil, false, false, nil
+	}
+	const identity = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	switch arguments[1] {
+	case "ls":
+		filter := ""
+		for index := 0; index+1 < len(arguments); index++ {
+			if arguments[index] == "--filter" && strings.HasPrefix(arguments[index+1], "name=^/") &&
+				strings.Contains(arguments[index+1], "-iam-authentication-recovery-") {
+				filter = arguments[index+1]
+			}
+		}
+		if filter == "" {
+			return nil, false, false, nil
+		}
+		want := "name=^/" + strings.TrimPrefix(runtimeBoundary.authenticationRecovery.Name, "/") + "$"
+		if !runtimeBoundary.authenticationPresent || filter != want {
+			return nil, true, true, nil
+		}
+		return []byte(identity + "\n"), true, true, nil
+	case "create":
+		if !hasArgumentPair(arguments, "--entrypoint", authenticationRecoveryEntrypoint) {
+			return nil, false, false, nil
+		}
+		container, err := runtimeBoundary.authenticationRecoveryContainer(arguments, identity)
+		if err != nil {
+			return nil, true, true, err
+		}
+		runtimeBoundary.authenticationRecovery = container
+		runtimeBoundary.authenticationPresent = true
+		return []byte(identity + "\n"), true, true, nil
+	case "inspect":
+		if !runtimeBoundary.authenticationPresent || arguments[len(arguments)-1] != identity {
+			return nil, false, false, nil
+		}
+		encoded, err := json.Marshal(runtimeBoundary.authenticationRecovery)
+		return encoded, true, true, err
+	case "start":
+		if !runtimeBoundary.authenticationPresent || arguments[len(arguments)-1] != identity ||
+			!slices.Contains(arguments, "--attach") {
+			return nil, false, false, nil
+		}
+		output, err := runtimeBoundary.authenticationRecoveryResult()
+		runtimeBoundary.authenticationRecovery.State = platformContainerState{Status: "exited"}
+		return output, true, true, err
+	case "rm":
+		if !runtimeBoundary.authenticationPresent || arguments[len(arguments)-1] != identity ||
+			runtimeBoundary.authenticationRecovery.State.Running {
+			return nil, false, false, nil
+		}
+		runtimeBoundary.authenticationPresent = false
+		runtimeBoundary.authenticationRecovery = platformContainerInspection{}
+		return nil, true, true, nil
+	default:
+		return nil, false, false, nil
+	}
+}
+
+func (runtimeBoundary *platformStartRuntime) authenticationRecoveryContainer(
+	arguments []string,
+	identity string,
+) (platformContainerInspection, error) {
+	if runtimeBoundary.root == "" || runtimeBoundary.installationID == "" ||
+		runtimeBoundary.correlationID == "" || runtimeBoundary.releaseID == "" ||
+		runtimeBoundary.iamImageID == "" || len(arguments) < 4 ||
+		arguments[len(arguments)-2] != runtimeBoundary.iamImageID {
+		return platformContainerInspection{}, errors.New("authentication recovery fixture is incomplete")
+	}
+	mode := arguments[len(arguments)-1]
+	if mode != installationv1.AuthenticationRecoveryCloseCommand &&
+		mode != installationv1.AuthenticationRecoveryReconcileCommand &&
+		mode != installationv1.AuthenticationRecoveryReopenCommand {
+		return platformContainerInspection{}, errors.New("authentication recovery mode is invalid")
+	}
+	values := func(name string) []string {
+		found := make([]string, 0, 2)
+		for index := 0; index+1 < len(arguments); index++ {
+			if arguments[index] == name {
+				found = append(found, arguments[index+1])
+			}
+		}
+		return found
+	}
+	one := func(name string) (string, bool) {
+		found := values(name)
+		return strings.Join(found, ""), len(found) == 1
+	}
+	name, nameOK := one("--name")
+	networkID, networkOK := one("--network")
+	user, userOK := one("--user")
+	entrypoint, entrypointOK := one("--entrypoint")
+	wantName := runtimeBoundary.expectation.Name + "-iam-authentication-recovery-" + mode
+	if !nameOK || name != wantName || !networkOK || networkID != "network-control" ||
+		!userOK || user != "0:0" || !entrypointOK || entrypoint != authenticationRecoveryEntrypoint ||
+		!hasArgumentPair(arguments, "--pull", "never") || !slices.Contains(arguments, "--read-only") ||
+		!hasArgumentPair(arguments, "--cpus", "1") || !hasArgumentPair(arguments, "--memory", "256m") ||
+		!hasArgumentPair(arguments, "--memory-swap", "256m") || !hasArgumentPair(arguments, "--pids-limit", "64") ||
+		!hasArgumentPair(arguments, "--ipc", "private") || !hasArgumentPair(arguments, "--cgroupns", "private") ||
+		!hasArgumentPair(arguments, "--restart", "no") || !hasArgumentPair(arguments, "--log-driver", "none") {
+		return platformContainerInspection{}, errors.New("authentication recovery isolation is invalid")
+	}
+	labels := make(map[string]string)
+	for _, value := range values("--label") {
+		key, labelValue, found := strings.Cut(value, "=")
+		if !found || key == "" || labels[key] != "" {
+			return platformContainerInspection{}, errors.New("authentication recovery labels are invalid")
+		}
+		labels[key] = labelValue
+	}
+	if labels["com.xiak.matrix.managed"] != "true" ||
+		labels["com.xiak.matrix.installation"] != runtimeBoundary.installationID ||
+		labels["com.xiak.matrix.release"] != runtimeBoundary.releaseID ||
+		labels["com.xiak.matrix.role"] != "iam-authentication-recovery-"+mode ||
+		labels["com.xiak.matrix.command"] != runtimeBoundary.correlationID ||
+		!validSHA256(labels["com.xiak.matrix.input"]) {
+		return platformContainerInspection{}, errors.New("authentication recovery labels differ")
+	}
+	mounts := make([]platformProviderMount, 0, 3)
+	for _, value := range values("--mount") {
+		fields := strings.Split(value, ",")
+		if len(fields) != 4 || fields[0] != "type=bind" || fields[3] != "readonly" ||
+			!strings.HasPrefix(fields[1], "src=") || !strings.HasPrefix(fields[2], "dst=") {
+			return platformContainerInspection{}, errors.New("authentication recovery mount is invalid")
+		}
+		source, destination := strings.TrimPrefix(fields[1], "src="), strings.TrimPrefix(fields[2], "dst=")
+		if !strings.HasPrefix(filepath.Clean(source)+string(os.PathSeparator), filepath.Clean(runtimeBoundary.root)+string(os.PathSeparator)) {
+			return platformContainerInspection{}, errors.New("authentication recovery mount escaped the installation")
+		}
+		mounts = append(mounts, platformProviderMount{Type: "bind", Source: source, Destination: destination})
+	}
+	environment := append([]string{"PATH=/usr/bin"}, values("--env")...)
+	limit := int64(64)
+	container := platformContainerInspection{
+		ID: identity, Name: "/" + name, Image: runtimeBoundary.iamImageID,
+		Config: platformContainerConfig{
+			Labels: labels, User: user, Env: environment,
+			Entrypoint: []string{entrypoint}, Cmd: []string{mode},
+		},
+		State:  platformContainerState{Status: "created"},
+		Mounts: mounts,
+		HostConfig: platformHostConfig{
+			ReadonlyRootfs: true, NetworkMode: networkID, Memory: 256 * 1024 * 1024,
+			MemorySwap: 256 * 1024 * 1024, PidsLimit: &limit, NanoCPUs: 1_000_000_000,
+			CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
+			Tmpfs:   map[string]string{"/tmp": "rw,noexec,nosuid,size=64m"},
+			IpcMode: "private", CgroupnsMode: "private",
+		},
+	}
+	container.HostConfig.RestartPolicy.Name = "no"
+	container.HostConfig.LogConfig.Type = "none"
+	container.NetworkSettings.Networks = map[string]struct {
+		NetworkID string `json:"NetworkID"`
+	}{"control": {}}
+	return container, nil
+}
+
+func (runtimeBoundary *platformStartRuntime) authenticationRecoveryResult() ([]byte, error) {
+	container := runtimeBoundary.authenticationRecovery
+	if len(container.Config.Cmd) != 1 {
+		return nil, errors.New("authentication recovery command is absent")
+	}
+	mounted := func(destination string) ([]byte, error) {
+		for _, mount := range container.Mounts {
+			if mount.Destination == destination {
+				return os.ReadFile(mount.Source)
+			}
+		}
+		return nil, errors.New("authentication recovery protected input is absent")
+	}
+	switch container.Config.Cmd[0] {
+	case installationv1.AuthenticationRecoveryCloseCommand:
+		encoded, err := mounted("/run/matrix/authentication-recovery-input.json")
+		if err != nil {
+			return nil, err
+		}
+		intent, err := installationv1.DecodeAuthenticationRecoveryIntent(bytes.NewReader(encoded))
+		clear(encoded)
+		if err != nil {
+			return nil, err
+		}
+		intentDigest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
+		if err != nil {
+			return nil, err
+		}
+		_, bootstrapDigest, err := sealedIAMBootstrapScope(runtimeBoundary.root, runtimeBoundary.installationID)
+		if err != nil {
+			return nil, err
+		}
+		closedAt := time.Date(2026, 10, 3, 8, 9, 10, 11_000, time.UTC)
+		snapshot := installationv1.AuthenticationRecoverySecuritySnapshot{
+			APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:           installationv1.AuthenticationRecoverySecuritySnapshotKind,
+			Purpose:        installationv1.AuthenticationRecoveryPurpose,
+			InstallationID: intent.InstallationID, BootstrapDigest: bootstrapDigest,
+			Epoch: intent.Epoch, CommandID: intent.CommandID, RecoveryIntentDigest: intentDigest,
+			ClosedAt: closedAt, AuthenticationStateDigest: intent.AuthenticationStateDigest,
+			Accounts: []installationv1.AuthenticationRecoveryAccountReplay{{
+				AccountID: "account", Users: []installationv1.AuthenticationRecoveryUserReplay{{
+					UserID: "root", LastConsumedStep: -1,
+				}},
+			}},
+		}
+		snapshotDigest, err := installationv1.AuthenticationRecoverySecuritySnapshotDigest(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		closure := installationv1.AuthenticationRecoveryClosure{
+			APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:           installationv1.AuthenticationRecoveryClosureKind,
+			Purpose:        installationv1.AuthenticationRecoveryPurpose,
+			InstallationID: intent.InstallationID, Epoch: intent.Epoch,
+			State: installationv1.AuthenticationRecoveryStateClosed, CommandID: intent.CommandID,
+			BackupID: intent.BackupID, BackupDigest: intent.BackupDigest,
+			RecoveryIntentDigest: intentDigest, TOTPCustodyDigest: intent.TOTPCustodyDigest,
+			ClosedAt: closedAt, SecuritySnapshotDigest: snapshotDigest,
+		}
+		return installationv1.EncodeAuthenticationRecoveryClosureEnvelope(
+			installationv1.AuthenticationRecoveryClosureEnvelope{
+				APIVersion: installationv1.AuthenticationRecoveryAPIVersion,
+				Kind:       installationv1.AuthenticationRecoveryClosureEnvelopeKind,
+				Purpose:    installationv1.AuthenticationRecoveryPurpose,
+				Closure:    closure, SecuritySnapshot: snapshot,
+			},
+		)
+	case installationv1.AuthenticationRecoveryReconcileCommand, installationv1.AuthenticationRecoveryReopenCommand:
+		closureBytes, err := mounted("/run/matrix/authentication-recovery-input.json")
+		if err != nil {
+			return nil, err
+		}
+		closure, err := installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(closureBytes))
+		clear(closureBytes)
+		if err != nil {
+			return nil, err
+		}
+		snapshotBytes, err := mounted("/run/matrix/authentication-recovery-security-snapshot.json")
+		if err != nil {
+			return nil, err
+		}
+		snapshot, err := installationv1.DecodeAuthenticationRecoverySecuritySnapshot(bytes.NewReader(snapshotBytes))
+		clear(snapshotBytes)
+		if err != nil || installationv1.ValidateAuthenticationRecoverySecuritySnapshotForClosure(snapshot, closure) != nil {
+			return nil, errors.New("authentication recovery snapshot differs")
+		}
+		if container.Config.Cmd[0] == installationv1.AuthenticationRecoveryReconcileCommand {
+			return installationv1.EncodeAuthenticationRecoveryClosure(closure)
+		}
+		closureDigest, err := installationv1.AuthenticationRecoveryClosureDigest(closure)
+		if err != nil {
+			return nil, err
+		}
+		return installationv1.EncodeAuthenticationRecoveryCompletion(
+			installationv1.AuthenticationRecoveryCompletion{
+				APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
+				Kind:           installationv1.AuthenticationRecoveryCompletionKind,
+				Purpose:        installationv1.AuthenticationRecoveryPurpose,
+				InstallationID: closure.InstallationID, Epoch: closure.Epoch,
+				State: installationv1.AuthenticationRecoveryStateReopened, CommandID: closure.CommandID,
+				ClosureDigest: closureDigest, CompletedAt: closure.ClosedAt.Add(time.Microsecond),
+				SecuritySnapshotDigest: closure.SecuritySnapshotDigest,
+			},
+		)
+	default:
+		return nil, errors.New("authentication recovery mode is unsupported")
+	}
+}
+
+func (runtimeBoundary *platformStartRuntime) runTOTPBackupCustody(
+	ctx context.Context,
+	input io.Reader,
+	output io.Writer,
+	arguments []string,
+) (bool, error) {
+	if ctx == nil || input == nil || runtimeBoundary.root == "" ||
+		runtimeBoundary.installationID == "" || runtimeBoundary.releaseID == "" ||
+		runtimeBoundary.iamImageID == "" {
+		return false, errors.New("TOTP backup custody fixture is incomplete")
+	}
+	backupID := ""
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] != "--label" ||
+			!strings.HasPrefix(arguments[index+1], "com.xiak.matrix.backup=") {
+			continue
+		}
+		if backupID != "" {
+			return true, errors.New("TOTP backup custody has ambiguous backup identity")
+		}
+		backupID = strings.TrimPrefix(arguments[index+1], "com.xiak.matrix.backup=")
+	}
+	if !backupIDPattern.MatchString(backupID) {
+		return true, errors.New("TOTP backup custody backup identity is invalid")
+	}
+	dsnSource, err := managedPath(
+		runtimeBoundary.root, filepath.FromSlash(layout.IAMBackupCustody),
+	)
+	if err != nil {
+		return true, err
+	}
+	want := []string{
+		"run", "--rm", "--pull", "never", "--interactive",
+		"--name", runtimeBoundary.expectation.Name + "-iam-backup-custody-" + strings.TrimPrefix(backupID, "backup-"),
+		"--network", "network-control",
+		"--user", "0:0", "--read-only",
+		"--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+		"--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+		"--cpus", "1", "--memory", "256m", "--memory-swap", "256m",
+		"--pids-limit", "64", "--ipc", "private", "--cgroupns", "private",
+		"--log-driver", "none",
+		"--label", "com.xiak.matrix.managed=true",
+		"--label", "com.xiak.matrix.installation=" + runtimeBoundary.installationID,
+		"--label", "com.xiak.matrix.release=" + runtimeBoundary.releaseID,
+		"--label", "com.xiak.matrix.role=iam-backup-custody",
+		"--label", "com.xiak.matrix.backup=" + backupID,
+		"--mount", "type=bind,src=" + dsnSource + ",dst=" + totpBackupCustodyDSNTarget + ",readonly",
+		"--env", installationv1.TOTPBackupCustodyDatabaseDSNFileEnvironment + "=" + totpBackupCustodyDSNTarget,
+		"--entrypoint", totpBackupCustodyEntrypoint,
+		runtimeBoundary.iamImageID, installationv1.TOTPBackupCustodySnapshotCommand,
+	}
+	if !slices.Equal(arguments, want) {
+		return true, fmt.Errorf("TOTP backup custody invocation is invalid: %q", strings.Join(arguments, " "))
+	}
+	keyring, err := readTOTPKeyring(runtimeBoundary.root, runtimeBoundary.installationID)
+	if err != nil {
+		return true, err
+	}
+	defer func() { keyring = iamv1.TOTPKeyring{} }()
+	required := make([]installationv1.TOTPBackupRequiredKey, 0, len(keyring.Keys))
+	for _, key := range keyring.Keys {
+		commitment, commitmentErr := iamv1.TOTPKeyMaterialCommitment(keyring, key.KeyID)
+		if commitmentErr != nil {
+			return true, commitmentErr
+		}
+		required = append(required, installationv1.TOTPBackupRequiredKey{
+			KeyID: key.KeyID, FormatVersion: key.FormatVersion, Commitment: commitment,
+		})
+	}
+	custody := installationv1.TOTPBackupCustody{
+		APIVersion:     installationv1.TOTPBackupCustodyAPIVersion,
+		Kind:           installationv1.TOTPBackupCustodyKind,
+		Purpose:        installationv1.TOTPBackupCustodyPurpose,
+		InstallationID: keyring.Scope.InstallationID, BootstrapDigest: keyring.Scope.BootstrapDigest,
+		KeysetRevision: keyring.KeysetRevision, RequiredKeys: required,
+	}
+	custodyDigest, err := installationv1.TOTPBackupCustodyDigest(custody)
+	if err != nil {
+		return true, err
+	}
+	authenticationState := sha256.Sum256([]byte(
+		"matrix.localmachine.test.authentication-state.v1\x00" + runtimeBoundary.installationID,
+	))
+	lease := installationv1.TOTPBackupSnapshotLease{
+		APIVersion: installationv1.TOTPBackupCustodyAPIVersion,
+		Kind:       installationv1.TOTPBackupSnapshotLeaseKind,
+		Purpose:    installationv1.TOTPBackupCustodyPurpose,
+		SnapshotID: "00000003-0000001B-1", Custody: custody, CustodyDigest: custodyDigest,
+		AuthenticationStateDigest: "sha256:" + hex.EncodeToString(authenticationState[:]),
+	}
+	encoded, err := installationv1.EncodeTOTPBackupSnapshotLease(lease)
+	if err != nil {
+		return true, err
+	}
+	encoded = append(encoded, '\n')
+	if _, err := output.Write(encoded); err != nil {
+		return true, err
+	}
+	releaseFrame, err := io.ReadAll(io.LimitReader(
+		input, int64(len(installationv1.TOTPBackupCustodyReleaseFrame)+1),
+	))
+	if err != nil {
+		return true, err
+	}
+	select {
+	case <-ctx.Done():
+		return true, ctx.Err()
+	default:
+	}
+	if string(releaseFrame) != installationv1.TOTPBackupCustodyReleaseFrame {
+		return true, errors.New("TOTP backup custody release frame is invalid")
+	}
+	runtimeBoundary.backupCustodyRuns++
+	return true, nil
+}
+
 func (runtimeBoundary *platformStartRuntime) inspectNetworkLabels(
 	identity string,
 ) ([]byte, bool, error) {
@@ -2278,7 +2729,7 @@ func (runtimeBoundary *platformStartRuntime) inspectNetwork(
 	labels["com.docker.compose.project"] = runtimeBoundary.expectation.Name
 	labels["com.docker.compose.network"] = logicalName
 	content, err := json.Marshal(map[string]any{
-		"Id": identity, "Internal": expected.Internal, "Labels": labels,
+		"Id": identity, "Name": logicalName, "Internal": expected.Internal, "Labels": labels,
 	})
 	return content, true, err
 }

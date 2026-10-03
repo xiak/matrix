@@ -11818,7 +11818,10 @@ func TestIAMOwnSessionBulkPostgres(t *testing.T) {
 	if dsn == "" {
 		t.Skip("set MATRIX_IAM_OWN_SESSION_BULK_POSTGRES_TEST_DSN to an own clean PostgreSQL 18 database")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// This gate now includes the complete bulk-vs-writer lock matrix. Keep one
+	// hard fixture deadline, but size it for every retained scenario rather
+	// than letting a successful earlier case consume the later cases' budget.
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_own_session_bulk_") {
@@ -12178,7 +12181,10 @@ func TestIAMOwnSessionPostgres(t *testing.T) {
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// Pagination, the full concurrent writer matrix, and recovery fencing all
+	// share this isolated database. Their cumulative bound must not expire a
+	// later valid scenario merely because the earlier scenarios succeeded.
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_own_session_") {

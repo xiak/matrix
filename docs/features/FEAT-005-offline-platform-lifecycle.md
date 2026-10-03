@@ -250,6 +250,22 @@ commit that records the final gate assertions passes its own independent CI.
 It does not admit revision 10, another authority profile, an earlier backup
 wire or arbitrary host-level snapshot rollback.
 
+The first assertion-only follow-up `08600d4faecf4244c3c6fcfe183e32dc3eca4fad`
+did not pass [Verification 37139124479](https://github.com/xiak/matrix/actions/runs/37139124479):
+the Ubuntu installation unit gate still modelled the pre-v3 backup fake and
+therefore omitted the real purpose-only custody/recovery subprocess contract.
+That failure does not invalidate the signed-runtime execution above, but it
+does prevent accepting the follow-up commit. The current correction keeps the
+production contract unchanged, makes the existing Linux local-machine owner
+verify the exact isolated container arguments, private mounts, canonical
+lease/release frame, closure/snapshot consumption and one-shot recovery
+receipt, and proves an equal backup replay neither streams PostgreSQL nor
+acquires custody a second time. The focused Linux Go 1.26.5 container gate
+(`network=none`, 2 CPUs, 2 GiB, 256 PIDs) passed installation/release vet and
+race; the full Windows-host repository vet and race suites also passed. This
+is local correction evidence only until its own fixed commit and independent
+CI complete.
+
 ### Signed IAM security-report precursor
 
 The fixed security-report candidate used IAM schema 61, Audit schema 31, PaaS
