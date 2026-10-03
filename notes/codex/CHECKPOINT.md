@@ -6,8 +6,8 @@
 - Updated: 2026-10-03
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `d8232a1a8`
-- Pushed documentation milestone: `48c61de09`
+- Pushed source/embed milestone: `7b040479f`
+- Pushed documentation milestone: `071dda4d9`
 
 ## Authoritative route
 
@@ -29,22 +29,23 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Capability-gated User batch
-association now uses the shared content area for Add to groups and Attach
-policies, with explicit targets and select/review/submit stages. Cancel keeps
-the directory selection and restores More actions; confirmed completion waits
-for the authoritative refresh before clearing selection and restoring Create
-user. User status and delete operations remain focused confirmations. This is
-still isolated MOCK only and adds no LIVE repository or wire contract.
+login verification remains disabled for UX review. The isolated service-
+authorization directory now follows the fixed FEAT-IAM-008 template vocabulary
+without presenting a template as Account consent: the release-owned template
+defines an account-scoped permission ceiling and 15-minute maximum, while the
+exact `SERVICE_INSTALLATION` remains an independent workload binding. The
+review also exposes product bind, service-linked-role create and role-pass as
+three separate checks. Concrete subjects, resources, PolicyVersion IDs,
+digests and session records stay visibly MOCK.
 
-Source and synchronized embed are committed at `d8232a1a8`; FEAT evidence is
-committed at `48c61de09`. The complete frontend gate passed 58 files/974 cases
-plus three normalization cases, typecheck, lint, architecture, 228-pair style
-checks, 42-route export, 233-file embed equality and repository Go test/vet.
-Desktop and `390 × 844` DEV showed no association Dialog or horizontal
-overflow; a fresh browser tab had no warning/error. Earlier shared loading,
-page-command and content-workflow milestones remain owned by FEAT-007 and
-FEAT-IAM-010.
+Source and synchronized embed are pushed at `7b040479f`; FEAT evidence is
+pushed at `071dda4d9`. Service-authorization 4-case, role-workspace 202-case and
+product-resource 69-case runs passed. A complete 60-file run reached 1025/1026;
+the unchanged audit-lineage case exceeded the five-second limit only under full
+load and passed 5/5 in an immediate default-timeout rerun. Typecheck, lint,
+architecture, 228-pair style checks, three normalization cases, 45-route
+export, 249-file embed equality and repository Go test/vet passed. Desktop and
+`390 × 844` DEV showed no Dialog, overflow or browser warning/error.
 
 Earlier Account security report, federation replacement, Deployment lifecycle,
 AccessKey carrier, Application tag recovery, service authorization, policy
@@ -55,20 +56,19 @@ and indexed by FEAT-IAM-010 and FEAT-007; load only the relevant evidence row.
 
 Keep the inspectable MOCK available and consume IAM changes only from fixed,
 pushed commits after the IAM owner explicitly marks the contract consumable.
-The IAM engineer is currently completing signed same-source A/B installation
-plus real PostgreSQL and SMTP receipt gates. SMTP installation settings are
-operator-private configuration, not a tenant IAM browser object; do not add
-host, password, CA or dispatcher controls to the tenant console.
+The IAM engineer confirms `GET /v1/service-role-templates` and service-linked-
+role list/detail as LIVE read-only surfaces. A browser must never call IAM
+internal bind/session endpoints. Real bind/unbind starts at the exact managed-
+service installation and goes through the product northbound/BFF plus internal
+PaaS/IAM credential chain; until that wire is mounted and browser-verified,
+consent, unbind and unknown-result recovery remain explicit MOCK.
 
-The IAM engineer has been asked for the next backend-not-yet-implemented areas
-that are safe to prototype, with actor/owner, planned contract, allowed MOCK
-states and forbidden inferences. The engineer is still completing the signed
-A/B installation and real PostgreSQL/SMTP release gate. Until an answer is
-fixed, new UX may explain responsibilities and content flow only; it must not
-add a parallel domain model, decision-shaped authorization result, LIVE
-adapter, publish action or fabricated success. External assertions remain
-configuration-only, and the Account security report remains information
-architecture rather than a mounted LIVE client.
+Do not infer tenant authorization from an ACTIVE template, Profile registration
+or installation identity. Do not infer current permission from historical
+binding counts, configuration state or an `UNREVOKED` session. A
+`SERVICE_LINKED` Role remains read-only and separate from ordinary Role edit.
+Profile-to-template matching may be shown only as release validation, never as
+automatic installation, consent or grant.
 
 Continue without reintroducing whole-page loading, hidden broad Context
 subscriptions, fabricated totals, duplicate components or login verification
