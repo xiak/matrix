@@ -1606,7 +1606,7 @@ function parseAuthorizationShape(value: unknown, scope: AuthorizationAuthoritySc
 
 function parseAuthorizationAction(value: unknown, product: string): AuthorizationProfileAction {
   const wire = accountRecord(value);
-  exactKeys(wire, ["action", "resourceKind", "scope", "resourceShapes"], ["conditions", "resultResourceKind", "subjectTypes", "userAuthenticationMethods"]);
+  exactKeys(wire, ["action", "resourceKind", "scope", "resourceShapes"], ["conditions", "instanceListBatch", "resultResourceKind", "subjectTypes", "userAuthenticationMethods"]);
   const action = accountText(wire.action);
   const parts = action.split(".");
   if (!/^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$/.test(action) || action.length > 128 || parts[0] !== product) {
@@ -1635,6 +1635,11 @@ function parseAuthorizationAction(value: unknown, product: string): Authorizatio
   const shapeKeys = resourceShapes.map((shape) => `${shape.mode}:${shape.collectionUsage ?? ""}`);
   if (new Set(shapeKeys).size !== shapeKeys.length) throw new Error("INVALID_IAM_RESPONSE");
 
+  const instanceListBatch = wire.instanceListBatch === undefined ? undefined : wire.instanceListBatch;
+  if (instanceListBatch !== undefined && typeof instanceListBatch !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  const hasInstance = resourceShapes.some((shape) => shape.mode === "INSTANCE");
+  const hasCollectionList = resourceShapes.some((shape) => shape.collectionUsage === "COLLECTION_LIST");
+
   const conditionValues = wire.conditions === undefined || wire.conditions === null ? [] : wire.conditions;
   if (!Array.isArray(conditionValues) || conditionValues.length > 8 || (scope !== "TENANT" && conditionValues.length)) {
     throw new Error("INVALID_IAM_RESPONSE");
@@ -1647,11 +1652,15 @@ function parseAuthorizationAction(value: unknown, product: string): Authorizatio
       resourceShapes.some((shape) => shape.collectionUsage === "COLLECTION_CREATE") && resultResourceKind === undefined) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
+  if (instanceListBatch && (scope !== "TENANT" || resultResourceKind !== undefined || !hasInstance || !hasCollectionList)) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
   return {
     action,
     resourceKind: authorizationIdentifier(wire.resourceKind, true),
     scope,
     resourceShapes,
+    ...(instanceListBatch === undefined ? {} : { instanceListBatch }),
     ...(conditions.length ? { conditions } : {}),
     ...(resultResourceKind === undefined ? {} : { resultResourceKind }),
     ...(subjectTypes === undefined ? {} : { subjectTypes }),

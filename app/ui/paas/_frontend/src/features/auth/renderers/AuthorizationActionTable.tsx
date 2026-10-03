@@ -23,6 +23,7 @@ export function AuthorizationActionTable({ actions, label }: { actions: Authoriz
         <td data-label={t("action")}><code>{action.action}</code></td>
         <td data-label={t("resourceTarget")}><small>{t(`scopes.${action.scope}`)}</small><strong>{action.resourceKind}</strong>
           {action.resourceShapes.map((shape) => <small key={`${shape.mode}:${shape.collectionUsage ?? ""}`}>{t(`shapes.${authorizationResourceShapeKind(shape)}`)}</small>)}
+          {action.instanceListBatch ? <small>{t("instanceListBatch")}</small> : null}
           {action.resultResourceKind ? <small>{t("resultResource", { resource: action.resultResourceKind })}</small> : null}
         </td>
         <td data-label={t("subjectCredential")}>

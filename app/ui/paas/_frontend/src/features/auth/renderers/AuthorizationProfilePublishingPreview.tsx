@@ -5,10 +5,42 @@ import { ArrowLeft, FileCode2, LockKeyhole, ShieldCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, Steps, Table, TablePagination } from "@ui/xiak";
 import type { AuthorizationProfileEntry } from "../domain/accounts";
+import { reviewServiceTemplateProfile, type ServiceTemplateProfileCheck } from "../domain/serviceAuthorization";
+import { previewManagedServiceRoleTemplate } from "../repositories/previewServiceAuthorizationContract";
 import { AuthorizationActionTable } from "./AuthorizationActionTable";
 import styles from "./AuthorizationProfilePublishingPreview.module.css";
 
 const stageIds = ["declaration", "validation", "release"] as const;
+
+function ServiceTemplateCompatibilityReview({ entry }: { entry: AuthorizationProfileEntry }) {
+  const t = useTranslations("AuthorizationProfilePublishingPreview.validation.templateReview");
+  const template = previewManagedServiceRoleTemplate;
+  const review = reviewServiceTemplateProfile(template, entry);
+  const checkHint = (check: ServiceTemplateProfileCheck) => check.action
+    ? t(`checks.${check.id}.hint`, { action: check.action, resource: check.resourceKind ?? "—" })
+    : t(`checks.${check.id}.hint`, {
+      template: check.id === "product" ? template.spec.product : template.spec.servicePurpose,
+      profile: check.id === "product" ? entry.profile.product : entry.profile.callingService
+    });
+  return <section aria-labelledby="authorization-profile-template-review-title" className={styles.templateReview}>
+    <div className={styles.templateReviewHeading}>
+      <div><h4 id="authorization-profile-template-review-title">{t("title")}</h4><p>{t("hint")}</p></div>
+      <Badge status={review.compatible ? "success" : "warning"}>{t(review.compatible ? "compatible" : "mismatch")}</Badge>
+    </div>
+    <Alert status="info">{t("boundary")}</Alert>
+    <dl className={styles.templateReferences}>
+      <div><dt>{t("profileReference")}</dt><dd><code>{entry.profile.product}@{entry.profile.revision}</code><small><code>{entry.contentDigest}</code></small></dd></div>
+      <div><dt>{t("templateReference")}</dt><dd><code>{template.id}@v{template.version}</code><small><code>{template.contentDigest}</code></small></dd></div>
+      <div><dt>{t("permissionCeiling")}</dt><dd><code>{template.spec.policyVersion.policyId}</code><small><code>{template.spec.policyVersion.versionId}</code></small></dd></div>
+    </dl>
+    <ul className={styles.templateChecks}>{review.checks.map((check, index) => <li key={`${check.id}:${check.action ?? index}`}>
+      <span aria-hidden="true">{index + 1}</span>
+      <div><strong>{t(`checks.${check.id}.title`)}</strong><p>{checkHint(check)}</p></div>
+      <Badge status={check.passed ? "success" : "warning"}>{t(check.passed ? "matched" : "notMatched")}</Badge>
+    </li>)}</ul>
+    <p className={styles.templateCeilingHint}>{t("ceilingBoundary")}</p>
+  </section>;
+}
 
 export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
   entry: AuthorizationProfileEntry;
@@ -90,6 +122,7 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
             <div><dt>{t("validation.diagnostics.runtimeEvidence")}</dt><dd><Badge status="warning">{t("validation.diagnostics.notVerified")}</Badge><small>{t("validation.diagnostics.runtimeEvidenceHint")}</small></dd></div>
           </dl>
         </section>
+        {profile.product === previewManagedServiceRoleTemplate.spec.product ? <ServiceTemplateCompatibilityReview entry={entry} /> : null}
         <section aria-label={t("validation.reviewActionsTitle")} className={styles.reviewActions}>
           <div><h4>{t("validation.reviewActionsTitle")}</h4><p>{t("validation.reviewActionsHint")}</p></div>
           <AuthorizationActionTable actions={reviewActions} label={t("validation.reviewActionsTitle")} />

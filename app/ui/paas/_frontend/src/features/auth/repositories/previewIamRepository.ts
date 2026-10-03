@@ -6,6 +6,7 @@ import type {
   AccountIdentity,
   AccountPolicy,
   ActionCapability,
+  AuthorizationProfileCondition,
   AuthorizationProfileEntry,
   CapabilityRestriction,
   DirectoryPage,
@@ -36,6 +37,11 @@ export const previewCredential = "matrix-ux-preview-memory-only";
 const previewPassword = "demo-password";
 const previewAt = "2026-09-08T09:00:00Z";
 const previewSessionObservedAt = "2026-09-18T12:00:00Z";
+const previewTenantProfileConditions: AuthorizationProfileCondition[] = [
+  { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+  { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+  { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
+];
 
 // This exact-shaped sample lets the DEV console exercise the catalog UX while
 // remaining visibly isolated from the running IAM registry. The PaaS carrier
@@ -83,21 +89,29 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
   },
   {
     profile: {
-      product: "managedservice", revision: 1, callingService: "PAAS", actions: [
+      product: "managedservice", revision: 4, callingService: "PAAS", actions: [
+        { action: "managedservice.offering.read", resourceKind: "SERVICE_OFFERING", scope: "TENANT", subjectTypes: ["USER"], instanceListBatch: true,
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }, { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }],
+          conditions: previewTenantProfileConditions },
+        { action: "managedservice.region.read", resourceKind: "REGION", scope: "TENANT", subjectTypes: ["USER"],
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }, { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }],
+          conditions: previewTenantProfileConditions },
+        { action: "managedservice.quota-entitlement.activate", resourceKind: "QUOTA_ENTITLEMENT", scope: "TENANT", subjectTypes: ["USER"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
+          conditions: previewTenantProfileConditions, resultResourceKind: "QUOTA_ENTITLEMENT" },
+        { action: "managedservice.quota-entitlement.read", resourceKind: "QUOTA_ENTITLEMENT", scope: "TENANT", subjectTypes: ["USER"],
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }, { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }],
+          conditions: previewTenantProfileConditions },
         { action: "managedservice.service-installation.create", resourceKind: "SERVICE_INSTALLATION", scope: "TENANT", subjectTypes: ["USER"],
           resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
-          conditions: [
-            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
-            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
-            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
-          ], resultResourceKind: "SERVICE_INSTALLATION" },
+          conditions: previewTenantProfileConditions, resultResourceKind: "SERVICE_INSTALLATION" },
         { action: "managedservice.service-installation.read", resourceKind: "SERVICE_INSTALLATION", scope: "TENANT", subjectTypes: ["USER", "ROLE"],
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }, { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }],
-          conditions: [
-            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
-            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
-            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
-          ] }
+          conditions: previewTenantProfileConditions },
+        { action: "managedservice.service-installation.service-role.bind", resourceKind: "SERVICE_INSTALLATION", scope: "TENANT", subjectTypes: ["USER"],
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }], conditions: previewTenantProfileConditions },
+        { action: "managedservice.service-installation.service-role.unbind", resourceKind: "SERVICE_INSTALLATION", scope: "TENANT", subjectTypes: ["USER"],
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }], conditions: previewTenantProfileConditions }
       ]
     },
     contentDigest: `sha256:${"2".repeat(64)}`

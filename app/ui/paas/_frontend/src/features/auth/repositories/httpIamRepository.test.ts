@@ -2006,6 +2006,33 @@ describe("IAM HTTP account boundary", () => {
     expect(result.items[0]!.profile.actions[3]).toMatchObject({ userAuthenticationMethods: ["ACCESS_KEY"] });
   });
 
+  it("preserves only a bounded tenant instance-list batch declaration", async () => {
+    const entry = profileEntry("managedservice");
+    const listAction = {
+      ...entry.profile.actions[1]!, action: "managedservice.offering.read", resourceKind: "SERVICE_OFFERING",
+      resourceShapes: [
+        { mode: "INSTANCE", prefixAllowed: false },
+        { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }
+      ], instanceListBatch: true
+    };
+    reply({ apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...entry,
+      profile: { ...entry.profile, actions: [listAction] } }] });
+    const result = await httpAccountRepository.listAuthorizationProfiles("bearer");
+    expect(result.items[0]!.profile.actions[0]).toMatchObject({ instanceListBatch: true });
+
+    for (const invalid of [
+      { ...listAction, instanceListBatch: "true" },
+      { ...listAction, scope: "INSTALLATION", conditions: [] },
+      { ...listAction, resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }] },
+      { ...listAction, resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }] },
+      { ...listAction, resultResourceKind: "SERVICE_OFFERING" }
+    ]) {
+      reply({ apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...entry,
+        profile: { ...entry.profile, actions: [invalid] } }] });
+      await expect(httpAccountRepository.listAuthorizationProfiles("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
   it("rejects malformed or incompatible subject and credential admission without ignoring fields", async () => {
     const entry = profileEntry();
     for (const fields of [

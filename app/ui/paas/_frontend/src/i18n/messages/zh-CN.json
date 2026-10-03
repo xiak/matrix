@@ -2172,6 +2172,7 @@
     "targets": "授权目标",
     "conditions": "可信条件",
     "resultResource": "成功结果：{resource}",
+    "instanceListBatch": "产品 PEP 有界批量候选检查",
     "none": "无",
     "noActions": "没有匹配的 Action",
     "noActionsHint": "调整关键词或清除筛选条件。",
@@ -2243,6 +2244,25 @@
         "runtimeEvidence": "运行时执行证据",
         "notVerified": "运行时证据未验证",
         "runtimeEvidenceHint": "该 MOCK 没有连接产品 PEP、网关或审计证据，不能证明请求会被允许或拒绝。"
+      },
+      "templateReview": {
+        "title": "服务授权模板交叉校验",
+        "hint": "发布前把模板引用的产品、服务用途和工作负载 Action 与这一份不可变 AuthorizationProfile 快照逐项对齐。",
+        "boundary": "这里只验证两份发布契约是否兼容。模板可见、Profile 已登记或校验通过，都不代表客户账号已经同意，也不会创建服务关联角色、资源绑定或临时会话。",
+        "compatible": "契约兼容 · MOCK",
+        "mismatch": "发现契约不一致",
+        "matched": "匹配",
+        "notMatched": "不匹配",
+        "profileReference": "AuthorizationProfile 快照",
+        "templateReference": "ServiceRoleTemplate 快照",
+        "permissionCeiling": "固定策略上限引用",
+        "ceilingBoundary": "策略上限是模板的另一份不可变引用；AuthorizationProfile 只能证明 Action 和资源形状存在，不能证明该策略版本内容正确，更不能据此推断已授权。",
+        "checks": {
+          "product": { "title": "产品命名空间一致", "hint": "模板 {template} 对应 Profile {profile}。" },
+          "servicePurpose": { "title": "受信服务用途一致", "hint": "模板用途 {template} 对应 Profile callingService {profile}。" },
+          "bindAction": { "title": "绑定 Action 可由当前用户发起", "hint": "{action} 必须声明为 {resource} 精确实例、租户范围且仅接受登录会话 USER。" },
+          "unbindAction": { "title": "解绑 Action 可由当前用户发起", "hint": "{action} 必须声明为 {resource} 精确实例、租户范围且仅接受登录会话 USER。" }
+        }
       },
       "reviewActionsTitle": "逐项核对权限声明",
       "reviewActionsHint": "按当前声明原样列出 Action、资源目标、主体、凭据和可信条件；分页仅改变显示，不代表已通过 IAM 校验。",

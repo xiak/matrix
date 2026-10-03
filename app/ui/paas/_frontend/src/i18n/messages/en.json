@@ -2172,6 +2172,7 @@
     "targets": "Authorization targets",
     "conditions": "Trusted conditions",
     "resultResource": "Successful result: {resource}",
+    "instanceListBatch": "Bounded product-PEP candidate batch",
     "none": "None",
     "noActions": "No matching Actions",
     "noActionsHint": "Adjust the keyword or clear the filters.",
@@ -2243,6 +2244,25 @@
         "runtimeEvidence": "Runtime enforcement evidence",
         "notVerified": "Runtime evidence not verified",
         "runtimeEvidenceHint": "This MOCK is not connected to a product PEP, gateway, or audit evidence and cannot prove whether a request will be allowed or denied."
+      },
+      "templateReview": {
+        "title": "Service-authorization template cross-check",
+        "hint": "Before release, compare the template product, service purpose, and workload Actions with this immutable AuthorizationProfile snapshot.",
+        "boundary": "This checks compatibility between two release contracts only. A visible template, registered Profile, or passing check is not customer consent and creates no service-linked role, resource binding, or temporary session.",
+        "compatible": "Contracts compatible · MOCK",
+        "mismatch": "Contract mismatch found",
+        "matched": "Matched",
+        "notMatched": "Mismatch",
+        "profileReference": "AuthorizationProfile snapshot",
+        "templateReference": "ServiceRoleTemplate snapshot",
+        "permissionCeiling": "Pinned policy-ceiling reference",
+        "ceilingBoundary": "The policy ceiling is a separate immutable template reference. AuthorizationProfile compatibility proves only that Actions and resource shapes exist; it cannot validate that policy version or imply a grant.",
+        "checks": {
+          "product": { "title": "Product namespaces match", "hint": "Template {template} maps to Profile {profile}." },
+          "servicePurpose": { "title": "Trusted service purpose matches", "hint": "Template purpose {template} maps to Profile callingService {profile}." },
+          "bindAction": { "title": "The current user can request the bind Action", "hint": "{action} must declare an exact {resource} instance in tenant scope and admit only login-session USER." },
+          "unbindAction": { "title": "The current user can request the unbind Action", "hint": "{action} must declare an exact {resource} instance in tenant scope and admit only login-session USER." }
+        }
       },
       "reviewActionsTitle": "Review each permission declaration",
       "reviewActionsHint": "Show each declared Action, resource target, subject, credential, and trusted condition as written. Paging changes only what is displayed; it is not IAM validation.",

@@ -220,6 +220,9 @@ export type AuthorizationProfileAction = {
   resourceKind: string;
   scope: AuthorizationAuthorityScope;
   resourceShapes: AuthorizationResourceShape[];
+  // Product PEP transport capability for bounded candidate filtering. This is
+  // declaration metadata, never an allow decision or a policy grant.
+  instanceListBatch?: boolean;
   conditions?: AuthorizationProfileCondition[];
   resultResourceKind?: string;
   // Missing sets retain the sealed legacy ceiling; they never mean all

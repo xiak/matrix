@@ -9,6 +9,10 @@ import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountPolicyDocument } from "../domain/accounts";
 import type { RoleCapability, RoleSessionFilterLifecycle, RoleSessionLifecycle } from "../domain/roles";
 import type { ServicePrincipalReference } from "../domain/serviceAuthorization";
+import {
+  previewManagedServiceRoleTemplate,
+  previewManagedServiceWorkload
+} from "../repositories/previewServiceAuthorizationContract";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
 import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
 import styles from "./ServiceAuthorizationPreview.module.css";
@@ -16,28 +20,22 @@ import styles from "./ServiceAuthorizationPreview.module.css";
 type PreviewView = "directory" | "detail" | "review" | "account-access";
 type DirectorySection = "authorizations" | "templates";
 
-// UX-only projection of the FEAT-IAM-008 service-delegation boundary. Stable
-// template vocabulary follows the fixed release-owned contract, while digests,
-// account relations, workload IDs and session records remain isolated samples.
-// A template never contains a concrete account, service principal or workload.
+// Compact renderer projection of the shared release-shaped MOCK contract. It
+// never adds a concrete account, service principal or workload to the template.
 const previewTemplate = {
-  id: "managedservice.installation-reader",
-  product: "managedservice",
-  version: 1,
-  contentDigest: `sha256:${"8".repeat(64)}`,
-  servicePurpose: "PAAS",
-  roleName: "ManagedServiceInstallationReader",
-  revision: 1,
-  policyId: "system.managedservice-installation-reader",
-  policyVersionId: "version-preview-managedservice-installation-reader-v1",
-  policyContentDigest: `sha256:${"9".repeat(64)}`,
-  maxSessionDurationSeconds: 15 * 60,
-  workload: {
-    resourceKind: "SERVICE_INSTALLATION",
-    bindAction: "managedservice.service-installation.service-role.bind",
-    unbindAction: "managedservice.service-installation.service-role.unbind"
-  },
-  snapshotName: "ManagedServiceInstallationReader"
+  id: previewManagedServiceRoleTemplate.id,
+  product: previewManagedServiceRoleTemplate.spec.product,
+  version: previewManagedServiceRoleTemplate.version,
+  contentDigest: previewManagedServiceRoleTemplate.contentDigest,
+  servicePurpose: previewManagedServiceRoleTemplate.spec.servicePurpose,
+  roleName: previewManagedServiceRoleTemplate.spec.roleName,
+  revision: previewManagedServiceRoleTemplate.version,
+  policyId: previewManagedServiceRoleTemplate.spec.policyVersion.policyId,
+  policyVersionId: previewManagedServiceRoleTemplate.spec.policyVersion.versionId,
+  policyContentDigest: previewManagedServiceRoleTemplate.spec.policyVersion.contentDigest,
+  maxSessionDurationSeconds: previewManagedServiceRoleTemplate.spec.maxSessionDurationSeconds,
+  workload: previewManagedServiceWorkload,
+  snapshotName: previewManagedServiceRoleTemplate.spec.roleName
 } as const;
 
 const previewWorkload = {

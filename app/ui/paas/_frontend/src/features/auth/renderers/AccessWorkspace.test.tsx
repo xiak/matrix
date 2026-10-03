@@ -701,6 +701,26 @@ describe("policy creation entry and directory contract", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" })).toBe(document.activeElement));
     expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest", inline: "nearest" });
   });
+  it("cross-checks the managed-service template without implying customer authorization", async () => {
+    const { user } = await open("policies", { repository: {
+      listAuthorizationProfiles: vi.fn(() => previewAccountRepository.listAuthorizationProfiles(previewCredential))
+    } });
+    await screen.findByRole("table", { name: "策略" });
+    await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
+    await user.click(await screen.findByRole("button", { name: "managedservice" }));
+    await user.click(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+
+    const review = screen.getByRole("region", { name: "服务授权模板交叉校验" });
+    expect(within(review).getByText("契约兼容 · MOCK")).toBeTruthy();
+    expect(within(review).getByText("managedservice@4")).toBeTruthy();
+    expect(within(review).getByText("managedservice.installation-reader@v1")).toBeTruthy();
+    expect(within(review).getByText(/managedservice\.service-installation\.service-role\.bind/)).toBeTruthy();
+    expect(within(review).getByText(/managedservice\.service-installation\.service-role\.unbind/)).toBeTruthy();
+    expect(within(review).getAllByText("匹配")).toHaveLength(4);
+    expect(within(review).getByText(/不代表客户账号已经同意/)).toBeTruthy();
+    expect(screen.getByText("产品 PEP 有界批量候选检查")).toBeTruthy();
+  });
   it("pages action evidence instead of mounting an unbounded onboarding review", async () => {
     const actions = Array.from({ length: 1202 }, (_, index) => ({
       action: `paas.review-${String(index + 1).padStart(4, "0")}.read`, resourceKind: "APPLICATION", scope: "TENANT",
