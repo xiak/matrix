@@ -4419,6 +4419,7 @@
         "findings": "Unused access finding samples",
         "directoryHint": "This surface shows explicitly MOCK, read-only evidence shapes and the S4c-b lifecycle information architecture. The candidate real Finding list is empty, and the page offers no archive, unarchive, resolve, or remediation write.",
         "lifecyclePreviewBoundary": "Read-only S4c-b UX preview · ACTIVE, ARCHIVED, and RESOLVED exist only to validate list, filter, and detail hierarchy. There is no real scan, state-transition API, or background remediation.",
+        "scaleBoundary": "The browser generates {count} deterministic samples only to validate filtering, local pagination, and a bounded current-page DOM. They are not evidence of server totals, cursor behavior, ordering, or capacity.",
         "principal": "Principal or credential",
         "principalType": "Object type",
         "findingType": "Finding type",

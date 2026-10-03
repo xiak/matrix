@@ -4151,13 +4151,18 @@ describe("CAM-style access workspace", () => {
       { kind: "roleSsoMapping", name: "AuditAssertionRule", configuration: "configured", target: { view: "providers" } },
       { kind: "serviceWorkload", name: "PipelineDeploymentRole", configuration: "configured", target: { view: "roles", id: "role-pipeline" } }
     ]);
-    expect(analysis.unusedFindings.map(({ accountId, findingType, lifecycle }) => ({ accountId, findingType, lifecycle }))).toEqual([
+    expect(analysis.unusedFindings).toHaveLength(123);
+    expect(analysis.unusedFindings.slice(0, 3).map(({ accountId, findingType, lifecycle }) => ({ accountId, findingType, lifecycle }))).toEqual([
       { accountId: "org-xiak", findingType: "unusedPassword", lifecycle: "ACTIVE" },
       { accountId: "org-xiak", findingType: "unusedAccessKey", lifecycle: "ARCHIVED" },
       { accountId: "org-xiak", findingType: "unusedRole", lifecycle: "RESOLVED" }
     ]);
+    expect(Object.fromEntries((["ACTIVE", "ARCHIVED", "RESOLVED"] as const).map((lifecycle) => [
+      lifecycle,
+      analysis.unusedFindings.filter((finding) => finding.lifecycle === lifecycle).length
+    ]))).toEqual({ ACTIVE: 41, ARCHIVED: 41, RESOLVED: 41 });
     expect(analysis.unusedFindings.every((finding) => finding.analyzerId === analysis.rule.id)).toBe(true);
-    expect(analysis.unusedFindings.map(({ id, observedFrom, observedThrough }) => ({ id, observedFrom, observedThrough }))).toEqual([
+    expect(analysis.unusedFindings.slice(0, 3).map(({ id, observedFrom, observedThrough }) => ({ id, observedFrom, observedThrough }))).toEqual([
       { id: "mock-unused-password", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
       { id: "mock-unused-access-key", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
       { id: "mock-unused-role", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" }
@@ -4202,8 +4207,10 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "查看对应配置" }));
     expect(onNavigate).toHaveBeenCalledWith("providers", undefined);
     await user.click(screen.getByRole("button", { name: "返回列表" }));
-    await user.click(screen.getByRole("tab", { name: "未使用访问 (3)" }));
+    await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
     expect(screen.getByText(/当前真实数据不满足该前提/)).toBeTruthy();
+    expect(screen.getByText(/123 条样例由浏览器确定性生成/)).toBeTruthy();
+    expect(screen.getByText(/不是服务端总数、游标、排序或容量验收/)).toBeTruthy();
     expect(screen.getByRole("heading", { name: "扫描与证据新鲜度" })).toBeTruthy();
     expect(screen.getByText("上一份证据 · 非最新")).toBeTruthy();
     expect(screen.getByText(/不能闪成空列表/)).toBeTruthy();
@@ -4213,13 +4220,23 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: /^筛选/ }));
     const lifecycleFilter = screen.getByRole("combobox", { name: "发现状态" });
     expect(lifecycleFilter.textContent).toContain("待复核");
-    expect(within(table).getByText("待复核")).toBeTruthy();
+    expect(screen.getByText("共 41 条")).toBeTruthy();
+    expect(screen.getByText("第 1 / 5 页")).toBeTruthy();
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(within(table).getAllByText("待复核")).toHaveLength(10);
     expect(within(table).queryByText("已归档")).toBeNull();
     await user.click(lifecycleFilter);
     await user.click(screen.getByRole("option", { name: "全部类型" }));
-    expect(within(table).getByText("已归档")).toBeTruthy();
-    expect(within(table).getByText("已解决")).toBeTruthy();
+    expect(screen.getByText("共 123 条")).toBeTruthy();
+    expect(screen.getByText("第 1 / 13 页")).toBeTruthy();
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(within(table).getAllByText("已归档").length).toBeGreaterThan(0);
+    expect(within(table).getAllByText("已解决").length).toBeGreaterThan(0);
     expect(within(table).queryByRole("button", { name: /删除|停用/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(screen.getByText("第 2 / 13 页")).toBeTruthy();
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    await user.click(screen.getByRole("button", { name: "上一页" }));
     const first = analysis.unusedFindings[0]!;
     await user.click(within(table).getByRole("button", { name: first.name }));
     expect(screen.getByRole("heading", { name: `审阅 · ${first.name}` })).toBeTruthy();
@@ -4247,7 +4264,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
     expect(screen.getByText(/配置存在不代表权限已生效/)).toBeTruthy();
     expect(screen.getByRole("table", { name: "已配置入口" })).toBeTruthy();
-    await user.click(screen.getByRole("tab", { name: "未使用访问 (3)" }));
+    await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
     expect(screen.getByRole("table", { name: "未使用访问发现样例" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "返回列表" })).toBeNull();
     expect(await extension.read("preview")).toEqual(before);
@@ -4277,7 +4294,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(/MOCK Analyzer 已更新到资源版本 4/)).toBeTruthy();
     expect(screen.getByText("365 天")).toBeTruthy();
 
-    await user.click(screen.getByRole("tab", { name: "未使用访问 (3)" }));
+    await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
     await user.click(within(screen.getByRole("table", { name: "未使用访问发现样例" })).getByRole("button", { name: "lin" }));
     expect(screen.getByText("MOCK 样例")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /归档|重新打开|解决/ })).toBeNull();

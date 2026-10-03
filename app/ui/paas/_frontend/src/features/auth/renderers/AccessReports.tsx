@@ -216,6 +216,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           </Card.Body>
         </Card>
         <Alert status="info">{t("unused.lifecyclePreviewBoundary")}</Alert>
+        <Alert status="info">{t("unused.scaleBoundary", { count: unusedFindings.length })}</Alert>
         <WorkspaceCollection embedded title={t("unused.findings")} description={t("unused.directoryHint")} items={unusedFindings}
           columns={[t("unused.principal"), t("unused.findingType"), t("unused.status"), t("unused.lastObserved"), t("unused.reviewWindow")]}
           keywords={(finding) => `${finding.subjectId} ${finding.findingType} ${finding.lifecycle}`}

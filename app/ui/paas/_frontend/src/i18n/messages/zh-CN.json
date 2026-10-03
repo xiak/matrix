@@ -4436,6 +4436,7 @@
         "findings": "未使用访问发现样例",
         "directoryHint": "这里只展示显式 MOCK 的只读证据形状和 S4c-b 设计中的生命周期信息架构。候选真实 Finding 当前为空，页面没有归档、取消归档、解决或处置写操作。",
         "lifecyclePreviewBoundary": "S4c-b 只读 UX 预演 · ACTIVE、ARCHIVED 与 RESOLVED 仅用于验证列表、筛选和详情层级；当前没有真实扫描、状态转换接口或后台处置。",
+        "scaleBoundary": "{count} 条样例由浏览器确定性生成，只用于验证筛选、本地分页与当前页 DOM 有界；不是服务端总数、游标、排序或容量验收。",
         "principal": "身份或凭证",
         "principalType": "对象类型",
         "findingType": "发现类型",

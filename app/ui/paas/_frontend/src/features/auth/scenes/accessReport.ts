@@ -164,6 +164,57 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       windowDays: 90,
       target: { view: "roles", id: role.id }
     });
+  findings.push(...Array.from({ length: 120 }, (_, offset): UnusedAccessFindingPreview => {
+    const ordinal = String(offset + 1).padStart(3, "0");
+    const subjectKind = (["user", "accessKey", "role"] as const)[offset % 3]!;
+    const lifecycle = (["ACTIVE", "ARCHIVED", "RESOLVED"] as const)[offset % 3]!;
+    const findingType = subjectKind === "user"
+      ? "unusedPassword"
+      : subjectKind === "accessKey"
+        ? "unusedAccessKey"
+        : "unusedRole";
+    const name = subjectKind === "user"
+      ? `mock-user-${ordinal}`
+      : subjectKind === "accessKey"
+        ? `AKIDMOCK${ordinal}`
+        : `MockRole${ordinal}`;
+    const subjectId = subjectKind === "user"
+      ? `mock-principal-${ordinal}`
+      : subjectKind === "accessKey"
+        ? `mock-key-owner-${ordinal}`
+        : `mock-role-${ordinal}`;
+    const target = subjectKind === "user"
+      ? { view: "users" as const }
+      : subjectKind === "accessKey"
+        ? { view: "keys" as const }
+        : { view: "roles" as const };
+    const lifecycleEvidence: UnusedAccessFindingPreview["lifecycleEvidence"] = [
+      { lifecycle: "ACTIVE", occurredAt: "2026-09-09T03:00:00Z", source: "SYNTHETIC_ANALYZER" }
+    ];
+    if (lifecycle === "ARCHIVED") lifecycleEvidence.push({
+      lifecycle: "ARCHIVED", occurredAt: "2026-09-10T02:20:00Z", source: "SYNTHETIC_HUMAN_REVIEW"
+    });
+    if (lifecycle === "RESOLVED") lifecycleEvidence.push({
+      lifecycle: "RESOLVED", occurredAt: "2026-09-12T05:10:00Z", source: "SYNTHETIC_ANALYZER"
+    });
+    return {
+      id: `mock-bulk-${ordinal}`,
+      analyzerId: "access-analyzer-preview",
+      accountId: workspace.accountId,
+      name,
+      subjectId,
+      subjectKind,
+      findingType,
+      lifecycle,
+      lifecycleEvidence,
+      lastObservedAt: "2026-05-01T00:00:00Z",
+      generatedAt: "2026-09-09T03:00:00Z",
+      observedFrom: "2026-06-11T03:00:00Z",
+      observedThrough: "2026-09-09T03:00:00Z",
+      windowDays: 90,
+      target
+    };
+  }));
   return findings;
 }
 
