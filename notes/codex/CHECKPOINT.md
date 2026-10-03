@@ -6,8 +6,8 @@
 - Updated: 2026-10-03
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `eb3f65953`
-- Pushed documentation milestone: `a51b76b32`
+- Pushed source/embed milestone: `5e124ab49`
+- Pushed documentation milestone: `d6bf2209b`
 
 ## Authoritative route
 
@@ -29,24 +29,25 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The managed-service
-capability directory now projects the current eight-Action Profile revision 4,
-including the explicitly bounded `instanceListBatch` PEP transport capability.
-The product publishing review cross-checks that immutable Profile snapshot
-against the shared `managedservice.installation-reader@v1` template: product,
-service purpose, bind/unbind Actions, resource kind, TENANT exact-instance
-shape, USER subject and login-session credential must all match. The Profile,
-template and permission-ceiling PolicyVersion remain three distinct references;
-compatibility is never shown as Account consent, Role relation, binding,
-RoleSession or permission.
+login verification remains disabled for UX review. Access Analysis Finding
+details now expose the exact recovery epoch, recovery command, completion time
+and the new generation's observation start through one reusable boundary.
+Epoch zero must omit recovery command/time; a post-recovery epoch must bind a
+nonblank command and cannot start observing before recovery completed. A
+`RESTORE_GAP` is elevated above individual coverage rows: pre-recovery Findings
+are not current conclusions and the new epoch must not create, migrate or
+automatically remediate Findings until every required IAM source rebuilds the
+complete threshold window. The first MOCK Finding uses an explicitly synthetic
+epoch 2 and cannot be interpreted as installation or backend evidence.
 
-Source and synchronized embed are pushed at `eb3f65953`; FEAT evidence is
-pushed at `a51b76b32`. The affected five-file run passed 317 tests. Typecheck,
-lint, architecture, 228-pair style checks, 45-route production export,
-249-file embed equality and repository Go test/vet passed. The full Vitest run
-was stopped after extended silent execution and is not claimed as evidence.
-Desktop and `390 × 844` DEV showed the new review as a stable three-column/
-single-column information flow with no overflow or browser warning/error.
+Source and synchronized embed are pushed at `5e124ab49`; FEAT evidence is
+pushed at `d6bf2209b`. The affected four-file run passed 218 tests; after adding
+the blank-command rejection, the pure domain file's 7 tests passed again.
+Typecheck, lint, architecture, 228-pair style checks, 45-route production
+export, 249-file embed equality and repository Go test/vet passed. The full
+Vitest run was stopped after extended silent execution and is not claimed as
+evidence. Desktop and `390 × 844` DEV showed the recovery boundary without
+horizontal overflow or browser warning/error.
 
 Earlier Account security report, federation replacement, Deployment lifecycle,
 AccessKey carrier, Application tag recovery, service authorization, policy
@@ -57,19 +58,17 @@ and indexed by FEAT-IAM-010 and FEAT-007; load only the relevant evidence row.
 
 Keep the inspectable MOCK available and consume IAM changes only from fixed,
 pushed commits after the IAM owner explicitly marks the contract consumable.
-The IAM engineer confirms `GET /v1/service-role-templates` and service-linked-
-role list/detail as LIVE read-only surfaces. A browser must never call IAM
-internal bind/session endpoints. Real bind/unbind starts at the exact managed-
-service installation and goes through the product northbound/BFF plus internal
-PaaS/IAM credential chain; until that wire is mounted and browser-verified,
-consent, unbind and unknown-result recovery remain explicit MOCK.
+The client recovery invariant is implemented, but installation backup recovery
+has not yet been inherited as a running or release-accepted integration. When
+the IAM owner fixes and publishes that integration, verify the exact epoch,
+command/time provenance, `RESTORE_GAP` rebuilding window and no-auto-disposition
+behavior against the installed runtime before changing the LIVE status.
 
-Do not infer tenant authorization from an ACTIVE template, Profile registration
-or installation identity. Do not infer current permission from historical
-binding counts, configuration state or an `UNREVOKED` session. A
-`SERVICE_LINKED` Role remains read-only and separate from ordinary Role edit.
-Profile-to-template matching may be shown only as release validation, never as
-automatic installation, consent or grant.
+The earlier managed-service Profile/template compatibility milestone remains
+release validation only: it is not Account consent, Role relation, binding,
+RoleSession or permission. Browser code must not call IAM internal bind/session
+endpoints, and real managed-service consent/unbind remains MOCK until its
+northbound/BFF wire is mounted and browser-verified.
 
 Continue without reintroducing whole-page loading, hidden broad Context
 subscriptions, fabricated totals, duplicate components or login verification
