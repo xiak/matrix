@@ -4324,7 +4324,8 @@
       "account": "目标账号",
       "tabs": {
         "external": "外部与非用户入口",
-        "unused": "未使用访问"
+        "unused": "未使用访问",
+        "rule": "分析规则"
       },
       "external": {
         "coverageTitle": "分析范围与证据覆盖",
@@ -4401,7 +4402,57 @@
           "unusedPassword": "核对用户是否仍需要控制台访问；若不需要，优先移除登录方式或停用用户，并保留资源归属和审计事实。",
           "unusedAccessKey": "先确认没有工作负载依赖，再停用旧密钥并观察；仅在业务验证完成后删除，不能把密钥未启用或创建较早当作未使用证明。",
           "unusedRole": "核对信任主体、服务工作负载、近期承担会话和业务资源依赖；删除角色前先移除真实依赖，不能只依据角色当前存在。"
+        },
+        "triage": {
+          "reviewTitle": "审阅发现状态 · {name}",
+          "boundary": "MOCK · 这里只改变本地发现的审阅状态，不修改用户、密码、访问密钥、角色、策略或授权，也不会启动新的分析任务。",
+          "currentState": "当前发现状态",
+          "nextState": "目标发现状态",
+          "archivedImpact": "归档只表示当前暂不处理；它不会证明对象仍需要访问，也不会停用对象或阻止后续扫描重新生成发现。",
+          "activeImpact": "重新打开只把发现送回人工审阅队列；它不会重新启用身份、凭证、角色或任何资源访问。",
+          "updated": "本地发现状态已更新为“{status}”。资源和权限没有变化；刷新或离开当前 MOCK 会话后不会保留。",
+          "actions": { "active": "归档发现", "archived": "重新打开发现" },
+          "confirm": { "active": "确认重新打开", "archived": "确认归档" },
+          "cancel": "取消"
         }
+      },
+      "rule": {
+        "title": "账号级访问分析规则",
+        "hint": "定义合成分析器如何形成待人工审阅的发现；不代表真实后台任务已运行。",
+        "mock": "MOCK 规则",
+        "edit": "编辑规则（MOCK）",
+        "editTitle": "编辑访问分析规则",
+        "reviewTitle": "审阅访问分析规则",
+        "workflowBoundary": "隔离 MOCK · 此流程只验证规则配置、审阅与反馈体验。没有后端规则、扫描 worker、自动处置或跨产品活动采集。",
+        "configuration": "分析范围与响应",
+        "configurationHint": "先定义证据窗口和对象范围，再审阅响应模式。",
+        "account": "当前账号",
+        "revision": "规则修订",
+        "nextRevision": "目标修订",
+        "window": "完整观测窗口",
+        "windowHint": "只有窗口起点前已存在且所有来源水位完整的对象，才有资格形成未使用发现。",
+        "days": "{count} 天",
+        "scope": "分析对象",
+        "scopeHint": "至少选择一类；对象状态与发现状态始终分开。",
+        "scopeRequired": "至少选择一种分析对象。",
+        "scopes": { "password": "用户控制台密码", "accessKey": "访问密钥", "role": "角色会话使用" },
+        "responseMode": "发现响应模式",
+        "responseModes": { "REPORT_ONLY": "仅生成报告", "HUMAN_REVIEW": "进入人工确认队列" },
+        "automaticRemediation": "自动处置",
+        "disabled": "未启用",
+        "automaticUnavailable": "自动停用、撤权或删除不可用。处置必须进入对应对象页面，重新核对所有者、依赖、权限与服务端能力。",
+        "evidence": "证据前提",
+        "evidenceStates": { "SYNTHETIC_COMPLETE_WINDOW": "完整窗口（合成样例）" },
+        "noBackgroundWorker": "当前没有真实后台扫描、跨产品活动聚合或自动修复。下方发现仍是固定样例，不会因为本地规则变化而被即时重算。",
+        "review": "下一步：审阅",
+        "cancel": "取消",
+        "reviewSummary": "确认规则变化",
+        "reviewHint": "确认 Account、修订、窗口、范围与响应模式；规则本身不授予处置权限。",
+        "sessionOnly": "仅当前 MOCK 会话",
+        "applyBoundary": "应用只更新当前页面内的 MOCK 规则。它不会写入 IAM、创建任务、重算发现或变更任何资源。",
+        "applyMock": "应用 MOCK 规则",
+        "backToEdit": "返回编辑",
+        "saved": "MOCK 规则已更新到修订 {revision}。没有启动后台分析，也没有修改任何身份或权限。"
       }
     },
     "reportPreview": {

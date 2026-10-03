@@ -4124,6 +4124,15 @@ describe("CAM-style access workspace", () => {
       { accountId: "org-xiak", findingType: "unusedAccessKey", status: "archived" },
       { accountId: "org-xiak", findingType: "unusedRole", status: "resolved" }
     ]);
+    expect(analysis.rule).toEqual({
+      accountId: "org-xiak",
+      revision: 3,
+      windowDays: 90,
+      scopes: ["password", "accessKey", "role"],
+      responseMode: "REPORT_ONLY",
+      automaticRemediation: false,
+      evidence: "SYNTHETIC_COMPLETE_WINDOW"
+    });
     expect(() => buildAccessAnalysisPreview(workspace, { ...scene, accountId: "org-foreign" })).toThrow("INVALID_IAM_TENANT");
     const onNavigate = vi.fn();
     const user = userEvent.setup();
@@ -4164,6 +4173,38 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("tab", { name: "未使用访问 (3)" }));
     expect(screen.getByRole("table", { name: "未使用访问发现样例" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "返回列表" })).toBeNull();
+    expect(await extension.read("preview")).toEqual(before);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("previews rule review and finding triage without changing identities or permissions", async () => {
+    const { user, repository, extension } = await open("access-analysis");
+    const before = await extension.read("preview");
+
+    await user.click(screen.getByRole("tab", { name: "分析规则" }));
+    expect(screen.getByText("账号级访问分析规则")).toBeTruthy();
+    expect(screen.getByText(/没有真实后台扫描/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "编辑规则（MOCK）" }));
+    await select(user, "完整观测窗口", "60 天");
+    await user.click(screen.getByRole("checkbox", { name: "角色会话使用" }));
+    await user.click(screen.getByRole("radio", { name: "进入人工确认队列" }));
+    await user.click(screen.getByRole("button", { name: "下一步：审阅" }));
+    expect(screen.getByRole("heading", { name: "审阅访问分析规则" })).toBeTruthy();
+    expect(screen.getByText("用户控制台密码 · 访问密钥")).toBeTruthy();
+    expect(screen.getByText("进入人工确认队列")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "应用 MOCK 规则" }));
+    expect(screen.getByText(/MOCK 规则已更新到修订 4/)).toBeTruthy();
+    expect(screen.getByText("60 天")).toBeTruthy();
+
+    await user.click(screen.getByRole("tab", { name: "未使用访问 (3)" }));
+    await user.click(within(screen.getByRole("table", { name: "未使用访问发现样例" })).getByRole("button", { name: "lin" }));
+    await user.click(screen.getByRole("button", { name: "归档发现" }));
+    expect(screen.getByRole("heading", { name: "审阅发现状态 · lin" })).toBeTruthy();
+    expect(screen.getByText(/不修改用户、密码、访问密钥、角色、策略或授权/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认归档" }));
+    expect(screen.getByText(/本地发现状态已更新为“已归档”/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新打开发现" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(await extension.read("preview")).toEqual(before);
     expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();

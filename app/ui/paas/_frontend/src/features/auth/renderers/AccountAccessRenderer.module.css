@@ -160,6 +160,9 @@
 .resetRequestId { min-width: 0; overflow-wrap: anywhere; }
 
 @media (max-width: 600px) {
+  .accessAnalysisTabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; overflow: visible; }
+  .accessAnalysisTabs > button { min-width: 0; padding-inline: var(--xiak-spacing-narrow); white-space: normal; line-height: var(--xiak-line-height-body); text-align: center; }
+
   .settingsSectionLink { min-height: var(--xiak-control-height); padding: var(--xiak-spacing-tight); text-align: center; }
   .settingsSectionLink span { display: none; }
 

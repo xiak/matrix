@@ -34,6 +34,17 @@ export type UnusedAccessFindingPreview = {
   target: { view: Extract<AccountAccessView, "users" | "keys" | "roles">; id?: string };
 };
 
+export type AccessAnalysisRuleScope = "password" | "accessKey" | "role";
+export type AccessAnalysisRulePreview = {
+  accountId: string;
+  revision: number;
+  windowDays: 30 | 60 | 90;
+  scopes: AccessAnalysisRuleScope[];
+  responseMode: "REPORT_ONLY" | "HUMAN_REVIEW";
+  automaticRemediation: false;
+  evidence: "SYNTHETIC_COMPLETE_WINDOW";
+};
+
 export type AccessAnalysisCoverageState = "mockObserved" | "unobserved" | "unsupported";
 export type AccessAnalysisCoverage = {
   id: "roleSsoMapping" | "serviceWorkload" | "resourcePolicies" | "crossAccountDelegation" | "activityWindow";
@@ -118,6 +129,7 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
   coverage: AccessAnalysisCoverage[];
   trustEntries: AccessAnalysisTrustEntry[];
   unusedFindings: UnusedAccessFindingPreview[];
+  rule: AccessAnalysisRulePreview;
 } {
   assertReportAccount(workspace, scene);
   const mappingEntries: AccessAnalysisTrustEntry[] = workspace.roleSsoMappings.map((mapping) => {
@@ -169,7 +181,16 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
       { id: "activityWindow", state: "unobserved" }
     ],
     trustEntries: [...mappingEntries, ...serviceEntries],
-    unusedFindings: buildUnusedAccessFindingPreview(workspace, scene)
+    unusedFindings: buildUnusedAccessFindingPreview(workspace, scene),
+    rule: {
+      accountId: workspace.accountId,
+      revision: 3,
+      windowDays: 90,
+      scopes: ["password", "accessKey", "role"],
+      responseMode: "REPORT_ONLY",
+      automaticRemediation: false,
+      evidence: "SYNTHETIC_COMPLETE_WINDOW"
+    }
   };
 }
 

@@ -1,14 +1,14 @@
 "use client";
 
-import { useMemo, useState, type RefObject } from "react";
+import { useId, useMemo, useState, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { ArrowRight } from "lucide-react";
-import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, Tabs, Typography } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, Card, Checkbox, ContentPage, EmptyState, FormField, RadioGroup, Select, Tabs, Typography } from "@ui/xiak";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { SessionSummary } from "../domain/session";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { accountSecurityReportLimits, accountSecurityReportLimitViolation, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildAccountSecurityReportDirectoryPreview, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type AccountSecurityReportDirectoryEntry, type AccountSecurityReportDirectoryStatus, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
+import { accountSecurityReportLimits, accountSecurityReportLimitViolation, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildAccountSecurityReportDirectoryPreview, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisRulePreview, type AccessAnalysisRuleScope, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type AccountSecurityReportDirectoryEntry, type AccountSecurityReportDirectoryStatus, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -39,6 +39,85 @@ const reportDirectoryStatus: Record<AccountSecurityReportDirectoryStatus, "succe
   expired: "neutral"
 };
 
+const accessAnalysisRuleScopes = ["password", "accessKey", "role"] as const satisfies readonly AccessAnalysisRuleScope[];
+
+function AccessAnalysisRuleWorkflow({ rule, onBack, onApply }: {
+  rule: AccessAnalysisRulePreview;
+  onBack(): void;
+  onApply(rule: AccessAnalysisRulePreview): void;
+}) {
+  const t = useTranslations("IamWorkspace.accessAnalysis.rule");
+  const id = useId();
+  const [step, setStep] = useState<"edit" | "review">("edit");
+  const [windowDays, setWindowDays] = useState(rule.windowDays);
+  const [scopes, setScopes] = useState<AccessAnalysisRuleScope[]>(rule.scopes);
+  const [responseMode, setResponseMode] = useState(rule.responseMode);
+  const toggleScope = (scope: AccessAnalysisRuleScope, checked: boolean) => setScopes((current) => checked
+    ? [...new Set([...current, scope])]
+    : current.filter((item) => item !== scope));
+  const next = () => { if (scopes.length) setStep("review"); };
+  const apply = () => onApply({ ...rule, revision: rule.revision + 1, windowDays, scopes, responseMode });
+
+  return <WorkspaceDetail title={t(step === "edit" ? "editTitle" : "reviewTitle")} onBack={step === "review" ? () => setStep("edit") : onBack}>
+    <Alert status="info">{t("workflowBoundary")}</Alert>
+    {step === "edit" ? <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{t("configuration")}</Typography.Title><Typography.Text tone="muted">{t("configurationHint")}</Typography.Text></div><Badge status="warning">{t("mock")}</Badge></Card.Header>
+      <Card.Body className={styles.detail}>
+        <FormField id={`${id}-window`} label={t("window")} hint={t("windowHint")}><Select id={`${id}-window`} value={String(windowDays)} options={([30, 60, 90] as const).map((days) => ({ value: String(days), label: t("days", { count: days }) }))} onValueChange={(value) => setWindowDays(Number(value) as AccessAnalysisRulePreview["windowDays"])} /></FormField>
+        <fieldset className={styles.editorFields}>
+          <legend>{t("scope")}</legend>
+          <p className={styles.note}>{t("scopeHint")}</p>
+          {accessAnalysisRuleScopes.map((scope) => <Checkbox key={scope} checked={scopes.includes(scope)} onChange={(event) => toggleScope(scope, event.target.checked)}>{t(`scopes.${scope}`)}</Checkbox>)}
+          {!scopes.length ? <Alert status="warning">{t("scopeRequired")}</Alert> : null}
+        </fieldset>
+        <RadioGroup label={t("responseMode")} value={responseMode} onValueChange={(value) => setResponseMode(value as AccessAnalysisRulePreview["responseMode"])} options={(["REPORT_ONLY", "HUMAN_REVIEW"] as const).map((value) => ({ value, label: t(`responseModes.${value}`) }))} />
+        <Alert status="warning">{t("automaticUnavailable")}</Alert>
+      </Card.Body>
+      <Card.Footer><div className={styles.actions}><Button disabled={!scopes.length} onClick={next}>{t("review")}</Button><Button variant="secondary" onClick={onBack}>{t("cancel")}</Button></div></Card.Footer>
+    </Card> : <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{t("reviewSummary")}</Typography.Title><Typography.Text tone="muted">{t("reviewHint")}</Typography.Text></div><Badge status="warning">{t("sessionOnly")}</Badge></Card.Header>
+      <Card.Body className={styles.detail}>
+        <dl className={styles.facts}>
+          <div><dt>{t("account")}</dt><dd><code>{rule.accountId}</code></dd></div>
+          <div><dt>{t("nextRevision")}</dt><dd>{rule.revision + 1}</dd></div>
+          <div><dt>{t("window")}</dt><dd>{t("days", { count: windowDays })}</dd></div>
+          <div><dt>{t("scope")}</dt><dd>{scopes.map((scope) => t(`scopes.${scope}`)).join(" · ")}</dd></div>
+          <div><dt>{t("responseMode")}</dt><dd>{t(`responseModes.${responseMode}`)}</dd></div>
+          <div><dt>{t("automaticRemediation")}</dt><dd>{t("disabled")}</dd></div>
+        </dl>
+        <Alert status="warning">{t("applyBoundary")}</Alert>
+      </Card.Body>
+      <Card.Footer><div className={styles.actions}><Button onClick={apply}>{t("applyMock")}</Button><Button variant="secondary" onClick={() => setStep("edit")}>{t("backToEdit")}</Button></div></Card.Footer>
+    </Card>}
+  </WorkspaceDetail>;
+}
+
+function UnusedFindingTriageReview({ finding, onBack, onApply }: {
+  finding: UnusedAccessFindingPreview;
+  onBack(): void;
+  onApply(status: "active" | "archived"): void;
+}) {
+  const t = useTranslations("IamWorkspace.accessAnalysis.unused");
+  const nextStatus = finding.status === "active" ? "archived" : "active";
+  return <WorkspaceDetail title={t("triage.reviewTitle", { name: finding.name })} onBack={onBack}>
+    <Alert status="info">{t("triage.boundary")}</Alert>
+    <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{finding.name}</Typography.Title><Typography.Text tone="muted">{finding.subjectId}</Typography.Text></div><Badge status={findingStatus[finding.status]}>{t(`statuses.${finding.status}`)}</Badge></Card.Header>
+      <Card.Body className={styles.detail}>
+        <dl className={styles.facts}>
+          <div><dt>{t("triage.currentState")}</dt><dd>{t(`statuses.${finding.status}`)}</dd></div>
+          <div><dt>{t("triage.nextState")}</dt><dd>{t(`statuses.${nextStatus}`)}</dd></div>
+          <div><dt>{t("findingType")}</dt><dd>{t(`types.${finding.findingType}`)}</dd></div>
+          <div><dt>{t("reviewWindow")}</dt><dd>{t("days", { count: finding.windowDays })}</dd></div>
+          <div><dt>{t("lastObserved")}</dt><dd><WorkspaceTime value={finding.lastObservedAt} /></dd></div>
+        </dl>
+        <Alert status="warning">{t(`triage.${nextStatus}Impact`)}</Alert>
+      </Card.Body>
+      <Card.Footer><div className={styles.actions}><Button onClick={() => onApply(nextStatus)}>{t(`triage.confirm.${nextStatus}`)}</Button><Button variant="secondary" onClick={onBack}>{t("triage.cancel")}</Button></div></Card.Footer>
+    </Card>
+  </WorkspaceDetail>;
+}
+
 export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: {
   workspace?: AccessWorkspace;
   scene: AccountAccessScene;
@@ -46,12 +125,23 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
   onNavigate(view: AccountAccessView, id?: string): void;
 }) {
   const t = useTranslations("IamWorkspace.accessAnalysis");
-  const [section, setSection] = useState<"external" | "unused">("external");
+  const [section, setSection] = useState<"external" | "unused" | "rule">("external");
   const [selectedTrustEntry, setSelectedTrustEntry] = useState<AccessAnalysisTrustEntry | null>(null);
   const [selectedUnusedFinding, setSelectedUnusedFinding] = useState<UnusedAccessFindingPreview | null>(null);
-  const analysis = workspace ? buildAccessAnalysisPreview(workspace, scene) : null;
+  const [findingStates, setFindingStates] = useState<Record<string, UnusedAccessFindingPreview["status"]>>({});
+  const [triaging, setTriaging] = useState(false);
+  const [lastFindingChange, setLastFindingChange] = useState<string | null>(null);
+  const [editingRule, setEditingRule] = useState(false);
+  const [ruleOverride, setRuleOverride] = useState<AccessAnalysisRulePreview | null>(null);
+  const [ruleSaved, setRuleSaved] = useState(false);
+  const analysis = useMemo(() => workspace ? buildAccessAnalysisPreview(workspace, scene) : null, [scene, workspace]);
+  const unusedFindings = useMemo(() => analysis?.unusedFindings.map((finding) => ({ ...finding, status: findingStates[finding.id] ?? finding.status })) ?? [], [analysis, findingStates]);
+  const rule = ruleOverride?.accountId === workspace?.accountId ? ruleOverride : analysis?.rule ?? null;
   const selectedTrust = selectedTrustEntry?.accountId === workspace?.accountId ? selectedTrustEntry : null;
-  const selectedUnused = selectedUnusedFinding?.accountId === workspace?.accountId ? selectedUnusedFinding : null;
+  const selectedUnusedId = selectedUnusedFinding && selectedUnusedFinding.accountId === workspace?.accountId ? selectedUnusedFinding.id : null;
+  const selectedUnused = selectedUnusedId
+    ? unusedFindings.find((finding) => finding.id === selectedUnusedId) ?? null
+    : null;
 
   if (!workspace || !analysis) return <div className={styles.stack}>
     <ContentPage.Heading title={t("title")} scrollKey="access-analysis-live" />
@@ -83,8 +173,17 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
     </Card>
   </WorkspaceDetail>;
 
-  if (selectedUnused) return <WorkspaceDetail key={selectedUnused.id} title={t("unused.detailTitle", { name: selectedUnused.name })} onBack={() => setSelectedUnusedFinding(null)}>
+  if (editingRule && rule) return <AccessAnalysisRuleWorkflow rule={rule} onBack={() => setEditingRule(false)} onApply={(next) => { setRuleOverride(next); setRuleSaved(true); setEditingRule(false); setSection("rule"); }} />;
+
+  if (triaging && selectedUnused && selectedUnused.status !== "resolved") return <UnusedFindingTriageReview finding={selectedUnused} onBack={() => setTriaging(false)} onApply={(status) => {
+    setFindingStates((current) => ({ ...current, [selectedUnused.id]: status }));
+    setLastFindingChange(selectedUnused.id);
+    setTriaging(false);
+  }} />;
+
+  if (selectedUnused) return <WorkspaceDetail key={selectedUnused.id} title={t("unused.detailTitle", { name: selectedUnused.name })} onBack={() => { setLastFindingChange(null); setSelectedUnusedFinding(null); }}>
     <Alert status="info">{t("unused.sampleEvidence")}</Alert>
+    {lastFindingChange === selectedUnused.id ? <Alert status="success">{t("unused.triage.updated", { status: t(`unused.statuses.${selectedUnused.status}`) })}</Alert> : null}
     <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{selectedUnused.name}</Typography.Title><Typography.Text tone="muted">{selectedUnused.subjectId}</Typography.Text></div><Badge status={findingStatus[selectedUnused.status]}>{t(`unused.statuses.${selectedUnused.status}`)}</Badge></Card.Header>
       <Card.Body className={styles.detail}>
@@ -103,18 +202,18 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           <Alert status="warning">{t("unused.noAutomaticAction")}</Alert>
         </section>
       </Card.Body>
-      <Card.Footer><Button onClick={() => onNavigate(selectedUnused.target.view, selectedUnused.target.id)}>{t("unused.reviewTarget")}<ArrowRight aria-hidden="true" /></Button></Card.Footer>
+      <Card.Footer><div className={styles.actions}><Button onClick={() => onNavigate(selectedUnused.target.view, selectedUnused.target.id)}>{t("unused.reviewTarget")}<ArrowRight aria-hidden="true" /></Button>{selectedUnused.status !== "resolved" ? <Button variant="secondary" onClick={() => setTriaging(true)}>{t(`unused.triage.actions.${selectedUnused.status}`)}</Button> : null}</div></Card.Footer>
     </Card>
   </WorkspaceDetail>;
 
-  const statusCounts = analysis.unusedFindings.reduce<Record<UnusedAccessFindingPreview["status"], number>>((counts, finding) => {
+  const statusCounts = unusedFindings.reduce<Record<UnusedAccessFindingPreview["status"], number>>((counts, finding) => {
     counts[finding.status] += 1;
     return counts;
   }, { active: 0, archived: 0, resolved: 0 });
   const content = <>
     <Alert status="info">{t("previewBoundary")}</Alert>
-    <Tabs.Root value={section} onValueChange={(value) => setSection(value as "external" | "unused")}>
-      <Tabs.List aria-label={t("sections")}><Tabs.Trigger value="external">{t("tabs.external")} ({analysis.trustEntries.length})</Tabs.Trigger><Tabs.Trigger value="unused">{t("tabs.unused")} ({analysis.unusedFindings.length})</Tabs.Trigger></Tabs.List>
+    <Tabs.Root value={section} onValueChange={(value) => setSection(value as "external" | "unused" | "rule")}>
+      <Tabs.List aria-label={t("sections")} className={styles.accessAnalysisTabs}><Tabs.Trigger value="external">{t("tabs.external")} ({analysis.trustEntries.length})</Tabs.Trigger><Tabs.Trigger value="unused">{t("tabs.unused")} ({unusedFindings.length})</Tabs.Trigger><Tabs.Trigger value="rule">{t("tabs.rule")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content className={styles.stack} value="external">
         <Card>
           <Card.Header><div><Typography.Title as="h2" level={3}>{t("external.coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("external.coverageHint")}</Typography.Text></div><Badge status="info">{t("mockConfiguration")}</Badge></Card.Header>
@@ -139,12 +238,31 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
             <p className={styles.note}>{t("unused.sampleWindow", { count: 90 })}</p>
           </Card.Body>
         </Card>
-        <WorkspaceCollection embedded title={t("unused.findings")} description={t("unused.directoryHint")} items={analysis.unusedFindings}
+        <WorkspaceCollection embedded title={t("unused.findings")} description={t("unused.directoryHint")} items={unusedFindings}
           columns={[t("unused.principal"), t("unused.findingType"), t("unused.lastObserved"), t("unused.status")]}
           keywords={(finding) => `${finding.subjectId} ${finding.findingType} ${finding.status}`}
           filter={{ label: t("unused.status"), options: (["active", "archived", "resolved"] as const).map((value) => ({ value, label: t(`unused.statuses.${value}`) })), matches: (finding, value) => finding.status === value }}
           row={(finding) => <><td><button className={styles.userLink} onClick={() => setSelectedUnusedFinding(finding)}>{finding.name}</button><small>{finding.subjectId}</small></td><td>{t(`unused.types.${finding.findingType}`)}</td><td><WorkspaceTime value={finding.lastObservedAt} /></td><td><Badge status={findingStatus[finding.status]}>{t(`unused.statuses.${finding.status}`)}</Badge></td></>}
           footerNote={t("unused.directoryHint")} />
+      </Tabs.Content>
+      <Tabs.Content className={styles.stack} value="rule">
+        {ruleSaved ? <Alert status="success">{t("rule.saved", { revision: rule?.revision ?? 0 })}</Alert> : null}
+        {rule ? <Card>
+          <Card.Header><div><Typography.Title as="h2" level={3}>{t("rule.title")}</Typography.Title><Typography.Text tone="muted">{t("rule.hint")}</Typography.Text></div><Badge status="warning">{t("rule.mock")}</Badge></Card.Header>
+          <Card.Body className={styles.detail}>
+            <dl className={styles.facts}>
+              <div><dt>{t("rule.account")}</dt><dd><code>{rule.accountId}</code></dd></div>
+              <div><dt>{t("rule.revision")}</dt><dd>{rule.revision}</dd></div>
+              <div><dt>{t("rule.window")}</dt><dd>{t("rule.days", { count: rule.windowDays })}</dd></div>
+              <div><dt>{t("rule.scope")}</dt><dd>{rule.scopes.map((scope) => t(`rule.scopes.${scope}`)).join(" · ")}</dd></div>
+              <div><dt>{t("rule.responseMode")}</dt><dd>{t(`rule.responseModes.${rule.responseMode}`)}</dd></div>
+              <div><dt>{t("rule.automaticRemediation")}</dt><dd>{t("rule.disabled")}</dd></div>
+              <div><dt>{t("rule.evidence")}</dt><dd>{t(`rule.evidenceStates.${rule.evidence}`)}</dd></div>
+            </dl>
+            <Alert status="warning">{t("rule.noBackgroundWorker")}</Alert>
+          </Card.Body>
+          <Card.Footer><Button variant="secondary" onClick={() => { setRuleSaved(false); setEditingRule(true); }}>{t("rule.edit")}</Button></Card.Footer>
+        </Card> : null}
       </Tabs.Content>
     </Tabs.Root>
   </>;
