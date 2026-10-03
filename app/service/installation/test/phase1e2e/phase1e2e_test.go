@@ -2,6 +2,12 @@ package phase1e2e
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +23,24 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
+
+func fixtureTrustPEM(t *testing.T, notBefore, notAfter time.Time) string {
+	t.Helper()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "phase1 mail fixture CA"},
+		NotBefore: notBefore, NotAfter: notAfter, IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
 
 func TestOfflinePhase1Lifecycle(t *testing.T) {
 	if os.Getenv("MATRIX_PHASE1_E2E") != "1" {
@@ -122,6 +146,31 @@ func TestAccessAnalyzerLifecycleCoverageStaysClosed(t *testing.T) {
 	coverage[0].Reason = ""
 	if accessAnalyzerCoverageIsClosed(coverage, "") {
 		t.Fatal("complete access coverage admitted a no-effect lifecycle assertion")
+	}
+}
+
+func TestSecurityMailFixtureTrustCoversLifecycleWindow(t *testing.T) {
+	now := time.Date(2026, time.October, 3, 1, 2, 3, 0, time.UTC)
+	through := now.Add(30 * time.Minute)
+	valid := fixtureTrustPEM(t, now.Add(-time.Hour), through.Add(time.Hour))
+	if !trustedCertificatesCoverWindow(valid, now, through) {
+		t.Fatal("valid fixture trust did not cover lifecycle window")
+	}
+	for name, value := range map[string]string{
+		"missing":         "",
+		"malformed":       "not a certificate",
+		"expired":         fixtureTrustPEM(t, now.Add(-2*time.Hour), now.Add(-time.Hour)),
+		"not-yet-valid":   fixtureTrustPEM(t, now.Add(time.Minute), through.Add(time.Hour)),
+		"expires-in-gate": fixtureTrustPEM(t, now.Add(-time.Hour), through.Add(-time.Minute)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if trustedCertificatesCoverWindow(value, now, through) {
+				t.Fatal("unsafe fixture trust covered lifecycle window")
+			}
+		})
+	}
+	if trustedCertificatesCoverWindow(valid, through, now) {
+		t.Fatal("reversed lifecycle window was accepted")
 	}
 }
 

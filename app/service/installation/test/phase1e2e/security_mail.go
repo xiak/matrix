@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/mail"
@@ -71,6 +73,27 @@ func verifyFixtureArchive(path, expected string) error {
 	return nil
 }
 
+func trustedCertificatesCoverWindow(encoded string, from, through time.Time) bool {
+	if encoded == "" || from.After(through) {
+		return false
+	}
+	rest := []byte(encoded)
+	count := 0
+	for len(rest) != 0 {
+		block, remaining := pem.Decode(rest)
+		if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			return false
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil || from.Before(certificate.NotBefore) || through.After(certificate.NotAfter) {
+			return false
+		}
+		count++
+		rest = remaining
+	}
+	return count != 0
+}
+
 func startSecurityMailFixture(
 	ctx context.Context,
 	config options,
@@ -91,6 +114,10 @@ func startSecurityMailFixture(
 		return nil, fail("security-mail-fixture-channel-input")
 	}
 	defer mailConfig.Clear()
+	lifecycleDeadline, hasDeadline := ctx.Deadline()
+	if !hasDeadline || !trustedCertificatesCoverWindow(mailConfig.TrustedCAPEM, time.Now(), lifecycleDeadline) {
+		return nil, fail("security-mail-fixture-channel-trust-window")
+	}
 	networks, err := dockerLines(
 		ctx, "network", "ls", "--quiet",
 		"--filter", "label=com.xiak.matrix.managed=true",
@@ -180,8 +207,8 @@ func startSecurityMailFixture(
 		return failFixture("security-mail-fixture-network-attachment")
 	}
 	ready := false
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+	readyDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(readyDeadline) {
 		if _, err := docker(
 			ctx, "exec", fixture.containerID, "sh", "-lc", "postfix status >/dev/null 2>&1",
 		); err == nil {
