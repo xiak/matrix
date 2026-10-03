@@ -4151,10 +4151,10 @@ describe("CAM-style access workspace", () => {
       { kind: "roleSsoMapping", name: "AuditAssertionRule", configuration: "configured", target: { view: "providers" } },
       { kind: "serviceWorkload", name: "PipelineDeploymentRole", configuration: "configured", target: { view: "roles", id: "role-pipeline" } }
     ]);
-    expect(analysis.unusedFindings.map(({ accountId, findingType }) => ({ accountId, findingType }))).toEqual([
-      { accountId: "org-xiak", findingType: "unusedPassword" },
-      { accountId: "org-xiak", findingType: "unusedAccessKey" },
-      { accountId: "org-xiak", findingType: "unusedRole" }
+    expect(analysis.unusedFindings.map(({ accountId, findingType, lifecycle }) => ({ accountId, findingType, lifecycle }))).toEqual([
+      { accountId: "org-xiak", findingType: "unusedPassword", lifecycle: "ACTIVE" },
+      { accountId: "org-xiak", findingType: "unusedAccessKey", lifecycle: "ARCHIVED" },
+      { accountId: "org-xiak", findingType: "unusedRole", lifecycle: "RESOLVED" }
     ]);
     expect(analysis.rule).toEqual({
       id: "access-analyzer-preview",
@@ -4190,11 +4190,21 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(/当前真实数据不满足该前提/)).toBeTruthy();
     const table = screen.getByRole("table", { name: "未使用访问发现样例" });
     expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    await user.click(screen.getByRole("button", { name: /^筛选/ }));
+    const lifecycleFilter = screen.getByRole("combobox", { name: "发现状态" });
+    expect(lifecycleFilter.textContent).toContain("待复核");
+    expect(within(table).getByText("待复核")).toBeTruthy();
+    expect(within(table).queryByText("已归档")).toBeNull();
+    await user.click(lifecycleFilter);
+    await user.click(screen.getByRole("option", { name: "全部类型" }));
+    expect(within(table).getByText("已归档")).toBeTruthy();
+    expect(within(table).getByText("已解决")).toBeTruthy();
     expect(within(table).queryByRole("button", { name: /删除|停用/ })).toBeNull();
     const first = analysis.unusedFindings[0]!;
     await user.click(within(table).getByRole("button", { name: first.name }));
     expect(screen.getByRole("heading", { name: `审阅 · ${first.name}` })).toBeTruthy();
     expect(screen.getByText("完整窗口（合成样例）")).toBeTruthy();
+    expect(screen.getByText(/不是处置许可/)).toBeTruthy();
     expect(screen.getByText(/不能从一条未使用发现直接删除身份或权限/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看对应对象" }));
     expect(onNavigate).toHaveBeenCalledWith(first.target.view, first.target.id);

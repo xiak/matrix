@@ -107,6 +107,8 @@
   overflow-wrap: anywhere;
 }
 
+.factMeta { display: block; margin-top: var(--xiak-spacing-micro); color: var(--xiak-color-text-muted); font-family: var(--xiak-font-mono); }
+
 .grantOverview { container: authorization-overview / inline-size; display: grid; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
 .grantOverviewHeading { display: grid; gap: var(--xiak-spacing-micro); }
 .grantOverviewHeading h3, .grantOverviewHeading p, .grantOverview dl, .grantOverview dt, .grantOverview dd { margin: 0; }
@@ -350,6 +352,7 @@
 .catalogProductTable th:first-child { min-width: 180px; }
 .catalogProductTable th:last-child { min-width: 180px; }
 .catalogBadges { display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-narrow); }
+.badgeRow { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--xiak-spacing-narrow); }
 .catalogDigestShort { font-size: var(--xiak-font-size-small); }
 
 @media (max-width: 600px) {

@@ -87,7 +87,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   row(item: T): ReactNode; create?: { label: string; disabled?: boolean; reason?: string; onClick(): void }; embedded?: boolean;
   secondaryActions?: readonly PageCommand[];
   keywords?(item: T): string;
-  filter?: { label: string; options: { value: string; label: string }[]; matches(item: T, value: string): boolean };
+  filter?: { label: string; options: { value: string; label: string }[]; defaultValue?: string; matches(item: T, value: string): boolean };
   status?: string;
   loadMore?: { label: string; disabled?: boolean; busy?: boolean; onClick(): void };
   footerNote?: ReactNode;
@@ -102,7 +102,8 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   const collection = useTranslations("Collection");
   const toolbarLabels = useTableToolbarLabels();
   const [query, setQuery] = useState("");
-  const [kind, setKind] = useState("all");
+  const filterDefault = filter?.defaultValue ?? "all";
+  const [kind, setKind] = useState(filterDefault);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const deferredQuery = useDeferredValue(query);
@@ -113,7 +114,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   }), [filter, items, keywords, kind, words]);
   const pages = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, pages);
-  const reset = () => { setQuery(""); setKind("all"); setPage(1); };
+  const reset = () => { setQuery(""); setKind(filterDefault); setPage(1); };
   const action = create ? <Button ref={createActionRef} disabled={create.disabled} title={create.reason} onClick={create.onClick} size="small"><Plus aria-hidden="true" />{create.label}</Button> : null;
   const primary = create ? { id: "create", label: create.label, icon: <Plus aria-hidden="true" />, disabled: create.disabled, disabledReason: create.disabled ? create.reason : undefined, onSelect: create.onClick } satisfies PageCommand : undefined;
   return <Card aria-description={description}>

@@ -25,6 +25,12 @@ const trustEntryStatus: Record<AccessAnalysisTrustEntry["configuration"], "info"
   disabled: "neutral"
 };
 
+const unusedFindingStatus: Record<UnusedAccessFindingPreview["lifecycle"], "warning" | "neutral" | "success"> = {
+  ACTIVE: "warning",
+  ARCHIVED: "neutral",
+  RESOLVED: "success"
+};
+
 const accountSecurityReportFailureBoundaries = ["overLimit", "retainedReportLimit", "expired", "revoked"] as const;
 
 const reportDirectoryStatus: Record<AccountSecurityReportDirectoryStatus, "success" | "warning" | "neutral"> = {
@@ -133,11 +139,12 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
   if (selectedUnused) return <WorkspaceDetail key={selectedUnused.id} title={t("unused.detailTitle", { name: selectedUnused.name })} onBack={() => setSelectedUnusedFinding(null)}>
     <Alert status="info">{t("unused.sampleEvidence")}</Alert>
     <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>{selectedUnused.name}</Typography.Title><Typography.Text tone="muted">{selectedUnused.subjectId}</Typography.Text></div><Badge status="info">{t("unused.mockSample")}</Badge></Card.Header>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{selectedUnused.name}</Typography.Title><Typography.Text tone="muted">{selectedUnused.subjectId}</Typography.Text></div><span className={styles.badgeRow}><Badge status="info">{t("unused.mockSample")}</Badge><Badge status={unusedFindingStatus[selectedUnused.lifecycle]} title={selectedUnused.lifecycle}>{t(`unused.lifecycle.${selectedUnused.lifecycle}`)}</Badge></span></Card.Header>
       <Card.Body className={styles.detail}>
         <dl className={styles.facts}>
           <div><dt>{t("account")}</dt><dd><code>{selectedUnused.accountId}</code></dd></div>
           <div><dt>{t("unused.findingType")}</dt><dd>{t(`unused.types.${selectedUnused.findingType}`)}</dd></div>
+          <div><dt>{t("unused.status")}</dt><dd>{t(`unused.lifecycle.${selectedUnused.lifecycle}`)}<small className={styles.factMeta}>{selectedUnused.lifecycle}</small></dd></div>
           <div><dt>{t("unused.principalType")}</dt><dd>{t(`unused.subjects.${selectedUnused.subjectKind}`)}</dd></div>
           <div><dt>{t("unused.lastObserved")}</dt><dd><WorkspaceTime value={selectedUnused.lastObservedAt} /></dd></div>
           <div><dt>{t("unused.reviewWindow")}</dt><dd>{t("unused.days", { count: selectedUnused.windowDays })}</dd></div>
@@ -147,6 +154,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
         <section aria-labelledby="unused-access-recommendation" className={styles.stack}>
           <Typography.Title as="h3" id="unused-access-recommendation" level={3}>{t("unused.recommendationTitle")}</Typography.Title>
           <p className={styles.note}>{t(`unused.recommendations.${selectedUnused.findingType}`)}</p>
+          <Alert status="info">{t(`unused.lifecycleBoundaries.${selectedUnused.lifecycle}`)}</Alert>
           <Alert status="warning">{t("unused.noAutomaticAction")}</Alert>
         </section>
       </Card.Body>
@@ -183,10 +191,12 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
             <p className={styles.note}>{t("unused.sampleWindow", { count: 90 })}</p>
           </Card.Body>
         </Card>
+        <Alert status="info">{t("unused.lifecyclePreviewBoundary")}</Alert>
         <WorkspaceCollection embedded title={t("unused.findings")} description={t("unused.directoryHint")} items={unusedFindings}
-          columns={[t("unused.principal"), t("unused.findingType"), t("unused.lastObserved"), t("unused.reviewWindow")]}
-          keywords={(finding) => `${finding.subjectId} ${finding.findingType}`}
-          row={(finding) => <><td><button className={styles.userLink} onClick={() => setSelectedUnusedFinding(finding)}>{finding.name}</button><small>{finding.subjectId}</small></td><td>{t(`unused.types.${finding.findingType}`)}</td><td><WorkspaceTime value={finding.lastObservedAt} /></td><td>{t("unused.days", { count: finding.windowDays })}</td></>}
+          columns={[t("unused.principal"), t("unused.findingType"), t("unused.status"), t("unused.lastObserved"), t("unused.reviewWindow")]}
+          keywords={(finding) => `${finding.subjectId} ${finding.findingType} ${finding.lifecycle}`}
+          filter={{ label: t("unused.status"), defaultValue: "ACTIVE", options: (["ACTIVE", "ARCHIVED", "RESOLVED"] as const).map((value) => ({ value, label: t(`unused.lifecycle.${value}`) })), matches: (finding, value) => finding.lifecycle === value }}
+          row={(finding) => <><td><button className={styles.userLink} onClick={() => setSelectedUnusedFinding(finding)}>{finding.name}</button><small>{finding.subjectId}</small></td><td>{t(`unused.types.${finding.findingType}`)}</td><td><Badge status={unusedFindingStatus[finding.lifecycle]} title={finding.lifecycle}>{t(`unused.lifecycle.${finding.lifecycle}`)}</Badge></td><td><WorkspaceTime value={finding.lastObservedAt} /></td><td>{t("unused.days", { count: finding.windowDays })}</td></>}
           footerNote={t("unused.directoryHint")} />
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="rule">

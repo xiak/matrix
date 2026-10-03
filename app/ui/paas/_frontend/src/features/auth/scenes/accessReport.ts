@@ -27,6 +27,7 @@ export type UnusedAccessFindingPreview = {
   subjectId: string;
   subjectKind: "user" | "accessKey" | "role";
   findingType: "unusedPassword" | "unusedAccessKey" | "unusedRole";
+  lifecycle: "ACTIVE" | "ARCHIVED" | "RESOLVED";
   lastObservedAt: string;
   generatedAt: string;
   windowDays: 90;
@@ -96,6 +97,7 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       subjectId: user.id,
       subjectKind: "user",
       findingType: "unusedPassword",
+      lifecycle: "ACTIVE",
       lastObservedAt: "2026-05-18T08:15:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
       windowDays: 90,
@@ -108,6 +110,7 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       subjectId: key.ownerId,
       subjectKind: "accessKey",
       findingType: "unusedAccessKey",
+      lifecycle: "ARCHIVED",
       lastObservedAt: "2026-05-04T11:30:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
       windowDays: 90,
@@ -120,6 +123,7 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       subjectId: role.id,
       subjectKind: "role",
       findingType: "unusedRole",
+      lifecycle: "RESOLVED",
       lastObservedAt: "2026-04-21T01:45:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
       windowDays: 90,
