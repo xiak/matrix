@@ -3,7 +3,7 @@
 .cardHeading { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); min-width: 0; }
 .cardHeading > div { display: grid; gap: var(--xiak-spacing-micro); min-width: 0; }
 .cardHeading span { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
-.cardHeading h2, .sectionHeading h3, .sectionHeading p, .scenarioHint, .beforeRun, .unavailable p { margin: 0; }
+.cardHeading h2, .sectionHeading h3, .sectionHeading p, .scenarioHint, .beforeRun, .unavailable p, .liveBoundary { margin: 0; }
 .cardHeading h2 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-title); }
 .scenarioHint { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
 .requestGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; }
@@ -12,6 +12,7 @@
 .requestGrid dd { display: grid; justify-items: start; min-width: 0; gap: var(--xiak-spacing-micro); margin: 0; }
 .requestGrid strong { color: var(--xiak-color-text-strong); }
 .requestGrid code, .requestGrid small { max-width: 100%; overflow-wrap: anywhere; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.requestGrid small { display: block; min-width: 0; }
 .actions, .resultActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); }
 .actions span, .resultActions span, .beforeRun, .unavailable p { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
 .resultFacts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; }
@@ -29,15 +30,22 @@
 .restrictionList li { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(220px, 1fr); align-items: center; gap: var(--xiak-spacing-default); min-width: 0; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); }
 .restrictionList li > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
 .restrictionList li strong { color: var(--xiak-color-text-strong); }
-.restrictionList li span, .restrictionList li code { overflow-wrap: anywhere; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.restrictionList li span, .restrictionList li code, .restrictionList li small { overflow-wrap: anywhere; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .restrictionPolicy { min-width: 0; }
 .restrictionEmpty { justify-self: start; }
 .boundaryGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; }
 .boundaryGrid > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--xiak-spacing-default); min-width: 0; padding: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel-hover); }
 .beforeRun { padding-inline: var(--xiak-spacing-default); }
 .unavailable { display: grid; justify-items: start; min-width: 0; gap: var(--xiak-spacing-default); }
+.liveBoundary { display: grid; width: 100%; min-width: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--xiak-spacing-default); }
+.liveBoundary > div { display: grid; align-content: start; min-width: 0; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); }
+.liveBoundary dt { color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
+.liveBoundary dd { margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.sourcesTable { min-width: 0; }
+.sourcesTable td { min-width: 0; }
+.sourcesTable td code { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 @container access-diagnosis (max-width: 560px) {
-  .requestGrid, .resultFacts, .boundaryGrid { grid-template-columns: minmax(0, 1fr); }
+  .requestGrid, .resultFacts, .boundaryGrid, .liveBoundary { grid-template-columns: minmax(0, 1fr); }
   .restrictionList li { grid-template-columns: minmax(0, 1fr) auto; }
   .restrictionPolicy, .restrictionEmpty { grid-column: 1 / -1; }
   .cardHeading { align-items: start; }
