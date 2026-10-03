@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { ListFilter, RefreshCcw, ShieldCheck } from "lucide-react";
 import { useEffectiveCredential } from "@/features/auth/application/RoleSessionProvider";
@@ -91,6 +91,53 @@ function requestFrom(filters: DraftFilters): AuditQueryRequest {
 function appliedFilterCount(request: AuditQueryRequest): number {
   return Number(Boolean(request.from)) + Number(Boolean(request.to)) + Number(Boolean(request.action)) +
     Number(Boolean(request.actor)) + Number(request.pageSize !== emptyFilters.pageSize);
+}
+
+function AuditFilterPanel({ initialFilters, loading, onApply, onReset }: {
+  initialFilters: DraftFilters;
+  loading: boolean;
+  onApply(filters: DraftFilters): void;
+  onReset(): void;
+}) {
+  const t = useTranslations("AuditService");
+  const [draft, setDraft] = useState<DraftFilters>(initialFilters);
+  const [validation, setValidation] = useState<string | null>(null);
+  const actionOptions = useMemo(() => [{ value: "", label: t("filters.allActions") }, ...auditActions.map((action) => ({ value: action, label: action }))], [t]);
+  const actorTypeOptions = useMemo(() => auditActorTypes.map((type) => ({ value: type, label: t(`actorTypes.${type}`) })), [t]);
+  const roleSourceOptions = useMemo(() => (["USER", "SERVICE_ACCOUNT"] as const).map((type) => ({ value: type, label: t(`actorTypes.${type}`) })), [t]);
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if ((draft.from && Number.isNaN(Date.parse(draft.from))) || (draft.to && Number.isNaN(Date.parse(draft.to))) ||
+      (draft.from && draft.to && Date.parse(draft.from) > Date.parse(draft.to)) ||
+      (draft.actorId && !actorIdPattern.test(draft.actorId)) ||
+      (draft.actorType === "USER" && draft.accessKeyId && (!draft.actorId || !actorIdPattern.test(draft.accessKeyId))) ||
+      (draft.actorType === "ROLE" && ((!draft.actorId && (draft.roleSessionId || draft.roleSourceId)) || (draft.actorId && (!actorIdPattern.test(draft.roleSessionId) || !actorIdPattern.test(draft.roleSourceId)))))) {
+      setValidation(t("filters.invalid"));
+      return;
+    }
+    setValidation(null);
+    onApply(draft);
+  };
+
+  return <>
+    <form id="audit-query-filters" className={styles.filters} onSubmit={submit}>
+      <FormField id="audit-from" label={t("filters.from")}><Input id="audit-from" type="datetime-local" value={draft.from} onChange={(event) => setDraft((current) => ({ ...current, from: event.target.value }))} /></FormField>
+      <FormField id="audit-to" label={t("filters.to")}><Input id="audit-to" type="datetime-local" value={draft.to} onChange={(event) => setDraft((current) => ({ ...current, to: event.target.value }))} /></FormField>
+      <FormField label={t("filters.action")}><Select aria-label={t("filters.action")} options={actionOptions} value={draft.action} onValueChange={(action) => setDraft((current) => ({ ...current, action }))} /></FormField>
+      <FormField label={t("filters.actorType")}><Select aria-label={t("filters.actorType")} options={actorTypeOptions} value={draft.actorType} onValueChange={(actorType) => setDraft((current) => ({ ...current, actorType: actorType as AuditActorType }))} /></FormField>
+      <FormField id="audit-actor-id" label={t("filters.actorId")} hint={t("filters.actorHint")}><Input id="audit-actor-id" maxLength={128} value={draft.actorId} onChange={(event) => setDraft((current) => ({ ...current, actorId: event.target.value }))} /></FormField>
+      {draft.actorType === "USER" ? <FormField id="audit-access-key-id" label={t("filters.accessKeyId")} hint={t("filters.accessKeyHint")}><Input id="audit-access-key-id" maxLength={128} value={draft.accessKeyId} onChange={(event) => setDraft((current) => ({ ...current, accessKeyId: event.target.value }))} /></FormField> : null}
+      {draft.actorType === "ROLE" ? <>
+        <FormField id="audit-role-session-id" label={t("filters.roleSessionId")} hint={t("filters.roleSessionHint")}><Input id="audit-role-session-id" maxLength={128} value={draft.roleSessionId} onChange={(event) => setDraft((current) => ({ ...current, roleSessionId: event.target.value }))} /></FormField>
+        <FormField label={t("filters.roleSourceType")}><Select aria-label={t("filters.roleSourceType")} options={roleSourceOptions} value={draft.roleSourceType} onValueChange={(roleSourceType) => setDraft((current) => ({ ...current, roleSourceType: roleSourceType as DraftFilters["roleSourceType"] }))} /></FormField>
+        <FormField id="audit-role-source-id" label={t("filters.roleSourceId")} hint={t("filters.roleSourceHint")}><Input id="audit-role-source-id" maxLength={128} value={draft.roleSourceId} onChange={(event) => setDraft((current) => ({ ...current, roleSourceId: event.target.value }))} /></FormField>
+      </> : null}
+      <FormField label={t("filters.pageSize")}><Select aria-label={t("filters.pageSize")} options={[10, 25, 50, 100, AUDIT_MAX_PAGE_SIZE].map((size) => ({ value: String(size), label: String(size) }))} value={String(draft.pageSize)} onValueChange={(size) => setDraft((current) => ({ ...current, pageSize: Number(size) }))} /></FormField>
+      <div className={styles.filterActions}><Button disabled={loading} type="submit">{t("actions.query")}</Button><Button disabled={loading} type="button" variant="secondary" onClick={() => { setDraft(emptyFilters); setValidation(null); onReset(); }}>{t("actions.reset")}</Button></div>
+    </form>
+    {validation ? <Alert status="danger" role="alert">{validation}</Alert> : null}
+  </>;
 }
 
 function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void }) {
@@ -210,14 +257,13 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
   const effectiveCredential = useEffectiveCredential();
   const credential = effectiveCredential ?? (preview ? "preview-audit-session" : null);
   const repository = preview ? previewAuditRepository : httpAuditRepository;
-  const [draft, setDraft] = useState<DraftFilters>(emptyFilters);
+  const [appliedFilters, setAppliedFilters] = useState<DraftFilters>(emptyFilters);
   const [request, setRequest] = useState<AuditQueryRequest>(() => requestFrom(emptyFilters));
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
   const [pageIndex, setPageIndex] = useState(0);
   const [page, setPage] = useState<AuditRecordPage | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<LoadError | null>(null);
-  const [validation, setValidation] = useState<string | null>(null);
   const [refreshRevision, setRefreshRevision] = useState(0);
   const [selected, setSelected] = useState<AuditRecord | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -265,26 +311,17 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
     filterTrigger.current?.focus({ preventScroll: true });
   }, [filtersOpen]);
 
-  const apply = useCallback(() => {
-    if ((draft.from && Number.isNaN(Date.parse(draft.from))) || (draft.to && Number.isNaN(Date.parse(draft.to))) ||
-      (draft.from && draft.to && Date.parse(draft.from) > Date.parse(draft.to)) ||
-      (draft.actorId && !actorIdPattern.test(draft.actorId)) ||
-      (draft.actorType === "USER" && draft.accessKeyId && (!draft.actorId || !actorIdPattern.test(draft.accessKeyId))) ||
-      (draft.actorType === "ROLE" && ((!draft.actorId && (draft.roleSessionId || draft.roleSourceId)) || (draft.actorId && (!actorIdPattern.test(draft.roleSessionId) || !actorIdPattern.test(draft.roleSourceId)))))) {
-      setValidation(t("filters.invalid"));
-      return;
-    }
-    setValidation(null);
+  const apply = useCallback((filters: DraftFilters) => {
+    setAppliedFilters(filters);
     setCursors([undefined]);
     setPageIndex(0);
-    setRequest(requestFrom(draft));
+    setRequest(requestFrom(filters));
     restoreFilterFocus.current = true;
     setFiltersOpen(false);
-  }, [draft, t]);
+  }, []);
 
   const reset = useCallback(() => {
-    setDraft(emptyFilters);
-    setValidation(null);
+    setAppliedFilters(emptyFilters);
     setCursors([undefined]);
     setPageIndex(0);
     setRequest(requestFrom(emptyFilters));
@@ -292,9 +329,6 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
     setFiltersOpen(false);
   }, []);
 
-  const actionOptions = useMemo(() => [{ value: "", label: t("filters.allActions") }, ...auditActions.map((action) => ({ value: action, label: action }))], [t]);
-  const actorTypeOptions = useMemo(() => auditActorTypes.map((type) => ({ value: type, label: t(`actorTypes.${type}`) })), [t]);
-  const roleSourceOptions = useMemo(() => (["USER", "SERVICE_ACCOUNT"] as const).map((type) => ({ value: type, label: t(`actorTypes.${type}`) })), [t]);
   const filterCount = appliedFilterCount(request);
 
   if (selected) return <RecordDetail record={selected} onBack={() => {
@@ -314,22 +348,7 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
           <Button aria-expanded={filtersOpen} aria-controls="audit-query-filters" ref={filterTrigger} type="button" variant="secondary" onClick={() => setFiltersOpen((value) => !value)}><ListFilter aria-hidden="true" />{t("filters.toggle")}{filterCount ? <Badge status="info">{t("filters.activeCount", { count: filterCount })}</Badge> : null}</Button>
           <Button aria-label={t("actions.refresh")} disabled={loading} iconOnly size="small" type="button" variant="ghost" onClick={() => setRefreshRevision((value) => value + 1)}><RefreshCcw aria-hidden="true" /></Button>
         </div>
-        {filtersOpen ? <form id="audit-query-filters" className={styles.filters} onSubmit={(event) => { event.preventDefault(); apply(); }}>
-          <FormField id="audit-from" label={t("filters.from")}><Input id="audit-from" type="datetime-local" value={draft.from} onChange={(event) => setDraft((current) => ({ ...current, from: event.target.value }))} /></FormField>
-          <FormField id="audit-to" label={t("filters.to")}><Input id="audit-to" type="datetime-local" value={draft.to} onChange={(event) => setDraft((current) => ({ ...current, to: event.target.value }))} /></FormField>
-          <FormField label={t("filters.action")}><Select aria-label={t("filters.action")} options={actionOptions} value={draft.action} onValueChange={(action) => setDraft((current) => ({ ...current, action }))} /></FormField>
-          <FormField label={t("filters.actorType")}><Select aria-label={t("filters.actorType")} options={actorTypeOptions} value={draft.actorType} onValueChange={(actorType) => setDraft((current) => ({ ...current, actorType: actorType as AuditActorType }))} /></FormField>
-          <FormField id="audit-actor-id" label={t("filters.actorId")} hint={t("filters.actorHint")}><Input id="audit-actor-id" maxLength={128} value={draft.actorId} onChange={(event) => setDraft((current) => ({ ...current, actorId: event.target.value }))} /></FormField>
-          {draft.actorType === "USER" ? <FormField id="audit-access-key-id" label={t("filters.accessKeyId")} hint={t("filters.accessKeyHint")}><Input id="audit-access-key-id" maxLength={128} value={draft.accessKeyId} onChange={(event) => setDraft((current) => ({ ...current, accessKeyId: event.target.value }))} /></FormField> : null}
-          {draft.actorType === "ROLE" ? <>
-            <FormField id="audit-role-session-id" label={t("filters.roleSessionId")} hint={t("filters.roleSessionHint")}><Input id="audit-role-session-id" maxLength={128} value={draft.roleSessionId} onChange={(event) => setDraft((current) => ({ ...current, roleSessionId: event.target.value }))} /></FormField>
-            <FormField label={t("filters.roleSourceType")}><Select aria-label={t("filters.roleSourceType")} options={roleSourceOptions} value={draft.roleSourceType} onValueChange={(roleSourceType) => setDraft((current) => ({ ...current, roleSourceType: roleSourceType as DraftFilters["roleSourceType"] }))} /></FormField>
-            <FormField id="audit-role-source-id" label={t("filters.roleSourceId")} hint={t("filters.roleSourceHint")}><Input id="audit-role-source-id" maxLength={128} value={draft.roleSourceId} onChange={(event) => setDraft((current) => ({ ...current, roleSourceId: event.target.value }))} /></FormField>
-          </> : null}
-          <FormField label={t("filters.pageSize")}><Select aria-label={t("filters.pageSize")} options={[10, 25, 50, 100, AUDIT_MAX_PAGE_SIZE].map((size) => ({ value: String(size), label: String(size) }))} value={String(draft.pageSize)} onValueChange={(size) => setDraft((current) => ({ ...current, pageSize: Number(size) }))} /></FormField>
-          <div className={styles.filterActions}><Button disabled={loading} type="submit">{t("actions.query")}</Button><Button disabled={loading} type="button" variant="secondary" onClick={reset}>{t("actions.reset")}</Button></div>
-        </form> : null}
-        {validation ? <Alert status="danger" role="alert">{validation}</Alert> : null}
+        {filtersOpen ? <AuditFilterPanel initialFilters={appliedFilters} loading={loading} onApply={apply} onReset={reset} /> : null}
         {error ? <EmptyState title={t("errors.title")} description={t(`errors.${error}`)} action={error !== "expired" ? <Button variant="secondary" onClick={() => setRefreshRevision((value) => value + 1)}>{t("actions.retry")}</Button> : undefined} /> : null}
         {!error && !page ? <TableSkeleton label={t("directory.loading")} labelVisible={false} rows={6} header={false} /> : null}
         {!error && page ? <div className={styles.collection} aria-busy={loading || undefined}>

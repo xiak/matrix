@@ -3,13 +3,15 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { Mail } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, FormField, Input, PasswordInput, Typography } from "@ui/xiak";
-import { validPreviewNotificationAddress } from "../domain/accessWorkspace";
+import { Alert, Badge, Button, Card, FormField, Input, PasswordInput, Select, Typography } from "@ui/xiak";
+import { validPreviewNotificationAddress, type PendingNotificationAddressReplacement } from "../domain/accessWorkspace";
 import styles from "./MfaPreviewExperience.module.css";
 
 const demonstrationCode = "48392017";
 const demonstrationPassword = "demo-password";
+const demonstrationReplacementTotp = "630127";
 const contactSteps = ["address", "verify", "complete"] as const;
+const replacementSteps = ["target", "proof", "verify", "complete"] as const;
 
 type ContactStage = "summary" | "address" | "verify" | "replacement";
 type FocusTarget = "trigger" | "summary" | null;
@@ -23,10 +25,29 @@ function ContactProgress({ current }: { current: number }) {
   </ol>;
 }
 
-export function SecurityNotificationAddressPreview({ verifiedAddress: controlledVerifiedAddress, onOpenReplacement, onVerified }: {
+function ReplacementProgress({ current }: { current: number }) {
+  const t = useTranslations("SecurityNotificationPreview.replacement");
+  return <ol aria-label={t("progress")} className={styles.steps}>
+    {replacementSteps.map((step, index) => <li aria-current={current === index ? "step" : undefined} data-active={index <= current ? "true" : undefined} key={step}>
+      <span>{index + 1}</span><small>{t(`progressSteps.${step}`)}</small>
+    </li>)}
+  </ol>;
+}
+
+export function SecurityNotificationAddressPreview({ verifiedAddress: controlledVerifiedAddress, onOpenReplacement, onVerified,
+  replacementAvailable = true, replacementIntent = null, replacementTotpCode = demonstrationReplacementTotp,
+  onBeginReplacement, onVerifyReplacement, onCommitReplacement, onInspectReplacement, onCancelReplacement }: {
   verifiedAddress?: string | null;
   onOpenReplacement?(): void;
   onVerified?(address: string): boolean | void | Promise<boolean | void>;
+  replacementAvailable?: boolean;
+  replacementIntent?: PendingNotificationAddressReplacement | null;
+  replacementTotpCode?: string;
+  onBeginReplacement?(mockIntentId: string, targetAddress: string): Promise<boolean>;
+  onVerifyReplacement?(mockIntentId: string): Promise<boolean>;
+  onCommitReplacement?(mockIntentId: string, responseMode: "success" | "response-lost"): Promise<boolean>;
+  onInspectReplacement?(mockIntentId: string, resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable"): Promise<boolean>;
+  onCancelReplacement?(mockIntentId: string): Promise<boolean>;
 } = {}) {
   const t = useTranslations("SecurityNotificationPreview");
   const auth = useTranslations("Auth");
@@ -41,6 +62,7 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
   const [confirming, setConfirming] = useState(false);
   const confirmingRef = useRef(false);
   const [completed, setCompleted] = useState(false);
+  const [replacementCompleted, setReplacementCompleted] = useState(false);
   const addressId = useId();
   const passwordId = useId();
   const codeId = useId();
@@ -69,6 +91,7 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
   const previewReplacement = () => {
     onOpenReplacement?.();
     setCompleted(false);
+    setReplacementCompleted(false);
     setError(null);
     setStage("replacement");
   };
@@ -117,7 +140,12 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
     }
   };
 
-  if (stage === "replacement" && verifiedAddress) return <NotificationAddressReplacementPreview address={verifiedAddress} headingRef={flowHeading} onClose={close} />;
+  if (stage === "replacement" && verifiedAddress) return <NotificationAddressReplacementPreview address={verifiedAddress} demonstrationTotp={replacementTotpCode} headingRef={flowHeading} intent={replacementIntent}
+    onBegin={onBeginReplacement ?? (async () => false)} onCancel={onCancelReplacement ?? (async () => false)} onCommit={onCommitReplacement ?? (async () => false)}
+    onInspect={onInspectReplacement ?? (async () => false)} onVerify={onVerifyReplacement ?? (async () => false)} onClose={close} onComplete={() => {
+    setReplacementCompleted(true);
+    close();
+  }} />;
 
   if (stage === "address") return <Card className={styles.flowCard}>
     <Card.Header><div><h2 className={styles.flowTitle} ref={flowHeading} tabIndex={-1}>{t("flowTitle")}</h2><Typography.Text tone="muted">{t("flowHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
@@ -161,6 +189,7 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
   return <section aria-labelledby="security-notification-address" className={styles.section}>
     <div className={styles.sectionHeading}><div><p>{t("eyebrow")}</p><h2 id="security-notification-address" ref={summaryHeading} tabIndex={-1}>{t("title")}</h2><span>{t("hint")}</span></div><Badge status={verifiedAddress ? "success" : pendingAddress ? "warning" : "neutral"}>{t(pendingAddress ? "verificationInProgress" : `states.${state}`)}</Badge></div>
     {completed ? <Alert status="success">{t("completed")}</Alert> : null}
+    {replacementCompleted ? <Alert status="success">{t("replacement.completed")}</Alert> : null}
     <Card><Card.Header><div className={styles.cardTitle}><span><Mail aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("cardTitle")}</Typography.Title><Typography.Text tone="muted">{t("cardHint")}</Typography.Text></div></div></Card.Header><Card.Body className={styles.cardBody}>
       <dl className={styles.facts}>
         <div><dt>{t("address")}</dt><dd>{verifiedAddress ?? pendingAddress ?? t("notConfigured")}</dd></div>
@@ -170,33 +199,165 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
         <div><dt>{t("owner")}</dt><dd>{t("ownerValue")}</dd></div>
         {pendingAddress ? <div><dt>{t("deliveryState")}</dt><dd>{t("deliveryPending")}</dd></div> : null}
       </dl>
-      {verifiedAddress ? <><Alert>{t("firstSliceBoundary")}</Alert><div className={styles.actions}><Button ref={trigger} onClick={previewReplacement} variant="secondary">{t("replacement.open")}</Button></div></> : <div className={styles.actions}><Button ref={trigger} onClick={begin}>{t(pendingAddress ? "resume" : "start")}</Button></div>}
+      {verifiedAddress ? <><Alert>{t("firstSliceBoundary")}</Alert><div className={styles.actions}><Button ref={trigger} disabled={!replacementAvailable && !replacementIntent} onClick={previewReplacement} title={!replacementAvailable && !replacementIntent ? t("replacement.unavailable") : undefined} variant="secondary">{t(replacementIntent ? "replacement.resume" : "replacement.open")}</Button></div></> : <div className={styles.actions}><Button ref={trigger} onClick={begin}>{t(pendingAddress ? "resume" : "start")}</Button></div>}
     </Card.Body></Card>
   </section>;
 }
 
-function NotificationAddressReplacementPreview({ address, headingRef, onClose }: {
+function NotificationAddressReplacementPreview({ address, demonstrationTotp, headingRef, intent, onBegin, onVerify, onCommit, onInspect, onCancel, onClose, onComplete }: {
   address: string;
+  demonstrationTotp: string;
   headingRef: RefObject<HTMLHeadingElement | null>;
+  intent: PendingNotificationAddressReplacement | null;
+  onBegin(mockIntentId: string, targetAddress: string): Promise<boolean>;
+  onVerify(mockIntentId: string): Promise<boolean>;
+  onCommit(mockIntentId: string, responseMode: "success" | "response-lost"): Promise<boolean>;
+  onInspect(mockIntentId: string, resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable"): Promise<boolean>;
+  onCancel(mockIntentId: string): Promise<boolean>;
   onClose(): void;
+  onComplete(): void;
 }) {
   const t = useTranslations("SecurityNotificationPreview");
+  const auth = useTranslations("Auth");
+  const [stage, setStage] = useState<"target" | "proof" | "complete">("target");
+  const [originalAddress] = useState(intent?.previousAddress ?? address);
+  const [targetAddress, setTargetAddress] = useState(intent?.targetAddress ?? "");
+  const [password, setPassword] = useState("");
+  const [totp, setTotp] = useState("");
+  const [mailCode, setMailCode] = useState("");
+  const [error, setError] = useState<"address" | "proof" | "code" | "action" | "rejected" | "lookup" | null>(null);
+  const [responseMode, setResponseMode] = useState<"success" | "response-lost">("success");
+  const [inspectionMode, setInspectionMode] = useState<"found-applied" | "found-rejected" | "not-found" | "unavailable">("found-applied");
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const targetId = useId();
+  const passwordId = useId();
+  const totpId = useId();
+  const mailCodeId = useId();
+  const responseModeId = useId();
+  const inspectionModeId = useId();
+  const stepIndex = stage === "complete" || intent?.status === "APPLY_UNKNOWN" ? 3 : intent ? 2 : stage === "proof" ? 1 : 0;
+  useEffect(() => { headingRef.current?.focus(); }, [headingRef, stage]);
+
+  const prepareTarget = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const candidate = targetAddress.trim().toLowerCase();
+    if (!validPreviewNotificationAddress(candidate) || candidate === originalAddress.toLowerCase()) { setError("address"); return; }
+    setTargetAddress(candidate);
+    setError(null);
+    setStage("proof");
+  };
+  const verifyIdentity = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const accepted = password === demonstrationPassword && totp === demonstrationTotp;
+    setPassword("");
+    setTotp("");
+    if (!accepted) { setError("proof"); return; }
+    setBusy(true);
+    try {
+      const created = await onBegin(`mock-notification-replacement-${crypto.randomUUID()}`, targetAddress);
+      setError(created ? null : "action");
+    } catch { setError("action"); }
+    finally { setBusy(false); }
+  };
+  const verifyTarget = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const accepted = mailCode === demonstrationCode;
+    setMailCode("");
+    if (!accepted) { setError("code"); return; }
+    if (!intent) { setError("action"); return; }
+    setBusy(true);
+    try { setError(await onVerify(intent.mockIntentId) ? null : "action"); }
+    catch { setError("action"); }
+    finally { setBusy(false); }
+  };
+  const cancel = async () => {
+    if (!intent) { onClose(); return; }
+    setBusy(true);
+    try { if (await onCancel(intent.mockIntentId)) onClose(); else setError("action"); }
+    catch { setError("action"); }
+    finally { setBusy(false); }
+  };
+  const commit = async () => {
+    if (!intent || intent.status !== "READY_TO_COMMIT" || busyRef.current) return;
+    busyRef.current = true; setBusy(true);
+    try {
+      if (!await onCommit(intent.mockIntentId, responseMode)) setError("action");
+      else if (responseMode === "success") { setError(null); setStage("complete"); }
+    } catch { setError("action"); }
+    finally { busyRef.current = false; setBusy(false); }
+  };
+  const inspect = async () => {
+    if (!intent || intent.status !== "APPLY_UNKNOWN" || busyRef.current) return;
+    busyRef.current = true; setBusy(true);
+    try {
+      if (!await onInspect(intent.mockIntentId, inspectionMode)) setError("lookup");
+      else if (inspectionMode === "found-applied") { setError(null); setStage("complete"); }
+      else if (inspectionMode === "found-rejected") { setError("rejected"); setTargetAddress(""); setStage("target"); }
+      else setError("lookup");
+    } catch { setError("lookup"); }
+    finally { busyRef.current = false; setBusy(false); }
+  };
+
   return <Card className={styles.flowCard}>
-    <Card.Header><div><h2 className={styles.flowTitle} ref={headingRef} tabIndex={-1}>{t("replacement.title")}</h2><Typography.Text tone="muted">{t("replacement.hint")}</Typography.Text></div><Badge status="warning">{t("replacement.deferred")}</Badge></Card.Header>
+    <Card.Header><div><h2 className={styles.flowTitle} ref={headingRef} tabIndex={-1}>{t("replacement.title")}</h2><Typography.Text tone="muted">{t("replacement.hint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
     <Card.Body className={styles.flowBody}>
+      <ReplacementProgress current={stepIndex} />
       <dl className={styles.facts}>
-        <div><dt>{t("replacement.currentAddress")}</dt><dd>{address}</dd></div>
+        <div><dt>{t("replacement.currentAddress")}</dt><dd>{stage === "complete" ? targetAddress : originalAddress}</dd></div>
         <div><dt>{t("replacement.currentState")}</dt><dd>{t("states.VERIFIED")}</dd></div>
-        <div><dt>{t("replacement.targetState")}</dt><dd>{t("replacement.noChange")}</dd></div>
+        <div><dt>{t("replacement.targetState")}</dt><dd>{stage === "complete" ? t("replacement.switched") : intent?.status === "APPLY_UNKNOWN" ? t("replacement.unknown") : targetAddress ? t("replacement.pendingTarget", { address: targetAddress }) : t("replacement.noChange")}</dd></div>
       </dl>
-      <ol aria-label={t("replacement.stepsLabel")} className={styles.ageFlow}>
-        <li>{t("replacement.steps.reauthenticate")}</li>
-        <li>{t("replacement.steps.verifyNew")}</li>
-        <li>{t("replacement.steps.commit")}</li>
-        <li>{t("replacement.steps.notify")}</li>
-      </ol>
-      <Alert status="warning">{t("replacement.boundary")}</Alert>
-      <div className={styles.flowActions}><Button onClick={onClose} variant="secondary">{t("replacement.close")}</Button></div>
+      {!intent && stage === "target" ? <form className={styles.form} onSubmit={prepareTarget}>
+        <Alert status="warning">{t("replacement.mockBoundary")}</Alert>
+        {error === "rejected" ? <Alert status="warning">{t("replacement.rejected")}</Alert> : null}
+        <FormField id={targetId} label={t("replacement.newAddress")} hint={t("replacement.newAddressHint")}><Input autoComplete="email" id={targetId} onChange={(event) => { setTargetAddress(event.target.value); setError(null); }} required value={targetAddress} /></FormField>
+        {error === "address" ? <Alert status="danger">{t("replacement.invalidAddress")}</Alert> : null}
+        <Alert>{t("replacement.beforeCommit")}</Alert>
+        <div className={styles.flowActions}><Button onClick={onClose} type="button" variant="ghost">{t("replacement.cancel")}</Button><Button disabled={!targetAddress.trim()} type="submit">{t("replacement.continue")}</Button></div>
+      </form> : null}
+      {!intent && stage === "proof" ? <form className={styles.form} onSubmit={(event) => void verifyIdentity(event)}>
+        <Alert>{t("replacement.proofBoundary")}</Alert>
+        <FormField id={passwordId} label={t("currentPassword")}><PasswordInput autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={passwordId} onChange={(event) => { setPassword(event.target.value); setError(null); }} showLabel={auth("showPassword")} value={password} /></FormField>
+        <FormField id={totpId} label={t("replacement.totpLabel")} hint={t("replacement.totpHint")}><Input autoComplete="one-time-code" id={totpId} inputMode="numeric" maxLength={6} onChange={(event) => { setTotp(event.target.value.replace(/\D/g, "")); setError(null); }} pattern="[0-9]{6}" required value={totp} /></FormField>
+        <Alert>{t("replacement.demoProof", { password: demonstrationPassword, code: demonstrationTotp })}</Alert>
+        {error === "proof" ? <Alert status="danger">{t("replacement.invalidProof")}</Alert> : null}
+        {error === "action" ? <Alert status="danger">{t("replacement.actionUnavailable")}</Alert> : null}
+        <div className={styles.flowActions}><Button disabled={busy} onClick={() => { setError(null); setStage("target"); }} type="button" variant="ghost">{t("replacement.back")}</Button><Button disabled={busy || !password || totp.length !== 6} type="submit">{busy ? t("replacement.verifying") : t("replacement.verifyIdentity")}</Button></div>
+      </form> : null}
+      {intent?.status === "PENDING_VERIFICATION" ? <form className={styles.form} onSubmit={(event) => void verifyTarget(event)}>
+        <Alert status="warning">{t("replacement.verifyBoundary", { address: targetAddress })}</Alert>
+        <Alert>{t("demoCode", { code: demonstrationCode })}</Alert>
+        <FormField id={mailCodeId} label={t("codeLabel")} hint={t("codeHint")}><Input autoComplete="one-time-code" id={mailCodeId} inputMode="numeric" maxLength={8} onChange={(event) => { setMailCode(event.target.value.replace(/\D/g, "")); setError(null); }} pattern="[0-9]{8}" required value={mailCode} /></FormField>
+        {error === "code" ? <Alert status="danger">{t("invalidCode")}</Alert> : null}
+        {error === "action" ? <Alert status="danger">{t("replacement.actionUnavailable")}</Alert> : null}
+        <div className={styles.flowActions}><Button disabled={busy} onClick={() => void cancel()} type="button" variant="ghost">{t("replacement.cancelIntent")}</Button><Button disabled={busy || mailCode.length !== 8} type="submit">{busy ? t("replacement.verifying") : t("replacement.verifyAddress")}</Button></div>
+      </form> : null}
+      {intent?.status === "READY_TO_COMMIT" ? <div className={styles.form}>
+        <Alert status="warning">{t("replacement.reviewBoundary")}</Alert>
+        <dl className={styles.facts}><div><dt>{t("replacement.previousAddress")}</dt><dd>{intent.previousAddress}</dd></div><div><dt>{t("replacement.verifiedTarget")}</dt><dd>{intent.targetAddress}</dd></div></dl>
+        <FormField id={responseModeId} label={t("replacement.responseScenario")}><Select id={responseModeId} value={responseMode} onValueChange={(value) => setResponseMode(value as typeof responseMode)} options={(["success", "response-lost"] as const).map((value) => ({ value, label: t(`replacement.responseScenarios.${value}`) }))} /></FormField>
+        <p className={styles.boundary}><Mail aria-hidden="true" />{t("replacement.unknownBoundary")}</p>
+        {error === "action" ? <Alert status="danger">{t("replacement.actionUnavailable")}</Alert> : null}
+        <div className={styles.flowActions}><Button disabled={busy} onClick={() => void cancel()} variant="ghost">{t("replacement.cancelIntent")}</Button><Button disabled={busy} onClick={() => void commit()}>{busy ? t("replacement.committing") : t("replacement.commit")}</Button></div>
+      </div> : null}
+      {intent?.status === "APPLY_UNKNOWN" ? <div className={styles.form}>
+        <Alert status="warning">{t("replacement.applyUnknown")}</Alert>
+        <dl className={styles.facts}><div><dt>{t("replacement.mockIntent")}</dt><dd><code>{intent.mockIntentId}</code></dd></div><div><dt>{t("replacement.previousAddress")}</dt><dd>{intent.previousAddress}</dd></div><div><dt>{t("replacement.verifiedTarget")}</dt><dd>{intent.targetAddress}</dd></div></dl>
+        <FormField id={inspectionModeId} label={t("replacement.inspectionScenario")}><Select id={inspectionModeId} value={inspectionMode} onValueChange={(value) => setInspectionMode(value as typeof inspectionMode)} options={(["found-applied", "found-rejected", "not-found", "unavailable"] as const).map((value) => ({ value, label: t(`replacement.inspectionScenarios.${value}`) }))} /></FormField>
+        {error === "lookup" ? <Alert status="warning">{t("replacement.lookupPending")}</Alert> : null}
+        <div className={styles.flowActions}><Button disabled={busy} onClick={onClose} variant="ghost">{t("replacement.closeForNow")}</Button><Button disabled={busy} onClick={() => void inspect()}>{busy ? t("replacement.inspecting") : t("replacement.inspect")}</Button></div>
+      </div> : null}
+      {stage === "complete" ? <div className={styles.form}>
+        <Alert status="success">{t("replacement.success")}</Alert>
+        <dl className={styles.facts}>
+          <div><dt>{t("replacement.previousAddress")}</dt><dd>{originalAddress}</dd></div>
+          <div><dt>{t("replacement.newTrustedAddress")}</dt><dd>{targetAddress}</dd></div>
+          <div><dt>{t("replacement.notificationResult")}</dt><dd>{t("replacement.notificationResultValue")}</dd></div>
+        </dl>
+        <Alert>{t("replacement.localOnly")}</Alert>
+        <div className={styles.flowActions}><Button onClick={onComplete}>{t("replacement.finish")}</Button></div>
+      </div> : null}
     </Card.Body>
   </Card>;
 }

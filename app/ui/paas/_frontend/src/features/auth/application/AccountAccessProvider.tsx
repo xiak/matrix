@@ -1708,7 +1708,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         if (result.workspace.accountId !== tenantId || result.workspace.mode !== "preview") throw new Error("INVALID_IAM_TENANT");
         setWorkspace(result.workspace);
         if (command.kind === "create-subuser" || command.kind === "delete-user" || command.kind === "update-user" || command.kind === "import-enterprise-members") { setLoading(true); setRevision((current) => current + 1); }
-        if (!(command.kind === "save-account-rule" && command.responseMode === "response-lost")) {
+        if (!(command.kind === "save-account-rule" && command.responseMode === "response-lost") &&
+            command.kind !== "verify-personal-notification-address" &&
+            command.kind !== "begin-personal-notification-replacement" &&
+            command.kind !== "verify-personal-notification-replacement" &&
+            command.kind !== "commit-personal-notification-replacement" &&
+            command.kind !== "inspect-personal-notification-replacement" &&
+            command.kind !== "cancel-personal-notification-replacement") {
           setSuccess("completed");
         }
         return { issuedKey: result.issuedKey, recoveryCodes: result.recoveryCodes };

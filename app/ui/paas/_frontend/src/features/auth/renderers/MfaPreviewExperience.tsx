@@ -287,11 +287,23 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
     {feedback ? <Alert status="success">{t(`feedback.${feedback}`)}</Alert> : null}
     {reauthenticationRequired ? <Alert status="warning">{t(workspace.pendingAccountRuleChange?.status === "UNKNOWN" ? "accountOutcomeUnknownReauthenticationRequired" : "reauthenticationRequired")}</Alert> : null}
     {pendingReplacement ? <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("replacementPendingTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.form}><Alert status="warning">{t(replacementOutcomeUnknown ? "replacementPendingUnknown" : "replacementPendingHint")}</Alert>{pendingInspectError ? <Alert status="danger">{t("replacementInspectFailed")}</Alert> : null}<dl className={styles.facts}><div><dt>{t("replacementRequest")}</dt><dd><code>{pendingReplacement.requestId}</code></dd></div><div><dt>{t("replacementDeadline")}</dt><dd>{format.dateTime(new Date(pendingReplacement.expiresAt), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}</dd></div></dl><div className={styles.flowActions}>{replacementOutcomeUnknown ? <Button disabled={pendingInspectBusy} onClick={() => { setPendingInspectBusy(true); setPendingInspectError(false); void access.executeWorkspace({ kind: "inspect-personal-mfa-replacement", requestId: pendingReplacement.requestId }).then((result) => { if (!result) setPendingInspectError(true); else setUnresolvedReplacementRequestId(null); }).catch(() => setPendingInspectError(true)).finally(() => setPendingInspectBusy(false)); }} variant="secondary">{pendingInspectBusy ? t("replacementInspecting") : t("replacementInspectMock")}</Button> : <Button onClick={() => void access.executeWorkspace({ kind: "cancel-personal-mfa-replacement", requestId: pendingReplacement.requestId })} variant="secondary">{t("cancelReplacement")}</Button>}</div></Card.Body></Card> : null}
-    <SecurityNotificationAddressPreview onOpenReplacement={access.clearFeedback} onVerified={async (address) => {
-      const verified = Boolean(await access.executeWorkspace({ kind: "verify-personal-notification-address", address }));
-      if (verified) access.clearFeedback();
-      return verified;
-    }} verifiedAddress={workspace.personalNotificationAddress} />
+    <SecurityNotificationAddressPreview
+      onBeginReplacement={async (mockIntentId, targetAddress) => Boolean(await access.executeWorkspace({ kind: "begin-personal-notification-replacement", mockIntentId, targetAddress }))}
+      onCancelReplacement={async (mockIntentId) => Boolean(await access.executeWorkspace({ kind: "cancel-personal-notification-replacement", mockIntentId }))}
+      onCommitReplacement={async (mockIntentId, responseMode) => Boolean(await access.executeWorkspace({ kind: "commit-personal-notification-replacement", mockIntentId, responseMode }))}
+      onInspectReplacement={async (mockIntentId, resultMode) => Boolean(await access.executeWorkspace({ kind: "inspect-personal-notification-replacement", mockIntentId, resultMode }))}
+      onOpenReplacement={access.clearFeedback}
+      onVerified={async (address) => {
+        const verified = Boolean(await access.executeWorkspace({ kind: "verify-personal-notification-address", address }));
+        if (verified) access.clearFeedback();
+        return verified;
+      }}
+      onVerifyReplacement={async (mockIntentId) => Boolean(await access.executeWorkspace({ kind: "verify-personal-notification-replacement", mockIntentId }))}
+      replacementAvailable={factorState === "bound" && !reauthenticationRequired && !pendingReplacement}
+      replacementIntent={workspace.pendingNotificationAddressReplacement}
+      replacementTotpCode={previewTotpCode(workspace.personalMfa)}
+      verifiedAddress={workspace.personalNotificationAddress}
+    />
     <section aria-labelledby="personal-security" className={styles.section}>
       <div className={styles.sectionHeading}><div><p>{t("personalEyebrow")}</p><h2 id="personal-security" ref={personalHeading} tabIndex={-1}>{t("personalTitle")}</h2><span>{t("personalHint")}</span></div><Badge status={reauthenticationRequired ? "warning" : factorState === "bound" ? "success" : required ? "warning" : "neutral"}>{t(reauthenticationRequired ? "reauthenticate" : factorState === "bound" ? "bound" : required ? "bindingRequired" : "notBound")}</Badge></div>
       <div className={styles.securityCards}>

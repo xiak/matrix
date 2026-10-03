@@ -79,6 +79,13 @@ export type PendingAccountRuleChange = {
   requestedLoginProtection: boolean;
   status: "UNKNOWN" | "UNRECOVERABLE";
 };
+/** Browser-memory rehearsal only; names deliberately do not define an IAM wire contract. */
+export type PendingNotificationAddressReplacement = {
+  mockIntentId: string;
+  previousAddress: string;
+  targetAddress: string;
+  status: "PENDING_VERIFICATION" | "READY_TO_COMMIT" | "APPLY_UNKNOWN";
+};
 export type EnterpriseMember = { id: string; name: string; department: string };
 export type EnterpriseAccount = { id: string; name: string; corporationId: string; visibleMemberIds: string[]; importedMemberIds: string[]; createdAt: string };
 export function enterprisePrincipalId(accountId: string, memberId: string): string { return "principal-wecom-" + accountId + "-" + memberId; }
@@ -103,7 +110,7 @@ export function validPreviewNotificationAddress(value: string): boolean {
 }
 export function previewTotpCode(state: PersonalMfaPreviewState): "624810" | "731942" { return state.demoCode ?? "624810"; }
 export function nextPreviewTotpCode(state: PersonalMfaPreviewState): "624810" | "731942" { return previewTotpCode(state) === "624810" ? "731942" : "624810"; }
-export type AccessEvent = { id: string; action: Exclude<AccessWorkspaceCommand["kind"], "remember-account-rule-change-unknown" | "mark-personal-mfa-replacement-unknown" | "inspect-personal-mfa-replacement" | "verify-personal-notification-address"> | "sign-in" | "batch-users"; target: string; at: string };
+export type AccessEvent = { id: string; action: Exclude<AccessWorkspaceCommand["kind"], "remember-account-rule-change-unknown" | "mark-personal-mfa-replacement-unknown" | "inspect-personal-mfa-replacement" | "verify-personal-notification-address" | "begin-personal-notification-replacement" | "verify-personal-notification-replacement" | "commit-personal-notification-replacement" | "inspect-personal-notification-replacement" | "cancel-personal-notification-replacement"> | "sign-in" | "batch-users"; target: string; at: string };
 export type PreviewUserProfile = {
   consoleAccess: boolean; programmaticAccess: boolean; passwordResetRequired: boolean;
   loginProtection: boolean; tags: { key: string; value: string }[];
@@ -120,6 +127,7 @@ export type AccessWorkspace = {
   userBoundaries: Record<string, string>; roleSessions: AccessRoleSession[];
   pendingKeyCreation: PendingAccessKeyCreation | null;
   pendingAccountRuleChange: PendingAccountRuleChange | null;
+  pendingNotificationAddressReplacement: PendingNotificationAddressReplacement | null;
   testResources: { id: string; reference: string; tags?: Record<string, string> }[];
   // Synthetic diagnostic inputs, not canned decisions or authorization rules.
   testRequests: { id: "path" | "duplicate" | "tags" | "deny" | "boundary" | "ungranted"; request: AccessTestRequest }[];
@@ -159,6 +167,11 @@ export type AccessWorkspaceCommand =
   | { kind: "delete-key"; id: string; resourceVersion: number; requestId: string }
   | { kind: "confirm-personal-mfa" }
   | { kind: "verify-personal-notification-address"; address: string }
+  | { kind: "begin-personal-notification-replacement"; mockIntentId: string; targetAddress: string }
+  | { kind: "verify-personal-notification-replacement"; mockIntentId: string }
+  | { kind: "commit-personal-notification-replacement"; mockIntentId: string; responseMode: "success" | "response-lost" }
+  | { kind: "inspect-personal-notification-replacement"; mockIntentId: string; resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable" }
+  | { kind: "cancel-personal-notification-replacement"; mockIntentId: string }
   | { kind: "begin-personal-mfa-replacement"; requestId: string; proofStartedAt: string }
   | { kind: "mark-personal-mfa-replacement-unknown"; requestId: string }
   | { kind: "inspect-personal-mfa-replacement"; requestId: string }
@@ -507,6 +520,62 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       state.personalNotificationAddress = command.address;
       recordEvent = false;
       target = context.primaryPrincipalId; break;
+    case "begin-personal-notification-replacement": {
+      const previousAddress = state.personalNotificationAddress;
+      const targetAddress = command.targetAddress.trim().toLowerCase();
+      if (!previousAddress) throw new AccessWorkspaceError("invalid");
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired ||
+          state.personalMfa.pendingReplacement || state.pendingNotificationAddressReplacement ||
+          !/^mock-notification-replacement-[0-9a-f-]{36}$/.test(command.mockIntentId) ||
+          !validPreviewNotificationAddress(targetAddress) || targetAddress === previousAddress.toLowerCase()) invalid();
+      state.pendingNotificationAddressReplacement = {
+        mockIntentId: command.mockIntentId,
+        previousAddress,
+        targetAddress,
+        status: "PENDING_VERIFICATION"
+      };
+      recordEvent = false;
+      break;
+    }
+    case "verify-personal-notification-replacement": {
+      const pending = state.pendingNotificationAddressReplacement;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.mockIntentId !== command.mockIntentId || pending.status !== "PENDING_VERIFICATION" ||
+          state.personalNotificationAddress !== pending.previousAddress) invalid();
+      pending.status = "READY_TO_COMMIT";
+      recordEvent = false;
+      break;
+    }
+    case "commit-personal-notification-replacement": {
+      const pending = state.pendingNotificationAddressReplacement;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.mockIntentId !== command.mockIntentId || pending.status !== "READY_TO_COMMIT" ||
+          state.personalNotificationAddress !== pending.previousAddress) invalid();
+      if (command.responseMode === "response-lost") pending.status = "APPLY_UNKNOWN";
+      else {
+        state.personalNotificationAddress = pending.targetAddress;
+        state.pendingNotificationAddressReplacement = null;
+      }
+      recordEvent = false;
+      break;
+    }
+    case "inspect-personal-notification-replacement": {
+      const pending = state.pendingNotificationAddressReplacement;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.mockIntentId !== command.mockIntentId || pending.status !== "APPLY_UNKNOWN") invalid();
+      if (command.resultMode === "found-applied") state.personalNotificationAddress = pending.targetAddress;
+      if (command.resultMode === "found-applied" || command.resultMode === "found-rejected") state.pendingNotificationAddressReplacement = null;
+      recordEvent = false;
+      break;
+    }
+    case "cancel-personal-notification-replacement": {
+      const pending = state.pendingNotificationAddressReplacement;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.mockIntentId !== command.mockIntentId || pending.status === "APPLY_UNKNOWN") invalid();
+      state.pendingNotificationAddressReplacement = null;
+      recordEvent = false;
+      break;
+    }
     case "confirm-personal-mfa":
       if (state.personalMfa.factorState === "bound" || state.personalMfa.pendingReplacement || (state.personalMfa.reauthenticationRequired && state.personalMfa.recoveryState !== "rebind-required")) invalid();
       state.personalMfa = { factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" };
@@ -633,6 +702,6 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       target = source.accountId; break;
     }
   }
-  if (recordEvent && command.kind !== "remember-account-rule-change-unknown" && command.kind !== "mark-personal-mfa-replacement-unknown" && command.kind !== "inspect-personal-mfa-replacement" && command.kind !== "verify-personal-notification-address") state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);
+  if (recordEvent && command.kind !== "remember-account-rule-change-unknown" && command.kind !== "mark-personal-mfa-replacement-unknown" && command.kind !== "inspect-personal-mfa-replacement" && command.kind !== "verify-personal-notification-address" && command.kind !== "begin-personal-notification-replacement" && command.kind !== "verify-personal-notification-replacement" && command.kind !== "commit-personal-notification-replacement" && command.kind !== "inspect-personal-notification-replacement" && command.kind !== "cancel-personal-notification-replacement") state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);
   return state;
 }

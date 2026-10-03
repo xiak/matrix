@@ -102,12 +102,15 @@ describe("AuditWorkspace", () => {
     expect(screen.getByLabelText("角色会话 ID")).toBeTruthy();
     expect(screen.getByRole("combobox", { name: "角色来源类型" })).toBeTruthy();
 
-    await user.type(screen.getByLabelText("操作者 ID"), "role-deployer");
+    await user.click(screen.getByLabelText("操作者 ID"));
+    await user.paste("role-deployer");
     await user.click(screen.getByRole("button", { name: "查询" }));
     expect((await screen.findByRole("alert")).textContent).toContain("请检查时间范围、操作者 ID 和分页参数");
 
-    await user.type(screen.getByLabelText("角色会话 ID"), "role-session-preview");
-    await user.type(screen.getByLabelText("角色来源 ID"), "principal-developer");
+    await user.click(screen.getByLabelText("角色会话 ID"));
+    await user.paste("role-session-preview");
+    await user.click(screen.getByLabelText("角色来源 ID"));
+    await user.paste("principal-developer");
     await user.click(screen.getByRole("button", { name: "查询" }));
     await waitFor(() => expect(screen.getByText("第 1 页 · 1 条记录")).toBeTruthy());
     expect(screen.getByText("role-deployer")).toBeTruthy();
