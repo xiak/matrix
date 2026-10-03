@@ -1,9 +1,8 @@
 "use client";
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useId, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, Checkbox, FormField, Input, Select, Tabs, TextArea, Typography } from "@ui/xiak";
-import { useAccountAccess } from "../application/AccountAccessProvider";
-import { userSsoConfigurationIssue, type AccessWorkspace, type UserSsoConfiguration, type UserSsoConfigurationIssue } from "../domain/accessWorkspace";
+import { Alert, Badge, Card, Tabs, Typography } from "@ui/xiak";
+import type { AccessWorkspace } from "../domain/accessWorkspace";
 import { MfaSecurityPreview } from "./MfaPreviewExperience";
 import { AccountSecuritySettingsPreview } from "./AccountSecuritySettingsPreview";
 import { PasswordRulesPreview } from "./PasswordRulesPreview";
@@ -54,74 +53,71 @@ export function AccessSecuritySettings({ workspace }: { workspace: AccessWorkspa
   </section>;
 }
 
-const emptySaml: UserSsoConfiguration = { protocol: "SAML", metadata: "", mappingClaim: "NameID" };
-const emptyOidc: UserSsoConfiguration = { protocol: "OIDC", issuer: "", clientId: "", authorizationEndpoint: "", mappingClaim: "", jwks: "" };
-
 export function AccessUserSso({ workspace }: { workspace: AccessWorkspace }) {
-  const t = useTranslations("IamWorkspace");
-  const access = useAccountAccess();
-  const id = useId();
-  const heading = useRef<HTMLHeadingElement>(null);
-  const [phase, setPhase] = useState<"summary" | "edit" | "review">("summary");
-  const [enabled, setEnabled] = useState(workspace.settings.userSsoEnabled);
-  const [configuration, setConfiguration] = useState<UserSsoConfiguration>(workspace.settings.userSsoConfiguration ?? emptySaml);
-  const [validationIssue, setValidationIssue] = useState<UserSsoConfigurationIssue | null>(null);
-  const changed = enabled !== workspace.settings.userSsoEnabled || JSON.stringify(configuration) !== JSON.stringify(workspace.settings.userSsoConfiguration);
-  const current = workspace.settings.userSsoConfiguration;
-  useLayoutEffect(() => { if (phase !== "summary") heading.current?.focus({ preventScroll: true }); }, [phase]);
-  function edit() {
-    setEnabled(workspace.settings.userSsoEnabled);
-    setConfiguration(workspace.settings.userSsoConfiguration ?? emptySaml);
-    setValidationIssue(null);
-    access.clearWorkspaceError();
-    setPhase("edit");
-  }
-  function review() {
-    const issue = userSsoConfigurationIssue(configuration);
-    if (issue) {
-      setValidationIssue(issue);
-      document.getElementById(id + "-" + (issue === "configuration" ? "protocol" : issue))?.focus();
-      return;
-    }
-    setValidationIssue(null);
-    setPhase("review");
-  }
-  function clearIssue(field: UserSsoConfigurationIssue) {
-    setValidationIssue((current) => current === field ? null : current);
-  }
-  async function save() {
-    const result = await access.executeWorkspace({ kind: "save-sso-settings", userSsoEnabled: enabled, userSsoConfiguration: configuration });
-    if (result) setPhase("summary");
-  }
-  return <Card><Card.Header><Typography.Title as="h2" level={3}>{t("userSsoAccountSignIn")}</Typography.Title><Badge status={workspace.settings.userSsoEnabled ? "success" : "neutral"}>{t(workspace.settings.userSsoEnabled ? "enabled" : "disabled")}</Badge></Card.Header><Card.Body className={styles.stack}>
-    {phase === "summary" ? <><Alert>{t("ssoHint")}</Alert><p className={styles.note}>{t("ssoFlow")}</p></> : null}
-    {phase === "summary" ? <section className={styles.stack}>
-      <h3 className={styles.stepTitle}>{t("userSsoConfiguration")}</h3>
-      {current ? <dl className={styles.facts}><div><dt>{t("protocol")}</dt><dd>{current.protocol}</dd></div><div><dt>{t("issuer")}</dt><dd>{current.protocol === "OIDC" ? current.issuer : t("samlIssuerFromMetadata")}</dd></div><div><dt>{t("userSsoMapping")}</dt><dd>{current.mappingClaim}</dd></div></dl> : <p className={styles.note}>{t("userSsoNotConfigured")}</p>}
-      <div className={styles.actions}><Button onClick={edit} variant="secondary">{t(current ? "edit" : "configure")}</Button></div>
-    </section> : null}
-    {phase === "edit" ? <form className={styles.form} onSubmit={(event) => { event.preventDefault(); review(); }}>
-      <h3 className={styles.stepTitle} ref={heading} tabIndex={-1}>{t("userSsoConfiguration")}</h3>
-      <p className={styles.note}>{t("userSsoEditBoundary")}</p>
-      <fieldset className={styles.editorFields} disabled={access.busy}>
-        <FormField id={id + "-protocol"} label={t("protocol")}><Select id={id + "-protocol"} value={configuration.protocol} options={[{ value: "SAML", label: "SAML 2.0" }, { value: "OIDC", label: "OIDC" }]} onValueChange={(value) => { setConfiguration(value === "OIDC" ? emptyOidc : emptySaml); setValidationIssue(null); }} /></FormField>
-        {configuration.protocol === "SAML" ? <FormField id={id + "-metadata"} label={t("userSsoSamlMetadata")} hint={t("userSsoLocalOnly")} error={validationIssue === "metadata" ? t("userSsoInvalidMetadata") : undefined}><TextArea id={id + "-metadata"} required maxLength={65536} rows={6} spellCheck={false} invalid={validationIssue === "metadata"} aria-describedby={`${id}-metadata-hint${validationIssue === "metadata" ? ` ${id}-metadata-error` : ""}`} value={configuration.metadata} onChange={(event) => { setConfiguration({ protocol: "SAML", metadata: event.target.value, mappingClaim: "NameID" }); clearIssue("metadata"); }} /></FormField> : <>
-          <FormField id={id + "-issuer"} label={t("issuer")} error={validationIssue === "issuer" ? t("userSsoInvalidHttpsUrl") : undefined}><Input id={id + "-issuer"} required type="url" aria-invalid={validationIssue === "issuer"} aria-describedby={validationIssue === "issuer" ? `${id}-issuer-error` : undefined} value={configuration.issuer} onChange={(event) => { setConfiguration((current) => current.protocol === "OIDC" ? { ...current, issuer: event.target.value } : current); clearIssue("issuer"); }} /></FormField>
-          <FormField id={id + "-clientId"} label={t("userSsoClientId")} error={validationIssue === "clientId" ? t("userSsoInvalidClientId") : undefined}><Input id={id + "-clientId"} required maxLength={256} aria-invalid={validationIssue === "clientId"} aria-describedby={validationIssue === "clientId" ? `${id}-clientId-error` : undefined} value={configuration.clientId} onChange={(event) => { setConfiguration((current) => current.protocol === "OIDC" ? { ...current, clientId: event.target.value } : current); clearIssue("clientId"); }} /></FormField>
-          <FormField id={id + "-authorizationEndpoint"} label={t("userSsoAuthorizationEndpoint")} error={validationIssue === "authorizationEndpoint" ? t("userSsoInvalidHttpsUrl") : undefined}><Input id={id + "-authorizationEndpoint"} required type="url" aria-invalid={validationIssue === "authorizationEndpoint"} aria-describedby={validationIssue === "authorizationEndpoint" ? `${id}-authorizationEndpoint-error` : undefined} value={configuration.authorizationEndpoint} onChange={(event) => { setConfiguration((current) => current.protocol === "OIDC" ? { ...current, authorizationEndpoint: event.target.value } : current); clearIssue("authorizationEndpoint"); }} /></FormField>
-          <FormField id={id + "-mappingClaim"} label={t("userSsoMapping")} error={validationIssue === "mappingClaim" ? t("userSsoInvalidMapping") : undefined}><Input id={id + "-mappingClaim"} required maxLength={128} aria-invalid={validationIssue === "mappingClaim"} aria-describedby={validationIssue === "mappingClaim" ? `${id}-mappingClaim-error` : undefined} value={configuration.mappingClaim} onChange={(event) => { setConfiguration((current) => current.protocol === "OIDC" ? { ...current, mappingClaim: event.target.value } : current); clearIssue("mappingClaim"); }} /></FormField>
-          <FormField id={id + "-jwks"} label={t("userSsoJwks")} hint={t("userSsoLocalOnly")} error={validationIssue === "jwks" ? t("userSsoInvalidJwks") : undefined}><TextArea id={id + "-jwks"} required maxLength={65536} rows={5} spellCheck={false} invalid={validationIssue === "jwks"} aria-describedby={`${id}-jwks-hint${validationIssue === "jwks" ? ` ${id}-jwks-error` : ""}`} value={configuration.jwks} onChange={(event) => { setConfiguration((current) => current.protocol === "OIDC" ? { ...current, jwks: event.target.value } : current); clearIssue("jwks"); }} /></FormField>
-        </>}
-        <Checkbox checked={enabled} onChange={(event) => setEnabled(event.target.checked)}>{t("ssoEnable")}</Checkbox>
-        <div className={styles.actions}><Button disabled={!changed || access.busy} type="submit">{t("userSsoReview")}</Button><Button type="button" variant="secondary" onClick={() => setPhase("summary")}>{t("cancel")}</Button></div>
-      </fieldset>
-    </form> : null}
-    {phase === "review" ? <section className={styles.stack}>
-      <h3 className={styles.stepTitle} ref={heading} tabIndex={-1}>{t("userSsoReviewTitle")}</h3>
-      <Alert status="warning">{t(enabled ? "userSsoEnableImpact" : "userSsoDisableImpact")}</Alert>
-      <dl className={styles.facts}><div><dt>{t("userSsoTarget")}</dt><dd>{workspace.accountId}</dd></div><div><dt>{t("userSsoPreviousState")}</dt><dd>{t(workspace.settings.userSsoEnabled ? "enabled" : "disabled")}</dd></div><div><dt>{t("userSsoNewState")}</dt><dd>{t(enabled ? "enabled" : "disabled")}</dd></div><div><dt>{t("protocol")}</dt><dd>{configuration.protocol}</dd></div><div><dt>{t("userSsoMapping")}</dt><dd>{configuration.mappingClaim}</dd></div>{configuration.protocol === "SAML" ? <div><dt>{t("userSsoSamlMetadata")}</dt><dd>{t("userSsoMaterialPresent")}</dd></div> : <><div><dt>{t("issuer")}</dt><dd>{configuration.issuer}</dd></div><div><dt>{t("userSsoClientId")}</dt><dd>{configuration.clientId}</dd></div><div><dt>{t("userSsoAuthorizationEndpoint")}</dt><dd>{configuration.authorizationEndpoint}</dd></div><div><dt>{t("userSsoJwks")}</dt><dd>{t("userSsoMaterialPresent")}</dd></div></>}</dl>
-      <p className={styles.note}>{t("userSsoReviewBoundary")}</p>
-      <div className={styles.actions}><Button disabled={access.busy} onClick={() => void save()}>{t("save")}</Button><Button disabled={access.busy} onClick={() => { access.clearWorkspaceError(); setPhase("edit"); }} variant="secondary">{t("userSsoBackToEdit")}</Button></div>
-    </section> : null}
+  const t = useTranslations("IamWorkspace.userSsoConcept");
+  const titleId = useId();
+  const journey = ["provider", "mapping", "session", "authorization"] as const;
+  const readiness = ["installation", "trust", "identity", "recovery", "audit"] as const;
+  const samlRequirements = ["metadata", "serviceProvider", "signature", "subject"] as const;
+  const oidcRequirements = ["issuer", "client", "proof", "subject"] as const;
+
+  return <Card><Card.Header>
+    <div className={styles.cardHeadingCopy}>
+      <Typography.Title as="h2" id={titleId} level={3}>{t("title")}</Typography.Title>
+      <Typography.Text tone="muted">{t("subtitle")}</Typography.Text>
+    </div>
+    <div className={styles.headingBadges}><Badge status="warning">MOCK</Badge><Badge status="neutral">{t("state")}</Badge></div>
+  </Card.Header><Card.Body className={styles.stack}>
+    <Alert status="info">{t("boundary")}</Alert>
+
+    <section aria-labelledby={`${titleId}-journey`} className={styles.stack}>
+      <div className={styles.securityCheckHeading}>
+        <div className={styles.cardHeadingCopy}><h3 className={styles.stepTitle} id={`${titleId}-journey`}>{t("journeyTitle")}</h3><p className={styles.note}>{t("journeyHint")}</p></div>
+        <Badge status="neutral">{workspace.accountId}</Badge>
+      </div>
+      <ol className={styles.securityChecks}>
+        {journey.map((step, index) => <li key={step}>
+          <Badge status="neutral">{index + 1}</Badge>
+          <div className={styles.securityCheckCopy}>
+            <div className={styles.securityCheckHeading}><strong>{t(`journey.${step}.title`)}</strong><Badge status={step === "provider" || step === "mapping" || step === "session" ? "warning" : "neutral"}>{t(`journey.${step}.state`)}</Badge></div>
+            <p>{t(`journey.${step}.detail`)}</p>
+          </div>
+        </li>)}
+      </ol>
+    </section>
+
+    <section aria-labelledby={`${titleId}-protocols`} className={styles.stack}>
+      <div className={styles.cardHeadingCopy}><h3 className={styles.stepTitle} id={`${titleId}-protocols`}>{t("protocolsTitle")}</h3><p className={styles.note}>{t("protocolsHint")}</p></div>
+      <div className={styles.settingsGrid}>
+        <section className={styles.conceptPanel} aria-labelledby={`${titleId}-saml`}>
+          <div className={styles.securityCheckHeading}><strong id={`${titleId}-saml`}>{t("protocols.saml.title")}</strong><Badge status="neutral">SAML 2.0</Badge></div>
+          <p>{t("protocols.saml.hint")}</p>
+          <ul>{samlRequirements.map((item) => <li key={item}>{t(`protocols.saml.items.${item}`)}</li>)}</ul>
+        </section>
+        <section className={styles.conceptPanel} aria-labelledby={`${titleId}-oidc`}>
+          <div className={styles.securityCheckHeading}><strong id={`${titleId}-oidc`}>{t("protocols.oidc.title")}</strong><Badge status="neutral">OIDC</Badge></div>
+          <p>{t("protocols.oidc.hint")}</p>
+          <ul>{oidcRequirements.map((item) => <li key={item}>{t(`protocols.oidc.items.${item}`)}</li>)}</ul>
+        </section>
+      </div>
+    </section>
+
+    <section aria-labelledby={`${titleId}-readiness`} className={styles.stack}>
+      <div className={styles.cardHeadingCopy}><h3 className={styles.stepTitle} id={`${titleId}-readiness`}>{t("readinessTitle")}</h3><p className={styles.note}>{t("readinessHint")}</p></div>
+      <ol className={styles.securityChecks}>
+        {readiness.map((item, index) => <li key={item}>
+          <Badge status="neutral">{index + 1}</Badge>
+          <div className={styles.securityCheckCopy}><div className={styles.securityCheckHeading}><strong>{t(`readiness.${item}.title`)}</strong><Badge status="warning">{t("notReady")}</Badge></div><p>{t(`readiness.${item}.detail`)}</p></div>
+        </li>)}
+      </ol>
+    </section>
+
+    <section aria-labelledby={`${titleId}-comparison`} className={styles.stack}>
+      <div className={styles.cardHeadingCopy}><h3 className={styles.stepTitle} id={`${titleId}-comparison`}>{t("comparisonTitle")}</h3><p className={styles.note}>{t("comparisonHint")}</p></div>
+      <dl className={styles.facts}>
+        <div><dt>{t("comparison.user.title")}</dt><dd>{t("comparison.user.detail")}</dd></div>
+        <div><dt>{t("comparison.role.title")}</dt><dd>{t("comparison.role.detail")}</dd></div>
+      </dl>
+    </section>
   </Card.Body></Card>;
 }

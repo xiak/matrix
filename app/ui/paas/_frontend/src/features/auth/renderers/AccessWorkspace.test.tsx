@@ -76,7 +76,7 @@ function AccountRefresh() {
 function ReauthenticationGuardProbe() {
   const access = useAccountAccess();
   return <>
-    <button data-testid="guard-workspace" onClick={() => void access.executeWorkspace({ kind: "save-sso-settings", userSsoEnabled: false, userSsoConfiguration: null })}>Protected workspace mutation</button>
+    <button data-testid="guard-workspace" onClick={() => void access.executeWorkspace({ kind: "save-account-key-network-preview", expectedRuleVersion: 1, accessKeyNetwork: { allowedSourceCidrs: [] } })}>Protected workspace mutation</button>
     <button data-testid="guard-group" onClick={() => void access.groups?.create({ name: "BlockedGroup", description: "must not reach adapter", requestId: "blocked-group" }).catch(() => undefined)}>Protected group mutation</button>
   </>;
 }
@@ -3724,27 +3724,23 @@ describe("CAM-style access workspace", () => {
     expect((await extension.read("preview")).personalNotificationAddress).toBeNull();
     expect(screen.queryByText("安全通知地址已在当前页面的 MOCK 状态中验证")).toBeNull();
   });
-  it("retains user SSO inputs on failure and saves only its owned settings on retry", async () => {
-    const { user, repository, extension } = await open("user-sso", { seed: async (preview) => {
-      preview.transact((source) => ({ workspace: { ...source, providers: [], roleSsoMappings: [], roles: source.roles.filter((role) => role.principalType !== "provider") } }));
-    } });
+  it("keeps account user SSO read-only until IAM publishes provider, mapping and sign-in contracts", async () => {
+    const { repository, extension } = await open("user-sso");
     const before = await extension.read("preview");
-    expect(screen.getByText("尚未配置。无需先创建角色 SSO 身份提供商。")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "去配置" }));
-    await user.type(screen.getByLabelText("企业 IdP 的 SAML 元数据 XML"), '<EntityDescriptor entityID="user-sso"></EntityDescriptor>');
-    await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
-    await user.click(screen.getByRole("button", { name: "审阅配置" }));
-    expect(screen.getByText(/原密码登录可能被关闭/)).toBeTruthy();
-    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("暂时无法完成操作，请重试。");
+    expect(screen.getByRole("heading", { name: "用户 SSO" })).toBeTruthy();
+    expect(screen.getByText("未配置 · 尚未启用")).toBeTruthy();
+    expect(screen.getByText("账号级身份提供商")).toBeTruthy();
+    expect(screen.getByText("外部身份映射")).toBeTruthy();
+    expect(screen.getByText("登录 Session")).toBeTruthy();
+    expect(screen.getByText("用户权限")).toBeTruthy();
+    expect(screen.getByText("SAML 企业身份源")).toBeTruthy();
+    expect(screen.getByText("OIDC 企业身份源")).toBeTruthy();
+    expect(screen.getByText("用户 SSO", { selector: "dt" })).toBeTruthy();
+    expect(screen.getByText("角色 SSO", { selector: "dt" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /配置|连接|启用|登录/ })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(await extension.read("preview")).toEqual(before);
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("由 SAML 元数据声明");
-    const state = await extension.read("preview");
-    expect(state.settings).toEqual({ ...before.settings, userSsoEnabled: true, userSsoConfiguration: { protocol: "SAML", metadata: '<EntityDescriptor entityID="user-sso"></EntityDescriptor>', mappingClaim: "NameID" } });
-    expect(state.providers).toEqual(before.providers);
-    expect(state.userPolicies).toEqual(before.userPolicies);
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(repository.execute).not.toHaveBeenCalled();
   });
   it("shows the reviewed rule version and requires a new login after an applied account-rule change", async () => {
@@ -3937,85 +3933,6 @@ describe("CAM-style access workspace", () => {
     expect((screen.getByLabelText("当前密码") as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText("6 位动态验证码") as HTMLInputElement).value).toBe("");
   });
-  it("saves SSO settings only to the preview adapter", async () => {
-    const { user, repository, extension } = await open("user-sso");
-    await screen.findByText(/用户 SSO 将企业身份映射到已有 IAM 用户/);
-    await user.click(screen.getByRole("button", { name: "去配置" }));
-    await user.type(screen.getByLabelText("企业 IdP 的 SAML 元数据 XML"), '<EntityDescriptor entityID="user-sso"></EntityDescriptor>');
-    await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
-    await user.click(screen.getByRole("button", { name: "审阅配置" }));
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    expect((await extension.read("preview")).settings.userSsoEnabled).toBe(true);
-    expect(repository.execute).not.toHaveBeenCalled();
-  });
-  it("keeps malformed SAML metadata in the editor and focuses its inline error before review", async () => {
-    const { user, extension } = await open("user-sso");
-    await user.click(screen.getByRole("button", { name: "去配置" }));
-    const metadata = screen.getByLabelText("企业 IdP 的 SAML 元数据 XML") as HTMLTextAreaElement;
-    await user.type(metadata, "not metadata");
-    await user.click(screen.getByRole("button", { name: "审阅配置" }));
-    expect(screen.queryByRole("heading", { name: "审阅用户 SSO 变更" })).toBeNull();
-    expect(screen.getByRole("alert").textContent).toContain("EntityDescriptor");
-    expect(metadata).toBe(document.activeElement);
-    expect(metadata.getAttribute("aria-invalid")).toBe("true");
-    expect((await extension.read("preview")).settings.userSsoConfiguration).toBeNull();
-    await user.clear(metadata);
-    await user.type(metadata, '<EntityDescriptor entityID="preview"></EntityDescriptor>');
-    expect(metadata.getAttribute("aria-invalid")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "审阅配置" }));
-    expect(screen.getByRole("heading", { name: "审阅用户 SSO 变更" })).toBe(document.activeElement);
-  });
-  it("shows OIDC HTTPS and JWKS shape errors next to their fields before review", async () => {
-    const { user, extension } = await open("user-sso");
-    await user.click(screen.getByRole("button", { name: "去配置" }));
-    await select(user, "协议", "OIDC");
-    const issuer = screen.getByLabelText("身份提供商 URL") as HTMLInputElement;
-    await user.type(issuer, "http://login.example.invalid");
-    await user.type(screen.getByLabelText("客户端 ID"), "matrix-preview");
-    await user.type(screen.getByLabelText("授权请求地址"), "https://login.example.invalid/authorize");
-    await user.type(screen.getByLabelText("映射到 IAM 用户的字段"), "preferred_username");
-    const jwks = screen.getByLabelText("签名公钥 JWKS JSON") as HTMLTextAreaElement;
-    fireEvent.change(jwks, { target: { value: "not json" } });
-    await user.click(screen.getByRole("button", { name: "审阅配置" }));
-    expect(issuer).toBe(document.activeElement);
-    expect(screen.getByRole("alert").textContent).toContain("HTTPS");
-    await user.clear(issuer);
-    await user.type(issuer, "https://login.example.invalid");
-    await user.click(screen.getByRole("button", { name: "审阅配置" }));
-    expect(jwks).toBe(document.activeElement);
-    expect(screen.getByRole("alert").textContent).toContain("JWKS JSON");
-    expect((await extension.read("preview")).settings.userSsoConfiguration).toBeNull();
-    fireEvent.change(jwks, { target: { value: '{"keys":[{"kty":"RSA"}]}' } });
-    await user.click(screen.getByRole("button", { name: "审阅配置" }));
-    expect(screen.getByRole("heading", { name: "审阅用户 SSO 变更" })).toBe(document.activeElement);
-  });
-  it("configures OIDC user SSO without selecting or modifying a role SSO provider", async () => {
-    const { user, extension } = await open("user-sso");
-    const before = await extension.read("preview");
-    await user.click(screen.getByRole("button", { name: "去配置" }));
-    await select(user, "协议", "OIDC");
-    await user.type(screen.getByLabelText("身份提供商 URL"), "https://login.example.invalid/oidc");
-    await user.type(screen.getByLabelText("客户端 ID"), "matrix-user-sso");
-    await user.type(screen.getByLabelText("授权请求地址"), "https://login.example.invalid/authorize");
-    await user.type(screen.getByLabelText("映射到 IAM 用户的字段"), "preferred_username");
-    fireEvent.change(screen.getByLabelText("签名公钥 JWKS JSON"), { target: { value: '{"keys":[{"kty":"RSA"}]}' } });
-    await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
-    await user.click(screen.getByRole("button", { name: "审阅配置" }));
-    expect(screen.getByRole("heading", { name: "审阅用户 SSO 变更" })).toBe(document.activeElement);
-    expect(screen.getByText("org-xiak")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    const state = await extension.read("preview");
-    expect(state.settings.userSsoConfiguration).toEqual({ protocol: "OIDC", issuer: "https://login.example.invalid/oidc", clientId: "matrix-user-sso", authorizationEndpoint: "https://login.example.invalid/authorize", mappingClaim: "preferred_username", jwks: '{"keys":[{"kty":"RSA"}]}' });
-    expect(state.providers).toEqual(before.providers);
-    expect(state.roles).toEqual(before.roles);
-    expect(state.roleSsoMappings).toEqual(before.roleSsoMappings);
-    await user.click(screen.getByRole("button", { name: "编辑" }));
-    await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
-    await user.click(screen.getByRole("button", { name: "审阅配置" }));
-    expect(screen.getByText(/普通 IAM 用户的非 SSO 登录路径可恢复/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    expect((await extension.read("preview")).settings).toMatchObject({ userSsoEnabled: false, userSsoConfiguration: state.settings.userSsoConfiguration });
-  });
   it.each(["groups", "policy-configuration"] as const)("never loads the %s preview graph after the directory denies management", async (view) => {
     const { repository } = await open(view, { reader: true });
     await screen.findByText("没有此页面的管理权限");
@@ -4029,7 +3946,7 @@ describe("CAM-style access workspace", () => {
     expect(repository.execute).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "新建密钥" })).toBeNull();
   });
-  it("keeps enterprise member provisioning separate from SSO configuration", async () => {
+  it("keeps enterprise member provisioning separate from the role SSO provider directory", async () => {
     const { user, extension } = await open("federations");
     await user.click(await screen.findByRole("button", { name: "模拟关联企业微信" }));
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -4050,7 +3967,6 @@ describe("CAM-style access workspace", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "导入为子用户" })).toBe(document.activeElement));
     const state = await extension.read("preview");
     expect(state.enterprises[0]?.importedMemberIds).toEqual(["dev01"]);
-    expect(state.settings.userSsoEnabled).toBe(false);
     expect(state.providers).toHaveLength(1);
   });
   it("explains bilateral cross-account collaboration without inventing an invitation command", async () => {

@@ -82,35 +82,8 @@ export type PendingAccountRuleChange = {
 export type EnterpriseMember = { id: string; name: string; department: string };
 export type EnterpriseAccount = { id: string; name: string; corporationId: string; visibleMemberIds: string[]; importedMemberIds: string[]; createdAt: string };
 export function enterprisePrincipalId(accountId: string, memberId: string): string { return "principal-wecom-" + accountId + "-" + memberId; }
-export type UserSsoConfiguration =
-  | { protocol: "SAML"; metadata: string; mappingClaim: "NameID" }
-  | { protocol: "OIDC"; issuer: string; clientId: string; authorizationEndpoint: string; mappingClaim: string; jwks: string };
-export type UserSsoConfigurationIssue = "configuration" | "metadata" | "issuer" | "clientId" | "authorizationEndpoint" | "mappingClaim" | "jwks";
-
-/** Local preview shape checks only; this does not verify an IdP, XML signature, key or login. */
-export function userSsoConfigurationIssue(config: UserSsoConfiguration | null): UserSsoConfigurationIssue | null {
-  if (config?.protocol === "SAML") {
-    if (config.mappingClaim !== "NameID" || typeof config.metadata !== "string" || !config.metadata.trim() || config.metadata.length > 65536 || !/<(?:[\w-]+:)?EntityDescriptor[\s>]/.test(config.metadata)) return "metadata";
-    return null;
-  }
-  if (config?.protocol !== "OIDC") return "configuration";
-  function httpsUrl(value: unknown) {
-    if (typeof value !== "string") return false;
-    try { return new URL(value).protocol === "https:"; } catch { return false; }
-  }
-  if (!httpsUrl(config.issuer)) return "issuer";
-  if (typeof config.clientId !== "string" || !config.clientId.trim() || config.clientId.length > 256) return "clientId";
-  if (!httpsUrl(config.authorizationEndpoint)) return "authorizationEndpoint";
-  if (typeof config.mappingClaim !== "string" || !config.mappingClaim.trim() || config.mappingClaim.length > 128) return "mappingClaim";
-  if (typeof config.jwks !== "string" || !config.jwks.trim() || config.jwks.length > 65536) return "jwks";
-  try {
-    const jwks = JSON.parse(config.jwks);
-    if (!jwks || !Array.isArray(jwks.keys) || !jwks.keys.length) return "jwks";
-  } catch { return "jwks"; }
-  return null;
-}
 export type AccessSettings = {
-  loginProtection: boolean; accountRuleVersion: number; userSsoEnabled: boolean; userSsoConfiguration: UserSsoConfiguration | null;
+  loginProtection: boolean; accountRuleVersion: number;
   accessKeyNetwork: AccessKeyNetworkRestrictions;
 };
 export type PersonalMfaPreviewState = {
@@ -206,8 +179,7 @@ export type AccessWorkspaceCommand =
   | { kind: "save-account-key-network-preview"; expectedRuleVersion: number; accessKeyNetwork: AccessKeyNetworkRestrictions }
   /** Preview client journal only; this is not a future IAM mutation contract. */
   | { kind: "remember-account-rule-change-unknown"; requestId: string; expectedRuleVersion: number; expectedLoginProtection: boolean; loginProtection: boolean }
-  | { kind: "inspect-account-rule-change"; requestId: string; resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable" }
-  | { kind: "save-sso-settings"; userSsoEnabled: boolean; userSsoConfiguration: UserSsoConfiguration | null };
+  | { kind: "inspect-account-rule-change"; requestId: string; resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable" };
 
 export const policyVersionLimit = 5;
 
@@ -659,11 +631,6 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       }
       state.pendingAccountRuleChange = null;
       target = source.accountId; break;
-    }
-    case "save-sso-settings": {
-      const config = command.userSsoConfiguration;
-      if (typeof command.userSsoEnabled !== "boolean" || (command.userSsoEnabled && !config) || (config !== null && userSsoConfigurationIssue(config))) invalid();
-      state.settings = { ...state.settings, userSsoEnabled: command.userSsoEnabled, userSsoConfiguration: config ? structuredClone(config) : null }; target = source.accountId; break;
     }
   }
   if (recordEvent && command.kind !== "remember-account-rule-change-unknown" && command.kind !== "mark-personal-mfa-replacement-unknown" && command.kind !== "inspect-personal-mfa-replacement" && command.kind !== "verify-personal-notification-address") state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);

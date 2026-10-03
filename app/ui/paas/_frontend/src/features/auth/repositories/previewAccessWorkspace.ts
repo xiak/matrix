@@ -81,7 +81,7 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
       usage: { observedAt: "2026-09-09T08:15:00Z", lastAuthorization: { evaluatedAt: "2026-09-09T08:14:58Z", allowed: false, action: "audit.record.read", product: "audit", sourceIp: "198.51.100.42" } }
     }],
     userPolicies: { "principal-lin": ["policy-prod-logs"], "principal-qiao": ["policy-tag-logs", "policy-production-guard", "policy-assume-reviewer"] },
-    settings: { loginProtection: false, accountRuleVersion: 1, userSsoEnabled: false, userSsoConfiguration: null, accessKeyNetwork: { allowedSourceCidrs: ["2001:db8:1200::/48", "203.0.113.0/24"] } },
+    settings: { loginProtection: false, accountRuleVersion: 1, accessKeyNetwork: { allowedSourceCidrs: ["2001:db8:1200::/48", "203.0.113.0/24"] } },
     personalMfa: { factorState: "never-bound", reauthenticationRequired: false, recoveryState: "idle" },
     personalNotificationAddress: null,
     events: [{ id: "event-sign-in", action: "sign-in", target: "preview-admin", at: "2026-09-09T01:10:00Z" }]

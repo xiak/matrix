@@ -4205,36 +4205,67 @@
       "roleId": "请选择信任该身份提供商的目标角色。"
     },
     "ssoConfirmMockSave": "保存 MOCK 配置",
-    "ssoHint": "用户 SSO 将企业身份映射到已有 IAM 用户，与角色 SSO 配置独立。本页仅为 MOCK，不改变真实登录。",
-    "ssoFlow": "企业 IdP → 已有 IAM 用户 → 该用户的权限",
-    "ssoEnable": "启用用户 SSO（模拟）",
     "ssoProvider": "选择身份提供商",
-    "userSsoAccountSignIn": "账号登录方式",
-    "userSsoConfiguration": "身份映射配置",
-    "userSsoNotConfigured": "尚未配置。无需先创建角色 SSO 身份提供商。",
-    "userSsoEditBoundary": "此配置独立于角色 SSO；只保存到当前 MOCK 会话。",
-    "userSsoSamlMetadata": "企业 IdP 的 SAML 元数据 XML",
-    "userSsoLocalOnly": "仅检查本地格式，不连接外部 IdP，也不验证签名或登录。",
-    "userSsoClientId": "客户端 ID",
-    "userSsoAuthorizationEndpoint": "授权请求地址",
-    "userSsoMapping": "映射到 IAM 用户的字段",
-    "userSsoJwks": "签名公钥 JWKS JSON",
-    "userSsoInvalidMetadata": "请输入包含 EntityDescriptor 的 SAML 元数据。此处只检查演示格式。",
-    "userSsoInvalidHttpsUrl": "请输入有效的 HTTPS 地址。",
-    "userSsoInvalidClientId": "请输入不超过 256 个字符的客户端 ID。",
-    "userSsoInvalidMapping": "请输入不超过 128 个字符的用户映射字段。",
-    "userSsoInvalidJwks": "请输入含非空 keys 数组的 JWKS JSON。此处不验证密钥。",
-    "userSsoMaterialPresent": "已填写；未验证真实签名或登录",
-    "samlIssuerFromMetadata": "由 SAML 元数据声明",
     "userSsoReview": "审阅配置",
-    "userSsoReviewTitle": "审阅用户 SSO 变更",
+    "userSsoMaterialPresent": "已填写；未验证真实签名或登录",
+    "userSsoConcept": {
+      "title": "用户 SSO",
+      "subtitle": "账号级企业身份登录边界",
+      "state": "未配置 · 尚未启用",
+      "boundary": "IAM-EXT-01/02 概念预览 · 当前没有已发布的身份提供商、外部身份映射或登录路由契约。本页不连接 IdP、不验证断言或 Token、不保存密钥、不创建映射，也不启动登录。",
+      "journeyTitle": "用户登录链路",
+      "journeyHint": "固定语义先显示；每一步只有在 IAM 返回权威事实后才能变成可用状态。",
+      "journey": {
+        "provider": { "title": "账号级身份提供商", "state": "未配置", "detail": "SAML 或 OIDC 信任属于当前账号；它与用于承担角色的身份提供商配置不能互换。" },
+        "mapping": { "title": "外部身份映射", "state": "无权威映射", "detail": "外部 subject 只能唯一映射到一个既有 USER；不会自动创建用户，也不会把外部组变成 Matrix 用户组或策略。" },
+        "session": { "title": "登录 Session", "state": "未签发", "detail": "断言或 Token 通过协议、路由和映射校验后，才可为该 USER 建立新的登录 Session；旧 Session 不会被追溯升级。" },
+        "authorization": { "title": "用户权限", "state": "独立决定", "detail": "登录成功只确认身份。资源权限仍来自既有用户直接策略与用户组继承，不能由 IdP 声明直接授予。" }
+      },
+      "protocolsTitle": "协议接入信息",
+      "protocolsHint": "以下是后续接入必须具备的边界，不是当前配置值或健康状态。",
+      "protocols": {
+        "saml": {
+          "title": "SAML 企业身份源",
+          "hint": "适合企业目录把已认证用户送回 Matrix 登录入口。",
+          "items": {
+            "metadata": "IdP metadata、Issuer 与签名证书必须被可信发布并支持轮换。",
+            "serviceProvider": "Entity ID、ACS、Audience 与 Recipient 由安装配置固定，不能由浏览器或管理员请求临时选择。",
+            "signature": "签名、时效、受众与重放校验由 IAM 完成，页面不能用 XML 格式检查冒充验证。",
+            "subject": "NameID 或声明映射只定位既有 USER，并受账号范围与唯一性约束。"
+          }
+        },
+        "oidc": {
+          "title": "OIDC 企业身份源",
+          "hint": "适合通过标准授权流程建立账号级登录信任。",
+          "items": {
+            "issuer": "Issuer、Discovery 与 JWKS 必须来自可信 HTTPS 边界并支持密钥轮换。",
+            "client": "Client ID 与 Redirect URI 由安装配置固定；客户端 Secret 不在浏览器中展示或保存。",
+            "proof": "state、nonce、PKCE、签名、Audience 与时效由 IAM 校验，页面不自行判断可信。",
+            "subject": "稳定 subject 或受控声明只映射到既有 USER，不能绕过停用状态与账号隔离。"
+          }
+        }
+      },
+      "readinessTitle": "启用前置",
+      "readinessHint": "全部由后端契约和真实运行验收后，配置、测试连接与启停动作才可以开放。",
+      "notReady": "尚未就绪",
+      "readiness": {
+        "installation": { "title": "安装级登录入口", "detail": "RP/Origin、回调地址、realm 解析及防枚举行为需固定，不能信任租户输入改变登录范围。" },
+        "trust": { "title": "协议与材料生命周期", "detail": "需要元数据、证书或 JWKS 的版本、轮换、失效和失败关闭规则。" },
+        "identity": { "title": "外部身份唯一映射", "detail": "需定义 IdentityProvider、ExternalIdentity 与既有 USER 的账号级唯一性、停用和断联语义。" },
+        "recovery": { "title": "应急与恢复路径", "detail": "启用前必须保留受控恢复；恢复不能绕过 MFA、复活停用用户或恢复已撤销权限。" },
+        "audit": { "title": "Session 与审计证据", "detail": "登录、映射、拒绝、断联和配置变更需产生可关联的权威审计，页面不合成成功事实。" }
+      },
+      "comparisonTitle": "不要混淆两种 SSO",
+      "comparisonHint": "二者都可使用企业 IdP，但得到的身份与授权路径不同。",
+      "comparison": {
+        "user": { "title": "用户 SSO", "detail": "外部身份 → 既有 USER → 登录 Session → 该用户已有权限。" },
+        "role": { "title": "角色 SSO", "detail": "外部断言或 Token → TrustPolicy / 声明检查 → RoleSession → 角色策略与权限边界。" }
+      }
+    },
     "userSsoBackToEdit": "返回编辑",
     "userSsoTarget": "目标账号",
     "userSsoPreviousState": "当前状态",
     "userSsoNewState": "变更后",
-    "userSsoEnableImpact": "若按此模式正式启用，普通 IAM 用户的控制台登录将改由企业 IdP，原密码登录可能被关闭。请先验证 IdP、映射及应急登录方案；实际规则仍待 IAM 契约固定。本 MOCK 不执行该变更。",
-    "userSsoDisableImpact": "若按此模式正式关闭，普通 IAM 用户的非 SSO 登录路径可恢复；具体规则仍待 IAM 契约固定。此操作不移除角色 SSO 或修改现有用户授权。本 MOCK 不执行该变更。",
-    "userSsoReviewBoundary": "本次只保存隔离预览配置，不创建用户、不关联策略、不配置角色信任，也不验证真实断言或签发会话。",
     "owner": "所属用户",
     "lastUsed": "最近使用",
     "neverUsed": "尚未使用",
@@ -5111,7 +5142,6 @@
       "set-user-policies": "调整用户授权",
       "save-account-rule": "保存账号安全规则",
       "inspect-account-rule-change": "查询账号安全规则原意图",
-      "save-sso-settings": "保存用户 SSO 设置",
       "set-user-groups": "调整用户组",
       "update-user": "编辑用户",
       "delete-user": "删除用户",

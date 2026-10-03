@@ -339,6 +339,13 @@
 @container user-directory (max-width: 540px) { .accountOwner { align-items: flex-start; flex-direction: column; } .accountOwnerMeta { justify-content: flex-start; text-align: left; } }
 .stepTitle { margin: 0; font-size: var(--xiak-font-size-body); color: var(--xiak-color-text-strong); }
 .stepTitle:focus { outline: none; }
+.cardHeadingCopy { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
+.cardHeadingCopy p { margin: 0; }
+.headingBadges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--xiak-spacing-tight); }
+.conceptPanel { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-comfortable); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
+.conceptPanel p { margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; }
+.conceptPanel ul { display: grid; gap: var(--xiak-spacing-tight); margin: 0; padding-inline-start: 1.25rem; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; }
+.conceptPanel li { overflow-wrap: anywhere; }
 
 .catalogSection { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); padding: 0 var(--xiak-panel-padding) var(--xiak-panel-padding); }
 .catalogNotice { display: grid; gap: var(--xiak-spacing-default); }

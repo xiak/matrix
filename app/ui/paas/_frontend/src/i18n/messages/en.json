@@ -4205,36 +4205,67 @@
       "roleId": "Choose a target role that trusts this identity provider."
     },
     "ssoConfirmMockSave": "Save MOCK configuration",
-    "ssoHint": "User SSO maps an enterprise identity to an existing IAM user and is separate from role SSO. This MOCK does not change real sign-in.",
-    "ssoFlow": "Enterprise IdP → existing IAM user → that user's permissions",
-    "ssoEnable": "Enable user SSO (mock)",
     "ssoProvider": "Select identity provider",
-    "userSsoAccountSignIn": "Account sign-in",
-    "userSsoConfiguration": "Identity mapping configuration",
-    "userSsoNotConfigured": "Not configured yet. A role SSO identity provider is not a prerequisite.",
-    "userSsoEditBoundary": "This configuration is independent of role SSO and is saved only in the current MOCK session.",
-    "userSsoSamlMetadata": "Enterprise IdP SAML metadata XML",
-    "userSsoLocalOnly": "Only local format is checked. No external IdP is contacted, and no signature or sign-in is verified.",
-    "userSsoClientId": "Client ID",
-    "userSsoAuthorizationEndpoint": "Authorization endpoint",
-    "userSsoMapping": "Claim mapped to IAM user",
-    "userSsoJwks": "Signing keys JWKS JSON",
-    "userSsoInvalidMetadata": "Enter SAML metadata containing EntityDescriptor. This is a preview shape check only.",
-    "userSsoInvalidHttpsUrl": "Enter a valid HTTPS URL.",
-    "userSsoInvalidClientId": "Enter a client ID of no more than 256 characters.",
-    "userSsoInvalidMapping": "Enter a user mapping claim of no more than 128 characters.",
-    "userSsoInvalidJwks": "Enter JWKS JSON with a non-empty keys array. Keys are not verified here.",
-    "userSsoMaterialPresent": "Provided; real signature and sign-in not verified",
-    "samlIssuerFromMetadata": "Declared by SAML metadata",
     "userSsoReview": "Review configuration",
-    "userSsoReviewTitle": "Review user SSO change",
+    "userSsoMaterialPresent": "Provided; real signature and sign-in not verified",
+    "userSsoConcept": {
+      "title": "User SSO",
+      "subtitle": "Account-scoped enterprise identity sign-in boundary",
+      "state": "Not configured · not enabled",
+      "boundary": "IAM-EXT-01/02 concept preview · No identity-provider, external-identity mapping, or sign-in-routing contract is published yet. This page does not contact an IdP, validate an assertion or token, store a secret, create a mapping, or start sign-in.",
+      "journeyTitle": "User sign-in path",
+      "journeyHint": "Stable semantics render immediately; a step can become available only when IAM returns authoritative facts.",
+      "journey": {
+        "provider": { "title": "Account identity provider", "state": "Not configured", "detail": "SAML or OIDC trust belongs to this account. It is not interchangeable with provider configuration used to assume a role." },
+        "mapping": { "title": "External identity mapping", "state": "No authoritative mapping", "detail": "An external subject can map uniquely to one existing USER only. It neither creates a user nor turns external groups into Matrix groups or policies." },
+        "session": { "title": "Sign-in Session", "state": "Not issued", "detail": "Only after protocol, routing, and mapping checks pass can IAM establish a new Session for that USER. Existing Sessions are never upgraded retroactively." },
+        "authorization": { "title": "User authorization", "state": "Evaluated separately", "detail": "Successful sign-in establishes identity only. Resource access still comes from existing direct user policies and group inheritance, never directly from an IdP claim." }
+      },
+      "protocolsTitle": "Protocol integration information",
+      "protocolsHint": "These are required future boundaries, not current configuration values or health facts.",
+      "protocols": {
+        "saml": {
+          "title": "SAML enterprise identity source",
+          "hint": "For an enterprise directory to return an authenticated user to Matrix sign-in.",
+          "items": {
+            "metadata": "IdP metadata, Issuer, and signing certificates require trusted publication and rotation.",
+            "serviceProvider": "Entity ID, ACS, Audience, and Recipient are fixed by installation configuration; neither the browser nor an admin request can select them ad hoc.",
+            "signature": "IAM validates signature, time, audience, and replay. An XML shape check in the page cannot stand in for verification.",
+            "subject": "NameID or claim mapping only locates an existing USER and remains constrained by account scope and uniqueness."
+          }
+        },
+        "oidc": {
+          "title": "OIDC enterprise identity source",
+          "hint": "For establishing account sign-in trust through a standard authorization flow.",
+          "items": {
+            "issuer": "Issuer, Discovery, and JWKS require a trusted HTTPS boundary and key rotation.",
+            "client": "Client ID and Redirect URI are fixed by installation configuration; a client secret is never displayed or stored in the browser.",
+            "proof": "IAM validates state, nonce, PKCE, signature, Audience, and time. The page does not decide trust.",
+            "subject": "A stable subject or controlled claim maps only to an existing USER and cannot bypass disablement or account isolation."
+          }
+        }
+      },
+      "readinessTitle": "Enablement prerequisites",
+      "readinessHint": "Configuration, connection testing, and enable/disable actions remain closed until backend contracts and real-runtime gates accept every item.",
+      "notReady": "Not ready",
+      "readiness": {
+        "installation": { "title": "Installation sign-in entry point", "detail": "RP/Origin, callback addresses, realm resolution, and anti-enumeration behavior must be fixed; tenant input cannot redirect sign-in scope." },
+        "trust": { "title": "Protocol and material lifecycle", "detail": "Metadata, certificate, or JWKS versioning, rotation, expiry, and fail-closed behavior need authoritative contracts." },
+        "identity": { "title": "Unique external identity mapping", "detail": "Account-scoped uniqueness, disablement, and unlink semantics are required across IdentityProvider, ExternalIdentity, and an existing USER." },
+        "recovery": { "title": "Emergency and recovery path", "detail": "A controlled recovery path is required before enablement. Recovery cannot bypass MFA, revive a disabled user, or restore revoked access." },
+        "audit": { "title": "Session and audit evidence", "detail": "Sign-in, mapping, rejection, unlinking, and configuration changes need correlated authoritative audit evidence; the page never synthesizes success." }
+      },
+      "comparisonTitle": "Do not conflate the two SSO paths",
+      "comparisonHint": "Both may use an enterprise IdP, but they produce different identities and authorization paths.",
+      "comparison": {
+        "user": { "title": "User SSO", "detail": "External identity → existing USER → sign-in Session → that user's existing permissions." },
+        "role": { "title": "Role SSO", "detail": "External assertion or token → TrustPolicy / claim checks → RoleSession → role policies and permission boundary." }
+      }
+    },
     "userSsoBackToEdit": "Back to editing",
     "userSsoTarget": "Target account",
     "userSsoPreviousState": "Current state",
     "userSsoNewState": "After change",
-    "userSsoEnableImpact": "If enabled under this model, ordinary IAM users would sign in through the enterprise IdP and password sign-in might close. Verify the IdP, mapping and emergency access first; actual rules await an IAM contract. This MOCK does not apply the change.",
-    "userSsoDisableImpact": "If disabled under this model, the non-SSO sign-in path for ordinary IAM users could return; actual rules await an IAM contract. This does not remove role SSO or change user grants. This MOCK does not apply the change.",
-    "userSsoReviewBoundary": "This only saves isolated preview configuration. It does not create users, attach policies, configure role trust, verify real assertions or issue sessions.",
     "owner": "Owner",
     "lastUsed": "Last used",
     "neverUsed": "Never used",
@@ -5090,7 +5121,6 @@
       "set-user-policies": "Update user policies",
       "save-account-rule": "Save account security rule",
       "inspect-account-rule-change": "Inspect original account security-rule intent",
-      "save-sso-settings": "Save user SSO settings",
       "set-user-groups": "Update memberships",
       "update-user": "Edit user",
       "delete-user": "Delete user",
