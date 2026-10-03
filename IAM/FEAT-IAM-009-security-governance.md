@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1会话自管理、S2 TOTP MFA/安全通知/恢复、S3密码与共享尝试治理及S4a账号安全报告均已有固定实现和所属段落的真实证据；未完成的LIVE UI或发布组合仍按各段边界保留。S4b当前访问诊断已固定于`ef4483e2`；S4c-a账号级闲置访问分析器已固定于`bbb2f7ee`；S4c-b真实观测扫描和Finding生命周期已固定于`91649497`并通过独立CI。S4c-c显式自动处置及009完整发布尚未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性。
+- 状态：S1会话自管理、S2 TOTP MFA/安全通知/恢复、S3密码与共享尝试治理及S4a账号安全报告均已有固定实现和所属段落的真实证据；未完成的LIVE UI或发布组合仍按各段边界保留。S4b当前访问诊断已固定于`ef4483e2`；S4c-a账号级闲置访问分析器已固定于`bbb2f7ee`；S4c-b真实观测扫描和Finding生命周期已固定于`91649497`并通过独立CI；S4c-c显式自动处置后端及其签名恢复组合已由`ed2835db`的独立CI最终确认。009完整LIVE UI与最终发布组合尚未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于整个产品发布可用性。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -1499,9 +1499,9 @@ Linux权限测试修复提交`4f53122b44be26036ef27b5ec56c245d799a159e`的[Verif
 
 后继认证恢复切片以固定产品源码`ddac6992c60ea267e8b2992b05de4487c14314f5`组成`IAM64/Audit34/PaaS3+r11`的签名A/B，并在本任务独立、network-none、2CPU/4GiB/PIDs768的Linux Docker 27.5.1引擎完成553.71秒的安装、升级、回滚、受保护备份及选定备份恢复。恢复事务推进所有密码、TOTP、恢复材料和AccessKey的credential generation，撤销恢复前全部USER/Role Session，并封锁备份内最后消费及恢复时当前TOTP step；门禁实际证明旧平台bearer、旧普通primary bearer和旧MFA bearer在下一请求均为401。原有效密码、Account/Root归属、TOTP因子、已验证通知地址、策略和受保护平台关系保持，但必须重新登录；MFA登录只接受严格晚于恢复fence的新step。普通同profile升级与保数据回滚则继续保留未撤销的有效Session，不能把两种生命周期语义混用。
 
-仅停止并启动该任务自有嵌套引擎后，持久卷上的新鲜MFA登录、tenant primary恢复/撤权、status/verify/support和完整生命周期在68.84秒通过；没有重启共享Docker、远端机器或其他Phase资源。以上关闭了签名安装A/B和备份恢复会话重发门禁，但记录最终断言的固定提交仍待自己的独立CI，UX/UI LIVE组合也未完成，因此S4c-c后端与完整009仍不标记为发布验收。
+仅停止并启动该任务自有嵌套引擎后，持久卷上的新鲜MFA登录、tenant primary恢复/撤权、status/verify/support和完整生命周期在68.84秒通过；没有重启共享Docker、远端机器或其他Phase资源。以上关闭了签名安装A/B和备份恢复会话重发门禁；记录最终断言的后继`ed2835db`也已通过下述独立CI，因此S4c-c后端按本节精确边界验收。UX/UI LIVE组合和完整009发布仍未完成，不能由后端切片替代。
 
-后继断言提交`08600d4faecf4244c3c6fcfe183e32dc3eca4fad`的[Verification 37139124479](https://github.com/xiak/matrix/actions/runs/37139124479)未通过，不能作为发布证据：`go`命中上述过期Linux安装fixture，`authority-runtime`则在本人会话累计门禁末段耗尽共享120秒fixture期限。对失败数据库的重现表明，批量撤销与27项writer竞争的前23项均已正常完成，随后登录场景因父context到期返回503；另一本人会话门禁同样在分页、writer、恢复及schema重放共用一个期限后，于末段平台恢复超时。当前修正不删除场景、不降低Argon2/MFA成本或并发强度，只把两个完整矩阵的fixture硬上限改为4分钟。新的独立磁盘PG18、1CPU/768MiB/PIDs192及Go1.26.5 race-p1环境中，批量27项以145.52秒全部通过，完整本人会话门禁以113.90秒通过；同一`authority-runtime`后半的联系人、TOTP、托管与备份快照四项以267.80秒通过。全仓`go vet -p 2 ./...`与`go test -race -count=1 -p 2 ./...`也通过。以上仍是未固定工作树的本地证据；必须由后继精确提交及其独立CI确认，旧失败不回填。
+后继断言提交`08600d4faecf4244c3c6fcfe183e32dc3eca4fad`的[Verification 37139124479](https://github.com/xiak/matrix/actions/runs/37139124479)未通过，不能作为发布证据：`go`命中上述过期Linux安装fixture，`authority-runtime`则在本人会话累计门禁末段耗尽共享120秒fixture期限。对失败数据库的重现表明，批量撤销与27项writer竞争的前23项均已正常完成，随后登录场景因父context到期返回503；另一本人会话门禁同样在分页、writer、恢复及schema重放共用一个期限后，于末段平台恢复超时。最终修正不删除场景、不降低Argon2/MFA成本或并发强度，只把两个完整矩阵的fixture硬上限改为4分钟。新的独立磁盘PG18、1CPU/768MiB/PIDs192及Go1.26.5 race-p1环境中，批量27项以145.52秒全部通过，完整本人会话门禁以113.90秒通过；同一`authority-runtime`后半的联系人、TOTP、托管与备份快照四项以267.80秒通过。全仓`go vet -p 2 ./...`与`go test -race -count=1 -p 2 ./...`也通过。该修正固定于`ed2835db362de0a4a1ef3ca9145ee56801ae2436`；其[Verification 37144670484](https://github.com/xiak/matrix/actions/runs/37144670484)已核实精确SHA，`go`、`node-process`、十二条authority分片及最终`authority-process`共15项全部completed/success。`authority-runtime`实际完成本人会话、保留数据和真实进程路径，`authority-recovery-window`完成保存码跨真实认证窗口耗尽门禁。旧失败不回填，本次成功也不替代尚未完成的LIVE UI与009最终发布组合。
 
 #### S4验收与衔接
 

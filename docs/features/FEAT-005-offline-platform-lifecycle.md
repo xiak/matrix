@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted foundation; IAM authentication-recovery lifecycle candidate is in verification
+- Status: Accepted foundation; current IAM authentication-recovery lifecycle slice is accepted
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current isolated-IAM source candidate is manifest `v2` with the exact `64/34/3` revision 11 profile. Revision 11 adds the installation-side authentication-recovery ABI; it remains unaccepted until the exact source passes the focused, signed A/B and independent CI gates below
+- Release contract: accepted foundation `v1`; the accepted isolated-IAM authentication-recovery slice is manifest `v2` with the exact `64/34/3` revision 11 profile. Revision 11 adds the installation-side authentication-recovery ABI and is accepted only for the focused signed A/B and independent CI evidence below
 
 ## Outcome
 
@@ -244,11 +244,16 @@ and portable image ID
 it proves the configured local delivery path, not an external provider SLA or
 recipient reading the message.
 
-This is accepted local signed-runtime evidence for the exact production
-source and test contract. Revision 11 remains a release candidate until the
-commit that records the final gate assertions passes its own independent CI.
-It does not admit revision 10, another authority profile, an earlier backup
-wire or arbitrary host-level snapshot rollback.
+This is accepted signed-runtime evidence for the exact production source and
+test contract. The assertion and runtime-gate correction is fixed at
+`ed2835db362de0a4a1ef3ca9145ee56801ae2436`; its
+[Verification 37144670484](https://github.com/xiak/matrix/actions/runs/37144670484)
+completed successfully with all 15 jobs, including both recovery-storage and
+recovery-window lanes, the complete authority-runtime lane and the final
+authority-process summary. Revision 11 is therefore accepted for this exact
+IAM authentication-recovery lifecycle slice. It does not admit revision 10,
+another authority profile, an earlier backup wire, arbitrary host-level
+snapshot rollback, or imply acceptance of the entire IAM release and LIVE UI.
 
 The first assertion-only follow-up `08600d4faecf4244c3c6fcfe183e32dc3eca4fad`
 did not pass [Verification 37139124479](https://github.com/xiak/matrix/actions/runs/37139124479):
@@ -262,9 +267,10 @@ lease/release frame, closure/snapshot consumption and one-shot recovery
 receipt, and proves an equal backup replay neither streams PostgreSQL nor
 acquires custody a second time. The focused Linux Go 1.26.5 container gate
 (`network=none`, 2 CPUs, 2 GiB, 256 PIDs) passed installation/release vet and
-race; the full Windows-host repository vet and race suites also passed. This
-is local correction evidence only until its own fixed commit and independent
-CI complete.
+race; the full Windows-host repository vet and race suites also passed. The
+same correction is contained in the independently successful `ed2835db`
+verification above; the failed `08600d4f` run remains a failed historical
+attempt and is not backfilled.
 
 ### Signed IAM security-report precursor
 
