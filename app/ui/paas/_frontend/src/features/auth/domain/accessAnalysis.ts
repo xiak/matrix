@@ -1,11 +1,18 @@
 export type AccessAnalyzerStatus = "ACTIVE" | "DISABLED";
 
+export type AccessDispositionMode = "REVIEW_ONLY" | "DISABLE_UNUSED_ACCESS_KEYS";
+
+export type AccessDispositionRule =
+  | { mode: "REVIEW_ONLY"; findingDelayDays: 0 }
+  | { mode: "DISABLE_UNUSED_ACCESS_KEYS"; findingDelayDays: number };
+
 export type AccessAnalyzer = {
   id: string;
   accountId: string;
   type: "UNUSED_ACCESS";
   status: AccessAnalyzerStatus;
   unusedAccessAgeDays: number;
+  disposition: AccessDispositionRule;
   resourceVersion: number;
   createdAt: string;
   updatedAt: string;
@@ -86,6 +93,7 @@ type AccessFindingRecord = {
   createdAt: string;
   updatedAt: string;
   resolvedAt: string | null;
+  resolutionReason: "CONDITION_CLEARED" | "AUTOMATIC_DISPOSITION" | null;
 };
 
 export type UnusedPasswordFinding = AccessFindingRecord & {
@@ -125,6 +133,12 @@ export type CreateAccessAnalyzerCommand = {
 export type UpdateAccessAnalyzerCommand = {
   status: AccessAnalyzerStatus;
   unusedAccessAgeDays: number;
+  resourceVersion: number;
+  requestId: string;
+};
+
+export type SetAccessDispositionCommand = {
+  disposition: AccessDispositionRule;
   resourceVersion: number;
   requestId: string;
 };

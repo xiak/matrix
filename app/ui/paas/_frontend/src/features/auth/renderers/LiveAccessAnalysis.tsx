@@ -6,7 +6,7 @@ import { Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, 
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { AccessAnalysisClient } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
-import type { AccessAnalyzer, AccessFinding, AccessFindingDirectory, AccessFindingStatusFilter, AccessObservationCoverage } from "../domain/accessAnalysis";
+import type { AccessAnalyzer, AccessDispositionRule, AccessFinding, AccessFindingDirectory, AccessFindingStatusFilter, AccessObservationCoverage } from "../domain/accessAnalysis";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -61,7 +61,7 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
   const [findingsLoading, setFindingsLoading] = useState(false);
   const [selected, setSelected] = useState<AccessFinding | null>(null);
   const [error, setError] = useState<Failure | null>(null);
-  const [notice, setNotice] = useState<"created" | "updated" | "archived" | "unarchived" | null>(null);
+  const [notice, setNotice] = useState<"created" | "updated" | "dispositionUpdated" | "archived" | "unarchived" | null>(null);
   const [busy, setBusy] = useState(false);
   const [reloadRevision, setReloadRevision] = useState(0);
   const analyzer = analyzers?.[0] ?? null;
@@ -137,6 +137,23 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
     } finally { setBusy(false); }
   };
 
+  const setDisposition = async (disposition: AccessDispositionRule) => {
+    if (!analyzer) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const updated = await client.setDisposition(analyzer.id, {
+        disposition,
+        resourceVersion: analyzer.resourceVersion,
+        requestId: requestToken("ui-access-analyzer-set-disposition-")
+      });
+      setAnalyzers([updated]); setNotice("dispositionUpdated");
+    } catch (failure) {
+      const code = failureCode(failure);
+      setError(code);
+      if (code === "conflict") setReloadRevision((current) => current + 1);
+    } finally { setBusy(false); }
+  };
+
   const transitionFinding = async (finding: AccessFinding) => {
     if (finding.status === "RESOLVED") return;
     setBusy(true); setError(null); setNotice(null);
@@ -179,8 +196,10 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
           <div><dt>{t("live.windowStartedAt")}</dt><dd><WorkspaceTime value={selected.windowStartedAt} /></dd></div>
           <div><dt>{t("live.observedAt")}</dt><dd><WorkspaceTime value={selected.observedAt} /></dd></div>
           <div><dt>{t("live.lastActivityAt")}</dt><dd>{selected.lastActivityAt ? <WorkspaceTime value={selected.lastActivityAt} /> : t("live.noActivity")}</dd></div>
+          {selected.resolvedAt ? <div><dt>{t("live.resolvedAt")}</dt><dd><WorkspaceTime value={selected.resolvedAt} /></dd></div> : null}
+          {selected.resolutionReason ? <div><dt>{t("live.resolutionReason")}</dt><dd>{t(`live.resolutionReasons.${selected.resolutionReason}`)}</dd></div> : null}
         </dl>
-        <Alert status="warning">{t("unused.noAutomaticAction")}</Alert>
+        <Alert status="warning">{selected.resolutionReason === "AUTOMATIC_DISPOSITION" ? t("live.automaticDispositionEvidence") : t("unused.noAutomaticAction")}</Alert>
       </Card.Body>
       <Card.Footer><div className={styles.actions}>
         {selected.status !== "RESOLVED" ? <Button disabled={busy} onClick={() => void transitionFinding(selected)}>{t(selected.status === "ACTIVE" ? "live.archive" : "live.unarchive")}</Button> : null}
@@ -220,7 +239,10 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
               next={{ label: t("live.next"), disabled: !findings?.nextAfter, onClick: () => { if (!findings?.nextAfter) return; setFindingsLoading(true); setError(null); setCursorStack((current) => [...current.slice(0, pageIndex + 1), findings.nextAfter ?? undefined]); setPageIndex((current) => current + 1); } }} /></Table.Footer>
           </Card>
         </Tabs.Content>
-        <Tabs.Content className={styles.stack} value="rule"><LiveAnalyzerRule key={`${analyzer.resourceVersion}:${analyzer.status}:${analyzer.unusedAccessAgeDays}`} analyzer={analyzer} busy={busy} onSave={updateAnalyzer} /></Tabs.Content>
+        <Tabs.Content className={styles.stack} value="rule">
+          <LiveAnalyzerRule key={`${analyzer.resourceVersion}:${analyzer.status}:${analyzer.unusedAccessAgeDays}`} analyzer={analyzer} busy={busy} onSave={updateAnalyzer} />
+          <LiveDispositionRule key={`${analyzer.resourceVersion}:${analyzer.disposition.mode}:${analyzer.disposition.findingDelayDays}`} analyzer={analyzer} busy={busy} onSave={setDisposition} />
+        </Tabs.Content>
       </>}
     </Tabs.Root>
   </div>;
@@ -251,5 +273,75 @@ function LiveAnalyzerRule({ analyzer, busy, onSave }: {
       <Alert status="warning">{t("live.noAutomaticRemediation")}</Alert>
     </Card.Body>
     <Card.Footer><Button disabled={busy || invalid || unchanged} onClick={() => void onSave({ status, unusedAccessAgeDays: value })}>{t("live.saveRule")}</Button></Card.Footer>
+  </Card>;
+}
+
+function LiveDispositionRule({ analyzer, busy, onSave }: {
+  analyzer: AccessAnalyzer;
+  busy: boolean;
+  onSave(value: AccessDispositionRule): Promise<void>;
+}) {
+  const t = useTranslations("IamWorkspace.accessAnalysis.disposition");
+  const id = useId();
+  const [step, setStep] = useState<"summary" | "edit" | "review">("summary");
+  const [mode, setMode] = useState<AccessDispositionRule["mode"]>(analyzer.disposition.mode);
+  const [delayValue, setDelayValue] = useState(String(analyzer.disposition.findingDelayDays || 7));
+  const delayDays = Number(delayValue);
+  const automatic = mode === "DISABLE_UNUSED_ACCESS_KEYS";
+  const invalidDelay = automatic && (!/^\d+$/.test(delayValue) || !Number.isInteger(delayDays) || delayDays < 1 || delayDays > 30);
+  const nextDisposition: AccessDispositionRule = automatic
+    ? { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: delayDays }
+    : { mode: "REVIEW_ONLY", findingDelayDays: 0 };
+  const unchanged = nextDisposition.mode === analyzer.disposition.mode &&
+    nextDisposition.findingDelayDays === analyzer.disposition.findingDelayDays;
+  const save = async () => {
+    if (invalidDelay || unchanged) return;
+    await onSave(nextDisposition);
+  };
+
+  if (step === "edit") return <Card>
+    <Card.Header><div><Typography.Title as="h2" level={3}>{t("editTitle")}</Typography.Title><Typography.Text tone="muted">{t("configurationHint")}</Typography.Text></div><Badge status="info">{t("live")}</Badge></Card.Header>
+    <Card.Body className={styles.detail}>
+      <Alert status="info">{t("liveWorkflowBoundary")}</Alert>
+      <RadioGroup label={t("mode")} value={mode} onValueChange={(value) => setMode(value as AccessDispositionRule["mode"])} options={(["REVIEW_ONLY", "DISABLE_UNUSED_ACCESS_KEYS"] as const).map((value) => ({ value, label: t(`modes.${value}`) }))} />
+      {automatic ? <FormField id={`${id}-live-delay`} label={t("delay")} hint={t("delayHint")} error={invalidDelay ? t("delayInvalid") : undefined}><Input id={`${id}-live-delay`} disabled={busy} required type="number" min={1} max={30} step={1} invalid={invalidDelay} aria-describedby={`${id}-live-delay-hint${invalidDelay ? ` ${id}-live-delay-error` : ""}`} value={delayValue} onChange={(event) => setDelayValue(event.target.value)} /></FormField> : <Alert status="info">{t("reviewOnlyMeaning")}</Alert>}
+      <Alert status="warning">{t("scopeBoundary")}</Alert>
+      <Alert status="info">{t("permissionBoundary")}</Alert>
+    </Card.Body>
+    <Card.Footer><div className={styles.actions}><Button disabled={busy || invalidDelay || unchanged} onClick={() => setStep("review")}>{t("review")}</Button><Button variant="secondary" disabled={busy} onClick={() => setStep("summary")}>{t("cancel")}</Button></div></Card.Footer>
+  </Card>;
+
+  if (step === "review") return <Card>
+    <Card.Header><div><Typography.Title as="h2" level={3}>{t("reviewTitle")}</Typography.Title><Typography.Text tone="muted">{t("reviewHint")}</Typography.Text></div><Badge status="warning">{t("liveWriteReview")}</Badge></Card.Header>
+    <Card.Body className={styles.detail}>
+      <dl className={styles.facts}>
+        <div><dt>{t("account")}</dt><dd><code>{analyzer.accountId}</code></dd></div>
+        <div><dt>{t("analyzerId")}</dt><dd><code>{analyzer.id}</code></dd></div>
+        <div><dt>{t("nextResourceVersion")}</dt><dd>{analyzer.resourceVersion + 1}</dd></div>
+        <div><dt>{t("mode")}</dt><dd className={styles.dispositionFact}><code>{nextDisposition.mode}</code><small>{t(`modes.${nextDisposition.mode}`)}</small></dd></div>
+        <div><dt>{t("eligibleFinding")}</dt><dd><code>UNUSED_ACCESS_KEY</code></dd></div>
+        <div><dt>{t("effect")}</dt><dd className={styles.dispositionFact}>{automatic ? <><code>DISABLE_ACCESS_KEY</code><small>{t("disableMeaning")}</small></> : t("noWriteEffect")}</dd></div>
+        <div><dt>{t("delay")}</dt><dd>{automatic ? t("days", { count: delayDays }) : t("notApplicable")}</dd></div>
+        <div><dt>{t("permission")}</dt><dd><code>iam.access-analyzer.set-disposition</code></dd></div>
+      </dl>
+      <Alert status="warning">{t("reviewBoundary")}</Alert>
+      <Alert status="info">{t("safeguardsBoundary")}</Alert>
+    </Card.Body>
+    <Card.Footer><div className={styles.actions}><Button disabled={busy} onClick={() => void save()}>{t("applyLive")}</Button><Button variant="secondary" disabled={busy} onClick={() => setStep("edit")}>{t("backToEdit")}</Button></div></Card.Footer>
+  </Card>;
+
+  return <Card>
+    <Card.Header><div><Typography.Title as="h2" level={3}>{t("title")}</Typography.Title><Typography.Text tone="muted">{t("liveHint")}</Typography.Text></div><Badge status={analyzer.disposition.mode === "REVIEW_ONLY" ? "neutral" : "warning"}>{t(`modes.${analyzer.disposition.mode}`)}</Badge></Card.Header>
+    <Card.Body className={styles.detail}>
+      <dl className={styles.facts}>
+        <div><dt>{t("mode")}</dt><dd><code>{analyzer.disposition.mode}</code></dd></div>
+        <div><dt>{t("eligibleFinding")}</dt><dd><code>UNUSED_ACCESS_KEY</code></dd></div>
+        <div><dt>{t("effect")}</dt><dd>{analyzer.disposition.mode === "DISABLE_UNUSED_ACCESS_KEYS" ? <code>DISABLE_ACCESS_KEY</code> : t("noWriteEffect")}</dd></div>
+        <div><dt>{t("delay")}</dt><dd>{analyzer.disposition.mode === "DISABLE_UNUSED_ACCESS_KEYS" ? t("days", { count: analyzer.disposition.findingDelayDays }) : t("notApplicable")}</dd></div>
+        <div><dt>{t("permission")}</dt><dd><code>iam.access-analyzer.set-disposition</code></dd></div>
+      </dl>
+      <Alert status="warning">{t("summaryBoundary")}</Alert>
+    </Card.Body>
+    <Card.Footer><Button variant="secondary" disabled={busy} onClick={() => setStep("edit")}>{t("editLive")}</Button></Card.Footer>
   </Card>;
 }

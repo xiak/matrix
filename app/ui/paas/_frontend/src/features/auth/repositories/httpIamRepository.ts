@@ -68,7 +68,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
-import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
+import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessDispositionRule, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
 import { sourceCidrValid } from "../domain/policyLanguage";
 
 function accountRecord(value: unknown): Record<string, unknown> {
@@ -480,9 +480,33 @@ function accountRevisionOrZero(value: unknown): number {
   return value;
 }
 
+function parseAccessDispositionRule(value: unknown): AccessDispositionRule {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["mode", "findingDelayDays"]);
+  if (wire.mode === "REVIEW_ONLY" && wire.findingDelayDays === 0) {
+    return { mode: "REVIEW_ONLY", findingDelayDays: 0 };
+  }
+  if (wire.mode === "DISABLE_UNUSED_ACCESS_KEYS" && typeof wire.findingDelayDays === "number" &&
+      Number.isSafeInteger(wire.findingDelayDays) && wire.findingDelayDays >= 1 && wire.findingDelayDays <= 30) {
+    return { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: wire.findingDelayDays };
+  }
+  throw new Error("INVALID_IAM_RESPONSE");
+}
+
+function accessDispositionIntent(value: AccessDispositionRule): AccessDispositionRule {
+  if (value.mode === "REVIEW_ONLY" && value.findingDelayDays === 0) {
+    return { mode: "REVIEW_ONLY", findingDelayDays: 0 };
+  }
+  if (value.mode === "DISABLE_UNUSED_ACCESS_KEYS" && Number.isSafeInteger(value.findingDelayDays) &&
+      value.findingDelayDays >= 1 && value.findingDelayDays <= 30) {
+    return { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: value.findingDelayDays };
+  }
+  throw new Error("INVALID_IAM_REQUEST");
+}
+
 function parseAccessAnalyzer(value: unknown, accountId: string, analyzerId?: string): AccessAnalyzer {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "type", "status", "unusedAccessAgeDays", "resourceVersion", "createdAt", "updatedAt"]);
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "type", "status", "unusedAccessAgeDays", "disposition", "resourceVersion", "createdAt", "updatedAt"]);
   requireAccountKind(wire, "AccessAnalyzer");
   if (wire.type !== "UNUSED_ACCESS" || wire.status !== "ACTIVE" && wire.status !== "DISABLED") {
     throw new Error("INVALID_IAM_RESPONSE");
@@ -493,6 +517,7 @@ function parseAccessAnalyzer(value: unknown, accountId: string, analyzerId?: str
     type: "UNUSED_ACCESS",
     status: wire.status,
     unusedAccessAgeDays: accessAnalysisAgeDays(wire.unusedAccessAgeDays),
+    disposition: parseAccessDispositionRule(wire.disposition),
     resourceVersion: accountVersion(wire.resourceVersion),
     ...chronologicalTimestamps(wire.createdAt, wire.updatedAt)
   };
@@ -555,7 +580,7 @@ function parseAccessFinding(value: unknown, accountId: string, analyzerId: strin
     "apiVersion", "kind", "id", "accountId", "analyzerId", "analyzerRevision", "type", "status", "target",
     "targetResourceVersion", "conditionGeneration", "activityRevision", "recoveryEpoch", "windowStartedAt", "observedAt",
     "resourceVersion", "createdAt", "updatedAt"
-  ], ["recoveryCommandId", "recoveryCompletedAt", "lastActivityAt", "resolvedAt"]);
+  ], ["recoveryCommandId", "recoveryCompletedAt", "lastActivityAt", "resolvedAt", "resolutionReason"]);
   requireAccountKind(wire, "AccessFinding");
   if (wire.type !== "UNUSED_PASSWORD" && wire.type !== "UNUSED_ACCESS_KEY" && wire.type !== "UNUSED_ROLE" ||
       wire.status !== "ACTIVE" && wire.status !== "ARCHIVED" && wire.status !== "RESOLVED") throw new Error("INVALID_IAM_RESPONSE");
@@ -586,10 +611,14 @@ function parseAccessFinding(value: unknown, accountId: string, analyzerId: strin
     throw new Error("INVALID_IAM_RESPONSE");
   }
   const resolvedAt = wire.resolvedAt === undefined ? null : accountTimestamp(wire.resolvedAt);
+  const resolutionReasonWire = wire.resolutionReason;
+  let resolutionReason: AccessFinding["resolutionReason"] = null;
   if (findingStatus === "RESOLVED") {
     if (!resolvedAt || timestampOrder(resolvedAt) < timestampOrder(createdAt) || timestampOrder(resolvedAt) !== timestampOrder(updatedAt) ||
-        timestampOrder(observedAt) !== timestampOrder(updatedAt)) throw new Error("INVALID_IAM_RESPONSE");
-  } else if (resolvedAt) throw new Error("INVALID_IAM_RESPONSE");
+        timestampOrder(observedAt) !== timestampOrder(updatedAt) ||
+        resolutionReasonWire !== "CONDITION_CLEARED" && resolutionReasonWire !== "AUTOMATIC_DISPOSITION") throw new Error("INVALID_IAM_RESPONSE");
+    resolutionReason = resolutionReasonWire;
+  } else if (resolvedAt || resolutionReasonWire !== undefined) throw new Error("INVALID_IAM_RESPONSE");
   const common = {
     id,
     accountId: owner,
@@ -608,7 +637,8 @@ function parseAccessFinding(value: unknown, accountId: string, analyzerId: strin
     resourceVersion: accountVersion(wire.resourceVersion),
     createdAt,
     updatedAt,
-    resolvedAt
+    resolvedAt,
+    resolutionReason
   };
   if (findingType === "UNUSED_PASSWORD") return { ...common, type: "UNUSED_PASSWORD", target: target as { kind: "USER"; id: string } };
   if (findingType === "UNUSED_ACCESS_KEY") return { ...common, type: "UNUSED_ACCESS_KEY", target: target as { kind: "ACCESS_KEY"; id: string } };
@@ -2291,6 +2321,23 @@ export const httpAccountRepository: AccountRepository = {
       if (result.status !== command.status || result.unusedAccessAgeDays !== unusedAccessAgeDays || result.resourceVersion !== resourceVersion + 1) {
         throw new Error("INVALID_IAM_RESPONSE");
       }
+      return result;
+    },
+    async setDisposition(credential, accountId, analyzerId, command) {
+      const owner = accountIdentifier(accountId);
+      const target = accountIdentifier(analyzerId);
+      const resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+      const disposition = accessDispositionIntent(command.disposition);
+      const result = parseAccessAnalyzer(await requestJSON<unknown>(
+        `/api/iam/v1/account/access-analyzers/${encodeURIComponent(target)}:set-disposition`, {
+          method: "POST",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ disposition, resourceVersion, requestId: accountIdentifier(command.requestId) })
+        }
+      ), owner, target);
+      if (result.resourceVersion !== resourceVersion + 1 || result.disposition.mode !== disposition.mode ||
+          result.disposition.findingDelayDays !== disposition.findingDelayDays) throw new Error("INVALID_IAM_RESPONSE");
       return result;
     },
     async listFindings(credential, accountId, analyzerId, status, after) {

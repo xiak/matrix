@@ -39,7 +39,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CurrentRoleIdentity, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, UserRoleSession } from "../domain/roles";
-import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
+import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
 
 export type LoginCommand = { loginName: string; password: string };
 export type ChangePasswordCommand = { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean };
@@ -130,6 +130,7 @@ export interface AccountRepository {
     readAnalyzer(credential: string, accountId: string, analyzerId: string): Promise<AccessAnalyzer>;
     createAnalyzer(credential: string, accountId: string, command: CreateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
     updateAnalyzer(credential: string, accountId: string, analyzerId: string, command: UpdateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
+    setDisposition(credential: string, accountId: string, analyzerId: string, command: SetAccessDispositionCommand): Promise<AccessAnalyzer>;
     listFindings(credential: string, accountId: string, analyzerId: string, status: AccessFindingStatusFilter, after?: string): Promise<AccessFindingDirectory>;
     readFinding(credential: string, accountId: string, analyzerId: string, findingId: string): Promise<AccessFinding>;
     archiveFinding(credential: string, accountId: string, analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;

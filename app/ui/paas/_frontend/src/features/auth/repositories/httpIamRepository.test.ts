@@ -579,7 +579,8 @@ describe("IAM HTTP access-key boundary", () => {
 
 const accessAnalyzer = {
   apiVersion, kind: "AccessAnalyzer", id: "analyzer-unused", accountId: account.id,
-  type: "UNUSED_ACCESS", status: "ACTIVE", unusedAccessAgeDays: 90, resourceVersion: 1,
+  type: "UNUSED_ACCESS", status: "ACTIVE", unusedAccessAgeDays: 90,
+  disposition: { mode: "REVIEW_ONLY", findingDelayDays: 0 }, resourceVersion: 1,
   createdAt: "2026-06-11T08:00:00Z", updatedAt: "2026-06-11T08:00:00Z"
 };
 const accessFinding = {
@@ -599,7 +600,7 @@ const accessCoverage = [
   { source: "PAAS_RESULTS", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED" },
   { source: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED" }
 ];
-function accessFindingList(items = [accessFinding], coverage = accessCoverage) {
+function accessFindingList(items: unknown[] = [accessFinding], coverage = accessCoverage) {
   return {
     apiVersion, kind: "AccessFindingList", accountId: account.id, analyzerId: accessAnalyzer.id,
     observedAt: "2026-09-11T08:00:00Z", coverage, items
@@ -629,6 +630,15 @@ describe("IAM HTTP access-analysis boundary", () => {
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/access-analyzers/${accessAnalyzer.id}:update`);
     expect(requestBody(fetcher)).toEqual({ status: "DISABLED", unusedAccessAgeDays: 120, resourceVersion: 1, requestId: "update-analyzer-one" });
     expect(result).toMatchObject({ status: "DISABLED", resourceVersion: 2 });
+
+    const optedIn = { ...updated, disposition: { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: 7 }, resourceVersion: 3, updatedAt: "2026-06-11T08:02:00Z" };
+    fetcher = reply(optedIn);
+    const disposition = await httpAccountRepository.accessAnalysis!.setDisposition("bearer", account.id, accessAnalyzer.id, {
+      disposition: { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: 7 }, resourceVersion: 2, requestId: "set-disposition-one"
+    });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/access-analyzers/${accessAnalyzer.id}:set-disposition`);
+    expect(requestBody(fetcher)).toEqual({ disposition: { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: 7 }, resourceVersion: 2, requestId: "set-disposition-one" });
+    expect(disposition).toMatchObject({ disposition: { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: 7 }, resourceVersion: 3 });
   });
 
   it("binds the finding lifecycle filter and opaque cursor into the exact list request", async () => {
@@ -682,6 +692,46 @@ describe("IAM HTTP access-analysis boundary", () => {
       type: "UNUSED_ACCESS", unusedAccessAgeDays: 0, requestId: "create-analyzer-invalid"
     })).rejects.toThrow();
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("requires the fixed disposition shape and resolved Finding reason", async () => {
+    const invalidAnalyzers = [
+      Object.fromEntries(Object.entries(accessAnalyzer).filter(([key]) => key !== "disposition")),
+      { ...accessAnalyzer, disposition: { mode: "REVIEW_ONLY", findingDelayDays: 1 } },
+      { ...accessAnalyzer, disposition: { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: 31 } },
+      { ...accessAnalyzer, disposition: { mode: "REVIEW_ONLY", findingDelayDays: 0, extra: true } }
+    ];
+    for (const response of invalidAnalyzers) {
+      reply(response);
+      await expect(httpAccountRepository.accessAnalysis!.readAnalyzer("bearer", account.id, accessAnalyzer.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    await expect(httpAccountRepository.accessAnalysis!.setDisposition("bearer", account.id, accessAnalyzer.id, {
+      disposition: { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: 31 }, resourceVersion: 1, requestId: "invalid-disposition"
+    } as never)).rejects.toThrow("INVALID_IAM_REQUEST");
+    expect(fetcher).not.toHaveBeenCalled();
+
+    const resolved = {
+      ...accessFinding,
+      status: "RESOLVED",
+      observedAt: "2026-09-11T08:00:00Z",
+      updatedAt: "2026-09-11T08:00:00Z",
+      resolvedAt: "2026-09-11T08:00:00Z",
+      resolutionReason: "AUTOMATIC_DISPOSITION"
+    };
+    reply(accessFindingList([resolved]));
+    const directory = await httpAccountRepository.accessAnalysis!.listFindings("bearer", account.id, accessAnalyzer.id, "RESOLVED");
+    expect(directory.items[0]).toMatchObject({ status: "RESOLVED", resolutionReason: "AUTOMATIC_DISPOSITION" });
+
+    for (const response of [
+      accessFindingList([{ ...resolved, resolutionReason: undefined }]),
+      accessFindingList([{ ...accessFinding, resolutionReason: "CONDITION_CLEARED" }])
+    ]) {
+      reply(response);
+      await expect(httpAccountRepository.accessAnalysis!.listFindings("bearer", account.id, accessAnalyzer.id, "ALL")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 });
 

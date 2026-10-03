@@ -90,12 +90,13 @@ export function AccessAnalysisDispositionWorkflow({ rule, onBack, onApply }: {
           <div><dt>{t("account")}</dt><dd><code>{rule.accountId}</code></dd></div>
           <div><dt>{t("analyzerId")}</dt><dd><code>{rule.id}</code></dd></div>
           <div><dt>{t("nextResourceVersion")}</dt><dd>{rule.resourceVersion + 1}</dd></div>
-          <div><dt>{t("mode")}</dt><dd><code>{mode}</code><small>{t(`modes.${mode}`)}</small></dd></div>
+          <div><dt>{t("mode")}</dt><dd className={styles.dispositionFact}><code>{mode}</code><small>{t(`modes.${mode}`)}</small></dd></div>
           <div><dt>{t("eligibleFinding")}</dt><dd><code>UNUSED_ACCESS_KEY</code></dd></div>
-          <div><dt>{t("effect")}</dt><dd>{automatic ? <><code>DISABLE_ACCESS_KEY</code><small>{t("disableMeaning")}</small></> : t("noWriteEffect")}</dd></div>
+          <div><dt>{t("effect")}</dt><dd className={styles.dispositionFact}>{automatic ? <><code>DISABLE_ACCESS_KEY</code><small>{t("disableMeaning")}</small></> : t("noWriteEffect")}</dd></div>
           <div><dt>{t("delay")}</dt><dd>{automatic ? t("days", { count: delayDays }) : t("notApplicable")}</dd></div>
         </dl>
         <Alert status="warning">{t("reviewBoundary")}</Alert>
+        <Alert status="info">{t("safeguardsBoundary")}</Alert>
         <Alert status="info">{t("applyBoundary")}</Alert>
       </Card.Body>
       <Card.Footer><div className={styles.actions}><Button onClick={apply}>{t("applyMock")}</Button><Button variant="secondary" onClick={() => setStep("edit")}>{t("backToEdit")}</Button></div></Card.Footer>

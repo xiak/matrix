@@ -4352,7 +4352,7 @@
       "liveBoundary": "LIVE · NOT_CONNECTED · S4c-a 后端源码已固定，但当前页面尚未接入真实会话。页面不会提前建立未经验收的 LIVE 结论，也不会回退到 MOCK Finding。",
       "liveUnavailableTitle": "访问分析尚未接入",
       "liveUnavailableHint": "待 IAM 固定来源覆盖、规则、Finding 与分页 wire 后再连接；现有用户、密钥和角色接口不能组成可信的访问分析器。",
-      "previewBoundary": "MOCK · 本页按已固定 S4c-a/b 与候选 S4c-c 边界预演来源覆盖、Analyzer、Finding、人工复核及显式自动处置规则。配置存在不代表权限已生效、资源可达、入口曾被使用或后台处置已经运行；样例 Finding 不是后端扫描结果。",
+      "previewBoundary": "MOCK · 本页按已固定 S4c-a/b 与 S4c-c 源码边界预演来源覆盖、Analyzer、Finding、人工复核及显式自动处置规则；S4c-c 独立门禁仍在运行。配置存在不代表权限已生效、资源可达、入口曾被使用或后台处置已经运行；样例 Finding 不是后端扫描结果。",
       "mockConfiguration": "MOCK 配置快照",
       "account": "目标账号",
       "live": {
@@ -4374,6 +4374,7 @@
         "notices": {
           "created": "访问分析器已创建；完整观测窗口形成前可能没有 Finding。",
           "updated": "分析规则已更新；这不会立即重算 Finding 或处置任何对象。",
+          "dispositionUpdated": "自动处置规则已更新。旧 Finding 不会被追溯处置；必须等待下一次扫描在新 Analyzer 修订下重新确认。",
           "archived": "Finding 已归档；目标对象和权限均未改变。",
           "unarchived": "Finding 已恢复为待复核；没有重新运行扫描。"
         },
@@ -4398,6 +4399,13 @@
         "observedAt": "证据观测时间",
         "lastActivityAt": "窗口前最后活动",
         "noActivity": "未提供窗口前活动时间",
+        "resolvedAt": "解决时间",
+        "resolutionReason": "解决原因",
+        "resolutionReasons": {
+          "CONDITION_CLEARED": "后继扫描确认条件已消失",
+          "AUTOMATIC_DISPOSITION": "自动处置完成"
+        },
+        "automaticDispositionEvidence": "此结果只证明该 Finding 记录了自动处置完成；不能据此推断其他密钥、用户或角色已被处置，也不能跳过当前资源状态与审计复核。",
         "archive": "归档 Finding",
         "unarchive": "取消归档",
         "ruleHint": "账号级 Analyzer 只配置未使用阈值和启停状态，使用资源版本进行并发控制。",
@@ -4596,7 +4604,7 @@
           "DISABLE_UNUSED_ACCESS_KEYS": "自动停用闲置访问密钥"
         },
         "delay": "Finding 观察宽限期",
-        "delayHint": "输入 1–30 的整数天数；候选默认值为 7 天。宽限期不是权限，也不能替代执行前重新校验。",
+        "delayHint": "输入 1–30 的整数天数；固定默认值为 7 天。宽限期不是权限，也不能替代执行前重新校验。",
         "delayInvalid": "请输入 1–30 的整数天数。",
         "days": "{count} 天",
         "notApplicable": "不适用",
@@ -4620,8 +4628,15 @@
         "applyBoundary": "应用只更新当前页面内的 MOCK 规则。它不会停用密钥、解决 Finding、生成 Audit 事实或影响 User 与 Role。",
         "applyMock": "应用 MOCK 自动处置规则",
         "backToEdit": "返回编辑",
-        "summaryBoundary": "User 与 Role 仍然只报告并进入各自生命周期审阅。首期不会用一个闲置开关扩大到身份、角色、策略或工作负载。",
-        "saved": "MOCK 自动处置规则已更新到资源版本 {version}。没有启动 worker，也没有修改任何真实对象。"
+        "summaryBoundary": "User 与 Role 仍然只报告并进入各自生命周期审阅。规则只影响后继扫描在新 Analyzer 修订下形成的候选，不追溯旧 Finding，也不会扩大到身份、角色、策略或工作负载。",
+        "saved": "MOCK 自动处置规则已更新到资源版本 {version}。没有启动 worker，也没有修改任何真实对象。",
+        "live": "LIVE 配置",
+        "liveHint": "账号级显式治理配置；默认只报告，只有独立授权的明确 opt-in 才允许延迟停用闲置访问密钥。",
+        "editLive": "配置自动处置",
+        "liveWorkflowBoundary": "此流程会调用当前账号的真实 Analyzer 配置接口。它只改变处置规则，不会在提交时停用密钥或解决 Finding。",
+        "liveWriteReview": "写入前审阅",
+        "applyLive": "确认并保存规则",
+        "safeguardsBoundary": "规则不追溯旧 Finding：开启后必须等待下一次扫描先关闭旧记录，再在新 Analyzer 修订下形成或重新确认候选。Root 访问密钥管理入口不属于候选；访问密钥所有者若已成为平台操作者，执行阶段必须保持受保护并拒绝自动处置。"
       }
     },
     "reportPreview": {

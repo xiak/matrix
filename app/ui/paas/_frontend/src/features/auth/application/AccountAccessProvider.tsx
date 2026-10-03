@@ -33,7 +33,7 @@ import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 import type { CreateRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand } from "../domain/roles";
-import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
+import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
@@ -199,6 +199,7 @@ export type AccessAnalysisClient = {
   readAnalyzer(analyzerId: string): Promise<AccessAnalyzer>;
   createAnalyzer(command: CreateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
   updateAnalyzer(analyzerId: string, command: UpdateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
+  setDisposition(analyzerId: string, command: SetAccessDispositionCommand): Promise<AccessAnalyzer>;
   listFindings(analyzerId: string, status: AccessFindingStatusFilter, after?: string): Promise<AccessFindingDirectory>;
   readFinding(analyzerId: string, findingId: string): Promise<AccessFinding>;
   archiveFinding(analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;
@@ -1048,6 +1049,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       readAnalyzer: (analyzerId) => scoped(analysisRepository.readAnalyzer(credential, accountId, analyzerId)),
       createAnalyzer: (command) => scoped(analysisRepository.createAnalyzer(credential, accountId, command)),
       updateAnalyzer: (analyzerId, command) => scoped(analysisRepository.updateAnalyzer(credential, accountId, analyzerId, command)),
+      setDisposition: (analyzerId, command) => scoped(analysisRepository.setDisposition(credential, accountId, analyzerId, command)),
       listFindings: (analyzerId, status, after) => scoped(analysisRepository.listFindings(credential, accountId, analyzerId, status, after)),
       readFinding: (analyzerId, findingId) => scoped(analysisRepository.readFinding(credential, accountId, analyzerId, findingId)),
       archiveFinding: (analyzerId, findingId, command) => scoped(analysisRepository.archiveFinding(credential, accountId, analyzerId, findingId, command)),

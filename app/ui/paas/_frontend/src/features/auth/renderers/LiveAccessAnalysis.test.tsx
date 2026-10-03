@@ -10,7 +10,8 @@ import { LiveAccessAnalysis } from "./LiveAccessAnalysis";
 const timestamp = "2026-09-11T08:00:00Z";
 const analyzer = {
   id: "analyzer-unused", accountId: "account-acme", type: "UNUSED_ACCESS" as const, status: "ACTIVE" as const,
-  unusedAccessAgeDays: 90, resourceVersion: 1, createdAt: "2026-06-11T08:00:00Z", updatedAt: "2026-06-11T08:00:00Z"
+  unusedAccessAgeDays: 90, disposition: { mode: "REVIEW_ONLY" as const, findingDelayDays: 0 as const },
+  resourceVersion: 1, createdAt: "2026-06-11T08:00:00Z", updatedAt: "2026-06-11T08:00:00Z"
 };
 const finding = {
   id: "finding-password-alex", accountId: analyzer.accountId, analyzerId: analyzer.id, analyzerRevision: 1,
@@ -18,7 +19,7 @@ const finding = {
   targetResourceVersion: 2, conditionGeneration: 1, activityRevision: 1, recoveryEpoch: 0,
   recoveryCommandId: null, recoveryCompletedAt: null, windowStartedAt: "2026-06-11T08:00:00Z", observedAt: timestamp,
   lastActivityAt: "2026-06-01T08:00:00Z", resourceVersion: 1, createdAt: "2026-09-11T07:00:00Z",
-  updatedAt: "2026-09-11T07:00:00Z", resolvedAt: null
+  updatedAt: "2026-09-11T07:00:00Z", resolvedAt: null, resolutionReason: null
 };
 const coverage: AccessFindingDirectory["coverage"] = [
   { source: "IAM_PASSWORD_SESSIONS", state: "COMPLETE", observedFrom: "2026-06-11T08:00:00Z", observedThrough: timestamp, reason: null },
@@ -40,6 +41,9 @@ function client(overrides: Partial<AccessAnalysisClient> = {}): AccessAnalysisCl
     readAnalyzer: vi.fn().mockResolvedValue(analyzer),
     createAnalyzer: vi.fn().mockResolvedValue(analyzer),
     updateAnalyzer: vi.fn().mockResolvedValue({ ...analyzer, resourceVersion: 2 }),
+    setDisposition: vi.fn().mockImplementation(async (_analyzerId, command) => ({
+      ...analyzer, disposition: command.disposition, resourceVersion: command.resourceVersion + 1, updatedAt: timestamp
+    })),
     listFindings: vi.fn().mockResolvedValue(directory),
     readFinding: vi.fn().mockResolvedValue(finding),
     archiveFinding: vi.fn().mockResolvedValue({ ...finding, status: "ARCHIVED", resourceVersion: 2, updatedAt: timestamp }),
@@ -105,5 +109,51 @@ describe("live access analysis", () => {
     await user.click(within(empty.parentElement!).getByRole("button", { name: "创建 90 天分析器" }));
     await waitFor(() => expect(createAnalyzer).toHaveBeenCalledWith(expect.objectContaining({ type: "UNUSED_ACCESS" })));
     expect(await screen.findByText("访问分析器已创建；完整观测窗口形成前可能没有 Finding。")).toBeTruthy();
+  });
+
+  it("keeps report-only as the default and reviews a bounded access-key opt-in in the content area", async () => {
+    const user = userEvent.setup();
+    const setDisposition = vi.fn().mockImplementation(async (_analyzerId, command) => ({
+      ...analyzer, disposition: command.disposition, resourceVersion: 2, updatedAt: timestamp
+    }));
+    view(client({ setDisposition }));
+    await user.click(screen.getByRole("tab", { name: "分析规则" }));
+    expect(await screen.findByText("仅报告（默认）")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "配置自动处置" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("radio", { name: "自动停用闲置访问密钥" }));
+    const delay = screen.getByRole("spinbutton", { name: "Finding 观察宽限期" });
+    await user.clear(delay);
+    await user.type(delay, "31");
+    expect((screen.getByRole("button", { name: "下一步：审阅" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.clear(delay);
+    await user.type(delay, "7");
+    await user.click(screen.getByRole("button", { name: "下一步：审阅" }));
+    expect(screen.getByText(/规则不追溯旧 Finding/)).toBeTruthy();
+    expect(screen.getByText(/Root 访问密钥管理入口不属于候选/)).toBeTruthy();
+    expect(screen.getByText("iam.access-analyzer.set-disposition")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认并保存规则" }));
+    await waitFor(() => expect(setDisposition).toHaveBeenCalledWith(analyzer.id, expect.objectContaining({
+      disposition: { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: 7 }, resourceVersion: 1
+    })));
+    expect(await screen.findByText(/自动处置规则已更新/)).toBeTruthy();
+  });
+
+  it("renders an automatic resolution as bounded evidence rather than a general remediation claim", async () => {
+    const user = userEvent.setup();
+    const resolved = {
+      ...finding,
+      type: "UNUSED_ACCESS_KEY" as const,
+      target: { kind: "ACCESS_KEY" as const, id: "key-ci" },
+      status: "RESOLVED" as const,
+      observedAt: timestamp,
+      updatedAt: timestamp,
+      resolvedAt: timestamp,
+      resolutionReason: "AUTOMATIC_DISPOSITION" as const
+    };
+    view(client({ listFindings: vi.fn().mockResolvedValue({ ...directory, items: [resolved] }) }));
+    await user.click(await screen.findByRole("button", { name: "key-ci" }));
+    expect(await screen.findByText("自动处置完成")).toBeTruthy();
+    expect(screen.getByText(/只证明该 Finding 记录了自动处置完成/)).toBeTruthy();
   });
 });

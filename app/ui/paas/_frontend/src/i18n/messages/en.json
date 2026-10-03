@@ -4352,7 +4352,7 @@
       "liveBoundary": "LIVE · NOT_CONNECTED · The S4c-a backend source is fixed, but this page is not connected to a real session. It creates no unverified LIVE conclusion and never falls back to MOCK Findings.",
       "liveUnavailableTitle": "Access analysis is not connected",
       "liveUnavailableHint": "Connect only after IAM fixes source coverage, rule, Finding, and pagination wire contracts. Existing user, key, and role APIs cannot be composed into an authoritative analyzer.",
-      "previewBoundary": "MOCK · This page previews source coverage, the Analyzer, Findings, human review, and explicit automatic-disposition rules against fixed S4c-a/b and candidate S4c-c boundaries. Configuration does not prove effective permission, resource reachability, use, or a running disposition worker; sample Findings are not backend scan results.",
+      "previewBoundary": "MOCK · This page previews source coverage, the Analyzer, Findings, human review, and explicit automatic-disposition rules against the fixed S4c-a/b and S4c-c source boundaries; the independent S4c-c gates are still running. Configuration does not prove effective permission, resource reachability, use, or a running disposition worker; sample Findings are not backend scan results.",
       "mockConfiguration": "MOCK configuration snapshot",
       "account": "Target account",
       "live": {
@@ -4374,6 +4374,7 @@
         "notices": {
           "created": "The access analyzer was created. Findings may remain empty until a complete observation window exists.",
           "updated": "The analyzer rule was updated. This does not immediately recompute Findings or remediate an object.",
+          "dispositionUpdated": "The disposition rule was updated. Existing Findings are not retroactively disposed; the next scan must reconfirm them under the new Analyzer revision.",
           "archived": "The Finding was archived. Its target and permissions were not changed.",
           "unarchived": "The Finding was returned to active review. No scan was rerun."
         },
@@ -4398,6 +4399,13 @@
         "observedAt": "Evidence observed",
         "lastActivityAt": "Last activity before window",
         "noActivity": "No pre-window activity time was supplied",
+        "resolvedAt": "Resolved at",
+        "resolutionReason": "Resolution reason",
+        "resolutionReasons": {
+          "CONDITION_CLEARED": "A later scan confirmed the condition cleared",
+          "AUTOMATIC_DISPOSITION": "Automatic disposition completed"
+        },
+        "automaticDispositionEvidence": "This proves only that this Finding records a completed automatic disposition. It does not prove that any other key, User or Role changed, and it never replaces current-resource and Audit review.",
         "archive": "Archive Finding",
         "unarchive": "Unarchive Finding",
         "ruleHint": "The account Analyzer configures only the unused-access threshold and enabled state, guarded by resource-version concurrency.",
@@ -4575,7 +4583,7 @@
           "DISABLE_UNUSED_ACCESS_KEYS": "Automatically disable unused access keys"
         },
         "delay": "Finding observation grace period",
-        "delayHint": "Enter an integer from 1 to 30 days. The candidate default is 7 days. A grace period is not authority and never replaces execution-time revalidation.",
+        "delayHint": "Enter an integer from 1 to 30 days. The fixed default is 7 days. A grace period is not authority and never replaces execution-time revalidation.",
         "delayInvalid": "Enter an integer from 1 to 30 days.",
         "days": "{count} days",
         "notApplicable": "Not applicable",
@@ -4599,8 +4607,15 @@
         "applyBoundary": "Apply updates only the in-page MOCK rule. It does not disable a key, resolve a Finding, produce an Audit fact or affect a User or Role.",
         "applyMock": "Apply MOCK automatic disposition",
         "backToEdit": "Back to edit",
-        "summaryBoundary": "Users and Roles remain report-only and enter their own lifecycle review. The first slice never expands one unused-access switch into identity, Role, Policy or workload changes.",
-        "saved": "The MOCK automatic disposition rule is now resource version {version}. No worker started and no real object changed."
+        "summaryBoundary": "Users and Roles remain report-only and enter their own lifecycle review. The rule affects only candidates formed by a later scan under the new Analyzer revision; it is not retroactive and never expands into identity, Role, Policy or workload changes.",
+        "saved": "The MOCK automatic disposition rule is now resource version {version}. No worker started and no real object changed.",
+        "live": "LIVE configuration",
+        "liveHint": "Explicit Account governance. Report-only is the default; only a separately authorized opt-in can admit delayed disabling of unused access keys.",
+        "editLive": "Configure automatic disposition",
+        "liveWorkflowBoundary": "This flow calls the current Account's real Analyzer configuration endpoint. Submitting changes only the rule; it does not disable a key or resolve a Finding immediately.",
+        "liveWriteReview": "Review before write",
+        "applyLive": "Confirm and save rule",
+        "safeguardsBoundary": "The rule is not retroactive: after opt-in, the next scan must close the old record and form or reconfirm a candidate under the new Analyzer revision. The Root access-key management entry is never eligible; if an access-key owner has become a platform operator, execution must preserve that protection and reject automatic disposition."
       }
     },
     "reportPreview": {

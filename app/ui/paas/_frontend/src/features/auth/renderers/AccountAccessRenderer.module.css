@@ -107,6 +107,17 @@
   overflow-wrap: anywhere;
 }
 
+.dispositionFact {
+  display: grid;
+  justify-items: start;
+  gap: var(--xiak-spacing-micro);
+}
+
+.dispositionFact small {
+  color: var(--xiak-color-text-muted);
+  line-height: 1.5;
+}
+
 .factMeta { display: block; margin-top: var(--xiak-spacing-micro); color: var(--xiak-color-text-muted); font-family: var(--xiak-font-mono); }
 
 .grantOverview { container: authorization-overview / inline-size; display: grid; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
