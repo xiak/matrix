@@ -38,6 +38,9 @@ export type UnusedAccessFindingPreview = {
   generatedAt: string;
   observedFrom: string;
   observedThrough: string;
+  recoveryEpoch: number;
+  recoveryCommandId: string | null;
+  recoveryCompletedAt: string | null;
   windowDays: 90;
   target: { view: Extract<AccountAccessView, "users" | "keys" | "roles">; id?: string };
 };
@@ -127,6 +130,9 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       generatedAt: "2026-09-09T03:00:00Z",
       observedFrom: "2026-06-11T03:00:00Z",
       observedThrough: "2026-09-09T03:00:00Z",
+      recoveryEpoch: 2,
+      recoveryCommandId: "mock-recovery-command-2",
+      recoveryCompletedAt: "2026-06-10T03:00:00Z",
       windowDays: 90,
       target: { view: "users", id: user.id }
     });
@@ -147,6 +153,9 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       generatedAt: "2026-09-09T03:00:00Z",
       observedFrom: "2026-06-11T03:00:00Z",
       observedThrough: "2026-09-09T03:00:00Z",
+      recoveryEpoch: 0,
+      recoveryCommandId: null,
+      recoveryCompletedAt: null,
       windowDays: 90,
       target: { view: "keys" }
     });
@@ -167,6 +176,9 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       generatedAt: "2026-09-09T03:00:00Z",
       observedFrom: "2026-06-11T03:00:00Z",
       observedThrough: "2026-09-09T03:00:00Z",
+      recoveryEpoch: 0,
+      recoveryCommandId: null,
+      recoveryCompletedAt: null,
       windowDays: 90,
       target: { view: "roles", id: role.id }
     });
@@ -217,6 +229,9 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       generatedAt: "2026-09-09T03:00:00Z",
       observedFrom: "2026-06-11T03:00:00Z",
       observedThrough: "2026-09-09T03:00:00Z",
+      recoveryEpoch: 0,
+      recoveryCommandId: null,
+      recoveryCompletedAt: null,
       windowDays: 90,
       target
     };

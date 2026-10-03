@@ -4436,6 +4436,22 @@
         "noAutomaticRemediation": "Changing this rule never disables, deletes, or revokes an identity or permission. Real remediation requires a separate review on the target object.",
         "saveRule": "Save analyzer rule"
       },
+      "recovery": {
+        "title": "Recovery generation and observation trust",
+        "states": {
+          "BASELINE": "Baseline generation",
+          "POST_RECOVERY": "Post-recovery generation"
+        },
+        "epoch": "Recovery generation",
+        "commandId": "Recovery command",
+        "completedAt": "Recovery completed",
+        "windowStartedAt": "Observation start for this generation",
+        "baselineBoundary": "Generation 0 means this Finding is not bound to a supported backup-recovery event. It remains an observation, not current permission or remediation authority.",
+        "livePostRecoveryBoundary": "This Finding belongs only to the recovery generation and command shown here, and its observation window cannot start before recovery completed. It does not prove the system is still in this generation and cannot authorize another object or a later recovery.",
+        "mockPostRecoveryBoundary": "MOCK scenario · This generation, command and timestamp exist only to validate the post-recovery information structure. They are not an installation recovery record, backend Finding or automatic-remediation credential.",
+        "gapTitle": "The post-recovery observation window is not rebuilt",
+        "gapBoundary": "At least one required IAM source reports RESTORE_GAP. Pre-recovery Findings are not current conclusions; the new generation must not produce, migrate or automatically remediate Findings until every required source rebuilds the complete threshold window."
+      },
       "tabs": { "external": "Sources and entry points", "unused": "Unused access", "rule": "Analysis rule" },
       "external": {
         "coverageTitle": "Analysis scope and evidence coverage",

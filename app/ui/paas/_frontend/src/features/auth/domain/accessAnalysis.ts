@@ -115,6 +115,32 @@ export type AccessFinding = UnusedPasswordFinding | UnusedAccessKeyFinding | Unu
 export type AccessFindingStatus = AccessFinding["status"];
 export type AccessFindingStatusFilter = AccessFindingStatus | "ALL";
 
+export type AccessFindingRecoveryEvidence = Pick<AccessFinding,
+  "recoveryEpoch" | "recoveryCommandId" | "recoveryCompletedAt" | "windowStartedAt">;
+
+export type AccessFindingRecoveryState = "BASELINE" | "POST_RECOVERY";
+
+// Recovery provenance is a security boundary, not display-only metadata. A
+// post-recovery Finding must be bound to the exact completed recovery and a
+// fresh observation window; an epoch-zero Finding must carry neither field.
+export function accessFindingRecoveryState(evidence: AccessFindingRecoveryEvidence): AccessFindingRecoveryState {
+  if (evidence.recoveryEpoch === 0) {
+    if (evidence.recoveryCommandId !== null || evidence.recoveryCompletedAt !== null) throw new Error("INVALID_ACCESS_FINDING_RECOVERY");
+    return "BASELINE";
+  }
+  const completedAt = evidence.recoveryCompletedAt ? Date.parse(evidence.recoveryCompletedAt) : Number.NaN;
+  const windowStartedAt = Date.parse(evidence.windowStartedAt);
+  if (!Number.isSafeInteger(evidence.recoveryEpoch) || evidence.recoveryEpoch < 1 || !evidence.recoveryCommandId?.trim() ||
+      !Number.isFinite(completedAt) || !Number.isFinite(windowStartedAt) || windowStartedAt < completedAt) {
+    throw new Error("INVALID_ACCESS_FINDING_RECOVERY");
+  }
+  return "POST_RECOVERY";
+}
+
+export function hasAccessRecoveryGap(coverage: readonly AccessObservationCoverage[]): boolean {
+  return coverage.some((entry) => entry.state === "INSUFFICIENT_COVERAGE" && entry.reason === "RESTORE_GAP");
+}
+
 export type AccessFindingDirectory = {
   accountId: string;
   analyzerId: string;

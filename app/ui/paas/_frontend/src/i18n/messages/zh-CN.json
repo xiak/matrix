@@ -4436,6 +4436,22 @@
         "noAutomaticRemediation": "规则变化不会自动禁用、删除或撤销任何身份与权限；真实处置必须回到对应对象独立审阅。",
         "saveRule": "保存分析规则"
       },
+      "recovery": {
+        "title": "恢复代次与观测可信度",
+        "states": {
+          "BASELINE": "初始代次",
+          "POST_RECOVERY": "恢复后代次"
+        },
+        "epoch": "恢复代次",
+        "commandId": "恢复命令",
+        "completedAt": "恢复完成时间",
+        "windowStartedAt": "本代次观测起点",
+        "baselineBoundary": "代次 0 表示该 Finding 没有绑定受支持的备份恢复事件；它仍只是一条观测结论，不是当前权限或处置许可。",
+        "livePostRecoveryBoundary": "该 Finding 只属于这里显示的恢复代次和恢复命令；本代次观测起点不得早于恢复完成。它不能证明当前系统仍处于同一代次，也不能复用为其他对象或后续恢复的处置许可。",
+        "mockPostRecoveryBoundary": "MOCK 场景 · 这组代次、恢复命令和时间仅用于验收恢复后的信息结构。它不是安装恢复记录、后端 Finding 或自动处置凭据。",
+        "gapTitle": "恢复后观测窗口尚未重建",
+        "gapBoundary": "至少一个必需 IAM 来源返回 RESTORE_GAP。恢复前 Finding 不能作为当前结论；新代次在全部必需来源重新覆盖完整阈值窗口前，不应生成、迁移或自动处置 Finding。"
+      },
       "tabs": {
         "external": "来源与入口",
         "unused": "未使用访问",

@@ -8,6 +8,7 @@ import type { AccessAnalysisClient } from "../application/AccountAccessProvider"
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessAnalyzer, AccessDispositionRule, AccessFinding, AccessFindingDirectory, AccessFindingStatusFilter, AccessObservationCoverage } from "../domain/accessAnalysis";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { AccessFindingRecoveryBoundary, AccessRecoveryGapBoundary } from "./AccessRecoveryBoundary";
 import styles from "./AccountAccessRenderer.module.css";
 
 type Failure = "forbidden" | "routeUnavailable" | "conflict" | "invalid" | "unavailable";
@@ -199,6 +200,7 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
           {selected.resolvedAt ? <div><dt>{t("live.resolvedAt")}</dt><dd><WorkspaceTime value={selected.resolvedAt} /></dd></div> : null}
           {selected.resolutionReason ? <div><dt>{t("live.resolutionReason")}</dt><dd>{t(`live.resolutionReasons.${selected.resolutionReason}`)}</dd></div> : null}
         </dl>
+        <AccessFindingRecoveryBoundary evidence={selected} source="live" />
         <Alert status="warning">{selected.resolutionReason === "AUTOMATIC_DISPOSITION" ? t("live.automaticDispositionEvidence") : t("unused.noAutomaticAction")}</Alert>
       </Card.Body>
       <Card.Footer><div className={styles.actions}>
@@ -229,6 +231,7 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
             <Card.Header><div><Typography.Title as="h2" level={3}>{t("external.coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.coverageHint")}</Typography.Text></div><Badge status="info"><WorkspaceTime value={findings.observedAt} /></Badge></Card.Header>
             <Card.Body className={styles.securityReportBody}><dl className={styles.activityEvidence}>{findings.coverage.map((entry) => <div key={entry.source}><dt>{t(`external.coverage.${entry.source}.title`)}</dt><dd><Badge status={coverageBadge[entry.state]}>{t(`external.coverageStates.${entry.state}`)}</Badge><span>{entry.reason ? t(`external.coverageReasons.${entry.reason}`) : t("live.coverageComplete")}</span>{entry.observedFrom && entry.observedThrough ? <small><WorkspaceTime value={entry.observedFrom} /> – <WorkspaceTime value={entry.observedThrough} /></small> : null}</dd></div>)}</dl></Card.Body>
           </Card>}
+          {findings ? <AccessRecoveryGapBoundary coverage={findings.coverage} /> : null}
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="unused">
           <Card>

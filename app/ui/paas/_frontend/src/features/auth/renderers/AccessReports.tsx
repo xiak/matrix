@@ -10,6 +10,7 @@ import type { SessionSummary } from "../domain/session";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { accountSecurityReportLimits, accountSecurityReportLimitViolation, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildAccountSecurityReportDirectoryPreview, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisRulePreview, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type AccountSecurityReportDirectoryEntry, type AccountSecurityReportDirectoryStatus, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
 import { AccessAnalysisDispositionWorkflow, AccessAnalysisRulesPanel, AccessAnalysisRuleWorkflow, type AccessAnalysisRuleSavedKind } from "./AccessAnalysisRulePreview";
+import { AccessFindingRecoveryBoundary } from "./AccessRecoveryBoundary";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -188,6 +189,12 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           <div><dt>{t("unused.evidenceCoverage")}</dt><dd>{t("unused.completeSample")}</dd></div>
         </dl>
         <Alert status="info">{t("unused.correlationBoundary")}</Alert>
+        <AccessFindingRecoveryBoundary evidence={{
+          recoveryEpoch: selectedUnused.recoveryEpoch,
+          recoveryCommandId: selectedUnused.recoveryCommandId,
+          recoveryCompletedAt: selectedUnused.recoveryCompletedAt,
+          windowStartedAt: selectedUnused.observedFrom
+        }} source="mock" />
         <section aria-labelledby="unused-lifecycle-evidence" className={styles.stack}>
           <Typography.Title as="h3" id="unused-lifecycle-evidence" level={3}>{t("unused.lifecycleEvidenceTitle")}</Typography.Title>
           <ol className={styles.securityChecks}>{selectedUnused.lifecycleEvidence.map((event, index) => <li key={`${event.lifecycle}:${event.occurredAt}:${index}`}>

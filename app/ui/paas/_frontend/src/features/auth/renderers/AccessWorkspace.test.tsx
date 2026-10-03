@@ -4217,6 +4217,11 @@ describe("CAM-style access workspace", () => {
       { id: "mock-unused-access-key", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
       { id: "mock-unused-role", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" }
     ]);
+    expect(analysis.unusedFindings.slice(0, 3).map(({ recoveryEpoch, recoveryCommandId, recoveryCompletedAt }) => ({ recoveryEpoch, recoveryCommandId, recoveryCompletedAt }))).toEqual([
+      { recoveryEpoch: 2, recoveryCommandId: "mock-recovery-command-2", recoveryCompletedAt: "2026-06-10T03:00:00Z" },
+      { recoveryEpoch: 0, recoveryCommandId: null, recoveryCompletedAt: null },
+      { recoveryEpoch: 0, recoveryCommandId: null, recoveryCompletedAt: null }
+    ]);
     expect(analysis.unusedFindings[1]?.lifecycleEvidence.map(({ lifecycle, source }) => `${lifecycle}:${source}`)).toEqual([
       "ACTIVE:SYNTHETIC_ANALYZER", "ARCHIVED:SYNTHETIC_HUMAN_REVIEW"
     ]);
@@ -4309,6 +4314,10 @@ describe("CAM-style access workspace", () => {
     const observedWindow = screen.getByText("证据观测窗口").closest("div")!;
     expect(within(observedWindow).getByText("2026年6月11日 03:00")).toBeTruthy();
     expect(within(observedWindow).getByText("2026年9月9日 03:00")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "恢复代次与观测可信度" })).toBeTruthy();
+    expect(screen.getByText("恢复后代次")).toBeTruthy();
+    expect(screen.getByText("mock-recovery-command-2")).toBeTruthy();
+    expect(screen.getByText(/不是安装恢复记录、后端 Finding 或自动处置凭据/)).toBeTruthy();
     const lifecycleEvidence = screen.getByRole("region", { name: "状态证据时间线" });
     expect(within(lifecycleEvidence).getByText("待复核")).toBeTruthy();
     expect(within(lifecycleEvidence).getByText(/合成扫描证据/)).toBeTruthy();

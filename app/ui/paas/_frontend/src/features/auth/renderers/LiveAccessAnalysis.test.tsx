@@ -156,4 +156,35 @@ describe("live access analysis", () => {
     expect(await screen.findByText("自动处置完成")).toBeTruthy();
     expect(screen.getByText(/只证明该 Finding 记录了自动处置完成/)).toBeTruthy();
   });
+
+  it("shows the exact recovery generation instead of treating a post-recovery Finding as timeless evidence", async () => {
+    const user = userEvent.setup();
+    const recovered = {
+      ...finding,
+      recoveryEpoch: 2,
+      recoveryCommandId: "recovery-command-2",
+      recoveryCompletedAt: "2026-06-10T08:00:00Z"
+    };
+    view(client({ listFindings: vi.fn().mockResolvedValue({ ...directory, items: [recovered] }) }));
+    await user.click(await screen.findByRole("button", { name: "user-alex" }));
+    expect(screen.getByRole("region", { name: "恢复代次与观测可信度" })).toBeTruthy();
+    expect(screen.getByText("恢复后代次")).toBeTruthy();
+    expect(screen.getByText("recovery-command-2")).toBeTruthy();
+    expect(screen.getByText(/不能复用为其他对象或后续恢复的处置许可/)).toBeTruthy();
+  });
+
+  it("elevates a restore gap above the coverage rows and keeps automatic disposition report-only", async () => {
+    const user = userEvent.setup();
+    const restoredCoverage: AccessFindingDirectory["coverage"] = [{
+      source: "IAM_PASSWORD_SESSIONS",
+      state: "INSUFFICIENT_COVERAGE" as const,
+      observedFrom: "2026-06-10T08:00:00Z",
+      observedThrough: timestamp,
+      reason: "RESTORE_GAP" as const
+    }, ...coverage.slice(1)];
+    view(client({ listFindings: vi.fn().mockResolvedValue({ ...directory, coverage: restoredCoverage, items: [] }) }));
+    await user.click(screen.getByRole("tab", { name: "来源覆盖" }));
+    expect(await screen.findByText("恢复后观测窗口尚未重建")).toBeTruthy();
+    expect(screen.getByText(/恢复前 Finding 不能作为当前结论/)).toBeTruthy();
+  });
 });
