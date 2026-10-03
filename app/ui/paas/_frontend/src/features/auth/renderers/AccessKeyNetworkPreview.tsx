@@ -16,6 +16,20 @@ export function AccessKeyNetworkRestrictionValues({ value }: { value: AccessKeyN
   return value.allowedSourceCidrs.length ? <ul className={styles.networkValues}>{value.allowedSourceCidrs.map((cidr) => <li key={cidr}><code>{cidr}</code></li>)}</ul> : <span className={styles.note}>{t("unrestrictedLayer")}</span>;
 }
 
+export function AccessKeySecuritySignals({ account, keyValue }: { account?: AccessKeyNetworkRestrictions; keyValue?: AccessKey }) {
+  const t = useTranslations("AccessKeyNetworkPreview");
+  const known = account !== undefined && keyValue !== undefined;
+  const accountLimited = Boolean(account?.allowedSourceCidrs.length);
+  const keyLimited = Boolean(keyValue?.networkRestrictions.allowedSourceCidrs.length);
+  const networkState = !known ? "unknown" : accountLimited && keyLimited ? "accountAndKey" : accountLimited ? "accountOnly" : keyLimited ? "keyOnly" : "unrestricted";
+  const usageState = keyValue?.usage.lastAuthorization ? "observed" : keyValue ? "unknown" : "unavailable";
+
+  return <dl className={styles.securitySignals} aria-label={t("securitySignals")}>
+    <div><dt>{t("networkSignal")}</dt><dd><Badge status={known && (accountLimited || keyLimited) ? "info" : "neutral"}>{t(`networkStates.${networkState}`)}</Badge></dd></div>
+    <div><dt>{t("usageSignal")}</dt><dd><Badge status={usageState === "observed" ? "info" : "neutral"}>{t(`usageStates.${usageState}`)}</Badge></dd></div>
+  </dl>;
+}
+
 export function AccessKeyNetworkDraftField({ id, value, issue, onChange }: { id: string; value: string; issue: AccessKeyNetworkDraftIssue | null; onChange(value: string): void }) {
   const t = useTranslations("AccessKeyNetworkPreview");
   return <FormField id={id} label={t("allowedCidrs")} hint={t("cidrHint")} error={issue ? t(`issues.${issue}`) : undefined}>

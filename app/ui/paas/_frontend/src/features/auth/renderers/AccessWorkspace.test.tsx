@@ -1024,6 +1024,9 @@ describe("CAM-style access workspace", () => {
     await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
     const keyDirectory = await screen.findByRole("table", { name: "访问密钥" });
     expect(within(keyDirectory).getByText("已禁用")).toBeTruthy();
+    expect(within(keyDirectory).getByRole("columnheader", { name: "安全观测" })).toBeTruthy();
+    expect(within(keyDirectory).getByText("账号 + 密钥")).toBeTruthy();
+    expect(within(keyDirectory).getByText("有历史观测")).toBeTruthy();
     expect(screen.queryByText("最近使用")).toBeNull();
     await user.click(within(keyDirectory).getByRole("button", { name: "MOCK-pipeline-key" }));
     expect(screen.getByRole("heading", { name: "最近授权观测" })).toBeTruthy();

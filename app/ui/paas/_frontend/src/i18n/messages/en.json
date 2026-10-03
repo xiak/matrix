@@ -4298,6 +4298,7 @@
     "keyEmpty": "No access keys yet",
     "keyEmptyHint": "Programmatic access is absent by default. Create a key only when it is required.",
     "keyRevision": "Key resource version",
+    "keySecuritySignals": "Security observations",
     "keyUserRevision": "User resource version",
     "keyProductBoundary": "An access key proves the owning user's programmatic identity; it carries no independent permissions. Every business request is still evaluated against that user's current policies, conditions and resource scope. Enabling a key does not grant product access.",
     "keyProgrammaticTitle": "Programmatic access boundary",
@@ -4389,7 +4390,7 @@
       "conflict": "The user or key state changed. Reload before acting and preserve the original requestId for an uncertain request.",
       "unavailable": "Access keys cannot be read or updated right now. Do not generate a new requestId without a trustworthy result."
     },
-    "keyNoUsageEvidence": "The current contract has no reliable last-used time or access history. Absence of records cannot prove that a key is unused or safe to delete.",
+    "keyNoUsageEvidence": "The current contract returns only non-secret key metadata and action capabilities. It includes neither source-network configuration nor reliable usage evidence. Unknown does not mean unconfigured, unused, or safe to delete.",
     "keyInlineWorkflow": "The operation stays in the content area and does not open a modal.",
     "keyCreateReview": "Review and create access key",
     "keyCreateNetworkTitle": "Freeze source networks at creation",
@@ -6156,6 +6157,21 @@
     "evaluatedAt": "Evaluated at",
     "observationBoundary": "The latest Allow does not mean access is still allowed, and the latest Deny does not prove the key is disabled. Every request must recheck the key, user, policies, boundary, resource, conditions, and both network layers.",
     "observationUnknown": "No verified recent authorization fact is available. Unknown does not mean never used and is not evidence that deletion is safe.",
+    "securitySignals": "Security observations",
+    "networkSignal": "Trusted network",
+    "usageSignal": "Usage evidence",
+    "networkStates": {
+      "accountAndKey": "Account + key",
+      "accountOnly": "Account layer only",
+      "keyOnly": "Key layer only",
+      "unrestricted": "No added restriction",
+      "unknown": "Not provided by this API"
+    },
+    "usageStates": {
+      "observed": "Historical observation",
+      "unknown": "Unknown",
+      "unavailable": "Not provided by this API"
+    },
     "configureKey": "Configure source network",
     "editKeyTitle": "Edit key source restrictions",
     "reviewKeyTitle": "Review key source change",

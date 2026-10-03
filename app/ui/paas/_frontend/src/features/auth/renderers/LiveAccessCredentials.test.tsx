@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
@@ -52,6 +52,9 @@ describe("LiveAccessCredentials", () => {
     expect(screen.getByRole("heading", { name: "访问密钥" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "管理 alex 的访问密钥" })).toBeNull();
     expect(await screen.findByRole("button", { name: key.id })).toBeTruthy();
+    const table = screen.getByRole("table", { name: "访问密钥" });
+    expect(within(table).getByRole("columnheader", { name: "安全观测" })).toBeTruthy();
+    expect(within(table).getAllByText("当前接口未提供")).toHaveLength(2);
     expect(api.list).toHaveBeenCalledWith(owner.id);
     expect(screen.queryByText("本页使用固定的访问密钥管理契约", { exact: false })).toBeNull();
   });

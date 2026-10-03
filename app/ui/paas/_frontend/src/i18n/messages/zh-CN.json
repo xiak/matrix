@@ -4298,6 +4298,7 @@
     "keyEmpty": "尚未创建访问密钥",
     "keyEmptyHint": "默认没有程序访问能力。只有明确需要时才创建。",
     "keyRevision": "密钥资源版本",
+    "keySecuritySignals": "安全观测",
     "keyUserRevision": "用户资源版本",
     "keyProductBoundary": "访问密钥只证明所属用户的程序化身份，不携带独立权限。每次业务请求仍按该用户当时有效的策略、条件和资源范围判定；启用密钥不等于获得产品权限。",
     "keyProgrammaticTitle": "编程访问边界",
@@ -4389,7 +4390,7 @@
       "conflict": "用户或密钥状态已变化。请重新读取后再操作，并保留不确定请求的原 requestId。",
       "unavailable": "暂时无法读取或更新访问密钥。未收到可信结果时不要生成新的 requestId。"
     },
-    "keyNoUsageEvidence": "当前契约没有可靠的最后使用时间或访问日志。不能因“没有记录”推断密钥未被使用或可以安全删除。",
+    "keyNoUsageEvidence": "当前契约只返回非秘密密钥元数据与操作能力，不包含来源网络配置或可靠使用证据。这里的未知不代表未配置、未使用或可以安全删除。",
     "keyInlineWorkflow": "操作在当前内容区完成，不打开模态框。",
     "keyCreateReview": "核对并创建访问密钥",
     "keyCreateNetworkTitle": "创建时固定来源网络",
@@ -6177,6 +6178,21 @@
     "evaluatedAt": "求值时间",
     "observationBoundary": "最近一次允许不代表当前仍允许，最近一次拒绝也不证明密钥已禁用。每次请求仍须重新校验密钥、用户、策略、边界、资源、条件和两层网络限制。",
     "observationUnknown": "没有已验证的最近授权事实。未知不等于从未使用，也不能据此安全删除密钥。",
+    "securitySignals": "安全观测",
+    "networkSignal": "可信网络",
+    "usageSignal": "使用证据",
+    "networkStates": {
+      "accountAndKey": "账号 + 密钥",
+      "accountOnly": "仅账号层",
+      "keyOnly": "仅密钥层",
+      "unrestricted": "无附加限制",
+      "unknown": "当前接口未提供"
+    },
+    "usageStates": {
+      "observed": "有历史观测",
+      "unknown": "未知",
+      "unavailable": "当前接口未提供"
+    },
     "configureKey": "配置来源网络",
     "editKeyTitle": "编辑密钥级来源",
     "reviewKeyTitle": "审阅密钥级来源变更",
