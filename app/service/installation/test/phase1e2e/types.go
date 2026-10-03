@@ -44,6 +44,7 @@ type iamRetention struct {
 	AdministratorPassword []byte
 	AdministratorContact  iamv1.NotificationContact
 	MFA                   mfaRetention
+	AccessAnalyzer        iamv1.AccessAnalyzer
 	Tenants               []tenantRetention
 	PlatformAuditHashes   map[string]struct{}
 }

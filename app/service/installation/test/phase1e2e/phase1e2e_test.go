@@ -88,6 +88,43 @@ func TestNotificationContactRetentionRequiresExactVerifiedState(t *testing.T) {
 	}
 }
 
+func TestAccessAnalyzerLifecycleCoverageStaysClosed(t *testing.T) {
+	observedFrom := time.Date(2026, time.October, 3, 1, 2, 3, 0, time.UTC)
+	observedThrough := observedFrom.Add(time.Minute)
+	coverage := make([]iamv1.AccessObservationCoverage, 0, len(iamv1.AccessObservationCoverageSources()))
+	for index, source := range iamv1.AccessObservationCoverageSources() {
+		entry := iamv1.AccessObservationCoverage{Source: source}
+		if index < 4 {
+			entry.State = iamv1.AccessObservationInsufficientCoverage
+			entry.Reason = iamv1.AccessObservationWindowIncomplete
+			entry.ObservedFrom = &observedFrom
+			entry.ObservedThrough = &observedThrough
+		} else {
+			entry.State = iamv1.AccessObservationNotIncluded
+			entry.Reason = iamv1.AccessObservationSourceNotImplemented
+		}
+		coverage = append(coverage, entry)
+	}
+	if !accessAnalyzerCoverageIsClosed(coverage, iamv1.AccessObservationWindowIncomplete) ||
+		!accessAnalyzerCoverageIsClosed(coverage, "") ||
+		accessAnalyzerCoverageIsClosed(coverage, iamv1.AccessObservationRestoreGap) {
+		t.Fatal("ordinary incomplete access coverage was not kept distinct")
+	}
+	for index := 0; index < 4; index++ {
+		coverage[index].Reason = iamv1.AccessObservationRestoreGap
+	}
+	if !accessAnalyzerCoverageIsClosed(coverage, iamv1.AccessObservationRestoreGap) ||
+		!accessAnalyzerCoverageIsClosed(coverage, "") ||
+		accessAnalyzerCoverageIsClosed(coverage, iamv1.AccessObservationWindowIncomplete) {
+		t.Fatal("restored access coverage was not kept distinct")
+	}
+	coverage[0].State = iamv1.AccessObservationComplete
+	coverage[0].Reason = ""
+	if accessAnalyzerCoverageIsClosed(coverage, "") {
+		t.Fatal("complete access coverage admitted a no-effect lifecycle assertion")
+	}
+}
+
 func TestOptionsRequirePrivateSecurityMailOnlyForEffectfulLifecycle(t *testing.T) {
 	root := t.TempDir()
 	for name, value := range map[string]string{

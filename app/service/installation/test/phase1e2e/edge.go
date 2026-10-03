@@ -339,6 +339,72 @@ func (client *edgeClient) createSecurityReport(
 	return result, nil
 }
 
+func (client *edgeClient) createAccessAnalyzer(
+	ctx context.Context,
+	bearer []byte,
+) (iamv1.AccessAnalyzer, error) {
+	age := iamv1.MinUnusedAccessAgeDays
+	var result iamv1.AccessAnalyzer
+	if err := client.mutateIAM(ctx, "/account/access-analyzers", bearer,
+		iamv1.CreateAccessAnalyzerRequest{
+			Type: iamv1.AccessAnalyzerUnusedAccess, UnusedAccessAgeDays: &age,
+			RequestID: "phase1-create-access-analyzer",
+		}, &result, http.StatusCreated); err != nil || iamv1.ValidateAccessAnalyzer(result) != nil ||
+		result.UnusedAccessAgeDays != age || result.Disposition != (iamv1.AccessDispositionRule{
+		Mode: iamv1.AccessDispositionReviewOnly,
+	}) {
+		return iamv1.AccessAnalyzer{}, errors.New("IAM access analyzer creation response failed")
+	}
+	return result, nil
+}
+
+func (client *edgeClient) setAccessAnalyzerDisposition(
+	ctx context.Context,
+	bearer []byte,
+	analyzer iamv1.AccessAnalyzer,
+) (iamv1.AccessAnalyzer, error) {
+	want := iamv1.AccessDispositionRule{
+		Mode: iamv1.AccessDispositionDisableAccessKeys, FindingDelayDays: iamv1.MinAccessDispositionDelayDays,
+	}
+	var result iamv1.AccessAnalyzer
+	if err := client.mutateIAM(ctx, "/account/access-analyzers/"+string(analyzer.ID)+":set-disposition", bearer,
+		iamv1.SetAccessDispositionRequest{
+			Disposition: want, ResourceVersion: analyzer.ResourceVersion,
+			RequestID: "phase1-set-access-disposition",
+		}, &result, http.StatusOK); err != nil || iamv1.ValidateAccessAnalyzer(result) != nil ||
+		result.ID != analyzer.ID || result.AccountID != analyzer.AccountID || result.Disposition != want ||
+		result.ResourceVersion != analyzer.ResourceVersion+1 {
+		return iamv1.AccessAnalyzer{}, errors.New("IAM access analyzer disposition response failed")
+	}
+	return result, nil
+}
+
+func (client *edgeClient) readAccessAnalyzer(
+	ctx context.Context,
+	bearer []byte,
+	analyzerID iamv1.AccessAnalyzerID,
+) (iamv1.AccessAnalyzer, error) {
+	var result iamv1.AccessAnalyzer
+	if _, err := client.get(ctx, "/api/iam/v1/account/access-analyzers/"+string(analyzerID), bearer, &result); err != nil ||
+		iamv1.ValidateAccessAnalyzer(result) != nil || result.ID != analyzerID {
+		return iamv1.AccessAnalyzer{}, errors.New("IAM access analyzer response failed")
+	}
+	return result, nil
+}
+
+func (client *edgeClient) listAccessFindings(
+	ctx context.Context,
+	bearer []byte,
+	analyzerID iamv1.AccessAnalyzerID,
+) (iamv1.AccessFindingList, error) {
+	var result iamv1.AccessFindingList
+	if _, err := client.get(ctx, "/api/iam/v1/account/access-analyzers/"+string(analyzerID)+"/findings", bearer, &result); err != nil ||
+		iamv1.ValidateAccessFindingList(result) != nil || result.AnalyzerID != analyzerID {
+		return iamv1.AccessFindingList{}, errors.New("IAM access finding directory response failed")
+	}
+	return result, nil
+}
+
 func (client *edgeClient) readSecurityReport(
 	ctx context.Context,
 	bearer []byte,

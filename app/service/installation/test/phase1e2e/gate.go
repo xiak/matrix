@@ -137,11 +137,17 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	value.retainedIAM.MFA = mfa
+	analyzer, err := value.configureAccessAnalyzer(ctx, bearer)
+	if err != nil {
+		return err
+	}
+	value.retainedIAM.AccessAnalyzer = analyzer
 	if err := value.persistTenantRetention(); err != nil {
 		return err
 	}
 	emit("security-mail-contact-verification")
 	emit("signed-mfa-binding-login-and-security-notice")
+	emit("access-analyzer-explicit-disposition-baseline")
 
 	secret, secretDigest, err := value.provisionSecret()
 	if err != nil {
@@ -177,18 +183,20 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 
 	wantInitialAudit := map[auditv1.Action]string{
-		auditv1.ActionIAMBootstrapApplied:              "",
-		auditv1.ActionIAMSessionIssued:                 "",
-		auditv1.ActionIAMUserPasswordChanged:           "principal-admin",
-		auditv1.ActionIAMAuthorizationDecided:          "",
-		auditv1.ActionPaaSApplicationCreated:           string(applicationID),
-		auditv1.ActionPaaSConfigurationCreated:         string(configurationID),
-		auditv1.ActionPaaSConfigurationRevisionCreated: string(configurationRevisionTwo),
-		auditv1.ActionPaaSApplicationRevisionCreated:   string(applicationRevisionID),
-		auditv1.ActionPaaSDeploymentCreated:            string(deploymentID),
-		auditv1.ActionPaaSDeploymentUpdated:            string(deploymentID),
-		auditv1.ActionIAMSecurityReportCreated:         string(baselineReport.metadata.ID),
-		auditv1.ActionIAMSecurityReportDownloadStarted: string(baselineReport.metadata.ID),
+		auditv1.ActionIAMBootstrapApplied:                 "",
+		auditv1.ActionIAMSessionIssued:                    "",
+		auditv1.ActionIAMUserPasswordChanged:              "principal-admin",
+		auditv1.ActionIAMAuthorizationDecided:             "",
+		auditv1.ActionPaaSApplicationCreated:              string(applicationID),
+		auditv1.ActionPaaSConfigurationCreated:            string(configurationID),
+		auditv1.ActionPaaSConfigurationRevisionCreated:    string(configurationRevisionTwo),
+		auditv1.ActionPaaSApplicationRevisionCreated:      string(applicationRevisionID),
+		auditv1.ActionPaaSDeploymentCreated:               string(deploymentID),
+		auditv1.ActionPaaSDeploymentUpdated:               string(deploymentID),
+		auditv1.ActionIAMSecurityReportCreated:            string(baselineReport.metadata.ID),
+		auditv1.ActionIAMSecurityReportDownloadStarted:    string(baselineReport.metadata.ID),
+		auditv1.ActionIAMAccessAnalyzerCreated:            string(value.retainedIAM.AccessAnalyzer.ID),
+		auditv1.ActionIAMAccessAnalyzerDispositionUpdated: string(value.retainedIAM.AccessAnalyzer.ID),
 	}
 	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, wantInitialAudit)
 	if err != nil || !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {
@@ -335,6 +343,11 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("backup-recovery")
+	if err := value.assertAccessAnalyzer(
+		ctx, bearer, value.retainedIAM.AccessAnalyzer, iamv1.AccessObservationRestoreGap,
+	); err != nil {
+		return err
+	}
 	if err := value.assertSecurityReportSnapshot(ctx, bearer, baselineReport, true); err != nil {
 		return err
 	}
@@ -461,6 +474,78 @@ func equalJSON(left, right any) bool {
 	clear(leftJSON)
 	clear(rightJSON)
 	return equal
+}
+
+func (value *gate) configureAccessAnalyzer(ctx context.Context, bearer []byte) (iamv1.AccessAnalyzer, error) {
+	created, err := value.edge.createAccessAnalyzer(ctx, bearer)
+	if err != nil || created.AccountID != "organization-default" || created.ResourceVersion != 1 {
+		return iamv1.AccessAnalyzer{}, fail("access-analyzer-create")
+	}
+	configured, err := value.edge.setAccessAnalyzerDisposition(ctx, bearer, created)
+	if err != nil {
+		return iamv1.AccessAnalyzer{}, fail("access-analyzer-set-disposition")
+	}
+	if err := value.assertAccessAnalyzer(ctx, bearer, configured, iamv1.AccessObservationWindowIncomplete); err != nil {
+		return iamv1.AccessAnalyzer{}, err
+	}
+	return configured, nil
+}
+
+func (value *gate) assertAccessAnalyzer(
+	ctx context.Context,
+	bearer []byte,
+	want iamv1.AccessAnalyzer,
+	wantReason iamv1.AccessObservationCoverageReason,
+) error {
+	actual, err := value.edge.readAccessAnalyzer(ctx, bearer, want.ID)
+	if err != nil || !equalJSON(actual, want) {
+		return fail("access-analyzer-retention")
+	}
+	poll, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for poll.Err() == nil {
+		findings, readErr := value.edge.listAccessFindings(poll, bearer, want.ID)
+		if readErr == nil && findings.AccountID == want.AccountID && len(findings.Items) == 0 && findings.NextAfter == "" &&
+			accessAnalyzerCoverageIsClosed(findings.Coverage, wantReason) {
+			return nil
+		}
+		if !waitPoll(poll, 200*time.Millisecond) {
+			break
+		}
+	}
+	return fail("access-analyzer-coverage")
+}
+
+func accessAnalyzerCoverageIsClosed(
+	coverage []iamv1.AccessObservationCoverage,
+	wantReason iamv1.AccessObservationCoverageReason,
+) bool {
+	sources := iamv1.AccessObservationCoverageSources()
+	if len(coverage) != len(sources) {
+		return false
+	}
+	for index, entry := range coverage {
+		if entry.Source != sources[index] {
+			return false
+		}
+		if index < 4 {
+			reasonMatches := entry.Reason == wantReason
+			if wantReason == "" {
+				reasonMatches = entry.Reason == iamv1.AccessObservationWindowIncomplete ||
+					entry.Reason == iamv1.AccessObservationRestoreGap
+			}
+			if entry.State != iamv1.AccessObservationInsufficientCoverage || !reasonMatches ||
+				entry.ObservedFrom == nil || entry.ObservedThrough == nil {
+				return false
+			}
+			continue
+		}
+		if entry.State != iamv1.AccessObservationNotIncluded || entry.Reason != iamv1.AccessObservationSourceNotImplemented ||
+			entry.ObservedFrom != nil || entry.ObservedThrough != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (value *gate) afterRestart(ctx context.Context) error {
@@ -662,7 +747,8 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 func (value *gate) persistTenantRetention() error {
 	if value.retainedIAM == nil ||
 		iamv1.ValidateNotificationContact(value.retainedIAM.AdministratorContact) != nil ||
-		value.retainedIAM.AdministratorContact.State != "VERIFIED" || !validMFARetention(value.retainedIAM.MFA) {
+		value.retainedIAM.AdministratorContact.State != "VERIFIED" || !validMFARetention(value.retainedIAM.MFA) ||
+		iamv1.ValidateAccessAnalyzer(value.retainedIAM.AccessAnalyzer) != nil {
 		return fail("tenant-retention-contact")
 	}
 	encoded, err := json.Marshal(value.retainedIAM)
@@ -696,7 +782,7 @@ func (value *gate) readTenantRetention(installationID string) error {
 	var retained iamRetention
 	if decodeOne(content, &retained) != nil || retained.InstallationID != installationID || len(retained.Tenants) != 2 || len(retained.AdministratorPassword) == 0 ||
 		iamv1.ValidateNotificationContact(retained.AdministratorContact) != nil || retained.AdministratorContact.State != "VERIFIED" ||
-		!validMFARetention(retained.MFA) {
+		!validMFARetention(retained.MFA) || iamv1.ValidateAccessAnalyzer(retained.AccessAnalyzer) != nil {
 		return fail("tenant-retention-fixture-identity")
 	}
 	value.retainedIAM = &retained
@@ -727,6 +813,9 @@ func (value *gate) assertTenantRetention(ctx context.Context, requireContact boo
 			return fail("tenant-retained-notification-contact")
 		}
 		if err := value.assertMFARetention(ctx, false); err != nil {
+			return err
+		}
+		if err := value.assertAccessAnalyzer(ctx, operator, value.retainedIAM.AccessAnalyzer, ""); err != nil {
 			return err
 		}
 	}
