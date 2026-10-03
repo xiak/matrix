@@ -142,15 +142,19 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
       <Card.Header><div><Typography.Title as="h2" level={3}>{selectedUnused.name}</Typography.Title><Typography.Text tone="muted">{selectedUnused.subjectId}</Typography.Text></div><span className={styles.badgeRow}><Badge status="info">{t("unused.mockSample")}</Badge><Badge status={unusedFindingStatus[selectedUnused.lifecycle]} title={selectedUnused.lifecycle}>{t(`unused.lifecycle.${selectedUnused.lifecycle}`)}</Badge></span></Card.Header>
       <Card.Body className={styles.detail}>
         <dl className={styles.facts}>
+          <div><dt>{t("unused.findingId")}</dt><dd><code>{selectedUnused.id}</code></dd></div>
+          <div><dt>{t("unused.analyzerId")}</dt><dd><code>{selectedUnused.analyzerId}</code></dd></div>
           <div><dt>{t("account")}</dt><dd><code>{selectedUnused.accountId}</code></dd></div>
           <div><dt>{t("unused.findingType")}</dt><dd>{t(`unused.types.${selectedUnused.findingType}`)}</dd></div>
           <div><dt>{t("unused.status")}</dt><dd>{t(`unused.lifecycle.${selectedUnused.lifecycle}`)}<small className={styles.factMeta}>{selectedUnused.lifecycle}</small></dd></div>
           <div><dt>{t("unused.principalType")}</dt><dd>{t(`unused.subjects.${selectedUnused.subjectKind}`)}</dd></div>
           <div><dt>{t("unused.lastObserved")}</dt><dd><WorkspaceTime value={selectedUnused.lastObservedAt} /></dd></div>
           <div><dt>{t("unused.reviewWindow")}</dt><dd>{t("unused.days", { count: selectedUnused.windowDays })}</dd></div>
+          <div><dt>{t("unused.observedWindow")}</dt><dd><WorkspaceTime value={selectedUnused.observedFrom} /> – <WorkspaceTime value={selectedUnused.observedThrough} /></dd></div>
           <div><dt>{t("unused.findingCreated")}</dt><dd><WorkspaceTime value={selectedUnused.generatedAt} /></dd></div>
           <div><dt>{t("unused.evidenceCoverage")}</dt><dd>{t("unused.completeSample")}</dd></div>
         </dl>
+        <Alert status="info">{t("unused.correlationBoundary")}</Alert>
         <section aria-labelledby="unused-lifecycle-evidence" className={styles.stack}>
           <Typography.Title as="h3" id="unused-lifecycle-evidence" level={3}>{t("unused.lifecycleEvidenceTitle")}</Typography.Title>
           <ol className={styles.securityChecks}>{selectedUnused.lifecycleEvidence.map((event) => <li key={`${event.lifecycle}:${event.occurredAt}`}>
@@ -166,7 +170,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           <Alert status="warning">{t("unused.noAutomaticAction")}</Alert>
         </section>
       </Card.Body>
-      <Card.Footer><Button onClick={() => onNavigate(selectedUnused.target.view, selectedUnused.target.id)}>{t("unused.reviewTarget")}<ArrowRight aria-hidden="true" /></Button></Card.Footer>
+      <Card.Footer><div className={styles.actions}><Button variant="secondary" onClick={() => { setSelectedUnusedFinding(null); setSection("rule"); }}>{t("unused.reviewAnalyzer")}</Button><Button onClick={() => onNavigate(selectedUnused.target.view, selectedUnused.target.id)}>{t("unused.reviewTarget")}<ArrowRight aria-hidden="true" /></Button></div></Card.Footer>
     </Card>
   </WorkspaceDetail>;
   const content = <>

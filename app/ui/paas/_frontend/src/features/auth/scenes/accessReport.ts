@@ -22,6 +22,7 @@ export type AccessActivityObservation = {
 
 export type UnusedAccessFindingPreview = {
   id: string;
+  analyzerId: string;
   accountId: string;
   name: string;
   subjectId: string;
@@ -35,6 +36,8 @@ export type UnusedAccessFindingPreview = {
   }[];
   lastObservedAt: string;
   generatedAt: string;
+  observedFrom: string;
+  observedThrough: string;
   windowDays: 90;
   target: { view: Extract<AccountAccessView, "users" | "keys" | "roles">; id?: string };
 };
@@ -104,6 +107,7 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
   const findings: UnusedAccessFindingPreview[] = [];
   if (user) findings.push({
       id: "mock-unused-password",
+      analyzerId: "access-analyzer-preview",
       accountId: workspace.accountId,
       name: user.loginName,
       subjectId: user.id,
@@ -115,11 +119,14 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       ],
       lastObservedAt: "2026-05-18T08:15:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
+      observedFrom: "2026-06-11T03:00:00Z",
+      observedThrough: "2026-09-09T03:00:00Z",
       windowDays: 90,
       target: { view: "users", id: user.id }
     });
   if (key) findings.push({
       id: "mock-unused-access-key",
+      analyzerId: "access-analyzer-preview",
       accountId: workspace.accountId,
       name: key.id,
       subjectId: key.ownerId,
@@ -132,11 +139,14 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       ],
       lastObservedAt: "2026-05-04T11:30:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
+      observedFrom: "2026-06-11T03:00:00Z",
+      observedThrough: "2026-09-09T03:00:00Z",
       windowDays: 90,
       target: { view: "keys" }
     });
   if (role) findings.push({
       id: "mock-unused-role",
+      analyzerId: "access-analyzer-preview",
       accountId: workspace.accountId,
       name: role.name,
       subjectId: role.id,
@@ -149,6 +159,8 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       ],
       lastObservedAt: "2026-04-21T01:45:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
+      observedFrom: "2026-06-11T03:00:00Z",
+      observedThrough: "2026-09-09T03:00:00Z",
       windowDays: 90,
       target: { view: "roles", id: role.id }
     });

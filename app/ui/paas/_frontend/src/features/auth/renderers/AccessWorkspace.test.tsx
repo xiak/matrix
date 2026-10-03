@@ -4156,6 +4156,12 @@ describe("CAM-style access workspace", () => {
       { accountId: "org-xiak", findingType: "unusedAccessKey", lifecycle: "ARCHIVED" },
       { accountId: "org-xiak", findingType: "unusedRole", lifecycle: "RESOLVED" }
     ]);
+    expect(analysis.unusedFindings.every((finding) => finding.analyzerId === analysis.rule.id)).toBe(true);
+    expect(analysis.unusedFindings.map(({ id, observedFrom, observedThrough }) => ({ id, observedFrom, observedThrough }))).toEqual([
+      { id: "mock-unused-password", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "mock-unused-access-key", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "mock-unused-role", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" }
+    ]);
     expect(analysis.unusedFindings[1]?.lifecycleEvidence.map(({ lifecycle, source }) => `${lifecycle}:${source}`)).toEqual([
       "ACTIVE:SYNTHETIC_ANALYZER", "ARCHIVED:SYNTHETIC_HUMAN_REVIEW"
     ]);
@@ -4217,7 +4223,13 @@ describe("CAM-style access workspace", () => {
     const first = analysis.unusedFindings[0]!;
     await user.click(within(table).getByRole("button", { name: first.name }));
     expect(screen.getByRole("heading", { name: `审阅 · ${first.name}` })).toBeTruthy();
+    expect(screen.getByText(first.id)).toBeTruthy();
+    expect(screen.getByText(first.analyzerId)).toBeTruthy();
+    expect(screen.getByText(/只用于关联这份合成 MOCK 的排障上下文/)).toBeTruthy();
     expect(screen.getByText("完整窗口（合成样例）")).toBeTruthy();
+    const observedWindow = screen.getByText("证据观测窗口").closest("div")!;
+    expect(within(observedWindow).getByText("2026年6月11日 03:00")).toBeTruthy();
+    expect(within(observedWindow).getByText("2026年9月9日 03:00")).toBeTruthy();
     const lifecycleEvidence = screen.getByRole("region", { name: "状态证据时间线" });
     expect(within(lifecycleEvidence).getByText("待复核")).toBeTruthy();
     expect(within(lifecycleEvidence).getByText(/合成扫描证据/)).toBeTruthy();
@@ -4225,6 +4237,8 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(/不能从一条未使用发现直接删除身份或权限/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看对应对象" }));
     expect(onNavigate).toHaveBeenCalledWith(first.target.view, first.target.id);
+    await user.click(screen.getByRole("button", { name: "查看分析规则" }));
+    expect(screen.getByText("账号级访问分析规则")).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
   it("opens access analysis as a bookmarkable content page without mutating IAM state", async () => {
