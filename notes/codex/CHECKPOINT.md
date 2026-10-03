@@ -3,11 +3,11 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-10-03
+- Updated: 2026-10-04
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `1dcc20702`
-- Pushed documentation milestone: `13e4b09e6`
+- Pushed source/embed milestone: `f18aea0f1`
+- Pushed documentation milestone: `f4a6a14b5`
 
 ## Authoritative route
 
@@ -29,26 +29,26 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Role assertion mapping
-review and detail now reuse one read-only five-stage SSO journey: IdP
-verification, untrusted assertion verification, candidate Role mapping,
-independent Role TrustPolicy evaluation and bounded STS RoleSession issuance.
-It is explicitly an IAM-EXT-03 concept preview and adds no backend resource,
-state, command, repository, HTTP wire, request ID, verified assertion or issued
-session.
+login verification remains disabled for UX review. The existing enterprise
+member import and the new cross-account collaboration concept are now separate
+tabs. The IAM-EXT-06 preview explains constrained invitation, independent
+recipient confirmation, exact Role trust, bilateral authorization, auditable
+short-lived sessions and bilateral revocation. It offers no write action and
+adds no backend resource, state, command, repository, HTTP wire, request ID or
+successful relationship/session.
 
-Source and synchronized embed are pushed at `1dcc20702`; FEAT evidence is
-pushed at `13e4b09e6`. The targeted mapping workflow and bilingual message tests,
-typecheck, lint, architecture, 228-pair style checks, 45-route production
+Source and synchronized embed are pushed at `f18aea0f1`; FEAT evidence is
+pushed at `f4a6a14b5`. The targeted no-command workflow and bilingual message
+tests, typecheck, lint, architecture, 228-pair style checks, 45-route production
 export, 249-file embed equality and repository Go test/vet passed. Desktop and
-`390 × 844` DEV showed the journey without horizontal overflow or browser
-warning/error.
+`390 × 844` DEV showed the preview without horizontal overflow; a clean browser
+tab had no warning/error.
 
-Earlier Access Analyzer recovery trust, Account security report, federation
-replacement, Deployment lifecycle, AccessKey carrier, Application tag recovery,
-service authorization, policy compilation/provenance and shared navigation/
-loading milestones remain owned and indexed by FEAT-IAM-010 and FEAT-007; load
-only the relevant evidence row.
+Earlier Role SSO journey, Access Analyzer recovery trust, Account security
+report, federation replacement, Deployment lifecycle, AccessKey carrier,
+Application tag recovery, service authorization, policy compilation/provenance
+and shared navigation/loading milestones remain owned and indexed by
+FEAT-IAM-010 and FEAT-007; load only the relevant evidence row.
 
 ## Continuation boundary
 
