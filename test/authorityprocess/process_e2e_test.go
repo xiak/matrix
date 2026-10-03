@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -4084,8 +4085,9 @@ type iamCapacityCall struct {
 	request  *http.Request
 	status   int
 	verify   func([]byte) (string, bool) // optional newly issued test secret, validity
-	interval time.Duration               // independent lane's planned start interval; zero is unpaced
-	confirm  bool                        // next mutation requires this response to be verified
+	accept   func(iamCapacityResult) (string, bool)
+	interval time.Duration // lane's planned start interval; zero is unpaced
+	confirm  bool          // next mutation requires this response to be verified
 }
 
 type iamCapacitySchedule uint8
@@ -4093,17 +4095,19 @@ type iamCapacitySchedule uint8
 const (
 	iamCapacityPaired iamCapacitySchedule = iota
 	iamCapacityIndependent
+	iamCapacityOpenLoop
 )
 
 type iamCapacityResult struct {
-	index     int
-	status    int
-	body      []byte
-	started   time.Time
-	completed time.Time
-	scheduled time.Time // absent for unpaced closed-loop requests
-	failed    bool
-	confirm   chan bool // optional bounded acknowledgment; never a retry or new authority
+	index      int
+	status     int
+	body       []byte
+	started    time.Time
+	completed  time.Time
+	scheduled  time.Time // absent for unpaced closed-loop requests
+	retryAfter string
+	failed     bool
+	confirm    chan bool // optional bounded acknowledgment; never a retry or new authority
 }
 
 func makeIAMCapacityCall(t *testing.T, ctx context.Context, lane, method, server, path, bearer string,
@@ -4557,8 +4561,6 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 		password, status, lane := changed, http.StatusOK, "login-"+string(account.id)
 		if incorrect {
 			password, status, lane = wrong, http.StatusUnauthorized, "wrong-password-"+string(account.id)
-		} else {
-			plannedLogins++
 		}
 		return makeIAMCapacityCall(t, ctx, lane, http.MethodPost, server, "/v1/auth/login", "", map[string]string{
 			"loginName": "capacity.simple@" + string(account.id), "password": password, "requestId": id,
@@ -4578,6 +4580,7 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 				if server == replica {
 					other = endpoint
 				}
+				plannedLogins++
 				issuedSessions[value.Session.ID], issuedCredentials[value.Credential] = true, true
 				issuedLogins = append(issuedLogins, struct {
 					login  loginResult
@@ -4586,6 +4589,27 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 			}
 			return value.Credential, valid
 		})
+	}
+	allowAuthenticationBusy := func(call iamCapacityCall, busy *int) iamCapacityCall {
+		expectedStatus, verify := call.status, call.verify
+		call.status, call.verify = 0, nil
+		call.accept = func(result iamCapacityResult) (string, bool) {
+			if result.status == expectedStatus {
+				return verify(result.body)
+			}
+			if result.status != http.StatusTooManyRequests || result.retryAfter != "1" {
+				return "", false
+			}
+			var problem iamv1.Problem
+			valid := json.Unmarshal(result.body, &problem) == nil && problem.Status == http.StatusTooManyRequests &&
+				problem.Code == "iam.authentication.busy" && problem.RequestID != "" &&
+				!bytes.Contains(result.body, []byte(`"credential"`)) && !bytes.Contains(result.body, []byte(`"remaining"`))
+			if valid {
+				*busy++
+			}
+			return "", valid
+		}
+		return call
 	}
 	policyCall := func(account accountFixture, server, id, resource string, complex, allowed bool) iamCapacityCall {
 		plannedDecisions++
@@ -4677,10 +4701,66 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 		waitAllIAMOutboxDelivered(t, ctx, database)
 		secrets = append(secrets, runIAMCapacityStage(t, ctx, database, stage, concurrency, iamCapacityIndependent, calls)...)
 	}
+	const openLoopInterval = 5 * time.Millisecond
+	var saturationBusy int
+	calls := make([]iamCapacityCall, 0, 100)
+	for index := range 100 {
+		call := allowAuthenticationBusy(loginCall(accounts[0], servers[index%2], fmt.Sprintf("capacity-open-loop-saturation-%d", index), true), &saturationBusy)
+		call.interval = openLoopInterval
+		calls = append(calls, call)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	secrets = append(secrets, runIAMCapacityStage(t, ctx, database, "open-loop-saturation", 8, iamCapacityOpenLoop, calls)...)
+	if saturationBusy == 0 || saturationBusy == len(calls) {
+		t.Fatal("open-loop pressure did not observe both admitted authentication work and explicit overload")
+	}
+	var mixedBusy int
+	calls = make([]iamCapacityCall, 0, 200)
+	for index := range 100 {
+		server := servers[index%2]
+		pressure := allowAuthenticationBusy(loginCall(accounts[0], server, fmt.Sprintf("capacity-open-loop-business-pressure-%d", index), true), &mixedBusy)
+		pressure.interval = openLoopInterval
+		calls = append(calls, pressure)
+		probe := policyCall(accounts[1], server, fmt.Sprintf("capacity-open-loop-business-probe-%d", index), "capacity-selected", true, true)
+		probe.interval = openLoopInterval
+		calls = append(calls, probe)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	secrets = append(secrets, runIAMCapacityStage(t, ctx, database, "open-loop-business-isolation", 16, iamCapacityOpenLoop, calls)...)
+	if mixedBusy == 0 {
+		t.Fatal("open-loop business-isolation stage did not actually overload authentication")
+	}
+	var fairnessPressureBusy, fairnessPeerBusy int
+	calls = make([]iamCapacityCall, 0, 200)
+	for index := range 100 {
+		server := servers[index%2]
+		pressure := allowAuthenticationBusy(loginCall(accounts[0], server, fmt.Sprintf("capacity-open-loop-fairness-pressure-%d", index), true), &fairnessPressureBusy)
+		pressure.interval = openLoopInterval
+		calls = append(calls, pressure)
+		peer := allowAuthenticationBusy(loginCall(accounts[1], server, fmt.Sprintf("capacity-open-loop-fairness-peer-%d", index), true), &fairnessPeerBusy)
+		peer.interval = openLoopInterval
+		calls = append(calls, peer)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	secrets = append(secrets, runIAMCapacityStage(t, ctx, database, "open-loop-account-fairness-observation", 16, iamCapacityOpenLoop, calls)...)
+	if fairnessPressureBusy == 0 || fairnessPressureBusy == 100 || fairnessPeerBusy == 100 {
+		t.Fatal("open-loop fairness observation either missed overload or made no peer progress")
+	}
+	t.Logf("IAM_ACCOUNT_FAIRNESS_GAP pressureBusy=%d peerBusy=%d pressureAdmitted=%d peerAdmitted=%d; observation only, no account reservation is claimed", fairnessPressureBusy, fairnessPeerBusy, 100-fairnessPressureBusy, 100-fairnessPeerBusy)
+	for index, server := range servers {
+		login := loginIAM(t, server, "capacity.simple@"+string(accounts[1].id), changed, fmt.Sprintf("capacity-open-loop-recovery-%d", index))
+		secrets = append(secrets, login.Credential)
+		response := performJSON(t, http.MethodGet, servers[1-index]+"/v1/auth/me", login.Credential, nil)
+		var identity iamv1.CurrentIdentity
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &identity) != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
+			identity.Account.ID != accounts[1].id || identity.User.ID != accounts[1].simple.ID {
+			t.Fatal("IAM replica did not recover normal authentication after bounded open-loop pressure")
+		}
+	}
 	// A successful write is followed by new requests through both real replicas;
 	// measured Deny is expected service work, never counted as an HTTP failure.
 	revokeIAMPolicyAttachment(t, replica, accounts[0].root, accounts[0].attachment.ID, accounts[0].attachment.ResourceVersion, "capacity-revoke-simple")
-	calls := make([]iamCapacityCall, 0, 200)
+	calls = make([]iamCapacityCall, 0, 200)
 	for index := range 200 {
 		calls = append(calls, policyCall(accounts[index%2], servers[(index/2)%2], fmt.Sprintf("capacity-revoked-%d", index), "capacity-selected", false, index%2 != 0))
 	}
@@ -4878,12 +4958,19 @@ func TestIAMCapacityPercentiles(t *testing.T) {
 // Only scheduling and HTTP transport run concurrently. Response verification
 // stays on the receiving test goroutine, including immutable evidence capture.
 func dispatchIAMCapacityCalls(ctx context.Context, client *http.Client, started time.Time, concurrency int, schedule iamCapacitySchedule, calls []iamCapacityCall) (<-chan iamCapacityResult, error) {
-	if concurrency < 1 || concurrency > 2 || len(calls) == 0 || len(calls) > 200 || (schedule != iamCapacityPaired && schedule != iamCapacityIndependent) {
+	maxConcurrency := 2
+	if schedule == iamCapacityOpenLoop {
+		maxConcurrency = 16
+	}
+	if concurrency < 1 || concurrency > maxConcurrency || len(calls) == 0 || len(calls) > 200 ||
+		(schedule != iamCapacityPaired && schedule != iamCapacityIndependent && schedule != iamCapacityOpenLoop) {
 		return nil, errors.New("invalid capacity workload budget")
 	}
 	lanes := make(map[string][]int)
 	for index, call := range calls {
-		if call.request == nil || call.lane == "" || call.interval < 0 || call.interval > 100*time.Millisecond || (schedule == iamCapacityPaired && (call.interval != 0 || call.confirm)) {
+		if call.request == nil || call.lane == "" || call.interval < 0 || call.interval > 100*time.Millisecond ||
+			(schedule == iamCapacityPaired && (call.interval != 0 || call.confirm)) ||
+			(schedule == iamCapacityOpenLoop && (call.interval == 0 || call.confirm)) {
 			return nil, errors.New("invalid capacity request schedule")
 		}
 		indexes := lanes[call.lane]
@@ -4920,6 +5007,7 @@ func dispatchIAMCapacityCalls(ctx context.Context, client *http.Client, started 
 			result.failed = true
 		} else {
 			result.status = response.StatusCode
+			result.retryAfter = response.Header.Get("Retry-After")
 			result.body, err = io.ReadAll(io.LimitReader(response.Body, 2*1024*1024+1))
 			closeErr := response.Body.Close()
 			result.failed = err != nil || closeErr != nil || len(result.body) > 2*1024*1024
@@ -4944,6 +5032,35 @@ func dispatchIAMCapacityCalls(ctx context.Context, client *http.Client, started 
 	go func() {
 		defer close(results)
 		var workers sync.WaitGroup
+		if schedule == iamCapacityOpenLoop {
+			inflight := make(chan struct{}, concurrency)
+			for _, indexes := range lanes {
+				for ordinal, index := range indexes {
+					scheduled := started.Add(time.Duration(ordinal) * calls[index].interval)
+					workers.Go(func() {
+						delay := time.Until(scheduled)
+						if delay > 0 {
+							timer := time.NewTimer(delay)
+							defer timer.Stop()
+							select {
+							case <-timer.C:
+							case <-ctx.Done():
+								return
+							}
+						}
+						select {
+						case inflight <- struct{}{}:
+							defer func() { <-inflight }()
+						case <-ctx.Done():
+							return
+						}
+						execute(index, scheduled)
+					})
+				}
+			}
+			workers.Wait()
+			return
+		}
 		if schedule == iamCapacityIndependent {
 			for _, indexes := range lanes {
 				workers.Go(func() {
@@ -5197,6 +5314,85 @@ func TestIAMCapacityScheduling(t *testing.T) {
 			}
 		}
 	})
+	t.Run("open-loop-bounded-inflight", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		defer releaseOnce.Do(func() { close(release) })
+		var active, peak atomic.Int32
+		startedRequests := make(chan struct{}, 8)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			current := active.Add(1)
+			defer active.Add(-1)
+			for observed := peak.Load(); current > observed; observed = peak.Load() {
+				if peak.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			startedRequests <- struct{}{}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer server.Close()
+		client := server.Client()
+		transport := client.Transport.(*http.Transport).Clone()
+		transport.MaxConnsPerHost, transport.MaxIdleConnsPerHost = 8, 8
+		client.Transport = transport
+		defer transport.CloseIdleConnections()
+		calls := make([]iamCapacityCall, 0, 8)
+		for range 8 {
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls = append(calls, iamCapacityCall{lane: "pressure", request: request, interval: 10 * time.Millisecond})
+		}
+		started := time.Now().Add(20 * time.Millisecond)
+		results, err := dispatchIAMCapacityCalls(ctx, client, started, 4, iamCapacityOpenLoop, calls)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range 4 {
+			select {
+			case <-startedRequests:
+			case <-ctx.Done():
+				t.Fatal("open-loop requests waited for an earlier completion")
+			}
+		}
+		if peak.Load() != 4 {
+			t.Fatalf("open-loop in-flight peak=%d, want 4", peak.Load())
+		}
+		releaseOnce.Do(func() { close(release) })
+		seen := make([]bool, len(calls))
+		for result := range results {
+			if result.index < 0 || result.index >= len(calls) || seen[result.index] || result.failed || result.status != http.StatusNoContent ||
+				result.scheduled != started.Add(time.Duration(result.index)*10*time.Millisecond) || result.started.Before(result.scheduled) {
+				t.Fatal("open-loop schedule lost, duplicated, advanced or corrupted a result")
+			}
+			seen[result.index] = true
+		}
+		if slices.Contains(seen, false) || peak.Load() > 4 || active.Load() != 0 {
+			t.Fatal("open-loop schedule exceeded its bound or omitted work")
+		}
+		invalid := slices.Clone(calls)
+		invalid[0].interval = 0
+		if _, err := dispatchIAMCapacityCalls(ctx, client, time.Now(), 4, iamCapacityOpenLoop, invalid); err == nil {
+			t.Fatal("open-loop schedule accepted an unpaced workload")
+		}
+		invalid = slices.Clone(calls)
+		invalid[0].confirm = true
+		if _, err := dispatchIAMCapacityCalls(ctx, client, time.Now(), 4, iamCapacityOpenLoop, invalid); err == nil {
+			t.Fatal("open-loop schedule accepted dependent mutation confirmation")
+		}
+		if _, err := dispatchIAMCapacityCalls(ctx, client, time.Now(), 17, iamCapacityOpenLoop, calls); err == nil {
+			t.Fatal("open-loop schedule exceeded its in-flight ceiling")
+		}
+	})
 }
 
 func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, name string, concurrency int, schedule iamCapacitySchedule, calls []iamCapacityCall) []string {
@@ -5215,7 +5411,11 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
-	transport.MaxConnsPerHost, transport.MaxIdleConnsPerHost, transport.MaxIdleConns = 2, 2, 4
+	connectionLimit := 2
+	if schedule == iamCapacityOpenLoop {
+		connectionLimit = concurrency
+	}
+	transport.MaxConnsPerHost, transport.MaxIdleConnsPerHost, transport.MaxIdleConns = connectionLimit, connectionLimit, connectionLimit*2
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	lanes := make(map[string]*laneResult)
@@ -5314,11 +5514,17 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 				lane.scheduledLatencies = append(lane.scheduledLatencies, result.completed.Sub(result.scheduled))
 			}
 			lane.statuses[result.status]++
-			secret, valid := call.verify(result.body)
+			var secret string
+			var valid bool
+			if call.accept != nil {
+				secret, valid = call.accept(result)
+			} else if call.verify != nil {
+				secret, valid = call.verify(result.body)
+			}
 			if secret != "" {
 				secrets = append(secrets, secret)
 			}
-			accepted := !result.failed && result.status == call.status && valid
+			accepted := !result.failed && valid && (call.accept != nil || result.status == call.status)
 			if !accepted {
 				lane.failures++
 				reason := "response-contract"
@@ -5359,6 +5565,8 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 		load := "closed-loop-paired-batches"
 		if schedule == iamCapacityIndependent {
 			load = "closed-loop-independent-lanes"
+		} else if schedule == iamCapacityOpenLoop {
+			load = "open-loop-bounded-inflight"
 		}
 		observation := map[string]any{
 			"stage": name, "lane": laneName, "concurrency": concurrency, "load": load,
@@ -5373,7 +5581,7 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 			"poolWaitDuration": nil, "lockWaitDuration": nil, "runnerCPUChange": cpuEnd,
 			"runnerMemoryCurrentBytes": capacityCgroupNumber(t, "memory.current"), "runnerMemoryPeakBytes": capacityCgroupNumber(t, "memory.peak"),
 		}
-		if schedule == iamCapacityIndependent {
+		if schedule == iamCapacityIndependent || schedule == iamCapacityOpenLoop {
 			observation["laneStartMS"] = float64(lane.first.Sub(started)) / float64(time.Millisecond)
 			observation["laneEndMS"] = float64(lane.last.Sub(started)) / float64(time.Millisecond)
 			observation["laneVerifiedRequestsPerSecond"] = float64(len(lane.latencies)-lane.failures) / lane.last.Sub(lane.first).Seconds()
