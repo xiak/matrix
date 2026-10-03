@@ -1,6 +1,6 @@
 # FEAT-IAM-007：访问密钥与程序访问
 
-- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。实际产品消费已累计到`efe12e824b6534e7b6912c6ed9900c7f0c53e3e9`：PaaS已覆盖已列明的创建、实例读取、Deployment控制和Application声明标签，Audit覆盖精确租户记录查询、完整性验证及可信外部source IP。Account/key网络限制和不可变使用摘要的当前工作树候选已通过真实PG18、IAM59→60滚动前驱及双IAM/Audit/PaaS独立进程门禁，尚待固定提交与独立CI；签名APISIX安装、生产入口托管/备份、UI及最终发布仍未完成，整体未验收。
+- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。实际产品消费已累计到`efe12e824b6534e7b6912c6ed9900c7f0c53e3e9`：PaaS已覆盖已列明的创建、实例读取、Deployment控制和Application声明标签，Audit覆盖精确租户记录查询、完整性验证及可信外部source IP。Account/key网络限制和不可变使用摘要固定于`472596b1`及后继Audit修正，并由累计`91649497`的完整独立CI确认；签名APISIX安装、生产入口托管/备份、LIVE UI及最终发布仍未完成，整体未验收。
 - 依赖：003、005；临时凭据与 006 协作。
 - Owner：IAM credential；各产品 HTTP 签名消费归其 PEP。
 
@@ -323,6 +323,8 @@ Account值归现有`AccountSecuritySettings.accessKeyNetwork`，不是授权Poli
 另一空白数据库上的`TestIndependentIAMAuditAndPaaSProcesses`以race-p1通过252.76秒（package 256.255秒）：两个真实IAM副本、Audit、PaaS及dispatcher覆盖双Account资源/Operation/outbox、程序签名body/path/If-Match/幂等键篡改、可信来源与重放、设置回包丢失/重启、MFA恢复及停用USER历史投递。聚焦API/authority/usecase/HTTP/PostgreSQL race、architecture和vet以及全仓普通`go test -p 2 ./...`、`go vet ./...`通过；OpenAPI二次生成字节稳定。上述本地证据先对应首次固定候选，不替代精确SHA独立CI、签名APISIX、安装备份或真实浏览器验收。
 
 首次固定`472596b1e`的[Verification 36895737155](https://github.com/xiak/matrix/actions/runs/36895737155)不能标为通过：`authority-storage`在通用Audit catalog真库门禁拒绝新事实，精确错误为`closed sanitized Audit event is invalid`。本任务在新的限额PG18空库按相同命令复现，确认公开Go contract已有新action/ACCESS_KEY target，而Audit SQL封闭action、query过滤及IAM outbox decision-required列表遗漏该值；修复只补同一action的四处封闭映射，不放宽actor、target、result或decision。修复后新的Audit存储/HTTP真库门禁10.713秒/4.163秒及完整AccessKey真库race-p1 99.07秒（package 102.743秒）通过，全仓普通测试/vet也通过；后继固定SHA和独立CI仍须另验，原失败不回填。
+
+后继Audit目录修正已累计进入`91649497a0c53be1174d8835326a2df51fe74a55`；其[Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260)已核实精确SHA并全部completed/success，当前真实PG18、双IAM/Audit/PaaS与恢复门禁均覆盖网络更新事实、Allow/Deny使用摘要及即时生效。原`472596b1`失败保持历史失败，不回填；该成功只接受K3后端切片，不替代签名APISIX、安装备份托管、LIVE UI或最终发布。
 
 ## 验收
 

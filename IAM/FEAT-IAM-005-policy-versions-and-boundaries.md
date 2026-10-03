@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过。受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；IP 条件后端候选已有本地 PG18、独立多进程与唯一前驱保留数据证据，固定提交及独立 CI 尚未完成。完整委派未完成，Role边界与STS交集的实施/验收归006。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；完整安全委派、签名边缘、最终发布和UI验收仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -202,6 +202,8 @@ policy_versions 增加无默认、必填的 contract_version，1只标识切换�
 当前后端候选形状为 IAM schema 53、authorization decision contract 5、PaaS Profile revision 3；它没有更新已发布 installation profile，不能以源码数字宣称可安装。2026-09-29 在本任务独立 PostgreSQL 18.6（2 CPU、1 GiB、PIDs 256、随机 loopback 端口）和 GOMAXPROCS=2/`-p 2` 下完成：API、唯一求值器、IAM usecase 及 PaaS PEP/client 聚焦 race；空库迁移、双重 apply、策略编译、当前/历史决定和全部网络替换攻击的完整 policy storage race 193.40s；两个 IAM、PaaS、Audit、dispatcher 的独立进程 race 167.66s，实际 `127.0.0.1` peer 命中、绑定 `127.0.0.2` 的同 bearer 被拒且伪造三个转发头无效，默认版本切换即时生效，落库决定精确为 contract 5；固定 IAM45 executable 产生保留数据后升级到 IAM53 的 race 103.42s，原 Session/MFA/恢复/策略版本/决定/outbox/canonical 与重启行为保持，迁移不补造网络上下文。生成文件连续两次 SHA256 一致，相关 vet 通过。这些本地证据不构成独立 CI、APISIX 可信代理链、签名发布 Profile、正式 UI 或完整 005 验收。
 
 生产切片已固定为`94cc8d7fd4cf60deb909ba4e1111538b663fad43`并随`1b2735ce1c0842cfdb22fb0a32dc389f7b492d72`推送。后者的[Verification36587669797](https://github.com/xiak/matrix/actions/runs/36587669797)首次storage运行在当前 recorder 前被原 Audit 数据测试的五处旧 contract4 夹具拒绝，实际错误为`authorization contract version is invalid`；不能将该run或此前本地结果记为独立CI通过。生产数据库按 contract5 失败关闭是预期行为，修正只把当前正向、退役action、错误资源、错误installation及撤权测试的 recorder 输入/落库断言推进到5，仍保留1–4拒绝攻击和旧不可变记录读取。相同源码在新空PG18三库复现原失败后，修正后的Audit数据/HTTP race分别9.794s/4.175s通过；未改生产SQL、历史canonical或发布Profile，固定修正及后继独立CI仍待完成。
+
+修正固定于`9a030943386d693276fcea53ac706e8cc4269f1f`；它自己的CI仍因后继问题失败，不回填。后继程序签名、Audit租户读取、Account/Key网络限制和当前门禁继续使用同一`request.source-ip`契约，没有放宽来源或新增平行求值器。累计固定`91649497a0c53be1174d8835326a2df51fe74a55`的[Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260)已核实精确SHA并全部completed/success，包含当前真实PG18与独立进程来源IP矩阵，因此本IP条件后端切片按上述边界接受；APISIX可信代理链、签名安装和完整005仍未验收。
 
 评估器处理类型化 Statement。必需的 IAM 身份/时间/已使用网络上下文缺失使整个决定失败关闭；未来可选业务属性缺失时条件不匹配，否定条件也不能因此自动放行。显式 Null 存在检查尚未启用，不能把 null 输入当成受支持算子。多个条件同时满足，多值规则明确为 any/all；禁止隐式字符串类型转换。资源列表中每个必要资源都要通过，不以某个资源成功代替全部。
 

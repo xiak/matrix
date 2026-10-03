@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已固定为`a7f2e83b`，可信创建请求标签及Audit目录修复累计固定为`49aaf216`并通过14项独立CI；既有Application资源标签读取和写入已累计固定到`e9ea19e6`并通过本地真实PG18、独立进程及唯一滚动前驱门禁。AccessKey产品消费已累计固定到`35e15da22`，覆盖五条不可变资源图创建、带真实标签的Application读取及其余六条实例读取，并通过本地真库、独立进程、唯一前驱和全仓检查；最新独立CI仍在运行，其他签名动作、LIVE UI和发布组合仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤、可信标签读写及Audit目录已有固定门禁。AccessKey产品消费已覆盖不可变资源图创建、实例读取、Deployment控制、Application声明标签和租户Audit读取，并累计到`91649497`的完整独立CI；其他签名动作、可信边缘、LIVE UI和最终发布组合仍未完成，整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -248,6 +248,8 @@ PaaS Profile下一revision只为`paas.application.label.set|delete`向USER增加
 双Account同ID/不同标签的真实进程门禁必须证明set/delete只影响决定Account，另一key/Account、标签key/value/body/path/If-Match替换、nonce与业务幂等重放、撤权/停用、IAM失联和并发标签变化均关闭；成功Operation/outbox/Audit保留原USER/accessKeyId。现有LOGIN_SESSION、AccessKey资源图创建/读取及Deployment控制全部回归。本片不新增标签DSL、批量API或资源列表。
 
 固定实现`4433b7ac00fec3ae7e2fdae35fad4bbdc4cf9238`及门禁收紧`c83c38d7b91aa17003c2d217fd509eaba37d98d5`交付revision 12/digest `sha256:ec6ef98cd9b4939cbbdd05632c8fbd28ff8ce79d98466ce98103c3fae30699b6`，未新增数据库迁移。2026-10-01独立PG18.6 PaaS事务race 5.171秒、双Account五进程race 257.56秒及revision 11真实前驱升级112.17秒通过；同ID不同标签、跨Account复用同一业务幂等键、精确set/delete、资源/请求标签决定、USER/key Operation与Audit归因、body/path/key/If-Match/幂等键替换、nonce冲突和登录会话原路径均由真实HTTP/数据库证明。全仓普通/race、vet、模块校验、生成稳定及Linux amd64构建通过；独立CI尚未终态，可信边缘、签名发布组合和UI仍由其owner另验。
+
+上述AccessKey产品路径及后继Audit租户读取、网络限制与使用观测累计进入`91649497a0c53be1174d8835326a2df51fe74a55`；其[Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260)已核实精确SHA并全部completed/success。该终态覆盖当前整仓、真实authority storage/runtime/process分片及node gate，接受当前已列出的产品消费后端；不表示未列动作自动获得ACCESS_KEY，不替代APISIX可信边缘、签名安装、LIVE UI或最终发布组合。
 
 ## 验收
 
