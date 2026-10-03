@@ -153,8 +153,8 @@ export function WorkspaceDetail({ title, onBack, backLabel, actions, children, e
   return <div className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{resolvedBackLabel}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div> : <ContentPage.Heading title={title} scrollKey={`detail:${title}`} back={{ label: resolvedBackLabel, onClick: onBack }} actions={commands} focus={focus} />}{children}</div>;
 }
 
-export function WorkspaceInlineForm({ title, onClose, onSubmit, children, backLabel, submitLabel, submitDisabled, submitVariant, validationError, operation }: {
-  title: string; onClose(): void; onSubmit(): Promise<boolean>; children: ReactNode;
+export function WorkspaceInlineForm({ title, onClose, onBack, onSubmit, children, backLabel, submitLabel, submitDisabled, submitVariant, validationError, operation }: {
+  title: string; onClose(): void; onBack?(): void; onSubmit(): Promise<boolean>; children: ReactNode;
   backLabel?: string; submitLabel?: string; submitDisabled?: boolean; submitVariant?: ComponentProps<typeof Button>["variant"];
   validationError?: string; operation?: { busy: boolean; error?: string; clearError(): void };
 }) {
@@ -166,8 +166,9 @@ export function WorkspaceInlineForm({ title, onClose, onSubmit, children, backLa
   const clearError = operation?.clearError ?? access.clearWorkspaceError;
   const busy = operation?.busy ?? access.busy;
   const error = validationError ?? operation?.error ?? (access.workspaceError ? t(`errors.${access.workspaceError}`) : undefined);
+  const back = onBack ?? onClose;
   useEffect(() => { clearError(); }, [clearError]);
-  useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
+  useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, [title]);
   useEffect(() => {
     if (!error || busy) return;
     const alert = form.current?.querySelector<HTMLElement>('[role="alert"]');
@@ -175,7 +176,7 @@ export function WorkspaceInlineForm({ title, onClose, onSubmit, children, backLa
     alert?.scrollIntoView?.({ block: "nearest" });
   }, [error, busy]);
   return <section className={styles.stack} role="group" aria-label={title}>
-    <div className={styles.sectionHeading}><Button type="button" variant="ghost" disabled={busy} onClick={onClose}>{backLabel ?? t("back")}</Button><h3 className={styles.detailTitle} ref={heading} tabIndex={-1}>{title}</h3></div>
+    <div className={styles.sectionHeading}><Button type="button" variant="ghost" disabled={busy} onClick={back}>{backLabel ?? t("back")}</Button><h3 className={styles.detailTitle} ref={heading} tabIndex={-1}>{title}</h3></div>
     <form ref={form} className={styles.stack} aria-busy={busy || undefined} onSubmit={async (event) => {
       event.preventDefault();
       if (submitting.current || busy || submitDisabled) return;
@@ -185,7 +186,7 @@ export function WorkspaceInlineForm({ title, onClose, onSubmit, children, backLa
     }}>
       {error ? <Alert status="danger" tabIndex={-1}>{error}</Alert> : null}
       <fieldset className={styles.editorFields} disabled={busy}>{children}</fieldset>
-      <div className={styles.actions}><Button type="submit" variant={submitVariant} disabled={busy || submitDisabled}>{submitLabel ?? t("save")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={onClose}>{t("cancel")}</Button></div>
+      <div className={styles.actions}><Button type="submit" variant={submitVariant} disabled={busy || submitDisabled}>{submitLabel ?? t("save")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={back}>{t("cancel")}</Button></div>
     </form>
   </section>;
 }

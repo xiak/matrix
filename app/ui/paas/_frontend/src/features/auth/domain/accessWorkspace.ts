@@ -25,8 +25,39 @@ export type IdentityProvider = {
   id: string; name: string; protocol: "SAML" | "OIDC"; issuer: string; audience: string;
   metadata: string; enabled: boolean; createdAt: string;
 };
+export type IdentityProviderConfigurationIssue = "name" | "duplicate" | "issuer" | "audience" | "metadata";
+
+/** Local preview shape checks only; this does not verify an IdP, assertion, token, key or login. */
+export function identityProviderConfigurationIssue(
+  draft: Pick<IdentityProvider, "name" | "protocol" | "issuer" | "audience" | "metadata"> & { id?: string },
+  providers: readonly Pick<IdentityProvider, "id" | "name">[]
+): IdentityProviderConfigurationIssue | null {
+  if (!draft.name.trim() || draft.name.length > 64 || /[<>\u0000-\u001f]/.test(draft.name)) return "name";
+  if (providers.some((entry) => entry.id !== draft.id && entry.name.toLowerCase() === draft.name.trim().toLowerCase())) return "duplicate";
+  try { if (new URL(draft.issuer).protocol !== "https:") return "issuer"; } catch { return "issuer"; }
+  if (!draft.audience.trim() || draft.audience.length > 256) return "audience";
+  if (!draft.metadata.trim() || draft.metadata.length > 65536) return "metadata";
+  if (draft.protocol === "SAML") return /<(?:[\w-]+:)?EntityDescriptor[\s>]/.test(draft.metadata) ? null : "metadata";
+  try {
+    const jwks = JSON.parse(draft.metadata);
+    return jwks && Array.isArray(jwks.keys) && jwks.keys.length ? null : "metadata";
+  } catch { return "metadata"; }
+}
 /** Browser-memory design sample only; this is not an IAM account or published backend resource. */
 export type RoleSsoMappingPreview = { id: string; name: string; assertionSubject: string; providerId: string; roleId: string; enabled: boolean; createdAt: string };
+export type RoleSsoMappingPreviewIssue = "name" | "duplicate" | "assertionSubject" | "providerId" | "roleId";
+
+export function roleSsoMappingPreviewIssue(
+  draft: Pick<RoleSsoMappingPreview, "name" | "assertionSubject" | "providerId" | "roleId"> & { id?: string },
+  workspace: Pick<AccessWorkspace, "providers" | "roles" | "roleSsoMappings">
+): RoleSsoMappingPreviewIssue | null {
+  if (!draft.name.trim() || draft.name.length > 64 || /[<>\u0000-\u001f]/.test(draft.name)) return "name";
+  if (workspace.roleSsoMappings.some((entry) => entry.id !== draft.id && entry.name.toLowerCase() === draft.name.trim().toLowerCase())) return "duplicate";
+  if (!draft.assertionSubject.trim() || draft.assertionSubject.length > 256) return "assertionSubject";
+  if (!workspace.providers.some((entry) => entry.id === draft.providerId)) return "providerId";
+  const role = workspace.roles.find((entry) => entry.id === draft.roleId);
+  return role?.principalType === "provider" && role.principal === draft.providerId ? null : "roleId";
+}
 export type AccessKey = {
   id: string;
   ownerId: string;
@@ -438,12 +469,10 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       if (state.roleSsoMappings.some((entry) => entry.roleId === id)) throw new AccessWorkspaceError("referenced");
       state.roles = state.roles.filter((entry) => entry.id !== id); break;
     case "save-provider": {
-      validateName(state.providers, command.name, command.id);
-      if (!command.audience.trim() || !command.metadata.trim() || command.metadata.length > 65536) invalid();
-      try { if (new URL(command.issuer).protocol !== "https:") invalid(); } catch { invalid(); }
-      if (command.protocol === "OIDC") {
-        try { const jwks = JSON.parse(command.metadata); if (!Array.isArray(jwks.keys) || !jwks.keys.length) invalid(); } catch { invalid(); }
-      } else if (!/<(?:[\w-]+:)?EntityDescriptor[\s>]/.test(command.metadata)) invalid();
+      const issue = identityProviderConfigurationIssue(command, state.providers);
+      if (issue === "duplicate") throw new AccessWorkspaceError("duplicate");
+      if (issue) invalid();
+      if (command.id) exists(state.providers, command.id);
       const previous = state.providers.find((entry) => entry.id === id);
       state.providers = put(state.providers, { ...command, id, name: command.name.trim(), createdAt: previous?.createdAt ?? createdAt });
       target = command.name; break;
@@ -454,11 +483,10 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       state.providers = state.providers.filter((entry) => entry.id !== id);
       break;
     case "save-role-sso-mapping-preview": {
-      validateName(state.roleSsoMappings, command.name, command.id);
-      if (!command.assertionSubject.trim()) invalid();
-      exists(state.providers, command.providerId);
-      const role = exists(state.roles, command.roleId);
-      if (role.principalType !== "provider" || role.principal !== command.providerId) invalid();
+      const issue = roleSsoMappingPreviewIssue(command, state);
+      if (issue === "duplicate") throw new AccessWorkspaceError("duplicate");
+      if (issue) invalid();
+      if (command.id) exists(state.roleSsoMappings, command.id);
       const previous = state.roleSsoMappings.find((entry) => entry.id === id);
       state.roleSsoMappings = put(state.roleSsoMappings, { ...command, id, name: command.name.trim(), createdAt: previous?.createdAt ?? createdAt });
       target = command.name; break;
