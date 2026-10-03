@@ -35,6 +35,16 @@ func TestSessionPersistsSealedMonotonicJournal(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(stored, initial) {
 		t.Fatalf("stored initial journal = %#v / %v", stored, err)
 	}
+	tampered := initial
+	tampered.Version++
+	tampered.AuthenticationRecoveryEpoch++
+	if err := session.Write(tampered); err == nil {
+		t.Fatal("ordinary journal write advanced authentication recovery epoch")
+	}
+	stored, err = session.Read()
+	if err != nil || !reflect.DeepEqual(stored, initial) {
+		t.Fatalf("rejected epoch mutation changed journal = %#v / %v", stored, err)
+	}
 
 	advanced, err := lifecycle.Advance(
 		initial,

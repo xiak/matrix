@@ -108,6 +108,8 @@ func TestRecoveryBindsSelectedBackupAndPublishesOnlyAfterReady(t *testing.T) {
 	command := lifecycleCommand(ActionRecover, releaseA, '1', 35)
 	command.BackupID = "backup-" + strings.Repeat("c", 32)
 	command.BackupDigest = digest('b')
+	command.AuthenticationRecoveryEpoch = 1
+	command.AuthenticationRecoveryDigest = digest('d')
 	started, err := Start(journal, command)
 	if err != nil || started.Execution.Phase != PhaseRecovering ||
 		started.Execution.Destination != releaseA ||
@@ -131,7 +133,8 @@ func TestRecoveryBindsSelectedBackupAndPublishesOnlyAfterReady(t *testing.T) {
 	if recovered.CurrentReleaseID != releaseA ||
 		recovered.CurrentReleaseDigest != digest('1') ||
 		recovered.PreviousRelease != "" || recovered.Active != nil ||
-		recovered.Last == nil || recovered.Last.Outcome != OutcomeSucceeded {
+		recovered.Last == nil || recovered.Last.Outcome != OutcomeSucceeded ||
+		recovered.AuthenticationRecoveryEpoch != 1 {
 		t.Fatalf("completed recovery journal = %#v", recovered)
 	}
 

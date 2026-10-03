@@ -24,7 +24,9 @@ var binarySpecifications = []binarySpecification{
 	{name: "matrix-health", packagePath: "./app/service/installation/cmd/matrix-health"},
 	{name: "matrix-iam", packagePath: "./app/service/iam/cmd/matrix-iam"},
 	{name: "matrix-iam-access-analysis-worker", packagePath: "./app/service/iam/cmd/matrix-iam-access-analysis-worker"},
+	{name: "matrix-iam-authentication-recovery", packagePath: "./app/service/iam/cmd/matrix-iam-authentication-recovery"},
 	{name: "matrix-iam-audit-dispatcher", packagePath: "./app/service/iam/cmd/matrix-iam-audit-dispatcher"},
+	{name: "matrix-iam-backup-custody", packagePath: "./app/service/iam/cmd/matrix-iam-backup-custody"},
 	{name: "matrix-iam-migrate", packagePath: "./app/service/iam/cmd/matrix-iam-migrate"},
 	{name: "matrix-iam-notification-dispatcher", packagePath: "./app/service/iam/cmd/matrix-iam-notification-dispatcher"},
 	{name: "matrix-paas", packagePath: "./app/service/paas/cmd/matrix-paas"},
@@ -55,7 +57,11 @@ var imageRecipes = []imageRecipe{
 	},
 	{
 		component: "iam", baseReference: "scratch",
-		binaries:    []string{"matrix-iam", "matrix-iam-access-analysis-worker", "matrix-iam-audit-dispatcher", "matrix-iam-migrate", "matrix-iam-notification-dispatcher", "matrix-health"},
+		binaries: []string{
+			"matrix-iam", "matrix-iam-access-analysis-worker", "matrix-iam-authentication-recovery",
+			"matrix-iam-audit-dispatcher", "matrix-iam-backup-custody", "matrix-iam-migrate",
+			"matrix-iam-notification-dispatcher", "matrix-health",
+		},
 		systemRoots: true,
 	},
 	{

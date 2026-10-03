@@ -894,6 +894,8 @@ TOTP最后额度竞争增量继续归同一个三库门禁：在上述真实恢�
 
 隔离状态的存放与认证方式、全部副本栅栏、备份外安全证明或受控作废方案、恢复能力及完成顺序必须由installation与IAM共同冻结并真实运行；不是本文凭空声明已有一个外部防回滚系统。现有封存来源只证明原安装/原USER，不自动证明备份之后没有撤权；既有密码恢复入口不能用来绕过这个缺口。首个可启用MFA的release只允许已验证理解这些安全状态的前驱；仅识别OPEN文件但忽略MFA资格的旧binary仍不合格。installation可先交付不开启MFA的准备release，但其后继数据准入/运行也必须证明不会绕过因子、Session认证事实或恢复栅栏。确切profile/revision由发布片冻结，不能因通用版本数字比较而启动。
 
+当前installation衔接候选把上述边界具体化为`64/34/3+r11`：受保护备份通过一次目的限定RR lease取得真实pg_dump快照、TOTP custody摘要和完整`authenticationStateDigest`；恢复用同一封存意图先inspect、再close，数据库恢复期间保持CLOSED，随后只消费原closure和security snapshot完成reconcile/reopen。installation journal的单调恢复epoch只在准确成功的终态转换推进，作为Access Analyzer重新开始观察窗口的数据库外信号；普通journal写入、失败恢复、变体重放或旧备份格式不能推进。当前聚焦race已覆盖容器能力、回包丢失、完成锚点和效果前拒绝，但真实PG18签名A/B恢复、旧Session/TOTP/AccessKey拒绝、`RESTORE_GAP`、重启和独立CI尚未完成，因此本段仍是候选，不把r10或固定donor的证据回填为r11验收。
+
 #### 封闭审计事实与必要安全通知
 
 本片只为实际安全变化设计新事实，不为每个HTTP步骤创建事件类型。下表是拟定action目录，实施时在原`api/audit/v1`、IAM outbox/proof和Audit SQL拥有者同步验证，旧canonical编码不改写。

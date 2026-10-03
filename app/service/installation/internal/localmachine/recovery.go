@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
@@ -66,6 +67,7 @@ type RecoveryProjectService struct {
 
 func recoverBackup(
 	ctx context.Context,
+	effects *Effects,
 	runtimeBoundary dockerRuntime,
 	streaming streamingDockerRuntime,
 	projectInspector RecoveryProjectInspector,
@@ -88,6 +90,26 @@ func recoverBackup(
 				errors.New("recovery release image identity is absent"),
 			)
 		}
+	}
+	beforeClose, err := inspectUpgradeProject(ctx, runtimeBoundary, current, target)
+	if err != nil {
+		return err
+	}
+	if beforeClose.releaseID == "" {
+		_, closed, closureErr := readAuthenticationRecoveryClosure(
+			plan.Current.Root, plan.AuthenticationIntent.CommandID,
+		)
+		if closureErr != nil {
+			return closureErr
+		}
+		if !closed {
+			if _, startErr := startRecoveryPostgres(ctx, runtimeBoundary, current); startErr != nil {
+				return startErr
+			}
+		}
+	}
+	if err := effects.closeAuthenticationRecovery(ctx, plan); err != nil {
+		return err
 	}
 
 	state, err := inspectUpgradeProject(ctx, runtimeBoundary, current, target)
@@ -149,7 +171,10 @@ func recoverBackup(
 			errors.New("recovery schema identity changed"),
 		)
 	}
-	return migrateInstallation(ctx, runtimeBoundary, target)
+	if err := migrateInstallation(ctx, runtimeBoundary, target); err != nil {
+		return err
+	}
+	return effects.reconcileAuthenticationRecovery(ctx, plan)
 }
 
 func removeRecoveredVerificationProject(
@@ -609,7 +634,12 @@ func authenticateRecoveryPlan(
 		plan.Current.Listener != plan.Target.Listener || plan.Current.Port != plan.Target.Port ||
 		plan.Current.Trust != plan.Target.Trust ||
 		!bytes.Equal(plan.Current.TrustBytes, plan.Target.TrustBytes) ||
-		!backupIDPattern.MatchString(plan.BackupID) || !validSHA256(plan.BackupDigest) {
+		!backupIDPattern.MatchString(plan.BackupID) || !validSHA256(plan.BackupDigest) ||
+		installationv1.ValidateCurrentAuthenticationRecoveryIntent(plan.AuthenticationIntent) != nil ||
+		plan.AuthenticationIntent.InstallationID != plan.Current.InstallationID ||
+		plan.AuthenticationIntent.CommandID != plan.Current.CorrelationID ||
+		plan.AuthenticationIntent.BackupID != plan.BackupID ||
+		plan.AuthenticationIntent.BackupDigest != plan.BackupDigest {
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
 			errors.Join(
 				platformcommand.ErrEffectVerification,
@@ -632,6 +662,15 @@ func authenticateRecoveryPlan(
 				platformcommand.ErrEffectVerification,
 				errors.New("recovery database profiles are incompatible"),
 			)
+	}
+	if plan.AuthenticationIntent.SourceReleaseID != currentBundle.Manifest.Release.ID ||
+		plan.AuthenticationIntent.SourceReleaseDigest != currentBundle.ManifestSHA256 ||
+		plan.AuthenticationIntent.TargetReleaseID != targetBundle.Manifest.Release.ID ||
+		plan.AuthenticationIntent.TargetReleaseDigest != targetBundle.ManifestSHA256 {
+		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{}, errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("recovery authentication intent differs from signed releases"),
+		)
 	}
 	current := plan.Current
 	current.Bundle = currentBundle
@@ -656,7 +695,9 @@ func authenticateRecoveryPlan(
 	if err != nil || profileErr != nil || digest != plan.BackupDigest ||
 		manifest.ReleaseID != target.Bundle.Manifest.Release.ID ||
 		manifest.ReleaseDigest != target.Bundle.ManifestSHA256 ||
-		profile != target.Bundle.Manifest.Database {
+		profile != target.Bundle.Manifest.Database || manifest.TOTPBackupCustody == nil ||
+		manifest.TOTPBackupCustody.CustodyDigest != plan.AuthenticationIntent.TOTPCustodyDigest ||
+		manifest.AuthenticationStateDigest != plan.AuthenticationIntent.AuthenticationStateDigest {
 		clear(current.TrustBytes)
 		clear(target.TrustBytes)
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},

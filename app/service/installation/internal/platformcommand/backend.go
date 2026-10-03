@@ -15,6 +15,7 @@ import (
 	"time"
 
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -122,21 +123,24 @@ type RollbackPlan struct {
 // by a selected protected backup. BackupDigest binds the sealed manifest and
 // its exact artifact commitments into the durable recovery command.
 type RecoverySource struct {
-	InstallationID string
-	BackupID       string
-	BackupDigest   string
-	ReleaseID      string
-	ReleaseDigest  string
-	Database       release.DatabaseProfile
+	InstallationID            string
+	BackupID                  string
+	BackupDigest              string
+	TOTPCustodyDigest         string
+	AuthenticationStateDigest string
+	ReleaseID                 string
+	ReleaseDigest             string
+	Database                  release.DatabaseProfile
 }
 
 // RecoveryPlan binds the current committed release, the authenticated release
 // named by the selected backup, and the exact protected backup identity.
 type RecoveryPlan struct {
-	Current      InstallPlan
-	Target       InstallPlan
-	BackupID     string
-	BackupDigest string
+	Current              InstallPlan
+	Target               InstallPlan
+	BackupID             string
+	BackupDigest         string
+	AuthenticationIntent installationv1.AuthenticationRecoveryIntent
 }
 
 // Effects is the closed local-machine lifecycle boundary. Mutating phases are
@@ -151,6 +155,7 @@ type Effects interface {
 	RollbackUpgrade(context.Context, UpgradePlan) error
 	ApplyRollbackPhase(context.Context, RollbackPlan, lifecycle.Phase) error
 	InspectBackup(context.Context, InstalledPlan, string) (RecoverySource, error)
+	PreflightRecovery(context.Context, RecoveryPlan) error
 	ApplyRecoveryPhase(context.Context, RecoveryPlan, lifecycle.Phase) error
 	VerifyInstallation(context.Context, InstalledPlan) error
 	ObserveInstallation(context.Context, InstalledPlan) (bool, error)
@@ -894,6 +899,8 @@ func (backend *Backend) recover(
 	}
 	if source.InstallationID != state.InstallationID || source.BackupID != request.BackupID ||
 		source.ReleaseID == "" || source.ReleaseDigest == "" || source.BackupDigest == "" ||
+		iamv1.ValidateDigest("TOTP custody digest", source.TOTPCustodyDigest) != nil ||
+		iamv1.ValidateDigest("authentication state digest", source.AuthenticationStateDigest) != nil ||
 		release.ValidateDatabaseProfile(source.Database) != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
 	}
@@ -916,9 +923,34 @@ func (backend *Backend) recover(
 			return cli.Result{}, fault(cli.FaultInternal, "COMMAND_ID_GENERATION_FAILED")
 		}
 	}
+	recoveryEpoch := state.AuthenticationRecoveryEpoch + 1
+	if state.Active != nil {
+		recoveryEpoch = state.Active.Command.AuthenticationRecoveryEpoch
+	}
+	intent := installationv1.AuthenticationRecoveryIntent{
+		APIVersion:                installationv1.AuthenticationRecoveryAPIVersion,
+		Kind:                      installationv1.AuthenticationRecoveryIntentKind,
+		Purpose:                   installationv1.AuthenticationRecoveryPurpose,
+		InstallationID:            state.InstallationID,
+		Epoch:                     recoveryEpoch,
+		CommandID:                 commandID,
+		BackupID:                  source.BackupID,
+		BackupDigest:              source.BackupDigest,
+		SourceReleaseID:           currentBundle.Manifest.Release.ID,
+		SourceReleaseDigest:       currentBundle.ManifestSHA256,
+		TargetReleaseID:           targetBundle.Manifest.Release.ID,
+		TargetReleaseDigest:       targetBundle.ManifestSHA256,
+		TOTPCustodyDigest:         source.TOTPCustodyDigest,
+		AuthenticationStateDigest: source.AuthenticationStateDigest,
+	}
+	intentDigest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
+	if err != nil || installationv1.ValidateCurrentAuthenticationRecoveryIntent(intent) != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_AUTHENTICATION_INTENT_INVALID")
+	}
 	started, err := lifecycle.Start(state, lifecycle.Command{
 		ID: commandID, Action: lifecycle.ActionRecover,
 		InputDigest: source.ReleaseDigest, BackupDigest: source.BackupDigest,
+		AuthenticationRecoveryEpoch: recoveryEpoch, AuthenticationRecoveryDigest: intentDigest,
 		TargetReleaseID: source.ReleaseID, BackupID: source.BackupID,
 		RequestedAt: canonicalNow(backend.now()),
 	})
@@ -927,11 +959,6 @@ func (backend *Backend) recover(
 	}
 	if started.Replay == lifecycle.ReplayCompleted {
 		return completedResult(started.Journal, started.Execution, false)
-	}
-	if started.Replay == lifecycle.ReplayNone {
-		if err := session.Write(started.Journal); err != nil {
-			return cli.Result{}, stateWriteFault(err)
-		}
 	}
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
@@ -950,6 +977,21 @@ func (backend *Backend) recover(
 	plan := RecoveryPlan{
 		Current: currentPlan, Target: targetPlan,
 		BackupID: source.BackupID, BackupDigest: source.BackupDigest,
+		AuthenticationIntent: intent,
+	}
+	if started.Replay == lifecycle.ReplayNone {
+		if err := backend.effects.PreflightRecovery(ctx, plan); err != nil {
+			if ctx.Err() != nil {
+				return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+			}
+			if errors.Is(err, ErrEffectOutcomeUnknown) {
+				return cli.Result{}, fault(cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+			}
+			return cli.Result{}, effectFault(lifecycle.PhasePreflight, err)
+		}
+		if err := session.Write(started.Journal); err != nil {
+			return cli.Result{}, stateWriteFault(err)
+		}
 	}
 	return backend.driveReleaseChange(
 		ctx, session, lifecycle.ActionRecover,

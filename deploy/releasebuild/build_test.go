@@ -147,6 +147,8 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 		"FROM scratch",
 		"COPY --from=matrix-system-roots /etc/ssl/cert.pem /etc/ssl/cert.pem",
 		"COPY --from=matrix-system-roots /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt",
+		"COPY --chmod=0555 matrix-iam-authentication-recovery /matrix/bin/matrix-iam-authentication-recovery",
+		"COPY --chmod=0555 matrix-iam-backup-custody /matrix/bin/matrix-iam-backup-custody",
 		"COPY --chmod=0555 matrix-iam-notification-dispatcher /matrix/bin/matrix-iam-notification-dispatcher",
 	} {
 		if !strings.Contains(iamDockerfile, required) {

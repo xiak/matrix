@@ -464,7 +464,9 @@ func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.
 					effects.recoverySource = RecoverySource{
 						InstallationID: before.InstallationID,
 						BackupID:       request.BackupID, BackupDigest: "sha256:" + strings.Repeat("e", 64),
-						ReleaseID: fixtures[0].Manifest.Release.ID, ReleaseDigest: fixtures[0].ManifestDigest,
+						TOTPCustodyDigest:         "sha256:" + strings.Repeat("c", 64),
+						AuthenticationStateDigest: "sha256:" + strings.Repeat("d", 64),
+						ReleaseID:                 fixtures[0].Manifest.Release.ID, ReleaseDigest: fixtures[0].ManifestDigest,
 						Database: fixtures[0].Manifest.Database,
 					}
 					failureCode = "RECOVERY_SCHEMA_INCOMPATIBLE"
@@ -601,12 +603,14 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 	backupID := "backup-" + strings.Repeat("d", 32)
 	backupDigest := "sha256:" + strings.Repeat("e", 64)
 	effects.recoverySource = RecoverySource{
-		InstallationID: installed.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   backupDigest,
-		ReleaseID:      fixtures[0].Manifest.Release.ID,
-		ReleaseDigest:  fixtures[0].ManifestDigest,
-		Database:       fixtures[0].Manifest.Database,
+		InstallationID:            installed.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              backupDigest,
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("c", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("d", 64),
+		ReleaseID:                 fixtures[0].Manifest.Release.ID,
+		ReleaseDigest:             fixtures[0].ManifestDigest,
+		Database:                  fixtures[0].Manifest.Database,
 	}
 	request := cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
@@ -621,6 +625,8 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 		active.Active.Command.BackupDigest != backupDigest ||
 		active.Active.Command.TargetReleaseID != fixtures[0].Manifest.Release.ID ||
 		active.Active.Command.InputDigest != fixtures[0].ManifestDigest ||
+		active.Active.Command.AuthenticationRecoveryEpoch != 1 ||
+		active.Active.Command.AuthenticationRecoveryDigest == "" ||
 		active.CurrentReleaseID != fixtures[1].Manifest.Release.ID {
 		t.Fatalf("unknown recovery journal = %#v", active)
 	}
@@ -651,11 +657,13 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 			t.Fatalf("recovery phase %s calls = %d, want %d", phase, effects.recoveryCalls[phase], want)
 		}
 	}
-	if effects.recoveryInspectCalls != 3 ||
+	if effects.recoveryInspectCalls != 3 || effects.recoveryPreflightCalls != 1 ||
 		effects.recoveryPlan.Current.Bundle.Manifest.Release.ID != fixtures[1].Manifest.Release.ID ||
 		effects.recoveryPlan.Target.Bundle.Manifest.Release.ID != fixtures[0].Manifest.Release.ID ||
 		effects.recoveryPlan.BackupID != backupID ||
-		effects.recoveryPlan.BackupDigest != backupDigest {
+		effects.recoveryPlan.BackupDigest != backupDigest ||
+		effects.recoveryPlan.AuthenticationIntent.Epoch != 1 ||
+		effects.recoveryPlan.AuthenticationIntent.AuthenticationStateDigest != effects.recoverySource.AuthenticationStateDigest {
 		t.Fatalf("recovery inspection/plan = calls:%d plan:%#v", effects.recoveryInspectCalls, effects.recoveryPlan)
 	}
 	completed := readJournal(t, root)
@@ -664,8 +672,40 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 		completed.PreviousRelease != "" || completed.PreviousReleaseDigest != "" ||
 		completed.Active != nil || completed.Last == nil ||
 		completed.Last.Command.ID != commandID ||
-		completed.Last.Outcome != lifecycle.OutcomeSucceeded {
+		completed.Last.Outcome != lifecycle.OutcomeSucceeded ||
+		completed.AuthenticationRecoveryEpoch != 1 {
 		t.Fatalf("completed recovery journal = %#v", completed)
+	}
+}
+
+func TestRecoveryPreflightFailureCannotPersistOrReachDestructiveEffects(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{recoveryPreflightErr: ErrEffectConflict}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+		t.Fatal(err)
+	}
+	materializeInstalledRelease(t, root, fixture)
+	before := readJournal(t, root)
+	backupID := "backup-" + strings.Repeat("a", 32)
+	effects.recoverySource = RecoverySource{
+		InstallationID:            before.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              "sha256:" + strings.Repeat("b", 64),
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("c", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("d", 64),
+		ReleaseID:                 fixture.Manifest.Release.ID,
+		ReleaseDigest:             fixture.ManifestDigest,
+		Database:                  fixture.Manifest.Database,
+	}
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	assertFault(t, err, cli.FaultConflict, "OWNERSHIP_CONFLICT")
+	if after := readJournal(t, root); !reflect.DeepEqual(after, before) ||
+		effects.recoveryPreflightCalls != 1 || len(effects.recoveryCalls) != 0 {
+		t.Fatalf("failed recovery preflight changed state: before=%#v after=%#v effects=%#v", before, after, effects)
 	}
 }
 
@@ -693,12 +733,14 @@ func TestRecoveryRejectsUntrustedSourceBeforePersistingIntent(t *testing.T) {
 	}
 
 	effects.recoverySource = RecoverySource{
-		InstallationID: before.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   "sha256:" + strings.Repeat("c", 64),
-		ReleaseID:      "matrix-v0.9.9-ffffffffffff",
-		ReleaseDigest:  "sha256:" + strings.Repeat("f", 64),
-		Database:       fixture.Manifest.Database,
+		InstallationID:            before.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              "sha256:" + strings.Repeat("c", 64),
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("d", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("e", 64),
+		ReleaseID:                 "matrix-v0.9.9-ffffffffffff",
+		ReleaseDigest:             "sha256:" + strings.Repeat("f", 64),
+		Database:                  fixture.Manifest.Database,
 	}
 	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
@@ -748,12 +790,14 @@ func TestRecoveryDefinitiveFailureRequiresManualIntervention(t *testing.T) {
 	before := readJournal(t, root)
 	backupID := "backup-" + strings.Repeat("b", 32)
 	effects.recoverySource = RecoverySource{
-		InstallationID: before.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   "sha256:" + strings.Repeat("d", 64),
-		ReleaseID:      fixture.Manifest.Release.ID,
-		ReleaseDigest:  fixture.ManifestDigest,
-		Database:       fixture.Manifest.Database,
+		InstallationID:            before.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              "sha256:" + strings.Repeat("d", 64),
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("e", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("f", 64),
+		ReleaseID:                 fixture.Manifest.Release.ID,
+		ReleaseDigest:             fixture.ManifestDigest,
+		Database:                  fixture.Manifest.Database,
 	}
 
 	_, err := backend.Run(context.Background(), cli.Request{
@@ -1056,6 +1100,8 @@ type installEffects struct {
 	recoveryInspectCalls      int
 	recoveryInspectErr        error
 	recoverySource            RecoverySource
+	recoveryPreflightCalls    int
+	recoveryPreflightErr      error
 	recoveryCalls             map[lifecycle.Phase]int
 	recoveryPlan              RecoveryPlan
 	recoveryFailPhase         lifecycle.Phase
@@ -1194,6 +1240,20 @@ func (effects *installEffects) InspectBackup(
 		return RecoverySource{}, effects.recoveryInspectErr
 	}
 	return effects.recoverySource, nil
+}
+
+func (effects *installEffects) PreflightRecovery(
+	_ context.Context,
+	plan RecoveryPlan,
+) error {
+	effects.recoveryPreflightCalls++
+	effects.recoveryPlan = plan
+	if installationv1.ValidateCurrentAuthenticationRecoveryIntent(plan.AuthenticationIntent) != nil ||
+		plan.AuthenticationIntent.CommandID != plan.Current.CorrelationID ||
+		plan.AuthenticationIntent.InstallationID != plan.Current.InstallationID {
+		return errors.New("recovery preflight plan is incomplete")
+	}
+	return effects.recoveryPreflightErr
 }
 
 func (effects *installEffects) ApplyRecoveryPhase(

@@ -215,7 +215,7 @@ func controlNetworkID(
 ) (string, error) {
 	output, _, err := runtimeBoundary.Run(
 		ctx, nil,
-		"network", "ls", "--quiet",
+		"network", "ls", "--quiet", "--no-trunc",
 		"--filter", "label=com.docker.compose.project="+project,
 		"--filter", "label=com.docker.compose.network=control",
 	)

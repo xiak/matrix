@@ -25,20 +25,21 @@ const (
 	PaaSAPI                   = "secrets/database/paas-api-dsn"
 	PaaSWorker                = "secrets/database/paas-worker-dsn"
 
-	IAMBootstrap                   = "secrets/authority/iam-bootstrap.json"
-	IAMAccessKeyWrappingKeyring    = "secrets/authority/iam-access-key-wrapping-keyring.json"
-	IAMTOTPKeyring                 = "secrets/authority/iam-totp-keyring.json"
-	IAMEmailVerificationKeyring    = "secrets/authority/iam-email-verification-keyring.json"
-	IAMSecurityMailSMTPChannel     = "secrets/authority/iam-security-mail-smtp-channel.json"
-	IAMCursorKey                   = "secrets/authority/iam-cursor-key"
-	AuditIAMCredential             = "secrets/authority/audit-iam-credential"
-	IAMAuditCredential             = "secrets/authority/iam-audit-credential"
-	PaaSIAMCredential              = "secrets/authority/paas-iam-credential"
-	PaaSAuditCredential            = "secrets/authority/paas-audit-credential"
-	InstallationVerifierCredential = "secrets/authority/installation-verifier-iam-credential"
-	AuditCursorKey                 = "secrets/authority/audit-cursor-key"
-	BackupSealKey                  = "secrets/authority/backup-seal-key"
-	InitialAdministratorPassword   = "secrets/operator/initial-admin-password"
+	IAMBootstrap                        = "secrets/authority/iam-bootstrap.json"
+	IAMAccessKeyWrappingKeyring         = "secrets/authority/iam-access-key-wrapping-keyring.json"
+	IAMTOTPKeyring                      = "secrets/authority/iam-totp-keyring.json"
+	IAMEmailVerificationKeyring         = "secrets/authority/iam-email-verification-keyring.json"
+	IAMSecurityMailSMTPChannel          = "secrets/authority/iam-security-mail-smtp-channel.json"
+	IAMCursorKey                        = "secrets/authority/iam-cursor-key"
+	AuditIAMCredential                  = "secrets/authority/audit-iam-credential"
+	IAMAuditCredential                  = "secrets/authority/iam-audit-credential"
+	PaaSIAMCredential                   = "secrets/authority/paas-iam-credential"
+	PaaSAuditCredential                 = "secrets/authority/paas-audit-credential"
+	InstallationVerifierCredential      = "secrets/authority/installation-verifier-iam-credential"
+	AuditCursorKey                      = "secrets/authority/audit-cursor-key"
+	BackupSealKey                       = "secrets/authority/backup-seal-key"
+	InitialAdministratorPassword        = "secrets/operator/initial-admin-password"
+	IAMAuthenticationRecoveryCompletion = "state/iam-authentication-recovery/completion.json"
 
 	PostgresData       = "data/postgres"
 	ExecutorRoot       = "runtime/executor"
@@ -49,4 +50,20 @@ const (
 
 func ReleaseDirectory(releaseID string) string {
 	return "releases/" + releaseID
+}
+
+func IAMAuthenticationRecoveryIntent(commandID string) string {
+	return "state/iam-authentication-recovery/" + commandID + ".intent.json"
+}
+
+func IAMAuthenticationRecoveryPreflightIntent(commandID string) string {
+	return "state/iam-authentication-recovery/" + commandID + ".preflight.json"
+}
+
+func IAMAuthenticationRecoveryClosure(commandID string) string {
+	return "state/iam-authentication-recovery/" + commandID + ".closure.json"
+}
+
+func IAMAuthenticationRecoverySecuritySnapshot(commandID string) string {
+	return "state/iam-authentication-recovery/" + commandID + ".security-snapshot.json"
 }

@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted foundation; IAM security-mail topology candidate is in verification
+- Status: Accepted foundation; IAM authentication-recovery lifecycle candidate is in verification
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current isolated-IAM candidate is manifest `v2` with the exact `61/31/3` revision 7 profile. Its local signed A/B lifecycle gate has passed; the combination remains unaccepted until the final exact source passes independent CI
+- Release contract: accepted foundation `v1`; current isolated-IAM source candidate is manifest `v2` with the exact `64/34/3` revision 11 profile. Revision 11 adds the installation-side authentication-recovery ABI; it remains unaccepted until the exact source passes the focused, signed A/B and independent CI gates below
 
 ## Outcome
 
@@ -175,6 +175,25 @@ separate destructive path that restores a selected verified backup after an
 operator request. Backups remain installation-owned, restrictive, sealed, and
 excluded from support evidence.
 
+The current recovery contract closes authentication before a destructive
+database restore and does not reopen it merely because PostgreSQL is healthy.
+Backup creation obtains one purpose-only IAM repeatable-read lease and binds
+the database dump to its exact TOTP-custody commitment and complete
+authentication-state digest. Recovery preflights the exact protected intent
+before journal advancement or provider effects, persists its source closure
+and security snapshot outside the restored database, restores and migrates
+while authentication remains closed, then reconciles and reopens only that
+same snapshot. Missing, changed or uncertain evidence fails closed.
+
+The installation journal carries a monotonic authentication-recovery epoch.
+Only the exact successful terminal recovery transition may advance it;
+ordinary journal writes, failed recovery, replay variants and response loss
+cannot do so. Equal replay observes the original completion. This epoch is the
+installation-owned non-rollback signal consumed by IAM access analysis after
+a supported restore; it is not a substitute for the IAM closure, a caller
+selector, a cross-profile compatibility permit or protection against a local
+root rolling back every installation disk and key together.
+
 `verify` rechecks journal seals, current bundle content, loaded image identity,
 Compose project membership, service health, schema compatibility, IAM
 authorization, Audit ingestion/deduplication, and one no-secret application
@@ -184,6 +203,27 @@ timestamps, and correlation IDs; it excludes secrets, tokens, configuration
 values, database rows, native errors, arbitrary logs, and absolute paths.
 
 ## Incremental acceptance
+
+### Current IAM authentication-recovery lifecycle candidate
+
+The source candidate uses IAM schema 64, Audit schema 34, PaaS schema 3 and
+`contractRevision=11`. Revision 11 identifies the exact backup wire v3,
+purpose-only backup-custody and authentication-recovery entry points,
+protected closure/security-snapshot files, complete recovery intent and
+monotonic installation epoch. It does not admit an earlier backup wire,
+another authority tuple or another revision for recovery. Historical v1/v2
+backup metadata remains bounded and decodable for diagnosis, but current
+recovery rejects it before destructive effects.
+
+Focused race gates currently prove the lifecycle/journal transition rules,
+recovery preflight ordering, purpose-only container boundary, response-loss
+replay, exact completion-anchor sequence and release-builder inventory. This
+is source-level candidate evidence only. Acceptance still requires the exact
+source to run a task-owned PostgreSQL 18 backup/restore, signed same-profile
+Release A/B lifecycle, authentication closure/reconciliation/reopen, stale
+Session/TOTP/AccessKey rejection, access-analysis `RESTORE_GAP`, restart and
+independent CI gates. Until those pass, revision 11 is not an accepted release
+combination and cannot inherit earlier revision 10 or donor evidence.
 
 ### Signed IAM security-report precursor
 

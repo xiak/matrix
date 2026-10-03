@@ -186,7 +186,8 @@ func (session *Session) Write(value lifecycle.Journal) error {
 	if err != nil {
 		return err
 	}
-	if value.InstallationID != current.InstallationID || value.Version != current.Version+1 {
+	if value.InstallationID != current.InstallationID || value.Version != current.Version+1 ||
+		lifecycle.ValidateTransition(current, value) != nil {
 		return errors.New("installation journal version or identity is stale")
 	}
 	key, err := readKey(filepath.Join(session.state, keyFilename))
