@@ -1662,6 +1662,48 @@
     "tenant": "Tenant",
     "noTenants": "No tenants on this page",
     "tenantScopeHint": "Creating a tenant does not grant cross-tenant access",
+    "tenantManagementSections": "Tenants and organization governance",
+    "organizationGovernance": {
+      "tab": "Organization governance preview",
+      "title": "Organization directory and permission guardrails",
+      "description": "Govern boundaries above multiple Accounts without replacing authorization inside each account.",
+      "deferred": "Deferred",
+      "boundary": "IAM-EXT-08 concept preview · No backend contract exists yet for an organization tree, member-Account relationships, guardrail attachments, or effective ceilings. This page creates no organization node, moves no account, publishes no policy, and generates no request ID.",
+      "directoryState": "Organization directory",
+      "guardrailState": "Guardrail source",
+      "evaluationState": "Effective ceiling",
+      "notConnected": "Backend not connected",
+      "noAuthoritativeSource": "No authoritative OrganizationGuardrail",
+      "notEvaluated": "Not evaluated",
+      "upperBound": "An organization guardrail can only narrow access; it cannot create an Allow. Users, Groups, and Roles inside an account still require their own grants, and an explicit Deny on any applicable path must win.",
+      "mustDefine": "Must be defined before enablement",
+      "stages": {
+        "directory": {
+          "title": "Establish stable hierarchy and membership",
+          "detail": "Organizations, organizational units, and Account memberships need stable IDs, owners, and versions. A tenant directory is not an organization tree."
+        },
+        "attach": {
+          "title": "Attach versioned guardrails to exact nodes",
+          "detail": "A guardrail attachment must bind an exact organization node and immutable content version. An ordinary Account administrator cannot elevate or bypass an ancestor boundary."
+        },
+        "inherit": {
+          "title": "Intersect ceilings across the complete path",
+          "detail": "The effective ceiling comes from the full root-to-Account path. All ceilings intersect, explicit Deny wins, and a missing required source fails closed."
+        },
+        "authorize": {
+          "title": "Combine it independently with account grants",
+          "detail": "Passing a guardrail is not an authorization. User, Group, Role, and Session permissions still need an Account-level Allow and must satisfy boundaries and session restrictions."
+        },
+        "move": {
+          "title": "Account moves must handle concurrency and revocation",
+          "detail": "Moving a member Account changes its full inheritance path. A real implementation must freeze exact versions and prove the old path cannot authorize new requests."
+        },
+        "exceptions": {
+          "title": "Close Root and service exceptions explicitly",
+          "detail": "Applicability or exceptions for Root, platform services, and emergency recovery must be defined and audited individually with default deny, never guessed from a frontend label or account type."
+        }
+      }
+    },
     "tenantIdentity": "Account identity",
     "rootIdentityId": "Root identity ID",
     "tenantActive": "Active",

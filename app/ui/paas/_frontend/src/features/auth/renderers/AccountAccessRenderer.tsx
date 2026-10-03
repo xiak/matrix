@@ -30,6 +30,7 @@ import { AccessEnterpriseAccounts } from "./AccessEnterpriseAccounts";
 import { AccountPolicyDirectory } from "./AccountPolicyDirectory";
 import { LivePolicyCreationWizard } from "./LivePolicyCreationWizard";
 import { AccountTenantWorkspace } from "./AccountTenantWorkspace";
+import { OrganizationGovernancePreview } from "./OrganizationGovernancePreview";
 import { OwnSessionsPage } from "./OwnSessionsPage";
 import { LivePersonalSecuritySettings } from "./LivePersonalSecuritySettings";
 import { LiveAccountSecuritySettings } from "./LiveAccountSecuritySettings";
@@ -103,6 +104,7 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   const access = useAccountAccess();
   const [creating, setCreating] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [section, setSection] = useState<"accounts" | "governance">("accounts");
   const [cursorPage, setCursorPage] = useState(1);
   const createActionFocus = useRef<PageCommandsHandle>(null);
   const previousCreating = useRef(false);
@@ -114,18 +116,25 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   }, [creating]);
   if (selected) return <AccountTenantWorkspace account={selected} key={`${selected.id}:${selected.resourceVersion}`} onBack={() => setSelectedId(null)} />;
   if (creating) return <CreateTenantWorkspace onClose={() => setCreating(false)} />;
-  return <div className={styles.stack}>
-    <Card>
-      <ContentPage.Heading title={t("tenantAccounts")} scrollKey="tenant-directory" actions={scene.canCreateAccounts ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
-      <Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
-          <tbody>{scene.accounts.map((account) => <tr key={account.id}><td data-label={t("tenant")}><button className={styles.userLink} onClick={() => { setSelectedId(account.id); setCreating(false); }} type="button">{account.name}</button><small>{account.id}</small></td><td data-label={t("primaryLogin")}>{account.rootLoginName}</td><td data-label={t("alias")}>{account.loginAlias ?? t("aliasUnset")}</td><td data-label={t("status")}><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
-        </Table>
-        {!scene.accounts.length ? <EmptyState title={t("noTenants")} /> : null}
-      <Table.Footer note={t("tenantScopeHint")}><TablePagination mode="cursor" disabled={access.busy || access.loading} summary={w("cursorPage", { page: cursorPage })}
-        previous={{ label: t("firstPage"), disabled: cursorPage <= 1, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage(1); access.accountsPage(""); } }}
-        next={{ label: t("nextPage"), disabled: !scene.nextAccountPage, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage((current) => current + 1); access.accountsPage(scene.nextAccountPage!); } }} /></Table.Footer>
-    </Card>
-  </div>;
+  return <Tabs.Root value={section} onValueChange={(value) => setSection(value as typeof section)}>
+    <Tabs.List aria-label={t("tenantManagementSections")}>
+      <Tabs.Trigger value="accounts">{t("tenantAccounts")}</Tabs.Trigger>
+      <Tabs.Trigger value="governance">{t("organizationGovernance.tab")}</Tabs.Trigger>
+    </Tabs.List>
+    <Tabs.Content value="accounts"><div className={styles.stack}>
+      <Card>
+        <ContentPage.Heading title={t("tenantAccounts")} scrollKey="tenant-directory" actions={scene.canCreateAccounts ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
+        <Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
+            <tbody>{scene.accounts.map((account) => <tr key={account.id}><td data-label={t("tenant")}><button className={styles.userLink} onClick={() => { setSelectedId(account.id); setCreating(false); }} type="button">{account.name}</button><small>{account.id}</small></td><td data-label={t("primaryLogin")}>{account.rootLoginName}</td><td data-label={t("alias")}>{account.loginAlias ?? t("aliasUnset")}</td><td data-label={t("status")}><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
+          </Table>
+          {!scene.accounts.length ? <EmptyState title={t("noTenants")} /> : null}
+        <Table.Footer note={t("tenantScopeHint")}><TablePagination mode="cursor" disabled={access.busy || access.loading} summary={w("cursorPage", { page: cursorPage })}
+          previous={{ label: t("firstPage"), disabled: cursorPage <= 1, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage(1); access.accountsPage(""); } }}
+          next={{ label: t("nextPage"), disabled: !scene.nextAccountPage, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage((current) => current + 1); access.accountsPage(scene.nextAccountPage!); } }} /></Table.Footer>
+      </Card>
+    </div></Tabs.Content>
+    <Tabs.Content value="governance"><OrganizationGovernancePreview /></Tabs.Content>
+  </Tabs.Root>;
 }
 
 type AccountAccessRendererProps = { view?: AccountAccessView; entityId?: string; policyMethod?: string; userTab?: AccountUserDetailTab; onNavigate(view: AccountAccessView, id?: string, method?: PolicyCreationMethod, userTab?: AccountUserDetailTab): void };

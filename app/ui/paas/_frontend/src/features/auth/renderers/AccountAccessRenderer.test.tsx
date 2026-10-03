@@ -635,6 +635,23 @@ describe("account access", () => {
     }));
   });
 
+  it("separates deferred organization guardrails from the live tenant lifecycle", async () => {
+    const repository = accounts();
+    const { user } = await openAccess(repository, iam(), "tenants");
+    expect(await screen.findByRole("table", { name: "租户账号列表" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "组织治理预览" }));
+    const preview = screen.getByRole("region", { name: "组织目录与权限护栏" });
+    expect(within(preview).getByText(/不创建组织节点、不移动账号、不发布策略/)).toBeTruthy();
+    expect(within(preview).getByText(/只能收窄权限，不能产生 Allow/)).toBeTruthy();
+    expect(within(preview).getByText(/租户列表不能被解释成组织树/)).toBeTruthy();
+    expect(within(preview).getByText(/护栏通过不等于获准/)).toBeTruthy();
+    expect(within(preview).queryByRole("button")).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(screen.queryByRole("table", { name: "租户账号列表" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "租户账号" }));
+    expect(screen.getByRole("table", { name: "租户账号列表" })).toBeTruthy();
+  });
+
   it("opens tenant creation in the content area and restores the create action", async () => {
     const { user } = await openAccess(accounts(), iam(), "tenants");
     await user.click(await screen.findByRole("button", { name: "开通租户" }));

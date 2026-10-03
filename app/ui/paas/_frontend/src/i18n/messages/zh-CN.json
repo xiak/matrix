@@ -1662,6 +1662,48 @@
     "tenant": "租户",
     "noTenants": "当前页没有租户",
     "tenantScopeHint": "开通不等于跨租户授权",
+    "tenantManagementSections": "租户与组织治理",
+    "organizationGovernance": {
+      "tab": "组织治理预览",
+      "title": "组织目录与权限护栏",
+      "description": "在多个 Account 之上组织治理边界，但不替代账号内 IAM 授权。",
+      "deferred": "Deferred",
+      "boundary": "IAM-EXT-08 概念预览 · 当前没有组织树、成员 Account 关系、护栏附件或有效上限后端。本页不创建组织节点、不移动账号、不发布策略，也不生成请求号。",
+      "directoryState": "组织目录",
+      "guardrailState": "护栏来源",
+      "evaluationState": "有效上限",
+      "notConnected": "未接入后端",
+      "noAuthoritativeSource": "没有权威 OrganizationGuardrail",
+      "notEvaluated": "未计算",
+      "upperBound": "组织护栏只能收窄权限，不能产生 Allow。账号内 User／Group／Role 仍须通过自己的策略获得授权；任一路径上的显式 Deny 必须优先。",
+      "mustDefine": "启用前必须定义",
+      "stages": {
+        "directory": {
+          "title": "建立稳定的组织层级与成员关系",
+          "detail": "Organization、组织单元与 Account 成员关系必须有稳定 ID、所有者和版本；租户列表不能被解释成组织树。"
+        },
+        "attach": {
+          "title": "把版本化护栏关联到准确节点",
+          "detail": "护栏附件必须绑定准确组织节点和不可变内容版本；普通 Account 管理员不能自行提升或绕过上级边界。"
+        },
+        "inherit": {
+          "title": "沿完整路径计算上限交集",
+          "detail": "有效上限来自根到 Account 的完整路径；所有上限求交集，显式 Deny 优先，缺少任一必要来源时失败关闭。"
+        },
+        "authorize": {
+          "title": "再与账号内授权独立组合",
+          "detail": "护栏通过不等于获准。User、Group、Role 与 Session 仍须得到账号内 Allow，并同时满足权限边界和会话限制。"
+        },
+        "move": {
+          "title": "账号移动必须处理并发与撤销",
+          "detail": "移动成员 Account 会改变完整继承路径；真实实现必须冻结准确版本并证明旧路径不能继续放行新的请求。"
+        },
+        "exceptions": {
+          "title": "封闭 Root 与服务例外",
+          "detail": "Root、平台服务和紧急恢复是否适用或例外必须逐项定义、审计且默认拒绝，不能由前端名称或账号类型猜测。"
+        }
+      }
+    },
     "tenantIdentity": "账户身份",
     "rootIdentityId": "根身份 ID",
     "tenantActive": "正常",
