@@ -6,8 +6,8 @@
 - Updated: 2026-10-04
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `d0dd7166a`
-- Pushed documentation milestone: `056b09bfc`
+- Pushed source/embed milestone: `26412cd32`
+- Pushed documentation milestone: `d556fc869`
 
 ## Authoritative route
 
@@ -29,28 +29,28 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Platform management now
-keeps the live tenant Account directory and the deferred IAM-EXT-08 organization
-governance concept in separate tabs. The concept preview explains a stable
-organization tree, versioned node guardrails, complete-path intersection with
-explicit Deny precedence, independent Account grants, safe Account moves and
-closed Root/service exceptions. Guardrails only narrow an upper bound and never
-create Allow; the current tenant table is not presented as an organization tree.
-It offers no write action and adds no backend resource, state, command,
-repository, HTTP wire, request ID or effective result.
+login verification remains disabled for UX review. An already verified personal
+security notification address now exposes an in-page, read-only replacement
+preview. It explains target-bound step-up, closed verification of the new
+address while the old address remains authoritative, atomic commit with no
+partial state, and closed notifications to both addresses after commit. The
+preview has no inputs or write action and creates no challenge, replacement
+intent, request ID, email delivery or IAM wire; it does not mark the deferred
+replacement capability delivered.
 
-Source and synchronized embed are pushed at `d0dd7166a`; FEAT evidence is
-pushed at `056b09bfc`. The targeted no-command workflow and bilingual message
-tests, typecheck, lint, architecture, 228-pair style checks, 45-route production
-export, 249-file embed equality and repository Go test/vet passed. Desktop and
-`390 × 844` DEV showed the preview without horizontal overflow; the browser had
-no warning/error.
+Source and synchronized embed are pushed at `26412cd32`; FEAT evidence is
+pushed at `d556fc869`. The complete 62-file/1045-test frontend suite, three
+static normalization tests, typecheck, lint, architecture, 228-pair style
+checks, 45-route production export, 249-file embed equality and repository Go
+test/vet passed. Desktop and `390 × 844` DEV showed no horizontal overflow; the
+preview contained only its return action and no generic success feedback.
 
-Earlier cross-account collaboration, Role SSO journey, Access Analyzer recovery
-trust, Account security report, federation replacement, Deployment lifecycle,
-AccessKey carrier, Application tag recovery, service authorization, policy
-compilation/provenance and shared navigation/loading milestones remain owned and
-indexed by FEAT-IAM-010 and FEAT-007; load only the relevant evidence row.
+Earlier organization governance, cross-account collaboration, Role SSO journey,
+Access Analyzer recovery trust, Account security report, federation replacement,
+Deployment lifecycle, AccessKey carrier, Application tag recovery, service
+authorization, policy compilation/provenance and shared navigation/loading
+milestones remain owned and indexed by FEAT-IAM-010 and FEAT-007; load only the
+relevant evidence row.
 
 ## Continuation boundary
 
