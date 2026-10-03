@@ -695,7 +695,7 @@ IAM 工程师随后固定并推送来源 `cb62ed2f6c307f5a50aa27480f89c8c58cf081
 - 来源覆盖严格按 `IAM_PASSWORD_SESSIONS`、`IAM_ACCESS_KEY_AUTHORIZATIONS`、`IAM_ROLE_SESSIONS`、`IAM_ROLE_AUTHORIZATIONS`、`PAAS_RESULTS`、`EXTERNAL_FEDERATION` 排序。前四项只能显示 `INSUFFICIENT_COVERAGE / SOURCE_NOT_READY`，且必须同时给出 `observedFrom` 与 `observedThrough`；后两项只能显示 `NOT_INCLUDED / SOURCE_NOT_IMPLEMENTED`，且不得伪造观测时间。控制台分别解释“证据不足”和“未纳入”，不能把任一状态显示成没有风险、没有使用或扫描完成。
 - Analyzer 配置按当前 Account 展示 `id`、固定 `type=UNUSED_ACCESS`、`resourceVersion`、1–365 天阈值（默认 90）与 `ACTIVE / DISABLED`。隔离 MOCK 的审阅与应用只更新浏览器内版本；真正更新必须调用 IAM `:update` 并携带 `resourceVersion` 做 CAS，不能静默覆盖并发修改。
 - 固定 S4c-a 的 Finding 列表当前必须为空。页面保留的三个未使用访问样例明确标为合成只读 MOCK，只用于验证信息层级与对象跳转；它们没有服务端状态，也不提供归档、重新打开、解决、自动停用或授权变更。`REPORT_ONLY / HUMAN_REVIEW`、Finding 详情与生命周期、自动处置及“扫描完成/没有风险”都不属于本阶段。
-- 定向用例覆盖六项来源顺序和字段不变量、Analyzer 边界、CAS 版本提示、空真实 Finding 与只读合成样例；桌面和 `390 × 844` 均保持内容区交互、无 Dialog、无页面横向溢出。完整共享门禁由 FEAT-007 唯一记录。后端 Verification `37087693606` 在本记录形成时仍处于 queued，因而本节不继承 IAM 后端发布验收，也不把预览标为 LIVE。
+- 定向用例覆盖六项来源顺序和字段不变量、Analyzer 边界、CAS 版本提示、空真实 Finding 与只读合成样例；桌面和 `390 × 844` 均保持内容区交互、无 Dialog、无页面横向溢出。完整共享门禁由 FEAT-007 唯一记录。后端 Verification `37087693606` 的 authority-storage、Go 与 Node process 门禁已成功，但整条 run 仍在进行，因而本节不继承 IAM 后端发布验收，也不把预览标为 LIVE。
 
 公共 UI、生产导出、完整前端及 Go 回归证据只归
 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence)
