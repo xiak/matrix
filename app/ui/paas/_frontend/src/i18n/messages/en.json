@@ -672,7 +672,26 @@
     },
     "start": "Verify first address",
     "resume": "Continue verification",
-    "firstSliceBoundary": "The current design covers only the user's first address. Replacing or removing an existing address requires the current password and target-bound strong proof; this MOCK provides no weaker bypass.",
+    "firstSliceBoundary": "The current live slice covers only the user's first address. Replacing or removing an address requires the current password and target-bound strong proof; the control below is a read-only flow preview and offers no weaker bypass.",
+    "replacement": {
+      "open": "Review safe replacement flow",
+      "title": "Safely replace the notification address",
+      "hint": "The old address keeps receiving security notices until the new address is exactly verified and atomically activated.",
+      "deferred": "Deferred · concept preview",
+      "currentAddress": "Current trusted address",
+      "currentState": "Current state",
+      "targetState": "Preview result",
+      "noChange": "Unchanged · no replacement intent created",
+      "stepsLabel": "Target flow for safely replacing a notification address",
+      "steps": {
+        "reauthenticate": "Reverify the current password and bound authenticator, then bind the step-up proof to the current Account, User, Session, contact revision, and exact replacement intent.",
+        "verifyNew": "Send a closed 8-digit code to the new address and spend independent send and guess budgets. The old address remains authoritative until confirmation.",
+        "commit": "At confirmation, recheck identity, intent, expiry, and contact revision, and switch atomically only when every value still matches. Conflict, expiry, or an unknown result writes no partial state.",
+        "notify": "After commit, send closed notifications tied to the committed fact to both old and new addresses. Existing notifications keep the recipient revision frozen when they were created."
+      },
+      "boundary": "Read-only concept preview: it collects no new address, password, or code; creates no challenge; sends no email; changes no MOCK address; and exposes no administrator override, email sign-in, or MFA-recovery bypass.",
+      "close": "Back to security notifications"
+    },
     "completed": "The security notification address is verified only in this page's MOCK state. Nothing was written to IAM and no real email was sent.",
     "flowTitle": "Verify the first security notification address",
     "flowHint": "Reconfirm the current password, then confirm the 8-digit code sent to the target address.",

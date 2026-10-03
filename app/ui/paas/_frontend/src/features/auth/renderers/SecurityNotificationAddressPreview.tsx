@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { Mail } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, FormField, Input, PasswordInput, Typography } from "@ui/xiak";
@@ -11,7 +11,7 @@ const demonstrationCode = "48392017";
 const demonstrationPassword = "demo-password";
 const contactSteps = ["address", "verify", "complete"] as const;
 
-type ContactStage = "summary" | "address" | "verify";
+type ContactStage = "summary" | "address" | "verify" | "replacement";
 type FocusTarget = "trigger" | "summary" | null;
 
 function ContactProgress({ current }: { current: number }) {
@@ -23,8 +23,9 @@ function ContactProgress({ current }: { current: number }) {
   </ol>;
 }
 
-export function SecurityNotificationAddressPreview({ verifiedAddress: controlledVerifiedAddress, onVerified }: {
+export function SecurityNotificationAddressPreview({ verifiedAddress: controlledVerifiedAddress, onOpenReplacement, onVerified }: {
   verifiedAddress?: string | null;
+  onOpenReplacement?(): void;
   onVerified?(address: string): boolean | void | Promise<boolean | void>;
 } = {}) {
   const t = useTranslations("SecurityNotificationPreview");
@@ -64,6 +65,12 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
     setError(null);
     setCode("");
     setStage(pendingAddress ? "verify" : "address");
+  };
+  const previewReplacement = () => {
+    onOpenReplacement?.();
+    setCompleted(false);
+    setError(null);
+    setStage("replacement");
   };
   const close = () => {
     focusTarget.current = "trigger";
@@ -109,6 +116,8 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
       setConfirming(false);
     }
   };
+
+  if (stage === "replacement" && verifiedAddress) return <NotificationAddressReplacementPreview address={verifiedAddress} headingRef={flowHeading} onClose={close} />;
 
   if (stage === "address") return <Card className={styles.flowCard}>
     <Card.Header><div><h2 className={styles.flowTitle} ref={flowHeading} tabIndex={-1}>{t("flowTitle")}</h2><Typography.Text tone="muted">{t("flowHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
@@ -161,7 +170,33 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
         <div><dt>{t("owner")}</dt><dd>{t("ownerValue")}</dd></div>
         {pendingAddress ? <div><dt>{t("deliveryState")}</dt><dd>{t("deliveryPending")}</dd></div> : null}
       </dl>
-      {verifiedAddress ? <Alert>{t("firstSliceBoundary")}</Alert> : <div className={styles.actions}><Button ref={trigger} onClick={begin}>{t(pendingAddress ? "resume" : "start")}</Button></div>}
+      {verifiedAddress ? <><Alert>{t("firstSliceBoundary")}</Alert><div className={styles.actions}><Button ref={trigger} onClick={previewReplacement} variant="secondary">{t("replacement.open")}</Button></div></> : <div className={styles.actions}><Button ref={trigger} onClick={begin}>{t(pendingAddress ? "resume" : "start")}</Button></div>}
     </Card.Body></Card>
   </section>;
+}
+
+function NotificationAddressReplacementPreview({ address, headingRef, onClose }: {
+  address: string;
+  headingRef: RefObject<HTMLHeadingElement | null>;
+  onClose(): void;
+}) {
+  const t = useTranslations("SecurityNotificationPreview");
+  return <Card className={styles.flowCard}>
+    <Card.Header><div><h2 className={styles.flowTitle} ref={headingRef} tabIndex={-1}>{t("replacement.title")}</h2><Typography.Text tone="muted">{t("replacement.hint")}</Typography.Text></div><Badge status="warning">{t("replacement.deferred")}</Badge></Card.Header>
+    <Card.Body className={styles.flowBody}>
+      <dl className={styles.facts}>
+        <div><dt>{t("replacement.currentAddress")}</dt><dd>{address}</dd></div>
+        <div><dt>{t("replacement.currentState")}</dt><dd>{t("states.VERIFIED")}</dd></div>
+        <div><dt>{t("replacement.targetState")}</dt><dd>{t("replacement.noChange")}</dd></div>
+      </dl>
+      <ol aria-label={t("replacement.stepsLabel")} className={styles.ageFlow}>
+        <li>{t("replacement.steps.reauthenticate")}</li>
+        <li>{t("replacement.steps.verifyNew")}</li>
+        <li>{t("replacement.steps.commit")}</li>
+        <li>{t("replacement.steps.notify")}</li>
+      </ol>
+      <Alert status="warning">{t("replacement.boundary")}</Alert>
+      <div className={styles.flowActions}><Button onClick={onClose} variant="secondary">{t("replacement.close")}</Button></div>
+    </Card.Body>
+  </Card>;
 }
