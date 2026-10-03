@@ -57,6 +57,12 @@ export type AccessAnalysisRulePreview = {
   windowDays: number;
   status: "ACTIVE" | "DISABLED";
   evidence: "SYNTHETIC_COMPLETE_WINDOW";
+  disposition: AccessAnalysisDispositionRulePreview;
+};
+
+export type AccessAnalysisDispositionRulePreview = {
+  mode: "REVIEW_ONLY" | "DISABLE_UNUSED_ACCESS_KEYS";
+  findingDelayDays: number;
 };
 
 export type AccessAnalysisCoverageState = "INSUFFICIENT_COVERAGE" | "NOT_INCLUDED";
@@ -294,7 +300,11 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
       resourceVersion: 3,
       windowDays: 90,
       status: "ACTIVE",
-      evidence: "SYNTHETIC_COMPLETE_WINDOW"
+      evidence: "SYNTHETIC_COMPLETE_WINDOW",
+      disposition: {
+        mode: "REVIEW_ONLY",
+        findingDelayDays: 0
+      }
     }
   };
 }

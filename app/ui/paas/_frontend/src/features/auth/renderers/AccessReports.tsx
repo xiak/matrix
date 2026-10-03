@@ -1,14 +1,15 @@
 "use client";
 
-import { useId, useMemo, useState, type RefObject } from "react";
+import { useMemo, useState, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { ArrowRight } from "lucide-react";
-import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, RadioGroup, Tabs, Typography } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, Tabs, Typography } from "@ui/xiak";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { SessionSummary } from "../domain/session";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { accountSecurityReportLimits, accountSecurityReportLimitViolation, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildAccountSecurityReportDirectoryPreview, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisRulePreview, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type AccountSecurityReportDirectoryEntry, type AccountSecurityReportDirectoryStatus, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
+import { AccessAnalysisDispositionWorkflow, AccessAnalysisRulesPanel, AccessAnalysisRuleWorkflow, type AccessAnalysisRuleSavedKind } from "./AccessAnalysisRulePreview";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -75,49 +76,6 @@ function UnusedFindingLifecycleWorkflow({ finding, nextLifecycle, onBack, onAppl
   </WorkspaceDetail>;
 }
 
-function AccessAnalysisRuleWorkflow({ rule, onBack, onApply }: {
-  rule: AccessAnalysisRulePreview;
-  onBack(): void;
-  onApply(rule: AccessAnalysisRulePreview): void;
-}) {
-  const t = useTranslations("IamWorkspace.accessAnalysis.rule");
-  const id = useId();
-  const [step, setStep] = useState<"edit" | "review">("edit");
-  const [windowValue, setWindowValue] = useState(String(rule.windowDays));
-  const [status, setStatus] = useState(rule.status);
-  const windowDays = Number(windowValue);
-  const invalidWindow = !/^\d+$/.test(windowValue) || !Number.isInteger(windowDays) || windowDays < 1 || windowDays > 365;
-  const next = () => { if (!invalidWindow) setStep("review"); };
-  const apply = () => onApply({ ...rule, resourceVersion: rule.resourceVersion + 1, windowDays, status });
-
-  return <WorkspaceDetail title={t(step === "edit" ? "editTitle" : "reviewTitle")} onBack={step === "review" ? () => setStep("edit") : onBack}>
-    <Alert status="info">{t("workflowBoundary")}</Alert>
-    {step === "edit" ? <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>{t("configuration")}</Typography.Title><Typography.Text tone="muted">{t("configurationHint")}</Typography.Text></div><Badge status="warning">{t("mock")}</Badge></Card.Header>
-      <Card.Body className={styles.detail}>
-        <FormField id={`${id}-window`} label={t("window")} hint={t("windowHint")} error={invalidWindow ? t("windowInvalid") : undefined}><Input id={`${id}-window`} required type="number" min={1} max={365} step={1} invalid={invalidWindow} aria-describedby={`${id}-window-hint${invalidWindow ? ` ${id}-window-error` : ""}`} value={windowValue} onChange={(event) => setWindowValue(event.target.value)} /></FormField>
-        <RadioGroup label={t("status")} value={status} onValueChange={(value) => setStatus(value as AccessAnalysisRulePreview["status"])} options={(["ACTIVE", "DISABLED"] as const).map((value) => ({ value, label: t(`statuses.${value}`) }))} />
-        <Alert status="warning">{t("sourceGate")}</Alert>
-      </Card.Body>
-      <Card.Footer><div className={styles.actions}><Button disabled={invalidWindow} onClick={next}>{t("review")}</Button><Button variant="secondary" onClick={onBack}>{t("cancel")}</Button></div></Card.Footer>
-    </Card> : <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>{t("reviewSummary")}</Typography.Title><Typography.Text tone="muted">{t("reviewHint")}</Typography.Text></div><Badge status="warning">{t("sessionOnly")}</Badge></Card.Header>
-      <Card.Body className={styles.detail}>
-        <dl className={styles.facts}>
-          <div><dt>{t("account")}</dt><dd><code>{rule.accountId}</code></dd></div>
-          <div><dt>{t("analyzerId")}</dt><dd><code>{rule.id}</code></dd></div>
-          <div><dt>{t("analyzerType")}</dt><dd><code>{rule.type}</code></dd></div>
-          <div><dt>{t("nextResourceVersion")}</dt><dd>{rule.resourceVersion + 1}</dd></div>
-          <div><dt>{t("window")}</dt><dd>{t("days", { count: windowDays })}</dd></div>
-          <div><dt>{t("status")}</dt><dd>{t(`statuses.${status}`)}</dd></div>
-        </dl>
-        <Alert status="warning">{t("applyBoundary")}</Alert>
-      </Card.Body>
-      <Card.Footer><div className={styles.actions}><Button onClick={apply}>{t("applyMock")}</Button><Button variant="secondary" onClick={() => setStep("edit")}>{t("backToEdit")}</Button></div></Card.Footer>
-    </Card>}
-  </WorkspaceDetail>;
-}
-
 export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: {
   workspace?: AccessWorkspace;
   scene: AccountAccessScene;
@@ -128,9 +86,9 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
   const [section, setSection] = useState<"external" | "unused" | "rule">("external");
   const [selectedTrustEntry, setSelectedTrustEntry] = useState<AccessAnalysisTrustEntry | null>(null);
   const [selectedUnusedFinding, setSelectedUnusedFinding] = useState<UnusedAccessFindingPreview | null>(null);
-  const [editingRule, setEditingRule] = useState(false);
+  const [editingRule, setEditingRule] = useState<AccessAnalysisRuleSavedKind | null>(null);
   const [ruleOverride, setRuleOverride] = useState<AccessAnalysisRulePreview | null>(null);
-  const [ruleSaved, setRuleSaved] = useState(false);
+  const [ruleSaved, setRuleSaved] = useState<AccessAnalysisRuleSavedKind | null>(null);
   const [unusedReviewOverrides, setUnusedReviewOverrides] = useState<Record<string, UnusedFindingReviewOverride[]>>({});
   const [unusedTransition, setUnusedTransition] = useState<UnusedFindingReviewOverride["lifecycle"] | null>(null);
   const [unusedTransitionNotice, setUnusedTransitionNotice] = useState<{ key: string; lifecycle: UnusedFindingReviewOverride["lifecycle"] } | null>(null);
@@ -186,7 +144,9 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
     </Card>
   </WorkspaceDetail>;
 
-  if (editingRule && rule) return <AccessAnalysisRuleWorkflow rule={rule} onBack={() => setEditingRule(false)} onApply={(next) => { setRuleOverride(next); setRuleSaved(true); setEditingRule(false); setSection("rule"); }} />;
+  if (editingRule === "analyzer" && rule) return <AccessAnalysisRuleWorkflow rule={rule} onBack={() => setEditingRule(null)} onApply={(next) => { setRuleOverride(next); setRuleSaved("analyzer"); setEditingRule(null); setSection("rule"); }} />;
+
+  if (editingRule === "disposition" && rule) return <AccessAnalysisDispositionWorkflow rule={rule} onBack={() => setEditingRule(null)} onApply={(next) => { setRuleOverride(next); setRuleSaved("disposition"); setEditingRule(null); setSection("rule"); }} />;
 
   if (unusedTransition && selectedUnused) return <UnusedFindingLifecycleWorkflow finding={selectedUnused} nextLifecycle={unusedTransition} onBack={() => setUnusedTransition(null)} onApply={(nextLifecycle) => {
     const key = unusedFindingKey(selectedUnused);
@@ -298,23 +258,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           footerNote={t("unused.directoryHint")} />
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="rule">
-        {ruleSaved ? <Alert status="success">{t("rule.saved", { version: rule?.resourceVersion ?? 0 })}</Alert> : null}
-        {rule ? <Card>
-          <Card.Header><div><Typography.Title as="h2" level={3}>{t("rule.title")}</Typography.Title><Typography.Text tone="muted">{t("rule.hint")}</Typography.Text></div><Badge status="warning">{t("rule.mock")}</Badge></Card.Header>
-          <Card.Body className={styles.detail}>
-            <dl className={styles.facts}>
-              <div><dt>{t("rule.account")}</dt><dd><code>{rule.accountId}</code></dd></div>
-              <div><dt>{t("rule.analyzerId")}</dt><dd><code>{rule.id}</code></dd></div>
-              <div><dt>{t("rule.analyzerType")}</dt><dd><code>{rule.type}</code></dd></div>
-              <div><dt>{t("rule.resourceVersion")}</dt><dd>{rule.resourceVersion}</dd></div>
-              <div><dt>{t("rule.window")}</dt><dd>{t("rule.days", { count: rule.windowDays })}</dd></div>
-              <div><dt>{t("rule.status")}</dt><dd><Badge status={rule.status === "ACTIVE" ? "success" : "neutral"}>{t(`rule.statuses.${rule.status}`)}</Badge></dd></div>
-              <div><dt>{t("rule.evidence")}</dt><dd>{t(`rule.evidenceStates.${rule.evidence}`)}</dd></div>
-            </dl>
-            <Alert status="warning">{t("rule.noBackgroundWorker")}</Alert>
-          </Card.Body>
-          <Card.Footer><Button variant="secondary" onClick={() => { setRuleSaved(false); setEditingRule(true); }}>{t("rule.edit")}</Button></Card.Footer>
-        </Card> : null}
+        {rule ? <AccessAnalysisRulesPanel rule={rule} saved={ruleSaved} onEditAnalyzer={() => { setRuleSaved(null); setEditingRule("analyzer"); }} onEditDisposition={() => { setRuleSaved(null); setEditingRule("disposition"); }} /> : null}
       </Tabs.Content>
     </Tabs.Root>
   </>;

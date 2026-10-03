@@ -4193,7 +4193,8 @@ describe("CAM-style access workspace", () => {
       resourceVersion: 3,
       windowDays: 90,
       status: "ACTIVE",
-      evidence: "SYNTHETIC_COMPLETE_WINDOW"
+      evidence: "SYNTHETIC_COMPLETE_WINDOW",
+      disposition: { mode: "REVIEW_ONLY", findingDelayDays: 0 }
     });
     expect(() => buildAccessAnalysisPreview(workspace, { ...scene, accountId: "org-foreign" })).toThrow("INVALID_IAM_TENANT");
     const onNavigate = vi.fn();
@@ -4330,6 +4331,30 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "应用 MOCK 规则" }));
     expect(screen.getByText(/MOCK Analyzer 已更新到资源版本 4/)).toBeTruthy();
     expect(screen.getByText("365 天")).toBeTruthy();
+    expect(screen.getByText("自动处置规则")).toBeTruthy();
+    expect(screen.getByText("REVIEW_ONLY")).toBeTruthy();
+    expect(screen.getByText(/User 与 Role 仍然只报告/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "配置自动处置（MOCK）" }));
+    expect(screen.getByText(/此流程只验证显式 opt-in/)).toBeTruthy();
+    expect(screen.getByText(/普通 Analyzer 更新权限不能顺带开启写效果/)).toBeTruthy();
+    await user.click(screen.getByRole("radio", { name: "自动停用闲置访问密钥" }));
+    const delay = screen.getByRole("spinbutton", { name: "Finding 观察宽限期" });
+    await user.clear(delay);
+    await user.type(delay, "31");
+    expect(screen.getByText("请输入 1–30 的整数天数。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "下一步：审阅" }).getAttribute("disabled")).not.toBeNull();
+    await user.clear(delay);
+    await user.type(delay, "7");
+    await user.click(screen.getByRole("button", { name: "下一步：审阅" }));
+    expect(screen.getByRole("heading", { name: "审阅自动处置规则" })).toBeTruthy();
+    expect(screen.getByText("UNUSED_ACCESS_KEY")).toBeTruthy();
+    expect(screen.getByText("DISABLE_ACCESS_KEY")).toBeTruthy();
+    expect(screen.getByText(/Finding 也不是处置许可/)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "应用 MOCK 自动处置规则" }));
+    expect(screen.getByText(/MOCK 自动处置规则已更新到资源版本 5/)).toBeTruthy();
+    expect(screen.getAllByText("DISABLE_UNUSED_ACCESS_KEYS").length).toBeGreaterThan(0);
+    expect(screen.getByText("iam.access-analyzer.set-disposition")).toBeTruthy();
 
     await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
     await user.click(within(screen.getByRole("table", { name: "未使用访问发现样例" })).getByRole("button", { name: "lin" }));
