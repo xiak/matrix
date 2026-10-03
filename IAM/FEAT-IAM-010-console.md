@@ -218,19 +218,19 @@ LIVE 成员入口只用当前 USER bearer 发现其本人的可承担 Role；Acc
 
 ### 访问密钥生命周期的契约对齐体验
 
-访问密钥体验以 IAM-007 固定来源 `644fff09446fc8ffb003cc53cf2fb55d4f58828a` 为 LIVE HTTP 接入依据。它只管理 same-account 非 Root User 的长期编程凭据，不与登录会话、RoleSession、服务身份或 Account Root 混用。入口先选择 User，再读取该 User 的密钥；控制台不能为了方便伪造一个后端并不存在的 Account 全局密钥目录。
+访问密钥体验以 IAM-007 当前固定来源 `91649497a0c53be1174d8835326a2df51fe74a55` 为 LIVE HTTP 接入依据，其中来源网络与授权观测的生产契约由 `472596b1edf5fc0fa3f908294bae0624d581dc4f` 引入；精确源码的 Verification `37106511260` 已完成且 15 个任务全部成功。它只管理 same-account 非 Root User 的长期编程凭据，不与登录会话、RoleSession、服务身份或 Account Root 混用。入口先选择 User，再读取该 User 的密钥；控制台不能为了方便伪造一个后端并不存在的 Account 全局密钥目录。
 
 每个 User 最多拥有两个未删除密钥，`ENABLED` 与 `DISABLED` 都计入上限。推荐轮换顺序固定为“创建第二把 → 外部验证工作负载 → 停用旧密钥 → 删除旧密钥”；删除不可恢复且只允许删除已停用密钥。密码变更、退出登录或会话撤销都不能显示成会自动停用或删除访问密钥。
 
 创建和重新启用只对 `ACTIVE` 且没有强制改密状态的 User 开放；这些状态仍不阻止具有精确能力的操作者读取、停用或删除既有密钥。LIVE 客户端必须消费 AccessKey 专属 `ActionCapability` 与平台保护事实，不能从 User 列表/读取能力、显示名称或 `enabled` 状态推断密钥管理权限。
 
-Secret 只在创建结果明确为 `APPLIED` 时展示一次，并在确认离开后从 DOM 与页面状态移除。网络或 5xx 导致结果未知时必须把原 owner 与 requestId 作为共享未决意图保留；`UNKNOWN` 不包含也不要求客户端尚不知道的 keyId。切换 User、返回目录、组件重新挂载或生成新 requestId 均不能绕过。原 owner/requestId 的完成映射不可覆盖；相同创建请求的重放不能创建第二把密钥或重发 Secret。by-request 查询的 `NOT_FOUND` 与暂不可用都继续保持 `UNKNOWN`，只有可核对的已提交结果才揭示非秘密 keyId。查询若确认已创建但 Secret 已丢失，先停用并删除该密钥，之后才允许创建新意图。初次创建元数据重放只证明原结果，不证明密钥当前可用。当前固定契约没有可靠的最近使用证据，因此页面不能制造 last-used 时间、活跃工作负载或“可安全删除”结论。
+Secret 只在创建结果明确为 `APPLIED` 时展示一次，并在确认离开后从 DOM 与页面状态移除。网络或 5xx 导致结果未知时必须把原 owner、规范化后的 `networkRestrictions` 与 requestId 作为共享未决意图保留；`UNKNOWN` 不包含也不要求客户端尚不知道的 keyId。切换 User、返回目录、组件重新挂载或生成新 requestId 均不能绕过。原 owner/requestId 的完成映射不可覆盖；相同创建请求的重放不能创建第二把密钥或重发 Secret。by-request 查询的 `NOT_FOUND` 与暂不可用都继续保持 `UNKNOWN`，只有可核对的已提交结果才揭示非秘密 keyId。查询若确认已创建但 Secret 已丢失，先停用并删除该密钥，之后才允许创建新意图。初次创建元数据重放只证明原结果，不证明密钥当前可用。页面只显示固定 `usage.observedAt` 和可选 `lastAuthorization`，不把它们改称 last-used、活跃工作负载或“可安全删除”结论。
 
-### 访问密钥网络治理与授权观测的隔离体验
+### 访问密钥网络治理与授权观测
 
-公有云常见的长期凭据治理需要把账号统一底线、单把密钥的进一步收紧和请求时授权重新求值分开呈现。IAM-007 已提供后继固定候选 `4e79ef783410bbb596232763a9be80412b5e0846`，但其独立 CI 与明确可消费确认仍未完成，因此本片继续只在显式 DEV 体验仓库中建模，不添加 LIVE repository、HTTP decoder、Action 或 wire；候选通过独立门禁后必须用其正式对象替换预览形状，而不是保留并行兼容模型。
+公有云常见的长期凭据治理需要把账号统一底线、单把密钥的进一步收紧和请求时授权重新求值分开呈现。固定来源 `91649497a0c53be1174d8835326a2df51fe74a55` 已把这些事实纳入当前 wire：每个密钥必须带 `networkRestrictions` 与 `usage`，账号安全设置必须带完整 password、session 与 access-key-network 三段，密钥网络更新使用独立 `iam.access-key.set-network-restrictions` 能力和专用 PUT 路由。LIVE 严格消费该契约；显式 DEV 仓库保留同一信息架构用于随时验收，不再维护一套候选对象或兼容形状。
 
-账号层和密钥层分别保存完整 `allowedSourceCidrs` 列表：空列表表示该层不限制；两层按 AND 合并，同一层多个 CIDR 按 OR 匹配。`0.0.0.0/0` 只覆盖 IPv4，`::/0` 只覆盖 IPv6，两者都不等于空列表。编辑是全量替换而不是追加；最多接受 16 个严格规范、去重、排序后的 IPv4/IPv6 网络，拒绝带主机位的网络、zone、IPv4-mapped IPv6、非规范前导零和重复项。账号层属于完整账号安全设置，复用其资源版本、本人因子、专用 step-up 和变更后重新登录边界；密钥层属于准确 AccessKey，使用该密钥资源版本与未来独立网络限制动作，不能借用启停命令。无变化审阅不允许提交。
+账号层和密钥层分别保存完整 `allowedSourceCidrs` 列表：空列表表示该层不限制；两层按 AND 合并，同一层多个 CIDR 按 OR 匹配。`0.0.0.0/0` 只覆盖 IPv4，`::/0` 只覆盖 IPv6，两者都不等于空列表。编辑是全量替换而不是追加；最多接受 16 个严格规范、去重、排序后的 IPv4/IPv6 网络，拒绝带主机位的网络、zone、IPv4-mapped IPv6、非规范前导零和重复项。账号层属于完整账号安全设置，复用其资源版本、本人因子、专用 step-up 和变更后重新登录边界；密钥页只读取这层事实。密钥层属于准确 AccessKey，使用该密钥资源版本与独立网络限制动作，不能借用启停命令；无变化审阅不允许提交。
 
 创建流程在一个意图中冻结准确 User、User 资源版本、规范化后的密钥层 `networkRestrictions` 与 requestId，并把密钥和其来源网络边界作为同一创建结果提交；UI 不先创建无限制密钥再补写限制。同一 requestId 只能精确重放原意图，版本或 CIDR 改变时失败关闭。响应丢失继续显示被冻结的版本和两层来源范围，只能恢复非秘密 keyId，不能补发 Secret。
 
@@ -242,7 +242,7 @@ Secret 只在创建结果明确为 `APPLIED` 时展示一次，并在确认离�
 
 真实策略新建、版本读取、发布、切默认与退休已有前端客户端，JSON 与当前目录驱动的可视化作者也已有行为测试，但仍需与固定 IAM 进程完成浏览器联调；当前目录元数据和边界引用不能替代这些权威结果。Action 家族、跨资源类型多 Action 可视化、更多云产品条件与资源挑选尚未纳入 LIVE 表单；现有 DEV 创建策略四路径仍是隔离 MOCK 体验，不构成 IAM 当前发布能力。只读权限能力目录客户端同样仍需真实进程浏览器验收；产品声明管理不是租户策略功能。
 
-Role 管理 list/read/create、管理员 RoleSession list/read/revoke，以及成员可承担角色发现、AssumeRole、当前 Role 身份、签发结果 by-request 恢复/撤销和 Role logout 的固定 LIVE 客户端已经完成，但仍需真实 IAM 进程浏览器联调；Role update/status/delete、trust 与 policy attachment 变更和权限边界仍待各自固定契约接入。恢复码再生成的固定 LIVE 客户端已经完成，但仍需固定 IAM 进程验证 step-up、一次性秘密交付和重新登录查询闭环；账号安全规则仍是隔离 MOCK，不能从纯设计契约推导 LIVE 写入。SSO 与其余登录安全专项按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
+Role 管理 list/read/create、管理员 RoleSession list/read/revoke，以及成员可承担角色发现、AssumeRole、当前 Role 身份、签发结果 by-request 恢复/撤销和 Role logout 的固定 LIVE 客户端已经完成，但仍需真实 IAM 进程浏览器联调；Role update/status/delete、trust 与 policy attachment 变更和权限边界仍待各自固定契约接入。恢复码再生成的固定 LIVE 客户端已经完成，但仍需固定 IAM 进程验证 step-up、一次性秘密交付和重新登录查询闭环；账号安全设置当前读取要求完整 password、session 与 access-key-network 三段，但账号设置页尚未开放网络写入体验。SSO 与其余登录安全专项按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理、网络限制和授权观测契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
 
 ## 验收
 
@@ -573,35 +573,18 @@ LIVE 仍固定为 `LIVE · NOT_CONNECTED`，但接入边界不再只给空状态
 - 2026-09-30 已推送 [`c0ad4901`](https://github.com/xiak/matrix/commit/c0ad4901)：来源身份、可承担角色标题和承担边界说明现在同步呈现，只有角色卡目录使用延迟骨架。初次目录失败保留当前 USER 身份和同一内容结构，明确没有创建 RoleSession，并提供原位重试；有已验证目录时的后续错误继续保留该目录。受控延迟和 503→重试用例证明固定结构不会被 `PageSkeleton` 整块替换，也不会提前出现承担操作。完整前端门禁现为 50 文件/842 条用例及三条静态归一化，类型/lint/架构/228 组主题对比、41 页导出、嵌入同步及全仓 Go test/vet 通过。`390 × 844` DEV MOCK 共用布局的 document/body/viewport 均为 390px 且 warning/error 为空；该浏览器观察不冒充 LIVE 延迟或故障注入验收。
 - 本证据接受固定 LIVE 客户端、身份切换与恢复状态机、响应式信息架构和 MOCK 保留；尚未以真实 IAM 进程完成承担、产品请求、logout/来源恢复或故障注入的浏览器闭环，也不接受 Role 管理写入、跨账号、角色链、服务身份或 SSO。
 
-### 访问密钥生命周期的开发验收证据
+### 访问密钥生命周期、网络治理与授权观测的开发验收证据
 
-2026-09-21，LIVE 前端适配固定在已推送的
-[`bd8b28d70d105f2994ab62bf5c2e0c83644d1975`](https://github.com/xiak/matrix/commit/bd8b28d70d105f2994ab62bf5c2e0c83644d1975)，
-契约来源为本文件记录的 IAM-007 固定提交。隔离 MOCK 体验最初固定在
-[`35a59d936dabff0c0a01a4aa9cfb307e48cef558`](https://github.com/xiak/matrix/commit/35a59d936dabff0c0a01a4aa9cfb307e48cef558)，并继续作为显式预览保留。
+2026-10-04，当前访问密钥网络治理、授权观测与同步嵌入资源固定在已推送的
+[`63b4643bc`](https://github.com/xiak/matrix/commit/63b4643bc)。IAM 固定消费源为
+[`91649497a0c53be1174d8835326a2df51fe74a55`](https://github.com/xiak/matrix/commit/91649497a0c53be1174d8835326a2df51fe74a55)，其精确 [Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260) 已完成且 15 个任务全部成功；本提交用正式对象替换此前仅用于预览的候选形状，没有保留并行兼容模型。
 
-- Account 级伪全局密钥表被替换为 User 选择与每用户密钥目录；Root 不作为候选。目录只展示密钥 ID、User、状态、创建时间和资源版本，明确显示当前没有可靠的最近使用证据，也没有伪造工作负载活跃性或安全删除结论。
-- 创建、停用/启用与删除均在内容区完成，不打开 Dialog。创建审阅固定展示 User revision 和 requestId；Secret 只在明确成功时一次展示，确认后从 DOM 与页面状态移除。删除要求目标已停用并再次确认不可恢复边界。
-- 创建和重新启用同时要求 User 为 `ACTIVE` 且不处于强制改密；这不阻止对已有密钥执行防御性的读取、停用或删除。页面明确保留 AccessKey 专属 ActionCapability 与平台保护的 LIVE 边界，不从用户目录能力或显示属性推断管理权。
-- 可执行的“响应丢失”路径只把 owner 与原 requestId 保存在共享 workspace 未决意图中，不存储或要求未知 keyId；页面跳转、组件重新挂载、返回目录、切换 User 与新 requestId 都不能绕过。owner/requestId 映射只写一次，相同创建请求的重放不增加密钥也不重新交付 Secret。原请求查询可切换“已找到、暂未找到、暂不可用”三种验收场景；后两种保留 UNKNOWN 与创建锁，只有已找到才揭示非秘密 keyId。若密钥已经存在但 Secret 不可恢复，必须先停用和删除该密钥，之后才解除全局创建锁。
-- 轮换指导固定为“创建第二把 → 外部验证 → 停用旧密钥 → 删除旧密钥”，并明确密码修改、退出登录、会话撤销与访问密钥生命周期相互独立，产品 PEP 尚未接入。
-- LIVE 仓库严格消费每用户 list/read/create/set-status/delete 路由，不发送客户端 Account selector；响应必须精确匹配 Account、User、AccessKey、资源版本、排序和每个 ActionCapability 的资源绑定。Secret 只接受首次 `APPLIED`，`EQUAL_REPLAY` 携带 Secret、额外字段、错误资源或非法版本全部失败关闭。Provider 只在真实仓库存在、Account 一致且当前场景拥有用户目录时开放客户端；401 仅过期发起请求的会话，其他真实失败不会转入 MOCK。
-- LIVE 页面与 MOCK 使用相同的每用户信息架构，但为独立实现：固定标题、边界说明与轮换指导立即呈现，仅密钥数据区显示局部加载；创建、状态和删除都留在内容区。创建发出前，Provider 按 Account 与操作者保留原 User、User revision 和 requestId 的非秘密意图，并以 tab 会话存储保守延续到页面重载；切页、换 User、重挂载与重新登录同一操作者都不能开启新意图。未知结果只能由操作者显式以原参数重试；当前 IAM-007 固定管理契约没有 by-request 查询，LIVE 不伪装成可查询。`EQUAL_REPLAY` 只显示非秘密创建事实，不说明密钥当前可用。首次 `APPLIED` 的 Secret 只在当前内容组件内存展示一次，确认保存才清除创建锁；若在确认前离开，Secret 不恢复，锁转为已定位密钥的处置引导，须明确停用并删除该密钥后才能再创建。旧会话的迟到响应不能修改新会话状态，403 等真实失败不会回退 MOCK。
-- 2026-09-29 增量验证：原请求跨内容组件卸载、页面重载、同一操作者重新登录的锁定与精确重试、换 User/新 requestId 拦截、`APPLIED` 一次性 Secret 确认后清锁及确认前离页的保守处置均由定向用例通过。完整前端和嵌入门禁见 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence)；本片仍未以真实 IAM 进程完成 AccessKey 浏览器与发布验收。
-- 完整前端 41 个测试文件、629 条用例与三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价、`go test ./...` 及 `go vet ./...` 通过。显式 MOCK DEV 在 `390 × 844` 验证每用户目录与详情仍可检查、无 Dialog，document/body 均满足 `clientWidth == scrollWidth == 390`，控制台 warning/error 为空。
-- 当前证据接受固定 LIVE 客户端、隔离 MOCK 可检查性与静态宿主一致性；尚未以真实 IAM 进程执行 per-User Secret 交付、状态变更、删除及冲突/不确定结果的浏览器验收，也不表示外部工作负载验证或产品鉴权执行点已经接入。
-
-### 访问密钥网络治理预览的开发验收证据
-
-2026-10-04，当前访问密钥安全观测投影与同步嵌入资源固定在已推送的
-[`f95afe394`](https://github.com/xiak/matrix/commit/f95afe394)。它在 2026-10-02 的
-[`05fe4a74c`](https://github.com/xiak/matrix/commit/05fe4a74c) 网络治理预览基础上替换目录信息层级，不新增 AccessKey wire、Action、写按钮或平行领域对象。
-
-- 每 User 密钥目录稳定显示 Access key ID、启停状态、创建时间、密钥资源版本与“安全观测”。隔离 MOCK 的可信网络摘要只由既有账号层和密钥层 `networkRestrictions` 推导为“账号 + 密钥”“仅账号层”“仅密钥层”或“无附加限制”；使用证据只在既有 `lastAuthorization` 存在时显示“有历史观测”，缺失时保持“未知”。目录不显示 last-used 时间，不把缺失记录翻译成从未使用、闲置、健康或可安全删除。
-- LIVE 当前每 User 管理契约只返回非秘密密钥元数据和 ActionCapability，不包含可信网络配置或使用证据。相同目录位置明确显示“当前接口未提供”，详情说明未知不代表未配置、未使用或可安全删除；客户端不从策略、状态、创建时间或浏览器网络猜测这两个事实。固定契约将来提供受信只读字段时，应替换该未知态，而不是新增并行模型。
-- 账号层和密钥层仍分别保存完整 `allowedSourceCidrs`：空列表表示该层不限制；两层按 AND 合并、同层多项按 OR 匹配。纯领域解析器统一执行最多 16 项、严格网络地址、规范化、去重与排序；创建意图冻结准确 User 资源版本、requestId 与规范网络限制，响应未知时保持原意图。密钥详情的 Allow/Reject 历史仍只是观测事实，不转换成当前 permit、健康状态、在线状态或删除建议；样例只使用保留测试网段，不读取浏览器 IP。
-- 完整 Vitest 62 个文件、1042 条用例与三条静态归一化用例通过；受影响的密钥目录与 LIVE 用例 203 条再次通过。类型、lint、架构和 228 组主题对比、45 路由生产导出、249 个 Go 嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 均通过。桌面 DEV 实看新增列保持双行紧凑摘要；`390 × 844` 下五个字段按公共 Table 规则堆叠，document/body/client/scroll 宽度均为 390，浏览器 warning/error 为空。
-- IAM-007 后继固定候选 `4e79ef783410bbb596232763a9be80412b5e0846` 的历史状态仍只证明候选源与部分独立门禁；本片不据此新增 LIVE 网络或使用观测字段，也不接受真实 IAM 写入、来源网络执行、实时授权状态或产品 PEP 验收。真实字段、固定源码、终态独立 CI 与浏览器联调仍须由 IAM-007 所有者确认。
+- Account 级伪全局目录已被替换为 User 选择与每 User 密钥目录，Root 不作为候选。创建、启停、删除和网络限制审阅都在内容区完成；创建冻结 User revision、规范化网络限制和 requestId，Secret 只在首次 `APPLIED` 时展示一次。未知结果、相等重放、确认前离页和已定位但 Secret 丢失继续沿用同一保守锁定，不会通过切页、换 User 或新 requestId 绕过。轮换指导保持“创建第二把 → 外部验证 → 停用旧密钥 → 删除旧密钥”，且密码、登录会话和密钥生命周期互不替代。
+- 每 User 密钥目录稳定显示 Access key ID、启停状态、创建时间、密钥资源版本与“安全观测”。LIVE 与隔离 MOCK 都只由账号层和密钥层 `networkRestrictions` 推导“账号 + 密钥”“仅账号层”“仅密钥层”或“无附加限制”；账号设置独立加载失败时保留密钥层已知事实并把账号层标为未知，不以整页骨架或假“无限制”覆盖内容。使用证据只在 `lastAuthorization` 存在时显示历史观测，缺失时保持“在保留的 IAM 证据中未知”。
+- 严格 LIVE repository 要求密钥返回 `networkRestrictions` 与 `usage.observedAt`，可选 `lastAuthorization` 必须满足时间顺序、产品/Action 前缀及规范单播来源 IP；未知、额外、重复或越界字段整体失败关闭。目录和详情不显示 last-used，不把缺失记录翻译成从未使用、闲置、健康或可安全删除；历史 Allow/Deny 也不转换成当前 permit、业务成功或资源创建结果。
+- 账号层和密钥层分别保存完整 `allowedSourceCidrs`：空列表表示该层不限制；两层按 AND 合并、同层多项按 OR 匹配。纯领域解析器统一执行最多 16 项、严格网络地址、规范化、去重与排序。创建意图冻结准确 User 资源版本、requestId 与规范网络限制，响应未知时保持原意图；密钥网络编辑在内容区完成，使用独立资源版本、请求 ID 与 `iam.access-key.set-network-restrictions`，不打开 Dialog、不复用启停动作。当前账号安全设置响应要求 password、session 与 access-key-network 三段完整存在；历史完成记录允许保留当时缺失的新字段，但不能冒充当前设置。
+- 完整 Vitest 62 个文件、1046 条用例与三条静态归一化用例通过；类型、lint、架构和 228 组主题对比、45 路由生产导出、249 个 Go 嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 均通过。桌面 DEV 实看目录与详情保持清晰层级；`390 × 844` 下 document/body 的 client/scroll 宽度均为 390，标题动作收进更多菜单，来源网络卡片纵向堆叠。重新加载当前构建后浏览器 warning/error 为空。
+- 本片接受固定 wire、严格客户端、内容区交互、隔离 MOCK 可检查性和静态宿主一致性；尚未以真实 IAM 进程执行来源网络写入、创建的一次性 Secret、冲突/不确定结果及账号级 step-up 浏览器闭环，也不接受来源网络在产品 PEP 的执行、实时授权状态或云产品 AccessKey 可用性。
 
 ### 本人安全通知地址的开发验收证据
 
