@@ -28,6 +28,12 @@
 .flowActions { justify-content: flex-end; }
 .policyForm > p { margin: -8px 0 0 28px; color: var(--xiak-color-text-muted); line-height: 1.7; }
 .ageFlow { display: grid; gap: var(--xiak-spacing-tight); margin: 0; padding-inline-start: var(--xiak-spacing-roomy); color: var(--xiak-color-text-base); line-height: var(--xiak-line-height-body); }
+.stateGuide { display: grid; gap: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); padding-top: var(--xiak-spacing-default); }
+.stateGuide h4 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-semibold); }
+.stateGuide p { margin: var(--xiak-spacing-narrow) 0 0; color: var(--xiak-color-text-muted); line-height: var(--xiak-line-height-body); }
+.stateGuide ul { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; padding: 0; list-style: none; }
+.stateGuide li { display: grid; align-content: start; gap: var(--xiak-spacing-tight); min-width: 0; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-default); }
+.stateGuide li > span:last-child { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
 .ruleFields { display: grid; min-width: 0; gap: var(--xiak-spacing-default); margin: 0; border: 0; padding: 0; }
 .ruleFields legend { margin-bottom: var(--xiak-spacing-default); color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-medium); }
 .ruleNumber { max-width: 180px; }
@@ -84,4 +90,5 @@
   .steps small, .contactSteps small { display: none; }
   .codes { grid-template-columns: 1fr; }
   .facts > div { grid-template-columns: 1fr; gap: 4px; }
+  .stateGuide ul { grid-template-columns: 1fr; }
 }
