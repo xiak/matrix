@@ -2315,15 +2315,15 @@
     },
     "detail": {
       "title": "服务授权模板",
-      "eyebrow": "待审阅模板",
-      "hint": "核对示例服务身份、单一用途和资源权限范围；这些内容尚未成为可授权模板。",
-      "trustLabel": "服务身份",
-      "trustTitle": "正式授权必须验证服务主体登记",
-      "trustHint": "callingService 或普通服务名称不是客户委派凭据；未来仍需校验实际工作负载、用途和目标账号。",
+      "eyebrow": "固定契约样例",
+      "hint": "先审阅产品发布的模板能力，再从具体资源进入账号同意。模板本身不包含目标账号、服务主体实例或业务资源。",
+      "trustLabel": "发布校验边界",
+      "trustTitle": "产品与服务用途必须匹配受信声明",
+      "trustHint": "模板只固定 product、service purpose、workload Action 和权限上限；具体服务主体、目标账号和资源必须在后续同意时重新验证。",
       "permissionLabel": "权限快照",
       "permissionHint": "未来的客户同意应绑定受控发布的精确模板内容；目录或模板升版不得自动扩大既有授权。",
-      "snapshotBoundary": "这份示意快照不引用租户可编辑策略；模板摘要与权限上限摘要仅用于演示固定读取形状，不是 IAM 发布记录或客户同意证明。",
-      "snapshotTitle": "示例权限动作",
+      "snapshotBoundary": "这份 MOCK 使用固定模板词汇，但摘要仍是隔离样例。权限上限覆盖目标账号内声明类型的资源，精确业务资源必须由独立 WorkloadRoleBinding 和产品 PEP 共同收窄。",
+      "snapshotTitle": "权限上限动作",
       "snapshotCount": "{count} 条声明",
       "ordinaryRole": "现有 PipelineDeploymentRole 是普通工作负载角色，不是本服务授权的既有实例；本页不会把普通角色或租户策略冒充为已发布的服务模板。",
       "review": "审阅服务授权",
@@ -2333,6 +2333,7 @@
     "fields": {
       "product": "云产品",
       "purpose": "业务用途",
+      "servicePurpose": "受信服务用途",
       "policySnapshot": "权限快照",
       "templateState": "平台模板状态",
       "accountState": "当前账号状态",
@@ -2350,6 +2351,9 @@
       "policyId": "权限上限策略 ID",
       "policyVersion": "权限上限策略版本",
       "workloadKinds": "允许的工作负载类型",
+      "supportedWorkload": "支持的工作负载",
+      "bindAction": "绑定 Action",
+      "unbindAction": "解绑 Action",
       "maxSession": "最长会话",
       "roleId": "服务关联角色 ID",
       "roleManagement": "角色管理方式",
@@ -2360,7 +2364,7 @@
       "bindingId": "绑定 ID",
       "updatedAt": "更新时间"
     },
-    "states": { "illustrative": "示意模板 · 未发布", "notAuthorized": "当前账号未授权", "notConfigured": "未配置", "authorized": "账号已授权 · 设计预览", "active": "ACTIVE" },
+    "states": { "contractSample": "固定模板契约 · MOCK", "notAuthorized": "当前账号未授权", "notConfigured": "未配置", "authorized": "账号已授权 · 设计预览", "active": "ACTIVE" },
     "observation": {
       "pageTitle": "账号服务授权观察",
       "eyebrow": "授权后只读场景 · MOCK",
@@ -2465,7 +2469,7 @@
         "boundary": "MOCK · 这里只解释运行时信息流，不调用 AssumeRole 或产品 PEP。下方目录另行展示固定契约允许公开的非秘密会话元数据和禁用提交的撤销审阅；不展示临时凭据、内部端点或 proof／decision，也不把任何配置状态写成一次请求的许可。"
       },
       "permissionTitle": "绑定的权限上限快照",
-      "permissionHint": "服务承担角色后仍不能超过这一精确动作和资源范围",
+      "permissionHint": "服务承担角色后不能超过账号范围的权限上限；精确资源仍由独立 binding 与产品 PEP 收窄",
       "readOnly": "IAM 中仅提供审计与状态观察。普通租户角色编辑不能修改服务关联角色的信任、权限上限或绑定；授权与撤销应回到对应云产品资源流程，并处理关联资源与短期会话生命周期。"
     },
     "progress": "服务授权审阅进度",
@@ -2473,8 +2477,8 @@
     "steps": { "identity": "服务身份与用途", "permissions": "权限快照", "consent": "同意与生命周期" },
     "review": {
       "title": "审阅服务授权",
-      "identity": { "title": "确认服务身份与单一用途", "lead": "正式授权对象应是经过登记的服务主体，为一个明确用途请求访问目标账号中的准确产品资源。本页主体和资源均为示意值，不是已受信服务或既有授权。", "passRoleBoundary": "未来 PassRole／承担角色必须同时校验操作者、目标账号与角色、实际工作负载、service purpose 和发起授权的产品资源；当前 UX 示例没有工作负载证明，因此不表示服务已经可以承担该角色。" },
-      "permissions": { "title": "核对示例权限范围", "lead": "逐条核对已登记的精确动作、资源种类、匹配方式和条件。示例 ID 只说明范围，不会获得真实资源权限。", "illustrative": "只读示例", "statement": "声明 {number}", "allow": "允许", "deny": "拒绝", "actionPatterns": "精确动作", "resources": "资源范围", "conditions": "请求条件", "noConditions": "无条件限制", "match": { "EXACT": "精确 ID", "PREFIX_IN_AUTHORITY": "当前权威范围内的前缀", "ANY_IN_AUTHORITY": "当前权威范围内全部" }, "snapshotBoundary": "这里只演示当前 Matrix 目录中已声明的托管服务安装只读动作与资源形状；示例服务主体、资源 ID 和模板修订未在 IAM 发布。真实授权仍须由受控模板、内容摘要、目标账号同意及工作负载绑定共同约束。" },
+      "identity": { "title": "确认服务身份与单一用途", "lead": "正式授权对象应是经过登记的服务主体，为一个明确用途请求访问目标账号中的准确产品资源。本页主体和资源均为示意值，不是已受信服务或既有授权。", "requiredChecks": "同意前必须共同通过的授权检查", "requiredChecksHint": "三个 Action 分别保护真实产品资源、服务关联角色创建和目标角色传递，任一个通过都不能替代另外两个。", "passRoleBoundary": "PassRole／承担角色必须同时校验操作者、目标账号与角色、实际工作负载、service purpose 和发起授权的产品资源；当前 UX 示例没有工作负载证明，因此不表示服务已经可以承担该角色。" },
+      "permissions": { "title": "核对模板权限上限", "lead": "逐条核对模板固定的权限上限。账号范围内的资源上限不等于所有资源已绑定，最终访问仍受精确 WorkloadRoleBinding 与产品 PEP 约束。", "illustrative": "只读示例", "statement": "声明 {number}", "allow": "允许", "deny": "拒绝", "actionPatterns": "精确动作", "resources": "资源范围", "conditions": "请求条件", "noConditions": "无条件限制", "match": { "EXACT": "精确 ID", "PREFIX_IN_AUTHORITY": "当前权威范围内的前缀", "ANY_IN_AUTHORITY": "当前权威范围内全部" }, "snapshotBoundary": "这里沿用固定的 managedservice.installation-reader@v1 词汇，但内容摘要仍是 MOCK。权限上限、目标账号同意和精确工作负载绑定是三个独立事实；模板 ACTIVE 或目录可见都不授予租户权限。" },
       "consent": {
         "title": "确认客户同意与撤销边界",
         "lead": "只有客户从准确的托管服务安装资源入口明确同意后，平台才能创建面向该账号、产品资源和用途的服务关联角色；IAM 只读观察该结果，当前 MOCK 不执行此动作。",
@@ -2483,9 +2487,9 @@
           "explicit": { "title": "显式客户同意", "hint": "目录可见、产品安装和服务身份认证均不替代当前账号的授权。" },
           "shortTerm": { "title": "仅使用短期会话", "hint": "服务未来通过承担专用角色获取受限临时凭据，不接收客户长期密钥。" },
           "noExpansion": { "title": "模板升版不自动扩权", "hint": "新模板或新修订必须重新审阅；既有同意保持原权限快照。" },
-          "cleanup": { "title": "删除／清理前检查关联资源", "hint": "删除服务关联角色前，有关联资源时应拒绝删除或进入明确的异步清理流程；授权撤销和既有短期会话何时失效仍需后端契约定义。" }
+          "cleanup": { "title": "删除／清理前检查关联资源", "hint": "有 ACTIVE 资源绑定时不能把服务关联角色当作普通角色删除。解绑会阻止该资源的新会话；既有会话仍按独立生命周期观察和撤销。" }
         },
-        "unavailable": "IAM 尚未发布 ServiceRoleTemplate 的租户授权、撤销或承担角色契约。最终授权始终禁用，也不会产生成功状态。",
+        "unavailable": "IAM 角色目录没有真实产品资源上下文，因此这里只读审阅模板，不能提交授权。真实绑定／解绑必须从对应托管服务安装资源入口发起；浏览器不能调用 IAM 内部入口。",
         "previewAvailable": "点击“模拟授权服务”只更新当前隔离 MOCK 的内存状态，用于验收成功反馈、信息层级和返回路径；它不是 IAM 授权证据。"
       }
     },
@@ -2525,7 +2529,7 @@
       "items": {
         "resourceOnly": { "title": "只影响当前实例", "hint": "确认后只把这个 SERVICE_INSTALLATION 标记为未绑定；其他业务资源不受影响。" },
         "accountRelation": { "title": "保留账号服务关系", "hint": "账号级 ServiceLinkedRoleAccess 继续有效，以便其他已绑定资源和后续重新授权使用。" },
-        "sessions": { "title": "不承诺立即终止既有会话", "hint": "短期会话撤销与到期语义尚未由后端固定；产品不能把 binding 已解除显示成所有既有凭据已立即失效。" }
+        "sessions": { "title": "不承诺立即终止既有会话", "hint": "binding 解除后不得再为当前资源签发新会话；既有会话按各自生命周期和撤销能力处理，不能把解绑显示成所有会话已同步终止。" }
       },
       "previewBoundary": "这次确认只更新当前隔离 MOCK 的浏览器内存。它不调用 unbind API、不删除服务关联角色，也不改变真实资源权限。",
       "cancel": "保留实例授权",

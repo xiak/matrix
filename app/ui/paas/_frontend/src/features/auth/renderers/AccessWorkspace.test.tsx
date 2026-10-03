@@ -1141,45 +1141,51 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(/只读查看本账号已经形成的服务关联角色关系/)).toBeTruthy();
     const accountDirectory = screen.getByRole("table", { name: "当前账号服务授权" });
     expect(within(accountDirectory).getByText("1 个有效 / 1 个全部")).toBeTruthy();
-    expect(within(accountDirectory).getByText("PreviewServiceRoleForManagedServiceInstallationRead")).toBeTruthy();
+    expect(within(accountDirectory).getByText("ManagedServiceInstallationReader")).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
     const templateDirectory = screen.getByRole("table", { name: "服务授权模板" });
     expect(within(templateDirectory).getByRole("columnheader", { name: "平台模板状态" })).toBeTruthy();
-    expect(within(templateDirectory).getByRole("columnheader", { name: "当前账号状态" })).toBeTruthy();
-    expect(within(templateDirectory).getByText("示意模板 · 未发布")).toBeTruthy();
-    expect(within(templateDirectory).getByText("当前账号未授权")).toBeTruthy();
+    expect(within(templateDirectory).getByRole("columnheader", { name: "支持的工作负载" })).toBeTruthy();
+    expect(within(templateDirectory).queryByRole("columnheader", { name: "当前账号状态" })).toBeNull();
+    expect(within(templateDirectory).getByText("固定模板契约 · MOCK")).toBeTruthy();
+    expect(within(templateDirectory).getByText("managedservice.installation-reader")).toBeTruthy();
     expect(screen.getByText(/普通服务角色仍在角色列表中单独管理/)).toBeTruthy();
 
     const template = screen.getByRole("button", { name: "托管服务安装访问" });
     await user.click(template);
     expect(screen.getByRole("heading", { level: 1, name: "服务授权模板" })).toBe(document.activeElement);
-    expect(screen.getAllByText("preview.paas.service").length).toBeGreaterThan(0);
-    expect(screen.getByText("PreviewServiceRoleForManagedServiceInstallationRead")).toBeTruthy();
-    expect(screen.getByText("目标账号").nextElementSibling?.textContent).toBe("org-xiak");
-    expect(screen.getByText("发起授权的产品资源").nextElementSibling?.textContent).toBe("SERVICE_INSTALLATION:service-installation-example");
+    expect(screen.getByText("ManagedServiceInstallationReader")).toBeTruthy();
+    expect(screen.getByText("最长会话").nextElementSibling?.textContent).toBe("15 分钟");
+    expect(screen.getByText("绑定 Action").nextElementSibling?.textContent).toBe("managedservice.service-installation.service-role.bind");
+    expect(screen.queryByText("目标账号")).toBeNull();
+    expect(screen.queryByText("发起授权的产品资源")).toBeNull();
+    expect(screen.queryByText("preview.paas.service")).toBeNull();
     expect(screen.getByText(/PipelineDeploymentRole 是普通工作负载角色/)).toBeTruthy();
-    expect(screen.getByText(/不引用租户可编辑策略/)).toBeTruthy();
+    expect(screen.getByText(/权限上限覆盖目标账号内声明类型的资源/)).toBeTruthy();
 
     const review = screen.getByRole("button", { name: "审阅服务授权" });
     await user.click(review);
     expect(screen.getByRole("heading", { level: 1, name: "审阅服务授权" })).toBe(document.activeElement);
     expect(screen.getByRole("heading", { level: 3, name: "确认服务身份与单一用途" })).toBeTruthy();
+    expect(screen.getByText("managedservice.service-installation.service-role.bind")).toBeTruthy();
+    expect(screen.getByText("iam.service-linked-role.create")).toBeTruthy();
+    expect(screen.getByText("iam.role.pass")).toBeTruthy();
     expect(screen.getByText(/必须同时校验操作者、目标账号与角色、实际工作负载、service purpose 和发起授权的产品资源/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByText("PreviewManagedServiceInstallationRead · v1")).toBeTruthy();
+    expect(screen.getByText("ManagedServiceInstallationReader · v1")).toBeTruthy();
     const statement = screen.getByRole("region", { name: "声明 1" });
     expect(within(statement).getByText("managedservice.service-installation.read")).toBeTruthy();
     expect(within(statement).getByText("SERVICE_INSTALLATION")).toBeTruthy();
-    expect(within(statement).getByText("SERVICE_INSTALLATION").parentElement?.textContent).toContain("精确 ID");
-    expect(within(statement).getByText("service-installation-example")).toBeTruthy();
+    expect(within(statement).getByText("SERVICE_INSTALLATION").parentElement?.textContent).toContain("当前权威范围内全部");
+    expect(within(statement).queryByText("service-installation-example")).toBeNull();
     expect(within(statement).getByText("无条件限制")).toBeTruthy();
-    expect(screen.getByText(/服务主体、资源 ID 和模板修订未在 IAM 发布/)).toBeTruthy();
+    expect(screen.getByText(/模板 ACTIVE 或目录可见都不授予租户权限/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     const authorize = screen.getByRole("button", { name: "授权服务（未接入）" }) as HTMLButtonElement;
     expect(authorize.disabled).toBe(true);
-    expect(screen.getAllByText("示意模板 · 未发布").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("固定模板契约 · MOCK").length).toBeGreaterThan(0);
     expect(screen.getAllByText("当前账号未授权").length).toBeGreaterThan(0);
-    expect(screen.getByText(/尚未发布 ServiceRoleTemplate/)).toBeTruthy();
+    expect(screen.getByText(/IAM 角色目录没有真实产品资源上下文/)).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(await extension.read("preview")).toEqual(before);
@@ -1191,7 +1197,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "返回角色列表" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "更多操作" })).toBe(document.activeElement));
   });
-  it("keeps the illustrative service template independent of tenant policy revisions", async () => {
+  it("keeps the fixed service-template contract independent of tenant policy revisions", async () => {
     const { user } = await open("roles", { seed: async (extension) => {
       extension.transact((source) => ({ workspace: { ...source, policies: source.policies.map((policy) => policy.id !== "policy-delivery" ? policy : {
         ...policy,
@@ -1204,10 +1210,10 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
     expect(screen.queryByRole("button", { name: /打开策略详情/ })).toBeNull();
-    expect(screen.getByText(/不引用租户可编辑策略/)).toBeTruthy();
+    expect(screen.getByText(/权限上限覆盖目标账号内声明类型的资源/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByText("PreviewManagedServiceInstallationRead · v1")).toBeTruthy();
+    expect(screen.getByText("ManagedServiceInstallationReader · v1")).toBeTruthy();
     expect(screen.getByText("managedservice.service-installation.read")).toBeTruthy();
     expect(screen.queryByText("iam:*")).toBeNull();
   });
@@ -1217,7 +1223,7 @@ describe("CAM-style access workspace", () => {
     } });
     await invokePageAction(user, "服务授权");
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
-    expect(within(screen.getByRole("table", { name: "服务授权模板" })).getByText("PreviewManagedServiceInstallationRead")).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "服务授权模板" })).getByText("system.managedservice-installation-reader")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));

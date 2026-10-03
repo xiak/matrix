@@ -387,9 +387,10 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "核对示例权限范围" })).toBe(document.activeElement));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "核对模板权限上限" })).toBe(document.activeElement));
     expect(screen.getByText("managedservice.service-installation.read")).toBeTruthy();
-    expect(screen.getByText("pg-test")).toBeTruthy();
+    expect(screen.getByText(/当前权威范围内全部/)).toBeTruthy();
+    expect(screen.queryByText("pg-test")).toBeNull();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "确认客户同意与撤销边界" })).toBe(document.activeElement));
     const authorize = screen.getByRole("button", { name: "模拟授权服务" }) as HTMLButtonElement;

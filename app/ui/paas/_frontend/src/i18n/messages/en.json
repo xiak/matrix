@@ -2315,15 +2315,15 @@
     },
     "detail": {
       "title": "Service authorization template",
-      "eyebrow": "Template awaiting review",
-      "hint": "Review the example service identity, single purpose, and resource scope. This is not yet an authorizable template.",
-      "trustLabel": "Service identity",
-      "trustTitle": "Production consent must verify service registration",
-      "trustHint": "A callingService or ordinary service name is not a customer delegation credential. A future flow must still verify workload, purpose, and target account.",
+      "eyebrow": "Fixed-contract sample",
+      "hint": "Review the product-published template capability first, then enter account consent from an exact resource. A template contains no target account, service-principal instance, or product resource.",
+      "trustLabel": "Publication validation boundary",
+      "trustTitle": "Product and service purpose must match a trusted declaration",
+      "trustHint": "The template fixes only product, service purpose, workload Actions, and the permission ceiling. A later consent must verify the concrete service principal, target account, and resource again.",
       "permissionLabel": "Permission snapshot",
       "permissionHint": "Future customer consent should bind exact, controlled template content. Catalog or template revisions must not silently expand an existing grant.",
-      "snapshotBoundary": "This illustrative snapshot does not reference a tenant-editable policy. Its template and permission-ceiling digests demonstrate the fixed read shape only; they are not IAM publication or customer-consent evidence.",
-      "snapshotTitle": "Example permission actions",
+      "snapshotBoundary": "This MOCK uses fixed template vocabulary, but the digests remain isolated samples. The permission ceiling covers the declared resource kind in the target account; a separate WorkloadRoleBinding and the product PEP narrow it to an exact product resource.",
+      "snapshotTitle": "Permission-ceiling actions",
       "snapshotCount": "{count} statements",
       "ordinaryRole": "The existing PipelineDeploymentRole is an ordinary workload role, not an existing instance of this service authorization. This page does not present an ordinary role or tenant policy as a published service template.",
       "review": "Review service authorization",
@@ -2333,6 +2333,7 @@
     "fields": {
       "product": "Cloud product",
       "purpose": "Business purpose",
+      "servicePurpose": "Trusted service purpose",
       "policySnapshot": "Permission snapshot",
       "templateState": "Platform template state",
       "accountState": "Current account state",
@@ -2350,6 +2351,9 @@
       "policyId": "Permission-ceiling policy ID",
       "policyVersion": "Permission-ceiling policy version",
       "workloadKinds": "Allowed workload kinds",
+      "supportedWorkload": "Supported workload",
+      "bindAction": "Bind Action",
+      "unbindAction": "Unbind Action",
       "maxSession": "Maximum session",
       "roleId": "Service-linked role ID",
       "roleManagement": "Role management",
@@ -2360,7 +2364,7 @@
       "bindingId": "Binding ID",
       "updatedAt": "Updated"
     },
-    "states": { "illustrative": "Illustrative · unpublished", "notAuthorized": "Not authorized for this account", "notConfigured": "Not configured", "authorized": "Account authorized · design preview", "active": "ACTIVE" },
+    "states": { "contractSample": "Fixed template contract · MOCK", "notAuthorized": "Not authorized for this account", "notConfigured": "Not configured", "authorized": "Account authorized · design preview", "active": "ACTIVE" },
     "observation": {
       "pageTitle": "Account service-authorization observation",
       "eyebrow": "Authorized read-only scenario · MOCK",
@@ -2465,7 +2469,7 @@
         "boundary": "MOCK · This explains the runtime information flow without calling AssumeRole or a product PEP. The separate directory below shows non-secret session metadata allowed by the fixed contract and a revoke review with submission disabled. It exposes no temporary credential, internal endpoint, proof, or decision and never presents configuration state as permission for a request."
       },
       "permissionTitle": "Bound permission-ceiling snapshot",
-      "permissionHint": "Role assumption still cannot exceed this exact action and resource scope",
+      "permissionHint": "Role assumption cannot exceed the account-scoped ceiling; a separate binding and product PEP still narrow it to the exact resource",
       "readOnly": "IAM exposes audit and state observation only. Ordinary tenant role editing cannot change a service-linked role's trust, permission ceiling, or bindings. Authorization and revocation belong to the corresponding cloud-product resource flow and must handle associated resources and short-lived-session lifecycle."
     },
     "progress": "Service authorization review progress",
@@ -2473,8 +2477,8 @@
     "steps": { "identity": "Service identity and purpose", "permissions": "Permission snapshot", "consent": "Consent and lifecycle" },
     "review": {
       "title": "Review service authorization",
-      "identity": { "title": "Confirm service identity and one purpose", "lead": "Production consent must target a registered service subject requesting one purpose against an exact product resource in the target account. This subject and resource are illustrative, not trusted or already authorized.", "passRoleBoundary": "A future PassRole or role assumption must jointly verify the actor, target account and role, actual workload, service purpose, and product resource that initiated consent. This UX example has no workload proof and does not mean the service can assume the role." },
-      "permissions": { "title": "Review the example permission scope", "lead": "Review each registered exact action, resource kind, matching rule, and condition. Example IDs illustrate scope and grant no real resource access.", "illustrative": "Read-only example", "statement": "Statement {number}", "allow": "Allow", "deny": "Deny", "actionPatterns": "Exact actions", "resources": "Resource scope", "conditions": "Request conditions", "noConditions": "No conditions", "match": { "EXACT": "Exact ID", "PREFIX_IN_AUTHORITY": "Prefix within current authority", "ANY_IN_AUTHORITY": "All within current authority" }, "snapshotBoundary": "Only the managed-service installation read action and resource shape already declared in the current Matrix catalog are illustrated here. The example service subject, resource ID, and template revision have not been published by IAM. Real authorization still requires a controlled template, content digest, target-account consent, and workload binding." },
+      "identity": { "title": "Confirm service identity and one purpose", "lead": "Production consent must target a registered service subject requesting one purpose against an exact product resource in the target account. This subject and resource are illustrative, not trusted or already authorized.", "requiredChecks": "Authorization checks that must all pass before consent", "requiredChecksHint": "The three Actions protect the real product resource, service-linked-role creation, and target-role passing separately. Passing one never replaces the other two.", "passRoleBoundary": "PassRole or role assumption must jointly verify the actor, target account and role, actual workload, service purpose, and product resource that initiated consent. This UX example has no workload proof and does not mean the service can assume the role." },
+      "permissions": { "title": "Review the template permission ceiling", "lead": "Review the permission ceiling pinned by the template. An account-scoped resource ceiling does not mean every resource is bound; exact WorkloadRoleBinding and product-PEP checks still constrain access.", "illustrative": "Read-only example", "statement": "Statement {number}", "allow": "Allow", "deny": "Deny", "actionPatterns": "Exact actions", "resources": "Resource scope", "conditions": "Request conditions", "noConditions": "No conditions", "match": { "EXACT": "Exact ID", "PREFIX_IN_AUTHORITY": "Prefix within current authority", "ANY_IN_AUTHORITY": "All within current authority" }, "snapshotBoundary": "This uses the fixed managedservice.installation-reader@v1 vocabulary, but its content digests remain MOCK values. Permission ceiling, target-account consent, and exact workload binding are independent facts; an ACTIVE template or catalog visibility grants no tenant permission." },
       "consent": {
         "title": "Confirm customer consent and revocation boundaries",
         "lead": "Only explicit customer consent from the exact managed-service installation can create a service-linked role scoped to this account, product resource, and purpose. IAM observes the result read-only; this MOCK does not perform that action.",
@@ -2483,9 +2487,9 @@
           "explicit": { "title": "Explicit customer consent", "hint": "Catalog visibility, product installation, and service authentication do not replace authorization by this account." },
           "shortTerm": { "title": "Short-lived sessions only", "hint": "The service would assume a dedicated role for constrained temporary credentials instead of receiving a customer's long-lived key." },
           "noExpansion": { "title": "Template revisions never auto-expand access", "hint": "A new template or revision requires review; existing consent retains its original permission snapshot." },
-          "cleanup": { "title": "Check associated resources before deletion or cleanup", "hint": "Associated resources must block service-linked-role deletion or enter an explicit asynchronous cleanup flow. Backend contracts must still define authorization revocation and when existing short-lived sessions expire." }
+          "cleanup": { "title": "Check associated resources before deletion or cleanup", "hint": "An ACTIVE resource binding prevents treating the service-linked role like an ordinary deletable role. Unbinding blocks new sessions for that resource; existing sessions remain subject to independent lifecycle observation and revocation." }
         },
-        "unavailable": "IAM has not published tenant authorize, revoke, or assume-role contracts for ServiceRoleTemplate. Final authorization stays disabled and cannot produce a success state.",
+        "unavailable": "The IAM role directory has no real product-resource context, so it can review the template but cannot submit consent. Real bind and unbind operations must start from the matching managed-service installation; a browser never calls IAM internal endpoints.",
         "previewAvailable": "Simulate service authorization updates only this isolated MOCK's in-memory state so success feedback, information hierarchy, and return paths can be reviewed. It is not IAM authorization evidence."
       }
     },
@@ -2525,7 +2529,7 @@
       "items": {
         "resourceOnly": { "title": "Affects only this instance", "hint": "Confirmation marks only this SERVICE_INSTALLATION as unbound; other product resources are unaffected." },
         "accountRelation": { "title": "Keep the account service relation", "hint": "The account-level ServiceLinkedRoleAccess remains active for other bound resources and later reauthorization." },
-        "sessions": { "title": "Do not promise immediate session termination", "hint": "The backend has not frozen short-lived session revocation and expiry semantics. The product cannot present an unbound resource as proof that every existing credential is already invalid." }
+        "sessions": { "title": "Do not promise immediate session termination", "hint": "Once unbound, no new session may be issued for this resource. Existing sessions follow their own lifecycle and revoke capability, so unbinding cannot be presented as synchronous termination of every session." }
       },
       "previewBoundary": "This confirmation changes only the isolated MOCK's browser memory. It calls no unbind API, deletes no service-linked role, and changes no real resource permission.",
       "cancel": "Keep instance authorization",

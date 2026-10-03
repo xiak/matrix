@@ -18,12 +18,15 @@ describe("ServiceAuthorizationPreview", () => {
     expect(screen.getByRole("heading", { level: 1, name: "审阅服务授权" })).toBe(document.activeElement);
     expect(screen.getByText("managedservice")).toBeTruthy();
     expect(screen.getByText("允许已登记的 PaaS 服务按单一用途读取一个精确的托管服务安装。")).toBeTruthy();
-    expect(screen.getByText("60 分钟")).toBeTruthy();
+    expect(screen.getByText("15 分钟")).toBeTruthy();
+    expect(screen.getByText("managedservice.service-installation.service-role.bind")).toBeTruthy();
+    expect(screen.getByText("iam.service-linked-role.create")).toBeTruthy();
+    expect(screen.getByText("iam.role.pass")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "核对示例权限范围" })).toBe(document.activeElement));
-    expect(screen.getByText("preview.policy.managed-service-installation-read")).toBeTruthy();
-    expect(screen.getByText("v1", { selector: "code" })).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "核对模板权限上限" })).toBe(document.activeElement));
+    expect(screen.getByText("system.managedservice-installation-reader")).toBeTruthy();
+    expect(screen.getByText("version-preview-managedservice-installation-reader-v1", { selector: "code" })).toBeTruthy();
     expect(screen.getByText(`sha256:${"9".repeat(64)}`)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "确认客户同意与撤销边界" })).toBe(document.activeElement));
@@ -36,7 +39,7 @@ describe("ServiceAuthorizationPreview", () => {
 
     const directory = screen.getByRole("table", { name: "当前账号服务授权" });
     expect(within(directory).getByText("1 个有效 / 1 个全部")).toBeTruthy();
-    expect(within(directory).getByText("PreviewServiceRoleForManagedServiceInstallationRead")).toBeTruthy();
+    expect(within(directory).getByText("ManagedServiceInstallationReader")).toBeTruthy();
     const accountTrigger = within(directory).getByRole("button", { name: "查看账号服务授权：托管服务安装访问" });
     await user.click(accountTrigger);
 
@@ -59,7 +62,7 @@ describe("ServiceAuthorizationPreview", () => {
     expect(screen.getByRole("heading", { name: "不可变 ServiceRoleTemplate" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "ServiceLinkedRoleAccess" })).toBeTruthy();
     expect(screen.getByText("允许已登记的 PaaS 服务按单一用途读取一个精确的托管服务安装。")).toBeTruthy();
-    expect(screen.getAllByText("managed-service-installation-read", { selector: "code" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("managedservice.installation-reader", { selector: "code" }).length).toBeGreaterThan(0);
     expect(screen.getAllByText(`sha256:${"8".repeat(64)}`).length).toBeGreaterThan(0);
     expect(screen.getAllByText(`sha256:${"9".repeat(64)}`).length).toBeGreaterThan(0);
     expect(screen.getByText("服务关联角色为 ACTIVE 只说明账号与发布模板、注册服务主体的关系可用；它不证明任何业务资源已经绑定，也不能替代逐条 WorkloadRoleBinding。")).toBeTruthy();
@@ -71,7 +74,7 @@ describe("ServiceAuthorizationPreview", () => {
     expect(within(bindings).getByText("preview.workload-role-binding.service-installation-example")).toBeTruthy();
     expect(within(bindings).getByText("org-xiak")).toBeTruthy();
     expect(within(bindings).getByText("preview.service-linked-role.managed-service-installation-read")).toBeTruthy();
-    expect(within(bindings).getByText("preview.service-role-template.managed-service-installation-read.v1@v1")).toBeTruthy();
+    expect(within(bindings).getByText("managedservice.installation-reader@v1")).toBeTruthy();
     expect(screen.getByText("第 1 页")).toBeTruthy();
     expect(screen.getByText("当前 MOCK 只展示一页精确绑定；LIVE 读取仅按后端返回的不透明游标继续，不推断总页数。")).toBeTruthy();
     expect((screen.getByRole("button", { name: "上一页绑定" }) as HTMLButtonElement).disabled).toBe(true);
@@ -101,7 +104,7 @@ describe("ServiceAuthorizationPreview", () => {
     const installationIds = within(sessions).getAllByText("preview.service-installation.paas");
     expect(installationIds).toHaveLength(3);
     expect(installationIds.every((node) => node.parentElement?.textContent?.includes("PAAS"))).toBe(true);
-    expect(within(sessions).getAllByText("PreviewServiceRoleForManagedServiceInstallationRead").length).toBe(3);
+    expect(within(sessions).getAllByText("ManagedServiceInstallationReader").length).toBe(3);
     expect(within(sessions).queryByText("2026-10-01T02:20:00Z")).toBeNull();
     expect(within(sessions).queryByText(/credential|proof|decision/i)).toBeNull();
     expect(screen.getByText("显示 3 / 3 条")).toBeTruthy();
@@ -166,7 +169,7 @@ describe("ServiceAuthorizationPreview", () => {
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
     const chain = screen.getByRole("heading", { name: "服务授权链" }).closest("section")!;
-    expect(within(chain).getByText("示意模板 · 未发布")).toBeTruthy();
+    expect(within(chain).getByText("固定模板契约 · MOCK")).toBeTruthy();
     expect(within(chain).getByText("当前账号未授权")).toBeTruthy();
     expect(within(chain).getByText("未配置")).toBeTruthy();
     expect(within(chain).getByText("运行时使用")).toBeTruthy();
