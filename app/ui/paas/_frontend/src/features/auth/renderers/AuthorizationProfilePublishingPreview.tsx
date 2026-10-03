@@ -4,13 +4,198 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, FileCode2, LockKeyhole, ShieldCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, Steps, Table, TablePagination } from "@ui/xiak";
-import type { AuthorizationProfileEntry } from "../domain/accounts";
+import {
+  authorizationResourceShapeKind,
+  type AuthorizationProfileAction,
+  type AuthorizationProfileEntry
+} from "../domain/accounts";
 import { reviewServiceTemplateProfile, type ServiceTemplateProfileCheck } from "../domain/serviceAuthorization";
 import { previewManagedServiceRoleTemplate } from "../repositories/previewServiceAuthorizationContract";
 import { AuthorizationActionTable } from "./AuthorizationActionTable";
 import styles from "./AuthorizationProfilePublishingPreview.module.css";
 
 const stageIds = ["declaration", "validation", "release"] as const;
+
+const declarationFields = [
+  "resourceKind", "scope", "resourceShapes", "subjectTypes", "userAuthenticationMethods",
+  "conditions", "resultResourceKind", "instanceListBatch"
+] as const;
+type DeclarationField = typeof declarationFields[number];
+type ProfileChange = {
+  id: string;
+  kind: "added" | "removed" | "changed";
+  action: string;
+  fields: DeclarationField[] | ["callingService"];
+  before?: AuthorizationProfileAction;
+  after?: AuthorizationProfileAction;
+  beforeCallingService?: string;
+  afterCallingService?: string;
+};
+export type AuthorizationProfileComparison =
+  | { status: "ready"; changes: ProfileChange[]; added: number; removed: number; changed: number }
+  | { status: "unavailable"; reason: "product" | "revision" | "duplicate-action" };
+
+function normalizedField(action: AuthorizationProfileAction, field: DeclarationField): unknown {
+  if (field === "resourceShapes") return action.resourceShapes.map((shape) => ({
+    mode: shape.mode,
+    prefixAllowed: shape.prefixAllowed,
+    collectionUsage: shape.collectionUsage ?? null
+  })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  if (field === "conditions") return action.conditions ? action.conditions.map((condition) => ({
+    key: condition.key,
+    source: condition.source,
+    valueType: condition.valueType
+  })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))) : null;
+  if (field === "subjectTypes") return action.subjectTypes ? [...action.subjectTypes].sort() : null;
+  if (field === "userAuthenticationMethods") return action.userAuthenticationMethods ? [...action.userAuthenticationMethods].sort() : null;
+  return action[field] ?? null;
+}
+
+function actionMap(actions: AuthorizationProfileAction[]): Map<string, AuthorizationProfileAction> | null {
+  const result = new Map<string, AuthorizationProfileAction>();
+  for (const action of actions) {
+    if (result.has(action.action)) return null;
+    result.set(action.action, action);
+  }
+  return result;
+}
+
+function presentDeclarationFields(action: AuthorizationProfileAction): DeclarationField[] {
+  return declarationFields.filter((field) => normalizedField(action, field) !== null);
+}
+
+// This is a structural MOCK comparison only. It never recomputes a digest,
+// evaluates a Policy, predicts migration, or produces a publish decision.
+export function compareAuthorizationProfileEntries(
+  current: AuthorizationProfileEntry,
+  candidate: AuthorizationProfileEntry
+): AuthorizationProfileComparison {
+  if (current.profile.product !== candidate.profile.product) return { status: "unavailable", reason: "product" };
+  if (!Number.isSafeInteger(current.profile.revision) || current.profile.revision < 1 ||
+    !Number.isSafeInteger(candidate.profile.revision) || candidate.profile.revision < 1) {
+    return { status: "unavailable", reason: "revision" };
+  }
+  const currentActions = actionMap(current.profile.actions);
+  const candidateActions = actionMap(candidate.profile.actions);
+  if (!currentActions || !candidateActions) return { status: "unavailable", reason: "duplicate-action" };
+  const changes: ProfileChange[] = [];
+  if (current.profile.callingService !== candidate.profile.callingService) changes.push({
+    id: "@profile/callingService",
+    kind: "changed",
+    action: "AuthorizationProfile.callingService",
+    fields: ["callingService"],
+    beforeCallingService: current.profile.callingService,
+    afterCallingService: candidate.profile.callingService
+  });
+  const actionIds = [...new Set([...currentActions.keys(), ...candidateActions.keys()])].sort();
+  for (const actionId of actionIds) {
+    const before = currentActions.get(actionId);
+    const after = candidateActions.get(actionId);
+    if (!before && after) {
+      changes.push({ id: `added:${actionId}`, kind: "added", action: actionId, fields: presentDeclarationFields(after), after });
+      continue;
+    }
+    if (before && !after) {
+      changes.push({ id: `removed:${actionId}`, kind: "removed", action: actionId, fields: presentDeclarationFields(before), before });
+      continue;
+    }
+    if (!before || !after) continue;
+    const fields = declarationFields.filter((field) => JSON.stringify(normalizedField(before, field)) !== JSON.stringify(normalizedField(after, field)));
+    if (fields.length) changes.push({ id: `changed:${actionId}`, kind: "changed", action: actionId, fields, before, after });
+  }
+  return {
+    status: "ready",
+    changes,
+    added: changes.filter((change) => change.kind === "added").length,
+    removed: changes.filter((change) => change.kind === "removed").length,
+    changed: changes.filter((change) => change.kind === "changed").length
+  };
+}
+
+function syntheticCandidate(entry: AuthorizationProfileEntry): AuthorizationProfileEntry {
+  const actions = entry.profile.actions.map((action) => structuredClone(action));
+  const first = actions[0];
+  if (first) first.userAuthenticationMethods = first.userAuthenticationMethods?.includes("ACCESS_KEY")
+    ? first.userAuthenticationMethods.filter((method) => method !== "ACCESS_KEY")
+    : [...(first.userAuthenticationMethods ?? []), "ACCESS_KEY"];
+  if (actions.length > 1) actions.pop();
+  actions.push({
+    action: `${entry.profile.product}.candidate-preview.read`,
+    resourceKind: first?.resourceKind ?? "PREVIEW_RESOURCE",
+    scope: first?.scope ?? "TENANT",
+    resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }],
+    subjectTypes: ["USER"],
+    userAuthenticationMethods: ["LOGIN_SESSION"]
+  });
+  return {
+    profile: { ...entry.profile, revision: entry.profile.revision + 1, actions },
+    contentDigest: `sha256:${"c".repeat(64)}`
+  };
+}
+
+function fieldValue(
+  action: AuthorizationProfileAction | undefined,
+  field: DeclarationField,
+  omitted: string
+): string {
+  if (!action) return omitted;
+  if (field === "resourceShapes") return action.resourceShapes.map(authorizationResourceShapeKind).join(" · ") || omitted;
+  if (field === "conditions") return action.conditions?.map((condition) => `${condition.key} / ${condition.source} / ${condition.valueType}`).join(" · ") || omitted;
+  if (field === "subjectTypes") return action.subjectTypes?.join(" · ") || omitted;
+  if (field === "userAuthenticationMethods") return action.userAuthenticationMethods?.join(" · ") || omitted;
+  if (field === "instanceListBatch") return action.instanceListBatch === undefined ? omitted : String(action.instanceListBatch);
+  return String(action[field] ?? omitted);
+}
+
+function ProfileChangeImpactReview({ current, candidate }: {
+  current: AuthorizationProfileEntry;
+  candidate: AuthorizationProfileEntry;
+}) {
+  const t = useTranslations("AuthorizationProfilePublishingPreview.validation.changeImpact");
+  const catalog = useTranslations("AuthorizationProfileCatalog");
+  const comparison = useMemo(() => compareAuthorizationProfileEntries(current, candidate), [candidate, current]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  if (comparison.status === "unavailable") return <section aria-labelledby="authorization-profile-change-impact-title" className={styles.changeReview}>
+    <div className={styles.changeReviewHeading}><div><h4 id="authorization-profile-change-impact-title">{t("title")}</h4><p>{t("hint")}</p></div><Badge status="warning">{t("unavailable")}</Badge></div>
+    <Alert status="warning">{t(`reasons.${comparison.reason}`)}</Alert>
+  </section>;
+  const pages = Math.max(1, Math.ceil(comparison.changes.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const visible = comparison.changes.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  return <section aria-labelledby="authorization-profile-change-impact-title" className={styles.changeReview}>
+    <div className={styles.changeReviewHeading}>
+      <div><h4 id="authorization-profile-change-impact-title">{t("title")}</h4><p>{t("hint")}</p></div>
+      <Badge status="warning">{t("synthetic")}</Badge>
+    </div>
+    <Alert status="info">{t("boundary")}</Alert>
+    <dl className={styles.changeReferences}>
+      <div><dt>{t("current")}</dt><dd><code>{current.profile.product}@{current.profile.revision}</code><small><code>{current.contentDigest}</code></small></dd></div>
+      <div><dt>{t("candidate")}</dt><dd><code>{candidate.profile.product}@{candidate.profile.revision}</code><small><code>{candidate.contentDigest}</code></small></dd></div>
+    </dl>
+    <div className={styles.changeSummary} aria-label={t("summaryLabel")}>
+      <Badge status="warning">{t("summary.added", { count: comparison.added })}</Badge>
+      <Badge status="info">{t("summary.removed", { count: comparison.removed })}</Badge>
+      <Badge status="neutral">{t("summary.changed", { count: comparison.changed })}</Badge>
+    </div>
+    {comparison.changes.length ? <>
+      <Table aria-label={t("table")} mobileLayout="stack" className={styles.changeTable}>
+        <thead><tr><th scope="col">{t("columns.action")}</th><th scope="col">{t("columns.review")}</th><th scope="col">{t("columns.fields")}</th></tr></thead>
+        <tbody>{visible.map((change) => <tr key={change.id}>
+          <td data-label={t("columns.action")}><Badge status={change.kind === "removed" ? "info" : "warning"}>{t(`kinds.${change.kind}`)}</Badge><code>{change.action}</code></td>
+          <td data-label={t("columns.review")}><strong>{t(`reviews.${change.kind}`)}</strong><small>{t("reviewBoundary")}</small></td>
+          <td data-label={t("columns.fields")}><ul className={styles.changeDetails}>{change.fields.map((field) => <li key={field}>
+            <strong>{t(`fields.${field}`)}</strong>
+            <code>{field === "callingService" ? change.beforeCallingService : fieldValue(change.before, field, t("omitted"))}</code>
+            <span aria-hidden="true">→</span>
+            <code>{field === "callingService" ? change.afterCallingService : fieldValue(change.after, field, t("omitted"))}</code>
+          </li>)}</ul></td>
+        </tr>)}</tbody>
+      </Table>
+      <Table.Footer note={t("footer")}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: catalog("page", { page: currentPage, pages }), pageSize: catalog("pageSize"), previous: catalog("previous"), next: catalog("next") }} /></Table.Footer>
+    </> : <div className={styles.noChanges}><strong>{t("noChanges")}</strong><p>{t("noChangesHint")}</p></div>}
+  </section>;
+}
 
 function ServiceTemplateCompatibilityReview({ entry }: { entry: AuthorizationProfileEntry }) {
   const t = useTranslations("AuthorizationProfilePublishingPreview.validation.templateReview");
@@ -42,8 +227,9 @@ function ServiceTemplateCompatibilityReview({ entry }: { entry: AuthorizationPro
   </section>;
 }
 
-export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
+export function AuthorizationProfilePublishingPreview({ entry, candidate: suppliedCandidate, onClose }: {
   entry: AuthorizationProfileEntry;
+  candidate?: AuthorizationProfileEntry;
   onClose(): void;
 }) {
   const t = useTranslations("AuthorizationProfilePublishingPreview");
@@ -63,6 +249,7 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
   }, [stage]);
 
   const profile = entry.profile;
+  const candidate = useMemo(() => suppliedCandidate ?? syntheticCandidate(entry), [entry, suppliedCandidate]);
   const scopes = [...new Set(profile.actions.map((action) => action.scope))];
   const resources = [...new Set(profile.actions.map((action) => action.resourceKind))];
   const conditions = [...new Set(profile.actions.flatMap((action) => action.conditions?.map((condition) => condition.key) ?? []))];
@@ -122,6 +309,7 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
             <div><dt>{t("validation.diagnostics.runtimeEvidence")}</dt><dd><Badge status="warning">{t("validation.diagnostics.notVerified")}</Badge><small>{t("validation.diagnostics.runtimeEvidenceHint")}</small></dd></div>
           </dl>
         </section>
+        <ProfileChangeImpactReview current={entry} candidate={candidate} />
         {profile.product === previewManagedServiceRoleTemplate.spec.product ? <ServiceTemplateCompatibilityReview entry={entry} /> : null}
         <section aria-label={t("validation.reviewActionsTitle")} className={styles.reviewActions}>
           <div><h4>{t("validation.reviewActionsTitle")}</h4><p>{t("validation.reviewActionsHint")}</p></div>

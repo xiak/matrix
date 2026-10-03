@@ -6,13 +6,14 @@ import { LocaleProvider, useLocalePreference } from "@/i18n/LocaleProvider";
 import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
-import { accountAccessViews, type AccountAccessView, type AccountIdentity, type ActionCapability, type AuthorizationProfileAction, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
+import { accountAccessViews, type AccountAccessView, type AccountIdentity, type ActionCapability, type AuthorizationProfileAction, type AuthorizationProfileEntry, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
 import type { AccessPolicy } from "../domain/accessWorkspace";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorkspace";
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import type { PolicyDocument } from "../domain/policyDocument";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
+import { AuthorizationProfilePublishingPreview, compareAuthorizationProfileEntries } from "./AuthorizationProfilePublishingPreview";
 import type { AccountUserDetailTab } from "./AccountUserWorkspace";
 import { GroupDetail, GroupDirectory } from "./GroupAccessWorkspace";
 import { AccessAnalysisPreview, AccessReportPreview, AccessReports } from "./AccessReports";
@@ -679,6 +680,13 @@ describe("policy creation entry and directory contract", () => {
     expect(within(diagnostics).getByText("PAAS")).toBeTruthy();
     expect(within(diagnostics).getByText("运行时证据未验证")).toBeTruthy();
     expect(within(diagnostics).getAllByText(/IAM 已认证身份/).length).toBeGreaterThan(0);
+    const impact = screen.getByRole("region", { name: "候选修订影响" });
+    expect(within(impact).getByText("合成候选 · MOCK")).toBeTruthy();
+    expect(within(impact).getByText("新增声明 1")).toBeTruthy();
+    expect(within(impact).getByText("移除声明 0")).toBeTruthy();
+    expect(within(impact).getByText("改变声明 1")).toBeTruthy();
+    expect(within(impact).getByText("paas.candidate-preview.read")).toBeTruthy();
+    expect(within(impact).getByText(/不代表权限扩大或收窄/)).toBeTruthy();
     const reviewActions = screen.getByRole("table", { name: "逐项核对权限声明" });
     expect(within(reviewActions).getByText("paas.application.read")).toBeTruthy();
     expect(within(reviewActions).getByText("实例（支持已声明前缀）")).toBeTruthy();
@@ -737,11 +745,48 @@ describe("policy creation entry and directory contract", () => {
     expect(within(review).getAllByRole("row")).toHaveLength(11);
     expect(within(review).getByText("paas.review-0001.read")).toBeTruthy();
     expect(within(review).queryByText("paas.review-0011.read")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "下一页" }));
+    await user.click(within(review.closest("section")!).getByRole("button", { name: "下一页" }));
     expect(within(review).getAllByRole("row")).toHaveLength(11);
     expect(within(review).getByText("paas.review-0011.read")).toBeTruthy();
     expect(within(review).queryByText("paas.review-0001.read")).toBeNull();
     expect(screen.getByText(/分页仅改变显示/)).toBeTruthy();
+  });
+  it("compares complete candidate declarations without turning a revision into a publish decision", async () => {
+    const action = (index: number, resourceKind = "APPLICATION"): AuthorizationProfileAction => ({
+      action: `paas.review-${String(index + 1).padStart(4, "0")}.read`, resourceKind, scope: "TENANT",
+      resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }], subjectTypes: ["USER"],
+      userAuthenticationMethods: ["LOGIN_SESSION"]
+    });
+    const current: AuthorizationProfileEntry = {
+      profile: { product: "paas", revision: 1, callingService: "PAAS", actions: Array.from({ length: 1202 }, (_, index) => action(index)) },
+      contentDigest: `sha256:${"a".repeat(64)}`
+    };
+    const identical = compareAuthorizationProfileEntries(current, current);
+    expect(identical).toMatchObject({ status: "ready", added: 0, removed: 0, changed: 0, changes: [] });
+    const changedService = compareAuthorizationProfileEntries(current, {
+      ...current, profile: { ...current.profile, revision: 2, callingService: "AUDIT" }
+    });
+    expect(changedService.status).toBe("ready");
+    if (changedService.status === "ready") expect(changedService.changes[0]).toMatchObject({ action: "AuthorizationProfile.callingService", fields: ["callingService"] });
+
+    const candidate: AuthorizationProfileEntry = {
+      profile: { ...current.profile, revision: 2, actions: Array.from({ length: 1202 }, (_, index) => action(index, "APPLICATION_REVISION")) },
+      contentDigest: `sha256:${"b".repeat(64)}`
+    };
+    const user = userEvent.setup();
+    render(<LocaleProvider><AuthorizationProfilePublishingPreview entry={current} candidate={candidate} onClose={vi.fn()} /></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    const impact = screen.getByRole("region", { name: "候选修订影响" });
+    const changes = within(impact).getByRole("table", { name: "候选修订变更清单" });
+    expect(within(changes).getAllByRole("row")).toHaveLength(11);
+    expect(within(changes).getByText("paas.review-0001.read")).toBeTruthy();
+    expect(within(changes).queryByText("paas.review-0011.read")).toBeNull();
+    await user.click(within(impact).getByRole("button", { name: "下一页" }));
+    expect(within(changes).getAllByRole("row")).toHaveLength(11);
+    expect(within(changes).getByText("paas.review-0011.read")).toBeTruthy();
+    expect(within(changes).queryByText("paas.review-0001.read")).toBeNull();
+    expect(within(impact).getByText(/revision 和 digest 仅标识不可变内容/)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
   it.each([
     ["visual", "按策略生成器创建", "可视化编辑"],

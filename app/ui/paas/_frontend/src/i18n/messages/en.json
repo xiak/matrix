@@ -2323,6 +2323,50 @@
         "notVerified": "Runtime evidence not verified",
         "runtimeEvidenceHint": "This MOCK is not connected to a product PEP, gateway, or audit evidence and cannot prove whether a request will be allowed or denied."
       },
+      "changeImpact": {
+        "title": "Candidate revision impact",
+        "hint": "Compare the current catalog revision with one synthetic AuthorizationProfile candidate before trusted release, showing only structural changes to complete declarations.",
+        "synthetic": "Synthetic candidate · MOCK",
+        "boundary": "A difference says only that a declaration was added, removed, or changed and still requires backend verification. It does not establish permission expansion or reduction, policy migration feasibility, PEP coverage, release approval, or an Allow/Deny for any identity. This page cannot upload, save, activate, or publish the candidate.",
+        "current": "Current catalog revision",
+        "candidate": "Synthetic candidate revision",
+        "summaryLabel": "Candidate revision change summary",
+        "summary": {
+          "added": "Declarations added {count}",
+          "removed": "Declarations removed {count}",
+          "changed": "Declarations changed {count}"
+        },
+        "table": "Candidate revision change list",
+        "columns": { "action": "Declaration", "review": "Review result", "fields": "Before and after" },
+        "kinds": { "added": "Declaration added", "removed": "Declaration removed", "changed": "Declaration changed" },
+        "reviews": {
+          "added": "Validate the new declaration",
+          "removed": "Validate compatibility impact",
+          "changed": "Revalidate the complete declaration"
+        },
+        "reviewBoundary": "Structural difference only; not an authorization or release decision.",
+        "fields": {
+          "callingService": "Calling service",
+          "resourceKind": "Resource kind",
+          "scope": "Authority scope",
+          "resourceShapes": "Request resource shapes",
+          "subjectTypes": "Subject capability",
+          "userAuthenticationMethods": "USER credential capability",
+          "conditions": "Condition and tag facts",
+          "resultResourceKind": "Result resource",
+          "instanceListBatch": "Batch candidate semantics"
+        },
+        "omitted": "Not explicitly declared",
+        "footer": "Only the current change page is mounted. Revision and digest identify immutable content; they do not mean compatibility, authorization, or a permit.",
+        "noChanges": "No declaration changes",
+        "noChangesHint": "The structural comparison found no Action or callingService differences. Backend verification of canonical content, digest, PEP evidence, and release gates is still required.",
+        "unavailable": "Unable to assess",
+        "reasons": {
+          "product": "The candidate and current revision do not belong to the same product, so they cannot be compared as revisions of one AuthorizationProfile.",
+          "revision": "The current or candidate revision is not a recognized positive integer, so no version relationship can be inferred.",
+          "duplicate-action": "The current or candidate declaration contains a duplicate Action and cannot be matched uniquely before and after."
+        }
+      },
       "templateReview": {
         "title": "Service-authorization template cross-check",
         "hint": "Before release, compare the template product, service purpose, and workload Actions with this immutable AuthorizationProfile snapshot.",

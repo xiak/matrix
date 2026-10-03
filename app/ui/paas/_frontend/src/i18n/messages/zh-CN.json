@@ -2323,6 +2323,50 @@
         "notVerified": "运行时证据未验证",
         "runtimeEvidenceHint": "该 MOCK 没有连接产品 PEP、网关或审计证据，不能证明请求会被允许或拒绝。"
       },
+      "changeImpact": {
+        "title": "候选修订影响",
+        "hint": "在受信发布前比较当前目录修订与一份合成 AuthorizationProfile 候选，只呈现完整声明的结构变化。",
+        "synthetic": "合成候选 · MOCK",
+        "boundary": "差异只说明声明新增、移除或改变，并要求后端继续验证；不代表权限扩大或收窄、策略迁移可行、PEP 已覆盖、发布已批准或任何身份已经获得 Allow/Deny。候选不能在本页上传、保存、设为 ACTIVE 或发布。",
+        "current": "当前目录修订",
+        "candidate": "合成候选修订",
+        "summaryLabel": "候选修订变更摘要",
+        "summary": {
+          "added": "新增声明 {count}",
+          "removed": "移除声明 {count}",
+          "changed": "改变声明 {count}"
+        },
+        "table": "候选修订变更清单",
+        "columns": { "action": "声明标识", "review": "复核结论", "fields": "前后差异" },
+        "kinds": { "added": "新增声明", "removed": "移除声明", "changed": "声明变化" },
+        "reviews": {
+          "added": "新声明需逐项验证",
+          "removed": "兼容影响需逐项验证",
+          "changed": "完整声明需重新验证"
+        },
+        "reviewBoundary": "仅结构差异，不是授权或发布结论。",
+        "fields": {
+          "callingService": "调用服务",
+          "resourceKind": "资源类型",
+          "scope": "授权范围",
+          "resourceShapes": "请求资源形状",
+          "subjectTypes": "主体能力",
+          "userAuthenticationMethods": "USER 凭据能力",
+          "conditions": "条件与标签事实",
+          "resultResourceKind": "结果资源",
+          "instanceListBatch": "批量候选语义"
+        },
+        "omitted": "未显式声明",
+        "footer": "只挂载当前变化页；revision 和 digest 仅标识不可变内容，不表示兼容、授权或 permit。",
+        "noChanges": "没有声明变化",
+        "noChangesHint": "结构比较未发现 Action 或 callingService 差异；仍需后端验证 canonical 内容、摘要、PEP 证据与发布门禁。",
+        "unavailable": "无法评估",
+        "reasons": {
+          "product": "候选与当前修订不属于同一 product，不能作为同一 AuthorizationProfile 的修订差异比较。",
+          "revision": "当前或候选 revision 不是可识别的正整数，不能推断版本关系。",
+          "duplicate-action": "当前或候选声明包含重复 Action，无法建立唯一的前后对应关系。"
+        }
+      },
       "templateReview": {
         "title": "服务授权模板交叉校验",
         "hint": "发布前把模板引用的产品、服务用途和工作负载 Action 与这一份不可变 AuthorizationProfile 快照逐项对齐。",

@@ -56,6 +56,31 @@
 .diagnosticGrid dd { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); overflow-wrap: anywhere; }
 .diagnosticGrid dd > span { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
 .diagnosticGrid code { white-space: normal; overflow-wrap: anywhere; }
+.changeReview { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); }
+.changeReviewHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.changeReviewHeading > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.changeReviewHeading h4, .changeReviewHeading p { margin: 0; }
+.changeReviewHeading h4 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); }
+.changeReviewHeading p, .changeReferences small, .changeTable small, .noChanges p { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.changeReferences { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; }
+.changeReferences > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel-hover); border-radius: var(--xiak-radius-small); }
+.changeReferences dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.changeReferences dd { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
+.changeReferences code, .changeTable code { white-space: normal; overflow-wrap: anywhere; }
+.changeSummary { display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-narrow); }
+.changeTable td { vertical-align: top; }
+.changeTable td:first-child { min-width: 160px; }
+.changeTable td:first-child > code { display: block; margin-top: var(--xiak-spacing-narrow); }
+.changeTable td > strong { display: block; color: var(--xiak-color-text-strong); }
+.changeTable td > small { display: block; margin-top: var(--xiak-spacing-micro); }
+.changeDetails { display: grid; gap: var(--xiak-spacing-narrow); margin: 0; padding: 0; list-style: none; }
+.changeDetails li { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: start; gap: var(--xiak-spacing-micro) var(--xiak-spacing-narrow); }
+.changeDetails strong { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.changeDetails li > strong { grid-column: 1 / -1; }
+.changeDetails span { color: var(--xiak-color-text-muted); }
+.noChanges { display: grid; gap: var(--xiak-spacing-micro); padding: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel-hover); border-radius: var(--xiak-radius-small); }
+.noChanges strong { color: var(--xiak-color-text-strong); }
+.noChanges p { margin: 0; }
 .templateReview { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); }
 .templateReviewHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .templateReviewHeading > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
@@ -102,6 +127,11 @@
   .reviewList li { grid-template-columns: 28px minmax(0, 1fr); }
   .reviewList li > :last-child { grid-column: 2; justify-self: start; }
   .diagnosticGrid { grid-template-columns: minmax(0, 1fr); }
+  .changeReviewHeading { align-items: stretch; flex-direction: column; }
+  .changeReviewHeading > :last-child { align-self: flex-start; }
+  .changeReferences { grid-template-columns: minmax(0, 1fr); }
+  .changeDetails li { grid-template-columns: minmax(0, 1fr); }
+  .changeDetails span { display: none; }
   .templateReviewHeading { align-items: stretch; flex-direction: column; }
   .templateReviewHeading > :last-child { align-self: flex-start; }
   .templateReferences { grid-template-columns: minmax(0, 1fr); }
