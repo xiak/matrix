@@ -691,12 +691,11 @@ IAM 工程师随后固定并推送来源 `cb62ed2f6c307f5a50aa27480f89c8c58cf081
 - JSON 详情可承载受控显示字段；CSV v1 不接收自由文本 displayName、标签或描述，且不采用 Key1/Key2 之类随数量增长的列。当前页面不生成文件，下载按钮保持稳定但禁用；真实内容开放前仍需服务端规范转义、防公式注入输入域与真实表格程序验收。读取和下载必须重新核对 Account、有效 Session 与精确权限，报告不提供公开 URL，并要求 `no-store`。
 - 定向用例覆盖凭证清单与账号报告分离、Root 计数临界值、正常确认后封存、超限审阅即时关闭、20 份未到期报告时拒绝新建且不提供删除/覆盖操作、跨 Account 拒绝、上限全量失败、精确来源覆盖、用户/密钥证据和无 Dialog。已推送的 [`fccd0847f`](https://github.com/xiak/matrix/commit/fccd0847f) 另以合法最大规模生成报告，确认 User 与 AccessKey 表分别只有表头加当前十行，并显示 100 页与 200 页。完整共享门禁与当前用例总数由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一记录；本节只接受账号安全报告的领域限制与交互结果。新建浏览器会话完成登录、打开与正常生成，桌面和 `390 × 844` 均无横向溢出；窄屏 document/body/client/scroll 宽度均为 390px，两个证据表保持字段标签。当前提交的全新 DEV 会话还确认保留冲突说明直接出现在生成前内容区，且没有浏览器 warning/error。4 MiB、当前未到期报告数量与真实资源变化仍由 LIVE 服务端最终校验。
 
-2026-10-01，访问分析信息架构与同步嵌入资源固定在 `23f09eb7`。本次只扩展隔离 MOCK 的配置清点与证据边界，不建立新的 IAM LIVE 读取、分析、处置或跨账号契约。
-- 身份安全概览另提供整页的访问分析 MOCK。该页面沿用稳定内容区而非 Dialog；固定标题、范围边界与页签立即呈现，数据表格在窄屏改为带字段标签的堆叠行。第一组只清点当前隔离租户中已经存在的 IdP、联合身份映射、provider 信任 Role 与 service principal Role，并把配置完整、不完整和停用严格限定为本地配置关系状态；它们都不代表身份已签发、Role 可承担、策略已允许、资源可达或入口曾被使用。详情只进入既有身份提供商或 Role 配置核对，不提供自动撤权。
-- 同一页面在读取任何入口结论前先呈现来源覆盖：联合身份与服务工作负载仅为 MOCK 配置已清点；资源策略/ACL 与跨账号委托当前不受预览支持；真实活动窗口仍未观测。未显示的资源侧或跨账号路径不能解释为不存在。现有 Role 契约仅覆盖 same-account 用户、服务和身份提供商；控制台不为尚未固定的跨账号语义伪造主体、授权或暴露状态。
-- 第二组保留未使用访问审阅样例，使用显式合成的完整 90 天窗口，只演示控制台密码、访问密钥和 Role 三类发现；当前真实数据缺少完整窗口与来源水位，因此不把任何真实身份判定为闲置。
-- `待审阅`、`已归档`、`已解决` 只属于隔离 MOCK 的发现展示状态，不冻结为 IAM LIVE 状态机，不进入 API decoder 或权限判断，也不改变 User、Key 或 Role 的资源状态。发现详情只能进入对应对象核对，不提供停用、删除或权限变更；后续真实处置必须调用各对象自己的生命周期命令，并重新核对版本、所有者、工作负载、授权来源、业务影响、能力与服务端结果。未观测、完整窗口内未出现、不适用和未知继续保持不同语义，尤其不能把“没有数据”显示成“从未使用”。未来任何真实 report、finding 和 cursor 都必须全程绑定 Account；租户发现归租户安全管理边界，平台运营者不因平台身份默认获得读取权。
-- 本证据只接受信息架构和隔离 MOCK 计算，不声称 IAM 已提供安全报告 HTTP、完整观测数据、风险模型或真实审计证明。
+2026-10-03，访问分析预览按 IAM S4c-a 固定源 `bbb2f7ee48d61f4c7a16de6edd457ef5640a675a` 重写，并随同步嵌入资源固定在控制台提交 `aac6650ea`。页面继续使用可收藏的稳定内容区而非 Dialog；标题、边界和页签立即呈现，只有数据区域承载来源状态。本轮只对齐固定契约并保留隔离 MOCK，不宣称已经接通 IAM LIVE。
+- 来源覆盖严格按 `IAM_PASSWORD_SESSIONS`、`IAM_ACCESS_KEY_AUTHORIZATIONS`、`IAM_ROLE_SESSIONS`、`IAM_ROLE_AUTHORIZATIONS`、`PAAS_RESULTS`、`EXTERNAL_FEDERATION` 排序。前四项只能显示 `INSUFFICIENT_COVERAGE / SOURCE_NOT_READY`，且必须同时给出 `observedFrom` 与 `observedThrough`；后两项只能显示 `NOT_INCLUDED / SOURCE_NOT_IMPLEMENTED`，且不得伪造观测时间。控制台分别解释“证据不足”和“未纳入”，不能把任一状态显示成没有风险、没有使用或扫描完成。
+- Analyzer 配置按当前 Account 展示 `id`、固定 `type=UNUSED_ACCESS`、`resourceVersion`、1–365 天阈值（默认 90）与 `ACTIVE / DISABLED`。隔离 MOCK 的审阅与应用只更新浏览器内版本；真正更新必须调用 IAM `:update` 并携带 `resourceVersion` 做 CAS，不能静默覆盖并发修改。
+- 固定 S4c-a 的 Finding 列表当前必须为空。页面保留的三个未使用访问样例明确标为合成只读 MOCK，只用于验证信息层级与对象跳转；它们没有服务端状态，也不提供归档、重新打开、解决、自动停用或授权变更。`REPORT_ONLY / HUMAN_REVIEW`、Finding 详情与生命周期、自动处置及“扫描完成/没有风险”都不属于本阶段。
+- 定向用例覆盖六项来源顺序和字段不变量、Analyzer 边界、CAS 版本提示、空真实 Finding 与只读合成样例；桌面和 `390 × 844` 均保持内容区交互、无 Dialog、无页面横向溢出。完整共享门禁由 FEAT-007 唯一记录。后端 Verification `37087693606` 在本记录形成时仍处于 queued，因而本节不继承 IAM 后端发布验收，也不把预览标为 LIVE。
 
 公共 UI、生产导出、完整前端及 Go 回归证据只归
 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence)
