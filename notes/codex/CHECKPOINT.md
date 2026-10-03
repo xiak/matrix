@@ -7,7 +7,7 @@
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
 - Pushed source/embed milestone: `63b4643bc`
-- Pushed documentation milestone: `fb44cd08e`
+- Pushed documentation milestone: `e7a78b45c`
 
 ## Authoritative route
 
@@ -49,6 +49,15 @@ pairs, 45-route production export, 249-file embed equality, repository
 checks passed with document/body client and scroll widths at 390px; a fresh
 reload emitted no warning/error.
 
+Documentation milestone `e7a78b45c` replaces the service-authorization read
+baseline with cumulative IAM source
+`a464299b6656becc73054cd53b4a31b44104540b`; Verification `36779942782`
+completed all 14 tasks successfully. The accepted browser boundary is only the
+three current-`LOGIN_SESSION` customer reads for templates, Account relations
+and exact bindings. Account remains outside browser selection, IAM stays
+read-only, and product bind/unbind remains unmounted pending its own fixed
+source and terminal evidence.
+
 ## Continuation boundary
 
 Keep the MOCK preview available. Consume IAM changes only from fixed, pushed
@@ -57,10 +66,11 @@ still needs a real-IAM browser mutation flow and installed-release acceptance;
 product PEP enforcement, current permit and cloud-product credential usability
 must not be inferred from IAM observations.
 
-For the next UI slices, prefer the fixed public surface in this order: read-only
-service-template / Account-relation / workload-binding information architecture,
-then any Access Analyzer rule whose exact backend source has a successful
-terminal gate. A template being `ACTIVE` is not Account consent, a binding or a
+The service-template / Account-relation / workload-binding read surface is now
+an accepted contract baseline but still needs real-IAM browser verification.
+For the next UI slice, prefer an Access Analyzer rule only after its exact
+backend source has a successful terminal gate; otherwise keep the existing
+isolated MOCK. A template being `ACTIVE` is not Account consent, a binding or a
 credential. Do not call `/v1/internal/*`, invent product selectors or expose a
 write action whose public contract has not been accepted. Preserve current
 page-shell loading, local data feedback, shared tables and content-area actions.
