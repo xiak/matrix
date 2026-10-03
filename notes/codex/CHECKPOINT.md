@@ -6,8 +6,8 @@
 - Updated: 2026-10-03
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `7b040479f`
-- Pushed documentation milestone: `071dda4d9`
+- Pushed source/embed milestone: `eb3f65953`
+- Pushed documentation milestone: `a51b76b32`
 
 ## Authoritative route
 
@@ -29,23 +29,24 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The isolated service-
-authorization directory now follows the fixed FEAT-IAM-008 template vocabulary
-without presenting a template as Account consent: the release-owned template
-defines an account-scoped permission ceiling and 15-minute maximum, while the
-exact `SERVICE_INSTALLATION` remains an independent workload binding. The
-review also exposes product bind, service-linked-role create and role-pass as
-three separate checks. Concrete subjects, resources, PolicyVersion IDs,
-digests and session records stay visibly MOCK.
+login verification remains disabled for UX review. The managed-service
+capability directory now projects the current eight-Action Profile revision 4,
+including the explicitly bounded `instanceListBatch` PEP transport capability.
+The product publishing review cross-checks that immutable Profile snapshot
+against the shared `managedservice.installation-reader@v1` template: product,
+service purpose, bind/unbind Actions, resource kind, TENANT exact-instance
+shape, USER subject and login-session credential must all match. The Profile,
+template and permission-ceiling PolicyVersion remain three distinct references;
+compatibility is never shown as Account consent, Role relation, binding,
+RoleSession or permission.
 
-Source and synchronized embed are pushed at `7b040479f`; FEAT evidence is
-pushed at `071dda4d9`. Service-authorization 4-case, role-workspace 202-case and
-product-resource 69-case runs passed. A complete 60-file run reached 1025/1026;
-the unchanged audit-lineage case exceeded the five-second limit only under full
-load and passed 5/5 in an immediate default-timeout rerun. Typecheck, lint,
-architecture, 228-pair style checks, three normalization cases, 45-route
-export, 249-file embed equality and repository Go test/vet passed. Desktop and
-`390 × 844` DEV showed no Dialog, overflow or browser warning/error.
+Source and synchronized embed are pushed at `eb3f65953`; FEAT evidence is
+pushed at `a51b76b32`. The affected five-file run passed 317 tests. Typecheck,
+lint, architecture, 228-pair style checks, 45-route production export,
+249-file embed equality and repository Go test/vet passed. The full Vitest run
+was stopped after extended silent execution and is not claimed as evidence.
+Desktop and `390 × 844` DEV showed the new review as a stable three-column/
+single-column information flow with no overflow or browser warning/error.
 
 Earlier Account security report, federation replacement, Deployment lifecycle,
 AccessKey carrier, Application tag recovery, service authorization, policy
