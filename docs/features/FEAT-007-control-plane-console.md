@@ -1912,6 +1912,8 @@ or PostgreSQL runtime regression, a new APISIX installation/upgrade, or complete
 IAM acceptance. Earlier live User-boundary evidence retains its named source
 and is not inherited as a new backend acceptance result.
 
+| IAM AuthorizationProfile candidate diff preview | The isolated product-onboarding review now compares the current catalog declaration with a visibly synthetic candidate in its IAM-validation stage. It fixes both immutable references and reports only structural declaration additions, removals and changes across product/calling-service and the complete Action shape; invalid revisions, duplicate Actions and cross-product candidates fail closed. Revision order, digest and diff counts never become an expansion/reduction, identity-impact, Allow/Deny, migration, PEP, approval, rollback or publish conclusion. No upload, save, ACTIVE or publish control exists, the entry stays absent from LIVE and no repository write occurs. The three-column table mounts only the current 10-row page; a 1,202-change behavior case proves pagination, while desktop and `390 × 844` checks show no Dialog, overflow or browser warning/error. Source and synchronized embed are pushed at `6314911b2`; 197 focused cases and the complete 62-file/1,047-case frontend suite passed with three normalization tests, type/lint/architecture/228-pair style gates, 45-page export, 43 normalized paths, 249-file embed equality and repository Go test/vet. Exact exclusions remain owned by [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#权限能力目录片的开发验收证据). |
+
 ### Retained shared UX and earlier named release evidence
 
 - Live user and tenant cursor actions own their repository reads independently:
