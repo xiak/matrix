@@ -1,4 +1,5 @@
 import type { ActionCapability } from "./accounts";
+import type { AccessKeyNetworkRestrictions, AccessKeyUsageObservation } from "./accessKeyNetwork";
 
 export type AccessKeyStatus = "ENABLED" | "DISABLED";
 
@@ -7,6 +8,7 @@ export type ManagedAccessKey = {
   accountId: string;
   userId: string;
   status: AccessKeyStatus;
+  networkRestrictions: AccessKeyNetworkRestrictions;
   resourceVersion: number;
   createdAt: string;
   updatedAt: string;
@@ -14,6 +16,7 @@ export type ManagedAccessKey = {
 
 export type AccessKeyAccess = {
   key: ManagedAccessKey;
+  usage: AccessKeyUsageObservation;
   capabilities: ActionCapability[];
 };
 
@@ -33,6 +36,8 @@ export type AccessKeyStatusChange = {
   outcome: "APPLIED" | "EQUAL_REPLAY";
   key: ManagedAccessKey;
 };
+
+export type AccessKeyNetworkChange = AccessKeyStatusChange;
 
 export type AccessKeyDeletion = {
   outcome: "APPLIED" | "EQUAL_REPLAY";

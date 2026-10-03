@@ -1,3 +1,5 @@
+import type { AccessKeyNetworkRestrictions } from "./accessKeyNetwork";
+
 export type PolicyScope = "TENANT" | "INSTALLATION";
 export type PolicyManagement = "SYSTEM" | "CUSTOMER";
 export type PolicyStatus = "ACTIVE" | "RETIRED";
@@ -39,6 +41,7 @@ export type IamAction =
   | "iam.access-key.create"
   | "iam.access-key.read"
   | "iam.access-key.set-status"
+  | "iam.access-key.set-network-restrictions"
   | "iam.access-key.delete";
 
 export type CapabilityRestriction =
@@ -83,9 +86,9 @@ export type AccountSecuritySettings = {
   accountId: string;
   resourceVersion: number;
   mfa: { requiredForUsers: boolean };
-  // Null is confined to the pre-password-settings IAM runtime and retained
-  // historical completions. Never substitute the MOCK sample as account data.
-  password: AccountPasswordSettings | null;
+  password: AccountPasswordSettings;
+  session: AccountSessionSettings;
+  accessKeyNetwork: AccessKeyNetworkRestrictions;
   updatedAt: string;
 };
 
@@ -96,17 +99,30 @@ export type AccountPasswordSettings = {
   requireDigit: boolean;
   requireSymbol: boolean;
   historyCount: number;
+  maxAgeDays: number;
+  expiryMode: "CHANGE_PASSWORD" | "ADMIN_RESET";
+};
+
+export type AccountSessionSettings = { idleTimeoutMinutes: number };
+
+export type RetainedAccountSecuritySettings = Omit<AccountSecuritySettings, "password" | "session" | "accessKeyNetwork"> & {
+  password: (Omit<AccountPasswordSettings, "maxAgeDays" | "expiryMode"> & Partial<Pick<AccountPasswordSettings, "maxAgeDays" | "expiryMode">>) | null;
+  session: AccountSessionSettings | null;
+  accessKeyNetwork: AccessKeyNetworkRestrictions | null;
 };
 
 export type SecuritySettingsUpdateIntent = {
   expectedResourceVersion: number;
   mfa: { requiredForUsers: boolean };
+  password: AccountPasswordSettings;
+  session: AccountSessionSettings;
+  accessKeyNetwork: AccessKeyNetworkRestrictions;
 };
 
 export type AccountSecuritySettingsChange = {
   requestId: string;
   expectedResourceVersion: number;
-  settings: AccountSecuritySettings;
+  settings: RetainedAccountSecuritySettings;
   callerSessionEnded: true;
 };
 

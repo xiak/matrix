@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, parseAccessKeyNetworkDraft } from "./accessKeyNetwork";
+import { accessKeyAuthorizationSourceIpValid, accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, parseAccessKeyNetworkDraft } from "./accessKeyNetwork";
 
 describe("AccessKey network restriction preview", () => {
   it("normalizes and sorts strict IPv4 and IPv6 networks", () => {
@@ -34,5 +34,13 @@ describe("AccessKey network restriction preview", () => {
   it("compares canonical restriction values without relying on object serialization", () => {
     expect(accessKeyNetworkRestrictionsEqual({ allowedSourceCidrs: ["2001:db8::/32"] }, { allowedSourceCidrs: ["2001:db8::/32"] })).toBe(true);
     expect(accessKeyNetworkRestrictionsEqual({ allowedSourceCidrs: ["2001:db8::/32"] }, { allowedSourceCidrs: ["203.0.113.0/24"] })).toBe(false);
+  });
+
+  it("accepts only canonical unicast authorization source addresses", () => {
+    expect(accessKeyAuthorizationSourceIpValid("198.51.100.42")).toBe(true);
+    expect(accessKeyAuthorizationSourceIpValid("2001:db8::42")).toBe(true);
+    for (const invalid of ["0.0.0.0", "224.0.0.1", "::", "ff02::1", "::ffff:192.0.2.1", "2001:0db8::42", "fe80::1%eth0", "198.051.100.42"]) {
+      expect(accessKeyAuthorizationSourceIpValid(invalid)).toBe(false);
+    }
   });
 });

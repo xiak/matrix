@@ -5,6 +5,8 @@ import type {
   AccountIdentity,
   AccountSecuritySettings,
   AccountPasswordSettings,
+  AccountSessionSettings,
+  RetainedAccountSecuritySettings,
   AccountSecuritySettingsChange,
   AccountSecuritySettingsUpdate,
   SecuritySettingsUpdateIntent,
@@ -64,12 +66,13 @@ import type {
   OwnSessionRevocation,
   SessionSummary
 } from "../domain/session";
-import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
+import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
 import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessDispositionRule, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
 import { sourceCidrValid } from "../domain/policyLanguage";
+import { accessKeyAuthorizationSourceIpValid, accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, type AccessKeyNetworkRestrictions, type AccessKeyUsageObservation } from "../domain/accessKeyNetwork";
 
 function accountRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("INVALID_IAM_RESPONSE");
@@ -161,7 +164,8 @@ const capabilityActions = new Set<IamAction>([
   "iam.user.permission-boundary.set", "iam.user.permission-boundary.remove",
   "iam.user.reset-password", "iam.policy-attachment.create", "iam.platform-policy-attachment.create",
   "iam.policy-attachment.revoke", "iam.platform-policy-attachment.revoke",
-  "iam.access-key.list", "iam.access-key.create", "iam.access-key.read", "iam.access-key.set-status", "iam.access-key.delete"
+  "iam.access-key.list", "iam.access-key.create", "iam.access-key.read", "iam.access-key.set-status",
+  "iam.access-key.set-network-restrictions", "iam.access-key.delete"
 ]);
 
 const capabilityRestrictions = new Set<CapabilityRestriction>([
@@ -171,7 +175,8 @@ const capabilityRestrictions = new Set<CapabilityRestriction>([
 ]);
 
 function capabilityResourceKind(action: IamAction): ActionCapability["resource"]["kind"] {
-  if (action === "iam.access-key.read" || action === "iam.access-key.set-status" || action === "iam.access-key.delete") return "ACCESS_KEY";
+  if (action === "iam.access-key.read" || action === "iam.access-key.set-status" ||
+      action === "iam.access-key.set-network-restrictions" || action === "iam.access-key.delete") return "ACCESS_KEY";
   if (action === "iam.user.read" || action === "iam.user.update" || action === "iam.user.delete" ||
       action === "iam.user.permission-boundary.set" || action === "iam.user.permission-boundary.remove" ||
       action === "iam.user.set-status" || action === "iam.user.reset-password" ||
@@ -371,7 +376,7 @@ function parseGroup(value: unknown): Group {
 
 function parseManagedAccessKey(value: unknown): ManagedAccessKey {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "userId", "status", "resourceVersion", "createdAt", "updatedAt"]);
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "userId", "status", "networkRestrictions", "resourceVersion", "createdAt", "updatedAt"]);
   requireAccountKind(wire, "AccessKey");
   if (wire.status !== "ENABLED" && wire.status !== "DISABLED") throw new Error("INVALID_IAM_RESPONSE");
   const resourceVersion = accountVersion(wire.resourceVersion);
@@ -381,13 +386,14 @@ function parseManagedAccessKey(value: unknown): ManagedAccessKey {
     accountId: accountIdentifier(wire.accountId),
     userId: accountIdentifier(wire.userId),
     status: wire.status,
+    networkRestrictions: parseAccessKeyNetworkRestrictions(wire.networkRestrictions),
     resourceVersion,
     ...chronologicalTimestamps(wire.createdAt, wire.updatedAt)
   };
 }
 
 function accessKeyCapabilities(accessKeyId: string): Array<Pick<ActionCapability, "action" | "resource">> {
-  return (["iam.access-key.read", "iam.access-key.set-status", "iam.access-key.delete"] as const).map((action) => ({
+  return (["iam.access-key.read", "iam.access-key.set-status", "iam.access-key.set-network-restrictions", "iam.access-key.delete"] as const).map((action) => ({
     action,
     resource: { kind: "ACCESS_KEY" as const, id: accessKeyId }
   }));
@@ -395,12 +401,40 @@ function accessKeyCapabilities(accessKeyId: string): Array<Pick<ActionCapability
 
 function parseAccessKeyAccess(value: unknown, accountId: string, userId: string, accessKeyId?: string): AccessKeyAccess {
   const wire = accountRecord(value);
-  exactKeys(wire, ["key", "capabilities"]);
+  exactKeys(wire, ["key", "usage", "capabilities"]);
   const key = parseManagedAccessKey(wire.key);
   if (key.accountId !== accountId || key.userId !== userId || (accessKeyId !== undefined && key.id !== accessKeyId)) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
-  return { key, capabilities: parseCapabilities(wire.capabilities, accessKeyCapabilities(key.id)) };
+  return { key, usage: parseAccessKeyUsage(wire.usage), capabilities: parseCapabilities(wire.capabilities, accessKeyCapabilities(key.id)) };
+}
+
+function parseAccessKeyNetworkRestrictions(value: unknown): AccessKeyNetworkRestrictions {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["allowedSourceCidrs"]);
+  if (!Array.isArray(wire.allowedSourceCidrs) || wire.allowedSourceCidrs.some((entry) => typeof entry !== "string")) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const restrictions = { allowedSourceCidrs: [...wire.allowedSourceCidrs] as string[] };
+  if (!accessKeyNetworkRestrictionsValid(restrictions)) throw new Error("INVALID_IAM_RESPONSE");
+  return restrictions;
+}
+
+function parseAccessKeyUsage(value: unknown): AccessKeyUsageObservation {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["observedAt"], ["lastAuthorization"]);
+  const observedAt = accountTimestamp(wire.observedAt);
+  if (wire.lastAuthorization === undefined) return { observedAt };
+  const authorization = accountRecord(wire.lastAuthorization);
+  exactKeys(authorization, ["evaluatedAt", "allowed", "product", "action", "sourceIp"]);
+  const evaluatedAt = accountTimestamp(authorization.evaluatedAt);
+  const product = accountText(authorization.product);
+  const action = accountText(authorization.action);
+  const sourceIp = accountText(authorization.sourceIp);
+  if (timestampOrder(evaluatedAt) > timestampOrder(observedAt) || typeof authorization.allowed !== "boolean" ||
+      !/^[a-z][a-z0-9-]{0,63}$/.test(product) || !/^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/.test(action) ||
+      !action.startsWith(`${product}.`) || !accessKeyAuthorizationSourceIpValid(sourceIp)) throw new Error("INVALID_IAM_RESPONSE");
+  return { observedAt, lastAuthorization: { evaluatedAt, allowed: authorization.allowed, product, action, sourceIp } };
 }
 
 function parseAccessKeyDirectory(value: unknown, accountId: string, userId: string): AccessKeyDirectory {
@@ -443,6 +477,19 @@ function parseAccessKeyStatusChange(value: unknown, accountId: string, userId: s
   if (wire.outcome !== "APPLIED" && wire.outcome !== "EQUAL_REPLAY") throw new Error("INVALID_IAM_RESPONSE");
   const key = parseManagedAccessKey(wire.key);
   if (key.accountId !== accountId || key.userId !== userId || key.id !== accessKeyId || key.status !== status || key.resourceVersion !== commandVersion + 1) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { outcome: wire.outcome, key };
+}
+
+function parseAccessKeyNetworkChange(value: unknown, accountId: string, userId: string, accessKeyId: string, commandVersion: number, restrictions: AccessKeyNetworkRestrictions): AccessKeyNetworkChange {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["outcome", "key"]);
+  if (wire.outcome !== "APPLIED" && wire.outcome !== "EQUAL_REPLAY") throw new Error("INVALID_IAM_RESPONSE");
+  const key = parseManagedAccessKey(wire.key);
+  if (key.accountId !== accountId || key.userId !== userId || key.id !== accessKeyId || key.resourceVersion !== commandVersion + 1 ||
+      key.networkRestrictions.allowedSourceCidrs.length !== restrictions.allowedSourceCidrs.length ||
+      key.networkRestrictions.allowedSourceCidrs.some((entry, index) => entry !== restrictions.allowedSourceCidrs[index])) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
   return { outcome: wire.outcome, key };
@@ -851,16 +898,31 @@ function boundedFactorRevision(value: unknown): number {
 
 function parseSecuritySettingsIntent(value: unknown): SecuritySettingsUpdateIntent {
   const wire = accountRecord(value);
-  exactKeys(wire, ["expectedResourceVersion", "mfa"]);
+  exactKeys(wire, ["expectedResourceVersion", "mfa", "password", "session", "accessKeyNetwork"]);
   const mfa = accountRecord(wire.mfa);
   exactKeys(mfa, ["requiredForUsers"]);
   const expectedResourceVersion = accountVersion(wire.expectedResourceVersion);
   if (expectedResourceVersion >= Number.MAX_SAFE_INTEGER || typeof mfa.requiredForUsers !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
-  return { expectedResourceVersion, mfa: { requiredForUsers: mfa.requiredForUsers } };
+  return { expectedResourceVersion, mfa: { requiredForUsers: mfa.requiredForUsers },
+    password: parseAccountPasswordSettings(wire.password), session: parseAccountSessionSettings(wire.session),
+    accessKeyNetwork: parseAccessKeyNetworkRestrictions(wire.accessKeyNetwork) };
+}
+
+function accountPasswordSettingsEqual(actual: AccountPasswordSettings, expected: AccountPasswordSettings): boolean {
+  return actual.minimumLength === expected.minimumLength &&
+    actual.requireLowercase === expected.requireLowercase &&
+    actual.requireUppercase === expected.requireUppercase &&
+    actual.requireDigit === expected.requireDigit &&
+    actual.requireSymbol === expected.requireSymbol &&
+    actual.historyCount === expected.historyCount &&
+    actual.maxAgeDays === expected.maxAgeDays &&
+    actual.expiryMode === expected.expiryMode;
 }
 
 function sameSecuritySettingsIntent(actual: SecuritySettingsUpdateIntent, expected: SecuritySettingsUpdateIntent): boolean {
-  return actual.expectedResourceVersion === expected.expectedResourceVersion && actual.mfa.requiredForUsers === expected.mfa.requiredForUsers;
+  return actual.expectedResourceVersion === expected.expectedResourceVersion && actual.mfa.requiredForUsers === expected.mfa.requiredForUsers &&
+    accountPasswordSettingsEqual(actual.password, expected.password) && actual.session.idleTimeoutMinutes === expected.session.idleTimeoutMinutes &&
+    accessKeyNetworkRestrictionsEqual(actual.accessKeyNetwork, expected.accessKeyNetwork);
 }
 
 function parseSecurityStepUp(value: unknown, operation: SecurityStepUp["operation"], expectedIntent?: SecuritySettingsUpdateIntent): SecurityStepUp {
@@ -2239,40 +2301,88 @@ function accountHeaders(credential: string): HeadersInit { return { Authorizatio
 
 function parseAccountPasswordSettings(value: unknown): AccountPasswordSettings {
   const wire = accountRecord(value);
-  exactKeys(wire, ["minimumLength", "requireLowercase", "requireUppercase", "requireDigit", "requireSymbol", "historyCount"]);
+  const base = ["minimumLength", "requireLowercase", "requireUppercase", "requireDigit", "requireSymbol", "historyCount"];
+  exactKeys(wire, [...base, "maxAgeDays", "expiryMode"]);
   if (!Number.isSafeInteger(wire.minimumLength) || (wire.minimumLength as number) < 15 || (wire.minimumLength as number) > 128 ||
       !Number.isSafeInteger(wire.historyCount) || (wire.historyCount as number) < 0 || (wire.historyCount as number) > 24 ||
       typeof wire.requireLowercase !== "boolean" || typeof wire.requireUppercase !== "boolean" ||
       typeof wire.requireDigit !== "boolean" || typeof wire.requireSymbol !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  if (!Number.isSafeInteger(wire.maxAgeDays) || (wire.maxAgeDays as number) < 0 || (wire.maxAgeDays as number) > 365 ||
+      (wire.expiryMode !== "CHANGE_PASSWORD" && wire.expiryMode !== "ADMIN_RESET")) throw new Error("INVALID_IAM_RESPONSE");
   return {
     minimumLength: wire.minimumLength as number, historyCount: wire.historyCount as number,
     requireLowercase: wire.requireLowercase, requireUppercase: wire.requireUppercase,
-    requireDigit: wire.requireDigit, requireSymbol: wire.requireSymbol
+    requireDigit: wire.requireDigit, requireSymbol: wire.requireSymbol,
+    maxAgeDays: wire.maxAgeDays as number,
+    expiryMode: wire.expiryMode as AccountPasswordSettings["expiryMode"]
   };
+}
+
+function parseRetainedAccountPasswordSettings(value: unknown): NonNullable<RetainedAccountSecuritySettings["password"]> {
+  const wire = accountRecord(value);
+  const base = ["minimumLength", "requireLowercase", "requireUppercase", "requireDigit", "requireSymbol", "historyCount"];
+  exactKeys(wire, base, ["maxAgeDays", "expiryMode"]);
+  const current = wire.maxAgeDays === undefined && wire.expiryMode === undefined ? null : parseAccountPasswordSettings(wire);
+  if (current) return current;
+  if (!Number.isSafeInteger(wire.minimumLength) || (wire.minimumLength as number) < 15 || (wire.minimumLength as number) > 128 ||
+      !Number.isSafeInteger(wire.historyCount) || (wire.historyCount as number) < 0 || (wire.historyCount as number) > 24 ||
+      typeof wire.requireLowercase !== "boolean" || typeof wire.requireUppercase !== "boolean" ||
+      typeof wire.requireDigit !== "boolean" || typeof wire.requireSymbol !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  return { minimumLength: wire.minimumLength as number, historyCount: wire.historyCount as number,
+    requireLowercase: wire.requireLowercase, requireUppercase: wire.requireUppercase,
+    requireDigit: wire.requireDigit, requireSymbol: wire.requireSymbol };
+}
+
+function parseAccountSessionSettings(value: unknown): AccountSessionSettings {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["idleTimeoutMinutes"]);
+  if (!Number.isSafeInteger(wire.idleTimeoutMinutes) || (wire.idleTimeoutMinutes as number) < 5 || (wire.idleTimeoutMinutes as number) > 60) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { idleTimeoutMinutes: wire.idleTimeoutMinutes as number };
 }
 
 function parseAccountSecuritySettings(value: unknown, expectedAccountId: string): AccountSecuritySettings {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "accountId", "resourceVersion", "mfa", "updatedAt"], ["password"]);
+  const base = ["apiVersion", "kind", "accountId", "resourceVersion", "mfa", "updatedAt"];
+  exactKeys(wire, [...base, "password", "session", "accessKeyNetwork"]);
+  requireAccountKind(wire, "AccountSecuritySettings");
+  const accountId = accountIdentifier(wire.accountId);
+  const mfa = accountRecord(wire.mfa);
+  exactKeys(mfa, ["requiredForUsers"]);
+  if (accountId !== accountIdentifier(expectedAccountId) || typeof mfa.requiredForUsers !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  if (wire.password === null || wire.session === null || wire.accessKeyNetwork === null) throw new Error("INVALID_IAM_RESPONSE");
+  return { accountId, resourceVersion: accountVersion(wire.resourceVersion), mfa: { requiredForUsers: mfa.requiredForUsers },
+    password: parseAccountPasswordSettings(wire.password), session: parseAccountSessionSettings(wire.session),
+    accessKeyNetwork: parseAccessKeyNetworkRestrictions(wire.accessKeyNetwork),
+    updatedAt: accountTimestamp(wire.updatedAt) };
+}
+
+function parseRetainedAccountSecuritySettings(value: unknown, expectedAccountId: string): RetainedAccountSecuritySettings {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "resourceVersion", "mfa", "updatedAt"], ["password", "session", "accessKeyNetwork"]);
   requireAccountKind(wire, "AccountSecuritySettings");
   const accountId = accountIdentifier(wire.accountId);
   const mfa = accountRecord(wire.mfa);
   exactKeys(mfa, ["requiredForUsers"]);
   if (accountId !== accountIdentifier(expectedAccountId) || typeof mfa.requiredForUsers !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
   return { accountId, resourceVersion: accountVersion(wire.resourceVersion), mfa: { requiredForUsers: mfa.requiredForUsers },
-    password: wire.password === undefined ? null : parseAccountPasswordSettings(wire.password), updatedAt: accountTimestamp(wire.updatedAt) };
+    password: wire.password === undefined ? null : parseRetainedAccountPasswordSettings(wire.password),
+    session: wire.session === undefined ? null : parseAccountSessionSettings(wire.session),
+    accessKeyNetwork: wire.accessKeyNetwork === undefined ? null : parseAccessKeyNetworkRestrictions(wire.accessKeyNetwork),
+    updatedAt: accountTimestamp(wire.updatedAt) };
 }
 
 function parseAccountSecuritySettingsChange(value: unknown, accountId: string, requestId: string, intent: SecuritySettingsUpdateIntent): AccountSecuritySettingsChange {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "requestId", "expectedResourceVersion", "settings", "callerSessionEnded"]);
   requireAccountKind(wire, "AccountSecuritySettingsChange");
-  const settings = parseAccountSecuritySettings(wire.settings, accountId);
-  // This unmounted legacy write client freezes only MFA. It must not accept a
-  // newer combined-settings completion that it never bound into its intent.
-  if (settings.password !== null) throw new Error("INVALID_IAM_RESPONSE");
+  const settings = parseRetainedAccountSecuritySettings(wire.settings, accountId);
+  if (settings.password === null || settings.session === null || settings.accessKeyNetwork === null) throw new Error("INVALID_IAM_RESPONSE");
   if (accountIdentifier(wire.requestId) !== requestId || accountVersion(wire.expectedResourceVersion) !== intent.expectedResourceVersion ||
       settings.resourceVersion !== intent.expectedResourceVersion + 1 || settings.mfa.requiredForUsers !== intent.mfa.requiredForUsers ||
+      !accountPasswordSettingsEqual(settings.password as AccountPasswordSettings, intent.password) || settings.session.idleTimeoutMinutes !== intent.session.idleTimeoutMinutes ||
+      !accessKeyNetworkRestrictionsEqual(settings.accessKeyNetwork, intent.accessKeyNetwork) ||
       wire.callerSessionEnded !== true) throw new Error("INVALID_IAM_RESPONSE");
   return { requestId, expectedResourceVersion: intent.expectedResourceVersion, settings, callerSessionEnded: true };
 }
@@ -2456,7 +2566,8 @@ export const httpAccountRepository: AccountRepository = {
         return parseAccountSecuritySettingsUpdate(await requestJSON<unknown>("/api/iam/v1/account/security-settings", {
           method: "PUT",
           headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
-          body: JSON.stringify({ requestId, stepUpId, expectedResourceVersion: intent.expectedResourceVersion, mfa: intent.mfa })
+          body: JSON.stringify({ requestId, stepUpId, expectedResourceVersion: intent.expectedResourceVersion, mfa: intent.mfa,
+            password: intent.password, session: intent.session, accessKeyNetwork: intent.accessKeyNetwork })
         }), target, requestId, intent);
       },
       async changeByRequest(credential, accountId, requestId, expectedIntent) {
@@ -2598,10 +2709,11 @@ export const httpAccountRepository: AccountRepository = {
     async create(credential, accountId, userId, command) {
       const target = accountIdentifier(userId);
       const userResourceVersion = accountVersion(command.userResourceVersion);
+      if (!accessKeyNetworkRestrictionsValid(command.networkRestrictions)) throw new Error("INVALID_IAM_REQUEST");
       return parseAccessKeyCreation(await postAccount(
         credential,
         `/api/iam/v1/users/${encodeURIComponent(target)}/access-keys`,
-        { userResourceVersion, requestId: accountIdentifier(command.requestId) }
+        { userResourceVersion, networkRestrictions: command.networkRestrictions, requestId: accountIdentifier(command.requestId) }
       ), accountIdentifier(accountId), target);
     },
     async setStatus(credential, accountId, userId, accessKeyId, command) {
@@ -2616,6 +2728,20 @@ export const httpAccountRepository: AccountRepository = {
         `/api/iam/v1/users/${encodeURIComponent(target)}/access-keys/${encodeURIComponent(keyId)}:set-status`,
         { accessKeyResourceVersion, requestId: accountIdentifier(command.requestId), status: command.status }
       ), accountIdentifier(accountId), target, keyId, accessKeyResourceVersion, command.status);
+    },
+    async setNetworkRestrictions(credential, accountId, userId, accessKeyId, command) {
+      const target = accountIdentifier(userId);
+      const keyId = accountIdentifier(accessKeyId);
+      const accessKeyResourceVersion = accountVersion(command.accessKeyResourceVersion);
+      if (accessKeyResourceVersion === Number.MAX_SAFE_INTEGER || !accessKeyNetworkRestrictionsValid(command.networkRestrictions)) {
+        throw new Error("INVALID_IAM_REQUEST");
+      }
+      return parseAccessKeyNetworkChange(await requestJSON<unknown>(
+        `/api/iam/v1/users/${encodeURIComponent(target)}/access-keys/${encodeURIComponent(keyId)}/network-restrictions`,
+        { method: "PUT", headers: { ...accountHeaders(credential), "Content-Type": "application/json" }, body: JSON.stringify({
+          accessKeyResourceVersion, networkRestrictions: command.networkRestrictions, requestId: accountIdentifier(command.requestId)
+        }) }
+      ), accountIdentifier(accountId), target, keyId, accessKeyResourceVersion, command.networkRestrictions);
     },
     async delete(credential, accountId, userId, accessKeyId, command) {
       const target = accountIdentifier(userId);

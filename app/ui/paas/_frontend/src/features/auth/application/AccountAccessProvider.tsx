@@ -28,7 +28,8 @@ import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceRoleTe
 import { type AccessWorkspace, type AccessWorkspaceCommand, type PendingAccountRuleChange } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import type { AccountRepository } from "../repositories/iamRepository";
-import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
+import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
+import { accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, type AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
@@ -186,9 +187,10 @@ export type AccessKeyClient = {
   accountId: string;
   list(userId: string): Promise<AccessKeyDirectory>;
   read(userId: string, accessKeyId: string): Promise<AccessKeyAccess>;
-  create(userId: string, command: { userResourceVersion: number; requestId: string }): Promise<AccessKeyCreation>;
+  create(userId: string, command: { userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string }): Promise<AccessKeyCreation>;
   acknowledgeIssued(requestId: string, accessKeyId: string): boolean;
   setStatus(userId: string, accessKeyId: string, command: { accessKeyResourceVersion: number; requestId: string; status: AccessKeyStatus }): Promise<AccessKeyStatusChange>;
+  setNetworkRestrictions(userId: string, accessKeyId: string, command: { accessKeyResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string }): Promise<AccessKeyNetworkChange>;
   delete(userId: string, accessKeyId: string, command: { accessKeyResourceVersion: number; requestId: string }): Promise<AccessKeyDeletion>;
 };
 
@@ -211,6 +213,7 @@ export type AccessKeyCreateIntent = Readonly<{
   actorId: string;
   userId: string;
   userResourceVersion: number;
+  networkRestrictions: AccessKeyNetworkRestrictions;
   requestId: string;
 } & ({ phase: "unknown" } | { phase: "recovered"; keyId: string })>;
 
@@ -282,10 +285,12 @@ function readAccessKeyCreateIntent(accountId: string, actorId: string): AccessKe
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
-    const base = ["accountId", "actorId", "userId", "userResourceVersion", "requestId", "phase"];
+    const base = ["accountId", "actorId", "userId", "userResourceVersion", "networkRestrictions", "requestId", "phase"];
     if (record.accountId !== accountId || record.actorId !== actorId ||
       typeof record.userId !== "string" || !record.userId || record.userId.length > 256 ||
       typeof record.userResourceVersion !== "number" || !Number.isSafeInteger(record.userResourceVersion) || record.userResourceVersion < 1 ||
+      !record.networkRestrictions || typeof record.networkRestrictions !== "object" || Array.isArray(record.networkRestrictions) ||
+      !accessKeyNetworkRestrictionsValid(record.networkRestrictions as AccessKeyNetworkRestrictions) ||
       typeof record.requestId !== "string" || !/^ui-access-key-create-[0-9a-f]{32}$/.test(record.requestId) ||
       (record.phase !== "unknown" && record.phase !== "recovered") ||
       Object.keys(record).length !== base.length + (record.phase === "recovered" ? 1 : 0) ||
@@ -1084,11 +1089,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
           !/^ui-access-key-create-[0-9a-f]{32}$/.test(command.requestId)) throw new HttpProblem(400, "INVALID_ACCESS_KEY_CREATE_INTENT");
         if (accessKeyCreateSubmitting.current?.session === viewSession) throw new HttpProblem(409, "ACCESS_KEY_CREATE_IN_FLIGHT");
         const pending = accessKeyCreateRef.current?.session === viewSession ? accessKeyCreateRef.current.intent : null;
-        if (pending && (pending.phase !== "unknown" || pending.userId !== userId || pending.userResourceVersion !== command.userResourceVersion || pending.requestId !== command.requestId)) {
+        if (pending && (pending.phase !== "unknown" || pending.userId !== userId || pending.userResourceVersion !== command.userResourceVersion ||
+          !accessKeyNetworkRestrictionsEqual(pending.networkRestrictions, command.networkRestrictions) || pending.requestId !== command.requestId)) {
           throw new HttpProblem(409, "ACCESS_KEY_CREATE_INTENT_LOCKED");
         }
         const intent: AccessKeyCreateIntent = pending ?? {
           accountId, actorId: principalId, userId, userResourceVersion: command.userResourceVersion,
+          networkRestrictions: command.networkRestrictions,
           requestId: command.requestId, phase: "unknown"
         };
         if (!pending) {
@@ -1133,6 +1140,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         return true;
       },
       setStatus: (userId, accessKeyId, command) => scoped(keyRepository.setStatus(credential, accountId, target(userId), accessKeyId, command)),
+      setNetworkRestrictions: (userId, accessKeyId, command) => scoped(keyRepository.setNetworkRestrictions(credential, accountId, target(userId), accessKeyId, command)),
       delete: async (userId, accessKeyId, command) => {
         const result = await scoped(keyRepository.delete(credential, accountId, target(userId), accessKeyId, command));
         const pending = accessKeyCreateRef.current?.session === viewSession ? accessKeyCreateRef.current.intent : null;

@@ -516,11 +516,14 @@ describe("IAM HTTP member role self-service boundary", () => {
 });
 
 const accessKey = { apiVersion, kind: "AccessKey", id: "mak1.alex-primary", accountId: account.id, userId: user.id,
-  status: "ENABLED", resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+  status: "ENABLED", networkRestrictions: { allowedSourceCidrs: ["198.51.100.0/24"] }, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
 function accessKeyAccess(value = accessKey) {
-  return { key: value, capabilities: [
+  return { key: value, usage: { observedAt: timestamp, lastAuthorization: {
+    evaluatedAt: timestamp, allowed: false, product: "audit", action: "audit.record.read", sourceIp: "198.51.100.42"
+  } }, capabilities: [
     capability("iam.access-key.read", "ACCESS_KEY", value.id),
     capability("iam.access-key.set-status", "ACCESS_KEY", value.id),
+    capability("iam.access-key.set-network-restrictions", "ACCESS_KEY", value.id),
     capability("iam.access-key.delete", "ACCESS_KEY", value.id, value.status === "DISABLED", "TARGET_MUST_BE_DISABLED")
   ] };
 }
@@ -541,25 +544,51 @@ describe("IAM HTTP access-key boundary", () => {
 
   it("accepts the one-time secret only on a first applied creation", async () => {
     const fetcher = reply({ outcome: "APPLIED", key: accessKey, secret: "mak1.secret-material" });
-    const result = await httpAccountRepository.accessKeys!.create("bearer", account.id, user.id, { userResourceVersion: 2, requestId: "create-key-1" });
+    const result = await httpAccountRepository.accessKeys!.create("bearer", account.id, user.id, { userResourceVersion: 2, networkRestrictions: { allowedSourceCidrs: [] }, requestId: "create-key-1" });
     expect(result).toEqual(expect.objectContaining({ outcome: "APPLIED", secret: "mak1.secret-material" }));
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/users/${user.id}/access-keys`);
-    expect(requestBody(fetcher)).toEqual({ userResourceVersion: 2, requestId: "create-key-1" });
+    expect(requestBody(fetcher)).toEqual({ userResourceVersion: 2, networkRestrictions: { allowedSourceCidrs: [] }, requestId: "create-key-1" });
 
     reply({ outcome: "EQUAL_REPLAY", key: accessKey, secret: "must-not-repeat" });
-    await expect(httpAccountRepository.accessKeys!.create("bearer", account.id, user.id, { userResourceVersion: 2, requestId: "create-key-1" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    await expect(httpAccountRepository.accessKeys!.create("bearer", account.id, user.id, { userResourceVersion: 2, networkRestrictions: { allowedSourceCidrs: [] }, requestId: "create-key-1" })).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
   it("keeps exact capability resource bindings and ordered key identities", async () => {
     reply({ ...accessKeyList(), items: [{ ...accessKeyAccess(), capabilities: [
       capability("iam.access-key.read", "ACCESS_KEY", "another-key"),
       capability("iam.access-key.set-status", "ACCESS_KEY", accessKey.id),
+      capability("iam.access-key.set-network-restrictions", "ACCESS_KEY", accessKey.id),
       capability("iam.access-key.delete", "ACCESS_KEY", accessKey.id)
     ] }] });
     await expect(httpAccountRepository.accessKeys!.list("bearer", account.id, user.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
 
     reply({ ...accessKeyList(), items: [accessKeyAccess({ ...accessKey, id: "mak1.z" }), accessKeyAccess({ ...accessKey, id: "mak1.a" })] });
     await expect(httpAccountRepository.accessKeys!.list("bearer", account.id, user.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("fails closed on malformed network and retained authorization observations", async () => {
+    const base = accessKeyAccess();
+    for (const invalid of [
+      { ...base, key: { ...accessKey, networkRestrictions: undefined } },
+      { ...base, key: { ...accessKey, networkRestrictions: { allowedSourceCidrs: ["198.51.100.1/24"] } } },
+      { ...base, key: { ...accessKey, networkRestrictions: { allowedSourceCidrs: ["203.0.113.0/24", "198.51.100.0/24"] } } },
+      { ...base, usage: {} },
+      { ...base, usage: { ...base.usage, observedAt: "not-a-time" } },
+      { ...base, usage: { ...base.usage, lastAuthorization: { ...base.usage.lastAuthorization, evaluatedAt: "2026-09-11T08:01:00Z" } } },
+      { ...base, usage: { ...base.usage, lastAuthorization: { ...base.usage.lastAuthorization, product: "iam" } } },
+      { ...base, usage: { ...base.usage, lastAuthorization: { ...base.usage.lastAuthorization, sourceIp: "0.0.0.0" } } },
+      { ...base, usage: { ...base.usage, lastAuthorization: { ...base.usage.lastAuthorization, sourceIp: "2001:0db8::1" } } },
+      { ...base, usage: { ...base.usage, extra: true } },
+      { ...base, capabilities: base.capabilities.slice(0, 3) }
+    ]) {
+      reply({ ...accessKeyList(), items: [invalid] });
+      await expect(httpAccountRepository.accessKeys!.list("bearer", account.id, user.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    reply({ ...accessKeyList(), items: [{ ...base, usage: { observedAt: timestamp } }] });
+    await expect(httpAccountRepository.accessKeys!.list("bearer", account.id, user.id)).resolves.toMatchObject({
+      items: [{ usage: { observedAt: timestamp } }]
+    });
   });
 
   it("updates and deletes one key at its exact resource version", async () => {
@@ -569,6 +598,15 @@ describe("IAM HTTP access-key boundary", () => {
     expect(status.key).toMatchObject({ status: "DISABLED", resourceVersion: 2 });
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/users/${user.id}/access-keys/${accessKey.id}:set-status`);
     expect(requestBody(fetcher)).toEqual({ accessKeyResourceVersion: 1, requestId: "disable-key-1", status: "DISABLED" });
+
+    const restricted = { ...accessKey, networkRestrictions: { allowedSourceCidrs: ["2001:db8::/32"] }, resourceVersion: 2, updatedAt: "2026-09-11T08:01:00Z" };
+    fetcher = reply({ outcome: "APPLIED", key: restricted });
+    const network = await httpAccountRepository.accessKeys!.setNetworkRestrictions("bearer", account.id, user.id, accessKey.id, {
+      accessKeyResourceVersion: 1, networkRestrictions: restricted.networkRestrictions, requestId: "network-key-1"
+    });
+    expect(network.key.networkRestrictions).toEqual(restricted.networkRestrictions);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/users/${user.id}/access-keys/${accessKey.id}/network-restrictions`);
+    expect(requestBody(fetcher)).toEqual({ accessKeyResourceVersion: 1, networkRestrictions: restricted.networkRestrictions, requestId: "network-key-1" });
 
     fetcher = reply({ outcome: "APPLIED", deletion: { apiVersion, kind: "AccessKeyDeletion", id: accessKey.id, accountId: account.id, userId: user.id, resourceVersion: 3, deletedAt: "2026-09-11T08:02:00Z" } });
     const deletion = await httpAccountRepository.accessKeys!.delete("bearer", account.id, user.id, accessKey.id, { accessKeyResourceVersion: 2, requestId: "delete-key-1" });
@@ -2052,11 +2090,15 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("reads only the authenticated account's security rule and rejects partial or cross-account data", async () => {
+    const password = { minimumLength: 15, requireLowercase: false, requireUppercase: false,
+      requireDigit: false, requireSymbol: false, historyCount: 1, maxAgeDays: 0, expiryMode: "CHANGE_PASSWORD" };
+    const session = { idleTimeoutMinutes: 30 };
+    const accessKeyNetwork = { allowedSourceCidrs: [] };
     const settings = { apiVersion, kind: "AccountSecuritySettings", accountId: account.id,
-      resourceVersion: 4, mfa: { requiredForUsers: false }, updatedAt: timestamp };
+      resourceVersion: 4, mfa: { requiredForUsers: false }, password, session, accessKeyNetwork, updatedAt: timestamp };
     const fetcher = reply(settings);
     await expect(httpAccountRepository.accountSecuritySettings!.read("bearer", account.id)).resolves.toEqual({
-      accountId: account.id, resourceVersion: 4, mfa: { requiredForUsers: false }, password: null, updatedAt: timestamp
+      accountId: account.id, resourceVersion: 4, mfa: { requiredForUsers: false }, password, session, accessKeyNetwork, updatedAt: timestamp
     });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/account/security-settings");
     expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
@@ -2070,6 +2112,11 @@ describe("IAM HTTP account boundary", () => {
       { ...settings, mfa: { requiredForUsers: null } },
       { ...settings, mfa: { requiredForUsers: false, factorBound: true } },
       { ...settings, resourceVersion: 0 },
+      { ...settings, password: undefined },
+      { ...settings, session: undefined },
+      { ...settings, accessKeyNetwork: undefined },
+      { ...settings, session: { idleTimeoutMinutes: 4 } },
+      { ...settings, accessKeyNetwork: { allowedSourceCidrs: ["198.51.100.1/24"] } },
       { ...settings, updatedAt: "not-a-timestamp" },
       { ...settings, editAllowed: true }
     ]) {
@@ -2080,18 +2127,21 @@ describe("IAM HTTP account boundary", () => {
 
   it("reads complete account password rules without inventing defaults or trusting malformed rules", async () => {
     const password = { minimumLength: 21, requireLowercase: true, requireUppercase: false,
-      requireDigit: true, requireSymbol: false, historyCount: 3 };
+      requireDigit: true, requireSymbol: false, historyCount: 3, maxAgeDays: 90, expiryMode: "ADMIN_RESET" };
     const settings = { apiVersion, kind: "AccountSecuritySettings", accountId: account.id,
-      resourceVersion: 7, mfa: { requiredForUsers: true }, password, updatedAt: timestamp };
+      resourceVersion: 7, mfa: { requiredForUsers: true }, password, session: { idleTimeoutMinutes: 30 },
+      accessKeyNetwork: { allowedSourceCidrs: ["198.51.100.0/24"] }, updatedAt: timestamp };
     reply(settings);
     await expect(httpAccountRepository.accountSecuritySettings!.read("bearer", account.id)).resolves.toEqual({
-      accountId: account.id, resourceVersion: 7, mfa: { requiredForUsers: true }, password, updatedAt: timestamp
+      accountId: account.id, resourceVersion: 7, mfa: { requiredForUsers: true }, password,
+      session: settings.session, accessKeyNetwork: settings.accessKeyNetwork, updatedAt: timestamp
     });
     for (const invalid of [
       { ...password, minimumLength: 14 }, { ...password, minimumLength: 129 },
       { ...password, minimumLength: "21" }, { ...password, historyCount: -1 },
       { ...password, historyCount: 25 }, { ...password, requireDigit: undefined },
-      { ...password, requireSymbol: "false" }, { ...password, unrecognized: true }
+      { ...password, requireSymbol: "false" }, { ...password, maxAgeDays: 366 },
+      { ...password, expiryMode: "UNKNOWN" }, { ...password, unrecognized: true }
     ]) {
       reply({ ...settings, password: invalid });
       await expect(httpAccountRepository.accountSecuritySettings!.read("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
@@ -2102,12 +2152,15 @@ describe("IAM HTTP account boundary", () => {
 
   it("binds account MFA updates to one exact operation proof and original request", async () => {
     const update = httpAccountRepository.accountSecuritySettings!.update!;
-    const intent = { expectedResourceVersion: 4, mfa: { requiredForUsers: true } };
+    const intent = { expectedResourceVersion: 4, mfa: { requiredForUsers: true },
+      password: { minimumLength: 18, requireLowercase: true, requireUppercase: true, requireDigit: true, requireSymbol: false, historyCount: 4, maxAgeDays: 90, expiryMode: "CHANGE_PASSWORD" as const },
+      session: { idleTimeoutMinutes: 20 }, accessKeyNetwork: { allowedSourceCidrs: ["198.51.100.0/24"] } };
     const stepUp = { apiVersion, kind: "StepUp", id: "settings-proof-1", requestId: "settings-change-1",
       operation: "SECURITY_SETTINGS_UPDATE", expectedFactorRevision: 2, securitySettings: intent,
       state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z" };
     const settings = { apiVersion, kind: "AccountSecuritySettings", accountId: account.id,
-      resourceVersion: 5, mfa: { requiredForUsers: true }, updatedAt: timestamp };
+      resourceVersion: 5, mfa: { requiredForUsers: true }, password: intent.password, session: intent.session,
+      accessKeyNetwork: intent.accessKeyNetwork, updatedAt: timestamp };
     const change = { apiVersion, kind: "AccountSecuritySettingsChange", requestId: stepUp.requestId,
       expectedResourceVersion: 4, settings, callerSessionEnded: true };
 
@@ -2130,7 +2183,7 @@ describe("IAM HTTP account boundary", () => {
     await expect(update.apply("bearer", account.id, { requestId: stepUp.requestId, stepUpId: stepUp.id, intent })).resolves.toMatchObject({ outcome: "APPLIED", change: { callerSessionEnded: true, settings: { resourceVersion: 5 } } });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/account/security-settings");
     expect(firstRequest(fetcher)[1].method).toBe("PUT");
-    expect(requestBody(fetcher)).toEqual({ requestId: stepUp.requestId, stepUpId: stepUp.id, expectedResourceVersion: 4, mfa: { requiredForUsers: true } });
+    expect(requestBody(fetcher)).toEqual({ requestId: stepUp.requestId, stepUpId: stepUp.id, ...intent });
 
     fetcher = reply(change);
     await expect(update.changeByRequest("new-bearer", account.id, stepUp.requestId, intent)).resolves.toMatchObject({ requestId: stepUp.requestId, callerSessionEnded: true });
@@ -2140,18 +2193,23 @@ describe("IAM HTTP account boundary", () => {
 
   it("rejects drifted security proofs and account-rule completions without treating them as success", async () => {
     const update = httpAccountRepository.accountSecuritySettings!.update!;
-    const intent = { expectedResourceVersion: 4, mfa: { requiredForUsers: true } };
+    const intent = { expectedResourceVersion: 4, mfa: { requiredForUsers: true },
+      password: { minimumLength: 18, requireLowercase: true, requireUppercase: true, requireDigit: true, requireSymbol: false, historyCount: 4, maxAgeDays: 90, expiryMode: "CHANGE_PASSWORD" as const },
+      session: { idleTimeoutMinutes: 20 }, accessKeyNetwork: { allowedSourceCidrs: ["198.51.100.0/24"] } };
     const stepUp = { apiVersion, kind: "StepUp", id: "settings-proof-1", requestId: "settings-change-1",
       operation: "SECURITY_SETTINGS_UPDATE", expectedFactorRevision: 2, securitySettings: intent,
       state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z" };
     const settings = { apiVersion, kind: "AccountSecuritySettings", accountId: account.id,
-      resourceVersion: 5, mfa: { requiredForUsers: true }, updatedAt: timestamp };
+      resourceVersion: 5, mfa: { requiredForUsers: true }, password: intent.password, session: intent.session,
+      accessKeyNetwork: intent.accessKeyNetwork, updatedAt: timestamp };
     const change = { apiVersion, kind: "AccountSecuritySettingsChange", requestId: stepUp.requestId,
       expectedResourceVersion: 4, settings, callerSessionEnded: true };
     for (const invalid of [
       { ...stepUp, operation: "TOTP_REPLACE" },
       { ...stepUp, securitySettings: undefined },
       { ...stepUp, securitySettings: { ...intent, mfa: { requiredForUsers: false } } },
+      { ...stepUp, securitySettings: { ...intent, session: { idleTimeoutMinutes: 30 } } },
+      { ...stepUp, securitySettings: { ...intent, accessKeyNetwork: { allowedSourceCidrs: [] } } },
       { ...stepUp, expectedFactorRevision: 3 },
       { ...stepUp, securitySettings: { ...intent, unrelated: true } }
     ]) {
@@ -2165,8 +2223,9 @@ describe("IAM HTTP account boundary", () => {
       { ...change, settings: { ...settings, accountId: "other-account" } },
       { ...change, settings: { ...settings, resourceVersion: 6 } },
       { ...change, settings: { ...settings, mfa: { requiredForUsers: false } } },
-      { ...change, settings: { ...settings, password: { minimumLength: 15, requireLowercase: false,
-        requireUppercase: false, requireDigit: false, requireSymbol: false, historyCount: 1 } } },
+      { ...change, settings: { ...settings, password: { ...intent.password, historyCount: 1 } } },
+      { ...change, settings: { ...settings, session: { idleTimeoutMinutes: 30 } } },
+      { ...change, settings: { ...settings, accessKeyNetwork: { allowedSourceCidrs: [] } } },
       { ...change, extra: true }
     ]) {
       reply({ outcome: "APPLIED", change: invalid });

@@ -1,27 +1,29 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { KeyRound } from "lucide-react";
 import { Alert, Badge, Button, Card, Checkbox, ContentPage, Table, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { AccessKeyAccess, AccessKeyDirectory, AccessKeyStatus } from "../domain/accessKeys";
 import type { IamAction } from "../domain/accounts";
-import type { AccessKeyClient, AccessKeyCreateIntent, AuthorizationProfileClient } from "../application/AccountAccessProvider";
+import type { AccessKeyClient, AccessKeyCreateIntent, AccountSecuritySettingsClient, AuthorizationProfileClient } from "../application/AccountAccessProvider";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
 import { AccountIdentifier } from "./AccountOverview";
 import { AccessKeyOwnerDirectory } from "./AccessKeyOwnerDirectory";
-import { AccessKeySecuritySignals } from "./AccessKeyNetworkPreview";
+import { accessKeyNetworkRestrictionsEqual, parseAccessKeyNetworkDraft, type AccessKeyNetworkDraftIssue } from "../domain/accessKeyNetwork";
+import { AccessKeyNetworkDetail, AccessKeyNetworkDraftField, AccessKeySecuritySignals, AccessKeyUsagePreview, type AccessKeyAccountNetworkState } from "./AccessKeyNetworkPreview";
 import { ProgrammaticAccessGuide, RotationGuide } from "./AccessCredentials";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccessCredentials.module.css";
 
 type LiveKeyError = "forbidden" | "routeUnavailable" | "conflict" | "unavailable";
 type LiveKeyFlow =
-  | { kind: "create"; requestId: string; userResourceVersion: number }
+  | { kind: "create"; requestId: string; userResourceVersion: number; networkRestrictions: { allowedSourceCidrs: string[] } }
   | { kind: "issued"; keyId: string; secret: string; requestId: string }
   | { kind: "replayed"; keyId: string }
   | { kind: "status"; access: AccessKeyAccess; status: AccessKeyStatus; requestId: string }
+  | { kind: "network"; access: AccessKeyAccess; requestId: string }
   | { kind: "delete"; access: AccessKeyAccess; requestId: string };
 
 function keyError(error: unknown): LiveKeyError {
@@ -48,28 +50,37 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
   onInspectRecovered(keyId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
+  const network = useTranslations("AccessKeyNetworkPreview");
   const restrictions = useTranslations("AccountAccess.restrictions");
+  const networkFieldId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<LiveKeyError | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
+  const initialNetwork = flow.kind === "create" ? flow.networkRestrictions : flow.kind === "network" ? flow.access.key.networkRestrictions : { allowedSourceCidrs: [] };
+  const [networkDraft, setNetworkDraft] = useState(() => initialNetwork.allowedSourceCidrs.join("\n"));
+  const [networkIssue, setNetworkIssue] = useState<AccessKeyNetworkDraftIssue | null>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [flow.kind]);
 
   const createCapability = capability(directory, "iam.access-key.create");
   const actionCapability = flow.kind === "status" ? capability(flow.access, "iam.access-key.set-status")
+    : flow.kind === "network" ? capability(flow.access, "iam.access-key.set-network-restrictions")
     : flow.kind === "delete" ? capability(flow.access, "iam.access-key.delete") : null;
   const title = flow.kind === "create" ? t("keyCreateReview")
     : flow.kind === "issued" ? t("keyLiveCreated")
       : flow.kind === "replayed" ? t("keyLiveReplayTitle")
         : flow.kind === "status" ? t("changeStateTitle", { action: t(flow.status === "ENABLED" ? "enable" : "disable"), name: flow.access.key.id })
+          : flow.kind === "network" ? network("editKeyTitle")
           : t("keyDeleteReview", { name: flow.access.key.id });
 
   const run = async () => {
+    const parsedNetwork = flow.kind === "create" || flow.kind === "network" ? parseAccessKeyNetworkDraft(networkDraft) : null;
+    if (parsedNetwork && !parsedNetwork.ok) { setNetworkIssue(parsedNetwork.issue); return; }
     setBusy(true); setError(null);
     try {
       if (flow.kind === "create") {
-        const result = await client.create(owner.id, { userResourceVersion: flow.userResourceVersion, requestId: flow.requestId });
+        const result = await client.create(owner.id, { userResourceVersion: flow.userResourceVersion, networkRestrictions: parsedNetwork && parsedNetwork.ok ? parsedNetwork.restrictions : flow.networkRestrictions, requestId: flow.requestId });
         if (result.outcome === "APPLIED") onCloseWith({ kind: "issued", keyId: result.key.id, secret: result.secret, requestId: flow.requestId });
         else onCloseWith({ kind: "replayed", keyId: result.key.id });
         void onChanged();
@@ -77,6 +88,8 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
       }
       if (flow.kind === "status") {
         await client.setStatus(owner.id, flow.access.key.id, { accessKeyResourceVersion: flow.access.key.resourceVersion, requestId: flow.requestId, status: flow.status });
+      } else if (flow.kind === "network" && parsedNetwork?.ok) {
+        await client.setNetworkRestrictions(owner.id, flow.access.key.id, { accessKeyResourceVersion: flow.access.key.resourceVersion, networkRestrictions: parsedNetwork.restrictions, requestId: flow.requestId });
       } else if (flow.kind === "delete") {
         await client.delete(owner.id, flow.access.key.id, { accessKeyResourceVersion: flow.access.key.resourceVersion, requestId: flow.requestId });
       }
@@ -89,6 +102,9 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
   const onCloseWith = (next: LiveKeyFlow) => setReplacement(next);
   const active = replacement ?? flow;
   const activeTitle = replacement ? replacement.kind === "issued" ? t("keyLiveCreated") : t("keyLiveReplayTitle") : title;
+  const networkDraftResult = flow.kind === "create" || flow.kind === "network" ? parseAccessKeyNetworkDraft(networkDraft) : null;
+  const networkUnchanged = flow.kind === "network" && networkDraftResult?.ok &&
+    accessKeyNetworkRestrictionsEqual(flow.access.key.networkRestrictions, networkDraftResult.restrictions);
 
   return <Card>
     <Card.Header className={styles.flowHeader}><div><h2 className={styles.focusHeading} ref={heading} tabIndex={-1}>{activeTitle}</h2><Typography.Text tone="muted">{t("keyInlineWorkflow")}</Typography.Text></div><Badge status="success">LIVE</Badge></Card.Header>
@@ -100,6 +116,8 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
           <div><dt>{t("keyUserRevision")}</dt><dd>v{active.userResourceVersion}</dd></div>
           <div><dt>requestId</dt><dd><code>{active.requestId}</code></dd></div>
         </dl>
+        <AccessKeyNetworkDraftField id={networkFieldId} issue={networkIssue} value={networkDraft} onChange={(value) => { setNetworkDraft(value); setNetworkIssue(null); }} />
+        <Alert>{network("emptyLayerMeaning")}</Alert>
         <Alert status="warning">{t("keyCreateWarning")}</Alert>
         {!createCapability?.available && createCapability?.restrictionReason ? <Alert status="warning">{restrictions(createCapability.restrictionReason)}</Alert> : null}
         <div className={styles.actions}><Button disabled={busy || !createCapability?.available} onClick={() => void run()}>{busy ? t("keyLiveSaving") : t(retryingOriginal ? "keyLiveRetryOriginal" : "keyConfirmCreate")}</Button><Button disabled={busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
@@ -121,6 +139,13 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
         {!actionCapability?.available && actionCapability?.restrictionReason ? <Alert status="warning">{restrictions(actionCapability.restrictionReason)}</Alert> : null}
         <div className={styles.actions}><Button disabled={busy || !actionCapability?.available} onClick={() => void run()}>{busy ? t("keyLiveSaving") : t(active.status === "ENABLED" ? "enable" : "disable")}</Button><Button disabled={busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
       </> : null}
+      {active.kind === "network" ? <>
+        <dl className={styles.reviewFacts}><div><dt>{t("keyId")}</dt><dd><code>{active.access.key.id}</code></dd></div><div><dt>{t("keyRevision")}</dt><dd>v{active.access.key.resourceVersion}</dd></div><div><dt>requestId</dt><dd><code>{active.requestId}</code></dd></div></dl>
+        <AccessKeyNetworkDraftField id={networkFieldId} issue={networkIssue} value={networkDraft} onChange={(value) => { setNetworkDraft(value); setNetworkIssue(null); }} />
+        <Alert status="info">{network("liveKeyReviewBoundary")}</Alert>
+        {!actionCapability?.available && actionCapability?.restrictionReason ? <Alert status="warning">{restrictions(actionCapability.restrictionReason)}</Alert> : null}
+        <div className={styles.actions}><Button disabled={busy || !actionCapability?.available || !networkDraftResult?.ok || networkUnchanged} onClick={() => void run()}>{busy ? t("keyLiveSaving") : network("applyLive")}</Button><Button disabled={busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
+      </> : null}
       {active.kind === "delete" ? <>
         <Alert status="danger">{t("keyDeleteImpact")}</Alert>
         <dl className={styles.reviewFacts}><div><dt>{t("keyId")}</dt><dd><code>{active.access.key.id}</code></dd></div><div><dt>{t("keyRevision")}</dt><dd>v{active.access.key.resourceVersion}</dd></div><div><dt>requestId</dt><dd><code>{active.requestId}</code></dd></div></dl>
@@ -132,16 +157,18 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
   </Card>;
 }
 
-export function LiveAccessCredentials({ client, scene, createIntent = null, scopedOwner, userDirectory, authorizationProfiles = null, onInspectPermissions }: {
+export function LiveAccessCredentials({ client, scene, createIntent = null, scopedOwner, userDirectory, accountSecuritySettings = null, authorizationProfiles = null, onInspectPermissions }: {
   client: AccessKeyClient;
   scene: AccountAccessScene;
   createIntent?: AccessKeyCreateIntent | null;
   scopedOwner?: AccountUserScene;
   userDirectory?: { busy: boolean; loading: boolean; readPage(after: string): void };
+  accountSecuritySettings?: AccountSecuritySettingsClient | null;
   authorizationProfiles?: AuthorizationProfileClient | null;
   onInspectPermissions?(ownerId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
+  const network = useTranslations("AccessKeyNetworkPreview");
   const restrictions = useTranslations("AccountAccess.restrictions");
   const [ownerId, setOwnerId] = useState<string | null>(scopedOwner?.id ?? null);
   const [directory, setDirectory] = useState<AccessKeyDirectory | null>(null);
@@ -149,9 +176,25 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
   const [flow, setFlow] = useState<LiveKeyFlow | null>(null);
   const [loading, setLoading] = useState(Boolean(scopedOwner));
   const [error, setError] = useState<LiveKeyError | null>(null);
+  const [accountNetworkView, setAccountNetworkView] = useState<{
+    client: AccountSecuritySettingsClient | null;
+    state: AccessKeyAccountNetworkState;
+  }>({ client: accountSecuritySettings, state: accountSecuritySettings ? { status: "loading" } : { status: "unavailable" } });
   const requestRevision = useRef(0);
   const scopedOwnerId = scopedOwner?.id ?? null;
   const owner = scopedOwner ?? scene.users.find((user) => user.id === ownerId) ?? null;
+  const accountNetwork = accountNetworkView.client === accountSecuritySettings
+    ? accountNetworkView.state : accountSecuritySettings ? { status: "loading" as const } : { status: "unavailable" as const };
+
+  useEffect(() => {
+    if (!accountSecuritySettings) return;
+    let current = true;
+    void accountSecuritySettings.load().then((result) => {
+      if (!current) return;
+      setAccountNetworkView({ client: accountSecuritySettings, state: result.status === "ready" ? { status: "ready", value: result.settings.accessKeyNetwork } : { status: "unavailable" } });
+    }, () => { if (current) setAccountNetworkView({ client: accountSecuritySettings, state: { status: "unavailable" } }); });
+    return () => { current = false; };
+  }, [accountSecuritySettings]);
 
   const load = useCallback(async (userId: string, foreground = true) => {
     const request = ++requestRevision.current;
@@ -197,12 +240,12 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
 
   const startCreate = () => {
     if (createIntent) return;
-    if (directory) setFlow({ kind: "create", requestId: requestToken("ui-access-key-create-"), userResourceVersion: directory.userResourceVersion });
+    if (directory) setFlow({ kind: "create", requestId: requestToken("ui-access-key-create-"), userResourceVersion: directory.userResourceVersion, networkRestrictions: { allowedSourceCidrs: [] } });
   };
   const resumeCreate = () => {
     if (!createIntent || createIntent.userId !== owner.id) return;
     setFlow(createIntent.phase === "unknown"
-      ? { kind: "create", requestId: createIntent.requestId, userResourceVersion: createIntent.userResourceVersion }
+      ? { kind: "create", requestId: createIntent.requestId, userResourceVersion: createIntent.userResourceVersion, networkRestrictions: createIntent.networkRestrictions }
       : { kind: "replayed", keyId: createIntent.keyId });
   };
   const openKey = async (access: AccessKeyAccess) => {
@@ -230,14 +273,15 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
     {!flow && selected ? <>
       <Card><Card.Header><div><Typography.Title as="h2" level={3}>{selected.key.id}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={selected.key.status === "ENABLED" ? "success" : "neutral"}>{t(selected.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></Card.Header><Card.Body className={styles.detailBody}>
         <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.key.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.key.createdAt} /></dd></div><div><dt>{t("keyRevision")}</dt><dd>v{selected.key.resourceVersion}</dd></div></dl>
-        <Alert status="info">{t("keyNoUsageEvidence")}</Alert>
-        <div className={styles.actions}><Button onClick={() => setSelected(null)} variant="ghost">{t("back")}</Button><Button disabled={!capability(selected, "iam.access-key.set-status")?.available} onClick={() => setFlow({ kind: "status", access: selected, status: selected.key.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") })} variant="secondary">{t(selected.key.status === "ENABLED" ? "disable" : "enable")}</Button><Button disabled={selected.key.status !== "DISABLED" || !capability(selected, "iam.access-key.delete")?.available} onClick={() => setFlow({ kind: "delete", access: selected, requestId: requestToken("ui-access-key-delete-") })} variant="danger">{t("delete")}</Button></div>
+        <div className={styles.actions}><Button onClick={() => setSelected(null)} variant="ghost">{t("back")}</Button><Button disabled={!capability(selected, "iam.access-key.set-network-restrictions")?.available} onClick={() => setFlow({ kind: "network", access: selected, requestId: requestToken("ui-access-key-network-") })} variant="secondary">{network("configureKey")}</Button><Button disabled={!capability(selected, "iam.access-key.set-status")?.available} onClick={() => setFlow({ kind: "status", access: selected, status: selected.key.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") })} variant="secondary">{t(selected.key.status === "ENABLED" ? "disable" : "enable")}</Button><Button disabled={selected.key.status !== "DISABLED" || !capability(selected, "iam.access-key.delete")?.available} onClick={() => setFlow({ kind: "delete", access: selected, requestId: requestToken("ui-access-key-delete-") })} variant="danger">{t("delete")}</Button></div>
       </Card.Body></Card>
+      <AccessKeyNetworkDetail account={accountNetwork} keyValue={selected.key} source="LIVE" />
+      <AccessKeyUsagePreview source="LIVE" usage={selected.usage} />
       <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
       <RotationGuide />
     </> : null}
     {!flow && !selected && directory ? <>
-      <Card><Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={directory.items.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: directory.items.length })}</Badge></Card.Header><Card.Body className={styles.tableBody}>{directory.items.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keyRevision")}</th><th scope="col">{t("keySecuritySignals")}</th></tr></thead><tbody>{directory.items.map((item) => <tr key={item.key.id}><td data-label={t("keyId")}><button className={styles.keyLink} onClick={() => void openKey(item)}>{item.key.id}</button></td><td data-label={t("state")}><Badge status={item.key.status === "ENABLED" ? "success" : "neutral"}>{t(item.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={item.key.createdAt} /></td><td data-label={t("keyRevision")}>v{item.key.resourceVersion}</td><td data-label={t("keySecuritySignals")}><AccessKeySecuritySignals /></td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body></Card>
+      <Card><Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={directory.items.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: directory.items.length })}</Badge></Card.Header><Card.Body className={styles.tableBody}>{directory.items.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keyRevision")}</th><th scope="col">{t("keySecuritySignals")}</th></tr></thead><tbody>{directory.items.map((item) => <tr key={item.key.id}><td data-label={t("keyId")}><button className={styles.keyLink} onClick={() => void openKey(item)}>{item.key.id}</button></td><td data-label={t("state")}><Badge status={item.key.status === "ENABLED" ? "success" : "neutral"}>{t(item.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={item.key.createdAt} /></td><td data-label={t("keyRevision")}>v{item.key.resourceVersion}</td><td data-label={t("keySecuritySignals")}><AccessKeySecuritySignals account={accountNetwork} keyValue={item.key} usage={item.usage} /></td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body></Card>
       <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
       <RotationGuide />
     </> : null}

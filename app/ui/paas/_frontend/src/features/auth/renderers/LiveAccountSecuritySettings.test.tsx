@@ -5,10 +5,13 @@ import { LocaleProvider } from "@/i18n/LocaleProvider";
 import type { AccountSecuritySettingsClient, AccountSecuritySettingsLoad } from "../application/AccountAccessProvider";
 import { LiveAccountSecuritySettings } from "./LiveAccountSecuritySettings";
 
-function client(result: AccountSecuritySettingsLoad = { status: "ready", settings: {
-  accountId: "account-one", resourceVersion: 4, mfa: { requiredForUsers: false }, password: null,
-  updatedAt: "2026-09-11T08:00:00Z"
-} }): AccountSecuritySettingsClient {
+const currentSettings = {
+  accountId: "account-one", resourceVersion: 4, mfa: { requiredForUsers: false },
+  password: { minimumLength: 15, requireLowercase: false, requireUppercase: false, requireDigit: false, requireSymbol: false, historyCount: 1, maxAgeDays: 0, expiryMode: "CHANGE_PASSWORD" as const },
+  session: { idleTimeoutMinutes: 30 }, accessKeyNetwork: { allowedSourceCidrs: [] }, updatedAt: "2026-09-11T08:00:00Z"
+};
+
+function client(result: AccountSecuritySettingsLoad = { status: "ready", settings: currentSettings }): AccountSecuritySettingsClient {
   return { accountId: "account-one", principalId: "user-one", sessionId: "session-one", load: vi.fn().mockResolvedValue(result) };
 }
 
@@ -28,7 +31,7 @@ describe("live account security settings", () => {
     expect(await screen.findByText("用户可选")).toBeTruthy();
     expect(screen.getByText("account-one")).toBeTruthy();
     expect(screen.getByText(/不能证明任何人已绑定验证器/)).toBeTruthy();
-    expect(screen.getByText(/尚未返回密码规则/)).toBeTruthy();
+    expect(screen.getByText(/至少 15 个码点/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /编辑|保存/ })).toBeNull();
     expect(source.load).toHaveBeenCalledTimes(1);
   });
@@ -48,10 +51,10 @@ describe("live account security settings", () => {
     const newClient = { ...client(), accountId: "account-two", principalId: "user-two", sessionId: "session-two", load: vi.fn(() => newRead.promise) };
     const view = render(<LocaleProvider><LiveAccountSecuritySettings client={oldClient} /></LocaleProvider>);
     view.rerender(<LocaleProvider><LiveAccountSecuritySettings client={newClient} /></LocaleProvider>);
-    await act(async () => { oldRead.resolve({ status: "ready", settings: { accountId: "account-one", resourceVersion: 4, mfa: { requiredForUsers: true }, password: null, updatedAt: "2026-09-11T08:00:00Z" } }); });
+    await act(async () => { oldRead.resolve({ status: "ready", settings: { ...currentSettings, mfa: { requiredForUsers: true } } }); });
     expect(screen.queryByText("account-one")).toBeNull();
     expect(screen.queryByText("已要求")).toBeNull();
-    await act(async () => { newRead.resolve({ status: "ready", settings: { accountId: "account-two", resourceVersion: 5, mfa: { requiredForUsers: false }, password: null, updatedAt: "2026-09-12T08:00:00Z" } }); });
+    await act(async () => { newRead.resolve({ status: "ready", settings: { ...currentSettings, accountId: "account-two", resourceVersion: 5, updatedAt: "2026-09-12T08:00:00Z" } }); });
     expect(screen.getByText("account-two")).toBeTruthy();
     expect(screen.getByText("用户可选")).toBeTruthy();
   });
@@ -67,10 +70,8 @@ describe("live account security settings", () => {
     expect(screen.getByText(/正在更新当前账号规则/)).toBeTruthy();
     expect(screen.queryByText("正在读取当前账号规则…")).toBeNull();
     expect(screen.getByText("用户可选").closest('[aria-busy="true"]')).toBeTruthy();
-    await act(async () => { nextRead.resolve({ status: "ready", settings: {
-      accountId: "account-one", resourceVersion: 5, mfa: { requiredForUsers: true }, password: null,
-      updatedAt: "2026-09-12T08:00:00Z"
-    } }); });
+    await act(async () => { nextRead.resolve({ status: "ready", settings: { ...currentSettings,
+      resourceVersion: 5, mfa: { requiredForUsers: true }, updatedAt: "2026-09-12T08:00:00Z" } }); });
     expect(screen.getByText("已要求")).toBeTruthy();
     expect(screen.queryByText("用户可选")).toBeNull();
     expect(screen.queryByText(/正在更新当前账号规则/)).toBeNull();
@@ -91,7 +92,7 @@ describe("live account security settings", () => {
   it("retries only the failed data region without replacing the page", async () => {
     const source = client();
     const read = vi.fn().mockResolvedValueOnce({ status: "unavailable" }).mockResolvedValueOnce({ status: "ready", settings: {
-      accountId: "account-one", resourceVersion: 4, mfa: { requiredForUsers: true }, password: null, updatedAt: "2026-09-11T08:00:00Z"
+      ...currentSettings, mfa: { requiredForUsers: true }
     } });
     source.load = read;
     const user = userEvent.setup();
@@ -106,7 +107,8 @@ describe("live account security settings", () => {
     const source = client({ status: "ready", settings: {
       accountId: "account-one", resourceVersion: 7, mfa: { requiredForUsers: true },
       password: { minimumLength: 21, requireLowercase: true, requireUppercase: false,
-        requireDigit: true, requireSymbol: false, historyCount: 3 }, updatedAt: "2026-09-11T08:00:00Z"
+        requireDigit: true, requireSymbol: false, historyCount: 3, maxAgeDays: 90, expiryMode: "ADMIN_RESET" },
+      session: { idleTimeoutMinutes: 20 }, accessKeyNetwork: { allowedSourceCidrs: ["198.51.100.0/24"] }, updatedAt: "2026-09-11T08:00:00Z"
     } });
     render(<LocaleProvider><LiveAccountSecuritySettings client={source} /></LocaleProvider>);
     expect(await screen.findByText(/至少 21 个码点/)).toBeTruthy();

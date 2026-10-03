@@ -54,7 +54,7 @@ export function parseAccessKeyNetworkDraft(value: string): AccessKeyNetworkDraft
     canonical.push(normalized);
   }
   if (new Set(canonical).size !== canonical.length) return { ok: false, issue: "duplicate" };
-  return { ok: true, restrictions: { allowedSourceCidrs: canonical.sort((left, right) => left.localeCompare(right, "en")) } };
+  return { ok: true, restrictions: { allowedSourceCidrs: canonical.sort() } };
 }
 
 export function accessKeyNetworkDraftValue(value: AccessKeyNetworkRestrictions): string {
@@ -66,7 +66,28 @@ export function accessKeyNetworkRestrictionsEqual(left: AccessKeyNetworkRestrict
     && left.allowedSourceCidrs.every((cidr, index) => cidr === right.allowedSourceCidrs[index]);
 }
 
-export function accessKeyNetworkRestrictionsValid(value: AccessKeyNetworkRestrictions): boolean {
-  const parsed = parseAccessKeyNetworkDraft(accessKeyNetworkDraftValue(value));
-  return parsed.ok && parsed.restrictions.allowedSourceCidrs.every((cidr, index) => cidr === value.allowedSourceCidrs[index]);
+export function accessKeyNetworkRestrictionsValid(value: unknown): value is AccessKeyNetworkRestrictions {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      !Array.isArray((value as AccessKeyNetworkRestrictions).allowedSourceCidrs) ||
+      (value as AccessKeyNetworkRestrictions).allowedSourceCidrs.some((entry) => typeof entry !== "string") ||
+      Object.keys(value).some((key) => key !== "allowedSourceCidrs")) return false;
+  const restrictions = value as AccessKeyNetworkRestrictions;
+  const parsed = parseAccessKeyNetworkDraft(accessKeyNetworkDraftValue(restrictions));
+  return parsed.ok && parsed.restrictions.allowedSourceCidrs.every((cidr, index) => cidr === restrictions.allowedSourceCidrs[index]);
+}
+
+export function accessKeyAuthorizationSourceIpValid(value: string): boolean {
+  if (!value || value.length > 64 || /[%\s]/.test(value)) return false;
+  if (value.includes(".")) {
+    const dotted = value.includes(":") ? value.slice(value.lastIndexOf(":") + 1) : value;
+    if (!/^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}$/.test(dotted)) return false;
+  }
+  try {
+    const address = ipaddr.parse(value);
+    if (address instanceof ipaddr.IPv6 && address.isIPv4MappedAddress()) return false;
+    if (address.range() === "unspecified" || address.range() === "multicast") return false;
+    return address.toString() === value;
+  } catch {
+    return false;
+  }
 }

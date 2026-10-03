@@ -4390,7 +4390,6 @@
       "conflict": "用户或密钥状态已变化。请重新读取后再操作，并保留不确定请求的原 requestId。",
       "unavailable": "暂时无法读取或更新访问密钥。未收到可信结果时不要生成新的 requestId。"
     },
-    "keyNoUsageEvidence": "当前契约只返回非秘密密钥元数据与操作能力，不包含来源网络配置或可靠使用证据。这里的未知不代表未配置、未使用或可以安全删除。",
     "keyInlineWorkflow": "操作在当前内容区完成，不打开模态框。",
     "keyCreateReview": "核对并创建访问密钥",
     "keyCreateNetworkTitle": "创建时固定来源网络",
@@ -6164,7 +6163,10 @@
     "keyHint": "账号层与密钥层共同约束这把密钥。",
     "accountLayer": "账号层",
     "keyLayer": "密钥层",
+    "accountLayerLoading": "正在读取账号级规则…",
+    "accountLayerUnavailable": "账号级规则当前不可用；不能据此判断整体网络边界。",
     "andBoundary": "两层按 AND 组合；每层内部多个 CIDR 按 OR 匹配。任一非空层不匹配都应拒绝。",
+    "partialNetworkBoundary": "密钥层来自当前 AccessKey；账号层尚未可信读取。这里不会把账号层未知误写成账号层无限制。",
     "familyBoundary": "0.0.0.0/0 仅覆盖 IPv4，::/0 仅覆盖 IPv6；两者都不是空列表。",
     "noChange": "变更后与当前配置一致，无需保存。",
     "usageTitle": "最近授权观测",
@@ -6186,12 +6188,13 @@
       "accountOnly": "仅账号层",
       "keyOnly": "仅密钥层",
       "unrestricted": "无附加限制",
-      "unknown": "当前接口未提供"
+      "accountLoading": "账号规则读取中",
+      "keyLimitedAccountUnknown": "密钥层已限制 · 账号层未知",
+      "keyOpenAccountUnknown": "密钥层无限制 · 账号层未知"
     },
     "usageStates": {
       "observed": "有历史观测",
-      "unknown": "未知",
-      "unavailable": "当前接口未提供"
+      "unknown": "保留证据中未知"
     },
     "configureKey": "配置来源网络",
     "editKeyTitle": "编辑密钥级来源",
@@ -6201,6 +6204,8 @@
     "keyVersion": "密钥版本",
     "keyReviewBoundary": "当前仅更新浏览器内 MOCK。未来 LIVE 写入必须使用独立网络限制动作、精确密钥版本和服务端重新鉴权；不会借用启停接口。",
     "applyMock": "应用到 MOCK",
+    "liveKeyReviewBoundary": "这会通过专用密钥网络限制动作完整替换当前密钥层；账号层继续独立生效。保存使用当前密钥版本并由 IAM 重新鉴权。",
+    "applyLive": "保存来源限制",
     "issues": {
       "tooMany": "最多允许 16 个 CIDR。",
       "invalid": "包含无效或非网络地址的 CIDR；不接受主机位、zone 或 IPv4-mapped IPv6。",

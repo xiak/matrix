@@ -4390,7 +4390,6 @@
       "conflict": "The user or key state changed. Reload before acting and preserve the original requestId for an uncertain request.",
       "unavailable": "Access keys cannot be read or updated right now. Do not generate a new requestId without a trustworthy result."
     },
-    "keyNoUsageEvidence": "The current contract returns only non-secret key metadata and action capabilities. It includes neither source-network configuration nor reliable usage evidence. Unknown does not mean unconfigured, unused, or safe to delete.",
     "keyInlineWorkflow": "The operation stays in the content area and does not open a modal.",
     "keyCreateReview": "Review and create access key",
     "keyCreateNetworkTitle": "Freeze source networks at creation",
@@ -6143,7 +6142,10 @@
     "keyHint": "The account and key layers jointly constrain this key.",
     "accountLayer": "Account layer",
     "keyLayer": "Key layer",
+    "accountLayerLoading": "Reading the account rule…",
+    "accountLayerUnavailable": "The account rule is currently unavailable; the effective network boundary cannot be inferred.",
     "andBoundary": "The layers combine with AND; CIDRs within one layer combine with OR. A mismatch in either non-empty layer must deny the request.",
+    "partialNetworkBoundary": "The key layer comes from the current AccessKey, but the account layer has not been read reliably. Unknown is never presented as unrestricted.",
     "familyBoundary": "0.0.0.0/0 covers only IPv4 and ::/0 covers only IPv6; neither is an empty list.",
     "noChange": "The reviewed value matches the current configuration. Nothing needs to be saved.",
     "usageTitle": "Latest authorization observation",
@@ -6165,12 +6167,13 @@
       "accountOnly": "Account layer only",
       "keyOnly": "Key layer only",
       "unrestricted": "No added restriction",
-      "unknown": "Not provided by this API"
+      "accountLoading": "Reading account rule",
+      "keyLimitedAccountUnknown": "Key restricted · account unknown",
+      "keyOpenAccountUnknown": "Key unrestricted · account unknown"
     },
     "usageStates": {
       "observed": "Historical observation",
-      "unknown": "Unknown",
-      "unavailable": "Not provided by this API"
+      "unknown": "Unknown in retained evidence"
     },
     "configureKey": "Configure source network",
     "editKeyTitle": "Edit key source restrictions",
@@ -6180,6 +6183,8 @@
     "keyVersion": "Key version",
     "keyReviewBoundary": "This changes only the browser-memory MOCK. A future LIVE write must use a dedicated network-restriction action, the exact key version, and server reauthorization; it must not reuse status mutation.",
     "applyMock": "Apply to MOCK",
+    "liveKeyReviewBoundary": "This fully replaces the current key layer through the dedicated network-restriction action. The account layer remains independent. Save uses the exact key version and IAM reauthorizes the request.",
+    "applyLive": "Save source restrictions",
     "issues": {
       "tooMany": "At most 16 CIDRs are allowed.",
       "invalid": "A CIDR is invalid or is not a network address; host bits, zones, and IPv4-mapped IPv6 are not accepted.",

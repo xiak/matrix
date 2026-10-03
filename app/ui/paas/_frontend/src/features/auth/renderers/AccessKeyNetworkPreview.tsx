@@ -5,7 +5,7 @@ import { Network, ShieldCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, FormField, TextArea, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
-import { accessKeyNetworkDraftValue, accessKeyNetworkRestrictionsEqual, parseAccessKeyNetworkDraft, type AccessKeyNetworkDraftIssue, type AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
+import { accessKeyNetworkDraftValue, accessKeyNetworkRestrictionsEqual, parseAccessKeyNetworkDraft, type AccessKeyNetworkDraftIssue, type AccessKeyNetworkRestrictions, type AccessKeyUsageObservation } from "../domain/accessKeyNetwork";
 import type { AccessKey, AccessWorkspace } from "../domain/accessWorkspace";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
 import { SecurityStepUpPreview } from "./SecurityStepUpPreview";
@@ -16,16 +16,27 @@ export function AccessKeyNetworkRestrictionValues({ value }: { value: AccessKeyN
   return value.allowedSourceCidrs.length ? <ul className={styles.networkValues}>{value.allowedSourceCidrs.map((cidr) => <li key={cidr}><code>{cidr}</code></li>)}</ul> : <span className={styles.note}>{t("unrestrictedLayer")}</span>;
 }
 
-export function AccessKeySecuritySignals({ account, keyValue }: { account?: AccessKeyNetworkRestrictions; keyValue?: AccessKey }) {
+export type AccessKeyAccountNetworkState =
+  | { status: "ready"; value: AccessKeyNetworkRestrictions }
+  | { status: "loading" | "unavailable" };
+
+type KeyNetworkValue = { networkRestrictions: AccessKeyNetworkRestrictions };
+
+export function AccessKeySecuritySignals({ account, keyValue, usage }: {
+  account: AccessKeyAccountNetworkState;
+  keyValue: KeyNetworkValue;
+  usage: AccessKeyUsageObservation;
+}) {
   const t = useTranslations("AccessKeyNetworkPreview");
-  const known = account !== undefined && keyValue !== undefined;
-  const accountLimited = Boolean(account?.allowedSourceCidrs.length);
-  const keyLimited = Boolean(keyValue?.networkRestrictions.allowedSourceCidrs.length);
-  const networkState = !known ? "unknown" : accountLimited && keyLimited ? "accountAndKey" : accountLimited ? "accountOnly" : keyLimited ? "keyOnly" : "unrestricted";
-  const usageState = keyValue?.usage.lastAuthorization ? "observed" : keyValue ? "unknown" : "unavailable";
+  const accountLimited = account.status === "ready" && Boolean(account.value.allowedSourceCidrs.length);
+  const keyLimited = Boolean(keyValue.networkRestrictions.allowedSourceCidrs.length);
+  const networkState = account.status === "loading" ? "accountLoading"
+    : account.status === "unavailable" ? keyLimited ? "keyLimitedAccountUnknown" : "keyOpenAccountUnknown"
+      : accountLimited && keyLimited ? "accountAndKey" : accountLimited ? "accountOnly" : keyLimited ? "keyOnly" : "unrestricted";
+  const usageState = usage.lastAuthorization ? "observed" : "unknown";
 
   return <dl className={styles.securitySignals} aria-label={t("securitySignals")}>
-    <div><dt>{t("networkSignal")}</dt><dd><Badge status={known && (accountLimited || keyLimited) ? "info" : "neutral"}>{t(`networkStates.${networkState}`)}</Badge></dd></div>
+    <div><dt>{t("networkSignal")}</dt><dd><Badge status={accountLimited || keyLimited ? "info" : "neutral"}>{t(`networkStates.${networkState}`)}</Badge></dd></div>
     <div><dt>{t("usageSignal")}</dt><dd><Badge status={usageState === "observed" ? "info" : "neutral"}>{t(`usageStates.${usageState}`)}</Badge></dd></div>
   </dl>;
 }
@@ -107,24 +118,24 @@ export function AccountAccessKeyNetworkPreview({ workspace }: { workspace: Acces
   </section>;
 }
 
-export function AccessKeyNetworkLayers({ account, keyValue }: { account: AccessKeyNetworkRestrictions; keyValue: AccessKeyNetworkRestrictions }) {
+export function AccessKeyNetworkLayers({ account, keyValue }: { account: AccessKeyAccountNetworkState; keyValue: AccessKeyNetworkRestrictions }) {
   const t = useTranslations("AccessKeyNetworkPreview");
-  return <div className={styles.networkLayers}><section><h3>{t("accountLayer")}</h3><AccessKeyNetworkRestrictionValues value={account} /></section><section><h3>{t("keyLayer")}</h3><AccessKeyNetworkRestrictionValues value={keyValue} /></section></div>;
+  return <div className={styles.networkLayers}><section><h3>{t("accountLayer")}</h3>{account.status === "ready" ? <AccessKeyNetworkRestrictionValues value={account.value} /> : <span className={styles.note}>{t(account.status === "loading" ? "accountLayerLoading" : "accountLayerUnavailable")}</span>}</section><section><h3>{t("keyLayer")}</h3><AccessKeyNetworkRestrictionValues value={keyValue} /></section></div>;
 }
 
-export function AccessKeyNetworkDetail({ account, keyValue }: { account: AccessKeyNetworkRestrictions; keyValue: AccessKey }) {
+export function AccessKeyNetworkDetail({ account, keyValue, source = "MOCK" }: { account: AccessKeyAccountNetworkState; keyValue: KeyNetworkValue; source?: "MOCK" | "LIVE" }) {
   const t = useTranslations("AccessKeyNetworkPreview");
-  return <Card><Card.Header><div className={styles.cardHeading}><Network aria-hidden="true" /><div><Typography.Title as="h2" level={3}>{t("keyTitle")}</Typography.Title><Typography.Text tone="muted">{t("keyHint")}</Typography.Text></div></div><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.networkBody}>
+  return <Card><Card.Header><div className={styles.cardHeading}><Network aria-hidden="true" /><div><Typography.Title as="h2" level={3}>{t("keyTitle")}</Typography.Title><Typography.Text tone="muted">{t("keyHint")}</Typography.Text></div></div><Badge status={source === "LIVE" ? "success" : "warning"}>{source}</Badge></Card.Header><Card.Body className={styles.networkBody}>
     <AccessKeyNetworkLayers account={account} keyValue={keyValue.networkRestrictions} />
-    <Alert status="info">{t("andBoundary")}</Alert>
+    <Alert status="info">{t(account.status === "ready" ? "andBoundary" : "partialNetworkBoundary")}</Alert>
     <p className={styles.note}>{t("familyBoundary")}</p>
   </Card.Body></Card>;
 }
 
-export function AccessKeyUsagePreview({ usage }: { usage: AccessKey["usage"] }) {
+export function AccessKeyUsagePreview({ usage, source = "MOCK" }: { usage: AccessKeyUsageObservation; source?: "MOCK" | "LIVE" }) {
   const t = useTranslations("AccessKeyNetworkPreview");
   const authorization = usage.lastAuthorization;
-  return <Card><Card.Header><div><Typography.Title as="h2" level={3}>{t("usageTitle")}</Typography.Title><Typography.Text tone="muted">{t("usageHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.networkBody}>
+  return <Card><Card.Header><div><Typography.Title as="h2" level={3}>{t("usageTitle")}</Typography.Title><Typography.Text tone="muted">{t("usageHint")}</Typography.Text></div><Badge status={source === "LIVE" ? "success" : "warning"}>{source}</Badge></Card.Header><Card.Body className={styles.networkBody}>
     <dl className={styles.networkFacts}><div><dt>{t("observedAt")}</dt><dd><WorkspaceTime value={usage.observedAt} /></dd></div>{authorization ? <><div><dt>{t("lastResult")}</dt><dd><Badge status={authorization.allowed ? "success" : "danger"}>{t(authorization.allowed ? "allowed" : "denied")}</Badge></dd></div><div><dt>Action</dt><dd><code>{authorization.action}</code></dd></div><div><dt>{t("product")}</dt><dd>{authorization.product}</dd></div><div><dt>{t("sourceIp")}</dt><dd><code>{authorization.sourceIp}</code></dd></div><div><dt>{t("evaluatedAt")}</dt><dd><WorkspaceTime value={authorization.evaluatedAt} /></dd></div></> : null}</dl>
     <Alert status="warning">{authorization ? t("observationBoundary") : t("observationUnknown")}</Alert>
   </Card.Body></Card>;

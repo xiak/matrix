@@ -35,7 +35,8 @@ import type {
 } from "../domain/accounts";
 import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceRoleTemplateDirectory } from "../domain/serviceAuthorization";
 import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWorkspace";
-import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
+import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
+import type { AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CurrentRoleIdentity, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, UserRoleSession } from "../domain/roles";
@@ -169,6 +170,7 @@ export interface AccountRepository {
     read(credential: string, accountId: string, userId: string, accessKeyId: string): Promise<AccessKeyAccess>;
     create(credential: string, accountId: string, userId: string, command: {
       userResourceVersion: number;
+      networkRestrictions: AccessKeyNetworkRestrictions;
       requestId: string;
     }): Promise<AccessKeyCreation>;
     setStatus(credential: string, accountId: string, userId: string, accessKeyId: string, command: {
@@ -176,6 +178,11 @@ export interface AccountRepository {
       requestId: string;
       status: AccessKeyStatus;
     }): Promise<AccessKeyStatusChange>;
+    setNetworkRestrictions(credential: string, accountId: string, userId: string, accessKeyId: string, command: {
+      accessKeyResourceVersion: number;
+      networkRestrictions: AccessKeyNetworkRestrictions;
+      requestId: string;
+    }): Promise<AccessKeyNetworkChange>;
     delete(credential: string, accountId: string, userId: string, accessKeyId: string, command: {
       accessKeyResourceVersion: number;
       requestId: string;

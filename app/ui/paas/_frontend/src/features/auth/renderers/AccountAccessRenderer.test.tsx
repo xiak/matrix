@@ -265,9 +265,9 @@ function AccessKeyIntentProbe() {
     <button onClick={() => setVisible((current) => !current)}>toggle-key-view</button>
     <output aria-label="key-probe-session">{`${session.phase}:${access.scene?.accountId ?? "none"}:${access.loading}:${access.error ?? "none"}`}</output>
     {visible ? <>
-      <button disabled={!client} onClick={() => { if (client) void client.create(childUser.id, { userResourceVersion: childUser.resourceVersion, requestId: originalKeyRequestId }).catch(() => {}); }}>create-original-key</button>
-      <button disabled={!client} onClick={() => { if (client) void client.create(childUser.id, { userResourceVersion: childUser.resourceVersion, requestId: `ui-access-key-create-${"b".repeat(32)}` }).catch(() => {}); }}>create-new-key</button>
-      <button disabled={!client} onClick={() => { if (client) void client.create("child-b", { userResourceVersion: 2, requestId: `ui-access-key-create-${"c".repeat(32)}` }).catch(() => {}); }}>create-other-user-key</button>
+      <button disabled={!client} onClick={() => { if (client) void client.create(childUser.id, { userResourceVersion: childUser.resourceVersion, networkRestrictions: { allowedSourceCidrs: [] }, requestId: originalKeyRequestId }).catch(() => {}); }}>create-original-key</button>
+      <button disabled={!client} onClick={() => { if (client) void client.create(childUser.id, { userResourceVersion: childUser.resourceVersion, networkRestrictions: { allowedSourceCidrs: [] }, requestId: `ui-access-key-create-${"b".repeat(32)}` }).catch(() => {}); }}>create-new-key</button>
+      <button disabled={!client} onClick={() => { if (client) void client.create("child-b", { userResourceVersion: 2, networkRestrictions: { allowedSourceCidrs: [] }, requestId: `ui-access-key-create-${"c".repeat(32)}` }).catch(() => {}); }}>create-other-user-key</button>
       <button disabled={!client} onClick={() => { client?.acknowledgeIssued(originalKeyRequestId, "mak1.lost-secret"); }}>acknowledge-issued-key</button>
       <button disabled={!client} onClick={() => { if (client) void client.delete(childUser.id, "mak1.lost-secret", { accessKeyResourceVersion: 2, requestId: "ui-access-key-delete-test" }).catch(() => {}); }}>retire-recovered-key</button>
       <output aria-label="key-create-intent">{access.accessKeyCreateIntent ? `${access.accessKeyCreateIntent.phase}:${access.accessKeyCreateIntent.userId}:${access.accessKeyCreateIntent.requestId}` : "none"}</output>
@@ -762,7 +762,7 @@ describe("account access", () => {
 
   it("keeps access-method facts unknown while opening the user's real key inventory in context", async () => {
     const list = vi.fn().mockResolvedValue({ accountId: account.id, userId: childUser.id, userResourceVersion: childUser.resourceVersion, capabilities: [], items: [] });
-    const repository = accounts({ accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), delete: vi.fn() } });
+    const repository = accounts({ accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
 
@@ -780,7 +780,7 @@ describe("account access", () => {
       ? { items: [other], nextAfter: null }
       : { items: [child], nextAfter: "users-page-2" });
     const repository = accounts({ listUsers, accessKeys: {
-      list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), delete: vi.fn()
+      list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn()
     } });
     const { user } = await openAccess(repository, iam(), "keys");
     expect(await screen.findByText("已加载 1 位用户")).toBeTruthy();
@@ -801,6 +801,7 @@ describe("account access", () => {
 
   it("retains one live key creation across view unmount and login, blocks another owner, and unlocks only after recovered-key retirement", async () => {
     const key = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      networkRestrictions: { allowedSourceCidrs: [] },
       resourceVersion: 2, createdAt: timestamp, updatedAt: timestamp };
     const create = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
       .mockResolvedValueOnce({ outcome: "EQUAL_REPLAY", key });
@@ -811,7 +812,7 @@ describe("account access", () => {
     const otherUser = { user: otherIdentity, policyAttachments: [], capabilities: userCapabilities(otherIdentity) };
     const repository = accounts({
       listUsers: vi.fn().mockResolvedValue({ items: [child, otherUser], nextAfter: null }),
-      accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), delete: remove }
+      accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: remove }
     });
     const auth = iam();
     const user = userEvent.setup();
@@ -845,9 +846,10 @@ describe("account access", () => {
 
   it("keeps an applied key locked until its one-time Secret is acknowledged", async () => {
     const key = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      networkRestrictions: { allowedSourceCidrs: [] },
       resourceVersion: 2, createdAt: timestamp, updatedAt: timestamp };
     const create = vi.fn().mockResolvedValue({ outcome: "APPLIED", key, secret: "test-only-one-time-secret" });
-    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), delete: vi.fn() } });
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
     const auth = iam();
     const user = userEvent.setup();
     const tree = () => <LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>;
@@ -865,12 +867,13 @@ describe("account access", () => {
 
   it("treats an applied Secret as lost after page loss and requires the recovered key to be retired", async () => {
     const key = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      networkRestrictions: { allowedSourceCidrs: [] },
       resourceVersion: 2, createdAt: timestamp, updatedAt: timestamp };
     const create = vi.fn().mockResolvedValue({ outcome: "APPLIED", key, secret: "test-only-one-time-secret" });
     const remove = vi.fn().mockResolvedValue({ outcome: "APPLIED", deletion: {
       id: key.id, accountId: account.id, userId: childUser.id, resourceVersion: 3, deletedAt: timestamp
     } });
-    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), delete: remove } });
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: remove } });
     const auth = iam();
     const user = userEvent.setup();
     const tree = () => <LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>;
