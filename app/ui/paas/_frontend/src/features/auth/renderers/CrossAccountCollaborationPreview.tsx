@@ -33,6 +33,43 @@ export function CrossAccountCollaborationPreview({ accountId }: { accountId: str
           <div><dt>{t("state")}</dt><dd><Badge status="warning">{t("notConnected")}</Badge></dd></div>
           <div><dt>{t("prerequisite")}</dt><dd>{t("twoAccounts")}</dd></div>
         </dl>
+        <section aria-labelledby={`${titleId}-modes`} className={styles.stack}>
+          <div className={styles.securityEvidenceHeading}>
+            <Typography.Title as="h3" id={`${titleId}-modes`} level={3}>{t("modes.title")}</Typography.Title>
+            <Typography.Text tone="muted">{t("modes.description")}</Typography.Text>
+          </div>
+          <div className={styles.crossAccountModes}>
+            <article className={styles.crossAccountMode}>
+              <div className={styles.crossAccountModeHeading}>
+                <strong>{t("modes.role.title")}</strong>
+                <Badge status="neutral">{t("modes.role.status")}</Badge>
+              </div>
+              <p>{t("modes.role.description")}</p>
+              <dl>
+                <div><dt>{t("modes.surface")}</dt><dd>{t("modes.role.surface")}</dd></div>
+                <div><dt>{t("modes.identity")}</dt><dd>{t("modes.role.identity")}</dd></div>
+                <div><dt>{t("modes.authorization")}</dt><dd>{t("modes.role.authorization")}</dd></div>
+              </dl>
+            </article>
+            <article className={styles.crossAccountMode}>
+              <div className={styles.crossAccountModeHeading}>
+                <strong>{t("modes.resource.title")}</strong>
+                <Badge status="warning">{t("modes.resource.status")}</Badge>
+              </div>
+              <p>{t("modes.resource.description")}</p>
+              <dl>
+                <div><dt>{t("modes.surface")}</dt><dd>{t("modes.resource.surface")}</dd></div>
+                <div><dt>{t("modes.identity")}</dt><dd>{t("modes.resource.identity")}</dd></div>
+                <div><dt>{t("modes.authorization")}</dt><dd>{t("modes.resource.authorization")}</dd></div>
+              </dl>
+            </article>
+          </div>
+          <Alert status="warning">{t("modes.resourceBoundary")}</Alert>
+        </section>
+        <div className={styles.securityEvidenceHeading}>
+          <Typography.Title as="h3" level={3}>{t("roleJourney")}</Typography.Title>
+          <Typography.Text tone="muted">{t("roleJourneyHint")}</Typography.Text>
+        </div>
         <ol className={styles.securityChecks}>
           {steps.map((step, index) => <li key={step}>
             <Badge status="neutral">{index + 1}</Badge>

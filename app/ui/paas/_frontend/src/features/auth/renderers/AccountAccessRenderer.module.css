@@ -239,6 +239,19 @@
 .securityCheckCopy { display: grid; flex: 1; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .securityCheckHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-tight); }
 .securityCheckHeading strong { color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-medium); }
+.crossAccountModes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); }
+.crossAccountMode { display: grid; align-content: start; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-comfortable); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
+.crossAccountModeHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-tight); }
+.crossAccountModeHeading strong { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-semibold); }
+.crossAccountMode > p { margin: 0; color: var(--xiak-color-text-muted); line-height: var(--xiak-line-height-body); }
+.crossAccountMode dl { display: grid; gap: var(--xiak-spacing-tight); margin: 0; }
+.crossAccountMode dl > div { display: grid; grid-template-columns: minmax(7rem, 0.35fr) minmax(0, 1fr); gap: var(--xiak-spacing-default); padding-top: var(--xiak-spacing-tight); border-top: var(--xiak-border-subtle); }
+.crossAccountMode dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.crossAccountMode dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .crossAccountModes { grid-template-columns: minmax(0, 1fr); }
+  .crossAccountMode dl > div { grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-micro); }
+}
 .securityCheckCopy p { margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; overflow-wrap: anywhere; }
 .activityEvidence { display: grid; margin: 0; border-top: var(--xiak-border-subtle); }
 .activityEvidence > div { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr); gap: var(--xiak-spacing-default); align-items: start; padding-block: var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); }

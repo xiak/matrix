@@ -5168,6 +5168,32 @@
       "prerequisite": "Real acceptance prerequisite",
       "twoAccounts": "Two independent real accounts and a verifiable external subject",
       "required": "Must be closed",
+      "roleJourney": "Role-assumption collaboration path",
+      "roleJourneyHint": "These six steps describe only the IAM-EXT-06 short-lived role-session model. They do not imply that every product shares resources through roles.",
+      "modes": {
+        "title": "Choose the correct cross-account model first",
+        "description": "Role assumption and direct resource sharing solve different problems and cannot share one switch or policy editor.",
+        "surface": "Management surface",
+        "identity": "Access identity",
+        "authorization": "Effective requirement",
+        "role": {
+          "title": "Assume a Role in the target account",
+          "status": "IAM-EXT-06",
+          "description": "Use this to perform a bounded set of operations in the target account. The external subject exchanges its identity for an auditable short-lived role session.",
+          "surface": "IAM invitation, trust, and Role management",
+          "identity": "Source subject → target RoleSession",
+          "authorization": "Both the target Role trust and the source subject's assume permission must allow"
+        },
+        "resource": {
+          "title": "Share one business resource directly",
+          "status": "IAM-EXT-09 · Deferred",
+          "description": "Use this to access an exact resource without changing identity. It exists only when the product declares resource-policy or ACL support.",
+          "surface": "The product resource detail, not a generic IAM editor",
+          "identity": "The source subject keeps its original account identity",
+          "authorization": "The source identity policy and the resource owner's share must both pass; explicit deny wins"
+        },
+        "resourceBoundary": "No product currently publishes a consumable resource-policy or ACL contract, and there is no anonymous-access model. The console must not invent a Principal, public-access switch, or generic resource policy. A product owner must first declare resource kinds, supported actions, sharing semantics, and its PEP; IAM can then validate both sides."
+      },
       "revocationBoundary": "Revocation by either account must stop new role assumptions. The fixed backend contract must still define whether existing short-lived sessions are revoked or expire. This preview does not assume that deleting one local record completes bilateral revocation.",
       "steps": {
         "invite": {

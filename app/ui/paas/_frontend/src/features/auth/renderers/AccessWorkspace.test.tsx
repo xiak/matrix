@@ -3969,12 +3969,18 @@ describe("CAM-style access workspace", () => {
     expect(state.enterprises[0]?.importedMemberIds).toEqual(["dev01"]);
     expect(state.providers).toHaveLength(1);
   });
-  it("explains bilateral cross-account collaboration without inventing an invitation command", async () => {
+  it("separates role assumption from product-owned resource sharing without inventing a command", async () => {
     const { user, repository } = await open("federations");
     await user.click(await screen.findByRole("tab", { name: "跨账号协作" }));
     const preview = screen.getByRole("region", { name: "跨账号协作信任链路" });
     expect(within(preview).getByText(/不发送邀请、不创建账号关系、不签发会话/)).toBeTruthy();
     expect(within(preview).getByText("org-xiak")).toBeTruthy();
+    expect(within(preview).getByRole("heading", { level: 3, name: "先选择正确的跨账号模式" })).toBeTruthy();
+    expect(within(preview).getByRole("heading", { level: 3, name: "角色承担协作链路" })).toBeTruthy();
+    expect(within(preview).getByText("承担目标账号 Role")).toBeTruthy();
+    expect(within(preview).getByText("直接共享一个业务资源")).toBeTruthy();
+    expect(within(preview).getByText(/对应产品的资源详情，不是 IAM 通用编辑器/)).toBeTruthy();
+    expect(within(preview).getByText(/当前没有任何产品发布可消费的资源策略或 ACL 契约/)).toBeTruthy();
     expect(within(preview).getByText("外部账号确认主体与意图")).toBeTruthy();
     expect(within(preview).getByText(/Role trust 与外部主体的承担权限都必须满足/)).toBeTruthy();
     expect(within(preview).getByText(/任一账号撤销协作后/)).toBeTruthy();

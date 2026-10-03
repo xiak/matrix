@@ -5189,6 +5189,32 @@
       "prerequisite": "真实验收前提",
       "twoAccounts": "两个独立真实账号与可核对的外部主体",
       "required": "必须闭合",
+      "roleJourney": "角色承担协作链路",
+      "roleJourneyHint": "以下六步只描述 IAM-EXT-06 的短期角色会话模式，不代表所有产品都通过角色共享资源。",
+      "modes": {
+        "title": "先选择正确的跨账号模式",
+        "description": "角色承担与直接资源共享解决不同问题，不能共用一个开关或策略编辑入口。",
+        "surface": "管理位置",
+        "identity": "访问身份",
+        "authorization": "生效条件",
+        "role": {
+          "title": "承担目标账号 Role",
+          "status": "IAM-EXT-06",
+          "description": "适合进入目标账号执行一组受控操作；外部主体换取有界、可审计的短期角色会话。",
+          "surface": "IAM 的邀请、信任与 Role 管理",
+          "identity": "来源主体 → 目标 RoleSession",
+          "authorization": "目标 Role trust 与来源主体承担权限都必须允许"
+        },
+        "resource": {
+          "title": "直接共享一个业务资源",
+          "status": "IAM-EXT-09 · Deferred",
+          "description": "适合不切换身份地访问明确资源；只有产品声明支持资源策略或 ACL 时才存在。",
+          "surface": "对应产品的资源详情，不是 IAM 通用编辑器",
+          "identity": "来源主体保持原账号身份",
+          "authorization": "来源身份策略与资源 owner 的共享许可共同满足，显式拒绝优先"
+        },
+        "resourceBoundary": "当前没有任何产品发布可消费的资源策略或 ACL 契约，也没有匿名访问模型。控制台不得据此生成 Principal、公开访问开关或通用资源策略；后续必须由产品 owner 声明资源类型、支持动作、共享语义和 PEP，再由 IAM 校验两侧权限。"
+      },
       "revocationBoundary": "任一账号撤销协作后，都必须停止新的角色承担；已有短期会话的撤销或到期语义仍需由固定后端契约明确。本预览不假定删除一侧记录即可完成双边撤销。",
       "steps": {
         "invite": {
