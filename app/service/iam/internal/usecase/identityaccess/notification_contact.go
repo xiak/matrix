@@ -22,6 +22,8 @@ type NotificationContactSubject struct {
 type NotificationVerificationStart struct {
 	Subject         NotificationContactSubject
 	PasswordAttempt PasswordAttempt
+	Purpose         iamv1.NotificationContactVerificationPurpose
+	StepUpID        string
 	IntentDigest    string
 	RequestID       string
 	NotificationID  string
@@ -34,14 +36,16 @@ type NotificationConfirmationAttempt struct {
 	Subject  NotificationContactSubject
 	ID       string
 	Sequence uint64
+	Purpose  iamv1.NotificationContactVerificationPurpose
 	Binding  iamv1.EmailVerificationBinding
 	Sealed   authority.SealedEmailVerificationCode
 }
 
 type NotificationConfirmation struct {
-	Attempt        NotificationConfirmationAttempt
-	NotificationID string
-	AuditEvent     auditv1.Event
+	Attempt                NotificationConfirmationAttempt
+	NotificationID         string
+	PreviousNotificationID string
+	AuditEvent             auditv1.Event
 }
 
 func (NotificationVerificationStart) String() string { return "[REDACTED]" }
@@ -228,7 +232,7 @@ func (service *Authority) StartNotificationVerification(ctx context.Context, cre
 			return err
 		}
 		result, err = service.recordNotificationVerification(ctx, tx, NotificationVerificationStart{Subject: notificationSubject(subject), PasswordAttempt: attempt,
-			IntentDigest: attempt.IntentDigest, RequestID: request.RequestID, NotificationID: notificationID,
+			Purpose: iamv1.NotificationContactFirstAddress, IntentDigest: attempt.IntentDigest, RequestID: request.RequestID, NotificationID: notificationID,
 			Binding: iamv1.EmailVerificationBinding{AccountID: attempt.AccountID, UserID: attempt.PrincipalID, VerificationID: verificationID,
 				Recipient: request.Email, CredentialGeneration: attempt.CredentialGeneration, IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute)}}, code)
 		return err
@@ -274,7 +278,8 @@ func (service *Authority) StartChallengeNotificationVerification(ctx context.Con
 		if err != nil {
 			return err
 		}
-		result, err = service.recordNotificationVerification(ctx, tx, NotificationVerificationStart{Subject: subject, IntentDigest: intent,
+		result, err = service.recordNotificationVerification(ctx, tx, NotificationVerificationStart{Subject: subject,
+			Purpose: iamv1.NotificationContactFirstAddress, IntentDigest: intent,
 			RequestID: request.RequestID, NotificationID: notificationID,
 			Binding: iamv1.EmailVerificationBinding{AccountID: subject.AccountID, UserID: subject.UserID, VerificationID: verificationID,
 				Recipient: request.Email, CredentialGeneration: inspection.CredentialGeneration, IssuedAt: now, ExpiresAt: inspection.State.Challenge.ExpiresAt}}, code)
@@ -284,6 +289,57 @@ func (service *Authority) StartChallengeNotificationVerification(ctx context.Con
 		return iamv1.NotificationContactVerification{}, err
 	}
 	if iamv1.ValidateNotificationContactVerification(result) != nil {
+		return iamv1.NotificationContactVerification{}, ErrUnavailable
+	}
+	return result, nil
+}
+
+func (service *Authority) StartNotificationContactReplacement(ctx context.Context, credential iamv1.Secret, request iamv1.StartNotificationContactReplacementRequest) (iamv1.NotificationContactVerification, error) {
+	if iamv1.ValidateStartNotificationContactReplacementRequest(request) != nil {
+		return iamv1.NotificationContactVerification{}, ErrInvalidArgument
+	}
+	verificationID, err := service.config.NewID("email-verification")
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, ErrUnavailable
+	}
+	notificationID, err := service.config.NewID("notification")
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, ErrUnavailable
+	}
+	code, err := service.credentials.IssueEmailVerificationCode()
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, ErrUnavailable
+	}
+	var result iamv1.NotificationContactVerification
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		subject, err := service.notificationSession(ctx, tx, credential)
+		if err != nil {
+			return err
+		}
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		intent, err := digestSanitized("notification-contact-replacement", struct {
+			SessionID iamv1.SessionID
+			Request   iamv1.StartNotificationContactReplacementRequest
+		}{subject.Subject.Session.ID, request})
+		if err != nil {
+			return err
+		}
+		result, err = service.recordNotificationVerification(ctx, tx, NotificationVerificationStart{
+			Subject: notificationSubject(subject), Purpose: iamv1.NotificationContactReplacement, StepUpID: request.StepUpID,
+			IntentDigest: intent, RequestID: request.RequestID, NotificationID: notificationID,
+			Binding: iamv1.EmailVerificationBinding{AccountID: subject.Subject.Organization.ID, UserID: subject.Subject.Principal.ID,
+				VerificationID: verificationID, Recipient: request.Email, CredentialGeneration: subject.CredentialGeneration,
+				ContactRevision: request.ExpectedResourceVersion, IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute)}}, code)
+		return err
+	})
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, err
+	}
+	if iamv1.ValidateNotificationContactVerification(result) != nil || result.Purpose != iamv1.NotificationContactReplacement ||
+		result.ExpectedResourceVersion != request.ExpectedResourceVersion || result.Email != request.Email || result.RequestID != request.RequestID {
 		return iamv1.NotificationContactVerification{}, ErrUnavailable
 	}
 	return result, nil
@@ -308,11 +364,18 @@ func (service *Authority) recordNotificationVerification(ctx context.Context, tx
 	if err != nil {
 		return iamv1.NotificationContactVerification{}, err
 	}
-	return tx.StartNotificationVerification(ctx, change)
+	if change.Purpose == iamv1.NotificationContactFirstAddress {
+		return tx.StartNotificationVerification(ctx, change)
+	}
+	if change.Purpose == iamv1.NotificationContactReplacement {
+		return tx.StartNotificationReplacement(ctx, change)
+	}
+	return iamv1.NotificationContactVerification{}, ErrInvalidArgument
 }
 
 func (service *Authority) notificationContactEvent(subject NotificationContactSubject, action auditv1.Action, digest, requestID string, now time.Time) (auditv1.Event, error) {
-	if action != auditv1.ActionIAMNotificationContactVerificationStarted && action != auditv1.ActionIAMNotificationContactVerified {
+	if action != auditv1.ActionIAMNotificationContactVerificationStarted && action != auditv1.ActionIAMNotificationContactVerified &&
+		action != auditv1.ActionIAMNotificationContactReplaced {
 		return auditv1.Event{}, ErrInvalidArgument
 	}
 	id, err := service.config.NewID("event")
@@ -388,6 +451,13 @@ func (service *Authority) confirmNotificationContact(ctx context.Context, id, re
 	if err != nil {
 		return iamv1.NotificationContactVerification{}, ErrUnavailable
 	}
+	var previousNotificationID string
+	if attempt.Purpose == iamv1.NotificationContactReplacement {
+		previousNotificationID, err = service.config.NewID("notification")
+		if err != nil {
+			return iamv1.NotificationContactVerification{}, ErrUnavailable
+		}
+	}
 	var result iamv1.NotificationContactVerification
 	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
 		subject, generation, err := authenticate(ctx, tx)
@@ -405,11 +475,16 @@ func (service *Authority) confirmNotificationContact(ctx context.Context, id, re
 		if err != nil {
 			return err
 		}
-		event, err := service.notificationContactEvent(subject, auditv1.ActionIAMNotificationContactVerified, digest, requestID, now)
+		action := auditv1.ActionIAMNotificationContactVerified
+		if attempt.Purpose == iamv1.NotificationContactReplacement {
+			action = auditv1.ActionIAMNotificationContactReplaced
+		}
+		event, err := service.notificationContactEvent(subject, action, digest, requestID, now)
 		if err != nil {
 			return err
 		}
-		result, err = tx.ConfirmNotificationContact(ctx, NotificationConfirmation{Attempt: attempt, NotificationID: notificationID, AuditEvent: event})
+		result, err = tx.ConfirmNotificationContact(ctx, NotificationConfirmation{Attempt: attempt, NotificationID: notificationID,
+			PreviousNotificationID: previousNotificationID, AuditEvent: event})
 		return err
 	})
 	if err != nil {

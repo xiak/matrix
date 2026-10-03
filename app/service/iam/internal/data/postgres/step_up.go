@@ -16,6 +16,8 @@ func (value *transaction) StartStepUp(ctx context.Context, mutation identityacce
 	s, r := mutation.Session, mutation.Request
 	var expectedSettingsVersion *uint64
 	var requiredForUsers *bool
+	var expectedNotificationContactVersion *uint64
+	var notificationContactEmail *string
 	var passwordSettings, sessionSettings, accessKeyNetwork []byte
 	if r.SecuritySettings != nil {
 		if iamv1.ValidateSecuritySettingsUpdateIntent(*r.SecuritySettings) != nil {
@@ -37,9 +39,17 @@ func (value *transaction) StartStepUp(ctx context.Context, mutation identityacce
 			return iamv1.StepUp{}, identityaccess.ErrUnavailable
 		}
 	}
+	if r.NotificationContact != nil {
+		if iamv1.ValidateNotificationContactReplacementIntent(*r.NotificationContact) != nil {
+			return iamv1.StepUp{}, identityaccess.ErrInvalidArgument
+		}
+		expectedNotificationContactVersion = &r.NotificationContact.ExpectedResourceVersion
+		notificationContactEmail = &r.NotificationContact.Email
+	}
 	var encoded []byte
-	err := value.tx.QueryRow(ctx, "SELECT iam.start_step_up($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb)", s.AccountID, s.PrincipalID, s.ID,
-		mutation.ID, r.RequestID, r.Operation, r.ExpectedFactorRevision, expectedSettingsVersion, requiredForUsers, passwordSettings, sessionSettings, accessKeyNetwork).Scan(&encoded)
+	err := value.tx.QueryRow(ctx, "SELECT iam.start_step_up($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14)", s.AccountID, s.PrincipalID, s.ID,
+		mutation.ID, r.RequestID, r.Operation, r.ExpectedFactorRevision, expectedSettingsVersion, requiredForUsers, passwordSettings, sessionSettings, accessKeyNetwork,
+		expectedNotificationContactVersion, notificationContactEmail).Scan(&encoded)
 	if err != nil {
 		return iamv1.StepUp{}, mapStepUpError("start operation proof", err)
 	}

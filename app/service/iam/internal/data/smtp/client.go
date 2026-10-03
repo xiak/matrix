@@ -295,6 +295,10 @@ func securityText(kind authority.SecurityMailKind) (string, string) {
 		return "MATRIX notification address verification", "A request was made to verify this notification address."
 	case authority.MailContactVerified:
 		return "MATRIX notification address verified", "This address was verified for security notifications. Email verification does not grant login or account recovery access."
+	case authority.MailContactReplacedPrevious:
+		return "MATRIX notification address changed", "Your MATRIX security-notification address was changed. This previous address will no longer receive new security notifications. If you did not make this change, use your established recovery process immediately."
+	case authority.MailContactReplacedCurrent:
+		return "MATRIX notification address changed", "This address is now verified for MATRIX security notifications. Email verification does not grant login or account recovery access."
 	case authority.MailAuthenticatorBound:
 		return "MATRIX authenticator bound", "A TOTP authenticator was bound to your account user."
 	case authority.MailAuthenticatorReplaced:

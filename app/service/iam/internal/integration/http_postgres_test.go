@@ -3417,6 +3417,187 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 		}
 	}
 	assertContactProof(contact.AccountID, contact.UserID)
+	t.Run("verified_contact_replacement_is_step_up_bound_and_atomic", func(t *testing.T) {
+		initialPassword := iamHTTPSecret(t, "Contact-Replace-Initial-483!")
+		currentPassword := iamHTTPSecret(t, "Contact-Replace-Current-792!")
+		user, err := first.CreateUser(ctx, login.Credential, iamv1.CreateUserRequest{LoginName: "contact-replacement", DisplayName: "Contact replacement gate",
+			InitialPassword: initialPassword, RequestID: "contact-replacement-create"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		access, err := first.Login(ctx, iamv1.LoginRequest{LoginName: user.LoginName + "@" + string(user.AccountID), Password: initialPassword,
+			RequestID: "contact-replacement-login"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := first.ChangePassword(ctx, access.Credential, iamv1.ChangePasswordRequest{CurrentPassword: initialPassword,
+			NewPassword: currentPassword, RequestID: "contact-replacement-password"}); err != nil {
+			t.Fatal(err)
+		}
+		firstVerification, err := first.StartNotificationVerification(ctx, access.Credential, iamv1.StartNotificationContactVerificationRequest{
+			Email: "previous@mail.example.test", Password: currentPassword, RequestID: "contact-replacement-first"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		firstCode := iamNotificationStorageCode(t, ctx, database, protector, firstVerification)
+		if _, err := first.ConfirmNotificationContact(ctx, access.Credential, firstVerification.ID,
+			iamv1.ConfirmNotificationContactVerificationRequest{Code: firstCode, RequestID: "contact-replacement-first-confirm"}); err != nil {
+			t.Fatal(err)
+		}
+		enrollment, err := first.StartTOTPEnrollment(ctx, access.Credential, iamv1.StartTOTPEnrollmentRequest{
+			RequestID: "contact-replacement-factor", Password: currentPassword, ExpectedFactorRevision: 1})
+		if err != nil || enrollment.Provisioning == nil {
+			t.Fatal("prepare replacement factor", err)
+		}
+		codeAt := func(advance int64) iamv1.Secret {
+			t.Helper()
+			var step int64
+			if err := database.QueryRow(ctx, "SELECT floor(extract(epoch FROM clock_timestamp())/30)::bigint").Scan(&step); err != nil {
+				t.Fatal(err)
+			}
+			material := enrollment.Provisioning.Seed.CopyBytes()
+			defer clear(material)
+			code, err := hotp.GenerateCode(string(material), uint64(step+advance))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return iamHTTPSecret(t, code)
+		}
+		if _, err := first.ConfirmTOTPEnrollment(ctx, access.Credential, enrollment.Enrollment.ID,
+			iamv1.ConfirmTOTPEnrollmentRequest{RequestID: "contact-replacement-factor-confirm", Code: codeAt(-1)}); err != nil {
+			t.Fatal("bind replacement factor", err)
+		}
+		challenge, err := first.Login(ctx, iamv1.LoginRequest{LoginName: user.LoginName + "@" + string(user.AccountID), Password: currentPassword,
+			RequestID: "contact-replacement-mfa-login"})
+		if err != nil || challenge.Challenge == nil || challenge.Challenge.NextStep != "TOTP" {
+			t.Fatal("replacement login did not require TOTP", err)
+		}
+		session, err := first.VerifyAuthenticationChallenge(ctx, challenge.Challenge.ID, iamv1.VerifyAuthenticationChallengeRequest{
+			RequestID: "contact-replacement-mfa-verify", ChallengeCredential: challenge.ChallengeCredential, Code: codeAt(0)})
+		if err != nil || !session.Credential.Present() {
+			t.Fatal("replacement MFA login failed", err)
+		}
+		intent := iamv1.NotificationContactReplacementIntent{ExpectedResourceVersion: 1, Email: "current@mail.example.test"}
+		proof, err := first.StartStepUp(ctx, session.Credential, iamv1.StartStepUpRequest{RequestID: "contact-replacement-intent",
+			Operation: iamv1.StepUpReplaceNotificationContact, ExpectedFactorRevision: 2, NotificationContact: &intent})
+		if err != nil {
+			t.Fatal("start replacement proof", err)
+		}
+		proof, err = second.VerifyStepUp(ctx, session.Credential, proof.ID, iamv1.VerifyStepUpRequest{
+			RequestID: "contact-replacement-proof", Password: currentPassword, Code: codeAt(1)})
+		if err != nil || proof.State != "PROVED" || proof.NotificationContact == nil || *proof.NotificationContact != intent {
+			t.Fatal("prove replacement intent", err)
+		}
+		replacementRequest := iamv1.StartNotificationContactReplacementRequest{StepUpID: proof.ID,
+			ExpectedResourceVersion: intent.ExpectedResourceVersion, Email: intent.Email, RequestID: "contact-replacement-intent"}
+		replacementBytes, err := iamv1.EncodeStartNotificationContactReplacementRequest(replacementRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var replacement, replacementReplay iamv1.NotificationContactVerification
+		call(0, http.MethodPost, path+"/replacements", session.Credential, replacementBytes, http.StatusOK, &replacement)
+		call(1, http.MethodPost, path+"/replacements", session.Credential, replacementBytes, http.StatusOK, &replacementReplay)
+		if replacement.ID == "" || replacement.ID != replacementReplay.ID || replacement.Purpose != iamv1.NotificationContactReplacement ||
+			replacement.ExpectedResourceVersion != 1 || replacement.Email != intent.Email || replacement.State != "PENDING" {
+			t.Fatal("replacement command replay or projection differs")
+		}
+		var before iamv1.NotificationContact
+		call(0, http.MethodGet, path, session.Credential, nil, http.StatusOK, &before)
+		if before.Email != "previous@mail.example.test" || before.ResourceVersion != 1 || before.PendingVerificationID != replacement.ID {
+			t.Fatal("unconfirmed replacement changed the authoritative contact")
+		}
+		variant := replacementRequest
+		variant.Email = "variant@mail.example.test"
+		variantBytes, _ := iamv1.EncodeStartNotificationContactReplacementRequest(variant)
+		call(1, http.MethodPost, path+"/replacements", session.Credential, variantBytes, http.StatusConflict, nil)
+		wrongVersion := replacementRequest
+		wrongVersion.ExpectedResourceVersion++
+		wrongVersionBytes, _ := iamv1.EncodeStartNotificationContactReplacementRequest(wrongVersion)
+		call(0, http.MethodPost, path+"/replacements", session.Credential, wrongVersionBytes, http.StatusConflict, nil)
+		call(0, http.MethodPost, path+"/replacements", access.Credential, replacementBytes, http.StatusUnauthorized, nil)
+		call(1, http.MethodPost, path+"/replacements", login.Credential, replacementBytes, http.StatusForbidden, nil)
+		replacementCode := iamNotificationStorageCode(t, ctx, database, protector, replacement)
+		confirmationBytes, _ := iamv1.EncodeConfirmNotificationContactVerificationRequest(iamv1.ConfirmNotificationContactVerificationRequest{
+			Code: replacementCode, RequestID: "contact-replacement-confirm"})
+		type confirmationResult struct {
+			response *httptest.ResponseRecorder
+		}
+		results := make(chan confirmationResult, len(handlers))
+		start := make(chan struct{})
+		for replica := range handlers {
+			go func(replica int) {
+				<-start
+				credential := session.Credential.CopyBytes()
+				defer clear(credential)
+				results <- confirmationResult{response: performIAMRequest(handlers[replica], http.MethodPost,
+					path+"/verifications/"+replacement.ID+":confirm", string(credential), confirmationBytes)}
+			}(replica)
+		}
+		close(start)
+		var applied, conflicted int
+		for range handlers {
+			result := <-results
+			if result.response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("replacement confirmation response was cacheable")
+			}
+			switch result.response.Code {
+			case http.StatusOK:
+				applied++
+				if json.Unmarshal(result.response.Body.Bytes(), &replacement) != nil {
+					t.Fatal("invalid replacement completion")
+				}
+			case http.StatusConflict:
+				conflicted++
+			default:
+				t.Fatalf("replacement confirmation race status=%d body=%s", result.response.Code, result.response.Body.String())
+			}
+		}
+		if applied != 1 || conflicted != 1 {
+			t.Fatalf("replacement confirmation race applied=%d conflicted=%d", applied, conflicted)
+		}
+		if replacement.State != "VERIFIED" || replacement.CompletedAt == nil || replacement.Purpose != iamv1.NotificationContactReplacement {
+			t.Fatal("replacement possession did not commit")
+		}
+		var after iamv1.NotificationContact
+		call(0, http.MethodGet, path, session.Credential, nil, http.StatusOK, &after)
+		if after.Email != intent.Email || after.ResourceVersion != 2 || after.PendingVerificationID != "" {
+			t.Fatal("replacement did not atomically advance the current contact")
+		}
+		var notices, facts int
+		if err := database.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM iam.security_notifications n WHERE n.tenant_id=$1 AND n.verification_id=$2
+			  AND (n.kind,n.email,n.contact_revision) IN (('CONTACT_REPLACED_PREVIOUS','previous@mail.example.test',1),('CONTACT_REPLACED_CURRENT',$3,2))),
+			(SELECT count(*) FROM iam.audit_outbox o WHERE o.tenant_id=$1 AND o.event_document->>'action'='iam.notification-contact.replaced'
+			  AND o.event_document#>>'{actor,id}'=$4 AND o.event_document::text NOT LIKE '%'||$3||'%')`,
+			replacement.AccountID, replacement.ID, intent.Email, replacement.UserID).Scan(&notices, &facts); err != nil || notices != 2 || facts != 1 {
+			t.Fatal("replacement notices or nonsecret fact differ", err, notices, facts)
+		}
+		counterfeit, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, rejected := counterfeit.Exec(ctx, `INSERT INTO iam.security_notifications(
+			tenant_id,id,user_id,installation_id,verification_id,event_id,kind,email,contact_revision,created_at,state,next_attempt_at,updated_at)
+			SELECT tenant_id,'contact-replacement-counterfeit',user_id,installation_id,id,started_event_id,
+			 'CONTACT_REPLACED_CURRENT',email,contact_revision+1,completed_at,'PENDING',completed_at,completed_at
+			 FROM iam.notification_contact_verifications WHERE tenant_id=$1 AND id=$2`, replacement.AccountID, replacement.ID)
+		if rejected == nil {
+			_, rejected = counterfeit.Exec(ctx, "SET CONSTRAINTS ALL IMMEDIATE")
+		}
+		_ = counterfeit.Rollback(ctx)
+		var invariant *pgconn.PgError
+		if !errors.As(rejected, &invariant) || invariant.Code != "23514" {
+			t.Fatal("counterfeit replacement notification was accepted", rejected)
+		}
+		call(0, http.MethodPost, path+"/replacements", session.Credential, replacementBytes, http.StatusOK, &replacementReplay)
+		if replacementReplay.State != "VERIFIED" || replacementReplay.CompletedAt == nil || *replacementReplay.CompletedAt != *replacement.CompletedAt {
+			t.Fatal("equal replay did not observe the original completion")
+		}
+		otherIntent := replacementRequest
+		otherIntent.RequestID = "contact-replacement-other"
+		otherBytes, _ := iamv1.EncodeStartNotificationContactReplacementRequest(otherIntent)
+		call(1, http.MethodPost, path+"/replacements", session.Credential, otherBytes, http.StatusForbidden, nil)
+	})
 	t.Run("real_postfix_http_contact_and_historical_notice", func(t *testing.T) {
 		channel, receive := iamNotificationPostfix(t, mail.Scope)
 		initialPassword := iamHTTPSecret(t, "Mail-Initial-User-Password-472!")

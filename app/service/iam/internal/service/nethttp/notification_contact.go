@@ -90,6 +90,31 @@ func (value *handler) startNotificationVerification(response http.ResponseWriter
 	writeJSON(response, http.StatusOK, result)
 }
 
+func (value *handler) startNotificationContactReplacement(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.StartNotificationContactReplacementRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.StartNotificationContactReplacement(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	if result.Purpose != iamv1.NotificationContactReplacement || result.RequestID != body.RequestID ||
+		result.ExpectedResourceVersion != body.ExpectedResourceVersion || result.Email != body.Email {
+		value.writeError(response, request, identityaccess.ErrUnavailable)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
 func (value *handler) notificationVerification(response http.ResponseWriter, request *http.Request) {
 	const prefix = "/v1/auth/notification-contact/verifications/"
 	if !rejectQuery(response, request) {

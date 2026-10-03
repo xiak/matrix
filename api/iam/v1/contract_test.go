@@ -563,6 +563,41 @@ func TestStepUpMetadataIsBoundedAndNeverLoginAuthority(t *testing.T) {
 			t.Fatal("step-up metadata became login authority")
 		}
 	}
+	contactIntent := NotificationContactReplacementIntent{ExpectedResourceVersion: 7, Email: "replacement@example.test"}
+	contactProof := baseline
+	contactProof.Operation, contactProof.NotificationContact = StepUpReplaceNotificationContact, &contactIntent
+	if err := ValidateStepUp(contactProof); err != nil {
+		t.Fatal("valid contact replacement proof rejected", err)
+	}
+	encodedContact, err := json.Marshal(contactProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decodedContact StepUp
+	if json.Unmarshal(encodedContact, &decodedContact) != nil || !reflect.DeepEqual(contactProof, decodedContact) {
+		t.Fatal("contact replacement intent did not survive strict metadata round trip")
+	}
+	for _, invalid := range []StepUp{
+		func() StepUp { v := contactProof; v.NotificationContact = nil; return v }(),
+		func() StepUp { v := contactProof; v.SecuritySettings = &SecuritySettingsUpdateIntent{}; return v }(),
+		func() StepUp {
+			v := contactProof
+			intent := *v.NotificationContact
+			intent.Email = "other@example.test\r\nBcc:x@example.test"
+			v.NotificationContact = &intent
+			return v
+		}(),
+		func() StepUp { v := baseline; v.NotificationContact = &contactIntent; return v }(),
+	} {
+		if ValidateStepUp(invalid) == nil {
+			t.Fatal("step-up accepted a mixed or invalid notification contact intent")
+		}
+	}
+	request := StartStepUpRequest{RequestID: "replace-contact", Operation: StepUpReplaceNotificationContact,
+		ExpectedFactorRevision: 2, NotificationContact: &contactIntent}
+	if ValidateStartStepUpRequest(request) != nil {
+		t.Fatal("valid contact replacement step-up request rejected")
+	}
 	for name, mutate := range map[string]func(*StepUp){
 		"foreign API":          func(v *StepUp) { v.APIVersion = "other/v1" },
 		"challenge kind":       func(v *StepUp) { v.Kind = "AuthenticationChallenge" },
@@ -1102,11 +1137,11 @@ func TestNotificationContactAndVerificationAreClosedCurrentUserContracts(t *test
 		t.Fatal(err)
 	}
 	contact.PendingVerificationID = "verification-a"
-	if ValidateNotificationContact(contact) == nil {
-		t.Fatal("first-contact API accepted replacement state")
+	if err := ValidateNotificationContact(contact); err != nil {
+		t.Fatal("verified contact did not allow a pending replacement", err)
 	}
 	verification := NotificationContactVerification{APIVersion: APIVersion, Kind: "NotificationContactVerification", ID: "verification-a", AccountID: "account-a", UserID: "user-a",
-		RequestID: "request-a", Email: "receiver@example.test", State: "PENDING", IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute), Delivery: NotificationDeliveryObservation{State: "PENDING", UpdatedAt: now}}
+		RequestID: "request-a", Purpose: NotificationContactFirstAddress, Email: "receiver@example.test", State: "PENDING", IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute), Delivery: NotificationDeliveryObservation{State: "PENDING", UpdatedAt: now}}
 	if err := ValidateNotificationContactVerification(verification); err != nil {
 		t.Fatal(err)
 	}
@@ -1204,6 +1239,43 @@ func TestNotificationSecretRequestsNeedExplicitEncodingAndRejectSelectors(t *tes
 		confirm.Code, _ = NewSecret(candidate)
 		if _, err := EncodeConfirmNotificationContactVerificationRequest(confirm); err == nil {
 			t.Fatal("noncanonical confirmation code accepted")
+		}
+	}
+}
+
+func TestNotificationContactReplacementRequestIsExactAndRedacted(t *testing.T) {
+	request := StartNotificationContactReplacementRequest{StepUpID: "contact-proof", ExpectedResourceVersion: 3,
+		Email: "new@example.test", RequestID: "replace-contact"}
+	encoded, err := EncodeStartNotificationContactReplacementRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded StartNotificationContactReplacementRequest
+	if DecodeRequest(bytes.NewReader(encoded), &decoded) != nil || decoded != request {
+		t.Fatal("replacement request did not survive strict round trip")
+	}
+	if formatted := fmt.Sprintf("%v %+v %#v", request, request, request); strings.Contains(formatted, request.Email) {
+		t.Fatal("replacement address leaked through formatted diagnostics")
+	}
+	for _, change := range []func(*StartNotificationContactReplacementRequest){
+		func(v *StartNotificationContactReplacementRequest) { v.StepUpID = "" },
+		func(v *StartNotificationContactReplacementRequest) { v.ExpectedResourceVersion = 0 },
+		func(v *StartNotificationContactReplacementRequest) { v.ExpectedResourceVersion = 9007199254740991 },
+		func(v *StartNotificationContactReplacementRequest) {
+			v.Email = "new@example.test\r\nBcc:x@example.test"
+		},
+		func(v *StartNotificationContactReplacementRequest) { v.RequestID = "" },
+	} {
+		invalid := request
+		change(&invalid)
+		if ValidateStartNotificationContactReplacementRequest(invalid) == nil {
+			t.Fatal("invalid replacement request accepted")
+		}
+	}
+	for _, selector := range []string{`"accountId":"other"`, `"userId":"other"`, `"sessionId":"other"`, `"smtpHost":"other"`} {
+		candidate := append(bytes.Clone(encoded[:len(encoded)-1]), []byte(","+selector+"}")...)
+		if DecodeRequest(bytes.NewReader(candidate), &decoded) == nil {
+			t.Fatal("replacement request accepted an authority selector")
 		}
 	}
 }

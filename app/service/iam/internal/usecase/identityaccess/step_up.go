@@ -164,6 +164,10 @@ func (service *Authority) StartStepUp(ctx context.Context, credential iamv1.Secr
 			!sameSessionSettings(result.SecuritySettings.Session, request.SecuritySettings.Session))) {
 		return iamv1.StepUp{}, ErrUnavailable
 	}
+	if (result.NotificationContact == nil) != (request.NotificationContact == nil) ||
+		(result.NotificationContact != nil && *result.NotificationContact != *request.NotificationContact) {
+		return iamv1.StepUp{}, ErrUnavailable
+	}
 	return result, nil
 }
 

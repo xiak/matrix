@@ -1178,6 +1178,64 @@ func TestIAMHTTPReplacementKeepsBearerIntentAndOneTimeProvisioning(t *testing.T)
 	}
 }
 
+func TestIAMHTTPNotificationContactReplacementKeepsExactIntent(t *testing.T) {
+	now := time.Date(2026, 10, 4, 8, 0, 0, 0, time.UTC)
+	const path = "/v1/auth/notification-contact/replacements"
+	const body = `{"stepUpId":"contact-proof","expectedResourceVersion":3,"email":"new@example.invalid","requestId":"replace-contact"}`
+	for _, scenario := range []string{"accepted", "missing-bearer", "query-selector", "body-selector", "duplicate-proof", "wrong-result-purpose", "wrong-result-version", "wrong-result-email", "wrong-method", "unavailable"} {
+		t.Run(scenario, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			workflow.enrollmentMail = iamv1.NotificationContactVerification{APIVersion: iamv1.APIVersion, Kind: "NotificationContactVerification",
+				ID: "contact-replacement", AccountID: "account-one", UserID: "user-one", RequestID: "replace-contact",
+				Purpose: iamv1.NotificationContactReplacement, ExpectedResourceVersion: 3, Email: "new@example.invalid", State: "PENDING",
+				IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute), Delivery: iamv1.NotificationDeliveryObservation{State: "PENDING", UpdatedAt: now}}
+			method, target, input := http.MethodPost, path, body
+			status, calls := http.StatusOK, 1
+			switch scenario {
+			case "missing-bearer":
+				status, calls = http.StatusUnauthorized, 0
+			case "query-selector":
+				target += "?accountId=other"
+				status, calls = http.StatusBadRequest, 0
+			case "body-selector":
+				input = strings.TrimSuffix(body, "}") + `,"userId":"other"}`
+				status, calls = http.StatusBadRequest, 0
+			case "duplicate-proof":
+				input = strings.TrimSuffix(body, "}") + `,"stepUpId":"other"}`
+				status, calls = http.StatusBadRequest, 0
+			case "wrong-result-purpose":
+				workflow.enrollmentMail.Purpose = iamv1.NotificationContactFirstAddress
+				workflow.enrollmentMail.ExpectedResourceVersion = 0
+				status = http.StatusServiceUnavailable
+			case "wrong-result-version":
+				workflow.enrollmentMail.ExpectedResourceVersion++
+				status = http.StatusServiceUnavailable
+			case "wrong-result-email":
+				workflow.enrollmentMail.Email = "other@example.invalid"
+				status = http.StatusServiceUnavailable
+			case "wrong-method":
+				method, status, calls = http.MethodGet, http.StatusMethodNotAllowed, 0
+			case "unavailable":
+				workflow.enrollmentErr, status = identityaccess.ErrUnavailable, http.StatusServiceUnavailable
+			}
+			request := httptest.NewRequest(method, target, strings.NewReader(input))
+			request.Header.Set("Content-Type", "application/json")
+			if scenario != "missing-bearer" {
+				request.Header.Set("Authorization", "Bearer current-contact-session")
+			}
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != status || workflow.stepCalls != calls || response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("notification contact replacement transport differs", response.Code, status, workflow.stepCalls, calls)
+			}
+			if calls == 1 && (!workflow.stepCredential.Present() || workflow.notificationReplacementRequest != (iamv1.StartNotificationContactReplacementRequest{
+				StepUpID: "contact-proof", ExpectedResourceVersion: 3, Email: "new@example.invalid", RequestID: "replace-contact"})) {
+				t.Fatal("replacement transport changed the exact proof intent")
+			}
+		})
+	}
+}
+
 func TestIAMHTTPInitialEnrollmentResponsesKeepSecretsPurposeBound(t *testing.T) {
 	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	completed := now.Add(time.Second)
@@ -1221,7 +1279,7 @@ func TestIAMHTTPInitialEnrollmentResponsesKeepSecretsPurposeBound(t *testing.T) 
 				workflow.enrollmentConfirmation.RecoveryCodes = append(workflow.enrollmentConfirmation.RecoveryCodes, code)
 			}
 			workflow.enrollmentMail = iamv1.NotificationContactVerification{APIVersion: iamv1.APIVersion, Kind: "NotificationContactVerification", ID: "contact-one", AccountID: "account-one", UserID: "user-one",
-				RequestID: "first-contact", Email: "first@example.invalid", State: "PENDING", IssuedAt: now, ExpiresAt: now.Add(3 * time.Minute), Delivery: iamv1.NotificationDeliveryObservation{State: "PENDING", UpdatedAt: now}}
+				RequestID: "first-contact", Purpose: iamv1.NotificationContactFirstAddress, Email: "first@example.invalid", State: "PENDING", IssuedAt: now, ExpiresAt: now.Add(3 * time.Minute), Delivery: iamv1.NotificationDeliveryObservation{State: "PENDING", UpdatedAt: now}}
 			sample.change(workflow)
 			request := httptest.NewRequest(http.MethodPost, sample.path, strings.NewReader(sample.body))
 			request.Header.Set("Content-Type", "application/json")
@@ -2352,6 +2410,7 @@ type httpWorkflow struct {
 	enrollmentConfirmation           iamv1.ConfirmTOTPEnrollmentResponse
 	enrollmentMail                   iamv1.NotificationContactVerification
 	enrollmentErr                    error
+	notificationReplacementRequest   iamv1.StartNotificationContactReplacementRequest
 	totpCalls                        int
 	stepCalls                        int
 	stepCredential                   iamv1.Secret
@@ -2906,6 +2965,12 @@ func (workflow *httpWorkflow) ConfirmChallengeNotificationContact(_ context.Cont
 	workflow.enrollmentCalls++
 	workflow.verifiedChallengeID, workflow.enrollmentCredential, workflow.enrollmentRequestID = id, body.ChallengeCredential, body.RequestID
 	workflow.enrollmentVerificationID = verificationID
+	return workflow.enrollmentMail, workflow.enrollmentErr
+}
+
+func (workflow *httpWorkflow) StartNotificationContactReplacement(_ context.Context, credential iamv1.Secret, body iamv1.StartNotificationContactReplacementRequest) (iamv1.NotificationContactVerification, error) {
+	workflow.stepCalls++
+	workflow.stepCredential, workflow.notificationReplacementRequest = credential, body
 	return workflow.enrollmentMail, workflow.enrollmentErr
 }
 

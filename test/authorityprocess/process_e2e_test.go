@@ -79,6 +79,19 @@ const (
 	verifierCredential     = "mx1.ProcessVerifierCredential0000000000000001"
 )
 
+type migrationErrorRecorder struct {
+	executor interface {
+		Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	}
+	err error
+}
+
+func (recorder *migrationErrorRecorder) Exec(ctx context.Context, statement string, arguments ...any) (pgconn.CommandTag, error) {
+	tag, err := recorder.executor.Exec(ctx, statement, arguments...)
+	recorder.err = err
+	return tag, err
+}
+
 func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 	admin, err := pgx.ParseConfig("postgres://migration:admin-password@127.0.0.1:5432/ignored-path?sslmode=disable&user=postgres&password=query-admin&host=127.0.0.1&port=5432&dbname=matrix_authority_process_unit")
 	if err != nil {
@@ -112,9 +125,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "91649497a0c53be1174d8835326a2df51fe74a55"
-	const sourceSchema uint64 = 63
-	const currentSchema uint64 = 64
+	const source = "530f6bf47a266b08a0ae2bbca5b1fd89798c646b"
+	const sourceSchema uint64 = 64
+	const currentSchema uint64 = 65
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -306,7 +319,10 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 			var state []byte
 			if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
 			 'contacts',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,user_id) FROM iam.notification_contacts c),
-			 'verifications',(SELECT jsonb_agg(to_jsonb(v) ORDER BY tenant_id,id) FROM iam.notification_contact_verifications v),
+			 'verifications',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,user_id,session_id,request_id,intent_digest,
+			     installation_id,bootstrap_digest,credential_generation,contact_revision,email,key_id,nonce,ciphertext,
+			     issued_at,expires_at,state,completed_at,confirmation_request_id,completion_event_id,started_event_id,notification_id)
+			     ORDER BY tenant_id,id) FROM iam.notification_contact_verifications),
 			 'notifications',(SELECT jsonb_agg(to_jsonb(n) ORDER BY tenant_id,id) FROM iam.security_notifications n))`).Scan(&state); err != nil {
 				t.Fatal("read retained notification invariants", err)
 			}
@@ -517,7 +533,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "retained-access-analyzer-create"})
 	var retainedAccessAnalyzer iamv1.AccessAnalyzer
 	if accessAnalyzerResponse.Status != http.StatusCreated || json.Unmarshal(accessAnalyzerResponse.Body, &retainedAccessAnalyzer) != nil ||
-		retainedAccessAnalyzer.AccountID != primary.Session.AccountID || retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{}) {
+		retainedAccessAnalyzer.AccountID != primary.Session.AccountID || retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}) {
 		t.Fatalf("actual predecessor did not create its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
 	}
 	retainedCreatedAnalyzer := retainedAccessAnalyzer
@@ -527,14 +543,12 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		endpoint+"/v1/account/access-analyzers/"+string(retainedAccessAnalyzer.ID)+":update", primary.Credential, retainedAnalyzerUpdate)
 	if accessAnalyzerResponse.Status != http.StatusOK || json.Unmarshal(accessAnalyzerResponse.Body, &retainedAccessAnalyzer) != nil ||
 		retainedAccessAnalyzer.UnusedAccessAgeDays != 91 || retainedAccessAnalyzer.ResourceVersion != 2 ||
-		retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{}) {
+		retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}) {
 		t.Fatalf("actual predecessor did not update its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
 	}
-	// IAM63 predates explicit disposition. IAM64 owns the only pre-v1
-	// replacement rule: retained analyzers become REVIEW_ONLY and do not gain
-	// automatic authority merely by migration or restart.
+	// The immediate IAM64 predecessor already owns explicit REVIEW_ONLY. IAM65
+	// must preserve it instead of inventing a migration default or authority.
 	migratedAccessAnalyzerExpected := retainedAccessAnalyzer
-	migratedAccessAnalyzerExpected.Disposition = iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}
 	if iamv1.ValidateAccessAnalyzer(migratedAccessAnalyzerExpected) != nil {
 		t.Fatal("predecessor analyzer differs beyond the intentional REVIEW_ONLY default")
 	}
@@ -570,7 +584,8 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	 CREATE EVENT TRIGGER iam_predecessor_fault ON ddl_command_end EXECUTE FUNCTION public.iam_predecessor_fault()`); err != nil {
 		t.Fatal("install isolated late cutover fault")
 	}
-	failed := iammigration.Up(ctx, admin)
+	recorder := &migrationErrorRecorder{executor: admin}
+	failed := iammigration.Up(ctx, recorder)
 	if _, err := admin.Exec(ctx, "ROLLBACK"); err != nil {
 		t.Fatal("finish rejected predecessor cutover")
 	}
@@ -583,9 +598,10 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	 AND EXISTS(SELECT 1 FROM iam.authorization_profile_heads h JOIN iam.authorization_profiles p
 	   ON (p.product,p.revision)=(h.product,h.revision)
 	   WHERE h.product='paas' AND h.revision=$2 AND p.content_digest=$3)
-	 AND iam.authentication_recovery_contract_ready()`, sourceSchema, oldPaaSProfileRevision, oldPaaSProfileDigest).Scan(&untouched); err != nil || !untouched ||
+		 AND iam.authentication_recovery_contract_ready()`, sourceSchema, oldPaaSProfileRevision, oldPaaSProfileDigest).Scan(&untouched); err != nil || !untouched ||
 		!bytes.Equal(originalState, identityState()) || !bytes.Equal(originalMail, mailState()) {
-		t.Fatal("failed cutover partially changed retained authority")
+		t.Fatalf("failed cutover partially changed retained authority: migration=%v database=%v state_query=%v untouched=%t identity_unchanged=%t mail_unchanged=%t",
+			failed, recorder.err, err, untouched, bytes.Equal(originalState, identityState()), bytes.Equal(originalMail, mailState()))
 	}
 	if _, err := admin.Exec(ctx, `DROP EVENT TRIGGER iam_predecessor_fault;
 	 DROP FUNCTION public.iam_predecessor_fault(); DROP SEQUENCE public.iam_predecessor_fault_seen`); err != nil {
@@ -786,9 +802,17 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		if !bytes.Equal(originalMail, mailState()) {
 			t.Fatal("migration/restart rewrote pending notification or verification material")
 		}
+		var classified bool
+		if err := admin.QueryRow(ctx, `SELECT count(*)=1 AND bool_and(purpose='FIRST_ADDRESS' AND step_up_id IS NULL)
+			FROM iam.notification_contact_verifications WHERE tenant_id=$1 AND user_id=$2 AND id=$3`,
+			oldVerification.AccountID, oldVerification.UserID, oldVerification.ID).Scan(&classified); err != nil || !classified {
+			t.Fatal("migration did not classify predecessor first-address evidence", err)
+		}
 		response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/notification-contact/verifications/"+oldVerification.ID, oldContactBearer, nil)
 		var retained iamv1.NotificationContactVerification
-		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &retained) != nil || retained != oldVerification {
+		expected := oldVerification
+		expected.Purpose = iamv1.NotificationContactFirstAddress
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &retained) != nil || retained != expected {
 			t.Fatal("retained predecessor Session lost or changed its own contact intent", response.Status)
 		}
 	}
@@ -1221,7 +1245,24 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		}
 		originalPasswords := passwordState()
 		defer clear(originalPasswords)
-		invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], intentFile}, installationv1.AuthenticationRecoveryExitConflict)
+		expectedHistory := original
+		if index == 1 {
+			invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], intentFile}, installationv1.AuthenticationRecoveryExitConflict)
+		} else {
+			// Closing the current source creates its own current snapshot. That is
+			// not permission to reconcile or reopen using another database's old
+			// snapshot below.
+			currentEnvelopeBytes := invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], intentFile}, 0)
+			currentEnvelope, decodeErr := installationv1.DecodeAuthenticationRecoveryClosureEnvelope(bytes.NewReader(currentEnvelopeBytes))
+			if decodeErr != nil || installationv1.ValidateAuthenticationRecoveryClosureEnvelopeForIntent(currentEnvelope, intent, lease.Custody.BootstrapDigest) != nil {
+				t.Fatal("current source close did not return its bounded snapshot", decodeErr)
+			}
+			expectedHistory = history(database)
+			defer clear(expectedHistory)
+			if bytes.Equal(original, expectedHistory) {
+				t.Fatal("current source close did not persist its own closure")
+			}
+		}
 		for _, mode := range []string{"reconcile", "reopen"} {
 			environment := []string{dsnFiles[index], closureFile, snapshotFile}
 			if index == 1 {
@@ -1239,7 +1280,7 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 				// restoration under the new qualification projection.
 				invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, mode, environment, installationv1.AuthenticationRecoveryExitConflict)
 			}
-			if !bytes.Equal(original, history(database)) || !bytes.Equal(originalPasswords, passwordState()) {
+			if !bytes.Equal(expectedHistory, history(database)) || !bytes.Equal(originalPasswords, passwordState()) {
 				t.Fatal("old snapshot replay changed current security state or history")
 			}
 		}

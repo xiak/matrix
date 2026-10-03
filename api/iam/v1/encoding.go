@@ -745,6 +745,7 @@ func (value *StepUp) UnmarshalJSON(source []byte) error {
 		Operation              StepUpOperation `json:"operation"`
 		ExpectedFactorRevision uint64          `json:"expectedFactorRevision"`
 		SecuritySettings       json.RawMessage `json:"securitySettings,omitempty"`
+		NotificationContact    json.RawMessage `json:"notificationContact,omitempty"`
 		State                  string          `json:"state"`
 		CreatedAt              time.Time       `json:"createdAt"`
 		ExpiresAt              time.Time       `json:"expiresAt"`
@@ -764,6 +765,14 @@ func (value *StepUp) UnmarshalJSON(source []byte) error {
 		}
 		result.SecuritySettings = &intent
 	}
+	if decoded.NotificationContact != nil {
+		var intent NotificationContactReplacementIntent
+		if contractjson.DecodeObjectBytes(decoded.NotificationContact, MaxRequestBytes, &intent) != nil ||
+			ValidateNotificationContactReplacementIntent(intent) != nil {
+			return contractjson.ErrInvalidDocument
+		}
+		result.NotificationContact = &intent
+	}
 	if ValidateStepUp(result) != nil {
 		return contractjson.ErrInvalidDocument
 	}
@@ -774,7 +783,9 @@ func (value *StepUp) UnmarshalJSON(source []byte) error {
 	_, proved := fields["provedAt"]
 	_, consumed := fields["consumedAt"]
 	_, settings := fields["securitySettings"]
-	if proved != (result.ProvedAt != nil) || consumed != (result.ConsumedAt != nil) || settings != (result.SecuritySettings != nil) {
+	_, contact := fields["notificationContact"]
+	if proved != (result.ProvedAt != nil) || consumed != (result.ConsumedAt != nil) || settings != (result.SecuritySettings != nil) ||
+		contact != (result.NotificationContact != nil) {
 		return contractjson.ErrInvalidDocument
 	}
 	*value = result
@@ -792,6 +803,9 @@ func (value *StartStepUpRequest) UnmarshalJSON(source []byte) error {
 		return contractjson.ErrInvalidDocument
 	}
 	if _, present := fields["securitySettings"]; present != (decoded.SecuritySettings != nil) {
+		return contractjson.ErrInvalidDocument
+	}
+	if _, present := fields["notificationContact"]; present != (decoded.NotificationContact != nil) {
 		return contractjson.ErrInvalidDocument
 	}
 	*value = StartStepUpRequest(decoded)
@@ -1291,6 +1305,24 @@ func EncodeConfirmNotificationContactVerificationRequest(request ConfirmNotifica
 		return nil, ErrEncodingFailed
 	}
 	return encoded, nil
+}
+
+func (value *StartNotificationContactReplacementRequest) UnmarshalJSON(source []byte) error {
+	type wire StartNotificationContactReplacementRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateStartNotificationContactReplacementRequest(StartNotificationContactReplacementRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = StartNotificationContactReplacementRequest(decoded)
+	return nil
+}
+
+func EncodeStartNotificationContactReplacementRequest(request StartNotificationContactReplacementRequest) ([]byte, error) {
+	if err := ValidateStartNotificationContactReplacementRequest(request); err != nil {
+		return nil, err
+	}
+	return json.Marshal(request)
 }
 
 // EncodeAssumeRoleResponse is the sole role-credential response encoder.

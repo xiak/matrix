@@ -52,6 +52,29 @@ type ConfirmNotificationContactVerificationRequest struct {
 	RequestID string `json:"requestId"`
 }
 
+type NotificationContactVerificationPurpose string
+
+const (
+	NotificationContactFirstAddress NotificationContactVerificationPurpose = "FIRST_ADDRESS"
+	NotificationContactReplacement  NotificationContactVerificationPurpose = "REPLACEMENT"
+)
+
+// NotificationContactReplacementIntent is the exact nonsecret target of a
+// purpose-limited StepUp. It is neither a contact selector nor mailbox proof.
+type NotificationContactReplacementIntent struct {
+	ExpectedResourceVersion uint64 `json:"expectedResourceVersion"`
+	Email                   string `json:"email"`
+}
+
+// A replacement is separate from first-address enrollment. The StepUp must
+// bind this exact email and version before this command can create a code.
+type StartNotificationContactReplacementRequest struct {
+	StepUpID                string `json:"stepUpId"`
+	ExpectedResourceVersion uint64 `json:"expectedResourceVersion"`
+	Email                   string `json:"email"`
+	RequestID               string `json:"requestId"`
+}
+
 // First-address verification under an ENROLLMENT challenge is a distinct
 // carrier. It cannot replace a verified contact or accept a login Session.
 type StartChallengeNotificationContactVerificationRequest struct {
@@ -77,18 +100,20 @@ type NotificationDeliveryObservation struct {
 }
 
 type NotificationContactVerification struct {
-	APIVersion  string                          `json:"apiVersion"`
-	Kind        string                          `json:"kind"`
-	ID          string                          `json:"id"`
-	AccountID   AccountID                       `json:"accountId"`
-	UserID      PrincipalID                     `json:"userId"`
-	RequestID   string                          `json:"requestId"`
-	Email       string                          `json:"email"`
-	State       string                          `json:"state"`
-	IssuedAt    time.Time                       `json:"issuedAt"`
-	ExpiresAt   time.Time                       `json:"expiresAt"`
-	CompletedAt *time.Time                      `json:"completedAt,omitempty"`
-	Delivery    NotificationDeliveryObservation `json:"delivery"`
+	APIVersion              string                                 `json:"apiVersion"`
+	Kind                    string                                 `json:"kind"`
+	ID                      string                                 `json:"id"`
+	AccountID               AccountID                              `json:"accountId"`
+	UserID                  PrincipalID                            `json:"userId"`
+	RequestID               string                                 `json:"requestId"`
+	Purpose                 NotificationContactVerificationPurpose `json:"purpose"`
+	ExpectedResourceVersion uint64                                 `json:"expectedResourceVersion"`
+	Email                   string                                 `json:"email"`
+	State                   string                                 `json:"state"`
+	IssuedAt                time.Time                              `json:"issuedAt"`
+	ExpiresAt               time.Time                              `json:"expiresAt"`
+	CompletedAt             *time.Time                             `json:"completedAt,omitempty"`
+	Delivery                NotificationDeliveryObservation        `json:"delivery"`
 }
 
 func (NotificationContact) String() string             { return "[REDACTED]" }
@@ -104,6 +129,10 @@ func (StartNotificationContactVerificationRequest) GoString() string {
 func (ConfirmNotificationContactVerificationRequest) String() string { return "[REDACTED]" }
 func (ConfirmNotificationContactVerificationRequest) GoString() string {
 	return "iamv1.ConfirmNotificationContactVerificationRequest{[REDACTED]}"
+}
+func (StartNotificationContactReplacementRequest) String() string { return "[REDACTED]" }
+func (StartNotificationContactReplacementRequest) GoString() string {
+	return "iamv1.StartNotificationContactReplacementRequest{[REDACTED]}"
 }
 func (StartChallengeNotificationContactVerificationRequest) String() string { return "[REDACTED]" }
 func (StartChallengeNotificationContactVerificationRequest) GoString() string {

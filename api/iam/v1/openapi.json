@@ -27302,8 +27302,56 @@
         ],
         "type": "object"
       },
+      "NotificationContactReplacementIntent": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "One ASCII dot-atom address and canonical lower-case DNS domain. No display name, address list, literal IP, SMTPUTF8 or normalization of local-part case. Authoritative syntax validation applies.",
+            "maxLength": 254,
+            "minLength": 3,
+            "type": "string"
+          },
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "email",
+          "expectedResourceVersion"
+        ],
+        "type": "object"
+      },
       "NotificationContactVerification": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "expectedResourceVersion": {
+                    "const": 0
+                  },
+                  "purpose": {
+                    "const": "FIRST_ADDRESS"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "expectedResourceVersion": {
+                    "maximum": 9007199254740990,
+                    "minimum": 1
+                  },
+                  "purpose": {
+                    "const": "REPLACEMENT"
+                  }
+                }
+              }
+            ]
+          }
+        ],
         "oneOf": [
           {
             "properties": {
@@ -27350,6 +27398,11 @@
             "minLength": 3,
             "type": "string"
           },
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 0,
+            "type": "integer"
+          },
           "expiresAt": {
             "$ref": "#/components/schemas/Timestamp"
           },
@@ -27361,6 +27414,13 @@
           },
           "kind": {
             "const": "NotificationContactVerification"
+          },
+          "purpose": {
+            "enum": [
+              "FIRST_ADDRESS",
+              "REPLACEMENT"
+            ],
+            "type": "string"
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
@@ -27383,10 +27443,12 @@
           "apiVersion",
           "delivery",
           "email",
+          "expectedResourceVersion",
           "expiresAt",
           "id",
           "issuedAt",
           "kind",
+          "purpose",
           "requestId",
           "state",
           "userId"
@@ -38495,6 +38557,35 @@
         ],
         "type": "object"
       },
+      "StartNotificationContactReplacementRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "One ASCII dot-atom address and canonical lower-case DNS domain. No display name, address list, literal IP, SMTPUTF8 or normalization of local-part case. Authoritative syntax validation applies.",
+            "maxLength": 254,
+            "minLength": 3,
+            "type": "string"
+          },
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "stepUpId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "email",
+          "expectedResourceVersion",
+          "requestId",
+          "stepUpId"
+        ],
+        "type": "object"
+      },
       "StartNotificationContactVerificationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -38526,6 +38617,7 @@
             "oneOf": [
               {
                 "properties": {
+                  "notificationContact": false,
                   "operation": {
                     "const": "RECOVERY_CODES_REGENERATE"
                   },
@@ -38537,6 +38629,7 @@
                   "expectedFactorRevision": {
                     "maximum": 9007199254740990
                   },
+                  "notificationContact": false,
                   "operation": {
                     "const": "TOTP_REPLACE"
                   },
@@ -38548,6 +38641,7 @@
                   "expectedFactorRevision": {
                     "maximum": 9007199254740990
                   },
+                  "notificationContact": false,
                   "operation": {
                     "const": "TOTP_REMOVE"
                   },
@@ -38556,6 +38650,7 @@
               },
               {
                 "properties": {
+                  "notificationContact": false,
                   "operation": {
                     "const": "SECURITY_SETTINGS_UPDATE"
                   },
@@ -38565,6 +38660,20 @@
                 },
                 "required": [
                   "securitySettings"
+                ]
+              },
+              {
+                "properties": {
+                  "notificationContact": {
+                    "$ref": "#/components/schemas/NotificationContactReplacementIntent"
+                  },
+                  "operation": {
+                    "const": "NOTIFICATION_CONTACT_REPLACE"
+                  },
+                  "securitySettings": false
+                },
+                "required": [
+                  "notificationContact"
                 ]
               }
             ]
@@ -38576,12 +38685,16 @@
             "minimum": 2,
             "type": "integer"
           },
+          "notificationContact": {
+            "$ref": "#/components/schemas/NotificationContactReplacementIntent"
+          },
           "operation": {
             "enum": [
               "RECOVERY_CODES_REGENERATE",
               "SECURITY_SETTINGS_UPDATE",
               "TOTP_REPLACE",
-              "TOTP_REMOVE"
+              "TOTP_REMOVE",
+              "NOTIFICATION_CONTACT_REPLACE"
             ]
           },
           "requestId": {
@@ -38703,6 +38816,7 @@
             "oneOf": [
               {
                 "properties": {
+                  "notificationContact": false,
                   "operation": {
                     "const": "RECOVERY_CODES_REGENERATE"
                   },
@@ -38714,6 +38828,7 @@
                   "expectedFactorRevision": {
                     "maximum": 9007199254740990
                   },
+                  "notificationContact": false,
                   "operation": {
                     "const": "TOTP_REPLACE"
                   },
@@ -38725,6 +38840,7 @@
                   "expectedFactorRevision": {
                     "maximum": 9007199254740990
                   },
+                  "notificationContact": false,
                   "operation": {
                     "const": "TOTP_REMOVE"
                   },
@@ -38733,6 +38849,7 @@
               },
               {
                 "properties": {
+                  "notificationContact": false,
                   "operation": {
                     "const": "SECURITY_SETTINGS_UPDATE"
                   },
@@ -38742,6 +38859,20 @@
                 },
                 "required": [
                   "securitySettings"
+                ]
+              },
+              {
+                "properties": {
+                  "notificationContact": {
+                    "$ref": "#/components/schemas/NotificationContactReplacementIntent"
+                  },
+                  "operation": {
+                    "const": "NOTIFICATION_CONTACT_REPLACE"
+                  },
+                  "securitySettings": false
+                },
+                "required": [
+                  "notificationContact"
                 ]
               },
               {
@@ -38843,12 +38974,16 @@
           "kind": {
             "type": "string"
           },
+          "notificationContact": {
+            "$ref": "#/components/schemas/NotificationContactReplacementIntent"
+          },
           "operation": {
             "enum": [
               "RECOVERY_CODES_REGENERATE",
               "SECURITY_SETTINGS_UPDATE",
               "TOTP_REPLACE",
-              "TOTP_REMOVE"
+              "TOTP_REMOVE",
+              "NOTIFICATION_CONTACT_REPLACE"
             ]
           },
           "provedAt": {
@@ -42239,6 +42374,61 @@
           }
         },
         "summary": "Read only this login USER's security contact; not an authentication or recovery identity"
+      }
+    },
+    "/v1/auth/notification-contact/replacements": {
+      "post": {
+        "operationId": "startNotificationContactReplacement",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartNotificationContactReplacementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationContactVerification"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Consume the exact same-Session NOTIFICATION_CONTACT_REPLACE proof and send a possession code to the proposed address; the current verified address remains authoritative until confirmation"
       }
     },
     "/v1/auth/notification-contact/verifications": {

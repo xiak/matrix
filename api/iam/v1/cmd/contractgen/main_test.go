@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
 func TestGeneratedOpenAPIIsCurrent(t *testing.T) {
@@ -161,5 +163,31 @@ func TestInitialEnrollmentDocumentsItsOwnCredentialCarrier(t *testing.T) {
 		if request["$ref"] != "#/components/schemas/"+sample.request || response["$ref"] != "#/components/schemas/"+sample.response {
 			t.Fatal("command reused a broader authentication body or response")
 		}
+	}
+}
+
+func TestNotificationContactReplacementDocumentsPurposeBoundStepUp(t *testing.T) {
+	document := buildDocument()
+	paths := document["paths"].(object)
+	route, ok := paths["/v1/auth/notification-contact/replacements"].(object)
+	if !ok || len(route) != 1 {
+		t.Fatal("notification contact replacement route missing or exposes another method")
+	}
+	operation := route["post"].(object)
+	if operation["operationId"] != "startNotificationContactReplacement" {
+		t.Fatal("notification contact replacement operation differs")
+	}
+	request := operation["requestBody"].(object)["content"].(object)["application/json"].(object)["schema"].(object)
+	response := operation["responses"].(object)["200"].(object)["content"].(object)["application/json"].(object)["schema"].(object)
+	if request["$ref"] != "#/components/schemas/StartNotificationContactReplacementRequest" ||
+		response["$ref"] != "#/components/schemas/NotificationContactVerification" {
+		t.Fatal("notification contact replacement wire types differ")
+	}
+	schemas := document["components"].(object)["schemas"].(object)
+	stepUp := schemas["StartStepUpRequest"].(object)
+	encoded, _ := json.Marshal(stepUp["allOf"])
+	if !bytes.Contains(encoded, []byte(iamv1.StepUpReplaceNotificationContact)) ||
+		!bytes.Contains(encoded, []byte("NotificationContactReplacementIntent")) {
+		t.Fatal("step-up schema does not bind the exact replacement intent")
 	}
 }

@@ -319,6 +319,7 @@ func buildPaths() object {
 		"/v1/users/{userId}:set-status":                                        object{"post": mutationOperation("setUserStatus", "Disable or enable an account user", "SetUserStatusRequest", "User", "200", nil, []any{openapi31.PathIDParameter("userId")})},
 		"/v1/users/{userId}:reset-password":                                    object{"post": mutationOperation("resetUserPassword", "Reset an account user password and revoke its sessions", "ResetUserPasswordRequest", "User", "200", nil, []any{openapi31.PathIDParameter("userId")})},
 		"/v1/auth/notification-contact":                                        object{"get": readOperation("getNotificationContact", "Read only this login USER's security contact; not an authentication or recovery identity", "NotificationContact", nil, nil)},
+		"/v1/auth/notification-contact/replacements":                           object{"post": mutationOperation("startNotificationContactReplacement", "Consume the exact same-Session NOTIFICATION_CONTACT_REPLACE proof and send a possession code to the proposed address; the current verified address remains authoritative until confirmation", "StartNotificationContactReplacementRequest", "NotificationContactVerification", "200", nil, nil)},
 		"/v1/auth/notification-contact/verifications":                          object{"post": mutationOperation("startNotificationVerification", "Reauthenticate the current password to verify the first notification address; no replacement or selectors", "StartNotificationContactVerificationRequest", "NotificationContactVerification", "200", nil, nil)},
 		"/v1/auth/notification-contact/verifications/{verificationId}":         object{"get": readOperation("getNotificationVerification", "Read the original verification from its actual starting login session; never consumes a code", "NotificationContactVerification", nil, []any{openapi31.PathIDParameter("verificationId")})},
 		"/v1/auth/notification-contact/verifications/{verificationId}:confirm": object{"post": mutationOperation("confirmNotificationContact", "Consume the original address-possession code once; a repeated confirmation conflicts; query lost completions with GET", "ConfirmNotificationContactVerificationRequest", "NotificationContactVerification", "200", nil, []any{openapi31.PathIDParameter("verificationId")})},
@@ -746,6 +747,8 @@ func structContracts() map[string]reflect.Type {
 		"NotificationContact":                           openapi31.StructType[iamv1.NotificationContact](),
 		"NotificationContactVerification":               openapi31.StructType[iamv1.NotificationContactVerification](),
 		"NotificationDeliveryObservation":               openapi31.StructType[iamv1.NotificationDeliveryObservation](),
+		"NotificationContactReplacementIntent":          openapi31.StructType[iamv1.NotificationContactReplacementIntent](),
+		"StartNotificationContactReplacementRequest":    openapi31.StructType[iamv1.StartNotificationContactReplacementRequest](),
 		"StartNotificationContactVerificationRequest":   openapi31.StructType[iamv1.StartNotificationContactVerificationRequest](),
 		"ConfirmNotificationContactVerificationRequest": openapi31.StructType[iamv1.ConfirmNotificationContactVerificationRequest](),
 		"CreateUserRequest":                             openapi31.StructType[iamv1.CreateUserRequest](),
@@ -976,7 +979,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		return object{"enum": []string{"STARTED", "COMPLETED", "SUPERSEDED", "EXPIRED"}}
 	}
 	if (owner == "StepUp" || owner == "StartStepUpRequest") && jsonName == "operation" {
-		return object{"enum": []string{string(iamv1.StepUpRegenerateRecoveryCodes), string(iamv1.StepUpUpdateSecuritySettings), string(iamv1.StepUpReplaceTOTP), string(iamv1.StepUpRemoveTOTP)}}
+		return object{"enum": []string{string(iamv1.StepUpRegenerateRecoveryCodes), string(iamv1.StepUpUpdateSecuritySettings), string(iamv1.StepUpReplaceTOTP), string(iamv1.StepUpRemoveTOTP), string(iamv1.StepUpReplaceNotificationContact)}}
 	}
 	if owner == "StepUp" && jsonName == "state" {
 		return object{"enum": []string{"PENDING", "PROVED", "CONSUMED", "EXPIRED"}}
@@ -1006,7 +1009,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "ChallengePasswordChangeResponse" && jsonName == "nextStep" {
 		return object{"const": "REAUTHENTICATE"}
 	}
-	if (owner == "NotificationContact" || owner == "NotificationContactVerification" || owner == "StartNotificationContactVerificationRequest" || owner == "StartChallengeNotificationContactVerificationRequest") && jsonName == "email" {
+	if (owner == "NotificationContact" || owner == "NotificationContactVerification" || owner == "NotificationContactReplacementIntent" || owner == "StartNotificationContactReplacementRequest" || owner == "StartNotificationContactVerificationRequest" || owner == "StartChallengeNotificationContactVerificationRequest") && jsonName == "email" {
 		return object{"type": "string", "minLength": 3, "maxLength": 254, "description": "One ASCII dot-atom address and canonical lower-case DNS domain. No display name, address list, literal IP, SMTPUTF8 or normalization of local-part case. Authoritative syntax validation applies."}
 	}
 	if owner == "NotificationContact" {
@@ -1021,6 +1024,12 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	}
 	if owner == "NotificationContactVerification" && jsonName == "state" {
 		return object{"type": "string", "enum": []string{"PENDING", "VERIFIED", "CANCELLED", "EXPIRED"}}
+	}
+	if owner == "NotificationContactVerification" && jsonName == "purpose" {
+		return object{"type": "string", "enum": []string{string(iamv1.NotificationContactFirstAddress), string(iamv1.NotificationContactReplacement)}}
+	}
+	if (owner == "NotificationContactVerification" || owner == "NotificationContactReplacementIntent" || owner == "StartNotificationContactReplacementRequest") && jsonName == "expectedResourceVersion" {
+		return object{"type": "integer", "minimum": 0, "maximum": uint64(9007199254740990)}
 	}
 	if (owner == "ConfirmNotificationContactVerificationRequest" || owner == "ConfirmChallengeNotificationContactVerificationRequest") && jsonName == "code" {
 		return object{"type": "string", "pattern": "^[0-9]{8}$", "minLength": 8, "maxLength": 8, "writeOnly": true}
@@ -1519,10 +1528,11 @@ func applySemanticOverlays(schemas object) {
 	schemas["StepUp"].(object)["description"] = "Non-secret metadata bound to one operation and its original effective login Session. It is not a bearer, unlogged challenge or authorization permit. Runtime validation enforces the original 120-second lifetime and proof/consumption ordering; proving never extends expiry."
 	for _, name := range []string{"StepUp", "StartStepUpRequest"} {
 		operations := []any{
-			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRegenerateRecoveryCodes)}, "securitySettings": false}},
-			object{"properties": object{"operation": object{"const": string(iamv1.StepUpReplaceTOTP)}, "securitySettings": false, "expectedFactorRevision": object{"maximum": uint64(9007199254740990)}}},
-			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRemoveTOTP)}, "securitySettings": false, "expectedFactorRevision": object{"maximum": uint64(9007199254740990)}}},
-			object{"required": []string{"securitySettings"}, "properties": object{"operation": object{"const": string(iamv1.StepUpUpdateSecuritySettings)}, "securitySettings": openapi31.Ref("SecuritySettingsUpdateIntent")}},
+			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRegenerateRecoveryCodes)}, "securitySettings": false, "notificationContact": false}},
+			object{"properties": object{"operation": object{"const": string(iamv1.StepUpReplaceTOTP)}, "securitySettings": false, "notificationContact": false, "expectedFactorRevision": object{"maximum": uint64(9007199254740990)}}},
+			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRemoveTOTP)}, "securitySettings": false, "notificationContact": false, "expectedFactorRevision": object{"maximum": uint64(9007199254740990)}}},
+			object{"required": []string{"securitySettings"}, "properties": object{"operation": object{"const": string(iamv1.StepUpUpdateSecuritySettings)}, "securitySettings": openapi31.Ref("SecuritySettingsUpdateIntent"), "notificationContact": false}},
+			object{"required": []string{"notificationContact"}, "properties": object{"operation": object{"const": string(iamv1.StepUpReplaceNotificationContact)}, "securitySettings": false, "notificationContact": openapi31.Ref("NotificationContactReplacementIntent")}},
 		}
 		if name == "StepUp" {
 			schemas[name].(object)["properties"].(object)["securitySettings"] = historicalIntent
@@ -1626,6 +1636,13 @@ func applySemanticOverlays(schemas object) {
 	schemas["NotificationContactVerification"].(object)["oneOf"] = []any{
 		object{"properties": object{"state": object{"const": "PENDING"}, "completedAt": false}},
 		object{"required": []string{"completedAt"}, "properties": object{"state": object{"enum": []string{"VERIFIED", "CANCELLED", "EXPIRED"}}, "completedAt": object{"type": "string"}}},
+	}
+	schemas["NotificationContactVerification"].(object)["allOf"] = []any{object{"oneOf": []any{
+		object{"properties": object{"purpose": object{"const": string(iamv1.NotificationContactFirstAddress)}, "expectedResourceVersion": object{"const": 0}}},
+		object{"properties": object{"purpose": object{"const": string(iamv1.NotificationContactReplacement)}, "expectedResourceVersion": object{"minimum": 1, "maximum": uint64(9007199254740990)}}},
+	}}}
+	for _, name := range []string{"NotificationContactReplacementIntent", "StartNotificationContactReplacementRequest"} {
+		schemas[name].(object)["properties"].(object)["expectedResourceVersion"] = object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
 	}
 	schemas["NotificationDeliveryObservation"].(object)["description"] = "Exact durable submission observation, never delivery/read proof. ACCEPTED requires lastOutcome ACCEPTED and exact SMTP 250. Retriable observations are UNKNOWN/UNAVAILABLE or 4xx; 5xx is terminal. Original intent, time and attempt progression are validated authoritatively."
 	unobserved := object{"properties": object{"lastOutcome": false, "lastSmtpCode": false}}

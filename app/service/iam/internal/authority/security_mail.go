@@ -63,6 +63,8 @@ type SecurityMailKind string
 const (
 	MailAddressVerification      SecurityMailKind = "ADDRESS_VERIFICATION"
 	MailContactVerified          SecurityMailKind = "CONTACT_VERIFIED"
+	MailContactReplacedPrevious  SecurityMailKind = "CONTACT_REPLACED_PREVIOUS"
+	MailContactReplacedCurrent   SecurityMailKind = "CONTACT_REPLACED_CURRENT"
 	MailAuthenticatorBound       SecurityMailKind = "AUTHENTICATOR_BOUND"
 	MailAuthenticatorReplaced    SecurityMailKind = "AUTHENTICATOR_REPLACED"
 	MailAuthenticatorRemoved     SecurityMailKind = "AUTHENTICATOR_REMOVED"
@@ -108,7 +110,7 @@ func (message SecurityMail) Validate() error {
 		return ErrSecurityMail
 	}
 	switch message.Kind {
-	case MailContactVerified, MailAuthenticatorBound, MailAuthenticatorReplaced, MailAuthenticatorRemoved,
+	case MailContactVerified, MailContactReplacedPrevious, MailContactReplacedCurrent, MailAuthenticatorBound, MailAuthenticatorReplaced, MailAuthenticatorRemoved,
 		MailRecoveryStarted, MailAuthenticatorRecovered, MailRecoveryCodesRegenerated, MailSecuritySettingsChanged:
 		return nil
 	default:

@@ -42,6 +42,7 @@ const (
 	ActionIAMUserPasswordResetRequired              Action = "iam.user.password-reset-required"
 	ActionIAMNotificationContactVerificationStarted Action = "iam.notification-contact.verification-started"
 	ActionIAMNotificationContactVerified            Action = "iam.notification-contact.verified"
+	ActionIAMNotificationContactReplaced            Action = "iam.notification-contact.replaced"
 	ActionIAMAuthenticatorBound                     Action = "iam.authenticator.bound"
 	ActionIAMAuthenticatorReplaced                  Action = "iam.authenticator.replaced"
 	ActionIAMAuthenticatorRemoved                   Action = "iam.authenticator.removed"
@@ -253,6 +254,7 @@ var allActions = []Action{
 	ActionIAMUserPasswordResetRequired,
 	ActionIAMNotificationContactVerificationStarted,
 	ActionIAMNotificationContactVerified,
+	ActionIAMNotificationContactReplaced,
 	ActionIAMAuthenticatorBound,
 	ActionIAMAuthenticatorReplaced,
 	ActionIAMAuthenticatorRemoved,
@@ -398,6 +400,7 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionIAMNotificationContactVerificationStarted: {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMNotificationContactVerified:            {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMNotificationContactReplaced:            {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorBound:                     {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorReplaced:                  {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorRemoved:                   {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},

@@ -70,6 +70,9 @@ func (value *transaction) ReadNotificationVerification(ctx context.Context, subj
 }
 
 func (value *transaction) StartNotificationVerification(ctx context.Context, change identityaccess.NotificationVerificationStart) (iamv1.NotificationContactVerification, error) {
+	if change.Purpose != iamv1.NotificationContactFirstAddress || change.StepUpID != "" || change.Binding.ContactRevision != 0 {
+		return iamv1.NotificationContactVerification{}, identityaccess.ErrInvalidArgument
+	}
 	encoded, err := json.Marshal(change.AuditEvent)
 	if err != nil {
 		return iamv1.NotificationContactVerification{}, identityaccess.ErrUnavailable
@@ -95,14 +98,35 @@ func (value *transaction) StartNotificationVerification(ctx context.Context, cha
 	return decodeNotificationVerification(result, change.Subject)
 }
 
+func (value *transaction) StartNotificationReplacement(ctx context.Context, change identityaccess.NotificationVerificationStart) (iamv1.NotificationContactVerification, error) {
+	if change.Purpose != iamv1.NotificationContactReplacement || change.Subject.SessionID == "" || change.Subject.ChallengeID != "" ||
+		change.PasswordAttempt.ID != "" || change.Binding.ContactRevision == 0 || iamv1.ValidateID("stepUpId", change.StepUpID) != nil {
+		return iamv1.NotificationContactVerification{}, identityaccess.ErrInvalidArgument
+	}
+	encoded, err := json.Marshal(change.AuditEvent)
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, identityaccess.ErrUnavailable
+	}
+	b := change.Binding
+	var result []byte
+	err = value.tx.QueryRow(ctx, `SELECT iam.start_notification_replacement($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb)`,
+		change.Subject.AccountID, change.Subject.UserID, change.Subject.SessionID, change.StepUpID, change.RequestID, change.IntentDigest,
+		b.VerificationID, change.NotificationID, b.InstallationID, b.BootstrapDigest, b.CredentialGeneration, b.ContactRevision,
+		b.Recipient, change.Sealed.KeyID, change.Sealed.Nonce, change.Sealed.Ciphertext, b.IssuedAt, string(encoded)).Scan(&result)
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, mapNotificationDatabaseError("start IAM notification contact replacement", err)
+	}
+	return decodeNotificationVerification(result, change.Subject)
+}
+
 func (value *transaction) ReserveNotificationConfirmation(ctx context.Context, subject identityaccess.NotificationContactSubject, id, attemptID string) (identityaccess.NotificationConfirmationAttempt, bool, error) {
 	result := identityaccess.NotificationConfirmationAttempt{Subject: subject, ID: attemptID}
 	result.Binding.AccountID, result.Binding.UserID, result.Binding.VerificationID = subject.AccountID, subject.UserID, id
 	result.Sealed.FormatVersion = 1
 	b := &result.Binding
-	err := value.tx.QueryRow(ctx, `SELECT installation_id,bootstrap_digest,credential_generation,contact_revision,email,issued_at,expires_at,key_id,nonce,ciphertext,attempt_sequence
+	err := value.tx.QueryRow(ctx, `SELECT purpose,installation_id,bootstrap_digest,credential_generation,contact_revision,email,issued_at,expires_at,key_id,nonce,ciphertext,attempt_sequence
 		FROM iam.reserve_notification_confirmation($1,$2,NULLIF($3::text,''),NULLIF($4::text,''),$5,$6)`, subject.AccountID, subject.UserID, subject.SessionID, subject.ChallengeID, id, attemptID).Scan(
-		&b.InstallationID, &b.BootstrapDigest, &b.CredentialGeneration, &b.ContactRevision, &b.Recipient, &b.IssuedAt, &b.ExpiresAt,
+		&result.Purpose, &b.InstallationID, &b.BootstrapDigest, &b.CredentialGeneration, &b.ContactRevision, &b.Recipient, &b.IssuedAt, &b.ExpiresAt,
 		&result.Sealed.KeyID, &result.Sealed.Nonce, &result.Sealed.Ciphertext, &result.Sequence)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.NotificationConfirmationAttempt{}, false, nil
@@ -114,7 +138,9 @@ func (value *transaction) ReserveNotificationConfirmation(ctx context.Context, s
 	info, aad, err := iamv1.EmailVerificationCipherContext(*b, result.Sealed.KeyID)
 	clear(info)
 	clear(aad)
-	if err != nil || result.Sequence == 0 || len(result.Sealed.Nonce) != 12 || len(result.Sealed.Ciphertext) != 24 {
+	validPurpose := result.Purpose == iamv1.NotificationContactFirstAddress && b.ContactRevision == 0 ||
+		result.Purpose == iamv1.NotificationContactReplacement && b.ContactRevision > 0 && b.ContactRevision <= 9007199254740990
+	if err != nil || !validPurpose || result.Sequence == 0 || len(result.Sealed.Nonce) != 12 || len(result.Sealed.Ciphertext) != 24 {
 		return identityaccess.NotificationConfirmationAttempt{}, false, identityaccess.ErrUnavailable
 	}
 	return result, true, nil
@@ -132,8 +158,9 @@ func (value *transaction) ConfirmNotificationContact(ctx context.Context, change
 	}
 	a := change.Attempt
 	var result []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.confirm_notification_contact($1,$2,NULLIF($3::text,''),NULLIF($4::text,''),$5,$6,$7,$8,$9::jsonb)",
-		a.Subject.AccountID, a.Subject.UserID, a.Subject.SessionID, a.Subject.ChallengeID, a.Binding.VerificationID, a.ID, a.Sequence, change.NotificationID, string(encoded)).Scan(&result)
+	err = value.tx.QueryRow(ctx, "SELECT iam.confirm_notification_contact($1,$2,NULLIF($3::text,''),NULLIF($4::text,''),$5,$6,$7,$8,NULLIF($9::text,''),$10::jsonb)",
+		a.Subject.AccountID, a.Subject.UserID, a.Subject.SessionID, a.Subject.ChallengeID, a.Binding.VerificationID, a.ID, a.Sequence,
+		change.NotificationID, change.PreviousNotificationID, string(encoded)).Scan(&result)
 	if err != nil {
 		return iamv1.NotificationContactVerification{}, mapNotificationDatabaseError("confirm IAM notification contact", err)
 	}

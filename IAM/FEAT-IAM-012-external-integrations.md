@@ -1,6 +1,6 @@
 # FEAT-IAM-012：外部身份、通知与组织治理
 
-- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。installation已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像；首条联系人验证、SMTP/Maildir实收、MFA安全通知和同profile生命周期累计进入`64/34/3+r11`签名组合，并由`ed2835db`完整独立CI确认。该首地址/渠道切片已验收；S1c已有地址替换的独立命令、目的限定StepUp、原子切换和双向告警设计已冻结，生产实现及真实UI未完成。其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
+- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。installation已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像；首条联系人验证、SMTP/Maildir实收、MFA安全通知和同profile生命周期累计进入`64/34/3+r11`签名组合，并由`ed2835db`完整独立CI确认。该首地址/渠道切片已验收；S1c已有地址替换的独立命令、目的限定StepUp、原子切换和双向告警生产实现，当前组合为`65/35/3+r12`，本地contract/race、PG18空白安装、准确前序保留数据及独立多进程门禁已通过；独立CI、替换双地址真实邮箱和UI浏览器验收尚未完成，因此S1c仍为Implementing。其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
 - Owner：IAM负责S1的地址验证、目的限定通知意图/投递和重试；installation负责受保护SMTP及必要私有材料配置，UX/UI负责本人交互。其他外部来源与计费保持各自业务边界。
 - S1a不等于完整S1或其他外部能力已实现；缺少前置时不提供假入口或伪成功。
 
@@ -215,6 +215,10 @@ IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`�
 沿原contract/domain/usecase/PG18/authorityprocess及SMTP实收owner证明：两Account/同名USER的意图和地址互不接管；Session/密码/联系版本改变后确认拒绝且无部分写入；5次错误额度跨两副本/重启/新意图保留；并发同码只一次成功；原请求回包丢失仅查询已完成结果，换地址/密码/候选码不能被视作原成功。新目的不能消费LOGIN或PASSWORD_CHANGE的密码保留，也不能反向使用。
 
 真库验证发送预算及租约/fence、恶意直接DML/越租户ID、跨安装/USER/意图/地址/期限密文互换、缺key/错key、成功事实与通知任务原子性；真实进程使用受限登录和受保护文件。实际Postfix完成验证码邮件到邮箱、取码经真实HTTP确认、已提交安全通知实收、4xx/5xx/失联/进程中断后的状态/重复语义。不得用测试直接改验证码摘要/联系人状态、mock邮箱确认或只读队列行替代该路径。UI由UX/UI owner在固定API后完成，不在本任务重写页面。
+
+当前S1c后端实现新增`POST /v1/auth/notification-contact/replacements`、`NOTIFICATION_CONTACT_REPLACE`目的限定StepUp、`FIRST_ADDRESS|REPLACEMENT`验证来源、`iam.notification-contact.replaced`事实及原/新地址两条封闭通知。当前联系人只在新地址确认事务内从版本`N`推进到`N+1`；原地址在此之前保持权威，历史通知收件人不重写。真实PG门禁覆盖两副本并发确认只一次成功、旧Session/跨Account/错版本拒绝、事实或通知伪造回滚、完成等值查询及证明不可复用；公开响应和Audit均不含地址、验证码或证明秘密。
+
+2026-10-04当前源码以Go race、`GOMAXPROCS=2`串行完成：全新PG18的`TestIAMNotificationContactPostgres`116.714秒；固定即时前序`530f6bf47a266b08a0ae2bbca5b1fd89798c646b`真实IAM64二进制和数据升级到IAM65的`TestIAMRetainedPredecessorProcessUpgrade`182.726秒；独立IAM/Audit/PaaS真实进程门禁304.922秒。前序门禁实际发现旧验证行在FORCE RLS下未能补充来源分类，修正后只将该版本已存在的首地址证据确定为`FIRST_ADDRESS`且不生成StepUp关系；原不可变字段、Session、恢复、策略分析、Audit及通知材料保持。Audit35真库、相关API/domain/usecase/HTTP/SMTP/发布profile聚焦race及OpenAPI确定性生成也通过。上述是本地实现证据，不替代待完成的独立CI、双地址真实SMTP收信、签名同profile生命周期或UI验收。
 
 ## 其他延期能力的架构预留
 

@@ -477,7 +477,7 @@ func assertAuditContractCatalog(
 			candidate.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "another-system-actor"}
 			invalid = append(invalid, candidate)
 		}
-		if action == auditv1.ActionIAMUserPasswordResetRequired || action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
+		if action == auditv1.ActionIAMUserPasswordResetRequired || action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMNotificationContactReplaced || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
 			candidate := event
 			candidate.Target.ID = "another-users-principal"
 			invalid = append(invalid, candidate)
@@ -2429,7 +2429,7 @@ func authorityAuditEvent(
 	if contract.ServiceActorRequired {
 		event.Actor = auditv1.ActorReference{Type: auditv1.ActorServiceAccount, ID: "catalog-base-service"}
 	}
-	if action == auditv1.ActionIAMUserPasswordResetRequired || action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
+	if action == auditv1.ActionIAMUserPasswordResetRequired || action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMNotificationContactReplaced || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
 		event.Target.ID = string(event.Actor.ID)
 	}
 	if contract.RoleActorRequired {

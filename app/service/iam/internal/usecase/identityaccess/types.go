@@ -53,6 +53,7 @@ type Transaction interface {
 	ReadNotificationContact(context.Context, NotificationContactSubject) (iamv1.NotificationContact, error)
 	ReadNotificationVerification(context.Context, NotificationContactSubject, string) (iamv1.NotificationContactVerification, error)
 	StartNotificationVerification(context.Context, NotificationVerificationStart) (iamv1.NotificationContactVerification, error)
+	StartNotificationReplacement(context.Context, NotificationVerificationStart) (iamv1.NotificationContactVerification, error)
 	ReserveNotificationConfirmation(context.Context, NotificationContactSubject, string, string) (NotificationConfirmationAttempt, bool, error)
 	RejectNotificationConfirmation(context.Context, NotificationConfirmationAttempt) error
 	ConfirmNotificationContact(context.Context, NotificationConfirmation) (iamv1.NotificationContactVerification, error)

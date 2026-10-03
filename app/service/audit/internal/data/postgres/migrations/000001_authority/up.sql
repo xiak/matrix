@@ -398,6 +398,7 @@ BEGIN
         ('iam.session.others-revoked', 'IAM', 'PRINCIPAL', 'SUCCEEDED', false, false, false),
         ('iam.notification-contact.verification-started', 'IAM', 'USER', 'SUCCEEDED', false, false, false),
         ('iam.notification-contact.verified', 'IAM', 'USER', 'SUCCEEDED', false, false, false),
+        ('iam.notification-contact.replaced', 'IAM', 'USER', 'SUCCEEDED', false, false, false),
         ('iam.authenticator.bound', 'IAM', 'PRINCIPAL', 'SUCCEEDED', false, false, false),
         ('iam.authenticator.replaced', 'IAM', 'PRINCIPAL', 'SUCCEEDED', false, false, false),
         ('iam.authenticator.removed', 'IAM', 'PRINCIPAL', 'SUCCEEDED', false, false, false),
@@ -540,7 +541,7 @@ BEGIN
        OR (action_name IN ('iam.access-finding.detected','iam.access-finding.resolved','iam.access-key.automatically-disabled') AND (
              submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
              OR submitted_event#>>'{actor,id}' IS DISTINCT FROM 'iam.access-analyzer'))
-       OR (action_name IN ('iam.user.password-reset-required','iam.session.others-revoked','iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound','iam.authenticator.replaced','iam.authenticator.removed',
+       OR (action_name IN ('iam.user.password-reset-required','iam.session.others-revoked','iam.notification-contact.verification-started','iam.notification-contact.verified','iam.notification-contact.replaced','iam.authenticator.bound','iam.authenticator.replaced','iam.authenticator.removed',
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated') AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
             OR submitted_event#>>'{actor,id}' IS DISTINCT FROM submitted_event#>>'{target,id}'))
@@ -631,7 +632,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        34::bigint,
+        35::bigint,
         transaction_timestamp()
 $function$;
 
@@ -947,7 +948,7 @@ BEGIN
             'iam.user.password-changed', 'iam.user.password-reset-required',
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.session.revoked', 'iam.session.others-revoked', 'iam.password.changed',
-            'iam.notification-contact.verification-started','iam.notification-contact.verified',
+            'iam.notification-contact.verification-started','iam.notification-contact.verified','iam.notification-contact.replaced',
             'iam.authenticator.bound','iam.authenticator.replaced','iam.authenticator.removed',
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',

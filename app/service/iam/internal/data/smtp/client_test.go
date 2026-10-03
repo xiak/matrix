@@ -259,7 +259,8 @@ func TestSecurityMailSMTPEncodingIsStableAndClosed(t *testing.T) {
 	if otherParsed.Header.Get("Message-ID") == id {
 		t.Fatal("notification identity collided")
 	}
-	for _, kind := range []authority.SecurityMailKind{authority.MailAuthenticatorBound, authority.MailAuthenticatorReplaced,
+	for _, kind := range []authority.SecurityMailKind{authority.MailContactReplacedPrevious, authority.MailContactReplacedCurrent,
+		authority.MailAuthenticatorBound, authority.MailAuthenticatorReplaced,
 		authority.MailAuthenticatorRemoved, authority.MailRecoveryStarted, authority.MailAuthenticatorRecovered,
 		authority.MailRecoveryCodesRegenerated, authority.MailSecuritySettingsChanged} {
 		message = smtpMessage()

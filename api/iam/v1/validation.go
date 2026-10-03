@@ -49,7 +49,7 @@ func ValidateNotificationContact(value NotificationContact) error {
 		}
 	case "VERIFIED":
 		if validatePositiveVersion(value.ResourceVersion) != nil || ValidateSecurityMailAddress(value.Email) != nil ||
-			value.VerifiedAt == nil || validateTime("verifiedAt", *value.VerifiedAt) != nil || value.PendingVerificationID != "" {
+			value.VerifiedAt == nil || validateTime("verifiedAt", *value.VerifiedAt) != nil {
 			return errors.New("verified notification contact is invalid")
 		}
 	default:
@@ -61,6 +61,24 @@ func ValidateNotificationContact(value NotificationContact) error {
 func ValidateStartNotificationContactVerificationRequest(value StartNotificationContactVerificationRequest) error {
 	if ValidateSecurityMailAddress(value.Email) != nil || !value.Password.Present() || ValidateID("requestId", value.RequestID) != nil {
 		return errors.New("notification contact verification request is invalid")
+	}
+	return nil
+}
+
+func ValidateNotificationContactReplacementIntent(value NotificationContactReplacementIntent) error {
+	if validatePositiveVersion(value.ExpectedResourceVersion) != nil || value.ExpectedResourceVersion > 9007199254740990 ||
+		ValidateSecurityMailAddress(value.Email) != nil {
+		return errors.New("notification contact replacement intent is invalid")
+	}
+	return nil
+}
+
+func ValidateStartNotificationContactReplacementRequest(value StartNotificationContactReplacementRequest) error {
+	if ValidateID("stepUpId", value.StepUpID) != nil || ValidateID("requestId", value.RequestID) != nil ||
+		ValidateNotificationContactReplacementIntent(NotificationContactReplacementIntent{
+			ExpectedResourceVersion: value.ExpectedResourceVersion, Email: value.Email,
+		}) != nil {
+		return errors.New("notification contact replacement request is invalid")
 	}
 	return nil
 }
@@ -153,6 +171,18 @@ func ValidateNotificationContactVerification(value NotificationContactVerificati
 		validateTime("expiresAt", value.ExpiresAt) != nil || !value.ExpiresAt.After(value.IssuedAt) || value.ExpiresAt.Sub(value.IssuedAt) > 10*time.Minute ||
 		ValidateNotificationDeliveryObservation(value.Delivery) != nil || value.Delivery.UpdatedAt.Before(value.IssuedAt) {
 		return errors.New("notification contact verification is invalid")
+	}
+	switch value.Purpose {
+	case NotificationContactFirstAddress:
+		if value.ExpectedResourceVersion != 0 {
+			return errors.New("first notification contact has an existing version")
+		}
+	case NotificationContactReplacement:
+		if validatePositiveVersion(value.ExpectedResourceVersion) != nil || value.ExpectedResourceVersion > 9007199254740990 {
+			return errors.New("notification contact replacement version is invalid")
+		}
+	default:
+		return errors.New("notification contact verification purpose is invalid")
 	}
 	if value.State == "PENDING" {
 		if value.CompletedAt != nil {
@@ -811,7 +841,7 @@ func ValidateUpdateAccountSecuritySettingsResponse(value UpdateAccountSecuritySe
 
 func ValidateStepUp(value StepUp) error {
 	if value.APIVersion != APIVersion || value.Kind != "StepUp" ||
-		validateStepUpOperationHistory(value.Operation, value.SecuritySettings, value.State == "CONSUMED") != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
+		validateStepUpOperationHistory(value.Operation, value.SecuritySettings, value.NotificationContact, value.State == "CONSUMED") != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
 		ValidateID("stepUp.id", value.ID) != nil || ValidateID("stepUp.requestId", value.RequestID) != nil ||
 		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
 		value.ExpiresAt.Sub(value.CreatedAt) != 2*time.Minute {
@@ -851,7 +881,7 @@ func ValidateStepUp(value StepUp) error {
 }
 
 func ValidateStartStepUpRequest(value StartStepUpRequest) error {
-	if validateStepUpOperation(value.Operation, value.SecuritySettings) != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil {
+	if validateStepUpOperation(value.Operation, value.SecuritySettings, value.NotificationContact) != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil {
 		return errors.New("step-up operation is invalid")
 	}
 	if (value.Operation == StepUpReplaceTOTP || value.Operation == StepUpRemoveTOTP) && value.ExpectedFactorRevision > 9007199254740990 {
@@ -860,19 +890,23 @@ func ValidateStartStepUpRequest(value StartStepUpRequest) error {
 	return ValidateID("requestId", value.RequestID)
 }
 
-func validateStepUpOperation(operation StepUpOperation, settings *SecuritySettingsUpdateIntent) error {
-	return validateStepUpOperationHistory(operation, settings, false)
+func validateStepUpOperation(operation StepUpOperation, settings *SecuritySettingsUpdateIntent, contact *NotificationContactReplacementIntent) error {
+	return validateStepUpOperationHistory(operation, settings, contact, false)
 }
 
-func validateStepUpOperationHistory(operation StepUpOperation, settings *SecuritySettingsUpdateIntent, historical bool) error {
+func validateStepUpOperationHistory(operation StepUpOperation, settings *SecuritySettingsUpdateIntent, contact *NotificationContactReplacementIntent, historical bool) error {
 	switch operation {
 	case StepUpRegenerateRecoveryCodes, StepUpReplaceTOTP, StepUpRemoveTOTP:
-		if settings == nil {
+		if settings == nil && contact == nil {
 			return nil
 		}
 	case StepUpUpdateSecuritySettings:
-		if settings != nil {
+		if settings != nil && contact == nil {
 			return validateSecuritySettingsUpdateIntent(*settings, historical)
+		}
+	case StepUpReplaceNotificationContact:
+		if settings == nil && contact != nil {
+			return ValidateNotificationContactReplacementIntent(*contact)
 		}
 	}
 	return errors.New("step-up operation intent is invalid")

@@ -494,35 +494,38 @@ type ConfirmAuthenticatorRecoveryResponse struct {
 type StepUpOperation string
 
 const (
-	StepUpRegenerateRecoveryCodes StepUpOperation = "RECOVERY_CODES_REGENERATE"
-	StepUpUpdateSecuritySettings  StepUpOperation = "SECURITY_SETTINGS_UPDATE"
-	StepUpReplaceTOTP             StepUpOperation = "TOTP_REPLACE"
-	StepUpRemoveTOTP              StepUpOperation = "TOTP_REMOVE"
+	StepUpRegenerateRecoveryCodes    StepUpOperation = "RECOVERY_CODES_REGENERATE"
+	StepUpUpdateSecuritySettings     StepUpOperation = "SECURITY_SETTINGS_UPDATE"
+	StepUpReplaceTOTP                StepUpOperation = "TOTP_REPLACE"
+	StepUpRemoveTOTP                 StepUpOperation = "TOTP_REMOVE"
+	StepUpReplaceNotificationContact StepUpOperation = "NOTIFICATION_CONTACT_REPLACE"
 )
 
 // StepUp is non-secret metadata for one operation bound to its original login
 // Session. Neither its ID nor PROVED state is a bearer or a permission decision.
 type StepUp struct {
-	APIVersion             string                        `json:"apiVersion"`
-	Kind                   string                        `json:"kind"`
-	ID                     string                        `json:"id"`
-	RequestID              string                        `json:"requestId"`
-	Operation              StepUpOperation               `json:"operation"`
-	ExpectedFactorRevision uint64                        `json:"expectedFactorRevision"`
-	SecuritySettings       *SecuritySettingsUpdateIntent `json:"securitySettings,omitempty"`
-	State                  string                        `json:"state"`
-	CreatedAt              time.Time                     `json:"createdAt"`
-	ExpiresAt              time.Time                     `json:"expiresAt"`
-	ProvedAt               *time.Time                    `json:"provedAt,omitempty"`
-	ConsumedAt             *time.Time                    `json:"consumedAt,omitempty"`
+	APIVersion             string                                `json:"apiVersion"`
+	Kind                   string                                `json:"kind"`
+	ID                     string                                `json:"id"`
+	RequestID              string                                `json:"requestId"`
+	Operation              StepUpOperation                       `json:"operation"`
+	ExpectedFactorRevision uint64                                `json:"expectedFactorRevision"`
+	SecuritySettings       *SecuritySettingsUpdateIntent         `json:"securitySettings,omitempty"`
+	NotificationContact    *NotificationContactReplacementIntent `json:"notificationContact,omitempty"`
+	State                  string                                `json:"state"`
+	CreatedAt              time.Time                             `json:"createdAt"`
+	ExpiresAt              time.Time                             `json:"expiresAt"`
+	ProvedAt               *time.Time                            `json:"provedAt,omitempty"`
+	ConsumedAt             *time.Time                            `json:"consumedAt,omitempty"`
 }
 
 // RequestID is the intended sensitive command's identity, not a target selector.
 type StartStepUpRequest struct {
-	RequestID              string                        `json:"requestId"`
-	Operation              StepUpOperation               `json:"operation"`
-	ExpectedFactorRevision uint64                        `json:"expectedFactorRevision"`
-	SecuritySettings       *SecuritySettingsUpdateIntent `json:"securitySettings,omitempty"`
+	RequestID              string                                `json:"requestId"`
+	Operation              StepUpOperation                       `json:"operation"`
+	ExpectedFactorRevision uint64                                `json:"expectedFactorRevision"`
+	SecuritySettings       *SecuritySettingsUpdateIntent         `json:"securitySettings,omitempty"`
+	NotificationContact    *NotificationContactReplacementIntent `json:"notificationContact,omitempty"`
 }
 
 // The original login bearer is still required; this request cannot authenticate
