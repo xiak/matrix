@@ -157,6 +157,27 @@ describe("AccountLiveRoles", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("opens exact current role relationships without extra directory requests", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const api = client();
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} onOpen={onOpen} /></LocaleProvider>);
+
+    expect(await screen.findByRole("heading", { name: role.name })).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "policy-role-ceiling" }));
+    expect(onOpen).toHaveBeenLastCalledWith("policies", "policy-role-ceiling");
+
+    await user.click(screen.getByRole("button", { name: "system.log-reader" }));
+    expect(onOpen).toHaveBeenLastCalledWith("policies", "system.log-reader");
+
+    await user.click(screen.getByRole("tab", { name: "信任策略 (1)" }));
+    await user.click(screen.getByRole("button", { name: "USER · user-alex" }));
+    expect(onOpen).toHaveBeenLastCalledWith("users", "user-alex");
+    expect(api.list).not.toHaveBeenCalled();
+    expect(api.listTrustVersions).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("loads immutable trust history only on demand and opens a version inline", async () => {
     const user = userEvent.setup();
     const api = client();
@@ -174,6 +195,7 @@ describe("AccountLiveRoles", () => {
     const detail = screen.getByRole("group", { name: "信任版本详情" });
     expect(within(detail).getByText(previousTrustVersion.contentDigest)).toBeTruthy();
     expect(within(detail).getByText(/user-sam/)).toBeTruthy();
+    expect(within(detail).queryByRole("button", { name: /user-sam/ })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 

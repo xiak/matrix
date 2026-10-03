@@ -39,7 +39,12 @@ function roleCapability(access: RoleAccess, action: RoleCapabilityAction): RoleC
   return access.capabilities.find((candidate) => candidate.action === action && candidate.resource.kind === "ROLE" && candidate.resource.id === access.role.id) ?? null;
 }
 
-function LiveRoleAuthorizationOverview({ access, client, onAccessChanged }: { access: RoleAccess; client: RoleAccessClient; onAccessChanged(access: RoleAccess): void }) {
+function LiveRoleAuthorizationOverview({ access, client, onAccessChanged, onOpen }: {
+  access: RoleAccess;
+  client: RoleAccessClient;
+  onAccessChanged(access: RoleAccess): void;
+  onOpen: OpenRoleEntity;
+}) {
   const t = useTranslations("RoleWorkspace"), a = useTranslations("AccountAccess"), w = useTranslations("IamWorkspace");
   const selectId = useId();
   const form = useRef<HTMLFormElement>(null), editTrigger = useRef<HTMLButtonElement>(null), restoreEditFocus = useRef(false);
@@ -160,7 +165,7 @@ function LiveRoleAuthorizationOverview({ access, client, onAccessChanged }: { ac
 
   const boundaryValue = phase === "loading" ? <span aria-label={t("boundaryLoading")} role="status"><Skeleton /></span>
     : phase === "error" ? <Badge status="neutral">{t("boundaryUnknown")}</Badge>
-      : boundary?.policy ? <span><strong>{boundary.policy.policyId}</strong><small>{t("boundaryPolicyVersion", { version: boundary.policy.versionId, revision: boundary.resourceVersion })}</small></span>
+      : boundary?.policy ? <span><button className={styles.userLink} onClick={() => onOpen("policies", currentPolicyId)} type="button">{boundary.policy.policyId}</button><small>{t("boundaryPolicyVersion", { version: boundary.policy.versionId, revision: boundary.resourceVersion })}</small></span>
         : <span><Badge status="warning">{t("boundaryClosed")}</Badge><small>{t("boundaryClosedHint")}</small></span>;
   return <>
     <AuthorizationOverview title={t("authorizationOverview")} hint={t("liveAuthorizationOverviewHint")} items={[
@@ -317,7 +322,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
       </div>
       <p className={styles.note}>{access.role.description || w("none")}</p>
       <Alert>{t("liveTrustExplanation")}</Alert>
-      <LiveRoleAuthorizationOverview key={`${client.sessionRevision}:${access.role.id}`} access={access} client={client} onAccessChanged={setAccess} />
+      <LiveRoleAuthorizationOverview key={`${client.sessionRevision}:${access.role.id}`} access={access} client={client} onAccessChanged={setAccess} onOpen={onOpen} />
       <dl className={styles.facts}>
         <div><dt>{t("roleId")}</dt><dd><code>{access.role.id}</code></dd></div>
         <div><dt>{t("resourceVersion")}</dt><dd>v{access.role.resourceVersion}</dd></div>
@@ -340,7 +345,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
           {access.policyAttachments.length ? <Table aria-label={t("livePermissions")} mobileLayout="stack">
             <thead><tr><th scope="col">{t("policyId")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("attachmentVersion")}</th><th scope="col">{t("updated")}</th></tr></thead>
             <tbody>{access.policyAttachments.map((attachment) => <tr key={attachment.id}>
-              <td data-label={t("policyId")}><code>{attachment.policyId}</code><small>{attachment.id}</small></td>
+              <td data-label={t("policyId")}><button className={styles.userLink} onClick={() => onOpen("policies", attachment.policyId)} type="button">{attachment.policyId}</button><small>{attachment.id}</small></td>
               <td data-label={t("scope")}>{t("tenantScope")}</td>
               <td data-label={t("attachmentVersion")}>v{attachment.resourceVersion}</td>
               <td data-label={t("updated")}><WorkspaceTime value={attachment.updatedAt} /></td>
@@ -354,7 +359,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
             <tbody>{access.trustVersion.document.statements.map((statement) => <tr key={statement.sid}>
               <td data-label="SID"><code>{statement.sid}</code></td>
               <td data-label={t("effect")}><Badge status={statement.effect === "ALLOW" ? "success" : "warning"}>{statement.effect}</Badge></td>
-              <td data-label={t("trustedUsers")}><div className={styles.roleTags}>{statement.principals.map((principal) => <Badge key={principal.id}>USER · {principal.id}</Badge>)}</div></td>
+              <td data-label={t("trustedUsers")}><div className={styles.roleTags}>{statement.principals.map((principal) => <button className={styles.userLink} key={principal.id} onClick={() => onOpen("users", principal.id)} type="button"><Badge>USER · {principal.id}</Badge></button>)}</div></td>
             </tr>)}</tbody>
           </Table> : <EmptyState title={t("trustClosed")} description={t("trustClosedHint")} />}
           <details className={styles.trustDocuments}>
