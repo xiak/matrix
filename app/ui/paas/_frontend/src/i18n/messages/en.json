@@ -4352,7 +4352,7 @@
       "liveBoundary": "LIVE · NOT_CONNECTED · The S4c-a backend source is fixed, but this page is not connected to a real session. It creates no unverified LIVE conclusion and never falls back to MOCK Findings.",
       "liveUnavailableTitle": "Access analysis is not connected",
       "liveUnavailableHint": "Connect only after IAM fixes source coverage, rule, Finding, and pagination wire contracts. Existing user, key, and role APIs cannot be composed into an authoritative analyzer.",
-      "previewBoundary": "MOCK · This page previews source coverage, the Analyzer, Findings, human review, and explicit automatic-disposition rules against the fixed S4c-a/b and S4c-c source boundaries; the independent S4c-c gates are still running. Configuration does not prove effective permission, resource reachability, use, or a running disposition worker; sample Findings are not backend scan results.",
+      "previewBoundary": "MOCK · This page previews source coverage, the Analyzer, Findings, human review, and explicit automatic-disposition rules against the fixed S4c-a/b and S4c-c source boundaries; this preview does not inherit S4c-c backend release acceptance. Configuration does not prove effective permission, resource reachability, use, or a running disposition worker; sample Findings are not backend scan results.",
       "mockConfiguration": "MOCK configuration snapshot",
       "account": "Target account",
       "live": {

@@ -4352,7 +4352,7 @@
       "liveBoundary": "LIVE · NOT_CONNECTED · S4c-a 后端源码已固定，但当前页面尚未接入真实会话。页面不会提前建立未经验收的 LIVE 结论，也不会回退到 MOCK Finding。",
       "liveUnavailableTitle": "访问分析尚未接入",
       "liveUnavailableHint": "待 IAM 固定来源覆盖、规则、Finding 与分页 wire 后再连接；现有用户、密钥和角色接口不能组成可信的访问分析器。",
-      "previewBoundary": "MOCK · 本页按已固定 S4c-a/b 与 S4c-c 源码边界预演来源覆盖、Analyzer、Finding、人工复核及显式自动处置规则；S4c-c 独立门禁仍在运行。配置存在不代表权限已生效、资源可达、入口曾被使用或后台处置已经运行；样例 Finding 不是后端扫描结果。",
+      "previewBoundary": "MOCK · 本页按已固定 S4c-a/b 与 S4c-c 源码边界预演来源覆盖、Analyzer、Finding、人工复核及显式自动处置规则；本预览不继承 S4c-c 后端发布验收。配置存在不代表权限已生效、资源可达、入口曾被使用或后台处置已经运行；样例 Finding 不是后端扫描结果。",
       "mockConfiguration": "MOCK 配置快照",
       "account": "目标账号",
       "live": {
