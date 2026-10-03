@@ -2161,6 +2161,93 @@ func TestIAMHTTPSecurityReportRoutesAreCredentialBoundAndNoStore(t *testing.T) {
 	}
 }
 
+func TestIAMHTTPAccessAnalyzerRoutesAreCredentialBoundAndStrict(t *testing.T) {
+	now := time.Date(2026, 10, 3, 2, 0, 0, 0, time.UTC)
+	analyzer := iamv1.AccessAnalyzer{APIVersion: iamv1.APIVersion, Kind: "AccessAnalyzer", ID: "analyzer-one", AccountID: "account-one",
+		Type: iamv1.AccessAnalyzerUnusedAccess, Status: iamv1.AccessAnalyzerActive, UnusedAccessAgeDays: 90,
+		ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+	through := now.Add(time.Hour)
+	coverage := make([]iamv1.AccessObservationCoverage, 0, 6)
+	for index, source := range iamv1.AccessObservationCoverageSources() {
+		entry := iamv1.AccessObservationCoverage{Source: source}
+		if index < 4 {
+			entry.State, entry.Reason = iamv1.AccessObservationInsufficientCoverage, iamv1.AccessObservationSourceNotReady
+			entry.ObservedFrom, entry.ObservedThrough = &now, &through
+		} else {
+			entry.State, entry.Reason = iamv1.AccessObservationNotIncluded, iamv1.AccessObservationSourceNotImplemented
+		}
+		coverage = append(coverage, entry)
+	}
+	workflow := newHTTPWorkflow(t)
+	workflow.accessAnalyzer = analyzer
+	workflow.accessAnalyzerList = iamv1.AccessAnalyzerList{APIVersion: iamv1.APIVersion, Kind: "AccessAnalyzerList", AccountID: analyzer.AccountID, Items: []iamv1.AccessAnalyzer{analyzer}}
+	workflow.accessFindingList = iamv1.AccessFindingList{APIVersion: iamv1.APIVersion, Kind: "AccessFindingList", AccountID: analyzer.AccountID,
+		AnalyzerID: analyzer.ID, ObservedAt: through, Coverage: coverage, Items: []iamv1.AccessFinding{}}
+	handler := newTestHandler(t, workflow)
+
+	call := func(method, path, body string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer current")
+		if body != "" {
+			request.Header.Set("Content-Type", "application/json")
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != want {
+			t.Fatalf("%s %s status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+		}
+		return response
+	}
+	created := call(http.MethodPost, "/v1/account/access-analyzers", `{"type":"UNUSED_ACCESS","requestId":"analyzer-create"}`, http.StatusCreated)
+	var createdAnalyzer iamv1.AccessAnalyzer
+	if json.Unmarshal(created.Body.Bytes(), &createdAnalyzer) != nil || createdAnalyzer != analyzer || workflow.accessAnalyzerCreateCalls != 1 ||
+		workflow.accessAnalyzerCreateRequest.RequestID != "analyzer-create" || string(workflow.accessAnalyzerCredential.CopyBytes()) != "current" {
+		t.Fatalf("access analyzer creation was not preserved: %s", created.Body.String())
+	}
+	listed := call(http.MethodGet, "/v1/account/access-analyzers", "", http.StatusOK)
+	if listed.Header().Get("Cache-Control") != "no-store" || workflow.accessAnalyzerListCalls != 1 {
+		t.Fatal("access analyzer directory was not no-store")
+	}
+	read := call(http.MethodGet, "/v1/account/access-analyzers/analyzer-one", "", http.StatusOK)
+	if read.Header().Get("Cache-Control") != "no-store" || workflow.accessAnalyzerReadCalls != 1 || workflow.accessAnalyzerID != analyzer.ID {
+		t.Fatal("access analyzer read lost its target")
+	}
+	workflow.accessAnalyzer.Status, workflow.accessAnalyzer.UnusedAccessAgeDays, workflow.accessAnalyzer.ResourceVersion = iamv1.AccessAnalyzerDisabled, 60, 2
+	updated := call(http.MethodPost, "/v1/account/access-analyzers/analyzer-one:update",
+		`{"status":"DISABLED","unusedAccessAgeDays":60,"resourceVersion":1,"requestId":"analyzer-update"}`, http.StatusOK)
+	if workflow.accessAnalyzerUpdateCalls != 1 || workflow.accessAnalyzerUpdateRequest.Status != iamv1.AccessAnalyzerDisabled ||
+		!strings.Contains(updated.Body.String(), `"resourceVersion":2`) {
+		t.Fatal("access analyzer update was not preserved")
+	}
+	findings := call(http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings", "", http.StatusOK)
+	if findings.Header().Get("Cache-Control") != "no-store" || workflow.accessFindingListCalls != 1 ||
+		!strings.Contains(findings.Body.String(), `"SOURCE_NOT_READY"`) || !strings.Contains(findings.Body.String(), `"items":[]`) {
+		t.Fatalf("access finding coverage was not explicit: %s", findings.Body.String())
+	}
+
+	for _, sample := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{http.MethodGet, "/v1/account/access-analyzers?accountId=other", "", http.StatusBadRequest},
+		{http.MethodPost, "/v1/account/access-analyzers", `{"type":"UNUSED_ACCESS","requestId":"x","accountId":"other"}`, http.StatusBadRequest},
+		{http.MethodGet, "/v1/account/access-analyzers/analyzer-one?tenantId=other", "", http.StatusBadRequest},
+		{http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings/nested", "", http.StatusNotFound},
+		{http.MethodDelete, "/v1/account/access-analyzers/analyzer-one", "", http.StatusMethodNotAllowed},
+	} {
+		response := call(sample.method, sample.path, sample.body, sample.want)
+		if response.Code < 400 {
+			t.Fatal("invalid access analyzer route was accepted")
+		}
+	}
+	workflow.accessAnalyzerErr = identityaccess.ErrAccessAnalyzerNotFound
+	missing := call(http.MethodGet, "/v1/account/access-analyzers/analyzer-missing", "", http.StatusNotFound)
+	if !strings.Contains(missing.Body.String(), "iam.access-analyzer.not-found") {
+		t.Fatalf("missing access analyzer problem=%s", missing.Body.String())
+	}
+}
+
 func httpSecurityReportFixture(t testing.TB) (iamv1.AccountSecurityReport, []byte) {
 	t.Helper()
 	observed := time.Date(2026, 10, 2, 8, 9, 10, 0, time.UTC)
@@ -2266,6 +2353,19 @@ type httpWorkflow struct {
 	securityReportCredential         iamv1.Secret
 	securityReportRequest            iamv1.CreateAccountSecurityReportRequest
 	securityReportID                 iamv1.SecurityReportID
+	accessAnalyzer                   iamv1.AccessAnalyzer
+	accessAnalyzerList               iamv1.AccessAnalyzerList
+	accessFindingList                iamv1.AccessFindingList
+	accessAnalyzerErr                error
+	accessAnalyzerCredential         iamv1.Secret
+	accessAnalyzerID                 iamv1.AccessAnalyzerID
+	accessAnalyzerCreateRequest      iamv1.CreateAccessAnalyzerRequest
+	accessAnalyzerUpdateRequest      iamv1.UpdateAccessAnalyzerRequest
+	accessAnalyzerCreateCalls        int
+	accessAnalyzerListCalls          int
+	accessAnalyzerReadCalls          int
+	accessAnalyzerUpdateCalls        int
+	accessFindingListCalls           int
 	workloadBindingCalls             int
 	workloadServiceCredential        iamv1.Secret
 	workloadSubjectCredential        iamv1.Secret
@@ -2307,6 +2407,36 @@ func (value *httpWorkflow) DownloadAccountSecurityReport(_ context.Context, cred
 	value.securityReportDownloadCalls++
 	value.securityReportCredential, value.securityReportID = credential, id
 	return append([]byte(nil), value.securityReportCSV...), value.securityReportErr
+}
+
+func (value *httpWorkflow) CreateAccessAnalyzer(_ context.Context, credential iamv1.Secret, request iamv1.CreateAccessAnalyzerRequest) (iamv1.AccessAnalyzer, error) {
+	value.accessAnalyzerCreateCalls++
+	value.accessAnalyzerCredential, value.accessAnalyzerCreateRequest = credential, request
+	return value.accessAnalyzer, value.accessAnalyzerErr
+}
+
+func (value *httpWorkflow) ListAccessAnalyzers(_ context.Context, credential iamv1.Secret, _ string, _ string) (iamv1.AccessAnalyzerList, error) {
+	value.accessAnalyzerListCalls++
+	value.accessAnalyzerCredential = credential
+	return value.accessAnalyzerList, value.accessAnalyzerErr
+}
+
+func (value *httpWorkflow) AccessAnalyzer(_ context.Context, credential iamv1.Secret, id iamv1.AccessAnalyzerID, _ string) (iamv1.AccessAnalyzer, error) {
+	value.accessAnalyzerReadCalls++
+	value.accessAnalyzerCredential, value.accessAnalyzerID = credential, id
+	return value.accessAnalyzer, value.accessAnalyzerErr
+}
+
+func (value *httpWorkflow) UpdateAccessAnalyzer(_ context.Context, credential iamv1.Secret, id iamv1.AccessAnalyzerID, request iamv1.UpdateAccessAnalyzerRequest) (iamv1.AccessAnalyzer, error) {
+	value.accessAnalyzerUpdateCalls++
+	value.accessAnalyzerCredential, value.accessAnalyzerID, value.accessAnalyzerUpdateRequest = credential, id, request
+	return value.accessAnalyzer, value.accessAnalyzerErr
+}
+
+func (value *httpWorkflow) ListAccessFindings(_ context.Context, credential iamv1.Secret, id iamv1.AccessAnalyzerID, _ string, _ string) (iamv1.AccessFindingList, error) {
+	value.accessFindingListCalls++
+	value.accessAnalyzerCredential, value.accessAnalyzerID = credential, id
+	return value.accessFindingList, value.accessAnalyzerErr
 }
 
 func (value *httpWorkflow) UserPasswordResetCompletion(_ context.Context, credential iamv1.Secret, user iamv1.PrincipalID, command string, version uint64, _ string) (iamv1.UserPasswordResetCompletion, error) {

@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话管理、S3a共享密码尝试、S2分项及S3b密码规则/历史与管理员重置完成查询已有固定实现和真实证据。S2的当前签名安装候选已在真实邮箱前置后完成TOTP绑定、旧会话撤销、MFA登录、安全通知、A/B升级/回滚/备份恢复及任务自有引擎重启后的新鲜MFA登录；精确源码独立CI和LIVE UI仍未完成，因此S2及本FEAT尚未最终验收。S3c后端累计固定`b9483f82`的[Verification36532338140](https://github.com/xiak/matrix/actions/runs/36532338140)已核对精确SHA、completed/success，13项全部通过；实际一天观察的固定`87e1c143`及[Verification36545493632](https://github.com/xiak/matrix/actions/runs/36545493632)也已核对精确SHA、completed/success，13项全部通过，但它只证明截止前准备和现有回归，截止后门禁尚未发生。Session idle源码候选已完成API/SQL、双副本、真实最低五分钟、固定前驱和五进程本地门禁，独立CI、LIVE UI及发布组合未完成。S4a账号安全报告后端固定`57cb28d7`已推送，完成公开契约、同事务快照、受限持久化、HTTP、真实PG18纵向门禁、唯一固定前驱和独立多进程本地门禁；后继已在原owner补真实双向设置竞争、Excel打开重存及独立PostgreSQL七天到期清理门禁。固定`67a2a19c`的IAM61/Audit31/PaaS3+r6签名A/B已在原`phase1e2e` owner完成报告receipt、正文、CSV与Audit事实的安装、升级、回滚、选定备份恢复及任务自有引擎重启门禁；精确源码独立CI和LIVE UI仍未完成，因此S4a尚未标记最终验收。S4其余诊断/治理、资格变化的旧备份恢复及009完整发布仍未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性。
+- 状态：S1会话自管理、S2 TOTP MFA/安全通知/恢复、S3密码与共享尝试治理及S4a账号安全报告均已有固定实现和所属段落的真实证据；未完成的独立CI、LIVE UI或发布组合仍按各段边界保留。S4b当前访问诊断已固定于`ef4483e2`，S4c-a账号级闲置访问分析器已完成本地纵向、固定前驱及独立多进程门禁，正在形成固定提交；S4c-b真实观测扫描、Finding生命周期、自动处置及009完整发布尚未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -1422,6 +1422,34 @@ S4a不提供报告目录、共享链接、自动规则、后台停用、详细�
 当前后端执行片已经落到同一授权拥有者：公开契约新增`CurrentAccessDiagnosis`及严格OpenAPI，HTTP入口继续使用服务凭据和主体Bearer；authority只在原`PolicyEvaluation`中保留匹配Allow/Deny版本及三类上限结果，再投影已验证attachment/membership/Role证据，没有解析第二遍Policy。用例事务只检查当前Profile并调用该求值器，不分配ID、不调用`RecordAuthorization`、不产生Audit outbox；本片没有SQL或schema变化。API、authority、usecase、HTTP、架构及全仓Go测试/race/vet已通过；独立PostgreSQL 18的实际IAM60 executable→IAM61迁移、双迁移、bootstrap/restart、冻结Profile推进门禁也已通过，并在真实进程中证明诊断前后`iam.authorization_decisions`和`iam.audit_outbox`计数不变。`TestIndependentIAMAuditAndPaaSProcesses`又在全新独立PostgreSQL 18上串行race-p2通过253.97秒：两个同时存活的IAM进程以同一服务凭据、Subject Session及已提交策略快照返回除各自事务`evaluatedAt`外完全相同的诊断语义，前后决定表和IAM outbox计数不变；原门禁仍完整覆盖双租户、MFA、恢复、重启、PaaS/Audit和历史重放。该次实跑还暴露进程门禁仍要求源码authority版本不得等于已发布IAM61/Audit31/PaaS3+r7的过期前置条件，现已替换为三个真实进程readiness必须精确匹配`CurrentDatabaseProfile`，没有放宽完整profile比较或安装准入。固定`14248c4f`的旧[Verification37073584728](https://github.com/xiak/matrix/actions/runs/37073584728)因此在`authority-runtime`失败，不能算成功；修复与本片的独立GitHub CI仍待固定提交后完成，不能用本地门禁替代。
 
 #### 闲置发现和处置
+
+##### S4c：账号级闲置访问分析器
+
+安全报告是一次不可变快照，访问分析器则是账号显式启用、持续重算并维护Finding生命周期的治理资源；二者不得共用ID、状态或把报告误作后台任务许可。首个分析器类型固定为`UNUSED_ACCESS`，一个Account至多一个当前实例，配置包含`unusedAccessAgeDays`（1–365，默认90）、状态、单调`resourceVersion`和实际观察范围。阈值是分析条件而不是内置Policy，后续可增加新的分析器类型或规则而不改授权求值器、Session或资源生命周期接口。
+
+按真实观察时长交付而不伪造时间：S4c-a先实现Analyzer创建/目录/详情/更新和Finding空目录，创建时开始记录各IAM来源的真实`observedFrom`；四项IAM来源在扫描器尚未接入时必须保持`INSUFFICIENT_COVERAGE/SOURCE_NOT_READY`，即使墙钟后来超过阈值也不能把空目录伪装成已完整分析；PaaS结果和外部联合身份保持`NOT_INCLUDED/SOURCE_NOT_IMPLEMENTED`。S4c-b在真实来源写入、扫描器、恢复epoch和Finding生命周期门禁完成后才把已接入来源转换为`OBSERVATION_WINDOW_INCOMPLETE`或`COMPLETE`并生成下述三类Finding。两片共享同一对象与API，不保留候选别名或第二套分析模型；测试可使用独立数据库的受控墙钟证明1/90/365日边界，但生产入口不接受时间selector。
+
+S4c-b的首个Finding纵向切片只生成`UNUSED_PASSWORD`、`UNUSED_ACCESS_KEY`和人工可承担Role的`UNUSED_ROLE`。密码活动只认成功发行的PASSWORD/PASSWORD_TOTP登录Session；AccessKey活动只认完成密钥认证后记录的Allow或Deny授权决定，坏MAC、重放或无法归属的请求不算使用；Role活动认成功发行的RoleSession或由该RoleSession产生的Allow/Deny决定。Deny可以证明凭据或Role被真实使用，但不能证明业务操作成功。服务相关角色、未实现的外部联合身份、动作级未使用权限和产品业务结果不在该片范围，必须明确显示`NOT_INCLUDED`，不能被折算为零次或安全结论。
+
+分析器只有在每一必需IAM来源覆盖完整阈值窗口时才可产生Finding。覆盖记录至少包含来源、`observedFrom`、`observedThrough`、状态及封闭缺口原因；对象在窗口内新建、旧决定缺少主体谱系、数据损坏、迁移后尚未积累完整窗口、恢复后存在观察缺口或数据库结果不确定时均为`INSUFFICIENT_COVERAGE`，不产生“闲置”Finding。受支持的备份恢复必须由安装owner在恢复完成后推进不可回退的恢复epoch，并使IAM重新开始观察窗口；在该衔接完成和实跑前，本片不得把数据库内可回滚时间戳声称为防回滚证据，也不得开放自动处置。
+
+Finding绑定Account、analyzer ID与revision、类型、目标kind/id/resourceVersion、完整窗口、活动revision和证据摘要；不包含秘密、原始请求、私有策略编译结果或可重用Decision。生命周期为`ACTIVE`、`ARCHIVED`和`RESOLVED`：人工归档只表示已评审，条件消失或目标版本变化后由后继扫描关闭为RESOLVED；旧条件再次成立产生新的condition generation，不能复活旧Finding。目录和详情只能由当前LOGIN_SESSION在当前Account权限下读取，opaque cursor绑定Account、分析器revision、过滤器和页预算；跨账号同ID、停用账号、撤权或过期会话必须失败关闭。
+
+S4c-a动作固定为`iam.access-analyzer.create/list/read/update`和`iam.access-finding.list`；资源kind为`ACCESS_ANALYZER`和`ACCESS_FINDING`。create/list作用于当前ACCOUNT实例，analyzer read/update及finding list作用于准确Analyzer实例；所有Action只接受LOGIN_SESSION。HTTP固定为`POST|GET /v1/account/access-analyzers`、`GET /v1/account/access-analyzers/{analyzerId}`、`POST /v1/account/access-analyzers/{analyzerId}:update`和`GET /v1/account/access-analyzers/{analyzerId}/findings`。update只能在`ACTIVE|DISABLED`间改变状态或修改阈值并提交expected resourceVersion；停用时冻结当前观察边界，重新启用从新epoch开始，均不伪造Finding或RESOLVED。
+
+S4c-b才增加`iam.access-finding.read/archive/unarchive`以及详情和末端`:archive|:unarchive`路由。它不增加“以Finding停用目标”的快捷授权；人工处置继续调用现有User、AccessKey或Role生命周期命令，重新验证当前操作者、目标resourceVersion和受保护身份约束。后继若支持“仅当仍闲置时停用”，必须把原Finding的窗口和活动revision作为并发前提，并在同一写事务内按现有锁序重检；Finding、报告、管理员确认或历史Allow都不是permit。
+
+后台扫描使用数据库租约与fence实现同一分析器单写，多副本可以并行处理不同Account但不能重复推进同一condition generation。扫描进程使用安装生成且只挂给该进程的专用数据库登录，只能调用封闭的readiness/claim/complete函数；它不是USER、服务账号、普通IAM worker或可调用北向API的凭据。Account中当前ACTIVE分析器是唯一租户同意，claim必须锁内重检该状态；扫描器不能读取秘密、保存创建者Session或调用User/Key/Role生命周期。扫描结果、Finding状态变化和outbox同事务；租约丢失、提交结果未知、重启或重复领取按准确完成关系恢复，不能重做成功事实。Redis或内存缓存只能承载可丢的调度加速，不能成为覆盖水位、Finding状态或授权权威。
+
+S4c-a不可变事实只有用户管理动作`iam.access-analyzer.created/updated`，均要求真实USER、当前精确Decision和目标Analyzer。S4c-b才增加用户动作`iam.access-finding.archived/unarchived`和扫描器事实`iam.access-finding.detected/resolved`：前者要求真实USER、当前精确Decision和目标Finding；后者仅允许IAM自身封闭扫描事务产生的`SYSTEM/iam.access-analyzer` actor，不接受HTTP、普通服务凭据、worker输入或伪造Decision，也不把该SYSTEM actor扩张到User/Key/Role生命周期。重复扫描且状态不变不补事实；历史事实投递仍使用原IAM outbox证明，不因Finding今天已归档、目标已停用或操作者会话失效而丢失。
+
+##### S4c-a当前实现与证据
+
+当前候选实现使用IAM62/Audit32/PaaS3+r8，只提供上述Analyzer管理和Finding空目录，不包含扫描器、Finding详情/归档、自动处置或恢复epoch。六项来源逐项返回真实覆盖边界：四项IAM来源固定为`INSUFFICIENT_COVERAGE/SOURCE_NOT_READY`，PaaS结果和外部联合身份固定为`NOT_INCLUDED/SOURCE_NOT_IMPLEMENTED`；ACTIVE只推进时间观察上界，DISABLED冻结，重新启用重置观察起点。新增`000018_access_analyzers`保存Analyzer、逐来源覆盖及不可变完成关联，强制RLS；创建/更新与准确Decision、事实和outbox同事务。旧AccountAdministrator显式取得五项新Action，平台角色、PaaS角色及旧数据主体不会因迁移自动获得权限。
+
+本地候选证据（2026-10-03）：`TestIAMAccessAnalyzerPostgres`在独立PostgreSQL18.6中串行race通过14.368秒，覆盖默认90日、1–365边界、创建/准确重放/变体和重复冲突、CAS更新与陈旧版本409、启停覆盖语义、两Account的ID/cursor攻击、撤权及Account停复用即时生效、受限登录/RLS/不可变关联和等值schema重放。Audit存储与HTTP真实数据库门禁分别通过16.364秒和4.248秒。滚动固定前驱`ef4483e2`的实际IAM61 executable产生原Session和安全报告，当前IAM62迁移/程序保留原数据且不合成Analyzer；旧主体先被403拒绝，显式授予新Action后才能创建，双迁移与重启保持，整个门禁串行race通过147.817秒。两个IAM副本、Audit、PaaS及两个dispatcher的独立进程门禁通过257.626秒，覆盖同requestId跨副本重放、双Account隔离、更新、重启、两类Audit事实和链验证。该候选尚未形成推送固定SHA，独立CI、LIVE UI和发布组合均未完成，因此S4c-a尚未最终验收。
+
+第一片最低真门禁覆盖两个Account相同对象ID、1/90/365日边界、对象年龄不足、旧谱系与恢复缺口；成功/失败密码登录、有效/坏签名/重放Key、RoleSession发行及Allow/Deny使用；归档、取消归档、活动后自动RESOLVED和后继再次闲置的新generation；策略/目标版本变更、账号或操作者停用、两个扫描副本的租约/fence及未知提交；Finding前后原User/Key/Role、Session、权限和业务资源不变。容量门禁必须证明有界分页和索引计划，不在每次请求扫描全部不可变决定；完整发布还须实跑安装恢复epoch衔接，否则只能交付观察与Finding后端候选，不能启用自动治理。
 
 闲置资格必须绑定规则修订、对象resourceVersion、真实活动修订和完整观察窗口。采集缺口、审计积压/死信、对象新建后不足阈值或仅没有浏览器登录时都不能断言User/Key闲置；程序Key和Role的真实活动必须按准确主体归因，不能忽略非浏览器使用。阈值以数据库时间和已冻结产品范围计算，不借外部地域/风险来源造结论。
 

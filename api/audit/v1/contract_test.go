@@ -440,6 +440,39 @@ func TestServiceRoleConsentFactsRequireTenantUserDecisions(t *testing.T) {
 	}
 }
 
+func TestAccessAnalyzerFactsRequireTenantUserDecisions(t *testing.T) {
+	for _, action := range []Action{ActionIAMAccessAnalyzerCreated, ActionIAMAccessAnalyzerUpdated} {
+		event := Event{
+			APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-access-analyzer",
+			TenantID: "account-example", Actor: ActorReference{Type: ActorUser, ID: "user-example"},
+			Action: action, Target: TargetReference{Kind: TargetAccessAnalyzer, ID: "analyzer-example"}, Result: ResultSucceeded,
+			IAMDecisionID: "decision-example", RequestDigest: "sha256:" + strings.Repeat("1", 64),
+			RequestID: "request-example", CorrelationID: "request-example",
+			OccurredAt: time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC),
+		}
+		if err := ValidateEventForSource(SourceIAM, event); err != nil {
+			t.Fatalf("valid access analyzer fact %s rejected: %v", action, err)
+		}
+		for name, mutate := range map[string]func(*Event){
+			"missing decision":   func(candidate *Event) { candidate.IAMDecisionID = "" },
+			"service actor":      func(candidate *Event) { candidate.Actor.Type = ActorServiceAccount },
+			"system actor":       func(candidate *Event) { candidate.Actor.Type = ActorSystem },
+			"wrong target":       func(candidate *Event) { candidate.Target.Kind = TargetAccount },
+			"installation scope": func(candidate *Event) { candidate.TenantID, candidate.InstallationID = "", "installation-example" },
+			"target namespace":   func(candidate *Event) { candidate.Target.TenantID = "account-other" },
+			"wrong result":       func(candidate *Event) { candidate.Result = ResultDenied },
+		} {
+			t.Run(string(action)+"/"+name, func(t *testing.T) {
+				forged := event
+				mutate(&forged)
+				if ValidateEventForSource(SourceIAM, forged) == nil {
+					t.Fatal("access analyzer fact accepted forged authority")
+				}
+			})
+		}
+	}
+}
+
 func TestServiceRoleSessionIssuanceRequiresExactServiceActor(t *testing.T) {
 	event := Event{
 		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-service-session",

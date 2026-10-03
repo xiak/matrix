@@ -261,6 +261,11 @@ const (
 	ActionIAMSecurityReportCreate            Action = "iam.security-report.create"
 	ActionIAMSecurityReportRead              Action = "iam.security-report.read"
 	ActionIAMSecurityReportDownload          Action = "iam.security-report.download"
+	ActionIAMAccessAnalyzerCreate            Action = "iam.access-analyzer.create"
+	ActionIAMAccessAnalyzerList              Action = "iam.access-analyzer.list"
+	ActionIAMAccessAnalyzerRead              Action = "iam.access-analyzer.read"
+	ActionIAMAccessAnalyzerUpdate            Action = "iam.access-analyzer.update"
+	ActionIAMAccessFindingList               Action = "iam.access-finding.list"
 	ActionIAMPolicyAttachmentCreate          Action = "iam.policy-attachment.create"
 	ActionIAMPolicyAttachmentRevoke          Action = "iam.policy-attachment.revoke"
 	ActionIAMPlatformPolicyAttachmentCreate  Action = "iam.platform-policy-attachment.create"
@@ -347,6 +352,8 @@ const (
 	ResourcePolicy                ResourceKind = "POLICY"
 	ResourceSession               ResourceKind = "SESSION"
 	ResourceSecurityReport        ResourceKind = "SECURITY_REPORT"
+	ResourceAccessAnalyzer        ResourceKind = "ACCESS_ANALYZER"
+	ResourceAccessFinding         ResourceKind = "ACCESS_FINDING"
 	ResourceApplication           ResourceKind = "APPLICATION"
 	ResourceConfiguration         ResourceKind = "CONFIGURATION"
 	ResourceConfigurationRevision ResourceKind = "CONFIGURATION_REVISION"
@@ -459,7 +466,7 @@ func AllServicePurposes() []ServicePurpose {
 // ActionDefinition and contract enum order are derived projections, not a second
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
-	iamSecurityReportProfile(),
+	iamAccessAnalyzerProfile(),
 	paasProfileRevisionTwelve,
 	managedServiceProfileRevisionFour,
 	auditProfileRevisionFour,
@@ -514,7 +521,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), iamSecurityReportProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -999,6 +1006,23 @@ func iamSecurityReportProfile() AuthorizationProfile {
 		declaredProfileAction(ActionIAMSecurityReportCreate, ResourceAccount, AuthorityScopeTenant, ResourceSecurityReport, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionIAMSecurityReportRead, ResourceSecurityReport, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionIAMSecurityReportDownload, ResourceSecurityReport, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	} {
+		declaration.SubjectTypes = []SubjectType{SubjectUser}
+		declaration.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
+		profile.Actions = append(profile.Actions, declaration)
+	}
+	return profile
+}
+
+func iamAccessAnalyzerProfile() AuthorizationProfile {
+	profile := iamSecurityReportProfile()
+	profile.Revision = 11
+	for _, declaration := range []AuthorizationProfileAction{
+		declaredProfileAction(ActionIAMAccessAnalyzerCreate, ResourceAccount, AuthorityScopeTenant, ResourceAccessAnalyzer, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMAccessAnalyzerList, ResourceAccount, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMAccessAnalyzerRead, ResourceAccessAnalyzer, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMAccessAnalyzerUpdate, ResourceAccessAnalyzer, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMAccessFindingList, ResourceAccessAnalyzer, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 	} {
 		declaration.SubjectTypes = []SubjectType{SubjectUser}
 		declaration.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}

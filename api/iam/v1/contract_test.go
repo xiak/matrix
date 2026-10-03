@@ -4598,6 +4598,8 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 				ActionIAMSecuritySettingsRead, ActionIAMSecuritySettingsUpdate,
 				ActionIAMAccessKeySetNetworkRestrictions,
 				ActionIAMSecurityReportCreate, ActionIAMSecurityReportRead, ActionIAMSecurityReportDownload,
+				ActionIAMAccessAnalyzerCreate, ActionIAMAccessAnalyzerList, ActionIAMAccessAnalyzerRead,
+				ActionIAMAccessAnalyzerUpdate, ActionIAMAccessFindingList,
 				ActionIAMServiceRoleTemplateList, ActionIAMServiceLinkedRoleList,
 				ActionIAMServiceLinkedRoleRead, ActionIAMServiceLinkedRoleCreate,
 				ActionIAMRolePass, ActionIAMWorkloadRoleBindingRevoke,
@@ -8563,7 +8565,7 @@ func TestAccountSecurityReportContractIsBoundedAndExplicit(t *testing.T) {
 
 func TestSecurityReportActionsAreCurrentLoginSessionCapabilities(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || profile.Revision != 10 {
+	if !found || profile.Revision != 11 {
 		t.Fatal("security report profile revision is not current")
 	}
 	wants := map[Action]struct {
@@ -8582,6 +8584,33 @@ func TestSecurityReportActionsAreCurrentLoginSessionCapabilities(t *testing.T) {
 			!slices.Equal(profile.Actions[index].SubjectTypes, []SubjectType{SubjectUser}) ||
 			!slices.Equal(profile.Actions[index].UserAuthenticationMethods, []UserAuthenticationMethod{UserAuthenticationLoginSession}) {
 			t.Fatal("security report action widened its authority boundary", action)
+		}
+	}
+}
+
+func TestAccessAnalyzerActionsAreCurrentLoginSessionCapabilities(t *testing.T) {
+	profile, found := LookupAuthorizationProfile(ProductIAM)
+	if !found || profile.Revision != 11 {
+		t.Fatal("access analyzer profile revision is not current")
+	}
+	wants := map[Action]struct {
+		resource ResourceKind
+		result   ResourceKind
+	}{
+		ActionIAMAccessAnalyzerCreate: {resource: ResourceAccount, result: ResourceAccessAnalyzer},
+		ActionIAMAccessAnalyzerList:   {resource: ResourceAccount},
+		ActionIAMAccessAnalyzerRead:   {resource: ResourceAccessAnalyzer},
+		ActionIAMAccessAnalyzerUpdate: {resource: ResourceAccessAnalyzer},
+		ActionIAMAccessFindingList:    {resource: ResourceAccessAnalyzer},
+	}
+	for action, want := range wants {
+		definition, known := LookupActionDefinition(action)
+		index := slices.IndexFunc(profile.Actions, func(candidate AuthorizationProfileAction) bool { return candidate.Action == action })
+		if !known || definition.ResourceKind != want.resource || definition.AuthorityScope != AuthorityScopeTenant ||
+			definition.CallingService != ServiceIAM || index < 0 || profile.Actions[index].ResultResourceKind != want.result ||
+			!slices.Equal(profile.Actions[index].SubjectTypes, []SubjectType{SubjectUser}) ||
+			!slices.Equal(profile.Actions[index].UserAuthenticationMethods, []UserAuthenticationMethod{UserAuthenticationLoginSession}) {
+			t.Fatal("access analyzer action widened its authority boundary", action)
 		}
 	}
 }

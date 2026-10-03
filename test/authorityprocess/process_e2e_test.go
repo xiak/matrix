@@ -110,9 +110,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "4e79ef783410bbb596232763a9be80412b5e0846"
-	const sourceSchema uint64 = 60
-	const currentSchema uint64 = 61
+	const source = "ef4483e25196a20e0b1938c19b2c311930d4b5b8"
+	const sourceSchema uint64 = 61
+	const currentSchema uint64 = 62
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -496,6 +496,20 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		}
 		return state
 	}
+	predecessorReportResponse := performJSON(t, http.MethodPost, endpoint+"/v1/account/security-reports", primary.Credential,
+		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "predecessor-security-report"})
+	var predecessorReportCreation iamv1.CreateAccountSecurityReportResponse
+	if predecessorReportResponse.Status != http.StatusCreated || json.Unmarshal(predecessorReportResponse.Body, &predecessorReportCreation) != nil ||
+		iamv1.ValidateCreateAccountSecurityReportResponse(predecessorReportCreation) != nil {
+		t.Fatalf("actual predecessor did not create its supported security report: status=%d", predecessorReportResponse.Status)
+	}
+	predecessorReportResponse = performJSON(t, http.MethodGet,
+		endpoint+"/v1/account/security-reports/"+string(predecessorReportCreation.Metadata.ID), primary.Credential, nil)
+	var predecessorReport iamv1.AccountSecurityReport
+	if predecessorReportResponse.Status != http.StatusOK || json.Unmarshal(predecessorReportResponse.Body, &predecessorReport) != nil ||
+		iamv1.ValidateAccountSecurityReport(predecessorReport) != nil {
+		t.Fatal("actual predecessor did not return its security report")
+	}
 	originalState := identityState()
 	var originalFacts []auditv1.Event
 	rows, err := admin.Query(ctx, "SELECT event_document FROM iam.audit_outbox ORDER BY tenant_id,event_id")
@@ -611,29 +625,49 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
-	deniedReport := performJSON(t, http.MethodPost, endpoint+"/v1/account/security-reports", primary.Credential,
-		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "retained-security-report-without-grant"})
-	if deniedReport.Status != http.StatusForbidden {
-		t.Fatalf("migration silently granted a predecessor root the new report capability: status=%d", deniedReport.Status)
+	predecessorReportResponse = performJSON(t, http.MethodGet,
+		endpoint+"/v1/account/security-reports/"+string(predecessorReportCreation.Metadata.ID), primary.Credential, nil)
+	var migratedPredecessorReport iamv1.AccountSecurityReport
+	if predecessorReportResponse.Status != http.StatusOK || json.Unmarshal(predecessorReportResponse.Body, &migratedPredecessorReport) != nil ||
+		!reflect.DeepEqual(migratedPredecessorReport, predecessorReport) {
+		t.Fatal("migration changed the predecessor security report")
+	}
+	var syntheticAnalyzers int
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.access_analyzers").Scan(&syntheticAnalyzers); err != nil || syntheticAnalyzers != 0 {
+		t.Fatal("migration synthesized an access analyzer without an explicit request", err)
+	}
+	accessAnalyzerResponse := performJSON(t, http.MethodPost, endpoint+"/v1/account/access-analyzers", primary.Credential,
+		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "retained-access-analyzer-without-grant"})
+	if accessAnalyzerResponse.Status != http.StatusForbidden {
+		t.Fatalf("migration silently granted the predecessor root the new access analyzer capability: status=%d", accessAnalyzerResponse.Status)
 	}
 	statement := func(sid string, actions []iamv1.Action, kind iamv1.ResourceKind) iamv1.PolicyStatement {
 		return iamv1.PolicyStatement{SID: sid, Effect: iamv1.PolicyAllow, Actions: actions,
 			Resources: []iamv1.PolicyResourceSelector{{Kind: kind, Match: iamv1.PolicyResourceAnyInAuthority}}}
 	}
 	policyResponse := performJSON(t, http.MethodPost, endpoint+"/v1/policies", primary.Credential, iamv1.CreatePolicyRequest{
-		DisplayName: "Retained security report authority", RequestID: "retained-security-report-policy",
+		DisplayName: "Retained access analyzer authority", RequestID: "retained-access-analyzer-policy",
 		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
 			Statements: []iamv1.PolicyStatement{
-				statement("create", []iamv1.Action{iamv1.ActionIAMSecurityReportCreate}, iamv1.ResourceAccount),
-				statement("read", []iamv1.Action{iamv1.ActionIAMSecurityReportRead, iamv1.ActionIAMSecurityReportDownload}, iamv1.ResourceSecurityReport),
+				statement("manage-directory", []iamv1.Action{iamv1.ActionIAMAccessAnalyzerCreate, iamv1.ActionIAMAccessAnalyzerList}, iamv1.ResourceAccount),
+				statement("manage-analyzer", []iamv1.Action{iamv1.ActionIAMAccessAnalyzerRead, iamv1.ActionIAMAccessAnalyzerUpdate,
+					iamv1.ActionIAMAccessFindingList}, iamv1.ResourceAccessAnalyzer),
 			}},
 	})
-	var reportPolicy iamv1.PolicyDetail
-	if policyResponse.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(policyResponse.Body), &reportPolicy) != nil ||
-		iamv1.ValidatePolicyDetail(reportPolicy) != nil {
-		t.Fatalf("create explicit retained report policy status=%d", policyResponse.Status)
+	var accessAnalyzerPolicy iamv1.PolicyDetail
+	if policyResponse.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(policyResponse.Body), &accessAnalyzerPolicy) != nil ||
+		iamv1.ValidatePolicyDetail(accessAnalyzerPolicy) != nil {
+		t.Fatalf("create explicit retained access analyzer policy status=%d", policyResponse.Status)
 	}
-	createIAMPolicyAttachment(t, endpoint, primary.Credential, primary.Session.PrincipalID, reportPolicy.Policy.ID, "retained-security-report-grant")
+	createIAMPolicyAttachment(t, endpoint, primary.Credential, primary.Session.PrincipalID, accessAnalyzerPolicy.Policy.ID,
+		"retained-access-analyzer-grant")
+	accessAnalyzerResponse = performJSON(t, http.MethodPost, endpoint+"/v1/account/access-analyzers", primary.Credential,
+		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "retained-access-analyzer-create"})
+	var retainedAccessAnalyzer iamv1.AccessAnalyzer
+	if accessAnalyzerResponse.Status != http.StatusCreated || json.Unmarshal(accessAnalyzerResponse.Body, &retainedAccessAnalyzer) != nil ||
+		iamv1.ValidateAccessAnalyzer(retainedAccessAnalyzer) != nil || retainedAccessAnalyzer.AccountID != primary.Session.AccountID {
+		t.Fatalf("current authority could not explicitly create an access analyzer after predecessor migration: status=%d", accessAnalyzerResponse.Status)
+	}
 	createRetainedReport := func(requestID string) iamv1.AccountSecurityReport {
 		t.Helper()
 		response := performJSON(t, http.MethodPost, endpoint+"/v1/account/security-reports", primary.Credential,
@@ -831,6 +865,13 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("restart/schema replay changed completed session state")
 	}
 	assertRetainedMail()
+	accessAnalyzerResponse = performJSON(t, http.MethodGet,
+		endpoint+"/v1/account/access-analyzers/"+string(retainedAccessAnalyzer.ID), primary.Credential, nil)
+	var restartedAccessAnalyzer iamv1.AccessAnalyzer
+	if accessAnalyzerResponse.Status != http.StatusOK || json.Unmarshal(accessAnalyzerResponse.Body, &restartedAccessAnalyzer) != nil ||
+		restartedAccessAnalyzer != retainedAccessAnalyzer {
+		t.Fatal("schema replay or restart changed the explicit access analyzer")
+	}
 	var afterAttempt []byte
 	if err := admin.QueryRow(ctx, "SELECT to_jsonb(b) FROM iam.password_attempts b WHERE tenant_id=$1 AND principal_id=$2", member.AccountID, member.ID).Scan(&afterAttempt); err != nil || !bytes.Equal(attemptState, afterAttempt) {
 		t.Fatal("actual process restart/schema replay refunded guesses", err)
@@ -1473,7 +1514,7 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 				 FROM iam.accounts WHERE id=$1`, tenant).Scan(&exact); err != nil || !exact {
 				t.Fatal("restart lost or duplicated predecessor settings lineage", err)
 			}
-			t.Log("actual IAM60 complete settings intent survived IAM61 migration; another Session was rejected, the original Session applied once, and restart preserved both immutable completions")
+			t.Log("actual fixed-predecessor complete settings intent survived current migration; another Session was rejected, the original Session applied once, and restart preserved both immutable completions")
 		}
 	}
 }
@@ -7294,6 +7335,102 @@ func proveSecurityReportProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	}
 }
 
+func proveAccessAnalyzerProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint, replicaEndpoint, auditEndpoint, home, customer string, restartIAM func()) {
+	t.Helper()
+	type fixture struct {
+		owner   string
+		account iamv1.AccountID
+		result  iamv1.AccessAnalyzer
+	}
+	fixtures := []fixture{{owner: home, account: "organization-process"}, {owner: customer, account: "organization-process-customer"}}
+	request := iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "process-access-analyzer"}
+	for index := range fixtures {
+		item := &fixtures[index]
+		created := performJSON(t, http.MethodPost, endpoint+"/v1/account/access-analyzers", item.owner, request)
+		if created.Status != http.StatusCreated || created.Header.Get("Cache-Control") != "no-store" ||
+			iamv1.DecodeRequest(bytes.NewReader(created.Body), &item.result) != nil || iamv1.ValidateAccessAnalyzer(item.result) != nil ||
+			item.result.AccountID != item.account || item.result.UnusedAccessAgeDays != iamv1.DefaultUnusedAccessAgeDays {
+			t.Fatalf("create process access analyzer account=%s status=%d", item.account, created.Status)
+		}
+		var replay iamv1.AccessAnalyzer
+		repeated := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/account/access-analyzers", item.owner, request)
+		if repeated.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(repeated.Body), &replay) != nil || replay != item.result {
+			t.Fatal("replica changed the completed access analyzer creation")
+		}
+		var directory iamv1.AccessAnalyzerList
+		listed := performJSON(t, http.MethodGet, replicaEndpoint+"/v1/account/access-analyzers", item.owner, nil)
+		if listed.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(listed.Body), &directory) != nil ||
+			iamv1.ValidateAccessAnalyzerList(directory) != nil || len(directory.Items) != 1 || directory.Items[0] != item.result {
+			t.Fatal("access analyzer process directory differs from Account state")
+		}
+		var findings iamv1.AccessFindingList
+		observed := performJSON(t, http.MethodGet,
+			replicaEndpoint+"/v1/account/access-analyzers/"+string(item.result.ID)+"/findings", item.owner, nil)
+		if observed.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(observed.Body), &findings) != nil ||
+			iamv1.ValidateAccessFindingList(findings) != nil || len(findings.Items) != 0 || findings.AccountID != item.account {
+			t.Fatal("access analyzer process invented findings or lost explicit coverage")
+		}
+		for sourceIndex, coverage := range findings.Coverage {
+			if sourceIndex < 4 && (coverage.State != iamv1.AccessObservationInsufficientCoverage || coverage.Reason != iamv1.AccessObservationSourceNotReady) {
+				t.Fatal("IAM process source claimed unsupported access coverage")
+			}
+			if sourceIndex >= 4 && (coverage.State != iamv1.AccessObservationNotIncluded || coverage.Reason != iamv1.AccessObservationSourceNotImplemented) {
+				t.Fatal("external process source claimed implemented access coverage")
+			}
+		}
+	}
+	if fixtures[0].result.ID == fixtures[1].result.ID {
+		t.Fatal("independent Accounts received the same access analyzer identity")
+	}
+	for _, attack := range []struct {
+		caller, target string
+	}{{home, string(fixtures[1].result.ID)}, {customer, string(fixtures[0].result.ID)}} {
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/account/access-analyzers/"+attack.target, attack.caller, nil)
+		if response.Status != http.StatusNotFound || bytes.Contains(response.Body, []byte(attack.target)) {
+			t.Fatalf("cross-Account access analyzer attack status=%d", response.Status)
+		}
+	}
+	update := iamv1.UpdateAccessAnalyzerRequest{Status: iamv1.AccessAnalyzerDisabled, UnusedAccessAgeDays: 60,
+		ResourceVersion: fixtures[0].result.ResourceVersion, RequestID: "process-access-analyzer-disable"}
+	updated := performJSON(t, http.MethodPost,
+		replicaEndpoint+"/v1/account/access-analyzers/"+string(fixtures[0].result.ID)+":update", home, update)
+	if updated.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(updated.Body), &fixtures[0].result) != nil ||
+		fixtures[0].result.Status != iamv1.AccessAnalyzerDisabled || fixtures[0].result.ResourceVersion != 2 {
+		t.Fatal("replica did not atomically disable the access analyzer")
+	}
+	restartIAM()
+	for _, item := range fixtures {
+		var analyzer iamv1.AccessAnalyzer
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/account/access-analyzers/"+string(item.result.ID), item.owner, nil)
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &analyzer) != nil || analyzer != item.result {
+			t.Fatalf("IAM restart lost access analyzer account=%s status=%d", item.account, response.Status)
+		}
+	}
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	for index, item := range fixtures {
+		created := queryAudit(t, auditEndpoint, item.owner,
+			auditv1.QueryRecordsRequest{PageSize: 10, Action: auditv1.ActionIAMAccessAnalyzerCreated}, http.StatusOK)
+		if created.TenantID != auditv1.TenantID(item.account) || len(created.Records) != 1 ||
+			created.Records[0].Event.Target.Kind != auditv1.TargetAccessAnalyzer || created.Records[0].Event.Target.ID != string(item.result.ID) {
+			t.Fatal("access analyzer creation fact escaped its Account chain")
+		}
+		updated := queryAudit(t, auditEndpoint, item.owner,
+			auditv1.QueryRecordsRequest{PageSize: 10, Action: auditv1.ActionIAMAccessAnalyzerUpdated}, http.StatusOK)
+		wantUpdated := 0
+		if index == 0 {
+			wantUpdated = 1
+		}
+		if len(updated.Records) != wantUpdated ||
+			(index == 0 && updated.Records[0].Event.Target.ID != string(item.result.ID)) {
+			t.Fatal("access analyzer update fact escaped its Account chain")
+		}
+		chain := verifyAudit(t, auditEndpoint, item.owner)
+		if chain.TenantID != auditv1.TenantID(item.account) || chain.State != auditv1.VerificationVerified || !chain.Complete {
+			t.Fatal("access analyzer facts broke the Account Audit chain")
+		}
+	}
+}
+
 func proveTenantAccountProcesses(
 	t *testing.T,
 	ctx context.Context,
@@ -7392,6 +7529,7 @@ func proveTenantAccountProcesses(
 	sensitive = append(sensitive, proveRoleManagementProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, roleOperator.Credential, withAuditOutage, restartIAM)...)
 	sensitive = append(sensitive, proveAccessKeyProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	proveSecurityReportProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, restartIAM)
+	proveAccessAnalyzerProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, restartIAM)
 	sensitive = append(sensitive, proveOwnSessionProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	sensitive = append(sensitive, proveOtherSessionProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, primary.Credential, withAuditOutage, restartIAM)...)
 	readAccount := func(id string) iamv1.Account {

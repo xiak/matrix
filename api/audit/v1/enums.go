@@ -71,6 +71,8 @@ const (
 	ActionIAMAccessKeyDeleted                       Action = "iam.access-key.deleted"
 	ActionIAMSecurityReportCreated                  Action = "iam.security-report.created"
 	ActionIAMSecurityReportDownloadStarted          Action = "iam.security-report.download-started"
+	ActionIAMAccessAnalyzerCreated                  Action = "iam.access-analyzer.created"
+	ActionIAMAccessAnalyzerUpdated                  Action = "iam.access-analyzer.updated"
 	ActionIAMGroupCreated                           Action = "iam.group.created"
 	ActionIAMPolicyCreated                          Action = "iam.policy.created"
 	ActionIAMPolicyVersionCreated                   Action = "iam.policy-version.created"
@@ -144,6 +146,7 @@ const (
 	TargetRoleSession           TargetKind = "ROLE_SESSION"
 	TargetAccessKey             TargetKind = "ACCESS_KEY"
 	TargetSecurityReport        TargetKind = "SECURITY_REPORT"
+	TargetAccessAnalyzer        TargetKind = "ACCESS_ANALYZER"
 	TargetPolicy                TargetKind = "POLICY"
 	TargetGroupMembership       TargetKind = "GROUP_MEMBERSHIP"
 	TargetOrganization          TargetKind = "ORGANIZATION"
@@ -273,6 +276,8 @@ var allActions = []Action{
 	ActionIAMAccessKeyDeleted,
 	ActionIAMSecurityReportCreated,
 	ActionIAMSecurityReportDownloadStarted,
+	ActionIAMAccessAnalyzerCreated,
+	ActionIAMAccessAnalyzerUpdated,
 	ActionIAMPolicyCreated,
 	ActionIAMPolicyVersionCreated,
 	ActionIAMPolicyVersionDeleted,
@@ -412,6 +417,8 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMAccessKeyDeleted:                    {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMSecurityReportCreated:               {Source: SourceIAM, Target: TargetSecurityReport, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMSecurityReportDownloadStarted:       {Source: SourceIAM, Target: TargetSecurityReport, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessAnalyzerCreated:               {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessAnalyzerUpdated:               {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMPolicyCreated: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},

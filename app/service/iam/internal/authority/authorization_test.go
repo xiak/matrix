@@ -2277,6 +2277,27 @@ func TestManagedServiceUsesTheExistingClosedPaaSSystemPolicyMatrix(t *testing.T)
 	}
 }
 
+func TestAccessAnalyzerAdministrationIsAccountAdministratorOnly(t *testing.T) {
+	for _, action := range []iamv1.Action{
+		iamv1.ActionIAMAccessAnalyzerCreate,
+		iamv1.ActionIAMAccessAnalyzerList,
+		iamv1.ActionIAMAccessAnalyzerRead,
+		iamv1.ActionIAMAccessAnalyzerUpdate,
+		iamv1.ActionIAMAccessFindingList,
+	} {
+		for _, policyID := range []iamv1.PolicyID{
+			iamv1.SystemPolicyAccountAdministrator,
+			iamv1.SystemPolicyPlatformOperator,
+			iamv1.SystemPolicyPaaSDeveloper,
+			iamv1.SystemPolicyPaaSViewer,
+		} {
+			if attachedSystemPolicyAllows(t, policyID, action) != (policyID == iamv1.SystemPolicyAccountAdministrator) {
+				t.Fatalf("access analyzer action %q acquired the wrong system policy %q", action, policyID)
+			}
+		}
+	}
+}
+
 func TestServiceRoleAdministrationRequiresItsExplicitPolicyAndCallingService(t *testing.T) {
 	actions := map[iamv1.Action]iamv1.ServicePurpose{
 		iamv1.ActionIAMServiceRoleTemplateList:           iamv1.ServiceIAM,

@@ -33,6 +33,11 @@ type Workflow interface {
 	CreateAccountSecurityReport(context.Context, iamv1.Secret, iamv1.CreateAccountSecurityReportRequest) (iamv1.CreateAccountSecurityReportResponse, error)
 	AccountSecurityReport(context.Context, iamv1.Secret, iamv1.SecurityReportID, string) (iamv1.AccountSecurityReport, error)
 	DownloadAccountSecurityReport(context.Context, iamv1.Secret, iamv1.SecurityReportID, string) ([]byte, error)
+	CreateAccessAnalyzer(context.Context, iamv1.Secret, iamv1.CreateAccessAnalyzerRequest) (iamv1.AccessAnalyzer, error)
+	ListAccessAnalyzers(context.Context, iamv1.Secret, string, string) (iamv1.AccessAnalyzerList, error)
+	AccessAnalyzer(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, string) (iamv1.AccessAnalyzer, error)
+	UpdateAccessAnalyzer(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.UpdateAccessAnalyzerRequest) (iamv1.AccessAnalyzer, error)
+	ListAccessFindings(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, string, string) (iamv1.AccessFindingList, error)
 	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
 	GetUser(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserAccess, error)
 	GetUserPermissionBoundary(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserPermissionBoundary, error)
@@ -225,6 +230,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/account:alias", value.setAccountAlias)
 	routes.HandleFunc("/v1/account/security-reports", value.securityReports)
 	routes.HandleFunc("/v1/account/security-reports/", value.securityReport)
+	routes.HandleFunc("/v1/account/access-analyzers", value.accessAnalyzers)
+	routes.HandleFunc("/v1/account/access-analyzers/", value.accessAnalyzer)
 	routes.HandleFunc("/v1/account/security-settings", value.accountSecuritySettings)
 	routes.HandleFunc("/v1/account/security-settings/changes/", value.securitySettingsChange)
 	routes.HandleFunc("/v1/auth/logout", value.logout)
@@ -1405,6 +1412,120 @@ func (value *handler) securityReport(response http.ResponseWriter, request *http
 	writeJSON(response, http.StatusOK, result)
 }
 
+func (value *handler) accessAnalyzers(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodPost {
+		response.Header().Set("Allow", "GET, POST")
+		writeProblem(response, requestID(request), http.StatusMethodNotAllowed, "iam.method.invalid", "IAM method not allowed")
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	if request.Method == http.MethodPost {
+		if !rejectQuery(response, request) {
+			return
+		}
+		body, ok := decodeJSON[iamv1.CreateAccessAnalyzerRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.CreateAccessAnalyzer(request.Context(), credential, body)
+		if err == nil {
+			err = iamv1.ValidateAccessAnalyzer(result)
+		}
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusCreated, result)
+		return
+	}
+	after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.ListAccessAnalyzers(request.Context(), credential, after, requestID(request))
+	if err == nil {
+		err = iamv1.ValidateAccessAnalyzerList(result)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) accessAnalyzer(response http.ResponseWriter, request *http.Request) {
+	suffix := ""
+	switch {
+	case strings.HasSuffix(request.URL.Path, ":update"):
+		suffix = ":update"
+	case strings.HasSuffix(request.URL.Path, "/findings"):
+		suffix = "/findings"
+	}
+	id, ok := commandPathID(response, request, "/v1/account/access-analyzers/", suffix, "analyzerId")
+	if !ok {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	switch suffix {
+	case ":update":
+		if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+			return
+		}
+		body, ok := decodeJSON[iamv1.UpdateAccessAnalyzerRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.UpdateAccessAnalyzer(request.Context(), credential, iamv1.AccessAnalyzerID(id), body)
+		if err == nil {
+			err = iamv1.ValidateAccessAnalyzer(result)
+		}
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+	case "/findings":
+		if !value.requireMethod(response, request, http.MethodGet) {
+			return
+		}
+		after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.ListAccessFindings(request.Context(), credential, iamv1.AccessAnalyzerID(id), after, requestID(request))
+		if err == nil {
+			err = iamv1.ValidateAccessFindingList(result)
+		}
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		response.Header().Set("Cache-Control", "no-store")
+		writeJSON(response, http.StatusOK, result)
+	default:
+		if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+			return
+		}
+		result, err := value.workflow.AccessAnalyzer(request.Context(), credential, iamv1.AccessAnalyzerID(id), requestID(request))
+		if err == nil {
+			err = iamv1.ValidateAccessAnalyzer(result)
+		}
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		response.Header().Set("Cache-Control", "no-store")
+		writeJSON(response, http.StatusOK, result)
+	}
+}
+
 func (value *handler) accountSecuritySettings(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet && request.Method != http.MethodPut {
 		response.Header().Set("Allow", "GET, PUT")
@@ -1928,6 +2049,8 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusNotFound, "iam.security-settings-change.not-found", "Security settings change not found")
 	case errors.Is(err, identityaccess.ErrSecurityReportNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.security-report.not-found", "Security report not found")
+	case errors.Is(err, identityaccess.ErrAccessAnalyzerNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.access-analyzer.not-found", "Access analyzer not found")
 	case errors.Is(err, identityaccess.ErrUserPasswordResetCompletionNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.user-password-reset-completion.not-found", "User password reset completion not found")
 	case errors.Is(err, identityaccess.ErrVerificationRejected):

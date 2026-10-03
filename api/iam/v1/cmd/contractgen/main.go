@@ -70,6 +70,20 @@ func buildDocument() object {
 
 func buildPaths() object {
 	return object{
+		"/v1/account/access-analyzers": object{
+			"get":  readOperation("listAccessAnalyzers", "List current-account access analyzers without expanding findings", "AccessAnalyzerList", nil, accountPageParameters()),
+			"post": mutationOperation("createAccessAnalyzer", "Create the current-account unused-access analyzer and begin its real observation window", "CreateAccessAnalyzerRequest", "AccessAnalyzer", "201", nil, nil),
+		},
+		"/v1/account/access-analyzers/{analyzerId}": object{
+			"get": readOperation("getAccessAnalyzer", "Read one current-account access analyzer", "AccessAnalyzer", nil, []any{openapi31.PathIDParameter("analyzerId")}),
+		},
+		"/v1/account/access-analyzers/{analyzerId}:update": object{
+			"post": mutationOperation("updateAccessAnalyzer", "Update status or unused-access age at the expected analyzer revision", "UpdateAccessAnalyzerRequest", "AccessAnalyzer", "200", nil, []any{openapi31.PathIDParameter("analyzerId")}),
+		},
+		"/v1/account/access-analyzers/{analyzerId}/findings": object{
+			"get": readOperation("listAccessFindings", "List only evidence-backed findings; incomplete observation returns explicit coverage and no invented findings", "AccessFindingList", nil,
+				append([]any{openapi31.PathIDParameter("analyzerId")}, accountPageParameters()...)),
+		},
 		"/v1/account/security-reports": object{
 			"post": mutationOperation("createAccountSecurityReport", "Generate one immutable current-account IAM security report without cross-product inference", "CreateAccountSecurityReportRequest", "CreateAccountSecurityReportResponse", "201", nil, nil),
 		},
@@ -521,7 +535,7 @@ func scalarSchemas() object {
 	}
 	for _, name := range []string{
 		"AccountID", "PrincipalID", "GroupID", "GroupMembershipID", "RoleBindingID", "RoleID", "RoleTrustVersionID", "RoleSessionID", "SessionID", "DecisionID",
-		"PolicyID", "PolicyVersionID", "PolicyAttachmentID", "AccessKeyID", "SecurityReportID",
+		"PolicyID", "PolicyVersionID", "PolicyAttachmentID", "AccessKeyID", "SecurityReportID", "AccessAnalyzerID", "AccessFindingID",
 	} {
 		result[name] = object{"allOf": []any{openapi31.Ref("ID")}}
 	}
@@ -531,40 +545,46 @@ func scalarSchemas() object {
 
 func enumSchemas() map[string][]string {
 	return map[string][]string{
-		"PasswordExpiryMode":             {string(iamv1.PasswordExpiryChange), string(iamv1.PasswordExpiryAdminReset)},
-		"RoleStatus":                     {string(iamv1.RoleActive), string(iamv1.RoleDisabled)},
-		"AccessKeyStatus":                {string(iamv1.AccessKeyEnabled), string(iamv1.AccessKeyDisabled)},
-		"SecurityReportObservationState": {string(iamv1.SecurityReportObserved), string(iamv1.SecurityReportNotObservedInRetainedIAMState), string(iamv1.SecurityReportUnknown)},
-		"SecurityReportCoverageState":    {string(iamv1.SecurityReportCoverageComplete), string(iamv1.SecurityReportCoverageNotIncluded)},
-		"RoleManagement":                 {string(iamv1.RoleCustomerManaged), string(iamv1.RoleServiceLinked)},
-		"ServiceRoleTemplateStatus":      {string(iamv1.ServiceRoleTemplateActive), string(iamv1.ServiceRoleTemplateRetired)},
-		"WorkloadRoleBindingStatus":      {string(iamv1.WorkloadRoleBindingActive), string(iamv1.WorkloadRoleBindingRevoked)},
-		"AccountStatus":                  {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
-		"PrincipalType":                  {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
-		"SubjectType":                    {string(iamv1.SubjectUser), string(iamv1.SubjectServiceAccount), string(iamv1.SubjectRole)},
-		"UserAuthenticationMethod":       {string(iamv1.UserAuthenticationLoginSession), string(iamv1.UserAuthenticationAccessKey)},
-		"PrincipalStatus":                {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
-		"SessionStatus":                  {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
-		"RoleSessionLifecycle":           {string(iamv1.RoleSessionUnrevoked), string(iamv1.RoleSessionExpired), string(iamv1.RoleSessionRevoked)},
-		"AuthorityScope":                 {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
-		"AuthorizationResourceMode":      {string(iamv1.AuthorizationResourceInstance), string(iamv1.AuthorizationResourceCollection)},
-		"AuthorizationCollectionUsage":   {string(iamv1.AuthorizationCollectionList), string(iamv1.AuthorizationCollectionCreate)},
-		"IdentityKind":                   {string(iamv1.IdentityRoot), string(iamv1.IdentityUser)},
-		"CapabilityRestriction":          openapi31.StringValues(iamv1.AllCapabilityRestrictions()),
-		"PolicyAttachmentTargetKind":     {string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetService), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)},
-		"PolicyGrantSourceKind":          {string(iamv1.PolicyGrantDirect), string(iamv1.PolicyGrantGroup)},
-		"PolicyManagement":               {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
-		"PolicyStatus":                   {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
-		"PolicyEffect":                   {string(iamv1.PolicyAllow), string(iamv1.PolicyDeny)},
-		"ConditionKey":                   {string(iamv1.ConditionIAMCurrentTime), string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID), string(iamv1.ConditionRequestSourceIP)},
-		"PolicyConditionOperator":        {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan), string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals), string(iamv1.PolicyIPAddress), string(iamv1.PolicyNotIPAddress)},
-		"PolicyResourceMatch":            {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority), string(iamv1.PolicyResourcePrefixInAuthority)},
-		"Action":                         openapi31.StringValues(iamv1.AllActions()),
+		"PasswordExpiryMode":              {string(iamv1.PasswordExpiryChange), string(iamv1.PasswordExpiryAdminReset)},
+		"RoleStatus":                      {string(iamv1.RoleActive), string(iamv1.RoleDisabled)},
+		"AccessKeyStatus":                 {string(iamv1.AccessKeyEnabled), string(iamv1.AccessKeyDisabled)},
+		"SecurityReportObservationState":  {string(iamv1.SecurityReportObserved), string(iamv1.SecurityReportNotObservedInRetainedIAMState), string(iamv1.SecurityReportUnknown)},
+		"SecurityReportCoverageState":     {string(iamv1.SecurityReportCoverageComplete), string(iamv1.SecurityReportCoverageNotIncluded)},
+		"AccessAnalyzerType":              {string(iamv1.AccessAnalyzerUnusedAccess)},
+		"AccessAnalyzerStatus":            {string(iamv1.AccessAnalyzerActive), string(iamv1.AccessAnalyzerDisabled)},
+		"AccessFindingType":               {string(iamv1.AccessFindingUnusedPassword), string(iamv1.AccessFindingUnusedAccessKey), string(iamv1.AccessFindingUnusedRole)},
+		"AccessFindingStatus":             {string(iamv1.AccessFindingActive), string(iamv1.AccessFindingArchived), string(iamv1.AccessFindingResolved)},
+		"AccessObservationCoverageState":  {string(iamv1.AccessObservationComplete), string(iamv1.AccessObservationInsufficientCoverage), string(iamv1.AccessObservationNotIncluded)},
+		"AccessObservationCoverageReason": {string(iamv1.AccessObservationWindowIncomplete), string(iamv1.AccessObservationHistoricalUnknown), string(iamv1.AccessObservationRestoreGap), string(iamv1.AccessObservationSourceNotReady), string(iamv1.AccessObservationSourceNotImplemented)},
+		"RoleManagement":                  {string(iamv1.RoleCustomerManaged), string(iamv1.RoleServiceLinked)},
+		"ServiceRoleTemplateStatus":       {string(iamv1.ServiceRoleTemplateActive), string(iamv1.ServiceRoleTemplateRetired)},
+		"WorkloadRoleBindingStatus":       {string(iamv1.WorkloadRoleBindingActive), string(iamv1.WorkloadRoleBindingRevoked)},
+		"AccountStatus":                   {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
+		"PrincipalType":                   {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
+		"SubjectType":                     {string(iamv1.SubjectUser), string(iamv1.SubjectServiceAccount), string(iamv1.SubjectRole)},
+		"UserAuthenticationMethod":        {string(iamv1.UserAuthenticationLoginSession), string(iamv1.UserAuthenticationAccessKey)},
+		"PrincipalStatus":                 {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
+		"SessionStatus":                   {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
+		"RoleSessionLifecycle":            {string(iamv1.RoleSessionUnrevoked), string(iamv1.RoleSessionExpired), string(iamv1.RoleSessionRevoked)},
+		"AuthorityScope":                  {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
+		"AuthorizationResourceMode":       {string(iamv1.AuthorizationResourceInstance), string(iamv1.AuthorizationResourceCollection)},
+		"AuthorizationCollectionUsage":    {string(iamv1.AuthorizationCollectionList), string(iamv1.AuthorizationCollectionCreate)},
+		"IdentityKind":                    {string(iamv1.IdentityRoot), string(iamv1.IdentityUser)},
+		"CapabilityRestriction":           openapi31.StringValues(iamv1.AllCapabilityRestrictions()),
+		"PolicyAttachmentTargetKind":      {string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetService), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)},
+		"PolicyGrantSourceKind":           {string(iamv1.PolicyGrantDirect), string(iamv1.PolicyGrantGroup)},
+		"PolicyManagement":                {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
+		"PolicyStatus":                    {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
+		"PolicyEffect":                    {string(iamv1.PolicyAllow), string(iamv1.PolicyDeny)},
+		"ConditionKey":                    {string(iamv1.ConditionIAMCurrentTime), string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID), string(iamv1.ConditionRequestSourceIP)},
+		"PolicyConditionOperator":         {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan), string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals), string(iamv1.PolicyIPAddress), string(iamv1.PolicyNotIPAddress)},
+		"PolicyResourceMatch":             {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority), string(iamv1.PolicyResourcePrefixInAuthority)},
+		"Action":                          openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
 			string(iamv1.ResourceAccount), string(iamv1.ResourceUser), string(iamv1.ResourceAccessKey),
 			string(iamv1.ResourcePolicy), string(iamv1.ResourceRole), string(iamv1.ResourceRoleSession),
 			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceGroup), string(iamv1.ResourceGroupMembership), string(iamv1.ResourceRoleBinding), string(iamv1.ResourceWorkloadRoleBinding), string(iamv1.ResourcePolicyAttachment),
-			string(iamv1.ResourceSession), string(iamv1.ResourceSecurityReport), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
+			string(iamv1.ResourceSession), string(iamv1.ResourceSecurityReport), string(iamv1.ResourceAccessAnalyzer), string(iamv1.ResourceAccessFinding), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
 			string(iamv1.ResourceConfigurationRevision), string(iamv1.ResourceApplicationRevision),
 			string(iamv1.ResourceDeployment), string(iamv1.ResourceOperation),
 			string(iamv1.ResourceServiceOffering), string(iamv1.ResourceRegion),
@@ -728,6 +748,13 @@ func structContracts() map[string]reflect.Type {
 		"AccountSecurityReport":                         openapi31.StructType[iamv1.AccountSecurityReport](),
 		"CreateAccountSecurityReportRequest":            openapi31.StructType[iamv1.CreateAccountSecurityReportRequest](),
 		"CreateAccountSecurityReportResponse":           openapi31.StructType[iamv1.CreateAccountSecurityReportResponse](),
+		"AccessAnalyzer":                                openapi31.StructType[iamv1.AccessAnalyzer](),
+		"AccessObservationCoverage":                     openapi31.StructType[iamv1.AccessObservationCoverage](),
+		"AccessFinding":                                 openapi31.StructType[iamv1.AccessFinding](),
+		"AccessAnalyzerList":                            openapi31.StructType[iamv1.AccessAnalyzerList](),
+		"AccessFindingList":                             openapi31.StructType[iamv1.AccessFindingList](),
+		"CreateAccessAnalyzerRequest":                   openapi31.StructType[iamv1.CreateAccessAnalyzerRequest](),
+		"UpdateAccessAnalyzerRequest":                   openapi31.StructType[iamv1.UpdateAccessAnalyzerRequest](),
 		"RootIdentity":                                  openapi31.StructType[iamv1.RootIdentity](),
 		"Account":                                       openapi31.StructType[iamv1.Account](),
 		"User":                                          openapi31.StructType[iamv1.User](),
@@ -1196,6 +1223,18 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			base["maxItems"], base["uniqueItems"] = 3, true
 		}
 	}
+	if jsonName == "unusedAccessAgeDays" && (owner == "AccessAnalyzer" || owner == "CreateAccessAnalyzerRequest" || owner == "UpdateAccessAnalyzerRequest") {
+		base["minimum"], base["maximum"] = iamv1.MinUnusedAccessAgeDays, iamv1.MaxUnusedAccessAgeDays
+		if owner == "CreateAccessAnalyzerRequest" {
+			base["default"] = iamv1.DefaultUnusedAccessAgeDays
+		}
+	}
+	if (owner == "AccessAnalyzerList" || owner == "AccessFindingList") && jsonName == "items" {
+		base["maxItems"] = iamv1.DirectoryPageSize
+	}
+	if owner == "AccessFindingList" && jsonName == "coverage" {
+		base["minItems"], base["maxItems"] = 6, 6
+	}
 	if owner == "AuthorizationBatchRequest" && jsonName == "requests" || owner == "AuthorizationBatchDecision" && jsonName == "decisions" {
 		base["minItems"], base["maxItems"] = 1, iamv1.MaxAuthorizationBatchItems
 	}
@@ -1304,6 +1343,21 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["AccessObservationCoverage"].(object)["oneOf"] = []any{
+		object{"required": []string{"observedFrom", "observedThrough"}, "properties": object{"state": object{"const": string(iamv1.AccessObservationComplete)}, "reason": false}},
+		object{"required": []string{"observedFrom", "observedThrough", "reason"}, "properties": object{"state": object{"const": string(iamv1.AccessObservationInsufficientCoverage)}, "reason": object{"enum": []string{string(iamv1.AccessObservationWindowIncomplete), string(iamv1.AccessObservationHistoricalUnknown), string(iamv1.AccessObservationRestoreGap), string(iamv1.AccessObservationSourceNotReady)}}}},
+		object{"required": []string{"reason"}, "properties": object{"state": object{"const": string(iamv1.AccessObservationNotIncluded)}, "reason": object{"const": string(iamv1.AccessObservationSourceNotImplemented)}, "observedFrom": false, "observedThrough": false}},
+	}
+	accessCoverage := make([]any, 0, len(iamv1.AccessObservationCoverageSources()))
+	for _, source := range iamv1.AccessObservationCoverageSources() {
+		accessCoverage = append(accessCoverage, object{"properties": object{"source": object{"const": source}}})
+	}
+	schemas["AccessFindingList"].(object)["properties"].(object)["coverage"] = object{
+		"type": "array", "minItems": len(accessCoverage), "maxItems": len(accessCoverage), "prefixItems": accessCoverage, "items": false,
+	}
+	schemas["AccessAnalyzer"].(object)["description"] = "Current-account governance configuration. It is not a Policy, decision, report, finding, or write permit."
+	schemas["AccessFinding"].(object)["description"] = "Evidence-bound review state. It never authorizes mutation of its target; lifecycle commands must recheck current authority and resource state."
+	schemas["AccessFindingList"].(object)["description"] = "A bounded account/analyzer directory with explicit source coverage. Incomplete coverage produces no invented idle findings."
 	schemas["SecurityReportTimeObservation"].(object)["oneOf"] = []any{
 		object{"required": []string{"observedAt"}, "properties": object{"state": object{"const": string(iamv1.SecurityReportObserved)}}},
 		object{"properties": object{"state": object{"enum": []string{string(iamv1.SecurityReportNotObservedInRetainedIAMState), string(iamv1.SecurityReportUnknown)}}, "observedAt": false}},

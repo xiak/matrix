@@ -17362,6 +17362,257 @@ func TestIAMSecurityReportPostgres(t *testing.T) {
 	}
 }
 
+func TestIAMAccessAnalyzerPostgres(t *testing.T) {
+	dsn := os.Getenv("MATRIX_IAM_ACCESS_ANALYZER_POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set MATRIX_IAM_ACCESS_ANALYZER_POSTGRES_TEST_DSN to an own clean PostgreSQL 18 database")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_access_analyzer_") {
+		t.Fatal("access analyzer gate requires its own database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect access analyzer gate database")
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	document := iamHTTPBootstrap(t)
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, &iamTransactionFailureTrace{}, iamHTTPAccessKeyWrapping(t, document))
+	if _, err := bootstrapIAMWithTOTP(t, ctx, workflow, document); err != nil {
+		t.Fatal("bootstrap access analyzer gate", err)
+	}
+	endpoint, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		endpoint.ServeHTTP(response, request.WithContext(ctx))
+	})
+	call := func(method, path, bearer string, body any, status int, result any) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != status {
+			t.Fatalf("access analyzer %s %s status=%d want=%d body=%s", method, path, response.Code, status, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("access analyzer response is cacheable")
+		}
+		if result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body.Bytes()), result) != nil {
+			t.Fatal("decode access analyzer response")
+		}
+		return response
+	}
+
+	root := localRecoveryLogin(t, handler, "admin", adminPassword, true)
+	root = localRecoveryChangePassword(t, handler, root, adminPassword, changedAdminPassword)
+	create := iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "access-analyzer-create"}
+	var analyzer iamv1.AccessAnalyzer
+	call(http.MethodPost, "/v1/account/access-analyzers", root, create, http.StatusCreated, &analyzer)
+	if iamv1.ValidateAccessAnalyzer(analyzer) != nil || analyzer.AccountID != document.Organization.ID ||
+		analyzer.Status != iamv1.AccessAnalyzerActive || analyzer.UnusedAccessAgeDays != iamv1.DefaultUnusedAccessAgeDays || analyzer.ResourceVersion != 1 {
+		t.Fatal("access analyzer creation did not use the current Account and default threshold")
+	}
+	var replay iamv1.AccessAnalyzer
+	call(http.MethodPost, "/v1/account/access-analyzers", root, create, http.StatusCreated, &replay)
+	if replay != analyzer {
+		t.Fatal("access analyzer exact replay changed its original result")
+	}
+	age := uint16(60)
+	call(http.MethodPost, "/v1/account/access-analyzers", root,
+		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, UnusedAccessAgeDays: &age, RequestID: create.RequestID},
+		http.StatusConflict, nil)
+	call(http.MethodPost, "/v1/account/access-analyzers", root,
+		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "access-analyzer-duplicate"},
+		http.StatusConflict, nil)
+
+	var directory iamv1.AccessAnalyzerList
+	call(http.MethodGet, "/v1/account/access-analyzers", root, nil, http.StatusOK, &directory)
+	if iamv1.ValidateAccessAnalyzerList(directory) != nil || len(directory.Items) != 1 || directory.Items[0] != analyzer {
+		t.Fatal("access analyzer directory differs from Account-owned state")
+	}
+	path := "/v1/account/access-analyzers/" + string(analyzer.ID)
+	var read iamv1.AccessAnalyzer
+	call(http.MethodGet, path, root, nil, http.StatusOK, &read)
+	if read != analyzer {
+		t.Fatal("access analyzer read differs from its created state")
+	}
+	assertCoverage := func(result iamv1.AccessFindingList, active bool) []time.Time {
+		t.Helper()
+		if iamv1.ValidateAccessFindingList(result) != nil || result.AccountID != analyzer.AccountID || result.AnalyzerID != analyzer.ID || len(result.Items) != 0 {
+			t.Fatal("access finding directory invented findings or lost its Account scope")
+		}
+		through := make([]time.Time, 0, 4)
+		for index, entry := range result.Coverage {
+			if index < 4 {
+				if entry.State != iamv1.AccessObservationInsufficientCoverage || entry.Reason != iamv1.AccessObservationSourceNotReady ||
+					entry.ObservedFrom == nil || entry.ObservedThrough == nil {
+					t.Fatal("IAM access source claimed coverage without a scanner")
+				}
+				if active && entry.ObservedThrough.Before(*entry.ObservedFrom) {
+					t.Fatal("active access observation window moved backwards")
+				}
+				through = append(through, *entry.ObservedThrough)
+				continue
+			}
+			if entry.State != iamv1.AccessObservationNotIncluded || entry.Reason != iamv1.AccessObservationSourceNotImplemented ||
+				entry.ObservedFrom != nil || entry.ObservedThrough != nil {
+				t.Fatal("unimplemented access source was presented as observed")
+			}
+		}
+		return through
+	}
+	var findings iamv1.AccessFindingList
+	call(http.MethodGet, path+"/findings", root, nil, http.StatusOK, &findings)
+	assertCoverage(findings, true)
+
+	disable := iamv1.UpdateAccessAnalyzerRequest{Status: iamv1.AccessAnalyzerDisabled, UnusedAccessAgeDays: 60,
+		ResourceVersion: analyzer.ResourceVersion, RequestID: "access-analyzer-disable"}
+	var disabled iamv1.AccessAnalyzer
+	call(http.MethodPost, path+":update", root, disable, http.StatusOK, &disabled)
+	if disabled.Status != iamv1.AccessAnalyzerDisabled || disabled.UnusedAccessAgeDays != 60 || disabled.ResourceVersion != 2 || disabled.ID != analyzer.ID {
+		t.Fatal("access analyzer disable did not preserve its identity and CAS")
+	}
+	var disabledReplay iamv1.AccessAnalyzer
+	call(http.MethodPost, path+":update", root, disable, http.StatusOK, &disabledReplay)
+	if disabledReplay != disabled {
+		t.Fatal("access analyzer update exact replay changed its original result")
+	}
+	call(http.MethodPost, path+":update", root,
+		iamv1.UpdateAccessAnalyzerRequest{Status: iamv1.AccessAnalyzerDisabled, UnusedAccessAgeDays: 61,
+			ResourceVersion: analyzer.ResourceVersion, RequestID: disable.RequestID}, http.StatusConflict, nil)
+	call(http.MethodPost, path+":update", root,
+		iamv1.UpdateAccessAnalyzerRequest{Status: iamv1.AccessAnalyzerActive, UnusedAccessAgeDays: 60,
+			ResourceVersion: analyzer.ResourceVersion, RequestID: "access-analyzer-stale"}, http.StatusConflict, nil)
+	var disabledFindings, disabledFindingsAgain iamv1.AccessFindingList
+	call(http.MethodGet, path+"/findings", root, nil, http.StatusOK, &disabledFindings)
+	time.Sleep(time.Millisecond)
+	call(http.MethodGet, path+"/findings", root, nil, http.StatusOK, &disabledFindingsAgain)
+	disabledThrough := assertCoverage(disabledFindings, false)
+	disabledAgainThrough := assertCoverage(disabledFindingsAgain, false)
+	if !slices.Equal(disabledThrough, disabledAgainThrough) {
+		t.Fatal("disabled access analyzer continued advancing its observation window")
+	}
+	enable := iamv1.UpdateAccessAnalyzerRequest{Status: iamv1.AccessAnalyzerActive, UnusedAccessAgeDays: 30,
+		ResourceVersion: disabled.ResourceVersion, RequestID: "access-analyzer-enable"}
+	var enabled iamv1.AccessAnalyzer
+	call(http.MethodPost, path+":update", root, enable, http.StatusOK, &enabled)
+	if enabled.Status != iamv1.AccessAnalyzerActive || enabled.UnusedAccessAgeDays != 30 || enabled.ResourceVersion != 3 {
+		t.Fatal("access analyzer re-enable did not reset the authoritative configuration")
+	}
+	var enabledFindings iamv1.AccessFindingList
+	call(http.MethodGet, path+"/findings", root, nil, http.StatusOK, &enabledFindings)
+	assertCoverage(enabledFindings, true)
+	for index := 0; index < 4; index++ {
+		if enabledFindings.Coverage[index].ObservedFrom.Before(enabled.UpdatedAt) ||
+			enabledFindings.Coverage[index].ObservedThrough.Before(*enabledFindings.Coverage[index].ObservedFrom) {
+			t.Fatal("re-enabled access analyzer retained the disabled observation window")
+		}
+	}
+
+	var otherAccount iamv1.Account
+	call(http.MethodPost, "/v1/accounts", root, map[string]any{"id": "access-analyzer-other-account", "displayName": "Access analyzer other",
+		"rootLoginName": "access-analyzer-other-root", "rootDisplayName": "Access analyzer other root", "initialPassword": initialDeveloperPassword,
+		"requestId": "access-analyzer-other-create"}, http.StatusCreated, &otherAccount)
+	otherRoot := localRecoveryLogin(t, handler, "access-analyzer-other-root", initialDeveloperPassword, true)
+	otherRoot = localRecoveryChangePassword(t, handler, otherRoot, initialDeveloperPassword, changedDeveloperPassword)
+	var otherAnalyzer iamv1.AccessAnalyzer
+	call(http.MethodPost, "/v1/account/access-analyzers", otherRoot,
+		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "access-analyzer-other-analyzer"},
+		http.StatusCreated, &otherAnalyzer)
+	if otherAnalyzer.AccountID != otherAccount.ID || otherAnalyzer.ID == analyzer.ID {
+		t.Fatal("second Account access analyzer identity differs")
+	}
+	call(http.MethodGet, path, otherRoot, nil, http.StatusNotFound, nil)
+	call(http.MethodGet, "/v1/account/access-analyzers/"+string(otherAnalyzer.ID), root, nil, http.StatusNotFound, nil)
+	call(http.MethodGet, path+"/findings?after=forged", root, nil, http.StatusBadRequest, nil)
+	var disabledOtherAccount iamv1.Account
+	call(http.MethodPost, "/v1/accounts/"+string(otherAccount.ID)+":set-status", root,
+		iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled, ResourceVersion: otherAccount.ResourceVersion,
+			RequestID: "access-analyzer-other-disable"}, http.StatusOK, &disabledOtherAccount)
+	call(http.MethodGet, "/v1/account/access-analyzers/"+string(otherAnalyzer.ID), otherRoot, nil, http.StatusUnauthorized, nil)
+	call(http.MethodPost, "/v1/accounts/"+string(otherAccount.ID)+":set-status", root,
+		iamv1.SetAccountStatusRequest{Status: iamv1.AccountActive, ResourceVersion: disabledOtherAccount.ResourceVersion,
+			RequestID: "access-analyzer-other-enable"}, http.StatusOK, nil)
+	otherRoot = localRecoveryLogin(t, handler, "access-analyzer-other-root", changedDeveloperPassword, false)
+	call(http.MethodGet, "/v1/account/access-analyzers/"+string(otherAnalyzer.ID), otherRoot, nil, http.StatusOK, &read)
+
+	var receipts, createdFacts, updatedFacts int
+	if err := database.QueryRow(ctx, `SELECT
+	  (SELECT count(*) FROM iam.access_analyzer_receipts WHERE tenant_id=$1),
+	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-analyzer.created'),
+	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-analyzer.updated')`,
+		document.Organization.ID).Scan(&receipts, &createdFacts, &updatedFacts); err != nil {
+		t.Fatal("read access analyzer durable state", err)
+	}
+	if receipts != 3 || createdFacts != 1 || updatedFacts != 2 {
+		t.Fatalf("access analyzer replay or rejection changed durable state: receipts=%d created=%d updated=%d", receipts, createdFacts, updatedFacts)
+	}
+	restrictedConfig := config.Copy()
+	restrictedConfig.User, restrictedConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+	restricted, err := pgx.ConnectConfig(ctx, restrictedConfig)
+	if err != nil {
+		t.Fatal("connect restricted IAM access analyzer role", err)
+	}
+	defer restricted.Close(context.Background())
+	if err := restricted.QueryRow(ctx, "SELECT count(*) FROM iam.access_analyzers").Scan(&receipts); err == nil {
+		t.Fatal("restricted IAM runtime role can read access analyzer storage directly")
+	}
+	tx, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err == nil {
+		_, err = tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", document.Organization.ID)
+	}
+	var crossRows int
+	if err == nil {
+		err = tx.QueryRow(ctx, "SELECT count(*) FROM iam.access_analyzers WHERE analyzer_id=$1", otherAnalyzer.ID).Scan(&crossRows)
+	}
+	_ = tx.Rollback(context.Background())
+	if err != nil || crossRows != 0 {
+		t.Fatal("access analyzer RLS exposed another Account", err)
+	}
+	assertReceiptMutationRejected := func(statement string, arguments ...any) {
+		t.Helper()
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(context.Background())
+		if _, err = tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err == nil {
+			_, err = tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", document.Organization.ID)
+		}
+		if err == nil {
+			_, err = tx.Exec(ctx, statement, arguments...)
+		}
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "42501" {
+			t.Fatal("access analyzer receipt mutation was not rejected", err)
+		}
+	}
+	assertReceiptMutationRejected("UPDATE iam.access_analyzer_receipts SET completed_at=completed_at+interval '1 second' WHERE tenant_id=$1", document.Organization.ID)
+	assertReceiptMutationRejected("DELETE FROM iam.access_analyzer_receipts WHERE tenant_id=$1", document.Organization.ID)
+	assertReceiptMutationRejected("TRUNCATE iam.access_analyzer_receipts")
+
+	applyIAMSchema(t, ctx, database)
+	var afterReplay iamv1.AccessAnalyzer
+	call(http.MethodGet, path, root, nil, http.StatusOK, &afterReplay)
+	if afterReplay != enabled {
+		t.Fatal("equivalent schema replay changed the access analyzer")
+	}
+}
+
 // These growing matrices have their own clean fixtures and the same two-minute
 // bound as the existing management session flow. They must not consume the
 // unrelated attachment matrix or account HTTP gate's remaining deadline.

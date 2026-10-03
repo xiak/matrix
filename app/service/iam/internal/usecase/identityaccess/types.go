@@ -130,6 +130,11 @@ type Transaction interface {
 	CreateSecurityReport(context.Context, SecurityReportCreation) (iamv1.CreateAccountSecurityReportResponse, error)
 	ReadSecurityReport(context.Context, AccountRead, iamv1.SecurityReportID) (iamv1.AccountSecurityReport, error)
 	DownloadSecurityReport(context.Context, SecurityReportDownload) (SecurityReportDownloadResult, error)
+	CreateAccessAnalyzer(context.Context, AccessAnalyzerCreation) (iamv1.AccessAnalyzer, error)
+	ListAccessAnalyzers(context.Context, AccountRead) (iamv1.AccessAnalyzerList, error)
+	ReadAccessAnalyzer(context.Context, AccessAnalyzerRead) (iamv1.AccessAnalyzer, error)
+	UpdateAccessAnalyzer(context.Context, AccessAnalyzerMutation) (iamv1.AccessAnalyzer, error)
+	ListAccessFindings(context.Context, AccessFindingRead) (iamv1.AccessFindingList, error)
 	LockAccountSecuritySettings(context.Context, iamv1.Session) error
 	UpdateAccountSecuritySettings(context.Context, SecuritySettingsMutation) (iamv1.UpdateAccountSecuritySettingsResponse, error)
 	ReadSecuritySettingsChange(context.Context, AccountRead, string) (iamv1.AccountSecuritySettingsChange, error)
@@ -239,6 +244,38 @@ type SecurityReportDownload struct {
 type SecurityReportDownloadResult struct {
 	Metadata iamv1.AccountSecurityReportMetadata
 	CSV      []byte
+}
+
+type AccessAnalyzerCreation struct {
+	AccountRead
+	Session       iamv1.Session
+	RequestID     string
+	RequestDigest string
+	Analyzer      iamv1.AccessAnalyzer
+	AuditEvent    auditv1.Event
+}
+
+type AccessAnalyzerRead struct {
+	AccountRead
+	AnalyzerID iamv1.AccessAnalyzerID
+}
+
+type AccessAnalyzerMutation struct {
+	AccessAnalyzerRead
+	Session       iamv1.Session
+	RequestID     string
+	RequestDigest string
+	Request       iamv1.UpdateAccessAnalyzerRequest
+	AuditEvent    auditv1.Event
+}
+
+type AccessFindingRead struct {
+	AccountRead
+	AnalyzerID iamv1.AccessAnalyzerID
+}
+
+func (value AccessFindingRead) AccessAnalyzerRead() AccessAnalyzerRead {
+	return AccessAnalyzerRead{AccountRead: value.AccountRead, AnalyzerID: value.AnalyzerID}
 }
 
 // Private, nonsecret custody evidence; never a caller-selected installation.

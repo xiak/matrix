@@ -1713,6 +1713,81 @@ func TestAccountSecurityReportUsesCurrentAuthorityAndImmutableSnapshot(t *testin
 	}
 }
 
+func TestAccessAnalyzerUsesCurrentAuthorityAndNeverInventsFindings(t *testing.T) {
+	tx := newCoreTransaction()
+	sequence := 0
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{CursorKey: bytes.Repeat([]byte{0x5c}, 32), NewID: func(prefix string) (string, error) {
+		sequence++
+		return fmt.Sprintf("%s-%d", prefix, sequence), nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "analyzer-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: bootstrap.Administrator.Password,
+		NewPassword: coreSecret(t, "Analyzer-Changed-Password-79!"), RequestID: "analyzer-password"}); err != nil {
+		t.Fatal(err)
+	}
+	request := iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "analyzer-create"}
+	created, err := service.CreateAccessAnalyzer(t.Context(), login.Credential, request)
+	if err != nil || created.UnusedAccessAgeDays != iamv1.DefaultUnusedAccessAgeDays || created.ResourceVersion != 1 || len(tx.accessAnalyzerCreations) != 1 {
+		t.Fatal("create access analyzer", created, err)
+	}
+	creation := tx.accessAnalyzerCreations[0]
+	if creation.Session.ID == "" || creation.AccountID != bootstrap.Organization.ID ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, creation.AuditEvent) != nil ||
+		creation.AuditEvent.Action != auditv1.ActionIAMAccessAnalyzerCreated || creation.AuditEvent.Target.Kind != auditv1.TargetAccessAnalyzer ||
+		creation.AuditEvent.Target.ID != string(created.ID) || creation.AuditEvent.IAMDecisionID == "" {
+		t.Fatal("access analyzer creation lost its session, decision or audit fact")
+	}
+	replayed, err := service.CreateAccessAnalyzer(t.Context(), login.Credential, request)
+	if err != nil || replayed != created || len(tx.accessAnalyzerCreations) != 1 {
+		t.Fatal("access analyzer exact replay changed the result", replayed, err)
+	}
+	listed, err := service.ListAccessAnalyzers(t.Context(), login.Credential, "", "analyzer-list")
+	if err != nil || len(listed.Items) != 1 || listed.Items[0] != created {
+		t.Fatal("list access analyzers", listed, err)
+	}
+	read, err := service.AccessAnalyzer(t.Context(), login.Credential, created.ID, "analyzer-read")
+	if err != nil || read != created {
+		t.Fatal("read access analyzer", read, err)
+	}
+	updated, err := service.UpdateAccessAnalyzer(t.Context(), login.Credential, created.ID, iamv1.UpdateAccessAnalyzerRequest{
+		Status: iamv1.AccessAnalyzerDisabled, UnusedAccessAgeDays: 60, ResourceVersion: created.ResourceVersion, RequestID: "analyzer-update"})
+	if err != nil || updated.Status != iamv1.AccessAnalyzerDisabled || updated.UnusedAccessAgeDays != 60 || updated.ResourceVersion != 2 || len(tx.accessAnalyzerMutations) != 1 {
+		t.Fatal("update access analyzer", updated, err)
+	}
+	mutation := tx.accessAnalyzerMutations[0]
+	if auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil ||
+		mutation.AuditEvent.Action != auditv1.ActionIAMAccessAnalyzerUpdated || mutation.AuditEvent.Target.ID != string(created.ID) {
+		t.Fatal("access analyzer update lost its precise audit fact")
+	}
+	findings, err := service.ListAccessFindings(t.Context(), login.Credential, created.ID, "", "finding-list")
+	if err != nil || len(findings.Items) != 0 || len(findings.Coverage) != 6 {
+		t.Fatal("list access findings", findings, err)
+	}
+	for index, coverage := range findings.Coverage {
+		if index < 4 {
+			if coverage.State != iamv1.AccessObservationInsufficientCoverage || coverage.Reason != iamv1.AccessObservationSourceNotReady ||
+				coverage.ObservedFrom == nil || coverage.ObservedThrough == nil {
+				t.Fatal("IAM source falsely claimed completed analysis", coverage)
+			}
+		} else if coverage.State != iamv1.AccessObservationNotIncluded || coverage.Reason != iamv1.AccessObservationSourceNotImplemented {
+			t.Fatal("unimplemented product source was not explicit", coverage)
+		}
+	}
+	if _, err := service.AccessAnalyzer(t.Context(), coreServiceCredential(t, bootstrap, iamv1.ServicePaaS), created.ID, "analyzer-service"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("service credential reached USER access analyzer", err)
+	}
+}
+
 func TestAccountSecuritySettingsCannotBypassCurrentSessionAndExplicitAuthority(t *testing.T) {
 	tx := newCoreTransaction()
 	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
@@ -3357,8 +3432,15 @@ type coreTransaction struct {
 		Digest   string
 		Metadata iamv1.AccountSecurityReportMetadata
 	}
-	securityReportCreations          []SecurityReportCreation
-	securityReportDownloads          []SecurityReportDownload
+	securityReportCreations []SecurityReportCreation
+	securityReportDownloads []SecurityReportDownload
+	accessAnalyzers         map[iamv1.AccessAnalyzerID]iamv1.AccessAnalyzer
+	accessAnalyzerRequests  map[string]struct {
+		Digest   string
+		Analyzer iamv1.AccessAnalyzer
+	}
+	accessAnalyzerCreations          []AccessAnalyzerCreation
+	accessAnalyzerMutations          []AccessAnalyzerMutation
 	attachmentSession                iamv1.SessionID
 	revocationSession                iamv1.SessionID
 	sessionRevocation                *SessionRevocationMutation
@@ -3707,6 +3789,96 @@ func (transaction *coreTransaction) DownloadSecurityReport(_ context.Context, mu
 	return SecurityReportDownloadResult{Metadata: report.Metadata, CSV: append([]byte(nil), transaction.securityReportCSVs[mutation.ReportID]...)}, nil
 }
 
+func (transaction *coreTransaction) CreateAccessAnalyzer(_ context.Context, mutation AccessAnalyzerCreation) (iamv1.AccessAnalyzer, error) {
+	key := "create:" + mutation.RequestID
+	if previous, found := transaction.accessAnalyzerRequests[key]; found {
+		if previous.Digest != mutation.RequestDigest {
+			return iamv1.AccessAnalyzer{}, ErrConflict
+		}
+		return previous.Analyzer, nil
+	}
+	for _, analyzer := range transaction.accessAnalyzers {
+		if analyzer.AccountID == mutation.AccountID && analyzer.Type == mutation.Analyzer.Type {
+			return iamv1.AccessAnalyzer{}, ErrConflict
+		}
+	}
+	transaction.accessAnalyzerCreations = append(transaction.accessAnalyzerCreations, mutation)
+	transaction.accessAnalyzers[mutation.Analyzer.ID] = mutation.Analyzer
+	transaction.accessAnalyzerRequests[key] = struct {
+		Digest   string
+		Analyzer iamv1.AccessAnalyzer
+	}{mutation.RequestDigest, mutation.Analyzer}
+	return mutation.Analyzer, nil
+}
+
+func (transaction *coreTransaction) ListAccessAnalyzers(_ context.Context, read AccountRead) (iamv1.AccessAnalyzerList, error) {
+	result := iamv1.AccessAnalyzerList{APIVersion: iamv1.APIVersion, Kind: "AccessAnalyzerList", AccountID: read.AccountID, Items: []iamv1.AccessAnalyzer{}}
+	for _, analyzer := range transaction.accessAnalyzers {
+		if analyzer.AccountID == read.AccountID && string(analyzer.ID) > read.After {
+			result.Items = append(result.Items, analyzer)
+		}
+	}
+	slices.SortFunc(result.Items, func(left, right iamv1.AccessAnalyzer) int { return strings.Compare(string(left.ID), string(right.ID)) })
+	return result, nil
+}
+
+func (transaction *coreTransaction) ReadAccessAnalyzer(_ context.Context, read AccessAnalyzerRead) (iamv1.AccessAnalyzer, error) {
+	analyzer, found := transaction.accessAnalyzers[read.AnalyzerID]
+	if !found || analyzer.AccountID != read.AccountID {
+		return iamv1.AccessAnalyzer{}, ErrAccessAnalyzerNotFound
+	}
+	return analyzer, nil
+}
+
+func (transaction *coreTransaction) UpdateAccessAnalyzer(_ context.Context, mutation AccessAnalyzerMutation) (iamv1.AccessAnalyzer, error) {
+	key := "update:" + mutation.RequestID
+	if previous, found := transaction.accessAnalyzerRequests[key]; found {
+		if previous.Digest != mutation.RequestDigest {
+			return iamv1.AccessAnalyzer{}, ErrConflict
+		}
+		return previous.Analyzer, nil
+	}
+	analyzer, err := transaction.ReadAccessAnalyzer(context.Background(), mutation.AccessAnalyzerRead)
+	if err != nil {
+		return iamv1.AccessAnalyzer{}, err
+	}
+	if analyzer.ResourceVersion != mutation.Request.ResourceVersion {
+		return iamv1.AccessAnalyzer{}, ErrConflict
+	}
+	analyzer.Status = mutation.Request.Status
+	analyzer.UnusedAccessAgeDays = mutation.Request.UnusedAccessAgeDays
+	analyzer.ResourceVersion++
+	analyzer.UpdatedAt = transaction.now
+	transaction.accessAnalyzerMutations = append(transaction.accessAnalyzerMutations, mutation)
+	transaction.accessAnalyzers[analyzer.ID] = analyzer
+	transaction.accessAnalyzerRequests[key] = struct {
+		Digest   string
+		Analyzer iamv1.AccessAnalyzer
+	}{mutation.RequestDigest, analyzer}
+	return analyzer, nil
+}
+
+func (transaction *coreTransaction) ListAccessFindings(_ context.Context, read AccessFindingRead) (iamv1.AccessFindingList, error) {
+	analyzer, err := transaction.ReadAccessAnalyzer(context.Background(), read.AccessAnalyzerRead())
+	if err != nil {
+		return iamv1.AccessFindingList{}, err
+	}
+	from, through := analyzer.CreatedAt, transaction.now
+	coverage := make([]iamv1.AccessObservationCoverage, 0, 6)
+	for index, source := range iamv1.AccessObservationCoverageSources() {
+		entry := iamv1.AccessObservationCoverage{Source: source}
+		if index < 4 {
+			entry.State, entry.Reason = iamv1.AccessObservationInsufficientCoverage, iamv1.AccessObservationSourceNotReady
+			entry.ObservedFrom, entry.ObservedThrough = &from, &through
+		} else {
+			entry.State, entry.Reason = iamv1.AccessObservationNotIncluded, iamv1.AccessObservationSourceNotImplemented
+		}
+		coverage = append(coverage, entry)
+	}
+	return iamv1.AccessFindingList{APIVersion: iamv1.APIVersion, Kind: "AccessFindingList", AccountID: read.AccountID,
+		AnalyzerID: analyzer.ID, ObservedAt: transaction.now, Coverage: coverage, Items: []iamv1.AccessFinding{}}, nil
+}
+
 func (tx *coreTransaction) CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error) {
 	return tx.loginChallenge, nil
 }
@@ -3964,6 +4136,11 @@ func newCoreTransaction() *coreTransaction {
 		attachments:        make(map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment),
 		securityReports:    make(map[iamv1.SecurityReportID]iamv1.AccountSecurityReport),
 		securityReportCSVs: make(map[iamv1.SecurityReportID][]byte),
+		accessAnalyzers:    make(map[iamv1.AccessAnalyzerID]iamv1.AccessAnalyzer),
+		accessAnalyzerRequests: make(map[string]struct {
+			Digest   string
+			Analyzer iamv1.AccessAnalyzer
+		}),
 		securityReportRequests: make(map[string]struct {
 			Digest   string
 			Metadata iamv1.AccountSecurityReportMetadata
