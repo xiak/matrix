@@ -2385,14 +2385,18 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("heading", { name: "诊断解释" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "生成 MOCK 诊断" }));
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "诊断解释" }));
-    expect(screen.getByText("ALLOWED · 样例")).toBeTruthy();
+    expect(screen.getByText("ALLOWED · MOCK")).toBeTruthy();
     expect(screen.getByText(/不是授权凭证/)).toBeTruthy();
+    expect(screen.getByText("mock-diagnosis:path")).toBeTruthy();
+    expect(screen.getByText("mock-current-access:path")).toBeTruthy();
+    expect(screen.getByText("ALLOWED 结果不携带拒绝原因。")).toBeTruthy();
     const layers = screen.getByRole("region", { name: "限制层" });
-    expect(within(layers).getByText("身份授权策略")).toBeTruthy();
-    expect(within(layers).getByText("权限边界")).toBeTruthy();
-    expect(within(layers).getByText("SessionPolicy")).toBeTruthy();
-    expect(within(layers).getByText("NOT_EVALUATED")).toBeTruthy();
-    expect(screen.getByRole("table", { name: "合成策略证据" })).toBeTruthy();
+    expect(within(layers).getByText("USER_BOUNDARY")).toBeTruthy();
+    expect(within(layers).getByText("NOT_APPLICABLE")).toBeTruthy();
+    const boundary = screen.getByRole("region", { name: "不在授权诊断范围" });
+    expect(within(boundary).getAllByText("NOT_EVALUATED")).toHaveLength(2);
+    expect(screen.getByRole("table", { name: "匹配授权来源" })).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "合成策略证据" })).toBeNull();
     expect(await extension.read("preview")).toEqual(before);
     expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
@@ -2400,14 +2404,19 @@ describe("CAM-style access workspace", () => {
   it("replaces a stale diagnosis when the synthetic scenario changes and explains deny sources", async () => {
     const { user } = await open("access-diagnosis", { users: reviewUsers });
     await user.click(screen.getByRole("button", { name: "生成 MOCK 诊断" }));
-    expect(screen.getByText("ALLOWED · 样例")).toBeTruthy();
+    expect(screen.getByText("ALLOWED · MOCK")).toBeTruthy();
     await select(user, "合成场景", "显式拒绝样例");
     expect(screen.queryByRole("heading", { name: "诊断解释" })).toBeNull();
     expect(screen.getByText("合成资源 fixture")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "生成 MOCK 诊断" }));
-    expect(screen.getByText("DENIED · 显式拒绝样例")).toBeTruthy();
-    expect(screen.getByText("存在匹配的显式拒绝声明")).toBeTruthy();
-    expect(within(screen.getByRole("table", { name: "合成策略证据" })).getAllByText("MATCHED").length).toBeGreaterThan(0);
+    expect(screen.getByText("DENIED · MOCK")).toBeTruthy();
+    expect(screen.getByText("EXPLICIT_DENY")).toBeTruthy();
+    expect(screen.getByText(/至少一个已匹配来源或上限层包含显式 Deny/)).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "匹配授权来源" })).getAllByText("DENY").length).toBeGreaterThan(0);
+    await select(user, "合成场景", "权限边界限制样例");
+    await user.click(screen.getByRole("button", { name: "生成 MOCK 诊断" }));
+    expect(screen.getByText("USER_PERMISSION_BOUNDARY")).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "限制层" })).getByText("BLOCKED")).toBeTruthy();
   });
   it("does not expose the local diagnosis evaluator to a live account before the contract is connected", async () => {
     const { repository } = await open("access-diagnosis", { live: true });
