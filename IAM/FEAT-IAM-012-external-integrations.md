@@ -1,6 +1,6 @@
 # FEAT-IAM-012：外部身份、通知与组织治理
 
-- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。installation已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像；首条联系人验证、SMTP/Maildir实收、MFA安全通知和同profile生命周期累计进入`64/34/3+r11`签名组合，并由`ed2835db`完整独立CI确认。该首地址/渠道切片已验收；已有地址替换及真实UI未完成，其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
+- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。installation已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像；首条联系人验证、SMTP/Maildir实收、MFA安全通知和同profile生命周期累计进入`64/34/3+r11`签名组合，并由`ed2835db`完整独立CI确认。该首地址/渠道切片已验收；S1c已有地址替换的独立命令、目的限定StepUp、原子切换和双向告警设计已冻结，生产实现及真实UI未完成。其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
 - Owner：IAM负责S1的地址验证、目的限定通知意图/投递和重试；installation负责受保护SMTP及必要私有材料配置，UX/UI负责本人交互。其他外部来源与计费保持各自业务边界。
 - S1a不等于完整S1或其他外部能力已实现；缺少前置时不提供假入口或伪成功。
 
@@ -90,6 +90,40 @@ SMTP目标、发件地址与认证材料只来自受保护部署配置的后续�
 本分支HTTP由`api/iam/v1`原生成owner统一实现，固定交接后才供UI接线：`GET /v1/auth/notification-contact`、`POST /v1/auth/notification-contact/verifications`、`GET /v1/auth/notification-contact/verifications/{id}`、`POST /v1/auth/notification-contact/verifications/{id}:confirm`。不接受accountId/userId/SMTP服务器/发件人/任意模板selector。普通Session分支与后继ENROLLMENT分支严格互斥；首片只开放前者，不能预先接受一个尚无真实状态机的challenge凭据。读取原完成仍须证明本人，不是全局command查询。所有秘密请求走原严格解码、专用编码与`no-store`，不会放入URL或浏览器持久化。
 
 后继已有地址替换必须证明当前密码及已绑定因子对应的目标限定STEP_UP；变更要求按操作前有效规则判断。旧地址在新地址实际确认前继续接收安全告警，新地址不能消除已创建的原地址通知。确认替换后旧/新地址各有封闭通知，原通知目的/收件修订保持。强制ENROLLMENT只允许已经证明NEVER_BOUND/合法REMOVED的首次地址子步骤，不允许丢失因子或旧备份借此换走既有地址。相关新模板/事实须与这条实际变更一起加入，不能用七种现有模板冒充地址替换；本设计不授权管理员代换、在线MFA恢复或邮件登录。
+
+### S1c：已验证地址替换详细设计
+
+本切片替换安全通知目的地址，不创建第二种联系人、邮箱登录身份或管理员代办路径。它沿用唯一`NotificationContact`当前投影、原验证意图、共享预算和通知worker；API不得把“当前无联系人”的首地址登记与“已有可信联系人”的替换自动分支，也不得让客户端通过省略字段选择较弱认证。首地址继续使用既有密码重认证入口，替换使用下述独立命令。
+
+#### API与目的限定证明
+
+`StepUpOperation`新增`NOTIFICATION_CONTACT_REPLACE`，并绑定唯一`NotificationContactReplacementIntent{expectedResourceVersion,email}`。该意图必须出现在StepUp请求、持久元数据及读取结果中，其他StepUp操作必须拒绝它；邮箱、版本或操作变化都属于另一意图。`expectedFactorRevision`继续绑定操作前真实TOTP修订。证明只能由当前非强制`PASSWORD_TOTP`登录Session启动并以当前密码及未消费TOTP完成，StepUp ID或已证明状态本身不是bearer。
+
+替换入口固定为`POST /v1/auth/notification-contact/replacements`，请求仅含`stepUpId/expectedResourceVersion/email/requestId`；Account、USER、Session、当前地址及SMTP配置全部从当前权威推导。它在同一事务锁内重新认证原Session，核对当前联系人版本、因子修订及StepUp的完整替换意图，然后一次消费该证明并建立用途为`REPLACEMENT`的验证意图。当前联系人不在此事务改变。相同命令等值重放只返回原验证；同一StepUp、requestId或版本绑定不同邮箱必须冲突，不能签发第二个验证码。
+
+替换确认继续使用原验证资源的`GET /v1/auth/notification-contact/verifications/{verificationId}`和`POST .../{verificationId}:confirm`，但验证投影显式返回`purpose=FIRST_ADDRESS|REPLACEMENT`及`expectedResourceVersion`；客户端不得根据联系人当前存在与否猜测用途。确认只接受原LOGIN_SESSION、验证码和新请求ID，不再次接受邮箱、StepUp或版本selector。查询只观察原命令及其非秘密完成，不更新期限、预算、当前地址或证明资格。
+
+#### 锁、事务与状态变化
+
+建立替换意图按现有稳定锁序锁定Account、USER、Session、TOTP因子、StepUp、当前联系人及该USER验证槽；确认按同一主体顺序锁定验证槽和当前联系人，再锁定原通知意图所需行。不得先锁联系人后升级到主体锁，也不得用事务外预查决定是否需要MFA。建立后的验证意图封存Account/USER、发起Session、credential generation、factor revision、当前contact revision、候选邮箱、绝对期限和原StepUp消费；任一权威事实变化都使确认失败关闭且不返还预算。
+
+确认成功在一个IAM事务内完成且只能完成一次：消费验证码；把唯一当前联系人从版本`N`推进到`N+1`并切换为候选邮箱；记录单一`iam.notification-contact.replaced`成功事实；为原地址和新地址分别保存`CONTACT_REPLACED_OLD`、`CONTACT_REPLACED_NEW`封闭安全通知；完成原验证命令。Audit事实和普通响应不含两个邮箱、验证码或StepUp秘密。任一联系人写入、事实或通知意图失败必须使全部效果回滚；SMTP仍在提交后异步执行，临时投递失败不能回滚已经确认的替换。
+
+当前联系人表继续只表示当前投影，但不能再用`resource_version=1`或拒绝一切UPDATE冒充不可变历史。生产角色仍无表DML；唯一替换函数通过受保护触发器验证准确的已消费验证、旧/新修订及同一事实，再执行受限UPDATE。原验证、通知收件人与修订、Audit事实及完成记录保留历史。不能物理改写旧通知收件人，也不能按新的当前地址重算或重新路由已经提交的通知。
+
+#### 并发、恢复与失败语义
+
+一个USER仍至多一个有效联系人验证意图；新替换意图可原子终止旧的未完成替换，但不返还发送/猜码预算，也不改变当前联系人。并发两个替换确认、替换与首地址确认、替换与另一安全事件、改密、退出、因子替换/移除、USER或Account停用时，至多一个状态变化成功；失败分支不得部分更新联系人、事实、通知或证明。候选邮箱与当前邮箱相同也不是成功重放，必须在建立意图前拒绝，避免用验证流程制造虚假变更事实。
+
+确认前所有新安全事件继续绑定旧地址及其修订；确认事务之后的新事件绑定新地址及`N+1`修订。已经提交给旧地址的通知继续按原收件人投递。替换成功的两条告警各自固定收件人，不因后续再次替换而改写。旧地址收到的是“地址已被替换”，新地址收到的是“已成为安全通知地址”；两者均无登录、恢复或撤销链接。
+
+受支持备份恢复不得让备份中PENDING替换继续确认，也不得让旧的StepUp重新消费；恢复门禁沿009现有恢复隔离终止这些临时资格。已完成替换恢复到更早数据库快照时，不能只靠当前数据库声明旧地址重新可信；须由安装恢复的可信安全状态水位决定关闭认证或重新建立联系状态。本片不声称抵抗本地root把数据库、密钥和所有封存状态一起回滚。
+
+#### 版本与验收范围
+
+这是未发布产品的下一前向schema，不维护所有开发快照。生产实现只保留空白安装和准确上一固定`64/34/3+r11`组合到新组合的保留数据门禁；更老开发schema通过已验证固定前驱先归并，不为每个历史数字保留运行兼容层。若新增IAM函数/约束和Audit动作，分别推进实际IAM/Audit schema及完整`contractRevision`，不能只改HTTP版本或继续声称`r11`。安装profile、签名A/B和真实UI由其原owner在固定实现后消费，不能继承本设计文字的验收状态。
+
+最低门禁必须覆盖：首地址与替换接口互不降级；密码/TOTP/StepUp/Session/credential/factor/contact任一错配；同验证码及双替换并发；回包丢失后原命令查询；旧/新地址真实SMTP实收；替换前后安全事件收件修订；已提交旧通知重试不改收件人；改密、退出、因子替换/移除、USER/Account停用交错；错误版本、跨Account/USER、RoleSession、AccessKey和ServiceIdentity拒绝；事实、联系人、双通知任一失败全回滚；重启、上一固定schema保留数据、备份恢复隔离、受限数据库角色、readiness及签名同profile生命周期。纯mock、只测邮件模板或只见任务入队都不能验收S1c。
 
 009的S2c基础契约为首次ENROLLMENT增加两个独立严格请求：`StartChallengeNotificationContactVerificationRequest`只含email/requestId/challengeCredential，`ConfirmChallengeNotificationContactVerificationRequest`只含code/requestId/challengeCredential。它们不是原Session请求的可选旁路；普通请求继续拒绝challengeCredential，新请求拒绝password/credential/Session及身份、配置、通道selector。首期仅允许锁内证明NEVER_BOUND且原强制改密已完成的当前ENROLLMENT挑战；RECOVERY或未知历史不能取得这个能力。验证意图/共享预算/真实投递仍归本节，不新增联系人模型或通用邮件入口。该片只冻结数据/编码，未注册对应HTTP或数据库入口；既有运行时仍只支持完整LOGIN_SESSION本人验证。
 
