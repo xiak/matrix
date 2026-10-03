@@ -368,6 +368,10 @@ BEGIN
         ('iam.security-report.download-started', 'IAM', 'SECURITY_REPORT', 'SUCCEEDED', true, true, false),
         ('iam.access-analyzer.created', 'IAM', 'ACCESS_ANALYZER', 'SUCCEEDED', true, true, false),
         ('iam.access-analyzer.updated', 'IAM', 'ACCESS_ANALYZER', 'SUCCEEDED', true, true, false),
+        ('iam.access-finding.detected', 'IAM', 'ACCESS_FINDING', 'SUCCEEDED', false, false, false),
+        ('iam.access-finding.resolved', 'IAM', 'ACCESS_FINDING', 'SUCCEEDED', false, false, false),
+        ('iam.access-finding.archived', 'IAM', 'ACCESS_FINDING', 'SUCCEEDED', true, true, false),
+        ('iam.access-finding.unarchived', 'IAM', 'ACCESS_FINDING', 'SUCCEEDED', true, true, false),
         ('iam.group-membership.created', 'IAM', 'GROUP_MEMBERSHIP', 'SUCCEEDED', true, true, false),
         ('iam.group-membership.removed', 'IAM', 'GROUP_MEMBERSHIP', 'SUCCEEDED', true, true, false),
         ('iam.user.status-set', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
@@ -531,6 +535,9 @@ BEGIN
             OR submitted_event#>>'{actor,roleSession,sessionId}' IS DISTINCT FROM submitted_event#>>'{target,id}'))
        OR (action_name='iam.service-role-session.issued'
             AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SERVICE_ACCOUNT')
+       OR (action_name IN ('iam.access-finding.detected','iam.access-finding.resolved') AND (
+            submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
+            OR submitted_event#>>'{actor,id}' IS DISTINCT FROM 'iam.access-analyzer'))
        OR (action_name IN ('iam.user.password-reset-required','iam.session.others-revoked','iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound','iam.authenticator.replaced','iam.authenticator.removed',
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated') AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
@@ -543,6 +550,7 @@ BEGIN
             'iam.service-linked-role.created','iam.workload-role-binding.created','iam.workload-role-binding.revoked',
             'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.network-restrictions-updated','iam.access-key.deleted',
             'iam.security-report.created','iam.security-report.download-started','iam.access-analyzer.created','iam.access-analyzer.updated',
+            'iam.access-finding.archived','iam.access-finding.unarchived',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.user.password-reset','iam.user.password-changed','iam.user.password-reset-required',
             'iam.policy-attachment.created','iam.policy-attachment.revoked')
@@ -621,7 +629,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        32::bigint,
+        33::bigint,
         transaction_timestamp()
 $function$;
 
@@ -930,6 +938,7 @@ BEGIN
             'iam.service-linked-role.created','iam.workload-role-binding.created','iam.workload-role-binding.revoked',
             'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.network-restrictions-updated','iam.access-key.deleted',
             'iam.security-report.created','iam.security-report.download-started','iam.access-analyzer.created','iam.access-analyzer.updated',
+            'iam.access-finding.detected','iam.access-finding.resolved','iam.access-finding.archived','iam.access-finding.unarchived',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',

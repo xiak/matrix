@@ -472,6 +472,11 @@ func assertAuditContractCatalog(
 				invalid = append(invalid, candidate)
 			}
 		}
+		if contract.SystemActorID != "" {
+			candidate := event
+			candidate.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "another-system-actor"}
+			invalid = append(invalid, candidate)
+		}
 		if action == auditv1.ActionIAMUserPasswordResetRequired || action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
 			candidate := event
 			candidate.Target.ID = "another-users-principal"
@@ -2406,12 +2411,13 @@ func authorityAuditEvent(
 	if contract.OperationRequired {
 		event.OperationID = auditv1.OperationID("operation-" + eventID)
 	}
+	if contract.SystemActorID != "" {
+		event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: contract.SystemActorID}
+	}
 	if contract.PlatformOnly {
 		event.TenantID, event.InstallationID = "", string(tenantID)
 		if contract.SystemActorID == "" {
 			event.Actor.Type = auditv1.ActorUser
-		} else {
-			event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: contract.SystemActorID}
 		}
 		if contract.TargetMatchesInstallation {
 			event.Target.ID = event.InstallationID
