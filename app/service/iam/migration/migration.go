@@ -80,6 +80,30 @@ func VerifyInstalledWithAuthenticationRecovery(
 		authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN))
 }
 
+// ApplyWithAccessAnalysis provisions the scanner's purpose-only login in
+// addition to the existing API, outbox, recovery, custody and notification
+// identities. The scanner never receives any of those roles.
+func ApplyWithAccessAnalysis(
+	ctx context.Context,
+	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN string,
+) error {
+	return postgresmigration.Apply(ctx, adminDSN, iammigrations.Source(),
+		accessAnalysisLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN))
+}
+
+func VerifyInstalledWithAccessAnalysis(
+	ctx context.Context,
+	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN string,
+) error {
+	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(),
+		accessAnalysisLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN))
+}
+
+func accessAnalysisLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN string) []postgresmigration.Login {
+	logins := authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN)
+	return append([]postgresmigration.Login{{Name: "matrix_iam_access_analysis_worker_login", Group: "matrix_iam_access_analysis_worker", DSN: accessAnalysisDSN}}, logins...)
+}
+
 func authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN string) []postgresmigration.Login {
 	logins := notificationDeliveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN)
 	return append(append(logins[:1:1], postgresmigration.Login{

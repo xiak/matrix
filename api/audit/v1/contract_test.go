@@ -297,14 +297,15 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		}
 		if contract.PlatformOnly {
 			event.TenantID, event.InstallationID = "", "installation-example"
-			if contract.PlatformSystemActorID == "" {
+			if contract.SystemActorID == "" {
 				event.Actor.Type = ActorUser
-			} else {
-				event.Actor = ActorReference{Type: ActorSystem, ID: contract.PlatformSystemActorID}
 			}
 			if contract.TargetMatchesInstallation {
 				event.Target.ID = event.InstallationID
 			}
+		}
+		if contract.SystemActorID != "" {
+			event.Actor = ActorReference{Type: ActorSystem, ID: contract.SystemActorID}
 		}
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
@@ -325,7 +326,7 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if err := ValidateEventForSource(contract.Source, event); err != nil {
 			t.Fatalf("valid action contract %q rejected: %v", action, err)
 		}
-		if contract.PlatformSystemActorID != "" {
+		if contract.SystemActorID != "" {
 			for _, mutation := range []func(*Event){
 				func(candidate *Event) { candidate.Actor.Type = ActorUser },
 				func(candidate *Event) { candidate.Actor.ID = "another-system" },
@@ -469,6 +470,64 @@ func TestAccessAnalyzerFactsRequireTenantUserDecisions(t *testing.T) {
 					t.Fatal("access analyzer fact accepted forged authority")
 				}
 			})
+		}
+	}
+}
+
+func TestAccessFindingFactsRequireTenantAnalyzerSystemActor(t *testing.T) {
+	for _, action := range []Action{ActionIAMAccessFindingDetected, ActionIAMAccessFindingResolved} {
+		event := Event{
+			APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-access-finding",
+			TenantID: "account-example", Actor: ActorReference{Type: ActorSystem, ID: "iam.access-analyzer"},
+			Action: action, Target: TargetReference{Kind: TargetAccessFinding, ID: "finding-example"}, Result: ResultSucceeded,
+			RequestDigest: "sha256:" + strings.Repeat("1", 64), RequestID: "scan-example", CorrelationID: "scan-example",
+			OccurredAt: time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC),
+		}
+		if err := ValidateEventForSource(SourceIAM, event); err != nil {
+			t.Fatalf("valid %s access finding fact: %v", action, err)
+		}
+		for name, mutate := range map[string]func(*Event){
+			"user actor":       func(value *Event) { value.Actor = ActorReference{Type: ActorUser, ID: "user-example"} },
+			"wrong system":     func(value *Event) { value.Actor.ID = "iam" },
+			"decision":         func(value *Event) { value.IAMDecisionID = "decision-example" },
+			"installation":     func(value *Event) { value.InstallationID, value.TenantID = "mxi-11111111111111111111111111111111", "" },
+			"analyzer target":  func(value *Event) { value.Target.Kind = TargetAccessAnalyzer },
+			"different result": func(value *Event) { value.Result = ResultDenied },
+		} {
+			changed := event
+			mutate(&changed)
+			if ValidateEventForSource(SourceIAM, changed) == nil {
+				t.Fatalf("%s accepted %s", action, name)
+			}
+		}
+	}
+}
+
+func TestAccessFindingReviewFactsRequireTenantUserDecisions(t *testing.T) {
+	for _, action := range []Action{ActionIAMAccessFindingArchived, ActionIAMAccessFindingUnarchived} {
+		event := Event{
+			APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-access-finding-review",
+			TenantID: "account-example", Actor: ActorReference{Type: ActorUser, ID: "user-example"},
+			Action: action, Target: TargetReference{Kind: TargetAccessFinding, ID: "finding-example"}, Result: ResultSucceeded,
+			IAMDecisionID: "decision-example", RequestDigest: "sha256:" + strings.Repeat("2", 64),
+			RequestID: "review-example", CorrelationID: "review-example",
+			OccurredAt: time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC),
+		}
+		if err := ValidateEventForSource(SourceIAM, event); err != nil {
+			t.Fatalf("valid %s access finding review fact: %v", action, err)
+		}
+		for name, mutate := range map[string]func(*Event){
+			"missing decision": func(value *Event) { value.IAMDecisionID = "" },
+			"system actor":     func(value *Event) { value.Actor = ActorReference{Type: ActorSystem, ID: "iam.access-analyzer"} },
+			"wrong target":     func(value *Event) { value.Target.Kind = TargetAccessAnalyzer },
+			"installation":     func(value *Event) { value.InstallationID, value.TenantID = "mxi-11111111111111111111111111111111", "" },
+			"different result": func(value *Event) { value.Result = ResultDenied },
+		} {
+			changed := event
+			mutate(&changed)
+			if ValidateEventForSource(SourceIAM, changed) == nil {
+				t.Fatalf("%s accepted %s", action, name)
+			}
 		}
 	}
 }

@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1会话自管理、S2 TOTP MFA/安全通知/恢复、S3密码与共享尝试治理及S4a账号安全报告均已有固定实现和所属段落的真实证据；未完成的独立CI、LIVE UI或发布组合仍按各段边界保留。S4b当前访问诊断已固定于`ef4483e2`，S4c-a账号级闲置访问分析器已完成本地纵向、固定前驱及独立多进程门禁，正在形成固定提交；S4c-b真实观测扫描、Finding生命周期、自动处置及009完整发布尚未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性。
+- 状态：S1会话自管理、S2 TOTP MFA/安全通知/恢复、S3密码与共享尝试治理及S4a账号安全报告均已有固定实现和所属段落的真实证据；未完成的LIVE UI或发布组合仍按各段边界保留。S4b当前访问诊断已固定于`ef4483e2`；S4c-a账号级闲置访问分析器已固定于`bbb2f7ee`并通过独立CI。S4c-b真实观测扫描和Finding生命周期正在本分支收口，自动处置及009完整发布尚未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -1445,9 +1445,21 @@ S4c-a不可变事实只有用户管理动作`iam.access-analyzer.created/updated
 
 ##### S4c-a当前实现与证据
 
-当前候选实现使用IAM62/Audit32/PaaS3+r8，只提供上述Analyzer管理和Finding空目录，不包含扫描器、Finding详情/归档、自动处置或恢复epoch。六项来源逐项返回真实覆盖边界：四项IAM来源固定为`INSUFFICIENT_COVERAGE/SOURCE_NOT_READY`，PaaS结果和外部联合身份固定为`NOT_INCLUDED/SOURCE_NOT_IMPLEMENTED`；ACTIVE只推进时间观察上界，DISABLED冻结，重新启用重置观察起点。新增`000018_access_analyzers`保存Analyzer、逐来源覆盖及不可变完成关联，强制RLS；创建/更新与准确Decision、事实和outbox同事务。旧AccountAdministrator显式取得五项新Action，平台角色、PaaS角色及旧数据主体不会因迁移自动获得权限。
+固定实现`bbb2f7ee48d61f4c7a16de6edd457ef5640a675a`使用IAM62/Audit32/PaaS3+r8，只提供上述Analyzer管理和Finding空目录，不包含扫描器、Finding详情/归档、自动处置或恢复epoch。六项来源逐项返回真实覆盖边界：四项IAM来源固定为`INSUFFICIENT_COVERAGE/SOURCE_NOT_READY`，PaaS结果和外部联合身份固定为`NOT_INCLUDED/SOURCE_NOT_IMPLEMENTED`；ACTIVE只推进时间观察上界，DISABLED冻结，重新启用重置观察起点。新增`000018_access_analyzers`保存Analyzer、逐来源覆盖及不可变完成关联，强制RLS；创建/更新与准确Decision、事实和outbox同事务。旧AccountAdministrator显式取得五项新Action，平台角色、PaaS角色及旧数据主体不会因迁移自动获得权限。
 
-本地候选证据（2026-10-03）：`TestIAMAccessAnalyzerPostgres`在独立PostgreSQL18.6中串行race通过14.368秒，覆盖默认90日、1–365边界、创建/准确重放/变体和重复冲突、CAS更新与陈旧版本409、启停覆盖语义、两Account的ID/cursor攻击、撤权及Account停复用即时生效、受限登录/RLS/不可变关联和等值schema重放。Audit存储与HTTP真实数据库门禁分别通过16.364秒和4.248秒。滚动固定前驱`ef4483e2`的实际IAM61 executable产生原Session和安全报告，当前IAM62迁移/程序保留原数据且不合成Analyzer；旧主体先被403拒绝，显式授予新Action后才能创建，双迁移与重启保持，整个门禁串行race通过147.817秒。两个IAM副本、Audit、PaaS及两个dispatcher的独立进程门禁通过257.626秒，覆盖同requestId跨副本重放、双Account隔离、更新、重启、两类Audit事实和链验证。该候选尚未形成推送固定SHA，独立CI、LIVE UI和发布组合均未完成，因此S4c-a尚未最终验收。
+本地证据（2026-10-03）：`TestIAMAccessAnalyzerPostgres`在独立PostgreSQL18.6中串行race通过14.368秒，覆盖默认90日、1–365边界、创建/准确重放/变体和重复冲突、CAS更新与陈旧版本409、启停覆盖语义、两Account的ID/cursor攻击、撤权及Account停复用即时生效、受限登录/RLS/不可变关联和等值schema重放。Audit存储与HTTP真实数据库门禁分别通过16.364秒和4.248秒。滚动固定前驱`ef4483e2`的实际IAM61 executable产生原Session和安全报告，当前IAM62迁移/程序保留原数据且不合成Analyzer；旧主体先被403拒绝，显式授予新Action后才能创建，双迁移与重启保持，整个门禁串行race通过147.817秒。两个IAM副本、Audit、PaaS及两个dispatcher的独立进程门禁通过257.626秒，覆盖同requestId跨副本重放、双Account隔离、更新、重启、两类Audit事实和链验证。固定源码的[Verification 37087693606](https://github.com/xiak/matrix/actions/runs/37087693606)已按精确SHA核实，`go`、`node-process`及十三项authority门禁全部completed/success。LIVE UI和发布组合仍未完成，不能由S4c-a后端证据替代。
+
+##### S4c-b当前实现与证据
+
+当前工作树将源码形状推进为IAM63/Audit32/PaaS3+r9。新增`000019_access_analysis`及独立`matrix-iam-access-analysis-worker`：专用最小数据库登录只能执行readiness、claim和complete；快照、结果、租约和fence均由数据库封闭校验，Go领域评估器不读取数据库、不解释Policy，也不能调用北向生命周期接口。四项IAM来源来自实际Session、AccessKey决定、RoleSession及Role决定谱系；PaaS结果和外部联合身份仍明确`NOT_INCLUDED`。扫描完成在同一事务写Finding、不可变SYSTEM事实和outbox；重复扫描无状态变化时不补事实。
+
+公开Finding入口现提供列表、详情、归档和取消归档，过滤器固定为`ALL|ACTIVE|ARCHIVED|RESOLVED`，缺省`ALL`；目录固定按Finding ID升序取最多101项并返回100项页面，不接受caller指定排序或pageSize。Opaque cursor绑定Account、Analyzer ID及resourceVersion、归一化过滤器、恢复epoch、当前USER/Session/凭据代际、安装和准确Action；跨过滤器、跨Analyzer、分析器更新、恢复epoch推进、换会话或换purpose均拒绝。归档/取消归档使用expected resourceVersion CAS、准确Decision和真实USER事实；同一Finding的并发写只有一个APPLIED，另一方冲突，不能把现状冒充原请求的成功。扫描器独占`RESOLVED`，没有人工resolve入口，也没有以Finding直接停用User/Key/Role的自动处置。
+
+恢复边界已经接入实际Authentication Recovery状态而不是测试时间戳：快照及Finding绑定单调recovery epoch和原恢复完成证据；恢复前历史Finding仍保存，但新epoch在四项来源重新覆盖完整阈值窗口前只返回`INSUFFICIENT_COVERAGE/RESTORE_GAP`，目录和详情不能把旧epoch Finding作为当前结论。覆盖不足时Go评估器和数据库期望结果都必须返回空detections和空resolutions，既不生成新Finding，也不把恢复前Finding误标为RESOLVED；重复恢复继续重新打开观察窗口。产品受支持恢复之外的整机root级回滚不在本片威胁模型内。
+
+当前聚焦证据（2026-10-03，尚未形成固定提交）：API、authority、HTTP、identityaccess及accessanalysis包和生成稳定性通过；`TestIAMAccessAnalyzerPostgres`在全新PG18数据库通过18.396秒，覆盖生产扫描器生成101个真实Finding、100+1分页、状态过滤与跨过滤器cursor攻击、复合状态索引执行计划、双IAM authority并发CAS、跨Account同ID攻击、Finding事实/receipt唯一性及Analyzer更新使旧cursor失效。`TestIAMAuthenticationRecoveryPostgres`使用三个全新PG18数据库、实际`pg_dump/pg_restore`、关闭/重开和二次恢复通过163.141秒，证明epoch0历史Finding保留但不暴露为当前结论，epoch1/2覆盖不足时无Finding迁移。该恢复门禁先发现SQL仍试图解析旧Finding并正确失败，随后将SQL与领域评估器统一为覆盖不足时零迁移；覆盖契约还要求四个不同IAM来源全部出现，重复来源不能伪造完整覆盖，旧失败不回填。
+
+固定前驱门禁已前移到`bbb2f7ee48d61f4c7a16de6edd457ef5640a675a`的实际IAM62 migrator/runtime，在本任务全新PG18数据库通过141.424秒：旧程序创建真实Analyzer，当前IAM63迁移保留唯一实例且不合成Finding或attempt，双次迁移、等值bootstrap及当前程序重启保持。独立`TestIndependentIAMAuditAndPaaSProcesses`在另一全新PG18数据库启动受限IAM/Audit/PaaS、双dispatcher及两份真实`matrix-iam-access-analysis-worker`；第一次运行真实暴露complete与另一扫描事务之间的PostgreSQL `40001`，失败事务未产生部分结果但原租约会等待到期，不能靠延长门禁掩盖。最终实现沿IAM现有用例事务边界，对序列化冲突或死锁最多三次开启全新事务，保留同一attempt/completion且尊重取消；不重试陈旧租约、校验失败或未知错误。对应单元门禁证明claim及complete分别重试、意图不变、耗尽和取消失败关闭；修复后的实际多进程门禁在原8分钟上限内通过253.946秒，两份扫描器各完成一次周期、无重复结果或遗留租约，四项IAM来源推进为真实`OBSERVATION_WINDOW_INCOMPLETE`，未接入来源仍为`NOT_INCLUDED`。最终工作树再次通过全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块校验、Linux amd64构建、生成稳定性、差异及架构检查。独立CI和LIVE UI仍待固定提交后验证，故S4c-b尚未验收。
 
 第一片最低真门禁覆盖两个Account相同对象ID、1/90/365日边界、对象年龄不足、旧谱系与恢复缺口；成功/失败密码登录、有效/坏签名/重放Key、RoleSession发行及Allow/Deny使用；归档、取消归档、活动后自动RESOLVED和后继再次闲置的新generation；策略/目标版本变更、账号或操作者停用、两个扫描副本的租约/fence及未知提交；Finding前后原User/Key/Role、Session、权限和业务资源不变。容量门禁必须证明有界分页和索引计划，不在每次请求扫描全部不可变决定；完整发布还须实跑安装恢复epoch衔接，否则只能交付观察与Finding后端候选，不能启用自动治理。
 

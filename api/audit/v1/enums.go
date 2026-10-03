@@ -73,6 +73,10 @@ const (
 	ActionIAMSecurityReportDownloadStarted          Action = "iam.security-report.download-started"
 	ActionIAMAccessAnalyzerCreated                  Action = "iam.access-analyzer.created"
 	ActionIAMAccessAnalyzerUpdated                  Action = "iam.access-analyzer.updated"
+	ActionIAMAccessFindingDetected                  Action = "iam.access-finding.detected"
+	ActionIAMAccessFindingResolved                  Action = "iam.access-finding.resolved"
+	ActionIAMAccessFindingArchived                  Action = "iam.access-finding.archived"
+	ActionIAMAccessFindingUnarchived                Action = "iam.access-finding.unarchived"
 	ActionIAMGroupCreated                           Action = "iam.group.created"
 	ActionIAMPolicyCreated                          Action = "iam.policy.created"
 	ActionIAMPolicyVersionCreated                   Action = "iam.policy-version.created"
@@ -147,6 +151,7 @@ const (
 	TargetAccessKey             TargetKind = "ACCESS_KEY"
 	TargetSecurityReport        TargetKind = "SECURITY_REPORT"
 	TargetAccessAnalyzer        TargetKind = "ACCESS_ANALYZER"
+	TargetAccessFinding         TargetKind = "ACCESS_FINDING"
 	TargetPolicy                TargetKind = "POLICY"
 	TargetGroupMembership       TargetKind = "GROUP_MEMBERSHIP"
 	TargetOrganization          TargetKind = "ORGANIZATION"
@@ -211,7 +216,7 @@ type ActionContract struct {
 	RoleActorRequired         bool
 	ServiceActorRequired      bool
 	AccessKeyActorPermitted   bool
-	PlatformSystemActorID     ActorID
+	SystemActorID             ActorID
 	TargetMatchesInstallation bool
 }
 
@@ -278,6 +283,10 @@ var allActions = []Action{
 	ActionIAMSecurityReportDownloadStarted,
 	ActionIAMAccessAnalyzerCreated,
 	ActionIAMAccessAnalyzerUpdated,
+	ActionIAMAccessFindingDetected,
+	ActionIAMAccessFindingResolved,
+	ActionIAMAccessFindingArchived,
+	ActionIAMAccessFindingUnarchived,
 	ActionIAMPolicyCreated,
 	ActionIAMPolicyVersionCreated,
 	ActionIAMPolicyVersionDeleted,
@@ -419,6 +428,10 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMSecurityReportDownloadStarted:       {Source: SourceIAM, Target: TargetSecurityReport, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessAnalyzerCreated:               {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessAnalyzerUpdated:               {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessFindingDetected:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, SystemActorID: "iam.access-analyzer"},
+	ActionIAMAccessFindingResolved:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, SystemActorID: "iam.access-analyzer"},
+	ActionIAMAccessFindingArchived:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessFindingUnarchived:             {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMPolicyCreated: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
@@ -463,19 +476,19 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionIAMInstallationPrimaryCredentialsRecovered: {
 		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, PlatformOnly: true,
-		PlatformSystemActorID: "iam-local-recovery",
+		SystemActorID: "iam-local-recovery",
 	},
 	ActionIAMAuthenticationRecoveryClosed: {
 		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
-		PlatformSystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
+		SystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
 	},
 	ActionIAMAuthenticationRecoveryReconciled: {
 		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
-		PlatformSystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
+		SystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
 	},
 	ActionIAMAuthenticationRecoveryReopened: {
 		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
-		PlatformSystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
+		SystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
 	},
 	ActionIAMOrganizationCreated: {
 		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,

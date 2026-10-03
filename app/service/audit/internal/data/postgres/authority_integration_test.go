@@ -528,7 +528,7 @@ func assertAuditContractCatalog(
 						forged.TenantID, forged.InstallationID = auditv1.TenantID(forged.InstallationID), ""
 					case "actor":
 						forged.Actor.Type = auditv1.ActorSystem
-						if contract.PlatformSystemActorID != "" {
+						if contract.SystemActorID != "" {
 							forged.Actor.Type = auditv1.ActorUser
 						}
 					case "installation":
@@ -2408,10 +2408,10 @@ func authorityAuditEvent(
 	}
 	if contract.PlatformOnly {
 		event.TenantID, event.InstallationID = "", string(tenantID)
-		if contract.PlatformSystemActorID == "" {
+		if contract.SystemActorID == "" {
 			event.Actor.Type = auditv1.ActorUser
 		} else {
-			event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: contract.PlatformSystemActorID}
+			event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: contract.SystemActorID}
 		}
 		if contract.TargetMatchesInstallation {
 			event.Target.ID = event.InstallationID

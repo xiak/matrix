@@ -41,7 +41,7 @@ type contract struct {
 }
 
 var platformServiceNames = []string{
-	"apisix", "audit", "iam", "iam-audit-dispatcher", "iam-notification-dispatcher", "paas-api",
+	"apisix", "audit", "iam", "iam-access-analysis-worker", "iam-audit-dispatcher", "iam-notification-dispatcher", "paas-api",
 	"paas-audit-dispatcher", "paas-ui", "paas-worker", "postgres",
 }
 
@@ -220,6 +220,7 @@ func compileServices(
 	iamAPIDSN := path.Join(root, layout.IAMAPI)
 	iamWorkerDSN := path.Join(root, layout.IAMWorker)
 	iamNotificationDSN := path.Join(root, layout.IAMNotificationWorker)
+	iamAccessAnalysisDSN := path.Join(root, layout.IAMAccessAnalysisWorker)
 	accessKeyWrappingKeyring := path.Join(root, layout.IAMAccessKeyWrappingKeyring)
 	totpKeyring := path.Join(root, layout.IAMTOTPKeyring)
 	emailKeyring := path.Join(root, layout.IAMEmailVerificationKeyring)
@@ -367,6 +368,21 @@ func compileServices(
 	}
 	iamNotification.DependsOn = healthy("postgres", "iam")
 
+	iamAccessAnalysis := service(
+		"iam-access-analysis-worker", "iam", images["iam"], []string{"control"},
+		[]string{"/matrix/bin/matrix-iam-access-analysis-worker"},
+		"0.5", "384M", "http://127.0.0.1:8080/ready",
+	)
+	iamAccessAnalysis.Environment = map[string]string{
+		"MATRIX_IAM_ACCESS_ANALYSIS_DATABASE_DSN_FILE": "/run/matrix/iam-access-analysis-worker-dsn",
+		"MATRIX_IAM_ACCESS_ANALYSIS_WORKER_ID":         "iam-access-analysis-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		"MATRIX_IAM_ACCESS_ANALYSIS_LISTEN_ADDRESS":    "0.0.0.0:8080",
+	}
+	iamAccessAnalysis.Volumes = []mount{
+		bind(iamAccessAnalysisDSN, "/run/matrix/iam-access-analysis-worker-dsn", true),
+	}
+	iamAccessAnalysis.DependsOn = healthy("postgres", "iam")
+
 	paasAPI := service(
 		"paas-api", "paas", images["paas"], []string{"control"}, []string{"/matrix/bin/matrix-paas"},
 		"1.0", "768M", "http://127.0.0.1:8080/ready",
@@ -466,7 +482,8 @@ func compileServices(
 
 	return map[string]serviceConfig{
 		"apisix": apisix, "audit": audit, "iam": iam,
-		"iam-audit-dispatcher": iamAudit, "iam-notification-dispatcher": iamNotification, "paas-api": paasAPI,
+		"iam-access-analysis-worker": iamAccessAnalysis, "iam-audit-dispatcher": iamAudit,
+		"iam-notification-dispatcher": iamNotification, "paas-api": paasAPI,
 		"paas-audit-dispatcher": paasAudit, "paas-ui": ui, "paas-worker": paasWorker,
 		"postgres": postgres,
 	}

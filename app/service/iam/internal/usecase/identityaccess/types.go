@@ -134,7 +134,10 @@ type Transaction interface {
 	ListAccessAnalyzers(context.Context, AccountRead) (iamv1.AccessAnalyzerList, error)
 	ReadAccessAnalyzer(context.Context, AccessAnalyzerRead) (iamv1.AccessAnalyzer, error)
 	UpdateAccessAnalyzer(context.Context, AccessAnalyzerMutation) (iamv1.AccessAnalyzer, error)
+	ReadAccessFindingDirectoryRevision(context.Context, AccessFindingRead) (authority.AccessFindingDirectoryRevision, error)
 	ListAccessFindings(context.Context, AccessFindingRead) (iamv1.AccessFindingList, error)
+	ReadAccessFinding(context.Context, AccessFindingRead) (iamv1.AccessFinding, error)
+	SetAccessFindingArchived(context.Context, AccessFindingMutation) (iamv1.AccessFinding, error)
 	LockAccountSecuritySettings(context.Context, iamv1.Session) error
 	UpdateAccountSecuritySettings(context.Context, SecuritySettingsMutation) (iamv1.UpdateAccountSecuritySettingsResponse, error)
 	ReadSecuritySettingsChange(context.Context, AccountRead, string) (iamv1.AccountSecuritySettingsChange, error)
@@ -272,10 +275,22 @@ type AccessAnalyzerMutation struct {
 type AccessFindingRead struct {
 	AccountRead
 	AnalyzerID iamv1.AccessAnalyzerID
+	FindingID  iamv1.AccessFindingID
+	Filter     iamv1.AccessFindingFilter
 }
 
 func (value AccessFindingRead) AccessAnalyzerRead() AccessAnalyzerRead {
 	return AccessAnalyzerRead{AccountRead: value.AccountRead, AnalyzerID: value.AnalyzerID}
+}
+
+type AccessFindingMutation struct {
+	AccessFindingRead
+	Session         iamv1.Session
+	RequestID       string
+	RequestDigest   string
+	ExpectedVersion uint64
+	Archived        bool
+	AuditEvent      auditv1.Event
 }
 
 // Private, nonsecret custody evidence; never a caller-selected installation.

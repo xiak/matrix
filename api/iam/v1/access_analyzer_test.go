@@ -36,6 +36,39 @@ func TestAccessAnalyzerAndFindingContractsRejectInventedAuthority(t *testing.T) 
 			}
 		})
 	}
+	archived := finding
+	archived.Status, archived.ResourceVersion, archived.UpdatedAt = AccessFindingArchived, 2, now.Add(time.Minute)
+	if ValidateAccessFinding(archived) != nil {
+		t.Fatal("valid archived finding was rejected")
+	}
+	resolvedAt := now.Add(2 * time.Minute)
+	resolved := archived
+	resolved.Status, resolved.ResourceVersion, resolved.ObservedAt, resolved.UpdatedAt, resolved.ResolvedAt = AccessFindingResolved, 3, resolvedAt, resolvedAt, &resolvedAt
+	if ValidateAccessFinding(resolved) != nil {
+		t.Fatal("valid resolved finding was rejected")
+	}
+	recoveredAt := finding.WindowStartedAt.Add(-time.Hour)
+	finding.RecoveryEpoch, finding.RecoveryCommandID, finding.RecoveryCompletedAt = 2, "recovery-command", &recoveredAt
+	if ValidateAccessFinding(finding) != nil {
+		t.Fatal("valid recovery-bound finding was rejected")
+	}
+	for name, mutate := range map[string]func(*AccessFinding){
+		"missing command": func(value *AccessFinding) { value.RecoveryCommandID = "" },
+		"missing time":    func(value *AccessFinding) { value.RecoveryCompletedAt = nil },
+		"future floor": func(value *AccessFinding) {
+			future := value.WindowStartedAt.Add(time.Second)
+			value.RecoveryCompletedAt = &future
+		},
+		"zero epoch evidence": func(value *AccessFinding) { value.RecoveryEpoch = 0 },
+	} {
+		t.Run("recovery "+name, func(t *testing.T) {
+			value := finding
+			mutate(&value)
+			if ValidateAccessFinding(value) == nil {
+				t.Fatal("invalid recovery-bound finding was accepted")
+			}
+		})
+	}
 }
 
 func TestAccessObservationCoverageKeepsUnknownAndExcludedDistinct(t *testing.T) {
@@ -101,5 +134,24 @@ func TestAccessAnalyzerMutationContractsAreVersionedAndBounded(t *testing.T) {
 			UnusedAccessAgeDays: &age, RequestID: "create-analyzer"}) == nil {
 			t.Fatal("out-of-range unused access age was accepted", age)
 		}
+	}
+	if ValidateAccessFindingDispositionRequest(AccessFindingDispositionRequest{ResourceVersion: 1, RequestID: "archive-finding"}) != nil ||
+		ValidateAccessFindingDispositionRequest(AccessFindingDispositionRequest{ResourceVersion: 0, RequestID: "archive-finding"}) == nil ||
+		ValidateAccessFindingDispositionRequest(AccessFindingDispositionRequest{ResourceVersion: 1}) == nil {
+		t.Fatal("access finding disposition concurrency contract differs")
+	}
+	for _, status := range []AccessFindingStatusFilter{AccessFindingStatusAll, AccessFindingStatusFilter(AccessFindingActive),
+		AccessFindingStatusFilter(AccessFindingArchived), AccessFindingStatusFilter(AccessFindingResolved)} {
+		filter, err := NormalizeAccessFindingFilter(AccessFindingFilter{Status: status})
+		if err != nil || filter.Status != status {
+			t.Fatalf("valid access finding filter %q was rejected: %+v", status, err)
+		}
+	}
+	filter, err := NormalizeAccessFindingFilter(AccessFindingFilter{})
+	if err != nil || filter.Status != AccessFindingStatusAll {
+		t.Fatal("omitted access finding filter did not normalize to ALL")
+	}
+	if _, err := NormalizeAccessFindingFilter(AccessFindingFilter{Status: "UNKNOWN"}); err == nil {
+		t.Fatal("unknown access finding filter was accepted")
 	}
 }

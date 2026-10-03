@@ -1769,7 +1769,8 @@ func TestAccessAnalyzerUsesCurrentAuthorityAndNeverInventsFindings(t *testing.T)
 		mutation.AuditEvent.Action != auditv1.ActionIAMAccessAnalyzerUpdated || mutation.AuditEvent.Target.ID != string(created.ID) {
 		t.Fatal("access analyzer update lost its precise audit fact")
 	}
-	findings, err := service.ListAccessFindings(t.Context(), login.Credential, created.ID, "", "finding-list")
+	findings, err := service.ListAccessFindings(t.Context(), login.Credential, created.ID,
+		iamv1.AccessFindingFilter{Status: iamv1.AccessFindingStatusAll}, "", "finding-list")
 	if err != nil || len(findings.Items) != 0 || len(findings.Coverage) != 6 {
 		t.Fatal("list access findings", findings, err)
 	}
@@ -1782,6 +1783,38 @@ func TestAccessAnalyzerUsesCurrentAuthorityAndNeverInventsFindings(t *testing.T)
 		} else if coverage.State != iamv1.AccessObservationNotIncluded || coverage.Reason != iamv1.AccessObservationSourceNotImplemented {
 			t.Fatal("unimplemented product source was not explicit", coverage)
 		}
+	}
+	finding := iamv1.AccessFinding{APIVersion: iamv1.APIVersion, Kind: "AccessFinding", ID: "finding-one",
+		AccountID: bootstrap.Organization.ID, AnalyzerID: created.ID, AnalyzerRevision: 1, Type: iamv1.AccessFindingUnusedPassword,
+		Status: iamv1.AccessFindingActive, Target: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(bootstrap.Administrator.ID)},
+		TargetResourceVersion: 1, ConditionGeneration: 1, ActivityRevision: 1, WindowStartedAt: tx.now.Add(-90 * 24 * time.Hour),
+		ObservedAt: tx.now, ResourceVersion: 1, CreatedAt: tx.now, UpdatedAt: tx.now}
+	tx.accessFindings[finding.ID] = finding
+	readFinding, err := service.AccessFinding(t.Context(), login.Credential, created.ID, finding.ID, "finding-read")
+	if err != nil || readFinding != finding {
+		t.Fatal("read access finding", readFinding, err)
+	}
+	archiveRequest := iamv1.AccessFindingDispositionRequest{ResourceVersion: 1, RequestID: "finding-archive"}
+	archived, err := service.ArchiveAccessFinding(t.Context(), login.Credential, created.ID, finding.ID, archiveRequest)
+	if err != nil || archived.Status != iamv1.AccessFindingArchived || archived.ResourceVersion != 2 || len(tx.accessFindingMutations) != 1 {
+		t.Fatal("archive access finding", archived, err)
+	}
+	if mutation := tx.accessFindingMutations[0]; auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil ||
+		mutation.AuditEvent.Action != auditv1.ActionIAMAccessFindingArchived || mutation.AuditEvent.Target.ID != string(finding.ID) {
+		t.Fatal("access finding archive lost its exact user decision fact")
+	}
+	if replayed, replayErr := service.ArchiveAccessFinding(t.Context(), login.Credential, created.ID, finding.ID, archiveRequest); replayErr != nil || replayed != archived || len(tx.accessFindingMutations) != 1 {
+		t.Fatal("access finding archive replay changed its completion", replayed, replayErr)
+	}
+	if _, staleErr := service.UnarchiveAccessFinding(t.Context(), login.Credential, created.ID, finding.ID,
+		iamv1.AccessFindingDispositionRequest{ResourceVersion: 1, RequestID: "finding-unarchive-stale"}); !errors.Is(staleErr, ErrConflict) {
+		t.Fatal("stale finding disposition was not rejected", staleErr)
+	}
+	unarchived, err := service.UnarchiveAccessFinding(t.Context(), login.Credential, created.ID, finding.ID,
+		iamv1.AccessFindingDispositionRequest{ResourceVersion: 2, RequestID: "finding-unarchive"})
+	if err != nil || unarchived.Status != iamv1.AccessFindingActive || unarchived.ResourceVersion != 3 || len(tx.accessFindingMutations) != 2 ||
+		tx.accessFindingMutations[1].AuditEvent.Action != auditv1.ActionIAMAccessFindingUnarchived {
+		t.Fatal("unarchive access finding", unarchived, err)
 	}
 	if _, err := service.AccessAnalyzer(t.Context(), coreServiceCredential(t, bootstrap, iamv1.ServicePaaS), created.ID, "analyzer-service"); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatal("service credential reached USER access analyzer", err)
@@ -3439,8 +3472,14 @@ type coreTransaction struct {
 		Digest   string
 		Analyzer iamv1.AccessAnalyzer
 	}
-	accessAnalyzerCreations          []AccessAnalyzerCreation
-	accessAnalyzerMutations          []AccessAnalyzerMutation
+	accessAnalyzerCreations []AccessAnalyzerCreation
+	accessAnalyzerMutations []AccessAnalyzerMutation
+	accessFindings          map[iamv1.AccessFindingID]iamv1.AccessFinding
+	accessFindingMutations  []AccessFindingMutation
+	accessFindingRequests   map[string]struct {
+		Digest  string
+		Finding iamv1.AccessFinding
+	}
 	attachmentSession                iamv1.SessionID
 	revocationSession                iamv1.SessionID
 	sessionRevocation                *SessionRevocationMutation
@@ -3858,10 +3897,21 @@ func (transaction *coreTransaction) UpdateAccessAnalyzer(_ context.Context, muta
 	return analyzer, nil
 }
 
+func (transaction *coreTransaction) ReadAccessFindingDirectoryRevision(_ context.Context, read AccessFindingRead) (authority.AccessFindingDirectoryRevision, error) {
+	analyzer, err := transaction.ReadAccessAnalyzer(context.Background(), read.AccessAnalyzerRead())
+	if err != nil {
+		return authority.AccessFindingDirectoryRevision{}, err
+	}
+	return authority.AccessFindingDirectoryRevision{AnalyzerResourceVersion: analyzer.ResourceVersion, RecoveryEpoch: 0}, nil
+}
+
 func (transaction *coreTransaction) ListAccessFindings(_ context.Context, read AccessFindingRead) (iamv1.AccessFindingList, error) {
 	analyzer, err := transaction.ReadAccessAnalyzer(context.Background(), read.AccessAnalyzerRead())
 	if err != nil {
 		return iamv1.AccessFindingList{}, err
+	}
+	if filter, err := iamv1.NormalizeAccessFindingFilter(read.Filter); err != nil || filter != read.Filter {
+		return iamv1.AccessFindingList{}, ErrInvalidArgument
 	}
 	from, through := analyzer.CreatedAt, transaction.now
 	coverage := make([]iamv1.AccessObservationCoverage, 0, 6)
@@ -3877,6 +3927,44 @@ func (transaction *coreTransaction) ListAccessFindings(_ context.Context, read A
 	}
 	return iamv1.AccessFindingList{APIVersion: iamv1.APIVersion, Kind: "AccessFindingList", AccountID: read.AccountID,
 		AnalyzerID: analyzer.ID, ObservedAt: transaction.now, Coverage: coverage, Items: []iamv1.AccessFinding{}}, nil
+}
+
+func (transaction *coreTransaction) ReadAccessFinding(_ context.Context, read AccessFindingRead) (iamv1.AccessFinding, error) {
+	finding, found := transaction.accessFindings[read.FindingID]
+	if !found || finding.AccountID != read.AccountID || finding.AnalyzerID != read.AnalyzerID {
+		return iamv1.AccessFinding{}, ErrAccessFindingNotFound
+	}
+	return finding, nil
+}
+
+func (transaction *coreTransaction) SetAccessFindingArchived(_ context.Context, mutation AccessFindingMutation) (iamv1.AccessFinding, error) {
+	action := "unarchive:"
+	status, required := iamv1.AccessFindingActive, iamv1.AccessFindingArchived
+	if mutation.Archived {
+		action, status, required = "archive:", iamv1.AccessFindingArchived, iamv1.AccessFindingActive
+	}
+	key := action + mutation.RequestID
+	if previous, found := transaction.accessFindingRequests[key]; found {
+		if previous.Digest != mutation.RequestDigest {
+			return iamv1.AccessFinding{}, ErrConflict
+		}
+		return previous.Finding, nil
+	}
+	finding, err := transaction.ReadAccessFinding(context.Background(), mutation.AccessFindingRead)
+	if err != nil {
+		return iamv1.AccessFinding{}, err
+	}
+	if finding.ResourceVersion != mutation.ExpectedVersion || finding.Status != required {
+		return iamv1.AccessFinding{}, ErrConflict
+	}
+	finding.Status, finding.ResourceVersion, finding.UpdatedAt = status, finding.ResourceVersion+1, transaction.now
+	transaction.accessFindings[finding.ID] = finding
+	transaction.accessFindingMutations = append(transaction.accessFindingMutations, mutation)
+	transaction.accessFindingRequests[key] = struct {
+		Digest  string
+		Finding iamv1.AccessFinding
+	}{mutation.RequestDigest, finding}
+	return finding, nil
 }
 
 func (tx *coreTransaction) CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error) {
@@ -4137,9 +4225,14 @@ func newCoreTransaction() *coreTransaction {
 		securityReports:    make(map[iamv1.SecurityReportID]iamv1.AccountSecurityReport),
 		securityReportCSVs: make(map[iamv1.SecurityReportID][]byte),
 		accessAnalyzers:    make(map[iamv1.AccessAnalyzerID]iamv1.AccessAnalyzer),
+		accessFindings:     make(map[iamv1.AccessFindingID]iamv1.AccessFinding),
 		accessAnalyzerRequests: make(map[string]struct {
 			Digest   string
 			Analyzer iamv1.AccessAnalyzer
+		}),
+		accessFindingRequests: make(map[string]struct {
+			Digest  string
+			Finding iamv1.AccessFinding
 		}),
 		securityReportRequests: make(map[string]struct {
 			Digest   string

@@ -11,6 +11,10 @@ type AccessAnalyzerType string
 type AccessAnalyzerStatus string
 type AccessFindingType string
 type AccessFindingStatus string
+
+// AccessFindingStatusFilter is a closed directory filter. ALL is a query
+// value, never a persisted finding state.
+type AccessFindingStatusFilter string
 type AccessObservationCoverageState string
 type AccessObservationCoverageReason string
 
@@ -27,6 +31,8 @@ const (
 	AccessFindingActive   AccessFindingStatus = "ACTIVE"
 	AccessFindingArchived AccessFindingStatus = "ARCHIVED"
 	AccessFindingResolved AccessFindingStatus = "RESOLVED"
+
+	AccessFindingStatusAll AccessFindingStatusFilter = "ALL"
 
 	AccessObservationComplete             AccessObservationCoverageState = "COMPLETE"
 	AccessObservationInsufficientCoverage AccessObservationCoverageState = "INSUFFICIENT_COVERAGE"
@@ -95,6 +101,9 @@ type AccessFinding struct {
 	TargetResourceVersion uint64              `json:"targetResourceVersion"`
 	ConditionGeneration   uint64              `json:"conditionGeneration"`
 	ActivityRevision      uint64              `json:"activityRevision"`
+	RecoveryEpoch         uint64              `json:"recoveryEpoch"`
+	RecoveryCommandID     string              `json:"recoveryCommandId,omitempty"`
+	RecoveryCompletedAt   *time.Time          `json:"recoveryCompletedAt,omitempty"`
 	WindowStartedAt       time.Time           `json:"windowStartedAt"`
 	ObservedAt            time.Time           `json:"observedAt"`
 	LastActivityAt        *time.Time          `json:"lastActivityAt,omitempty"`
@@ -123,6 +132,13 @@ type AccessFindingList struct {
 	NextAfter  string                      `json:"nextAfter,omitempty"`
 }
 
+// AccessFindingFilter contains only public list filters. An omitted status
+// normalizes to ALL so the normalized value can be bound into an opaque
+// continuation cursor without ambiguity.
+type AccessFindingFilter struct {
+	Status AccessFindingStatusFilter `json:"status"`
+}
+
 type CreateAccessAnalyzerRequest struct {
 	Type                AccessAnalyzerType `json:"type"`
 	UnusedAccessAgeDays *uint16            `json:"unusedAccessAgeDays,omitempty"`
@@ -134,6 +150,14 @@ type UpdateAccessAnalyzerRequest struct {
 	UnusedAccessAgeDays uint16               `json:"unusedAccessAgeDays"`
 	ResourceVersion     uint64               `json:"resourceVersion"`
 	RequestID           string               `json:"requestId"`
+}
+
+// AccessFindingDispositionRequest supplies the concurrency and idempotency
+// preconditions for a human review transition. The route selects ARCHIVED or
+// ACTIVE; callers cannot use this contract to manufacture RESOLVED findings.
+type AccessFindingDispositionRequest struct {
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
 }
 
 func ValidateAccessAnalyzer(value AccessAnalyzer) error {
@@ -209,8 +233,16 @@ func ValidateAccessFinding(value AccessFinding) error {
 		validatePositiveVersion(value.ActivityRevision) != nil || validatePositiveVersion(value.ResourceVersion) != nil ||
 		validateTime("accessFinding.windowStartedAt", value.WindowStartedAt) != nil || validateTime("accessFinding.observedAt", value.ObservedAt) != nil ||
 		validateTime("accessFinding.createdAt", value.CreatedAt) != nil || validateTime("accessFinding.updatedAt", value.UpdatedAt) != nil ||
-		!value.ObservedAt.After(value.WindowStartedAt) || value.CreatedAt.After(value.UpdatedAt) || value.UpdatedAt.After(value.ObservedAt) {
+		!value.ObservedAt.After(value.WindowStartedAt) || value.CreatedAt.After(value.ObservedAt) || value.CreatedAt.After(value.UpdatedAt) {
 		return errors.New("access finding is invalid")
+	}
+	if value.RecoveryEpoch == 0 {
+		if value.RecoveryCommandID != "" || value.RecoveryCompletedAt != nil {
+			return errors.New("access finding recovery scope is invalid")
+		}
+	} else if ValidateID("accessFinding.recoveryCommandId", value.RecoveryCommandID) != nil || value.RecoveryCompletedAt == nil ||
+		validateTime("accessFinding.recoveryCompletedAt", *value.RecoveryCompletedAt) != nil || value.WindowStartedAt.Before(*value.RecoveryCompletedAt) {
+		return errors.New("access finding recovery scope is invalid")
 	}
 	if !validAccessFindingTarget(value.Type, value.Target) {
 		return errors.New("access finding target is invalid")
@@ -225,7 +257,7 @@ func ValidateAccessFinding(value AccessFinding) error {
 		}
 	case AccessFindingResolved:
 		if value.ResolvedAt == nil || validateTime("accessFinding.resolvedAt", *value.ResolvedAt) != nil ||
-			value.ResolvedAt.Before(value.CreatedAt) || value.ResolvedAt.Before(value.UpdatedAt) {
+			value.ResolvedAt.Before(value.CreatedAt) || !value.ResolvedAt.Equal(value.UpdatedAt) || value.ObservedAt != value.UpdatedAt {
 			return errors.New("resolved access finding is invalid")
 		}
 	default:
@@ -277,6 +309,26 @@ func ValidateUpdateAccessAnalyzerRequest(value UpdateAccessAnalyzerRequest) erro
 		return errors.New("access analyzer update request is invalid")
 	}
 	return nil
+}
+
+func ValidateAccessFindingDispositionRequest(value AccessFindingDispositionRequest) error {
+	if validatePositiveVersion(value.ResourceVersion) != nil || ValidateID("requestId", value.RequestID) != nil {
+		return errors.New("access finding disposition request is invalid")
+	}
+	return nil
+}
+
+func NormalizeAccessFindingFilter(value AccessFindingFilter) (AccessFindingFilter, error) {
+	if value.Status == "" {
+		value.Status = AccessFindingStatusAll
+	}
+	switch value.Status {
+	case AccessFindingStatusAll, AccessFindingStatusFilter(AccessFindingActive),
+		AccessFindingStatusFilter(AccessFindingArchived), AccessFindingStatusFilter(AccessFindingResolved):
+		return value, nil
+	default:
+		return AccessFindingFilter{}, errors.New("access finding filter is invalid")
+	}
 }
 
 func validateUnusedAccessAge(value uint16) error {

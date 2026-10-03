@@ -82,7 +82,19 @@ func buildPaths() object {
 		},
 		"/v1/account/access-analyzers/{analyzerId}/findings": object{
 			"get": readOperation("listAccessFindings", "List only evidence-backed findings; incomplete observation returns explicit coverage and no invented findings", "AccessFindingList", nil,
-				append([]any{openapi31.PathIDParameter("analyzerId")}, accountPageParameters()...)),
+				append(append([]any{openapi31.PathIDParameter("analyzerId")}, accountPageParameters()...), accessFindingStatusParameter())),
+		},
+		"/v1/account/access-analyzers/{analyzerId}/findings/{findingId}": object{
+			"get": readOperation("getAccessFinding", "Read one evidence-bound finding under current account permission", "AccessFinding", nil,
+				[]any{openapi31.PathIDParameter("analyzerId"), openapi31.PathIDParameter("findingId")}),
+		},
+		"/v1/account/access-analyzers/{analyzerId}/findings/{findingId}:archive": object{
+			"post": mutationOperation("archiveAccessFinding", "Mark an active finding reviewed without mutating its target", "AccessFindingDispositionRequest", "AccessFinding", "200", nil,
+				[]any{openapi31.PathIDParameter("analyzerId"), openapi31.PathIDParameter("findingId")}),
+		},
+		"/v1/account/access-analyzers/{analyzerId}/findings/{findingId}:unarchive": object{
+			"post": mutationOperation("unarchiveAccessFinding", "Return an archived unresolved finding to active review", "AccessFindingDispositionRequest", "AccessFinding", "200", nil,
+				[]any{openapi31.PathIDParameter("analyzerId"), openapi31.PathIDParameter("findingId")}),
 		},
 		"/v1/account/security-reports": object{
 			"post": mutationOperation("createAccountSecurityReport", "Generate one immutable current-account IAM security report without cross-product inference", "CreateAccountSecurityReportRequest", "CreateAccountSecurityReportResponse", "201", nil, nil),
@@ -399,6 +411,13 @@ func securityReportContentOperation(parameters []any) object {
 
 func accountPageParameters() []any {
 	return []any{object{"name": "after", "in": "query", "required": false, "schema": pageCursorSchema(), "description": "Opaque signed continuation bound to the current account, session, query and authority revision. Pass nextAfter unchanged; raw resource IDs are not accepted."}}
+}
+
+func accessFindingStatusParameter() any {
+	return object{"name": "status", "in": "query", "required": false,
+		"description": "Closed lifecycle filter. Omission is equivalent to ALL and the normalized value is bound into nextAfter.",
+		"schema": object{"type": "string", "enum": []string{string(iamv1.AccessFindingStatusAll), string(iamv1.AccessFindingActive),
+			string(iamv1.AccessFindingArchived), string(iamv1.AccessFindingResolved)}, "default": string(iamv1.AccessFindingStatusAll)}}
 }
 
 func pageCursorSchema() object {
@@ -755,6 +774,7 @@ func structContracts() map[string]reflect.Type {
 		"AccessFindingList":                             openapi31.StructType[iamv1.AccessFindingList](),
 		"CreateAccessAnalyzerRequest":                   openapi31.StructType[iamv1.CreateAccessAnalyzerRequest](),
 		"UpdateAccessAnalyzerRequest":                   openapi31.StructType[iamv1.UpdateAccessAnalyzerRequest](),
+		"AccessFindingDispositionRequest":               openapi31.StructType[iamv1.AccessFindingDispositionRequest](),
 		"RootIdentity":                                  openapi31.StructType[iamv1.RootIdentity](),
 		"Account":                                       openapi31.StructType[iamv1.Account](),
 		"User":                                          openapi31.StructType[iamv1.User](),
@@ -1357,6 +1377,10 @@ func applySemanticOverlays(schemas object) {
 	}
 	schemas["AccessAnalyzer"].(object)["description"] = "Current-account governance configuration. It is not a Policy, decision, report, finding, or write permit."
 	schemas["AccessFinding"].(object)["description"] = "Evidence-bound review state. It never authorizes mutation of its target; lifecycle commands must recheck current authority and resource state."
+	schemas["AccessFinding"].(object)["oneOf"] = []any{
+		object{"properties": object{"recoveryEpoch": object{"const": 0}, "recoveryCommandId": false, "recoveryCompletedAt": false}},
+		object{"required": []string{"recoveryCommandId", "recoveryCompletedAt"}, "properties": object{"recoveryEpoch": object{"minimum": 1}}},
+	}
 	schemas["AccessFindingList"].(object)["description"] = "A bounded account/analyzer directory with explicit source coverage. Incomplete coverage produces no invented idle findings."
 	schemas["SecurityReportTimeObservation"].(object)["oneOf"] = []any{
 		object{"required": []string{"observedAt"}, "properties": object{"state": object{"const": string(iamv1.SecurityReportObserved)}}},

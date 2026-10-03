@@ -23,6 +23,7 @@ var binarySpecifications = []binarySpecification{
 	{name: "matrix-audit-migrate", packagePath: "./app/service/audit/cmd/matrix-audit-migrate"},
 	{name: "matrix-health", packagePath: "./app/service/installation/cmd/matrix-health"},
 	{name: "matrix-iam", packagePath: "./app/service/iam/cmd/matrix-iam"},
+	{name: "matrix-iam-access-analysis-worker", packagePath: "./app/service/iam/cmd/matrix-iam-access-analysis-worker"},
 	{name: "matrix-iam-audit-dispatcher", packagePath: "./app/service/iam/cmd/matrix-iam-audit-dispatcher"},
 	{name: "matrix-iam-migrate", packagePath: "./app/service/iam/cmd/matrix-iam-migrate"},
 	{name: "matrix-iam-notification-dispatcher", packagePath: "./app/service/iam/cmd/matrix-iam-notification-dispatcher"},
@@ -54,7 +55,7 @@ var imageRecipes = []imageRecipe{
 	},
 	{
 		component: "iam", baseReference: "scratch",
-		binaries:    []string{"matrix-iam", "matrix-iam-audit-dispatcher", "matrix-iam-migrate", "matrix-iam-notification-dispatcher", "matrix-health"},
+		binaries:    []string{"matrix-iam", "matrix-iam-access-analysis-worker", "matrix-iam-audit-dispatcher", "matrix-iam-migrate", "matrix-iam-notification-dispatcher", "matrix-health"},
 		systemRoots: true,
 	},
 	{

@@ -266,6 +266,9 @@ const (
 	ActionIAMAccessAnalyzerRead              Action = "iam.access-analyzer.read"
 	ActionIAMAccessAnalyzerUpdate            Action = "iam.access-analyzer.update"
 	ActionIAMAccessFindingList               Action = "iam.access-finding.list"
+	ActionIAMAccessFindingRead               Action = "iam.access-finding.read"
+	ActionIAMAccessFindingArchive            Action = "iam.access-finding.archive"
+	ActionIAMAccessFindingUnarchive          Action = "iam.access-finding.unarchive"
 	ActionIAMPolicyAttachmentCreate          Action = "iam.policy-attachment.create"
 	ActionIAMPolicyAttachmentRevoke          Action = "iam.policy-attachment.revoke"
 	ActionIAMPlatformPolicyAttachmentCreate  Action = "iam.platform-policy-attachment.create"
@@ -466,7 +469,7 @@ func AllServicePurposes() []ServicePurpose {
 // ActionDefinition and contract enum order are derived projections, not a second
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
-	iamAccessAnalyzerProfile(),
+	iamAccessFindingProfile(),
 	paasProfileRevisionTwelve,
 	managedServiceProfileRevisionFour,
 	auditProfileRevisionFour,
@@ -1023,6 +1026,21 @@ func iamAccessAnalyzerProfile() AuthorizationProfile {
 		declaredProfileAction(ActionIAMAccessAnalyzerRead, ResourceAccessAnalyzer, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionIAMAccessAnalyzerUpdate, ResourceAccessAnalyzer, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionIAMAccessFindingList, ResourceAccessAnalyzer, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	} {
+		declaration.SubjectTypes = []SubjectType{SubjectUser}
+		declaration.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
+		profile.Actions = append(profile.Actions, declaration)
+	}
+	return profile
+}
+
+func iamAccessFindingProfile() AuthorizationProfile {
+	profile := iamAccessAnalyzerProfile()
+	profile.Revision = 12
+	for _, declaration := range []AuthorizationProfileAction{
+		declaredProfileAction(ActionIAMAccessFindingRead, ResourceAccessFinding, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMAccessFindingArchive, ResourceAccessFinding, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMAccessFindingUnarchive, ResourceAccessFinding, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 	} {
 		declaration.SubjectTypes = []SubjectType{SubjectUser}
 		declaration.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}

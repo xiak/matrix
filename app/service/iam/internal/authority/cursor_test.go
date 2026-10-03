@@ -213,6 +213,55 @@ func TestRoleSessionDirectoryCursorBindsAuthorityFiltersAndTerminalRevision(t *t
 	}
 }
 
+func TestAccessFindingCursorBindsFilterAnalyzerRevisionAndRecoveryEpoch(t *testing.T) {
+	now := authorityTestTime()
+	codec, _ := NewCursorCodec(bytes.Repeat([]byte{0x49}, 32))
+	subject := authoritySubject(now, iamv1.SystemPolicyAccountAdministrator)
+	query := DirectoryQuery{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMAccessFindingList,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccessAnalyzer, ID: "analyzer-a"},
+		AccessFindings: &AccessFindingDirectoryQuery{Revision: AccessFindingDirectoryRevision{
+			AnalyzerResourceVersion: 7, RecoveryEpoch: 2}, Filter: iamv1.AccessFindingFilter{Status: iamv1.AccessFindingStatusAll}}}
+	cursor, err := codec.Encode(subject, query, "finding-last", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after, err := codec.Decode(cursor, subject, query, now.Add(time.Second)); err != nil || after != "finding-last" {
+		t.Fatal("finding directory could not continue", err)
+	}
+	for name, change := range map[string]func(*DirectoryQuery){
+		"another analyzer": func(q *DirectoryQuery) { q.Resource.ID = "analyzer-b" },
+		"changed status": func(q *DirectoryQuery) {
+			q.AccessFindings.Filter.Status = iamv1.AccessFindingStatusFilter(iamv1.AccessFindingArchived)
+		},
+		"analyzer updated":  func(q *DirectoryQuery) { q.AccessFindings.Revision.AnalyzerResourceVersion++ },
+		"recovery advanced": func(q *DirectoryQuery) { q.AccessFindings.Revision.RecoveryEpoch++ },
+		"zero revision":     func(q *DirectoryQuery) { q.AccessFindings.Revision.AnalyzerResourceVersion = 0 },
+		"unnormalized":      func(q *DirectoryQuery) { q.AccessFindings.Filter.Status = "" },
+		"unknown status":    func(q *DirectoryQuery) { q.AccessFindings.Filter.Status = "UNKNOWN" },
+		"different purpose": func(q *DirectoryQuery) { q.Action = iamv1.ActionIAMAccessAnalyzerRead },
+		"mixed role query": func(q *DirectoryQuery) {
+			q.RoleSessions = &RoleSessionDirectoryQuery{Revision: RoleSessionDirectoryRevision{
+				CredentialGeneration: 1, DirectoryRevision: 1, UserAuthorizationGeneration: 1, Groups: []RoleSourceGroupGeneration{}},
+				Filter: iamv1.RoleSessionFilter{Lifecycle: "ALL"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := query
+			detail := *query.AccessFindings
+			changed.AccessFindings = &detail
+			change(&changed)
+			if after, err := codec.Decode(cursor, subject, changed, now); !errors.Is(err, ErrInvalidCursor) || after != "" {
+				t.Fatal("changed finding binding disclosed continuation", err)
+			}
+		})
+	}
+	noPermission := subject
+	noPermission.Policies = nil
+	if _, err := codec.Decode(cursor, noPermission, query, now); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("finding directory revision became a permit")
+	}
+}
+
 func TestDirectoryCursorCannotBypassExpiredPolicyConditions(t *testing.T) {
 	now := authorityTestTime()
 	codec, err := NewCursorCodec(bytes.Repeat([]byte{0x36}, 32))

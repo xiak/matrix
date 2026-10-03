@@ -1764,8 +1764,8 @@ BEGIN
             ERRCODE = '22023',
             MESSAGE = 'sanitized IAM Audit event is invalid';
     END IF;
-    IF (submitted_event->>'occurredAt')::timestamptz IS DISTINCT FROM
-       transaction_timestamp() THEN
+    IF expected_action NOT IN ('iam.access-finding.detected','iam.access-finding.resolved')
+       AND (submitted_event->>'occurredAt')::timestamptz IS DISTINCT FROM transaction_timestamp() THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
             MESSAGE = 'IAM Audit event must use database transaction time';

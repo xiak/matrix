@@ -20,6 +20,7 @@ const (
 	IAMAuthenticationRecovery = "secrets/database/iam-authentication-recovery-dsn"
 	IAMBackupCustody          = "secrets/database/iam-backup-custody-dsn"
 	IAMNotificationWorker     = "secrets/database/iam-notification-worker-dsn"
+	IAMAccessAnalysisWorker   = "secrets/database/iam-access-analysis-worker-dsn"
 	AuditRuntime              = "secrets/database/audit-runtime-dsn"
 	PaaSAPI                   = "secrets/database/paas-api-dsn"
 	PaaSWorker                = "secrets/database/paas-worker-dsn"

@@ -37,7 +37,10 @@ type Workflow interface {
 	ListAccessAnalyzers(context.Context, iamv1.Secret, string, string) (iamv1.AccessAnalyzerList, error)
 	AccessAnalyzer(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, string) (iamv1.AccessAnalyzer, error)
 	UpdateAccessAnalyzer(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.UpdateAccessAnalyzerRequest) (iamv1.AccessAnalyzer, error)
-	ListAccessFindings(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, string, string) (iamv1.AccessFindingList, error)
+	ListAccessFindings(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingFilter, string, string) (iamv1.AccessFindingList, error)
+	AccessFinding(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingID, string) (iamv1.AccessFinding, error)
+	ArchiveAccessFinding(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingID, iamv1.AccessFindingDispositionRequest) (iamv1.AccessFinding, error)
+	UnarchiveAccessFinding(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingID, iamv1.AccessFindingDispositionRequest) (iamv1.AccessFinding, error)
 	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
 	GetUser(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserAccess, error)
 	GetUserPermissionBoundary(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserPermissionBoundary, error)
@@ -1346,6 +1349,25 @@ func directoryPage(response http.ResponseWriter, request *http.Request, validate
 	return values[0], true
 }
 
+func accessFindingPage(response http.ResponseWriter, request *http.Request) (iamv1.AccessFindingFilter, string, bool) {
+	query, err := url.ParseQuery(request.URL.RawQuery)
+	valid := err == nil && len(request.URL.RawQuery) <= 512 && len(query) <= 2 && request.ContentLength == 0 && len(request.TransferEncoding) == 0
+	for key, values := range query {
+		if len(values) != 1 || values[0] == "" || (key != "after" && key != "status") {
+			valid = false
+		}
+	}
+	filter, filterErr := iamv1.NormalizeAccessFindingFilter(iamv1.AccessFindingFilter{
+		Status: iamv1.AccessFindingStatusFilter(query.Get("status")),
+	})
+	after := query.Get("after")
+	if !valid || filterErr != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.query.unsupported", "IAM access finding query invalid")
+		return iamv1.AccessFindingFilter{}, "", false
+	}
+	return filter, after, true
+}
+
 func (value *handler) securityReports(response http.ResponseWriter, request *http.Request) {
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
@@ -1458,6 +1480,10 @@ func (value *handler) accessAnalyzers(response http.ResponseWriter, request *htt
 }
 
 func (value *handler) accessAnalyzer(response http.ResponseWriter, request *http.Request) {
+	if strings.Contains(strings.TrimPrefix(request.URL.Path, "/v1/account/access-analyzers/"), "/findings/") {
+		value.accessFinding(response, request)
+		return
+	}
 	suffix := ""
 	switch {
 	case strings.HasSuffix(request.URL.Path, ":update"):
@@ -1495,11 +1521,11 @@ func (value *handler) accessAnalyzer(response http.ResponseWriter, request *http
 		if !value.requireMethod(response, request, http.MethodGet) {
 			return
 		}
-		after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
+		filter, after, ok := accessFindingPage(response, request)
 		if !ok {
 			return
 		}
-		result, err := value.workflow.ListAccessFindings(request.Context(), credential, iamv1.AccessAnalyzerID(id), after, requestID(request))
+		result, err := value.workflow.ListAccessFindings(request.Context(), credential, iamv1.AccessAnalyzerID(id), filter, after, requestID(request))
 		if err == nil {
 			err = iamv1.ValidateAccessFindingList(result)
 		}
@@ -1524,6 +1550,71 @@ func (value *handler) accessAnalyzer(response http.ResponseWriter, request *http
 		response.Header().Set("Cache-Control", "no-store")
 		writeJSON(response, http.StatusOK, result)
 	}
+}
+
+func (value *handler) accessFinding(response http.ResponseWriter, request *http.Request) {
+	path := strings.TrimPrefix(request.URL.Path, "/v1/account/access-analyzers/")
+	parts := strings.Split(path, "/")
+	if path == request.URL.Path || len(parts) != 3 || parts[1] != "findings" || parts[0] == "" || parts[2] == "" {
+		value.notFound(response, request)
+		return
+	}
+	suffix := ""
+	for _, candidate := range []string{":archive", ":unarchive"} {
+		if strings.HasSuffix(parts[2], candidate) {
+			suffix = candidate
+			parts[2] = strings.TrimSuffix(parts[2], candidate)
+			break
+		}
+	}
+	if iamv1.ValidateID("analyzerId", parts[0]) != nil || iamv1.ValidateID("findingId", parts[2]) != nil {
+		value.notFound(response, request)
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	analyzerID, findingID := iamv1.AccessAnalyzerID(parts[0]), iamv1.AccessFindingID(parts[2])
+	if suffix == "" {
+		if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+			return
+		}
+		result, err := value.workflow.AccessFinding(request.Context(), credential, analyzerID, findingID, requestID(request))
+		if err == nil {
+			err = iamv1.ValidateAccessFinding(result)
+		}
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		response.Header().Set("Cache-Control", "no-store")
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	body, ok := decodeJSON[iamv1.AccessFindingDispositionRequest](value, response, request)
+	if !ok {
+		return
+	}
+	var result iamv1.AccessFinding
+	var err error
+	if suffix == ":archive" {
+		result, err = value.workflow.ArchiveAccessFinding(request.Context(), credential, analyzerID, findingID, body)
+	} else {
+		result, err = value.workflow.UnarchiveAccessFinding(request.Context(), credential, analyzerID, findingID, body)
+	}
+	if err == nil {
+		err = iamv1.ValidateAccessFinding(result)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (value *handler) accountSecuritySettings(response http.ResponseWriter, request *http.Request) {
@@ -2051,6 +2142,8 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusNotFound, "iam.security-report.not-found", "Security report not found")
 	case errors.Is(err, identityaccess.ErrAccessAnalyzerNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.access-analyzer.not-found", "Access analyzer not found")
+	case errors.Is(err, identityaccess.ErrAccessFindingNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.access-finding.not-found", "Access finding not found")
 	case errors.Is(err, identityaccess.ErrUserPasswordResetCompletionNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.user-password-reset-completion.not-found", "User password reset completion not found")
 	case errors.Is(err, identityaccess.ErrVerificationRejected):

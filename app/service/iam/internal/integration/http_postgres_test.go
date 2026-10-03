@@ -43,6 +43,7 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 	iampostgres "github.com/xiak/matrix/app/service/iam/internal/data/postgres"
 	iamhttp "github.com/xiak/matrix/app/service/iam/internal/service/nethttp"
+	"github.com/xiak/matrix/app/service/iam/internal/usecase/accessanalysis"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/auditdispatch"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/authenticationrecovery"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
@@ -54,6 +55,8 @@ const (
 	iamHTTPPostgresDSN       = "MATRIX_IAM_HTTP_POSTGRES_TEST_DSN"
 	iamHTTPTestRole          = "matrix_iam_http_test_api"
 	iamHTTPWorkerRole        = "matrix_iam_http_test_worker"
+	iamAccessAnalysisLogin   = "matrix_iam_access_analysis_worker_login"
+	iamAccessAnalysisPass    = "matrix-iam-access-analysis-test-only"
 	iamHTTPTestPassword      = "matrix-iam-http-test-only"
 	adminPassword            = "Initial-Admin-Password-49!"
 	changedAdminPassword     = "Changed-Admin-Password-73!"
@@ -3960,6 +3963,113 @@ func iamNotificationPostfix(t *testing.T, scope iamv1.SecurityMailInstallationSc
 		return nil, ""
 	}
 	return channel, receive
+}
+
+// Exercise the production scanner executable and its exact purpose-only
+// database identity. No API, outbox, notification or recovery credential is
+// mounted into the child.
+func iamAccessAnalysisProcess(t *testing.T, ctx context.Context, database *pgx.Conn, adminDSN string) func() {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", "..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	binary := filepath.Join(directory, "access-analysis-worker")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.CommandContext(ctx, "go", "build", "-p", "2", "-trimpath", "-o", binary, "./app/service/iam/cmd/matrix-iam-access-analysis-worker")
+	build.Dir = root
+	build.Env = append(os.Environ(), "GOMAXPROCS=2", "GOMEMLIMIT=512MiB")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build access analysis executable: %v %s", err, output)
+	}
+	dsn, err := url.Parse(adminDSN)
+	if err != nil || (dsn.Scheme != "postgres" && dsn.Scheme != "postgresql") {
+		t.Fatal("access analysis test DSN must be an explicit PostgreSQL URL")
+	}
+	dsn.User = url.UserPassword(iamAccessAnalysisLogin, iamAccessAnalysisPass)
+	query := dsn.Query()
+	query.Del("user")
+	query.Del("password")
+	query.Set("application_name", "matrix-iam-access-analysis-process-gate")
+	dsn.RawQuery = query.Encode()
+	dsnPath := filepath.Join(directory, "access-analysis-dsn")
+	if err := os.WriteFile(dsnPath, []byte(dsn.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	child := exec.CommandContext(ctx, binary)
+	child.Dir = root
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "MATRIX_") && !strings.HasPrefix(entry, "GOMAXPROCS=") && !strings.HasPrefix(entry, "GOMEMLIMIT=") {
+			child.Env = append(child.Env, entry)
+		}
+	}
+	child.Env = append(child.Env, "GOMAXPROCS=2", "GOMEMLIMIT=512MiB",
+		"MATRIX_IAM_ACCESS_ANALYSIS_DATABASE_DSN_FILE="+dsnPath,
+		"MATRIX_IAM_ACCESS_ANALYSIS_WORKER_ID=access-analysis-real-process",
+		"MATRIX_IAM_ACCESS_ANALYSIS_LISTEN_ADDRESS="+address)
+	var stdout, stderr bytes.Buffer
+	child.Stdout, child.Stderr = &stdout, &stderr
+	if err := child.Start(); err != nil {
+		t.Fatal("start access analysis executable", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- child.Wait() }()
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			_ = child.Process.Kill()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("access analysis child did not stop")
+			}
+			for _, private := range []string{iamAccessAnalysisPass, dsn.String()} {
+				if strings.Contains(stdout.String(), private) || strings.Contains(stderr.String(), private) {
+					t.Error("access analysis executable leaked private database material")
+				}
+			}
+		})
+	}
+	t.Cleanup(stop)
+	client := &http.Client{Timeout: time.Second, Transport: &http.Transport{Proxy: nil}}
+	defer client.CloseIdleConnections()
+	ready := false
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := client.Get("http://" + address + "/ready")
+		if err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				ready = true
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !ready {
+		stop()
+		t.Fatal("access analysis executable never became ready", stderr.String())
+	}
+	var restricted bool
+	if err := database.QueryRow(ctx, `SELECT count(*) BETWEEN 1 AND 3 AND bool_and(usename=$1)
+		FROM pg_stat_activity WHERE application_name='matrix-iam-access-analysis-process-gate' AND datname=current_database()`,
+		iamAccessAnalysisLogin).Scan(&restricted); err != nil || !restricted {
+		stop()
+		t.Fatal("actual access analysis process used an unproven database login", err)
+	}
+	return stop
 }
 
 // Exercise the production executable and protected FILE consumers, not a
@@ -17520,6 +17630,299 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 		}
 	}
 
+	var unusedUser iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "access-analyzer-unused", "displayName": "Unused access",
+		"initialPassword": initialDeveloperPassword, "requestId": "access-analyzer-unused-create"}, http.StatusCreated, &unusedUser)
+	if _, err := database.Exec(ctx, `UPDATE iam.principals SET created_at=clock_timestamp()-interval '31 days'
+		WHERE tenant_id=$1 AND id=$2`, document.Organization.ID, unusedUser.ID); err != nil {
+		t.Fatal("backdate synthetic unused principal", err)
+	}
+	if _, err := database.Exec(ctx, `UPDATE iam.access_analyzer_observations
+		SET observed_from=clock_timestamp()-interval '31 days',observed_through=clock_timestamp()-interval '31 days',
+			state='INSUFFICIENT_COVERAGE',reason='OBSERVATION_WINDOW_INCOMPLETE'
+		WHERE tenant_id=$1 AND analyzer_id=$2
+		  AND source IN ('IAM_PASSWORD_SESSIONS','IAM_ACCESS_KEY_AUTHORIZATIONS','IAM_ROLE_SESSIONS','IAM_ROLE_AUTHORIZATIONS')`,
+		document.Organization.ID, analyzer.ID); err != nil {
+		t.Fatal("establish synthetic complete observation window", err)
+	}
+	createIAMAccessAnalysisRole(t, ctx, database)
+	analysisConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal("parse access analysis worker database config", err)
+	}
+	analysisConfig.ConnConfig.User, analysisConfig.ConnConfig.Password = iamAccessAnalysisLogin, iamAccessAnalysisPass
+	analysisConfig.MaxConns, analysisConfig.MinConns = 2, 0
+	analysisPool, err := pgxpool.NewWithConfig(ctx, analysisConfig)
+	if err != nil {
+		t.Fatal("connect restricted access analysis worker", err)
+	}
+	defer analysisPool.Close()
+	analysisRepository, err := iampostgres.NewAccessAnalysisRepository(analysisPool)
+	if err != nil {
+		t.Fatal("construct access analysis repository", err)
+	}
+	tamperSequence := 0
+	tamperedScanner, err := accessanalysis.NewScanner(accessAnalysisTamperRepository{Repository: analysisRepository}, func(string) (string, error) {
+		tamperSequence++
+		return fmt.Sprintf("tampered-analysis-%d", tamperSequence), nil
+	}, "access-analysis-worker-one")
+	if err != nil {
+		t.Fatal("construct tampered access analysis scanner", err)
+	}
+	tampered, err := tamperedScanner.ScanOnce(ctx)
+	if err == nil || !tampered.Claimed {
+		t.Fatal("forged access analysis digest was accepted", tampered, err)
+	}
+	var prematureFindings, prematureFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.access_findings WHERE tenant_id=$1),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-finding.detected')`,
+		document.Organization.ID).Scan(&prematureFindings, &prematureFacts); err != nil || prematureFindings != 0 || prematureFacts != 0 {
+		t.Fatal("forged access analysis left partial state", prematureFindings, prematureFacts, err)
+	}
+	if _, err := database.Exec(ctx, `UPDATE iam.access_analysis_scan_state
+		SET worker_id=NULL,lease_expires_at=NULL,next_scan_at=clock_timestamp(),updated_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$2`, document.Organization.ID, analyzer.ID); err != nil {
+		t.Fatal("release rejected test lease", err)
+	}
+	stopAnalysisProcess := iamAccessAnalysisProcess(t, ctx, database, dsn)
+	defer stopAnalysisProcess()
+	waitForFindingStatus := func(status iamv1.AccessFindingStatus) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			var observed string
+			err := database.QueryRow(ctx, `SELECT status FROM iam.access_findings
+				WHERE tenant_id=$1 AND analyzer_id=$2 AND target_id=$3`, document.Organization.ID, analyzer.ID, unusedUser.ID).Scan(&observed)
+			if err == nil && observed == string(status) {
+				return
+			}
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatal("read access finding process result", err)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Fatal("access analysis process did not reach finding status", status)
+	}
+	waitForFindingStatus(iamv1.AccessFindingActive)
+	var detectedPage iamv1.AccessFindingList
+	call(http.MethodGet, path+"/findings", root, nil, http.StatusOK, &detectedPage)
+	if iamv1.ValidateAccessFindingList(detectedPage) != nil || len(detectedPage.Items) != 1 ||
+		detectedPage.Items[0].Status != iamv1.AccessFindingActive || detectedPage.Items[0].Type != iamv1.AccessFindingUnusedPassword ||
+		detectedPage.Items[0].Target != (iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(unusedUser.ID)}) {
+		t.Fatal("access finding directory differs from the committed detection")
+	}
+	findingPath := path + "/findings/" + string(detectedPage.Items[0].ID)
+	var detectedFinding iamv1.AccessFinding
+	call(http.MethodGet, findingPath, root, nil, http.StatusOK, &detectedFinding)
+	if detectedFinding != detectedPage.Items[0] {
+		t.Fatal("access finding detail differs from its directory evidence")
+	}
+	archive := iamv1.AccessFindingDispositionRequest{ResourceVersion: detectedFinding.ResourceVersion, RequestID: "access-finding-archive"}
+	var archivedFinding iamv1.AccessFinding
+	call(http.MethodPost, findingPath+":archive", root, archive, http.StatusOK, &archivedFinding)
+	if archivedFinding.Status != iamv1.AccessFindingArchived || archivedFinding.ResourceVersion != detectedFinding.ResourceVersion+1 ||
+		archivedFinding.Target != detectedFinding.Target {
+		t.Fatal("access finding archive mutated its evidence or target")
+	}
+	var archivedReplay iamv1.AccessFinding
+	call(http.MethodPost, findingPath+":archive", root, archive, http.StatusOK, &archivedReplay)
+	if archivedReplay != archivedFinding {
+		t.Fatal("access finding archive replay changed its original completion")
+	}
+	call(http.MethodPost, findingPath+":archive", root,
+		iamv1.AccessFindingDispositionRequest{ResourceVersion: archivedFinding.ResourceVersion, RequestID: archive.RequestID}, http.StatusConflict, nil)
+	call(http.MethodPost, findingPath+":unarchive", root,
+		iamv1.AccessFindingDispositionRequest{ResourceVersion: detectedFinding.ResourceVersion, RequestID: "access-finding-unarchive-stale"}, http.StatusConflict, nil)
+	var unarchivedFinding iamv1.AccessFinding
+	call(http.MethodPost, findingPath+":unarchive", root,
+		iamv1.AccessFindingDispositionRequest{ResourceVersion: archivedFinding.ResourceVersion, RequestID: "access-finding-unarchive"}, http.StatusOK, &unarchivedFinding)
+	if unarchivedFinding.Status != iamv1.AccessFindingActive || unarchivedFinding.ResourceVersion != archivedFinding.ResourceVersion+1 ||
+		unarchivedFinding.Target != detectedFinding.Target {
+		t.Fatal("access finding unarchive mutated its evidence or target")
+	}
+	if _, err := analysisPool.Exec(ctx, "SELECT count(*) FROM iam.access_findings"); err == nil {
+		t.Fatal("access analysis worker can read finding storage directly")
+	}
+	unusedLogin := localRecoveryLogin(t, handler, unusedUser.LoginName+"@"+string(unusedUser.AccountID), initialDeveloperPassword, true)
+	if unusedLogin == "" {
+		t.Fatal("unused principal activity did not create a real session")
+	}
+	if _, err := database.Exec(ctx, `UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$2`, document.Organization.ID, analyzer.ID); err != nil {
+		t.Fatal("make access analyzer eligible for its next test cycle", err)
+	}
+	waitForFindingStatus(iamv1.AccessFindingResolved)
+	var resolvedPage iamv1.AccessFindingList
+	call(http.MethodGet, path+"/findings", root, nil, http.StatusOK, &resolvedPage)
+	if iamv1.ValidateAccessFindingList(resolvedPage) != nil || len(resolvedPage.Items) != 1 ||
+		resolvedPage.Items[0].ID != detectedPage.Items[0].ID || resolvedPage.Items[0].Status != iamv1.AccessFindingResolved ||
+		resolvedPage.Items[0].ResolvedAt == nil || !resolvedPage.Items[0].ResolvedAt.Equal(resolvedPage.Items[0].UpdatedAt) {
+		t.Fatal("access finding resolution differs from the committed activity")
+	}
+	var detectedFacts, resolvedFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-finding.detected'),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-finding.resolved')`,
+		document.Organization.ID).Scan(&detectedFacts, &resolvedFacts); err != nil || detectedFacts != 1 || resolvedFacts != 1 {
+		t.Fatal("access finding audit facts differ", detectedFacts, resolvedFacts, err)
+	}
+
+	// Start from one role created by the public workflow, then create a bounded
+	// old-state fixture by copying its already-validated metadata/trust bytes.
+	// The production scanner and completion contract still produce every
+	// finding; the fixture avoids 101 irrelevant API receipts and never writes
+	// the findings table itself.
+	var paginationTemplate iamv1.Role
+	call(http.MethodPost, "/v1/roles", root, iamv1.CreateRoleRequest{
+		Name: "Access pagination template", Tags: []iamv1.RoleTag{},
+		TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}},
+		RequestID:   "access-pagination-template",
+	}, http.StatusCreated, &paginationTemplate)
+	paginationFixture, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal("begin access finding pagination fixture", err)
+	}
+	if _, err = paginationFixture.Exec(ctx, "SET CONSTRAINTS iam.roles_current_trust_fk DEFERRED"); err == nil {
+		_, err = paginationFixture.Exec(ctx, `INSERT INTO iam.roles(
+			tenant_id,id,metadata,management,status,resource_version,current_trust_version_id,created_at,updated_at)
+		SELECT template.tenant_id,'access-pagination-role-'||to_char(item,'FM000'),
+		  jsonb_set(template.metadata,'{name}',to_jsonb('Access pagination role '||to_char(item,'FM000'))),
+		  template.management,template.status,1,'access-pagination-trust-'||to_char(item,'FM000'),
+		  clock_timestamp()-interval '31 days',clock_timestamp()-interval '31 days'
+		FROM iam.roles template CROSS JOIN generate_series(0,$3::integer-1) item
+		WHERE template.tenant_id=$1 AND template.id=$2`, document.Organization.ID, paginationTemplate.ID, iamv1.DirectoryPageSize+1)
+	}
+	if err == nil {
+		_, err = paginationFixture.Exec(ctx, `INSERT INTO iam.role_trust_versions(
+			tenant_id,role_id,id,canonical_document,content_digest,created_at)
+		SELECT source.tenant_id,'access-pagination-role-'||to_char(item,'FM000'),
+		  'access-pagination-trust-'||to_char(item,'FM000'),source.canonical_document,source.content_digest,
+		  clock_timestamp()-interval '31 days'
+		FROM iam.role_trust_versions source CROSS JOIN generate_series(0,$4::integer-1) item
+		WHERE source.tenant_id=$1 AND source.role_id=$2 AND source.id=$3`, document.Organization.ID,
+			paginationTemplate.ID, paginationTemplate.CurrentTrustVersionID, iamv1.DirectoryPageSize+1)
+	}
+	if err == nil {
+		err = paginationFixture.Commit(ctx)
+	} else {
+		_ = paginationFixture.Rollback(context.Background())
+	}
+	if err != nil {
+		t.Fatal("create access finding pagination fixture", err)
+	}
+	if _, err := database.Exec(ctx, `UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$2`, document.Organization.ID, analyzer.ID); err != nil {
+		t.Fatal("make pagination scan eligible", err)
+	}
+	paginationDeadline := time.Now().Add(20 * time.Second)
+	for {
+		var activeRoles int
+		if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.access_findings
+			WHERE tenant_id=$1 AND analyzer_id=$2 AND target_kind='ROLE' AND status='ACTIVE'`,
+			document.Organization.ID, analyzer.ID).Scan(&activeRoles); err != nil {
+			t.Fatal("count paginated findings", err)
+		}
+		if activeRoles == iamv1.DirectoryPageSize+1 {
+			break
+		}
+		if time.Now().After(paginationDeadline) {
+			t.Fatalf("access analysis process produced %d/%d pagination findings", activeRoles, iamv1.DirectoryPageSize+1)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	var activeFirst, activeSecond iamv1.AccessFindingList
+	call(http.MethodGet, path+"/findings?status=ACTIVE", root, nil, http.StatusOK, &activeFirst)
+	if iamv1.ValidateAccessFindingList(activeFirst) != nil || len(activeFirst.Items) != iamv1.DirectoryPageSize || activeFirst.NextAfter == "" {
+		t.Fatal("first active finding page did not expose an opaque continuation")
+	}
+	call(http.MethodGet, path+"/findings?status=ACTIVE&after="+url.QueryEscape(activeFirst.NextAfter), root, nil, http.StatusOK, &activeSecond)
+	if iamv1.ValidateAccessFindingList(activeSecond) != nil || len(activeSecond.Items) != 1 || activeSecond.NextAfter != "" ||
+		activeFirst.Items[len(activeFirst.Items)-1].ID >= activeSecond.Items[0].ID {
+		t.Fatal("second active finding page duplicated, skipped or reordered evidence")
+	}
+	call(http.MethodGet, path+"/findings?status=RESOLVED&after="+url.QueryEscape(activeFirst.NextAfter), root, nil, http.StatusUnprocessableEntity, nil)
+	var resolvedOnly iamv1.AccessFindingList
+	call(http.MethodGet, path+"/findings?status=RESOLVED", root, nil, http.StatusOK, &resolvedOnly)
+	if len(resolvedOnly.Items) != 1 || resolvedOnly.Items[0].ID != detectedFinding.ID || resolvedOnly.Items[0].Status != iamv1.AccessFindingResolved {
+		t.Fatal("resolved finding filter included another lifecycle")
+	}
+	planTx, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal("begin access finding plan proof", err)
+	}
+	if _, err = planTx.Exec(ctx, "ANALYZE iam.access_findings; SET LOCAL enable_seqscan=off; SET LOCAL enable_bitmapscan=off; SET LOCAL enable_sort=off"); err != nil {
+		t.Fatal("bound access finding plan proof", err)
+	}
+	planRows, err := planTx.Query(ctx, `EXPLAIN (COSTS OFF,FORMAT TEXT)
+		SELECT finding_id FROM iam.access_findings WHERE tenant_id=$1 AND analyzer_id=$2 AND recovery_epoch=0
+		  AND status='RESOLVED' AND finding_id>'' COLLATE "C" ORDER BY finding_id COLLATE "C" LIMIT 101`,
+		document.Organization.ID, analyzer.ID)
+	if err != nil {
+		t.Fatal("explain access finding status directory", err)
+	}
+	var plan strings.Builder
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			t.Fatal("read access finding plan", err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	planRows.Close()
+	_ = planTx.Rollback(context.Background())
+	if planRows.Err() != nil || !strings.Contains(plan.String(), "access_findings_status_directory_idx") {
+		t.Fatalf("access finding status directory has no usable bounded index: %v\n%s", planRows.Err(), plan.String())
+	}
+	stopAnalysisProcess()
+
+	// Two independent HTTP authority instances race the same expected version.
+	// The database CAS must commit exactly one review fact and one receipt.
+	secondWorkflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, &iamTransactionFailureTrace{}, iamHTTPAccessKeyWrapping(t, document))
+	secondEndpoint, err := iamhttp.NewHandler(secondWorkflow, iamhttp.Config{})
+	if err != nil {
+		t.Fatal("construct second IAM authority", err)
+	}
+	secondHandler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		secondEndpoint.ServeHTTP(response, request.WithContext(ctx))
+	})
+	concurrentTarget := activeFirst.Items[0]
+	concurrentPath := path + "/findings/" + string(concurrentTarget.ID) + ":archive"
+	start := make(chan struct{})
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	archiveBodies := make([][]byte, 2)
+	for index := range archiveBodies {
+		archiveBodies[index] = mustIAMJSON(t, iamv1.AccessFindingDispositionRequest{ResourceVersion: concurrentTarget.ResourceVersion,
+			RequestID: fmt.Sprintf("access-finding-concurrent-archive-%d", index)})
+	}
+	for index, currentHandler := range []http.Handler{handler, secondHandler} {
+		currentHandler, body := currentHandler, archiveBodies[index]
+		go func() {
+			<-start
+			responses <- performIAMRequest(currentHandler, http.MethodPost, concurrentPath, root, body)
+		}()
+	}
+	close(start)
+	statuses := []int{(<-responses).Code, (<-responses).Code}
+	slices.Sort(statuses)
+	if !slices.Equal(statuses, []int{http.StatusOK, http.StatusConflict}) {
+		t.Fatal("concurrent access finding archive did not have one winner", statuses)
+	}
+	var archivedOnly iamv1.AccessFindingList
+	call(http.MethodGet, path+"/findings?status=ARCHIVED", root, nil, http.StatusOK, &archivedOnly)
+	if len(archivedOnly.Items) != 1 || archivedOnly.Items[0].ID != concurrentTarget.ID || archivedOnly.Items[0].Status != iamv1.AccessFindingArchived {
+		t.Fatal("archived finding filter differs from the one committed race winner")
+	}
+
+	// A configuration revision is part of the cursor snapshot even if the
+	// caller and status filter are unchanged.
+	paginatedUpdate := iamv1.UpdateAccessAnalyzerRequest{Status: iamv1.AccessAnalyzerActive, UnusedAccessAgeDays: 31,
+		ResourceVersion: enabled.ResourceVersion, RequestID: "access-analyzer-pagination-revision"}
+	var paginatedAnalyzer iamv1.AccessAnalyzer
+	call(http.MethodPost, path+":update", root, paginatedUpdate, http.StatusOK, &paginatedAnalyzer)
+	call(http.MethodGet, path+"/findings?status=ACTIVE&after="+url.QueryEscape(activeFirst.NextAfter), root, nil, http.StatusUnprocessableEntity, nil)
+
 	var otherAccount iamv1.Account
 	call(http.MethodPost, "/v1/accounts", root, map[string]any{"id": "access-analyzer-other-account", "displayName": "Access analyzer other",
 		"rootLoginName": "access-analyzer-other-root", "rootDisplayName": "Access analyzer other root", "initialPassword": initialDeveloperPassword,
@@ -17535,6 +17938,12 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 	}
 	call(http.MethodGet, path, otherRoot, nil, http.StatusNotFound, nil)
 	call(http.MethodGet, "/v1/account/access-analyzers/"+string(otherAnalyzer.ID), root, nil, http.StatusNotFound, nil)
+	call(http.MethodGet, findingPath, otherRoot, nil, http.StatusNotFound, nil)
+	call(http.MethodGet, "/v1/account/access-analyzers/"+string(otherAnalyzer.ID)+"/findings/"+string(detectedFinding.ID), root, nil, http.StatusNotFound, nil)
+	call(http.MethodPost, findingPath+":archive", otherRoot,
+		iamv1.AccessFindingDispositionRequest{ResourceVersion: 4, RequestID: "cross-account-finding-archive"}, http.StatusNotFound, nil)
+	call(http.MethodPost, "/v1/account/access-analyzers/"+string(otherAnalyzer.ID)+"/findings/"+string(detectedFinding.ID)+":archive", root,
+		iamv1.AccessFindingDispositionRequest{ResourceVersion: 4, RequestID: "wrong-analyzer-finding-archive"}, http.StatusNotFound, nil)
 	call(http.MethodGet, path+"/findings?after=forged", root, nil, http.StatusBadRequest, nil)
 	var disabledOtherAccount iamv1.Account
 	call(http.MethodPost, "/v1/accounts/"+string(otherAccount.ID)+":set-status", root,
@@ -17547,16 +17956,20 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 	otherRoot = localRecoveryLogin(t, handler, "access-analyzer-other-root", changedDeveloperPassword, false)
 	call(http.MethodGet, "/v1/account/access-analyzers/"+string(otherAnalyzer.ID), otherRoot, nil, http.StatusOK, &read)
 
-	var receipts, createdFacts, updatedFacts int
+	var receipts, createdFacts, updatedFacts, findingReceipts, archivedFacts, unarchivedFacts int
 	if err := database.QueryRow(ctx, `SELECT
 	  (SELECT count(*) FROM iam.access_analyzer_receipts WHERE tenant_id=$1),
 	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-analyzer.created'),
-	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-analyzer.updated')`,
-		document.Organization.ID).Scan(&receipts, &createdFacts, &updatedFacts); err != nil {
+	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-analyzer.updated'),
+	  (SELECT count(*) FROM iam.access_finding_receipts WHERE tenant_id=$1),
+	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-finding.archived'),
+	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.access-finding.unarchived')`,
+		document.Organization.ID).Scan(&receipts, &createdFacts, &updatedFacts, &findingReceipts, &archivedFacts, &unarchivedFacts); err != nil {
 		t.Fatal("read access analyzer durable state", err)
 	}
-	if receipts != 3 || createdFacts != 1 || updatedFacts != 2 {
-		t.Fatalf("access analyzer replay or rejection changed durable state: receipts=%d created=%d updated=%d", receipts, createdFacts, updatedFacts)
+	if receipts != 4 || createdFacts != 1 || updatedFacts != 3 || findingReceipts != 3 || archivedFacts != 2 || unarchivedFacts != 1 {
+		t.Fatalf("access analyzer replay or rejection changed durable state: receipts=%d created=%d updated=%d findingReceipts=%d archived=%d unarchived=%d",
+			receipts, createdFacts, updatedFacts, findingReceipts, archivedFacts, unarchivedFacts)
 	}
 	restrictedConfig := config.Copy()
 	restrictedConfig.User, restrictedConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
@@ -17604,11 +18017,14 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 	assertReceiptMutationRejected("UPDATE iam.access_analyzer_receipts SET completed_at=completed_at+interval '1 second' WHERE tenant_id=$1", document.Organization.ID)
 	assertReceiptMutationRejected("DELETE FROM iam.access_analyzer_receipts WHERE tenant_id=$1", document.Organization.ID)
 	assertReceiptMutationRejected("TRUNCATE iam.access_analyzer_receipts")
+	assertReceiptMutationRejected("UPDATE iam.access_finding_receipts SET completed_at=completed_at+interval '1 second' WHERE tenant_id=$1", document.Organization.ID)
+	assertReceiptMutationRejected("DELETE FROM iam.access_finding_receipts WHERE tenant_id=$1", document.Organization.ID)
+	assertReceiptMutationRejected("TRUNCATE iam.access_finding_receipts")
 
 	applyIAMSchema(t, ctx, database)
 	var afterReplay iamv1.AccessAnalyzer
 	call(http.MethodGet, path, root, nil, http.StatusOK, &afterReplay)
-	if afterReplay != enabled {
+	if afterReplay != paginatedAnalyzer {
 		t.Fatal("equivalent schema replay changed the access analyzer")
 	}
 }
@@ -28328,6 +28744,41 @@ func createIAMHTTPRole(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	if _, err := admin.Exec(ctx, statement); err != nil {
 		t.Fatalf("create IAM HTTP runtime role: %v", err)
 	}
+}
+
+func createIAMAccessAnalysisRole(t *testing.T, ctx context.Context, admin *pgx.Conn) {
+	t.Helper()
+	statement := `DO $matrix_iam_access_analysis_role$
+	BEGIN
+		IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '` + iamAccessAnalysisLogin + `') THEN
+			CREATE ROLE ` + iamAccessAnalysisLogin + ` LOGIN PASSWORD '` + iamAccessAnalysisPass + `'
+				NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+		END IF;
+	END
+	$matrix_iam_access_analysis_role$;
+	ALTER ROLE ` + iamAccessAnalysisLogin + ` PASSWORD '` + iamAccessAnalysisPass + `'
+		NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+	GRANT matrix_iam_access_analysis_worker TO ` + iamAccessAnalysisLogin + `;`
+	if _, err := admin.Exec(ctx, statement); err != nil {
+		t.Fatalf("create IAM access analysis runtime role: %v", err)
+	}
+}
+
+type accessAnalysisTamperRepository struct{ accessanalysis.Repository }
+
+func (repository accessAnalysisTamperRepository) WithinTransaction(ctx context.Context, callback func(context.Context, accessanalysis.Transaction) error) error {
+	return repository.Repository.WithinTransaction(ctx, func(ctx context.Context, transaction accessanalysis.Transaction) error {
+		return callback(ctx, accessAnalysisTamperTransaction{Transaction: transaction})
+	})
+}
+
+type accessAnalysisTamperTransaction struct{ accessanalysis.Transaction }
+
+func (transaction accessAnalysisTamperTransaction) Complete(ctx context.Context, claim accessanalysis.Claim, completion accessanalysis.Completion) error {
+	if len(completion.Detections) > 0 {
+		completion.Detections[0].Event.RequestDigest = "sha256:" + strings.Repeat("b", 64)
+	}
+	return transaction.Transaction.Complete(ctx, claim, completion)
 }
 
 func assertIAMSecretsAbsent(t *testing.T, ctx context.Context, admin *pgx.Conn, plaintexts ...string) {

@@ -88,8 +88,8 @@ func ValidateEvent(value Event) error {
 			problems = append(problems, errors.New("self-service event must target the actual actor"))
 		}
 		if contract.PlatformOnly != (value.InstallationID != "") ||
-			contract.PlatformOnly && contract.PlatformSystemActorID == "" && value.Actor.Type != ActorUser ||
-			contract.PlatformSystemActorID != "" && (value.Actor.Type != ActorSystem || value.Actor.ID != contract.PlatformSystemActorID) ||
+			contract.PlatformOnly && contract.SystemActorID == "" && value.Actor.Type != ActorUser ||
+			contract.SystemActorID != "" && (value.Actor.Type != ActorSystem || value.Actor.ID != contract.SystemActorID) ||
 			contract.TargetMatchesInstallation && value.Target.ID != value.InstallationID {
 			problems = append(problems, errors.New("Audit action and authority differ"))
 		}

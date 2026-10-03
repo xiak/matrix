@@ -350,17 +350,18 @@ func actionRules() (eventRules []any, recordRules []any) {
 		if contract.PlatformOnly {
 			thenRequired = append(thenRequired, "installationId")
 			thenProperties["tenantId"] = false
-			if contract.PlatformSystemActorID == "" {
+			if contract.SystemActorID == "" {
 				thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorUser)}}}
-			} else {
-				thenProperties["actor"] = object{"properties": object{
-					"type": object{"const": string(auditv1.ActorSystem)},
-					"id":   object{"const": string(contract.PlatformSystemActorID)},
-				}}
 			}
 		} else {
 			thenRequired = append(thenRequired, "tenantId")
 			thenProperties["installationId"] = false
+		}
+		if contract.SystemActorID != "" {
+			thenProperties["actor"] = object{"properties": object{
+				"type": object{"const": string(auditv1.ActorSystem)},
+				"id":   object{"const": string(contract.SystemActorID)},
+			}}
 		}
 		if !contract.AccessKeyActorPermitted {
 			actor, exists := thenProperties["actor"].(object)

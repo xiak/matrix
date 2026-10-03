@@ -2183,6 +2183,11 @@ func TestIAMHTTPAccessAnalyzerRoutesAreCredentialBoundAndStrict(t *testing.T) {
 	workflow.accessAnalyzerList = iamv1.AccessAnalyzerList{APIVersion: iamv1.APIVersion, Kind: "AccessAnalyzerList", AccountID: analyzer.AccountID, Items: []iamv1.AccessAnalyzer{analyzer}}
 	workflow.accessFindingList = iamv1.AccessFindingList{APIVersion: iamv1.APIVersion, Kind: "AccessFindingList", AccountID: analyzer.AccountID,
 		AnalyzerID: analyzer.ID, ObservedAt: through, Coverage: coverage, Items: []iamv1.AccessFinding{}}
+	workflow.accessFinding = iamv1.AccessFinding{APIVersion: iamv1.APIVersion, Kind: "AccessFinding", ID: "finding-one",
+		AccountID: analyzer.AccountID, AnalyzerID: analyzer.ID, AnalyzerRevision: 1, Type: iamv1.AccessFindingUnusedPassword,
+		Status: iamv1.AccessFindingActive, Target: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: "user-one"},
+		TargetResourceVersion: 1, ConditionGeneration: 1, ActivityRevision: 1, WindowStartedAt: now.Add(-90 * 24 * time.Hour),
+		ObservedAt: now, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
 	handler := newTestHandler(t, workflow)
 
 	call := func(method, path, body string, want int) *httptest.ResponseRecorder {
@@ -2220,10 +2225,27 @@ func TestIAMHTTPAccessAnalyzerRoutesAreCredentialBoundAndStrict(t *testing.T) {
 		!strings.Contains(updated.Body.String(), `"resourceVersion":2`) {
 		t.Fatal("access analyzer update was not preserved")
 	}
-	findings := call(http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings", "", http.StatusOK)
+	findings := call(http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings?status=ARCHIVED", "", http.StatusOK)
 	if findings.Header().Get("Cache-Control") != "no-store" || workflow.accessFindingListCalls != 1 ||
+		workflow.accessFindingFilter.Status != iamv1.AccessFindingStatusFilter(iamv1.AccessFindingArchived) ||
 		!strings.Contains(findings.Body.String(), `"SOURCE_NOT_READY"`) || !strings.Contains(findings.Body.String(), `"items":[]`) {
 		t.Fatalf("access finding coverage was not explicit: %s", findings.Body.String())
+	}
+	finding := call(http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings/finding-one", "", http.StatusOK)
+	if finding.Header().Get("Cache-Control") != "no-store" || workflow.accessFindingReadCalls != 1 ||
+		workflow.accessFindingID != "finding-one" {
+		t.Fatal("access finding read lost its exact target")
+	}
+	archived := call(http.MethodPost, "/v1/account/access-analyzers/analyzer-one/findings/finding-one:archive",
+		`{"resourceVersion":1,"requestId":"finding-archive"}`, http.StatusOK)
+	if workflow.accessFindingArchiveCalls != 1 || workflow.accessFindingRequest.RequestID != "finding-archive" ||
+		!strings.Contains(archived.Body.String(), `"status":"ARCHIVED"`) {
+		t.Fatal("access finding archive was not preserved")
+	}
+	unarchived := call(http.MethodPost, "/v1/account/access-analyzers/analyzer-one/findings/finding-one:unarchive",
+		`{"resourceVersion":2,"requestId":"finding-unarchive"}`, http.StatusOK)
+	if workflow.accessFindingUnarchiveCalls != 1 || !strings.Contains(unarchived.Body.String(), `"status":"ACTIVE"`) {
+		t.Fatal("access finding unarchive was not preserved")
 	}
 
 	for _, sample := range []struct {
@@ -2233,7 +2255,10 @@ func TestIAMHTTPAccessAnalyzerRoutesAreCredentialBoundAndStrict(t *testing.T) {
 		{http.MethodGet, "/v1/account/access-analyzers?accountId=other", "", http.StatusBadRequest},
 		{http.MethodPost, "/v1/account/access-analyzers", `{"type":"UNUSED_ACCESS","requestId":"x","accountId":"other"}`, http.StatusBadRequest},
 		{http.MethodGet, "/v1/account/access-analyzers/analyzer-one?tenantId=other", "", http.StatusBadRequest},
-		{http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings/nested", "", http.StatusNotFound},
+		{http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings?status=UNKNOWN", "", http.StatusBadRequest},
+		{http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings?status=ACTIVE&status=ARCHIVED", "", http.StatusBadRequest},
+		{http.MethodGet, "/v1/account/access-analyzers/analyzer-one/findings/finding-one/nested", "", http.StatusNotFound},
+		{http.MethodPost, "/v1/account/access-analyzers/analyzer-one/findings/finding-one:resolve", `{"resourceVersion":3,"requestId":"invented"}`, http.StatusMethodNotAllowed},
 		{http.MethodDelete, "/v1/account/access-analyzers/analyzer-one", "", http.StatusMethodNotAllowed},
 	} {
 		response := call(sample.method, sample.path, sample.body, sample.want)
@@ -2356,6 +2381,8 @@ type httpWorkflow struct {
 	accessAnalyzer                   iamv1.AccessAnalyzer
 	accessAnalyzerList               iamv1.AccessAnalyzerList
 	accessFindingList                iamv1.AccessFindingList
+	accessFinding                    iamv1.AccessFinding
+	accessFindingFilter              iamv1.AccessFindingFilter
 	accessAnalyzerErr                error
 	accessAnalyzerCredential         iamv1.Secret
 	accessAnalyzerID                 iamv1.AccessAnalyzerID
@@ -2366,6 +2393,11 @@ type httpWorkflow struct {
 	accessAnalyzerReadCalls          int
 	accessAnalyzerUpdateCalls        int
 	accessFindingListCalls           int
+	accessFindingReadCalls           int
+	accessFindingArchiveCalls        int
+	accessFindingUnarchiveCalls      int
+	accessFindingID                  iamv1.AccessFindingID
+	accessFindingRequest             iamv1.AccessFindingDispositionRequest
 	workloadBindingCalls             int
 	workloadServiceCredential        iamv1.Secret
 	workloadSubjectCredential        iamv1.Secret
@@ -2433,10 +2465,35 @@ func (value *httpWorkflow) UpdateAccessAnalyzer(_ context.Context, credential ia
 	return value.accessAnalyzer, value.accessAnalyzerErr
 }
 
-func (value *httpWorkflow) ListAccessFindings(_ context.Context, credential iamv1.Secret, id iamv1.AccessAnalyzerID, _ string, _ string) (iamv1.AccessFindingList, error) {
+func (value *httpWorkflow) ListAccessFindings(_ context.Context, credential iamv1.Secret, id iamv1.AccessAnalyzerID,
+	filter iamv1.AccessFindingFilter, _ string, _ string) (iamv1.AccessFindingList, error) {
 	value.accessFindingListCalls++
 	value.accessAnalyzerCredential, value.accessAnalyzerID = credential, id
+	value.accessFindingFilter = filter
 	return value.accessFindingList, value.accessAnalyzerErr
+}
+
+func (value *httpWorkflow) AccessFinding(_ context.Context, credential iamv1.Secret, analyzerID iamv1.AccessAnalyzerID,
+	findingID iamv1.AccessFindingID, _ string) (iamv1.AccessFinding, error) {
+	value.accessFindingReadCalls++
+	value.accessAnalyzerCredential, value.accessAnalyzerID, value.accessFindingID = credential, analyzerID, findingID
+	return value.accessFinding, value.accessAnalyzerErr
+}
+
+func (value *httpWorkflow) ArchiveAccessFinding(_ context.Context, credential iamv1.Secret, analyzerID iamv1.AccessAnalyzerID,
+	findingID iamv1.AccessFindingID, request iamv1.AccessFindingDispositionRequest) (iamv1.AccessFinding, error) {
+	value.accessFindingArchiveCalls++
+	value.accessAnalyzerCredential, value.accessAnalyzerID, value.accessFindingID, value.accessFindingRequest = credential, analyzerID, findingID, request
+	value.accessFinding.Status, value.accessFinding.ResourceVersion, value.accessFinding.UpdatedAt = iamv1.AccessFindingArchived, request.ResourceVersion+1, value.accessFinding.UpdatedAt.Add(time.Second)
+	return value.accessFinding, value.accessAnalyzerErr
+}
+
+func (value *httpWorkflow) UnarchiveAccessFinding(_ context.Context, credential iamv1.Secret, analyzerID iamv1.AccessAnalyzerID,
+	findingID iamv1.AccessFindingID, request iamv1.AccessFindingDispositionRequest) (iamv1.AccessFinding, error) {
+	value.accessFindingUnarchiveCalls++
+	value.accessAnalyzerCredential, value.accessAnalyzerID, value.accessFindingID, value.accessFindingRequest = credential, analyzerID, findingID, request
+	value.accessFinding.Status, value.accessFinding.ResourceVersion, value.accessFinding.UpdatedAt = iamv1.AccessFindingActive, request.ResourceVersion+1, value.accessFinding.UpdatedAt.Add(time.Second)
+	return value.accessFinding, value.accessAnalyzerErr
 }
 
 func (value *httpWorkflow) UserPasswordResetCompletion(_ context.Context, credential iamv1.Secret, user iamv1.PrincipalID, command string, version uint64, _ string) (iamv1.UserPasswordResetCompletion, error) {

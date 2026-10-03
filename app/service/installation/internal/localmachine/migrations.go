@@ -38,6 +38,7 @@ var platformMigrations = []migrationDefinition{
 			{layout.IAMAuthenticationRecovery, "/run/matrix/iam-authentication-recovery-dsn", installationv1.AuthenticationRecoveryMigrationDSNFileEnvironment},
 			{layout.IAMBackupCustody, "/run/matrix/iam-backup-custody-dsn", installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment},
 			{layout.IAMNotificationWorker, "/run/matrix/iam-notification-worker-dsn", "MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE"},
+			{layout.IAMAccessAnalysisWorker, "/run/matrix/iam-access-analysis-worker-dsn", "MATRIX_MIGRATION_IAM_ACCESS_ANALYSIS_DSN_FILE"},
 		},
 	},
 	{

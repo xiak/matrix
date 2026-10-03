@@ -46,6 +46,7 @@ type DirectoryQuery struct {
 	AssumableRoles *RoleDiscoveryRevision         `json:",omitempty"`
 	RoleSessions   *RoleSessionDirectoryQuery     `json:",omitempty"`
 	LoginSessions  *LoginSessionDirectoryRevision `json:",omitempty"`
+	AccessFindings *AccessFindingDirectoryQuery   `json:",omitempty"`
 }
 
 type LoginSessionDirectoryRevision struct {
@@ -64,6 +65,23 @@ type RoleSessionDirectoryRevision struct {
 type RoleSessionDirectoryQuery struct {
 	Revision RoleSessionDirectoryRevision
 	Filter   iamv1.RoleSessionFilter
+}
+
+type AccessFindingDirectoryRevision struct {
+	AnalyzerResourceVersion uint64 `json:"analyzerResourceVersion"`
+	RecoveryEpoch           uint64 `json:"recoveryEpoch"`
+}
+
+type AccessFindingDirectoryQuery struct {
+	Revision AccessFindingDirectoryRevision
+	Filter   iamv1.AccessFindingFilter
+}
+
+func ValidateAccessFindingDirectoryRevision(value AccessFindingDirectoryRevision) error {
+	if value.AnalyzerResourceVersion == 0 || value.AnalyzerResourceVersion > 9007199254740991 || value.RecoveryEpoch > 9007199254740991 {
+		return ErrAuthorityUnavailable
+	}
+	return nil
 }
 
 func ValidateRoleSessionDirectoryRevision(value RoleSessionDirectoryRevision) error {
@@ -216,18 +234,24 @@ func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, n
 	var usage iamv1.AuthorizationCollectionUsage
 	pageSize := iamv1.DirectoryPageSize
 	if query.LoginSessions != nil {
-		validQuery = query.AssumableRoles == nil && query.RoleSessions == nil && query.Action == "" && query.Resource == (iamv1.ResourceReference{}) &&
+		validQuery = query.AssumableRoles == nil && query.RoleSessions == nil && query.AccessFindings == nil && query.Action == "" && query.Resource == (iamv1.ResourceReference{}) &&
 			query.LoginSessions.CredentialGeneration > 0 && query.LoginSessions.CredentialGeneration <= 9007199254740991
 	} else if query.AssumableRoles != nil {
 		revision := query.AssumableRoles
-		validQuery = query.RoleSessions == nil && query.Action == "" && query.Resource == (iamv1.ResourceReference{}) &&
+		validQuery = query.RoleSessions == nil && query.AccessFindings == nil && query.Action == "" && query.Resource == (iamv1.ResourceReference{}) &&
 			revision.CredentialGeneration > 0 && revision.CredentialGeneration <= 9007199254740991 &&
 			revision.DirectoryRevision > 0 && revision.DirectoryRevision <= 9007199254740991
 		pageSize = iamv1.RoleDiscoveryPageSize
 	} else if query.RoleSessions != nil {
 		filter, err := iamv1.NormalizeRoleSessionFilter(query.RoleSessions.Filter)
-		validQuery = err == nil && filter == query.RoleSessions.Filter && ValidateRoleSessionDirectoryRevision(query.RoleSessions.Revision) == nil &&
+		validQuery = query.AccessFindings == nil && err == nil && filter == query.RoleSessions.Filter && ValidateRoleSessionDirectoryRevision(query.RoleSessions.Revision) == nil &&
 			query.Action == iamv1.ActionIAMRoleSessionList && query.Resource.Kind == iamv1.ResourceRole && iamv1.ValidateID("roleId", query.Resource.ID) == nil
+		mode = iamv1.AuthorizationResourceInstance
+	} else if query.AccessFindings != nil {
+		filter, err := iamv1.NormalizeAccessFindingFilter(query.AccessFindings.Filter)
+		validQuery = err == nil && filter == query.AccessFindings.Filter && ValidateAccessFindingDirectoryRevision(query.AccessFindings.Revision) == nil &&
+			query.Action == iamv1.ActionIAMAccessFindingList && query.Resource.Kind == iamv1.ResourceAccessAnalyzer &&
+			iamv1.ValidateID("analyzerId", query.Resource.ID) == nil
 		mode = iamv1.AuthorizationResourceInstance
 	} else {
 		switch query.Action {

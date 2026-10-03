@@ -30,6 +30,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 	iampostgres "github.com/xiak/matrix/app/service/iam/internal/data/postgres"
+	"github.com/xiak/matrix/app/service/iam/internal/usecase/accessanalysis"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/authenticationrecovery"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
@@ -1147,6 +1148,7 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	createIAMHTTPRole(t, ctx, sourceAdmin)
 	createAuthenticationRecoveryTestRoles(t, ctx, sourceAdmin)
 	createAuthenticationRecoveryBackupRole(t, ctx, sourceAdmin)
+	createIAMAccessAnalysisRole(t, ctx, sourceAdmin)
 
 	document := iamHTTPBootstrap(t)
 	document.InstallationID = "mxi-" + strings.Repeat("1", 32)
@@ -1184,6 +1186,70 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal("create recovery attempt subject", err)
+	}
+	// Carry a real scanner-created epoch-0 finding through pg_dump/restore so
+	// recovery can prove that historical evidence is retained without becoming
+	// visible in the new authentication epoch.
+	sourceAnalyzer, err := sourceAPI.CreateAccessAnalyzer(ctx, sourceCredential, iamv1.CreateAccessAnalyzerRequest{
+		Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "auth-recovery-access-analyzer",
+	})
+	if err != nil {
+		t.Fatal("create recovery access analyzer", err)
+	}
+	if _, err := sourceAdmin.Exec(ctx, `UPDATE iam.principals SET created_at=clock_timestamp()-interval '91 days'
+		WHERE tenant_id=$1 AND id=$2`, document.Organization.ID, budgetUser.ID); err != nil {
+		t.Fatal("establish old unused recovery subject", err)
+	}
+	if _, err := sourceAdmin.Exec(ctx, `UPDATE iam.access_analyzer_observations
+		SET observed_from=clock_timestamp()-interval '91 days',observed_through=clock_timestamp()-interval '91 days',
+			state='INSUFFICIENT_COVERAGE',reason='OBSERVATION_WINDOW_INCOMPLETE'
+		WHERE tenant_id=$1 AND analyzer_id=$2
+		  AND source IN ('IAM_PASSWORD_SESSIONS','IAM_ACCESS_KEY_AUTHORIZATIONS','IAM_ROLE_SESSIONS','IAM_ROLE_AUTHORIZATIONS')`,
+		document.Organization.ID, sourceAnalyzer.ID); err != nil {
+		t.Fatal("establish source analyzer observation window", err)
+	}
+	sourceAnalysisConfig, err := pgxpool.ParseConfig(sourceDSN)
+	if err != nil {
+		t.Fatal("parse source analysis database", err)
+	}
+	sourceAnalysisConfig.ConnConfig.User, sourceAnalysisConfig.ConnConfig.Password = iamAccessAnalysisLogin, iamAccessAnalysisPass
+	sourceAnalysisConfig.MaxConns, sourceAnalysisConfig.MinConns = 2, 0
+	sourceAnalysisPool, err := pgxpool.NewWithConfig(ctx, sourceAnalysisConfig)
+	if err != nil {
+		t.Fatal("connect source access analysis worker", err)
+	}
+	var closeSourceAnalysisOnce sync.Once
+	closeSourceAnalysis := func() { closeSourceAnalysisOnce.Do(sourceAnalysisPool.Close) }
+	t.Cleanup(closeSourceAnalysis)
+	sourceAnalysisRepository, err := iampostgres.NewAccessAnalysisRepository(sourceAnalysisPool)
+	if err != nil {
+		t.Fatal("construct source access analysis repository", err)
+	}
+	analysisSequence := 0
+	sourceScanner, err := accessanalysis.NewScanner(sourceAnalysisRepository, func(string) (string, error) {
+		analysisSequence++
+		return fmt.Sprintf("auth-recovery-analysis-%d", analysisSequence), nil
+	}, "auth-recovery-access-analysis")
+	if err != nil {
+		t.Fatal("construct source access analysis scanner", err)
+	}
+	if scanned, err := sourceScanner.ScanOnce(ctx); err != nil || !scanned.Claimed {
+		t.Fatal("scan source recovery finding", scanned, err)
+	}
+	sourceFindingPage, err := sourceAPI.ListAccessFindings(ctx, sourceCredential, sourceAnalyzer.ID,
+		iamv1.AccessFindingFilter{Status: iamv1.AccessFindingStatusAll}, "", "auth-recovery-source-findings")
+	if err != nil {
+		t.Fatal("list source recovery finding", err)
+	}
+	var sourceFinding iamv1.AccessFinding
+	for _, item := range sourceFindingPage.Items {
+		if item.Target == (iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(budgetUser.ID)}) {
+			sourceFinding = item
+			break
+		}
+	}
+	if sourceFinding.ID == "" || sourceFinding.RecoveryEpoch != 0 || sourceFinding.Status != iamv1.AccessFindingActive {
+		t.Fatal("source scanner did not create the epoch-0 recovery fixture")
 	}
 	// Carry a real completed removal through the same RR dump and two
 	// restores. An absent active factor alone must never earn this state.
@@ -1296,6 +1362,11 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	}
 	assertAuthenticationAuthorityOpen(t, ctx, sourceAPI, sourceCredential)
 	assertAuthenticationAuthorityOpen(t, ctx, restoredAPI, restoredCredential)
+	restoredBeforeRecovery, err := restoredAPI.AccessFinding(ctx, restoredCredential, sourceAnalyzer.ID, sourceFinding.ID,
+		"auth-recovery-restored-finding-before-close")
+	if err != nil || restoredBeforeRecovery != sourceFinding {
+		t.Fatal("restored backup did not preserve the original epoch-0 finding", err)
+	}
 	assertAuthenticationRecoveryDatabaseBoundary(t, ctx, sourceAdmin, sourceConfig)
 	assertAuthenticationRecoveryDatabaseBoundary(t, ctx, restoredAdmin, restoredConfig)
 
@@ -1304,12 +1375,37 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	intent := authenticationRecoveryIntent(document.InstallationID)
 	intent.AuthenticationStateDigest = lease.AuthenticationStateDigest
 	intent.TOTPCustodyDigest = lease.CustodyDigest
+	if _, err := sourceAdmin.Exec(ctx, `UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$2`, document.Organization.ID, sourceAnalyzer.ID); err != nil {
+		t.Fatal("make source analysis eligible before close", err)
+	}
 	envelope := closeAuthenticationConcurrently(t, ctx, sourceRecovery, intent)
 	closure, snapshot := envelope.Closure, envelope.SecuritySnapshot
 	if installationv1.ValidateAuthenticationRecoveryClosureForIntent(closure, intent) != nil {
 		t.Fatal("source close returned an invalid installation closure")
 	}
 	assertAuthenticationAuthorityClosed(t, ctx, sourceAPI, sourceCredential)
+	if _, err := sourceAPI.ListAccessFindings(ctx, sourceCredential, sourceAnalyzer.ID,
+		iamv1.AccessFindingFilter{Status: iamv1.AccessFindingStatusAll}, "", "auth-recovery-source-closed-findings"); err == nil {
+		t.Fatal("closed source authority listed access findings")
+	}
+	if _, err := sourceAPI.AccessFinding(ctx, sourceCredential, sourceAnalyzer.ID, sourceFinding.ID,
+		"auth-recovery-source-closed-finding"); err == nil {
+		t.Fatal("closed source authority read an access finding")
+	}
+	var attemptsBeforeClosedScan int
+	if err := sourceAdmin.QueryRow(ctx, "SELECT count(*) FROM iam.access_analysis_attempts").Scan(&attemptsBeforeClosedScan); err != nil {
+		t.Fatal("count source analysis attempts before closed scan", err)
+	}
+	if scanned, err := sourceScanner.ScanOnce(ctx); err == nil || scanned.Claimed {
+		t.Fatal("closed source authority allowed an access analysis claim", scanned, err)
+	}
+	var attemptsAfterClosedScan int
+	if err := sourceAdmin.QueryRow(ctx, "SELECT count(*) FROM iam.access_analysis_attempts").Scan(&attemptsAfterClosedScan); err != nil ||
+		attemptsAfterClosedScan != attemptsBeforeClosedScan {
+		t.Fatal("closed source scan left a partial attempt", attemptsBeforeClosedScan, attemptsAfterClosedScan, err)
+	}
+	closeSourceAnalysis()
 	if _, err := sourceLocal.InspectLocalCredentialRecovery(ctx, localAuthority, nil); !errors.Is(err, identityaccess.ErrForbidden) {
 		t.Fatalf("source local credential recovery bypassed CLOSED: %v", err)
 	}
@@ -1462,6 +1558,67 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	if _, err := restoredAPI.CurrentIdentity(ctx, login.Credential); err != nil {
 		t.Fatal("new post-recovery Session is unusable", err)
 	}
+	createIAMAccessAnalysisRole(t, ctx, restoredAdmin)
+	restoredAnalysisConfig, err := pgxpool.ParseConfig(restoredDSN)
+	if err != nil {
+		t.Fatal("parse restored analysis database", err)
+	}
+	restoredAnalysisConfig.ConnConfig.User, restoredAnalysisConfig.ConnConfig.Password = iamAccessAnalysisLogin, iamAccessAnalysisPass
+	restoredAnalysisConfig.MaxConns, restoredAnalysisConfig.MinConns = 2, 0
+	restoredAnalysisPool, err := pgxpool.NewWithConfig(ctx, restoredAnalysisConfig)
+	if err != nil {
+		t.Fatal("connect restored access analysis worker", err)
+	}
+	restoredAnalysisRepository, err := iampostgres.NewAccessAnalysisRepository(restoredAnalysisPool)
+	if err != nil {
+		restoredAnalysisPool.Close()
+		t.Fatal("construct restored access analysis repository", err)
+	}
+	restoredAnalysisSequence := 0
+	restoredScanner, err := accessanalysis.NewScanner(restoredAnalysisRepository, func(string) (string, error) {
+		restoredAnalysisSequence++
+		return fmt.Sprintf("auth-recovery-restored-analysis-%d", restoredAnalysisSequence), nil
+	}, "auth-recovery-restored-access-analysis")
+	if err != nil {
+		restoredAnalysisPool.Close()
+		t.Fatal("construct restored access analysis scanner", err)
+	}
+	if _, err := restoredAdmin.Exec(ctx, `UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$2`, document.Organization.ID, sourceAnalyzer.ID); err != nil {
+		restoredAnalysisPool.Close()
+		t.Fatal("make restored access analysis eligible", err)
+	}
+	if scanned, err := restoredScanner.ScanOnce(ctx); err != nil || !scanned.Claimed || scanned.Detections != 0 {
+		restoredAnalysisPool.Close()
+		t.Fatal("restored analysis did not fail closed during the new observation window", scanned, err)
+	}
+	restoredAnalysisPool.Close()
+	recoveryFindings, err := restoredAPI.ListAccessFindings(ctx, login.Credential, sourceAnalyzer.ID,
+		iamv1.AccessFindingFilter{Status: iamv1.AccessFindingStatusAll}, "", "auth-recovery-epoch-one-findings")
+	if err != nil || len(recoveryFindings.Items) != 0 {
+		t.Fatal("reopened authority exposed a pre-recovery or premature finding", err)
+	}
+	for index, coverage := range recoveryFindings.Coverage {
+		if index >= 4 {
+			break
+		}
+		if coverage.State != iamv1.AccessObservationInsufficientCoverage || coverage.Reason != iamv1.AccessObservationRestoreGap ||
+			coverage.ObservedFrom == nil || coverage.ObservedFrom.Before(completion.CompletedAt) {
+			t.Fatal("reopened authority did not restart the observation window at its trusted recovery floor")
+		}
+	}
+	if _, err := restoredAPI.AccessFinding(ctx, login.Credential, sourceAnalyzer.ID, sourceFinding.ID,
+		"auth-recovery-epoch-zero-finding"); !errors.Is(err, identityaccess.ErrAccessFindingNotFound) {
+		t.Fatal("reopened authority revived an epoch-0 finding", err)
+	}
+	var recoveryEpochBoundary bool
+	if err := restoredAdmin.QueryRow(ctx, `SELECT
+		(SELECT state='OPEN' AND epoch=1 FROM iam.authentication_recovery_state WHERE singleton)
+		AND (SELECT count(*)=0 FROM iam.access_findings WHERE tenant_id=$1 AND analyzer_id=$2 AND recovery_epoch=1)
+		AND (SELECT count(*)=1 FROM iam.access_findings WHERE tenant_id=$1 AND analyzer_id=$2 AND recovery_epoch=0)`,
+		document.Organization.ID, sourceAnalyzer.ID).Scan(&recoveryEpochBoundary); err != nil || !recoveryEpochBoundary {
+		t.Fatal("restored finding epoch storage boundary differs", err)
+	}
 
 	after := readAuthenticationRecoverySecurityState(t, ctx, restoredAdmin, document, restoredSession)
 	if after.credentialGeneration != before.credentialGeneration+1 || after.activeSessions != 1 ||
@@ -1486,6 +1643,36 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 		document, budgetUser, restoredMFA, intent, completion, snapshot, nextLease, nextDump)
 	repeatedAPI, closeRepeatedAPI := authenticationRecoveryAPI(t, ctx, repeatedDSN, document)
 	assertRestoredRemoval(repeatedAPI, repeatedAdmin, "repeated")
+	repeatedLogin, err := repeatedAPI.Login(ctx, iamv1.LoginRequest{LoginName: "admin", Password: iamHTTPSecret(t, changedAdminPassword),
+		RequestID: "auth-recovery-epoch-two-login"})
+	if err != nil || repeatedLogin.Outcome != iamv1.LoginAuthenticated {
+		t.Fatal("second restored authority could not authenticate", err)
+	}
+	repeatedFindings, err := repeatedAPI.ListAccessFindings(ctx, repeatedLogin.Credential, sourceAnalyzer.ID,
+		iamv1.AccessFindingFilter{Status: iamv1.AccessFindingStatusAll}, "", "auth-recovery-epoch-two-findings")
+	if err != nil || len(repeatedFindings.Items) != 0 {
+		t.Fatal("second recovery revived an earlier finding epoch", err)
+	}
+	for index, coverage := range repeatedFindings.Coverage {
+		if index >= 4 {
+			break
+		}
+		if coverage.State != iamv1.AccessObservationInsufficientCoverage || coverage.Reason != iamv1.AccessObservationRestoreGap {
+			t.Fatal("second recovery did not restart access observation")
+		}
+	}
+	if _, err := repeatedAPI.AccessFinding(ctx, repeatedLogin.Credential, sourceAnalyzer.ID, sourceFinding.ID,
+		"auth-recovery-epoch-two-old-finding"); !errors.Is(err, identityaccess.ErrAccessFindingNotFound) {
+		t.Fatal("second recovery exposed an epoch-0 finding", err)
+	}
+	var repeatedEpochBoundary bool
+	if err := repeatedAdmin.QueryRow(ctx, `SELECT
+		(SELECT state='OPEN' AND epoch=2 FROM iam.authentication_recovery_state WHERE singleton)
+		AND (SELECT count(*)=0 FROM iam.access_findings WHERE tenant_id=$1 AND analyzer_id=$2 AND recovery_epoch IN (1,2))
+		AND (SELECT count(*)=1 FROM iam.access_findings WHERE tenant_id=$1 AND analyzer_id=$2 AND recovery_epoch=0)`,
+		document.Organization.ID, sourceAnalyzer.ID).Scan(&repeatedEpochBoundary); err != nil || !repeatedEpochBoundary {
+		t.Fatal("second restored finding epoch storage boundary differs", err)
+	}
 	closeRepeatedAPI()
 }
 

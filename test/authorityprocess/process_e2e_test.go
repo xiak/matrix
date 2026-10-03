@@ -57,12 +57,13 @@ import (
 const (
 	authorityProcessDSN = "MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN"
 
-	iamAPILogin       = "matrix_authority_process_iam_api"
-	iamWorkerLogin    = "matrix_authority_process_iam_worker"
-	auditRuntimeLogin = "matrix_authority_process_audit_runtime"
-	paasAPILogin      = "matrix_authority_process_paas_api"
-	paasWorkerLogin   = "matrix_authority_process_paas_worker"
-	processDBPassword = "matrix-authority-process-test-only"
+	iamAPILogin            = "matrix_authority_process_iam_api"
+	iamWorkerLogin         = "matrix_authority_process_iam_worker"
+	iamAccessAnalysisLogin = "matrix_iam_access_analysis_worker_login"
+	auditRuntimeLogin      = "matrix_authority_process_audit_runtime"
+	paasAPILogin           = "matrix_authority_process_paas_api"
+	paasWorkerLogin        = "matrix_authority_process_paas_worker"
+	processDBPassword      = "matrix-authority-process-test-only"
 
 	initialAdminPassword     = "Initial-Process-Admin-Password-49!"
 	changedAdminPassword     = "Changed-Process-Admin-Password-73!"
@@ -110,9 +111,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "ef4483e25196a20e0b1938c19b2c311930d4b5b8"
-	const sourceSchema uint64 = 61
-	const currentSchema uint64 = 62
+	const source = "bbb2f7ee48d61f4c7a16de6edd457ef5640a675a"
+	const sourceSchema uint64 = 62
+	const currentSchema uint64 = 63
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -160,6 +161,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword))},
 		{installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment, localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword))},
 		{"MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_notification_worker_login", processDBPassword))},
+		{"MATRIX_MIGRATION_IAM_ACCESS_ANALYSIS_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_access_analysis_worker_login", processDBPassword))},
 	} {
 		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
 	}
@@ -510,6 +512,13 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		iamv1.ValidateAccountSecurityReport(predecessorReport) != nil {
 		t.Fatal("actual predecessor did not return its security report")
 	}
+	accessAnalyzerResponse := performJSON(t, http.MethodPost, endpoint+"/v1/account/access-analyzers", primary.Credential,
+		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "retained-access-analyzer-create"})
+	var retainedAccessAnalyzer iamv1.AccessAnalyzer
+	if accessAnalyzerResponse.Status != http.StatusCreated || json.Unmarshal(accessAnalyzerResponse.Body, &retainedAccessAnalyzer) != nil ||
+		iamv1.ValidateAccessAnalyzer(retainedAccessAnalyzer) != nil || retainedAccessAnalyzer.AccountID != primary.Session.AccountID {
+		t.Fatalf("actual predecessor did not create its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
+	}
 	originalState := identityState()
 	var originalFacts []auditv1.Event
 	rows, err := admin.Query(ctx, "SELECT event_document FROM iam.audit_outbox ORDER BY tenant_id,event_id")
@@ -568,7 +577,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 			child := startChild(t, root, currentMigrator, migrationEnvironment, action)
 			children = append(children, child)
 			if err := child.wait(30 * time.Second); err != nil {
-				t.Fatal("actual current migrator rejected retained own-session data")
+				t.Fatalf("actual current migrator rejected retained own-session data: action=%s err=%v output=%q", action, err, child.output())
 			}
 		}
 	}
@@ -632,41 +641,18 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		!reflect.DeepEqual(migratedPredecessorReport, predecessorReport) {
 		t.Fatal("migration changed the predecessor security report")
 	}
-	var syntheticAnalyzers int
-	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.access_analyzers").Scan(&syntheticAnalyzers); err != nil || syntheticAnalyzers != 0 {
-		t.Fatal("migration synthesized an access analyzer without an explicit request", err)
+	var retainedAnalyzerShape bool
+	if err := admin.QueryRow(ctx, `SELECT (SELECT count(*)=1 FROM iam.access_analyzers)
+		AND (SELECT count(*)=0 FROM iam.access_findings)
+		AND (SELECT count(*)=0 FROM iam.access_analysis_attempts)`).Scan(&retainedAnalyzerShape); err != nil || !retainedAnalyzerShape {
+		t.Fatal("migration changed the predecessor analyzer or synthesized analysis results", err)
 	}
-	accessAnalyzerResponse := performJSON(t, http.MethodPost, endpoint+"/v1/account/access-analyzers", primary.Credential,
-		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "retained-access-analyzer-without-grant"})
-	if accessAnalyzerResponse.Status != http.StatusForbidden {
-		t.Fatalf("migration silently granted the predecessor root the new access analyzer capability: status=%d", accessAnalyzerResponse.Status)
-	}
-	statement := func(sid string, actions []iamv1.Action, kind iamv1.ResourceKind) iamv1.PolicyStatement {
-		return iamv1.PolicyStatement{SID: sid, Effect: iamv1.PolicyAllow, Actions: actions,
-			Resources: []iamv1.PolicyResourceSelector{{Kind: kind, Match: iamv1.PolicyResourceAnyInAuthority}}}
-	}
-	policyResponse := performJSON(t, http.MethodPost, endpoint+"/v1/policies", primary.Credential, iamv1.CreatePolicyRequest{
-		DisplayName: "Retained access analyzer authority", RequestID: "retained-access-analyzer-policy",
-		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
-			Statements: []iamv1.PolicyStatement{
-				statement("manage-directory", []iamv1.Action{iamv1.ActionIAMAccessAnalyzerCreate, iamv1.ActionIAMAccessAnalyzerList}, iamv1.ResourceAccount),
-				statement("manage-analyzer", []iamv1.Action{iamv1.ActionIAMAccessAnalyzerRead, iamv1.ActionIAMAccessAnalyzerUpdate,
-					iamv1.ActionIAMAccessFindingList}, iamv1.ResourceAccessAnalyzer),
-			}},
-	})
-	var accessAnalyzerPolicy iamv1.PolicyDetail
-	if policyResponse.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(policyResponse.Body), &accessAnalyzerPolicy) != nil ||
-		iamv1.ValidatePolicyDetail(accessAnalyzerPolicy) != nil {
-		t.Fatalf("create explicit retained access analyzer policy status=%d", policyResponse.Status)
-	}
-	createIAMPolicyAttachment(t, endpoint, primary.Credential, primary.Session.PrincipalID, accessAnalyzerPolicy.Policy.ID,
-		"retained-access-analyzer-grant")
-	accessAnalyzerResponse = performJSON(t, http.MethodPost, endpoint+"/v1/account/access-analyzers", primary.Credential,
-		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "retained-access-analyzer-create"})
-	var retainedAccessAnalyzer iamv1.AccessAnalyzer
-	if accessAnalyzerResponse.Status != http.StatusCreated || json.Unmarshal(accessAnalyzerResponse.Body, &retainedAccessAnalyzer) != nil ||
-		iamv1.ValidateAccessAnalyzer(retainedAccessAnalyzer) != nil || retainedAccessAnalyzer.AccountID != primary.Session.AccountID {
-		t.Fatalf("current authority could not explicitly create an access analyzer after predecessor migration: status=%d", accessAnalyzerResponse.Status)
+	accessAnalyzerResponse = performJSON(t, http.MethodGet,
+		endpoint+"/v1/account/access-analyzers/"+string(retainedAccessAnalyzer.ID), primary.Credential, nil)
+	var migratedAccessAnalyzer iamv1.AccessAnalyzer
+	if accessAnalyzerResponse.Status != http.StatusOK || json.Unmarshal(accessAnalyzerResponse.Body, &migratedAccessAnalyzer) != nil ||
+		migratedAccessAnalyzer != retainedAccessAnalyzer {
+		t.Fatal("migration changed the predecessor access analyzer")
 	}
 	createRetainedReport := func(requestID string) iamv1.AccountSecurityReport {
 		t.Helper()
@@ -1143,6 +1129,13 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		return encoded
 	}
 	for index, database := range databases {
+		// The supported migrator always applies the current idempotent role
+		// bootstrap before schema SQL. The new purpose-only analysis group does
+		// not exist in the IAM62 cluster, so a bare Up would test an impossible
+		// production sequence rather than the retained database.
+		if err := iammigration.Bootstrap(ctx, database); err != nil {
+			t.Fatal("bootstrap current purpose roles for predecessor recovery copy", err)
+		}
 		original := history(database)
 		defer clear(original)
 		if index == 0 {
@@ -2284,7 +2277,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	seedProcessExecutionProfile(t, ctx, adminConfig)
 
 	temporary := t.TempDir()
-	binaries := buildAuthorityBinaries(t, ctx, root, temporary)
+	binaries := buildAuthorityBinaries(t, ctx, root, temporary, mode == authorityProcessFull)
 	bootstrap := processBootstrap(t)
 	bootstrapBytes, err := iamv1.EncodeBootstrapDocument(bootstrap)
 	if err != nil {
@@ -2311,6 +2304,12 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		temporary,
 		"iam-worker-dsn",
 		[]byte(runtimeDSN(t, adminConfig, iamWorkerLogin, processDBPassword)),
+	)
+	iamAccessAnalysisDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"iam-access-analysis-dsn",
+		[]byte(runtimeDSN(t, adminConfig, iamAccessAnalysisLogin, processDBPassword)),
 	)
 	auditDSNPath := writeProtectedFile(
 		t,
@@ -2369,6 +2368,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	auditAddress := freeAddress(t)
 	paasAddress := freeAddress(t)
 	iamDispatcherAddress := freeAddress(t)
+	iamAccessAnalysisAddressA := freeAddress(t)
+	iamAccessAnalysisAddressB := freeAddress(t)
 	paasDispatcherAddress := freeAddress(t)
 	iamEndpoint := "http://" + iamAddress
 	auditEndpoint := "http://" + auditAddress
@@ -2398,6 +2399,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 			"MATRIX_IAM_AUDIT_CREDENTIAL_FILE=" + credentialPath,
 			"MATRIX_IAM_AUDIT_WORKER_ID=" + workerID,
 			"MATRIX_IAM_AUDIT_LISTEN_ADDRESS=" + iamDispatcherAddress,
+		}
+	}
+	iamAccessAnalysisEnvironment := func(workerID, address string) []string {
+		return []string{
+			"MATRIX_IAM_ACCESS_ANALYSIS_DATABASE_DSN_FILE=" + iamAccessAnalysisDSNPath,
+			"MATRIX_IAM_ACCESS_ANALYSIS_WORKER_ID=" + workerID,
+			"MATRIX_IAM_ACCESS_ANALYSIS_LISTEN_ADDRESS=" + address,
 		}
 	}
 	paasEnvironment := []string{
@@ -2495,6 +2503,14 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	waitHTTPStatus(t, ctx, dispatcher, "http://"+iamDispatcherAddress+"/ready", http.StatusOK)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	assertIAMEventsStoredOnce(t, ctx, admin)
+	if mode == authorityProcessFull {
+		analysisWorkerA := start(binaries.accessAnalysis,
+			iamAccessAnalysisEnvironment("iam-access-analysis-a", iamAccessAnalysisAddressA))
+		waitHTTPStatus(t, ctx, analysisWorkerA, "http://"+iamAccessAnalysisAddressA+"/ready", http.StatusOK)
+		analysisWorkerB := start(binaries.accessAnalysis,
+			iamAccessAnalysisEnvironment("iam-access-analysis-b", iamAccessAnalysisAddressB))
+		waitHTTPStatus(t, ctx, analysisWorkerB, "http://"+iamAccessAnalysisAddressB+"/ready", http.StatusOK)
+	}
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
 	// The source authorities now form the published release composition. Prove
@@ -3886,6 +3902,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 
 type binarySet struct {
 	iam            string
+	accessAnalysis string
 	localRecovery  string
 	audit          string
 	dispatcher     string
@@ -5371,12 +5388,13 @@ func buildAuthorityBinaries(
 	ctx context.Context,
 	root string,
 	temporary string,
+	withAccessAnalysis bool,
 ) binarySet {
 	t.Helper()
 	build := func(name, packagePath string) string {
 		return buildAuthorityBinary(t, ctx, root, temporary, name, packagePath)
 	}
-	return binarySet{
+	binaries := binarySet{
 		iam:            build("matrix-iam", "./app/service/iam/cmd/matrix-iam"),
 		localRecovery:  build("matrix-iam-local-recovery", "./app/service/iam/cmd/matrix-iam-local-recovery"),
 		audit:          build("matrix-audit", "./app/service/audit/cmd/matrix-audit"),
@@ -5384,6 +5402,10 @@ func buildAuthorityBinaries(
 		paas:           build("matrix-paas", "./app/service/paas/cmd/matrix-paas"),
 		paasDispatcher: build("matrix-paas-audit-dispatcher", "./app/service/paas/cmd/matrix-paas-audit-dispatcher"),
 	}
+	if withAccessAnalysis {
+		binaries.accessAnalysis = build("matrix-iam-access-analysis-worker", "./app/service/iam/cmd/matrix-iam-access-analysis-worker")
+	}
+	return binaries
 }
 
 func buildAuthorityBinary(t *testing.T, ctx context.Context, root, temporary, name, packagePath string) string {
@@ -7363,21 +7385,42 @@ func proveAccessAnalyzerProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			iamv1.ValidateAccessAnalyzerList(directory) != nil || len(directory.Items) != 1 || directory.Items[0] != item.result {
 			t.Fatal("access analyzer process directory differs from Account state")
 		}
-		var findings iamv1.AccessFindingList
-		observed := performJSON(t, http.MethodGet,
-			replicaEndpoint+"/v1/account/access-analyzers/"+string(item.result.ID)+"/findings", item.owner, nil)
-		if observed.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(observed.Body), &findings) != nil ||
-			iamv1.ValidateAccessFindingList(findings) != nil || len(findings.Items) != 0 || findings.AccountID != item.account {
-			t.Fatal("access analyzer process invented findings or lost explicit coverage")
-		}
-		for sourceIndex, coverage := range findings.Coverage {
-			if sourceIndex < 4 && (coverage.State != iamv1.AccessObservationInsufficientCoverage || coverage.Reason != iamv1.AccessObservationSourceNotReady) {
-				t.Fatal("IAM process source claimed unsupported access coverage")
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			var findings iamv1.AccessFindingList
+			observed := performJSON(t, http.MethodGet,
+				replicaEndpoint+"/v1/account/access-analyzers/"+string(item.result.ID)+"/findings", item.owner, nil)
+			if observed.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(observed.Body), &findings) != nil ||
+				iamv1.ValidateAccessFindingList(findings) != nil || len(findings.Items) != 0 || findings.AccountID != item.account {
+				t.Fatal("access analyzer process invented findings or lost explicit coverage")
 			}
-			if sourceIndex >= 4 && (coverage.State != iamv1.AccessObservationNotIncluded || coverage.Reason != iamv1.AccessObservationSourceNotImplemented) {
-				t.Fatal("external process source claimed implemented access coverage")
+			ready := true
+			for sourceIndex, coverage := range findings.Coverage {
+				if sourceIndex < 4 {
+					if coverage.State != iamv1.AccessObservationInsufficientCoverage ||
+						(coverage.Reason != iamv1.AccessObservationSourceNotReady && coverage.Reason != iamv1.AccessObservationWindowIncomplete) {
+						t.Fatal("IAM process source claimed unsupported access coverage")
+					}
+					ready = ready && coverage.Reason == iamv1.AccessObservationWindowIncomplete
+				}
+				if sourceIndex >= 4 && (coverage.State != iamv1.AccessObservationNotIncluded || coverage.Reason != iamv1.AccessObservationSourceNotImplemented) {
+					t.Fatal("external process source claimed implemented access coverage")
+				}
 			}
+			if ready {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("independent access analysis workers did not complete the first observation")
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
+	}
+	var singleWriter bool
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT count(*)=2 AND bool_and(completed_at IS NOT NULL AND cycle_complete) FROM iam.access_analysis_attempts)
+		AND NOT EXISTS(SELECT 1 FROM iam.access_analysis_scan_state WHERE worker_id IS NOT NULL OR lease_expires_at IS NOT NULL)`).Scan(&singleWriter); err != nil || !singleWriter {
+		t.Fatal("independent access analysis workers duplicated or stranded a scan", err)
 	}
 	if fixtures[0].result.ID == fixtures[1].result.ID {
 		t.Fatal("independent Accounts received the same access analyzer identity")
@@ -12201,6 +12244,7 @@ func createProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	}{
 		{iamAPILogin, "matrix_iam_api"},
 		{iamWorkerLogin, "matrix_iam_worker"},
+		{iamAccessAnalysisLogin, "matrix_iam_access_analysis_worker"},
 		{localRecoveryProcessLogin, "matrix_iam_credential_recovery"},
 		{"matrix_iam_authentication_recovery_login", "matrix_iam_authentication_recovery"},
 		{auditRuntimeLogin, "matrix_audit_runtime"},
@@ -12432,31 +12476,45 @@ func runtimeDSN(t *testing.T, admin *pgx.ConnConfig, user string, password strin
 func assertRuntimeProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn, users ...string) {
 	t.Helper()
 	for _, user := range users {
-		config, err := pgxpool.ParseConfig(runtimeDSN(t, admin.Config(), user, processDBPassword))
-		if err != nil {
-			t.Fatal("parse authority process identity probe")
-		}
-		// The probe must not satisfy the independent running-process assertion.
-		config.ConnConfig.RuntimeParams["application_name"] += ":identity-probe"
-		probe, err := pgx.ConnectConfig(ctx, config.ConnConfig)
-		if err != nil {
-			t.Fatalf("connect authority identity probe for %s", user)
-		}
-		var sessionUser, currentUser string
-		var limited bool
-		probeErr := probe.QueryRow(ctx, `SELECT session_user, current_user, NOT rolsuper AND NOT rolbypassrls
+		assertRuntimeProcessLogin(t, ctx, admin, user, 2)
+	}
+}
+
+func assertRuntimeProcessLogin(t *testing.T, ctx context.Context, admin *pgx.Conn, user string, maximumConnections int) {
+	t.Helper()
+	config, err := pgxpool.ParseConfig(runtimeDSN(t, admin.Config(), user, processDBPassword))
+	if err != nil {
+		t.Fatal("parse authority process identity probe")
+	}
+	// The probe must not satisfy the independent running-process assertion.
+	config.ConnConfig.RuntimeParams["application_name"] += ":identity-probe"
+	probe, err := pgx.ConnectConfig(ctx, config.ConnConfig)
+	if err != nil {
+		t.Fatalf("connect authority identity probe for %s", user)
+	}
+	var sessionUser, currentUser string
+	var limited bool
+	probeErr := probe.QueryRow(ctx, `SELECT session_user, current_user, NOT rolsuper AND NOT rolbypassrls
             FROM pg_roles WHERE rolname=current_user`).Scan(&sessionUser, &currentUser, &limited)
-		_ = probe.Close(context.Background())
-		if probeErr != nil || sessionUser != user || currentUser != user || !limited {
-			t.Fatalf("authority identity probe for %s used an unexpected or privileged role", user)
-		}
+	_ = probe.Close(context.Background())
+	if probeErr != nil || sessionUser != user || currentUser != user || !limited {
+		t.Fatalf("authority identity probe for %s used an unexpected or privileged role", user)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
 		var connections int
 		var confined bool
-		if err := admin.QueryRow(ctx, `SELECT count(*), COALESCE(bool_and(activity.usename=$2 AND NOT role.rolsuper AND NOT role.rolbypassrls),false)
+		queryErr := admin.QueryRow(ctx, `SELECT count(*), COALESCE(bool_and(activity.usename=$2 AND NOT role.rolsuper AND NOT role.rolbypassrls),false)
             FROM pg_stat_activity AS activity JOIN pg_roles AS role ON role.rolname=activity.usename
-			WHERE activity.datname=current_database() AND activity.application_name=$1`, "matrix-authority-process:"+user, user).Scan(&connections, &confined); err != nil || connections == 0 || connections > 2 || !confined {
-			t.Fatalf("running authority %s did not use its bounded non-superuser database login (connections=%d confined=%t queryError=%t)", user, connections, confined, err != nil)
+			WHERE activity.datname=current_database() AND activity.application_name=$1`, "matrix-authority-process:"+user, user).Scan(&connections, &confined)
+		if queryErr == nil && connections > 0 && connections <= maximumConnections && confined {
+			return
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("running authority %s did not use its bounded non-superuser database login (connections=%d max=%d confined=%t queryError=%t)",
+				user, connections, maximumConnections, confined, queryErr != nil)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

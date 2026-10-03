@@ -64,6 +64,10 @@
           "iam.security-report.download-started",
           "iam.access-analyzer.created",
           "iam.access-analyzer.updated",
+          "iam.access-finding.detected",
+          "iam.access-finding.resolved",
+          "iam.access-finding.archived",
+          "iam.access-finding.unarchived",
           "iam.policy.created",
           "iam.policy-version.created",
           "iam.policy-version.deleted",
@@ -1453,6 +1457,110 @@
                   "properties": {
                     "action": {
                       "const": "iam.access-analyzer.updated"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-finding.detected"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-finding.resolved"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-finding.archived"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-finding.unarchived"
                     }
                   },
                   "required": [
@@ -5400,6 +5508,196 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "iam.access-finding.detected"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "id": {
+                      "const": "iam.access-analyzer"
+                    },
+                    "type": {
+                      "const": "SYSTEM"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCESS_FINDING"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.access-finding.resolved"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "id": {
+                      "const": "iam.access-analyzer"
+                    },
+                    "type": {
+                      "const": "SYSTEM"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCESS_FINDING"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.access-finding.archived"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCESS_FINDING"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.access-finding.unarchived"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCESS_FINDING"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "iam.policy.created"
                 }
               },
@@ -8437,6 +8735,7 @@
           "ACCESS_KEY",
           "SECURITY_REPORT",
           "ACCESS_ANALYZER",
+          "ACCESS_FINDING",
           "POLICY",
           "GROUP_MEMBERSHIP",
           "ORGANIZATION",
