@@ -4134,28 +4134,29 @@ describe("CAM-style access workspace", () => {
     const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
     const analysis = buildAccessAnalysisPreview(workspace, scene);
     expect(analysis.coverage).toEqual([
-      { id: "roleSsoMapping", state: "mockObserved" },
-      { id: "serviceWorkload", state: "mockObserved" },
-      { id: "resourcePolicies", state: "unsupported" },
-      { id: "crossAccountDelegation", state: "unsupported" },
-      { id: "activityWindow", state: "unobserved" }
+      { id: "IAM_PASSWORD_SESSIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "IAM_ACCESS_KEY_AUTHORIZATIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "IAM_ROLE_SESSIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "IAM_ROLE_AUTHORIZATIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "PAAS_RESULTS", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null },
+      { id: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null }
     ]);
     expect(analysis.trustEntries.map(({ kind, name, configuration, target }) => ({ kind, name, configuration, target }))).toEqual([
       { kind: "roleSsoMapping", name: "AuditAssertionRule", configuration: "configured", target: { view: "providers" } },
       { kind: "serviceWorkload", name: "PipelineDeploymentRole", configuration: "configured", target: { view: "roles", id: "role-pipeline" } }
     ]);
-    expect(analysis.unusedFindings.map(({ accountId, findingType, status }) => ({ accountId, findingType, status }))).toEqual([
-      { accountId: "org-xiak", findingType: "unusedPassword", status: "active" },
-      { accountId: "org-xiak", findingType: "unusedAccessKey", status: "archived" },
-      { accountId: "org-xiak", findingType: "unusedRole", status: "resolved" }
+    expect(analysis.unusedFindings.map(({ accountId, findingType }) => ({ accountId, findingType }))).toEqual([
+      { accountId: "org-xiak", findingType: "unusedPassword" },
+      { accountId: "org-xiak", findingType: "unusedAccessKey" },
+      { accountId: "org-xiak", findingType: "unusedRole" }
     ]);
     expect(analysis.rule).toEqual({
+      id: "access-analyzer-preview",
       accountId: "org-xiak",
-      revision: 3,
+      type: "UNUSED_ACCESS",
+      resourceVersion: 3,
       windowDays: 90,
-      scopes: ["password", "accessKey", "role"],
-      responseMode: "REPORT_ONLY",
-      automaticRemediation: false,
+      status: "ACTIVE",
       evidence: "SYNTHETIC_COMPLETE_WINDOW"
     });
     expect(() => buildAccessAnalysisPreview(workspace, { ...scene, accountId: "org-foreign" })).toThrow("INVALID_IAM_TENANT");
@@ -4164,8 +4165,12 @@ describe("CAM-style access workspace", () => {
     render(<LocaleProvider><AccessAnalysisPreview workspace={workspace} scene={scene} onBack={vi.fn()} onNavigate={onNavigate} /></LocaleProvider>);
     expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
     expect(screen.getByText(/配置存在不代表权限已生效/)).toBeTruthy();
-    expect(screen.getByText("资源策略与 ACL")).toBeTruthy();
-    expect(screen.getAllByText("当前不支持").length).toBe(2);
+    expect(screen.getByText("密码登录会话")).toBeTruthy();
+    expect(screen.getAllByText("证据不足").length).toBe(4);
+    expect(screen.getAllByText("未纳入").length).toBe(2);
+    expect(screen.getAllByText("SOURCE_NOT_READY").length).toBe(4);
+    const paasCoverage = screen.getByText("PaaS 业务结果").closest("div")!;
+    expect(paasCoverage.querySelector("time")).toBeNull();
     const entryTable = screen.getByRole("table", { name: "已配置入口" });
     expect(entryTable.getAttribute("data-mobile-layout")).toBe("stack");
     expect(within(entryTable).getAllByText("devops.matrix.internal").length).toBe(2);
@@ -4202,7 +4207,7 @@ describe("CAM-style access workspace", () => {
     expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
-  it("previews rule review and finding triage without changing identities or permissions", async () => {
+  it("previews the candidate rule bounds and keeps finding samples read-only", async () => {
     const { user, repository, extension } = await open("access-analysis");
     const before = await extension.read("preview");
 
@@ -4210,25 +4215,25 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("账号级访问分析规则")).toBeTruthy();
     expect(screen.getByText(/没有真实后台扫描/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "编辑规则（MOCK）" }));
-    await select(user, "完整观测窗口", "60 天");
-    await user.click(screen.getByRole("checkbox", { name: "角色会话使用" }));
-    await user.click(screen.getByRole("radio", { name: "进入人工确认队列" }));
+    const window = screen.getByRole("spinbutton", { name: "完整观测窗口" });
+    await user.clear(window);
+    await user.type(window, "366");
+    expect(screen.getByText("请输入 1–365 的整数天数。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "下一步：审阅" }).getAttribute("disabled")).not.toBeNull();
+    await user.clear(window);
+    await user.type(window, "365");
+    await user.click(screen.getByRole("radio", { name: "已停用" }));
     await user.click(screen.getByRole("button", { name: "下一步：审阅" }));
     expect(screen.getByRole("heading", { name: "审阅访问分析规则" })).toBeTruthy();
-    expect(screen.getByText("用户控制台密码 · 访问密钥")).toBeTruthy();
-    expect(screen.getByText("进入人工确认队列")).toBeTruthy();
+    expect(screen.getByText("已停用")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "应用 MOCK 规则" }));
-    expect(screen.getByText(/MOCK 规则已更新到修订 4/)).toBeTruthy();
-    expect(screen.getByText("60 天")).toBeTruthy();
+    expect(screen.getByText(/MOCK Analyzer 已更新到资源版本 4/)).toBeTruthy();
+    expect(screen.getByText("365 天")).toBeTruthy();
 
     await user.click(screen.getByRole("tab", { name: "未使用访问 (3)" }));
     await user.click(within(screen.getByRole("table", { name: "未使用访问发现样例" })).getByRole("button", { name: "lin" }));
-    await user.click(screen.getByRole("button", { name: "归档发现" }));
-    expect(screen.getByRole("heading", { name: "审阅发现状态 · lin" })).toBeTruthy();
-    expect(screen.getByText(/不修改用户、密码、访问密钥、角色、策略或授权/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "确认归档" }));
-    expect(screen.getByText(/本地发现状态已更新为“已归档”/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "重新打开发现" })).toBeTruthy();
+    expect(screen.getByText("MOCK 样例")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /归档|重新打开|解决/ })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(await extension.read("preview")).toEqual(before);
     expect(repository.execute).not.toHaveBeenCalled();

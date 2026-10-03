@@ -27,29 +27,39 @@ export type UnusedAccessFindingPreview = {
   subjectId: string;
   subjectKind: "user" | "accessKey" | "role";
   findingType: "unusedPassword" | "unusedAccessKey" | "unusedRole";
-  status: "active" | "archived" | "resolved";
   lastObservedAt: string;
   generatedAt: string;
   windowDays: 90;
   target: { view: Extract<AccountAccessView, "users" | "keys" | "roles">; id?: string };
 };
 
-export type AccessAnalysisRuleScope = "password" | "accessKey" | "role";
 export type AccessAnalysisRulePreview = {
+  id: string;
   accountId: string;
-  revision: number;
-  windowDays: 30 | 60 | 90;
-  scopes: AccessAnalysisRuleScope[];
-  responseMode: "REPORT_ONLY" | "HUMAN_REVIEW";
-  automaticRemediation: false;
+  type: "UNUSED_ACCESS";
+  resourceVersion: number;
+  windowDays: number;
+  status: "ACTIVE" | "DISABLED";
   evidence: "SYNTHETIC_COMPLETE_WINDOW";
 };
 
-export type AccessAnalysisCoverageState = "mockObserved" | "unobserved" | "unsupported";
-export type AccessAnalysisCoverage = {
-  id: "roleSsoMapping" | "serviceWorkload" | "resourcePolicies" | "crossAccountDelegation" | "activityWindow";
-  state: AccessAnalysisCoverageState;
-};
+export type AccessAnalysisCoverageState = "INSUFFICIENT_COVERAGE" | "NOT_INCLUDED";
+export type AccessAnalysisCoverageReason = "SOURCE_NOT_READY" | "SOURCE_NOT_IMPLEMENTED";
+export type AccessAnalysisCoverage =
+  | {
+    id: "IAM_PASSWORD_SESSIONS" | "IAM_ACCESS_KEY_AUTHORIZATIONS" | "IAM_ROLE_SESSIONS" | "IAM_ROLE_AUTHORIZATIONS";
+    state: Extract<AccessAnalysisCoverageState, "INSUFFICIENT_COVERAGE">;
+    reason: Extract<AccessAnalysisCoverageReason, "SOURCE_NOT_READY">;
+    observedFrom: string;
+    observedThrough: string;
+  }
+  | {
+    id: "PAAS_RESULTS" | "EXTERNAL_FEDERATION";
+    state: Extract<AccessAnalysisCoverageState, "NOT_INCLUDED">;
+    reason: Extract<AccessAnalysisCoverageReason, "SOURCE_NOT_IMPLEMENTED">;
+    observedFrom: null;
+    observedThrough: null;
+  };
 export type AccessAnalysisTrustEntry = {
   id: string;
   accountId: string;
@@ -86,7 +96,6 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       subjectId: user.id,
       subjectKind: "user",
       findingType: "unusedPassword",
-      status: "active",
       lastObservedAt: "2026-05-18T08:15:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
       windowDays: 90,
@@ -99,7 +108,6 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       subjectId: key.ownerId,
       subjectKind: "accessKey",
       findingType: "unusedAccessKey",
-      status: "archived",
       lastObservedAt: "2026-05-04T11:30:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
       windowDays: 90,
@@ -112,7 +120,6 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       subjectId: role.id,
       subjectKind: "role",
       findingType: "unusedRole",
-      status: "resolved",
       lastObservedAt: "2026-04-21T01:45:00Z",
       generatedAt: "2026-09-09T03:00:00Z",
       windowDays: 90,
@@ -174,21 +181,22 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
   return {
     accountId: workspace.accountId,
     coverage: [
-      { id: "roleSsoMapping", state: "mockObserved" },
-      { id: "serviceWorkload", state: "mockObserved" },
-      { id: "resourcePolicies", state: "unsupported" },
-      { id: "crossAccountDelegation", state: "unsupported" },
-      { id: "activityWindow", state: "unobserved" }
+      { id: "IAM_PASSWORD_SESSIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "IAM_ACCESS_KEY_AUTHORIZATIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "IAM_ROLE_SESSIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "IAM_ROLE_AUTHORIZATIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "PAAS_RESULTS", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null },
+      { id: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null }
     ],
     trustEntries: [...mappingEntries, ...serviceEntries],
     unusedFindings: buildUnusedAccessFindingPreview(workspace, scene),
     rule: {
+      id: "access-analyzer-preview",
       accountId: workspace.accountId,
-      revision: 3,
+      type: "UNUSED_ACCESS",
+      resourceVersion: 3,
       windowDays: 90,
-      scopes: ["password", "accessKey", "role"],
-      responseMode: "REPORT_ONLY",
-      automaticRemediation: false,
+      status: "ACTIVE",
       evidence: "SYNTHETIC_COMPLETE_WINDOW"
     }
   };
