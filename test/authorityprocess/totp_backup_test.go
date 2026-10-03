@@ -59,6 +59,7 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 	var migrationEnvironment []string
 	for _, value := range []struct{ environment, login string }{
 		{"MATRIX_MIGRATION_DATABASE_DSN_FILE", ""},
+		{"MATRIX_MIGRATION_IAM_ACCESS_ANALYSIS_DSN_FILE", "matrix_iam_access_analysis_worker_login"},
 		{"MATRIX_MIGRATION_IAM_API_DSN_FILE", apiLogin},
 		{installationv1.AuthenticationRecoveryMigrationDSNFileEnvironment, "matrix_iam_authentication_recovery_login"},
 		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", "matrix_iam_worker_login"},

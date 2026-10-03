@@ -1465,6 +1465,8 @@ S4c-a不可变事实只有用户管理动作`iam.access-analyzer.created/updated
 
 生产Audit修复提交`5fd6f047037ad9806993aeb03fc82078046327fe`的[Verification 37101686980](https://github.com/xiak/matrix/actions/runs/37101686980)中，`authority-storage`和`node-process`已成功，但`go`在全仓race步骤失败，故仍不能验收。Linux离线复现定位到新增worker测试错误地以`os.WriteFile`的创建权限参数尝试修改现有0600文件；POSIX不会据此改变既有mode，测试实际仍把0600作为负例并误报。测试已改为显式`chmod 0644`，固定Go1.26.8 Linux镜像、只读源码和依赖缓存、关闭网络的聚焦race门禁通过；该更改不放宽生产`ReadText(..., private=true)`。最终修复提交及其完整独立CI仍待完成。
 
+Linux权限测试修复提交`4f53122b44be26036ef27b5ec56c245d799a159e`的[Verification 37102922494](https://github.com/xiak/matrix/actions/runs/37102922494)中，`go`、`node-process`、`authority-storage`、恢复存储和Role/STS分片均成功；`authority-runtime`的实际会话/TOTP步骤成功后，`TestIAMTOTPBackupProcesses`因沿用旧迁移文件清单、未提供新增scanner专用DSN而失败。完整CI日志确认唯一失败为一次性备份fixture的`actual backup-capability migration failed`；同一固定源码的独立IAM/Audit/PaaS多进程门禁在本任务PG18通过315.66秒。现有备份测试owner已补入`MATRIX_MIGRATION_IAM_ACCESS_ANALYSIS_DSN_FILE`，不改变备份、迁移或scanner生产权限；修复后的聚焦门禁和新独立CI仍待完成。
+
 第一片最低真门禁覆盖两个Account相同对象ID、1/90/365日边界、对象年龄不足、旧谱系与恢复缺口；成功/失败密码登录、有效/坏签名/重放Key、RoleSession发行及Allow/Deny使用；归档、取消归档、活动后自动RESOLVED和后继再次闲置的新generation；策略/目标版本变更、账号或操作者停用、两个扫描副本的租约/fence及未知提交；Finding前后原User/Key/Role、Session、权限和业务资源不变。容量门禁必须证明有界分页和索引计划，不在每次请求扫描全部不可变决定；完整发布还须实跑安装恢复epoch衔接，否则只能交付观察与Finding后端候选，不能启用自动治理。
 
 闲置资格必须绑定规则修订、对象resourceVersion、真实活动修订和完整观察窗口。采集缺口、审计积压/死信、对象新建后不足阈值或仅没有浏览器登录时都不能断言User/Key闲置；程序Key和Role的真实活动必须按准确主体归因，不能忽略非浏览器使用。阈值以数据库时间和已冻结产品范围计算，不借外部地域/风险来源造结论。
