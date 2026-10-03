@@ -577,6 +577,114 @@ describe("IAM HTTP access-key boundary", () => {
   });
 });
 
+const accessAnalyzer = {
+  apiVersion, kind: "AccessAnalyzer", id: "analyzer-unused", accountId: account.id,
+  type: "UNUSED_ACCESS", status: "ACTIVE", unusedAccessAgeDays: 90, resourceVersion: 1,
+  createdAt: "2026-06-11T08:00:00Z", updatedAt: "2026-06-11T08:00:00Z"
+};
+const accessFinding = {
+  apiVersion, kind: "AccessFinding", id: "finding-password-alex", accountId: account.id,
+  analyzerId: accessAnalyzer.id, analyzerRevision: accessAnalyzer.resourceVersion,
+  type: "UNUSED_PASSWORD", status: "ACTIVE", target: { kind: "USER", id: user.id },
+  targetResourceVersion: user.resourceVersion, conditionGeneration: 1, activityRevision: 1, recoveryEpoch: 0,
+  windowStartedAt: "2026-06-11T08:00:00Z", observedAt: "2026-09-11T08:00:00Z",
+  lastActivityAt: "2026-06-01T08:00:00Z", resourceVersion: 1,
+  createdAt: "2026-09-11T07:00:00Z", updatedAt: "2026-09-11T07:00:00Z"
+};
+const accessCoverage = [
+  { source: "IAM_PASSWORD_SESSIONS", state: "COMPLETE", observedFrom: "2026-06-11T08:00:00Z", observedThrough: "2026-09-11T08:00:00Z" },
+  { source: "IAM_ACCESS_KEY_AUTHORIZATIONS", state: "INSUFFICIENT_COVERAGE", observedFrom: "2026-08-11T08:00:00Z", observedThrough: "2026-09-11T08:00:00Z", reason: "SOURCE_NOT_READY" },
+  { source: "IAM_ROLE_SESSIONS", state: "COMPLETE", observedFrom: "2026-06-11T08:00:00Z", observedThrough: "2026-09-11T08:00:00Z" },
+  { source: "IAM_ROLE_AUTHORIZATIONS", state: "COMPLETE", observedFrom: "2026-06-11T08:00:00Z", observedThrough: "2026-09-11T08:00:00Z" },
+  { source: "PAAS_RESULTS", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED" },
+  { source: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED" }
+];
+function accessFindingList(items = [accessFinding], coverage = accessCoverage) {
+  return {
+    apiVersion, kind: "AccessFindingList", accountId: account.id, analyzerId: accessAnalyzer.id,
+    observedAt: "2026-09-11T08:00:00Z", coverage, items
+  };
+}
+
+describe("IAM HTTP access-analysis boundary", () => {
+  it("loads and mutates one current-account analyzer without an account selector", async () => {
+    let fetcher = reply({ apiVersion, kind: "AccessAnalyzerList", accountId: account.id, items: [accessAnalyzer] });
+    const directory = await httpAccountRepository.accessAnalysis!.listAnalyzers("bearer", account.id);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/account/access-analyzers");
+    expect(directory).toMatchObject({ accountId: account.id, nextAfter: null, items: [{ id: accessAnalyzer.id, unusedAccessAgeDays: 90 }] });
+
+    fetcher = reply(accessAnalyzer);
+    expect((await httpAccountRepository.accessAnalysis!.readAnalyzer("bearer", account.id, accessAnalyzer.id)).id).toBe(accessAnalyzer.id);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/access-analyzers/${accessAnalyzer.id}`);
+
+    fetcher = reply(accessAnalyzer);
+    await httpAccountRepository.accessAnalysis!.createAnalyzer("bearer", account.id, { type: "UNUSED_ACCESS", requestId: "create-analyzer-one" });
+    expect(requestBody(fetcher)).toEqual({ type: "UNUSED_ACCESS", requestId: "create-analyzer-one" });
+
+    const updated = { ...accessAnalyzer, status: "DISABLED", unusedAccessAgeDays: 120, resourceVersion: 2, updatedAt: "2026-06-11T08:01:00Z" };
+    fetcher = reply(updated);
+    const result = await httpAccountRepository.accessAnalysis!.updateAnalyzer("bearer", account.id, accessAnalyzer.id, {
+      status: "DISABLED", unusedAccessAgeDays: 120, resourceVersion: 1, requestId: "update-analyzer-one"
+    });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/access-analyzers/${accessAnalyzer.id}:update`);
+    expect(requestBody(fetcher)).toEqual({ status: "DISABLED", unusedAccessAgeDays: 120, resourceVersion: 1, requestId: "update-analyzer-one" });
+    expect(result).toMatchObject({ status: "DISABLED", resourceVersion: 2 });
+  });
+
+  it("binds the finding lifecycle filter and opaque cursor into the exact list request", async () => {
+    const fetcher = reply(accessFindingList());
+    const result = await httpAccountRepository.accessAnalysis!.listFindings("bearer", account.id, accessAnalyzer.id, "ACTIVE", "ic1.next-page");
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/access-analyzers/${accessAnalyzer.id}/findings?status=ACTIVE&after=ic1.next-page`);
+    expect(result).toMatchObject({ accountId: account.id, analyzerId: accessAnalyzer.id, nextAfter: null });
+    expect(result.coverage[0]).toMatchObject({ source: "IAM_PASSWORD_SESSIONS", state: "COMPLETE", reason: null });
+    expect(result.items[0]).toMatchObject({ id: accessFinding.id, type: "UNUSED_PASSWORD", status: "ACTIVE", target: { kind: "USER", id: user.id } });
+  });
+
+  it("archives and unarchives only the selected finding at its exact resource version", async () => {
+    const archived = { ...accessFinding, status: "ARCHIVED", resourceVersion: 2, updatedAt: "2026-09-11T08:01:00Z" };
+    let fetcher = reply(archived);
+    const archivedResult = await httpAccountRepository.accessAnalysis!.archiveFinding("bearer", account.id, accessAnalyzer.id, accessFinding.id, {
+      resourceVersion: 1, requestId: "archive-finding-one"
+    });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/access-analyzers/${accessAnalyzer.id}/findings/${accessFinding.id}:archive`);
+    expect(requestBody(fetcher)).toEqual({ resourceVersion: 1, requestId: "archive-finding-one" });
+    expect(archivedResult).toMatchObject({ status: "ARCHIVED", resourceVersion: 2 });
+
+    const active = { ...accessFinding, resourceVersion: 3, updatedAt: "2026-09-11T08:02:00Z" };
+    fetcher = reply(active);
+    const activeResult = await httpAccountRepository.accessAnalysis!.unarchiveFinding("bearer", account.id, accessAnalyzer.id, accessFinding.id, {
+      resourceVersion: 2, requestId: "unarchive-finding-one"
+    });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/access-analyzers/${accessAnalyzer.id}/findings/${accessFinding.id}:unarchive`);
+    expect(activeResult).toMatchObject({ status: "ACTIVE", resourceVersion: 3 });
+  });
+
+  it("rejects foreign ownership, reordered coverage, mismatched targets, and invented resolutions", async () => {
+    const invalidResponses = [
+      { ...accessFindingList(), accountId: "account-foreign" },
+      accessFindingList([accessFinding], [accessCoverage[1]!, accessCoverage[0]!, ...accessCoverage.slice(2)]),
+      accessFindingList([{ ...accessFinding, target: { kind: "ROLE", id: "role-foreign" } }]),
+      accessFindingList([{ ...accessFinding, status: "RESOLVED" }])
+    ];
+    for (const response of invalidResponses) {
+      reply(response);
+      await expect(httpAccountRepository.accessAnalysis!.listFindings("bearer", account.id, accessAnalyzer.id, "ALL")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("rejects response expansion and invalid analyzer command values before they become UI state", async () => {
+    reply({ ...accessAnalyzer, leakedAuthority: true });
+    await expect(httpAccountRepository.accessAnalysis!.readAnalyzer("bearer", account.id, accessAnalyzer.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    await expect(httpAccountRepository.accessAnalysis!.createAnalyzer("bearer", account.id, {
+      type: "UNUSED_ACCESS", unusedAccessAgeDays: 0, requestId: "create-analyzer-invalid"
+    })).rejects.toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
 const notificationContact = {
   apiVersion, kind: "NotificationContact", accountId: account.id, userId: user.id,
   state: "NONE", resourceVersion: 0

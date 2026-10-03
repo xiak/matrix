@@ -33,6 +33,7 @@ import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 import type { CreateRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand } from "../domain/roles";
+import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
@@ -191,6 +192,19 @@ export type AccessKeyClient = {
   delete(userId: string, accessKeyId: string, command: { accessKeyResourceVersion: number; requestId: string }): Promise<AccessKeyDeletion>;
 };
 
+export type AccessAnalysisClient = {
+  accountId: string;
+  sessionRevision: number;
+  listAnalyzers(after?: string): Promise<AccessAnalyzerDirectory>;
+  readAnalyzer(analyzerId: string): Promise<AccessAnalyzer>;
+  createAnalyzer(command: CreateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
+  updateAnalyzer(analyzerId: string, command: UpdateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
+  listFindings(analyzerId: string, status: AccessFindingStatusFilter, after?: string): Promise<AccessFindingDirectory>;
+  readFinding(analyzerId: string, findingId: string): Promise<AccessFinding>;
+  archiveFinding(analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;
+  unarchiveFinding(analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;
+};
+
 export type AccessKeyCreateIntent = Readonly<{
   accountId: string;
   actorId: string;
@@ -335,6 +349,7 @@ type AccountAccess = {
   policyCreate: PolicyCreateClient | null;
   policyVersionMutation: PolicyVersionMutationClient | null;
   accountSecuritySettings: AccountSecuritySettingsClient | null;
+  accessAnalysis: AccessAnalysisClient | null;
   accessKeys: AccessKeyClient | null;
   accessKeyCreateIntent: AccessKeyCreateIntent | null;
   roles: RoleAccessClient | null;
@@ -1013,6 +1028,33 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [active, credential, expireSession, principalId, repository, scene, sessionId, sessionRevision, tenantId]);
 
+  const accessAnalysis = useMemo<AccessAnalysisClient | null>(() => {
+    const analysisRepository = repository.accessAnalysis;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !analysisRepository || repository.workspace) return null;
+    const accountId = scene.accountId;
+    const scoped = async <T,>(request: Promise<T>): Promise<T> => {
+      try { return await request; }
+      catch (failure) {
+        if (failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
+          setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+        }
+        throw failure;
+      }
+    };
+    return {
+      accountId,
+      sessionRevision,
+      listAnalyzers: (after) => scoped(analysisRepository.listAnalyzers(credential, accountId, after)),
+      readAnalyzer: (analyzerId) => scoped(analysisRepository.readAnalyzer(credential, accountId, analyzerId)),
+      createAnalyzer: (command) => scoped(analysisRepository.createAnalyzer(credential, accountId, command)),
+      updateAnalyzer: (analyzerId, command) => scoped(analysisRepository.updateAnalyzer(credential, accountId, analyzerId, command)),
+      listFindings: (analyzerId, status, after) => scoped(analysisRepository.listFindings(credential, accountId, analyzerId, status, after)),
+      readFinding: (analyzerId, findingId) => scoped(analysisRepository.readFinding(credential, accountId, analyzerId, findingId)),
+      archiveFinding: (analyzerId, findingId, command) => scoped(analysisRepository.archiveFinding(credential, accountId, analyzerId, findingId, command)),
+      unarchiveFinding: (analyzerId, findingId, command) => scoped(analysisRepository.unarchiveFinding(credential, accountId, analyzerId, findingId, command))
+    };
+  }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
+
   const accessKeys = useMemo<AccessKeyClient | null>(() => {
     const keyRepository = repository.accessKeys;
     if (!active || !credential || !principalId || !scene || scene.accountId !== tenantId || !keyRepository || !scene.canListUsers) return null;
@@ -1297,6 +1339,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     policyRead,
     policyCreate,
     policyVersionMutation,
+    accessAnalysis,
     accessKeys,
     accessKeyCreateIntent: accessKeyCreateIntent?.accountId === tenantId ? accessKeyCreateIntent : null,
     roles,
@@ -1439,7 +1482,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessAnalysis, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

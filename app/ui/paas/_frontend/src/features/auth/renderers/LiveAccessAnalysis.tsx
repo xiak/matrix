@@ -1,0 +1,255 @@
+"use client";
+
+import { useEffect, useId, useState } from "react";
+import { useTranslations } from "next-intl";
+import { Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, RadioGroup, Select, Table, TablePagination, TableSkeleton, Tabs, Typography } from "@ui/xiak";
+import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
+import type { AccessAnalysisClient } from "../application/AccountAccessProvider";
+import type { AccountAccessView } from "../domain/accounts";
+import type { AccessAnalyzer, AccessFinding, AccessFindingDirectory, AccessFindingStatusFilter, AccessObservationCoverage } from "../domain/accessAnalysis";
+import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import styles from "./AccountAccessRenderer.module.css";
+
+type Failure = "forbidden" | "routeUnavailable" | "conflict" | "invalid" | "unavailable";
+
+const findingBadge: Record<AccessFinding["status"], "warning" | "neutral" | "success"> = {
+  ACTIVE: "warning",
+  ARCHIVED: "neutral",
+  RESOLVED: "success"
+};
+
+const coverageBadge: Record<AccessObservationCoverage["state"], "success" | "warning" | "neutral"> = {
+  COMPLETE: "success",
+  INSUFFICIENT_COVERAGE: "warning",
+  NOT_INCLUDED: "neutral"
+};
+
+function failureCode(error: unknown): Failure {
+  if (error instanceof HttpProblem) {
+    if (error.status === 403) return "forbidden";
+    if (error.status === 404) return "routeUnavailable";
+    if (error.status === 409) return "conflict";
+    if (error.status === 400 || error.status === 422) return "invalid";
+  }
+  return "unavailable";
+}
+
+function findingTypeKey(type: AccessFinding["type"]): "unusedPassword" | "unusedAccessKey" | "unusedRole" {
+  if (type === "UNUSED_PASSWORD") return "unusedPassword";
+  if (type === "UNUSED_ACCESS_KEY") return "unusedAccessKey";
+  return "unusedRole";
+}
+
+function targetView(finding: AccessFinding): { view: AccountAccessView; id?: string } {
+  if (finding.type === "UNUSED_PASSWORD") return { view: "users", id: finding.target.id };
+  if (finding.type === "UNUSED_ROLE") return { view: "roles", id: finding.target.id };
+  return { view: "keys" };
+}
+
+export function LiveAccessAnalysis({ client, onNavigate }: {
+  client: AccessAnalysisClient;
+  onNavigate(view: AccountAccessView, id?: string): void;
+}) {
+  const t = useTranslations("IamWorkspace.accessAnalysis");
+  const [section, setSection] = useState<"coverage" | "unused" | "rule">("unused");
+  const [analyzers, setAnalyzers] = useState<AccessAnalyzer[] | null>(null);
+  const [analyzersLoading, setAnalyzersLoading] = useState(true);
+  const [filter, setFilter] = useState<AccessFindingStatusFilter>("ACTIVE");
+  const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined]);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [findings, setFindings] = useState<AccessFindingDirectory | null>(null);
+  const [findingsLoading, setFindingsLoading] = useState(false);
+  const [selected, setSelected] = useState<AccessFinding | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
+  const [notice, setNotice] = useState<"created" | "updated" | "archived" | "unarchived" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [reloadRevision, setReloadRevision] = useState(0);
+  const analyzer = analyzers?.[0] ?? null;
+  const currentCursor = cursorStack[pageIndex];
+
+  useEffect(() => {
+    let active = true;
+    void client.listAnalyzers().then((directory) => {
+      if (!active) return;
+      setFindingsLoading(directory.items.length > 0);
+      setAnalyzers(directory.items);
+    }).catch((failure) => {
+      if (!active) return;
+      setAnalyzers(null);
+      setError(failureCode(failure));
+    }).finally(() => { if (active) setAnalyzersLoading(false); });
+    return () => { active = false; };
+  }, [client, reloadRevision]);
+
+  useEffect(() => {
+    if (!analyzer) return;
+    let active = true;
+    void client.listFindings(analyzer.id, filter, currentCursor).then((directory) => {
+      if (!active) return;
+      setFindings(directory);
+    }).catch((failure) => {
+      if (!active) return;
+      setFindings(null);
+      setError(failureCode(failure));
+    }).finally(() => { if (active) setFindingsLoading(false); });
+    return () => { active = false; };
+  }, [analyzer, client, currentCursor, filter, reloadRevision]);
+
+  const changeFilter = (value: string) => {
+    setFindingsLoading(true);
+    setError(null);
+    setFilter(value as AccessFindingStatusFilter);
+    setCursorStack([undefined]);
+    setPageIndex(0);
+    setSelected(null);
+    setNotice(null);
+  };
+
+  const reload = () => {
+    setAnalyzersLoading(true);
+    setFindingsLoading(Boolean(analyzer));
+    setError(null);
+    setReloadRevision((current) => current + 1);
+  };
+
+  const createAnalyzer = async () => {
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const created = await client.createAnalyzer({ type: "UNUSED_ACCESS", requestId: requestToken("ui-access-analyzer-create-") });
+      setFindingsLoading(true); setAnalyzers([created]); setNotice("created"); setSection("rule");
+    } catch (failure) { setError(failureCode(failure)); }
+    finally { setBusy(false); }
+  };
+
+  const updateAnalyzer = async (next: { status: AccessAnalyzer["status"]; unusedAccessAgeDays: number }) => {
+    if (!analyzer) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const updated = await client.updateAnalyzer(analyzer.id, {
+        ...next, resourceVersion: analyzer.resourceVersion, requestId: requestToken("ui-access-analyzer-update-")
+      });
+      setAnalyzers([updated]); setNotice("updated");
+      setCursorStack([undefined]); setPageIndex(0); setFindings(null); setFindingsLoading(true);
+    } catch (failure) {
+      const code = failureCode(failure);
+      setError(code);
+      if (code === "conflict") setReloadRevision((current) => current + 1);
+    } finally { setBusy(false); }
+  };
+
+  const transitionFinding = async (finding: AccessFinding) => {
+    if (finding.status === "RESOLVED") return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const command = { resourceVersion: finding.resourceVersion, requestId: requestToken(`ui-access-finding-${finding.status === "ACTIVE" ? "archive" : "unarchive"}-`) };
+      const updated = finding.status === "ACTIVE"
+        ? await client.archiveFinding(finding.analyzerId, finding.id, command)
+        : await client.unarchiveFinding(finding.analyzerId, finding.id, command);
+      setSelected(updated);
+      setFindings((current) => current ? {
+        ...current,
+        items: filter === "ALL" || filter === updated.status
+          ? current.items.map((item) => item.id === updated.id ? updated : item)
+          : current.items.filter((item) => item.id !== updated.id)
+      } : current);
+      setNotice(updated.status === "ARCHIVED" ? "archived" : "unarchived");
+    } catch (failure) {
+      const code = failureCode(failure);
+      setError(code);
+      if (code === "conflict") {
+        try { setSelected(await client.readFinding(finding.analyzerId, finding.id)); } catch { /* The explicit conflict remains authoritative. */ }
+      }
+    } finally { setBusy(false); }
+  };
+
+  if (selected) return <WorkspaceDetail title={t("live.findingTitle", { id: selected.target.id })} onBack={() => { setSelected(null); setNotice(null); }}>
+    {error ? <Alert status="danger">{t(`live.errors.${error}`)}</Alert> : null}
+    {notice ? <Alert status="success">{t(`live.notices.${notice}`)}</Alert> : null}
+    <Alert status="info">{t("live.findingBoundary")}</Alert>
+    <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{selected.target.id}</Typography.Title><Typography.Text tone="muted">{selected.id}</Typography.Text></div><Badge status={findingBadge[selected.status]}>{t(`unused.lifecycle.${selected.status}`)}</Badge></Card.Header>
+      <Card.Body className={styles.detail}>
+        <dl className={styles.facts}>
+          <div><dt>{t("unused.findingId")}</dt><dd><code>{selected.id}</code></dd></div>
+          <div><dt>{t("unused.analyzerId")}</dt><dd><code>{selected.analyzerId}</code></dd></div>
+          <div><dt>{t("unused.findingType")}</dt><dd>{t(`unused.types.${findingTypeKey(selected.type)}`)}</dd></div>
+          <div><dt>{t("unused.status")}</dt><dd>{t(`unused.lifecycle.${selected.status}`)}</dd></div>
+          <div><dt>{t("live.targetVersion")}</dt><dd>{selected.targetResourceVersion}</dd></div>
+          <div><dt>{t("rule.resourceVersion")}</dt><dd>{selected.resourceVersion}</dd></div>
+          <div><dt>{t("live.windowStartedAt")}</dt><dd><WorkspaceTime value={selected.windowStartedAt} /></dd></div>
+          <div><dt>{t("live.observedAt")}</dt><dd><WorkspaceTime value={selected.observedAt} /></dd></div>
+          <div><dt>{t("live.lastActivityAt")}</dt><dd>{selected.lastActivityAt ? <WorkspaceTime value={selected.lastActivityAt} /> : t("live.noActivity")}</dd></div>
+        </dl>
+        <Alert status="warning">{t("unused.noAutomaticAction")}</Alert>
+      </Card.Body>
+      <Card.Footer><div className={styles.actions}>
+        {selected.status !== "RESOLVED" ? <Button disabled={busy} onClick={() => void transitionFinding(selected)}>{t(selected.status === "ACTIVE" ? "live.archive" : "live.unarchive")}</Button> : null}
+        <Button variant="secondary" onClick={() => { const target = targetView(selected); onNavigate(target.view, target.id); }}>{t("unused.reviewTarget")}</Button>
+      </div></Card.Footer>
+    </Card>
+  </WorkspaceDetail>;
+
+  return <div className={styles.detailWorkspace}>
+    <ContentPage.Heading title={t("title")} scrollKey={`access-analysis-live:${client.accountId}`} />
+    <Alert status="info">{t("live.connectedBoundary")}</Alert>
+    {error ? <Alert status="danger"><div className={styles.confirmation}><strong>{t(`live.errors.${error}`)}</strong><Button variant="secondary" onClick={reload}>{t("live.retry")}</Button></div></Alert> : null}
+    {notice ? <Alert status="success">{t(`live.notices.${notice}`)}</Alert> : null}
+    <Tabs.Root value={section} onValueChange={(value) => setSection(value as typeof section)}>
+      <Tabs.List aria-label={t("sections")} className={styles.accessAnalysisTabs}>
+        <Tabs.Trigger value="coverage">{t("live.tabs.coverage")}</Tabs.Trigger>
+        <Tabs.Trigger value="unused">{t("tabs.unused")}</Tabs.Trigger>
+        <Tabs.Trigger value="rule">{t("tabs.rule")}</Tabs.Trigger>
+      </Tabs.List>
+      {analyzersLoading ? <Tabs.Content value={section}><Card><TableSkeleton header label={t("live.loading")} labelVisible={false} rows={4} /></Card></Tabs.Content> : analyzers === null ? <Tabs.Content value={section} className={styles.stack}>
+        <EmptyState title={t("live.loadFailedTitle")} description={t("live.loadFailedHint")} action={<Button variant="secondary" onClick={reload}>{t("live.retry")}</Button>} />
+      </Tabs.Content> : !analyzer ? <Tabs.Content value={section} className={styles.stack}>
+        <EmptyState title={t("live.noAnalyzerTitle")} description={t("live.noAnalyzerHint")} action={<Button disabled={busy || error === "forbidden"} onClick={() => void createAnalyzer()}>{t("live.createAnalyzer")}</Button>} />
+      </Tabs.Content> : <>
+        <Tabs.Content className={styles.stack} value="coverage">
+          {findingsLoading ? <Card><TableSkeleton header label={t("live.loadingCoverage")} labelVisible={false} rows={6} /></Card> : !findings ? <EmptyState title={t("live.loadFailedTitle")} description={t("live.loadFailedHint")} action={<Button variant="secondary" onClick={reload}>{t("live.retry")}</Button>} /> : <Card>
+            <Card.Header><div><Typography.Title as="h2" level={3}>{t("external.coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.coverageHint")}</Typography.Text></div><Badge status="info"><WorkspaceTime value={findings.observedAt} /></Badge></Card.Header>
+            <Card.Body className={styles.securityReportBody}><dl className={styles.activityEvidence}>{findings.coverage.map((entry) => <div key={entry.source}><dt>{t(`external.coverage.${entry.source}.title`)}</dt><dd><Badge status={coverageBadge[entry.state]}>{t(`external.coverageStates.${entry.state}`)}</Badge><span>{entry.reason ? t(`external.coverageReasons.${entry.reason}`) : t("live.coverageComplete")}</span>{entry.observedFrom && entry.observedThrough ? <small><WorkspaceTime value={entry.observedFrom} /> – <WorkspaceTime value={entry.observedThrough} /></small> : null}</dd></div>)}</dl></Card.Body>
+          </Card>}
+        </Tabs.Content>
+        <Tabs.Content className={styles.stack} value="unused">
+          <Card>
+            <Card.Header><div><Typography.Title as="h2" level={3}>{t("live.findingsTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.findingsHint")}</Typography.Text></div><FormField id="live-access-finding-status" label={t("unused.status")}><Select id="live-access-finding-status" disabled={findingsLoading} value={filter} onValueChange={changeFilter} options={(['ALL', 'ACTIVE', 'ARCHIVED', 'RESOLVED'] as const).map((value) => ({ value, label: t(`live.filters.${value}`) }))} /></FormField></Card.Header>
+            {findingsLoading ? <TableSkeleton label={t("live.loadingFindings")} labelVisible={false} rows={6} /> : !findings ? <EmptyState title={t("live.loadFailedTitle")} description={t("live.loadFailedHint")} action={<Button variant="secondary" onClick={reload}>{t("live.retry")}</Button>} /> : findings.items.length ? <Table aria-label={t("live.findingsTitle")} mobileLayout="stack"><thead><tr><th scope="col">{t("unused.principal")}</th><th scope="col">{t("unused.findingType")}</th><th scope="col">{t("unused.status")}</th><th scope="col">{t("live.observedAt")}</th></tr></thead><tbody>{findings.items.map((finding) => <tr key={finding.id}><td data-label={t("unused.principal")}><button className={styles.userLink} onClick={() => { setSelected(finding); setNotice(null); }}>{finding.target.id}</button><small>{finding.id}</small></td><td data-label={t("unused.findingType")}>{t(`unused.types.${findingTypeKey(finding.type)}`)}</td><td data-label={t("unused.status")}><Badge status={findingBadge[finding.status]}>{t(`unused.lifecycle.${finding.status}`)}</Badge></td><td data-label={t("live.observedAt")}><WorkspaceTime value={finding.observedAt} /></td></tr>)}</tbody></Table> : <EmptyState title={t("live.noFindingsTitle")} description={t("live.noFindingsHint")} />}
+            <Table.Footer note={t("live.cursorBoundary")}><TablePagination mode="cursor" disabled={findingsLoading} summary={t("live.page", { page: pageIndex + 1 })}
+              previous={{ label: t("live.previous"), disabled: pageIndex === 0, onClick: () => { setFindingsLoading(true); setError(null); setPageIndex((current) => Math.max(0, current - 1)); } }}
+              next={{ label: t("live.next"), disabled: !findings?.nextAfter, onClick: () => { if (!findings?.nextAfter) return; setFindingsLoading(true); setError(null); setCursorStack((current) => [...current.slice(0, pageIndex + 1), findings.nextAfter ?? undefined]); setPageIndex((current) => current + 1); } }} /></Table.Footer>
+          </Card>
+        </Tabs.Content>
+        <Tabs.Content className={styles.stack} value="rule"><LiveAnalyzerRule key={`${analyzer.resourceVersion}:${analyzer.status}:${analyzer.unusedAccessAgeDays}`} analyzer={analyzer} busy={busy} onSave={updateAnalyzer} /></Tabs.Content>
+      </>}
+    </Tabs.Root>
+  </div>;
+}
+
+function LiveAnalyzerRule({ analyzer, busy, onSave }: {
+  analyzer: AccessAnalyzer;
+  busy: boolean;
+  onSave(value: { status: AccessAnalyzer["status"]; unusedAccessAgeDays: number }): Promise<void>;
+}) {
+  const t = useTranslations("IamWorkspace.accessAnalysis");
+  const id = useId();
+  const [days, setDays] = useState(String(analyzer.unusedAccessAgeDays));
+  const [status, setStatus] = useState(analyzer.status);
+  const value = Number(days);
+  const invalid = !/^\d+$/.test(days) || !Number.isInteger(value) || value < 1 || value > 365;
+  const unchanged = value === analyzer.unusedAccessAgeDays && status === analyzer.status;
+  return <Card>
+    <Card.Header><div><Typography.Title as="h2" level={3}>{t("rule.title")}</Typography.Title><Typography.Text tone="muted">{t("live.ruleHint")}</Typography.Text></div><Badge status={analyzer.status === "ACTIVE" ? "success" : "neutral"}>{t(`rule.statuses.${analyzer.status}`)}</Badge></Card.Header>
+    <Card.Body className={styles.detail}>
+      <dl className={styles.facts}>
+        <div><dt>{t("rule.account")}</dt><dd><code>{analyzer.accountId}</code></dd></div>
+        <div><dt>{t("rule.analyzerId")}</dt><dd><code>{analyzer.id}</code></dd></div>
+        <div><dt>{t("rule.resourceVersion")}</dt><dd>{analyzer.resourceVersion}</dd></div>
+      </dl>
+      <FormField id={`${id}-days`} label={t("rule.window")} hint={t("rule.windowHint")} error={invalid ? t("rule.windowInvalid") : undefined}><Input id={`${id}-days`} disabled={busy} type="number" min={1} max={365} step={1} value={days} onChange={(event) => setDays(event.target.value)} /></FormField>
+      <RadioGroup label={t("rule.status")} value={status} onValueChange={(next) => setStatus(next as AccessAnalyzer["status"])} options={(['ACTIVE', 'DISABLED'] as const).map((next) => ({ value: next, label: t(`rule.statuses.${next}`) }))} />
+      <Alert status="warning">{t("live.noAutomaticRemediation")}</Alert>
+    </Card.Body>
+    <Card.Footer><Button disabled={busy || invalid || unchanged} onClick={() => void onSave({ status, unusedAccessAgeDays: value })}>{t("live.saveRule")}</Button></Card.Footer>
+  </Card>;
+}

@@ -68,6 +68,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
+import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
 import { sourceCidrValid } from "../domain/policyLanguage";
 
 function accountRecord(value: unknown): Record<string, unknown> {
@@ -465,6 +466,171 @@ function parseAccessKeyDeletion(value: unknown, accountId: string, userId: strin
     throw new Error("INVALID_IAM_RESPONSE");
   }
   return { outcome: wire.outcome, deletion: result };
+}
+
+function accessAnalysisAgeDays(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 365) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return value;
+}
+
+function accountRevisionOrZero(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("INVALID_IAM_RESPONSE");
+  return value;
+}
+
+function parseAccessAnalyzer(value: unknown, accountId: string, analyzerId?: string): AccessAnalyzer {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "type", "status", "unusedAccessAgeDays", "resourceVersion", "createdAt", "updatedAt"]);
+  requireAccountKind(wire, "AccessAnalyzer");
+  if (wire.type !== "UNUSED_ACCESS" || wire.status !== "ACTIVE" && wire.status !== "DISABLED") {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const result: AccessAnalyzer = {
+    id: accountIdentifier(wire.id),
+    accountId: accountIdentifier(wire.accountId),
+    type: "UNUSED_ACCESS",
+    status: wire.status,
+    unusedAccessAgeDays: accessAnalysisAgeDays(wire.unusedAccessAgeDays),
+    resourceVersion: accountVersion(wire.resourceVersion),
+    ...chronologicalTimestamps(wire.createdAt, wire.updatedAt)
+  };
+  if (result.accountId !== accountId || analyzerId !== undefined && result.id !== analyzerId) throw new Error("INVALID_IAM_RESPONSE");
+  return result;
+}
+
+function parseAccessAnalyzerDirectory(value: unknown, accountId: string, after?: string): AccessAnalyzerDirectory {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "items"], ["nextAfter"]);
+  requireAccountKind(wire, "AccessAnalyzerList");
+  if (accountIdentifier(wire.accountId) !== accountId || !Array.isArray(wire.items) || wire.items.length > 100) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const items = wire.items.map((item) => parseAccessAnalyzer(item, accountId));
+  const nextAfter = orderedDirectoryPage(items.map((item) => item.id), wire.nextAfter, after);
+  if (nextAfter && items.length !== 100) throw new Error("INVALID_IAM_RESPONSE");
+  return { accountId, items, nextAfter };
+}
+
+function parseAccessObservationCoverage(value: unknown, observedAt: string): AccessObservationCoverage[] {
+  if (!Array.isArray(value) || value.length !== accessObservationSources.length) throw new Error("INVALID_IAM_RESPONSE");
+  return value.map((entry, index) => {
+    const wire = accountRecord(entry);
+    exactKeys(wire, ["source", "state"], ["observedFrom", "observedThrough", "reason"]);
+    const source = accessObservationSources[index]!;
+    if (wire.source !== source) throw new Error("INVALID_IAM_RESPONSE");
+    if (wire.state === "NOT_INCLUDED") {
+      if (wire.observedFrom !== undefined || wire.observedThrough !== undefined || wire.reason !== "SOURCE_NOT_IMPLEMENTED") {
+        throw new Error("INVALID_IAM_RESPONSE");
+      }
+      return { source, state: "NOT_INCLUDED", observedFrom: null, observedThrough: null, reason: "SOURCE_NOT_IMPLEMENTED" };
+    }
+    const observedFrom = accountTimestamp(wire.observedFrom);
+    const observedThrough = accountTimestamp(wire.observedThrough);
+    if (timestampOrder(observedThrough) < timestampOrder(observedFrom) || timestampOrder(observedThrough) > timestampOrder(observedAt)) {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    if (wire.state === "COMPLETE") {
+      if (wire.reason !== undefined) throw new Error("INVALID_IAM_RESPONSE");
+      return { source, state: "COMPLETE", observedFrom, observedThrough, reason: null };
+    }
+    if (wire.state !== "INSUFFICIENT_COVERAGE" ||
+      !["OBSERVATION_WINDOW_INCOMPLETE", "HISTORICAL_PROVENANCE_UNKNOWN", "RESTORE_GAP", "SOURCE_NOT_READY"].includes(String(wire.reason))) {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    return {
+      source,
+      state: "INSUFFICIENT_COVERAGE",
+      observedFrom,
+      observedThrough,
+      reason: wire.reason as "OBSERVATION_WINDOW_INCOMPLETE" | "HISTORICAL_PROVENANCE_UNKNOWN" | "RESTORE_GAP" | "SOURCE_NOT_READY"
+    };
+  });
+}
+
+function parseAccessFinding(value: unknown, accountId: string, analyzerId: string, findingId?: string): AccessFinding {
+  const wire = accountRecord(value);
+  exactKeys(wire, [
+    "apiVersion", "kind", "id", "accountId", "analyzerId", "analyzerRevision", "type", "status", "target",
+    "targetResourceVersion", "conditionGeneration", "activityRevision", "recoveryEpoch", "windowStartedAt", "observedAt",
+    "resourceVersion", "createdAt", "updatedAt"
+  ], ["recoveryCommandId", "recoveryCompletedAt", "lastActivityAt", "resolvedAt"]);
+  requireAccountKind(wire, "AccessFinding");
+  if (wire.type !== "UNUSED_PASSWORD" && wire.type !== "UNUSED_ACCESS_KEY" && wire.type !== "UNUSED_ROLE" ||
+      wire.status !== "ACTIVE" && wire.status !== "ARCHIVED" && wire.status !== "RESOLVED") throw new Error("INVALID_IAM_RESPONSE");
+  const findingType = wire.type;
+  const findingStatus = wire.status as AccessFinding["status"];
+  const id = accountIdentifier(wire.id);
+  const owner = accountIdentifier(wire.accountId);
+  const analyzer = accountIdentifier(wire.analyzerId);
+  if (owner !== accountId || analyzer !== analyzerId || findingId !== undefined && id !== findingId) throw new Error("INVALID_IAM_RESPONSE");
+  const targetWire = accountRecord(wire.target);
+  exactKeys(targetWire, ["kind", "id"]);
+  const expectedTargetKind = findingType === "UNUSED_PASSWORD" ? "USER" : findingType === "UNUSED_ACCESS_KEY" ? "ACCESS_KEY" : "ROLE";
+  if (targetWire.kind !== expectedTargetKind) throw new Error("INVALID_IAM_RESPONSE");
+  const target = { kind: expectedTargetKind, id: accountIdentifier(targetWire.id) };
+  const windowStartedAt = accountTimestamp(wire.windowStartedAt);
+  const observedAt = accountTimestamp(wire.observedAt);
+  const createdAt = accountTimestamp(wire.createdAt);
+  const updatedAt = accountTimestamp(wire.updatedAt);
+  if (timestampOrder(observedAt) <= timestampOrder(windowStartedAt) || timestampOrder(createdAt) > timestampOrder(observedAt) ||
+      timestampOrder(createdAt) > timestampOrder(updatedAt)) throw new Error("INVALID_IAM_RESPONSE");
+  const lastActivityAt = wire.lastActivityAt === undefined ? null : accountTimestamp(wire.lastActivityAt);
+  if (lastActivityAt && timestampOrder(lastActivityAt) >= timestampOrder(windowStartedAt)) throw new Error("INVALID_IAM_RESPONSE");
+  const recoveryEpoch = accountRevisionOrZero(wire.recoveryEpoch);
+  const recoveryCommandId = wire.recoveryCommandId === undefined ? null : accountIdentifier(wire.recoveryCommandId);
+  const recoveryCompletedAt = wire.recoveryCompletedAt === undefined ? null : accountTimestamp(wire.recoveryCompletedAt);
+  if (recoveryEpoch === 0 ? recoveryCommandId !== null || recoveryCompletedAt !== null
+    : recoveryCommandId === null || recoveryCompletedAt === null || timestampOrder(windowStartedAt) < timestampOrder(recoveryCompletedAt)) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const resolvedAt = wire.resolvedAt === undefined ? null : accountTimestamp(wire.resolvedAt);
+  if (findingStatus === "RESOLVED") {
+    if (!resolvedAt || timestampOrder(resolvedAt) < timestampOrder(createdAt) || timestampOrder(resolvedAt) !== timestampOrder(updatedAt) ||
+        timestampOrder(observedAt) !== timestampOrder(updatedAt)) throw new Error("INVALID_IAM_RESPONSE");
+  } else if (resolvedAt) throw new Error("INVALID_IAM_RESPONSE");
+  const common = {
+    id,
+    accountId: owner,
+    analyzerId: analyzer,
+    analyzerRevision: accountVersion(wire.analyzerRevision),
+    status: findingStatus,
+    targetResourceVersion: accountVersion(wire.targetResourceVersion),
+    conditionGeneration: accountVersion(wire.conditionGeneration),
+    activityRevision: accountVersion(wire.activityRevision),
+    recoveryEpoch,
+    recoveryCommandId,
+    recoveryCompletedAt,
+    windowStartedAt,
+    observedAt,
+    lastActivityAt,
+    resourceVersion: accountVersion(wire.resourceVersion),
+    createdAt,
+    updatedAt,
+    resolvedAt
+  };
+  if (findingType === "UNUSED_PASSWORD") return { ...common, type: "UNUSED_PASSWORD", target: target as { kind: "USER"; id: string } };
+  if (findingType === "UNUSED_ACCESS_KEY") return { ...common, type: "UNUSED_ACCESS_KEY", target: target as { kind: "ACCESS_KEY"; id: string } };
+  return { ...common, type: "UNUSED_ROLE", target: target as { kind: "ROLE"; id: string } };
+}
+
+function parseAccessFindingDirectory(value: unknown, accountId: string, analyzerId: string, status: AccessFindingStatusFilter, after?: string): AccessFindingDirectory {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "analyzerId", "observedAt", "coverage", "items"], ["nextAfter"]);
+  requireAccountKind(wire, "AccessFindingList");
+  if (accountIdentifier(wire.accountId) !== accountId || accountIdentifier(wire.analyzerId) !== analyzerId || !Array.isArray(wire.items) || wire.items.length > 100) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const observedAt = accountTimestamp(wire.observedAt);
+  const coverage = parseAccessObservationCoverage(wire.coverage, observedAt);
+  const items = wire.items.map((item) => parseAccessFinding(item, accountId, analyzerId));
+  if (items.some((item) => timestampOrder(item.observedAt) > timestampOrder(observedAt) || status !== "ALL" && item.status !== status)) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const nextAfter = orderedDirectoryPage(items.map((item) => item.id), wire.nextAfter, after);
+  if (nextAfter && items.length !== 100) throw new Error("INVALID_IAM_RESPONSE");
+  return { accountId, analyzerId, observedAt, coverage, items, nextAfter };
 }
 
 function securityMailAddress(value: unknown): string {
@@ -2080,6 +2246,106 @@ function parseAccountSecuritySettingsUpdate(value: unknown, accountId: string, r
 }
 
 export const httpAccountRepository: AccountRepository = {
+  accessAnalysis: {
+    async listAnalyzers(credential, accountId, after) {
+      const owner = accountIdentifier(accountId);
+      return parseAccessAnalyzerDirectory(await requestJSON<unknown>(
+        `/api/iam/v1/account/access-analyzers${pageQuery(after)}`,
+        { headers: accountHeaders(credential) }
+      ), owner, after);
+    },
+    async readAnalyzer(credential, accountId, analyzerId) {
+      const owner = accountIdentifier(accountId);
+      const target = accountIdentifier(analyzerId);
+      return parseAccessAnalyzer(await requestJSON<unknown>(
+        `/api/iam/v1/account/access-analyzers/${encodeURIComponent(target)}`,
+        { headers: accountHeaders(credential) }
+      ), owner, target);
+    },
+    async createAnalyzer(credential, accountId, command) {
+      const owner = accountIdentifier(accountId);
+      if (command.type !== "UNUSED_ACCESS") throw new Error("INVALID_IAM_REQUEST");
+      const unusedAccessAgeDays = command.unusedAccessAgeDays === undefined ? undefined : accessAnalysisAgeDays(command.unusedAccessAgeDays);
+      const result = parseAccessAnalyzer(await requestJSON<unknown>("/api/iam/v1/account/access-analyzers", {
+        method: "POST",
+        headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify({ type: command.type, ...(unusedAccessAgeDays === undefined ? {} : { unusedAccessAgeDays }), requestId: accountIdentifier(command.requestId) })
+      }), owner);
+      if (result.resourceVersion !== 1 || result.type !== command.type ||
+          result.unusedAccessAgeDays !== (unusedAccessAgeDays ?? 90)) throw new Error("INVALID_IAM_RESPONSE");
+      return result;
+    },
+    async updateAnalyzer(credential, accountId, analyzerId, command) {
+      const owner = accountIdentifier(accountId);
+      const target = accountIdentifier(analyzerId);
+      const resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER || command.status !== "ACTIVE" && command.status !== "DISABLED") throw new Error("INVALID_IAM_REQUEST");
+      const unusedAccessAgeDays = accessAnalysisAgeDays(command.unusedAccessAgeDays);
+      const result = parseAccessAnalyzer(await requestJSON<unknown>(
+        `/api/iam/v1/account/access-analyzers/${encodeURIComponent(target)}:update`, {
+          method: "POST",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ status: command.status, unusedAccessAgeDays, resourceVersion, requestId: accountIdentifier(command.requestId) })
+        }
+      ), owner, target);
+      if (result.status !== command.status || result.unusedAccessAgeDays !== unusedAccessAgeDays || result.resourceVersion !== resourceVersion + 1) {
+        throw new Error("INVALID_IAM_RESPONSE");
+      }
+      return result;
+    },
+    async listFindings(credential, accountId, analyzerId, status, after) {
+      const owner = accountIdentifier(accountId);
+      const target = accountIdentifier(analyzerId);
+      if (status !== "ALL" && status !== "ACTIVE" && status !== "ARCHIVED" && status !== "RESOLVED") throw new Error("INVALID_IAM_REQUEST");
+      const query = new URLSearchParams({ status });
+      if (after !== undefined) query.set("after", pageCursor(after));
+      return parseAccessFindingDirectory(await requestJSON<unknown>(
+        `/api/iam/v1/account/access-analyzers/${encodeURIComponent(target)}/findings?${query.toString()}`,
+        { headers: accountHeaders(credential) }
+      ), owner, target, status, after);
+    },
+    async readFinding(credential, accountId, analyzerId, findingId) {
+      const owner = accountIdentifier(accountId);
+      const analyzer = accountIdentifier(analyzerId);
+      const target = accountIdentifier(findingId);
+      return parseAccessFinding(await requestJSON<unknown>(
+        `/api/iam/v1/account/access-analyzers/${encodeURIComponent(analyzer)}/findings/${encodeURIComponent(target)}`,
+        { headers: accountHeaders(credential) }
+      ), owner, analyzer, target);
+    },
+    async archiveFinding(credential, accountId, analyzerId, findingId, command) {
+      const owner = accountIdentifier(accountId);
+      const analyzer = accountIdentifier(analyzerId);
+      const target = accountIdentifier(findingId);
+      const resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+      const result = parseAccessFinding(await requestJSON<unknown>(
+        `/api/iam/v1/account/access-analyzers/${encodeURIComponent(analyzer)}/findings/${encodeURIComponent(target)}:archive`, {
+          method: "POST",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ resourceVersion, requestId: accountIdentifier(command.requestId) })
+        }
+      ), owner, analyzer, target);
+      if (result.status !== "ARCHIVED" || result.resourceVersion !== resourceVersion + 1) throw new Error("INVALID_IAM_RESPONSE");
+      return result;
+    },
+    async unarchiveFinding(credential, accountId, analyzerId, findingId, command) {
+      const owner = accountIdentifier(accountId);
+      const analyzer = accountIdentifier(analyzerId);
+      const target = accountIdentifier(findingId);
+      const resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+      const result = parseAccessFinding(await requestJSON<unknown>(
+        `/api/iam/v1/account/access-analyzers/${encodeURIComponent(analyzer)}/findings/${encodeURIComponent(target)}:unarchive`, {
+          method: "POST",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ resourceVersion, requestId: accountIdentifier(command.requestId) })
+        }
+      ), owner, analyzer, target);
+      if (result.status !== "ACTIVE" || result.resourceVersion !== resourceVersion + 1) throw new Error("INVALID_IAM_RESPONSE");
+      return result;
+    }
+  },
   accountSecuritySettings: {
     async read(credential, accountId) {
       return parseAccountSecuritySettings(await requestJSON<unknown>("/api/iam/v1/account/security-settings", {
