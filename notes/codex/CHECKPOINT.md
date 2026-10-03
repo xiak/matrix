@@ -6,8 +6,8 @@
 - Updated: 2026-10-04
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `26412cd32`
-- Pushed documentation milestone: `d556fc869`
+- Pushed source/embed milestone: `ed4e3e69c`
+- Pushed documentation milestone: `09686b7c5`
 
 ## Authoritative route
 
@@ -29,24 +29,24 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. An already verified personal
-security notification address now exposes an in-page, read-only replacement
-preview. It explains target-bound step-up, closed verification of the new
-address while the old address remains authoritative, atomic commit with no
-partial state, and closed notifications to both addresses after commit. The
-preview has no inputs or write action and creates no challenge, replacement
-intent, request ID, email delivery or IAM wire; it does not mark the deferred
-replacement capability delivered.
+login verification remains disabled for UX review. The existing Passkey/WebAuthn
+concept component now explains unconfigured, configured-but-not-production-ready,
+and IAM-authoritative available/restricted states. It fixes trusted RP ID/origin,
+target-bound registration/deletion step-up, exact Session ownership, fail-closed
+credential-risk handling and controlled recovery without displaying a fake
+device directory or exposing registration, deletion, reset, recovery or save
+actions. Initial mount no longer steals focus from the page title.
 
-Source and synchronized embed are pushed at `26412cd32`; FEAT evidence is
-pushed at `d556fc869`. The complete 62-file/1045-test frontend suite, three
+Source and synchronized embed are pushed at `ed4e3e69c`; FEAT evidence is
+pushed at `09686b7c5`. The complete 62-file/1046-test frontend suite, three
 static normalization tests, typecheck, lint, architecture, 228-pair style
 checks, 45-route production export, 249-file embed equality and repository Go
-test/vet passed. Desktop and `390 × 844` DEV showed no horizontal overflow; the
-preview contained only its return action and no generic success feedback.
+test/vet passed. Desktop and `390 × 844` DEV showed no horizontal overflow,
+inputs, Dialog, or submit-success state in this preview.
 
-Earlier organization governance, cross-account collaboration, Role SSO journey,
-Access Analyzer recovery trust, Account security report, federation replacement,
+Earlier notification-address replacement, paginated policy Action catalog,
+organization governance, cross-account collaboration, Role SSO journey, Access
+Analyzer recovery trust, Account security report, federation replacement,
 Deployment lifecycle, AccessKey carrier, Application tag recovery, service
 authorization, policy compilation/provenance and shared navigation/loading
 milestones remain owned and indexed by FEAT-IAM-010 and FEAT-007; load only the
