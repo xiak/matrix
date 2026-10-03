@@ -1463,6 +1463,8 @@ S4c-a不可变事实只有用户管理动作`iam.access-analyzer.created/updated
 
 候选提交的独立[Verification 37099747513](https://github.com/xiak/matrix/actions/runs/37099747513)未通过，不能作为验收证据：`authority-storage`在PostgreSQL authority门禁失败，`go`在全仓race步骤失败。固定源码在本任务环境复现后先发现测试fixture把tenant-scoped SYSTEM事实误造为USER actor；修正fixture又暴露生产Audit SQL的封闭目录、SYSTEM actor约束和查询白名单遗漏四个access-finding动作。修复工作树将实际组合更正为IAM63/Audit33/PaaS3+r9，并为错误SYSTEM actor增加负向门禁；全新PG18上的Audit catalog与保留数据升级通过16.140秒、Audit HTTP通过4.308秒，PaaS存储通过5.540秒，IAM受影响integration package串行race通过768.375秒；全仓race、vet、模块校验、Linux amd64构建和生成稳定性再次通过。新固定提交及其独立CI仍待完成，LIVE UI也未验收，故S4c-b继续保持未验收。
 
+生产Audit修复提交`5fd6f047037ad9806993aeb03fc82078046327fe`的[Verification 37101686980](https://github.com/xiak/matrix/actions/runs/37101686980)中，`authority-storage`和`node-process`已成功，但`go`在全仓race步骤失败，故仍不能验收。Linux离线复现定位到新增worker测试错误地以`os.WriteFile`的创建权限参数尝试修改现有0600文件；POSIX不会据此改变既有mode，测试实际仍把0600作为负例并误报。测试已改为显式`chmod 0644`，固定Go1.26.8 Linux镜像、只读源码和依赖缓存、关闭网络的聚焦race门禁通过；该更改不放宽生产`ReadText(..., private=true)`。最终修复提交及其完整独立CI仍待完成。
+
 第一片最低真门禁覆盖两个Account相同对象ID、1/90/365日边界、对象年龄不足、旧谱系与恢复缺口；成功/失败密码登录、有效/坏签名/重放Key、RoleSession发行及Allow/Deny使用；归档、取消归档、活动后自动RESOLVED和后继再次闲置的新generation；策略/目标版本变更、账号或操作者停用、两个扫描副本的租约/fence及未知提交；Finding前后原User/Key/Role、Session、权限和业务资源不变。容量门禁必须证明有界分页和索引计划，不在每次请求扫描全部不可变决定；完整发布还须实跑安装恢复epoch衔接，否则只能交付观察与Finding后端候选，不能启用自动治理。
 
 闲置资格必须绑定规则修订、对象resourceVersion、真实活动修订和完整观察窗口。采集缺口、审计积压/死信、对象新建后不足阈值或仅没有浏览器登录时都不能断言User/Key闲置；程序Key和Role的真实活动必须按准确主体归因，不能忽略非浏览器使用。阈值以数据库时间和已冻结产品范围计算，不借外部地域/风险来源造结论。

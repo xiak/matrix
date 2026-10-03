@@ -32,6 +32,9 @@ func TestAccessAnalysisDatabaseFileRequiresExactPrivateLogin(t *testing.T) {
 		if err := os.WriteFile(path, []byte(valid), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := databaseConfig(path); err == nil {
 			t.Fatal("group-readable access analysis DSN was accepted")
 		}
