@@ -4220,6 +4220,9 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(/当前真实数据不满足该前提/)).toBeTruthy();
     expect(screen.getByText(/123 条样例由浏览器确定性生成/)).toBeTruthy();
     expect(screen.getByText(/不是服务端总数、游标、排序或容量验收/)).toBeTruthy();
+    expect(screen.getByText(/归档与取消归档只改变当前浏览器会话中的样例状态/)).toBeTruthy();
+    expect(screen.queryByText(/页面没有归档、取消归档/)).toBeNull();
+    expect(screen.getByText(/只有归档和取消归档可在当前 MOCK 会话内切换/)).toBeTruthy();
     expect(screen.getByRole("heading", { name: "扫描与证据新鲜度" })).toBeTruthy();
     expect(screen.getByText("上一份证据 · 非最新")).toBeTruthy();
     expect(screen.getByText(/不能闪成空列表/)).toBeTruthy();
@@ -4305,7 +4308,7 @@ describe("CAM-style access workspace", () => {
     expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
-  it("previews the candidate rule bounds and keeps finding samples read-only", async () => {
+  it("previews candidate rule bounds without mutating backend Finding or object state", async () => {
     const { user, repository, extension } = await open("access-analysis");
     const before = await extension.read("preview");
 
