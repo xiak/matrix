@@ -16,6 +16,14 @@ function SelectionHarness() {
   </LocaleProvider>;
 }
 
+function PaginationHarness() {
+  const [selected, setSelected] = useState<string[]>([]);
+  return <LocaleProvider>
+    <PolicyActionCatalog actions={policyActions.slice(0, 12)} selected={selected} service="regions" onChange={setSelected} />
+    <output aria-label="selected action count">{selected.length}</output>
+  </LocaleProvider>;
+}
+
 afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); });
 
 describe("policy action catalog", () => {
@@ -41,5 +49,23 @@ describe("policy action catalog", () => {
     expect(within(definition).getByText("成功产出")).toBeTruthy();
     expect(within(definition).getByText("日志主题")).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("renders one action page while selecting the complete filtered result set", async () => {
+    const user = userEvent.setup();
+    const actions = policyActions.slice(0, 12);
+    render(<PaginationHarness />);
+
+    expect(screen.getByText("第 1 / 2 页")).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: actions[9]!.id })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: actions[10]!.id })).toBeNull();
+
+    await user.click(screen.getByRole("checkbox", { name: "选择当前筛选结果" }));
+    expect(screen.getByLabelText("selected action count").textContent).toBe("12");
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+
+    expect(screen.getByText("第 2 / 2 页")).toBeTruthy();
+    expect((screen.getByRole("checkbox", { name: actions[10]!.id }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByRole("checkbox", { name: actions[0]!.id })).toBeNull();
   });
 });

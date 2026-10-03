@@ -1,9 +1,9 @@
 "use client";
 
-import { Fragment, useId, useLayoutEffect, useState } from "react";
+import { Fragment, useId, useLayoutEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Info, X } from "lucide-react";
-import { Badge, Button, Table, TableSelectionCell } from "@ui/xiak";
+import { Badge, Button, Table, TablePagination, TableSelectionCell } from "@ui/xiak";
 import type { PolicyAction, PolicyConditionKey, PolicyService } from "../domain/previewAuthorizationCatalog";
 import styles from "./PolicyActionCatalog.module.css";
 
@@ -25,9 +25,15 @@ export function PolicyActionCatalog({ actions, selected, service, onChange }: {
   const p = useTranslations("PolicyWorkspace");
   const id = useId();
   const [inspected, setInspected] = useState<string | null>(null);
-  const visibleIds = actions.map((action) => action.id);
-  const selectedVisible = visibleIds.filter((action) => selected.includes(action));
-  const selectionState = selectedVisible.length === 0 ? false : selectedVisible.length === visibleIds.length ? true : "mixed";
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const visibleIds = useMemo(() => actions.map((action) => action.id), [actions]);
+  const selectedIds = useMemo(() => new Set(selected), [selected]);
+  const selectedVisibleCount = visibleIds.reduce((count, action) => count + Number(selectedIds.has(action)), 0);
+  const selectionState = selectedVisibleCount === 0 ? false : selectedVisibleCount === visibleIds.length ? true : "mixed";
+  const pages = Math.max(1, Math.ceil(actions.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const pageActions = actions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const tableLabel = t("catalogTable", { service: t(`services.${service}`) });
 
   useLayoutEffect(() => {
@@ -68,8 +74,8 @@ export function PolicyActionCatalog({ actions, selected, service, onChange }: {
           <th scope="col" data-catalog-control>{t("definitionColumn")}</th>
         </tr></thead>
         <tbody>
-          {actions.map((action) => {
-            const isSelected = selected.includes(action.id);
+          {pageActions.map((action) => {
+            const isSelected = selectedIds.has(action.id);
             const isOpen = inspected === action.id;
             const panelId = actionDefinitionId(id, action.id);
             return <Fragment key={action.id}>
@@ -130,6 +136,9 @@ export function PolicyActionCatalog({ actions, selected, service, onChange }: {
           {!actions.length ? <tr><td colSpan={6} className={styles.empty}>{t("noActions")}</td></tr> : null}
         </tbody>
       </Table>
+      {actions.length ? <Table.Footer note={t("catalogPageHint", { count: actions.length })}>
+        <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={(nextPage) => { setInspected(null); setPage(nextPage); }} onPageSizeChange={(size) => { setInspected(null); setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
+      </Table.Footer> : null}
     </div>
   </section>;
 }
