@@ -39,7 +39,7 @@ export function UserPermissionSelector({ workspace, scene, value, onChange }: {
   return <div className={styles.stack}>
     <Alert>{t("leastPrivilege")}</Alert>
     <Tabs.Root value={mode} onValueChange={(next) => { setMode(next); setCopied(false); }}>
-      <Tabs.List aria-label={t("permissionMethod")}><Tabs.Trigger value="policies">{t("choosePolicies")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("joinGroups")}</Tabs.Trigger><Tabs.Trigger value="copy">{t("copyUser")}</Tabs.Trigger></Tabs.List>
+      <Tabs.List aria-label={t("permissionMethod")} className={styles.permissionMethods}><Tabs.Trigger value="policies">{t("choosePolicies")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("joinGroups")}</Tabs.Trigger><Tabs.Trigger value="copy">{t("copyUser")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content value={mode} className={styles.stack}>
         <Transfer key={mode} options={options}
           remaining={30 - (mode === "groups" ? value.groupIds.length : value.policyIds.length)} filterKey={kind}

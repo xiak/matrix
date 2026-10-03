@@ -36,5 +36,7 @@
   .typeOptions, .formGrid { grid-template-columns: minmax(0, 1fr); }
   .typeOptions { margin-top: var(--xiak-spacing-roomy); }
   .typeOptions label { min-height: 0; }
+  .permissionMethods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; overflow: visible; }
+  .permissionMethods > [role="tab"] { min-width: 0; min-height: 56px; padding-inline: var(--xiak-spacing-tight); white-space: normal; text-align: center; line-height: 1.45; }
   .review dl > div { grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-tight); }
 }
