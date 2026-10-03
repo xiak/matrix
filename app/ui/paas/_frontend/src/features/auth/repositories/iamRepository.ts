@@ -141,7 +141,7 @@ export interface AccountRepository {
     // The authenticated Session selects the account; accountId only verifies
     // the response locally and is never sent as an authority selector.
     read(credential: string, accountId: string): Promise<AccountSecuritySettings>;
-    /** Staged against the fixed IAM contract; not exposed by the current LIVE settings page. */
+    /** Full-settings replacement guarded by a dedicated step-up ceremony. */
     update?: {
       startStepUp(credential: string, command: { requestId: string; expectedFactorRevision: number; intent: SecuritySettingsUpdateIntent }): Promise<SecurityStepUp>;
       stepUpByRequest(credential: string, requestId: string, expectedFactorRevision: number, intent: SecuritySettingsUpdateIntent): Promise<SecurityStepUp>;

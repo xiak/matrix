@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
-import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
-import type { AuthenticatorState, NotificationContact } from "../domain/personalSecurity";
+import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
+import type { AuthenticatorState, NotificationContact, SecurityStepUp } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/roles";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
@@ -64,6 +64,15 @@ const accountAccess = (value: Account): AccountAccess => ({ account: value, capa
 ] });
 const identity: AccountIdentity = {
   account, user: rootUser, identityKind: "ROOT_IDENTITY", policySources: [], permissionBoundary: { accountId: account.id, userId: rootUser.id, resourceVersion: rootUser.resourceVersion, policy: null }, capabilities: currentCapabilities()
+};
+const accountSecuritySettings: AccountSecuritySettings = {
+  accountId: account.id,
+  resourceVersion: 4,
+  mfa: { requiredForUsers: true },
+  password: { minimumLength: 15, requireLowercase: true, requireUppercase: true, requireDigit: true, requireSymbol: true, historyCount: 3, maxAgeDays: 90, expiryMode: "CHANGE_PASSWORD" },
+  session: { idleTimeoutMinutes: 30 },
+  accessKeyNetwork: { allowedSourceCidrs: [] },
+  updatedAt: timestamp
 };
 const childUser: User = { ...rootUser, id: "child-a", loginName: "developer", displayName: "Developer A" };
 const child: UserAccess = { user: childUser, policyAttachments: [attachment("child-a", tenantPolicy)], capabilities: userCapabilities(childUser, [attachment("child-a", tenantPolicy)]) };
@@ -272,6 +281,24 @@ function AccessKeyIntentProbe() {
       <button disabled={!client} onClick={() => { if (client) void client.delete(childUser.id, "mak1.lost-secret", { accessKeyResourceVersion: 2, requestId: "ui-access-key-delete-test" }).catch(() => {}); }}>retire-recovered-key</button>
       <output aria-label="key-create-intent">{access.accessKeyCreateIntent ? `${access.accessKeyCreateIntent.phase}:${access.accessKeyCreateIntent.userId}:${access.accessKeyCreateIntent.requestId}` : "none"}</output>
     </> : null}
+  </>;
+}
+
+function SecuritySettingsIntentProbe() {
+  const session = useSession();
+  const access = useAccountAccess();
+  const update = access.accountSecuritySettings?.update;
+  const intent = update?.intent;
+  return <>
+    <button onClick={() => void session.login("admin", "password")}>login-settings-probe</button>
+    <output aria-label="settings-probe-session">{session.phase}</output>
+    <button disabled={!update || Boolean(intent)} onClick={() => { if (update) void update.begin(accountSecuritySettings, { allowedSourceCidrs: ["10.0.0.0/8"] }, 7).catch(() => {}); }}>begin-settings</button>
+    <button disabled={!update || intent?.state !== "STEP_UP_UNKNOWN"} onClick={() => { if (update) void update.retryStepUp().catch(() => {}); }}>retry-settings-step-up</button>
+    <button disabled={!update || intent?.state !== "PENDING"} onClick={() => { if (update) void update.verifyStepUp({ requestId: `ui-account-security-settings-verify-${"b".repeat(32)}`, password: "test-password", code: "123456" }).catch(() => {}); }}>verify-settings-step-up</button>
+    <button disabled={!update || intent?.state !== "PROVED"} onClick={() => { if (update) void update.apply().catch(() => {}); }}>apply-settings</button>
+    <button disabled={!update || intent?.state !== "APPLY_UNKNOWN"} onClick={() => { if (update) void update.inspectChange().catch(() => {}); }}>inspect-settings</button>
+    <button disabled={!update || !intent} onClick={() => { if (update && intent) update.clear(intent.requestId); }}>clear-settings</button>
+    <output aria-label="settings-intent">{intent ? `${intent.state}:${intent.requestId}:${intent.settings.expectedResourceVersion}:${intent.settings.accessKeyNetwork.allowedSourceCidrs.join(",")}` : "none"}</output>
   </>;
 }
 
@@ -565,6 +592,142 @@ describe("account access", () => {
     await openAccess(accounts({ accountSecuritySettings: { read } }), iam(), "settings");
     expect(await screen.findByRole("button", { name: "登录控制台" })).toBeTruthy();
     expect(screen.queryByText(/没有查看账号安全规则的权限/)).toBeNull();
+  });
+
+  it("persists one frozen full-settings intent, replays the exact step-up, ends the caller Session, and recovers completion after login", async () => {
+    const pendingStepUp = (command: { requestId: string; expectedFactorRevision: number; intent: SecuritySettingsUpdateIntent }, state: SecurityStepUp["state"]): SecurityStepUp => ({
+      id: "step-up-settings-one", requestId: command.requestId, operation: "SECURITY_SETTINGS_UPDATE",
+      expectedFactorRevision: command.expectedFactorRevision, securitySettings: structuredClone(command.intent), state,
+      createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z",
+      provedAt: state === "PROVED" || state === "CONSUMED" ? "2026-09-11T08:01:00Z" : null,
+      consumedAt: state === "CONSUMED" ? "2026-09-11T08:02:00Z" : null
+    });
+    const startStepUp = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockImplementation(async (_credential, command) => pendingStepUp(command, "PENDING"));
+    const verifyStepUp = vi.fn(async (_credential, _stepUpId, _originalRequestId, _expectedFactorRevision, _intent, command) => {
+      const original = startStepUp.mock.calls[1]![1];
+      expect(command.password).toBe("test-password");
+      expect(command.code).toBe("123456");
+      return pendingStepUp(original, "PROVED");
+    });
+    const apply = vi.fn(async (_credential, _accountId, command) => ({ outcome: "APPLIED" as const, change: {
+      requestId: command.requestId,
+      expectedResourceVersion: command.intent.expectedResourceVersion,
+      settings: { ...structuredClone(accountSecuritySettings), resourceVersion: 5, accessKeyNetwork: structuredClone(command.intent.accessKeyNetwork) },
+      callerSessionEnded: true as const
+    } }));
+    const repository = accounts({ accountSecuritySettings: {
+      read: vi.fn().mockResolvedValue(structuredClone(accountSecuritySettings)),
+      update: {
+        startStepUp,
+        stepUpByRequest: vi.fn(),
+        verifyStepUp,
+        apply,
+        changeByRequest: vi.fn()
+      }
+    } });
+    const auth = iam();
+    const user = userEvent.setup();
+    const tree = () => <LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><SecuritySettingsIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>;
+
+    const first = render(tree());
+    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "begin-settings" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "begin-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toMatch(/^STEP_UP_UNKNOWN:ui-account-security-settings-[0-9a-f]{32}:4:10\.0\.0\.0\/8$/));
+    expect(sessionStorage.length).toBe(1);
+    const stored = sessionStorage.getItem(sessionStorage.key(0)!);
+    expect(stored).not.toContain("test-password");
+    first.unmount();
+
+    render(tree());
+    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("STEP_UP_UNKNOWN"));
+    await user.click(screen.getByRole("button", { name: "retry-settings-step-up" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("PENDING"));
+    expect(startStepUp).toHaveBeenCalledTimes(2);
+    expect(startStepUp.mock.calls[0]![1]).toEqual(startStepUp.mock.calls[1]![1]);
+    expect(startStepUp.mock.calls[1]![1].intent).toEqual({
+      expectedResourceVersion: 4,
+      mfa: accountSecuritySettings.mfa,
+      password: accountSecuritySettings.password,
+      session: accountSecuritySettings.session,
+      accessKeyNetwork: { allowedSourceCidrs: ["10.0.0.0/8"] }
+    });
+
+    await user.click(screen.getByRole("button", { name: "verify-settings-step-up" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("PROVED"));
+    expect(JSON.stringify(sessionStorage)).not.toContain("test-password");
+    await user.click(screen.getByRole("button", { name: "apply-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-probe-session").textContent).toBe("anonymous"));
+    expect(apply).toHaveBeenCalledWith(credential, account.id, expect.objectContaining({
+      requestId: startStepUp.mock.calls[1]![1].requestId,
+      stepUpId: "step-up-settings-one",
+      intent: startStepUp.mock.calls[1]![1].intent
+    }));
+
+    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("COMPLETED"));
+    await user.click(screen.getByRole("button", { name: "clear-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toBe("none"));
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("keeps an unknown account-rule PUT locked and resolves only the original request after login", async () => {
+    const provedStepUp = (command: { requestId: string; expectedFactorRevision: number; intent: SecuritySettingsUpdateIntent }): SecurityStepUp => ({
+      id: "step-up-settings-unknown", requestId: command.requestId, operation: "SECURITY_SETTINGS_UPDATE",
+      expectedFactorRevision: command.expectedFactorRevision, securitySettings: structuredClone(command.intent), state: "PROVED",
+      createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", provedAt: "2026-09-11T08:01:00Z", consumedAt: null
+    });
+    const startStepUp = vi.fn(async (_credential, command) => ({ ...provedStepUp(command), state: "PENDING" as const, provedAt: null }));
+    const verifyStepUp = vi.fn(async () => {
+      const original = startStepUp.mock.calls[0]![1];
+      return provedStepUp(original);
+    });
+    const apply = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const completedChange = {
+      requestId: "placeholder",
+      expectedResourceVersion: accountSecuritySettings.resourceVersion,
+      settings: { ...structuredClone(accountSecuritySettings), resourceVersion: 5, accessKeyNetwork: { allowedSourceCidrs: ["10.0.0.0/8"] } },
+      callerSessionEnded: true as const
+    };
+    const changeByRequest = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(404, "IAM_CHANGE_NOT_FOUND"))
+      .mockImplementation(async (_credential, _accountId, requestId, intent) => ({ ...completedChange, requestId, expectedResourceVersion: intent.expectedResourceVersion }));
+    const repository = accounts({ accountSecuritySettings: {
+      read: vi.fn().mockResolvedValue(structuredClone(accountSecuritySettings)),
+      update: { startStepUp, stepUpByRequest: vi.fn(), verifyStepUp, apply, changeByRequest }
+    } });
+    const auth = iam();
+    const user = userEvent.setup();
+    const tree = () => <LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><SecuritySettingsIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>;
+
+    render(tree());
+    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "begin-settings" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "begin-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("PENDING"));
+    await user.click(screen.getByRole("button", { name: "verify-settings-step-up" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("PROVED"));
+    await user.click(screen.getByRole("button", { name: "apply-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("APPLY_UNKNOWN"));
+    const originalRequestId = startStepUp.mock.calls[0]![1].requestId;
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.getItem(sessionStorage.key(0)!)).toContain(originalRequestId);
+
+    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("APPLY_UNKNOWN"));
+    await user.click(screen.getByRole("button", { name: "inspect-settings" }));
+    await waitFor(() => expect(changeByRequest).toHaveBeenCalledTimes(1));
+    expect(screen.getByLabelText("settings-intent").textContent).toContain("APPLY_UNKNOWN");
+    expect(apply).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "inspect-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("COMPLETED"));
+    expect(changeByRequest).toHaveBeenNthCalledWith(2, credential, account.id, originalRequestId, startStepUp.mock.calls[0]![1].intent);
+    expect(screen.getByLabelText("settings-probe-session").textContent).toBe("authenticated");
+    expect(apply).toHaveBeenCalledTimes(1);
   });
 
   it("switches a settings draft and an existing safe error without reloading IAM", async () => {
