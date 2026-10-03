@@ -11,7 +11,8 @@ import { LiveRecoveryCodeRegeneration } from "./LiveRecoveryCodeRegeneration";
 import styles from "./MfaPreviewExperience.module.css";
 
 type LoadState = "loading" | "ready" | "error";
-type FlowError = "load" | "contactStart" | "contactInspect" | "contactConfirm" | "enrollmentStart" | "enrollmentOutcomeUnknown"
+type FlowError = "load" | "contactStart" | "contactStartAuthentication" | "contactStartUnknown" | "contactInspect"
+  | "contactConfirm" | "contactConfirmAuthentication" | "contactConfirmBusy" | "contactConfirmUnknown" | "enrollmentStart" | "enrollmentOutcomeUnknown"
   | "enrollmentInspect" | "enrollmentNotFound" | "enrollmentConfirm" | "cancel" | null;
 
 function localTime(value: string, format: ReturnType<typeof useFormatter>) {
@@ -50,8 +51,9 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
   const [email, setEmail] = useState("");
   const [contactPassword, setContactPassword] = useState("");
   const [contactPasswordIssue, setContactPasswordIssue] = useState(false);
+  const [contactStartFrozen, setContactStartFrozen] = useState(false);
   const [contactCode, setContactCode] = useState("");
-  const [contactCodeIssue, setContactCodeIssue] = useState<"invalid" | "attemptsExhausted" | null>(null);
+  const [contactCodeIssue, setContactCodeIssue] = useState<"invalid" | null>(null);
   const [factorPassword, setFactorPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -96,14 +98,20 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
     setBusy(true); setError(null); setContactPasswordIssue(false);
     try {
       const next = await client.startNotificationVerification({ email, password: contactPassword, requestId: contactRequest.current });
-      setVerification(next); setContactPassword(""); setContactCode(""); setContactCodeIssue(null);
+      setVerification(next); setContactStartFrozen(false); setContactCode(""); setContactCodeIssue(null);
       contactConfirmRequest.current = requestToken("ui-security-contact-confirm-");
     } catch (failure) {
       if (failure instanceof NotificationContactPasswordRejected) {
-        setContactPassword(""); setContactPasswordIssue(true); contactPasswordRef.current?.focus();
-      } else setError("contactStart");
+        setContactStartFrozen(false); setContactPasswordIssue(true); contactPasswordRef.current?.focus();
+      } else if (failure instanceof HttpProblem && failure.status === 401) {
+        setContactStartFrozen(false); setError("contactStartAuthentication");
+      } else if (!(failure instanceof HttpProblem) || failure.status === 409 || failure.status === 429 || failure.status >= 500) {
+        setContactStartFrozen(true); setError("contactStartUnknown");
+      } else {
+        setContactStartFrozen(false); setError("contactStart");
+      }
     }
-    finally { setBusy(false); }
+    finally { setContactPassword(""); setBusy(false); }
   }
 
   async function confirmContact(event: FormEvent<HTMLFormElement>) {
@@ -115,13 +123,20 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
       setVerification(next); setContactCode(""); setContactCodeIssue(null);
       await load();
     } catch (failure) {
-      if (failure instanceof HttpProblem && failure.status === 422) {
-        setContactCode(""); setContactCodeIssue("invalid"); contactCodeRef.current?.focus();
+      if (failure instanceof HttpProblem && failure.status === 422 && failure.code === "iam.verification.rejected") {
+        setContactCodeIssue("invalid");
+      } else if (failure instanceof HttpProblem && failure.status === 401) {
+        setError("contactConfirmAuthentication");
       } else if (failure instanceof HttpProblem && failure.status === 429) {
-        setContactCode(""); setContactCodeIssue("attemptsExhausted");
-      } else setError("contactConfirm");
+        setError("contactConfirmBusy");
+      } else if (!(failure instanceof HttpProblem) || failure.status === 409 || failure.status >= 500) {
+        setError("contactConfirmUnknown");
+      } else {
+        setError("contactConfirm");
+      }
+      contactCodeRef.current?.focus();
     }
-    finally { setBusy(false); }
+    finally { setContactCode(""); setBusy(false); }
   }
 
   async function inspectContactVerification() {
@@ -208,17 +223,17 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
           {loadState === "ready" && contact?.state === "VERIFIED" ? <dl className={styles.facts}><div><dt>{t("contact.address")}</dt><dd>{contact.email}</dd></div><div><dt>{t("contact.verifiedAt")}</dt><dd>{localTime(contact.verifiedAt, format)}</dd></div><div><dt>{t("revision")}</dt><dd>v{contact.resourceVersion}</dd></div></dl> : null}
           {loadState === "ready" && contact?.state === "NONE" && !verification ? <form className={styles.form} onSubmit={(event) => void startContact(event)}>
             <Alert>{t("contact.firstOnly")}</Alert>
-            <FormField id={emailId} label={t("contact.address")}><Input autoComplete="email" id={emailId} inputMode="email" onChange={(event) => { setEmail(event.target.value); contactRequest.current = requestToken("ui-security-contact-"); }} required type="email" value={email} /></FormField>
-            <FormField id={contactPasswordId} label={t("currentPassword")} error={contactPasswordIssue ? t("contact.passwordRejected") : undefined}><PasswordInput aria-describedby={contactPasswordIssue ? `${contactPasswordId}-error` : undefined} autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={contactPasswordId} invalid={contactPasswordIssue} onChange={(event) => { setContactPassword(event.target.value); setContactPasswordIssue(false); contactRequest.current = requestToken("ui-security-contact-"); }} ref={contactPasswordRef} required showLabel={auth("showPassword")} value={contactPassword} /></FormField>
-            <div className={styles.flowActions}><Button disabled={busy || !email || !contactPassword} type="submit">{busy ? t("saving") : t("contact.send")}</Button></div>
+            <FormField id={emailId} label={t("contact.address")}><Input autoComplete="email" disabled={contactStartFrozen} id={emailId} inputMode="email" onChange={(event) => { setEmail(event.target.value); contactRequest.current = requestToken("ui-security-contact-"); }} required type="email" value={email} /></FormField>
+            <FormField id={contactPasswordId} label={t("currentPassword")} error={contactPasswordIssue ? t("contact.passwordRejected") : undefined}><PasswordInput aria-describedby={contactPasswordIssue ? `${contactPasswordId}-error` : undefined} autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={contactPasswordId} invalid={contactPasswordIssue} onChange={(event) => { setContactPassword(event.target.value); setContactPasswordIssue(false); if (!contactStartFrozen) contactRequest.current = requestToken("ui-security-contact-"); }} ref={contactPasswordRef} required showLabel={auth("showPassword")} value={contactPassword} /></FormField>
+            <div className={styles.flowActions}><Button disabled={busy || !email || !contactPassword} type="submit">{busy ? t("saving") : t(contactStartFrozen ? "contact.retryStart" : "contact.send")}</Button></div>
           </form> : null}
           {loadState === "ready" && verification ? <form className={styles.form} onSubmit={(event) => void confirmContact(event)}>
             <Alert status={verification.delivery.state === "FAILED" || verification.delivery.state === "EXPIRED" ? "warning" : "info"}>{t(deliveryKey!)} {t("contact.deliveryMeaning")}</Alert>
             <dl className={styles.facts}><div><dt>{t("contact.address")}</dt><dd>{verification.email}</dd></div><div><dt>{t("contact.expiresAt")}</dt><dd>{localTime(verification.expiresAt, format)}</dd></div><div><dt>{t("contact.attempts")}</dt><dd>{verification.delivery.attempts}</dd></div><div><dt>{t("contact.deliveryUpdatedAt")}</dt><dd>{localTime(verification.delivery.updatedAt, format)}</dd></div></dl>
-            <FormField id={contactCodeId} label={t("contact.code")} hint={t("contact.codeHint")} error={contactCodeIssue ? t(`contact.codeErrors.${contactCodeIssue}`) : undefined}><Input aria-describedby={`${contactCodeId}-hint${contactCodeIssue ? ` ${contactCodeId}-error` : ""}`} autoComplete="one-time-code" disabled={contactCodeIssue === "attemptsExhausted"} id={contactCodeId} inputMode="numeric" invalid={Boolean(contactCodeIssue)} maxLength={8} onChange={(event) => { setContactCode(event.target.value.replace(/\D/g, "")); if (contactCodeIssue === "invalid") setContactCodeIssue(null); }} pattern="[0-9]{8}" ref={contactCodeRef} required value={contactCode} /></FormField>
+            <FormField id={contactCodeId} label={t("contact.code")} hint={t("contact.codeHint")} error={contactCodeIssue ? t(`contact.codeErrors.${contactCodeIssue}`) : undefined}><Input aria-describedby={`${contactCodeId}-hint${contactCodeIssue ? ` ${contactCodeId}-error` : ""}`} autoComplete="one-time-code" id={contactCodeId} inputMode="numeric" invalid={Boolean(contactCodeIssue)} maxLength={8} onChange={(event) => { setContactCode(event.target.value.replace(/\D/g, "")); if (contactCodeIssue === "invalid") setContactCodeIssue(null); }} pattern="[0-9]{8}" ref={contactCodeRef} required value={contactCode} /></FormField>
             <div className={styles.flowActions}>
               <Button disabled={busy || contactRefreshing} onClick={() => void inspectContactVerification()} type="button" variant="secondary"><RefreshCcw aria-hidden="true" />{contactRefreshing ? t("contact.refreshingDelivery") : t("contact.refreshDelivery")}</Button>
-              <Button disabled={busy || contactRefreshing || contactCodeIssue === "attemptsExhausted" || contactCode.length !== 8} type="submit">{busy ? t("saving") : t("contact.confirm")}</Button>
+              <Button disabled={busy || contactRefreshing || contactCode.length !== 8} type="submit">{busy ? t("saving") : t(error === "contactConfirmUnknown" ? "contact.retryConfirm" : "contact.confirm")}</Button>
             </div>
             <p className={styles.boundary}>{t("contact.refreshBoundary")}</p>
           </form> : null}

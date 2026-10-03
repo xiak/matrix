@@ -1057,7 +1057,7 @@ describe("account access", () => {
     expect(security.confirmNotificationVerification).not.toHaveBeenCalled();
   });
 
-  it("separates a wrong notification code from an exhausted verification budget", async () => {
+  it("keeps verification rejection separate from temporary authentication capacity", async () => {
     const none = { accountId: account.id, userId: rootUser.id, state: "NONE" as const, resourceVersion: 0 as const, pendingVerificationId: null };
     const pending = { id: "verification-one", accountId: account.id, userId: rootUser.id, requestId: "request-one", email: "admin@example.com", state: "PENDING" as const, issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z", completedAt: null, delivery: { state: "ACCEPTED" as const, attempts: 1, lastOutcome: "ACCEPTED" as const, lastSmtpCode: 250, updatedAt: timestamp } };
     const security = {
@@ -1066,8 +1066,8 @@ describe("account access", () => {
       startNotificationVerification: vi.fn().mockResolvedValue(pending),
       notificationVerification: vi.fn().mockResolvedValue(pending),
       confirmNotificationVerification: vi.fn()
-        .mockRejectedValueOnce(new HttpProblem(422, "iam.notification_contact.code_invalid"))
-        .mockRejectedValueOnce(new HttpProblem(429, "iam.notification_contact.attempts_exhausted")),
+        .mockRejectedValueOnce(new HttpProblem(422, "iam.verification.rejected"))
+        .mockRejectedValueOnce(new HttpProblem(429, "iam.authentication.busy")),
       startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
     };
     const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
@@ -1080,7 +1080,7 @@ describe("account access", () => {
     const code = await screen.findByLabelText("8 位邮箱验证码");
     await user.type(code, "12345678");
     await user.click(screen.getByRole("button", { name: "验证通知地址" }));
-    expect(await screen.findByText(/验证码不正确/)).toBeTruthy();
+    expect(await screen.findByText(/验证码未通过验证/)).toBeTruthy();
     expect(code.getAttribute("aria-invalid")).toBe("true");
     expect(code).toBe(document.activeElement);
     expect((code as HTMLInputElement).value).toBe("");
@@ -1088,10 +1088,12 @@ describe("account access", () => {
     await user.type(code, "87654321");
     expect(code.getAttribute("aria-invalid")).toBeNull();
     await user.click(screen.getByRole("button", { name: "验证通知地址" }));
-    expect(await screen.findByText(/尝试次数已用尽/)).toBeTruthy();
-    expect((code as HTMLInputElement).disabled).toBe(true);
+    expect(await screen.findByText(/认证工作容量暂时繁忙/)).toBeTruthy();
+    expect((code as HTMLInputElement).value).toBe("");
+    expect((code as HTMLInputElement).disabled).toBe(false);
     expect((screen.getByRole("button", { name: "验证通知地址" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "刷新发送状态" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole("heading", { name: "安全通知与身份验证器" })).toBeTruthy();
     expect(security.startNotificationVerification).toHaveBeenCalledTimes(1);
     expect(security.confirmNotificationVerification).toHaveBeenCalledTimes(2);
   });
@@ -1124,7 +1126,7 @@ describe("account access", () => {
     expect(security.startNotificationVerification).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps an ambiguous contact rejection generic when the bearer-only observation is unavailable", async () => {
+  it("keeps an ambiguous contact authentication rejection generic and clears the password", async () => {
     const none = { accountId: account.id, userId: rootUser.id, state: "NONE" as const, resourceVersion: 0 as const, pendingVerificationId: null };
     const security = {
       notificationContact: vi.fn().mockResolvedValueOnce(none).mockRejectedValue(new HttpProblem(503, "iam.unavailable")),
@@ -1141,12 +1143,44 @@ describe("account access", () => {
     await user.type(password, "Private-Password-49!");
     await user.click(screen.getByRole("button", { name: "发送验证码" }));
 
-    expect(await within(securityRegion).findByText(/无法开始邮箱验证/)).toBeTruthy();
+    expect(await within(securityRegion).findByText(/当前登录状态无法确认/)).toBeTruthy();
     expect(within(securityRegion).queryByText(/当前密码不正确/)).toBeNull();
     expect(password.getAttribute("aria-invalid")).toBeNull();
-    expect(password.value).toBe("Private-Password-49!");
+    expect(password.value).toBe("");
     expect(screen.queryByRole("heading", { name: "登录控制台" })).toBeNull();
     expect(security.notificationContact).toHaveBeenCalledTimes(2);
+  });
+
+  it("freezes an unknown notification start and retries with the original request id without retaining the password", async () => {
+    const none = { accountId: account.id, userId: rootUser.id, state: "NONE" as const, resourceVersion: 0 as const, pendingVerificationId: null };
+    const pending = { id: "verification-one", accountId: account.id, userId: rootUser.id, requestId: "request-one", email: "admin@example.com", state: "PENDING" as const, issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z", completedAt: null, delivery: { state: "PENDING" as const, attempts: 0, lastOutcome: null, lastSmtpCode: null, updatedAt: timestamp } };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(none),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null }),
+      startNotificationVerification: vi.fn()
+        .mockRejectedValueOnce(new HttpProblem(503, "iam.unavailable"))
+        .mockResolvedValueOnce(pending),
+      notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    const email = await within(securityRegion).findByLabelText("邮箱地址") as HTMLInputElement;
+    const password = within(securityRegion).getAllByLabelText("当前密码")[0]! as HTMLInputElement;
+    await user.type(email, "admin@example.com");
+    await user.type(password, "Private-Password-49!");
+    await user.click(screen.getByRole("button", { name: "发送验证码" }));
+
+    expect(await within(securityRegion).findByText(/创建验证意图的结果未知/)).toBeTruthy();
+    expect(email.disabled).toBe(true);
+    expect(password.value).toBe("");
+    const firstRequestId = security.startNotificationVerification.mock.calls[0]![1].requestId;
+
+    await user.type(password, "Private-Password-49!");
+    await user.click(screen.getByRole("button", { name: "按原请求重试发送" }));
+    expect(await screen.findByLabelText("8 位邮箱验证码")).toBeTruthy();
+    expect(security.startNotificationVerification.mock.calls[1]![1].requestId).toBe(firstRequestId);
+    expect(within(securityRegion).queryByDisplayValue("Private-Password-49!")).toBeNull();
   });
 
   it("expires the login session only after the contact rejection and bearer-only read both return 401", async () => {

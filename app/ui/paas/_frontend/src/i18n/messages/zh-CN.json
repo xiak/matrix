@@ -5665,6 +5665,7 @@
       "verifiedAt": "验证时间",
       "firstOnly": "当前真实接口只支持首次登记。替换与移除将在相应契约冻结后开放。",
       "send": "发送验证码",
+      "retryStart": "按原请求重试发送",
       "passwordRejected": "当前密码不正确。输入已清空，请重新输入后再试。",
       "deliveryMeaning": "“已接受”仅代表邮件服务器接受投递，不代表收件人已收到或阅读。",
       "expiresAt": "有效期至",
@@ -5676,10 +5677,10 @@
       "code": "8 位邮箱验证码",
       "codeHint": "验证码在本次验证窗口内有效。请勿把邮箱验证码当作 MFA。",
       "codeErrors": {
-        "invalid": "验证码不正确。输入已清空，请使用本次验证邮件中的 8 位验证码。",
-        "attemptsExhausted": "本次验证的验证码尝试次数已用尽，不能继续提交。你仍可刷新原验证状态；页面不会发送新的验证码。"
+        "invalid": "验证码未通过验证，可能错误、已使用或已过期。输入已清空；当前登录会话仍保留。"
       },
-      "confirm": "验证通知地址"
+      "confirm": "验证通知地址",
+      "retryConfirm": "按原请求重试确认"
     },
     "delivery": {
       "PENDING": "等待投递。",
@@ -5793,9 +5794,14 @@
     },
     "errors": {
       "load": "无法读取当前安全状态。固定内容仍可使用；只有数据区域加载失败。",
-      "contactStart": "无法开始邮箱验证。请检查密码、邮箱格式或稍后按原意图重试。",
+      "contactStart": "IAM 明确拒绝了本次邮箱验证请求。未建立可信地址；可检查邮箱格式和当前账号状态后重新开始。",
+      "contactStartAuthentication": "本次重新认证未通过，或当前登录状态无法确认。密码已从页面清除；这不是验证码错误。",
+      "contactStartUnknown": "创建验证意图的结果未知。邮箱和原 requestId 已冻结，密码已清除；请重新输入同一密码并按原请求重试，不能创建第二个意图。",
       "contactInspect": "暂时无法刷新原验证意图。页面不会重新发送邮件或创建新意图；请保留当前页面后重试。",
-      "contactConfirm": "无法确认邮箱验证码。验证码可能错误、已使用或已过期。",
+      "contactConfirm": "IAM 明确拒绝了本次确认请求。地址仍未验证；请刷新原验证意图后再决定下一步。",
+      "contactConfirmAuthentication": "当前登录或原始验证会话无法确认。验证码已清除；这不会被显示成验证码错误，也不会把地址标记为已验证。",
+      "contactConfirmBusy": "IAM 认证工作容量暂时繁忙。验证码已清除，但原 verificationId 和确认 requestId 保留；请稍后重新输入验证码重试。",
+      "contactConfirmUnknown": "确认结果未知。验证码已从页面清除，原 verificationId 与 requestId 保留；可刷新原状态，或重新输入同一验证码按原请求重试。",
       "enrollmentStart": "无法开始首次绑定。请确认通知地址已验证且安全版本没有变化。",
       "enrollmentOutcomeUnknown": "首次绑定的提交结果未知。页面已保留原 requestId；请先查询原请求，不要重复提交。",
       "enrollmentInspect": "暂时无法查询原绑定意图。请保留本页和原 requestId，稍后重试。",

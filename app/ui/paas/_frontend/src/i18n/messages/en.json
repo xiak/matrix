@@ -5644,6 +5644,7 @@
       "verifiedAt": "Verified at",
       "firstOnly": "The live contract currently supports first registration only. Replacement and removal will open after their contracts are frozen.",
       "send": "Send verification code",
+      "retryStart": "Retry original send request",
       "passwordRejected": "The current password is incorrect. The field was cleared; enter it again to retry.",
       "deliveryMeaning": "Accepted means only that the mail server accepted delivery; it does not prove receipt or reading.",
       "expiresAt": "Expires at",
@@ -5655,10 +5656,10 @@
       "code": "8-digit email code",
       "codeHint": "The code is valid only in this verification window. An email code is not MFA.",
       "codeErrors": {
-        "invalid": "The code is incorrect. The field was cleared; use the 8-digit code from this verification message.",
-        "attemptsExhausted": "This verification has exhausted its code-attempt budget and cannot accept another submission. You can still refresh the original status; this page will not send a new code."
+        "invalid": "The code was rejected and may be incorrect, used, or expired. The field was cleared; the current login session remains active."
       },
-      "confirm": "Verify notification address"
+      "confirm": "Verify notification address",
+      "retryConfirm": "Retry original confirmation"
     },
     "delivery": {
       "PENDING": "Waiting for delivery.",
@@ -5772,9 +5773,14 @@
     },
     "errors": {
       "load": "The current security state could not be loaded. Fixed content remains visible; only the data region failed.",
-      "contactStart": "Email verification could not start. Check the password and address, or retry the original intent later.",
+      "contactStart": "IAM explicitly rejected this email-verification request. No trusted address was created; check the address and current account state before starting again.",
+      "contactStartAuthentication": "Reauthentication was rejected or the current login state could not be confirmed. The password was cleared; this is not an email-code error.",
+      "contactStartUnknown": "The verification-intent outcome is unknown. The address and original requestId are frozen and the password was cleared; re-enter the same password to retry the original request, not a second intent.",
       "contactInspect": "The original verification intent cannot be refreshed right now. This page will not resend the message or create another intent; keep the page and try again.",
-      "contactConfirm": "The email code could not be confirmed. It may be incorrect, used, or expired.",
+      "contactConfirm": "IAM explicitly rejected this confirmation request. The address remains unverified; refresh the original verification before deciding what to do next.",
+      "contactConfirmAuthentication": "The current login or original verification session could not be confirmed. The code was cleared; this is not presented as a wrong-code result and the address remains unverified.",
+      "contactConfirmBusy": "IAM authentication capacity is temporarily busy. The code was cleared, while the original verificationId and confirmation requestId remain; re-enter the code and retry later.",
+      "contactConfirmUnknown": "The confirmation outcome is unknown. The code was cleared while the original verificationId and requestId remain; refresh the original status or retry the original request with the same code.",
       "enrollmentStart": "First enrollment could not start. Confirm the notification address is verified and the security revision is current.",
       "enrollmentOutcomeUnknown": "The enrollment submission outcome is unknown. This page kept the original requestId; query it before doing anything else and do not resubmit.",
       "enrollmentInspect": "The original enrollment intent cannot be queried right now. Keep this page and requestId, then try again later.",
