@@ -948,6 +948,10 @@
         "label": "Login sessions",
         "hint": "Own sessions and secure sign-out"
       },
+      "access-analysis": {
+        "label": "Access analysis",
+        "hint": "Review external entry points and unused access"
+      },
       "security-reports": {
         "label": "Security reports",
         "hint": "IAM snapshots, coverage, and retention"
@@ -4312,6 +4316,9 @@
       "open": "Access analysis",
       "title": "Access analysis",
       "sections": "Access analysis scope",
+      "liveBoundary": "LIVE · NOT_CONNECTED · The backend does not yet expose an access-analysis directory, a complete activity window, or a finding-lifecycle contract. This page neither infers unused access from identity age, credential state, or partial audit records nor falls back to MOCK findings.",
+      "liveUnavailableTitle": "Access analysis is not connected",
+      "liveUnavailableHint": "Connect only after IAM fixes evidence sources, collection watermarks, analysis windows, finding states, and pagination. Existing user, key, and role APIs cannot be composed into an authoritative analyzer.",
       "previewBoundary": "MOCK · This page inventories Role SSO mapping previews and service-role configuration from the current tenant preview and uses a synthetic window to preview unused-access review. Configuration does not prove effective permission, resource reachability, or actual use; this page performs no automatic revocation.",
       "mockConfiguration": "MOCK configuration snapshot",
       "account": "Target account",

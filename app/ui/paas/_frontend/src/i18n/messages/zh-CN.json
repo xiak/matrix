@@ -948,6 +948,10 @@
         "label": "登录会话",
         "hint": "本人会话与安全退出"
       },
+      "access-analysis": {
+        "label": "访问分析",
+        "hint": "外部入口与未使用访问审阅"
+      },
       "security-reports": {
         "label": "安全报告",
         "hint": "IAM 快照、覆盖范围与保留期"
@@ -4312,6 +4316,9 @@
       "open": "访问分析",
       "title": "访问分析",
       "sections": "访问分析范围",
+      "liveBoundary": "LIVE · NOT_CONNECTED · 当前后端尚未提供访问分析目录、完整活动窗口或发现生命周期契约；页面不会从身份年龄、凭证状态或局部审计记录推断未使用访问，也不会回退到 MOCK 发现。",
+      "liveUnavailableTitle": "访问分析尚未接入",
+      "liveUnavailableHint": "待 IAM 冻结证据来源、采集水位、分析窗口、发现状态与分页契约后再连接；现有用户、密钥和角色接口不能组成可信的访问分析器。",
       "previewBoundary": "MOCK · 本页只清点当前租户预览模型中的角色 SSO 映射预览与服务角色配置，并用合成窗口预演未使用访问体验。配置存在不代表权限已生效、资源可达或入口曾被使用；本页不会自动撤权。",
       "mockConfiguration": "MOCK 配置快照",
       "account": "目标账号",

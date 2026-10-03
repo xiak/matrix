@@ -151,7 +151,7 @@ describe("buildConsoleScene", () => {
     expect(scene.content).toEqual({ kind: "access", view: "groups" });
     expect(scene.navigation.filter((item) => item.selected).map((item) => item.id)).toEqual(["groups"]);
     expect(scene.navigation.filter((item) => item.group === "identityProviders").map((item) => item.id)).toEqual(["providers", "user-sso"]);
-    expect(scene.navigation.filter((item) => item.group === "security").map((item) => item.id)).toEqual(["keys", "sessions", "security-reports", "settings"]);
+    expect(scene.navigation.filter((item) => item.group === "security").map((item) => item.id)).toEqual(["keys", "sessions", "access-analysis", "security-reports", "settings"]);
     expect(scene.navigation.find((item) => item.id === "federations")?.group).toBe("identity");
     expect(scene.navigation.map((item) => item.id)).not.toContain("installations");
   });

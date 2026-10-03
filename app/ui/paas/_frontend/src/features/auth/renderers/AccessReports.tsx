@@ -40,18 +40,24 @@ const reportDirectoryStatus: Record<AccountSecurityReportDirectoryStatus, "succe
 };
 
 export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: {
-  workspace: AccessWorkspace;
+  workspace?: AccessWorkspace;
   scene: AccountAccessScene;
-  onBack(): void;
+  onBack?(): void;
   onNavigate(view: AccountAccessView, id?: string): void;
 }) {
   const t = useTranslations("IamWorkspace.accessAnalysis");
   const [section, setSection] = useState<"external" | "unused">("external");
   const [selectedTrustEntry, setSelectedTrustEntry] = useState<AccessAnalysisTrustEntry | null>(null);
   const [selectedUnusedFinding, setSelectedUnusedFinding] = useState<UnusedAccessFindingPreview | null>(null);
-  const analysis = buildAccessAnalysisPreview(workspace, scene);
-  const selectedTrust = selectedTrustEntry?.accountId === workspace.accountId ? selectedTrustEntry : null;
-  const selectedUnused = selectedUnusedFinding?.accountId === workspace.accountId ? selectedUnusedFinding : null;
+  const analysis = workspace ? buildAccessAnalysisPreview(workspace, scene) : null;
+  const selectedTrust = selectedTrustEntry?.accountId === workspace?.accountId ? selectedTrustEntry : null;
+  const selectedUnused = selectedUnusedFinding?.accountId === workspace?.accountId ? selectedUnusedFinding : null;
+
+  if (!workspace || !analysis) return <div className={styles.stack}>
+    <ContentPage.Heading title={t("title")} scrollKey="access-analysis-live" />
+    <Alert status="info">{t("liveBoundary")}</Alert>
+    <EmptyState title={t("liveUnavailableTitle")} description={t("liveUnavailableHint")} />
+  </div>;
 
   if (selectedTrust) return <WorkspaceDetail key={selectedTrust.id} title={t("external.detailTitle", { name: selectedTrust.name })} onBack={() => setSelectedTrustEntry(null)}>
     <Alert status="info">{t("external.configurationEvidence")}</Alert>
@@ -105,7 +111,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
     counts[finding.status] += 1;
     return counts;
   }, { active: 0, archived: 0, resolved: 0 });
-  return <WorkspaceDetail key="access-analysis" title={t("title")} onBack={onBack}>
+  const content = <>
     <Alert status="info">{t("previewBoundary")}</Alert>
     <Tabs.Root value={section} onValueChange={(value) => setSection(value as "external" | "unused")}>
       <Tabs.List aria-label={t("sections")}><Tabs.Trigger value="external">{t("tabs.external")} ({analysis.trustEntries.length})</Tabs.Trigger><Tabs.Trigger value="unused">{t("tabs.unused")} ({analysis.unusedFindings.length})</Tabs.Trigger></Tabs.List>
@@ -141,7 +147,10 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           footerNote={t("unused.directoryHint")} />
       </Tabs.Content>
     </Tabs.Root>
-  </WorkspaceDetail>;
+  </>;
+  return onBack
+    ? <WorkspaceDetail key="access-analysis" title={t("title")} onBack={onBack}>{content}</WorkspaceDetail>
+    : <div className={styles.detailWorkspace}><ContentPage.Heading title={t("title")} scrollKey="access-analysis" />{content}</div>;
 }
 
 function CredentialReportPreview({ workspace, scene, onBack }: {
@@ -417,14 +426,12 @@ export function SecurityReportDirectoryPreview({ workspace, scene, currentSessio
     footerNote={t("directoryBoundary")} />;
 }
 
-export function AccessReports({ workspace, scene, currentSession = null, onNavigate, onOpenAccessAnalysis, onOpenReport, accessAnalysisTriggerRef, reportTriggerRef }: {
+export function AccessReports({ workspace, scene, currentSession = null, onNavigate, onOpenReport, reportTriggerRef }: {
   workspace: AccessWorkspace;
   scene: AccountAccessScene;
   currentSession?: SessionSummary | null;
   onNavigate(view: AccountAccessView, id?: string): void;
-  onOpenAccessAnalysis?(): void;
   onOpenReport?(kind: "credentials" | "security"): void;
-  accessAnalysisTriggerRef?: RefObject<HTMLButtonElement | null>;
   reportTriggerRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const t = useTranslations("IamWorkspace");
@@ -435,7 +442,7 @@ export function AccessReports({ workspace, scene, currentSession = null, onNavig
   return <Card>
     <Card.Header>
       <Typography.Title as="h2" level={3}>{t("securityOverview")}</Typography.Title>
-      <div className={styles.actions}><Badge status="info">{t("mockEvidence")}</Badge>{onOpenAccessAnalysis ? <Button ref={accessAnalysisTriggerRef} size="small" variant="ghost" onClick={onOpenAccessAnalysis}>{t("accessAnalysis.open")}<ArrowRight aria-hidden="true" /></Button> : null}</div>
+      <div className={styles.actions}><Badge status="info">{t("mockEvidence")}</Badge><Button size="small" variant="ghost" onClick={() => onNavigate("access-analysis")}>{t("accessAnalysis.open")}<ArrowRight aria-hidden="true" /></Button></div>
     </Card.Header>
     <Card.Body className={styles.securityReportBody}>
       <p className={styles.note}>{t("securityOverviewHint")}</p>

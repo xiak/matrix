@@ -1863,7 +1863,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "返回列表" }));
     expect(screen.getByRole("button", { name: "查看全部记录" })).toBeTruthy();
   });
-  it.each(["groups", "policies", "policy-configuration", "access-diagnosis", "security-reports", "roles", "providers", "user-sso", "federations", "keys", "settings"] as const)("renders %s with consistent localized controls", async (view) => {
+  it.each(["groups", "policies", "policy-configuration", "access-diagnosis", "access-analysis", "security-reports", "roles", "providers", "user-sso", "federations", "keys", "settings"] as const)("renders %s with consistent localized controls", async (view) => {
     const { user } = await open(view);
     expect(screen.getByRole("region", { name: "账号与权限" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Language" }));
@@ -4064,6 +4064,8 @@ describe("CAM-style access workspace", () => {
     expect(onNavigate).toHaveBeenCalledWith("security-reports");
     await user.click(within(card).getByRole("button", { name: "查看长期访问密钥" }));
     expect(onNavigate).toHaveBeenCalledWith("keys");
+    await user.click(within(card).getByRole("button", { name: "访问分析" }));
+    expect(onNavigate).toHaveBeenCalledWith("access-analysis");
   });
   it("keeps the security-report directory synthetic while validating retention and detail flows", async () => {
     const { user, repository, extension } = await open("security-reports");
@@ -4152,6 +4154,27 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "查看对应对象" }));
     expect(onNavigate).toHaveBeenCalledWith(first.target.view, first.target.id);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("opens access analysis as a bookmarkable content page without mutating IAM state", async () => {
+    const { user, repository, extension } = await open("access-analysis");
+    const before = await extension.read("preview");
+    expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
+    expect(screen.getByText(/配置存在不代表权限已生效/)).toBeTruthy();
+    expect(screen.getByRole("table", { name: "已配置入口" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "未使用访问 (3)" }));
+    expect(screen.getByRole("table", { name: "未使用访问发现样例" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "返回列表" })).toBeNull();
+    expect(await extension.read("preview")).toEqual(before);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("does not fabricate live access analysis before its evidence contract exists", async () => {
+    const { repository } = await open("access-analysis", { live: true });
+    expect(screen.getByText(/LIVE · NOT_CONNECTED/)).toBeTruthy();
+    expect(screen.getByText("访问分析尚未接入")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "已配置入口" })).toBeNull();
+    expect(screen.queryByRole("table", { name: "未使用访问发现样例" })).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
   });
   it("confirms and seals the IAM-only account security report without a dialog or fabricated CSV", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
