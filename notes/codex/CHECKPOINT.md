@@ -6,8 +6,8 @@
 - Updated: 2026-10-04
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `9bb0527f5`
-- Pushed documentation milestone: `d45ce9e1c`
+- Pushed source/embed milestone: `3e206bad1`
+- Pushed documentation milestone: `7bfeb0edf`
 
 ## Authoritative route
 
@@ -29,37 +29,40 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. User SSO is now a read-only
-account concept page with fixed `未配置 · 尚未启用` status. It explains Account
-IdP → unique ExternalIdentity → existing USER → new interactive Session, keeps
-authorization separate, and contrasts that journey with Role SSO. SAML/OIDC
-panels and five readiness gates expose prerequisites without fabricating
-configuration, mapping, login or Session facts.
+login verification remains disabled for UX review. The cross-account concept
+preview now separates IAM Role assumption from direct product-resource sharing.
+Role assumption requires source permission plus target trust and yields a
+short-lived RoleSession. Direct sharing remains product-owned and appears only
+after that product declares a resource-policy or ACL contract and enforces it at
+its PEP. Neither mode exposes actions, generic Principal editing, anonymous
+access or fabricated success.
 
-Source and synchronized embed are pushed at `9bb0527f5`; FEAT evidence is
-pushed at `d45ce9e1c`. The complete 62-file/1041-test frontend suite, three
-static normalization tests, typecheck, lint, architecture, 228-pair style
-checks, 45-route production export, 249-file embed equality and repository Go
-test/vet passed. Desktop and `390 × 844` DEV showed no horizontal overflow,
-inputs, buttons, Dialog, submit-success state or console warning/error in this
-preview.
+Source and synchronized embed are pushed at `3e206bad1`; FEAT evidence is
+pushed at `7bfeb0edf`. The focused 196-test renderer suite and complete
+62-file/1041-test frontend suite, three static normalization tests, typecheck,
+lint, architecture, 228-pair style checks, 45-route production export,
+249-file embed equality and repository Go test/vet passed. Desktop and
+`390 × 844` DEV showed no horizontal overflow, buttons, Dialog or console
+warning/error in this preview.
 
-Earlier notification-address replacement, paginated policy Action catalog,
-organization governance, cross-account collaboration, Role SSO journey, Access
-Analyzer recovery trust, Account security report, federation replacement,
-Deployment lifecycle, AccessKey carrier, Application tag recovery, service
-authorization, policy compilation/provenance and shared navigation/loading
-milestones remain owned and indexed by FEAT-IAM-010 and FEAT-007; load only the
-relevant evidence row.
+Earlier User SSO, notification-address replacement, paginated policy Action
+catalog, organization governance, Role SSO journey, Access Analyzer recovery
+trust, Account security report, federation replacement, Deployment lifecycle,
+AccessKey carrier, Application tag recovery, service authorization, policy
+compilation/provenance and shared navigation/loading milestones remain owned
+and indexed by FEAT-IAM-010 and FEAT-007; load only the relevant evidence row.
 
 ## Continuation boundary
 
 Keep the inspectable MOCK available and consume IAM changes only from fixed,
 pushed commits after the IAM owner explicitly marks the contract consumable.
-Do not restore the removed `UserSsoConfiguration`, `save-sso-settings` or local
-protocol validation. Add IdP lifecycle, ExternalIdentity mapping, login/logout
-or Session behavior only after the IAM owner fixes the corresponding domain,
-wire and security contract; replace the concept boundary in place.
+The next fixed northbound slice is IAM commit `07aa50627318708ed4d3ac9ce481b1e5829669d6`:
+consume only the four `/v1/auth/notification-contact` first-email verification
+APIs from a real full `LOGIN_SESSION`. Do not add Account/User selectors,
+replacement, subscriptions, SMS, ENROLLMENT or STEP_UP. An unverified address
+is never shown as bound; 401 expires the current Session rather than becoming a
+code error; 422 rejects verification without clearing the Session; secrets and
+responses use `no-store`. Keep the explicit MOCK preview isolated.
 The client recovery invariant is implemented, but installation backup recovery
 has not yet been inherited as a running or release-accepted integration. When
 the IAM owner fixes and publishes that integration, verify the exact epoch,
