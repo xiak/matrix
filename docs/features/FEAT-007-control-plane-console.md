@@ -1701,6 +1701,21 @@ and `git diff --check` gates must pass on the same committed worktree.
 Verified through 2026-10-04 against the current all-service navigation,
 IAM policy-version authoring, current-access diagnosis, group relationship refresh and authorization hierarchy, AccessKey network and authorization evidence, isolated first-enrollment, account-rule and session-expiry previews.
 
+Current compact IAM shell evidence is fixed at source `0114419d2` and synchronized
+embed `80789db67`. The page title, back navigation and one consolidated page-action
+trigger remain on one stable header row; fixed chrome paints immediately while only
+data-owning regions may load. Access analysis keeps its three mode labels in one
+readable, horizontally scrollable 44 px control row instead of wrapping or moving the
+page. A real `390 × 844` DEV pass covered Access analysis, Policy list/detail, compact
+page actions, User list and User selection actions: document, body and viewport widths
+stayed at 390 px, no unintended Dialog or horizontal page overflow appeared and browser
+warning/error logs remained empty. The complete 62-file/1,069-case frontend suite,
+three normalization cases, type/lint/architecture/228-pair style gates, 45-route
+export, 43 normalized paths, 249-file embed equality and repository-wide Go test/vet
+passed. This is shared compact-shell and presentation evidence; exact IAM semantics,
+LIVE authorization and remaining real-runtime/browser acceptance stay with
+[FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md).
+
 | Gate | Evidence |
 | --- | --- |
 | IAM customer policy versions | LIVE detail retains lazy exact-version inspection and inline default/retirement review. Its CUSTOMER/TENANT version author offers JSON plus a catalog-driven visual path for one to 128 compatible exact Actions per statement, with paged choices and a selected-only filter; unrepresentable JSON remains untouched, and catalog denial is local to the visual path. Publication remains separate from default selection and authorization. The explicit MOCK editor and usage view remain separate. The current UX source passed real IAM browser publication → explicit default selection → old-version retirement in an isolated synthetic fixture; switching and retirement also cleared the obsolete publication notice. The compact follow-up removes the generic operation column from both LIVE and isolated MOCK version directories: the version identifier remains the semantic inspection entry, the default marker stays adjacent to it, and only a mutable non-default version receives the overflow menu for default selection and retirement/deletion. The shared row-action cell also owns the Role-session lifecycle/menu pairing, avoiding a second near-identical layout helper. Source/embed `2072b3639` passed 284 focused cases and the complete 57-file/933-case suite plus three normalization cases, type/lint/architecture/228-pair style gates, 42-route export, 233-file embed equivalence and full repository Go test/vet. At `390 × 844`, the version table exposed only Version and Created facts, kept its menu beside the non-default version, matched document/body to the viewport, and produced no Dialog or browser warning/error. This does not establish cross-session unknown-result recovery, authorization effect at a subsequent business request, installation or release acceptance. Exact semantics and evidence belong to [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#策略版本读取与变更的开发验收证据). |
