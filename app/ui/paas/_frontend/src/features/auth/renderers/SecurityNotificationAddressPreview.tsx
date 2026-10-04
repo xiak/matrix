@@ -36,18 +36,16 @@ function ReplacementProgress({ current }: { current: number }) {
 
 export function SecurityNotificationAddressPreview({ verifiedAddress: controlledVerifiedAddress, onOpenReplacement, onVerified,
   replacementAvailable = true, replacementIntent = null, replacementTotpCode = demonstrationReplacementTotp,
-  onBeginReplacement, onVerifyReplacement, onCommitReplacement, onInspectReplacement, onCancelReplacement }: {
+  onBeginReplacement, onConfirmReplacement, onInspectReplacement }: {
   verifiedAddress?: string | null;
   onOpenReplacement?(): void;
   onVerified?(address: string): boolean | void | Promise<boolean | void>;
   replacementAvailable?: boolean;
   replacementIntent?: PendingNotificationAddressReplacement | null;
   replacementTotpCode?: string;
-  onBeginReplacement?(mockIntentId: string, targetAddress: string): Promise<boolean>;
-  onVerifyReplacement?(mockIntentId: string): Promise<boolean>;
-  onCommitReplacement?(mockIntentId: string, responseMode: "success" | "response-lost"): Promise<boolean>;
-  onInspectReplacement?(mockIntentId: string, resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable"): Promise<boolean>;
-  onCancelReplacement?(mockIntentId: string): Promise<boolean>;
+  onBeginReplacement?(mockVerificationId: string, targetAddress: string): Promise<boolean>;
+  onConfirmReplacement?(mockVerificationId: string, responseMode: "success" | "response-lost"): Promise<boolean>;
+  onInspectReplacement?(mockVerificationId: string, resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable"): Promise<boolean>;
 } = {}) {
   const t = useTranslations("SecurityNotificationPreview");
   const auth = useTranslations("Auth");
@@ -141,8 +139,8 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
   };
 
   if (stage === "replacement" && verifiedAddress) return <NotificationAddressReplacementPreview address={verifiedAddress} demonstrationTotp={replacementTotpCode} headingRef={flowHeading} intent={replacementIntent}
-    onBegin={onBeginReplacement ?? (async () => false)} onCancel={onCancelReplacement ?? (async () => false)} onCommit={onCommitReplacement ?? (async () => false)}
-    onInspect={onInspectReplacement ?? (async () => false)} onVerify={onVerifyReplacement ?? (async () => false)} onClose={close} onComplete={() => {
+    onBegin={onBeginReplacement ?? (async () => false)} onConfirm={onConfirmReplacement ?? (async () => false)}
+    onInspect={onInspectReplacement ?? (async () => false)} onClose={close} onComplete={() => {
     setReplacementCompleted(true);
     close();
   }} />;
@@ -204,16 +202,14 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
   </section>;
 }
 
-function NotificationAddressReplacementPreview({ address, demonstrationTotp, headingRef, intent, onBegin, onVerify, onCommit, onInspect, onCancel, onClose, onComplete }: {
+function NotificationAddressReplacementPreview({ address, demonstrationTotp, headingRef, intent, onBegin, onConfirm, onInspect, onClose, onComplete }: {
   address: string;
   demonstrationTotp: string;
   headingRef: RefObject<HTMLHeadingElement | null>;
   intent: PendingNotificationAddressReplacement | null;
-  onBegin(mockIntentId: string, targetAddress: string): Promise<boolean>;
-  onVerify(mockIntentId: string): Promise<boolean>;
-  onCommit(mockIntentId: string, responseMode: "success" | "response-lost"): Promise<boolean>;
-  onInspect(mockIntentId: string, resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable"): Promise<boolean>;
-  onCancel(mockIntentId: string): Promise<boolean>;
+  onBegin(mockVerificationId: string, targetAddress: string): Promise<boolean>;
+  onConfirm(mockVerificationId: string, responseMode: "success" | "response-lost"): Promise<boolean>;
+  onInspect(mockVerificationId: string, resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable"): Promise<boolean>;
   onClose(): void;
   onComplete(): void;
 }) {
@@ -236,7 +232,7 @@ function NotificationAddressReplacementPreview({ address, demonstrationTotp, hea
   const mailCodeId = useId();
   const responseModeId = useId();
   const inspectionModeId = useId();
-  const stepIndex = stage === "complete" || intent?.status === "APPLY_UNKNOWN" ? 3 : intent ? 2 : stage === "proof" ? 1 : 0;
+  const stepIndex = stage === "complete" || intent?.status === "CONFIRM_UNKNOWN" ? 3 : intent ? 2 : stage === "proof" ? 1 : 0;
   useEffect(() => { headingRef.current?.focus(); }, [headingRef, stage]);
 
   const prepareTarget = (event: FormEvent<HTMLFormElement>) => {
@@ -249,49 +245,38 @@ function NotificationAddressReplacementPreview({ address, demonstrationTotp, hea
   };
   const verifyIdentity = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (busyRef.current) return;
     const accepted = password === demonstrationPassword && totp === demonstrationTotp;
     setPassword("");
     setTotp("");
     if (!accepted) { setError("proof"); return; }
+    busyRef.current = true;
     setBusy(true);
     try {
-      const created = await onBegin(`mock-notification-replacement-${crypto.randomUUID()}`, targetAddress);
+      const created = await onBegin(`mock-notification-verification-${crypto.randomUUID()}`, targetAddress);
       setError(created ? null : "action");
     } catch { setError("action"); }
-    finally { setBusy(false); }
+    finally { busyRef.current = false; setBusy(false); }
   };
   const verifyTarget = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (busyRef.current) return;
     const accepted = mailCode === demonstrationCode;
     setMailCode("");
     if (!accepted) { setError("code"); return; }
     if (!intent) { setError("action"); return; }
-    setBusy(true);
-    try { setError(await onVerify(intent.mockIntentId) ? null : "action"); }
-    catch { setError("action"); }
-    finally { setBusy(false); }
-  };
-  const cancel = async () => {
-    if (!intent) { onClose(); return; }
-    setBusy(true);
-    try { if (await onCancel(intent.mockIntentId)) onClose(); else setError("action"); }
-    catch { setError("action"); }
-    finally { setBusy(false); }
-  };
-  const commit = async () => {
-    if (!intent || intent.status !== "READY_TO_COMMIT" || busyRef.current) return;
     busyRef.current = true; setBusy(true);
     try {
-      if (!await onCommit(intent.mockIntentId, responseMode)) setError("action");
+      if (!await onConfirm(intent.mockVerificationId, responseMode)) setError("action");
       else if (responseMode === "success") { setError(null); setStage("complete"); }
     } catch { setError("action"); }
     finally { busyRef.current = false; setBusy(false); }
   };
   const inspect = async () => {
-    if (!intent || intent.status !== "APPLY_UNKNOWN" || busyRef.current) return;
+    if (!intent || intent.status !== "CONFIRM_UNKNOWN" || busyRef.current) return;
     busyRef.current = true; setBusy(true);
     try {
-      if (!await onInspect(intent.mockIntentId, inspectionMode)) setError("lookup");
+      if (!await onInspect(intent.mockVerificationId, inspectionMode)) setError("lookup");
       else if (inspectionMode === "found-applied") { setError(null); setStage("complete"); }
       else if (inspectionMode === "found-rejected") { setError("rejected"); setTargetAddress(""); setStage("target"); }
       else setError("lookup");
@@ -306,7 +291,7 @@ function NotificationAddressReplacementPreview({ address, demonstrationTotp, hea
       <dl className={styles.facts}>
         <div><dt>{t("replacement.currentAddress")}</dt><dd>{stage === "complete" ? targetAddress : originalAddress}</dd></div>
         <div><dt>{t("replacement.currentState")}</dt><dd>{t("states.VERIFIED")}</dd></div>
-        <div><dt>{t("replacement.targetState")}</dt><dd>{stage === "complete" ? t("replacement.switched") : intent?.status === "APPLY_UNKNOWN" ? t("replacement.unknown") : targetAddress ? t("replacement.pendingTarget", { address: targetAddress }) : t("replacement.noChange")}</dd></div>
+        <div><dt>{t("replacement.targetState")}</dt><dd>{stage === "complete" ? t("replacement.switched") : intent?.status === "CONFIRM_UNKNOWN" ? t("replacement.unknown") : targetAddress ? t("replacement.pendingTarget", { address: targetAddress }) : t("replacement.noChange")}</dd></div>
       </dl>
       {!intent && stage === "target" ? <form className={styles.form} onSubmit={prepareTarget}>
         <Alert status="warning">{t("replacement.mockBoundary")}</Alert>
@@ -331,20 +316,14 @@ function NotificationAddressReplacementPreview({ address, demonstrationTotp, hea
         <FormField id={mailCodeId} label={t("codeLabel")} hint={t("codeHint")}><Input autoComplete="one-time-code" id={mailCodeId} inputMode="numeric" maxLength={8} onChange={(event) => { setMailCode(event.target.value.replace(/\D/g, "")); setError(null); }} pattern="[0-9]{8}" required value={mailCode} /></FormField>
         {error === "code" ? <Alert status="danger">{t("invalidCode")}</Alert> : null}
         {error === "action" ? <Alert status="danger">{t("replacement.actionUnavailable")}</Alert> : null}
-        <div className={styles.flowActions}><Button disabled={busy} onClick={() => void cancel()} type="button" variant="ghost">{t("replacement.cancelIntent")}</Button><Button disabled={busy || mailCode.length !== 8} type="submit">{busy ? t("replacement.verifying") : t("replacement.verifyAddress")}</Button></div>
+        <p className={styles.boundary}><Mail aria-hidden="true" />{t("replacement.confirmBoundary")}</p>
+        <details className={styles.scenarioDetails}><summary>{t("replacement.previewScenarios")}</summary><FormField id={responseModeId} label={t("replacement.responseScenario")}><Select id={responseModeId} value={responseMode} onValueChange={(value) => setResponseMode(value as typeof responseMode)} options={(["success", "response-lost"] as const).map((value) => ({ value, label: t(`replacement.responseScenarios.${value}`) }))} /></FormField></details>
+        <div className={styles.flowActions}><Button disabled={busy} onClick={onClose} type="button" variant="ghost">{t("replacement.closeForNow")}</Button><Button disabled={busy || mailCode.length !== 8} type="submit">{busy ? t("replacement.verifying") : t("replacement.verifyAddress")}</Button></div>
       </form> : null}
-      {intent?.status === "READY_TO_COMMIT" ? <div className={styles.form}>
-        <Alert status="warning">{t("replacement.reviewBoundary")}</Alert>
-        <dl className={styles.facts}><div><dt>{t("replacement.previousAddress")}</dt><dd>{intent.previousAddress}</dd></div><div><dt>{t("replacement.verifiedTarget")}</dt><dd>{intent.targetAddress}</dd></div></dl>
-        <FormField id={responseModeId} label={t("replacement.responseScenario")}><Select id={responseModeId} value={responseMode} onValueChange={(value) => setResponseMode(value as typeof responseMode)} options={(["success", "response-lost"] as const).map((value) => ({ value, label: t(`replacement.responseScenarios.${value}`) }))} /></FormField>
-        <p className={styles.boundary}><Mail aria-hidden="true" />{t("replacement.unknownBoundary")}</p>
-        {error === "action" ? <Alert status="danger">{t("replacement.actionUnavailable")}</Alert> : null}
-        <div className={styles.flowActions}><Button disabled={busy} onClick={() => void cancel()} variant="ghost">{t("replacement.cancelIntent")}</Button><Button disabled={busy} onClick={() => void commit()}>{busy ? t("replacement.committing") : t("replacement.commit")}</Button></div>
-      </div> : null}
-      {intent?.status === "APPLY_UNKNOWN" ? <div className={styles.form}>
+      {intent?.status === "CONFIRM_UNKNOWN" ? <div className={styles.form}>
         <Alert status="warning">{t("replacement.applyUnknown")}</Alert>
-        <dl className={styles.facts}><div><dt>{t("replacement.mockIntent")}</dt><dd><code>{intent.mockIntentId}</code></dd></div><div><dt>{t("replacement.previousAddress")}</dt><dd>{intent.previousAddress}</dd></div><div><dt>{t("replacement.verifiedTarget")}</dt><dd>{intent.targetAddress}</dd></div></dl>
-        <FormField id={inspectionModeId} label={t("replacement.inspectionScenario")}><Select id={inspectionModeId} value={inspectionMode} onValueChange={(value) => setInspectionMode(value as typeof inspectionMode)} options={(["found-applied", "found-rejected", "not-found", "unavailable"] as const).map((value) => ({ value, label: t(`replacement.inspectionScenarios.${value}`) }))} /></FormField>
+        <dl className={styles.facts}><div><dt>{t("replacement.mockVerification")}</dt><dd><code>{intent.mockVerificationId}</code></dd></div><div><dt>{t("replacement.previousAddress")}</dt><dd>{intent.previousAddress}</dd></div><div><dt>{t("replacement.verifiedTarget")}</dt><dd>{intent.targetAddress}</dd></div></dl>
+        <details className={styles.scenarioDetails}><summary>{t("replacement.previewScenarios")}</summary><FormField id={inspectionModeId} label={t("replacement.inspectionScenario")}><Select id={inspectionModeId} value={inspectionMode} onValueChange={(value) => setInspectionMode(value as typeof inspectionMode)} options={(["found-applied", "found-rejected", "not-found", "unavailable"] as const).map((value) => ({ value, label: t(`replacement.inspectionScenarios.${value}`) }))} /></FormField></details>
         {error === "lookup" ? <Alert status="warning">{t("replacement.lookupPending")}</Alert> : null}
         <div className={styles.flowActions}><Button disabled={busy} onClick={onClose} variant="ghost">{t("replacement.closeForNow")}</Button><Button disabled={busy} onClick={() => void inspect()}>{busy ? t("replacement.inspecting") : t("replacement.inspect")}</Button></div>
       </div> : null}

@@ -3762,7 +3762,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("button", { name: "绑定验证器" }).hasAttribute("disabled")).toBe(false);
     expect(repository.execute).not.toHaveBeenCalled();
   });
-  it("replaces a verified security-notification address only after both proofs and an atomic review", async () => {
+  it("replaces a verified security-notification address when the target code confirmation commits atomically", async () => {
     const { user, repository, extension } = await open("settings", { seed: seedBoundNotificationOperator });
     const notification = screen.getByRole("region", { name: "安全通知" });
     await user.click(within(notification).getByRole("button", { name: "查看安全更换流程" }));
@@ -3782,9 +3782,6 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(/旧地址仍是唯一可信收件地址/)).toBeTruthy();
 
     await user.type(screen.getByLabelText("8 位邮箱验证码"), "48392017");
-    await user.click(screen.getByRole("button", { name: "验证新地址" }));
-    expect((await extension.read("preview")).personalNotificationAddress).toBe("preview.security@example.com");
-    expect(screen.getByText(/旧地址仍然生效/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "验证并原子切换" }));
 
     await waitFor(() => expect(screen.getAllByText("next.security@example.com", { selector: "dd" }).length).toBeGreaterThan(0));
@@ -3793,7 +3790,7 @@ describe("CAM-style access workspace", () => {
     expect(repository.execute).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
-  it("locks an unknown notification-address replacement across navigation until the original intent is inspected", async () => {
+  it("locks an unknown notification-address replacement across navigation until the original verification is inspected", async () => {
     const { user, repository, extension } = await open("settings", { seed: seedBoundNotificationOperator });
     await user.click(screen.getByRole("button", { name: "查看安全更换流程" }));
     await user.type(screen.getByLabelText("新的安全通知邮箱"), "unknown.security@example.com");
@@ -3801,31 +3798,31 @@ describe("CAM-style access workspace", () => {
     await user.type(screen.getByLabelText("当前密码"), "demo-password");
     await user.type(screen.getByLabelText("当前验证器验证码"), "624810");
     await user.click(screen.getByRole("button", { name: "验证并发送新地址验证码" }));
-    await user.type(screen.getByLabelText("8 位邮箱验证码"), "48392017");
-    await user.click(screen.getByRole("button", { name: "验证新地址" }));
-    await user.click(screen.getByRole("combobox", { name: "模拟提交响应" }));
+    await user.click(screen.getByText("MOCK 异常场景"));
+    await user.click(screen.getByRole("combobox", { name: "模拟确认响应" }));
     await user.click(screen.getByRole("option", { name: "响应丢失 · 结果未知" }));
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "48392017");
     await user.click(screen.getByRole("button", { name: "验证并原子切换" }));
 
     const pending = (await extension.read("preview")).pendingNotificationAddressReplacement;
-    expect(pending).toMatchObject({ targetAddress: "unknown.security@example.com", status: "APPLY_UNKNOWN" });
-    expect(screen.queryByRole("button", { name: "取消本次更换" })).toBeNull();
+    expect(pending).toMatchObject({ targetAddress: "unknown.security@example.com", status: "CONFIRM_UNKNOWN" });
     await user.click(screen.getByRole("button", { name: "暂时关闭" }));
     await user.click(screen.getByTestId("go-users"));
     await user.click(screen.getByTestId("go-settings"));
     await user.click(screen.getByRole("button", { name: "继续安全更换" }));
-    expect(screen.getByText(pending!.mockIntentId)).toBeTruthy();
+    expect(screen.getByText(pending!.mockVerificationId)).toBeTruthy();
     expect(screen.getByText("unknown.security@example.com", { selector: "dd" })).toBeTruthy();
 
+    await user.click(screen.getByText("MOCK 异常场景"));
     await user.click(screen.getByRole("combobox", { name: "模拟查询结果" }));
     await user.click(screen.getByRole("option", { name: "暂时未找到" }));
-    await user.click(screen.getByRole("button", { name: "查询原意图" }));
-    expect(screen.getByText(/原意图继续锁定/)).toBeTruthy();
-    expect((await extension.read("preview")).pendingNotificationAddressReplacement).toMatchObject({ mockIntentId: pending!.mockIntentId, status: "APPLY_UNKNOWN" });
+    await user.click(screen.getByRole("button", { name: "查询原验证" }));
+    expect(screen.getByText(/原验证继续锁定/)).toBeTruthy();
+    expect((await extension.read("preview")).pendingNotificationAddressReplacement).toMatchObject({ mockVerificationId: pending!.mockVerificationId, status: "CONFIRM_UNKNOWN" });
 
     await user.click(screen.getByRole("combobox", { name: "模拟查询结果" }));
     await user.click(screen.getByRole("option", { name: "查到已应用" }));
-    await user.click(screen.getByRole("button", { name: "查询原意图" }));
+    await user.click(screen.getByRole("button", { name: "查询原验证" }));
     expect(await extension.read("preview")).toMatchObject({ personalNotificationAddress: "unknown.security@example.com", pendingNotificationAddressReplacement: null });
     expect(repository.execute).not.toHaveBeenCalled();
   });

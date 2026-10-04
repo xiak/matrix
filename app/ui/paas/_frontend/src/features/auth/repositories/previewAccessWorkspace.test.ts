@@ -741,24 +741,21 @@ describe("access workspace preview invariants", () => {
     await repository.execute("mock", { kind: "confirm-personal-mfa" });
     await repository.execute("mock", { kind: "complete-personal-mfa-reauthentication" });
     const eventCount = (await repository.read("mock")).events.length;
-    const mockIntentId = "mock-notification-replacement-00000000-0000-4000-8000-000000000001";
+    const mockVerificationId = "mock-notification-verification-00000000-0000-4000-8000-000000000001";
 
-    const started = await repository.execute("mock", { kind: "begin-personal-notification-replacement", mockIntentId, targetAddress: "TARGET@example.invalid" });
+    const started = await repository.execute("mock", { kind: "begin-personal-notification-replacement", mockVerificationId, targetAddress: "TARGET@example.invalid" });
     expect(started.workspace).toMatchObject({
       personalNotificationAddress: "current@example.invalid",
-      pendingNotificationAddressReplacement: { mockIntentId, previousAddress: "current@example.invalid", targetAddress: "target@example.invalid", status: "PENDING_VERIFICATION" }
+      pendingNotificationAddressReplacement: { mockVerificationId, previousAddress: "current@example.invalid", targetAddress: "target@example.invalid", status: "PENDING_VERIFICATION" }
     });
-    const verified = await repository.execute("mock", { kind: "verify-personal-notification-replacement", mockIntentId });
-    expect(verified.workspace).toMatchObject({ personalNotificationAddress: "current@example.invalid", pendingNotificationAddressReplacement: { status: "READY_TO_COMMIT" } });
-    const unknown = await repository.execute("mock", { kind: "commit-personal-notification-replacement", mockIntentId, responseMode: "response-lost" });
-    expect(unknown.workspace).toMatchObject({ personalNotificationAddress: "current@example.invalid", pendingNotificationAddressReplacement: { status: "APPLY_UNKNOWN" } });
-    await expect(repository.execute("mock", { kind: "cancel-personal-notification-replacement", mockIntentId })).rejects.toMatchObject({ code: "invalid" });
-    await expect(repository.execute("mock", { kind: "begin-personal-notification-replacement", mockIntentId: "mock-notification-replacement-00000000-0000-4000-8000-000000000002", targetAddress: "other@example.invalid" })).rejects.toMatchObject({ code: "invalid" });
+    const unknown = await repository.execute("mock", { kind: "confirm-personal-notification-replacement", mockVerificationId, responseMode: "response-lost" });
+    expect(unknown.workspace).toMatchObject({ personalNotificationAddress: "current@example.invalid", pendingNotificationAddressReplacement: { status: "CONFIRM_UNKNOWN" } });
+    await expect(repository.execute("mock", { kind: "begin-personal-notification-replacement", mockVerificationId: "mock-notification-verification-00000000-0000-4000-8000-000000000002", targetAddress: "other@example.invalid" })).rejects.toMatchObject({ code: "invalid" });
     for (const resultMode of ["not-found", "unavailable"] as const) {
-      const unresolved = await repository.execute("mock", { kind: "inspect-personal-notification-replacement", mockIntentId, resultMode });
-      expect(unresolved.workspace).toMatchObject({ personalNotificationAddress: "current@example.invalid", pendingNotificationAddressReplacement: { mockIntentId, status: "APPLY_UNKNOWN" } });
+      const unresolved = await repository.execute("mock", { kind: "inspect-personal-notification-replacement", mockVerificationId, resultMode });
+      expect(unresolved.workspace).toMatchObject({ personalNotificationAddress: "current@example.invalid", pendingNotificationAddressReplacement: { mockVerificationId, status: "CONFIRM_UNKNOWN" } });
     }
-    const applied = await repository.execute("mock", { kind: "inspect-personal-notification-replacement", mockIntentId, resultMode: "found-applied" });
+    const applied = await repository.execute("mock", { kind: "inspect-personal-notification-replacement", mockVerificationId, resultMode: "found-applied" });
     expect(applied.workspace).toMatchObject({ personalNotificationAddress: "target@example.invalid", pendingNotificationAddressReplacement: null });
     expect(applied.workspace.events).toHaveLength(eventCount);
   });
@@ -767,13 +764,12 @@ describe("access workspace preview invariants", () => {
     await repository.execute("mock", { kind: "verify-personal-notification-address", address: "current@example.invalid" });
     await repository.execute("mock", { kind: "confirm-personal-mfa" });
     await repository.execute("mock", { kind: "complete-personal-mfa-reauthentication" });
-    const mockIntentId = "mock-notification-replacement-00000000-0000-4000-8000-000000000003";
-    await repository.execute("mock", { kind: "begin-personal-notification-replacement", mockIntentId, targetAddress: "target@example.invalid" });
-    await repository.execute("mock", { kind: "verify-personal-notification-replacement", mockIntentId });
-    await repository.execute("mock", { kind: "commit-personal-notification-replacement", mockIntentId, responseMode: "response-lost" });
-    const rejected = await repository.execute("mock", { kind: "inspect-personal-notification-replacement", mockIntentId, resultMode: "found-rejected" });
+    const mockVerificationId = "mock-notification-verification-00000000-0000-4000-8000-000000000003";
+    await repository.execute("mock", { kind: "begin-personal-notification-replacement", mockVerificationId, targetAddress: "target@example.invalid" });
+    await repository.execute("mock", { kind: "confirm-personal-notification-replacement", mockVerificationId, responseMode: "response-lost" });
+    const rejected = await repository.execute("mock", { kind: "inspect-personal-notification-replacement", mockVerificationId, resultMode: "found-rejected" });
     expect(rejected.workspace).toMatchObject({ personalNotificationAddress: "current@example.invalid", pendingNotificationAddressReplacement: null });
-    const restarted = await repository.execute("mock", { kind: "begin-personal-notification-replacement", mockIntentId: "mock-notification-replacement-00000000-0000-4000-8000-000000000004", targetAddress: "other@example.invalid" });
+    const restarted = await repository.execute("mock", { kind: "begin-personal-notification-replacement", mockVerificationId: "mock-notification-verification-00000000-0000-4000-8000-000000000004", targetAddress: "other@example.invalid" });
     expect(restarted.workspace.pendingNotificationAddressReplacement).toMatchObject({ targetAddress: "other@example.invalid", status: "PENDING_VERIFICATION" });
   });
   it("keeps personal MFA mutations locked behind a normal reauthentication across workspace reads", async () => {

@@ -1711,10 +1711,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         if (!(command.kind === "save-account-rule" && command.responseMode === "response-lost") &&
             command.kind !== "verify-personal-notification-address" &&
             command.kind !== "begin-personal-notification-replacement" &&
-            command.kind !== "verify-personal-notification-replacement" &&
-            command.kind !== "commit-personal-notification-replacement" &&
-            command.kind !== "inspect-personal-notification-replacement" &&
-            command.kind !== "cancel-personal-notification-replacement") {
+            command.kind !== "confirm-personal-notification-replacement" &&
+            command.kind !== "inspect-personal-notification-replacement") {
           setSuccess("completed");
         }
         return { issuedKey: result.issuedKey, recoveryCodes: result.recoveryCodes };
