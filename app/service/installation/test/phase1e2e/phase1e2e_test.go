@@ -167,6 +167,21 @@ func TestContactReplacementRetentionRequiresThreeAcceptedDeliveries(t *testing.T
 	}
 }
 
+func TestContactReplacementObservationQueryUsesClosedHexLiterals(t *testing.T) {
+	accountID := iamv1.AccountID("account-'-$USER")
+	userID := iamv1.PrincipalID("principal-'-$VERIFICATION")
+	verificationID := "verification-'-$TENANT"
+	query := contactReplacementObservationQuery(accountID, userID, verificationID)
+	for _, unsafe := range []string{string(accountID), string(userID), verificationID, ":'", "$TENANT", "$USER", "$VERIFICATION"} {
+		if strings.Contains(query, unsafe) {
+			t.Fatalf("observation query contains an unencoded value or placeholder %q", unsafe)
+		}
+	}
+	if strings.Count(query, "convert_from(decode('") != 3 {
+		t.Fatal("observation query does not contain exactly three hex-decoded predicates")
+	}
+}
+
 func TestAccessAnalyzerLifecycleCoverageStaysClosed(t *testing.T) {
 	observedFrom := time.Date(2026, time.October, 3, 1, 2, 3, 0, time.UTC)
 	observedThrough := observedFrom.Add(time.Minute)

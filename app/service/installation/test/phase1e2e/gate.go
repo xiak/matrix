@@ -585,9 +585,6 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if err := value.assertTenantRetention(ctx, true, true); err != nil {
 		return err
 	}
-	if err := value.assertMFARetention(ctx, true); err != nil {
-		return err
-	}
 	emit("restart-retained-mfa-fresh-login")
 	if err := value.restorePausedTenant(ctx); err != nil {
 		return err

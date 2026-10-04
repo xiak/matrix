@@ -419,25 +419,13 @@ func (value *gate) observeContactReplacement(
 	if err != nil {
 		return contactReplacementRetention{}, err
 	}
-	query := `SELECT jsonb_build_object(
- 'accountId',v.tenant_id,'userId',v.user_id,'verificationId',v.id,
- 'completionEventId',v.completion_event_id,'expectedResourceVersion',v.contact_revision,
- 'email',v.email,'state',v.state,'notifications',(
-   SELECT jsonb_agg(jsonb_build_object(
-     'id',n.id,'eventId',n.event_id,'kind',n.kind,'email',n.email,
-     'contactRevision',n.contact_revision,'state',n.state,'attempts',n.attempts,
-     'lastOutcome',n.last_outcome,'lastSmtpCode',n.last_smtp_code) ORDER BY n.kind,n.id)
-   FROM iam.security_notifications n WHERE n.tenant_id=v.tenant_id AND n.verification_id=v.id
- ))::text
-FROM iam.notification_contact_verifications v
-WHERE v.tenant_id=:'tenant' AND v.user_id=:'user' AND v.id=:'verification' AND v.purpose='REPLACEMENT'`
+	query := contactReplacementObservationQuery(contact.AccountID, contact.UserID, verification.ID)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		content, observeErr := docker(
 			ctx, "container", "exec", "--user", "postgres", containerID,
 			"psql", "--no-psqlrc", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1",
-			"--set", "tenant="+string(contact.AccountID), "--set", "user="+string(contact.UserID),
-			"--set", "verification="+verification.ID, "--username", "matrix", "--dbname", "matrix", "--command", query,
+			"--username", "matrix", "--dbname", "matrix", "--command", query,
 		)
 		var observed contactReplacementRetention
 		if observeErr == nil && json.Unmarshal(bytes.TrimSpace(content), &observed) == nil &&
@@ -449,6 +437,34 @@ WHERE v.tenant_id=:'tenant' AND v.user_id=:'user' AND v.id=:'verification' AND v
 		}
 	}
 	return contactReplacementRetention{}, errors.New("contact replacement delivery observation failed")
+}
+
+func contactReplacementObservationQuery(
+	accountID iamv1.AccountID,
+	userID iamv1.PrincipalID,
+	verificationID string,
+) string {
+	query := `SELECT jsonb_build_object(
+ 'accountId',v.tenant_id,'userId',v.user_id,'verificationId',v.id,
+ 'completionEventId',v.completion_event_id,'expectedResourceVersion',v.contact_revision,
+ 'email',v.email,'state',v.state,'notifications',(
+   SELECT jsonb_agg(jsonb_build_object(
+     'id',n.id,'eventId',n.event_id,'kind',n.kind,'email',n.email,
+     'contactRevision',n.contact_revision,'state',n.state,'attempts',n.attempts,
+     'lastOutcome',n.last_outcome,'lastSmtpCode',n.last_smtp_code) ORDER BY n.kind,n.id)
+   FROM iam.security_notifications n WHERE n.tenant_id=v.tenant_id AND n.verification_id=v.id
+ ))::text
+FROM iam.notification_contact_verifications v
+WHERE v.tenant_id=$TENANT AND v.user_id=$USER AND v.id=$VERIFICATION AND v.purpose='REPLACEMENT'`
+	return strings.NewReplacer(
+		"$TENANT", postgresHexText(string(accountID)),
+		"$USER", postgresHexText(string(userID)),
+		"$VERIFICATION", postgresHexText(verificationID),
+	).Replace(query)
+}
+
+func postgresHexText(value string) string {
+	return "convert_from(decode('" + hex.EncodeToString([]byte(value)) + "','hex'),'UTF8')"
 }
 
 func validContactReplacementRetention(
