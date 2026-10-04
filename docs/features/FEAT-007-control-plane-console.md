@@ -1730,6 +1730,10 @@ Repository-wide `go test -p 2 ./...` and `go vet -p 2 ./...` also pass against t
 same synchronized assets. The maintained `127.0.0.1:4317` preview returned HTTP 200
 for 25 canonical root, shared-service, service-subroute and IAM routes after the
 asset sync, so the inspectable MOCK entry remains intact.
+The same current DEV session used the compact product directory to enter all eight
+published services at `390 × 844`: every route exposed its expected `h1`, document and
+body client/scroll widths stayed at 390 px, no Dialog survived navigation and the
+browser warning/error log remained empty. The viewport was reset after the audit.
 
 | Gate | Evidence |
 | --- | --- |
