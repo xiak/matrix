@@ -1716,6 +1716,17 @@ passed. This is shared compact-shell and presentation evidence; exact IAM semant
 LIVE authorization and remaining real-runtime/browser acceptance stay with
 [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md).
 
+The shared delayed-feedback regression matrix is fixed at `ba7e57a9a`. It now
+exercises every loading-region branch used by Overview, Catalog, Quotas, Regions,
+Applications, Resources, Installations, Operations, Messages, DevOps pipelines and
+environments, Observability health and alerts, Log overview/search/topics/collection,
+Audit and IAM overview/policy routes. Each destination must expose its stable named
+region immediately, announce loading without placeholder DOM for the first 200 ms and
+then mount placeholders only inside that region. The focused shell suite passes 82
+cases; the complete frontend gate passes 62 files/1,082 cases, three normalization
+cases, type/lint/architecture/228-pair style gates, 45-route export, 43 normalized
+paths and 249-file embed equality. The synchronized Go UI host passes test and vet.
+
 | Gate | Evidence |
 | --- | --- |
 | IAM customer policy versions | LIVE detail retains lazy exact-version inspection and inline default/retirement review. Its CUSTOMER/TENANT version author offers JSON plus a catalog-driven visual path for one to 128 compatible exact Actions per statement, with paged choices and a selected-only filter; unrepresentable JSON remains untouched, and catalog denial is local to the visual path. Publication remains separate from default selection and authorization. The explicit MOCK editor and usage view remain separate. The current UX source passed real IAM browser publication → explicit default selection → old-version retirement in an isolated synthetic fixture; switching and retirement also cleared the obsolete publication notice. The compact follow-up removes the generic operation column from both LIVE and isolated MOCK version directories: the version identifier remains the semantic inspection entry, the default marker stays adjacent to it, and only a mutable non-default version receives the overflow menu for default selection and retirement/deletion. The shared row-action cell also owns the Role-session lifecycle/menu pairing, avoiding a second near-identical layout helper. Source/embed `2072b3639` passed 284 focused cases and the complete 57-file/933-case suite plus three normalization cases, type/lint/architecture/228-pair style gates, 42-route export, 233-file embed equivalence and full repository Go test/vet. At `390 × 844`, the version table exposed only Version and Created facts, kept its menu beside the non-default version, matched document/body to the viewport, and produced no Dialog or browser warning/error. This does not establish cross-session unknown-result recovery, authorization effect at a subsequent business request, installation or release acceptance. Exact semantics and evidence belong to [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#策略版本读取与变更的开发验收证据). |
