@@ -181,10 +181,8 @@ describe("ServiceAuthorizationPreview", () => {
   });
 
   it("explains product, IAM, and tenant ownership without exposing publisher controls", async () => {
-    const user = userEvent.setup();
     render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
 
-    await user.click(screen.getByRole("tab", { name: "平台模板" }));
     const responsibility = screen.getByRole("region", { name: "服务授权职责边界" });
     expect(within(responsibility).getByText("产品团队定义能力")).toBeTruthy();
     expect(within(responsibility).getByText("IAM 平台校验并发布")).toBeTruthy();

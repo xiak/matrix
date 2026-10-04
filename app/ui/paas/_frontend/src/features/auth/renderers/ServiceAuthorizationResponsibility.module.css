@@ -1,0 +1,91 @@
+.root {
+  container: service-authorization-responsibility / inline-size;
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-default);
+  padding: var(--xiak-spacing-default);
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-panel);
+  background: var(--xiak-color-bg-panel-hover);
+}
+
+.heading {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-micro);
+}
+
+.heading h3,
+.heading p {
+  margin: 0;
+}
+
+.heading h3 {
+  color: var(--xiak-color-text-strong);
+}
+
+.heading p,
+.stages small {
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+  line-height: var(--xiak-line-height-body);
+}
+
+.stages {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--xiak-spacing-default);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stages li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: start;
+  align-items: start;
+  gap: var(--xiak-spacing-tight);
+  min-width: 0;
+  padding-inline-start: var(--xiak-spacing-default);
+  border-inline-start: var(--xiak-border-subtle);
+}
+
+.stages li > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-micro);
+}
+
+.stages li > :last-child {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.stages strong {
+  color: var(--xiak-color-text-strong);
+  overflow-wrap: anywhere;
+}
+
+.index {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--xiak-color-accent-haze);
+  color: var(--xiak-color-accent-text);
+  font: var(--xiak-font-weight-semibold) var(--xiak-font-size-small)/1 var(--xiak-font-numeric);
+}
+
+@container service-authorization-responsibility (max-width: 680px) {
+  .stages {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stages li {
+    padding-block: var(--xiak-spacing-tight);
+    border-inline-start: 0;
+    border-block-start: var(--xiak-border-subtle);
+  }
+}

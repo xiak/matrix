@@ -14,6 +14,7 @@ import type {
 import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceLinkedRoleListing, ServiceLinkedRoleRelation, ServiceRoleTemplate } from "../domain/serviceAuthorization";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
+import { ServiceAuthorizationResponsibility } from "./ServiceAuthorizationResponsibility";
 import styles from "./AccountAccessRenderer.module.css";
 
 type FailureStatus = "forbidden" | "routeUnavailable" | "unavailable" | "expired";
@@ -373,6 +374,7 @@ export function AccountServiceAuthorizations({ relations, templates, onBack }: {
   return <Card aria-description={t("hint")}>
     <ContentPage.Heading title={t("title")} scrollKey="service-authorization-directory" back={{ label: t("backToRoles"), onClick: onBack }} focus />
     <div className={styles.policyDirectoryIntro}><p>{t("hint")}</p><p>{t("boundary")}</p></div>
+    <ServiceAuthorizationResponsibility />
     <Tabs.Root value={section} onValueChange={setSection}>
       <Tabs.List aria-label={t("sectionsLabel")}>
         {relations ? <Tabs.Trigger value="authorizations">{t("sections.authorizations")}</Tabs.Trigger> : null}

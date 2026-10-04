@@ -15,6 +15,7 @@ import {
 } from "../repositories/previewServiceAuthorizationContract";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
 import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
+import { ServiceAuthorizationResponsibility } from "./ServiceAuthorizationResponsibility";
 import styles from "./ServiceAuthorizationPreview.module.css";
 
 type PreviewView = "directory" | "detail" | "review" | "account-access";
@@ -137,22 +138,8 @@ function TemplateDirectory({ triggerRef, onOpen }: {
   onOpen(): void;
 }) {
   const t = useTranslations("ServiceAuthorizationPreview");
-  const responsibilityTitleId = useId();
   return <div className={styles.stack}>
     <div className={styles.sectionHeading}><div><h3>{t("directory.title")}</h3><p>{t("directory.hint")}</p></div><Badge status="warning">{t("states.contractSample")}</Badge></div>
-    <section aria-labelledby={responsibilityTitleId} className={styles.responsibility}>
-      <div className={styles.responsibilityHeading}>
-        <h4 id={responsibilityTitleId}>{t("directory.responsibility.title")}</h4>
-        <p>{t("directory.responsibility.hint")}</p>
-      </div>
-      <ol className={styles.responsibilityStages}>
-        {(["product", "iam", "tenant"] as const).map((owner, index) => <li key={owner}>
-          <span className={styles.runtimeIndex} aria-hidden="true">{index + 1}</span>
-          <div><strong>{t(`directory.responsibility.${owner}.title`)}</strong><small>{t(`directory.responsibility.${owner}.hint`)}</small></div>
-          <Badge status="neutral">{t(`directory.responsibility.${owner}.state`)}</Badge>
-        </li>)}
-      </ol>
-    </section>
     <Table aria-label={t("directory.tableLabel")} mobileLayout="stack">
       <thead><tr><th scope="col">{t("fields.product")}</th><th scope="col">{t("fields.servicePurpose")}</th><th scope="col">{t("fields.permissionCeiling")}</th><th scope="col">{t("fields.supportedWorkload")}</th><th scope="col">{t("fields.templateState")}</th></tr></thead>
       <tbody><tr>
@@ -360,7 +347,7 @@ function ServiceAuthorizationValiditySummary() {
   const t = useTranslations("ServiceAuthorizationPreview");
   const titleId = useId();
 
-  return <section aria-labelledby={titleId} className={styles.responsibility}>
+  return <section aria-labelledby={titleId} className={styles.validitySummary}>
     <div className={styles.runtimeTraceHeading}>
       <div><h4 id={titleId}>{t("observation.validity.title")}</h4><p>{t("observation.validity.hint")}</p></div>
       <div className={styles.stateBadges}>
@@ -645,6 +632,7 @@ export function ServiceAuthorizationPreview({ workspace, onClose }: {
       <Card.Body className={styles.root}>
         <div className={styles.summary}><p>{t("subtitle")}</p><div className={styles.badges}><Badge status="warning">MOCK</Badge><Badge>{t("previewOnly")}</Badge></div></div>
         <Alert status="warning">{t("boundary")}</Alert>
+        <ServiceAuthorizationResponsibility />
         {view === "directory" ? <Tabs.Root value={directorySection} onValueChange={(value) => setDirectorySection(value as DirectorySection)}>
           <Tabs.List aria-label={t("directory.sectionsLabel")}><Tabs.Trigger value="authorizations">{t("directory.authorizations")}</Tabs.Trigger><Tabs.Trigger value="templates">{t("directory.templates")}</Tabs.Trigger></Tabs.List>
           <Tabs.Content className={styles.stack} value="authorizations"><AccountAuthorizationDirectory accountId={workspace.accountId} triggerRef={accountAccessTrigger} onOpen={() => { setAccountAccessOrigin("directory"); setView("account-access"); }} /></Tabs.Content>

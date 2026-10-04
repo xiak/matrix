@@ -1209,7 +1209,7 @@ describe("CAM-style access workspace", () => {
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { level: 1, name: "服务授权" })).toBe(document.activeElement);
-    expect(screen.getByText(/真实创建或撤销必须从对应云产品的具体资源入口发起/)).toBeTruthy();
+    expect(screen.getByText(/真实同意或撤销必须从对应云产品的具体资源入口发起/)).toBeTruthy();
     expect(screen.getByText(/只读查看本账号已经形成的服务关联角色关系/)).toBeTruthy();
     const accountDirectory = screen.getByRole("table", { name: "当前账号服务授权" });
     expect(within(accountDirectory).getByText("1 个有效 / 1 个全部")).toBeTruthy();

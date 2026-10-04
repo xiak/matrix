@@ -2476,7 +2476,7 @@
     "title": "Service authorization",
     "subtitle": "An isolated MOCK view of the platform-template and account-authorization boundary",
     "previewOnly": "Backend not connected",
-    "boundary": "Product onboarding, service identity, and customer authorization are separate boundaries. Real creation or revocation must start from the corresponding cloud product resource; IAM only observes template and service-linked-role state. This page remains an isolated MOCK: action names follow the current Matrix permission catalog, while the service subject, target resources, and revision are illustrative. It creates no role or credential and writes nothing to IAM.",
+    "boundary": "This is an isolated MOCK that reads illustrative template, account-relation, and resource-binding facts. It creates no role or credential and writes nothing to IAM. Real consent or revocation must start from the exact cloud-product resource.",
     "directory": {
       "title": "Service authorization templates available for review",
       "hint": "Cloud products and the IAM platform publish templates through a controlled process. Tenant administrators initiate consent from the concrete product resource and review it read-only in IAM; they cannot register platform Actions.",

@@ -131,6 +131,11 @@ describe("AccountServiceAuthorizations", () => {
     render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={templateClient} onBack={vi.fn()} /></LocaleProvider>);
 
     expect(screen.getByRole("heading", { name: "服务授权" })).toBeTruthy();
+    const responsibility = screen.getByRole("region", { name: "服务授权职责边界" });
+    expect(within(responsibility).getByText("产品团队定义能力")).toBeTruthy();
+    expect(within(responsibility).getByText("IAM 平台校验并发布")).toBeTruthy();
+    expect(within(responsibility).getByText("租户管理员消费目录")).toBeTruthy();
+    expect(within(responsibility).queryByRole("button")).toBeNull();
     expect(screen.getByRole("tab", { name: "当前账号授权", selected: true })).toBeTruthy();
     expect(screen.getByText("正在读取当前账号的服务授权")).toBeTruthy();
     expect(templateClient.load).not.toHaveBeenCalled();
