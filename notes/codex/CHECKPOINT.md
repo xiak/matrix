@@ -6,9 +6,9 @@
 - Updated: 2026-10-04
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed branch head: `5d30a0324`
+- Pushed branch head: `6c499c664`
 - Pushed source/embed milestone: `ba7e57a9a`
-- Pushed documentation milestone: `5d30a0324`
+- Pushed documentation milestone: `6071f2a5e`
 
 ## Authoritative route
 
@@ -28,28 +28,28 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`; login
-verification remains disabled for UX review. Its 25 checked root, shared-service,
-service-subroute and IAM paths return HTTP 200. Source and synchronized embed
-`ba7e57a9a` extend the shared delayed-feedback regression matrix across every
-currently routed Overview, Catalog, Quota, Region, Application, Resource,
-Installation, Operation, Message, DevOps, Observability, Log, Audit and IAM
-loading-region branch. Each destination exposes stable named chrome immediately,
-waits 200 ms before painting placeholders and confines them to the data-owning
-region. The earlier compact IAM and notification-replacement behavior remains in
-place, including the separate inspectable MOCK.
+verification remains disabled for UX review. Merge `6c499c664` joins UX head
+`6071f2a5e` with fixed IAM head `08469334a`. The integrated tree takes the IAM
+head's complete API, service, deployment, test and Go-module closure while the
+console source remains owned by FEAT-IAM-010/FEAT-007. No backend conflict was
+resolved by inventing a third contract, and the separate inspectable MOCK remains
+available.
 
-Acceptance at this milestone: focused shell 82 tests; complete frontend 62 files /
-1,082 tests; three static-normalization tests; typecheck, lint, architecture and
-228 theme-contrast pairs; 45-route production export, 43 normalized paths and
-249-file embed equality; synchronized repository-wide Go test/vet. Documentation head
-`5d30a0324` records the current shared gate; exact IAM semantics and remaining
-real IAM/SMTP browser acceptance remain in the IAM owner.
+Acceptance at this milestone: complete frontend 62 files / 1,082 tests; three
+static-normalization tests; typecheck, lint, architecture and 228 theme-contrast
+pairs; 45-route production export, 43 normalized paths and 249-file embed
+equality; repository-wide `go test -p 2 ./...` and `go vet -p 2 ./...`. Exact
+IAM semantics and the remaining real IAM + PostgreSQL 18 + SMTP/Maildir browser
+acceptance remain in the IAM owner.
 
 ## Continuation boundary
 
-Keep the MOCK preview available. Consume IAM changes only from fixed, pushed
-sources with terminal evidence. The replacement source is accepted only as a
-client contract until the remaining real IAM/SMTP browser gate passes.
+Keep the MOCK preview available. The next release gate is the real
+NotificationContact replacement browser journey against IAM, independent
+PostgreSQL 18 and SMTP/Maildir; do not let a new security-report UI slice replace
+or weaken that gate. Consume later IAM changes only from fixed, pushed sources
+with terminal evidence. The replacement source is accepted only as a client
+contract until the remaining real IAM/SMTP browser gate passes.
 AccessKey and service-authorization reads still need installed-runtime
 acceptance; product PEP enforcement, current permit and cloud-product
 credential usability must not be inferred from IAM observations. Product
