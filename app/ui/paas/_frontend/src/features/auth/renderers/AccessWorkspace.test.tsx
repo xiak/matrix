@@ -4265,12 +4265,19 @@ describe("CAM-style access workspace", () => {
     expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
-  it("does not fabricate a live security-report directory before a list contract exists", async () => {
-    const { repository } = await open("security-reports", { live: true });
-    expect(screen.getByText(/LIVE · NOT_CONNECTED/)).toBeTruthy();
-    expect(screen.getByText("安全报告目录尚未接入")).toBeTruthy();
+  it("offers the fixed live create and read-by-ID entry without fabricating a report directory", async () => {
+    const securityReports = {
+      create: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")),
+      read: vi.fn().mockRejectedValue(new HttpProblem(404, "NOT_FOUND")),
+      download: vi.fn().mockRejectedValue(new HttpProblem(404, "NOT_FOUND"))
+    };
+    const { repository } = await open("security-reports", { live: true, repository: { securityReports } });
+    expect(screen.getByText(/只使用 IAM 已固定的生成、按 ID 读取和下载接口/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "生成当前账号安全报告" })).toBeTruthy();
+    expect(screen.getByLabelText("报告 ID")).toBeTruthy();
     expect(screen.queryByRole("table", { name: "安全报告" })).toBeNull();
     expect(screen.queryByRole("button", { name: "生成报告（MOCK）" })).toBeNull();
+    expect(screen.queryByText(/LIVE · NOT_CONNECTED/)).toBeNull();
     expect(repository.execute).not.toHaveBeenCalled();
   });
   it("reviews configured trust entry points and synthetic unused access without inventing effective access", async () => {

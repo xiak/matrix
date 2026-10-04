@@ -615,6 +615,126 @@ describe("IAM HTTP access-key boundary", () => {
   });
 });
 
+const securityReportCoverage = [
+  { source: "IAM_ACCOUNT", state: "COMPLETE" },
+  { source: "IAM_USERS", state: "COMPLETE" },
+  { source: "IAM_LOGIN_SESSIONS", state: "COMPLETE" },
+  { source: "IAM_ACCESS_KEYS", state: "COMPLETE" },
+  { source: "IAM_ROLE_ACTIVITY", state: "NOT_INCLUDED" },
+  { source: "PAAS_RESULTS", state: "NOT_INCLUDED" },
+  { source: "AUDIT_STATISTICS", state: "NOT_INCLUDED" },
+  { source: "NOTIFICATION_DELIVERY", state: "NOT_INCLUDED" },
+  { source: "EXTERNAL_RISK", state: "NOT_INCLUDED" }
+];
+
+async function securityReportFixture(csv = new TextEncoder().encode("resource_type,resource_id\nACCOUNT,account-acme\n")) {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", csv));
+  const csvContentDigest = `sha256:${Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("")}`;
+  const metadata = {
+    apiVersion, kind: "AccountSecurityReportMetadata", id: "report-one", accountId: account.id, formatVersion: 1,
+    observedAt: "2026-09-11T08:00:00Z", expiresAt: "2026-09-18T08:00:00Z",
+    documentDigest: `sha256:${"a".repeat(64)}`, csvContentDigest,
+    userCount: 2, accessKeyCount: 1, rowCount: 4, csvBytes: csv.length
+  };
+  return { csv, report: {
+    metadata, accountSecuritySettingsVersion: 4, coverage: securityReportCoverage,
+    users: [{
+      id: "root-acme", loginName: "admin", displayName: "Account owner", status: "ACTIVE", root: true,
+      resourceVersion: 4, createdAt: "2026-01-01T00:00:00Z", mfa: { enrollmentState: "NEVER_BOUND", factorRevision: 1 },
+      lastPasswordLogin: { state: "OBSERVED", observedAt: "2026-09-11T07:00:00Z" }
+    }, {
+      id: user.id, loginName: user.loginName, displayName: user.displayName, status: "ACTIVE", root: false,
+      resourceVersion: user.resourceVersion, createdAt: "2026-02-01T00:00:00Z", mfa: { enrollmentState: "UNKNOWN" },
+      lastPasswordLogin: { state: "UNKNOWN" }
+    }],
+    accessKeys: [{
+      id: "key-alex", userId: user.id, status: "ENABLED", networkRestrictions: { allowedSourceCidrs: ["10.0.0.0/24"] },
+      resourceVersion: 2, createdAt: "2026-03-01T00:00:00Z",
+      lastAuthorization: { evaluatedAt: "2026-09-11T06:00:00Z", allowed: true, product: "paas", action: "paas.application.read", sourceIp: "10.0.0.8" }
+    }]
+  } };
+}
+
+describe("IAM HTTP account-security-report boundary", () => {
+  it("creates and reads only the current-account report with the exact fixed request", async () => {
+    const fixture = await securityReportFixture();
+    let fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ outcome: "APPLIED", metadata: fixture.report.metadata }), {
+      status: 201, headers: { "Content-Type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetcher);
+    const creation = await httpAccountRepository.securityReports!.create("bearer", account.id, { formatVersion: 1, requestId: "report-request-one" });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/account/security-reports");
+    expect(requestBody(fetcher as ReturnType<typeof reply>)).toEqual({ formatVersion: 1, requestId: "report-request-one" });
+    expect(creation).toMatchObject({ outcome: "APPLIED", metadata: { id: "report-one", accountId: account.id } });
+
+    fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(fixture.report), {
+      status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetcher);
+    const report = await httpAccountRepository.securityReports!.read("bearer", account.id, "report-one");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/account/security-reports/report-one");
+    expect(report).toMatchObject({ metadata: { id: "report-one", rowCount: 4 }, users: [{ root: true }, { id: user.id }], accessKeys: [{ id: "key-alex" }] });
+  });
+
+  it("requires the protocol status that corresponds to APPLIED or EQUAL_REPLAY", async () => {
+    const fixture = await securityReportFixture();
+    for (const [status, outcome] of [[200, "APPLIED"], [201, "EQUAL_REPLAY"]] as const) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ outcome, metadata: fixture.report.metadata }), {
+        status, headers: { "Content-Type": "application/json" }
+      })));
+      await expect(httpAccountRepository.securityReports!.create("bearer", account.id, { formatVersion: 1, requestId: "report-request-one" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("re-reads current metadata and verifies exact CSV bytes before returning a download", async () => {
+    const fixture = await securityReportFixture();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(fixture.report), { status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(fixture.csv, { status: 200, headers: {
+        "Cache-Control": "no-store", "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="matrix-iam-security-report-report-one.csv"'
+      } }));
+    vi.stubGlobal("fetch", fetcher);
+    const result = await httpAccountRepository.securityReports!.download("bearer", account.id, "report-one");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls.map((call) => call[0])).toEqual([
+      "/api/iam/v1/account/security-reports/report-one",
+      "/api/iam/v1/account/security-reports/report-one/content"
+    ]);
+    expect(result.filename).toBe("matrix-iam-security-report-report-one.csv");
+    expect(Array.from(result.bytes)).toEqual(Array.from(fixture.csv));
+  });
+
+  it("fails closed for foreign reports, expanded documents, reordered coverage, and corrupted CSV", async () => {
+    const fixture = await securityReportFixture();
+    for (const response of [
+      { ...fixture.report, metadata: { ...fixture.report.metadata, accountId: "account-foreign" } },
+      { ...fixture.report, leakedAuthority: true },
+      { ...fixture.report, coverage: [securityReportCoverage[1], securityReportCoverage[0], ...securityReportCoverage.slice(2)] }
+    ]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(response), {
+        status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }
+      })));
+      await expect(httpAccountRepository.securityReports!.read("bearer", account.id, "report-one")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(fixture.report), {
+      status: 200, headers: { "Content-Type": "application/json" }
+    })));
+    await expect(httpAccountRepository.securityReports!.read("bearer", account.id, "report-one")).rejects.toThrow("INVALID_IAM_RESPONSE");
+
+    const corrupted = Uint8Array.from(fixture.csv);
+    corrupted[corrupted.length - 2] = corrupted[corrupted.length - 2]! ^ 1;
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(fixture.report), { status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(corrupted, { status: 200, headers: {
+        "Cache-Control": "no-store", "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="matrix-iam-security-report-report-one.csv"'
+      } })));
+    await expect(httpAccountRepository.securityReports!.download("bearer", account.id, "report-one")).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+});
+
 const accessAnalyzer = {
   apiVersion, kind: "AccessAnalyzer", id: "analyzer-unused", accountId: account.id,
   type: "UNUSED_ACCESS", status: "ACTIVE", unusedAccessAgeDays: 90,

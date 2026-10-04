@@ -1,4 +1,4 @@
-import { requestJSON, requestToken } from "@/infrastructure/http/jsonRequest";
+import { HttpProblem, requestJSON, requestToken } from "@/infrastructure/http/jsonRequest";
 import type {
   Account,
   AccountAccess,
@@ -73,6 +73,7 @@ import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleD
 import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessDispositionRule, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
 import { sourceCidrValid } from "../domain/policyLanguage";
 import { accessKeyAuthorizationSourceIpValid, accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, type AccessKeyNetworkRestrictions, type AccessKeyUsageObservation } from "../domain/accessKeyNetwork";
+import { accountSecurityReportCoverage, accountSecurityReportLimits, type AccountSecurityReport, type AccountSecurityReportCreation, type AccountSecurityReportDownload, type AccountSecurityReportMetadata, type SecurityReportAccessKey, type SecurityReportMFAState, type SecurityReportTimeObservation, type SecurityReportUser } from "../domain/securityReports";
 
 function accountRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("INVALID_IAM_RESPONSE");
@@ -2425,7 +2426,209 @@ function parseAccountSecuritySettingsUpdate(value: unknown, accountId: string, r
   return { outcome: wire.outcome, change: parseAccountSecuritySettingsChange(wire.change, accountId, requestId, intent) };
 }
 
+function securityReportCount(value: unknown, maximum: number): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > maximum) throw new Error("INVALID_IAM_RESPONSE");
+  return value;
+}
+
+function securityReportDigest(value: unknown): string {
+  const result = accountText(value);
+  if (!/^sha256:[0-9a-f]{64}$/.test(result)) throw new Error("INVALID_IAM_RESPONSE");
+  return result;
+}
+
+function parseAccountSecurityReportMetadata(value: unknown, expectedAccountId: string, expectedReportId?: string): AccountSecurityReportMetadata {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "formatVersion", "observedAt", "expiresAt", "documentDigest", "csvContentDigest", "userCount", "accessKeyCount", "rowCount", "csvBytes"]);
+  requireAccountKind(wire, "AccountSecurityReportMetadata");
+  const id = accountIdentifier(wire.id);
+  const accountId = accountIdentifier(wire.accountId);
+  const observedAt = accountTimestamp(wire.observedAt);
+  const expiresAt = accountTimestamp(wire.expiresAt);
+  const userCount = securityReportCount(wire.userCount, accountSecurityReportLimits.users);
+  const accessKeyCount = securityReportCount(wire.accessKeyCount, accountSecurityReportLimits.accessKeys);
+  const rowCount = securityReportCount(wire.rowCount, accountSecurityReportLimits.rows);
+  const csvBytes = securityReportCount(wire.csvBytes, accountSecurityReportLimits.csvBytes);
+  const retentionMicros = BigInt(accountSecurityReportLimits.retainedDays * 24 * 60 * 60) * 1_000_000n;
+  if (accountId !== accountIdentifier(expectedAccountId) || expectedReportId !== undefined && id !== accountIdentifier(expectedReportId) || wire.formatVersion !== 1 ||
+      timestampMicros(expiresAt) - timestampMicros(observedAt) !== retentionMicros || rowCount !== 1 + userCount + accessKeyCount || csvBytes < 1) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { apiVersion: "iam.matrix.xiak.com/v1", kind: "AccountSecurityReportMetadata", id, accountId, formatVersion: 1,
+    observedAt, expiresAt, documentDigest: securityReportDigest(wire.documentDigest), csvContentDigest: securityReportDigest(wire.csvContentDigest),
+    userCount, accessKeyCount, rowCount, csvBytes };
+}
+
+function parseSecurityReportObservation(value: unknown, createdAt: string, observedAt: string): SecurityReportTimeObservation {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["state"], ["observedAt"]);
+  if (wire.state !== "OBSERVED" && wire.state !== "NOT_OBSERVED_IN_RETAINED_IAM_STATE" && wire.state !== "UNKNOWN") throw new Error("INVALID_IAM_RESPONSE");
+  if (wire.state !== "OBSERVED") {
+    if (wire.observedAt !== undefined) throw new Error("INVALID_IAM_RESPONSE");
+    return { state: wire.state };
+  }
+  const timestamp = accountTimestamp(wire.observedAt);
+  if (timestampOrder(timestamp) < timestampOrder(createdAt) || timestampOrder(timestamp) > timestampOrder(observedAt)) throw new Error("INVALID_IAM_RESPONSE");
+  return { state: wire.state, observedAt: timestamp };
+}
+
+function parseSecurityReportMFA(value: unknown): SecurityReportMFAState {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["enrollmentState"], ["factorRevision"]);
+  if (wire.enrollmentState !== "NEVER_BOUND" && wire.enrollmentState !== "BOUND" && wire.enrollmentState !== "RECOVERY_REQUIRED" &&
+      wire.enrollmentState !== "REMOVED" && wire.enrollmentState !== "UNKNOWN") throw new Error("INVALID_IAM_RESPONSE");
+  if (wire.enrollmentState === "UNKNOWN") {
+    if (wire.factorRevision !== undefined) throw new Error("INVALID_IAM_RESPONSE");
+    return { enrollmentState: wire.enrollmentState };
+  }
+  const factorRevision = accountVersion(wire.factorRevision);
+  if (wire.enrollmentState === "NEVER_BOUND" && factorRevision !== 1) throw new Error("INVALID_IAM_RESPONSE");
+  return { enrollmentState: wire.enrollmentState, factorRevision };
+}
+
+function parseSecurityReportUser(value: unknown, observedAt: string): SecurityReportUser {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["id", "loginName", "displayName", "status", "root", "resourceVersion", "createdAt", "mfa", "lastPasswordLogin"], ["mustChangePassword"]);
+  const id = accountIdentifier(wire.id);
+  const loginName = accountText(wire.loginName);
+  const displayName = groupText(wire.displayName, 1, 128);
+  const createdAt = accountTimestamp(wire.createdAt);
+  if (!/^[a-z][a-z0-9._-]{2,63}$/.test(loginName) || wire.status !== "ACTIVE" && wire.status !== "DISABLED" ||
+      typeof wire.root !== "boolean" || wire.mustChangePassword !== undefined && typeof wire.mustChangePassword !== "boolean" ||
+      timestampOrder(createdAt) > timestampOrder(observedAt)) throw new Error("INVALID_IAM_RESPONSE");
+  return { id, loginName, displayName, status: wire.status, root: wire.root,
+    ...(wire.mustChangePassword === true ? { mustChangePassword: true } : {}), resourceVersion: accountVersion(wire.resourceVersion), createdAt,
+    mfa: parseSecurityReportMFA(wire.mfa), lastPasswordLogin: parseSecurityReportObservation(wire.lastPasswordLogin, createdAt, observedAt) };
+}
+
+function parseSecurityReportAccessKey(value: unknown, observedAt: string): SecurityReportAccessKey {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["id", "userId", "status", "networkRestrictions", "resourceVersion", "createdAt"], ["lastAuthorization"]);
+  const createdAt = accountTimestamp(wire.createdAt);
+  if (wire.status !== "ENABLED" && wire.status !== "DISABLED" || timestampOrder(createdAt) > timestampOrder(observedAt)) throw new Error("INVALID_IAM_RESPONSE");
+  const usage = parseAccessKeyUsage({ observedAt, ...(wire.lastAuthorization === undefined ? {} : { lastAuthorization: wire.lastAuthorization }) });
+  if (usage.lastAuthorization && timestampOrder(usage.lastAuthorization.evaluatedAt) < timestampOrder(createdAt)) throw new Error("INVALID_IAM_RESPONSE");
+  return { id: accountIdentifier(wire.id), userId: accountIdentifier(wire.userId), status: wire.status,
+    networkRestrictions: parseAccessKeyNetworkRestrictions(wire.networkRestrictions), resourceVersion: accountVersion(wire.resourceVersion), createdAt,
+    ...(usage.lastAuthorization ? { lastAuthorization: usage.lastAuthorization } : {}) };
+}
+
+function parseAccountSecurityReport(value: unknown, accountId: string, reportId?: string): AccountSecurityReport {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["metadata", "accountSecuritySettingsVersion", "coverage", "users", "accessKeys"]);
+  const metadata = parseAccountSecurityReportMetadata(wire.metadata, accountId, reportId);
+  if (!Array.isArray(wire.coverage) || wire.coverage.length !== accountSecurityReportCoverage.length || !Array.isArray(wire.users) || !Array.isArray(wire.accessKeys)) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const coverage = wire.coverage.map((value, index) => {
+    const item = accountRecord(value);
+    exactKeys(item, ["source", "state"]);
+    const expected = accountSecurityReportCoverage[index]!;
+    if (item.source !== expected[0] || item.state !== expected[1]) throw new Error("INVALID_IAM_RESPONSE");
+    return { source: expected[0], state: expected[1] };
+  });
+  const users = wire.users.map((item) => parseSecurityReportUser(item, metadata.observedAt));
+  const accessKeys = wire.accessKeys.map((item) => parseSecurityReportAccessKey(item, metadata.observedAt));
+  if (users.length !== metadata.userCount || accessKeys.length !== metadata.accessKeyCount || users.filter((user) => user.root).length !== 1 ||
+      users.some((user, index) => index > 0 && users[index - 1]!.id >= user.id) ||
+      accessKeys.some((key, index) => index > 0 && accessKeys[index - 1]!.id >= key.id) ||
+      accessKeys.some((key) => !users.some((user) => user.id === key.userId))) throw new Error("INVALID_IAM_RESPONSE");
+  return { metadata, accountSecuritySettingsVersion: accountVersion(wire.accountSecuritySettingsVersion), coverage, users, accessKeys };
+}
+
+function parseAccountSecurityReportCreation(value: unknown, accountId: string, requestId: string): AccountSecurityReportCreation {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["outcome", "metadata"]);
+  if (wire.outcome !== "APPLIED" && wire.outcome !== "EQUAL_REPLAY" || !requestId) throw new Error("INVALID_IAM_RESPONSE");
+  return { outcome: wire.outcome, metadata: parseAccountSecurityReportMetadata(wire.metadata, accountId) };
+}
+
+async function createAccountSecurityReport(credential: string, accountId: string, requestId: string): Promise<AccountSecurityReportCreation> {
+  const response = await fetch("/api/iam/v1/account/security-reports", {
+    method: "POST",
+    cache: "no-store",
+    headers: { ...accountHeaders(credential), Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ formatVersion: 1, requestId })
+  });
+  let body: unknown;
+  try { body = await response.json(); }
+  catch { throw new HttpProblem(response.status, "INVALID_PLATFORM_RESPONSE"); }
+  if (!response.ok) {
+    const code = body && typeof body === "object" && "code" in body && typeof body.code === "string" ? body.code : "PLATFORM_REQUEST_REJECTED";
+    throw new HttpProblem(response.status, code);
+  }
+  const result = parseAccountSecurityReportCreation(body, accountId, requestId);
+  if (result.outcome === "APPLIED" ? response.status !== 201 : response.status !== 200) throw new Error("INVALID_IAM_RESPONSE");
+  return result;
+}
+
+async function rejectedSecurityReportResponse(response: Response): Promise<never> {
+  let code = "PLATFORM_REQUEST_REJECTED";
+  try {
+    const body = await response.json() as unknown;
+    if (body && typeof body === "object" && "code" in body && typeof body.code === "string") code = body.code;
+  } catch { /* The status remains authoritative when the error body is not JSON. */ }
+  throw new HttpProblem(response.status, code);
+}
+
+async function readAccountSecurityReport(credential: string, accountId: string, reportId: string): Promise<AccountSecurityReport> {
+  const response = await fetch(`/api/iam/v1/account/security-reports/${encodeURIComponent(reportId)}`, {
+    cache: "no-store",
+    headers: { ...accountHeaders(credential), Accept: "application/json" }
+  });
+  if (!response.ok) return rejectedSecurityReportResponse(response);
+  const cacheControl = response.headers.get("Cache-Control")?.toLowerCase() ?? "";
+  if (response.status !== 200 || !cacheControl.split(",").map((value) => value.trim()).includes("no-store")) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  let body: unknown;
+  try { body = await response.json(); }
+  catch { throw new Error("INVALID_IAM_RESPONSE"); }
+  return parseAccountSecurityReport(body, accountId, reportId);
+}
+
+async function downloadAccountSecurityReportCSV(credential: string, metadata: AccountSecurityReportMetadata): Promise<AccountSecurityReportDownload> {
+  const filename = `matrix-iam-security-report-${metadata.id}.csv`;
+  const response = await fetch(`/api/iam/v1/account/security-reports/${encodeURIComponent(metadata.id)}/content`, {
+    cache: "no-store",
+    headers: { ...accountHeaders(credential), Accept: "text/csv" }
+  });
+  if (!response.ok) return rejectedSecurityReportResponse(response);
+  const contentType = response.headers.get("Content-Type")?.toLowerCase() ?? "";
+  const disposition = response.headers.get("Content-Disposition");
+  const cacheControl = response.headers.get("Cache-Control")?.toLowerCase() ?? "";
+  if (!/^text\/csv(?:\s*;\s*charset=utf-8)?$/.test(contentType) || disposition !== `attachment; filename="${filename}"` ||
+      !cacheControl.split(",").map((value) => value.trim()).includes("no-store") || response.headers.get("Content-Encoding")) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.length !== metadata.csvBytes || bytes.length < 1 || bytes.length > accountSecurityReportLimits.csvBytes) throw new Error("INVALID_IAM_RESPONSE");
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  const encoded = Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("");
+  if (`sha256:${encoded}` !== metadata.csvContentDigest) throw new Error("INVALID_IAM_RESPONSE");
+  return { metadata, bytes, filename };
+}
+
 export const httpAccountRepository: AccountRepository = {
+  securityReports: {
+    async create(credential, accountId, command) {
+      const owner = accountIdentifier(accountId);
+      if (command.formatVersion !== 1) throw new Error("INVALID_IAM_REQUEST");
+      const requestId = accountIdentifier(command.requestId);
+      return createAccountSecurityReport(credential, owner, requestId);
+    },
+    async read(credential, accountId, reportId) {
+      const owner = accountIdentifier(accountId);
+      const target = accountIdentifier(reportId);
+      return readAccountSecurityReport(credential, owner, target);
+    },
+    async download(credential, accountId, reportId) {
+      const owner = accountIdentifier(accountId);
+      const target = accountIdentifier(reportId);
+      const current = await readAccountSecurityReport(credential, owner, target);
+      return downloadAccountSecurityReportCSV(credential, current.metadata);
+    }
+  },
   accessAnalysis: {
     async listAnalyzers(credential, accountId, after) {
       const owner = accountIdentifier(accountId);

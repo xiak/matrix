@@ -1,6 +1,7 @@
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessView } from "../domain/accounts";
 import type { SessionSummary } from "../domain/session";
+import { accountSecurityReportLimits as fixedAccountSecurityReportLimits } from "../domain/securityReports";
 import type { AccountAccessScene } from "./accountAccessScene";
 
 export type AccessSecurityCheckState = "review" | "configured" | "notApplicable" | "unknown";
@@ -448,12 +449,8 @@ export function buildCredentialReport(workspace: AccessWorkspace, scene: Account
 }
 
 export const accountSecurityReportLimits = {
-  users: 1000,
-  accessKeys: 2000,
-  rows: 3001,
-  contentBytes: 4 * 1024 * 1024,
-  retainedDays: 7,
-  retainedReports: 20
+  ...fixedAccountSecurityReportLimits,
+  contentBytes: fixedAccountSecurityReportLimits.csvBytes
 } as const;
 
 export type AccountSecurityReportObservationState = "OBSERVED" | "NOT_OBSERVED_IN_RETAINED_IAM_STATE" | "UNKNOWN";

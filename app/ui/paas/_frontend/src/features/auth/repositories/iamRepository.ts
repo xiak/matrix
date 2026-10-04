@@ -41,6 +41,7 @@ import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact,
 import type { UserBatchCommand } from "../domain/userBatch";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CurrentRoleIdentity, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, UserRoleSession } from "../domain/roles";
 import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
+import type { AccountSecurityReport, AccountSecurityReportCreation, AccountSecurityReportDownload } from "../domain/securityReports";
 
 export type LoginCommand = { loginName: string; password: string };
 export type ChangePasswordCommand = { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean };
@@ -136,6 +137,14 @@ export interface IamRepository {
 }
 
 export interface AccountRepository {
+  // Security reports have no collection endpoint. The authenticated Session
+  // selects the account; accountId only binds returned resources locally.
+  securityReports?: {
+    create(credential: string, accountId: string, command: { formatVersion: 1; requestId: string }): Promise<AccountSecurityReportCreation>;
+    read(credential: string, accountId: string, reportId: string): Promise<AccountSecurityReport>;
+    /** Re-reads metadata, then validates the exact CSV bytes before returning them. */
+    download(credential: string, accountId: string, reportId: string): Promise<AccountSecurityReportDownload>;
+  };
   // Access analysis is account-scoped by the authenticated Session. The
   // account and analyzer IDs below only verify returned resources locally.
   accessAnalysis?: {
