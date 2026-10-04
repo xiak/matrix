@@ -1,6 +1,7 @@
 package authorityprocess
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
 	"context"
@@ -29,6 +30,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -61,6 +63,8 @@ import (
 const (
 	authorityProcessDSN           = "MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN"
 	notificationBrowserProcessDSN = "MATRIX_IAM_NOTIFICATION_CONSOLE_BROWSER_POSTGRES_TEST_DSN"
+	notificationBrowserArchiveSHA = "de33d98cd0ffdb770ac1df8bde8f9e098d2b9ba701aded15e06464c311214d67"
+	notificationBrowserClassicID  = "sha256:aedd64ed08af884f23637c6abb029b73647dbfdf27c785be5aa1371f49cbb7da"
 
 	iamAPILogin            = "matrix_authority_process_iam_api"
 	iamWorkerLogin         = "matrix_authority_process_iam_worker"
@@ -2339,6 +2343,9 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	dsn := os.Getenv(variable)
 	if dsn == "" {
+		if mode == authorityProcessNotificationBrowser {
+			t.Fatal("notification browser gate requires " + notificationBrowserProcessDSN)
+		}
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
 	}
 	duration := 6 * time.Minute
@@ -4332,9 +4339,14 @@ func runIAMNotificationConsoleBrowser(t *testing.T, ctx context.Context, databas
 func notificationBrowserSMTP(t *testing.T, bootstrap iamv1.BootstrapDocument) (iamv1.SecurityMailSMTPChannel, func(string, string) ([]byte, string), string) {
 	t.Helper()
 	container, task := os.Getenv("MATRIX_IAM_SMTP_POSTFIX_CONTAINER"), os.Getenv("MATRIX_IAM_SMTP_POSTFIX_TASK")
+	archive, runtimeImage := os.Getenv("MATRIX_IAM_SMTP_POSTFIX_ARCHIVE"), os.Getenv("MATRIX_IAM_SMTP_POSTFIX_RUNTIME_IMAGE")
 	if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(container) || !regexp.MustCompile(`^iam012-smtp-[a-f0-9]{32}$`).MatchString(task) {
 		t.Fatal("notification browser requires its own fixed Postfix container and iam012 task identity")
 	}
+	if !regexp.MustCompile(`^sha256:[a-f0-9]{64}$`).MatchString(runtimeImage) {
+		t.Fatal("notification browser requires the immutable runtime image ID captured after loading the fixed archive")
+	}
+	verifyNotificationBrowserArchive(t, archive)
 	docker := func(arguments ...string) []byte {
 		t.Helper()
 		commandContext, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -4359,17 +4371,18 @@ func notificationBrowserSMTP(t *testing.T, bootstrap iamv1.BootstrapDocument) (i
 	}
 	var fixture struct {
 		ID                          string
+		Image                       string
 		Running                     bool
 		Labels                      map[string]string
 		NanoCPUs, Memory, PidsLimit int64
 		Ports                       map[string][]struct{ HostIP, HostPort string }
 	}
-	projection := `{"ID":{{json .Id}},"Running":{{json .State.Running}},"Labels":{{json .Config.Labels}},"NanoCPUs":{{json .HostConfig.NanoCpus}},"Memory":{{json .HostConfig.Memory}},"PidsLimit":{{json .HostConfig.PidsLimit}},"Ports":{{json .NetworkSettings.Ports}}}`
+	projection := `{"ID":{{json .Id}},"Image":{{json .Image}},"Running":{{json .State.Running}},"Labels":{{json .Config.Labels}},"NanoCPUs":{{json .HostConfig.NanoCpus}},"Memory":{{json .HostConfig.Memory}},"PidsLimit":{{json .HostConfig.PidsLimit}},"Ports":{{json .NetworkSettings.Ports}}}`
 	if json.Unmarshal(localDocker("inspect", "--format", projection, container), &fixture) != nil {
 		t.Fatal("invalid notification browser SMTP fixture metadata")
 	}
 	ports := fixture.Ports["25/tcp"]
-	if fixture.ID != container || !fixture.Running || fixture.Labels["matrix.task"] != task || fixture.Labels["matrix.owner"] != "feat-iam" ||
+	if fixture.ID != container || fixture.Image != runtimeImage || !fixture.Running || fixture.Labels["matrix.task"] != task || fixture.Labels["matrix.owner"] != "feat-iam" ||
 		fixture.NanoCPUs <= 0 || fixture.NanoCPUs > 2_000_000_000 || fixture.Memory <= 0 || fixture.Memory > 1024*1024*1024 ||
 		fixture.PidsLimit <= 0 || fixture.PidsLimit > 128 || len(ports) != 1 || ports[0].HostIP != "127.0.0.1" {
 		t.Fatal("notification browser SMTP fixture must be isolated, bounded and loopback-only")
@@ -4429,6 +4442,71 @@ func notificationBrowserSMTP(t *testing.T, bootstrap iamv1.BootstrapDocument) (i
 		return nil, ""
 	}
 	return channel, receive, container
+}
+
+func verifyNotificationBrowserArchive(t *testing.T, archivePath string) {
+	t.Helper()
+	archive, err := os.Open(archivePath)
+	if err != nil {
+		t.Fatal("open fixed notification browser SMTP archive", err)
+	}
+	defer archive.Close()
+	info, err := archive.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 512*1024*1024 {
+		t.Fatal("notification browser SMTP archive must be one bounded regular file")
+	}
+	digest := sha256.New()
+	if copied, err := io.Copy(digest, archive); err != nil || copied != info.Size() || hex.EncodeToString(digest.Sum(nil)) != notificationBrowserArchiveSHA {
+		t.Fatal("notification browser SMTP archive SHA256 does not match the fixed Phase3 fixture")
+	}
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		t.Fatal("rewind notification browser SMTP archive", err)
+	}
+	reader := tar.NewReader(archive)
+	seen := map[string]byte{}
+	var manifest []byte
+	for entries := 0; ; entries++ {
+		if entries > 10_000 {
+			t.Fatal("notification browser SMTP archive entry bound exceeded")
+		}
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal("read notification browser SMTP archive", err)
+		}
+		normalized := strings.TrimSuffix(header.Name, "/")
+		clean := path.Clean(normalized)
+		if normalized == "" || clean != normalized || path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+			t.Fatal("notification browser SMTP archive contains an unsafe path")
+		}
+		if _, exists := seen[clean]; exists {
+			t.Fatal("notification browser SMTP archive contains duplicate entries")
+		}
+		seen[clean] = header.Typeflag
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA && header.Typeflag != tar.TypeDir {
+			t.Fatal("notification browser SMTP archive contains an unsupported entry type")
+		}
+		if clean == "manifest.json" {
+			if (header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA) || header.Size <= 0 || header.Size > 64*1024 {
+				t.Fatal("notification browser SMTP archive manifest is not one bounded regular file")
+			}
+			manifest, err = io.ReadAll(io.LimitReader(reader, header.Size+1))
+			if err != nil || int64(len(manifest)) != header.Size {
+				t.Fatal("read notification browser SMTP archive manifest", err)
+			}
+		}
+	}
+	var manifests []struct {
+		Config string `json:"Config"`
+	}
+	config := "blobs/sha256/" + strings.TrimPrefix(notificationBrowserClassicID, "sha256:")
+	configType, configExists := seen[config]
+	if len(manifest) == 0 || json.Unmarshal(manifest, &manifests) != nil || len(manifests) != 1 || manifests[0].Config != config ||
+		!configExists || (configType != tar.TypeReg && configType != tar.TypeRegA) {
+		t.Fatal("notification browser SMTP archive does not contain the fixed classic image identity")
+	}
 }
 
 type iamCapacityCall struct {
