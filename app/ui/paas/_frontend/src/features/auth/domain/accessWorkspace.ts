@@ -26,35 +26,11 @@ type IdentityProviderBase = {
   id: string; accountId: string; name: string; protocol: "SAML" | "OIDC";
   issuer: string; enabled: boolean; createdAt: string;
 };
-/**
- * Browser-memory provider projection. `redirectUri` is deliberately OIDC-only;
- * neither branch defines the eventual SAML/OIDC backend configuration wire.
- */
+/** Read-only concept projection; neither branch defines a SAML/OIDC backend wire. */
 export type IdentityProvider = IdentityProviderBase & (
   | { protocol: "SAML" }
   | { protocol: "OIDC"; redirectUri: string }
 );
-export type IdentityProviderConfigurationDraft = {
-  id?: string; name: string; issuer: string;
-} & (
-  | { protocol: "SAML" }
-  | { protocol: "OIDC"; redirectUri: string }
-);
-export type IdentityProviderConfigurationIssue = "name" | "duplicate" | "issuer" | "redirectUri";
-
-/** Local preview shape checks only; this does not verify an IdP, assertion, token or login. */
-export function identityProviderConfigurationIssue(
-  draft: IdentityProviderConfigurationDraft,
-  providers: readonly Pick<IdentityProvider, "id" | "name">[]
-): IdentityProviderConfigurationIssue | null {
-  if (!draft.name.trim() || draft.name.length > 64 || /[<>\u0000-\u001f]/.test(draft.name)) return "name";
-  if (providers.some((entry) => entry.id !== draft.id && entry.name.toLowerCase() === draft.name.trim().toLowerCase())) return "duplicate";
-  try { if (new URL(draft.issuer).protocol !== "https:") return "issuer"; } catch { return "issuer"; }
-  if (draft.protocol === "OIDC") {
-    try { if (new URL(draft.redirectUri).protocol !== "https:") return "redirectUri"; } catch { return "redirectUri"; }
-  }
-  return null;
-}
 export type ExternalIdentityPreview = {
   id: string;
   accountId: string;
@@ -76,21 +52,8 @@ export function externalIdentityProjectionIssue(
   if (!Object.prototype.hasOwnProperty.call(workspace.userProfiles, identity.userId)) return "user";
   return null;
 }
-/** Browser-memory design sample only; this is not an IAM account, claim DSL, or published backend resource. */
+/** Read-only design sample; this is not an IAM account, claim DSL, or published backend resource. */
 export type RoleSsoMappingPreview = { id: string; name: string; subjectSample: string; providerId: string; roleId: string; enabled: boolean; createdAt: string };
-export type RoleSsoMappingPreviewIssue = "name" | "duplicate" | "subjectSample" | "providerId" | "roleId";
-
-export function roleSsoMappingPreviewIssue(
-  draft: Pick<RoleSsoMappingPreview, "name" | "subjectSample" | "providerId" | "roleId"> & { id?: string },
-  workspace: Pick<AccessWorkspace, "accountId" | "providers" | "roles" | "roleSsoMappings">
-): RoleSsoMappingPreviewIssue | null {
-  if (!draft.name.trim() || draft.name.length > 64 || /[<>\u0000-\u001f]/.test(draft.name)) return "name";
-  if (workspace.roleSsoMappings.some((entry) => entry.id !== draft.id && entry.name.toLowerCase() === draft.name.trim().toLowerCase())) return "duplicate";
-  if (!draft.subjectSample.trim() || draft.subjectSample.length > 256) return "subjectSample";
-  if (!workspace.providers.some((entry) => entry.id === draft.providerId && entry.accountId === workspace.accountId)) return "providerId";
-  const role = workspace.roles.find((entry) => entry.id === draft.roleId);
-  return role?.principalType === "provider" && role.principal === draft.providerId ? null : "roleId";
-}
 export type AccessKey = {
   id: string;
   ownerId: string;
@@ -189,10 +152,6 @@ export type AccessWorkspaceCommand =
   | { kind: "create-role-session"; roleId: string; caller: RoleSessionCaller; sessionMinutes: number; sourceIp?: string }
   | { kind: "revoke-role-session"; id: string }
   | { kind: "delete-role"; id: string }
-  | ({ kind: "save-provider"; id?: string; name: string; issuer: string; enabled: boolean } & ({ protocol: "SAML" } | { protocol: "OIDC"; redirectUri: string }))
-  | { kind: "delete-provider"; id: string }
-  | { kind: "save-role-sso-mapping-preview"; id?: string; name: string; subjectSample: string; providerId: string; roleId: string; enabled: boolean }
-  | { kind: "delete-role-sso-mapping-preview"; id: string }
   | { kind: "create-key"; ownerId: string; ownerState: AccessKeyOwnerState; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string; responseMode: "success" | "response-lost" }
   | { kind: "inspect-key-creation"; ownerId: string; requestId: string; resultMode: "found" | "not-found" | "unavailable" }
   | { kind: "set-key-status"; id: string; ownerState: AccessKeyOwnerState; status: AccessKey["status"]; resourceVersion: number; requestId: string }
@@ -484,31 +443,6 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       exists(state.roles, id);
       if (state.roleSsoMappings.some((entry) => entry.roleId === id)) throw new AccessWorkspaceError("referenced");
       state.roles = state.roles.filter((entry) => entry.id !== id); break;
-    case "save-provider": {
-      const issue = identityProviderConfigurationIssue(command, state.providers);
-      if (issue === "duplicate") throw new AccessWorkspaceError("duplicate");
-      if (issue) invalid();
-      if (command.id) exists(state.providers, command.id);
-      const previous = state.providers.find((entry) => entry.id === id);
-      state.providers = put(state.providers, { ...command, id, accountId: state.accountId, name: command.name.trim(), createdAt: previous?.createdAt ?? createdAt });
-      target = command.name; break;
-    }
-    case "delete-provider":
-      exists(state.providers, id);
-      if (state.roles.some((entry) => entry.principalType === "provider" && entry.principal === id) || state.roleSsoMappings.some((entry) => entry.providerId === id) || state.externalIdentities.some((entry) => entry.providerId === id)) throw new AccessWorkspaceError("referenced");
-      state.providers = state.providers.filter((entry) => entry.id !== id);
-      break;
-    case "save-role-sso-mapping-preview": {
-      const issue = roleSsoMappingPreviewIssue(command, state);
-      if (issue === "duplicate") throw new AccessWorkspaceError("duplicate");
-      if (issue) invalid();
-      if (command.id) exists(state.roleSsoMappings, command.id);
-      const previous = state.roleSsoMappings.find((entry) => entry.id === id);
-      state.roleSsoMappings = put(state.roleSsoMappings, { ...command, id, name: command.name.trim(), createdAt: previous?.createdAt ?? createdAt });
-      target = command.name; break;
-    }
-    case "delete-role-sso-mapping-preview":
-      exists(state.roleSsoMappings, id); state.roleSsoMappings = state.roleSsoMappings.filter((entry) => entry.id !== id); break;
     case "create-key":
       if (state.pendingKeyCreation || command.ownerState !== "active" || !context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !accessKeyNetworkRestrictionsValid(command.networkRestrictions) || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
       state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt, networkRestrictions: structuredClone(command.networkRestrictions), usage: { observedAt: createdAt } });
