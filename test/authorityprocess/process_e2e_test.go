@@ -10,6 +10,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -24,11 +25,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
+	"net/mail"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -56,11 +59,13 @@ import (
 )
 
 const (
-	authorityProcessDSN = "MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN"
+	authorityProcessDSN           = "MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN"
+	notificationBrowserProcessDSN = "MATRIX_IAM_NOTIFICATION_CONSOLE_BROWSER_POSTGRES_TEST_DSN"
 
 	iamAPILogin            = "matrix_authority_process_iam_api"
 	iamWorkerLogin         = "matrix_authority_process_iam_worker"
 	iamAccessAnalysisLogin = "matrix_iam_access_analysis_worker_login"
+	iamNotificationLogin   = "matrix_iam_notification_worker_login"
 	auditRuntimeLogin      = "matrix_authority_process_audit_runtime"
 	paasAPILogin           = "matrix_authority_process_paas_api"
 	paasWorkerLogin        = "matrix_authority_process_paas_worker"
@@ -2280,6 +2285,7 @@ type authorityProcessMode uint8
 const (
 	authorityProcessFull authorityProcessMode = iota
 	authorityProcessBrowser
+	authorityProcessNotificationBrowser
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
 )
@@ -2311,12 +2317,25 @@ func TestIAMConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessBrowser)
 }
 
+// This opt-in fixture keeps the browser on production HTTP, PostgreSQL and
+// SMTP/Maildir boundaries while a human or browser driver performs the
+// purpose-bound notification-contact replacement. It never reads a code from
+// IAM storage and does not share the ordinary console fixture's database.
+func TestIAMNotificationContactConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_NOTIFICATION_CONSOLE_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_NOTIFICATION_CONSOLE_BROWSER=1 for the bounded notification browser fixture")
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessNotificationBrowser)
+}
+
 func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) {
 	variable, prefix := authorityProcessDSN, "matrix_authority_process_"
 	if mode == authorityProcessCapacity {
 		variable, prefix = "MATRIX_IAM_CAPACITY_POSTGRES_TEST_DSN", "matrix_authority_process_capacity_"
 	} else if mode == authorityProcessPasswordCapacity {
 		variable, prefix = "MATRIX_IAM_PASSWORD_HISTORY_CAPACITY_POSTGRES_TEST_DSN", "matrix_authority_process_password_capacity_"
+	} else if mode == authorityProcessNotificationBrowser {
+		variable, prefix = notificationBrowserProcessDSN, "matrix_authority_process_notification_browser_"
 	}
 	dsn := os.Getenv(variable)
 	if dsn == "" {
@@ -2329,7 +2348,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		// observation harness; sample count, password cost and product request
 		// deadlines remain unchanged.
 		duration = 8 * time.Minute
-	} else if mode == authorityProcessBrowser {
+	} else if mode == authorityProcessBrowser || mode == authorityProcessNotificationBrowser {
 		duration = 30 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
@@ -2352,11 +2371,14 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	assertCleanSchemas(t, ctx, admin)
 	applyPlatformSchemas(t, ctx, admin)
 	createProcessLogins(t, ctx, admin)
+	if mode == authorityProcessNotificationBrowser {
+		createProcessLogin(t, ctx, admin, iamNotificationLogin, "matrix_iam_notification_worker")
+	}
 	assertCrossSchemaIsolation(t, ctx, adminConfig)
 	seedProcessExecutionProfile(t, ctx, adminConfig)
 
 	temporary := t.TempDir()
-	binaries := buildAuthorityBinaries(t, ctx, root, temporary, mode == authorityProcessFull)
+	binaries := buildAuthorityBinaries(t, ctx, root, temporary, mode == authorityProcessFull, mode == authorityProcessNotificationBrowser)
 	bootstrap := processBootstrap(t)
 	bootstrapBytes, err := iamv1.EncodeBootstrapDocument(bootstrap)
 	if err != nil {
@@ -2662,6 +2684,31 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	)
 	if mode == authorityProcessBrowser {
 		runIAMConsoleBrowser(t, ctx, admin, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
+		return
+	}
+	if mode == authorityProcessNotificationBrowser {
+		channel, receive, smtpContainer := notificationBrowserSMTP(t, bootstrap)
+		encodedChannel, err := iamv1.EncodeSecurityMailSMTPChannel(channel)
+		if err != nil {
+			t.Fatal("encode notification browser SMTP channel", err)
+		}
+		channelPath := writeProtectedFile(t, temporary, "notification-browser-smtp.json", encodedChannel)
+		clear(encodedChannel)
+		notificationDSNPath := writeProtectedFile(t, temporary, "notification-browser-dsn",
+			[]byte(runtimeDSN(t, adminConfig, iamNotificationLogin, processDBPassword)))
+		notificationAddress := freeAddress(t)
+		notificationProcess := start(binaries.notification, []string{
+			"MATRIX_IAM_NOTIFICATION_DATABASE_DSN_FILE=" + notificationDSNPath,
+			"MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE=" + channelPath,
+			"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE=" + iamEmailKeyPath,
+			"MATRIX_IAM_NOTIFICATION_WORKER_ID=notification-browser-mail",
+			"MATRIX_IAM_NOTIFICATION_LISTEN_ADDRESS=" + notificationAddress,
+		})
+		waitHTTPStatus(t, ctx, notificationProcess, "http://"+notificationAddress+"/ready", http.StatusOK)
+		assertRuntimeProcessLogins(t, ctx, admin, iamNotificationLogin)
+		sensitive = append(sensitive, "smtp-test-password")
+		sensitive = append(sensitive, runIAMNotificationConsoleBrowser(t, ctx, admin, root, temporary, iamEndpoint, auditEndpoint,
+			paasEndpoint, adminLogin.Credential, smtpContainer, receive, start)...)
 		return
 	}
 	platformDecisions := []iamv1.AuthorizationDecision{
@@ -3985,6 +4032,7 @@ type binarySet struct {
 	localRecovery  string
 	audit          string
 	dispatcher     string
+	notification   string
 	paas           string
 	paasDispatcher string
 }
@@ -4023,19 +4071,55 @@ func runIAMConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn,
 			t.Fatal("browser fixture could not publish a real boundary policy")
 		}
 	}
+	server, ui, finish := startIAMBrowserFixture(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer server.Close()
+	t.Logf("BROWSER_FIXTURE url=%s/console/access finish=%s member=%s; synthetic credentials are the existing changed test constants", server.URL, finish, member.ID)
+	waitIAMBrowserFinish(t, ctx, ui, finish)
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	waitAllPaaSOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
+	sets, removals := 0, 0
+	for _, record := range page.Records {
+		if record.Event.Target.ID != string(member.ID) {
+			continue
+		}
+		switch record.Event.Action {
+		case auditv1.ActionIAMUserPermissionBoundarySet:
+			sets++
+		case auditv1.ActionIAMUserPermissionBoundaryRemoved:
+			removals++
+		}
+	}
+	if sets != 2 || removals != 1 {
+		t.Fatalf("observed boundary facts set=%d remove=%d, want set+replace+remove", sets, removals)
+	}
+	response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/users/"+string(member.ID)+"/permission-boundary", bearer, nil)
+	var boundary iamv1.UserPermissionBoundary
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &boundary) != nil || iamv1.ValidateUserPermissionBoundary(boundary) != nil || boundary.Policy != nil {
+		t.Fatal("browser removal did not leave an explicit unbound user")
+	}
+	if verification := verifyAudit(t, auditEndpoint, bearer); verification.State != auditv1.VerificationVerified {
+		t.Fatal("browser facts failed the real Audit chain verification")
+	}
+	t.Log("browser fixture finished with real set/replace/remove facts; visual assertions belong to recorded browser observations")
+}
+
+func startIAMBrowserFixture(t *testing.T, ctx context.Context, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint string,
+	start func(string, []string) *childProcess) (*httptest.Server, *childProcess, string) {
+	t.Helper()
 	uiAddress := freeAddress(t)
 	uiBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-ui", "./app/ui/paas/cmd/matrix-paas-ui")
 	ui := start(uiBinary, []string{"MATRIX_PAAS_UI_LISTEN_ADDRESS=" + uiAddress})
 	waitHTTPStatus(t, ctx, ui, "http://"+uiAddress+"/ready", http.StatusOK)
 
-	// Same-origin loopback routing only. No credentials/selectors are injected;
-	// actual services enforce every request. This is not production APISIX.
+	// Same-origin loopback routing only. No credentials or account selectors
+	// are injected; each production authority still authenticates the request.
 	mux := http.NewServeMux()
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxConnsPerHost = 8
 	transport.MaxIdleConnsPerHost = 8
 	transport.ResponseHeaderTimeout = 15 * time.Second
-	defer transport.CloseIdleConnections()
+	t.Cleanup(transport.CloseIdleConnections)
 	for _, route := range []struct{ prefix, strip, endpoint string }{
 		{"/api/iam/", "/api/iam", iamEndpoint},
 		{"/api/audit/", "/api/audit", auditEndpoint},
@@ -4068,9 +4152,11 @@ func runIAMConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn,
 	server.Config.WriteTimeout = 30 * time.Second
 	server.Config.IdleTimeout = 30 * time.Second
 	server.Start()
-	defer server.Close()
-	finish := filepath.Join(temporary, "browser-finished")
-	t.Logf("BROWSER_FIXTURE url=%s/console/access finish=%s member=%s; synthetic credentials are the existing changed test constants", server.URL, finish, member.ID)
+	return server, ui, filepath.Join(temporary, "browser-finished")
+}
+
+func waitIAMBrowserFinish(t *testing.T, ctx context.Context, ui *childProcess, finish string) {
+	t.Helper()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -4088,37 +4174,261 @@ func runIAMConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn,
 			if err != nil || !info.Mode().IsRegular() {
 				t.Fatal("invalid browser completion marker")
 			}
-			goto finished
+			return
 		}
 	}
-finished:
+}
+
+func runIAMNotificationConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn, root, temporary,
+	iamEndpoint, auditEndpoint, paasEndpoint, bearer, smtpContainer string,
+	receive func(string, string) ([]byte, string), start func(string, []string) *childProcess) []string {
+	t.Helper()
+	const (
+		loginName       = "browser.notification"
+		previousAddress = "previous@matrix.test"
+		currentAddress  = "current@matrix.test"
+	)
+	secrets := []string{}
+	secret := func(value iamv1.Secret) string {
+		material := value.CopyBytes()
+		defer clear(material)
+		secrets = append(secrets, string(material))
+		return string(material)
+	}
+	call := func(method, path, credential string, body, result any, status int) {
+		t.Helper()
+		response := performJSON(t, method, iamEndpoint+path, credential, body)
+		if response.Status != status || (result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body), result) != nil) {
+			t.Fatalf("notification browser setup %s %s status=%d want=%d", method, path, response.Status, status)
+		}
+	}
+	user := createIAMUser(t, iamEndpoint, bearer, loginName, "Notification browser operator", initialDeveloperPassword, "notification-browser-create")
+	first := loginIAM(t, iamEndpoint, loginName+"@organization-process", initialDeveloperPassword, "notification-browser-login")
+	secrets = append(secrets, first.Credential)
+	changePasswordIAM(t, iamEndpoint, first.Credential, initialDeveloperPassword, changedDeveloperPassword, "notification-browser-password")
+
+	var firstVerification iamv1.NotificationContactVerification
+	call(http.MethodPost, "/v1/auth/notification-contact/verifications", first.Credential,
+		map[string]string{"email": previousAddress, "password": changedDeveloperPassword, "requestId": "notification-browser-first-contact"},
+		&firstVerification, http.StatusOK)
+	var firstNotificationID string
+	if err := database.QueryRow(ctx, `SELECT notification_id FROM iam.notification_contact_verifications WHERE tenant_id=$1 AND id=$2`,
+		user.AccountID, firstVerification.ID).Scan(&firstNotificationID); err != nil {
+		t.Fatal("read notification browser first message", err)
+	}
+	body, firstMessageID := receive(firstNotificationID, previousAddress)
+	match := regexp.MustCompile(`(?m)^Verification code: ([0-9]{8})\r?$`).FindSubmatch(body)
+	if len(match) != 2 {
+		t.Fatal("notification browser first mailbox lacks the exact code")
+	}
+	firstCode := string(match[1])
+	secrets = append(secrets, firstCode)
+	clear(body)
+	call(http.MethodPost, "/v1/auth/notification-contact/verifications/"+firstVerification.ID+":confirm", first.Credential,
+		map[string]string{"requestId": "notification-browser-first-confirm", "code": firstCode}, nil, http.StatusOK)
+	var firstNoticeID string
+	if err := database.QueryRow(ctx, `SELECT id FROM iam.security_notifications WHERE tenant_id=$1 AND verification_id=$2 AND kind='CONTACT_VERIFIED'`,
+		user.AccountID, firstVerification.ID).Scan(&firstNoticeID); err != nil {
+		t.Fatal("read notification browser first-address notice", err)
+	}
+	body, firstNoticeMessageID := receive(firstNoticeID, previousAddress)
+	if firstNoticeMessageID == firstMessageID || bytes.Contains(body, []byte("Verification code:")) {
+		t.Fatal("notification browser first-address notice reused verification material")
+	}
+	clear(body)
+
+	var enrollment iamv1.StartTOTPEnrollmentResponse
+	call(http.MethodPost, "/v1/auth/totp/enrollments", first.Credential,
+		map[string]any{"requestId": "notification-browser-factor", "password": changedDeveloperPassword, "expectedFactorRevision": 1},
+		&enrollment, http.StatusOK)
+	if enrollment.Provisioning == nil {
+		t.Fatal("notification browser did not receive one-time TOTP provisioning")
+	}
+	seed := secret(enrollment.Provisioning.Seed)
+	secret(enrollment.Provisioning.URI)
+	secrets = append(secrets, url.QueryEscape(seed))
+	totpPath := writeProtectedFile(t, temporary, "notification-browser-totp-seed", []byte(seed))
+	code, _ := processTOTPCode(t, ctx, database, seed, -1, true)
+	secrets = append(secrets, code)
+	var bound iamv1.ConfirmTOTPEnrollmentResponse
+	call(http.MethodPost, "/v1/auth/totp/enrollments/"+enrollment.Enrollment.ID+":confirm", first.Credential,
+		map[string]string{"requestId": "notification-browser-factor-confirm", "code": code}, &bound, http.StatusOK)
+	for _, recoveryCode := range bound.RecoveryCodes {
+		secret(recoveryCode)
+	}
+
+	server, ui, finish := startIAMBrowserFixture(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer server.Close()
+	t.Logf("BROWSER_FIXTURE url=%s/console/access/settings finish=%s login=%s@organization-process totp_seed_file=%s smtp_container=%s current_maildir=/home/current/Maildir; use the existing changed developer password",
+		server.URL, finish, loginName, totpPath, smtpContainer)
+	waitIAMBrowserFinish(t, ctx, ui, finish)
+
+	var email, replacementID string
+	var resourceVersion uint64
+	if err := database.QueryRow(ctx, `SELECT email,resource_version,verification_id FROM iam.notification_contacts WHERE tenant_id=$1 AND user_id=$2`,
+		user.AccountID, user.ID).Scan(&email, &resourceVersion, &replacementID); err != nil || email != currentAddress || resourceVersion != 2 {
+		t.Fatal("browser did not atomically advance the notification contact from N to N+1", err)
+	}
+	var purpose, state string
+	if err := database.QueryRow(ctx, `SELECT purpose,state FROM iam.notification_contact_verifications WHERE tenant_id=$1 AND id=$2 AND user_id=$3`,
+		user.AccountID, replacementID, user.ID).Scan(&purpose, &state); err != nil || purpose != string(iamv1.NotificationContactReplacement) || state != "VERIFIED" {
+		t.Fatal("browser replacement verification is not the committed REPLACEMENT intent", err)
+	}
+	messageIDs := map[string]string{}
+	rows, err := database.Query(ctx, `SELECT kind,id FROM iam.security_notifications WHERE tenant_id=$1 AND verification_id=$2
+		AND kind IN ('ADDRESS_VERIFICATION','CONTACT_REPLACED_PREVIOUS','CONTACT_REPLACED_CURRENT') ORDER BY kind`, user.AccountID, replacementID)
+	if err != nil {
+		t.Fatal("read notification browser replacement messages", err)
+	}
+	for rows.Next() {
+		var kind, id string
+		if err := rows.Scan(&kind, &id); err != nil {
+			rows.Close()
+			t.Fatal("scan notification browser replacement messages", err)
+		}
+		messageIDs[kind] = id
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal("iterate notification browser replacement messages", err)
+	}
+	rows.Close()
+	if len(messageIDs) != 3 {
+		t.Fatal("notification browser did not create exactly the replacement code and two historical alerts")
+	}
+	verificationBody, verificationMessageID := receive(messageIDs["ADDRESS_VERIFICATION"], currentAddress)
+	if len(regexp.MustCompile(`(?m)^Verification code: [0-9]{8}\r?$`).Find(verificationBody)) == 0 {
+		t.Fatal("replacement verification was not observed in the current mailbox")
+	}
+	clear(verificationBody)
+	previousBody, previousMessageID := receive(messageIDs["CONTACT_REPLACED_PREVIOUS"], previousAddress)
+	currentBody, currentMessageID := receive(messageIDs["CONTACT_REPLACED_CURRENT"], currentAddress)
+	if verificationMessageID == previousMessageID || verificationMessageID == currentMessageID || previousMessageID == currentMessageID ||
+		bytes.Contains(previousBody, []byte("Verification code:")) || bytes.Contains(currentBody, []byte("Verification code:")) {
+		t.Fatal("replacement alerts reused verification material or recipient identity")
+	}
+	clear(previousBody)
+	clear(currentBody)
+	var accepted int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.security_notifications WHERE tenant_id=$1 AND verification_id=$2
+		AND state='ACCEPTED' AND attempts=1 AND last_outcome='ACCEPTED' AND last_smtp_code=250`, user.AccountID, replacementID).Scan(&accepted); err != nil || accepted != 3 {
+		t.Fatal("notification browser dispatcher did not persist three exact DATA 250 observations", err)
+	}
 	waitAllIAMOutboxDelivered(t, ctx, database)
-	waitAllPaaSOutboxDelivered(t, ctx, database)
 	page := queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
-	sets, removals := 0, 0
+	replaced := 0
 	for _, record := range page.Records {
-		if record.Event.Target.ID != string(member.ID) {
-			continue
-		}
-		switch record.Event.Action {
-		case auditv1.ActionIAMUserPermissionBoundarySet:
-			sets++
-		case auditv1.ActionIAMUserPermissionBoundaryRemoved:
-			removals++
+		if record.Event.Action == auditv1.ActionIAMNotificationContactReplaced && record.Event.Target.ID == string(user.ID) {
+			replaced++
 		}
 	}
-	if sets != 2 || removals != 1 {
-		t.Fatalf("observed boundary facts set=%d remove=%d, want set+replace+remove", sets, removals)
+	if replaced != 1 || verifyAudit(t, auditEndpoint, bearer).State != auditv1.VerificationVerified {
+		t.Fatal("notification browser replacement lacks one verified Audit fact")
 	}
-	response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/users/"+string(member.ID)+"/permission-boundary", bearer, nil)
-	var boundary iamv1.UserPermissionBoundary
-	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &boundary) != nil || iamv1.ValidateUserPermissionBoundary(boundary) != nil || boundary.Policy != nil {
-		t.Fatal("browser removal did not leave an explicit unbound user")
+	t.Log("notification browser fixture finished: old verified address -> PASSWORD_TOTP Session -> purpose-bound StepUp -> current Maildir code -> N+1 contact -> both historical alerts")
+	return secrets
+}
+
+func notificationBrowserSMTP(t *testing.T, bootstrap iamv1.BootstrapDocument) (iamv1.SecurityMailSMTPChannel, func(string, string) ([]byte, string), string) {
+	t.Helper()
+	container, task := os.Getenv("MATRIX_IAM_SMTP_POSTFIX_CONTAINER"), os.Getenv("MATRIX_IAM_SMTP_POSTFIX_TASK")
+	if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(container) || !regexp.MustCompile(`^iam012-smtp-[a-f0-9]{32}$`).MatchString(task) {
+		t.Fatal("notification browser requires its own fixed Postfix container and iam012 task identity")
 	}
-	if verification := verifyAudit(t, auditEndpoint, bearer); verification.State != auditv1.VerificationVerified {
-		t.Fatal("browser facts failed the real Audit chain verification")
+	docker := func(arguments ...string) []byte {
+		t.Helper()
+		commandContext, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		output, err := exec.CommandContext(commandContext, "docker", arguments...).Output()
+		if err != nil || len(output) > 65536 {
+			t.Fatal("notification browser SMTP fixture observation failed")
+		}
+		return output
 	}
-	t.Log("browser fixture finished with real set/replace/remove facts; visual assertions belong to recorded browser observations")
+	dockerContext := strings.TrimSpace(string(docker("context", "show")))
+	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`).MatchString(dockerContext) {
+		t.Fatal("invalid local Docker context")
+	}
+	endpoint := strings.TrimSpace(string(docker("context", "inspect", dockerContext, "--format", "{{.Endpoints.docker.Host}}")))
+	if !strings.HasPrefix(endpoint, "npipe:///") && !strings.HasPrefix(endpoint, "unix:///") {
+		t.Fatal("remote notification browser SMTP fixture forbidden")
+	}
+	localDocker := func(arguments ...string) []byte {
+		t.Helper()
+		return docker(append([]string{"--context", dockerContext}, arguments...)...)
+	}
+	var fixture struct {
+		ID                          string
+		Running                     bool
+		Labels                      map[string]string
+		NanoCPUs, Memory, PidsLimit int64
+		Ports                       map[string][]struct{ HostIP, HostPort string }
+	}
+	projection := `{"ID":{{json .Id}},"Running":{{json .State.Running}},"Labels":{{json .Config.Labels}},"NanoCPUs":{{json .HostConfig.NanoCpus}},"Memory":{{json .HostConfig.Memory}},"PidsLimit":{{json .HostConfig.PidsLimit}},"Ports":{{json .NetworkSettings.Ports}}}`
+	if json.Unmarshal(localDocker("inspect", "--format", projection, container), &fixture) != nil {
+		t.Fatal("invalid notification browser SMTP fixture metadata")
+	}
+	ports := fixture.Ports["25/tcp"]
+	if fixture.ID != container || !fixture.Running || fixture.Labels["matrix.task"] != task || fixture.Labels["matrix.owner"] != "feat-iam" ||
+		fixture.NanoCPUs <= 0 || fixture.NanoCPUs > 2_000_000_000 || fixture.Memory <= 0 || fixture.Memory > 1024*1024*1024 ||
+		fixture.PidsLimit <= 0 || fixture.PidsLimit > 128 || len(ports) != 1 || ports[0].HostIP != "127.0.0.1" {
+		t.Fatal("notification browser SMTP fixture must be isolated, bounded and loopback-only")
+	}
+	port, err := strconv.ParseUint(ports[0].HostPort, 10, 16)
+	if err != nil || port == 0 {
+		t.Fatal("invalid notification browser SMTP port")
+	}
+	certificate := localDocker("exec", container, "head", "-c", "16385", "/etc/matrix-smtp-test/server.crt")
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(certificate) {
+		t.Fatal("invalid notification browser SMTP public trust")
+	}
+	digest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel := iamv1.SecurityMailSMTPChannel{APIVersion: iamv1.APIVersion, Kind: "SecurityMailSMTPChannel", Purpose: iamv1.SecurityMailSubmissionPurpose,
+		Scope: iamv1.SecurityMailInstallationScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest}, Host: "127.0.0.1", Port: uint16(port),
+		TLSMode: iamv1.SecurityMailSTARTTLS, Username: "smtp-user@matrix.test", Password: processSecret(t, "smtp-test-password"),
+		From: "sender@matrix.test", TrustedCAPEM: string(certificate)}
+	receive := func(reference, recipient string) ([]byte, string) {
+		t.Helper()
+		mailbox, ok := map[string]string{"previous@matrix.test": "previous", "current@matrix.test": "current"}[recipient]
+		if !ok {
+			t.Fatal("unexpected notification browser mailbox recipient")
+		}
+		maildir := "/home/" + mailbox + "/Maildir"
+		mailPath := regexp.MustCompile(`^` + regexp.QuoteMeta(maildir) + `/(new|cur)/[a-zA-Z0-9_.,:=+-]+$`)
+		referenceLine := regexp.MustCompile(`(?m)^Notification reference: ` + regexp.QuoteMeta(reference) + `\r?$`)
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			files := strings.Fields(string(localDocker("exec", container, "find", maildir+"/new", maildir+"/cur", "-maxdepth", "1", "-type", "f", "-print")))
+			if len(files) > 100 {
+				t.Fatal("notification browser mailbox bound exceeded")
+			}
+			for _, path := range files {
+				if !mailPath.MatchString(path) {
+					t.Fatal("unexpected notification browser mailbox path")
+				}
+				encoded := localDocker("exec", container, "head", "-c", "16385", "--", path)
+				if len(encoded) > 16384 || !referenceLine.Match(encoded) {
+					clear(encoded)
+					continue
+				}
+				message, err := mail.ReadMessage(bytes.NewReader(encoded))
+				if err != nil || message.Header.Get("To") != recipient || message.Header.Get("From") != "sender@matrix.test" ||
+					message.Header.Get("Received") == "" || message.Header.Get("Message-ID") == "" {
+					clear(encoded)
+					t.Fatal("invalid notification browser mail identity")
+				}
+				return encoded, message.Header.Get("Message-ID")
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Fatal("notification browser SMTP acceptance did not reach the exact Maildir")
+		return nil, ""
+	}
+	return channel, receive, container
 }
 
 type iamCapacityCall struct {
@@ -5675,6 +5985,7 @@ func buildAuthorityBinaries(
 	root string,
 	temporary string,
 	withAccessAnalysis bool,
+	withNotification bool,
 ) binarySet {
 	t.Helper()
 	build := func(name, packagePath string) string {
@@ -5690,6 +6001,9 @@ func buildAuthorityBinaries(
 	}
 	if withAccessAnalysis {
 		binaries.accessAnalysis = build("matrix-iam-access-analysis-worker", "./app/service/iam/cmd/matrix-iam-access-analysis-worker")
+	}
+	if withNotification {
+		binaries.notification = build("matrix-iam-notification-dispatcher", "./app/service/iam/cmd/matrix-iam-notification-dispatcher")
 	}
 	return binaries
 }
