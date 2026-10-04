@@ -13,7 +13,8 @@ import type { AuthenticatorState, NotificationContact } from "../domain/personal
 import styles from "./MfaPreviewExperience.module.css";
 
 type ReplacementError = "start" | "startUnknown" | "inspect" | "proofRejected" | "proofUnknown"
-  | "verificationUnknown" | "confirmRejected" | "confirmBusy" | "confirmUnknown" | null;
+  | "proofBusy" | "proofInvalid" | "verificationBusy" | "verificationUnknown"
+  | "confirmRejected" | "confirmBusy" | "confirmUnknown" | null;
 
 function localTime(value: string, format: ReturnType<typeof useFormatter>) {
   return format.dateTime(new Date(value), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -23,7 +24,7 @@ export function LiveNotificationContactReplacement({ client, contact, factor, on
   client: PersonalSecurityClient;
   contact: Extract<NotificationContact, { state: "VERIFIED" }>;
   factor: AuthenticatorState;
-  onCommitted(): Promise<void>;
+  onCommitted(): Promise<boolean>;
 }) {
   const t = useTranslations("PersonalSecurity.contact.replacement");
   const auth = useTranslations("Auth");
@@ -45,12 +46,20 @@ export function LiveNotificationContactReplacement({ client, contact, factor, on
   const canStart = client.notificationReplacementAvailable && factor.enrollmentState === "BOUND" && !contact.pendingVerificationId;
 
   async function finish() {
-    await onCommitted();
+    if (!await onCommitted()) return false;
     client.clearNotificationReplacementProgress();
     setDrafting(false);
     setEmail("");
     setEmailCode("");
     setError(null);
+    return true;
+  }
+
+  async function refreshCommitted() {
+    setBusy(true); setError(null);
+    try {
+      if (!await finish()) setError("inspect");
+    } finally { setBusy(false); }
   }
 
   async function start(event: FormEvent<HTMLFormElement>) {
@@ -91,10 +100,12 @@ export function LiveNotificationContactReplacement({ client, contact, factor, on
       if (failure instanceof NotificationReplacementProofRejected) {
         setError("proofRejected");
         queueMicrotask(() => passwordRef.current?.focus());
-      } else if (!(failure instanceof HttpProblem) || failure.status === 409 || failure.status >= 500) {
-        setError(null);
+      } else if (failure instanceof HttpProblem && failure.status === 429) {
+        setError("proofBusy");
+      } else if (failure instanceof HttpProblem && [400, 413, 415, 422].includes(failure.status)) {
+        setError("proofInvalid");
       } else {
-        setError("proofRejected");
+        setError(null);
       }
     } finally {
       setPassword(""); setTotpCode(""); setBusy(false);
@@ -104,7 +115,7 @@ export function LiveNotificationContactReplacement({ client, contact, factor, on
   async function startVerification() {
     setBusy(true); setError(null);
     try { await client.startNotificationReplacementVerification(); }
-    catch { setError(null); }
+    catch (failure) { setError(failure instanceof HttpProblem && failure.status === 429 ? "verificationBusy" : null); }
     finally { setBusy(false); }
   }
 
@@ -112,7 +123,7 @@ export function LiveNotificationContactReplacement({ client, contact, factor, on
     setBusy(true); setError(null);
     try {
       const verification = await client.inspectNotificationReplacementVerification();
-      if (verification.state === "VERIFIED") await finish();
+      if (verification.state === "VERIFIED" && !await finish()) setError("inspect");
     } catch { setError("inspect"); }
     finally { setBusy(false); }
   }
@@ -135,7 +146,7 @@ export function LiveNotificationContactReplacement({ client, contact, factor, on
   }
 
   if (!progress && !drafting) return <div className={styles.stateGuide}>
-    <div><h4>{t("title")}</h4><p>{t(canStart ? "ready" : client.notificationReplacementAvailable ? "factorRequired" : "unavailable")}</p></div>
+    <div><h4>{t("title")}</h4><p>{t(contact.pendingVerificationId ? "pendingElsewhere" : canStart ? "ready" : client.notificationReplacementAvailable ? "factorRequired" : "unavailable")}</p></div>
     <div className={styles.flowActions}><Button disabled={!canStart} onClick={() => setDrafting(true)} variant="secondary">{t("start")}</Button></div>
   </div>;
 
@@ -178,6 +189,7 @@ export function LiveNotificationContactReplacement({ client, contact, factor, on
       <div className={styles.flowActions}><Button disabled={busy} onClick={() => void inspectVerification()} type="button" variant="secondary"><RefreshCcw aria-hidden="true" />{t("refresh")}</Button><Button disabled={busy || emailCode.length !== 8} type="submit">{busy ? t("working") : t("confirm")}</Button></div>
     </form> : null}
     {progress.state === "CONFIRM_UNKNOWN" ? <><Alert status="warning">{t("confirmUnknown")}</Alert><div className={styles.flowActions}><Button disabled={busy} onClick={() => void inspectVerification()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("inspectConfirmation")}</Button></div></> : null}
+    {progress.state === "COMPLETED" ? <><Alert status="success">{t("completed")}</Alert><div className={styles.flowActions}><Button disabled={busy} onClick={() => void refreshCommitted()} variant="secondary"><RefreshCcw aria-hidden="true" />{busy ? t("working") : t("reloadCurrent")}</Button></div></> : null}
     {progress.state === "EXPIRED" ? <><Alert status="warning">{t("expired")}</Alert><div className={styles.flowActions}><Button disabled={busy} onClick={() => client.clearNotificationReplacementProgress()} variant="secondary">{t("finish")}</Button></div></> : null}
   </div>;
 }

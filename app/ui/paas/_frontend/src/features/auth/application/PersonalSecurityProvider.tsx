@@ -36,7 +36,7 @@ export type PersonalSecurityClient = {
   startNotificationReplacement(command: { email: string; expectedResourceVersion: number; expectedFactorRevision: number }): Promise<SecurityStepUp>;
   retryNotificationReplacementStepUp(): Promise<SecurityStepUp>;
   inspectNotificationReplacementStepUp(): Promise<SecurityStepUp>;
-  proveNotificationReplacement(command: { password: string; code: string }): Promise<NotificationContactReplacementVerification>;
+  proveNotificationReplacement(command: { password: string; code: string }): Promise<SecurityStepUp>;
   startNotificationReplacementVerification(): Promise<NotificationContactReplacementVerification>;
   inspectNotificationReplacementVerification(): Promise<NotificationContactReplacementVerification>;
   confirmNotificationReplacement(code: string): Promise<NotificationContactReplacementVerification>;
@@ -195,7 +195,9 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
         replaceNotificationProgress(intent.requestId, (value) => ({ ...value, state: verification.state === "PENDING" ? "PENDING_CONFIRMATION" : verification.state === "VERIFIED" ? "COMPLETED" : "EXPIRED", stepUp, verification }));
         return verification;
       } catch (failure) {
-        if (failure instanceof HttpProblem && [403, 404, 422].includes(failure.status)) {
+        if (failure instanceof HttpProblem && failure.status === 429) {
+          replaceNotificationProgress(intent.requestId, (value) => ({ ...value, state: "PROVED", stepUp }));
+        } else if (failure instanceof HttpProblem && [403, 404, 422].includes(failure.status)) {
           replaceNotificationProgress(intent.requestId, (value) => ({ ...value, state: "EXPIRED" }));
         }
         throw failure;
@@ -323,7 +325,7 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
           throw new Error("INVALID_IAM_STATE");
         }
         replaceNotificationProgress(intent.requestId, (value) => ({ ...value, state: "PROVED", stepUp }));
-        return startReplacementVerification(intent, stepUp);
+        return stepUp;
       },
       async startNotificationReplacementVerification() {
         const intent = requireNotificationReplacement();

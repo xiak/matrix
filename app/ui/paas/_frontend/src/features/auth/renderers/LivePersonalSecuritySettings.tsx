@@ -40,6 +40,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
   const passwordId = useId();
   const totpCodeId = useId();
   const requestRevision = useRef(0);
+  const hasTrustedSecurityState = useRef(false);
   const contactRequest = useRef(requestToken("ui-security-contact-"));
   const contactConfirmRequest = useRef(requestToken("ui-security-contact-confirm-"));
   const enrollmentRequest = useRef(requestToken("ui-totp-enroll-"));
@@ -66,25 +67,31 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
   }, [client]);
 
   const load = useCallback(async () => {
-    if (!clientScope) return;
+    if (!clientScope) return false;
     const activeClient = clientRef.current;
-    if (!activeClient) return;
+    if (!activeClient) return false;
     const revision = ++requestRevision.current;
     try {
       const [nextContact, nextFactor] = await Promise.all([activeClient.notificationContact(), activeClient.authenticatorState()]);
-      if (revision !== requestRevision.current) return;
+      if (revision !== requestRevision.current) return false;
       let nextVerification: NotificationContactVerification | null = null;
       if (nextContact.state === "NONE" && nextContact.pendingVerificationId) {
         nextVerification = await activeClient.notificationVerification(nextContact.pendingVerificationId);
-        if (revision !== requestRevision.current) return;
+        if (revision !== requestRevision.current) return false;
       }
       setContact(nextContact);
       setVerification(nextVerification?.state === "PENDING" ? nextVerification : null);
       setFactor(nextFactor);
       setError(null);
       setLoadState("ready");
+      hasTrustedSecurityState.current = true;
+      return true;
     } catch {
-      if (revision === requestRevision.current) { setLoadState("error"); setError("load"); }
+      if (revision === requestRevision.current) {
+        if (!hasTrustedSecurityState.current) setLoadState("error");
+        setError("load");
+      }
+      return false;
     }
   }, [clientScope]);
 

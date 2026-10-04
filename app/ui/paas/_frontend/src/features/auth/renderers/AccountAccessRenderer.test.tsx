@@ -20,6 +20,21 @@ const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
 const credential = "account-test-only-memory-credential";
 const timestamp = "2026-09-11T08:00:00Z";
+function replacementFixtures() {
+  const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "old@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+  const pendingStepUp: SecurityStepUp = {
+    id: "step-up-replace-contact", requestId: "replace-contact-request", operation: "NOTIFICATION_CONTACT_REPLACE",
+    expectedFactorRevision: 3, notificationContact: { expectedResourceVersion: 1, email: "new@example.com" },
+    state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z", provedAt: null, consumedAt: null
+  };
+  const pendingVerification = {
+    id: "verification-replace-contact", accountId: account.id, userId: rootUser.id, requestId: "replace-contact-request",
+    purpose: "REPLACEMENT" as const, expectedResourceVersion: 1, email: "new@example.com", state: "PENDING" as const,
+    issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z", completedAt: null,
+    delivery: { state: "ACCEPTED" as const, attempts: 1, lastOutcome: "ACCEPTED" as const, lastSmtpCode: 250, updatedAt: timestamp }
+  };
+  return { verified, pendingStepUp, pendingVerification };
+}
 const account: Account = { id: "tenant-a", displayName: "Team A", status: "ACTIVE", rootIdentity: { principalId: "primary-a", loginName: "admin" }, loginAlias: null, resourceVersion: 1 };
 const rootUser: User = { id: "primary-a", accountId: "tenant-a", loginName: "admin", displayName: "Account owner", status: "ACTIVE", resourceVersion: 2, mustChangePassword: false };
 const tenantPolicy: AccountPolicy = { id: "system.paas-viewer", management: "SYSTEM", accountId: null, displayName: "ReadOnlyAccess", scope: "TENANT", status: "ACTIVE", defaultVersionId: "version-1", resourceVersion: 3, createdAt: timestamp, updatedAt: timestamp };
@@ -1231,7 +1246,8 @@ describe("account access", () => {
     await user.click(within(securityRegion).getByRole("button", { name: "继续验证本人身份" }));
     await user.type(await within(securityRegion).findByLabelText("当前密码"), "Private-Password-49!");
     await user.type(within(securityRegion).getByLabelText("6 位动态验证码"), "123456");
-    await user.click(within(securityRegion).getByRole("button", { name: "验证并发送邮箱验证码" }));
+    await user.click(within(securityRegion).getByRole("button", { name: "验证本人身份" }));
+    await user.click(await within(securityRegion).findByRole("button", { name: "发送到新地址" }));
     expect(await within(securityRegion).findByText(/不代表收件人已收到或阅读/)).toBeTruthy();
     await user.type(within(securityRegion).getByLabelText("新地址的 8 位验证码"), "12345678");
     await user.click(within(securityRegion).getByRole("button", { name: "确认并更换地址" }));
@@ -1244,6 +1260,219 @@ describe("account access", () => {
     expect(replacement.startVerification).toHaveBeenCalledTimes(1);
     expect(replacement.confirmVerification).toHaveBeenCalledWith(credential, "verification-replace-contact",
       expect.objectContaining({ expectedResourceVersion: 1, email: "new@example.com" }), expect.objectContaining({ code: "12345678" }));
+  });
+
+  it("keeps a separately pending replacement locked to its original intent context", async () => {
+    const verified = {
+      accountId: account.id,
+      userId: rootUser.id,
+      state: "VERIFIED" as const,
+      resourceVersion: 1,
+      email: "old@example.com",
+      verifiedAt: timestamp,
+      pendingVerificationId: "verification-pending-elsewhere"
+    };
+    const replacement = {
+      startStepUp: vi.fn(), stepUpByRequest: vi.fn(), verifyStepUp: vi.fn(),
+      startVerification: vi.fn(), verification: vi.fn(), confirmVerification: vi.fn()
+    };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 3, factorId: "factor-current" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), notificationReplacement: replacement,
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+
+    expect(await within(securityRegion).findByText(/IAM 已记录一条待确认的替换/)).toBeTruthy();
+    expect((within(securityRegion).getByRole("button", { name: "更换地址" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(securityRegion).queryByLabelText("目标地址")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(replacement.startStepUp).not.toHaveBeenCalled();
+  });
+
+  it("reports busy step-up capacity without claiming that the password or authenticator code was rejected", async () => {
+    const { verified, pendingStepUp } = replacementFixtures();
+    const replacement = {
+      startStepUp: vi.fn(async (_credential: string, command: { requestId: string }) => ({ ...pendingStepUp, requestId: command.requestId })),
+      stepUpByRequest: vi.fn(),
+      verifyStepUp: vi.fn().mockRejectedValue(new HttpProblem(429, "iam.authentication.busy")),
+      startVerification: vi.fn(), verification: vi.fn(), confirmVerification: vi.fn()
+    };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 3, factorId: "factor-current" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), notificationReplacement: replacement,
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByText("old@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "更换地址" }));
+    await user.type(within(securityRegion).getByLabelText("目标地址"), "new@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "继续验证本人身份" }));
+    await user.type(await within(securityRegion).findByLabelText("当前密码"), "Private-Password-49!");
+    await user.type(within(securityRegion).getByLabelText("6 位动态验证码"), "123456");
+    await user.click(within(securityRegion).getByRole("button", { name: "验证本人身份" }));
+
+    expect(await within(securityRegion).findByText(/认证容量暂时繁忙/)).toBeTruthy();
+    expect(within(securityRegion).queryByText(/当前密码或动态验证码未通过/)).toBeNull();
+    expect(within(securityRegion).getByRole("button", { name: "验证本人身份" })).toBeTruthy();
+    expect(replacement.verifyStepUp).toHaveBeenCalledTimes(1);
+    expect(replacement.startVerification).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unknown proof locked when the bearer probe is unavailable", async () => {
+    const { verified, pendingStepUp } = replacementFixtures();
+    const replacement = {
+      startStepUp: vi.fn(async (_credential: string, command: { requestId: string }) => ({ ...pendingStepUp, requestId: command.requestId })),
+      stepUpByRequest: vi.fn(),
+      verifyStepUp: vi.fn().mockRejectedValue(new HttpProblem(401, "iam.authentication.failed")),
+      startVerification: vi.fn(), verification: vi.fn(), confirmVerification: vi.fn()
+    };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValueOnce(verified).mockRejectedValueOnce(new HttpProblem(503, "iam.unavailable")),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 3, factorId: "factor-current" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), notificationReplacement: replacement,
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByText("old@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "更换地址" }));
+    await user.type(within(securityRegion).getByLabelText("目标地址"), "new@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "继续验证本人身份" }));
+    await user.type(await within(securityRegion).findByLabelText("当前密码"), "Private-Password-49!");
+    await user.type(within(securityRegion).getByLabelText("6 位动态验证码"), "123456");
+    await user.click(within(securityRegion).getByRole("button", { name: "验证本人身份" }));
+
+    expect(await within(securityRegion).findByText(/本人验证结果未知/)).toBeTruthy();
+    expect(within(securityRegion).queryByText(/当前密码或动态验证码未通过/)).toBeNull();
+    expect(within(securityRegion).queryByLabelText("当前密码")).toBeNull();
+    expect(within(securityRegion).getByRole("button", { name: "查询原安全验证" })).toBeTruthy();
+    expect(replacement.verifyStepUp).toHaveBeenCalledTimes(1);
+    expect(replacement.startVerification).not.toHaveBeenCalled();
+  });
+
+  it("does not repeat identity proof when new-address delivery starts with an unknown result", async () => {
+    const { verified, pendingStepUp } = replacementFixtures();
+    const replacement = {
+      startStepUp: vi.fn(async (_credential: string, command: { requestId: string }) => ({ ...pendingStepUp, requestId: command.requestId })),
+      stepUpByRequest: vi.fn(),
+      verifyStepUp: vi.fn(async (_credential: string, _stepUpId: string, originalRequestId: string) => ({ ...pendingStepUp, requestId: originalRequestId, state: "PROVED" as const, provedAt: "2026-09-11T08:00:30Z" })),
+      startVerification: vi.fn().mockRejectedValue(new HttpProblem(503, "iam.unavailable")),
+      verification: vi.fn(), confirmVerification: vi.fn()
+    };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 3, factorId: "factor-current" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), notificationReplacement: replacement,
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByText("old@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "更换地址" }));
+    await user.type(within(securityRegion).getByLabelText("目标地址"), "new@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "继续验证本人身份" }));
+    await user.type(await within(securityRegion).findByLabelText("当前密码"), "Private-Password-49!");
+    await user.type(within(securityRegion).getByLabelText("6 位动态验证码"), "123456");
+    await user.click(within(securityRegion).getByRole("button", { name: "验证本人身份" }));
+    await user.click(await within(securityRegion).findByRole("button", { name: "发送到新地址" }));
+
+    expect(await within(securityRegion).findByText(/验证码发送请求结果未知/)).toBeTruthy();
+    expect(within(securityRegion).queryByLabelText("当前密码")).toBeNull();
+    expect(within(securityRegion).getByRole("button", { name: "按原请求重试" })).toBeTruthy();
+    expect(replacement.verifyStepUp).toHaveBeenCalledTimes(1);
+    expect(replacement.startVerification).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries only new-address delivery when that endpoint is temporarily busy", async () => {
+    const { verified, pendingStepUp } = replacementFixtures();
+    const replacement = {
+      startStepUp: vi.fn(async (_credential: string, command: { requestId: string }) => ({ ...pendingStepUp, requestId: command.requestId })),
+      stepUpByRequest: vi.fn(),
+      verifyStepUp: vi.fn(async (_credential: string, _stepUpId: string, originalRequestId: string) => ({ ...pendingStepUp, requestId: originalRequestId, state: "PROVED" as const, provedAt: "2026-09-11T08:00:30Z" })),
+      startVerification: vi.fn().mockRejectedValue(new HttpProblem(429, "iam.authentication.busy")),
+      verification: vi.fn(), confirmVerification: vi.fn()
+    };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 3, factorId: "factor-current" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), notificationReplacement: replacement,
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByText("old@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "更换地址" }));
+    await user.type(within(securityRegion).getByLabelText("目标地址"), "new@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "继续验证本人身份" }));
+    await user.type(await within(securityRegion).findByLabelText("当前密码"), "Private-Password-49!");
+    await user.type(within(securityRegion).getByLabelText("6 位动态验证码"), "123456");
+    await user.click(within(securityRegion).getByRole("button", { name: "验证本人身份" }));
+    await user.click(await within(securityRegion).findByRole("button", { name: "发送到新地址" }));
+
+    expect(await within(securityRegion).findByText(/发送新地址验证码的服务暂时繁忙/)).toBeTruthy();
+    expect(within(securityRegion).queryByLabelText("当前密码")).toBeNull();
+    expect(within(securityRegion).getByRole("button", { name: "发送到新地址" })).toBeTruthy();
+    expect(replacement.verifyStepUp).toHaveBeenCalledTimes(1);
+    expect(replacement.startVerification).toHaveBeenCalledTimes(1);
+  });
+
+  it("never reconfirms a committed replacement while authoritative contact refresh is unavailable", async () => {
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "old@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    const updated = { ...verified, resourceVersion: 2, email: "new@example.com", verifiedAt: "2026-09-11T08:03:00Z" };
+    const pendingStepUp: SecurityStepUp = {
+      id: "step-up-replace-contact", requestId: "replace-contact-request", operation: "NOTIFICATION_CONTACT_REPLACE",
+      expectedFactorRevision: 3, notificationContact: { expectedResourceVersion: 1, email: "new@example.com" },
+      state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z", provedAt: null, consumedAt: null
+    };
+    const pendingVerification = {
+      id: "verification-replace-contact", accountId: account.id, userId: rootUser.id, requestId: "replace-contact-request",
+      purpose: "REPLACEMENT" as const, expectedResourceVersion: 1, email: "new@example.com", state: "PENDING" as const,
+      issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z", completedAt: null,
+      delivery: { state: "ACCEPTED" as const, attempts: 1, lastOutcome: "ACCEPTED" as const, lastSmtpCode: 250, updatedAt: timestamp }
+    };
+    const replacement = {
+      startStepUp: vi.fn(async (_credential: string, command: { requestId: string }) => ({ ...pendingStepUp, requestId: command.requestId })),
+      stepUpByRequest: vi.fn(),
+      verifyStepUp: vi.fn(async (_credential: string, _stepUpId: string, originalRequestId: string) => ({ ...pendingStepUp, requestId: originalRequestId, state: "PROVED" as const, provedAt: "2026-09-11T08:00:30Z" })),
+      startVerification: vi.fn(async (_credential: string, command: { requestId: string }) => ({ ...pendingVerification, requestId: command.requestId })),
+      verification: vi.fn(),
+      confirmVerification: vi.fn(async (_credential: string, _verificationId: string, original: { requestId: string }) => ({ ...pendingVerification, requestId: original.requestId, state: "VERIFIED" as const, completedAt: "2026-09-11T08:03:00Z" }))
+    };
+    const security = {
+      notificationContact: vi.fn()
+        .mockResolvedValueOnce(verified)
+        .mockRejectedValueOnce(new HttpProblem(503, "iam.unavailable"))
+        .mockResolvedValue(updated),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 3, factorId: "factor-current" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), notificationReplacement: replacement,
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByText("old@example.com");
+
+    await user.click(within(securityRegion).getByRole("button", { name: "更换地址" }));
+    await user.type(within(securityRegion).getByLabelText("目标地址"), "new@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "继续验证本人身份" }));
+    await user.type(await within(securityRegion).findByLabelText("当前密码"), "Private-Password-49!");
+    await user.type(within(securityRegion).getByLabelText("6 位动态验证码"), "123456");
+    await user.click(within(securityRegion).getByRole("button", { name: "验证本人身份" }));
+    await user.click(await within(securityRegion).findByRole("button", { name: "发送到新地址" }));
+    await user.type(await within(securityRegion).findByLabelText("新地址的 8 位验证码"), "12345678");
+    await user.click(within(securityRegion).getByRole("button", { name: "确认并更换地址" }));
+
+    expect(await within(securityRegion).findByText(/IAM 已提交地址替换/)).toBeTruthy();
+    expect(within(securityRegion).queryByRole("button", { name: "确认并更换地址" })).toBeNull();
+    expect(replacement.confirmVerification).toHaveBeenCalledTimes(1);
+    await user.click(within(securityRegion).getByRole("button", { name: "重新读取当前联系人" }));
+    expect(await within(securityRegion).findByText("new@example.com")).toBeTruthy();
+    expect(within(securityRegion).getByRole("button", { name: "更换地址" })).toBeTruthy();
+    expect(replacement.confirmVerification).toHaveBeenCalledTimes(1);
   });
 
   it("queries the original replacement verification after an unknown atomic confirmation without submitting twice", async () => {
@@ -1284,7 +1513,8 @@ describe("account access", () => {
     await user.click(within(securityRegion).getByRole("button", { name: "继续验证本人身份" }));
     await user.type(await within(securityRegion).findByLabelText("当前密码"), "Private-Password-49!");
     await user.type(within(securityRegion).getByLabelText("6 位动态验证码"), "123456");
-    await user.click(within(securityRegion).getByRole("button", { name: "验证并发送邮箱验证码" }));
+    await user.click(within(securityRegion).getByRole("button", { name: "验证本人身份" }));
+    await user.click(await within(securityRegion).findByRole("button", { name: "发送到新地址" }));
     await user.type(await within(securityRegion).findByLabelText("新地址的 8 位验证码"), "12345678");
     await user.click(within(securityRegion).getByRole("button", { name: "确认并更换地址" }));
     expect(await within(securityRegion).findByText(/确认回包未知/)).toBeTruthy();
