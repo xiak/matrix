@@ -61,7 +61,7 @@ Role、身份提供商、联合身份和企业账号均为详情优先的管理�
 
 高级体验仓库仍只通过一键 MOCK 入口选择。真实角色、策略编写、SSO 或模拟器未接入时明确说明；访问密钥页面在存在固定 HTTP 能力时使用 LIVE per-User 适配，否则只允许显式 MOCK 工作区继续展示体验。任何真实失败都不调用体验仓库兜底。UI 原型与后端固定契约逐片衔接，不能据此发布一个尚未整合后端的安装版本。
 
-身份安全概览与报告继续归 IAM-009 S4 的真实治理契约所有。当前控制台只从隔离体验仓库派生本地建议，明确区分“需复核、已配置、不适用、状态未知”，且把设置开关与认证器绑定证据分开。活动区按成功登录、Key 使用、Role 活动与业务结果分别呈现；只有当前 MOCK Session 的实际签发可作当前身份的登录样例，普通操作事件不能冒充成功登录，Key 创建/修改时间、Role 或 RoleSession 存在及 IAM Allow 不能分别冒充真实使用或业务成功。缺少认证器、最近使用、完整采集窗口或来源水位时必须为未知，不能猜成 `false`、安全、闲置或从未使用。报告只导出字段白名单中的 MOCK 快照，并显式保留观察时间及采集缺口；不建立真实报告 API、风险分或自动处置能力。
+身份安全概览与尚未接入的来源继续归 IAM-009 S4 的真实治理契约所有。概览只从隔离体验仓库派生本地建议，明确区分“需复核、已配置、不适用、状态未知”，且把设置开关与认证器绑定证据分开。活动区按成功登录、Key 使用、Role 活动与业务结果分别呈现；只有当前 MOCK Session 的实际签发可作当前身份的登录样例，普通操作事件不能冒充成功登录，Key 创建/修改时间、Role 或 RoleSession 存在及 IAM Allow 不能分别冒充真实使用或业务成功。缺少认证器、最近使用、完整采集窗口或来源水位时必须为未知，不能猜成 `false`、安全、闲置或从未使用。账号安全报告已经严格接入 `POST /v1/account/security-reports`、`GET /v1/account/security-reports/{reportId}` 与 `GET /v1/account/security-reports/{reportId}/content`；它只支持创建、按 ID 读取和下载，未建立真实报告目录、风险分、后台任务或自动处置能力。保留的 MOCK 报告目录只是本地搜索、筛选、状态和到期样例，不能解释成服务器持有这些报告。
 
 ### 本人安全通知地址的固定客户端接入
 
@@ -507,16 +507,14 @@ LIVE 仍固定为 `LIVE · NOT_CONNECTED`，但接入边界不再只给空状态
 
 ### 身份提供商与角色 SSO 断言映射预览 MOCK 的开发验收证据
 
-2026-09-21，前端实现与同步嵌入资源固定在已推送的
-[`fb08f614`](https://github.com/xiak/matrix/commit/fb08f614)。
+2026-10-04，当前 replacement-first 只读实现与同步嵌入资源固定在已推送的 [`d14176ed7`](https://github.com/xiak/matrix/commit/d14176ed7)。
 
-- 身份提供商及其后继断言映射预览的新建、编辑从 Dialog 迁入各自目录或详情的内容区；固定页面标题、页签和卡片外壳继续存在，只替换业务工作流正文。删除仍使用独立危险确认，不把不可恢复操作伪装成普通编辑。
-- 早期“联合账号”原型已由 2026-10-02 的替换片原位删除，不能再解释成长期云账号或后端对象。当前角色 SSO 只保留 browser-memory `RoleSsoMappingPreview`；用户 SSO 另有不可编辑的 Account-scoped `ExternalIdentity` 投影，两者不能互换。外部目录同步、邀请、SAML/OIDC 发现与真实断言校验仍不在该 MOCK 片内。
-- 公共目录组件允许在同一内容边界切换列表与工作流；公共响应式命令焦点句柄在桌面返回主操作、小屏返回可见的“页面操作”入口，避免聚焦被 CSS 隐藏的桌面按钮。进入工作流聚焦标题，失败保留输入，返回、取消和完成恢复稳定触发器。
-- `AccessWorkspace` 130 条行为用例、完整前端 42 个测试文件 646 条用例及三条静态归一化用例通过。类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。
-- 真实 DEV 在 `539 × 866` 验证两类新建工作流；身份提供商与映射预览均在内容区呈现，Dialog 数为零，document/body 均满足 `clientWidth == scrollWidth == 539`。返回目录后小屏焦点位于可见的“页面操作”按钮，最终控制台 warning/error 为空。该证据只接受显式 MOCK UX，不声明真实 SSO 目录、写入、密钥轮换或外部协议联调已接入。
-- 当前 replacement-first 投影删除了角色 SSO Provider 中预先发明的 Audience、SAML XML、OIDC JWKS、客户端 ID、公钥与本地协议材料解析器。Provider 的共同投影只保留 Account、协议分类、HTTPS Issuer、状态和创建时间；OIDC 单独保留一个明确标注为协议样例的 HTTPS Redirect URI，SAML 不共享该字段而显示协议配置待 IAM-EXT 冻结。编辑与详情显示同一 MOCK 边界：只保存当前浏览器会话，不连接外部 IdP、不验证签名、断言或 Token，也不签发登录会话。IAM Owner 尚未发布可消费的外部 IdP wire，因此此片没有添加 HTTP、秘密字段承诺或 LIVE 可用声明。
-- 2026-10-04 的 replacement-first 当前实现固定在已推送的 [`f90219f54`](https://github.com/xiak/matrix/commit/f90219f5430e016d71d6eb3dba4ddaf860949eca)。领域、命令、隔离仓库、角色会话投影、访问分析和双语页面没有 `FederatedAccount`、`workspace.federations` 或 `save/delete-federation`，只保留明确 browser-memory 的 `RoleSsoMappingPreview`；样例只保存名称、非规则的外部主体样例、provider、目标 Role、状态与创建时间。浏览器内部的 `provider` 判别值不会伪装成后端 PrincipalType，导出的预览 JSON 明示 `MOCK_IDENTITY_PROVIDER`。角色承担求值不接受外部映射调用方，映射预览不能生成体验 RoleSession 或形成允许结论。身份提供商与映射目录在列表、详情和编辑层均显示同一 MOCK 边界；小屏主操作仍由公共页面菜单承载，编辑继续替换内容区而非打开 Dialog。IAM Owner 再次确认尚无固定 external IdP/Role trust wire、共同 Redirect URI 或 claim 映射 DSL。定向 338 条 IAM 用例、完整 62 文件/1061 条前端用例、三条静态归一化、类型/lint/架构/228 组主题对比、45 路由导出、249 文件嵌入等价与全仓 Go test/vet 通过；桌面及 `390 × 844` DEV 均无横向溢出或 Dialog，手机页面操作菜单可达，控制台 warning/error 为空。
+- 角色 SSO 只保留“身份提供商目录／详情”和“断言映射预览目录／详情”两条只读信息流。页面没有新建、编辑、启用、删除、保存、表单、Dialog 或伪成功反馈；原 browser-memory 写命令、校验器、写入用例和失效文案已原位删除，没有保留兼容入口或平行实现。
+- Provider 只展示 Account、协议分类、HTTPS Issuer、明确的协议专属配置待冻结状态、目标 Role 与创建时间。断言映射只展示非规则的外部主体样例、Provider、候选 Role 和创建时间；两类状态统一标记 `MOCK`，不能解释成后端已启用资源、登录成功或有效权限。
+- `RoleSsoMappingPreview` 只是固定概念夹具，不是可变的浏览器资源。早期“联合账号”原型、Provider 写命令和映射写命令均已删除；用户 SSO 的 Account-scoped `ExternalIdentity` 投影仍由下一节独立拥有，不能与角色 SSO 的候选映射互换。
+- 映射详情复用只读“角色 SSO 登录链路”，按身份提供商校验、外部断言校验、候选角色形成、Role TrustPolicy、调用方承担授权和 STS RoleSession 六段解释安全边界。映射不是授权；Role trust 与承担权限任一未成立都不能签发会话。本预览不接收真实断言或 Token、不发现外部 IdP、不创建本地 User、不生成请求号，也不签发或保存 RoleSession。
+- IAM Owner 仍未发布可消费的 external IdP／Role trust wire、SAML/OIDC 协议配置、claim 映射规则或写入生命周期。当前实现没有新增 repository、HTTP wire、秘密字段承诺、LIVE 可用声明或有效权限结论；后端契约冻结后必须 replacement-first 接入，真实失败不得回退本 MOCK。
+- 定向 `AccessWorkspace` 与隔离仓库共 274 条用例、完整前端 63 个测试文件／1086 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、45 路由生产导出、249 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。真实 DEV 验证 Provider 与映射的目录、详情和六段安全链路，页面无写操作或 Dialog，浏览器 warning/error 为空。既有桌面与 `390 × 844` 响应式验收仍覆盖相同公共目录、详情和页签外壳。
 
 ### 用户 SSO 隔离体验的开发验收证据
 
