@@ -49,6 +49,20 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 创建的未知结果处理边界：固定`42035189eb823e388509f54525889c1a18c6b79d`已要求必填requestId，客户端须保留同一操作者的原requestId、目标、policyId与预期策略修订；未知回包只能明确重试原输入，不能每次执行都自动换意图。当前公开API没有按requestId查询历史关联完成的入口，也不承诺撤权、目标失效、策略退休或修订变化后仍可通过写命令读取旧结果；401/403/409不能证明原事务未提交。刷新User直接关联目录仅证明当前关系，不能把“现在不存在”解释成“原来没成功”，更不能据此自动重新授权。前端不复制私有ID生成算法。独立的非敏感历史完成核对及撤销后原意图确认仍是本FEAT待设计/验收的缺口；后续须与当前执行资格严格分离，不能借结果查询重新授予权限或绕过当前读取授权，不能以已有普通重放测试宣称提交后失联的完整恢复闭环已交付。
 
+#### 关联命令完成查询
+
+下一纵向切片使用单一路由 `GET /v1/policy-attachment-changes/by-request/{requestId}`。请求只含原 `requestId`，不接受 Account、actor、target、policy、scope、installation 或操作类型 selector；Account、原操作者和当前 installation 都从有效 USER LOGIN_SESSION 推导。一个操作者在同一 Account 内的 policy-attachment 命令必须使用跨 CREATE/REVOKE 唯一的 requestId；复用已存在 requestId 但改变操作或任何输入时冲突，不能形成两个可供查询的结果。
+
+响应 `PolicyAttachmentChange` 是严格互斥联合：公共字段为 `apiVersion/kind/operation/accountId/actorPrincipalId/requestId/completedAt`。`operation=CREATE` 必须同时返回原 `target/policyId/policyResourceVersion` 和创建完成时的不可变 `attachment`；`operation=REVOKE` 必须返回原 `attachmentId/expectedResourceVersion` 和不可变 `revocation`。它不返回密码、Session、策略正文、决定正文、Audit event 或可重用 permit，也不把关系当前是否仍有效混入原完成。后继撤销、重新关联、策略退休、主体停用或资源删除都不能改写已完成结果。
+
+查询先用当前认证得到的 Account/USER 在受限函数内定位同 actor 的原 receipt；不存在、旧开发版本没有 receipt、错误 actor 或错误 Account 均统一为 `404 NOT_FOUND`。找到后才按 receipt 封存 scope 对准确 POLICY_ATTACHMENT 资源执行只读动作：tenant 使用 `iam.policy-attachment-change.read`，installation 使用 `iam.platform-policy-attachment-change.read`。这两个动作不属于创建/撤销能力，不自动进入既有系统策略版本；需要使用者显式采用包含它们的新不可变策略版本。当前 Session 无该只读权限返回403；损坏、重复或无法与原关系事实核对的 receipt 返回503并失败关闭。查询不产生新的业务 Audit 事实、不重新执行原命令，也不把原操作者曾有写权限当作今天仍有读权限。
+
+PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是从可变 `policy_attachments` 或可投递 outbox 临时拼接结果。主键为 `(account_id,actor_principal_id,request_id)`，同时保存 operation、输入承诺、准确原输入、结果文档、attachment ID、scope/installation、原 decision/event ID 和完成时间；CHECK、复合外键、FORCE RLS、拒绝 UPDATE/DELETE/TRUNCATE 及受限函数 ACL 进入同一 schema verifier。创建或撤销必须在原关系、决定、Audit outbox 的同一事务中写入唯一 receipt；receipt 写入失败则整笔业务变化回滚。查询只返回保存的结果文档，并重新验证输入承诺、结果字段、关系身份及原 event/requestDigest 对应，不以今天的关系状态补字段。
+
+该能力是未发布产品的下一前向 schema，只验证空白安装和准确即时前序；不为每个开发数字保留兼容函数或双表写入。即时前序已完成的旧命令没有足够原始输入可安全补造 receipt，因此不回填猜测结果，查询明确返回 NOT_FOUND；NOT_FOUND 仍不证明原事务回滚，客户端不得自动重发写命令。真正实现时必须推进实际 IAM schema 与 contractRevision，并在任何效果前由完整 release profile 拒绝旧二进制；本设计本身不分配版本数字。
+
+最低验收包含：CREATE/REVOKE 提交后断开回包，再以同一和新有效 Session 查询精确原结果；后继撤销、重新关联、策略退休、主体停用后的历史不改写；错误 actor/Account/requestId、跨 scope、错误 installation、错误当前只读权限与 Role/AccessKey/ServiceIdentity 均拒绝；同 requestId 跨操作或变体竞争至多一个完成；事务末端、receipt/outbox/关系任一失败均零部分效果；篡改输入承诺、结果、event、scope 或 ACL 后失败关闭；固定即时前序保留数据升级不复活权限且不伪造历史 receipt。UI 对明确完成解除原未知提示，对404/403/5xx继续保持未知，绝不因当前目录状态自动重发。
+
 新事实为 `iam.policy-attachment.created/revoked`（tenant chain）与 `iam.platform-policy-attachment.created/revoked`（installation chain），target 均为 POLICY_ATTACHMENT；必须有当前 USER 决定，不接受 SYSTEM、probe 或 target.tenantId 变体。平台关联 ID 的物理 owner 仍为调用身份的 home Account，不允许用跨账号 target ID 借平台权限修改其他租户。事实、关联和决定/outbox 同事务；公开命令不提供系统策略发布或服务主体授权旁路。
 
 用例负责系统策略装配、附件授予撤销、当前来源收集和决定持久化。写入按 scope → principal → policy → attachment 锁序；撤销与密码/状态保护使用相同 principal 锁。账号级普通变更对 organization 使用共享锁，不把不同成员的所有写入串成独占队列；租户生命周期与安装 primary 恢复需要独占 scope。凭据变更继续按 principal → credential → session 加锁，退出先读取不可变主体引用，再按 principal → session 重新锁定当前记录。API/worker/verifier 无越权 DML，查询走 RLS/受限函数。安装恢复用例要查询新的显式平台附件，保持封存 primary tuple 与原 receipt。
