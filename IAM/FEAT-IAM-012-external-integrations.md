@@ -1,6 +1,6 @@
 # FEAT-IAM-012：外部身份、通知与组织治理
 
-- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。installation已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像；首条联系人验证、SMTP/Maildir实收、MFA安全通知和同profile生命周期累计进入`64/34/3+r11`签名组合，并由`ed2835db`完整独立CI确认。该首地址/渠道切片已验收；S1c已有地址替换的独立命令、目的限定StepUp、原子切换和双向告警生产实现，当前组合为`65/35/3+r12`，本地contract/race、PG18空白安装、准确前序保留数据及独立多进程门禁已通过；独立CI、替换双地址真实邮箱和UI浏览器验收尚未完成，因此S1c仍为Implementing。其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
+- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。installation已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像；首条联系人验证、SMTP/Maildir实收、MFA安全通知和同profile生命周期累计进入`64/34/3+r11`签名组合，并由`ed2835db`完整独立CI确认。该首地址/渠道切片已验收；S1c已有地址替换的独立命令、目的限定StepUp、原子切换和双向告警生产实现，当前组合为`65/35/3+r12`，本地contract/race、PG18空白安装、准确前序保留数据、独立多进程及双地址真实Postfix门禁已通过，固定生产实现的独立CI也已完成；后继门禁提交的独立CI、签名同profile生命周期和UI浏览器验收尚未完成，因此S1c仍为Implementing。其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
 - Owner：IAM负责S1的地址验证、目的限定通知意图/投递和重试；installation负责受保护SMTP及必要私有材料配置，UX/UI负责本人交互。其他外部来源与计费保持各自业务边界。
 - S1a不等于完整S1或其他外部能力已实现；缺少前置时不提供假入口或伪成功。
 
@@ -219,6 +219,10 @@ IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`�
 当前S1c后端实现新增`POST /v1/auth/notification-contact/replacements`、`NOTIFICATION_CONTACT_REPLACE`目的限定StepUp、`FIRST_ADDRESS|REPLACEMENT`验证来源、`iam.notification-contact.replaced`事实及原/新地址两条封闭通知。当前联系人只在新地址确认事务内从版本`N`推进到`N+1`；原地址在此之前保持权威，历史通知收件人不重写。真实PG门禁覆盖两副本并发确认只一次成功、旧Session/跨Account/错版本拒绝、事实或通知伪造回滚、完成等值查询及证明不可复用；公开响应和Audit均不含地址、验证码或证明秘密。
 
 2026-10-04当前源码以Go race、`GOMAXPROCS=2`串行完成：全新PG18的`TestIAMNotificationContactPostgres`116.714秒；固定即时前序`530f6bf47a266b08a0ae2bbca5b1fd89798c646b`真实IAM64二进制和数据升级到IAM65的`TestIAMRetainedPredecessorProcessUpgrade`182.726秒；独立IAM/Audit/PaaS真实进程门禁304.922秒。前序门禁实际发现旧验证行在FORCE RLS下未能补充来源分类，修正后只将该版本已存在的首地址证据确定为`FIRST_ADDRESS`且不生成StepUp关系；原不可变字段、Session、恢复、策略分析、Audit及通知材料保持。Audit35真库、相关API/domain/usecase/HTTP/SMTP/发布profile聚焦race及OpenAPI确定性生成也通过。上述是本地实现证据，不替代待完成的独立CI、双地址真实SMTP收信、签名同profile生命周期或UI验收。
+
+固定生产实现`2487b6586697d10089c31adaee37c4a4603055d4`的[Verification37161461635](https://github.com/xiak/matrix/actions/runs/37161461635)已由GitHub API核实精确SHA；go、node-process及13条authority分片共15项全部completed/success。`authority-recovery-window`实际跨越三个生产十分钟认证窗口并正常完成，不以改数据库时钟或缩短产品窗口取得通过。
+
+后继固定门禁`20632441a0e014f175f3111d55a887db76027bc7`在本任务独立PG18及两个独立本地Maildir实跑`TestIAMNotificationContactPostgres`118.66秒。生产HTTP、目的限定StepUp和受限dispatcher先把首地址验证码及安全通知投递到`previous@matrix.test`，再把替换验证码投递到`current@matrix.test`；确认前旧地址仍为版本1权威联系人，确认后原子推进为新地址版本2。随后停用USER，已提交的`CONTACT_REPLACED_PREVIOUS`和`CONTACT_REPLACED_CURRENT`仍分别到达原、新邮箱；替换验证码与两条告警共三条通知均保存一次`DATA 250/ACCEPTED`，告警不含验证码，四条联系人事实逐项通过原历史proof及伪造拒绝。Postfix夹具固定Debian13基底、2CPU/768MiB/Pids128、独立任务标签及loopback随机端口；队列清空后只删除本任务容器、镜像和四个临时数据库，保留既有PG容器供后续门禁。该证据不声称公网最终送达、用户已读、任意SMTP供应商或尚未执行的签名生命周期/UI验收。
 
 ## 其他延期能力的架构预留
 
