@@ -256,8 +256,21 @@ describe("ConsoleShellRenderer", () => {
     { selection: { section: "catalog" }, role: "region", name: "产品规格" },
     { selection: { section: "quotas" }, role: "region", name: "服务配额" },
     { selection: { section: "regions" }, role: "region", name: "区域与节点" },
+    { selection: { section: "applications" }, role: "article", name: "统一资源列表" },
+    { selection: { section: "resources" }, role: "article", name: "统一资源列表" },
+    { selection: { section: "installations" }, role: "article", name: "组织服务实例" },
+    { selection: { section: "operations" }, role: "article", name: "操作与任务" },
+    { selection: { section: "messages" }, role: "article", name: "消息中心" },
+    { selection: { section: "devops", view: "pipelines" }, role: "article", name: "最近流水线" },
     { selection: { section: "devops", view: "environments" }, role: "region", name: "交付环境" },
+    { selection: { section: "observability", view: "health" }, role: "article", name: "服务健康" },
+    { selection: { section: "observability", view: "alerts" }, role: "article", name: "当前告警" },
+    { selection: { section: "logs" }, role: "article", name: "最近日志" },
     { selection: { section: "logs", view: "search" }, role: "article", name: "检索分析" },
+    { selection: { section: "logs", view: "topics" }, role: "article", name: "日志主题" },
+    { selection: { section: "logs", view: "collection" }, role: "article", name: "采集配置" },
+    { selection: { section: "audit" }, role: "article", name: "审计记录" },
+    { selection: { section: "access" }, role: "article", name: "概览" },
     { selection: { section: "access", view: "policies" }, role: "article", name: "策略" }
   ] as const)("keeps the $name destination region stable while only its data placeholder is delayed", ({ selection, role, name }) => {
     vi.useFakeTimers();
