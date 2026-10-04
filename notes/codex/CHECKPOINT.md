@@ -6,8 +6,8 @@
 - Updated: 2026-10-04
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `6314911b2`
-- Pushed documentation milestone: `ff134c535`
+- Pushed source/embed milestone: `0835f3b1c`
+- Pushed documentation milestone: `f34a20faf`
 
 ## Authoritative route
 
@@ -27,20 +27,21 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`; login
-verification remains disabled for UX review. Source/embed `6314911b2` adds an
-isolated AuthorizationProfile candidate-revision impact preview to the product
-onboarding review. It compares only complete declaration structure, labels the
-candidate as synthetic, fails closed for invalid identities, and never turns a
-revision, digest or diff count into authorization, migration, PEP or publish
-claims. LIVE remains unchanged and no repository write is mounted.
+verification remains disabled for UX review. Source/embed `0835f3b1c` makes the
+service-authorization responsibility model stable shared context for both the
+isolated MOCK and strict LIVE read directory. Before either account-relation or
+platform-template data loads, the page distinguishes product-team definition
+and PEP enforcement, IAM validation/trusted publication, and tenant directory
+consumption/product-resource consent. It exposes no publisher, consent,
+revocation or repository-write command.
 
-The change table renders only the current ten-row page; desktop and
-`390 × 844` DEV checks found no Dialog, horizontal overflow or browser
-warning/error. Full acceptance at this milestone: 62 frontend files / 1,047
+Desktop renders the responsibility model in three columns and `390 × 844`
+uses one column; both have no Dialog, horizontal overflow or browser
+warning/error. Full acceptance at this milestone: 62 frontend files / 1,061
 tests, three static-normalization tests, typecheck, lint, architecture, 228
 theme-contrast pairs, 45-route production export, 43 normalized paths,
 249-file embed equality, repository `go test -p 2 ./...` and
-`go vet -p 2 ./...`. Documentation milestone `ff134c535` records the exact
+`go vet -p 2 ./...`. Documentation milestone `f34a20faf` records the exact
 semantics and exclusions in the owning FEATs.
 
 ## Continuation boundary
