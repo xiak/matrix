@@ -10,33 +10,63 @@ type OperationID string
 type Cursor string
 
 type ActorReference struct {
-	Type ActorType `json:"type"`
-	ID   ActorID   `json:"id"`
+	Type        ActorType             `json:"type"`
+	ID          ActorID               `json:"id"`
+	RoleSession *RoleSessionReference `json:"roleSession,omitempty"`
+	AccessKeyID string                `json:"accessKeyId,omitempty"`
+}
+
+type RoleSessionReference struct {
+	SessionID                string  `json:"sessionId"`
+	SourceUserID             ActorID `json:"sourceUserId,omitempty"`
+	SourceServicePrincipalID ActorID `json:"sourceServicePrincipalId,omitempty"`
+}
+
+// Lineage is part of the actor identity, not pointer identity or an attribute.
+func (actor ActorReference) Equal(other ActorReference) bool {
+	if actor.Type != other.Type || actor.ID != other.ID || actor.AccessKeyID != other.AccessKeyID || (actor.RoleSession == nil) != (other.RoleSession == nil) {
+		return false
+	}
+	return actor.RoleSession == nil || *actor.RoleSession == *other.RoleSession
 }
 
 type TargetReference struct {
 	Kind TargetKind `json:"kind"`
 	ID   string     `json:"id"`
+	// Only the published primary-recovery facts and current account-root
+	// recovery use this resource namespace; it is never chain authority.
+	TenantID TenantID `json:"tenantId,omitempty"`
 }
 
 // Event contains one sanitized fact. Source is deliberately absent: the
 // ingestion boundary derives it exclusively from the service credential.
 type Event struct {
-	APIVersion    string          `json:"apiVersion"`
-	Kind          string          `json:"kind"`
-	EventID       EventID         `json:"eventId"`
-	TenantID      TenantID        `json:"tenantId"`
-	Actor         ActorReference  `json:"actor"`
-	IAMDecisionID DecisionID      `json:"iamDecisionId,omitempty"`
-	Action        Action          `json:"action"`
-	Target        TargetReference `json:"target"`
-	Result        Result          `json:"result"`
-	RequestDigest string          `json:"requestDigest"`
-	RequestID     string          `json:"requestId"`
-	CorrelationID string          `json:"correlationId"`
-	OperationID   OperationID     `json:"operationId,omitempty"`
-	TraceParent   string          `json:"traceparent,omitempty"`
-	OccurredAt    time.Time       `json:"occurredAt"`
+	APIVersion     string          `json:"apiVersion"`
+	Kind           string          `json:"kind"`
+	EventID        EventID         `json:"eventId"`
+	TenantID       TenantID        `json:"tenantId,omitempty"`
+	InstallationID string          `json:"installationId,omitempty"`
+	Actor          ActorReference  `json:"actor"`
+	IAMDecisionID  DecisionID      `json:"iamDecisionId,omitempty"`
+	Action         Action          `json:"action"`
+	Target         TargetReference `json:"target"`
+	Result         Result          `json:"result"`
+	RequestDigest  string          `json:"requestDigest"`
+	RequestID      string          `json:"requestId"`
+	CorrelationID  string          `json:"correlationId"`
+	OperationID    OperationID     `json:"operationId,omitempty"`
+	TraceParent    string          `json:"traceparent,omitempty"`
+	OccurredAt     time.Time       `json:"occurredAt"`
+}
+
+// Equal compares the complete fact, including independently decoded lineage.
+func (event Event) Equal(other Event) bool {
+	if !event.Actor.Equal(other.Actor) || !event.OccurredAt.Equal(other.OccurredAt) {
+		return false
+	}
+	event.Actor, other.Actor = ActorReference{}, ActorReference{}
+	event.OccurredAt, other.OccurredAt = time.Time{}, time.Time{}
+	return event == other
 }
 
 type AuditRecord struct {
@@ -69,11 +99,12 @@ type QueryRecordsRequest struct {
 }
 
 type RecordPage struct {
-	APIVersion string        `json:"apiVersion"`
-	Kind       string        `json:"kind"`
-	TenantID   TenantID      `json:"tenantId"`
-	Records    []AuditRecord `json:"records"`
-	NextCursor Cursor        `json:"nextCursor,omitempty"`
+	APIVersion     string        `json:"apiVersion"`
+	Kind           string        `json:"kind"`
+	TenantID       TenantID      `json:"tenantId,omitempty"`
+	InstallationID string        `json:"installationId,omitempty"`
+	Records        []AuditRecord `json:"records"`
+	NextCursor     Cursor        `json:"nextCursor,omitempty"`
 }
 
 type VerifyChainRequest struct {
@@ -84,7 +115,8 @@ type VerifyChainRequest struct {
 type ChainVerification struct {
 	APIVersion        string            `json:"apiVersion"`
 	Kind              string            `json:"kind"`
-	TenantID          TenantID          `json:"tenantId"`
+	TenantID          TenantID          `json:"tenantId,omitempty"`
+	InstallationID    string            `json:"installationId,omitempty"`
 	State             VerificationState `json:"state"`
 	FromSequence      uint64            `json:"fromSequence"`
 	ToSequence        uint64            `json:"toSequence"`

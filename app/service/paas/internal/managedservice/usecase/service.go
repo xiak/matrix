@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
@@ -93,25 +95,47 @@ type CreateInstallationCommand struct {
 	IdempotencyKey string
 }
 
+type BindServiceRoleCommand struct {
+	Authorization  port.Authorization
+	Credential     string
+	InstallationID string
+	Request        managedservicev1.BindServiceRoleRequest
+	IdempotencyKey string
+}
+
+type UnbindServiceRoleCommand struct {
+	Authorization  port.Authorization
+	Credential     string
+	InstallationID string
+	BindingID      iamv1.WorkloadRoleBindingID
+	Request        managedservicev1.UnbindServiceRoleRequest
+	IdempotencyKey string
+}
+
 type Config struct {
-	Catalog              domain.Catalog
-	Region               managedservicev1.Region
-	MaximumWriteAttempts int
-	NewQuotaID           func() (string, error)
-	NewOperationID       func() (string, error)
+	Catalog               domain.Catalog
+	Region                managedservicev1.Region
+	WorkloadRoleAuthority port.WorkloadRoleAuthority
+	WorkloadRoleRuntime   port.WorkloadRoleRuntime
+	MaximumWriteAttempts  int
+	NewQuotaID            func() (string, error)
+	NewOperationID        func() (string, error)
 }
 
 type Service struct {
-	repository           Repository
-	catalog              domain.Catalog
-	region               managedservicev1.Region
-	maximumWriteAttempts int
-	newQuotaID           func() (string, error)
-	newOperationID       func() (string, error)
+	repository            Repository
+	workloadRoleAuthority port.WorkloadRoleAuthority
+	workloadRoleRuntime   port.WorkloadRoleRuntime
+	catalog               domain.Catalog
+	region                managedservicev1.Region
+	maximumWriteAttempts  int
+	newQuotaID            func() (string, error)
+	newOperationID        func() (string, error)
 }
 
 func NewService(repository Repository, config Config) (*Service, error) {
-	if repository == nil || managedservicev1.ValidateRegion(config.Region) != nil {
+	if repository == nil || config.WorkloadRoleAuthority == nil || config.WorkloadRoleRuntime == nil ||
+		managedservicev1.ValidateRegion(config.Region) != nil {
 		return nil, errors.New("managed-service use case configuration is invalid")
 	}
 	if len(config.Catalog.List()) == 0 {
@@ -130,7 +154,9 @@ func NewService(repository Repository, config Config) (*Service, error) {
 		config.NewOperationID = func() (string, error) { return newID("operation-") }
 	}
 	return &Service{
-		repository: repository, catalog: config.Catalog, region: config.Region,
+		repository: repository, workloadRoleAuthority: config.WorkloadRoleAuthority,
+		workloadRoleRuntime: config.WorkloadRoleRuntime,
+		catalog:             config.Catalog, region: config.Region,
 		maximumWriteAttempts: config.MaximumWriteAttempts,
 		newQuotaID:           config.NewQuotaID, newOperationID: config.NewOperationID,
 	}, nil
@@ -278,6 +304,161 @@ func (service *Service) GetInstallationOperation(
 		return managedservicev1.InstallationOperation{}, err
 	}
 	return installation.Operation, nil
+}
+
+// BindServiceRole proves the path resource exists in the IAM-derived Account
+// before forwarding one normalized, idempotent workload consent command. The
+// caller cannot select the Account, Role, service principal or purpose.
+func (service *Service) BindServiceRole(
+	ctx context.Context,
+	command BindServiceRoleCommand,
+) (managedservicev1.ServiceRoleBindingReceipt, error) {
+	if ctx == nil || port.ValidateAuthorization(command.Authorization) != nil ||
+		command.Authorization.SubjectType != port.SubjectUser || command.Credential == "" ||
+		managedservicev1.ValidateInstallationID(command.InstallationID) != nil ||
+		managedservicev1.ValidateBindServiceRoleRequest(command.Request) != nil ||
+		managedservicev1.ValidateIdempotencyKey(command.IdempotencyKey) != nil {
+		return managedservicev1.ServiceRoleBindingReceipt{}, ErrInvalidArgument
+	}
+	var installation managedservicev1.ServiceInstallation
+	err := service.withTransaction(ctx, command.Authorization.TenantID, ReadOnly, func(transaction Transaction) error {
+		var readErr error
+		installation, readErr = transaction.GetServiceInstallation(ctx, command.InstallationID)
+		return readErr
+	})
+	if err != nil {
+		return managedservicev1.ServiceRoleBindingReceipt{}, err
+	}
+	if managedservicev1.ValidateServiceInstallation(installation) != nil || installation.ID != command.InstallationID {
+		return managedservicev1.ServiceRoleBindingReceipt{}, ErrRepositoryUnavailable
+	}
+	requestID := serviceRoleBindingRequestID(command.IdempotencyKey)
+	request := port.AuthorizationRequest{
+		Credential: command.Credential, Action: port.AuthorizeInstallationRoleBind,
+		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID},
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: requestID,
+	}
+	result, err := service.workloadRoleAuthority.BindWorkloadRole(ctx, command.Request.Template, request)
+	if err != nil {
+		return managedservicev1.ServiceRoleBindingReceipt{}, err
+	}
+	if iamv1.ValidateServiceLinkedRoleAccess(result) != nil || len(result.Bindings) != 1 ||
+		result.Relation.Role.AccountID != iamv1.AccountID(command.Authorization.TenantID) ||
+		result.Relation.Template != command.Request.Template ||
+		result.Bindings[0].AccountID != iamv1.AccountID(command.Authorization.TenantID) ||
+		result.Bindings[0].RoleID != result.Relation.Role.ID ||
+		result.Bindings[0].Template != command.Request.Template ||
+		result.Bindings[0].Workload != (iamv1.ResourceReference{
+			Kind: iamv1.ResourceServiceInstallation, ID: installation.ID,
+		}) {
+		return managedservicev1.ServiceRoleBindingReceipt{}, port.ErrAuthorizationUnavailable
+	}
+	binding := result.Bindings[0]
+	assumeRequestID := serviceRoleSessionRequestID(binding.ID, command.Authorization.RequestID)
+	readRequest := port.WorkloadRoleAuthorizationRequest{
+		Action:       port.AuthorizeInstallationRead,
+		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID},
+		ResourceMode: iamv1.AuthorizationResourceInstance,
+		RequestID:    serviceRoleBusinessReadRequestID(binding.ID, command.Authorization.RequestID),
+	}
+	lease, err := service.workloadRoleRuntime.AssumeWorkloadRole(ctx, binding.ID, assumeRequestID, readRequest)
+	if err != nil {
+		return managedservicev1.ServiceRoleBindingReceipt{}, err
+	}
+	runtimeAuthorization := lease.Authorization()
+	if port.ValidateWorkloadRoleAuthorizationForRequest(runtimeAuthorization, binding.ID, readRequest) != nil ||
+		runtimeAuthorization.TenantID != command.Authorization.TenantID || runtimeAuthorization.RoleID != binding.RoleID ||
+		runtimeAuthorization.SourceServicePrincipalID != result.Relation.ServicePrincipal.PrincipalID {
+		_ = lease.Release(ctx)
+		return managedservicev1.ServiceRoleBindingReceipt{}, port.ErrAuthorizationUnavailable
+	}
+	var serviceRead managedservicev1.ServiceInstallation
+	readErr := service.withTransaction(ctx, runtimeAuthorization.TenantID, ReadOnly, func(transaction Transaction) error {
+		var transactionErr error
+		serviceRead, transactionErr = transaction.GetServiceInstallation(ctx, installation.ID)
+		return transactionErr
+	})
+	releaseErr := lease.Release(ctx)
+	if readErr != nil {
+		if releaseErr != nil {
+			return managedservicev1.ServiceRoleBindingReceipt{}, errors.Join(readErr, releaseErr)
+		}
+		return managedservicev1.ServiceRoleBindingReceipt{}, readErr
+	}
+	if releaseErr != nil {
+		return managedservicev1.ServiceRoleBindingReceipt{}, releaseErr
+	}
+	if managedservicev1.ValidateServiceInstallation(serviceRead) != nil || !reflect.DeepEqual(serviceRead, installation) {
+		return managedservicev1.ServiceRoleBindingReceipt{}, ErrRepositoryUnavailable
+	}
+	receipt := managedservicev1.ServiceRoleBindingReceipt{
+		Kind: "ServiceRoleBindingReceipt", ServiceInstallationID: installation.ID,
+		BindingID: binding.ID, RoleID: binding.RoleID, Template: binding.Template,
+		Status: binding.Status, ResourceVersion: binding.ResourceVersion, CreatedAt: binding.CreatedAt,
+	}
+	if managedservicev1.ValidateServiceRoleBindingReceipt(receipt) != nil {
+		return managedservicev1.ServiceRoleBindingReceipt{}, port.ErrAuthorizationUnavailable
+	}
+	return receipt, nil
+}
+
+// UnbindServiceRole proves both path resources without treating either as an
+// authority selector. IAM recovers the Account, Role, template, workload and
+// service principal from the existing binding and performs its single
+// terminal transition under the same USER and service credentials.
+func (service *Service) UnbindServiceRole(
+	ctx context.Context,
+	command UnbindServiceRoleCommand,
+) (managedservicev1.ServiceRoleUnbindingReceipt, error) {
+	if ctx == nil || port.ValidateAuthorization(command.Authorization) != nil ||
+		command.Authorization.SubjectType != port.SubjectUser || command.Credential == "" ||
+		managedservicev1.ValidateInstallationID(command.InstallationID) != nil ||
+		iamv1.ValidateID("bindingId", string(command.BindingID)) != nil ||
+		managedservicev1.ValidateUnbindServiceRoleRequest(command.Request) != nil ||
+		managedservicev1.ValidateIdempotencyKey(command.IdempotencyKey) != nil {
+		return managedservicev1.ServiceRoleUnbindingReceipt{}, ErrInvalidArgument
+	}
+	var installation managedservicev1.ServiceInstallation
+	err := service.withTransaction(ctx, command.Authorization.TenantID, ReadOnly, func(transaction Transaction) error {
+		var readErr error
+		installation, readErr = transaction.GetServiceInstallation(ctx, command.InstallationID)
+		return readErr
+	})
+	if err != nil {
+		return managedservicev1.ServiceRoleUnbindingReceipt{}, err
+	}
+	if managedservicev1.ValidateServiceInstallation(installation) != nil || installation.ID != command.InstallationID {
+		return managedservicev1.ServiceRoleUnbindingReceipt{}, ErrRepositoryUnavailable
+	}
+	requestID := serviceRoleUnbindingRequestID(command.IdempotencyKey)
+	request := port.AuthorizationRequest{
+		Credential: command.Credential, Action: port.AuthorizeInstallationRoleUnbind,
+		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID},
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: requestID,
+	}
+	binding, err := service.workloadRoleAuthority.RevokeWorkloadRole(
+		ctx, command.BindingID, command.Request.ResourceVersion, request,
+	)
+	if err != nil {
+		return managedservicev1.ServiceRoleUnbindingReceipt{}, err
+	}
+	if iamv1.ValidateWorkloadRoleBinding(binding) != nil ||
+		binding.ID != command.BindingID || binding.AccountID != iamv1.AccountID(command.Authorization.TenantID) ||
+		binding.Workload != (iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: installation.ID}) ||
+		binding.Status != iamv1.WorkloadRoleBindingRevoked || binding.ResourceVersion != command.Request.ResourceVersion+1 ||
+		binding.RevokedAt == nil {
+		return managedservicev1.ServiceRoleUnbindingReceipt{}, port.ErrAuthorizationUnavailable
+	}
+	receipt := managedservicev1.ServiceRoleUnbindingReceipt{
+		Kind: "ServiceRoleUnbindingReceipt", ServiceInstallationID: installation.ID,
+		BindingID: binding.ID, RoleID: binding.RoleID, Template: binding.Template,
+		Status: binding.Status, ResourceVersion: binding.ResourceVersion,
+		CreatedAt: binding.CreatedAt, RevokedAt: *binding.RevokedAt,
+	}
+	if managedservicev1.ValidateServiceRoleUnbindingReceipt(receipt) != nil {
+		return managedservicev1.ServiceRoleUnbindingReceipt{}, port.ErrAuthorizationUnavailable
+	}
+	return receipt, nil
 }
 
 func (service *Service) ActivateQuota(
@@ -482,6 +663,34 @@ func managedAuditEventID(action, resourceID string) string {
 		"matrix-managedservice-audit-event-v1\x00" + action + "\x00" + resourceID,
 	))
 	return "audit-" + hex.EncodeToString(digest[:])
+}
+
+func serviceRoleBindingRequestID(idempotencyKey string) string {
+	digest := sha256.Sum256([]byte(
+		"matrix-managedservice-service-role-binding-v1\x00" + idempotencyKey,
+	))
+	return "msrb-" + hex.EncodeToString(digest[:])
+}
+
+func serviceRoleUnbindingRequestID(idempotencyKey string) string {
+	digest := sha256.Sum256([]byte(
+		"matrix-managedservice-service-role-unbinding-v1\x00" + idempotencyKey,
+	))
+	return "msru-" + hex.EncodeToString(digest[:])
+}
+
+func serviceRoleSessionRequestID(bindingID iamv1.WorkloadRoleBindingID, publicRequestID string) string {
+	digest := sha256.Sum256([]byte(
+		"matrix-managedservice-service-role-session-v1\x00" + string(bindingID) + "\x00" + publicRequestID,
+	))
+	return "msrs-" + hex.EncodeToString(digest[:])
+}
+
+func serviceRoleBusinessReadRequestID(bindingID iamv1.WorkloadRoleBindingID, publicRequestID string) string {
+	digest := sha256.Sum256([]byte(
+		"matrix-managedservice-service-role-read-v1\x00" + string(bindingID) + "\x00" + publicRequestID,
+	))
+	return "msrr-" + hex.EncodeToString(digest[:])
 }
 
 func (service *Service) withWriteRetry(

@@ -1,4 +1,5 @@
 {
+  "outcome": "AUTHENTICATED",
   "session": {
     "apiVersion": "iam.matrix.xiak.com/v1",
     "kind": "Session",

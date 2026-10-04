@@ -373,21 +373,24 @@ func TestFileSecretResolverConsumesProvisionedReadOnlyTreeWithoutMutatingModes(t
 	root := t.TempDir()
 	reference := paasv1.SecretVersionReference{SecretID: "secret-read-only", Version: "version-one"}
 	directory := filepath.Join(root, string(reference.SecretID))
-	if err := os.Mkdir(directory, 0o500); err != nil {
-		t.Fatalf("create read-only secret directory: %v", err)
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatalf("create secret provisioning directory: %v", err)
 	}
 	file := filepath.Join(directory, reference.Version)
-	if err := os.WriteFile(file, []byte("read-only-secret"), 0o400); err != nil {
-		t.Fatalf("write read-only secret: %v", err)
-	}
-	if err := os.Chmod(root, 0o500); err != nil {
-		t.Fatalf("protect read-only secret root: %v", err)
-	}
 	t.Cleanup(func() {
 		_ = os.Chmod(root, 0o700)
 		_ = os.Chmod(directory, 0o700)
 		_ = os.Chmod(file, 0o600)
 	})
+	if err := os.WriteFile(file, []byte("read-only-secret"), 0o400); err != nil {
+		t.Fatalf("write read-only secret: %v", err)
+	}
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatalf("seal read-only secret directory: %v", err)
+	}
+	if err := os.Chmod(root, 0o500); err != nil {
+		t.Fatalf("protect read-only secret root: %v", err)
+	}
 	resolver, err := NewFileSecretResolver(root)
 	if err != nil {
 		t.Fatalf("create read-only SecretResolver: %v", err)

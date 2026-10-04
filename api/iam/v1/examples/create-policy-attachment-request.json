@@ -1,0 +1,6 @@
+{
+  "target": { "kind": "USER", "id": "principal-developer" },
+  "policyId": "system.paas-developer",
+  "policyResourceVersion": 1,
+  "requestId": "request-create-attachment"
+}

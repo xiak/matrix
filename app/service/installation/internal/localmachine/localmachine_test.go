@@ -4,7 +4,10 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -19,6 +23,7 @@ import (
 	"time"
 
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -50,6 +55,52 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	if bootstrap.InstallationID != plan.InstallationID ||
 		len(bootstrap.Services) != len(iamv1.AllServicePurposes()) {
 		t.Fatalf("staged IAM bootstrap identity = %#v", bootstrap)
+	}
+	bootstrapDigest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil {
+		t.Fatalf("digest staged IAM bootstrap: %v", err)
+	}
+	accessKeyKeyringBytes := readTestFile(t, plan.Root, layout.IAMAccessKeyWrappingKeyring)
+	accessKeyKeyring, err := iamv1.DecodeAccessKeyWrappingKeyring(bytes.NewReader(accessKeyKeyringBytes))
+	clear(accessKeyKeyringBytes)
+	if err != nil || accessKeyKeyring.Scope.InstallationID != plan.InstallationID ||
+		accessKeyKeyring.Scope.BootstrapDigest != bootstrapDigest {
+		t.Fatalf("staged access-key wrapping scope = %#v / %v", accessKeyKeyring.Scope, err)
+	}
+	totpKeyringBytes := readTestFile(t, plan.Root, layout.IAMTOTPKeyring)
+	totpKeyring, err := iamv1.DecodeTOTPKeyring(bytes.NewReader(totpKeyringBytes))
+	clear(totpKeyringBytes)
+	if err != nil || totpKeyring.Scope.InstallationID != plan.InstallationID ||
+		totpKeyring.Scope.BootstrapDigest != bootstrapDigest {
+		t.Fatalf("staged TOTP wrapping scope = %#v / %v", totpKeyring.Scope, err)
+	}
+	emailKeyringBytes := readTestFile(t, plan.Root, layout.IAMEmailVerificationKeyring)
+	emailKeyring, err := iamv1.DecodeEmailVerificationKeyring(bytes.NewReader(emailKeyringBytes))
+	clear(emailKeyringBytes)
+	if err != nil || emailKeyring.Scope.InstallationID != plan.InstallationID ||
+		emailKeyring.Scope.BootstrapDigest != bootstrapDigest ||
+		emailKeyring.Purpose != iamv1.EmailVerificationWrappingPurpose {
+		t.Fatalf("staged email-verification wrapping scope = %#v / %v", emailKeyring.Scope, err)
+	}
+	channelBytes := readTestFile(t, plan.Root, layout.IAMSecurityMailSMTPChannel)
+	channel, err := iamv1.DecodeSecurityMailSMTPChannel(bytes.NewReader(channelBytes))
+	clear(channelBytes)
+	if err != nil || channel.Scope != emailKeyring.Scope ||
+		channel.Purpose != iamv1.SecurityMailSubmissionPurpose ||
+		channel.Host != plan.SecurityMail.Configuration.Host ||
+		channel.From != plan.SecurityMail.Configuration.From {
+		t.Fatalf("staged security-mail channel = %#v / %v", channel, err)
+	}
+	for _, relative := range []string{
+		layout.IAMEmailVerificationKeyring,
+		layout.IAMSecurityMailSMTPChannel,
+		layout.IAMNotificationWorker,
+	} {
+		content, err := readManagedFile(plan.Root, filepath.FromSlash(relative), 1024*1024)
+		clear(content)
+		if err != nil {
+			t.Fatalf("security-mail material %s is not protected: %v", relative, err)
+		}
 	}
 
 	serviceCredentials := make(map[iamv1.ServicePurpose][]byte, len(bootstrap.Services))
@@ -88,6 +139,10 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		{layout.PostgresMigration, "matrix"},
 		{layout.IAMAPI, "matrix_iam_api_login"},
 		{layout.IAMWorker, "matrix_iam_worker_login"},
+		{layout.IAMCredentialRecovery, "matrix_iam_credential_recovery_login"},
+		{layout.IAMAuthenticationRecovery, "matrix_iam_authentication_recovery_login"},
+		{layout.IAMBackupCustody, "matrix_iam_backup_custody_login"},
+		{layout.IAMNotificationWorker, "matrix_iam_notification_worker_login"},
 		{layout.AuditRuntime, "matrix_audit_runtime_login"},
 		{layout.PaaSAPI, "matrix_paas_api_login"},
 		{layout.PaaSWorker, "matrix_paas_worker_login"},
@@ -223,6 +278,88 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		); !errors.Is(err, platformcommand.ErrEffectConflict) {
 			t.Fatalf("unsafe APISIX runtime replay error=%v", err)
 		}
+	}
+}
+
+func TestStageSecurityMailRejectsConfigurationScopeAndStoredChannelSubstitution(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage security-mail fixture: %v", err)
+	}
+	before := snapshotManagedCredentials(t, plan.Root)
+
+	replacement := testSecurityMailInput(t)
+	replacement.Configuration.Host = "smtp-replacement.matrix.test"
+	digest, err := installationv1.SecurityMailConfigurationDigest(replacement.Configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement.Digest = digest
+	replaced := plan
+	replaced.SecurityMail = replacement
+	if err := stageInstallation(replaced, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("security-mail replacement error = %v", err)
+	}
+	if after := snapshotManagedCredentials(t, plan.Root); !equalSnapshots(before, after) {
+		t.Fatal("rejected security-mail replacement changed installation credentials")
+	}
+
+	wrongScope := plan
+	wrongScope.InstallationID = "mxi-22222222222222222222222222222222"
+	if err := stageInstallation(wrongScope, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("cross-installation security-mail replay error = %v", err)
+	}
+	if after := snapshotManagedCredentials(t, plan.Root); !equalSnapshots(before, after) {
+		t.Fatal("rejected installation scope changed installation credentials")
+	}
+
+	channelPath, err := managedPath(plan.Root, filepath.FromSlash(layout.IAMSecurityMailSMTPChannel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	channelBytes := readTestFile(t, plan.Root, layout.IAMSecurityMailSMTPChannel)
+	channel, err := iamv1.DecodeSecurityMailSMTPChannel(bytes.NewReader(channelBytes))
+	clear(channelBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel.Host = "smtp-drift.matrix.test"
+	replacementBytes, err := iamv1.EncodeSecurityMailSMTPChannel(channel)
+	channel = iamv1.SecurityMailSMTPChannel{}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(channelPath, replacementBytes, 0o600); err != nil {
+		clear(replacementBytes)
+		t.Fatal(err)
+	}
+	clear(replacementBytes)
+	if _, err := authenticateInstalledPlan(installedPlanFrom(plan)); err == nil {
+		t.Fatal("stored SMTP channel drift authenticated against the sealed journal")
+	}
+}
+
+func TestStageSecurityMailRejectsOrphanedChannel(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage security-mail fixture: %v", err)
+	}
+
+	keyPath, err := managedPath(plan.Root, filepath.FromSlash(layout.IAMEmailVerificationKeyring))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authenticateInstalledPlan(installedPlanFrom(plan)); err == nil {
+		t.Fatal("installed plan authenticated without its email-verification keyring")
+	}
+	if err := stageInstallation(plan, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("orphaned SMTP channel error = %v", err)
+	}
+	if actual := readTestFile(t, plan.Root, layout.IAMSecurityMailSMTPChannel); actual == nil {
+		t.Fatal("orphaned SMTP channel was not retained for explicit repair")
 	}
 }
 
@@ -409,6 +546,10 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 		readTestFile(t, plan.Root, layout.PostgresMigration),
 		readTestFile(t, plan.Root, layout.IAMAPI),
 		readTestFile(t, plan.Root, layout.IAMWorker),
+		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
+		readTestFile(t, plan.Root, layout.IAMAuthenticationRecovery),
+		readTestFile(t, plan.Root, layout.IAMBackupCustody),
+		readTestFile(t, plan.Root, layout.IAMNotificationWorker),
 		readTestFile(t, plan.Root, layout.AuditRuntime),
 		readTestFile(t, plan.Root, layout.PaaSAPI),
 		readTestFile(t, plan.Root, layout.PaaSWorker),
@@ -694,11 +835,9 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	}
 	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
 	runtimeBoundary.started = true
-	managedInventory := "sha256:" + strings.Repeat("a", 64)
 	effects := &Effects{
 		runtime: runtimeBoundary, entropy: rand.Reader,
-		verifier:         &recordingInstallationVerifier{},
-		managedInventory: func(string) (string, error) { return managedInventory, nil },
+		verifier: &recordingInstallationVerifier{},
 	}
 	request := platformcommand.BackupPlan{
 		InstalledPlan: installedPlanFrom(plan),
@@ -708,6 +847,9 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	if err := effects.CreateBackup(context.Background(), request); err != nil {
 		t.Fatalf("create protected backup: %v", err)
 	}
+	if runtimeBoundary.backupCustodyRuns != 1 {
+		t.Fatalf("TOTP backup custody runs = %d, want 1", runtimeBoundary.backupCustodyRuns)
+	}
 	backupRoot := filepath.Join(
 		plan.Root, filepath.FromSlash(layout.BackupDirectory), request.BackupID,
 	)
@@ -716,7 +858,6 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		t.Fatalf("read backup manifest: %v", err)
 	}
 	sealKey := readTestFile(t, plan.Root, layout.BackupSealKey)
-	defer clear(sealKey)
 	for _, forbidden := range [][]byte{secret, sealKey, []byte(plan.Root)} {
 		if bytes.Contains(manifestContent, forbidden) {
 			t.Fatal("backup manifest contains secret or absolute-path material")
@@ -727,7 +868,6 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		manifest.BackupID != request.BackupID ||
 		manifest.InstallationID != plan.InstallationID ||
 		manifest.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
-		manifest.ManagedServiceInventory != managedInventory ||
 		len(manifest.Artifacts) != 2 || manifest.Seal == nil || manifest.Seal.Value == "" {
 		t.Fatalf("sealed backup manifest = %#v", manifest)
 	}
@@ -738,7 +878,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		source.BackupID != request.BackupID || !validSHA256(source.BackupDigest) ||
 		source.ReleaseID != plan.Bundle.Manifest.Release.ID ||
 		source.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
-		source.SchemaVersion != plan.Bundle.Manifest.Database.SchemaVersion {
+		source.Database != plan.Bundle.Manifest.Database {
 		t.Fatalf("authenticated recovery source = %#v / %v", source, err)
 	}
 	foreign := request.InstalledPlan
@@ -764,6 +904,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		t.Fatalf("workload secret snapshot differs: read=%v close=%v", err, closeErr)
 	}
 	streams := runtimeBoundary.backupStreams
+	custodyRuns := runtimeBoundary.backupCustodyRuns
 	if streams == 0 || runtimeBoundary.restoreChecks == 0 ||
 		len(runtimeBoundary.migrationRuns) != len(platformMigrations) {
 		t.Fatal("backup did not verify the schema and PostgreSQL custom dump")
@@ -774,34 +915,17 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	if runtimeBoundary.backupStreams != streams {
 		t.Fatal("backup replay streamed a second database snapshot")
 	}
-	managedInventory = "sha256:" + strings.Repeat("b", 64)
-	if _, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID); !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
-		runtimeBoundary.providerRemovals != 0 || runtimeBoundary.recoveryRestores != 0 {
-		t.Fatalf("changed managed inventory was not rejected before effects: %v", err)
+	if runtimeBoundary.backupCustodyRuns != custodyRuns {
+		t.Fatal("backup replay acquired a second TOTP custody snapshot")
 	}
-	if err := effects.CreateBackup(context.Background(), request); err != nil {
-		t.Fatalf("replay of an authenticated old snapshot failed: %v", err)
-	}
-	if replayed, err := os.ReadFile(filepath.Join(backupRoot, backupManifestFilename)); err != nil || !bytes.Equal(replayed, manifestContent) {
-		t.Fatal("backup replay replaced its original inventory witness")
-	}
-	missingInventory := manifest
-	missingInventory.ManagedServiceInventory = ""
-	missingInventory.Seal = nil
-	signingKey, err := loadBackupSealKey(plan.Root, nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clear(signingKey)
-	missingContent, err := sealBackupManifest(missingInventory, signingKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(backupRoot, backupManifestFilename), missingContent, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID); !errors.Is(err, platformcommand.ErrEffectVerification) {
-		t.Fatalf("backup without a required inventory witness was admitted: %v", err)
+	for _, scalar := range []string{"0", "null"} {
+		ambiguous := append([]byte(`{"schemaVersion":`+scalar+`,`), manifestContent[1:]...)
+		if err := os.WriteFile(filepath.Join(backupRoot, backupManifestFilename), ambiguous, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID); !errors.Is(err, platformcommand.ErrEffectVerification) {
+			t.Fatal("v2 backup accepted an empty legacy schema selector without changing its seal")
+		}
 	}
 	if err := os.WriteFile(filepath.Join(backupRoot, backupManifestFilename), manifestContent, 0o600); err != nil {
 		t.Fatal(err)
@@ -815,41 +939,6 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		context.Background(), request,
 	); !errors.Is(err, platformcommand.ErrEffectVerification) {
 		t.Fatalf("tampered backup replay error = %v", err)
-	}
-}
-
-func TestBackupRejectsManagedInventoryChangeDuringSnapshot(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("local-machine backup effects target Linux")
-	}
-	plan, expectation := configuredPlatformStartFixture(t)
-	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
-	runtimeBoundary.started = true
-	effects := &Effects{
-		runtime: runtimeBoundary, entropy: rand.Reader,
-		verifier: &recordingInstallationVerifier{},
-		managedInventory: func(string) (string, error) {
-			if runtimeBoundary.backupStreams == 0 {
-				return "sha256:" + strings.Repeat("a", 64), nil
-			}
-			return "sha256:" + strings.Repeat("b", 64), nil
-		},
-	}
-	request := platformcommand.BackupPlan{
-		InstalledPlan: installedPlanFrom(plan),
-		BackupID:      "backup-cccccccccccccccccccccccccccccccc",
-		CreatedAt:     time.Date(2026, 8, 26, 5, 0, 0, 0, time.UTC),
-	}
-	if err := effects.CreateBackup(context.Background(), request); !errors.Is(err, platformcommand.ErrEffectPrecondition) {
-		t.Fatalf("backup admitted changing managed inventory: %v", err)
-	}
-	for _, name := range []string{request.BackupID, "." + request.BackupID + ".partial"} {
-		if _, err := os.Lstat(filepath.Join(plan.Root, filepath.FromSlash(layout.BackupDirectory), name)); !os.IsNotExist(err) {
-			t.Fatal("incoherent snapshot was published or retained")
-		}
-	}
-	if !runtimeBoundary.started || runtimeBoundary.providerRemovals != 0 || runtimeBoundary.recoveryRestores != 0 {
-		t.Fatal("rejected backup changed the running platform")
 	}
 }
 
@@ -869,8 +958,6 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
 	runtimeBoundary.started = true
 	projectInspector := newRecoveryProbeInspector(t, plan)
-	managedInventory := "sha256:" + strings.Repeat("a", 64)
-	changeInventoryAfterStop := false
 	verifier := &recordingInstallationVerifier{}
 	verifier.after = func(verifiedPlan platformcommand.InstallPlan) (paasv1.InstallationVerification, error) {
 		state := projectInspector.provision(t, 2)
@@ -882,12 +969,6 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	effects := &Effects{
 		runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
 		projectInspector: projectInspector,
-		managedInventory: func(string) (string, error) {
-			if changeInventoryAfterStop && !runtimeBoundary.started {
-				return "sha256:" + strings.Repeat("b", 64), nil
-			}
-			return managedInventory, nil
-		},
 	}
 	backup := platformcommand.BackupPlan{
 		InstalledPlan: installedPlanFrom(plan),
@@ -926,19 +1007,18 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 		Target:       plan,
 		BackupID:     source.BackupID,
 		BackupDigest: source.BackupDigest,
+		AuthenticationIntent: installationv1.AuthenticationRecoveryIntent{
+			APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:           installationv1.AuthenticationRecoveryIntentKind,
+			Purpose:        installationv1.AuthenticationRecoveryPurpose,
+			InstallationID: plan.InstallationID, Epoch: 1, CommandID: plan.CorrelationID,
+			BackupID: source.BackupID, BackupDigest: source.BackupDigest,
+			SourceReleaseID: plan.Bundle.Manifest.Release.ID, SourceReleaseDigest: plan.Bundle.ManifestSHA256,
+			TargetReleaseID: plan.Bundle.Manifest.Release.ID, TargetReleaseDigest: plan.Bundle.ManifestSHA256,
+			TOTPCustodyDigest:         source.TOTPCustodyDigest,
+			AuthenticationStateDigest: source.AuthenticationStateDigest,
+		},
 	}
-	managedInventory = "sha256:" + strings.Repeat("b", 64)
-	if err := effects.ApplyRecoveryPhase(context.Background(), recovery, lifecycle.PhaseRecovering); !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
-		runtimeBoundary.providerRemovals != removals || runtimeBoundary.recoveryRestores != 0 {
-		t.Fatalf("inventory change after inspection was not rejected before shutdown: %v", err)
-	}
-	managedInventory = "sha256:" + strings.Repeat("a", 64)
-	changeInventoryAfterStop = true
-	if err := effects.ApplyRecoveryPhase(context.Background(), recovery, lifecycle.PhaseRecovering); !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
-		runtimeBoundary.recoveryRestores != 0 {
-		t.Fatalf("inventory race was not rejected before database restore: %v", err)
-	}
-	changeInventoryAfterStop = false
 	for _, phase := range []lifecycle.Phase{
 		lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying,
 	} {
@@ -963,6 +1043,185 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 			runtimeBoundary.recoveryRestores, runtimeBoundary.postgresOnly,
 			runtimeBoundary.started, runtimeBoundary.providerRemovals, verifier.calls,
 		)
+	}
+}
+
+func TestRecoveryRejectsDifferentProfilesBeforeProviderEffects(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine recovery effects target Linux")
+	}
+	for _, difference := range []string{"revision", "PaaS schema"} {
+		t.Run(difference, func(t *testing.T) {
+			targetProfile := release.CurrentDatabaseProfile()
+			currentProfile := targetProfile
+			if difference == "revision" {
+				currentProfile.ContractRevision++
+			} else {
+				currentProfile.Authorities.PaaS++
+			}
+			upgrade := newUpgradePlan(t, targetProfile, currentProfile)
+			target, err := authenticateInstalledPlan(upgrade.Source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clear(target.TrustBytes)
+			installation, err := verifiedInstallationConfiguration(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectation, err := decodePlatformExpectation(installation.topology.ComposeJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtimeBoundary := newPlatformStartRuntime(target, expectation)
+			runtimeBoundary.started = true
+			verifier := &recordingInstallationVerifier{}
+			effects := &Effects{runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+				projectInspector: newRecoveryProbeInspector(t, target)}
+			backup := platformcommand.BackupPlan{
+				InstalledPlan: upgrade.Source, BackupID: upgrade.BackupID, CreatedAt: upgrade.CreatedAt,
+			}
+			if err := effects.CreateBackup(context.Background(), backup); err != nil {
+				t.Fatal(err)
+			}
+			source, err := effects.InspectBackup(context.Background(), upgrade.Source, backup.BackupID)
+			if err != nil || source.Database != targetProfile {
+				t.Fatalf("authenticate selected backup profile: %v", err)
+			}
+			recovery := platformcommand.RecoveryPlan{Current: upgrade.Target, Target: target,
+				BackupID: source.BackupID, BackupDigest: source.BackupDigest}
+			current, selected, _, err := authenticateRecoveryPlan(recovery)
+			clear(current.TrustBytes)
+			clear(selected.TrustBytes)
+			if !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatalf("different current profile admitted to authenticated recovery: %v", err)
+			}
+			credentials := snapshotManagedCredentials(t, target.Root)
+			for _, phase := range []lifecycle.Phase{lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying} {
+				if err := effects.ApplyRecoveryPhase(context.Background(), recovery, phase); !errors.Is(err, platformcommand.ErrEffectVerification) {
+					t.Fatalf("different recovery profile reached %s: %v", phase, err)
+				}
+			}
+			if runtimeBoundary.providerRemovals != 0 || runtimeBoundary.composeCalls != 0 ||
+				runtimeBoundary.recoveryRestores != 0 || verifier.calls != 0 || !runtimeBoundary.started ||
+				!reflect.DeepEqual(snapshotManagedCredentials(t, target.Root), credentials) {
+				t.Fatal("rejected recovery changed service, data, credentials or provider state")
+			}
+			assertReleaseConfiguration(t, target)
+			retained, err := effects.InspectBackup(context.Background(), upgrade.Source, backup.BackupID)
+			if err != nil || retained != source {
+				t.Fatalf("rejected recovery changed the authenticated backup: %v", err)
+			}
+		})
+	}
+}
+
+func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine backup effects target Linux")
+	}
+	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
+	// Produce the backup through the current private snapshot protocol, then
+	// rewrite only its published v1 manifest bytes below. Supporting a sealed
+	// legacy manifest does not make the legacy runtime profile executable by
+	// the current backup-custody helper.
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	effects := &Effects{runtime: runtimeBoundary, entropy: rand.Reader, verifier: &recordingInstallationVerifier{}}
+	request := platformcommand.BackupPlan{
+		InstalledPlan: installedPlanFrom(plan), BackupID: "backup-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		CreatedAt: time.Date(2026, 8, 26, 5, 0, 0, 0, time.UTC),
+	}
+	if err := effects.CreateBackup(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(plan.Root, filepath.FromSlash(layout.BackupDirectory), request.BackupID, backupManifestFilename)
+	content, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest backupManifest
+	if err := json.Unmarshal(content, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = legacyBackupAPIVersion, 1, release.DatabaseProfile{}
+	manifest.AccessKeyWrapping = nil
+	manifest.TOTPBackupCustody = nil
+	manifest.AuthenticationStateDigest = ""
+	key, err := loadBackupSealKey(plan.Root, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(key)
+	artifacts, err := json.Marshal(manifest.Artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Freeze the published v1 HMAC input independently of the new Go struct.
+	canonical := []byte(fmt.Sprintf(`{"apiVersion":"installation.matrix.xiak.com/v1","kind":"PlatformBackup","backupId":%q,"installationId":%q,"releaseId":%q,"releaseDigest":%q,"schemaVersion":1,"createdAt":"2026-08-26T05:00:00Z","artifacts":%s}`,
+		manifest.BackupID, manifest.InstallationID, manifest.ReleaseID, manifest.ReleaseDigest, artifacts))
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte("matrix-platform-backup-v1\x00"))
+	_, _ = mac.Write(canonical)
+	sealed := append(append([]byte(nil), canonical[:len(canonical)-1]...),
+		[]byte(fmt.Sprintf(`,"seal":{"algorithm":"HMAC-SHA256","keyId":"installation-backup-v1","value":"sha256:%s"}}`+"\n", hex.EncodeToString(mac.Sum(nil))))...)
+	roundTrip, err := sealBackupManifest(manifest, key)
+	if err != nil || !bytes.Equal(roundTrip, sealed) {
+		t.Fatalf("published backup seal changed: %v", err)
+	}
+	if err := os.WriteFile(backupPath, sealed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacyManifest, _, err := readVerifiedBackupDirectory(
+		plan.Root, plan.InstallationID, request.BackupID,
+		filepath.Join(filepath.FromSlash(layout.BackupDirectory), request.BackupID), key,
+	)
+	profile, profileErr := legacyManifest.databaseProfile()
+	if err != nil || profileErr != nil || profile != legacy {
+		t.Fatalf("read published backup: %#v / %v / %v", profile, err, profileErr)
+	}
+	if err := effects.CreateBackup(context.Background(), request); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("legacy backup replay was not rejected by the current runtime: %v", err)
+	}
+	retained, err := os.ReadFile(backupPath)
+	if err != nil || !bytes.Equal(retained, sealed) {
+		t.Fatal("legacy backup replay rewrote its sealed bytes")
+	}
+
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = legacyBackupAPIVersion, 2, release.DatabaseProfile{}
+	substituted, err := sealBackupManifest(manifest, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backupPath, substituted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if different, _, err := readVerifiedBackupDirectory(
+		plan.Root, plan.InstallationID, request.BackupID,
+		filepath.Join(filepath.FromSlash(layout.BackupDirectory), request.BackupID), key,
+	); err != nil || different.SchemaVersion != 2 {
+		t.Fatalf("read validly sealed alternate legacy profile: %v", err)
+	}
+	if err := effects.CreateBackup(context.Background(), request); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("validly sealed different profile masked the installed release: %v", err)
+	}
+}
+
+func TestBackupProfileRejectsMissingAndAmbiguousVersions(t *testing.T) {
+	for _, manifest := range []backupManifest{
+		{APIVersion: backupAPIVersion},
+		{APIVersion: legacyBackupAPIVersion},
+		{APIVersion: legacyBackupAPIVersion, SchemaVersion: 1, Database: release.CurrentDatabaseProfile()},
+		{APIVersion: backupAPIVersion, SchemaVersion: 1, Database: release.CurrentDatabaseProfile()},
+		{APIVersion: "installation.matrix.xiak.com/v3", Database: release.CurrentDatabaseProfile()},
+	} {
+		if _, err := manifest.databaseProfile(); err == nil {
+			t.Fatal("ambiguous backup profile accepted")
+		}
+		if _, err := sealBackupManifest(manifest, bytes.Repeat([]byte{1}, sha256.Size)); err == nil {
+			t.Fatal("ambiguous backup profile was sealed")
+		}
 	}
 }
 
@@ -1017,7 +1276,7 @@ func TestSupportEvidenceIsBoundedSanitizedAndUsefulWhenDegraded(t *testing.T) {
 	var healthy supportEvidence
 	if json.Unmarshal(content, &healthy) != nil || healthy.State != supportStateReady ||
 		healthy.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
-		healthy.DatabaseSchemaVersion != plan.Bundle.Manifest.Database.SchemaVersion ||
+		healthy.Database != plan.Bundle.Manifest.Database ||
 		len(healthy.Components) != len(expectation.Services) ||
 		len(healthy.Images) != len(plan.Bundle.Manifest.Images) {
 		t.Fatalf("healthy support evidence = %#v", healthy)
@@ -1199,9 +1458,10 @@ func TestUpgradeProjectClassificationRejectsMixedReleaseOwnership(t *testing.T) 
 
 func configuredPlatformStartFixture(
 	t *testing.T,
+	profiles ...release.DatabaseProfile,
 ) (platformcommand.InstallPlan, platformComposeExpectation) {
 	t.Helper()
-	plan := newInstallPlan(t)
+	plan := newInstallPlan(t, profiles...)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
 		t.Fatalf("stage installation: %v", err)
 	}
@@ -1323,12 +1583,13 @@ func TestGeneratedCredentialKindsCannotBeSubstituted(t *testing.T) {
 	}
 }
 
-func newInstallPlan(t *testing.T) platformcommand.InstallPlan {
+func newInstallPlan(t *testing.T, profiles ...release.DatabaseProfile) platformcommand.InstallPlan {
 	t.Helper()
-	fixture, err := releasetest.Write(t.TempDir())
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 1, profiles...)
 	if err != nil {
 		t.Fatalf("write release fixture: %v", err)
 	}
+	fixture := fixtures[0]
 	trustBytes, err := os.ReadFile(fixture.TrustPath)
 	if err != nil {
 		t.Fatalf("read release trust: %v", err)
@@ -1346,12 +1607,32 @@ func newInstallPlan(t *testing.T) platformcommand.InstallPlan {
 		CorrelationID: "cmd-11111111111111111111111111111111",
 		Listener:      "0.0.0.0", Port: 8080, Bundle: bundle,
 		Trust: fixture.Trust, TrustBytes: trustBytes,
+		SecurityMail: testSecurityMailInput(t),
 	}
 }
 
-func newUpgradePlan(t *testing.T) platformcommand.UpgradePlan {
+func testSecurityMailInput(t *testing.T) platformcommand.SecurityMailInput {
 	t.Helper()
-	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2)
+	password, err := iamv1.NewSecret("smtp-private-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := installationv1.SecurityMailConfiguration{
+		APIVersion: installationv1.SecurityMailConfigurationAPIVersion,
+		Kind:       installationv1.SecurityMailConfigurationKind,
+		Host:       "smtp.matrix.test", Port: 587, TLSMode: iamv1.SecurityMailSTARTTLS,
+		Username: "matrix-sender", Password: password, From: "security@matrix.test",
+	}
+	digest, err := installationv1.SecurityMailConfigurationDigest(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return platformcommand.SecurityMailInput{Digest: digest, Configuration: configuration}
+}
+
+func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformcommand.UpgradePlan {
+	t.Helper()
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, profiles...)
 	if err != nil {
 		t.Fatalf("write upgrade release fixtures: %v", err)
 	}
@@ -1375,6 +1656,7 @@ func newUpgradePlan(t *testing.T) platformcommand.UpgradePlan {
 		CorrelationID: "cmd-11111111111111111111111111111111",
 		Listener:      "0.0.0.0", Port: 8080, Bundle: bundles[0],
 		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
+		SecurityMail: testSecurityMailInput(t),
 	}
 	if err := stageInstallation(source, rand.Reader); err != nil {
 		t.Fatalf("stage upgrade source: %v", err)
@@ -1422,10 +1704,11 @@ func installedPlanFrom(plan platformcommand.InstallPlan) platformcommand.Install
 		Root: plan.Root, InstallationID: plan.InstallationID,
 		CorrelationID: plan.CorrelationID,
 		Listener:      plan.Listener, Port: plan.Port,
-		ReleaseID:        plan.Bundle.Manifest.Release.ID,
-		ReleaseDigest:    plan.Bundle.ManifestSHA256,
-		TrustKeyID:       plan.Trust.KeyID,
-		TrustFingerprint: plan.Trust.PublicKeyFingerprint,
+		ReleaseID:          plan.Bundle.Manifest.Release.ID,
+		ReleaseDigest:      plan.Bundle.ManifestSHA256,
+		SecurityMailDigest: plan.SecurityMail.Digest,
+		TrustKeyID:         plan.Trust.KeyID,
+		TrustFingerprint:   plan.Trust.PublicKeyFingerprint,
 	}
 }
 
@@ -1444,10 +1727,15 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.ReleaseTrust, layout.IAMBootstrap, layout.AuditIAMCredential,
 		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
+		layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring,
+		layout.IAMEmailVerificationKeyring, layout.IAMSecurityMailSMTPChannel,
+		layout.IAMCursorKey,
 		layout.BackupSealKey,
 		layout.InitialAdministratorPassword,
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,
-		layout.IAMWorker, layout.AuditRuntime, layout.PaaSAPI, layout.PaaSWorker,
+		layout.IAMWorker, layout.IAMCredentialRecovery, layout.IAMAuthenticationRecovery,
+		layout.IAMBackupCustody, layout.IAMNotificationWorker,
+		layout.AuditRuntime, layout.PaaSAPI, layout.PaaSWorker,
 	}
 	result := make(map[string]string, len(paths))
 	for _, path := range paths {
@@ -1550,6 +1838,13 @@ type migrationRuntime struct {
 type platformStartRuntime struct {
 	expectation               platformComposeExpectation
 	images                    map[string]bool
+	root                      string
+	installationID            string
+	correlationID             string
+	releaseID                 string
+	iamImageID                string
+	authenticationRecovery    platformContainerInspection
+	authenticationPresent     bool
 	started                   bool
 	resourceDriftService      string
 	userDriftService          string
@@ -1563,6 +1858,7 @@ type platformStartRuntime struct {
 	migrationRuns             [][]string
 	databaseDump              []byte
 	backupStreams             int
+	backupCustodyRuns         int
 	restoreChecks             int
 	recoveryRestores          int
 	postgresOnly              bool
@@ -1593,12 +1889,25 @@ func newPlatformStartRuntime(
 	expectation platformComposeExpectation,
 ) *platformStartRuntime {
 	images := make(map[string]bool, len(plan.Bundle.Manifest.Images))
+	iamImageID := ""
+	iamImages := 0
 	for _, image := range plan.Bundle.Manifest.Images {
 		images[image.ImageID] = true
+		if image.Component == "iam" {
+			iamImages++
+			iamImageID = image.ImageID
+		}
+	}
+	if iamImages != 1 {
+		iamImageID = ""
 	}
 	return &platformStartRuntime{
-		expectation: expectation, images: images,
-		databaseDump: []byte("matrix-postgresql-custom-backup-fixture"),
+		expectation: expectation, images: images, root: plan.Root,
+		installationID: plan.InstallationID,
+		correlationID:  plan.CorrelationID,
+		releaseID:      plan.Bundle.Manifest.Release.ID,
+		iamImageID:     iamImageID,
+		databaseDump:   []byte("matrix-postgresql-custom-backup-fixture"),
 	}
 }
 
@@ -1794,6 +2103,9 @@ func (runtimeBoundary *platformStartRuntime) Run(
 	if input != nil {
 		return nil, false, errors.New("platform start Docker invocation has unexpected stdin")
 	}
+	if output, started, handled, err := runtimeBoundary.runAuthenticationRecovery(arguments); handled {
+		return output, started, err
+	}
 	if arguments[0] == "exec" && slices.Contains(arguments, "psql") {
 		if !slices.Contains(arguments, "--no-password") {
 			return nil, false, errors.New("platform database observation may prompt for a password")
@@ -1804,6 +2116,9 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		imageID := arguments[4]
 		if !runtimeBoundary.images[imageID] {
 			return nil, true, errors.New("platform image is absent")
+		}
+		if arguments[3] == "{{json .Config.Env}}" {
+			return []byte(`["PATH=/usr/bin"]`), true, nil
 		}
 		return []byte(imageID + "|linux|amd64\n"), true, nil
 	}
@@ -1944,13 +2259,16 @@ func (runtimeBoundary *platformStartRuntime) Run(
 }
 
 func (runtimeBoundary *platformStartRuntime) RunTo(
-	_ context.Context,
+	ctx context.Context,
 	input io.Reader,
 	output io.Writer,
 	arguments ...string,
 ) (bool, error) {
 	if output == nil {
 		return false, errors.New("platform backup streaming invocation is invalid")
+	}
+	if hasArgumentPair(arguments, "--entrypoint", totpBackupCustodyEntrypoint) {
+		return runtimeBoundary.runTOTPBackupCustody(ctx, input, output, arguments)
 	}
 	if slices.Contains(arguments, "pg_restore") {
 		if input == nil {
@@ -1998,6 +2316,392 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 	return true, err
 }
 
+func (runtimeBoundary *platformStartRuntime) runAuthenticationRecovery(
+	arguments []string,
+) ([]byte, bool, bool, error) {
+	if len(arguments) < 2 || arguments[0] != "container" {
+		return nil, false, false, nil
+	}
+	const identity = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	switch arguments[1] {
+	case "ls":
+		filter := ""
+		for index := 0; index+1 < len(arguments); index++ {
+			if arguments[index] == "--filter" && strings.HasPrefix(arguments[index+1], "name=^/") &&
+				strings.Contains(arguments[index+1], "-iam-authentication-recovery-") {
+				filter = arguments[index+1]
+			}
+		}
+		if filter == "" {
+			return nil, false, false, nil
+		}
+		want := "name=^/" + strings.TrimPrefix(runtimeBoundary.authenticationRecovery.Name, "/") + "$"
+		if !runtimeBoundary.authenticationPresent || filter != want {
+			return nil, true, true, nil
+		}
+		return []byte(identity + "\n"), true, true, nil
+	case "create":
+		if !hasArgumentPair(arguments, "--entrypoint", authenticationRecoveryEntrypoint) {
+			return nil, false, false, nil
+		}
+		container, err := runtimeBoundary.authenticationRecoveryContainer(arguments, identity)
+		if err != nil {
+			return nil, true, true, err
+		}
+		runtimeBoundary.authenticationRecovery = container
+		runtimeBoundary.authenticationPresent = true
+		return []byte(identity + "\n"), true, true, nil
+	case "inspect":
+		if !runtimeBoundary.authenticationPresent || arguments[len(arguments)-1] != identity {
+			return nil, false, false, nil
+		}
+		encoded, err := json.Marshal(runtimeBoundary.authenticationRecovery)
+		return encoded, true, true, err
+	case "start":
+		if !runtimeBoundary.authenticationPresent || arguments[len(arguments)-1] != identity ||
+			!slices.Contains(arguments, "--attach") {
+			return nil, false, false, nil
+		}
+		output, err := runtimeBoundary.authenticationRecoveryResult()
+		runtimeBoundary.authenticationRecovery.State = platformContainerState{Status: "exited"}
+		return output, true, true, err
+	case "rm":
+		if !runtimeBoundary.authenticationPresent || arguments[len(arguments)-1] != identity ||
+			runtimeBoundary.authenticationRecovery.State.Running {
+			return nil, false, false, nil
+		}
+		runtimeBoundary.authenticationPresent = false
+		runtimeBoundary.authenticationRecovery = platformContainerInspection{}
+		return nil, true, true, nil
+	default:
+		return nil, false, false, nil
+	}
+}
+
+func (runtimeBoundary *platformStartRuntime) authenticationRecoveryContainer(
+	arguments []string,
+	identity string,
+) (platformContainerInspection, error) {
+	if runtimeBoundary.root == "" || runtimeBoundary.installationID == "" ||
+		runtimeBoundary.correlationID == "" || runtimeBoundary.releaseID == "" ||
+		runtimeBoundary.iamImageID == "" || len(arguments) < 4 ||
+		arguments[len(arguments)-2] != runtimeBoundary.iamImageID {
+		return platformContainerInspection{}, errors.New("authentication recovery fixture is incomplete")
+	}
+	mode := arguments[len(arguments)-1]
+	if mode != installationv1.AuthenticationRecoveryCloseCommand &&
+		mode != installationv1.AuthenticationRecoveryReconcileCommand &&
+		mode != installationv1.AuthenticationRecoveryReopenCommand {
+		return platformContainerInspection{}, errors.New("authentication recovery mode is invalid")
+	}
+	values := func(name string) []string {
+		found := make([]string, 0, 2)
+		for index := 0; index+1 < len(arguments); index++ {
+			if arguments[index] == name {
+				found = append(found, arguments[index+1])
+			}
+		}
+		return found
+	}
+	one := func(name string) (string, bool) {
+		found := values(name)
+		return strings.Join(found, ""), len(found) == 1
+	}
+	name, nameOK := one("--name")
+	networkID, networkOK := one("--network")
+	user, userOK := one("--user")
+	entrypoint, entrypointOK := one("--entrypoint")
+	wantName := runtimeBoundary.expectation.Name + "-iam-authentication-recovery-" + mode
+	if !nameOK || name != wantName || !networkOK || networkID != "network-control" ||
+		!userOK || user != "0:0" || !entrypointOK || entrypoint != authenticationRecoveryEntrypoint ||
+		!hasArgumentPair(arguments, "--pull", "never") || !slices.Contains(arguments, "--read-only") ||
+		!hasArgumentPair(arguments, "--cpus", "1") || !hasArgumentPair(arguments, "--memory", "256m") ||
+		!hasArgumentPair(arguments, "--memory-swap", "256m") || !hasArgumentPair(arguments, "--pids-limit", "64") ||
+		!hasArgumentPair(arguments, "--ipc", "private") || !hasArgumentPair(arguments, "--cgroupns", "private") ||
+		!hasArgumentPair(arguments, "--restart", "no") || !hasArgumentPair(arguments, "--log-driver", "none") {
+		return platformContainerInspection{}, errors.New("authentication recovery isolation is invalid")
+	}
+	labels := make(map[string]string)
+	for _, value := range values("--label") {
+		key, labelValue, found := strings.Cut(value, "=")
+		if !found || key == "" || labels[key] != "" {
+			return platformContainerInspection{}, errors.New("authentication recovery labels are invalid")
+		}
+		labels[key] = labelValue
+	}
+	if labels["com.xiak.matrix.managed"] != "true" ||
+		labels["com.xiak.matrix.installation"] != runtimeBoundary.installationID ||
+		labels["com.xiak.matrix.release"] != runtimeBoundary.releaseID ||
+		labels["com.xiak.matrix.role"] != "iam-authentication-recovery-"+mode ||
+		labels["com.xiak.matrix.command"] != runtimeBoundary.correlationID ||
+		!validSHA256(labels["com.xiak.matrix.input"]) {
+		return platformContainerInspection{}, errors.New("authentication recovery labels differ")
+	}
+	mounts := make([]platformProviderMount, 0, 3)
+	for _, value := range values("--mount") {
+		fields := strings.Split(value, ",")
+		if len(fields) != 4 || fields[0] != "type=bind" || fields[3] != "readonly" ||
+			!strings.HasPrefix(fields[1], "src=") || !strings.HasPrefix(fields[2], "dst=") {
+			return platformContainerInspection{}, errors.New("authentication recovery mount is invalid")
+		}
+		source, destination := strings.TrimPrefix(fields[1], "src="), strings.TrimPrefix(fields[2], "dst=")
+		if !strings.HasPrefix(filepath.Clean(source)+string(os.PathSeparator), filepath.Clean(runtimeBoundary.root)+string(os.PathSeparator)) {
+			return platformContainerInspection{}, errors.New("authentication recovery mount escaped the installation")
+		}
+		mounts = append(mounts, platformProviderMount{Type: "bind", Source: source, Destination: destination})
+	}
+	environment := append([]string{"PATH=/usr/bin"}, values("--env")...)
+	limit := int64(64)
+	container := platformContainerInspection{
+		ID: identity, Name: "/" + name, Image: runtimeBoundary.iamImageID,
+		Config: platformContainerConfig{
+			Labels: labels, User: user, Env: environment,
+			Entrypoint: []string{entrypoint}, Cmd: []string{mode},
+		},
+		State:  platformContainerState{Status: "created"},
+		Mounts: mounts,
+		HostConfig: platformHostConfig{
+			ReadonlyRootfs: true, NetworkMode: networkID, Memory: 256 * 1024 * 1024,
+			MemorySwap: 256 * 1024 * 1024, PidsLimit: &limit, NanoCPUs: 1_000_000_000,
+			CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
+			Tmpfs:   map[string]string{"/tmp": "rw,noexec,nosuid,size=64m"},
+			IpcMode: "private", CgroupnsMode: "private",
+		},
+	}
+	container.HostConfig.RestartPolicy.Name = "no"
+	container.HostConfig.LogConfig.Type = "none"
+	container.NetworkSettings.Networks = map[string]struct {
+		NetworkID string `json:"NetworkID"`
+	}{"control": {}}
+	return container, nil
+}
+
+func (runtimeBoundary *platformStartRuntime) authenticationRecoveryResult() ([]byte, error) {
+	container := runtimeBoundary.authenticationRecovery
+	if len(container.Config.Cmd) != 1 {
+		return nil, errors.New("authentication recovery command is absent")
+	}
+	mounted := func(destination string) ([]byte, error) {
+		for _, mount := range container.Mounts {
+			if mount.Destination == destination {
+				return os.ReadFile(mount.Source)
+			}
+		}
+		return nil, errors.New("authentication recovery protected input is absent")
+	}
+	switch container.Config.Cmd[0] {
+	case installationv1.AuthenticationRecoveryCloseCommand:
+		encoded, err := mounted("/run/matrix/authentication-recovery-input.json")
+		if err != nil {
+			return nil, err
+		}
+		intent, err := installationv1.DecodeAuthenticationRecoveryIntent(bytes.NewReader(encoded))
+		clear(encoded)
+		if err != nil {
+			return nil, err
+		}
+		intentDigest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
+		if err != nil {
+			return nil, err
+		}
+		_, bootstrapDigest, err := sealedIAMBootstrapScope(runtimeBoundary.root, runtimeBoundary.installationID)
+		if err != nil {
+			return nil, err
+		}
+		closedAt := time.Date(2026, 10, 3, 8, 9, 10, 11_000, time.UTC)
+		snapshot := installationv1.AuthenticationRecoverySecuritySnapshot{
+			APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:           installationv1.AuthenticationRecoverySecuritySnapshotKind,
+			Purpose:        installationv1.AuthenticationRecoveryPurpose,
+			InstallationID: intent.InstallationID, BootstrapDigest: bootstrapDigest,
+			Epoch: intent.Epoch, CommandID: intent.CommandID, RecoveryIntentDigest: intentDigest,
+			ClosedAt: closedAt, AuthenticationStateDigest: intent.AuthenticationStateDigest,
+			Accounts: []installationv1.AuthenticationRecoveryAccountReplay{{
+				AccountID: "account", Users: []installationv1.AuthenticationRecoveryUserReplay{{
+					UserID: "root", LastConsumedStep: -1,
+				}},
+			}},
+		}
+		snapshotDigest, err := installationv1.AuthenticationRecoverySecuritySnapshotDigest(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		closure := installationv1.AuthenticationRecoveryClosure{
+			APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:           installationv1.AuthenticationRecoveryClosureKind,
+			Purpose:        installationv1.AuthenticationRecoveryPurpose,
+			InstallationID: intent.InstallationID, Epoch: intent.Epoch,
+			State: installationv1.AuthenticationRecoveryStateClosed, CommandID: intent.CommandID,
+			BackupID: intent.BackupID, BackupDigest: intent.BackupDigest,
+			RecoveryIntentDigest: intentDigest, TOTPCustodyDigest: intent.TOTPCustodyDigest,
+			ClosedAt: closedAt, SecuritySnapshotDigest: snapshotDigest,
+		}
+		return installationv1.EncodeAuthenticationRecoveryClosureEnvelope(
+			installationv1.AuthenticationRecoveryClosureEnvelope{
+				APIVersion: installationv1.AuthenticationRecoveryAPIVersion,
+				Kind:       installationv1.AuthenticationRecoveryClosureEnvelopeKind,
+				Purpose:    installationv1.AuthenticationRecoveryPurpose,
+				Closure:    closure, SecuritySnapshot: snapshot,
+			},
+		)
+	case installationv1.AuthenticationRecoveryReconcileCommand, installationv1.AuthenticationRecoveryReopenCommand:
+		closureBytes, err := mounted("/run/matrix/authentication-recovery-input.json")
+		if err != nil {
+			return nil, err
+		}
+		closure, err := installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(closureBytes))
+		clear(closureBytes)
+		if err != nil {
+			return nil, err
+		}
+		snapshotBytes, err := mounted("/run/matrix/authentication-recovery-security-snapshot.json")
+		if err != nil {
+			return nil, err
+		}
+		snapshot, err := installationv1.DecodeAuthenticationRecoverySecuritySnapshot(bytes.NewReader(snapshotBytes))
+		clear(snapshotBytes)
+		if err != nil || installationv1.ValidateAuthenticationRecoverySecuritySnapshotForClosure(snapshot, closure) != nil {
+			return nil, errors.New("authentication recovery snapshot differs")
+		}
+		if container.Config.Cmd[0] == installationv1.AuthenticationRecoveryReconcileCommand {
+			return installationv1.EncodeAuthenticationRecoveryClosure(closure)
+		}
+		closureDigest, err := installationv1.AuthenticationRecoveryClosureDigest(closure)
+		if err != nil {
+			return nil, err
+		}
+		return installationv1.EncodeAuthenticationRecoveryCompletion(
+			installationv1.AuthenticationRecoveryCompletion{
+				APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
+				Kind:           installationv1.AuthenticationRecoveryCompletionKind,
+				Purpose:        installationv1.AuthenticationRecoveryPurpose,
+				InstallationID: closure.InstallationID, Epoch: closure.Epoch,
+				State: installationv1.AuthenticationRecoveryStateReopened, CommandID: closure.CommandID,
+				ClosureDigest: closureDigest, CompletedAt: closure.ClosedAt.Add(time.Microsecond),
+				SecuritySnapshotDigest: closure.SecuritySnapshotDigest,
+			},
+		)
+	default:
+		return nil, errors.New("authentication recovery mode is unsupported")
+	}
+}
+
+func (runtimeBoundary *platformStartRuntime) runTOTPBackupCustody(
+	ctx context.Context,
+	input io.Reader,
+	output io.Writer,
+	arguments []string,
+) (bool, error) {
+	if ctx == nil || input == nil || runtimeBoundary.root == "" ||
+		runtimeBoundary.installationID == "" || runtimeBoundary.releaseID == "" ||
+		runtimeBoundary.iamImageID == "" {
+		return false, errors.New("TOTP backup custody fixture is incomplete")
+	}
+	backupID := ""
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] != "--label" ||
+			!strings.HasPrefix(arguments[index+1], "com.xiak.matrix.backup=") {
+			continue
+		}
+		if backupID != "" {
+			return true, errors.New("TOTP backup custody has ambiguous backup identity")
+		}
+		backupID = strings.TrimPrefix(arguments[index+1], "com.xiak.matrix.backup=")
+	}
+	if !backupIDPattern.MatchString(backupID) {
+		return true, errors.New("TOTP backup custody backup identity is invalid")
+	}
+	dsnSource, err := managedPath(
+		runtimeBoundary.root, filepath.FromSlash(layout.IAMBackupCustody),
+	)
+	if err != nil {
+		return true, err
+	}
+	want := []string{
+		"run", "--rm", "--pull", "never", "--interactive",
+		"--name", runtimeBoundary.expectation.Name + "-iam-backup-custody-" + strings.TrimPrefix(backupID, "backup-"),
+		"--network", "network-control",
+		"--user", "0:0", "--read-only",
+		"--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+		"--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+		"--cpus", "1", "--memory", "256m", "--memory-swap", "256m",
+		"--pids-limit", "64", "--ipc", "private", "--cgroupns", "private",
+		"--log-driver", "none",
+		"--label", "com.xiak.matrix.managed=true",
+		"--label", "com.xiak.matrix.installation=" + runtimeBoundary.installationID,
+		"--label", "com.xiak.matrix.release=" + runtimeBoundary.releaseID,
+		"--label", "com.xiak.matrix.role=iam-backup-custody",
+		"--label", "com.xiak.matrix.backup=" + backupID,
+		"--mount", "type=bind,src=" + dsnSource + ",dst=" + totpBackupCustodyDSNTarget + ",readonly",
+		"--env", installationv1.TOTPBackupCustodyDatabaseDSNFileEnvironment + "=" + totpBackupCustodyDSNTarget,
+		"--entrypoint", totpBackupCustodyEntrypoint,
+		runtimeBoundary.iamImageID, installationv1.TOTPBackupCustodySnapshotCommand,
+	}
+	if !slices.Equal(arguments, want) {
+		return true, fmt.Errorf("TOTP backup custody invocation is invalid: %q", strings.Join(arguments, " "))
+	}
+	keyring, err := readTOTPKeyring(runtimeBoundary.root, runtimeBoundary.installationID)
+	if err != nil {
+		return true, err
+	}
+	defer func() { keyring = iamv1.TOTPKeyring{} }()
+	required := make([]installationv1.TOTPBackupRequiredKey, 0, len(keyring.Keys))
+	for _, key := range keyring.Keys {
+		commitment, commitmentErr := iamv1.TOTPKeyMaterialCommitment(keyring, key.KeyID)
+		if commitmentErr != nil {
+			return true, commitmentErr
+		}
+		required = append(required, installationv1.TOTPBackupRequiredKey{
+			KeyID: key.KeyID, FormatVersion: key.FormatVersion, Commitment: commitment,
+		})
+	}
+	custody := installationv1.TOTPBackupCustody{
+		APIVersion:     installationv1.TOTPBackupCustodyAPIVersion,
+		Kind:           installationv1.TOTPBackupCustodyKind,
+		Purpose:        installationv1.TOTPBackupCustodyPurpose,
+		InstallationID: keyring.Scope.InstallationID, BootstrapDigest: keyring.Scope.BootstrapDigest,
+		KeysetRevision: keyring.KeysetRevision, RequiredKeys: required,
+	}
+	custodyDigest, err := installationv1.TOTPBackupCustodyDigest(custody)
+	if err != nil {
+		return true, err
+	}
+	authenticationState := sha256.Sum256([]byte(
+		"matrix.localmachine.test.authentication-state.v1\x00" + runtimeBoundary.installationID,
+	))
+	lease := installationv1.TOTPBackupSnapshotLease{
+		APIVersion: installationv1.TOTPBackupCustodyAPIVersion,
+		Kind:       installationv1.TOTPBackupSnapshotLeaseKind,
+		Purpose:    installationv1.TOTPBackupCustodyPurpose,
+		SnapshotID: "00000003-0000001B-1", Custody: custody, CustodyDigest: custodyDigest,
+		AuthenticationStateDigest: "sha256:" + hex.EncodeToString(authenticationState[:]),
+	}
+	encoded, err := installationv1.EncodeTOTPBackupSnapshotLease(lease)
+	if err != nil {
+		return true, err
+	}
+	encoded = append(encoded, '\n')
+	if _, err := output.Write(encoded); err != nil {
+		return true, err
+	}
+	releaseFrame, err := io.ReadAll(io.LimitReader(
+		input, int64(len(installationv1.TOTPBackupCustodyReleaseFrame)+1),
+	))
+	if err != nil {
+		return true, err
+	}
+	select {
+	case <-ctx.Done():
+		return true, ctx.Err()
+	default:
+	}
+	if string(releaseFrame) != installationv1.TOTPBackupCustodyReleaseFrame {
+		return true, errors.New("TOTP backup custody release frame is invalid")
+	}
+	runtimeBoundary.backupCustodyRuns++
+	return true, nil
+}
+
 func (runtimeBoundary *platformStartRuntime) inspectNetworkLabels(
 	identity string,
 ) ([]byte, bool, error) {
@@ -2025,7 +2729,7 @@ func (runtimeBoundary *platformStartRuntime) inspectNetwork(
 	labels["com.docker.compose.project"] = runtimeBoundary.expectation.Name
 	labels["com.docker.compose.network"] = logicalName
 	content, err := json.Marshal(map[string]any{
-		"Id": identity, "Internal": expected.Internal, "Labels": labels,
+		"Id": identity, "Name": logicalName, "Internal": expected.Internal, "Labels": labels,
 	})
 	return content, true, err
 }

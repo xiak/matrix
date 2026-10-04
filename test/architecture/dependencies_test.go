@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -186,7 +187,10 @@ func TestAuthorityDomainsKeepPureDependencies(t *testing.T) {
 					if strings.HasPrefix(imported, modulePath) && imported != owningAPI {
 						t.Errorf("%s: authority domain cannot import %q", filepath.ToSlash(relative), imported)
 					}
-					if isThirdPartyImport(imported) && imported != "golang.org/x/crypto/argon2" {
+					// IAM reuses only the reviewed pure OTP construction. Keep
+					// provider, persistence and transport dependencies closed.
+					approvedOTP := context == "iam" && (imported == "github.com/pquerna/otp" || imported == "github.com/pquerna/otp/hotp")
+					if isThirdPartyImport(imported) && imported != "golang.org/x/crypto/argon2" && !approvedOTP {
 						t.Errorf("%s: authority domain has unapproved external dependency %q", filepath.ToSlash(relative), imported)
 					}
 					for _, forbidden := range []string{"database/", "net", "os", "syscall"} {
@@ -384,6 +388,53 @@ func TestInstallationKeepsGoOnlyClosedLifecycleBoundaries(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("inspect installation dependencies: %v", err)
+	}
+}
+
+func TestSoftwareTOTPAuthenticatorRemainsAnInstallationTestDependency(t *testing.T) {
+	root := repositoryRoot(t)
+	const authenticator = "github.com/xiak/matrix/test/totpauthenticator"
+	var consumers []string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			name := entry.Name()
+			if name == ".git" || name == "build" || name == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.ToLower(filepath.Ext(path)) != ".go" {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, declaration := range file.Imports {
+			imported, err := strconv.Unquote(declaration.Path.Value)
+			if err != nil {
+				return err
+			}
+			if imported == authenticator {
+				relative, err := filepath.Rel(root, path)
+				if err != nil {
+					return err
+				}
+				consumers = append(consumers, filepath.ToSlash(relative))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspect software TOTP authenticator consumers: %v", err)
+	}
+	slices.Sort(consumers)
+	want := []string{"app/service/installation/test/phase1e2e/security_mfa.go"}
+	if !slices.Equal(consumers, want) {
+		t.Fatalf("software TOTP authenticator consumers = %v, want %v", consumers, want)
 	}
 }
 

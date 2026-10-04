@@ -1,0 +1,959 @@
+package iamv1
+
+import (
+	"bytes"
+	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"slices"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/xiak/matrix/api/contractjson"
+)
+
+// This contract owns immutable product-declaration bytes. It is not an
+// enrollment, permission, trusted signature, or caller-supplied authority.
+type AuthorizationProfile struct {
+	APIVersion     string                       `json:"apiVersion"`
+	Kind           string                       `json:"kind"`
+	Product        ProductID                    `json:"product"`
+	Revision       uint64                       `json:"revision"`
+	CallingService ServicePurpose               `json:"callingService"`
+	Actions        []AuthorizationProfileAction `json:"actions"`
+}
+
+// A USER credential carrier, not a subject type or permission. ROLE sessions
+// and service credentials retain their separate authentication contracts.
+type UserAuthenticationMethod string
+
+const (
+	UserAuthenticationLoginSession UserAuthenticationMethod = "LOGIN_SESSION"
+	UserAuthenticationAccessKey    UserAuthenticationMethod = "ACCESS_KEY"
+)
+
+type AuthorizationProfileAction struct {
+	Action         Action                          `json:"action"`
+	ResourceKind   ResourceKind                    `json:"resourceKind"`
+	Scope          AuthorityScope                  `json:"scope"`
+	ResourceShapes []AuthorizationResourceShape    `json:"resourceShapes"`
+	Conditions     []AuthorizationProfileCondition `json:"conditions,omitempty"`
+	// InstanceListBatch admits only the bounded batch transport used by a
+	// product PEP to filter its own trusted list candidates. It is not a grant.
+	InstanceListBatch bool `json:"instanceListBatch,omitempty"`
+	// The successful fact may concern a child/new resource. This declaration
+	// never changes the resource against which IAM makes its decision.
+	ResultResourceKind ResourceKind `json:"resultResourceKind,omitempty"`
+	// Absence preserves sealed pre-STS bytes with their USER/probe-only ceiling.
+	// It never means unrestricted subjects. New explicit sets are digest-bound.
+	SubjectTypes []SubjectType `json:"subjectTypes,omitempty"`
+	// Absence preserves historical LOGIN_SESSION-only USER admission. A USER
+	// capability never implicitly enables every kind of USER credential.
+	UserAuthenticationMethods []UserAuthenticationMethod `json:"userAuthenticationMethods,omitempty"`
+}
+
+func (action *AuthorizationProfileAction) UnmarshalJSON(source []byte) error {
+	type wire AuthorizationProfileAction
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxAuthorizationProfileBytes, &decoded) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	if encoded, present := fields["subjectTypes"]; present &&
+		(bytes.Equal(bytes.TrimSpace(encoded), []byte("null")) || len(decoded.SubjectTypes) == 0) {
+		return contractjson.ErrInvalidDocument
+	}
+	if encoded, present := fields["userAuthenticationMethods"]; present &&
+		(bytes.Equal(bytes.TrimSpace(encoded), []byte("null")) || len(decoded.UserAuthenticationMethods) == 0) {
+		return contractjson.ErrInvalidDocument
+	}
+	*action = AuthorizationProfileAction(decoded)
+	return nil
+}
+
+type AuthorizationResourceMode string
+type AuthorizationCollectionUsage string
+
+const (
+	AuthorizationResourceInstance     AuthorizationResourceMode    = "INSTANCE"
+	AuthorizationResourceCollection   AuthorizationResourceMode    = "COLLECTION"
+	AuthorizationCollectionList       AuthorizationCollectionUsage = "COLLECTION_LIST"
+	AuthorizationCollectionCreate     AuthorizationCollectionUsage = "COLLECTION_CREATE"
+	MaxAuthorizationProfileActions                                 = 128
+	MaxAuthorizationProfileConditions                              = 8
+	MaxAuthorizationTags                                           = MaxAuthorizationProfileConditions
+	MaxAuthorizationProfileBytes      int64                        = 64 * 1024
+)
+
+// Prefix support belongs to the instance shape, not every use of an Action.
+// Successful resource production is declared separately on the action:
+// both collection and parent-instance authorization may create a resource.
+type AuthorizationResourceShape struct {
+	Mode            AuthorizationResourceMode    `json:"mode"`
+	PrefixAllowed   bool                         `json:"prefixAllowed"`
+	CollectionUsage AuthorizationCollectionUsage `json:"collectionUsage,omitempty"`
+}
+
+type AuthorizationProfileCondition struct {
+	Key       ConditionKey       `json:"key"`
+	ValueType ConditionValueType `json:"valueType"`
+	Source    ConditionSource    `json:"source"`
+}
+
+type AuthorizationProfileReference struct {
+	Product       ProductID `json:"product"`
+	Revision      uint64    `json:"revision"`
+	ContentDigest string    `json:"contentDigest"`
+}
+
+// AuthorizationProfileList is complete current product metadata, not the
+// requesting user's permissions. AccountID binds the read context only.
+type AuthorizationProfileList struct {
+	APIVersion string                      `json:"apiVersion"`
+	Kind       string                      `json:"kind"`
+	AccountID  AccountID                   `json:"accountId"`
+	Items      []AuthorizationProfileEntry `json:"items"`
+}
+
+// Keep the declaration whole: filtering actions would invalidate its digest.
+type AuthorizationProfileEntry struct {
+	Profile       AuthorizationProfile `json:"profile"`
+	ContentDigest string               `json:"contentDigest"`
+}
+
+const MaxAuthorizationProfileListItems = 16
+
+func DecodeAuthorizationProfileList(reader io.Reader) (AuthorizationProfileList, error) {
+	var value AuthorizationProfileList
+	if contractjson.DecodeObject(reader, MaxRequestBytes, &value) != nil || ValidateAuthorizationProfileList(value) != nil {
+		return AuthorizationProfileList{}, ErrInvalidAuthorizationProfile
+	}
+	return value, nil
+}
+
+func ValidateAuthorizationProfileList(value AuthorizationProfileList) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthorizationProfileList" ||
+		ValidateID("accountId", string(value.AccountID)) != nil || len(value.Items) < 1 || len(value.Items) > MaxAuthorizationProfileListItems {
+		return ErrInvalidAuthorizationProfile
+	}
+	var previous ProductID
+	for _, entry := range value.Items {
+		if entry.Profile.Product <= previous || CheckAuthorizationProfileReference(entry.Profile,
+			AuthorizationProfileReference{Product: entry.Profile.Product, Revision: entry.Profile.Revision, ContentDigest: entry.ContentDigest}) != nil {
+			return ErrInvalidAuthorizationProfile
+		}
+		previous = entry.Profile.Product
+	}
+	// This endpoint uses the existing ordinary contract/HTTP decode budget,
+	// not the much larger sum of every individual declaration's maximum.
+	encoded, err := json.Marshal(value)
+	if err != nil || int64(len(encoded)) > MaxRequestBytes {
+		return ErrInvalidAuthorizationProfile
+	}
+	return nil
+}
+
+type authorizationProfileCommitment struct {
+	profile    AuthorizationProfile
+	normalized AuthorizationProfile
+	canonical  string
+	reference  AuthorizationProfileReference
+}
+
+func sourceAuthorizationProfileCommitment(profile AuthorizationProfile) authorizationProfileCommitment {
+	canonical, digest, err := canonicalizeAuthorizationProfile(profile)
+	var normalized AuthorizationProfile
+	if err != nil || json.Unmarshal([]byte(canonical), &normalized) != nil {
+		panic("invalid release-owned IAM product declaration")
+	}
+	return authorizationProfileCommitment{cloneAuthorizationProfile(profile), normalized, canonical,
+		AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}}
+}
+
+var ErrInvalidAuthorizationProfile = errors.New("invalid IAM authorization profile")
+
+func DecodeAuthorizationProfile(reader io.Reader) (AuthorizationProfile, error) {
+	if reader == nil {
+		return AuthorizationProfile{}, ErrInvalidAuthorizationProfile
+	}
+	encoded, err := io.ReadAll(io.LimitReader(reader, MaxAuthorizationProfileBytes+1))
+	if err != nil || int64(len(encoded)) > MaxAuthorizationProfileBytes {
+		return AuthorizationProfile{}, ErrInvalidAuthorizationProfile
+	}
+	// Full byte equality with an already validated source constant proves the
+	// same syntax/content, not registration or authority. Return a deep copy;
+	// no caller can mutate the source. All other bytes use the strict decoder.
+	for _, source := range sourceProfileCommitments {
+		if string(encoded) == source.canonical {
+			return cloneAuthorizationProfile(source.normalized), nil
+		}
+	}
+	var value AuthorizationProfile
+	if contractjson.DecodeObject(bytes.NewReader(encoded), MaxAuthorizationProfileBytes, &value) != nil || ValidateAuthorizationProfile(value) != nil {
+		return AuthorizationProfile{}, ErrInvalidAuthorizationProfile
+	}
+	return value, nil
+}
+
+func ValidateAuthorizationProfile(value AuthorizationProfile) error {
+	_, _, err := CanonicalizeAuthorizationProfile(value)
+	return err
+}
+
+// Product and service identifiers are syntactic namespaces here, not enums of
+// products known to today's executable. Only trusted registration may admit a
+// declaration; a well-formed unfamiliar product gets no runtime permission.
+func profileIdentifier(value string, upper bool) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	for index, character := range []byte(value) {
+		letter := character >= 'a' && character <= 'z'
+		if upper {
+			letter = character >= 'A' && character <= 'Z'
+		}
+		if !letter && (index == 0 || !(character >= '0' && character <= '9' || character == '_' || character == '-')) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthorizationProfile" ||
+		!profileIdentifier(string(value.Product), false) || !profileIdentifier(string(value.CallingService), true) ||
+		validatePositiveVersion(value.Revision) != nil || len(value.Actions) == 0 || len(value.Actions) > MaxAuthorizationProfileActions {
+		return ErrInvalidAuthorizationProfile
+	}
+	seen := make(map[Action]bool, len(value.Actions))
+	for _, action := range value.Actions {
+		product, _, _ := strings.Cut(string(action.Action), ".")
+		if !authorizationActionIdentifier(action.Action) || product != string(value.Product) || seen[action.Action] ||
+			!profileIdentifier(string(action.ResourceKind), true) || len(action.ResourceShapes) == 0 || len(action.ResourceShapes) > 3 || len(action.Conditions) > MaxAuthorizationProfileConditions {
+			return ErrInvalidAuthorizationProfile
+		}
+		seen[action.Action] = true
+		if action.Scope != AuthorityScopeTenant && action.Scope != AuthorityScopeInstallation && action.Scope != AuthorityScopeInstallationProbe {
+			return ErrInvalidAuthorizationProfile
+		}
+		if action.SubjectTypes != nil {
+			if len(action.SubjectTypes) < 1 || len(action.SubjectTypes) > 3 {
+				return ErrInvalidAuthorizationProfile
+			}
+			seenTypes := make(map[SubjectType]bool, len(action.SubjectTypes))
+			for _, subjectType := range action.SubjectTypes {
+				if !knownSubjectType(subjectType) || seenTypes[subjectType] {
+					return ErrInvalidAuthorizationProfile
+				}
+				seenTypes[subjectType] = true
+			}
+		}
+		if action.UserAuthenticationMethods != nil {
+			if len(action.UserAuthenticationMethods) < 1 || len(action.UserAuthenticationMethods) > 2 ||
+				action.SubjectTypes == nil && action.Scope == AuthorityScopeInstallationProbe ||
+				action.SubjectTypes != nil && !slices.Contains(action.SubjectTypes, SubjectUser) {
+				return ErrInvalidAuthorizationProfile
+			}
+			seenMethods := make(map[UserAuthenticationMethod]bool, len(action.UserAuthenticationMethods))
+			for _, method := range action.UserAuthenticationMethods {
+				if !knownUserAuthenticationMethod(method) || seenMethods[method] {
+					return ErrInvalidAuthorizationProfile
+				}
+				seenMethods[method] = true
+			}
+		}
+		if action.ResultResourceKind != "" && !profileIdentifier(string(action.ResultResourceKind), true) {
+			return ErrInvalidAuthorizationProfile
+		}
+		shapes := make(map[string]bool, len(action.ResourceShapes))
+		var hasInstance, hasCollectionList bool
+		for _, shape := range action.ResourceShapes {
+			key := string(shape.Mode) + ":" + string(shape.CollectionUsage)
+			if shapes[key] {
+				return ErrInvalidAuthorizationProfile
+			}
+			shapes[key] = true
+			switch shape.Mode {
+			case AuthorizationResourceInstance:
+				if shape.CollectionUsage != "" || shape.PrefixAllowed && action.Scope != AuthorityScopeTenant {
+					return ErrInvalidAuthorizationProfile
+				}
+				hasInstance = true
+			case AuthorizationResourceCollection:
+				if shape.PrefixAllowed {
+					return ErrInvalidAuthorizationProfile
+				}
+				switch shape.CollectionUsage {
+				case AuthorizationCollectionList:
+					if action.ResultResourceKind != "" {
+						return ErrInvalidAuthorizationProfile
+					}
+					hasCollectionList = true
+				case AuthorizationCollectionCreate:
+					if action.ResultResourceKind == "" {
+						return ErrInvalidAuthorizationProfile
+					}
+				default:
+					return ErrInvalidAuthorizationProfile
+				}
+			default:
+				return ErrInvalidAuthorizationProfile
+			}
+		}
+		if action.InstanceListBatch && (action.Scope != AuthorityScopeTenant || action.ResultResourceKind != "" ||
+			!hasInstance || !hasCollectionList) {
+			return ErrInvalidAuthorizationProfile
+		}
+		conditions := make(map[ConditionKey]bool, len(action.Conditions))
+		for _, condition := range action.Conditions {
+			if action.Scope != AuthorityScopeTenant || conditions[condition.Key] {
+				return ErrInvalidAuthorizationProfile
+			}
+			conditions[condition.Key] = true
+			// Reuse the source owner's closed definitions without borrowing an
+			// unrelated action's permission or inferring a source from its name.
+			definition, known := lookupConditionDefinition(condition.Key)
+			if !known || condition.ValueType != definition.ValueType || condition.Source != definition.Source {
+				return ErrInvalidAuthorizationProfile
+			}
+		}
+	}
+	return nil
+}
+
+func authorizationActionIdentifier(action Action) bool {
+	parts := strings.Split(string(action), ".")
+	if len(parts) < 2 || len(parts) > 5 || len(action) > 128 {
+		return false
+	}
+	for _, part := range parts {
+		if !profileIdentifier(part, false) {
+			return false
+		}
+	}
+	return true
+}
+
+// CanonicalizeAuthorizationProfile normalizes declaration sets without
+// mutating inputs. Its domain-separated digest is not a Policy or Audit hash.
+func CanonicalizeAuthorizationProfile(value AuthorizationProfile) (string, string, error) {
+	// Equality covers every supplied byte-bearing field, including nested
+	// shapes and conditions. A tuple match alone is never sufficient. Unknown,
+	// reordered or changed declarations use the complete validator/encoder.
+	if source, known := sourceProfileCommitments[value.Product]; known &&
+		(equalAuthorizationProfile(value, source.profile) || equalAuthorizationProfile(value, source.normalized)) {
+		return source.canonical, source.reference.ContentDigest, nil
+	}
+	return canonicalizeAuthorizationProfile(value)
+}
+
+// Compare every declaration field without reflective pointer traversal on each
+// capability projection. This checks content, not just the reference tuple;
+// unknown/changed declarations still use the complete canonical encoder.
+func equalAuthorizationProfile(left, right AuthorizationProfile) bool {
+	if left.APIVersion != right.APIVersion || left.Kind != right.Kind || left.Product != right.Product ||
+		left.Revision != right.Revision || left.CallingService != right.CallingService ||
+		len(left.Actions) != len(right.Actions) || (left.Actions == nil) != (right.Actions == nil) {
+		return false
+	}
+	for index, action := range left.Actions {
+		other := right.Actions[index]
+		if action.Action != other.Action || action.ResourceKind != other.ResourceKind || action.Scope != other.Scope ||
+			action.InstanceListBatch != other.InstanceListBatch ||
+			action.ResultResourceKind != other.ResultResourceKind ||
+			(action.SubjectTypes == nil) != (other.SubjectTypes == nil) || !slices.Equal(action.SubjectTypes, other.SubjectTypes) ||
+			(action.UserAuthenticationMethods == nil) != (other.UserAuthenticationMethods == nil) || !slices.Equal(action.UserAuthenticationMethods, other.UserAuthenticationMethods) ||
+			(action.ResourceShapes == nil) != (other.ResourceShapes == nil) || !slices.Equal(action.ResourceShapes, other.ResourceShapes) ||
+			(action.Conditions == nil) != (other.Conditions == nil) || !slices.Equal(action.Conditions, other.Conditions) {
+			return false
+		}
+	}
+	return true
+}
+
+func canonicalizeAuthorizationProfile(value AuthorizationProfile) (string, string, error) {
+	if validateAuthorizationProfileStructure(value) != nil {
+		return "", "", ErrInvalidAuthorizationProfile
+	}
+	value = cloneAuthorizationProfile(value)
+	for index := range value.Actions {
+		action := &value.Actions[index]
+		slices.Sort(action.SubjectTypes)
+		slices.Sort(action.UserAuthenticationMethods)
+		slices.SortFunc(action.ResourceShapes, func(left, right AuthorizationResourceShape) int {
+			if order := cmp.Compare(left.Mode, right.Mode); order != 0 {
+				return order
+			}
+			return cmp.Compare(left.CollectionUsage, right.CollectionUsage)
+		})
+		slices.SortFunc(action.Conditions, func(left, right AuthorizationProfileCondition) int { return cmp.Compare(left.Key, right.Key) })
+	}
+	slices.SortFunc(value.Actions, func(left, right AuthorizationProfileAction) int { return cmp.Compare(left.Action, right.Action) })
+	encoded, err := json.Marshal(value)
+	if err != nil || int64(len(encoded)) > MaxAuthorizationProfileBytes {
+		return "", "", ErrInvalidAuthorizationProfile
+	}
+	digest := sha256.Sum256(append([]byte("matrix.iam.authorization-profile.v1\x00"), encoded...))
+	return string(encoded), "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
+func cloneAuthorizationProfile(value AuthorizationProfile) AuthorizationProfile {
+	value.Actions = slices.Clone(value.Actions)
+	for index := range value.Actions {
+		value.Actions[index].SubjectTypes = slices.Clone(value.Actions[index].SubjectTypes)
+		value.Actions[index].UserAuthenticationMethods = slices.Clone(value.Actions[index].UserAuthenticationMethods)
+		value.Actions[index].ResourceShapes = slices.Clone(value.Actions[index].ResourceShapes)
+		value.Actions[index].Conditions = slices.Clone(value.Actions[index].Conditions)
+	}
+	return value
+}
+
+// All current and immutable policy lookups project the same capability shape.
+// This is derived data, never an independently editable action registry.
+func authorizationProfileActionDefinition(profile AuthorizationProfile, action AuthorizationProfileAction) ActionDefinition {
+	definition := ActionDefinition{Action: action.Action, Product: profile.Product, CallingService: profile.CallingService, ResourceKind: action.ResourceKind, AuthorityScope: action.Scope}
+	for _, shape := range action.ResourceShapes {
+		if shape.Mode == AuthorizationResourceInstance {
+			definition.ResourcePrefixAllowed = shape.PrefixAllowed
+		}
+	}
+	return definition
+}
+
+// CheckAuthorizationProfileReference compares the exact tuple, never a
+// numerically newer revision. It does not authenticate the profile publisher.
+func CheckAuthorizationProfileReference(value AuthorizationProfile, reference AuthorizationProfileReference) error {
+	_, digest, err := CanonicalizeAuthorizationProfile(value)
+	if err != nil || reference.Product != value.Product || reference.Revision != value.Revision || reference.ContentDigest != digest {
+		return ErrInvalidAuthorizationProfile
+	}
+	return nil
+}
+
+// CheckAuthorizationProfileSubject validates one subject capability, not the
+// subject's credentials, registration or permissions. Runtime callers supply
+// the actual authenticated type; it is not an AuthorizationRequest selector.
+func CheckAuthorizationProfileSubject(profile AuthorizationProfile, reference AuthorizationProfileReference, action Action, subjectType SubjectType) error {
+	if CheckAuthorizationProfileReference(profile, reference) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	return checkValidatedProfileSubject(profile, action, subjectType)
+}
+
+// The complete declaration must already have been validated in this call stack.
+// Missing capabilities preserve the sealed legacy ceiling without rewriting
+// bytes. No product name, resource kind or action prefix grants ROLE capability.
+func checkValidatedProfileSubject(profile AuthorizationProfile, action Action, subjectType SubjectType) error {
+	if !knownSubjectType(subjectType) {
+		return ErrInvalidAuthorizationProfile
+	}
+	for _, declared := range profile.Actions {
+		if declared.Action != action {
+			continue
+		}
+		if declared.SubjectTypes != nil {
+			if slices.Contains(declared.SubjectTypes, subjectType) {
+				return nil
+			}
+			return ErrInvalidAuthorizationProfile
+		}
+		legacyType := SubjectUser
+		if declared.Scope == AuthorityScopeInstallationProbe {
+			legacyType = SubjectServiceAccount
+		}
+		if subjectType == legacyType {
+			return nil
+		}
+		return ErrInvalidAuthorizationProfile
+	}
+	return ErrInvalidAuthorizationProfile
+}
+
+func knownSubjectType(subjectType SubjectType) bool {
+	return subjectType == SubjectUser || subjectType == SubjectServiceAccount || subjectType == SubjectRole
+}
+
+func knownUserAuthenticationMethod(method UserAuthenticationMethod) bool {
+	return method == UserAuthenticationLoginSession || method == UserAuthenticationAccessKey
+}
+
+func checkValidatedProfileSubjectCredential(profile AuthorizationProfile, action Action, subject Subject) error {
+	if checkValidatedProfileSubject(profile, action, subject.Type) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	if subject.Type == SubjectUser {
+		method := UserAuthenticationLoginSession
+		if subject.AccessKeyID != "" {
+			method = UserAuthenticationAccessKey
+		}
+		return checkValidatedProfileUserAuthentication(profile, action, method)
+	}
+	return nil
+}
+
+// CheckAuthorizationProfileUserAuthentication checks a declared USER carrier,
+// not an authenticated identity, signature, nonce or policy decision. The caller
+// must supply the actual verified carrier and independently establish authority.
+func CheckAuthorizationProfileUserAuthentication(profile AuthorizationProfile, reference AuthorizationProfileReference, action Action, method UserAuthenticationMethod) error {
+	if CheckAuthorizationProfileReference(profile, reference) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	return checkValidatedProfileUserAuthentication(profile, action, method)
+}
+
+func checkValidatedProfileUserAuthentication(profile AuthorizationProfile, action Action, method UserAuthenticationMethod) error {
+	if !knownUserAuthenticationMethod(method) || checkValidatedProfileSubject(profile, action, SubjectUser) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	for _, declared := range profile.Actions {
+		if declared.Action != action {
+			continue
+		}
+		if declared.UserAuthenticationMethods == nil {
+			if method == UserAuthenticationLoginSession {
+				return nil
+			}
+			return ErrInvalidAuthorizationProfile
+		}
+		if slices.Contains(declared.UserAuthenticationMethods, method) {
+			return nil
+		}
+		return ErrInvalidAuthorizationProfile
+	}
+	return ErrInvalidAuthorizationProfile
+}
+
+// CheckAuthorizationProfileTarget validates an explicitly selected target mode
+// against immutable declaration bytes. The caller must separately establish
+// trusted registration, current service identity and account/installation scope.
+// Neither an ID spelled "collection" nor an action name selects the mode.
+func CheckAuthorizationProfileTarget(
+	profile AuthorizationProfile,
+	reference AuthorizationProfileReference,
+	action Action,
+	resource ResourceReference,
+	mode AuthorizationResourceMode,
+	usage AuthorizationCollectionUsage,
+) error {
+	if CheckAuthorizationProfileReference(profile, reference) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	return checkValidatedProfileTarget(profile, action, resource, mode, usage)
+}
+
+// CheckAuthorizationProfileInstanceListBatch validates the transport
+// capability of one exact current declaration. It does not authenticate a
+// caller, establish candidate ownership or authorize any listed resource.
+func CheckAuthorizationProfileInstanceListBatch(
+	profile AuthorizationProfile,
+	reference AuthorizationProfileReference,
+	action Action,
+	resourceKind ResourceKind,
+) error {
+	if CheckAuthorizationProfileReference(profile, reference) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	return checkValidatedProfileInstanceListBatch(profile, action, resourceKind)
+}
+
+func checkValidatedProfileInstanceListBatch(profile AuthorizationProfile, action Action, resourceKind ResourceKind) error {
+	for _, declared := range profile.Actions {
+		if declared.Action == action && declared.ResourceKind == resourceKind && declared.Scope == AuthorityScopeTenant &&
+			declared.InstanceListBatch {
+			return nil
+		}
+	}
+	return ErrInvalidAuthorizationProfile
+}
+
+func checkSourceProfileInstanceListBatch(reference AuthorizationProfileReference, action Action, resourceKind ResourceKind) error {
+	expected, known := sourceProfileCommitments[reference.Product]
+	if !known || expected.reference != reference {
+		return ErrInvalidAuthorizationProfile
+	}
+	return checkValidatedProfileInstanceListBatch(expected.profile, action, resourceKind)
+}
+
+// Private: only call after this exact profile's complete canonical commitment
+// has already been validated in the same stack. Never expose an unchecked PEP
+// entrypoint or retain this as an authorization result.
+func checkValidatedProfileTarget(profile AuthorizationProfile, action Action, resource ResourceReference,
+	mode AuthorizationResourceMode, usage AuthorizationCollectionUsage) error {
+	if ValidateID("resource.id", resource.ID) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	switch mode {
+	case AuthorizationResourceInstance:
+		if usage != "" {
+			return ErrInvalidAuthorizationProfile
+		}
+	case AuthorizationResourceCollection:
+		if resource.ID != "collection" || (usage != AuthorizationCollectionList && usage != AuthorizationCollectionCreate) {
+			return ErrInvalidAuthorizationProfile
+		}
+	default:
+		return ErrInvalidAuthorizationProfile
+	}
+	for _, declared := range profile.Actions {
+		if declared.Action != action || declared.ResourceKind != resource.Kind {
+			continue
+		}
+		for _, shape := range declared.ResourceShapes {
+			if shape.Mode == mode && shape.CollectionUsage == usage {
+				return nil
+			}
+		}
+	}
+	return ErrInvalidAuthorizationProfile
+}
+
+// Only select the private, immutable executable declaration here. A caller-
+// supplied Profile with an equal tuple must never enter this fast path.
+func checkSourceProfileTarget(reference AuthorizationProfileReference, action Action, resource ResourceReference,
+	mode AuthorizationResourceMode, usage AuthorizationCollectionUsage) error {
+	expected, known := sourceProfileCommitments[reference.Product]
+	if !known || expected.reference != reference {
+		return ErrInvalidAuthorizationProfile
+	}
+	for _, profile := range authorizationProfiles {
+		if profile.Product == reference.Product {
+			return checkValidatedProfileTarget(profile, action, resource, mode, usage)
+		}
+	}
+	return ErrInvalidAuthorizationProfile
+}
+
+// NewAuthorizationRequest is a current-source transport constructor. The PEP
+// explicitly chooses the target mode; this function never infers list/create
+// from a resource ID and does not authenticate or authorize the caller.
+func NewAuthorizationRequest(action Action, resource ResourceReference, mode AuthorizationResourceMode, usage AuthorizationCollectionUsage, requestID, correlationID string) (AuthorizationRequest, error) {
+	definition, known := LookupActionDefinition(action)
+	if !known {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	source, known := sourceProfileCommitments[definition.Product]
+	if !known {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	request := AuthorizationRequest{Action: action, Resource: resource,
+		Profile:      source.reference,
+		ResourceMode: mode, CollectionUsage: usage, RequestID: requestID, CorrelationID: correlationID}
+	if err := ValidateAuthorizationRequest(request); err != nil {
+		return AuthorizationRequest{}, err
+	}
+	return request, nil
+}
+
+// NewRequestTagConditionKey creates the only dynamic condition namespace
+// currently supported by the contract. A product Profile must still declare
+// the returned exact key before a Policy or request may use it.
+func NewRequestTagConditionKey(tag string) (ConditionKey, error) {
+	if !authorizationTagKey(tag) {
+		return "", ErrInvalidAuthorizationProfile
+	}
+	return ConditionKey(ConditionRequestTagPrefix + tag), nil
+}
+
+func requestTagName(key ConditionKey) (string, bool) {
+	value := string(key)
+	if !strings.HasPrefix(value, ConditionRequestTagPrefix) {
+		return "", false
+	}
+	tag := strings.TrimPrefix(value, ConditionRequestTagPrefix)
+	return tag, authorizationTagKey(tag)
+}
+
+// ParseRequestTagConditionKey exposes only the normalized tag name. It does
+// not prove that an action Profile declares the condition.
+func ParseRequestTagConditionKey(key ConditionKey) (string, bool) {
+	return requestTagName(key)
+}
+
+// NewResourceTagConditionKey creates the resource-owned tag namespace. An
+// exact current action declaration is still required before the value can be
+// bound or evaluated.
+func NewResourceTagConditionKey(tag string) (ConditionKey, error) {
+	if !authorizationTagKey(tag) {
+		return "", ErrInvalidAuthorizationProfile
+	}
+	return ConditionKey(ConditionResourceTagPrefix + tag), nil
+}
+
+func resourceTagName(key ConditionKey) (string, bool) {
+	value := string(key)
+	if !strings.HasPrefix(value, ConditionResourceTagPrefix) {
+		return "", false
+	}
+	tag := strings.TrimPrefix(value, ConditionResourceTagPrefix)
+	return tag, authorizationTagKey(tag)
+}
+
+// ParseResourceTagConditionKey exposes only the normalized tag name. It does
+// not establish product ownership or authorization.
+func ParseResourceTagConditionKey(key ConditionKey) (string, bool) {
+	return resourceTagName(key)
+}
+
+func authorizationTagKey(value string) bool {
+	if len(value) < 1 || len(value) > 63 ||
+		(value[0] < 'a' || value[0] > 'z') && (value[0] < '0' || value[0] > '9') ||
+		value[len(value)-1] == '-' {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// BindAuthorizationRequestTags extracts every request-tag condition declared
+// by the current action from the product's complete validated label set. The
+// caller cannot select which declared keys are included, and undeclared labels
+// never become Policy inputs.
+func BindAuthorizationRequestTags(request AuthorizationRequest, labels map[string]string) (AuthorizationRequest, error) {
+	if request.RequestTags != nil || ValidateAuthorizationRequest(request) != nil || len(labels) > 64 {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	profile, known := LookupAuthorizationProfile(request.Profile.Product)
+	if !known || CheckAuthorizationProfileReference(profile, request.Profile) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	tags, err := authorizationTagsForAction(profile, request.Action, labels, ConditionCallingServiceRequestTag, requestTagName)
+	if err != nil {
+		return AuthorizationRequest{}, err
+	}
+	request.RequestTags = tags
+	if ValidateAuthorizationRequest(request) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	return request, nil
+}
+
+// CheckAuthorizationTagsForAction lets a product use case re-bind the final
+// command labels before mutation. It prevents a trusted handler decision from
+// being reused with a different body inside the same process boundary.
+func CheckAuthorizationTagsForAction(tags []AuthorizationTag, action Action, labels map[string]string) error {
+	definition, known := LookupActionDefinition(action)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	profile, known := LookupAuthorizationProfile(definition.Product)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	expected, err := authorizationTagsForAction(profile, action, labels, ConditionCallingServiceRequestTag, requestTagName)
+	if err != nil || !slices.Equal(tags, expected) {
+		return ErrInvalidAuthorizationProfile
+	}
+	return nil
+}
+
+// BindAuthorizationResourceTags extracts only the exact resource-tag facts
+// declared by the current action. The complete label map must come from the
+// product's trusted persistence boundary, never a northbound request body.
+func BindAuthorizationResourceTags(request AuthorizationRequest, labels map[string]string) (AuthorizationRequest, error) {
+	if request.ResourceTags != nil || ValidateAuthorizationRequest(request) != nil || len(labels) > 64 {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	profile, known := LookupAuthorizationProfile(request.Profile.Product)
+	if !known || CheckAuthorizationProfileReference(profile, request.Profile) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	tags, err := authorizationTagsForAction(profile, request.Action, labels, ConditionCallingServiceResourceTag, resourceTagName)
+	if err != nil {
+		return AuthorizationRequest{}, err
+	}
+	request.ResourceTags = tags
+	if ValidateAuthorizationRequest(request) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	return request, nil
+}
+
+// CheckAuthorizationResourceTagsForAction re-derives an authorization
+// snapshot from current product storage before an allowed read is returned.
+func CheckAuthorizationResourceTagsForAction(tags []AuthorizationTag, action Action, labels map[string]string) error {
+	definition, known := LookupActionDefinition(action)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	profile, known := LookupAuthorizationProfile(definition.Product)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	expected, err := authorizationTagsForAction(profile, action, labels, ConditionCallingServiceResourceTag, resourceTagName)
+	if err != nil || !slices.Equal(tags, expected) {
+		return ErrInvalidAuthorizationProfile
+	}
+	return nil
+}
+
+func authorizationTagsForAction(
+	profile AuthorizationProfile,
+	action Action,
+	labels map[string]string,
+	source ConditionSource,
+	parse func(ConditionKey) (string, bool),
+) ([]AuthorizationTag, error) {
+	if len(labels) > 64 {
+		return nil, ErrInvalidAuthorizationProfile
+	}
+	for _, declaration := range profile.Actions {
+		if declaration.Action != action {
+			continue
+		}
+		var tags []AuthorizationTag
+		for _, condition := range declaration.Conditions {
+			if condition.Source != source {
+				continue
+			}
+			key, valid := parse(condition.Key)
+			value, present := labels[key]
+			if !valid {
+				return nil, ErrInvalidAuthorizationProfile
+			}
+			if present {
+				if validateAuthorizationTagValue(value) != nil {
+					return nil, ErrInvalidAuthorizationProfile
+				}
+				tags = append(tags, AuthorizationTag{Key: key, Value: value})
+			}
+		}
+		slices.SortFunc(tags, func(left, right AuthorizationTag) int { return cmp.Compare(left.Key, right.Key) })
+		return tags, nil
+	}
+	return nil, ErrInvalidAuthorizationProfile
+}
+
+func validateAuthorizationTagValue(value string) error {
+	if len([]byte(value)) > 128 || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return ErrInvalidAuthorizationProfile
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return ErrInvalidAuthorizationProfile
+		}
+	}
+	return nil
+}
+
+// BindAuthorizationSourceIP is the sole public constructor for a product PEP's
+// network context. It refuses replacement and only succeeds when the current
+// source-owned action declaration explicitly accepts the condition source.
+func BindAuthorizationSourceIP(request AuthorizationRequest, sourceIP string) (AuthorizationRequest, error) {
+	if request.NetworkContext != nil || ValidateAuthorizationRequest(request) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	request.NetworkContext = &AuthorizationNetworkContext{SourceIP: sourceIP}
+	if ValidateAuthorizationRequest(request) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	return request, nil
+}
+
+// CheckAuthorizationDecisionForRequest is the shared response-binding contract
+// used by PEPs before consuming either an Allow or a Deny.
+func CheckAuthorizationDecisionForRequest(decision AuthorizationDecision, request AuthorizationRequest) error {
+	if ValidateAuthorizationRequest(request) != nil || ValidateAuthorizationDecision(decision) != nil || decision.Profile == nil ||
+		*decision.Profile != request.Profile || decision.Action != request.Action || decision.Resource != request.Resource ||
+		decision.ResourceMode != request.ResourceMode || decision.CollectionUsage != request.CollectionUsage ||
+		!authorizationNetworkContextsEqual(decision.NetworkContext, request.NetworkContext) ||
+		!slices.Equal(decision.RequestTags, request.RequestTags) ||
+		!slices.Equal(decision.ResourceTags, request.ResourceTags) ||
+		decision.RequestID != request.RequestID || decision.CorrelationID != request.CorrelationID {
+		return ErrInvalidAuthorizationProfile
+	}
+	return nil
+}
+
+func ValidateAuthorizationBatchRequest(value AuthorizationBatchRequest) error {
+	if value.Requests == nil || len(value.Requests) < 1 || len(value.Requests) > MaxAuthorizationBatchItems {
+		return ErrInvalidAuthorizationProfile
+	}
+	first := value.Requests[0]
+	if ValidateAuthorizationRequest(first) != nil || first.ResourceMode != AuthorizationResourceInstance ||
+		first.CollectionUsage != "" || checkSourceProfileInstanceListBatch(first.Profile, first.Action, first.Resource.Kind) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	seenRequests := make(map[string]bool, len(value.Requests))
+	previousResource := ""
+	for _, request := range value.Requests {
+		if ValidateAuthorizationRequest(request) != nil || request.Profile != first.Profile || request.Action != first.Action ||
+			request.Resource.Kind != first.Resource.Kind || request.ResourceMode != AuthorizationResourceInstance ||
+			request.CollectionUsage != "" || request.CorrelationID != first.CorrelationID ||
+			!authorizationNetworkContextsEqual(request.NetworkContext, first.NetworkContext) ||
+			request.Resource.ID <= previousResource || seenRequests[request.RequestID] {
+			return ErrInvalidAuthorizationProfile
+		}
+		seenRequests[request.RequestID] = true
+		previousResource = request.Resource.ID
+	}
+	return nil
+}
+
+func ValidateAuthorizationBatchDecision(value AuthorizationBatchDecision) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthorizationBatchDecision" ||
+		ValidateID("tenantId", string(value.TenantID)) != nil || ValidateSubject(value.Subject) != nil ||
+		(value.Subject.Type != SubjectUser && value.Subject.Type != SubjectRole) || value.Subject.AccessKeyID != "" ||
+		ValidateID("correlationId", value.CorrelationID) != nil || validateTime("decidedAt", value.DecidedAt) != nil ||
+		checkSourceProfileInstanceListBatch(value.Profile, value.Action, value.ResourceKind) != nil ||
+		value.Decisions == nil || len(value.Decisions) < 1 || len(value.Decisions) > MaxAuthorizationBatchItems {
+		return ErrInvalidAuthorizationProfile
+	}
+	previousResource := ""
+	seenRequests := make(map[string]bool, len(value.Decisions))
+	for _, decision := range value.Decisions {
+		if ValidateAuthorizationDecision(decision) != nil || decision.Profile == nil || *decision.Profile != value.Profile ||
+			decision.Action != value.Action || decision.Resource.Kind != value.ResourceKind ||
+			decision.ResourceMode != AuthorizationResourceInstance || decision.CollectionUsage != "" ||
+			decision.CorrelationID != value.CorrelationID || !decision.DecidedAt.Equal(value.DecidedAt) ||
+			!authorizationNetworkContextsEqual(decision.NetworkContext, value.NetworkContext) ||
+			decision.Resource.ID <= previousResource || seenRequests[decision.RequestID] ||
+			decision.Allowed && (decision.TenantID != value.TenantID || decision.Subject == nil ||
+				!authorizationSubjectsEqual(*decision.Subject, value.Subject)) {
+			return ErrInvalidAuthorizationProfile
+		}
+		seenRequests[decision.RequestID] = true
+		previousResource = decision.Resource.ID
+	}
+	return nil
+}
+
+func CheckAuthorizationBatchDecisionForRequest(value AuthorizationBatchDecision, request AuthorizationBatchRequest) error {
+	if ValidateAuthorizationBatchRequest(request) != nil || ValidateAuthorizationBatchDecision(value) != nil ||
+		len(value.Decisions) != len(request.Requests) {
+		return ErrInvalidAuthorizationProfile
+	}
+	first := request.Requests[0]
+	if value.Profile != first.Profile || value.Action != first.Action || value.ResourceKind != first.Resource.Kind ||
+		value.CorrelationID != first.CorrelationID || !authorizationNetworkContextsEqual(value.NetworkContext, first.NetworkContext) {
+		return ErrInvalidAuthorizationProfile
+	}
+	for index := range request.Requests {
+		if CheckAuthorizationDecisionForRequest(value.Decisions[index], request.Requests[index]) != nil {
+			return ErrInvalidAuthorizationProfile
+		}
+	}
+	return nil
+}
+
+func authorizationNetworkContextsEqual(left, right *AuthorizationNetworkContext) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func authorizationSubjectsEqual(left, right Subject) bool {
+	if left.Type != right.Type || left.ID != right.ID || left.AccessKeyID != right.AccessKeyID ||
+		(left.RoleSession == nil) != (right.RoleSession == nil) {
+		return false
+	}
+	return left.RoleSession == nil || *left.RoleSession == *right.RoleSession
+}

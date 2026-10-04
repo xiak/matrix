@@ -1,0 +1,17 @@
+# IAM
+
+- [产品目标、对象命名、需求与架构](./FEAT-IAM-000-product-contract.md)
+- [业务授权能力目录](./FEAT-IAM-001-authorization-profile.md)
+- [策略权限权威替换](./FEAT-IAM-002-policy-authority.md)
+- [主账号、用户与凭据生命周期](./FEAT-IAM-003-account-identities.md)
+- [用户组与授权委派](./FEAT-IAM-004-groups-and-delegation.md)
+- [自定义策略、条件与权限边界](./FEAT-IAM-005-policy-versions-and-boundaries.md)
+- [角色、信任与 STS](./FEAT-IAM-006-roles-and-sts.md)
+- [访问密钥与程序访问](./FEAT-IAM-007-programmatic-credentials.md)
+- [业务接入、服务角色与 ABAC](./FEAT-IAM-008-product-enforcement.md)
+- [登录保护与安全治理](./FEAT-IAM-009-security-governance.md)
+- [IAM 控制台](./FEAT-IAM-010-console.md)
+- [交付与需求验收](./FEAT-IAM-011-acceptance.md)
+- [外部身份与组织治理延期需求](./FEAT-IAM-012-external-integrations.md)
+- [固定来源采用记录](../docs/adoption/FEAT-006-platform-authorities.md)
+- [纯产品参考](../doc/access-management/README.md)

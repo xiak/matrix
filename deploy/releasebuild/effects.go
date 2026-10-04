@@ -237,7 +237,7 @@ func allowedBinaryPackage(value string) bool {
 }
 
 func allowedImageReference(value string) bool {
-	return value == APISIXBaseReference || value == DockerBaseReference ||
+	return value == APISIXBaseReference || value == AlpineBaseReference || value == DockerBaseReference ||
 		value == PostgresReference || buildTagPattern.MatchString(value)
 }
 

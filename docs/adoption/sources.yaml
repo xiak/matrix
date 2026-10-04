@@ -22,12 +22,12 @@ sources:
     paths:
       - docs/paas
     mode: redesign-for-independent-product
-  cloudUxInteractionBackport:
-    repository: this-repository
-    commit: 21b469b343d83a190acc0a3bb34a29b5294191ad
+  passwordBlocklistReview:
+    repository: https://github.com/danielmiessler/SecLists.git
+    commit: c5a05259b61cc60dee828ad1bf92c288c7e97ea0
     paths:
-      - app/ui/platform/_frontend/src/ui/xiak/select/Select.tsx
-      - app/ui/platform/_frontend/src/ui/xiak/table/TableToolbar.tsx
-      - app/ui/platform/_frontend/src/ui/xiak/form/Controls.test.tsx
-      - app/ui/platform/_frontend/src/ui/xiak/table/TableToolbar.test.tsx
-    mode: selective-interaction-backport
+      - LICENSE
+      - Passwords/Common-Credentials/README.md
+      - Passwords/Common-Credentials/10k-most-common.txt
+      - Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt
+    mode: adapt-bounded-offline-data-no-repository-runtime-dependency

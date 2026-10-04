@@ -10,7 +10,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 )
 
-// Effects is the concrete Linux local-machine provider behind mx.
+// Effects is the concrete Phase 1 Linux local-machine provider behind mx.
 // It owns no lifecycle policy; every method delegates one journaled phase to
 // its existing idempotent effect boundary.
 type Effects struct {
@@ -18,15 +18,13 @@ type Effects struct {
 	entropy          io.Reader
 	verifier         installationVerifier
 	projectInspector RecoveryProjectInspector
-	managedInventory func(string) (string, error)
 }
 
-func NewEffects(projectInspector RecoveryProjectInspector, managedInventory func(string) (string, error)) *Effects {
+func NewEffects(projectInspector RecoveryProjectInspector) *Effects {
 	return &Effects{
 		runtime: localDockerRuntime{}, entropy: rand.Reader,
 		verifier:         newHTTPInstallationVerifier(nil),
 		projectInspector: projectInspector,
-		managedInventory: managedInventory,
 	}
 }
 
@@ -180,7 +178,7 @@ func (effects *Effects) ApplyRecoveryPhase(
 	phase lifecycle.Phase,
 ) error {
 	if effects == nil || effects.runtime == nil || effects.verifier == nil ||
-		effects.projectInspector == nil || effects.managedInventory == nil || ctx == nil {
+		effects.projectInspector == nil || ctx == nil {
 		return errors.Join(
 			platformcommand.ErrEffectUnavailable,
 			errors.New("local-machine recovery effects are unavailable"),
@@ -199,10 +197,19 @@ func (effects *Effects) ApplyRecoveryPhase(
 			)
 		}
 		return recoverBackup(
-			ctx, effects.runtime, streaming, effects.projectInspector, effects.managedInventory, plan,
+			ctx, effects, effects.runtime, streaming, effects.projectInspector, plan,
 		)
 	case lifecycle.PhaseStarting:
-		return startInstallation(ctx, effects.runtime, plan.Target)
+		current, target, _, err := authenticateRecoveryPlan(plan)
+		if err != nil {
+			return err
+		}
+		defer clear(current.TrustBytes)
+		defer clear(target.TrustBytes)
+		if err := effects.reopenAuthenticationRecovery(ctx, plan); err != nil {
+			return err
+		}
+		return startInstallation(ctx, effects.runtime, target)
 	case lifecycle.PhaseVerifying:
 		return verifyRecoveredInstallation(
 			ctx, effects.runtime, effects.verifier, effects.projectInspector, plan,

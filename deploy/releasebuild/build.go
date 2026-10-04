@@ -21,10 +21,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
-const (
-	minimumFreeBytes      = 4 * 1024 * 1024 * 1024
-	databaseSchemaVersion = 1
-)
+const minimumFreeBytes = 4 * 1024 * 1024 * 1024
 
 type SigningMaterial struct {
 	KeyID      string
@@ -259,6 +256,7 @@ func buildImages(
 func verifyBaseImages(ctx context.Context, effects Effects) error {
 	for _, required := range []struct{ reference, id string }{
 		{APISIXBaseReference, APISIXBaseImageID},
+		{AlpineBaseReference, AlpineBaseImageID},
 		{DockerBaseReference, DockerBaseImageID},
 		{PostgresReference, PostgresImageID},
 	} {
@@ -322,11 +320,8 @@ func newManifest(
 			CommandContract: "v1",
 		},
 		MinimumFreeBytes: minimumFreeBytes,
-		Database: installationrelease.DatabaseProfile{
-			SchemaVersion: databaseSchemaVersion,
-			Compatibility: "expand-contract-n-minus-one",
-		},
-		TopologyDigest: topology.ContractDigest(), Files: files, Images: images,
+		Database:         installationrelease.CurrentDatabaseProfile(),
+		TopologyDigest:   topology.ContractDigest(), Files: files, Images: images,
 	}
 }
 

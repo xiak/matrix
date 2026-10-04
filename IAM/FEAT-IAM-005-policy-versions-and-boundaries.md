@@ -1,0 +1,422 @@
+# FEAT-IAM-005：自定义策略、条件与权限边界
+
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；完整安全委派、签名边缘、最终发布和UI验收仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
+- 依赖：002、004、001 的目录。
+- Owner：IAM 策略语言、分析器、版本与权限上限。
+
+## 需求
+
+| ID | 行为 |
+| --- | --- |
+| IAM-LANG-01 | 自定义 Policy CRUD，不可变版本、一个有效版本、版本查询/删除/切换 |
+| IAM-LANG-02 | 文档严格校验，未知/重复字段、超限、非法 scope/action/resource 拒绝 |
+| IAM-LANG-03 | 精确 Action、受限通配、精确资源/集合选择、默认拒绝和显式 Deny |
+| IAM-LANG-04 | 有界的字符串等值、时间、IP 条件；每键来源/类型/缺失/集合语义确定 |
+| IAM-LANG-05 | User/Role boundary set/get/remove，仅限制最大权限 |
+| IAM-LANG-06 | 版本切换/修改附件/边界下次请求生效，决定记录实际版本 |
+| IAM-LANG-07 | 可视化/JSON 同一语言；分析器提供字段位置和稳定错误/警告 |
+| IAM-LANG-08 | 委派管理不允许通过创建/改版/附件或去除边界扩大自身许可 |
+
+## 详细设计
+
+本片先补齐发布入口所需的结构诊断基础，再交付自定义策略管理与真实授权路径，不把诊断函数视为本 FEAT 验收完成。`api/iam/v1/policy.go` 已拥有解码、语义验证和唯一 canonical/digest；分析器、版本发布和实际求值必须复用该拥有者，不复制一套 UI grammar 或宽松 JSON 解析器。
+
+### 结构诊断与安全边界
+
+当前语言的失败提供稳定 code 和 JSON Pointer；根文档位置为空字符串。诊断只引用固定字段及受预算限制的数组下标，不带用户提交的策略名称、资源 ID、原文或秘密。通用错误字符串仍保持安全且支持 `errors.Is(ErrInvalidPolicy)`。重复键、未知字段、类型错误、尾随文档和超限输入继续由现有严格 decoder 拒绝；不能为了精确位置改用宽松解码。暂不能可靠定位的 JSON 结构错误定位根文档，不伪造行列。
+
+校验顺序固定为文档语言/scope/语句预算 → 按输入下标的语句字段/action/resource → action 与资源种类的完整覆盖。语义失败不产生 canonical 或 digest；有效文档的既有编码与摘要不变。JSON/可视化编辑器最终消费同一诊断语义；当前不开放新的匿名分析、发布权限或在线恢复入口。自定义管理和后续条件语法须继续扩展这个唯一验证路径，不能绕开当前未知字段失败关闭。
+
+### 版本、条件与委派
+
+首个管理纵向路径为原 Account Root 创建一份 CUSTOMER/TENANT Policy 和其初始默认版本 → 查询准确策略内容 → 沿既有附件关联给 User/Group → 业务请求实际按自定义权限允许或拒绝。创建不自动关联给创建者或任何主体。非 root 的高风险发布委派在防自助提权门禁完成前保持关闭；不能仅因为能查看目录或关联系统策略就取得编辑任意权限文档的能力。这是后续完整版本/边界管理的起点，不代替其需求。
+
+- `POST /v1/policies` 使用 `iam.policy.create` / 当前 ACCOUNT；入参仅 displayName、document、requestId，Account、管理类型、scope 和 ID 不能由调用者指定。document 只能为 TENANT；平台动作、系统名称空间和服务 probe 拒绝。
+- `GET /v1/policies/{policyId}` 使用 `iam.policy.read` / 精确 POLICY，返回策略与当前默认版本；只读取本账号 CUSTOMER 或可见的 TENANT 系统策略，不因主账号关系越过平台或其他账号。
+- 创建的 Policy ID 绑定账号、actor 和原 requestId；初始 versionId 绑定 canonical digest。等值重放返回原创建结果，变体或后续修订冲突，不产生第二条成功事实。当前权限、原 root 关系和活跃凭据在实际事务内重检。
+- 同账号 ACTIVE/CUSTOMER displayName 精确唯一，不以显示名派生 Policy ID；不同账号可以同名。创建上限为每账号 128 个活跃自定义策略，已有完整目录上限仍为 256 项。整个 HTTP 请求沿用 64 KiB 预算，不能因为策略文档本身有预算就无限扩大外层请求。创建使用现有 requestId 幂等身份，不新增平行的 Idempotency-Key 别名。
+- `iam.policy.created` 是租户链的 IAM/USER 成功事实，target 为 POLICY，绑定真实 decision、request digest 和策略 ID。策略、初始版本与 outbox 同事务，非法文档、跨域或并发冲突不得留下半套对象。该路径不改 Audit canonical 编码或恢复能力。
+
+JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/digest 记录内容。对象最多五个管理可见版本（包括一个默认版本）作为初始产品容量，可在真实容量门禁后调大；当前有效/被边界与历史证明引用版本不能直接物理删除。五个不是策略终生发布次数：非默认版本逻辑退休后保留历史内容与证明，但退出管理集合并释放一个名额。当前没有精确 version pin；普通附件引用 Policy 并跟随默认，不冒充非默认版本 pin。默认指针以 resourceVersion 原子切换，不就地改 JSON。
+
+#### 版本发布事务
+
+版本集合由所属 Policy 管理，不新增可脱离 Policy 授权的 version 资源命名空间。初始 CUSTOMER 版本保留已有 `version-<digest>` 身份；后续发布使用 `version-<digest>-<Policy结果修订>`，使相同内容的再次发布不复用已退休身份。内容仍不可变，ID 对客户端不透明，不能以名称/后缀推导权限。所有版本写入先经当前 PDP，再锁内检查原 root、活跃 Account/USER 与该账号 CUSTOMER Policy；SYSTEM 策略不接受这些用户写入。
+
+| 路由 | Action / 授权资源 | 行为 |
+| --- | --- | --- |
+| `GET /v1/policies/{policyId}/versions` | `iam.policy-version.list` / POLICY | 当前 CUSTOMER Policy 的最多五个不可变版本及当前元数据；不是可复用 permit |
+| `GET /v1/policies/{policyId}/versions/{versionId}` | `iam.policy-version.read` / POLICY | 精确 owner+version 内容与同一快照元数据；版本不必是默认版本 |
+| `DELETE /v1/policies/{policyId}/versions/{versionId}` | `iam.policy-version.delete` / POLICY | resourceVersion、requestId；退休非默认版本，释放一个管理名额，返回默认内容不变的 PolicyDetail |
+| `POST /v1/policies/{policyId}/versions` | `iam.policy-version.create` / POLICY | document、resourceVersion、requestId；新增版本，Policy 修订 +1，不自动切换默认值或关联主体 |
+| `POST /v1/policies/{policyId}:set-default-version` | `iam.policy.set-default-version` / POLICY | versionId、resourceVersion、requestId；显式原子切换并使 Policy 修订 +1，不修改版本文档 |
+
+同意图重放只在该命令结果仍是当前 Policy 修订时返回原结果；变体、过时 resourceVersion 或命令后已有其他修订均冲突，不能把历史命令重放成新的切换。新 requestId 重复创建管理集合中仍存在的内容，或选择当前默认版本，均冲突而不是悄悄制造新修订。退休内容再次发布是新意图、新身份，不恢复旧版本；普通精确读取和默认选择都拒绝退休版本。并发操作按同一 Policy 锁和预期修订只产生一个有效结果。
+
+发布事务不修改Principal不可变键，actor使用`FOR NO KEY UPDATE`保护身份可变状态并序列化发布者；User边界与策略附件的actor/USER目标也按稳定ID使用同一互斥方式，包括自身目标的后续读取。不能在已经记录decision、取得actor外键`KEY SHARE`之后，由两个并发写者都升级为`FOR UPDATE`。Account/root/当前PDP/实际会话检查、精确Policy锁、平台凭据保护及同修订冲突保持，不解除外键或依赖自动重试掩盖死锁。与006共享的修复必须覆盖实际策略/附件竞争、凭据/身份撤销以及runtime 40P01观测；当前候选的最终结果归006本轮组合证据，不能继承旧门禁的无死锁结论。
+
+成功事实分别为租户链 `iam.policy-version.created`、`iam.policy.default-version-set`，target 为所属 POLICY；原 request digest 绑定目标策略、预期修订及新 versionId/contentDigest，不记录策略正文。新增版本与 Policy 修订、历史决定、单一 outbox 同事务；切换后的新请求重读实际默认版本，已提交的旧决定仍使用其原版本证据。版本列表/精确版本读取的结果不能绕过另一次写入的当前授权与修订检查。
+
+#### 策略元数据生命周期
+
+策略改名使用 `PATCH /v1/policies/{policyId}`，入参严格为 displayName、resourceVersion、requestId，返回当前默认 `PolicyDetail`。对应 `iam.policy.update` / 精确 POLICY，当前 PDP 与原 root/ACTIVE CUSTOMER 锁内约束均保留。显示名按账号内活跃 CUSTOMER 精确唯一；更新仅改变显示名、修订号和更新时间，不能改变稳定 ID、owner、默认版本、内容或附件。新意图的同名无变更、旧修订、重复活跃名称均冲突；精确重放仅在原结果修订仍当前时返回同一结果。成功事实为租户链 `iam.policy.updated`，只记录绑定意图摘要的 POLICY 目标，不记录正文。并发改名/默认切换/附件使用同一 Policy 修订锁；末尾 outbox 写失败必须全部回滚。
+
+策略删除使用 `DELETE /v1/policies/{policyId}`，入参仅 resourceVersion、requestId，使用 `iam.policy.delete` / 精确 POLICY。当前 PDP 和原 root/ACTIVE Account/USER 检查后，锁定本账号 CUSTOMER Policy；SYSTEM 和跨账号拒绝。任何未撤销附件（包括停用 User 或组的附件）都使删除冲突，不能隐式解除关联。删除只把 Policy 置为不可恢复的 RETIRED，resourceVersion +1，返回终态 `Policy` 元数据；保留默认指针、全部不可变版本、已撤销附件、决定和 outbox。等值删除重放仅匹配原意图和终态修订；不同命令、错误版本、旧创建/改名/切换不得复活对象。成功事实为租户链 `iam.policy.deleted` / POLICY，与终态同事务。
+
+普通管理目录只列 ACTIVE 策略，删除释放活跃 CUSTOMER 名额和显示名；原创建意图不能复用，但新创建意图可以使用相同显示名并得到新稳定 ID。删除后的普通内容读取、改名、发布/切换与重新关联均拒绝，历史事实按其原证据投递，不从当前目录反推历史是否存在。目录不提供未声明的回收站或历史查询 API；原始内容仍受不可变存储保护。真实门禁必须证明有超过目录预算的历史退休记录时仍能列出/创建当前策略，不能以扩大预算掩盖终生容量问题。附件创建与删除在同一 Policy 锁序列化；只有创建关联成功或策略终态成功之一，不能留下活跃的退休策略附件。
+
+#### 版本删除与再次发布
+
+版本删除退出管理集合并释放五版本名额，但不得物理移除旧授权证明内容。接口/事务、本地组合回归与独立 CI 已完成，尚待实际 UI 消费，不将该后端切片当作完整 LANG-01 验收。
+
+- `DELETE /v1/policies/{policyId}/versions/{versionId}` 使用 `iam.policy-version.delete` / 所属 POLICY；请求只有 resourceVersion、requestId，版本 ID 来自路径，账号仍从当前身份推导。成功返回默认内容不变的 `PolicyDetail`，Policy 修订 +1。SYSTEM、跨账号、非原 root、退休 Policy 拒绝；当前默认版本不得删除，必须先显式切换。
+- 在现有 `policy_versions` 加终态退休时间，保留原 ID、scope、document、canonical、digest 和创建时间不变，不新建平行内容库。该表的更新保护只允许一次 NULL→退休时间，禁止内容变更、取消退休、物理删除及 truncate；共享的决定/附件历史保护函数不放宽。默认指针不能指向退休版本。列表、普通精确读取、默认选择和五版本预算只使用未退休内容；历史决定/proof 继续读取原精确版本，不能加当前活跃过滤而丢掉旧证据。
+- 同请求精确重放仅在其原结果修订仍当前时返回；错误版本、变体、后来已有其他修订或其他命令再次删除均冲突。成功事实为租户链 `iam.policy-version.deleted`，target 为所属 POLICY，原 request digest 绑定准确 versionId、Policy ID 和预期修订；退休、修订、授权决定与 outbox 同事务。
+- 再次提交仍在管理集合的相同内容继续冲突；已退休的内容可用新请求重新发布，但必须形成新 versionId，不能清除旧退休状态。digest-only 的初始 ID 原样保留；新版本发布 ID 绑定 contentDigest 与本次 Policy 结果修订（单调 resourceVersion），不再将“内容相同”误当成“同一次发布”。ID 对客户端始终是不透明值，不允许客户端拼接或推导授权。内容 digest/canonical 算法不变，新发布不会自动成为默认或产生附件。
+- 真实门禁：五项满额→退休非默认项→创建新内容以及再次发布已退休内容；活跃重复拒绝；退休版本的旧决定和 Audit proof 保留；旧创建/删除重放及 schema/bootstrap 重放不复活；删除与默认切换/新建/Policy 删除同修订竞争只有确定赢家；末尾 outbox 故障没有部分退休或名额变化。现有默认版本始终可读、目录只含最多五个可管理版本。后续 boundary 若引入精确版本引用，须在其 owning slice 将该活跃引用加入同锁删除约束，不能只依赖历史存在或静态检查。
+
+#### 受限资源通配：当前权威内的 ID 前缀
+
+该后端纵向切片已通过本地真实门禁和精确提交独立 CI，不代表完整 LANG-03 或 UI 验收。资源选择器沿用 `kind`、`match`、`id`，增加 `PREFIX_IN_AUTHORITY`：`id` 是非空、最多 128 字节、符合当前稳定 ID 字符集的字面前缀，例如 `application-prod-`；匹配该前缀本身和以其开头的合法资源 ID。`*`、`?`、正则、转义、路径归一化和大小写折叠均不参与此语法，也不增加另一种带星号的兼容写法。完全匹配仍为 EXACT，整个权威内同种资源仍为 ANY_IN_AUTHORITY，后者不携带 id。
+
+前缀只缩小当前已认证权威中的资源集合，不从 ID 猜账号/主体/目录层级，也不取显示名、别名或标签。只在 TENANT 且动作目录明确声明支持时启用；能力声明由 001 拥有，当前仅真实实例 `paas.application.read` 开启。相同 ResourceKind 不能让 create/list/collection、平台/probe 或未来动作隐式获得前缀支持；同一语句有多个使用该 kind 的动作时，必须全部声明支持，不能用其中一个 read 掩盖 create。原 EXACT/ANY 行为不变。
+
+产品 PEP 仍独立证明真实资源归属并按既有集合/实例语义调用 IAM；`getApplication` 传入 URL 中的精确 applicationId，数据读取再次使用当前 tenant。匹配某个集合 ID 不意味着可将实例列表按前缀自动过滤，更不改变 create 的 collection→最终 ID 契约。账号相同前缀、甚至相同 ID 仍严格隔离。目录分页不能用此前缀获得权限，现有 cursor 的每页当前 PDP/完整权限快照校验继续保留。
+
+匹配为一次有界字面前缀比较，每个选择器最多比较 128 字节；现有文档/语句/动作/资源数量和总评估预算不增加，无正则编译、回溯、文件系统匹配或展开缓存。匹配 Deny 与所有直接/组来源、条件照常合成，默认切换/撤销和 cursor 必须重新检查当前版本。旧 EXACT/ANY 内容和 canonical 不变，历史事实不按新默认权限重新授权。
+
+验收沿用现有契约、求值器、HTTP/PG 与双 IAM/PaaS/Audit 门禁：前缀本身/较短 ID/匹配后缀/不匹配/大小写/最大长度、空与通配字符攻击、重复选择器、未知 kind、平台/probe 拒绝；组继承与匹配 Deny、时间/身份组合、跨账号同前缀/同 ID、旧 cursor/版本重放、受限 SQL 发布及末尾事务失败无部分效果。至少实际 PaaS 中一个匹配应用允许、一个非匹配应用拒绝，随后改变默认/撤销后同 bearer 下一请求拒绝；不能只增加 parser 单测。
+
+动作通配由下节的版本化 Profile 冻结展开范围与历史证据：旧不可变 PolicyVersion 不能因产品以后注册了同前缀的新动作而自动取得这些权限。不以运行时字符串前缀判断 Action、服务或 scope，不把资源前缀子集宣称为完整 LANG-03。
+
+#### 受限动作族通配：冻结目录的编译增量
+
+本纵向片已接入在线发布、数据库与唯一 PDP，并完成下述本地真实运行门禁和精确提交独立 CI。作者 `actions` 只允许精确三段 `product.family.*`，例如 `paas.application.*`；总长仍最多128字节。星号只匹配一个非空完整声明段；`paas.application.*` 不匹配 `paas.application-extra.read` 或 `paas.application.child.read`。全局 `*`、仅产品 `paas.*`、多层模式、中间星号、部分段前缀、问号、正则、转义、大小写折叠和未知命名空间不支持。
+
+仅 TENANT 作者可使用模式。编译器在调用边界明确提供、完整校验的冻结 Profile 中展开，不按 scope、资源或条件筛掉不便匹配的动作：任一展开动作范围不符、资源缺失、条件或前缀能力不符，整个语句拒绝。零匹配拒绝，不表示“未来可能允许”。重复作者 token 拒绝；不同模式以及模式与精确动作重叠时按集合去重。作者文档原样规范编码，resolvedStatements 只含排序、精确、去重的动作，逐语句仍最多128项；原64KiB作者、128KiB完整内容及16个Profile预算不增加。每次解析至多8192次动作访问（64语句×128动作），在去重之前计入所有展开结果与精确 token，重叠不能隐藏编译工作；展开表只从已验证且每个最多128动作的Profile一次构造，不逐模式扫描全局目录。产品名只用于语法命名空间与查找明确声明，不推导服务或授权资格。
+
+精确动作的旧 canonical/digest 不变；作者模式与显式枚举即使当前展开相同，也有不同内容承诺。新 Profile 可使新发布产生不同结果，但原内容始终用原精确 archive 验证，不移动默认值、不重新展开到当前 head；当前兼容性检查在 Effect/资源/条件之前执行，包含不匹配资源的 Deny。编译成功不是授权决定或目录注册证明。
+
+本片门禁覆盖真实产品和未注册合成产品的同一纯路径、段边界、零匹配、scope/条件/资源攻击、重复与重叠、展开上限、输入副本隔离、重排稳定、SID/摘要篡改、冻结与新目录分离，以及精确动作的全部原回归。产品 Profile 声明只能登记精确动作；作者模式不能成为实际 AuthorizationRequest.action。纯编译成功仍不构成发布或执行授权。
+
+共同闭环沿用 contractVersion2/compilationVersion1，原exact canonical/digest不变，legacy1和原document-only编码任何路径均禁止模式。传输codec从完整resolved集合验证作者语法覆盖与总承诺，但不证明可信目录的完整性；缺失或伪造的匹配成员必须再由trusted owner加载精确archive后重编译拒绝。当前发布仍只接受作者document，在原事务里锁定并核对当前源码heads；SQL私有断言独立从这些完整Profile展开全部成员，按同一去重前8192预算验证SID/精确集合/最小引用以及每个资源和条件。它不把模式当SQL LIKE/调用者正则，不根据scope过滤匹配集合。PDP先完成整个冻结内容与当前解释相容性验证，再且仅再按resolved SID的精确动作匹配；删除作者Action匹配兜底，默认指针/附件/边界下次请求生效，原事实不重新授权。
+
+本轮开发readiness为IAM23/Audit13/PaaS1，反映SQL与作者语义变化；create10/claim7/recorder7/evidence5外形、ServiceIdentity/lookup_service/Audit canonical保持。安装CurrentDatabaseProfile不改，其他Phase的PaaS5不导入。必须证明真正HTTP发布/关联后PaaS允许与Deny/撤销/隔离和历史投递；原exact版本/默认/退休/重放不变；新revision只能使用明确源码拥有的声明，不能覆盖r1。旧pattern不因新head新增动作而扩张，不移动default；新动作只有显式新Publish加set-default才取得权限。SQL升级或同schema数字不作跨发行兼容证明。上述真实目录前进、多进程与独立CI门禁未齐前，LANG-03继续未验收。
+
+当前 SQL 的 `resource_kind_for_action` / `is_platform_action` 删除原 CASE 双目录，沿既有私有函数读取已登记 current Profile 的精确 Action。它们是 STABLE、invoker、非并行、owner-only 投影，不是额外注册或授权入口。只有 INSTALLATION 为平台动作；TENANT/INSTALLATION_PROBE 为已知非平台，缺失返回 NULL，重复匹配以标量子查询失败，非法 scope 不降级为 tenant。recorder 和 boundary 显式拒绝缺失解释；管理消费还核对原决定的精确 current Profile。当前用例在原事务锁定源码一致的 heads 后使用投影，历史 proof 仍读取原 archive，封闭 event→decision 事实映射不改。
+
+真实可信 archive 读取负向门禁在现有PG18 policy owner验证：完整重算摘要且通过传输 codec 的缺失/伪造同族成员，在受限管理读取时仍因精确 archive 不符返回 sanitized 503；恢复测试投影后原内容可读，没有改写不可变历史。发布、PaaS Allow/Deny/撤销及资源/Operation/outbox隔离由下述最终完整回归证明，不将初期检查冒充最终固定源码验收。
+
+原 retained-process 门禁使用仅测试用 Go build overlay，独立构建 source-owned PaaS Profile r2 的 IAM executable 和 migrator，保留 r1 原声明，加入一个合成同族 inspect 并移除 read 的主体条件能力。原迁移器实际 apply 两次和 verify，未用 DML 直接造 head/版本/附件。r1 在线请求 422 且没有普通 Deny 决定；r2 请求中的旧动作保持允许，新动作在旧默认和仅发布阶段均拒绝，显式 set-default 后允许。重启/撤销及原 r1 决定、版本字节和业务 proof 保留。合成 inspect 仅证明 IAM 目录演进，不是生产 PaaS endpoint、运行时注册能力或签名发行升级。
+
+早期完整回归曾触及原120秒组流程及240秒综合上限，未计成功。CPU剖析定位能力投影反复反射比较完整Profile的开销。优化仅把同一源码承诺的完整内容相等检查改为类型化逐字段比较，嵌套shape/condition仍全部核对，任意不同内容仍走原完整编码器；没有身份/权限/current-head跨请求缓存。没有放宽时限、减少101成员/分页规模或并发攻击，失败由下述最终完整回归收口，不用聚焦成功替代。
+
+解码仅在完整有界输入与预先验证的源码canonical每字节相等时返回深拷贝，其他输入仍走原严格decoder/完整编码器。该路径不按product/revision/digest短路，不保留数据库状态；原/规范排序、全部标量变体、深拷贝隔离、尾随对象、重复字段和超限均验证。编译器仅为作者精确依赖与完整匹配族构建临时索引，仍先校验所有传入Profile，包括未引用声明的语法/重复/条件。所有改变只去除重复纯计算，不减少密码哈希强度，也不把快路径或CPU样本作为容量/HA验收。
+
+最终目录前进门禁在全新专属PG18通过20.72s（Go包24.066s）：原r1家族Deny使用的身份条件在新源码中移除时，即使资源不匹配也整次503且不写普通决定，显式撤销后恢复原Allow。首次登记的r2同时承诺inspect新增与read条件移除；不修改已登记r2，不复用先前仅inspect试验库。原固定21解释基线、Root preflight/末尾回滚、真实发布/默认/撤销/重启、原字节及历史proof均在同门禁保留。
+
+最终源码的整组PG18 policy race剖析通过158.43s：组流程74.41s、完整数据后的平台凭据保护13.64s、末尾原schema/bootstrap/退休/撤权重放及current Profile/私有ACL攻击全部完成。剖析二进制保留`-race`，局部`-ldflags=-w`只去除Windows调试段；随后使用普通链接的最终串行回归也通过，未以剖析代替正常运行：Audit数据库/保留升级7.741s、Audit HTTP3.593s、IAM integration308.117s、authorityprocess101.499s、PaaS数据库5.817s。IAM包包含完整policy、真实HTTP和本地恢复；进程包包含固定21 retained升级、首次r2条件冲突/新增动作，以及真实双IAM/PaaS/Audit、受限数据库身份、模式Allow/Deny/撤销、跨租户资源/配置/Operation/outbox与历史proof。环境为本任务独立PG18.6、1CPU/768MiB/PIDs128/maxconn64，Go2/768MiB、重型race-p1串行；无远端或其他Phase运行验收。
+
+最终全仓 Go race/vet、模块校验、API 生成字节稳定和 Linux amd64 全仓构建通过。受限动作族与原编译内容往返 fuzz 各15秒、2 workers、1秒最小化预算，通过212769/218535次执行。上述检查与真实PG重型门禁串行，原组120秒/综合240秒和101成员规模未放宽。固定 `f15cc983a69092528a66eb49b0509b760392187c` 的 [Verification 34955695756](https://github.com/xiak/matrix/actions/runs/34955695756) 已通过 GitHub API 核实精确 SHA，go、authority-process、node-process 全部 completed/success；不宣称容量/HA、UI或发布兼容。
+
+纯片固定 `9febf76690e96f98abbf265b3ce840b8bf3dbc2c` / [Verification 34947449762](https://github.com/xiak/matrix/actions/runs/34947449762) 已核实精确SHA，go/authority-process/node-process全部success。该固定仍22/13/1且线上拒绝模式，不含当前23纵向增量。其本地契约攻击、两个实际产品的最小引用、合成非全局目录、当前请求兼容、8192恰好通过及去重前超限拒绝均通过；全仓 Go race/vet、模块校验、生成稳定和Linux构建通过，Go2核/768MiB。模式/原编译内容往返分别15秒/2workers/1秒最小化预算通过265354/284079次；原单策略样本约80μs、49989B、162alloc，无模式不建索引；这些不是容量SLO。该纯片本地没有外部环境，CI真实进程只是既有exact授权回归，不能作为模式运行验收。
+
+#### CAT-05 的不可变编译内容
+
+版本绑定由现有 `api/iam/v1/policy.go` 拥有唯一契约，并贯穿注册事务、发布、当前评估与历史证明。保留唯一作者 `document`，编译结果显式使用 `compilationVersion="1"`、`profiles` 和 `resolvedStatements`。每个 resolved 项只有唯一 `sid` 与排序的精确 `actions`；与作者语句逐一对应。本轮受限动作族模式沿上述共同闭环接入，未知动作继续拒绝，模式不能进入运行时字符串匹配。
+
+编译器消费显式的 Profile 集合，校验动作的范围、资源/前缀与条件能力，输出恰好实际涉及的产品引用，每产品一个精确 revision/digest；不能按产品名或动作后缀推导权限。输入 Profile 是调用边界提供的材料，纯语法/摘要校验不认证发布者、不注册新产品。实际 Create/Publish 只接受 document 和既有并发/幂等字段，在锁内核对受信 current head 与当前源码声明；用户不能提交 compilation 或选择旧 Profile。不可变内容加载核对注册的精确 Profile、重新验证整个编译结果及其摘要，不把缺失字段解释成旧格式。
+
+唯一 canonical owner 使用新域 `matrix.iam.policy-compilation.v1` 承诺完整规范作者文档、编译版本、最小产品引用和逐语句解析结果。SID 在两侧均唯一且一一对应，整个文档已经进入摘要，不另存第二个语句摘要或可独立改变的 ordinal。原 v1 文档 canonical/digest 保留真实历史读取契约；新编译内容不能使用原算法冒充已绑定版本。纯契约首片不改变当前 PolicyVersion HTTP/SQL 或安装 profile，后续切换必须增加明确的完整新载荷和受保护历史标记。
+
+编译预算沿用原文档/语句/动作/资源限制，输入最多16个 Profile（各自仍受001预算），完整规范编译内容最多128KiB；这不是放大当前HTTP请求/响应预算。输入与输出集合不共享可修改切片；重排不改变摘要，重复/多余/缺失引用、同产品多版本、SID错配、解析动作变体，以及用同revision的不同内容验证已冻结引用均拒绝。纯编译器不证明全局同revision不变性，该责任属于后续不可变registry。目录新增动作或形状只能改变新编译内容，旧结果按原 Profile 验证；两个实际产品以及没有当前全局目录条目的合法合成产品均走同一纯校验路径。后者只证明无产品名分支，不证明它被线上接入。
+
+当前真实评估同时满足请求当前 Profile 与策略原 Profile 的目标模式、资源种类、scope、caller及可信条件解释；同名动作的解释冲突失败关闭，不能静默忽略旧 Deny。ALLOW/DENY 及 Deny 优先不会被 Profile 绑定降级。目录更新不重编译旧版本、不移动默认指针，历史决定不查最新 head。001 的注册/当前请求/决定绑定与本 owner 的数据库发布/求值已串联并通过下述本分支门禁；最终be3主机消费者组合及未来有效Profile版本升级仍须由其真实消费者另验。
+
+#### 编译持久化切换与支持边界
+
+本节后端切片已通过本分支固定CI，完整005及组合发行未验收。沿现有 policy_versions、发布事务、默认指针及唯一 evaluator 替换，不新建平行策略库或权限引擎。新版本由服务端在同一事务锁住受信 current heads 后编译，保存完整不可变编译内容和唯一摘要；客户端仍只提交作者文档与原并发/幂等字段。源码目录、SQL实际登记与当前 head 不一致时发布失败关闭，不从 archive 最大 revision 或请求中选择产品版本。相同作者文档在不同合法 Profile 下会形成不同内容承诺，须显式发布再显式 set-default，不自动更新附件。
+
+policy_versions 增加无默认、必填的 contract_version，1只标识切换前真实完整存储行，2代表新编译契约；缺列/缺字段/null 不是可由运行时提交的旧格式选择器。一次性 cutover 持锁、整事务检查既有行后标记；旧 document/canonical/contentDigest、创建时间、默认指针和附件均不改，不回填编译结果。重复迁移不得补齐不完整新行或复活退休内容。本片开发契约已对齐为 IAM22/Audit13，本分支 PaaS1 不变；发布 CurrentDatabaseProfile 不变，数字不授权旧二进制或发行升级。
+
+公开 PolicyVersion 必填 contractVersion：1禁止出现 compilation（含null），2要求完整 compilation。版本响应验证语言结构和全部摘要，但不能用当前目录枚举拒绝受保护历史内容；发布请求继续使用受信当前声明，响应能解析不代表可参与当前授权。唯一 `CanonicalizePolicyVersion` 只返回校验过的传输规范字节，不认证声明来源。
+
+发布 SQL 沿现有 create_policy/create_policy_version，末尾增加必填 integer submitted_contract，只接受2；旧九参数函数在同事务移除，不保留默认参数或 overload。SQL检查完整承诺、逐SID精确动作集合、最小引用与当前头，并按稳定产品顺序持锁至事务结束，不另写 canonical 编码器。policy_versions.compilation 仅2必填，并与 canonical_document 中的作者文档和编译部分一致；新SYSTEM种子直接使用2，既有默认指针不前移。
+
+私有 policy_version_snapshot 仅返回 `{value:完整PolicyVersion,canonical:原存储字节}`，owner-only、API/PUBLIC/worker/recovery无直接EXECUTE，只嵌入已有受限管理读取和会话/服务快照。adapter严格解包，依据版本中的精确引用加载不可变archive，重验编译语义、规范字节和digest；没有当前head或解析失败fallback。随后立即还原既有用例/领域值，raw canonical和storage wrapper不进入公共响应、决定、证据、outbox、日志或支持导出。声明缓存只活在当前事务，不能缓存为跨请求permit。
+
+能力列表复用同一求值器，不以性能为由跳过旧 Deny 或降低完整性校验。同一次校验栈已验证的精确声明不重复散列；程序内固定声明可预计算规范编码，但外来值只有包括嵌套目标形状、条件和 caller 的完整内容相等时才复用该编码，只有 product/revision/digest 相等不够。其他声明仍走唯一完整编码器；此源码常量优化不保存数据库 head、主体状态、附件或授权结果，撤权和默认版本变化仍按下一请求读取。
+
+当前附件与BOUND边界的决定证据显式绑定版本contractVersion和compilation；不是存储wrapper或策略正文。新recorder在锁内对照实际默认行，拒绝省略/伪造。旧不可变证据没有这些字段时，仅受保护contract1精确版本可按原格式验证，不能由缺字段推定版本；contract2历史必须有完整匹配。历史proof按原行和精确archive校验，不读取当前默认、当前head或当前用户权限。lookup_session及service快照嵌套JSON随片更新，但lookup_service、claim七列、recorder七参数、read_audit_evidence五输出及Audit canonical不变。
+
+**历史存在不等于旧语义已获证明。** contract1 仅证明在切换前存在，不证明记录来自哪一版程序；首版 archive 恰好存在同样不是来源证明。固定 `1dc1079c4e7bec80f5345d06929875b492ba9a86` 是此切片明确的解释基线，不是每份旧策略的作者声明。若保存 migration/legacy interpretation 上限，它不能伪装成作者 profiles、compilationVersion 或修改旧摘要。最终 host 固定 be3 的权限 parity 是消费者验收，不补造旧数据来源。
+
+- 当前CUSTOMER旧版本仅保留管理/历史读取和原事实proof，不参与当前授权；原Root必须显式重发编译版本并选择默认。以后若支持旧解释，须另有固定能力契约及真实旧binary→当前PEP非扩权矩阵，逐项证明action/kind/scope/caller/mode/usage、条件来源/算子及EXACT/ANY/PREFIX语义。未知或冲突使整次决定失败关闭，不能跳过Deny后使用另一Allow。
+- Account Root 必须沿既有当前授权路径显式发布新编译版本并 set-default 才完成重审。首片 preflight 要求原 Root USER 为 ACTIVE、原 SYSTEM 默认精确匹配已证明的固定管理 seed，并拒绝 Root 任何当前直接或实际组继承的 legacy CUSTOMER 附件；即使该文档在普通 User 兼容集合中也不例外，受支持的 Deny/时间条件仍可能封锁管理。操作者须在旧版本按已有权限显式解除这些 Root 附件再重试，迁移不自动解除。真实切换后还必须证明 policy.read/create、version.create/set-default 及必要 attachment.revoke 可达，不以 seed 存在代替。若资格或路径不满足，在 marker/schema/default/outbox 变化前整事务拒绝；不先切换再将用户锁死，不新增绕过 PDP 的在线修复权限。以后若允许 Root 的旧CUSTOMER附件，需要另证完整有效快照及所有必需管理操作的可达矩阵。
+- SYSTEM 种子是有确定源码 canonical/digest 的另一种输入。已有种子只有精确匹配受支持固定内容及已验证能力上限才可继续当前求值；名字相同、管理类型相同不足。新装直接产生新编译版本；已有默认值不得因 schema/bootstrap 等值重放被替换，旧平台撤权不恢复。
+- ACTIVE Root 指原 USER，不允许迁移启用暂停 Account。ACTIVE/DISABLED Account 都检查原 Root 归属、ACTIVE USER、精确管理 seed 和零 Root legacy CUSTOMER 直接/实际组附件；暂停不能豁免资格。ACTIVE Account 验证当前管理可达；DISABLED Account 只承诺原状态和访问冻结保持，并须真实完成暂停带数据切换→仍拒绝→既有平台显式 enable→Root 管理可达的分支，enable 有自己的决定/事实。该分支未经验证前可在效果前拒绝，不假想恢复；Root USER 自身停用、缺失或身份不符均拒绝。
+- 本片不支持任意未发布 schema 的自动兼容。保留已提交历史 bytes/proof 与允许旧策略参与当前授权是两个独立判断；不能以历史能读取、数字升高或当前新装通过作为正向许可证明。
+
+**编译内容与当前请求相容性。** 在唯一编译契约 owner 校验完整冻结内容后，只比较该请求命中的精确动作解释，不要求整份产品新旧 revision 相等。每个包含该动作的语句无论 Allow/Deny、资源值或条件是否会匹配，都先检查原声明与当前声明的 product/caller、kind/scope、结果种类和明确 mode/usage；所用条件必须仍有相同类型/来源，所用实例前缀必须仍被该实例 shape 声明。未知/变化解释不能被“不匹配语句”掩盖。增加无关动作或未使用条件不会自动扩大旧 resolvedActions；新动作没有进入原编译内容，不能由旧版本授权。缺冻结引用、错摘要或畸形当前请求不是普通策略 Deny。
+
+相容性检查只证明两份已提供声明的语义约束，不认证注册、当前 producer、tenant 或资源归属，也不返回 Allow。PDP 必须另外验证当前身份、受信 current head、全部附件/边界及语句匹配；资源 ID 恰为 collection 不选 mode。PREFIX 仅适用 INSTANCE，不能因同 Action 另外支持集合而获得目录权限。历史 proof 仍按原冻结材料，不将该当前相容性检查用于重新授权历史事件。
+
+主体类型相容性由001的 `subjectTypes` 统一约束：评估器传入权威身份的类型，不接受请求方 selector；同一动作必须被当前与冻结声明同时支持。比较的是本次实际类型，不要求新旧完整集合相等，因此新增 ROLE 不破坏旧 USER 的解释，但也不能让旧 USER-only 版本对 ROLE 生效。此检查先于 Effect/资源/条件匹配，未知或不相容的旧 Deny 导致整体失败关闭。需新增主体能力时，原 Root 显式 Publish 新编译内容并 set-default；不得改写已封存 Profile/PolicyVersion 或自动移动默认。历史决定 proof 不重新执行当前主体检查。
+
+**增量验收。** 沿现有契约/authority、IAM HTTP/PG、Audit proof 和 authorityprocess 测试：新装编译种子、真实发布与显式默认切换、跨产品最小引用、篡改编译物/旧引用/未知字段、完整响应预算；新 head 增加动作/shape 不使旧 Allow 扩权且不跳过旧 Deny；条件/prefix/同ID三种模式、边界交集和旧 cursor 拒绝；发布与 head/default/附件变更的真实并发及 outbox 末尾失败回滚。明确固定 predecessor 的原 document/default/附件/决定及原 proof 保留，未知旧CUSTOMER和改写SYSTEM种子拒绝，Root自救或效果前preflight拒绝，重复迁移/重启不扩大权限。纯相容性测试不替代上述实际存储、PDP和PEP门禁。
+
+#### 条件首片：IAM 权威时间
+
+本纵向切片证明有时间窗口的自定义策略从发布、显式关联到实际业务鉴权；不是只增加一个解析函数。目前已接入现有校验、数据库发布、唯一求值器与 cursor 复核，完整验收尚未完成。该片是 LANG-04 的增量，不代替字符串、IP、标签或完整 CAT-05/产品接入。条件定义进入现有公共契约拥有者，来源声明按 001 管理；求值继续在单一 authority 中，不按产品名称分叉。
+
+- Statement 增加可省略的 `conditions`，元素严格为 `key`、`operator`、`values`；旧无条件文档的 canonical bytes 保持不变。每语句最多 16 个条件，同 key/operator 重复拒绝，禁止空数组、未知字段和隐式类型转换。时间条件各只有一个值，不把多值含义交给实现偶然决定。
+- 第一项键为 `iam.current-time`，类型为时间，来源仅 IAM 当前数据库事务时间；算子为 `DATE_GREATER_THAN_EQUALS` 与 `DATE_LESS_THAN`，分别表示闭合起点和开放终点。两个条件组合表示 `[start,end)`。值使用严格 UTC 时间格式和既有微秒精度约束；非法日期、非 UTC、空值和反向/空窗口在发布前拒绝。
+- 首片只对目录明确声明支持此键的 TENANT/USER 授权启用。产品服务不能通过 authorization body/header/query 自报该时间，通用 attributes map 不开放。未知键、动作未声明条件能力或缺少必需权威上下文失败关闭，不能默默去掉条件求值。
+- 条件先确定语句是否匹配，再汇总所有直接/组来源的 Allow/Deny；匹配 Deny 优先。窗口外的 Allow 不授权，窗口内的 Deny 能覆盖另一来源 Allow。读到损坏的任何有效策略仍使本次决定失败关闭，不以另一份 Allow 掩盖。
+- 一次决定使用相同事务时间和权威快照，不在一条语句中多次读取本机时钟。等待中的事务按既有一致快照排序；这不是追溯取消已经接受的业务事务、运行中任务或长连接。历史决定保留其原版本/摘要和发生时间，窗口到期后历史 outbox 仍可投递，不用当前时间重新授权旧事实。条件是当前时间匹配，不是永久到期终态；数据库时钟回拨仍按实际权威时间，不能声称此片实现了单调时钟或时钟故障治理。
+- 一个条件 Allow 到期不取消另一份合法 Allow。需要强制限制全部授权来源的期限必须作为后续权限边界，而不是将普通策略附件误作全局上限。恢复访问可以显式切换到已有合法非默认版本，或发布新版本再显式切换；不会通过清除退休状态、隐式更新默认值或改写旧文档恢复。
+- 门禁覆盖边界前/等于起点/内部/等于终点/边界后，时区/精度/空窗口攻击，多条件 AND、显式 Deny、直接与继承来源；真实 HTTP 发布/关联后由独立 IAM/PaaS 决定，伪造时间字段拒绝，换版后的下一请求改变结果，原决定与链证据可重放。用有界的实际数据库时间等待证明运行语义，不靠只传入 mock 时间或扩大超时作为全片验收。
+
+#### 字符串条件：当前权威身份
+
+本纵向切片实施中，已接入契约、生成 schema、受限数据库发布和唯一求值器，完整验收尚未完成。沿用同一 `conditions` 结构，首先支持 IAM 自身持有的账号与当前主体稳定 ID；不是调用者属性、业务资源属性或完整 ABAC。可信键的目录定义由 001 拥有。
+
+- `iam.account-id` 取当前认证主体的唯一 Account ID；`iam.principal-id` 在USER分支取当前User ID，在006的ROLE分支取当前Role ID，不取来源USER。不能取目标资源 ID、Group ID、策略拥有者、别名、登录名或请求中的 tenant/account/principal selector。仅实际Profile与冻结编译声明支持的主体/条件组合可求值；旧USER-only编译不会因新目录出现ROLE而扩权。产品服务主体的条件尚未开放，ROLE的真实消费与来源承担资格门禁归006；原来源USER当前Assume条件仍以该USER单独求值，不混入角色业务条件。
+- 两键类型为 STRING，支持 `STRING_EQUALS` 和 `STRING_NOT_EQUALS`。当前值是一个标量；条件 `values` 是 1–16 个互异、合法的稳定 ID，精确、区分大小写比较，不 trim、不做大小写折叠、通配或隐式类型转换。等值为任一候选匹配，否定为全部候选均不匹配；多个条件继续 AND，匹配 Deny 继续跨来源优先。不同键可使用相同算子；仅相同 key/operator 重复拒绝。互相矛盾的等值/否定条件不匹配，不能以最后一项覆盖前项。
+- IAM 账号、主体和数据库时间是当前决定必须具备的权威上下文。缺失或非法时整个评估失败关闭，不能因为存在否定条件而允许访问。未来可选业务属性的缺失语义不能改变这些必需身份字段的完整性要求。来源类型/键/算子不一致同样拒绝；没有公开 context/attributes map。
+- 现有唯一 canonical owner 对每个条件的值集合复制后排序，绝不修改调用者切片。候选顺序不改变摘要；无条件文档和已有单值时间条件 bytes/digest 不变。Go 校验、OpenAPI 和 SQL 发布检查都覆盖键对应的类型、算子、大小与重复；不新建另一语言实现或绕过受限数据库写入口。
+- 真实闭环：同一 Group 中两个普通 User 共享同一条件策略，仅被选中的当前主体得到目标资源权限；账号条件、否定集合和时间条件可共同约束。显式切换默认版本后原 bearer 的下一请求反映新条件，移除成员或附件仍即时拒绝。两账号同名 User/Group/策略不串用；caller header/body/cursor 不能换身份，服务凭据不能冒充 USER。当前条件不参与历史事实重新授权，原版本/决定/outbox/链仍可重放。
+- 门禁还覆盖大小写差异、多值顺序、重复 key/operator/值、空/超限值、非法 ID、类型错误、未知来源、不同键同算子、AND 与全来源 Deny、缺少必需身份、默认切换前后及分页续查；纯函数与 fuzz 不替代独立 IAM/PaaS/Audit 的真实业务调用。
+
+#### IP 条件：产品服务提供的可信网络来源
+
+本片沿用唯一 `conditions` 语言与产品 Profile，不增加通用 attributes map、PaaS 专用策略模型或按角色分叉的求值器。条件键固定为 `request.source-ip`，类型为 `IP`，来源固定为 `CALLING_SERVICE_NETWORK`；它表示已认证产品服务从自己实际处理的网络请求中建立的来源地址，不是 IAM 连接对端、资源归属或调用者声明。首个运行消费者覆盖 PaaS 的 TENANT 应用、配置、修订、部署和 Operation 动作；后继程序访问切片又只为 Audit 的租户记录查询与完整性验证声明该条件，并由受信边缘事实驱动。平台主机、安装探针、IAM、Audit 平台动作与 ManagedService 动作不因同名字符串自动取得该能力。以后其他产品接入时必须在自己的新 Profile revision 中显式声明并完成相同 PEP 门禁。
+
+- 产品 PEP 从真实 socket/受信 edge 上下文生成 `networkContext.sourceIp`，不读取或转交 caller 的 `Forwarded`、`X-Forwarded-For`、query、body 或普通业务 header。当前直连 PaaS 切片只接受 `RemoteAddr` 中的直接网络对端；经过 APISIX 时，在 installation/edge owner 提供准确可信代理链、覆盖攻击和签名组合证据前，不能把 APISIX 地址或 caller header 宣称为原始客户端 IP。缺少该能力的发布组合必须关闭相应 IP 条件，而不是默默降级成任意来源。
+- 北向授权仍不接受 tenant、subject 或条件值 selector。`AuthorizationRequest` 只增加可省略且严格封闭的 `networkContext:{sourceIp}`；`AuthorizationDecision` 原样绑定同一上下文，PEP 在消费 Allow 或 Deny 前精确比对。省略保持已有非网络请求的 bytes；存在时必须是无端口、无 zone、非 IPv4-mapped IPv6 的规范 IPv4/IPv6 单地址，允许私有地址与 loopback 以支持私有部署，拒绝 unspecified、multicast、非规范文本及额外字段。产品服务身份、Profile caller 和来源上下文三者都成立才进入求值；IAM 自己看到的服务连接地址不能替代它。
+- 算子只开放 `IP_ADDRESS` 与 `NOT_IP_ADDRESS`。`values` 为 1–16 个互异、规范且已 masked 的 IPv4/IPv6 CIDR；不接受裸地址别名、host bits、zone、映射地址、范围字符串、DNS、VPC 名或隐式族转换。正向条件为当前单一地址命中任一 CIDR；否定条件为当前地址不命中全部 CIDR。多个条件继续 AND，匹配 Deny 继续跨来源优先；值规范排序后进入原 canonical/digest，调用者切片不被修改。
+- `request.source-ip` 是使用该条件时必须存在的权威上下文。策略不使用该键时，旧的无网络上下文请求保持原行为；任一当前有效 Policy、User/Role boundary 或 SessionPolicy 使用该键而上下文缺失、非法、来源声明不符时，整次决定失败关闭，不把它当作普通“不匹配”，尤其不能让 `NOT_IP_ADDRESS` 因缺值变成 Allow。显式 Null/存在性检查仍不开放。
+- PaaS 当前 Profile 以新 revision 声明这一能力；原 USER+ROLE revision 作为唯一明确历史解释保留，旧 PolicyVersion 没有使用该键时可按既有逐动作相容性继续求值，但不会凭新 head 获得 IP 条件。发布含 IP 条件的新版本必须引用新 Profile；旧 profile、旧决定和旧策略 canonical bytes/digest 不改写。请求、决定、数据库不可变证据和 AccessKey 授权结果绑定相同 network context；历史 outbox 继续验证原决定，不用当前 IP 重新授权。
+- 最小真实门禁覆盖 IPv4/IPv6、私网/loopback、CIDR边界、正向/否定、多值/多条件、Allow+Deny、User/Role/AccessKey 与 User/Role boundary；伪造/重复转发头、空 RemoteAddr、端口/zone/mapped/host-bit/非规范编码、请求与决定替换、缺上下文、错误产品/动作/Profile、重启及默认版本切换均失败关闭。真实 PaaS HTTP 需证明同一 bearer 从允许地址成功、从不允许地址拒绝，tenant/resource/cursor 不能改变来源；独立 IAM/PaaS/Audit 进程和数据库 proof 通过后才接受本片，纯解析或 mock context 测试不构成纵向验收。
+
+当前后端候选形状为 IAM schema 53、authorization decision contract 5、PaaS Profile revision 3；它没有更新已发布 installation profile，不能以源码数字宣称可安装。2026-09-29 在本任务独立 PostgreSQL 18.6（2 CPU、1 GiB、PIDs 256、随机 loopback 端口）和 GOMAXPROCS=2/`-p 2` 下完成：API、唯一求值器、IAM usecase 及 PaaS PEP/client 聚焦 race；空库迁移、双重 apply、策略编译、当前/历史决定和全部网络替换攻击的完整 policy storage race 193.40s；两个 IAM、PaaS、Audit、dispatcher 的独立进程 race 167.66s，实际 `127.0.0.1` peer 命中、绑定 `127.0.0.2` 的同 bearer 被拒且伪造三个转发头无效，默认版本切换即时生效，落库决定精确为 contract 5；固定 IAM45 executable 产生保留数据后升级到 IAM53 的 race 103.42s，原 Session/MFA/恢复/策略版本/决定/outbox/canonical 与重启行为保持，迁移不补造网络上下文。生成文件连续两次 SHA256 一致，相关 vet 通过。这些本地证据不构成独立 CI、APISIX 可信代理链、签名发布 Profile、正式 UI 或完整 005 验收。
+
+生产切片已固定为`94cc8d7fd4cf60deb909ba4e1111538b663fad43`并随`1b2735ce1c0842cfdb22fb0a32dc389f7b492d72`推送。后者的[Verification36587669797](https://github.com/xiak/matrix/actions/runs/36587669797)首次storage运行在当前 recorder 前被原 Audit 数据测试的五处旧 contract4 夹具拒绝，实际错误为`authorization contract version is invalid`；不能将该run或此前本地结果记为独立CI通过。生产数据库按 contract5 失败关闭是预期行为，修正只把当前正向、退役action、错误资源、错误installation及撤权测试的 recorder 输入/落库断言推进到5，仍保留1–4拒绝攻击和旧不可变记录读取。相同源码在新空PG18三库复现原失败后，修正后的Audit数据/HTTP race分别9.794s/4.175s通过；未改生产SQL、历史canonical或发布Profile，固定修正及后继独立CI仍待完成。
+
+修正固定于`9a030943386d693276fcea53ac706e8cc4269f1f`；它自己的CI仍因后继问题失败，不回填。后继程序签名、Audit租户读取、Account/Key网络限制和当前门禁继续使用同一`request.source-ip`契约，没有放宽来源或新增平行求值器。累计固定`91649497a0c53be1174d8835326a2df51fe74a55`的[Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260)已核实精确SHA并全部completed/success，包含当前真实PG18与独立进程来源IP矩阵，因此本IP条件后端切片按上述边界接受；APISIX可信代理链、签名安装和完整005仍未验收。
+
+评估器处理类型化 Statement。必需的 IAM 身份/时间/已使用网络上下文缺失使整个决定失败关闭；未来可选业务属性缺失时条件不匹配，否定条件也不能因此自动放行。显式 Null 存在检查尚未启用，不能把 null 输入当成受支持算子。多个条件同时满足，多值规则明确为 any/all；禁止隐式字符串类型转换。资源列表中每个必要资源都要通过，不以某个资源成功代替全部。
+
+变更在 account → principal → policy → default pointer/attachment 锁顺序内检查管理者当前委派上限。当前高风险发布与边界写入仅限原 Account Root；仅持有管理策略不足以开放这些写入。后续 LANG-08 必须证明受委派者不能经创建/改版/附件或去除边界扩大自身许可，不能用通用子集推理的假实现宣称安全委派。
+
+#### 权限边界：User 纵向闭环
+
+本节拥有 User 边界后端的设计与验收契约，真实运行证据见本 FEAT 验收节；它不等于完整 LANG-05/08 或控制台验收。Role 的边界随 006 的真实 RoleSession 接入，不制造临时 Role 别名或删除 Role 需求。边界用于限制主体，不是第二种正向附件、单独的 Deny 策略或 Group 的属性。
+
+**权限合成。** 每个普通 User 最多一个当前 TENANT 边界，引用已有 ACTIVE/TENANT Policy；CUSTOMER 必须属于当前 Account，SYSTEM 必须是本账号可见的租户策略。边界跟随该 Policy 的当前默认版本，不另开版本 pin 或复制策略内容。普通直接/组授权先按现有唯一求值器求并集并处理显式 Deny，再与边界的 Allow 求交；两边任一匹配 Deny 均拒绝。边界使用同一次 IAM 身份、数据库时间和资源上下文，不能引用另一账号、组身份或请求属性。
+
+| 普通直接/组授权结果 | 当前边界状态/结果 | 最终结果 |
+| --- | --- | --- |
+| 没有 Allow | 有 Allow | 拒绝：边界不能授予权限 |
+| Allow | 明确无边界 | 允许，仍需通过身份、服务、scope 与资源归属检查 |
+| Allow | 有 Allow 且无匹配 Deny | 允许，仍需通过相同检查 |
+| Allow | 没有匹配 Allow，包括窗口外/条件不匹配 | 拒绝，另一普通附件不能绕过 |
+| 任一侧匹配 Deny | 任意合法状态 | 拒绝 |
+| 任意结果 | 边界状态缺失、损坏、跨账号或版本关系不成立 | 整个决定失败关闭，不降级成无边界 |
+
+边界只限制 TENANT 权限；不能授予或取消 INSTALLATION/INSTALLATION_PROBE，不将普通用户伪装为 service。原 Account Root 不允许绑定普通 User 边界，保留其租户最终控制关系。持有未撤销平台附件的 USER 继续受已有凭据/状态保护；其租户边界不改变平台附件和离线恢复语义。普通管理员不能借边界 API 接管平台身份；本片写入仍只允许原 root，并且不能更改任何凭据或平台附件。登录、自己的有效会话退出、需验证旧密码的自助改密沿现有身份认证路径，不因业务权限边界没有 Allow 而无法退出或完成强制改密；这些路径不产生业务许可。
+
+**管理 API。** 沿现有 users 资源，不新增 boundary 顶层目录或第二个 Policy 发布入口。Account 从当前有效 bearer 推导，目标只取精确 userId。读取不返回策略正文；要读取正文仍需独立 `iam.policy.read`。
+
+| 路由 | Action / 资源 | 严格输入与结果 |
+| --- | --- | --- |
+| `GET /v1/users/{userId}/permission-boundary` | 既有 `iam.user.read` / USER | 返回 UserPermissionBoundary：accountId、userId、当前 User resourceVersion，以及显式 null 或精确 PolicyVersionReference；无边界不是 404 |
+| `PUT /v1/users/{userId}/permission-boundary` | 新 `iam.user.permission-boundary.set` / USER | policyId、policyResourceVersion、resourceVersion、requestId；设置或替换单一边界，返回同一当前投影 |
+| `DELETE /v1/users/{userId}/permission-boundary` | 新 `iam.user.permission-boundary.remove` / USER | resourceVersion、requestId；显式解除上限，返回 policy 为 null 的当前投影 |
+
+两个新动作属于现有 IAM/TENANT/USER 目录，不开放平台、probe 或 PREFIX 能力。当前 PDP 通过后，写入还必须锁内验证原 root；普通管理员即使通过正向策略取得这两个 Action，也不能执行高风险写入。GET 对本人或他人均沿精确 `iam.user.read`，CurrentIdentity 则仅投影自身边界，不由此泄露他人信息。set 的 policyResourceVersion 绑定操作者看到的默认版本状态，避免等待期间默认切换后静默设置另一份上限；后续显式默认切换仍对所有当前引用生效。已有相同边界的新意图、无边界时的新 remove 意图均冲突；等值重放仅在该命令结果仍为当前 User 修订时返回原结果。后续变更后的旧命令不能重新设置、解除或复活边界。
+
+**事务和存储。** 仍由 identityaccess 用例协调 SERIALIZABLE 事务、当前 PDP、受限数据库函数与 outbox。在既有 principal/user 修订上做并发控制，不引入与 User 脱节的可独立授权聚合。现有 policy authority 迁移 owner 增加按 tenant+USER 归属的边界关系及不可丢弃的设置/撤销历史；一个 User 至多一个未撤销关系，复设形成新关系身份而非恢复旧关系。关系不是 `policy_attachments` 的另一种 target。首次没有关系必须由权威查询明确输出 NONE；数据库/解码错误、缺少查询结果或内连接漏行不能输出 NONE。
+
+锁顺序为 Account → actor/目标 USER（同类按稳定 ID 顺序）→ 原 root 关系 → actor 凭据/当前会话 → 涉及的 Policy（旧/新按稳定 ID 顺序）→ 当前边界关系。私有 mutation 的 SessionID 只能取本次认证 bearer，公共请求不接受该字段；锁内检查该会话仍属于 actor、未撤销/未到期且凭据代际相同，和改密/退出共享 principal-first 顺序。写入重检活跃 Account/actor、目标为本账号未删除的普通 USER、原 root 关系和预期 User/Policy 修订；允许为停用的普通 User 管理边界，但不得顺带启用它。User resourceVersion 与关系更新、单一成功事实在同事务提交。set/remove 与 User 状态/删除、Policy 默认切换/删除、另一边界命令的锁序必须逐项对齐。同一 User 修订的竞争只有一个赢家；set 与 Policy 删除不能留下活跃的退休策略引用。set 若先于默认切换提交，两项可以合法成功，边界必须跟随新默认；若默认切换先提交，set 的旧 policyResourceVersion 必须冲突。不能为了强行得到单一赢家而把默认跟随改成版本 pin。
+
+任何当前边界引用都阻止 Policy 删除，包括停用 User 的引用；不能因没有普通附件而误判无引用。边界跟随默认，因此只阻止当前默认版本退休，旧非默认版本可依既有规则退休但必须保留内容与历史证明。User 删除在其既有事务内终结当前边界并保留历史；停用/恢复不移除边界、不复活旧关系。末尾 outbox 故障不得留下 User 修订、边界状态或完成事实的部分变更。
+
+**当前权威与历史。** `lookup_session` 当前快照必须包含独立、完整的边界状态；不改 `lookup_service`、ServiceIdentity、七列 claim 或 Audit canonical。SubjectContext 中由数据库构造边界，业务 Authorize 请求不能带边界 selector。复用同一文档校验和 statement evaluator，普通附件 provenance 与边界 provenance 分开；边界本身不能填入 PolicyAttachmentEvidence 冒充一个 Allow 来源。边界最多增加一份现有有界文档的求值预算，仍须验证整个快照，不用遇到 Allow/Deny 就提前退出而掩盖损坏状态。
+
+CurrentIdentity/capabilities 与所有目录每页重新调用当前 PDP；cursor 的完整授权摘要纳入边界关系修订、Policy 修订及精确默认版本/digest，即使当前列表动作在变更前后均允许，也拒绝旧 cursor。不能把 null pointer、旧 capability 或首次页面的决定缓存为当前无边界证明。
+
+`record_authorization` 增加独立的边界证据：区分当前 USER/TENANT 的 NONE、实际应用边界，以及不适用的权威类型。当前记录入口必须拒绝省略或伪造状态，锁内验证 User 修订、当前关系/owner/default/digest；不能只校验普通正向附件。新决定无论 Allow/Deny 均保存实际边界状态，适用时保存精确关系与 PolicyVersionReference，即使边界没有匹配语句。旧不可变决定没有该证据时按其原契约验证，不伪造历史边界、不回填当下状态；旧记录的存在不允许新入口省略证明。历史 proof 验证原已提交证据，默认切换、策略退休、移除边界或停用主体后仍能投递，不重新执行当前权限。
+
+成功事实新增租户链 `iam.user.permission-boundary.set` 与 `iam.user.permission-boundary.removed`，target 为真实 USER；绑定原 actor、decision、request digest 和单一关系变更，不放策略正文。设置/替换使用同一 set 事实，不新增泛化 attributes 或成功事实别名。API、Audit catalog、SQL 验证与 producer 封闭映射一起修改；发生时 evidence 仅证明 IAM 授权/归属，不扩张为业务完整 payload 的真实性证明。实际新增字段/函数形状完成后再冻结开发 readiness，不提前修改安装 profile，也不把开发版本变动当成首版全历史升级责任。
+
+**必须通过的纵向门禁。** 沿既有契约/authority/cursor、IAM HTTP/PG、Audit proof 和 authorityprocess owner 扩展，禁止新增平行框架：
+
+- 上表全部组合；同一 Policy 同时作为普通附件和边界时 provenance 仍独立；直接/多组 Allow 不能绕过边界，边界中的 Deny/时间/身份/资源前缀使用同一语义。
+- 两真实 Account 的同名 User/Policy、同资源 ID；跨账号 Policy/User、Group/service/root 目标、伪造 scope/body/header/cursor、非法版本和非 root 自助移除/替换均拒绝且无部分效果。
+- 无边界→设置→替换→移除、仅发布与显式默认切换、普通附件撤销、User 停复用；同 bearer 在两个 IAM 实例和真实 PaaS 下一请求生效。至少两个实际应用，一项允许、一项受边界拒绝；边界独立存在而无正向附件时两项都拒绝。
+- set/remove 同修订竞争、set/default 切换、set/Policy 删除、remove/User 删除及等值/变体/陈旧命令；实际锁等待后 actor/session 撤销；最后 outbox 写失败完整回滚。当前引用阻止删除，删除 User 不丢历史且不移资源。
+- 受限 runtime 不能直接改关系/证据；新决定的 NONE/不适用/版本证明伪造失败；当前数据重复迁移/重启后边界和撤权不复活，原决定/outbox/旧 canonical 可验证。遵循 011 首版基线，不为本片枚举所有未发布 schema 起点。
+- CurrentIdentity 显示边界不是授权来源；capability 不越界；旧 cursor 在边界/默认变化后拒绝。正常/强制改密与退出仍保持当前 credential generation 和撤销语义。UI 在该后端片后接入，不以纯函数测试代替整个 LANG-05/08。
+
+## 验收
+
+Allow/Deny/边界交集表、条件缺失/类型/大小攻击、跨账号资源与 namespace、未知版本/Action、显式 Deny 全来源优先；真实数据库改版/附件/边界并发，旧 session 下次请求立即反映；旧事实仍可验证投递；UI 与 API 使用同一文档。fuzz 只证明当前 grammar 不崩溃且失败关闭，不快照实现细节。
+
+### User 边界后端证据
+
+契约、唯一 statement evaluator 的交集、独立 provenance 和 cursor 当前边界/default 摘要已进入当前工作树。严格响应 decoder 不将缺失 policy 当成显式 null；生成 schema 的 nullable/required 缺失由正向测试发现并修正。API schema/Go 验证、边界不授予权限、时间/身份/前缀条件、损坏快照失败关闭、平台不求租户交集及 cursor 旧默认拒绝的聚焦 race 通过；相关 usecase/架构与 vet 通过。它们不证明管理写入或安全委派已完成。
+
+2026-09-14，专属 PostgreSQL 18（1 CPU、768 MiB、PIDs128、最多64连接）新库的原版本/条件门禁通过，最后子流程11.95s、父流程16.27s、包18.891s；它仅证明既有行为能消费新 snapshot/recorder。随后现有 HTTP/PG owner 新增 User 边界流程，最终聚焦包9.406s、父流程6.65s、边界流程2.11s通过：无授权时边界不授予权限、多授权求交、精确重放、SYSTEM 替换、停用 User 移除不启用、原命令不能恢复旧状态；同一 Policy 的正向附件与边界证据独立，发布不改默认，显式切换后原 bearer 下一请求改变权限。没有普通附件时的边界引用独立阻止 Policy 删除；两个同名策略的真实账号不能互换归属，平台策略/root/跨账号目标、服务凭据与 caller selector 拒绝。
+
+同修订两个 set 只有一项成功；成功事实的 outbox 最后故障回滚 User 修订、关系、决定及事实。数据库锁屏障证明请求已鉴权但尚未写入时，对准确 bearer 的退出先完成，放行后的请求拒绝且无边界/成功事实变化。初始屏障放在决定插入之后，已有外键锁会阻塞退出，导致测试请求截止而非预期竞争；改为决定插入前的锁屏障后真实通过，没有增大超时或放宽生产鉴权。API/worker/recovery 不能直接读写关系，owner 也不能删除/复活历史；新 recorder 省略、空、错误 scope 和陈旧 User 修订证据均拒绝，已提交证据不可修改。旧 set 事实在换版、替换、移除和停用后仍通过 IAM-source 精确 proof。
+
+Audit 原双 schema/受限 recorder/封闭 action/不可变链真库门禁5.324s通过；其旧五参数测试消费者已改为六参数，从实际主体修订和真实无边界状态构造 NONE，平台/服务使用 NOT_APPLICABLE，并核对存储的独立证据。不保留旧 overload 或空证据兼容入口。生成 schema 对响应 kind/apiVersion 的遗漏经负向门禁先失败后修正，严格 codec 与 OpenAPI 同步拒绝伪类型。
+
+完整 `TestIAMPolicyAuthorityStoragePostgres` 在本片新数据库串行 race 通过87.05s（包89.626s），User 边界2.64s，保留原真实组规模/分页、版本/条件/元数据/终态、凭据并发、受限存储攻击和最后 schema/bootstrap 带数据重放。相关 API/IAM/Audit/架构 race 回归通过；默认跳过数据库的包结果不是额外真库证据。随后补充 remove/User 删除的同修订竞争，在另一个新库聚焦通过2.19s（父6.88s、包9.594s）：只有一条成功完成事实，删除后无当前边界/凭据，全部关系历史仍在，旧 set 不能复活，原事实继续通过 proof。首轮测试误用了 DELETE User 路由，改为已有 POST `:delete` 后通过，没有另造删除接口。
+
+新增真实边界场景后的独立 `TestIndependentIAMAuditAndPaaSProcesses` 串行 race 通过45.79s（包48.451s）：原流程先创建两个真实 PaaS 应用；只有边界时两个 IAM 实例及 PaaS 均拒绝，随后显式普通授权只能读取被边界选中的应用。两实例 CurrentIdentity 保持边界与正向来源分离；发布新版本不立即改变上限，另一实例显式选择 Deny 默认后，同一 bearer 的下一请求拒绝。移除边界恢复普通授权覆盖的两个应用，撤销普通附件再全部拒绝。实际 IAM dispatcher 投递单一 set/removed 租户事实，真实 Audit 查询核对目标 USER、decision 关联并完成链验证；原受限运行身份、跨账号资源/Operation/outbox 和失联回归保留。这是本次新增运行证据，不继承旧进程结论，也不作为 UI、容量或完整 LANG-05/08 验收。
+
+本轮专属 PG 容器、网络和合成数据卷在精确 ID/标签与零客户端核对后清理；没有用户数据或其他任务环境变更。
+
+边界与 Policy 竞争的新增真库子流程通过3.69s（父8.02s、包10.584s）：replace/remove 同 User 修订单一赢家，set/default 按合法提交顺序观察当前默认或拒绝旧修订，set/Policy 删除没有退休策略的活跃引用，成功事实精确对应已提交关系。受边界约束的初始 User 通过真实登录产生两个临时会话，强制改密即使提交 revokeOtherSessions=false 也撤销其他临时会话，只保留调用会话；新 CurrentIdentity 保留边界、清除 must-change 而不产生正向授权，之后自助退出仍成功。
+
+现有组/成员容量门禁复用真实百条 HTTP 数据补边界分页后通过32.63s（父36.62s、包39.201s）：设置、默认切换、移除均拒绝旧 cursor；两默认版本都允许列表时也不复用旧快照，新 cursor 仍能翻到下一页。没有新建分页框架、批量伪造权限数据或扩大页面上限。
+
+以上竞争/分页测试增量后的全仓 Go race 测试与 vet、模块校验、API 生成字节稳定及 Linux amd64 全仓构建通过。默认跳过的外部环境测试没有记作真实运行；最终独立 CI 绑定下述准确提交。
+
+最终混合授权聚焦通过3.05s（父7.42s、包9.969s）：同一 USER 的直接授权与两个真实 Group 继承均不能绕过边界，决定保存两个精确 Membership 证明；普通 Group 中的 Deny 在边界 Allow 时仍拒绝，撤销该 Deny 后恢复交集内访问。随后最终源码的完整串行 PG18 回归通过：IAM integration172.824s、Audit 数据5.412s、Audit HTTP2.650s、独立双 IAM/PaaS/Audit45.400s、PaaS 数据4.310s。该轮包含现有凭据/恢复、schema/bootstrap 带数据重放、真实运行身份、资源/Operation/outbox 隔离及全部新边界测试，不扩展未发布历史升级矩阵。
+
+当前源码 readiness 为 IAM18/Audit12/PaaS1，反映新增快照/六参数 recorder、带私有 session 参数的边界写入口和两个封闭成功事实；实际 lookup_session 末尾为 policies/boundary 两个 jsonb。没有修改安装 profile，不授权旧 binary 使用新函数形状。两个新 IAM 管理 Action 进入显式目录，但发行策略的新内容不会借 schema/bootstrap 等值重放偷偷切换已存在默认指针；首版策略由最终发行基线冻结。固定 `119f232ea7cf7ba7d91a1ef6433e132e0127f03f` 的 [Verification 34849128040](https://github.com/xiak/matrix/actions/runs/34849128040) 已通过 GitHub API 核实精确 SHA，Go、authority-process、node-process 全部 completed/success。UI、Role 边界、安全委派及其他语言需求仍未验收；不能将本片后端门禁作为整 FEAT 完成。
+
+### CAT-05 编译契约基础证据
+
+2026-09-15，现有契约测试验证最小多产品引用、唯一SID与精确动作集合、原文档/编译物/声明重排稳定、无可修改切片共享、作者Effect/资源/条件均进入整体摘要。篡改revision/digest、缺项/多项、跨SID搬移动作、重复、超限、未知字段及大小写别名均拒绝；当前发布请求仍拒绝客户端传入profiles、resolvedStatements或compilationVersion。合成产品通过显式声明走同一校验器，但不能注册到当前目录；冻结声明缺少前缀/条件/动作时不能借用全局当前能力。既有全部Action的ALLOW/DENY文档与当前校验、canonical保持一致。
+
+初次注册使用PaaS完整12项与Audit完整链读取/验证的各自唯一r1。原未发布错误草案只保存在Git，不建立兼容注册记录；这不允许覆盖真正已登记的相同revision。该声明修正没有改变当前action/resource/scope/caller投影，不把纯声明当作新请求mode已生效；运行时registry由001独立拥有。
+
+单一校验器重构后的专属PG18.6（固定镜像 `postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280`，1CPU/768MiB/PIDs128、64连接）串行race-p1回归通过：`TestIAMPolicyAuthorityStoragePostgres` 124.45s（包127.374s），独立IAM双实例/Audit/PaaS及双dispatcher 65.68s（包68.494s）。保留当前版本/附件/边界、凭据竞争、RLS、受限runtime登录、双租户资源/Operation/outbox、撤权与不可变历史。这些是原线上授权的回归证据，不是新compilation持久化、Profile绑定决定或产品mode执行的验收。
+
+最终声明收敛后的全仓 Go race/vet、模块校验、API生成稳定和Linux amd64全仓构建通过；编译物严格解码/规范往返fuzz以15秒、2workers、1秒样本最小化预算通过482263次执行，不作容量或完整语言证明。当前PolicyVersion HTTP/SQL、readiness、安装profile、lookup_service、七列claim及Audit canonical均未改；最终UI仍由独立UX/UI owner负责。初建internal测试网络未产生loopback端口，未开始任何数据库门禁即按精确自有ID重建普通专属网络；没有改共享网络配置。两项真库回归结束并确认零客户端后清理本轮PG容器、网络及仅含两个合成数据库的卷，不涉及用户数据。
+
+固定纯编译实现 `d3a08bfa7c248793ffb51499186486efa2ebb377` 的 [Verification 34925618255](https://github.com/xiak/matrix/actions/runs/34925618255) 已由GitHub API核实精确SHA及go、authority-process、node-process全部completed/success；不据此验收registry、编译内容持久化或新wire。
+
+### 编译内容与请求相容性基础证据
+
+2026-09-15，现有纯契约 owner 增加 `CheckPolicyCompilationRequest`，复用唯一编译 canonical/digest 和明确目标模式校验，不新增 JSON 语言、登记 API 或授权结果。测试先因缺实现失败，接入后通过所有已声明 Action/shape 的 Allow/Deny 相容矩阵；同 kind/id=collection 的实例/列表/创建3×3以及 EXACT/ANY 两种选择器仅自身模式相容。语法合法的新版声明改变 caller/kind/scope/result、增加原未有 shape、撤掉所用 prefix/condition 时，原未匹配资源的 Deny 也不能被静默跳过；全摘要、缺冻结声明、错引用、无编译结果或畸形当前请求先失败。
+
+独立于全局目录的合成产品验证新 revision 同义可用、无关新动作不进入原 resolvedActions、移除未使用条件不重写内容；即使策略没有当前请求动作，损坏内容仍拒绝。检查按冻结 resolvedActions 选择 SID，不从作者 Action 字符串或资源 ID 推导模式；该纯函数不返回 Allow、不认证来源且不用于历史重新授权。当前线上 PolicyVersion 格式、SQL发布和PDP仍未接入编译内容，不能用这些纯测试替代后续纵向闭环。
+
+GOMAXPROCS2/GOMEMLIMIT768MiB 下全仓 Go race/vet、模块验证、API生成字节稳定及 Linux amd64 构建通过；最终 SID/随机测试增量再次通过 API/architecture race。沿原编译规范往返 fuzz 加总承诺与当前请求检查，15秒、2workers、每样本最小化1秒，通过342088次执行，不声称容量SLO。该纯函数片没有启动真实数据库、服务、浏览器或远端实验；默认跳过的外部环境测试不作为新增真库证据。固定 `f272d06f84d8a753f0a7ec2cf3dc4276f637d660` 的 [Verification 34935374957](https://github.com/xiak/matrix/actions/runs/34935374957) 已独立核实精确SHA及三项completed/success。其IAM21/Audit13/PaaS1及发布profile未变，不包含上述IAM22存储/求值WIP，也不替代后继真实门禁。
+
+### 编译版本存储与当前求值证据
+
+2026-09-15，固定 `32dc1a4aab4a69d1c6cb4d04437dd7f8fd739cb0` 的 [Verification 34944465086](https://github.com/xiak/matrix/actions/runs/34944465086) 已经GitHub API核实精确SHA，Go、authority-process、node-process全部completed/success；整个005和IAM目标仍未验收。公开版本严格区分contract1/2；新发布只由当前受信声明编译，SQL与适配器保留原作者内容、完整编译承诺和精确archive引用。私有快照包装不泄漏到公共响应/证据；外来声明不存在、同revision不同内容、非规范原存储字节、缺少版本标记/编译内容、SID/动作替换及扩大私有函数权限均失败关闭。重新计算攻击载荷摘要后仍须拒绝错误引用和绑定，不以普通hash不符代替深层校验。
+
+独立限额PG18.6（1 CPU、768 MiB、128 PIDs、64连接），Go2/768MiB、race-p1串行：完整策略门禁198.844s（父195.67s）；原组规模单独94.864s（流程82.84s），未减少分页/竞争/成员规模，未扩大两分钟流程与四分钟总预算。初次完整运行曾超时，定位为重复声明/编译校验开销；同栈去重及源码完整内容相等的编码复用后重新通过。原生单策略微基准由329µs降至59µs，但这不代表端到端容量或HA/SLO验收，011仍须独立证明。
+
+实际固定`1dc1079c4e7bec80f5345d06929875b492ba9a86`旧IAM executable/migrator产生真实数据，再切换当前源码，最终17.983s（流程14.95s）：Root旧CUSTOMER直接附件使整次切换无副作用拒绝，须用旧HTTP显式解除；另有明确标为管理员腐败夹具的Root停用/缺失及Root实际组继承负向。原accounts/roots、策略/default、原版本canonical/digest、附件/组、凭据/会话、决定/evidence、bootstrap receipt及outbox保持；仅原版本取得contract1/null编译标记，新SYSTEM版本不成为原默认。late DDL故障整事务回滚，旧binary拒绝新schema，重启/等值bootstrap不复活撤销。旧SYSTEM Viewer在真实旧/新IAM HTTP上保持读允许、创建/平台拒绝；普通旧CUSTOMER保持当前访问失败关闭，Root读取后显式发布contract2仍不获权，必须另作set-default才允许准确目标。暂停账号保持暂停，随后现有平台操作员显式enable产生唯一关联事实，原Root才能继续新策略发布。此门禁不证明其他旧来源或任何签名跨profile升级。
+
+真实IAM HTTP176.101s；Audit HTTP3.143s；双schema/受限登录/RLS/不可变链最终6.246s；原独立双IAM/PaaS/Audit+dispatcher95.547s。后者保留真实应用、配置、配额/托管服务、Operation/outbox、跨账号ID/cursor、版本默认改变和撤销即时生效、历史producer proof及失联/重启路径；没有用额外模拟进程替代已有业务路径。原本地平台凭据恢复及并发真实PG回归17.666s。双库测试的旧schema数字与直读私有快照夹具已按新形状替换并复跑，不保留旧格式兼容旁路。
+
+最终SQL引用/绑定攻击及原作者64KiB预算（完整编译128KiB不是放大作者文档预算）聚焦19.008s通过；全仓Go race/vet、模块校验、API生成稳定和Linux amd64构建通过。最终API/architecture race再次通过；既有编译内容与Profile规范往返fuzz各15秒、2workers、每样本最小化1秒，分别572754和247876次执行通过，包含完整版本传输承诺与固定源码声明种子。源码为IAM22/Audit13/PaaS1，发布CurrentDatabaseProfile不变；本片不包含UI、host、完整动作通配、Role/STS、运行时产品接入或最终容量/签名发行验收。
+
+### 当前首片证据与未完成边界
+
+创建/读取首片的固定可审查点为 `7104b1de8f16ae82645e149b2c5376f983eae5cd`，其 [Verification 34814615083](https://github.com/xiak/matrix/actions/runs/34814615083) 已逐项核实精确 SHA、Go/authority-process/node-process 全部 completed/success。该固定对象不包含后续版本管理增量。
+
+2026-09-14，本分支专属 PG18（1 CPU、768 MiB、128 PIDs、最多 64 连接）完成以下本地证据；不是发布安装或其他分支的验收状态：
+
+- 原 `TestIAMPolicyAuthorityStoragePostgres` 当前空库、故障回滚、双次迁移、带数据重放、组/附件/凭据与历史不变量回归通过，106.23s。首片 HTTP 真实创建、读取、同名跨账号、精确重放/变体冲突、零隐式附件和精确资源授权在原 owner 内验证。
+- 后续同 owner 的 `customer_policy_publication_and_current_authority` 聚焦真实 gate 通过，5.39s（含父门禁 13.78s）：所有当前 Action 的 SQL scope 校验、重复/未知字段与大小攻击、同意图并发单结果单事实、outbox 最后写失败全事务回滚，以及真实锁等待后的发布者停用拒绝。停用前的原创建事实继续通过 event-bound producer 校验；伪造目标、租户或请求摘要拒绝。
+- 原 `TestIndependentIAMAuditAndPaaSProcesses` 通过，50.62s：真实受限 runtime 登录、两个 IAM 实例、PaaS 与 Audit；从 replica 创建 CUSTOMER 策略，经另一实例显式关联后 PaaS 只允许选定应用，撤销立即拒绝，创建成功事实由真实 dispatcher 进入租户链。保留既有跨租户业务/Operation/outbox、故障关闭及历史链回归。
+- API 严格 schema/Go 文档验证、PolicyDetail 归属/默认版本/digest 检查以及 IAM/Audit/架构 race 通过；OpenAPI 重生成字节稳定。诊断 fuzz 有界 15s、2 workers 通过（31,516 次执行）；它不证明尚未实现的条件语法。
+
+### 版本增量本地证据
+
+同日沿原测试拥有者完成版本增量：
+
+- 聚焦 PG18 `customer_immutable_versions_and_default_selection` 最后复验通过，2.96s（含父门禁 9.59s）：非默认版本创建/精确读取/完整目录、同命令重放、显式切换对现有会话的 Allow→Deny→Allow、旧命令冲突、旧决定 proof 保留、五版本预算、末尾 outbox 故障整体回滚，以及同预期修订并发创建只有一个赢家。跨账号 root 和普通已授权账号管理员仍不能发布/切换；路由命令后缀不能成为目录别名。
+- 原独立双 IAM/Audit/PaaS 门禁通过，55.09s：同一用户 bearer 在不同 IAM 实例提交版本/切换，真实 PaaS 下一请求改变结果；原创建、一个版本创建、两次默认切换事实进入同一租户链。没有修改单一 canonical 编码或旧 hash。
+- 对齐 CI 的本地串行真实数据库回归通过：Audit 数据层（含双 authority 当前形状/权限与保留记录）10.135s、Audit HTTP 3.969s、IAM 集成 198.018s、独立进程 43.658s、PaaS 数据层 5.473s。数据库均位于本任务专属受限 PG18；没有运行未发布 IAM 全历史升级链。
+- 新请求/版本目录/非默认详情的 Go 与 JSON Schema 测试、相关 API/IAM/Audit/architecture race、生成稳定、全仓 Go 测试/vet、模块校验与 Linux IAM/Audit 构建通过。版本增量固定 `aa28c39ca25ad0136b4a7042f1f1ae358d4f1429` 的 [Verification 34816605258](https://github.com/xiak/matrix/actions/runs/34816605258) 已核实精确 SHA 和 Go/authority-process/node-process 全部 completed/success；不继承 `7104b1d` 的结果。
+
+### 策略改名增量证据
+
+2026-09-14，既有 PG18 `customer_policy_metadata_lifecycle` 聚焦真库门禁通过，8.44s（含父门禁 34.71s）：稳定 ID/default/content、同意图重放、过时/变体/同名冲突、不同账号同名独立、非法字段、服务密钥不能冒充用户 bearer、普通已授权管理员/跨账号拒绝；两次改名及改名与默认切换的并发分别只有一个赢家。真实 publisher 锁等待后身份撤销返回 401，不留下元数据或成功事实；末尾 outbox 故障时元数据、决定与事实均回滚。后续修订后原改名事实仍通过 event-bound producer 校验。
+
+同一独立 PG18（1 CPU、768 MiB、128 PIDs、64 连接）上的串行 CI 等价回归：Audit 数据层 18.484s、Audit HTTP 5.576s、IAM 集成 228.237s、独立进程 61.388s、PaaS 数据层 10.364s。实际两个 IAM 实例与 PaaS/Audit 证明 rename 后原应用仍可访问、其他应用仍拒绝，随后附件撤销生效，单一改名事实由真实 outbox 进入租户链；保留当前 schema 带数据重放、故障原子性、受限数据库身份、旧 Audit 字节和历史 proof 门禁。未运行未发布 IAM 从 schema 1 起的逐版升级链。
+
+相关 API/IAM/Audit/architecture race、全仓 Go 测试/vet、模块校验、OpenAPI 稳定生成及 Linux IAM/Audit 构建通过。改名候选 `02fed1296d0f425e610812a870c85ed524295447` 的 [Verification 34819882669](https://github.com/xiak/matrix/actions/runs/34819882669) 最终为 failure：Go/node-process 成功，authority-process 中既有平台凭据保护测试只读取用户目录第一页，前置 Group 测试已创建超过 100 个用户，目标随机 ID 落在后页时误报缺关联。因此 02fed 不作为独立 CI 成功点；本地改名证据不替代修复后的完整 CI。
+
+### 策略删除与分页门禁
+
+旧平台凭据保护门禁改为使用服务返回的 opaque 签名 cursor 至多读取 10 页，每页仍由 UserList 校验限制为 100 项，重复 cursor 拒绝；不会解码/推导游标。仅此确定规模的测试使用页上限，生产保护继续由数据库检查全部有效关联。100 条排序靠前的停用主体仅作为分页数据，真实受保护用户仍由 HTTP 创建，确保单独运行也经过后页；它不证明这些批量数据完成了用户创建流程。PG18 聚焦 `platform_scope_protects_credentials_independently_of_policy_name` 修复后通过，14.34s（含父门禁 30.08s），保留 ACTIVE/退休系统策略/停用主体各阶段的原凭据保护断言。
+
+PG18 聚焦 `customer_policy_terminal_deletion` 最终通过，3.18s（含父门禁 8.82s）：活跃 User、停用 User 与 Group 的未撤销附件均阻止删除；outbox 最后失败没有元数据/决定/事实残留；精确重放单一生命周期事实、旧创建/更新/版本/关联不能复活；同名新意图产生新 Policy ID；原版本与创建/删除历史 proof 保留。257 条退休内容仅作为目录容量数据，验证历史不占活跃管理目录；删除与附件创建竞争没有活跃的退休策略关联。改名/发布/默认切换/删除同修订四路竞争只有一项生效，未获胜操作不改变名称、默认版本、内容集合或终态；成功生命周期事实与实际获胜请求及已提交授权决定绑定，不把正常的授权决定审计误计为第二条生命周期事实。
+
+当前完整 `TestIAMPolicyAuthorityStoragePostgres` 在同一限额的新数据库串行复验通过，86.46s，包含原 Group 规模/分页 46.39s、删除 3.33s、平台保护后页 5.92s，以及最终 schema/bootstrap 带数据重放、终态/撤权不复活和不可变证据攻击。一次与本机其他构建重叠的回归曾耗尽原两分钟总预算；该次不算通过，没有增大超时或削减 Group HTTP 创建/分页覆盖，以上为无并行重型构建的完整复验。
+
+原独立双 IAM/PaaS/Audit 真实进程门禁通过，51.364s：从实际 HTTP 创建、发布、切换、改名、撤销附件到删除策略，真实 PaaS 权限仍正确拒绝，删除事实由 dispatcher 进入同一租户链。Audit 数据层 17.765s、Audit HTTP 4.405s、PaaS 数据层 5.848s 均通过；保留受限进程登录、租户/资源/Operation/outbox 隔离、当前身份失联失败关闭和历史链。该源码组合不是签名安装或 UI 验收。
+
+最终 IAM 集成包 race 串行复验共 199.938s，通过上述策略权威、真实 IAM HTTP 94.02s、专用本地凭据恢复 16.52s，保留当前版本的改密/重置/恢复/退出/撤权并发与原意图重放。相关 API/IAM/Audit/architecture race、全仓 Go 测试/vet、模块校验、OpenAPI 稳定生成和 Linux IAM/Audit 构建均通过；本片独立 CI 仍须绑定提交核实。
+
+策略删除固定 `0ac6445a33fb2e592fe94d2787a87cd7460ec4ae` 的 [Verification 34823234061](https://github.com/xiak/matrix/actions/runs/34823234061) 已核实精确 SHA，Go/authority-process/node-process 全部 completed/success，包含 02fed 旧后页门禁修复，不包含后续版本退休。该固定源码为 IAM13/Audit10/PaaS1，安装发布 profile 未修改。
+
+### 版本退休与容量复用证据
+
+2026-09-14，本分支新建专属受限 PG18（1 CPU、768 MiB、128 PIDs、64 连接），现有 `customer_immutable_versions_and_default_selection` 聚焦通过，6.19s（父门禁 11.33s）：五项满额、默认禁止删除、非默认退休释放槽位、活跃重复内容拒绝、退休内容新 ID 再次发布、新内容继续复用槽位、末尾 outbox 失败全回滚、旧命令不复活、历史 canonical/digest/proof 保留，及退休/默认切换/新版本/整策略删除四路同修订竞争单一赢家。原父门禁再次 apply/bootstrap 后比较真实退休内容、ID 和终态均不变。最终完整真库复验还包含“新内容不能以退休态插入”的存储攻击拒绝与严格响应校验。
+
+版本退休固定基线 readiness 为 IAM14/Audit11/PaaS1，仅反映该片函数、退休列/保护与封闭 action 契约；安装发布 profile 未修改，不能据此组装或宣称跨版本可升级。当前没有对外诊断 endpoint、版本管理 capability 条目或自定义策略 UI 验收。LANG-03 的受限通配、LANG-04 条件、LANG-05 边界、LANG-07 编辑器以及 LANG-08 完整委派仍必须继续实现，不能将策略 CRUD 当作 FEAT Accepted。
+
+完整回归中的 Audit 数据层 11.447s、Audit HTTP 3.286s、实际双 IAM/PaaS/Audit 进程 137.207s、PaaS 数据层 18.719s 通过；真实 PaaS 在非默认版本退休后保持原授权，版本退休/策略删除事实均经实际 dispatcher 入链。该次 IAM 包没有通过：十组串行流程共用的两分钟 context 在末尾凭据并发耗尽（策略父门禁 122.72s），后续保护检查因同一已过期 context 不能执行，不计为成功。现有测试 owner 改为每组两分钟、共享数据综合门禁四分钟，HTTP 请求也继承对应截止时间与取消；没有删除规模、并发或攻击用例，没有改变生产超时、资源上限和 CI 作业总上限。
+
+上述调整后的新库完整 IAM integration race 最终通过，320.659s，包含完整策略存储/版本/组/凭据保护、IAM HTTP 155.29s 与本地原平台凭据恢复 37.59s，未跳过原有并发、撤权及重放检查。这是功能/隔离验收，不是容量/性能 SLO。相关 API/IAM/Audit/architecture race、全仓 Go 测试/vet、模块校验、OpenAPI 稳定生成与 Linux IAM/Audit 构建通过；最终测试预算与响应校验增量另经完整真库与聚焦 vet 验证。发布 profile、签名安装与 UI 仍未作为本片证据。
+
+版本退休固定 `b99e082fa9ba8a6412eeb766387f4fbeb5df0aa3` 的 [Verification 34827144713](https://github.com/xiak/matrix/actions/runs/34827144713) 已核实精确 SHA，Go/authority-process/node-process 全部 completed/success；该固定对象不包含后续时间条件。
+
+### 时间条件增量证据
+
+2026-09-14，严格条件解析正向测试先因不支持条件失败，实现后通过；非法来源、未知算子、重复条件、空/反向窗口、非 UTC/非法日期/非微秒精度拒绝，无条件文档原 canonical/digest 与调用者输入保持。领域门禁覆盖 `[start,end)` 微秒边界、匹配 Deny 优先、来源顺序无关、无效权威时间失败关闭；现有 cursor owner 补窗口到期不能继续分页。
+
+专属 PG18（1 CPU、768 MiB、128 PIDs、64 连接）的原版本门禁最终聚焦通过，9.47s（父门禁 18.33s，包 21.540s），包含实际 HTTP 发布/关联、当前数据库时间的五秒窗口到期拒绝、禁止 caller currentTime/conditions/attributes、到期前决定继续通过 producer proof、存储层非法来源/重复算子/日期攻击，以及原版本退休和带数据 replay。首轮测试忘记撤销其先前显式授予的账号管理员策略，过期后仍由另一无条件 Allow 授权；实际 policy_evidence 精确证明这一点。测试已通过原 HTTP 撤销该宽权限再观察唯一窗口授权，没有改变正确的权限并集语义来迁就用例。
+
+真实独立双 IAM/PaaS/Audit 进程门禁通过，45.75s（包 48.644s）：同一 bearer 在实际数据库时间的六秒窗口内可读目标应用，到期后拒绝；发布无条件新版本仍拒绝，只有显式默认切换才使下一请求恢复允许，撤销附件再次拒绝。真实 dispatcher 投递旧时间决定及生命周期事实，原完整租户链、受限 runtime 身份、跨账号业务/Operation/outbox 与失联回归保留。
+
+最终完整串行真实 PG18 回归通过：Audit 数据层 5.702s、Audit HTTP 3.326s、IAM integration race 246.989s、PaaS 数据层 6.202s。IAM 门禁进一步把时间授权改为真实组继承，检查窗口内证据精确绑定 PolicyVersion 和 Membership、窗口外无匹配授权来源；独立进程覆盖直接附件。保留原组规模/分页、版本生命周期、凭据并发、旧 canonical、schema/bootstrap 带数据重放及原平台恢复。全仓默认 Go 测试/vet、API/IAM/Audit/architecture race 与模块校验通过；默认跳过数据库的测试不替代上述真实运行。
+
+最终带时间条件种子的诊断/canonical fuzz 通过：15 秒、2 workers、每次样本最小化限 1 秒，132,238 次执行；不以此声称性能或未实现语法正确。OpenAPI 重生成字节稳定，最终 API/authority race 与 Linux IAM/Audit 构建通过。全部本地进程结束后，专属 PG 容器、网络和合成数据卷按精确身份检查并清理，没有用户或其他任务数据变更。
+
+时间条件固定基线 readiness 为 IAM15/Audit11/PaaS1；IAM 版本反映该片策略文档/发布验证语义，Audit 编码、ServiceIdentity、lookup_service、七列 claim 和安装发布 profile 未变。固定 `7218e1671378a227d78d020686a68d164982e2ac` 的 [Verification 34830294815](https://github.com/xiak/matrix/actions/runs/34830294815) 最终失败：Go/node-process 成功，authority-process 中时间条件和独立进程通过，但原账号别名竞争返回 503/200 而非 409/200。PG 日志证明同一 backend 的五次 `40001` 相隔约 9ms，原无等待整事务重试在竞争提交前耗尽；修复与竞争验收归 003。本地时间条件证据保留，但该候选不得作为 CI 成功对象，不继承 b99e082 的结论。
+
+时间条件及竞争修复的固定 `581ce7584527470e1fe377040eb98ffe161e83de` / [Verification 34833032924](https://github.com/xiak/matrix/actions/runs/34833032924) 已核实精确 SHA，Go/authority-process/node-process 全部 completed/success。以此为后续条件实现的已验证回滚点；并不把时间子集视为完整 LANG-04 或整个 FEAT 的验收。
+
+### 字符串身份条件增量证据
+
+2026-09-14，现有严格契约和真实 `Decide` 的正向条件门禁先因不支持身份条件失败，实现后通过；覆盖等于的任一匹配、不等于的全部不匹配、大小写、同语句账号/主体/时间 AND、Group 仍绑定当前 USER、全来源 Deny、缺失/非法身份和服务主体失败关闭。值集合重排保持 canonical/digest 和原请求幂等身份，不修改输入；原无条件/单值时间编码保持。OpenAPI 对相同 key/operator、不同 values 的重复项也有数量限制，其缺失回归先失败后通过，避免只依赖整个 JSON 对象的 uniqueItems。
+
+专属 PG18（1 CPU、768 MiB、128 PIDs、64 连接）的版本/条件聚焦门禁通过，11.29s（父门禁 15.57s、包 18.454s）：两个账号中同名 User/Group/Policy、同资源 ID 隔离；Group 内两个普通 User 的条件选择、显式默认切换、移除/重新加入成员、附件撤销；输入字段和 header 不能改当前身份；存储层未知来源、非法值、重复键/算子/值拒绝；旧决定在换版/撤销后仍通过 producer proof。首轮误要求公开 Denied 返回身份，真实存储已证明正确允许/拒绝，测试改为核对私有决定归属并保留公开拒绝不泄露身份；另一轮按现有契约修正为 root 使用全局登录名、普通 User 使用 qualified realm，没有放宽生产登录规则。
+
+完整串行 PG18 回归通过：Audit 数据层 5.449s、Audit HTTP 3.060s、IAM integration race 172.276s、独立双 IAM/PaaS/Audit 45.125s、PaaS 数据层 4.427s。实际 PaaS 同一 bearer 使用账号/主体/时间组合条件，窗口后拒绝；发布不切换默认，显式切换到否定集合后按当前主体允许或拒绝，撤销附件再次拒绝。真实 dispatcher、受限 runtime 登录、跨账号资源/Operation/outbox、历史链与当前状态重放门禁保留。随后补充的服务凭据冒充 USER 攻击在新库聚焦复验通过，11.31s（父门禁 15.80s、包 18.343s）；没有用默认跳过数据库的测试代替真实验收。
+
+身份条件固定基线的源码/SQL readiness 为 IAM16/Audit11/PaaS1；IAM 仅反映该片字符串发布验证和当前权威求值，安装发布 profile、ServiceIdentity、lookup_service、七列 claim 与 Audit canonical 未改。UI、签名安装、IP 条件和完整 LANG-04 未验收。专属 PG 的容器/网络/合成数据卷在精确身份与标签核对、确认无客户端后清理，未动用户数据或其他任务资源。
+
+最终全仓 Go race/vet、模块校验、稳定 API 生成及 Linux amd64 全仓构建通过。现有 canonical round-trip fuzz 加身份否定集合种子，15 秒/2 workers/1 秒样本最小化预算通过 549,059 次执行；该数字仅是有界随机验证，不是容量或完整语言证明。真实 PG 与广域构建/fuzz 串行，未增加共享资源或放宽生产权限。
+
+固定候选 `b208ab081ac2f08aab81f63b8cfefb17ebdc6c82` / [Verification 34836760785](https://github.com/xiak/matrix/actions/runs/34836760785) 不作为 CI 成功点：Go 作业的既有 `TestPinnedSSHExecutorHonorsCancellationDuringHandshake` 期望 `ssh-handshake`，实际为 `ssh-connect`（两者均 UNAVAILABLE）。测试在服务端 TCP Accept 后立即取消，不能证明客户端 DialContext 已完成；本地原测试 200 次未复现，不将其称为确定的本地 red。取得该 owner 的窄测试窗口后，以有界读取客户端完整 SSH 版本行作为真实协议屏障，仍不发送服务端版本，严格保留握手阶段、500ms 退出和连接/goroutine 清理断言；生产 SSH 行为和错误分类不变。修复后的同测试 race 200 次、整个 adapter 与架构检查、vet 通过；新固定组合仍需独立 CI，不能将本地字符串证据或其他 job 成功冒充整次成功。
+
+34836760785 已结束为 failure：authority-process/node-process 均 success，Go 仅上述 SSH 测试失败。窄测试修复后全仓 `go test -race -p 2 -count=1 ./...`、全仓 vet 与 Linux amd64 构建通过；本轮未改 IAM 生产代码、SQL 或 schema/profile，不重启真实数据库或重跑未发布历史升级链。新提交必须重新核实完整 CI，修复后的成功不能回填到 b208 候选。
+
+修复固定 `4f22e223398fbe4523bc09d6a369677cb23767db` / [Verification 34837563263](https://github.com/xiak/matrix/actions/runs/34837563263) 已核实精确 SHA，Go/authority-process/node-process 全部 completed/success。该对象是身份字符串条件及 SSH 测试修正的已验证回滚点，不包含后续资源前缀，不回填 b208 的失败结果。
+
+### 资源字面前缀增量证据
+
+2026-09-14，正向契约、schema 和唯一求值器门禁先因不支持 PREFIX_IN_AUTHORITY 失败，接入后通过；覆盖字面/大小写/长度/空与通配字符、较短 ID、匹配 Deny 与来源顺序。后续按真实资源粒度收紧为 ActionDefinition 显式能力，所有当前动作的 schema/Go 接受矩阵对齐；read 与同 kind create 混合不能绕过。目录 cursor 不因应用前缀得到权限，独立目录授权仍需当前 PDP；默认前缀改变后旧完整快照 cursor 失效。
+
+专属受限 PG18（1 CPU、768 MiB、128 PIDs、64 连接）版本/条件聚焦通过，11.64s（父门禁 16.38s，包 19.111s）：两个真实账号/组对相同前缀和同资源 ID 各自授权，跨账号附件拒绝；前缀本身/后缀允许，大小写/短值/不匹配与匹配 Deny 拒绝；确切 Membership/版本证据、发布不隐式切换、显式默认切换和附件撤销在原 bearer 下一请求生效；旧事实仍通过 producer proof。末尾存储攻击的首轮测试误把排在前面的另一个前缀截成合法 ID，导致预期错误，实际 canonical 证明这一点；修正为精确字段替换后的新库完整聚焦通过，生产校验未放宽。
+
+完整串行真实 PG18 回归通过：Audit 数据层 5.434s、Audit HTTP 2.620s、IAM integration race 164.055s、双 IAM/PaaS/Audit 独立进程 46.279s、PaaS 数据层 5.044s。受限 SQL 对所有当前动作的 prefix 接受/拒绝与目录能力对照；当前 schema/bootstrap 带数据重放、凭据/组/策略并发、失败原子性与不可变历史门禁保留。实际 PaaS 先创建两个应用，然后只用前缀+时间+身份组合授权：匹配应用允许，真实存在但不匹配的应用拒绝；原 bearer 到期、后续默认变更及附件撤销均按当前 PDP 生效。原实际 dispatcher、租户链、受限登录和资源/Operation/outbox 隔离回归未替换。
+
+当前开发源码 IAM17/Audit11/PaaS1，仅反映新增前缀文档/发布语义；安装 profile、ServiceIdentity、lookup_service、七列 claim、Audit canonical 和 PaaS 生产契约未改。固定 `b342e9da08515f9172b29d1ac237a088171c9e53` 的 [Verification 34839955131](https://github.com/xiak/matrix/actions/runs/34839955131) 已由 GitHub API 核实精确 SHA，Go、authority-process、node-process 全部 completed/success。签名安装、UI 和完整 LANG-03 未验收。专属容器/网络/合成数据卷已核对精确身份、标签与零客户端后移除，不涉及用户数据或其他任务资源。
+
+全仓 Go race/vet、模块校验、稳定 API 生成与 Linux amd64 构建通过。上述真库回归后，唯一验证器将按资源重复检查动作能力改为每语句一次汇总不支持前缀的 kind，不改变接受集合；最终 API/authority/usecase/architecture race、全仓 vet 与 Linux 构建再过。现有 round-trip fuzz 增加前缀种子，最终 15 秒/2 workers/1 秒样本最小化预算通过 634,172 次执行；最大合法长度比较、混合 read/create 拒绝和 cursor 当前快照门禁通过。末尾纯校验整理后的完整真库由上述精确提交的独立 authority-process 再验成功；该结果与之前临时工作树的本地结果分开记录。

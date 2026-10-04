@@ -1,6 +1,12 @@
 package paasv1
 
-import "time"
+import (
+	"encoding/json"
+	"slices"
+	"time"
+
+	"github.com/xiak/matrix/api/contractjson"
+)
 
 type TenantID string
 type ResourceID string
@@ -69,6 +75,103 @@ type Capacity struct {
 	WorkloadSlots int64 `json:"workloadSlots"`
 }
 
+// ExecutionTargetUsage is measured OS usage, never placement capacity or a
+// reservation. Missing measurements have no value; expired values retain their
+// original timestamps and must not be presented as current.
+type ExecutionTargetUsage struct {
+	ObservedAt       time.Time         `json:"observedAt"`
+	ValidUntil       time.Time         `json:"validUntil"`
+	CPU              CPUUsage          `json:"cpu"`
+	Memory           MemoryUsage       `json:"memory"`
+	FilesystemsState MeasurementState  `json:"filesystemsState"`
+	Filesystems      []FilesystemUsage `json:"filesystems,omitempty"`
+}
+
+// Snapshot returns an independent value for a reader. It never renews the
+// source timestamp, including after a control-plane or node disconnection.
+func (usage ExecutionTargetUsage) Snapshot(now time.Time) ExecutionTargetUsage {
+	if usage.CPU.Value != nil {
+		value := *usage.CPU.Value
+		usage.CPU.Value = &value
+	}
+	if usage.Memory.Value != nil {
+		value := *usage.Memory.Value
+		usage.Memory.Value = &value
+	}
+	usage.Filesystems = slices.Clone(usage.Filesystems)
+	for index := range usage.Filesystems {
+		if usage.Filesystems[index].Value != nil {
+			value := *usage.Filesystems[index].Value
+			if value.TotalInodes != nil {
+				total := *value.TotalInodes
+				value.TotalInodes = &total
+			}
+			if value.FreeInodes != nil {
+				free := *value.FreeInodes
+				value.FreeInodes = &free
+			}
+			usage.Filesystems[index].Value = &value
+		}
+	}
+	if now.Before(usage.ObservedAt) || !now.Before(usage.ValidUntil) {
+		usage.CPU.State, usage.Memory.State = MeasurementStale, MeasurementStale
+		usage.FilesystemsState = MeasurementStale
+		for index := range usage.Filesystems {
+			usage.Filesystems[index].State = MeasurementStale
+			if value := usage.Filesystems[index].Value; value != nil && value.InodesState == MeasurementAvailable {
+				value.InodesState = MeasurementStale
+			}
+		}
+	}
+	return usage
+}
+
+type CPUUsage struct {
+	State MeasurementState `json:"state"`
+	Value *CPUUsageValue   `json:"value,omitempty"`
+}
+
+type CPUUsageValue struct {
+	LogicalCPUs      int64   `json:"logicalCpus"`
+	WindowMillis     int64   `json:"windowMillis"`
+	UtilizationRatio float64 `json:"utilizationRatio"`
+	IOWaitRatio      float64 `json:"ioWaitRatio"`
+	Load1            float64 `json:"load1"`
+	Load5            float64 `json:"load5"`
+	Load15           float64 `json:"load15"`
+}
+
+type MemoryUsage struct {
+	State MeasurementState  `json:"state"`
+	Value *MemoryUsageValue `json:"value,omitempty"`
+}
+
+type MemoryUsageValue struct {
+	TotalBytes     int64 `json:"totalBytes"`
+	AvailableBytes int64 `json:"availableBytes"`
+	UsedBytes      int64 `json:"usedBytes"`
+	SwapTotalBytes int64 `json:"swapTotalBytes"`
+	SwapFreeBytes  int64 `json:"swapFreeBytes"`
+}
+
+type FilesystemUsage struct {
+	Device         string                `json:"device"`
+	MountPoint     string                `json:"mountPoint"`
+	FilesystemType string                `json:"filesystemType"`
+	State          MeasurementState      `json:"state"`
+	Value          *FilesystemUsageValue `json:"value,omitempty"`
+}
+
+type FilesystemUsageValue struct {
+	TotalBytes     int64            `json:"totalBytes"`
+	UsedBytes      int64            `json:"usedBytes"`
+	AvailableBytes int64            `json:"availableBytes"`
+	InodesState    MeasurementState `json:"inodesState"`
+	TotalInodes    *int64           `json:"totalInodes,omitempty"`
+	FreeInodes     *int64           `json:"freeInodes,omitempty"`
+	ReadOnly       bool             `json:"readOnly"`
+}
+
 type ExecutionTargetSpec struct {
 	ExecutionPoolID       ResourceID                  `json:"executionPoolId"`
 	InfrastructureAdapter AdapterRef                  `json:"infrastructureAdapter"`
@@ -83,6 +186,7 @@ type ExecutionTargetStatus struct {
 	Allocatable                  Capacity              `json:"allocatable"`
 	SupportedIsolationGuarantees []IsolationGuarantee  `json:"supportedIsolationGuarantees"`
 	ObservedAt                   time.Time             `json:"observedAt"`
+	Usage                        *ExecutionTargetUsage `json:"usage,omitempty"`
 }
 
 type ExecutionTarget struct {
@@ -179,6 +283,13 @@ type CreateApplicationRequest struct {
 	ID     ResourceID        `json:"id"`
 	Name   string            `json:"name"`
 	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// SetApplicationLabelRequest contains only the target value. The label key,
+// Account, current value and resource version come from the route, current
+// identity, product store and If-Match boundary respectively.
+type SetApplicationLabelRequest struct {
+	Value string `json:"value"`
 }
 
 type Configuration struct {
@@ -302,8 +413,44 @@ type DeploymentGeneration struct {
 }
 
 type SubjectRef struct {
-	Type SubjectType `json:"type"`
-	ID   string      `json:"id"`
+	Type        SubjectType           `json:"type"`
+	ID          string                `json:"id"`
+	RoleSession *RoleSessionReference `json:"roleSession,omitempty"`
+	AccessKeyID string                `json:"accessKeyId,omitempty"`
+}
+
+type RoleSessionReference struct {
+	SessionID                string `json:"sessionId"`
+	SourceUserID             string `json:"sourceUserId,omitempty"`
+	SourceServicePrincipalID string `json:"sourceServicePrincipalId,omitempty"`
+}
+
+func (subject SubjectRef) Equal(other SubjectRef) bool {
+	if subject.Type != other.Type || subject.ID != other.ID || subject.AccessKeyID != other.AccessKeyID ||
+		(subject.RoleSession == nil) != (other.RoleSession == nil) {
+		return false
+	}
+	return subject.RoleSession == nil || *subject.RoleSession == *other.RoleSession
+}
+
+func (subject *SubjectRef) UnmarshalJSON(source []byte) error {
+	type wire SubjectRef
+	var decoded wire
+	if err := contractjson.DecodeObjectBytes(source, 1024, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	_, hasLineage := fields["roleSession"]
+	_, hasAccessKey := fields["accessKeyId"]
+	if (decoded.Type == SubjectRole) != hasLineage || hasAccessKey && decoded.AccessKeyID == "" ||
+		ValidateSubjectRef(SubjectRef(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*subject = SubjectRef(decoded)
+	return nil
 }
 
 type ResourceRef struct {
@@ -472,6 +619,7 @@ type ExecutionTargetObservation struct {
 	Health                       ExecutionTargetHealth `json:"health"`
 	SupportedIsolationGuarantees []IsolationGuarantee  `json:"supportedIsolationGuarantees"`
 	ObservedAt                   time.Time             `json:"observedAt"`
+	Usage                        *ExecutionTargetUsage `json:"usage,omitempty"`
 }
 
 type NormalizedAdapterError struct {

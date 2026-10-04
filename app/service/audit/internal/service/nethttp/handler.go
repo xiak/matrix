@@ -3,11 +3,13 @@
 package nethttp
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"mime"
 	"net/http"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"github.com/xiak/matrix/api/contractjson"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/audit/internal/usecase/auditlog"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 type Workflow interface {
@@ -27,12 +30,16 @@ type Workflow interface {
 		string,
 		auditv1.QueryRecordsRequest,
 	) (auditv1.RecordPage, error)
+	QueryRecordsAccessKey(context.Context, iamv1.AccessKeySignedRequest, string, string, auditv1.QueryRecordsRequest) (auditv1.RecordPage, error)
+	QueryPlatformRecords(context.Context, iamv1.Secret, string, auditv1.QueryRecordsRequest) (auditv1.RecordPage, error)
 	VerifyChain(
 		context.Context,
 		iamv1.Secret,
 		string,
 		auditv1.VerifyChainRequest,
 	) (auditv1.ChainVerification, error)
+	VerifyChainAccessKey(context.Context, iamv1.AccessKeySignedRequest, string, string, auditv1.VerifyChainRequest) (auditv1.ChainVerification, error)
+	VerifyPlatformChain(context.Context, iamv1.Secret, string, auditv1.VerifyChainRequest) (auditv1.ChainVerification, error)
 	VerifyInstallation(
 		context.Context,
 		iamv1.Secret,
@@ -42,13 +49,16 @@ type Workflow interface {
 }
 
 type Config struct {
-	NewRequestID func() (string, error)
+	NewRequestID     func() (string, error)
+	NorthboundOrigin string
+	InstallationID   string
 }
 
 type handler struct {
-	workflow Workflow
-	config   Config
-	routes   *http.ServeMux
+	workflow          Workflow
+	config            Config
+	routes            *http.ServeMux
+	accessKeyBoundary *externalrequest.Boundary
 }
 
 type requestIDContextKey struct{}
@@ -61,11 +71,22 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 		config.NewRequestID = newRequestID
 	}
 	value := &handler{workflow: workflow, config: config}
+	if config.NorthboundOrigin != "" || config.InstallationID != "" {
+		boundary, err := externalrequest.NewBoundary(
+			config.NorthboundOrigin, "/api/audit", config.InstallationID, iamv1.ProductAudit,
+		)
+		if err != nil {
+			return nil, errors.New("Audit AccessKey northbound boundary is invalid")
+		}
+		value.accessKeyBoundary = boundary
+	}
 	routes := http.NewServeMux()
 	routes.HandleFunc("/ready", value.ready)
 	routes.HandleFunc("/v1/events", value.ingest)
 	routes.HandleFunc("/v1/records:query", value.queryRecords)
 	routes.HandleFunc("/v1/integrity:verify", value.verifyChain)
+	routes.HandleFunc("/v1/platform/records:query", value.queryRecords)
+	routes.HandleFunc("/v1/platform/integrity:verify", value.verifyChain)
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
 	routes.HandleFunc("/", value.notFound)
 	value.routes = routes
@@ -124,7 +145,40 @@ func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	}
 	response.Header().Set("Matrix-Request-ID", requestID)
 	request = request.WithContext(context.WithValue(request.Context(), requestIDContextKey{}, requestID))
+	if externalrequest.IsAccessKeyAuthorization(request) {
+		if !value.prepareAccessKeyRequest(response, request) {
+			return
+		}
+	}
 	value.routes.ServeHTTP(response, request)
+}
+
+type accessKeyContextKey struct{}
+
+func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, request *http.Request) bool {
+	accepted := value.accessKeyBoundary != nil && request.Method == http.MethodPost && request.URL != nil &&
+		request.URL.RawQuery == "" && (request.URL.Path == "/v1/records:query" || request.URL.Path == "/v1/integrity:verify")
+	if !accepted {
+		writeAuthenticationProblem(response, request)
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, auditv1.MaxRequestBytes+1))
+	_ = request.Body.Close()
+	if err != nil || int64(len(body)) > auditv1.MaxRequestBytes {
+		clear(body)
+		writeProblem(response, requestID(request), http.StatusBadRequest, "audit.json.invalid", "Audit JSON invalid")
+		return false
+	}
+	external, err := value.accessKeyBoundary.AccessKeyRequest(request, body)
+	if err != nil {
+		clear(body)
+		writeAuthenticationProblem(response, request)
+		return false
+	}
+	request.Body = io.NopCloser(bytes.NewReader(bytes.Clone(body)))
+	*request = *request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, external))
+	clear(body)
+	return true
 }
 
 func (value *handler) ready(response http.ResponseWriter, request *http.Request) {
@@ -170,20 +224,25 @@ func (value *handler) queryRecords(response http.ResponseWriter, request *http.R
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
 	}
-	credential, ok := bearerCredential(response, request)
-	if !ok {
-		return
-	}
 	body, ok := decodeJSON[auditv1.QueryRecordsRequest](response, request)
 	if !ok {
 		return
 	}
-	page, err := value.workflow.QueryRecords(
-		request.Context(),
-		credential,
-		requestID(request),
-		body,
-	)
+	query := value.workflow.QueryRecords
+	if request.URL.Path == "/v1/platform/records:query" {
+		query = value.workflow.QueryPlatformRecords
+	}
+	var page auditv1.RecordPage
+	var err error
+	if external, present := request.Context().Value(accessKeyContextKey{}).(externalrequest.AccessKeyRequest); present {
+		page, err = value.workflow.QueryRecordsAccessKey(request.Context(), external.SignedRequest, external.SourceIP, requestID(request), body)
+	} else {
+		credential, credentialOK := bearerCredential(response, request)
+		if !credentialOK {
+			return
+		}
+		page, err = query(request.Context(), credential, requestID(request), body)
+	}
 	if err != nil {
 		value.writeError(response, request, err)
 		return
@@ -195,20 +254,25 @@ func (value *handler) verifyChain(response http.ResponseWriter, request *http.Re
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
 	}
-	credential, ok := bearerCredential(response, request)
-	if !ok {
-		return
-	}
 	body, ok := decodeJSON[auditv1.VerifyChainRequest](response, request)
 	if !ok {
 		return
 	}
-	verification, err := value.workflow.VerifyChain(
-		request.Context(),
-		credential,
-		requestID(request),
-		body,
-	)
+	verify := value.workflow.VerifyChain
+	if request.URL.Path == "/v1/platform/integrity:verify" {
+		verify = value.workflow.VerifyPlatformChain
+	}
+	var verification auditv1.ChainVerification
+	var err error
+	if external, present := request.Context().Value(accessKeyContextKey{}).(externalrequest.AccessKeyRequest); present {
+		verification, err = value.workflow.VerifyChainAccessKey(request.Context(), external.SignedRequest, external.SourceIP, requestID(request), body)
+	} else {
+		credential, credentialOK := bearerCredential(response, request)
+		if !credentialOK {
+			return
+		}
+		verification, err = verify(request.Context(), credential, requestID(request), body)
+	}
 	if err != nil {
 		value.writeError(response, request, err)
 		return

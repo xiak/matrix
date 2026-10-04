@@ -85,12 +85,13 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 	}
 
 	want := map[string][]string{
-		"/ready":                               {"get"},
-		"/v1/applications":                     {"post"},
-		"/v1/applications/{applicationId}":     {"get"},
-		"/v1/configurations":                   {"post"},
-		"/v1/configurations/{configurationId}": {"get"},
-		"/v1/configuration-revisions":          {"post"},
+		"/ready":                           {"get"},
+		"/v1/applications":                 {"post"},
+		"/v1/applications/{applicationId}": {"get"},
+		"/v1/applications/{applicationId}/labels/{labelKey}": {"put", "delete"},
+		"/v1/configurations":                                      {"post"},
+		"/v1/configurations/{configurationId}":                    {"get"},
+		"/v1/configuration-revisions":                             {"post"},
 		"/v1/configuration-revisions/{configurationRevisionId}":   {"get"},
 		"/v1/application-revisions":                               {"post"},
 		"/v1/application-revisions/{applicationRevisionId}":       {"get"},
@@ -215,6 +216,7 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 	}))
 	assertExactEnum(t, schemas, "SubjectType", stringify([]SubjectType{
 		SubjectUser,
+		SubjectRole,
 		SubjectServiceAccount,
 		SubjectAgent,
 		SubjectSystemUser,
@@ -406,6 +408,7 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"RollbackDeploymentRequest":          reflect.TypeOf(RollbackDeploymentRequest{}),
 		"DeploymentGeneration":               reflect.TypeOf(DeploymentGeneration{}),
 		"SubjectRef":                         reflect.TypeOf(SubjectRef{}),
+		"RoleSessionReference":               reflect.TypeOf(RoleSessionReference{}),
 		"ResourceRef":                        reflect.TypeOf(ResourceRef{}),
 		"FieldViolation":                     reflect.TypeOf(FieldViolation{}),
 		"Readiness":                          reflect.TypeOf(Readiness{}),

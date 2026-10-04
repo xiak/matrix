@@ -14,7 +14,64 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/audit/internal/authority"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
+
+func TestAuditHTTPAcceptsAccessKeyOnlyForExactTenantQueryRoutes(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler, err := NewHandler(workflow, Config{
+		NewRequestID:     func() (string, error) { return "request-http-key", nil },
+		NorthboundOrigin: "https://api.example.test:443",
+		InstallationID:   "installation-one",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryBody := auditv1.QueryRecordsRequest{PageSize: 10, Cursor: "cursor-signed"}
+	query := accessKeyJSONRequest(t, http.MethodPost, "/v1/records:query", "/api/audit/v1/records:query", queryBody)
+	queryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(queryResponse, query)
+	if queryResponse.Code != http.StatusOK || workflow.queryCalls != 1 || workflow.queryCredentialPresent ||
+		workflow.querySigned.Parameters.Audience != iamv1.ProductAudit ||
+		workflow.querySigned.HTTP.EscapedPath != "/api/audit/v1/records:query" || workflow.querySourceIP != "192.0.2.10" {
+		t.Fatalf("signed Audit query status=%d calls=%d signed=%#v body=%s", queryResponse.Code, workflow.queryCalls, workflow.querySigned, queryResponse.Body.String())
+	}
+
+	verifyBody := auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: 10}
+	verify := accessKeyJSONRequest(t, http.MethodPost, "/v1/integrity:verify", "/api/audit/v1/integrity:verify", verifyBody)
+	verifyResponse := httptest.NewRecorder()
+	handler.ServeHTTP(verifyResponse, verify)
+	if verifyResponse.Code != http.StatusOK || workflow.verifyCalls != 1 || workflow.verifyCredentialPresent ||
+		workflow.verifySigned.HTTP.EscapedPath != "/api/audit/v1/integrity:verify" || workflow.verifySourceIP != "192.0.2.10" {
+		t.Fatalf("signed Audit verification status=%d calls=%d signed=%#v body=%s", verifyResponse.Code, workflow.verifyCalls, workflow.verifySigned, verifyResponse.Body.String())
+	}
+
+	platform := accessKeyJSONRequest(t, http.MethodPost, "/v1/platform/records:query", "/api/audit/v1/platform/records:query", queryBody)
+	platformResponse := httptest.NewRecorder()
+	handler.ServeHTTP(platformResponse, platform)
+	if platformResponse.Code != http.StatusUnauthorized || workflow.platformQueryCalls != 0 || workflow.queryCalls != 1 {
+		t.Fatalf("AccessKey reached platform Audit route: status=%d calls=%d/%d", platformResponse.Code, workflow.platformQueryCalls, workflow.queryCalls)
+	}
+
+	wrongTarget := accessKeyJSONRequest(t, http.MethodPost, "/v1/records:query", "/api/audit/v1/integrity:verify", queryBody)
+	wrongTargetResponse := httptest.NewRecorder()
+	handler.ServeHTTP(wrongTargetResponse, wrongTarget)
+	if wrongTargetResponse.Code != http.StatusUnauthorized || workflow.queryCalls != 1 {
+		t.Fatalf("substituted signed route reached workflow: status=%d calls=%d", wrongTargetResponse.Code, workflow.queryCalls)
+	}
+
+	missingSource := accessKeyJSONRequest(t, http.MethodPost, "/v1/records:query", "/api/audit/v1/records:query", queryBody)
+	missingSource.Header.Del(externalrequest.HeaderExternalSourceIP)
+	missingSourceResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingSourceResponse, missingSource)
+	if missingSourceResponse.Code != http.StatusUnauthorized || workflow.queryCalls != 1 {
+		t.Fatalf("request without edge source reached workflow: status=%d calls=%d", missingSourceResponse.Code, workflow.queryCalls)
+	}
+
+	if _, err := NewHandler(workflow, Config{NorthboundOrigin: "https://api.example.test:443"}); err == nil {
+		t.Fatal("partial Audit AccessKey configuration was accepted")
+	}
+}
 
 func TestAuditHTTPExposesCredentialBoundRoutes(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
@@ -274,12 +331,18 @@ type httpWorkflow struct {
 	ingestCalls                 int
 	queryCalls                  int
 	verifyCalls                 int
+	platformQueryCalls          int
+	platformVerifyCalls         int
 	installationVerifyCalls     int
 	ingestCredentialPresent     bool
 	queryCredentialPresent      bool
 	verifyCredentialPresent     bool
 	queryRequestID              string
 	verifyRequestID             string
+	querySigned                 iamv1.AccessKeySignedRequest
+	verifySigned                iamv1.AccessKeySignedRequest
+	querySourceIP               string
+	verifySourceIP              string
 	installationVerifyRequestID string
 }
 
@@ -303,7 +366,7 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 		CorrelationID: "correlation-event-http",
 		OccurredAt:    now.Add(-time.Minute),
 	}
-	checkpoint, err := authority.GenesisCheckpoint(event.TenantID)
+	checkpoint, err := authority.GenesisCheckpoint(authority.TenantChain(event.TenantID))
 	if err != nil {
 		t.Fatalf("create Audit HTTP checkpoint: %v", err)
 	}
@@ -385,6 +448,23 @@ func (workflow *httpWorkflow) QueryRecords(
 	return workflow.page, nil
 }
 
+func (workflow *httpWorkflow) QueryRecordsAccessKey(
+	_ context.Context,
+	signed iamv1.AccessKeySignedRequest,
+	sourceIP string,
+	requestID string,
+	_ auditv1.QueryRecordsRequest,
+) (auditv1.RecordPage, error) {
+	workflow.queryCalls++
+	workflow.querySigned = signed
+	workflow.querySourceIP = sourceIP
+	workflow.queryRequestID = requestID
+	if workflow.queryErr != nil {
+		return auditv1.RecordPage{}, workflow.queryErr
+	}
+	return workflow.page, nil
+}
+
 func (workflow *httpWorkflow) VerifyChain(
 	_ context.Context,
 	credential iamv1.Secret,
@@ -393,6 +473,20 @@ func (workflow *httpWorkflow) VerifyChain(
 ) (auditv1.ChainVerification, error) {
 	workflow.verifyCalls++
 	workflow.verifyCredentialPresent = credential.Present()
+	workflow.verifyRequestID = requestID
+	return workflow.verification, nil
+}
+
+func (workflow *httpWorkflow) VerifyChainAccessKey(
+	_ context.Context,
+	signed iamv1.AccessKeySignedRequest,
+	sourceIP string,
+	requestID string,
+	_ auditv1.VerifyChainRequest,
+) (auditv1.ChainVerification, error) {
+	workflow.verifyCalls++
+	workflow.verifySigned = signed
+	workflow.verifySourceIP = sourceIP
 	workflow.verifyRequestID = requestID
 	return workflow.verification, nil
 }
@@ -407,4 +501,50 @@ func (workflow *httpWorkflow) VerifyInstallation(
 	workflow.installationVerifyRequestID = requestID
 	workflow.verifyCredentialPresent = credential.Present()
 	return workflow.installationVerification, workflow.queryErr
+}
+
+func (workflow *httpWorkflow) QueryPlatformRecords(
+	ctx context.Context, credential iamv1.Secret, requestID string, request auditv1.QueryRecordsRequest,
+) (auditv1.RecordPage, error) {
+	workflow.platformQueryCalls++
+	return workflow.QueryRecords(ctx, credential, requestID, request)
+}
+
+func (workflow *httpWorkflow) VerifyPlatformChain(
+	ctx context.Context, credential iamv1.Secret, requestID string, request auditv1.VerifyChainRequest,
+) (auditv1.ChainVerification, error) {
+	workflow.platformVerifyCalls++
+	return workflow.VerifyChain(ctx, credential, requestID, request)
+}
+
+func accessKeyJSONRequest(t *testing.T, method, target, externalTarget string, body any) *http.Request {
+	t.Helper()
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(method, target, bytes.NewReader(encoded))
+	request.Header.Set("Content-Type", "application/json")
+	nonce, err := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := iamv1.EncodeAccessKeyAuthorization(iamv1.AccessKeySignatureParameters{
+		AccessKeyID: "key-one", InstallationID: "installation-one", Audience: iamv1.ProductAudit,
+		SignedAt: 1800000000, Nonce: nonce,
+	}, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := header.CopyBytes()
+	request.Header.Set("Authorization", string(plain))
+	clear(plain)
+	request.Header.Set(externalrequest.HeaderExternalOrigin, "https://api.example.test:443")
+	request.Header.Set(externalrequest.HeaderExternalRequestTarget, externalTarget)
+	request.Header.Set(externalrequest.HeaderExternalSourceIP, "192.0.2.10")
+	return request
 }

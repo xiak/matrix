@@ -16,9 +16,35 @@ func (service *Authority) Bootstrap(
 	if iamv1.ValidateBootstrapDocument(document) != nil {
 		return iamv1.BootstrapStatus{}, ErrInvalidArgument
 	}
-	contentDigest, err := authority.BootstrapDigest(document)
+	contentDigest, err := iamv1.BootstrapDigest(document)
 	if err != nil {
 		return iamv1.BootstrapStatus{}, ErrUnavailable
+	}
+	// The immutable receipt commits to the complete original private document.
+	// A completed installation does not re-admit or rewrite its password under
+	// today's rules. First application still goes through ApplyBootstrap's
+	// atomic receipt/conflict check after hashing outside this transaction.
+	var status iamv1.BootstrapStatus
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		var err error
+		status, err = tx.BootstrapStatus(ctx)
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidateBootstrapStatus(status) != nil {
+			return ErrUnavailable
+		}
+		if status.State == iamv1.BootstrapReady && (status.InstallationID != document.InstallationID ||
+			status.AccountID != document.Organization.ID || status.ContentDigest != contentDigest) {
+			return ErrConflict
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.BootstrapStatus{}, err
+	}
+	if status.State == iamv1.BootstrapReady {
+		return status, nil
 	}
 	passwordHash, err := service.passwords.Hash(document.Administrator.Password)
 	if err != nil {
@@ -65,7 +91,6 @@ func (service *Authority) Bootstrap(
 		},
 		Services: services,
 	}
-	var status iamv1.BootstrapStatus
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
 		if err != nil {
@@ -74,6 +99,7 @@ func (service *Authority) Bootstrap(
 		event, err := newAuditEvent(
 			eventID,
 			document.Organization.ID,
+			"",
 			auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "iam-bootstrap"},
 			auditv1.ActionIAMBootstrapApplied,
 			auditv1.TargetReference{Kind: auditv1.TargetInstallation, ID: document.InstallationID},

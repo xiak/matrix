@@ -41,11 +41,12 @@ func (value *invocationError) Error() string { return "platform command failed" 
 func (value *invocationError) Unwrap() error { return value.err }
 
 type commandOptions struct {
-	root          string
-	bundle        string
-	trustKey      string
-	backupID      string
-	supportOutput string
+	root                      string
+	bundle                    string
+	trustKey                  string
+	securityMailConfiguration string
+	backupID                  string
+	supportOutput             string
 }
 
 func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
@@ -123,7 +124,8 @@ func newPlatformCommand(
 			}
 			request := Request{
 				Action: action, Root: options.root, Bundle: options.bundle, TrustKey: options.trustKey,
-				BackupID: options.backupID, SupportOutput: options.supportOutput,
+				SecurityMailConfiguration: options.securityMailConfiguration,
+				BackupID:                  options.backupID, SupportOutput: options.supportOutput,
 			}
 			result, err := backend.Run(command.Context(), request)
 			if err != nil {
@@ -148,8 +150,10 @@ func bindCommandFlags(flags *pflag.FlagSet, action lifecycle.Action, options *co
 	case lifecycle.ActionInstall:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
 		flags.StringVar(&options.trustKey, "trust-key", "", "out-of-band release trust root")
+		flags.StringVar(&options.securityMailConfiguration, "security-mail-configuration", "", "protected SMTP security-mail configuration file")
 	case lifecycle.ActionUpgrade:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
+		flags.StringVar(&options.securityMailConfiguration, "security-mail-configuration", "", "protected SMTP security-mail configuration file")
 	case lifecycle.ActionRecover:
 		flags.StringVar(&options.backupID, "backup", "", "verified installation-owned backup identity")
 	case lifecycle.ActionSupport:
@@ -163,12 +167,13 @@ func validateCommandFlags(action lifecycle.Action, options *commandOptions) erro
 	}
 	switch action {
 	case lifecycle.ActionInstall:
-		if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.trustKey) == "" {
-			return errors.New("offline bundle and trust key are required")
+		if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.trustKey) == "" ||
+			strings.TrimSpace(options.securityMailConfiguration) == "" {
+			return errors.New("offline bundle, trust key and security-mail configuration are required")
 		}
 	case lifecycle.ActionUpgrade:
-		if strings.TrimSpace(options.bundle) == "" {
-			return errors.New("offline bundle is required")
+		if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.securityMailConfiguration) == "" {
+			return errors.New("offline bundle and security-mail configuration are required")
 		}
 	case lifecycle.ActionRecover:
 		if strings.TrimSpace(options.backupID) == "" {

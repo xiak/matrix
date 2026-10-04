@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	randv2 "math/rand/v2"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
@@ -40,17 +41,74 @@ func NewAuthority(repository Repository, config Config) (*Authority, error) {
 	if config.NewID == nil {
 		config.NewID = newID
 	}
+	var cursors *authority.CursorCodec
+	if config.CursorKey != nil {
+		codec, err := authority.NewCursorCodec(config.CursorKey)
+		if err != nil {
+			return nil, err
+		}
+		cursors = &codec
+	}
+	// The codec owns its copy. Non-directory local workflows need no cursor
+	// authority; the network entry requires a persistent key explicitly.
+	config.CursorKey = nil
+	wrapping, err := newAccessKeyWrapping(config.AccessKeyWrapping)
+	if err != nil {
+		return nil, err
+	}
+	config.AccessKeyWrapping = nil
+	totp, err := newTOTPRegistration(config.TOTPKeyring)
+	if err != nil {
+		return nil, err
+	}
+	var totpSeeds *authority.TOTPSeedProtector
+	if config.TOTPKeyring != nil {
+		totpSeeds, err = authority.NewTOTPSeedProtector(*config.TOTPKeyring)
+		if err != nil {
+			return nil, ErrInvalidArgument
+		}
+	}
+	config.TOTPKeyring = nil
+	var email *authority.EmailVerificationProtector
+	if config.EmailVerificationKeyring != nil {
+		email, err = authority.NewEmailVerificationProtector(*config.EmailVerificationKeyring)
+		if err != nil {
+			return nil, ErrInvalidArgument
+		}
+	}
+	config.EmailVerificationKeyring = nil
 	return &Authority{
-		repository:  repository,
-		config:      config,
-		passwords:   authority.NewPasswordHasher(nil),
-		credentials: authority.NewCredentialIssuer(nil),
+		repository:   repository,
+		config:       config,
+		passwords:    authority.NewPasswordHasher(nil),
+		credentials:  authority.NewCredentialIssuer(nil),
+		cursors:      cursors,
+		accessKeys:   wrapping,
+		totp:         totp,
+		totpSeeds:    totpSeeds,
+		email:        email,
+		passwordWork: make(chan struct{}, 2),
 	}, nil
 }
 
 func (service *Authority) withinTransaction(
 	ctx context.Context,
 	callback func(context.Context, Transaction) error,
+) error {
+	return service.withinRepositoryTransaction(ctx, callback, false)
+}
+
+func (service *Authority) withinLocalCredentialRecoveryTransaction(
+	ctx context.Context,
+	callback func(context.Context, Transaction) error,
+) error {
+	return service.withinRepositoryTransaction(ctx, callback, true)
+}
+
+func (service *Authority) withinRepositoryTransaction(
+	ctx context.Context,
+	callback func(context.Context, Transaction) error,
+	localCredentialRecovery bool,
 ) error {
 	if service == nil || service.repository == nil {
 		return ErrUnavailable
@@ -60,12 +118,33 @@ func (service *Authority) withinTransaction(
 	}
 	var transactionErr error
 	for attempt := 0; attempt < service.config.MaxTransactionAttempts; attempt++ {
-		transactionErr = service.repository.WithinTransaction(ctx, callback)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if localCredentialRecovery {
+			transactionErr = service.repository.WithinLocalCredentialRecoveryTransaction(ctx, callback)
+		} else {
+			transactionErr = service.repository.WithinTransaction(ctx, callback)
+		}
 		if transactionErr == nil || !errors.Is(transactionErr, ErrRetryableTransaction) {
 			return transactionErr
 		}
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if attempt+1 < service.config.MaxTransactionAttempts {
+			// The failed transaction (including its connection and locks) has
+			// ended. Yield before taking a fresh Serializable snapshot; otherwise
+			// a hot loop can spend every attempt before the winner commits.
+			ceiling := min(50*time.Millisecond<<attempt, 200*time.Millisecond)
+			delay := ceiling/2 + time.Duration(randv2.Int64N(int64(ceiling/2)))
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
 		}
 	}
 	return fmt.Errorf("IAM transaction attempts exhausted: %w", transactionErr)
@@ -104,7 +183,8 @@ func digestSanitized(domain string, value any) (string, error) {
 
 func newAuditEvent(
 	eventID string,
-	tenantID iamv1.OrganizationID,
+	tenantID iamv1.AccountID,
+	installationID string,
 	actor auditv1.ActorReference,
 	action auditv1.Action,
 	target auditv1.TargetReference,
@@ -116,19 +196,20 @@ func newAuditEvent(
 	occurredAt time.Time,
 ) (auditv1.Event, error) {
 	event := auditv1.Event{
-		APIVersion:    auditv1.APIVersion,
-		Kind:          "AuditEvent",
-		EventID:       auditv1.EventID(eventID),
-		TenantID:      auditv1.TenantID(tenantID),
-		Actor:         actor,
-		IAMDecisionID: auditv1.DecisionID(decisionID),
-		Action:        action,
-		Target:        target,
-		Result:        result,
-		RequestDigest: requestDigest,
-		RequestID:     requestID,
-		CorrelationID: correlationID,
-		OccurredAt:    occurredAt,
+		APIVersion:     auditv1.APIVersion,
+		Kind:           "AuditEvent",
+		EventID:        auditv1.EventID(eventID),
+		TenantID:       auditv1.TenantID(tenantID),
+		InstallationID: installationID,
+		Actor:          actor,
+		IAMDecisionID:  auditv1.DecisionID(decisionID),
+		Action:         action,
+		Target:         target,
+		Result:         result,
+		RequestDigest:  requestDigest,
+		RequestID:      requestID,
+		CorrelationID:  correlationID,
+		OccurredAt:     occurredAt,
 	}
 	if err := auditv1.ValidateEventForSource(auditv1.SourceIAM, event); err != nil {
 		return auditv1.Event{}, fmt.Errorf("%w: construct IAM Audit event", ErrUnavailable)

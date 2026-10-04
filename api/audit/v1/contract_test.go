@@ -1,6 +1,8 @@
 package auditv1
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"reflect"
 	"strings"
@@ -9,6 +11,213 @@ import (
 
 	"github.com/xiak/matrix/api/contractjson"
 )
+
+func TestCanonicalEventPreservesTenantBytesAndDigest(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-example",
+		TenantID: "organization-example", Actor: ActorReference{Type: ActorUser, ID: "principal-example"},
+		IAMDecisionID: "decision-example", Action: ActionPaaSDeploymentCreated,
+		Target: TargetReference{Kind: TargetDeployment, ID: "deployment-example"}, Result: ResultAccepted,
+		RequestDigest: "sha256:" + strings.Repeat("1", 64), RequestID: "request-example",
+		CorrelationID: "correlation-example", OperationID: "operation-example",
+		OccurredAt: time.Date(2026, 8, 25, 3, 4, 5, 0, time.UTC),
+	}
+	// This is the accepted tenant canonical wire format, not an implementation snapshot.
+	const expected = `{"canonicalVersion":"matrix.audit.canonical-event.v1","source":"PAAS","event":{"apiVersion":"audit.matrix.xiak.com/v1","kind":"AuditEvent","eventId":"event-example","tenantId":"organization-example","actor":{"type":"USER","id":"principal-example"},"iamDecisionId":"decision-example","action":"paas.deployment.created","target":{"kind":"DEPLOYMENT","id":"deployment-example"},"result":"ACCEPTED","requestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","requestId":"request-example","correlationId":"correlation-example","operationId":"operation-example","occurredAt":"2026-08-25T03:04:05.000000Z"}}`
+	document, digest, err := CanonicalizeEvent(SourcePaaS, event)
+	expectedDigest := sha256.Sum256([]byte(expected))
+	if err != nil || document != expected || digest != "sha256:"+hex.EncodeToString(expectedDigest[:]) {
+		t.Fatalf("historical tenant canonical bytes/digest changed: %v", err)
+	}
+	if _, _, err := CanonicalizeEvent(SourceIAM, event); err == nil {
+		t.Fatal("canonical encoder accepted another producer source")
+	}
+}
+
+func TestSelfServiceFactsRequireTheActualTenantUser(t *testing.T) {
+	for _, contract := range []struct {
+		action Action
+		target TargetKind
+	}{{ActionIAMOtherSessionsRevoked, TargetPrincipal}, {ActionIAMNotificationContactVerificationStarted, TargetUser}, {ActionIAMNotificationContactVerified, TargetUser}, {ActionIAMNotificationContactReplaced, TargetUser}, {ActionIAMAuthenticatorBound, TargetPrincipal},
+		{ActionIAMAuthenticatorReplaced, TargetPrincipal}, {ActionIAMAuthenticatorRemoved, TargetPrincipal}, {ActionIAMAuthenticatorRecoveryStarted, TargetPrincipal}, {ActionIAMAuthenticatorRecovered, TargetPrincipal}, {ActionIAMRecoveryCodesRegenerated, TargetPrincipal}} {
+		t.Run(string(contract.action), func(t *testing.T) {
+			valid := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-others", TenantID: "account-one",
+				Actor: ActorReference{Type: ActorUser, ID: "user-one"}, Action: contract.action,
+				Target: TargetReference{Kind: contract.target, ID: "user-one"}, Result: ResultSucceeded,
+				RequestDigest: "sha256:" + strings.Repeat("a", 64), RequestID: "request-one", CorrelationID: "request-one",
+				OccurredAt: time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)}
+			if _, _, err := CanonicalizeEvent(SourceIAM, valid); err != nil {
+				t.Fatal(err)
+			}
+			for _, mutate := range []func(*Event){
+				func(v *Event) { v.Actor.Type = ActorSystem },
+				func(v *Event) { v.Actor.Type = ActorServiceAccount },
+				func(v *Event) { v.Actor.AccessKeyID = "key-one" },
+				func(v *Event) { v.Target.ID = "another-user" },
+				func(v *Event) { v.Target.Kind = TargetSession },
+				func(v *Event) { v.Target.TenantID = v.TenantID },
+				func(v *Event) { v.TenantID, v.InstallationID = "", "installation-one" },
+				func(v *Event) { v.IAMDecisionID = "invented-permit" },
+				func(v *Event) { v.OperationID = "invented-operation" },
+				func(v *Event) { v.Result = ResultDenied },
+			} {
+				value := valid
+				mutate(&value)
+				if ValidateEventForSource(SourceIAM, value) == nil {
+					t.Fatal("unrelated authority accepted as tenant self-service")
+				}
+			}
+			if ValidateEventForSource(SourcePaaS, valid) == nil {
+				t.Fatal("another producer accepted")
+			}
+		})
+	}
+}
+
+func TestPasswordResetRequiredIsOnlyAnAuthenticatedTenantDenial(t *testing.T) {
+	valid := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-reset-required", TenantID: "account-one",
+		Actor: ActorReference{Type: ActorUser, ID: "user-one"}, Action: Action("iam.user.password-reset-required"),
+		Target: TargetReference{Kind: TargetUser, ID: "user-one"}, Result: ResultDenied,
+		RequestDigest: "sha256:" + strings.Repeat("a", 64), RequestID: "request-one", CorrelationID: "request-one",
+		OccurredAt: time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)}
+	if _, _, err := CanonicalizeEvent(SourceIAM, valid); err != nil {
+		t.Fatal("authenticated terminal denial rejected", err)
+	}
+	for name, mutate := range map[string]func(*Event){
+		"success":      func(v *Event) { v.Result = ResultSucceeded },
+		"accepted":     func(v *Event) { v.Result = ResultAccepted },
+		"other user":   func(v *Event) { v.Target.ID = "other-user" },
+		"system":       func(v *Event) { v.Actor.Type = ActorSystem },
+		"service":      func(v *Event) { v.Actor.Type = ActorServiceAccount },
+		"key":          func(v *Event) { v.Actor.AccessKeyID = "key-one" },
+		"decision":     func(v *Event) { v.IAMDecisionID = "not-a-permit" },
+		"operation":    func(v *Event) { v.OperationID = "not-an-operation" },
+		"installation": func(v *Event) { v.TenantID, v.InstallationID = "", "installation-one" },
+		"target scope": func(v *Event) { v.Target.TenantID = v.TenantID },
+		"session":      func(v *Event) { v.Target.Kind = TargetSession },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := valid
+			mutate(&value)
+			if ValidateEventForSource(SourceIAM, value) == nil {
+				t.Fatal("reset instruction became another authority or success fact")
+			}
+		})
+	}
+	if ValidateEventForSource(SourcePaaS, valid) == nil || ValidateEventForSource(SourceAudit, valid) == nil {
+		t.Fatal("another producer admitted a password authentication fact")
+	}
+}
+
+func TestAccessKeyFactsRequireRealTenantUserDecisions(t *testing.T) {
+	event := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-key", TenantID: "account-a",
+		Actor: ActorReference{Type: ActorUser, ID: "manager-a"}, IAMDecisionID: "decision-key", Target: TargetReference{Kind: TargetAccessKey, ID: "key-a"},
+		Result: ResultSucceeded, RequestID: "request-key", CorrelationID: "request-key", RequestDigest: "sha256:" + strings.Repeat("1", 64),
+		OccurredAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)}
+	for _, action := range []Action{ActionIAMAccessKeyCreated, ActionIAMAccessKeyEnabled, ActionIAMAccessKeyDisabled, ActionIAMAccessKeyNetworkRestrictionsUpdated, ActionIAMAccessKeyDeleted} {
+		event.Action = action
+		if _, _, err := CanonicalizeEvent(SourceIAM, event); err != nil {
+			t.Fatal("valid AccessKey fact rejected", err)
+		}
+		for name, change := range map[string]func(*Event){
+			"no decision":      func(e *Event) { e.IAMDecisionID = "" },
+			"no tenant":        func(e *Event) { e.TenantID = "" },
+			"platform":         func(e *Event) { e.TenantID = ""; e.InstallationID = "installation-a" },
+			"target namespace": func(e *Event) { e.Target.TenantID = e.TenantID },
+			"user target":      func(e *Event) { e.Target.Kind = TargetUser },
+			"failure":          func(e *Event) { e.Result = ResultDenied },
+			"system":           func(e *Event) { e.Actor = ActorReference{Type: ActorSystem, ID: "iam"} },
+			"service":          func(e *Event) { e.Actor = ActorReference{Type: ActorServiceAccount, ID: "service-a"} },
+			"role": func(e *Event) {
+				e.Actor = ActorReference{Type: ActorRole, ID: "role-a", RoleSession: &RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}}
+			},
+		} {
+			t.Run(string(action)+"/"+name, func(t *testing.T) {
+				changed := event
+				change(&changed)
+				if _, _, err := CanonicalizeEvent(SourceIAM, changed); err == nil {
+					t.Fatal("AccessKey fact widened the closed source/actor/target contract")
+				}
+			})
+		}
+		if _, _, err := CanonicalizeEvent(SourcePaaS, event); err == nil {
+			t.Fatal("another producer asserted IAM credential lifecycle")
+		}
+	}
+}
+
+func TestAdministratorRoleSessionRevocationRequiresItsOwnDecision(t *testing.T) {
+	event := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-admin-revoke", TenantID: "account-a",
+		Actor: ActorReference{Type: ActorUser, ID: "admin-a"}, IAMDecisionID: "decision-a", Action: ActionIAMRoleSessionAdminRevoked,
+		Target: TargetReference{Kind: TargetRoleSession, ID: "session-a"}, Result: ResultSucceeded,
+		RequestID: "request-a", CorrelationID: "request-a", RequestDigest: "sha256:" + strings.Repeat("1", 64),
+		OccurredAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)}
+	if _, _, err := CanonicalizeEvent(SourceIAM, event); err != nil {
+		t.Fatal("valid administrator fact rejected", err)
+	}
+	for name, change := range map[string]func(*Event){
+		"no decision": func(e *Event) { e.IAMDecisionID = "" },
+		"system":      func(e *Event) { e.Actor = ActorReference{Type: ActorSystem, ID: "iam"} },
+		"service":     func(e *Event) { e.Actor = ActorReference{Type: ActorServiceAccount, ID: "service-a"} },
+		"role": func(e *Event) {
+			e.Actor = ActorReference{Type: ActorRole, ID: "role-a", RoleSession: &RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}}
+		},
+		"wrong target":  func(e *Event) { e.Target.Kind = TargetRole },
+		"target tenant": func(e *Event) { e.Target.TenantID = "account-a" },
+		"installation":  func(e *Event) { e.TenantID = ""; e.InstallationID = "installation-a" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			copy := event
+			change(&copy)
+			if _, _, err := CanonicalizeEvent(SourceIAM, copy); err == nil {
+				t.Fatal("administrator fact widened authority")
+			}
+		})
+	}
+	event.Action, event.IAMDecisionID = ActionIAMRoleSessionRevoked, ""
+	if _, _, err := CanonicalizeEvent(SourceIAM, event); err != nil {
+		t.Fatal("source self-revocation gained a decision requirement", err)
+	}
+}
+
+func TestLegacyOrganizationCreationRetainsItsTenantCanonicalContract(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-legacy-organization",
+		TenantID: "organization-original", Actor: ActorReference{Type: ActorUser, ID: "principal-original"},
+		IAMDecisionID: "decision-original", Action: ActionIAMOrganizationCreated,
+		Target: TargetReference{Kind: TargetOrganization, ID: "organization-created"}, Result: ResultSucceeded,
+		RequestDigest: "sha256:" + strings.Repeat("1", 64), RequestID: "request-original",
+		CorrelationID: "request-original", OccurredAt: time.Date(2026, 8, 25, 3, 4, 5, 0, time.UTC),
+	}
+	const expected = `{"canonicalVersion":"matrix.audit.canonical-event.v1","source":"IAM","event":{"apiVersion":"audit.matrix.xiak.com/v1","kind":"AuditEvent","eventId":"event-legacy-organization","tenantId":"organization-original","actor":{"type":"USER","id":"principal-original"},"iamDecisionId":"decision-original","action":"iam.organization.created","target":{"kind":"ORGANIZATION","id":"organization-created"},"result":"SUCCEEDED","requestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","requestId":"request-original","correlationId":"request-original","occurredAt":"2026-08-25T03:04:05.000000Z"}}`
+	document, digest, err := CanonicalizeEvent(SourceIAM, event)
+	expectedDigest := sha256.Sum256([]byte(expected))
+	if err != nil || document != expected || digest != "sha256:"+hex.EncodeToString(expectedDigest[:]) {
+		t.Fatal("legacy organization fact changed its canonical contract")
+	}
+	event.TenantID, event.InstallationID = "", "installation-original"
+	if _, _, err := CanonicalizeEvent(SourceIAM, event); err == nil {
+		t.Fatal("legacy organization action was reclassified as a platform lifecycle fact")
+	}
+}
+
+func TestUserRoleLineageRetainsItsCanonicalContract(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-role-exit", TenantID: "account-original",
+		Actor: ActorReference{Type: ActorRole, ID: "role-original", RoleSession: &RoleSessionReference{
+			SessionID: "role-session-original", SourceUserID: "user-original",
+		}},
+		Action: ActionIAMRoleSessionExited, Target: TargetReference{Kind: TargetRoleSession, ID: "role-session-original"},
+		Result: ResultSucceeded, RequestDigest: "sha256:" + strings.Repeat("2", 64), RequestID: "request-role-exit",
+		CorrelationID: "request-role-exit", OccurredAt: time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC),
+	}
+	const expected = `{"canonicalVersion":"matrix.audit.canonical-event.v1","source":"IAM","event":{"apiVersion":"audit.matrix.xiak.com/v1","kind":"AuditEvent","eventId":"event-role-exit","tenantId":"account-original","actor":{"type":"ROLE","id":"role-original","roleSession":{"sessionId":"role-session-original","sourceUserId":"user-original"}},"action":"iam.role-session.exited","target":{"kind":"ROLE_SESSION","id":"role-session-original"},"result":"SUCCEEDED","requestDigest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","requestId":"request-role-exit","correlationId":"request-role-exit","occurredAt":"2026-09-30T08:00:00.000000Z"}}`
+	document, digest, err := CanonicalizeEvent(SourceIAM, event)
+	expectedDigest := sha256.Sum256([]byte(expected))
+	if err != nil || document != expected || digest != "sha256:"+hex.EncodeToString(expectedDigest[:]) {
+		t.Fatal("existing USER RoleSession fact changed its canonical contract")
+	}
+}
 
 func TestAuditExamplesPassDomainValidation(t *testing.T) {
 	tests := []struct {
@@ -86,15 +295,302 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if contract.OperationRequired {
 			event.OperationID = "operation-example"
 		}
+		if contract.PlatformOnly {
+			event.TenantID, event.InstallationID = "", "installation-example"
+			if contract.SystemActorID == "" {
+				event.Actor.Type = ActorUser
+			}
+			if contract.TargetMatchesInstallation {
+				event.Target.ID = event.InstallationID
+			}
+		}
+		if contract.SystemActorID != "" {
+			event.Actor = ActorReference{Type: ActorSystem, ID: contract.SystemActorID}
+		}
+		if contract.UserActorRequired {
+			event.Actor.Type = ActorUser
+		}
+		if action == ActionIAMUserPasswordResetRequired || action == ActionIAMOtherSessionsRevoked || action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMNotificationContactReplaced || action == ActionIAMAuthenticatorBound || action == ActionIAMAuthenticatorReplaced || action == ActionIAMAuthenticatorRemoved || action == ActionIAMAuthenticatorRecoveryStarted || action == ActionIAMAuthenticatorRecovered || action == ActionIAMRecoveryCodesRegenerated {
+			event.Target.ID = string(event.Actor.ID)
+		}
+		if contract.RoleActorRequired {
+			event.Actor = ActorReference{Type: ActorRole, ID: "role-example",
+				RoleSession: &RoleSessionReference{SessionID: event.Target.ID, SourceUserID: "source-example"}}
+		}
+		if contract.ServiceActorRequired {
+			event.Actor = ActorReference{Type: ActorServiceAccount, ID: "service-example"}
+		}
+		if action == ActionIAMAccountRootCredentialsRecovered || action == ActionIAMTenantAdministratorRecovered || action == ActionIAMInstallationPrimaryCredentialsRecovered {
+			event.Target.TenantID = "organization-recovered"
+		}
 		if err := ValidateEventForSource(contract.Source, event); err != nil {
 			t.Fatalf("valid action contract %q rejected: %v", action, err)
+		}
+		if contract.SystemActorID != "" {
+			for _, mutation := range []func(*Event){
+				func(candidate *Event) { candidate.Actor.Type = ActorUser },
+				func(candidate *Event) { candidate.Actor.ID = "another-system" },
+			} {
+				forged := event
+				mutation(&forged)
+				if ValidateEvent(forged) == nil {
+					t.Fatalf("action %q accepted a forged platform system actor", action)
+				}
+			}
+		}
+		if contract.TargetMatchesInstallation {
+			forged := event
+			forged.Target.ID = "another-installation"
+			if ValidateEvent(forged) == nil {
+				t.Fatalf("action %q accepted another installation target", action)
+			}
+		}
+		if contract.RoleActorRequired {
+			for _, actorType := range []ActorType{ActorUser, ActorSystem, ActorServiceAccount} {
+				forged := event
+				forged.Actor = ActorReference{Type: actorType, ID: event.Actor.ID}
+				if ValidateEvent(forged) == nil {
+					t.Fatal("role exit accepted another actor type")
+				}
+			}
+		}
+		if contract.UserActorRequired {
+			for _, actorType := range []ActorType{ActorSystem, ActorServiceAccount} {
+				forged := event
+				forged.Actor.Type = actorType
+				if ValidateEvent(forged) == nil {
+					t.Fatal("attachment fact accepted a non-USER actor")
+				}
+			}
+		}
+		if contract.ServiceActorRequired {
+			for _, actorType := range []ActorType{ActorUser, ActorSystem, ActorRole} {
+				forged := event
+				forged.Actor = ActorReference{Type: actorType, ID: event.Actor.ID}
+				if actorType == ActorRole {
+					forged.Actor.RoleSession = &RoleSessionReference{SessionID: event.Target.ID, SourceServicePrincipalID: event.Actor.ID}
+				}
+				if ValidateEvent(forged) == nil {
+					t.Fatal("service role issuance accepted another actor type")
+				}
+			}
 		}
 		if err := ValidateEventForSource(otherAuditSource(contract.Source), event); err == nil {
 			t.Fatalf("action %q accepted a forged source", action)
 		}
+		wrongNamespace := event
+		if action == ActionIAMAccountRootCredentialsRecovered || action == ActionIAMTenantAdministratorRecovered || action == ActionIAMInstallationPrimaryCredentialsRecovered {
+			wrongNamespace.Target.TenantID = ""
+		} else {
+			wrongNamespace.Target.TenantID = "organization-forged"
+		}
+		if ValidateEvent(wrongNamespace) == nil {
+			t.Fatalf("action %q accepted an invalid target tenant namespace", action)
+		}
+		wrongAuthority := event
+		if contract.PlatformOnly {
+			wrongAuthority.TenantID, wrongAuthority.InstallationID = TenantID(event.InstallationID), ""
+		} else {
+			wrongAuthority.TenantID, wrongAuthority.InstallationID = "", string(event.TenantID)
+		}
+		if ValidateEvent(wrongAuthority) == nil {
+			t.Fatalf("action %q accepted another authority namespace", action)
+		}
 	}
 	if _, known := ContractForAction(Action("audit.unregistered")); known {
 		t.Fatal("unregistered Audit action has a contract")
+	}
+}
+
+func TestServiceRoleConsentFactsRequireTenantUserDecisions(t *testing.T) {
+	for action, target := range map[Action]TargetKind{
+		ActionIAMServiceLinkedRoleCreated:   TargetRole,
+		ActionIAMWorkloadRoleBindingCreated: TargetWorkloadRoleBinding,
+		ActionIAMWorkloadRoleBindingRevoked: TargetWorkloadRoleBinding,
+	} {
+		event := Event{
+			APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-service-role",
+			TenantID: "account-example", Actor: ActorReference{Type: ActorUser, ID: "user-example"},
+			Action: action, Target: TargetReference{Kind: target, ID: "target-example"}, Result: ResultSucceeded,
+			IAMDecisionID: "decision-example", RequestDigest: "sha256:" + strings.Repeat("1", 64),
+			RequestID: "request-example", CorrelationID: "correlation-example",
+			OccurredAt: time.Date(2026, 9, 30, 1, 2, 3, 0, time.UTC),
+		}
+		if err := ValidateEventForSource(SourceIAM, event); err != nil {
+			t.Fatalf("valid service-role fact %s rejected: %v", action, err)
+		}
+		if ValidateEventForSource(otherAuditSource(SourceIAM), event) == nil {
+			t.Fatal("service-role fact accepted another source", action)
+		}
+		for name, mutate := range map[string]func(*Event){
+			"missing decision":   func(candidate *Event) { candidate.IAMDecisionID = "" },
+			"service actor":      func(candidate *Event) { candidate.Actor.Type = ActorServiceAccount },
+			"system actor":       func(candidate *Event) { candidate.Actor.Type = ActorSystem },
+			"wrong target":       func(candidate *Event) { candidate.Target.Kind = TargetPrincipal },
+			"installation scope": func(candidate *Event) { candidate.TenantID, candidate.InstallationID = "", "installation-example" },
+			"target namespace":   func(candidate *Event) { candidate.Target.TenantID = "account-other" },
+		} {
+			t.Run(string(action)+"/"+name, func(t *testing.T) {
+				forged := event
+				mutate(&forged)
+				if ValidateEventForSource(SourceIAM, forged) == nil {
+					t.Fatal("service-role fact accepted forged authority")
+				}
+			})
+		}
+	}
+}
+
+func TestAccessAnalyzerFactsRequireTenantUserDecisions(t *testing.T) {
+	for _, action := range []Action{ActionIAMAccessAnalyzerCreated, ActionIAMAccessAnalyzerUpdated, ActionIAMAccessAnalyzerDispositionUpdated} {
+		event := Event{
+			APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-access-analyzer",
+			TenantID: "account-example", Actor: ActorReference{Type: ActorUser, ID: "user-example"},
+			Action: action, Target: TargetReference{Kind: TargetAccessAnalyzer, ID: "analyzer-example"}, Result: ResultSucceeded,
+			IAMDecisionID: "decision-example", RequestDigest: "sha256:" + strings.Repeat("1", 64),
+			RequestID: "request-example", CorrelationID: "request-example",
+			OccurredAt: time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC),
+		}
+		if err := ValidateEventForSource(SourceIAM, event); err != nil {
+			t.Fatalf("valid access analyzer fact %s rejected: %v", action, err)
+		}
+		for name, mutate := range map[string]func(*Event){
+			"missing decision":   func(candidate *Event) { candidate.IAMDecisionID = "" },
+			"service actor":      func(candidate *Event) { candidate.Actor.Type = ActorServiceAccount },
+			"system actor":       func(candidate *Event) { candidate.Actor.Type = ActorSystem },
+			"wrong target":       func(candidate *Event) { candidate.Target.Kind = TargetAccount },
+			"installation scope": func(candidate *Event) { candidate.TenantID, candidate.InstallationID = "", "installation-example" },
+			"target namespace":   func(candidate *Event) { candidate.Target.TenantID = "account-other" },
+			"wrong result":       func(candidate *Event) { candidate.Result = ResultDenied },
+		} {
+			t.Run(string(action)+"/"+name, func(t *testing.T) {
+				forged := event
+				mutate(&forged)
+				if ValidateEventForSource(SourceIAM, forged) == nil {
+					t.Fatal("access analyzer fact accepted forged authority")
+				}
+			})
+		}
+	}
+}
+
+func TestAutomaticAccessKeyDispositionRequiresTenantAnalyzerSystemActor(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-access-key-disposition",
+		TenantID: "account-example", Actor: ActorReference{Type: ActorSystem, ID: "iam.access-analyzer"},
+		Action: ActionIAMAccessKeyAutomaticallyDisabled, Target: TargetReference{Kind: TargetAccessKey, ID: "key-example"}, Result: ResultSucceeded,
+		RequestDigest: "sha256:" + strings.Repeat("3", 64), RequestID: "disposition-example", CorrelationID: "disposition-example",
+		OccurredAt: time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC),
+	}
+	if err := ValidateEventForSource(SourceIAM, event); err != nil {
+		t.Fatal("valid automatic access key disposition fact was rejected", err)
+	}
+	for name, mutate := range map[string]func(*Event){
+		"user actor":       func(value *Event) { value.Actor = ActorReference{Type: ActorUser, ID: "user-example"} },
+		"wrong system":     func(value *Event) { value.Actor.ID = "iam" },
+		"decision":         func(value *Event) { value.IAMDecisionID = "decision-example" },
+		"installation":     func(value *Event) { value.InstallationID, value.TenantID = "mxi-11111111111111111111111111111111", "" },
+		"finding target":   func(value *Event) { value.Target.Kind = TargetAccessFinding },
+		"different result": func(value *Event) { value.Result = ResultDenied },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := event
+			mutate(&changed)
+			if ValidateEventForSource(SourceIAM, changed) == nil {
+				t.Fatal("automatic access key disposition accepted forged authority")
+			}
+		})
+	}
+}
+
+func TestAccessFindingFactsRequireTenantAnalyzerSystemActor(t *testing.T) {
+	for _, action := range []Action{ActionIAMAccessFindingDetected, ActionIAMAccessFindingResolved} {
+		event := Event{
+			APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-access-finding",
+			TenantID: "account-example", Actor: ActorReference{Type: ActorSystem, ID: "iam.access-analyzer"},
+			Action: action, Target: TargetReference{Kind: TargetAccessFinding, ID: "finding-example"}, Result: ResultSucceeded,
+			RequestDigest: "sha256:" + strings.Repeat("1", 64), RequestID: "scan-example", CorrelationID: "scan-example",
+			OccurredAt: time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC),
+		}
+		if err := ValidateEventForSource(SourceIAM, event); err != nil {
+			t.Fatalf("valid %s access finding fact: %v", action, err)
+		}
+		for name, mutate := range map[string]func(*Event){
+			"user actor":       func(value *Event) { value.Actor = ActorReference{Type: ActorUser, ID: "user-example"} },
+			"wrong system":     func(value *Event) { value.Actor.ID = "iam" },
+			"decision":         func(value *Event) { value.IAMDecisionID = "decision-example" },
+			"installation":     func(value *Event) { value.InstallationID, value.TenantID = "mxi-11111111111111111111111111111111", "" },
+			"analyzer target":  func(value *Event) { value.Target.Kind = TargetAccessAnalyzer },
+			"different result": func(value *Event) { value.Result = ResultDenied },
+		} {
+			changed := event
+			mutate(&changed)
+			if ValidateEventForSource(SourceIAM, changed) == nil {
+				t.Fatalf("%s accepted %s", action, name)
+			}
+		}
+	}
+}
+
+func TestAccessFindingReviewFactsRequireTenantUserDecisions(t *testing.T) {
+	for _, action := range []Action{ActionIAMAccessFindingArchived, ActionIAMAccessFindingUnarchived} {
+		event := Event{
+			APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-access-finding-review",
+			TenantID: "account-example", Actor: ActorReference{Type: ActorUser, ID: "user-example"},
+			Action: action, Target: TargetReference{Kind: TargetAccessFinding, ID: "finding-example"}, Result: ResultSucceeded,
+			IAMDecisionID: "decision-example", RequestDigest: "sha256:" + strings.Repeat("2", 64),
+			RequestID: "review-example", CorrelationID: "review-example",
+			OccurredAt: time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC),
+		}
+		if err := ValidateEventForSource(SourceIAM, event); err != nil {
+			t.Fatalf("valid %s access finding review fact: %v", action, err)
+		}
+		for name, mutate := range map[string]func(*Event){
+			"missing decision": func(value *Event) { value.IAMDecisionID = "" },
+			"system actor":     func(value *Event) { value.Actor = ActorReference{Type: ActorSystem, ID: "iam.access-analyzer"} },
+			"wrong target":     func(value *Event) { value.Target.Kind = TargetAccessAnalyzer },
+			"installation":     func(value *Event) { value.InstallationID, value.TenantID = "mxi-11111111111111111111111111111111", "" },
+			"different result": func(value *Event) { value.Result = ResultDenied },
+		} {
+			changed := event
+			mutate(&changed)
+			if ValidateEventForSource(SourceIAM, changed) == nil {
+				t.Fatalf("%s accepted %s", action, name)
+			}
+		}
+	}
+}
+
+func TestServiceRoleSessionIssuanceRequiresExactServiceActor(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-service-session",
+		TenantID: "account-example", Actor: ActorReference{Type: ActorServiceAccount, ID: "service-example"},
+		Action: ActionIAMServiceRoleSessionIssued,
+		Target: TargetReference{Kind: TargetRoleSession, ID: "role-session-example"}, Result: ResultSucceeded,
+		RequestDigest: "sha256:" + strings.Repeat("2", 64), RequestID: "request-service-session",
+		CorrelationID: "request-service-session", OccurredAt: time.Date(2026, 9, 30, 1, 2, 3, 0, time.UTC),
+	}
+	if err := ValidateEventForSource(SourceIAM, event); err != nil {
+		t.Fatal("valid service role session issuance rejected", err)
+	}
+	for name, mutate := range map[string]func(*Event){
+		"user actor":   func(candidate *Event) { candidate.Actor.Type = ActorUser },
+		"system actor": func(candidate *Event) { candidate.Actor.Type = ActorSystem },
+		"role actor": func(candidate *Event) {
+			candidate.Actor = ActorReference{Type: ActorRole, ID: "role-example", RoleSession: &RoleSessionReference{SessionID: "role-session-source", SourceServicePrincipalID: "service-example"}}
+		},
+		"decision":           func(candidate *Event) { candidate.IAMDecisionID = "decision-forged" },
+		"wrong target":       func(candidate *Event) { candidate.Target.Kind = TargetPrincipal },
+		"installation scope": func(candidate *Event) { candidate.TenantID, candidate.InstallationID = "", "installation-example" },
+		"target namespace":   func(candidate *Event) { candidate.Target.TenantID = "account-other" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged := event
+			mutate(&forged)
+			if ValidateEventForSource(SourceIAM, forged) == nil {
+				t.Fatal("service role session issuance accepted forged authority")
+			}
+		})
 	}
 }
 
@@ -117,6 +613,8 @@ func TestAuditOpenAPISecurityDerivesSourceAndTenantFromCredentials(t *testing.T)
 	assertAuditSecurity(t, paths, "/v1/events", "ServiceCredential")
 	assertAuditSecurity(t, paths, "/v1/records:query", "UserSession")
 	assertAuditSecurity(t, paths, "/v1/integrity:verify", "UserSession")
+	assertAuditSecurity(t, paths, "/v1/platform/records:query", "UserSession")
+	assertAuditSecurity(t, paths, "/v1/platform/integrity:verify", "UserSession")
 	assertAuditSecurity(t, paths, "/v1/installation:verify", "InstallationVerifier")
 
 	schemas := auditOpenAPISchemas(t, document)
@@ -126,7 +624,7 @@ func TestAuditOpenAPISecurityDerivesSourceAndTenantFromCredentials(t *testing.T)
 	}
 	for _, schemaName := range []string{"QueryRecordsRequest", "VerifyChainRequest"} {
 		properties := mustAuditObject(t, mustAuditObject(t, schemas[schemaName], schemaName)["properties"], schemaName+" properties")
-		for _, forbidden := range []string{"tenantId", "organizationId", "subject", "source"} {
+		for _, forbidden := range []string{"tenantId", "installationId", "organizationId", "subject", "source"} {
 			if _, exists := properties[forbidden]; exists {
 				t.Fatalf("%s exposes authority selector %q", schemaName, forbidden)
 			}

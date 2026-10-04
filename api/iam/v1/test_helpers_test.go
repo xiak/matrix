@@ -48,7 +48,18 @@ func compileIAMOpenAPISchema(
 	}
 	compiler := jsonschema.NewCompiler()
 	compiler.AssertFormat()
-	resource := "https://iam.matrix.xiak.com/contracts/" + name + ".json"
+	resource := "https://schemas.matrix.xiak.com/api/iam/v1/" + name + ".json"
+	auditDocument, err := os.ReadFile("../../audit/v1/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var auditSchema map[string]any
+	if json.Unmarshal(auditDocument, &auditSchema) != nil {
+		t.Fatal("invalid Audit contract document")
+	}
+	if err := compiler.AddResource("https://schemas.matrix.xiak.com/api/audit/v1/openapi.json", auditSchema); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiler.AddResource(resource, wrapper); err != nil {
 		t.Fatalf("add %s schema resource: %v", name, err)
 	}

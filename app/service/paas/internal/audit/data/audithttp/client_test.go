@@ -44,9 +44,12 @@ func TestClientAcceptsNewAndEqualReplayUsingClosedAuditEvent(t *testing.T) {
 	for _, scenario := range []struct {
 		status  int
 		outcome auditv1.IngestionOutcome
+		role    bool
 	}{
 		{status: http.StatusCreated, outcome: auditv1.IngestionAccepted},
 		{status: http.StatusOK, outcome: auditv1.IngestionDuplicate},
+		{status: http.StatusCreated, outcome: auditv1.IngestionAccepted, role: true},
+		{status: http.StatusOK, outcome: auditv1.IngestionDuplicate, role: true},
 	} {
 		t.Run(string(scenario.outcome), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -66,7 +69,11 @@ func TestClientAcceptsNewAndEqualReplayUsingClosedAuditEvent(t *testing.T) {
 				_ = json.NewEncoder(response).Encode(ingestionResult(event, scenario.outcome))
 			}))
 			defer server.Close()
-			if err := newAuditClient(t, server.URL).Ingest(context.Background(), testPaaSAuditEvent()); err != nil {
+			event := testPaaSAuditEvent()
+			if scenario.role {
+				event.Actor = paasv1.SubjectRef{Type: paasv1.SubjectRole, ID: "role-a", RoleSession: &paasv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}}
+			}
+			if err := newAuditClient(t, server.URL).Ingest(context.Background(), event); err != nil {
 				t.Fatalf("ingest PaaS Audit event: %v", err)
 			}
 		})

@@ -1,8 +1,11 @@
 package authority
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	_ "embed"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -16,20 +19,53 @@ import (
 )
 
 var (
-	ErrWeakPassword        = errors.New("password does not satisfy the fixed policy")
-	ErrInvalidPasswordHash = errors.New("stored password hash is invalid")
-	ErrPasswordHashing     = errors.New("password hashing failed")
+	ErrWeakPassword            = errors.New("password does not satisfy the password requirements")
+	ErrInvalidPasswordHash     = errors.New("stored password hash is invalid")
+	ErrInvalidPasswordSettings = errors.New("stored password settings are invalid")
+	ErrInvalidPasswordHistory  = errors.New("stored password history is invalid")
+	ErrPasswordHashing         = errors.New("password hashing failed")
 )
 
 const (
-	passwordMemoryKiB    = 64 * 1024
-	passwordIterations   = 3
-	passwordParallelism  = 1
-	passwordSaltBytes    = 16
-	passwordKeyBytes     = 32
-	minimumPasswordBytes = 14
-	maximumPasswordBytes = 128
+	passwordMemoryKiB         = 64 * 1024
+	passwordIterations        = 3
+	passwordParallelism       = 1
+	passwordSaltBytes         = 16
+	passwordKeyBytes          = 32
+	minimumPasswordCodePoints = 15
+	maximumPasswordCodePoints = 128
+	maximumPasswordBytes      = 512
+	maximumPasswordHistory    = 24
 )
+
+// This bounded offline asset carries its original MIT notice and fixed-source
+// attribution. It contains only entries not already rejected by the length
+// floor. It is not an online breach query or a complete compromised corpus.
+//
+//go:embed password_blocklist.txt
+var commonPasswordDocument string
+
+var commonPasswords = mustLoadCommonPasswords()
+
+func mustLoadCommonPasswords() []string {
+	values, err := parseCommonPasswords(commonPasswordDocument)
+	if err != nil {
+		// A missing/modified build asset must never silently disable admission.
+		panic("invalid embedded IAM password blocklist")
+	}
+	return values
+}
+
+func parseCommonPasswords(document string) ([]string, error) {
+	if fmt.Sprintf("%x", sha256.Sum256([]byte(document))) != "76031dba001805005624a4ef1ab5479a81d4b405fa87921cdca50cc676f3d699" {
+		return nil, errors.New("embedded password blocklist is invalid")
+	}
+	_, entries, present := strings.Cut(document, "\n# Passwords\n")
+	if !present || !strings.HasSuffix(entries, "\n") {
+		return nil, errors.New("embedded password blocklist is invalid")
+	}
+	return strings.Split(strings.TrimSuffix(entries, "\n"), "\n"), nil
+}
 
 type PasswordHash string
 
@@ -80,13 +116,81 @@ func (hasher *PasswordHasher) Hash(password iamv1.Secret) (PasswordHash, error) 
 	return PasswordHash(encoded), nil
 }
 
-// ValidatePassword applies the fixed Phase 1 password policy without hashing.
+// ValidatePassword applies the new-password product baseline without hashing.
 // Use cases call it before authentication so malformed input is rejected
-// cheaply, then hash only after the caller has authenticated.
+// cheaply, then hash only after the caller has authenticated. Stored-secret
+// verification deliberately does not apply today's admission rules.
 func ValidatePassword(password iamv1.Secret) error {
+	return ValidatePasswordWithSettings(password, DefaultPasswordSettings())
+}
+
+// Defaults are explicit values for creation and the protected-identity floor,
+// never a fallback for missing or malformed persisted Account configuration.
+func DefaultPasswordSettings() iamv1.AccountPasswordSettings {
+	return iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: minimumPasswordCodePoints, HistoryCount: 1}
+}
+
+func ValidatePasswordWithSettings(password iamv1.Secret, settings iamv1.AccountPasswordSettings) error {
+	if iamv1.ValidateAccountPasswordSettings(settings) != nil {
+		return ErrInvalidPasswordSettings
+	}
 	plaintext := password.CopyBytes()
 	defer clear(plaintext)
-	return validatePasswordPolicy(plaintext)
+	return validatePasswordPolicy(plaintext, settings)
+}
+
+// ValidateReplacement compares actual stored verifiers, newest history first.
+// The caller owns admission/work slots and must finally recheck the locked
+// credential, settings and history head: this result is not a reusable permit.
+// A generation fence without a password write is not a historical password.
+func (hasher *PasswordHasher) ValidateReplacement(ctx context.Context, password iamv1.Secret,
+	settings iamv1.AccountPasswordSettings, current PasswordHash, history []PasswordHash) error {
+	if err := ValidatePasswordWithSettings(password, settings); err != nil {
+		return err
+	}
+	if len(history) > maximumPasswordHistory {
+		return ErrInvalidPasswordHistory
+	}
+	// Even retained entries outside today's selected window must be well-formed;
+	// weakening a rule must not silently conceal damaged authority state.
+	for index := -1; index < len(history); index++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		stored := current
+		if index >= 0 {
+			stored = history[index]
+		}
+		salt, key, err := parsePasswordHash(stored)
+		clear(salt)
+		clear(key)
+		if err != nil {
+			return err
+		}
+	}
+	matched := false
+	for index := -1; index < min(settings.HistoryCount, len(history)); index++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		stored := current
+		if index >= 0 {
+			stored = history[index]
+		}
+		equal, err := hasher.Verify(password, stored)
+		if err != nil {
+			return err
+		}
+		// Do not expose the matching position by returning after the first hit.
+		matched = matched || equal
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if matched {
+		return ErrWeakPassword
+	}
+	return nil
 }
 
 func (hasher *PasswordHasher) Verify(password iamv1.Secret, stored PasswordHash) (bool, error) {
@@ -139,33 +243,34 @@ func parsePasswordHash(stored PasswordHash) ([]byte, []byte, error) {
 	return salt, derived, nil
 }
 
-func validatePasswordPolicy(password []byte) error {
-	if len(password) < minimumPasswordBytes || len(password) > maximumPasswordBytes || !utf8.Valid(password) {
+func validatePasswordPolicy(password []byte, settings iamv1.AccountPasswordSettings) error {
+	if len(password) > maximumPasswordBytes || !utf8.Valid(password) {
 		return ErrWeakPassword
 	}
-	categories := 0
-	hasLower, hasUpper, hasDigit, hasSymbol := false, false, false, false
+	length := utf8.RuneCount(password)
+	if length < settings.MinimumLength || length > maximumPasswordCodePoints {
+		return ErrWeakPassword
+	}
+	var lower, upper, digit, symbol bool
 	for _, character := range string(password) {
-		switch {
-		case unicode.IsControl(character), unicode.IsSpace(character):
+		if unicode.IsControl(character) {
 			return ErrWeakPassword
-		case unicode.IsLower(character):
-			hasLower = true
-		case unicode.IsUpper(character):
-			hasUpper = true
-		case unicode.IsDigit(character):
-			hasDigit = true
-		default:
-			hasSymbol = true
 		}
+		lower = lower || unicode.IsLower(character)
+		upper = upper || unicode.IsUpper(character)
+		digit = digit || unicode.IsDigit(character)
+		symbol = symbol || unicode.IsPunct(character) || unicode.IsSymbol(character)
 	}
-	for _, present := range []bool{hasLower, hasUpper, hasDigit, hasSymbol} {
-		if present {
-			categories++
-		}
-	}
-	if categories < 3 {
+	if settings.RequireLowercase && !lower || settings.RequireUppercase && !upper ||
+		settings.RequireDigit && !digit || settings.RequireSymbol && !symbol {
 		return ErrWeakPassword
+	}
+	for _, blocked := range commonPasswords {
+		// Compare the complete candidate, never a substring. Folding is only
+		// for blocklist admission; hashing and Verify preserve the exact bytes.
+		if strings.EqualFold(string(password), blocked) {
+			return ErrWeakPassword
+		}
 	}
 	return nil
 }

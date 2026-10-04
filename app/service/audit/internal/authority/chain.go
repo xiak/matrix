@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"hash"
+	"strings"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
@@ -17,16 +18,53 @@ var ErrInvalidChain = errors.New("Audit hash chain is invalid")
 const GenesisHash = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 type Checkpoint struct {
-	TenantID   auditv1.TenantID
+	ChainID    ChainID
 	Sequence   uint64
 	RecordHash string
 }
 
-func GenesisCheckpoint(tenantID auditv1.TenantID) (Checkpoint, error) {
-	if auditv1.ValidateID("tenantId", string(tenantID)) != nil {
+// ChainID is a storage partition key, not a tenant identity. Its namespace
+// keeps installation and tenant authorities disjoint even for equal IDs.
+type ChainID string
+
+func TenantChain(tenantID auditv1.TenantID) ChainID { return ChainID("tenant:" + string(tenantID)) }
+func InstallationChain(installationID string) ChainID {
+	return ChainID("installation:" + installationID)
+}
+
+func ChainFor(tenantID auditv1.TenantID, installationID string) ChainID {
+	if auditv1.ValidateAuthority(tenantID, installationID) != nil {
+		return ""
+	}
+	if installationID != "" {
+		return InstallationChain(installationID)
+	}
+	return TenantChain(tenantID)
+}
+
+func (chain ChainID) TenantID() auditv1.TenantID {
+	if strings.HasPrefix(string(chain), "tenant:") {
+		return auditv1.TenantID(strings.TrimPrefix(string(chain), "tenant:"))
+	}
+	return ""
+}
+
+func (chain ChainID) InstallationID() string {
+	if strings.HasPrefix(string(chain), "installation:") {
+		return strings.TrimPrefix(string(chain), "installation:")
+	}
+	return ""
+}
+
+func (chain ChainID) Validate() error {
+	return auditv1.ValidateAuthority(chain.TenantID(), chain.InstallationID())
+}
+
+func GenesisCheckpoint(chainID ChainID) (Checkpoint, error) {
+	if chainID.Validate() != nil {
 		return Checkpoint{}, ErrInvalidChain
 	}
-	return Checkpoint{TenantID: tenantID, RecordHash: GenesisHash}, nil
+	return Checkpoint{ChainID: chainID, RecordHash: GenesisHash}, nil
 }
 
 func AppendRecord(
@@ -40,7 +78,7 @@ func AppendRecord(
 		return auditv1.AuditRecord{}, CanonicalFact{}, ErrInvalidChain
 	}
 	fact, err := Canonicalize(source, event)
-	if err != nil || fact.TenantID != previous.TenantID {
+	if err != nil || fact.ChainID != previous.ChainID {
 		return auditv1.AuditRecord{}, CanonicalFact{}, ErrInvalidChain
 	}
 	record := auditv1.AuditRecord{
@@ -68,7 +106,7 @@ func VerifyChain(initial Checkpoint, records []auditv1.AuditRecord) (Checkpoint,
 	current := initial
 	for _, record := range records {
 		if auditv1.ValidateAuditRecord(record) != nil ||
-			record.Event.TenantID != current.TenantID ||
+			ChainFor(record.Event.TenantID, record.Event.InstallationID) != current.ChainID ||
 			record.Sequence != current.Sequence+1 ||
 			subtle.ConstantTimeCompare([]byte(record.PreviousHash), []byte(current.RecordHash)) != 1 {
 			return Checkpoint{}, ErrInvalidChain
@@ -103,20 +141,25 @@ func computeRecordHash(record auditv1.AuditRecord) (string, error) {
 		return "", ErrInvalidChain
 	}
 	digest := sha256.New()
-	digest.Write([]byte("matrix.audit.record.v1\x00"))
-	writeHashString(digest, string(record.Event.TenantID))
+	if record.Event.InstallationID != "" {
+		digest.Write([]byte("matrix.audit.record.platform.v1\x00"))
+		writeHashString(digest, record.Event.InstallationID)
+	} else {
+		digest.Write([]byte("matrix.audit.record.v1\x00"))
+		writeHashString(digest, string(record.Event.TenantID))
+	}
 	var integer [8]byte
 	binary.BigEndian.PutUint64(integer[:], record.Sequence)
 	digest.Write(integer[:])
 	digest.Write(contentDigest)
 	digest.Write(previousHash)
-	writeHashString(digest, canonicalTimestamp(record.IngestedAt))
+	writeHashString(digest, record.IngestedAt.Format("2006-01-02T15:04:05.000000Z"))
 	writeHashString(digest, string(record.Retention))
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func validateCheckpoint(value Checkpoint) error {
-	if auditv1.ValidateID("tenantId", string(value.TenantID)) != nil {
+	if value.ChainID.Validate() != nil {
 		return ErrInvalidChain
 	}
 	if value.Sequence == 0 {

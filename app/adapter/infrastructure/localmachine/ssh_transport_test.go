@@ -1,11 +1,14 @@
 package localmachine
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -280,9 +283,23 @@ func TestPinnedSSHExecutorHonorsCancellationDuringHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("net.Listen() error = %v", err)
 	}
-	defer listener.Close()
 	accepted := make(chan net.Conn, 1)
+	acceptDone := make(chan struct{})
+	t.Cleanup(func() {
+		_ = listener.Close()
+		select {
+		case <-acceptDone:
+		case <-time.After(500 * time.Millisecond):
+			t.Error("stalled SSH server accept goroutine did not stop")
+		}
+		select {
+		case connection := <-accepted:
+			_ = connection.Close()
+		default:
+		}
+	})
 	go func() {
+		defer close(acceptDone)
 		connection, acceptErr := listener.Accept()
 		if acceptErr == nil {
 			accepted <- connection
@@ -295,6 +312,7 @@ func TestPinnedSSHExecutorHonorsCancellationDuringHandshake(t *testing.T) {
 		probeTimeout:   time.Second,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	binding := mustSSHBinding(t, listener.Addr().String(), pinnedTestHostKey(), "/")
 	result := make(chan error, 1)
 	go func() {
@@ -313,12 +331,31 @@ func TestPinnedSSHExecutorHonorsCancellationDuringHandshake(t *testing.T) {
 		t.Fatal("SSH executor did not connect to stalled handshake server")
 	}
 	defer serverConnection.Close()
+	// Accept only proves the server-side TCP connection exists; cancellation
+	// there can legitimately interrupt the client's DialContext. Observe the
+	// client's bounded SSH version line before canceling the handshake, while
+	// withholding our version so SSH cannot proceed to authentication/probes.
+	if err := serverConnection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal("cannot bound SSH version read")
+	}
+	reader := bufio.NewReader(io.LimitReader(serverConnection, 255))
+	version, err := reader.ReadString('\n')
+	if err != nil || !strings.HasPrefix(version, "SSH-2.0-") || !strings.HasSuffix(version, "\r\n") {
+		t.Fatal("client did not enter SSH version exchange")
+	}
 	cancel()
 	select {
 	case err := <-result:
 		requireProbeFailure(t, err, ProbeFailureUnavailable, "ssh-handshake")
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("SSH handshake did not stop promptly after context cancellation")
+	}
+	if err := serverConnection.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatal("cannot bound canceled SSH connection read")
+	}
+	var extra [1]byte
+	if n, err := serverConnection.Read(extra[:]); n != 0 || !errors.Is(err, io.EOF) {
+		t.Fatal("canceled SSH handshake did not close its connection")
 	}
 }
 

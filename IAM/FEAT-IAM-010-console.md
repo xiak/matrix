@@ -3,7 +3,7 @@
 - 状态：实施中；在既有控制台接入固定 IAM 契约，完整 IAM 页面与发布验收尚未完成。
 - Owner：UX/UI 工程师负责页面、客户端、公共组件和独立浏览器验收；IAM 工程师负责后端契约、鉴权及真实进程支持。
 - 全局导航、视觉体系、响应式布局和隔离 MOCK 体验由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md) 拥有；固定来源由 [adoption review](../docs/adoption/FEAT-007-control-plane-console.md) 拥有。不引入另一套 IAM UI。
-- 当前 IAM 集成基线固定为 `04041d2d3f7ed55225a5164bc2bc05251d25a6f1`（Verification `35485632542` completed/success）。该来源只固定当前 API 与权威对象，不把 IAM 各 FEAT 的未完成验收继承为 UI 验收。
+- 当前 IAM 集成基线固定为 `08469334a`（Verification `37170446801` 的 15 项 job 均 completed/success）。UX 分支完整采用该来源的 `api/**`、`app/service/**`、`deploy/**`、`test/**` 与 Go module 闭包；控制台源继续由本 FEAT 和 FEAT-007 拥有，嵌入产物从该前端重新生成。该来源只固定当前 API、权威对象和后端真实门禁，不把 IAM 各 FEAT 的未完成浏览器验收继承为 UI 验收。
 - 权限能力目录的 CAT-06 固定契约为 `40407e2710a45ee1000552146cd362740074369a`，对应 IAM 累积来源 `a36a35c2eddbeb7c76a8d7c140e180b24a169aab`。它只固定只读目录及其错误边界，不接受租户注册产品、目录生命周期或策略作者发布能力。
 - 成员 Role 自服务固定到 IAM-006 来源 `62a18a48168e87a4158b95eba41427b445ed10d1`、公开目录数量边界 `0567c8b2699521b137db0f8b69f17630c59f04fb` 和来源身份不可复活修正 `1ebab37aef4bce12b963f52d3919748a9d50d4c6`。该边界只接受当前 USER 的可承担目录、承担、按原请求查询/撤销、CurrentRoleIdentity 和 Role logout，不扩大管理员 Role 管理能力。
 - 本人安全通知、首次 TOTP 绑定及原登录挑战的固定契约来源为 `f5cec0e132ad18900d9a5a5629eae04fda4817f1`。受限自助恢复客户端按 IAM-009 S2b 候选 `48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e` 的三个封闭接口实现。IAM 的 `80a6e6d18288df7f5d89ffee40722ee9aa614ee7` 已在真实 PostgreSQL 18.6 上完成十码逐条耗尽、两次自然十分钟窗口及相关 race/vet 验证；其独立 CI 仍因平台 billing/spending 未取得 runner，真实 IAM 浏览器也未验收，因此这里只固定客户端解释与隔离 MOCK，不把候选称为已发布或继承未完成的发布验收。

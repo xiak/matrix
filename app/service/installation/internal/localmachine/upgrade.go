@@ -198,7 +198,7 @@ func validateUpgradeIdentity(
 		target.Bundle.Manifest.Release.ID == source.Bundle.Manifest.Release.ID ||
 		target.Bundle.Manifest.Release.PreviousID != source.Bundle.Manifest.Release.ID ||
 		target.Bundle.Manifest.Release.PreviousVersion != source.Bundle.Manifest.Release.Version ||
-		target.Bundle.Manifest.Database.SchemaVersion < source.Bundle.Manifest.Database.SchemaVersion {
+		target.Bundle.Manifest.Database != source.Bundle.Manifest.Database {
 		return errors.New("upgrade source and target identities are inconsistent")
 	}
 	return nil

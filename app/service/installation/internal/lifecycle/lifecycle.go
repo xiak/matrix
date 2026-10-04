@@ -67,13 +67,16 @@ const (
 )
 
 type Command struct {
-	ID              string    `json:"id"`
-	Action          Action    `json:"action"`
-	InputDigest     string    `json:"inputDigest,omitempty"`
-	BackupDigest    string    `json:"backupDigest,omitempty"`
-	TargetReleaseID string    `json:"targetReleaseId,omitempty"`
-	BackupID        string    `json:"backupId,omitempty"`
-	RequestedAt     time.Time `json:"requestedAt"`
+	ID                           string    `json:"id"`
+	Action                       Action    `json:"action"`
+	InputDigest                  string    `json:"inputDigest,omitempty"`
+	BackupDigest                 string    `json:"backupDigest,omitempty"`
+	AuthenticationRecoveryEpoch  uint64    `json:"authenticationRecoveryEpoch,omitempty"`
+	AuthenticationRecoveryDigest string    `json:"authenticationRecoveryDigest,omitempty"`
+	TargetReleaseID              string    `json:"targetReleaseId,omitempty"`
+	SecurityMailDigest           string    `json:"securityMailDigest,omitempty"`
+	BackupID                     string    `json:"backupId,omitempty"`
+	RequestedAt                  time.Time `json:"requestedAt"`
 }
 
 type Execution struct {
@@ -91,16 +94,18 @@ type Execution struct {
 }
 
 type Journal struct {
-	APIVersion            string       `json:"apiVersion"`
-	Version               uint64       `json:"version"`
-	InstallationID        string       `json:"installationId"`
-	ReleaseTrust          ReleaseTrust `json:"releaseTrust"`
-	CurrentReleaseID      string       `json:"currentReleaseId,omitempty"`
-	CurrentReleaseDigest  string       `json:"currentReleaseDigest,omitempty"`
-	PreviousRelease       string       `json:"previousReleaseId,omitempty"`
-	PreviousReleaseDigest string       `json:"previousReleaseDigest,omitempty"`
-	Active                *Execution   `json:"active,omitempty"`
-	Last                  *Execution   `json:"last,omitempty"`
+	APIVersion                  string       `json:"apiVersion"`
+	Version                     uint64       `json:"version"`
+	InstallationID              string       `json:"installationId"`
+	ReleaseTrust                ReleaseTrust `json:"releaseTrust"`
+	CurrentReleaseID            string       `json:"currentReleaseId,omitempty"`
+	CurrentReleaseDigest        string       `json:"currentReleaseDigest,omitempty"`
+	PreviousRelease             string       `json:"previousReleaseId,omitempty"`
+	PreviousReleaseDigest       string       `json:"previousReleaseDigest,omitempty"`
+	SecurityMailDigest          string       `json:"securityMailDigest,omitempty"`
+	AuthenticationRecoveryEpoch uint64       `json:"authenticationRecoveryEpoch,omitempty"`
+	Active                      *Execution   `json:"active,omitempty"`
+	Last                        *Execution   `json:"last,omitempty"`
 }
 
 // ReleaseTrust pins the out-of-band public trust root for the complete
@@ -148,6 +153,13 @@ func ValidateInstallationID(value string) error {
 func ValidateBackupID(value string) error {
 	if !backupIDPattern.MatchString(value) {
 		return errors.New("backup identity is invalid")
+	}
+	return nil
+}
+
+func ValidateCommandID(value string) error {
+	if !commandIDPattern.MatchString(value) {
+		return errors.New("installation command identity is invalid")
 	}
 	return nil
 }
@@ -302,11 +314,27 @@ func ValidateJournal(journal Journal) error {
 			journal.PreviousRelease == journal.CurrentReleaseID || journal.CurrentReleaseID == "")) {
 		problems = append(problems, errors.New("previous release identity is invalid"))
 	}
+	if (journal.CurrentReleaseID == "") != (journal.SecurityMailDigest == "") ||
+		(journal.SecurityMailDigest != "" && !digestPattern.MatchString(journal.SecurityMailDigest)) {
+		problems = append(problems, errors.New("installation security mail commitment is invalid"))
+	}
+	if journal.AuthenticationRecoveryEpoch > 9007199254740991 {
+		problems = append(problems, errors.New("authentication recovery epoch is invalid"))
+	}
 	if journal.Active != nil {
 		problems = append(problems, validateExecution(*journal.Active, false))
 		if journal.CurrentReleaseID != journal.Active.SourceRelease ||
 			journal.CurrentReleaseDigest != journal.Active.SourceDigest {
 			problems = append(problems, errors.New("active command source does not match the current release"))
+		}
+		if journal.Active.Command.Action == ActionUpgrade &&
+			journal.Active.Command.SecurityMailDigest != journal.SecurityMailDigest {
+			problems = append(problems, errors.New("active upgrade changed the security mail commitment"))
+		}
+		if journal.Active.Command.Action == ActionRecover &&
+			(journal.AuthenticationRecoveryEpoch >= 9007199254740991 ||
+				journal.Active.Command.AuthenticationRecoveryEpoch != journal.AuthenticationRecoveryEpoch+1) {
+			problems = append(problems, errors.New("active recovery authentication epoch is invalid"))
 		}
 	}
 	if journal.Last != nil {
@@ -327,41 +355,47 @@ func validateCommand(command Command) error {
 	switch command.Action {
 	case ActionInstall:
 		if !digestPattern.MatchString(command.InputDigest) ||
-			!releaseIDPattern.MatchString(command.TargetReleaseID) || command.BackupID != "" ||
+			!releaseIDPattern.MatchString(command.TargetReleaseID) || !digestPattern.MatchString(command.SecurityMailDigest) || command.BackupID != "" ||
 			command.BackupDigest != "" {
 			return errors.New("release-changing command input is invalid")
 		}
 	case ActionUpgrade:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
-			!backupIDPattern.MatchString(command.BackupID) || command.BackupDigest != "" {
+			!backupIDPattern.MatchString(command.BackupID) || !digestPattern.MatchString(command.SecurityMailDigest) || command.BackupDigest != "" {
 			return errors.New("upgrade command input is invalid")
 		}
 	case ActionRecover:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
 			!backupIDPattern.MatchString(command.BackupID) ||
-			!digestPattern.MatchString(command.BackupDigest) {
+			!digestPattern.MatchString(command.BackupDigest) || command.SecurityMailDigest != "" ||
+			command.AuthenticationRecoveryEpoch == 0 || command.AuthenticationRecoveryEpoch > 9007199254740991 ||
+			!digestPattern.MatchString(command.AuthenticationRecoveryDigest) {
 			return errors.New("recovery command input is invalid")
 		}
 	case ActionBackup:
 		if command.InputDigest != "" || command.TargetReleaseID != "" ||
-			!backupIDPattern.MatchString(command.BackupID) || command.BackupDigest != "" {
+			!backupIDPattern.MatchString(command.BackupID) || command.BackupDigest != "" || command.SecurityMailDigest != "" {
 			return errors.New("backup command input is invalid")
 		}
 	case ActionSupport:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			command.TargetReleaseID != "" || command.BackupID != "" ||
-			command.BackupDigest != "" {
+			command.BackupDigest != "" || command.SecurityMailDigest != "" {
 			return errors.New("support command input is invalid")
 		}
 	case ActionVerify, ActionStatus, ActionRollback:
 		if command.InputDigest != "" || command.TargetReleaseID != "" || command.BackupID != "" ||
-			command.BackupDigest != "" {
+			command.BackupDigest != "" || command.SecurityMailDigest != "" {
 			return errors.New("installation command contains unrelated input")
 		}
 	default:
 		return errors.New("installation command action is unsupported")
+	}
+	if command.Action != ActionRecover &&
+		(command.AuthenticationRecoveryEpoch != 0 || command.AuthenticationRecoveryDigest != "") {
+		return errors.New("installation command contains unrelated authentication recovery input")
 	}
 	return nil
 }
@@ -385,7 +419,8 @@ func validateActionPrecondition(journal Journal, command Command) error {
 			return ErrPrecondition
 		}
 	case ActionRecover:
-		if journal.CurrentReleaseID == "" {
+		if journal.CurrentReleaseID == "" || journal.AuthenticationRecoveryEpoch >= 9007199254740991 ||
+			command.AuthenticationRecoveryEpoch != journal.AuthenticationRecoveryEpoch+1 {
 			return ErrPrecondition
 		}
 	}
@@ -481,7 +516,10 @@ func validateExecution(execution Execution, completed bool) error {
 func sameCommandInput(left, right Command) bool {
 	return left.ID == right.ID && left.Action == right.Action &&
 		left.InputDigest == right.InputDigest && left.TargetReleaseID == right.TargetReleaseID &&
-		left.BackupID == right.BackupID && left.BackupDigest == right.BackupDigest
+		left.SecurityMailDigest == right.SecurityMailDigest &&
+		left.BackupID == right.BackupID && left.BackupDigest == right.BackupDigest &&
+		left.AuthenticationRecoveryEpoch == right.AuthenticationRecoveryEpoch &&
+		left.AuthenticationRecoveryDigest == right.AuthenticationRecoveryDigest
 }
 
 func workflow(action Action) []Phase {
@@ -532,11 +570,13 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 		journal.CurrentReleaseDigest = execution.DestinationDigest
 		journal.PreviousRelease = ""
 		journal.PreviousReleaseDigest = ""
+		journal.SecurityMailDigest = execution.Command.SecurityMailDigest
 	case ActionUpgrade:
 		journal.PreviousRelease = execution.SourceRelease
 		journal.PreviousReleaseDigest = execution.SourceDigest
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
+		journal.SecurityMailDigest = execution.Command.SecurityMailDigest
 	case ActionRollback:
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
@@ -547,6 +587,7 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 		journal.CurrentReleaseDigest = execution.DestinationDigest
 		journal.PreviousRelease = ""
 		journal.PreviousReleaseDigest = ""
+		journal.AuthenticationRecoveryEpoch = execution.Command.AuthenticationRecoveryEpoch
 	}
 }
 
@@ -570,15 +611,41 @@ func validateCompletedPointers(journal Journal, execution Execution) error {
 				journal.PreviousReleaseDigest != execution.SourceDigest) {
 			return errors.New("successful upgrade did not retain its source release")
 		}
+		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionUpgrade) &&
+			journal.SecurityMailDigest != execution.Command.SecurityMailDigest {
+			return errors.New("successful command lost its security mail commitment")
+		}
 		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionRollback ||
 			execution.Command.Action == ActionRecover) && journal.PreviousRelease != "" {
 			return errors.New("successful command retained an invalid previous release")
+		}
+		if execution.Command.Action == ActionRecover &&
+			journal.AuthenticationRecoveryEpoch != execution.Command.AuthenticationRecoveryEpoch {
+			return errors.New("successful recovery lost its authentication recovery epoch")
 		}
 	case OutcomeFailed, OutcomeRolledBack, OutcomeManualIntervention:
 		if journal.CurrentReleaseID != execution.SourceRelease ||
 			journal.CurrentReleaseDigest != execution.SourceDigest {
 			return errors.New("failed command changed the current release")
 		}
+	}
+	return nil
+}
+
+// ValidateTransition prevents persistence from advancing the non-rollback
+// authentication recovery epoch outside the exact terminal recovery step.
+func ValidateTransition(before, after Journal) error {
+	if before.AuthenticationRecoveryEpoch == after.AuthenticationRecoveryEpoch {
+		return nil
+	}
+	if before.Active == nil || before.Active.Command.Action != ActionRecover ||
+		after.Active != nil || after.Last == nil {
+		return errors.New("authentication recovery epoch lacks a terminal recovery transition")
+	}
+	expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
+	if err != nil || expected.AuthenticationRecoveryEpoch != after.AuthenticationRecoveryEpoch ||
+		expected.Last == nil || *expected.Last != *after.Last {
+		return errors.New("authentication recovery epoch transition is invalid")
 	}
 	return nil
 }

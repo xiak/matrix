@@ -39,7 +39,12 @@ func (repository *Repository) WithinTransaction(
 		return auditlog.ErrInvalidArgument
 	}
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{
-		IsoLevel:   pgx.Serializable,
+		// Event identity and each mutable chain head are explicitly locked by
+		// the SQL authority; records are immutable. Keep one stable snapshot
+		// without SSI page dependencies between otherwise independent chains.
+		// Waiting on a changed head still aborts with 40001 and retries the
+		// whole transaction; neither READ COMMITTED nor global serialization.
+		IsoLevel:   pgx.RepeatableRead,
 		AccessMode: pgx.ReadWrite,
 	})
 	if err != nil {

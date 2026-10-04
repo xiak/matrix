@@ -1,10 +1,14 @@
 # FEAT-006: Platform IAM and Audit authorities
 
-- Status: In progress
-- Target release: Matrix PaaS Phase 2 tenant accounts
+- Status: Accepted foundation; minimal multi-tenant slice accepted on `feat/iam-xxx`; the independent IAM replacement is owned by `IAM/` on `feat/iam` and is not accepted here
+- Target release: Private Application PaaS v0.1 multi-tenant extension
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`
 - Audit API contract: `audit.matrix.xiak.com/v1`
+- Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
+- Multi-tenant extension: accounts, primary/platform credential protection, historical producer proof, tenant lifecycle, original-primary recovery and password-session policy pass backend, signed lifecycle and installed-browser gates; keyboard-only usability verification is deferred by the user in FEAT-007
+- Follow-up: original installation-primary local credential recovery passes the IAM/Audit backend gates; signed installation/CLI integration remains separate and unaccepted, without reopening the accepted multi-tenant evidence
+- IAM refactor source baseline: fixed product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, independently checked against the public access-management documentation on 2026-09-11
 
 ## Outcome
 
@@ -20,6 +24,17 @@ This is the smallest real authority slice required by
 the two authorities in one vertical FEAT so their cross-service proof is owned
 once, while their code, schemas, credentials, processes, and source-of-truth
 boundaries remain separate. The target is fixed before donor inspection.
+
+## Self-developed IAM replacement
+
+The next IAM product vocabulary, requirements, architecture, detailed designs
+and implementation slices are owned by
+[`IAM/FEAT-IAM-000`](../../IAM/FEAT-IAM-000-product-contract.md) and its linked
+FEATs. This document retains the accepted foundation, multi-tenant and local
+recovery evidence; it does not claim acceptance of the replacement.
+
+The refactor is isolated on `feat/iam`. Its fixed source and adoption decisions
+remain in [the existing adoption owner](../adoption/FEAT-006-platform-authorities.md).
 
 ## Ownership and non-ownership
 
@@ -110,20 +125,23 @@ PaaS, Audit, or IAM authority.
 
 An authenticated service can read only the identity bound to its current
 Bearer through `GET /v1/service-identity`. The endpoint accepts no request
-body, tenant, principal, purpose, source, or other selector.
+body, tenant, principal, purpose, source, or other selector. The required
+`installationId` comes from its current credential's sealed installation;
+`organizationId` still identifies its service-home tenant, not every tenant
+that it may serve.
 
 Audit resolves each producer through `POST /v1/audit-producer:resolve`. IAM
-authenticates the current service credential, checks its exact bootstrap
-installation binding and IAM/PaaS/Audit purpose, and verifies that the proposed
-event organization is an existing account in that installation. The response
-binds that organization to the authenticated producer without changing the
-producer's own organization. Only this append-only producer boundary may span
-the installation's tenants; it grants no user, query, or resource access.
-Unknown organizations, user credentials, verifier credentials, and caller
-purpose/subject selectors fail closed. Existing disabled organizations may
-still receive their committed historical outbox facts. Audit derives the closed
-event source from the verified producer purpose and checks the returned target
-against the event. Shared producer credentials and source headers are forbidden.
+authenticates the current service credential, checks its sealed installation
+and IAM/PaaS/Audit purpose, and proves the exact submitted event against its
+committed IAM fact or original authorization evidence. The closed mapping and
+its source-payload limitation are specified in the multi-tenant target below.
+The response binds the event's scope and canonical digest without changing
+the producer's identity. This one-append result grants no reusable permit,
+user, query, or resource access. Unknown scopes, substituted evidence, user
+or verifier producer credentials, and caller source/purpose selectors fail
+closed. Current user/session/role state does not invalidate a committed fact;
+current producer credential validity remains required. Audit derives source
+from purpose and verifies scope/digest before touching its record registry.
 
 Built-in organization roles are:
 
@@ -139,6 +157,187 @@ The action catalog includes the accepted PaaS `Authorizer` actions plus the
 minimal IAM administration, Audit read/verify, and installation-probe actions.
 Roles and actions are code-owned closed values in Phase 1; customers cannot
 upload policy languages, expressions, scripts, or provider-native documents.
+
+### Installation-scoped platform authorization
+
+FEAT-008's host admission uses the separate `PLATFORM_OPERATOR` role for
+execution-pool create/read, execution-target register/read, platform Operation
+read, and platform-role grant/revoke. Organization administration never grants
+these actions; the platform role does not implicitly grant tenant application
+or organization administration. Platform bindings admit user principals only.
+The existing role-binding commands select their IAM action from the actual
+role, including retained revoked bindings, so replay cannot change authority.
+
+Allowed platform decisions contain the exact `installationId` from IAM's
+sealed bootstrap receipt and no `tenantId`. Allowed tenant decisions contain
+only `tenantId`; denials expose neither authority nor subject. The calling
+service must still own the action. IAM reloads the current session, roles and
+receipt on every request and rejects incomplete identity or password-change
+state. SQL guards enforce the same installation/user/active-role boundary.
+IAM authorization Audit facts remain in the actor's organization because their
+target is the IAM decision, not the platform resource.
+
+A fresh bootstrap grants the initial administrator two independent bindings:
+organization administrator and platform operator. Neither equal bootstrap
+replay nor schema reapplication repairs or regrants a revoked platform role.
+Older installations without a platform binding require an explicit authorized
+upgrade/recovery path; that offline lifecycle remains unaccepted. No migration
+silently promotes organization administrators.
+
+### Local recovery of the original installation primary
+
+This subsequent bounded target restores only the password of the original
+installation primary while its platform binding is still unrevoked. It is
+not first-time authorization of an older installation, restoration of a
+revoked role, ownership transfer, service-credential recovery, or recovery
+from a disabled principal/organization. Those cases fail without effects.
+The completed multi-tenant slice retains its existing acceptance status.
+
+The signed release must supply a purpose-specific, one-shot IAM local entry with
+`inspect` and `apply` modes, separate from the HTTP server and database
+migrator. Installation owns verified executable selection, local capability
+protection, command locking/journaling, secret-file lifetime, and release
+profile enforcement. IAM owns capability verification, the atomic security
+mutation, completion evidence, and its single immutable Audit fact. Neither
+mode restarts services, engines, hosts, or workloads.
+
+The entry is `matrix-iam-local-recovery inspect|apply`, with no other argument
+or northbound route. It reads only the exact protected files named by
+`MATRIX_IAM_LOCAL_RECOVERY_DATABASE_DSN_FILE`,
+`MATRIX_IAM_LOCAL_RECOVERY_AUTHORITY_FILE`, and, when needed,
+`MATRIX_IAM_LOCAL_RECOVERY_REQUEST_FILE`. Successful output is validated,
+sanitized JSON. Exit codes are 0 for success, 2 for invalid input, 3 for
+forbidden authority, 4 for conflicting intent/state, and 6 for unavailable or
+unknown outcome; failure output is only the corresponding stable
+`IAM_LOCAL_RECOVERY_*` code. A lost or invalid result requires receipt
+inspection, not automatic reissuance with fresh expected values.
+
+The local authority combines an installation-private capability signing key
+with a dedicated PostgreSQL login whose sole role is
+`matrix_iam_credential_recovery`. That role can execute only the fixed
+inspection and recovery functions; it cannot access tables, use other IAM
+commands, or become API, worker, owner, migrator, or another authority role.
+Existing USER/API/worker/verifier credentials gain no recovery capability.
+The authority file seals installation ID, bootstrap content digest, home
+organization, and original primary ID. Both commands compare this tuple with
+IAM's existing bootstrap receipt; callers cannot choose another target.
+The dedicated login is `matrix_iam_credential_recovery_login`; only ordinary
+installation provisioning uses `MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE` to
+configure it. Migration is never a supported recovery effect.
+
+The signing key is local issuing authority, not a USER permission. A single
+HMAC-SHA256 capability binds the fixed purpose, command ID, sealed tuple,
+expected organization/principal/credential/binding versions, exact binding
+ID, and new password. Private request encoding is explicit and bounded;
+ordinary JSON serialization of the authority, password, or capability fails.
+Capability verification is constant-time. Passwords, password hashes,
+capabilities and database credentials never enter ordinary journal JSON,
+Audit, standard output, or native errors. An input commitment is the SHA-256
+of the capability, not an unkeyed password digest or an append permission.
+The trusted one-shot executable verifies this MAC; PostgreSQL authenticates
+the dedicated database role and independently enforces sealed ownership and
+the atomic state transition. This does not claim that PostgreSQL verifies the
+MAC or that a compromised local installation authority is contained by it.
+Installation consumes the single public `iamv1.BootstrapDigest` function;
+the existing sealed receipt bytes are not redefined or copied into a second
+digest implementation.
+
+Read-only inspection uses this separate local authority rather than a lost
+user session. It returns only the eligible sealed original primary and the
+expected generation/resource versions needed to issue one intent. An exact
+command-ID/input-commitment query instead returns that historical completion
+and its original expected metadata without rechecking current eligibility.
+Its `NOT_FOUND` result never supplies fresh versions or permission to replace
+the intent. This allows confirmation after a lost response or private-file
+cleanup without another password change. Recovery
+then rechecks the receipt, `account_owner`, ACTIVE USER and organization,
+the exact unrevoked `PLATFORM_OPERATOR` binding, and all expected versions in
+the same SERIALIZABLE transaction. Binding and principal locking must agree
+with existing revoke/grant/password paths. Success replaces the Argon2id
+password hash, increments credential generation and principal version, sets
+`must_change_password=true`, revokes every existing session, and atomically
+stores completion evidence plus outbox. It does not modify any binding,
+principal/organization status, account ownership, or service credential.
+
+The stable command ID and private input commitment identify one recovery.
+Exact replay returns the original completion, not permission or current
+eligibility; changed input conflicts. A committed old command cannot change
+passwords or regrant authority after later password changes, logout, role
+revocation, or restart. An uncommitted stale intent conflicts on its expected
+generation/versions. Login with the recovery password still requires the
+normal forced-change flow before protected platform access.
+
+The only new fact is `iam.installation-primary.credentials-recovered`:
+installation chain, exact SYSTEM actor `iam-local-recovery`, PRINCIPAL target
+equal to the original primary and mandatory `target.tenantId` equal to its
+home organization. It has no fabricated USER decision. No other action gains
+a SYSTEM/platform exception or a target-tenant field. Its request digest
+contains only sanitized ownership/version metadata. Current IAM producer
+credentials and exact committed-outbox evidence remain mandatory for append;
+later user/session/binding state cannot erase an already committed fact.
+Existing canonical bytes, chain hashing, ServiceIdentity, lookup_service,
+and the seven-column outbox claim stay unchanged.
+
+Backend acceptance for this follow-up extends the existing IAM/Audit and
+authority-process owners. It does not certify the installation consumer:
+
+1. Contract/domain tests reject substituted scope, purpose, generation,
+   binding, password, capability, actor, action and target; private material
+   is absent from ordinary JSON, errors and audit records.
+2. Real PostgreSQL 18 proves restricted local/runtime identities, atomic
+   credential generation/session/outbox changes, original-primary and active
+   unrevoked-binding checks, and no success side effects on every rejection.
+   Equal bootstrap/schema replay never repairs revoked authority.
+3. Concurrent recovery/change/reset/logout/grant/revoke and duplicate intents
+   serialize without lost generations, partial facts, surviving old sessions
+   or privilege resurrection. Both recovery-first and revoke-first outcomes
+   retain their respective committed facts and terminal revoked bindings.
+4. The real one-shot IAM executable is invoked in the existing
+   independent-process gate, followed by normal login/forced change and
+   actual outbox delivery/replay/chain verification. Process restart and
+   retained-state schema upgrade preserve history and replay behavior.
+5. IAM schema/function and Audit closed-action changes are verified by actual
+   schema/readiness checks. The coordinated target is IAM4/Audit3 and release
+   contract revision 4, frozen with the installation owner. This branch's
+   actual complete profile is IAM4/Audit3/PaaS1 plus revision 4; signed
+   installation/CLI integration remains pending in its existing owner.
+   These SQL/runtime checks do not certify a cross-profile release transition
+   or import this branch's PaaS1 profile into Phase 3's PaaS2 composition.
+
+The local backend gates pass on 2026-08-28 with a dedicated PostgreSQL 18
+instance limited to one CPU and 768 MiB, fresh named databases, bounded
+connections and serial heavy gates. Contract, architecture, full-repository
+race/vet, generated schema and Linux builds pass. Actual restricted logins
+reject tables, other functions, role escalation and cross-schema access;
+verification rejects inherited recovery authority and altered function/RLS/
+immutability protections. Ordered real-lock races prove both recovery-first
+and revoke-first outcomes, alongside password/reset/recovery/logout/grant/
+login and duplicate-intent races. Rejection preserves credentials, sessions,
+bindings and success facts; exact replay cannot perform another mutation.
+
+The existing independent-process gate invokes the actual one-shot executable
+with protected files and observes its single purpose-only database connection.
+It proves forced password replacement, exact receipt confirmation after the
+private intent file is removed, conflicting input rejection, historical
+outbox delivery after an Audit outage, action/SYSTEM-filtered platform query,
+and chain/replay behavior after later password change, platform revocation
+and IAM restart. Only the exact committed IAM fact is admitted; other
+producers and substituted targets/correlation are rejected. This is not a
+claim that a Docker transport interruption or signed CLI journal was tested.
+
+The actual fixed `5721b7b` IAM executable creates populated schema-3 state
+before migration: valid and revoked sessions, changed credentials and role
+history. The new executable rejects the unmigrated schema. Production
+provisioning/verification applied twice preserves valid generation-bound
+sessions and old canonical bytes; recovery and restart never revive revoked
+state. The existing `9fd45b0`/`a36cf98` retained-executable, dual-tenant resource,
+Audit HTTP/storage and PaaS database regressions also pass. These results
+certify this IAM/Audit backend boundary only, not a signed cross-profile
+installation upgrade or Phase 3's different composition.
+Fixed implementation `aa345eca5f1ed3921000aa5380d5bfd2aa6d0a50` passes all
+three [independent Verification jobs](https://github.com/xiak/matrix/actions/runs/33153170437),
+including Linux PostgreSQL 18, retained-executable upgrades and the real
+one-shot recovery process alongside the existing authority and node gates.
 
 ### Tenant accounts and subaccounts
 
@@ -175,13 +374,40 @@ Malformed, ambiguous, unknown, disabled, and wrong-password identities do not
 reveal whether a tenant or user exists. There is no public identity-discovery
 or username-only "next step" endpoint.
 
-The exact installer-created administrator may open another tenant account
-with its own primary account and initial password. This capability is bound
-to the bootstrap identity, not to the general `ORGANIZATION_ADMIN` role; it
-cannot be granted through tenant role bindings and grants no read or mutation
-authority over another tenant's PaaS resources. Tenant creation is atomic and
-audited. Public self-registration, payment, organization deletion, impersonation,
-cross-tenant session switching, and host administration are outside this slice.
+A password change preserves only the submitting session derived from the
+effective bearer and revalidated inside the transaction. First-login,
+administrator-reset and original-primary-recovery password changes always
+revoke other sessions: a second temporary-password session must never gain
+normal permissions when another session completes password replacement.
+Ordinary password changes accept `revokeOtherSessions`, defaulting to true;
+explicit false may retain only already valid sessions of that same USER.
+It cannot revive a revoked or old temporary session. The password, effective
+session policy and sanitized Audit fact commit together. Each password change,
+reset or primary recovery advances a per-USER credential generation under the
+same principal lock; login binds the session to the credential generation it
+verified. This generation is a monotonic counter, not a timestamp. Legacy sessions
+without credential-version evidence always fail closed and require a new
+login; transaction timestamps cannot establish which password issued them.
+No migration backfills or retention option may bless these legacy rows.
+Wrong-password and failed transactions leave the password,
+sessions and success facts unchanged. The console calls these login sessions,
+not devices; it does not add device fingerprinting or a device inventory.
+The accepted password/session implementation at `5721b7b` uses IAM3/Audit2/
+PaaS1 and release contract revision 3. Retained-session process gates, the
+populated signed lifecycle in FEAT-005 and the installed-browser journey in
+FEAT-007 pass for that exact complete profile. Neither earlier `2/2/1`
+revision-2 evidence nor this accepted revision-3 installation certifies the
+subsequent local-recovery release profile defined above.
+
+An explicitly bound `PLATFORM_OPERATOR` may open another tenant account with
+its own primary account and initial password, list/read tenant metadata,
+suspend/restore access, and recover that tenant's original primary credentials.
+These are installation-scoped actions, not `ORGANIZATION_ADMIN` privileges or
+an exception for the bootstrap person. Tenant creation is atomic and grants
+only the new primary's protected tenant-administrator binding; it neither
+reruns bootstrap nor grants platform or cross-tenant resource permissions.
+Public self-registration, payment, organization deletion, impersonation and
+cross-tenant session switching are outside this slice.
 
 An organization administrator can list its users and active role bindings,
 create a subaccount with no business permissions by default or an explicitly
@@ -196,7 +422,7 @@ verifier role is never assignable to a user.
 
 Directory reads are bounded and scoped by the current session; pagination
 cannot select another tenant. Current-identity reads expose only the current
-organization, principal, fixed roles, and the bootstrap-bound tenant-opening
+organization, principal, fixed roles, and the platform-role tenant-opening
 capability. No password, hash, session credential, service credential, or host
 binding enters those responses or Audit facts.
 
@@ -226,13 +452,10 @@ payload leakage.
 ### Ingestion and integrity
 
 Audit admits only authenticated service identities and a closed versioned
-event union for IAM and PaaS facts. Every event has source, event ID, tenant,
+event union for IAM, PaaS and Audit facts. Every event has source, event ID,
+exactly one tenant or installation chain scope,
 actor, IAM decision correlation where applicable, fixed action, typed target,
 result, request/content digest, safe correlation IDs, and UTC occurrence time.
-Authority is an exact union: tenant facts carry one `tenantId`, platform facts
-carry one `installationId`, and neither form may contain both. A `ROLE` actor
-also carries its role-session ID and exactly one source user or service
-principal; only a `USER` actor may carry optional access-key lineage.
 There is no arbitrary attributes map, request body, configuration value,
 secret, credential, native provider payload, stack trace, or absolute path.
 
@@ -249,13 +472,89 @@ acceptance identity. All three retain the original IAM decision, actor,
 request digest, and request correlation without endpoint, credential
 reference, machine binding, provider payload, or native error.
 
-`(source, eventId)` is the idempotency identity. Equal canonical replay returns
-the stored result; different canonical content conflicts. A successful ingest
-serializes one per-tenant sequence and stores canonical event bytes,
+`(source, eventId)` is the idempotency identity. After producer proof, equal
+canonical replay returns the stored result; different canonical content
+conflicts. Unproved or changed historical authority is denied before registry
+lookup. A successful ingest serializes one chain sequence and stores canonical event bytes,
 content SHA-256, previous record hash, and a domain-separated record hash. The
 database runtime role cannot update a record, rewrite a sequence, or delete a
 record. Verification recomputes the selected tenant chain from an accepted
 checkpoint and fails on a gap, changed content, or changed predecessor.
+Internal `tenant:` and `installation:` chain keys keep equal raw IDs separate.
+Existing tenant canonical bytes, hashes and cursors remain unchanged. The one
+public `auditv1.CanonicalizeEvent` encoder serves ingestion, replay and proof.
+
+Audit transactions use REPEATABLE READ with one stable snapshot. The SQL
+authority locks the exact event identity before its selected chain head;
+records and registry entries are immutable, and head/record/registry updates
+commit together. Waiting on a concurrently changed head or genesis insertion
+still aborts the old snapshot and retries the whole transaction. Different
+chains do not require serialization through shared index-page predicate
+dependencies. This is not a general change to IAM isolation or permission to
+add mutable cross-chain state without revisiting its concurrency invariant.
+
+Only known rolled-back serialization or deadlock failures are retried
+(PostgreSQL 40001/40P01). The default remains five attempts;
+competing chain writers wait with bounded exponential jitter between attempts
+(5 ms initial minimum, less than 100 ms per scheduled wait). Cancellation ends
+the wait and prevents a new attempt. Authentication, authorization, invalid
+input, replay conflicts, unavailable storage and unknown commit outcomes are
+not transaction-retry signals. Exhaustion still fails closed; this is not a
+throughput guarantee or a retry of external IAM calls.
+
+Audited reads are chain writers, not read-only transactions: a successful
+query or verification must commit its access fact. The use case prepares that
+fact and takes ingestion's event-then-selected-head locks before scanning the
+chain. Only a validated successful read appends it, so the response excludes
+its own access fact and a failed read leaves no partial success record.
+Installation verification uses the same preparation after finding its exact
+immutable probe; a missing probe still returns PENDING without an access fact.
+The other tenant's head is not locked. Five paced attempts, canonical encoding,
+schema/profile, producer proof, SQL/ACL and public contracts stay unchanged;
+the independent HTTP gate still has no client retries.
+
+The existing HTTP/PG gate observes actual lock waits and restricted database
+sessions, not incidental call order. It covers absent-head creation, same-chain
+consecutive sequences, equal-event replay after an old-snapshot retry, changed
+content and cross-scope identity conflicts, and rollback after a real append.
+Head, records, registry and full-chain verification must agree. Three paired
+independent-chain schedules (including equal raw tenant/installation IDs) must
+each succeed in one transaction; this test-only attempt limit does not change
+the production retry budget. Paused query/verification gates prove a complete
+locked prefix excluding their own success fact, selected-head exclusion,
+other-tenant progress, and no success fact on failure. The authority gate
+also checks actual transaction isolation and session_user.
+
+The earlier early-head-lock correction remains fixed at
+`f9ca482df5bde3c8689e9d105f382e178a6abdab` with
+[Verification35054751383](https://github.com/xiak/matrix/actions/runs/35054751383)
+success; it did not prove absence of cross-chain SSI interference. The later
+`b4bf4110efae1f3604d86587feb867579a8cfe50`
+[Verification35165984088](https://github.com/xiak/matrix/actions/runs/35165984088)
+failed authority-runtime and its aggregate check: platform integrity returned
+503, with database 40001 pivot failures. Go, node and authority-storage passed;
+that is not an accepted run. A fresh local process replay passed, so it is not
+claimed to reproduce the CI's exact five-attempt exhaustion. Instead, a real
+PG18 barrier reproduced cross-chain SSI conflicts in all three schedules,
+while the narrowly changed repository passed those schedules plus replay and
+atomicity cases. No SQL, error classification or retry-count change is used
+to turn the failure green. The subsequent fixed correction has its own
+independent acceptance below; it does not relabel the failed run.
+
+On 2026-09-17 the isolated correction (excluding pending AccessKey work)
+passed the real PG18 restricted-role/immutable-history and retained-tenant
+upgrade gates in 7.784s, the strengthened HTTP gate in 4.165s, and independent
+two-IAM/Audit/PaaS processes with both dispatchers in 67.906s. The process
+gate retains installation verification, current revocation, tenant separation,
+actual runtime database identities and historical proof. Its final clean tree
+`3b880a2f65c99bf4f3bc975c4204f6d73a737fb9` also passed whole-repository race/p2
+(including architecture), vet, module verification, byte-stable contract
+generation and Linux amd64 build with Go2/512MiB. GitHub API verified the exact
+fixed `d2b1db475c5c60fd6f7f680f0149935fbb903129` on
+[Verification35170233190](https://github.com/xiak/matrix/actions/runs/35170233190):
+go, node-process, authority-storage, authority-runtime and authority-process
+all completed/success. This proves the isolated correction and its current
+regressions, not pending AccessKey work, a capacity SLO or full IAM/HA acceptance.
 
 Phase 1 retention is `INDEFINITE`: there is no purge, overwrite, truncate, or
 tenant deletion path. Configurable expiry, archive tiers, legal hold, and
@@ -265,21 +564,27 @@ purge path, and backup/recovery remains owned by installation.
 
 ### Query
 
-Audit query requires a user bearer credential and calls IAM for
-`audit.record.read` or `audit.integrity.verify`. The returned tenant is IAM
-authority; a tenant header, query filter, cursor, actor, or record body cannot
-change it. Queries use bounded page sizes, deterministic descending sequence,
-an opaque tenant-bound cursor, and optional bounded time/action/actor filters.
+Tenant Audit query accepts either a current user login credential or an
+AccessKey-signed request only where the Audit authorization profile explicitly
+declares that carrier, then calls IAM for `audit.record.read` or
+`audit.integrity.verify`. The returned tenant is IAM authority; a tenant
+header, query filter, cursor, actor, record body, or signed external target
+cannot change it. Queries use bounded page sizes, deterministic descending
+sequence, an opaque tenant-bound cursor, and optional bounded
+time/action/actor filters. The signed request binds the complete JSON body and
+preserves USER plus accessKeyId in the local access fact; a valid signature
+from another tenant still cannot use the original cursor.
+
+Platform records use `/v1/platform/records:query` and
+`/v1/platform/integrity:verify`, backed by the separate
+`audit.platform-record.read` / `audit.platform-integrity.verify` IAM actions.
+Their installation comes from the current IAM decision, not a query selector;
+platform access does not authorize a tenant chain, and AccessKey is not an
+accepted carrier for either platform route. Tenant and installation
+page/verification responses expose exactly their authorized scope.
 Responses expose the sanitized event, sequence, hashes, ingestion time, and
 retention policy only. Reading or verifying Audit writes a local sanitized
 access record without recursively calling the ingestion API.
-
-Platform query and verification use the separate `/v1/platform` endpoints and
-platform Audit actions. Their installation authority comes only from the
-current IAM decision; they do not turn the tenant console into an authority
-selector. Actor filters are identity filters rather than free-form text: a
-role filter must submit the complete role-session lineage accepted by the
-Audit contract.
 
 ### Fixed installation verification
 
@@ -337,6 +642,293 @@ placeholder and does not claim downstream PaaS success.
 
 ## Incremental acceptance
 
+### Multi-tenant extension target
+
+The accepted Phase 1 evidence below does not accept tenant lifecycle or a
+multi-tenant installation. This extension keeps `iam` as the existing owner;
+it does not introduce an Account service, a second tenant aggregate, or a
+public-cloud IAM platform. Its smallest enterprise outcome is an operator
+opening a tenant, that tenant's administrator managing independently
+credentialed members, and those members using only their authorized tenant
+resources through real IAM, PaaS, Audit, and the existing console.
+
+The application workflows and transactions remain in `identityaccess`, pure
+credential/role rules in `authority`, database enforcement in the existing
+IAM PostgreSQL adapter, and HTTP contracts in `api/iam/v1`. Cross-service
+authorization and Audit ingestion use the existing service-owned HTTP ports;
+no service reads another context's tables. Each security mutation and its
+sanitized fact commit together through the existing IAM outbox.
+
+| Boundary | Required invariant |
+| --- | --- |
+| Resource ownership | `Organization.ID` is `TenantID`. Applications, service installations, quota entitlements, Operations, and tenant Audit records belong to that tenant, not their creator. Disabling a member cannot transfer or delete them. |
+| Membership | A member is a `USER` principal with independent credentials and tenant-local built-in role bindings, not a child tenant. A service identity cannot log in as a user or receive user/platform roles through member management. |
+| Login realm | The pre-authentication realm resolves exactly one immutable organization. `(tenant, loginName)` is unique; the same login name in two tenants is supported. There is no ambiguous cross-tenant fallback, public realm/member discovery, or realm switch inside an existing session. Reuse the console owner's qualified `loginName` namespace rather than add a second realm protocol; any retained unqualified installation login is a lookup rule, not privileged authority. |
+| Business authority | Every protected request reloads current IAM identity and role state. Headers, resource IDs, URLs, bodies, and cursors never replace IAM-derived tenant authority. A platform tenant ID is a management target, never an impersonation selector. |
+| Platform separation | `PLATFORM_OPERATOR` manages tenant lifecycle through explicit platform actions, without generic tenant application, Secret, Audit-read, or terminal access. `ORGANIZATION_ADMIN` manages only its tenant's members and tenant roles and cannot grant a platform role. New-tenant initialization grants only its initial organization administrator; it never calls installation bootstrap. |
+| Service production | A service's installation binding, producer purpose, and permission to target a tenant are separate facts. Multi-tenant ingestion requires a positive IAM-owned target-tenant/installation check as well as the existing closed source/action checks; removing the producer-tenant equality check alone is forbidden. |
+| Suspension | Member or tenant suspension freezes subsequent protected access and new changes, not data or running workloads. Restoration does not regrant revoked roles or resurrect revoked sessions. Accepted durable Operations and outbox deliveries may finish; the extension does not claim cancellation of already accepted work or instantaneous termination of open streams. New requests fail closed during IAM uncertainty. |
+
+Unauthenticated unknown realm, unknown member, disabled tenant/member, and
+wrong-password cases must have the same normalized authentication failure and
+bounded password-verification work. Passwords, temporary credentials, realm
+existence hints, and native errors cannot enter responses, logs, Audit facts,
+or ordinary JSON marshaling. Strict contract validation remains separate from
+authentication failure. The installer, console login, password-change, logout,
+and protected bootstrap-file retirement must use the same realm semantics.
+
+Tenant administrators can create/list/read members, suspend/restore them, and
+grant/revoke the closed tenant roles. Member reads and binding lists are
+bounded and tenant-confined; no admin API exposes credential digests or
+plaintext. Each tenant retains its one primary user's protected administrator
+binding, including during concurrent member and role changes. Delegated
+administrator roles remain revocable; ordinary handoff grants a child user
+daily administration without transferring primary ownership. Credential
+recovery is an explicit, auditable workflow with fresh temporary credentials,
+required password change, and revocation of prior sessions; it is not bootstrap
+replay, a direct SQL repair, or a hidden generic impersonation capability.
+The installation's service-home organization cannot be suspended through
+tenant management, and online tenant recovery cannot recover platform
+credentials or grant platform roles.
+
+Daily administrator handoff is not primary/root ownership transfer. The
+primary user's tenant-administrator binding remains protected; another
+tenant administrator cannot disable or reset that identity through member
+commands. A successor's password change can prove readiness for daily
+administration, but cannot authorize removing primary-account protection.
+Primary credential recovery is an explicit separate workflow, not promotion
+of a child user to account owner. This distinction follows the separate
+root and delegated-administrator boundaries in the
+[AWS root-user documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_root-user.html)
+and [Alibaba RAM administrator documentation](https://www.alibabacloud.com/help/en/ram/create-admin-user).
+Resources remain owned by the existing organization, not the primary person.
+Matrix implements this primary/delegated-administrator boundary without
+including billing, identity-provider, account-ownership transfer or custom
+policy products in the slice.
+
+An unrevoked `PLATFORM_OPERATOR` binding also protects its user's credentials
+from ordinary tenant member status/password commands, even if that user is
+already disabled. Platform grants and credential changes serialize on the
+same principal; a platform grantee must have completed initial/reset password
+change. Tenant administration cannot become platform credential takeover.
+Platform recovery remains the installation owner's separate lifecycle.
+
+The platform lifecycle slice extends the existing account command owner:
+
+| HTTP route | IAM action | Target |
+| --- | --- | --- |
+| `POST /v1/organizations` | `iam.organization.create` | New organization ID |
+| `GET /v1/organizations` | `iam.organization.read` | Organization collection `organizations` |
+| `GET /v1/organizations/{organizationId}` | `iam.organization.read` | Exact organization ID |
+| `POST /v1/organizations/{organizationId}:set-status` | `iam.organization.set-status` | Exact organization ID |
+| `POST /v1/organizations/{organizationId}:recover-administrator` | `iam.organization-administrator.recover` | Original primary USER ID, checked inside the named tenant |
+
+The URL is a platform command's target, never the caller's tenant. Status and
+recovery requests require the current organization's `resourceVersion`;
+recovery additionally names its exact `principalId` and a new temporary
+password. The response is the existing non-secret `OrganizationAccount`.
+Stale versions and redundant status transitions conflict without changing data;
+concurrent status/recovery commands cannot both consume the same version.
+Recovery preserves primary ID/login and tenant ownership, enables that USER,
+restores only its protected `ORGANIZATION_ADMIN` binding if absent, forces a
+password change and revokes all of its old sessions. It does not enable a
+suspended tenant. A child, service identity, other tenant's primary, or any
+primary with an unrevoked platform binding is refused under the same principal
+lock used for platform grants. This online workflow cannot recover the
+installation operator; that remains the offline lifecycle boundary.
+
+Suspension revokes every active tenant session and freezes subsequent access
+and command admission. Restoration does not revive any session or revoked
+binding. The sealed service-home organization cannot be suspended, preserving
+normal current-credential checks for its producers and operators. Neither
+command mutates PaaS resources, quota, accepted Operations or existing
+workloads. Work admitted before suspension may finish through its existing
+worker/outbox; in-flight requests are not retrospectively canceled. This is
+next-request revocation, not an implemented real-time long-connection kill.
+
+New lifecycle events are `iam.tenant.created`, `iam.tenant.disabled`,
+`iam.tenant.enabled` and `iam.tenant-administrator.recovered` in the installation
+chain. The first three target the real organization ID; recovery targets the
+original primary USER and requires `target.tenantId`. That target field is
+only a resource namespace and is forbidden on every other action. It cannot
+change chain, query or role scope. Existing `iam.organization.created` facts
+remain tenant-scoped with unchanged canonical bytes and hashes; neither
+migration nor replay reclassifies them. Each successful lifecycle mutation
+and its sanitized fact commit atomically with the current platform decision.
+
+IAM outbox storage remains owned by the producing organization. The worker's
+claim keeps its original six columns and appends `installation_id` from that
+physical owner's sealed bootstrap receipt, never from the event. Tenant facts
+must still match their storage owner; installation facts must match that seal.
+Completion and fencing use the claimed row identity, not a chain selector.
+Readiness and migration verification check the exact result-column contract;
+malformed scope is retained as a dead letter before delivery. Sharing schema
+version numbers is not an N-1 dispatcher or release
+compatibility claim. The release owner's `contractRevision` must also bind
+this result shape before a populated upgrade or rollback can be accepted.
+
+Installation-scoped Audit partitioning remains the FEAT-008 owner's shared
+implementation. Tenant lifecycle facts use that agreed platform scope;
+tenant member/role/session facts stay in the tenant chain. The extension must
+preserve existing canonical bytes, `(source,eventId)` replay classification,
+immutable records, sequence/hash chains, and delayed outbox delivery after a
+tenant is suspended. Historical accepted facts are not reauthorized as new
+tenant mutations when replayed. Installation identity alone must not permit
+forging another installation's tenant or inventing a tenant.
+
+The producer proof extends the one existing `/v1/audit-producer:resolve`
+endpoint. Its input is the exact closed Audit event, not an independently
+selected tenant/source/purpose. Its output binds the current producer,
+validated tenant-or-installation scope, and the existing canonical event
+content digest to this append only. It is never cached as a permit or exposed
+as user resource/read authority. IAM-source facts must exactly match IAM's
+own committed outbox document, including denied decisions, bootstrap,
+session, and password facts that have no allowed business decision.
+
+The existing IAM `identityaccess` use-case boundary owns `audit_producer.go`:
+historical cross-context evidence is separate from current identity-domain
+evaluation. Its PostgreSQL adapter reads only IAM's own committed records.
+`api/iam/v1` references the public Audit event and its generated schema in
+one direction; it does not copy the event schema or import Audit internals.
+The IAM schema/readiness contract requires this proof boundary; Audit's independent
+partition schema remains version 2, while PaaS remains at its own version.
+These numbers do not constitute a release compatibility or downgrade claim.
+
+For PaaS/Audit sources, an immutable original decision proves historical
+authority, actor, action, request, and scope. The event and decision must have
+the same actor and request correlation; the current producer purpose and
+installation must match the source and original authority. The mapping is
+closed, with no action-prefix fallback:
+
+| Audit event | Original IAM decision | Resource constraint |
+| --- | --- | --- |
+| `paas.application.created` | `paas.application.create` | `APPLICATION`, `collection` |
+| `paas.configuration.created` | `paas.configuration.create` | `CONFIGURATION`, `collection` |
+| `paas.configuration-revision.created` | `paas.configuration-revision.create` | `CONFIGURATION_REVISION`, `collection` |
+| `paas.application-revision.created` | `paas.application-revision.create` | `APPLICATION_REVISION`, `collection` |
+| `paas.deployment.created` | `paas.deployment.create` | `DEPLOYMENT`, `collection` |
+| `paas.deployment.updated` | `paas.deployment.update` | `DEPLOYMENT`, exact event target ID |
+| `paas.deployment.stopped` | `paas.deployment.stop` | `DEPLOYMENT`, exact event target ID |
+| `paas.deployment.rolled-back` | `paas.deployment.rollback` | `DEPLOYMENT`, exact event target ID |
+| `paas.execution-pool.created` | `paas.execution-pool.create` | `EXECUTION_POOL`, actual requested target ID; installation scope |
+| `paas.execution-target.registered` | `paas.execution-target.register` | `EXECUTION_TARGET`, actual requested target ID; installation scope |
+| `managedservice.quota-entitlement.activated` | `managedservice.quota-entitlement.activate` | `QUOTA_ENTITLEMENT`, `collection` |
+| `managedservice.service-installation.created` | `managedservice.service-installation.create` | `SERVICE_INSTALLATION`, `collection` |
+| `managedservice.service-installation.ready` | Original `managedservice.service-installation.create` | Retained create decision; the producing worker/outbox owns final target/Operation correlation |
+| `audit.records.read` | `audit.record.read` | `AUDIT_RECORD`, `records` |
+| `audit.integrity.verified` | `audit.integrity.verify` | `AUDIT_CHAIN`, `chain` |
+| `audit.platform-records.read` | `audit.platform-record.read` | `AUDIT_RECORD`, `records`; installation scope |
+| `audit.platform-integrity.verified` | `audit.platform-integrity.verify` | `AUDIT_CHAIN`, `chain`; installation scope |
+
+The existing fixed installation verifier is a separate closed exception:
+`installation.verify` must name the sealed installation and its original
+verifier service actor, not any service principal. Its PaaS facts are limited
+to fixed-probe application/configuration/revision creation and Deployment
+create/update; its Audit integrity fact targets `installation-verification`.
+It cannot authorize managed-service quota/purchase, arbitrary user resource
+mutations, another tenant, or another installation. The fixed-probe owner
+continues to enforce its exact process-owned resources and payloads. IAM proves
+the sealed verifier, original installation decision, closed action and fixed
+24-hex probe namespace, not the release/artifact-derived exact probe payload.
+
+An original collection-create decision does not contain the final resource
+ID, Operation ID, or business request digest. This proof therefore does not
+claim independent proof of a specific committed business payload: the source
+context's existing transaction/outbox still owns that fact. No generic
+receipt framework or cross-service payload lookup is added. Negative gates
+must substitute tenant/installation, actor, decision, request, action, exact
+resource target, event digest, and producer purpose independently; absent or
+uncertain evidence fails closed. Historical user/session/role revocation or
+tenant suspension cannot invalidate a previously committed fact, while the
+producer credential itself must still be current and effective. Canonical
+encoding/hash computation has one public Audit contract owner, never a copy
+inside IAM or an import of Audit's internal implementation.
+
+Tenant deletion/data destruction, billing, organization trees, custom roles or
+policy DSL, SSO/multiple identity providers, and cross-organization people are
+excluded. Host observation, execution-pool/target implementation, platform
+Operations, terminals, and general installation Audit are not reimplemented
+here. No real-time stream revocation or public-cloud isolation claim is made.
+
+### Multi-tenant vertical gates
+
+Existing owners are extended rather than adding a parallel test framework.
+Contract/unit/architecture/security checks precede each focused PostgreSQL
+gate; the existing independent authority-process gate proves cross-service
+behavior at each backend milestone, followed by the console and offline
+lifecycle gates where their contracts change.
+
+1. **Tenant opening and authentication.** A real platform operator creates two
+   independent tenants and their initial administrators without rerunning
+   bootstrap or gaining tenant roles. Platform list/detail and suspend/restore
+   work; tenant administrators and ordinary members cannot invoke them.
+   Both tenants contain an administrator and ordinary member with matching
+   login names. Correct realm/password login, initial password change, logout,
+   bad/unknown/disabled realm/member failures, and unavailable IAM are proven
+   through real HTTP. Tenant suspension affects the next protected request
+   across IAM, PaaS, and Audit. The installation authority/service credentials
+   cannot be accidentally disabled by suspending an ordinary tenant.
+2. **Member and administrator lifecycle.** In each tenant, the administrator
+   lists/reads/creates/suspends/restores members and grants/revokes permitted
+   built-in roles. Next-request member, role, session, password-reset, and
+   tenant revocation behavior is tested. Cross-tenant member/binding/session
+   IDs, cursor reuse, service-principal substitution, platform self-grant,
+   revoked-binding replay, and concurrent attempts to remove the primary
+   administrator fail safely. Daily child-administrator handoff and explicit
+   primary credential recovery preserve primary identity, never promote a
+   child to root, and produce correlated sanitized facts. An unrevoked platform
+   binding protects even a disabled user's credentials; concurrent platform
+   grant versus tenant password reset/status changes cannot permit takeover.
+   Two initial/reset-password sessions cannot both become privileged after one
+   changes the password. Ordinary password changes retain the verified current
+   session and default to revoking others; explicit false retains only valid
+   same-user sessions, never revoked or old temporary ones. A later platform
+   grant and schema replay/restart cannot promote an invalid old session.
+   Concurrent change/reset/recover/logout must not preserve a revoked session;
+   a concurrent old-password login cannot evade required other-session
+   revocation. Omitted, explicit true/false and forced-change options require
+   separate gates, including current-session substitution denial.
+3. **Resource and Audit isolation.** Both tenants create/read their own
+   applications, database/service installations, quota entitlements, and
+   Operations. Cross-tenant resource IDs, filters, headers, bodies, cursors,
+   and roles never expose or mutate the other tenant. Disabling a creator or
+   tenant preserves tenant ownership and existing workloads. Separately
+   running IAM, Audit, PaaS, and dispatchers deliver each accepted mutation's
+   tenant/actor/decision correlation through real PG18. Delayed delivery,
+   exact replay, changed replay, unknown/wrong-installation tenant, wrong
+   producer purpose, and IAM outage are covered without weakening immutable
+   Audit chains or allowing platform operators to read tenant data.
+   Shared application/configuration IDs and idempotency keys remain
+   tenant-local. A configuration or revision cannot reference another tenant's
+   application or configuration; rejected references leave no resource,
+   Operation or accepted outbox fact. Distinct configuration values and their
+   Operations are read only through the corresponding tenant session.
+4. **Restart, single-tenant upgrade, and rollback.** The existing offline
+   lifecycle owner upgrades an actual populated single-tenant installation,
+   not only a fresh schema. Credentials, resources, Audit chains, and revoked
+   identities/roles/sessions survive equal bootstrap and migration replay plus
+   process restart. A verified rollback either preserves the supported
+   contract or explicitly refuses an unsafe downgrade before modifying data;
+   it must never revive credentials, discard a second tenant, or rewrite Audit
+   history. The release topology's realm-aware clients must work through
+   APISIX after upgrade and protected-backup recovery.
+5. **Operable console.** Reuse the accepted control-plane components and
+   navigation. In this task's isolated environment, a real browser opens a
+   tenant as platform operator, manages members as tenant administrator,
+   logs in as members in both realms, and sees only permitted resources.
+   Reload/logout and forbidden/stale-session responses are exercised; a mock,
+   empty screen, health response, or component test does not accept this gate.
+
+At baseline `9fd45b0`, login accepts no realm and `iam.login_index` is globally
+keyed by login name; there are no tenant opening/status or member-query/status
+HTTP workflows. Audit ingestion confines a producer to its home organization.
+The existing process gate proves a single bootstrap tenant plus isolation
+attacks, not two independently provisioned tenants. These are gaps, not
+accepted multi-tenant behavior. The existing console owner's overlapping
+tenant/account work and the installation Audit owner's shared contracts must
+have explicit implementation ownership and verified fixed commits before
+integration; uncommitted work is not a donor or acceptance evidence.
+
 ### Gate A: contracts, domain, and database authority
 
 1. Strict Go/OpenAPI examples cover every request/response and reject unknown,
@@ -383,45 +975,206 @@ tests pass.
 
 ## Implementation evidence
 
-The Phase 2 tenant-account extension is implemented but not release-accepted.
-On 2026-08-27 its generated contracts, full repository unit/architecture tests,
-vet, and IAM/Audit race suites passed. The IAM HTTP gate on real PostgreSQL 18
-proves two accounts with repeated child names, ID/alias login, old-alias
-reservation, concurrent alias acquisition, bounded directories, explicit
-initial grants, protected primary identities, tenant confinement, role
-revocation, disable/re-enable, all-session password reset, and populated-schema
-replay. A fresh database repeat passed with the race detector enabled.
+The isolated `feat/iam-xxx` integration adapts fixed source `6a0f417` onto
+`9fd45b0`, retaining the accepted platform-role boundary. It does not import
+another Phase's checkpoint, moving branch, or acceptance status. The existing
+action catalog remains in `000001`; the distinct account storage slice is
+`000003`. User creation cannot attach `PLATFORM_OPERATOR`; explicit platform
+binding commands keep their separate authority. The console can read that
+role without presenting it as an assignable tenant role.
 
-The Audit HTTP and dual-schema PostgreSQL gates passed, including all four new
-account actions, tenant-bound filters and cursors, chain integrity, runtime
-privileges, and immutable records. The independent IAM/PaaS/Audit process gate
-now creates the second tenant through HTTP rather than direct-table fixtures:
-its child creates a PaaS resource, both outboxes deliver to that tenant, the
-bootstrap owner cannot read the resource or its audit, and the second tenant's
-chain verifies. User and verifier credentials cannot become audit producers;
-the producer contract verifies registered target organizations through IAM.
+On 2026-08-27 this integrated branch passed fresh PostgreSQL 18 IAM HTTP and
+Audit HTTP race gates, the dual-schema privilege/immutable-record gate, and
+the independent IAM/Audit/PaaS plus two dispatcher process gate. These use a
+task-owned database server, random loopback ports, and bounded concurrency;
+no shared installation was changed. The IAM gate exercises repeated child
+names, qualified login, alias competition/reservation, bounded directories,
+explicit tenant grants, immediate role/session revocation, password reset,
+and populated-schema replay. The process gate opens a second tenant through
+HTTP, creates its PaaS resource, delivers both outboxes, verifies its chain,
+and rejects cross-tenant resource, binding, and cursor access. The platform
+grant/revoke/self-grant-denial and equal-bootstrap restart regression remains
+in the same gate. Frontend type/lint/architecture/style checks, 52 tests, a
+two-worker production build, and all 59 embedded files' export equality pass.
+Full-repository tests and vet, IAM/Audit contract and service race tests,
+stable contract generation, and Linux amd64 IAM/Audit/PaaS/UI builds also pass.
 
-The control-plane console now exposes Audit as an independent product rather
-than an IAM submenu. Its tenant-scoped record directory uses only the contract's
-bounded time, action, actor, page-size, and opaque-cursor inputs; it has no
-tenant selector or unsupported full-text search. The LIVE tenant adapter calls
-only the accepted bearer-protected tenant endpoints and rejects an installation
-response. Its closed decoder accepts exactly one response authority, validates
-all published actor lineages and target kinds, and rejects unknown nested
-identity fields. The query form asks for the additional role-session source or
-optional user access key only when that actor type requires it. Record evidence
-and explicit bounded chain verification remain in the content region and
-preserve the shared shell while data loads. LIVE mode never substitutes preview
-data; the retained MOCK adapter is visibly identified, includes role-session
-and access-key examples, and rejects cursor or sequence ranges outside its
-fixture chain. Desktop and 390-pixel responsive browser checks passed, as did
-the full frontend type, lint, architecture, theme-contrast, behavior,
-production-export, and Go embed gates.
+The primary/platform credential-protection increment also passed the fresh
+PG18 IAM HTTP race gate, including a plain tenant administrator racing a
+platform grant against password reset or member suspension, and rejecting
+reset/enable of a pre-existing disabled platform user. Initial/reset-password
+users cannot receive a platform binding until they change that password.
+The independent five-process regression, focused IAM/contracts/architecture
+tests, and vet pass. Primary-member and primary-role protection remain intact;
+no online platform recovery or primary-ownership transfer was introduced.
 
-These results do not replace Gate C. The account extension has not yet run the
-signed, network-disabled install/upgrade/rollback/backup/recovery journey or
-been applied to the user's existing installation. The prior accepted
-foundation evidence below covers only its named source revisions.
+The historical-proof increment adapts the public installation contract from fixed source
+`6401e9602d2a5313cdc31f38363b86f404505894`, retaining the account integration
+and the `686efca` credential-protection rollback point. This branch's own
+fresh PG18 gates pass for IAM/Audit HTTP, separated database privileges,
+immutable records, and all five independent authority/dispatcher processes.
+The resolve endpoint now accepts only the event-bound request and verifies
+the historical evidence specified above. Real HTTP tests reject independent
+tenant selectors, substituted actor/decision/request/correlation/scope and
+wrong producer purpose; exact IAM facts reject any content change. Historical
+facts still resolve after the original user logs out and is disabled. The
+process gate verifies both real tenant outboxes, the fixed verifier, Audit
+outage/restart, equal replay, changed-authority denial, changed-business-payload
+replay conflict, and current producer credential revocation. Unit gates cover
+every closed action mapping and the explicitly unproved create payload.
+It also passed [independent CI](https://github.com/xiak/matrix/actions/runs/33054487149)
+at `26f3569269ba6e8bf3ac55b3c596c55590e1144a`.
+
+The existing process-test owner builds and runs the actual IAM executables
+from fixed `9fd45b0` and `a36cf9817f522549b995ea9c1f0d873499b4fe62` against
+their original single-tenant and multi-tenant schemas. HTTP creates and changes
+credentials, revokes a role/session and the platform binding, then the current
+schema is applied twice and the new executable starts and restarts. Primary
+identity, changed passwords, qualified child login, revocations and original
+IAM facts are retained; the new binary rejects the unmigrated old schema
+before bootstrap. The independent Audit upgrade gate retains original tenant
+documents, canonical bytes and hashes from `9fd45b0`, keeps identical raw tenant
+and installation IDs in separate chains, and rejects immutable-record writes.
+Every old active session lacks credential-generation evidence and must log in
+again; neither its issuance time nor explicit retention blesses it. New
+generation-bound sessions survive explicit false, migration replay and process
+restart without reviving revoked sessions. IAM readiness is 3 and Audit is 2;
+these SQL migration checks do not authorize a cross-profile signed release
+transition or historical-binary rollback.
+
+The platform lifecycle increment passes this branch's real PG18 IAM HTTP,
+Audit HTTP, separated-schema and retained-record upgrade gates. A non-primary
+user with only an explicit platform role opens a tenant; tenant administrators
+and ordinary members cannot use platform metadata or lifecycle commands.
+Wrong versions, non-primary users, foreign-tenant targets and even a disabled
+platform-bound primary leave credentials, sessions, bindings and success facts
+unchanged. Same-version status/recovery races commit exactly one transition.
+Recovery can repair a legacy disabled primary's missing active tenant-admin
+binding without reviving its old revoked binding or transferring ownership.
+The worker gate completes both tenant and installation claims and rejects
+forged scopes into owner-bound dead letters; every Audit action is exercised
+through both append and filtered query.
+Full-repository unit/architecture tests and vet, IAM/Audit contract and service
+race tests, stable generation and Linux amd64 builds also pass.
+
+The independent five-process gate opens the second tenant over HTTP, admits a
+real PaaS mutation during an Audit outage, then suspends the tenant. Both
+outboxes deliver after Audit returns while old IAM/PaaS/Audit sessions remain
+denied. Original-primary recovery, equal-bootstrap IAM restart and explicit
+tenant restoration preserve forced password change and old-session revocation.
+Disabling the resource creator changes neither the application document nor
+the accepted Operation's tenant and original actor. All four lifecycle facts
+arrive in the installation chain; tenant audit bytes, replay and verification
+remain separate. This gate does not run a workload executor and therefore does
+not by itself prove continued execution of a live container.
+
+Process database identity must be proved independently of successful HTTP
+flows. The original test DSN helper changed a parsed pgx config and then used
+`ConnString()`, which returned the original migration-admin URL. Those runs
+do not establish least-privilege executable logins or database tenant
+isolation. This does not invalidate the separate adapter attack gates that
+connect directly with the modified configuration. The corrected helper
+constructs an explicit runtime URL, removes query credential overrides and
+bounds each process pool to two connections. Its default, database-free gate
+checks the user/password/address round trip. The real process gate checks
+`session_user` and `current_user` with that DSN and separately inspects every
+running binary's `pg_stat_activity` login, connection bound, and absence of
+superuser/RLS-bypass privileges; the identity probe cannot satisfy the running
+process check. No production diagnostic endpoint is introduced.
+On 2026-08-27, this branch passed the corrected PG18 race gate for all five
+processes and for the actual fixed `9fd45b0` IAM executable's populated
+upgrade/restart. Other Phase branches must adapt and rerun their own gates;
+these results do not certify their binaries.
+The `cf003e4` correction is retained in the console/runtime milestone
+`b66d77db0499b227f42b3b14d1869329aabcca30`, which passes all three
+[independent CI jobs](https://github.com/xiak/matrix/actions/runs/33065779664).
+
+The resource-isolation increment in the same gate uses two actual tenant
+sessions with matching child login names, idempotency keys and database
+resource IDs. Each tenant independently activates quota and admits two
+database services; equal replay keeps its own quota/Operation, changed replay
+conflicts, and over-quota admission leaves no reservation. Foreign quota,
+service and Operation IDs, caller tenant headers/body fields and unsupported
+selectors/cursors cannot select another tenant. A platform-only user has no
+tenant-resource access, a viewer cannot mutate, and role revocation affects
+the next request. Suspension rejects quota/service/Operation reads; recovery,
+restoration and creator disable preserve their ownership, original actor and
+accepted content. Real outboxes deliver one quota fact and two creation facts
+per tenant with the original IAM authority. These are pending service records,
+not claims that a PostgreSQL workload has been provisioned.
+
+The same real-process gate also creates applications, configurations and
+configuration revisions with matching IDs and idempotency keys in both
+tenants. Equal replay preserves the local Operation; changed replay conflicts.
+Distinct configuration values survive spoofed tenant/subject headers and URL
+selectors without crossing tenants. Foreign application/configuration
+references leave no resource, Operation or accepted outbox fact. Each
+Operation remains readable only in its tenant; platform-only and revoked
+roles cannot read or mutate these resources. Every delivered creation fact
+joins its original tenant, actor, IAM decision, target and Operation exactly
+once, without configuration values entering Audit. The bounded PG18
+five-process race gate passes with these checks on 2026-08-27.
+
+The task-local real-runtime gate on 2026-08-27 additionally runs the production
+PaaS executor with the independent IAM/Audit/PaaS/UI processes, both dispatchers
+and APISIX. Separate runtime database logins have one or two actual connections
+and neither superuser nor RLS-bypass privileges. Browser-created PostgreSQL 18
+workloads use the fixed image, at most two running instances, and verified
+limits of 0.5 CPU and 1 GiB each. An initial infrastructure failure remains a
+real `FAILED` Operation and releases its reserved quota; it is not rewritten
+as a successful installation. Docker's exhausted default address pools are
+worked around only with a task-owned explicit /28 network for the actual
+generated Compose project, without changing global configuration or removing
+another task's network.
+
+Before starting the executor for the replacement request, the gate checks
+that the tenant and original creator are both disabled and the accepted
+Operation is still pending. The normal worker then provisions the database
+and delivers its `managedservice.service-installation.ready` fact with the
+original actor and IAM decision, while the tenant remains paused. Pausing the
+other tenant preserves its already-running database and inserted row. Both
+database rows, container identities and start times survive the tenant pauses
+and an equal-bootstrap IAM process restart; disabled access is not revived.
+Explicit restoration does not change resource ownership or resurrect old
+sessions. Fresh public HTTP sessions reject foreign resource, Operation,
+quota and audit-cursor access, keep platform and tenant audit reads separate,
+verify both tenant chains and the installation chain completely, and replay
+the historical ready fact as an exact duplicate. These live-engine observations
+are task-local evidence, not an assertion that the pending-record CI gate runs
+a workload executor.
+
+The password-session increment passes this branch's fresh PostgreSQL 18 race
+gates on 2026-08-28: forced initial/reset/recovery changes, ordinary omitted,
+true and false choices, invalid selectors, atomic failure, later platform
+grant, and concurrent change/change, reset, recovery, logout and old-password
+login. Credential generation advances exactly once per successful change;
+legacy NULL sessions remain denied after both actual old-binary upgrades.
+The independent five-process regression retains actual restricted database
+logins, dual-tenant resource/Operation isolation, lifecycle and historical
+outbox proofs. The Audit HTTP, separated-schema and retained canonical/hash
+gates also pass. Full-repository unit/architecture/race and vet, strict contract
+generation, dependency verification and Linux amd64 builds pass. The native
+Linux release boundary preserves published v1 authentication and rejects
+different complete profiles before effects, including the prior `2/2/1`
+revision 2. Fixed implementation
+`5721b7b1a985f25c9730ddb9229a51f7f6c3b63a` passes all three
+[independent Verification jobs](https://github.com/xiak/matrix/actions/runs/33138242923).
+
+On 2026-08-28 the same fixed source passes the populated signed revision-3
+install, A/B upgrade, failed-candidate rollback, data-preserving rollback,
+selected-backup recovery and owned local-engine restart gates in
+[FEAT-005](FEAT-005-offline-platform-lifecycle.md). The installed browser then
+passes the dual-tenant password/session and real database journey in
+[FEAT-007](FEAT-007-control-plane-console.md), including measured 360-pixel
+controls. Together with the earlier lifecycle/resource checks retained by the
+current regressions, these accept this branch's minimum multi-tenant slice.
+The user's deferred keyboard-only usability gate is not counted as passed.
+This does not accept another Phase, main, complete public-cloud IAM, an
+arbitrary historical N-1 binary, or a cross-profile runtime transition.
+The FEAT-005 owner retains the exact signed profile and compatibility limits;
+retained-data SQL migration tests are not a substitute for signed lifecycle
+acceptance, nor permission to upgrade an incompatible published installation.
+Prior foundation evidence below covers only its named source revisions.
 
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
   current-credential-only service identity, fixed Argon2id and
@@ -436,10 +1189,12 @@ foundation evidence below covers only its named source revisions.
   canonical/event disagreement, arbitrary payloads, record hashes, immutable
   update/delete/truncate paths, database session/event/lease time, lease
   recovery, and stale fencing tokens.
-- Gate B was accepted on 2026-08-26 after implementation commit `255b790`.
+- Gate B's initial HTTP-flow evidence dates from implementation `255b790` on
+  2026-08-26. It is not evidence of actual executable database-login isolation;
+  that boundary requires the corrected process gate described above.
   IAM, Audit, the IAM Audit dispatcher, PaaS, and the PaaS Audit dispatcher run
-  as five independent processes with exact file credentials, least-privilege
-  database logins, and HTTP-only authority integration. PaaS readiness binds
+  as five independent processes with exact file service credentials and
+  HTTP-only authority integration. PaaS readiness binds
   its schema and outbox invariants to the live IAM identity of its configured
   PaaS service credential; there is no header, local allow-list, cached permit,
   or in-process Audit fallback.
@@ -477,6 +1232,18 @@ foundation evidence below covers only its named source revisions.
   leases and fencing; clean PostgreSQL 18 gates prove the three new actions,
   their public contracts, source-bound ingestion, transactional correlation,
   and delivery through the existing immutable Audit chain.
+- The Phase 3 IAM extension passes the existing strict contract, role matrix,
+  real PostgreSQL HTTP and database attack gates. The existing independent
+  IAM/Audit/PaaS process gate proves explicit platform grants, next-request
+  revocation, rejected organization-admin self-grant, and no authority
+  resurrection after IAM restart with equal bootstrap. Each tested allowed
+  or denied platform decision joins exactly one delivered immutable IAM Audit
+  fact. These checks do not accept platform-resource mutations or the offline
+  upgrade/recovery path.
+  Source `a757a27` also passes full-repository race/architecture, vet, module
+  verification, stable generation, ten repeated IAM runs, Linux builds and
+  [independent CI](https://github.com/xiak/matrix/actions/runs/33046535740),
+  including the existing real node/collector process regression.
 
 ## Deferred
 
@@ -484,7 +1251,14 @@ Permission-request approval workflows and time-limited grants are not part of
 the current direct-administrator-grant contract. Database engine/data access
 also remains separate from PaaS control-plane authorization.
 
-External identity providers, LDAP, SAML, OIDC, MFA/WebAuthn, SCIM, customer
+Local TOTP MFA is now owned by
+[IAM-009](../../IAM/FEAT-IAM-009-security-governance.md), with the approved
+minimal security-email increment in
+[IAM-012](../../IAM/FEAT-IAM-012-external-integrations.md). These are not
+accepted by the original password-only milestone; their implementation and
+release evidence remain with those owners, not a blanket MFA deferral here.
+
+External identity providers, LDAP, SAML, OIDC, WebAuthn, SCIM, customer
 policy languages, custom roles, multi-organization principals, token signing
 and key rotation, high availability, remote policy decision points,
 configurable Audit deletion/archival/legal hold, cryptographic external

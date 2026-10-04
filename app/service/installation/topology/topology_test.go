@@ -48,7 +48,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	if !ok {
 		t.Fatal("compiled topology has no networks object")
 	}
-	expectedNetworks := map[string]bool{"control": true, "edge": false, "web": true}
+	expectedNetworks := map[string]bool{"control": true, "edge": false, "mail-egress": false, "web": true}
 	actualNetworks := make([]string, 0, len(networks))
 	for name, raw := range networks {
 		network, valid := raw.(map[string]any)
@@ -64,7 +64,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		actualNetworks = append(actualNetworks, name)
 	}
 	slices.Sort(actualNetworks)
-	if !slices.Equal(actualNetworks, []string{"control", "edge", "web"}) {
+	if !slices.Equal(actualNetworks, []string{"control", "edge", "mail-egress", "web"}) {
 		t.Fatalf("compiled networks = %v", actualNetworks)
 	}
 
@@ -73,14 +73,20 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	foundDockerSocket := false
 	foundPostgresData := false
 	foundAPISIXRuntimeBoundary := false
+	emailKeyringMounts := 0
+	securityMailChannelMounts := 0
+	notificationDSNMounts := 0
+	accessAnalysisDSNMounts := 0
 	expectedEntrypoints := map[string]string{
-		"audit":                 "/matrix/bin/matrix-audit",
-		"iam":                   "/matrix/bin/matrix-iam",
-		"iam-audit-dispatcher":  "/matrix/bin/matrix-iam-audit-dispatcher",
-		"paas-api":              "/matrix/bin/matrix-paas",
-		"paas-audit-dispatcher": "/matrix/bin/matrix-paas-audit-dispatcher",
-		"paas-ui":               "/matrix/bin/matrix-paas-ui",
-		"paas-worker":           "/matrix/bin/matrix-paas-worker",
+		"audit":                       "/matrix/bin/matrix-audit",
+		"iam":                         "/matrix/bin/matrix-iam",
+		"iam-access-analysis-worker":  "/matrix/bin/matrix-iam-access-analysis-worker",
+		"iam-audit-dispatcher":        "/matrix/bin/matrix-iam-audit-dispatcher",
+		"iam-notification-dispatcher": "/matrix/bin/matrix-iam-notification-dispatcher",
+		"paas-api":                    "/matrix/bin/matrix-paas",
+		"paas-audit-dispatcher":       "/matrix/bin/matrix-paas-audit-dispatcher",
+		"paas-ui":                     "/matrix/bin/matrix-paas-ui",
+		"paas-worker":                 "/matrix/bin/matrix-paas-worker",
 	}
 	expectedEnvironmentKeys := map[string][]string{
 		"audit": {
@@ -89,13 +95,23 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE",
 		},
 		"iam": {
-			"MATRIX_IAM_BOOTSTRAP_FILE", "MATRIX_IAM_DATABASE_DSN_FILE",
-			"MATRIX_IAM_LISTEN_ADDRESS",
+			"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_BOOTSTRAP_FILE",
+			"MATRIX_IAM_CURSOR_KEY_FILE", "MATRIX_IAM_DATABASE_DSN_FILE",
+			"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE", "MATRIX_IAM_LISTEN_ADDRESS", "MATRIX_IAM_TOTP_KEYRING_FILE",
 		},
 		"iam-audit-dispatcher": {
 			"MATRIX_IAM_AUDIT_CREDENTIAL_FILE", "MATRIX_IAM_AUDIT_DATABASE_DSN_FILE",
 			"MATRIX_IAM_AUDIT_ENDPOINT", "MATRIX_IAM_AUDIT_LISTEN_ADDRESS",
 			"MATRIX_IAM_AUDIT_WORKER_ID",
+		},
+		"iam-access-analysis-worker": {
+			"MATRIX_IAM_ACCESS_ANALYSIS_DATABASE_DSN_FILE", "MATRIX_IAM_ACCESS_ANALYSIS_LISTEN_ADDRESS",
+			"MATRIX_IAM_ACCESS_ANALYSIS_WORKER_ID",
+		},
+		"iam-notification-dispatcher": {
+			"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE", "MATRIX_IAM_NOTIFICATION_DATABASE_DSN_FILE",
+			"MATRIX_IAM_NOTIFICATION_LISTEN_ADDRESS", "MATRIX_IAM_NOTIFICATION_WORKER_ID",
+			"MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE",
 		},
 		"paas-api": {
 			"MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
@@ -121,7 +137,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 	expectedImageComponents := map[string]string{
 		"apisix": "apisix", "audit": "audit", "iam": "iam",
-		"iam-audit-dispatcher": "iam", "paas-api": "paas",
+		"iam-access-analysis-worker": "iam", "iam-audit-dispatcher": "iam", "iam-notification-dispatcher": "iam", "paas-api": "paas",
 		"paas-audit-dispatcher": "paas", "paas-ui": "paas-ui",
 		"paas-worker": "paas",
 	}
@@ -165,6 +181,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			}
 		} else if slices.Contains(actualServiceNetworks, "edge") {
 			t.Fatalf("service %q can join the northbound edge network", name)
+		}
+		if slices.Contains(actualServiceNetworks, "mail-egress") != (name == "iam-notification-dispatcher") {
+			t.Fatalf("service %q crosses the SMTP egress boundary", name)
 		}
 		labels, ok := service["labels"].(map[string]any)
 		if !ok || labels["com.xiak.matrix.managed"] != "true" ||
@@ -298,6 +317,31 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				if strings.Contains(source, "/secrets/") && mount["read_only"] != true {
 					t.Fatalf("service %q secret mount is writable: %#v", name, mount)
 				}
+				if source == path.Join(options.Root, layout.IAMEmailVerificationKeyring) {
+					emailKeyringMounts++
+					if (name != "iam" && name != "iam-notification-dispatcher") ||
+						target != "/run/matrix/iam-email-verification-keyring.json" || mount["read_only"] != true {
+						t.Fatalf("email verification keyring crossed its IAM/notification boundary: %#v", mount)
+					}
+				}
+				if source == path.Join(options.Root, layout.IAMSecurityMailSMTPChannel) {
+					securityMailChannelMounts++
+					if name != "iam-notification-dispatcher" || target != "/run/matrix/iam-security-mail-smtp-channel.json" || mount["read_only"] != true {
+						t.Fatalf("SMTP channel crossed its notification-only boundary: %#v", mount)
+					}
+				}
+				if source == path.Join(options.Root, layout.IAMNotificationWorker) {
+					notificationDSNMounts++
+					if name != "iam-notification-dispatcher" || target != "/run/matrix/iam-notification-worker-dsn" || mount["read_only"] != true {
+						t.Fatalf("notification database identity crossed its worker boundary: %#v", mount)
+					}
+				}
+				if source == path.Join(options.Root, layout.IAMAccessAnalysisWorker) {
+					accessAnalysisDSNMounts++
+					if name != "iam-access-analysis-worker" || target != "/run/matrix/iam-access-analysis-worker-dsn" || mount["read_only"] != true {
+						t.Fatalf("access analysis database identity crossed its worker boundary: %#v", mount)
+					}
+				}
 				if name == "paas-worker" && source == options.Root+"/runtime/executor" {
 					foundExecutorRoot = target == source
 				}
@@ -349,6 +393,10 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			portCount, foundExecutorRoot, foundDockerSocket, foundPostgresData,
 			foundAPISIXRuntimeBoundary,
 		)
+	}
+	if emailKeyringMounts != 2 || securityMailChannelMounts != 1 || notificationDSNMounts != 1 || accessAnalysisDSNMounts != 1 {
+		t.Fatalf("IAM private mount closure: mail-keyring=%d mail-channel=%d mail-dsn=%d analysis-dsn=%d",
+			emailKeyringMounts, securityMailChannelMounts, notificationDSNMounts, accessAnalysisDSNMounts)
 	}
 	encoded := string(result.ComposeJSON)
 	for _, forbidden := range []string{"latest", "secret-value", "dockerfile", "registry"} {
@@ -443,10 +491,8 @@ func topologyManifest() release.Manifest {
 			MinimumCompose: "2.40.0", CommandContract: "v1",
 		},
 		MinimumFreeBytes: 1 << 30,
-		Database: release.DatabaseProfile{
-			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
-		},
-		TopologyDigest: ContractDigest(), Files: files, Images: images,
+		Database:         release.CurrentDatabaseProfile(),
+		TopologyDigest:   ContractDigest(), Files: files, Images: images,
 	}
 }
 

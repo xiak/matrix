@@ -1,9 +1,12 @@
 package managedservicev1
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
+
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
 func TestRequestsRejectNativeAndTenantFieldsAtDecodeBoundary(t *testing.T) {
@@ -57,5 +60,69 @@ func TestQuotaUsageCannotExceedPurchasedCount(t *testing.T) {
 	}
 	if err := ValidateQuotaEntitlement(value); err == nil {
 		t.Fatal("over-consumed quota was accepted")
+	}
+}
+
+func TestServiceRoleBindingContractHasNoAuthoritySelectors(t *testing.T) {
+	template := iamv1.ServiceRoleTemplateReference{
+		ID: "managedservice.installation-reader", Version: 1,
+		ContentDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	request := BindServiceRoleRequest{Template: template}
+	if err := ValidateBindServiceRoleRequest(request); err != nil {
+		t.Fatalf("valid bind request rejected: %v", err)
+	}
+	for _, body := range []string{
+		`{"template":{"id":"managedservice.installation-reader","version":1,"contentDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"accountId":"forged"}`,
+		`{"template":{"id":"managedservice.installation-reader","version":1,"contentDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"roleId":"forged"}`,
+		`{"template":{"id":"managedservice.installation-reader","version":1,"contentDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"installationId":"forged"}`,
+		`{"template":{"id":"managedservice.installation-reader","version":1,"contentDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"purpose":"PAAS"}`,
+	} {
+		var decoded BindServiceRoleRequest
+		if err := DecodeRequest(strings.NewReader(body), &decoded); err == nil {
+			t.Fatalf("authority selector accepted: %s", body)
+		}
+	}
+	now := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
+	receipt := ServiceRoleBindingReceipt{
+		Kind: "ServiceRoleBindingReceipt", ServiceInstallationID: "postgres-primary",
+		BindingID: "binding-one", RoleID: "role-one", Template: template,
+		Status: iamv1.WorkloadRoleBindingActive, ResourceVersion: 1, CreatedAt: now,
+	}
+	if err := ValidateServiceRoleBindingReceipt(receipt); err != nil {
+		t.Fatalf("valid binding receipt rejected: %v", err)
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil || strings.Contains(string(encoded), "accountId") || strings.Contains(string(encoded), "servicePrincipal") {
+		t.Fatalf("receipt leaked authority selector: %s err=%v", encoded, err)
+	}
+	unbind := UnbindServiceRoleRequest{ResourceVersion: 1}
+	if ValidateUnbindServiceRoleRequest(unbind) != nil {
+		t.Fatal("valid unbind request rejected")
+	}
+	for _, body := range []string{
+		`{"resourceVersion":1,"accountId":"forged"}`,
+		`{"resourceVersion":1,"roleId":"forged"}`,
+		`{"resourceVersion":1,"template":{"id":"forged"}}`,
+		`{"resourceVersion":1,"workloadId":"forged"}`,
+	} {
+		var decoded UnbindServiceRoleRequest
+		if err := DecodeRequest(strings.NewReader(body), &decoded); err == nil {
+			t.Fatalf("unbind authority selector accepted: %s", body)
+		}
+	}
+	revokedAt := now.Add(time.Minute)
+	unbinding := ServiceRoleUnbindingReceipt{
+		Kind: "ServiceRoleUnbindingReceipt", ServiceInstallationID: receipt.ServiceInstallationID,
+		BindingID: receipt.BindingID, RoleID: receipt.RoleID, Template: template,
+		Status: iamv1.WorkloadRoleBindingRevoked, ResourceVersion: 2,
+		CreatedAt: now, RevokedAt: revokedAt,
+	}
+	if err := ValidateServiceRoleUnbindingReceipt(unbinding); err != nil {
+		t.Fatalf("valid unbinding receipt rejected: %v", err)
+	}
+	if encoded, err = json.Marshal(unbinding); err != nil || strings.Contains(string(encoded), "accountId") ||
+		strings.Contains(string(encoded), "servicePrincipal") {
+		t.Fatalf("unbinding receipt leaked authority selector: %s err=%v", encoded, err)
 	}
 }

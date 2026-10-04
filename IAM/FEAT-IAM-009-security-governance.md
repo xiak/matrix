@@ -1,0 +1,1522 @@
+# FEAT-IAM-009：登录保护与安全治理
+
+- 状态：S1会话自管理、S2 TOTP MFA/安全通知/恢复、S3密码与共享尝试治理及S4a账号安全报告均已有固定实现和所属段落的真实证据；未完成的LIVE UI或发布组合仍按各段边界保留。S4b当前访问诊断已固定于`ef4483e2`；S4c-a账号级闲置访问分析器已固定于`bbb2f7ee`；S4c-b真实观测扫描和Finding生命周期已固定于`91649497`并通过独立CI；S4c-c显式自动处置后端及其签名恢复组合已由`ed2835db`的独立CI最终确认。009完整LIVE UI与最终发布组合尚未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于整个产品发布可用性。
+- 依赖：003、005、007。
+- Owner：IAM 身份/凭据/会话治理，Audit evidence。
+
+## 需求
+
+| ID | 行为 |
+| --- | --- |
+| IAM-SEC-01 | Account 密码长度/复杂度/历史/到期/失败锁定规则，确定上限和错误文案 |
+| IAM-SEC-02 | 会话列表、当前设备、单设备撤销、其他设备下线、idle/absolute expiry |
+| IAM-SEC-03 | 本地可验的 TOTP MFA 绑定/挑战/解绑、恢复材料、敏感操作 step-up |
+| IAM-SEC-04 | 登录/操作保护、可信来源网络规则、防枚举、速率限制 |
+| IAM-SEC-05 | 闲置 User/Key 处理明确关闭哪项能力，恢复不隐式复活凭据 |
+| IAM-SEC-06 | 权限来源、拒绝 reason/request ID、凭据活跃度、安全报告和下载 |
+| IAM-SEC-07 | 账号恢复与日常凭据管理分界，平台离线恢复不能在线授予 |
+
+## 详细设计
+
+### S1：本人登录会话自管理
+
+最小企业目标是：同一User在两个真实客户端登录，从其中一个有效登录会话查看本人的当前登录会话，准确辨认当前会话，结束另一会话；另一IAM副本在下一次受保护请求立即拒绝被结束的会话，当前会话不受影响，审计及原业务资源保留。这是IAM-SEC-02的首片，不以它替代其他设备一键下线、idle expiry、密码规则、MFA或完整009验收。
+
+仍只有现有`Session`，复用其真实ID、Account/USER归属、credential generation、发行/到期和不可逆撤销状态。不新增Device实体、SessionStore、缓存权威或可换取登录凭据的包装。一个会话不等于一台物理设备；多个浏览器标签页可能共用同一会话，一台设备也可能多次登录。UI中的“当前”仅指本次有效bearer绑定的Session，不能由User-Agent、IP或caller提交的ID判断。没有真实采集的客户端、来源、最近活动或认证强度时不展示推测值，不声称“在线”。
+
+仅当前有效LOGIN_SESSION认证的USER可以管理自己的会话，包括其实际RootIdentity关系所指的原USER；该关系不授予另一账号或平台权限。RoleSession、AccessKey、ServiceIdentity及其他用户均不进入本入口。自管理是类似改密/退出的身份内在能力，不借`iam.session.revoke`为普通User授予管理员跨用户权限，也不伪造USER业务Allow。既有管理员撤销路由及其PDP保持独立。
+
+强制改密的当前有效临时会话允许这组只缩减本人访问面的安全补救，但仍不得访问业务、修改权限或清除forced-change。结束其他会话不改变密码、generation、must-change标志、策略或RootIdentity。NULL/失配generation、已撤销/到期的caller、停用User或暂停Account均失败关闭，不能为自管理“恢复”认证资格。原改密的默认撤销其他、forced强撤其他及锁内保留当前会话语义不变；当前会话的退出仍走既有logout。
+
+#### 封闭入口
+
+下列请求/响应及SQL形状已在S1独立编辑窗口确认，随同一实现切片验证；本节不是运行验收证据。007的固定`644fff09`已完成独立CI及交接，消费者无需等待S1。
+
+| 入口 | 行为与边界 |
+| --- | --- |
+| `GET /v1/auth/sessions?after=...` | 本人当前有效登录会话，固定100项和稳定ID seek；响应`SessionList{apiVersion,kind,accountId,userId,currentSessionId,observedAt,items,nextCursor?}`。Account、User、当前Session均来自bearer；items复用现有Session，不借本片修改其已有wire字段。不接受user/account/session selector、任意排序或页大小 |
+| `POST /v1/auth/sessions/{sessionId}:revoke` | 复用严格`RevokeSessionRequest{requestId}`，目标必须是同Account、同USER的另一登录会话；响应`RevokeOwnSessionResponse{outcome,revocation}`，outcome准确为APPLIED或EQUAL_REPLAY，revocation复用原非秘密Revocation。目标为当前Session时明确冲突，使用既有logout，不生成两套当前退出语义 |
+
+目录不列已撤销、实际已到期或generation不再有效的历史记录；“当前有效会话”只表示认证资格，不代表它具有任何业务权限。历史记录仍在原Session和Audit owner保存，不在此增加管理员目录/回收站。返回的sessionId是资源引用，不是bearer；绝不返回lookup/verification digest、密码hash、credential generation内部证据或可兑换凭据。该目录不证明用户的RoleSession/AccessKey已退出。
+
+items必须是非NULL数组、至多100项、同Account/USER、ID严格递增且无重复；每项均在observedAt时ACTIVE、未撤销且未到期。分页后的items不一定包含currentSessionId，不能据此判断当前会话已消失。只有实际读到第101条时才提供nextCursor，不凭固定页长猜测后续；末页可以因并发失效而变空。
+
+分页复用原opaque cursor和独立安装key，增加封闭的本人Session目录绑定，不创造可由caller指定的通用purpose。每页先重新验证当前身份，再核对安装、Account/USER、当前Session、凭据代际、准确查询与固定页预算；旧游标不能跨用户、账号、登录会话或安全状态使用。继续使用数据库时间，游标不得越过当前会话的有效期。目录不是冻结快照；并发登录/退出与自然到期可改变后续页，不借游标维持已失效的身份或旧权限。
+
+#### 事务、历史与并发
+
+撤销目标的不可变归属必须在锁内验证；仅在事务外查出同USER不够。顺序沿现有Account→USER→凭据→Session；同USER命令共用真实principal屏障，多个Session按稳定ID取锁。当前bearer的真实session/generation、Account/User状态及目标资格在锁内重检；取得锁后以数据库当前时钟重新判断caller和target到期，不能沿用等待前的事务时间。原事实时间与canonical不因此改写。SERIALIZABLE重试重读整个身份，不能保留等待前的旧认证结果。缺失、跨用户、跨账号、Role/Key替换均无效果，也不泄露另一个目标是否存在。
+
+精确重放绑定原USER、实际调用Session、目标Session、requestId和封闭输入承诺，只返回原完成信息，不再次更新状态或补第二个事实。已由其他意图、logout、改密/reset/recover撤销的目标不冒充本命令成功；已到期目标同样不是新的可执行撤销。更换bearer后复用相同requestId不能把原“保留当前、结束另一会话”的意图换成另一次操作。未知回包保留原意图；当前认证资格已经失效时不能凭旧请求ID取得新许可，需正常重新登录并由用户明确发起新意图。
+
+先验证当前caller，再读取其Account/USER下的完成关联。准确完成优先于目标今天的到期状态，EQUAL_REPLAY仍返回原Revocation；它不表示目标今天仍可登录。只有原意图尚未完成时，才按当前目标资格执行新撤销。输入承诺使用本人撤销的封闭目的，包含实际actor Session、目标Session与requestId，不与logout或管理员命令互认。保留原Session的日常改密不把其旧游标变有效；仍有效的同一Session查询自己的原完成只读取历史，不重做副作用。
+
+沿用`iam.session.revoked`的原租户事实含义，真实USER为actor、被结束的Session为target；自管理不填写伪造iamDecisionId。状态、不可变输入/完成关联及outbox必须同事务，旧canonical/hash和管理员事实保持。原终态和outbox没有原调用Session到请求意图的唯一绑定，不能把旧函数的`applied=false`当成准确重放；原Session SQL owner现以`session_self_revocations`保存仅用于本人撤销另一会话的不可变完成关联。它以Account/USER/requestId唯一，绑定真实caller/target Session、输入承诺、原Revocation与outbox事件，准确约束同USER归属和一个目标的一次完成。它不是可复用许可或第二个Session模型，不新增通用receipt服务。API/worker没有直接表读写权限；真实FK、强制RLS、不可变/禁止truncate及同事务完整性由数据库验证。当前记录、claim、service identity或K2 key证据都不因本设计而改变。
+
+#### SQL形状与所有权
+
+复用`000001_authority`的Session拥有者，不新增迁移目录或平行撤销器。当前`lookup_session(text)`保持原23个输出列的顺序，仅在末尾追加内部`credential_generation bigint`，供本人游标绑定；旧NULL代际行继续不可认证，不回填。新增`list_own_sessions(tenant text,user text,current_session text,after text)`只返回`id/status/issued_at/expires_at`四列，固定按ID取至多101条以生成100项页面，无秘密或caller可选limit。它在同一权威快照中核对当前Session和同User有效代际，适配器复用真实已认证Account/User构造原Session投影。
+
+原`revoke_session(text,text,text,text,jsonb)`已在末尾追加真实`actor_session_id text`，返回仍为`resource_version/revoked_at/applied`。logout、管理员撤销与本人入口均传实际bearer对应的Session；删除旧五参函数并验证不存在，不留未重检当前会话的旁路。管理员分支仍要求原精确Decision且拒绝forced-change，logout仍只结束调用会话；无Decision的本人另一会话分支要求上述精确完成关联。管理员和目标不同User时按稳定ID同时锁定双方principal，再检查当前actor和目标，不能倒置原密码/状态/恢复锁序。旧logout或管理员的已撤销结果不是本人新意图的EQUAL_REPLAY。
+
+本片冻结的源码版本为IAM31/Audit18，对应真实IAM函数/表/ACL/readiness变化。record9/contract4、evidence5、claim7、lookup_service5及旧canonical不变。此片不分配最终release contractRevision、不改发布profile；安装owner在实际消费者组合中另行冻结和验收，源码数字增加不产生升级许可。
+
+结束登录会话不会删除资源、改策略、停应用或撤销独立AccessKey。以该登录会话为来源的RoleSession继续按006现有来源有效性约束关闭，不能另造“同时撤销所有凭据”的伪承诺；已接受Operation、后台任务和长连接是否继续沿原产品边界，不声称实现推送式实时断连。
+
+#### S1验收与交付边界
+
+并发按数据库实际先提交的一方验收，不能只证明某一种偶然调用顺序：
+
+| 交错 | 必须成立的结果 |
+| --- | --- |
+| 同USER的A结束B、B结束A | 首个撤销成功后，后一个命令的caller已无效，不能再结束幸存会话；只有一个本人成功事实 |
+| A结束B与A退出 | 退出先提交则另一命令不能使用失效A；本人撤销先提交则后续正常退出A，两个不同事实各一次 |
+| A结束B与保留其他会话的日常改密 | 改密先提交时以锁内当前代际判定；撤销先提交时B不得随代际推进复活，A仍遵循原保留规则 |
+| A结束B与默认/强制改密、reset、recover | 先结束的目标不冒充新意图成功；当前caller被撤销后旧命令拒绝，无部分完成或成功outbox |
+| A结束B与User/Account停用 | 停用先提交后不能继续使用旧认证快照；撤销先提交的原事实仍可投递，资源/Operation不被删除或终止 |
+| 等待真实锁期间caller或target到期 | caller已到期则无权执行；只有target到期则新意图冲突，不产生撤销或成功事实。独立静默数据库验证原事务未借序列化重试取得新时间 |
+| 提交后回包丢失、重启再重放 | 原有效A只能取回同一完成；变体、换caller或新意图操作已结束目标均不能产生第二次完成 |
+
+- 两Account、每个至少两个USER、同名登录与两个实际IAM副本：目录只含本人，当前标识来自实际bearer，另一会话结束后跨副本新请求拒绝，当前会话继续有效；普通无业务策略的User和forced-change会话均有上述最窄自管理能力，但仍不能访问业务。
+- 真实101条会话的分页、时间到期、错误/跨用户/跨账号/跨Session cursor、伪current/user/account字段、Role/Key/SERVICE凭据与NULL/错误generation全部按当前契约拒绝。不能用字符串形状或mock Session证明归属。
+- 撤销、准确重放、变体/新意图操作已撤销目标；并发相互撤销、logout、三种改密选项、reset、原root/platform恢复及Account/User停用，分别证明双方先提交的状态与失败无部分效果。forced-change的只减权补救不能使旧临时会话升级。
+- 末端outbox失败整笔回滚；真正提交后丢失响应、当前认证随后撤销、重启与schema等值重放不重做原意图。Audit延迟投递保留原事实/归属/hash，不按当前登录资格重写历史。
+- 真实PG18、受限登录/RLS与SQL越权、原unit/architecture/security/进程门禁及精确SHA独立CI归现有owner。UI全部交UX/UI工程师，在固定契约就绪后再接入并独立做浏览器闭环，不由本片替代。
+
+沿用`api/iam/v1`契约/生成测试、`authority/cursor_test.go`、`identityaccess/service_test.go`和`nethttp/handler_test.go`证明封闭输入/响应、凭据分离、游标绑定及用例控制流。真实SQL/RLS、撤销竞争与旧函数消失归既有`integration/http_postgres_test.go`的附件/会话owner；其中锁内真实到期使用独立静默数据库，明确检查没有序列化重试或死锁掩盖原时间检查。跨副本、原TCP故障、Audit失联及重启归`test/authorityprocess/process_e2e_test.go`，不增加平行测试框架。先聚焦再累计回归，不修改现有单项时间、密码成本或规模来取得通过。保留数据验证使用实际固定`644fff09`的IAM30 executable/schema创建身份、正常/forced/已撤销会话，再验证IAM31的精确新形状、原事实和重启；NULL代际只作为明确的负向损坏样本，不伪称该旧程序发行。此片不要求为每个未发布中间schema维持永久升级链，也不证明跨release准入。
+
+S1仅在本分支实施，release contractRevision不提前分配。不变更Phase3的PaaS/Audit查询PEP、edge解析、NorthboundOrigin/APISIX、source release Profile或安装工作，也不要求其等待S1。固定`c2fbd9e3`中S1所需会话类型/校验/生成器、IAM PostgreSQL、authentication/management与cursor和本分支固定`644fff09`相同；只核对固定对象，不导入其PaaS6、发布profile或文档。最终交接必须有本片精确SHA、独立CI及真实PG18保留数据/并发证据。
+
+#### S1当前运行证据
+
+2026-09-18在本任务干净Git导出上验证；真实PG18限1CPU/1GiB，Linux Go1.26.5 runner限2CPU/1536MiB、GOMAXPROCS=2，数据库门禁串行`-race -p 1`。不改生产密码成本、最小60秒Session TTL或单项时限。
+
+| 门禁 | 当前结果与范围 |
+| --- | --- |
+| `TestIAMOwnSessionPostgres` | 91.88s通过；本人/跨账号/载体/101项分页、RLS及函数形状、末端失败原子性、22种已控制先后顺序的会话/密码/状态/原root与平台恢复竞争、真实自然到期与历史重放 |
+| `TestIAMOwnSessionExpiryPostgres` | 62.28s通过；两个请求分别在等待真实principal锁期间caller或target到期，原事务无序列化重试/死锁，分别拒绝且无完成/状态/outbox副作用 |
+| `TestIAMRetainedOwnSessionProcessUpgrade` | 10.25s通过；真实`644fff09` IAM30产生正常/forced/已撤销会话，IAM31双次迁移、原六字段bootstrap receipt、NULL代际拒绝、旧canonical/proof、准确本人完成及重启保持 |
+| `TestIndependentIAMAuditAndPaaSProcesses` | 56.63s通过；受限实际数据库登录、两个IAM与Audit/PaaS/dispatcher、提交后真正断开TCP、重启/准确重放、Audit延迟投递/原链、PaaS资源及Operation归属保持 |
+| 既有IAM累计回归 | 同一最终代码另用新数据库，策略权威164.44s、附件/会话竞争105.14s、AccessKey92.43s、账号HTTP142.97s、本地凭据恢复30.20s全部通过，包合计536.266s；保留原密码成本、所有场景和各自时限 |
+| Role/STS累计回归 | `TestIAMRoleAndManagementReferencesPostgres`七个独立数据库全部通过，343.05s；保留原角色写入、承担/退出、发现、管理员会话管理、业务授权、安全竞争和私有引用门禁 |
+| Audit/PaaS累计回归 | 双authority数据库及旧tenant记录保留升级包4.773s、Audit HTTP包2.124s、PaaS数据库包1.900s通过；审计测试遗漏的IAM30断言已替换为实际IAM31，初始化前/后ready状态、受限登录、RLS、历史及租约fence断言保留，没有Audit生产改动 |
+| 既有固定前驱 | 原Role capability、Role authority和Policy三个真实前驱程序门禁分别9.68s/18.42s/22.10s通过，包51.231s；原策略/信任/历史/撤销不被新Session函数形状改写，不构成release兼容许可 |
+| 全仓检查 | Windows Go1.26.3干净导出的全仓race（含architecture）、vet、模块校验、生成文件集合/字节一致、Linux amd64构建通过；不把通用Linux容器缺少真实machine-id导致的旧本机安装adapter失败称为整仓Linux通过 |
+| 精确固定源码独立CI | `3080922f6ae1871f1c351d5ee30f03551fc3c605`的[Verification 35301228478](https://github.com/xiak/matrix/actions/runs/35301228478)，2026-09-18经GitHub API核实精确SHA，go、node-process、authority-storage、authority-runtime、authority-process全部completed/success；两个数据库lane按既有20分钟预算串行，汇总检查未替代实际运行 |
+
+到期门禁有实际反例：仅恢复等待前`transaction_timestamp()`判定的SQL时，已到期caller仍返回200并执行撤销。原多写入矩阵未可靠识别这一错误，已由静默数据库、真实时间及无重试断言替换该到期证明；锁后使用`clock_timestamp()`的最终实现通过。原事实时间和Audit canonical没有重写。
+
+既有附件/会话并发矩阵曾在本机原120秒预算超时，固定`644fff09`在同一限额中也出现120.07s失败。当前代码的CPU采样诊断在原预算100.31s通过，采样主要为Argon2与race检查、该次无CPU限流；这不证明先前超时的全部原因已解决，不降低成本、删场景或延长预算。其后同一最终代码的新数据库累计回归105.14s及上述固定源码独立CI均通过；后继成功不回填旧失败。以上仅S1后端证据，不证明UI、安装/profile兼容、容量/HA或完整009已验收。
+
+### S1b：一键结束本人其他登录会话
+
+本片生产实现固定`159bb302fed89161c4b60afeb4a6f41f9bd99820`，连同一般事务分组及Role准备修正后的累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`已通过本地及五项独立CI，接受IAM-SEC-02的后端批量自助减权切片；不代替S2–S4、UI或完整009。已验证并推送的`3080922f`及受限容量回归`b6f57d01`保留为先前回滚点。Phase3与UX/UI owner均确认本片IAM/Audit公共窗口无冲突；消费者只按固定源对齐，UI仍按其既定优先级独立验收。
+
+唯一新增入口为`POST /v1/auth/sessions:revoke-others`，严格复用`RevokeSessionRequest{requestId}`。当前Account、USER和保留的Session只从真实LOGIN_SESSION bearer取得；原root与forced-change自助减权可用，Role/AccessKey/ServiceIdentity、selector、目标列表和caller提供的当前Session均拒绝。不新增PDP权限或管理员能力。本人逐项撤销、目录和logout保持原契约。
+
+响应`RevokeOtherSessionsResponse`含`apiVersion`、`kind=OtherSessionsRevocation`、`outcome=APPLIED|EQUAL_REPLAY`、`accountId/userId/currentSessionId/requestId`、`revokedCount`和`completedAt`。数量为实际原子终止的会话数，允许零；时间与数量在精确重放时保持原值。响应不返回目标秘密或无界Session数组，也不宣称物理设备、全部凭据或推送式断连。
+
+复用Account→稳定USER→credential→稳定Session锁序及SERIALIZABLE重试；锁后以数据库当前时钟再次检查actor有效性。仅结束同USER、非当前、未撤销、未到期且与当前密码代际一致的登录Session。并发新登录按事务序列化次序解释，不用发行时间猜测其所属意图；一次命令只执行原一致快照中的集合，后继新登录不因原命令重放被终止。密码、generation、must-change、User/Account状态、策略、Key和业务资源均不变。派生Role、已接受Operation与长连接仍沿原拥有者边界。
+
+原单目标`session_self_revocations`仍只证明逐项命令，不能把循环调用或其目标唯一键当成批量完成。原Session SQL owner新增目的限定的`session_other_revocations`完成关系及`session_other_revocation_targets`终态证据关系：完成以Account/USER/requestId唯一，绑定实际actor Session、封闭输入摘要、原时间/数量及单一outbox事件；目标关系绑定同Account/USER的实际Session、终态resourceVersion和完成归属。两者均强制RLS、不可变、不可truncate、受限角色无直接读写权限；FK与延迟完整性校验保证目标终态、准确数量和原事实一致。零目标也有完成和事实，避免网络重试误伤之后的新会话。不新增通用receipt服务、第二Session模型或Session epoch。
+
+先重新认证并锁内验证actor，再读取该目的的原完成；只有相同USER、actor Session和输入承诺返回EQUAL_REPLAY。换caller重用requestId冲突；已失效caller不能通过原完成取得资格。新意图正常观察当时集合。末端写入/超时失败全部回滚，不能返回部分成功；数据库查询与原请求期限不放宽，也不静默截取前100项。
+
+单一新增tenant事实为`iam.session.others-revoked`：source IAM、actor实际USER、target PRINCIPAL且ID等于actor、result SUCCEEDED；不允许decision、operation、Key/Role/SYSTEM actor、installation scope或target.tenantId。事件摘要仅绑定本封闭请求，目标集合和数量由IAM同事务不可变完成证据证明；IAM-source producer仍验证原已提交outbox，后续停用不丢失历史投递。零目标事实表示该意图已完成，不伪称结束了某个不存在的Session。旧事件canonical/hash、lookup_session24、lookup_service5、claim7、record9/contract4及evidence5不变。
+
+新增`iam.revoke_other_sessions(text,text,text,jsonb)`返回`revoked_count bigint/completed_at timestamptz/applied boolean`，仅原API数据库角色可执行；原六参单项函数不变。候选源码IAM32/Audit19反映真实新表/函数和封闭Audit动作；readiness/verify核对形状、ACL和约束，不能只比较数字。产品Profile和发布revision不变，安装组合另验，不授跨版本发布许可。
+
+验收沿既有contract、identityaccess、nethttp、PostgreSQL和authorityprocess owner：两账号/同名User及多真实会话、超过一页的完整集合、当前保留/其他主体不变；零目标/重复/换caller/新登录后重放；forced/root与拒绝载体；并发互相批量撤销、单项/logout/change/reset/recover和账号/成员状态的双向次序；锁内真实到期、末端故障回滚、真正提交后断链及重启/等值schema不重做；受限SQL/RLS/伪造目标和数量/事实拒绝，原Audit链及延迟历史投递。不得把默认无DSN的跳过、mock或单项旧门禁算成本片真实验收。保留数据以本片固定前驱`3080922f`的真实Session及单项完成为起点，不遍历所有未发布schema。UI及完整发布仍独立验收。
+
+#### S1b当前运行证据
+
+2026-09-18，下列本地源码门禁及累计回归已通过；累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`的[Verification35324569376](https://github.com/xiak/matrix/actions/runs/35324569376)也已核对精确SHA及五项全部completed/success。实际日志确认本人Session三项package226.359s、保留数据及独立进程package148.830s均通过；此前失败及累计修正归[011运行约束](./FEAT-IAM-011-acceptance.md#运行约束)，后续通过不回填旧失败。以下本地真实PG18.4固定镜像限1CPU/1GiB/PIDs192，Linux Go1.26.5 runner限2CPU/1536MiB/PIDs256、GOMAXPROCS=2、GOMEMLIMIT=512MiB，串行`-race -p 1`；单项期限与生产密码成本未放宽。所有本地门禁终态成功、数据库无客户端且测试库已逐项释放后，已清理本轮专属临时PG及空网络；未操作其他任务资源。
+
+| 门禁 | 已观察到的结果与范围 |
+| --- | --- |
+| `TestIAMOwnSessionBulkPostgres` | 76.89s；真实101个有效目标、NULL/错误代际排除、当前/其他用户/其他账号保持；零目标与后继新登录的精确重放、末端回滚、强制改密与原root；27组受控交错包含相互批量、单项、退出、三种改密、reset、停用、原root/平台恢复、同意图竞争及并发新登录。私有表/RLS、不可变目标、伪造数量/actor/target/digest/时间/决定/跨账号caller均被实际约束拒绝且无部分事实。 |
+| `TestIAMOwnSessionPostgres` | 69.28s；提取复用的并发门禁仍完整执行原逐项撤销、分页、自然到期、22组安全交错及平台恢复；没有用批量场景替换旧断言。 |
+| `TestIAMOwnSessionExpiryPostgres` | 最终61.83s；四个原事务在等待真实principal锁期间经历相同真实60秒到期：单项caller/target与批量caller到期均拒绝，仍有效caller的批量意图则完成空集，不计入已到期target、不修改Session。准确零目标完成及单一事实保持；无序列化重试或死锁替代锁后时钟证明，期限和最小会话寿命未改。 |
+| `TestIAMRetainedOwnSessionProcessUpgrade` | 17.02s；实际固定`3080922f`的IAM31程序产生正常/forced/已撤销/NULL负向会话及原单项完成，IAM32双次迁移、六字段bootstrap receipt、原会话/附件/凭据和canonical/proof保持；新批量完成在重启后只精确重放，后继登录不被终止。不是跨release准入证明。 |
+| `TestIndependentIAMAuditAndPaaSProcesses` | 59.14s；实际受限登录、两IAM及Audit/PaaS/dispatcher，批量提交后真正丢失TCP回包、重启、当前保留/被结束会话的下一业务请求拒绝；来源用户停用后历史仍投递一次，完整tenant链及应用/Operation归属保持。真实Role凭据不能调用该USER入口。 |
+| Audit与PaaS聚焦回归 | 新闭合事实的双authority/SQL错误actor与目标约束3.56s、旧tenant记录保留0.15s、Audit HTTP1.08s、PaaS数据库0.84s通过。 |
+| IAM累计回归 | 策略存储包153.432s、策略关联/会话96.72s、AccessKey81.11s、IAM HTTP与账号/凭据生命周期125.46s、平台本地凭据恢复26.56s通过；保留原密码成本、场景及各自期限。 |
+| Role累计回归 | 角色管理35.47s、发行71.97s、发现11.34s、会话管理97.50s、业务授权34.50s、私有引用11.24s通过；最终安全交错63.17s，保留原36种并增加批量结束真实Role来源Session的双向次序，另保留交叠组删除。新场景证明当前caller保留、来源登录和Role下一请求均拒绝、先提交决定/事实准确且历史证明继续有效。 |
+| 固定前驱累计保留数据 | 既有实际旧策略程序19.04s、Role能力程序9.71s、Role授权程序18.20s通过。仅证明所属FEAT明确的数据保留边界，不将开发schema序号自动纳入发布兼容。 |
+| 静态及全仓检查 | Windows Go1.26.3干净导出的全仓race/architecture、vet、模块校验、API生成字节一致和Linux amd64构建通过。CI的10个既有Bash代码块、Session测试选择及原限额已核对，不把本机缺少YAML解析器称为解析通过。 |
+
+失败边界保持明确：一轮新负向fixture将JSON字节按simple protocol传成bytea，先得到22P02，未触达期望的完整性约束；已改为真实JSON文本，随后同一攻击矩阵按准确23514/23503通过，未放宽生产校验。一次累计回归的建库准备因旧临时库累积填满本任务256MiB临时盘而中止；当时没有新的门禁在运行，不能计为通过。仅移除该已停止的自有临时实例，后续保持同限额、串行独立建库，并在每项完成且无连接后释放该项库；不提高磁盘/CPU/内存/期限，不操作共享引擎或其他任务资源。
+
+### S2：本地TOTP、认证挑战与恢复
+
+本节包含已交付基础片和正在实施的S2b，拟定HTTP与恢复设计不等于已有运行接口；不预分配发布profile/revision，也不作为S1或007消费者集成前置。最小完整路径是：本人验证密码并绑定真实TOTP认证器，保存一次性恢复材料，之后密码正确仍须完成TOTP才能得到登录Session；丢失认证器时经受限恢复重新绑定，再正常登录。最终还需覆盖RootIdentity、敏感操作再次认证及账号级强制要求，不能用普通User的可选绑定代替整个IAM-SEC-03。
+
+本稿根据2026-09-20确认的设计方向细化，只增加S3所列两个安全配置授权动作的设计，不顺带增加管理员重置他人认证器的权限、客服系统、全局身份、组级安全策略语言、Refresh Token或新身份服务。现有密码恢复权限不扩展为MFA恢复权。UI交UX/UI owner，本文只约束数据、行为和交互结果；不另写一份平行页面设计或路线图。
+
+固定`644fff09`中，Login在密码验证后直接发行Session，凭据目的仅有SESSION/SERVICE/ROLE_SESSION；尚无MFA挑战、因子状态、OTP消费或认证强度证据。现有密码重置、租户root恢复和平台离线恢复都不能因此被解释为MFA恢复。TOTP算法与验证码验证不依赖手机号、微信或外部IdP；用户已选择的首期安全通知通道是邮件，所以实际启用还须满足012的可信接收地址与真实投递前置，不能继续声称完整本片完全不需通知地址。邮件只提供安全通知，不作为MFA因子或恢复授权；内网SMTP/邮箱可以满足私有交付，不要求公有云消息服务。短信、外部风险引擎和Passkey仍按012的前置处理。
+
+#### S2a当前实施边界
+
+用户已要求按本稿继续目标。先在既有`authority`域实现固定TOTP参数的秘密生成/纯校验和恢复码的用途/主体绑定验证，继而冻结独立私有keyring并实现种子认证加密；不开放MFA配置、挑战HTTP入口或改动原LoginResponse，不修改安装、UI、SQL、schema或发布profile。两项security-settings动作仍待完整S2c权限切片，不随本片提前授予。
+
+`totp.go`及其测试拥有认证域的固定参数、严格输入和消费时间窗，不建立新的service、store或通用因子框架。秘密使用原`iamv1.Secret`，生成复用原`CredentialIssuer`的受控熵源；恢复码生成和单向验证继续由现有`credential.go`/测试拥有。参数固定为20字节种子、HMAC-SHA1、6位ASCII码、30秒、当前前后各一步；不增加可由请求选择的算法或窗口。
+
+标准OTP构造采用固定`github.com/pquerna/otp v1.5.0`（上游`5971b1ef1d6652fec2caed37f11e5cacd9249f78`），只调用`hotp.ValidateCustom`的固定SHA1/六位/十进制分支；删除本地HMAC组装、动态截断和数字生成实现，不保留双实现。Go标准库仍是上游HMAC的底层原语；库不负责MATRIX的密钥、认证挑战、共享预算、事务、通知或恢复。原Secret与canonical Base32/ASCII校验先于上游，拒绝大小写归一化、空白裁剪和宽松padding。只对数据库当前时刻的有界三个候选counter求值，检查全部匹配与已消费水位，返回最高未消费匹配；不用本机时钟的布尔TOTP捷径，不把返回true解释为已原子消费。
+
+生产架构门禁只允许IAM authority导入经过复核的`otp`与`otp/hotp`，不为其他业务上下文、Audit域或API开放依赖。签名生命周期门禁使用仓库`test/totpauthenticator`中唯一的软件认证器客户端；它只根据一次性provisioning seed和当前时刻生成标准码，只能由installation的`phase1e2e`消费，不能取得Matrix身份、Session、权限或进入发布镜像。这样既不在installation复制HMAC实现，也不把测试客户端变成生产OTP owner。模块间接带入barcode/QR代码，但本片不调用其URI/图片/Key对象，不将其秘密类型暴露为公开契约；独立向量仍是测试预期，不改为由被测库生成答案。版本与模块checksum固定在go.mod/go.sum，沿现有依赖更新机制维护；采用开源库不是安全审计或“最安全”证明。该纯算法替换不变更SQL、API、材料格式或发布profile，也不开放额外MFA入口。
+
+替换在已推送`07aa5062`之后进行。本地固定参数/RFC4226及6238/独立边界和相邻步碰撞回归通过race，严格输入20秒/2-worker fuzz通过；库的宽松空白/大小写行为没有改变MATRIX输入边界。Go1.26.7进程级工具链完成全仓默认race/architecture、vet、模块校验、122文件API重新生成集合/哈希一致性及Linux amd64构建，未改全局Go。`govulncheck v1.8.0`对实际IAM入口报告0已知可达、0已导入package告警，3项仅依赖module级未调用；这是当次静态分析，不是无漏洞证明。原本机Go1.26.3对同入口报告7项标准库可达公告，不能据纯OTP包扫描无告警掩盖；构建工具链差异已同步安装owner，具体签名包仍须核对自身工具链和验收。
+
+TOTP校验只返回须在原子事务内消费的准确时间步，不持久化消费，不发行身份凭据。调用方未来必须在权威锁下传入数据库时刻和原因子已消费水位，并在同一成功事务推进；`-1`仅表示已证明从未消费，不能用于缺失/未知行。恢复码验证同样只证明持有原主体/批次下的材料，不证明其未消费、恢复资格或当前权限。该基础片的纯函数通过不等于跨副本一次性消费、真实MFA、托管、通知或恢复已验收。
+
+固定`5e185e95c9d474443a26171a5f2616816e53bdba`的[Verification35506581374](https://github.com/xiak/matrix/actions/runs/35506581374)已返回failure：go、node-process、authority-storage成功；authority-runtime在`TestIAMRetainedRoleAuthorityProcessUpgrade`的实际Audit数据库登录/连接上限探针失败，汇总随之失败，尚不能判定具体是连接数、身份或查询错误。随后同一固定生产源码、仅增加脱敏失败计数诊断，在本任务新PG18/Go1.26.7串行race下该实际旧程序保留数据/进程门禁22.52s通过；此结果不能回填独立CI或据此放宽探针，固定对象仍未取得全部独立门禁验收。
+
+本片验收使用RFC4226/6238向量、独立Node标准HMAC生成的边界/相邻碰撞向量、严格输入与秘密输出门禁、正常熵及中断熵，以及既有域/API回归、race/vet/architecture。真实PG、多副本、安装恢复和浏览器门禁归后继完整流程，不能以本片替代。
+
+恢复码内部材料格式固定`mrc1.`加16随机字节的canonical unpadded Base64URL；不是通用bearer类型。单向验证域包含独立目的、封存installation、真实Account/USER、不可变批次/码ID；每段ID沿原严格校验且以NUL分界，秘密使用固定16字节原始值。不同用途、安装、主体、批次或码身份不能互用。该摘要不写入Audit，不可解密回显；只返回验证成功不证明码未消费。
+
+本地聚焦证据：六个TOTP/恢复码行为测试通过race；原authority/API累计race及vet通过；20秒、最多2 worker的TOTP输入fuzz完成83581次执行且无失败。独立Node HMAC向量包括epoch、2038、最大支持日期和910737/910738相邻步的相同码，恢复码SHA256也按独立实现核对；均为公开合成材料，不是用户凭据或真实认证器浏览器验收。秘密仍由原Secret拒绝普通JSON/格式化输出。尚未据此声称材料托管、一次性SQL消费或MFA启用。
+
+2026-09-20本片在干净源码导出、Go1.26.3 Windows/amd64下完成全仓默认`-race -p 2 -count=1`（含architecture）、vet和模块校验，GOMAXPROCS=2/GOMEMLIMIT=512MiB；Linux/amd64构建也通过。未改API生成物、现有SQL或对外运行路径，未启动PG/容器；默认因缺少DSN/运行环境而SKIP的门禁不计为真实运行证据。初始算法固定`ad93b84fa1cbe902b148e62a9d0f0924a5473a98`的[Verification35484114635](https://github.com/xiak/matrix/actions/runs/35484114635)已由GitHub API核实精确SHA和completed/success；它不包含后继材料片，也不证明MFA登录/恢复已实现。
+
+S2a后继材料基础片由`api/iam/v1/totp_wrapping.go`单一拥有私有keyring、每key承诺、keyset摘要和格式1的种子上下文。新增文件是为了独立TOTP材料边界，不能复用007的AccessKey kind/purpose/文件；现有contract测试拥有它的严格输入、秘密脱敏及不进入公开OpenAPI的门禁。两种凭据共享的仅是原uint32BE长度分界原语，移入既有encoding owner并保留原AccessKey context/signature/nonce字节；没有通用keyring、材料provider或第二套Audit canonical。
+
+`authority/totp.go`在已有算法owner增加`SealTOTPSeed/OpenTOTPSeed`：独立HKDF-SHA256目的、AES-256-GCM、标准库生成96位nonce，认证并加密固定20字节种子。上下文还绑定准确bootstrapDigest、Account/USER、不可重用factorId及keyId；格式、key引用、nonce/ciphertext/tag或任一归属改变均拒绝。每factor/key版本只应封装一次，事务重试复用结果，重封装用原行CAS；本片纯函数不替代此后持久生命周期。集合revision/active切换不改旧密文身份，已撤销因子不会因可解密而重新获得认证资格。
+
+本材料片不读取生产文件、不注册keyset、不查询数据库引用、不迁移/轮换真实数据，也不证明备份可恢复、运行副本一致或MFA已开放。后继同快照custody摘要不能拿`TOTPKeysetDigest`代替：后者只证明一套给定材料的内容，前者还必须证明准确备份快照依赖。标准算法参考[Go随机nonce GCM](https://pkg.go.dev/crypto/cipher#NewGCMWithRandomNonce)及[HKDF](https://www.rfc-editor.org/rfc/rfc5869.html)；独立Node标准crypto向量核对原始材料承诺、集合摘要、每记录派生密钥和解密后实际RFC验证码，不以同一实现自算向量作唯一证明。
+
+材料片固定`04041d2d3f7ed55225a5164bc2bc05251d25a6f1`本地门禁（2026-09-20）：新私有codec/承诺/加密互换及既有AccessKey聚焦race通过；私有codec和密文输入各20秒、最多2 worker的fuzz分别完成547018和705841次执行，无失败，这不是QPS/容量证据。最终代码干净Git导出完成全仓默认race/architecture、vet、模块校验、生成前后全部文件集合及SHA256一致、Linux amd64构建，GOMAXPROCS=2/GOMEMLIMIT=512MiB。外部环境SKIP仍不计真库/进程验收；本片无新DB、容器或远端操作。[Verification35485632542](https://github.com/xiak/matrix/actions/runs/35485632542)2026-09-20经GitHub API再次核实精确SHA及completed/success；它仍不证明后继IAM33、实际MFA或安装分支已验收。
+
+#### S2a运行时托管准备
+
+S2a运行时后继已在本分支实现并通过下述本地门禁及固定提交的独立CI：网络进程必须读取已冻结的独立TOTP文件；启动时以封存bootstrap tuple注册非秘密材料承诺，不能生成替代秘密。沿原owner增加`000012_totp`是因为多key注册历史及种子持久状态与AccessKey具有不同的用途/退役边界，不复制其单key表或新建服务。该固定片源码IAM34/Audit19，发布profile/revision不变。
+
+本片`register_totp_keyset(jsonb)→void`仅接收`scope/keysetRevision/activeKeyId/contentDigest/keys`；每key为`keyId/formatVersion/materialCommitment`，所有摘要由已验证的私有codec计算。SQL可信边界仍是持有材料的IAM进程，不宣称数据库可独立验证32字节原密钥。封存scope必须精确匹配，注册与读请求串行保持不可变key身份/同revision集合、单调revision；没有数据/副本/备份退役证明前不允许去掉任何已注册key。精确重放不新增记录。该函数没有在线HTTP或worker入口。
+
+`read_totp_custody()→jsonb`只返回当前完整非秘密注册和`hasAuthenticators`，不是备份lease或同快照required-key摘要。原登录保留尝试与最终发行、Session和Role认证以及readiness都核对本副本实际材料；旧集合实例不能因文件已在另一副本替换而继续认证。本准备程序对任何持久认证器记录（包括REVOKED）均失败关闭，不能把缺少可用因子解释为从未绑定；它不实现/开放绑定、MFA挑战或恢复。后继启用片必须以真正因子/Session状态机替换该拒绝规则，不能删检查直接放行。
+
+该片必须在原测试owner证明：私有文件/用途/scope错误及缺失关闭；真实受限PG首次注册/等值重放/升级revision、同ID换材料/同revision变体/退役/越安装拒绝且无部分注册；另一个真实IAM副本观察注册推进后拒绝旧材料；真实登录和旧Session请求对未知认证器状态失败，不只测ready；登记竞争与读取锁顺序、RLS/ACL/不可变历史、重启/双迁移保留，以及原密码/Role/AccessKey/历史Audit回归。仅测试插入的不可用种子记录是负向边界夹具，不是已实现的绑定路径；没有真实绑定/OTP消费/通知/恢复门禁仍不能称MFA可用。
+
+本地真实PostgreSQL18.6证据沿原owner：独立2逻辑CPU/1GiB/24进程限制、16连接/64MiB shared buffers；Go2/512MiB、race/-p1串行。`TestIAMTOTPCustodyPostgres`最终2.52s覆盖精确注册/变体无部分写、读锁阻止登记越过在途请求、两个不同同revision集合并发仅一方成功、真实密文REVOKED行使登录/Session/重启失败关闭和双迁移保留。原IAM HTTP累计104.94s；实际固定`7cf857bb` IAM32 executable→IAM34保留Session/原receipt/canonical/proof及重启最终15.13s。独立IAM/Audit/PaaS与两个dispatcher门禁最终106.91s，包括真实受限登录、两IAM及新IAM进程推进集合revision后旧两个进程的真实Login/Session均503、匹配材料实例仍接受原有效Session、重启后原业务和历史投递继续。没有借用Docker/远端/其他任务资源；这些源码实验不证明新发布profile或备份恢复兼容。最终同生产源码的clean-export全仓race/架构、vet、模块校验、728文件生成清单/哈希一致性及Linux amd64构建通过。
+
+该准备片固定`a36a35c2eddbeb7c76a8d7c140e180b24a169aab`已推送；2026-09-20经GitHub API核实精确[Verification35491802049](https://github.com/xiak/matrix/actions/runs/35491802049)及go、node-process、authority-storage、authority-runtime、authority-process全部completed/success。它不证明后继同快照备份、实际MFA或安装恢复已验收。
+
+#### S2a同快照备份交接
+
+该后继切片已固定推送`285706e3adf76fb0c109dad474f06266c8b67ab5`，下述聚焦真库/进程及累计本地门禁通过；2026-09-20由GitHub API核实精确[Verification35494523608](https://github.com/xiak/matrix/actions/runs/35494523608)及go、node-process、authority-storage、authority-runtime、authority-process全部completed/success。按与installation冻结的唯一`api/adapter/installation/v1`契约，只消费固定`d479e1c57b6458852dd029227d32f3d56df6c5ad`的非秘密custody/lease及其同源依赖、固定`2e6714bd95ee7c0d90a289b7b9902539717386d3`的协议常量，不搬动安装WIP或引入其发布profile。custody绑定封存installation/bootstrap、同快照观察到的keysetRevision及按keyId排序唯一的`keyId/formatVersion/commitment`；observed revision不是退役权或强制当前集合回退。显式空数组仅表示IAM从该快照确证无密文引用，缺失/null不能冒充空。snapshotId仅是有期限的PostgreSQL运行句柄，不进入持久备份、Audit或摘要。
+
+IAM新增独立目的的一次性入口`matrix-iam-backup-custody snapshot`，不用普通API、worker或凭据恢复登录。仅读取`MATRIX_IAM_BACKUP_CUSTODY_DATABASE_DSN_FILE`，不读取keyring、bootstrap秘密或恢复authority。封闭role/login为`matrix_iam_backup_custody`/`matrix_iam_backup_custody_login`，仅允许`iam.read_totp_backup_custody()`；没有表读写、注册、认证或恢复权限。原迁移入口新增`MATRIX_MIGRATION_IAM_BACKUP_CUSTODY_DSN_FILE`只配置和核对该登录，迁移不执行备份或恢复效果。新增命令保护独立数据库权限与长存活只读事务边界，不另建服务、通用lease框架或第二摘要实现。
+
+helper持有单一REPEATABLE READ READ ONLY事务，核对实际注册与全部保留密文引用（包括PENDING/ACTIVE/REVOKED），缺注册、未知格式/状态或不完整投影失败。由同一事务调用`pg_export_snapshot()`并输出恰一行canonical lease，然后保持事务；整个生命周期硬上限10分钟，无时间/SQL/tenant selector。stdin必须为恰好8字节ASCII `RELEASE\n`随后EOF，只有正常rollback（绝不commit）并关闭连接后退出0；提前EOF、额外输入、截止、导出/查询/编码/关闭失败均非0。固定stderr/退出码为2=`IAM_BACKUP_CUSTODY_INVALID`、3=`IAM_BACKUP_CUSTODY_FORBIDDEN`、6=`IAM_BACKUP_CUSTODY_UNAVAILABLE`，不输出原生PG/路径/材料错误。lease已输出不表示操作已完成。
+
+installation负责真实consumer、签名打包及非秘密custody封存：在helper仍存活的同一10分钟内完成导入snapshot的pg_dump、校验dump、核对本地受保护keyring为所需集合的可信超集，然后写精确RELEASE并关闭stdin、等待0。任何一边失败/未知都不得发布backup manifest，partial清理由安装自己的owner验证。这不是当前恢复资格证明或重新开放认证许可。
+
+源码IAM35/Audit19，不分配发布revision、不改变原lookup_service/claim/Session/Audit canonical。原owner门禁必须证明实际受限登录和严格权限、同一snapshot下登记/因子并发变更不混入摘要/pg_dump、显式空/缺引用/错格式关闭、lease存活和释放/提前EOF/额外输入/超时/中断及秘密扫描；至少真实pg_dump导入和恢复查询相符，不能只检查snapshot字符串。API codec通过、Go假事务或迁移重复通过都不能替代该实际运行与安装恢复验收。
+
+实现复用同一`totp_keyset_snapshot()`内部校验，运行请求继续持有原SHARE锁；备份使用只读MVCC视图，不阻塞后继登记/因子写入。目的限定函数检查真实session_user、角色闭包、非管理员属性及无其他IAM函数/表权限，readiness/verify同时核对精确函数与ACL形状。helper同时设置数据库statement/idle-in-transaction上限，进程失联不能无限保留导出事务。安装URI沿原pgxpool配置语法解析但只创建一条连接，pool参数不下发为PostgreSQL设置；不能从不完整URI或环境补另一份凭据/目标。
+
+原共享迁移进程只容纳4个私有DSN，本片新增第五个目的后将其上限精确改为5，仍要求完整、唯一、排序的FILE声明；IAM登录库存也保持原排序规则。六个、重复、乱序或缺少所需文件均在迁移调用前拒绝，不开放通用角色/DSN请求。真实进程门禁使用实际新迁移器apply两次及verify，旧IAM32保留数据也走实际当前迁移器；不能用仅执行Up的成功替代这一入口。备份登录和普通API/worker/恢复登录保持分离，既有共享驱动不执行任何备份或恢复效果。
+
+2026-09-20本地真实PG18.6、原2逻辑CPU/1GiB/24进程与16连接限额，Go2/512MiB、race-p1串行：
+
+| 本地门禁 | 实际结果与边界 |
+| --- | --- |
+| 同快照数据7.06s | 旧空视图不混入后继revision/真实REVOKED及PENDING密文，新视图准确要求两把原材料；释放后句柄失效、额外函数/直接登录表权限失败关闭、双迁移保留及DB自身终止孤儿lease。故意损坏的保留记录即使失去NOT NULL约束也不能把缺nonce解释为合法备份依赖；该管理级故障夹具只在自有测试库内使用。 |
+| 一次性真实进程20.10s | 实际新迁移器apply两次/verify、专用登录、pg_dump/pg_restore与摘要引用相符、额外写入不进入原dump；严格控制帧/EOF、非专用DSN、断DB及杀本任务helper均不能成功，失联快照不可导入且不残留客户端。 |
+| 实际IAM32→35迁移/运行16.51s | 固定7cf857bb旧executable产生原数据，当前真实迁移器保留Session/原receipt/canonical/proof；等值bootstrap、双迁移与重启不复活已终止状态。不是逐个未发布schema升级或release准入证明。 |
+| 双权限库与完整独立进程 | 双schema/受限权限/不可变记录7.37s；IAM双实例、Audit、PaaS、双dispatcher84.50s。最后进程组合连同新helper场景的package108.075s全部通过，保留旧材料实例拒绝、原业务/历史投递和实际runtime登录检查。 |
+| 默认累计门禁 | clean-export全仓race/architecture、vet、模块验证、API全部120文件生成清单与SHA256一致、Linux amd64构建通过；最终进程中断/缺nonce安全增量另过真库race，并在再次干净导出中通过IAM、共享迁移、authorityprocess、architecture的race/vet和IAM Linux构建。外部环境默认SKIP不计真运行。 |
+
+新测试文件仍归原authorityprocess package，单独保护其此前没有的非HTTP私有管道与真实快照交接，不新增测试框架。进程中的不透明密文是备份引用负向夹具，不是已实现绑定/解密证据；数据门禁另使用真实加密codec。失败门禁不回填通过：首轮pool参数被单连接解析器当GUC，随后真实迁移入口又发现第五份配置超过原上限/排序规则；按冻结用途修复并补默认负向测试，再分别通过上述新库门禁。未放宽权限、唯一性、期限或跨profile准入。这些门禁不替代签名备份consumer、当前恢复资格或重新开放认证的验收。
+
+#### 不同状态不能混用
+
+| 状态或材料 | 责任与限制 |
+| --- | --- |
+| Account的`security-settings` | 同Account单份有版本的安全配置；保存日常User的密码/MFA/会话要求，不表示某个人已经绑定因子，也不是授权Policy |
+| USER的TOTP认证器 | 真实凭据，绑定Account/USER及不可重用因子身份；有受保护种子、当前绑定修订、终态和已消费时间步。不是新Principal、Role或物理Device |
+| 未完成的认证挑战 | 保存已经验证的阶段、闭合目的、实际主体/代际、过期、尝试预算和消费状态；不能访问业务、承担角色或充当Session。它的随机持有凭据与现有三类凭据分域，不能放进Session表假装“低权限登录” |
+| 登录Session的认证事实 | 只在实际完成所需因子后记录方法、认证时刻和对应权威修订；用户后来启用MFA，不能将原密码Session倒填成双因子。历史缺字段不猜测MFA已完成 |
+| 恢复材料 | 一次性高熵秘密及不可变批次归属；用于受限重新绑定，不是主账号转让、密码替代或可缓存业务许可 |
+
+仍在现有IAM进程内由身份用例组织事务，纯TOTP校验与存储副作用分开；不先拆Identity/STS新服务，不增加泛化ChallengeStore/SessionStore。挑战确有独立的期限、消费和权限边界，只有其接口/存储形状在实现窗口冻结后才增加必要模型。
+
+#### 工程责任与运行权限
+
+| Owner | 交付契约 | 不获得的权限 |
+| --- | --- | --- |
+| IAM | 状态机、本人/受保护身份校验、加密上下文、尝试预算、一次性消费、Session/Role有效性、原子事实与最小通知意图 | 不能读取安装私钥、直接恢复数据库或跨库查询业务资源 |
+| 原installation交付owner | 独立材料生成/封存/分发、文件与挂载隔离、启动检查、升级准入、受支持备份恢复和恢复期间访问隔离 | 开发/执行安装程序不等于取得在线租户安全配置或因子管理权限 |
+| Audit | 新事实的封闭actor/action/target与历史proof验证；旧canonical、租户链和投递归属保持 | 不解密因子，不把当前登录资格用于重新授权历史事实 |
+| IAM的012最小安全邮件切片，installation托管通道配置 | 已验证接收人、受限投递、重试/受理证据及失败告警；实际切片进度及证据仅归012 | 联系人不是Principal，投递身份不获得租户业务读写或认证器恢复权 |
+| UX/UI owner | 真实绑定/挑战/恢复/设置交互、秘密一次性展示及失败反馈 | 不计算有效权限、不缓存秘密、不靠隐藏按钮保护入口 |
+
+用户已授权IAM补012最小邮件通知，并与原installation负责人设计实施目的限定的原受保护主账号MFA恢复及备份恢复隔离；这不表示接口已经冻结或其他任务已经交付。IAM和installation共同证明材料错误时关闭、两副本一致、真实备份恢复不复活认证资格及原primary封存关系保持。保留原主账号身份不表示其密码、认证器或临时交付凭据永不轮换；永久身份关系与可撤销凭据分开。
+
+#### 权威状态与最小数据形状
+
+下表为拟定持久边界及关键字段，不是已迁移表。复用IAM现有SQL/事务owner；只有独立生命周期或唯一性约束所需的数据才落独立关系，不为每个名词生成repository/interface。
+
+| 状态 | 最小持久信息及约束 |
+| --- | --- |
+| Account安全配置 | `accountId/resourceVersion/mfa.requiredForUsers`，后续密码与会话字段归S3。复用单调`security_settings_version`同时承担配置CAS与认证资格版本；每次真实配置变更都加一，不另造能独立回退或遗漏推进的登录资格计数器 |
+| USER安全状态 | 原Account/USER、`enrollmentState=NEVER_BOUND\|BOUND\|REMOVED\|RECOVERY_REQUIRED`、单调`factorRevision`、当前factorId；是原USER的认证状态，不是第二主体。缺行/损坏不是NEVER_BOUND，只有新建或经过证明的迁移可建立该资格；REMOVED必须关联本人合法解绑的原子完成，不从因子缺行推断 |
+| TOTP因子 | factorId、原Account/USER、`PENDING\|ACTIVE\|REVOKED`、格式/keyId/nonce/ciphertext、创建/确认/终止时间及最后消费时间步；每USER至多一个ACTIVE和一个未到期PENDING。替换生成新ID，REVOKED不原地启用；过期待确认行不能变ACTIVE |
+| AuthenticationChallenge | challengeId、目的`LOGIN\|ENROLLMENT\|RECOVERY`、实际Account/USER、密码代际、factor/settings修订、已验证阶段、绝对期限、剩余额度、秘密lookup/verification digest；这些未登录流程的凭据不能成为Session |
+| 本人操作StepUp | 绑定当前已认证Session、Account/USER、固定操作、实际目标、非秘密输入承诺、密码代际及预期资源版本；通过同一有效Session持有，不另发行可交换秘密或通用permit。其独立生命周期是再次认证证明，不是另一个身份或全局Session升权 |
+| 挑战与证明终态 | AuthenticationChallenge为`PENDING → CONSUMED\|CANCELLED\|EXPIRED`；StepUp为`PENDING → PROVED → CONSUMED`，PENDING/PROVED均受原绝对期限限制。不可回到PENDING、续期或重用完成证明 |
+| 恢复码批次 | Account/USER/batchId、每码随机公共引用及单向验证值、发行/消费/整批终止信息；默认候选10条、每条128位随机秘密，不能按用户名/时间派生或可解密回显 |
+| Session认证事实 | 在原Session追加真实`authenticationMethods/authenticatedAt`和内部factor/settings资格修订；只在实际认证时写入。Role使用原来源Session约束，不复制一份可独立放行的MFA布尔值 |
+| 尝试与命令完成 | S3的有界尝试保留/结果，及本目的不可变命令关联；绑定真实actor或challenge、requestId、非秘密输入、原完成和outbox。不是通用receipt服务，不向调用方发行新的授权能力 |
+
+因子/恢复批次/challenge/完成关系通过复合外键绑定同Account和USER；强制RLS、禁止普通API/worker直接DML、只授目的限定函数。唯一ACTIVE、终态不可逆、一次消费、单调修订及成功事实关联需要数据库约束/锁内检查，不能只依赖Go预查。挑战、尝试的临时行按期限与有界保留规则清理；删除临时行不能清除USER共享预算或历史完成事实。
+
+#### 登录、设置与恢复状态机
+
+```text
+realm解析 + 有界密码核对
+  ├─ 错误/停用/未知 → 同一安全错误；不发行任何身份凭据
+  ├─ 无MFA要求且NEVER_BOUND或合法REMOVED → 原登录Session路径
+  ├─ 已绑定 → LOGIN挑战 → 新鲜TOTP
+  │                       ├─ 必须改密 → 仅改密阶段 → 全部旧会话/挑战失效 → 重新登录
+  │                       └─ 无改密要求 → 消费挑战与OTP → 新Session
+  └─ 要求MFA且证明NEVER_BOUND或合法REMOVED → ENROLLMENT挑战
+                          → 必要初始改密后重新开始 → 确认新因子
+                          → 结束设置挑战 → 密码 + 未消费TOTP正常登录
+
+LOGIN挑战 + 有效恢复码
+  → 原子消费恢复码、终止丢失因子及旧Session/挑战
+  → 新RECOVERY挑战（只能重新绑定）
+  → 确认新因子 + 新恢复批次 → 结束挑战 → 正常重新登录
+```
+
+用户主动绑定因子后，即使Account未强制MFA，后续登录仍需该因子；Account管理员将要求改为false不删除用户因子。`RECOVERY_REQUIRED`、未经合法解绑而缺因子、密文损坏或资格未知都不能进入“密码即可首次设置”。普通替换在确认前保留旧因子；合法丢失恢复在签发受限重绑挑战时终止被报告丢失的因子，两条路径不混淆。
+
+明确允许无因子的用户，可用当前密码和原有效因子的step-up完成主动解绑：同事务终止因子/恢复批次、撤销旧会话、推进factorRevision并记录REMOVED。它保留原绑定及解绑事实，不改回NEVER_BOUND。此后无强制要求时可以密码登录并主动重新绑定；要求后来收紧时，只有原合法解绑完成仍可证明的REMOVED才可进入受限ENROLLMENT，确认时创建新因子，绝不启用旧因子。解绑与要求收紧交错时在同一Account/USER锁序下决定，不能先预查false再越过新要求。
+
+已明确处于RECOVERY_REQUIRED且仍有可验证恢复批次的USER，在密码验证后只取得`nextStep=RECOVER`的LOGIN挑战；它不能走普通TOTP成功分支，只能用另一条未消费恢复码继续受限恢复。未知/损坏的因子记录不自动获得这项资格；没有可证明恢复批次时保持拒绝并指向人工协调的受控恢复边界，不能用页面跳转代替授权。
+
+恢复开始和完成各是一个原子步骤：开始时消费一条码、推进因子修订、撤销旧登录及派生资格并签发新RECOVERY挑战；完成时绑定新因子、作废原批次剩余码、生成新批次并结束恢复挑战。开始后丢失回包不能退还已用码；持有另一条未使用原批次码并再次验证密码，可以开启新的受限恢复意图，同时终止旧恢复挑战。所有码都丢失时不能降级为普通reset，进入下述另行确认的身份恢复边界。
+
+#### 当前HTTP契约
+
+LoginResponse严格区分AUTHENTICATED与CHALLENGE_REQUIRED：前者必须完整包含Session、credential和mustChangePassword（即使false也不能省略），后者只有challenge及独立持有秘密，连null/false形式的Session分支字段也拒绝。当前密码登录可返回两种封闭用途：`LOGIN`仅允许`TOTP|PASSWORD_CHANGE|RECOVER`，`ENROLLMENT`仅允许`PASSWORD_CHANGE|ENROLLMENT`。前者由已绑定因子或准确恢复历史决定；后者只用于当前账号要求下、已证明NEVER_BOUND且不属受保护范围的首次强制绑定。`RECOVERY`目的只能由消费有效保存码的独立恢复入口取得，不因同名nextStep为ENROLLMENT就与首次绑定互认。Challenge从来不是Session或普通业务bearer；客户端不能靠缺省outcome、purpose或nextStep猜测认证成功。本人主动绑定、登录/强制改密、保存码恢复、step-up和首次强制绑定已有固定后端，完整MFA发布、LIVE UI与签名安装仍须分别验收。
+
+首次强制绑定消费者可从已验证固定`e24dbdae6b4ea420365a4527a0bd89b16e0d720f`读取`api/iam/v1`的类型、`ValidateLoginResponse/ValidateAuthenticationChallenge`及OpenAPI，配合本节和[绑定、替换与秘密托管](#绑定替换与秘密托管)的实际路由。其[Verification36033828072](https://github.com/xiak/matrix/actions/runs/36033828072)精确SHA及九项job在2026-09-27再次核实全部success；该后端证据不等于前端已完成。e24至候选fa27的公开IAM类型、handler及认证用例没有变化（用例目录仅readiness版本变化），无需等待私有备份恢复切片才设计合法认证联合响应；不得因此继承IAM45恢复、UI或发布验收。
+
+当前工作树的`TestIAMTOTPEnrollmentPostgres`已在独立PG18（1CPU/1GiB/Pids192、16连接）、Go1.26.7/GOMAXPROCS2/512MiB、串行race下最终24.83s通过，包含实际邮件分支：真实受限API登录、从测试Maildir取码并完成现有通知地址确认后，经HTTP读取NEVER_BOUND、创建绑定、核对一次性provisioning、按原requestId读取及元数据重放、取消PENDING。正式绑定使用HTTP发行的种子；保留受限SQL的在途OTP攻击及最终outbox明确注入失败后的整笔回滚检查，再经实际HTTP确认，同事务提交因子、十条单向恢复码、安全通知与两个旧Session撤销。十条返回码各精确匹配一个带安装/USER/批次/码引用的持久验证值，旧会话重发确认被拒；原密码发行函数不能绕过MFA。
+
+实际HTTP密码登录只发行挑战；挑战当Session/Role/会话目录bearer拒绝，错误载体不扣另一个USER预算，原绑定码被拒且失败额度确实提交。两个各有独立连接池和材料快照的IAM Authority实例同时使用不同挑战提交同一个新码，只产生一个PASSWORD_TOTP Session；另一实例查验成功。新会话只读原CONFIRMED元数据，不能取消或再次取得秘密。正常改密使未完成的旧挑战在验码前失败，不能消耗新额度或复活；原认证事实不能事后改写，缺完成挑战的伪造MFA Session无法提交。等值迁移保留因子消费、会话事实和当前有效会话。绑定事实经原producer proof核对准确摘要，伪造requestId被拒；新增`iam.authenticator.bound`仅接受同USER actor/target的tenant成功事实，不允许Role/Key/SYSTEM、伪Decision或安装范围。
+
+原Audit存储全action/权限攻击门禁5.27s、保留tenant旧链升级0.24s通过，包含新绑定action及旧canonical不变；原`TestIAMTOTPCustodyPostgres`2.32s通过，材料缺失/不匹配及未知保留因子仍失败关闭。API、IAM authority/usecase/HTTP、通知dispatcher和architecture的聚焦race及相关IAM/Audit vet通过。严格codec拒绝秘密回放、错误分支及selector；OpenAPI同步真实NOT_FOUND/已确认取消冲突，缺少实际响应的回归先失败后通过。专用通知consumer接入封闭AUTHENTICATOR_BOUND，拒绝其携带验证邮件秘密。
+
+该门禁的`real_postfix_bound_notice`子例1.66s通过：独立生产通知可执行程序使用自己的受限数据库登录和受保护FILE，`pg_stat_activity`核对实际连接身份；程序在验证码投递后停止，绑定及旧Session撤销完成后重新启动，从原通知ID领取并将AUTHENTICATOR_BOUND发到相同真实测试Maildir，最终DATA250及ACCEPTED持久化。正文模板与原绑定目的相符，未包含验证码、TOTP种子/URI、密码或十条恢复码。专属Debian13/Postfix3.10.13使用1CPU/768MiB/Pids128、独立网络及loopback随机端口；原SMTP实收/错误认证/外部转发拒绝门禁3.07s也通过。不使用共享SMTP或个人邮箱；DATA250与本次本地Maildir观察不是一般公网最终送达、已读或恰好一次承诺。
+
+上述IAM HTTP handler和两个Authority仍在同一测试进程，不能冒充独立IAM executable或端到端浏览器；后继独立进程证据见下表。只有显式配置专属Postfix时，门禁才从实际邮箱取码并验证绑定通知；无SMTP配置的合成解封分支仅证明事务，跳过的邮件子例不计交付。TOTP客户端码使用库生成，只证明事务行为，独立算法向量仍由authority测试拥有。未提供DSN的默认SKIP不计真库。该轮结束时确认PG无客户端、SMTP队列为空，仅删除两个自有容器/网络及合成现场，按唯一标签核对容器/网络/卷均零残留，未操作其他任务或共享服务。
+
+实际实现仍复用原authentication/credential/事务/HTTP与迁移owner；`totp_authentication.go`在既有usecase与PostgreSQL包中分开承载用途受限挑战和短事务映射，不引入新服务、repository或通用permit。新增内部凭据目的AUTHENTICATION_CHALLENGE，与SESSION/SERVICE/ROLE_SESSION的lookup和验证摘要均隔离；验码请求只接受body中的challengeCredential，不接受并列Authorization载体或身份selector。坏OTP必须在预留已提交后作为业务拒绝提交，提交未知不退还额度；验证码、种子和持有凭据不进入请求摘要或Audit。因子解密和消费使用锁内数据库时间，进程只持有自身已验证材料快照。
+
+准备版的ANY-factor拒绝已由工作树中的已识别生命周期/Session资格检查替换，`read_totp_custody`现在返回`hasUnrecognizedAuthenticators`而非旧字段；旧或损坏历史仍不能解释为NEVER_BOUND。lookup_session保留24列但实际筛选当前MFA资格，Role读取也检查真实来源Session。Session认证方法/时间/修订不可修改；已消费挑战永久关联原同USER Session、原因子修订和原发行outbox，不能将恢复材料可用或今天的用户配置当作认证事实。此私有返回及新表/函数/约束已与installation owner协调为源码IAM37/Audit21，本分支PaaS2不变；readiness/verify同时核对真实形状。没有修改发布profile或分配release revision，也没有把未完成MFA标成可发布；旧36/20不能因版本数字接近而视为兼容，安装消费者仍须独立按完整profile验证。
+
+#### S2b源码准入与保留数据门禁
+
+IAM37的`totp_authentication_contract_ready()`由迁移verify与实际readiness复用：检查挑战/预算/恢复材料/USER认证状态的列类型、NULL边界、复合归属键、唯一性和有界索引、强制RLS/唯一策略、表及列授权；同时核对目的限定函数的精确输入/结果、安全定义者、search_path、ACL/无额外重载，以及Session认证事实/因子消费/完成/通知关联触发器的ALWAYS和延迟约束形状。它不复制TOTP算法或Audit编码，也不以schema数字、SQL文本快照或“有几张表”替代实际约束。
+
+IAM37基线只发行恢复材料，批次与码的更新、删除、截断全部关闭。IAM38的下述在线恢复以原子状态机替换消费/批次终止保护，不放宽直接表权限：只有已提交真实尝试的目的限定函数可以读取原批次校验投影；API不能任意读取材料或调用私有锁函数，Audit/通知worker和离线凭据恢复身份没有该消费能力。
+
+真实旧程序门禁发现：直接遍历强制RLS下的Account会漏掉旧USER。迁移现在只在原MFA状态表确实不存在时，经已有且已校验的account_roots枚举各Account并在对应租户范围读取USER；不新增全局读取能力或“legacy标记”。无任何原因子历史的旧USER建立NEVER_BOUND；已有因子证据（含REVOKED）只能进入RECOVERY_REQUIRED。表已存在时，等值迁移不补缺行、不重新推断NEVER_BOUND；正常新建USER仍由原事务触发器初始化。缺失/未知状态在实际认证入口失败关闭，不能靠重启修复成新资格。
+
+本次最终PG18.4使用先后创建、各自唯一标签的本机fixture，单实例1CPU/1GiB/Pids192/max_connections16，Go1.26.7/2/512MiB、race/-p1串行；每项独立数据库验证没有客户端后释放，轮次结束再清理本轮容器/网络/卷并核实零残留。最终结果：
+
+| 现有门禁 | 实际观察 |
+| --- | --- |
+| TestIAMTOTPEnrollmentPostgres | 包37.688s：保留绑定、跨副本OTP消费、强制改密/安全变更竞争；33项实际DDL/授权破坏使具体contract与总readiness同时关闭，回滚破坏后恢复ready；受信SQL也不能改写已发行恢复材料 |
+| 缺失认证状态子例 | 2.48s：仅测试管理员制造一个已有USER状态缺失，恢复删除保护后，原密码/旧Session在双迁移后继续拒绝；没有Session/challenge秘密返回，没有新NEVER_BOUND行。首个失败保留的密码尝试预算不因迁移重放退还 |
+| TestIndependentIAMAuditAndPaaSProcesses | 74.71s（包77.948s）：实际两个IAM程序、Audit/PaaS及原双dispatcher，保留所有原场景；新MFA绑定与强制改密真正提交后丢失TCP回包、两次IAM重启、跨进程同OTP仅一次成功、旧Session/challenge及跨服务载体拒绝、用户停用后原绑定事实历史投递、精确重放与全链验证 |
+| TestIAMTOTPCustodyPostgres | 2.28s：原托管注册、变体、真实密文/未知历史及重启关闭累计回归 |
+| TestIAMRetainedOwnSessionProcessUpgrade | 实际固定7cf857bba48eb5d7da487162c43e8f52534db133的IAM32程序生成数据→IAM37，14.01s；保留原Session/个人及批量撤销完成、NULL凭据谱系拒绝、原receipt/canonical/历史proof与重启 |
+| TestIAMRetainedPreMFAProcessUpgrade | 实际固定07aa50627318708ed4d3ac9ce481b1e5829669d6的IAM36程序生成数据→IAM37，14.90s；两个Account、密码与旧Session、实际HTTP首地址待确认意图/密文/原通知保持；不替旧会话补造MFA方法、认证时间、修订、挑战或恢复批次 |
+| TestIAMRetainedRoleAuthorityProcessUpgrade | 18.62s：原实际旧Role程序/受限数据库身份及历史事实累计回归；保留诊断计数，不放宽原连接上限或冒充旧5e185e95的CI成功 |
+| Audit既有存储/旧链 | 全action/权限/不可变记录5.20s，旧tenant分区保留升级0.22s；包括新增绑定action，未改变旧canonical/链契约 |
+
+33项破坏包含表/列泄露、worker执行或API转授权、函数owner/security/search_path/strict/额外重载/返回列变化，NULL/类型/生命周期约束、跨主体外键、RLS/额外策略/lookup写范围、索引缺失/错误谓词及认证/完成/通知触发器损坏。这些是实际目录/行为检查，不是比较SQL源代码。
+
+上述最终MFA真库未配置SMTP，邮件子例明确SKIP，不继承前述旧轮次真实邮箱验收；旧程序门禁保留待投递意图也不是投递成功。独立进程门禁的通知地址经真实HTTP创建/确认，但取码仅使用本测试自有密钥、公开EmailVerificationCipherContext及标准原语解封，是明确的合成运输前置，不是生产内部包依赖、模拟MFA完成或SMTP实收；不直接修改联系人、密码或认证器行制造正向资格。库生成的TOTP只作为客户端输入，原独立算法向量不变。
+
+新门禁发现缺少已验证通知地址曾被映射为401，并在最终事务拒绝后遗留密码保留。现已在实际Session/材料验证后、预留密码工作前返回403；最终SQL仍在锁内重新检查真实联系人，未用预查替代安全约束。进程断言同时证明拒绝前后原密码预算逐字段不变、原Session仍有效。另一轮代理给无bearer的challenge请求误添空Authorization，夹具被真实入口拒绝；修正为只在调用确有bearer时传头，未放宽生产载体规则。
+
+最终全仓默认race/architecture、vet、模块校验、122个API tracked文件生成集合/哈希一致及Linux amd64构建通过；外部环境SKIP不计真实验收。两项旧binary门禁在CI现有runtime owner显式注册，不逐版回放所有未发布schema。固定源码`f5cec0e132ad18900d9a5a5629eae04fda4817f1`的[Verification35520219893](https://github.com/xiak/matrix/actions/runs/35520219893)已按精确SHA核对为failure：五项均runner_id=0、steps=0，GitHub annotation说明账户付款或spending limit阻止启动，未执行任何测试。它不是测试通过，也不能据此判为代码回归；独立CI验收仍缺失。本片不证明发布profile兼容；恢复、首次强制设置、step-up、Account设置、真实UI及受支持备份恢复等完整009要求仍未完成。
+
+以下完整流程仍为目标契约，尚待实际事务和消费者组合；不保留“密码通过即成功”的兼容旁路。现有realm仍在loginName中解析，以下路径均不接受accountId/userId作为身份selector。
+
+主动首次绑定的当前实现窗口冻结为本人有效、非forced的LOGIN_SESSION：`GET /v1/auth/authenticators`只投影真实enrollmentState/factorRevision及当前factorId，不伪造尚未实现的账号要求或操作能力。`POST /v1/auth/totp/enrollments`严格接收`requestId/password/expectedFactorRevision`；APPLIED仅一次返回原enrollment及秘密provisioning(seed/uri)，EQUAL_REPLAY只有元数据。种子、factorId和封装在最终事务重试之外生成一次，最终锁内重新核对原Session、密码代际、已提交尝试、材料及可信通知地址。原requestId绑定实际Session与预期修订，变体不复用原结果。
+
+只读`GET /v1/auth/totp/enrollments/{id}`及`GET /v1/auth/totp/enrollments/by-request/{requestId}`都只查当前已认证同USER的原元数据；后者支持创建回包丢失、客户端尚未知factorId的情况。查无原意图返回NOT_FOUND，不表示先前提交已经回滚，不自动签发新意图。`DELETE /v1/auth/totp/enrollments/{id}`不接收body/query，只能使原PENDING不可逆终止；不能撤销已确认因子。`POST .../{id}:confirm`严格接收`requestId/code`，原Session与新码均有效时一次提交绑定、码消费、十条单向恢复码、通知及单一绑定事实，并撤销全部旧Session。首次成功结果包含原enrollment、一次性recoveryCodes及固定`nextStep=REAUTHENTICATE`；不提供确认重发秘密或保存确认接口。关闭页面/取消保存不能逆转已提交绑定。回包未知需正常重新登录后读原完成，不用另一个候选码冒充相同成功；之后恢复码重发仍须其独立强认证流程。
+
+本窗口不代表完整MFA可发布：受限首次设置、恢复、step-up、受保护身份防锁死与恢复隔离和账号要求仍按本节完整目标验收；源码schema/readiness已由上表核对，但不能代替发布组合。不得将临时可运行的开发分支部署为已接受的MFA版本。
+
+已绑定USER的强制改密增量沿同一LOGIN挑战实现：原TOTP核验成功且锁内仍要求改密时，消费OTP并结束原挑战，换发新的持有凭据和`nextStep=PASSWORD_CHANGE`挑战，不发行Session。新挑战保存原挑战、真实USER/代际/因子修订及本次验证时间的不可变关联，期限不得超过原LOGIN挑战；仅保存“需要改密”状态不能重新取得能力，原挑战凭据也不能随验证成功而升级。`POST /v1/auth/challenges/{id}:password`只接受`requestId/challengeCredential/newPassword`，不接受bearer、身份selector、旧Session或保留会话选项。新密码复用现有密码格式/成本校验并拒绝与当前密码相同；哈希工作在有界槽位和短事务之间进行，提交前按Account→USER→credential→MFA→factor→challenge顺序重验原资格和数据库当前期限。成功只返回`nextStep=REAUTHENTICATE`及完成时间，原子推进credential generation、清除forced、撤销所有旧Session/未完成挑战，并保存原`iam.user.password-changed`事实。没有会话被保留或提升；原绑定因子、消费步和恢复批次不改写。错误/到期/并发reset或停用/重复或未知完成都不能用旧挑战再改一次密码；未知结果需正常登录核实，不自动续期、回退或重新执行。此段为实现与负向门禁约束，不是已完成验收；完整S3密码历史/期限规则仍归其原目标。
+
+该增量的真库证据归同一`TestIAMTOTPEnrollmentPostgres`，最终运行结果见上表。普通成员经实际创建、首次改密、通知地址确认、HTTP绑定，再由真实管理员reset进入BOUND+must-change，没有直接修改凭据/forced/因子来制造正向资格。验证后的挑战必须换ID/秘密且期限准确等于原挑战；原秘密、错误阶段及挑战当Session/Role/通知地址bearer全部拒绝。同密码拒绝、末端outbox注入失败无部分变化，两个独立Authority的并发改密仅一次成功，旧临时密码被拒；新密码仍须新鲜TOTP才发行普通Session。原子generation/forced、零旧有效Session/未完成挑战及单一原密码变更事实均由真实数据核对，schema等值重放不复活旧挑战。
+
+受控交错只在生产读取事务已真实提交后暂停调用，不伪造授权或持有密码工作期间的数据库锁；另一Authority的实际reset或停用可以完成，然后原改密最终事务拒绝，安全变更后的密码/Session/挑战/事实不受旧请求部分覆盖。恢复启用后旧挑战仍无效，只能正常重新登录。提交后真实TCP断链、重启及旧数据升级另由上表独立可执行程序门禁证明，不用这一受控交错替代；实际锁等待到期、反向安全交错及完整MFA仍须各自验收。API/authority/usecase/HTTP/通知dispatcher/architecture聚焦race、相关IAM/Audit vet及122个API文件重生成字节一致通过。新`:password`入口的bearer混用、selector、旧密码字段、保留Session选项、重复秘密字段及null/错误方法在进入用例前拒绝，错误响应不含秘密。上述最终真库未配置SMTP，邮件子例明确SKIP，不覆盖前述真实Postfix证据。
+
+通知本人查询的MFA接入和原邮件门禁归012。这里的REAUTHENTICATE只描述用途受限的改密挑战，不改变已固定`/v1/auth/password`的LOGIN_SESSION契约：日常选项、forced撤销其他以及锁内保留当前会话保持。UI不得把本地清空状态描述成服务端已撤销；新的挑战交互必须与既有Session改密分开，固定契约交接后由UX自行验收。
+
+| 入口 | 输入/结果及认证边界 |
+| --- | --- |
+| `POST /v1/auth/login` | 保留`{loginName,password,requestId}`；响应改为严格互斥联合：`outcome=AUTHENTICATED`才有原`session/credential/mustChangePassword`；`CHALLENGE_REQUIRED`只有challenge和一次性challengeCredential，绝不同时有Session |
+| `POST /v1/auth/challenges/{id}:verify` | `{requestId,challengeCredential,code}`，仅LOGIN/PENDING；成功要么发行一次Session，要么进入强制改密阶段；坏码消耗已保留的预算后返回统一认证错误 |
+| `POST /v1/auth/challenges/{id}:password` | `{requestId,challengeCredential,newPassword}`；仅当前被允许的强制改密阶段，复用密码业务不变量，不伪造Session。推进generation并撤销全部旧Session/挑战后只返回`REAUTHENTICATE`，不接受保留其他会话选项 |
+| `POST /v1/auth/challenges/{id}:recover` | `{requestId,challengeCredential,recoveryCode}`；仅密码已验证的LOGIN挑战，原挑战消费后换独立RECOVERY挑战。不允许caller改变purpose或目标USER |
+| `GET /v1/auth/authenticators` | 有效本人LOGIN_SESSION下返回因子元数据、有效要求和可进行的本人操作；不返回种子、恢复码、内部digest，不授予Account配置完整读权 |
+| `POST /v1/auth/totp/enrollments` | `{requestId,expectedFactorRevision,...}`；使用本人Session与相应再次认证证明，或ENROLLMENT/RECOVERY专用challenge，严格二选一。返回enrollmentId、期限及只展示一次的provisioning内容；替换须证明旧因子或合法恢复 |
+| `POST /v1/auth/totp/enrollments/{id}:confirm` | `{requestId,code,...原认证上下文}`；验证新种子对应码及原意图后原子确认、消费时间步、保存恢复批次，返回一次性恢复码和`REAUTHENTICATE`；不发行普通Session |
+| `POST /v1/auth/authenticators/{id}:remove` | 本人当前Session、预期因子修订及目标限定step-up；仅有效要求允许无因子时删除，撤销相关Session与恢复批次。强制要求下删除最后因子拒绝，转向替换/恢复 |
+| `POST /v1/auth/recovery-codes:regenerate` | 本人Session及该操作的强认证证明；原子终止旧批次、只展示新批次一次。不改变当前密码或取消MFA |
+| `POST /v1/auth/step-up`、`POST /v1/auth/step-up/{id}:verify` | 两者均须本人有效LOGIN_SESSION；创建操作专属StepUp，重新验证密码和TOTP后置PROVED，不发行新bearer。首个实际操作只开放下节恢复码重发；因子替换/移除和security-settings随各自事务接通后才能增加闭合操作值，不接受任意Action/目标 |
+
+表中的省略部分只指两种已声明认证载体的严格联合，不是自由attributes：Session分支从Authorization取得actor，秘密证明用明确Secret字段；challenge分支只接受challengeId/credential，不能同时带Session换主体。公开challenge只含id、purpose、expiresAt、服务器计算的nextStep，不含凭据代际、内部规则摘要或任意跳转URL。准备首次自助绑定使用本人Session加当前密码；替换等其余操作使用目标限定step-up。challengeCredential不进入通用Bearer认证器，不可用于`/authorize`、Role、Key、业务API或本人会话目录。
+
+所有Secret输入采用现有严格解码、脱敏和专用编码，拒绝未知/重复/NULL字段及超预算请求；相关响应`Cache-Control: no-store`，不得进入URL/query或浏览器持久存储。公开ID不是持有凭据。没有Refresh Token、新cookie协议或记住设备能力；不为此添加刷新路由。
+
+结构错误400、未认证/错误或过期证明401、当前已认证但权限/资格不足403、版本或不同意图冲突409、全局资源预算耗尽429、数据库/必要材料不可用503；与具体用户存在性相关的抑制不返回可枚举的剩余次数或专属冷却原因。状态码沿原Problem契约冻结，不用错误文本传秘密或恢复指令。已提交但回包丢失的secret响应不重发原秘密；只能通过持有原上下文查询非秘密完成，或重新认证发起新意图。完成查询不验证新的候选OTP，更不能把不同候选值当成原成功。该只读查询的路径/保留期限随具体命令一并冻结，不新增通用receipt API。
+
+#### S2b受限自助恢复增量
+
+三个在线恢复HTTP入口和实际消费事务已固定推送`48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e`，并完成下述本地运行门禁；独立CI与消费者验收未完成，不改变f5cec0e1的交付结论。开始时把新PENDING因子与独立RECOVERY挑战一并提交，种子在重试事务之外生成/封装一次。公开`AuthenticatorRecovery`仅描述原ID/requestId、`STARTED/COMPLETED/SUPERSEDED/EXPIRED`和期限/完成时间，不含主体selector或秘密；它不是普通Session首次绑定的Enrollment：开始已终止旧因子并消费一条码，关闭页面不能撤回这些效果。
+
+| 封闭入口 | 输入与结果 |
+| --- | --- |
+| `POST /v1/auth/challenges/{id}:recover` | 只收`requestId/challengeCredential/recoveryCode`；接受当前LOGIN/TOTP或有确切原恢复历史的LOGIN/RECOVER。首次成功返回恢复元数据、新RECOVERY/ENROLLMENT挑战及独立秘密、一次性provisioning；不返回Session或重发秘密 |
+| `POST /v1/auth/challenges/{id}:confirm-recovery` | 复用验证码请求形状`requestId/challengeCredential/code`，但只接受RECOVERY/ENROLLMENT；正确新TOTP原子完成新绑定、新恢复批次、旧批次终止及通知，只返回完成元数据、新十码和`REAUTHENTICATE` |
+| `POST /v1/auth/challenges/{id}:recovery-result` | 只收当前LOGIN挑战持有凭据及原恢复`requestId`，读取同USER的原非秘密元数据；NOT_FOUND不证明提交回滚、不消费新码、不自动开启意图 |
+
+保存码恢复从`LOGIN`挑战进入，密码登录本身不能直接发行`RECOVERY`重绑能力；当前另有的首次强制`ENROLLMENT`挑战不是这条恢复路径。RECOVERY挑战、PENDING因子及恢复仪式均不得晚于原LOGIN挑战期限，读取或重试不续期。开始回包未知时，以新密码验证得到的LOGIN挑战查原元数据；新种子或挑战秘密丢失时，明确使用另一条原批次码开启新意图，并永久终止旧未完成恢复及PENDING因子。完成回包未知不重发新恢复码；持有新因子可以正常重登，重发码仍须独立强认证流程。
+
+候选恢复码在共享USER尝试预算已提交后比较；非空畸形码也计次，错误challenge秘密不能借公开ID扣他人预算。仅检查同USER唯一有效批次固定十条不可变验证值，按原码ID做用途绑定比较，不因首个匹配提前退出；被消费码永不重新允许。并发同码只一次成功，不同码也不能越过已经消费的原LOGIN挑战。新挑战、新意图、副本、重启及因子修订推进不能返还预算。
+
+完整耗尽门禁沿既有integration owner增加`TestIAMTOTPRecoveryExhaustionPostgres`，复用真实绑定/成员/联系人准备，在专属空白PG18库由HTTP逐条消费原十码，不插入消费记录或移动数据库时钟。必须经过两个真实十分钟窗口，分别观察共享预算、过期原恢复和显式替代；全码耗尽后当前密码证明仍可读取原STARTED/SUPERSEDED元数据，但重用旧码必须拒绝且不产生Session/新意图/完成。仍有效的第十次恢复可以确认其已签发的新因子，原批次终止、新十码仅一次返回，正常密码+新TOTP重新登录；十个开始/一个完成及原通知关联完整。它不是一般三分钟绑定门禁的超时重试：独立上下文25分钟、Go27分钟、串行CI专用lane30分钟，只为不可压缩的自然时间；原其他门禁期限和CPU/内存/并发不增加。
+
+开始/确认沿Account→USER→password→MFA→原批次/因子→challenge/尝试锁序重验当前状态及锁后数据库时间。RECOVERY_REQUIRED只有与合法开始的不可变事实、已撤销原因子及尚未终止的原批次相符时才可取得LOGIN/RECOVER挑战；即使十条码均已消费，仍可查询本人原恢复元数据，但开始新意图必须另有未消费码。迁移发现的未知旧因子不能仅凭同名状态取得资格。密码代际改变、停用、另一恢复或批次终止使旧工作失效。恢复不改密码、不清除forced、不发Session；forced用户重绑后仍须走密码+新TOTP的原强制改密路径。
+
+成功开始/完成各提交一个封闭`iam.authenticator.recovery-started/recovered`本人USER tenant事实和原VERIFIED地址的非秘密通知，不修改地址/角色/Policy。RootIdentity或平台附件不阻止本人持有当前密码及原码的自助操作，但不能据此授予管理员重置他人MFA的能力；丢失全部材料的本地恢复仍独立。当前SQL/函数和Audit目录对应源码IAM38/Audit22，发布profile/revision未分配。必须证明两副本单码/双码竞争、失败预算、outbox失败回滚、开始/完成后TCP丢失、剩余码重启、新绑定后旧批次拒绝、改密/停用交错及真实通知/历史Audit，不能以纯codec或单进程通过称恢复已交付。
+
+开始/查询请求只有各自闭合字段，秘密必须显式编码；恢复元数据与一次性结果分开，STARTED不能带null完成，成功完成必须严格早于到期，开始的挑战/恢复期限必须相等；普通LoginResponse拒绝RECOVERY，即使独立Challenge已能描述该目的。验证码确认复用已有严格请求形状，不另建同形DTO。首次绑定与重绑复用TOTP绑定事务参数和十条恢复码生成，不保留第二套OTP算法、绑定证明或通知投递器。内部PostgreSQL时间投影先转UTC再进入公开严格校验，不放宽公开日期契约。
+
+2026-09-21本地增量证据：自有PostgreSQL18.6、受限API登录、两独立Authority的`TestIAMTOTPEnrollmentPostgres` race通过（包34.023s），包括原首次绑定/登录/强制改密回归、41类真实目录破坏失败关闭及十类恢复场景：正常完成、丢失开始材料后的显式替代、两挑战同码竞争、同挑战两码竞争、共享失败预算、开始/确认末端通知故障回滚、forced义务保留、reset/停用交错。开始和确认竞争各只有一个成功；安全交错在真实尝试事务提交后暂停，另一Authority完成reset/停用，再放行旧请求，密码代际/MFA/因子/挑战/事实无部分覆盖；重新启用不复活旧恢复挑战。恢复码逐条消费、批次终止、新因子登录及两类事实/通知关联由真实数据核对，不使用SQL文本快照。API/IAM/Audit/HTTP/dispatcher/architecture聚焦race通过；HTTP拒绝混用bearer、selector、重复/null秘密、保留Session和密码字段。
+
+随后全仓默认race、vet通过，两个拥有者OpenAPI重新生成字节一致；通知dispatcher的既有无秘密通知用例扩展到两个恢复事件后race通过，IAM/Audit Linux amd64构建通过。独立自有数据库中的IAM/Audit双schema受限角色与存储隔离门禁8.159s、Audit HTTP4.112s通过，覆盖新封闭action的校验，未替代真实IAM outbox历史投递。
+
+最终TOTP enrollment/recovery、custody、备份快照和密码尝试四类PG18门禁串行race再次通过，包126.157s，其中custody2.74s、备份快照4.35s、密码尝试63.10s。并发密码夹具在真实保留事务提交后暂停并捕获旧hash，reset可先完成，旧hash的后继校验不能签Session；不再依赖最终事务内的ID生成调用位置推断“没有持锁”。备份故障夹具在重启用不可变触发器前先实际执行已排队的deferred约束，不关闭新增恢复证明。两项均为既有测试owner的夹具修正，没有放宽生产锁序、权限或认证条件。未配置真实数据库/SMTP的默认SKIP不计为运行证据。
+
+其后的独立可执行程序门禁`TestIndependentIAMAuditAndPaaSProcesses`在新自有PG18.6数据库上race通过83.36s（包86.631s），保留原受限runtime实际登录、双IAM、Audit、PaaS、双dispatcher及所有原跨租户路径。恢复的开始与确认均由真实IAM提交后在代理处中断TCP回包，客户端确实没有收到成功；三个阶段分别重启两IAM。开始秘密丢失后，只用新密码证明查询原STARTED，明确以另一条原批次码开启替代；原意图变为SUPERSEDED并保留准确原期限/完成时间。完成回包丢失后不重发十码，新因子加当前密码可以正常登录。捕获的丢失回包只用于测试证据和脱敏检查，不当成客户端已取得的材料。
+
+同一进程门禁核对两条原码已消费、旧批次终止、五次USER预算没有因重启/新意图返还，新的PASSWORD_TOTP Session有实际认证修订；原Session/LOGIN与RECOVERY秘密均不能作为IAM/PaaS/Audit bearer。停用USER后再恢复IAM dispatcher，两个开始事实和一个完成事实仍通过历史proof入原tenant链；精确重复不新增记录，伪造requestId拒绝，整链验证通过。通知仅证明三个原地址/原验证意图/修订的已提交任务，邮箱取码仍是明确的合成custody夹具，不冒充SMTP实收。
+
+`TestIAMRetainedMFAProcessUpgrade`使用固定`f5cec0e132ad18900d9a5a5629eae04fda4817f1`的实际IAM37 migrator和binary创建真实绑定、十条恢复码、已消费OTP、MFA Session及未完成LOGIN挑战，再由当前IAM38 apply/verify两次、等值bootstrap及重启。最终race通过18.01s（包21.417s）：原密文/预算/消费/会话/通知及原canonical/receipt/proof保持，不补造恢复记录；原客户端保存码随后完成重绑，旧真实MFA bearer即时拒绝，新因子可登录。完成后再实际执行当前migrator的apply/verify并重启，精确完成、消费码及终止批次不变，旧bearer和原挑战仍拒绝。原IAM32/36保留数据门禁也分别通过14.05s/15.05s（包32.312s）。这些是选定固定源码的数据库行为证据，不是已发布release跨profile升级许可；不要求逐一回放全部未发布schema。新MFA predecessor已接入原CI的独立数据库及串行authority-runtime gate，没有改变发布profile或扩大runner并发。
+
+最终新增自有PG18.6与Postfix3.10.13串行race门禁通过89.54s（包93.080s），覆盖原41类readiness破坏及12类恢复场景。真实邮件子例12.83s：从独立测试Maildir取验证码，建立原可信地址；开始恢复后由生产通知可执行程序实收第一封，停止worker，再确认新因子并停用USER；重启同一受限worker仍实收原地址的完成通知。两条原通知均保存DATA250/ACCEPTED，正文目的、原验证ID/地址修订准确，未包含密码、种子/URI、验证码或新旧十码。原绑定通知子例2.81s也通过；独立SMTP实收/错误认证/外部转发拒绝门禁3.07s（包5.267s）通过。通知机制归012，这些是专属本地邮箱实收，不是公网最终送达、已读或签名安装通道验收。
+
+同轮实际锁等待子例31.39s：原尝试事务提交后，在独立事务仅锁定该USER，`pg_stat_activity/pg_blocking_pids`确认受限runtime真正等待；数据库时钟经过原30秒期限后才释放锁。候选OTP仍在允许窗口内，但最终恢复401，因子/挑战/批次/事实及已扣预算无部分变更。没有改服务器时间、期限或消费记录。缺TOTP密钥、缺邮件包装材料以及有效格式但不匹配封存承诺的种子密钥分别在开始/确认返回503，不消费原码、不签能力也不改预算；同一真实数据随后仍能正常恢复。
+
+最终Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB全仓默认race、architecture、vet及模块校验通过；122个API tracked文件重新生成集合/字节一致，全部包Linux amd64构建和diff检查通过。数据库已无客户端、测试邮箱队列为空后，按准确ID及owner/task标签仅清理本轮两个临时容器、两个空网络和合成SMTP配置文件；本轮标签下容器/网络/卷均零残留。临时空目录删除被工具策略拒绝，保留待人工清理；未操作共享或远端服务。
+
+十码耗尽的独立长门禁已在另一自有空白PG18.6库通过race：顶层1229.25s、耗尽子例1202.09s、包1232.773s。原绑定已占一次额度，十次真实开始分别经过三轮共享窗口，两次间隔各不少于十分钟；全码消费后旧码401、无第十一个意图/Session/完成，查询原元数据不改权威状态。第十次已签发的恢复正常确认且重复确认拒绝，最终九条SUPERSEDED、一条COMPLETED、旧十码全部消费、新十码未消费、十个开始/一个完成及十一条原通知关联完整；随后密码加新TOTP可以登录。固定1CPU/1GiB/Pids192/max_connections16的数据库和GOMAXPROCS2/GOMEMLIMIT512MiB、race-p1不变，没有改时钟、预算或消费行。该新增证据来自同进程双Authority的真实HTTP handler与受限PG事务，不冒充独立可执行进程、SMTP或浏览器门禁；这些仍由各自原owner证明。
+
+同一受限引擎内另建空白数据库，原`TestIAMTOTPEnrollmentPostgres`串行race通过66.03s（包69.540s），保留三分钟上下文、41类readiness破坏及全部非邮件恢复场景，真实USER锁等待到期31.34s通过；两项Postfix子例因本轮没有SMTP明确SKIP，不继承前轮邮件实收为本次证据。新长门禁与原回归使用的Go源码字节完全相同，没有以短路或缩短时间换取通过。其后全仓默认race/architecture、vet、模块校验、gofmt及diff检查通过；默认外部门禁SKIP仍不算真实验收。本片仅测试、现有CI和FEAT证据，未修改生产API/SQL/schema/profile/UI。两个测试终止且实际无数据库客户端后，仅停止并删除本轮准确owner/task的临时PG容器及空网络，标签下容器/网络/卷零残留；未操作其他任务或远端资源。
+
+测试与串行CI增量已固定推送`80a6e6d18288df7f5d89ffee40722ee9aa614ee7`；其[Verification35531111030](https://github.com/xiak/matrix/actions/runs/35531111030)已由GitHub API核实精确SHA及completed/failure：六项均runner_id=0、steps=0，新增自然窗口作业的annotation明确为账户付款或spending limit，未执行测试。生产固定48e56cbb的[Verification35528886088](https://github.com/xiak/matrix/actions/runs/35528886088)同为五项零执行失败；这些不能算代码通过或证明代码回归，不反复重跑不变的billing阻塞。
+
+整片仍未验收：浏览器恢复与独立CI尚须完成；step-up/受限首次强制设置仍属后继S2，离线CLOSED/reconcile/reopen及发布profile由安装主任务独占实施，本片没有修改其契约或消费者。安装与UX已收到固定对象、准确IAM38/Audit22形状及验收缺口，只能选择性复用并自行验证。
+
+#### S2b后继：目的限定step-up与本人恢复码重发
+
+本纵向目标补足一次性十码回包丢失后、用户仍持有有效认证器的安全重发路径；不是管理员恢复、丢失全部材料的旁路或完整S3设置。以下五个HTTP入口、用例、SQL及封闭事实已固定推送`b7a70bfa9e53f0a5f16619c60523c84613cb7b0b`，具备下述本地证据，但整片尚未验收。结合已冻结的离线恢复隔离后，当前源码为IAM40/Audit24；不能继承前置纯契约、安装分支或旧IAM38/Audit22的验收，也不预分配发布profile/revision。
+
+StepUp始终由本人非forced、当前有效的PASSWORD_TOTP登录Session持有。原Account/USER、Session、credential generation、factorId/revision及当时有效恢复批次从IAM推导，不能由URL/body选择；ROLE、AccessKey、SERVICE和未登录挑战不能持有。此处不再另发行挑战秘密：公开ID不是能力，每个写请求仍须原有效bearer与锁内证明。原Session认证事实不被再次认证改写，也没有“最近验证过MFA即可任意操作”的缓存。
+
+| 入口 | 封闭契约与效果 |
+| --- | --- |
+| `POST /v1/auth/step-up` | `{requestId,operation,expectedFactorRevision}`；首个operation仅`RECOVERY_CODES_REGENERATE`。requestId就是后继敏感命令的原意图，绑定真实USER/Session及准确输入；等值返回原StepUp，变体409。不返回新凭据、剩余额度、内部摘要或可选目标 |
+| `GET /v1/auth/step-up/by-request/{requestId}` | 原有效Session读取该原意图非秘密StepUp；NOT_FOUND不证明提交回滚。不是跨用户列表或通用receipt服务 |
+| `POST /v1/auth/step-up/{id}:verify` | `{requestId,password,code}`加原bearer；这里requestId标识本次认证提交，不替换StepUp绑定的敏感命令意图。共享现有USER密码/OTP预算，重新验证当前密码及未消费TOTP后只返回PROVED元数据；不能用恢复码替代TOTP、发行Session或隐式执行敏感命令 |
+| `POST /v1/auth/recovery-codes:regenerate` | `{requestId,stepUpId,expectedFactorRevision}`加原bearer；requestId/预期修订必须等于StepUp绑定的原意图。成功同事务消费匹配PROVED、终止准确旧批次、保存新十条单向验证值及不可变完成/事实/通知；APPLIED仅一次返回十码，EQUAL_REPLAY只返回原完成元数据 |
+| `GET /v1/auth/recovery-codes/regenerations/by-request/{requestId}` | 当前有效本人Session读取原`RecoveryCodeRegeneration`；可以在正常重新登录后查询原完成，不要求旧Session继续有效，但不能重新取得十码或借查询消费证明 |
+
+公开`StepUp`只含id、原requestId、operation、expectedFactorRevision、`PENDING/PROVED/CONSUMED/EXPIRED`及createdAt/expiresAt/provedAt/consumedAt。创建时固定120秒绝对期限，验证成功不续期；PROVED/CONSUMED时间须在原期限内，消费不得早于证明。状态描述历史阶段，不承诺此刻仍有权限；请求仍检查当前身份、原版本、实际操作与期限。每USER最多三条未到期PENDING/PROVED，创建新意图不清空跨副本共享尝试预算。已证明后的重复verify提交返回409；回包未知时，通过原命令requestId读取非秘密状态，不重放密码或OTP、不另签证明。旧证明到期、logout/reset、密码代际、USER/Account停用、因子或原恢复批次变化后不能用于另一命令。
+
+首次目标没有任意payload：固定操作+原requestId+预期factorRevision是公开输入，真实Session/USER/因子/旧批次和凭据代际是内部绑定。后续其他敏感命令须按准确字段扩展闭合联合，不能改成caller attributes、任意JSON承诺或通用Action字符串。结构错误/错目的不消费另一合法证明；同一证明并发只有一次执行。坏密码/码的持久失败预算遵循原短事务规则，末端成功事实失败必须回滚效果但不能把已提交保留当作免费尝试。
+
+恢复码重发不更换TOTP因子、不推进factorRevision、不清除或升级任何Session、不改密码/角色/Account要求；新批次通过单一`iam.recovery-codes.regenerated`的tenant USER-self/PRINCIPAL事实及准确step-up完成建立不可变来源。旧批次的已消费记录保留，剩余旧码因整批终止永不再次接受；原`factor.bound_event_id`不改写。当前批次与原绑定事实的关联检查必须同时接受有完整封闭重发来源的新批次，不能简单删掉`batch.event_id == factor.bound_event_id`而放宽任意写入。原绑定/恢复批次的canonical及历史proof保留。通知仅发送`RECOVERY_CODES_REGENERATED`到原已验证地址，不包含新旧码、种子、密码、OTP或可用认证链接。
+
+验收沿现有owner：严格字段/秘密显式编码、LoginResponse拒绝StepUp；两个真实副本共享密码和OTP消费，跨Session/主体/目的/意图/旧批次/修订攻击；创建/证明/消费期限在锁等待后重新检查；证明与logout/change/reset/停用/恢复双向交错；同证明双提交、两个证明竞争同旧批次、成功事实/通知失败无部分换码；开始/证明/换码提交前后真实断TCP与重启，只读核对、不重发秘密。换码后用一条真实新码完成原受限恢复，旧十码始终拒绝；旧绑定/恢复记录经等值迁移保持，伪造重发来源不能取得当前资格。真实SMTP原地址实收与操作者之后停用的历史Audit投递另沿原门禁。安装离线CLOSED/reconcile/reopen仍由installation独占，新增批次来源必须通过固定对象协调后集成，不在本片修改其接口或宣称备份防回滚已完成。
+
+前置纯契约证据：原`contract_test.go`/`schema_validation_test.go`证明封闭操作与字段、UTC微秒和原120秒期限、状态/时间顺序、已绑定修订范围、秘密显式编码、APPLIED十码唯一性、EQUAL_REPLAY禁止秘密字段及LoginResponse不能接受StepUp。Go1.26.7/GOMAXPROCS2下API与全仓默认race/architecture、vet、模块校验、122个tracked API文件再生成集合/哈希稳定及Linux amd64构建通过；单worker的`FuzzStepUpContractRoundTrip`运行10秒、176823次通过。外部环境默认SKIP不算运行证据，该纯契约固定不含数据库schema/readiness、Audit action、通知、安装profile或UI变化，也不是后继运行时组合的验收。
+
+固定`303093bb945da43eb597f56b52059009580d0da1`已推送；[Verification35532968349](https://github.com/xiak/matrix/actions/runs/35532968349)按精确SHA核实completed/failure，六项均runner_id=0、steps=0，付款/spending-limit annotation阻止启动。独立CI未执行，不能继承本地结果或记作验收通过；该外部限制不改变下一步原子实现的安全边界。
+
+运行时数据仍由原`000012_totp`与通知owner持有：`step_ups`保存原Session的用途限定证明，`recovery_code_regenerations`保存不可变原意图/新旧批次/事实/通知关系；原恢复批次只追加准确重生成来源和终止原因，不更换其复合主键或重写绑定事实。原子末端验证新十码、消费的密码/OTP尝试、原Session认证事实及本人通知；对原始发行与后续重生成使用各自闭合历史来源，旧的临时`RECOVERY_CODES_CHANGED`占位名称已被实际`RECOVERY_CODES_REGENERATED`替换，没有兼容别名。readiness与迁移校验检查表、约束、索引、ALWAYS/deferred保护及确切函数/ACL，数值相同不代替这些检查。
+
+本地前置真库证据（离线隔离接入前）：自有PostgreSQL18.6、受限运行登录和两个独立HTTP handler的`TestIAMStepUpPostgres` race通过332.33s（包335.870s）。56类真实schema/权限破坏均失败关闭；八类重生成场景包括原意图重放、跨Session、共享密码/OTP预算、logout/改密/reset/停复用后的旧证明拒绝、同证明并发只有一次十码响应、末端通知明确P0001故障无部分变化、新码继续完成原受限恢复，以及实际USER锁等待超过原120秒（121.34s）后的过期拒绝。使用生产窗口、真实数据库时间和原算法成本，不修改时钟/计数制造成功；这不等于独立进程、提交后断TCP、SMTP、浏览器或接入离线隔离后的累计验收。
+
+离线隔离只选择性采用已确认的固定对象，来源选择归原adoption owner。保留其`000014`、专用本地角色、CLOSED→reconcile→reopen和永久批次栅栏，并保留本分支已有Session完整形状校验；在线增量占用其后继IAM40/Audit24，不修改ServiceIdentity、lookup_service、七列claim或旧canonical。普通认证事务在OPEN共享锁下运行；离线关闭以同一状态锁串行化，不能在关闭后借在线换码逃出隔离。恢复前的Session/证明不得被新会话接走，被永久隔离的旧批次不能经迁移重放或新step-up重获恢复资格。原密码恢复的精确历史读取保持原独立事务，不能因全局隔离获得新的恢复能力。
+
+当前40/24组合的聚焦race通过API/私有恢复codec、IAM用例、HTTP、目的限定入口与迁移进程配置检查。沿原integration owner采用的双库`TestIAMAuthenticationRecoveryPostgres`包含真实PASSWORD_TOTP登录及恢复前PROVED，在新独立库最后复验通过86.74s（包90.279s）：CLOSED拒绝在线重生成；reopen后旧会话及新会话均不能消费原证明，新证明也不能使用永久隔离的原批次；实际schema重放后仍拒绝，且证明/批次/成功事实/通知无部分变化。两个库是独立准备的源/恢复权威，未执行签名安装器或真实备份搬移，不能据此称安装恢复已验收。
+
+当前40/24组合在新的独立PostgreSQL18.6库重跑`TestIAMStepUpPostgres`，race通过395.18s（包398.640s）；原56类schema/权限损坏及九类在线场景全部通过。新增两条实际PROVED竞争同一旧批次用时58.61s，恰有一个APPLIED十码响应、一个401，只有一条完成/事实/通知和一个存活新批次，失败证明未被消费；实际锁等待超过原120秒后的到期拒绝用时121.23s。原同证明双提交、末端失败回滚、新码恢复及重放保持；没有缩短生产窗口、放宽预算或跳过原场景。真实邮件分支单独SKIP，不计入上述通过范围。
+
+后继进程夹具已修正并实际复验：原登录竞争与新增重生成共用USER会叠加共享尝试额度，现将后者改为单独通过实际绑定及密码/TOTP登录的USER，保留原竞争/强制改密路径、真实预算及原六分钟期限，不增加重试到通过或计数回填。2026-09-24在本任务独立Windows PostgreSQL18.6目录及随机loopback端口，`TestIndependentIAMAuditAndPaaSProcesses` race通过143.01s（包146.381s）：实际受限runtime登录、两个IAM与Audit/PaaS/dispatcher、创建/证明/换码各自提交后丢失TCP响应、重启后原意图查询、显式新意图替换丢失的十码，以及操作者停用后的原事实投递/重放/完整链均通过。旧401运行仍是失败记录，不用后继通过反推当时未采集的数据库状态。原联系人码为合成托管夹具，这不是SMTP或浏览器证据。
+
+该本机数据库用Windows Job限制2个逻辑CPU、1GiB总内存和24个进程；实际读取确认16连接、64MiB shared_buffers、4MiB work_mem及关闭parallel workers，Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB、race-p1串行。未安装全局服务或启动/重启Docker、共享服务及远端。原用例测试另以十个失败分支证明：密码/OTP保留或拒绝提交不确定时不继续读种子/签证明，不重新保留免费尝试；两个阶段之间撤销Session或改变generation关闭旧身份；异常退出归还昂贵计算槽。这仅证明用例控制流，真实持久预算和锁竞争仍由PG门禁负责。
+
+同轮实际固定`f5cec0e1` IAM37 executable/schema产生已绑定因子、消费步骤、原十码、PASSWORD_TOTP会话及待完成挑战，随后当前IAM40双迁移/bootstrap/重启保留数据，`TestIAMRetainedMFAProcessUpgrade` race通过43.21s（包46.723s）。原码继续完成受限恢复及新因子登录，完成后再次迁移/重启仍保留准确消费、批次终态和旧会话/挑战拒绝。首次检查因`to_jsonb(整行)`把新添空列误当原批次变化而失败；已改为原归属、因子/事件来源和生命周期的明确比较，并独立断言不补造step-up、重生成或其来源字段，生产迁移未因此放宽。此片只证明选定真实前驱的数据/程序边界，不要求逐版回放所有未发布schema，也不构成跨release profile许可。
+
+独立通知进程经真实Postfix投递原重生成邮件的分支已加入原测试owner，仍待实跑。当前Docker引擎不可连接；无Postfix时显式SKIP，不把队列当实收，不继承此前其他邮件类型的验收。
+
+同一组合另在三个独立空白数据库完成Audit累计race：双authority受限登录/完整攻击面5.64s、固定旧tenant链保留升级0.35s（包9.134s）、Audit HTTP隔离与并发1.27s（包3.844s）。首次运行在初始化readiness检查发现两处旧IAM39断言与实际IAM40不符；只更新准确版本预期，在新库保留原初始化前/后状态、实际函数/权限及不可变记录门禁后通过，未降低生产校验。测试终止且确认无客户端后已正常停止本任务本机PG；先前清理被工具策略拒绝的临时数据/私有文件仍按owner-only权限保留，未绕过重试或操作其他任务资源。
+
+2026-09-24最终全仓默认race（含architecture）及vet通过；模块校验、122个API文件集合及生成字节一致、Linux amd64构建、gofmt与diff检查通过。新增step-up真实门禁实测约六分半，放入现有CI矩阵的独立20分钟lane；四个数据库lane仍max-parallel=1，原storage/runtime各20分钟、自然窗口30分钟及全部单项期限不变，没有把新增工作挤入旧门禁预算。YAML及14段Bash语法检查通过，编译列出的17个IAM真库测试分别归一般存储6、Role1、runtime8、step-up1、自然窗口1，未遗漏或重复；这些检查不等于独立runner执行。默认外部环境SKIP不计验收，真实PG/进程证据仅以上述明确实跑为准，SMTP、浏览器及独立CI仍缺失。本片未修改UI、installation/profile、PaaS或既有canonical拥有者。
+
+固定b7a70bfa的[Verification35953732463](https://github.com/xiak/matrix/actions/runs/35953732463)已经GitHub API核实精确SHA及completed/failure：七项均runner_id=0、steps=0，go的annotation明确账户付款或spending limit阻止启动，未执行测试。不能记作通过或代码回归，不修改billing、不反复重跑不变的外部阻塞。安装与UX/UI只接收固定对象及上述证据边界，不继承验收或发布profile。
+
+安装发布前置仍未完成：旧preparation35/18+r13没有本次purpose executable/SQL，不是新40/24组合可在数据库恢复后才尝试的目标。若产品继续支持恢复到exact signed immediate predecessor，必须先有具备完整恢复ABI、且未验收MFA创建仍关闭的新preparation A，再证明B→A的真实受支持路径；目前没有这样的已验收A/B。此处不分配release profile/revision、不开放跨profile旁路，也不以本地双库事务代替签名备份恢复或任意整机快照防回滚。
+
+#### 事务、锁序与失败结果
+
+复用当前SERIALIZABLE边界，但认证失败必须是可提交的业务结果。仓储callback返回错误会回滚；因此尝试已验证失败时先提交`REJECTED`及计数，用例在提交成功后映射401。数据库异常、提交未知或必要计数不能持久化时不发行Session，也不把未知结果当作可免费重试。
+
+1. 密码等昂贵运算前，短事务保留S3定义的单次在途额度，绑定服务器attemptId、实际USER、原密码代际及期限；只有保留已确认成功才执行计算，不在数据库锁内长时间运行Argon2。
+2. 验证结果进入最终事务，沿Account/安全配置→稳定USER→密码凭据→因子/恢复批次→稳定Session→challenge/step-up/尝试完成顺序重检。现有catalog/policy锁仍按原授权命令顺序；涉及新状态的登录、密码、附件授撤与恢复路径必须统一核对顺序，不能某条路径先锁Session再回头锁因子。
+3. 读取当前账号配置使用共享锁，修改使用排他锁；不是每次登录独占整个Account。配置、主体、密码代际或因子状态改变时，旧计算不能落库。锁等待后使用数据库当前时钟重查到期/OTP窗口，不沿用等待前事务时间。
+4. 成功发行将OTP消费、challenge终态、Session认证事实、尝试结果及outbox一起提交；因子/设置变更同样将修订、资格屏障、不可变完成和事实一起提交。失败不产生成功Session或成功事件。
+5. SERIALIZABLE重试使用同一个已保留attempt，不重新获取免费猜测次数；已完成结果只查原非秘密完成。只有可证明事务已回滚的40001/40P01才能重试事务，网络断开/提交未知不得套用该策略。
+
+step-up通过只证明本次再次认证，不等于PDP Allow，也不提升整个Session。其原始120秒绝对期限同时约束PENDING和PROVED，验证不续期，绑定当前Session、目标操作、非秘密输入承诺及版本；设置最终写入时再检查权限、未撤销平台附件保护和实际规则，成功时一次消费。因子、密码、会话或权限先改变会让旧证明失效。没有“最近做过一次MFA，之后任意操作都跳过”的全局缓存。
+
+#### 绑定、替换与秘密托管
+
+已有本人登录会话的主动首次绑定需重新验证当前密码；forced-change先沿既有密码流程完成，不能通过绑定清除must-change。账号强制MFA且无可用登录会话时的首次设置，走下述独立受限挑战，不绕过要求先发普通Session。待确认种子不能用于登录；必须证明持有该种子所产生的有效码，才在同一事务确认绑定并写入事实。替换需旧因子或合法恢复证明，加上新因子有效码；新因子确认前旧绑定仍生效，确认时原子终止旧绑定，不制造密码单独登录的空窗。
+
+首次强制设置的ENROLLMENT挑战只在已证明NEVER_BOUND/合法REMOVED、当前密码及修订仍有效且不存在待替换的可信地址时，允许012的首次通知地址验证子步骤；尚需初始改密时必须先改密并重新取得挑战。此子步骤不取得Session、普通资料修改或更换既有安全接收地址的权限。验证码只证明当前意图中地址的持有，不清除因子要求；地址确认后仍须完成真实TOTP绑定并正常重登。LOST/RECOVERY_REQUIRED、未知/损坏因子或旧库恢复不能通过这个首次设置分支接管接收地址。
+
+S2c首次设置的公共契约复用`AuthenticationChallenge`，purpose为独立的`ENROLLMENT`，nextStep仅`PASSWORD_CHANGE|ENROLLMENT`；不把它伪装成已完成MFA的LOGIN挑战或RECOVERY。Login的CHALLENGE_REQUIRED分支支持该用途，但仍不携带Session、普通credential或mustChangePassword字段。运行时发行先在原密码预算及Account→USER→凭据→因子锁内证明当前账号要求、非受保护主体和准确NEVER_BOUND历史；首片不虚构尚无合法解绑事务的REMOVED资格。发行结果须匹配上述锁内读取的真实状态、用途与阶段，caller不能选择purpose，数据库返回与当前资格不符的用途也不能因公共枚举存在而被接受。
+
+目的限定的首次设置操作使用challengeCredential请求体，不使用Authorization bearer，且与普通Session接口互斥。`InspectEnrollmentChallengeRequest`仅含challengeCredential；`EnrollmentChallengeState`在PASSWORD_CHANGE阶段只返回challenge，在ENROLLMENT阶段还必须返回本人NotificationContact，可含当前PENDING TOTPEnrollment；后者沿同一challenge绝对期限，不重新获得五分钟。`StartChallengeTOTPEnrollmentRequest`仅含requestId/challengeCredential，不接受密码、factorRevision、Account/USER、算法、恢复码或Session selector；预期因子修订取锁内权威。发起响应复用原StartTOTPEnrollmentResponse的一次性provisioning边界，确认复用VerifyAuthenticationChallengeRequest及ConfirmTOTPEnrollmentResponse，成功只返回REAUTHENTICATE和一次性恢复码。
+
+012拥有首次邮箱子步骤：`StartChallengeNotificationContactVerificationRequest{requestId,challengeCredential,email}`及`ConfirmChallengeNotificationContactVerificationRequest{requestId,challengeCredential,code}`不接受普通密码/Session或SMTP选择。先证明ENROLLMENT用途、未过期、原密码/因子/配置资格仍有效且无可信地址，再使用原共享发送/猜码预算；确认期限取原验证意图与challenge期限的交集。已有VERIFIED地址只能沿原记录使用，不能借设置流程替换。inspect仅是当前挑战持有者的非秘密观察，不重发种子、码或挑战凭据；回包未知不改变原意图。
+
+运行时HTTP沿已有`/v1/auth/challenges/{challengeId}`拥有者增加封闭的POST入口：`:enrollment-state`读取上述状态，`:enroll`发起原首次TOTP意图，`:confirm-enrollment`提交当前因子的OTP。012的首次邮箱入口为其下`/notification-contact/verifications`发起验证、`/notification-contact/verifications/{verificationId}:confirm`确认原验证；verificationId只是原意图的标识，不能改变挑战所属USER。所有入口都拒绝query、Authorization和Matrix-Subject-Credential等第二认证载体，秘密仅通过严格JSON请求体传递；响应no-store，错误不回显输入。PASSWORD_CHANGE只能读取该阶段并调用原`:password`，不能读取地址或发起后继操作。入口存在不代表账号强制开关已获准开放；实际正向验收须与设置CAS和资格屏障一并完成。
+
+固定`0a237aae`的新增契约不注册HTTP路径、不改SQL或源码schema、不开放账号update/新StepUp值，也不证明已实现强制设置。实际首次设置路由、设置写入和资格屏障仍须在后继纵向片接入；普通Session本人绑定和RECOVERY路径保持原约束。基础门禁覆盖用途/阶段/载体互斥、严格字段及秘密编码、缩短但不可延长的绑定期限、跨目的和半会话拒绝。
+
+首次设置的运行时实现继续使用原`create_login_challenge`，由锁内真实NEVER_BOUND及Account要求选择ENROLLMENT，不接受调用方purpose。Go同时依据同一事务读取的明确`enrollmentRequired`核对返回用途：需要初始改密时只能得到ENROLLMENT/PASSWORD_CHANGE，否则只能得到ENROLLMENT/ENROLLMENT；原BOUND/RECOVERY_REQUIRED仍只能得到准确LOGIN阶段。缺少显式要求、用途或阶段不一致均为权威不可用，不退回密码Session。
+
+现有`:password`入口承载两个不同的封闭证明：LOGIN/PASSWORD_CHANGE必须有已消费TOTP及原后继关系；ENROLLMENT/PASSWORD_CHANGE必须仍为未绑定的非受保护USER、当前强制要求、原成功密码尝试及锁内有效代际/配置。不能共享“已经完成MFA”的假设。两者成功都推进密码代际、撤销全部旧Session及未完成挑战，只返回REAUTHENTICATE；首次设置者重新用新密码取得独立ENROLLMENT挑战，不把改密结果转换成Session或补造TOTP事实。现有绑定、恢复码、角色和通知地址不由此修改。
+
+这些分支与首次联系人/TOTP确认、设置CAS和Session/Role资格屏障属于同一S2c运行时交付；候选中的配置变更必须来自当前PDP及同Session操作证明的原子事务，不能通过迁移、配置或内部默认值提前存入强制要求。全部路径及安装恢复前置接齐前不得将候选作为发布验收；局部编译/用途反例不是首次设置纵向验收。
+
+S2c固定基线为IAM43/Audit25/PaaS2源码，最终独立CI证据见下文，不是发布profile或完整S2c验收。已有受限首次联系人/因子工作流与五条封闭HTTP路由；Session及所有LOGIN/RECOVERY/ENROLLMENT挑战在发行时锁内保存Account安全设置版本，历史NULL不回填。已有Session→Role读取复用同一当前资格判断；平台保护附件真实授撤终止该USER旧Session和待完成挑战。设置专属step-up绑定准确意图，最终事务在Account排他锁后重验同USER/Session、当前PDP和版本；原子保存单调设置、消费证明、不可变完成和tenant事实。IAM产品Profile7仅新增`iam.security-settings.update`并保存历史6，旧系统策略不自动加权。Audit25增加`iam.security-settings.updated`，严格USER→ACCOUNT及原允许决定，不改旧canonical或链。分项本地证据如下，不据此宣称完整竞争矩阵、恢复或发布门禁完成。
+
+2026-09-24的`TestIAMSecuritySettingsPostgres`沿用原integration owner，在独立PG18.6与真实Postfix上完整race-p1通过85.06s（包88.588s）：真正PASSWORD_TOTP证明无操作权限仍403；撤权事务停在真实成功事实屏障时，设置请求确已认证并等待其Account锁，撤权提交后403，原PROVED未消费且无配置/完成/成功事实/通知。显式重新授权后，Account更新和通知写入的末端拒绝均全部回滚。false→true→false各只产生一条完成、事实及原已验证地址的通知，精确重放和双次schema不重复。旧密码、MFA及原root会话随版本变化拒绝，新MFA登录可查原结果而不终止新Session；放宽不复活旧挑战。新USER经受限强制改密、从实际Maildir取验证码后HTTP确认地址、TOTP绑定及十码一次响应，才能正常PASSWORD_TOTP登录。PASSWORD_CHANGE不暴露后继信息，缺少可信地址403，挑战不能当Session。两名真实授权及PROVED的USER竞争version=2，恰一APPLIED、一401，失败证明不消费；17类设置存储/ACL/约束/触发器破坏使readiness关闭。原三分钟期限、算法成本和真实尝试预算不变。
+
+本次两个`SECURITY_SETTINGS_CHANGED`均经独立生产通知可执行程序到达真实Maildir，并保存原通知的一次DATA250/ACCEPTED观察；第二个实际写入者先由另一个明确授权、正常重新登录的USER停用，再启动worker，历史投递仍成功。正文/Subject目的与通知ID、原地址匹配，没有密码、种子/URI、验证码、Session/challenge凭据或恢复码。保留前置root故意耗尽的OTP预算，不能为邮件夹具清零或借旧Session继续操作。专属Postfix3.10.13为2CPU/768MiB/Pids128、独立网络及随机loopback端口；原STARTTLS/错误口令/外部转发拒绝门禁3.07s（包5.390s）通过。IAM HTTP handler仍在测试进程内，通知worker是真实受限登录的独立程序；本地邮箱实收不是公网最终送达、浏览器或签名安装验收。未配置Postfix的分支仍只证明加密托管/事务，明确SKIP邮件子例。
+
+投递器修正前，同一源码的`TestIAMPolicyAuthorityStoragePostgres`145.16s、`TestIAMHTTPPostgresVerticalSlice`92.76s和非SMTP设置门禁86.39s串行组合包327.873s通过。平台目录、附件、生命周期及密码会话夹具已按当前契约替换：先证明授撤平台附件使原bearer401，再正常重登验证原Allow/403；并发凭据保护入口先确认两名操作者均已认证，不能让失效会话掩盖目标权限检查。保留组继承、策略版本/Deny/Boundary、真实grant与reset/status竞争、原root恢复、双租户及outbox物理归属门禁；设置通知、原会话及双次迁移的不复活检查保持。未放宽生产权限、数据库隔离、原期限或尝试预算。这是本分支真库回归，不替代SMTP、浏览器、签名恢复或独立CI。
+
+上述实跑发现并修正了存储投影的时间边界：PG的Asia/Shanghai时间先解码并统一UTC，再执行公共观察校验；不能让嵌套公共JSON decoder在规范化前把合法PASSWORD_CHANGE状态当503。公共UTC、用途、阶段与秘密校验未放宽。联系人码取自原加密托管夹具，证明确认事务而非SMTP实收；浏览器、其他撤权/改密竞争和签名恢复仍需后继验收。原双authority数据库门禁在另一新PG18.6库通过（包10.546s），保留实际受限登录、RLS/不可变记录攻击与IAM43/Audit25精确readiness；不把该通用Audit门禁当作新设置事件的端到端投递证明。全仓默认race（含architecture）、受影响API/IAM/Audit的vet、118个API Go/JSON文件集合生成稳定、workflow YAML及14段Bash语法、格式/diff检查通过；默认外部SKIP不计实跑。Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB，真库仍为原2逻辑CPU/1GiB/24进程/16连接专属Job；该轮零客户端后正常停止并保留数据，后继进程门禁另用新数据库。独立CI与完整S2c尚未完成。
+
+同日既有`TestIndependentIAMAuditAndPaaSProcesses`在新的独立PG18.6库race-p1通过，最终含设置通知的子测试145.74s，仍用原六分钟期限：真实平台API创建独立Account、显式设置策略及实际MFA操作者，PUT提交后真实断TCP，再重启两个IAM并正常完成MFA重登；原完成读取及精确重放不改变新Session，变体409。变更前正常访问PaaS的原USER及其真实RoleSession随后立即401，IAM重启和同USER重新登录也不复活旧Role。暂停本任务dispatcher期间撤销操作者设置权限、停用USER，原事实绑定的唯一通知仍保留原已验证地址；恢复dispatcher后原允许决定及`iam.security-settings.updated`只投递到本Account链。跨Account/请求/目标变体403，事实等值重放且整链验证通过，原应用归属和读取保持。原绑定/改密/恢复码/step-up断连与重启、受限进程DB身份、双租户资源/Operation/outbox及日志秘密检查保留。旧平台附件夹具已改为先断言授撤后的原会话401，再正常重登执行原Allow/403边界，不弱化权限断言。该子测试所在组合包因下面前驱的过期目录断言曾失败，不能称该次组合包通过；修正后的前驱另库单独复验。该进程门禁仍不是SMTP、浏览器或签名恢复验收。
+
+2026-09-24本任务独立Windows PG18.6的`TestIAMTOTPEnrollmentPostgres`以race-p1通过167.49s（包172.160s）：实际绑定、双实例OTP竞争、正常/强制改密、恢复、真实锁等待到期、历史与schema/ACL校验保留；新增缺失/错误Account版本的Session和挑战拒绝，以及不可改写版本的反例。负向版本损坏只在回滚事务中注入，不是假造合法配置变更。两项SMTP子例明确跳过，不作为通知实收证据。
+
+同一单前驱owner使用实际固定`0a237aae` IAM41程序产生两Account数据，再由最终IAM43设置/通知代码迁移、verify、等值bootstrap及重启，race通过41.75s（包45.195s）。原密码与MFA Session、待完成LOGIN/RECOVERY均保持NULL资格并拒绝，迁移不改原凭据/消费/完成/canonical；新登录取得当前版本，已消费恢复码不退还，新密码证明加另一条原码可显式重启恢复并完成新因子登录。旧MFA会话与待恢复历史由独立USER承担，不回填计数或增加原三分钟期限。曾保留的“当前IAM目录为6”断言已按本片明确Profile7修正；真库核对旧目录字节归档仍在、所有初始设置仍1/false/原createdAt且没有新变更完成，保留这些不扩权/不补造历史断言。原受限runtime登录、提交后历史、产品声明冻结/显式发布选择、撤权及重启门禁保留。这不证明签名release跨profile兼容，也不替代其他S2c竞争或浏览器验收。
+
+真实SMTP增量暴露并修正了投递器漏接`RECOVERY_CODES_REGENERATED`和`SECURITY_SETTINGS_CHANGED`的问题：此前两者会在领取后被封闭switch拒绝，模板/SQL存在不等于可发送。原dispatcher测试先复现两类失败，再验证准确类型的250观察、夹带验证码密文及未知kind拒绝。`TestIAMStepUpPostgres/authenticator_recovery/regenerate`在新PG18.6库race通过38.51s（包42.063s），其中历史邮件1.49s：本人实际重生成十码、用新码完成因子恢复、再停用USER后，独立worker仍实收原通知，原250结果与地址关联保留，正文/Subject无新旧恢复码或其他认证秘密。这是聚焦重生成路径，不冒充全部九场景重跑。邮箱观察在原十秒期限内一次筛选有界文件集，再校验匹配邮件的精确正文、To/From/Received/Message-ID；不再为每封无关邮件启动Docker进程，也不扩大期限或把SMTP受理当作实收。
+
+`TestIAMPolicyAttachmentSessionPostgres`在另一新库完整race通过60.69s（包64.228s），仍用原两分钟期限：USER/Group/platform的48种附件授撤与登出、各改密选项、重置、停用及当前授权竞争全部保留。平台附件授予后原bearer拒绝；新登录请求通过认证/PDP并等待真实数据库屏障时，撤销再重新授予平台附件，原两个Session及在途写入仍拒绝，无错误成功事实。双次schema与等值bootstrap后拒绝保持。本轮只移除矩阵中28次完全未使用的第二Session登录；跨Session改密及平台撤权/重授所需的第二Session仍真实签发，没有减少安全场景、降低密码成本或增加期限。
+
+固定`847fc85307f8f50992a04f67b71caecf7581683d`的[Verification35997837317](https://github.com/xiak/matrix/actions/runs/35997837317)已确认authority-storage失败：上述矩阵在末尾第二次schema replay触及120秒截止，不能继承本地68.39s的旧通过。后继投递修正`fea7a772a3af5a31b3b790f79689a1843bcf70d7`的[Verification36002470008](https://github.com/xiak/matrix/actions/runs/36002470008)也未通过storage：旧离线恢复夹具仍使用平台附件授予前的operator Session，实际401导致原403断言和锁等待失败。该失败已在新PG18.6库复现35.56s；只在原owner补充原Session必须401、正常重新登录后继续全部原权限/并发断言，没有接受401冒充受保护身份拒绝。修正后完整`TestIAMLocalCredentialRecoveryPostgres`通过24.43s，保留专用SQL身份、精确receipt、两种恢复/撤权次序和schema/bootstrap不复活。以上失败不能由后继本地通过回填，当前修正仍须自身精确SHA独立CI。
+
+设置竞争门禁`TestIAMSecuritySettingsRacesPostgres`在独立空白PG18.6库串行race通过35.99s（包39.422s）。八个Account均经正常创建、首次改密、显式设置授权、联系人确认、实际TOTP绑定和密码+TOTP登录；设置收紧分别与logout、保留当前Session的日常改密、保存码开始因子恢复及另一普通USER的LOGIN验码交错，原outbox屏障及第二副本的真实锁依赖控制双方先提交。设置先提交时旧Session/LOGIN挑战拒绝；改密先提交时当前Session继续有效但旧generation的StepUp拒绝；logout/恢复先提交时设置没有部分版本、证明消费、完成、成功Audit或邮件意图。普通USER验码先完成可以真实签发Session，后提交的设置仍合法，但该Session随设置版本变化立即拒绝；两条已提交事实均保留，不错误要求此顺序只能一方成功。设置先完成则旧LOGIN挑战不消费OTP、不签发Session。真实generation/因子修订/恢复码和OTP消费、原完成及当前schema重放、新Authority后的旧资格拒绝逐项核对；没有隐藏deadlock重试。原三分钟期限、密码成本和共享尝试预算保持，不移动时钟、回填正向数据或宣称进程重启/SMTP/发布验收。设置放宽、其他因子/reset及Role竞争仍按完整矩阵继续。
+
+固定`234a401212e4c14a739766fcbb38c17cfa162c88`的[Verification36005275195](https://github.com/xiak/matrix/actions/runs/36005275195)已确认storage失败，Go/node分别通过，其余数据库lane仍不能算成功。失败发生于`TestIAMRoleAndManagementReferencesPostgres/private_references`：三条明确合成的负向Session行缺少当前必需的认证事实，被INSERT触发器23514拒绝，原过期/旧代际/NULL代际断言尚未执行。该失败在独立PG18.6复现3.31s；修正只复制原真实登录的认证事实，保留各自无效的期限或凭据代际，额外核对无bearer索引、MFA/设置事实一致且仅预定资格无效。没有停用触发器、伪造正向登录或放宽生产校验。完整private_references子门禁的108种命令/引用组合及末尾双schema/bootstrap保留检查在另一新库race通过（包17.528s）；这是该子门禁，不冒充七组Role门禁全部重跑。
+
+本轮最终全仓默认race（含architecture）及vet、gofmt/diff检查通过；Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB，重型真库仍串行race-p1。新门禁进入原step-up lane的独立数据库，storage排除重复执行，未新增lane、提高资源/并发或放宽期限。默认外部环境SKIP不是运行证据；本轮真库范围为上列明确执行的门禁，不重复启动整套进程/SMTP。没有生产API/SQL/schema/profile、安装或UI变更；核对自有PG精确进程/路径/监听和零其他客户端后正常停机保留数据。最终固定`a97a8a0c422d8e9d2c8cadb85f74c61c815318c6`的[Verification36008692931](https://github.com/xiak/matrix/actions/runs/36008692931)已由GitHub API核实精确SHA及completed/success，go、node-process、authority-storage、authority-runtime、authority-step-up、authority-recovery-window及聚合authority-process七项全部成功。它证明该IAM43/Audit25固定对象，不回填此前失败、不证明后继IAM44/Audit26正常更换工作树或完整MFA发布。
+
+原`TestIAMStepUpPostgres`完整九场景在另一独立PG18.6库串行race通过388.34s（包391.890s）：原重发/后续恢复、双证明、另一Session、共享预算、登出/改密/重置/停用及真实行锁等待120秒到期全部保留，不放宽原七分钟期限。该轮完成于设置通知接入之前；SMTP历史通知子例明确SKIP，不计实收。设置专属意图已归上面的独立`TestIAMSecuritySettingsPostgres`，不再与会话会被账号变更终止的旧公共fixture混跑。其证明准确绑定版本/值，变体或无变化值409，不能当PDP许可或消费恢复码重发。API/生成器、工作流、HTTP和architecture聚焦race通过；工作流反例拒绝存储端返回缺失/变体设置意图，单worker10秒StepUp fuzz完成25437次无失败。所有真实设置变更均返回原调用方`callerSessionEnded=true`，包括放宽要求。上述证据不替代完整S2c竞争矩阵或发布门禁。
+
+上述S2c局部门禁保持PG硬限2逻辑CPU/1GiB/24进程、16连接及原测试期限；Go1.26.7、GOMAXPROCS2/GOMEMLIMIT512MiB，真实数据库串行race-p1。最终投递修正源码的全仓默认race（含architecture）、vet、模块校验、Linux/amd64全包构建及格式/diff检查通过；默认外部门禁SKIP不计真实运行。没有API/SQL/schema/profile或安装/UI改动。实际无其他数据库客户端且核对精确进程/路径/端口后正常停止自有PG并保留数据；测试邮箱队列为空后仅删除准确owner/task的SMTP容器和空网络，标签下无容器/网络/卷残留，没有共享或远端服务操作。本候选独立CI尚未确认，消费者不能继承本分支验收或当作已验证发布组合。
+
+运行时用途已落到原`authentication_challenges`：不可变且无默认值的`purpose`与原阶段/来源约束共同定义能力。登录TOTP与其已证明的改密后继为LOGIN，消耗原恢复码而产生的重绑后继为RECOVERY；后继首次设置具有独立ENROLLMENT用途，不能仅按相同步骤名授予这些不同流程的能力。私有lookup必须返回真实purpose，入口、共享尝试保留、末端锁和延迟完成证明分别核对，不从缺字段、客户端输入、当前MFA标志或普通Session补造。固定IAM42基线不发行首次设置ENROLLMENT；IAM43候选已有锁内发行分支，但在配置写入与前置验收完成前不能合法开启该要求。
+
+真正的前用途固定程序所产生的记录，只按其当时封闭的阶段及原来源关系做一次精确分类，不改变原密码证明、因子、期限、会话、消费记录、事实字节或哈希。已具备用途模型后缺列、NULL或损坏关系必须失败关闭，等值迁移不得重新猜测用途。新源码IAM42/Audit24/PaaS2只描述实际数据库与私有lookup形状，不分配安装release profile，也不宣称旧二进制或跨profile兼容。当前只在[011的单前驱窗口](./FEAT-IAM-011-acceptance.md#未发布阶段与首版基线)同时覆盖原LOGIN及实际消耗恢复码产生的待完成RECOVERY；不能由新程序手工补出旧恢复正向证据，也不为每次用途变化永久保留一个旧binary。
+
+用途运行时在2026-09-24的本任务独立原生PG18.6上以Go1.26.7、GOMAXPROCS=2/GOMEMLIMIT=512MiB、重型race-p1串行验证。PG使用Windows Job硬限2逻辑CPU/1GiB/24进程、16连接、64MiB shared_buffers、4MiB work_mem和零并行worker。真实TOTP绑定/恢复/改密及schema/ACL门禁106.06s通过：待用及已完成challenge用途不可篡改，缺列、可空、默认值、缺关系约束或私有snapshot被授予API均不READY；损坏当前用途后等值迁移失败，原事务回滚后仍READY。迁移按实际Account逐一运行原延迟完成证明，不停用这些证明或借分类掩盖损坏历史。
+
+固定339d的交付验证实跑了`f5cec0e132ad18900d9a5a5629eae04fda4817f1`的IAM37原LOGIN至42（38.19s），以及`0a237aae5c904e0e32e5766544e31c1cfed5a02a`的IAM41至42（41.90s）：两个Account、同名User各由旧HTTP真实绑定及消费原恢复码，保留待完成RECOVERY，再由新程序完成原重绑。原凭据、期限、消费及因子历史、receipt、事件canonical和哈希保持；双迁移、等值bootstrap和重启不补权限或重发材料。这是该固定切片当时的运行证据，不要求后继常规门禁继续维护两个未发布前驱；当前窗口及其精简后验证归011。
+
+最终独立IAM双副本/Audit/PaaS/dispatcher门禁135.70s通过：真实受限数据库登录、绑定/强制改密/恢复/step-up提交后丢失TCP回包、重启及原意图重放、跨副本一次OTP成功、停用后历史outbox和链验证均保留。此前末尾明文检查的失败已在保留数据库只读定位为真实六位OTP偶然命中合法`requestDigest`的SHA256子串；检查改为解码JSON后逐值核对，仅对契约有效Audit事件的该摘要字段区分六位短码碰撞，原请求/历史证明的绑定仍由门禁另验。18组默认反例包含真实字符串/数字/嵌套/键名泄漏、JSON转义、LIKE字符、坏摘要和其他字段伪装；不能通过把码放入另一个字段或伪造摘要逃过检查。真实SMTP子门禁本轮明确SKIP，不以合成联系人、入队或上述进程通过冒充邮件交付；浏览器和发布组合仍未验收。
+
+用途运行时的最终源码已通过全仓默认race/architecture、vet、模块校验、Linux/amd64全包构建、122个API文件重生成字节一致及格式/diff检查；默认外部门禁SKIP不替代上述实际运行。7组错误用途用有效challenge凭据分别证明在尝试预算和因子材料读取之前拒绝，缺失用途属于权威不可用而非可推断默认。独立PG在确认无其他客户端后正常停止，保留数据未删除；没有共享Docker/系统服务或远端重启。固定源独立CI仍须另外核实，不能因本地通过完成整片S2c。
+
+该用途运行时已固定推送`339d37474f2cfbee11479a497514d8dcb4d38b0f`；[Verification35967101589](https://github.com/xiak/matrix/actions/runs/35967101589)已按精确SHA核实实际启动runner，go、node-process和step-up成功，storage/runtime失败，不能记为独立CI通过。两处Audit门禁仍期待旧IAM41，另一个IAM21保留数据门禁把新增配置/认证事实列误当成原行变化；这与此前付款限制导致的零执行失败不同。
+
+2026-09-24在上述限额的独立PG18.6上复现后，仅修正测试拥有者：Audit schema断言同步42；保留数据快照仍比较全部原字段，新字段单独证明初始配置为1/false/原创建时间，旧Session认证事实保持NULL、不得伪造MFA。Audit数据5.61s、HTTP1.32s及实际IAM21 executable保留数据/当前产品声明推进32.40s通过；后者先以原断言复现失败。受影响Audit/进程/架构默认race及vet通过。没有生产API/SQL/profile或安全语义变更；该旧版实验只提供此次修正证据，不扩大[011的未发布兼容窗口](./FEAT-IAM-011-acceptance.md#未发布阶段与首版基线)，也不代替完整S2c或发布验收。
+
+固定`0a237aae`的纯契约基础片已在Go1.26.7、GOMAXPROCS=2/GOMEMLIMIT=512MiB下完成全仓默认race、vet、模块校验、Linux/amd64构建与122个API生成文件字节一致检查；最终受影响API/生成器、identityaccess/nethttp及architecture再次race通过。原测试owner覆盖25组challenge用途/阶段组合、四种请求的缺失/null/重复/身份与第二载体注入、PASSWORD_CHANGE不得暴露后继状态、非首因子/晚于绑定的地址验证时间/挑战期限不匹配拒绝；现有LOGIN发行器拒绝ENROLLMENT/RECOVERY和未经TOTP的PASSWORD_CHANGE返回。单worker、15秒请求fuzz完成72241次执行无失败。该固定片没有启动数据库/SMTP/浏览器，默认外部门禁SKIP不计真实运行；其源码为IAM41/Audit24/PaaS2，不分配发布profile，独立CI与完整S2c仍未验收。
+
+该纯契约/发行器防错片固定并推送于`0a237aae5c904e0e32e5766544e31c1cfed5a02a`。GitHub API核实[Verification35961451647](https://github.com/xiak/matrix/actions/runs/35961451647)精确SHA及completed/failure，七项均runner_id=0/steps=0；go annotation仍为付款/支出限制导致未启动。它是已本地验证的固定候选，不是独立CI通过，不继承此前数据库、邮件或UI证据。
+
+种子、provisioning URI/二维码和恢复码均属秘密，只经受保护连接的专用一次性响应传输，普通JSON、HTTP请求URL/query、审计、日志、support和浏览器持久缓存不得保存。provisioning URI内的种子参数仅是一次性内容，不能导航到第三方或发送给外部二维码服务。复制/打印是用户对恢复材料的显式操作，不自动下载到共享目录。创建回包未知只查询原非秘密完成；不重新展示种子或恢复码。无法继续持有原待绑定凭据时，明确废弃该待绑定意图后重新开始，不能悄悄创建替代秘密。
+
+TOTP验证需要可用种子，不能仅存单向摘要；数据库应存目的、安装、Account/USER、因子身份和格式绑定的认证密文，只有IAM认证路径可解封。007的AccessKey私有keyring和envelope是单用途契约，不能把TOTP伪装成AccessKey以复用材料；密码hash、cursor key及离线恢复authority同样不是种子封装密钥。可复用受保护读取、秘密脱敏及标准密码学原语，具体独立材料/私有codec与安装、备份、readiness的衔接须另行冻结；没有真实托管证据不开放启用配置。
+
+独立材料契约由`api/iam/v1`拥有：`TOTPKeyring{apiVersion,kind,purpose,scope{installationId,bootstrapDigest},keysetRevision,activeKeyId,keys}`，kind固定`TOTPKeyring`、purpose固定`IAM_TOTP_SEED_WRAPPING`；每项为`{keyId,formatVersion,keyMaterial}`。首个私有格式只接受formatVersion=1、32字节随机材料的canonical unpadded Base64URL；沿原Secret脱敏，普通JSON编解码拒绝，仅显式私有codec可读写。keysetRevision使用1至MaxInt64，keys为1至8项、按keyId严格递增且唯一，active必须准确存在；私有文件最多8192字节。此上限不是自动退役许可，达到上限但旧材料仍被依赖时拒绝继续轮换，不能悄悄丢key。一个安装内的IAM副本使用一致的受控keyset，不是各自生成密钥；不同安装和不同用途不共用材料。原BootstrapDigest继续单一拥有，不另算摘要。具体FILE环境名、路径、owner/权限及挂载由installation在实现窗口冻结，本文不提供未经运行验证的命令。
+
+单key的materialCommitment绑定独立domain、purpose、完整scope、keyId、format及原始32字节材料，**不绑定keysetRevision或active选择**；同一不可变key加入新集合时原承诺必须保持，才能验证旧备份所需材料。整套keyset另用非秘密摘要绑定版本、active、有序key引用与各自commitment；它不是恢复资格、反回滚证明或任意key退役许可。同keyId换材料、降级revision或已知revision换集合必须由权威注册/安装封存的历史比较拒绝，纯codec只能验证一个文档，不能伪称已证明历史单调。
+
+备份不归档或覆盖实时keyring。IAM须提供与被备份数据库同一快照的非秘密custody摘要，列出该快照实际依赖的全部keyId/格式/material commitment及keysetRevision；installation将其封存进备份，恢复前确认当前受保护材料是准确可信超集。不能只取activeKey、遍历宿主文件或由dump外一次普通HTTP查询猜测引用；同一快照的只读交接ABI及IAM35实现见上文，安装消费者另有验收边界。正常readiness须核对封存scope和实际引用，旧key退役同时需要数据库无引用、所有实际副本读到新集合、仍受支持备份不再依赖旧key的证据。宿主文件替换不自动证明运行副本已读取新集合，挂载和读取方式必须实测。
+
+种子密文候选采用标准AES-256-GCM与随机nonce；按独立目的通过HKDF-SHA256派生记录密钥，认证上下文包含格式、封存installationId、Account/USER、不可变factorId及keyId，使用唯一无歧义编码。状态、显示名和消费时间步不是密文身份，不能每次修改都重新定义AAD。Go标准原语和[RFC5869](https://www.rfc-editor.org/rfc/rfc5869.html)只作为算法依据，私有codec及互换攻击须实测，不能复制AccessKey编码器或新增通用密钥服务。恢复码为高熵随机值，仅保存目的/主体/批次绑定的单向验证值，不用这套可逆密文保存。
+
+| 材料状态 | IAM及安装预期行为 |
+| --- | --- |
+| 新安装/新增副本 | 安装先提供准确材料，再启动支持本片契约的IAM；新副本核对安装归属、格式、keyset及实际数据所需keyId后才ready |
+| 文件缺失、权限/owner错误、安装不匹配、keyId不可用 | 必要认证路径失败关闭；不得生成替代keyring、改用密码单因子或跳过已绑定状态。该发布profile要求的材料未就绪时实例不得报告ready |
+| 正常重启、等值安装重放 | 原材料身份/字节保持，不借启动覆盖、重新初始化或清空不可解密的行 |
+| 有计划的包装密钥轮换 | 先向全部副本分发含新旧key的受控集合，确认读能力后切换activeKeyId；新写用新key，旧密文按原keyId读取。重封装以原密文版本CAS，不改因子身份/OTP消费状态 |
+| 退役旧key | 只有数据重封装、实际副本和仍受支持备份的解封要求全部得到验证才可移除；没有证据拒绝退役。轮换不是清除失败计数或恢复码消费的手段 |
+
+材料只读挂给确需验证TOTP的IAM认证进程；Audit、PaaS、普通worker、浏览器、verifier及support不获得种子keyring或可遍历其父目录。内存仅短时持有解封种子，错误/日志不得输出材料。这里保护数据库只读泄漏与用途混用，不宣称抵御IAM认证进程、受信写入路径或本机root完全失陷；SQL边界仍需独立证明运行角色权限与状态不变量。
+
+#### 登录与一次性消费
+
+材料准备版与MFA启用版须有不同的精确数据库/函数行为门禁，不能由manifest自声明capabilities或仅比较schema大小推断兼容。准备版必须核对注册材料与实际仍需解密的行；出现其不理解的ACTIVE/PENDING或其他需解密状态时，除readiness为false，实际Login、Session查验及受保护认证路径也须失败关闭。不能假设所有调用方都遵守健康探针。源码IAM34的注册/读形状与拒绝全部保留因子行的行为、IAM35的同快照helper已在上文实现；实际因子状态机、签名备份consumer及准备→启用的发布profile尚未完成，IAM33密码预算本身不充作这些证明。
+
+已与installation冻结运行配置名`MATRIX_IAM_TOTP_KEYRING_FILE`及目标`/run/matrix/iam-totp-keyring.json`，仅IAM单文件只读挂载，不能给其他服务或挂父目录。本分支IAM34已消费独立受保护文件，安装挂载/交付仍由installation自己的固定证据负责。备份要求单一exported snapshot：IAM35的目的限定helper持有REPEATABLE READ READ ONLY事务，从同一视图得出注册历史/实际依赖，pg_dump在lease未结束时导入该snapshot；普通两次query或当前keyset摘要不证明一致性。required稳定key承诺与本地superset核对不能替代当前恢复资格；只读helper的准确门禁见上文，不能将运行请求的`read_totp_custody`冒充备份lease或完整安装consumer。
+
+登录响应必须明确区分“已发行Session”与“需要继续认证”，不能在挑战分支返回半有效bearer。仅密码、账号和User当前状态验证成功后签发短期挑战，不在错误密码/未知realm时暴露是否绑定MFA。完成挑战时，在原Account→USER→凭据锁序下重新检查主体状态、密码代际、因子修订及挑战；密码改变、因子替换或挑战终止使旧阶段证明失效，不根据请求中的user/account字段换主体。原密码Session及不支持新响应的旧客户端不能绕过所需因子。
+
+首次设置、合法解绑后重新设置与已绑定因子丢失是不同资格。账号要求MFA时，只有明确NEVER_BOUND或具备原合法解绑完成的REMOVED才能获得密码验证后的设置挑战；后者保留原历史，不改称“从未绑定”。因子行被删除、损坏或状态未知不能推导这两种资格。设置挑战只允许必要的初始改密和绑定，不允许读取业务、创建Key、承担Role或调整安全策略。初始改密仍须原子推进密码代际、撤销旧会话和挑战，再用新密码重新开始设置；不让旧挑战跨代际升级，也不通过设置清除must-change。绑定完成结束设置流程，正常重新登录并使用尚未消费的TOTP，才发行Session。它复用同一密码用例的不变量，但不是借现有普通Session或普通改密bearer冒充未完成认证。
+
+账号强制要求与用户主动启用均从权威配置计算有效要求，客户端不能选择较弱登录模式。启用账号要求时，旧单因子Session及其派生Role不能继续以旧认证事实取得新请求许可；各副本在下一次受保护请求重查有效要求，不等待异步逐行撤销完成。收紧要求须在同一事务建立不可回退的会话资格屏障，不能仅临时读出不匹配，之后放宽又恢复旧会话；准确修订/谱系字段在实现窗口冻结。降低账号要求不删除用户已绑定因子、不复活已失效的Session；新Session按当时真实要求重新认证。强制配置的操作者、作用范围、版本冲突、初始设置资格和高权限恢复路径须一起冻结；仅凭显示名为管理员或静态布尔字段不能判定。
+
+TOTP规范输入、默认30秒步长、成功后拒绝同一步重用及标准向量依据[RFC6238](https://www.rfc-editor.org/rfc/rfc6238.html#section-5.2)与[RFC4226](https://www.rfc-editor.org/rfc/rfc4226.html#section-5)。Matrix拟采用一个固定、可实测互通的参数集，不提供caller算法/位数/时钟selector；首个互通候选为HMAC-SHA1、6位ASCII数字、30秒步长和每因子独立20字节CSPRNG种子，正式冻结需独立客户端验证。保留前导零，拒绝Unicode数字/宽松整数解析；使用数据库权威时间及64位时间步。拟只接受当前及前后各一步，不动态扩大窗口或相信客户端时间。
+
+因子修订内的已接受时间步单调推进；两个副本、多个挑战、登录和step-up共享同一消费权威，不能各自接受一次。若一个码恰好匹配多个候选步，任何仍在窗口内的匹配步已被消费则整次拒绝，不能改选较新匹配绕过；全部匹配尚未消费时以固定规则消费最高匹配步。已消费步骤、错误码计数、挑战终态和最终Session/安全命令事实按准确事务边界提交；已识别挑战的认证失败不能因最终HTTP错误而回滚尝试计数。有效码已提交但回包未知时，不重发旧Session秘密或生成另一个成功结果；客户端使用新挑战及未使用码重新认证。
+
+挑战拟定5分钟绝对有效期、最多5次有效持有凭据下的校验尝试、每USER至多3条未到期登录挑战；这些是待真实门禁验证的Matrix产品预算，不是标准规定。还有跨挑战、跨副本的同USER/因子总预算，新建挑战、重启和切换副本不能重置它。错误挑战持有凭据不能借公开ID消耗另一用户预算，未知输入不分配无界行。滥用保护不通过停用User/Account或删除因子实现；具体渐进延迟、临时抑制及入口资源预算须与IAM-SEC-01/04一同冻结，缺少它们不能宣称MFA可用。
+
+#### 敏感操作、凭据分离与恢复
+
+step-up证明绑定原有效Session、Account/USER、闭合操作、目标、准确输入承诺和预期资源版本，并有短期限与一次消费；它只证明认证强度，不产生PDP Allow。因子校验成功不增加策略或越过Boundary。对于同一IAM权威内的敏感命令，命令事务核对当前权限、消费匹配证明并记录结果；已消费或提交未知的证明不能在后来授权改变后重用。无效结构/错误目的不得消费另一条合法证明。跨PaaS/Audit业务命令不与IAM共享数据库事务，需由真实产品PEP另行冻结请求/决定绑定、一次消费、原意图重试和历史证据；本片不声称跨服务原子执行，也不把step-up响应缓存为permit。敏感操作清单与各实际命令owner逐项冻结，不能以任意action字符串或“管理员”显示名打开通用升权入口。
+
+绑定启用、替换、解绑或因子恢复需要显式结束受影响登录会话，并使其派生RoleSession按原来源约束关闭；不默认保留一个尚未具有新认证事实的旧Session。日常改密的既有“保留当前/选择其他会话”语义不被这项MFA状态变更悄悄替换。账号要求MFA时不得简单删除最后一个有效因子，须走已验证的替换/恢复路径。AccessKey仍独立管理，不能凭User“已经绑定MFA”给key、服务或角色请求标记为完成MFA；若Role trust或业务动作要求认证强度，只能使用当次受信来源的实际认证事实，不能接受header/body自报。
+
+恢复码拟为每条至少128位CSPRNG秘密，数据库只保存目的/Account/USER/批次绑定的单向验证值及一次消费状态；不采用参考文档中可解密回显的恢复码存储。保存恢复码使用单向函数、OTP需要共享的一次使用与尝试限制、以及OTP不具备抗钓鱼性，可参见[NIST SP800-63B的OTP及恢复章节](https://pages.nist.gov/800-63-4/sp800-63b.html#recovery)。这些来源不证明Matrix通过NIST认证或满足某一AAL，TOTP也不替代012的抗钓鱼因子。
+
+恢复码必须与当前密码及准确恢复目的一起验证，成功只允许在短期受限流程中证明并绑定新认证器，不能直接发行普通Session、关闭强制MFA或重置密码。原码一次消费；重新生成批次必须通过有效强认证，明确终止旧批次且只返回新秘密一次。回包丢失保留原意图、只返回非秘密完成，不能重发秘密或把已消费码恢复为未用。恢复完成后正常进行新登录；丢失所有因子及恢复码是另一条受审计身份恢复，不得通过普通密码reset隐式绕过。
+
+RootIdentity仍是原Account的原USER，恢复不能转让root、启用暂停账号或附加INSTALLATION权限。具有未撤销平台附件的USER不能由租户管理员接管因子；平台恢复继续在安装本地能力边界。现有原root/平台密码恢复只证明其已冻结的密码操作，不自动取得因子恢复权。开启这些身份的强制MFA之前，须与相应恢复owner明确最小新目的、当前资格/封存来源、并发撤权和单一审计事实，并实跑防锁死/防绕过路径；这一缺口未解决前不宣称完整MFA或安全治理验收。
+
+#### S2正常更换认证器
+
+正常更换后端已固定于e24并通过本节精确SHA独立CI，不是已验收发布。原同Session TOTP_REPLACE证明、新PENDING因子、原绝对期限、一次provisioning、非秘密重放/取消、新旧因子及十码批次切换、会话结束和历史Audit/通知意图均在原owner内。下述实际竞争、双Account/成员停复用、错误OTP计费、独立进程断连/重启、历史Audit投递、最近前驱保留数据及邮件实收证明各自边界；LIVE UI与签名安装组合仍待验收。首次绑定、丢失恢复、正常更换及主动解绑分别验收，不能以其中一条通过代替其他路径。正常更换要求本人仍持有旧因子和当前密码，不存在把认证降到单因子的步骤。主动解绑及REMOVED资格由下一节独立接通；本片不开放管理员重置他人因子，不增设角色、可转移permit或第四类认证挑战。
+
+更换复用原`TOTPEnrollment`作为新PENDING因子的准备/确认生命周期，不另造一套种子托管、恢复码发行或事务框架。该投影已增加必填`purpose=INITIAL|REPLACEMENT`以区分首次设置与更换；已识别的原Session/ENROLLMENT首次绑定来源可准确投影INITIAL，未知历史不能靠缺字段获得合法来源。因子真实ID仍为enrollment ID，新因子必须新建；旧因子身份、密文和已消费步不可改写成新因子。原`AuthenticatorState`在确认前仍为BOUND/原factorRevision，不能提前显示已经更换。
+
+| 入口/对象 | 精确边界 |
+| --- | --- |
+| 原StepUp入口 | 新增封闭`TOTP_REPLACE`操作，沿原`requestId/expectedFactorRevision`绑定当前实际因子、恢复批次、Session及凭据/主体版本；不得携带securitySettings或任意目标selector |
+| `POST /v1/auth/totp/enrollments:replace` | 严格`{requestId,stepUpId,expectedFactorRevision}`；requestId必须是该证明的原操作意图。当前USER的正常PASSWORD_TOTP Session和同Session PROVED证明都必须在锁内有效；Root/平台USER也只操作本人，不借其受保护身份绕过再次认证 |
+| 开始结果 | 复用`StartTOTPEnrollmentResponse`，只在第一次APPLIED返回新provisioning；EQUAL_REPLAY只给原REPLACEMENT元数据。开始原子消费StepUp、保存新PENDING与原proof/旧factor/旧batch/当前可信联系人修订的不可变关联，旧ACTIVE和原恢复码不变 |
+| 原enrollment查询/取消 | 沿同USER的ID/原requestId查非秘密状态；秘密不得通过读取或重放恢复。取消只终止新PENDING，不撤旧因子，不退还原StepUp；新更换需新意图/新证明。NOT_FOUND不证明原请求从未提交 |
+| 原enrollment确认 | `ConfirmTOTPEnrollmentRequest`仍只含requestId和新因子OTP；路径由真实持有Session定位本人原更换。只接受开始时的同一仍有效Session和未过期原证明关联，重新核对旧factor/batch、Account安全设置版本、credential generation及可信联系人修订；不能用新登录或新的宽松设置给旧流程续资格 |
+| 成功结果/未知完成 | 复用确认结果，`nextStep=REAUTHENTICATE`，新十码只在首次提交回包出现。原会话结束后须当前密码+新因子正常登录，才能只读原确认元数据；丢回包不重发恢复码。需要新码时通过现有强认证重生成路径，不回退旧批次 |
+
+开始时的截止时间不得晚于原StepUp的绝对expiresAt，也不得超过原enrollment上限；不能消费证明后再获得一段重新起算的五分钟强认证资格。等值重放、查询、新副本和自然到期都不延长期限。开始后的改密、logout、reset、停用、另一恢复、批次重发、Account要求/可信联系人修订改变，均使原确认资格失败关闭；旧PENDING可以被同USER取消，但不能从失败流程恢复原proof。合法保存码恢复在原恢复事务内终止该USER尚未完成的正常更换，保留其proof/factor来源与CANCELLED或EXPIRED终态，再创建恢复的PENDING因子；不能让正常更换占槽阻断已有恢复路径，失败时也不能只取消更换却未完成恢复。该操作只产生原`iam.authenticator.recovery-started`事实，不伪造更换成功。未确认新种子从不用于正常登录。
+
+最小持久化仍在原`000012_totp`：新PENDING因子增加准确原StepUp关联及开始时的可信联系人修订；旧factor/batch、USER、Session、密码代际和主体版本复用该不可变proof的已有字段，不再建立一套更换对象或通用receipt表。公开purpose从已验证的来源关系投影，不给无来源历史回填INITIAL。原enrollment截止约束按来源分支校验，不能为所有来源一起放宽；原`lock_step_up`继续拒绝CONSUMED，确认只经该新因子唯一关联检查已被其开始事务消费的TOTP_REPLACE，不使其他命令重新使用已消费证明。原十码批次增加准确“因子更换”终止来源，并以deferred历史关联验证新旧批次、factor、proof和单一成功事实；不得用宽松`revoked_at`替代来源。更换必须推进因子修订，因此开始及proof的预期值上限是9007199254740990，不能接受会溢出安全整数范围的最后一个已绑定修订。
+
+确认在原Account→USER→credential→MFA→稳定因子/批次→Session/证明/尝试锁序中，按锁后数据库时间重验，消费新因子OTP并原子完成：旧factor永久REVOKED、新factor ACTIVE、factorRevision单调+1、原恢复批次终止、新批次十码建立、全部旧登录Session及未完成挑战结束、StepUp/Enrollment精确完成关联、一个`iam.authenticator.replaced` tenant事实和一个对应安全邮件意图。派生Role按原来源Session关闭；独立AccessKey、密码、Policy/附件、Account/User状态和工作负载不被更换改变。通知只发向开始时绑定且确认时仍可信的联系人，变更请求不接受收件地址。
+
+新Audit action只允许同一实际USER actor/PRINCIPAL target、tenant成功事实且没有伪业务Decision；producer proof验证原已提交更换和新旧因子/批次来源。后续USER/Session撤销不丢失该事实或通知，旧canonical/chain、ServiceIdentity、lookup_service和Audit claim不变。幂等/未知完成由原enrollment历史承担，不增加通用receipt API。
+
+验收须覆盖：旧因子在准备/取消/自然到期期间仍可正常认证，新种子不提前生效；新OTP错误/重复/跨副本共享预算，两个确认只有一次效果；确认与旧因子登录、设置收紧/放宽、改密/退出/reset/保存码恢复和批次重发的双向实际锁序；末端Audit/通知失败整笔回滚，提交后真正丢回包、原元数据查询、新因子正常登录且旧码/旧Session/旧恢复批次拒绝；两Account隔离、其他身份载体/错误purpose拒绝、当前schema重放/最近实际前驱及重启不复活；真实通知、独立进程和UX/UI另行证明。只在实际函数/约束落地时分配源码schema形状，与安装owner明确完整profile，设计中的新字段/路径不能提前成为LIVE或发布能力。
+
+旧因子LOGIN验码与更换的并发语义：LOGIN先提交时两条命令都可成功，原PASSWORD_TOTP会话准确记录旧factorRevision，但随后必须被更换撤销，原session.issued及authenticator.replaced事实均保留；更换先提交时原LOGIN挑战终止，旧OTP即使仍处于有效时间步且尚未消费也不能发行会话。两条路径均核对真实事务阻塞、原期限未到、尝试计费与新旧批次/会话终态；schema重放和原请求重试不得复活。沿原integration及锁屏障owner增加独立两场景入口`TestIAMTOTPReplacementLoginPostgres`，三分钟上限、专用数据库，在原replacement CI lane串行运行；不扩大其他fixture期限或生产OTP预算，不新建测试框架。
+
+原更换期限另沿相同owner的`TestIAMTOTPReplacementExpiryPostgres`证明：等待原120秒绝对窗口的最后十秒，持有真实USER行锁，使截止前进入的确认事务实际阻塞至过期，再验证仍在OTP有效窗口内的新码被拒。不能用已失效OTP或过期attempt掩盖原证明截止时间，也不能修改数据库时间/权威期限；失败不消费新尝试或改变旧因子/批次。查询与等值重放只投影原EXPIRED元数据，取消不得转成可重用证明，迁移重放后旧认证器正常登录及原保存码恢复仍须成功。使用独立数据库和三分钟上限，不挤占其他fixture或放宽生产窗口。
+
+身份停复用沿原integration owner的`TestIAMTOTPReplacementQualificationsPostgres`独立运行两个场景：原成员停复用用例从security矩阵移动而非复制；另以平台API开通真实非系统Account，在其原root创建的普通USER上准备更换，再由平台操作者暂停和恢复该Account。两种真实状态命令均不删除旧ACTIVE因子和恢复批次，但原Session及其已消费更换证明不能复活。重新启用后用原密码和旧因子正常登录，只能读取原PENDING元数据，不能接管另一Session开始的更换；在原期限尚有效、OTP预算仍有余额时验证两类旧资格拒绝。schema重放后原状态和拒绝保持，新Session可明确取消未完成的更换。不把已被成员停用失效的同一流程用于证明Account屏障，也不操作安装服务所属Account。本门禁限三分钟，原security回到六项/五分钟，不以扩期限承载新增场景；此项不冒充并发锁序证据。
+
+错误新OTP复用原`replace-rollback`场景：真实更换准备后，从有效窗口排除候选码碰撞，实际HTTP错误响应仍持久化第四次共享尝试为REJECTED，不改变因子/会话/批次/成功事实。schema重放不退还该额度；另一Authority以有效新OTP取得第五次reservation，末端通知失败时整笔安全效果回滚，但reservation保持已计费。即时跨副本重试必须拒绝，不能因HTTP错误、故障或重建Authority得到新预算。保留原末端故障确实到达的sequence证据，不新增另一套错误计数fixture。
+
+协作边界已确认：UX/UI在其分支设计隔离MOCK，取得固定契约后才独立接入LIVE decoder；installation仅按固定验证对象消费。本片实际函数/来源约束及封闭action推进IAM44/Audit26，PaaS2未改；前驱基线为IAM43/Audit25。没有新增发布revision、修改安装profile或取得跨profile许可，也没有新的FILE/挂载/拓扑配置。安装侧必须明确识别已提交替换来源并保留恢复隔离的完整当前状态证明，不能因新批次合法便继承整套备份恢复验收。
+
+固定实现`e24dbdae6b4ea420365a4527a0bd89b16e0d720f`的[Verification36033828072](https://github.com/xiak/matrix/actions/runs/36033828072)已由GitHub API核实精确SHA及九项全部completed/success，包括go、node-process、六条串行数据库lane及aggregate；已向UX和installation提供固定交接。这不包含LIVE UI、签名组合、主动解绑或后继备份恢复快照消费。
+
+本地真实证据（不替代独立CI、UI或发布验收）：2026-09-24本任务独立限额PG18.6、实际受限IAM登录、同进程两个Authority/HTTP，原integration owner的`TestIAMTOTPReplacementPostgres`完整三个场景通过race-p1，119.218s。真实密码+旧TOTP产生证明；准备后旧factor/batch仍ACTIVE，原request重放无种子，取消不退还proof，schema重放后取消状态保持且旧因子正常登录成功。两个Authority并发确认只有一次成功及一批十码；原factor/批次和全部旧Session结束，新factor正常登录后只读原完成，不能用新Session再次确认。新事实在actor旧Session撤销后仍取得精确producer proof，改写原request则拒绝；另一批次不能借用该更换的终止来源。
+
+准备消费后及确认通知INSERT末端分别注入失败：测试故障函数在本任务数据库的public命名空间，注入前readiness必须正常，以测试专用非事务sequence确认确实到达指定失败点，不能把预检查503冒充事务回滚。失败后因子、批次、会话、挑战及成功事实/通知无部分变化；确认的共享OTP reservation仍为RESERVED/已计费，不因系统错误返还尝试额度。破坏新增FK/唯一索引/三端deferred触发器/字段形状或授予worker写函数均使readiness关闭。另一全新本任务PG18数据库的原`TestPostgresAuthorityIntegration`通过race-p1，8.548s，覆盖IAM44/Audit26真实schema、最小权限和新action目录的合法/错误主体及target边界；没有用它替代新更换的跨服务投递。
+
+安全矩阵局部证据：另一个全新本任务PG18.6数据库上的原integration owner入口`TestIAMTOTPReplacementSecurityPostgres`通过race-p1，208.83s/package212.290s。六个独立USER分别证明仍在真实有效窗口内、未消费且与新因子码不同的旧OTP拒绝，未使用的原保存恢复码拒绝，以及确认与logout/保留当前会话的改密各两个实际锁顺序。负向校验确实扣取第五次共享额度、挑战仍PENDING、无新Session或恢复事实，不拿预算已耗尽冒充旧材料失效。竞争使用原事务屏障并观察真实阻塞PID；先更换则另一旧会话操作401且密码不变，先logout则新因子保持PENDING；先改密则原Session按显式选项仍可读取旧factor，但新generation不能完成旧证明授权的更换。schema重放和原确认重试均不能复活旧资格，断言期间原期限仍未到，不以到期掩盖代际失效。
+
+设置竞争的局部证据：`TestIAMTOTPReplacementSettingsPostgres`在另一全新本任务PG18.6库串行race通过131.02s（包134.577s）。复用原设置竞争owner，四个独立Account各有实际授权并完成MFA的管理员，以及另一个正常绑定因子的普通USER；分别证明设置收紧/放宽与成员确认更换的两个真实锁顺序。放宽前先实际执行受保护的收紧命令，再由管理员正常重新登录、取得准确版本的放宽证明；等待真实OTP时间步，原五次共享预算、三分钟测试期限不变。更换先提交时管理员仍可合法修改设置，两条事实均保留；设置先提交时旧成员Session及更换拒绝，新因子仍PENDING、旧factor及批次保持，原证明不复活。断言同时核对密码代际、因子/批次、设置版本、成功事实和通知意图，且原准备期限尚未到；双次观察跨schema重放和新Authority，旧资格持续拒绝，没有隐藏deadlock重试。共用owner的原`TestIAMSecuritySettingsRacesPostgres`八场景在另一新库完整race复验31.77s（包35.219s），没有删减原logout/改密/恢复/LOGIN验码断言。它们不是SMTP、独立进程重启或UI验收；该轮PG经精确PID/文件/数据目录及零其他客户端核对后正常停止，数据保留。
+
+因子变更竞争局部证据：新库的`TestIAMTOTPReplacementMutationsPostgres`完整六场景race通过243.29s（包246.812s），涵盖管理员密码reset、保存码开始恢复及恢复码批次重生成与确认更换的两个真实锁顺序。管理员reset可以在已完成更换后合法成功，不删除新绑定因子；reset先提交则旧更换拒绝。批次重生成先完成时原Session及旧因子仍有效，但绑定原批次的更换证明失效；更换先完成则旧Session不能再重生成。保存码恢复先提交时只消费原码一次、原待更换因子结束且保留来源，状态进入RECOVERY_REQUIRED；更换先提交则旧挑战/旧恢复批次不能开始恢复。逐项核对generation、MFA修订、新旧批次、证明消费、成功事实和通知，schema重放不复活原资格，没有隐藏deadlock重试。
+
+该门禁先在真库复现“待更换因子占用单一PENDING槽，合法保存码恢复23505”的问题，再收紧原恢复事务：同USER已经证明的恢复原子终止未完成更换，不放宽唯一索引或授权。后补末端通知失败注入，在另一新库的`replace-race-recovery-before`通过52.08s（父门禁59.75s）：readiness正常且专用sequence证明实际达到末端，失败后待更换因子、旧因子/批次、恢复码消费、Session和成功事实/通知无部分改变。已提交的尝试计数单独核对为第四次RESERVED；立即重试拒绝且不退还额度，等待原30秒实际期限后第五次成功恢复，未修改时钟、正向权威行或生产预算。同一最终测试源码另库复验原保存码完整恢复10.12s、显式保留当前Session的改密先行场景16.52s，组合包90.458s通过；不是全部原恢复/更换场景重新跑过。
+
+独立进程局部证据：原`TestIndependentIAMAuditAndPaaSProcesses`在本任务新PG18.6数据库串行race通过133.43s（包136.738s），保持原6分钟期限和受限runtime登录。原设置、绑定/强制改密、保存码恢复和重生成场景未删减；新增独立普通USER实际完成旧因子绑定、登录及TOTP_REPLACE证明，准备重放只返回原REPLACEMENT元数据/期限，旧ACTIVE因子及批次保持。实际确认已提交后由原代理中断TCP回包，再停止/启动本任务两份IAM；旧Session在IAM/PaaS/Audit均拒绝，新密码未改变，原已取得的新种子可正常完成新因子登录并读取准确完成元数据，不能取回丢失的十码或借新Session再确认。数据库核对旧factor/批次精确终止来源、新factor/十码批次、全部旧Session/挑战终止和单一成功事实/通知意图。整个USER严格使用原5次共享OTP预算，不改时钟或正向权威数据。
+
+该进程场景在暂停本任务IAM dispatcher期间完成更换，并实际停用actor，再恢复dispatcher；原tenant USER事实仍投递一次，两次准确重放返回相同Audit记录，改写request或目标tenant拒绝，原租户完整链验证通过。捕获的丢失十码仅进入秘密泄漏检查，不作为客户端重试材料。联系人验证码来自本测试自己的受保护密文夹具，不是邮件实收。首轮曾被原测试43/25期望与实际44/26不符提前拒绝，修正的仅是源码组合期望，再换新库完整重跑；发布profile及不匹配准入未修改。最终同一测试源码的authorityprocess默认race、architecture及vet通过；默认无DSN的SKIP不计作真库证据。PG沿用本任务Windows Job的2逻辑CPU/1GiB/24进程限额；验证后核对精确PID、执行文件、数据目录及零其他客户端，正常停止并确认launcher退出0，测试数据保留。
+
+最近前驱局部证据：2026-09-25原单一`TestIAMRetainedPredecessorProcessUpgrade`已前移到固定`a97a8a0c422d8e9d2c8cadb85f74c61c815318c6`的实际IAM43 migrator/runtime，在新的本任务PG18.6数据库串行race通过43.49s（包46.788s），仍限3分钟。旧程序实际创建双Account/同名USER、原Session/强制改密会话、已撤附件/Session、明确的NULL凭据代际负向行、待验证联系人和MFA/保存码恢复历史。当前更换deferred函数建立处注入DDL失败，非事务sequence证明达到故障点；原schema及完整身份、因子/批次/保存码、挑战、OTP尝试和邮件状态保持，无新更换字段/函数残留。随后真实当前migrator双次apply/verify、等值bootstrap及进程重启保留旧行，新更换关联只在旧行上保持NULL，不伪造来源。
+
+IAM43已发行的安全设置资格如实保留，不再套用被替代IAM41的缺失资格预期；原有效调用Session可准确重放其旧完成，新登录不能接管该完成，已撤及NULL凭据代际仍拒绝。双Account原保存码恢复在原期限及当前资格下继续同一意图完成，未另消费一条码；另一真实旧MFA Session通过当前密码/旧因子证明完成新TOTP_REPLACE，新因子正常登录后旧factor、旧批次和待验证挑战保持终态。再次迁移/verify/bootstrap/重启保留准确恢复和更换完成、原proof、共享尝试、六字段bootstrap receipt、原tenant canonical/digest及历史producer proof，原产品声明不扩权/不忽略Deny的真实binary门禁也保留。首轮发现旧两类enrollment回包尚无新purpose，测试仅对固定前驱的这两条回包使用局部旧格式读取，不放宽生产解码器、不补默认purpose，换新库复验通过。旧IAM41入口未作为另一条可选路径留下，发布profile及安装准入未改变；该证据不是签名跨profile升级或SMTP/UI验收。
+
+2026-09-25最终候选在Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB下，全仓`go test -race -count=1 -p 2 ./...`（含architecture）、`go vet -p 2 ./...`及Linux amd64构建通过；两份API重新生成的输出hash一致，格式/diff检查通过，无DSN的默认SKIP不另计作真实数据库证据。七个更换fixture在原CI matrix按实际耗时分为`authority-replacement`（20分钟，准备/确认、安全、设置、变更四门禁）和`authority-replacement-qualification`（15分钟，LOGIN、原期限、身份资格三门禁），各用独立数据库，仍为2CPU、相同内存和max-parallel=1；没有提高原lane或单测试期限。固定a97的step-up实测643秒，本片本地各门禁串行累计约18分钟，因此不追加到原step-up，也不把全部更换检查挤进同一20分钟队列；原step-up保持原三门禁。workflow YAML及16段Bash语法已校验，当前候选独立CI尚待核实。准备/确认、设置、LOGIN、到期、身份资格各限3分钟，安全及变更矩阵各限5分钟，生产预算不变。同进程Authority、独立服务进程和真实SMTP分别按下列证据认定，不互相替代。所有运行只使用自有限额PG和服务，无共享或远端操作。
+
+邮件实收局部证据：2026-09-25在另一新PG18.6数据库，原`TestIAMTOTPReplacementPostgres/authenticator_recovery/replace-confirm`串行race通过，父门禁59.87s、场景36.73s、包63.382s，保留原三分钟期限及五次OTP预算。现有Postfix夹具运行于本任务唯一标签容器/网络，1CPU/512MiB/Pids96、随机loopback SMTP端口，实际版本3.10.13；PG保持2逻辑CPU/1GiB/24进程。管理员及更换USER均经实际STARTTLS邮件取得验证码并确认地址；两个Authority并发确认只有一次更换及一批十码，新因子正常登录后再实际停用USER，旧、新Session均不能继续访问。原新factor/成功Audit事实精确关联的通知仍为PENDING且零尝试，随后才启动独立受限`matrix-iam-notification-dispatcher`，真实Maildir收到原地址的`MATRIX authenticator replaced`邮件；数据库记录一次ACCEPTED/SMTP250。检查原/新种子、密码、邮箱验证码、两批恢复码及Session/Challenge凭据均不出现在邮件，邮件没有认证链接或验证码模板。再次停止/启动该投递进程后，原接受记录和同一Message-ID/完整邮件字节保持；不把这描述为所有未知投递都exactly-once，也不声称收件人已读。
+
+该运行的IAM Authority/HTTP仍在同一测试进程，邮件投递器是实际独立可执行文件并通过pg_stat_activity核对受限登录；它与上面的独立IAM/Audit/PaaS进程门禁分别证明不同边界。未设置专属SMTP时该邮件子例明确SKIP，不拿通知队列代替实收。最终SMTP/notificationdispatch race及integration vet通过；本轮未重新运行全仓或全部更换场景，没有生产API/SQL/schema/profile、安装或UI变更。结束时确认Postfix队列为空、精确owner/task及网络唯一成员后，仅正常停止并删除本轮SMTP容器和空网络，合成邮箱随容器删除，标签下容器/网络/卷零残留；PG核对准确进程/数据目录与零其他客户端后正常停止，数据保留。
+
+LOGIN竞争局部证据：2026-09-25原integration owner的`TestIAMTOTPReplacementLoginPostgres`在另一新PG18.6数据库串行race通过110.41s（包113.965s），两个真实锁顺序分别39.87s/59.55s，完整保留原readiness/资格破坏检查、三分钟期限及五次共享OTP预算。两个Authority/HTTP通过原事务屏障和实际pg_blocking_pids证明发生阻塞；旧LOGIN先完成时准确签发旧修订PASSWORD_TOTP会话，更换随后成功并撤销该会话，两条原事实均保留。更换先完成时仍在期限内的旧LOGIN挑战CANCELLED、未消费旧OTP且无新Session；新factor/十码批次保持有效、旧批次带准确replacement终止来源。分别实测总OTP计费5次/4次，不以耗尽预算或到期掩盖拒绝。schema重放后原LOGIN及更换请求均拒绝，原安全状态摘要保持且没有deadlock重试。
+
+相同最终测试源码在另外两个新库聚焦复验共用锁序owner的`replace-race-password-before`（父门禁10.97s）及`replace-race-reset-after`（父门禁30.36s），串行组合包44.834s通过；不等于六场景安全/变更矩阵全部重跑。本轮integration与architecture默认race、integration vet、gofmt/diff、workflow YAML及15段Bash语法检查通过，LOGIN独立数据库进入既有replacement lane且storage排除重复执行。没有生产契约、schema、安装或UI改动；测试结束核对自有PG准确进程/路径及零其他客户端，正常停机保留数据。它们仍不是SMTP、独立服务重启、签名发布或浏览器证据。
+
+原期限局部证据：2026-09-25另一新PG18.6数据库的`TestIAMTOTPReplacementExpiryPostgres`完整race通过（包137.293s）。截止前进入的真实HTTP确认在USER行锁上阻塞，原120秒期限自然到达后释放；锁后仍有效的新OTP被401拒绝且共享尝试/全部安全状态不变。查询和准备等值重放准确返回原EXPIRED元数据、不返回种子；取消落地到期终态、schema重放不变，随后原旧因子正常登录和原保存码恢复都成功。初次夹具把数据库返回的本地时区时间直接送入只接受规范UTC的纯校验函数，停在干扰因素检查而未取得验收；修正为同一时刻的UTC表达后用新库完整复验，没有改OTP算法、生产窗口或事务。该证据不替代独立进程/SMTP/UI，也不把前两次失败计作通过。
+
+身份隔离与失败计费证据：2026-09-25最终测试源码在两个新的PG18.6数据库串行race完整通过`TestIAMTOTPReplacementPostgres`三场景与`TestIAMTOTPReplacementQualificationsPostgres`两场景，包240.193s。真实非系统Account的普通成员和原Account成员分别经历Account或USER停复用；停用前两个真实bearer均可正常读取本人，跨Account查询和使用有效新OTP确认均401且状态/计费摘要不变。两类重新启用均不复活旧Session；原密码+旧因子正常登录只可读/取消旧PENDING，不能接管其同Session证明。拒绝时原期限未到、计费仍为4次且最近LOGIN成功，新码重新按当前有效窗口生成，避免用过期码或额度耗尽掩盖拒绝。schema重放保持旧ACTIVE因子/批次、proof来源与拒绝，无更换成功事实/通知。
+
+同一完整运行的`replace-rollback`真实错误新OTP返回401后第四次共享尝试持久REJECTED，schema重放不退款；另一个Authority的有效新OTP取得第五次reservation，通知末端故障回滚全部安全效果，reservation仍RESERVED/已计费，跨副本即时重试拒绝。此前这两个新增场景的聚焦包76.442s通过，但不包含后补跨Account攻击，最终240.193s才覆盖完整最终断言。原USER场景曾在七项security矩阵通过285.419s，现已移动到独立qualifications门禁，未复制；security保留原六项。最终PG按精确PID/执行文件/数据目录、零其他客户端核对后正常停止，launcher退出0、监听消失并保留数据，SMTP也已仅清理自有临时资源。独立CI、LIVE UI、签名组合及主动解绑仍未由这些本地测试取得验收。
+
+#### S2本人主动解绑与可证明的重新绑定
+
+本节为待独立CI确认的后端候选：原`api/iam/v1`纯契约之上，已在现有拥有者接通`TOTP_REMOVE`证明、解绑与原完成查询HTTP、原子事务、REMOVED历史及重新绑定；具备下述本地真实证据，不能作为已验收发布。源码按协调的IAM46/Audit27更新版本/readiness及校验，恢复资格投影、唯一前驱与独立进程分别验证，不改变已固定IAM45消费者或发布profile。最小闭环是普通USER以当前密码和原有效TOTP明确移除自己的因子，全部旧登录资格结束，正常密码重登；之后主动重新绑定，或在账号要求收紧后通过受限ENROLLMENT重新绑定。不能以只增加REMOVED枚举、删除因子行或解除账号要求替代此闭环。
+
+解绑是本人认证器管理，不是租户管理员的他人重置权限，也不新增可授予的Policy动作。仅当前ACTIVE Account/USER、无forced-change的PASSWORD_TOTP Session可发起；需要本人仍持有原因子、当前密码、可信联系人和未被恢复fence关闭的当前恢复批次。Account必须当前不强制MFA。已与安装owner确认：原RootIdentity及存在未撤销平台权限附件的USER不能自助移除最后因子；检查原绑定而非只看当前有效权限，并与平台附件变更在原principal锁序中串行化。受保护身份继续使用更换/已获准的恢复路径，不新增在线降级或借用安装本地能力，不影响其正在验证的IAM45组合。
+
+| 入口/对象 | 详细契约与不变量 |
+| --- | --- |
+| 原StepUp发起/验证 | 增加封闭目的`TOTP_REMOVE`，请求仍为原requestId/expectedFactorRevision；拒绝securitySettings、身份selector及其他目的字段。证明绑定当前本人Session、密码代际、原factor/batch和主体版本，原120秒绝对期限不变；重新验证密码与原TOTP，沿现有共享预算消费，不追加第二个猜码器 |
+| `POST /v1/auth/totp:remove` | 严格`{requestId,stepUpId,expectedFactorRevision}`；只接受当前登录bearer，不接受challenge/Role/Key/SERVICE或并列认证载体。实际USER和Account来自bearer，requestId必须匹配同Session、同目的的原PROVED意图。第一次结果为`APPLIED`、非秘密removal和`nextStep=REAUTHENTICATE`，无新Session、种子或恢复码 |
+| `GET /v1/auth/totp/removals/by-request/{requestId}` | 当前有效同USER正常登录后，只读原非秘密完成；无Account/User/原Session selector。完成投影`AuthenticatorRemoval{apiVersion,kind,id,requestId,factorId,factorRevision,removedAt}`，factorRevision为原子移除后的修订。404为`iam.authenticator-removal.not-found`，不证明旧请求未提交，不签发新执行资格 |
+| 同意图重放 | 当前认证先验证；完成已存在且原输入精确相等时返回`EQUAL_REPLAY`及原removal，不再次检查原因子今天是否ACTIVE，也不消费新证明、退出新Session或返回新的REAUTHENTICATE指令。原已撤销bearer仍401；重新绑定后读取旧完成也不触碰新因子 |
+| 重新绑定 | 复用本人绑定和ENROLLMENT入口、一次provisioning及确认流程。只接受有真实完成来源的REMOVED，不改回NEVER_BOUND；新factor、新批次和新修订必须与原解绑完成关联。沿现有INITIAL/REPLACEMENT准备用途，不把INITIAL投影当成USER从未绑定的证明；历史身份状态和来源另由锁内权威判断 |
+
+纯契约局部证据（2026-09-28）：原contract/schema测试覆盖`RemoveTOTPRequest`、`AuthenticatorRemoval`、`RemoveTOTPResponse`的严格字段、重复/大小写别名/未知成员/秘密与身份selector拒绝、解码失败不修改目标、可精确表达且允许递增的输入修订和递增后完成修订、规范时间，以及首次`APPLIED`必须重新登录但`EQUAL_REPLAY`连空或null的`nextStep`也不得出现。OpenAPI与解码器对原完成类型和重放分支一致；它不是当前因子状态或登录授权。新增同拥有者的有界round-trip fuzz以2 worker执行30秒、446750次通过。API/IAM相关默认race、architecture及vet通过；无DSN的SKIP不是真库证据。该片不宣称解绑事务、永久来源约束、跨服务事实/通知、SMTP或UI可用，安装私有snapshot/closure及七列claim未变。
+
+原`000012_totp`承载此生命周期。当前StepUp能证明认证及一次消费，但不能独自证明哪个因子已经合法解绑；需要本目的不可变`authenticator_removals`完成关联，绑定同Account/USER、requestId、StepUp、旧factor/batch、结果revision/time与唯一Audit事实。它不是第二主体、通用receipt或另一个认证器目录。USER的REMOVED状态必须通过复合FK和deferred语义约束指向该完成；原批次的终止来源也指向同一完成。proof消费、状态、因子、批次、会话、完成、outbox和通知缺任何一项均不能提交。重放/升级不得补造来源；有旧因子而缺完成、错USER或状态未知时关闭认证，不能推断合法REMOVED。只在首次确认的新生USER或已证明的真实来源上保留NEVER_BOUND。
+
+完成读取先验证今天真实有效的同USER LOGIN_SESSION，再核对原requestId和准确输入；允许正常重新登录所得的PASSWORD会话读取本人旧完成，但不能借该分支执行未完成的新解绑。新意图才要求当前PASSWORD_TOTP、未过期同Session证明及完整执行资格。相同requestId更换stepUpId或expectedFactorRevision必须冲突，即使原完成仍存在；旧证明绑定的其他请求同样不可执行。源码必须将历史只读分支与新的安全效果分开，不先要求原因子仍ACTIVE而使真实丢回包永远无法确认，也不先读到完成就绕过今天的账号/主体/Session停用检查。
+
+写事务沿现有Account/安全设置→USER→credential/MFA→稳定factor/batch→Session/StepUp锁序。锁后用数据库当前时间重查证明期限和完整资格；当前设置的读取锁与设置更新排他锁互斥，不能事务外预查false后越过收紧。账号false→true→false也不能使原Session/证明重新有效。成功时旧factor永久REVOKED、原批次不可逆终止、factorRevision恰好+1且不得溢出、MFA状态REMOVED；所有旧登录Session和未完成挑战失效，派生Role依原来源Session关闭。待确认的正常更换在同事务取消并保留原消耗历史，未完成proof不因取消而退回可用。密码/hash/generation、身份及Policy/Group/Role/Key/业务资源不因解绑改变。
+
+登录和Session判断必须显式识别有合法来源的REMOVED：未强制时新Session只有真实PASSWORD认证事实，不能继承原PASSWORD_TOTP；账号当前强制时只能发行ENROLLMENT，无普通Session。既有MFA Session在解绑后永久无效，旧密码Session也不能因状态变宽复活。重新绑定仍重新验证当前密码，完成后旧密码Session终止，正常密码+新TOTP登录。原factor永不改为ACTIVE，旧批次永不恢复，旧解绑完成不会在后来的改密/绑定/停复用后重做。
+
+新增单一tenant事实`iam.authenticator.removed`，真实USER actor与同USER PRINCIPAL target，无伪造的业务Decision；producer proof必须读取上述准确已提交完成和原StepUp/factor/batch关联，不因用户后来停用或Session失效丢掉历史事实。旧canonical/hash、ServiceIdentity/lookup_service/claim保持。009要求同事务写一条`AUTHENTICATOR_REMOVED`通知，012沿原封闭模板、可信联系人修订、受限worker与历史投递承担交付；模板已经存在不等于SQL领取/dispatcher已接通。解绑请求没有收件地址，SMTP临时失联不复活已移除因子，必要通知意图写入失败则整笔回滚。
+
+恢复的资格投影必须包括REMOVED的完整来源及后续绑定关系：旧BOUND备份不能因没有当前ACTIVE因子而通过资格相等检查。原snapshot只携带重放下限，不承载密码/种子；同资格恢复仍保留完成并结束旧Session、码及Key能力。资格变化后的旧备份仍归独立全域恢复方案，不能为本片放宽IAM45的匹配准入或伪造旧解绑记录。
+
+本运行时在唯一`authentication_security_projection`中使用新的内部`matrix.iam.authentication-state.v2`域：加入MFA状态的removalId、批次的解绑终止来源、已验证的完整解绑完成及其已消费证明身份、已确认重新绑定的原来源；逐条核对完成与原Session/factor/batch/Audit/通知关系。时间按UTC epoch参与内部摘要，未确认绑定、正常OTP步、Session使用和投递租约不进入资格承诺。它不修改公开Audit canonical或私有snapshot文件编码，不赋予旧IAM45备份跨后继schema/profile恢复的许可。
+
+验收复用原TOTP/StepUp/security-settings integration及authorityprocess，不新增并行测试框架或历史版本矩阵：
+
+- 普通USER在两个实际IAM上完成解绑、旧Session/Role/因子/批次拒绝、新PASSWORD登录、主动新绑定及新PASSWORD_TOTP登录；账号收紧后的REMOVED只能进入原受限首次设置路径。缺失/伪造完成、错归属、旧记录重放和schema重放均不能获得REMOVED资格。
+- Group/Policy只授管理权限不能移除他人因子；RootIdentity/未撤销平台附件、强制MFA、forced-change、错误目的/版本、过期或另一Session的proof均无效果。无需配置全权IAM策略即可执行本人合法流程，但SELF不因此扩大为跨用户授权。
+- 使用实际数据库等待关系控制解绑与设置收紧、授予平台附件、正常替换/保存码恢复/批次重发、logout、change/reset及User/Account停用的双方先提交；依据真实资格判定结果，不能固定假定所有组合都只有一个成功。等待期间证明自然到期也必须拒绝，无序列化重试掩盖过期判断。
+- 审计/通知末端失败全部回滚；提交后断TCP，正常重新登录只读原完成，原意图精确重放不结束新Session。后续重新绑定后再重放解绑仍保留新因子；清理过期挑战不能清掉永久完成来源。
+- 真实SMTP收到原已验证地址的唯一事件关联邮件，明确渠道受理与实收；受限登录、SQL/RLS/约束破坏、日志/响应秘密检查及独立进程通过。UX只在固定公共契约和后端证据后接入，无“强制MFA也可关闭”或管理员代解绑的伪入口。
+- 后继源码迁移仅保留实际最近受影响固定前驱，验证真实BOUND/待操作/撤销历史及新函数形状；与安装owner核对最终完整profile，未发布中间版本不累积N-1测试链。源码数据库实验不构成对用户安装的迁移或发布准入。
+
+运行时本地证据（2026-09-28）：本任务专属Windows PG18.6、2逻辑CPU/1GiB/24进程/16连接，Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB、串行race-p1。原`TestIAMTOTPRemovalPostgres`后继包83.740s通过本人证明用途隔离、原root/实际平台附件保护、错误修订无效果、通知末端故障全部回滚、原子REMOVED与旧会话终止、新PASSWORD登录及原完成精确重放，再实际绑定新因子/新十码、PASSWORD_TOTP登录；后继原解绑重放和双次迁移不影响新因子。七类实际存储攻击分别拒绝丢失来源、伪NEVER_BOUND、错误USER、删除完成、复活因子/批次及返还已消费证明，且安全状态无部分变化。原演员真实停用后仍可取得单次事件摘要绑定的producer proof，伪造request被拒绝；未重新授权旧Session。新RR资格门禁证明解绑、新确认绑定改变资格并在close前拒绝旧备份，而新登录、精确重放、迁移及待确认绑定不改变有效资格。首次备份测试使用了不符合私有安装ID格式的旧HTTP夹具而失败，改用真实安装格式后通过，未放宽生产校验。
+
+同一恢复owner的`TestIAMAuthenticationRecoveryPostgres`包136.379s通过真实三个数据库、同一RR快照pg_dump/pg_restore及连续两次恢复：源端实际登录、地址验证、TOTP绑定与本人解绑产生完整历史，恢复端保留同一完成和撤销来源；旧Session/factor/batch均不复活，当前正常PASSWORD登录可读取并精确重放原完成且不会被再次退出。原快照完整集合、预算下限、Policy/Group/边界、并发reconcile/reopen和失败回滚门禁保留，没有重新bootstrap或关闭恢复约束。后继同源码`TestIAMTOTPRemovalRequiredEnrollmentPostgres`包61.772s通过账号设置收紧后的受限ENROLLMENT、新因子绑定与登录，保留相同历史攻击、备份资格及审计证明门禁。API状态schema门禁曾遗漏解码后的真实Validate步骤，按生产调用路径修正后API包race22.692s通过；IAM用例、恢复用例、HTTP、通知、生成器及architecture聚焦race和vet/diff通过。
+
+并发局部证据沿原HTTP夹具与真实数据库锁等待，不制造正向Session/证明：`TestIAMTOTPRemovalSettingsPostgres`包14.666s通过设置收紧与解绑的两个顺序，使用独立的实际MFA设置管理员；共用夹具的原`TestIAMTOTPReplacementSettingsPostgres`包117.478s完整回归通过。`TestIAMTOTPRemovalAuthorityPostgres`45.13s、`TestIAMTOTPRemovalSessionsPostgres`119.86s、`TestIAMTOTPRemovalMutationsPostgres`120.38s串行完整通过（包288.880s）：共十组平台授予、logout、保留当前Session的改密、管理员reset及USER停用的双向竞争。先授平台权限时解绑被拒；先解绑时后继独立授予/reset/停用仍可合法完成，不强行规定所有组合只准一个成功。锁内资格、准确generation/状态、原因子/批次、证明是否消费、单一完成/通知/审计分别核对，原请求拒绝和迁移重放无部分变更；所有解绑入口检查40P01计数，不能用重试隐藏死锁。首次平台夹具两场景误共用请求ID，第二个不同目标被正确409拒绝；改为独立意图后复验，没有放宽生产幂等约束。
+
+其余资格竞争在新的三个专属数据库串行race-p1通过：`TestIAMTOTPRemovalFactorsPostgres`、`TestIAMTOTPRemovalRecoveryPostgres`、`TestIAMTOTPRemovalAccountPostgres`合包376.838s，覆盖替换确认、批次重发、保存码恢复及独立Account停用的八组双向锁顺序。第二种因子操作使用真实不同目的的证明，恢复使用实际LOGIN挑战和未消费的保存码；Account来自真实平台开通而非bootstrap归属，停用后正常恢复也不复活原Session/解绑证明。分别核对完成、状态/修订、旧factor/batch、另一证明/恢复码消费以及准确Audit/通知归属。原容量夹具曾预先占满三个未完成证明，导致第四个意图被正确拒绝；容量断言保留在原专门场景，竞争场景只准备实际参与的证明，未放宽生产限额。
+
+`TestIAMTOTPRemovalExpiryPostgres`包137.879s通过自然到期：实际另一副本等待原USER锁，数据库时钟超过原证明期限后才放锁；请求401、无解绑完成或安全状态变化，原MFA Session仍有效，证明未被消费。迁移后同请求仍拒绝，不修改时钟/期限，也不拿Session已过期冒充证明到期。该等待观察复用原regeneration门禁的同一局部实现；原`TestIAMStepUpPostgres`的regenerate、regenerate-competing-proofs及regenerate-lock-expiry在新库聚焦回归206.826s通过，保留原三个在途证明上限及自然到期行为。
+
+同一`TestIAMTOTPRemovalPostgres`在新库和本任务专属Postfix3.10.13上完成真实邮件路径100.37s（包103.826s）：首条地址验证码来自实际STARTTLS/SASL投递的Maildir邮件，普通USER完成解绑、重新绑定及实际停用后，原`AUTHENTICATOR_REMOVED`意图仍由生产notification-dispatcher投往原验证地址。数据库观察确认实际worker登录受限，SMTP最终250、唯一受理attempt及原Message-ID/正文在worker重启后保持；检查旧/新密码、Session、种子、挑战和两代恢复码均不出现在安全邮件。Postfix沿既有固定Debian镜像，2CPU/768MiB/Pids128、独立标签网络和仅127.0.0.1随机端口；这证明该本地合成邮箱实收，不声称正式安装通道、互联网收件或最终用户已读。
+
+IAM46/Audit27版本/readiness与校验对齐后，新的独立PG18数据库上`TestIndependentIAMAuditAndPaaSProcesses`168.58s（包172.086s）通过。复用原因子进程夹具，不新增服务或测试入口：真实双IAM、受限runtime登录、PaaS/Audit及dispatcher完成解绑提交后断TCP、新PASSWORD登录读取原完成、精确重放、新因子绑定/MFA登录及重启。派生RoleSession先证明能访问同一业务资源；解绑、密码重登、再次绑定后旧Role资格持续拒绝。普通新登录保留业务授权，旧完成不退出新Session；实际停用原USER后，已提交解绑outbox仍进入原tenant chain，重复append保持同记录/链位置，伪造request/tenant拒绝，完整链验证通过。原设置/绑定/改密/恢复/批次重发/替换的断连与重启、双租户业务门禁保留。首次新增SQL断言误写契约字段名`credential_generation`而非实际存储列`credential_version`，在测试中修正并以新库复跑，没有改生产凭据语义。此组合不包含SMTP消费者，邮件证据独立如上；签名profile保持不变。
+
+后继相同IAM46/Audit27源码在三个新库通过双authority权限/不可变记录和旧tenant记录升级门禁（合包9.180s）、Audit HTTP门禁（包3.607s）。全目录遍历曾因既有事件夹具未将新增解绑事实的target设为本人而被canonical校验拒绝；修正合法夹具，并加入该action的他人target及ROLE actor负向断言，生产自服务约束未放宽。旧tenant编码/哈希、RLS、最小权限、准确readiness及新封闭action均实际检查。
+
+唯一前驱已替换为固定`42035189eb823e388509f54525889c1a18c6b79d`的IAM45→IAM46，不增加第二条历史入口。原`TestIAMRetainedPredecessorProcessUpgrade`在新专属PG18.6、相同限额和Go1.26.3串行race-p1下57.48s（包60.834s）通过。实际旧backup-custody/recovery程序生成资格、完整snapshot、SOURCE/RESTORED完成及floor；CLOSED副本迁移拒绝且原状态/函数不变，OPEN已完成副本双迁移后精确reconcile/reopen只返回原字节、不重复改变凭据或下限。另一真实原库副本尚未reconcile，迁移后相同旧快照的首次close/reconcile/reopen均被拒绝，不把旧投影当新授权。原末端DDL故障通过非事务sequence证明已到达，全部回滚并保留旧历史；新解绑表/来源列/函数不残留。真实双账号MFA恢复意图沿原期限完成；另一旧BOUND因子完成当前解绑、新PASSWORD登录、新因子绑定和MFA登录，重启/双次迁移与原解绑重放保留新资格，旧因子/批次/Session/挑战不复活。当前产品声明演进、撤权、原Audit canonical/proof门禁仍实际执行。删除旧IAM44无snapshot/旧ABI分支，不回填历史证明；这不是签名跨profile兼容验收。
+
+最终IAM46源码在另外四个新库串行复验原`TestIAMAuthenticationRecoveryPostgres`163.88s（包167.462s）及`TestIAMTOTPBackupProcesses`32.75s（包36.180s）通过。前者保留两次真实RR dump/restore、解绑历史及Group/权限边界、非退款密码/OTP下限和两个Authority最后一次预算竞争；后者以当前实际一次性backup/recovery程序、受限登录、严格FILE、完整保留dump、提交后stdout丢失及原完成精确重放证明私有消费契约。原期限、密码成本、数据库/进程限额均不放宽；无签名安装/profile或跨schema备份兼容声明。
+
+当前新增源码门禁接入原Verification的独立串行`authority-removal`与`authority-removal-security` lanes；十个专属数据库入口、YAML及19段Bash语法已校验，两项各15分钟，PG限额与失败关闭汇总不变。最终源码全仓`go test -race -count=1 -p 2 ./...`（含architecture）、`go vet -p 2 ./...`、模块校验、全部API生成稳定性、Linux amd64构建及diff/gofmt检查通过。使用实际Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB；默认外部门禁SKIP不计真库证据，真库范围仅按上述实际执行结果。固定SHA独立CI、LIVE UI及签名发布仍待完成；不能据此开放资格已经改变的旧备份正向恢复。实收门禁确认队列为空后仅正常删除本轮自有Postfix容器及其空网络，合成邮箱与临时密钥可由原夹具重建；未停止其他任务、共享引擎或远端服务。
+
+固定18bdcd9a的[Verification36382998585](https://github.com/xiak/matrix/actions/runs/36382998585)已确认两条replacement lane失败：容量夹具收窄后没有给更换场景发行竞争证明，空stepUpId得到400而非预期的409，不能算完成了跨意图攻击。后继只补一个实际HTTP发行、同目的且不同requestId/ID的PENDING证明，保留原409、原来源不可改写及容量上限，不把畸形输入当成已验证竞争。新的三个本任务PG18数据库串行race复验`TestIAMTOTPReplacementPostgres`、`TestIAMTOTPReplacementSecurityPostgres`、`TestIAMTOTPReplacementLoginPostgres`合包523.310s通过，包含准备/确认/末端回滚、旧因子及旧码拒绝、logout/改密/LOGIN的双向锁序；其中security240.62s、LOGIN149.77s，原各项期限未变。没有重跑SMTP，不能冒充邮件实收。另一个removal-security累计包超时及调用分组修正归[011](FEAT-IAM-011-acceptance.md#当前ci任务分配)，上述失败不回填为通过；修正后精确SHA的独立CI、LIVE UI和签名发布仍待完成。
+
+#### 受支持备份恢复与防回滚边界
+
+**新意图效果前检查切片。** 选择性适配安装owner已验证固定`e579eef16c5e833337bd8055a0a838b7aa1614f3`的私有inspect契约及IAM实现，在本分支当前密码规则/资格投影上重新验证；不导入其安装程序、发布profile、FEAT或验收状态。当前工作树已实现源码IAM49/Audit27及准确的五函数恢复角色形状，独立CI与签名组合仍待验收；本分支已发布profile保持4/3/1+r4。后继在线reset-completion独立预留IAM50，不与本片混合验收。
+
+专用`matrix-iam-authentication-recovery inspect`仅接受原受保护intent文件，用原authentication-recovery DB角色在Serializable事务内核对当前完整资格及未使用commandId；返回与原安装、bootstrap、epoch、意图摘要和当前认证状态摘要精确绑定的非秘密ELIGIBLE结果。它不返回私有快照、不关闭认证、不写closure/receipt，不是close的可缓存许可；close仍独立锁内重验。已完成或正在关闭的同commandId不能利用历史prepare的重放分支取得新资格；旧备份资格不同仍拒绝。当前API、worker、通知、密码恢复和backup角色均无此执行权。原close/reconcile/reopen及历史snapshot/canonical不变，不新增在线路由。须在原恢复门禁证明准确函数/ACL/readiness、两个事务次序、inspect后资格变化被close拒绝、只读/错误安装/历史command拒绝、无效果及真实程序的封闭文件/stdout边界；保持单前驱，不增加所有开发schema排列。
+
+本分支组合的局部运行证据：独立PG18.4（1CPU/768MiB/PIDs192、24连接，随机本机回环端口）及Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB下，原关闭门禁串行race-p1通过55.39s（包58.918s），保留原3分钟期限。真实策略发布/默认版本、附件、组成员、边界、角色信任、联系地址与因子变化均拒绝旧备份inspect及close；准确inspect返回十个封闭非秘密字段，错误事务/安装/目的权限被拒。实际锁依赖证明inspect先持锁时close等待，检查无效果提交后close自行校验；close先持锁时在途inspect发生序列化冲突，重试已提交command返回CONFLICT。检查后的真实改密使原close拒绝，五项新增函数形状/权限破坏均使readiness关闭。原末端故障回滚、完整snapshot及准确并发close保持。
+
+原`TestIAMTOTPBackupProcesses`在第二个新库串行race-p1通过20.42s（包23.844s），仍为原4分钟期限：真实迁移程序apply两次/verify、专用恢复程序inspect成功、API/worker/backup登录拒绝、旧资格/完成command拒绝及无效果断言均执行。原完整RR dump/restore、close/reopen提交后stdout丢失、原完成字节重放、运行进程关闭及重启后旧Session拒绝保持。该证据不覆盖安装journal/签名profile、资格变化后的旧备份正向恢复、LIVE UI或整体009验收，不能继承donor分支的r16安装结果。
+
+同一受限环境的另外两个新库通过原单前驱与双authority门禁：实际固定`42035189eb823e388509f54525889c1a18c6b79d`的IAM45程序→当前IAM49保留数据升级95.13s（包98.417s），原真实MFA恢复/解绑/重绑、密码设置与历史、资格和消费下限、SOURCE/RESTORED完成、两次迁移/重启及原bootstrap/Audit canonical/proof保留；CLOSED迁移与旧快照首次恢复继续拒绝。双authority真实PG权限/不可变记录/当前readiness检查6.25s（包8.929s）通过。只使用原唯一前驱入口，不增加逐个开发schema路径，不声明任意N-1或跨发布profile兼容。
+
+同一最终源码全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块验证及Linux amd64构建通过；默认无外部DSN的SKIP不计真实验收。实际PG门禁均终态成功后确认零客户端，正常停止并清理本轮唯一临时PG及空网络；只有可重建测试数据，未操作其他任务或远端资源。独立CI与最终签名消费者组合仍待各自固定验证。
+
+固定`9df4512616ac2648fa6e993b260d5ef7c6670606`的干净archive随后在另一独立内部网络、PG18.4（1CPU/768MiB/PIDs192）与Go1.26.5 runner（2CPU/1536MiB/PIDs256，包含测试及全部子进程）通过原完整独立进程门禁158.10s（包159.144s）。实际两个IAM、PaaS、Audit和dispatcher证明当前49/27源码readiness、受限数据库登录、双账号资源/配置/Operation/outbox、跨副本当前撤权及完整历史链；原MFA绑定/恢复/再认证/换绑/解绑和安全设置的提交后TCP丢失、重启及原完成重放均保留，原6分钟fixture未扩大。冷runner第一次因login shell清除了Go路径在测试启动前退出127，改用镜像原PATH的非login shell后才取得上述真实结果，未改变源码或门禁。API再生成无差异；两容器、编译cache及空网络均已按唯一标签清理。该固定源已推送，[Verification36455507556](https://github.com/xiak/matrix/actions/runs/36455507556)已核实精确SHA、queued，未验收独立CI或签名新组合；旧0fa的36441090890已终态failure，恢复码真实窗口success不覆盖其其他失败/取消。
+
+本节只覆盖产品提供的受控备份/恢复，不声称抵抗root将数据库、所有磁盘、密钥和封存历史一起回滚。密钥用途隔离保护秘密，事务保护同一次提交；二者都不使数据库外的时间自动单调。将T1已消费/撤销的状态恢复到T0，会重新出现历史有效行；数据库内新增generation、消费表或与数据库一同备份的Audit均不能独立阻止。PostgreSQL的[PITR说明](https://www.postgresql.org/docs/18/continuous-archiving.html)只证明可恢复到选定时点，不提供认证资格不回退的保证。
+
+安全要求是：受支持恢复重新开放访问前，恢复可信的最新安全状态，或作废所有无法确认的认证资格并通过经过证明的受限路径重建。受影响入口包括登录、挑战、已有Session、派生Role及其他可能绕过该限制的发行/管理入口，不只关闭UI。历史资源、Operation和Audit不因此删除；已接受工作负载和历史outbox沿原产品边界处理。
+
+| 恢复阶段 | 必须成立的条件与失败结果 |
+| --- | --- |
+| 准入 | 核对完整release profile、封存installation/原primary、备份真实性、配套keyset及受支持安全恢复方案；材料匹配不等于状态足够新。不满足时在恢复副作用前拒绝，不能加force跳过 |
+| 先隔离访问 | installation建立不随本次旧库恢复回退的恢复意图及关闭状态，并确认全部相关副本/直连入口已隔离；不能只撤掉负载均衡后留下可直连旧实例 |
+| 恢复数据库与材料 | 始终保持关闭；进程重启、安装器崩溃和旧journal出现均不得提前ready。副本须确认同一恢复意图，不能各自判断“库能连接就健康” |
+| 验证安全状态 | 若有备份之外可信且完整的消费/撤销证明，可按封闭契约恢复；不能拿最大时间戳、链本身完整、outbox已空或旧bootstrap receipt冒充最新证明 |
+| 无法确认时 | 不采信旧恢复码、因子、Session和challenge。作废/重新绑定方案必须有独立验证过的当前恢复资格，且不复活被撤销的权限。只有旧备份/旧凭据而无可信资格时保持关闭，不新建临时全权管理员 |
+| 再开放 | 原子安全状态及完成证据持久化、必要通知意图建立、所有副本确认后，installation才封存开放结果；丢失回包只续跑原意图，不重新清空状态或签发恢复能力 |
+
+当前源码恢复实现固定`1584de22e156ea47a4db6056e91a9340b4f364f9`，IAM45/Audit26，复用`api/adapter/installation/v1/authentication_recovery.go`及原`000014_authentication_recovery`的目的限定close/reconcile/reopen。close取得认证状态独占锁，普通事务的共享锁提供在途请求屏障；原安装/意图/backup/custody及epoch与完整当前资格摘要、逐USER重放下限共同封存。reconcile/reopen必须消费同一closure和snapshot，重检恢复库资格；reopen在同一事务推进凭据代际、撤销旧Session/RoleSession、结束在途尝试/挑战，为恢复码批次和AccessKey建立永久fence，并推进ACTIVE因子消费下限和凭据代际绑定的尝试floor。包含后继测试修正/资格预算补充的固定`42035189eb823e388509f54525889c1a18c6b79d`已在2026-09-28通过GitHub API核实[Verification36367216408](https://github.com/xiak/matrix/actions/runs/36367216408)精确SHA、九个执行job及汇总全部completed/success；不回填旧失败，不覆盖当前解绑候选、签名安装或LIVE UI验收。
+
+现有`TestIAMAuthenticationRecoveryPostgres`使用真实RR快照的全量dump/restore，覆盖三个独立数据库、两次还原及源端OTP/密码消费；`TestIAMAuthenticationRecoveryClosePostgres`通过实际资格变更证明旧备份在close效果前被拒。备份helper的资格摘要与TOTP custody摘要分别证明身份/授权状态和包装材料，不能互相替代。当前正向路径要求资格匹配，尚不支持从旧备份重建之后变更过的完整当前资格；这一缺口仍按下文的独立后继设计处理。固定前驱e24的无snapshot历史receipt只保留原字节读取，不能取得新执行资格；新组合也不能因schema数字或材料匹配而继承早期发布验收。
+
+当前恢复切片复用上述目的限定入口、专用数据库角色、封存意图和完成记录，不新建在线恢复/导出权限、通用receipt、第二套秘密托管或全局身份。完整要求如下；实现与已执行证据见下文，剩余资格变化、容量和签名消费者仍须各owner共同验收：
+
+- 在第一次破坏性恢复之前，close已取得的同一权威屏障内建立完整当前安全状态承诺。结果与真实封存installation/bootstrap、原command/epoch、source/target release及准确backup绑定，由安装owner持久保存在本次数据库回退范围之外。只读预查或从目标旧库重新取expected均不能代替这个时间点的证明。
+- 完整性至少覆盖当前Account集合及真实root归属、启停状态、安全设置版本/requiredForUsers；USER的当前状态、凭据代际/强制改密、MFA状态/修订、当前因子/批次和可信通知联系修订。已撤销的Policy/附件/Role及受保护平台恢复资格也不能因只补MFA字段而默认继承。无需导出明文密码、种子、码或可离线猜测秘密；具体凭据验证材料如确需携带，必须走经批准的受保护格式，不能塞入普通Closure/Audit/support。
+- 集合必须由IAM从同一已冻结快照完整导出，不能由caller选择Account/User、页数或子集。省略行、重复/乱序项、错归属、超预算、未知旧状态及截断均失败关闭；一个摘要本身不证明集合完整。规模上限不得未经验证变成业务配额，也不得通过分页期间继续写入拼接不同时刻的状态。
+- reconcile/reopen分别验证已封存当前证据与恢复后数据。明确可保持的当前资格才能保留；会话、挑战、已恢复旧码/Key等仍按原不可逆fence处理。因子时间步下限只处理短窗重放，不能证明这个因子在T1未被撤销；曾替换的旧因子不能在后续新时间步重新认证。密码/主体/策略及联系状态同样不得凭旧库“看起来有效”重获资格。
+- 缺失、冲突或无法确认时保持CLOSED；若在破坏性效果前已能发现不支持，则在效果前拒绝。此负向保护只是前置切片，不等于完整旧备份恢复已交付。正向恢复仍须实现可信当前状态恢复，或作废不确定能力后通过当前有效的受控资格重建；不能以“全部拒绝”替代完整目标，也不能只救回primary便开放其他主体。
+- 回包丢失、中断、重复启动和跨副本只能续跑原已封存意图、原证据与原完成；不得生成另一epoch、从旧库重签当前资格或重复推进状态。已封存摘要不授予单独reopen能力，安装先验证全部相关副本/直连入口隔离，最后才封存开放结果。
+
+跨进程交接方向已与installation确认，纯类型/codec固定`dce2456adb8503c9c86d31bb2a3f63f35719ffa0`已推送，SQL投影与恢复原子消费已按候选IAM45实现；独立CI及安装消费未验收前不能据此开放新恢复。原Closure末尾增加`securitySnapshotDigest,omitempty`；省略形式只用于已完成历史receipt的原字节读取，不是新执行的兼容分支。新close只返回封闭`{apiVersion,kind,purpose,closure,securitySnapshot}`，快照绑定封存installation/bootstrapDigest、原commandId/epoch/recoveryIntentDigest及准确closedAt；快照不再包含closureDigest，避免循环摘要。唯一canonical编码及快照摘要归现有`api/adapter/installation/v1`，completion也必须绑定相同快照摘要。新reconcile/reopen同时要求原CLOSURE_FILE和`MATRIX_IAM_AUTHENTICATION_RECOVERY_SECURITY_SNAPSHOT_FILE`，缺字段/缺文件不调用旧执行路径。当前私有SQL投影和原子close已有下述局部证据；完整字段/容量矩阵及恢复原子消费仍未验收，本文没有宣称安装已可调用。
+
+installation先以现有受保护write-once流程写入快照，回读核对完整canonical字节、摘要和归属，再写closure；两者都持久化之前不做破坏性恢复。close回包丢失只能从源库原command receipt取回原快照，不能从恢复库重采样。已有closure而快照缺失时保持关闭，不把它解释为“尚未close”再签新意图。原只读容器根、单文件只读挂载及无日志边界不变，不给IAM新增可写宿主挂载。安装现有文件/执行输出各4MiB、CLI45秒/外层60秒/SQL15秒预算不扩大；纯契约采用快照2MiB及Account/USER总项数3000双硬界，已有下述稀疏资格3000项的真实投影、dump/restore、close/reconcile/reopen证据，密集因子和策略及峰值细测仍待证明，不能把该协议界限作为已验收业务容量。超界在source backup/close封存前拒绝，不截断、不输出部分集合，也不新增账号创建配额。
+
+容量门禁沿用原三个fixture及期限，在单Account的3000项上限中加入真实API创建的16个MFA用户、8个Group和关联客户Policy/版本/USER边界；其余行仍为明确标注的合成传输压力数据。普通授权及因子来源须来自真实管理/验证流程，不能复制因子密文或补造Audit/决定。全量dump/restore逐主体保留各自原凭据代际，reopen逐项只推进一次，并验证当前因子、完整策略/组关系及恢复fence。该混合工作集只补充原稀疏边界的业务多样性，不代表3000个完整MFA用户或任意历史密度的生产容量；后者仍须单独给出可验证规模，不据此关闭密集资格容量缺口。
+
+完整资格与瞬时重放状态分开承诺：顶层`authenticationStateDigest`由同一私有SQL投影证明下表的当前身份/授权；`accounts`按accountId排序，每项`{accountId,users}`，USER按userId排序，每项`{userId,factorId,lastConsumedStep,passwordAttempts,totpAttempts}`只携带不可回退的重放下限。无当前ACTIVE因子唯一表示为`factorId=""/lastConsumedStep=-1`；无预算记录为明确null，有记录为`{windowStartedAt,usedAttempts,sequence}`，缺字段不是null或零额度。保留所有Account及USER墓碑，恢复后的实际完整集合必须重新比对，编解码检查不能证明集合未被省略。密码成功后的合法零计数与OTP至少一次计费分开；窗口不重起，原序列及消费上界不得回退。快照不导出密码hash、种子、恢复码或服务认证材料。
+
+可预见的旧备份不兼容必须在破坏性恢复前拒绝：现有RR exported-snapshot helper应同时读取上述权威投影摘要，pg_dump仍导入同一snapshot。新增`authenticationStateDigest`作为lease和安装受保护backup manifest的独立字段，不改变仅描述包装密钥需求的TOTPBackupCustody字节或复用其摘要。安装拟发行manifest v5并沿RecoverySource/Intent封存；旧v4缺少此证明，仅保留历史读取，不补造摘要，不取得当前自动recover资格。close将候选备份的摘要与当前同一事务投影比较，不等时不保存closure、不推进epoch或写成功事实；匹配后仍须封存完整重放快照并在实际恢复后复核。Session、OTP消费步及通知投递lease等应由既定fence/预算处理的瞬时状态不进入该资格摘要，避免一次普通登录使备份无意义地失配。该首片支持安全资格匹配的实际备份；资格已经变化的旧备份需要后继可信状态携带/重建路径，不能将此首片标成该完整恢复能力。
+
+资格变化后的全域恢复是后继独立设计，不是上述相等准入的宽松模式。现有私有投影只有资格摘要及重放下限；它没有可重建的新密码验证材料、因子密文、联系人与策略正文。不能反解摘要、按旧库补字段，或只恢复主账号后开放其他旧主体。后继方案必须明确以下闭包后才能冻结执行契约，不在本次IAM45消费者集成中追加接口或分配版本：
+
+- 安装owner证明当前权威来源、原close/意图和受保护封存均在本次回退范围外；当前源不可用且没有等价可信证明时不能从目标旧库补证。备份真实性只说明T0材料来自哪里，不说明T1资格仍有效。
+- IAM负责完整当前Account/USER/服务身份、凭据及MFA谱系、Policy/附件/Group/Role/边界与通知地址的资格处理。选择保留当前IAM权威数据或目的限定携带/重建时，都必须保留真实不可变来源和完整集合；当前snapshot不能悄悄成为含密码验证材料或种子的公开导出格式，原秘密托管目的不能混用。
+- IAM决定、outbox、原恢复receipt与Audit链是关联的历史闭包。只搬当前主体行而还原T0决定/投递状态可能丢失T1事实或断开证明；不能补造USER授权决定、重写旧canonical/哈希或把已投递事实当作可以丢弃。最新链/未完成投递如何跨业务数据回退保持，需Audit与installation各自owner共同证明，不在IAM单独宣称解决。
+- 所有旧Session/Role、challenge/StepUp、恢复码/Key仍按准确恢复意图结束资格，源端已消费预算不返还；合法当前用户能够通过选定的当前认证或受控重建路径重新访问。仅有拒绝旧状态、让所有人永久锁死或救回一个primary，都不构成这条正向恢复的完成证据。
+
+此后继方向不改变当前已冻结的同资格恢复ABI、完整profile准入或旧helper的消费边界。当前固定消费者仍先验同资格正向生命周期；全域恢复未实现的状态继续保留在本FEAT，不凭该局部交付缩小009的完整目标。
+
+安全投影须覆盖下表中的当前权威；选择摘要时仍须在唯一SQL投影中列出组成字段、稳定排序和完整集合检查。不得只用某个局部generation替代其他来源，也不以“整库hash”夹带秘密和无关投递状态。此表是字段冻结的检查依据，不是已经发布的JSON类型：
+
+| 当前权威及源码owner | 恢复比较或不可逆处理 |
+| --- | --- |
+| `accounts/account_roots`与Account安全设置 | 完整Account集合、原root归属、启停/版本、settings版本及requiredForUsers；新Account和已停用Account都不能漏出集合 |
+| `principals/user_credentials/user_mfa_states` | 包括DISABLED及已删除USER墓碑、凭据存在性/代际、强制改密及真实MFA来源。已删除USER无密码行与非删除USER意外缺行分开；未知MFA不能默认NEVER_BOUND，尚未实现的REMOVED不能预先成为许可 |
+| `totp_authenticators/mfa_recovery_batches/authenticator_recoveries`及更换/重发来源 | 当前因子/批次与修订及其不可变关联相符；同ID并不足以证明当前ACTIVE。正常OTP消费步是重放下限，不应因为合法登录使整份资格比较失配，但reopen下限必须覆盖源最新已消费步和允许窗口 |
+| `notification_contacts/notification_contact_verifications` | 绑定当前已验证联系来源及修订；不能从旧地址重新取得通知/恢复资格。待验证秘密不导出，也不升级成已验证联系人 |
+| `policies/policy_versions/policy_attachments/user_permission_boundaries` | 包括当前版本选择、canonical内容摘要、删除/退役、所有目标种类和TENANT/INSTALLATION/INSTALLATION_PROBE范围及撤销状态；不能只保存当前有效平台附件布尔值而丢掉撤权历史 |
+| `groups/group_memberships/roles/role_trust_versions/role_permission_boundaries`及来源代际 | 当前组关系、Role状态/信任/边界及各自版本共同参与；`role_source_authority_generations`只覆盖自己的写入来源，不能代替Role信任、策略默认版本或产品声明 |
+| `authorization_profiles/authorization_profile_heads`、SERVICE_ACCOUNT及`service_credentials` | 当前封闭动作/资源语义、服务身份启停/用途及凭据撤销必须相符；不因USER都被检查便默认历史服务凭据有效。只允许非秘密承诺，不导出服务认证材料，也不借此改ServiceIdentity/lookup_service契约 |
+| `password_attempts/totp_attempts`及原恢复fence | 源端已消耗预算不能随旧库返还；具体保留/保守抑制须沿当前预算机制证明。Session/RoleSession、旧挑战/StepUp、旧恢复码批次和AccessKey继续按原恢复屏障失效，不把恢复后的ACTIVE行当作当前资格 |
+
+close仍使用原SERIALIZABLE事务和认证状态独占屏障，不降成READ COMMITTED，也不在事务外预读账户集合。由于MVCC快照可能早于实际取得屏障，必须将全部安全读取、精确快照、关闭receipt和outbox置于同一事务，并在成功commit之后才编码输出；序列化失败的候选快照不得交给安装器。限次重试保持原intent而开启全新事务，不能重用失败事务的采样结果。后继真实IAM门禁须控制“业务变更先提交”和“close先提交”两个实际锁顺序，覆盖账户/用户新增及撤销，不仅比较goroutine调用顺序。
+
+该隔离选择已有局部机制证据：2026-09-25本任务独立限额PG18.6中，实际观察writer共享屏障阻塞closer独占锁；closer预先建立SERIALIZABLE快照，writer提交revision2后，旧视图close以`40001`失败，barrier仍OPEN且writer效果保留；全新重试读到revision2再提交CLOSED。临时探针库已删除。该结果只验证PG锁/MVCC机制，不是生产IAM完整投影、15秒预算或真实备份恢复已通过；后继生产测试必须用真实API变更和原恢复入口重新证明。
+
+纯契约局部证据：原`authentication_recovery_test.go`的严格snapshot/envelope、原intent/closure/completion历史字节、归属/摘要变体、显式空状态、缺失/重复/乱序字段和项数上界通过本地聚焦race；最终同一源码全仓默认race/architecture、vet及diff检查通过，外部环境SKIP不计真实运行。一个Account加2999个USER、128字节ID、双预算及最大bigint序列的实际Go canonical输出为1,626,221字节，并完成严格解码。Envelope与原意图绑定时另从安装已认证来源传入bootstrapDigest，不允许从回包或恢复库自证归属。五秒/两worker的模糊测试只执行了五次，是有限smoke而非充分模糊覆盖。纯契约固定`dce2456a`及测试DSN修正`29668fa330b2233b43ebd48ed37738623377f9de`均已推送；2026-09-25经GitHub API核实后者精确SHA的[Verification36044565312](https://github.com/xiak/matrix/actions/runs/36044565312)九项全部completed/success，已通知安装及UX owner。两个固定对象未改SQL/helper/runtime/schema/profile，不证明当前恢复入口已经要求新证据或满足容量/签名恢复门禁。
+
+再开放不能退化成批量更新Session撤销列。旧PENDING绑定仪式须失去执行资格，只能由新资格重新注册；合法保留的ACTIVE因子还须满足当前撤销/归属证明及准确重放下限。密码尝试不得随旧备份返额，无法取得可信预算时先保守抑制。普通USER、密码/Key/Role/附件和可信通知地址的回退必须一起处理，epoch不是重新授予它们的许可。本原子增量按已协调边界将工作树IAM readiness/verify推进到45，Audit仍26，私有函数形状和源码进程预期同步；这是源码候选，精确SHA独立CI和发布组合未验收，不改已接受release profile或安装准入。唯一前驱前移到已验证e24的IAM44，须通过原旧binary门禁；安装owner独立冻结真实PaaS组合和发布revision，不继承本分支数字。
+
+预算消费的实施边界：`password_attempts`只在凭据代际相符时维持60秒窗口，reopen的代际推进不能直接沿用旧行并声称不返额。恢复未修改密码，原恢复owner现以`authentication_recovery_attempt_floors`将可信窗口/计数绑定到再开放后的同一USER代际和准确完成；TOTP沿原10分钟跨目的预算保留。它不是LOGIN或ABANDONED尝试，不填造目标库缺行；正常reservation在真实USER锁内读取原行与恢复下限，下一序列严格超过二者。只有此后真实尝试/成功或原窗口自然到期才按既有规则消耗、清空或更新预算。真正改密仍按新凭据规则处理，不能混同于恢复的机械代际推进；旧代际尝试不作为新凭据的当前预算。后续备份/close投影包含尚未被新尝试承接的有效下限，不在热路径逐次扫描整份2MiB封存快照，不新增Redis或通用限流服务。下限只允许原CLOSED恢复事务与同事务完成写入，后继完成必须推进epoch；强制RLS、精确USER/完成FK、列/约束/ACL和两个保护触发器进入readiness。该实现的局部真实证据如下；不能据此称全部预算竞争矩阵或独立进程已验收。
+
+备份侧局部实现证据（本切片局部验证，独立CI待确认，不是恢复验收）：同一私有SQL投影已接入RR helper，lease新增必填`authenticationStateDigest`，TOTP custody及其摘要字节保持不变。新Account集合读取仅允许专用backup/recovery会话在内部显式作用域中使用，普通API的现有trusted GUC不是跨Account读取许可；内部函数不授予任何runtime角色。项数先做有界计数再构建JSON，超界不截断。真实独立PG18.6的原备份门禁race通过12.977s：改密、USER创建/停用/删除墓碑和非home Account改变资格摘要；普通登录/失败预算/退出、非ACTIVE密文与包装注册不改变资格摘要；导入同一exported snapshot的专用读者保持原证明。故意放宽内部函数权限时必须失败关闭，入口已改为同时要求实际`ready=true`及准确schema，而不只比较版本数字。
+
+原独立进程备份门禁改用全量IAM `pg_dump --snapshot`及真实`pg_restore`，含原owner/ACL/RLS；源快照建立后经实际IAM HTTP改密，恢复库中的真实专用helper仍产出快照对应的相同资格和材料证明，下一源快照才看到新密码代际。16.05s门禁通过并保留断开/中断/过期、固定输出和角色拒绝。新场景发现测试DSN在复制配置切换数据库后仍沿用原URL的源库名称；原`runtimeDSN`已按实际host/port/database重建并新增默认round-trip，恢复端另从`pg_stat_activity`验证实际目标及专用登录。没有新增生产调试接口。随后全仓默认race/architecture、vet及diff通过，默认环境的DSN SKIP不计真实运行；本轮八个一次性数据库已删除，自有PG正常停止且验证目录保留，未操作其他环境。上述证据不包括投影全部授权/因子变化矩阵、3000项实际容量、close/封存/reconcile/reopen、预算合并或签名安装恢复，不能用备份一致性代替恢复安全闭环。
+
+原子关闭局部证据（本切片局部验证，独立CI待确认）：原用例事务内依次执行`prepare_authentication_recovery_close`、Go唯一snapshot编码/摘要和五参数`close_authentication_recovery`；准备只取得原屏障和采样，不写receipt/epoch/outbox，所有输出校验在commit前完成。已提交相同意图只返回原不可变快照，不从当前状态重采样；历史无快照行不补造证明。真实独立PG18.6的`TestIAMAuthenticationRecoveryClosePostgres`最终race-p1通过3.50s：两个真实Account、改密先提交与close先取得锁的两种依赖均经`pg_blocking_pids`实证；前者拒绝过期备份资格，后者拒绝晚到改密且凭据代际/成功事实不变。并发相同close返回完全相同canonical envelope。省略Account/USER、回退因子步或删除实际密码预算均在封存前拒绝；prepare rollback、outbox末端故障、快照列/默认值/约束/执行权限/SECURITY DEFINER、内部核对器越权及旧reopen签名复活的九项破坏分别验证无部分效果或readiness关闭，原closure不可变。
+
+当前关闭门禁覆盖六类授权来源的真实API变更：Policy发布和默认版本切换、直接附件撤销、Group成员移除、USER权限边界设置、Role信任撤销。每项分别从真实RR helper取得变更前备份资格，正常提交当前管理事务，再证明资格摘要改变、旧资格close返回CONFLICT且认证仍OPEN/epoch0、closure及成功恢复事实为零。没有直接改投影字段，也未新增测试入口/数据库矩阵；原双向锁顺序、故障原子性与schema越权检查完整保留。
+
+同一owner另外区分有效资格变化与瞬时认证状态：通过真实USER创建/强制改密、通知地址验证、首次TOTP绑定、MFA登录、TOTP_REPLACE专用step-up及确认更换建立完整来源。已验证地址、首次绑定和更换分别改变资格摘要并拒绝此前backup lease；待验证地址、PENDING绑定、成功登录/OTP消费、已证明step-up及待确认更换均不改变该摘要。更换后的原因子确已REVOKED、新因子成为当前BOUND来源，并保留唯一更换事实；拒绝旧备份不能撤销这些已提交状态。验证码只由测试已有私有解密观察器取得，不修改状态、不伪造验证或审计记录，也不声称完成SMTP投递。
+
+2026-09-28上述完整关闭门禁在独立PG18.6中串行race-p1通过70.87秒（包74.356秒），新增联系/因子场景64.36秒包含真实OTP时间步等待，原3分钟期限未扩大。环境为Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB、原PG的2逻辑CPU/1GiB/24进程/16连接限制。首轮因测试未执行正常启动所需邮件keyset注册而失败，补齐原注册调用后才取得该证据，没有放宽生产托管检查。IAM及architecture默认race-p2、同范围vet、gofmt/diff通过；默认外部SKIP不作为真库证据。仅本轮两个零客户端合成库被删除，自有PG正常停止、原保留库不变。它仍只证明同资格恢复的效果前拒绝及瞬时状态排除，不证明换因子之后的旧备份正向恢复、地址替换/安全设置的完整变化矩阵、全部并发或签名安装；后继固定源码独立CI待确认。
+
+保留数据恢复局部证据（本切片局部验证，独立CI待确认）：2026-09-27的`TestIAMAuthenticationRecoveryPostgres`在新的三个PG18.6数据库中串行race-p1通过78.53s（包82.142s）；同日关闭门禁通过5.04s。仍使用本任务原2CPU/1GiB/24process/16connection限额，阶段结束即释放不用的连接池。源库只bootstrap一次，通过实际API建立密码、Session、业务授权决定、AccessKey、两个USER的TOTP/恢复批次、已证明StepUp及在途尝试；专用RR lease的同一snapshot交给真实pg_dump，完整IAM含owner/ACL/RLS经pg_restore进入空目标，没有再次初始化或关闭约束。原bootstrap receipt、完整Profile archive及决定/私有证据逐项保持，跨表约束的恢复修复与负向历史校验归[001](FEAT-IAM-001-authorization-profile.md)。资格摘要、Account、USER、因子或完整集合被篡改，即使重新算出自洽快照摘要也在reconcile前拒绝，目标无closure/epoch/outbox部分效果。准确并发reconcile/reopen及原完成重放保持，旧Session、StepUp、恢复码与Key沿原fence失效，正常重新认证及带数据schema重放通过。
+
+同一门禁中，一个备份时没有尝试行的真实USER在源端发生四次错误密码；恢复后两个独立Authority在真实USER行锁上同时等待（独立观察连接沿`pg_blocking_pids`确认两者依赖），释放后只消耗剩余第五次，后继请求不再推进序列，窗口保持源端原60秒。旧实现曾在该真实反例中退回used=1/sequence=1，修复后才通过。恢复下限写入末端注入故障时，密码代际、Session、因子、在途尝试及完成全部回滚，floor和reopened outbox均为零且保持CLOSED。成功后在任何新登录之前，真实backup helper产生下一备份及完整pg_dump，专用SERIALIZABLE prepare逐USER保留源密码/TOTP窗口、次数、序列及不回退因子步；prepare回滚不推进epoch，也没有生成目标原先不存在的password attempt。关闭门禁的12项floor列/约束/FK/RLS/ACL/触发器与函数权限破坏检查均失败关闭；专用恢复登录不能直接读取或清空floor。
+
+同一三库门禁区分OTP重放与预算耗尽：另一个真实USER在第一次备份之后以生产允许的下一时间步OTP成功登录。首次恢复后，此用户仍有三次剩余额度；用原已消费代码创建新挑战，在校验前后都以实际数据库时间证明代码仍处有效窗口，真实请求拒绝并将共享尝试从2扣到3，因子消费步不变且没有Session。没有移动数据库时钟、扩大skew或直接改因子消费步。另一USER正常完成第五次TOTP登录后，第一目标以原下一备份再次close，并将该真实dump恢复到第三库；密码与OTP均保留源端5次下限、原窗口/sequence和未来消费步。两个Authority及有数据Up不能获取新额度，第一次不可变completion的原样重放不能再次推进代际。此项不是跨进程副本或所有密码变更交错的证明。
+
+TOTP最后额度竞争增量继续归同一个三库门禁：在上述真实恢复及非耗尽重放拒绝之后，使用原封存快照中已消费4次的另一USER；两个独立Authority各持真实不同LOGIN挑战，在同USER锁后的实际等待依赖被观察到后同时提交正确的新OTP、竞争第五次。恰好一次MFA登录成功、一次拒绝，共享次数只到5、序列只前进一步，原十分钟窗口保留，两个挑战合计只增加一次尝试，成功Session与事实各一个且可被两个Authority验证。之后更换Authority和新建挑战也不得返额，沿原第三库恢复/有数据Up场景证明。真实管理重置及随后强制改密则属于新凭据：原尚未到期的耗尽密码floor保留不被篡改，但不能封死新一代合法密码；新尝试序列继续单调，成功登录沿当前契约将本代计数归零，旧恢复完成重放不能再次撤销新Session。
+
+2026-09-27上述完整增量在新三库PG18.6串行race-p1通过80.01秒（包83.475秒），原4分钟期限和既有限额不扩大。两个真实挑战会消耗密码额度，后继OTP专项目标在该USER较早的60秒密码窗口自然结束后才提交，另一个USER的耗尽密码floor则仍在其原有效窗口内验证；不把密码拒绝冒充OTP拒绝，不通过改时钟、清记录或重置计数准备场景。初次新增改密断言错误地期待成功登录后保留一次计数；实际锁内状态与原issue_session行为均为SUCCEEDED/used=0，按当前行为修正后上述完整运行通过，没有修改生产预算或SQL。IAM各包及architecture默认race-p2、同范围vet/diff通过；默认缺DSN的SKIP不替代以上真库证据。阶段结束后仅删除本轮13个可重建合成库，确认零客户端并正常停止自有PG，保留原其他数据库。这是同进程双Authority、实际PG与两次完整dump/restore的证据，不是独立进程HA、所有凭据交错、签名安装或完整009验收；后继精确SHA独立CI待确认。
+
+容量局部证据（本地验证，独立CI待确认）：原integration owner的`TestIAMAuthenticationRecoveryCapacityPostgres`使用真实同RR dump/完整还原/reconcile/reopen，2026-09-28最终三项串行race-p1通过89.58秒。单Account加2999个USER中，16个用户的改密、邮件确认及TOTP绑定、8个Group、8个客户Policy/16个版本、128项组成员关系和16项USER边界均通过真实Authority建立；每个业务用户在绑定前已成功执行组与边界授权下的资源查询。其余压力行复制原测试哈希，不伪造因子/审计历史，也不宣称API开户吞吐。首次沿用共同邮箱的第六次验证受到现有每收件人预算拒绝；改为每个测试用户独立地址，没有清计数、延长窗口或放宽生产预算。
+
+上述单Account混合工作集完整canonical为668,152字节，backup投影2.483秒、close5.659秒、reconcile2.739秒、reopen1.328秒；1500个Account各一USER的稀疏工作集为565,896字节，分别3.524/7.240/3.369/5.071秒。前一次混合工作集close实测10.578秒，不能只取较快测量宣称峰值余量。每种fixture仍为2分钟、SQL15秒及私有命令45秒；PG18.6沿原2逻辑CPU/1GiB/24进程/16连接，Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB。完整owner/ACL/RLS恢复后逐主体比较原代际，不再假设所有凭据都是第1代；reopen及其精确重放后每主体恰好+1、一个floor、一次completion和三个恢复事实。16个有效因子、批次和当前策略/组关系均保留，但全部旧Session撤销、16个批次全部建立永久恢复fence；最终schema verify通过。3001项在真实backup和有效形状的close均失败关闭，后者仍OPEN/epoch0、无receipt或成功事实。还原目标沿原唯一命名派生并正常删除，未新增数据库/历史版本CI矩阵。这个混合工作集不证明3000个完整MFA用户、任意历史密度、峰值余量或生产业务配额，密集资格容量缺口仍保留。
+
+同一最终源码同时重跑原三库恢复门禁70.92秒，连容量入口包合计163.987秒通过；保留源OTP重放拒绝/持久扣额、双Authority最后额度竞争、第二次实际还原及真正改密后的旧完成重放断言。随后IAM各包和architecture默认race-p2、同范围vet及diff通过；默认SKIP不计真库证据。仅本轮12个可重建合成数据库在零客户端核对后正常删除，专属PG正常停止，原保留数据及其他任务环境不变。当前仅本地验证，尚无本增量的独立CI成功证据。
+
+普通成员业务恢复增量：原三库门禁将直接用户附件替换为真实Group附件，并在原Key创建后设立更窄的list-only USER边界；组仍允许list/create。2026-09-28新三库PG18.6、原限额及4分钟期限、串行race-p1通过90.35秒（包93.939秒）。双Authority竞争取得的唯一新MFA会话可在双方查询原Key，但create受USER边界拒绝，用户管理/平台目录同样拒绝；没有新Key、秘密或成功事实，原Key的精确command恢复fence保持。原两次实际还原、OTP/密码预算及完成重放检查均保留。最终integration/architecture默认race-p2与同范围vet/diff通过；两轮共6个可重建合成库经归属/零客户端核对后删除，专属PG正常停止。本片不增加数据库或历史版本CI矩阵，也不改变生产权限、SQL或IAM45的消费契约；独立CI仍待确认。
+
+新reconcile五参、reopen四参和私有FILE入口均实际消费原snapshot；unit/race证明快照缺失、超2MiB、截断、非canonical和错绑定在数据库配置前被拒，有效文件对照确实到达下一阶段，用例不为坏快照开启事务。该运行仍为同进程Authority加实际PG/备份工具，不是独立签名CLI/安装或LIVE UI；完整资格变化恢复、预算完整矩阵、密集资格恢复容量、当前源码独立CI仍未验收，因此不标整体恢复已完成。只操作本任务限额本机PG18.6及合成库，未操作其他任务环境或远端。
+
+独立消费局部证据（本切片局部验证，独立CI待确认）：2026-09-27原`test/authorityprocess/totp_backup_test.go`的`TestIAMTOTPBackupProcesses`在新PG18.6数据库中串行race-p1通过31.89s（包35.345s），原4分钟期限及限额未扩大。实际backup/migrator/IAM/recovery executable读取原FILE契约，完整IAM由同RR snapshot的真实dump进入空目标。专用恢复进程在真实认证状态行锁后等待，以独立autocommit观察`pg_stat_activity`及传递锁依赖，确认实际数据库、专用login和application_name，而非只检查DSN字符串。错误API/worker/backup身份、真实旧密码资格、缺失或改写snapshot均拒绝且无部分成功事实。close与reopen使用已关闭读端的真实stdout管道；在任何成功重试之前先直接核实原事务已提交，再由新进程取回精确canonical receipt，不能让重试掩盖首命令未提交。reopen只推进一次generation及三项恢复事实；两次网络进程启动和等值bootstrap后旧密码/Session仍拒绝，新登录Session不被历史完成重放再次撤销，三个原事实的HTTP producer响应均核对安装归属、IAM用途及唯一canonical digest。
+
+备份引用负向fixture继续保留原不透明REVOKED/PENDING记录，并实际证明缺少绑定来源时IAM重启失败关闭；不删记录或补造来源来取得健康。正向进程恢复现场来自这些负向数据加入之前、真实HTTP改密之后的另一份完整RR备份；两个现场独立，未再次bootstrap造数据。首次组合失败确认了这项fixture边界，后继修正只分离测试数据；另一处HTTP测试改用原秘密wire输入，未放宽Secret的普通JSON禁令。该门禁不签发release、不模拟安装journal的可信来源，也不把不透明密文引用称为真实MFA绑定；Windows本地运行不证明Linux文件owner/权限、签名整包、全部副本隔离或实际因子路径，这些仍由既定验收分别证明。
+
+上述进程增量后的私有installation契约、IAM各包、authorityprocess默认race、architecture及同范围vet/diff检查通过；默认缺DSN的SKIP不计真实PG证据。这些是schema45推进前的局部证据，不自动证明后继候选或远端CI；发布profile未改变。
+
+候选IAM45的单前驱局部证据（本切片局部验证，独立CI待确认）：2026-09-27原`TestIAMRetainedPredecessorProcessUpgrade`在新的限额PG18.6数据库中串行race-p1通过58.55s（包62.048s），原3分钟期限未增加。唯一固定源前移到e24的IAM44，删除旧IAM43专用的无purpose响应包装和忽略replacement列比较；当前严格解码原INITIAL绑定响应并保留完整因子/批次字段。真实旧binary产生双Account、会话、MFA及恢复历史，迁移末端故障完整回滚，再双次迁移、等值bootstrap、正常更换/恢复及重启，保留原receipt、canonical和历史producer证明。
+
+同一入口另外由PG复制已静止的本测试旧数据库到两个唯一临时库，保留原schema及真实身份数据，由e24专用executable实际生成SOURCE closure、RESTORED reconciliation和completion；没有INSERT补造legacy记录。仍CLOSED的副本在迁移验证时拒绝并整笔回滚，原IAM44函数/状态/记录保持；已OPEN的完成副本双次迁移/verify通过，新增snapshot列仍NULL、floor为空，旧记录、凭据、Session、因子和outbox逐项不变。新FILE入口、真实受限角色调用新SQL及旧binary调用已移除ABI均不能借旧receipt再执行，拒绝后无部分变化。这是相邻开发源码的记录保留与失败关闭证据；模板复制不是签名备份恢复实验，fixture release/custody承诺不是安装准入，不能据此宣称旧binary在新schema受支持。临时副本正常删除，未增加历史版本CI矩阵。本前驱门禁不代替实际IAM45恢复、精确SHA独立CI或签名安装验收。
+
+同日候选IAM45另以新库复跑：关闭门禁8.24s、三库真实RR备份/恢复62.72s（同包74.588s）、实际backup/recovery/IAM进程33.27s（包36.729s）、双IAM/Audit/PaaS组合152.36s（包155.806s）全部通过。连同上述58.55s前驱运行，本轮实际工具链为本机Go1.26.3、GOMAXPROCS2/GOMEMLIMIT512MiB，PG18.6沿原Windows Job的2逻辑CPU/1GiB/24进程及16连接限制，重型门禁串行race-p1；不将先前Go1.26.7的测量配置套用于本轮。组合保留实际受限数据库登录、双租户应用/Operation/outbox、设置及MFA绑定/恢复/step-up/更换的提交后TCP丢失、重启、跨副本唯一OTP消费、当前撤权与原历史投递。通知元数据不是SMTP投递证据，Windows运行不是Linux受保护文件或签名整包验收。确认无其他客户端后正常删除本轮15个可由测试重建的合成数据库并停止自有PG；其余保留库、其他任务环境和远端均未操作。精确SHA独立CI、完整密集资格/预算矩阵及签名/UI组合仍未验收。
+
+同一最终候选源码在上述Go1.26.3限制下通过全仓`go test -race -count=1 -p 2 ./...`（含architecture）、`go vet -p 2 ./...`、模块校验及Linux amd64/CGO关闭的全仓构建。`go generate ./api/...`前后四份OpenAPI文件集合及SHA256逐项一致，gofmt/diff检查通过；默认外部DSN缺失的SKIP不充当真库、浏览器或签名安装证据。CI继续沿原lane串行运行，单一IAM前驱替换而非叠加；清除已删除旧fixture仍“opt-in”的过时说明，不增加兼容版本矩阵或扩大时间预算。
+
+固定生产候选`1584de22e156ea47a4db6056e91a9340b4f364f9`的[Verification36316212546](https://github.com/xiak/matrix/actions/runs/36316212546)没有通过独立验收：实际storage日志在原双schema测试的未初始化readiness断言中失败，数据库准确返回`ready=false/schema=45`，测试仍要求44；其后IAM storage门禁尚未执行。整体queued不表示该失败仍在等待，也不能用Go/node成功覆盖它。本地新库先重现同一失败，再仅把原测试初始化前后的精确期望同步45；另一组新库完整通过原双schema权限/不可变记录5.31s、旧tenant记录升级0.44s、Audit HTTP并发/重放/失败事务1.27s，race包8.561s/3.989s。后继`2b46f12a4752675dabe9ebd8df75c19175df7ebf`的[Verification36316892387](https://github.com/xiak/matrix/actions/runs/36316892387)越过此门禁后在RoleSession随机ID分页断言失败，原因与修正证据归[006](FEAT-IAM-006-roles-and-sts.md#r3管理会话本地证据)；不能标为当前源码独立CI成功。生产SQL、就绪条件、场景与预算均未改变；修正候选仍须独立CI，不回填失败或继承签名安装验收。
+
+原子事务门禁修正了未完成迁移文本和simple-protocol测试中的JSON参数表达；锁等待按实际传递依赖而非直接队列位置判断，关闭后的认证错误保持原401语义。没有放宽生产锁、密码算法或超时。用例另证明六类错误准备结果不能到达seal，序列化commit冲突重新采样而不复用失败结果，重试耗尽/未知commit不返回候选快照，错误返回校验不能发生在commit之后。该阶段同一源码的私有installation契约、IAM各包默认race、architecture、IAM vet及diff通过，默认DSN缺失的SKIP不算真实运行。上述局部证据不代表完整授权变化/预算矩阵、密集资格恢复容量、当前源码独立CI或签名恢复已通过。
+
+本版选定的保守准入是：没有上述证明的MFA备份恢复组合不开放。用户已授权原受保护主账号的目的限定MFA恢复及隔离增量，但当前恢复资格来源仍须证明，不能凭本地root权限、旧备份或旧receipt恢复历史权限。备份外的一把长期恢复密钥证明能力来源，不自动证明T1的Account/User仍启用、平台附件未撤销或因子/设置仍是T0版本；恢复T0后从旧库取expected再签新请求不能填补该缺口。仅救回primary而不能安全处理普通USER及密码/AccessKey/Role/授权附件/接收地址的回退，也不能将平台改回OPEN。
+
+隔离状态的存放与认证方式、全部副本栅栏、备份外安全证明或受控作废方案、恢复能力及完成顺序必须由installation与IAM共同冻结并真实运行；不是本文凭空声明已有一个外部防回滚系统。现有封存来源只证明原安装/原USER，不自动证明备份之后没有撤权；既有密码恢复入口不能用来绕过这个缺口。首个可启用MFA的release只允许已验证理解这些安全状态的前驱；仅识别OPEN文件但忽略MFA资格的旧binary仍不合格。installation可先交付不开启MFA的准备release，但其后继数据准入/运行也必须证明不会绕过因子、Session认证事实或恢复栅栏。确切profile/revision由发布片冻结，不能因通用版本数字比较而启动。
+
+当前installation衔接候选把上述边界具体化为`64/34/3+r11`：受保护备份通过一次目的限定RR lease取得真实pg_dump快照、TOTP custody摘要和完整`authenticationStateDigest`；恢复用同一封存意图先inspect、再close，数据库恢复期间保持CLOSED，随后只消费原closure和security snapshot完成reconcile/reopen。installation journal的单调恢复epoch只在准确成功的终态转换推进，作为Access Analyzer重新开始观察窗口的数据库外信号；普通journal写入、失败恢复、变体重放或旧备份格式不能推进。当前聚焦race已覆盖容器能力、回包丢失、完成锚点和效果前拒绝，但真实PG18签名A/B恢复、旧Session/TOTP/AccessKey拒绝、`RESTORE_GAP`、重启和独立CI尚未完成，因此本段仍是候选，不把r10或固定donor的证据回填为r11验收。
+
+#### 封闭审计事实与必要安全通知
+
+本片只为实际安全变化设计新事实，不为每个HTTP步骤创建事件类型。下表是拟定action目录，实施时在原`api/audit/v1`、IAM outbox/proof和Audit SQL拥有者同步验证，旧canonical编码不改写。
+
+| 拟定事实 | actor/target/scope与证明 |
+| --- | --- |
+| `iam.authenticator.bound` / `iam.authenticator.replaced` / `iam.authenticator.removed` | tenant链；实际USER为actor，PRINCIPAL target等于同一USER；精确关联已确认的本人Session或用途限定认证挑战及因子修订，不允许SERVICE/ROLE、他人目标或伪造业务Decision |
+| `iam.authenticator.recovery-started` / `iam.authenticator.recovered` | tenant链；密码+有效恢复码证明的实际USER，自助开始/新因子确认分别一个事实；原完成保存阶段与归属，不将只验证密码的未知请求归为成功恢复 |
+| `iam.recovery-codes.regenerated` | tenant链；实际USER与本人target，强认证证明、原/新批次及原子终态由IAM私有完成关联证明，不在事件中写恢复码或其验证值 |
+| `iam.security-settings.updated` | tenant链；当前PDP允许的实际USER为actor、真实ACCOUNT为target；关联原决定及设置旧/新版本，不能以平台身份默认管理另一租户 |
+
+正常发行仍用原`iam.session.issued`，认证事实保留在发行的私有证明中，不能给旧事件补MFA。敏感请求摘要只编码必要非秘密字段；密码、OTP、种子、恢复码、challenge持有凭据及其可离线猜测的摘要不入Audit。IAM-source投递继续核对已提交事实，后续因子撤销、账号暂停或Session到期不丢失历史。
+
+错误密码/坏challenge没有已认证USER，不能为了统一日志伪造USER决定或泛化SYSTEM actor。本片由持久尝试结果与受限脱敏指标证明失败预算，不承诺把每个匿名失败HTTP请求写入不可变租户链；有当前Session的权限拒绝沿既有决定事实。若后续要求匿名失败入Audit，须单独冻结准确来源/actor和抗写放大预算，不借本片自动增加actor范围。受保护身份的离线因子恢复同样需要独立目的限定事实，不能复用现有密码恢复的SYSTEM action。
+
+必要安全通知覆盖首次绑定、替换/移除、恢复开始/完成、恢复码重发及安全配置变更。IAM在成功事务内保存非秘密投递意图，绑定原eventId、Account、目标USER或已指定安全接收人及其已验证地址修订。它与Audit投递职责不同；不把原Audit claim七列改作邮件队列，也不使通知消费者拥有所有租户查询权。用户已授权由IAM在[012的S1](FEAT-IAM-012-external-integrations.md#s1最小安全邮件通知)交付最小邮件机制，installation托管通道配置；不新建通用消息中心或假订阅API。
+
+投递观察状态为`PENDING/RETRY_WAIT/ACCEPTED/FAILED/UNKNOWN`；只有渠道真实提供回执时才记录DELIVERED，绝不声称已读。先记录尝试身份再调用渠道，使用eventId加接收人修订去重；响应丢失先查询渠道证据，渠道无法幂等/查询时允许可识别重复告警而不声称恰好一次。失败有限重试、持久告警，不回滚已经完成的凭据撤销或重新执行恢复。通知里没有秘密、临时登录链接或恢复授权。
+
+接收地址必须来自已验证且当前可用的归属来源；恢复申请不能临时提供一个地址就把告警只发给它。没有已配置渠道/可信接收人时，新增绑定、恢复和强制MFA的发布前置不满足；运行中短暂投递故障则保留已提交安全变更及待投递，不把已撤销因子恢复有效。现有受损访问的退出/撤销不能因通知渠道不可用而被阻止。通知是本片未完成依赖，不把Audit成功、入队或测试收件箱的mock作为真实交付。[NIST恢复与通知要求](https://pages.nist.gov/800-63-4/sp800-63b.html#recovery)是安全参考，不因此宣称NIST认证或AAL合规。
+
+#### S2验收与未冻结衔接
+
+- 既有credential/authority测试使用RFC标准向量及独立实现生成的所选参数向量；真实认证器完成绑定和登录。覆盖前导零、时步边界/超2038、前后窗口、错种子/主体、同一步重复、合法码跨目的/挑战/副本及相同码多步碰撞。
+- 两个真实IAM副本证明密码正确但MFA未完成时不存在可用Session；错误码预算持久、并发成功只消费一次，认证/outbox末端失败无部分Session或成功事实。提交后断开真实TCP、重新登录、重启和等值schema重放不重发秘密、不复活挑战。
+- 账号强制MFA下新User的初始改密/首次设置、合法解绑后的重新设置、已有因子丢失和状态损坏分别走准确路径；旧挑战不能因改密获得新资格。启停要求与解绑、普通/Role请求双向竞争，旧密码会话不能等待异步任务期间继续放行；弱化配置不能复活已失效会话或挑战。
+- 绑定/替换/恢复与change/reset/logout、User/Account停用、平台附件写入双向竞争；旧单因子Session不升级、旧Role来源关闭、独立AccessKey不被虚假MFA事实放行。因子缺失/损坏/代际未知失败关闭，不按时间猜测认证强度。
+- 实际受限PG登录、RLS/函数越权、种子跨安装/主体互换、仅IAM材料挂载与日志/审计/支持输出秘密扫描；恢复码单向存储、一次性返回/消费、批次更换和备份回退攻击。
+- UX/UI owner完成真实绑定、登录挑战、换码等待、丢失回包、合法恢复和权限拒绝流程；不通过假OTP服务、空页面或截图代替运行。原密码/Session/Role/K2历史和canonical回归保留。
+
+当前工作树在固定签名产品源码`823a665e8d24b21c180134ab7893dc189d55599d`的`61/31/3+r7` A/B上扩展原`phase1e2e` owner，并在新的本任务Docker 27.5.1经典镜像存储、外层`network=none`、2CPU/4GiB/Pids768环境中完成350.46秒全生命周期。真实普通USER正常改密并验证自己的通知地址，随后从一次性provisioning取得seed，由上述测试认证器提交真实六位TOTP；确认原子绑定因子并返回十条一次性恢复码，旧Session立即401，等待下一个真实30秒时间步后密码登录只返回LOGIN/TOTP challenge，消费新码才取得`PASSWORD_TOTP` Session。受限dispatcher向实际Postfix/Maildir另投递`AUTHENTICATOR_BOUND`通知，正文不含seed、OTP、恢复码、密码或Session。该MFA身份的精确USER、联系人、因子状态、保留Session和测试私有seed在失败升级自动回退、B升级、显式平台回滚及选定备份恢复后逐次核对；只有mode-0600、位于安装/备份外的测试保留夹具持有跨门禁材料，support扫描继续禁止这些值，包括一次性恢复码和实际OTP。只重启已核对ID/标签的本任务外层引擎后，旧MFA Session仍能读取原状态，另一次等待新鲜时间步的完整密码+TOTP登录及logout在16.53秒门禁中通过。该结果不证明LIVE浏览器、真实硬件认证器、任意SMTP供应商、跨profile兼容或最终独立CI；后者完成前保持候选。
+
+#### 验收矩阵、分片与未决交付
+
+| 门禁/现有owner | 必须证明的结果 |
+| --- | --- |
+| `api/iam/v1`契约/生成测试 | 登录两分支严格互斥；challenge不能当Session；未知字段/两认证载体同时提交/跨目的/秘密普通marshal拒绝；仅两项安全配置新授权动作 |
+| `authority`、`identityaccess`、`nethttp`原测试 | 标准向量、秘密隔离、纯状态规则、正确错误映射及失败提交；不把假事务中的计数当成PG证据 |
+| IAM原`integration/http_postgres_test.go` | 两Account同名User；真实RLS/ACL/唯一性、同码两副本只有一次消费、重建challenge不返预算；配置CAS和错误码后计数保持；真实锁等待后的到期与因子替换检查 |
+| 并发矩阵 | 双验证、验证对改密/reset/recover/logout、因子替换对验证/恢复码消费、设置收紧/放宽对Session/Role请求、平台附件grant/revoke对目标凭据操作；分别控制两种提交次序，无部分状态/秘密或多余成功事实 |
+| 原authorityprocess | 两真实IAM和Audit/PaaS/dispatcher、实际受限PG登录；提交前崩溃/提交后断TCP、数据库失联与重启、旧客户端、真实资源请求；已失效Session/Role立即拒绝且已提交Operation及历史链保持 |
+| 安装/恢复owner | 同部署两副本一致keyset、错安装/错key/缺key不ready、重启不重建；T0有效备份→T1消费/撤销→T2恢复，先隔离且旧资格不接受；在每个恢复阶段中断仍不提前开放；无可信恢复资格明确拒绝 |
+| 通知owner | 真实已验证接收人和实际渠道；跨租户/新地址替换拒绝，受理未知/重复/失败重试与告警；Audit、入队、受理、送达不混淆，不因投递失败复活凭据 |
+| UX/UI owner | 独立真实认证器完成主动绑定、首次强制设置、登录挑战、过期/等待新码、秘密回包丢失、合法重绑及设置权限拒绝；浏览器不能读取持久缓存中的秘密 |
+| 原011容量owner | 明确副本/CPU/内存/连接/数据及尝试预算，错误登录与复杂PDP并行时没有无界队列；不提前宣称生产QPS、公平性SLO或数据库HA |
+
+恢复反例沿现有`authentication_recovery_postgres_test.go`和安装真实dump owner补齐，不建立平行测试框架。两套独立bootstrap只是事务夹具，不是T0快照；正向身份及T1变化必须走实际API，旧数据来自受支持的真实备份/恢复。以下为新增验收设计，尚未执行：
+
+| T0之后的真实T1变化 | 恢复旧库后必须证明 |
+| --- | --- |
+| 普通Account由不强制改为强制MFA | 不能恢复旧false后直接密码登录；当前设置承诺缺失/不匹配时不OPEN，不给旧Session补新版本 |
+| 本人正常更换或合法丢失恢复到新因子 | 原因子在真实新时间步也不能登录/step-up，旧批次继续不可消费；不能仅检查恢复瞬间同一步OTP拒绝 |
+| 修改/reset密码、停用USER/Account、撤销平台附件 | 旧凭据、旧启用状态或旧绑定不能重新取得业务或本地恢复资格；不得从恢复库重新签expected掩盖撤销 |
+| 撤销策略附件、组成员/Role信任或权限边界收紧 | 原资源保留但旧权限不能复活，普通Session、Role、Key各按其当前载体约束拒绝 |
+| 消费恢复码/结束Session与待完成挑战 | 同码、同秘密和原StepUp不可再次完成，失败预算不因重启/旧库回退获得新额度 |
+| 导出后删项/变体、遗漏新Account、超界集合或错误安装 | 完整性和归属核对失败，任何新密码/绑定/完成及成功Audit事实均不得部分提交 |
+| close/封存/数据库恢复/reconcile/reopen各阶段中断 | 原意图与准确完成可续跑，不额外开放、清空状态或重复消费，两个真实IAM均受相同关闭结果约束 |
+
+验收须同时包含安全状态确可恢复的正向路径及不支持状态的明确拒绝；只有负向通过不标记完整恢复完成。普通成员的正向恢复沿原三库门禁验证：以真实Group附件和USER边界取得的业务权限，在全量还原及reopen后由新MFA会话重新行使；两个Authority都应允许原资源查询，但仍拒绝未授予的用户管理和平台目录权限。Group允许list/create、USER边界仅允许list，恢复后create仍须明确权限拒绝且无新Key/秘密/成功事实，不能使用与组完全相同的边界证明限制没有丢失。旧会话和旧Key的永久fence不因新会话正常访问而解除，不用主账号登录或关系行计数代替该业务证明。纯契约字节测试、IAM真库事务、实际签名安装与浏览器分别记录，不继承其他分支的组合状态。
+
+设置竞争的有界门禁沿原integration owner复用真实初始化：六个独立Account，各自正常改密、确认通知地址、绑定TOTP、登录并取得准确设置意图的PROVED证明。设置false→true分别与本人logout、保留当前Session的日常改密、保存恢复码开始重绑竞争，每项控制两种提交次序。在第一事务的原成功outbox写入处暂停，实际观察第二副本的数据库锁依赖后才释放，不以goroutine启动顺序代替串行化证据。先提交设置则旧Session/LOGIN挑战不能再操作；先提交logout/恢复则旧Session不能更新设置；先提交保留当前Session的改密也必须使旧凭据代际的StepUp失效。逐项核对版本、generation、因子/恢复码消费、证明消费及完成/Audit/通知原子结果，schema等值重放及新Authority不得复活败方资格。独立三分钟期限及原尝试预算不变，不改时钟或直写正向身份；通知地址代码的存储解封只证明事务，不冒充SMTP。局部真实证据归上文，六项不替代上表其余因子/设置放宽/reset/Role竞争。
+
+同一门禁继续补设置收紧与另一普通USER的真实LOGIN验证码消费双向竞争：普通USER须正常创建、改密、确认联系人、绑定因子及密码证明，不使用管理员的保护身份豁免。验证先提交时可以正常发行Session，但紧接着已提交的设置变更必须使它立即失效，保留原认证事实；设置先提交时原挑战不得消费OTP或产生Session/成功事实。两序仍用实际数据库锁依赖，并核对原因子消费步、挑战完成关联及schema重放后的拒绝。该项不把密码正确或OTP校验计算成功当作已完成认证，也不要求两个原本可以按顺序合法提交的操作只有一个成功。
+
+设置放宽也必须遵守同一资格屏障。原integration文件及`proveIAMSecuritySettingsRaces`增加true→false与普通USER的LOGIN验证码消费双向竞争。先由真实命令建立true、管理员重新完成MFA，再准备准确version=2的放宽证明；成员挑战须在该真实版本下发行。验码先提交时，原PASSWORD_TOTP认证事实及version=2保留，后提交放宽使该Session失效；放宽先提交时，不得消费旧挑战/OTP或发行任何Session。两种提交次序最终都应允许该已绑定成员使用当前version=3重新完成真实MFA，而不能回退成PASSWORD或复活旧挑战。原恢复码/因子归属及单一设置完成/Audit/通知保持，重放和新Authority再次证明旧资格关闭。
+
+首轮合跑在原180秒总期限停止：原八项及放宽验码先提交通过，后一顺序尚在等真实TOTP时间步，不能算通过或产品授权失败。后继将新增两项放入同文件的`TestIAMSecuritySettingsLooseningPostgres`及一个专属数据库，原八项入口、三分钟期限和所有断言保持；新入口也限三分钟，不增加框架、schema历史矩阵或生产时钟旁路。CI仍在原20分钟step-up lane内串行，单独Go调用避免与原证明/设置共享10分钟包计时器；没有增加job、并发或资源上限。
+
+2026-09-28最终代码在本任务原限额PG18.6、Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB、串行race-p1验证：原八项设置竞争34.61秒全部通过；新增两项放宽98.91秒（包102.462秒），同owner的更换设置四项119.97秒、解绑设置两项11.63秒（组合包135.153秒）通过。新增场景同时验证原挑战仍未到期、准确旧设置版本/真实PASSWORD_TOTP事实、失败无Session/OTP消费、两副本当前新登录以及旧挑战/会话不复活。没有抑制deadlock重试或改写OTP/密码成本/正向权限数据；初次错误命名的空数据库在任何迁移前被原前缀检查拒绝，不计运行证据。工作流YAML、19段Bash语法及新数据库/唯一入口/一般事务排除对应关系通过。该片只有现有测试/CI及文档，不修改生产API、SQL、schema/profile或UI；后继精确SHA独立CI、真实浏览器及签名安装仍未验收。
+
+同一最终源码通过全仓`go test -race -count=1 -p 2 ./...`（含architecture）、`go vet -p 2 ./...`、模块校验和diff检查；默认未提供DSN的SKIP不补充上述真库范围。全部本地测试完成后，精确核对本任务PG进程/数据目录及零其他客户端，再正常停止，原数据保留，未操作其他任务或远端服务。
+
+实现顺序在本FEAT内细分，不新建重复FEAT：
+
+1. S2a：冻结私有材料、挑战/失败结果、现有锁序和消费者联合响应；补纯契约/域门禁，尚不开放MFA。
+2. S2b：实际PG共享尝试预算、TOTP消费及本人绑定/登录/受限重绑纵向闭环；具备完整安全条件后才开放对应能力，不把恢复留到加固阶段。
+3. S2c：S3两项security-settings权限、配置CAS、强制初始设置及Session/Role资格屏障；与原主账号/平台恢复owner完成受保护身份边界后验收全范围。
+4. S2d：真实安装材料、备份恢复与必要通知；与后端并行对齐，但未完成不能作为可发布MFA。
+5. S2e：UX/UI真实浏览器和完整固定消费者发布门禁；S3其余密码/期限规则及S4仍按各自需求独立验收。
+
+允许先审查/实现不对外启用的基础片，但不能降低本节承诺。实施前仍需冻结：installation的材料/同快照custody摘要/恢复栅栏契约、原受保护主账号丢失全部因子的当前恢复资格、012最小邮件的地址与真实通道契约、UX/UI登录联合响应，以及S3内置策略发布版本。通知及有界恢复工作已经用户授权，不再列为待批准；它们的实现、跨owner ABI和真实验收仍未完成，不能以“以后完善”换取MFA已验收。具体SQL函数/输出列形状、源码schema/Audit版本和最终release profile在对应实现切片分配，本文不预占数字。
+
+未发布中间schema不从1逐版重跑。保留数据测试选实际最近受影响固定程序创建的状态，证明旧NULL认证事实不被补造为MFA、封存primary/历史事实保持及新状态重启不复活；最终首版基线与真实已发布消费者按011执行。数据升级实验证据不替代签名release准入。设计改动仅归本文及原adoption，不改变S1/S1b证据、其他Phase或任何运行环境。
+
+### S3：账号安全规则、认证预算与期限
+
+本节细化IAM-SEC-01/02/04；共享密码尝试已进入下述S3a实现，账号规则及期限仍是待实施设计，不能把整个S3称为已开放。最小可验路径是：账号管理员设置本账号日常User的密码规则，两个IAM副本一致执行创建/改密/重置，有限次数的真实错误认证不能通过并发、realm别名、重启或事务回滚取得额外尝试；另一账号和业务鉴权仍受独立预算保护。密码规则不是005的授权Policy，不能参与Allow/Deny或授予密码重置权。
+
+固定`644fff09`的事实与差距如下，不能把已有HTTP timeout当成安全治理：
+
+| 现有owner | 该固定前驱行为 | 本需求缺口 |
+| --- | --- | --- |
+| `authority/password.go` | 固定Argon2id 64MiB/3次/并行1；新密码14–128 UTF-8字节、四类至少三类、拒绝空白/控制字符；Verify按保存格式核对原完整秘密 | 无账号规则、历史/常见密码检查；Hash同时负责固定规则，需区分产品规则与不可由租户降低的哈希成本 |
+| `authentication.go` / `lookup_login` | realm解析后在事务内验证真hash或dummy hash；错误结果结束事务，成功直接发行Session | S3a现已替换为计算前提交预算、锁外验证与最终原子消费；MFA部分认证及Account公平配额仍未完成 |
+| `user_credentials` | 当前hash、真实changed_at及单调credential_version | 无历史密码集合或已验证规则版本；不能从hash推测长度/复杂度，也不能补造旧密码历史 |
+| `service.go` / `issue_session` / `lookup_session` | 默认8小时绝对期限，用例配置允许1分钟至24小时；数据库时间、撤销和密码代际参与资格 | 无账号会话期限配置、可信last-activity或idle expiry；HTTP连接IdleTimeout不等于Session闲置过期 |
+
+#### 规则归属与变更
+
+账号安全配置是Account内单份有resourceVersion的治理状态，首片不另建可附件到Group/Role的安全策略语言或任意用户例外。`Policy/PolicyVersion`负责谁能操作资源，`security-settings`是该授权所管理的资源；两个对象不能合并。普通User仅可在其已验证身份下取得设置自己新密码所需的有效约束，不取得全账号安全报告或其他用户状态。未认证登录响应不公开按realm变化的配置。
+
+本次权限与入口如下。S2c已固定非秘密配置、准确变更意图及历史完成的数据契约；固定`847fc853`及后继候选已实现读取、写入、设置专属step-up及完成查询，本地证据归上文。强制绑定、会话屏障、并发及受支持恢复仍须按完整验收矩阵交付，不能因数据类型或部分运行门禁通过而视为发布完成。
+
+| 项目 | 设计 |
+| --- | --- |
+| 读取动作 | `iam.security-settings.read`，TENANT scope，原`ACCOUNT`实例资源且ID必须等于已认证Account；不另造一对一安全配置resource ID |
+| 修改动作 | `iam.security-settings.update`，相同scope/资源；不附带User认证器、密码reset、会话管理员、platform或其他Account的权限 |
+| 可用身份载体 | 当前实际USER的LOGIN_SESSION，包含原root但仍需原权限求值；首片不接受RoleSession、AccessKey、ServiceIdentity。SELF不是新增AuthorityScope或万能角色 |
+| 读取入口 | `GET /v1/account/security-settings`，Account从当前身份推导，没有URL/body/header selector；返回`AccountSecuritySettings{apiVersion,kind,accountId,resourceVersion,mfa,updatedAt}`的非秘密配置 |
+| 修改入口 | `PUT /v1/account/security-settings`，严格`{requestId,stepUpId,expectedResourceVersion,mfa:{requiredForUsers}}`；本片完整替换已支持的mfa段，没有任意JSON merge或用户例外数组。`stepUpId`只引用由当前Session持有、绑定准确意图的证明，不是可转移凭据或调用方提供的Allow |
+| 成功结果 | `UpdateAccountSecuritySettingsResponse{outcome,change}`，outcome只为`APPLIED\|EQUAL_REPLAY`；`change`是`AccountSecuritySettingsChange{apiVersion,kind,requestId,expectedResourceVersion,settings,callerSessionEnded}`。settings保存原完成时的非秘密配置快照及updatedAt，新版本必须等于expected+1；requestId是唯一命令引用，不另造完成ID。新执行的输入变体、版本冲突、权限或证明失效均无部分写入。精确完成只在当前caller仍有权限且原输入一致时返回，不要求已消费证明重新可执行，不重复消费或递增版本 |
+| 完成读取 | `GET /v1/account/security-settings/changes/{requestId}`；当前LOGIN_SESSION、当前read权限、同Account且原actor为同一USER，允许该USER重新登录后只读原版本/完成时间/结果。不返回证明秘密、不重做写入，不存在或不属于caller均不泄露其他意图 |
+| 后继字段 | 密码及Session期限随S3相应实现统一增加到实际schema和UI；尚未实现的字段拒绝，不返回伪默认值或预留可写空对象 |
+
+`SecuritySettingsUpdateIntent{expectedResourceVersion,mfa}`只包含操作专属证明必须绑定的准确非秘密目标，不是任意Action/payload或PDP许可。S2c在原`StepUp/StartStepUpRequest`增加封闭操作`SECURITY_SETTINGS_UPDATE`：仍必填`expectedFactorRevision`，且只有该操作必填`securitySettings:SecuritySettingsUpdateIntent`；`RECOVERY_CODES_REGENERATE`禁止此字段（包括null）。Account、USER、Session和当前绑定因子仍由IAM推导。`mfa.requiredForUsers`必须显式为true或false；省略、null、空mfa和未知字段均拒绝，不能将缺失配置解码为放宽规则。公开版本为正安全整数；expected必须留出一次递增的空间。
+
+设置证明的`requestId`就是后继设置命令的原requestId；同一USER原意图不能改换Session、操作、因子修订、预期设置版本或目标值。开始时在现有Account→USER→凭据→MFA锁序内核对当前设置版本；目标与当前值相同属于409，不创建无变化的版本或成功事实。证明和消费沿用原120秒绝对期限、共享密码/OTP预算及真实认证因子，不另建通用payload摘要或缓存许可。只读证明返回准确非秘密意图，失联不能据此重新签发另一意图；最终设置事务仍需当前PDP、准确版本和同Session的PROVED证明。设置证明不能消费恢复码重发，反之亦然。运行时证明准备和原子设置消费为同一未验收S2c增量，不能因新增枚举或局部证明门禁就交付可修改设置。
+
+`callerSessionEnded`必须显式为true，描述**原命令调用Session**被这次真实配置版本变化淘汰；收紧及放宽都适用，不能通过true→false让旧资格复活。它不是当前读取者的登出指令，也不是请求方可选的保留会话参数。历史查询及EQUAL_REPLAY始终返回原快照/原结果，不因当前配置、当前登录Session或后续授权改变而改写。正常重新登录后读到旧的true不得再退出新Session；APPLIED后原caller必须正常重新认证。该字段不列举其他会话、不授予其查询权，也不能推断Role/其他身份获得更强认证。
+
+非秘密数据契约的固定基线为`d570673ba87c113f7474fdab79b5e22a83c2b323`，当时只发布上述六个类型及OpenAPI组件，没有运行时路由、Action或SQL。既有测试owner覆盖显式false/true、缺失/null、未知或重复字段、请求方身份/权限选择、版本上限及历史完成与新Session分离；JSON Schema证明结构与封闭枚举，expected+1仍由Go验证，不证明事务。该固定基线的API/架构race、vet、122文件生成一致性和单worker15秒fuzz（221734次执行）本地通过；[Verification 35955820844](https://github.com/xiak/matrix/actions/runs/35955820844)因GitHub付款/支出限制终止failure，七项均runner_id=0、steps=0，没有独立测试执行。其证据不代表下述运行时增量或完整S2c已验收。
+
+当前首片只有TOTP，故不提供算法、允许因子清单、宽限期、按组例外或平台底线开关；新Account的`requiredForUsers=false`只是未强制日常User，不关闭用户主动绑定的因子。已有安装安全配置只能从实际可信旧状态迁移，不能以默认false覆盖生效决定；缺少应存在的行不得在读取时临时生成。用户NEVER_BOUND的首次设置、具备合法解绑完成的REMOVED重新设置及因子丢失必须区分。
+
+S2c运行时的首个有界交付是配置读取：`GET /v1/account/security-settings`在同一事务中使用当前USER/LOGIN_SESSION、当前PDP及真实Account实例，唯一SQL入口`iam.read_account_security_settings(text,text,text)`精确消费本事务内的允许决定。原`iam.accounts`增加`security_settings_version`、`mfa_required_for_users`、`security_settings_updated_at`三列，不增加平行Account实体，不在读取时生成默认行或时间。源IAM schema为41、Audit仍24；这是源码形状，不分配或替换安装release profile。
+
+前驱没有账号级强制开关，首次迁移仅记录version=1、requiredForUsers=false、updatedAt=Account原createdAt；新Account也在原创建事务中记录相同初始状态。此只读阶段由约束和ALWAYS触发器拒绝任何设置变更，不能存入尚未执行的true；等值迁移不改设置，缺失或部分字段不能用默认false重建应有权威。readiness/verify核对列类型/精度/非空、约束、触发器、精确函数及API/worker/通知/离线恢复等执行权限。IAM产品Profile从5推进到6，保留历史5；新动作只允许TENANT/ACCOUNT实例/USER/LOGIN_SESSION，旧系统策略及附件不自动补权。
+
+固定只读阶段不注册update、不开放写入/设置proof，也不声明强制要求已执行。其真实验收覆盖两Account、授权/撤权、Deny/Boundary、无授权平台身份、USER以外载体、selector、受限DB登录、历史decision重用拒绝、原审计关联、迁移重放和重启。当前后继S2c写入候选与证据归上文，不继承只读阶段的验收。设置写入须与首次受限ENROLLMENT、登录资格修订及受支持恢复的非回退证据一起交付；受支持旧备份的配置值不能独自充当当前安全要求，此衔接仍需installation owner共同冻结，不靠默认false或仅可回滚数据库版本来证明。
+
+设置可变后的恢复前置必须证明关闭认证时的完整当前Account安全要求，而不是备份内较早的配置。破坏性恢复前需将这些准确Account归属、`security_settings_version`及`requiredForUsers`的承诺保存在数据库备份回退范围外；恢复库有遗漏、未知Account或无法核对当前要求时保持CLOSED，不自动取旧false、不借当前可登录身份补证。当前IAM45候选已把这些要求纳入独立authenticationStateDigest及有界security snapshot，原TOTP custody仍只证明包装材料，不能替代当前资格。准确消费及验收边界统一归[受支持备份恢复与防回滚边界](#受支持备份恢复与防回滚边界)：只证明资格相同的恢复，不证明设置已经变化的旧备份可恢复，更不以相同schema或局部源码门禁代替签名发布兼容。
+
+2026-09-24只读增量的本地证据使用独立Windows PostgreSQL18.6，Windows Job硬限2逻辑CPU/1GiB/24进程，16连接、64MiB shared_buffers、4MiB work_mem、无parallel worker；Go1.26.7、GOMAXPROCS=2/GOMEMLIMIT=512MiB，真实门禁串行`-race -p 1`。数据库最终在零其他客户端连接时正常停止，未操作共享或远端服务。
+
+| 现有门禁拥有者 | 本地实跑结果与证明范围 |
+| --- | --- |
+| `TestIAMPolicyAuthorityStoragePostgres` | 整组142.48s通过；最终读取子片及其父级保留检查18.60s（包22.017s）通过。两个Account同名成员、显式自定义策略、旧root/平台策略不补权、Deny与Boundary、即时撤权及另一个Account不受影响；真实session_user/current_user受限登录、五类直接SQL/历史决定越权拒绝、11项列/触发器/ACL/函数漂移关闭、原设置时间与迁移重放、授权事实关联。 |
+| `TestIAMRetainedMFAProcessUpgrade` | 固定`f5cec0e132ad18900d9a5a5629eae04fda4817f1`实际IAM37二进制产生的数据→IAM41，最终23.41s（包26.768s）通过。原Account、凭据、附件、Session和历史事实保持；原IAM产品Profile的实际canonical/digest逐字保留，新head为6；只初始化此前不存在的设置，更新时间仍为原Account创建时间。原TOTP、恢复码、挑战及完成继续经历真实重放/重启与恢复，不构成签名release跨profile升级许可。 |
+| `TestIndependentIAMAuditAndPaaSProcesses` | 最终127.29s（包130.724s）通过。两个IAM进程、受限运行登录、显式授权、跨副本读取/撤权、重启后原设置、有效RoleSession/AccessKey不能充当LOGIN_SESSION；读取的历史决定在撤权后仍通过原producer proof/outbox投递至正确租户Audit。原双租户业务、MFA绑定/恢复/step-up及真实断TCP门禁保留；通知夹具不是SMTP证据。 |
+| 原Audit PostgreSQL/HTTP拥有者 | `TestPostgresAuthorityIntegration`5.45s（包8.346s）及`TestAuditHTTPPostgresVerticalSlice`1.30s（包4.279s）通过；当前IAM readiness期待同步41，原最小权限、不可变记录、双范围并发及失败事务保持。 |
+
+本片全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块验证、Linux/amd64全包构建、122个API文件两次生成一致性及gofmt/diff检查通过。默认测试中跳过的外部运行环境不计作实跑，真实证据仅以上列门禁为准。源码读取闭环不等于完整S2c验收。独立CI、设置写入/强制绑定/会话屏障、真实邮件、新UI浏览器及签名恢复仍分别需要实际证据；旧CI的零执行账单限制不能作为本片通过凭据。
+
+本片固定并推送于`018fbd7505ae16d59dcfe857df7fbbe870bf1a13`。GitHub API核对其[Verification 35959220825](https://github.com/xiak/matrix/actions/runs/35959220825)精确SHA：completed/failure，七项均runner_id=0、steps=0；go annotation明确为账号付款/支出限制，未启动测试。因此本片是已本地验证的固定候选，不是独立CI通过或发布验收。
+
+新动作进入IAM产品Profile和策略编译器，不由handler比较角色名称。现有系统策略版本保持不可变；具体新内置版本及其生效范围归002，在实现窗口明确验证，不因为目录新增Action就自动给所有旧附件补权。自定义策略可按已有发布/附件流程显式授予这两个动作，不能跳过Boundary或Deny；平台操作员的安装权限不隐含租户设置权限。
+
+修改的准入顺序为：确认真实Session及Account → 当前PDP → 当前受保护身份/配置规则 → 操作专属step-up → resourceVersion CAS → 原子变更/事实。顺序是语义条件，具体取锁仍遵守既有锁序。最终事务按**修改前当前有效规则、不可降低的产品底线和该操作自身要求**重检；本片所有设置修改均需近期密码及TOTP的目标限定证明，即使拟提交`requiredForUsers=false`也不能用该新值省略MFA。尚未绑定的操作者应先完成本人合法绑定与正常登录，不以这项权限代替绑定资格。
+
+每次真实设置变更（包括false→true与true→false）都只增一次`security_settings_version`，既有Session及待完成Challenge持有发行时的准确版本。下一次认证在当前Account下比较该版本；旧版本、NULL或未知版本均关闭，不补填、猜测或在重放中刷新。所有既有Session保守地重新认证，包括已有MFA及当前操作者；不在配置事务内遍历全部用户/会话。Role只消费原来源Session资格。已绑定因子不因放宽设置而解绑，旧Session/Challenge也不复活。原root/未撤销平台主体不受`requiredForUsers`的租户强制绑定控制，但同样重新认证当前版本；这不取消其身份、平台附件或独立恢复资格。
+
+INSTALLATION USER附件的真实新增与撤销在现有Account→稳定USER锁序中，原子终止该USER全部旧Session及PENDING Challenge；精确附件重放不再执行该效果。不能仅在读取时根据今天的保护身份豁免：撤销后再授予同类保护可能使旧弱会话复活。实际终止保留原认证事实、预算和历史完成，不改变其他USER或业务资源，也不为附件操作补造Session成功事实。新Session只能经新的完整认证发行，旧无资格版本的历史行始终失败关闭。
+
+更新后caller被要求重新登录时，旧Session不得为重放而豁免认证。未知回包先正常重新认证、读取当前配置及上述原非秘密完成；不自动用新resourceVersion与新证明重做原命令。读取历史完成与执行写入是两件事；只有update而没有read权限的主体不因此获得查询权，须保留未知结果并经现有授权流程处理，不能猜测失败后自动重写。
+
+租户可配置范围是本账号日常User，不可通过规则修改间接接管、锁死RootIdentity或拥有未撤销INSTALLATION附件的USER；这些身份的固定底线及恢复另属已声明root/installation边界。平台保护根据未撤销附件而非“当前可登录/有效Allow”判断，与附件授撤共用principal锁序。主体后来进入/退出受保护范围不能删除其原历史、清除已消费预算或复活会话；资格和实际规则切换须有明确的锁内行为，不通过配置开关绕过已有凭据保护。
+
+创建/修改配置、原请求完成关联和封闭Audit事实同事务；相同resourceVersion并发只有确定赢家。设置新密码的命令在写入前验证当前规则修订、主体/凭据代际及准确历史集合，不能依赖UI预检查或事务外缓存。状态变更、密码reset/recover与规则收紧交错时，过期验证结果不能落库。普通管理员规则不改变服务凭据、AccessKey、离线capability或RoleSession的密码语义；但Role仍受其原登录来源失效约束，不存在借Role绕过来源收紧的例外。
+
+#### 密码设置与历史
+
+当前新密码底线以长口令和可用的密码管理器为基础：最短15个Unicode码点，允许至多128个码点并有512 UTF-8字节硬上限；允许普通空格，不截断、trim或自动变换大小写，拒绝控制字符。原默认三类字符要求已移除；哈希成本及严格保存格式不变。复杂度组合的账号配置和真实历史仍按下述S3b实施；到期配置尚未开放，不把未执行的选项写入API。账号规则不得降低底线或选择哈希算法/盐长度/内存成本，也不宣称符合某一认证等级。[NIST密码验证要求](https://pages.nist.gov/800-63-4/sp800-63b.html#passwordver)强调长度、常见/泄露密码拦截和尝试限制，明确不采用额外字符组合规则或例行周期轮换；本产品为企业显式要求保留这两类配置的需求，不把它们说成NIST要求。外部产品的参数不直接成为本系统默认值。
+
+长度按码点而非字节/视觉字形计算，新口令规范化若改变验证字节必须有独立明确格式；本片不对旧hash隐式加入NFC或宽松匹配。已有密码仍按原格式验证完整秘密，不能先用新设置规则拒绝旧密码而使用户无法正常改密。长度/字符规则默认约束后续创建、改密、reset及相应受支持恢复写入；修改规则不证明所有存量密码已经合规，也不自动生成批量改密事实。到期只依据可证明的真实改密时间；当前`changed_at`还会被认证恢复fence更新，不能直接作为密码年龄，具体边界见下文。
+
+历史只保存各次真实密码的盐化慢hash及凭据代际/变更关联，不保存明文、可逆密文或快速无盐指纹。总是拒绝把当前密码重新设为“新密码”；额外历史数量拟限定0–24、默认1，0只关闭更早历史检查。新增、改密、重置和恢复应执行各自主体当前有效规则，不给管理员临时密码留无审计旁路；没有可证明历史时只保留当前已知状态，不生成24条占位证据。
+
+历史校验按固定上限串行使用原慢hash，有独立高成本工作预算；不能用并行24次散列放大内存，也不能在预算不足时跳过比较而接受密码。若把昂贵计算放在数据库写事务外，写入事务必须重新核对账号规则修订、USER状态、原credential generation和历史head，任一变化均不得使用旧验证结果。不得跨多个SQL事务保存半个新密码/半份历史；只有原子成功才轮换历史、推进generation、执行现有会话撤销规则和写outbox。
+
+常见密码底线使用固定来源的有界离线词表，选择与MIT许可/摘要归既有[adoption](../docs/adoption/FEAT-006-platform-authorities.md#password-and-authentication-budget-target-review)。唯一嵌入资源归原authority owner，不新增词表服务或运行时网络依赖；缺失资源不能构建，摘要不符拒绝启动。只比较完整待设置口令及其大小写变体，不因子串出现而拒绝长口令；用于散列及原密码核验的字节始终不变。该有限词表不证明完整泄露检测、持续更新或所有语言覆盖，后续来源变更必须重新固定审查/测试，不能以动态下载悄悄替换规则。待设置秘密不外发，也不记录匹配明文。恢复码、OTP和AccessKey秘密不是用户口令，不受此词表或复杂度设置控制。
+
+底线沿现有Hash/Validate入口覆盖新建、普通/强制改密及受支持reset/recovery，不给首次bootstrap或新恢复意图保留弱规则。无副作用重放另按原封存来源处理：Bootstrap在短事务内核对完整digest/installation/Account，精确READY直接返回原receipt；本地恢复先认证私有请求MAC，再查询原commandId+inputCommitment完成，并核对原expected，精确完成不重新散列或执行恢复。首次/NOT_FOUND仍走当前底线及原最终事务；变体、未知返回或读取失败关闭。没有增加在线恢复权、修改SQL/schema、私有FILE或发布profile。
+
+2026-09-28本任务专属PG18.6（2逻辑CPU/1GiB/24进程/16连接）、Go1.26.3/GOMAXPROCS2/512MiB、串行race-p1验证：原`TestIAMHTTPPostgresVerticalSlice`145.65s通过，实际创建/登录/改密保留首尾空格及超过128字节的Unicode口令，14码点、常见密码大小写变体和129码点写入均无部分安全效果；原会话策略、改密/reset/recover/logout/旧密码登录和平台授予竞争保持。原`TestIAMLocalCredentialRecoveryPostgres`37.19s通过新事务及原receipt、撤权/改密/登录等竞争。唯一`TestIAMRetainedPredecessorProcessUpgrade`108.97s通过：固定420/IAM45真实程序以旧14字节口令封存bootstrap并创建成员，当前IAM46双迁移/重启、原bootstrap精确重放、旧秘密认证和受控改密保持，原MFA/恢复/审计与来源门禁不变。未增加历史升级矩阵；旧短口令本地恢复receipt的专门分支目前由用例测试证明，不冒充已用旧程序制造该receipt。原authority及usecase的race与architecture通过，覆盖码点/UTF-8/空格保真、原hash验证、词表损坏、首次弱输入拒绝及历史完成无新写入。独立CI、UI表单消费、签名安装与容量仍须各自验证，不能将本底线称为完整S3b。
+
+最终相同源码另用新专属PG18.6数据库运行原`TestIndependentIAMAuditAndPaaSProcesses`195.41s（包198.984s）通过：实际受限runtime登录、双IAM/PaaS/Audit/dispatcher保留双账号、改密/恢复、各MFA仪式的提交后断TCP及重启、撤权和历史审计投递。它不包含SMTP实收、LIVE UI或签名安装。全仓`go test -race -count=1 -p 2 ./...`、architecture、`go vet -p 2 ./...`、模块校验、API生成一致性、Linux amd64构建和diff/gofmt均通过；默认外部门禁SKIP不计真库证据。原Argon2id成本、权限/恢复范围、源码IAM46/Audit27及既有发布profile未变，规则配置/历史/到期仍待下片实现。
+
+##### S3b：新密码规则、真实历史与写入契约
+
+当前候选`0fa1ff82`的独立CI还在`TestIAMSecuritySettingsRacesPostgres/verify-settings-first-false`准备绑定因子时出现认证拒绝，不能归并成storage超时或标为通过。该fixture用数据库当前计数的前一时间片生成绑定码；若提交跨过下一个30秒边界，原码已经超出生产允许范围。修正仅在生成前观察真实数据库时间：距边界不足5秒时先等待下一窗口，不重试已拒绝命令、不改时钟、OTP窗口、尝试预算或原fixture期限。
+
+最终测试Go blob`6269f631bfff69a4fcff4c850c57dabb78dc5d33`在本任务独立PG18.4（1CPU/768MiB/PIDs192、无宿主端口）、Go1.26.5 runner（2CPU/1536MiB/PIDs256、GOMAXPROCS2/512MiB、串行race-p1）通过原四组：设置竞争108.39s、设置放宽106.67s、换绑与设置146.73s、解绑与设置17.18s，每组仍为原3分钟context。原十项设置竞争及其他双向场景、实际锁等待、失败无部分效果和重放检查保留；在原verify-first场景中，真实ENROLLMENT尝试已保留后持有至原码过期，返回认证拒绝且预算为REJECTED/已用1次、因子仍PENDING/未消费、无该请求成功事实，随后新的有效绑定继续原竞争。该场景同时断言测试取码器确实等过边界，不以mock时间或正向DML制造资格。独立CI、LIVE及签名组合仍未验收；CI串行分组归011，不把本地四组通过替代累计候选验收。
+
+本片已推送候选`2468b28c3606aa377fcf47dd3129991cb0495bb9`（IAM48/Audit27）；[Verification36428925813](https://github.com/xiak/matrix/actions/runs/36428925813)已核对精确SHA及最终failure，authority-storage/runtime/removal失败；恢复窗口于15:05:26UTC成功，汇总仍正确失败，不能接受该候选。Audit双schema门禁仍断言IAM47；原备份专用入口也要求47，合法IAM48快照被拒绝。runtime的`TestIAMTOTPBackupSnapshotPostgres`及removal的`remove-transaction`、`remove-required`日志均精确命中该备份核对；不能将这些失败解释为新的解绑权限问题。
+
+修复已固定推送`4c6cf48e4ac195abb71d1490dfd6e414f7c01912`，仅校正两处测试断言和原备份函数的版本，不移除readiness、函数形状或专用角色检查，不增加schema/profile编号。原门禁在新PG18.6数据库串行race-p1由失败转为通过：双authority存储5.89s、真实备份快照10.42s；实际备份/恢复程序及pg_dump/restore门禁25.77s通过，包含受限登录、完整快照、丢失回包和原意图重放。同一生产修复的固定`0fa1ff82`干净导出在另两个专属PG18.4数据库串行race-p1通过原解绑用例：`TestIAMTOTPRemovalPostgres/authenticator_recovery/remove-transaction`为29.57s、`TestIAMTOTPRemovalRequiredEnrollmentPostgres/authenticator_recovery/remove-required`为56.89s（包87.531s），保持原fixture期限和生产密码成本；历史解绑邮件因未配置Postfix而SKIP，不计邮箱投递证据。前一组合命令中缺DSN的Audit保留数据升级同样不计通过。
+
+IAM/Audit、architecture及authorityprocess默认race-p2、相同范围vet与IAM全包Linux amd64构建通过，默认外部SKIP不计运行验收。修复随`0fa1ff828086b316f6b6034994e74d39d11c4bc0`推送的[Verification36441090890](https://github.com/xiak/matrix/actions/runs/36441090890)已确认精确SHA：Go、node、roles通过，但storage中的`TestIAMPolicyAttachmentSessionPostgres`在120.11s耗尽原fixture期限，尾部503，不能接受该候选。相同固定源在独立PG18.4、Go1.26.5/GOMAXPROCS2下实际复现120.19s失败；后尾未完成场景不能记为通过。完整24条密码历史的成本/账号干扰测量与其失败边界归011，不与该测试准备成本或后继S3c密码到期混为一项；容量候选`082c172e`未包含在0fa运行中。上述本地通过不等于完整009、LIVE消费者或签名安装验收。
+
+附件/Session后继门禁仅复用同一种安全变更的create/revoke测试USER，保留原user/group/platform全部48项真实锁后竞争、事实数量、失败无部分效果、双次schema/等值bootstrap重放和旧bearer断言。恢复测试资格只用实际登录、强制改密、启用或显式重新授权，不写正向凭据/会话数据；同一current会话的两次改密仍保留该会话，false路径保留原有效会话，其余已撤会话在下一变更前再次检查不复活。首次运行选择revoke子项时独立准备，不依赖create已被选中。各次新密码均真实不同，不复用刚退休密码。原120秒fixture、5秒竞争屏障、2连接池与生产密码成本不变；runner2CPU/1536MiB/PIDs256、PG1CPU/768MiB/PIDs192，无额外swap/宿主端口。最终测试Go blob `fd98829f091e7d2ed841985baee47940f9e64637`在082c172e干净源码导出上、空白PG18.4串行race-p1通过98.20s（包99.251s）；另一空白库仅选择user reset、group disable与platform change-current的revoke子项通过13.39s（包14.448s），没有执行其create前项。IAM integration、architecture、authorityprocess默认race-p2与同范围vet通过；默认外部SKIP不计真库证据。本片不改生产API/SQL、schema/profile或CI期限，独立CI仍待验收。
+
+S3b正在实施，尚未完整验收。最小可验收结果是：管理员按原step-up修改同Account规则，普通USER的创建、本人普通/强制改密及管理员reset都执行当前规则和真实历史；原root及installation恢复执行不可由租户放宽或锁死的固定底线。不是只给页面增加设置字段。到期和idle随各自真实执行片加入，S3b不提前接受尚未执行的`maxAgeDays`/Session占位配置。前一累计候选`eb18a189eb04f1fbd2fd1fffa2057f9ed1d79e7d`已推送，源码IAM47/Audit27；[Verification 36411622119](https://github.com/xiak/matrix/actions/runs/36411622119)已核对精确SHA、completed/failure：十项成功（包含真实恢复窗口），authority-runtime失败，最终authority-process汇总因前置失败而失败，不能标记独立CI成功。该进程失败命中`iam.outbox`敏感材料检查；本任务在自有失败PG18数据中已证明一次真实已消费六位OTP与更早公开的Group ID子串重合，且原事实早于本轮所有TOTP因子。后继工作树修正只依据原不可变事实的完整canonical承诺及真实生成先后，排除旧标识符的短码偶合；完整短码、其他文本、变体/无来源事实和长凭据仍检查，诊断不输出秘密。原CI失败不回填，该敏感材料检查修正已包含在2468b28c，累计候选仍未独立验收。前一候选2f4ef24d的[Verification 36406606774](https://github.com/xiak/matrix/actions/runs/36406606774)storage/runtime已failure：AccessKey的旧reset输入和本人会话两入口的恢复后旧fixture复用了刚退役密码，实际422而非旧预期成功；本固定修正并实跑这些门禁，但不回填旧失败或把被后继运行替代的任务计为通过。不分配或修改installation拥有的发布profile/revision。
+
+原契约owner已有`AccountPasswordSettings`值/严格codec，原密码owner已有规则和有界历史比较；现有Hash复用其固定默认底线，不保留第二套密码字符校验。历史比较校验当前及全部已保留hash的格式、串行比较当前和选定窗口，不因命中某一位置提前成功/返回；超出24条或损坏记录失败关闭，取消停止后续昂贵工作。0表示不检查额外历史，不允许当前密码；缺少真实历史不补造。它是可信IAM进程的校验结果，最终事务仍须核对原资格和history head。
+
+存储沿原`user_credentials`增加有界`password_history`、其内部完整性承诺及独立`password_changed_at`，不新建历史服务或公开hash查询。ALWAYS行触发器只在真实hash替换且generation准确加一时退役原verifier并保留最新24条；同hash的恢复fence保留历史和密码年龄。旧数据初始化为空历史/NULL年龄，不能由通用changed_at推测或用迁移时间补填；列集不完整时拒绝迁移。直接改历史、重算摘要后清空历史、改年龄或无代际推进替换hash均拒绝。当前工作树的唯一私有认证资格投影v4纳入年龄、历史承诺及Account密码规则，年龄用时区无关的epoch值；公开snapshot/FILE、Audit canonical、ServiceIdentity/lookup_service和七列claim不变。
+
+本候选的普通Session改密及原LOGIN/ENROLLMENT的PASSWORD_CHANGE阶段已接入当前Account规则和真实历史；CreateUser与管理员reset也取得当前规则版本，不能只按固定默认值接受新密码。当前密码始终拒绝，历史按显式0–24窗口执行；原root/未撤销安装附件USER维持固定产品底线。有权准备的短事务返回准确规则/版本及有界历史，原两槽内串行比较与hash不持有数据库事务，最终写入锁内复核原身份/仪式、规则版本、代际、current hash及history head。普通改密因新口令被拒而提交原尝试REJECTED，不返还已扣预算；挑战拒绝不消费原PASSWORD_CHANGE仪式，也不制造普通Session。LOGIN、邮件验证等其他目的不返回历史材料。旧无规则版本的写函数删除，readiness核对实际函数/列/权限形状；历史完成缺密码段仍只读，当前读取及新StepUp必须完整。本人及原改密挑战的有效规则查询已在工作树接入同一权威投影，不能借读取规则取得改密许可。此为S3b后端候选，不是已验收发布或LIVE契约；密码规则单独变更及真实前驱旧设置完成/未完成证明已有下述本地运行证据，更多规则/凭据竞争及最终独立验收仍须收口。
+
+源码IAM48/Audit27的本地证据：自有PG18.6、2逻辑CPU/1GiB/16连接下，`TestIAMSecuritySettingsPostgres`串行race-p1通过117.93s（包121.542s），实际配置24码点/四类字符/24条历史后覆盖创建、管理员reset、强制仪式改密及普通改密正负向；本人/ENROLLMENT改密要求读取验证普通用户不需管理权限、原root临时会话读取固定底线、两副本观察当前规则、旧会话/消费后挑战拒绝及错误主体/阶段拒绝。同一门禁用26次实际改密产生完整有界历史，再以真实设置收紧到24条；最老的仍保留密码被拒且无部分凭据/会话/成功事实，刚移出的密码成功并准确推进历史边界，没有直接写正向历史行。结构、默认和新旧私有函数权限损坏关闭readiness，schema重放保持当前设置。原TOTP gate的`forced_password_challenge`三分支串行race-p1通过32.53s：真实密码+OTP后LOGIN的PASSWORD_CHANGE可读，原TOTP阶段不可读，完成/再次reset/停用及复用后原挑战仍拒绝；没有增加时间预算或制造正向认证行。独立两个IAM/PaaS/Audit/dispatcher进程最终133.33s通过，实际HTTP的普通/受保护身份规则、撤销设置管理权限后本人规则仍可读、两副本与重启一致；保留受限数据库身份、跨租户、撤权、历史投递、MFA及原资源归属回归。敏感材料检查的精确来源、变体、额外字段与不泄密诊断保持；最终全仓默认race-p2（含architecture）、vet-p2、模块校验、122个API文件集合与SHA256生成一致及全仓Linux amd64构建通过，默认外部DSN缺失的SKIP不计真库证据。本地源码证据不能替代未完成的独立CI、SMTP、LIVE UI、签名安装或完整S3b验收；发布profile仍为4/3/1+r4，不随源码schema数字自动改变。全部本地测试句柄已终止；核对精确PID/可执行文件/数据目录/loopback端口且无其他客户端后，正常停止本任务PG并保留数据，未操作共享或远端服务。
+
+唯一`TestIAMRetainedPredecessorProcessUpgrade`在上述限额下串行race-p1通过98.92s（包102.405s）：固定420/IAM45真实程序通过登录、邮箱验证、绑定因子与step-up完成两次MFA设置变更，并留下有效期内的PROVED未完成设置意图；无正向授权DML。IAM48双次迁移/等值bootstrap保留原版本2/3、完成响应、CONSUMED证明及旧Audit canonical/历史生产者资格，历史密码段仍NULL；当前Account初始化默认规则，不跳版本或补写事实。旧未完成证明不可读作当前可执行证明，也不能附上默认密码规则继续提交；它的原状态及已用OTP额度不变。另一个真实授权操作者以新完整证明执行仅密码规则变更（MFA保持false、24码点/历史0），原子接续版本4、结束原资格并关联通知/outbox。普通USER用重新登录的真实会话读到该规则后，可复用刚退役密码，但当前密码仍422；其凭据、会话和成功事实在拒绝、schema重放及重启后不变。原末端DDL失败证明新增Account密码列/历史列也完整回滚，旧密码历史/年龄UNKNOWN、原Session/恢复/因子解绑重绑及产品动作族授权回归保留。初次新增夹具重用了已消费五次OTP的操作者，真实401后改用另一个仍有额度的真实身份；没有清计数、降低成本或扩大原3分钟预算，也没有新增历史版本/DSN入口。该运行不是跨release/profile升级许可。
+
+原`TestIAMSecuritySettingsRacesPostgres`在新专属PG18数据库串行race-p1通过42.00s（包45.592s）。同一owner增加仅密码规则变更与本人改密的两个真实提交方向，MFA始终false，不借MFA变化掩盖新规则屏障；沿原数据库锁等待证明双方确已竞争。先提交方成功后，旧会话/凭据或旧step-up的另一写入拒绝；账号规则/版本、密码代际/真实历史、证明状态、通知及成功事实没有部分混合。原logout、MFA设置与改密、恢复码恢复、登录验证的八个竞争场景保留，等值schema及新Authority重复核验各自结果；无新增测试入口、时间预算或生产旁路。
+
+受保护身份变化沿既有`end_authentication_on_protection_change`处理：真实安装附件授撤与改密共用Account→USER锁，永久结束旧Session和未完成Challenge，而非只临时隐藏权限。上述117.93s设置门禁中，两个独立目标在短密码准备事务实际提交后，分别完成平台授予/撤销；Account配置版本仍3，但实际规则来源已经变化。旧Session无法读取要求，锁外准备的改密均拒绝，密码/历史/会话/成功事实保持授撤后的状态，原尝试仍保留且不返还额度。撤销场景的新口令特意满足原受保护底线但不满足24码点账号规则，以证明不能提交旧规则计算。初始fixture误用授予前旧Session的401没有被放宽，改为真实重新登录后完成证据；无需重复增加另一套规则epoch或写许可。完整`TestIAMHTTPPostgresVerticalSlice`在另一新库串行race-p1通过108.27s（包111.914s），保留tenant/member/root恢复、grant/reset/status与change/reset/recover/logout/login竞争、历史生产者及物理owner门禁。默认history=1改用三次真实改密证明边界，原历史篡改拒绝保留；完整26次历史上限由上述设置owner统一覆盖，不重复生成同样的长历史。
+
+管理员reset沿原入口执行当前Account规则/历史，公开请求不变。准备事务以真实当前`iam.user.reset-password`决定取得目标同Account、版本相同、非本人/原root/未撤销安装附件的USER材料；与最终写入共用原Account→USER锁序。事务提交后才在有界槽内比较/hash，最终重新认证原Session并执行当前PDP，锁内同时比较账号设置版本、目标版本、credential generation、current hash与history head；准备的历史允许决定不充当最终写许可。状态管理不取得密码材料，也不能附带密码expected值。旧8/11参数`change_user`删除，仅API可调用封闭六列`read_password_reset`与12参数最终写入；内部材料沿原类型复用且不可JSON/普通格式化输出，不新增公开历史查询。受保护身份、停用、forced及原会话撤销语义不变。
+
+在线reset写入仍为版本CAS，不提供`EQUAL_REPLAY`；相同原版本在首次成功后冲突，不证明原请求成功。固定`047f6694`已包含下节的原管理员完成查询及实际丢失回包门禁，并通过精确独立CI；LIVE UI与发布组合仍需各自验收。UI的网络/协议UNKNOWN保留原Account/actor/target/requestId/expectedVersion，只核对该原意图，不自动生成新请求或取新版本重置；404、409、当前版本/forced-change变化均不代表原成功。临时秘密只在当前视图内存持有，离开或身份切换清除；查询不需要原密码，也不恢复已失效身份的权限。主动获取新版本再次重置是新的明确操作，必须告知可能覆盖已生效临时密码。完成查询的唯一契约及证据归下节，不复用离线能力或增加通用查询许可。
+
+安装本地凭据恢复的历史执行片已实现，仍沿原封存scope/expected/commandId/inputCommitment与专用登录：四参数私有`prepare_local_credential_recovery`复核精确历史完成；未完成时按原Account→USER→Policy→Attachment→credential顺序锁定同一当前资格，只返回原primary的有界材料。昂贵比较/hash在事务外的原工作槽执行；最终八参数`recover_local_credentials`复用同一准备/锁序，并比对原current hash/history digest，generation仍由原expected绑定，删除旧六参数旁路。两阶段之间若同一意图已经完成，仍只返回原receipt，不因当前密码已更换/附件撤销而重做、拒绝准确历史或重新签发expected。新请求及变体仍须当前资格，不启用身份/Account、不授附件、不变更MFA；公开FILE/inspection/result及旧完成字节不变。准备与最终入口仅专用本地角色可调用，历史材料不进入inspection/stdout/错误/Audit。本地真实PG18已验证新输入复用拒绝、准备后改密/撤权、精确并发完成、末端outbox失败和受限SQL；独立进程、唯一前驱的当前增量已本地通过，独立CI仍待收口，不据此宣称完整S3b或签名发布已验收。
+
+本地凭据恢复的专门证据归前一固定候选eb18a189（IAM47/Audit27）：原真库门禁58.46s通过，在准确原意图被另一连接完成且随后真正改密后，准备/最终写前的原请求仍只读返回原receipt；本人改密或撤权先提交时旧准备无部分效果，恢复先行仍严格按最终写而非准备事务证明次序。错误current hash/history head、末端outbox失败和专用角色ACL/readiness均有真实正负向对照。它不替代IAM48累计候选的独立CI；被后继完整HTTP、设置、单前驱及进程回归覆盖的中间实现时序和过时夹具记录保留在Git，不继续作为当前行为描述。
+
+在线原root恢复也已接入固定底线/真实历史，公开恢复请求不变。原当前平台决定先在Account→原USER→credential锁序下核对原root、Account版本和未撤销安装附件保护，目的限定的准备仅返回该root的真实历史材料；比较/hash在原两槽内且无数据库事务。最终重新认证原Session/当前PDP并在同一锁序重验原root、Account版本、credential generation、current hash与history head。即使本人改密没有推进Account版本，旧恢复计算仍冲突且不改凭据/会话/附件/成功事实。删除旧`read_account_root`及九参数写入口，替换为仅API可用的五参数准备和十二参数最终写入；私有锁函数不向运行角色开放，readiness核对准确形状和执行权。既有在线恢复可重新启用原root及修复其账号管理员关系的语义不扩张：不启用暂停Account、不授平台附件、不复活旧撤销附件、不替换原root，也不改变MFA；它不等于权限更窄的安装离线恢复。
+
+| `password`字段 | 有效范围与默认值 |
+| --- | --- |
+| `minimumLength` | 整数15–128，默认15，单位为Unicode码点；最大128码点/512 UTF-8字节是固定产品边界，不由Account选择 |
+| `requireLowercase`、`requireUppercase`、`requireDigit`、`requireSymbol` | 四个显式boolean，默认均false；分别按Unicode小写、大写、十进制数字类别，titlecase不冒充uppercase，数字字母（例如罗马数字）不冒充decimal digit；symbol只指Unicode标点或符号，不把空格、组合附加符或无大小写字母冒充符号 |
+| `historyCount` | 整数0–24，默认1；指当前密码之外的最近已知历史，当前密码始终拒绝复用 |
+
+新口令允许普通空格且逐字节保留，拒绝控制字符；不trim、折叠空格、改大小写或对既有`matrix-iam-v1`验证隐式规范化。四类开关是显式企业要求，不能作为标准合规或密码强度证明。受保护USER的有效规则固定为上述默认值及统一词表，账号规则不能使其改密/恢复采用管理员设定的额外要求，也不能免除真实历史。是否受保护按当前原RootIdentity或任何未撤销INSTALLATION附件判断，仍与授撤共用Account→稳定USER锁序；不得使用“当前是否能登录/是否得到Allow”代替。
+
+继续扩展现有`AccountSecuritySettings`、`SecuritySettingsUpdateIntent`和PUT请求：当前读取及新写入必须有完整`mfa`与`password`，所有字段显式给出；省略/null/未知字段、越界或部分merge均拒绝。证明绑定同一requestId、预期resourceVersion及两段的准确值。只改密码规则也是真实配置版本变化，沿原设置屏障淘汰旧Session/Challenge；无变化不增版本。没有第三个Policy对象、通用payload证明、另一组账号配置ID或新权限动作。
+
+历史完成、已消费StepUp及原Audit bytes不可补填`password`默认值：固定前驱确有只含MFA的不可变完成，这是保留读取的真实依据。旧完成缺段只能表示“原记录没有该配置”，不能作为当前设置或新请求；当前配置校验与历史投影校验必须在既有codec owner明确区分。新写入/证明不得接受旧缺段形状，旧未完成证明不能因迁移补默认后继续执行。UI由010消费固定契约，不依据自身默认值重建旧命令。实际字段/ABI和旧证明处置须由单前驱真库门禁验证后才对外冻结可用性。
+
+**初始化不伪造配置变更。** 原`security_settings_version`同时是连续完成谱系的编号，不能在迁移时直接加一，再补造USER/Decision/Audit或绕过前一完成检查。首次落地只在当前Account初始化上述密码默认值，保留原配置版本、MFA值、更新时间、完成记录和Session认证事实；它不追溯否定原密码或已有登录，新密码写入则立即执行当前有效规则。不增加迁移专用身份、第二个配置epoch或通用来源receipt。后续真实配置操作才沿同一编号加一，密码规则单独变化也必须有完整step-up、当前Decision、完成、审计和通知；新完成的previous密码值必须准确等于当前值，第一条新完成之前只有真实旧完成时，其previous密码值只能是初始化默认值，不能接受任意补值或跳过原MFA谱系。
+
+旧的未完成`SECURITY_SETTINGS_UPDATE`证明没有承诺密码段，因此即使Session与预期版本仍有效，也不得验证、消费或通过原requestId重建为新意图；运行时入口和锁内函数均检查完整承诺。保留其原存储状态、时间及已扣尝试预算，不伪造CONSUMED或提前到期的事实。只有原已完成记录及其CONSUMED证明可以按真实旧形状只读；缺段不能成为当前PENDING/PROVED响应或新写入。新的INSERT/更新函数不得产生缺段设置证明，旧无密码参数的写函数删除；普通Role/worker/通知/恢复身份不获得直接修补能力。首次初始化、同版本重放和损坏列集分别判定，重放不能重新填默认值来修复被删改的当前规则。唯一资格投影纳入新规则后自然改变；这不授予旧备份新的恢复资格，也不需要为迁移而撤销所有正常Session。
+
+本人有效要求与管理员配置读取分开。本候选实现`GET /v1/auth/password-requirements`，仅从当前LOGIN_SESSION推导本人，允许真实forced-change临时会话；拒绝query/body和额外`Matrix-Subject-Credential`，不接受accountId/userId或Role/Key/Service载体，不需要取得整账号`security-settings.read`。`POST /v1/auth/challenges/{challengeId}/password-requirements`只接受原`challengeCredential`，拒绝bearer或第二载体，仅当前有效LOGIN或ENROLLMENT的PASSWORD_CHANGE阶段可读，不能据此跨阶段或发行Session。`PasswordRequirements`的`password`复用完整`AccountPasswordSettings`，`maximumLength=128`以Unicode码点计、`maximumUTF8Bytes=512`，`settingsVersion`为当前Account配置版本，`source`封闭为`ACCOUNT|PROTECTED_IDENTITY`；后者必须准确返回固定默认规则。不含hash、历史条目、密码年龄、内部generation或其他用户状态。普通未认证login/realm查询不暴露规则，响应no-store。数据库的两个API专用只读入口分别在原Account→USER屏障后重检真实Session或复用`lock_password_challenge`；私有`user_password_requirements`是规则与来源的单一投影，原写入准备的`user_password_settings`只取其密码段，不另写一套保护身份判断。不读取密码hash来生成提示，不消费尝试、挑战、会话或成功事实。readiness/verify验证实际函数形状、拥有者及权限。requirements是填写提示，不是写许可或可缓存验证结论；最终写入仍以锁内当前规则为准。管理员创建/重置页面按原权限读取账号配置，不为此新增窥探他人密码历史的入口。该API须在精确固定源码独立CI通过后再交付LIVE消费者。
+
+所有实际密码写入沿原owner一次替换，不保留固定旧规则旁路：
+
+| 原入口/事实 | S3b必须落实的行为 |
+| --- | --- |
+| 初次Bootstrap、CreateAccount原root | 固定产品底线，建立已知当前hash，不伪造更早历史；原root和安装归属不变 |
+| CreateUser | 同Account当前有效规则，无更早历史；实际PDP、规则版本、目标不存在及原outbox在最终事务重检 |
+| ChangePassword与ChallengePasswordChange | 分别验证原Session/原受限仪式，再检查新口令与真实历史；既有日常保留当前会话选项、forced强撤其他和挑战完成语义保持 |
+| ResetUserPassword | 当前目标真实规则/历史，原受保护身份拒绝不变；管理员临时密码也不能免检查，仍强制改密并撤销旧资格 |
+| RecoverRootCredentials | 保持003既有原root恢复语义及当前平台授权，使用固定产品底线/真实历史；可修复原root日常管理但不复活旧撤销附件、不转让root、不授平台、不启用暂停Account、不改变MFA |
+| RecoverLocalCredentials | 原安装目的与资格不扩权，使用固定产品底线/真实历史；不启用身份/Account、不授予附件、不改变MFA；本地能力及精确receipt保持原owner |
+
+昂贵验证统一由原`authority/password.go`的严格Argon2id verifier及有界工作槽执行；哈希算法、盐长度、内存/迭代不成为Account配置。校验当前hash与最多24个旧hash串行执行；规则失败、历史匹配或成本预算不足不写凭据、历史、会话或成功事实，不向调用者透露匹配了第几个旧密码。失败预算按真实认证步骤持久消费，不因新口令不合格退还旧密码/OTP猜测额度。现有两槽仅证明单副本资源上限，集群公平/最大历史成本仍须011实测，不能在本片声称已完成HA/高并发容量。
+
+有权准备的短事务读取当前Account规则版本、目标USER版本/保护身份、当前凭据代际及精确有界历史head；昂贵核对与新hash在无数据库连接/身份锁时执行。最终事务重新取得当前actor/目标资格、原决定或受限仪式、相同规则与历史head，再原子写入新hash、历史、代际、既有会话效果与outbox。任何CAS变化关闭旧结果，不自动按新规则重复命令。内部“已比较”的值是可信IAM程序的计算结果，不是密码学证明，也不能作为公开permit；受限运行角色只能通过封闭函数读取/写入，worker/verifier/通知及无关恢复角色不得取得历史hash。错误作用域、历史缺失/篡改、最终outbox失败必须整笔关闭。
+
+历史保留固定上限24条，不随临时降低`historyCount`删掉仍在产品窗口内的旧hash；提高规则只能检查实际保留的过去，不能声称知道迁移前全部密码。以每次**真实新hash写入**的原完成/代际作为退役关联，初次上线只承认已知当前hash。代际允许因恢复fence而有空档，不要求历史代际连续、不因空档补造密码或另建假改密计数。实际重写当前hash时才推进历史head/保留窗口；仅撤销会话、推进资格代际或精确完成重放不得追加历史。新旧hash的盐不同不能证明明文不同，所有替换入口都必须通过原verifier比较。
+
+**密码年龄独立于会话资格代际。** 固定18的`iam.reopen_authentication_recovery`实际在不换hash时提升`credential_version`并更新`changed_at`，因此后继到期片需要真实`password_changed_at`：只有实际设置密码的原子事务可以更新；恢复fence/迁移/重启不得把它刷新。无法从真实记录证明的前驱年龄保留NULL/UNKNOWN，绝不回填迁移时间。到期关闭时UNKNOWN不自动锁死原登录；管理员日后明确启用到期时，未知年龄须在原密码及所需MFA验证后进入受限改密，不能先发行正常业务Session。过期判断使用数据库时间，不由浏览器提供“最后改密时间”。
+
+精确Bootstrap等值重放及已完成本地恢复receipt不是新的密码写入。新规则不能使原已封存输入的无副作用完成查询重新散列、追加历史、刷新年龄或恢复旧权限；也不能为了允许重放，给首次Bootstrap/新commandId保留旧弱规则。以原安装scope、完整BootstrapDigest或原commandId+inputCommitment证明精确历史，缺记录/变体一律不取得新效果。该分支必须在现有事务/函数owner解决，不能事务外见到READY就跳过封存输入核对。
+
+当前配置、真实密码历史承诺和年龄属于认证资格。S3b必须扩展唯一认证状态投影及备份比较，不能仍用忽略这些字段的旧digest放行恢复。已有公开Audit/canonical、ServiceIdentity/lookup_service与七列claim保持；历史hash不进入公共snapshot、Audit、普通journal或错误。私有快照/恢复schema的具体变更与安装owner先对齐，完整release profile仍由安装另验；资格变化的旧备份仍需完整可信状态携带路径，本片不把永久拒绝当成该最终能力。
+
+验收复用现有authority/usecase/API、IAM PG18与authorityprocess owners：每个写入口有真实正负向；两个Account同名USER与两个IAM副本验证当前规则/历史；0/1/24、Unicode/空格/512字节、无历史及旧hash准确验证；改密与reset/recover/规则修改/受保护附件授撤的相反提交次序，证明旧计算无部分效果。真实恢复提升generation但不使密码变年轻、等值Bootstrap/receipt不追加历史、末端失败/重启和历史审计保留均要单独断言。单前驱必须真实产生至少两次MFA设置完成及一个未完成设置证明：迁移后原完成/CONSUMED证明/原Audit字节保持，当前初始化不跳版本，旧未完成证明拒绝，新完整证明可以从原末版本完成密码规则变化，接续谱系无缺口；仅原合法Session仍有效不等于旧证明仍可写入。缺列/错误默认/历史篡改、同版本重放及末端DDL失败不得部分初始化或修复旧资格。保留数据只滚动一个真实固定前驱，不枚举全部未发布schema；锁不变量覆盖采用代表性竞争边界，不为每个字段复制整套重型进程/升级矩阵。词表与有限资源容量、LIVE UI、签名恢复分别沿其owner验收，不能以这份设计或纯单测替代。
+
+##### S3b 后继：管理员重置的原完成确认
+
+本节为上述UNKNOWN缺口的有界实现。`UserPasswordResetCompletion`纯载体、严格codec、查询路由及原子完成关系已实现，源码IAM50/Audit27，具备下述本地证据；**独立CI、LIVE UI及签名发布验收未完成**。IAM负责事务、严格契约及原进程门禁，UX负责消费和浏览器；000015沿用IAM49的无副作用检查边界，不与本片共用一个验收结论。发布revision另由安装owner冻结，CurrentDatabaseProfile仍为4/3/1+r4；本片不提前开展密码到期或新离线恢复能力。
+
+**源事实不能被过度解释。** 固定0fa的`ResetUserPassword`对目标、原resourceVersion及requestId生成脱敏摘要；`change_user`在锁内检查实际版本、写密码并追加原事实，但没有单独保存摘要所表示的expected版本。摘要也不包含密码字节。因此不从目标当前状态、409、版本加一或仅匹配outbox摘要推导“原完整密码输入已成功”；不把该摘要补充为公开的廉价密码校验器。
+
+最小新增状态是现有用户密码重置事务内的不可变完成关系，而非通用命令服务或另一密码存储：保存由当前权威推导的Account/actor、实际目标USER、原requestId、锁内使用的expected版本、真正更新后的结果版本及原成功eventId。完成关系与密码/generation、forced-change、会话撤销及outbox同事务提交；原version冲突、规则/资格变化或末端事实失败不留下任何部分完成。关系必须外键绑定原目标、actor及不可变成功事实，数据库校验事实的scope/action/actor/target/requestId/result一致。API/worker/恢复登录均不能直接增删改该关系；仅原受控reset函数写入，读取也使用目的限定函数。旧数据不由当前状态或历史摘要批量回填完成；无可信完成关系只能保持未确认。
+
+原POST请求/响应及受保护身份限制保持：仍按当前规则准备、锁外比较/hash和锁内最终资格核对，不改成`EQUAL_REPLAY`，也不返还原密码。已使用的同Account/actor/requestId不可改目标、改版本或重新执行；重复POST仍明确冲突，当前资格失效则先拒绝。不同输入竞争同一原版本最多一个成功；不声明服务能通过完成确认判断两个密码输入是否等值。调用者必须保持每次原意图不可变，不能将同一requestId用于另一口令。原主账号恢复和本人改密不自动加入这一关系或取得此读取路径。
+
+查询为`GET /v1/users/{userId}/password-resets/{resetRequestId}?resourceVersion=<原expected>`。仅一个合法版本参数、无body、无Account/actor/session选择器；从当前有效LOGIN_SESSION推导Account及actor，重新按准确目标检查现有`iam.user.reset-password`，不要求额外目录读取权限，也不开放给Role/Key/Service或临时强制改密载体。只读该actor原目标/请求/expected的精确关系；重新登录后仍须是相同actor且当前有权，知道requestId不是查询凭据。该路径不调用新reset或当前可变密码准备，不要求目标仍保持提交时版本或密码。
+
+| 查询结果 | 业务含义及消费者边界 |
+| --- | --- |
+| 200：精确历史确认 | 只含apiVersion/kind、Account、actor、目标、原requestId、expected/resulting版本、eventId及原事实occurredAt；这些字段全部取自已验证完成关系/原事实，不回传密码、hash、generation、Session或私有证明。它证明原请求身份的重置已提交，不代表临时密码现在有效、目标当前可登录或Audit已完成投递 |
+| 404：没有精确关系 | 不证明未提交、没有在途事务或历史操作从未发生；保留UNKNOWN，不生成新requestId/新版本自动重试。查到别人的完成、错误目标或原版本也不能泄露其元数据 |
+| 401/403 | 当前身份或权限不再成立；结束该身份的本地敏感材料，不以历史成功获得持续查询权 |
+| 503、传输/协议未知 | 不变成未执行或成功，保留未确认；未知结果的原POST不自动重发。只读查询可以由用户再次显式发起，不引入无限轮询或重试 |
+
+纯载体的准确字段是`apiVersion`、`kind=UserPasswordResetCompletion`、`accountId`、`actorPrincipalId`、`userId`、`requestId`、`expectedResourceVersion`、`resultingResourceVersion`、`eventId`、`occurredAt`，全部必填；不存在pending/outcome/重放permit或密码输入承诺字段。expected为1至9007199254740990，resulting严格等于expected+1且仍在JSON安全整数范围，actor与目标USER不同，原事实时间为UTC微秒。JSON Schema只证明闭合字段、类型和各自范围，跨字段关系与严格重复键/大小写/字节预算由唯一Go codec校验；任何解析失败不部分覆盖调用者已有结果。结构有效仍不证明数据库提交、来源或当前查询权限，不能绕过后继锁内证明。
+
+原纯载体门禁覆盖最小/最大版本、缺项/null/未知秘密或许可字段、错误purpose、重复/变体键、self-reset、版本跳跃/溢出、非UTC/超微秒时间、超限/尾随输入与失败不部分写入。当前OpenAPI已声明实际GET及400/401/403/404/503封闭结果；HTTP拒绝重复/变体参数、非规范版本、额外selector/body及错配结果。用例在当前事务内复核原Account/actor/目标/request/version与原事实时间，事务结果不确定不返回部分完成；不读取目标当前密码或调用准备/重置。API、HTTP、用例和architecture的聚焦race已通过，默认外部DSN缺失的SKIP不是运行证据。
+
+现有000003拥有`user_password_reset_completions`：实际锁内expected/resulting版本、原actor/目标/请求和原成功事实的八列关系，强制租户RLS、准确外键和不可变/禁止truncate约束。完成关系与成功事实双向提交校验；历史核对保留原脱敏metadata digest字节，它不包含密码、不构成密码等值证明。仅`read_user_password_reset_completion`向API角色开放，准备/最终写入沿原owner；readiness核对实际列、函数、ACL及触发器形状，损坏时查询也失败关闭。新成功事实必须有同事务完成关系，旧outbox投递更新不触发补造；旧成功事实只能拒绝已用requestId的新执行，不能被迁移成新完成回执。公开Audit/canonical、claim7及离线FILE均未改变。
+
+2026-09-29本任务独立PG18.4（1CPU/768MiB/PIDs192/max_connections24）、Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB、串行race-p1：完整`TestIAMHTTPPostgresVerticalSlice`143.22s（包146.775s）通过，保留原三分钟期限、密码成本及全租户/平台保护门禁。原password-session owner增加真实在途查询404、同版本两个reset实际锁竞争一胜一冲突、末端outbox及完成关系失败无部分状态、跨Account/actor与服务凭据拒绝、仅有准确reset权但无目录权的原actor可读及撤权后403、同actor重新登录、后续改密/重置/停用/删除后原结果保持；旧会话不复活。最终补充已用requestId不能改目标重做、事实错误scope/actor/target/action/decision/request/digest及额外permit字段拒绝后，在另一空白库聚焦复验31.28s（包34.773s）通过。真实运行角色不能直接SELECT/INSERT/UPDATE/DELETE/TRUNCATE关系；owner强制RLS、原metadata/时间篡改、列级授权及触发器/函数权限损坏门禁保持。
+
+最终`TestIndependentIAMAuditAndPaaSProcesses`155.30s（包158.534s）通过：真实管理员reset提交后主动中断TCP回包，由另一IAM副本读取准确原完成；随后强制改密、进程重启和目标停用仍读到相同历史。实际RoleSession、AccessKey和服务凭据不能使用该GET，保留原双租户资源、运行登录身份、MFA/恢复/设置未知完成及历史Audit投递门禁。唯一固定`42035189`/IAM45的真实前驱程序产生旧reset，当前IAM50双次迁移/等值bootstrap/重启门禁118.49s通过：原事实、receipt/canonical保持，旧reset查询404、不补造完成，同一旧requestId不能用新版本再次执行。没有增加历史schema矩阵或声明跨release/profile兼容。双权威实际存储门禁另在空白库7.45s通过，IAM50/Audit27及原最小权限、不可变Audit保持。以上不继承安装分支验收，也不是SMTP或浏览器证据。
+
+最终全仓默认race-p2（含architecture）、vet-p2、模块校验、122个API文件生成集合/哈希一致及Linux amd64构建通过；默认外部DSN缺失的SKIP不计真实运行证据。核对零其他客户端后正常停止并移除本轮唯一专属PG、两个合成数据/模块缓存卷和空网络，未操作其他任务或远端服务。容量CI冷缓存修正的失败边界与复验证据归011，不用本地通过覆盖独立CI。
+
+累计固定`047f669490278fee978e0e11208a241ac7eac6df`的[Verification36470362108](https://github.com/xiak/matrix/actions/runs/36470362108)于2026-09-29经GitHub API核实精确SHA及全部13项job（含汇总）completed/success；该IAM50/Audit27基线不包含下述S3c增量。原`21b3de3a`的storage失败不回填；HTTP夹具的超时复现、分页边界分离及真实复验归[011当前CI任务分配](FEAT-IAM-011-acceptance.md#当前ci任务分配)。生产重置契约和本片源码schema未因此改变，消费者仍需验证自己的运行组合。
+
+查询只追加现有授权决定/相关审计，不再次产生`iam.user.password-reset`成功事实；Audit暂不可投递不应抹除IAM已提交完成。目标随后自行改密、被再次reset、停用或删除时，原完成仍是历史记录，不能被当前状态替换、撤销或重新执行。受支持恢复后的历史缺失保持UNKNOWN；本关系不声称抵抗整机回滚、恢复密码资格或授予跨profile恢复许可。原公开Audit/canonical、ServiceIdentity/lookup_service、claim7和离线FILE均不改变。
+
+验收沿原accounts/usecase/API/SQL/HTTP及authorityprocess拥有者，不新增重型测试框架或全历史升级矩阵：实际POST已提交后丢TCP回包，由另一IAM副本查询且重启后仍相同；提交前终止与正在提交期间的未观察结果不误报成功；错误Account/actor/目标/requestId/version与撤权、Session失效、Role/Key/Service攻击拒绝；同版本并发reset及已使用ID变体只有确定赢家；末端outbox/完成关系失败完整回滚；后续改密/停用/删除不改变原完成或恢复旧凭据；运行角色不能伪造、篡改或删除完成，错误scope/action/目标绑定关闭readiness/查询。最后在真实浏览器中证明UNKNOWN只核对原意图、不泄露秘密、不自动再次reset。当前API或纯契约测试通过均不能替代这些验收。
+
+#### 认证尝试的持久预算
+
+##### S3a：登录与改密共享密码尝试
+
+本片实现及本地门禁已完成，独立CI未确认前不标验收。已验证并推送的`04041d2d`是修改前回滚点。只替换原Login/ChangePassword的密码核对与原Session/credential SQL拥有者；不开放MFA、账号设置API或改变既有改密保留当前会话规则。源码IAM33用于实际新函数/ACL/readiness形状，Audit不变，不分配发布revision或修改installation的完整profile。
+
+首片固定防猜测预算为同一真实USER、同一credential generation在60秒窗口内最多5次保留、同时最多1次在途、单次30秒有效。成功的完整单因子登录或本人改密才清零；未来MFA部分成功不得调用此成功分支。额度在计算前持久扣除，过期、进程中断、取消、提交未知和失败均不退还。窗口按数据库时间恢复，不停用账号或删除凭据。该限制同样约束正确密码，不能用正确猜测绕过已生效抑制；它是本片可验证的产品值，不是标准要求或完整抗拒绝服务承诺。
+
+每USER只有一条有界预算行，包含单调attempt sequence、最近服务器随机attemptId、LOGIN/PASSWORD_CHANGE目的、实际调用Session（后者必填）、原Account/User版本与credential generation、窗口已用次数及RESERVED/终态。下一尝试使用更大的sequence，不把同一尝试从终态改回RESERVED；不保存无限匿名登录名、也不以caller requestId去重猜测。过期只释放槽位；覆盖上一次临时状态不删除已提交Session/outbox或成功事实。跨realm别名、IAM副本、登录/旧密码重验共用该行，不同USER/Account隔离。
+
+短保留事务和最终提交均沿Account共享锁→USER→credential→实际Session→尝试锁序。最终成功须精确消费原attemptId+sequence，重查原身份版本、凭据代际、当前状态及锁后数据库时间；旧结果不能跨改密、停用/复用或超时继续发行。成功消费与Session/改密及原outbox同事务；坏密码在单独短事务提交REJECTED后才返回401。失败提交不确定返回不可用，不返额度、不签Session。旧无尝试的issue_session/change_password形状删除；裸lookup_password删除，lookup_login仅留作内部唯一realm解析器，不授API/worker直接执行。服务可信验证密码，SQL消费不声称能证明Go已经做过Argon2。
+
+两个目的共用每IAM Authority实例最多2个非排队工作槽，覆盖真实/dummy核对及本人新密码hash，固定Argon2成本不变。槽耗尽返回统一429、`iam.authentication.busy`及`Retry-After: 1`；仅登录/改密OpenAPI声明该行为。未知/抑制/停用身份统一401并做有界dummy核对，不提供剩余额度、专属冷却或用户存在信息。此本地资源限制不是集群全局配额，也不证明时序完全不可区分。Account公平配额、OTP/挑战预算和011洪泛容量仍为未完成前置，不能据此标记完整S2/S3已验收。
+
+验收沿原service/HTTP/PG18/authorityprocess拥有者：失败提交及回包丢失、过期无返额、别名/双副本共享、不同租户同名隔离、锁外hash时并发改密/停用/退出、最终outbox失败原子性、旧attempt/重复完成不能签第二Session、真实runtime ACL/RLS/函数形状、重启/等值迁移不重置额度。仅选实际固定IAM32前驱保留数据，不重跑未发布的1至32整链；这也不构成跨release升级许可。
+
+2026-09-20本地真实门禁使用本任务独立Windows PostgreSQL18.6目录/随机loopback端口，不借用Docker、其他Phase或远端。Windows Job约束2个逻辑CPU、1GiB总内存、24个进程；PG最多16个连接、64MiB shared_buffers/4MiB work_mem且关闭parallel workers。Go使用GOMAXPROCS=2/GOMEMLIMIT=512MiB，数据库门禁串行race/-p1，未降低密码成本、原场景或单项时限。
+
+| 现有测试拥有者内的门禁 | 本地结果与边界 |
+| --- | --- |
+| `TestIAMPasswordAttemptsPostgres` | 最终矩阵63.39s通过；两个受限运行身份池、同名跨租户/别名、登录与改密共用5次限制、失败落库、未知输入无新行、真实30秒槽位到期无返额/60秒窗口恢复、并发reset拒绝旧计算、schema/bootstrap/新Authority不清额度、原子Session/outbox和ACL/精确形状；真实SQL证明已消费尝试不能再签Session、改密目的不能换成登录且拒绝后原尝试不被消费 |
+| `TestIAMHTTPPostgresVerticalSlice` | 84.36s通过；原租户/成员/删除/别名/生命周期、密码选项及change/reset/recover/logout/旧密码登录竞争、平台附件与凭据保护、历史生产者及物理owner/审计链保持 |
+| `TestIAMOwnSessionBulkPostgres` | 最终夹具49.10s通过；包含两个提交方向的登录/撤销真实锁依赖。保留原成功数量、原目标集合、精确重放、后继登录存活及完整密码/恢复/停用竞争，不把新用户锁等待误当成发行无效 |
+| Audit原双schema/保留数据门禁 | `TestPostgresAuthorityIntegration`4.46s及`TestAuditRetainedTenantPartitionUpgrade`0.33s通过，包7.572s；正向存储夹具先提交密码尝试，再以真实USER事实消费新形状。原裸查询的运行权限明确拒绝；RLS、数据库时间、末端原子性、旧canonical及不可变记录攻击保留 |
+| `TestIAMRetainedOwnSessionProcessUpgrade` | 20.10s通过；真实固定`7cf857bb` IAM32 executable产生原数据，IAM33双次迁移/原六字段receipt/原绑定及canonical/proof保留；实际进程重启不清密码尝试，NULL/撤销Session不复活。旧Session完成/forced批量减权门禁保留，未声称跨release兼容 |
+| `TestIndependentIAMAuditAndPaaSProcesses` | 68.66s通过；实际受限数据库登录、双IAM及Audit/PaaS/dispatcher进程、真实HTTP/原outbox/审计及资源隔离回归；源码readiness精确33/19/2，不改已发布profile |
+| 默认/架构及构建检查 | 相同最终生产代码的干净导出全仓race/architecture通过；最后追加的SQL攻击在上述新PG18门禁通过。最终导出vet、模块校验、724文件生成集合及SHA256一致、Linux amd64构建通过；外部DSN的默认SKIP不是运行证据 |
+
+初始`31c18531`的[Verification35488659078](https://github.com/xiak/matrix/actions/runs/35488659078)未通过：Audit存储夹具还直接调用裸密码查询/旧函数，会话并发夹具还要求新登录绕过同USER写锁；两处已在原测试owner按当前契约替换并完成上述本地复验，没有恢复旁路、删场景、增时限或修改生产实现。累计固定`92e3073e290104089af3e02ddaaa6a7d8fb2c457`的[Verification35489211152](https://github.com/xiak/matrix/actions/runs/35489211152)已在2026-09-20以GitHub API核实精确SHA，go、node-process、authority-storage、authority-runtime、authority-process全部completed/success；这个后继成功不回填原失败。上表不替代未完成的Account公平配额、密码规则、MFA/通知/恢复或完整009验收。本机默认DSN缺失时的SKIP不作为上述证据；原Docker不可用没有被用来降低门禁或重启共享服务。
+
+必须分清三种限制：进程/入口预算保护CPU、内存和连接；当前实际USER/凭据预算限制猜测；Account公平预算避免一个账号占满认证资源。前者可以有每副本本地上限，但不能冒充集群级尝试上限；后两者需要共享权威状态，所有IAM副本按相同数据库时间核对。安装/edge的限额是补充，不授权IAM失联时回退到内存计数或旧Allow。
+
+计数主体来自真实realm解析结果，不是caller的accountId或原loginName字符串；同一User的账号ID/别名登录共享预算，不同账号的同名User隔离。未知realm/用户不创建无限主体或原始登录名计数行，而在有硬容量界限的入口预算下执行适当的dummy核对；不能通过选不同别名绕开，或在公共返回体泄露是否存在/剩余次数。未知与错误密码、暂停/停用的外部语义需一起验收，不能声称仅使用dummy hash就已经消除所有时序侧信道。
+
+登录、改密时的旧密码重验，以及绑定/step-up/受限恢复中的密码核对共享该USER及密码代际的猜测预算，不能通过切换认证目的获得免费尝试。新密码规则校验或管理员设置临时密码不冒充本人密码认证成功；MFA码的因子预算和完整认证预算各按其目的保留，任何单一阶段成功不能清空所有限制。
+
+仅在昂贵验证后递增失败数不足以约束并发：执行前须在共享权威下保留有上限的在途尝试资格，绑定真实USER/credential generation及服务器生成的单次尝试身份。它不发行Session，也不是caller可重复使用的permit。进程中断或响应未知不退还同一次猜测资格；取消、过期与回收必须有明确数据库规则，不能通过重新连接恢复全部预算。正确密码不能绕过已生效的抑制，错误请求也不能靠反复复用requestId获得免费核对。
+
+已验证失败以非异常结果完成失败计数事务，再映射稳定HTTP错误；不能让现有`withinTransaction`收到认证错误后回滚计数。成功的最终认证才按冻结规则处理连续失败状态，并与发行结果原子关联；MFA尚未完成不能重置完整认证预算。并发中旧代际失败不扣新凭据额度，但不能因此抹掉已经发生的入口资源消耗；成功不会清除其他仍在途的尝试资格。未知完成只按原尝试状态处理，不重做密码核对或返还额度。
+
+首个有界实现的尝试状态为`RESERVED → SUCCEEDED|REJECTED|ABANDONED`，结果不可逆。过期RESERVED转ABANDONED只释放并发槽，不返还该窗口已经消耗的猜测次数；不能通过断开HTTP或杀进程刷额度。相同attempt最终提交最多一次，任何重试都不能先发行凭据后补计数。验证码错误属于REJECTED而非使整个计数事务回滚的异常；未知challenge持有凭据不能按其公开ID锁死另一个用户。
+
+候选产品预算：每挑战绝对5分钟/最多5次提交、每USER最多3个活跃登录挑战；共享密码核对每USER同时最多1个昂贵尝试。跨挑战OTP/密码窗口、渐进抑制、Account公平配额及全局crypto队列须在011受限容量/抗锁死门禁中给出具体可发布值，未冻结不得上线，仅给每challenge计数不能通过S2验收。这些均不是租户可无限放大的参数，也不要求新增Redis；PostgreSQL是首个共享权威，IAM本地信号量只保护单副本资源。
+
+临时抑制不是停用User/Account，不删除凭据、不终止工作负载、不影响历史投递；具体失败阈值、窗口、最大抑制和逐步恢复需以容量与抗锁死测试冻结，不直接照搬外部厂商的“一小时锁定”。健康探针、服务身份与业务PDP有各自预算，不能被错误密码洪泛无限挤占，也不能给其普通API添加跳过认证预算的开关。全局过载可返回明确有界退避；用户存在性相关的冷却信息不得在未认证响应中枚举。验证码/邮件等外部手段仍按012，没有通道不造假。
+
+来源IP只有经过安装/edge owner确认的可信代理链才能用于规则；007的外部origin/request-target header不证明客户端IP，caller的Forwarded/X-Forwarded-For也不是权威。登录网络规则属于身份入口，005的IP条件属于业务PDP，两者不能混为一条“可信来源”布尔值。真实来源尚未提供时保持IP规则不可启用，不用IAM所看到的代理地址冒充最终用户地址。
+
+#### S3c：密码到期执行设计
+
+本节为S3c执行切片，**完整到期验收未完成**。已提交的IAM50/Audit27基线及纯契约只提供原reset完成查询和下述不含凭据的终态格式，不发行该终态。本分支候选增量增加显式八字段密码配置、历史六字段的只读边界、真实密码年龄计算及两个Session发行入口的截止截断；无因子和已有因子的受限改密、管理员重置终态及其原子拒绝事实均已接通。真实旧程序产生的UNKNOWN年龄已按两种模式运行，证据范围见下文；设置/重置竞争及末端故障已实测，自然到期与最终独立CI仍待完成，不能将该候选当作可发布版本。源码形状定为IAM51/Audit28，发布profile及000015无效果检查没有变更。最小企业目标不仅是显示到期日期，而是同一账号两个真实IAM副本在期限、锁等待、配置改变及恢复后作出一致的登录/业务拒绝，并提供规定的后续路径。
+
+在原`AccountSecuritySettings.password`中增加两个明确字段，不另建密码Policy、年龄服务或可替换的授权权威：
+
+| 字段 | 当前配置及新意图要求 | 默认及边界 |
+| --- | --- | --- |
+| `maxAgeDays` | 整数，0或1–365；一个日为86400秒的实际经过时长，不采用本地日历日/DST计算 | 0，关闭周期到期；不是“不校验密码” |
+| `expiryMode` | 封闭枚举`CHANGE_PASSWORD`或`ADMIN_RESET`，即使maxAgeDays=0也必须明确提交 | `CHANGE_PASSWORD`；只有开启到期时执行 |
+
+两种到期处置都属于本需求，不能用永久拒绝登录代替受限改密，也不能用允许本人改密冒充管理员重置模式。默认关闭例行到期；保留配置是满足企业的明确要求，不宣称定期换密天然更安全或符合NIST的例行轮换建议。[NIST密码验证要求](https://pages.nist.gov/800-63-4/sp800-63b.html#passwordver)明确禁止要求例行周期更换；本产品为企业显式要求提供选项，不作NIST合规声明；[密码规则产品参考](https://cloud.tencent.com/document/product/598/36249)区分最长有效期及到期后的两种处置，具体采用决定归原adoption owner。
+
+**年龄和归属。** 唯一年龄来源仍是`user_credentials.password_changed_at`，只由真实新hash写入推进；NULL表示UNKNOWN，不能由created_at、通用changed_at、generation、恢复时间或迁移时间推导。现有历史格式函数不读取当前时间，不能替代到期资格校验：非有限时间、将来时间或计算越界均是不可用数据，不归类成UNKNOWN、0岁或额外有效期，也不自动改写为今天。启用到期且年龄UNKNOWN时执行对应到期处置；关闭时UNKNOWN本身不构成拒绝，但其他密码、MFA、身份或会话限制照常执行。已知年龄的期限为原时间加maxAgeDays×86400秒，等于期限即过期。使用权威数据库时间，锁等待后、消费认证证明和最终发行前再次核对，不能用准备事务的旧时间或浏览器日期发出已过期资格。
+
+原root及存在未撤销INSTALLATION附件的USER沿`user_password_requirements`唯一来源判定继续使用不可被租户改变的产品底线，其周期到期默认关闭；这不豁免真实must-change、停用、MFA、撤权或封存恢复限制。平台附件授撤仍永久结束旧认证资格，不能用“当前Allow已经失效”改变保护判定。到期仅约束密码登录及派生的登录会话，不将年龄状态写成全局`User.mustChangePassword`或USER停用，不因此撤销独立AccessKey、服务凭据或停止工作负载；显式reset/停用原有影响仍按原owner执行。
+
+**登录执行。** 密码核对继续使用S3a已提交的有界尝试；到期提示不得成为未认证realm/用户名查询。错误密码、无当前资格和未知主体仍使用原统一拒绝。正确密码不是完成MFA，也不是已获得业务权限：
+
+| 当前认证路径 | `CHANGE_PASSWORD`且已过期/UNKNOWN | `ADMIN_RESET`且已过期/UNKNOWN |
+| --- | --- | --- |
+| 当前允许密码单因素登录 | 原LOGIN目的可直接进入有独立持有凭据的PASSWORD_CHANGE，不发行Session | 不发行Session、可执行改密或绑定凭据；仅返回管理员重置所需的终态 |
+| 已绑定当前有效因子 | 必须先完成原密码及当前TOTP，再进入PASSWORD_CHANGE | 同样先证明当前已绑定因子，再返回终态，不能靠过期绕过MFA |
+| 当前要求首次绑定、但尚未有因子 | 原ENROLLMENT路径先完成PASSWORD_CHANGE；改密后重新登录并继续真实首次绑定 | 先由有当前权限的管理员重置密码，再走原首次绑定，不顺便解除MFA要求 |
+| 因子恢复待完成或来源不明 | 保留原RECOVERY_REQUIRED/失败关闭路径，不能只靠旧密码取得改密或登录权 | 同左；管理员重置密码不等于恢复因子 |
+
+无因子的LOGIN/PASSWORD_CHANGE原子绑定实际已消费LOGIN密码尝试、当前凭据代际、MFA历史和设置版本；factor/source challenge/verified step均必须为空，不能伪造TOTP、已消费的上游TOTP挑战或正常Session。发行时的原始密码尝试、当前NEVER_BOUND/合法REMOVED和准确期限由原插入guard验证；后续继续由Account→USER→credential锁内的真实状态、修订及期限资格约束，密码尝试预算的后来使用不改写已封存来源。已绑定分支保留真实两阶段来源，必须先消费真实OTP，原LOGIN/TOTP与新PASSWORD_CHANGE双向关联及其原因子校验不放宽。完成挑战改密沿现有接口返回重新登录，消费原挑战并结束其他旧资格；新密码与新MFA必须通过正常流程，不能将受限挑战升级成bearer。普通未到期的日常改密仍保留当前会话选项；到期边界之外不得复用旧Session执行改密。
+
+复用原`LoginResponse`增加封闭终态`ADMIN_RESET_REQUIRED`，纯载体恰好包含`outcome`和`passwordResetReason=EXPIRED|AGE_UNKNOWN`两个字段，其他结果拒绝reason。即使值为null、false或空串也不能携带Session、bearer、challenge、challengeCredential、mustChangePassword、身份或恢复许可；仍只能通过原显式编码器输出。Login或TOTP验证未来只能在本次实际密码证明及所需已绑定因子证明后返回；该终态没有可点击跳过权限的恢复链接。页面只能将原账号输入显示为待登录请求，不能声称已经登录；AGE_UNKNOWN文案说明无法证实年龄而按账号规则要求管理员重置，不能写成已过期。管理员执行真正重置后，用户仍需以新密码重新登录并执行原强制改密和MFA，不由该终态续发会话。两副本重复消费原尝试/OTP不能再产生一份成功结果。相关认证尝试的已用额度、真实OTP消费及终态必须提交后再响应，不能把预期拒绝当作数据库异常而回滚额度；UNKNOWN不自动新发意图。UX已确认互斥终态应只提供重新登录/联系管理员指引，不显示新密码输入或自动重试；浏览器仍须在固定运行实现后验收。
+
+**当前证据（2026-09-29）。** S3c后端固定`b9483f82`的独立CI已完成；实际一天观察固定`87e1c143`的独立CI也已完成，但截止后拒绝仍须在数据库真实时刻到达后执行，不能由绿色准备门禁回填。真库使用本任务独立PG18.4（1CPU/768MiB/PIDs192/24连接），Go1.26.5容器（2CPU/1536MiB/PIDs256、GOMAXPROCS2/GOMEMLIMIT512MiB），重型race-p1串行；不降低密码成本、OTP窗口或原三分钟前驱期限。
+
+| 现有门禁owner | 已实际证明的边界 | 结果 |
+| --- | --- | --- |
+| API codec/schema及用例 | 两种终态理由、无凭据/身份混入、非法/null/重复字段拒绝；历史六字段逐字保留，当前八字段必需；错误密码及最终事务失败不输出终态 | race通过；LoginResponse 2-worker/20s fuzz 524078次、密码设置2-worker/10s fuzz 15709次，无失败 |
+| 原安全设置真库 | 真实step-up开启一天期限；PASSWORD与PASSWORD_TOTP返回和存储截止均精确截断于真实password_changed_at+86400s；保留当前Session的改密不延长原较早截止；规则、历史、强制首次绑定、设置竞争与平台保护 | 完整包118.700s通过；SMTP分支SKIP，不计邮件验收 |
+| 唯一前驱进程门禁 | 固定`42035189eb823e388509f54525889c1a18c6b79d`的实际IAM45创建普通USER、真实改密/联系验证/因子，当前IAM51保留NULL年龄；两种处置、精确原历史、迁移重放与重启 | 最终带独立因子资格的完整运行171.53s（包172.614s）通过，原三分钟期限不变 |
+| 原readiness攻击门禁 | 专用函数ACL、SECURITY DEFINER、STRICT、缺失及关联FK/唯一性/终态约束八类真实破坏均关闭 | 8.47s（包9.534s）通过；密码配置/历史及五类函数形状的所属合同门禁亦已通过 |
+| 既有独立进程组合 | 当前源码IAM51/Audit28/PaaS2的实际readiness、受限运行登录、两个IAM实例、PaaS资源、原身份变更及历史Audit投递/重放；安装发布profile仍按其owner效果前拒绝 | `TestIndependentIAMAuditAndPaaSProcesses` 152.62s（包153.679s）通过；该场景尚未产生新增到期终态事实 |
+| Audit原存储/HTTP | IAM51/Audit28；真实append/query新DENIED事实，错误actor/target/Decision/结果拒绝，受限登录、RLS及旧链保持 | 双authority 4.80s（包5.853s）、HTTP 1.10s（包2.141s）通过 |
+| 默认回归与生成 | API/IAM/Audit race、architecture、对应vet及双API生成一致；末次新增测试的原authorityprocess/architecture race和vet再通过 | 最新测试包4.903s、architecture10.349s；缺外部环境的SKIP不计运行证据 |
+
+前驱进程的ADMIN_RESET正向必须先提交实际密码证明，已有因子的USER还必须消费当前TOTP；响应恰好两字段，密码/principal不变、不发行Session或改密后继。错误密码、重复挑战、同码新挑战均拒绝且不增加该终态事实；已用尝试额度不清零。另一个实际授权、密码年龄已知的操作者通过真实step-up切换CHANGE_PASSWORD；无因子USER取得密码来源的受限LOGIN/PASSWORD_CHANGE，已有因子USER先通过TOTP取得原两阶段后继。两者真实改密后重新认证，原挑战/Session拒绝，未移除因子。模式/密码改变及重启后，原DENIED事实的producer证明仍核对准确digest，伪造requestId拒绝。
+
+末端故障只在本任务数据库的原outbox触发器注入，非事务sequence证明三个实际请求均已到达最终写入：无因子终态、已有因子终态、受限改密分别返回503；密码/hash/generation、principal、MFA水位、挑战完成、Session及事实无部分变更。密码与OTP的独立RESERVED尝试及已用额度保留；OTP挑战准确保留一次尝试，不因业务事务回滚而退款。受限改密失败后，原未消费挑战可完成一次真实改密，不绕过重新认证。
+
+设置竞争用实际outbox屏障暂停已持有Account锁的设置事务；通过pg_locks和pg_blocking_pids确认持有旧版本挑战及新鲜未用OTP的请求确实等待该事务。设置提交后，旧请求401，未消费OTP或共享预算，也不新增终态事实；新规则下后续真实认证仍成功。该证据不替代其他改密/reset/恢复及平台附件的双向竞争。
+
+同一门禁另外由旧程序创建两名独立普通USER及一名显式获准确USER权限的操作者。当前进程的两个并发请求在真实Account/USER锁上分别证明：管理员重置先提交时，旧受限挑战改密401；受限挑战改密先提交时，持旧版本的重置409。每组只有赢家的凭据代际+1及对应成功事实；原重置完成关系仅在重置赢家存在，改密赢家只消费原挑战。真实新密码重新登录并核对强制改密要求，重启后旧挑战仍拒绝且身份、Session、MFA及事实不变。两种到期模式使用各自旧程序真实绑定的因子，避免一个测试身份连续消耗互不相关的自然OTP窗口。最初共享因子的运行超过原三分钟而失败，不作为验收证据；没有通过正向DML回填年龄或刷新尝试预算。
+
+迁移对旧挑战只比较原字段，并另验新增nullable关联始终NULL、无补造终态；末端DDL失败全回滚。判断旧Session是否有效使用真实bearer拒绝和当前版本/代际资格，而不是要求删除所有ACTIVE历史行。没有回填密码时间、修改宿主时钟、清空预算或用正向资格DML制造通过。
+
+尚缺真实已知年龄跨过到期时刻、平台附件/恢复等剩余代表性竞争、新终态专属跨进程投递/独立CI、LIVE浏览器和签名消费者。期限计算函数在截止前/等于/之后的只读观察不是实际经过一天；UNKNOWN流程不冒充自然到期或跨发布profile许可。各轮自有资源均已按精确ID/标签清理；本次确认零其他客户端后正常停止PG，删除两个已结束runner、PG及临时合成数据、无引用缓存卷和空网络，未操作其他任务或远端。
+
+实际一天门禁已在本任务单独保留的PG18.4数据库上完成前半段：先用原`TestIAMSecuritySettingsPostgres`的真实HTTP流程设置`maxAgeDays=1/CHANGE_PASSWORD`，保留普通USER的真实新密码时间；再由新增的单一`TestIAMNaturalPasswordExpiryPostgres`在两个独立Authority上证明截止前登录会话可用，且其数据库截止精确等于`password_changed_at+86400s`。本次数据库给出的截止为2026-09-30 06:52:34.699497 UTC；没有改时钟、缩短产品一天或回填正向资格。原bearer仅保存在本任务0600私有卷以供截止后拒绝门禁，PG容器与空网络已正常移除，保留本任务独立PG数据卷与证据卷，不涉及其他任务资源。**截止后的实际拒绝、受限改密及重新登录尚未运行，不计完整到期验收。**
+
+**已登录请求和派生资格。** 正常LOGIN_SESSION在最终发行事务中使用`min(原会话绝对截止, 当时有效的密码截止)`作为其已封存expiresAt，不能由调用者提交最终期限；对将到期但不足60秒的真实剩余时间不得向上补齐。每个发行入口，包括PASSWORD_TOTP完成，均执行相同权威计算。本增量已将`issue_session`与`complete_login_challenge`适配器同片替换成“原发行身份/时间一致、实际截止为有效且不超原上限的权威值”，不是只缩短SQL结果而使合法发行全部503，也不接受任意更长结果。锁后时间已经越过真实密码截止时不得发行Session；申请TTL的60秒下限不能用于给真实剩余期限续命。RoleSession保持不晚于来源Session的截止并在每次当前授权时重验来源，不能承担角色延长密码资格。已有设置版本及认证事实保持不可变：启用、收紧、放宽或关闭到期设置沿原版本更新结束旧Session/Challenge资格，不能给旧行回填当前版本；新登录才使用新规则。已到期Session不因后续真实改密、延长规则、关闭规则、时区变化或重启恢复；日常改密保留的当前Session也不延长其原已封存绝对截止。
+
+到期无需新增全局扫描/定时撤权器才能生效；期限及原设置版本检查负责下一次受保护请求失败关闭。长连接/已接受后台Operation仍按所属产品已声明的检查点处理，不宣称此片能实时中止它们。管理员重置仅使用既有授权入口和受保护身份限制，不因为返回终态向本人、普通管理员或安装服务增加恢复权。
+
+**事务、审计和恢复。** 设置StepUp、当前配置和新请求必须承诺两个新字段；精确历史完成保持原字节，缺新字段的旧未完成证明不能按默认值变成当前写许可。初始化当前默认不跳设置版本、不补造USER事实；全部新密码设置进入唯一认证资格投影。认证恢复的同hash generation fence继续保留原年龄，已完成恢复/设置receipt只读重放不重新变年轻。旧备份的状态与当前资格无法对应时保持关闭，不将本片视作跨release/profile恢复准入。
+
+真实改密及配置变化沿原封闭事实与事务outbox。管理员重置终态的可审计拒绝使用单一tenant事实`iam.user.password-reset-required`（USER actor/USER target必须同一主体、DENIED），只由消费本次真实密码及所需因子证明的封闭IAM入口写入；不伪造业务Decision或SYSTEM身份，不把每次匿名猜测都写成该USER事实。它证明本次当前规则要求重置，不把UNKNOWN年龄记录为已证明密码过期；不含Decision、Operation、Key/Role来源、安装scope或任意附加属性，不新增通知类别或改写旧canonical。
+
+原事务适配器的`RequirePasswordReset`只接受真实LOGIN密码尝试或原LOGIN/TOTP尝试二选一。SQL入口`iam.require_password_reset(text,text,text,bigint,text,text,bigint,bigint,jsonb)→text`仅API角色可执行，沿原Account→USER→凭据及因子/挑战/尝试锁，锁后以数据库当前时钟重验ADMIN_RESET及EXPIRED/AGE_UNKNOWN。无因子分支只接受NEVER_BOUND/合法REMOVED；已绑定分支调用原TOTP消费，不接纳RECOVERY_REQUIRED或其他目的。凭据、身份、附件和工作负载均不变；尝试消费、实际OTP水位及outbox同事务，终态不重置成功登录预算，提交失败或不确定不能返回完成。
+
+原`authentication_challenges`增加nullable `password_reset_required_event_id`，仅已消费LOGIN/TOTP的无Session、无改密后继分支可填，唯一外键绑定同tenant outbox；原延迟完整性检查核对真实已确认因子/修订/已消费时间步及同一USER、时间、DENIED事实。旧行保持NULL，迁移不得补造终态或事实；不新建表、通用receipt或查询许可。IAM-source投递沿既有当前producer凭据及不可变outbox精确摘要，不用用户今天的密码年龄、配置或状态重新授权历史事实；业务payload不因此获得额外证明。只观察时钟过期不会自动改凭据、写成功改密事实或发送重复通知。
+
+**验收。** 沿原密码/挑战/设置、IAM真库和authorityprocess owner增量验证，不复制历史版本矩阵：
+
+- 默认关闭、1/365边界、UNKNOWN、已知当前/到期、未来/非有限年龄拒绝、两种处置、普通/受保护身份及两账号同名USER；当前未认证输入不泄露规则或年龄。
+- 有/无已绑定因子、强制首次绑定、原reset强制改密和RECOVERY_REQUIRED的交叉边界；密码成功不能补造MFA或普通Session，终态无可执行载体，失败不退额度。
+- 正常会话与派生Role在真实数据库截止前后、锁等待跨过截止、另一个IAM副本和进程重启后的拒绝；设置放宽/关闭不复活旧Session/Challenge，AccessKey及既有资源无隐式变化。
+- 规则修改、平台附件授撤、本人改密、reset及恢复与最终发行/改密的代表性双向竞争；原准备不能携带旧年龄/规则越过锁内重检，末端失败无部分hash、会话、证明、事实或预算返还。
+- 单前驱真实产生的已知及UNKNOWN年龄、完成/未完成设置证明、同hash恢复fence、旧事实哈希和准确历史重放；缺列/非法配置/越权调用关闭readiness。最长天数用纯规则边界测试，真库边界使用原限额及数据库真实时间；不能改宿主时钟、缩短生产周期或以任意正向资格DML代替行为。
+- UX真实浏览器分别观察到期改密和管理员重置终态，不能用现有四种MOCK年龄展示算验收；对应签名消费者及恢复组合由安装owner另验。公共类型、错误/结果、具体migration函数形状和发布profile在各自窗口冻结前仍不可消费。
+
+#### 会话闲置期限（后继执行片）
+
+此片的后端源码候选已实现，完整009、独立CI、LIVE消费者和发布组合仍未验收。最小目标为同一Account两名USER在两个IAM副本上获得各自LOGIN_SESSION：一个客户端仅在显式交互时更新自己的服务器活动水位，另一个没有活动的会话在真实闲置截止后的下一次IAM/PaaS受保护请求被拒；重启、后台安装轮询或另一个凭据的活动都不能复活它。Session绝对期限现有默认8小时、发行配置最多24小时，仍在发行时封存且不滑动；密码到期可进一步缩短它。闲置不是人类在场证明，也不是MFA或step-up。
+
+Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默认30分钟、允许5–60分钟；有未撤销安装级平台附件或原root身份的有效上限为30分钟。更新继续使用现有Account权限、目标限定step-up、版本CAS、不可变完成、通知和outbox事务；旧完成仍只读原字节，缺字段的旧未完成proof不能凭默认值变成写许可。设置改变沿既有安全设置屏障使旧会话/挑战失效，不能通过调大阈值挽回已过期会话。每个新Session封存发行时实际适用的idle秒数和由数据库产生的初始活动时间，不从客户端、当前策略或今天的角色关系倒填旧Session。升级前缺活动水位的旧Session失败关闭并重新登录，不用`issued_at`猜测其后是否有活动。
+
+唯一续闲置入口拟为`POST /v1/auth/sessions/current:touch`：只收当前有效LOGIN_SESSION bearer，不收Account/User/Session selector、时间戳、阈值或RoleSession；返回当前Session的非秘密服务器`lastActivityAt/idleExpiresAt/absoluteExpiresAt`。服务器在原Account→USER→credential→Session锁序中验证身份、代际、状态、MFA及`clock_timestamp()<min(原absolute,上次活动+封存idle)`，然后至多每60秒提交一次活动水位；更频繁的请求只返回原已记录水位，不给额外有效期。窗口是数据库时间和同一Session行的原子比较，双副本竞争只产生一次推进。后端可以验证请求持有者的有效bearer，但不能证明实际真人进行了鼠标/键盘操作；本入口不得被描述为强认证。无效、已到期或在等待锁期间过期的Session不能touch，任何失败都不改变活动水位。
+
+普通IAM/PaaS受保护请求、`/ready`及安装进度后台轮询只检查当前闲置资格，不续期；RoleSession、AccessKey、服务、worker和后台Operation均不触碰来源LOGIN_SESSION。UX owner只读核对发现控制台当前唯一周期性带bearer后端请求是PENDING/PROVISIONING安装阶段每4秒读取进度；IAM账号工作区无周期刷新，亦无通用交互活动上报。UI未来只能在明确的前台交互下调用已冻结的touch入口，不借轮询、页面可见性或客户端倒计时取得权威期限。该接口及字段在实现/生成/门禁固定前不可称LIVE；当前UX只做显式MOCK。跨服务查询仍以IAM当前会话为权威，业务服务不得缓存一次Allow当作持续有效。
+
+底层`Session`水位归现有IAM Session表/读取函数，不增SessionStore、Redis或后台扫描服务。lookup、本人目录、RoleSession来源资格及各最终写事务必须按服务端当前时间检查`min(absolute,idle)`；历史已过期记录可留存但不得作为ACTIVE资格或被后续touch复活。活动水位不是每次业务请求的Audit事实；它只能支持IAM已知的最近认证活动，不能填补S4所需的Key、Role和各产品业务结果水位。按两个真实IAM副本、有效/迟到并发touch、最低合法5分钟自然闲置、管理员延长设置、密码/状态/撤权交错、重启与旧行升级，以及PaaS跨进程拒绝实跑；不修改时钟或缩短生产配置假装到期。设计依据是[NIST 800-63B会话管理](https://pages.nist.gov/800-63-4/sp800-63b/session/)的总体/闲置双期限与[OWASP Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)的服务端执行原则；30分钟是MATRIX产品默认，不宣称获得NIST等级认证。
+
+**当前本地证据（2026-09-29）。** 源码形状为IAM52/Audit28；发布Profile仍由安装owner按完整组合冻结，不能从源码schema数字推导兼容。API严格codec/OpenAPI、usecase、HTTP路由和数据适配器的受影响race均通过；生成前后OpenAPI SHA256均为`a229ac03500b09cee1b1ebd4357cbc1368c0a4a5b4b84185af71113b8c1b43f2`。最终契约复核另发现生成器曾把写活动水位的入口描述为只读观察，当前以无body的POST mutation单独建模，明确400拒绝query/body且200只表示命令完成；契约回归已先失败后通过。默认/受保护30分钟、设置5–60分钟、60秒合并、普通读取不续期、双副本竞争、函数ACL/readiness及apply-twice由独立PG18.4的`TestIAMSessionIdlePostgres`串行race-p1在92.262s通过。
+
+`TestIAMSessionIdleNaturalPostgres`沿实际邮箱确认、TOTP、step-up和安全设置流程把普通Account配置为产品最低5分钟：两个独立Authority交替执行普通认证读取，数据库活动水位保持不变；真实经过截止后两个副本的业务读取和迟到touch都拒绝，USER及历史Session行不被删除或改写。该门禁424.632s通过，没有改宿主/数据库时钟、缩短生产最小值或用正向资格DML。原安全设置、并发和放宽门禁在新数据库分别140.212s、141.981s、126.548s通过，证明新增字段没有绕过原CAS、step-up、通知、历史及受保护身份边界。
+
+固定`42035189eb823e388509f54525889c1a18c6b79d`的实际IAM45程序创建旧设置谱系、MFA Session、恢复、密码年龄及产品Profile，再升级到IAM52。最终`TestIAMRetainedPredecessorProcessUpgrade`串行race-p1在182.518s通过：历史完成字节和新增字段NULL保持，旧Session因无活动水位失败关闭，同一USER重新完成密码+TOTP后只能读取自己的原完成且不能继承旧Session的未完成proof；当前完整proof可从旧版本谱系继续写入，迁移/等值bootstrap/重启不复活旧资格。真实门禁发现并修正了新设置谱系把旧NULL与当前默认值误判为断链的问题；比较时允许二者等价，但不回填旧行，也不让旧proof取得新字段。测试维护复核随后将Session、设置完成和step-up从整行减新列的布局快照改为明确业务字段，并删除readiness之后重复的`pg_proc`参数顺序断言；同一真实前驱门禁在新独立PG18上串行race-p1复验170.215s通过，行为、旧字节及失败关闭断言保留。
+
+同一前驱门禁用两个由旧程序真实创建的独立USER分别证明旧MFA Session失败关闭和旧因子移除/重绑/新因子登录，避免通过清空共享五次OTP预算或延长窗口制造通过。闲置资格还已纳入密码尝试、本人/批量会话撤销及策略关联的锁内Session检查；门禁曾发现旧NULL会话被批量撤销计数的问题，生产函数现拒绝把这类无效历史行当作当前有效目标。最终独立双IAM/Audit/PaaS/dispatcher进程门禁在新PG18.4数据库串行race-p1通过284.626s，保留受限数据库身份、双租户资源、撤权、MFA、历史outbox/Audit和重启回归。CI新增独立自然闲置lane并从通用自动发现中显式排除该测试，避免缺DSN时SKIP被误记为通过；本候选的独立CI尚未完成。
+
+固定`139e1322730186cc555bec305ba3889edd59b10c`的[Verification36559683247](https://github.com/xiak/matrix/actions/runs/36559683247)在`authority-storage`失败，不能算作本片独立CI成功。失败先暴露Audit存储门禁写死IAM51；改为读取未初始化时的有效版本并证明bootstrap只让同一版本就绪，不把IAM内部schema号交给Audit测试拥有。随后同一门禁还暴露旧测试通过直接改写Session发行/到期时间制造过期，已删除该重复路径；真实自然absolute/idle到期仍由IAM所属门禁证明，跨authority测试继续证明服务器封存期限、撤销过滤和失败outbox原子性。修正后的`TestPostgresAuthorityIntegration`在新独立PG18.6上串行race-p1通过18.961s；后继固定SHA及独立CI仍待确认，旧失败不回填。
+
+同轮测试所有权审计确认，认证schema破坏矩阵只依赖同一最终schema，不依赖恢复、替换、移除或设置仪式的mode。当前仅在`TestIAMTOTPEnrollmentPostgres`执行这一完整矩阵，其他入口继续执行各自真实事务，不再重复相同catalog攻击。相同独立PG18容器、Go race-p1下，唯一攻击矩阵及enrollment业务96.561s通过，非enrollment的真实认证器移除事务82.423s通过；没有删除任何模式特有测试、readiness断言或安全攻击项。
+
+#### S3验收与衔接
+
+- 两账号同名用户、ID/别名两种realm、两个IAM副本，真实验证同USER预算共享/不同USER隔离、设置归属、受限规则读取及配置越权；root和未撤销平台附件保护不能通过停用后重试绕过。
+- 密码边界、Unicode码点/字节/空格/组合字符、旧hash准确验证、常见密码来源和历史0/1/上限、所有写入口、错误版本和缺历史；并发改密/重置/恢复/规则变更无部分hash、代际、会话或成功事实。
+- 实际失败HTTP响应后从另一副本观察已消费额度，容量边界内并发只获得有限资格；真实进程中断/取消/数据库失联和重启不重置，未知用户洪泛不形成无界存储。MFA完成前不能刷新完整登录预算。
+- 实际过期前正向、数据库时间过期后拒绝、闲置touch边界/并发/迟到/换副本、配置放宽与重启不复活；不伪造时钟或缩减已冻结密码成本取得通过。
+- 有限CPU/内存下分别测正常登录、最大历史比较、错误密码洪泛与并行业务鉴权，真实记录等待/拒绝和另一账号的可服务性；证据归011容量owner，不以两进程启动或纯函数benchmark代替。
+
+本稿已给出security-settings的两项Action、资源/载体及HTTP提案；产品Profile/内置策略的准确版本、最终共享尝试预算和后继密码/期限字段仍须在实现切片冻结。匿名失败记录边界按S2，不把已解析用户名写成已认证USER、不伪造SYSTEM或业务Decision、不将原始密码/失败候选放入Audit。仍沿现有credential、usecase、HTTP、PG和authorityprocess门禁，不新增通用限流服务或可替换Redis授权权威。共享实现窗口未开放前仅保留设计和固定来源决定。
+
+### S4：安全报告、权限诊断与闲置治理
+
+本节细化IAM-SEC-05/06；下述S4a冻结首个运行入口，其余诊断与自动治理仍只有设计。最小路径是：有当前权限的账号安全人员查看本账号User/Key状态、真实使用证据和明确缺口，生成/下载同一份有界报告，选择目标后以当前权限显式处置；另一账号、已撤权用户和平台运营身份不能借reportId、cursor或下载地址读到内容。自动闲置处置是后继执行切片，不因能下载报表而取得后台全租户修改权，完整009仍需实现其已启用治理规则并实跑。
+
+#### S4a执行片：IAM账号安全报告
+
+首个可验收切片只生成`AccountSecurityReport`，不创建第二套账号、主体、活动或授权模型。报告范围只能是当前有效LOGIN_SESSION推导出的Account；请求没有accountId、tenantId、userId、产品、时间水位或数据源selector。平台操作员、ServiceIdentity、RoleSession和AccessKey不因其身份名称或安装归属取得入口。RootIdentity与普通USER一样必须拥有当前精确权限，不能由受保护身份性质隐式放行。
+
+封闭Action为`iam.security-report.create`、`iam.security-report.read`和`iam.security-report.download`。create作用于当前ACCOUNT实例并产生SECURITY_REPORT；read/download只作用于报告实例。第一片HTTP固定为`POST /v1/account/security-reports`、`GET /v1/account/security-reports/{reportId}`和`GET /v1/account/security-reports/{reportId}/content`。沿现有IAM请求约定，create body只含requestId和固定`formatVersion=1`，API版本由媒体类型/路由契约确定；GET只接受路径中的规范reportId，不接受身份、范围、格式或下载地址selector。create同步完成或整体失败，不暴露PENDING任务、轮询token或可替换的存储URL；准确重放返回原报告元数据，不能以相同requestId重新观察今天的状态。
+
+版本1只封存同一数据库只读一致快照内IAM可以独立证明的内容：Account ID和安全设置版本；每个USER的ID、类型、状态、resourceVersion、是否原root、MFA资格状态、最后一次已提交密码登录Session发行时间；每把AccessKey的ID、所属USER、状态、resourceVersion、创建时间、网络限制和最新不可变授权观测。AccessKey观测沿007的真实Allow/Deny证据，不能把Allow写成业务成功。Session发行不存在时表示`NOT_OBSERVED_IN_RETAINED_IAM_STATE`，不能写“从未登录”；缺少旧谱系、未知MFA资格或不能证明的活动使用显式`UNKNOWN`及原因，不能默认安全或自动建议停用。Role承担、RoleSession业务活动、PaaS结果、Audit统计、通知送达和外部风险均准确标记`NOT_INCLUDED`，本片禁止跨库扫描或伪造联合水位。
+
+报告正文是生成时不可变的规范结构及由同一结构生成的CSV v1；保存正文摘要、observedAt、覆盖声明、USER/Key/总行数、字节数和expiresAt。数据库一致快照是生成事务的内部正确性边界，不暴露无持久语义的PostgreSQL snapshot ID。CSV每行一种稳定资源类型，不把Key写死为列组；v1只导出受契约字符集限制的资源ID、loginName、枚举、规范CIDR、版本和时间，不导出自由displayName、标签或描述，从输入域消除公式前缀而不是猜测各表格程序的转义。单一导出编码器仍须验证分隔符、引号、换行和公式攻击，在实际支持的表格程序门禁通过前content入口失败关闭。JSON读取可包含displayName，但它不进入CSV。响应使用`Cache-Control: no-store`及受保护连接，不生成公开URL。
+
+第一片硬预算为每个报告最多1000个USER、2000把AccessKey、3001个数据行（含ACCOUNT）及4MiB规范CSV；任一上限超出就整体拒绝，不截断、不抽样、不形成成功事实。报告保留7天；每Account最多20个未过期报告。到期报告不能读取或下载，清理仅删除正文投影并保留最小不可变完成关系，不能因此删除原身份、决定、outbox或Audit事实。容量、保留和正文托管必须在真实PostgreSQL与安装备份边界验证，不能落到本机临时目录。
+
+生成在同一事务重验当前LOGIN_SESSION、Account/USER/凭据代际、账号状态、精确create权限和全部预算，封存正文、摘要、完成关系、`iam.security-report.created`租户事实及outbox后才成功。read/download每次重新验证当前身份、Account和相应Action；reportId存在、原创建者仍有效或创建时曾有权限都不能代替当前授权。download受理以`iam.security-report.download-started`记录调用身份和报告目标，不记录正文，也只证明服务端开始发送；权限撤销后新请求立即拒绝，已发送字节不声称可收回。两个事实均要求真实USER actor、SECURITY_REPORT target和原精确Decision，不能用SYSTEM、泛化账号动作或空Decision代替。
+
+S4a不提供报告目录、共享链接、自动规则、后台停用、详细历史Deny解释或跨产品联合报告；这些仍由后继S4切片完成。首片最低真实门禁覆盖两Account同reportId攻击、创建/读取/下载逐项撤权、账号及USER停用、请求重放/变体/回包丢失、容量与正文末端失败、到期/清理/重启、旧数据UNKNOWN语义、秘密扫描、CSV攻击，以及报告生成与User/Key/Session/设置变化的双向事务次序。报告永远不是后续写操作的permit；处置继续调用现有生命周期入口并重新核对当前版本和权限。
+
+固定`644fff09`已有CurrentIdentity的直接/组PolicySources、PermissionBoundary、非权威ActionCapability，以及不可变决定与outbox；公开DecisionReason仅ALLOWED/DENIED。AccessKey元数据只有身份、状态、resourceVersion及创建/修改时间，没有lastUsed；没有安全报告、详细拒绝诊断或闲置调度实现。不能把已有目录、元数据更新时间或Audit链完整等同于这些功能完成。
+
+#### 观测事实及完整性
+
+| 指标 | 可用的权威事实 | 不能推出的结论 |
+| --- | --- | --- |
+| 最近成功登录 | 已提交Session发行及其真实USER/Account/发生时间 | 本人仍在线、已经访问业务、客户端物理设备 |
+| 最近认证活动 | 真实载体被核验且完成相应受保护入口的权威记录；需覆盖管理、自助及业务请求，不只采集Allow | 更新User资料、报告生成时间或不存在记录可代替last-active |
+| Key使用 | 已通过MAC并提交的准确key谱系/决定；Allow与Deny分列，坏MAC和nonce重放不冒充新使用 | Key启用、改显示名或创建时间就是最近使用；Allow就是业务执行成功 |
+| Role活动 | 承担事实与RoleSession业务请求分别记录原USER和真实Role身份 | 角色创建/改信任就是承担；角色活动自动续期原登录会话 |
+| 业务结果 | 各真实产品已验证的事务/outbox事实及其精确决定关联 | IAM Allow、Operation受理或缺少结果表示部署已经成功/失败 |
+| 未观察到使用 | 已知采集起点、准确范围与水位内确实没有匹配记录 | 从未使用、跨产品全覆盖、可以安全删除或自动停用 |
+
+报告明确observedAt、覆盖Account/对象/产品/载体、窗口、采集起点和各来源水位。分别表达有值、窗口内未观察到、信息不完整/未知、能力不适用；不把NULL变成零次、false或“从未”。MFA/网络风险等未启用能力显示尚无数据能力，不制造“已通过检查”或风险分。当前状态快照与历史统计并列，原报告不是后续权限/资格来源。
+
+只可从IAM自有权威或经所属上下文认证的闭合查询取得数据，禁止跨库扫Audit/PaaS表。IAM本地一致快照不代表三个服务在同一时刻的联合快照；不能用最大的event time或单次outbox pending=0充当所有生产者完整水位。迟到/乱序/重放按不可变事实身份去重，已封存报告不被后台重写；数据补齐需要新报告和新观测时间。历史缺少Key/Role谱系时保持未知，不从今天的主体关系倒填。
+
+最小报告先只承诺实际IAM权威能证明的覆盖。业务结果和Audit统计必须由产品/Audit owner冻结对应受限查询与水位后才能标完整；报告权限不隐含原始Audit读权，IAM的安装级服务身份也不因此得到任意tenant查询权。范围缺口保留为显式验收项，不用少量抽样代替完整报告。活动投影如果用于自动处置资格，必须与其真实认证/命令事务一致或有可验证的完整水位；普通异步展示数据不能成为撤权的唯一依据。
+
+#### 生成、读取和下载
+
+报告是账号内有界、不可变的观测制品，复用当前IAM事务/存储边界；不先造独立报表服务、通用数据仓库或导出任务框架。生成、查看/下载及详细权限诊断需要明确封闭Action和Profile支持的真实身份载体，不按“管理员”显示名放行。读取和下载每次重验当前账号、身份、会话及权限，reportId只是引用；报告存在或生成时曾有权限不是今天的permit。租户报告不展开installation附件、平台主机或另一账号事实。
+
+生成请求绑定原Account、实际actor、明确范围/过滤、requestId及格式版本；准确重复只取原报告，不用同一个ID重新生成新内容。报告固定摘要、生成时刻、行数/覆盖及到期，有硬查询/行数/字节/执行时间预算；超出已支持容量明确拒绝或标记不完整，不能悄悄截断并称全量。查询分页用原签名cursor绑定准确报告/账号/当前身份/查询；按多个可变目录页面拼接的结果不能宣称同一快照。
+
+首个下载形态为版本化CSV，字段只取明确的非秘密投影；有稳定资源类型和ID，不把Key永久写死为Key1/Key2列，也不把字段缺失填成无风险。编码处理分隔符、引号、换行和公式开头字符，用户显示名/标签一律不作为公式；安全导出后的显示文本与原始值区别需要在格式中说明。必须在声明支持的电子表格程序验证首次打开及保存再打开，单纯给字段加引号并不能证明安全；[OWASP的CSV注入说明](https://community.owasp.org/attacks/CSV_Injection)也明确不同程序不存在通用无损转义保证。未通过安全门禁不开放该导出，而非把风险交给用户忽略警告。
+
+秘密、hash、digest校验材料、MFA种子、恢复码、raw签名、会话bearer及私有PDP证据均不进入报告；仅列必须的公共资源引用和有权限的状态。制品不进入公开目录、静态CDN或免鉴权分享URL，下载响应no-store并经受保护连接；保留/到期清理仅删除报告投影，不清理原Audit/决定/资源。内部持久制品的访问、备份保护和容量由实际存储/安装owner一并验证，不以测试目录文件作为生产托管。
+
+报告生成/下载受理事实记录实际身份、范围和reportId，不记录正文；HTTP发送完成也不证明用户已保存文件。流式传输开始后撤权的中断边界与其他长请求一样明确，不声称已传出的字节可收回。候选已增加封闭的`iam.security-report.created`与`iam.security-report.download-started`租户事实，并由真实USER、原请求和精确Decision的延迟完整性约束绑定；本地独立Audit/进程回归已通过，固定源码的独立CI仍未完成，任何环境都不能借泛化SYSTEM或现有业务action替代。
+
+#### 权限来源和拒绝诊断
+
+当前权限来源复用直接附件、组成员/附件、角色、Boundary和SessionPolicy的真实修订及单一求值器；不维护第二套“有效权限列表”作为PDP。条件、动态资源和显式Deny存在时，展开动作名称不是最终Allow。已有ActionCapability仅为UI提示，诊断结果也不进入授权接口、承担角色或资源命令。
+
+历史拒绝以原decisionId/requestId及当时封存证据解释，不用今天的策略重新计算并覆盖旧理由。当前预检查另标“当前”，必须限定真实Action/资源和有权查看的账号范围，不伪造用户会话、可执行Decision或签名Key请求。详细理由需要区分显式Deny、缺Allow及上限不满足等实际求值分支；当前仅ALLOWED/DENIED不足，准确安全理由/证据投影在实施时冻结。不从错误信息泄露另一租户对象是否存在，不自动生成并附加“修复用全权限策略”。
+
+##### S4b执行片：当前访问诊断
+
+首片只诊断一个当前、准确的业务授权请求，不查询历史决定，也不模拟任意主体。入口为内部服务边界`POST /v1/authorize:diagnose`：认证方式与`/v1/authorize`相同，`Authorization`承载当前产品服务凭据，`Matrix-Subject-Credential`承载一个当前LOGIN_SESSION或ROLE_SESSION；请求体复用严格`AuthorizationRequest`。Account、安装、主体、调用服务和当前Profile均由凭据及受信注册取得，不能由body/header/query/cursor覆盖。AccessKey、SERVICE_ACCOUNT probe及匿名浏览器不进入首片；产品控制面可以代表当前真实请求调用，浏览器不得直接提交自称可信的网络、标签或资源归属。
+
+诊断在同一只读事务快照中验证当前Profile head、主体资格、策略附件、组关系、User/Role Boundary、SessionPolicy及调用服务，并调用唯一authority求值器。它返回独立`CurrentAccessDiagnosis`，不返回或持久化`AuthorizationDecision`、decisionId、permit、bearer、nonce、私有编译结果或Audit proof；重复请求只重新观察当前状态，不形成可重放完成。真正读写业务资源仍须重新调用原授权入口并由产品事务保存其准确决定，因此“诊断允许”不能被任何PEP、outbox或Audit producer接受为授权证据。
+
+响应固定包含当前scope（TENANT时`tenantId`、INSTALLATION时`installationId`二选一）、真实Subject、原Profile/action/resource/mode/usage、`evaluatedAt`、`outcome=ALLOWED|DENIED`、稳定排序的`reasons`、匹配来源及限制层。拒绝原因封闭为`EXPLICIT_DENY`、`NO_MATCHING_ALLOW`、`USER_PERMISSION_BOUNDARY`、`ROLE_PERMISSION_BOUNDARY`、`SESSION_POLICY`、`CREDENTIAL_RESTRICTED`、`SUBJECT_UNSUPPORTED`、`CALLING_SERVICE_UNSUPPORTED`和`RESOURCE_CONTEXT_UNSUPPORTED`；多个独立限制同时存在时全部返回，顺序不表达内部短路。权威状态损坏、证据不完整或数据库不确定返回503，不能伪装成普通Deny。
+
+匹配来源只投影`DIRECT|GROUP|ROLE|SERVICE_ROLE`、ALLOW/DENY、不可变PolicyVersion引用及必要的attachment/membership引用；限制层只投影`USER_BOUNDARY|ROLE_BOUNDARY|SESSION_POLICY`、`MATCHED|BLOCKED|NOT_APPLICABLE`及已有公开版本/digest引用。不返回Policy正文、条件实际值、编译结构、服务lookup digest、凭据代际或内部锁序。诊断只说明“给定受信上下文下当前PDP结果”，明确`resourceExistence=NOT_EVALUATED`、`businessOutcome=NOT_EVALUATED`；另一账号同名/同ID资源不能由响应推断存在。
+
+最低验收沿现有API、authority、HTTP、真实PostgreSQL和独立进程owner增量完成：USER直接/组来源的Allow与Deny、显式Deny优先、无Allow、User Boundary；USER来源ROLE的角色附件、Role Boundary和SessionPolicy交集；服务角色的模板/工作负载限制；错产品服务、错Profile、伪造网络/标签、停用/撤权/过期凭据及跨账号同ID攻击。每次诊断前后决定表、outbox和Audit事实数量必须不变；诊断后变更策略或撤权，真实业务授权必须按新状态重新判断，旧诊断不能被接受或重放。两个IAM副本对同一已提交快照给出相同语义，Profile推进、数据库失联和不完整证据失败关闭；不得为此增加缓存权威或第二套策略解释器。历史决定解释、管理员模拟其他主体和自动生成修复策略继续关闭，另行设计前不能借本入口实现。
+
+当前后端执行片已经落到同一授权拥有者：公开契约新增`CurrentAccessDiagnosis`及严格OpenAPI，HTTP入口继续使用服务凭据和主体Bearer；authority只在原`PolicyEvaluation`中保留匹配Allow/Deny版本及三类上限结果，再投影已验证attachment/membership/Role证据，没有解析第二遍Policy。用例事务只检查当前Profile并调用该求值器，不分配ID、不调用`RecordAuthorization`、不产生Audit outbox；本片没有SQL或schema变化。API、authority、usecase、HTTP、架构及全仓Go测试/race/vet已通过；独立PostgreSQL 18的实际IAM60 executable→IAM61迁移、双迁移、bootstrap/restart、冻结Profile推进门禁也已通过，并在真实进程中证明诊断前后`iam.authorization_decisions`和`iam.audit_outbox`计数不变。`TestIndependentIAMAuditAndPaaSProcesses`又在全新独立PostgreSQL 18上串行race-p2通过253.97秒：两个同时存活的IAM进程以同一服务凭据、Subject Session及已提交策略快照返回除各自事务`evaluatedAt`外完全相同的诊断语义，前后决定表和IAM outbox计数不变；原门禁仍完整覆盖双租户、MFA、恢复、重启、PaaS/Audit和历史重放。该次实跑还暴露进程门禁仍要求源码authority版本不得等于已发布IAM61/Audit31/PaaS3+r7的过期前置条件，现已替换为三个真实进程readiness必须精确匹配`CurrentDatabaseProfile`，没有放宽完整profile比较或安装准入。固定`14248c4f`的旧[Verification37073584728](https://github.com/xiak/matrix/actions/runs/37073584728)因此在`authority-runtime`失败，不能算成功；修复与本片的独立GitHub CI仍待固定提交后完成，不能用本地门禁替代。
+
+#### 闲置发现和处置
+
+##### S4c：账号级闲置访问分析器
+
+安全报告是一次不可变快照，访问分析器则是账号显式启用、持续重算并维护Finding生命周期的治理资源；二者不得共用ID、状态或把报告误作后台任务许可。首个分析器类型固定为`UNUSED_ACCESS`，一个Account至多一个当前实例，配置包含`unusedAccessAgeDays`（1–365，默认90）、状态、单调`resourceVersion`和实际观察范围。阈值是分析条件而不是内置Policy，后续可增加新的分析器类型或规则而不改授权求值器、Session或资源生命周期接口。
+
+按真实观察时长交付而不伪造时间：S4c-a先实现Analyzer创建/目录/详情/更新和Finding空目录，创建时开始记录各IAM来源的真实`observedFrom`；四项IAM来源在扫描器尚未接入时必须保持`INSUFFICIENT_COVERAGE/SOURCE_NOT_READY`，即使墙钟后来超过阈值也不能把空目录伪装成已完整分析；PaaS结果和外部联合身份保持`NOT_INCLUDED/SOURCE_NOT_IMPLEMENTED`。S4c-b在真实来源写入、扫描器、恢复epoch和Finding生命周期门禁完成后才把已接入来源转换为`OBSERVATION_WINDOW_INCOMPLETE`或`COMPLETE`并生成下述三类Finding。两片共享同一对象与API，不保留候选别名或第二套分析模型；测试可使用独立数据库的受控墙钟证明1/90/365日边界，但生产入口不接受时间selector。
+
+S4c-b的首个Finding纵向切片只生成`UNUSED_PASSWORD`、`UNUSED_ACCESS_KEY`和人工可承担Role的`UNUSED_ROLE`。密码活动只认成功发行的PASSWORD/PASSWORD_TOTP登录Session；AccessKey活动只认完成密钥认证后记录的Allow或Deny授权决定，坏MAC、重放或无法归属的请求不算使用；Role活动认成功发行的RoleSession或由该RoleSession产生的Allow/Deny决定。Deny可以证明凭据或Role被真实使用，但不能证明业务操作成功。服务相关角色、未实现的外部联合身份、动作级未使用权限和产品业务结果不在该片范围，必须明确显示`NOT_INCLUDED`，不能被折算为零次或安全结论。
+
+分析器只有在每一必需IAM来源覆盖完整阈值窗口时才可产生Finding。覆盖记录至少包含来源、`observedFrom`、`observedThrough`、状态及封闭缺口原因；对象在窗口内新建、旧决定缺少主体谱系、数据损坏、迁移后尚未积累完整窗口、恢复后存在观察缺口或数据库结果不确定时均为`INSUFFICIENT_COVERAGE`，不产生“闲置”Finding。受支持的备份恢复必须由安装owner在恢复完成后推进不可回退的恢复epoch，并使IAM重新开始观察窗口；在该衔接完成和实跑前，本片不得把数据库内可回滚时间戳声称为防回滚证据，也不得开放自动处置。
+
+Finding绑定Account、analyzer ID与revision、类型、目标kind/id/resourceVersion、完整窗口、活动revision和证据摘要；不包含秘密、原始请求、私有策略编译结果或可重用Decision。生命周期为`ACTIVE`、`ARCHIVED`和`RESOLVED`：人工归档只表示已评审，条件消失或目标版本变化后由后继扫描关闭为RESOLVED；旧条件再次成立产生新的condition generation，不能复活旧Finding。目录和详情只能由当前LOGIN_SESSION在当前Account权限下读取，opaque cursor绑定Account、分析器revision、过滤器和页预算；跨账号同ID、停用账号、撤权或过期会话必须失败关闭。
+
+S4c-a动作固定为`iam.access-analyzer.create/list/read/update`和`iam.access-finding.list`；资源kind为`ACCESS_ANALYZER`和`ACCESS_FINDING`。create/list作用于当前ACCOUNT实例，analyzer read/update及finding list作用于准确Analyzer实例；所有Action只接受LOGIN_SESSION。HTTP固定为`POST|GET /v1/account/access-analyzers`、`GET /v1/account/access-analyzers/{analyzerId}`、`POST /v1/account/access-analyzers/{analyzerId}:update`和`GET /v1/account/access-analyzers/{analyzerId}/findings`。update只能在`ACTIVE|DISABLED`间改变状态或修改阈值并提交expected resourceVersion；停用时冻结当前观察边界，重新启用从新epoch开始，均不伪造Finding或RESOLVED。
+
+S4c-b才增加`iam.access-finding.read/archive/unarchive`以及详情和末端`:archive|:unarchive`路由。它不增加“以Finding停用目标”的快捷授权；人工处置继续调用现有User、AccessKey或Role生命周期命令，重新验证当前操作者、目标resourceVersion和受保护身份约束。后继若支持“仅当仍闲置时停用”，必须把原Finding的窗口和活动revision作为并发前提，并在同一写事务内按现有锁序重检；Finding、报告、管理员确认或历史Allow都不是permit。
+
+后台扫描使用数据库租约与fence实现同一分析器单写，多副本可以并行处理不同Account但不能重复推进同一condition generation。扫描进程使用安装生成且只挂给该进程的专用数据库登录，只能调用封闭的readiness/claim/complete函数；它不是USER、服务账号、普通IAM worker或可调用北向API的凭据。Account中当前ACTIVE分析器是唯一租户同意，claim必须锁内重检该状态；扫描器不能读取秘密、保存创建者Session或调用User/Key/Role生命周期。扫描结果、Finding状态变化和outbox同事务；租约丢失、提交结果未知、重启或重复领取按准确完成关系恢复，不能重做成功事实。Redis或内存缓存只能承载可丢的调度加速，不能成为覆盖水位、Finding状态或授权权威。
+
+S4c-a不可变事实只有用户管理动作`iam.access-analyzer.created/updated`，均要求真实USER、当前精确Decision和目标Analyzer。S4c-b才增加用户动作`iam.access-finding.archived/unarchived`和扫描器事实`iam.access-finding.detected/resolved`：前者要求真实USER、当前精确Decision和目标Finding；后者仅允许IAM自身封闭扫描事务产生的`SYSTEM/iam.access-analyzer` actor，不接受HTTP、普通服务凭据、worker输入或伪造Decision，也不把该SYSTEM actor扩张到User/Key/Role生命周期。重复扫描且状态不变不补事实；历史事实投递仍使用原IAM outbox证明，不因Finding今天已归档、目标已停用或操作者会话失效而丢失。
+
+##### S4c-a当前实现与证据
+
+固定实现`bbb2f7ee48d61f4c7a16de6edd457ef5640a675a`使用IAM62/Audit32/PaaS3+r8，只提供上述Analyzer管理和Finding空目录，不包含扫描器、Finding详情/归档、自动处置或恢复epoch。六项来源逐项返回真实覆盖边界：四项IAM来源固定为`INSUFFICIENT_COVERAGE/SOURCE_NOT_READY`，PaaS结果和外部联合身份固定为`NOT_INCLUDED/SOURCE_NOT_IMPLEMENTED`；ACTIVE只推进时间观察上界，DISABLED冻结，重新启用重置观察起点。新增`000018_access_analyzers`保存Analyzer、逐来源覆盖及不可变完成关联，强制RLS；创建/更新与准确Decision、事实和outbox同事务。旧AccountAdministrator显式取得五项新Action，平台角色、PaaS角色及旧数据主体不会因迁移自动获得权限。
+
+本地证据（2026-10-03）：`TestIAMAccessAnalyzerPostgres`在独立PostgreSQL18.6中串行race通过14.368秒，覆盖默认90日、1–365边界、创建/准确重放/变体和重复冲突、CAS更新与陈旧版本409、启停覆盖语义、两Account的ID/cursor攻击、撤权及Account停复用即时生效、受限登录/RLS/不可变关联和等值schema重放。Audit存储与HTTP真实数据库门禁分别通过16.364秒和4.248秒。滚动固定前驱`ef4483e2`的实际IAM61 executable产生原Session和安全报告，当前IAM62迁移/程序保留原数据且不合成Analyzer；旧主体先被403拒绝，显式授予新Action后才能创建，双迁移与重启保持，整个门禁串行race通过147.817秒。两个IAM副本、Audit、PaaS及两个dispatcher的独立进程门禁通过257.626秒，覆盖同requestId跨副本重放、双Account隔离、更新、重启、两类Audit事实和链验证。固定源码的[Verification 37087693606](https://github.com/xiak/matrix/actions/runs/37087693606)已按精确SHA核实，`go`、`node-process`及十三项authority门禁全部completed/success。LIVE UI和发布组合仍未完成，不能由S4c-a后端证据替代。
+
+##### S4c-b当前实现与证据
+
+当前工作树将源码形状推进为IAM63/Audit33/PaaS3+r9。新增`000019_access_analysis`及独立`matrix-iam-access-analysis-worker`：专用最小数据库登录只能执行readiness、claim和complete；快照、结果、租约和fence均由数据库封闭校验，Go领域评估器不读取数据库、不解释Policy，也不能调用北向生命周期接口。四项IAM来源来自实际Session、AccessKey决定、RoleSession及Role决定谱系；PaaS结果和外部联合身份仍明确`NOT_INCLUDED`。扫描完成在同一事务写Finding、不可变SYSTEM事实和outbox；重复扫描无状态变化时不补事实。
+
+公开Finding入口现提供列表、详情、归档和取消归档，过滤器固定为`ALL|ACTIVE|ARCHIVED|RESOLVED`，缺省`ALL`；目录固定按Finding ID升序取最多101项并返回100项页面，不接受caller指定排序或pageSize。Opaque cursor绑定Account、Analyzer ID及resourceVersion、归一化过滤器、恢复epoch、当前USER/Session/凭据代际、安装和准确Action；跨过滤器、跨Analyzer、分析器更新、恢复epoch推进、换会话或换purpose均拒绝。归档/取消归档使用expected resourceVersion CAS、准确Decision和真实USER事实；同一Finding的并发写只有一个APPLIED，另一方冲突，不能把现状冒充原请求的成功。扫描器独占`RESOLVED`，没有人工resolve入口，也没有以Finding直接停用User/Key/Role的自动处置。
+
+恢复边界已经接入实际Authentication Recovery状态而不是测试时间戳：快照及Finding绑定单调recovery epoch和原恢复完成证据；恢复前历史Finding仍保存，但新epoch在四项来源重新覆盖完整阈值窗口前只返回`INSUFFICIENT_COVERAGE/RESTORE_GAP`，目录和详情不能把旧epoch Finding作为当前结论。覆盖不足时Go评估器和数据库期望结果都必须返回空detections和空resolutions，既不生成新Finding，也不把恢复前Finding误标为RESOLVED；重复恢复继续重新打开观察窗口。产品受支持恢复之外的整机root级回滚不在本片威胁模型内。
+
+固定候选`88eace16279f03885d6b06258993e5191c320cfe`的聚焦证据（2026-10-03）：API、authority、HTTP、identityaccess及accessanalysis包和生成稳定性通过；`TestIAMAccessAnalyzerPostgres`在全新PG18数据库通过18.396秒，覆盖生产扫描器生成101个真实Finding、100+1分页、状态过滤与跨过滤器cursor攻击、复合状态索引执行计划、双IAM authority并发CAS、跨Account同ID攻击、Finding事实/receipt唯一性及Analyzer更新使旧cursor失效。`TestIAMAuthenticationRecoveryPostgres`使用三个全新PG18数据库、实际`pg_dump/pg_restore`、关闭/重开和二次恢复通过163.141秒，证明epoch0历史Finding保留但不暴露为当前结论，epoch1/2覆盖不足时无Finding迁移。该恢复门禁先发现SQL仍试图解析旧Finding并正确失败，随后将SQL与领域评估器统一为覆盖不足时零迁移；覆盖契约还要求四个不同IAM来源全部出现，重复来源不能伪造完整覆盖，旧失败不回填。
+
+固定前驱门禁已前移到`bbb2f7ee48d61f4c7a16de6edd457ef5640a675a`的实际IAM62 migrator/runtime，在本任务全新PG18数据库通过141.424秒：旧程序创建真实Analyzer，当前IAM63迁移保留唯一实例且不合成Finding或attempt，双次迁移、等值bootstrap及当前程序重启保持。独立`TestIndependentIAMAuditAndPaaSProcesses`在另一全新PG18数据库启动受限IAM/Audit/PaaS、双dispatcher及两份真实`matrix-iam-access-analysis-worker`；第一次运行真实暴露complete与另一扫描事务之间的PostgreSQL `40001`，失败事务未产生部分结果但原租约会等待到期，不能靠延长门禁掩盖。最终实现沿IAM现有用例事务边界，对序列化冲突或死锁最多三次开启全新事务，保留同一attempt/completion且尊重取消；不重试陈旧租约、校验失败或未知错误。对应单元门禁证明claim及complete分别重试、意图不变、耗尽和取消失败关闭；修复后的实际多进程门禁在原8分钟上限内通过253.946秒，两份扫描器各完成一次周期、无重复结果或遗留租约，四项IAM来源推进为真实`OBSERVATION_WINDOW_INCOMPLETE`，未接入来源仍为`NOT_INCLUDED`。候选提交前工作树通过全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块校验、Linux amd64构建、生成稳定性、差异及架构检查。
+
+候选提交的独立[Verification 37099747513](https://github.com/xiak/matrix/actions/runs/37099747513)未通过，不能作为验收证据：`authority-storage`在PostgreSQL authority门禁失败，`go`在全仓race步骤失败。固定源码在本任务环境复现后先发现测试fixture把tenant-scoped SYSTEM事实误造为USER actor；修正fixture又暴露生产Audit SQL的封闭目录、SYSTEM actor约束和查询白名单遗漏四个access-finding动作。修复工作树将实际组合更正为IAM63/Audit33/PaaS3+r9，并为错误SYSTEM actor增加负向门禁；全新PG18上的Audit catalog与保留数据升级通过16.140秒、Audit HTTP通过4.308秒，PaaS存储通过5.540秒，IAM受影响integration package串行race通过768.375秒；全仓race、vet、模块校验、Linux amd64构建和生成稳定性再次通过。新固定提交及其独立CI仍待完成，LIVE UI也未验收，故S4c-b继续保持未验收。
+
+生产Audit修复提交`5fd6f047037ad9806993aeb03fc82078046327fe`的[Verification 37101686980](https://github.com/xiak/matrix/actions/runs/37101686980)中，`authority-storage`和`node-process`已成功，但`go`在全仓race步骤失败，故仍不能验收。Linux离线复现定位到新增worker测试错误地以`os.WriteFile`的创建权限参数尝试修改现有0600文件；POSIX不会据此改变既有mode，测试实际仍把0600作为负例并误报。测试已改为显式`chmod 0644`，固定Go1.26.8 Linux镜像、只读源码和依赖缓存、关闭网络的聚焦race门禁通过；该更改不放宽生产`ReadText(..., private=true)`。最终修复提交及其完整独立CI仍待完成。
+
+Linux权限测试修复提交`4f53122b44be26036ef27b5ec56c245d799a159e`的[Verification 37102922494](https://github.com/xiak/matrix/actions/runs/37102922494)中，`go`、`node-process`、`authority-storage`、恢复存储和Role/STS分片均成功；`authority-runtime`的实际会话/TOTP步骤成功后，`TestIAMTOTPBackupProcesses`因沿用旧迁移文件清单、未提供新增scanner专用DSN而失败。完整CI日志确认唯一失败为一次性备份fixture的`actual backup-capability migration failed`；同一固定源码的独立IAM/Audit/PaaS多进程门禁在本任务PG18通过315.66秒。现有备份测试owner已补入`MATRIX_MIGRATION_IAM_ACCESS_ANALYSIS_DSN_FILE`，不改变备份、迁移或scanner生产权限；修复后的聚焦门禁和新独立CI仍待完成。
+
+最终修复提交`91649497a0c53be1174d8835326a2df51fe74a55`只为上述既有备份迁移fixture提供实际`matrix_iam_access_analysis_worker_login`专用DSN，不改变公开API、OpenAPI、生产SQL或worker权限。其[Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260)已由GitHub API按精确SHA核实：`go`、`node-process`、`authority-process`汇总及十二项拆分authority门禁共十五个job全部`completed/success`，无失败、取消、超时或跳过。S4c-b后端据此接受；UX/UI的LIVE组合、自动处置和完整009发布仍分别验收，不能继承本结论。
+
+第一片最低真门禁覆盖两个Account相同对象ID、1/90/365日边界、对象年龄不足、旧谱系与恢复缺口；成功/失败密码登录、有效/坏签名/重放Key、RoleSession发行及Allow/Deny使用；归档、取消归档、活动后自动RESOLVED和后继再次闲置的新generation；策略/目标版本变更、账号或操作者停用、两个扫描副本的租约/fence及未知提交；Finding前后原User/Key/Role、Session、权限和业务资源不变。容量门禁必须证明有界分页和索引计划，不在每次请求扫描全部不可变决定；完整发布还须实跑安装恢复epoch衔接，否则只能交付观察与Finding后端候选，不能启用自动治理。
+
+闲置资格必须绑定规则修订、对象resourceVersion、真实活动修订和完整观察窗口。采集缺口、审计积压/死信、对象新建后不足阈值或仅没有浏览器登录时都不能断言User/Key闲置；程序Key和Role的真实活动必须按准确主体归因，不能忽略非浏览器使用。阈值以数据库时间和已冻结产品范围计算，不借外部地域/风险来源造结论。
+
+首片人工确认后仍调用现有User/Key生命周期命令，以当下真实权限和目标版本为准，报告建议不能代替它们。若动作明确声明“仅当仍闲置时停用”，写事务必须按Account→稳定principal→credential/key锁序重新核对活动修订和范围水位，与真实认证/使用写入串行化；看过旧报告不算这一证明。新活动先提交则旧建议冲突，停用先提交则下一请求关闭；两个后台执行者不能因同一发现产生重复成功事实。未知完成按原准确意图核对，不生成新意图重做。
+
+停用Key只关闭该程序凭据的新请求，不删除User或业务资源；停用User影响其各认证载体，但不停止已接受工作负载或销毁Operation/outbox。启用是新的显式当前管理操作，不复活原登录/Role会话，不撤销删除终态；人工决定长期Key重新启用不等于自动恢复旧签名报文。RootIdentity及有未撤销平台附件的USER不由普通闲置任务接管，受保护身份不能通过先停用再恢复绕过。
+
+自动执行需要账号显式启用的闭合规则、执行目的/目标范围、当前有效执行身份与撤销边界，不能把创建规则者的过期Session存入worker、伪造USER决定或复用verifier权限。执行者、账号同意和服务受托仍服从008的边界；没有对应当前权限证明时只报告、不变更。不先添加一个拥有所有租户写权的通用治理服务主体；安装purpose本身不授予目标tenant权限。
+
+##### S4c-c：显式自动处置
+
+自动处置默认关闭；创建分析器只能得到`REVIEW_ONLY`，不能在创建请求中顺带开启写效果。账号管理员必须通过独立动作`iam.access-analyzer.set-disposition`和`POST /v1/account/access-analyzers/{analyzerId}:set-disposition`显式设置闭合规则，不能沿用普通`iam.access-analyzer.update`权限。请求只包含期望Analyzer版本、`requestId`及固定规则；首次规则只有`REVIEW_ONLY`或`DISABLE_UNUSED_ACCESS_KEYS`，后者要求1–30日的Finding观察宽限期，默认7日。规则是Account拥有的治理配置，不是Policy、Decision、Finding permit或创建者Session的延长授权；设置产生真实USER+当前精确Decision的`iam.access-analyzer.disposition-updated`事实，并推进Analyzer版本，使旧Finding不能直接取得新写资格。
+
+首片只允许自动停用`UNUSED_ACCESS_KEY`。`UNUSED_PASSWORD`和`UNUSED_ROLE`继续报告并由当前管理员调用原User/Role生命周期入口：自动停用User会同时影响密码、Key、Session及最后管理员/平台受保护身份，自动停用Role会影响未知工作负载，二者不能共用一个“闲置”开关隐式启用。服务相关Role仍不进入Finding。后续扩展必须新增明确目标范围和验收，不能把现有`DISABLE_UNUSED_ACCESS_KEYS`解释为任意资源处置。
+
+扫描进程继续使用专用`matrix_iam_access_analysis_worker_login`，但只能新增调用封闭的自动处置claim/complete函数；不给它User、AccessKey或Role北向API、表写权限、通用Policy Decision或跨租户selector。claim只选择当前ACTIVE Analyzer、当前`DISABLE_UNUSED_ACCESS_KEYS`规则、ACTIVE Finding和已过宽限期的ENABLED AccessKey，并保存不可变attempt、租约及fence。complete在同一事务重新锁定Account、Analyzer/规则、Finding、目标USER/Key和活动水位，核对当前恢复epoch、完整覆盖窗口、Analyzer/目标版本、condition generation、activity revision、宽限期、账号及执行登录仍有效；规则停用、Analyzer变化、新活动、Key先被修改、owner是RootIdentity或仍有未撤销平台附件、租约丢失及不确定数据均失败关闭。Finding和历史报告均不是permit。
+
+成功处置只将准确AccessKey从ENABLED改为DISABLED并推进其版本；不删除Key/User、撤销Policy、停止工作负载、销毁Operation/outbox或自动恢复其他资源。它在同一事务把原Finding标为`RESOLVED/AUTOMATIC_DISPOSITION`，写`iam.access-key.automatically-disabled`和原`iam.access-finding.resolved`两个封闭SYSTEM事实及outbox，并保存准确完成结果。系统actor仍固定为`SYSTEM/iam.access-analyzer`，不伪造USER Decision；Audit必须分别约束AccessKey和Finding target。人工重新启用Key是新的当前授权操作，不撤销历史事实、不恢复旧Session或签名请求；若后续再次满足条件，只能生成新的condition generation。
+
+普通扫描关闭Finding时使用`RESOLVED/CONDITION_CLEARED`；迁移只把真实前驱中已RESOLVED的旧记录解释为该原因，不为ACTIVE/ARCHIVED记录补造结果。未知提交按原attempt查询准确完成；两个执行副本、人工停用/启用、Key认证决定、规则更新/关闭、Analyzer停复用、账号/USER停复用、恢复epoch推进和平台附件授予分别按既有稳定锁序验证双向次序，不能靠SERIALIZABLE重试掩盖死锁或把失败重做成新意图。受支持备份恢复后，在新epoch重新取得完整窗口前不得claim；旧库回滚不能复活已完成attempt或已停用Key，仍依赖009既有安装侧不可回退恢复边界，数据库内记录不冒充整机防回滚。
+
+本片当前源码形状为IAM64/Audit34/PaaS3+r10。`TestIAMAccessAnalyzerPostgres`在本任务独立PG18、真实受限分析进程和race-p1下以当前精确源码通过33.852秒：默认`REVIEW_ONLY`面对已过期Finding持续无claim/无Key变化；显式启用后必须由新Analyzer修订重新观察条件，旧Finding先以`CONDITION_CLEARED`关闭，新代际才可自动停用Key。两个数据库worker并发领取允许一方先遇到SERIALIZABLE冲突并按生产循环重试，最终恰一持有单调fence；领取后管理员先改Key时完成失败关闭，Key/Finding/attempt/事实均无部分自动结果。普通USER Key唯一产生一次SYSTEM停用和一次Finding关闭；原主账号的Key入口本身拒绝，普通USER在Key创建后取得未撤销`PLATFORM_OPERATOR`附件时仍保持ENABLED、无attempt和自动事实。真库运行发现并修正四项生产缺口：受限worker未绑定目标tenant时被RLS隐藏、完成事实时间不是严格UTC canonical、规则修订同一轮先插新Finding再关旧Finding会撞唯一未解决条件、处置先锁User/Key再等待认证恢复全局屏障会与恢复事务形成反向锁序；修正后的完成路径先取得恢复屏障再按Account、USER、Policy、Key次序锁定并显式拒绝缺失权威行，未放宽RLS、目标唯一性或actor边界。
+
+同一候选在独立库完成Audit HTTP不可变链4.052秒、双authority/RLS 9.06秒及固定旧tenant链保留升级0.32秒。滚动前驱已替换为已验收IAM63固定`91649497a0c53be1174d8835326a2df51fe74a55`，实际旧migrator/程序创建并更新Analyzer、写入两类不可变receipt及其余保留数据后，IAM64双迁移、运行、恢复历史、重启和等值重放门禁以当前精确源码120.885秒通过；旧Analyzer仅取得确定的`REVIEW_ONLY`默认，原create/update完成在不改写历史receipt的前提下投影成当前安全响应并精确重放，不迁移即扩权，也不继续累积更早未发布schema矩阵。独立多进程门禁在另一空白PG18集群以当前精确源码通过226.568秒：两个IAM副本、两个分析worker、IAM dispatcher、Audit及PaaS保留原双租户/签名攻击/断链/重启矩阵，并实跑默认无效果、显式启用、竞争处置、唯一SYSTEM事实投递和完整tenant Audit链。全仓默认race（含architecture）、全仓vet、IAM/Audit OpenAPI重新生成及生成器稳定检查、Linux amd64全仓构建均通过。
+
+后继认证恢复切片以固定产品源码`ddac6992c60ea267e8b2992b05de4487c14314f5`组成`IAM64/Audit34/PaaS3+r11`的签名A/B，并在本任务独立、network-none、2CPU/4GiB/PIDs768的Linux Docker 27.5.1引擎完成553.71秒的安装、升级、回滚、受保护备份及选定备份恢复。恢复事务推进所有密码、TOTP、恢复材料和AccessKey的credential generation，撤销恢复前全部USER/Role Session，并封锁备份内最后消费及恢复时当前TOTP step；门禁实际证明旧平台bearer、旧普通primary bearer和旧MFA bearer在下一请求均为401。原有效密码、Account/Root归属、TOTP因子、已验证通知地址、策略和受保护平台关系保持，但必须重新登录；MFA登录只接受严格晚于恢复fence的新step。普通同profile升级与保数据回滚则继续保留未撤销的有效Session，不能把两种生命周期语义混用。
+
+仅停止并启动该任务自有嵌套引擎后，持久卷上的新鲜MFA登录、tenant primary恢复/撤权、status/verify/support和完整生命周期在68.84秒通过；没有重启共享Docker、远端机器或其他Phase资源。以上关闭了签名安装A/B和备份恢复会话重发门禁；记录最终断言的后继`ed2835db`也已通过下述独立CI，因此S4c-c后端按本节精确边界验收。UX/UI LIVE组合和完整009发布仍未完成，不能由后端切片替代。
+
+后继断言提交`08600d4faecf4244c3c6fcfe183e32dc3eca4fad`的[Verification 37139124479](https://github.com/xiak/matrix/actions/runs/37139124479)未通过，不能作为发布证据：`go`命中上述过期Linux安装fixture，`authority-runtime`则在本人会话累计门禁末段耗尽共享120秒fixture期限。对失败数据库的重现表明，批量撤销与27项writer竞争的前23项均已正常完成，随后登录场景因父context到期返回503；另一本人会话门禁同样在分页、writer、恢复及schema重放共用一个期限后，于末段平台恢复超时。最终修正不删除场景、不降低Argon2/MFA成本或并发强度，只把两个完整矩阵的fixture硬上限改为4分钟。新的独立磁盘PG18、1CPU/768MiB/PIDs192及Go1.26.5 race-p1环境中，批量27项以145.52秒全部通过，完整本人会话门禁以113.90秒通过；同一`authority-runtime`后半的联系人、TOTP、托管与备份快照四项以267.80秒通过。全仓`go vet -p 2 ./...`与`go test -race -count=1 -p 2 ./...`也通过。该修正固定于`ed2835db362de0a4a1ef3ca9145ee56801ae2436`；其[Verification 37144670484](https://github.com/xiak/matrix/actions/runs/37144670484)已核实精确SHA，`go`、`node-process`、十二条authority分片及最终`authority-process`共15项全部completed/success。`authority-runtime`实际完成本人会话、保留数据和真实进程路径，`authority-recovery-window`完成保存码跨真实认证窗口耗尽门禁。旧失败不回填，本次成功也不替代尚未完成的LIVE UI与009最终发布组合。
+
+#### S4验收与衔接
+
+- 真实两账号、同名/同ID资源、当前与过期权限，报告生成/目录/cursor/ID/下载逐项隔离；生成后撤权或账号暂停，新下载拒绝，不能用缓存文件绕过。查询/容量超限和传输失败没有假完整结果。
+- 登录、Role承担、Key正确签名Allow/Deny、坏MAC/重放及真实产品成功/失败分别产生准确指标；字段修改不算使用。人为延迟本任务outbox、乱序重放和缺谱系旧事实显示真实水位/未知，不能得出“从未使用”。
+- 直接/组/角色/Boundary/SessionPolicy组合的当前来源和原决定解释，变更策略后不篡改历史；诊断无授权效果、无新会话、无跨账号存在性泄露。
+- CSV恶意显示名、分隔符/双引号/换行/全角公式字符、受支持程序打开/再次保存打开、秘密扫描及下载审计；无外部分享或免鉴权静态文件旁路。UI和实际电子表格验收交所属owner，不以纯文本快照代替。
+- 新活动与停用、修改规则、停用执行者/账号及两个执行副本的双向竞争；旧发现不能覆盖新状态，未知回包/重启/恢复不重做已完成意图。所有资源、既有任务和历史Audit归属保持。
+
+S4a候选已冻结上述字段、三项Action、两项Audit事实、7天/20份及1000 USER/2000 Key/3001行/4MiB预算，源码形状为IAM61/Audit31；公开OpenAPI与运行校验使用同一类型。安装候选明确使用IAM61/Audit31/PaaS3+r6，且只允许相同完整profile的A/B生命周期；源码数字或IAM60→61真库迁移都不授予旧签名profile升级许可。新增`000017_security_reports`只保存不可变请求回执、可到期删除的正文投影和不可变下载事实，强制RLS且普通API/worker/恢复角色无表权限；生成、精确重放、读取和下载均从当前LOGIN_SESSION推导Account并重新作出准确授权决定。
+
+本地候选证据（2026-10-02）：`TestIAMSecurityReportPostgres`在独立PostgreSQL 18.4数据库通过10.221秒，覆盖显式普通USER授权、真实AccessKey与秘密扫描、创建/读取/CSV下载、精确重放、20份上限及第21份409、双Account reportId攻击、Account/User停复用不复活旧会话、撤权即时拒绝、原制品保留、事实唯一性、受限登录直读拒绝和owner更新/删除/截断拒绝；同一真库门禁还证明先生成的报告在User改名、AccessKey停用及新密码Session签发后保持原值，后生成的报告只反映已提交新值。真库运行先发现并修复两个PL/pgSQL歧义引用，旧失败不回填。用例门禁通过精确到期点前30分钟真实登录取得仍有效Session，证明到期点读取和下载均失败关闭。新增内置Action后的`TestIAMPolicyAuthorityStoragePostgres`在另一独立数据库通过165.347秒；API/Audit/authority/HTTP/identityaccess聚焦包和`test/architecture`通过。唯一滚动前驱已替换为固定`4e79ef783410bbb596232763a9be80412b5e0846`的实际IAM60程序；最终`TestIAMRetainedPredecessorProcessUpgrade`以当前IAM61迁移/程序在第三个独立PG18数据库通过84.735秒，保留真实Session/MFA/邮件/恢复/设置/策略/决定/事实并完成双迁移和重启，删除原IAM59→60缺字段兼容断言，不扩增历史矩阵；旧root不会因迁移自动取得新增Action，显式策略授权后，最新NULL凭据谱系报告为`UNKNOWN`，后继真实密码Session只使新报告成为`OBSERVED`，原报告保持不变。`TestIndependentIAMAuditAndPaaSProcesses`最终在另一独立PG18数据库通过200.224秒：两个Account以相同requestId跨IAM副本生成/等值重放/读取，跨Account reportId拒绝，CSV下载、Audit入链及IAM重启保留均成立。原`TestIAMSecuritySettingsRacesPostgres`在新的独立PG18.4数据库串行race-p1通过112.734秒；新增两个Account都经真实首次改密、联系人确认、TOTP绑定、MFA登录和设置Step-up，在原成功outbox屏障暂停已持有Account锁的事务，并用数据库阻塞关系证明另一IAM副本确实等待。报告先提交时保存完整旧设置版本快照，随后设置更新成功且旧Session失效；设置先提交时旧Session生成报告被拒绝，没有报告、正文或成功事实。等值迁移和新Authority不能重放败方或混合两个版本。第一次运行因沿用普通命令的200断言而把正确的201 Created判成失败，修正专属HTTP断言后才取得上述通过，生产状态未因此改变。真实门禁生成的913字节CSV随后由本机Microsoft Excel 16.0打开为5行×18列且0个公式，另存为XLSX、关闭并重新打开后行列、账号、AccessKey CIDR及0公式状态保持，不用解析器冒充电子表格应用。后继同一测试在本任务独立PostgreSQL 18.6进程加载外部可控墙钟、Matrix生产代码仍只读数据库`clock_timestamp()`的条件下串行race-p1通过27.678秒：数据库从2026-10-01前进至2026-10-08后重新登录并生成报告，原Account的20份已到期正文物理清理为1份新正文，21份创建回执/事实及原下载事实保持；另一个Account的1份回执和正文均未被跨账号清理。该门禁不向生产入口增加时间selector，也不拿直接改表制造过期状态。
+
+签名运行证据（2026-10-02）：固定源码`67a2a19cf42f76cff7c24abddc830dd7bc093039`构建同一`61/31/3+r6`的A=`matrix-v0.1.0-iam-report.5-67a2a19cf42f`与直接后继B=`matrix-v0.1.0-iam-report.6-67a2a19cf42f`。本任务独立、network-none、2CPU/4GiB/PIDs768的Linux Docker 27.5.1引擎完整通过A安装、readiness/profile、IAM用户/主账号与成员撤权、两代应用、Audit链、受保护备份、失败候选自动回滚、B升级、显式平台回滚和选定备份恢复；报告的精确receipt、JSON、CSV与两类Audit事实跨升级和保数据回滚保持，选定备份恢复保留备份前报告并移除备份后报告。只重启该任务自有嵌套引擎后，status/verify/support及完整生命周期在89.43秒通过，没有重启共享或远端服务。该签名运行已经完成，精确源码独立Verification仍在队列中，LIVE UI也未完成；两者通过前S4a不标记最终验收。S4后继的详细拒绝诊断和自动闲置处置仍只有设计，继续使用原IAM/Audit与authorityprocess门禁；报告只是可重建投影，不能成为平行权限权威或第二套审计链。
+
+## 验收
+
+真实浏览器双 session 改密选项、forced-change、登出/重置/recover 竞争，TOTP 时钟边界、重放和错主体挑战，安全设置旧行升级失败关闭；报告 Account 隔离与秘密扫描；用户/Key 停用即时有效且资源不被删除。Passkey 生产可信 origin 与硬件设备门禁条件见 012。

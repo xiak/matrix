@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/api/internal/openapi31"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 )
@@ -50,6 +51,7 @@ func buildDocument() object {
 				"name": "installationId", "in": "path", "required": true,
 				"schema": openapi31.Ref("Name"),
 			},
+			"BindingID": openapi31.PathIDParameter("bindingId"),
 		},
 		Responses: object{
 			"ProblemResponse": object{
@@ -70,19 +72,25 @@ func buildDocument() object {
 				"type": "string", "format": "date-time",
 				"pattern": `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z$`,
 			},
+			"Digest": object{
+				"type": "string", "minLength": 71, "maxLength": 71,
+				"pattern": `^sha256:[0-9a-f]{64}$`,
+			},
 		},
 		Enums: map[string][]string{
-			"OfferingKind":      {string(managedservicev1.OfferingPostgreSQL)},
-			"OfferingState":     {string(managedservicev1.OfferingAvailable), string(managedservicev1.OfferingUnavailable)},
-			"RegionProfile":     {string(managedservicev1.RegionLocalMachine)},
-			"RegionState":       {string(managedservicev1.RegionReady), string(managedservicev1.RegionStale), string(managedservicev1.RegionUnavailable)},
-			"InstallationPhase": {string(managedservicev1.InstallationPending), string(managedservicev1.InstallationProvisioning), string(managedservicev1.InstallationReady), string(managedservicev1.InstallationFailed)},
+			"OfferingKind":              {string(managedservicev1.OfferingPostgreSQL)},
+			"OfferingState":             {string(managedservicev1.OfferingAvailable), string(managedservicev1.OfferingUnavailable)},
+			"RegionProfile":             {string(managedservicev1.RegionLocalMachine)},
+			"RegionState":               {string(managedservicev1.RegionReady), string(managedservicev1.RegionStale), string(managedservicev1.RegionUnavailable)},
+			"InstallationPhase":         {string(managedservicev1.InstallationPending), string(managedservicev1.InstallationProvisioning), string(managedservicev1.InstallationReady), string(managedservicev1.InstallationFailed)},
+			"WorkloadRoleBindingStatus": {string(iamv1.WorkloadRoleBindingActive), string(iamv1.WorkloadRoleBindingRevoked)},
 			"ErrorCode": {
 				string(managedservicev1.ErrorInvalidArgument), string(managedservicev1.ErrorUnauthenticated),
 				string(managedservicev1.ErrorPermissionDenied), string(managedservicev1.ErrorIdentityUnavailable),
 				string(managedservicev1.ErrorNotFound), string(managedservicev1.ErrorAlreadyExists),
 				string(managedservicev1.ErrorIdempotencyConflict), string(managedservicev1.ErrorQuotaExhausted),
 				string(managedservicev1.ErrorRegionUnavailable), string(managedservicev1.ErrorInternal),
+				string(managedservicev1.ErrorServiceRoleConflict),
 			},
 		},
 		Structs: structs(), FieldOverlay: fieldOverlay, SchemaOverlay: schemaOverlay,
@@ -122,6 +130,18 @@ func paths() object {
 		"/v1/service-installations/{installationId}/operation": object{
 			"get": readResourceOperation("getInstallationOperation", "Read the current installation Operation.", "InstallationID", "InstallationOperation"),
 		},
+		"/v1/service-installations/{installationId}/service-role-bindings": object{
+			"post": resourceMutationOperation(
+				"bindServiceRole", "Bind an exact release-owned service Role template to this installation.",
+				"InstallationID", "BindServiceRoleRequest", "ServiceRoleBindingReceipt",
+			),
+		},
+		"/v1/service-installations/{installationId}/service-role-bindings/{bindingId}": object{
+			"delete": resourceMutationOperationWithParameters(
+				"unbindServiceRole", "Revoke one exact service Role binding from this installation.",
+				[]string{"InstallationID", "BindingID"}, "UnbindServiceRoleRequest", "ServiceRoleUnbindingReceipt",
+			),
+		},
 	}
 }
 
@@ -152,23 +172,47 @@ func mutationOperation(operationID, summary, requestSchema, responseSchema, crea
 	}
 }
 
+func resourceMutationOperation(operationID, summary, parameter, requestSchema, responseSchema string) object {
+	return resourceMutationOperationWithParameters(operationID, summary, []string{parameter}, requestSchema, responseSchema)
+}
+
+func resourceMutationOperationWithParameters(operationID, summary string, parameters []string, requestSchema, responseSchema string) object {
+	responses := openapi31.ProblemResponses("400", "401", "403", "404", "409", "415", "500", "503", "504")
+	responses["200"] = openapi31.JSONResponse("Durable service Role binding or equal idempotent replay.", responseSchema)
+	operationParameters := make([]any, 0, len(parameters)+1)
+	for _, parameter := range parameters {
+		operationParameters = append(operationParameters, openapi31.ComponentRef("#/components/parameters/"+parameter))
+	}
+	operationParameters = append(operationParameters, openapi31.ComponentRef("#/components/parameters/IdempotencyKey"))
+	return object{
+		"operationId": operationID, "summary": summary,
+		"parameters":  operationParameters,
+		"requestBody": openapi31.JSONRequestBody(requestSchema), "responses": responses,
+	}
+}
+
 func structs() map[string]reflect.Type {
 	return map[string]reflect.Type{
-		"QuotaShape":                openapi31.StructType[managedservicev1.QuotaShape](),
-		"ServiceOffering":           openapi31.StructType[managedservicev1.ServiceOffering](),
-		"ServiceOfferingList":       openapi31.StructType[managedservicev1.ServiceOfferingList](),
-		"RegionCapacity":            openapi31.StructType[managedservicev1.RegionCapacity](),
-		"Region":                    openapi31.StructType[managedservicev1.Region](),
-		"RegionList":                openapi31.StructType[managedservicev1.RegionList](),
-		"QuotaEntitlement":          openapi31.StructType[managedservicev1.QuotaEntitlement](),
-		"QuotaEntitlementList":      openapi31.StructType[managedservicev1.QuotaEntitlementList](),
-		"InstallationOperation":     openapi31.StructType[managedservicev1.InstallationOperation](),
-		"ServiceInstallation":       openapi31.StructType[managedservicev1.ServiceInstallation](),
-		"ServiceInstallationList":   openapi31.StructType[managedservicev1.ServiceInstallationList](),
-		"ActivateQuotaRequest":      openapi31.StructType[managedservicev1.ActivateQuotaRequest](),
-		"CreateInstallationRequest": openapi31.StructType[managedservicev1.CreateInstallationRequest](),
-		"FieldViolation":            openapi31.StructType[managedservicev1.FieldViolation](),
-		"Problem":                   openapi31.StructType[managedservicev1.Problem](),
+		"QuotaShape":                   openapi31.StructType[managedservicev1.QuotaShape](),
+		"ServiceOffering":              openapi31.StructType[managedservicev1.ServiceOffering](),
+		"ServiceOfferingList":          openapi31.StructType[managedservicev1.ServiceOfferingList](),
+		"RegionCapacity":               openapi31.StructType[managedservicev1.RegionCapacity](),
+		"Region":                       openapi31.StructType[managedservicev1.Region](),
+		"RegionList":                   openapi31.StructType[managedservicev1.RegionList](),
+		"QuotaEntitlement":             openapi31.StructType[managedservicev1.QuotaEntitlement](),
+		"QuotaEntitlementList":         openapi31.StructType[managedservicev1.QuotaEntitlementList](),
+		"InstallationOperation":        openapi31.StructType[managedservicev1.InstallationOperation](),
+		"ServiceInstallation":          openapi31.StructType[managedservicev1.ServiceInstallation](),
+		"ServiceInstallationList":      openapi31.StructType[managedservicev1.ServiceInstallationList](),
+		"ActivateQuotaRequest":         openapi31.StructType[managedservicev1.ActivateQuotaRequest](),
+		"CreateInstallationRequest":    openapi31.StructType[managedservicev1.CreateInstallationRequest](),
+		"ServiceRoleTemplateReference": openapi31.StructType[iamv1.ServiceRoleTemplateReference](),
+		"BindServiceRoleRequest":       openapi31.StructType[managedservicev1.BindServiceRoleRequest](),
+		"ServiceRoleBindingReceipt":    openapi31.StructType[managedservicev1.ServiceRoleBindingReceipt](),
+		"UnbindServiceRoleRequest":     openapi31.StructType[managedservicev1.UnbindServiceRoleRequest](),
+		"ServiceRoleUnbindingReceipt":  openapi31.StructType[managedservicev1.ServiceRoleUnbindingReceipt](),
+		"FieldViolation":               openapi31.StructType[managedservicev1.FieldViolation](),
+		"Problem":                      openapi31.StructType[managedservicev1.Problem](),
 	}
 }
 
@@ -181,6 +225,12 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	}
 	if field.Name == "ResourceVersion" {
 		base["minimum"] = 1
+	}
+	if owner == "ServiceRoleTemplateReference" && field.Name == "Version" {
+		base["minimum"] = 1
+	}
+	if owner == "ServiceRoleTemplateReference" && field.Name == "ContentDigest" {
+		return openapi31.Ref("Digest")
 	}
 	if strings.HasSuffix(field.Name, "Count") {
 		base["maximum"] = 100
@@ -206,6 +256,15 @@ func schemaOverlay(schemas object) {
 	properties := schemas["ServiceOffering"].(object)["properties"].(object)
 	properties["quotaShapes"].(object)["minItems"] = 1
 	properties["quotaShapes"].(object)["maxItems"] = 16
+	receipt := schemas["ServiceRoleBindingReceipt"].(object)["properties"].(object)
+	receipt["kind"] = object{"const": "ServiceRoleBindingReceipt"}
+	receipt["resourceVersion"] = object{"const": 1}
+	receipt["status"] = object{"const": string(iamv1.WorkloadRoleBindingActive)}
+	schemas["UnbindServiceRoleRequest"].(object)["properties"].(object)["resourceVersion"] = object{"const": 1}
+	unbinding := schemas["ServiceRoleUnbindingReceipt"].(object)["properties"].(object)
+	unbinding["kind"] = object{"const": "ServiceRoleUnbindingReceipt"}
+	unbinding["resourceVersion"] = object{"const": 2}
+	unbinding["status"] = object{"const": string(iamv1.WorkloadRoleBindingRevoked)}
 }
 
 func fatalf(format string, arguments ...any) {

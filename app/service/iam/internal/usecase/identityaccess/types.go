@@ -16,13 +16,19 @@ var (
 	ErrForbidden            = errors.New("IAM authorization denied")
 	ErrConflict             = errors.New("IAM state conflicts with the request")
 	ErrUnavailable          = errors.New("IAM authority is unavailable")
+	ErrOverloaded           = errors.New("IAM authentication work is at capacity")
+	ErrVerificationRejected = errors.New("IAM address verification was rejected")
 	ErrRetryableTransaction = errors.New("IAM transaction is retryable")
 )
 
 type Config struct {
-	SessionLifetime        time.Duration
-	MaxTransactionAttempts int
-	NewID                  func(prefix string) (string, error)
+	SessionLifetime          time.Duration
+	MaxTransactionAttempts   int
+	NewID                    func(prefix string) (string, error)
+	CursorKey                []byte
+	AccessKeyWrapping        *iamv1.AccessKeyWrappingKeyring
+	TOTPKeyring              *iamv1.TOTPKeyring
+	EmailVerificationKeyring *iamv1.EmailVerificationKeyring
 }
 
 type Repository interface {
@@ -30,56 +36,618 @@ type Repository interface {
 		context.Context,
 		func(context.Context, Transaction) error,
 	) error
+	WithinLocalCredentialRecoveryTransaction(
+		context.Context,
+		func(context.Context, Transaction) error,
+	) error
 }
 
 type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
+	CheckCurrentAuthorizationProfiles(context.Context) error
+	ReadAccessKeyCustody(context.Context) (AccessKeyCustody, error)
+	RegisterTOTPKeyset(context.Context, TOTPKeysetRegistration) error
+	ReadTOTPCustody(context.Context) (TOTPCustody, error)
+	RegisterEmailVerificationKeyset(context.Context, authority.EmailVerificationKeyset) error
+	ReadEmailVerificationKeyset(context.Context) (*authority.EmailVerificationKeyset, error)
+	ReadNotificationContact(context.Context, NotificationContactSubject) (iamv1.NotificationContact, error)
+	ReadNotificationVerification(context.Context, NotificationContactSubject, string) (iamv1.NotificationContactVerification, error)
+	StartNotificationVerification(context.Context, NotificationVerificationStart) (iamv1.NotificationContactVerification, error)
+	StartNotificationReplacement(context.Context, NotificationVerificationStart) (iamv1.NotificationContactVerification, error)
+	ReserveNotificationConfirmation(context.Context, NotificationContactSubject, string, string) (NotificationConfirmationAttempt, bool, error)
+	RejectNotificationConfirmation(context.Context, NotificationConfirmationAttempt) error
+	ConfirmNotificationContact(context.Context, NotificationConfirmation) (iamv1.NotificationContactVerification, error)
+	LookupAccessKey(context.Context, string, iamv1.AccessKeyID, string, iamv1.ProductID) (AccessKeyCredential, bool, error)
+	ReadAccessKeys(context.Context, AccessKeyRead) (AccessKeyDirectory, error)
+	ReserveAccessKey(context.Context, AccessKeyReservation) (AccessKeyReservationResult, error)
+	CompleteAccessKey(context.Context, AccessKeyCompletion) (AccessKeyMutationResult, error)
+	ChangeAccessKey(context.Context, AccessKeyChange) (AccessKeyMutationResult, error)
+	LookupAuthorizationProfile(context.Context, iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error)
 	BootstrapStatus(context.Context) (iamv1.BootstrapStatus, error)
 	ApplyBootstrap(context.Context, BootstrapMutation) (authority.BootstrapOutcome, error)
-	LookupLogin(context.Context, string) (LoginAccount, bool, error)
+	ReservePasswordAttempt(context.Context, PasswordAttemptRequest) (PasswordAttempt, bool, error)
+	RejectPasswordAttempt(context.Context, PasswordAttempt) error
+	ReadLoginAuthenticationState(context.Context, iamv1.AccountID, iamv1.PrincipalID) (LoginAuthenticationState, error)
+	ReadAuthenticatorState(context.Context, iamv1.Session) (iamv1.AuthenticatorState, error)
+	ReadEnrollmentChallenge(context.Context, AuthenticationChallengeCredential) (EnrollmentChallengeInspection, error)
+	StartTOTPEnrollment(context.Context, TOTPEnrollmentStart) (TOTPEnrollmentStartResult, error)
+	StartTOTPReplacement(context.Context, TOTPReplacementStart) (TOTPEnrollmentStartResult, error)
+	ReadTOTPEnrollment(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error)
+	ReadTOTPEnrollmentByRequest(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error)
+	CancelTOTPEnrollment(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error)
+	ConfirmTOTPEnrollment(context.Context, TOTPBindingConfirmation) (iamv1.TOTPEnrollment, error)
+	ReadRecoveryAttempt(context.Context, TOTPAttempt) (RecoveryCodeVerification, error)
+	StartAuthenticatorRecovery(context.Context, AuthenticatorRecoveryStart) (AuthenticatorRecoveryStartResult, error)
+	ConfirmAuthenticatorRecovery(context.Context, TOTPBindingConfirmation) (iamv1.AuthenticatorRecovery, error)
+	InspectAuthenticatorRecovery(context.Context, AuthenticationChallengeCredential, string) (iamv1.AuthenticatorRecovery, error)
+	StartStepUp(context.Context, StepUpStart) (iamv1.StepUp, error)
+	ReadStepUpByRequest(context.Context, iamv1.Session, string) (iamv1.StepUp, error)
+	ReadStepUpForVerification(context.Context, iamv1.Session, string) (iamv1.StepUp, error)
+	ProveStepUp(context.Context, StepUpVerification) (iamv1.StepUp, error)
+	RegenerateRecoveryCodes(context.Context, RecoveryCodeRegenerationMutation) (RecoveryCodeRegenerationResult, error)
+	ReadRecoveryCodeRegeneration(context.Context, iamv1.Session, string) (iamv1.RecoveryCodeRegeneration, error)
+	RemoveTOTP(context.Context, AuthenticatorRemovalMutation) (iamv1.RemoveTOTPResponse, error)
+	ReadAuthenticatorRemoval(context.Context, iamv1.Session, string) (iamv1.AuthenticatorRemoval, error)
+	CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error)
+	LookupAuthenticationChallenge(context.Context, string) (AuthenticationChallengeCredential, bool, error)
+	ReserveTOTPAttempt(context.Context, TOTPAttempt) (TOTPAttempt, bool, error)
+	ReadTOTPAttempt(context.Context, TOTPAttempt) (TOTPVerification, error)
+	RejectTOTPAttempt(context.Context, TOTPAttempt) error
+	CompleteLoginChallenge(context.Context, LoginChallengeCompletion) (iamv1.Session, error)
+	RequirePasswordReset(context.Context, PasswordResetRequirement) (iamv1.PasswordResetReason, error)
+	BeginPasswordChallenge(context.Context, PasswordChallengeCreation) (iamv1.AuthenticationChallenge, error)
+	ReadPasswordChallenge(context.Context, AuthenticationChallengeCredential) (PasswordReplacementMaterial, error)
+	ReadChallengePasswordRequirements(context.Context, AuthenticationChallengeCredential) (iamv1.PasswordRequirements, error)
+	ChangeChallengePassword(context.Context, ChallengePasswordMutation) (iamv1.ChallengePasswordChangeResponse, error)
 	IssueSession(context.Context, SessionMutation) (iamv1.Session, error)
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
-	LookupPassword(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (authority.PasswordHash, bool, error)
+	ListOwnSessions(context.Context, OwnSessionRead) ([]iamv1.Session, error)
+	TouchSession(context.Context, iamv1.Session) (iamv1.SessionActivity, error)
+	ReadPasswordRequirements(context.Context, iamv1.Session) (iamv1.PasswordRequirements, error)
+	LookupRoleSession(context.Context, string) (RoleSessionCredential, bool, error)
+	LookupRoleSessionForExit(context.Context, string) (RoleSessionExitCredential, bool, error)
+	ExitRoleSession(context.Context, string, auditv1.Event) (iamv1.RoleSession, error)
 	LookupService(context.Context, string) (ServiceCredential, bool, error)
-	CanProduceAudit(context.Context, iamv1.ServiceIdentity, iamv1.OrganizationID) (bool, error)
-	LookupServiceRoles(
+	ReadAuditEvidence(context.Context, iamv1.ServiceIdentity, auditv1.Event) (AuditEvidence, bool, error)
+	LookupServicePolicies(
 		context.Context,
-		iamv1.OrganizationID,
+		iamv1.AccountID,
 		iamv1.PrincipalID,
-	) ([]iamv1.BuiltinRole, error)
+	) ([]authority.AttachedPolicy, error)
 	RecordAuthorization(context.Context, AuthorizationMutation) error
 	ChangePassword(context.Context, PasswordMutation) (iamv1.ChangePasswordResponse, error)
 	RevokeSession(context.Context, SessionRevocationMutation) (iamv1.Revocation, bool, error)
-	CreateUser(context.Context, UserMutation) (iamv1.Principal, error)
-	PutRoleBinding(context.Context, RoleBindingMutation) (iamv1.RoleBinding, bool, error)
-	RevokeRoleBinding(context.Context, RoleBindingRevocationMutation) (iamv1.Revocation, bool, error)
-	ReadAccount(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (iamv1.OrganizationAccount, error)
-	ListPrincipals(context.Context, AccountRead) (iamv1.PrincipalList, error)
-	ListAccounts(context.Context, AccountRead) (iamv1.OrganizationAccountList, error)
-	CreateOrganization(context.Context, OrganizationMutation) (iamv1.OrganizationAccount, error)
-	SetAccountAlias(context.Context, AccountAliasMutation) (iamv1.OrganizationAccount, error)
-	ChangeSubaccount(context.Context, SubaccountMutation) (iamv1.Principal, error)
+	RevokeOtherSessions(context.Context, OtherSessionRevocationMutation) (iamv1.RevokeOtherSessionsResponse, error)
+	CreateUser(context.Context, UserMutation) (iamv1.User, error)
+	ReadUserCreationPasswordSettings(context.Context, AccountRead) (iamv1.AccountPasswordSettings, uint64, error)
+	LookupPolicy(context.Context, iamv1.AccountID, iamv1.PolicyID) (iamv1.Policy, bool, error)
+	LookupPolicyAttachment(context.Context, iamv1.AccountID, iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error)
+	CreatePolicyAttachment(context.Context, PolicyAttachmentMutation) (iamv1.PolicyAttachment, error)
+	RevokePolicyAttachment(context.Context, PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error)
+	ReadAccount(context.Context, iamv1.AccountID, iamv1.PrincipalID) (iamv1.Account, error)
+	ReadAccountSecuritySettings(context.Context, AccountRead) (iamv1.AccountSecuritySettings, error)
+	ReadSecurityReportSnapshot(context.Context, AccountRead) (SecurityReportSnapshot, error)
+	ReadSecurityReportByRequest(context.Context, AccountRead, string, string) (iamv1.AccountSecurityReportMetadata, bool, error)
+	CreateSecurityReport(context.Context, SecurityReportCreation) (iamv1.CreateAccountSecurityReportResponse, error)
+	ReadSecurityReport(context.Context, AccountRead, iamv1.SecurityReportID) (iamv1.AccountSecurityReport, error)
+	DownloadSecurityReport(context.Context, SecurityReportDownload) (SecurityReportDownloadResult, error)
+	CreateAccessAnalyzer(context.Context, AccessAnalyzerCreation) (iamv1.AccessAnalyzer, error)
+	ListAccessAnalyzers(context.Context, AccountRead) (iamv1.AccessAnalyzerList, error)
+	ReadAccessAnalyzer(context.Context, AccessAnalyzerRead) (iamv1.AccessAnalyzer, error)
+	UpdateAccessAnalyzer(context.Context, AccessAnalyzerMutation) (iamv1.AccessAnalyzer, error)
+	SetAccessDisposition(context.Context, AccessDispositionMutation) (iamv1.AccessAnalyzer, error)
+	ReadAccessFindingDirectoryRevision(context.Context, AccessFindingRead) (authority.AccessFindingDirectoryRevision, error)
+	ListAccessFindings(context.Context, AccessFindingRead) (iamv1.AccessFindingList, error)
+	ReadAccessFinding(context.Context, AccessFindingRead) (iamv1.AccessFinding, error)
+	SetAccessFindingArchived(context.Context, AccessFindingMutation) (iamv1.AccessFinding, error)
+	LockAccountSecuritySettings(context.Context, iamv1.Session) error
+	UpdateAccountSecuritySettings(context.Context, SecuritySettingsMutation) (iamv1.UpdateAccountSecuritySettingsResponse, error)
+	ReadSecuritySettingsChange(context.Context, AccountRead, string) (iamv1.AccountSecuritySettingsChange, error)
+	ListUsers(context.Context, AccountRead) (iamv1.UserList, error)
+	ReadUser(context.Context, AccountRead, iamv1.PrincipalID) (iamv1.UserAccess, error)
+	ListGroups(context.Context, AccountRead) (iamv1.GroupList, error)
+	ReadGroup(context.Context, GroupRead) (iamv1.GroupAccess, error)
+	ListRoles(context.Context, AccountRead) (iamv1.RoleList, error)
+	ReadRole(context.Context, RoleRead) (iamv1.RoleAccess, error)
+	ListServiceLinkedRoles(context.Context, AccountRead) (iamv1.ServiceLinkedRoleList, error)
+	ReadServiceLinkedRole(context.Context, ServiceLinkedRoleRead) (iamv1.ServiceLinkedRoleAccess, error)
+	ReadRoleDiscoveryRevision(context.Context, RoleDiscoveryRead) (authority.RoleDiscoveryRevision, error)
+	ReadRoleCandidates(context.Context, RoleDiscoveryRead) (RoleCandidates, error)
+	ReadRolePermissionBoundary(context.Context, RoleRead) (iamv1.RolePermissionBoundary, error)
+	LockWorkloadRoleBindingSources(context.Context, iamv1.AccountID, iamv1.PrincipalID, iamv1.SessionID, string, iamv1.ServicePurpose) error
+	CreateWorkloadRoleBinding(context.Context, WorkloadRoleBindingCreation) (iamv1.ServiceLinkedRoleAccess, error)
+	PrepareWorkloadRoleBindingRevocation(context.Context, iamv1.AccountID, iamv1.WorkloadRoleBindingID, string, iamv1.ServicePurpose) (iamv1.ServiceLinkedRoleAccess, error)
+	RevokeWorkloadRoleBinding(context.Context, WorkloadRoleBindingRevocation) (iamv1.WorkloadRoleBinding, error)
+	ReadServiceRoleAssumption(context.Context, ServiceRoleAssumptionRead) (ServiceRoleAssumption, error)
+	IssueServiceRoleSession(context.Context, ServiceRoleSessionIssuance) (iamv1.RoleSession, error)
+	ReadServiceRoleSessionByRequest(context.Context, ServiceRoleSessionRead) (iamv1.RoleSession, bool, error)
+	ReadRoleAssumption(context.Context, RoleAssumptionRead) (RoleAssumption, error)
+	IssueRoleSession(context.Context, RoleSessionIssuance) (iamv1.RoleSession, error)
+	ReadRoleSessionByRequest(context.Context, RoleAssumptionRead) (iamv1.RoleSession, bool, error)
+	RevokeRoleSessionByRequest(context.Context, RoleSessionRevocation) (iamv1.RoleSession, error)
+	PrepareRoleSessionManagement(context.Context, RoleSessionManagementTarget, bool) (authority.RoleSessionDirectoryRevision, error)
+	ListManagedRoleSessions(context.Context, RoleSessionManagementRead) (ManagedRoleSessionPage, error)
+	ReadManagedRoleSession(context.Context, RoleSessionManagementRead) (ManagedRoleSession, error)
+	RevokeManagedRoleSession(context.Context, RoleSessionAdministrativeRevocation) (iamv1.RevokeRoleSessionResponse, error)
+	ChangeRolePermissionBoundary(context.Context, RoleBoundaryMutation) (iamv1.RolePermissionBoundary, error)
+	CreateRole(context.Context, RoleCreation) (iamv1.Role, error)
+	UpdateRole(context.Context, RoleProfileMutation) (iamv1.Role, error)
+	SetRoleStatus(context.Context, RoleStatusMutation) (iamv1.Role, error)
+	SetRoleTrustPolicy(context.Context, RoleTrustMutation) (iamv1.Role, error)
+	DeleteRole(context.Context, RoleMutation) (iamv1.RoleDeletion, error)
+	ListRoleTrustVersions(context.Context, RoleRead) (iamv1.RoleTrustVersionList, error)
+	ReadRoleTrustVersion(context.Context, RoleRead, iamv1.RoleTrustVersionID) (iamv1.RoleTrustVersion, error)
+	CreateGroup(context.Context, GroupMutation) (iamv1.Group, error)
+	UpdateGroup(context.Context, GroupProfileMutation) (iamv1.Group, error)
+	DeleteGroup(context.Context, GroupDeletionMutation) (iamv1.GroupDeletion, error)
+	ListGroupMemberships(context.Context, GroupRead) (iamv1.GroupMembershipList, error)
+	CreateGroupMembership(context.Context, GroupMembershipMutation) (iamv1.GroupMembership, error)
+	RemoveGroupMembership(context.Context, GroupMembershipRemovalMutation) (iamv1.GroupMembership, bool, error)
+	ListPolicies(context.Context, AccountRead, iamv1.AuthorityScope) (iamv1.PolicyList, error)
+	ReadPolicy(context.Context, AccountRead, iamv1.PolicyID) (iamv1.PolicyDetail, error)
+	ReadUserPermissionBoundary(context.Context, AccountRead, iamv1.PrincipalID) (iamv1.UserPermissionBoundary, error)
+	ChangeUserPermissionBoundary(context.Context, UserBoundaryMutation) (iamv1.UserPermissionBoundary, error)
+	CreatePolicy(context.Context, PolicyCreation) (iamv1.PolicyDetail, error)
+	ListPolicyVersions(context.Context, AccountRead, iamv1.PolicyID) (iamv1.PolicyVersionList, error)
+	ReadPolicyVersion(context.Context, AccountRead, iamv1.PolicyID, iamv1.PolicyVersionID) (iamv1.PolicyVersionDetail, error)
+	CreatePolicyVersion(context.Context, PolicyVersionCreation) (iamv1.PolicyVersionDetail, error)
+	DeletePolicyVersion(context.Context, PolicyVersionDeletion) (iamv1.PolicyDetail, error)
+	SetDefaultPolicyVersion(context.Context, PolicyDefaultSelection) (iamv1.PolicyDetail, error)
+	UpdatePolicy(context.Context, PolicyUpdate) (iamv1.PolicyDetail, error)
+	DeletePolicy(context.Context, PolicyDeletion) (iamv1.Policy, error)
+	ListAccounts(context.Context, AccountRead) (AccountManagementPage, error)
+	ReadAccountAsPlatform(context.Context, AccountRead, iamv1.AccountID) (AccountManagementSnapshot, error)
+	ReadRootPasswordRecovery(context.Context, AccountRead, iamv1.AccountID, uint64) (iamv1.RootIdentity, PasswordReplacementMaterial, error)
+	CreateAccount(context.Context, AccountMutation) (iamv1.Account, error)
+	SetAccountStatus(context.Context, AccountStatusMutation) (iamv1.Account, error)
+	RecoverRootCredentials(context.Context, RootCredentialRecovery) (iamv1.Account, error)
+	InspectLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error)
+	PrepareLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, iamv1.LocalCredentialRecoveryExpected, iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, PasswordReplacementMaterial, error)
+	RecoverLocalCredentials(context.Context, LocalCredentialRecoveryMutation) (iamv1.LocalCredentialRecoveryResult, error)
+	SetAccountAlias(context.Context, AccountAliasMutation) (iamv1.Account, error)
+	UpdateUser(context.Context, UserProfileMutation) (iamv1.User, error)
+	DeleteUser(context.Context, UserDeletionMutation) (iamv1.UserDeletion, error)
+	ChangeUser(context.Context, UserChange) (iamv1.User, error)
+	ReadPasswordReset(context.Context, AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
+	ReadUserPasswordResetCompletion(context.Context, AccountRead, iamv1.PrincipalID, string, uint64) (iamv1.UserPasswordResetCompletion, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
 }
 
 type AccountRead struct {
-	OrganizationID   iamv1.OrganizationID
+	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	After            string
 }
 
-type OrganizationMutation struct {
-	ActorOrganizationID iamv1.OrganizationID
-	ActorPrincipalID    iamv1.PrincipalID
-	DecisionID          iamv1.DecisionID
-	Organization        iamv1.InitialOrganization
-	Administrator       BootstrapAdministrator
+type SecurityReportSnapshot struct {
+	ObservedAt                     time.Time                       `json:"observedAt"`
+	AccountSecuritySettingsVersion uint64                          `json:"accountSecuritySettingsVersion"`
+	Users                          []iamv1.SecurityReportUser      `json:"users"`
+	AccessKeys                     []iamv1.SecurityReportAccessKey `json:"accessKeys"`
+}
+
+type SecurityReportCreation struct {
+	AccountRead
+	Session       iamv1.Session
+	RequestID     string
+	RequestDigest string
+	Report        iamv1.AccountSecurityReport
+	CSV           []byte
+	AuditEvent    auditv1.Event
+}
+
+type SecurityReportDownload struct {
+	AccountRead
+	Session    iamv1.Session
+	ReportID   iamv1.SecurityReportID
+	RequestID  string
+	AuditEvent auditv1.Event
+}
+
+type SecurityReportDownloadResult struct {
+	Metadata iamv1.AccountSecurityReportMetadata
+	CSV      []byte
+}
+
+type AccessAnalyzerCreation struct {
+	AccountRead
+	Session       iamv1.Session
+	RequestID     string
+	RequestDigest string
+	Analyzer      iamv1.AccessAnalyzer
+	AuditEvent    auditv1.Event
+}
+
+type AccessAnalyzerRead struct {
+	AccountRead
+	AnalyzerID iamv1.AccessAnalyzerID
+}
+
+type AccessAnalyzerMutation struct {
+	AccessAnalyzerRead
+	Session       iamv1.Session
+	RequestID     string
+	RequestDigest string
+	Request       iamv1.UpdateAccessAnalyzerRequest
+	AuditEvent    auditv1.Event
+}
+
+type AccessDispositionMutation struct {
+	AccessAnalyzerRead
+	Session       iamv1.Session
+	RequestID     string
+	RequestDigest string
+	Request       iamv1.SetAccessDispositionRequest
+	AuditEvent    auditv1.Event
+}
+
+type AccessFindingRead struct {
+	AccountRead
+	AnalyzerID iamv1.AccessAnalyzerID
+	FindingID  iamv1.AccessFindingID
+	Filter     iamv1.AccessFindingFilter
+}
+
+func (value AccessFindingRead) AccessAnalyzerRead() AccessAnalyzerRead {
+	return AccessAnalyzerRead{AccountRead: value.AccountRead, AnalyzerID: value.AnalyzerID}
+}
+
+type AccessFindingMutation struct {
+	AccessFindingRead
+	Session         iamv1.Session
+	RequestID       string
+	RequestDigest   string
+	ExpectedVersion uint64
+	Archived        bool
+	AuditEvent      auditv1.Event
+}
+
+// Private, nonsecret custody evidence; never a caller-selected installation.
+type AccessKeyCustody struct {
+	InstallationID  string `json:"installationId"`
+	BootstrapDigest string `json:"bootstrapDigest"`
+	Keys            []struct {
+		WrappingKeyID      string `json:"wrappingKeyId"`
+		MaterialCommitment string `json:"materialCommitment"`
+	} `json:"keys"`
+}
+
+type AccessKeyRead struct {
+	AccountID      iamv1.AccountID
+	ActorID        iamv1.PrincipalID
+	ActorSessionID iamv1.SessionID
+	UserID         iamv1.PrincipalID
+	KeyID          iamv1.AccessKeyID
+	DecisionID     iamv1.DecisionID
+}
+
+type AccessKeyDirectory struct {
+	UserResourceVersion uint64                    `json:"userResourceVersion"`
+	UserStatus          iamv1.PrincipalStatus     `json:"userStatus"`
+	MustChangePassword  bool                      `json:"mustChangePassword"`
+	Entries             []AccessKeyDirectoryEntry `json:"entries"`
+}
+
+type AccessKeyDirectoryEntry struct {
+	Key   iamv1.AccessKey             `json:"key"`
+	Usage iamv1.AccessKeyUsageSummary `json:"usage"`
+}
+
+type AccessKeyReservation struct {
+	AccessKeyRead
+	ExpectedUserVersion uint64
+	InstallationID      string
+	WrappingKeyID       string
+	MaterialCommitment  string
+	NetworkRestrictions iamv1.AccessKeyNetworkRestrictions
+	RequestID           string
+	RequestDigest       string
+}
+
+type AccessKeyReservationResult struct {
+	Outcome string           `json:"outcome"`
+	Key     *iamv1.AccessKey `json:"key,omitempty"`
+}
+
+type AccessKeyCompletion struct {
+	AccessKeyRead
+	Material   authority.SealedAccessKeySecret
+	AuditEvent auditv1.Event
+}
+
+type AccessKeyChange struct {
+	AccessKeyRead
+	ExpectedVersion uint64
+	Status          iamv1.AccessKeyStatus // Empty only for irreversible deletion.
+	// Non-nil only for an exact network-restriction replacement. Status must
+	// then be empty; deletion has both fields empty.
+	NetworkRestrictions *iamv1.AccessKeyNetworkRestrictions
 	AuditEvent          auditv1.Event
 }
 
+type AccessKeyMutationResult struct {
+	Outcome  string                   `json:"outcome"`
+	Key      *iamv1.AccessKey         `json:"key,omitempty"`
+	Deletion *iamv1.AccessKeyDeletion `json:"deletion,omitempty"`
+}
+
+type GroupRead struct {
+	AccountRead
+	GroupID iamv1.GroupID
+}
+
+type RoleRead struct {
+	AccountRead
+	RoleID iamv1.RoleID
+}
+
+type ServiceLinkedRoleRead struct {
+	AccountRead
+	RoleID iamv1.RoleID
+}
+
+// Private authenticated references, not public account/user/session selectors.
+// RoleID selects one already-authorized management detail; otherwise After is
+// the decoded self-directory position. Neither is an issuance request ID.
+type RoleDiscoveryRead struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
+	RoleID           iamv1.RoleID
+	After            string
+}
+
+type RoleCandidate struct {
+	Role     iamv1.Role
+	Trust    iamv1.RoleTrustVersion
+	Boundary *authority.ResolvedRoleBoundary
+}
+
+type RoleCandidates struct {
+	Revision  authority.RoleDiscoveryRevision
+	Items     []RoleCandidate
+	NextAfter string
+}
+
+type RoleCreation struct {
+	Role             iamv1.Role
+	TrustVersion     iamv1.RoleTrustVersion
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+// WorkloadRoleBindingCreation contains only authenticated/derived authority.
+// The public command never selects an Account, Role or service principal.
+type WorkloadRoleBindingCreation struct {
+	AccountID                iamv1.AccountID
+	ActorPrincipalID         iamv1.PrincipalID
+	ActorSessionID           iamv1.SessionID
+	ServiceLookupDigest      string
+	Request                  iamv1.CreateWorkloadRoleBindingRequest
+	Template                 iamv1.ServiceRoleTemplate
+	Role                     iamv1.Role
+	TrustVersion             iamv1.RoleTrustVersion
+	Binding                  iamv1.WorkloadRoleBinding
+	WorkloadDecisionID       iamv1.DecisionID
+	RoleCreationDecisionID   iamv1.DecisionID
+	RolePassDecisionID       iamv1.DecisionID
+	RequestDigest            string
+	RoleCreatedAuditEvent    auditv1.Event
+	BindingCreatedAuditEvent auditv1.Event
+}
+
+// WorkloadRoleBindingRevocation contains only identities recovered from the
+// authenticated credentials and the existing binding. The public command can
+// select neither the target Account nor any Role, template, workload or
+// service-principal authority.
+type WorkloadRoleBindingRevocation struct {
+	AccountID               iamv1.AccountID
+	BindingID               iamv1.WorkloadRoleBindingID
+	ActorPrincipalID        iamv1.PrincipalID
+	ActorSessionID          iamv1.SessionID
+	ServiceLookupDigest     string
+	ServicePurpose          iamv1.ServicePurpose
+	Request                 iamv1.RevokeWorkloadRoleBindingRequest
+	RequestDigest           string
+	WorkloadDecisionID      iamv1.DecisionID
+	BindingRevokeDecisionID iamv1.DecisionID
+	RolePassDecisionID      iamv1.DecisionID
+	AuditEvent              auditv1.Event
+}
+
+// ServiceRoleSessionRead is derived exclusively from the authenticated
+// service credential. RequestID is an idempotency identity inside that
+// physical service principal, not an Account or Role selector.
+type ServiceRoleSessionRead struct {
+	ServiceLookupDigest string
+	Identity            iamv1.ServiceIdentity
+	RequestID           string
+}
+
+type ServiceRoleAssumptionRead struct {
+	ServiceRoleSessionRead
+	BindingID iamv1.WorkloadRoleBindingID
+}
+
+type ServiceRoleSessionReceipt struct {
+	Session       iamv1.RoleSession           `json:"session"`
+	BindingID     iamv1.WorkloadRoleBindingID `json:"bindingId"`
+	RequestDigest string                      `json:"requestDigest"`
+}
+
+// ServiceRoleAssumption is a locked current authority snapshot. The service
+// home Account is identity provenance only; Relation and Binding derive the
+// target Account and Role.
+type ServiceRoleAssumption struct {
+	Relation           iamv1.ServiceLinkedRole
+	Binding            iamv1.WorkloadRoleBinding
+	Template           iamv1.ServiceRoleTemplate
+	SecurityGeneration uint64
+	Existing           *ServiceRoleSessionReceipt
+}
+
+type ServiceRoleSessionIssuance struct {
+	ServiceRoleAssumptionRead
+	Session                    iamv1.RoleSession
+	Request                    iamv1.AssumeServiceRoleRequest
+	ExpectedBindingVersion     uint64
+	ExpectedSecurityGeneration uint64
+	DurationSeconds            uint32
+	RequestDigest              string
+	LookupDigest               string
+	VerificationDigest         string
+	AuditEvent                 auditv1.Event
+}
+
+// RoleMutation carries the exact authenticated writer and expected revision,
+// not a caller-selected tenant/session or a reusable authorization permit.
+type RoleMutation struct {
+	AccountID        iamv1.AccountID
+	RoleID           iamv1.RoleID
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
+	DecisionID       iamv1.DecisionID
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type RoleBoundaryMutation struct {
+	RoleMutation
+	PolicyID              iamv1.PolicyID
+	PolicyResourceVersion uint64
+	BoundaryID            string
+}
+
+// Only the authenticated login bearer supplies these private references.
+type RoleAssumptionRead struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
+	RoleID           iamv1.RoleID
+	RequestID        string
+}
+
+type RoleSessionReceipt struct {
+	Session              iamv1.RoleSession `json:"session"`
+	SourceSessionID      iamv1.SessionID   `json:"sourceSessionId"`
+	CredentialGeneration uint64            `json:"credentialGeneration"`
+	RequestDigest        string            `json:"requestDigest"`
+}
+
+type RoleAssumption struct {
+	Role                 iamv1.Role
+	Trust                iamv1.RoleTrustVersion
+	CredentialGeneration uint64
+	SecurityGeneration   uint64
+	Existing             *RoleSessionReceipt
+}
+
+type RoleSessionIssuance struct {
+	RoleAssumptionRead
+	Session                iamv1.RoleSession
+	ExpectedRoleVersion    uint64
+	CredentialGeneration   uint64
+	SecurityGeneration     uint64
+	DurationSeconds        uint32
+	RequestDigest          string
+	SessionPolicyCanonical string
+	SessionPolicyDigest    string
+	LookupDigest           string
+	VerificationDigest     string
+	DecisionID             iamv1.DecisionID
+	AuditEvent             auditv1.Event
+}
+
+type RoleSessionRevocation struct {
+	RoleAssumptionRead
+	AuditEvent auditv1.Event
+}
+
+type RoleSessionManagementTarget struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
+	RoleID           iamv1.RoleID
+	SessionID        iamv1.RoleSessionID
+}
+
+type RoleSessionManagementRead struct {
+	RoleSessionManagementTarget
+	DecisionID iamv1.DecisionID
+	After      string
+	Filter     iamv1.RoleSessionFilter
+}
+
+type ManagedRoleSession struct {
+	Session iamv1.RoleSession              `json:"session"`
+	Source  iamv1.RoleSessionSourceDisplay `json:"source"`
+}
+
+type ManagedRoleSessionPage struct {
+	Items     []ManagedRoleSession `json:"items"`
+	NextAfter string               `json:"nextAfter"`
+}
+
+type RoleSessionAdministrativeRevocation struct {
+	RoleSessionManagementTarget
+	DecisionID iamv1.DecisionID
+	AuditEvent auditv1.Event
+}
+
+// Possession permits only irreversible self-exit, even after business access
+// has expired or been revoked. This is not a current authentication context.
+type RoleSessionExitCredential struct {
+	Session            iamv1.RoleSession `json:"session"`
+	VerificationDigest string            `json:"verificationDigest"`
+}
+
+type RoleProfileMutation struct {
+	RoleMutation
+	Name                      string
+	Description               string
+	Tags                      []iamv1.RoleTag
+	MaxSessionDurationSeconds uint32
+}
+
+type RoleStatusMutation struct {
+	RoleMutation
+	Status iamv1.RoleStatus
+}
+
+type RoleTrustMutation struct {
+	RoleMutation
+	TrustVersion iamv1.RoleTrustVersion
+}
+
+// AccountManagementSnapshot carries only target facts required to project
+// management availability. They are not public authorization grants; every
+// command rechecks the same facts under its transaction locks.
+type AccountManagementSnapshot struct {
+	Account                      iamv1.Account
+	SystemAccount                bool
+	RootHasInstallationAuthority bool
+}
+
+type AccountManagementPage struct {
+	Items     []AccountManagementSnapshot
+	NextAfter string
+}
+
+type AccountMutation struct {
+	ActorAccountID   iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	Account          iamv1.InitialOrganization
+	Root             BootstrapAdministrator
+	AuditEvent       auditv1.Event
+}
+
 type AccountAliasMutation struct {
-	OrganizationID   iamv1.OrganizationID
+	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	Alias            string
@@ -87,14 +655,130 @@ type AccountAliasMutation struct {
 	AuditEvent       auditv1.Event
 }
 
-type SubaccountMutation struct {
-	OrganizationID   iamv1.OrganizationID
+type AccountStatusMutation struct {
+	ActorAccountID   iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AccountID        iamv1.AccountID
+	Status           iamv1.AccountStatus
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type RootCredentialRecovery struct {
+	ActorAccountID   iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AccountID        iamv1.AccountID
+	PrincipalID      iamv1.PrincipalID
+	ResourceVersion  uint64
+	PasswordHash     authority.PasswordHash
+	ExpectedPassword PasswordReplacementMaterial
+	AttachmentID     iamv1.PolicyAttachmentID
+	AuditEvent       auditv1.Event
+}
+
+// The local entry authenticates this mutation with installation-private
+// authority, never a USER decision or an existing service credential.
+type LocalCredentialRecoveryMutation struct {
+	Scope            iamv1.LocalCredentialRecoveryScope
+	Expected         iamv1.LocalCredentialRecoveryExpected
+	CommandID        string
+	InputCommitment  string
+	PasswordHash     authority.PasswordHash
+	ExpectedPassword PasswordReplacementMaterial
+	AuditEvent       auditv1.Event
+}
+
+// Private, purpose-authorized preparation. Never an HTTP response or a permit:
+// a final write must recheck current authority and these exact credential values.
+type PasswordReplacementMaterial struct {
+	PasswordHash         authority.PasswordHash
+	CredentialGeneration uint64
+	PasswordHistory      []authority.PasswordHash
+	HistoryDigest        string
+	PasswordSettings     iamv1.AccountPasswordSettings
+	SettingsVersion      uint64
+}
+
+func (PasswordReplacementMaterial) String() string { return "[REDACTED]" }
+func (PasswordReplacementMaterial) GoString() string {
+	return "identityaccess.PasswordReplacementMaterial{[REDACTED]}"
+}
+func (PasswordReplacementMaterial) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
+
+type UserChange struct {
+	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
 	PrincipalID      iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	ResourceVersion  uint64
 	Status           *iamv1.PrincipalStatus
 	PasswordHash     *authority.PasswordHash
+	ExpectedPassword *PasswordReplacementMaterial
+	AuditEvent       auditv1.Event
+}
+
+type UserProfileMutation struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	PrincipalID      iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	DisplayName      string
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type UserDeletionMutation struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	PrincipalID      iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type GroupMutation struct {
+	Group            iamv1.Group
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type GroupProfileMutation struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	GroupID          iamv1.GroupID
+	Name             string
+	Description      string
+	ResourceVersion  uint64
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type GroupDeletionMutation struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	GroupID          iamv1.GroupID
+	ResourceVersion  uint64
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type GroupMembershipMutation struct {
+	Membership       iamv1.GroupMembership
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type GroupMembershipRemovalMutation struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	GroupID          iamv1.GroupID
+	MembershipID     iamv1.GroupMembershipID
+	ResourceVersion  uint64
+	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
 }
 
@@ -121,16 +805,56 @@ type BootstrapMutation struct {
 	AuditEvent     auditv1.Event
 }
 
-type LoginAccount struct {
-	OrganizationID     iamv1.OrganizationID
-	PrincipalID        iamv1.PrincipalID
-	PasswordHash       authority.PasswordHash
-	OrganizationStatus iamv1.OrganizationStatus
-	PrincipalStatus    iamv1.PrincipalStatus
-	MustChangePassword bool
+// LoginName or the authenticated Session tuple, never both. Only the service
+// generates ID; a public request ID is not an authentication-attempt identity.
+type PasswordAttemptRequest struct {
+	ID           string
+	LoginName    string
+	AccountID    iamv1.AccountID
+	UserID       iamv1.PrincipalID
+	SessionID    iamv1.SessionID
+	Purpose      PasswordAttemptPurpose
+	IntentDigest string
 }
 
+type PasswordAttemptPurpose string
+
+const (
+	PasswordAttemptLogin               PasswordAttemptPurpose = "LOGIN"
+	PasswordAttemptChange              PasswordAttemptPurpose = "PASSWORD_CHANGE"
+	PasswordAttemptNotificationContact PasswordAttemptPurpose = "NOTIFICATION_CONTACT_VERIFY"
+	PasswordAttemptTOTPEnrollment      PasswordAttemptPurpose = "TOTP_ENROLLMENT"
+	PasswordAttemptStepUp              PasswordAttemptPurpose = "STEP_UP"
+)
+
+// Private, bounded authority snapshot. Success may only be consumed by the
+// final session/password transaction, not converted to a reusable permit.
+type PasswordAttempt struct {
+	ID                   string
+	Sequence             uint64
+	AccountID            iamv1.AccountID
+	PrincipalID          iamv1.PrincipalID
+	SessionID            iamv1.SessionID
+	PasswordHash         authority.PasswordHash
+	CredentialGeneration uint64
+	PasswordHistory      []authority.PasswordHash
+	HistoryDigest        string
+	PasswordSettings     iamv1.AccountPasswordSettings
+	SettingsVersion      uint64
+	MustChangePassword   bool
+	ExpiresAt            time.Time
+	Purpose              PasswordAttemptPurpose
+	IntentDigest         string
+}
+
+func (PasswordAttempt) String() string               { return "[REDACTED]" }
+func (PasswordAttempt) GoString() string             { return "identityaccess.PasswordAttempt{[REDACTED]}" }
+func (PasswordAttempt) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
+func (*PasswordAttempt) UnmarshalJSON([]byte) error  { return ErrUnavailable }
+
 type SessionMutation struct {
+	AttemptID          string
+	AttemptSequence    uint64
 	Session            iamv1.Session
 	LookupDigest       string
 	VerificationDigest string
@@ -138,57 +862,202 @@ type SessionMutation struct {
 }
 
 type SessionCredential struct {
-	Subject            authority.SubjectContext
+	Subject              authority.SubjectContext
+	VerificationDigest   string
+	CredentialGeneration uint64
+}
+
+type OwnSessionRead struct {
+	AccountID        iamv1.AccountID
+	UserID           iamv1.PrincipalID
+	CurrentSessionID iamv1.SessionID
+	After            string
+}
+
+type RoleSessionCredential struct {
+	Subject            authority.RoleSessionContext
 	VerificationDigest string
 }
 
 type ServiceCredential struct {
 	Identity           iamv1.ServiceIdentity
+	LookupDigest       string
 	VerificationDigest string
 }
 
+// Private locked credential input, not public metadata or a login Session.
+// Usable material never travels to products or ordinary JSON encoders.
+type AccessKeyCredential struct {
+	Subject            authority.AccessKeyContext
+	Material           authority.SealedAccessKeySecret
+	MaterialCommitment string
+}
+
+func (AccessKeyCredential) String() string               { return "[REDACTED]" }
+func (AccessKeyCredential) GoString() string             { return "identityaccess.AccessKeyCredential{[REDACTED]}" }
+func (AccessKeyCredential) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
+func (*AccessKeyCredential) UnmarshalJSON([]byte) error  { return ErrUnavailable }
+
 type AuthorizationMutation struct {
-	OrganizationID iamv1.OrganizationID
-	PrincipalID    iamv1.PrincipalID
-	Decision       iamv1.AuthorizationDecision
-	AuditEvent     auditv1.Event
+	AccountID iamv1.AccountID
+	Subject   iamv1.Subject
+	// Request is the original validated input, not reconstructed from Decision.
+	Request           iamv1.AuthorizationRequest
+	Decision          iamv1.AuthorizationDecision
+	PolicyEvidence    []authority.PolicyAttachmentEvidence
+	BoundaryEvidence  authority.UserBoundaryEvidence
+	RoleEvidence      *authority.RoleAuthorizationEvidence
+	AccessKeyEvidence *AccessKeyAuthorizationEvidence
+	AuditEvent        auditv1.Event
+}
+
+// Only the successful MAC path constructs this private, once-only evidence.
+// SQL resolves the service's full immutable identity from ServiceLookupDigest.
+type AccessKeyAuthorizationEvidence struct {
+	AccessKeyID                    iamv1.AccessKeyID `json:"accessKeyId"`
+	ResourceVersion                uint64            `json:"resourceVersion"`
+	AccountSecuritySettingsVersion uint64            `json:"accountSecuritySettingsVersion"`
+	FormatVersion                  uint8             `json:"formatVersion"`
+	WrappingKeyID                  string            `json:"wrappingKeyId"`
+	MaterialCommitment             string            `json:"materialCommitment"`
+	InstallationID                 string            `json:"installationId"`
+	ServiceLookupDigest            string            `json:"serviceLookupDigest"`
+	Audience                       iamv1.ProductID   `json:"audience"`
+	SignedRequestDigest            string            `json:"signedRequestDigest"`
+	NonceDigest                    string            `json:"nonceDigest"`
+	SignedAt                       int64             `json:"signedAt"`
+}
+
+func (AccessKeyAuthorizationEvidence) String() string { return "[REDACTED]" }
+func (AccessKeyAuthorizationEvidence) GoString() string {
+	return "identityaccess.AccessKeyAuthorizationEvidence{[REDACTED]}"
+}
+func (AccessKeyAuthorizationEvidence) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
+func (*AccessKeyAuthorizationEvidence) UnmarshalJSON([]byte) error  { return ErrUnavailable }
+
+type UserBoundaryMutation struct {
+	AccountID             iamv1.AccountID
+	ActorPrincipalID      iamv1.PrincipalID
+	SessionID             iamv1.SessionID
+	DecisionID            iamv1.DecisionID
+	UserID                iamv1.PrincipalID
+	ResourceVersion       uint64
+	PolicyID              iamv1.PolicyID
+	PolicyResourceVersion uint64
+	BoundaryID            string
+	AuditEvent            auditv1.Event
 }
 
 type PasswordMutation struct {
-	OrganizationID       iamv1.OrganizationID
-	PrincipalID          iamv1.PrincipalID
-	ExpectedPasswordHash authority.PasswordHash
-	NewPasswordHash      authority.PasswordHash
-	AuditEvent           auditv1.Event
+	AttemptID               string
+	AttemptSequence         uint64
+	AccountID               iamv1.AccountID
+	PrincipalID             iamv1.PrincipalID
+	SessionID               iamv1.SessionID
+	RevokeOtherSessions     bool
+	ExpectedPasswordHash    authority.PasswordHash
+	ExpectedHistoryDigest   string
+	ExpectedSettingsVersion uint64
+	NewPasswordHash         authority.PasswordHash
+	AuditEvent              auditv1.Event
 }
 
 type SessionRevocationMutation struct {
-	OrganizationID   iamv1.OrganizationID
+	AccountID        iamv1.AccountID
 	SessionID        iamv1.SessionID
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
+}
+
+type OtherSessionRevocationMutation struct {
+	AccountID      iamv1.AccountID
+	UserID         iamv1.PrincipalID
+	ActorSessionID iamv1.SessionID
+	AuditEvent     auditv1.Event
 }
 
 type UserMutation struct {
-	Principal        iamv1.Principal
-	PasswordHash     authority.PasswordHash
+	User                    iamv1.User
+	PasswordHash            authority.PasswordHash
+	ExpectedSettingsVersion uint64
+	ActorPrincipalID        iamv1.PrincipalID
+	DecisionID              iamv1.DecisionID
+	AuditEvent              auditv1.Event
+}
+
+type PolicyCreation struct {
+	Policy           iamv1.Policy
+	Version          iamv1.PolicyVersion
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
 }
 
-type RoleBindingMutation struct {
-	Binding          iamv1.RoleBinding
+type PolicyVersionCreation struct {
+	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
+	Version          iamv1.PolicyVersion
+	ResourceVersion  uint64
 	AuditEvent       auditv1.Event
 }
 
-type RoleBindingRevocationMutation struct {
-	OrganizationID   iamv1.OrganizationID
-	RoleBindingID    iamv1.RoleBindingID
+type PolicyDefaultSelection struct {
+	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	PolicyID         iamv1.PolicyID
+	VersionID        iamv1.PolicyVersionID
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type PolicyVersionDeletion struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	PolicyID         iamv1.PolicyID
+	VersionID        iamv1.PolicyVersionID
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type PolicyUpdate struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	PolicyID         iamv1.PolicyID
+	DisplayName      string
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type PolicyDeletion struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	PolicyID         iamv1.PolicyID
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type PolicyAttachmentMutation struct {
+	Attachment            iamv1.PolicyAttachment
+	PolicyResourceVersion uint64
+	ActorPrincipalID      iamv1.PrincipalID
+	ActorSessionID        iamv1.SessionID
+	DecisionID            iamv1.DecisionID
+	AuditEvent            auditv1.Event
+}
+
+type PolicyAttachmentRevocationMutation struct {
+	AccountID        iamv1.AccountID
+	AttachmentID     iamv1.PolicyAttachmentID
+	ResourceVersion  uint64
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
 }
@@ -200,8 +1069,14 @@ type ReadinessSnapshot struct {
 }
 
 type Authority struct {
-	repository  Repository
-	config      Config
-	passwords   *authority.PasswordHasher
-	credentials *authority.CredentialIssuer
+	repository   Repository
+	config       Config
+	passwords    *authority.PasswordHasher
+	credentials  *authority.CredentialIssuer
+	cursors      *authority.CursorCodec
+	accessKeys   *accessKeyWrapping
+	totp         *TOTPKeysetRegistration
+	totpSeeds    *authority.TOTPSeedProtector
+	email        *authority.EmailVerificationProtector
+	passwordWork chan struct{}
 }

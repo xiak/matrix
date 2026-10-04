@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
@@ -74,7 +75,9 @@ func TestPostgresIntegration(t *testing.T) {
 	assertExecutionProfileRefresh(t, ctx, admin, workerPool, prefix)
 	fixture := seedIntegrationFixture(t, ctx, admin, prefix)
 	applicationResult := assertApplicationLifecycle(t, ctx, admin, apiPool, fixture, prefix)
+	assertRoleSubjectStorage(t, ctx, admin, applicationResult.Operation)
 	assertAuditPersistenceAndFencing(t, ctx, admin, apiPool, workerPool, applicationResult)
+	assertApplicationLabelLifecycle(t, ctx, admin, apiPool, fixture, prefix)
 	assertOperationQueue(t, ctx, admin, workerPool, applicationResult)
 	planner, err := placement.NewV1Planner(5 * time.Minute)
 	if err != nil {
@@ -209,6 +212,74 @@ func integrationPlacementGuard(command createplacement.Command) operationqueue.L
 	return operationqueue.LeaseGuard{
 		TenantID: command.TenantID, OperationID: command.OperationID,
 		WorkerID: "worker-placement", FencingToken: 1,
+	}
+}
+
+func assertRoleSubjectStorage(t *testing.T, ctx context.Context, admin *pgx.Conn, operation paasv1.Operation) {
+	t.Helper()
+	// Privileged, rolled-back storage-shape attacks are not IAM authority or
+	// actual ROLE business acceptance; the independent process gate proves that.
+	for _, subject := range []struct {
+		encoded string
+		valid   bool
+	}{
+		{`{"type":"USER","id":"storage-user"}`, true},
+		{`{"type":"USER","id":"storage-user","accessKeyId":"storage-key"}`, true},
+		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":"storage-user"}}`, true},
+		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceServicePrincipalId":"service-paas"}}`, true},
+		{`null`, false}, {`{}`, false}, {`{"type":"ROLE","id":"storage-role"}`, false},
+		{`{"type":"USER","id":"storage-user","roleSession":null}`, false},
+		{`{"type":"USER","id":"storage-user","accessKeyId":""}`, false},
+		{`{"type":"SERVICE_ACCOUNT","id":"storage-service","accessKeyId":"storage-key"}`, false},
+		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":""}}`, false},
+		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":"storage-user","sourceSessionId":"private"}}`, false},
+		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":"storage-user","sourceServicePrincipalId":"service-paas"}}`, false},
+		{`{"type":"GROUP","id":"storage-group"}`, false},
+	} {
+		for _, target := range []struct{ statement, constraint string }{
+			{`UPDATE paas.operations SET document=jsonb_set(document,'{requestedBy}',$3::jsonb) WHERE tenant_id=$1 AND id=$2`, "operations_subject_valid"},
+			{`UPDATE paas.audit_outbox SET document=jsonb_set(document,'{actor}',$3::jsonb) WHERE tenant_id=$1 AND operation_id=$2`, "audit_outbox_subject_valid"},
+		} {
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			changed, err := tx.Exec(ctx, target.statement, operation.Scope.TenantID, operation.ID, subject.encoded)
+			_ = tx.Rollback(ctx)
+			if subject.valid {
+				if err != nil || changed.RowsAffected() == 0 {
+					t.Fatal("valid subject storage control did not reach real rows", err)
+				}
+			} else {
+				var pgErr *pgconn.PgError
+				if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != target.constraint {
+					t.Fatal("malformed role lineage escaped its real storage constraint", target.constraint, err)
+				}
+			}
+		}
+	}
+	for _, attack := range []string{
+		`ALTER TABLE paas.operations DROP CONSTRAINT operations_subject_valid`,
+		`ALTER TABLE paas.audit_outbox DROP CONSTRAINT audit_outbox_subject_valid`,
+		`GRANT EXECUTE ON FUNCTION paas.subject_reference_valid(jsonb) TO PUBLIC`,
+		`ALTER FUNCTION paas.subject_reference_valid(jsonb) STABLE`,
+		`ALTER FUNCTION paas.subject_reference_valid(jsonb) SECURITY DEFINER`,
+		`CREATE FUNCTION paas.subject_reference_valid(jsonb,text) RETURNS boolean LANGUAGE sql AS 'SELECT true'`,
+	} {
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, attack); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal("install scoped PaaS role contract drift", err)
+		}
+		var ready bool
+		err = tx.QueryRow(ctx, `SELECT paas.role_subject_contract_ready()`).Scan(&ready)
+		_ = tx.Rollback(ctx)
+		if err != nil || ready {
+			t.Fatal("PaaS role storage contract drift remained ready", err)
+		}
 	}
 }
 
@@ -990,8 +1061,61 @@ func (repository failAfterApplicationSubmitRepository) WithinTransaction(
 	)
 }
 
+func (repository failAfterApplicationSubmitRepository) WithinReadOnlyTransaction(
+	ctx context.Context,
+	tenantID paasv1.TenantID,
+	callback func(context.Context, applicationlifecycle.Transaction) error,
+) error {
+	return repository.delegate.WithinReadOnlyTransaction(ctx, tenantID, callback)
+}
+
 type failAfterApplicationSubmitTransaction struct {
 	applicationlifecycle.Transaction
+}
+
+type addSecondApplicationLabelRepository struct {
+	delegate applicationlifecycle.Repository
+}
+
+func (repository addSecondApplicationLabelRepository) WithinTransaction(
+	ctx context.Context,
+	tenantID paasv1.TenantID,
+	callback func(context.Context, applicationlifecycle.Transaction) error,
+) error {
+	return repository.delegate.WithinTransaction(ctx, tenantID,
+		func(callbackContext context.Context, transaction applicationlifecycle.Transaction) error {
+			return callback(callbackContext, addSecondApplicationLabelTransaction{Transaction: transaction})
+		})
+}
+
+func (repository addSecondApplicationLabelRepository) WithinReadOnlyTransaction(
+	ctx context.Context,
+	tenantID paasv1.TenantID,
+	callback func(context.Context, applicationlifecycle.Transaction) error,
+) error {
+	return repository.delegate.WithinReadOnlyTransaction(ctx, tenantID, callback)
+}
+
+type addSecondApplicationLabelTransaction struct {
+	applicationlifecycle.Transaction
+}
+
+func (transaction addSecondApplicationLabelTransaction) UpdateApplicationLabel(
+	ctx context.Context,
+	submission applicationlifecycle.ApplicationLabelSubmission,
+) error {
+	submission.Application.Metadata.Labels["tampered"] = "not-authorized"
+	return transaction.Transaction.UpdateApplicationLabel(ctx, submission)
+}
+
+func (transaction failAfterApplicationSubmitTransaction) UpdateApplicationLabel(
+	ctx context.Context,
+	submission applicationlifecycle.ApplicationLabelSubmission,
+) error {
+	if err := transaction.Transaction.UpdateApplicationLabel(ctx, submission); err != nil {
+		return err
+	}
+	return errInjectedAfterApplicationWrites
 }
 
 func (transaction failAfterApplicationSubmitTransaction) SubmitDeployment(
@@ -1016,6 +1140,43 @@ func assertApplicationLifecycle(
 	repository, err := NewApplicationRepository(apiPool)
 	if err != nil {
 		t.Fatalf("create application repository: %v", err)
+	}
+	if err := repository.WithinReadOnlyTransaction(ctx, fixture.tenantA,
+		func(transactionContext context.Context, transaction applicationlifecycle.Transaction) error {
+			actual, ok := transaction.(*applicationTransaction)
+			if !ok {
+				return errors.New("read-only application transaction has an unexpected implementation")
+			}
+			var readOnly, effectiveTenant string
+			if err := actual.tx.QueryRow(transactionContext, "SHOW transaction_read_only").Scan(&readOnly); err != nil {
+				return err
+			}
+			if err := actual.tx.QueryRow(transactionContext, "SELECT paas.current_tenant_id()").Scan(&effectiveTenant); err != nil {
+				return err
+			}
+			application, found, err := transaction.LoadApplication(transactionContext, fixture.applicationID)
+			if err != nil {
+				return err
+			}
+			if readOnly != "on" || effectiveTenant != string(fixture.tenantA) || !found || application.Metadata.ID != fixture.applicationID {
+				return errors.New("authorization inspection did not use the exact tenant read-only transaction")
+			}
+			return nil
+		}); err != nil {
+		t.Fatalf("application authorization read-only transaction: %v", err)
+	}
+	if err := repository.WithinReadOnlyTransaction(ctx, fixture.tenantB,
+		func(transactionContext context.Context, transaction applicationlifecycle.Transaction) error {
+			_, found, err := transaction.LoadApplication(transactionContext, fixture.applicationID)
+			if err != nil {
+				return err
+			}
+			if found {
+				return errors.New("read-only authorization inspection crossed tenant RLS")
+			}
+			return nil
+		}); err != nil {
+		t.Fatalf("application authorization read-only tenant RLS: %v", err)
 	}
 	usecase, err := applicationlifecycle.NewUsecase(
 		repository,
@@ -1152,6 +1313,209 @@ func assertApplicationLifecycle(
 		)
 	}
 	return created
+}
+
+func assertApplicationLabelLifecycle(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	apiPool *pgxpool.Pool,
+	fixture integrationFixture,
+	prefix string,
+) {
+	t.Helper()
+	repository, err := NewApplicationRepository(apiPool)
+	if err != nil {
+		t.Fatalf("create Application repository for labels: %v", err)
+	}
+	usecase, err := applicationlifecycle.NewUsecase(repository, applicationlifecycle.Config{MaxTransactionAttempts: 5})
+	if err != nil {
+		t.Fatalf("create Application label use case: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	tenantBApplication := paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application",
+		Metadata: integrationMetadata(fixture.applicationID, "tenant-b-application", paasv1.AuthorityTenant,
+			fixture.tenantB, 1, now, false)}
+	tenantBApplication.Metadata.Labels = map[string]string{"environment": "tenant-b", "gate": "postgres-integration"}
+	if err := paasv1.ValidateApplication(tenantBApplication); err != nil {
+		t.Fatalf("validate tenant B same-ID Application: %v", err)
+	}
+	execDocument(t, ctx, admin,
+		`INSERT INTO paas.applications (tenant_id, id, resource_version, document)
+		 VALUES ($1, $2, $3, $4::jsonb)`, fixture.tenantB, fixture.applicationID, 1,
+		integrationJSON(t, tenantBApplication))
+
+	setAuthorization := integrationAuthorization(fixture.tenantA,
+		paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-label-user"}, "set-application-label")
+	setAuthorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+	setCommand := applicationlifecycle.SetApplicationLabelCommand{Authorization: setAuthorization,
+		ApplicationID: fixture.applicationID, LabelKey: "environment", Value: "production",
+		ExpectedResourceVersion: 1, IdempotencyKey: "set-application-environment"}
+	set, err := usecase.SetApplicationLabel(ctx, setCommand)
+	if err != nil || set.Replayed || set.ResourceVersion != 2 ||
+		set.Operation.Action != paasv1.OperationSetApplicationLabel {
+		t.Fatalf("set Application label through API login: result=%#v err=%v", set, err)
+	}
+	replayed, err := usecase.SetApplicationLabel(ctx, setCommand)
+	if err != nil || !replayed.Replayed || replayed.Operation.ID != set.Operation.ID || replayed.ResourceVersion != 2 {
+		t.Fatalf("replay Application label set: result=%#v err=%v", replayed, err)
+	}
+	changedReplay := setCommand
+	changedReplay.Value = "staging"
+	changedReplay.Authorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}
+	if _, err := usecase.SetApplicationLabel(ctx, changedReplay); !errors.Is(err, applicationlifecycle.ErrIdempotencyConflict) {
+		t.Fatalf("changed Application label replay error = %v", err)
+	}
+
+	setConcurrent := setCommand
+	setConcurrent.Value, setConcurrent.ExpectedResourceVersion, setConcurrent.IdempotencyKey = "staging", 2, "concurrent-set-environment"
+	setConcurrent.Authorization = integrationAuthorization(fixture.tenantA,
+		paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-label-user"}, "concurrent-set-application-label")
+	setConcurrent.Authorization.ResourceTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+	setConcurrent.Authorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}
+	deleteConcurrent := applicationlifecycle.DeleteApplicationLabelCommand{Authorization: integrationAuthorization(fixture.tenantA,
+		paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-label-user"}, "concurrent-delete-application-label"),
+		ApplicationID: fixture.applicationID, LabelKey: "environment", ExpectedResourceVersion: 2,
+		IdempotencyKey: "concurrent-delete-environment"}
+	deleteConcurrent.Authorization.ResourceTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+	deleteConcurrent.Authorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+	start := make(chan struct{})
+	errorsByMutation := make([]error, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		<-start
+		_, errorsByMutation[0] = usecase.SetApplicationLabel(ctx, setConcurrent)
+	}()
+	go func() {
+		defer wait.Done()
+		<-start
+		_, errorsByMutation[1] = usecase.DeleteApplicationLabel(ctx, deleteConcurrent)
+	}()
+	close(start)
+	wait.Wait()
+	succeeded, conflicted := 0, 0
+	for _, mutationErr := range errorsByMutation {
+		switch {
+		case mutationErr == nil:
+			succeeded++
+		case errors.Is(mutationErr, applicationlifecycle.ErrResourceVersionConflict):
+			conflicted++
+		default:
+			t.Fatalf("concurrent Application label mutation error = %v", mutationErr)
+		}
+	}
+	if succeeded != 1 || conflicted != 1 {
+		t.Fatalf("concurrent Application label outcomes = %#v", errorsByMutation)
+	}
+
+	current := readIntegrationApplication(t, ctx, admin, fixture.tenantA, fixture.applicationID)
+	if current.Metadata.ResourceVersion != 3 {
+		t.Fatalf("Application resourceVersion after concurrent mutation = %d", current.Metadata.ResourceVersion)
+	}
+	if current.Metadata.Labels["environment"] == "" {
+		restoreAuthorization := integrationAuthorization(fixture.tenantA,
+			paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-label-user"}, "restore-application-label")
+		restoreAuthorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}
+		restored, err := usecase.SetApplicationLabel(ctx, applicationlifecycle.SetApplicationLabelCommand{
+			Authorization: restoreAuthorization, ApplicationID: fixture.applicationID, LabelKey: "environment",
+			Value: "staging", ExpectedResourceVersion: 3, IdempotencyKey: "restore-application-environment"})
+		if err != nil || restored.ResourceVersion != 4 {
+			t.Fatalf("restore Application label after concurrent delete: result=%#v err=%v", restored, err)
+		}
+		current = readIntegrationApplication(t, ctx, admin, fixture.tenantA, fixture.applicationID)
+	}
+	deleteAuthorization := integrationAuthorization(fixture.tenantA,
+		paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-label-user"}, "delete-application-label")
+	deleteAuthorization.ResourceTags = []iamv1.AuthorizationTag{{Key: "environment", Value: current.Metadata.Labels["environment"]}}
+	deleteAuthorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: current.Metadata.Labels["environment"]}}
+	deleted, err := usecase.DeleteApplicationLabel(ctx, applicationlifecycle.DeleteApplicationLabelCommand{
+		Authorization: deleteAuthorization, ApplicationID: fixture.applicationID, LabelKey: "environment",
+		ExpectedResourceVersion: current.Metadata.ResourceVersion, IdempotencyKey: "delete-application-environment"})
+	if err != nil || deleted.ResourceVersion != current.Metadata.ResourceVersion+1 {
+		t.Fatalf("delete Application label through API login: result=%#v err=%v", deleted, err)
+	}
+	current = readIntegrationApplication(t, ctx, admin, fixture.tenantA, fixture.applicationID)
+	if _, present := current.Metadata.Labels["environment"]; present {
+		t.Fatalf("deleted Application label remains in %#v", current.Metadata.Labels)
+	}
+	tenantBAfter := readIntegrationApplication(t, ctx, admin, fixture.tenantB, fixture.applicationID)
+	if tenantBAfter.Metadata.ResourceVersion != 1 || tenantBAfter.Metadata.Labels["environment"] != "tenant-b" {
+		t.Fatalf("tenant A label mutation crossed RLS into tenant B: %#v", tenantBAfter)
+	}
+	tamperedUsecase, err := applicationlifecycle.NewUsecase(addSecondApplicationLabelRepository{delegate: repository},
+		applicationlifecycle.Config{MaxTransactionAttempts: 1})
+	if err != nil {
+		t.Fatalf("create tampered label use case: %v", err)
+	}
+	tamperedAuthorization := integrationAuthorization(fixture.tenantA,
+		paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-label-user"}, "tampered-application-label")
+	tamperedAuthorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "tampered"}}
+	_, tamperedErr := tamperedUsecase.SetApplicationLabel(ctx, applicationlifecycle.SetApplicationLabelCommand{
+		Authorization: tamperedAuthorization, ApplicationID: fixture.applicationID, LabelKey: "environment", Value: "tampered",
+		ExpectedResourceVersion: current.Metadata.ResourceVersion, IdempotencyKey: "tampered-application-environment"})
+	assertPostgresCode(t, tamperedErr, "22023")
+	afterTamper := readIntegrationApplication(t, ctx, admin, fixture.tenantA, fixture.applicationID)
+	if afterTamper.Metadata.ResourceVersion != current.Metadata.ResourceVersion ||
+		afterTamper.Metadata.Labels["environment"] != "" || afterTamper.Metadata.Labels["tampered"] != "" {
+		t.Fatalf("database admitted an unproved second label mutation: %#v", afterTamper)
+	}
+
+	faultUsecase, err := applicationlifecycle.NewUsecase(failAfterApplicationSubmitRepository{delegate: repository},
+		applicationlifecycle.Config{MaxTransactionAttempts: 1})
+	if err != nil {
+		t.Fatalf("create fault-injected label use case: %v", err)
+	}
+	faultAuthorization := integrationAuthorization(fixture.tenantA,
+		paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-label-user"}, "fault-application-label")
+	faultAuthorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "fault"}}
+	var beforeFaultOperations, beforeFaultEvents int
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM paas.operations WHERE tenant_id=$1 AND target_kind='Application' AND target_id=$2
+		 AND action IN ('SET_APPLICATION_LABEL','DELETE_APPLICATION_LABEL')),
+		(SELECT count(*) FROM paas.audit_outbox WHERE tenant_id=$1 AND document#>>'{target,id}'=$2
+		 AND document->>'action' IN ('paas.application-label.updated','paas.application-label.deleted'))`,
+		fixture.tenantA, fixture.applicationID).Scan(&beforeFaultOperations, &beforeFaultEvents); err != nil {
+		t.Fatalf("inspect Application label rows before injected fault: %v", err)
+	}
+	if _, err := faultUsecase.SetApplicationLabel(ctx, applicationlifecycle.SetApplicationLabelCommand{
+		Authorization: faultAuthorization, ApplicationID: fixture.applicationID, LabelKey: "environment", Value: "fault",
+		ExpectedResourceVersion: current.Metadata.ResourceVersion, IdempotencyKey: "fault-application-environment"}); !errors.Is(err, errInjectedAfterApplicationWrites) {
+		t.Fatalf("fault-injected Application label mutation error = %v", err)
+	}
+	afterFault := readIntegrationApplication(t, ctx, admin, fixture.tenantA, fixture.applicationID)
+	if afterFault.Metadata.ResourceVersion != current.Metadata.ResourceVersion || afterFault.Metadata.Labels["environment"] != "" {
+		t.Fatalf("fault-injected Application label mutation leaked state: %#v", afterFault)
+	}
+	var afterFaultOperations, afterFaultEvents int
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM paas.operations WHERE tenant_id=$1 AND target_kind='Application' AND target_id=$2
+		 AND action IN ('SET_APPLICATION_LABEL','DELETE_APPLICATION_LABEL')),
+		(SELECT count(*) FROM paas.audit_outbox WHERE tenant_id=$1 AND document#>>'{target,id}'=$2
+		 AND document->>'action' IN ('paas.application-label.updated','paas.application-label.deleted'))`,
+		fixture.tenantA, fixture.applicationID).Scan(&afterFaultOperations, &afterFaultEvents); err != nil {
+		t.Fatalf("inspect fault-injected label rows: %v", err)
+	}
+	if afterFaultOperations != beforeFaultOperations || afterFaultEvents != beforeFaultEvents {
+		t.Fatalf("fault-injected label transaction leaked Operation/Audit rows: %d/%d -> %d/%d",
+			beforeFaultOperations, beforeFaultEvents, afterFaultOperations, afterFaultEvents)
+	}
+}
+
+func readIntegrationApplication(t *testing.T, ctx context.Context, admin *pgx.Conn,
+	tenantID paasv1.TenantID, applicationID paasv1.ResourceID) paasv1.Application {
+	t.Helper()
+	var document []byte
+	if err := admin.QueryRow(ctx, `SELECT document FROM paas.applications WHERE tenant_id=$1 AND id=$2`,
+		tenantID, applicationID).Scan(&document); err != nil {
+		t.Fatalf("read Application %s/%s: %v", tenantID, applicationID, err)
+	}
+	var application paasv1.Application
+	if err := decodeDocument("Application", document, &application); err != nil {
+		t.Fatalf("decode Application %s/%s: %v", tenantID, applicationID, err)
+	}
+	return application
 }
 
 func assertOperationQueue(

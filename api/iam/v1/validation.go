@@ -3,12 +3,15 @@ package iamv1
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
 var (
@@ -29,6 +32,179 @@ func ValidateID(name, value string) error {
 func ValidateDigest(name, value string) error {
 	if !digestPattern.MatchString(value) {
 		return fmt.Errorf("%s is invalid", name)
+	}
+	return nil
+}
+
+func ValidateNotificationContact(value NotificationContact) error {
+	if value.APIVersion != APIVersion || value.Kind != "NotificationContact" ||
+		ValidateID("accountId", string(value.AccountID)) != nil || ValidateID("userId", string(value.UserID)) != nil ||
+		(value.PendingVerificationID != "" && ValidateID("pendingVerificationId", value.PendingVerificationID) != nil) {
+		return errors.New("notification contact is invalid")
+	}
+	switch value.State {
+	case "NONE":
+		if value.ResourceVersion != 0 || value.Email != "" || value.VerifiedAt != nil {
+			return errors.New("unverified notification contact has trusted fields")
+		}
+	case "VERIFIED":
+		if validatePositiveVersion(value.ResourceVersion) != nil || ValidateSecurityMailAddress(value.Email) != nil ||
+			value.VerifiedAt == nil || validateTime("verifiedAt", *value.VerifiedAt) != nil {
+			return errors.New("verified notification contact is invalid")
+		}
+	default:
+		return errors.New("notification contact state is invalid")
+	}
+	return nil
+}
+
+func ValidateStartNotificationContactVerificationRequest(value StartNotificationContactVerificationRequest) error {
+	if ValidateSecurityMailAddress(value.Email) != nil || !value.Password.Present() || ValidateID("requestId", value.RequestID) != nil {
+		return errors.New("notification contact verification request is invalid")
+	}
+	return nil
+}
+
+func ValidateNotificationContactReplacementIntent(value NotificationContactReplacementIntent) error {
+	if validatePositiveVersion(value.ExpectedResourceVersion) != nil || value.ExpectedResourceVersion > 9007199254740990 ||
+		ValidateSecurityMailAddress(value.Email) != nil {
+		return errors.New("notification contact replacement intent is invalid")
+	}
+	return nil
+}
+
+func ValidateStartNotificationContactReplacementRequest(value StartNotificationContactReplacementRequest) error {
+	if ValidateID("stepUpId", value.StepUpID) != nil || ValidateID("requestId", value.RequestID) != nil ||
+		ValidateNotificationContactReplacementIntent(NotificationContactReplacementIntent{
+			ExpectedResourceVersion: value.ExpectedResourceVersion, Email: value.Email,
+		}) != nil {
+		return errors.New("notification contact replacement request is invalid")
+	}
+	return nil
+}
+
+func ValidateConfirmNotificationContactVerificationRequest(value ConfirmNotificationContactVerificationRequest) error {
+	code := value.Code.CopyBytes()
+	defer clear(code)
+	if ValidateID("requestId", value.RequestID) != nil || len(code) != 8 {
+		return errors.New("notification contact confirmation is invalid")
+	}
+	for _, digit := range code {
+		if digit < '0' || digit > '9' {
+			return errors.New("notification contact confirmation is invalid")
+		}
+	}
+	return nil
+}
+
+func ValidateStartChallengeNotificationContactVerificationRequest(value StartChallengeNotificationContactVerificationRequest) error {
+	if !value.ChallengeCredential.Present() || ValidateSecurityMailAddress(value.Email) != nil || ValidateID("requestId", value.RequestID) != nil {
+		return errors.New("enrollment contact verification request is invalid")
+	}
+	return nil
+}
+
+func ValidateConfirmChallengeNotificationContactVerificationRequest(value ConfirmChallengeNotificationContactVerificationRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateConfirmNotificationContactVerificationRequest(ConfirmNotificationContactVerificationRequest{
+		Code: value.Code, RequestID: value.RequestID,
+	})
+}
+
+func ValidateNotificationDeliveryObservation(value NotificationDeliveryObservation) error {
+	if value.Attempts > 5 || validateTime("updatedAt", value.UpdatedAt) != nil {
+		return errors.New("notification delivery observation is invalid")
+	}
+	switch value.State {
+	case "PENDING":
+		if value.Attempts != 0 || value.LastOutcome != "" {
+			return errors.New("pending notification already has an attempt")
+		}
+	case "IN_FLIGHT", "RETRY_WAIT", "ACCEPTED", "FAILED":
+		if value.Attempts == 0 {
+			return errors.New("notification observation lacks an attempt")
+		}
+	case "EXPIRED":
+	default:
+		return errors.New("notification delivery state is invalid")
+	}
+	if value.State == "IN_FLIGHT" && ((value.Attempts == 1 && value.LastOutcome != "") || (value.Attempts > 1 && value.LastOutcome == "")) ||
+		value.State == "RETRY_WAIT" && value.Attempts >= 5 || value.State == "EXPIRED" && value.Attempts >= 5 {
+		return errors.New("notification attempt progression is invalid")
+	}
+	switch value.LastOutcome {
+	case "":
+		if value.LastSMTPCode != 0 || value.Attempts > 1 || value.State == "EXPIRED" && value.Attempts != 0 || value.State == "RETRY_WAIT" || value.State == "ACCEPTED" || value.State == "FAILED" {
+			return errors.New("notification outcome is missing")
+		}
+	case "ACCEPTED":
+		if value.State != "ACCEPTED" || value.LastSMTPCode != 250 {
+			return errors.New("notification acceptance is not an exact SMTP observation")
+		}
+	case "REJECTED":
+		if value.LastSMTPCode < 400 || value.LastSMTPCode > 599 || value.State == "ACCEPTED" || value.Attempts == 0 {
+			return errors.New("notification rejection is invalid")
+		}
+		if value.LastSMTPCode >= 500 && value.State != "FAILED" || value.LastSMTPCode < 500 && value.State == "FAILED" && value.Attempts != 5 {
+			return errors.New("notification rejection disposition is invalid")
+		}
+	case "UNKNOWN", "UNAVAILABLE":
+		if value.LastSMTPCode != 0 || value.State == "ACCEPTED" || value.Attempts == 0 {
+			return errors.New("notification uncertainty is invalid")
+		}
+		if value.State == "FAILED" && value.Attempts != 5 {
+			return errors.New("notification attempts are not exhausted")
+		}
+	default:
+		return errors.New("notification outcome is invalid")
+	}
+	return nil
+}
+
+func ValidateNotificationContactVerification(value NotificationContactVerification) error {
+	if value.APIVersion != APIVersion || value.Kind != "NotificationContactVerification" ||
+		ValidateID("id", value.ID) != nil || ValidateID("accountId", string(value.AccountID)) != nil ||
+		ValidateID("userId", string(value.UserID)) != nil || ValidateID("requestId", value.RequestID) != nil ||
+		ValidateSecurityMailAddress(value.Email) != nil || validateTime("issuedAt", value.IssuedAt) != nil ||
+		validateTime("expiresAt", value.ExpiresAt) != nil || !value.ExpiresAt.After(value.IssuedAt) || value.ExpiresAt.Sub(value.IssuedAt) > 10*time.Minute ||
+		ValidateNotificationDeliveryObservation(value.Delivery) != nil || value.Delivery.UpdatedAt.Before(value.IssuedAt) {
+		return errors.New("notification contact verification is invalid")
+	}
+	switch value.Purpose {
+	case NotificationContactFirstAddress:
+		if value.ExpectedResourceVersion != 0 {
+			return errors.New("first notification contact has an existing version")
+		}
+	case NotificationContactReplacement:
+		if validatePositiveVersion(value.ExpectedResourceVersion) != nil || value.ExpectedResourceVersion > 9007199254740990 {
+			return errors.New("notification contact replacement version is invalid")
+		}
+	default:
+		return errors.New("notification contact verification purpose is invalid")
+	}
+	if value.State == "PENDING" {
+		if value.CompletedAt != nil {
+			return errors.New("pending verification has a completion")
+		}
+		return nil
+	}
+	if value.CompletedAt == nil || validateTime("completedAt", *value.CompletedAt) != nil || value.CompletedAt.Before(value.IssuedAt) {
+		return errors.New("notification contact completion is invalid")
+	}
+	switch value.State {
+	case "VERIFIED":
+		if !value.CompletedAt.Before(value.ExpiresAt) {
+			return errors.New("notification contact completed after expiry")
+		}
+	case "CANCELLED":
+	case "EXPIRED":
+		if *value.CompletedAt != value.ExpiresAt {
+			return errors.New("verification expiry has no exact boundary")
+		}
+	default:
+		return errors.New("notification contact verification state is invalid")
 	}
 	return nil
 }
@@ -77,7 +253,8 @@ func ValidateServiceIdentity(value ServiceIdentity) error {
 		problems = append(problems, errors.New("service identity type metadata is invalid"))
 	}
 	problems = append(problems,
-		ValidateID("serviceIdentity.organizationId", string(value.OrganizationID)),
+		ValidateID("serviceIdentity.installationId", value.InstallationID),
+		ValidateID("serviceIdentity.organizationId", string(value.AccountID)),
 		ValidateID("serviceIdentity.principalId", string(value.PrincipalID)),
 	)
 	if !knownServicePurpose(value.Purpose) {
@@ -87,7 +264,7 @@ func ValidateServiceIdentity(value ServiceIdentity) error {
 }
 
 func ValidateResolveAuditProducerRequest(value ResolveAuditProducerRequest) error {
-	return ValidateID("organizationId", string(value.OrganizationID))
+	return auditv1.ValidateEvent(value.Event)
 }
 
 func ValidateAuditProducerAuthorization(value AuditProducerAuthorization) error {
@@ -95,7 +272,15 @@ func ValidateAuditProducerAuthorization(value AuditProducerAuthorization) error 
 		(value.Producer.Purpose != ServiceIAM && value.Producer.Purpose != ServicePaaS && value.Producer.Purpose != ServiceAudit) {
 		return errors.New("audit producer authorization is invalid")
 	}
-	return errors.Join(ValidateServiceIdentity(value.Producer), ValidateID("organizationId", string(value.OrganizationID)))
+	if (value.TenantID == "") == (value.InstallationID == "") ||
+		(value.InstallationID != "" && value.InstallationID != value.Producer.InstallationID) {
+		return errors.New("audit producer scope is invalid")
+	}
+	scope := value.InstallationID
+	if value.TenantID != "" {
+		scope = string(value.TenantID)
+	}
+	return errors.Join(ValidateServiceIdentity(value.Producer), ValidateID("scope", scope), ValidateDigest("contentDigest", value.ContentDigest))
 }
 
 func ValidateBootstrapStatus(value BootstrapStatus) error {
@@ -104,7 +289,7 @@ func ValidateBootstrapStatus(value BootstrapStatus) error {
 	}
 	switch value.State {
 	case BootstrapUninitialized:
-		if value.InstallationID != "" || value.OrganizationID != "" ||
+		if value.InstallationID != "" || value.AccountID != "" ||
 			value.ContentDigest != "" || value.AppliedAt != nil {
 			return errors.New("uninitialized bootstrap status contains initialized data")
 		}
@@ -113,7 +298,7 @@ func ValidateBootstrapStatus(value BootstrapStatus) error {
 		var problems []error
 		problems = append(problems,
 			ValidateID("installationId", value.InstallationID),
-			ValidateID("organizationId", string(value.OrganizationID)),
+			ValidateID("organizationId", string(value.AccountID)),
 			ValidateDigest("contentDigest", value.ContentDigest),
 		)
 		if value.AppliedAt == nil {
@@ -137,12 +322,632 @@ func ValidateLoginRequest(value LoginRequest) error {
 }
 
 func ValidateLoginResponse(value LoginResponse) error {
-	var problems []error
-	problems = append(problems, ValidateSession(value.Session))
-	if !value.Credential.Present() {
-		problems = append(problems, ErrInvalidSecret)
+	switch value.Outcome {
+	case LoginAuthenticated:
+		if value.Challenge != nil || value.ChallengeCredential.Present() || !value.Credential.Present() ||
+			value.Session.Status != SessionActive || value.Session.RevokedAt != nil || value.PasswordResetReason != "" {
+			return errors.New("authenticated login result is invalid")
+		}
+		return ValidateSession(value.Session)
+	case LoginChallengeRequired:
+		if value.Challenge == nil || !value.ChallengeCredential.Present() || value.Credential.Present() ||
+			value.Session != (Session{}) || value.MustChangePassword || value.PasswordResetReason != "" ||
+			(value.Challenge.Purpose != "LOGIN" && value.Challenge.Purpose != "ENROLLMENT") {
+			return errors.New("challenged login result is invalid")
+		}
+		return ValidateAuthenticationChallenge(*value.Challenge)
+	case LoginAdminResetRequired:
+		if value.Session != (Session{}) || value.Credential.Present() || value.MustChangePassword ||
+			value.Challenge != nil || value.ChallengeCredential.Present() ||
+			(value.PasswordResetReason != PasswordResetExpired && value.PasswordResetReason != PasswordResetAgeUnknown) {
+			return errors.New("administrator password reset result is invalid")
+		}
+		return nil
+	default:
+		return errors.New("login outcome is invalid")
 	}
-	return errors.Join(problems...)
+}
+
+func ValidateVerifyAuthenticationChallengeRequest(value VerifyAuthenticationChallengeRequest) error {
+	if !value.ChallengeCredential.Present() || !value.Code.Present() {
+		return ErrInvalidSecret
+	}
+	// A nonempty malformed OTP is still an authentication attempt. Canonical
+	// six-digit validation occurs only after the shared debit is committed.
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateAuthenticationChallenge(value AuthenticationChallenge) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthenticationChallenge" {
+		return errors.New("authentication challenge is invalid")
+	}
+	switch value.Purpose {
+	case "LOGIN":
+		if value.NextStep != "TOTP" && value.NextStep != "PASSWORD_CHANGE" && value.NextStep != "RECOVER" {
+			return errors.New("login challenge stage is invalid")
+		}
+	case "RECOVERY":
+		if value.NextStep != "ENROLLMENT" {
+			return errors.New("recovery challenge stage is invalid")
+		}
+	case "ENROLLMENT":
+		if value.NextStep != "PASSWORD_CHANGE" && value.NextStep != "ENROLLMENT" {
+			return errors.New("enrollment challenge stage is invalid")
+		}
+	default:
+		return errors.New("authentication challenge purpose is invalid")
+	}
+	return errors.Join(ValidateID("challenge.id", value.ID), validateTime("challenge.expiresAt", value.ExpiresAt))
+}
+
+func ValidateInspectEnrollmentChallengeRequest(value InspectEnrollmentChallengeRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return nil
+}
+
+func ValidateStartChallengeTOTPEnrollmentRequest(value StartChallengeTOTPEnrollmentRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateEnrollmentChallengeState(value EnrollmentChallengeState) error {
+	if ValidateAuthenticationChallenge(value.Challenge) != nil || value.Challenge.Purpose != "ENROLLMENT" {
+		return errors.New("enrollment challenge observation is invalid")
+	}
+	if value.Challenge.NextStep == "PASSWORD_CHANGE" {
+		if value.NotificationContact != nil || value.Enrollment != nil {
+			return errors.New("password change challenge exposes enrollment state")
+		}
+		return nil
+	}
+	if value.NotificationContact == nil || ValidateNotificationContact(*value.NotificationContact) != nil {
+		return errors.New("enrollment contact observation is required")
+	}
+	if value.Enrollment != nil && (ValidateTOTPEnrollment(*value.Enrollment) != nil ||
+		value.Enrollment.Purpose != "INITIAL" || value.Enrollment.State != "PENDING" || value.Enrollment.FactorRevision == 2 ||
+		!value.Enrollment.ExpiresAt.Equal(value.Challenge.ExpiresAt) || value.NotificationContact.State != "VERIFIED" ||
+		value.NotificationContact.VerifiedAt.After(value.Enrollment.CreatedAt)) {
+		return errors.New("enrollment must retain its original challenge deadline and binding prerequisites")
+	}
+	return nil
+}
+
+func ValidateChallengePasswordChangeRequest(value ChallengePasswordChangeRequest) error {
+	if !value.ChallengeCredential.Present() || !value.NewPassword.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateChallengePasswordChangeResponse(value ChallengePasswordChangeResponse) error {
+	if value.NextStep != "REAUTHENTICATE" {
+		return errors.New("password challenge completion is invalid")
+	}
+	return validateTime("changedAt", value.ChangedAt)
+}
+
+func ValidateAuthenticatorState(value AuthenticatorState) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthenticatorState" || value.FactorRevision == 0 || value.FactorRevision > 9007199254740991 {
+		return errors.New("authenticator state is invalid")
+	}
+	switch value.EnrollmentState {
+	case "NEVER_BOUND":
+		if value.FactorRevision != 1 || value.FactorID != "" {
+			return errors.New("first enrollment state is invalid")
+		}
+	case "BOUND":
+		if value.FactorRevision <= 1 || ValidateID("factorId", value.FactorID) != nil {
+			return errors.New("bound authenticator is invalid")
+		}
+	case "REMOVED":
+		if value.FactorRevision < 3 || value.FactorID != "" {
+			return errors.New("removed authenticator state is invalid")
+		}
+	case "RECOVERY_REQUIRED":
+		if value.FactorID != "" && ValidateID("factorId", value.FactorID) != nil {
+			return errors.New("recovery authenticator is invalid")
+		}
+	default:
+		return errors.New("authenticator state is invalid")
+	}
+	return nil
+}
+
+func ValidateTOTPEnrollment(value TOTPEnrollment) error {
+	if value.APIVersion != APIVersion || value.Kind != "TOTPEnrollment" || value.FactorRevision == 0 || value.FactorRevision > 9007199254740990 ||
+		ValidateID("id", value.ID) != nil || ValidateID("requestId", value.RequestID) != nil ||
+		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
+		!value.ExpiresAt.After(value.CreatedAt) || value.ExpiresAt.Sub(value.CreatedAt) > 5*time.Minute {
+		return errors.New("TOTP enrollment is invalid")
+	}
+	switch value.Purpose {
+	case "INITIAL":
+	case "REPLACEMENT":
+		if value.FactorRevision < 2 || value.ExpiresAt.Sub(value.CreatedAt) > 2*time.Minute {
+			return errors.New("replacement must retain a bound revision and original proof deadline")
+		}
+	default:
+		return errors.New("TOTP enrollment purpose is invalid")
+	}
+	switch value.State {
+	case "PENDING":
+		if value.CompletedAt != nil {
+			return errors.New("pending enrollment has completion")
+		}
+	case "CONFIRMED", "CANCELLED", "EXPIRED":
+		if value.CompletedAt == nil || validateTime("completedAt", *value.CompletedAt) != nil || value.CompletedAt.Before(value.CreatedAt) ||
+			(value.State == "CONFIRMED" && !value.CompletedAt.Before(value.ExpiresAt)) {
+			return errors.New("enrollment completion is invalid")
+		}
+	default:
+		return errors.New("enrollment state is invalid")
+	}
+	return nil
+}
+
+func ValidateStartTOTPEnrollmentRequest(value StartTOTPEnrollmentRequest) error {
+	if !value.Password.Present() {
+		return ErrInvalidSecret
+	}
+	if value.ExpectedFactorRevision == 0 || value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("factor revision is invalid")
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateStartTOTPReplacementRequest(value StartTOTPReplacementRequest) error {
+	if value.ExpectedFactorRevision < 2 || value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("replaceable bound factor revision is required")
+	}
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID))
+}
+
+func ValidateRemoveTOTPRequest(value RemoveTOTPRequest) error {
+	if value.ExpectedFactorRevision < 2 || value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("removable bound factor revision is required")
+	}
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID))
+}
+
+func ValidateAuthenticatorRemoval(value AuthenticatorRemoval) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthenticatorRemoval" || value.FactorRevision < 3 {
+		return errors.New("authenticator removal is invalid")
+	}
+	return errors.Join(ValidateID("id", value.ID), ValidateID("requestId", value.RequestID), ValidateID("factorId", value.FactorID),
+		validatePositiveVersion(value.FactorRevision), validateTime("removedAt", value.RemovedAt))
+}
+
+func ValidateRemoveTOTPResponse(value RemoveTOTPResponse) error {
+	if err := ValidateAuthenticatorRemoval(value.Removal); err != nil {
+		return err
+	}
+	if value.Outcome == "APPLIED" && value.NextStep == "REAUTHENTICATE" || value.Outcome == "EQUAL_REPLAY" && value.NextStep == "" {
+		return nil
+	}
+	return errors.New("authenticator removal outcome is invalid")
+}
+
+func ValidateStartTOTPEnrollmentResponse(value StartTOTPEnrollmentResponse) error {
+	if err := ValidateTOTPEnrollment(value.Enrollment); err != nil {
+		return err
+	}
+	switch value.Outcome {
+	case "APPLIED":
+		if value.Enrollment.State != "PENDING" || value.Provisioning == nil || !value.Provisioning.Seed.Present() || !value.Provisioning.URI.Present() {
+			return errors.New("applied enrollment is invalid")
+		}
+	case "EQUAL_REPLAY":
+		if value.Provisioning != nil {
+			return errors.New("replayed enrollment contains provisioning")
+		}
+	default:
+		return errors.New("enrollment outcome is invalid")
+	}
+	return nil
+}
+
+func ValidateConfirmTOTPEnrollmentRequest(value ConfirmTOTPEnrollmentRequest) error {
+	if !value.Code.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateConfirmTOTPEnrollmentResponse(value ConfirmTOTPEnrollmentResponse) error {
+	if err := ValidateTOTPEnrollment(value.Enrollment); err != nil {
+		return err
+	}
+	if value.Enrollment.State != "CONFIRMED" || value.NextStep != "REAUTHENTICATE" || len(value.RecoveryCodes) != 10 {
+		return errors.New("enrollment confirmation is invalid")
+	}
+	return validateRecoveryCodes(value.RecoveryCodes)
+}
+
+func validateRecoveryCodes(codes []Secret) error {
+	if len(codes) != 10 {
+		return ErrInvalidSecret
+	}
+	seen := make(map[string]bool, 10)
+	for _, code := range codes {
+		if !code.Present() || seen[code.reveal()] {
+			return ErrInvalidSecret
+		}
+		seen[code.reveal()] = true
+	}
+	return nil
+}
+
+func ValidateAuthenticatorRecovery(value AuthenticatorRecovery) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthenticatorRecovery" ||
+		ValidateID("recovery.id", value.ID) != nil || ValidateID("recovery.requestId", value.RequestID) != nil ||
+		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
+		!value.ExpiresAt.After(value.CreatedAt) || value.ExpiresAt.Sub(value.CreatedAt) > 5*time.Minute {
+		return errors.New("authenticator recovery is invalid")
+	}
+	if value.State == "STARTED" {
+		if value.CompletedAt != nil {
+			return errors.New("started recovery has completion")
+		}
+		return nil
+	}
+	if value.CompletedAt == nil || validateTime("completedAt", *value.CompletedAt) != nil || value.CompletedAt.Before(value.CreatedAt) {
+		return errors.New("recovery completion is invalid")
+	}
+	switch value.State {
+	case "COMPLETED":
+		if !value.CompletedAt.Before(value.ExpiresAt) {
+			return errors.New("expired recovery was completed")
+		}
+	case "SUPERSEDED":
+	case "EXPIRED":
+		if value.CompletedAt.Before(value.ExpiresAt) {
+			return errors.New("unexpired recovery was expired")
+		}
+	default:
+		return errors.New("recovery state is invalid")
+	}
+	return nil
+}
+
+func ValidateStartAuthenticatorRecoveryRequest(value StartAuthenticatorRecoveryRequest) error {
+	// Nonempty malformed candidates are debited before domain verification.
+	if !value.ChallengeCredential.Present() || !value.RecoveryCode.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateInspectAuthenticatorRecoveryRequest(value InspectAuthenticatorRecoveryRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateStartAuthenticatorRecoveryResponse(value StartAuthenticatorRecoveryResponse) error {
+	if ValidateAuthenticatorRecovery(value.Recovery) != nil || value.Recovery.State != "STARTED" ||
+		ValidateAuthenticationChallenge(value.Challenge) != nil || value.Challenge.Purpose != "RECOVERY" ||
+		!value.Challenge.ExpiresAt.Equal(value.Recovery.ExpiresAt) || !value.ChallengeCredential.Present() ||
+		!value.Provisioning.Seed.Present() || !value.Provisioning.URI.Present() {
+		return errors.New("started recovery response is invalid")
+	}
+	return nil
+}
+
+func ValidateConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorRecoveryResponse) error {
+	if ValidateAuthenticatorRecovery(value.Recovery) != nil || value.Recovery.State != "COMPLETED" || value.NextStep != "REAUTHENTICATE" {
+		return errors.New("confirmed recovery response is invalid")
+	}
+	return validateRecoveryCodes(value.RecoveryCodes)
+}
+
+func ValidateAccountPasswordSettings(value AccountPasswordSettings) error {
+	return validateAccountPasswordSettings(value, false)
+}
+
+func validateAccountPasswordSettings(value AccountPasswordSettings, historical bool) error {
+	if value.MinimumLength < 15 || value.MinimumLength > 128 || value.HistoryCount < 0 || value.HistoryCount > 24 {
+		return errors.New("account password settings are invalid")
+	}
+	// An absent expiry pair is an actual immutable pre-expiry value, never a
+	// defaulted current rule or a new proof's target.
+	if historical && value.ExpiryMode == "" && value.MaxAgeDays == 0 {
+		return nil
+	}
+	if value.MaxAgeDays < 0 || value.MaxAgeDays > 365 ||
+		(value.ExpiryMode != PasswordExpiryChange && value.ExpiryMode != PasswordExpiryAdminReset) {
+		return errors.New("account password expiry settings are invalid")
+	}
+	return nil
+}
+
+func ValidatePasswordRequirements(value PasswordRequirements) error {
+	if value.APIVersion != APIVersion || value.Kind != "PasswordRequirements" ||
+		value.MaximumLength != 128 || value.MaximumUTF8Bytes != 512 ||
+		(value.Source != "ACCOUNT" && value.Source != "PROTECTED_IDENTITY") {
+		return errors.New("password requirements are invalid")
+	}
+	if value.Source == "PROTECTED_IDENTITY" && value.Password != (AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1, ExpiryMode: PasswordExpiryChange}) {
+		return errors.New("protected password requirements are invalid")
+	}
+	return errors.Join(ValidateAccountPasswordSettings(value.Password), validatePositiveVersion(value.SettingsVersion))
+}
+
+func ValidateChallengePasswordRequirementsRequest(value ChallengePasswordRequirementsRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return nil
+}
+
+func ValidateAccountSecuritySettings(value AccountSecuritySettings) error {
+	return validateAccountSecuritySettings(value, false)
+}
+
+func ValidateAccountSessionSettings(value AccountSessionSettings) error {
+	if value.IdleTimeoutMinutes < 5 || value.IdleTimeoutMinutes > 60 {
+		return errors.New("account session settings are invalid")
+	}
+	return nil
+}
+
+func ValidateAccessKeyNetworkRestrictions(value AccessKeyNetworkRestrictions) error {
+	if value.AllowedSourceCIDRs == nil || len(value.AllowedSourceCIDRs) > MaxAccessKeySourceCIDRs {
+		return errors.New("access key network restrictions are invalid")
+	}
+	previous := ""
+	for _, encoded := range value.AllowedSourceCIDRs {
+		prefix, err := netip.ParsePrefix(encoded)
+		if err != nil || prefix.Addr().Is4In6() || prefix.Masked().String() != encoded || encoded <= previous {
+			return errors.New("access key source CIDR is invalid")
+		}
+		previous = encoded
+	}
+	return nil
+}
+
+// AccessKeyNetworkRestrictionsAllowSource evaluates the canonical source
+// address against the validated AccessKey network contract. An empty list is
+// explicitly unrestricted; callers must still authenticate and authorize the
+// signed request before using this result.
+func AccessKeyNetworkRestrictionsAllowSource(value AccessKeyNetworkRestrictions, source string) (bool, error) {
+	if err := ValidateAccessKeyNetworkRestrictions(value); err != nil {
+		return false, err
+	}
+	address, err := ParseAuthorizationSourceIP(source)
+	if err != nil {
+		return false, err
+	}
+	if len(value.AllowedSourceCIDRs) == 0 {
+		return true, nil
+	}
+	for _, encoded := range value.AllowedSourceCIDRs {
+		prefix, err := netip.ParsePrefix(encoded)
+		if err != nil {
+			return false, err
+		}
+		if prefix.Contains(address) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func validateAccountSecuritySettings(value AccountSecuritySettings, historical bool) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettings" {
+		return errors.New("account security settings type metadata is invalid")
+	}
+	if value.Password == nil {
+		if !historical {
+			return errors.New("current password settings are missing")
+		}
+	} else if err := validateAccountPasswordSettings(*value.Password, historical); err != nil {
+		return err
+	}
+	if value.Session == nil {
+		if !historical {
+			return errors.New("current session settings are missing")
+		}
+	} else if err := ValidateAccountSessionSettings(*value.Session); err != nil {
+		return err
+	}
+	if value.AccessKeyNetwork == nil {
+		if !historical {
+			return errors.New("current access key network settings are missing")
+		}
+	} else if err := ValidateAccessKeyNetworkRestrictions(*value.AccessKeyNetwork); err != nil {
+		return err
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), validatePositiveVersion(value.ResourceVersion), validateTime("updatedAt", value.UpdatedAt))
+}
+
+func ValidateSecuritySettingsUpdateIntent(value SecuritySettingsUpdateIntent) error {
+	return validateSecuritySettingsUpdateIntent(value, false)
+}
+
+func validateSecuritySettingsUpdateIntent(value SecuritySettingsUpdateIntent, historical bool) error {
+	// A successful command increments the expected revision; both must remain
+	// exact safe integers for every public consumer.
+	if value.ExpectedResourceVersion == 0 || value.ExpectedResourceVersion >= 9007199254740991 {
+		return errors.New("security settings expected version is invalid")
+	}
+	if value.Password == nil {
+		if !historical {
+			return errors.New("password settings intent is missing")
+		}
+	} else if err := validateAccountPasswordSettings(*value.Password, historical); err != nil {
+		return err
+	}
+	if value.Session == nil {
+		if !historical {
+			return errors.New("session settings intent is missing")
+		}
+	} else if err := ValidateAccountSessionSettings(*value.Session); err != nil {
+		return err
+	}
+	if value.AccessKeyNetwork == nil {
+		if !historical {
+			return errors.New("access key network settings intent is missing")
+		}
+	} else if err := ValidateAccessKeyNetworkRestrictions(*value.AccessKeyNetwork); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ValidateUpdateAccountSecuritySettingsRequest(value UpdateAccountSecuritySettingsRequest) error {
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID),
+		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.MFA, Password: &value.Password, Session: &value.Session, AccessKeyNetwork: &value.AccessKeyNetwork}))
+}
+
+func ValidateAccountSecuritySettingsChange(value AccountSecuritySettingsChange) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettingsChange" ||
+		validateAccountSecuritySettings(value.Settings, true) != nil ||
+		validateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA, Password: value.Settings.Password, Session: value.Settings.Session, AccessKeyNetwork: value.Settings.AccessKeyNetwork}, true) != nil ||
+		value.Settings.ResourceVersion != value.ExpectedResourceVersion+1 ||
+		!value.CallerSessionEnded {
+		return errors.New("account security settings change is invalid")
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateSessionActivity(value SessionActivity) error {
+	if value.APIVersion != APIVersion || value.Kind != "SessionActivity" ||
+		ValidateID("sessionId", string(value.SessionID)) != nil || ValidateID("accountId", string(value.AccountID)) != nil ||
+		ValidateID("userId", string(value.UserID)) != nil || validateTime("lastActivityAt", value.LastActivityAt) != nil ||
+		validateTime("idleExpiresAt", value.IdleExpiresAt) != nil || validateTime("absoluteExpiresAt", value.AbsoluteExpiresAt) != nil {
+		return errors.New("session activity is invalid")
+	}
+	idle := value.IdleExpiresAt.Sub(value.LastActivityAt)
+	if idle < 5*time.Minute || idle > 60*time.Minute || idle%time.Minute != 0 || !value.AbsoluteExpiresAt.After(value.LastActivityAt) {
+		return errors.New("session activity deadline is invalid")
+	}
+	return nil
+}
+
+func ValidateUpdateAccountSecuritySettingsResponse(value UpdateAccountSecuritySettingsResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("account security settings outcome is invalid")
+	}
+	if value.Outcome == "APPLIED" && ValidateAccountSecuritySettings(value.Change.Settings) != nil {
+		return errors.New("new settings completion requires complete current settings")
+	}
+	return ValidateAccountSecuritySettingsChange(value.Change)
+}
+
+func ValidateStepUp(value StepUp) error {
+	if value.APIVersion != APIVersion || value.Kind != "StepUp" ||
+		validateStepUpOperationHistory(value.Operation, value.SecuritySettings, value.NotificationContact, value.State == "CONSUMED") != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
+		ValidateID("stepUp.id", value.ID) != nil || ValidateID("stepUp.requestId", value.RequestID) != nil ||
+		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
+		value.ExpiresAt.Sub(value.CreatedAt) != 2*time.Minute {
+		return errors.New("step-up is invalid")
+	}
+	if (value.Operation == StepUpReplaceTOTP || value.Operation == StepUpRemoveTOTP) && value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("factor revision cannot be advanced")
+	}
+	if value.ProvedAt != nil && (validateTime("provedAt", *value.ProvedAt) != nil || value.ProvedAt.Before(value.CreatedAt) || !value.ProvedAt.Before(value.ExpiresAt)) {
+		return errors.New("step-up proof time is invalid")
+	}
+	if value.ConsumedAt != nil && (value.ProvedAt == nil || validateTime("consumedAt", *value.ConsumedAt) != nil ||
+		value.ConsumedAt.Before(*value.ProvedAt) || !value.ConsumedAt.Before(value.ExpiresAt)) {
+		return errors.New("step-up consumption time is invalid")
+	}
+	switch value.State {
+	case "PENDING":
+		if value.ProvedAt != nil || value.ConsumedAt != nil {
+			return errors.New("pending step-up has completion")
+		}
+	case "PROVED":
+		if value.ProvedAt == nil || value.ConsumedAt != nil {
+			return errors.New("step-up proof is invalid")
+		}
+	case "CONSUMED":
+		if value.ProvedAt == nil || value.ConsumedAt == nil {
+			return errors.New("step-up consumption is invalid")
+		}
+	case "EXPIRED":
+		if value.ConsumedAt != nil {
+			return errors.New("consumed step-up cannot expire again")
+		}
+	default:
+		return errors.New("step-up state is invalid")
+	}
+	return nil
+}
+
+func ValidateStartStepUpRequest(value StartStepUpRequest) error {
+	if validateStepUpOperation(value.Operation, value.SecuritySettings, value.NotificationContact) != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil {
+		return errors.New("step-up operation is invalid")
+	}
+	if (value.Operation == StepUpReplaceTOTP || value.Operation == StepUpRemoveTOTP) && value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("factor revision cannot be advanced")
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func validateStepUpOperation(operation StepUpOperation, settings *SecuritySettingsUpdateIntent, contact *NotificationContactReplacementIntent) error {
+	return validateStepUpOperationHistory(operation, settings, contact, false)
+}
+
+func validateStepUpOperationHistory(operation StepUpOperation, settings *SecuritySettingsUpdateIntent, contact *NotificationContactReplacementIntent, historical bool) error {
+	switch operation {
+	case StepUpRegenerateRecoveryCodes, StepUpReplaceTOTP, StepUpRemoveTOTP:
+		if settings == nil && contact == nil {
+			return nil
+		}
+	case StepUpUpdateSecuritySettings:
+		if settings != nil && contact == nil {
+			return validateSecuritySettingsUpdateIntent(*settings, historical)
+		}
+	case StepUpReplaceNotificationContact:
+		if settings == nil && contact != nil {
+			return ValidateNotificationContactReplacementIntent(*contact)
+		}
+	}
+	return errors.New("step-up operation intent is invalid")
+}
+
+func ValidateVerifyStepUpRequest(value VerifyStepUpRequest) error {
+	// Nonempty malformed candidates must reach the shared durable budget.
+	if !value.Password.Present() || !value.Code.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateRegenerateRecoveryCodesRequest(value RegenerateRecoveryCodesRequest) error {
+	if value.ExpectedFactorRevision < 2 {
+		return errors.New("bound factor revision is required")
+	}
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID), validatePositiveVersion(value.ExpectedFactorRevision))
+}
+
+func ValidateRecoveryCodeRegeneration(value RecoveryCodeRegeneration) error {
+	if value.APIVersion != APIVersion || value.Kind != "RecoveryCodeRegeneration" || value.FactorRevision <= 1 {
+		return errors.New("recovery code regeneration is invalid")
+	}
+	return errors.Join(ValidateID("id", value.ID), ValidateID("requestId", value.RequestID), ValidateID("factorId", value.FactorID),
+		validatePositiveVersion(value.FactorRevision), validateTime("createdAt", value.CreatedAt))
+}
+
+func ValidateRegenerateRecoveryCodesResponse(value RegenerateRecoveryCodesResponse) error {
+	if err := ValidateRecoveryCodeRegeneration(value.Regeneration); err != nil {
+		return err
+	}
+	switch value.Outcome {
+	case "APPLIED":
+		return validateRecoveryCodes(value.RecoveryCodes)
+	case "EQUAL_REPLAY":
+		if value.RecoveryCodes == nil {
+			return nil
+		}
+	}
+	return errors.New("recovery code regeneration outcome is invalid")
 }
 
 func ValidateLogoutRequest(value LogoutRequest) error {
@@ -179,26 +984,7 @@ func ValidateCreateUserRequest(value CreateUserRequest) error {
 	if !value.InitialPassword.Present() {
 		problems = append(problems, ErrInvalidSecret)
 	}
-	if value.InitialRole != nil && !UserAssignableRole(*value.InitialRole) {
-		problems = append(problems, errors.New("initial role is invalid"))
-	}
 	return errors.Join(problems...)
-}
-
-func ValidatePutRoleBindingRequest(value PutRoleBindingRequest) error {
-	var problems []error
-	problems = append(problems,
-		ValidateID("principalId", string(value.PrincipalID)),
-		ValidateID("requestId", value.RequestID),
-	)
-	if !UserAssignableRole(value.Role) {
-		problems = append(problems, errors.New("role is invalid"))
-	}
-	return errors.Join(problems...)
-}
-
-func ValidateRevokeRoleBindingRequest(value RevokeRoleBindingRequest) error {
-	return ValidateID("requestId", value.RequestID)
 }
 
 func ValidateRevokeSessionRequest(value RevokeSessionRequest) error {
@@ -220,25 +1006,239 @@ func ValidateRevocation(value Revocation) error {
 
 func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	var problems []error
-	if !knownAction(value.Action) {
+	if checkSourceProfileTarget(value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil {
 		problems = append(problems, errors.New("authorization action is invalid"))
 	}
 	problems = append(problems,
 		validateResourceForAction(value.Action, value.Resource),
+		validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, nil),
+		validateAuthorizationRequestTagsForAction(value.Action, value.RequestTags, nil),
+		validateAuthorizationResourceTagsForAction(value.Action, value.ResourceTags, nil),
 		ValidateID("requestId", value.RequestID),
 		ValidateID("correlationId", value.CorrelationID),
 	)
 	return errors.Join(problems...)
 }
 
+func ValidateAuthorizationTag(value AuthorizationTag) error {
+	if !authorizationTagKey(value.Key) || validateAuthorizationTagValue(value.Value) != nil {
+		return errors.New("authorization tag is invalid")
+	}
+	return nil
+}
+
+// ValidateAuthorizationDecision is the current response contract. Historical
+// loaders must first authenticate the stored row's contract version and use the
+// explicit frozen-profile or legacy validator, never infer it from missing JSON.
 func ValidateAuthorizationDecision(value AuthorizationDecision) error {
+	if value.Profile == nil {
+		return errors.New("authorization decision has no product binding")
+	}
+	if checkSourceProfileTarget(*value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil ||
+		ValidateID("correlationId", value.CorrelationID) != nil {
+		return errors.New("authorization decision product binding is invalid")
+	}
+	if value.Allowed && value.Subject != nil &&
+		checkValidatedProfileSubjectCredential(sourceProfileCommitments[value.Profile.Product].profile, value.Action, *value.Subject) != nil {
+		return errors.New("authorization decision subject capability is invalid")
+	}
+	definition, known := LookupActionDefinition(value.Action)
+	if !known {
+		return errors.New("authorization decision action is not declared")
+	}
+	if err := validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, nil); err != nil {
+		return err
+	}
+	if err := validateAuthorizationRequestTagsForAction(value.Action, value.RequestTags, nil); err != nil {
+		return err
+	}
+	if err := validateAuthorizationResourceTagsForAction(value.Action, value.ResourceTags, nil); err != nil {
+		return err
+	}
+	return validateAuthorizationDecision(value, definition)
+}
+
+// This validates immutable evidence against explicit declaration bytes; it does
+// not establish that a producer or caller is entitled to select that profile.
+func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profile AuthorizationProfile) error {
+	if value.Profile == nil || CheckAuthorizationProfileTarget(profile, *value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil ||
+		ValidateID("correlationId", value.CorrelationID) != nil {
+		return errors.New("authorization decision product binding is invalid")
+	}
+	if value.Allowed && value.Subject != nil && checkValidatedProfileSubjectCredential(profile, value.Action, *value.Subject) != nil {
+		return errors.New("authorization decision subject capability is invalid")
+	}
+	for _, action := range profile.Actions {
+		if action.Action == value.Action {
+			if err := validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, &profile); err != nil {
+				return err
+			}
+			if err := validateAuthorizationRequestTagsForAction(value.Action, value.RequestTags, &profile); err != nil {
+				return err
+			}
+			if err := validateAuthorizationResourceTagsForAction(value.Action, value.ResourceTags, &profile); err != nil {
+				return err
+			}
+			return validateAuthorizationDecision(value, authorizationProfileActionDefinition(profile, action))
+		}
+	}
+	return errors.New("authorization decision action is not declared")
+}
+
+// Legacy syntax is only usable for an existing immutable row whose protected
+// database metadata says contract1. This function alone is not legacy admission.
+func ValidateLegacyAuthorizationDecision(value AuthorizationDecision) error {
+	definition, known := lookupRecordedActionDefinition(value.Action)
+	if !known || value.Resource.Kind != definition.ResourceKind || value.Profile != nil || value.ResourceMode != "" || value.CollectionUsage != "" || value.NetworkContext != nil || value.RequestTags != nil || value.ResourceTags != nil || value.CorrelationID != "" ||
+		value.Subject != nil && value.Subject.AccessKeyID != "" {
+		return errors.New("legacy decision contains an invalid or current binding")
+	}
+	return validateAuthorizationDecision(value, definition)
+}
+
+func validateAuthorizationRequestTagsForAction(action Action, tags []AuthorizationTag, profile *AuthorizationProfile) error {
+	return validateAuthorizationTagsForAction(action, tags, profile, ConditionCallingServiceRequestTag, requestTagName)
+}
+
+func validateAuthorizationResourceTagsForAction(action Action, tags []AuthorizationTag, profile *AuthorizationProfile) error {
+	return validateAuthorizationTagsForAction(action, tags, profile, ConditionCallingServiceResourceTag, resourceTagName)
+}
+
+func validateAuthorizationTagsForAction(
+	action Action,
+	tags []AuthorizationTag,
+	profile *AuthorizationProfile,
+	source ConditionSource,
+	parse func(ConditionKey) (string, bool),
+) error {
+	if tags != nil && (len(tags) < 1 || len(tags) > MaxAuthorizationTags) {
+		return errors.New("authorization request tags are invalid")
+	}
+	var declaration *AuthorizationProfileAction
+	if profile == nil {
+		definition, known := LookupActionDefinition(action)
+		if !known {
+			return errors.New("authorization tag action is not declared")
+		}
+		source, known := sourceProfileCommitments[definition.Product]
+		if !known {
+			return errors.New("authorization tag profile is not declared")
+		}
+		profile = &source.profile
+	}
+	for index := range profile.Actions {
+		if profile.Actions[index].Action == action {
+			declaration = &profile.Actions[index]
+			break
+		}
+	}
+	if declaration == nil {
+		return errors.New("authorization tag action is not declared")
+	}
+	allowed := make(map[string]bool)
+	for _, condition := range declaration.Conditions {
+		if condition.Source != source {
+			continue
+		}
+		name, valid := parse(condition.Key)
+		if !valid || condition.ValueType != ConditionString {
+			return errors.New("authorization tag declaration is invalid")
+		}
+		allowed[name] = true
+	}
+	previous := ""
+	for _, tag := range tags {
+		if !allowed[tag.Key] || tag.Key <= previous || ValidateAuthorizationTag(tag) != nil {
+			return errors.New("authorization request tags are invalid")
+		}
+		previous = tag.Key
+	}
+	return nil
+}
+
+func ValidateResolveAuthorizationSubjectRequest(value ResolveAuthorizationSubjectRequest) error {
+	source, known := sourceProfileCommitments[value.Profile.Product]
+	if !known || value.Profile != source.reference {
+		return errors.New("authorization subject profile is invalid")
+	}
+	return nil
+}
+
+func ValidateAuthorizationSubjectContext(value AuthorizationSubjectContext) error {
+	source, known := sourceProfileCommitments[value.Profile.Product]
+	if value.APIVersion != APIVersion || value.Kind != "AuthorizationSubjectContext" || !known ||
+		value.Profile != source.reference || ValidateID("tenantId", string(value.TenantID)) != nil ||
+		ValidateSubject(value.Subject) != nil || value.Subject.AccessKeyID != "" ||
+		(value.Subject.Type != SubjectUser && value.Subject.Type != SubjectRole) {
+		return errors.New("authorization subject context is invalid")
+	}
+	return nil
+}
+
+func CheckAuthorizationSubjectContextForRequest(value AuthorizationSubjectContext, request ResolveAuthorizationSubjectRequest) error {
+	if ValidateResolveAuthorizationSubjectRequest(request) != nil || ValidateAuthorizationSubjectContext(value) != nil ||
+		value.Profile != request.Profile {
+		return errors.New("authorization subject context does not match request")
+	}
+	return nil
+}
+
+// ParseAuthorizationSourceIP accepts the one canonical address form shared by
+// product PEPs, IAM request validation, and policy evaluation. Private and
+// loopback addresses remain valid for private deployment; ambiguous wire forms
+// and addresses that cannot be a unicast network peer fail closed.
+func ParseAuthorizationSourceIP(value string) (netip.Addr, error) {
+	address, err := netip.ParseAddr(value)
+	if err != nil || value == "" || strings.TrimSpace(value) != value || address.Zone() != "" || address.Is4In6() ||
+		address.IsUnspecified() || address.IsMulticast() || address.String() != value {
+		return netip.Addr{}, errors.New("authorization source IP is invalid")
+	}
+	return address, nil
+}
+
+func ValidateAuthorizationNetworkContext(value AuthorizationNetworkContext) error {
+	_, err := ParseAuthorizationSourceIP(value.SourceIP)
+	return err
+}
+
+func validateAuthorizationNetworkContextForAction(action Action, value *AuthorizationNetworkContext, profile *AuthorizationProfile) error {
+	if value == nil {
+		return nil
+	}
+	if ValidateAuthorizationNetworkContext(*value) != nil {
+		return errors.New("authorization network context is invalid")
+	}
+	var definition ConditionKeyDefinition
+	var supported bool
+	if profile == nil {
+		definition, supported = LookupActionConditionDefinition(action, ConditionRequestSourceIP)
+	} else {
+		for _, declared := range profile.Actions {
+			if declared.Action != action {
+				continue
+			}
+			for _, condition := range declared.Conditions {
+				if condition.Key == ConditionRequestSourceIP {
+					definition = ConditionKeyDefinition{condition.Key, condition.ValueType, condition.Source}
+					supported = true
+				}
+			}
+		}
+	}
+	if !supported || definition.ValueType != ConditionIP || definition.Source != ConditionCallingServiceNetwork {
+		return errors.New("authorization action does not accept network context")
+	}
+	return nil
+}
+
+func validateAuthorizationDecision(value AuthorizationDecision, definition ActionDefinition) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "AuthorizationDecision" {
 		problems = append(problems, errors.New("authorization decision type metadata is invalid"))
 	}
 	problems = append(problems,
 		ValidateID("id", string(value.ID)),
-		validateResourceForAction(value.Action, value.Resource),
+		ValidateID("resource.id", value.Resource.ID),
 		ValidateID("requestId", value.RequestID),
 		validateTime("decidedAt", value.DecidedAt),
 	)
@@ -248,8 +1248,18 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 		} else {
 			problems = append(problems, ValidateSubject(*value.Subject))
 		}
-		problems = append(problems, ValidateID("tenantId", string(value.TenantID)))
-	} else if value.Reason != DecisionDenied || value.Subject != nil || value.TenantID != "" {
+		if definition.AuthorityScope == AuthorityScopeInstallation {
+			problems = append(problems, ValidateID("installationId", value.InstallationID))
+			if value.TenantID != "" || value.Subject != nil && (value.Subject.Type != SubjectUser || value.Subject.AccessKeyID != "") {
+				problems = append(problems, errors.New("platform decision contains invalid authority"))
+			}
+		} else {
+			problems = append(problems, ValidateID("tenantId", string(value.TenantID)))
+			if value.InstallationID != "" {
+				problems = append(problems, errors.New("tenant decision contains platform authority"))
+			}
+		}
+	} else if value.Reason != DecisionDenied || value.Subject != nil || value.TenantID != "" || value.InstallationID != "" {
 		problems = append(problems, errors.New("denied decision exposes authority data"))
 	}
 	return errors.Join(problems...)
@@ -257,10 +1267,34 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 
 func ValidateSubject(value Subject) error {
 	var problems []error
-	if value.Type != PrincipalUser && value.Type != PrincipalServiceAccount {
+	if value.Type != SubjectUser && value.Type != SubjectServiceAccount && value.Type != SubjectRole {
 		problems = append(problems, errors.New("subject type is invalid"))
 	}
-	problems = append(problems, ValidateID("subject.id", string(value.ID)))
+	problems = append(problems, ValidateID("subject.id", value.ID))
+	if value.Type == SubjectRole {
+		if value.RoleSession == nil {
+			problems = append(problems, errors.New("role subject has no session reference"))
+		} else {
+			if (value.RoleSession.SourceUserID == "") == (value.RoleSession.SourceServicePrincipalID == "") {
+				problems = append(problems, errors.New("role session source is invalid"))
+			}
+			problems = append(problems, ValidateID("roleSession.sessionId", string(value.RoleSession.SessionID)))
+			if value.RoleSession.SourceUserID != "" {
+				problems = append(problems, ValidateID("roleSession.sourceUserId", string(value.RoleSession.SourceUserID)))
+			}
+			if value.RoleSession.SourceServicePrincipalID != "" {
+				problems = append(problems, ValidateID("roleSession.sourceServicePrincipalId", string(value.RoleSession.SourceServicePrincipalID)))
+			}
+		}
+	} else if value.RoleSession != nil {
+		problems = append(problems, errors.New("non-role subject contains role session"))
+	}
+	if value.AccessKeyID != "" {
+		if value.Type != SubjectUser {
+			problems = append(problems, errors.New("non-user subject contains access key lineage"))
+		}
+		problems = append(problems, ValidateID("subject.accessKeyId", string(value.AccessKeyID)))
+	}
 	return errors.Join(problems...)
 }
 
@@ -269,7 +1303,7 @@ func ValidateOrganization(value Organization) error {
 	if value.APIVersion != APIVersion || value.Kind != "Organization" {
 		problems = append(problems, errors.New("organization type metadata is invalid"))
 	}
-	if value.Status != OrganizationActive && value.Status != OrganizationDisabled {
+	if value.Status != AccountActive && value.Status != AccountDisabled {
 		problems = append(problems, errors.New("organization status is invalid"))
 	}
 	problems = append(problems,
@@ -294,7 +1328,7 @@ func ValidatePrincipal(value Principal) error {
 	}
 	problems = append(problems,
 		ValidateID("principal.id", string(value.ID)),
-		ValidateID("principal.organizationId", string(value.OrganizationID)),
+		ValidateID("principal.organizationId", string(value.AccountID)),
 		validateText("principal.displayName", value.DisplayName, 1, 128),
 		validatePositiveVersion(value.ResourceVersion),
 		validateChronology(value.CreatedAt, value.UpdatedAt),
@@ -304,24 +1338,6 @@ func ValidatePrincipal(value Principal) error {
 	} else if value.LoginName != "" || value.MustChangePassword {
 		problems = append(problems, errors.New("service principal contains user fields"))
 	}
-	return errors.Join(problems...)
-}
-
-func ValidateRoleBinding(value RoleBinding) error {
-	var problems []error
-	if value.APIVersion != APIVersion || value.Kind != "RoleBinding" {
-		problems = append(problems, errors.New("role binding type metadata is invalid"))
-	}
-	if !knownRole(value.Role) {
-		problems = append(problems, errors.New("role is invalid"))
-	}
-	problems = append(problems,
-		ValidateID("roleBinding.id", string(value.ID)),
-		ValidateID("roleBinding.organizationId", string(value.OrganizationID)),
-		ValidateID("roleBinding.principalId", string(value.PrincipalID)),
-		validatePositiveVersion(value.ResourceVersion),
-		validateChronology(value.CreatedAt, value.UpdatedAt),
-	)
 	return errors.Join(problems...)
 }
 
@@ -335,7 +1351,7 @@ func ValidateSession(value Session) error {
 	}
 	problems = append(problems,
 		ValidateID("session.id", string(value.ID)),
-		ValidateID("session.organizationId", string(value.OrganizationID)),
+		ValidateID("session.organizationId", string(value.AccountID)),
 		ValidateID("session.principalId", string(value.PrincipalID)),
 		validateTime("session.issuedAt", value.IssuedAt),
 		validateTime("session.expiresAt", value.ExpiresAt),
@@ -353,6 +1369,43 @@ func ValidateSession(value Session) error {
 		problems = append(problems, errors.New("non-revoked session contains revokedAt"))
 	}
 	return errors.Join(problems...)
+}
+
+func ValidateSessionList(value SessionList) error {
+	if value.APIVersion != APIVersion || value.Kind != "SessionList" || value.Items == nil || len(value.Items) > DirectoryPageSize ||
+		ValidateID("accountId", string(value.AccountID)) != nil || ValidateID("userId", string(value.UserID)) != nil ||
+		ValidateID("currentSessionId", string(value.CurrentSessionID)) != nil || validateTime("observedAt", value.ObservedAt) != nil {
+		return errors.New("session list is invalid")
+	}
+	var previous SessionID
+	for _, item := range value.Items {
+		if ValidateSession(item) != nil || item.AccountID != value.AccountID || item.PrincipalID != value.UserID ||
+			item.ID <= previous || item.Status != SessionActive || item.IssuedAt.After(value.ObservedAt) || !value.ObservedAt.Before(item.ExpiresAt) {
+			return errors.New("session observation is invalid")
+		}
+		previous = item.ID
+	}
+	if value.NextCursor != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextCursor) != nil) {
+		return errors.New("session continuation is invalid")
+	}
+	return nil
+}
+
+func ValidateRevokeOwnSessionResponse(value RevokeOwnSessionResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("session revocation outcome is invalid")
+	}
+	return ValidateRevocation(value.Revocation)
+}
+
+func ValidateRevokeOtherSessionsResponse(value RevokeOtherSessionsResponse) error {
+	if value.APIVersion != APIVersion || value.Kind != "OtherSessionsRevocation" ||
+		(value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY") || value.RevokedCount > 9007199254740991 {
+		return errors.New("other session revocation is invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("userId", string(value.UserID)),
+		ValidateID("currentSessionId", string(value.CurrentSessionID)), ValidateID("requestId", value.RequestID),
+		validateTime("completedAt", value.CompletedAt))
 }
 
 func ValidateReadiness(value Readiness) error {
@@ -390,21 +1443,8 @@ func ValidateProblem(value Problem) error {
 }
 
 func knownAction(value Action) bool {
-	for _, candidate := range allActions {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
-}
-
-func knownRole(value BuiltinRole) bool {
-	for _, candidate := range allBuiltinRoles {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
+	_, known := LookupActionDefinition(value)
+	return known
 }
 
 func knownServicePurpose(value ServicePurpose) bool {
@@ -430,55 +1470,14 @@ func validateResourceForAction(action Action, resource ResourceReference) error 
 	return nil
 }
 
-// ResourceKindForAction is the single action-to-resource catalog used by
-// domain validation and contract generation.
+// ResourceKindForAction reads the shared catalog for domain validation and
+// contract generation; resource ownership still requires product enforcement.
 func ResourceKindForAction(action Action) (ResourceKind, bool) {
-	switch action {
-	case ActionIAMPrincipalCreate, ActionIAMPrincipalList,
-		ActionIAMOrganizationCreate, ActionIAMOrganizationRead, ActionIAMAccountAliasSet:
-		return ResourceOrganization, true
-	case ActionIAMPrincipalRead, ActionIAMRoleBindingPut,
-		ActionIAMPrincipalSetStatus, ActionIAMPasswordReset:
-		return ResourcePrincipal, true
-	case ActionIAMRoleBindingRevoke:
-		return ResourceRoleBinding, true
-	case ActionIAMSessionRevoke:
-		return ResourceSession, true
-	case ActionPaaSApplicationCreate, ActionPaaSApplicationRead:
-		return ResourceApplication, true
-	case ActionPaaSConfigurationCreate, ActionPaaSConfigurationRead:
-		return ResourceConfiguration, true
-	case ActionPaaSConfigurationRevisionCreate, ActionPaaSConfigurationRevisionRead:
-		return ResourceConfigurationRevision, true
-	case ActionPaaSApplicationRevisionCreate, ActionPaaSApplicationRevisionRead:
-		return ResourceApplicationRevision, true
-	case ActionPaaSDeploymentCreate, ActionPaaSDeploymentUpdate,
-		ActionPaaSDeploymentRollback, ActionPaaSDeploymentStop, ActionPaaSDeploymentRead:
-		return ResourceDeployment, true
-	case ActionPaaSOperationRead:
-		return ResourceOperation, true
-	case ActionManagedServiceOfferingRead:
-		return ResourceServiceOffering, true
-	case ActionManagedServiceRegionRead:
-		return ResourceRegion, true
-	case ActionManagedServiceQuotaEntitlementActivate,
-		ActionManagedServiceQuotaEntitlementRead:
-		return ResourceQuotaEntitlement, true
-	case ActionManagedServiceInstallationCreate,
-		ActionManagedServiceInstallationRead:
-		return ResourceServiceInstallation, true
-	case ActionAuditRecordRead:
-		return ResourceAuditRecord, true
-	case ActionAuditIntegrityVerify:
-		return ResourceAuditChain, true
-	case ActionInstallationVerify:
-		return ResourceInstallation, true
-	default:
-		return "", false
-	}
+	definition, known := LookupActionDefinition(action)
+	return definition.ResourceKind, known
 }
 
-// ValidateLoginIdentifier accepts a primary login or one qualified subaccount
+// ValidateLoginIdentifier accepts a root login or one qualified account user
 // name. It deliberately does not normalize case, whitespace, Unicode, or DNS.
 func ValidateLoginIdentifier(value string) error {
 	name, namespace, qualified := strings.Cut(value, "@")
@@ -498,20 +1497,16 @@ func ValidateAccountAlias(value string) error {
 	return nil
 }
 
-func UserAssignableRole(role BuiltinRole) bool {
-	return knownRole(role) && role != RoleInstallationVerifier
-}
-
-func ValidateCreateOrganizationRequest(value CreateOrganizationRequest) error {
+func ValidateCreateAccountRequest(value CreateAccountRequest) error {
 	var secretError error
 	if !value.InitialPassword.Present() {
 		secretError = ErrInvalidSecret
 	}
 	return errors.Join(
-		ValidateID("organization.id", string(value.ID)),
+		ValidateID("account.id", string(value.ID)),
 		validateText("displayName", value.DisplayName, 1, 128),
-		validateLoginName(value.AdministratorLoginName),
-		validateText("administratorDisplayName", value.AdministratorDisplayName, 1, 128),
+		validateLoginName(value.RootLoginName),
+		validateText("rootDisplayName", value.RootDisplayName, 1, 128),
 		ValidateID("requestId", value.RequestID), secretError,
 	)
 }
@@ -521,9 +1516,40 @@ func ValidateSetAccountAliasRequest(value SetAccountAliasRequest) error {
 		validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
-func ValidateSetPrincipalStatusRequest(value SetPrincipalStatusRequest) error {
+func ValidateSetUserStatusRequest(value SetUserStatusRequest) error {
 	if value.Status != PrincipalActive && value.Status != PrincipalDisabled {
-		return errors.New("principal status is invalid")
+		return errors.New("user status is invalid")
+	}
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateUpdateUserRequest(value UpdateUserRequest) error {
+	return errors.Join(validateText("displayName", value.DisplayName, 1, 128),
+		validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateDeleteUserRequest(value DeleteUserRequest) error {
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateUserDeletion(value UserDeletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "UserDeletion" {
+		return errors.New("user deletion type metadata is invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("userId", string(value.ID)),
+		validateLoginName(value.LoginName), validatePositiveVersion(value.ResourceVersion), validateTime("deletedAt", value.DeletedAt))
+}
+
+func ValidateSetAccountStatusRequest(value SetAccountStatusRequest) error {
+	if value.Status != AccountActive && value.Status != AccountDisabled {
+		return errors.New("account status is invalid")
+	}
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateRecoverRootCredentialsRequest(value RecoverRootCredentialsRequest) error {
+	if !value.InitialPassword.Present() {
+		return ErrInvalidSecret
 	}
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
@@ -535,82 +1561,623 @@ func ValidateResetUserPasswordRequest(value ResetUserPasswordRequest) error {
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
-func ValidateOrganizationAccount(value OrganizationAccount) error {
+func ValidateUserPasswordResetCompletion(value UserPasswordResetCompletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "UserPasswordResetCompletion" {
+		return errors.New("user password reset completion metadata is invalid")
+	}
+	if value.ActorPrincipalID == value.UserID {
+		return errors.New("administrator reset cannot target its own actor")
+	}
+	if validatePositiveVersion(value.ExpectedResourceVersion) != nil || validatePositiveVersion(value.ResultingResourceVersion) != nil ||
+		value.ResultingResourceVersion != value.ExpectedResourceVersion+1 {
+		return errors.New("user password reset completion versions are invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("actorPrincipalId", string(value.ActorPrincipalID)),
+		ValidateID("userId", string(value.UserID)), ValidateID("requestId", value.RequestID),
+		ValidateID("eventId", value.EventID), validateTime("occurredAt", value.OccurredAt))
+}
+
+func ValidateRootIdentity(value RootIdentity) error {
+	return errors.Join(ValidateID("rootIdentity.principalId", string(value.PrincipalID)),
+		validateLoginName(value.LoginName))
+}
+
+func ValidateAccount(value Account) error {
 	var aliasError error
 	if value.LoginAlias != nil {
 		aliasError = ValidateAccountAlias(*value.LoginAlias)
 	}
-	return errors.Join(ValidateOrganization(value.Organization),
-		ValidateID("primaryPrincipalId", string(value.PrimaryPrincipalID)),
-		validateLoginName(value.PrimaryLoginName), aliasError)
+	if value.APIVersion != APIVersion || value.Kind != "Account" ||
+		(value.Status != AccountActive && value.Status != AccountDisabled) {
+		return errors.New("account is invalid")
+	}
+	return errors.Join(ValidateID("account.id", string(value.ID)),
+		validateText("account.displayName", value.DisplayName, 1, 128),
+		ValidateRootIdentity(value.RootIdentity), validatePositiveVersion(value.ResourceVersion),
+		validateChronology(value.CreatedAt, value.UpdatedAt), aliasError)
+}
+
+func ValidateUser(value User) error {
+	if value.APIVersion != APIVersion || value.Kind != "User" ||
+		(value.Status != PrincipalActive && value.Status != PrincipalDisabled) {
+		return errors.New("user is invalid")
+	}
+	return errors.Join(ValidateID("user.id", string(value.ID)), ValidateID("user.accountId", string(value.AccountID)),
+		validateLoginName(value.LoginName), validateText("user.displayName", value.DisplayName, 1, 128),
+		validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
+}
+
+func ValidateAccessKey(value AccessKey) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKey" ||
+		(value.Status != AccessKeyEnabled && value.Status != AccessKeyDisabled) ||
+		(value.ResourceVersion == 1 && (value.Status != AccessKeyEnabled || !value.CreatedAt.Equal(value.UpdatedAt))) {
+		return errors.New("access key metadata is invalid")
+	}
+	return errors.Join(ValidateID("accessKey.id", string(value.ID)), ValidateID("accessKey.accountId", string(value.AccountID)),
+		ValidateID("accessKey.userId", string(value.UserID)), ValidateAccessKeyNetworkRestrictions(value.NetworkRestrictions),
+		validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
+}
+
+func ValidateAccessKeyUsageSummary(value AccessKeyUsageSummary) error {
+	if err := validateTime("observedAt", value.ObservedAt); err != nil {
+		return err
+	}
+	if value.LastAuthorization == nil {
+		return nil
+	}
+	last := value.LastAuthorization
+	definition, known := LookupActionDefinition(last.Action)
+	_, sourceError := ParseAuthorizationSourceIP(last.SourceIP)
+	if validateTime("evaluatedAt", last.EvaluatedAt) != nil || last.EvaluatedAt.After(value.ObservedAt) ||
+		!known || definition.Product != last.Product || sourceError != nil {
+		return errors.New("access key usage summary is invalid")
+	}
+	return nil
+}
+
+func ValidateAccessKeyAccess(value AccessKeyAccess) error {
+	if err := ValidateAccessKey(value.Key); err != nil {
+		return err
+	}
+	if ValidateAccessKeyNetworkRestrictions(value.Key.NetworkRestrictions) != nil || ValidateAccessKeyUsageSummary(value.Usage) != nil {
+		return errors.New("access key access view is invalid")
+	}
+	expected := make(map[string]struct{}, 4)
+	for _, action := range []Action{ActionIAMAccessKeyRead, ActionIAMAccessKeySetStatus, ActionIAMAccessKeySetNetworkRestrictions, ActionIAMAccessKeyDelete} {
+		expected[capabilityKey(action, ResourceReference{Kind: ResourceAccessKey, ID: string(value.Key.ID)})] = struct{}{}
+	}
+	return validateCapabilities(value.Capabilities, expected)
+}
+
+func ValidateAccessKeyList(value AccessKeyList) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKeyList" || value.Items == nil || len(value.Items) > MaxUserAccessKeys {
+		return errors.New("access key list is invalid")
+	}
+	if err := errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("userId", string(value.UserID)), validatePositiveVersion(value.UserResourceVersion)); err != nil {
+		return err
+	}
+	expected := map[string]struct{}{capabilityKey(ActionIAMAccessKeyCreate, ResourceReference{Kind: ResourceUser, ID: string(value.UserID)}): {}}
+	if err := validateCapabilities(value.Capabilities, expected); err != nil {
+		return err
+	}
+	var previous AccessKeyID
+	for _, item := range value.Items {
+		if ValidateAccessKeyAccess(item) != nil || item.Key.AccountID != value.AccountID || item.Key.UserID != value.UserID || item.Key.ID <= previous {
+			return errors.New("access key list contains an unbound or duplicate entry")
+		}
+		previous = item.Key.ID
+	}
+	return nil
+}
+
+func ValidateCreateAccessKeyRequest(value CreateAccessKeyRequest) error {
+	return errors.Join(validatePositiveVersion(value.UserResourceVersion), ValidateAccessKeyNetworkRestrictions(value.NetworkRestrictions), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateSetAccessKeyStatusRequest(value SetAccessKeyStatusRequest) error {
+	if value.Status != AccessKeyEnabled && value.Status != AccessKeyDisabled {
+		return errors.New("access key status is invalid")
+	}
+	return ValidateDeleteAccessKeyRequest(DeleteAccessKeyRequest{AccessKeyResourceVersion: value.AccessKeyResourceVersion, RequestID: value.RequestID})
+}
+
+func ValidateDeleteAccessKeyRequest(value DeleteAccessKeyRequest) error {
+	if value.AccessKeyResourceVersion == 9007199254740991 {
+		return errors.New("access key resource version cannot advance")
+	}
+	return errors.Join(validatePositiveVersion(value.AccessKeyResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateSetAccessKeyNetworkRestrictionsRequest(value SetAccessKeyNetworkRestrictionsRequest) error {
+	return errors.Join(ValidateDeleteAccessKeyRequest(DeleteAccessKeyRequest{AccessKeyResourceVersion: value.AccessKeyResourceVersion, RequestID: value.RequestID}),
+		ValidateAccessKeyNetworkRestrictions(value.NetworkRestrictions))
+}
+
+func ValidateCreateAccessKeyResponse(value CreateAccessKeyResponse) error {
+	if ValidateAccessKey(value.Key) != nil || value.Key.ResourceVersion != 1 || value.Key.Status != AccessKeyEnabled ||
+		(value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY") ||
+		(value.Outcome == "APPLIED" && !value.Secret.Present()) ||
+		(value.Outcome == "EQUAL_REPLAY" && value.Secret.reveal() != "") {
+		return errors.New("access key creation result is invalid")
+	}
+	return nil
+}
+
+func ValidateSetAccessKeyStatusResponse(value SetAccessKeyStatusResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("access key change result is invalid")
+	}
+	if value.Key.ResourceVersion < 2 {
+		return errors.New("access key change result has no mutation")
+	}
+	return ValidateAccessKey(value.Key)
+}
+
+func ValidateSetAccessKeyNetworkRestrictionsResponse(value SetAccessKeyNetworkRestrictionsResponse) error {
+	return ValidateSetAccessKeyStatusResponse(SetAccessKeyStatusResponse{Outcome: value.Outcome, Key: value.Key})
+}
+
+func ValidateAccessKeyDeletion(value AccessKeyDeletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKeyDeletion" || value.ResourceVersion < 2 {
+		return errors.New("access key deletion is invalid")
+	}
+	return errors.Join(ValidateID("accessKey.id", string(value.ID)), ValidateID("accessKey.accountId", string(value.AccountID)),
+		ValidateID("accessKey.userId", string(value.UserID)), validatePositiveVersion(value.ResourceVersion), validateTime("deletedAt", value.DeletedAt))
+}
+
+func ValidateDeleteAccessKeyResponse(value DeleteAccessKeyResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("access key deletion result is invalid")
+	}
+	return ValidateAccessKeyDeletion(value.Deletion)
+}
+
+func ValidateGroup(value Group) error {
+	var descriptionError error
+	if value.Description != "" {
+		descriptionError = validateText("group.description", value.Description, 1, 512)
+	}
+	if value.APIVersion != APIVersion || value.Kind != "Group" {
+		return errors.New("group is invalid")
+	}
+	return errors.Join(ValidateID("group.id", string(value.ID)), ValidateID("group.accountId", string(value.AccountID)),
+		validateText("group.name", value.Name, 1, 64), descriptionError,
+		validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
+}
+
+func ValidateGroupMembership(value GroupMembership) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupMembership" {
+		return errors.New("group membership is invalid")
+	}
+	problems := []error{
+		ValidateID("membership.id", string(value.ID)), ValidateID("membership.accountId", string(value.AccountID)),
+		ValidateID("membership.groupId", string(value.GroupID)), ValidateID("membership.userId", string(value.UserID)),
+		ValidateID("membership.createdBy", string(value.CreatedBy)), validatePositiveVersion(value.ResourceVersion),
+		validateChronology(value.CreatedAt, value.UpdatedAt),
+	}
+	if value.RemovedAt == nil {
+		if value.RemovedBy != "" || value.ResourceVersion != 1 || !value.UpdatedAt.Equal(value.CreatedAt) {
+			problems = append(problems, errors.New("active membership contains removal state"))
+		}
+	} else {
+		problems = append(problems, ValidateID("membership.removedBy", string(value.RemovedBy)), validateTime("membership.removedAt", *value.RemovedAt))
+		if value.ResourceVersion < 2 || !value.RemovedAt.Equal(value.UpdatedAt) || value.RemovedAt.Before(value.CreatedAt) {
+			problems = append(problems, errors.New("removed membership chronology is invalid"))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateCreateGroupRequest(value CreateGroupRequest) error {
+	var descriptionError error
+	if value.Description != "" {
+		descriptionError = validateText("description", value.Description, 1, 512)
+	}
+	return errors.Join(validateText("name", value.Name, 1, 64), descriptionError, ValidateID("requestId", value.RequestID))
+}
+
+func ValidateUpdateGroupRequest(value UpdateGroupRequest) error {
+	return errors.Join(ValidateCreateGroupRequest(CreateGroupRequest{Name: value.Name, Description: value.Description, RequestID: value.RequestID}),
+		validatePositiveVersion(value.ResourceVersion))
+}
+
+func ValidateDeleteGroupRequest(value DeleteGroupRequest) error {
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateGroupDeletion(value GroupDeletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupDeletion" {
+		return errors.New("group deletion is invalid")
+	}
+	return errors.Join(ValidateID("groupDeletion.accountId", string(value.AccountID)), ValidateID("groupDeletion.id", string(value.ID)),
+		validateText("groupDeletion.name", value.Name, 1, 64), validatePositiveVersion(value.ResourceVersion),
+		validateTime("groupDeletion.deletedAt", value.DeletedAt))
+}
+
+func ValidateCreateGroupMembershipRequest(value CreateGroupMembershipRequest) error {
+	return errors.Join(ValidateID("userId", string(value.UserID)), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateRemoveGroupMembershipRequest(value RemoveGroupMembershipRequest) error {
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateActionCapability(value ActionCapability) error {
+	if value.Available {
+		if value.RestrictionReason != "" {
+			return errors.New("available capability has a restriction")
+		}
+	} else if !knownCapabilityRestriction(value.RestrictionReason) {
+		return errors.New("unavailable capability has no known restriction")
+	}
+	return validateResourceForAction(value.Action, value.Resource)
+}
+
+func knownCapabilityRestriction(value CapabilityRestriction) bool {
+	for _, known := range allCapabilityRestrictions {
+		if value == known {
+			return true
+		}
+	}
+	return false
+}
+
+func capabilityKey(action Action, resource ResourceReference) string {
+	return string(action) + "\x00" + string(resource.Kind) + "\x00" + resource.ID
+}
+
+func validateCapabilities(values []ActionCapability, expected map[string]struct{}) error {
+	if values == nil || len(values) != len(expected) {
+		return errors.New("capability set is incomplete")
+	}
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		key := capabilityKey(value.Action, value.Resource)
+		if ValidateActionCapability(value) != nil || seen[key] {
+			return errors.New("capability is invalid or duplicated")
+		}
+		if _, required := expected[key]; !required {
+			return errors.New("capability does not belong to its projection")
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+func expectedCapabilitySet(values ...struct {
+	Action   Action
+	Resource ResourceReference
+}) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[capabilityKey(value.Action, value.Resource)] = struct{}{}
+	}
+	return result
 }
 
 func ValidateCurrentIdentity(value CurrentIdentity) error {
+	if ValidateUserPermissionBoundary(value.PermissionBoundary) != nil || value.PermissionBoundary.AccountID != value.Account.ID ||
+		value.PermissionBoundary.UserID != value.User.ID || value.PermissionBoundary.ResourceVersion != value.User.ResourceVersion ||
+		(value.IdentityKind == IdentityRoot && value.PermissionBoundary.Policy != nil) {
+		return errors.New("current identity boundary is invalid")
+	}
 	if value.APIVersion != APIVersion || value.Kind != "CurrentIdentity" ||
-		value.Principal.Type != PrincipalUser || value.Roles == nil ||
-		value.Principal.OrganizationID != value.Account.Organization.ID ||
-		(value.CanCreateOrganizations && (value.Principal.ID != value.Account.PrimaryPrincipalID || value.Principal.MustChangePassword)) {
+		value.PolicySources == nil || len(value.PolicySources) > 256 ||
+		value.User.AccountID != value.Account.ID {
 		return errors.New("current identity is invalid")
 	}
-	seen := map[BuiltinRole]bool{}
-	for _, role := range value.Roles {
-		if !UserAssignableRole(role) || seen[role] {
-			return errors.New("current roles are invalid")
+	expectedKind := IdentityUser
+	if value.User.ID == value.Account.RootIdentity.PrincipalID {
+		expectedKind = IdentityRoot
+	}
+	if value.IdentityKind != expectedKind {
+		return errors.New("current identity kind is invalid")
+	}
+	seen := map[PolicyAttachmentID]bool{}
+	var previous PolicyAttachmentID
+	for _, source := range value.PolicySources {
+		attachment := source.Attachment
+		if ValidatePolicyGrantSource(source) != nil || seen[attachment.ID] || attachment.ID <= previous ||
+			attachment.AccountID != value.Account.ID ||
+			(source.Kind == PolicyGrantDirect && attachment.Target.ID != string(value.User.ID)) ||
+			(source.Kind == PolicyGrantGroup && (value.IdentityKind == IdentityRoot || source.Membership.AccountID != value.Account.ID || source.Membership.UserID != value.User.ID)) {
+			return errors.New("current policy sources are invalid")
 		}
-		seen[role] = true
+		seen[attachment.ID] = true
+		previous = attachment.ID
 	}
-	if value.CanCreateOrganizations && !seen[RoleOrganizationAdmin] {
-		return errors.New("account-opening capability is invalid")
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountCreate, ResourceReference{Kind: ResourceAccount, ID: "collection"}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountRead, ResourceReference{Kind: ResourceAccount, ID: "collection"}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountAliasSet, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMPolicyList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMRoleList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMRoleCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+	)
+	if validateCapabilities(value.Capabilities, expected) != nil {
+		return errors.New("current identity capabilities are invalid")
 	}
-	return errors.Join(ValidateOrganizationAccount(value.Account), ValidatePrincipal(value.Principal))
+	return errors.Join(ValidateAccount(value.Account), ValidateUser(value.User))
 }
 
-func ValidatePrincipalList(value PrincipalList) error {
-	if value.APIVersion != APIVersion || value.Kind != "PrincipalList" || value.Items == nil || len(value.Items) > 100 {
-		return errors.New("principal list is invalid")
+const DirectoryPageSize = 100
+const MaxPageCursorBytes = 384
+
+// ValidatePageCursor checks only the public bounded opaque envelope. Signature,
+// current authority, query and expiry are verified exclusively by IAM.
+func ValidatePageCursor(value string) error {
+	return validateCursorEnvelope(value, "ic1.")
+}
+
+// Self discovery has a distinct confidential cursor kind; management cursors
+// cannot be used to supply its private scan position (or vice versa).
+func ValidateRoleDiscoveryCursor(value string) error {
+	return validateCursorEnvelope(value, "ir1.")
+}
+
+func validateCursorEnvelope(value, prefix string) error {
+	if len(value) <= 4 || len(value) > MaxPageCursorBytes || value[:4] != prefix {
+		return errors.New("IAM page cursor is invalid")
 	}
-	var previous string
-	var tenant OrganizationID
-	for _, item := range value.Items {
-		if ValidatePrincipal(item.Principal) != nil || item.Principal.Type != PrincipalUser ||
-			string(item.Principal.ID) <= previous || item.RoleBindings == nil {
-			return errors.New("principal list item is invalid")
+	for _, character := range value[4:] {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == '-' || character == '_') {
+			return errors.New("IAM page cursor is invalid")
 		}
-		previous = string(item.Principal.ID)
-		if tenant != "" && item.Principal.OrganizationID != tenant {
-			return errors.New("principal directory contains multiple tenants")
-		}
-		tenant = item.Principal.OrganizationID
-		roles := map[BuiltinRole]bool{}
-		for _, binding := range item.RoleBindings {
-			if ValidateRoleBinding(binding) != nil || !UserAssignableRole(binding.Role) ||
-				binding.OrganizationID != item.Principal.OrganizationID || binding.PrincipalID != item.Principal.ID || roles[binding.Role] {
-				return errors.New("principal role binding is invalid")
-			}
-			roles[binding.Role] = true
-		}
-	}
-	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
-		return errors.New("principal page boundary is invalid")
 	}
 	return nil
 }
 
-func ValidateOrganizationAccountList(value OrganizationAccountList) error {
-	if value.APIVersion != APIVersion || value.Kind != "OrganizationAccountList" || value.Items == nil || len(value.Items) > 100 {
-		return errors.New("organization list is invalid")
+func ValidateUserList(value UserList) error {
+	if value.APIVersion != APIVersion || value.Kind != "UserList" || value.Items == nil || len(value.Items) > 100 {
+		return errors.New("user list is invalid")
+	}
+	var previous string
+	var account AccountID
+	for _, item := range value.Items {
+		if ValidateUserAccess(item) != nil || string(item.User.ID) <= previous {
+			return errors.New("user list item is invalid")
+		}
+		previous = string(item.User.ID)
+		if account != "" && item.User.AccountID != account {
+			return errors.New("user directory contains multiple accounts")
+		}
+		account = item.User.AccountID
+	}
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("user page boundary is invalid")
+	}
+	return nil
+}
+
+func ValidateUserAccess(value UserAccess) error {
+	if ValidateUser(value.User) != nil || value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 {
+		return errors.New("user access is invalid")
+	}
+	attachments := map[PolicyAttachmentID]bool{}
+	policies := map[PolicyID]bool{}
+	for _, attachment := range value.PolicyAttachments {
+		if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil ||
+			attachment.AccountID != value.User.AccountID || attachment.Target.Kind != PolicyTargetUser ||
+			attachment.Target.ID != string(value.User.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
+			return errors.New("user policy attachment is invalid")
+		}
+		attachments[attachment.ID] = true
+		policies[attachment.PolicyID] = true
+	}
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserRead, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserUpdate, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserDelete, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserPermissionBoundarySet, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserPermissionBoundaryRemove, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserSetStatus, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserPasswordReset, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMPolicyAttachmentCreate, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMPlatformPolicyAttachmentCreate, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+	)
+	for _, attachment := range value.PolicyAttachments {
+		action := ActionIAMPolicyAttachmentRevoke
+		if attachment.Scope == AuthorityScopeInstallation {
+			action = ActionIAMPlatformPolicyAttachmentRevoke
+		}
+		expected[capabilityKey(action, ResourceReference{Kind: ResourcePolicyAttachment, ID: string(attachment.ID)})] = struct{}{}
+	}
+	if validateCapabilities(value.Capabilities, expected) != nil {
+		return errors.New("user capabilities are invalid")
+	}
+	return nil
+}
+
+func ValidateGroupAccess(value GroupAccess) error {
+	if ValidateGroup(value.Group) != nil || value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 {
+		return errors.New("group access is invalid")
+	}
+	attachments := map[PolicyAttachmentID]bool{}
+	policies := map[PolicyID]bool{}
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupRead, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupUpdate, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupDelete, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupMembershipList, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupMembershipCreate, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupPolicyAttachmentCreate, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+	)
+	for _, attachment := range value.PolicyAttachments {
+		if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil || attachment.Scope != AuthorityScopeTenant ||
+			attachment.AccountID != value.Group.AccountID || attachment.Target.Kind != PolicyTargetGroup ||
+			attachment.Target.ID != string(value.Group.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
+			return errors.New("group policy attachment is invalid")
+		}
+		attachments[attachment.ID] = true
+		policies[attachment.PolicyID] = true
+		expected[capabilityKey(ActionIAMGroupPolicyAttachmentRevoke,
+			ResourceReference{Kind: ResourcePolicyAttachment, ID: string(attachment.ID)})] = struct{}{}
+	}
+	return validateCapabilities(value.Capabilities, expected)
+}
+
+func ValidateGroupList(value GroupList) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupList" || value.Items == nil || len(value.Items) > 100 {
+		return errors.New("group list is invalid")
+	}
+	var previous GroupID
+	var account AccountID
+	for _, item := range value.Items {
+		if ValidateGroupAccess(item) != nil || item.Group.ID <= previous || (account != "" && item.Group.AccountID != account) {
+			return errors.New("group list item is invalid")
+		}
+		previous, account = item.Group.ID, item.Group.AccountID
+	}
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("group page boundary is invalid")
+	}
+	return nil
+}
+
+func ValidateGroupMembershipAccess(value GroupMembershipAccess) error {
+	if ValidateGroupMembership(value.Membership) != nil || value.Membership.RemovedAt != nil {
+		return errors.New("group membership access is invalid")
+	}
+	expected := expectedCapabilitySet(struct {
+		Action   Action
+		Resource ResourceReference
+	}{ActionIAMGroupMembershipRemove, ResourceReference{Kind: ResourceGroupMembership, ID: string(value.Membership.ID)}})
+	if validateCapabilities(value.Capabilities, expected) != nil {
+		return errors.New("group membership capabilities are invalid")
+	}
+	return nil
+}
+
+func ValidateGroupMembershipList(value GroupMembershipList) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupMembershipList" ||
+		ValidateID("accountId", string(value.AccountID)) != nil || ValidateID("groupId", string(value.GroupID)) != nil ||
+		value.Items == nil || len(value.Items) > 100 {
+		return errors.New("group membership list is invalid")
+	}
+	var previous GroupMembershipID
+	for _, item := range value.Items {
+		membership := item.Membership
+		if ValidateGroupMembershipAccess(item) != nil || membership.AccountID != value.AccountID ||
+			membership.GroupID != value.GroupID || membership.ID <= previous {
+			return errors.New("group membership list item is invalid")
+		}
+		previous = membership.ID
+	}
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("group membership page boundary is invalid")
+	}
+	return nil
+}
+
+func ValidateAccountList(value AccountList) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccountList" || value.Items == nil || len(value.Items) > 100 {
+		return errors.New("account list is invalid")
 	}
 	var previous string
 	for _, item := range value.Items {
-		if ValidateOrganizationAccount(item) != nil || string(item.Organization.ID) <= previous {
-			return errors.New("organization list item is invalid")
+		if ValidateAccountAccess(item) != nil || string(item.Account.ID) <= previous {
+			return errors.New("account list item is invalid")
 		}
-		previous = string(item.Organization.ID)
+		previous = string(item.Account.ID)
 	}
-	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
-		return errors.New("organization page boundary is invalid")
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("account page boundary is invalid")
 	}
 	return nil
+}
+
+func ValidateAccountAccess(value AccountAccess) error {
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountSetStatus, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountRootCredentialsRecover, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+	)
+	return errors.Join(ValidateAccount(value.Account), validateCapabilities(value.Capabilities, expected))
 }
 
 func validateLoginName(value string) error {

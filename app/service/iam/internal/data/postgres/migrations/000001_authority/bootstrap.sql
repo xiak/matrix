@@ -8,7 +8,12 @@ BEGIN
         'matrix_iam_owner',
         'matrix_iam_migrator',
         'matrix_iam_api',
-        'matrix_iam_worker'
+        'matrix_iam_worker',
+        'matrix_iam_credential_recovery',
+        'matrix_iam_authentication_recovery',
+        'matrix_iam_backup_custody',
+        'matrix_iam_notification_worker',
+        'matrix_iam_access_analysis_worker'
     ]
     LOOP
         IF NOT EXISTS (
@@ -44,7 +49,7 @@ DECLARE
 BEGIN
     FOREACH parent_name IN ARRAY ARRAY['matrix_iam_owner', 'matrix_iam_migrator']
     LOOP
-        FOREACH member_name IN ARRAY ARRAY['matrix_iam_api', 'matrix_iam_worker']
+        FOREACH member_name IN ARRAY ARRAY['matrix_iam_api', 'matrix_iam_worker', 'matrix_iam_credential_recovery', 'matrix_iam_authentication_recovery', 'matrix_iam_backup_custody', 'matrix_iam_notification_worker', 'matrix_iam_access_analysis_worker']
         LOOP
             IF EXISTS (
                 SELECT 1
@@ -62,6 +67,63 @@ BEGIN
     END LOOP;
 END
 $matrix_iam_runtime_memberships$;
+
+DO $matrix_iam_recovery_memberships$
+DECLARE other_role text;
+BEGIN
+    FOREACH other_role IN ARRAY ARRAY['matrix_iam_api','matrix_iam_worker','matrix_iam_authentication_recovery'] LOOP
+        IF pg_has_role(other_role,'matrix_iam_credential_recovery','MEMBER')
+            OR pg_has_role('matrix_iam_credential_recovery',other_role,'MEMBER') THEN
+            RAISE EXCEPTION 'IAM local recovery role cannot share runtime authority';
+        END IF;
+    END LOOP;
+END
+$matrix_iam_recovery_memberships$;
+
+DO $matrix_iam_authentication_recovery_memberships$
+DECLARE other_role text;
+BEGIN
+    FOREACH other_role IN ARRAY ARRAY['matrix_iam_api','matrix_iam_worker','matrix_iam_credential_recovery','matrix_iam_backup_custody','matrix_iam_notification_worker'] LOOP
+        IF pg_has_role(other_role,'matrix_iam_authentication_recovery','MEMBER')
+            OR pg_has_role('matrix_iam_authentication_recovery',other_role,'MEMBER') THEN
+            RAISE EXCEPTION 'IAM authentication recovery cannot share another authority';
+        END IF;
+    END LOOP;
+END
+$matrix_iam_authentication_recovery_memberships$;
+
+DO $matrix_iam_custody_memberships$
+DECLARE other_role text;
+BEGIN
+    FOREACH other_role IN ARRAY ARRAY['matrix_iam_api','matrix_iam_worker','matrix_iam_credential_recovery','matrix_iam_authentication_recovery'] LOOP
+        IF pg_has_role(other_role,'matrix_iam_backup_custody','MEMBER')
+            OR pg_has_role('matrix_iam_backup_custody',other_role,'MEMBER') THEN
+            RAISE EXCEPTION 'IAM backup custody cannot share other authority';
+        END IF;
+    END LOOP;
+END $matrix_iam_custody_memberships$;
+
+DO $matrix_iam_notification_memberships$
+DECLARE other_role text;
+BEGIN
+    FOREACH other_role IN ARRAY ARRAY['matrix_iam_api','matrix_iam_worker','matrix_iam_credential_recovery','matrix_iam_authentication_recovery','matrix_iam_backup_custody'] LOOP
+        IF pg_has_role(other_role,'matrix_iam_notification_worker','MEMBER')
+            OR pg_has_role('matrix_iam_notification_worker',other_role,'MEMBER') THEN
+            RAISE EXCEPTION 'IAM notification delivery cannot share other authority';
+        END IF;
+    END LOOP;
+END $matrix_iam_notification_memberships$;
+
+DO $matrix_iam_access_analysis_memberships$
+DECLARE other_role text;
+BEGIN
+    FOREACH other_role IN ARRAY ARRAY['matrix_iam_api','matrix_iam_worker','matrix_iam_credential_recovery','matrix_iam_authentication_recovery','matrix_iam_backup_custody','matrix_iam_notification_worker'] LOOP
+        IF pg_has_role(other_role,'matrix_iam_access_analysis_worker','MEMBER')
+            OR pg_has_role('matrix_iam_access_analysis_worker',other_role,'MEMBER') THEN
+            RAISE EXCEPTION 'IAM access analysis cannot share another authority';
+        END IF;
+    END LOOP;
+END $matrix_iam_access_analysis_memberships$;
 
 CREATE SCHEMA IF NOT EXISTS iam AUTHORIZATION matrix_iam_owner;
 ALTER SCHEMA iam OWNER TO matrix_iam_owner;

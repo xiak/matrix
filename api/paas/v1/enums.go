@@ -34,6 +34,16 @@ const (
 
 type ExecutionTargetDesiredState string
 
+type MeasurementState string
+
+const (
+	MeasurementAvailable   MeasurementState = "AVAILABLE"
+	MeasurementWarmingUp   MeasurementState = "WARMING_UP"
+	MeasurementUnavailable MeasurementState = "UNAVAILABLE"
+	MeasurementUnsupported MeasurementState = "UNSUPPORTED"
+	MeasurementStale       MeasurementState = "STALE"
+)
+
 const (
 	ExecutionTargetActive   ExecutionTargetDesiredState = "ACTIVE"
 	ExecutionTargetDraining ExecutionTargetDesiredState = "DRAINING"
@@ -110,6 +120,8 @@ const (
 	OperationRegisterExecutionTarget     OperationAction = "REGISTER_EXECUTION_TARGET"
 	OperationCreatePlacement             OperationAction = "CREATE_PLACEMENT"
 	OperationCreateApplication           OperationAction = "CREATE_APPLICATION"
+	OperationSetApplicationLabel         OperationAction = "SET_APPLICATION_LABEL"
+	OperationDeleteApplicationLabel      OperationAction = "DELETE_APPLICATION_LABEL"
 	OperationCreateConfiguration         OperationAction = "CREATE_CONFIGURATION"
 	OperationCreateConfigurationRevision OperationAction = "CREATE_CONFIGURATION_REVISION"
 	OperationCreateApplicationRevision   OperationAction = "CREATE_APPLICATION_REVISION"
@@ -125,6 +137,8 @@ func OperationActions() []OperationAction {
 		OperationRegisterExecutionTarget,
 		OperationCreatePlacement,
 		OperationCreateApplication,
+		OperationSetApplicationLabel,
+		OperationDeleteApplicationLabel,
 		OperationCreateConfiguration,
 		OperationCreateConfigurationRevision,
 		OperationCreateApplicationRevision,
@@ -189,6 +203,7 @@ type SubjectType string
 
 const (
 	SubjectUser           SubjectType = "USER"
+	SubjectRole           SubjectType = "ROLE"
 	SubjectServiceAccount SubjectType = "SERVICE_ACCOUNT"
 	SubjectAgent          SubjectType = "AGENT"
 	SubjectSystemUser     SubjectType = "SYSTEM_USER"

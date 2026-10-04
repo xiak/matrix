@@ -33,6 +33,18 @@ func ValidateDigest(name, value string) error {
 	return nil
 }
 
+// ValidateAuthority requires exactly one explicit resource authority. A
+// platform installation is never represented by an organization's tenant ID.
+func ValidateAuthority(tenantID TenantID, installationID string) error {
+	if (tenantID == "") == (installationID == "") {
+		return errors.New("Audit authority must be exactly one tenant or installation")
+	}
+	if installationID != "" {
+		return ValidateID("installationId", installationID)
+	}
+	return ValidateID("tenantId", string(tenantID))
+}
+
 func ValidateEvent(value Event) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "AuditEvent" {
@@ -40,7 +52,7 @@ func ValidateEvent(value Event) error {
 	}
 	problems = append(problems,
 		ValidateID("eventId", string(value.EventID)),
-		ValidateID("tenantId", string(value.TenantID)),
+		ValidateAuthority(value.TenantID, value.InstallationID),
 		ValidateActor(value.Actor),
 		ValidateID("target.id", value.Target.ID),
 		ValidateDigest("requestDigest", value.RequestDigest),
@@ -52,6 +64,35 @@ func ValidateEvent(value Event) error {
 	if !known {
 		problems = append(problems, errors.New("Audit action is invalid"))
 	} else {
+		if value.Actor.Type == ActorRole && !contract.RoleActorPermitted {
+			problems = append(problems, errors.New("Audit action cannot contain a ROLE actor"))
+		}
+		if value.Actor.AccessKeyID != "" && !contract.AccessKeyActorPermitted {
+			problems = append(problems, errors.New("Audit action cannot contain access key lineage"))
+		}
+		if contract.UserActorRequired && value.Actor.Type != ActorUser {
+			problems = append(problems, errors.New("Audit action requires a USER actor"))
+		}
+		if contract.RoleActorRequired && value.Actor.Type != ActorRole {
+			problems = append(problems, errors.New("Audit action requires a ROLE actor"))
+		}
+		if contract.ServiceActorRequired && value.Actor.Type != ActorServiceAccount {
+			problems = append(problems, errors.New("Audit action requires a SERVICE_ACCOUNT actor"))
+		}
+		if value.Action == ActionIAMRoleSessionExited && (value.Actor.RoleSession == nil || value.Target.ID != value.Actor.RoleSession.SessionID) {
+			problems = append(problems, errors.New("role self-exit must target the actor's exact session"))
+		}
+		if (value.Action == ActionIAMUserPasswordResetRequired || value.Action == ActionIAMOtherSessionsRevoked || value.Action == ActionIAMNotificationContactVerificationStarted ||
+			value.Action == ActionIAMNotificationContactVerified || value.Action == ActionIAMNotificationContactReplaced || value.Action == ActionIAMAuthenticatorBound || value.Action == ActionIAMAuthenticatorReplaced || value.Action == ActionIAMAuthenticatorRemoved ||
+			value.Action == ActionIAMAuthenticatorRecoveryStarted || value.Action == ActionIAMAuthenticatorRecovered || value.Action == ActionIAMRecoveryCodesRegenerated) && value.Target.ID != string(value.Actor.ID) {
+			problems = append(problems, errors.New("self-service event must target the actual actor"))
+		}
+		if contract.PlatformOnly != (value.InstallationID != "") ||
+			contract.PlatformOnly && contract.SystemActorID == "" && value.Actor.Type != ActorUser ||
+			contract.SystemActorID != "" && (value.Actor.Type != ActorSystem || value.Actor.ID != contract.SystemActorID) ||
+			contract.TargetMatchesInstallation && value.Target.ID != value.InstallationID {
+			problems = append(problems, errors.New("Audit action and authority differ"))
+		}
 		if value.Target.Kind != contract.Target {
 			problems = append(problems, errors.New("Audit action and target kind differ"))
 		}
@@ -73,6 +114,13 @@ func ValidateEvent(value Event) error {
 	}
 	if value.IAMDecisionID != "" {
 		problems = append(problems, ValidateID("iamDecisionId", string(value.IAMDecisionID)))
+	}
+	if value.Action == ActionIAMTenantAdministratorRecovered ||
+		value.Action == ActionIAMInstallationPrimaryCredentialsRecovered ||
+		value.Action == ActionIAMAccountRootCredentialsRecovered {
+		problems = append(problems, ValidateID("target.tenantId", string(value.Target.TenantID)))
+	} else if value.Target.TenantID != "" {
+		problems = append(problems, errors.New("Audit action cannot contain a target tenant"))
 	}
 	if value.Action == ActionIAMAuthorizationDecided &&
 		string(value.IAMDecisionID) != value.Target.ID {
@@ -99,10 +147,34 @@ func ValidateEventForSource(source Source, value Event) error {
 
 func ValidateActor(value ActorReference) error {
 	var problems []error
-	if value.Type != ActorUser && value.Type != ActorServiceAccount && value.Type != ActorSystem {
+	if value.Type != ActorUser && value.Type != ActorServiceAccount && value.Type != ActorSystem && value.Type != ActorRole {
 		problems = append(problems, errors.New("actor type is invalid"))
 	}
 	problems = append(problems, ValidateID("actor.id", string(value.ID)))
+	if value.Type == ActorRole {
+		if value.RoleSession == nil {
+			problems = append(problems, errors.New("ROLE actor requires its session lineage"))
+		} else {
+			if (value.RoleSession.SourceUserID == "") == (value.RoleSession.SourceServicePrincipalID == "") {
+				problems = append(problems, errors.New("ROLE actor source lineage is invalid"))
+			}
+			problems = append(problems, ValidateID("actor.roleSession.sessionId", value.RoleSession.SessionID))
+			if value.RoleSession.SourceUserID != "" {
+				problems = append(problems, ValidateID("actor.roleSession.sourceUserId", string(value.RoleSession.SourceUserID)))
+			}
+			if value.RoleSession.SourceServicePrincipalID != "" {
+				problems = append(problems, ValidateID("actor.roleSession.sourceServicePrincipalId", string(value.RoleSession.SourceServicePrincipalID)))
+			}
+		}
+	} else if value.RoleSession != nil {
+		problems = append(problems, errors.New("non-ROLE actor cannot contain session lineage"))
+	}
+	if value.AccessKeyID != "" {
+		if value.Type != ActorUser {
+			problems = append(problems, errors.New("non-USER actor cannot contain key lineage"))
+		}
+		problems = append(problems, ValidateID("actor.accessKeyId", value.AccessKeyID))
+	}
 	return errors.Join(problems...)
 }
 
@@ -173,14 +245,14 @@ func ValidateRecordPage(value RecordPage) error {
 	if value.APIVersion != APIVersion || value.Kind != "AuditRecordPage" {
 		problems = append(problems, errors.New("Audit record page type metadata is invalid"))
 	}
-	problems = append(problems, ValidateID("tenantId", string(value.TenantID)))
+	problems = append(problems, ValidateAuthority(value.TenantID, value.InstallationID))
 	if len(value.Records) > MaxPageSize {
 		problems = append(problems, errors.New("Audit record page is too large"))
 	}
 	for index, record := range value.Records {
 		problems = append(problems, ValidateAuditRecord(record))
-		if record.Event.TenantID != value.TenantID {
-			problems = append(problems, errors.New("Audit page contains another tenant"))
+		if record.Event.TenantID != value.TenantID || record.Event.InstallationID != value.InstallationID {
+			problems = append(problems, errors.New("Audit page contains another authority"))
 		}
 		if index > 0 && value.Records[index-1].Sequence <= record.Sequence {
 			problems = append(problems, errors.New("Audit page sequence order is invalid"))
@@ -210,7 +282,7 @@ func ValidateChainVerification(value ChainVerification) error {
 		problems = append(problems, errors.New("chain verification state is invalid"))
 	}
 	problems = append(problems,
-		ValidateID("tenantId", string(value.TenantID)),
+		ValidateAuthority(value.TenantID, value.InstallationID),
 		validatePositiveSequence("fromSequence", value.FromSequence),
 		validatePositiveSequence("toSequence", value.ToSequence),
 		ValidateDigest("firstPreviousHash", value.FirstPreviousHash),

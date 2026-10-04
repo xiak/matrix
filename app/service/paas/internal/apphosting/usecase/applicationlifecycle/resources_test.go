@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
@@ -19,10 +20,11 @@ func TestCreateApplicationCommitsTerminalOperationAndSanitizedAudit(t *testing.T
 		Authorization: lifecycleAuthorization(),
 		Request: paasv1.CreateApplicationRequest{
 			ID: "application-new", Name: "application-new",
-			Labels: map[string]string{"team": "platform"},
+			Labels: map[string]string{"environment": "production", "team": "platform"},
 		},
 		IdempotencyKey: "create-application-new",
 	}
+	command.Authorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
 	resource, operation, replayed, err := usecase.CreateApplication(context.Background(), command)
 	if err != nil {
 		t.Fatalf("create Application: %v", err)
@@ -68,6 +70,110 @@ func TestCreateApplicationCommitsTerminalOperationAndSanitizedAudit(t *testing.T
 	changed.Request.Name = "changed-name"
 	if _, _, _, err := usecase.CreateApplication(context.Background(), changed); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("changed replay error = %v, want idempotency conflict", err)
+	}
+
+	changed = command
+	changed.Request.Labels = map[string]string{"environment": "staging", "team": "platform"}
+	if _, _, _, err := usecase.CreateApplication(context.Background(), changed); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("changed authorization label error = %v, want invalid argument", err)
+	}
+	if transaction.resourceSubmission != nil {
+		t.Fatal("changed authorization label reached the transaction")
+	}
+}
+
+func TestApplicationLabelMutationsBindCurrentAndRequestedState(t *testing.T) {
+	transaction := &fakeLifecycleTransaction{
+		now: lifecycleTime,
+		application: paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application",
+			Metadata: paasv1.ResourceMetadata{ID: "application-labels", Name: "application-labels",
+				Scope:  paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-a"},
+				Labels: map[string]string{"environment": "production", "team": "platform"}, ResourceVersion: 1,
+				CreatedAt: lifecycleTime, UpdatedAt: lifecycleTime}},
+		applicationFound: true, acceptedGenerations: make(map[uint64]paasv1.DeploymentGeneration),
+	}
+	usecase := mustLifecycleUsecase(t, &fakeLifecycleRepository{transaction: transaction})
+	authorization := lifecycleAuthorization()
+	authorization.ResourceTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+	authorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}
+	command := SetApplicationLabelCommand{Authorization: authorization, ApplicationID: "application-labels",
+		LabelKey: "environment", Value: "staging", ExpectedResourceVersion: 1, IdempotencyKey: "set-application-environment"}
+	result, err := usecase.SetApplicationLabel(context.Background(), command)
+	operation := result.Operation
+	if err != nil || result.Replayed || result.ResourceVersion != 2 || operation.Action != paasv1.OperationSetApplicationLabel ||
+		transaction.application.Metadata.ResourceVersion != 2 ||
+		transaction.application.Metadata.Labels["environment"] != "staging" ||
+		transaction.application.Metadata.Labels["team"] != "platform" {
+		t.Fatalf("set Application label = %#v / %#v, replayed=%t err=%v", transaction.application, operation, result.Replayed, err)
+	}
+	if transaction.applicationLabelSubmission == nil ||
+		transaction.applicationLabelSubmission.ExpectedResourceVersion != 1 ||
+		transaction.applicationLabelSubmission.AuditEvent.Action != "paas.application-label.updated" ||
+		transaction.applicationLabelSubmission.AuditEvent.IAMDecisionID != authorization.DecisionID {
+		t.Fatalf("set Application label submission = %#v", transaction.applicationLabelSubmission)
+	}
+
+	transaction.storedOperation, transaction.operationFound = operation, true
+	transaction.applicationLabelSubmission = nil
+	replayedResult, err := usecase.SetApplicationLabel(context.Background(), command)
+	if err != nil || !replayedResult.Replayed || replayedResult.ResourceVersion != 2 ||
+		replayedResult.Operation.ID != operation.ID || transaction.applicationLabelSubmission != nil {
+		t.Fatalf("set label replay = %#v err=%v", replayedResult, err)
+	}
+	changed := command
+	changed.Value = "restricted"
+	changed.Authorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "restricted"}}
+	if _, err := usecase.SetApplicationLabel(context.Background(), changed); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("changed set replay error = %v", err)
+	}
+
+	transaction.operationFound = false
+	deleteAuthorization := lifecycleAuthorization()
+	deleteAuthorization.ResourceTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}
+	deleteAuthorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}
+	deleted, err := usecase.DeleteApplicationLabel(context.Background(), DeleteApplicationLabelCommand{
+		Authorization: deleteAuthorization, ApplicationID: "application-labels", LabelKey: "environment",
+		ExpectedResourceVersion: 2, IdempotencyKey: "delete-application-environment",
+	})
+	if err != nil || deleted.Replayed || deleted.ResourceVersion != 3 || deleted.Operation.Action != paasv1.OperationDeleteApplicationLabel ||
+		transaction.application.Metadata.ResourceVersion != 3 ||
+		transaction.application.Metadata.Labels["environment"] != "" ||
+		transaction.application.Metadata.Labels["team"] != "platform" ||
+		transaction.applicationLabelSubmission.AuditEvent.Action != "paas.application-label.deleted" {
+		t.Fatalf("delete Application label = %#v / %#v, err=%v", transaction.application, deleted, err)
+	}
+}
+
+func TestApplicationLabelMutationRejectsStaleEvidenceAndNoChange(t *testing.T) {
+	transaction := &fakeLifecycleTransaction{
+		now: lifecycleTime,
+		application: paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application",
+			Metadata: paasv1.ResourceMetadata{ID: "application-labels", Name: "application-labels",
+				Scope:  paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-a"},
+				Labels: map[string]string{"environment": "production"}, ResourceVersion: 4,
+				CreatedAt: lifecycleTime, UpdatedAt: lifecycleTime}},
+		applicationFound: true, acceptedGenerations: make(map[uint64]paasv1.DeploymentGeneration),
+	}
+	usecase := mustLifecycleUsecase(t, &fakeLifecycleRepository{transaction: transaction})
+	authorization := lifecycleAuthorization()
+	authorization.ResourceTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}
+	authorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "restricted"}}
+	_, err := usecase.SetApplicationLabel(context.Background(), SetApplicationLabelCommand{
+		Authorization: authorization, ApplicationID: "application-labels", LabelKey: "environment",
+		Value: "restricted", ExpectedResourceVersion: 4, IdempotencyKey: "stale-label-evidence",
+	})
+	if !errors.Is(err, ErrResourceVersionConflict) || transaction.applicationLabelSubmission != nil {
+		t.Fatalf("stale label evidence error=%v submission=%#v", err, transaction.applicationLabelSubmission)
+	}
+
+	authorization.ResourceTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+	authorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+	_, err = usecase.SetApplicationLabel(context.Background(), SetApplicationLabelCommand{
+		Authorization: authorization, ApplicationID: "application-labels", LabelKey: "environment",
+		Value: "production", ExpectedResourceVersion: 4, IdempotencyKey: "same-label-value",
+	})
+	if !errors.Is(err, ErrNoDesiredChange) || transaction.applicationLabelSubmission != nil {
+		t.Fatalf("same label value error=%v submission=%#v", err, transaction.applicationLabelSubmission)
 	}
 }
 

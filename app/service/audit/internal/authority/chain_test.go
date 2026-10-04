@@ -9,7 +9,7 @@ import (
 )
 
 func TestPerTenantSequenceAndHashChainAppendAndVerify(t *testing.T) {
-	genesis, err := GenesisCheckpoint("organization-example")
+	genesis, err := GenesisCheckpoint(TenantChain("organization-example"))
 	if err != nil {
 		t.Fatalf("create genesis checkpoint: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestPerTenantSequenceAndHashChainAppendAndVerify(t *testing.T) {
 	secondEvent.OccurredAt = firstEvent.OccurredAt.Add(time.Second)
 	secondEvent.Target.ID = "application-example"
 	second, _, err := AppendRecord(
-		Checkpoint{TenantID: genesis.TenantID, Sequence: first.Sequence, RecordHash: first.RecordHash},
+		Checkpoint{ChainID: genesis.ChainID, Sequence: first.Sequence, RecordHash: first.RecordHash},
 		2,
 		auditv1.SourcePaaS,
 		secondEvent,
@@ -45,7 +45,7 @@ func TestPerTenantSequenceAndHashChainAppendAndVerify(t *testing.T) {
 }
 
 func TestHashChainRejectsChangedContentGapPredecessorAndTenant(t *testing.T) {
-	genesis, _ := GenesisCheckpoint("organization-example")
+	genesis, _ := GenesisCheckpoint(TenantChain("organization-example"))
 	event := auditAuthorityEvent("event-one", "organization-example", auditv1.ActionPaaSDeploymentCreated)
 	record, _, err := AppendRecord(
 		genesis, 1, auditv1.SourcePaaS, event,
@@ -69,7 +69,7 @@ func TestHashChainRejectsChangedContentGapPredecessorAndTenant(t *testing.T) {
 	if _, err := VerifyChain(genesis, []auditv1.AuditRecord{predecessor}); !errors.Is(err, ErrInvalidChain) {
 		t.Fatalf("changed predecessor verification error = %v", err)
 	}
-	otherTenant, _ := GenesisCheckpoint("organization-other")
+	otherTenant, _ := GenesisCheckpoint(TenantChain("organization-other"))
 	if _, err := VerifyChain(otherTenant, []auditv1.AuditRecord{record}); !errors.Is(err, ErrInvalidChain) {
 		t.Fatalf("cross-tenant verification error = %v", err)
 	}
@@ -80,7 +80,7 @@ func TestHashChainRejectsChangedContentGapPredecessorAndTenant(t *testing.T) {
 
 func TestEachTenantStartsAnIndependentChain(t *testing.T) {
 	for _, tenant := range []auditv1.TenantID{"organization-a", "organization-b"} {
-		genesis, err := GenesisCheckpoint(tenant)
+		genesis, err := GenesisCheckpoint(TenantChain(tenant))
 		if err != nil {
 			t.Fatalf("create %s genesis: %v", tenant, err)
 		}
@@ -91,6 +91,45 @@ func TestEachTenantStartsAnIndependentChain(t *testing.T) {
 		)
 		if err != nil || record.Sequence != 1 || record.PreviousHash != GenesisHash {
 			t.Fatalf("tenant %s first record = %#v err=%v", tenant, record, err)
+		}
+	}
+}
+
+func TestInstallationAndTenantChainsSeparateEqualIdentifiers(t *testing.T) {
+	tenant, _ := GenesisCheckpoint(TenantChain("authority-example"))
+	platform, _ := GenesisCheckpoint(InstallationChain("authority-example"))
+	tenantEvent := auditAuthorityEvent("event-tenant", "authority-example", auditv1.ActionPaaSDeploymentCreated)
+	platformEvent := auditAuthorityEvent("event-platform", "authority-example", auditv1.ActionPaaSExecutionPoolCreated)
+	now := time.Date(2026, 8, 27, 1, 2, 3, 0, time.UTC)
+	tenantRecord, _, err := AppendRecord(tenant, 1, auditv1.SourcePaaS, tenantEvent, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	platformRecord, _, err := AppendRecord(platform, 1, auditv1.SourcePaaS, platformEvent, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tenant.ChainID == platform.ChainID || tenantRecord.RecordHash == platformRecord.RecordHash ||
+		platformRecord.Event.TenantID != "" || tenantRecord.Event.InstallationID != "" {
+		t.Fatal("tenant and installation authorities collapsed")
+	}
+	for _, pair := range []struct {
+		head   Checkpoint
+		record auditv1.AuditRecord
+	}{{tenant, tenantRecord}, {platform, platformRecord}} {
+		if _, err := VerifyChain(pair.head, []auditv1.AuditRecord{pair.record}); err != nil {
+			t.Fatalf("verify %s: %v", pair.head.ChainID, err)
+		}
+	}
+	if _, err := VerifyChain(tenant, []auditv1.AuditRecord{platformRecord}); !errors.Is(err, ErrInvalidChain) {
+		t.Fatalf("installation record verified as tenant: %v", err)
+	}
+	if _, _, err := AppendRecord(platform, 1, auditv1.SourcePaaS, tenantEvent, now); !errors.Is(err, ErrInvalidChain) {
+		t.Fatalf("tenant event appended to installation chain: %v", err)
+	}
+	for _, invalid := range []ChainID{"", "authority-example", "tenant:", "installation:", "Tenant:authority", "tenant:bad space"} {
+		if _, err := GenesisCheckpoint(invalid); !errors.Is(err, ErrInvalidChain) {
+			t.Fatalf("invalid chain %q accepted: %v", invalid, err)
 		}
 	}
 }

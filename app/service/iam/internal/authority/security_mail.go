@@ -1,0 +1,359 @@
+package authority
+
+import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"errors"
+	"math/big"
+	"slices"
+	"time"
+
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
+)
+
+var (
+	ErrSecurityMail                = errors.New("security mail is invalid")
+	ErrEmailVerificationRejected   = errors.New("email verification failed")
+	ErrEmailVerificationProtection = errors.New("email verification protection failed")
+)
+
+const emailVerificationDigits = 8
+
+type MailSubmissionState string
+
+const (
+	MailAccepted    MailSubmissionState = "ACCEPTED"
+	MailRejected    MailSubmissionState = "REJECTED"
+	MailUnknown     MailSubmissionState = "UNKNOWN"
+	MailUnavailable MailSubmissionState = "UNAVAILABLE"
+)
+
+// A closed observation, not a delivered/read receipt or server error text.
+type MailSubmission struct {
+	State    MailSubmissionState
+	SMTPCode int
+}
+
+func (value MailSubmission) Validate() error {
+	switch value.State {
+	case MailAccepted:
+		if value.SMTPCode == 250 {
+			return nil
+		}
+	case MailRejected:
+		if value.SMTPCode >= 400 && value.SMTPCode <= 599 {
+			return nil
+		}
+	case MailUnknown, MailUnavailable:
+		if value.SMTPCode == 0 {
+			return nil
+		}
+	}
+	return ErrSecurityMail
+}
+
+type SecurityMailKind string
+
+const (
+	MailAddressVerification      SecurityMailKind = "ADDRESS_VERIFICATION"
+	MailContactVerified          SecurityMailKind = "CONTACT_VERIFIED"
+	MailContactReplacedPrevious  SecurityMailKind = "CONTACT_REPLACED_PREVIOUS"
+	MailContactReplacedCurrent   SecurityMailKind = "CONTACT_REPLACED_CURRENT"
+	MailAuthenticatorBound       SecurityMailKind = "AUTHENTICATOR_BOUND"
+	MailAuthenticatorReplaced    SecurityMailKind = "AUTHENTICATOR_REPLACED"
+	MailAuthenticatorRemoved     SecurityMailKind = "AUTHENTICATOR_REMOVED"
+	MailRecoveryStarted          SecurityMailKind = "RECOVERY_STARTED"
+	MailAuthenticatorRecovered   SecurityMailKind = "AUTHENTICATOR_RECOVERED"
+	MailRecoveryCodesRegenerated SecurityMailKind = "RECOVERY_CODES_REGENERATED"
+	MailSecuritySettingsChanged  SecurityMailKind = "SECURITY_SETTINGS_CHANGED"
+)
+
+// SecurityMail is a purpose-limited delivery projection, not a recipient
+// selector or proof of address ownership. The originating transaction owns
+// eligibility, the fixed recipient revision and durable delivery identity.
+type SecurityMail struct {
+	NotificationID        string
+	Recipient             string
+	Kind                  SecurityMailKind
+	OccurredAt            time.Time
+	VerificationCode      iamv1.Secret
+	VerificationExpiresAt time.Time
+}
+
+func (SecurityMail) String() string               { return "[REDACTED]" }
+func (SecurityMail) GoString() string             { return "authority.SecurityMail{[REDACTED]}" }
+func (SecurityMail) MarshalJSON() ([]byte, error) { return nil, ErrSecurityMail }
+func (*SecurityMail) UnmarshalJSON([]byte) error  { return ErrSecurityMail }
+
+func (message SecurityMail) Validate() error {
+	if iamv1.ValidateID("notificationId", message.NotificationID) != nil ||
+		iamv1.ValidateSecurityMailAddress(message.Recipient) != nil || !securityMailTime(message.OccurredAt) {
+		return ErrSecurityMail
+	}
+	if message.Kind == MailAddressVerification {
+		code := message.VerificationCode.CopyBytes()
+		defer clear(code)
+		if !validEmailVerificationCode(code) || !securityMailTime(message.VerificationExpiresAt) ||
+			!message.VerificationExpiresAt.After(message.OccurredAt) ||
+			message.VerificationExpiresAt.Sub(message.OccurredAt) > 10*time.Minute {
+			return ErrSecurityMail
+		}
+		return nil
+	}
+	if message.VerificationCode.Present() || !message.VerificationExpiresAt.IsZero() {
+		return ErrSecurityMail
+	}
+	switch message.Kind {
+	case MailContactVerified, MailContactReplacedPrevious, MailContactReplacedCurrent, MailAuthenticatorBound, MailAuthenticatorReplaced, MailAuthenticatorRemoved,
+		MailRecoveryStarted, MailAuthenticatorRecovered, MailRecoveryCodesRegenerated, MailSecuritySettingsChanged:
+		return nil
+	default:
+		return ErrSecurityMail
+	}
+}
+
+type EmailVerificationKeyCommitment struct {
+	KeyID              string `json:"keyId"`
+	FormatVersion      uint8  `json:"formatVersion"`
+	MaterialCommitment string `json:"materialCommitment"`
+}
+
+// A material-free registration shared by the API and its restricted mail
+// consumer. It proves neither mailbox possession nor recovery eligibility.
+type EmailVerificationKeyset struct {
+	Scope          iamv1.SecurityMailInstallationScope `json:"scope"`
+	KeysetRevision uint64                              `json:"keysetRevision"`
+	ActiveKeyID    string                              `json:"activeKeyId"`
+	ContentDigest  string                              `json:"contentDigest"`
+	Keys           []EmailVerificationKeyCommitment    `json:"keys"`
+}
+
+type EmailVerificationProtector struct {
+	registration EmailVerificationKeyset
+	keys         map[string][]byte
+}
+
+func (EmailVerificationProtector) String() string { return "[REDACTED]" }
+func (EmailVerificationProtector) GoString() string {
+	return "authority.EmailVerificationProtector{[REDACTED]}"
+}
+func (EmailVerificationProtector) MarshalJSON() ([]byte, error) {
+	return nil, ErrEmailVerificationProtection
+}
+
+func NewEmailVerificationProtector(document iamv1.EmailVerificationKeyring) (*EmailVerificationProtector, error) {
+	if iamv1.ValidateEmailVerificationKeyring(document) != nil {
+		return nil, ErrEmailVerificationProtection
+	}
+	digest, err := iamv1.EmailVerificationKeysetDigest(document)
+	if err != nil {
+		return nil, ErrEmailVerificationProtection
+	}
+	value := &EmailVerificationProtector{registration: EmailVerificationKeyset{Scope: document.Scope, KeysetRevision: document.KeysetRevision,
+		ActiveKeyID: document.ActiveKeyID, ContentDigest: digest}, keys: make(map[string][]byte, len(document.Keys))}
+	for _, key := range document.Keys {
+		encoded := key.KeyMaterial.CopyBytes()
+		material, err := base64.RawURLEncoding.Strict().DecodeString(string(encoded))
+		clear(encoded)
+		if err != nil || len(material) != 32 {
+			clear(material)
+			return nil, ErrEmailVerificationProtection
+		}
+		commitment, err := iamv1.EmailVerificationKeyMaterialCommitment(document, key.KeyID)
+		if err != nil {
+			clear(material)
+			return nil, ErrEmailVerificationProtection
+		}
+		value.keys[key.KeyID] = material
+		value.registration.Keys = append(value.registration.Keys, EmailVerificationKeyCommitment{key.KeyID, key.FormatVersion, commitment})
+	}
+	return value, nil
+}
+
+func (value *EmailVerificationProtector) Registration() EmailVerificationKeyset {
+	if value == nil {
+		return EmailVerificationKeyset{}
+	}
+	copy := value.registration
+	copy.Keys = slices.Clone(copy.Keys)
+	return copy
+}
+
+func (value *EmailVerificationProtector) Matches(registration EmailVerificationKeyset) bool {
+	if value == nil {
+		return false
+	}
+	expected := value.registration
+	return expected.Scope == registration.Scope && expected.KeysetRevision == registration.KeysetRevision &&
+		expected.ActiveKeyID == registration.ActiveKeyID && expected.ContentDigest == registration.ContentDigest && slices.Equal(expected.Keys, registration.Keys)
+}
+
+func (value *EmailVerificationProtector) Seal(binding iamv1.EmailVerificationBinding, code iamv1.Secret) (SealedEmailVerificationCode, error) {
+	if value == nil || binding.InstallationID != value.registration.Scope.InstallationID || binding.BootstrapDigest != value.registration.Scope.BootstrapDigest {
+		return SealedEmailVerificationCode{}, ErrEmailVerificationProtection
+	}
+	return SealEmailVerificationCode(binding, value.registration.ActiveKeyID, value.keys[value.registration.ActiveKeyID], code)
+}
+
+func (value *EmailVerificationProtector) Open(binding iamv1.EmailVerificationBinding, sealed SealedEmailVerificationCode) (iamv1.Secret, error) {
+	if value == nil || binding.InstallationID != value.registration.Scope.InstallationID || binding.BootstrapDigest != value.registration.Scope.BootstrapDigest {
+		return iamv1.Secret{}, ErrEmailVerificationProtection
+	}
+	return OpenEmailVerificationCode(binding, sealed.KeyID, value.keys[sealed.KeyID], sealed)
+}
+
+// IssueEmailVerificationCode creates only address-possession material. It is
+// not a Session, recovery credential or TOTP. Rejection sampling avoids the
+// bias of reducing arbitrary random bytes modulo the decimal code space.
+// The workflow still owes durable attempt limits, intent binding and expiry.
+func (issuer *CredentialIssuer) IssueEmailVerificationCode() (iamv1.Secret, error) {
+	if issuer == nil || issuer.entropy == nil {
+		return iamv1.Secret{}, ErrCredentialGeneration
+	}
+	random, err := rand.Int(issuer.entropy, big.NewInt(100_000_000))
+	if err != nil {
+		return iamv1.Secret{}, ErrCredentialGeneration
+	}
+	number := random.Uint64()
+	defer clear(random.Bits())
+	var code [emailVerificationDigits]byte
+	defer clear(code[:])
+	for index := len(code) - 1; index >= 0; index-- {
+		code[index] = byte(number%10) + '0'
+		number /= 10
+	}
+	secret, err := iamv1.NewSecret(string(code[:]))
+	if err != nil {
+		return iamv1.Secret{}, ErrCredentialGeneration
+	}
+	return secret, nil
+}
+
+// CompareEmailVerificationCode only compares transient material. Callers must
+// have already committed the shared attempt debit and must consume success in
+// the locked original-intent transaction; this does not prove either step.
+func CompareEmailVerificationCode(expected, candidate iamv1.Secret) (bool, error) {
+	reference, supplied := expected.CopyBytes(), candidate.CopyBytes()
+	defer clear(reference)
+	defer clear(supplied)
+	if !validEmailVerificationCode(reference) {
+		return false, ErrAuthorityUnavailable
+	}
+	if !validEmailVerificationCode(supplied) {
+		return false, ErrEmailVerificationRejected
+	}
+	if subtle.ConstantTimeCompare(reference, supplied) != 1 {
+		return false, ErrEmailVerificationRejected
+	}
+	return true, nil
+}
+
+func validEmailVerificationCode(code []byte) bool {
+	if len(code) != emailVerificationDigits {
+		return false
+	}
+	for _, digit := range code {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func securityMailTime(value time.Time) bool {
+	return !value.IsZero() && value.Location() == time.UTC && value == value.Round(0) &&
+		value.Year() >= 1970 && value.Year() <= 9999 && value.Nanosecond()%1000 == 0
+}
+
+// The encrypted code belongs only to the original private notification
+// intent. Neither ciphertext nor recipient-bearing AAD is an Audit payload.
+type SealedEmailVerificationCode struct {
+	FormatVersion uint8
+	KeyID         string
+	Nonce         []byte
+	Ciphertext    []byte
+}
+
+func (SealedEmailVerificationCode) String() string { return "[REDACTED]" }
+func (SealedEmailVerificationCode) GoString() string {
+	return "authority.SealedEmailVerificationCode{[REDACTED]}"
+}
+func (SealedEmailVerificationCode) MarshalJSON() ([]byte, error) {
+	return nil, ErrEmailVerificationProtection
+}
+func (*SealedEmailVerificationCode) UnmarshalJSON([]byte) error {
+	return ErrEmailVerificationProtection
+}
+
+// SealEmailVerificationCode seals once for a reserved immutable intent/key.
+// Retry reuses its committed result, not a new code, nonce, scope or lifetime.
+func SealEmailVerificationCode(binding iamv1.EmailVerificationBinding, keyID string, key []byte, code iamv1.Secret) (SealedEmailVerificationCode, error) {
+	aead, aad, err := emailVerificationCipher(binding, keyID, key)
+	defer clear(aad)
+	plaintext := code.CopyBytes()
+	defer clear(plaintext)
+	if err != nil || !validEmailVerificationCode(plaintext) {
+		return SealedEmailVerificationCode{}, ErrEmailVerificationProtection
+	}
+	protected := aead.Seal(nil, nil, plaintext, aad)
+	defer clear(protected)
+	return SealedEmailVerificationCode{FormatVersion: 1, KeyID: keyID,
+		Nonce: bytes.Clone(protected[:12]), Ciphertext: bytes.Clone(protected[12:])}, nil
+}
+
+func OpenEmailVerificationCode(binding iamv1.EmailVerificationBinding, keyID string, key []byte, sealed SealedEmailVerificationCode) (iamv1.Secret, error) {
+	if sealed.FormatVersion != 1 || sealed.KeyID != keyID || len(sealed.Nonce) != 12 || len(sealed.Ciphertext) != emailVerificationDigits+16 {
+		return iamv1.Secret{}, ErrEmailVerificationProtection
+	}
+	aead, aad, err := emailVerificationCipher(binding, keyID, key)
+	defer clear(aad)
+	if err != nil {
+		return iamv1.Secret{}, ErrEmailVerificationProtection
+	}
+	protected := append(bytes.Clone(sealed.Nonce), sealed.Ciphertext...)
+	defer clear(protected)
+	plaintext, err := aead.Open(nil, nil, protected, aad)
+	defer clear(plaintext)
+	if err != nil || !validEmailVerificationCode(plaintext) {
+		return iamv1.Secret{}, ErrEmailVerificationProtection
+	}
+	secret, err := iamv1.NewSecret(string(plaintext))
+	if err != nil {
+		return iamv1.Secret{}, ErrEmailVerificationProtection
+	}
+	return secret, nil
+}
+
+func emailVerificationCipher(binding iamv1.EmailVerificationBinding, keyID string, key []byte) (cipher.AEAD, []byte, error) {
+	if len(key) != 32 {
+		return nil, nil, ErrEmailVerificationProtection
+	}
+	info, aad, err := iamv1.EmailVerificationCipherContext(binding, keyID)
+	defer clear(info)
+	if err != nil {
+		return nil, nil, ErrEmailVerificationProtection
+	}
+	recordKey, err := hkdf.Key(sha256.New, key, []byte("matrix.iam.email-verification.hkdf-sha256.v1"), string(info), 32)
+	if err != nil {
+		clear(aad)
+		return nil, nil, ErrEmailVerificationProtection
+	}
+	defer clear(recordKey)
+	block, err := aes.NewCipher(recordKey)
+	if err != nil {
+		clear(aad)
+		return nil, nil, ErrEmailVerificationProtection
+	}
+	aead, err := cipher.NewGCMWithRandomNonce(block)
+	if err != nil {
+		clear(aad)
+		return nil, nil, ErrEmailVerificationProtection
+	}
+	return aead, aad, nil
+}

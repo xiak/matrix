@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"sort"
 	"strings"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/usecase"
@@ -27,6 +29,8 @@ type Workflow interface {
 	ListServiceInstallations(context.Context, port.Authorization) (managedservicev1.ServiceInstallationList, error)
 	GetServiceInstallation(context.Context, port.Authorization, string) (managedservicev1.ServiceInstallation, error)
 	GetInstallationOperation(context.Context, port.Authorization, string) (managedservicev1.InstallationOperation, error)
+	BindServiceRole(context.Context, usecase.BindServiceRoleCommand) (managedservicev1.ServiceRoleBindingReceipt, error)
+	UnbindServiceRole(context.Context, usecase.UnbindServiceRoleCommand) (managedservicev1.ServiceRoleUnbindingReceipt, error)
 	ActivateQuota(context.Context, usecase.ActivateQuotaCommand) (managedservicev1.QuotaEntitlement, bool, error)
 	CreateInstallation(context.Context, usecase.CreateInstallationCommand) (managedservicev1.ServiceInstallation, bool, error)
 }
@@ -61,24 +65,86 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	routes.HandleFunc("POST /managed-services/v1/service-installations", value.createInstallation)
 	routes.HandleFunc("GET /managed-services/v1/service-installations/{installationId}", value.getServiceInstallation)
 	routes.HandleFunc("GET /managed-services/v1/service-installations/{installationId}/operation", value.getInstallationOperation)
+	routes.HandleFunc("POST /managed-services/v1/service-installations/{installationId}/service-role-bindings", value.bindServiceRole)
+	routes.HandleFunc("DELETE /managed-services/v1/service-installations/{installationId}/service-role-bindings/{bindingId}", value.unbindServiceRole)
 	return routes, nil
 }
 
 func (value *handler) listOfferings(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
-		response, request, port.AuthorizeOfferingRead, port.ResourceServiceOffering,
+		response, request, port.AuthorizeOfferingRead, port.ResourceServiceOffering, iamv1.AuthorizationCollectionList,
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
 	}
 	result, err := value.workflow.ListOfferings(request.Context(), authorization)
-	writeResult(response, requestID, result, err)
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	filtered, err := value.filterOfferings(request, requestID, authorization, result)
+	if err != nil {
+		writeAuthorizationError(response, requestID, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, filtered)
+}
+
+func (value *handler) filterOfferings(
+	request *http.Request,
+	correlationID string,
+	collection port.Authorization,
+	result managedservicev1.ServiceOfferingList,
+) (managedservicev1.ServiceOfferingList, error) {
+	if request == nil || result.Kind != "ServiceOfferingList" || len(result.Items) < 1 ||
+		len(result.Items) > iamv1.MaxAuthorizationBatchItems || port.ValidateAuthorization(collection) != nil {
+		return managedservicev1.ServiceOfferingList{}, port.ErrAuthorizationUnavailable
+	}
+	items := append([]managedservicev1.ServiceOffering(nil), result.Items...)
+	sort.Slice(items, func(left, right int) bool { return items[left].ID < items[right].ID })
+	batch := port.AuthorizationBatchRequest{
+		Credential: request.Header.Get("Authorization"),
+		Requests:   make([]port.AuthorizationRequest, len(items)),
+	}
+	previous := ""
+	for index, offering := range items {
+		if managedservicev1.ValidateServiceOffering(offering) != nil || offering.ID <= previous {
+			return managedservicev1.ServiceOfferingList{}, port.ErrAuthorizationUnavailable
+		}
+		itemRequestID, err := value.config.NewRequestID()
+		if err != nil || managedservicev1.ValidateID("requestId", itemRequestID) != nil {
+			return managedservicev1.ServiceOfferingList{}, port.ErrAuthorizationUnavailable
+		}
+		batch.Requests[index] = port.AuthorizationRequest{
+			Credential: batch.Credential, Action: port.AuthorizeOfferingRead,
+			Resource:     port.ResourceReference{Kind: port.ResourceServiceOffering, ID: offering.ID},
+			ResourceMode: iamv1.AuthorizationResourceInstance,
+			RequestID:    itemRequestID, CorrelationID: correlationID,
+		}
+		previous = offering.ID
+	}
+	authorization, err := value.authorizer.AuthorizeBatch(request.Context(), batch)
+	if err != nil || port.ValidateAuthorizationBatchForRequest(authorization, batch) != nil ||
+		authorization.TenantID != collection.TenantID || authorization.SubjectType != collection.SubjectType ||
+		authorization.SubjectID != collection.SubjectID {
+		if err != nil {
+			return managedservicev1.ServiceOfferingList{}, err
+		}
+		return managedservicev1.ServiceOfferingList{}, port.ErrAuthorizationUnavailable
+	}
+	allowed := make([]managedservicev1.ServiceOffering, 0, len(items))
+	for index, item := range items {
+		if authorization.Items[index].Allowed {
+			allowed = append(allowed, item)
+		}
+	}
+	return managedservicev1.ServiceOfferingList{Kind: "ServiceOfferingList", Items: allowed}, nil
 }
 
 func (value *handler) getOffering(response http.ResponseWriter, request *http.Request) {
 	id := request.PathValue("offeringId")
 	authorization, requestID, ok := value.authorizeResource(
-		response, request, port.AuthorizeOfferingRead, port.ResourceServiceOffering, id,
+		response, request, port.AuthorizeOfferingRead, port.ResourceServiceOffering, id, iamv1.AuthorizationResourceInstance, "",
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -89,7 +155,7 @@ func (value *handler) getOffering(response http.ResponseWriter, request *http.Re
 
 func (value *handler) listRegions(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
-		response, request, port.AuthorizeRegionRead, port.ResourceRegion,
+		response, request, port.AuthorizeRegionRead, port.ResourceRegion, iamv1.AuthorizationCollectionList,
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -101,7 +167,7 @@ func (value *handler) listRegions(response http.ResponseWriter, request *http.Re
 func (value *handler) getRegion(response http.ResponseWriter, request *http.Request) {
 	id := request.PathValue("regionId")
 	authorization, requestID, ok := value.authorizeResource(
-		response, request, port.AuthorizeRegionRead, port.ResourceRegion, id,
+		response, request, port.AuthorizeRegionRead, port.ResourceRegion, id, iamv1.AuthorizationResourceInstance, "",
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -112,7 +178,7 @@ func (value *handler) getRegion(response http.ResponseWriter, request *http.Requ
 
 func (value *handler) listQuotaEntitlements(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
-		response, request, port.AuthorizeQuotaEntitlementRead, port.ResourceQuotaEntitlement,
+		response, request, port.AuthorizeQuotaEntitlementRead, port.ResourceQuotaEntitlement, iamv1.AuthorizationCollectionList,
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -124,7 +190,7 @@ func (value *handler) listQuotaEntitlements(response http.ResponseWriter, reques
 func (value *handler) getQuotaEntitlement(response http.ResponseWriter, request *http.Request) {
 	id := request.PathValue("quotaEntitlementId")
 	authorization, requestID, ok := value.authorizeResource(
-		response, request, port.AuthorizeQuotaEntitlementRead, port.ResourceQuotaEntitlement, id,
+		response, request, port.AuthorizeQuotaEntitlementRead, port.ResourceQuotaEntitlement, id, iamv1.AuthorizationResourceInstance, "",
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -135,7 +201,7 @@ func (value *handler) getQuotaEntitlement(response http.ResponseWriter, request 
 
 func (value *handler) activateQuota(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
-		response, request, port.AuthorizeQuotaEntitlementActivate, port.ResourceQuotaEntitlement,
+		response, request, port.AuthorizeQuotaEntitlementActivate, port.ResourceQuotaEntitlement, iamv1.AuthorizationCollectionCreate,
 	)
 	if !ok {
 		return
@@ -162,7 +228,7 @@ func (value *handler) activateQuota(response http.ResponseWriter, request *http.
 
 func (value *handler) listServiceInstallations(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
-		response, request, port.AuthorizeInstallationRead, port.ResourceServiceInstallation,
+		response, request, port.AuthorizeInstallationRead, port.ResourceServiceInstallation, iamv1.AuthorizationCollectionList,
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -174,7 +240,7 @@ func (value *handler) listServiceInstallations(response http.ResponseWriter, req
 func (value *handler) getServiceInstallation(response http.ResponseWriter, request *http.Request) {
 	id := request.PathValue("installationId")
 	authorization, requestID, ok := value.authorizeResource(
-		response, request, port.AuthorizeInstallationRead, port.ResourceServiceInstallation, id,
+		response, request, port.AuthorizeInstallationRead, port.ResourceServiceInstallation, id, iamv1.AuthorizationResourceInstance, "",
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -186,7 +252,7 @@ func (value *handler) getServiceInstallation(response http.ResponseWriter, reque
 func (value *handler) getInstallationOperation(response http.ResponseWriter, request *http.Request) {
 	id := request.PathValue("installationId")
 	authorization, requestID, ok := value.authorizeResource(
-		response, request, port.AuthorizeInstallationRead, port.ResourceServiceInstallation, id,
+		response, request, port.AuthorizeInstallationRead, port.ResourceServiceInstallation, id, iamv1.AuthorizationResourceInstance, "",
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -197,7 +263,7 @@ func (value *handler) getInstallationOperation(response http.ResponseWriter, req
 
 func (value *handler) createInstallation(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
-		response, request, port.AuthorizeInstallationCreate, port.ResourceServiceInstallation,
+		response, request, port.AuthorizeInstallationCreate, port.ResourceServiceInstallation, iamv1.AuthorizationCollectionCreate,
 	)
 	if !ok {
 		return
@@ -222,21 +288,73 @@ func (value *handler) createInstallation(response http.ResponseWriter, request *
 	writeJSON(response, status, result)
 }
 
+func (value *handler) bindServiceRole(response http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("installationId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeInstallationRoleBind, port.ResourceServiceInstallation, id,
+		iamv1.AuthorizationResourceInstance, "",
+	)
+	if !ok || !acceptsNoQuery(response, request, requestID) {
+		return
+	}
+	body, ok := decodeRequest[managedservicev1.BindServiceRoleRequest](response, request, requestID)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.BindServiceRole(request.Context(), usecase.BindServiceRoleCommand{
+		Authorization: authorization, Credential: request.Header.Get("Authorization"),
+		InstallationID: id, Request: body, IdempotencyKey: request.Header.Get("Idempotency-Key"),
+	})
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) unbindServiceRole(response http.ResponseWriter, request *http.Request) {
+	installationID, bindingID := request.PathValue("installationId"), request.PathValue("bindingId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeInstallationRoleUnbind, port.ResourceServiceInstallation, installationID,
+		iamv1.AuthorizationResourceInstance, "",
+	)
+	if !ok || !acceptsNoQuery(response, request, requestID) {
+		return
+	}
+	body, ok := decodeRequest[managedservicev1.UnbindServiceRoleRequest](response, request, requestID)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.UnbindServiceRole(request.Context(), usecase.UnbindServiceRoleCommand{
+		Authorization: authorization, Credential: request.Header.Get("Authorization"),
+		InstallationID: installationID, BindingID: iamv1.WorkloadRoleBindingID(bindingID),
+		Request: body, IdempotencyKey: request.Header.Get("Idempotency-Key"),
+	})
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
 func (value *handler) authorizeCollection(
 	response http.ResponseWriter,
 	request *http.Request,
-	action string,
-	resourceKind string,
+	action iamv1.Action,
+	resourceKind iamv1.ResourceKind,
+	usage iamv1.AuthorizationCollectionUsage,
 ) (port.Authorization, string, bool) {
-	return value.authorizeResource(response, request, action, resourceKind, "collection")
+	return value.authorizeResource(response, request, action, resourceKind, "collection", iamv1.AuthorizationResourceCollection, usage)
 }
 
 func (value *handler) authorizeResource(
 	response http.ResponseWriter,
 	request *http.Request,
-	action string,
-	resourceKind string,
+	action iamv1.Action,
+	resourceKind iamv1.ResourceKind,
 	resourceID string,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
 ) (port.Authorization, string, bool) {
 	requestID, err := value.config.NewRequestID()
 	if err != nil || managedservicev1.ValidateID("requestId", requestID) != nil {
@@ -252,7 +370,8 @@ func (value *handler) authorizeResource(
 	}
 	authorizationRequest := port.AuthorizationRequest{
 		Credential: request.Header.Get("Authorization"), Action: action,
-		Resource:  port.ResourceReference{Kind: resourceKind, ID: resourceID},
+		Resource:     port.ResourceReference{Kind: resourceKind, ID: resourceID},
+		ResourceMode: mode, CollectionUsage: usage,
 		RequestID: requestID,
 	}
 	if port.ValidateAuthorizationRequest(authorizationRequest) != nil {
@@ -307,6 +426,15 @@ func acceptsNoInput(
 	return true
 }
 
+func acceptsNoQuery(response http.ResponseWriter, request *http.Request, requestID string) bool {
+	if request.URL.RawQuery != "" {
+		writeProblem(response, requestID, http.StatusBadRequest,
+			managedservicev1.ErrorInvalidArgument, "Invalid argument", "query selectors are not accepted", false)
+		return false
+	}
+	return true
+}
+
 func writeResult(response http.ResponseWriter, requestID string, result any, err error) {
 	if err != nil {
 		writeWorkflowError(response, requestID, err)
@@ -331,6 +459,18 @@ func writeAuthorizationError(response http.ResponseWriter, requestID string, err
 
 func writeWorkflowError(response http.ResponseWriter, requestID string, err error) {
 	switch {
+	case errors.Is(err, port.ErrUnauthenticated):
+		writeProblem(response, requestID, http.StatusUnauthorized,
+			managedservicev1.ErrorUnauthenticated, "Unauthenticated", "IAM authentication failed", false)
+	case errors.Is(err, port.ErrPermissionDenied):
+		writeProblem(response, requestID, http.StatusForbidden,
+			managedservicev1.ErrorPermissionDenied, "Permission denied", "IAM denied this action", false)
+	case errors.Is(err, port.ErrAuthorizationUnavailable):
+		writeProblem(response, requestID, http.StatusServiceUnavailable,
+			managedservicev1.ErrorIdentityUnavailable, "Identity unavailable", "IAM authorization is unavailable", true)
+	case errors.Is(err, port.ErrWorkloadRoleConflict):
+		writeProblem(response, requestID, http.StatusConflict,
+			managedservicev1.ErrorServiceRoleConflict, "Service Role conflict", "the service Role binding conflicts with current authority", false)
 	case errors.Is(err, usecase.ErrInvalidArgument):
 		writeProblem(response, requestID, http.StatusBadRequest,
 			managedservicev1.ErrorInvalidArgument, "Invalid argument", "request violates the managed-service contract", false)

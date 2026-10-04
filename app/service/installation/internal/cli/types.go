@@ -20,12 +20,13 @@ type Streams struct {
 }
 
 type Request struct {
-	Action        lifecycle.Action
-	Root          string
-	Bundle        string
-	TrustKey      string
-	BackupID      string
-	SupportOutput string
+	Action                    lifecycle.Action
+	Root                      string
+	Bundle                    string
+	TrustKey                  string
+	SecurityMailConfiguration string
+	BackupID                  string
+	SupportOutput             string
 }
 
 type Result struct {

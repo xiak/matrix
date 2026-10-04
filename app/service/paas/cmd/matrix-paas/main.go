@@ -35,6 +35,7 @@ const (
 	serviceCredentialFileEnvironment = "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE"
 	listenAddressEnvironment         = "MATRIX_PAAS_LISTEN_ADDRESS"
 	installationIDEnvironment        = "MATRIX_PAAS_INSTALLATION_ID"
+	northboundOriginEnvironment      = "MATRIX_PAAS_NORTHBOUND_ORIGIN"
 	releaseIDEnvironment             = "MATRIX_PAAS_RELEASE_ID"
 	verificationDigestEnvironment    = "MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST"
 )
@@ -45,6 +46,7 @@ type configuration struct {
 	serviceCredentialFile string
 	listenAddress         string
 	installationID        string
+	northboundOrigin      string
 	releaseID             string
 	verificationDigest    string
 }
@@ -128,6 +130,8 @@ func run(ctx context.Context) error {
 		return err
 	}
 	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, installationVerifier, paashttp.Config{
+		NorthboundOrigin: config.northboundOrigin,
+		InstallationID:   config.installationID,
 		Readiness: func(readinessContext context.Context) (paasv1.Readiness, error) {
 			readiness, err := repository.Readiness(readinessContext)
 			if err != nil || readiness.State != paasv1.ReadinessReady {
@@ -150,7 +154,9 @@ func run(ctx context.Context) error {
 	managedServiceWorkflow, err := managedserviceusecase.NewService(
 		managedServiceRepository,
 		managedserviceusecase.Config{
-			Catalog: domain.DefaultCatalog(),
+			Catalog:               domain.DefaultCatalog(),
+			WorkloadRoleAuthority: managedServiceAuthorizer,
+			WorkloadRoleRuntime:   managedServiceAuthorizer,
 			Region: managedservicev1.Region{
 				ID: "local-primary", DisplayName: "本机主区域",
 				Profile: managedservicev1.RegionLocalMachine,
@@ -183,6 +189,7 @@ func loadConfiguration() (configuration, error) {
 		serviceCredentialFile: os.Getenv(serviceCredentialFileEnvironment),
 		listenAddress:         os.Getenv(listenAddressEnvironment),
 		installationID:        os.Getenv(installationIDEnvironment),
+		northboundOrigin:      os.Getenv(northboundOriginEnvironment),
 		releaseID:             os.Getenv(releaseIDEnvironment),
 		verificationDigest:    os.Getenv(verificationDigestEnvironment),
 	}

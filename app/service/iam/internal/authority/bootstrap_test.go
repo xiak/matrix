@@ -34,11 +34,11 @@ func TestBootstrapClassifiesApplyEqualReplayAndConflict(t *testing.T) {
 
 func TestBootstrapDigestIsStableForAnExactDocument(t *testing.T) {
 	document := authorityBootstrap(t)
-	first, err := BootstrapDigest(document)
+	first, err := iamv1.BootstrapDigest(document)
 	if err != nil {
 		t.Fatalf("digest bootstrap: %v", err)
 	}
-	second, err := BootstrapDigest(document)
+	second, err := iamv1.BootstrapDigest(document)
 	if err != nil || second != first {
 		t.Fatalf("repeat bootstrap digest = %q err=%v, want %q", second, err, first)
 	}

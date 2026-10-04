@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 )
@@ -33,6 +34,11 @@ var platformMigrations = []migrationDefinition{
 			{layout.PostgresMigration, "/run/matrix/migration-dsn", "MATRIX_MIGRATION_DATABASE_DSN_FILE"},
 			{layout.IAMAPI, "/run/matrix/iam-api-dsn", "MATRIX_MIGRATION_IAM_API_DSN_FILE"},
 			{layout.IAMWorker, "/run/matrix/iam-worker-dsn", "MATRIX_MIGRATION_IAM_WORKER_DSN_FILE"},
+			{layout.IAMCredentialRecovery, "/run/matrix/iam-recovery-dsn", "MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE"},
+			{layout.IAMAuthenticationRecovery, "/run/matrix/iam-authentication-recovery-dsn", installationv1.AuthenticationRecoveryMigrationDSNFileEnvironment},
+			{layout.IAMBackupCustody, "/run/matrix/iam-backup-custody-dsn", installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment},
+			{layout.IAMNotificationWorker, "/run/matrix/iam-notification-worker-dsn", "MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE"},
+			{layout.IAMAccessAnalysisWorker, "/run/matrix/iam-access-analysis-worker-dsn", "MATRIX_MIGRATION_IAM_ACCESS_ANALYSIS_DSN_FILE"},
 		},
 	},
 	{
@@ -209,7 +215,7 @@ func controlNetworkID(
 ) (string, error) {
 	output, _, err := runtimeBoundary.Run(
 		ctx, nil,
-		"network", "ls", "--quiet",
+		"network", "ls", "--quiet", "--no-trunc",
 		"--filter", "label=com.docker.compose.project="+project,
 		"--filter", "label=com.docker.compose.network=control",
 	)

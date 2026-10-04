@@ -41,7 +41,7 @@ type contract struct {
 }
 
 var platformServiceNames = []string{
-	"apisix", "audit", "iam", "iam-audit-dispatcher", "paas-api",
+	"apisix", "audit", "iam", "iam-access-analysis-worker", "iam-audit-dispatcher", "iam-notification-dispatcher", "paas-api",
 	"paas-audit-dispatcher", "paas-ui", "paas-worker", "postgres",
 }
 
@@ -77,9 +77,10 @@ func contractDescription() contract {
 		Name:     "matrix-00000000000000000000000000000000",
 		Services: compileServices(manifest, images, options),
 		Networks: map[string]networkConfig{
-			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
-			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
-			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
+			"control":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
+			"edge":        {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
+			"mail-egress": {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-mail-egress")},
+			"web":         {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
 		},
 	}
 	return contract{
@@ -111,9 +112,10 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 		Name:     "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
 		Services: compileServices(manifest, images, options),
 		Networks: map[string]networkConfig{
-			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
-			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
-			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
+			"control":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
+			"edge":        {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
+			"mail-egress": {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-mail-egress")},
+			"web":         {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
 		},
 	}
 	content, err := json.Marshal(document)
@@ -217,6 +219,13 @@ func compileServices(
 	postgresPassword := path.Join(root, layout.PostgresPassword)
 	iamAPIDSN := path.Join(root, layout.IAMAPI)
 	iamWorkerDSN := path.Join(root, layout.IAMWorker)
+	iamNotificationDSN := path.Join(root, layout.IAMNotificationWorker)
+	iamAccessAnalysisDSN := path.Join(root, layout.IAMAccessAnalysisWorker)
+	accessKeyWrappingKeyring := path.Join(root, layout.IAMAccessKeyWrappingKeyring)
+	totpKeyring := path.Join(root, layout.IAMTOTPKeyring)
+	emailKeyring := path.Join(root, layout.IAMEmailVerificationKeyring)
+	securityMailChannel := path.Join(root, layout.IAMSecurityMailSMTPChannel)
+	iamCursorKey := path.Join(root, layout.IAMCursorKey)
 	auditRuntimeDSN := path.Join(root, layout.AuditRuntime)
 	paasAPIDSN := path.Join(root, layout.PaaSAPI)
 	paasWorkerDSN := path.Join(root, layout.PaaSWorker)
@@ -286,13 +295,21 @@ func compileServices(
 		"1.0", "512M", "http://127.0.0.1:8080/ready",
 	)
 	iam.Environment = map[string]string{
-		"MATRIX_IAM_DATABASE_DSN_FILE": "/run/matrix/iam-api-dsn",
-		"MATRIX_IAM_BOOTSTRAP_FILE":    "/run/matrix/iam-bootstrap.json",
-		"MATRIX_IAM_LISTEN_ADDRESS":    "0.0.0.0:8080",
+		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE": "/run/matrix/iam-access-key-wrapping-keyring.json",
+		"MATRIX_IAM_TOTP_KEYRING_FILE":                "/run/matrix/iam-totp-keyring.json",
+		"MATRIX_IAM_DATABASE_DSN_FILE":                "/run/matrix/iam-api-dsn",
+		"MATRIX_IAM_BOOTSTRAP_FILE":                   "/run/matrix/iam-bootstrap.json",
+		"MATRIX_IAM_CURSOR_KEY_FILE":                  "/run/matrix/iam-cursor-key",
+		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE":  "/run/matrix/iam-email-verification-keyring.json",
+		"MATRIX_IAM_LISTEN_ADDRESS":                   "0.0.0.0:8080",
 	}
 	iam.Volumes = []mount{
 		bind(iamAPIDSN, "/run/matrix/iam-api-dsn", true),
 		bind(bootstrapIAM, "/run/matrix/iam-bootstrap.json", true),
+		bind(accessKeyWrappingKeyring, "/run/matrix/iam-access-key-wrapping-keyring.json", true),
+		bind(totpKeyring, "/run/matrix/iam-totp-keyring.json", true),
+		bind(emailKeyring, "/run/matrix/iam-email-verification-keyring.json", true),
+		bind(iamCursorKey, "/run/matrix/iam-cursor-key", true),
 	}
 	iam.DependsOn = healthy("postgres")
 
@@ -331,6 +348,40 @@ func compileServices(
 		bind(iamAuditCredential, "/run/matrix/iam-audit-credential", true),
 	}
 	iamAudit.DependsOn = healthy("postgres", "audit")
+
+	iamNotification := service(
+		"iam-notification-dispatcher", "iam", images["iam"], []string{"control", "mail-egress"},
+		[]string{"/matrix/bin/matrix-iam-notification-dispatcher"},
+		"0.5", "384M", "http://127.0.0.1:8080/ready",
+	)
+	iamNotification.Environment = map[string]string{
+		"MATRIX_IAM_NOTIFICATION_DATABASE_DSN_FILE":  "/run/matrix/iam-notification-worker-dsn",
+		"MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE": "/run/matrix/iam-security-mail-smtp-channel.json",
+		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE": "/run/matrix/iam-email-verification-keyring.json",
+		"MATRIX_IAM_NOTIFICATION_WORKER_ID":          "iam-notification-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		"MATRIX_IAM_NOTIFICATION_LISTEN_ADDRESS":     "0.0.0.0:8080",
+	}
+	iamNotification.Volumes = []mount{
+		bind(iamNotificationDSN, "/run/matrix/iam-notification-worker-dsn", true),
+		bind(securityMailChannel, "/run/matrix/iam-security-mail-smtp-channel.json", true),
+		bind(emailKeyring, "/run/matrix/iam-email-verification-keyring.json", true),
+	}
+	iamNotification.DependsOn = healthy("postgres", "iam")
+
+	iamAccessAnalysis := service(
+		"iam-access-analysis-worker", "iam", images["iam"], []string{"control"},
+		[]string{"/matrix/bin/matrix-iam-access-analysis-worker"},
+		"0.5", "384M", "http://127.0.0.1:8080/ready",
+	)
+	iamAccessAnalysis.Environment = map[string]string{
+		"MATRIX_IAM_ACCESS_ANALYSIS_DATABASE_DSN_FILE": "/run/matrix/iam-access-analysis-worker-dsn",
+		"MATRIX_IAM_ACCESS_ANALYSIS_WORKER_ID":         "iam-access-analysis-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		"MATRIX_IAM_ACCESS_ANALYSIS_LISTEN_ADDRESS":    "0.0.0.0:8080",
+	}
+	iamAccessAnalysis.Volumes = []mount{
+		bind(iamAccessAnalysisDSN, "/run/matrix/iam-access-analysis-worker-dsn", true),
+	}
+	iamAccessAnalysis.DependsOn = healthy("postgres", "iam")
 
 	paasAPI := service(
 		"paas-api", "paas", images["paas"], []string{"control"}, []string{"/matrix/bin/matrix-paas"},
@@ -431,7 +482,8 @@ func compileServices(
 
 	return map[string]serviceConfig{
 		"apisix": apisix, "audit": audit, "iam": iam,
-		"iam-audit-dispatcher": iamAudit, "paas-api": paasAPI,
+		"iam-access-analysis-worker": iamAccessAnalysis, "iam-audit-dispatcher": iamAudit,
+		"iam-notification-dispatcher": iamNotification, "paas-api": paasAPI,
 		"paas-audit-dispatcher": paasAudit, "paas-ui": ui, "paas-worker": paasWorker,
 		"postgres": postgres,
 	}

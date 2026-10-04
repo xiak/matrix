@@ -3,6 +3,7 @@
 package nethttp
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -10,12 +11,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
+	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
@@ -28,6 +34,8 @@ type Workflow interface {
 		context.Context,
 		applicationlifecycle.CreateApplicationCommand,
 	) (paasv1.Application, paasv1.Operation, bool, error)
+	SetApplicationLabel(context.Context, applicationlifecycle.SetApplicationLabelCommand) (applicationlifecycle.ApplicationLabelResult, error)
+	DeleteApplicationLabel(context.Context, applicationlifecycle.DeleteApplicationLabelCommand) (applicationlifecycle.ApplicationLabelResult, error)
 	CreateConfiguration(
 		context.Context,
 		applicationlifecycle.CreateConfigurationCommand,
@@ -42,6 +50,7 @@ type Workflow interface {
 	) (paasv1.ApplicationRevision, paasv1.Operation, bool, error)
 	Submit(context.Context, applicationlifecycle.SubmitCommand) (applicationlifecycle.Result, error)
 	Rollback(context.Context, applicationlifecycle.RollbackCommand) (applicationlifecycle.Result, error)
+	InspectApplicationAuthorization(context.Context, port.AuthorizationSubjectContext, paasv1.ResourceID) (applicationlifecycle.ApplicationAuthorizationSnapshot, error)
 	GetApplication(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.Application, error)
 	GetConfiguration(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.Configuration, error)
 	GetConfigurationRevision(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ConfigurationRevision, error)
@@ -53,6 +62,8 @@ type Workflow interface {
 
 type Config struct {
 	MaximumBodyBytes int64
+	NorthboundOrigin string
+	InstallationID   string
 	NewRequestID     func() (string, error)
 	Readiness        func(context.Context) (paasv1.Readiness, error)
 }
@@ -68,6 +79,7 @@ type handler struct {
 	authorizer           port.Authorizer
 	workflow             Workflow
 	installationVerifier InstallationVerifier
+	accessKeyBoundary    *externalrequest.Boundary
 	config               Config
 	routes               *http.ServeMux
 }
@@ -93,14 +105,26 @@ func NewHandler(
 	if config.NewRequestID == nil {
 		config.NewRequestID = newRequestID
 	}
+	var accessKeyBoundary *externalrequest.Boundary
+	if config.NorthboundOrigin != "" {
+		var err error
+		accessKeyBoundary, err = externalrequest.NewBoundary(
+			config.NorthboundOrigin, "/api/paas", config.InstallationID, iamv1.ProductPaaS,
+		)
+		if err != nil {
+			return nil, errors.New("AccessKey northbound boundary is invalid")
+		}
+	}
 	value := &handler{
 		authorizer: authorizer, workflow: workflow,
-		installationVerifier: installationVerifier, config: config,
+		installationVerifier: installationVerifier, accessKeyBoundary: accessKeyBoundary, config: config,
 	}
 	routes := http.NewServeMux()
 	routes.HandleFunc("GET /ready", value.ready)
 	routes.HandleFunc("POST /v1/applications", value.createApplication)
 	routes.HandleFunc("GET /v1/applications/{applicationId}", value.getApplication)
+	routes.HandleFunc("PUT /v1/applications/{applicationId}/labels/{labelKey}", value.setApplicationLabel)
+	routes.HandleFunc("DELETE /v1/applications/{applicationId}/labels/{labelKey}", value.deleteApplicationLabel)
 	routes.HandleFunc("POST /v1/configurations", value.createConfiguration)
 	routes.HandleFunc("GET /v1/configurations/{configurationId}", value.getConfiguration)
 	routes.HandleFunc("POST /v1/configuration-revisions", value.createConfigurationRevision)
@@ -204,15 +228,182 @@ func (value *handler) ready(response http.ResponseWriter, request *http.Request)
 func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("X-Content-Type-Options", "nosniff")
+	if externalrequest.IsAccessKeyAuthorization(request) {
+		if !value.prepareAccessKeyRequest(response, request) {
+			return
+		}
+	}
 	value.routes.ServeHTTP(response, request)
 }
 
+type accessKeyContextKey struct{}
+
+type accessKeyRequestContext struct {
+	SignedRequest iamv1.AccessKeySignedRequest
+	SourceIP      string
+	Actions       []iamv1.Action
+}
+
+func accessKeyActionsForRoute(method, path string) ([]iamv1.Action, bool) {
+	if method == http.MethodGet {
+		for _, route := range []struct {
+			prefix string
+			idName string
+			action iamv1.Action
+		}{
+			{"/v1/applications/", "applicationId", port.AuthorizeApplicationRead},
+			{"/v1/configurations/", "configurationId", port.AuthorizeConfigurationRead},
+			{"/v1/configuration-revisions/", "configurationRevisionId", port.AuthorizeConfigurationRevisionRead},
+			{"/v1/application-revisions/", "applicationRevisionId", port.AuthorizeApplicationRevisionRead},
+			{"/v1/deployments/", "deploymentId", port.AuthorizeDeploymentRead},
+			{"/v1/operations/", "operationId", port.AuthorizeOperationRead},
+		} {
+			id := strings.TrimPrefix(path, route.prefix)
+			if id != path && !strings.Contains(id, "/") && paasv1.ValidateID(route.idName, id) == nil {
+				return []iamv1.Action{route.action}, true
+			}
+		}
+		const deploymentPrefix = "/v1/deployments/"
+		parts := strings.Split(strings.TrimPrefix(path, deploymentPrefix), "/")
+		if len(parts) == 3 && parts[1] == "generations" &&
+			paasv1.ValidateID("deploymentId", parts[0]) == nil {
+			generation, err := strconv.ParseUint(parts[2], 10, 64)
+			if err == nil && generation > 0 && generation <= 9007199254740991 {
+				return []iamv1.Action{port.AuthorizeDeploymentRead}, true
+			}
+		}
+		return nil, false
+	}
+	if method == http.MethodPut {
+		const applicationPrefix = "/v1/applications/"
+		applicationPath := strings.TrimPrefix(path, applicationPrefix)
+		parts := strings.Split(applicationPath, "/")
+		if applicationPath != path && len(parts) == 3 && parts[1] == "labels" &&
+			paasv1.ValidateID("applicationId", parts[0]) == nil &&
+			port.ValidateApplicationLabelKeyForAction(port.AuthorizeApplicationLabelSet, parts[2]) == nil {
+			return []iamv1.Action{port.AuthorizeApplicationLabelSet}, true
+		}
+		const deploymentPrefix = "/v1/deployments/"
+		id := strings.TrimPrefix(path, deploymentPrefix)
+		if id != path && !strings.Contains(id, "/") && paasv1.ValidateID("deploymentId", id) == nil {
+			return []iamv1.Action{port.AuthorizeDeploymentUpdate, port.AuthorizeDeploymentStop}, true
+		}
+		return nil, false
+	}
+	if method == http.MethodDelete {
+		const applicationPrefix = "/v1/applications/"
+		applicationPath := strings.TrimPrefix(path, applicationPrefix)
+		parts := strings.Split(applicationPath, "/")
+		if applicationPath != path && len(parts) == 3 && parts[1] == "labels" &&
+			paasv1.ValidateID("applicationId", parts[0]) == nil &&
+			port.ValidateApplicationLabelKeyForAction(port.AuthorizeApplicationLabelDelete, parts[2]) == nil {
+			return []iamv1.Action{port.AuthorizeApplicationLabelDelete}, true
+		}
+		return nil, false
+	}
+	if method != http.MethodPost {
+		return nil, false
+	}
+	const deploymentPrefix = "/v1/deployments/"
+	const rollbackSuffix = "/rollback"
+	if strings.HasPrefix(path, deploymentPrefix) && strings.HasSuffix(path, rollbackSuffix) {
+		id := strings.TrimSuffix(strings.TrimPrefix(path, deploymentPrefix), rollbackSuffix)
+		if !strings.Contains(id, "/") && paasv1.ValidateID("deploymentId", id) == nil {
+			return []iamv1.Action{port.AuthorizeDeploymentRollback}, true
+		}
+		return nil, false
+	}
+	switch path {
+	case "/v1/applications":
+		return []iamv1.Action{port.AuthorizeApplicationCreate}, true
+	case "/v1/configurations":
+		return []iamv1.Action{port.AuthorizeConfigurationCreate}, true
+	case "/v1/configuration-revisions":
+		return []iamv1.Action{port.AuthorizeConfigurationRevisionCreate}, true
+	case "/v1/application-revisions":
+		return []iamv1.Action{port.AuthorizeApplicationRevisionCreate}, true
+	case "/v1/deployments":
+		return []iamv1.Action{port.AuthorizeDeploymentCreate}, true
+	default:
+		return nil, false
+	}
+}
+
+func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, request *http.Request) bool {
+	var expectedActions []iamv1.Action
+	var accepted bool
+	if request.URL != nil {
+		expectedActions, accepted = accessKeyActionsForRoute(request.Method, request.URL.Path)
+	}
+	if value.accessKeyBoundary == nil || !accepted || request.URL.RawQuery != "" {
+		requestID, ok := value.beginRequest(response)
+		if !ok {
+			return false
+		}
+		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated,
+			"Unauthenticated", "access keys are not accepted for this route", false)
+		return false
+	}
+	bodyReader := http.MaxBytesReader(response, request.Body, value.config.MaximumBodyBytes)
+	body, err := io.ReadAll(bodyReader)
+	_ = bodyReader.Close()
+	if err != nil {
+		requestID, ok := value.beginRequest(response)
+		if !ok {
+			return false
+		}
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument,
+			"Invalid argument", "signed request body is invalid or too large", false)
+		return false
+	}
+	if request.Method == http.MethodGet && len(body) != 0 {
+		clear(body)
+		requestID, ok := value.beginRequest(response)
+		if !ok {
+			return false
+		}
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument,
+			"Invalid argument", "signed resource reads accept no request body", false)
+		return false
+	}
+	external, err := value.accessKeyBoundary.AccessKeyRequest(request, body)
+	if err != nil {
+		clear(body)
+		requestID, ok := value.beginRequest(response)
+		if !ok {
+			return false
+		}
+		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated,
+			"Unauthenticated", "signed request authentication is invalid", false)
+		return false
+	}
+	request.Body = io.NopCloser(bytes.NewReader(bytes.Clone(body)))
+	accessKeyContext := accessKeyRequestContext{
+		SignedRequest: external.SignedRequest,
+		SourceIP:      external.SourceIP,
+		Actions:       expectedActions,
+	}
+	*request = *request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, accessKeyContext))
+	clear(body)
+	return true
+}
+
 func (value *handler) createApplication(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCollection(response, request, port.AuthorizeApplicationCreate, "Application")
+	requestID, ok := value.beginRequest(response)
 	if !ok {
 		return
 	}
 	body, ok := decodeJSON[paasv1.CreateApplicationRequest](value, response, request, requestID)
+	if !ok {
+		return
+	}
+	if err := paasv1.ValidateLabels(body.Labels); err != nil {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "application labels are invalid", false)
+		return
+	}
+	authorization, ok := value.authorizeRequestWithLabels(response, request, requestID,
+		port.AuthorizeApplicationCreate, port.ResourceApplication, "collection",
+		iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, body.Labels, nil)
 	if !ok {
 		return
 	}
@@ -223,8 +414,126 @@ func (value *handler) createApplication(response http.ResponseWriter, request *h
 		"/v1/applications/"+string(resource.Metadata.ID), operation, err)
 }
 
+func (value *handler) setApplicationLabel(response http.ResponseWriter, request *http.Request) {
+	applicationID, ok := pathResourceID(response, request, "applicationId")
+	if !ok {
+		return
+	}
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	if request.URL.RawQuery != "" {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "application label mutation does not accept query parameters", false)
+		return
+	}
+	body, ok := decodeJSON[paasv1.SetApplicationLabelRequest](value, response, request, requestID)
+	if !ok {
+		return
+	}
+	if err := paasv1.ValidateSetApplicationLabelRequest(body); err != nil {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "application label value is invalid", false)
+		return
+	}
+	expected, ok := parseIfMatch(response, request, requestID)
+	if !ok {
+		return
+	}
+	value.mutateApplicationLabel(response, request, requestID, applicationID,
+		port.AuthorizeApplicationLabelSet, &body.Value, expected)
+}
+
+func (value *handler) deleteApplicationLabel(response http.ResponseWriter, request *http.Request) {
+	applicationID, ok := pathResourceID(response, request, "applicationId")
+	if !ok {
+		return
+	}
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	if request.URL.RawQuery != "" || request.ContentLength > 0 || len(request.TransferEncoding) > 0 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "application label deletion does not accept query parameters or a request body", false)
+		return
+	}
+	expected, ok := parseIfMatch(response, request, requestID)
+	if !ok {
+		return
+	}
+	value.mutateApplicationLabel(response, request, requestID, applicationID,
+		port.AuthorizeApplicationLabelDelete, nil, expected)
+}
+
+func (value *handler) mutateApplicationLabel(
+	response http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	applicationID paasv1.ResourceID,
+	action iamv1.Action,
+	targetValue *string,
+	expectedResourceVersion uint64,
+) {
+	labelKey := request.PathValue("labelKey")
+	if port.ValidateApplicationLabelKeyForAction(action, labelKey) != nil {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "application label key is not declared by the current PaaS Profile", false)
+		return
+	}
+	subject, ok := value.resolveRequestSubject(response, request, requestID, action)
+	if !ok {
+		return
+	}
+	snapshot, inspectErr := value.workflow.InspectApplicationAuthorization(request.Context(), subject, applicationID)
+	found := inspectErr == nil
+	if inspectErr != nil && !errors.Is(inspectErr, applicationlifecycle.ErrNotFound) {
+		writeWorkflowError(response, requestID, inspectErr)
+		return
+	}
+	var currentLabels map[string]string
+	if found {
+		currentLabels = snapshot.Labels
+	}
+	var requestedLabels map[string]string
+	if targetValue != nil {
+		requestedLabels = map[string]string{labelKey: *targetValue}
+	} else if currentValue, present := currentLabels[labelKey]; present {
+		requestedLabels = map[string]string{labelKey: currentValue}
+	}
+	authorization, ok := value.authorizeRequestWithLabels(response, request, requestID,
+		action, port.ResourceApplication, applicationID, iamv1.AuthorizationResourceInstance, "",
+		requestedLabels, currentLabels)
+	if !ok {
+		return
+	}
+	if port.ValidateAuthorizationForSubjectContext(authorization, subject) != nil {
+		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+		return
+	}
+	if !found {
+		writeWorkflowError(response, requestID, applicationlifecycle.ErrNotFound)
+		return
+	}
+	var result applicationlifecycle.ApplicationLabelResult
+	var err error
+	if targetValue == nil {
+		result, err = value.workflow.DeleteApplicationLabel(request.Context(), applicationlifecycle.DeleteApplicationLabelCommand{
+			Authorization: authorization, ApplicationID: applicationID, LabelKey: labelKey,
+			ExpectedResourceVersion: expectedResourceVersion, IdempotencyKey: request.Header.Get("Idempotency-Key"),
+		})
+	} else {
+		result, err = value.workflow.SetApplicationLabel(request.Context(), applicationlifecycle.SetApplicationLabelCommand{
+			Authorization: authorization, ApplicationID: applicationID, LabelKey: labelKey, Value: *targetValue,
+			ExpectedResourceVersion: expectedResourceVersion, IdempotencyKey: request.Header.Get("Idempotency-Key"),
+		})
+	}
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	writeOperation(response, http.StatusOK, "/v1/applications/"+string(applicationID), result.ResourceVersion, result.Operation)
+}
+
 func (value *handler) createConfiguration(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCollection(response, request, port.AuthorizeConfigurationCreate, "Configuration")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeConfigurationCreate, port.ResourceConfiguration)
 	if !ok {
 		return
 	}
@@ -240,7 +549,7 @@ func (value *handler) createConfiguration(response http.ResponseWriter, request 
 }
 
 func (value *handler) createConfigurationRevision(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCollection(response, request, port.AuthorizeConfigurationRevisionCreate, "ConfigurationRevision")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeConfigurationRevisionCreate, port.ResourceConfigurationRevision)
 	if !ok {
 		return
 	}
@@ -256,7 +565,7 @@ func (value *handler) createConfigurationRevision(response http.ResponseWriter, 
 }
 
 func (value *handler) createApplicationRevision(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCollection(response, request, port.AuthorizeApplicationRevisionCreate, "ApplicationRevision")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeApplicationRevisionCreate, port.ResourceApplicationRevision)
 	if !ok {
 		return
 	}
@@ -272,7 +581,7 @@ func (value *handler) createApplicationRevision(response http.ResponseWriter, re
 }
 
 func (value *handler) createDeployment(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCollection(response, request, port.AuthorizeDeploymentCreate, "Deployment")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeDeploymentCreate, port.ResourceDeployment)
 	if !ok {
 		return
 	}
@@ -309,8 +618,9 @@ func (value *handler) updateDeployment(response http.ResponseWriter, request *ht
 		request,
 		requestID,
 		action,
-		"Deployment",
+		port.ResourceDeployment,
 		deploymentID,
+		iamv1.AuthorizationResourceInstance, "",
 	)
 	if !ok {
 		return
@@ -331,7 +641,7 @@ func (value *handler) rollbackDeployment(response http.ResponseWriter, request *
 	if !ok {
 		return
 	}
-	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeDeploymentRollback, "Deployment", deploymentID)
+	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeDeploymentRollback, port.ResourceDeployment, deploymentID, iamv1.AuthorizationResourceInstance, "")
 	if !ok {
 		return
 	}
@@ -352,16 +662,84 @@ func (value *handler) rollbackDeployment(response http.ResponseWriter, request *
 }
 
 func (value *handler) getApplication(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "applicationId", port.AuthorizeApplicationRead, "Application")
+	id, ok := pathResourceID(response, request, "applicationId")
 	if !ok {
 		return
 	}
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	subject, ok := value.resolveRequestSubject(response, request, requestID, port.AuthorizeApplicationRead)
+	if !ok {
+		return
+	}
+	snapshot, inspectErr := value.workflow.InspectApplicationAuthorization(request.Context(), subject, id)
+	found := inspectErr == nil
+	if inspectErr != nil && !errors.Is(inspectErr, applicationlifecycle.ErrNotFound) {
+		writeWorkflowError(response, requestID, inspectErr)
+		return
+	}
+	var labels map[string]string
+	if found {
+		labels = snapshot.Labels
+	}
+	authorization, ok := value.authorizeRequestWithLabels(response, request, requestID,
+		port.AuthorizeApplicationRead, port.ResourceApplication, id,
+		iamv1.AuthorizationResourceInstance, "", nil, labels)
+	if !ok {
+		return
+	}
+	if port.ValidateAuthorizationForSubjectContext(authorization, subject) != nil {
+		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+		return
+	}
 	resource, err := value.workflow.GetApplication(request.Context(), authorization, id)
+	if err == nil && (!found || resource.Metadata.ID != snapshot.ID ||
+		resource.Metadata.ResourceVersion != snapshot.ResourceVersion ||
+		port.ValidateAuthorizationResourceTagsForAction(authorization, port.AuthorizeApplicationRead, resource.Metadata.Labels) != nil) {
+		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+		return
+	}
 	writeResource(response, requestID, resource, resourceVersionETag(resource.Metadata.ResourceVersion), err)
 }
 
+func (value *handler) resolveRequestSubject(
+	response http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	expectedAction iamv1.Action,
+) (port.AuthorizationSubjectContext, bool) {
+	var subject port.AuthorizationSubjectContext
+	var err error
+	if signedContext, present := request.Context().Value(accessKeyContextKey{}).(accessKeyRequestContext); present {
+		accessKeyAuthorizer, ok := value.authorizer.(port.AccessKeyAuthorizer)
+		if !ok || !slices.Contains(signedContext.Actions, expectedAction) {
+			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+			return port.AuthorizationSubjectContext{}, false
+		}
+		subject, err = accessKeyAuthorizer.ResolveAccessKeySubject(request.Context(), signedContext.SignedRequest)
+	} else {
+		subjectRequest := port.SubjectResolutionRequest{Credential: request.Header.Get("Authorization")}
+		if port.ValidateSubjectResolutionRequest(subjectRequest) != nil {
+			writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
+			return port.AuthorizationSubjectContext{}, false
+		}
+		subject, err = value.authorizer.ResolveSubject(request.Context(), subjectRequest)
+	}
+	if err != nil {
+		writeAuthorizationError(response, requestID, err)
+		return port.AuthorizationSubjectContext{}, false
+	}
+	if port.ValidateAuthorizationSubjectContext(subject) != nil {
+		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+		return port.AuthorizationSubjectContext{}, false
+	}
+	return subject, true
+}
+
 func (value *handler) getConfiguration(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "configurationId", port.AuthorizeConfigurationRead, "Configuration")
+	id, authorization, requestID, ok := value.authorizePath(response, request, "configurationId", port.AuthorizeConfigurationRead, port.ResourceConfiguration)
 	if !ok {
 		return
 	}
@@ -370,7 +748,7 @@ func (value *handler) getConfiguration(response http.ResponseWriter, request *ht
 }
 
 func (value *handler) getConfigurationRevision(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "configurationRevisionId", port.AuthorizeConfigurationRevisionRead, "ConfigurationRevision")
+	id, authorization, requestID, ok := value.authorizePath(response, request, "configurationRevisionId", port.AuthorizeConfigurationRevisionRead, port.ResourceConfigurationRevision)
 	if !ok {
 		return
 	}
@@ -379,7 +757,7 @@ func (value *handler) getConfigurationRevision(response http.ResponseWriter, req
 }
 
 func (value *handler) getApplicationRevision(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "applicationRevisionId", port.AuthorizeApplicationRevisionRead, "ApplicationRevision")
+	id, authorization, requestID, ok := value.authorizePath(response, request, "applicationRevisionId", port.AuthorizeApplicationRevisionRead, port.ResourceApplicationRevision)
 	if !ok {
 		return
 	}
@@ -388,7 +766,7 @@ func (value *handler) getApplicationRevision(response http.ResponseWriter, reque
 }
 
 func (value *handler) getDeployment(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "deploymentId", port.AuthorizeDeploymentRead, "Deployment")
+	id, authorization, requestID, ok := value.authorizePath(response, request, "deploymentId", port.AuthorizeDeploymentRead, port.ResourceDeployment)
 	if !ok {
 		return
 	}
@@ -397,7 +775,7 @@ func (value *handler) getDeployment(response http.ResponseWriter, request *http.
 }
 
 func (value *handler) getDeploymentGeneration(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "deploymentId", port.AuthorizeDeploymentRead, "Deployment")
+	id, authorization, requestID, ok := value.authorizePath(response, request, "deploymentId", port.AuthorizeDeploymentRead, port.ResourceDeployment)
 	if !ok {
 		return
 	}
@@ -419,7 +797,7 @@ func (value *handler) getOperation(response http.ResponseWriter, request *http.R
 	if !ok {
 		return
 	}
-	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeOperationRead, "Operation", paasv1.ResourceID(id))
+	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeOperationRead, port.ResourceOperation, paasv1.ResourceID(id), iamv1.AuthorizationResourceInstance, "")
 	if !ok {
 		return
 	}
@@ -431,42 +809,44 @@ func (value *handler) getOperation(response http.ResponseWriter, request *http.R
 	writeResource(response, requestID, resource, etag, err)
 }
 
-func (value *handler) authorizeCollection(
+func (value *handler) authorizeCreationCollection(
 	response http.ResponseWriter,
 	request *http.Request,
-	action string,
+	action iamv1.Action,
 	kind string,
 ) (string, port.Authorization, bool) {
-	return value.authorize(response, request, action, kind, "collection")
+	return value.authorize(response, request, action, kind, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate)
 }
 
 func (value *handler) authorizePath(
 	response http.ResponseWriter,
 	request *http.Request,
 	pathName string,
-	action string,
+	action iamv1.Action,
 	kind string,
 ) (paasv1.ResourceID, port.Authorization, string, bool) {
 	id, ok := pathResourceID(response, request, pathName)
 	if !ok {
 		return "", port.Authorization{}, "", false
 	}
-	requestID, authorization, ok := value.authorize(response, request, action, kind, id)
+	requestID, authorization, ok := value.authorize(response, request, action, kind, id, iamv1.AuthorizationResourceInstance, "")
 	return id, authorization, requestID, ok
 }
 
 func (value *handler) authorize(
 	response http.ResponseWriter,
 	request *http.Request,
-	action string,
+	action iamv1.Action,
 	kind string,
 	id paasv1.ResourceID,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
 ) (string, port.Authorization, bool) {
 	requestID, ok := value.beginRequest(response)
 	if !ok {
 		return "", port.Authorization{}, false
 	}
-	authorization, ok := value.authorizeRequest(response, request, requestID, action, kind, id)
+	authorization, ok := value.authorizeRequest(response, request, requestID, action, kind, id, mode, usage)
 	return requestID, authorization, ok
 }
 
@@ -484,15 +864,79 @@ func (value *handler) authorizeRequest(
 	response http.ResponseWriter,
 	request *http.Request,
 	requestID string,
-	action string,
+	action iamv1.Action,
 	kind string,
 	id paasv1.ResourceID,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
 ) (port.Authorization, bool) {
+	return value.authorizeRequestWithLabels(response, request, requestID, action, kind, id, mode, usage, nil, nil)
+}
+
+func (value *handler) authorizeRequestWithLabels(
+	response http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	action iamv1.Action,
+	kind string,
+	id paasv1.ResourceID,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
+	requestLabels map[string]string,
+	resourceLabels map[string]string,
+) (port.Authorization, bool) {
+	signedContext, signed := request.Context().Value(accessKeyContextKey{}).(accessKeyRequestContext)
+	var sourceIP string
+	var err error
+	if signed {
+		sourceIP = signedContext.SourceIP
+	} else {
+		sourceIP, err = authorizationSourceIP(request.RemoteAddr)
+		if err != nil {
+			writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "request network authority could not be established", true)
+			return port.Authorization{}, false
+		}
+	}
 	authorizationRequest := port.AuthorizationRequest{
-		Credential: request.Header.Get("Authorization"),
-		Action:     action,
-		Resource:   paasv1.ResourceRef{Kind: kind, ID: id},
-		RequestID:  requestID,
+		Credential:   request.Header.Get("Authorization"),
+		Action:       action,
+		Resource:     paasv1.ResourceRef{Kind: kind, ID: id},
+		ResourceMode: mode, CollectionUsage: usage,
+		SourceIP:       sourceIP,
+		RequestLabels:  maps.Clone(requestLabels),
+		ResourceLabels: maps.Clone(resourceLabels),
+		RequestID:      requestID,
+	}
+	if signed {
+		if !slices.Contains(signedContext.Actions, action) {
+			writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
+			return port.Authorization{}, false
+		}
+		accessKeyAuthorizer, ok := value.authorizer.(port.AccessKeyAuthorizer)
+		if !ok {
+			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+			return port.Authorization{}, false
+		}
+		accessKeyRequest := port.AccessKeyAuthorizationRequest{
+			Action: action, Resource: authorizationRequest.Resource,
+			ResourceMode: mode, CollectionUsage: usage, SourceIP: sourceIP,
+			RequestLabels: maps.Clone(requestLabels), ResourceLabels: maps.Clone(resourceLabels),
+			RequestID: requestID, SignedRequest: signedContext.SignedRequest,
+		}
+		if port.ValidateAccessKeyAuthorizationRequest(accessKeyRequest) != nil {
+			writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
+			return port.Authorization{}, false
+		}
+		authorization, err := accessKeyAuthorizer.AuthorizeAccessKey(request.Context(), accessKeyRequest)
+		if err != nil {
+			writeAuthorizationError(response, requestID, err)
+			return port.Authorization{}, false
+		}
+		if port.ValidateAccessKeyAuthorizationForRequest(authorization, accessKeyRequest) != nil {
+			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+			return port.Authorization{}, false
+		}
+		return authorization, true
 	}
 	if err := port.ValidateAuthorizationRequest(authorizationRequest); err != nil {
 		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "a valid IAM credential is required", false)
@@ -508,6 +952,22 @@ func (value *handler) authorizeRequest(
 		return port.Authorization{}, false
 	}
 	return authorization, true
+}
+
+func authorizationSourceIP(remoteAddress string) (string, error) {
+	host, port, err := net.SplitHostPort(remoteAddress)
+	if err != nil || host == "" {
+		return "", errors.New("request remote address is invalid")
+	}
+	number, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || number == 0 {
+		return "", errors.New("request remote port is invalid")
+	}
+	address, err := iamv1.ParseAuthorizationSourceIP(host)
+	if err != nil {
+		return "", err
+	}
+	return address.String(), nil
 }
 
 func (value *handler) writeCreation(
@@ -663,6 +1123,8 @@ func writeAuthorizationError(response http.ResponseWriter, requestID string, err
 		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "IAM authentication failed", false)
 	case errors.Is(err, port.ErrPermissionDenied):
 		writeProblem(response, requestID, http.StatusForbidden, paasv1.ErrorPermissionDenied, "Permission denied", "IAM denied this action", false)
+	case errors.Is(err, port.ErrAuthorizationReplay):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Signed request conflict", "the signed request nonce was already consumed", false)
 	default:
 		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "IAM authorization is unavailable", true)
 	}
@@ -681,7 +1143,7 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 	case errors.Is(err, applicationlifecycle.ErrResourceVersionConflict):
 		writeProblem(response, requestID, http.StatusPreconditionFailed, paasv1.ErrorResourceVersionConflict, "Resource version conflict", "If-Match does not identify the current resource version", false)
 	case errors.Is(err, applicationlifecycle.ErrNoDesiredChange):
-		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "No desired change", "Deployment desired content is unchanged", false)
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "No desired change", "the requested desired state is unchanged", false)
 	case errors.Is(err, applicationlifecycle.ErrOperationInProgress):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Operation in progress", "Deployment already has an active Operation", true)
 	case errors.Is(err, context.DeadlineExceeded):

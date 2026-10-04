@@ -1,0 +1,490 @@
+name: Verification
+
+on:
+  push:
+    branches: [main, 'feat/**']
+    paths: ['api/**', 'app/**', 'deploy/**', 'test/**', 'go.mod', 'go.sum', '.github/workflows/**']
+  pull_request:
+    paths: ['api/**', 'app/**', 'deploy/**', 'test/**', 'go.mod', 'go.sum', '.github/workflows/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOMAXPROCS: '2'
+  GOMEMLIMIT: '512MiB'
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: go.sum
+      - name: Verify dependencies and generation
+        run: |
+          go mod download
+          go mod verify
+          go generate ./api/...
+          git diff --exit-code -- api
+      - name: Unit, architecture and race gates
+        run: |
+          go vet -p 2 ./...
+          go test -race -p 2 ./...
+
+  authority-gates:
+    name: ${{ matrix.lane }}
+    runs-on: ubuntu-24.04
+    # Keep existing storage/runtime budgets and all database lanes serial.
+    # Backup/authentication/local recovery storage has a separate bounded lane;
+    # recovery exhaustion separately observes two real ten-minute windows, and
+    # step-up owns OTP windows plus original proof expiry. Moving a fixture does
+    # not duplicate it, raise database concurrency, or weaken its own deadline.
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - lane: authority-storage
+            minutes: 20
+          - lane: authority-recovery-storage
+            minutes: 15
+          - lane: authority-roles
+            minutes: 15
+          - lane: authority-runtime
+            minutes: 20
+          - lane: authority-session-idle
+            minutes: 15
+          - lane: authority-capacity
+            minutes: 15
+          - lane: authority-step-up
+            minutes: 20
+          - lane: authority-replacement
+            minutes: 20
+          - lane: authority-replacement-qualification
+            minutes: 15
+          - lane: authority-removal
+            minutes: 15
+          - lane: authority-removal-security
+            minutes: 15
+          - lane: authority-recovery-window
+            minutes: 30
+    timeout-minutes: ${{ matrix.minutes }}
+    services:
+      postgres:
+        image: postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
+        env:
+          POSTGRES_PASSWORD: matrix-authority-ci-test-only
+        ports:
+          - 5432
+        options: >-
+          --cpus 1 --memory 768m --pids-limit 192
+          --label matrix.task=iam-authority-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
+          --health-cmd "pg_isready -U postgres" --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # Retained-data gates read fixed Git objects; acceptance is gate-specific.
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: go.sum
+      - name: Create independent gate databases
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          AUTHORITY_LANE: ${{ matrix.lane }}
+          AUTHORITY_RUN: ${{ github.run_id }}_${{ github.run_attempt }}
+          AUTHORITY_LABEL: iam-authority-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
+        run: |
+          test "$(docker inspect --format '{{ index .Config.Labels "matrix.task" }}' "$POSTGRES_CONTAINER_ID")" = "$AUTHORITY_LABEL"
+          case "$AUTHORITY_LANE" in
+            authority-storage)
+              databases=(matrix_authority_ci matrix_audit_upgrade_ci matrix_audit_http_ci
+                matrix_iam_http_ci matrix_iam_directory_ci matrix_iam_policy_ci matrix_iam_attachment_ci
+                matrix_iam_access_keys_ci matrix_iam_security_report_ci matrix_iam_access_analyzer_ci matrix_paas_ci)
+              ;;
+            authority-recovery-storage)
+              databases=(matrix_iam_recovery_ci matrix_iam_auth_recovery_source_ci
+                matrix_iam_auth_recovery_restored_ci matrix_iam_auth_recovery_repeated_ci
+                matrix_iam_auth_recovery_close_ci matrix_iam_auth_recovery_capacity_wide_ci
+                matrix_iam_auth_recovery_capacity_accounts_ci matrix_iam_auth_recovery_capacity_overflow_ci)
+              ;;
+            authority-roles)
+              databases=(matrix_iam_roles_ci matrix_iam_references_ci matrix_iam_role_sessions_ci matrix_iam_role_discovery_ci
+                matrix_iam_role_management_ci matrix_iam_role_authorization_ci matrix_iam_role_security_ci)
+              ;;
+            authority-runtime)
+              databases=(matrix_iam_own_session_ci matrix_iam_own_session_expiry_ci matrix_iam_own_session_bulk_ci matrix_iam_session_idle_ci matrix_iam_password_attempts_ci matrix_iam_totp_custody_ci
+                matrix_iam_totp_backup_ci matrix_iam_totp_backup_process_ci matrix_iam_notification_ci matrix_iam_totp_enrollment_ci
+                matrix_iam_upgrade_predecessor_ci matrix_authority_process_ci)
+              ;;
+            authority-session-idle)
+              databases=(matrix_iam_session_idle_natural_ci)
+              ;;
+            authority-capacity)
+              databases=(matrix_authority_process_capacity_ci matrix_authority_process_password_capacity_ci)
+              ;;
+            authority-recovery-window)
+              databases=(matrix_iam_totp_recovery_exhaustion_ci)
+              ;;
+            authority-step-up)
+              databases=(matrix_iam_step_up_ci matrix_iam_security_settings_ci matrix_iam_settings_races_ci matrix_iam_settings_loosening_ci)
+              ;;
+            authority-replacement)
+              databases=(matrix_iam_totp_replacement_ci matrix_iam_totp_replacement_security_ci matrix_iam_totp_replacement_settings_ci matrix_iam_totp_replacement_mutations_ci)
+              ;;
+            authority-replacement-qualification)
+              databases=(matrix_iam_totp_replacement_login_ci matrix_iam_totp_replacement_expiry_ci matrix_iam_totp_replacement_qualifications_ci)
+              ;;
+            authority-removal)
+              databases=(matrix_iam_totp_removal_ci matrix_iam_totp_removal_required_ci matrix_iam_totp_removal_settings_ci
+                matrix_iam_totp_removal_expiry_ci)
+              ;;
+            authority-removal-security)
+              databases=(matrix_iam_totp_removal_authority_ci matrix_iam_totp_removal_sessions_ci matrix_iam_totp_removal_mutations_ci
+                matrix_iam_totp_removal_factors_ci matrix_iam_totp_removal_recovery_ci matrix_iam_totp_removal_account_ci)
+              ;;
+            *) exit 1 ;;
+          esac
+          for database in "${databases[@]}"; do
+            docker exec "$POSTGRES_CONTAINER_ID" createdb -U postgres "${database}_${AUTHORITY_RUN}"
+          done
+      - name: Verify published installer rejects new schema format before effects
+        if: matrix.lane == 'authority-runtime'
+        run: |
+          legacy_source="$(mktemp -d "$RUNNER_TEMP/matrix-published-installer-XXXXXX")"
+          git archive c88a84f379afcf94431e2aca7332fe6ec3136dc7 | tar -x -C "$legacy_source"
+          (cd "$legacy_source" && go build -p 2 -trimpath -o "$RUNNER_TEMP/mx-phase1" ./app/service/installation/cmd/mx)
+          MATRIX_INSTALLATION_LEGACY_MX_BINARY="$RUNNER_TEMP/mx-phase1" \
+            go test -p 1 -count=1 ./app/service/installation/internal/platformcommand \
+              -run '^TestPublishedExecutableRejectsNewManifestBeforeEffects$'
+      # One rolling fixed IAM predecessor proves retained current invariants,
+      # not production release upgrade admission. Superseded unpublished
+      # binary/schema fixtures live in Git history, not opt-in matrix entries.
+      - name: PostgreSQL authority storage and HTTP gates
+        if: matrix.lane == 'authority-storage'
+        env:
+          MATRIX_AUTHORITY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_authority_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_AUDIT_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_audit_upgrade_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_AUDIT_HTTP_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_audit_http_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_HTTP_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_http_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_DIRECTORY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_directory_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_POLICY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_policy_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_ATTACHMENT_SESSION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_attachment_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_ACCESS_KEY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_access_keys_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_SECURITY_REPORT_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_security_report_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_ACCESS_ANALYZER_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_access_analyzer_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_PAAS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_paas_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/audit/internal/data/postgres \
+            ./app/service/audit/internal/integration
+          # Discover compiled tests so a new storage fixture is not silently
+          # omitted. Each runs serially with its original context/lock deadline
+          # and Go's default timer; unrelated fixtures do not share that timer.
+          iam_tests="$(go test -race -p 1 -list '^Test' ./app/service/iam/internal/integration)"
+          iam_storage_count=0
+          while IFS= read -r iam_test; do
+            [[ "$iam_test" =~ ^Test[A-Za-z0-9_]+$ ]] || continue
+            case "$iam_test" in
+              # This retained two-invocation gate deliberately observes a real
+              # one-day password deadline and cannot be an ordinary CI fixture.
+              TestIAMNaturalPasswordExpiryPostgres) continue ;;
+              TestIAMTOTPRemovalPostgres|TestIAMTOTPRemovalRequiredEnrollmentPostgres|TestIAMTOTPRemovalSettingsPostgres|TestIAMTOTPRemovalExpiryPostgres|TestIAMTOTPRemovalAuthorityPostgres|TestIAMTOTPRemovalSessionsPostgres|TestIAMTOTPRemovalMutationsPostgres|TestIAMTOTPRemovalFactorsPostgres|TestIAMTOTPRemovalRecoveryPostgres|TestIAMTOTPRemovalAccountPostgres) continue ;;
+              TestIAMAuthenticationRecoveryClosePostgres|TestIAMAuthenticationRecoveryCapacityPostgres|TestIAMAuthenticationRecoveryPostgres|TestIAMLocalCredentialRecoveryPostgres) continue ;;
+              TestIAMRoleAndManagementReferencesPostgres|TestIAMOwnSessionPostgres|TestIAMOwnSessionExpiryPostgres|TestIAMOwnSessionBulkPostgres|TestIAMSessionIdlePostgres|TestIAMSessionIdleNaturalPostgres|TestIAMPasswordAttemptsPostgres|TestIAMTOTPCustodyPostgres|TestIAMTOTPEnrollmentPostgres|TestIAMTOTPRecoveryExhaustionPostgres|TestIAMStepUpPostgres|TestIAMSecuritySettingsPostgres|TestIAMSecuritySettingsRacesPostgres|TestIAMSecuritySettingsLooseningPostgres|TestIAMTOTPReplacementPostgres|TestIAMTOTPReplacementSecurityPostgres|TestIAMTOTPReplacementSettingsPostgres|TestIAMTOTPReplacementMutationsPostgres|TestIAMTOTPReplacementLoginPostgres|TestIAMTOTPReplacementExpiryPostgres|TestIAMTOTPReplacementQualificationsPostgres|TestIAMTOTPBackupSnapshotPostgres|TestIAMNotificationContactPostgres) continue ;;
+            esac
+            printf 'IAM fixture: %s\n' "$iam_test"
+            iam_output="$(mktemp "$RUNNER_TEMP/iam-storage-${iam_test}-XXXXXX.log")"
+            if ! time go test -v -race -p 1 -count=1 ./app/service/iam/internal/integration -run "^${iam_test}$" | tee "$iam_output"; then
+              rm -f "$iam_output"
+              exit 1
+            fi
+            if grep -Fq -- "--- SKIP: ${iam_test}" "$iam_output"; then
+              printf 'Unexpected skipped IAM storage fixture: %s\n' "$iam_test" >&2
+              rm -f "$iam_output"
+              exit 1
+            fi
+            rm -f "$iam_output"
+            iam_storage_count=$((iam_storage_count + 1))
+          done <<< "$iam_tests"
+          test "$iam_storage_count" -gt 0
+          time go test -race -p 1 -count=1 ./app/service/paas/internal/apphosting/data/postgres
+      # Move, rather than duplicate, the four recovery storage fixtures. They
+      # keep independent databases, their existing contexts and the same
+      # single-PostgreSQL lane limit without consuming generic storage's 20m.
+      - name: Backup, authentication and local credential recovery storage gates
+        if: matrix.lane == 'authority-recovery-storage'
+        env:
+          MATRIX_IAM_RECOVERY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_recovery_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_AUTHENTICATION_RECOVERY_SOURCE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_auth_recovery_source_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_AUTHENTICATION_RECOVERY_RESTORED_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_auth_recovery_restored_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_AUTHENTICATION_RECOVERY_REPEATED_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_auth_recovery_repeated_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_AUTHENTICATION_RECOVERY_CLOSE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_auth_recovery_close_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_AUTHENTICATION_RECOVERY_CAPACITY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_auth_recovery_capacity_wide_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_AUTHENTICATION_RECOVERY_ACCOUNTS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_auth_recovery_capacity_accounts_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_AUTHENTICATION_RECOVERY_OVERFLOW_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_auth_recovery_capacity_overflow_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_BACKUP_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          MATRIX_IAM_BACKUP_POSTGRES_TASK: iam-authority-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAM(AuthenticationRecovery(Close|Capacity)?|LocalCredentialRecovery)Postgres$'
+      # Move, rather than duplicate, the existing seven Role/STS fixtures.
+      # Storage's measured 19m25s test step exhausted its 20m job at cleanup.
+      # Original per-test deadlines and the serial database limits stay fixed.
+      - name: Role, STS and management reference gates
+        if: matrix.lane == 'authority-roles'
+        env:
+          MATRIX_IAM_ROLE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_roles_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_ROLE_SESSION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_role_sessions_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_ROLE_DISCOVERY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_role_discovery_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_ROLE_MANAGEMENT_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_role_management_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_ROLE_AUTHORIZATION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_role_authorization_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_ROLE_SECURITY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_role_security_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_MANAGEMENT_REFERENCE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_references_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMRoleAndManagementReferencesPostgres$'
+      - name: Own login sessions and post-lock expiry
+        if: matrix.lane == 'authority-runtime'
+        env:
+          MATRIX_IAM_OWN_SESSION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_own_session_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_OWN_SESSION_EXPIRY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_own_session_expiry_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_OWN_SESSION_BULK_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_own_session_bulk_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_SESSION_IDLE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_session_idle_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_PASSWORD_ATTEMPTS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_password_attempts_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_CUSTODY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_custody_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_BACKUP_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_backup_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_NOTIFICATION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_notification_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_ENROLLMENT_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_enrollment_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        # Existing tests retain their databases/deadlines in the original
+        # twenty-minute lanes; natural-window exhaustion has its own lane.
+        # No existing scenario or password cost is reduced.
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAM(OwnSession(Postgres|ExpiryPostgres|BulkPostgres)|SessionIdlePostgres|PasswordAttemptsPostgres)$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAM(TOTPCustodyPostgres|TOTPEnrollmentPostgres|TOTPBackupSnapshotPostgres|NotificationContactPostgres)$'
+      - name: Retained data and actual authority processes
+        if: matrix.lane == 'authority-runtime'
+        env:
+          MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_upgrade_predecessor_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_authority_process_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_BACKUP_PROCESS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_backup_process_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_BACKUP_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          MATRIX_IAM_BACKUP_POSTGRES_TASK: iam-authority-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
+        run: time go test -race -p 1 -count=1 ./test/authorityprocess
+
+      - name: Natural minimum session idle expiry
+        if: matrix.lane == 'authority-session-idle'
+        env:
+          MATRIX_IAM_SESSION_IDLE_NATURAL_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_session_idle_natural_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMSessionIdleNaturalPostgres$'
+
+      - name: Operation-bound proof, saved-code regeneration and account requirements
+        if: matrix.lane == 'authority-step-up'
+        env:
+          MATRIX_IAM_STEP_UP_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_step_up_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_SECURITY_SETTINGS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_security_settings_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_SECURITY_SETTINGS_RACES_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_settings_races_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_SECURITY_SETTINGS_LOOSENING_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_settings_loosening_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAM(StepUp|SecuritySettings)Postgres$'
+          # Real boundary rejection belongs to the existing 3m race fixture,
+          # not the 7m proof fixture's shared Go package timer. Keep both
+          # serial, selected once, and inside this unchanged 20m lane.
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMSecuritySettingsRacesPostgres$'
+          # The new real-window fixture keeps its own 3m context and does
+          # not extend the existing fixtures or share their Go 10m timer.
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMSecuritySettingsLooseningPostgres$'
+
+      - name: Normal authenticator replacement and ordered security mutations
+        if: matrix.lane == 'authority-replacement'
+        env:
+          MATRIX_IAM_TOTP_REPLACEMENT_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REPLACEMENT_SECURITY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_security_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REPLACEMENT_SETTINGS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_settings_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REPLACEMENT_MUTATIONS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_mutations_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacement(Security)?Postgres$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacementSettingsPostgres$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacementMutationsPostgres$'
+
+      - name: Replacement login, original deadline, and identity qualifications
+        if: matrix.lane == 'authority-replacement-qualification'
+        env:
+          MATRIX_IAM_TOTP_REPLACEMENT_LOGIN_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_login_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REPLACEMENT_EXPIRY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_expiry_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REPLACEMENT_QUALIFICATIONS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_qualifications_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacementLoginPostgres$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacementExpiryPostgres$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacementQualificationsPostgres$'
+
+      - name: Voluntary removal, proved re-enrollment and original proof deadline
+        if: matrix.lane == 'authority-removal'
+        env:
+          MATRIX_IAM_TOTP_REMOVAL_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_REQUIRED_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_required_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_SETTINGS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_settings_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_EXPIRY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_expiry_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPRemoval(Postgres|RequiredEnrollmentPostgres|SettingsPostgres|ExpiryPostgres)$'
+
+      - name: Voluntary removal and ordered authority, credential and factor mutations
+        if: matrix.lane == 'authority-removal-security'
+        env:
+          MATRIX_IAM_TOTP_REMOVAL_AUTHORITY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_authority_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_SESSIONS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_sessions_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_MUTATIONS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_mutations_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_FACTORS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_factors_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_RECOVERY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_recovery_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_ACCOUNT_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_account_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          # Keep both existing groups serial with unchanged fixture and job
+          # deadlines; six real-window fixtures cannot share one Go 10m timer.
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPRemoval(Authority|Sessions|Mutations)Postgres$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPRemoval(Factors|Recovery|Account)Postgres$'
+
+      - name: Saved-code exhaustion across actual authentication windows
+        if: matrix.lane == 'authority-recovery-window'
+        env:
+          MATRIX_IAM_TOTP_RECOVERY_EXHAUSTION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_recovery_exhaustion_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          # Ten successful starts plus original enrollment require three
+          # production windows. No counter/time mutation or lowered cost.
+          time go test -race -p 1 -count=1 -v -timeout 27m ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPRecoveryExhaustionPostgres$'
+
+      - name: Bounded IAM HTTP and PostgreSQL capacity observation
+        if: matrix.lane == 'authority-capacity'
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          AUTHORITY_LABEL: iam-authority-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
+          CAPACITY_RUN: ${{ github.run_id }}_${{ github.run_attempt }}
+        run: |
+          test "$(docker inspect --format '{{ index .Config.Labels "matrix.task" }}' "$POSTGRES_CONTAINER_ID")" = "$AUTHORITY_LABEL"
+          mapfile -t networks < <(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' "$POSTGRES_CONTAINER_ID" | sed '/^$/d')
+          test "${#networks[@]}" = 1
+          # Actions registers the service label as the network alias. Its
+          # generated container name can exceed a DNS label's length limit.
+          postgres_host=postgres
+          test "$(docker inspect --format '{{range .NetworkSettings.Networks}}{{range .Aliases}}{{println .}}{{end}}{{end}}' "$POSTGRES_CONTAINER_ID" | grep -Fxc -- "$postgres_host")" = 1
+          capacity_name="matrix-iam-capacity-${CAPACITY_RUN}"
+          capacity_cache="${capacity_name}-build"
+          capacity_source="$RUNNER_TEMP/${capacity_name}-source.tar"
+          cleanup_capacity() {
+            if docker inspect "$capacity_name" >/dev/null 2>&1; then
+              test "$(docker inspect --format '{{ index .Config.Labels "matrix.task" }}' "$capacity_name")" = "$AUTHORITY_LABEL" || return 1
+              docker rm --force "$capacity_name"
+            fi
+            if docker volume inspect "$capacity_cache" >/dev/null 2>&1; then
+              test "$(docker volume inspect --format '{{ index .Labels "matrix.task" }}' "$capacity_cache")" = "$AUTHORITY_LABEL" || return 1
+              docker volume rm "$capacity_cache"
+            fi
+          }
+          trap cleanup_capacity EXIT
+          # The exact tracked source, without a foreign-owned .git directory
+          # or machine-local edits, is also the local measurement boundary.
+          test ! -e "$capacity_source"
+          git archive --format=tar --output="$capacity_source" HEAD
+          # setup-go may restore no cache (or only part of one). Populate and
+          # verify the exact dependencies before exposing them read-only to
+          # the bounded measurement container; never download during a sample.
+          go mod download
+          go mod verify
+          docker volume create --label "matrix.task=$AUTHORITY_LABEL" --label matrix.slice=iam-capacity "$capacity_cache"
+          export MATRIX_IAM_CAPACITY_POSTGRES_TEST_DSN="postgres://postgres:matrix-authority-ci-test-only@${postgres_host}:5432/matrix_authority_process_capacity_ci_${CAPACITY_RUN}?sslmode=disable"
+          export MATRIX_IAM_PASSWORD_HISTORY_CAPACITY_POSTGRES_TEST_DSN="postgres://postgres:matrix-authority-ci-test-only@${postgres_host}:5432/matrix_authority_process_password_capacity_ci_${CAPACITY_RUN}?sslmode=disable"
+          for capacity_test in TestIAMCapacityProcesses TestIAMPasswordHistoryCapacityProcesses; do
+            docker run --rm --name "$capacity_name" --label "matrix.task=$AUTHORITY_LABEL" --label matrix.slice=iam-capacity \
+              --cpus 2 --memory 1536m --memory-swap 1536m --pids-limit 256 --cgroupns private --network "${networks[0]}" \
+              --mount "type=bind,source=$capacity_source,target=/source.tar,readonly" \
+              --mount "type=bind,source=$(go env GOMODCACHE),target=/modules,readonly" \
+              --mount "type=volume,source=$capacity_cache,target=/cache" \
+              -e GOMAXPROCS=2 -e GOMEMLIMIT=512MiB -e GOCACHE=/cache -e GOMODCACHE=/modules \
+              -e MATRIX_IAM_CAPACITY_POSTGRES_TEST_DSN -e MATRIX_IAM_PASSWORD_HISTORY_CAPACITY_POSTGRES_TEST_DSN \
+              -e "MATRIX_CAPACITY_TEST=$capacity_test" \
+              golang@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 \
+              sh -c 'mkdir /work && tar -xf /source.tar -C /work && cd /work && go test -race -p 1 -count=1 -v ./test/authorityprocess -run "^${MATRIX_CAPACITY_TEST}$"'
+          done
+
+  authority-process:
+    # Preserve the branch-protection check. The matrix result is success only
+    # when ALL named lanes succeeded; failure/cancellation/skip must close it.
+    needs: authority-gates
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every authority lane to succeed
+        env:
+          AUTHORITY_RESULT: ${{ needs.authority-gates.result }}
+        run: test "$AUTHORITY_RESULT" = success
+
+  node-process:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      NODE_EXPORTER_VERSION: '1.12.1'
+      NODE_EXPORTER_SHA256: b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: go.sum
+      - name: Prepare the isolated runner's local Docker prerequisites
+        run: |
+          sudo timeout 30s systemctl start docker
+          sudo env -u DOCKER_CONTEXT DOCKER_HOST=unix:///var/run/docker.sock \
+            timeout 30s docker info --format '{{.ServerVersion}}'
+          sudo timeout 10s docker compose version --short
+      - name: Fetch authenticated collector fixture
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.3 --max-time 90 \
+            -o "$RUNNER_TEMP/node_exporter.tar.gz" \
+            "https://github.com/prometheus/node_exporter/releases/download/v$NODE_EXPORTER_VERSION/node_exporter-$NODE_EXPORTER_VERSION.linux-amd64.tar.gz"
+          echo "$NODE_EXPORTER_SHA256  $RUNNER_TEMP/node_exporter.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/node_exporter.tar.gz" -C "$RUNNER_TEMP" --no-same-owner \
+            "node_exporter-$NODE_EXPORTER_VERSION.linux-amd64/node_exporter" \
+            "node_exporter-$NODE_EXPORTER_VERSION.linux-amd64/LICENSE" \
+            "node_exporter-$NODE_EXPORTER_VERSION.linux-amd64/NOTICE"
+      - name: Build and verify the real Linux node and collector processes
+        env:
+          MATRIX_NODE_AGENT_REAL_RUNTIME: '1'
+          MATRIX_NODE_AGENT_BINARY: ${{ runner.temp }}/matrix-node-agent
+        run: |
+          go build -p 2 -trimpath -o "$MATRIX_NODE_AGENT_BINARY" ./app/service/nodeagent/cmd/matrix-node-agent
+          go test -c -p 2 -o "$RUNNER_TEMP/node-runtime.test" ./app/service/nodeagent/internal/service/nethttp
+          sudo env GOMAXPROCS=2 MATRIX_NODE_AGENT_REAL_RUNTIME=1 \
+            "MATRIX_NODE_AGENT_BINARY=$MATRIX_NODE_AGENT_BINARY" \
+            "MATRIX_NODE_EXPORTER_BINARY=$RUNNER_TEMP/node_exporter-$NODE_EXPORTER_VERSION.linux-amd64/node_exporter" \
+            "$RUNNER_TEMP/node-runtime.test" -test.v -test.count=1 -test.timeout=90s -test.run='^TestLinuxNodeProcessObservation$'

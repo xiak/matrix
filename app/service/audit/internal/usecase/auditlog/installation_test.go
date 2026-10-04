@@ -39,8 +39,8 @@ func TestVerifyInstallationFindsExactPaaSOperationAndVerifiesItsChain(t *testing
 		context.Background(), credential, "request-installation-pending", request,
 	)
 	if err != nil || pending.State != auditv1.InstallationVerificationPending ||
-		len(transaction.records["organization-example"]) != 0 {
-		t.Fatalf("pending installation Audit verification=%#v records=%d err=%v", pending, len(transaction.records["organization-example"]), err)
+		len(transaction.records[authority.TenantChain("organization-example")]) != 0 {
+		t.Fatalf("pending installation Audit verification=%#v records=%d err=%v", pending, len(transaction.records[authority.TenantChain("organization-example")]), err)
 	}
 
 	event := auditv1.Event{
@@ -60,7 +60,7 @@ func TestVerifyInstallationFindsExactPaaSOperationAndVerifiesItsChain(t *testing
 		OperationID:   request.OperationID,
 		OccurredAt:    transaction.now.Add(-time.Second),
 	}
-	checkpoint, err := authority.GenesisCheckpoint(event.TenantID)
+	checkpoint, err := authority.GenesisCheckpoint(authority.TenantChain(event.TenantID))
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestVerifyInstallationFindsExactPaaSOperationAndVerifiesItsChain(t *testing
 		verified.ToSequence != 1 || verified.RecordHash != record.RecordHash {
 		t.Fatalf("verified installation Audit result=%#v err=%v", verified, err)
 	}
-	records := transaction.records[event.TenantID]
+	records := transaction.records[authority.TenantChain(event.TenantID)]
 	if len(records) != 2 || records[1].Source != auditv1.SourceAudit ||
 		records[1].Event.Action != auditv1.ActionAuditIntegrityVerified ||
 		records[1].Event.Actor != (auditv1.ActorReference{

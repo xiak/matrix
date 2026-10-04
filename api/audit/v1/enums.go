@@ -19,25 +19,110 @@ const (
 
 const (
 	ActorUser           ActorType = "USER"
+	ActorRole           ActorType = "ROLE"
 	ActorServiceAccount ActorType = "SERVICE_ACCOUNT"
 	ActorSystem         ActorType = "SYSTEM"
 )
 
 const (
-	ActionIAMOrganizationCreated  Action = "iam.organization.created"
-	ActionIAMAccountAliasSet      Action = "iam.account-alias.set"
-	ActionIAMPrincipalStatusSet   Action = "iam.principal.status-set"
-	ActionIAMPasswordReset        Action = "iam.password.reset"
-	ActionIAMBootstrapApplied     Action = "iam.bootstrap.applied"
-	ActionIAMSessionIssued        Action = "iam.session.issued"
-	ActionIAMSessionRevoked       Action = "iam.session.revoked"
-	ActionIAMPasswordChanged      Action = "iam.password.changed"
-	ActionIAMPrincipalCreated     Action = "iam.principal.created"
-	ActionIAMRoleBindingPut       Action = "iam.role-binding.put"
-	ActionIAMRoleBindingRevoked   Action = "iam.role-binding.revoked"
-	ActionIAMAuthorizationDecided Action = "iam.authorization.decided"
+	ActionIAMAccountCreated                         Action = "iam.account.created"
+	ActionIAMAccountDisabled                        Action = "iam.account.disabled"
+	ActionIAMAccountEnabled                         Action = "iam.account.enabled"
+	ActionIAMAccountRootCredentialsRecovered        Action = "iam.account-root.credentials-recovered"
+	ActionIAMAccountAliasUpdated                    Action = "iam.account.alias-set"
+	ActionIAMSecuritySettingsUpdated                Action = "iam.security-settings.updated"
+	ActionIAMUserCreated                            Action = "iam.user.created"
+	ActionIAMUserUpdated                            Action = "iam.user.updated"
+	ActionIAMUserDeleted                            Action = "iam.user.deleted"
+	ActionIAMUserPermissionBoundarySet              Action = "iam.user.permission-boundary.set"
+	ActionIAMUserPermissionBoundaryRemoved          Action = "iam.user.permission-boundary.removed"
+	ActionIAMUserStatusSet                          Action = "iam.user.status-set"
+	ActionIAMUserPasswordReset                      Action = "iam.user.password-reset"
+	ActionIAMUserPasswordChanged                    Action = "iam.user.password-changed"
+	ActionIAMUserPasswordResetRequired              Action = "iam.user.password-reset-required"
+	ActionIAMNotificationContactVerificationStarted Action = "iam.notification-contact.verification-started"
+	ActionIAMNotificationContactVerified            Action = "iam.notification-contact.verified"
+	ActionIAMNotificationContactReplaced            Action = "iam.notification-contact.replaced"
+	ActionIAMAuthenticatorBound                     Action = "iam.authenticator.bound"
+	ActionIAMAuthenticatorReplaced                  Action = "iam.authenticator.replaced"
+	ActionIAMAuthenticatorRemoved                   Action = "iam.authenticator.removed"
+	ActionIAMAuthenticatorRecoveryStarted           Action = "iam.authenticator.recovery-started"
+	ActionIAMAuthenticatorRecovered                 Action = "iam.authenticator.recovered"
+	ActionIAMRecoveryCodesRegenerated               Action = "iam.recovery-codes.regenerated"
+	ActionIAMRoleCreated                            Action = "iam.role.created"
+	ActionIAMRoleUpdated                            Action = "iam.role.updated"
+	ActionIAMRoleDisabled                           Action = "iam.role.disabled"
+	ActionIAMRoleEnabled                            Action = "iam.role.enabled"
+	ActionIAMRoleTrustSet                           Action = "iam.role.trust-set"
+	ActionIAMRoleDeleted                            Action = "iam.role.deleted"
+	ActionIAMRolePermissionBoundarySet              Action = "iam.role.permission-boundary.set"
+	ActionIAMRolePermissionBoundaryRemoved          Action = "iam.role.permission-boundary.removed"
+	ActionIAMRoleSessionIssued                      Action = "iam.role-session.issued"
+	ActionIAMRoleSessionRevoked                     Action = "iam.role-session.revoked"
+	ActionIAMRoleSessionAdminRevoked                Action = "iam.role-session.admin-revoked"
+	ActionIAMRoleSessionExited                      Action = "iam.role-session.exited"
+	ActionIAMServiceRoleSessionIssued               Action = "iam.service-role-session.issued"
+	ActionIAMServiceLinkedRoleCreated               Action = "iam.service-linked-role.created"
+	ActionIAMWorkloadRoleBindingCreated             Action = "iam.workload-role-binding.created"
+	ActionIAMWorkloadRoleBindingRevoked             Action = "iam.workload-role-binding.revoked"
+	ActionIAMAccessKeyCreated                       Action = "iam.access-key.created"
+	ActionIAMAccessKeyEnabled                       Action = "iam.access-key.enabled"
+	ActionIAMAccessKeyDisabled                      Action = "iam.access-key.disabled"
+	ActionIAMAccessKeyNetworkRestrictionsUpdated    Action = "iam.access-key.network-restrictions-updated"
+	ActionIAMAccessKeyDeleted                       Action = "iam.access-key.deleted"
+	ActionIAMSecurityReportCreated                  Action = "iam.security-report.created"
+	ActionIAMSecurityReportDownloadStarted          Action = "iam.security-report.download-started"
+	ActionIAMAccessAnalyzerCreated                  Action = "iam.access-analyzer.created"
+	ActionIAMAccessAnalyzerUpdated                  Action = "iam.access-analyzer.updated"
+	ActionIAMAccessAnalyzerDispositionUpdated       Action = "iam.access-analyzer.disposition-updated"
+	ActionIAMAccessFindingDetected                  Action = "iam.access-finding.detected"
+	ActionIAMAccessFindingResolved                  Action = "iam.access-finding.resolved"
+	ActionIAMAccessFindingArchived                  Action = "iam.access-finding.archived"
+	ActionIAMAccessFindingUnarchived                Action = "iam.access-finding.unarchived"
+	ActionIAMAccessKeyAutomaticallyDisabled         Action = "iam.access-key.automatically-disabled"
+	ActionIAMGroupCreated                           Action = "iam.group.created"
+	ActionIAMPolicyCreated                          Action = "iam.policy.created"
+	ActionIAMPolicyVersionCreated                   Action = "iam.policy-version.created"
+	ActionIAMPolicyVersionDeleted                   Action = "iam.policy-version.deleted"
+	ActionIAMPolicyDefaultVersionSet                Action = "iam.policy.default-version-set"
+	ActionIAMPolicyUpdated                          Action = "iam.policy.updated"
+	ActionIAMPolicyDeleted                          Action = "iam.policy.deleted"
+	ActionIAMGroupUpdated                           Action = "iam.group.updated"
+	ActionIAMGroupDeleted                           Action = "iam.group.deleted"
+	ActionIAMGroupMembershipCreated                 Action = "iam.group-membership.created"
+	ActionIAMGroupMembershipRemoved                 Action = "iam.group-membership.removed"
+
+	// Published historical facts remain decodable and hash-stable. New writes
+	// use the Account/User facts above so their target contracts cannot drift.
+	ActionIAMOrganizationCreated                     Action = "iam.organization.created"
+	ActionIAMTenantCreated                           Action = "iam.tenant.created"
+	ActionIAMTenantDisabled                          Action = "iam.tenant.disabled"
+	ActionIAMTenantEnabled                           Action = "iam.tenant.enabled"
+	ActionIAMTenantAdministratorRecovered            Action = "iam.tenant-administrator.recovered"
+	ActionIAMInstallationPrimaryCredentialsRecovered Action = "iam.installation-primary.credentials-recovered"
+	ActionIAMAuthenticationRecoveryClosed            Action = "iam.authentication-recovery.closed"
+	ActionIAMAuthenticationRecoveryReconciled        Action = "iam.authentication-recovery.reconciled"
+	ActionIAMAuthenticationRecoveryReopened          Action = "iam.authentication-recovery.reopened"
+	ActionIAMAccountAliasSet                         Action = "iam.account-alias.set"
+	ActionIAMPrincipalStatusSet                      Action = "iam.principal.status-set"
+	ActionIAMPasswordReset                           Action = "iam.password.reset"
+	ActionIAMBootstrapApplied                        Action = "iam.bootstrap.applied"
+	ActionIAMSessionIssued                           Action = "iam.session.issued"
+	ActionIAMSessionRevoked                          Action = "iam.session.revoked"
+	ActionIAMOtherSessionsRevoked                    Action = "iam.session.others-revoked"
+	ActionIAMPasswordChanged                         Action = "iam.password.changed"
+	ActionIAMPrincipalCreated                        Action = "iam.principal.created"
+	ActionIAMRoleBindingPut                          Action = "iam.role-binding.put"
+	ActionIAMRoleBindingRevoked                      Action = "iam.role-binding.revoked"
+	ActionIAMPolicyAttachmentCreated                 Action = "iam.policy-attachment.created"
+	ActionIAMPolicyAttachmentRevoked                 Action = "iam.policy-attachment.revoked"
+	ActionIAMPlatformPolicyAttachmentCreated         Action = "iam.platform-policy-attachment.created"
+	ActionIAMPlatformPolicyAttachmentRevoked         Action = "iam.platform-policy-attachment.revoked"
+	ActionIAMAuthorizationDecided                    Action = "iam.authorization.decided"
 
 	ActionPaaSApplicationCreated                  Action = "paas.application.created"
+	ActionPaaSApplicationLabelUpdated             Action = "paas.application-label.updated"
+	ActionPaaSApplicationLabelDeleted             Action = "paas.application-label.deleted"
 	ActionPaaSConfigurationCreated                Action = "paas.configuration.created"
 	ActionPaaSConfigurationRevisionCreated        Action = "paas.configuration-revision.created"
 	ActionPaaSApplicationRevisionCreated          Action = "paas.application-revision.created"
@@ -45,19 +130,39 @@ const (
 	ActionPaaSDeploymentUpdated                   Action = "paas.deployment.updated"
 	ActionPaaSDeploymentStopped                   Action = "paas.deployment.stopped"
 	ActionPaaSDeploymentRolledBack                Action = "paas.deployment.rolled-back"
+	ActionPaaSExecutionPoolCreated                Action = "paas.execution-pool.created"
+	ActionPaaSExecutionTargetRegistered           Action = "paas.execution-target.registered"
+	ActionPaaSExecutionTargetDrained              Action = "paas.execution-target.drained"
+	ActionPaaSExecutionTargetActivated            Action = "paas.execution-target.activated"
+	ActionPaaSExecutionTargetRemoved              Action = "paas.execution-target.removed"
 	ActionManagedServiceQuotaEntitlementActivated Action = "managedservice.quota-entitlement.activated"
 	ActionManagedServiceInstallationCreated       Action = "managedservice.service-installation.created"
 	ActionManagedServiceInstallationReady         Action = "managedservice.service-installation.ready"
 
-	ActionAuditRecordsRead       Action = "audit.records.read"
-	ActionAuditIntegrityVerified Action = "audit.integrity.verified"
+	ActionAuditRecordsRead               Action = "audit.records.read"
+	ActionAuditIntegrityVerified         Action = "audit.integrity.verified"
+	ActionAuditPlatformRecordsRead       Action = "audit.platform-records.read"
+	ActionAuditPlatformIntegrityVerified Action = "audit.platform-integrity.verified"
 )
 
 const (
+	TargetAccount               TargetKind = "ACCOUNT"
+	TargetUser                  TargetKind = "USER"
+	TargetGroup                 TargetKind = "GROUP"
+	TargetRole                  TargetKind = "ROLE"
+	TargetRoleSession           TargetKind = "ROLE_SESSION"
+	TargetAccessKey             TargetKind = "ACCESS_KEY"
+	TargetSecurityReport        TargetKind = "SECURITY_REPORT"
+	TargetAccessAnalyzer        TargetKind = "ACCESS_ANALYZER"
+	TargetAccessFinding         TargetKind = "ACCESS_FINDING"
+	TargetPolicy                TargetKind = "POLICY"
+	TargetGroupMembership       TargetKind = "GROUP_MEMBERSHIP"
 	TargetOrganization          TargetKind = "ORGANIZATION"
 	TargetInstallation          TargetKind = "INSTALLATION"
 	TargetPrincipal             TargetKind = "PRINCIPAL"
 	TargetRoleBinding           TargetKind = "ROLE_BINDING"
+	TargetWorkloadRoleBinding   TargetKind = "WORKLOAD_ROLE_BINDING"
+	TargetPolicyAttachment      TargetKind = "POLICY_ATTACHMENT"
 	TargetSession               TargetKind = "SESSION"
 	TargetAuthorizationDecision TargetKind = "AUTHORIZATION_DECISION"
 	TargetApplication           TargetKind = "APPLICATION"
@@ -65,6 +170,8 @@ const (
 	TargetConfigurationRevision TargetKind = "CONFIGURATION_REVISION"
 	TargetApplicationRevision   TargetKind = "APPLICATION_REVISION"
 	TargetDeployment            TargetKind = "DEPLOYMENT"
+	TargetExecutionPool         TargetKind = "EXECUTION_POOL"
+	TargetExecutionTarget       TargetKind = "EXECUTION_TARGET"
 	TargetQuotaEntitlement      TargetKind = "QUOTA_ENTITLEMENT"
 	TargetServiceInstallation   TargetKind = "SERVICE_INSTALLATION"
 	TargetAuditRecords          TargetKind = "AUDIT_RECORDS"
@@ -97,15 +204,23 @@ const (
 	InstallationVerificationVerified InstallationVerificationState = "VERIFIED"
 )
 
-// ActionContract is the closed Phase 1 Audit event union. Source is authority
+// ActionContract is the closed Audit event union. Source is authority
 // context supplied by authentication and is never accepted from event JSON.
 type ActionContract struct {
-	Source               Source
-	Target               TargetKind
-	Results              []Result
-	IAMDecisionPermitted bool
-	IAMDecisionRequired  bool
-	OperationRequired    bool
+	Source                    Source
+	Target                    TargetKind
+	Results                   []Result
+	IAMDecisionPermitted      bool
+	IAMDecisionRequired       bool
+	OperationRequired         bool
+	PlatformOnly              bool
+	UserActorRequired         bool
+	RoleActorPermitted        bool
+	RoleActorRequired         bool
+	ServiceActorRequired      bool
+	AccessKeyActorPermitted   bool
+	SystemActorID             ActorID
+	TargetMatchesInstallation bool
 }
 
 func AllActions() []Action {
@@ -122,19 +237,100 @@ func ContractForAction(action Action) (ActionContract, bool) {
 }
 
 var allActions = []Action{
+	ActionIAMAccountCreated,
+	ActionIAMAccountDisabled,
+	ActionIAMAccountEnabled,
+	ActionIAMAccountRootCredentialsRecovered,
+	ActionIAMAccountAliasUpdated,
+	ActionIAMSecuritySettingsUpdated,
+	ActionIAMUserCreated,
+	ActionIAMUserUpdated,
+	ActionIAMUserDeleted,
+	ActionIAMUserPermissionBoundarySet,
+	ActionIAMUserPermissionBoundaryRemoved,
+	ActionIAMUserStatusSet,
+	ActionIAMUserPasswordReset,
+	ActionIAMUserPasswordChanged,
+	ActionIAMUserPasswordResetRequired,
+	ActionIAMNotificationContactVerificationStarted,
+	ActionIAMNotificationContactVerified,
+	ActionIAMNotificationContactReplaced,
+	ActionIAMAuthenticatorBound,
+	ActionIAMAuthenticatorReplaced,
+	ActionIAMAuthenticatorRemoved,
+	ActionIAMAuthenticatorRecoveryStarted,
+	ActionIAMAuthenticatorRecovered,
+	ActionIAMRecoveryCodesRegenerated,
+	ActionIAMGroupCreated,
+	ActionIAMRoleCreated,
+	ActionIAMRoleUpdated,
+	ActionIAMRoleDisabled,
+	ActionIAMRoleEnabled,
+	ActionIAMRoleTrustSet,
+	ActionIAMRoleDeleted,
+	ActionIAMRolePermissionBoundarySet,
+	ActionIAMRolePermissionBoundaryRemoved,
+	ActionIAMRoleSessionIssued,
+	ActionIAMRoleSessionRevoked,
+	ActionIAMRoleSessionAdminRevoked,
+	ActionIAMRoleSessionExited,
+	ActionIAMServiceRoleSessionIssued,
+	ActionIAMServiceLinkedRoleCreated,
+	ActionIAMWorkloadRoleBindingCreated,
+	ActionIAMWorkloadRoleBindingRevoked,
+	ActionIAMAccessKeyCreated,
+	ActionIAMAccessKeyEnabled,
+	ActionIAMAccessKeyDisabled,
+	ActionIAMAccessKeyNetworkRestrictionsUpdated,
+	ActionIAMAccessKeyDeleted,
+	ActionIAMSecurityReportCreated,
+	ActionIAMSecurityReportDownloadStarted,
+	ActionIAMAccessAnalyzerCreated,
+	ActionIAMAccessAnalyzerUpdated,
+	ActionIAMAccessAnalyzerDispositionUpdated,
+	ActionIAMAccessFindingDetected,
+	ActionIAMAccessFindingResolved,
+	ActionIAMAccessFindingArchived,
+	ActionIAMAccessFindingUnarchived,
+	ActionIAMAccessKeyAutomaticallyDisabled,
+	ActionIAMPolicyCreated,
+	ActionIAMPolicyVersionCreated,
+	ActionIAMPolicyVersionDeleted,
+	ActionIAMPolicyDefaultVersionSet,
+	ActionIAMPolicyUpdated,
+	ActionIAMPolicyDeleted,
+	ActionIAMGroupUpdated,
+	ActionIAMGroupDeleted,
+	ActionIAMGroupMembershipCreated,
+	ActionIAMGroupMembershipRemoved,
 	ActionIAMOrganizationCreated,
+	ActionIAMTenantCreated,
+	ActionIAMTenantDisabled,
+	ActionIAMTenantEnabled,
+	ActionIAMTenantAdministratorRecovered,
+	ActionIAMInstallationPrimaryCredentialsRecovered,
+	ActionIAMAuthenticationRecoveryClosed,
+	ActionIAMAuthenticationRecoveryReconciled,
+	ActionIAMAuthenticationRecoveryReopened,
 	ActionIAMAccountAliasSet,
 	ActionIAMPrincipalStatusSet,
 	ActionIAMPasswordReset,
 	ActionIAMBootstrapApplied,
 	ActionIAMSessionIssued,
 	ActionIAMSessionRevoked,
+	ActionIAMOtherSessionsRevoked,
 	ActionIAMPasswordChanged,
 	ActionIAMPrincipalCreated,
 	ActionIAMRoleBindingPut,
 	ActionIAMRoleBindingRevoked,
+	ActionIAMPolicyAttachmentCreated,
+	ActionIAMPolicyAttachmentRevoked,
+	ActionIAMPlatformPolicyAttachmentCreated,
+	ActionIAMPlatformPolicyAttachmentRevoked,
 	ActionIAMAuthorizationDecided,
 	ActionPaaSApplicationCreated,
+	ActionPaaSApplicationLabelUpdated,
+	ActionPaaSApplicationLabelDeleted,
 	ActionPaaSConfigurationCreated,
 	ActionPaaSConfigurationRevisionCreated,
 	ActionPaaSApplicationRevisionCreated,
@@ -142,14 +338,167 @@ var allActions = []Action{
 	ActionPaaSDeploymentUpdated,
 	ActionPaaSDeploymentStopped,
 	ActionPaaSDeploymentRolledBack,
+	ActionPaaSExecutionPoolCreated,
+	ActionPaaSExecutionTargetRegistered,
+	ActionPaaSExecutionTargetDrained,
+	ActionPaaSExecutionTargetActivated,
+	ActionPaaSExecutionTargetRemoved,
 	ActionManagedServiceQuotaEntitlementActivated,
 	ActionManagedServiceInstallationCreated,
 	ActionManagedServiceInstallationReady,
 	ActionAuditRecordsRead,
 	ActionAuditIntegrityVerified,
+	ActionAuditPlatformRecordsRead,
+	ActionAuditPlatformIntegrityVerified,
 }
 
 var actionContracts = map[Action]ActionContract{
+	ActionIAMAccountCreated: {
+		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMAccountDisabled: {
+		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMAccountEnabled: {
+		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMAccountRootCredentialsRecovered: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMAccountAliasUpdated: {
+		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMSecuritySettingsUpdated: {
+		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserCreated: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserUpdated: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserDeleted: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserPermissionBoundarySet: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserPermissionBoundaryRemoved: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserStatusSet: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserPasswordReset: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserPasswordChanged: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true,
+	},
+	ActionIAMUserPasswordResetRequired: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultDenied}, UserActorRequired: true,
+	},
+	ActionIAMNotificationContactVerificationStarted: {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMNotificationContactVerified:            {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMNotificationContactReplaced:            {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMAuthenticatorBound:                     {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMAuthenticatorReplaced:                  {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMAuthenticatorRemoved:                   {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMAuthenticatorRecoveryStarted:           {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMAuthenticatorRecovered:                 {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMRecoveryCodesRegenerated:               {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMGroupCreated: {
+		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMRoleCreated:                         {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleUpdated:                         {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleDisabled:                        {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleEnabled:                         {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleTrustSet:                        {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleDeleted:                         {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRolePermissionBoundarySet:           {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRolePermissionBoundaryRemoved:       {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleSessionIssued:                   {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleSessionRevoked:                  {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMRoleSessionAdminRevoked:             {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true, IAMDecisionRequired: true},
+	ActionIAMRoleSessionExited:                   {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, RoleActorPermitted: true, RoleActorRequired: true},
+	ActionIAMServiceRoleSessionIssued:            {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, ServiceActorRequired: true},
+	ActionIAMServiceLinkedRoleCreated:            {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMWorkloadRoleBindingCreated:          {Source: SourceIAM, Target: TargetWorkloadRoleBinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMWorkloadRoleBindingRevoked:          {Source: SourceIAM, Target: TargetWorkloadRoleBinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyCreated:                    {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyEnabled:                    {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyDisabled:                   {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyNetworkRestrictionsUpdated: {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyDeleted:                    {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMSecurityReportCreated:               {Source: SourceIAM, Target: TargetSecurityReport, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMSecurityReportDownloadStarted:       {Source: SourceIAM, Target: TargetSecurityReport, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessAnalyzerCreated:               {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessAnalyzerUpdated:               {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessAnalyzerDispositionUpdated:    {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessFindingDetected:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, SystemActorID: "iam.access-analyzer"},
+	ActionIAMAccessFindingResolved:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, SystemActorID: "iam.access-analyzer"},
+	ActionIAMAccessFindingArchived:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessFindingUnarchived:             {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyAutomaticallyDisabled:      {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, SystemActorID: "iam.access-analyzer"},
+	ActionIAMPolicyCreated: {
+		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPolicyVersionCreated: {
+		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPolicyVersionDeleted: {
+		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPolicyDefaultVersionSet: {
+		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPolicyUpdated: {
+		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPolicyDeleted: {
+		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMGroupUpdated: {
+		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMGroupDeleted: {
+		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMGroupMembershipCreated: {
+		Source: SourceIAM, Target: TargetGroupMembership, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMGroupMembershipRemoved: {
+		Source: SourceIAM, Target: TargetGroupMembership, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMTenantCreated: {
+		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMTenantDisabled: {
+		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMTenantEnabled: {
+		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMTenantAdministratorRecovered: {
+		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMInstallationPrimaryCredentialsRecovered: {
+		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, PlatformOnly: true,
+		SystemActorID: "iam-local-recovery",
+	},
+	ActionIAMAuthenticationRecoveryClosed: {
+		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
+		SystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
+	},
+	ActionIAMAuthenticationRecoveryReconciled: {
+		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
+		SystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
+	},
+	ActionIAMAuthenticationRecoveryReopened: {
+		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
+		SystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
+	},
 	ActionIAMOrganizationCreated: {
 		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
 	},
@@ -171,6 +520,9 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMSessionRevoked: {
 		Source: SourceIAM, Target: TargetSession, Results: []Result{ResultSucceeded}, IAMDecisionPermitted: true,
 	},
+	ActionIAMOtherSessionsRevoked: {
+		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true,
+	},
 	ActionIAMPasswordChanged: {
 		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded},
 	},
@@ -186,38 +538,89 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMAuthorizationDecided: {
 		Source: SourceIAM, Target: TargetAuthorizationDecision,
 		Results: []Result{ResultAllowed, ResultDenied}, IAMDecisionRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
+	},
+	ActionIAMPolicyAttachmentCreated: {
+		Source: SourceIAM, Target: TargetPolicyAttachment, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPolicyAttachmentRevoked: {
+		Source: SourceIAM, Target: TargetPolicyAttachment, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPlatformPolicyAttachmentCreated: {
+		Source: SourceIAM, Target: TargetPolicyAttachment, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMPlatformPolicyAttachmentRevoked: {
+		Source: SourceIAM, Target: TargetPolicyAttachment, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
 	},
 	ActionPaaSApplicationCreated: {
 		Source: SourcePaaS, Target: TargetApplication, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
+	},
+	ActionPaaSApplicationLabelUpdated: {
+		Source: SourcePaaS, Target: TargetApplication, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
+	},
+	ActionPaaSApplicationLabelDeleted: {
+		Source: SourcePaaS, Target: TargetApplication, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSConfigurationCreated: {
 		Source: SourcePaaS, Target: TargetConfiguration, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSConfigurationRevisionCreated: {
 		Source: SourcePaaS, Target: TargetConfigurationRevision, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSApplicationRevisionCreated: {
 		Source: SourcePaaS, Target: TargetApplicationRevision, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSDeploymentCreated: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSDeploymentUpdated: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSDeploymentStopped: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSDeploymentRolledBack: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
+	},
+	ActionPaaSExecutionPoolCreated: {
+		Source: SourcePaaS, Target: TargetExecutionPool, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
+	},
+	ActionPaaSExecutionTargetRegistered: {
+		Source: SourcePaaS, Target: TargetExecutionTarget, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
+	},
+	ActionPaaSExecutionTargetDrained: {
+		Source: SourcePaaS, Target: TargetExecutionTarget, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
+	},
+	ActionPaaSExecutionTargetActivated: {
+		Source: SourcePaaS, Target: TargetExecutionTarget, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
+	},
+	ActionPaaSExecutionTargetRemoved: {
+		Source: SourcePaaS, Target: TargetExecutionTarget, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
 	},
 	ActionManagedServiceQuotaEntitlementActivated: {
 		Source: SourcePaaS, Target: TargetQuotaEntitlement, Results: []Result{ResultSucceeded},
@@ -233,8 +636,18 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionAuditRecordsRead: {
 		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionAuditIntegrityVerified: {
 		Source: SourceAudit, Target: TargetAuditChain, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
+	},
+	ActionAuditPlatformRecordsRead: {
+		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionAuditPlatformIntegrityVerified: {
+		Source: SourceAudit, Target: TargetAuditChain, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, PlatformOnly: true,
 	},
 }

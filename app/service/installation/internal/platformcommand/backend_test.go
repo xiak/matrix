@@ -2,13 +2,18 @@ package platformcommand
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -177,6 +182,31 @@ func TestInstallRejectsAValidBundleFromAnotherTrustRoot(t *testing.T) {
 	assertFault(t, err, cli.FaultConflict, "RELEASE_TRUST_CONFLICT")
 }
 
+func TestInstalledSecurityMailConfigurationCannotBeSubstituted(t *testing.T) {
+	fixtures := writeReleaseSequence(t, 2)
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	install := installRequest(root, fixtures[0])
+	if _, err := backend.Run(context.Background(), install); err != nil {
+		t.Fatalf("install security-mail fixture: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+	before := readJournal(t, root)
+	effects.securityMailHost = "smtp-replacement.matrix.test"
+
+	_, err := backend.Run(context.Background(), install)
+	assertFault(t, err, cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
+	if !reflect.DeepEqual(readJournal(t, root), before) {
+		t.Fatal("rejected install replay changed the journal")
+	}
+	_, err = backend.Run(context.Background(), upgradeRequest(root, fixtures[1]))
+	assertFault(t, err, cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
+	if !reflect.DeepEqual(readJournal(t, root), before) || len(effects.upgradeCalls) != 0 {
+		t.Fatal("rejected upgrade changed state or reached lifecycle effects")
+	}
+}
+
 func TestUpgradeBindsImmediatePredecessorAndBackupBeforePublishing(t *testing.T) {
 	fixtures := writeReleaseSequence(t, 2)
 	effects := &installEffects{}
@@ -189,9 +219,7 @@ func TestUpgradeBindsImmediatePredecessorAndBackupBeforePublishing(t *testing.T)
 	}
 	materializeInstalledRelease(t, root, fixtures[0])
 
-	result, err := backend.Run(context.Background(), cli.Request{
-		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
-	})
+	result, err := backend.Run(context.Background(), upgradeRequest(root, fixtures[1]))
 	if err != nil || result.ReleaseID != fixtures[1].Manifest.Release.ID ||
 		result.PreviousID != fixtures[0].Manifest.Release.ID ||
 		!result.Changed || result.BackupID == "" {
@@ -238,9 +266,7 @@ func TestUpgradeUnknownOutcomeResumesAndDefinitiveFailureRestoresSource(t *testi
 		t.Fatalf("install upgrade replay source: %v", err)
 	}
 	materializeInstalledRelease(t, root, fixtures[0])
-	request := cli.Request{
-		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
-	}
+	request := upgradeRequest(root, fixtures[1])
 	_, err := backend.Run(context.Background(), request)
 	assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
 	active := readJournal(t, root)
@@ -278,9 +304,7 @@ func TestUpgradeRejectsSkippedPredecessorWithoutStartingACommand(t *testing.T) {
 	}
 	materializeInstalledRelease(t, root, fixtures[0])
 	before := readJournal(t, root)
-	_, err := backend.Run(context.Background(), cli.Request{
-		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[2].Root,
-	})
+	_, err := backend.Run(context.Background(), upgradeRequest(root, fixtures[2]))
 	assertFault(t, err, cli.FaultPrecondition, "UPGRADE_PREDECESSOR_MISMATCH")
 	if !reflect.DeepEqual(readJournal(t, root), before) || len(effects.upgradeCalls) != 0 {
 		t.Fatal("skipped predecessor changed state or reached upgrade effects")
@@ -303,9 +327,7 @@ func TestExplicitRollbackReplaysUnknownOutcomeAndCommitsOnlyTheSignedPredecessor
 		t.Fatalf("install rollback source: %v", err)
 	}
 	materializeInstalledRelease(t, root, fixtures[0])
-	if _, err := backend.Run(context.Background(), cli.Request{
-		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
-	}); err != nil {
+	if _, err := backend.Run(context.Background(), upgradeRequest(root, fixtures[1])); err != nil {
 		t.Fatalf("upgrade rollback fixture: %v", err)
 	}
 	materializeInstalledRelease(t, root, fixtures[1])
@@ -355,6 +377,182 @@ func TestExplicitRollbackReplaysUnknownOutcomeAndCommitsOnlyTheSignedPredecessor
 	}
 }
 
+func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.T) {
+	current := release.CurrentDatabaseProfile()
+	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
+	previousTenantProfile := release.DatabaseProfile{
+		Compatibility: "identical-authority-profile", ContractRevision: 2,
+		Authorities: release.AuthoritySchemas{IAM: 2, Audit: 2, PaaS: 1},
+	}
+	revised := current
+	revised.ContractRevision++
+	beforeSecurityMail := current
+	beforeSecurityMail.ContractRevision = 6
+	proofOnly := current
+	proofOnly.ContractRevision = 1
+	hostProof := proofOnly
+	hostProof.Authorities.PaaS = 2
+	profiles := []struct {
+		name           string
+		source, target release.DatabaseProfile
+	}{
+		{name: "published scalar to authorities", source: legacy, target: current},
+		{name: "verified tenant release before session lineage", source: previousTenantProfile, target: current},
+		{name: "session lineage to prior tenant release", source: current, target: previousTenantProfile},
+		{name: "legacy scalar increase", source: legacy, target: release.DatabaseProfile{SchemaVersion: 2, Compatibility: legacy.Compatibility}},
+		{name: "same schemas different authority contract", source: current, target: revised},
+		{name: "same schemas before security mail topology", source: beforeSecurityMail, target: current},
+		{name: "same schemas before tenant lifecycle", source: proofOnly, target: current},
+		{name: "host proof composition to tenant lifecycle", source: hostProof, target: current},
+	}
+	for _, authority := range []string{"IAM", "Audit", "PaaS"} {
+		target := current
+		switch authority {
+		case "IAM":
+			target.Authorities.IAM++
+		case "Audit":
+			target.Authorities.Audit++
+		case "PaaS":
+			target.Authorities.PaaS++
+		}
+		profiles = append(profiles, struct {
+			name           string
+			source, target release.DatabaseProfile
+		}{name: authority + " only", source: current, target: target})
+	}
+	for _, profile := range profiles {
+		for _, action := range []lifecycle.Action{lifecycle.ActionUpgrade, lifecycle.ActionRollback, lifecycle.ActionRecover} {
+			t.Run(profile.name+"/"+string(action), func(t *testing.T) {
+				fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, profile.source, profile.target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				effects := &installEffects{observeReady: true}
+				backend := newTestBackend(t, effects)
+				root := filepath.Join(t.TempDir(), "matrix")
+				if _, err := backend.Run(context.Background(), installRequest(root, fixtures[0])); err != nil {
+					t.Fatal(err)
+				}
+				materializeInstalledRelease(t, root, fixtures[0])
+				if action != lifecycle.ActionUpgrade {
+					materializeInstalledRelease(t, root, fixtures[1])
+					// A prior installer may have committed an unproved transition.
+					// Even a valid sealed predecessor is not a rollback permit.
+					state := readJournal(t, root)
+					state.PreviousRelease, state.PreviousReleaseDigest = state.CurrentReleaseID, state.CurrentReleaseDigest
+					state.CurrentReleaseID, state.CurrentReleaseDigest = fixtures[1].Manifest.Release.ID, fixtures[1].ManifestDigest
+					state.Last = nil
+					state.Version++
+					session, err := journal.AcquireExisting(context.Background(), root)
+					if err != nil {
+						t.Fatal(err)
+					}
+					writeErr := session.Write(state)
+					closeErr := session.Close()
+					if writeErr != nil || closeErr != nil {
+						t.Fatalf("seed committed predecessor: %v / %v", writeErr, closeErr)
+					}
+				}
+				before := readJournal(t, root)
+				request := cli.Request{Action: action, Root: root, Bundle: fixtures[1].Root}
+				if action == lifecycle.ActionUpgrade {
+					request.SecurityMailConfiguration = "/private/security-mail.json"
+				}
+				failureCode := string(action) + "_SCHEMA_INCOMPATIBLE"
+				if action == lifecycle.ActionRecover {
+					request.BackupID = "backup-" + strings.Repeat("d", 32)
+					effects.recoverySource = RecoverySource{
+						InstallationID: before.InstallationID,
+						BackupID:       request.BackupID, BackupDigest: "sha256:" + strings.Repeat("e", 64),
+						TOTPCustodyDigest:         "sha256:" + strings.Repeat("c", 64),
+						AuthenticationStateDigest: "sha256:" + strings.Repeat("d", 64),
+						ReleaseID:                 fixtures[0].Manifest.Release.ID, ReleaseDigest: fixtures[0].ManifestDigest,
+						Database: fixtures[0].Manifest.Database,
+					}
+					failureCode = "RECOVERY_SCHEMA_INCOMPATIBLE"
+				}
+				_, err = backend.Run(context.Background(), request)
+				assertFault(t, err, cli.FaultPrecondition, failureCode)
+				if !reflect.DeepEqual(readJournal(t, root), before) || len(effects.upgradeCalls) != 0 ||
+					len(effects.explicitRollbackCalls) != 0 || len(effects.recoveryCalls) != 0 || effects.observeCalls != 0 {
+					t.Fatal("incompatible profile changed state or reached lifecycle effects")
+				}
+			})
+		}
+	}
+}
+
+func TestPublishedScalarProfileStillAllowsItsOwnReleasePair(t *testing.T) {
+	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, legacy, legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := newTestBackend(t, &installEffects{observeReady: true})
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixtures[0])); err != nil {
+		t.Fatal(err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+	if _, err := backend.Run(context.Background(), upgradeRequest(root, fixtures[1])); err != nil {
+		t.Fatalf("upgrade published profile pair: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[1])
+	result, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRollback, Root: root})
+	if err != nil || result.ReleaseID != fixtures[0].Manifest.Release.ID {
+		t.Fatalf("rollback published profile pair: %#v / %v", result, err)
+	}
+}
+
+func TestPublishedExecutableRejectsNewManifestBeforeEffects(t *testing.T) {
+	binary := os.Getenv("MATRIX_INSTALLATION_LEGACY_MX_BINARY")
+	if binary == "" {
+		t.Skip("requires the mx executable built from published commit c88a84f")
+	}
+	info, err := os.Lstat(binary)
+	if err != nil || !filepath.IsAbs(binary) || !info.Mode().IsRegular() {
+		t.Fatal("legacy mx must be an absolute regular executable")
+	}
+	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, legacy, release.CurrentDatabaseProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "not-an-installation")
+	const sentinel = "unowned file must remain intact"
+	if err := os.WriteFile(root, []byte(sentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for index, fixture := range fixtures {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		command := exec.CommandContext(ctx, binary, "platform", "install", "--format", "json",
+			"--root", root, "--bundle", fixture.Root, "--trust-key", fixture.TrustPath)
+		output, runErr := command.CombinedOutput()
+		cancel()
+		var failure struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if runErr == nil || json.Unmarshal(output, &failure) != nil {
+			t.Fatalf("legacy CLI did not reject safely: %v", runErr)
+		}
+		if index == 0 {
+			// Both checks are after signature/payload authentication. Current
+			// topology need not be a supported runtime for the published mx.
+			if failure.Error.Code != "INSTALLATION_ROOT_INVALID" && failure.Error.Code != "TOPOLOGY_CONTRACT_UNSUPPORTED" {
+				t.Fatalf("legacy manifest did not authenticate: %s", failure.Error.Code)
+			}
+		} else if failure.Error.Code != "RELEASE_BUNDLE_INVALID" {
+			t.Fatalf("published mx accepted the new manifest format: %s", failure.Error.Code)
+		}
+		retained, err := os.ReadFile(root)
+		if err != nil || string(retained) != sentinel {
+			t.Fatal("legacy CLI changed the unowned root")
+		}
+	}
+}
+
 func TestExplicitRollbackRequiresReadyCurrentReleaseBeforePersistingIntent(t *testing.T) {
 	fixtures := writeReleaseSequence(t, 2)
 	effects := &installEffects{}
@@ -366,9 +564,7 @@ func TestExplicitRollbackRequiresReadyCurrentReleaseBeforePersistingIntent(t *te
 		t.Fatalf("install rollback preflight source: %v", err)
 	}
 	materializeInstalledRelease(t, root, fixtures[0])
-	if _, err := backend.Run(context.Background(), cli.Request{
-		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
-	}); err != nil {
+	if _, err := backend.Run(context.Background(), upgradeRequest(root, fixtures[1])); err != nil {
 		t.Fatalf("upgrade rollback preflight fixture: %v", err)
 	}
 	materializeInstalledRelease(t, root, fixtures[1])
@@ -399,9 +595,7 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 		t.Fatalf("install recovery source: %v", err)
 	}
 	materializeInstalledRelease(t, root, fixtures[0])
-	if _, err := backend.Run(context.Background(), cli.Request{
-		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
-	}); err != nil {
+	if _, err := backend.Run(context.Background(), upgradeRequest(root, fixtures[1])); err != nil {
 		t.Fatalf("upgrade recovery fixture: %v", err)
 	}
 	materializeInstalledRelease(t, root, fixtures[1])
@@ -409,12 +603,14 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 	backupID := "backup-" + strings.Repeat("d", 32)
 	backupDigest := "sha256:" + strings.Repeat("e", 64)
 	effects.recoverySource = RecoverySource{
-		InstallationID: installed.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   backupDigest,
-		ReleaseID:      fixtures[0].Manifest.Release.ID,
-		ReleaseDigest:  fixtures[0].ManifestDigest,
-		SchemaVersion:  fixtures[0].Manifest.Database.SchemaVersion,
+		InstallationID:            installed.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              backupDigest,
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("c", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("d", 64),
+		ReleaseID:                 fixtures[0].Manifest.Release.ID,
+		ReleaseDigest:             fixtures[0].ManifestDigest,
+		Database:                  fixtures[0].Manifest.Database,
 	}
 	request := cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
@@ -429,6 +625,8 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 		active.Active.Command.BackupDigest != backupDigest ||
 		active.Active.Command.TargetReleaseID != fixtures[0].Manifest.Release.ID ||
 		active.Active.Command.InputDigest != fixtures[0].ManifestDigest ||
+		active.Active.Command.AuthenticationRecoveryEpoch != 1 ||
+		active.Active.Command.AuthenticationRecoveryDigest == "" ||
 		active.CurrentReleaseID != fixtures[1].Manifest.Release.ID {
 		t.Fatalf("unknown recovery journal = %#v", active)
 	}
@@ -459,11 +657,13 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 			t.Fatalf("recovery phase %s calls = %d, want %d", phase, effects.recoveryCalls[phase], want)
 		}
 	}
-	if effects.recoveryInspectCalls != 3 ||
+	if effects.recoveryInspectCalls != 3 || effects.recoveryPreflightCalls != 1 ||
 		effects.recoveryPlan.Current.Bundle.Manifest.Release.ID != fixtures[1].Manifest.Release.ID ||
 		effects.recoveryPlan.Target.Bundle.Manifest.Release.ID != fixtures[0].Manifest.Release.ID ||
 		effects.recoveryPlan.BackupID != backupID ||
-		effects.recoveryPlan.BackupDigest != backupDigest {
+		effects.recoveryPlan.BackupDigest != backupDigest ||
+		effects.recoveryPlan.AuthenticationIntent.Epoch != 1 ||
+		effects.recoveryPlan.AuthenticationIntent.AuthenticationStateDigest != effects.recoverySource.AuthenticationStateDigest {
 		t.Fatalf("recovery inspection/plan = calls:%d plan:%#v", effects.recoveryInspectCalls, effects.recoveryPlan)
 	}
 	completed := readJournal(t, root)
@@ -472,8 +672,40 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 		completed.PreviousRelease != "" || completed.PreviousReleaseDigest != "" ||
 		completed.Active != nil || completed.Last == nil ||
 		completed.Last.Command.ID != commandID ||
-		completed.Last.Outcome != lifecycle.OutcomeSucceeded {
+		completed.Last.Outcome != lifecycle.OutcomeSucceeded ||
+		completed.AuthenticationRecoveryEpoch != 1 {
 		t.Fatalf("completed recovery journal = %#v", completed)
+	}
+}
+
+func TestRecoveryPreflightFailureCannotPersistOrReachDestructiveEffects(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{recoveryPreflightErr: ErrEffectConflict}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+		t.Fatal(err)
+	}
+	materializeInstalledRelease(t, root, fixture)
+	before := readJournal(t, root)
+	backupID := "backup-" + strings.Repeat("a", 32)
+	effects.recoverySource = RecoverySource{
+		InstallationID:            before.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              "sha256:" + strings.Repeat("b", 64),
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("c", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("d", 64),
+		ReleaseID:                 fixture.Manifest.Release.ID,
+		ReleaseDigest:             fixture.ManifestDigest,
+		Database:                  fixture.Manifest.Database,
+	}
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	assertFault(t, err, cli.FaultConflict, "OWNERSHIP_CONFLICT")
+	if after := readJournal(t, root); !reflect.DeepEqual(after, before) ||
+		effects.recoveryPreflightCalls != 1 || len(effects.recoveryCalls) != 0 {
+		t.Fatalf("failed recovery preflight changed state: before=%#v after=%#v effects=%#v", before, after, effects)
 	}
 }
 
@@ -501,12 +733,14 @@ func TestRecoveryRejectsUntrustedSourceBeforePersistingIntent(t *testing.T) {
 	}
 
 	effects.recoverySource = RecoverySource{
-		InstallationID: before.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   "sha256:" + strings.Repeat("c", 64),
-		ReleaseID:      "matrix-v0.9.9-ffffffffffff",
-		ReleaseDigest:  "sha256:" + strings.Repeat("f", 64),
-		SchemaVersion:  fixture.Manifest.Database.SchemaVersion,
+		InstallationID:            before.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              "sha256:" + strings.Repeat("c", 64),
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("d", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("e", 64),
+		ReleaseID:                 "matrix-v0.9.9-ffffffffffff",
+		ReleaseDigest:             "sha256:" + strings.Repeat("f", 64),
+		Database:                  fixture.Manifest.Database,
 	}
 	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
@@ -528,6 +762,15 @@ func TestRecoveryRejectsUntrustedSourceBeforePersistingIntent(t *testing.T) {
 		effects.recoveryInspectCalls != 2 || len(effects.recoveryCalls) != 0 {
 		t.Fatalf("cross-install recovery changed state: before=%#v after=%#v effects=%#v", before, after, effects)
 	}
+	effects.recoverySource.InstallationID = before.InstallationID
+	effects.recoverySource.Database.Authorities.Audit++
+	_, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	assertFault(t, err, cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
+	if !reflect.DeepEqual(readJournal(t, root), before) || len(effects.recoveryCalls) != 0 {
+		t.Fatal("backup profile substitution reached destructive recovery")
+	}
 }
 
 func TestRecoveryDefinitiveFailureRequiresManualIntervention(t *testing.T) {
@@ -547,12 +790,14 @@ func TestRecoveryDefinitiveFailureRequiresManualIntervention(t *testing.T) {
 	before := readJournal(t, root)
 	backupID := "backup-" + strings.Repeat("b", 32)
 	effects.recoverySource = RecoverySource{
-		InstallationID: before.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   "sha256:" + strings.Repeat("d", 64),
-		ReleaseID:      fixture.Manifest.Release.ID,
-		ReleaseDigest:  fixture.ManifestDigest,
-		SchemaVersion:  fixture.Manifest.Database.SchemaVersion,
+		InstallationID:            before.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              "sha256:" + strings.Repeat("d", 64),
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("e", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("f", 64),
+		ReleaseID:                 fixture.Manifest.Release.ID,
+		ReleaseDigest:             fixture.ManifestDigest,
+		Database:                  fixture.Manifest.Database,
 	}
 
 	_, err := backend.Run(context.Background(), cli.Request{
@@ -817,6 +1062,7 @@ func TestSupportBindsOwnedOutputWithoutPersistingItsPath(t *testing.T) {
 }
 
 type installEffects struct {
+	securityMailHost          string
 	calls                     map[lifecycle.Phase]int
 	failPhase                 lifecycle.Phase
 	failErr                   error
@@ -854,12 +1100,42 @@ type installEffects struct {
 	recoveryInspectCalls      int
 	recoveryInspectErr        error
 	recoverySource            RecoverySource
+	recoveryPreflightCalls    int
+	recoveryPreflightErr      error
 	recoveryCalls             map[lifecycle.Phase]int
 	recoveryPlan              RecoveryPlan
 	recoveryFailPhase         lifecycle.Phase
 	recoveryFailErr           error
 	recoveryFailOnce          bool
 	recoveryFailed            bool
+}
+
+func (effects *installEffects) ReadSecurityMailConfiguration(
+	_ context.Context,
+	path string,
+) (SecurityMailInput, error) {
+	if path == "" {
+		return SecurityMailInput{}, ErrEffectVerification
+	}
+	password, err := iamv1.NewSecret("smtp-private-password")
+	if err != nil {
+		return SecurityMailInput{}, err
+	}
+	host := effects.securityMailHost
+	if host == "" {
+		host = "smtp.matrix.test"
+	}
+	configuration := installationv1.SecurityMailConfiguration{
+		APIVersion: installationv1.SecurityMailConfigurationAPIVersion,
+		Kind:       installationv1.SecurityMailConfigurationKind,
+		Host:       host, Port: 587, TLSMode: iamv1.SecurityMailSTARTTLS,
+		Username: "matrix-sender", Password: password, From: "security@matrix.test",
+	}
+	digest, err := installationv1.SecurityMailConfigurationDigest(configuration)
+	if err != nil {
+		return SecurityMailInput{}, err
+	}
+	return SecurityMailInput{Digest: digest, Configuration: configuration}, nil
 }
 
 func (effects *installEffects) ApplyInstallPhase(
@@ -873,7 +1149,8 @@ func (effects *installEffects) ApplyInstallPhase(
 	effects.calls[phase]++
 	if plan.Root == "" || plan.InstallationID == "" || plan.Bundle.Manifest.Release.ID == "" ||
 		plan.CorrelationID == "" || plan.Trust.KeyID == "" ||
-		len(plan.TrustBytes) == 0 || plan.Port == 0 {
+		len(plan.TrustBytes) == 0 || plan.Port == 0 || plan.SecurityMail.Digest == "" ||
+		installationv1.ValidateSecurityMailConfiguration(plan.SecurityMail.Configuration) != nil {
 		return errors.New("install plan is incomplete")
 	}
 	if phase == effects.failPhase && effects.failErr != nil && (!effects.failOnce || !effects.failed) {
@@ -905,7 +1182,9 @@ func (effects *installEffects) ApplyUpgradePhase(
 	if plan.Source.ReleaseID == "" || plan.Source.ReleaseDigest == "" ||
 		plan.Target.Bundle.Manifest.Release.ID == "" || plan.BackupID == "" ||
 		plan.CreatedAt.IsZero() || plan.Source.CorrelationID == "" ||
-		plan.Source.CorrelationID != plan.Target.CorrelationID {
+		plan.Source.CorrelationID != plan.Target.CorrelationID ||
+		plan.Target.SecurityMail.Digest == "" ||
+		installationv1.ValidateSecurityMailConfiguration(plan.Target.SecurityMail.Configuration) != nil {
 		return errors.New("upgrade plan is incomplete")
 	}
 	if phase == effects.upgradeFailPhase && effects.upgradeFailErr != nil &&
@@ -961,6 +1240,20 @@ func (effects *installEffects) InspectBackup(
 		return RecoverySource{}, effects.recoveryInspectErr
 	}
 	return effects.recoverySource, nil
+}
+
+func (effects *installEffects) PreflightRecovery(
+	_ context.Context,
+	plan RecoveryPlan,
+) error {
+	effects.recoveryPreflightCalls++
+	effects.recoveryPlan = plan
+	if installationv1.ValidateCurrentAuthenticationRecoveryIntent(plan.AuthenticationIntent) != nil ||
+		plan.AuthenticationIntent.CommandID != plan.Current.CorrelationID ||
+		plan.AuthenticationIntent.InstallationID != plan.Current.InstallationID {
+		return errors.New("recovery preflight plan is incomplete")
+	}
+	return effects.recoveryPreflightErr
 }
 
 func (effects *installEffects) ApplyRecoveryPhase(
@@ -1068,6 +1361,14 @@ func installRequest(root string, fixture releasetest.Fixture) cli.Request {
 	return cli.Request{
 		Action: lifecycle.ActionInstall, Root: root,
 		Bundle: fixture.Root, TrustKey: fixture.TrustPath,
+		SecurityMailConfiguration: "/private/security-mail.json",
+	}
+}
+
+func upgradeRequest(root string, fixture releasetest.Fixture) cli.Request {
+	return cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root,
+		Bundle: fixture.Root, SecurityMailConfiguration: "/private/security-mail.json",
 	}
 }
 

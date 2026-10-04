@@ -35,6 +35,16 @@ func TestSessionPersistsSealedMonotonicJournal(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(stored, initial) {
 		t.Fatalf("stored initial journal = %#v / %v", stored, err)
 	}
+	tampered := initial
+	tampered.Version++
+	tampered.AuthenticationRecoveryEpoch++
+	if err := session.Write(tampered); err == nil {
+		t.Fatal("ordinary journal write advanced authentication recovery epoch")
+	}
+	stored, err = session.Read()
+	if err != nil || !reflect.DeepEqual(stored, initial) {
+		t.Fatalf("rejected epoch mutation changed journal = %#v / %v", stored, err)
+	}
 
 	advanced, err := lifecycle.Advance(
 		initial,
@@ -285,9 +295,10 @@ func activeInstallJournal(t *testing.T) lifecycle.Journal {
 	}
 	started, err := lifecycle.Start(value, lifecycle.Command{
 		ID: "cmd-" + strings.Repeat("b", 32), Action: lifecycle.ActionInstall,
-		InputDigest:     "sha256:" + strings.Repeat("c", 64),
-		TargetReleaseID: "matrix-v0.1.0-aaaaaaaaaaaa",
-		RequestedAt:     time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC),
+		InputDigest:        "sha256:" + strings.Repeat("c", 64),
+		SecurityMailDigest: "sha256:" + strings.Repeat("d", 64),
+		TargetReleaseID:    "matrix-v0.1.0-aaaaaaaaaaaa",
+		RequestedAt:        time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("start lifecycle journal: %v", err)

@@ -13,6 +13,80 @@ import (
 
 var lifecycleTime = time.Date(2026, 8, 25, 16, 0, 0, 123_000, time.UTC)
 
+func TestRoleSessionSeparatesBothBusinessIdempotencySpaces(t *testing.T) {
+	for _, fingerprint := range []struct {
+		name  string
+		value func(port.Authorization) (string, error)
+	}{
+		{"deployment", func(authorization port.Authorization) (string, error) {
+			return idempotencyFingerprint(mutation{authorization: authorization, deploymentID: "same-resource", kind: "SUBMIT_DEPLOYMENT", idempotencyKey: "same-key"})
+		}},
+		{"resource", func(authorization port.Authorization) (string, error) {
+			return resourceCreationFingerprint(resourceCreation[paasv1.Application]{authorization: authorization, id: "same-resource", action: paasv1.OperationCreateApplication, idempotencyKey: "same-key"})
+		}},
+	} {
+		t.Run(fingerprint.name, func(t *testing.T) {
+			original := lifecycleAuthorization()
+			original.Subject = paasv1.SubjectRef{Type: paasv1.SubjectRole, ID: "role-a", RoleSession: &paasv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}}
+			want, err := fingerprint.value(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, subject := range []paasv1.SubjectRef{
+				{Type: paasv1.SubjectRole, ID: "role-a", RoleSession: &paasv1.RoleSessionReference{SessionID: "session-b", SourceUserID: "user-a"}},
+				{Type: paasv1.SubjectRole, ID: "role-a", RoleSession: &paasv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-b"}},
+				{Type: paasv1.SubjectRole, ID: "role-b", RoleSession: &paasv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}},
+				{Type: paasv1.SubjectUser, ID: "user-a"},
+			} {
+				changed := original
+				changed.Subject = subject
+				got, err := fingerprint.value(changed)
+				if err != nil || got == want {
+					t.Fatal("different subject could replay the accepted command", err)
+				}
+			}
+			same := original
+			same.Subject.RoleSession = &paasv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}
+			got, err := fingerprint.value(same)
+			if err != nil || got != want {
+				t.Fatal("same role session lost exact replay", err)
+			}
+		})
+	}
+}
+
+func TestAccessKeySeparatesBusinessIdempotencySpace(t *testing.T) {
+	original := lifecycleAuthorization()
+	original.Subject = paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-a", AccessKeyID: "key-a"}
+	fingerprint := func(authorization port.Authorization) (string, error) {
+		return resourceCreationFingerprint(resourceCreation[paasv1.Application]{
+			authorization: authorization, id: "same-resource",
+			action: paasv1.OperationCreateApplication, idempotencyKey: "same-key",
+		})
+	}
+	want, err := fingerprint(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, subject := range []paasv1.SubjectRef{
+		{Type: paasv1.SubjectUser, ID: "user-a", AccessKeyID: "key-b"},
+		{Type: paasv1.SubjectUser, ID: "user-a"},
+		{Type: paasv1.SubjectUser, ID: "user-b", AccessKeyID: "key-a"},
+	} {
+		changed := original
+		changed.Subject = subject
+		got, err := fingerprint(changed)
+		if err != nil || got == want {
+			t.Fatal("different AccessKey subject could replay the accepted command", err)
+		}
+	}
+	same := original
+	got, err := fingerprint(same)
+	if err != nil || got != want {
+		t.Fatal("same AccessKey subject lost exact replay", err)
+	}
+}
+
 func TestSubmitCreatesDeploymentGenerationAndOperationAtomically(t *testing.T) {
 	transaction := lifecycleTransaction()
 	repository := &fakeLifecycleRepository{transaction: transaction}
@@ -326,6 +400,14 @@ func (repository *fakeLifecycleRepository) WithinTransaction(
 	return nil
 }
 
+func (repository *fakeLifecycleRepository) WithinReadOnlyTransaction(
+	ctx context.Context,
+	tenantID paasv1.TenantID,
+	callback func(context.Context, Transaction) error,
+) error {
+	return repository.WithinTransaction(ctx, tenantID, callback)
+}
+
 type fakeLifecycleTransaction struct {
 	now                        time.Time
 	deployment                 paasv1.Deployment
@@ -348,6 +430,7 @@ type fakeLifecycleTransaction struct {
 	loadedOperation            paasv1.Operation
 	loadedOperationFound       bool
 	resourceSubmission         *ResourceSubmission
+	applicationLabelSubmission *ApplicationLabelSubmission
 }
 
 func (transaction *fakeLifecycleTransaction) TransactionTime(context.Context) (time.Time, error) {
@@ -382,6 +465,13 @@ func (transaction *fakeLifecycleTransaction) LoadApplication(
 		return paasv1.Application{}, false, nil
 	}
 	return transaction.application, transaction.applicationFound, nil
+}
+
+func (transaction *fakeLifecycleTransaction) LoadApplicationForUpdate(
+	ctx context.Context,
+	id paasv1.ResourceID,
+) (paasv1.Application, bool, error) {
+	return transaction.LoadApplication(ctx, id)
 }
 
 func (transaction *fakeLifecycleTransaction) LoadConfiguration(
@@ -465,6 +555,16 @@ func (transaction *fakeLifecycleTransaction) CreateApplication(
 ) error {
 	transaction.application, transaction.applicationFound = value, true
 	transaction.resourceSubmission = &submission
+	return nil
+}
+
+func (transaction *fakeLifecycleTransaction) UpdateApplicationLabel(
+	_ context.Context,
+	submission ApplicationLabelSubmission,
+) error {
+	transaction.application = submission.Application
+	transaction.applicationFound = true
+	transaction.applicationLabelSubmission = &submission
 	return nil
 }
 

@@ -2,8 +2,11 @@ package processhttp
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"time"
@@ -48,6 +51,10 @@ func NewReadinessHandler(check func(context.Context) error) (http.Handler, error
 }
 
 func Serve(ctx context.Context, address string, handler http.Handler) error {
+	return serve(ctx, address, handler, nil)
+}
+
+func serve(ctx context.Context, address string, handler http.Handler, security *tls.Config) error {
 	if ctx == nil || address == "" || handler == nil {
 		return errors.New("service HTTP configuration is invalid")
 	}
@@ -67,8 +74,20 @@ func Serve(ctx context.Context, address string, handler http.Handler) error {
 			return ctx
 		},
 	}
+	defer server.Close()
+	if security != nil {
+		server.TLSConfig = security.Clone()
+		// Peer-supplied handshake diagnostics are not process support output.
+		server.ErrorLog = log.New(io.Discard, "", 0)
+	}
 	serveError := make(chan error, 1)
-	go func() { serveError <- server.Serve(listener) }()
+	go func() {
+		if security != nil {
+			serveError <- server.ServeTLS(listener, "", "")
+		} else {
+			serveError <- server.Serve(listener)
+		}
+	}()
 	select {
 	case err := <-serveError:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -95,13 +114,38 @@ func ServeWithBackground(
 	handler http.Handler,
 	background func(context.Context) error,
 ) error {
+	return serveWithBackground(ctx, address, handler, nil, background)
+}
+
+// ServeTLSWithBackground uses the same supervised lifecycle for a private TLS
+// listener. A missing TLS configuration is an error, never a plaintext fallback.
+func ServeTLSWithBackground(
+	ctx context.Context,
+	address string,
+	handler http.Handler,
+	security *tls.Config,
+	background func(context.Context) error,
+) error {
+	if security == nil || len(security.Certificates) == 0 || security.MinVersion < tls.VersionTLS12 {
+		return errors.New("service TLS configuration is invalid")
+	}
+	return serveWithBackground(ctx, address, handler, security, background)
+}
+
+func serveWithBackground(
+	ctx context.Context,
+	address string,
+	handler http.Handler,
+	security *tls.Config,
+	background func(context.Context) error,
+) error {
 	if ctx == nil || handler == nil || background == nil {
 		return errors.New("service background process configuration is invalid")
 	}
 	processContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results := make(chan error, 2)
-	go func() { results <- Serve(processContext, address, handler) }()
+	go func() { results <- serve(processContext, address, handler, security) }()
 	go func() { results <- background(processContext) }()
 	first := <-results
 	cancel()

@@ -19,14 +19,19 @@ import (
 	"strings"
 	"time"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	"github.com/xiak/matrix/api/contractjson"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/release"
 )
 
 const (
-	backupAPIVersion                 = "installation.matrix.xiak.com/v1"
+	backupAPIVersion                 = "installation.matrix.xiak.com/v3"
+	predecessorBackupAPIVersion      = "installation.matrix.xiak.com/v2"
+	legacyBackupAPIVersion           = "installation.matrix.xiak.com/v1"
 	backupKind                       = "PlatformBackup"
 	backupSealAlgorithm              = "HMAC-SHA256"
 	backupSealKeyID                  = "installation-backup-v1"
@@ -45,17 +50,66 @@ const (
 var backupIDPattern = regexp.MustCompile(`^backup-[0-9a-f]{32}$`)
 
 type backupManifest struct {
-	APIVersion              string           `json:"apiVersion"`
-	Kind                    string           `json:"kind"`
-	BackupID                string           `json:"backupId"`
-	InstallationID          string           `json:"installationId"`
-	ReleaseID               string           `json:"releaseId"`
-	ReleaseDigest           string           `json:"releaseDigest"`
-	SchemaVersion           uint64           `json:"schemaVersion"`
-	CreatedAt               time.Time        `json:"createdAt"`
-	ManagedServiceInventory string           `json:"managedServiceInventory"`
-	Artifacts               []backupArtifact `json:"artifacts"`
-	Seal                    *backupSeal      `json:"seal,omitempty"`
+	APIVersion                string                   `json:"apiVersion"`
+	Kind                      string                   `json:"kind"`
+	BackupID                  string                   `json:"backupId"`
+	InstallationID            string                   `json:"installationId"`
+	ReleaseID                 string                   `json:"releaseId"`
+	ReleaseDigest             string                   `json:"releaseDigest"`
+	SchemaVersion             uint64                   `json:"schemaVersion,omitempty"`
+	CreatedAt                 time.Time                `json:"createdAt"`
+	Artifacts                 []backupArtifact         `json:"artifacts"`
+	Seal                      *backupSeal              `json:"seal,omitempty"`
+	Database                  release.DatabaseProfile  `json:"database,omitzero"`
+	AccessKeyWrapping         *backupAccessKeyWrapping `json:"accessKeyWrapping,omitempty"`
+	TOTPBackupCustody         *backupTOTPBackupCustody `json:"totpBackupCustody,omitempty"`
+	AuthenticationStateDigest string                   `json:"authenticationStateDigest,omitempty"`
+}
+
+type backupAccessKeyWrapping struct {
+	WrappingKeyID string `json:"wrappingKeyId"`
+	Commitment    string `json:"commitment"`
+}
+
+type backupTOTPBackupCustody struct {
+	Custody       installationv1.TOTPBackupCustody `json:"custody"`
+	CustodyDigest string                           `json:"custodyDigest"`
+}
+
+// databaseProfile decodes the published scalar backup without changing its
+// sealed bytes. New backups must bind the complete release database profile.
+func (manifest backupManifest) databaseProfile() (release.DatabaseProfile, error) {
+	profile := manifest.Database
+	switch manifest.APIVersion {
+	case legacyBackupAPIVersion:
+		if manifest.SchemaVersion == 0 || profile != (release.DatabaseProfile{}) ||
+			manifest.AccessKeyWrapping != nil || manifest.TOTPBackupCustody != nil ||
+			manifest.AuthenticationStateDigest != "" {
+			return release.DatabaseProfile{}, errors.New("legacy backup database profile is invalid")
+		}
+		profile = release.DatabaseProfile{
+			SchemaVersion: manifest.SchemaVersion, Compatibility: "expand-contract-n-minus-one",
+		}
+	case predecessorBackupAPIVersion:
+		if manifest.SchemaVersion != 0 || manifest.AccessKeyWrapping != nil ||
+			manifest.TOTPBackupCustody != nil || manifest.AuthenticationStateDigest != "" {
+			return release.DatabaseProfile{}, errors.New("backup contains a legacy schema selector")
+		}
+	case backupAPIVersion:
+		if manifest.SchemaVersion != 0 || manifest.AccessKeyWrapping == nil ||
+			iamv1.ValidateID("wrappingKeyId", manifest.AccessKeyWrapping.WrappingKeyID) != nil ||
+			!validSHA256(manifest.AccessKeyWrapping.Commitment) ||
+			validateBackupTOTPBackupCustody(manifest.TOTPBackupCustody) != nil ||
+			!validSHA256(manifest.AuthenticationStateDigest) {
+			return release.DatabaseProfile{}, errors.New("backup security custody is invalid")
+		}
+	default:
+		return release.DatabaseProfile{}, errors.New("backup version is unsupported")
+	}
+	if err := release.ValidateDatabaseProfile(profile); err != nil {
+		return release.DatabaseProfile{}, err
+	}
+	return profile, nil
 }
 
 type backupArtifact struct {
@@ -76,7 +130,7 @@ func (effects *Effects) InspectBackup(
 	installed platformcommand.InstalledPlan,
 	backupID string,
 ) (platformcommand.RecoverySource, error) {
-	if effects == nil || effects.managedInventory == nil || ctx == nil {
+	if effects == nil || ctx == nil {
 		return platformcommand.RecoverySource{}, errors.Join(
 			platformcommand.ErrEffectUnavailable,
 			errors.New("local-machine backup inspection is unavailable"),
@@ -110,13 +164,23 @@ func (effects *Effects) InspectBackup(
 	if err != nil {
 		return platformcommand.RecoverySource{}, err
 	}
+	if manifest.APIVersion != backupAPIVersion ||
+		!validSHA256(manifest.AuthenticationStateDigest) {
+		return platformcommand.RecoverySource{}, errors.Join(
+			platformcommand.ErrEffectPrecondition,
+			errors.New("selected backup lacks the current authentication state proof"),
+		)
+	}
 	targetIdentity := installed
 	targetIdentity.ReleaseID = manifest.ReleaseID
 	targetIdentity.ReleaseDigest = manifest.ReleaseDigest
 	targetIdentity.PreviousID = ""
 	targetIdentity.PreviousDigest = ""
+	profile, profileErr := manifest.databaseProfile()
 	target, err := authenticateInstalledPlan(targetIdentity)
-	if err != nil || target.Bundle.Manifest.Database.SchemaVersion != manifest.SchemaVersion {
+	if err != nil || profileErr != nil || target.Bundle.Manifest.Database != profile ||
+		verifyBackupAccessKeyWrapping(installed.Root, installed.InstallationID, manifest) != nil ||
+		verifyBackupTOTPBackupCustody(installed.Root, installed.InstallationID, manifest) != nil {
 		clear(target.TrustBytes)
 		return platformcommand.RecoverySource{}, errors.Join(
 			platformcommand.ErrEffectVerification,
@@ -131,16 +195,15 @@ func (effects *Effects) InspectBackup(
 			platformcommand.ErrEffectConflict, err,
 		)
 	}
-	if err := requireManagedServiceInventory(installed.Root, manifest.ManagedServiceInventory, effects.managedInventory); err != nil {
-		return platformcommand.RecoverySource{}, err
-	}
 	return platformcommand.RecoverySource{
-		InstallationID: installed.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   manifestDigest,
-		ReleaseID:      manifest.ReleaseID,
-		ReleaseDigest:  manifest.ReleaseDigest,
-		SchemaVersion:  manifest.SchemaVersion,
+		InstallationID:            installed.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              manifestDigest,
+		TOTPCustodyDigest:         manifest.TOTPBackupCustody.CustodyDigest,
+		AuthenticationStateDigest: manifest.AuthenticationStateDigest,
+		ReleaseID:                 manifest.ReleaseID,
+		ReleaseDigest:             manifest.ReleaseDigest,
+		Database:                  profile,
 	}, nil
 }
 
@@ -148,7 +211,7 @@ func (effects *Effects) CreateBackup(
 	ctx context.Context,
 	request platformcommand.BackupPlan,
 ) error {
-	if effects == nil || effects.runtime == nil || effects.entropy == nil || effects.managedInventory == nil ||
+	if effects == nil || effects.runtime == nil || effects.entropy == nil ||
 		ctx == nil {
 		return errors.Join(
 			platformcommand.ErrEffectUnavailable,
@@ -214,7 +277,7 @@ func (effects *Effects) CreateBackup(
 	}
 	return createBackup(
 		ctx, effects.runtime, streaming, effects.entropy, plan,
-		installation, postgres.ID, request.BackupID, request.CreatedAt, effects.managedInventory,
+		installation, postgres.ID, request.BackupID, request.CreatedAt,
 	)
 }
 
@@ -228,7 +291,6 @@ func createBackup(
 	postgresID string,
 	backupID string,
 	createdAt time.Time,
-	inspectManagedInventory func(string) (string, error),
 ) error {
 	if _, err := ensureManagedDirectory(
 		plan.Root, filepath.FromSlash(layout.BackupDirectory),
@@ -270,10 +332,6 @@ func createBackup(
 			_ = removeManagedTree(plan.Root, partialRelative)
 		}
 	}()
-	managedInventory, err := readManagedServiceInventory(plan.Root, inspectManagedInventory)
-	if err != nil {
-		return err
-	}
 
 	secretsRelative := filepath.Join(partialRelative, workloadSecretsFilename)
 	if err := writeWorkloadSecretsArchive(plan.Root, secretsRelative); err != nil {
@@ -287,22 +345,42 @@ func createBackup(
 	if err != nil {
 		return err
 	}
-	dumpRelative := filepath.Join(partialRelative, databaseDumpFilename)
-	if err := streamDatabaseDump(
-		ctx, streaming, plan.Root, dumpRelative, postgresID, dumpLimit,
-	); err != nil {
-		if ctx.Err() != nil {
-			cleanup = false
-		}
+	accessKeyWrapping, err := backupAccessKeyWrappingForRelease(plan)
+	if err != nil {
 		return err
 	}
-	if err := requireManagedServiceInventory(plan.Root, managedInventory, inspectManagedInventory); err != nil {
+	custodyProcess, lease, err := startTOTPBackupCustody(
+		ctx, runtimeBoundary, streaming, plan, installation, backupID,
+	)
+	if err != nil {
+		return err
+	}
+	defer custodyProcess.abort()
+	totpCustody := &backupTOTPBackupCustody{
+		Custody: lease.Custody, CustodyDigest: lease.CustodyDigest,
+	}
+	if !validSHA256(lease.AuthenticationStateDigest) {
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("backup authentication state commitment is missing"),
+		)
+	}
+	dumpRelative := filepath.Join(partialRelative, databaseDumpFilename)
+	if err := streamDatabaseDump(
+		ctx, streaming, plan.Root, dumpRelative, postgresID, lease.SnapshotID, dumpLimit,
+	); err != nil {
 		return err
 	}
 	if err := verifyDatabaseDump(ctx, streaming, plan.Root, dumpRelative, postgresID); err != nil {
-		if ctx.Err() != nil {
-			cleanup = false
-		}
+		return err
+	}
+	if err := verifyBackupTOTPBackupCustody(plan.Root, plan.InstallationID, backupManifest{
+		APIVersion: backupAPIVersion, TOTPBackupCustody: totpCustody,
+		AuthenticationStateDigest: lease.AuthenticationStateDigest,
+	}); err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	if err := custodyProcess.release(); err != nil {
 		return err
 	}
 
@@ -323,12 +401,14 @@ func createBackup(
 	manifest := backupManifest{
 		APIVersion: backupAPIVersion, Kind: backupKind,
 		BackupID: backupID, InstallationID: plan.InstallationID,
-		ReleaseID:               plan.Bundle.Manifest.Release.ID,
-		ReleaseDigest:           plan.Bundle.ManifestSHA256,
-		SchemaVersion:           plan.Bundle.Manifest.Database.SchemaVersion,
-		CreatedAt:               createdAt,
-		ManagedServiceInventory: managedInventory,
-		Artifacts:               []backupArtifact{dumpArtifact, secretsArtifact},
+		ReleaseID:                 plan.Bundle.Manifest.Release.ID,
+		ReleaseDigest:             plan.Bundle.ManifestSHA256,
+		Database:                  plan.Bundle.Manifest.Database,
+		CreatedAt:                 createdAt,
+		Artifacts:                 []backupArtifact{dumpArtifact, secretsArtifact},
+		AccessKeyWrapping:         accessKeyWrapping,
+		TOTPBackupCustody:         totpCustody,
+		AuthenticationStateDigest: lease.AuthenticationStateDigest,
 	}
 	content, err := sealBackupManifest(manifest, key)
 	if err != nil {
@@ -415,6 +495,7 @@ func streamDatabaseDump(
 	root string,
 	relative string,
 	postgresID string,
+	snapshotID string,
 	maximum uint64,
 ) error {
 	file, err := createBackupFile(root, relative)
@@ -422,11 +503,14 @@ func streamDatabaseDump(
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
 	writer := &boundedBackupWriter{writer: file, maximum: maximum}
-	started, runErr := runtimeBoundary.RunTo(
-		ctx, nil, writer, "exec", "--user", "postgres", postgresID,
+	arguments := []string{"exec", "--user", "postgres", postgresID,
 		"pg_dump", "--format=custom", "--no-privileges",
-		"--no-password", "--lock-wait-timeout=5s", "--username=matrix", "--dbname=matrix",
-	)
+		"--no-password", "--lock-wait-timeout=5s"}
+	if snapshotID != "" {
+		arguments = append(arguments, "--snapshot="+snapshotID)
+	}
+	arguments = append(arguments, "--username=matrix", "--dbname=matrix")
+	started, runErr := runtimeBoundary.RunTo(ctx, nil, writer, arguments...)
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if runErr != nil || writer.exceeded || syncErr != nil || closeErr != nil {
@@ -739,6 +823,9 @@ func sealBackupManifest(value backupManifest, key []byte) ([]byte, error) {
 	if len(key) != sha256.Size {
 		return nil, errors.New("backup seal key is invalid")
 	}
+	if _, err := value.databaseProfile(); err != nil {
+		return nil, err
+	}
 	value.Seal = nil
 	canonical, err := json.Marshal(value)
 	if err != nil {
@@ -776,10 +863,13 @@ func verifyBackupDirectory(
 	if err != nil {
 		return err
 	}
-	if manifest.ReleaseID != plan.Bundle.Manifest.Release.ID ||
+	profile, profileErr := manifest.databaseProfile()
+	if profileErr != nil || manifest.ReleaseID != plan.Bundle.Manifest.Release.ID ||
 		manifest.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
-		manifest.SchemaVersion != installation.bundle.Manifest.Database.SchemaVersion ||
-		manifest.CreatedAt != createdAt {
+		profile != installation.bundle.Manifest.Database ||
+		manifest.CreatedAt != createdAt ||
+		verifyBackupAccessKeyWrapping(plan.Root, plan.InstallationID, manifest) != nil ||
+		verifyBackupTOTPBackupCustody(plan.Root, plan.InstallationID, manifest) != nil {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("backup manifest identity is invalid"),
@@ -789,6 +879,42 @@ func verifyBackupDirectory(
 		ctx, runtimeBoundary, plan.Root,
 		filepath.Join(relative, databaseDumpFilename), postgresID,
 	)
+}
+
+func backupAccessKeyWrappingForRelease(
+	plan platformcommand.InstallPlan,
+) (*backupAccessKeyWrapping, error) {
+	keyring, err := readAccessKeyWrappingKeyring(plan.Root, plan.InstallationID)
+	if err != nil {
+		return nil, errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	keyID := keyring.ActiveWrappingKeyID
+	commitment, err := iamv1.AccessKeyWrappingKeyCommitment(keyring, keyID)
+	keyring = iamv1.AccessKeyWrappingKeyring{}
+	if err != nil {
+		return nil, errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	return &backupAccessKeyWrapping{WrappingKeyID: keyID, Commitment: commitment}, nil
+}
+
+func verifyBackupAccessKeyWrapping(root, installationID string, backup backupManifest) error {
+	if backup.APIVersion != backupAPIVersion || backup.AccessKeyWrapping == nil {
+		return errors.New("backup lacks its access-key wrapping commitment")
+	}
+	keyring, err := readAccessKeyWrappingKeyring(root, installationID)
+	if err != nil {
+		return err
+	}
+	commitment, err := iamv1.AccessKeyWrappingKeyCommitment(
+		keyring, backup.AccessKeyWrapping.WrappingKeyID,
+	)
+	keyring = iamv1.AccessKeyWrappingKeyring{}
+	if err != nil || subtle.ConstantTimeCompare(
+		[]byte(commitment), []byte(backup.AccessKeyWrapping.Commitment),
+	) != 1 {
+		return errors.New("backup access-key wrapping commitment differs from the installation")
+	}
+	return nil
 }
 
 func readVerifiedBackupDirectory(
@@ -840,10 +966,10 @@ func readVerifiedBackupDirectory(
 	manifestDigest := "sha256:" + hex.EncodeToString(manifestDigestValue[:])
 	var manifest backupManifest
 	if contractjson.DecodeObjectBytes(content, maximumBackupManifestBytes, &manifest) != nil ||
-		manifest.APIVersion != backupAPIVersion || manifest.Kind != backupKind ||
+		manifest.Kind != backupKind ||
 		manifest.BackupID != backupID || manifest.InstallationID != installationID ||
 		manifest.ReleaseID == "" || !validSHA256(manifest.ReleaseDigest) ||
-		manifest.SchemaVersion == 0 || manifest.CreatedAt.IsZero() || !validSHA256(manifest.ManagedServiceInventory) ||
+		manifest.CreatedAt.IsZero() ||
 		manifest.CreatedAt.Location() != time.UTC ||
 		manifest.CreatedAt != manifest.CreatedAt.Truncate(time.Microsecond) ||
 		len(manifest.Artifacts) != 2 || manifest.Seal == nil ||
@@ -854,25 +980,16 @@ func readVerifiedBackupDirectory(
 			errors.New("backup manifest identity is invalid"),
 		)
 	}
-	sealValue := manifest.Seal.Value
-	manifest.Seal = nil
-	canonical, err := json.Marshal(manifest)
-	if err != nil {
+	if _, err := manifest.databaseProfile(); err != nil {
 		return backupManifest{}, "", errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	defer clear(canonical)
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte(backupSealDomain))
-	_, _ = mac.Write(canonical)
-	wantSeal := "sha256:" + hex.EncodeToString(mac.Sum(nil))
-	if subtle.ConstantTimeCompare([]byte(sealValue), []byte(wantSeal)) != 1 {
+	expected, err := sealBackupManifest(manifest, key)
+	defer clear(expected)
+	if err != nil || !hmac.Equal(expected, content) {
 		return backupManifest{}, "", errors.Join(
 			platformcommand.ErrEffectVerification,
-			errors.New("backup manifest seal is invalid"),
+			errors.New("backup manifest seal or canonical bytes are invalid"),
 		)
-	}
-	manifest.Seal = &backupSeal{
-		Algorithm: backupSealAlgorithm, KeyID: backupSealKeyID, Value: sealValue,
 	}
 	wantArtifacts := []struct {
 		path      string

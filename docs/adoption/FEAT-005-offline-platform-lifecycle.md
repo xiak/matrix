@@ -12,6 +12,9 @@
 | Legacy PaaS | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only through Git object commands; exclude its worktree. |
 | IAM/Audit foundation and delivery donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
+| Matrix authority-profile increment | `c29f9e3f065af4a6dcfc06596ee9a49a5c671774` | Same-repository fixed patch; adapt only release/lifecycle mechanisms, excluding Phase 3 host implementation, checkpoint and acceptance state. |
+| Matrix security-mail installation slice | `7d002ea2ff7afafc961974123fb4e16f23945a23` | Same-repository fixed patch; adapt the private configuration and installed notification-consumer boundary only, excluding donor profile values, host/node work and acceptance state. |
+| Matrix authentication-recovery installation sequence | `9d8ff34fdc2e1c45a278357d45e2803b799eaa29`, `4b3920fb4e714a7cfac6ff37da157f79c10f0079`, `5bb7836039165d88f3b0b88e48c533eaab902203`, `25e28b40f951554664ae2356713e054a2d8bb659` (all ancestors of fixed cumulative object `487fcfe13e8b2a687997b103ad3aad2c35a2b96e`) | Read only through fixed Git objects. Adapt only the installation-side authentication closure, replay anchor, backup custody and pre-effect inspection; exclude donor profile values, PaaS/node work, credentials, checkpoints and acceptance state. |
 
 The FEAT-005 supported host, signed bundle, fixed inventory, lifecycle,
 upgrade/rollback semantics, CLI surface, and real offline gates were committed
@@ -49,6 +52,24 @@ DevOps closure.
 
 ## Resulting implementation constraints
 
+The multi-tenant release target in FEAT-006/005 additionally adopts the fixed
+Matrix authority-profile increment as follows:
+
+| Fixed slice | Decision | Rationale |
+| --- | --- | --- |
+| `c29f9e3` manifest v2, exact profile comparison, sealed backup/recovery binding and support output | `ADAPT` | Keep independent authority versions plus the code-owned contract revision. Retain this branch's own service composition and coordinated revision, owned by FEAT-005, rather than importing the donor's host composition. Also close unproved cross-profile recovery before journal or provider changes, while preserving same-profile recovery. |
+| `c29f9e3` published v1 canonical/signature/backup preservation and pre-effect rejection gates | `REUSE` | Preserve evidence for real published formats without inventing cross-profile N-1 support. Run the gates on this branch and extend its existing process owner, never inherit the donor's acceptance result. |
+| `c29f9e3` PaaS2/host expectations and FEAT-008 status | `REJECT` for this slice | IAM release verification does not authorize importing host admission, changing another Phase or asserting its release acceptance. |
+| `7d002ea2` canonical `SecurityMailConfiguration` private-file contract | `ADAPT` | Keep the strict, redacted operator input and bind it later to this installation's sealed IAM bootstrap before writing the purpose-only channel. It is not an HTTP API, journal payload, support artifact or caller-selected authority scope. |
+| `7d002ea2` notification executable, purpose-only login, keyring/channel mounts and fixed Alpine base | `ADAPT` | Package the accepted IAM notification executable and generate this branch's protected DSN/keyring/channel from the sealed installation. Keep the runtime image on `scratch`, copying only the CA bundle from the fixed Alpine image so public and private SMTP certificates can be verified without adding a shell. Use a new mail-only egress network rather than the donor's shared management network. |
+| `7d002ea2` shared non-internal management network for the notification worker | `REJECT` | A mail credential should not share a general provider network with PaaS or other control-plane services. This branch gives only the notification dispatcher a separate `mail-egress` membership and preserves `control` as internal. |
+| `7d002ea2` donor release profile, host/node topology and foreign gate status | `REJECT` | This branch owns its exact authority profile and must prove its own notification consumer, SMTP custody and signed runtime; importing another branch's numbers or evidence would not validate the combined IAM source. |
+| `9d8ff34f` purpose-only authentication-recovery executable packaging and protected file mounts | `ADAPT` | Add the already-owned IAM recovery executable to the signed IAM image and invoke it only through the installation adapter. Preserve a read-only root, exact single-file mounts, no network, bounded resources, stable exit classes and redacted provider failures; do not create a northbound recovery API or grant the normal IAM service/worker these files. |
+| `4b3920fb` replay snapshot and completion anchor | `ADAPT` | Bind one recovery command to its immutable intent and exact response-loss replay. Persist the monotonic recovery epoch only on the exact successful terminal recovery transition; ordinary journal writes, failed recovery and changed replays cannot advance it. |
+| `5bb78360` backup custody and authentication-state reconciliation | `ADAPT` | Export the IAM backup lease, TOTP custody commitment and complete authentication-state digest from one purpose-only snapshot; close authentication before destructive restore and reconcile/reopen the exact sealed snapshot before normal services start. Earlier backup wire versions remain readable only as historical formats and are not recoverable by the current profile. |
+| `25e28b40` pre-effect recovery inspection | `ADAPT` | Inspect the exact recovery intent before journal advancement, database restore, service stop or another provider effect. An invalid, forbidden, conflicting or unavailable result fails closed; a lost success response is resolved only through the original bounded completion identity. |
+| `487fcfe1` Phase 3 profile numbers, node/PaaS topology, credentials and runtime evidence | `REJECT` | The current branch owns IAM/Audit/PaaS `64/34/3` and its coordinated revision. Fixed donor behavior informs this installation slice, but another branch's signed releases, node gates and acceptance statements cannot validate this composition. |
+
 1. Own the compact lifecycle in an `installation` context and keep one
    user-facing `mx` command tree. Do not import the legacy bootstrap aggregate
    or recreate its child authority graph.
@@ -78,5 +99,4 @@ DevOps closure.
    adopt tests tied to script layout, exact Compose text, ENV files, SQL text,
    line counts, or incidental command order.
 
-No donor source is copied and no donor repository is a build or runtime
-dependency.
+No legacy repository is a build or runtime dependency.

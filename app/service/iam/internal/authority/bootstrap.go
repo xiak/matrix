@@ -1,8 +1,6 @@
 package authority
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -22,21 +20,11 @@ type BootstrapReceipt struct {
 	ContentDigest  string
 }
 
-func BootstrapDigest(document iamv1.BootstrapDocument) (string, error) {
-	encoded, err := iamv1.EncodeBootstrapDocument(document)
-	if err != nil {
-		return "", err
-	}
-	defer clear(encoded)
-	digest := sha256.Sum256(encoded)
-	return "sha256:" + hex.EncodeToString(digest[:]), nil
-}
-
 func ClassifyBootstrap(
 	existing *BootstrapReceipt,
 	document iamv1.BootstrapDocument,
 ) (BootstrapOutcome, BootstrapReceipt, error) {
-	digest, err := BootstrapDigest(document)
+	digest, err := iamv1.BootstrapDigest(document)
 	if err != nil {
 		return "", BootstrapReceipt{}, err
 	}

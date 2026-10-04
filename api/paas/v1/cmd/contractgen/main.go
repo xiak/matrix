@@ -134,6 +134,22 @@ func buildPaths() schema {
 			"get": readOperation(resource.readID, "Get "+resource.kind, resource.parameter, resource.kind),
 		}
 	}
+	setLabel := mutationOperationWithPath(
+		"setApplicationLabel", "Set Application label", "applicationId", "SetApplicationLabelRequest", true, "200",
+	)
+	setLabel["parameters"] = slices.Insert(setLabel["parameters"].([]any), 1, any(pathNameParameter("labelKey")))
+	deleteLabel := schema{
+		"operationId": "deleteApplicationLabel",
+		"summary":     "Delete Application label",
+		"parameters": []any{
+			pathIDParameter("applicationId"), pathNameParameter("labelKey"),
+			componentRef("#/components/parameters/IdempotencyKey"), componentRef("#/components/parameters/IfMatch"),
+		},
+		"responses": mutationResponses("200"),
+	}
+	paths["/v1/applications/{applicationId}/labels/{labelKey}"] = schema{
+		"put": setLabel, "delete": deleteLabel,
+	}
 
 	paths["/v1/deployments"] = schema{
 		"post": mutationOperation("createDeployment", "Create Deployment", "CreateDeploymentRequest", false, "202"),
@@ -325,6 +341,13 @@ func pathIDParameter(name string) schema {
 	}
 }
 
+func pathNameParameter(name string) schema {
+	return schema{
+		"name": name, "in": "path", "required": true,
+		"schema": ref("Name"),
+	}
+}
+
 func componentRef(path string) schema {
 	return schema{"$ref": path}
 }
@@ -360,6 +383,7 @@ func enumSchemas() map[string][]string {
 		"TenantStatus":                  stringsOf(paasv1.TenantActive, paasv1.TenantSuspended, paasv1.TenantDeactivated),
 		"ExecutionPoolPhase":            stringsOf(paasv1.ExecutionPoolReady, paasv1.ExecutionPoolDegraded, paasv1.ExecutionPoolUnavailable),
 		"ExecutionTargetHealth":         stringsOf(paasv1.ExecutionTargetHealthUnknown, paasv1.ExecutionTargetHealthReady, paasv1.ExecutionTargetHealthDegraded, paasv1.ExecutionTargetHealthUnavailable),
+		"MeasurementState":              stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementWarmingUp, paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementStale),
 		"ExecutionTargetDesiredState":   stringsOf(paasv1.ExecutionTargetActive, paasv1.ExecutionTargetDraining),
 		"IsolationGuarantee":            stringsOfSlice(paasv1.IsolationGuarantees()),
 		"PlacementStrategy":             stringsOf(paasv1.PlacementFirstFit, paasv1.PlacementSpread, paasv1.PlacementBinPack),
@@ -370,7 +394,7 @@ func enumSchemas() map[string][]string {
 		"OperationState":                stringsOfSlice(paasv1.OperationStates()),
 		"EvidenceType":                  stringsOf(paasv1.EvidencePolicyDecision, paasv1.EvidencePlacementDecision, paasv1.EvidenceAdapterCommand, paasv1.EvidenceAdapterResult, paasv1.EvidenceObservation, paasv1.EvidenceVerification, paasv1.EvidenceAuditDispatch),
 		"EvidenceSeverity":              stringsOf(paasv1.EvidenceInfo, paasv1.EvidenceWarning, paasv1.EvidenceError),
-		"SubjectType":                   stringsOf(paasv1.SubjectUser, paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser),
+		"SubjectType":                   stringsOf(paasv1.SubjectUser, paasv1.SubjectRole, paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser),
 		"ReadinessState":                stringsOf(paasv1.ReadinessReady, paasv1.ReadinessNotReady),
 		"InstallationVerificationState": stringsOf(paasv1.InstallationVerificationPending, paasv1.InstallationVerificationReady, paasv1.InstallationVerificationFailed),
 		"ErrorCode":                     stringsOfSlice(paasv1.ErrorCodes()),
@@ -391,14 +415,16 @@ func structContracts() map[string]reflect.Type {
 		paasv1.ResourceScope{}, paasv1.ResourceMetadata{}, paasv1.Tenant{},
 		paasv1.LabelSelector{}, paasv1.ExecutionPoolSpec{}, paasv1.ExecutionPoolStatus{}, paasv1.ExecutionPool{},
 		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{},
+		paasv1.ExecutionTargetUsage{}, paasv1.CPUUsage{}, paasv1.CPUUsageValue{}, paasv1.MemoryUsage{}, paasv1.MemoryUsageValue{},
+		paasv1.FilesystemUsage{}, paasv1.FilesystemUsageValue{},
 		paasv1.PlacementPolicySpec{}, paasv1.PlacementPolicy{}, paasv1.PlacementDecision{},
 		paasv1.ArtifactRef{}, paasv1.ResourceRequirements{}, paasv1.ApplicationEndpoint{}, paasv1.ComponentInput{},
-		paasv1.SecretVersionReference{}, paasv1.ComponentBinding{}, paasv1.Application{}, paasv1.CreateApplicationRequest{}, paasv1.Configuration{},
+		paasv1.SecretVersionReference{}, paasv1.ComponentBinding{}, paasv1.Application{}, paasv1.CreateApplicationRequest{}, paasv1.SetApplicationLabelRequest{}, paasv1.Configuration{},
 		paasv1.CreateConfigurationRequest{}, paasv1.ConfigurationRevisionSpec{}, paasv1.ConfigurationRevision{},
 		paasv1.CreateConfigurationRevisionRequest{}, paasv1.ApplicationRevisionComponent{}, paasv1.ApplicationRevisionSpec{},
 		paasv1.ApplicationRevision{}, paasv1.CreateApplicationRevisionRequest{}, paasv1.DeploymentComponent{}, paasv1.DeploymentSpec{},
 		paasv1.DeploymentStatus{}, paasv1.Deployment{}, paasv1.CreateDeploymentRequest{}, paasv1.RollbackDeploymentRequest{},
-		paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.ResourceRef{}, paasv1.FieldViolation{}, paasv1.Readiness{},
+		paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.RoleSessionReference{}, paasv1.ResourceRef{}, paasv1.FieldViolation{}, paasv1.Readiness{},
 		paasv1.VerifyInstallationRequest{}, paasv1.InstallationVerification{},
 		paasv1.Problem{}, paasv1.Operation{}, paasv1.Evidence{}, paasv1.AdapterCapabilitiesContract{},
 		paasv1.AdapterCommandEnvelope{}, paasv1.InspectExecutionTargetRequest{}, paasv1.ObserveExecutionTargetRequest{},
@@ -435,6 +461,19 @@ func structSchema(contract reflect.Type) schema {
 	}
 	if len(required) > 0 {
 		result["required"] = required
+	}
+	if contract.Name() == "SubjectRef" {
+		result["oneOf"] = []any{
+			schema{"properties": schema{"type": schema{"const": string(paasv1.SubjectRole)}, "accessKeyId": false}, "required": []string{"roleSession"}},
+			schema{"properties": schema{"type": schema{"const": string(paasv1.SubjectUser)}, "roleSession": false}},
+			schema{"properties": schema{"type": schema{"enum": stringsOf(paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser)}, "roleSession": false, "accessKeyId": false}},
+		}
+	}
+	if contract.Name() == "RoleSessionReference" {
+		result["oneOf"] = []any{
+			schema{"required": []string{"sourceUserId"}, "properties": schema{"sourceServicePrincipalId": false}},
+			schema{"required": []string{"sourceServicePrincipalId"}, "properties": schema{"sourceUserId": false}},
+		}
 	}
 	return result
 }
@@ -496,6 +535,8 @@ func schemaForType(contract reflect.Type, jsonName string) schema {
 		return schema{"type": "string"}
 	case reflect.Bool:
 		return schema{"type": "boolean"}
+	case reflect.Float64:
+		return schema{"type": "number", "minimum": 0}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return schema{"type": "integer", "minimum": 0, "maximum": 9007199254740991}
 	case reflect.Uint16:
@@ -552,6 +593,53 @@ func applySemanticOverlays(schemas map[string]any) {
 	)
 
 	setArrayMinimum(schemas, "ExecutionPoolSpec", "allowedIsolationGuarantees", 1)
+	usageProperties := object(schemas["ExecutionTargetUsage"])["properties"].(schema)
+	usageProperties["filesystems"].(schema)["maxItems"] = paasv1.MaximumObservedFilesystems
+	usageProperties["filesystems"].(schema)["minItems"] = 1
+	for _, measurement := range []struct {
+		name, state string
+		values      []string
+		warming     bool
+	}{
+		{"CPUUsage", "state", []string{"value"}, true},
+		{"MemoryUsage", "state", []string{"value"}, false},
+		{"FilesystemUsage", "state", []string{"value"}, false},
+		{"FilesystemUsageValue", "inodesState", []string{"totalInodes", "freeInodes"}, false},
+		{"ExecutionTargetUsage", "filesystemsState", []string{"filesystems"}, false},
+	} {
+		states := stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementStale)
+		if measurement.warming {
+			states = append(states, string(paasv1.MeasurementWarmingUp))
+		}
+		properties := object(schemas[measurement.name])["properties"].(schema)
+		properties[measurement.state] = schema{"type": "string", "enum": states}
+		absent := schema{}
+		for _, field := range measurement.values {
+			absent[field] = false
+		}
+		object(schemas[measurement.name])["allOf"] = []any{
+			schema{
+				"if":   schema{"properties": schema{measurement.state: schema{"const": string(paasv1.MeasurementAvailable)}}, "required": []string{measurement.state}},
+				"then": schema{"required": measurement.values},
+			},
+			schema{
+				"if":   schema{"properties": schema{measurement.state: schema{"enum": stringsOf(paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementWarmingUp)}}, "required": []string{measurement.state}},
+				"then": schema{"properties": absent},
+			},
+		}
+	}
+	object(schemas["FilesystemUsageValue"])["dependentRequired"] = schema{"totalInodes": []string{"freeInodes"}, "freeInodes": []string{"totalInodes"}}
+	setIntegerMinimum(schemas, "FilesystemUsageValue", "totalInodes", 1)
+	cpuProperties := object(schemas["CPUUsageValue"])["properties"].(schema)
+	for _, field := range []string{"utilizationRatio", "ioWaitRatio"} {
+		cpuProperties[field].(schema)["maximum"] = 1
+	}
+	cpuProperties["logicalCpus"] = schema{"type": "integer", "minimum": 1, "maximum": 4096}
+	cpuProperties["windowMillis"] = schema{"type": "integer", "minimum": 1, "maximum": 60000}
+	filesystemProperties := object(schemas["FilesystemUsage"])["properties"].(schema)
+	for field, maximum := range map[string]int{"device": 256, "mountPoint": 1024, "filesystemType": 64} {
+		filesystemProperties[field] = schema{"type": "string", "minLength": 1, "maxLength": maximum}
+	}
 	setArrayUnique(schemas, "ExecutionTargetStatus", "supportedIsolationGuarantees")
 	executionTargetStatus := object(schemas["ExecutionTargetStatus"])
 	executionTargetStatus["allOf"] = []any{schema{

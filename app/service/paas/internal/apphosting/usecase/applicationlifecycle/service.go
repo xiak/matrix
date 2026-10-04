@@ -38,12 +38,14 @@ type requestIdentity struct {
 }
 
 type idempotencyIdentity struct {
-	TenantID       paasv1.TenantID    `json:"tenantId"`
-	SubjectType    paasv1.SubjectType `json:"subjectType"`
-	SubjectID      string             `json:"subjectId"`
-	CommandKind    string             `json:"commandKind"`
-	TargetID       paasv1.ResourceID  `json:"targetId"`
-	IdempotencyKey string             `json:"idempotencyKey"`
+	TenantID       paasv1.TenantID              `json:"tenantId"`
+	SubjectType    paasv1.SubjectType           `json:"subjectType"`
+	SubjectID      string                       `json:"subjectId"`
+	CommandKind    string                       `json:"commandKind"`
+	TargetID       paasv1.ResourceID            `json:"targetId"`
+	IdempotencyKey string                       `json:"idempotencyKey"`
+	RoleSession    *paasv1.RoleSessionReference `json:"roleSession,omitempty"`
+	AccessKeyID    string                       `json:"accessKeyId,omitempty"`
 }
 
 func NewUsecase(repository Repository, config Config) (*Usecase, error) {
@@ -357,6 +359,8 @@ func idempotencyFingerprint(command mutation) (string, error) {
 		TenantID: command.authorization.TenantID, SubjectType: command.authorization.Subject.Type,
 		SubjectID: command.authorization.Subject.ID, CommandKind: command.kind,
 		TargetID: command.deploymentID, IdempotencyKey: command.idempotencyKey,
+		RoleSession: command.authorization.Subject.RoleSession,
+		AccessKeyID: command.authorization.Subject.AccessKeyID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode idempotency identity: %w", err)
@@ -437,6 +441,10 @@ func auditEventForOperation(
 	switch operation.Action {
 	case paasv1.OperationCreateApplication:
 		action, result = audit.ApplicationCreated, audit.Succeeded
+	case paasv1.OperationSetApplicationLabel:
+		action, result = audit.ApplicationLabelUpdated, audit.Succeeded
+	case paasv1.OperationDeleteApplicationLabel:
+		action, result = audit.ApplicationLabelDeleted, audit.Succeeded
 	case paasv1.OperationCreateConfiguration:
 		action, result = audit.ConfigurationCreated, audit.Succeeded
 	case paasv1.OperationCreateConfigurationRevision:

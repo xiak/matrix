@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
@@ -66,10 +67,10 @@ type RecoveryProjectService struct {
 
 func recoverBackup(
 	ctx context.Context,
+	effects *Effects,
 	runtimeBoundary dockerRuntime,
 	streaming streamingDockerRuntime,
 	projectInspector RecoveryProjectInspector,
-	inspectManagedInventory func(string) (string, error),
 	plan platformcommand.RecoveryPlan,
 ) error {
 	current, target, manifest, err := authenticateRecoveryPlan(plan)
@@ -78,9 +79,6 @@ func recoverBackup(
 	}
 	defer clear(current.TrustBytes)
 	defer clear(target.TrustBytes)
-	if err := requireManagedServiceInventory(current.Root, manifest.ManagedServiceInventory, inspectManagedInventory); err != nil {
-		return err
-	}
 	for _, image := range target.Bundle.Manifest.Images {
 		present, inspectErr := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
 		if inspectErr != nil {
@@ -92,6 +90,26 @@ func recoverBackup(
 				errors.New("recovery release image identity is absent"),
 			)
 		}
+	}
+	beforeClose, err := inspectUpgradeProject(ctx, runtimeBoundary, current, target)
+	if err != nil {
+		return err
+	}
+	if beforeClose.releaseID == "" {
+		_, closed, closureErr := readAuthenticationRecoveryClosure(
+			plan.Current.Root, plan.AuthenticationIntent.CommandID,
+		)
+		if closureErr != nil {
+			return closureErr
+		}
+		if !closed {
+			if _, startErr := startRecoveryPostgres(ctx, runtimeBoundary, current); startErr != nil {
+				return startErr
+			}
+		}
+	}
+	if err := effects.closeAuthenticationRecovery(ctx, plan); err != nil {
+		return err
 	}
 
 	state, err := inspectUpgradeProject(ctx, runtimeBoundary, current, target)
@@ -107,9 +125,6 @@ func recoverBackup(
 		if err := rollbackInstallation(ctx, runtimeBoundary, participant); err != nil {
 			return err
 		}
-	}
-	if err := requireManagedServiceInventory(current.Root, manifest.ManagedServiceInventory, inspectManagedInventory); err != nil {
-		return err
 	}
 	if err := removeRecoveredVerificationProject(
 		ctx, runtimeBoundary, projectInspector, current, target,
@@ -149,35 +164,17 @@ func recoverBackup(
 		}
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
-	if manifest.SchemaVersion != target.Bundle.Manifest.Database.SchemaVersion {
+	profile, profileErr := manifest.databaseProfile()
+	if profileErr != nil || profile != target.Bundle.Manifest.Database {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("recovery schema identity changed"),
 		)
 	}
-	return migrateInstallation(ctx, runtimeBoundary, target)
-}
-
-func readManagedServiceInventory(root string, inspect func(string) (string, error)) (string, error) {
-	if inspect == nil {
-		return "", errors.Join(platformcommand.ErrEffectUnavailable, errors.New("managed-service inventory inspection is unavailable"))
-	}
-	digest, err := inspect(filepath.Join(root, filepath.FromSlash(layout.ExecutorRoot)))
-	if err != nil || !validSHA256(digest) {
-		return "", errors.Join(platformcommand.ErrEffectUnavailable, errors.New("managed-service inventory cannot be proved"))
-	}
-	return digest, nil
-}
-
-func requireManagedServiceInventory(root, expected string, inspect func(string) (string, error)) error {
-	actual, err := readManagedServiceInventory(root, inspect)
-	if err != nil {
+	if err := migrateInstallation(ctx, runtimeBoundary, target); err != nil {
 		return err
 	}
-	if actual != expected {
-		return errors.Join(platformcommand.ErrEffectPrecondition, errors.New("selected backup does not match the managed-service inventory"))
-	}
-	return nil
+	return effects.reconcileAuthenticationRecovery(ctx, plan)
 }
 
 func removeRecoveredVerificationProject(
@@ -637,7 +634,12 @@ func authenticateRecoveryPlan(
 		plan.Current.Listener != plan.Target.Listener || plan.Current.Port != plan.Target.Port ||
 		plan.Current.Trust != plan.Target.Trust ||
 		!bytes.Equal(plan.Current.TrustBytes, plan.Target.TrustBytes) ||
-		!backupIDPattern.MatchString(plan.BackupID) || !validSHA256(plan.BackupDigest) {
+		!backupIDPattern.MatchString(plan.BackupID) || !validSHA256(plan.BackupDigest) ||
+		installationv1.ValidateCurrentAuthenticationRecoveryIntent(plan.AuthenticationIntent) != nil ||
+		plan.AuthenticationIntent.InstallationID != plan.Current.InstallationID ||
+		plan.AuthenticationIntent.CommandID != plan.Current.CorrelationID ||
+		plan.AuthenticationIntent.BackupID != plan.BackupID ||
+		plan.AuthenticationIntent.BackupDigest != plan.BackupDigest {
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
 			errors.Join(
 				platformcommand.ErrEffectVerification,
@@ -653,6 +655,22 @@ func authenticateRecoveryPlan(
 	if err != nil {
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
 			errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	if currentBundle.Manifest.Database != targetBundle.Manifest.Database {
+		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
+			errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("recovery database profiles are incompatible"),
+			)
+	}
+	if plan.AuthenticationIntent.SourceReleaseID != currentBundle.Manifest.Release.ID ||
+		plan.AuthenticationIntent.SourceReleaseDigest != currentBundle.ManifestSHA256 ||
+		plan.AuthenticationIntent.TargetReleaseID != targetBundle.Manifest.Release.ID ||
+		plan.AuthenticationIntent.TargetReleaseDigest != targetBundle.ManifestSHA256 {
+		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{}, errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("recovery authentication intent differs from signed releases"),
+		)
 	}
 	current := plan.Current
 	current.Bundle = currentBundle
@@ -673,10 +691,13 @@ func authenticateRecoveryPlan(
 	manifest, digest, err := readVerifiedBackupDirectory(
 		plan.Current.Root, plan.Current.InstallationID, plan.BackupID, relative, key,
 	)
-	if err != nil || digest != plan.BackupDigest ||
+	profile, profileErr := manifest.databaseProfile()
+	if err != nil || profileErr != nil || digest != plan.BackupDigest ||
 		manifest.ReleaseID != target.Bundle.Manifest.Release.ID ||
 		manifest.ReleaseDigest != target.Bundle.ManifestSHA256 ||
-		manifest.SchemaVersion != target.Bundle.Manifest.Database.SchemaVersion {
+		profile != target.Bundle.Manifest.Database || manifest.TOTPBackupCustody == nil ||
+		manifest.TOTPBackupCustody.CustodyDigest != plan.AuthenticationIntent.TOTPCustodyDigest ||
+		manifest.AuthenticationStateDigest != plan.AuthenticationIntent.AuthenticationStateDigest {
 		clear(current.TrustBytes)
 		clear(target.TrustBytes)
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},

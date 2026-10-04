@@ -64,14 +64,18 @@ func DecodeCanonical(content []byte) (Manifest, error) {
 
 func ValidateManifest(manifest Manifest) error {
 	var problems []error
-	if manifest.APIVersion != ManifestAPIVersion || manifest.Kind != ManifestKind {
+	if (manifest.APIVersion != ManifestAPIVersion && manifest.APIVersion != LegacyManifestAPIVersion) ||
+		manifest.Kind != ManifestKind {
 		problems = append(problems, errors.New("release type is unsupported"))
+	}
+	if (manifest.APIVersion == LegacyManifestAPIVersion) != (manifest.Database.SchemaVersion != 0) {
+		problems = append(problems, errors.New("release database profile differs from its manifest version"))
 	}
 	problems = append(problems,
 		validateReleaseIdentity(manifest.Release),
 		validateSigner(manifest.Signer),
 		validateHost(manifest.Host),
-		validateDatabase(manifest.Database),
+		ValidateDatabaseProfile(manifest.Database),
 		validateDigest("topologyDigest", manifest.TopologyDigest),
 		validateFiles(manifest.Files),
 		validateImages(manifest.Images, manifest.Files),
@@ -233,9 +237,22 @@ func validateHost(value HostProfile) error {
 	return nil
 }
 
-func validateDatabase(value DatabaseProfile) error {
-	if value.SchemaVersion == 0 || value.SchemaVersion > 9007199254740991 ||
-		value.Compatibility != "expand-contract-n-minus-one" {
+// ValidateDatabaseProfile also validates sealed backup input. The legacy and
+// authority forms are disjoint; a scalar must never mask a missing authority.
+func ValidateDatabaseProfile(value DatabaseProfile) error {
+	validVersion := func(version uint64) bool {
+		return version > 0 && version <= 9007199254740991
+	}
+	if value.SchemaVersion != 0 {
+		if !validVersion(value.SchemaVersion) || value.Authorities != (AuthoritySchemas{}) || value.ContractRevision != 0 ||
+			value.Compatibility != "expand-contract-n-minus-one" {
+			return errors.New("legacy release database profile is invalid")
+		}
+		return nil
+	}
+	if value.Compatibility != "identical-authority-profile" || !validVersion(value.ContractRevision) ||
+		!validVersion(value.Authorities.IAM) || !validVersion(value.Authorities.Audit) ||
+		!validVersion(value.Authorities.PaaS) {
 		return errors.New("release database profile is invalid")
 	}
 	return nil

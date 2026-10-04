@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
@@ -94,7 +95,11 @@ func TestInstallationRejectsUnavailableRegionBeforePersistence(t *testing.T) {
 	repository := newMemoryRepository()
 	region := testRegion()
 	region.State = managedservicev1.RegionStale
-	service, err := NewService(repository, Config{Catalog: domain.DefaultCatalog(), Region: region})
+	authority := &stubWorkloadRoleBinder{}
+	service, err := NewService(repository, Config{
+		Catalog: domain.DefaultCatalog(), Region: region,
+		WorkloadRoleAuthority: authority, WorkloadRoleRuntime: authority,
+	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -163,11 +168,175 @@ func TestSingleResourceReadsReturnCurrentStateAndNotFound(t *testing.T) {
 	}
 }
 
+func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *testing.T) {
+	repository := newMemoryRepository()
+	binder := &stubWorkloadRoleBinder{}
+	service := newTestService(t, repository)
+	service.workloadRoleAuthority = binder
+	service.workloadRoleRuntime = binder
+	authorization := testAuthorization()
+	quota, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
+		Authorization: authorization, IdempotencyKey: "quota-role-binding",
+		Request: managedservicev1.ActivateQuotaRequest{
+			OfferingID: domain.PostgreSQLOfferingID, QuotaShapeID: "pg-small", InstanceCount: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("activate quota: %v", err)
+	}
+	installation, _, err := service.CreateInstallation(context.Background(), CreateInstallationCommand{
+		Authorization: authorization, IdempotencyKey: "installation-role-binding",
+		Request: managedservicev1.CreateInstallationRequest{
+			ID: "postgres-role-binding", Name: "Postgres role binding",
+			OfferingID: domain.PostgreSQLOfferingID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create installation: %v", err)
+	}
+	template := testServiceRoleTemplateReference()
+	binder.result = testServiceLinkedRoleAccess(t, authorization.TenantID, installation.ID, template)
+	command := BindServiceRoleCommand{
+		Authorization: authorization, Credential: "Bearer user-session",
+		InstallationID: installation.ID, Request: managedservicev1.BindServiceRoleRequest{Template: template},
+		IdempotencyKey: "bind-role-request",
+	}
+	beginCount := len(repository.beginTenants)
+	receipt, err := service.BindServiceRole(context.Background(), command)
+	if err != nil || receipt.ServiceInstallationID != installation.ID || receipt.Template != template ||
+		receipt.BindingID != binder.result.Bindings[0].ID {
+		t.Fatalf("binding receipt=%#v err=%v", receipt, err)
+	}
+	wantRequestID := serviceRoleBindingRequestID(command.IdempotencyKey)
+	if binder.calls != 1 || binder.request.Action != port.AuthorizeInstallationRoleBind ||
+		binder.request.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID}) ||
+		binder.request.RequestID != wantRequestID || binder.request.Credential != command.Credential {
+		t.Fatalf("binding request=%#v calls=%d", binder.request, binder.calls)
+	}
+	wantAssumeRequestID := serviceRoleSessionRequestID(binder.result.Bindings[0].ID, command.Authorization.RequestID)
+	wantReadRequestID := serviceRoleBusinessReadRequestID(binder.result.Bindings[0].ID, command.Authorization.RequestID)
+	if binder.runtimeCalls != 1 || binder.runtimeBindingID != binder.result.Bindings[0].ID ||
+		binder.runtimeAssumeRequestID != wantAssumeRequestID || binder.runtimeRequest.RequestID != wantReadRequestID ||
+		binder.runtimeRequest.Action != port.AuthorizeInstallationRead || binder.releaseCalls != 1 {
+		t.Fatalf("runtime binding=%s assume=%s request=%#v calls=%d releases=%d", binder.runtimeBindingID,
+			binder.runtimeAssumeRequestID, binder.runtimeRequest, binder.runtimeCalls, binder.releaseCalls)
+	}
+	if len(repository.beginTenants) != beginCount+2 || repository.beginTenants[beginCount] != authorization.TenantID ||
+		repository.beginTenants[beginCount+1] != authorization.TenantID {
+		t.Fatalf("service Role verification reads=%v", repository.beginTenants[beginCount:])
+	}
+	command.Authorization.RequestID = "request-bind-role-replay"
+	if _, err := service.BindServiceRole(context.Background(), command); err != nil ||
+		binder.request.RequestID != wantRequestID || binder.runtimeAssumeRequestID == wantAssumeRequestID {
+		t.Fatalf("equal replay did not keep command identity: request=%#v err=%v", binder.request, err)
+	}
+	binding := binder.result.Bindings[0]
+	binder.runtimeAuthorization = port.WorkloadRoleAuthorization{
+		TenantID: "organization-other", BindingID: binding.ID, RoleID: binding.RoleID,
+		RoleSessionID: "role-session-forged-account", SourceServicePrincipalID: binder.result.Relation.ServicePrincipal.PrincipalID,
+		DecisionID: "decision-forged-account", RequestID: "placeholder",
+	}
+	command.Authorization.RequestID = "request-bind-role-forged-runtime"
+	binder.runtimeAuthorization.RequestID = serviceRoleBusinessReadRequestID(binding.ID, command.Authorization.RequestID)
+	previousReleases := binder.releaseCalls
+	if _, err := service.BindServiceRole(context.Background(), command); !errors.Is(err, port.ErrAuthorizationUnavailable) ||
+		binder.releaseCalls != previousReleases+1 {
+		t.Fatalf("forged runtime Account was accepted or not released: releases=%d err=%v", binder.releaseCalls, err)
+	}
+	binder.runtimeAuthorization = port.WorkloadRoleAuthorization{}
+	binder.releaseErr = port.ErrAuthorizationUnavailable
+	command.Authorization.RequestID = "request-bind-role-release-unavailable"
+	previousReleases = binder.releaseCalls
+	if _, err := service.BindServiceRole(context.Background(), command); !errors.Is(err, port.ErrAuthorizationUnavailable) ||
+		binder.releaseCalls != previousReleases+1 {
+		t.Fatalf("failed RoleSession exit was hidden: releases=%d err=%v", binder.releaseCalls, err)
+	}
+	binder.releaseErr = nil
+	before := binder.calls
+	command.InstallationID = "postgres-absent"
+	if _, err := service.BindServiceRole(context.Background(), command); !errors.Is(err, ErrNotFound) || binder.calls != before {
+		t.Fatalf("absent resource reached IAM: calls=%d before=%d err=%v", binder.calls, before, err)
+	}
+	command.InstallationID = installation.ID
+	command.Authorization.SubjectType = port.SubjectServiceAccount
+	if _, err := service.BindServiceRole(context.Background(), command); !errors.Is(err, ErrInvalidArgument) || binder.calls != before {
+		t.Fatalf("service subject reached USER consent: calls=%d before=%d err=%v", binder.calls, before, err)
+	}
+}
+
+func TestUnbindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *testing.T) {
+	repository := newMemoryRepository()
+	authority := &stubWorkloadRoleBinder{}
+	service := newTestService(t, repository)
+	service.workloadRoleAuthority = authority
+	authorization := testAuthorization()
+	quota, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
+		Authorization: authorization, IdempotencyKey: "quota-role-unbinding",
+		Request: managedservicev1.ActivateQuotaRequest{
+			OfferingID: domain.PostgreSQLOfferingID, QuotaShapeID: "pg-small", InstanceCount: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("activate quota: %v", err)
+	}
+	installation, _, err := service.CreateInstallation(context.Background(), CreateInstallationCommand{
+		Authorization: authorization, IdempotencyKey: "installation-role-unbinding",
+		Request: managedservicev1.CreateInstallationRequest{
+			ID: "postgres-role-unbinding", Name: "Postgres role unbinding",
+			OfferingID: domain.PostgreSQLOfferingID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create installation: %v", err)
+	}
+	template := testServiceRoleTemplateReference()
+	access := testServiceLinkedRoleAccess(t, authorization.TenantID, installation.ID, template)
+	revoked := access.Bindings[0]
+	revokedAt := revoked.CreatedAt.Add(time.Second)
+	revoked.Status, revoked.ResourceVersion, revoked.UpdatedAt, revoked.RevokedAt =
+		iamv1.WorkloadRoleBindingRevoked, 2, revokedAt, &revokedAt
+	authority.revokeResult = revoked
+	command := UnbindServiceRoleCommand{
+		Authorization: authorization, Credential: "Bearer user-session",
+		InstallationID: installation.ID, BindingID: revoked.ID,
+		Request:        managedservicev1.UnbindServiceRoleRequest{ResourceVersion: 1},
+		IdempotencyKey: "unbind-role-request",
+	}
+	receipt, err := service.UnbindServiceRole(context.Background(), command)
+	if err != nil || receipt.ServiceInstallationID != installation.ID || receipt.Template != template ||
+		receipt.BindingID != revoked.ID || receipt.RoleID != revoked.RoleID || receipt.Status != iamv1.WorkloadRoleBindingRevoked ||
+		receipt.ResourceVersion != 2 || !receipt.RevokedAt.Equal(revokedAt) {
+		t.Fatalf("unbinding receipt=%#v err=%v", receipt, err)
+	}
+	wantRequestID := serviceRoleUnbindingRequestID(command.IdempotencyKey)
+	if authority.revokeCalls != 1 || authority.revokeBindingID != revoked.ID || authority.revokeVersion != 1 ||
+		authority.revokeRequest.Action != port.AuthorizeInstallationRoleUnbind ||
+		authority.revokeRequest.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID}) ||
+		authority.revokeRequest.RequestID != wantRequestID || authority.revokeRequest.Credential != command.Credential {
+		t.Fatalf("unbinding request=%#v calls=%d", authority.revokeRequest, authority.revokeCalls)
+	}
+	if _, err := service.UnbindServiceRole(context.Background(), command); err != nil || authority.revokeRequest.RequestID != wantRequestID {
+		t.Fatalf("equal unbinding replay did not keep command identity: request=%#v err=%v", authority.revokeRequest, err)
+	}
+	before := authority.revokeCalls
+	command.InstallationID = "postgres-absent"
+	if _, err := service.UnbindServiceRole(context.Background(), command); !errors.Is(err, ErrNotFound) || authority.revokeCalls != before {
+		t.Fatalf("absent unbinding resource reached IAM: calls=%d before=%d err=%v", authority.revokeCalls, before, err)
+	}
+	command.InstallationID = installation.ID
+	command.Authorization.SubjectType = port.SubjectServiceAccount
+	if _, err := service.UnbindServiceRole(context.Background(), command); !errors.Is(err, ErrInvalidArgument) || authority.revokeCalls != before {
+		t.Fatalf("service subject reached USER unbinding: calls=%d before=%d err=%v", authority.revokeCalls, before, err)
+	}
+}
+
 func newTestService(t *testing.T, repository Repository) *Service {
 	t.Helper()
 	var operationSequence atomic.Uint32
+	authority := &stubWorkloadRoleBinder{}
 	service, err := NewService(repository, Config{
 		Catalog: domain.DefaultCatalog(), Region: testRegion(),
+		WorkloadRoleAuthority: authority, WorkloadRoleRuntime: authority,
 		NewQuotaID: func() (string, error) { return "quota-test", nil },
 		NewOperationID: func() (string, error) {
 			if operationSequence.Add(1) == 1 {
@@ -180,6 +349,138 @@ func newTestService(t *testing.T, repository Repository) *Service {
 		t.Fatalf("new service: %v", err)
 	}
 	return service
+}
+
+type stubWorkloadRoleBinder struct {
+	calls                  int
+	template               iamv1.ServiceRoleTemplateReference
+	request                port.AuthorizationRequest
+	result                 iamv1.ServiceLinkedRoleAccess
+	revokeCalls            int
+	revokeBindingID        iamv1.WorkloadRoleBindingID
+	revokeVersion          uint64
+	revokeRequest          port.AuthorizationRequest
+	revokeResult           iamv1.WorkloadRoleBinding
+	err                    error
+	runtimeCalls           int
+	runtimeBindingID       iamv1.WorkloadRoleBindingID
+	runtimeAssumeRequestID string
+	runtimeRequest         port.WorkloadRoleAuthorizationRequest
+	runtimeAuthorization   port.WorkloadRoleAuthorization
+	runtimeErr             error
+	releaseCalls           int
+	releaseErr             error
+}
+
+func (binder *stubWorkloadRoleBinder) AssumeWorkloadRole(
+	_ context.Context,
+	bindingID iamv1.WorkloadRoleBindingID,
+	assumeRequestID string,
+	request port.WorkloadRoleAuthorizationRequest,
+) (port.WorkloadRoleLease, error) {
+	binder.runtimeCalls++
+	binder.runtimeBindingID, binder.runtimeAssumeRequestID, binder.runtimeRequest = bindingID, assumeRequestID, request
+	if binder.runtimeErr != nil {
+		return nil, binder.runtimeErr
+	}
+	authorization := binder.runtimeAuthorization
+	if authorization.TenantID == "" && len(binder.result.Bindings) == 1 {
+		binding := binder.result.Bindings[0]
+		authorization = port.WorkloadRoleAuthorization{
+			TenantID: string(binding.AccountID), BindingID: binding.ID, RoleID: binding.RoleID,
+			RoleSessionID: "role-session-managedservice", SourceServicePrincipalID: binder.result.Relation.ServicePrincipal.PrincipalID,
+			DecisionID: "decision-managedservice-read", RequestID: request.RequestID,
+		}
+	}
+	return &stubWorkloadRoleLease{binder: binder, authorization: authorization}, nil
+}
+
+type stubWorkloadRoleLease struct {
+	binder        *stubWorkloadRoleBinder
+	authorization port.WorkloadRoleAuthorization
+}
+
+func (lease *stubWorkloadRoleLease) Authorization() port.WorkloadRoleAuthorization {
+	return lease.authorization
+}
+
+func (lease *stubWorkloadRoleLease) Release(context.Context) error {
+	lease.binder.releaseCalls++
+	return lease.binder.releaseErr
+}
+
+func (binder *stubWorkloadRoleBinder) BindWorkloadRole(
+	_ context.Context,
+	template iamv1.ServiceRoleTemplateReference,
+	request port.AuthorizationRequest,
+) (iamv1.ServiceLinkedRoleAccess, error) {
+	binder.calls++
+	binder.template = template
+	binder.request = request
+	return binder.result, binder.err
+}
+
+func (binder *stubWorkloadRoleBinder) RevokeWorkloadRole(
+	_ context.Context,
+	bindingID iamv1.WorkloadRoleBindingID,
+	resourceVersion uint64,
+	request port.AuthorizationRequest,
+) (iamv1.WorkloadRoleBinding, error) {
+	binder.revokeCalls++
+	binder.revokeBindingID, binder.revokeVersion, binder.revokeRequest = bindingID, resourceVersion, request
+	return binder.revokeResult, binder.err
+}
+
+func testServiceRoleTemplateReference() iamv1.ServiceRoleTemplateReference {
+	return iamv1.ServiceRoleTemplateReference{
+		ID: "managedservice.installation-reader", Version: 1,
+		ContentDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}
+}
+
+func testServiceLinkedRoleAccess(
+	t *testing.T,
+	accountID string,
+	installationID string,
+	template iamv1.ServiceRoleTemplateReference,
+) iamv1.ServiceLinkedRoleAccess {
+	t.Helper()
+	createdAt := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
+	policyVersion := iamv1.PolicyVersionReference{
+		PolicyID:      "policy-managedservice-reader",
+		VersionID:     "version-managedservice-reader",
+		ContentDigest: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+	}
+	relation := iamv1.ServiceLinkedRole{
+		APIVersion: iamv1.APIVersion, Kind: "ServiceLinkedRole",
+		Role: iamv1.Role{
+			APIVersion: iamv1.APIVersion, Kind: "Role", ID: "role-managedservice-reader",
+			AccountID: iamv1.AccountID(accountID), Name: "ManagedServiceInstallationReader",
+			Description: "Managed service installation reader", Tags: []iamv1.RoleTag{},
+			Management: iamv1.RoleServiceLinked, Status: iamv1.RoleActive,
+			MaxSessionDurationSeconds: 900, ResourceVersion: 1,
+			CurrentTrustVersionID: "trust-managedservice-reader", CreatedAt: createdAt, UpdatedAt: createdAt,
+		},
+		Template: template,
+		ServicePrincipal: iamv1.ServicePrincipalReference{
+			InstallationID: "installation-platform", PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS,
+		},
+		PermissionCeiling: policyVersion,
+	}
+	binding := iamv1.WorkloadRoleBinding{
+		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleBinding", ID: "binding-managedservice-reader",
+		AccountID: relation.Role.AccountID, RoleID: relation.Role.ID, Template: template,
+		Workload: iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: installationID},
+		Status:   iamv1.WorkloadRoleBindingActive, ResourceVersion: 1, CreatedAt: createdAt, UpdatedAt: createdAt,
+	}
+	result := iamv1.ServiceLinkedRoleAccess{
+		APIVersion: iamv1.APIVersion, Kind: "ServiceLinkedRoleAccess", Relation: relation,
+		Bindings: []iamv1.WorkloadRoleBinding{binding},
+	}
+	if iamv1.ValidateServiceLinkedRoleAccess(result) != nil {
+		t.Fatal("test service-linked Role access is invalid")
+	}
+	return result
 }
 
 func testAuthorization() port.Authorization {
@@ -209,6 +510,7 @@ type memoryRepository struct {
 	installations map[string]managedservicev1.ServiceInstallation
 	installKeys   map[string]memoryReplay
 	events        []audit.Event
+	beginTenants  []string
 }
 
 type memoryReplay struct {
@@ -225,10 +527,11 @@ func newMemoryRepository() *memoryRepository {
 
 func (repository *memoryRepository) Begin(
 	_ context.Context,
-	_ string,
+	tenantID string,
 	_ TransactionMode,
 ) (Transaction, error) {
 	repository.mu.Lock()
+	repository.beginTenants = append(repository.beginTenants, tenantID)
 	return &memoryTransaction{
 		repository: repository,
 		quotas:     maps.Clone(repository.quotas), quotaKeys: maps.Clone(repository.quotaKeys),
