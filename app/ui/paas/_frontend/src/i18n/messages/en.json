@@ -4226,8 +4226,11 @@
     "protocol": "Protocol",
     "providerIssuer": "Identity-provider Issuer",
     "providerRedirectUri": "Sign-in Redirect URI",
-    "providerRedirectUriHint": "A preview of the HTTPS callback bound to this Account. The page never contacts it or starts sign-in.",
-    "providerPreviewBoundary": "MOCK · Stores only an Account, Issuer, and Redirect URI projection in this browser session. It connects to no external IdP, validates no assertion or token, and issues no sign-in session.",
+    "providerRedirectUriHint": "An OIDC-only local callback sample. The page never contacts it or starts sign-in, and it does not define a backend wire field.",
+    "providerProtocolConfiguration": "Protocol-specific configuration",
+    "providerSamlConfigurationPending": "SAML metadata, signing certificates, and ACS are protocol-specific. IAM-EXT has not fixed these fields, so this MOCK does not invent inputs for them.",
+    "providerSamlConfigurationState": "Awaiting the IAM-EXT SAML configuration contract",
+    "providerPreviewBoundary": "MOCK · Stores only Account, protocol, and Issuer projections in this browser session; OIDC also keeps one explicit callback sample. Protocol-specific SAML/OIDC configuration is not frozen into a backend wire. The page connects to no external IdP, validates no assertion or token, and issues no sign-in session.",
     "providerReviewTitle": "Review identity provider · {name}",
     "providerLinkedRoles": "Linked roles",
     "providerLinkedMappings": "Assertion mappings",
@@ -4241,12 +4244,12 @@
       "redirectUri": "Enter a valid HTTPS Redirect URI."
     },
     "roleSsoMappings": "Assertion mapping preview",
-    "roleSsoAssertionSubject": "Assertion subject value",
-    "roleSsoAssertionSubjectHint": "A local exact-match sample only. No real SAML assertion or OIDC token is accepted or verified, and no long-lived account is created.",
+    "roleSsoSubjectSample": "External subject sample (not a rule)",
+    "roleSsoSubjectSampleHint": "Only illustrates the candidate-role information flow. It is not a published exact-match rule or claim DSL, and the page accepts or verifies no real SAML assertion or OIDC token.",
     "roleSsoTargetRole": "Target role",
-    "roleSsoMappingPreviewBoundary": "MOCK · This is a local design sample of provider, assertion-subject, and role-trust configuration. It is not an IAM account or published backend resource and performs no directory sync, real sign-in, session issuance, or effective-access decision.",
+    "roleSsoMappingPreviewBoundary": "MOCK · This is a local information-flow sample across a provider, an external-subject sample, and role trust. It is not an IAM account, claim rule, or published backend resource and performs no directory sync, real sign-in, session issuance, or effective-access decision.",
     "roleSsoMappingReviewTitle": "Review assertion mapping · {name}",
-    "roleSsoMappingEnableReviewHint": "Enabling only saves a local mapping between an identity provider, an exact subject sample, and a target role. The caller still requires real assertion verification, role trust, and a separate role-assumption authorization check.",
+    "roleSsoMappingEnableReviewHint": "Enabling only saves a local design relationship among an identity provider, a subject sample, and a target role; it does not imply an exact-value backend mapping. The caller still requires real assertion verification, a closed mapping rule, role trust, and a separate role-assumption authorization check.",
     "roleSsoMappingDisableReviewHint": "On a real platform, disabling the mapping should normally stop new matches; existing sessions, role policies, and grants are not automatically revoked. This MOCK applies none of those effects.",
     "roleSsoMappingReviewBoundary": "Saving creates no IAM user or long-lived account, changes no target-role policy or permission boundary, accepts no assertion, issues no session, and makes no effective-access decision.",
     "roleSsoJourney": {
@@ -4264,7 +4267,7 @@
       "steps": {
         "provider": {
           "title": "Verify the enterprise identity provider",
-          "detail": "The current identity source is only a local Account, Issuer, and Redirect URI projection. Configuration alone is not a successful sign-in before real protocol validation."
+          "detail": "The current identity source is only a local Account, protocol, and Issuer projection; the OIDC callback is also just a sample. Configuration alone is not a successful sign-in before protocol-specific SAML/OIDC configuration and real validation exist."
         },
         "assertion": {
           "title": "Verify and parse the external assertion",
@@ -4272,7 +4275,7 @@
         },
         "mapping": {
           "title": "Build the set of selectable candidate roles",
-          "detail": "A mapping can only constrain a verified subject to an existing role. A real multi-role choice must come from the verified mapping set; the caller cannot type an arbitrary role."
+          "detail": "The subject sample only illustrates how a verified identity may produce candidate roles; it defines neither exact-value matching nor a claim DSL. A real multi-role choice must come from a closed backend mapping set, not an arbitrary caller-supplied role."
         },
         "trust": {
           "title": "Evaluate the Role TrustPolicy independently",
@@ -4291,7 +4294,7 @@
     "roleSsoMappingIssues": {
       "name": "Enter a valid name of no more than 64 characters.",
       "duplicate": "An assertion mapping with this name already exists.",
-      "assertionSubject": "Enter an assertion-subject sample of no more than 256 characters.",
+      "subjectSample": "Enter an external-subject sample of no more than 256 characters.",
       "providerId": "Choose an identity provider from the current MOCK account.",
       "roleId": "Choose a target role that trusts this identity provider."
     },
@@ -4304,7 +4307,7 @@
       "state": "MOCK · read-only projection",
       "boundary": "IAM-EXT-01/02 concept preview · Shows only stable IdentityProvider and ExternalIdentity relationships in the current Account. It contacts no IdP, validates no assertion or token, stores no secret, creates no mapping, and starts no sign-in.",
       "projectionTitle": "Account federation projection",
-      "projectionHint": "Provider, Issuer, Redirect URI, and Account are bound explicitly. An ExternalIdentity points only to an existing USER in the same Account.",
+      "projectionHint": "Provider, Issuer, and Account are bound explicitly while protocol-specific configuration remains unfrozen. An ExternalIdentity points only to an existing USER in the same Account.",
       "providerDirectory": "Account identity providers",
       "externalIdentityDirectory": "External identity mappings",
       "providerId": "Provider",
@@ -4314,6 +4317,8 @@
       "endpoints": "Federation endpoints",
       "issuer": "Issuer",
       "redirectUri": "Redirect URI",
+      "protocolConfiguration": "Protocol-specific configuration",
+      "samlConfigurationPending": "Unfrozen · awaiting IAM-EXT",
       "providerState": "Configuration state",
       "externalIdentity": "Opaque external identity",
       "targetUser": "Target USER",
@@ -4337,7 +4342,7 @@
       "notReady": "Not ready",
       "readiness": {
         "installation": { "title": "Installation sign-in entry point", "detail": "RP/Origin, callback addresses, realm resolution, and anti-enumeration behavior must be fixed; tenant input cannot redirect sign-in scope." },
-        "trust": { "title": "Protocol-validation lifecycle", "detail": "Issuer, Redirect URI, validation state, disablement, and fail-closed behavior require authoritative backend contracts; the page synthesizes no trusted result." },
+        "trust": { "title": "Protocol-validation lifecycle", "detail": "Issuer, SAML/OIDC-specific configuration, validation state, disablement, and fail-closed behavior require authoritative backend contracts. The page neither generalizes an OIDC callback into a SAML field nor synthesizes a trusted result." },
         "identity": { "title": "Unique external identity mapping", "detail": "Account-scoped uniqueness, disablement, and unlink semantics are required across IdentityProvider, ExternalIdentity, and an existing USER." },
         "recovery": { "title": "Emergency and recovery path", "detail": "A controlled recovery path is required before enablement. Recovery cannot bypass MFA, revive a disabled user, or restore revoked access." },
         "audit": { "title": "Session and audit evidence", "detail": "Sign-in, mapping, rejection, unlinking, and configuration changes need correlated authoritative audit evidence; the page never synthesizes success." }

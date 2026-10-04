@@ -81,7 +81,7 @@ export function AccessUserSso({ workspace }: { workspace: AccessWorkspace }) {
         <tbody>{providers.map((provider) => <tr key={provider.id}>
           <td data-label={t("providerId")}><strong>{provider.name}</strong><small><code>{provider.id}</code></small></td>
           <td data-label={t("accountProtocol")}><code>{provider.accountId}</code><small>{provider.protocol}</small></td>
-          <td data-label={t("endpoints")}><dl className={styles.federationEndpoints}><div><dt>{t("issuer")}</dt><dd><code>{provider.issuer}</code></dd></div><div><dt>{t("redirectUri")}</dt><dd><code>{provider.redirectUri}</code></dd></div></dl></td>
+          <td data-label={t("endpoints")}><dl className={styles.federationEndpoints}><div><dt>{t("issuer")}</dt><dd><code>{provider.issuer}</code></dd></div>{provider.protocol === "OIDC" ? <div><dt>{t("redirectUri")}</dt><dd><code>{provider.redirectUri}</code></dd></div> : <div><dt>{t("protocolConfiguration")}</dt><dd>{t("samlConfigurationPending")}</dd></div>}</dl></td>
           <td data-label={t("providerState")}><Badge status={provider.enabled ? "neutral" : "warning"}>{t(provider.enabled ? "projectionAvailable" : "newSessionBlocked")}</Badge></td>
         </tr>)}</tbody>
       </Table>

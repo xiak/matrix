@@ -264,7 +264,7 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
       accountId: workspace.accountId,
       name: mapping.name,
       kind: "roleSsoMapping",
-      principal: mapping.assertionSubject,
+      principal: mapping.subjectSample,
       roleId: mapping.roleId,
       roleName: role?.name ?? mapping.roleId,
       sourceId: mapping.providerId,

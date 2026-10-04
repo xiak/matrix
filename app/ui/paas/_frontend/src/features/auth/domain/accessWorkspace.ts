@@ -16,26 +16,43 @@ export type AccessPolicy = {
 export type PolicyTargets = { userIds: string[]; groupIds: string[]; roleIds: string[] };
 export type AccessGroup = { id: string; name: string; description: string; memberIds: string[]; policyIds: string[]; createdAt: string };
 export type AccessRole = {
+  // `provider` is a browser-preview discriminator, never an IAM PrincipalType wire value.
   id: string; name: string; description: string; principalType: "account" | "service" | "provider";
   principal: string; trustedUserIds: string[]; policyIds: string[]; boundaryPolicyId?: string;
   tags: { key: string; value: string }[]; sessionMinutes: number; consoleAccess: boolean; createdAt: string;
 };
 export type AccessRoleSession = { id: string; roleId: string; caller: RoleSessionCaller; createdAt: string; expiresAt: string; revokedAt?: string };
-export type IdentityProvider = {
+type IdentityProviderBase = {
   id: string; accountId: string; name: string; protocol: "SAML" | "OIDC";
-  issuer: string; redirectUri: string; enabled: boolean; createdAt: string;
+  issuer: string; enabled: boolean; createdAt: string;
 };
+/**
+ * Browser-memory provider projection. `redirectUri` is deliberately OIDC-only;
+ * neither branch defines the eventual SAML/OIDC backend configuration wire.
+ */
+export type IdentityProvider = IdentityProviderBase & (
+  | { protocol: "SAML" }
+  | { protocol: "OIDC"; redirectUri: string }
+);
+export type IdentityProviderConfigurationDraft = {
+  id?: string; name: string; issuer: string;
+} & (
+  | { protocol: "SAML" }
+  | { protocol: "OIDC"; redirectUri: string }
+);
 export type IdentityProviderConfigurationIssue = "name" | "duplicate" | "issuer" | "redirectUri";
 
 /** Local preview shape checks only; this does not verify an IdP, assertion, token or login. */
 export function identityProviderConfigurationIssue(
-  draft: Pick<IdentityProvider, "name" | "protocol" | "issuer" | "redirectUri"> & { id?: string },
+  draft: IdentityProviderConfigurationDraft,
   providers: readonly Pick<IdentityProvider, "id" | "name">[]
 ): IdentityProviderConfigurationIssue | null {
   if (!draft.name.trim() || draft.name.length > 64 || /[<>\u0000-\u001f]/.test(draft.name)) return "name";
   if (providers.some((entry) => entry.id !== draft.id && entry.name.toLowerCase() === draft.name.trim().toLowerCase())) return "duplicate";
   try { if (new URL(draft.issuer).protocol !== "https:") return "issuer"; } catch { return "issuer"; }
-  try { if (new URL(draft.redirectUri).protocol !== "https:") return "redirectUri"; } catch { return "redirectUri"; }
+  if (draft.protocol === "OIDC") {
+    try { if (new URL(draft.redirectUri).protocol !== "https:") return "redirectUri"; } catch { return "redirectUri"; }
+  }
   return null;
 }
 export type ExternalIdentityPreview = {
@@ -59,17 +76,17 @@ export function externalIdentityProjectionIssue(
   if (!Object.prototype.hasOwnProperty.call(workspace.userProfiles, identity.userId)) return "user";
   return null;
 }
-/** Browser-memory design sample only; this is not an IAM account or published backend resource. */
-export type RoleSsoMappingPreview = { id: string; name: string; assertionSubject: string; providerId: string; roleId: string; enabled: boolean; createdAt: string };
-export type RoleSsoMappingPreviewIssue = "name" | "duplicate" | "assertionSubject" | "providerId" | "roleId";
+/** Browser-memory design sample only; this is not an IAM account, claim DSL, or published backend resource. */
+export type RoleSsoMappingPreview = { id: string; name: string; subjectSample: string; providerId: string; roleId: string; enabled: boolean; createdAt: string };
+export type RoleSsoMappingPreviewIssue = "name" | "duplicate" | "subjectSample" | "providerId" | "roleId";
 
 export function roleSsoMappingPreviewIssue(
-  draft: Pick<RoleSsoMappingPreview, "name" | "assertionSubject" | "providerId" | "roleId"> & { id?: string },
+  draft: Pick<RoleSsoMappingPreview, "name" | "subjectSample" | "providerId" | "roleId"> & { id?: string },
   workspace: Pick<AccessWorkspace, "accountId" | "providers" | "roles" | "roleSsoMappings">
 ): RoleSsoMappingPreviewIssue | null {
   if (!draft.name.trim() || draft.name.length > 64 || /[<>\u0000-\u001f]/.test(draft.name)) return "name";
   if (workspace.roleSsoMappings.some((entry) => entry.id !== draft.id && entry.name.toLowerCase() === draft.name.trim().toLowerCase())) return "duplicate";
-  if (!draft.assertionSubject.trim() || draft.assertionSubject.length > 256) return "assertionSubject";
+  if (!draft.subjectSample.trim() || draft.subjectSample.length > 256) return "subjectSample";
   if (!workspace.providers.some((entry) => entry.id === draft.providerId && entry.accountId === workspace.accountId)) return "providerId";
   const role = workspace.roles.find((entry) => entry.id === draft.roleId);
   return role?.principalType === "provider" && role.principal === draft.providerId ? null : "roleId";
@@ -172,9 +189,9 @@ export type AccessWorkspaceCommand =
   | { kind: "create-role-session"; roleId: string; caller: RoleSessionCaller; sessionMinutes: number; sourceIp?: string }
   | { kind: "revoke-role-session"; id: string }
   | { kind: "delete-role"; id: string }
-  | { kind: "save-provider"; id?: string; name: string; protocol: IdentityProvider["protocol"]; issuer: string; redirectUri: string; enabled: boolean }
+  | ({ kind: "save-provider"; id?: string; name: string; issuer: string; enabled: boolean } & ({ protocol: "SAML" } | { protocol: "OIDC"; redirectUri: string }))
   | { kind: "delete-provider"; id: string }
-  | { kind: "save-role-sso-mapping-preview"; id?: string; name: string; assertionSubject: string; providerId: string; roleId: string; enabled: boolean }
+  | { kind: "save-role-sso-mapping-preview"; id?: string; name: string; subjectSample: string; providerId: string; roleId: string; enabled: boolean }
   | { kind: "delete-role-sso-mapping-preview"; id: string }
   | { kind: "create-key"; ownerId: string; ownerState: AccessKeyOwnerState; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string; responseMode: "success" | "response-lost" }
   | { kind: "inspect-key-creation"; ownerId: string; requestId: string; resultMode: "found" | "not-found" | "unavailable" }

@@ -606,7 +606,7 @@ describe("access workspace preview invariants", () => {
     const state = initialAccessWorkspace("org-xiak");
     expect(() => applyAccessWorkspaceCommand(state, { kind: "delete-provider", id: "idp-example" }, context)).toThrow("referenced");
     expect(() => applyAccessWorkspaceCommand(state, { kind: "delete-role", id: "role-audit" }, context)).toThrow("referenced");
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-role-sso-mapping-preview", name: "Wrong Trust", assertionSubject: "external", providerId: "idp-example", roleId: "role-pipeline", enabled: true }, context)).toThrow("invalid");
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-role-sso-mapping-preview", name: "Wrong Trust", subjectSample: "external", providerId: "idp-example", roleId: "role-pipeline", enabled: true }, context)).toThrow("invalid");
     const role = state.roles.find((entry) => entry.id === "role-pipeline")!;
     expect(() => applyAccessWorkspaceCommand(state, { kind: "update-role-settings", id: role.id, sessionMinutes: 60, consoleAccess: true }, context)).toThrow("invalid");
   });
@@ -616,6 +616,12 @@ describe("access workspace preview invariants", () => {
     expect(applyAccessWorkspaceCommand(state, command, context).providers.at(-1)).toMatchObject({ accountId: "org-xiak", protocol: "OIDC" });
     expect(() => applyAccessWorkspaceCommand(state, { ...command, issuer: "javascript:alert(1)" }, context)).toThrow("invalid");
     expect(() => applyAccessWorkspaceCommand(state, { ...command, redirectUri: "http://console.example.invalid/callback" }, context)).toThrow("invalid");
+  });
+  it("does not impose an OIDC redirect field on the SAML provider preview", () => {
+    const state = initialAccessWorkspace("org-xiak");
+    const next = applyAccessWorkspaceCommand(state, { kind: "save-provider", name: "SAML", protocol: "SAML", issuer: "https://id.example.invalid/saml", enabled: true }, context);
+    expect(next.providers.at(-1)).toMatchObject({ accountId: "org-xiak", protocol: "SAML" });
+    expect(next.providers.at(-1)).not.toHaveProperty("redirectUri");
   });
   it("fails closed when an external identity leaves the current account projection", () => {
     const state = initialAccessWorkspace("org-xiak");

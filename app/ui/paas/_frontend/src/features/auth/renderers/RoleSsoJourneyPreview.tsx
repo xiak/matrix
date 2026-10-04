@@ -6,7 +6,7 @@ import { Alert, Badge, Typography } from "@ui/xiak";
 import type { AccessRole, IdentityProvider, RoleSsoMappingPreview } from "../domain/accessWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
 
-type JourneyMapping = Pick<RoleSsoMappingPreview, "name" | "assertionSubject" | "enabled">;
+type JourneyMapping = Pick<RoleSsoMappingPreview, "name" | "subjectSample" | "enabled">;
 type JourneyStepKey = "provider" | "assertion" | "mapping" | "trust" | "permission" | "session";
 type JourneyStepState = "configuration" | "untrusted" | "candidate" | "disabled" | "notVerified" | "notIssued";
 

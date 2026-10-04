@@ -1588,11 +1588,11 @@ describe("CAM-style access workspace", () => {
   });
   it("shows provider names and IDs in trust review and retains a referenced-provider rejection", async () => {
     const { user, repository, extension } = await open("roles", { entityId: "role-audit", seed: async (extension) => {
-      await extension.execute("preview", { kind: "save-provider", name: "NextSSO", protocol: "SAML", issuer: "https://next.example.invalid/saml", redirectUri: "https://console.example.invalid/auth/federation/next", enabled: true });
+      await extension.execute("preview", { kind: "save-provider", name: "NextSSO", protocol: "SAML", issuer: "https://next.example.invalid/saml", enabled: true });
     } });
     const before = await extension.read("preview"), provider = before.providers.find((entry) => entry.name === "NextSSO")!;
     await user.click(await screen.findByRole("tab", { name: "信任关系" }));
-    expect(JSON.parse(screen.getByRole("region", { name: "仅 MOCK 的信任对象预览" }).textContent!)).toEqual({ mockOnly: true, principalType: "provider", principalId: "idp-example" });
+    expect(JSON.parse(screen.getByRole("region", { name: "仅 MOCK 的信任对象预览" }).textContent!)).toEqual({ mockOnly: true, principalType: "MOCK_IDENTITY_PROVIDER", principalId: "idp-example" });
     await user.click(screen.getByRole("button", { name: "修改信任关系" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     const workflow = screen.getByRole("group", { name: "修改信任关系" }), panel = within(workflow);
@@ -1601,7 +1601,7 @@ describe("CAM-style access workspace", () => {
     expect(panel.getByRole("article", { name: "变更前" }).textContent).toContain("EnterpriseSSO");
     expect(panel.getByRole("article", { name: "变更后" }).textContent).toContain(provider.id);
     await user.click(panel.getByText("查看完整信任文档对比"));
-    expect(JSON.parse(panel.getByRole("region", { name: "变更后 · 信任文档" }).textContent!)).toEqual({ mockOnly: true, principalType: "provider", principalId: provider.id });
+    expect(JSON.parse(panel.getByRole("region", { name: "变更后 · 信任文档" }).textContent!)).toEqual({ mockOnly: true, principalType: "MOCK_IDENTITY_PROVIDER", principalId: provider.id });
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     await user.click(panel.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(panel.getByRole("alert").textContent).toContain("仍被引用"));
@@ -3035,35 +3035,45 @@ describe("CAM-style access workspace", () => {
     await user.type(within(editor).getByLabelText("名称", { exact: true }), "PreviewIdp");
     await user.click(within(editor).getByRole("combobox", { name: "协议" }));
     await user.click(screen.getByRole("option", { name: protocol }));
-    expect(within(editor).getByText(/账号、Issuer 与 Redirect URI 投影/)).toBeTruthy();
+    expect(within(editor).getByText(/SAML\/OIDC 的协议专属配置尚未冻结成后端 wire/)).toBeTruthy();
     await user.type(within(editor).getByLabelText("身份提供商 Issuer"), "https://identity.example.invalid/test");
-    await user.type(within(editor).getByLabelText("登录 Redirect URI"), "http://console.example.invalid/callback");
-    await user.click(within(editor).getByRole("button", { name: "审阅配置" }));
-    await waitFor(() => expect(within(editor).getByRole("alert").textContent).toContain("HTTPS Redirect URI"));
-    expect(document.activeElement).toBe(within(editor).getByLabelText("登录 Redirect URI"));
-    expect(await extension.read("preview")).toEqual(before);
-    await user.clear(within(editor).getByLabelText("登录 Redirect URI"));
-    await user.type(within(editor).getByLabelText("登录 Redirect URI"), "https://console.example.invalid/auth/federation/callback");
+    if (protocol === "OIDC") {
+      await user.type(within(editor).getByLabelText("登录 Redirect URI"), "http://console.example.invalid/callback");
+      await user.click(within(editor).getByRole("button", { name: "审阅配置" }));
+      await waitFor(() => expect(within(editor).getByRole("alert").textContent).toContain("HTTPS Redirect URI"));
+      expect(document.activeElement).toBe(within(editor).getByLabelText("登录 Redirect URI"));
+      expect(await extension.read("preview")).toEqual(before);
+      await user.clear(within(editor).getByLabelText("登录 Redirect URI"));
+      await user.type(within(editor).getByLabelText("登录 Redirect URI"), "https://console.example.invalid/auth/federation/callback");
+    } else {
+      expect(within(editor).queryByLabelText("登录 Redirect URI")).toBeNull();
+      expect(within(editor).getByText(/SAML metadata、签名证书与 ACS/)).toBeTruthy();
+    }
     await user.click(within(editor).getByRole("button", { name: "审阅配置" }));
     expect(within(editor).getByRole("heading", { name: "审阅身份提供商 · PreviewIdp" })).toBe(document.activeElement);
     expect(within(editor).getByText("org-xiak")).toBeTruthy();
     expect(within(editor).getByText(/不会访问外部地址、验证签名、变更角色信任/)).toBeTruthy();
-    expect(within(editor).getByText("https://console.example.invalid/auth/federation/callback")).toBeTruthy();
+    if (protocol === "OIDC") expect(within(editor).getByText("https://console.example.invalid/auth/federation/callback")).toBeTruthy();
+    else expect(within(editor).getByText(/等待 IAM-EXT/)).toBeTruthy();
     expect(within(editor).queryByText(/JWKS|EntityDescriptor|客户端 Secret/)).toBeNull();
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
     await user.click(within(editor).getByRole("button", { name: "保存 MOCK 配置" }));
     await expectRetainedFailure(editor);
     expect(within(editor).getByText("PreviewIdp")).toBeTruthy();
     await user.click(within(editor).getByRole("button", { name: "返回编辑" }));
-    expect((within(editor).getByLabelText("登录 Redirect URI") as HTMLInputElement).value).toBe("https://console.example.invalid/auth/federation/callback");
+    if (protocol === "OIDC") expect((within(editor).getByLabelText("登录 Redirect URI") as HTMLInputElement).value).toBe("https://console.example.invalid/auth/federation/callback");
+    else expect(within(editor).queryByLabelText("登录 Redirect URI")).toBeNull();
     await user.click(within(editor).getByRole("button", { name: "审阅配置" }));
     await user.click(within(editor).getByRole("button", { name: "保存 MOCK 配置" }));
     await waitFor(() => expect(screen.queryByRole("group", { name: "审阅身份提供商 · PreviewIdp" })).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "新建身份提供商" }));
     const created = (await extension.read("preview")).providers.find((provider) => provider.name === "PreviewIdp")!;
-    expect(created).toMatchObject({ accountId: "org-xiak", protocol, redirectUri: "https://console.example.invalid/auth/federation/callback" });
+    expect(created).toMatchObject({ accountId: "org-xiak", protocol });
+    if (protocol === "OIDC") expect(created).toHaveProperty("redirectUri", "https://console.example.invalid/auth/federation/callback");
+    else expect(created).not.toHaveProperty("redirectUri");
     await user.click(screen.getByRole("button", { name: "PreviewIdp" }));
-    expect(screen.getByText("https://console.example.invalid/auth/federation/callback")).toBeTruthy();
+    if (protocol === "OIDC") expect(screen.getByText("https://console.example.invalid/auth/federation/callback")).toBeTruthy();
+    else expect(screen.getByText(/等待 IAM-EXT/)).toBeTruthy();
     expect(screen.queryByRole("region", { name: /metadata|JWKS|签名公钥/i })).toBeNull();
     await user.click(screen.getByRole("button", { name: "编辑" }));
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -3090,7 +3100,8 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "新建身份提供商" }));
     const editor = screen.getByRole("group", { name: "新建身份提供商" });
     await user.type(within(editor).getByLabelText("身份提供商 Issuer"), "https://saml.example.invalid/login");
-    await user.type(within(editor).getByLabelText("登录 Redirect URI"), "https://console.example.invalid/saml/callback");
+    expect(within(editor).queryByLabelText("登录 Redirect URI")).toBeNull();
+    expect(within(editor).getByText(/SAML metadata、签名证书与 ACS/)).toBeTruthy();
     await select(user, "协议", "OIDC");
     expect((within(editor).getByLabelText("身份提供商 Issuer") as HTMLInputElement).value).toBe("");
     expect((within(editor).getByLabelText("登录 Redirect URI") as HTMLInputElement).value).toBe("");
@@ -3098,7 +3109,7 @@ describe("CAM-style access workspace", () => {
     await user.type(within(editor).getByLabelText("登录 Redirect URI"), "https://console.example.invalid/oidc/callback");
     await select(user, "协议", "SAML");
     expect((within(editor).getByLabelText("身份提供商 Issuer") as HTMLInputElement).value).toBe("https://saml.example.invalid/login");
-    expect((within(editor).getByLabelText("登录 Redirect URI") as HTMLInputElement).value).toBe("https://console.example.invalid/saml/callback");
+    expect(within(editor).queryByLabelText("登录 Redirect URI")).toBeNull();
     await select(user, "协议", "OIDC");
     expect((within(editor).getByLabelText("身份提供商 Issuer") as HTMLInputElement).value).toBe("https://oidc.example.invalid");
     expect((within(editor).getByLabelText("登录 Redirect URI") as HTMLInputElement).value).toBe("https://console.example.invalid/oidc/callback");
@@ -3113,10 +3124,10 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     const editor = screen.getByRole("group", { name: "新建映射规则预览" });
     expect(within(editor).getByRole("heading", { name: "新建映射规则预览" })).toBe(document.activeElement);
-    expect(within(editor).getByText(/不是 IAM 账号或已发布后端资源/)).toBeTruthy();
+    expect(within(editor).getByText(/不是 IAM 账号、claim 规则或已发布后端资源/)).toBeTruthy();
     const mappingName = within(editor).getByLabelText("名称", { exact: true });
     await user.type(mappingName, "AuditAssertionRule");
-    await user.type(within(editor).getByLabelText("断言主体值"), "preview@example.invalid");
+    await user.type(within(editor).getByLabelText("外部主体样例（非规则）"), "preview@example.invalid");
     await select(user, "身份提供商", "EnterpriseSSO");
     await select(user, "目标角色", "ExternalAuditRole");
     await user.click(within(editor).getByRole("button", { name: "审阅配置" }));
@@ -3837,7 +3848,7 @@ describe("CAM-style access workspace", () => {
     expect(providers.textContent).toContain("EnterpriseSSO");
     expect(providers.textContent).toContain("org-xiak");
     expect(providers.textContent).toContain("https://identity.example.invalid/saml");
-    expect(providers.textContent).toContain("https://console.example.invalid/auth/federation/callback");
+    expect(providers.textContent).toContain("未冻结 · 等待 IAM-EXT");
     expect(identities.textContent).toContain("external-subject:auditor-01");
     expect(identities.textContent).toContain("principal-chen");
     expect(screen.getByText("账号级身份提供商")).toBeTruthy();

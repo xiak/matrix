@@ -23,7 +23,11 @@ export function validateRoleTrust(workspace: AccessWorkspace, trust: RoleTrust, 
   }
 }
 export function roleTrustPreview(role: RoleTrust) {
-  if (role.principalType !== "account") return { mockOnly: true, principalType: role.principalType, principalId: role.principal };
+  if (role.principalType !== "account") return {
+    mockOnly: true,
+    principalType: role.principalType === "provider" ? "MOCK_IDENTITY_PROVIDER" : role.principalType,
+    principalId: role.principal
+  };
   return {
     languageVersion: "1",
     statements: [{ sid: "trusted-users", effect: "ALLOW", principals: role.trustedUserIds.map((id) => ({ type: "USER", id })) }]
