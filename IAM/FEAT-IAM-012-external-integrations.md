@@ -1,6 +1,6 @@
 # FEAT-IAM-012：外部身份、通知与组织治理
 
-- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。installation已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像；首条联系人验证、SMTP/Maildir实收、MFA安全通知和同profile生命周期累计进入`64/34/3+r11`签名组合，并由`ed2835db`完整独立CI确认。该首地址/渠道切片已验收；S1c已有地址替换的独立命令、目的限定StepUp、原子切换和双向告警生产实现，当前组合为`65/35/3+r12`，本地contract/race、PG18空白安装、准确前序保留数据、独立多进程及双地址真实Postfix门禁已通过，固定生产实现的独立CI也已完成；后继门禁提交的独立CI、签名同profile生命周期和UI浏览器验收尚未完成，因此S1c仍为Implementing。其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
+- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。installation已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像；首条联系人验证、SMTP/Maildir实收、MFA安全通知和同profile生命周期累计进入`64/34/3+r11`签名组合，并由`ed2835db`完整独立CI确认。该首地址/渠道切片已验收；S1c已有地址替换的独立命令、目的限定StepUp、原子切换和双向告警生产实现，当前组合为`65/35/3+r12`，本地contract/race、PG18空白安装、准确前序保留数据、独立多进程及双地址真实Postfix门禁已通过，固定生产实现与后继门禁提交的独立CI也已完成；签名同profile生命周期和UI浏览器验收尚未完成，因此S1c仍为Implementing。其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
 - Owner：IAM负责S1的地址验证、目的限定通知意图/投递和重试；installation负责受保护SMTP及必要私有材料配置，UX/UI负责本人交互。其他外部来源与计费保持各自业务边界。
 - S1a不等于完整S1或其他外部能力已实现；缺少前置时不提供假入口或伪成功。
 
@@ -225,6 +225,8 @@ IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`�
 固定生产实现`2487b6586697d10089c31adaee37c4a4603055d4`的[Verification37161461635](https://github.com/xiak/matrix/actions/runs/37161461635)已由GitHub API核实精确SHA；go、node-process及13条authority分片共15项全部completed/success。`authority-recovery-window`实际跨越三个生产十分钟认证窗口并正常完成，不以改数据库时钟或缩短产品窗口取得通过。
 
 后继固定门禁`20632441a0e014f175f3111d55a887db76027bc7`在本任务独立PG18及两个独立本地Maildir实跑`TestIAMNotificationContactPostgres`118.66秒。生产HTTP、目的限定StepUp和受限dispatcher先把首地址验证码及安全通知投递到`previous@matrix.test`，再把替换验证码投递到`current@matrix.test`；确认前旧地址仍为版本1权威联系人，确认后原子推进为新地址版本2。随后停用USER，已提交的`CONTACT_REPLACED_PREVIOUS`和`CONTACT_REPLACED_CURRENT`仍分别到达原、新邮箱；替换验证码与两条告警共三条通知均保存一次`DATA 250/ACCEPTED`，告警不含验证码，四条联系人事实逐项通过原历史proof及伪造拒绝。相同最终源码另以`GOMAXPROCS=2`完成全仓`go test -race -p 2 -count=1 ./...`和`go vet ./...`，默认外部夹具SKIP不冒充上述真实PG/SMTP证据。Postfix夹具固定Debian13基底、2CPU/768MiB/Pids128、独立任务标签及loopback随机端口；队列清空后只删除本任务容器、镜像和四个临时数据库，保留既有PG容器供后续门禁。该证据不声称公网最终送达、用户已读、任意SMTP供应商或尚未执行的签名生命周期/UI验收。
+
+2026-10-04由GitHub API核实固定`20632441a0e014f175f3111d55a887db76027bc7`的[Verification 37170446801](https://github.com/xiak/matrix/actions/runs/37170446801)精确SHA；Go、node-process、十二项串行authority门禁及最终authority-process汇总共15项全部completed/success。恢复码耗尽门禁保留生产参数并实际跨三个OTP时间窗运行22分43秒；意外SKIP检测、真实storage/runtime、容量、StepUp、因子替换/移除及恢复窗口均未以短测替代。该CI证明固定后继门禁保留全仓回归，不替代仍待执行的`65/35/3+r12`签名同profile生命周期或真实浏览器/IAM/SMTP联合验收。
 
 ## 其他延期能力的架构预留
 
