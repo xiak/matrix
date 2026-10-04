@@ -6,8 +6,8 @@
 - Updated: 2026-10-04
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `0835f3b1c`
-- Pushed documentation milestone: `f34a20faf`
+- Pushed source/embed milestone: `aecdaac1c`
+- Pushed documentation milestone: `bb45f0de0`
 
 ## Authoritative route
 
@@ -27,22 +27,20 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`; login
-verification remains disabled for UX review. Source/embed `0835f3b1c` makes the
-service-authorization responsibility model stable shared context for both the
-isolated MOCK and strict LIVE read directory. Before either account-relation or
-platform-template data loads, the page distinguishes product-team definition
-and PEP enforcement, IAM validation/trusted publication, and tenant directory
-consumption/product-resource consent. It exposes no publisher, consent,
-revocation or repository-write command.
+verification remains disabled for UX review. Source/embed `aecdaac1c` gives the
+isolated MOCK and strict LIVE administrator RoleSession directories one shared,
+stable source guide before dynamic data. It separates `USER` from
+`SERVICE_ACCOUNT`, distinguishes session source from Role permission source,
+and keeps lifecycle observation separate from product PEP authorization. The
+guide issues no request or command and invents no session row or credential.
 
-Desktop renders the responsibility model in three columns and `390 × 844`
-uses one column; both have no Dialog, horizontal overflow or browser
-warning/error. Full acceptance at this milestone: 62 frontend files / 1,061
-tests, three static-normalization tests, typecheck, lint, architecture, 228
-theme-contrast pairs, 45-route production export, 43 normalized paths,
-249-file embed equality, repository `go test -p 2 ./...` and
-`go vet -p 2 ./...`. Documentation milestone `f34a20faf` records the exact
-semantics and exclusions in the owning FEATs.
+Desktop renders the guide in two columns and `390 × 844` uses one column; both
+have no Dialog, horizontal overflow or browser warning/error. Full acceptance
+at this milestone: 62 frontend files / 1,061 tests, three static-normalization
+tests, typecheck, lint, architecture, 228 theme-contrast pairs, 45-route
+production export, 43 normalized paths, 249-file embed equality, repository
+`go test -p 2 ./...` and `go vet -p 2 ./...`. Documentation milestone
+`bb45f0de0` records the exact semantics and exclusions in the owning FEATs.
 
 ## Continuation boundary
 
