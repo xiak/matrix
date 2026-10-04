@@ -103,6 +103,8 @@ SMTP目标、发件地址与认证材料只来自受保护部署配置的后续�
 
 替换确认继续使用原验证资源的`GET /v1/auth/notification-contact/verifications/{verificationId}`和`POST .../{verificationId}:confirm`，但验证投影显式返回`purpose=FIRST_ADDRESS|REPLACEMENT`及`expectedResourceVersion`；客户端不得根据联系人当前存在与否猜测用途。确认只接受原LOGIN_SESSION、验证码和新请求ID，不再次接受邮箱、StepUp或版本selector。查询只观察原命令及其非秘密完成，不更新期限、预算、当前地址或证明资格。
 
+客户端安全状态同样属于这个封闭契约：`VERIFIED`可与`pendingVerificationId`同时出现，此时邮箱、验证时间和版本仍是旧的当前权威，不得根据pending ID猜测候选地址、新建替换或伪造取消。StepUp本人证明与后续建立邮箱验证意图是两个不同的提交阶段；后者失败不得倒退为密码/TOTP错误或再提交秘密。写请求的单个401也不证明会话已撤销：只读bearer探针成功才能把它分类为本人证明被拒绝，探针明确401才结束当前会话，探针不可用或结果不确定必须保留原证明未知并只查询原命令。一旦原确认响应或后续查询证明替换已完成，即使重读当前联系人失败也不得再确认；只能重读权威投影并在成功后清理客户端意图。
+
 #### 锁、事务与状态变化
 
 建立替换意图按现有稳定锁序锁定Account、USER、Session、TOTP因子、StepUp、当前联系人及该USER验证槽；确认按同一主体顺序锁定验证槽和当前联系人，再锁定原通知意图所需行。不得先锁联系人后升级到主体锁，也不得用事务外预查决定是否需要MFA。建立后的验证意图封存Account/USER、发起Session、credential generation、factor revision、当前contact revision、候选邮箱、绝对期限和原StepUp消费；任一权威事实变化都使确认失败关闭且不返还预算。
@@ -123,7 +125,7 @@ SMTP目标、发件地址与认证材料只来自受保护部署配置的后续�
 
 这是未发布产品的下一前向schema，不维护所有开发快照。生产实现只保留空白安装和准确上一固定`64/34/3+r11`组合到新组合的保留数据门禁；更老开发schema通过已验证固定前驱先归并，不为每个历史数字保留运行兼容层。若新增IAM函数/约束和Audit动作，分别推进实际IAM/Audit schema及完整`contractRevision`，不能只改HTTP版本或继续声称`r11`。安装profile、签名A/B和真实UI由其原owner在固定实现后消费，不能继承本设计文字的验收状态。
 
-最低门禁必须覆盖：首地址与替换接口互不降级；密码/TOTP/StepUp/Session/credential/factor/contact任一错配；同验证码及双替换并发；回包丢失后原命令查询；旧/新地址真实SMTP实收；替换前后安全事件收件修订；已提交旧通知重试不改收件人；改密、退出、因子替换/移除、USER/Account停用交错；错误版本、跨Account/USER、RoleSession、AccessKey和ServiceIdentity拒绝；事实、联系人、双通知任一失败全回滚；重启、上一固定schema保留数据、备份恢复隔离、受限数据库角色、readiness及签名同profile生命周期。纯mock、只测邮件模板或只见任务入队都不能验收S1c。
+最低门禁必须覆盖：首地址与替换接口互不降级；密码/TOTP/StepUp/Session/credential/factor/contact任一错配；同验证码及双替换并发；回包丢失后原命令查询；`VERIFIED+pendingVerificationId`的旧权威及禁止猜测；StepUp明确429、写401且bearer探针不可用、证明成功后发码503/429均不重提交本人证明；确认已完成但联系人重读失败只重读权威投影；旧/新地址真实SMTP实收；替换前后安全事件收件修订；已提交旧通知重试不改收件人；改密、退出、因子替换/移除、USER/Account停用交错；错误版本、跨Account/USER、RoleSession、AccessKey和ServiceIdentity拒绝；事实、联系人、双通知任一失败全回滚；重启、上一固定schema保留数据、备份恢复隔离、受限数据库角色、readiness及签名同profile生命周期。纯mock、只测邮件模板或只见任务入队都不能验收S1c。
 
 009的S2c基础契约为首次ENROLLMENT增加两个独立严格请求：`StartChallengeNotificationContactVerificationRequest`只含email/requestId/challengeCredential，`ConfirmChallengeNotificationContactVerificationRequest`只含code/requestId/challengeCredential。它们不是原Session请求的可选旁路；普通请求继续拒绝challengeCredential，新请求拒绝password/credential/Session及身份、配置、通道selector。首期仅允许锁内证明NEVER_BOUND且原强制改密已完成的当前ENROLLMENT挑战；RECOVERY或未知历史不能取得这个能力。验证意图/共享预算/真实投递仍归本节，不新增联系人模型或通用邮件入口。该片只冻结数据/编码，未注册对应HTTP或数据库入口；既有运行时仍只支持完整LOGIN_SESSION本人验证。
 
