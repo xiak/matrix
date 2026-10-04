@@ -3936,7 +3936,22 @@
     "liveSessions": "角色会话",
     "liveSessionsUnavailable": "当前身份不能读取角色会话",
     "liveSessionsUnavailableHint": "角色详情可见不代表拥有会话目录权限；IAM 不会据此推断会话记录。",
-    "liveSessionDirectoryHint": "这里只管理当前角色的非秘密会话记录，并明确区分来源用户与服务账号。生命周期是 IAM 在页面读取时观测到的未撤销、已到期或已撤销状态，不代表会话当前仍有业务权限；自助承担角色在账号菜单的“角色访问”中完成。",
+    "liveSessionDirectoryHint": "这里只管理当前角色的非秘密会话记录。自助承担角色在账号菜单的“角色访问”中完成；管理员目录不会创建会话，也不会把读取结果解释为当前业务权限。",
+    "sourceGuide": {
+      "title": "会话来源与权限边界",
+      "hint": "来源说明谁申请了短期身份，不是角色的权限来源。两种来源都只使用目标角色自己的信任、策略和权限边界。",
+      "USER": {
+        "title": "人员用户",
+        "description": "当前账号中的用户从“角色访问”发起承担；除角色信任外，调用用户仍须被单独授予 iam.role.assume。",
+        "evidence": "目录只显示稳定的用户 ID、登录名与显示名称。"
+      },
+      "SERVICE_ACCOUNT": {
+        "title": "服务账号",
+        "description": "受信云产品通过服务授权链路，以准确 installationId、principalId 与 purpose 申请短期会话；它不是租户用户或长期凭据。",
+        "evidence": "目录不补查凭据、来源登录链路、资源绑定或授权代际。"
+      },
+      "boundary": "UNREVOKED、EXPIRED 或 REVOKED 只表示 IAM 读取时的会话生命周期；产品 PEP 仍须针对每次业务请求重新鉴权。"
+    },
     "exactSourceUserSearch": "输入完整来源用户 ID",
     "exactSourceServiceSearch": "输入完整服务主体 ID",
     "exactQueryKind": "精确查询字段",

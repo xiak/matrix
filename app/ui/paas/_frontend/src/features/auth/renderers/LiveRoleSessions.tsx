@@ -7,6 +7,7 @@ import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
 import type { RoleCapability, RoleSessionDirectory, RoleSessionFilter, RoleSessionFilterLifecycle, RoleSessionListing, RoleSessionSource } from "../domain/roles";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
+import { RoleSessionSourceGuide } from "./RoleSessionSourceGuide";
 import styles from "./AccountAccessRenderer.module.css";
 
 const exactIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -134,6 +135,7 @@ export function LiveRoleSessions({ client, roleId, listCapability, revokeIntent,
   return <div className={styles.stack} ref={directoryRegion} aria-busy={pending || loadingMore}>
     <div className={styles.actionHeader}><h3 ref={heading} tabIndex={-1}>{t("liveSessions")}</h3><Badge status="success">LIVE</Badge></div>
     <Alert>{t("liveSessionDirectoryHint")}</Alert>
+    <RoleSessionSourceGuide />
     {ownedRevokeIntent?.phase === "unknown" ? <div className={styles.stack}><Alert status="warning">{t("pendingUnknownRevoke", { id: ownedRevokeIntent.item.session.id })}</Alert><div className={styles.actions}><Button size="small" variant="secondary" onClick={() => { returnFocus.current = ownedRevokeIntent.item.session.id; onRevokeIntentChange(ownedRevokeIntent.requestId, { ...ownedRevokeIntent, open: true }); }}>{t("resumeUnknownRevoke")}</Button></div></div> : null}
     <TableToolbar labels={toolbarLabels} search={{ label: t(queryKind === "session" ? "exactSessionSearch" : queryKind === "sourceUser" ? "exactSourceUserSearch" : "exactSourceServiceSearch"), value: query, onChange: (value) => { setQuery(value); resetDirectoryQuery(); } }}
       filters={[

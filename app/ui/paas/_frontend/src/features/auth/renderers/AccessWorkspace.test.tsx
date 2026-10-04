@@ -1651,6 +1651,10 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("button", { name: "创建体验会话" })).toBeNull();
     expect(screen.queryByText("模拟访问")).toBeNull();
     expect(screen.getByText("管理员 MOCK 目录", { exact: false })).toBeTruthy();
+    const sourceGuide = screen.getByRole("region", { name: "会话来源与权限边界" });
+    expect(within(sourceGuide).getByText("人员用户")).toBeTruthy();
+    expect(within(sourceGuide).getByText("服务账号")).toBeTruthy();
+    expect(within(sourceGuide).queryByRole("button")).toBeNull();
     expect(screen.getByRole("table", { name: "临时会话" }).textContent).toContain(activeSessionId);
     expect(screen.getByRole("table", { name: "临时会话" }).textContent).not.toContain(revokedSessionId);
     await select(user, "会话生命周期", "全部历史");

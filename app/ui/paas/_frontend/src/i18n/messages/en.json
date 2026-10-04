@@ -3936,7 +3936,22 @@
     "liveSessions": "Role sessions",
     "liveSessionsUnavailable": "This identity cannot read role sessions",
     "liveSessionsUnavailableHint": "Access to role details does not imply session-directory authority. IAM does not infer session records from it.",
-    "liveSessionDirectoryHint": "This directory manages non-secret records for this role only and distinguishes source users from service accounts. Lifecycle is IAM's observation at read time—unrevoked, expired or revoked—not proof of current business authority. Members assume roles from Role access in the account menu.",
+    "liveSessionDirectoryHint": "This directory manages non-secret records for this role only. Members assume roles from Role access in the account menu; the administrator directory creates no session and never treats a read result as current business authority.",
+    "sourceGuide": {
+      "title": "Session sources and permission boundary",
+      "hint": "A source identifies who requested the temporary identity; it is not the role's permission source. Both source types use only the target role's own trust, policies, and permission boundary.",
+      "USER": {
+        "title": "Human user",
+        "description": "A user in the current account assumes from Role access. In addition to role trust, the calling user still needs a separate iam.role.assume grant.",
+        "evidence": "The directory exposes only stable user ID, login name, and display name facts."
+      },
+      "SERVICE_ACCOUNT": {
+        "title": "Service account",
+        "description": "A trusted cloud product requests a short-lived session through service authorization with exact installationId, principalId, and purpose. It is neither a tenant user nor a long-lived credential.",
+        "evidence": "The directory does not resolve credentials, source login lineage, resource bindings, or authorization generations."
+      },
+      "boundary": "UNREVOKED, EXPIRED, or REVOKED is only the session lifecycle observed by IAM at read time. The product PEP still re-authorizes every business request."
+    },
     "exactSourceUserSearch": "Enter the complete source user ID",
     "exactSourceServiceSearch": "Enter the complete service principal ID",
     "exactQueryKind": "Exact query field",

@@ -465,6 +465,12 @@ describe("AccountLiveRoles", () => {
     render(<LocaleProvider><RolesHarness api={client({ listSessions })} entityId={role.id} /></LocaleProvider>);
 
     await user.click(await screen.findByRole("tab", { name: "角色会话" }));
+    const sourceGuide = screen.getByRole("region", { name: "会话来源与权限边界" });
+    expect(within(sourceGuide).getByText("人员用户")).toBeTruthy();
+    expect(within(sourceGuide).getByText("服务账号")).toBeTruthy();
+    expect(within(sourceGuide).getByText(/不是租户用户或长期凭据/)).toBeTruthy();
+    expect(within(sourceGuide).getByText(/产品 PEP 仍须针对每次业务请求重新鉴权/)).toBeTruthy();
+    expect(within(sourceGuide).queryByRole("button")).toBeNull();
     const initial = await screen.findByRole("table", { name: "角色会话" });
     expect(initial.textContent).toContain("service-paas-runtime");
     expect(initial.textContent).toContain("installation-paas-primary");

@@ -9,6 +9,7 @@ import type { AccessRole, AccessRoleSession, AccessWorkspace } from "../domain/a
 import { roleSessionStatus } from "../domain/roleTrust";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
+import { RoleSessionSourceGuide } from "./RoleSessionSourceGuide";
 import styles from "./AccountAccessRenderer.module.css";
 
 type LifecycleFilter = "unrevoked" | "expired" | "revoked" | "all";
@@ -72,6 +73,7 @@ export function RoleSessions({ role, workspace, scene }: { role: AccessRole; wor
   return <div className={styles.stack} ref={directory}>
     <div className={styles.actionHeader}><h3>{t("sessions")}</h3><Badge status="neutral">MOCK</Badge></div>
     <Alert status="info">{t("sessionDirectoryHint")}</Alert>
+    <RoleSessionSourceGuide />
     <TableToolbar labels={toolbarLabels} search={{ label: t("exactSessionSearch"), value: sessionId, onChange: (value) => { setSessionId(value); setPage(1); } }} filters={[
       { id: "source-user", label: t("sourceUserFilter"), value: sourceUserId, onChange: (value) => { setSourceUserId(value); setPage(1); }, options: [{ value: "all", label: w("all") }, ...scene.users.map((user) => ({ value: user.id, label: `${user.loginName} · ${user.id}` }))] },
       { id: "lifecycle", label: t("lifecycleFilter"), value: lifecycle, defaultValue: "unrevoked", onChange: (value) => { setLifecycle(value as LifecycleFilter); setPage(1); }, options: (["unrevoked", "expired", "revoked", "all"] as const).map((value) => ({ value, label: t(`lifecycle.${value}`) })) }
