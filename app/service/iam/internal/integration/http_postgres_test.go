@@ -3382,10 +3382,11 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 	if err != nil || after.ResourceVersion != contact.ResourceVersion || after.Email != contact.Email {
 		t.Fatal("restart changed contact", err)
 	}
-	assertContactProof := func(account iamv1.AccountID, user iamv1.PrincipalID) {
+	assertContactProof := func(t *testing.T, account iamv1.AccountID, user iamv1.PrincipalID, expected int) {
 		t.Helper()
 		rows, err := database.Query(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1
-		 AND event_document#>>'{actor,id}'=$2 AND event_document->>'action' IN ('iam.notification-contact.verification-started','iam.notification-contact.verified')`, account, user)
+		 AND event_document#>>'{actor,id}'=$2 AND event_document->>'action' IN
+		 ('iam.notification-contact.verification-started','iam.notification-contact.verified','iam.notification-contact.replaced')`, account, user)
 		if err != nil {
 			t.Fatal("read committed contact facts")
 		}
@@ -3400,8 +3401,8 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 			events = append(events, event)
 		}
 		rows.Close()
-		if rows.Err() != nil || len(events) != 2 {
-			t.Fatal("contact has no exact pair of committed facts")
+		if rows.Err() != nil || len(events) != expected {
+			t.Fatal("contact has an unexpected committed fact set", len(events), expected)
 		}
 		for _, event := range events {
 			proof, err := restarted.ResolveAuditProducer(ctx, iamHTTPSecret(t, iamProducerCredential), iamv1.ResolveAuditProducerRequest{Event: event})
@@ -3416,7 +3417,7 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 			}
 		}
 	}
-	assertContactProof(contact.AccountID, contact.UserID)
+	assertContactProof(t, contact.AccountID, contact.UserID, 2)
 	t.Run("verified_contact_replacement_is_step_up_bound_and_atomic", func(t *testing.T) {
 		initialPassword := iamHTTPSecret(t, "Contact-Replace-Initial-483!")
 		currentPassword := iamHTTPSecret(t, "Contact-Replace-Current-792!")
@@ -3598,8 +3599,10 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 		otherBytes, _ := iamv1.EncodeStartNotificationContactReplacementRequest(otherIntent)
 		call(1, http.MethodPost, path+"/replacements", session.Credential, otherBytes, http.StatusForbidden, nil)
 	})
-	t.Run("real_postfix_http_contact_and_historical_notice", func(t *testing.T) {
-		channel, receive := iamNotificationPostfix(t, mail.Scope)
+	t.Run("real_postfix_http_contact_replacement_and_historical_notices", func(t *testing.T) {
+		channel, receive := iamNotificationPostfixForRecipients(t, mail.Scope)
+		const previousAddress = "previous@matrix.test"
+		const currentAddress = "current@matrix.test"
 		initialPassword := iamHTTPSecret(t, "Mail-Initial-User-Password-472!")
 		currentPassword := iamHTTPSecret(t, "Mail-Current-User-Password-739!")
 		user, err := first.CreateUser(ctx, login.Credential, iamv1.CreateUserRequest{LoginName: "mail-delivery", DisplayName: "Mail delivery gate", InitialPassword: initialPassword, RequestID: "mail-delivery-create"})
@@ -3617,13 +3620,16 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 		defer server.Close()
 		httpClient := server.Client()
 		httpClient.Timeout = 10 * time.Second
+		wireCredential := userLogin.Credential
 		wireCall := func(method, route string, body []byte, status int, result any) {
 			t.Helper()
 			request, err := http.NewRequestWithContext(ctx, method, server.URL+route, bytes.NewReader(body))
 			if err != nil {
 				t.Fatal(err)
 			}
-			request.Header.Set("Authorization", "Bearer "+string(userLogin.Credential.CopyBytes()))
+			credential := wireCredential.CopyBytes()
+			defer clear(credential)
+			request.Header.Set("Authorization", "Bearer "+string(credential))
 			if body != nil {
 				request.Header.Set("Content-Type", "application/json")
 			}
@@ -3641,7 +3647,7 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 				t.Fatal("invalid notification HTTP projection")
 			}
 		}
-		requestBytes, err := iamv1.EncodeStartNotificationContactVerificationRequest(iamv1.StartNotificationContactVerificationRequest{Email: "receiver@matrix.test", Password: currentPassword, RequestID: "mail-delivery-verify"})
+		requestBytes, err := iamv1.EncodeStartNotificationContactVerificationRequest(iamv1.StartNotificationContactVerificationRequest{Email: previousAddress, Password: currentPassword, RequestID: "mail-delivery-verify"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -3670,7 +3676,7 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 		}
 		// The confirmation code comes ONLY from the real delivered Maildir, not
 		// from an IAM row, decryption fixture, fake contact or injected digest.
-		body, verificationMessageID := receive(notificationID)
+		body, verificationMessageID := receive(notificationID, previousAddress)
 		match := regexp.MustCompile(`(?m)^Verification code: ([0-9]{8})\r?$`).FindSubmatch(body)
 		if len(match) != 2 {
 			t.Fatal("real verification mail has no exact code")
@@ -3689,9 +3695,104 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 		}
 		var verified iamv1.NotificationContact
 		wireCall(http.MethodGet, path, nil, 200, &verified)
-		if verified.State != "VERIFIED" || verified.Email != "receiver@matrix.test" || verified.ResourceVersion != 1 {
+		if verified.State != "VERIFIED" || verified.Email != previousAddress || verified.ResourceVersion != 1 {
 			t.Fatal("unexpected verified contact")
 		}
+		// Prove the first-address notice through the original mailbox before the
+		// same USER starts the replacement ceremony.
+		stopDelivery = startDelivery()
+		if err := database.QueryRow(ctx, "SELECT id FROM iam.security_notifications WHERE tenant_id=$1 AND verification_id=$2 AND kind='CONTACT_VERIFIED'", verification.AccountID, verification.ID).Scan(&notificationID); err != nil {
+			t.Fatal(err)
+		}
+		body, noticeMessageID := receive(notificationID, previousAddress)
+		if noticeMessageID == verificationMessageID || bytes.Contains(body, receivedCode.CopyBytes()) || bytes.Contains(body, []byte("Verification code:")) {
+			t.Fatal("historical notice reused verification material")
+		}
+		clear(body)
+		awaitSubmission(notificationID)
+		stopDelivery()
+
+		enrollment, err := first.StartTOTPEnrollment(ctx, userLogin.Credential, iamv1.StartTOTPEnrollmentRequest{
+			RequestID: "mail-delivery-factor", Password: currentPassword, ExpectedFactorRevision: 1})
+		if err != nil || enrollment.Provisioning == nil {
+			t.Fatal("prepare mail replacement factor", err)
+		}
+		codeAt := func(advance int64) iamv1.Secret {
+			t.Helper()
+			var step int64
+			if err := database.QueryRow(ctx, "SELECT floor(extract(epoch FROM clock_timestamp())/30)::bigint").Scan(&step); err != nil {
+				t.Fatal(err)
+			}
+			material := enrollment.Provisioning.Seed.CopyBytes()
+			defer clear(material)
+			code, err := hotp.GenerateCode(string(material), uint64(step+advance))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return iamHTTPSecret(t, code)
+		}
+		if _, err := first.ConfirmTOTPEnrollment(ctx, userLogin.Credential, enrollment.Enrollment.ID,
+			iamv1.ConfirmTOTPEnrollmentRequest{RequestID: "mail-delivery-factor-confirm", Code: codeAt(-1)}); err != nil {
+			t.Fatal("bind mail replacement factor", err)
+		}
+		challenge, err := first.Login(ctx, iamv1.LoginRequest{LoginName: user.LoginName + "@" + string(user.AccountID), Password: currentPassword,
+			RequestID: "mail-delivery-replacement-login"})
+		if err != nil || challenge.Challenge == nil || challenge.Challenge.NextStep != "TOTP" {
+			t.Fatal("mail replacement login did not require TOTP", err)
+		}
+		session, err := first.VerifyAuthenticationChallenge(ctx, challenge.Challenge.ID, iamv1.VerifyAuthenticationChallengeRequest{
+			RequestID: "mail-delivery-replacement-verify", ChallengeCredential: challenge.ChallengeCredential, Code: codeAt(0)})
+		if err != nil || !session.Credential.Present() {
+			t.Fatal("mail replacement MFA login failed", err)
+		}
+		intent := iamv1.NotificationContactReplacementIntent{ExpectedResourceVersion: 1, Email: currentAddress}
+		proof, err := first.StartStepUp(ctx, session.Credential, iamv1.StartStepUpRequest{RequestID: "mail-delivery-replacement-intent",
+			Operation: iamv1.StepUpReplaceNotificationContact, ExpectedFactorRevision: 2, NotificationContact: &intent})
+		if err != nil {
+			t.Fatal("start real-mail replacement proof", err)
+		}
+		proof, err = second.VerifyStepUp(ctx, session.Credential, proof.ID, iamv1.VerifyStepUpRequest{
+			RequestID: "mail-delivery-replacement-proof", Password: currentPassword, Code: codeAt(1)})
+		if err != nil || proof.State != "PROVED" {
+			t.Fatal("prove real-mail replacement intent", err)
+		}
+		wireCredential = session.Credential
+		replacementBytes, err := iamv1.EncodeStartNotificationContactReplacementRequest(iamv1.StartNotificationContactReplacementRequest{
+			StepUpID: proof.ID, ExpectedResourceVersion: 1, Email: currentAddress, RequestID: "mail-delivery-replacement-intent"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var replacement iamv1.NotificationContactVerification
+		wireCall(http.MethodPost, path+"/replacements", replacementBytes, http.StatusOK, &replacement)
+		wireCall(http.MethodGet, path, nil, http.StatusOK, &verified)
+		if verified.Email != previousAddress || verified.ResourceVersion != 1 || verified.PendingVerificationID != replacement.ID {
+			t.Fatal("unconfirmed real-mail replacement changed the old contact")
+		}
+		if err := database.QueryRow(ctx, "SELECT notification_id FROM iam.notification_contact_verifications WHERE tenant_id=$1 AND id=$2", replacement.AccountID, replacement.ID).Scan(&notificationID); err != nil {
+			t.Fatal(err)
+		}
+		stopDelivery = startDelivery()
+		body, replacementMessageID := receive(notificationID, currentAddress)
+		match = regexp.MustCompile(`(?m)^Verification code: ([0-9]{8})\r?$`).FindSubmatch(body)
+		if len(match) != 2 {
+			t.Fatal("real replacement mail has no exact code")
+		}
+		replacementCode := iamHTTPSecret(t, string(match[1]))
+		clear(body)
+		awaitSubmission(notificationID)
+		stopDelivery()
+		confirmationBytes, err = iamv1.EncodeConfirmNotificationContactVerificationRequest(iamv1.ConfirmNotificationContactVerificationRequest{
+			Code: replacementCode, RequestID: "mail-delivery-replacement-confirm"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wireCall(http.MethodPost, path+"/verifications/"+replacement.ID+":confirm", confirmationBytes, http.StatusOK, &replacement)
+		var replaced iamv1.NotificationContact
+		wireCall(http.MethodGet, path, nil, http.StatusOK, &replaced)
+		if replacement.State != "VERIFIED" || replaced.Email != currentAddress || replaced.ResourceVersion != 2 || replaced.PendingVerificationID != "" {
+			t.Fatal("real-mail replacement did not atomically advance contact")
+		}
+
 		current, err := first.GetUser(ctx, login.Credential, user.ID, "mail-delivery-current-user")
 		if err != nil {
 			t.Fatal(err)
@@ -3700,25 +3801,34 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 		wireCall(http.MethodGet, path, nil, 401, nil)
-		// Current authentication is closed, but the committed historical security
-		// notice must still go to its original recipient without old code material.
+		// Current authentication is now closed, but both committed replacement
+		// notices must still go to their exact historical recipients.
 		stopDelivery = startDelivery()
-		if err := database.QueryRow(ctx, "SELECT id FROM iam.security_notifications WHERE tenant_id=$1 AND verification_id=$2 AND kind='CONTACT_VERIFIED'", verification.AccountID, verification.ID).Scan(&notificationID); err != nil {
+		var previousNoticeID, currentNoticeID string
+		if err := database.QueryRow(ctx, "SELECT id FROM iam.security_notifications WHERE tenant_id=$1 AND verification_id=$2 AND kind='CONTACT_REPLACED_PREVIOUS'", replacement.AccountID, replacement.ID).Scan(&previousNoticeID); err != nil {
 			t.Fatal(err)
 		}
-		body, noticeMessageID := receive(notificationID)
-		if noticeMessageID == verificationMessageID || bytes.Contains(body, receivedCode.CopyBytes()) || bytes.Contains(body, []byte("Verification code:")) {
-			t.Fatal("historical notice reused verification material")
+		if err := database.QueryRow(ctx, "SELECT id FROM iam.security_notifications WHERE tenant_id=$1 AND verification_id=$2 AND kind='CONTACT_REPLACED_CURRENT'", replacement.AccountID, replacement.ID).Scan(&currentNoticeID); err != nil {
+			t.Fatal(err)
 		}
-		clear(body)
-		awaitSubmission(notificationID)
+		previousBody, previousNoticeMessageID := receive(previousNoticeID, previousAddress)
+		currentBody, currentNoticeMessageID := receive(currentNoticeID, currentAddress)
+		if previousNoticeMessageID == currentNoticeMessageID || previousNoticeMessageID == replacementMessageID || currentNoticeMessageID == replacementMessageID ||
+			bytes.Contains(previousBody, replacementCode.CopyBytes()) || bytes.Contains(currentBody, replacementCode.CopyBytes()) ||
+			bytes.Contains(previousBody, []byte("Verification code:")) || bytes.Contains(currentBody, []byte("Verification code:")) {
+			t.Fatal("replacement notice reused verification material or recipient identity")
+		}
+		clear(previousBody)
+		clear(currentBody)
+		awaitSubmission(previousNoticeID)
+		awaitSubmission(currentNoticeID)
 		stopDelivery()
 		var accepted int
-		if err := database.QueryRow(ctx, "SELECT count(*) FROM iam.security_notifications WHERE tenant_id=$1 AND verification_id=$2 AND state='ACCEPTED' AND attempts=1 AND last_outcome='ACCEPTED' AND last_smtp_code=250", verification.AccountID, verification.ID).Scan(&accepted); err != nil || accepted != 2 {
-			t.Fatal("actual worker did not persist both exact submission observations", err)
+		if err := database.QueryRow(ctx, "SELECT count(*) FROM iam.security_notifications WHERE tenant_id=$1 AND verification_id=$2 AND state='ACCEPTED' AND attempts=1 AND last_outcome='ACCEPTED' AND last_smtp_code=250", replacement.AccountID, replacement.ID).Scan(&accepted); err != nil || accepted != 3 {
+			t.Fatal("actual worker did not persist replacement verification and both exact notice submissions", err)
 		}
-		assertContactProof(user.AccountID, user.ID)
-		t.Log("real HTTP + independent restricted notification executable + authenticated STARTTLS Postfix: mailbox code consumed once; historical security notice received after USER disable/restart")
+		assertContactProof(t, user.AccountID, user.ID, 4)
+		t.Log("actual previous mailbox -> current mailbox possession -> atomic contact switch -> both exact historical replacement notices; all four DATA250 observations persisted without authentication secrets")
 	})
 	newMailUser := func(name string, administrator iamv1.Secret) (iamv1.User, iamv1.LoginResponse, iamv1.Secret) {
 		t.Helper()
@@ -4023,6 +4133,14 @@ func iamNotificationStorageCode(t *testing.T, ctx context.Context, database *pgx
 // This reader observes a real Maildir; it cannot write IAM state or deliver mail.
 func iamNotificationPostfix(t *testing.T, scope iamv1.SecurityMailInstallationScope) (iamv1.SecurityMailSMTPChannel, func(string) ([]byte, string)) {
 	t.Helper()
+	channel, receive := iamNotificationPostfixForRecipients(t, scope)
+	return channel, func(reference string) ([]byte, string) {
+		return receive(reference, "receiver@matrix.test")
+	}
+}
+
+func iamNotificationPostfixForRecipients(t *testing.T, scope iamv1.SecurityMailInstallationScope) (iamv1.SecurityMailSMTPChannel, func(string, string) ([]byte, string)) {
+	t.Helper()
 	container, task := os.Getenv("MATRIX_IAM_SMTP_POSTFIX_CONTAINER"), os.Getenv("MATRIX_IAM_SMTP_POSTFIX_TASK")
 	if container == "" && task == "" {
 		t.Skip("dedicated Postfix is absent; storage success is not notification delivery")
@@ -4080,17 +4198,27 @@ func iamNotificationPostfix(t *testing.T, scope iamv1.SecurityMailInstallationSc
 	channel := iamv1.SecurityMailSMTPChannel{APIVersion: iamv1.APIVersion, Kind: "SecurityMailSMTPChannel", Purpose: iamv1.SecurityMailSubmissionPurpose, Scope: scope,
 		Host: "127.0.0.1", Port: uint16(port), TLSMode: iamv1.SecurityMailSTARTTLS, Username: "smtp-user@matrix.test", Password: iamHTTPSecret(t, "smtp-test-password"),
 		From: "sender@matrix.test", TrustedCAPEM: string(certificate)}
-	receive := func(reference string) ([]byte, string) {
+	receive := func(reference, recipient string) ([]byte, string) {
 		t.Helper()
+		mailbox, ok := map[string]string{
+			"receiver@matrix.test": "receiver",
+			"previous@matrix.test": "previous",
+			"current@matrix.test":  "current",
+		}[recipient]
+		if !ok {
+			t.Fatal("unexpected synthetic mailbox recipient")
+		}
+		maildir := "/home/" + mailbox + "/Maildir"
+		mailPath := regexp.MustCompile(`^` + regexp.QuoteMeta(maildir) + `/(new|cur)/[a-zA-Z0-9_.,:=+-]+$`)
 		referenceLine := regexp.MustCompile(`(?m)^Notification reference: ` + regexp.QuoteMeta(reference) + `\r?$`)
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
-			files := strings.Fields(string(localDocker("exec", container, "find", "/home/receiver/Maildir/new", "/home/receiver/Maildir/cur", "-maxdepth", "1", "-type", "f", "-print")))
+			files := strings.Fields(string(localDocker("exec", container, "find", maildir+"/new", maildir+"/cur", "-maxdepth", "1", "-type", "f", "-print")))
 			if len(files) > 100 {
 				t.Fatal("synthetic mailbox bound exceeded")
 			}
 			for _, path := range files {
-				if !regexp.MustCompile(`^/home/receiver/Maildir/(new|cur)/[a-zA-Z0-9_.,:=+-]+$`).MatchString(path) {
+				if !mailPath.MatchString(path) {
 					t.Fatal("unexpected fixture mailbox path")
 				}
 			}
@@ -4130,7 +4258,7 @@ func iamNotificationPostfix(t *testing.T, scope iamv1.SecurityMailInstallationSc
 					clear(encoded)
 					continue
 				}
-				if message.Header.Get("To") != "receiver@matrix.test" || message.Header.Get("From") != "sender@matrix.test" || message.Header.Get("Received") == "" || message.Header.Get("Message-ID") == "" {
+				if message.Header.Get("To") != recipient || message.Header.Get("From") != "sender@matrix.test" || message.Header.Get("Received") == "" || message.Header.Get("Message-ID") == "" {
 					t.Fatal("actual recipient or submission identity differs")
 				}
 				clear(body)
