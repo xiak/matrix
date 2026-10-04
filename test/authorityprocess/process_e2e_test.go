@@ -65,6 +65,7 @@ const (
 	notificationBrowserProcessDSN = "MATRIX_IAM_NOTIFICATION_CONSOLE_BROWSER_POSTGRES_TEST_DSN"
 	notificationBrowserArchiveSHA = "de33d98cd0ffdb770ac1df8bde8f9e098d2b9ba701aded15e06464c311214d67"
 	notificationBrowserClassicID  = "sha256:aedd64ed08af884f23637c6abb029b73647dbfdf27c785be5aa1371f49cbb7da"
+	notificationBrowserOCIImageID = "sha256:ad2f4e51ff69bb251c6079047a4cff13edef14b9938ae6a2f5a355f54da00504"
 
 	iamAPILogin            = "matrix_authority_process_iam_api"
 	iamWorkerLogin         = "matrix_authority_process_iam_worker"
@@ -4343,8 +4344,8 @@ func notificationBrowserSMTP(t *testing.T, bootstrap iamv1.BootstrapDocument) (i
 	if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(container) || !regexp.MustCompile(`^iam012-smtp-[a-f0-9]{32}$`).MatchString(task) {
 		t.Fatal("notification browser requires its own fixed Postfix container and iam012 task identity")
 	}
-	if !regexp.MustCompile(`^sha256:[a-f0-9]{64}$`).MatchString(runtimeImage) {
-		t.Fatal("notification browser requires the immutable runtime image ID captured after loading the fixed archive")
+	if runtimeImage != notificationBrowserClassicID && runtimeImage != notificationBrowserOCIImageID {
+		t.Fatal("notification browser runtime image is not an identity fixed from the Phase3 archive")
 	}
 	verifyNotificationBrowserArchive(t, archive)
 	docker := func(arguments ...string) []byte {
