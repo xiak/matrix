@@ -1726,6 +1726,8 @@ then mount placeholders only inside that region. The focused shell suite passes 
 cases; the complete frontend gate passes 62 files/1,082 cases, three normalization
 cases, type/lint/architecture/228-pair style gates, 45-route export, 43 normalized
 paths and 249-file embed equality. The synchronized Go UI host passes test and vet.
+Repository-wide `go test -p 2 ./...` and `go vet -p 2 ./...` also pass against the
+same synchronized assets.
 
 | Gate | Evidence |
 | --- | --- |

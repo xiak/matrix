@@ -40,7 +40,7 @@ place, including the separate inspectable MOCK.
 Acceptance at this milestone: focused shell 82 tests; complete frontend 62 files /
 1,082 tests; three static-normalization tests; typecheck, lint, architecture and
 228 theme-contrast pairs; 45-route production export, 43 normalized paths and
-249-file embed equality; synchronized Go UI-host test/vet. Documentation head
+249-file embed equality; synchronized repository-wide Go test/vet. Documentation head
 `fc784e86a` records the current shared gate; exact IAM semantics and remaining
 real IAM/SMTP browser acceptance remain in the IAM owner.
 
