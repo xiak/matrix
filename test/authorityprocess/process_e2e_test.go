@@ -63,9 +63,9 @@ import (
 const (
 	authorityProcessDSN           = "MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN"
 	notificationBrowserProcessDSN = "MATRIX_IAM_NOTIFICATION_CONSOLE_BROWSER_POSTGRES_TEST_DSN"
-	notificationBrowserArchiveSHA = "de33d98cd0ffdb770ac1df8bde8f9e098d2b9ba701aded15e06464c311214d67"
-	notificationBrowserClassicID  = "sha256:aedd64ed08af884f23637c6abb029b73647dbfdf27c785be5aa1371f49cbb7da"
-	notificationBrowserOCIImageID = "sha256:ad2f4e51ff69bb251c6079047a4cff13edef14b9938ae6a2f5a355f54da00504"
+	notificationBrowserArchiveSHA = "ff014e8466236e0332aeccee3220c7c3865947f7e478419e38d2a0623d135d9c"
+	notificationBrowserClassicID  = "sha256:088f89b0669093b39e7c9dc1245ccf48bd160b74e0ae24edc4be1ee627e1f440"
+	notificationBrowserOCIImageID = "sha256:e1fb26aaf0d252a36575654008fa7fffc0945772facb417cb56052b7dc789f81"
 
 	iamAPILogin            = "matrix_authority_process_iam_api"
 	iamWorkerLogin         = "matrix_authority_process_iam_worker"
