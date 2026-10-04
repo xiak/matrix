@@ -127,13 +127,13 @@ DEV 体验把空闲策略作为独立于 MFA、角色承担时长与应用后台
 
 角色 SSO 的 IdP/Role 信任与用户 SSO 的 Account 登录配置是两条不同旅程。腾讯云公开说明角色 SSO 使用身份提供商与 Role，用户 SSO 则把企业身份映射到已有子用户；启用后会改变子用户的控制台登录路径。其 [角色 IdP](https://cloud.tencent.com/document/product/598/30290)、[用户 SAML](https://cloud.tencent.com/document/product/598/61674) 和 [用户 OIDC](https://cloud.tencent.com/document/product/598/93431) 配置分属不同页面。我们不复用角色提供商 ID 作为用户 SSO 前置条件，也不因为用户 SSO 配置推断 Role 信任或资源授权。
 
-角色 SSO 当前只保留身份提供商配置与 `RoleSsoMappingPreview` 的隔离浏览器内存样例。映射样例描述 provider、断言主体值与目标 Role 的设计关系，但不是 Account、User、外部主体目录记录或已发布后端资源；它不能同步目录、接受或验证真实断言、证明登录、创建 RoleSession 或参与有效权限判定。没有固定 IAM 来源前，页面不建立 HTTP、持久对象或成功承担路径；后端给出固定、已推送且明确可消费的 IdP/Role trust 契约后，再原位替换该预览，而不是保留兼容别名或并行模型。
+角色 SSO 当前只保留身份提供商配置与 `RoleSsoMappingPreview` 的隔离浏览器内存样例。映射样例描述 provider、外部主体样例与目标 Role 的设计关系；外部主体只用于解释未来映射输入，不是精确 claim 规则、候选角色 DSL、Account、User、外部主体目录记录或已发布后端资源。它不能同步目录、接受或验证真实断言、证明登录、创建 RoleSession 或参与有效权限判定。没有固定 IAM 来源前，页面不建立 HTTP、持久对象或成功承担路径；后端给出固定、已推送且明确可消费的 IdP/Role trust 契约后，再原位替换该预览，而不是保留兼容别名或并行模型。
 
 隔离样例按 IAM 工程师为 IAM-EXT-03 给出的目标语义显示六段安全边界：验证企业 IdP、把外部断言视为不可信输入并完成签名/时效/重放校验、由已验证映射形成可选角色集合、独立检查目标 Role 的 `TrustPolicy`、独立检查调用方的承担角色权限，最后才由 STS 签发有界 `RoleSession` 并保留原 Provider 和 opaque 外部身份供审计。Role Trust 与承担权限是两道独立门禁，任一道不成立都不能签发会话。该顺序只用于提前验证公有云 UX 和操作者心智模型；前端不为这些阶段新增状态机、命令、仓储、请求号或成功状态，也不从现有 provider、映射和 Role 样例推断真实断言已经通过校验。
 
-用户 SSO 页继续保持只读，但不再用“未配置”掩盖已有的稳定投影。隔离 `AccessWorkspace` 只展示同一 Account 中的 `IdentityProvider`、Issuer、Redirect URI，以及 opaque `ExternalIdentity` 到既有 `USER` 的映射；Account 是只读归属事实，不是可切换目标。跨 Account、未知 Provider、空或控制字符主体、未知 USER 均失败关闭且不进入可用投影。Provider 停用只表示依赖它的新 `Session` 签发必须失败，不宣称既有 Session 已撤销，也不改变该 USER 的直接策略或用户组授权。页面不会把外部目录组转换为 Matrix Group/Policy，也不会把用户 SSO 与 Role 的 `TrustPolicy`、角色选择或 `RoleSession` 合并。
+用户 SSO 页继续保持只读，但不再用“未配置”掩盖已有的稳定投影。隔离 `AccessWorkspace` 只展示同一 Account 中 `IdentityProvider` 的协议、Issuer 与状态；仅 OIDC 样例附带 Redirect URI，SAML 的 metadata、证书与 ACS 以及 OIDC 的 discovery/JWKS、client 与回调登记均保持未冻结。页面另展示 opaque `ExternalIdentity` 到既有 `USER` 的映射；Account 是只读归属事实，不是可切换目标。跨 Account、未知 Provider、空或控制字符主体、未知 USER 均失败关闭且不进入可用投影。Provider 停用只表示依赖它的新 `Session` 签发必须失败，不宣称既有 Session 已撤销，也不改变该 USER 的直接策略或用户组授权。页面不会把外部目录组转换为 Matrix Group/Policy，也不会把用户 SSO 与 Role 的 `TrustPolicy`、角色选择或 `RoleSession` 合并。
 
-页面只用协议作为分类，不把 SAML XML、证书、公钥、OIDC discovery/JWKS、client secret、私钥或 claim DSL 预先塑造成后端字段。另以安装登录入口、协议验证生命周期、外部主体唯一映射、应急恢复、审计与 Session 五项就绪条件约束后续实现。用户 SSO 页没有输入、按钮、Dialog、成功态或浏览器跳转，不提供 IdP 增删改启停、秘密上传、测试连接、USER 绑定/解绑或登录/登出。上述能力必须等待 IAM owner 固定真实领域、wire、安全与运行时契约后原位接入，不能从概念页反推后端字段或可用状态。
+页面只用协议作为分类，不把 SAML XML、证书、公钥、OIDC discovery/JWKS、client secret、私钥、回调登记或 claim DSL 预先塑造成共同后端字段。浏览器内的 `principalType: "provider"` 及只读 JSON 中的 `MOCK_IDENTITY_PROVIDER` 只是显式预览判别值，绝不写入当前只接受 `USER`／`SERVICE_ACCOUNT` 的后端 PrincipalType。另以安装登录入口、协议验证生命周期、外部主体唯一映射、应急恢复、审计与 Session 五项就绪条件约束后续实现。用户 SSO 页没有输入、按钮、Dialog、成功态或浏览器跳转，不提供 IdP 增删改启停、秘密上传、测试连接、USER 绑定/解绑或登录/登出。上述能力必须等待 IAM owner 固定真实领域、wire、安全与运行时契约后原位接入，不能从概念页反推后端字段或可用状态。
 
 安全总览把“建议结论”和“证据覆盖”作为两个独立维度。建议结论是需复核、已配置、状态未知或不适用；证据覆盖是已观测、覆盖不完整、未观测或不适用。未观测不等于没有活动，分页目录不完整时也不能把已加载用户的结论外推到整个 Account。页面和导出的 MOCK 报告都必须保留该差异，不能制造风险分、在线状态、来源位置、AccessKey 最近使用时间或其他未被权威数据支持的事实。
 
@@ -515,17 +515,17 @@ LIVE 仍固定为 `LIVE · NOT_CONNECTED`，但接入边界不再只给空状态
 - 公共目录组件允许在同一内容边界切换列表与工作流；公共响应式命令焦点句柄在桌面返回主操作、小屏返回可见的“页面操作”入口，避免聚焦被 CSS 隐藏的桌面按钮。进入工作流聚焦标题，失败保留输入，返回、取消和完成恢复稳定触发器。
 - `AccessWorkspace` 130 条行为用例、完整前端 42 个测试文件 646 条用例及三条静态归一化用例通过。类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。
 - 真实 DEV 在 `539 × 866` 验证两类新建工作流；身份提供商与映射预览均在内容区呈现，Dialog 数为零，document/body 均满足 `clientWidth == scrollWidth == 539`。返回目录后小屏焦点位于可见的“页面操作”按钮，最终控制台 warning/error 为空。该证据只接受显式 MOCK UX，不声明真实 SSO 目录、写入、密钥轮换或外部协议联调已接入。
-- 当前 replacement-first 投影删除了角色 SSO Provider 中预先发明的 Audience、SAML XML、OIDC JWKS、客户端 ID、公钥与本地协议材料解析器。Provider 只保留 Account、协议分类、HTTPS Issuer、HTTPS Redirect URI、状态和创建时间；协议切换仍隔离两份 Issuer/Redirect URI 草稿。编辑与详情显示同一 MOCK 边界：只保存当前浏览器会话，不连接外部 IdP、不验证签名、断言或 Token，也不签发登录会话。IAM Owner 尚未发布可消费的外部 IdP wire，因此此片没有添加 HTTP、秘密字段承诺或 LIVE 可用声明。
-- 2026-10-02 的 replacement-first 修正固定在已推送的 [`ccd7918fc`](https://github.com/xiak/matrix/commit/ccd7918fc)。领域、命令、隔离仓库、角色会话投影、访问分析和双语页面共同删除 `FederatedAccount`、`workspace.federations` 及 `save/delete-federation`，替换为明确 browser-memory 的 `RoleSsoMappingPreview`；样例只保存名称、断言主体值、provider、目标 Role、状态与创建时间。角色承担求值不再接受外部映射调用方，映射预览不能生成体验 RoleSession 或形成允许结论。身份提供商与映射目录在列表、详情和编辑层均显示同一 MOCK 边界；小屏主操作仍由公共页面菜单承载，编辑继续替换内容区而非打开 Dialog。IAM Owner 确认该命名与 FEAT-IAM-012 当前目标不冲突，同时再次确认尚无固定 external IdP/Role trust wire。定向 311 条 IAM 用例、完整 57 文件/941 条前端用例、三条静态归一化、类型/lint/架构/228 组主题对比、42 路由导出、233 文件嵌入等价与全仓 Go test/vet 通过；桌面及 `390 × 844` DEV 均无横向溢出或 Dialog，手机页面操作菜单可达，控制台 warning/error 为空。
+- 当前 replacement-first 投影删除了角色 SSO Provider 中预先发明的 Audience、SAML XML、OIDC JWKS、客户端 ID、公钥与本地协议材料解析器。Provider 的共同投影只保留 Account、协议分类、HTTPS Issuer、状态和创建时间；OIDC 单独保留一个明确标注为协议样例的 HTTPS Redirect URI，SAML 不共享该字段而显示协议配置待 IAM-EXT 冻结。编辑与详情显示同一 MOCK 边界：只保存当前浏览器会话，不连接外部 IdP、不验证签名、断言或 Token，也不签发登录会话。IAM Owner 尚未发布可消费的外部 IdP wire，因此此片没有添加 HTTP、秘密字段承诺或 LIVE 可用声明。
+- 2026-10-04 的 replacement-first 当前实现固定在已推送的 [`f90219f54`](https://github.com/xiak/matrix/commit/f90219f5430e016d71d6eb3dba4ddaf860949eca)。领域、命令、隔离仓库、角色会话投影、访问分析和双语页面没有 `FederatedAccount`、`workspace.federations` 或 `save/delete-federation`，只保留明确 browser-memory 的 `RoleSsoMappingPreview`；样例只保存名称、非规则的外部主体样例、provider、目标 Role、状态与创建时间。浏览器内部的 `provider` 判别值不会伪装成后端 PrincipalType，导出的预览 JSON 明示 `MOCK_IDENTITY_PROVIDER`。角色承担求值不接受外部映射调用方，映射预览不能生成体验 RoleSession 或形成允许结论。身份提供商与映射目录在列表、详情和编辑层均显示同一 MOCK 边界；小屏主操作仍由公共页面菜单承载，编辑继续替换内容区而非打开 Dialog。IAM Owner 再次确认尚无固定 external IdP/Role trust wire、共同 Redirect URI 或 claim 映射 DSL。定向 338 条 IAM 用例、完整 62 文件/1061 条前端用例、三条静态归一化、类型/lint/架构/228 组主题对比、45 路由导出、249 文件嵌入等价与全仓 Go test/vet 通过；桌面及 `390 × 844` DEV 均无横向溢出或 Dialog，手机页面操作菜单可达，控制台 warning/error 为空。
 
 ### 用户 SSO 隔离体验的开发验收证据
 
 2026-10-04，当前用户 SSO 概念边界、双语文案与同步嵌入资源固定在已推送的 [`9bb0527f5`](https://github.com/xiak/matrix/commit/9bb0527f5)。
 
 - 页面以 Account-scoped Provider → opaque `ExternalIdentity` → 同 Account 既有 `USER` → 新交互式 `Session` 的顺序解释身份链路，并把直接／用户组策略的授权计算明确放在登录之后；同页对照角色 SSO 的 IdP 断言 → 候选 Role → `TrustPolicy` 与承担权限双门禁 → `RoleSession`，防止把两套对象和会话混为一体。
-- 用户 SSO 页以两张只读响应式表格展示 Provider 与 ExternalIdentity 投影。稳定种子明确显示 Account、Issuer、Redirect URI、opaque subject 与目标 USER；跨账号、未知 Provider、非法主体或未知 USER 失败关闭并从可用投影排除。Provider 启用不等于登录、信任或授权成功，停用只阻断依赖它的新 Session 签发，不声称撤销既有 Session。
+- 用户 SSO 页以两张只读响应式表格展示 Provider 与 ExternalIdentity 投影。稳定种子明确显示 Account、协议、Issuer、状态、opaque subject 与目标 USER；OIDC 才显示回调样例，SAML 显示“协议专属配置待冻结”，不会借用 OIDC Redirect URI。跨账号、未知 Provider、非法主体或未知 USER 失败关闭并从可用投影排除。Provider 启用不等于登录、信任或授权成功，停用只阻断依赖它的新 Session 签发，不声称撤销既有 Session。
 - 页面已经删除预先发明的用户 SSO 草稿、材料编辑器、格式解析和保存命令；没有输入、按钮、Dialog、提交成功态、provider 操作、主体绑定或登录跳转，也没有新增 repository、HTTP wire、SQL 或登录运行时。此片不声明 IAM-EXT-01/02 已实现，不证明外部 IdP、协议材料、主体映射或 Session 可用。
-- 当前完整前端 62 文件／1060 条用例与三条静态归一化用例、类型、lint、架构、228 组主题对比、45 路由生产导出、249 文件嵌入等价及全仓 Go test/vet 均通过。真实 DEV 在桌面和 `390 × 844` 验证两张只读表格、四段用户登录链路与六段角色 SSO 链路；手机 document/body/viewport 均为 390px，端点在单元格内换行，无 Dialog、横向溢出或浏览器 warning/error。
+- 当前完整前端 62 文件／1061 条用例与三条静态归一化用例、类型、lint、架构、228 组主题对比、45 路由生产导出、249 文件嵌入等价及全仓 Go test/vet 均通过。真实 DEV 在桌面和 `390 × 844` 验证两张只读表格、四段用户登录链路与六段角色 SSO 链路；手机 document/body/viewport 均为 390px，端点在单元格内换行，无 Dialog、横向溢出或浏览器 warning/error。
 
 角色断言映射的审阅与详情复用同一个只读“角色 SSO 登录链路”组件，按 IdP 校验、断言校验、候选角色映射、Role TrustPolicy、调用方承担权限和 STS RoleSession 六段解释 IAM-EXT-03 目标语义。组件只读取现有本地 provider、映射和 Role 样例来标注“配置样例／验证前不可信／候选映射／待真实校验／未签发”，没有新增后端资源、状态、命令、repository、HTTP wire、requestId 或有效权限结论。该证据仍不接受真实 IdP 发现、断言验证、Role 选择、STS 签发或会话审计。
 
