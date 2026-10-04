@@ -6,9 +6,9 @@
 - Updated: 2026-10-04
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed branch head: `fc784e86a`
+- Pushed branch head: `5d30a0324`
 - Pushed source/embed milestone: `ba7e57a9a`
-- Pushed documentation milestone: `fc784e86a`
+- Pushed documentation milestone: `5d30a0324`
 
 ## Authoritative route
 
@@ -41,7 +41,7 @@ Acceptance at this milestone: focused shell 82 tests; complete frontend 62 files
 1,082 tests; three static-normalization tests; typecheck, lint, architecture and
 228 theme-contrast pairs; 45-route production export, 43 normalized paths and
 249-file embed equality; synchronized repository-wide Go test/vet. Documentation head
-`fc784e86a` records the current shared gate; exact IAM semantics and remaining
+`5d30a0324` records the current shared gate; exact IAM semantics and remaining
 real IAM/SMTP browser acceptance remain in the IAM owner.
 
 ## Continuation boundary
