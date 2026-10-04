@@ -1727,7 +1727,9 @@ cases; the complete frontend gate passes 62 files/1,082 cases, three normalizati
 cases, type/lint/architecture/228-pair style gates, 45-route export, 43 normalized
 paths and 249-file embed equality. The synchronized Go UI host passes test and vet.
 Repository-wide `go test -p 2 ./...` and `go vet -p 2 ./...` also pass against the
-same synchronized assets.
+same synchronized assets. The maintained `127.0.0.1:4317` preview returned HTTP 200
+for 25 canonical root, shared-service, service-subroute and IAM routes after the
+asset sync, so the inspectable MOCK entry remains intact.
 
 | Gate | Evidence |
 | --- | --- |

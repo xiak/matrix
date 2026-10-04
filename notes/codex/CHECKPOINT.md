@@ -28,7 +28,8 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`; login
-verification remains disabled for UX review. Source and synchronized embed
+verification remains disabled for UX review. Its 25 checked root, shared-service,
+service-subroute and IAM paths return HTTP 200. Source and synchronized embed
 `ba7e57a9a` extend the shared delayed-feedback regression matrix across every
 currently routed Overview, Catalog, Quota, Region, Application, Resource,
 Installation, Operation, Message, DevOps, Observability, Log, Audit and IAM
