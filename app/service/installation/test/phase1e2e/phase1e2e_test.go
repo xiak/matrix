@@ -112,6 +112,61 @@ func TestNotificationContactRetentionRequiresExactVerifiedState(t *testing.T) {
 	}
 }
 
+func TestContactReplacementRetentionRequiresThreeAcceptedDeliveries(t *testing.T) {
+	verifiedAt := time.Date(2026, time.October, 4, 1, 2, 3, 456000000, time.UTC)
+	contact := iamv1.NotificationContact{
+		APIVersion: iamv1.APIVersion, Kind: "NotificationContact",
+		AccountID: "account-retained", UserID: "principal-user", State: "VERIFIED",
+		ResourceVersion: 2, Email: securityMailCurrentRecipient, VerifiedAt: &verifiedAt,
+	}
+	verification := iamv1.NotificationContactVerification{ID: "contact-replacement-one"}
+	want := contactReplacementRetention{
+		AccountID: contact.AccountID, UserID: contact.UserID, VerificationID: verification.ID,
+		CompletionEventID: "event-contact-replaced", ExpectedResourceVersion: 1,
+		Email: securityMailCurrentRecipient, State: "VERIFIED",
+		Notifications: []securityNotificationRetention{
+			{ID: "notice-code", EventID: "event-code", Kind: "ADDRESS_VERIFICATION", Email: securityMailCurrentRecipient, ContactRevision: 1, State: "ACCEPTED", Attempts: 1, LastOutcome: "ACCEPTED", LastSMTPCode: 250},
+			{ID: "notice-current", EventID: "event-contact-replaced", Kind: "CONTACT_REPLACED_CURRENT", Email: securityMailCurrentRecipient, ContactRevision: 2, State: "ACCEPTED", Attempts: 1, LastOutcome: "ACCEPTED", LastSMTPCode: 250},
+			{ID: "notice-previous", EventID: "event-contact-replaced", Kind: "CONTACT_REPLACED_PREVIOUS", Email: securityMailPreviousRecipient, ContactRevision: 1, State: "ACCEPTED", Attempts: 1, LastOutcome: "ACCEPTED", LastSMTPCode: 250},
+		},
+	}
+	if !validContactReplacementRetention(want, contact, verification) || !sameContactReplacementRetention(want, want) {
+		t.Fatal("exact replacement delivery history was not retained")
+	}
+	clone := func() contactReplacementRetention {
+		observed := want
+		observed.Notifications = append([]securityNotificationRetention(nil), want.Notifications...)
+		return observed
+	}
+	for name, mutate := range map[string]func(*contactReplacementRetention){
+		"account":      func(value *contactReplacementRetention) { value.AccountID = "account-other" },
+		"user":         func(value *contactReplacementRetention) { value.UserID = "principal-other" },
+		"verification": func(value *contactReplacementRetention) { value.VerificationID = "replacement-other" },
+		"completion":   func(value *contactReplacementRetention) { value.CompletionEventID = "event-other" },
+		"version":      func(value *contactReplacementRetention) { value.ExpectedResourceVersion++ },
+		"address":      func(value *contactReplacementRetention) { value.Email = securityMailPreviousRecipient },
+		"state":        func(value *contactReplacementRetention) { value.State = "PENDING" },
+		"missing-row":  func(value *contactReplacementRetention) { value.Notifications = value.Notifications[:2] },
+		"recipient":    func(value *contactReplacementRetention) { value.Notifications[2].Email = securityMailCurrentRecipient },
+		"revision":     func(value *contactReplacementRetention) { value.Notifications[1].ContactRevision = 1 },
+		"not-accepted": func(value *contactReplacementRetention) { value.Notifications[0].State = "PENDING" },
+		"retry":        func(value *contactReplacementRetention) { value.Notifications[0].Attempts = 2 },
+		"missing-250":  func(value *contactReplacementRetention) { value.Notifications[0].LastSMTPCode = 0 },
+		"wrong-fact":   func(value *contactReplacementRetention) { value.Notifications[1].EventID = "event-other" },
+		"duplicate-kind": func(value *contactReplacementRetention) {
+			value.Notifications[2].Kind = "CONTACT_REPLACED_CURRENT"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observed := clone()
+			mutate(&observed)
+			if validContactReplacementRetention(observed, contact, verification) || sameContactReplacementRetention(observed, want) {
+				t.Fatal("changed replacement delivery history was accepted")
+			}
+		})
+	}
+}
+
 func TestAccessAnalyzerLifecycleCoverageStaysClosed(t *testing.T) {
 	observedFrom := time.Date(2026, time.October, 3, 1, 2, 3, 0, time.UTC)
 	observedThrough := observedFrom.Add(time.Minute)

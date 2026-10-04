@@ -234,7 +234,7 @@ func (value *gate) verifySignedMFA(
 	var result mfaRetention
 	verifyErr := func() error {
 		contact, err := value.verifySecurityMailWithFixture(
-			ctx, currentCredential, password, fixture, "phase1-signed-mfa-mail",
+			ctx, currentCredential, password, fixture, securityMailPreviousRecipient, "phase1-signed-mfa-mail",
 		)
 		if err != nil {
 			return err
@@ -292,7 +292,7 @@ func (value *gate) verifySignedMFA(
 			clear(credential)
 			return fail("signed-mfa-bound-state")
 		}
-		notice, _, err := fixture.receive(ctx, "MATRIX authenticator bound", value.edge.forbidden)
+		notice, _, err := fixture.receive(ctx, securityMailPreviousRecipient, "MATRIX authenticator bound", value.edge.forbidden)
 		if err != nil || bytes.Contains(notice, seed) {
 			clear(notice)
 			clear(seed)
@@ -300,9 +300,18 @@ func (value *gate) verifySignedMFA(
 			return fail("signed-mfa-security-notice")
 		}
 		clear(notice)
+		contact, replacement, replacementStep, err := value.replaceSignedMFAContact(
+			ctx, fixture, installationID, credential, password, seed, contact, bound, loginStep,
+		)
+		if err != nil {
+			clear(seed)
+			clear(credential)
+			return err
+		}
 		result = mfaRetention{
 			User: user, Password: append([]byte(nil), password...), Seed: seed,
-			Credential: credential, Contact: contact, State: bound, LastConsumedStep: loginStep,
+			Credential: credential, Contact: contact, Replacement: replacement,
+			State: bound, LastConsumedStep: replacementStep,
 		}
 		return nil
 	}()
@@ -325,6 +334,108 @@ func (value *gate) verifySignedMFA(
 	return result, nil
 }
 
+func (value *gate) replaceSignedMFAContact(
+	ctx context.Context,
+	fixture *securityMailFixture,
+	installationID string,
+	bearer, password, seed []byte,
+	contact iamv1.NotificationContact,
+	authenticator iamv1.AuthenticatorState,
+	minimumStep int64,
+) (iamv1.NotificationContact, contactReplacementRetention, int64, error) {
+	intent := iamv1.NotificationContactReplacementIntent{
+		ExpectedResourceVersion: contact.ResourceVersion,
+		Email:                   securityMailCurrentRecipient,
+	}
+	const requestID = "phase1-signed-mfa-contact-replace"
+	pending, err := value.edge.startNotificationContactReplacementStepUp(
+		ctx, bearer, intent, authenticator.FactorRevision, requestID,
+	)
+	if err != nil {
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-step-up")
+	}
+	step, totp, err := nextTOTPCode(ctx, seed, minimumStep)
+	if err != nil {
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-code")
+	}
+	value.edge.addForbidden(bytes.Clone(totp))
+	proof, err := value.edge.verifyNotificationContactReplacementStepUp(
+		ctx, bearer, password, totp, pending, requestID+"-proof",
+	)
+	clear(totp)
+	if err != nil {
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-proof")
+	}
+	verification, err := value.edge.startNotificationContactReplacement(ctx, bearer, proof, requestID)
+	if err != nil {
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-start")
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for verification.Delivery.State != "ACCEPTED" && time.Now().Before(deadline) {
+		if !waitPoll(ctx, 100*time.Millisecond) {
+			break
+		}
+		verification, err = value.edge.readNotificationContactVerification(ctx, bearer, verification.ID)
+		if err != nil {
+			return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-delivery")
+		}
+	}
+	if verification.Delivery.State != "ACCEPTED" || verification.Delivery.LastOutcome != "ACCEPTED" ||
+		verification.Delivery.LastSMTPCode != 250 || verification.Delivery.Attempts != 1 {
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-smtp")
+	}
+	body, verificationMessageID, err := fixture.receive(
+		ctx, securityMailCurrentRecipient, "MATRIX notification address verification", value.edge.forbidden,
+	)
+	if err != nil {
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-mailbox")
+	}
+	match := mailCodePattern.FindSubmatch(body)
+	if len(match) != 2 {
+		clear(body)
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-verification-code")
+	}
+	code := bytes.Clone(match[1])
+	clear(body)
+	defer clear(code)
+	value.edge.addForbidden(bytes.Clone(code))
+	completed, err := value.edge.confirmNotificationContactVerification(
+		ctx, bearer, code, verification.ID, requestID+"-confirm",
+	)
+	if err != nil || completed.Purpose != iamv1.NotificationContactReplacement ||
+		completed.AccountID != contact.AccountID || completed.UserID != contact.UserID {
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-confirm")
+	}
+	replaced, err := value.edge.notificationContact(ctx, bearer)
+	if err != nil || replaced.AccountID != contact.AccountID || replaced.UserID != contact.UserID ||
+		replaced.State != "VERIFIED" || replaced.Email != securityMailCurrentRecipient ||
+		replaced.ResourceVersion != contact.ResourceVersion+1 || replaced.PendingVerificationID != "" || replaced.VerifiedAt == nil {
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-state")
+	}
+	previousNotice, previousMessageID, err := fixture.receive(
+		ctx, securityMailPreviousRecipient, "MATRIX notification address changed", value.edge.forbidden,
+	)
+	if err != nil || bytes.Contains(previousNotice, code) {
+		clear(previousNotice)
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-previous-notice")
+	}
+	clear(previousNotice)
+	currentNotice, currentMessageID, err := fixture.receive(
+		ctx, securityMailCurrentRecipient, "MATRIX notification address changed", value.edge.forbidden,
+	)
+	if err != nil || bytes.Contains(currentNotice, code) || verificationMessageID == previousMessageID ||
+		verificationMessageID == currentMessageID || previousMessageID == currentMessageID {
+		clear(currentNotice)
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-current-notice")
+	}
+	clear(currentNotice)
+	replacement, err := value.observeContactReplacement(ctx, installationID, replaced, completed)
+	if err != nil {
+		return iamv1.NotificationContact{}, contactReplacementRetention{}, 0, fail("signed-mfa-contact-replacement-observation")
+	}
+	return replaced, replacement, step, nil
+}
+
 func (value *gate) assertMFARetention(ctx context.Context, authenticationRecovered bool) error {
 	if value.retainedIAM == nil || !validMFARetention(value.retainedIAM.MFA) {
 		return fail("signed-mfa-retention-fixture")
@@ -338,6 +449,13 @@ func (value *gate) assertMFARetention(ctx context.Context, authenticationRecover
 		contact, err := value.edge.notificationContact(ctx, retained.Credential)
 		if err != nil || !sameNotificationContact(contact, retained.Contact) {
 			return fail("signed-mfa-retained-contact")
+		}
+		replacement, err := value.observeContactReplacement(
+			ctx, value.retainedIAM.InstallationID, contact,
+			iamv1.NotificationContactVerification{ID: retained.Replacement.VerificationID},
+		)
+		if err != nil || !sameContactReplacementRetention(replacement, retained.Replacement) {
+			return fail("signed-mfa-retained-contact-replacement")
 		}
 		return nil
 	}
@@ -371,6 +489,13 @@ func (value *gate) assertMFARetention(ctx context.Context, authenticationRecover
 	if err != nil || !sameNotificationContact(contact, retained.Contact) {
 		return fail("signed-mfa-recovery-contact")
 	}
+	replacement, err := value.observeContactReplacement(
+		ctx, value.retainedIAM.InstallationID, contact,
+		iamv1.NotificationContactVerification{ID: retained.Replacement.VerificationID},
+	)
+	if err != nil || !sameContactReplacementRetention(replacement, retained.Replacement) {
+		return fail("signed-mfa-recovery-contact-replacement")
+	}
 	if err := value.edge.logout(ctx, credential); err != nil {
 		return fail("signed-mfa-recovery-logout")
 	}
@@ -381,7 +506,12 @@ func validMFARetention(value mfaRetention) bool {
 	return iamv1.ValidateUser(value.User) == nil && len(value.Password) != 0 && len(value.Seed) != 0 &&
 		len(value.Credential) != 0 && value.LastConsumedStep >= 0 &&
 		iamv1.ValidateNotificationContact(value.Contact) == nil && value.Contact.State == "VERIFIED" &&
+		value.Contact.Email == securityMailCurrentRecipient && value.Contact.ResourceVersion == 2 &&
 		value.Contact.AccountID == value.User.AccountID && value.Contact.UserID == value.User.ID &&
+		validContactReplacementRetention(
+			value.Replacement, value.Contact,
+			iamv1.NotificationContactVerification{ID: value.Replacement.VerificationID},
+		) &&
 		iamv1.ValidateAuthenticatorState(value.State) == nil && value.State.EnrollmentState == "BOUND"
 }
 

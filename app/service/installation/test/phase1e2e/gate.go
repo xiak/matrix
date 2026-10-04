@@ -197,6 +197,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		auditv1.ActionIAMSecurityReportDownloadStarted:    string(baselineReport.metadata.ID),
 		auditv1.ActionIAMAccessAnalyzerCreated:            string(value.retainedIAM.AccessAnalyzer.ID),
 		auditv1.ActionIAMAccessAnalyzerDispositionUpdated: string(value.retainedIAM.AccessAnalyzer.ID),
+		auditv1.ActionIAMNotificationContactReplaced:      string(value.retainedIAM.MFA.User.ID),
 	}
 	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, wantInitialAudit)
 	if err != nil || !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {
@@ -1277,7 +1278,9 @@ func (value *gate) pathLeakage() [][]byte {
 	}
 	if value.retainedIAM != nil {
 		result = append(result, value.retainedIAM.AdministratorPassword, value.retainedIAM.MFA.Password,
-			value.retainedIAM.MFA.Seed, value.retainedIAM.MFA.Credential)
+			value.retainedIAM.MFA.Seed, value.retainedIAM.MFA.Credential,
+			[]byte(value.retainedIAM.AdministratorContact.Email), []byte(value.retainedIAM.MFA.Contact.Email),
+			[]byte(securityMailPreviousRecipient), []byte(securityMailCurrentRecipient))
 		for _, tenant := range value.retainedIAM.Tenants {
 			result = append(result, tenant.InitialPassword, tenant.PrimaryPassword, tenant.ChildPassword,
 				tenant.RecoveryPassword, tenant.FinalPrimaryPassword, tenant.OldPrimaryCredential, tenant.OldChildCredential,
@@ -1789,20 +1792,16 @@ func (value *gate) assertWorkloadRemoved(ctx context.Context) error {
 }
 
 func (value *gate) activeCapacityClaims(ctx context.Context, installationID string) (int, error) {
-	ids, err := dockerLines(
-		ctx, "container", "ls", "--all", "--quiet",
-		"--filter", "label=com.xiak.matrix.installation="+installationID,
-		"--filter", "label=com.xiak.matrix.role=postgres",
-	)
-	if err != nil || len(ids) != 1 {
-		return 0, errors.New("PostgreSQL container is unavailable")
+	containerID, err := postgresContainerID(ctx, installationID)
+	if err != nil {
+		return 0, err
 	}
 	query := "SELECT count(*) FROM paas.capacity_reservations AS reservation " +
 		"JOIN paas.capacity_claims AS claim ON claim.id = reservation.capacity_claim_id " +
 		"WHERE reservation.tenant_id = 'organization-default' " +
 		"AND reservation.deployment_id = 'phase1-deployment' AND claim.state = 'ACTIVE'"
 	content, err := docker(
-		ctx, "container", "exec", "--user", "postgres", ids[0],
+		ctx, "container", "exec", "--user", "postgres", containerID,
 		"psql", "--no-psqlrc", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1",
 		"--username", "matrix", "--dbname", "matrix", "--command", query,
 	)
@@ -1814,6 +1813,18 @@ func (value *gate) activeCapacityClaims(ctx context.Context, installationID stri
 		return 0, errors.New("capacity observation is invalid")
 	}
 	return count, nil
+}
+
+func postgresContainerID(ctx context.Context, installationID string) (string, error) {
+	ids, err := dockerLines(
+		ctx, "container", "ls", "--all", "--quiet",
+		"--filter", "label=com.xiak.matrix.installation="+installationID,
+		"--filter", "label=com.xiak.matrix.role=postgres",
+	)
+	if err != nil || len(ids) != 1 {
+		return "", errors.New("PostgreSQL container is unavailable")
+	}
+	return ids[0], nil
 }
 
 func (value *gate) writeAndScanSupport(

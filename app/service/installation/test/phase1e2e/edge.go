@@ -151,6 +151,12 @@ type confirmNotificationContactWire struct {
 	RequestID string `json:"requestId"`
 }
 
+type verifyStepUpWire struct {
+	RequestID string `json:"requestId"`
+	Password  string `json:"password"`
+	Code      string `json:"code"`
+}
+
 func (client *edgeClient) login(ctx context.Context, password []byte, requestID string) ([]byte, error) {
 	result, err := client.loginNamed(ctx, "admin", password, "organization-default", "principal-admin", requestID)
 	if err != nil {
@@ -215,12 +221,12 @@ func (client *edgeClient) changePassword(
 func (client *edgeClient) startNotificationContactVerification(
 	ctx context.Context,
 	bearer, password []byte,
-	requestID string,
+	email, requestID string,
 ) (iamv1.NotificationContactVerification, error) {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/notification-contact/verifications", bearer,
 		startNotificationContactWire{
-			Email: "receiver@matrix.test", Password: string(password),
+			Email: email, Password: string(password),
 			RequestID: requestID,
 		}, nil, http.StatusOK,
 	)
@@ -230,9 +236,94 @@ func (client *edgeClient) startNotificationContactVerification(
 	defer clear(response.body)
 	var result iamv1.NotificationContactVerification
 	if response.header.Get("Cache-Control") != "no-store" || decodeOne(response.body, &result) != nil ||
-		iamv1.ValidateNotificationContactVerification(result) != nil || result.Email != "receiver@matrix.test" ||
+		iamv1.ValidateNotificationContactVerification(result) != nil || result.Email != email ||
 		result.RequestID != requestID || result.State != "PENDING" {
 		return iamv1.NotificationContactVerification{}, errors.New("IAM notification contact start response failed")
+	}
+	return result, nil
+}
+
+func (client *edgeClient) startNotificationContactReplacementStepUp(
+	ctx context.Context,
+	bearer []byte,
+	intent iamv1.NotificationContactReplacementIntent,
+	factorRevision uint64,
+	requestID string,
+) (iamv1.StepUp, error) {
+	response, err := client.json(
+		ctx, http.MethodPost, "/api/iam/v1/auth/step-up", bearer,
+		iamv1.StartStepUpRequest{
+			RequestID: requestID, Operation: iamv1.StepUpReplaceNotificationContact,
+			ExpectedFactorRevision: factorRevision, NotificationContact: &intent,
+		}, nil, http.StatusOK,
+	)
+	if err != nil {
+		return iamv1.StepUp{}, err
+	}
+	defer clear(response.body)
+	var result iamv1.StepUp
+	if response.header.Get("Cache-Control") != "no-store" || decodeOne(response.body, &result) != nil ||
+		iamv1.ValidateStepUp(result) != nil || result.State != "PENDING" || result.RequestID != requestID ||
+		result.Operation != iamv1.StepUpReplaceNotificationContact || result.ExpectedFactorRevision != factorRevision ||
+		result.NotificationContact == nil || *result.NotificationContact != intent {
+		return iamv1.StepUp{}, errors.New("IAM notification contact replacement step-up start failed")
+	}
+	return result, nil
+}
+
+func (client *edgeClient) verifyNotificationContactReplacementStepUp(
+	ctx context.Context,
+	bearer, password, code []byte,
+	pending iamv1.StepUp,
+	requestID string,
+) (iamv1.StepUp, error) {
+	response, err := client.json(
+		ctx, http.MethodPost, "/api/iam/v1/auth/step-up/"+pending.ID+":verify", bearer,
+		verifyStepUpWire{RequestID: requestID, Password: string(password), Code: string(code)},
+		nil, http.StatusOK,
+	)
+	if err != nil {
+		return iamv1.StepUp{}, err
+	}
+	defer clear(response.body)
+	var result iamv1.StepUp
+	if response.header.Get("Cache-Control") != "no-store" || decodeOne(response.body, &result) != nil ||
+		iamv1.ValidateStepUp(result) != nil || result.ID != pending.ID || result.State != "PROVED" ||
+		result.RequestID != pending.RequestID || result.Operation != pending.Operation ||
+		result.ExpectedFactorRevision != pending.ExpectedFactorRevision || result.NotificationContact == nil ||
+		pending.NotificationContact == nil || *result.NotificationContact != *pending.NotificationContact {
+		return iamv1.StepUp{}, errors.New("IAM notification contact replacement step-up proof failed")
+	}
+	return result, nil
+}
+
+func (client *edgeClient) startNotificationContactReplacement(
+	ctx context.Context,
+	bearer []byte,
+	proof iamv1.StepUp,
+	requestID string,
+) (iamv1.NotificationContactVerification, error) {
+	if proof.NotificationContact == nil {
+		return iamv1.NotificationContactVerification{}, errors.New("IAM notification contact replacement intent is absent")
+	}
+	request := iamv1.StartNotificationContactReplacementRequest{
+		StepUpID: proof.ID, ExpectedResourceVersion: proof.NotificationContact.ExpectedResourceVersion,
+		Email: proof.NotificationContact.Email, RequestID: requestID,
+	}
+	response, err := client.json(
+		ctx, http.MethodPost, "/api/iam/v1/auth/notification-contact/replacements", bearer,
+		request, nil, http.StatusOK,
+	)
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, err
+	}
+	defer clear(response.body)
+	var result iamv1.NotificationContactVerification
+	if response.header.Get("Cache-Control") != "no-store" || decodeOne(response.body, &result) != nil ||
+		iamv1.ValidateNotificationContactVerification(result) != nil || result.State != "PENDING" ||
+		result.Purpose != iamv1.NotificationContactReplacement || result.RequestID != requestID ||
+		result.ExpectedResourceVersion != request.ExpectedResourceVersion || result.Email != request.Email {
+		return iamv1.NotificationContactVerification{}, errors.New("IAM notification contact replacement start failed")
 	}
 	return result, nil
 }
