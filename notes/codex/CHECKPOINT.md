@@ -6,8 +6,9 @@
 - Updated: 2026-10-04
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `228c06eb2`
-- Pushed documentation milestone: `0e22ca71c`
+- Pushed branch head: `2397586e2`
+- Pushed source/embed milestone: `0114419d2` / `80789db67`
+- Pushed documentation milestone: `2397586e2`
 
 ## Authoritative route
 
@@ -27,18 +28,20 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`; login
-verification remains disabled for UX review. Source/embed `228c06eb2` mounts
-the fixed LIVE notification-address replacement while preserving the separate
-MOCK experience. It keeps proof, delivery and atomic confirmation as distinct
-states, retains completed or unknown intents until authoritative reread, and
-never guesses credential rejection from an unavailable bearer probe.
+verification remains disabled for UX review. Notification replacement source
+`228c06eb2` keeps proof, delivery and atomic confirmation as distinct states,
+retains completed or unknown intents until authoritative reread, and preserves
+the separate MOCK experience. Source `0114419d2` and generated embed
+`80789db67` additionally keep the access-analysis primary tabs single-line and
+stable on small screens, with local overflow only when their content cannot fit.
 
-Full acceptance at this milestone: 62 frontend files / 1,069 tests, three
+Acceptance after the mobile delta: 62 frontend files / 1,069 tests, three
 static-normalization tests, typecheck, lint, architecture, 228 theme-contrast
 pairs, 45-route production export, 43 normalized paths, 249-file embed equality,
-repository `go test -p 2 ./...` and `go vet -p 2 ./...`. Documentation milestone
-`0e22ca71c` records the exact semantics, fixed IAM sources and remaining real
-IAM/SMTP browser gate in the owning FEATs.
+and UI-host Go test/vet. The earlier notification replacement milestone also
+passed repository-wide Go test/vet. Documentation head `2397586e2` records the
+exact IAM semantics, mobile evidence, fixed sources and remaining real
+IAM/SMTP browser gate in the owning FEAT.
 
 ## Continuation boundary
 
