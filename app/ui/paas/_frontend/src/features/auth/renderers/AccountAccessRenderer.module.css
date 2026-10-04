@@ -354,6 +354,16 @@
 .stepTitle:focus { outline: none; }
 .cardHeadingCopy { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .cardHeadingCopy p { margin: 0; }
+.federationProviderTable { table-layout: fixed; }
+.federationProviderTable th:nth-child(1) { width: 20%; }
+.federationProviderTable th:nth-child(2) { width: 16%; }
+.federationProviderTable th:nth-child(3) { width: 44%; }
+.federationProviderTable th:nth-child(4) { width: 20%; }
+.federationEndpoints { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); margin: 0; }
+.federationEndpoints > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: var(--xiak-spacing-tight); align-items: baseline; }
+.federationEndpoints dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.federationEndpoints dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.federationEndpoints code { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .headingBadges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--xiak-spacing-tight); }
 .conceptPanel { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-comfortable); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
 .conceptPanel p { margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; }

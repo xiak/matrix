@@ -37,7 +37,7 @@ import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceRoleTe
 import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
 import type { AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
-import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
+import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CurrentRoleIdentity, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, UserRoleSession } from "../domain/roles";
 import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
@@ -100,6 +100,18 @@ export interface IamRepository {
     startNotificationVerification(credential: string, command: { email: string; password: string; requestId: string }): Promise<NotificationContactVerification>;
     notificationVerification(credential: string, verificationId: string): Promise<NotificationContactVerification>;
     confirmNotificationVerification(credential: string, verificationId: string, command: { code: string; requestId: string }): Promise<NotificationContactVerification>;
+    /**
+     * Purpose-bound verified-address replacement. It remains optional until the
+     * independently accepted IAM runtime is the deployment baseline.
+     */
+    notificationReplacement?: {
+      startStepUp(credential: string, command: { requestId: string; expectedFactorRevision: number; notificationContact: NotificationContactReplacementIntent }): Promise<SecurityStepUp>;
+      stepUpByRequest(credential: string, requestId: string, expectedFactorRevision: number, notificationContact: NotificationContactReplacementIntent): Promise<SecurityStepUp>;
+      verifyStepUp(credential: string, stepUpId: string, originalRequestId: string, expectedFactorRevision: number, notificationContact: NotificationContactReplacementIntent, command: { requestId: string; password: string; code: string }): Promise<SecurityStepUp>;
+      startVerification(credential: string, command: { stepUpId: string; requestId: string } & NotificationContactReplacementIntent): Promise<NotificationContactReplacementVerification>;
+      verification(credential: string, verificationId: string, command: { requestId: string } & NotificationContactReplacementIntent): Promise<NotificationContactReplacementVerification>;
+      confirmVerification(credential: string, verificationId: string, original: { requestId: string } & NotificationContactReplacementIntent, command: { code: string; requestId: string }): Promise<NotificationContactReplacementVerification>;
+    };
     authenticatorState(credential: string): Promise<AuthenticatorState>;
     startTOTPEnrollment(credential: string, command: { requestId: string; password: string; expectedFactorRevision: number }): Promise<TOTPEnrollmentStart>;
     replacement?: {

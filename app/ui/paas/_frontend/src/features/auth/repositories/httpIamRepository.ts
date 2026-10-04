@@ -67,7 +67,7 @@ import type {
   SessionSummary
 } from "../domain/session";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
-import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
+import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
 import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessDispositionRule, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
@@ -782,10 +782,23 @@ function parseNotificationDelivery(value: unknown, issuedAt: string): Notificati
   return { state: wire.state as NotificationDeliveryObservation["state"], attempts, lastOutcome: lastOutcome as NotificationDeliveryObservation["lastOutcome"], lastSmtpCode, updatedAt };
 }
 
-function parseNotificationVerification(value: unknown): NotificationContactVerification {
+function parseNotificationVerification(value: unknown): NotificationContactVerification;
+function parseNotificationVerification(value: unknown, expected: NotificationContactReplacementIntent & { requestId: string }): NotificationContactReplacementVerification;
+function parseNotificationVerification(value: unknown, expected?: NotificationContactReplacementIntent & { requestId: string }): NotificationContactVerification | NotificationContactReplacementVerification {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "userId", "requestId", "email", "state", "issuedAt", "expiresAt", "delivery"], ["completedAt"]);
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "userId", "requestId", ...(expected ? ["purpose", "expectedResourceVersion"] : []), "email", "state", "issuedAt", "expiresAt", "delivery"], ["completedAt"]);
   requireAccountKind(wire, "NotificationContactVerification");
+  const requestId = accountIdentifier(wire.requestId);
+  const email = securityMailAddress(wire.email);
+  let replacement: { purpose: "REPLACEMENT"; expectedResourceVersion: number } | undefined;
+  if (expected) {
+    const expectedResourceVersion = accountVersion(wire.expectedResourceVersion);
+    if (expectedResourceVersion > 9_007_199_254_740_990 || wire.purpose !== "REPLACEMENT" ||
+        expectedResourceVersion !== expected.expectedResourceVersion || requestId !== expected.requestId || email !== expected.email) {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    replacement = { purpose: "REPLACEMENT", expectedResourceVersion };
+  }
   if (wire.state !== "PENDING" && wire.state !== "VERIFIED" && wire.state !== "CANCELLED" && wire.state !== "EXPIRED") throw new Error("INVALID_IAM_RESPONSE");
   const issuedAt = accountTimestamp(wire.issuedAt);
   const expiresAt = accountTimestamp(wire.expiresAt);
@@ -800,8 +813,9 @@ function parseNotificationVerification(value: unknown): NotificationContactVerif
     id: accountIdentifier(wire.id),
     accountId: accountIdentifier(wire.accountId),
     userId: accountIdentifier(wire.userId),
-    requestId: accountIdentifier(wire.requestId),
-    email: securityMailAddress(wire.email),
+    requestId,
+    email,
+    ...replacement,
     state: wire.state,
     issuedAt,
     expiresAt,
@@ -925,17 +939,33 @@ function sameSecuritySettingsIntent(actual: SecuritySettingsUpdateIntent, expect
     accessKeyNetworkRestrictionsEqual(actual.accessKeyNetwork, expected.accessKeyNetwork);
 }
 
-function parseSecurityStepUp(value: unknown, operation: SecurityStepUp["operation"], expectedIntent?: SecuritySettingsUpdateIntent): SecurityStepUp {
+function parseSecurityStepUp(
+  value: unknown,
+  operation: SecurityStepUp["operation"],
+  expectedIntent?: SecuritySettingsUpdateIntent,
+  expectedNotificationContact?: NotificationContactReplacementIntent
+): SecurityStepUp {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "id", "requestId", "operation", "expectedFactorRevision", ...(operation === "SECURITY_SETTINGS_UPDATE" ? ["securitySettings"] : []), "state", "createdAt", "expiresAt"], ["provedAt", "consumedAt"]);
+  exactKeys(wire, ["apiVersion", "kind", "id", "requestId", "operation", "expectedFactorRevision", ...(operation === "SECURITY_SETTINGS_UPDATE" ? ["securitySettings"] : []), ...(operation === "NOTIFICATION_CONTACT_REPLACE" ? ["notificationContact"] : []), "state", "createdAt", "expiresAt"], ["provedAt", "consumedAt"]);
   requireAccountKind(wire, "StepUp");
   if (wire.operation !== operation ||
       (operation === "SECURITY_SETTINGS_UPDATE") !== Boolean(expectedIntent) ||
+      (operation === "NOTIFICATION_CONTACT_REPLACE") !== Boolean(expectedNotificationContact) ||
       wire.state !== "PENDING" && wire.state !== "PROVED" && wire.state !== "CONSUMED" && wire.state !== "EXPIRED") {
     throw new Error("INVALID_IAM_RESPONSE");
   }
   const securitySettings = operation === "SECURITY_SETTINGS_UPDATE" ? parseSecuritySettingsIntent(wire.securitySettings) : undefined;
   if (securitySettings && expectedIntent && !sameSecuritySettingsIntent(securitySettings, expectedIntent)) throw new Error("INVALID_IAM_RESPONSE");
+  let notificationContact: NotificationContactReplacementIntent | undefined;
+  if (operation === "NOTIFICATION_CONTACT_REPLACE") {
+    const intent = accountRecord(wire.notificationContact);
+    exactKeys(intent, ["expectedResourceVersion", "email"]);
+    const expectedResourceVersion = accountVersion(intent.expectedResourceVersion);
+    if (expectedResourceVersion > 9_007_199_254_740_990) throw new Error("INVALID_IAM_RESPONSE");
+    notificationContact = { expectedResourceVersion, email: securityMailAddress(intent.email) };
+    if (!expectedNotificationContact || notificationContact.expectedResourceVersion !== expectedNotificationContact.expectedResourceVersion ||
+        notificationContact.email !== expectedNotificationContact.email) throw new Error("INVALID_IAM_RESPONSE");
+  }
   const createdAt = accountTimestamp(wire.createdAt);
   const expiresAt = accountTimestamp(wire.expiresAt);
   if (timestampMicros(expiresAt) - timestampMicros(createdAt) !== 120n * 1_000_000n) throw new Error("INVALID_IAM_RESPONSE");
@@ -955,6 +985,7 @@ function parseSecurityStepUp(value: unknown, operation: SecurityStepUp["operatio
     operation,
     expectedFactorRevision: boundedFactorRevision(wire.expectedFactorRevision),
     ...(securitySettings ? { securitySettings } : {}),
+    ...(notificationContact ? { notificationContact } : {}),
     state: wire.state,
     createdAt,
     expiresAt,
@@ -3511,6 +3542,116 @@ export const httpIamRepository: IamRepository = {
       ));
       if (verification.id !== target) throw new Error("INVALID_IAM_RESPONSE");
       return verification;
+    },
+    notificationReplacement: {
+      async startStepUp(credential, command) {
+        const requestId = accountIdentifier(command.requestId);
+        const expectedFactorRevision = boundedFactorRevision(command.expectedFactorRevision);
+        const expectedResourceVersion = accountVersion(command.notificationContact.expectedResourceVersion);
+        if (expectedResourceVersion > 9_007_199_254_740_990) throw new Error("INVALID_IAM_RESPONSE");
+        const notificationContact = {
+          expectedResourceVersion,
+          email: securityMailAddress(command.notificationContact.email)
+        };
+        const result = parseSecurityStepUp(await requestJSON<unknown>("/api/iam/v1/auth/step-up", {
+          method: "POST",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId, operation: "NOTIFICATION_CONTACT_REPLACE", expectedFactorRevision, notificationContact })
+        }), "NOTIFICATION_CONTACT_REPLACE", undefined, notificationContact);
+        if (result.requestId !== requestId || result.expectedFactorRevision !== expectedFactorRevision || result.state !== "PENDING") {
+          throw new Error("INVALID_IAM_RESPONSE");
+        }
+        return result;
+      },
+      async stepUpByRequest(credential, requestId, expectedFactorRevision, notificationContact) {
+        const target = accountIdentifier(requestId);
+        const factorRevision = boundedFactorRevision(expectedFactorRevision);
+        const expected = {
+          expectedResourceVersion: accountVersion(notificationContact.expectedResourceVersion),
+          email: securityMailAddress(notificationContact.email)
+        };
+        if (expected.expectedResourceVersion > 9_007_199_254_740_990) throw new Error("INVALID_IAM_RESPONSE");
+        const result = parseSecurityStepUp(await requestJSON<unknown>(
+          `/api/iam/v1/auth/step-up/by-request/${encodeURIComponent(target)}`,
+          { headers: accountHeaders(credential) }
+        ), "NOTIFICATION_CONTACT_REPLACE", undefined, expected);
+        if (result.requestId !== target || result.expectedFactorRevision !== factorRevision) throw new Error("INVALID_IAM_RESPONSE");
+        return result;
+      },
+      async verifyStepUp(credential, stepUpId, originalRequestId, expectedFactorRevision, notificationContact, command) {
+        const target = accountIdentifier(stepUpId);
+        const original = accountIdentifier(originalRequestId);
+        const factorRevision = boundedFactorRevision(expectedFactorRevision);
+        const expected = {
+          expectedResourceVersion: accountVersion(notificationContact.expectedResourceVersion),
+          email: securityMailAddress(notificationContact.email)
+        };
+        if (expected.expectedResourceVersion > 9_007_199_254_740_990) throw new Error("INVALID_IAM_RESPONSE");
+        const result = parseSecurityStepUp(await requestJSON<unknown>(
+          `/api/iam/v1/auth/step-up/${encodeURIComponent(target)}:verify`,
+          {
+            method: "POST",
+            headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+            body: JSON.stringify({
+              requestId: accountIdentifier(command.requestId),
+              password: accountText(command.password),
+              code: accountText(command.code)
+            })
+          }
+        ), "NOTIFICATION_CONTACT_REPLACE", undefined, expected);
+        if (result.id !== target || result.requestId !== original || result.expectedFactorRevision !== factorRevision ||
+            result.state !== "PROVED" && result.state !== "EXPIRED") throw new Error("INVALID_IAM_RESPONSE");
+        return result;
+      },
+      async startVerification(credential, command) {
+        const stepUpId = accountIdentifier(command.stepUpId);
+        const requestId = accountIdentifier(command.requestId);
+        const expectedResourceVersion = accountVersion(command.expectedResourceVersion);
+        if (expectedResourceVersion > 9_007_199_254_740_990) throw new Error("INVALID_IAM_RESPONSE");
+        const email = securityMailAddress(command.email);
+        return parseNotificationVerification(await requestJSON<unknown>("/api/iam/v1/auth/notification-contact/replacements", {
+          method: "POST",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ stepUpId, expectedResourceVersion, email, requestId })
+        }), { requestId, expectedResourceVersion, email });
+      },
+      async verification(credential, verificationId, command) {
+        const target = accountIdentifier(verificationId);
+        const expectedResourceVersion = accountVersion(command.expectedResourceVersion);
+        if (expectedResourceVersion > 9_007_199_254_740_990) throw new Error("INVALID_IAM_RESPONSE");
+        const expected = {
+          requestId: accountIdentifier(command.requestId),
+          expectedResourceVersion,
+          email: securityMailAddress(command.email)
+        };
+        const result = parseNotificationVerification(await requestJSON<unknown>(
+          `/api/iam/v1/auth/notification-contact/verifications/${encodeURIComponent(target)}`,
+          { headers: accountHeaders(credential) }
+        ), expected);
+        if (result.id !== target) throw new Error("INVALID_IAM_RESPONSE");
+        return result;
+      },
+      async confirmVerification(credential, verificationId, original, command) {
+        if (!/^[0-9]{8}$/.test(command.code)) throw new Error("INVALID_IAM_RESPONSE");
+        const target = accountIdentifier(verificationId);
+        const expectedResourceVersion = accountVersion(original.expectedResourceVersion);
+        if (expectedResourceVersion > 9_007_199_254_740_990) throw new Error("INVALID_IAM_RESPONSE");
+        const expected = {
+          requestId: accountIdentifier(original.requestId),
+          expectedResourceVersion,
+          email: securityMailAddress(original.email)
+        };
+        const result = parseNotificationVerification(await requestJSON<unknown>(
+          `/api/iam/v1/auth/notification-contact/verifications/${encodeURIComponent(target)}:confirm`,
+          {
+            method: "POST",
+            headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+            body: JSON.stringify({ code: command.code, requestId: accountIdentifier(command.requestId) })
+          }
+        ), expected);
+        if (result.id !== target || result.state !== "VERIFIED") throw new Error("INVALID_IAM_RESPONSE");
+        return result;
+      }
     },
     async authenticatorState(credential) {
       return parseAuthenticatorState(await requestJSON<unknown>("/api/iam/v1/auth/authenticators", {

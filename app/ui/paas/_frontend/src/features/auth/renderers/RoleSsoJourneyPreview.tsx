@@ -7,7 +7,7 @@ import type { AccessRole, IdentityProvider, RoleSsoMappingPreview } from "../dom
 import styles from "./AccountAccessRenderer.module.css";
 
 type JourneyMapping = Pick<RoleSsoMappingPreview, "name" | "assertionSubject" | "enabled">;
-type JourneyStepKey = "provider" | "assertion" | "mapping" | "trust" | "session";
+type JourneyStepKey = "provider" | "assertion" | "mapping" | "trust" | "permission" | "session";
 type JourneyStepState = "configuration" | "untrusted" | "candidate" | "disabled" | "notVerified" | "notIssued";
 
 /**
@@ -43,6 +43,11 @@ export function RoleSsoJourneyPreview({ provider, mapping, role }: {
       key: "trust",
       state: trustConfigured ? "configuration" : "notVerified",
       status: trustConfigured ? "neutral" as const : "warning" as const
+    },
+    {
+      key: "permission",
+      state: "notVerified",
+      status: "warning" as const
     },
     {
       key: "session",

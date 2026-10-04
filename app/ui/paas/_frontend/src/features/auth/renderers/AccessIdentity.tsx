@@ -1,7 +1,7 @@
 "use client";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Checkbox, FormField, Input, Select, TextArea } from "@ui/xiak";
+import { Alert, Badge, Checkbox, FormField, Input, Select } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { identityProviderConfigurationIssue, roleSsoMappingPreviewIssue, type AccessWorkspace, type IdentityProvider, type IdentityProviderConfigurationIssue, type RoleSsoMappingPreview, type RoleSsoMappingPreviewIssue } from "../domain/accessWorkspace";
 import { WorkspaceCollection, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceTime } from "./AccessWorkspaceUi";
@@ -16,21 +16,20 @@ function ProviderEditor({ provider, workspace, onClose }: { provider?: IdentityP
   const [issue, setIssue] = useState<IdentityProviderConfigurationIssue | null>(null);
   const [name, setName] = useState(provider?.name ?? "");
   const [protocol, setProtocol] = useState<IdentityProvider["protocol"]>(provider?.protocol ?? "SAML");
-  const [drafts, setDrafts] = useState<Record<IdentityProvider["protocol"], Pick<IdentityProvider, "issuer" | "audience" | "metadata">>>(() => ({
-    SAML: provider?.protocol === "SAML" ? { issuer: provider.issuer, audience: provider.audience, metadata: provider.metadata } : { issuer: "", audience: "", metadata: "" },
-    OIDC: provider?.protocol === "OIDC" ? { issuer: provider.issuer, audience: provider.audience, metadata: provider.metadata } : { issuer: "", audience: "", metadata: "" }
+  const [drafts, setDrafts] = useState<Record<IdentityProvider["protocol"], Pick<IdentityProvider, "issuer" | "redirectUri">>>(() => ({
+    SAML: provider?.protocol === "SAML" ? { issuer: provider.issuer, redirectUri: provider.redirectUri } : { issuer: "", redirectUri: "" },
+    OIDC: provider?.protocol === "OIDC" ? { issuer: provider.issuer, redirectUri: provider.redirectUri } : { issuer: "", redirectUri: "" }
   }));
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
   const draft = drafts[protocol];
   const updateDraft = (field: keyof typeof draft, value: string) => setDrafts((current) => ({ ...current, [protocol]: { ...current[protocol], [field]: value } }));
-  const issuerLabel = t(protocol === "SAML" ? "providerSamlIssuer" : "providerOidcIssuer");
-  const audienceLabel = t(protocol === "SAML" ? "providerSamlAudience" : "providerOidcClientId");
-  const metadataLabel = t(protocol === "SAML" ? "providerSamlMetadata" : "providerOidcJwks");
+  const issuerLabel = t("providerIssuer");
+  const redirectLabel = t("providerRedirectUri");
   const linkedRoles = provider ? workspace.roles.filter((role) => role.principalType === "provider" && role.principal === provider.id) : [];
   const linkedMappings = provider ? workspace.roleSsoMappings.filter((mapping) => mapping.providerId === provider.id) : [];
   const clearIssue = (field: IdentityProviderConfigurationIssue) => setIssue((current) => current === field || (field === "name" && current === "duplicate") ? null : current);
   const fieldId = issue === "duplicate" ? "name" : issue;
-  const issueMessage = issue ? t(issue === "name" ? "providerIssues.name" : issue === "duplicate" ? "providerIssues.duplicate" : issue === "issuer" ? "providerIssues.issuer" : issue === "audience" ? "providerIssues.audience" : "providerIssues.metadata") : undefined;
+  const issueMessage = issue ? t(issue === "name" ? "providerIssues.name" : issue === "duplicate" ? "providerIssues.duplicate" : issue === "issuer" ? "providerIssues.issuer" : "providerIssues.redirectUri") : undefined;
   async function submit() {
     if (phase === "edit") {
       const next = identityProviderConfigurationIssue({ id: provider?.id, name, protocol, ...draft }, workspace.providers);
@@ -52,8 +51,7 @@ function ProviderEditor({ provider, workspace, onClose }: { provider?: IdentityP
       <FormField id={id + "-name"} label={t("name")} error={fieldId === "name" ? issueMessage : undefined}><Input id={id + "-name"} required maxLength={64} invalid={fieldId === "name"} value={name} onChange={(event) => { setName(event.target.value); clearIssue("name"); }} /></FormField>
       <FormField id={id + "-protocol"} label={t("protocol")}><Select id={id + "-protocol"} value={protocol} options={["SAML", "OIDC"].map((value) => ({ value, label: value }))} onValueChange={(value) => { setProtocol(value as IdentityProvider["protocol"]); setIssue(null); }} /></FormField>
       <FormField id={id + "-issuer"} label={issuerLabel} error={issue === "issuer" ? t("providerIssues.issuer") : undefined}><Input id={id + "-issuer"} type="url" required invalid={issue === "issuer"} placeholder="https://identity.example.invalid" value={draft.issuer} onChange={(event) => { updateDraft("issuer", event.target.value); clearIssue("issuer"); }} /></FormField>
-      <FormField id={id + "-audience"} label={audienceLabel} error={issue === "audience" ? t("providerIssues.audience") : undefined}><Input id={id + "-audience"} required maxLength={256} invalid={issue === "audience"} value={draft.audience} onChange={(event) => { updateDraft("audience", event.target.value); clearIssue("audience"); }} /></FormField>
-      <FormField id={id + "-metadata"} label={metadataLabel} hint={t(protocol === "SAML" ? "providerSamlMetadataHint" : "providerOidcJwksHint")} error={issue === "metadata" ? t("providerIssues.metadata") : undefined}><TextArea className={styles.codeEditor} id={id + "-metadata"} aria-describedby={id + "-metadata-hint"} required spellCheck={false} rows={6} maxLength={65536} invalid={issue === "metadata"} value={draft.metadata} onChange={(event) => { updateDraft("metadata", event.target.value); clearIssue("metadata"); }} /></FormField>
+      <FormField id={id + "-redirectUri"} label={redirectLabel} hint={t("providerRedirectUriHint")} error={issue === "redirectUri" ? t("providerIssues.redirectUri") : undefined}><Input id={id + "-redirectUri"} type="url" required invalid={issue === "redirectUri"} placeholder="https://console.example.invalid/auth/federation/callback" value={draft.redirectUri} onChange={(event) => { updateDraft("redirectUri", event.target.value); clearIssue("redirectUri"); }} /></FormField>
       <Checkbox checked={enabled} onChange={(event) => setEnabled(event.target.checked)}>{t("enable")}</Checkbox>
     </> : <>
       <Alert status="warning">{t(enabled ? "providerEnableReviewHint" : "providerDisableReviewHint", { count: linkedRoles.length + linkedMappings.length })}</Alert>
@@ -62,10 +60,9 @@ function ProviderEditor({ provider, workspace, onClose }: { provider?: IdentityP
         <div><dt>{t("name")}</dt><dd>{name}</dd></div>
         <div><dt>{t("protocol")}</dt><dd>{protocol}</dd></div>
         <div><dt>{issuerLabel}</dt><dd>{draft.issuer}</dd></div>
-        <div><dt>{audienceLabel}</dt><dd>{draft.audience}</dd></div>
+        <div><dt>{redirectLabel}</dt><dd>{draft.redirectUri}</dd></div>
         <div><dt>{t("userSsoPreviousState")}</dt><dd>{provider ? t(provider.enabled ? "enabled" : "disabled") : t("none")}</dd></div>
         <div><dt>{t("userSsoNewState")}</dt><dd>{t(enabled ? "enabled" : "disabled")}</dd></div>
-        <div><dt>{metadataLabel}</dt><dd>{t("userSsoMaterialPresent")}</dd></div>
         <div><dt>{t("providerLinkedRoles")}</dt><dd>{linkedRoles.map((role) => role.name).join(" · ") || t("none")}</dd></div>
         <div><dt>{t("providerLinkedMappings")}</dt><dd>{linkedMappings.map((mapping) => mapping.name).join(" · ") || t("none")}</dd></div>
       </dl>
@@ -93,8 +90,7 @@ export function AccessProviders({ workspace }: { workspace: AccessWorkspace }) {
     {selected ? <WorkspaceDetail title={selected.name} onBack={() => setSelectedId(null)} actionFocusRef={editTrigger} actions={editing ? undefined : { primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setEditing(selected) }, secondary: [{ id: "delete", label: t("delete"), danger: true, onSelect: () => setDeleting(selected) }] }}>
       {editing && editing !== "new" ? <ProviderEditor provider={editing} workspace={workspace} onClose={() => setEditing(null)} /> : <>
         <Alert status="info">{t("providerPreviewBoundary")}</Alert>
-        <dl className={styles.facts}><div><dt>{t("protocol")}</dt><dd>{selected.protocol}</dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.enabled ? "success" : "neutral"}>{t(selected.enabled ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t(selected.protocol === "SAML" ? "providerSamlIssuer" : "providerOidcIssuer")}</dt><dd>{selected.issuer}</dd></div><div><dt>{t(selected.protocol === "SAML" ? "providerSamlAudience" : "providerOidcClientId")}</dt><dd>{selected.audience}</dd></div><div><dt>{t("roles")}</dt><dd>{workspace.roles.filter((role) => role.principalType === "provider" && role.principal === selected.id).map((role) => role.name).join(" · ") || t("none")}</dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
-        <h3 className={styles.stepTitle}>{t(selected.protocol === "SAML" ? "providerSamlMetadata" : "providerOidcJwks")}</h3><pre className={styles.code} role="region" aria-label={t(selected.protocol === "SAML" ? "providerSamlMetadata" : "providerOidcJwks")} tabIndex={0}>{selected.metadata}</pre><p className={styles.note}>{t(selected.protocol === "SAML" ? "providerSamlMetadataHint" : "providerOidcJwksHint")}</p>
+        <dl className={styles.facts}><div><dt>{t("userSsoTarget")}</dt><dd><code>{selected.accountId}</code></dd></div><div><dt>{t("protocol")}</dt><dd>{selected.protocol}</dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.enabled ? "success" : "neutral"}>{t(selected.enabled ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("providerIssuer")}</dt><dd>{selected.issuer}</dd></div><div><dt>{t("providerRedirectUri")}</dt><dd>{selected.redirectUri}</dd></div><div><dt>{t("roles")}</dt><dd>{workspace.roles.filter((role) => role.principalType === "provider" && role.principal === selected.id).map((role) => role.name).join(" · ") || t("none")}</dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
       </>}
     </WorkspaceDetail> : <WorkspaceCollection title={t("providers")} description={t("providerHint")} intro={<Alert status="info">{t("providerPreviewBoundary")}</Alert>} items={workspace.providers} keywords={(provider) => provider.issuer} createFocusRef={createTrigger} create={{ label: t("createProvider"), onClick: () => setEditing("new") }} workflow={editing === "new" ? <ProviderEditor workspace={workspace} onClose={() => setEditing(null)} /> : undefined} filter={{ label: t("protocol"), options: ["SAML", "OIDC"].map((value) => ({ value, label: value })), matches: (provider, value) => provider.protocol === value }} columns={[t("name"), t("protocol"), t("state"), t("created")]} row={(provider) => <><td><button className={styles.userLink} onClick={() => setSelectedId(provider.id)}>{provider.name}</button><small>{provider.issuer}</small></td><td>{provider.protocol}</td><td><Badge status={provider.enabled ? "success" : "neutral"}>{t(provider.enabled ? "enabled" : "disabled")}</Badge></td><td><WorkspaceTime value={provider.createdAt} /></td></>} />}
     {deleting ? <WorkspaceDelete name={deleting.name} onClose={() => setDeleting(null)} onConfirm={() => access.executeWorkspace({ kind: "delete-provider", id: deleting.id })} /> : null}

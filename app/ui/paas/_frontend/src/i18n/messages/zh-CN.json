@@ -4224,31 +4224,21 @@
     "serviceNoConsole": "服务角色只用于工作负载，不允许控制台登录。",
     "roleSecurity": "MOCK · 不签发真实 STS 凭证，不改变当前登录",
     "protocol": "协议",
-    "issuer": "身份提供商 URL",
-    "audience": "客户端 ID / Audience",
-    "metadata": "联合元数据 / 签名公钥",
-    "metadataHint": "SAML 使用 EntityDescriptor XML；OIDC 使用包含 keys 数组的 JWKS JSON。仅验证本地格式，不连接外部地址。",
-    "providerSamlIssuer": "SAML IdP URL",
-    "providerSamlAudience": "服务提供商 Audience",
-    "providerSamlMetadata": "SAML 元数据 XML",
-    "providerSamlMetadataHint": "需包含 EntityDescriptor。本页不解析证书、不验证 XML 签名，也不发起登录。",
-    "providerOidcIssuer": "OIDC Issuer URL",
-    "providerOidcClientId": "客户端 ID",
-    "providerOidcJwks": "签名公钥 JWKS JSON",
-    "providerOidcJwksHint": "需包含非空 keys 数组。本页不发现 Issuer、不获取远端密钥，也不验证 Token。",
-    "providerPreviewBoundary": "MOCK · 仅保存当前浏览器会话并校验本地配置形状；不连接外部 IdP，不进行断言或 Token 交换，也不签发登录会话。",
+    "providerIssuer": "身份提供商 Issuer",
+    "providerRedirectUri": "登录 Redirect URI",
+    "providerRedirectUriHint": "只预览与当前账号绑定的 HTTPS 回调地址；页面不会访问它或启动登录。",
+    "providerPreviewBoundary": "MOCK · 只保存当前浏览器会话中的账号、Issuer 与 Redirect URI 投影；不连接外部 IdP，不验证断言或 Token，也不签发登录会话。",
     "providerReviewTitle": "审阅身份提供商 · {name}",
     "providerLinkedRoles": "关联角色",
     "providerLinkedMappings": "断言映射",
     "providerEnableReviewHint": "启用只让这份本地配置可被后续角色 SSO 预览引用，不会验证 IdP、建立信任或授予承担角色权限。当前有 {count} 条既有角色或映射关系需要一并核对。",
-    "providerDisableReviewHint": "若真实平台停用身份提供商，依赖它的新登录通常应停止；已签发会话、角色策略和授权不会因此自动撤销。当前有 {count} 条既有角色或映射关系需要单独核对。本 MOCK 不执行这些影响。",
+    "providerDisableReviewHint": "真实平台停用身份提供商后，依赖它的新 Session 签发必须失败；既有 Session 不会因此自动撤销，角色策略和授权也不会改变。当前有 {count} 条既有角色或映射关系需要单独核对。本 MOCK 不签发或撤销会话。",
     "providerReviewBoundary": "保存只更新当前 MOCK 会话中的身份提供商配置；不会访问外部地址、验证签名、变更角色信任、签发会话或证明有效权限。",
     "providerIssues": {
       "name": "请输入不超过 64 个字符的有效名称。",
       "duplicate": "已有同名身份提供商，请使用其他名称。",
-      "issuer": "请输入有效的 HTTPS 身份提供商地址。",
-      "audience": "请输入不超过 256 个字符的 Audience 或客户端 ID。",
-      "metadata": "SAML 需包含 EntityDescriptor；OIDC 需提供含非空 keys 数组的 JWKS JSON。这里只检查本地格式。"
+      "issuer": "请输入有效的 HTTPS Issuer。",
+      "redirectUri": "请输入有效的 HTTPS Redirect URI。"
     },
     "roleSsoMappings": "断言映射预览",
     "roleSsoAssertionSubject": "断言主体值",
@@ -4274,7 +4264,7 @@
       "steps": {
         "provider": {
           "title": "验证企业身份提供商",
-          "detail": "当前身份源只是本地配置样例；真实入口必须校验签名、issuer、audience/recipient、时窗以及重放。"
+          "detail": "当前身份源只是账号、Issuer 与 Redirect URI 的本地投影；真实入口完成协议验证前，不能把配置存在解释成登录成功。"
         },
         "assertion": {
           "title": "验证并解析外部断言",
@@ -4288,9 +4278,13 @@
           "title": "独立检查 Role TrustPolicy",
           "detail": "目标角色仍须独立验证其是否信任该身份提供商；映射不是授权，不会修改角色策略、权限边界或最终 Allow 结果。"
         },
+        "permission": {
+          "title": "独立检查承担角色权限",
+          "detail": "Role Trust 只允许该身份成为候选主体；调用者还必须通过承担角色的权限检查。任一门未成立，STS 都不能签发 RoleSession。"
+        },
         "session": {
           "title": "签发有界 STS RoleSession",
-          "detail": "会话时长只是目标角色设置的上限。真实会话必须保留外部原始主体与来源身份供审计；本预览不签发会话或凭据。"
+          "detail": "只有身份映射、Role Trust 与承担权限都成立后才可能签发。真实会话必须保留原 Provider 和 opaque 外部身份供审计；本预览不签发会话或凭据。"
         }
       }
     },
@@ -4304,50 +4298,46 @@
     "ssoConfirmMockSave": "保存 MOCK 配置",
     "ssoProvider": "选择身份提供商",
     "userSsoReview": "审阅配置",
-    "userSsoMaterialPresent": "已填写；未验证真实签名或登录",
     "userSsoConcept": {
       "title": "用户 SSO",
       "subtitle": "账号级企业身份登录边界",
-      "state": "未配置 · 尚未启用",
-      "boundary": "IAM-EXT-01/02 概念预览 · 当前没有已发布的身份提供商、外部身份映射或登录路由契约。本页不连接 IdP、不验证断言或 Token、不保存密钥、不创建映射，也不启动登录。",
+      "state": "MOCK · 只读投影",
+      "boundary": "IAM-EXT-01/02 概念预览 · 只展示当前账号内 IdentityProvider 与 ExternalIdentity 的稳定关系，不连接 IdP、不验证断言或 Token、不保存秘密、不创建映射，也不启动登录。",
+      "projectionTitle": "账号联合身份投影",
+      "projectionHint": "Provider、Issuer、Redirect URI 与 Account 显式绑定；ExternalIdentity 只指向同账号中的既有 USER。",
+      "providerDirectory": "账号身份提供商",
+      "externalIdentityDirectory": "外部身份映射",
+      "providerId": "Provider",
+      "provider": "身份提供商",
+      "account": "账号",
+      "accountProtocol": "账号 / 协议",
+      "endpoints": "联合端点",
+      "issuer": "Issuer",
+      "redirectUri": "Redirect URI",
+      "providerState": "配置状态",
+      "externalIdentity": "Opaque 外部身份",
+      "targetUser": "目标 USER",
+      "mappingState": "映射状态",
+      "projectionAvailable": "配置可参与校验 · 未验证",
+      "mappingConfigured": "只读映射 · 未签发",
+      "newSessionBlocked": "新 Session 签发阻断",
+      "enabledProviderBoundary": "Provider 启用只表示该配置可参与后端校验，不表示登录成功、身份可信或权限已授予。",
+      "disabledProviderEffect": "Provider 停用后，依赖它的新 Session 签发必须失败；既有 Session 不会据此自动撤销，USER 策略和用户组授权也不会改变。",
+      "invalidProjection": "存在跨账号、未知 Provider 或未知 USER 的投影；这些记录已失败关闭，不参与展示或会话判断。",
       "journeyTitle": "用户登录链路",
       "journeyHint": "固定语义先显示；每一步只有在 IAM 返回权威事实后才能变成可用状态。",
       "journey": {
-        "provider": { "title": "账号级身份提供商", "state": "未配置", "detail": "SAML 或 OIDC 信任属于当前账号；它与用于承担角色的身份提供商配置不能互换。" },
-        "mapping": { "title": "外部身份映射", "state": "无权威映射", "detail": "外部 subject 只能唯一映射到一个既有 USER；不会自动创建用户，也不会把外部组变成 Matrix 用户组或策略。" },
+        "provider": { "title": "账号级身份提供商", "state": "配置投影 · 未验证", "detail": "SAML 或 OIDC 配置属于当前账号；存在配置不等于外部身份已验证，也不等于可以签发 Session。" },
+        "mapping": { "title": "外部身份映射", "state": "只读投影", "detail": "Opaque 外部身份只能映射到同账号中的一个既有 USER；不会自动创建用户，也不会把外部组变成 Matrix 用户组或策略。" },
         "session": { "title": "登录 Session", "state": "未签发", "detail": "断言或 Token 通过协议、路由和映射校验后，才可为该 USER 建立新的登录 Session；旧 Session 不会被追溯升级。" },
         "authorization": { "title": "用户权限", "state": "独立决定", "detail": "登录成功只确认身份。资源权限仍来自既有用户直接策略与用户组继承，不能由 IdP 声明直接授予。" }
-      },
-      "protocolsTitle": "协议接入信息",
-      "protocolsHint": "以下是后续接入必须具备的边界，不是当前配置值或健康状态。",
-      "protocols": {
-        "saml": {
-          "title": "SAML 企业身份源",
-          "hint": "适合企业目录把已认证用户送回 Matrix 登录入口。",
-          "items": {
-            "metadata": "IdP metadata、Issuer 与签名证书必须被可信发布并支持轮换。",
-            "serviceProvider": "Entity ID、ACS、Audience 与 Recipient 由安装配置固定，不能由浏览器或管理员请求临时选择。",
-            "signature": "签名、时效、受众与重放校验由 IAM 完成，页面不能用 XML 格式检查冒充验证。",
-            "subject": "NameID 或声明映射只定位既有 USER，并受账号范围与唯一性约束。"
-          }
-        },
-        "oidc": {
-          "title": "OIDC 企业身份源",
-          "hint": "适合通过标准授权流程建立账号级登录信任。",
-          "items": {
-            "issuer": "Issuer、Discovery 与 JWKS 必须来自可信 HTTPS 边界并支持密钥轮换。",
-            "client": "Client ID 与 Redirect URI 由安装配置固定；客户端 Secret 不在浏览器中展示或保存。",
-            "proof": "state、nonce、PKCE、签名、Audience 与时效由 IAM 校验，页面不自行判断可信。",
-            "subject": "稳定 subject 或受控声明只映射到既有 USER，不能绕过停用状态与账号隔离。"
-          }
-        }
       },
       "readinessTitle": "启用前置",
       "readinessHint": "全部由后端契约和真实运行验收后，配置、测试连接与启停动作才可以开放。",
       "notReady": "尚未就绪",
       "readiness": {
         "installation": { "title": "安装级登录入口", "detail": "RP/Origin、回调地址、realm 解析及防枚举行为需固定，不能信任租户输入改变登录范围。" },
-        "trust": { "title": "协议与材料生命周期", "detail": "需要元数据、证书或 JWKS 的版本、轮换、失效和失败关闭规则。" },
+        "trust": { "title": "协议验证生命周期", "detail": "Issuer、Redirect URI、验证状态、停用和失败关闭必须由权威后端契约维护，页面不合成可信结果。" },
         "identity": { "title": "外部身份唯一映射", "detail": "需定义 IdentityProvider、ExternalIdentity 与既有 USER 的账号级唯一性、停用和断联语义。" },
         "recovery": { "title": "应急与恢复路径", "detail": "启用前必须保留受控恢复；恢复不能绕过 MFA、复活停用用户或恢复已撤销权限。" },
         "audit": { "title": "Session 与审计证据", "detail": "登录、映射、拒绝、断联和配置变更需产生可关联的权威审计，页面不合成成功事实。" }
@@ -4356,7 +4346,7 @@
       "comparisonHint": "二者都可使用企业 IdP，但得到的身份与授权路径不同。",
       "comparison": {
         "user": { "title": "用户 SSO", "detail": "外部身份 → 既有 USER → 登录 Session → 该用户已有权限。" },
-        "role": { "title": "角色 SSO", "detail": "外部断言或 Token → TrustPolicy / 声明检查 → RoleSession → 角色策略与权限边界。" }
+        "role": { "title": "角色 SSO", "detail": "外部身份 → Role Trust → 承担权限 → RoleSession → 角色策略与权限边界。" }
       }
     },
     "userSsoBackToEdit": "返回编辑",

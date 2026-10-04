@@ -73,7 +73,8 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
       { id: "role-audit", name: "ExternalAuditRole", description: "Read-only role for enterprise SSO", principalType: "provider", principal: "idp-example", trustedUserIds: [], tags: [], policyIds: ["policy-audit"], sessionMinutes: 60, consoleAccess: true, createdAt: at },
       { id: "role-log-reviewer", name: "ProductionLogReviewRole", description: "Qiao can review production logs in a role session without inheriting personal deployment grants", principalType: "account", principal: accountId, trustedUserIds: ["principal-qiao"], tags: [], policyIds: ["policy-tag-logs"], boundaryPolicyId: "policy-tag-logs", sessionMinutes: 30, consoleAccess: true, createdAt: at }
     ],
-    providers: [{ id: "idp-example", name: "EnterpriseSSO", protocol: "SAML", issuer: "https://identity.example.invalid/saml", audience: "matrix-cloud", metadata: '<EntityDescriptor entityID="https://identity.example.invalid/saml"></EntityDescriptor>', enabled: true, createdAt: at }],
+    providers: [{ id: "idp-example", accountId, name: "EnterpriseSSO", protocol: "SAML", issuer: "https://identity.example.invalid/saml", redirectUri: "https://console.example.invalid/auth/federation/callback", enabled: true, createdAt: at }],
+    externalIdentities: [{ id: "external-identity-audit", accountId, providerId: "idp-example", subject: "external-subject:auditor-01", userId: "principal-chen", enabled: true }],
     roleSsoMappings: [{ id: "role-sso-rule-audit", name: "AuditAssertionRule", assertionSubject: "audit@example.invalid", providerId: "idp-example", roleId: "role-audit", enabled: true, createdAt: at }],
     keys: [{
       id: "MOCK-pipeline-key", ownerId: "principal-lin", status: "ENABLED", resourceVersion: 2, createdAt: at,

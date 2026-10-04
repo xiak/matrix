@@ -1,8 +1,8 @@
 "use client";
 import { useId, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Card, Tabs, Typography } from "@ui/xiak";
-import type { AccessWorkspace } from "../domain/accessWorkspace";
+import { Alert, Badge, Card, Table, Tabs, Typography } from "@ui/xiak";
+import { externalIdentityProjectionIssue, type AccessWorkspace } from "../domain/accessWorkspace";
 import { MfaSecurityPreview } from "./MfaPreviewExperience";
 import { AccountSecuritySettingsPreview } from "./AccountSecuritySettingsPreview";
 import { PasswordRulesPreview } from "./PasswordRulesPreview";
@@ -58,8 +58,11 @@ export function AccessUserSso({ workspace }: { workspace: AccessWorkspace }) {
   const titleId = useId();
   const journey = ["provider", "mapping", "session", "authorization"] as const;
   const readiness = ["installation", "trust", "identity", "recovery", "audit"] as const;
-  const samlRequirements = ["metadata", "serviceProvider", "signature", "subject"] as const;
-  const oidcRequirements = ["issuer", "client", "proof", "subject"] as const;
+  const providers = workspace.providers.filter((provider) => provider.accountId === workspace.accountId);
+  const identityIssues = workspace.externalIdentities.map((identity) => ({ identity, issue: externalIdentityProjectionIssue(identity, workspace) }));
+  const identities = identityIssues.filter((entry) => entry.issue === null).map((entry) => entry.identity);
+  const providerName = (providerId: string) => providers.find((provider) => provider.id === providerId)?.name ?? providerId;
+  const providerEnabled = (providerId: string) => Boolean(providers.find((provider) => provider.id === providerId)?.enabled);
 
   return <Card><Card.Header>
     <div className={styles.cardHeadingCopy}>
@@ -69,6 +72,31 @@ export function AccessUserSso({ workspace }: { workspace: AccessWorkspace }) {
     <div className={styles.headingBadges}><Badge status="warning">MOCK</Badge><Badge status="neutral">{t("state")}</Badge></div>
   </Card.Header><Card.Body className={styles.stack}>
     <Alert status="info">{t("boundary")}</Alert>
+
+    <section aria-labelledby={`${titleId}-projection`} className={styles.stack}>
+      <div className={styles.cardHeadingCopy}><h3 className={styles.stepTitle} id={`${titleId}-projection`}>{t("projectionTitle")}</h3><p className={styles.note}>{t("projectionHint")}</p></div>
+      {identityIssues.some((entry) => entry.issue !== null) ? <Alert status="warning">{t("invalidProjection")}</Alert> : null}
+      <Table aria-label={t("providerDirectory")} className={styles.federationProviderTable} mobileLayout="stack">
+        <thead><tr><th scope="col">{t("providerId")}</th><th scope="col">{t("accountProtocol")}</th><th scope="col">{t("endpoints")}</th><th scope="col">{t("providerState")}</th></tr></thead>
+        <tbody>{providers.map((provider) => <tr key={provider.id}>
+          <td data-label={t("providerId")}><strong>{provider.name}</strong><small><code>{provider.id}</code></small></td>
+          <td data-label={t("accountProtocol")}><code>{provider.accountId}</code><small>{provider.protocol}</small></td>
+          <td data-label={t("endpoints")}><dl className={styles.federationEndpoints}><div><dt>{t("issuer")}</dt><dd><code>{provider.issuer}</code></dd></div><div><dt>{t("redirectUri")}</dt><dd><code>{provider.redirectUri}</code></dd></div></dl></td>
+          <td data-label={t("providerState")}><Badge status={provider.enabled ? "neutral" : "warning"}>{t(provider.enabled ? "projectionAvailable" : "newSessionBlocked")}</Badge></td>
+        </tr>)}</tbody>
+      </Table>
+      <Table aria-label={t("externalIdentityDirectory")} mobileLayout="stack">
+        <thead><tr><th scope="col">{t("externalIdentity")}</th><th scope="col">{t("provider")}</th><th scope="col">{t("account")}</th><th scope="col">{t("targetUser")}</th><th scope="col">{t("mappingState")}</th></tr></thead>
+        <tbody>{identities.map((identity) => <tr key={identity.id}>
+          <td data-label={t("externalIdentity")}><code>{identity.subject}</code></td>
+          <td data-label={t("provider")}>{providerName(identity.providerId)}</td>
+          <td data-label={t("account")}><code>{identity.accountId}</code></td>
+          <td data-label={t("targetUser")}><code>{identity.userId}</code></td>
+          <td data-label={t("mappingState")}><Badge status={identity.enabled && providerEnabled(identity.providerId) ? "neutral" : "warning"}>{t(identity.enabled && providerEnabled(identity.providerId) ? "mappingConfigured" : "newSessionBlocked")}</Badge></td>
+        </tr>)}</tbody>
+      </Table>
+      <Alert status={providers.some((provider) => !provider.enabled) ? "warning" : "info"}>{t(providers.some((provider) => !provider.enabled) ? "disabledProviderEffect" : "enabledProviderBoundary")}</Alert>
+    </section>
 
     <section aria-labelledby={`${titleId}-journey`} className={styles.stack}>
       <div className={styles.securityCheckHeading}>
@@ -84,22 +112,6 @@ export function AccessUserSso({ workspace }: { workspace: AccessWorkspace }) {
           </div>
         </li>)}
       </ol>
-    </section>
-
-    <section aria-labelledby={`${titleId}-protocols`} className={styles.stack}>
-      <div className={styles.cardHeadingCopy}><h3 className={styles.stepTitle} id={`${titleId}-protocols`}>{t("protocolsTitle")}</h3><p className={styles.note}>{t("protocolsHint")}</p></div>
-      <div className={styles.settingsGrid}>
-        <section className={styles.conceptPanel} aria-labelledby={`${titleId}-saml`}>
-          <div className={styles.securityCheckHeading}><strong id={`${titleId}-saml`}>{t("protocols.saml.title")}</strong><Badge status="neutral">SAML 2.0</Badge></div>
-          <p>{t("protocols.saml.hint")}</p>
-          <ul>{samlRequirements.map((item) => <li key={item}>{t(`protocols.saml.items.${item}`)}</li>)}</ul>
-        </section>
-        <section className={styles.conceptPanel} aria-labelledby={`${titleId}-oidc`}>
-          <div className={styles.securityCheckHeading}><strong id={`${titleId}-oidc`}>{t("protocols.oidc.title")}</strong><Badge status="neutral">OIDC</Badge></div>
-          <p>{t("protocols.oidc.hint")}</p>
-          <ul>{oidcRequirements.map((item) => <li key={item}>{t(`protocols.oidc.items.${item}`)}</li>)}</ul>
-        </section>
-      </div>
     </section>
 
     <section aria-labelledby={`${titleId}-readiness`} className={styles.stack}>

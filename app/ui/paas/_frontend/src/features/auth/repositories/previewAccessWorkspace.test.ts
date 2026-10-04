@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyAccessWorkspaceCommand, policyUsageCounts } from "../domain/accessWorkspace";
+import { applyAccessWorkspaceCommand, externalIdentityProjectionIssue, policyUsageCounts } from "../domain/accessWorkspace";
 import { analyzePolicyDocument, containsDenyStatement, parsePolicyDocument, policyDocumentDiagnostics, policyStatementKey, resourcesForPolicyActions, summarizePolicyServices, type PolicyDocument } from "../domain/policyDocument";
 import { expandPolicyActions } from "../domain/policyLanguage";
 import { policyActions, policyServices } from "../domain/previewAuthorizationCatalog";
@@ -610,12 +610,21 @@ describe("access workspace preview invariants", () => {
     const role = state.roles.find((entry) => entry.id === "role-pipeline")!;
     expect(() => applyAccessWorkspaceCommand(state, { kind: "update-role-settings", id: role.id, sessionMinutes: 60, consoleAccess: true }, context)).toThrow("invalid");
   });
-  it("validates HTTPS and metadata shape without claiming external validation", () => {
-    const command = { kind: "save-provider" as const, name: "OIDC", protocol: "OIDC" as const, issuer: "https://id.example.invalid", audience: "matrix", metadata: '{"keys":[{"kty":"RSA","kid":"MOCK"}]}', enabled: true };
+  it("binds a provider projection to HTTPS issuer and redirect addresses without accepting key material", () => {
+    const command = { kind: "save-provider" as const, name: "OIDC", protocol: "OIDC" as const, issuer: "https://id.example.invalid", redirectUri: "https://console.example.invalid/auth/federation/callback", enabled: true };
     const state = initialAccessWorkspace("org-xiak");
-    expect(applyAccessWorkspaceCommand(state, command, context).providers.at(-1)?.protocol).toBe("OIDC");
+    expect(applyAccessWorkspaceCommand(state, command, context).providers.at(-1)).toMatchObject({ accountId: "org-xiak", protocol: "OIDC" });
     expect(() => applyAccessWorkspaceCommand(state, { ...command, issuer: "javascript:alert(1)" }, context)).toThrow("invalid");
-    expect(() => applyAccessWorkspaceCommand(state, { ...command, metadata: "{}" }, context)).toThrow("invalid");
+    expect(() => applyAccessWorkspaceCommand(state, { ...command, redirectUri: "http://console.example.invalid/callback" }, context)).toThrow("invalid");
+  });
+  it("fails closed when an external identity leaves the current account projection", () => {
+    const state = initialAccessWorkspace("org-xiak");
+    const identity = state.externalIdentities[0]!;
+    expect(externalIdentityProjectionIssue(identity, state)).toBeNull();
+    expect(externalIdentityProjectionIssue({ ...identity, accountId: "org-foreign" }, state)).toBe("account");
+    expect(externalIdentityProjectionIssue({ ...identity, providerId: "idp-unknown" }, state)).toBe("provider");
+    expect(externalIdentityProjectionIssue({ ...identity, subject: "\u0000" }, state)).toBe("subject");
+    expect(externalIdentityProjectionIssue({ ...identity, userId: "principal-unknown" }, state)).toBe("user");
   });
   it("limits keys per subuser and requires disabling before deletion", () => {
     let state = initialAccessWorkspace("org-xiak");

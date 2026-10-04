@@ -808,6 +808,125 @@ describe("IAM HTTP personal-security boundary", () => {
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/authenticators");
   });
 
+  it("binds notification-address replacement to one exact proof, version, and candidate address", async () => {
+    const requestId = "replace-notification-contact-1";
+    const notificationContact = { expectedResourceVersion: 7, email: "Security@example.com" };
+    const stepUp = {
+      apiVersion, kind: "StepUp", id: "step-up-notification-1", requestId,
+      operation: "NOTIFICATION_CONTACT_REPLACE", expectedFactorRevision: 3, notificationContact,
+      state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z"
+    };
+    let fetcher = reply(stepUp);
+    await expect(httpIamRepository.personalSecurity!.notificationReplacement!.startStepUp("bearer", {
+      requestId, expectedFactorRevision: 3, notificationContact
+    })).resolves.toMatchObject({ operation: "NOTIFICATION_CONTACT_REPLACE", notificationContact, state: "PENDING" });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/step-up");
+    expect(requestBody(fetcher)).toEqual({
+      requestId, operation: "NOTIFICATION_CONTACT_REPLACE", expectedFactorRevision: 3, notificationContact
+    });
+
+    fetcher = reply(stepUp);
+    await httpIamRepository.personalSecurity!.notificationReplacement!.stepUpByRequest(
+      "bearer", requestId, 3, notificationContact
+    );
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/step-up/by-request/${requestId}`);
+
+    fetcher = reply({ ...stepUp, state: "PROVED", provedAt: "2026-09-11T08:00:30Z" });
+    await httpIamRepository.personalSecurity!.notificationReplacement!.verifyStepUp(
+      "bearer", stepUp.id, requestId, 3, notificationContact,
+      { requestId: "prove-notification-contact-1", password: "private-password", code: "123456" }
+    );
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/step-up/${stepUp.id}:verify`);
+    expect(requestBody(fetcher)).toEqual({
+      requestId: "prove-notification-contact-1", password: "private-password", code: "123456"
+    });
+
+    const verification = {
+      apiVersion, kind: "NotificationContactVerification", id: "verification-replacement-1",
+      accountId: account.id, userId: user.id, requestId, purpose: "REPLACEMENT",
+      expectedResourceVersion: 7, email: "Security@example.com", state: "PENDING",
+      issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z",
+      delivery: { state: "PENDING", attempts: 0, updatedAt: timestamp }
+    };
+    fetcher = reply(verification);
+    await expect(httpIamRepository.personalSecurity!.notificationReplacement!.startVerification("bearer", {
+      stepUpId: stepUp.id, requestId, ...notificationContact
+    })).resolves.toMatchObject({ purpose: "REPLACEMENT", expectedResourceVersion: 7, state: "PENDING" });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/notification-contact/replacements");
+    expect(requestBody(fetcher)).toEqual({ stepUpId: stepUp.id, requestId, ...notificationContact });
+
+    fetcher = reply(verification);
+    await httpIamRepository.personalSecurity!.notificationReplacement!.verification(
+      "bearer", verification.id, { requestId, ...notificationContact }
+    );
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/notification-contact/verifications/${verification.id}`);
+
+    fetcher = reply({ ...verification, state: "VERIFIED", completedAt: "2026-09-11T08:01:00Z" });
+    await httpIamRepository.personalSecurity!.notificationReplacement!.confirmVerification(
+      "bearer", verification.id, { requestId, ...notificationContact },
+      { requestId: "confirm-notification-contact-1", code: "12345678" }
+    );
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/notification-contact/verifications/${verification.id}:confirm`);
+    expect(requestBody(fetcher)).toEqual({ requestId: "confirm-notification-contact-1", code: "12345678" });
+  });
+
+  it("fails closed when notification replacement drifts from its original intent", async () => {
+    const requestId = "replace-notification-contact-1";
+    const notificationContact = { expectedResourceVersion: 7, email: "Security@example.com" };
+    const stepUp = {
+      apiVersion, kind: "StepUp", id: "step-up-notification-1", requestId,
+      operation: "NOTIFICATION_CONTACT_REPLACE", expectedFactorRevision: 3, notificationContact,
+      state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z"
+    };
+    for (const body of [
+      { ...stepUp, notificationContact: { ...notificationContact, expectedResourceVersion: 8 } },
+      { ...stepUp, notificationContact: { ...notificationContact, email: "Other@example.com" } },
+      { ...stepUp, notificationContact: undefined },
+      { ...stepUp, operation: "TOTP_REPLACE" }
+    ]) {
+      reply(body);
+      await expect(httpIamRepository.personalSecurity!.notificationReplacement!.stepUpByRequest(
+        "bearer", requestId, 3, notificationContact
+      )).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    const verification = {
+      apiVersion, kind: "NotificationContactVerification", id: "verification-replacement-1",
+      accountId: account.id, userId: user.id, requestId, purpose: "REPLACEMENT",
+      expectedResourceVersion: 7, email: "Security@example.com", state: "PENDING",
+      issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z",
+      delivery: { state: "PENDING", attempts: 0, updatedAt: timestamp }
+    };
+    for (const body of [
+      { ...verification, purpose: "FIRST_ADDRESS" },
+      { ...verification, expectedResourceVersion: 8 },
+      { ...verification, requestId: "another-request" },
+      { ...verification, email: "Other@example.com" },
+      { ...verification, purpose: undefined }
+    ]) {
+      reply(body);
+      await expect(httpIamRepository.personalSecurity!.notificationReplacement!.verification(
+        "bearer", verification.id, { requestId, ...notificationContact }
+      )).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    for (const action of [
+      () => httpIamRepository.personalSecurity!.notificationReplacement!.startStepUp("bearer", {
+        requestId, expectedFactorRevision: 1, notificationContact
+      }),
+      () => httpIamRepository.personalSecurity!.notificationReplacement!.startVerification("bearer", {
+        stepUpId: stepUp.id, requestId, expectedResourceVersion: 0, email: notificationContact.email
+      }),
+      () => httpIamRepository.personalSecurity!.notificationReplacement!.confirmVerification(
+        "bearer", verification.id, { requestId, ...notificationContact }, { requestId: "confirm-one", code: "123" }
+      )
+    ]) {
+      const fetcher = reply({});
+      await expect(action()).rejects.toThrow("INVALID_IAM_RESPONSE");
+      expect(fetcher).not.toHaveBeenCalled();
+    }
+  });
+
   it("binds recovery-code regeneration to one purpose-limited proof and original request", async () => {
     const requestId = "regenerate-codes-1";
     const stepUp = {

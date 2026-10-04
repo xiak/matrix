@@ -40,6 +40,16 @@ export type NotificationContactVerification = {
   delivery: NotificationDeliveryObservation;
 };
 
+export type NotificationContactReplacementIntent = {
+  expectedResourceVersion: number;
+  email: string;
+};
+
+export type NotificationContactReplacementVerification = NotificationContactVerification & {
+  purpose: "REPLACEMENT";
+  expectedResourceVersion: number;
+};
+
 export type AuthenticatorState =
   | { enrollmentState: "NEVER_BOUND"; factorRevision: 1; factorId: null }
   | { enrollmentState: "BOUND"; factorRevision: number; factorId: string }
@@ -107,9 +117,10 @@ export type SecurityStepUpState = "PENDING" | "PROVED" | "CONSUMED" | "EXPIRED";
 export type SecurityStepUp = {
   id: string;
   requestId: string;
-  operation: "RECOVERY_CODES_REGENERATE" | "TOTP_REPLACE" | "SECURITY_SETTINGS_UPDATE";
+  operation: "RECOVERY_CODES_REGENERATE" | "TOTP_REPLACE" | "SECURITY_SETTINGS_UPDATE" | "NOTIFICATION_CONTACT_REPLACE";
   expectedFactorRevision: number;
   securitySettings?: SecuritySettingsUpdateIntent;
+  notificationContact?: NotificationContactReplacementIntent;
   state: SecurityStepUpState;
   createdAt: string;
   expiresAt: string;
