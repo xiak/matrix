@@ -6,9 +6,9 @@
 - Updated: 2026-10-04
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed branch head: `2397586e2`
-- Pushed source/embed milestone: `0114419d2` / `80789db67`
-- Pushed documentation milestone: `2397586e2`
+- Pushed branch head: `fc784e86a`
+- Pushed source/embed milestone: `ba7e57a9a`
+- Pushed documentation milestone: `fc784e86a`
 
 ## Authoritative route
 
@@ -28,20 +28,21 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`; login
-verification remains disabled for UX review. Notification replacement source
-`228c06eb2` keeps proof, delivery and atomic confirmation as distinct states,
-retains completed or unknown intents until authoritative reread, and preserves
-the separate MOCK experience. Source `0114419d2` and generated embed
-`80789db67` additionally keep the access-analysis primary tabs single-line and
-stable on small screens, with local overflow only when their content cannot fit.
+verification remains disabled for UX review. Source and synchronized embed
+`ba7e57a9a` extend the shared delayed-feedback regression matrix across every
+currently routed Overview, Catalog, Quota, Region, Application, Resource,
+Installation, Operation, Message, DevOps, Observability, Log, Audit and IAM
+loading-region branch. Each destination exposes stable named chrome immediately,
+waits 200 ms before painting placeholders and confines them to the data-owning
+region. The earlier compact IAM and notification-replacement behavior remains in
+place, including the separate inspectable MOCK.
 
-Acceptance after the mobile delta: 62 frontend files / 1,069 tests, three
-static-normalization tests, typecheck, lint, architecture, 228 theme-contrast
-pairs, 45-route production export, 43 normalized paths, 249-file embed equality,
-and UI-host Go test/vet. The earlier notification replacement milestone also
-passed repository-wide Go test/vet. Documentation head `2397586e2` records the
-exact IAM semantics, mobile evidence, fixed sources and remaining real
-IAM/SMTP browser gate in the owning FEAT.
+Acceptance at this milestone: focused shell 82 tests; complete frontend 62 files /
+1,082 tests; three static-normalization tests; typecheck, lint, architecture and
+228 theme-contrast pairs; 45-route production export, 43 normalized paths and
+249-file embed equality; synchronized Go UI-host test/vet. Documentation head
+`fc784e86a` records the current shared gate; exact IAM semantics and remaining
+real IAM/SMTP browser acceptance remain in the IAM owner.
 
 ## Continuation boundary
 
