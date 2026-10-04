@@ -222,7 +222,7 @@ IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`�
 
 固定生产实现`2487b6586697d10089c31adaee37c4a4603055d4`的[Verification37161461635](https://github.com/xiak/matrix/actions/runs/37161461635)已由GitHub API核实精确SHA；go、node-process及13条authority分片共15项全部completed/success。`authority-recovery-window`实际跨越三个生产十分钟认证窗口并正常完成，不以改数据库时钟或缩短产品窗口取得通过。
 
-后继固定门禁`20632441a0e014f175f3111d55a887db76027bc7`在本任务独立PG18及两个独立本地Maildir实跑`TestIAMNotificationContactPostgres`118.66秒。生产HTTP、目的限定StepUp和受限dispatcher先把首地址验证码及安全通知投递到`previous@matrix.test`，再把替换验证码投递到`current@matrix.test`；确认前旧地址仍为版本1权威联系人，确认后原子推进为新地址版本2。随后停用USER，已提交的`CONTACT_REPLACED_PREVIOUS`和`CONTACT_REPLACED_CURRENT`仍分别到达原、新邮箱；替换验证码与两条告警共三条通知均保存一次`DATA 250/ACCEPTED`，告警不含验证码，四条联系人事实逐项通过原历史proof及伪造拒绝。Postfix夹具固定Debian13基底、2CPU/768MiB/Pids128、独立任务标签及loopback随机端口；队列清空后只删除本任务容器、镜像和四个临时数据库，保留既有PG容器供后续门禁。该证据不声称公网最终送达、用户已读、任意SMTP供应商或尚未执行的签名生命周期/UI验收。
+后继固定门禁`20632441a0e014f175f3111d55a887db76027bc7`在本任务独立PG18及两个独立本地Maildir实跑`TestIAMNotificationContactPostgres`118.66秒。生产HTTP、目的限定StepUp和受限dispatcher先把首地址验证码及安全通知投递到`previous@matrix.test`，再把替换验证码投递到`current@matrix.test`；确认前旧地址仍为版本1权威联系人，确认后原子推进为新地址版本2。随后停用USER，已提交的`CONTACT_REPLACED_PREVIOUS`和`CONTACT_REPLACED_CURRENT`仍分别到达原、新邮箱；替换验证码与两条告警共三条通知均保存一次`DATA 250/ACCEPTED`，告警不含验证码，四条联系人事实逐项通过原历史proof及伪造拒绝。相同最终源码另以`GOMAXPROCS=2`完成全仓`go test -race -p 2 -count=1 ./...`和`go vet ./...`，默认外部夹具SKIP不冒充上述真实PG/SMTP证据。Postfix夹具固定Debian13基底、2CPU/768MiB/Pids128、独立任务标签及loopback随机端口；队列清空后只删除本任务容器、镜像和四个临时数据库，保留既有PG容器供后续门禁。该证据不声称公网最终送达、用户已读、任意SMTP供应商或尚未执行的签名生命周期/UI验收。
 
 ## 其他延期能力的架构预留
 
