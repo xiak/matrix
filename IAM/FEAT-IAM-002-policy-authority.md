@@ -1,6 +1,6 @@
 # FEAT-IAM-002：策略权限权威替换
 
-- 状态：实施中；未验收。策略语言/求值与持久化替换在同一功能切片内收口，不把纯函数测试当作迁移完成。
+- 状态：单一策略权威的语言、持久化、迁移、当前求值、管理入口和历史证据已经实现；旧 RoleBinding 只保留为不可变历史词汇，不再是在线授权入口。关联写入结果不确定时的封闭完成查询、完整 LIVE UI/浏览器门禁及当前签名发布组合仍未完成，因此整体未验收。
 - 依赖：001 已验收的 CAT-01–04，固定安装消费者已对齐当前策略附件 wire；完整产品 Profile 的集成仍由 008 证明。
 - Owner：IAM `authority`、`identityaccess`、PostgreSQL；Audit 只保存事实。
 
@@ -73,7 +73,7 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 数据库的当前来源查询应返回 `AttachedPolicy`：关联、策略元数据和精确默认内容版本。`EvaluateAttachedPolicies` 先检查所有关系的 Account/主体/安装归属、状态和默认版本一致，再调用已有唯一语句评估器；任一损坏关系不能留下部分 Allow 或证据。当前直接主体路径拒绝未证明的 Group/Role 来源，继承证明由 004/006 接入后才启用。结果绑定准确关联 ID/修订以及命中的 policy/version/digest，按关联 ID 排序，不把允许权限重新解释为策略名称。
 
-以上对象/严格解码与关系校验已实现于现有 API/domain owner。当前候选已将 Go loader、实际 Decide/DecideService 接到 policies、policy_versions、policy_attachments 的当前关系快照；生产鉴权不再通过旧角色名装配权限。管理路由已切换；控制台及完整消费者尚未原子切换，不能运行作交付版本。契约测试覆盖跨 Account、错主体、伪造安装、未证明继承、非默认版本、退休/撤销、摘要替换、重复关联、预算和 Deny 证据顺序；完整业务闭环仍是本 FEAT 的必要剩余项。
+以上对象、严格解码与关系校验已由现有 API/domain owner 实现。Go loader、`Decide`/`DecideService`、管理路由和固定消费者均读取 `policies`、`policy_versions`、`policy_attachments` 的当前关系快照；生产鉴权不再通过旧角色名装配权限。契约测试覆盖跨 Account、错主体、伪造安装、未证明继承、非默认版本、退休/撤销、摘要替换、重复关联、预算和 Deny 证据顺序；未知提交结果查询及最终组合验收仍是必要剩余项。
 
 成员目录 `PrincipalAccess.policyAttachments` 返回同 Account、同 USER 的未撤销直接关联，替换旧 `roleBindings` 投影；不按策略名推断角色，不把元数据 RETIRED 或主体 DISABLED 当成关系撤销。每成员最多 256 条，SQL 读取 257 条用于检测溢出，不能静默截断关系。Go/schema 拒绝错误主体类型、跨账号/主体、重复关联或同策略重复有效关系、撤销关系及超预算结果。目录是管理快照，不是有效权限或可复用许可。
 
@@ -83,29 +83,19 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 领域求值结果将公开 AuthorizationDecision 与私有 PolicyEvidence 分开。新五参数 `record_authorization` 在同一事务核对关联 ID/修订、主体与 scope、当前默认版本/digest，并保存 `authorization_decisions.policy_evidence` 和原 outbox；没有证据的 Allow、重复/额外字段、错误关联或摘要失败关闭。决定及其证据禁止 UPDATE/DELETE/TRUNCATE。已有历史决定保留 NULL，不按迁移时的权限补造原始证据，也不重写原 decision document 或 Audit canonical bytes。新管理动作已接入，产品 Profile revision 的完整决定证据仍待后续同片完成；不宣称此列已覆盖全部最终证据字段。
 
-2026-09-11 该契约增量通过 API/IAM 全部 owning packages 与 architecture 的无缓存 race、IAM/API vet、生成稳定及 Linux/amd64 IAM 构建；API/domain 连续三次聚焦 race 也通过。固定 `3b370ca2c3ab299ec80b554ef970e70d609e2b29` 的独立 Verification `34570914253` 已核实 completed/success。默认版本改为另一不可变内容后，同一关联产生对应的新求值结果与版本证据；坏记录位于有效 Allow 之后仍整体拒绝。这些固定契约证据不包含后续未提交的存储候选。
+初始契约增量固定于 `3b370ca2c3ab299ec80b554ef970e70d609e2b29`，其独立 Verification `34570914253` 已核实 `completed/success`。默认版本改为另一不可变内容后，同一关联产生对应的新求值结果与版本证据；坏记录位于有效 Allow 之后仍整体拒绝。当前存储、运行时及累计证据以下述验收段为准，不把该早期纯契约结果单独当作交付结论。
 
 ## 验收
 
-### 已实现的求值核心；未完成的权威替换
+### 已实现的单一权威；未完成的交付闭环
 
-策略语言、规范编码/摘要、不可变内容版本与唯一 deny-first 求值器已实现。当前候选的实际授权决定读取持久化策略及当前默认版本，已删除 `RoleAllows` 和旧绑定名到内容的运行时映射；在线管理 API、成员目录、进程测试客户端和控制台已切换到策略关联，旧公开请求 DTO 已删除。真实组合和发布消费者仍须门禁确认，不能仅凭源码切换声称整个代码库已完成替换。求值器不限制策略数量为六种，也不按策略名称判断权限。系统策略列出显式 Action 集合，新增目录动作不会自动加入。
+策略语言、规范编码/摘要、不可变内容版本与唯一 deny-first 求值器已经实现。当前授权决定读取持久化策略、当前默认版本和未撤销关联；`RoleAllows`、旧绑定名到内容的运行时映射及旧公开管理 DTO 已删除。在线管理 API、成员目录、进程测试客户端和控制台 repository adapter 使用 `Policy`、`PolicyVersion` 与 `PolicyAttachment`；求值器不限制策略数量为六种，也不按显示名判断权限。系统策略列出显式 Action 集合，新增目录 Action 不会自动扩张既有版本。
 
-当前 policies/versions/attachments 持久化、旧绑定迁移、实际读取求值和关联/内容版本证据落库已有固定候选；控制台源码、严格 repository adapter、85 项前端测试及 59 个内嵌文件已完成替换并通过 2-worker 双次构建一致性检查。真实浏览器、完整产品 Profile 证据及组合回归仍未完成，因此本 FEAT 未 Accepted。候选服务与 SQL/readiness 为 IAM6/Audit4，发布 profile 尚未切换，不能将该混合中间态发布或启动作交付版本；最后已验证发布边界仍为原 4/3/1+r4，没有声明最终组合或签名发布可用。
+固定替换实现起点为 `121e68373951a9261755661329a8e4e41bb6206c`；当前累计后端来源 `08469334a8f31362cd04dde7e482972c3ea52b26` 的 [Verification 37170446801](https://github.com/xiak/matrix/actions/runs/37170446801) 已核实精确 SHA，Go、node-process、十二项串行 authority 门禁及最终汇总共十五项全部 `completed/success`。动态 storage 门禁为每个非白名单 IAM PostgreSQL 测试提供独立数据库，并在测试出现 `SKIP` 时失败，不能把被发现但未运行的 fixture 计为通过。
 
-既有完整 `TestIAMHTTPPostgresVerticalSlice` 已迁移到新关联管理和目录投影，在新的受限 PostgreSQL 18 数据库通过 race（88.28s）。成员创建不附带权限，测试必须另发显式策略关联命令；旧 initialRole 仍严格拒绝。实际覆盖两个租户同名用户/别名竞争、100 条目录分页、跨账号主体/关联 ID 拒绝、原 primary 保护及恢复、租户暂停/恢复、撤权后下一请求拒绝、密码/会话策略与并发、平台授予/凭据保护、IAM/PaaS/Audit 历史 producer 证明及物理 outbox owner/封存链分离。新 IAM 关联事实经过真实 HTTP producer 校验，摘要替换拒绝。安装 verifier 的服务关联不能通过 USER 管理路由撤销；后续存储撤销 fixture 只证明当前服务鉴权拒绝，不声明新的服务身份在线管理 API 已交付。两个 IAM 实例、Audit、PaaS 与双 dispatcher 在当前源码 6/4/1 形状下的独立进程门禁通过（35.03s）；它核对源码服务，不改变最后已发布 4/3/1+r4。工作流另以真实旧 installer 在效果前拒绝不匹配数据库形状；因此该结果不包含签名发布或真实浏览器。
+现有 `TestIAMPolicyAuthorityStoragePostgres` 与累计 HTTP/独立进程门禁覆盖空库迁移、等值重放、旧关联确定性迁移、受限运行登录、双租户隔离、显式关联/撤销、默认版本切换、Deny 优先、退休与撤权不复活、256/257 关系预算、不可变决定证据、历史 Audit bytes、原 primary/platform 保护及错误版本/跨 Account 攻击。固定旧 executable 的保留数据门禁证明撤销历史、NULL 历史证据、恢复 receipt、会话和凭据不会在迁移或重启后复活；SQL 可重放仍不等于跨完整 release profile 获准。
 
-现有 IAM integration owner 的 `TestIAMPolicyAuthorityStoragePostgres` 在专属 PostgreSQL 18.4、1 CPU/768 MiB、独立数据库和动态回环端口通过 race（末次 2.24s 用例时间）。它实际执行空库迁移、多次 Up、安装 bootstrap/等值重放、HTTP 登录/改密/当前身份和受限 API 登录下的 HTTP 鉴权，逐次核对实际持久化的关联/版本证据。验证不可变版本/决定、默认版本所属关系、默认切换后的 Deny 与重放保留、退休/撤销不复活、跨 Account 元数据/版本 RLS、伪造关联/决定证据及 runtime 角色拒绝直接读表。256 条当前关联仍能正常鉴权，第 257 条刻意放在最后且包含 Deny 时返回 503，不产生部分决定，不会截掉 Deny 后错误 Allow。测试中的管理状态变化由隔离数据库 fixture owner 构造，不证明新的在线策略 API 已实现；撤销前恢复可 Allow 的默认版本再验证拒绝，避免退休或 Deny 掩盖撤销缺陷。
-
-既有 `TestIAMRetainedLocalRecoveryProcessUpgrade` 实际运行固定 `5721b7b` 旧 executable 产生权限与撤销历史，再执行候选迁移；当前客户端切换后，真实 `5721b7b`/`9fd45b0`/`a36` 三种固定旧 executable 保留数据升级分别通过 race（13.70s/10.06s/10.13s，整包 36.673s）。旧版本准备仅使用原测试内的私有旧 wire；当前程序只使用策略关联接口，不恢复旧公开请求类型。两种注入故障均保持旧权威不变且不暴露新策略表；正常双次迁移后关联 ID、主体类型、scope、封存安装、修订与全部时间字段精确保留，历史决定证据仍 NULL，旧 Audit canonical bytes 未变，旧 executable 拒绝新权威。当前 IAM6 程序随后完成保留会话读取、本地原 primary 凭据恢复、精确 receipt 重放及重启；旧密码、撤销会话和已撤成员权限没有复活。此门禁不覆盖完整 IAM/Audit/PaaS 组合或跨 release-profile 安装准入；当前发布 profile 与候选 IAM6/Audit4 尚不匹配，真实 profile 比较保持拒绝，不能弱化该检查来通过进程门禁。
-
-本次候选 API/IAM/architecture 的默认无缓存 race、API 契约生成一致性与全仓测试包编译通过；全仓编译使用空测试选择器，不是全仓运行验收。安装测试 owner 已适配 CurrentIdentity、成员目录及显式策略关联创建/按修订撤销，未改变 release profile、发布准入或继承安装验收。
-
-Audit 既有 `TestPostgresAuthorityIntegration` 已适配新 session 关系投影、IAM6 readiness 和五参数决定写入，在本任务限额 PostgreSQL 18.4 的新数据库通过 race（末次 2.25s 用例时间）。受限 IAM/Audit 登录不能直接读取策略/版本/关联/决定表；各目录动作的写入绑定精确关联与版本证据，installation probe 使用真实 SERVICE_ACCOUNT fixture 而不是伪造 USER Allow。平台关联撤销后，新决定被拒绝，原决定/策略证据/outbox 仍可读取，原事件通过 Audit 数据库 append、精确重放和变体拒绝，未改 canonical/chain。此门禁验证数据库契约和不可变证据，不是第二策略评估器，也不替代独立 HTTP producer admission、在线附件管理或完整多进程验收。
-
-适配后 API/IAM/Audit 全部 owning packages 与 architecture 的默认无缓存 race、API/IAM/Audit vet 和 diff 检查通过；默认运行中需要独立 DSN 的门禁仍按原环境开关跳过，真实数据库证据仅限以上明确实跑项目。本轮任务专属 PostgreSQL 容器、网络和测试数据卷已核对归属后清理；没有修改其他 Phase 或共享运行环境。当前仍是未提交的整体替换候选，不继承旧固定提交的 CI 结果。
-
-2026-09-11 本分支局部证据：默认全仓 `go test -race -p 2 ./...`、全仓 vet、模块校验和生成稳定通过。新 PG18 独立限额库中的 IAM HTTP/本地凭据恢复 race 通过（155.770s）；既有独立 IAM/Audit/PaaS 门禁加第二 IAM 实例，以及实际 5721 旧 executable 保留数据升级合计通过（56.307s）。相关架构、默认拒绝、Deny 优先、跨 scope、冲突版本、摘要变体、预算边界和实际 service/action 决定测试通过；这些证据只覆盖当前转换，不替代最终附件迁移。
+仍未完成的产品闭环是：创建或撤销关联在提交后丢失回包时，当前 API 没有按原操作者、原 requestId 和完整输入承诺查询非敏感完成结果的入口；目录中当前存在或不存在关系不能证明原意图的提交结果。该能力必须与执行资格分离，只读返回原完成，不因策略退休、后续撤销或当前权限变化重新执行授权。除此之外，完整 LIVE UI/真实浏览器与当前签名发布组合仍由 010/011 和安装 owner 验收；这些缺口完成前本 FEAT 不标记 Accepted。
 
 纯求值基线在 Windows/amd64、Core Ultra 5 125H、GOMAXPROCS=2、20 Action 的策略文档、1/16/64 个有效版本下，单次有界测量分别约 5.6/126.6/564.6 µs，分配约 7.6/125.2/502.2 KB；不可变内容只编码一次但每次仍校验 digest。它不是端到端容量、SLO 或 HA 验收，负载/复杂条件/数据库路径需由 011 后续实测。
 
@@ -129,7 +119,7 @@ Audit 既有 `TestPostgresAuthorityIntegration` 已适配新 session 关系投�
 - 并发 revoke/reset/status/grant、错误版本和跨 Account ID 无部分变更。
 - PG18 受限登录、架构、security/race、独立进程与签名 profile 匹配门禁通过后 Accepted。
 
-固定采用归既有 adoption。安装 owner 已冻结 IAM6/Audit4/PaaS5+r12；落地前仍须逐项核对实际 ABI，不能只分配一个数字。`/v1/authorize` 和严格 `{event}` 的 `/v1/audit-producer:resolve` 在切换片中与消费者原子适配；不留下旧组织 selector 旁路。
+固定采用归既有 adoption。准确 schema/profile 数值及签名生命周期由正在交付该组合的子 FEAT 与安装 owner 记录，本 FEAT 不复制会随纵向切片推进的数字。`/v1/authorize` 和严格 `{event}` 的 `/v1/audit-producer:resolve` 已与当前消费者适配；不留下旧组织 selector 旁路。完整 profile 不匹配仍须在任何效果前拒绝，不能以 SQL 可迁移或版本数字较大代替真实兼容证明。
 
 原始 bootstrap 的 primary/platform 关系保留为显式系统策略附件。旧 binding 的 ID、resourceVersion、created/revoked 历史必须确定性迁移；平台凭据恢复只能使用仍未撤销的等价平台附件。若改动私有 `LocalCredentialRecoveryExpected` 中的 binding 字段，须在同一候选中更新 API、安装消费者、SQL、签名 codec 和旧 receipt 迁移，不能并存两套授权状态。首次授权与撤销后重新授权不因重构获得入口。
 
@@ -137,7 +127,7 @@ Audit 既有 `TestPostgresAuthorityIntegration` 已适配新 session 关系投�
 
 迁移依据真实 `role_bindings` 的 `(tenant_id,id)`、principal、role、resourceVersion 和 created/updated/revoked 时间；不能以“当前还能登录”推断历史有效状态。原安装 primary 的 local-recovery expected/receipt 已封存具体平台 binding ID 与版本，附件继承同一身份而不重新分配；历史完成的查询不重新判断当前附件是否有效。
 
-当前候选已将关联写入/撤销、本地恢复及密码/状态/退出路径调整为一致的 scope/主体优先锁序，不再让恢复和撤销先持有关联再等待主体。实际 SQL 与 Go 管理契约已切换；新接口的授予/凭据竞争及受控恢复/撤权双向顺序已有下述真实证据，默认版本切换/退休与关联修订竞争已由现有 fixture 发布门禁证明；完整在线消费者仍须补齐，不能以旧角色入口测试代替。
+当前实现已将关联写入/撤销、本地恢复及密码/状态/退出路径调整为一致的 scope/主体优先锁序，不再让恢复和撤销先持有关联再等待主体。实际 SQL、Go 管理契约与固定在线消费者均已切换；新接口的授予/凭据竞争及受控恢复/撤权双向顺序已有下述真实证据，默认版本切换/退休与关联修订竞争由现有 fixture 发布门禁证明。
 
 既有 `TestIAMLocalCredentialRecoveryPostgres` 已替换旧角色调用/状态读取，真实受限恢复角色与 API 登录使用当前策略关联。原 `platformBindingId`/修订仍是已发布私有 expected/receipt 的字段，内容指向保留原 ID 的附件，不重命名或重签历史记录。新请求对已经有效的同策略关联返回冲突，不伪装成等值授予；恢复先完成时目标处于强制改密状态，新授予拒绝。负向 SQL 事实使用事务内撤销附件证明资格失效，不删除受保护历史。
 
@@ -153,7 +143,7 @@ Audit 既有 `TestPostgresAuthorityIntegration` 已适配新 session 关系投�
 
 IAM `migrations.Source()` 现在拥有一个实际 BEGIN/COMMIT 边界，包住全部现有权威 SQL 片段与最终 schema/权限验证；片段不再分别提交。角色 bootstrap 仍是独立安装前置，runtime 登录仍由原安装流程在 Up 成功后配置；本片没有改变共享 migration executor、发布 profile 或跨版本准入。
 
-2026-09-11 的真实 5721 executable 保留数据门禁加入两种受限数据库故障：创建恢复入口时中断 DDL，以及 SQL 完成但故意留下不安全 RLS 供最终 verifier 拒绝。第一种反例在旧 Source 下确实失败（暴露部分迁移），修复后两种均通过；封存 receipt、组织/主体、凭据、会话、绑定、原授权决定与 outbox 保持原状态，新恢复表不暴露。含正常双次迁移/恢复/重启的该门禁通过 15.386s。它证明现有 schema3→4 的原子前置，不证明待实现的 IAM6 附件迁移或跨 release-profile 升级。
+固定旧 executable 保留数据门禁包含两种受限数据库故障：事务中断，以及 SQL 完成但最终权限/RLS verifier 拒绝。失败分支保持封存 receipt、账号/主体、凭据、会话、旧关联、原授权决定与 outbox 不变且不暴露新表；正常迁移、等值重放、当前恢复及重启则保留准确关联历史。它证明数据库替换的原子性，不证明跨完整 release profile 升级或回滚获准。
 
 后续新权威结构/数据映射/函数替换/readiness 更新必须纳入同一事务，扩充此失败门禁。等值重放不能重建可写旧 RoleBinding 权威或导入迁移后才出现的旧写入；旧 executable/readiness 需失败关闭。
 
@@ -161,10 +151,10 @@ IAM `migrations.Source()` 现在拥有一个实际 BEGIN/COMMIT 边界，包住�
 
 删除的是旧在线 RoleBinding 权限权威，不是不可变历史词汇。旧 Audit action/target、authorizations 和 receipt 的严格读取由原历史契约继续验证，不重编码、不新增授予能力。
 
-当前候选的 API/领域/SQL 已区分活跃操作与历史决定：`iam.policy-attachment.create/revoke` 分别绑定 PRINCIPAL/POLICY_ATTACHMENT、tenant scope；`iam.platform-policy-attachment.create/revoke` 使用相同资源种类和 installation scope。这四个动作只属于 IAM 调用方；相应系统策略显式采用新动作，probe 不获得业务权限。策略与关联的真实 scope 决定后续管理用例使用哪个动作，调用方不能以 scope selector 选择授权。
+当前 API/领域/SQL 已区分活跃操作与历史决定：`iam.policy-attachment.create/revoke` 分别绑定 PRINCIPAL/POLICY_ATTACHMENT、tenant scope；`iam.platform-policy-attachment.create/revoke` 使用相同资源种类和 installation scope。这四个动作只属于 IAM 调用方；相应系统策略显式采用新动作，probe 不获得业务权限。策略与关联的真实 scope 决定后续管理用例使用哪个动作，调用方不能以 scope selector 选择授权。
 
 四个旧 `iam.role-binding.put/revoke`、`iam.platform-role-binding.put/revoke` 只在封闭的历史定义中保留。AuthorizationDecision 的 Go/schema 读取接受其精确旧 resource/scope；AuthorizationRequest、策略编码、服务 admission 和实际求值均只用当前目录。SQL `record_authorization` 及 `assert_allowed_decision` 同样拒绝退休操作；最终迁移 verifier 检查新映射及旧映射关闭。不能通过 unknown action、混合/替换 scope、错资源类型或平台 SERVICE_ACCOUNT 扩张历史读取。旧在线路由/实际用例已删除，新关联接口和控制台只使用当前动作；仅实际固定旧 executable 的升级准备保留私有测试内的旧 wire，不能恢复退休动作让旧路径通过。
 
 本次分离的 API/schema、领域与架构 race 通过，生成稳定、对应 vet/diff 检查通过。专属 PostgreSQL 18.4 的实际 IAM HTTP/策略存储 race 23.44s：旧动作返回既有语义错误 422，不产生新决定；保留凭据并发与平台保护。双 authority 数据库 race 6.30s：受限 IAM 登录对每个旧动作的新 Allow/Deny 写入均被 SQLSTATE 22023 拒绝，无 decision/outbox 部分效果；新目录写入与原审计证据仍可读取。实际固定 5721 旧 executable 保留数据升级/重放/本地恢复/重启 race 24.17s 通过。没有修改旧 Audit canonical/claim 或发布 profile；这些历史动作分离证据不替代后文的新在线关联管理门禁或尚未完成的完整组合验收。
 
-`TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization` 已迁移到新关联用例和实际策略快照，不再借旧 RoleBinding 获得决定；API、核心用例、HTTP 与架构 race 通过。新的直接 USER 管理 HTTP 门禁在受限 PG18 登录上证明授权可读、撤销后新请求拒绝、CAS 冲突无部分效果、精确重放只有一份成功事实、旧创建不能复活撤销关联、普通成员和租户管理员不能自授权限或平台策略。平台关联事实使用独立 installation chain，并通过封闭 Audit 契约验证。相关双 authority 门禁通过（用例 2.93s）；实际旧 5721 executable 保留数据升级/本地恢复/重启通过（用例 16.14s）。这些是未提交候选的局部证据，不继承原 CI，也不代表完整进程/UI/安装验收。
+`TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization` 已迁移到新关联用例和实际策略快照，不再借旧 RoleBinding 获得决定。直接 USER 管理 HTTP 门禁在受限 PG18 登录上证明授权可读、撤销后新请求拒绝、CAS 冲突无部分效果、精确重放只有一份成功事实、旧创建不能复活撤销关联、普通成员和租户管理员不能自授权限或平台策略。平台关联事实使用独立 installation chain，并通过封闭 Audit 契约验证；这些固定局部证据由前述累计 CI 继续运行，但仍不单独代表完整 UI 或签名安装验收。
