@@ -740,7 +740,7 @@ function parseNotificationContact(value: unknown): NotificationContact {
     };
   }
   if (wire.state !== "VERIFIED") throw new Error("INVALID_IAM_RESPONSE");
-  exactKeys(wire, ["apiVersion", "kind", "accountId", "userId", "state", "resourceVersion", "email", "verifiedAt"]);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "userId", "state", "resourceVersion", "email", "verifiedAt"], ["pendingVerificationId"]);
   return {
     accountId,
     userId,
@@ -748,7 +748,7 @@ function parseNotificationContact(value: unknown): NotificationContact {
     resourceVersion: accountVersion(wire.resourceVersion),
     email: securityMailAddress(wire.email),
     verifiedAt: accountTimestamp(wire.verifiedAt),
-    pendingVerificationId: null
+    pendingVerificationId: wire.pendingVerificationId === undefined ? null : accountIdentifier(wire.pendingVerificationId)
   };
 }
 

@@ -796,6 +796,16 @@ describe("IAM HTTP personal-security boundary", () => {
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/notification-contact");
     expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
 
+    fetcher = reply({
+      apiVersion, kind: "NotificationContact", accountId: account.id, userId: user.id,
+      state: "VERIFIED", resourceVersion: 7, email: "old@example.com", verifiedAt: timestamp,
+      pendingVerificationId: "verification-replacement-1"
+    });
+    await expect(httpIamRepository.personalSecurity!.notificationContact("bearer")).resolves.toMatchObject({
+      state: "VERIFIED", email: "old@example.com", resourceVersion: 7, pendingVerificationId: "verification-replacement-1"
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/notification-contact");
+
     fetcher = reply(notificationVerification);
     await httpIamRepository.personalSecurity!.startNotificationVerification("bearer", {
       email: "Admin@example.com", password: "private-password", requestId: "verify-contact-1"

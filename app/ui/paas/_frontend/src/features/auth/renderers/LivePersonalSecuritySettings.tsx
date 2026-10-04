@@ -8,6 +8,7 @@ import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import { NotificationContactPasswordRejected, usePersonalSecurity, type PersonalSecurityClient } from "../application/PersonalSecurityProvider";
 import type { AuthenticatorState, NotificationContact, NotificationContactVerification, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import { LiveRecoveryCodeRegeneration } from "./LiveRecoveryCodeRegeneration";
+import { LiveNotificationContactReplacement } from "./LiveNotificationContactReplacement";
 import styles from "./MfaPreviewExperience.module.css";
 
 type LoadState = "loading" | "ready" | "error";
@@ -220,7 +221,10 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
         <Card.Header><div className={styles.cardTitle}><span><Mail aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("contact.title")}</Typography.Title><Typography.Text tone="muted">{t("contact.hint")}</Typography.Text></div></div>{loadState === "ready" ? <Badge status={verified ? "success" : verification ? "warning" : "neutral"}>{t(verified ? "contact.verified" : verification ? "contact.pending" : "contact.none")}</Badge> : null}</Card.Header>
         <Card.Body className={styles.cardBody}>
           {loadState === "loading" ? <><Skeleton /><Skeleton /></> : null}
-          {loadState === "ready" && contact?.state === "VERIFIED" ? <dl className={styles.facts}><div><dt>{t("contact.address")}</dt><dd>{contact.email}</dd></div><div><dt>{t("contact.verifiedAt")}</dt><dd>{localTime(contact.verifiedAt, format)}</dd></div><div><dt>{t("revision")}</dt><dd>v{contact.resourceVersion}</dd></div></dl> : null}
+          {loadState === "ready" && contact?.state === "VERIFIED" ? <>
+            <dl className={styles.facts}><div><dt>{t("contact.address")}</dt><dd>{contact.email}</dd></div><div><dt>{t("contact.verifiedAt")}</dt><dd>{localTime(contact.verifiedAt, format)}</dd></div><div><dt>{t("revision")}</dt><dd>v{contact.resourceVersion}</dd></div></dl>
+            {client && factor ? <LiveNotificationContactReplacement client={client} contact={contact} factor={factor} onCommitted={load} /> : null}
+          </> : null}
           {loadState === "ready" && contact?.state === "NONE" && !verification ? <form className={styles.form} onSubmit={(event) => void startContact(event)}>
             <Alert>{t("contact.firstOnly")}</Alert>
             <FormField id={emailId} label={t("contact.address")}><Input autoComplete="email" disabled={contactStartFrozen} id={emailId} inputMode="email" onChange={(event) => { setEmail(event.target.value); contactRequest.current = requestToken("ui-security-contact-"); }} required type="email" value={email} /></FormField>

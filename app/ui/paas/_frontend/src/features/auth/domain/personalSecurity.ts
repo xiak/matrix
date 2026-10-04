@@ -16,7 +16,8 @@ export type NotificationContact =
       resourceVersion: number;
       email: string;
       verifiedAt: string;
-      pendingVerificationId: null;
+      /** A replacement keeps this verified address authoritative until confirmation. */
+      pendingVerificationId: string | null;
     };
 
 export type NotificationDeliveryObservation = {
@@ -48,6 +49,32 @@ export type NotificationContactReplacementIntent = {
 export type NotificationContactReplacementVerification = NotificationContactVerification & {
   purpose: "REPLACEMENT";
   expectedResourceVersion: number;
+};
+
+export type NotificationContactReplacementState =
+  | "STEP_UP_UNKNOWN"
+  | "PENDING_PROOF"
+  | "PROOF_UNKNOWN"
+  | "PROVED"
+  | "VERIFICATION_UNKNOWN"
+  | "PENDING_CONFIRMATION"
+  | "CONFIRM_UNKNOWN"
+  | "COMPLETED"
+  | "EXPIRED";
+
+/**
+ * Non-secret client knowledge for one purpose-bound address replacement.
+ * Passwords and one-time codes deliberately never enter this model.
+ */
+export type NotificationContactReplacementProgress = {
+  requestId: string;
+  proofRequestId: string;
+  confirmationRequestId: string;
+  expectedFactorRevision: number;
+  notificationContact: NotificationContactReplacementIntent;
+  state: NotificationContactReplacementState;
+  stepUp: SecurityStepUp | null;
+  verification: NotificationContactReplacementVerification | null;
 };
 
 export type AuthenticatorState =

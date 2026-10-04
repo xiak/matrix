@@ -1194,6 +1194,113 @@ describe("account access", () => {
     expect(security.confirmNotificationVerification).toHaveBeenCalledWith(credential, "verification-one", expect.objectContaining({ code: "12345678" }));
   });
 
+  it("replaces a verified notification address inline through one purpose-bound live intent", async () => {
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "old@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    const updated = { ...verified, resourceVersion: 2, email: "new@example.com", verifiedAt: "2026-09-11T08:03:00Z" };
+    const pendingStepUp: SecurityStepUp = {
+      id: "step-up-replace-contact", requestId: "replace-contact-request", operation: "NOTIFICATION_CONTACT_REPLACE",
+      expectedFactorRevision: 3, notificationContact: { expectedResourceVersion: 1, email: "new@example.com" },
+      state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z", provedAt: null, consumedAt: null
+    };
+    const pendingVerification = {
+      id: "verification-replace-contact", accountId: account.id, userId: rootUser.id, requestId: "replace-contact-request",
+      purpose: "REPLACEMENT" as const, expectedResourceVersion: 1, email: "new@example.com", state: "PENDING" as const,
+      issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z", completedAt: null,
+      delivery: { state: "ACCEPTED" as const, attempts: 1, lastOutcome: "ACCEPTED" as const, lastSmtpCode: 250, updatedAt: timestamp }
+    };
+    const replacement = {
+      startStepUp: vi.fn(async (_credential: string, command: { requestId: string }) => ({ ...pendingStepUp, requestId: command.requestId })),
+      stepUpByRequest: vi.fn(),
+      verifyStepUp: vi.fn(async (_credential: string, _stepUpId: string, originalRequestId: string) => ({ ...pendingStepUp, requestId: originalRequestId, state: "PROVED" as const, provedAt: "2026-09-11T08:00:30Z" })),
+      startVerification: vi.fn(async (_credential: string, command: { requestId: string }) => ({ ...pendingVerification, requestId: command.requestId })),
+      verification: vi.fn(),
+      confirmVerification: vi.fn(async (_credential: string, _verificationId: string, original: { requestId: string }) => ({ ...pendingVerification, requestId: original.requestId, state: "VERIFIED" as const, completedAt: "2026-09-11T08:03:00Z" }))
+    };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValueOnce(verified).mockResolvedValue(updated),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 3, factorId: "factor-current" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), notificationReplacement: replacement,
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByText("old@example.com");
+
+    await user.click(within(securityRegion).getByRole("button", { name: "更换地址" }));
+    await user.type(within(securityRegion).getByLabelText("目标地址"), "new@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "继续验证本人身份" }));
+    await user.type(await within(securityRegion).findByLabelText("当前密码"), "Private-Password-49!");
+    await user.type(within(securityRegion).getByLabelText("6 位动态验证码"), "123456");
+    await user.click(within(securityRegion).getByRole("button", { name: "验证并发送邮箱验证码" }));
+    expect(await within(securityRegion).findByText(/不代表收件人已收到或阅读/)).toBeTruthy();
+    await user.type(within(securityRegion).getByLabelText("新地址的 8 位验证码"), "12345678");
+    await user.click(within(securityRegion).getByRole("button", { name: "确认并更换地址" }));
+
+    expect(await within(securityRegion).findByText("new@example.com")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(replacement.startStepUp).toHaveBeenCalledTimes(1);
+    expect(replacement.verifyStepUp).toHaveBeenCalledWith(credential, "step-up-replace-contact", expect.any(String), 3,
+      { expectedResourceVersion: 1, email: "new@example.com" }, expect.objectContaining({ password: "Private-Password-49!", code: "123456" }));
+    expect(replacement.startVerification).toHaveBeenCalledTimes(1);
+    expect(replacement.confirmVerification).toHaveBeenCalledWith(credential, "verification-replace-contact",
+      expect.objectContaining({ expectedResourceVersion: 1, email: "new@example.com" }), expect.objectContaining({ code: "12345678" }));
+  });
+
+  it("queries the original replacement verification after an unknown atomic confirmation without submitting twice", async () => {
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "old@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    const updated = { ...verified, resourceVersion: 2, email: "new@example.com", verifiedAt: "2026-09-11T08:03:00Z" };
+    const pendingStepUp: SecurityStepUp = {
+      id: "step-up-replace-contact", requestId: "replace-contact-request", operation: "NOTIFICATION_CONTACT_REPLACE",
+      expectedFactorRevision: 3, notificationContact: { expectedResourceVersion: 1, email: "new@example.com" },
+      state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z", provedAt: null, consumedAt: null
+    };
+    const pendingVerification = {
+      id: "verification-replace-contact", accountId: account.id, userId: rootUser.id, requestId: "replace-contact-request",
+      purpose: "REPLACEMENT" as const, expectedResourceVersion: 1, email: "new@example.com", state: "PENDING" as const,
+      issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z", completedAt: null,
+      delivery: { state: "ACCEPTED" as const, attempts: 1, lastOutcome: "ACCEPTED" as const, lastSmtpCode: 250, updatedAt: timestamp }
+    };
+    const replacement = {
+      startStepUp: vi.fn(async (_credential: string, command: { requestId: string }) => ({ ...pendingStepUp, requestId: command.requestId })),
+      stepUpByRequest: vi.fn(),
+      verifyStepUp: vi.fn(async (_credential: string, _stepUpId: string, originalRequestId: string) => ({ ...pendingStepUp, requestId: originalRequestId, state: "PROVED" as const, provedAt: "2026-09-11T08:00:30Z" })),
+      startVerification: vi.fn(async (_credential: string, command: { requestId: string }) => ({ ...pendingVerification, requestId: command.requestId })),
+      verification: vi.fn()
+        .mockImplementationOnce(async (_credential: string, _verificationId: string, command: { requestId: string }) => ({ ...pendingVerification, requestId: command.requestId }))
+        .mockImplementationOnce(async (_credential: string, _verificationId: string, command: { requestId: string }) => ({ ...pendingVerification, requestId: command.requestId, state: "VERIFIED" as const, completedAt: "2026-09-11T08:03:00Z" })),
+      confirmVerification: vi.fn().mockRejectedValue(new HttpProblem(503, "iam.unavailable"))
+    };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValueOnce(verified).mockResolvedValue(updated),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 3, factorId: "factor-current" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), notificationReplacement: replacement,
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByText("old@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "更换地址" }));
+    await user.type(within(securityRegion).getByLabelText("目标地址"), "new@example.com");
+    await user.click(within(securityRegion).getByRole("button", { name: "继续验证本人身份" }));
+    await user.type(await within(securityRegion).findByLabelText("当前密码"), "Private-Password-49!");
+    await user.type(within(securityRegion).getByLabelText("6 位动态验证码"), "123456");
+    await user.click(within(securityRegion).getByRole("button", { name: "验证并发送邮箱验证码" }));
+    await user.type(await within(securityRegion).findByLabelText("新地址的 8 位验证码"), "12345678");
+    await user.click(within(securityRegion).getByRole("button", { name: "确认并更换地址" }));
+    expect(await within(securityRegion).findByText(/确认回包未知/)).toBeTruthy();
+    expect(within(securityRegion).queryByRole("button", { name: "确认并更换地址" })).toBeNull();
+
+    await user.click(within(securityRegion).getByRole("button", { name: "查询原确认结果" }));
+    expect(await within(securityRegion).findByText(/确认回包未知/)).toBeTruthy();
+    expect(within(securityRegion).queryByRole("button", { name: "确认并更换地址" })).toBeNull();
+    expect(replacement.confirmVerification).toHaveBeenCalledTimes(1);
+    await user.click(within(securityRegion).getByRole("button", { name: "查询原确认结果" }));
+    expect(await within(securityRegion).findByText("new@example.com")).toBeTruthy();
+    expect(replacement.confirmVerification).toHaveBeenCalledTimes(1);
+    expect(replacement.verification).toHaveBeenCalledWith(credential, "verification-replace-contact",
+      expect.objectContaining({ expectedResourceVersion: 1, email: "new@example.com" }));
+  });
+
   it("refreshes the original notification delivery without creating or resending an intent", async () => {
     const none = { accountId: account.id, userId: rootUser.id, state: "NONE" as const, resourceVersion: 0 as const, pendingVerificationId: null };
     const pending = { id: "verification-one", accountId: account.id, userId: rootUser.id, requestId: "request-one", email: "admin@example.com", state: "PENDING" as const, issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z", completedAt: null, delivery: { state: "PENDING" as const, attempts: 0, lastOutcome: null, lastSmtpCode: null, updatedAt: timestamp } };
