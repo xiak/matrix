@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted foundation; current IAM authentication-recovery lifecycle slice is accepted
+- Status: Accepted foundation; current IAM notification-contact replacement lifecycle slice is accepted
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; the accepted isolated-IAM authentication-recovery slice is manifest `v2` with the exact `64/34/3` revision 11 profile. Revision 11 adds the installation-side authentication-recovery ABI and is accepted only for the focused signed A/B and independent CI evidence below
+- Release contract: accepted foundation `v1`; the accepted isolated-IAM notification-contact replacement slice is manifest `v2` with the exact `65/35/3` revision 12 profile. Revision 12 is accepted only for the focused signed A/B and independent CI evidence below
 
 ## Outcome
 
@@ -203,6 +203,74 @@ timestamps, and correlation IDs; it excludes secrets, tokens, configuration
 values, database rows, native errors, arbitrary logs, and absolute paths.
 
 ## Incremental acceptance
+
+### Accepted IAM notification-contact replacement lifecycle
+
+The accepted slice uses IAM schema 65, Audit schema 35, PaaS schema 3 and
+`contractRevision=12`. Revision 12 identifies the exact notification-contact
+replacement, step-up, delivery, Audit and installed-topology contracts. It is
+not compatible with revision 11 or another authority tuple, and does not
+authorize a cross-profile upgrade, rollback or backup recovery.
+
+The exact production source `620751040fa6e9a655045a35fb326792338136e7`
+assembled signed A=`matrix-v0.1.0-iam-r12.1-620751040fa6` and immediate
+B=`matrix-v0.1.0-iam-r12.2-620751040fa6`, both with the identical
+`65/35/3+r12` profile and topology digest
+`sha256:6b9a4ded6e910e16751a4a72a6393c4f235cb70f14ca4b8ff56e216f32bfec0d`.
+A fresh task-owned Docker 27.5.1 engine with no external route, two CPUs,
+4 GiB memory and 768 PIDs began with no inner container, image or volume. Its
+422.20-second pre-restart lifecycle installed A offline, exercised the real
+restricted PostgreSQL identities and APISIX IAM path, completed the existing
+tenant and application baselines, and preserved them through a failed-candidate
+automatic rollback, B upgrade, explicit platform rollback and selected-backup
+recovery.
+
+The same gate verified a User's first notification address, bound TOTP and
+completed a real password-plus-TOTP login before replacing
+`previous@matrix.test` with `current@matrix.test`. The replacement required an
+exact step-up proof, accepted the verification code only from the new
+address's Maildir, sent separate change notices to the old and new addresses,
+and retained one accepted SMTP-250 attempt for each of the verification and
+two change notices. The sanitized immutable verification, completion event,
+resource revision and three delivery records were re-read after every
+lifecycle transition and after backup recovery; passwords, codes, MACs and
+SMTP credentials were neither retained in that observation nor emitted to
+support evidence. The installation Audit query and chain included the exact
+contact-replaced fact.
+
+Only the exact task-owned outer engine was stopped and started. Its unchanged
+container identity and persistent volumes then passed the 26.58-second
+post-restart gate with one fresh MFA login, the same replacement observation,
+tenant recovery and revocation state, repeated status/verify, support
+redaction and the complete offline lifecycle. No Docker Desktop daemon,
+shared service or remote machine was restarted.
+
+The task-only Postfix fixture used authenticated STARTTLS/SASL, three separate
+Maildirs and a certificate restricted to `DNS:smtp.matrix.test`,
+`IP:127.0.0.1` and `IP:::1`. Its archive SHA-256 is
+`ff014e8466236e0332aeccee3220c7c3865947f7e478419e38d2a0623d135d9c`,
+its classic portable config identity is
+`sha256:088f89b0669093b39e7c9dc1245ccf48bd160b74e0ae24edc4be1ee627e1f440`,
+and Docker 29.6.2's containerd store reports the loaded OCI manifest identity
+`sha256:e1fb26aaf0d252a36575654008fa7fffc0945772facb417cb56052b7dc789f81`.
+Both the DNS and IPv4 SAN paths passed certificate verification and real
+delivery; an external relay was rejected. This fixture proves the bounded
+local delivery contract, not an external provider SLA or recipient action.
+
+The gate correction is fixed at
+`0c2f3a73a85d0c74dca86a3e46f7e5bba8cd0eed`. It keeps production contracts
+unchanged, encodes the three validated observation identities into closed SQL
+text instead of relying on unsupported psql variable expansion in
+`--command`, and removes a duplicate post-restart MFA assertion rather than
+weakening the authority's attempt budget. Full repository tests and vet,
+focused installation race, and both real lifecycle phases pass locally.
+[Verification 37182217550](https://github.com/xiak/matrix/actions/runs/37182217550)
+completed successfully for that exact commit with all 15 jobs, including the
+replacement qualification, replacement, step-up, storage, recovery, runtime
+and final authority-process lanes. Revision 12 is therefore accepted for this
+exact IAM notification-contact replacement lifecycle slice. It does not admit
+revision 11, another authority profile, an external mail-provider SLA, or imply
+acceptance of the entire IAM release and LIVE UI.
 
 ### Current IAM authentication-recovery lifecycle candidate
 
