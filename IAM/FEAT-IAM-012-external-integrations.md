@@ -1,6 +1,6 @@
 # FEAT-IAM-012：外部身份、通知与组织治理
 
-- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。installation已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像；首条联系人验证、SMTP/Maildir实收、MFA安全通知和同profile生命周期累计进入`64/34/3+r11`签名组合，并由`ed2835db`完整独立CI确认。该首地址/渠道切片已验收；S1c已有地址替换的独立命令、目的限定StepUp、原子切换和双向告警生产实现，当前组合为`65/35/3+r12`，本地contract/race、PG18空白安装、准确前序保留数据、独立多进程、双地址真实Postfix及真实浏览器联合门禁已通过，固定生产实现与后继门禁提交的独立CI也已完成；签名同profile生命周期的引擎重启复验尚未完成，因此S1c仍为Implementing。其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
+- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。installation已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像；首条联系人验证、SMTP/Maildir实收、MFA安全通知和同profile生命周期累计进入`64/34/3+r11`签名组合，并由`ed2835db`完整独立CI确认。该首地址/渠道切片已验收；S1c地址替换的独立命令、目的限定StepUp、原子切换和双向告警已在`65/35/3+r12`完成生产实现，并通过contract/race、PG18空白安装、准确前序保留数据、独立多进程、双地址真实Postfix、真实浏览器以及签名同profile安装/升级/回滚/恢复与引擎重启门禁，因此S1c已验收。其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
 - Owner：IAM负责S1的地址验证、目的限定通知意图/投递和重试；installation负责受保护SMTP及必要私有材料配置，UX/UI负责本人交互。其他外部来源与计费保持各自业务边界。
 - S1a不等于完整S1或其他外部能力已实现；缺少前置时不提供假入口或伪成功。
 
@@ -229,6 +229,10 @@ IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`�
 2026-10-04由GitHub API核实固定`20632441a0e014f175f3111d55a887db76027bc7`的[Verification 37170446801](https://github.com/xiak/matrix/actions/runs/37170446801)精确SHA；Go、node-process、十二项串行authority门禁及最终authority-process汇总共15项全部completed/success。恢复码耗尽门禁保留生产参数并实际跨三个OTP时间窗运行22分43秒；意外SKIP检测、真实storage/runtime、容量、StepUp、因子替换/移除及恢复窗口均未以短测替代。该CI证明固定后继门禁保留全仓回归，但不能替代下述浏览器联合门禁或仍在执行的`65/35/3+r12`签名同profile生命周期。
 
 同日，UX固定提交`d04726adf99b98d10bde6814c78532c24b7b79b9`在独立PG18、受限notification worker、真实IAM/Audit/PaaS/UI进程和不注入身份的同源代理中完成浏览器联合门禁；验收记录固定于`f379bfdf3e329a69c2cb6abe64d452884caa8b89`。命令`go test -race -p 1 ./test/authorityprocess -run '^TestIAMNotificationContactConsoleBrowser$' -count=1 -timeout 35m -v`通过，夹具341.42秒、包345.004秒。浏览器实际完成旧已验证地址、`PASSWORD_TOTP`会话、`NOTIFICATION_CONTACT_REPLACE`目的限定StepUp、只从目标Maildir取得验证码及联系人版本N到N+1的原子切换；测试随后核对旧/新地址历史告警、三次单次SMTP `250/ACCEPTED`、数据库权威联系人、唯一替换事实及完整Audit链。固定Postfix归档SHA-256为`ff014e8466236e0332aeccee3220c7c3865947f7e478419e38d2a0623d135d9c`，classic config为`sha256:088f89b0669093b39e7c9dc1245ccf48bd160b74e0ae24edc4be1ee627e1f440`，本次containerd runtime image为`sha256:e1fb26aaf0d252a36575654008fa7fffc0945772facb417cb56052b7dc789f81`；证书覆盖固定DNS及IPv4/IPv6 loopback，归档、运行镜像、容器标签/限额和loopback发布均失败关闭。临时PG/SMTP容器按精确ID清理，固定非秘密夹具保留。该证据接受S1c的控制台与真实进程联合路径，不替代仍在执行的签名同profile生命周期。
+
+签名同profile生命周期最终由固定`0c2f3a73a85d0c74dca86a3e46f7e5bba8cd0eed`收口。任务自有、断网且限额的Docker引擎从同一固定源码生成并验证A/B，完整profile为`65/35/3+r12`；全新数据卷的真实门禁在422.20秒内完成A安装、账号/联系人/TOTP与MFA登录、地址替换通知、访问分析、两代应用、Audit链、备份、失败候选回退、B升级、显式回滚、指定备份恢复、容量与support，并在只重启该任务自有外层引擎后以26.58秒的只读状态/验证/support门禁确认联系人、因子、会话资格和历史没有复活或漂移。该门禁没有重启共享Docker、远端机器或业务工作负载；测试资源随后按所有权清理。
+
+2026-10-04再次通过GitHub API核实固定`0c2f3a73a85d0c74dca86a3e46f7e5bba8cd0eed`的[Verification 37182217550](https://github.com/xiak/matrix/actions/runs/37182217550)精确SHA、completed/success及go、node-process与十三项authority门禁共15项全部成功。该固定提交只稳定原安装门禁的联系人保留断言，不另改生产API、SQL或profile；它与上述生产、PG/SMTP及浏览器固定对象共同接受S1c。此结论仍不声称公网最终送达、用户已读、任意SMTP供应商、完整通知订阅或整个IAM发布已经验收。
 
 ## 其他延期能力的架构预留
 
