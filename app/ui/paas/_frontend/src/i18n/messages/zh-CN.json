@@ -4597,6 +4597,7 @@
         "loading": "正在加载访问分析",
         "loadingCoverage": "正在加载来源覆盖",
         "loadingFindings": "正在加载 Finding",
+        "loadingFindingDetail": "正在重新授权并读取 Finding 详情",
         "retry": "重新加载",
         "loadFailedTitle": "无法读取访问分析",
         "loadFailedHint": "当前响应不是权威空目录。请重试或检查该身份的访问分析权限与服务状态。",

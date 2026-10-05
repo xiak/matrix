@@ -4597,6 +4597,7 @@
         "loading": "Loading access analysis",
         "loadingCoverage": "Loading source coverage",
         "loadingFindings": "Loading Findings",
+        "loadingFindingDetail": "Reauthorizing and loading the Finding detail",
         "retry": "Reload",
         "loadFailedTitle": "Access analysis could not be loaded",
         "loadFailedHint": "This response is not an authoritative empty directory. Retry or verify the identity's access-analysis authority and service status.",

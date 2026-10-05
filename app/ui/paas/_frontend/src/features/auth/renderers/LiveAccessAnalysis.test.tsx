@@ -78,6 +78,30 @@ describe("live access analysis", () => {
     expect(screen.queryByText(/共 .* 条/)).toBeNull();
   });
 
+  it("keeps the detail shell stable while reauthorizing and rereading the selected Finding", async () => {
+    const user = userEvent.setup();
+    let resolveFinding!: (value: typeof finding) => void;
+    const detail = new Promise<typeof finding>((resolve) => { resolveFinding = resolve; });
+    const readFinding = vi.fn().mockReturnValue(detail);
+    view(client({ readFinding }));
+    await user.click(await screen.findByRole("button", { name: "user-alex" }));
+    expect(screen.getByRole("heading", { name: "复核 Finding · user-alex" })).toBeTruthy();
+    expect(screen.getByText(/归档与取消归档只改变 Finding/)).toBeTruthy();
+    expect(readFinding).toHaveBeenCalledWith(analyzer.id, finding.id);
+    expect(screen.queryByRole("button", { name: "归档 Finding" })).toBeNull();
+    resolveFinding(finding);
+    expect(await screen.findByRole("button", { name: "归档 Finding" })).toBeTruthy();
+  });
+
+  it("keeps a failed Finding detail read local without rendering the list snapshot as authority", async () => {
+    const user = userEvent.setup();
+    view(client({ readFinding: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) }));
+    await user.click(await screen.findByRole("button", { name: "user-alex" }));
+    expect(await screen.findByText("当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "归档 Finding" })).toBeNull();
+    expect(screen.getByRole("button", { name: "重新加载" })).toBeTruthy();
+  });
+
   it("archives a Finding in the content area using its exact resource version", async () => {
     const user = userEvent.setup();
     const archiveFinding = vi.fn().mockResolvedValue({ ...finding, status: "ARCHIVED", resourceVersion: 2, updatedAt: timestamp });
@@ -85,7 +109,7 @@ describe("live access analysis", () => {
     view(value);
     await user.click(await screen.findByRole("button", { name: "user-alex" }));
     expect(screen.getByRole("heading", { name: "复核 Finding · user-alex" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "归档 Finding" }));
+    await user.click(await screen.findByRole("button", { name: "归档 Finding" }));
     await waitFor(() => expect(archiveFinding).toHaveBeenCalledWith(analyzer.id, finding.id, expect.objectContaining({ resourceVersion: 1 })));
     expect(await screen.findByText("Finding 已归档；目标对象和权限均未改变。")).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -151,7 +175,10 @@ describe("live access analysis", () => {
       resolvedAt: timestamp,
       resolutionReason: "AUTOMATIC_DISPOSITION" as const
     };
-    view(client({ listFindings: vi.fn().mockResolvedValue({ ...directory, items: [resolved] }) }));
+    view(client({
+      listFindings: vi.fn().mockResolvedValue({ ...directory, items: [resolved] }),
+      readFinding: vi.fn().mockResolvedValue(resolved)
+    }));
     await user.click(await screen.findByRole("button", { name: "key-ci" }));
     expect(await screen.findByText("自动处置完成")).toBeTruthy();
     expect(screen.getByText(/只证明该 Finding 记录了自动处置完成/)).toBeTruthy();
@@ -165,7 +192,10 @@ describe("live access analysis", () => {
       recoveryCommandId: "recovery-command-2",
       recoveryCompletedAt: "2026-06-10T08:00:00Z"
     };
-    view(client({ listFindings: vi.fn().mockResolvedValue({ ...directory, items: [recovered] }) }));
+    view(client({
+      listFindings: vi.fn().mockResolvedValue({ ...directory, items: [recovered] }),
+      readFinding: vi.fn().mockResolvedValue(recovered)
+    }));
     await user.click(await screen.findByRole("button", { name: "user-alex" }));
     expect(screen.getByRole("region", { name: "恢复代次与观测可信度" })).toBeTruthy();
     expect(screen.getByText("恢复后代次")).toBeTruthy();

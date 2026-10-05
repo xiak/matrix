@@ -12,6 +12,7 @@ import { AccessFindingRecoveryBoundary, AccessRecoveryGapBoundary } from "./Acce
 import styles from "./AccountAccessRenderer.module.css";
 
 type Failure = "forbidden" | "routeUnavailable" | "conflict" | "invalid" | "unavailable";
+type FindingSelection = { analyzerId: string; findingId: string; targetId: string };
 
 const findingBadge: Record<AccessFinding["status"], "warning" | "neutral" | "success"> = {
   ACTIVE: "warning",
@@ -60,7 +61,11 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
   const [pageIndex, setPageIndex] = useState(0);
   const [findings, setFindings] = useState<AccessFindingDirectory | null>(null);
   const [findingsLoading, setFindingsLoading] = useState(false);
+  const [selectedReference, setSelectedReference] = useState<FindingSelection | null>(null);
   const [selected, setSelected] = useState<AccessFinding | null>(null);
+  const [selectedLoading, setSelectedLoading] = useState(false);
+  const [selectedRevision, setSelectedRevision] = useState(0);
+  const [detailError, setDetailError] = useState<Failure | null>(null);
   const [error, setError] = useState<Failure | null>(null);
   const [notice, setNotice] = useState<"created" | "updated" | "dispositionUpdated" | "archived" | "unarchived" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -96,13 +101,29 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
     return () => { active = false; };
   }, [analyzer, client, currentCursor, filter, reloadRevision]);
 
+  useEffect(() => {
+    if (!selectedReference) return;
+    let active = true;
+    void client.readFinding(selectedReference.analyzerId, selectedReference.findingId).then((finding) => {
+      if (!active) return;
+      setSelected(finding);
+    }).catch((failure) => {
+      if (!active) return;
+      setSelected(null);
+      setDetailError(failureCode(failure));
+    }).finally(() => { if (active) setSelectedLoading(false); });
+    return () => { active = false; };
+  }, [client, selectedReference, selectedRevision]);
+
   const changeFilter = (value: string) => {
     setFindingsLoading(true);
     setError(null);
     setFilter(value as AccessFindingStatusFilter);
     setCursorStack([undefined]);
     setPageIndex(0);
+    setSelectedReference(null);
     setSelected(null);
+    setDetailError(null);
     setNotice(null);
   };
 
@@ -157,7 +178,7 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
 
   const transitionFinding = async (finding: AccessFinding) => {
     if (finding.status === "RESOLVED") return;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setDetailError(null); setNotice(null);
     try {
       const command = { resourceVersion: finding.resourceVersion, requestId: requestToken(`ui-access-finding-${finding.status === "ACTIVE" ? "archive" : "unarchive"}-`) };
       const updated = finding.status === "ACTIVE"
@@ -173,18 +194,31 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
       setNotice(updated.status === "ARCHIVED" ? "archived" : "unarchived");
     } catch (failure) {
       const code = failureCode(failure);
-      setError(code);
+      setDetailError(code);
       if (code === "conflict") {
-        try { setSelected(await client.readFinding(finding.analyzerId, finding.id)); } catch { /* The explicit conflict remains authoritative. */ }
+        setSelectedLoading(true);
+        try {
+          setSelected(await client.readFinding(finding.analyzerId, finding.id));
+        } catch (readFailure) {
+          setSelected(null);
+          setDetailError(failureCode(readFailure));
+        } finally {
+          setSelectedLoading(false);
+        }
       }
     } finally { setBusy(false); }
   };
 
-  if (selected) return <WorkspaceDetail title={t("live.findingTitle", { id: selected.target.id })} onBack={() => { setSelected(null); setNotice(null); }}>
-    {error ? <Alert status="danger">{t(`live.errors.${error}`)}</Alert> : null}
+  if (selectedReference) return <WorkspaceDetail title={t("live.findingTitle", { id: selected?.target.id ?? selectedReference.targetId })} onBack={() => {
+    setSelectedReference(null); setSelected(null); setDetailError(null); setNotice(null);
+  }}>
+    {detailError ? <Alert status="danger"><div className={styles.confirmation}><strong>{t(`live.errors.${detailError}`)}</strong><Button variant="secondary" onClick={() => {
+      setSelected(null); setSelectedLoading(true); setDetailError(null); setSelectedRevision((current) => current + 1);
+    }}>{t("live.retry")}</Button></div></Alert> : null}
     {notice ? <Alert status="success">{t(`live.notices.${notice}`)}</Alert> : null}
     <Alert status="info">{t("live.findingBoundary")}</Alert>
-    <Card>
+    {selectedLoading ? <Card><TableSkeleton header={false} label={t("live.loadingFindingDetail")} labelVisible={false} rows={5} /></Card> : null}
+    {!selectedLoading && selected ? <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{selected.target.id}</Typography.Title><Typography.Text tone="muted">{selected.id}</Typography.Text></div><Badge status={findingBadge[selected.status]}>{t(`unused.lifecycle.${selected.status}`)}</Badge></Card.Header>
       <Card.Body className={styles.detail}>
         <dl className={styles.facts}>
@@ -207,7 +241,7 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
         {selected.status !== "RESOLVED" ? <Button disabled={busy} onClick={() => void transitionFinding(selected)}>{t(selected.status === "ACTIVE" ? "live.archive" : "live.unarchive")}</Button> : null}
         <Button variant="secondary" onClick={() => { const target = targetView(selected); onNavigate(target.view, target.id); }}>{t("unused.reviewTarget")}</Button>
       </div></Card.Footer>
-    </Card>
+    </Card> : null}
   </WorkspaceDetail>;
 
   return <div className={styles.detailWorkspace}>
@@ -236,7 +270,10 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
         <Tabs.Content className={styles.stack} value="unused">
           <Card>
             <Card.Header><div><Typography.Title as="h2" level={3}>{t("live.findingsTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.findingsHint")}</Typography.Text></div><FormField id="live-access-finding-status" label={t("unused.status")}><Select id="live-access-finding-status" disabled={findingsLoading} value={filter} onValueChange={changeFilter} options={(['ALL', 'ACTIVE', 'ARCHIVED', 'RESOLVED'] as const).map((value) => ({ value, label: t(`live.filters.${value}`) }))} /></FormField></Card.Header>
-            {findingsLoading ? <TableSkeleton label={t("live.loadingFindings")} labelVisible={false} rows={6} /> : !findings ? <EmptyState title={t("live.loadFailedTitle")} description={t("live.loadFailedHint")} action={<Button variant="secondary" onClick={reload}>{t("live.retry")}</Button>} /> : findings.items.length ? <Table aria-label={t("live.findingsTitle")} mobileLayout="stack"><thead><tr><th scope="col">{t("unused.principal")}</th><th scope="col">{t("unused.findingType")}</th><th scope="col">{t("unused.status")}</th><th scope="col">{t("live.observedAt")}</th></tr></thead><tbody>{findings.items.map((finding) => <tr key={finding.id}><td data-label={t("unused.principal")}><button className={styles.userLink} onClick={() => { setSelected(finding); setNotice(null); }}>{finding.target.id}</button><small>{finding.id}</small></td><td data-label={t("unused.findingType")}>{t(`unused.types.${findingTypeKey(finding.type)}`)}</td><td data-label={t("unused.status")}><Badge status={findingBadge[finding.status]}>{t(`unused.lifecycle.${finding.status}`)}</Badge></td><td data-label={t("live.observedAt")}><WorkspaceTime value={finding.observedAt} /></td></tr>)}</tbody></Table> : <EmptyState title={t("live.noFindingsTitle")} description={t("live.noFindingsHint")} />}
+            {findingsLoading ? <TableSkeleton label={t("live.loadingFindings")} labelVisible={false} rows={6} /> : !findings ? <EmptyState title={t("live.loadFailedTitle")} description={t("live.loadFailedHint")} action={<Button variant="secondary" onClick={reload}>{t("live.retry")}</Button>} /> : findings.items.length ? <Table aria-label={t("live.findingsTitle")} mobileLayout="stack"><thead><tr><th scope="col">{t("unused.principal")}</th><th scope="col">{t("unused.findingType")}</th><th scope="col">{t("unused.status")}</th><th scope="col">{t("live.observedAt")}</th></tr></thead><tbody>{findings.items.map((finding) => <tr key={finding.id}><td data-label={t("unused.principal")}><button className={styles.userLink} onClick={() => {
+              setSelectedReference({ analyzerId: finding.analyzerId, findingId: finding.id, targetId: finding.target.id });
+              setSelected(null); setSelectedLoading(true); setDetailError(null); setNotice(null);
+            }}>{finding.target.id}</button><small>{finding.id}</small></td><td data-label={t("unused.findingType")}>{t(`unused.types.${findingTypeKey(finding.type)}`)}</td><td data-label={t("unused.status")}><Badge status={findingBadge[finding.status]}>{t(`unused.lifecycle.${finding.status}`)}</Badge></td><td data-label={t("live.observedAt")}><WorkspaceTime value={finding.observedAt} /></td></tr>)}</tbody></Table> : <EmptyState title={t("live.noFindingsTitle")} description={t("live.noFindingsHint")} />}
             <Table.Footer note={t("live.cursorBoundary")}><TablePagination mode="cursor" disabled={findingsLoading} summary={t("live.page", { page: pageIndex + 1 })}
               previous={{ label: t("live.previous"), disabled: pageIndex === 0, onClick: () => { setFindingsLoading(true); setError(null); setPageIndex((current) => Math.max(0, current - 1)); } }}
               next={{ label: t("live.next"), disabled: !findings?.nextAfter, onClick: () => { if (!findings?.nextAfter) return; setFindingsLoading(true); setError(null); setCursorStack((current) => [...current.slice(0, pageIndex + 1), findings.nextAfter ?? undefined]); setPageIndex((current) => current + 1); } }} /></Table.Footer>
