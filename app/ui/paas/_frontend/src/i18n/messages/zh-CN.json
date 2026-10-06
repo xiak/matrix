@@ -1317,7 +1317,7 @@
     "discoveryHint": "未授权角色不会出现在目录中；空页仍可能带有下一页游标。",
     "roleCount": "已发现 {count} 个角色",
     "eligible": "可承担",
-    "eligibleHint": "该角色已通过当前发现窗口的信任、权限、状态与边界检查。",
+    "eligibleHint": "该角色已通过当前发现窗口的调用者承担权限、角色信任、角色状态与权限边界检查；这不表示角色已获得业务资源权限。",
     "maxDuration": "最长 {max} 分钟",
     "resourceVersion": "版本 {version}",
     "reviewRole": "审阅并承担",

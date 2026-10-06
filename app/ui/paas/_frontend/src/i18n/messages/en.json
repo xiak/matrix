@@ -1317,7 +1317,7 @@
     "discoveryHint": "Unauthorized roles are not disclosed. An empty sparse page can still include a continuation.",
     "roleCount": "{count} roles discovered",
     "eligible": "Eligible",
-    "eligibleHint": "This role passed trust, permission, status, and boundary checks for the current discovery window.",
+    "eligibleHint": "This role passed caller-assume permission, role trust, role status, and permission-boundary checks for the current discovery window. It does not mean the role has business-resource permissions.",
     "maxDuration": "Up to {max} minutes",
     "resourceVersion": "Version {version}",
     "reviewRole": "Review and assume",

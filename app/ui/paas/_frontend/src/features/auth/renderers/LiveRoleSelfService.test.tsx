@@ -69,6 +69,7 @@ describe("LiveRoleSelfService", () => {
 
     await act(async () => { resolveDirectory(assumableDirectory); });
     expect(await screen.findByRole("button", { name: "审阅并承担 ReviewerRole" })).toBeTruthy();
+    expect(screen.getByText("这不表示角色已获得业务资源权限", { exact: false })).toBeTruthy();
     expect(listAssumable).toHaveBeenCalledTimes(1);
   });
 
