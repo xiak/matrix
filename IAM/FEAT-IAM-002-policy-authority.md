@@ -115,6 +115,8 @@ PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是�
 
 仍未完成的是完整 LIVE UI/真实浏览器、固定提交的独立CI及当前签名发布组合，由010/011、UX/UI和安装owner分别验收；这些缺口完成前本FEAT不标记Accepted。
 
+首个固定候选`2e18b09293adf9bdf7ffbd3fa0042de566f76e9b`的[Verification 37528963643](https://github.com/xiak/matrix/actions/runs/37528963643)不计为通过：`go`与`node-process`成功，但`authority-storage`动态发现新增真库fixture后，因工作流未创建其独立数据库及注入DSN而明确SKIP并按设计失败，后继分片不替代这一缺口。修正只为该准确fixture增加独立数据库/DSN，不放宽SKIP失败规则；同一入口在本任务PG18以CI形状重新运行22.63s通过（包26.301s），仍须由修正固定提交的独立CI最终确认。
+
 纯求值基线在 Windows/amd64、Core Ultra 5 125H、GOMAXPROCS=2、20 Action 的策略文档、1/16/64 个有效版本下，单次有界测量分别约 5.6/126.6/564.6 µs，分配约 7.6/125.2/502.2 KB；不可变内容只编码一次但每次仍校验 digest。它不是端到端容量、SLO 或 HA 验收，负载/复杂条件/数据库路径需由 011 后续实测。
 
 末次聚焦 API/authority/usecase/architecture 的无缓存 race 回归、Linux/amd64 全仓构建通过；同一 grammar 的有界双 worker fuzz 通过 192,454 次执行（12.173s 含收尾）。未启动其他 Phase 的环境或改变共享服务；本轮独立 PG 容器、网络和卷已清理。
