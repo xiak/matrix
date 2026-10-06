@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { ShieldCheck } from "lucide-react";
 import { Alert, Badge, Button, ContentPage, FormField, Input, TextArea, Wizard } from "@ui/xiak";
 import { accountError, type RoleAccessClient } from "../application/AccountAccessProvider";
-import type { CreateRoleCommand, RoleTag } from "../domain/roles";
+import { validateRoleMetadataInput, type CreateRoleCommand, type RoleTag } from "../domain/roles";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceSelection } from "./AccessWorkspaceUi";
 import { RoleTags } from "./RoleConfiguration";
@@ -13,16 +13,6 @@ import { useAccessDraft } from "./useAccessDraft";
 import styles from "./PolicyAuthoringWizard.module.css";
 
 type ValidationError = "invalidTrust" | "invalidName" | "invalidMetadata";
-
-function validMetadata(name: string, description: string, tags: RoleTag[], minutes: number): ValidationError | null {
-  if (!name || Array.from(name).length > 64 || /[<>\p{Cc}]/u.test(name)) return "invalidName";
-  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 720 || Array.from(description).length > 512 || /\p{Cc}/u.test(description)) return "invalidMetadata";
-  if (tags.length > 50 || new Set(tags.map((tag) => tag.key.trim())).size !== tags.length ||
-      tags.some((tag) => !tag.key.trim() || tag.key !== tag.key.trim() || tag.value !== tag.value.trim() ||
-        Array.from(tag.key).length > 64 || Array.from(tag.value).length > 256 || /[<>\p{Cc}]/u.test(tag.key + tag.value)) ||
-      tags.reduce((size, tag) => size + tag.key.length + tag.value.length, name.length + description.length) > 4096) return "invalidMetadata";
-  return null;
-}
 
 /** Live role creation owns metadata and the initial USER trust document only. Grants and the mandatory boundary remain separate commands. */
 export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
@@ -128,7 +118,7 @@ export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
       setStep(0);
       return;
     }
-    const invalid = validMetadata(normalizedName, normalizedDescription, tags, sessionMinutes);
+    const invalid = validateRoleMetadataInput(normalizedName, normalizedDescription, tags, sessionMinutes);
     if (invalid) {
       setValidationError(invalid);
       setStep(1);

@@ -41,7 +41,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import type { AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
-import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CurrentRoleIdentity, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, UserRoleSession } from "../domain/roles";
+import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CreateRolePolicyAttachmentCommand, CurrentRoleIdentity, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand, UserRoleSession } from "../domain/roles";
 import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
 import type { AccountSecurityReport, AccountSecurityReportCreation, AccountSecurityReportDownload } from "../domain/securityReports";
 
@@ -222,6 +222,11 @@ export interface AccountRepository {
     removePermissionBoundary(credential: string, accountId: string, roleId: string, command: RemoveRolePermissionBoundaryCommand): Promise<RolePermissionBoundary>;
     listTrustVersions(credential: string, accountId: string, roleId: string, after?: string): Promise<RoleTrustVersionDirectory>;
     create(credential: string, accountId: string, command: CreateRoleCommand): Promise<Role>;
+    update(credential: string, accountId: string, roleId: string, command: UpdateRoleCommand): Promise<Role>;
+    setStatus(credential: string, accountId: string, roleId: string, command: SetRoleStatusCommand): Promise<Role>;
+    setTrustPolicy(credential: string, accountId: string, roleId: string, command: SetRoleTrustPolicyCommand): Promise<Role>;
+    delete(credential: string, accountId: string, roleId: string, command: DeleteRoleCommand): Promise<RoleDeletion>;
+    createPolicyAttachment(credential: string, accountId: string, roleId: string, command: CreateRolePolicyAttachmentCommand): Promise<RolePolicyAttachment>;
     listSessions(credential: string, accountId: string, roleId: string, filter: RoleSessionFilter, after?: string): Promise<RoleSessionDirectory>;
     readSession(credential: string, accountId: string, roleId: string, sessionId: string): Promise<RoleSessionAccess>;
     revokeSession(credential: string, accountId: string, roleId: string, sessionId: string, requestId: string): Promise<RoleSessionRevocation>;

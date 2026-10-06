@@ -11,6 +11,7 @@ import type { AccountAccessView, AccountPolicy } from "../domain/accounts";
 import type { RoleAccess, RoleCapability, RoleCapabilityAction, RoleListing, RolePermissionBoundary, RoleTrustVersion, RoleTrustVersionDirectory } from "../domain/roles";
 import { AuthorizationOverview, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { LiveRoleSessions } from "./LiveRoleSessions";
+import { LiveRoleDelete, LiveRoleMetadataEditor, LiveRolePolicyEditor, LiveRoleStatusEditor, LiveRoleTrustEditor } from "./LiveRoleManagement";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -85,7 +86,7 @@ function LiveRoleAuthorizationOverview({ access, client, onAccessChanged, onOpen
   const eligible = phase === "ready" && value !== currentPolicyId && (value ? Boolean(selected && canSet) : Boolean(boundary?.policy && canRemove));
   const locked = operation.state === "pending" || operation.state === "conflict" || operation.state === "refreshFailed";
   const restrictionReason = setCapability?.restrictionReason ?? removeCapability?.restrictionReason ?? "AUTHORITY_REQUIRED";
-  useAccessDraft({ dirty: editing && (value !== currentPolicyId || review || operation.state === "uncertain"), busy: operation.state === "pending", title: t("editBoundary"), description: t("boundaryChangeHint"), form });
+  const requestLeave = useAccessDraft({ dirty: editing && (value !== currentPolicyId || review || operation.state === "uncertain"), busy: operation.state === "pending", title: t("editBoundary"), description: t("boundaryChangeHint"), form });
   useLayoutEffect(() => {
     if (!editing && restoreEditFocus.current) {
       restoreEditFocus.current = false;
@@ -97,7 +98,7 @@ function LiveRoleAuthorizationOverview({ access, client, onAccessChanged, onOpen
     const request = ++policyRequests.current;
     setPolicyPhase("loading"); setPoliciesAvailable(true);
     try {
-      const directory = await client.listBoundaryPolicies();
+      const directory = await client.listTenantPolicies();
       if (!mounted.current || request !== policyRequests.current) return;
       setPolicies(directory.items); setPoliciesAvailable(directory.available); setPolicyPhase("ready");
     } catch {
@@ -200,7 +201,7 @@ function LiveRoleAuthorizationOverview({ access, client, onAccessChanged, onOpen
         <div className={styles.actions}>
           <Button type="submit" disabled={locked || (!review && !eligible)}>{operation.state === "pending" ? t("boundarySaving") : operation.state === "uncertain" ? t("boundaryRetryOriginal") : review ? t("boundaryConfirm") : t("reviewChange")}</Button>
           {review ? <Button variant="secondary" disabled={locked} onClick={() => { intent.current = null; setReview(false); setOperation({ state: "idle" }); }}>{t("backToSelection")}</Button> : null}
-          <Button variant="ghost" disabled={locked} onClick={() => { intent.current = null; restoreEditFocus.current = true; setEditing(false); setReview(false); setOperation({ state: "idle" }); }}>{w("cancel")}</Button>
+          <Button variant="ghost" disabled={locked} onClick={() => requestLeave(() => { intent.current = null; restoreEditFocus.current = true; setEditing(false); setReview(false); setOperation({ state: "idle" }); })}>{w("cancel")}</Button>
         </div>
       </form> : null}
     </section> : null}
@@ -285,6 +286,8 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
   const [section, setSection] = useState("permissions");
+  const [workflow, setWorkflow] = useState<"metadata" | "status" | "trust" | "addPolicy" | "removePolicy" | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const retry = useCallback(() => {
     setPhase("loading");
@@ -312,10 +315,42 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
     return () => { current = false; };
   }, [a, client, roleId]);
 
-  return <WorkspaceDetail title={access?.role.name ?? roleId} onBack={() => onOpen("roles")}>
+  const updateCapability = access ? roleCapability(access, "iam.role.update") : null;
+  const statusCapability = access ? roleCapability(access, "iam.role.set-status") : null;
+  const deleteCapability = access ? roleCapability(access, "iam.role.delete") : null;
+  const trustCapability = access ? roleCapability(access, "iam.role-trust.set") : null;
+  const attachmentCapability = access ? roleCapability(access, "iam.role-policy-attachment.create") : null;
+  const canRevokeAttachment = access?.capabilities.some((capability) => capability.action === "iam.role-policy-attachment.revoke" && capability.resource.kind === "POLICY_ATTACHMENT" && capability.available) ?? false;
+  const actionReason = (capability: RoleCapability | null) => capability?.available ? undefined : capability?.restrictionReason ? a(`restrictions.${capability.restrictionReason}`) : phase !== "ready" ? t("loadingRole") : a("errors.forbidden");
+  const actionLocked = phase !== "ready" || workflow !== null;
+  const actions = {
+    primary: {
+      id: "edit-role", label: t("editMetadata"), variant: "secondary" as const,
+      disabled: actionLocked || updateCapability?.available !== true,
+      disabledReason: workflow ? t("finishCurrentWorkflow") : actionReason(updateCapability),
+      onSelect: () => setWorkflow("metadata")
+    },
+    secondary: [{
+      id: "set-role-status", label: access ? t(access.role.status === "ACTIVE" ? "disableRole" : "enableRole") : t("changeStatus"),
+      disabled: actionLocked || statusCapability?.available !== true,
+      disabledReason: workflow ? t("finishCurrentWorkflow") : actionReason(statusCapability),
+      onSelect: () => setWorkflow("status")
+    }, {
+      id: "delete-role", label: w("delete"), danger: true,
+      disabled: actionLocked || deleteCapability?.available !== true,
+      disabledReason: workflow ? t("finishCurrentWorkflow") : actionReason(deleteCapability),
+      onSelect: () => setDeleting(true)
+    }]
+  };
+
+  return <><WorkspaceDetail title={access?.role.name ?? roleId} onBack={() => onOpen("roles")} actions={actions}>
     {phase === "loading" ? <TableSkeleton label={t("loadingRole")} rows={4} header={false} /> : null}
     {phase === "error" ? <EmptyState title={t("roleUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={retry}>{t("retry")}</Button>} /> : null}
-    {phase === "ready" && access ? <>
+    {phase === "ready" && access ? workflow === "metadata" ? <LiveRoleMetadataEditor key={`${client.sessionRevision}:${access.role.id}:metadata`} access={access} client={client} onAccessChanged={setAccess} onClose={() => setWorkflow(null)} />
+      : workflow === "status" ? <LiveRoleStatusEditor key={`${client.sessionRevision}:${access.role.id}:status`} access={access} client={client} onAccessChanged={setAccess} onClose={() => setWorkflow(null)} />
+      : workflow === "trust" ? <LiveRoleTrustEditor key={`${client.sessionRevision}:${access.role.id}:trust`} access={access} client={client} onAccessChanged={setAccess} onClose={() => setWorkflow(null)} />
+      : workflow === "addPolicy" || workflow === "removePolicy" ? <LiveRolePolicyEditor key={`${client.sessionRevision}:${access.role.id}:${workflow}`} access={access} client={client} mode={workflow === "addPolicy" ? "add" : "remove"} onAccessChanged={setAccess} onClose={() => setWorkflow(null)} />
+      : <>
       <div className={styles.sectionHeading}>
         <Badge status={access.role.status === "ACTIVE" ? "success" : "neutral"}>{t(access.role.status === "ACTIVE" ? "active" : "disabled")}</Badge>
         <Badge>{t("customerManaged")}</Badge>
@@ -341,6 +376,10 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
           <Tabs.Trigger value="capabilities">{t("availableOperations")}</Tabs.Trigger>
         </Tabs.List>
         <Tabs.Content className={styles.stack} value="permissions">
+          <div className={styles.actions}>
+            <Button variant="secondary" disabled={attachmentCapability?.available !== true} title={attachmentCapability?.available === true ? undefined : actionReason(attachmentCapability)} onClick={() => setWorkflow("addPolicy")}>{t("addPolicies")}</Button>
+            <Button variant="ghost" disabled={!canRevokeAttachment} title={canRevokeAttachment ? undefined : t("noRevocablePolicies")} onClick={() => setWorkflow("removePolicy")}>{t("removePolicies")}</Button>
+          </div>
           <Alert>{t("permissionsAreRoleGrants")}</Alert>
           {access.policyAttachments.length ? <Table aria-label={t("livePermissions")} mobileLayout="stack">
             <thead><tr><th scope="col">{t("policyId")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("attachmentVersion")}</th><th scope="col">{t("updated")}</th></tr></thead>
@@ -353,6 +392,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
           </Table> : <EmptyState title={t("noLivePermissions")} description={t("noLivePermissionsHint")} />}
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="trust">
+          <div><Button variant="secondary" disabled={trustCapability?.available !== true} title={trustCapability?.available === true ? undefined : actionReason(trustCapability)} onClick={() => setWorkflow("trust")}>{t("editTrust")}</Button></div>
           <Alert>{t("trustIsAdmissionOnly")}</Alert>
           {access.trustVersion.document.statements.length ? <Table aria-label={t("liveTrust")} mobileLayout="stack">
             <thead><tr><th scope="col">SID</th><th scope="col">{t("effect")}</th><th scope="col">{t("trustedUsers")}</th></tr></thead>
@@ -387,7 +427,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
         </Tabs.Content>
       </Tabs.Root>
     </> : null}
-  </WorkspaceDetail>;
+  </WorkspaceDetail>{deleting && access ? <LiveRoleDelete key={`${client.sessionRevision}:${access.role.id}:delete`} access={access} client={client} onAccessChanged={setAccess} onClose={() => setDeleting(false)} onDeleted={() => onOpen("roles")} /> : null}</>;
 }
 
 export function AccountLiveRoles({ client, serviceRoleTemplates, serviceLinkedRoles, entityId, onCreate, onOpen, revokeIntent, onRevokeIntentChange }: {

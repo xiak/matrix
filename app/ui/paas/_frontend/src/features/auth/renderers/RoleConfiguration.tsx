@@ -21,7 +21,7 @@ export function RoleSessionSettings({ value, onChange, service }: { value: Pick<
   const id = useId();
   return <div className={styles.stack}><FormField id={id} label={w("sessionMinutes")} hint={t("durationHint")}><Input id={id} type="number" min={15} max={720} required value={value.sessionMinutes} aria-describedby={id + "-hint"} onChange={(event) => onChange({ ...value, sessionMinutes: Number(event.target.value) })} /></FormField><Checkbox checked={value.consoleAccess} disabled={service} onChange={(event) => onChange({ ...value, consoleAccess: event.target.checked })}>{w("consoleAccess")}</Checkbox><p className={styles.note}>{service ? w("serviceNoConsole") : t("consoleHint")}</p></div>;
 }
-export function RoleTags({ value, onChange }: { value: AccessRole["tags"]; onChange(tags: AccessRole["tags"]): void }) {
+export function RoleTags({ value, onChange, disabled = false }: { value: AccessRole["tags"]; onChange(tags: AccessRole["tags"]): void; disabled?: boolean }) {
   const t = useTranslations("UserWizard");
-  return <TagEditor value={value} onChange={onChange} labels={{ key: (index) => t("tagKey", { index }), value: (index) => t("tagValue", { index }), remove: (index) => t("removeTag", { index }), add: t("addTag"), empty: t("noTagsHint"), count: t("tagCount", { count: value.length }) }} />;
+  return <TagEditor value={value} disabled={disabled} onChange={onChange} labels={{ key: (index) => t("tagKey", { index }), value: (index) => t("tagValue", { index }), remove: (index) => t("removeTag", { index }), add: t("addTag"), empty: t("noTagsHint"), count: t("tagCount", { count: value.length }) }} />;
 }

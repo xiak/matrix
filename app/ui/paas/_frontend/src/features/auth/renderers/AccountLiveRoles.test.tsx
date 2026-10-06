@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
@@ -89,11 +89,17 @@ function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
     list: vi.fn().mockResolvedValue(directory),
     read: vi.fn().mockResolvedValue(access),
     readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, resourceVersion: 2, policy: { policyId: "policy-role-ceiling", versionId: "v3", contentDigest: `sha256:${"c".repeat(64)}` } }),
-    listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [], available: true }),
+    listTenantPolicies: vi.fn().mockResolvedValue({ items: [], available: true }),
     setPermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary set")),
     removePermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary removal")),
     listTrustVersions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, items: [previousTrustVersion, access.trustVersion], nextAfter: null }),
     create: vi.fn().mockResolvedValue(role),
+    update: vi.fn().mockResolvedValue({ ...role, resourceVersion: role.resourceVersion + 1 }),
+    setStatus: vi.fn().mockResolvedValue({ ...role, resourceVersion: role.resourceVersion + 1 }),
+    setTrustPolicy: vi.fn().mockResolvedValue({ ...role, resourceVersion: role.resourceVersion + 1 }),
+    delete: vi.fn().mockResolvedValue({ id: role.id, accountId: role.accountId, name: role.name, resourceVersion: role.resourceVersion + 1, revokedPolicyAttachments: 1, deletedAt: timestamp }),
+    createPolicyAttachment: vi.fn().mockResolvedValue(access.policyAttachments[0]),
+    revokePolicyAttachment: vi.fn().mockResolvedValue({ id: access.policyAttachments[0]!.id, resourceVersion: 2, revokedAt: timestamp }),
     listSessions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, observedAt: timestamp, items: [], nextAfter: null }),
     readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
     revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke")),
@@ -155,6 +161,113 @@ describe("AccountLiveRoles", () => {
     expect(screen.getByText("iam.role.assume")).toBeTruthy();
     expect(api.listSessions).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("edits complete role metadata inline and retries one uncertain command byte-for-byte", async () => {
+    const user = userEvent.setup();
+    const updatedRole = { ...role, description: "Review retained audit logs", resourceVersion: role.resourceVersion + 1 };
+    const updatedAccess = { ...access, role: updatedRole };
+    const update = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE")).mockResolvedValue(updatedRole);
+    const api = client({ read: vi.fn().mockResolvedValueOnce(access).mockResolvedValue(updatedAccess), update });
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: "编辑角色信息" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const description = screen.getByLabelText("描述");
+    await user.clear(description);
+    await user.type(description, updatedRole.description);
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByText("完整替换角色名称", { exact: false })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认更新" }));
+    expect(await screen.findByText("提交结果尚未确认", { exact: false })).toBeTruthy();
+    const original = update.mock.calls[0];
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(await screen.findByText("会失去用于安全重试的冻结请求 ID", { exact: false })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "继续编辑" }));
+    await user.click(screen.getByRole("button", { name: "重试原请求" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update.mock.calls[1]).toEqual(original);
+    expect(original?.[0]).toBe(role.id);
+    expect(original?.[1]).toMatchObject({ description: updatedRole.description, resourceVersion: role.resourceVersion, requestId: expect.stringMatching(/^role-update-/) });
+    expect(await screen.findByText(updatedRole.description)).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "编辑角色信息" })).toBeNull();
+  });
+
+  it("replaces only a valid R1 USER trust document from an inline review", async () => {
+    const user = userEvent.setup();
+    const nextDocument = { languageVersion: "1" as const, statements: [{ sid: "audit-review", effect: "ALLOW" as const, principals: [{ type: "USER" as const, id: "user-sam" }] }] };
+    const updatedRole = { ...role, currentTrustVersionId: "trust-reviewer-v3", resourceVersion: role.resourceVersion + 1 };
+    const updatedAccess: RoleAccess = { ...access, role: updatedRole, trustVersion: { ...access.trustVersion, id: updatedRole.currentTrustVersionId, document: nextDocument } };
+    const setTrustPolicy = vi.fn().mockResolvedValue(updatedRole);
+    const api = client({ read: vi.fn().mockResolvedValueOnce(access).mockResolvedValue(updatedAccess), setTrustPolicy });
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("tab", { name: "信任策略 (1)" }));
+    await user.click(screen.getByRole("button", { name: "修改信任关系" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const editor = screen.getByLabelText("同账号 USER 信任文档预览");
+    fireEvent.change(editor, { target: { value: JSON.stringify({ languageVersion: "1", statements: [{ sid: "service", effect: "ALLOW", principals: [{ type: "SERVICE", id: "paas" }] }] }) } });
+    await user.click(screen.getByRole("button", { name: "审阅信任关系变更" }));
+    expect(await screen.findByText("请输入有效的 R1 信任文档", { exact: false })).toBeTruthy();
+    expect(setTrustPolicy).not.toHaveBeenCalled();
+
+    fireEvent.change(editor, { target: { value: JSON.stringify(nextDocument, null, 2) } });
+    await user.click(screen.getByRole("button", { name: "审阅信任关系变更" }));
+    expect(screen.getByText("新文档会完整替换当前信任策略", { exact: false })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认替换信任策略" }));
+
+    await waitFor(() => expect(setTrustPolicy).toHaveBeenCalledWith(role.id, expect.objectContaining({ document: nextDocument, resourceVersion: role.resourceVersion, requestId: expect.stringMatching(/^role-trust-/) })));
+    expect(await screen.findByText("USER · user-sam")).toBeTruthy();
+  });
+
+  it("attaches one active tenant policy from an inline relationship workflow", async () => {
+    const user = userEvent.setup();
+    const attachment = { id: "attachment-boundary", accountId: role.accountId, target: { kind: "ROLE" as const, id: role.id }, policyId: boundaryPolicy.id,
+      scope: "TENANT" as const, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+    const updatedAccess: RoleAccess = { ...access, policyAttachments: [...access.policyAttachments, attachment], capabilities: [...access.capabilities, {
+      action: "iam.role-policy-attachment.revoke", resource: { kind: "POLICY_ATTACHMENT", id: attachment.id }, available: true, restrictionReason: null
+    }] };
+    const createPolicyAttachment = vi.fn().mockResolvedValue(attachment);
+    const api = client({ listTenantPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }), createPolicyAttachment,
+      read: vi.fn().mockResolvedValueOnce(access).mockResolvedValue(updatedAccess) });
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(await screen.findByRole("combobox", { name: "要关联的策略" }));
+    await user.click(await screen.findByRole("option", { name: `${boundaryPolicy.displayName} · ${boundaryPolicy.id}` }));
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "确认关联策略" }));
+
+    await waitFor(() => expect(createPolicyAttachment).toHaveBeenCalledWith(role.id, expect.objectContaining({ policyId: boundaryPolicy.id, policyResourceVersion: boundaryPolicy.resourceVersion, requestId: expect.stringMatching(/^role-attachment-/) })));
+    expect(await screen.findByRole("button", { name: boundaryPolicy.id })).toBeTruthy();
+  });
+
+  it("keeps one delete intent after an unknown result and retries the exact request", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const deletable: RoleAccess = { ...access, capabilities: access.capabilities.map((candidate) => candidate.action === "iam.role.delete" ? { ...candidate, available: true, restrictionReason: null } : candidate) };
+    const remove = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE")).mockResolvedValue({ id: role.id, accountId: role.accountId, name: role.name,
+      resourceVersion: role.resourceVersion + 1, revokedPolicyAttachments: 1, deletedAt: timestamp });
+    render(<LocaleProvider><RolesHarness api={client({ read: vi.fn().mockResolvedValue(deletable), delete: remove })} entityId={role.id} onOpen={onOpen} /></LocaleProvider>);
+
+    await screen.findByRole("heading", { name: role.name });
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "删除" }));
+    expect(screen.getByText("这是连接 IAM 的真实删除命令", { exact: false })).toBeTruthy();
+    await user.type(screen.getByLabelText("输入名称以确认"), role.name);
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    expect(await screen.findByText("删除结果未知", { exact: false })).toBeTruthy();
+    const original = remove.mock.calls[0];
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(await screen.findByText("会失去用于安全重试的冻结请求 ID", { exact: false })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "继续编辑" }));
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(2));
+    expect(remove.mock.calls[1]).toEqual(original);
+    expect(onOpen).toHaveBeenCalledWith("roles");
   });
 
   it("opens exact current role relationships without extra directory requests", async () => {
@@ -250,16 +363,16 @@ describe("AccountLiveRoles", () => {
     const closed = { accountId: role.accountId, roleId: role.id, resourceVersion: 2, policy: null };
     const applied = { accountId: role.accountId, roleId: role.id, resourceVersion: 3,
       policy: { policyId: boundaryPolicy.id, versionId: boundaryPolicy.defaultVersionId, contentDigest: `sha256:${"d".repeat(64)}` } };
-    const listBoundaryPolicies = vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true });
+    const listTenantPolicies = vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true });
     const setPermissionBoundary = vi.fn().mockResolvedValue(applied);
     const readPermissionBoundary = vi.fn().mockResolvedValueOnce(closed).mockResolvedValue(applied);
-    const api = client({ listBoundaryPolicies, setPermissionBoundary, readPermissionBoundary });
+    const api = client({ listTenantPolicies, setPermissionBoundary, readPermissionBoundary });
     render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
 
     expect(await screen.findByText("未设置权限上限 · 角色承担已关闭")).toBeTruthy();
-    expect(listBoundaryPolicies).not.toHaveBeenCalled();
+    expect(listTenantPolicies).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "修改权限边界" }));
-    await waitFor(() => expect(listBoundaryPolicies).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(listTenantPolicies).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole("dialog")).toBeNull();
     await chooseRoleBoundary(user, `${boundaryPolicy.displayName} · ${boundaryPolicy.id}`);
     await user.click(screen.getByRole("button", { name: "审阅变更" }));
@@ -288,7 +401,7 @@ describe("AccountLiveRoles", () => {
       policy: { policyId: boundaryPolicy.id, versionId: boundaryPolicy.defaultVersionId, contentDigest: `sha256:${"e".repeat(64)}` } };
     const setPermissionBoundary = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE")).mockResolvedValue(applied);
     const api = client({
-      listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }),
+      listTenantPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }),
       readPermissionBoundary: vi.fn().mockResolvedValueOnce(closed).mockResolvedValue(applied),
       setPermissionBoundary
     });
@@ -314,7 +427,7 @@ describe("AccountLiveRoles", () => {
     const closed = { accountId: role.accountId, roleId: role.id, resourceVersion: 3, policy: null };
     const removePermissionBoundary = vi.fn().mockResolvedValue(closed);
     const api = client({
-      listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [], available: false }),
+      listTenantPolicies: vi.fn().mockResolvedValue({ items: [], available: false }),
       readPermissionBoundary: vi.fn().mockResolvedValueOnce(current).mockResolvedValue(closed),
       removePermissionBoundary
     });
@@ -341,7 +454,7 @@ describe("AccountLiveRoles", () => {
       policy: { policyId: boundaryPolicy.id, versionId: boundaryPolicy.defaultVersionId, contentDigest: `sha256:${"1".repeat(64)}` } };
     const setPermissionBoundary = vi.fn().mockRejectedValue(new HttpProblem(409, "IAM_ROLE_REVISION_CHANGED"));
     const readPermissionBoundary = vi.fn().mockResolvedValueOnce(original).mockResolvedValue(latest);
-    const api = client({ listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }), readPermissionBoundary, setPermissionBoundary });
+    const api = client({ listTenantPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }), readPermissionBoundary, setPermissionBoundary });
     render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
 
     await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
@@ -365,7 +478,7 @@ describe("AccountLiveRoles", () => {
     const read = vi.fn().mockResolvedValueOnce(access).mockRejectedValueOnce(new Error("readback unavailable")).mockResolvedValue(access);
     const readPermissionBoundary = vi.fn().mockResolvedValueOnce(closed).mockResolvedValue(applied);
     const setPermissionBoundary = vi.fn().mockResolvedValue(applied);
-    const api = client({ read, readPermissionBoundary, listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }), setPermissionBoundary });
+    const api = client({ read, readPermissionBoundary, listTenantPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }), setPermissionBoundary });
     render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
 
     await user.click(await screen.findByRole("button", { name: "修改权限边界" }));

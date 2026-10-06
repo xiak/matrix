@@ -72,7 +72,7 @@ import type {
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
-import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
+import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDeletion, RoleDirectory, RoleListing, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
 import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessDispositionRule, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
 import { sourceCidrValid } from "../domain/policyLanguage";
 import { accessKeyAuthorizationSourceIpValid, accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, type AccessKeyNetworkRestrictions, type AccessKeyUsageObservation } from "../domain/accessKeyNetwork";
@@ -1248,6 +1248,24 @@ function parseRolePolicyAttachment(value: unknown, accountId: string, roleId: st
     policyId: accountIdentifier(wire.policyId), scope: "TENANT", resourceVersion: accountVersion(wire.resourceVersion),
     ...chronologicalTimestamps(wire.createdAt, wire.updatedAt)
   };
+}
+
+function parseRoleDeletion(value: unknown, accountId: string, roleId: string, expectedName: string, resourceVersion: number): RoleDeletion {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "name", "resourceVersion", "revokedPolicyAttachments", "deletedAt"]);
+  requireAccountKind(wire, "RoleDeletion");
+  if (typeof wire.revokedPolicyAttachments !== "number" || !Number.isSafeInteger(wire.revokedPolicyAttachments) || wire.revokedPolicyAttachments < 0) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const result: RoleDeletion = {
+    id: accountIdentifier(wire.id), accountId: accountIdentifier(wire.accountId), name: groupText(wire.name, 1, 64),
+    resourceVersion: accountVersion(wire.resourceVersion), revokedPolicyAttachments: wire.revokedPolicyAttachments,
+    deletedAt: accountTimestamp(wire.deletedAt)
+  };
+  if (result.accountId !== accountId || result.id !== roleId || result.name !== expectedName || result.resourceVersion !== resourceVersion + 1) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return result;
 }
 
 function parseRoleTrustDocument(value: unknown): RoleTrustDocument {
@@ -2957,6 +2975,66 @@ export const httpAccountRepository: AccountRepository = {
           role.maxSessionDurationSeconds !== maxSessionDurationSeconds || role.status !== "ACTIVE" ||
           JSON.stringify(role.tags) !== JSON.stringify(tags)) throw new Error("INVALID_IAM_RESPONSE");
       return role;
+    },
+    async update(credential, accountId, roleId, command) {
+      const owner = accountIdentifier(accountId), target = accountIdentifier(roleId);
+      const name = groupText(command.name, 1, 64), description = groupText(command.description, 0, 512);
+      const tags = command.tags.map((tag) => ({ key: groupText(tag.key, 1, 64), value: groupText(tag.value, 0, 256) }));
+      const maxSessionDurationSeconds = command.maxSessionDurationSeconds, resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER || tags.length > 50 || new Set(tags.map((tag) => tag.key)).size !== tags.length ||
+          tags.reduce((size, tag) => size + tag.key.length + tag.value.length, name.length + description.length) > 4096 ||
+          !Number.isSafeInteger(maxSessionDurationSeconds) || maxSessionDurationSeconds < 60 || maxSessionDurationSeconds > 43200) {
+        throw new Error("INVALID_IAM_REQUEST");
+      }
+      const role = parseRole(await requestJSON<unknown>(`/api/iam/v1/roles/${encodeURIComponent(target)}`, {
+        method: "PATCH", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description, tags, maxSessionDurationSeconds, resourceVersion, requestId: accountIdentifier(command.requestId) })
+      }));
+      if (role.accountId !== owner || role.id !== target || role.resourceVersion !== resourceVersion + 1 || role.name !== name ||
+          role.description !== description || role.maxSessionDurationSeconds !== maxSessionDurationSeconds || JSON.stringify(role.tags) !== JSON.stringify(tags)) {
+        throw new Error("INVALID_IAM_RESPONSE");
+      }
+      return role;
+    },
+    async setStatus(credential, accountId, roleId, command) {
+      const owner = accountIdentifier(accountId), target = accountIdentifier(roleId), resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER || (command.status !== "ACTIVE" && command.status !== "DISABLED")) throw new Error("INVALID_IAM_REQUEST");
+      const role = parseRole(await postAccount(credential, `/api/iam/v1/roles/${encodeURIComponent(target)}:set-status`, {
+        status: command.status, resourceVersion, requestId: accountIdentifier(command.requestId)
+      }));
+      if (role.accountId !== owner || role.id !== target || role.resourceVersion !== resourceVersion + 1 || role.status !== command.status) {
+        throw new Error("INVALID_IAM_RESPONSE");
+      }
+      return role;
+    },
+    async setTrustPolicy(credential, accountId, roleId, command) {
+      const owner = accountIdentifier(accountId), target = accountIdentifier(roleId), resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+      const document = parseRoleTrustDocument(command.document);
+      const role = parseRole(await requestJSON<unknown>(`/api/iam/v1/roles/${encodeURIComponent(target)}/trust-policy`, {
+        method: "PUT", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify({ document, resourceVersion, requestId: accountIdentifier(command.requestId) })
+      }));
+      if (role.accountId !== owner || role.id !== target || role.resourceVersion !== resourceVersion + 1) throw new Error("INVALID_IAM_RESPONSE");
+      return role;
+    },
+    async delete(credential, accountId, roleId, command) {
+      const owner = accountIdentifier(accountId), target = accountIdentifier(roleId), resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+      const expectedName = groupText(command.expectedName, 1, 64);
+      return parseRoleDeletion(await requestJSON<unknown>(`/api/iam/v1/roles/${encodeURIComponent(target)}`, {
+        method: "DELETE", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify({ resourceVersion, requestId: accountIdentifier(command.requestId) })
+      }), owner, target, expectedName, resourceVersion);
+    },
+    async createPolicyAttachment(credential, accountId, roleId, command) {
+      const owner = accountIdentifier(accountId), target = accountIdentifier(roleId), policyId = accountIdentifier(command.policyId);
+      const attachment = parseRolePolicyAttachment(await postAccount(credential, "/api/iam/v1/policy-attachments", {
+        target: { kind: "ROLE", id: target }, policyId,
+        policyResourceVersion: accountVersion(command.policyResourceVersion), requestId: accountIdentifier(command.requestId)
+      }), owner, target);
+      if (attachment.policyId !== policyId) throw new Error("INVALID_IAM_RESPONSE");
+      return attachment;
     },
     async listSessions(credential, accountId, roleId, filter, after) {
       const target = accountIdentifier(roleId);

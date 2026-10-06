@@ -5,6 +5,18 @@ export type RoleStatus = "ACTIVE" | "DISABLED";
 
 export type RoleTag = { key: string; value: string };
 
+export type RoleMetadataIssue = "invalidName" | "invalidMetadata";
+
+export function validateRoleMetadataInput(name: string, description: string, tags: RoleTag[], minutes: number): RoleMetadataIssue | null {
+  if (!name || Array.from(name).length > 64 || /[<>\p{Cc}]/u.test(name)) return "invalidName";
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 720 || Array.from(description).length > 512 || /\p{Cc}/u.test(description)) return "invalidMetadata";
+  if (tags.length > 50 || new Set(tags.map((tag) => tag.key.trim())).size !== tags.length ||
+      tags.some((tag) => !tag.key.trim() || tag.key !== tag.key.trim() || tag.value !== tag.value.trim() ||
+        Array.from(tag.key).length > 64 || Array.from(tag.value).length > 256 || /[<>\p{Cc}]/u.test(tag.key + tag.value)) ||
+      tags.reduce((size, tag) => size + tag.key.length + tag.value.length, name.length + description.length) > 4096) return "invalidMetadata";
+  return null;
+}
+
 export type Role = {
   id: string;
   accountId: string;
@@ -54,6 +66,40 @@ export type RoleTrustPrincipal = { type: "USER"; id: string };
 export type RoleTrustStatement = { sid: string; effect: "ALLOW" | "DENY"; principals: RoleTrustPrincipal[] };
 export type RoleTrustDocument = { languageVersion: "1"; statements: RoleTrustStatement[] };
 
+export function roleTrustDocumentFromUnknown(value: unknown): RoleTrustDocument | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const document = value as Record<string, unknown>;
+  if (Object.keys(document).sort().join("|") !== "languageVersion|statements" || document.languageVersion !== "1" ||
+      !Array.isArray(document.statements) || document.statements.length > 8) return null;
+  const ids = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+  const seenSids = new Set<string>();
+  let visits = 0;
+  const statements: RoleTrustStatement[] = [];
+  for (const candidate of document.statements) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+    const statement = candidate as Record<string, unknown>;
+    if (Object.keys(statement).sort().join("|") !== "effect|principals|sid" || typeof statement.sid !== "string" || !ids.test(statement.sid) ||
+        seenSids.has(statement.sid) || (statement.effect !== "ALLOW" && statement.effect !== "DENY") ||
+        !Array.isArray(statement.principals) || statement.principals.length < 1 || statement.principals.length > 32) return null;
+    const seenPrincipals = new Set<string>();
+    const principals: RoleTrustPrincipal[] = [];
+    for (const entry of statement.principals) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const principal = entry as Record<string, unknown>;
+      if (Object.keys(principal).sort().join("|") !== "id|type" || principal.type !== "USER" || typeof principal.id !== "string" ||
+          !ids.test(principal.id) || seenPrincipals.has(principal.id)) return null;
+      seenPrincipals.add(principal.id);
+      principals.push({ type: "USER", id: principal.id });
+    }
+    visits += principals.length;
+    if (visits > 256) return null;
+    seenSids.add(statement.sid);
+    statements.push({ sid: statement.sid, effect: statement.effect, principals });
+  }
+  const result: RoleTrustDocument = { languageVersion: "1", statements };
+  return new TextEncoder().encode(JSON.stringify(result)).length <= 16 * 1024 ? result : null;
+}
+
 export type RoleTrustVersion = {
   id: string;
   accountId: string;
@@ -101,6 +147,43 @@ export type CreateRoleCommand = {
   requestId: string;
 };
 
+export type UpdateRoleCommand = {
+  name: string;
+  description: string;
+  tags: RoleTag[];
+  maxSessionDurationSeconds: number;
+  resourceVersion: number;
+  requestId: string;
+};
+
+export type SetRoleStatusCommand = {
+  status: RoleStatus;
+  resourceVersion: number;
+  requestId: string;
+};
+
+export type SetRoleTrustPolicyCommand = {
+  document: RoleTrustDocument;
+  resourceVersion: number;
+  requestId: string;
+};
+
+export type DeleteRoleCommand = {
+  resourceVersion: number;
+  requestId: string;
+  /** Local response binding only. It is never serialized to IAM. */
+  expectedName: string;
+};
+
+export type RoleDeletion = {
+  id: string;
+  accountId: string;
+  name: string;
+  resourceVersion: number;
+  revokedPolicyAttachments: number;
+  deletedAt: string;
+};
+
 export type RolePolicyAttachment = {
   id: string;
   accountId: string;
@@ -110,6 +193,12 @@ export type RolePolicyAttachment = {
   resourceVersion: number;
   createdAt: string;
   updatedAt: string;
+};
+
+export type CreateRolePolicyAttachmentCommand = {
+  policyId: string;
+  policyResourceVersion: number;
+  requestId: string;
 };
 
 export type RoleAccess = {

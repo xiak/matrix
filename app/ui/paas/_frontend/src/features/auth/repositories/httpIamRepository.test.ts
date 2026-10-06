@@ -327,6 +327,68 @@ describe("IAM HTTP role boundary", () => {
     }
   });
 
+  it("updates complete role metadata with one CAS-bound request", async () => {
+    const command = {
+      name: "ProductionLogAuditor", description: "Review retained production logs", tags: [{ key: "team", value: "security" }],
+      maxSessionDurationSeconds: 1800, resourceVersion: role.resourceVersion, requestId: "ui-role-update-one"
+    };
+    const response = { ...role, ...command, requestId: undefined, resourceVersion: role.resourceVersion + 1 };
+    delete response.requestId;
+    const fetcher = reply(response);
+
+    const updated = await httpAccountRepository.roles!.update("bearer", account.id, role.id, command);
+
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}`);
+    expect(firstRequest(fetcher)[1].method).toBe("PATCH");
+    expect(requestBody(fetcher)).toEqual(command);
+    expect(updated).toMatchObject({ id: role.id, name: command.name, resourceVersion: role.resourceVersion + 1 });
+  });
+
+  it("keeps status and trust replacement as separate role commands", async () => {
+    const status = { status: "DISABLED" as const, resourceVersion: role.resourceVersion, requestId: "ui-role-disable-one" };
+    let fetcher = reply({ ...role, status: status.status, resourceVersion: role.resourceVersion + 1 });
+    await httpAccountRepository.roles!.setStatus("bearer", account.id, role.id, status);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}:set-status`);
+    expect(requestBody(fetcher)).toEqual(status);
+
+    const document = { languageVersion: "1" as const, statements: [{ sid: "security-review", effect: "ALLOW" as const, principals: [{ type: "USER" as const, id: user.id }] }] };
+    const trust = { document, resourceVersion: role.resourceVersion, requestId: "ui-role-trust-one" };
+    fetcher = reply({ ...role, currentTrustVersionId: "trust-reviewer-v3", resourceVersion: role.resourceVersion + 1 });
+    await httpAccountRepository.roles!.setTrustPolicy("bearer", account.id, role.id, trust);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/trust-policy`);
+    expect(firstRequest(fetcher)[1].method).toBe("PUT");
+    expect(requestBody(fetcher)).toEqual(trust);
+  });
+
+  it("binds role deletion to the reviewed name and revision", async () => {
+    const command = { resourceVersion: role.resourceVersion, requestId: "ui-role-delete-one", expectedName: role.name };
+    const response = { apiVersion, kind: "RoleDeletion", id: role.id, accountId: account.id, name: role.name,
+      resourceVersion: role.resourceVersion + 1, revokedPolicyAttachments: 2, deletedAt: timestamp };
+    const fetcher = reply(response);
+
+    const deleted = await httpAccountRepository.roles!.delete("bearer", account.id, role.id, command);
+
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}`);
+    expect(firstRequest(fetcher)[1].method).toBe("DELETE");
+    expect(requestBody(fetcher)).toEqual({ resourceVersion: command.resourceVersion, requestId: command.requestId });
+    expect(deleted.revokedPolicyAttachments).toBe(2);
+
+    reply({ ...response, name: "DifferentRole" });
+    await expect(httpAccountRepository.roles!.delete("bearer", account.id, role.id, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("creates an exact ROLE policy attachment without authority selectors", async () => {
+    const command = { policyId: customerPolicy.id, policyResourceVersion: customerPolicy.resourceVersion, requestId: "ui-role-attachment-one" };
+    const response = { ...roleAttachment, policyId: customerPolicy.id };
+    const fetcher = reply(response);
+
+    const attached = await httpAccountRepository.roles!.createPolicyAttachment("bearer", account.id, role.id, command);
+
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policy-attachments");
+    expect(requestBody(fetcher)).toEqual({ target: { kind: "ROLE", id: role.id }, ...command });
+    expect(attached).toMatchObject({ accountId: account.id, target: { kind: "ROLE", id: role.id }, policyId: customerPolicy.id });
+  });
+
   it("rejects foreign ownership, invented trust carriers, mismatched revisions and bad digests", async () => {
     const base = await roleAccess();
     const invalid = [

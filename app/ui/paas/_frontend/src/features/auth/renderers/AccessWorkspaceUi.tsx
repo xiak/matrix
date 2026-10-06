@@ -5,8 +5,11 @@ import { useFormatter, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableSkeleton, TableToolbar, TablePagination, Transfer, type PageCommand, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
-import { useAccountAccess } from "../application/AccountAccessProvider";
+import { useOptionalAccountAccess } from "../application/AccountAccessProvider";
+import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
+
+const noop = () => {};
 
 export function WorkspaceTime({ value }: { value: string | null }) {
   const format = useFormatter();
@@ -154,20 +157,22 @@ export function WorkspaceDetail({ title, onBack, backLabel, actions, children, e
   return <div className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{resolvedBackLabel}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div> : <ContentPage.Heading title={title} scrollKey={`detail:${title}`} back={{ label: resolvedBackLabel, onClick: onBack }} actions={commands} focus={focus} />}{children}</div>;
 }
 
-export function WorkspaceInlineForm({ title, onClose, onBack, onSubmit, children, backLabel, submitLabel, submitDisabled, submitVariant, validationError, operation }: {
+export function WorkspaceInlineForm({ title, onClose, onBack, onSubmit, children, backLabel, submitLabel, submitDisabled, submitVariant, validationError, operation, draft }: {
   title: string; onClose(): void; onBack?(): void; onSubmit(): Promise<boolean>; children: ReactNode;
   backLabel?: string; submitLabel?: string; submitDisabled?: boolean; submitVariant?: ComponentProps<typeof Button>["variant"];
   validationError?: string; operation?: { busy: boolean; error?: string; clearError(): void };
+  draft?: { dirty: boolean; title: string; description: string };
 }) {
   const t = useTranslations("IamWorkspace");
-  const access = useAccountAccess();
+  const access = useOptionalAccountAccess();
   const form = useRef<HTMLFormElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const submitting = useRef(false);
-  const clearError = operation?.clearError ?? access.clearWorkspaceError;
-  const busy = operation?.busy ?? access.busy;
-  const error = validationError ?? operation?.error ?? (access.workspaceError ? t(`errors.${access.workspaceError}`) : undefined);
+  const clearError = operation?.clearError ?? access?.clearWorkspaceError ?? noop;
+  const busy = operation?.busy ?? access?.busy ?? false;
+  const error = validationError ?? operation?.error ?? (access?.workspaceError ? t(`errors.${access.workspaceError}`) : undefined);
   const back = onBack ?? onClose;
+  const requestLeave = useAccessDraft({ dirty: draft?.dirty ?? false, busy, title: draft?.title ?? title, description: draft?.description ?? "", form });
   useEffect(() => { clearError(); }, [clearError]);
   useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, [title]);
   useEffect(() => {
@@ -176,8 +181,9 @@ export function WorkspaceInlineForm({ title, onClose, onBack, onSubmit, children
     alert?.focus({ preventScroll: true });
     alert?.scrollIntoView?.({ block: "nearest" });
   }, [error, busy]);
+  const leave = () => requestLeave(back);
   return <section className={styles.stack} role="group" aria-label={title}>
-    <div className={styles.sectionHeading}><Button type="button" variant="ghost" disabled={busy} onClick={back}>{backLabel ?? t("back")}</Button><h3 className={styles.detailTitle} ref={heading} tabIndex={-1}>{title}</h3></div>
+    <div className={styles.sectionHeading}><Button type="button" variant="ghost" disabled={busy} onClick={leave}>{backLabel ?? t("back")}</Button><h3 className={styles.detailTitle} ref={heading} tabIndex={-1}>{title}</h3></div>
     <form ref={form} className={styles.stack} aria-busy={busy || undefined} onSubmit={async (event) => {
       event.preventDefault();
       if (submitting.current || busy || submitDisabled) return;
@@ -187,20 +193,22 @@ export function WorkspaceInlineForm({ title, onClose, onBack, onSubmit, children
     }}>
       {error ? <Alert status="danger" tabIndex={-1}>{error}</Alert> : null}
       <fieldset className={styles.editorFields} disabled={busy}>{children}</fieldset>
-      <div className={styles.actions}><Button type="submit" variant={submitVariant} disabled={busy || submitDisabled}>{submitLabel ?? t("save")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={back}>{t("cancel")}</Button></div>
+      <div className={styles.actions}><Button type="submit" variant={submitVariant} disabled={busy || submitDisabled}>{submitLabel ?? t("save")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={leave}>{t("cancel")}</Button></div>
     </form>
   </section>;
 }
 
-export function WorkspaceDialog({ title, onClose, onSubmit, children, submitLabel, submitDisabled, submitVariant, validationError, size, fallbackFocusRef, operation }: { title: string; onClose(): void; onSubmit(): Promise<boolean>; children: ReactNode; submitLabel?: string; submitDisabled?: boolean; submitVariant?: ComponentProps<typeof Button>["variant"]; validationError?: string; size?: ComponentProps<typeof Dialog>["size"]; fallbackFocusRef?: ComponentProps<typeof Dialog>["fallbackFocusRef"]; operation?: { busy: boolean; error?: string; clearError(): void } }) {
+export function WorkspaceDialog({ title, onClose, onSubmit, children, submitLabel, submitDisabled, submitVariant, validationError, size, fallbackFocusRef, operation, draft }: { title: string; onClose(): void; onSubmit(): Promise<boolean>; children: ReactNode; submitLabel?: string; submitDisabled?: boolean; submitVariant?: ComponentProps<typeof Button>["variant"]; validationError?: string; size?: ComponentProps<typeof Dialog>["size"]; fallbackFocusRef?: ComponentProps<typeof Dialog>["fallbackFocusRef"]; operation?: { busy: boolean; error?: string; clearError(): void }; draft?: { dirty: boolean; title: string; description: string } }) {
   const t = useTranslations("IamWorkspace");
-  const access = useAccountAccess();
+  const access = useOptionalAccountAccess();
   const formId = useId();
   const form = useRef<HTMLFormElement>(null);
   const submitting = useRef(false);
-  const clearError = operation?.clearError ?? access.clearWorkspaceError;
-  const busy = operation?.busy ?? access.busy;
-  const error = validationError ?? operation?.error ?? (access.workspaceError ? t(`errors.${access.workspaceError}`) : undefined);
+  const clearError = operation?.clearError ?? access?.clearWorkspaceError ?? noop;
+  const busy = operation?.busy ?? access?.busy ?? false;
+  const error = validationError ?? operation?.error ?? (access?.workspaceError ? t(`errors.${access.workspaceError}`) : undefined);
+  const requestLeave = useAccessDraft({ dirty: draft?.dirty ?? false, busy, title: draft?.title ?? title, description: draft?.description ?? "", form });
+  const close = () => requestLeave(onClose);
   useEffect(() => { clearError(); }, [clearError]);
   useEffect(() => {
     if (!error || busy) return;
@@ -208,7 +216,7 @@ export function WorkspaceDialog({ title, onClose, onSubmit, children, submitLabe
     alert?.focus({ preventScroll: true });
     alert?.scrollIntoView?.({ block: "nearest" });
   }, [error, busy]);
-  return <Dialog open size={size} fallbackFocusRef={fallbackFocusRef} title={title} closeLabel={t("close")} onClose={onClose} busy={busy} footer={<><Button disabled={busy} onClick={onClose} variant="secondary">{t("cancel")}</Button><Button disabled={busy || submitDisabled} variant={submitVariant} type="submit" form={formId}>{submitLabel ?? t("save")}</Button></>}>
+  return <Dialog open size={size} fallbackFocusRef={fallbackFocusRef} title={title} closeLabel={t("close")} onClose={close} busy={busy} footer={<><Button disabled={busy} onClick={close} variant="secondary">{t("cancel")}</Button><Button disabled={busy || submitDisabled} variant={submitVariant} type="submit" form={formId}>{submitLabel ?? t("save")}</Button></>}>
     <form id={formId} ref={form} className={styles.stack} onSubmit={async (event) => { event.preventDefault(); if (submitting.current || busy || submitDisabled) return; submitting.current = true; clearError(); try { if (await onSubmit()) onClose(); } finally { submitting.current = false; } }}>
       {error ? <Alert status="danger" tabIndex={-1}>{error}</Alert> : null}
       <fieldset className={styles.editorFields} disabled={busy}>{children}</fieldset>
@@ -216,12 +224,12 @@ export function WorkspaceDialog({ title, onClose, onSubmit, children, submitLabe
   </Dialog>;
 }
 
-export function WorkspaceDelete({ name, onClose, onConfirm, impact, operation }: { name: string; onClose(): void; onConfirm(): Promise<unknown>; impact?: ReactNode; operation?: { busy: boolean; error?: string; clearError(): void } }) {
+export function WorkspaceDelete({ name, onClose, onConfirm, impact, hint, operation, draft }: { name: string; onClose(): void; onConfirm(): Promise<unknown>; impact?: ReactNode; hint?: ReactNode; operation?: { busy: boolean; error?: string; clearError(): void }; draft?: { dirty: boolean; title: string; description: string } }) {
   const t = useTranslations("IamWorkspace");
   const [confirmation, setConfirmation] = useState("");
   const id = useId();
-  return <WorkspaceDialog title={t("deleteTitle", { name })} onClose={onClose} submitLabel={t("deleteConfirm")} onSubmit={async () => confirmation === name && Boolean(await onConfirm())} operation={operation}>
-    <Alert status="warning">{t("deleteHint")}</Alert>{impact}<strong>{name}</strong>
+  return <WorkspaceDialog title={t("deleteTitle", { name })} onClose={onClose} submitLabel={t("deleteConfirm")} onSubmit={async () => confirmation === name && Boolean(await onConfirm())} operation={operation} draft={draft}>
+    <Alert status="warning">{hint ?? t("deleteHint")}</Alert>{impact}<strong>{name}</strong>
     <FormField id={id} label={t("confirmName")}><Input id={id} autoComplete="off" required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></FormField>
     {confirmation && confirmation !== name ? <p className={styles.note}>{t("confirmName")}: {name}</p> : null}
   </WorkspaceDialog>;

@@ -117,6 +117,13 @@ const managedRoleAccess: RoleAccess = {
     action: "iam.role.assume", resource: { kind: "ROLE", id: managedRole.id }, available: false, restrictionReason: "AUTHORITY_REQUIRED"
   }]
 };
+const unusedLiveRoleRepositoryMutations = () => ({
+  update: vi.fn().mockRejectedValue(new Error("unused role update")),
+  setStatus: vi.fn().mockRejectedValue(new Error("unused role status")),
+  setTrustPolicy: vi.fn().mockRejectedValue(new Error("unused role trust")),
+  delete: vi.fn().mockRejectedValue(new Error("unused role delete")),
+  createPolicyAttachment: vi.fn().mockRejectedValue(new Error("unused role attachment"))
+});
 const managedRoleSession = {
   id: "rs1.incident-review", accountId: account.id, roleId: managedRole.id, sourceUserId: childUser.id, status: "ACTIVE" as const,
   issuedAt: timestamp, expiresAt: "2026-09-21T09:00:00Z", revokedAt: null
@@ -2762,6 +2769,7 @@ describe("account access", () => {
       getServiceLinkedRole,
       listServiceRoleTemplates,
       roles: {
+        ...unusedLiveRoleRepositoryMutations(),
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
         readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
@@ -2811,6 +2819,7 @@ describe("account access", () => {
       currentIdentity: vi.fn().mockResolvedValue(roleIdentity),
       listServiceRoleTemplates,
       roles: {
+        ...unusedLiveRoleRepositoryMutations(),
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
         readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
@@ -2847,6 +2856,7 @@ describe("account access", () => {
     const repository = accounts({
       currentIdentity: vi.fn().mockResolvedValue(roleIdentity),
       roles: {
+        ...unusedLiveRoleRepositoryMutations(),
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
         readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
@@ -2903,6 +2913,7 @@ describe("account access", () => {
       currentIdentity: vi.fn().mockResolvedValue(roleIdentity),
       listPolicies,
       roles: {
+        ...unusedLiveRoleRepositoryMutations(),
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
         readPermissionBoundary,
@@ -2954,11 +2965,17 @@ describe("account access", () => {
       list: vi.fn().mockResolvedValue(managedRoleDirectory),
       read: vi.fn().mockResolvedValue(managedRoleAccess),
       readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
-      listBoundaryPolicies: vi.fn().mockResolvedValue({ items: [], available: true }),
+      listTenantPolicies: vi.fn().mockResolvedValue({ items: [], available: true }),
       setPermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary set")),
       removePermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary removal")),
       listTrustVersions: vi.fn(),
       create: operation,
+      update: vi.fn().mockRejectedValue(new Error("unused role update")),
+      setStatus: vi.fn().mockRejectedValue(new Error("unused role status")),
+      setTrustPolicy: vi.fn().mockRejectedValue(new Error("unused role trust")),
+      delete: vi.fn().mockRejectedValue(new Error("unused role delete")),
+      createPolicyAttachment: vi.fn().mockRejectedValue(new Error("unused role attachment")),
+      revokePolicyAttachment: vi.fn().mockRejectedValue(new Error("unused role revocation")),
       listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
       readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
       revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke"))
@@ -2999,6 +3016,7 @@ describe("account access", () => {
     const repository = accounts({
       currentIdentity: vi.fn().mockResolvedValue(roleIdentity),
       roles: {
+        ...unusedLiveRoleRepositoryMutations(),
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
         readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),

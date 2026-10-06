@@ -37,7 +37,7 @@ import { accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, t
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
-import type { CreateRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand } from "../domain/roles";
+import type { CreateRoleCommand, CreateRolePolicyAttachmentCommand, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand } from "../domain/roles";
 import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
 import type { AccountSecurityReport, AccountSecurityReportCreation, AccountSecurityReportDownload } from "../domain/securityReports";
 import type { SecurityStepUp } from "../domain/personalSecurity";
@@ -271,11 +271,17 @@ export type RoleAccessClient = {
   list(after?: string): Promise<RoleDirectory>;
   read(roleId: string): Promise<RoleAccess>;
   readPermissionBoundary(roleId: string): Promise<RolePermissionBoundary>;
-  listBoundaryPolicies(): Promise<{ items: AccountPolicy[]; available: boolean }>;
+  listTenantPolicies(): Promise<{ items: AccountPolicy[]; available: boolean }>;
   setPermissionBoundary(roleId: string, command: SetRolePermissionBoundaryCommand): Promise<RolePermissionBoundary>;
   removePermissionBoundary(roleId: string, command: RemoveRolePermissionBoundaryCommand): Promise<RolePermissionBoundary>;
   listTrustVersions(roleId: string, after?: string): Promise<RoleTrustVersionDirectory>;
   create(command: CreateRoleCommand): Promise<Role>;
+  update(roleId: string, command: UpdateRoleCommand): Promise<Role>;
+  setStatus(roleId: string, command: SetRoleStatusCommand): Promise<Role>;
+  setTrustPolicy(roleId: string, command: SetRoleTrustPolicyCommand): Promise<Role>;
+  delete(roleId: string, command: DeleteRoleCommand): Promise<RoleDeletion>;
+  createPolicyAttachment(roleId: string, command: CreateRolePolicyAttachmentCommand): Promise<RolePolicyAttachment>;
+  revokePolicyAttachment(attachmentId: string, command: { resourceVersion: number; requestId: string }): Promise<PolicyAttachmentRevocation>;
   listSessions(roleId: string, filter: RoleSessionFilter, after?: string): Promise<RoleSessionDirectory>;
   readSession(roleId: string, sessionId: string): Promise<RoleSessionAccess>;
   revokeSession(roleId: string, sessionId: string, requestId: string): Promise<RoleSessionRevocation>;
@@ -1621,7 +1627,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       list: (after) => scoped(roleRepository.list(credential, accountId, after)),
       read: (roleId) => scoped(roleRepository.read(credential, accountId, roleId)),
       readPermissionBoundary: (roleId) => scoped(roleRepository.readPermissionBoundary(credential, accountId, roleId)),
-      listBoundaryPolicies: () => scoped((async () => {
+      listTenantPolicies: () => scoped((async () => {
         if (!scene.tenantPoliciesAvailable) return { items: [], available: false };
         const directory = await readWhenAuthorized(() => repository.listPolicies(credential, false));
         if (!directory) return { items: [], available: false };
@@ -1632,6 +1638,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       removePermissionBoundary: (roleId, command) => protectedMutation(() => scoped(roleRepository.removePermissionBoundary(credential, accountId, roleId, command))),
       listTrustVersions: (roleId, after) => scoped(roleRepository.listTrustVersions(credential, accountId, roleId, after)),
       create: (command) => protectedMutation(() => scoped(roleRepository.create(credential, accountId, command))),
+      update: (roleId, command) => protectedMutation(() => scoped(roleRepository.update(credential, accountId, roleId, command))),
+      setStatus: (roleId, command) => protectedMutation(() => scoped(roleRepository.setStatus(credential, accountId, roleId, command))),
+      setTrustPolicy: (roleId, command) => protectedMutation(() => scoped(roleRepository.setTrustPolicy(credential, accountId, roleId, command))),
+      delete: (roleId, command) => protectedMutation(() => scoped(roleRepository.delete(credential, accountId, roleId, command))),
+      createPolicyAttachment: (roleId, command) => protectedMutation(() => scoped(roleRepository.createPolicyAttachment(credential, accountId, roleId, command))),
+      revokePolicyAttachment: (attachmentId, command) => protectedMutation(() => scoped(repository.revokePolicyAttachment(credential, attachmentId, command))),
       listSessions: (roleId, filter, after) => scoped(roleRepository.listSessions(credential, accountId, roleId, filter, after)),
       readSession: (roleId, sessionId) => scoped(roleRepository.readSession(credential, accountId, roleId, sessionId)),
       revokeSession: (roleId, sessionId, requestId) => scoped(roleRepository.revokeSession(credential, accountId, roleId, sessionId, requestId))
@@ -2001,4 +2013,9 @@ export function useAccountAccess(): AccountAccess {
   const value = useContext(AccountAccessContext);
   if (!value) throw new Error("useAccountAccess must be used inside AccountAccessProvider");
   return value;
+}
+
+/** Shared workspace primitives may receive an explicit operation controller. */
+export function useOptionalAccountAccess(): AccountAccess | null {
+  return useContext(AccountAccessContext);
 }
