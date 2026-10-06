@@ -183,11 +183,16 @@ function navigation(
     ];
   }
   const service = serviceForSection(section);
+  const selectedView = view === "create-user" ? "users"
+    : view === "create-policy" ? "policies"
+      : view === "create-group" ? "groups"
+        : view === "create-role" || view === "service-authorizations" ? "roles"
+          : view;
   return service ? serviceNavigation[service.id].map((page) => ({
     id: page.id, messageKey: page.id,
     group: "group" in page ? page.group : undefined,
     href: consoleRouteHref(page), icon: page.icon,
-    selected: page.section === section && ("view" in page ? page.view : undefined) === (view === "create-user" ? "users" : view === "create-policy" ? "policies" : view === "create-group" ? "groups" : view === "create-role" ? "roles" : view)
+    selected: page.section === section && ("view" in page ? page.view : undefined) === selectedView
   })) : [];
 
 }

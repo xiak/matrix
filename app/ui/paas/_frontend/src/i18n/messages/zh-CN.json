@@ -898,6 +898,10 @@
         "label": "新建角色",
         "hint": "信任、权限与临时会话"
       },
+      "service-authorizations": {
+        "label": "服务授权",
+        "hint": "平台模板、账号同意与资源绑定"
+      },
       "role-access": {
         "label": "角色切换体验",
         "hint": "发现并审阅可承担角色"

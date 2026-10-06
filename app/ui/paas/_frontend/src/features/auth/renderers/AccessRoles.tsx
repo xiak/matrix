@@ -12,7 +12,6 @@ import { AuthorizationOverview, WorkspaceCollection, WorkspaceDelete, WorkspaceD
 import { RoleSessionSettings, RoleTags, RoleTrustFields } from "./RoleConfiguration";
 import { PermissionBoundary } from "./PermissionBoundary";
 import { RoleSessions } from "./RoleSessions";
-import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
 import styles from "./AccountAccessRenderer.module.css";
 
 function RoleMetadataEditor({ role, onClose }: { role: AccessRole; onClose(): void }) {
@@ -90,12 +89,10 @@ function RolePolicyEditor({ role, workspace, mode, onClose }: { role: AccessRole
 export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("IamWorkspace"), r = useTranslations("RoleWorkspace"), relationship = useTranslations("RelationshipDirectory"), access = useAccountAccess();
   const [workflow, setWorkflow] = useState<"metadata" | "trust" | "settings" | "add" | "remove" | null>(null);
-  const [serviceAuthorizationOpen, setServiceAuthorizationOpen] = useState(false);
   const [tab, setTab] = useState("policies");
   const [deleting, setDeleting] = useState<AccessRole | null>(null);
   const metadataTrigger = useRef<HTMLButtonElement>(null), trustTrigger = useRef<HTMLButtonElement>(null), settingsTrigger = useRef<HTMLButtonElement>(null), addTrigger = useRef<HTMLButtonElement>(null), removeTrigger = useRef<HTMLButtonElement>(null);
   const collectionActionFocus = useRef<PageCommandsHandle>(null);
-  const previousServiceAuthorizationOpen = useRef(false);
   const previousWorkflow = useRef<typeof workflow>(null);
   const selected = workspace.roles.find((role) => role.id === entityId);
   useLayoutEffect(() => {
@@ -106,11 +103,6 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
     const fallback = closed === "remove" && target?.disabled ? addTrigger.current : null;
     (fallback ?? target)?.focus({ preventScroll: true });
   }, [workflow]);
-  useLayoutEffect(() => {
-    const wasOpen = previousServiceAuthorizationOpen.current;
-    previousServiceAuthorizationOpen.current = serviceAuthorizationOpen;
-    if (wasOpen && !serviceAuthorizationOpen) collectionActionFocus.current?.focus("service-authorization");
-  }, [serviceAuthorizationOpen]);
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("roles")}>{t("back")}</Button>} />;
   const principalLabel = (role: AccessRole) => role.principalType === "provider" ? workspace.providers.find((provider) => provider.id === role.principal)?.name ?? role.principal : role.principal;
   const selectedPolicies = selected?.policyIds.map((id) => workspace.policies.find((policy) => policy.id === id)).filter((policy) => policy !== undefined) ?? [];
@@ -120,9 +112,6 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
     return document ? containsDenyStatement(document) : false;
   }).map((policy) => policy.id));
   const openWorkflow = (next: NonNullable<typeof workflow>) => { access.clearWorkspaceError(); setWorkflow(next); };
-  if (!selected && serviceAuthorizationOpen) {
-    return <ServiceAuthorizationPreview workspace={workspace} onClose={() => setServiceAuthorizationOpen(false)} />;
-  }
   return <>
     {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("roles")} primaryActionRef={metadataTrigger} actions={workflow ? undefined : { primary: { id: "edit", label: r("editMetadata"), variant: "secondary", onSelect: () => openWorkflow("metadata") }, secondary: [{ id: "delete", label: t("delete"), danger: true, onSelect: () => setDeleting(selected) }] }}>
       {workflow === "metadata" ? <RoleMetadataEditor role={selected} onClose={() => setWorkflow(null)} />
@@ -150,7 +139,7 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
         <Tabs.Content className={styles.stack} value="settings"><div><Button ref={settingsTrigger} variant="secondary" onClick={() => openWorkflow("settings")}>{r("editSettings")}</Button></div><dl className={styles.facts}><div><dt>{t("sessionMinutes")}</dt><dd>{selected.sessionMinutes}</dd></div><div><dt>{t("consoleAccess")}</dt><dd>{t(selected.consoleAccess ? "enabled" : "disabled")}</dd></div></dl><Alert>{r("settingsChangeHint")}</Alert></Tabs.Content>
       </Tabs.Root>
       </>}
-    </WorkspaceDetail> : <WorkspaceCollection title={t("roles")} description={t("roleHint")} items={workspace.roles} keywords={(role) => [role.description, principalLabel(role)].join(" ")} filter={{ label: t("principalType"), options: ["account", "service", "provider"].map((value) => ({ value, label: t(value === "service" ? "servicePrincipal" : value as "account" | "provider") })), matches: (role, value) => role.principalType === value }} create={{ label: t("createRole"), onClick: onCreate }} secondaryActions={[{ id: "service-authorization", label: r("serviceAuthorization"), variant: "secondary", onSelect: () => setServiceAuthorizationOpen(true) }]} createFocusRef={collectionActionFocus} columns={[t("name"), r("directoryTrust"), r("directoryAuthorization"), r("directorySession"), t("created")]} row={(role) => <>
+    </WorkspaceDetail> : <WorkspaceCollection title={t("roles")} description={t("roleHint")} items={workspace.roles} keywords={(role) => [role.description, principalLabel(role)].join(" ")} filter={{ label: t("principalType"), options: ["account", "service", "provider"].map((value) => ({ value, label: t(value === "service" ? "servicePrincipal" : value as "account" | "provider") })), matches: (role, value) => role.principalType === value }} create={{ label: t("createRole"), onClick: onCreate }} secondaryActions={[{ id: "service-authorization", label: r("serviceAuthorization"), variant: "secondary", onSelect: () => onOpen("service-authorizations") }]} createFocusRef={collectionActionFocus} columns={[t("name"), r("directoryTrust"), r("directoryAuthorization"), r("directorySession"), t("created")]} row={(role) => <>
       <td><button className={styles.userLink} onClick={() => onOpen("roles", role.id)}>{role.name}</button><small>{role.description}</small></td>
       <td className={styles.roleDirectoryTrust}><Badge>{t(role.principalType === "service" ? "servicePrincipal" : role.principalType)}</Badge><small>{principalLabel(role)}</small></td>
       <td className={styles.roleDirectorySummary}><strong>{r("attachedPolicyCount", { count: role.policyIds.length })}</strong><small>{t("permissionBoundary")} · {role.boundaryPolicyId ? t("configured") : r("boundaryClosed")}</small></td>

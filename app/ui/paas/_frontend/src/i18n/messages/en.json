@@ -898,6 +898,10 @@
         "label": "Create role",
         "hint": "Trust, permissions and temporary sessions"
       },
+      "service-authorizations": {
+        "label": "Service authorization",
+        "hint": "Platform templates, account consent and resource bindings"
+      },
       "role-access": {
         "label": "Role switch preview",
         "hint": "Discover and review assumable roles"

@@ -1943,6 +1943,22 @@ immediate provider projection reuses only an authoritative preview or managed
 snapshot and cannot create data or authority. A true managed-service cache miss
 retains the destination structure plus regional loading feedback instead of
 inventing an empty success scene.
+
+The IAM service-authorization directory now follows the same addressable task
+contract as the other content workspaces. The Role collection dispatches
+`/console/access/service-authorizations/` instead of retaining an inline-open
+flag; the service-authorization renderer alone owns its remote data and local
+detail state. Direct parsing keeps the Role navigation item selected, the
+shared content header supplies the Role parent/back route, and the DEV MOCK
+entry returns to the requested deep link after its memory-only session is
+re-entered. Focused scene, route, MOCK and LIVE renderer cases cover that
+boundary; the browser observed the exact URL, selected Role navigation, no
+Dialog, deterministic return to `/console/access/roles/`, and no warning or
+error log. The complete 63-file/1,089-case frontend suite plus three export
+normalization cases, typecheck, lint, architecture, 228-pair style gates,
+46-page static build, 254-file embedded equivalence and repository Go test/vet
+all passed.
+
 These gates do not establish a universal click-latency budget, a new whole-repository
 or PostgreSQL runtime regression, a new APISIX installation/upgrade, or complete
 IAM acceptance. Earlier live User-boundary evidence retains its named source

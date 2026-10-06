@@ -208,6 +208,16 @@ describe("AccountServiceAuthorizations", () => {
     await user.click(screen.getByRole("button", { name: "重置查询" }));
     expect(screen.getByRole("table", { name: "服务授权模板目录" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: templateReference.id }));
+    const chain = screen.getByRole("heading", { name: "服务授权链" }).closest("section")!;
+    expect(within(chain).getByText("平台模板")).toBeTruthy();
+    expect(within(chain).getByText("账号同意")).toBeTruthy();
+    expect(within(chain).getByText("资源绑定")).toBeTruthy();
+    expect(within(chain).getByText("运行时使用")).toBeTruthy();
+    expect(within(chain).getAllByText("在账号授权中单独确认")).toHaveLength(2);
+    expect(within(chain).getByText("在运行边界中单独观察")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /授权|撤销/ })).toBeNull();
   });
 
   it("bounds a complete platform template snapshot with shared pagination and resets search to page one", async () => {

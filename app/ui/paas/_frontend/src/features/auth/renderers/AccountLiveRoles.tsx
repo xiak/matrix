@@ -11,7 +11,6 @@ import type { AccountAccessView, AccountPolicy } from "../domain/accounts";
 import type { RoleAccess, RoleCapability, RoleCapabilityAction, RoleListing, RolePermissionBoundary, RoleTrustVersion, RoleTrustVersionDirectory } from "../domain/roles";
 import { AuthorizationOverview, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { LiveRoleSessions } from "./LiveRoleSessions";
-import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -415,7 +414,6 @@ export function AccountLiveRoles({ client, serviceRoleTemplates, serviceLinkedRo
   const [state, setState] = useState("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [serviceAuthorizationOpen, setServiceAuthorizationOpen] = useState(false);
   const deferredQuery = useDeferredValue(query);
 
   const retry = useCallback(() => {
@@ -454,13 +452,12 @@ export function AccountLiveRoles({ client, serviceRoleTemplates, serviceLinkedRo
   const pages = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, pages);
 
-  if (serviceAuthorizationOpen && (serviceLinkedRoles || serviceRoleTemplates)) return <AccountServiceAuthorizations key={serviceLinkedRoles?.sessionRevision ?? serviceRoleTemplates?.sessionRevision} relations={serviceLinkedRoles ?? null} templates={serviceRoleTemplates ?? null} onBack={() => setServiceAuthorizationOpen(false)} />;
   if (entityId) return <RoleDetail client={client} roleId={entityId} onOpen={onOpen} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} />;
 
   return <Card aria-description={t("liveDirectoryHint")}>
     <ContentPage.Heading title={w("roles")} scrollKey="live-role-directory" actions={<ContentPage.Commands label={collection("pageActions")} moreLabel={collection("moreActions")}
       primary={{ id: "create", label: w("createRole"), icon: <Plus aria-hidden="true" />, disabled: !client.canCreate, disabledReason: client.createRestrictionReason ?? undefined, onSelect: onCreate }}
-      secondary={serviceLinkedRoles || serviceRoleTemplates ? [{ id: "service-authorization", label: t("serviceAuthorization"), variant: "secondary", onSelect: () => setServiceAuthorizationOpen(true) }] : []} />} />
+      secondary={serviceLinkedRoles || serviceRoleTemplates ? [{ id: "service-authorization", label: t("serviceAuthorization"), variant: "secondary", onSelect: () => onOpen("service-authorizations") }] : []} />} />
     <div className={styles.policyDirectoryIntro}><p>{t("liveDirectoryHint")}</p></div>
     <TableToolbar
       labels={toolbarLabels}

@@ -395,6 +395,8 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 上述服务授权固定形状与设置导航同批通过完整门禁：52 文件／861 条前端用例、三条归一化、类型/lint/架构/228 对主题样式、41 页导出、228 文件嵌入等价及全仓 Go test/vet。
 
+服务授权目录现在由角色目录进入可书签的 `/console/access/service-authorizations/` 内容路由，而不是角色组件的临时展开状态。路由保持左侧“角色”选中并提供固定返回角色目录的父级；严格 LIVE 与隔离 MOCK 继续复用各自既有目录渲染器，不新增关系模型或后端假成功。DEV 的内存体验会话刷新后仍按原安全边界要求重新进入，但一键体验会恢复准确深链接而不是丢到首页。共享导航、路由与浏览器证据由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 维护。
+
 当前服务授权目录保持租户观察优先：默认页只读列出当前 Account 的 `ServiceLinkedRoleAccess`，直接显示有效／全部 binding 数量、预定义 Role、精确业务资源与关系状态；平台模板作为独立懒加载页签保留。在账号关系和平台模板两个页签之前，隔离 MOCK 与严格 LIVE 只读目录共享同一个首屏责任边界，固定表达“产品团队定义 Action／资源／条件并落实产品 PEP → IAM 平台校验命名空间、不可变修订、摘要与执行证据并受信发布 → 租户管理员消费目录并从准确产品资源发起同意”。该区域没有上传、发布、同意、撤销或其他命令，也不因远端关系或模板仍在加载而消失；产品目录、平台发布与租户授权继续是三个不同边界。账号关系行进入既有三边界观察页，binding 页脚只表达不透明游标的上一页／下一页，不推断总页数。桌面责任链按三列呈现，`390 × 844` 收敛为单列；目录、详情和模板往返恢复原触发点，页面没有撤销、解绑、编辑或 Dialog。源与同步嵌入固定在 [`0835f3b1c`](https://github.com/xiak/matrix/commit/0835f3b1c)：服务授权 MOCK／LIVE 两文件 9 条定向用例、完整 62 文件／1061 条前端用例、3 条导出归一化、类型、lint、架构、228 对主题样式、45 路由、43 个规范化路径、249 个嵌入文件等价以及全仓 Go test/vet 均通过；桌面和 `390 × 844` DEV 实看无横向溢出或 Dialog，浏览器 warning/error 为空。
 
 IAM 工程师最初以来源 `cb62ed2f6c307f5a50aa27480f89c8c58cf081ee` 固定读取形状：`GET /v1/service-linked-roles` 返回 `relation + bindingCount + activeBindingCount`，详情返回 `relation + bindings[] + nextAfter?`；Role 名称／说明／会话上限归 `relation.role`，relation 与 binding 的模板引用均为完整 `{id,version,contentDigest}`，权限上限引用 release-owned 的不可变系统 PolicyVersion。该形状已由下文累计来源 `a464299b6656becc73054cd53b4a31b44104540b` 及其终态成功门禁取代为当前采用基线。前端沿用同一封闭 LIVE 只读适配；产品侧 northbound 写入属于下一节的独立边界，不形成并行 IAM 写模型。

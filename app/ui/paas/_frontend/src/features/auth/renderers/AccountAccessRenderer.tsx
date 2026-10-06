@@ -42,6 +42,8 @@ import { AccountLiveRoles } from "./AccountLiveRoles";
 import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
 import { LiveAccessAnalysis } from "./LiveAccessAnalysis";
 import { LiveSecurityReport } from "./LiveSecurityReport";
+import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
+import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
 import type { AccountUserDetailTab } from "./AccountUserWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -143,6 +145,7 @@ type AccountAccessRendererProps = { view?: AccountAccessView; entityId?: string;
 function AccountAccessInitialLoading({ entityId, view }: { entityId?: string; view: AccountAccessView }) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
+  const r = useTranslations("RoleWorkspace");
   const title = entityId ?? ({
     overview: t("title"),
     users: t("usersTitle"),
@@ -151,6 +154,7 @@ function AccountAccessInitialLoading({ entityId, view }: { entityId?: string; vi
     groups: w("groups"),
     policies: w("policies"),
     roles: w("roles"),
+    "service-authorizations": r("serviceAuthorization"),
     "policy-configuration": w("policyConfigurationReview"),
     "access-diagnosis": w("currentAccessDiagnosis"),
     "access-analysis": w("accessAnalysis.title"),
@@ -198,12 +202,13 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   const clearFeedback = access.clearFeedback;
   const workflow = view === "create-user" || view === "create-policy" || view === "policy-language" || view === "create-group" || view === "create-role";
   useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
-  const previewOnly = ["create-policy", "policy-language", "policy-configuration", "access-diagnosis", "access-analysis", "security-reports", "roles", "create-role", "providers", "user-sso", "federations", "keys"].includes(view);
+  const previewOnly = ["create-policy", "policy-language", "policy-configuration", "access-diagnosis", "access-analysis", "security-reports", "roles", "create-role", "service-authorizations", "providers", "user-sso", "federations", "keys"].includes(view);
   const denied = scene && (
     (view === "users" && !scene.canListUsers) ||
     (view === "create-user" && !scene.canCreateUsers) ||
     (view === "groups" && !(workspace ? scene.canListUsers : scene.canListGroups)) ||
     (view === "roles" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !scene.canListRoles)) ||
+    (view === "service-authorizations" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !scene.canListRoles)) ||
     (view === "create-role" && !workspace && (!access.roles || !scene.canCreateRoles)) ||
     (view === "create-group" && !(workspace ? scene.canListUsers : scene.canCreateGroups)) ||
     (view === "tenants" && !scene.canReadAccounts) ||
@@ -240,6 +245,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "groups" && workspace ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       view === "groups" && access.groups ? <AccountLiveGroups key={`${access.groups.accountId}:${entityId ?? "groups"}`} client={access.groups} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       view === "roles" && !workspace && access.roles ? <AccountLiveRoles key={`${access.roles.accountId}:${access.roles.sessionRevision}:${entityId ?? "roles"}`} client={access.roles} serviceRoleTemplates={access.serviceRoleTemplates} serviceLinkedRoles={access.serviceLinkedRoles} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} revokeIntent={access.roleSessionRevokeIntent} onRevokeIntentChange={access.changeRoleSessionRevokeIntent} /> :
+      view === "service-authorizations" && !workspace && (access.serviceLinkedRoles || access.serviceRoleTemplates) ? <AccountServiceAuthorizations key={access.serviceLinkedRoles?.sessionRevision ?? access.serviceRoleTemplates?.sessionRevision} relations={access.serviceLinkedRoles ?? null} templates={access.serviceRoleTemplates ?? null} onBack={() => onNavigate("roles")} /> :
       view === "create-role" && !workspace && access.roles ? <LiveRoleCreationWizard client={access.roles} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
       view === "keys" && !workspace && access.accessKeys ? <LiveAccessCredentials accountSecuritySettings={access.accountSecuritySettings} authorizationProfiles={access.authorizationProfiles} client={access.accessKeys} scene={scene} createIntent={access.accessKeyCreateIntent}
         userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} onInspectPermissions={(ownerId) => onNavigate("users", ownerId, undefined, "policies")} /> :
@@ -253,6 +259,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "create-role" ? <RoleCreationWizard workspace={workspace} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
       view === "policies" ? <AccessPolicies key={entityId ?? "policies"} entityId={entityId} workspace={workspace} scene={scene} onCreate={(method) => onNavigate("create-policy", undefined, method)} onOpen={onNavigate} /> :
       view === "roles" ? <AccessRoles key={entityId ?? "roles"} workspace={workspace} scene={scene} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} /> :
+      view === "service-authorizations" ? <ServiceAuthorizationPreview workspace={workspace} onClose={() => onNavigate("roles")} /> :
       view === "policy-configuration" ? <PolicyConfigurationReview key={entityId ?? "policy-configuration"} workspace={workspace} scene={scene} entityId={entityId} onOpen={onNavigate} /> :
       view === "providers" ? <Tabs.Root defaultValue="providers"><Tabs.List aria-label={w("providers")}><Tabs.Trigger value="providers">{w("provider")}</Tabs.Trigger><Tabs.Trigger value="mappings">{w("roleSsoMappings")}</Tabs.Trigger></Tabs.List><Tabs.Content value="providers"><AccessProviders workspace={workspace} /></Tabs.Content><Tabs.Content value="mappings"><AccessRoleSsoMappings workspace={workspace} /></Tabs.Content></Tabs.Root> :
       view === "federations" ? <AccessEnterpriseAccounts workspace={workspace} onUsers={() => onNavigate("users")} /> :

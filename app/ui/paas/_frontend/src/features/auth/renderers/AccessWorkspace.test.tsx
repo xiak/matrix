@@ -1267,7 +1267,8 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "返回服务授权" }));
     expect(screen.getByRole("button", { name: "托管服务安装访问" })).toBe(document.activeElement);
     await user.click(screen.getByRole("button", { name: "返回角色列表" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "更多操作" })).toBe(document.activeElement));
+    expect(await screen.findByRole("heading", { name: "角色" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "服务授权" })).toBeNull();
   });
   it("keeps the fixed service-template contract independent of tenant policy revisions", async () => {
     const { user } = await open("roles", { seed: async (extension) => {
