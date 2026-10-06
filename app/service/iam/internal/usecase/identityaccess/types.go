@@ -122,6 +122,8 @@ type Transaction interface {
 	ReadUserCreationPasswordSettings(context.Context, AccountRead) (iamv1.AccountPasswordSettings, uint64, error)
 	LookupPolicy(context.Context, iamv1.AccountID, iamv1.PolicyID) (iamv1.Policy, bool, error)
 	LookupPolicyAttachment(context.Context, iamv1.AccountID, iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error)
+	LookupPolicyAttachmentChangeReference(context.Context, PolicyAttachmentChangeLookup) (PolicyAttachmentChangeReference, bool, error)
+	ReadPolicyAttachmentChange(context.Context, PolicyAttachmentChangeRead) (iamv1.PolicyAttachmentChange, error)
 	CreatePolicyAttachment(context.Context, PolicyAttachmentMutation) (iamv1.PolicyAttachment, error)
 	RevokePolicyAttachment(context.Context, PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error)
 	ReadAccount(context.Context, iamv1.AccountID, iamv1.PrincipalID) (iamv1.Account, error)
@@ -1060,6 +1062,28 @@ type PolicyAttachmentRevocationMutation struct {
 	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
+}
+
+type PolicyAttachmentChangeLookup struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
+	RequestID        string
+}
+
+type PolicyAttachmentChangeReference struct {
+	AccountID        iamv1.AccountID          `json:"accountId"`
+	ActorPrincipalID iamv1.PrincipalID        `json:"actorPrincipalId"`
+	RequestID        string                   `json:"requestId"`
+	AttachmentID     iamv1.PolicyAttachmentID `json:"attachmentId"`
+	Scope            iamv1.AuthorityScope     `json:"scope"`
+	InstallationID   string                   `json:"installationId,omitempty"`
+}
+
+type PolicyAttachmentChangeRead struct {
+	PolicyAttachmentChangeLookup
+	Reference  PolicyAttachmentChangeReference
+	DecisionID iamv1.DecisionID
 }
 
 type ReadinessSnapshot struct {

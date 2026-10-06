@@ -13771,6 +13771,292 @@ func TestIAMPolicyAttachmentSessionPostgres(t *testing.T) {
 	verify()
 }
 
+func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
+	const environment = "MATRIX_IAM_POLICY_ATTACHMENT_CHANGE_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(environment)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_attachment_change_") {
+		t.Fatal("policy attachment change gate requires its own matrix_iam_attachment_change_ database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect policy attachment change database")
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	failures := &iamTransactionFailureTrace{}
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, failures)
+	document := iamHTTPBootstrap(t)
+	initial, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
+	if err != nil || initial.State != iamv1.BootstrapReady {
+		t.Fatal("bootstrap policy attachment change fixture")
+	}
+	endpoint, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestContext, cancelRequest := context.WithCancel(request.Context())
+		defer cancelRequest()
+		stop := context.AfterFunc(ctx, cancelRequest)
+		defer stop()
+		endpoint.ServeHTTP(response, request.WithContext(requestContext))
+	})
+	call := func(method, path, bearer string, body any, want int, result any) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != want {
+			t.Fatalf("policy attachment change %s %s: status=%d want=%d sqlstate=%v body=%s", method, path,
+				response.Code, want, failures.lastSQLState.Load(), response.Body.String())
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("decode policy attachment change response")
+		}
+		return response
+	}
+	assertSQLState := func(err error, code string) {
+		t.Helper()
+		var databaseError *pgconn.PgError
+		if !errors.As(err, &databaseError) || databaseError.Code != code {
+			t.Fatalf("database error=%v want SQLSTATE %s", err, code)
+		}
+	}
+	read := func(bearer, requestID string, want int) iamv1.PolicyAttachmentChange {
+		t.Helper()
+		var result iamv1.PolicyAttachmentChange
+		response := call(http.MethodGet, "/v1/policy-attachment-changes/by-request/"+requestID, bearer, nil, want, nil)
+		if want == http.StatusOK {
+			if json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidatePolicyAttachmentChange(result) != nil {
+				t.Fatal("read an invalid policy attachment completion")
+			}
+		}
+		return result
+	}
+
+	root := localRecoveryLogin(t, handler, "admin", adminPassword, true)
+	root = localRecoveryChangePassword(t, handler, root, adminPassword, changedAdminPassword)
+	var target, other iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-target", "displayName": "Attachment change target",
+		"initialPassword": initialDeveloperPassword, "requestId": "attachment-change-target"}, http.StatusCreated, &target)
+	targetBearer := localRecoveryLogin(t, handler, target.LoginName+"@"+string(target.AccountID), initialDeveloperPassword, true)
+	targetBearer = localRecoveryChangePassword(t, handler, targetBearer, initialDeveloperPassword, changedDeveloperPassword)
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-other", "displayName": "Attachment change other",
+		"initialPassword": initialDeveloperPassword, "requestId": "attachment-change-other"}, http.StatusCreated, &other)
+	otherBearer := localRecoveryLogin(t, handler, other.LoginName+"@"+string(other.AccountID), initialDeveloperPassword, true)
+	localRecoveryChangePassword(t, handler, otherBearer, initialDeveloperPassword, changedDeveloperPassword)
+
+	createRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)},
+		PolicyID: iamv1.SystemPolicyAuditReader, PolicyResourceVersion: 1, RequestID: "attachment-change-create",
+	}
+	var attachment iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", root, createRequest, http.StatusOK, &attachment)
+	created := read(root, createRequest.RequestID, http.StatusOK)
+	if created.Operation != iamv1.PolicyAttachmentChangeCreate || created.AccountID != target.AccountID ||
+		created.ActorPrincipalID != document.Administrator.ID || created.Target == nil || *created.Target != createRequest.Target ||
+		created.PolicyID != createRequest.PolicyID || created.PolicyResourceVersion != createRequest.PolicyResourceVersion ||
+		created.Attachment == nil || !reflect.DeepEqual(*created.Attachment, attachment) {
+		t.Fatal("create completion does not preserve the committed command result")
+	}
+	var factsBefore, factsAfter int
+	freshRoot := localRecoveryLogin(t, handler, "admin", changedAdminPassword, false)
+	const attachmentFactCount = `SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action' IN (
+		'iam.policy-attachment.created','iam.policy-attachment.revoked',
+		'iam.platform-policy-attachment.created','iam.platform-policy-attachment.revoked')`
+	if err := database.QueryRow(ctx, attachmentFactCount).Scan(&factsBefore); err != nil {
+		t.Fatal(err)
+	}
+	if repeated := read(freshRoot, createRequest.RequestID, http.StatusOK); !reflect.DeepEqual(repeated, created) {
+		t.Fatal("a new Session observed a different immutable completion")
+	}
+	if err := database.QueryRow(ctx, attachmentFactCount).Scan(&factsAfter); err != nil || factsAfter != factsBefore {
+		t.Fatal("completion lookup emitted a business Audit fact")
+	}
+	read(targetBearer, createRequest.RequestID, http.StatusNotFound)
+	read(root, "attachment-change-unknown", http.StatusNotFound)
+	call(http.MethodGet, "/v1/policy-attachment-changes/by-request/"+createRequest.RequestID+"?accountId=other", root, nil, http.StatusBadRequest, nil)
+	call(http.MethodGet, "/v1/policy-attachment-changes/by-request/"+createRequest.RequestID, root, map[string]any{}, http.StatusBadRequest, nil)
+	call(http.MethodPost, "/v1/policy-attachment-changes/by-request/"+createRequest.RequestID, root, nil, http.StatusMethodNotAllowed, nil)
+	call(http.MethodGet, "/v1/policy-attachment-changes/by-request/"+createRequest.RequestID, paasCredential, nil, http.StatusUnauthorized, nil)
+
+	var accountB iamv1.Account
+	call(http.MethodPost, "/v1/accounts", root, map[string]any{"id": "attachment-change-account-b", "displayName": "Attachment change B",
+		"rootLoginName": "attachment-change-root-b", "rootDisplayName": "Attachment change root B", "initialPassword": initialDeveloperPassword,
+		"requestId": "attachment-change-account-b"}, http.StatusCreated, &accountB)
+	rootB := localRecoveryLogin(t, handler, "attachment-change-root-b", initialDeveloperPassword, true)
+	rootB = localRecoveryChangePassword(t, handler, rootB, initialDeveloperPassword, changedDeveloperPassword)
+	read(rootB, createRequest.RequestID, http.StatusNotFound)
+
+	// A request ID is actor/account unique across CREATE and REVOKE. The
+	// conflicting revoke must roll back instead of changing the relationship.
+	call(http.MethodPost, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: createRequest.RequestID},
+		http.StatusConflict, nil)
+	var unchanged bool
+	if err := database.QueryRow(ctx, `SELECT resource_version=1 AND revoked_at IS NULL FROM iam.policy_attachments
+		WHERE tenant_id=$1 AND id=$2`, target.AccountID, attachment.ID).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatal("cross-operation request reuse partially revoked the attachment")
+	}
+	revokeRequest := iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: "attachment-change-revoke"}
+	var revoked iamv1.Revocation
+	call(http.MethodPost, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root, revokeRequest, http.StatusOK, &revoked)
+	revocation := read(root, revokeRequest.RequestID, http.StatusOK)
+	if revocation.Operation != iamv1.PolicyAttachmentChangeRevoke || revocation.AttachmentID != attachment.ID ||
+		revocation.ExpectedResourceVersion != revokeRequest.ResourceVersion || revocation.Revocation == nil ||
+		!reflect.DeepEqual(*revocation.Revocation, revoked) {
+		t.Fatal("revoke completion does not preserve the committed command result")
+	}
+	if afterRevoke := read(root, createRequest.RequestID, http.StatusOK); !reflect.DeepEqual(afterRevoke, created) {
+		t.Fatal("later revocation rewrote the original create completion")
+	}
+	for _, item := range []struct{ requestID, action string }{
+		{createRequest.RequestID, "iam.policy-attachment.created"},
+		{revokeRequest.RequestID, "iam.policy-attachment.revoked"},
+	} {
+		var receipts, facts int
+		if err := database.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM iam.policy_attachment_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3),
+			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{actor,id}'=$2
+			 AND event_document->>'requestId'=$3 AND event_document->>'action'=$4)`,
+			target.AccountID, document.Administrator.ID, item.requestID, item.action).Scan(&receipts, &facts); err != nil || receipts != 1 || facts != 1 {
+			t.Fatal("attachment completion is not one-to-one with its original fact", err)
+		}
+	}
+
+	// The original actor must still hold today's dedicated read authority. A
+	// former administrator keeps no read access merely because it performed
+	// the historical write, while another actor cannot discover the receipt.
+	var delegated iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-admin", "displayName": "Attachment change admin",
+		"initialPassword": initialDeveloperPassword, "requestId": "attachment-change-admin"}, http.StatusCreated, &delegated)
+	delegatedBearer := localRecoveryLogin(t, handler, delegated.LoginName+"@"+string(delegated.AccountID), initialDeveloperPassword, true)
+	localRecoveryChangePassword(t, handler, delegatedBearer, initialDeveloperPassword, changedDeveloperPassword)
+	var administratorGrant iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegated.ID)},
+		PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "attachment-change-admin-grant",
+	}, http.StatusOK, &administratorGrant)
+	delegatedBearer = localRecoveryLogin(t, handler, delegated.LoginName+"@"+string(delegated.AccountID), changedDeveloperPassword, false)
+	delegatedRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(other.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: "attachment-change-delegated-create",
+	}
+	var delegatedAttachment iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", delegatedBearer, delegatedRequest, http.StatusOK, &delegatedAttachment)
+	read(delegatedBearer, delegatedRequest.RequestID, http.StatusOK)
+	read(root, delegatedRequest.RequestID, http.StatusNotFound)
+	call(http.MethodPost, "/v1/policy-attachments/"+string(administratorGrant.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: administratorGrant.ResourceVersion, RequestID: "attachment-change-admin-revoke"},
+		http.StatusOK, nil)
+	read(delegatedBearer, delegatedRequest.RequestID, http.StatusForbidden)
+	var retained int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachment_changes
+		WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3`, delegated.AccountID, delegated.ID, delegatedRequest.RequestID).Scan(&retained); err != nil || retained != 1 {
+		t.Fatal("current authorization denial removed the historical completion")
+	}
+
+	// Installation-scoped writes use a different current read action but the
+	// same actor-only route. A caller-supplied installation cannot redirect it.
+	platformRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(other.ID)},
+		PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "attachment-change-platform-create",
+	}
+	var platformAttachment iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", root, platformRequest, http.StatusOK, &platformAttachment)
+	platformChange := read(root, platformRequest.RequestID, http.StatusOK)
+	if platformChange.Attachment == nil || platformChange.Attachment.Scope != iamv1.AuthorityScopeInstallation ||
+		platformChange.Attachment.InstallationID != document.InstallationID {
+		t.Fatal("platform completion lost its sealed installation scope")
+	}
+	var rootSession string
+	if err := database.QueryRow(ctx, `SELECT id FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2
+		AND status='ACTIVE' AND revoked_at IS NULL ORDER BY issued_at DESC LIMIT 1`, document.Organization.ID, document.Administrator.ID).Scan(&rootSession); err != nil {
+		t.Fatal("locate current root Session")
+	}
+	tx, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_api"); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	var ignored []byte
+	err = tx.QueryRow(ctx, `SELECT iam.read_policy_attachment_change($1,$2,$3,$4,$5,$6,$7,$8)`,
+		document.Organization.ID, document.Administrator.ID, rootSession, platformRequest.RequestID, platformAttachment.ID,
+		"INSTALLATION", "installation-attacker", "decision-attacker").Scan(&ignored)
+	_ = tx.Rollback(ctx)
+	assertSQLState(err, "42501")
+
+	// Runtime roles cannot read the table directly. Owner-only damage in a
+	// rolled-back transaction must make both evidence verification and
+	// readiness fail closed without changing the surviving receipt.
+	tx, err = database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_api"); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	err = tx.QueryRow(ctx, "SELECT count(*) FROM iam.policy_attachment_changes").Scan(&retained)
+	_ = tx.Rollback(ctx)
+	assertSQLState(err, "42501")
+	tx, err = database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `ALTER TABLE iam.policy_attachment_changes DISABLE TRIGGER policy_attachment_changes_cannot_be_updated;
+		UPDATE iam.policy_attachment_changes SET result_document=jsonb_set(result_document,'{requestId}',to_jsonb('tampered-request'::text))
+		WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3`, target.AccountID, document.Administrator.ID, createRequest.RequestID); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal("inject isolated policy attachment completion damage")
+	}
+	err = tx.QueryRow(ctx, "SELECT iam.verified_policy_attachment_change($1,$2,$3)",
+		target.AccountID, document.Administrator.ID, createRequest.RequestID).Scan(&ignored)
+	_ = tx.Rollback(ctx)
+	assertSQLState(err, "23514")
+	tx, err = database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "GRANT SELECT ON TABLE iam.policy_attachment_changes TO matrix_iam_worker"); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal("inject isolated policy attachment completion ACL drift")
+	}
+	var ready bool
+	if err := tx.QueryRow(ctx, "SELECT ready FROM iam.readiness()").Scan(&ready); err != nil || ready {
+		_ = tx.Rollback(ctx)
+		t.Fatal("policy attachment completion ACL drift did not close readiness")
+	}
+	_ = tx.Rollback(ctx)
+	if err := database.QueryRow(ctx, "SELECT ready FROM iam.readiness()").Scan(&ready); err != nil || !ready {
+		t.Fatal("rolled-back policy attachment damage did not restore readiness")
+	}
+	if survived := read(root, createRequest.RequestID, http.StatusOK); !reflect.DeepEqual(survived, created) {
+		t.Fatal("isolated damage changed the committed completion")
+	}
+
+	applyIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	if replayed := read(root, createRequest.RequestID, http.StatusOK); !reflect.DeepEqual(replayed, created) {
+		t.Fatal("equivalent schema replay rewrote the immutable completion")
+	}
+}
+
 func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) func() {
 	t.Helper()
 	var retainedChecks []func(*testing.T)

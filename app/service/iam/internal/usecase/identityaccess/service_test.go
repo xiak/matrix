@@ -4671,6 +4671,14 @@ func (transaction *coreTransaction) LookupPolicyAttachment(_ context.Context, ac
 	return attachment, found && attachment.AccountID == account, nil
 }
 
+func (*coreTransaction) LookupPolicyAttachmentChangeReference(_ context.Context, _ PolicyAttachmentChangeLookup) (PolicyAttachmentChangeReference, bool, error) {
+	return PolicyAttachmentChangeReference{}, false, nil
+}
+
+func (*coreTransaction) ReadPolicyAttachmentChange(_ context.Context, _ PolicyAttachmentChangeRead) (iamv1.PolicyAttachmentChange, error) {
+	return iamv1.PolicyAttachmentChange{}, ErrUnavailable
+}
+
 func (transaction *coreTransaction) CreatePolicyAttachment(_ context.Context, mutation PolicyAttachmentMutation) (iamv1.PolicyAttachment, error) {
 	transaction.attachmentSession = mutation.ActorSessionID
 	if _, found := transaction.users[iamv1.PrincipalID(mutation.Attachment.Target.ID)]; !found {

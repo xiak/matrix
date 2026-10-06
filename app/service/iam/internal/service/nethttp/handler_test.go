@@ -3141,6 +3141,26 @@ func (workflow *httpWorkflow) CreatePolicyAttachment(
 	}, nil
 }
 
+func (workflow *httpWorkflow) PolicyAttachmentChangeByRequest(
+	_ context.Context,
+	_ iamv1.Secret,
+	requestID string,
+	_ string,
+) (iamv1.PolicyAttachmentChange, bool, error) {
+	now := workflow.login.Session.IssuedAt
+	target := iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: "principal-user"}
+	attachment := iamv1.PolicyAttachment{
+		APIVersion: iamv1.APIVersion, Kind: "PolicyAttachment", ID: "binding-user",
+		AccountID: "organization-example", Target: target, PolicyID: iamv1.SystemPolicyPaaSDeveloper,
+		Scope: iamv1.AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	return iamv1.PolicyAttachmentChange{
+		APIVersion: iamv1.APIVersion, Kind: "PolicyAttachmentChange", Operation: iamv1.PolicyAttachmentChangeCreate,
+		AccountID: "organization-example", ActorPrincipalID: "principal-user", RequestID: requestID, CompletedAt: now,
+		Target: &target, PolicyID: attachment.PolicyID, PolicyResourceVersion: 1, Attachment: &attachment,
+	}, true, nil
+}
+
 func (workflow *httpWorkflow) RevokePolicyAttachment(
 	_ context.Context,
 	_ iamv1.Secret,

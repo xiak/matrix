@@ -24,6 +24,7 @@ type PolicyManagement string
 type PolicyStatus string
 type PolicyAttachmentID string
 type PolicyAttachmentTargetKind string
+type PolicyAttachmentChangeOperation string
 type PolicyGrantSourceKind string
 type PolicyConditionOperator string
 
@@ -40,14 +41,16 @@ const (
 )
 
 const (
-	PolicySystemManaged   PolicyManagement           = "SYSTEM"
-	PolicyCustomerManaged PolicyManagement           = "CUSTOMER"
-	PolicyActive          PolicyStatus               = "ACTIVE"
-	PolicyRetired         PolicyStatus               = "RETIRED"
-	PolicyTargetUser      PolicyAttachmentTargetKind = "USER"
-	PolicyTargetService   PolicyAttachmentTargetKind = "SERVICE_ACCOUNT"
-	PolicyTargetGroup     PolicyAttachmentTargetKind = "GROUP"
-	PolicyTargetRole      PolicyAttachmentTargetKind = "ROLE"
+	PolicySystemManaged          PolicyManagement                = "SYSTEM"
+	PolicyCustomerManaged        PolicyManagement                = "CUSTOMER"
+	PolicyActive                 PolicyStatus                    = "ACTIVE"
+	PolicyRetired                PolicyStatus                    = "RETIRED"
+	PolicyTargetUser             PolicyAttachmentTargetKind      = "USER"
+	PolicyTargetService          PolicyAttachmentTargetKind      = "SERVICE_ACCOUNT"
+	PolicyTargetGroup            PolicyAttachmentTargetKind      = "GROUP"
+	PolicyTargetRole             PolicyAttachmentTargetKind      = "ROLE"
+	PolicyAttachmentChangeCreate PolicyAttachmentChangeOperation = "CREATE"
+	PolicyAttachmentChangeRevoke PolicyAttachmentChangeOperation = "REVOKE"
 )
 
 const (
@@ -293,6 +296,26 @@ type RevokePolicyAttachmentRequest struct {
 	RequestID       string `json:"requestId"`
 }
 
+// PolicyAttachmentChange is an immutable, non-secret command receipt. It lets
+// the original actor distinguish a committed write from an unknown transport
+// result; it is not current relationship state or permission to repeat it.
+type PolicyAttachmentChange struct {
+	APIVersion              string                          `json:"apiVersion"`
+	Kind                    string                          `json:"kind"`
+	Operation               PolicyAttachmentChangeOperation `json:"operation"`
+	AccountID               AccountID                       `json:"accountId"`
+	ActorPrincipalID        PrincipalID                     `json:"actorPrincipalId"`
+	RequestID               string                          `json:"requestId"`
+	CompletedAt             time.Time                       `json:"completedAt"`
+	Target                  *PolicyAttachmentTarget         `json:"target,omitempty"`
+	PolicyID                PolicyID                        `json:"policyId,omitempty"`
+	PolicyResourceVersion   uint64                          `json:"policyResourceVersion,omitempty"`
+	Attachment              *PolicyAttachment               `json:"attachment,omitempty"`
+	AttachmentID            PolicyAttachmentID              `json:"attachmentId,omitempty"`
+	ExpectedResourceVersion uint64                          `json:"expectedResourceVersion,omitempty"`
+	Revocation              *Revocation                     `json:"revocation,omitempty"`
+}
+
 func ValidateCreatePolicyAttachmentRequest(value CreatePolicyAttachmentRequest) error {
 	// Group is the only inherited carrier implemented in this slice. Role and
 	// service-credential management remain closed until their own workflows.
@@ -305,6 +328,40 @@ func ValidateCreatePolicyAttachmentRequest(value CreatePolicyAttachmentRequest) 
 
 func ValidateRevokePolicyAttachmentRequest(value RevokePolicyAttachmentRequest) error {
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidatePolicyAttachmentChange(value PolicyAttachmentChange) error {
+	if value.APIVersion != APIVersion || value.Kind != "PolicyAttachmentChange" ||
+		ValidateID("accountId", string(value.AccountID)) != nil ||
+		ValidateID("actorPrincipalId", string(value.ActorPrincipalID)) != nil ||
+		ValidateID("requestId", value.RequestID) != nil || validateTime("completedAt", value.CompletedAt) != nil {
+		return ErrInvalidPolicy
+	}
+	switch value.Operation {
+	case PolicyAttachmentChangeCreate:
+		if value.Target == nil || value.Attachment == nil || value.Revocation != nil || value.AttachmentID != "" ||
+			value.ExpectedResourceVersion != 0 || ValidateID("target.id", value.Target.ID) != nil ||
+			ValidateID("policyId", string(value.PolicyID)) != nil || validatePositiveVersion(value.PolicyResourceVersion) != nil ||
+			ValidatePolicyAttachment(*value.Attachment) != nil || value.Attachment.AccountID != value.AccountID ||
+			value.Attachment.Target != *value.Target || value.Attachment.PolicyID != value.PolicyID ||
+			value.Attachment.ResourceVersion != 1 || value.Attachment.RevokedAt != nil ||
+			!value.Attachment.CreatedAt.Equal(value.CompletedAt) || !value.Attachment.UpdatedAt.Equal(value.CompletedAt) {
+			return ErrInvalidPolicy
+		}
+	case PolicyAttachmentChangeRevoke:
+		if value.Target != nil || value.Attachment != nil || value.PolicyID != "" || value.PolicyResourceVersion != 0 ||
+			ValidateID("attachmentId", string(value.AttachmentID)) != nil ||
+			validatePositiveVersion(value.ExpectedResourceVersion) != nil || value.ExpectedResourceVersion == 9007199254740991 ||
+			value.Revocation == nil || ValidateRevocation(*value.Revocation) != nil ||
+			value.Revocation.ID != string(value.AttachmentID) ||
+			value.Revocation.ResourceVersion != value.ExpectedResourceVersion+1 ||
+			!value.Revocation.RevokedAt.Equal(value.CompletedAt) {
+			return ErrInvalidPolicy
+		}
+	default:
+		return ErrInvalidPolicy
+	}
+	return nil
 }
 
 func ValidatePolicy(policy Policy) error {
@@ -405,6 +462,14 @@ func DecodePolicyAttachment(reader io.Reader) (PolicyAttachment, error) {
 	var value PolicyAttachment
 	if contractjson.DecodeObject(reader, MaxPolicyBytes, &value) != nil || ValidatePolicyAttachment(value) != nil {
 		return PolicyAttachment{}, ErrInvalidPolicy
+	}
+	return value, nil
+}
+
+func DecodePolicyAttachmentChange(reader io.Reader) (PolicyAttachmentChange, error) {
+	var value PolicyAttachmentChange
+	if contractjson.DecodeObject(reader, MaxPolicyBytes, &value) != nil || ValidatePolicyAttachmentChange(value) != nil {
+		return PolicyAttachmentChange{}, ErrInvalidPolicy
 	}
 	return value, nil
 }

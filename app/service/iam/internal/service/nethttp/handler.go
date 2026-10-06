@@ -149,6 +149,7 @@ type Workflow interface {
 	ConfirmNotificationContact(context.Context, iamv1.Secret, string, iamv1.ConfirmNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error)
 	CreateUser(context.Context, iamv1.Secret, iamv1.CreateUserRequest) (iamv1.User, error)
 	CreatePolicyAttachment(context.Context, iamv1.Secret, iamv1.CreatePolicyAttachmentRequest) (iamv1.PolicyAttachment, error)
+	PolicyAttachmentChangeByRequest(context.Context, iamv1.Secret, string, string) (iamv1.PolicyAttachmentChange, bool, error)
 	RevokePolicyAttachment(
 		context.Context,
 		iamv1.Secret,
@@ -268,6 +269,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/assumable-roles", value.assumableRoles)
 	routes.HandleFunc("/v1/auth/role-session:logout", value.logoutRoleSession)
 	routes.HandleFunc("/v1/policy-attachments", value.createPolicyAttachment)
+	routes.HandleFunc("/v1/policy-attachment-changes/by-request/", value.policyAttachmentChangeByRequest)
 	routes.HandleFunc("/v1/policy-attachments/", value.revokePolicyAttachment)
 	routes.HandleFunc("/v1/sessions/", value.revokeSession)
 	routes.HandleFunc("/", value.notFound)
@@ -1020,6 +1022,31 @@ func (value *handler) revokePolicyAttachment(response http.ResponseWriter, reque
 	)
 	if err != nil {
 		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) policyAttachmentChangeByRequest(response http.ResponseWriter, request *http.Request) {
+	id, ok := commandPathID(response, request, "/v1/policy-attachment-changes/by-request/", "", "requestId")
+	if !ok || !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, found, err := value.workflow.PolicyAttachmentChangeByRequest(request.Context(), credential, id, requestID(request))
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	if !found {
+		value.notFound(response, request)
+		return
+	}
+	if iamv1.ValidatePolicyAttachmentChange(result) != nil {
+		value.writeError(response, request, identityaccess.ErrUnavailable)
 		return
 	}
 	writeJSON(response, http.StatusOK, result)

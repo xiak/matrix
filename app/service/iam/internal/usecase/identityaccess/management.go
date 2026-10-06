@@ -574,6 +574,82 @@ func (service *Authority) RevokePolicyAttachment(ctx context.Context, credential
 	return result, nil
 }
 
+func (service *Authority) PolicyAttachmentChangeByRequest(
+	ctx context.Context,
+	credential iamv1.Secret,
+	originalRequestID string,
+	readRequestID string,
+) (iamv1.PolicyAttachmentChange, bool, error) {
+	if iamv1.ValidateID("requestId", originalRequestID) != nil || iamv1.ValidateID("readRequestId", readRequestID) != nil {
+		return iamv1.PolicyAttachmentChange{}, false, ErrInvalidArgument
+	}
+	var result iamv1.PolicyAttachmentChange
+	found, denied := false, false
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		found, denied = false, false
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		lookup := PolicyAttachmentChangeLookup{AccountID: subject.Subject.Organization.ID,
+			ActorPrincipalID: subject.Subject.Principal.ID, ActorSessionID: subject.Subject.Session.ID, RequestID: originalRequestID}
+		reference, exists, err := tx.LookupPolicyAttachmentChangeReference(ctx, lookup)
+		if err != nil || !exists {
+			return err
+		}
+		found = true
+		if reference.AccountID != lookup.AccountID || reference.ActorPrincipalID != lookup.ActorPrincipalID ||
+			reference.RequestID != lookup.RequestID || iamv1.ValidateID("attachmentId", string(reference.AttachmentID)) != nil {
+			return ErrUnavailable
+		}
+		action := iamv1.ActionIAMPolicyAttachmentChangeRead
+		switch reference.Scope {
+		case iamv1.AuthorityScopeTenant:
+			if reference.InstallationID != "" {
+				return ErrUnavailable
+			}
+		case iamv1.AuthorityScopeInstallation:
+			if reference.InstallationID == "" || reference.InstallationID != subject.Subject.InstallationID {
+				return ErrUnavailable
+			}
+			action = iamv1.ActionIAMPlatformPolicyAttachmentChangeRead
+		default:
+			return ErrUnavailable
+		}
+		decision, err := service.managementDecision(ctx, tx, subject, action,
+			iamv1.ResourceReference{Kind: iamv1.ResourcePolicyAttachment, ID: string(reference.AttachmentID)},
+			iamv1.AuthorizationResourceInstance, "", readRequestID, now)
+		if err != nil {
+			return err
+		}
+		if !decision.Allowed {
+			denied = true
+			return nil
+		}
+		result, err = tx.ReadPolicyAttachmentChange(ctx, PolicyAttachmentChangeRead{
+			PolicyAttachmentChangeLookup: lookup, Reference: reference, DecisionID: decision.ID,
+		})
+		return err
+	})
+	if err != nil {
+		return iamv1.PolicyAttachmentChange{}, false, err
+	}
+	if denied {
+		return iamv1.PolicyAttachmentChange{}, true, ErrForbidden
+	}
+	if !found {
+		return iamv1.PolicyAttachmentChange{}, false, nil
+	}
+	if iamv1.ValidatePolicyAttachmentChange(result) != nil || result.AccountID == "" || result.RequestID != originalRequestID {
+		return iamv1.PolicyAttachmentChange{}, true, ErrUnavailable
+	}
+	return result, true, nil
+}
+
 func (service *Authority) RevokeOtherSessions(ctx context.Context, credential iamv1.Secret, request iamv1.RevokeSessionRequest) (iamv1.RevokeOtherSessionsResponse, error) {
 	if iamv1.ValidateRevokeSessionRequest(request) != nil {
 		return iamv1.RevokeOtherSessionsResponse{}, ErrInvalidArgument

@@ -1,7 +1,7 @@
 SET LOCAL ROLE matrix_iam_owner;
 DO $verify_access_disposition$
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 65::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 66::bigint THEN
       RAISE EXCEPTION 'IAM access disposition schema version differs'; END IF;
     IF NOT iam.access_disposition_contract_ready() THEN
       RAISE EXCEPTION 'IAM access disposition contract differs'; END IF;

@@ -1085,6 +1085,80 @@ func (value *transaction) LookupPolicyAttachment(ctx context.Context, account ia
 	return attachment, err == nil, err
 }
 
+func validPolicyAttachmentChangeLookup(value identityaccess.PolicyAttachmentChangeLookup) bool {
+	return iamv1.ValidateID("accountId", string(value.AccountID)) == nil &&
+		iamv1.ValidateID("actorPrincipalId", string(value.ActorPrincipalID)) == nil &&
+		iamv1.ValidateID("actorSessionId", string(value.ActorSessionID)) == nil &&
+		iamv1.ValidateID("requestId", value.RequestID) == nil
+}
+
+func validPolicyAttachmentChangeReference(value identityaccess.PolicyAttachmentChangeReference) bool {
+	if iamv1.ValidateID("accountId", string(value.AccountID)) != nil ||
+		iamv1.ValidateID("actorPrincipalId", string(value.ActorPrincipalID)) != nil ||
+		iamv1.ValidateID("requestId", value.RequestID) != nil ||
+		iamv1.ValidateID("attachmentId", string(value.AttachmentID)) != nil {
+		return false
+	}
+	switch value.Scope {
+	case iamv1.AuthorityScopeTenant:
+		return value.InstallationID == ""
+	case iamv1.AuthorityScopeInstallation:
+		return iamv1.ValidateID("installationId", value.InstallationID) == nil
+	default:
+		return false
+	}
+}
+
+func (value *transaction) LookupPolicyAttachmentChangeReference(
+	ctx context.Context,
+	lookup identityaccess.PolicyAttachmentChangeLookup,
+) (identityaccess.PolicyAttachmentChangeReference, bool, error) {
+	if !validPolicyAttachmentChangeLookup(lookup) {
+		return identityaccess.PolicyAttachmentChangeReference{}, false, identityaccess.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.lookup_policy_attachment_change_reference($1,$2,$3,$4)",
+		string(lookup.AccountID), string(lookup.ActorPrincipalID), string(lookup.ActorSessionID), lookup.RequestID).Scan(&encoded); err != nil {
+		return identityaccess.PolicyAttachmentChangeReference{}, false, mapDatabaseError("locate IAM policy attachment change", err)
+	}
+	if len(encoded) == 0 {
+		return identityaccess.PolicyAttachmentChangeReference{}, false, nil
+	}
+	var reference identityaccess.PolicyAttachmentChangeReference
+	if iamv1.DecodeRequest(bytes.NewReader(encoded), &reference) != nil || !validPolicyAttachmentChangeReference(reference) ||
+		reference.AccountID != lookup.AccountID || reference.ActorPrincipalID != lookup.ActorPrincipalID || reference.RequestID != lookup.RequestID {
+		return identityaccess.PolicyAttachmentChangeReference{}, false, identityaccess.ErrUnavailable
+	}
+	return reference, true, nil
+}
+
+func (value *transaction) ReadPolicyAttachmentChange(
+	ctx context.Context,
+	read identityaccess.PolicyAttachmentChangeRead,
+) (iamv1.PolicyAttachmentChange, error) {
+	if !validPolicyAttachmentChangeLookup(read.PolicyAttachmentChangeLookup) ||
+		!validPolicyAttachmentChangeReference(read.Reference) || read.Reference.AccountID != read.AccountID ||
+		read.Reference.ActorPrincipalID != read.ActorPrincipalID || read.Reference.RequestID != read.RequestID ||
+		iamv1.ValidateID("decisionId", string(read.DecisionID)) != nil {
+		return iamv1.PolicyAttachmentChange{}, identityaccess.ErrInvalidArgument
+	}
+	var installationID any
+	if read.Reference.InstallationID != "" {
+		installationID = read.Reference.InstallationID
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.read_policy_attachment_change($1,$2,$3,$4,$5,$6,$7,$8)",
+		string(read.AccountID), string(read.ActorPrincipalID), string(read.ActorSessionID), read.RequestID,
+		string(read.Reference.AttachmentID), string(read.Reference.Scope), installationID, string(read.DecisionID)).Scan(&encoded); err != nil {
+		return iamv1.PolicyAttachmentChange{}, mapAuthorizationDatabaseError("read IAM policy attachment change", err)
+	}
+	change, err := iamv1.DecodePolicyAttachmentChange(bytes.NewReader(encoded))
+	if err != nil || change.AccountID != read.AccountID || change.ActorPrincipalID != read.ActorPrincipalID || change.RequestID != read.RequestID {
+		return iamv1.PolicyAttachmentChange{}, identityaccess.ErrUnavailable
+	}
+	return change, nil
+}
+
 func (value *transaction) CreatePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentMutation) (iamv1.PolicyAttachment, error) {
 	attachment := mutation.Attachment
 	if iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||

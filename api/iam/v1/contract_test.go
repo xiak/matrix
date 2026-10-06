@@ -4673,6 +4673,7 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 				ActionIAMAccessAnalyzerCreate, ActionIAMAccessAnalyzerList, ActionIAMAccessAnalyzerRead,
 				ActionIAMAccessAnalyzerUpdate, ActionIAMAccessAnalyzerSetDisposition, ActionIAMAccessFindingList, ActionIAMAccessFindingRead,
 				ActionIAMAccessFindingArchive, ActionIAMAccessFindingUnarchive,
+				ActionIAMPolicyAttachmentChangeRead, ActionIAMPlatformPolicyAttachmentChangeRead,
 				ActionIAMServiceRoleTemplateList, ActionIAMServiceLinkedRoleList,
 				ActionIAMServiceLinkedRoleRead, ActionIAMServiceLinkedRoleCreate,
 				ActionIAMRolePass, ActionIAMWorkloadRoleBindingRevoke,
@@ -7678,6 +7679,84 @@ func TestPolicyMetadataAndAttachmentOwnershipContracts(t *testing.T) {
 	}
 }
 
+func TestPolicyAttachmentChangeIsAStrictImmutableUnion(t *testing.T) {
+	now := time.Date(2026, 10, 6, 8, 0, 0, 123000000, time.UTC)
+	target := PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: "user-example"}
+	attachment := PolicyAttachment{
+		APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-example", AccountID: "account-a",
+		Target: target, PolicyID: SystemPolicyPaaSDeveloper, Scope: AuthorityScopeTenant,
+		ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	created := PolicyAttachmentChange{
+		APIVersion: APIVersion, Kind: "PolicyAttachmentChange", Operation: PolicyAttachmentChangeCreate,
+		AccountID: "account-a", ActorPrincipalID: "user-admin", RequestID: "attachment-create-request", CompletedAt: now,
+		Target: &target, PolicyID: attachment.PolicyID, PolicyResourceVersion: 1, Attachment: &attachment,
+	}
+	revocation := Revocation{APIVersion: APIVersion, Kind: "Revocation", ID: string(attachment.ID), ResourceVersion: 2, RevokedAt: now}
+	revoked := PolicyAttachmentChange{
+		APIVersion: APIVersion, Kind: "PolicyAttachmentChange", Operation: PolicyAttachmentChangeRevoke,
+		AccountID: "account-a", ActorPrincipalID: "user-admin", RequestID: "attachment-revoke-request", CompletedAt: now,
+		AttachmentID: attachment.ID, ExpectedResourceVersion: 1, Revocation: &revocation,
+	}
+	for name, value := range map[string]PolicyAttachmentChange{"create": created, "revoke": revoked} {
+		t.Run(name, func(t *testing.T) {
+			if ValidatePolicyAttachmentChange(value) != nil {
+				t.Fatal("valid policy attachment completion rejected")
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := DecodePolicyAttachmentChange(bytes.NewReader(encoded))
+			if err != nil || !reflect.DeepEqual(decoded, value) {
+				t.Fatal("policy attachment completion did not round trip")
+			}
+			for _, prefix := range []string{`{"unknown":true,`, `{"requestId":"another-request",`} {
+				if _, err := DecodePolicyAttachmentChange(strings.NewReader(prefix + string(encoded[1:]))); err == nil {
+					t.Fatal("policy attachment completion accepted unknown or duplicate input")
+				}
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*PolicyAttachmentChange){
+		"create mixed with revoke": func(value *PolicyAttachmentChange) {
+			value.AttachmentID, value.ExpectedResourceVersion, value.Revocation = attachment.ID, 1, &revocation
+		},
+		"create result differs": func(value *PolicyAttachmentChange) { value.Attachment.PolicyID = SystemPolicyAuditReader },
+		"create result time differs": func(value *PolicyAttachmentChange) {
+			value.Attachment.UpdatedAt = now.Add(time.Microsecond)
+		},
+		"create target differs": func(value *PolicyAttachmentChange) { value.Attachment.Target.ID = "another-user" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, targetCopy, attachmentCopy := created, *created.Target, *created.Attachment
+			value.Target, value.Attachment = &targetCopy, &attachmentCopy
+			mutate(&value)
+			if ValidatePolicyAttachmentChange(value) == nil {
+				t.Fatal("invalid create completion accepted")
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*PolicyAttachmentChange){
+		"revoke mixed with create": func(value *PolicyAttachmentChange) {
+			value.Target, value.PolicyID, value.PolicyResourceVersion, value.Attachment = &target, attachment.PolicyID, 1, &attachment
+		},
+		"revoke result id differs":       func(value *PolicyAttachmentChange) { value.Revocation.ID = "another-attachment" },
+		"revoke result version differs":  func(value *PolicyAttachmentChange) { value.Revocation.ResourceVersion = 3 },
+		"revoke result time differs":     func(value *PolicyAttachmentChange) { value.Revocation.RevokedAt = now.Add(time.Microsecond) },
+		"revoke unsafe maximum revision": func(value *PolicyAttachmentChange) { value.ExpectedResourceVersion = 9007199254740991 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, revocationCopy := revoked, *revoked.Revocation
+			value.Revocation = &revocationCopy
+			mutate(&value)
+			if ValidatePolicyAttachmentChange(value) == nil {
+				t.Fatal("invalid revoke completion accepted")
+			}
+		})
+	}
+}
+
 func TestCurrentIdentityUsesOnlyItsLivePolicyGrantSources(t *testing.T) {
 	now := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
 	blocked := func(action Action, kind ResourceKind, id string) ActionCapability {
@@ -8638,7 +8717,7 @@ func TestAccountSecurityReportContractIsBoundedAndExplicit(t *testing.T) {
 
 func TestSecurityReportActionsAreCurrentLoginSessionCapabilities(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || profile.Revision != 13 {
+	if !found || profile.Revision != 14 {
 		t.Fatal("security report profile revision is not current")
 	}
 	wants := map[Action]struct {
@@ -8663,7 +8742,7 @@ func TestSecurityReportActionsAreCurrentLoginSessionCapabilities(t *testing.T) {
 
 func TestAccessAnalyzerActionsAreCurrentLoginSessionCapabilities(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || profile.Revision != 13 {
+	if !found || profile.Revision != 14 {
 		t.Fatal("access analyzer profile revision is not current")
 	}
 	wants := map[Action]struct {

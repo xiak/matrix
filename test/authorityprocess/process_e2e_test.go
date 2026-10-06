@@ -125,9 +125,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "530f6bf47a266b08a0ae2bbca5b1fd89798c646b"
-	const sourceSchema uint64 = 64
-	const currentSchema uint64 = 65
+	const source = "9044bd6610b8f2c0cfe0887daf45e8ccf9a4ff90"
+	const sourceSchema uint64 = 65
+	const currentSchema uint64 = 66
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -546,7 +546,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}) {
 		t.Fatalf("actual predecessor did not update its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
 	}
-	// The immediate IAM64 predecessor already owns explicit REVIEW_ONLY. IAM65
+	// The immediate IAM65 predecessor already owns explicit REVIEW_ONLY. IAM66
 	// must preserve it instead of inventing a migration default or authority.
 	migratedAccessAnalyzerExpected := retainedAccessAnalyzer
 	if iamv1.ValidateAccessAnalyzer(migratedAccessAnalyzerExpected) != nil {
@@ -621,7 +621,39 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		currentSchema).Scan(&shape); err != nil || !shape {
 		t.Fatal("retained database did not satisfy current IAM readiness and fail-closed defaults", err)
 	}
+	var attachmentChangeUpgrade bool
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT count(*)=0 FROM iam.policy_attachment_changes)
+		AND EXISTS(SELECT 1 FROM iam.audit_outbox WHERE event_document->>'requestId'='retained-old-viewer'
+		  AND event_document->>'action'='iam.policy-attachment.created')
+		AND EXISTS(SELECT 1 FROM iam.policy_versions WHERE policy_id='system.account-administrator'
+		  AND id='version-e49a3d4626b4352752cd43a67fae9c64622a45b9390d4cb32f2e4e549702f715')
+		AND EXISTS(SELECT 1 FROM iam.policy_versions WHERE policy_id='system.platform-operator'
+		  AND id='version-adfc4caf50c1e501ad8ca42b1178a88027ad0c748a7aaf82569d12aa71678e79')
+		AND EXISTS(SELECT 1 FROM iam.policies p JOIN iam.policy_versions v ON (v.policy_id,v.id)=(p.id,p.default_version_id),
+		  LATERAL jsonb_array_elements(v.document->'statements') statement,
+		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
+		  WHERE p.id='system.account-administrator' AND p.resource_version=2
+		    AND action_value='iam.policy-attachment-change.read')
+		AND EXISTS(SELECT 1 FROM iam.policies p JOIN iam.policy_versions v ON (v.policy_id,v.id)=(p.id,p.default_version_id),
+		  LATERAL jsonb_array_elements(v.document->'statements') statement,
+		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
+		  WHERE p.id='system.platform-operator' AND p.resource_version=2
+		    AND action_value='iam.platform-policy-attachment-change.read')`).Scan(&attachmentChangeUpgrade); err != nil || !attachmentChangeUpgrade {
+		t.Fatal("schema65 attachment history was backfilled or exact built-in policy adoption was lost", err)
+	}
 	current := start(currentBinary, currentSchema)
+	legacyAttachmentCompletion := performJSON(t, http.MethodGet,
+		endpoint+"/v1/policy-attachment-changes/by-request/retained-old-viewer", primary.Credential, nil)
+	if legacyAttachmentCompletion.Status != http.StatusNotFound {
+		t.Fatal("current authority synthesized a completion receipt for an old attachment fact", legacyAttachmentCompletion.Status)
+	}
+	reusedAttachmentRequest := performJSON(t, http.MethodPost, endpoint+"/v1/policy-attachments", primary.Credential,
+		iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(forcedUser.ID)},
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "retained-old-viewer"})
+	if reusedAttachmentRequest.Status != http.StatusConflict {
+		t.Fatal("current authority reused an old attachment request ID with changed input", reusedAttachmentRequest.Status)
+	}
 	var retainedAuditProfileDocument, retainedAuditProfileDigest string
 	var currentAuditProfileRevision uint64
 	var currentAuditProfileDocument, currentAuditProfileDigest string
@@ -669,6 +701,18 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
+	currentGrant := createIAMPolicyAttachment(t, endpoint, primary.Credential, forcedUser.ID,
+		iamv1.SystemPolicyPaaSViewer, "retained-current-viewer")
+	currentAttachmentCompletion := performJSON(t, http.MethodGet,
+		endpoint+"/v1/policy-attachment-changes/by-request/retained-current-viewer", primary.Credential, nil)
+	var currentAttachmentChange iamv1.PolicyAttachmentChange
+	if currentAttachmentCompletion.Status != http.StatusOK ||
+		json.Unmarshal(currentAttachmentCompletion.Body, &currentAttachmentChange) != nil ||
+		iamv1.ValidatePolicyAttachmentChange(currentAttachmentChange) != nil ||
+		currentAttachmentChange.Operation != iamv1.PolicyAttachmentChangeCreate || currentAttachmentChange.Attachment == nil ||
+		!reflect.DeepEqual(*currentAttachmentChange.Attachment, currentGrant) {
+		t.Fatal("current authority did not persist and read its exact attachment completion", currentAttachmentCompletion.Status)
+	}
 	predecessorReportResponse = performJSON(t, http.MethodGet,
 		endpoint+"/v1/account/security-reports/"+string(predecessorReportCreation.Metadata.ID), primary.Credential, nil)
 	var migratedPredecessorReport iamv1.AccountSecurityReport
@@ -689,8 +733,8 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		migratedAccessAnalyzer != migratedAccessAnalyzerExpected {
 		t.Fatal("migration changed the predecessor access analyzer")
 	}
-	// The immutable IAM63 receipt deliberately keeps its original bytes. An
-	// exact create replay through IAM64 must project the new safe default at the
+	// The immutable predecessor receipt deliberately keeps its original bytes.
+	// An exact create replay through IAM66 must project the new safe default at the
 	// read boundary instead of mutating history or returning an obsolete wire
 	// shape that the current contract cannot decode.
 	accessAnalyzerResponse = performJSON(t, http.MethodPost, endpoint+"/v1/account/access-analyzers", primary.Credential,
@@ -1113,6 +1157,7 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "predecessor-private-recovery", "./app/service/iam/cmd/matrix-iam-authentication-recovery")
 	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "current-private-recovery", "./app/service/iam/cmd/matrix-iam-authentication-recovery")
 	backupBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "predecessor-backup-custody", "./app/service/iam/cmd/matrix-iam-backup-custody")
+	currentBackupBinary := buildAuthorityBinary(t, ctx, root, temporary, "current-backup-custody", "./app/service/iam/cmd/matrix-iam-backup-custody")
 	backupDSN := writeProtectedFile(t, temporary, "predecessor-backup-dsn", []byte(runtimeDSN(t, configs[0], "matrix_iam_backup_custody_login", processDBPassword)))
 	backupProcess, lease := startTOTPBackupProcess(t, ctx, baseline, backupBinary, backupDSN)
 	if lease.Custody.InstallationID != installationID || lease.AuthenticationStateDigest == "" ||
@@ -1246,16 +1291,38 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		originalPasswords := passwordState()
 		defer clear(originalPasswords)
 		expectedHistory := original
-		if index == 1 {
-			invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], intentFile}, installationv1.AuthenticationRecoveryExitConflict)
-		} else {
-			// Closing the current source creates its own current snapshot. That is
-			// not permission to reconcile or reopen using another database's old
-			// snapshot below.
-			currentEnvelopeBytes := invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], intentFile}, 0)
+		// The schema advance changes the closed authorization projection. A
+		// qualification sampled from the predecessor must not close the current
+		// authority, regardless of whether that old command already completed.
+		invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], intentFile}, installationv1.AuthenticationRecoveryExitConflict)
+		if index != 1 {
+			// A first close remains possible only after the current authority has
+			// issued a new purpose-limited custody lease over its exact state. The
+			// resulting current snapshot still grants no right to replay the old
+			// closure or snapshot below.
+			currentBackupDSN := writeProtectedFile(t, temporary, "current-backup-dsn", []byte(runtimeDSN(t, configs[index], "matrix_iam_backup_custody_login", processDBPassword)))
+			currentBackup, currentLease := startTOTPBackupProcess(t, ctx, root, currentBackupBinary, currentBackupDSN)
+			if currentLease.Custody.InstallationID != installationID || currentLease.AuthenticationStateDigest == "" ||
+				currentLease.AuthenticationStateDigest == lease.AuthenticationStateDigest ||
+				currentBackup.finish(t, installationv1.TOTPBackupCustodyReleaseFrame) != installationv1.TOTPBackupCustodyExitSuccess {
+				t.Fatal("current authority did not issue its changed bounded security qualification")
+			}
+			currentIntent := intent
+			currentIntent.CommandID = "cmd-" + strings.Repeat("6", 32)
+			currentIntent.BackupID = "backup-" + strings.Repeat("5", 32)
+			currentIntent.TOTPCustodyDigest = currentLease.CustodyDigest
+			currentIntent.AuthenticationStateDigest = currentLease.AuthenticationStateDigest
+			encodedCurrentIntent, encodeErr := installationv1.EncodeAuthenticationRecoveryIntent(currentIntent)
+			if encodeErr != nil {
+				t.Fatal(encodeErr)
+			}
+			currentIntentFile := installationv1.AuthenticationRecoveryIntentFileEnvironment + "=" + writeProtectedFile(t, temporary,
+				"current-recovery-intent", encodedCurrentIntent)
+			clear(encodedCurrentIntent)
+			currentEnvelopeBytes := invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], currentIntentFile}, 0)
 			currentEnvelope, decodeErr := installationv1.DecodeAuthenticationRecoveryClosureEnvelope(bytes.NewReader(currentEnvelopeBytes))
-			if decodeErr != nil || installationv1.ValidateAuthenticationRecoveryClosureEnvelopeForIntent(currentEnvelope, intent, lease.Custody.BootstrapDigest) != nil {
-				t.Fatal("current source close did not return its bounded snapshot", decodeErr)
+			if decodeErr != nil || installationv1.ValidateAuthenticationRecoveryClosureEnvelopeForIntent(currentEnvelope, currentIntent, currentLease.Custody.BootstrapDigest) != nil {
+				t.Fatal("current source close did not return its newly qualified bounded snapshot", decodeErr)
 			}
 			expectedHistory = history(database)
 			defer clear(expectedHistory)

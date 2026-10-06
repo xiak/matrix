@@ -1,6 +1,6 @@
 # FEAT-IAM-002：策略权限权威替换
 
-- 状态：单一策略权威的语言、持久化、迁移、当前求值、管理入口和历史证据已经实现；旧 RoleBinding 只保留为不可变历史词汇，不再是在线授权入口。关联写入结果不确定时的封闭完成查询、完整 LIVE UI/浏览器门禁及当前签名发布组合仍未完成，因此整体未验收。
+- 状态：单一策略权威的语言、持久化、迁移、当前求值、管理入口、历史证据及关联写入结果不确定时的封闭完成查询已经实现；旧 RoleBinding 只保留为不可变历史词汇，不再是在线授权入口。完整 LIVE UI/浏览器门禁及当前签名发布组合仍未完成，因此整体未验收。
 - 依赖：001 已验收的 CAT-01–04，固定安装消费者已对齐当前策略附件 wire；完整产品 Profile 的集成仍由 008 证明。
 - Owner：IAM `authority`、`identityaccess`、PostgreSQL；Audit 只保存事实。
 
@@ -47,11 +47,11 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 直接 USER 关联管理使用 `POST /v1/policy-attachments` 与 `POST /v1/policy-attachments/{id}:revoke`；不保留旧 RoleBinding 路由。创建关联 ID 由账号、操作者及 requestId 的域分离摘要稳定生成，策略 ID/目标/预期策略版本进入输入摘要。仅相同未撤销关联和原输入可重放返回；改变输入、已撤销关联或另一现存有效关联冲突，不因重试分配新 ID 而复权。撤销检查预期关联版本；完成后仅原版本加一、相同输入和操作者的事实可精确重放，其余陈旧版本冲突。两种写入都在当前授权事务内验证目标 USER 与策略 scope、封存 installation、策略/关联修订和原 primary 保护。
 
-创建的未知结果处理边界：固定`42035189eb823e388509f54525889c1a18c6b79d`已要求必填requestId，客户端须保留同一操作者的原requestId、目标、policyId与预期策略修订；未知回包只能明确重试原输入，不能每次执行都自动换意图。当前公开API没有按requestId查询历史关联完成的入口，也不承诺撤权、目标失效、策略退休或修订变化后仍可通过写命令读取旧结果；401/403/409不能证明原事务未提交。刷新User直接关联目录仅证明当前关系，不能把“现在不存在”解释成“原来没成功”，更不能据此自动重新授权。前端不复制私有ID生成算法。独立的非敏感历史完成核对及撤销后原意图确认仍是本FEAT待设计/验收的缺口；后续须与当前执行资格严格分离，不能借结果查询重新授予权限或绕过当前读取授权，不能以已有普通重放测试宣称提交后失联的完整恢复闭环已交付。
+创建的未知结果处理边界：固定`42035189eb823e388509f54525889c1a18c6b79d`已要求必填requestId，客户端须保留同一操作者的原requestId、目标、policyId与预期策略修订；未知回包不能每次自动换意图。当前实现增加按原requestId查询不可变完成结果的只读入口，但它不把404/403/5xx解释为原事务未提交，不根据当前关系存在与否自动重发，也不允许客户端复制私有ID生成算法。查询资格与原执行资格严格分离，不能借历史结果重新授予权限或绕过当前读取授权。
 
 #### 关联命令完成查询
 
-下一纵向切片使用单一路由 `GET /v1/policy-attachment-changes/by-request/{requestId}`。请求只含原 `requestId`，不接受 Account、actor、target、policy、scope、installation 或操作类型 selector；Account、原操作者和当前 installation 都从有效 USER LOGIN_SESSION 推导。一个操作者在同一 Account 内的 policy-attachment 命令必须使用跨 CREATE/REVOKE 唯一的 requestId；复用已存在 requestId 但改变操作或任何输入时冲突，不能形成两个可供查询的结果。
+当前纵向切片使用单一路由 `GET /v1/policy-attachment-changes/by-request/{requestId}`。请求只含原 `requestId`，不接受 Account、actor、target、policy、scope、installation 或操作类型 selector；Account、原操作者和当前 installation 都从有效 USER LOGIN_SESSION 推导。一个操作者在同一 Account 内的 policy-attachment 命令必须使用跨 CREATE/REVOKE 唯一的 requestId；复用已存在 requestId 但改变操作或任何输入时冲突，不能形成两个可供查询的结果。
 
 响应 `PolicyAttachmentChange` 是严格互斥联合：公共字段为 `apiVersion/kind/operation/accountId/actorPrincipalId/requestId/completedAt`。`operation=CREATE` 必须同时返回原 `target/policyId/policyResourceVersion` 和创建完成时的不可变 `attachment`；`operation=REVOKE` 必须返回原 `attachmentId/expectedResourceVersion` 和不可变 `revocation`。它不返回密码、Session、策略正文、决定正文、Audit event 或可重用 permit，也不把关系当前是否仍有效混入原完成。后继撤销、重新关联、策略退休、主体停用或资源删除都不能改写已完成结果。
 
@@ -59,7 +59,7 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是从可变 `policy_attachments` 或可投递 outbox 临时拼接结果。主键为 `(account_id,actor_principal_id,request_id)`，同时保存 operation、输入承诺、准确原输入、结果文档、attachment ID、scope/installation、原 decision/event ID 和完成时间；CHECK、复合外键、FORCE RLS、拒绝 UPDATE/DELETE/TRUNCATE 及受限函数 ACL 进入同一 schema verifier。创建或撤销必须在原关系、决定、Audit outbox 的同一事务中写入唯一 receipt；receipt 写入失败则整笔业务变化回滚。查询只返回保存的结果文档，并重新验证输入承诺、结果字段、关系身份及原 event/requestDigest 对应，不以今天的关系状态补字段。
 
-该能力是未发布产品的下一前向 schema，只验证空白安装和准确即时前序；不为每个开发数字保留兼容函数或双表写入。即时前序已完成的旧命令没有足够原始输入可安全补造 receipt，因此不回填猜测结果，查询明确返回 NOT_FOUND；NOT_FOUND 仍不证明原事务回滚，客户端不得自动重发写命令。真正实现时必须推进实际 IAM schema 与 contractRevision，并在任何效果前由完整 release profile 拒绝旧二进制；本设计本身不分配版本数字。
+该能力落在 IAM schema 66、release contractRevision 13，策略授权 Profile revision 14，只验证空白安装和准确即时前序 IAM65；不为每个开发数字保留兼容函数或双表写入。即时前序已完成的旧命令没有足够原始输入可安全补造 receipt，因此不回填猜测结果，查询明确返回 NOT_FOUND；NOT_FOUND 仍不证明原事务回滚，客户端不得自动重发写命令。完整 release profile 在任何效果前继续拒绝形状不匹配的旧二进制；相同 schema 数字也不能替代函数、策略 Profile 和 receipt 形状核对。
 
 最低验收包含：CREATE/REVOKE 提交后断开回包，再以同一和新有效 Session 查询精确原结果；后继撤销、重新关联、策略退休、主体停用后的历史不改写；错误 actor/Account/requestId、跨 scope、错误 installation、错误当前只读权限与 Role/AccessKey/ServiceIdentity 均拒绝；同 requestId 跨操作或变体竞争至多一个完成；事务末端、receipt/outbox/关系任一失败均零部分效果；篡改输入承诺、结果、event、scope 或 ACL 后失败关闭；固定即时前序保留数据升级不复活权限且不伪造历史 receipt。UI 对明确完成解除原未知提示，对404/403/5xx继续保持未知，绝不因当前目录状态自动重发。
 
@@ -87,7 +87,7 @@ PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是�
 
 数据库的当前来源查询应返回 `AttachedPolicy`：关联、策略元数据和精确默认内容版本。`EvaluateAttachedPolicies` 先检查所有关系的 Account/主体/安装归属、状态和默认版本一致，再调用已有唯一语句评估器；任一损坏关系不能留下部分 Allow 或证据。当前直接主体路径拒绝未证明的 Group/Role 来源，继承证明由 004/006 接入后才启用。结果绑定准确关联 ID/修订以及命中的 policy/version/digest，按关联 ID 排序，不把允许权限重新解释为策略名称。
 
-以上对象、严格解码与关系校验已由现有 API/domain owner 实现。Go loader、`Decide`/`DecideService`、管理路由和固定消费者均读取 `policies`、`policy_versions`、`policy_attachments` 的当前关系快照；生产鉴权不再通过旧角色名装配权限。契约测试覆盖跨 Account、错主体、伪造安装、未证明继承、非默认版本、退休/撤销、摘要替换、重复关联、预算和 Deny 证据顺序；未知提交结果查询及最终组合验收仍是必要剩余项。
+以上对象、严格解码与关系校验已由现有 API/domain owner 实现。Go loader、`Decide`/`DecideService`、管理路由和固定消费者均读取 `policies`、`policy_versions`、`policy_attachments` 的当前关系快照；生产鉴权不再通过旧角色名装配权限。契约测试覆盖跨 Account、错主体、伪造安装、未证明继承、非默认版本、退休/撤销、摘要替换、重复关联、预算、Deny 证据顺序及未知提交结果的封闭查询；最终组合验收仍是必要剩余项。
 
 成员目录 `PrincipalAccess.policyAttachments` 返回同 Account、同 USER 的未撤销直接关联，替换旧 `roleBindings` 投影；不按策略名推断角色，不把元数据 RETIRED 或主体 DISABLED 当成关系撤销。每成员最多 256 条，SQL 读取 257 条用于检测溢出，不能静默截断关系。Go/schema 拒绝错误主体类型、跨账号/主体、重复关联或同策略重复有效关系、撤销关系及超预算结果。目录是管理快照，不是有效权限或可复用许可。
 
@@ -101,7 +101,7 @@ PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是�
 
 ## 验收
 
-### 已实现的单一权威；未完成的交付闭环
+### 已实现的单一权威与完成查询；未完成的发布闭环
 
 策略语言、规范编码/摘要、不可变内容版本与唯一 deny-first 求值器已经实现。当前授权决定读取持久化策略、当前默认版本和未撤销关联；`RoleAllows`、旧绑定名到内容的运行时映射及旧公开管理 DTO 已删除。在线管理 API、成员目录、进程测试客户端和控制台 repository adapter 使用 `Policy`、`PolicyVersion` 与 `PolicyAttachment`；求值器不限制策略数量为六种，也不按显示名判断权限。系统策略列出显式 Action 集合，新增目录 Action 不会自动扩张既有版本。
 
@@ -109,7 +109,11 @@ PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是�
 
 现有 `TestIAMPolicyAuthorityStoragePostgres` 与累计 HTTP/独立进程门禁覆盖空库迁移、等值重放、旧关联确定性迁移、受限运行登录、双租户隔离、显式关联/撤销、默认版本切换、Deny 优先、退休与撤权不复活、256/257 关系预算、不可变决定证据、历史 Audit bytes、原 primary/platform 保护及错误版本/跨 Account 攻击。固定旧 executable 的保留数据门禁证明撤销历史、NULL 历史证据、恢复 receipt、会话和凭据不会在迁移或重启后复活；SQL 可重放仍不等于跨完整 release profile 获准。
 
-仍未完成的产品闭环是：创建或撤销关联在提交后丢失回包时，当前 API 没有按原操作者、原 requestId 和完整输入承诺查询非敏感完成结果的入口；目录中当前存在或不存在关系不能证明原意图的提交结果。该能力必须与执行资格分离，只读返回原完成，不因策略退休、后续撤销或当前权限变化重新执行授权。除此之外，完整 LIVE UI/真实浏览器与当前签名发布组合仍由 010/011 和安装 owner 验收；这些缺口完成前本 FEAT 不标记 Accepted。
+关联完成查询的本地候选已通过严格契约、HTTP/usecase、架构与生成一致性检查，并在真实PostgreSQL18中证明同事务receipt、CREATE/REVOKE断链查询、当前只读再授权、后继撤销/重新关联不改写历史、actor/Account/scope攻击、篡改/ACL/RLS失败关闭和旧历史不补造。专项`TestIAMPolicyAttachmentChangePostgres`为22.05s（包25.555s），累计`TestIAMPolicyAuthorityStoragePostgres`为329.47s（包333.089s）；API、authority、PostgreSQL adapter、HTTP、usecase、release及architecture聚焦race与对应vet通过。
+
+滚动即时前序门禁以固定`9044bd6610b8f2c0cfe0887daf45e8ccf9a4ff90`的IAM65真实程序产生数据，再由IAM66双迁移、等值bootstrap和重启，149.47s通过（包152.950s）。旧认证恢复qualification因系统策略/授权投影变化而按预期失败关闭，当前schema重新取得有界qualification后才能完成；迁移只采用准确IAM65默认系统策略版本，未来产品Profile产生的另一不可变版本不会被误选，后继显式默认版本也不会被等值重放覆盖。该门禁同时证明旧命令不补造receipt、会话/凭据/撤销历史不复活；它不等于跨完整release profile安装准入。
+
+仍未完成的是完整 LIVE UI/真实浏览器、固定提交的独立CI及当前签名发布组合，由010/011、UX/UI和安装owner分别验收；这些缺口完成前本FEAT不标记Accepted。
 
 纯求值基线在 Windows/amd64、Core Ultra 5 125H、GOMAXPROCS=2、20 Action 的策略文档、1/16/64 个有效版本下，单次有界测量分别约 5.6/126.6/564.6 µs，分配约 7.6/125.2/502.2 KB；不可变内容只编码一次但每次仍校验 digest。它不是端到端容量、SLO 或 HA 验收，负载/复杂条件/数据库路径需由 011 后续实测。
 

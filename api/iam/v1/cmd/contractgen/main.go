@@ -356,6 +356,10 @@ func buildPaths() object {
 		"/v1/policy-attachments": object{"post": mutationOperation(
 			"createPolicyAttachment", "Create a direct user or group policy attachment", "CreatePolicyAttachmentRequest", "PolicyAttachment", "200", nil, nil,
 		)},
+		"/v1/policy-attachment-changes/by-request/{requestId}": object{"get": readOperation(
+			"getPolicyAttachmentChangeByRequest", "Read the original actor's immutable attachment command result; no current relation inference or replay permit", "PolicyAttachmentChange", nil,
+			[]any{openapi31.PathIDParameter("requestId")},
+		)},
 		"/v1/policy-attachments/{attachmentId}:revoke": object{"post": mutationOperation(
 			"revokePolicyAttachment", "Revoke a policy attachment", "RevokePolicyAttachmentRequest", "Revocation", "200", nil,
 			[]any{openapi31.PathIDParameter("attachmentId")},
@@ -685,6 +689,7 @@ func structContracts() map[string]reflect.Type {
 		"PolicyAttachmentTarget":                        openapi31.StructType[iamv1.PolicyAttachmentTarget](),
 		"CreatePolicyAttachmentRequest":                 openapi31.StructType[iamv1.CreatePolicyAttachmentRequest](),
 		"RevokePolicyAttachmentRequest":                 openapi31.StructType[iamv1.RevokePolicyAttachmentRequest](),
+		"PolicyAttachmentChange":                        openapi31.StructType[iamv1.PolicyAttachmentChange](),
 		"Session":                                       openapi31.StructType[iamv1.Session](),
 		"SessionList":                                   openapi31.StructType[iamv1.SessionList](),
 		"RevokeOwnSessionResponse":                      openapi31.StructType[iamv1.RevokeOwnSessionResponse](),
@@ -1374,6 +1379,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			base["maximum"] = uint64(9007199254740990)
 		}
 	}
+	if owner == "PolicyAttachmentChange" && jsonName == "expectedResourceVersion" {
+		base["minimum"], base["maximum"] = 1, uint64(9007199254740990)
+	}
 	if owner == "ChangePasswordRequest" && jsonName == "revokeOtherSessions" {
 		base["default"] = true
 		base["description"] = "Revoke other login sessions, preserving only the current bearer session after transactional revalidation. Omission defaults to true. Required password replacement always revokes other sessions; false can retain only already valid sessions of the same user."
@@ -1382,6 +1390,16 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["PolicyAttachmentChange"].(object)["oneOf"] = []any{
+		object{"required": []string{"target", "policyId", "policyResourceVersion", "attachment"}, "properties": object{
+			"operation":    object{"const": string(iamv1.PolicyAttachmentChangeCreate)},
+			"attachmentId": false, "expectedResourceVersion": false, "revocation": false,
+		}},
+		object{"required": []string{"attachmentId", "expectedResourceVersion", "revocation"}, "properties": object{
+			"operation": object{"const": string(iamv1.PolicyAttachmentChangeRevoke)},
+			"target":    false, "policyId": false, "policyResourceVersion": false, "attachment": false,
+		}},
+	}
 	schemas["AccessObservationCoverage"].(object)["oneOf"] = []any{
 		object{"required": []string{"observedFrom", "observedThrough"}, "properties": object{"state": object{"const": string(iamv1.AccessObservationComplete)}, "reason": false}},
 		object{"required": []string{"observedFrom", "observedThrough", "reason"}, "properties": object{"state": object{"const": string(iamv1.AccessObservationInsufficientCoverage)}, "reason": object{"enum": []string{string(iamv1.AccessObservationWindowIncomplete), string(iamv1.AccessObservationHistoricalUnknown), string(iamv1.AccessObservationRestoreGap), string(iamv1.AccessObservationSourceNotReady)}}}},

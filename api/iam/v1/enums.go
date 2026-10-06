@@ -214,66 +214,68 @@ const (
 	ActionIAMUserSetStatus                 Action = "iam.user.set-status"
 	ActionIAMUserPasswordReset             Action = "iam.user.reset-password"
 
-	ActionIAMUserCreate                      Action = "iam.user.create"
-	ActionIAMUserRead                        Action = "iam.user.read"
-	ActionIAMUserUpdate                      Action = "iam.user.update"
-	ActionIAMUserDelete                      Action = "iam.user.delete"
-	ActionIAMUserPermissionBoundarySet       Action = "iam.user.permission-boundary.set"
-	ActionIAMUserPermissionBoundaryRemove    Action = "iam.user.permission-boundary.remove"
-	ActionIAMGroupList                       Action = "iam.group.list"
-	ActionIAMGroupCreate                     Action = "iam.group.create"
-	ActionIAMGroupRead                       Action = "iam.group.read"
-	ActionIAMGroupUpdate                     Action = "iam.group.update"
-	ActionIAMGroupDelete                     Action = "iam.group.delete"
-	ActionIAMGroupMembershipList             Action = "iam.group-membership.list"
-	ActionIAMGroupMembershipCreate           Action = "iam.group-membership.create"
-	ActionIAMGroupMembershipRemove           Action = "iam.group-membership.remove"
-	ActionIAMGroupPolicyAttachmentCreate     Action = "iam.group-policy-attachment.create"
-	ActionIAMGroupPolicyAttachmentRevoke     Action = "iam.group-policy-attachment.revoke"
-	ActionIAMRoleList                        Action = "iam.role.list"
-	ActionIAMRoleCreate                      Action = "iam.role.create"
-	ActionIAMRoleRead                        Action = "iam.role.read"
-	ActionIAMRoleUpdate                      Action = "iam.role.update"
-	ActionIAMRoleSetStatus                   Action = "iam.role.set-status"
-	ActionIAMRoleDelete                      Action = "iam.role.delete"
-	ActionIAMRoleTrustSet                    Action = "iam.role-trust.set"
-	ActionIAMRolePolicyAttachmentCreate      Action = "iam.role-policy-attachment.create"
-	ActionIAMRolePolicyAttachmentRevoke      Action = "iam.role-policy-attachment.revoke"
-	ActionIAMRolePermissionBoundarySet       Action = "iam.role.permission-boundary.set"
-	ActionIAMRolePermissionBoundaryRemove    Action = "iam.role.permission-boundary.remove"
-	ActionIAMRoleAssume                      Action = "iam.role.assume"
-	ActionIAMRoleSessionList                 Action = "iam.role-session.list"
-	ActionIAMRoleSessionRead                 Action = "iam.role-session.read"
-	ActionIAMRoleSessionRevoke               Action = "iam.role-session.revoke"
-	ActionIAMServiceRoleTemplateList         Action = "iam.service-role-template.list"
-	ActionIAMServiceLinkedRoleList           Action = "iam.service-linked-role.list"
-	ActionIAMServiceLinkedRoleRead           Action = "iam.service-linked-role.read"
-	ActionIAMServiceLinkedRoleCreate         Action = "iam.service-linked-role.create"
-	ActionIAMRolePass                        Action = "iam.role.pass"
-	ActionIAMWorkloadRoleBindingRevoke       Action = "iam.workload-role-binding.revoke"
-	ActionIAMSessionRevoke                   Action = "iam.session.revoke"
-	ActionIAMAccessKeyList                   Action = "iam.access-key.list"
-	ActionIAMAccessKeyCreate                 Action = "iam.access-key.create"
-	ActionIAMAccessKeyRead                   Action = "iam.access-key.read"
-	ActionIAMAccessKeySetStatus              Action = "iam.access-key.set-status"
-	ActionIAMAccessKeySetNetworkRestrictions Action = "iam.access-key.set-network-restrictions"
-	ActionIAMAccessKeyDelete                 Action = "iam.access-key.delete"
-	ActionIAMSecurityReportCreate            Action = "iam.security-report.create"
-	ActionIAMSecurityReportRead              Action = "iam.security-report.read"
-	ActionIAMSecurityReportDownload          Action = "iam.security-report.download"
-	ActionIAMAccessAnalyzerCreate            Action = "iam.access-analyzer.create"
-	ActionIAMAccessAnalyzerList              Action = "iam.access-analyzer.list"
-	ActionIAMAccessAnalyzerRead              Action = "iam.access-analyzer.read"
-	ActionIAMAccessAnalyzerUpdate            Action = "iam.access-analyzer.update"
-	ActionIAMAccessAnalyzerSetDisposition    Action = "iam.access-analyzer.set-disposition"
-	ActionIAMAccessFindingList               Action = "iam.access-finding.list"
-	ActionIAMAccessFindingRead               Action = "iam.access-finding.read"
-	ActionIAMAccessFindingArchive            Action = "iam.access-finding.archive"
-	ActionIAMAccessFindingUnarchive          Action = "iam.access-finding.unarchive"
-	ActionIAMPolicyAttachmentCreate          Action = "iam.policy-attachment.create"
-	ActionIAMPolicyAttachmentRevoke          Action = "iam.policy-attachment.revoke"
-	ActionIAMPlatformPolicyAttachmentCreate  Action = "iam.platform-policy-attachment.create"
-	ActionIAMPlatformPolicyAttachmentRevoke  Action = "iam.platform-policy-attachment.revoke"
+	ActionIAMUserCreate                         Action = "iam.user.create"
+	ActionIAMUserRead                           Action = "iam.user.read"
+	ActionIAMUserUpdate                         Action = "iam.user.update"
+	ActionIAMUserDelete                         Action = "iam.user.delete"
+	ActionIAMUserPermissionBoundarySet          Action = "iam.user.permission-boundary.set"
+	ActionIAMUserPermissionBoundaryRemove       Action = "iam.user.permission-boundary.remove"
+	ActionIAMGroupList                          Action = "iam.group.list"
+	ActionIAMGroupCreate                        Action = "iam.group.create"
+	ActionIAMGroupRead                          Action = "iam.group.read"
+	ActionIAMGroupUpdate                        Action = "iam.group.update"
+	ActionIAMGroupDelete                        Action = "iam.group.delete"
+	ActionIAMGroupMembershipList                Action = "iam.group-membership.list"
+	ActionIAMGroupMembershipCreate              Action = "iam.group-membership.create"
+	ActionIAMGroupMembershipRemove              Action = "iam.group-membership.remove"
+	ActionIAMGroupPolicyAttachmentCreate        Action = "iam.group-policy-attachment.create"
+	ActionIAMGroupPolicyAttachmentRevoke        Action = "iam.group-policy-attachment.revoke"
+	ActionIAMRoleList                           Action = "iam.role.list"
+	ActionIAMRoleCreate                         Action = "iam.role.create"
+	ActionIAMRoleRead                           Action = "iam.role.read"
+	ActionIAMRoleUpdate                         Action = "iam.role.update"
+	ActionIAMRoleSetStatus                      Action = "iam.role.set-status"
+	ActionIAMRoleDelete                         Action = "iam.role.delete"
+	ActionIAMRoleTrustSet                       Action = "iam.role-trust.set"
+	ActionIAMRolePolicyAttachmentCreate         Action = "iam.role-policy-attachment.create"
+	ActionIAMRolePolicyAttachmentRevoke         Action = "iam.role-policy-attachment.revoke"
+	ActionIAMRolePermissionBoundarySet          Action = "iam.role.permission-boundary.set"
+	ActionIAMRolePermissionBoundaryRemove       Action = "iam.role.permission-boundary.remove"
+	ActionIAMRoleAssume                         Action = "iam.role.assume"
+	ActionIAMRoleSessionList                    Action = "iam.role-session.list"
+	ActionIAMRoleSessionRead                    Action = "iam.role-session.read"
+	ActionIAMRoleSessionRevoke                  Action = "iam.role-session.revoke"
+	ActionIAMServiceRoleTemplateList            Action = "iam.service-role-template.list"
+	ActionIAMServiceLinkedRoleList              Action = "iam.service-linked-role.list"
+	ActionIAMServiceLinkedRoleRead              Action = "iam.service-linked-role.read"
+	ActionIAMServiceLinkedRoleCreate            Action = "iam.service-linked-role.create"
+	ActionIAMRolePass                           Action = "iam.role.pass"
+	ActionIAMWorkloadRoleBindingRevoke          Action = "iam.workload-role-binding.revoke"
+	ActionIAMSessionRevoke                      Action = "iam.session.revoke"
+	ActionIAMAccessKeyList                      Action = "iam.access-key.list"
+	ActionIAMAccessKeyCreate                    Action = "iam.access-key.create"
+	ActionIAMAccessKeyRead                      Action = "iam.access-key.read"
+	ActionIAMAccessKeySetStatus                 Action = "iam.access-key.set-status"
+	ActionIAMAccessKeySetNetworkRestrictions    Action = "iam.access-key.set-network-restrictions"
+	ActionIAMAccessKeyDelete                    Action = "iam.access-key.delete"
+	ActionIAMSecurityReportCreate               Action = "iam.security-report.create"
+	ActionIAMSecurityReportRead                 Action = "iam.security-report.read"
+	ActionIAMSecurityReportDownload             Action = "iam.security-report.download"
+	ActionIAMAccessAnalyzerCreate               Action = "iam.access-analyzer.create"
+	ActionIAMAccessAnalyzerList                 Action = "iam.access-analyzer.list"
+	ActionIAMAccessAnalyzerRead                 Action = "iam.access-analyzer.read"
+	ActionIAMAccessAnalyzerUpdate               Action = "iam.access-analyzer.update"
+	ActionIAMAccessAnalyzerSetDisposition       Action = "iam.access-analyzer.set-disposition"
+	ActionIAMAccessFindingList                  Action = "iam.access-finding.list"
+	ActionIAMAccessFindingRead                  Action = "iam.access-finding.read"
+	ActionIAMAccessFindingArchive               Action = "iam.access-finding.archive"
+	ActionIAMAccessFindingUnarchive             Action = "iam.access-finding.unarchive"
+	ActionIAMPolicyAttachmentCreate             Action = "iam.policy-attachment.create"
+	ActionIAMPolicyAttachmentRevoke             Action = "iam.policy-attachment.revoke"
+	ActionIAMPolicyAttachmentChangeRead         Action = "iam.policy-attachment-change.read"
+	ActionIAMPlatformPolicyAttachmentCreate     Action = "iam.platform-policy-attachment.create"
+	ActionIAMPlatformPolicyAttachmentRevoke     Action = "iam.platform-policy-attachment.revoke"
+	ActionIAMPlatformPolicyAttachmentChangeRead Action = "iam.platform-policy-attachment-change.read"
 
 	ActionPaaSExecutionPoolCreate      Action = "paas.execution-pool.create"
 	ActionPaaSExecutionPoolRead        Action = "paas.execution-pool.read"
@@ -470,7 +472,7 @@ func AllServicePurposes() []ServicePurpose {
 // ActionDefinition and contract enum order are derived projections, not a second
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
-	iamAccessDispositionProfile(),
+	iamPolicyAttachmentChangeProfile(),
 	paasProfileRevisionTwelve,
 	managedServiceProfileRevisionFour,
 	auditProfileRevisionFour,
@@ -525,7 +527,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), iamSecurityReportProfile(), iamAccessAnalyzerProfile(), iamAccessFindingProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), iamSecurityReportProfile(), iamAccessAnalyzerProfile(), iamAccessFindingProfile(), iamAccessDispositionProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -1057,6 +1059,20 @@ func iamAccessDispositionProfile() AuthorizationProfile {
 	declaration.SubjectTypes = []SubjectType{SubjectUser}
 	declaration.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
 	profile.Actions = append(profile.Actions, declaration)
+	return profile
+}
+
+func iamPolicyAttachmentChangeProfile() AuthorizationProfile {
+	profile := iamAccessDispositionProfile()
+	profile.Revision = 14
+	for _, declaration := range []AuthorizationProfileAction{
+		declaredProfileAction(ActionIAMPolicyAttachmentChangeRead, ResourcePolicyAttachment, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMPlatformPolicyAttachmentChangeRead, ResourcePolicyAttachment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	} {
+		declaration.SubjectTypes = []SubjectType{SubjectUser}
+		declaration.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
+		profile.Actions = append(profile.Actions, declaration)
+	}
 	return profile
 }
 
