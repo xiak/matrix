@@ -531,6 +531,10 @@ LIVE 仍固定为 `LIVE · NOT_CONNECTED`，但接入边界不再只给空状态
 - 页面已经删除预先发明的用户 SSO 草稿、材料编辑器、格式解析和保存命令；没有输入、按钮、Dialog、提交成功态、provider 操作、主体绑定或登录跳转，也没有新增 repository、HTTP wire、SQL 或登录运行时。此片不声明 IAM-EXT-01/02 已实现，不证明外部 IdP、协议材料、主体映射或 Session 可用。
 - 当前完整前端 62 文件／1061 条用例与三条静态归一化用例、类型、lint、架构、228 组主题对比、45 路由生产导出、249 文件嵌入等价及全仓 Go test/vet 均通过。真实 DEV 在桌面和 `390 × 844` 验证两张只读表格、四段用户登录链路与六段角色 SSO 链路；手机 document/body/viewport 均为 390px，端点在单元格内换行，无 Dialog、横向溢出或浏览器 warning/error。
 
+2026-10-07，已推送代码 [`0378564bb`](https://github.com/xiak/matrix/commit/0378564bb) 将身份提供商、用户 SSO 与角色 SSO 收敛到共享的只读 `FederationBoundaryOverview`，分别在 Provider 目录、断言映射页签与用户 SSO 页面标出当前所在区域。共享信息流固定三个边界：IdP 只建立协议信任且不授予资源权限；用户 SSO 只把已验证外部身份映射到既有 `USER`，权限仍来自直接策略、Group 与权限边界，IdP claim 不携权；角色 SSO 仍须未来的外部信任映射、目标 Role trust 与当前 assume/PDP 校验后才能签发 `RoleSession`，不得复用当前只接受 `USER` 的 `TrustPolicy` wire。IAM owner 已确认该边界与 IAM-EXT-01/02/03 目标一致；页面没有增加字段、命令、repository、状态机或成功态，并 replacement-first 删除了用户 SSO 页内重复的对比块。
+
+本次验收中完整串行前端为 63 个测试文件／1107 条用例；最终源代码又定向通过 `AccessWorkspace` 197 条与双语消息契约 4 条用例、类型、lint、架构和 228 组主题对比。生产构建生成 46 页，254 个 Go 嵌入文件等价，`go test ./app/ui/paas/...` 与 `go vet ./app/ui/paas/...` 通过。真实 DEV 在桌面及 `390 × 844` 验证三卡信息流和当前区域高亮，手机无横向溢出，浏览器 warning/error 为空。
+
 角色断言映射的审阅与详情复用同一个只读“角色 SSO 登录链路”组件，按 IdP 校验、断言校验、候选角色映射、Role TrustPolicy、调用方承担权限和 STS RoleSession 六段解释 IAM-EXT-03 目标语义。组件只读取现有本地 provider、映射和 Role 样例来标注“配置样例／验证前不可信／候选映射／待真实校验／未签发”，没有新增后端资源、状态、命令、repository、HTTP wire、requestId 或有效权限结论。该证据仍不接受真实 IdP 发现、断言验证、Role 选择、STS 签发或会话审计。
 
 ### 成员自服务 Role 承担 MOCK 的开发验收证据
