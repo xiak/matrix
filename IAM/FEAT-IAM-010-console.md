@@ -244,7 +244,7 @@ Secret 只在创建结果明确为 `APPLIED` 时展示一次，并在确认离�
 
 真实策略新建、版本读取、发布、切默认与退休已有前端客户端，JSON 与当前目录驱动的可视化作者也已有行为测试，但仍需与固定 IAM 进程完成浏览器联调；当前目录元数据和边界引用不能替代这些权威结果。Action 家族、跨资源类型多 Action 可视化、更多云产品条件与资源挑选尚未纳入 LIVE 表单；现有 DEV 创建策略四路径仍是隔离 MOCK 体验，不构成 IAM 当前发布能力。只读权限能力目录客户端同样仍需真实进程浏览器验收；产品声明管理不是租户策略功能。
 
-Role 管理 list/read/create、管理员 RoleSession list/read/revoke，以及成员可承担角色发现、AssumeRole、当前 Role 身份、签发结果 by-request 恢复/撤销和 Role logout 的固定 LIVE 客户端已经完成，但仍需真实 IAM 进程浏览器联调；Role update/status/delete、trust 与 policy attachment 变更和权限边界仍待各自固定契约接入。恢复码再生成的固定 LIVE 客户端已经完成，但仍需固定 IAM 进程验证 step-up、一次性秘密交付和重新登录查询闭环；账号安全设置当前读取要求完整 password、session 与 access-key-network 三段，但账号设置页尚未开放网络写入体验。SSO 与其余登录安全专项按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理、网络限制和授权观测契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
+Role 管理 list/read/create 与权限边界设置、成员可承担角色发现、AssumeRole、当前 Role 身份和 Role logout 已由独立真实 IAM/PostgreSQL 浏览器 fixture 完成基础闭环；管理员 RoleSession list/read/revoke 与成员签发结果 by-request 恢复/撤销已有固定 LIVE 客户端，但其撤销故障注入、Role 凭据业务产品请求以及承担/退出不确定结果仍需真实进程验收。Role update/status/delete、trust 写入与 policy attachment 写入仍待各自固定契约接入；策略附件完成查询正在由 IAM owner 固定，前端在固定提交前不得从目录读回或同 requestId 重放推断原命令结果。恢复码再生成的固定 LIVE 客户端已经完成，但仍需固定 IAM 进程验证 step-up、一次性秘密交付和重新登录查询闭环；账号安全设置已开放完整 password、session 与 access-key-network 读取及账号来源网络写入体验，但其 step-up、Session 终止与不确定结果仍待真实浏览器闭环。SSO 与其余登录安全专项按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理、网络限制和授权观测契约；当前真实浏览器只证明了无权时的 `403` 失败关闭，创建、一次性 Secret、轮换和网络限制仍未验收。产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
 
 ## 验收
 
