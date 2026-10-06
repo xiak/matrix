@@ -14,7 +14,7 @@ import type {
 import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceLinkedRoleListing, ServiceLinkedRoleRelation, ServiceRoleTemplate } from "../domain/serviceAuthorization";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
-import { ServiceAuthorizationResponsibility } from "./ServiceAuthorizationResponsibility";
+import { ServiceAuthorizationResponsibility } from "./AuthorizationOwnershipFlow";
 import styles from "./AccountAccessRenderer.module.css";
 
 type FailureStatus = "forbidden" | "routeUnavailable" | "unavailable" | "expired";

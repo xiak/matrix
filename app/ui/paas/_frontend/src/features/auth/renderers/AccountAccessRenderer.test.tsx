@@ -2604,6 +2604,10 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "paas" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { level: 2, name: "paas" })).toBe(document.activeElement);
+    const ownership = screen.getByRole("region", { name: "产品接入与租户授权是三段独立职责" });
+    expect(within(ownership).getByText("定义能力并落实 PEP")).toBeTruthy();
+    expect(within(ownership).getByText("校验契约并受信发布")).toBeTruthy();
+    expect(within(ownership).getByText("消费目录并分配权限")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "查看内部接入流程（MOCK）" })).toBeNull();
     expect(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "返回能力目录" }));

@@ -1,5 +1,5 @@
 .root {
-  container: service-authorization-responsibility / inline-size;
+  container: authorization-ownership-flow / inline-size;
   display: grid;
   min-width: 0;
   gap: var(--xiak-spacing-default);
@@ -22,6 +22,8 @@
 
 .heading h3 {
   color: var(--xiak-color-text-strong);
+  font-size: var(--xiak-font-size-body);
+  font-weight: var(--xiak-font-weight-semibold);
 }
 
 .heading p,
@@ -51,7 +53,7 @@
   border-inline-start: var(--xiak-border-subtle);
 }
 
-.stages li > div {
+.copy {
   display: grid;
   min-width: 0;
   gap: var(--xiak-spacing-micro);
@@ -78,7 +80,11 @@
   font: var(--xiak-font-weight-semibold) var(--xiak-font-size-small)/1 var(--xiak-font-numeric);
 }
 
-@container service-authorization-responsibility (max-width: 680px) {
+.action {
+  margin-top: var(--xiak-spacing-tight);
+}
+
+@container authorization-ownership-flow (max-width: 680px) {
   .stages {
     grid-template-columns: minmax(0, 1fr);
   }

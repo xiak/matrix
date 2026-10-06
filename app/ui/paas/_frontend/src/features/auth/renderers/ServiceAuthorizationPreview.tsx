@@ -15,7 +15,7 @@ import {
 } from "../repositories/previewServiceAuthorizationContract";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
 import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
-import { ServiceAuthorizationResponsibility } from "./ServiceAuthorizationResponsibility";
+import { ServiceAuthorizationResponsibility } from "./AuthorizationOwnershipFlow";
 import styles from "./ServiceAuthorizationPreview.module.css";
 
 type PreviewView = "directory" | "detail" | "review" | "account-access";
