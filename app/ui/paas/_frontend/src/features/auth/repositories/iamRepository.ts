@@ -30,6 +30,8 @@ import type {
   AuthorizationProfileDirectory,
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
+  UserPolicyAttachmentChange,
+  UserPolicyAttachmentChangeExpectation,
   UserAccess,
   UserPermissionBoundary
 } from "../domain/accounts";
@@ -295,5 +297,8 @@ export interface AccountRepository {
     resourceVersion: number;
     requestId: string;
   }): Promise<PolicyAttachmentRevocation>;
+  // Reads one immutable command receipt. Only requestId is sent; all other
+  // fields are local response-binding expectations, never authority selectors.
+  readUserPolicyAttachmentChange?(credential: string, expectation: UserPolicyAttachmentChangeExpectation): Promise<UserPolicyAttachmentChange>;
   execute(credential: string, command: AccountCommand): Promise<void>;
 }

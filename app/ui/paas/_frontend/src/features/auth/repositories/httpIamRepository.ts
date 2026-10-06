@@ -33,6 +33,7 @@ import type {
   IamAction,
   PolicyDirectory,
   PolicyGrantSource,
+  PolicyAttachmentRevocation,
   PolicyManagement,
   PolicyScope,
   PolicyStatus,
@@ -41,6 +42,8 @@ import type {
   User,
   UserAccess,
   UserPolicyAttachment,
+  UserPolicyAttachmentChange,
+  UserPolicyAttachmentChangeExpectation,
   UserPermissionBoundary
 } from "../domain/accounts";
 import type {
@@ -315,6 +318,59 @@ function parseGroupPolicyAttachment(value: unknown): GroupPolicyAttachment {
     installationId: null,
     target: { kind: "GROUP", id: attachment.target.id }
   };
+}
+
+function parsePolicyAttachmentRevocation(value: unknown): PolicyAttachmentRevocation {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "resourceVersion", "revokedAt"]);
+  requireAccountKind(wire, "Revocation");
+  return {
+    id: accountIdentifier(wire.id),
+    resourceVersion: accountVersion(wire.resourceVersion),
+    revokedAt: accountTimestamp(wire.revokedAt)
+  };
+}
+
+function parseUserPolicyAttachmentChange(value: unknown, expected: UserPolicyAttachmentChangeExpectation): UserPolicyAttachmentChange {
+  const wire = accountRecord(value);
+  const base = ["apiVersion", "kind", "operation", "accountId", "actorPrincipalId", "requestId", "completedAt"];
+  const operation = wire.operation;
+  if (operation === "CREATE") exactKeys(wire, [...base, "target", "policyId", "policyResourceVersion", "attachment"]);
+  else if (operation === "REVOKE") exactKeys(wire, [...base, "attachmentId", "expectedResourceVersion", "revocation"]);
+  else throw new Error("INVALID_IAM_RESPONSE");
+  requireAccountKind(wire, "PolicyAttachmentChange");
+  const accountId = accountIdentifier(wire.accountId);
+  const actorPrincipalId = accountIdentifier(wire.actorPrincipalId);
+  const requestId = accountIdentifier(wire.requestId);
+  const completedAt = accountTimestamp(wire.completedAt);
+  if (accountId !== expected.accountId || actorPrincipalId !== expected.actorPrincipalId || requestId !== expected.requestId ||
+      operation !== expected.operation) throw new Error("INVALID_IAM_RESPONSE");
+  if (operation === "CREATE" && expected.operation === "CREATE") {
+    const target = accountRecord(wire.target);
+    exactKeys(target, ["kind", "id"]);
+    const userId = accountIdentifier(target.id);
+    const policyId = accountIdentifier(wire.policyId);
+    const policyResourceVersion = accountVersion(wire.policyResourceVersion);
+    const attachment = parsePolicyAttachment(wire.attachment);
+    if (target.kind !== "USER" || userId !== expected.userId || policyId !== expected.policyId ||
+        policyResourceVersion !== expected.policyResourceVersion || attachment.accountId !== accountId ||
+        attachment.target.id !== userId || attachment.policyId !== policyId || attachment.resourceVersion !== 1 ||
+        attachment.createdAt !== completedAt || attachment.updatedAt !== completedAt) throw new Error("INVALID_IAM_RESPONSE");
+    return { operation, accountId, actorPrincipalId, requestId, completedAt,
+      target: { kind: "USER", id: userId }, policyId, policyResourceVersion, attachment };
+  }
+  if (operation === "REVOKE" && expected.operation === "REVOKE") {
+    const attachmentId = accountIdentifier(wire.attachmentId);
+    const expectedResourceVersion = accountVersion(wire.expectedResourceVersion);
+    const revocation = parsePolicyAttachmentRevocation(wire.revocation);
+    if (expectedResourceVersion >= Number.MAX_SAFE_INTEGER || attachmentId !== expected.attachmentId ||
+        expectedResourceVersion !== expected.expectedResourceVersion || revocation.id !== attachmentId ||
+        revocation.resourceVersion !== expectedResourceVersion + 1 || revocation.revokedAt !== completedAt) {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    return { operation, accountId, actorPrincipalId, requestId, completedAt, attachmentId, expectedResourceVersion, revocation };
+  }
+  throw new Error("INVALID_IAM_RESPONSE");
 }
 
 function parseGroupMembership(value: unknown): GroupMembership {
@@ -3241,22 +3297,22 @@ export const httpAccountRepository: AccountRepository = {
     return attachment;
   },
   async revokePolicyAttachment(credential, attachmentId, command) {
-    const wire = accountRecord(await postAccount(
+    const result = parsePolicyAttachmentRevocation(await postAccount(
       credential,
       `/api/iam/v1/policy-attachments/${encodeURIComponent(attachmentId)}:revoke`,
       { resourceVersion: command.resourceVersion, requestId: command.requestId }
     ));
-    exactKeys(wire, ["apiVersion", "kind", "id", "resourceVersion", "revokedAt"]);
-    requireAccountKind(wire, "Revocation");
-    const result = {
-      id: accountIdentifier(wire.id),
-      resourceVersion: accountVersion(wire.resourceVersion),
-      revokedAt: accountTimestamp(wire.revokedAt)
-    };
     if (result.id !== attachmentId || result.resourceVersion !== command.resourceVersion + 1) {
       throw new Error("INVALID_IAM_RESPONSE");
     }
     return result;
+  },
+  async readUserPolicyAttachmentChange(credential, expectation) {
+    const requestId = accountIdentifier(expectation.requestId);
+    return parseUserPolicyAttachmentChange(await requestJSON<unknown>(
+      `/api/iam/v1/policy-attachment-changes/by-request/${encodeURIComponent(requestId)}`,
+      { headers: accountHeaders(credential) }
+    ), { ...expectation, accountId: accountIdentifier(expectation.accountId), actorPrincipalId: accountIdentifier(expectation.actorPrincipalId), requestId });
   },
   async execute(credential, command) {
     const requestId = command.kind === "create-policy-attachment" || command.kind === "reset-password" ? command.requestId : requestToken("ui-account-");

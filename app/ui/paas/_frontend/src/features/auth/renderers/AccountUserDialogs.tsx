@@ -7,7 +7,7 @@ import { Alert, FormField, Badge, Button, Input, PasswordInput, Select, Typograp
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import { LiveAccessCredentials } from "./LiveAccessCredentials";
-import { WorkspaceDetail } from "./AccessWorkspaceUi";
+import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import type { CapabilityRestriction } from "../domain/accounts";
 import type { AccountUserScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
@@ -175,18 +175,40 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
             : <div><dt>{t("revocationAttachment")}</dt><dd><Typography.Code>{relationIntent.attachmentId}</Typography.Code> · {t("attachmentRevision", { revision: relationIntent.attachmentResourceVersion })}</dd></div>}
         </dl>
         <Alert status="warning">{t(relationIntent.kind === "revoke" ? "revocationReviewHint" : relationIntent.policyScope === "INSTALLATION" ? "platformAttachmentReviewHint" : "tenantAttachmentReviewHint")}</Alert>
-        {relationIntent.phase === "unknown" ? <Alert status="warning">{t(relationIntent.kind === "revoke" ? "revocationUnknownResult" : "attachmentUnknownResult", { requestId: relationIntent.requestId })}</Alert> : null}
+        {relationIntent.phase === "unknown" || relationIntent.phase === "checking" ? <Alert status="warning"><div className={styles.confirmation}>
+          <strong>{t("attachmentUnknownTitle")}</strong>
+          <p>{t(relationIntent.kind === "revoke" ? "revocationUnknownResult" : "attachmentUnknownResult", { requestId: relationIntent.requestId })}</p>
+          {relationIntent.lookupStatus !== "unchecked" ? <p role="status">{t(`attachmentLookup.${relationIntent.lookupStatus}`)}</p> : null}
+          <p>{t("attachmentUnknownLockHint")}</p>
+        </div></Alert> : null}
+        {relationIntent.phase === "confirmed" && relationIntent.completion ? <Alert status="success"><div className={styles.confirmation}>
+          <strong>{t("attachmentConfirmedTitle")}</strong>
+          <p>{t(relationIntent.kind === "attach" ? "attachmentConfirmedCreate" : "attachmentConfirmedRevoke", {
+            id: relationIntent.kind === "attach" ? relationIntent.completion.operation === "CREATE" ? relationIntent.completion.attachment.id : "—" : relationIntent.attachmentId
+          })}</p>
+          <p>{t("attachmentConfirmedAt")} <WorkspaceTime value={relationIntent.completion.completedAt} /></p>
+        </div></Alert> : null}
         {relationIntent.phase === "conflict" || relationIntent.phase === "rejected" ? <Alert status="danger">{t("attachmentRetryNeedsReview", { requestId: relationIntent.requestId })}{relationIntent.error ? ` ${t(`errors.${relationIntent.error}`)}` : ""}</Alert> : null}
         <div className={styles.actions}>
-          <Button disabled={disabled || (relationIntent.phase !== "review" && relationIntent.phase !== "unknown")} onClick={async () => {
-            if (await access.submitUserPolicyChange(relationIntent.requestId)) {
-              setSelectedPolicy(null);
-            }
-          }} variant={relationIntent.kind === "revoke" ? "danger" : "primary"}>{t(relationIntent.phase === "unknown" ? "retryOriginalAttachment" : relationIntent.kind === "revoke" ? "confirmRevoke" : "confirmAttachPolicy")}</Button>
-          <Button disabled={disabled} onClick={() => {
-            returnToTrigger.current = relationIntent.phase === "review";
-            if (access.endUserPolicyChange(relationIntent.requestId) && relationIntent.phase !== "review") setSelectedPolicy(null);
-          }} variant="secondary">{t(relationIntent.phase === "review" ? relationIntent.kind === "attach" ? "changeAttachmentSelection" : "cancel" : "endAttachmentIntent")}</Button>
+          {relationIntent.phase === "review" ? <>
+            <Button disabled={disabled} onClick={async () => {
+              if (await access.submitUserPolicyChange(relationIntent.requestId)) setSelectedPolicy(null);
+            }} variant={relationIntent.kind === "revoke" ? "danger" : "primary"}>{t(relationIntent.kind === "revoke" ? "confirmRevoke" : "confirmAttachPolicy")}</Button>
+            <Button disabled={disabled} onClick={() => {
+              returnToTrigger.current = true;
+              access.endUserPolicyChange(relationIntent.requestId);
+            }} variant="secondary">{t(relationIntent.kind === "attach" ? "changeAttachmentSelection" : "cancel")}</Button>
+          </> : null}
+          {relationIntent.phase === "unknown" || relationIntent.phase === "checking" ? <>
+            <Button disabled={disabled || relationIntent.phase === "checking"} onClick={() => void access.inspectUserPolicyChange(relationIntent.requestId)}>{t(relationIntent.phase === "checking" ? "checkingOriginalAttachment" : "checkOriginalAttachment")}</Button>
+            <Button disabled={disabled || relationIntent.phase === "checking"} onClick={() => void access.submitUserPolicyChange(relationIntent.requestId)} variant="secondary">{t("retryOriginalAttachment")}</Button>
+          </> : null}
+          {relationIntent.phase === "confirmed" ? <Button disabled={disabled} onClick={() => {
+            if (access.endUserPolicyChange(relationIntent.requestId)) setSelectedPolicy(null);
+          }}>{t("acknowledgeAttachmentCompletion")}</Button> : null}
+          {relationIntent.phase === "conflict" || relationIntent.phase === "rejected" ? <Button disabled={disabled} onClick={() => {
+            if (access.endUserPolicyChange(relationIntent.requestId)) setSelectedPolicy(null);
+          }} variant="secondary">{t("endAttachmentIntent")}</Button> : null}
         </div>
       </section> : attachablePolicies.length > 0 ? <form className={styles.inlineForm} onSubmit={(event) => {
         event.preventDefault();

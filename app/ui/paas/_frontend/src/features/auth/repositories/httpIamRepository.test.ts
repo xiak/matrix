@@ -2594,6 +2594,123 @@ describe("IAM HTTP account boundary", () => {
     expect(requestBody(fetcher)).toEqual({ resourceVersion: 1, requestId: "revocation-intent-one" });
   });
 
+  it("reads one immutable policy attachment completion by request without sending authority selectors", async () => {
+    const createExpectation = {
+      operation: "CREATE" as const,
+      accountId: account.id,
+      actorPrincipalId: account.rootIdentity.principalId,
+      requestId: `ui-user-attachment-${"a".repeat(32)}`,
+      userId: user.id,
+      policyId: tenantAttachment.policyId,
+      policyResourceVersion: 3
+    };
+    const createCompletion = {
+      apiVersion, kind: "PolicyAttachmentChange", operation: "CREATE",
+      accountId: createExpectation.accountId, actorPrincipalId: createExpectation.actorPrincipalId,
+      requestId: createExpectation.requestId, completedAt: timestamp,
+      target: { kind: "USER", id: user.id }, policyId: tenantAttachment.policyId,
+      policyResourceVersion: 3, attachment: tenantAttachment
+    };
+    const parsedAttachment = {
+        id: tenantAttachment.id, accountId: account.id, target: tenantAttachment.target,
+        policyId: tenantAttachment.policyId, scope: "TENANT", installationId: null,
+        resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp
+    };
+    let fetcher = reply(createCompletion);
+    await expect(httpAccountRepository.readUserPolicyAttachmentChange!("bearer", createExpectation)).resolves.toEqual({
+      operation: "CREATE", accountId: account.id, actorPrincipalId: account.rootIdentity.principalId,
+      requestId: createExpectation.requestId, completedAt: timestamp,
+      target: { kind: "USER", id: user.id }, policyId: tenantAttachment.policyId,
+      policyResourceVersion: 3, attachment: parsedAttachment
+    });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/policy-attachment-changes/by-request/${createExpectation.requestId}`);
+    expect(firstRequest(fetcher)[1]).not.toHaveProperty("body");
+
+    const revokeExpectation = {
+      operation: "REVOKE" as const,
+      accountId: account.id,
+      actorPrincipalId: account.rootIdentity.principalId,
+      requestId: `ui-user-revocation-${"b".repeat(32)}`,
+      attachmentId: tenantAttachment.id,
+      expectedResourceVersion: 1
+    };
+    const revocation = { apiVersion, kind: "Revocation", id: tenantAttachment.id, resourceVersion: 2, revokedAt: timestamp };
+    fetcher = reply({
+      apiVersion, kind: "PolicyAttachmentChange", operation: "REVOKE",
+      accountId: revokeExpectation.accountId, actorPrincipalId: revokeExpectation.actorPrincipalId,
+      requestId: revokeExpectation.requestId, completedAt: timestamp,
+      attachmentId: tenantAttachment.id, expectedResourceVersion: 1, revocation
+    });
+    await expect(httpAccountRepository.readUserPolicyAttachmentChange!("bearer", revokeExpectation)).resolves.toEqual({
+      operation: "REVOKE", accountId: account.id, actorPrincipalId: account.rootIdentity.principalId,
+      requestId: revokeExpectation.requestId, completedAt: timestamp,
+      attachmentId: tenantAttachment.id, expectedResourceVersion: 1,
+      revocation: { id: tenantAttachment.id, resourceVersion: 2, revokedAt: timestamp }
+    });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/policy-attachment-changes/by-request/${revokeExpectation.requestId}`);
+    expect(firstRequest(fetcher)[1]).not.toHaveProperty("body");
+  });
+
+  it("rejects policy attachment completions that are not byte-bound to the original actor and input", async () => {
+    const expectation = {
+      operation: "CREATE" as const,
+      accountId: account.id,
+      actorPrincipalId: account.rootIdentity.principalId,
+      requestId: `ui-user-attachment-${"c".repeat(32)}`,
+      userId: user.id,
+      policyId: tenantAttachment.policyId,
+      policyResourceVersion: 3
+    };
+    const valid = {
+      apiVersion, kind: "PolicyAttachmentChange", operation: "CREATE",
+      accountId: expectation.accountId, actorPrincipalId: expectation.actorPrincipalId,
+      requestId: expectation.requestId, completedAt: timestamp,
+      target: { kind: "USER", id: user.id }, policyId: tenantAttachment.policyId,
+      policyResourceVersion: 3, attachment: tenantAttachment
+    };
+    for (const body of [
+      { ...valid, accountId: "other-account" },
+      { ...valid, actorPrincipalId: "other-actor" },
+      { ...valid, requestId: "different-request" },
+      { ...valid, operation: "REVOKE" },
+      { ...valid, target: { kind: "USER", id: "other-user" } },
+      { ...valid, policyId: "system.other-policy" },
+      { ...valid, policyResourceVersion: 4 },
+      { ...valid, attachment: { ...tenantAttachment, resourceVersion: 2 } },
+      { ...valid, attachment: { ...tenantAttachment, updatedAt: "2026-09-11T08:00:01Z" } },
+      { ...valid, credential: "MUST_NOT_BE_ACCEPTED" }
+    ]) {
+      reply(body);
+      await expect(httpAccountRepository.readUserPolicyAttachmentChange!("bearer", expectation)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    const revokeExpectation = {
+      operation: "REVOKE" as const,
+      accountId: account.id,
+      actorPrincipalId: account.rootIdentity.principalId,
+      requestId: `ui-user-revocation-${"d".repeat(32)}`,
+      attachmentId: tenantAttachment.id,
+      expectedResourceVersion: 1
+    };
+    const validRevoke = {
+      apiVersion, kind: "PolicyAttachmentChange", operation: "REVOKE",
+      accountId: revokeExpectation.accountId, actorPrincipalId: revokeExpectation.actorPrincipalId,
+      requestId: revokeExpectation.requestId, completedAt: timestamp,
+      attachmentId: tenantAttachment.id, expectedResourceVersion: 1,
+      revocation: { apiVersion, kind: "Revocation", id: tenantAttachment.id, resourceVersion: 2, revokedAt: timestamp }
+    };
+    for (const body of [
+      { ...validRevoke, attachmentId: "other-attachment" },
+      { ...validRevoke, expectedResourceVersion: 2 },
+      { ...validRevoke, revocation: { ...validRevoke.revocation, resourceVersion: 3 } },
+      { ...validRevoke, revocation: { ...validRevoke.revocation, revokedAt: "2026-09-11T08:00:01Z" } },
+      { ...validRevoke, target: { kind: "USER", id: user.id } }
+    ]) {
+      reply(body);
+      await expect(httpAccountRepository.readUserPolicyAttachmentChange!("bearer", revokeExpectation)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
   it("rejects successful-looking responses for a different mutation target", async () => {
     reply({ ...tenantAttachment, target: { kind: "USER", id: "another-user" } });
     await expect(httpAccountRepository.execute("bearer", { kind: "create-policy-attachment", userId: user.id,

@@ -368,6 +368,41 @@ export type PolicyAttachmentRevocation = {
   revokedAt: string;
 };
 
+type PolicyAttachmentChangeBase = {
+  accountId: string;
+  actorPrincipalId: string;
+  requestId: string;
+  completedAt: string;
+};
+
+// Immutable completion evidence for one direct User policy relationship
+// command. It records the original result, not the relationship's current
+// state and not a reusable authorization decision.
+export type UserPolicyAttachmentChange = PolicyAttachmentChangeBase & (
+  | {
+      operation: "CREATE";
+      target: { kind: "USER"; id: string };
+      policyId: string;
+      policyResourceVersion: number;
+      attachment: UserPolicyAttachment;
+    }
+  | {
+      operation: "REVOKE";
+      attachmentId: string;
+      expectedResourceVersion: number;
+      revocation: PolicyAttachmentRevocation;
+    }
+);
+
+export type UserPolicyAttachmentChangeExpectation = {
+  accountId: string;
+  actorPrincipalId: string;
+  requestId: string;
+} & (
+  | { operation: "CREATE"; userId: string; policyId: string; policyResourceVersion: number }
+  | { operation: "REVOKE"; attachmentId: string; expectedResourceVersion: number }
+);
+
 export type PolicyGrantSource =
   | { kind: "DIRECT"; attachment: UserPolicyAttachment }
   | { kind: "GROUP"; attachment: GroupPolicyAttachment; membership: GroupMembership };

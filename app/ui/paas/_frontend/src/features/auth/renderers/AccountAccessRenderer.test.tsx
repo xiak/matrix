@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
-import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
+import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPolicyAttachmentChangeExpectation, UserPermissionBoundary } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact, SecurityStepUp } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/roles";
@@ -3198,6 +3198,137 @@ describe("account access", () => {
     expect(execute.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ requestId: expect.any(String) }));
   });
 
+  it("confirms an uncertain direct attachment only from its immutable completion without replaying the write", async () => {
+    const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
+    const readUserPolicyAttachmentChange = vi.fn(async (_credential: string, expected: UserPolicyAttachmentChangeExpectation) => {
+      if (expected.operation !== "CREATE") throw new Error("unexpected operation");
+      return {
+        operation: "CREATE" as const,
+        accountId: expected.accountId,
+        actorPrincipalId: expected.actorPrincipalId,
+        requestId: expected.requestId,
+        completedAt: timestamp,
+        target: { kind: "USER" as const, id: expected.userId },
+        policyId: expected.policyId,
+        policyResourceVersion: expected.policyResourceVersion,
+        attachment: attachment(expected.userId, platformPolicy)
+      };
+    });
+    const { user } = await openAccess(accounts({ execute, readUserPolicyAttachmentChange }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("combobox", { name: "关联策略" }));
+    await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
+    await user.click(screen.getByRole("button", { name: "审阅关联" }));
+    await user.click(screen.getByRole("button", { name: "确认关联" }));
+    expect(await screen.findByText("策略关系结果待确认")).toBeTruthy();
+    expect(sessionStorage.length).toBe(1);
+
+    await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
+    expect(await screen.findByText("原策略关系请求已确认")).toBeTruthy();
+    expect(screen.getByText(/attachment-child-a-system\.platform-admin/)).toBeTruthy();
+    expect(readUserPolicyAttachmentChange).toHaveBeenCalledWith(credential, {
+      operation: "CREATE", accountId: account.id, actorPrincipalId: rootUser.id,
+      requestId: expect.stringMatching(/^ui-user-attachment-[0-9a-f]{32}$/),
+      userId: childUser.id, policyId: platformPolicy.id, policyResourceVersion: platformPolicy.resourceVersion
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.length).toBe(0);
+    const finish = screen.getByRole("button", { name: "完成并重新读取" }) as HTMLButtonElement;
+    await waitFor(() => expect(finish.disabled).toBe(false));
+    await user.click(finish);
+    await waitFor(() => expect(screen.queryByText("原策略关系请求已确认")).toBeNull());
+  });
+
+  it.each([
+    [404, /IAM 没有返回该请求的完成记录/],
+    [403, /当前身份没有读取该完成记录的权限/],
+    [503, /IAM 暂时无法返回可验证的完成记录/],
+    [0, /IAM 暂时无法返回可验证的完成记录/]
+  ])("keeps an uncertain direct attachment locked when completion lookup fails with %s", async (status, message) => {
+    const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
+    const readUserPolicyAttachmentChange = vi.fn().mockRejectedValue(status === 0
+      ? new Error("network unavailable")
+      : new HttpProblem(status, status === 404 ? "IAM_NOT_FOUND" : status === 403 ? "IAM_FORBIDDEN" : "IAM_UNAVAILABLE"));
+    const { user } = await openAccess(accounts({ execute, readUserPolicyAttachmentChange }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("combobox", { name: "关联策略" }));
+    await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
+    await user.click(screen.getByRole("button", { name: "审阅关联" }));
+    await user.click(screen.getByRole("button", { name: "确认关联" }));
+    await user.click(await screen.findByRole("button", { name: "检查原请求结果" }));
+    expect(await screen.findByText(message)).toBeTruthy();
+    const review = screen.getByRole("region", { name: "确认直接关联策略" });
+    expect(within(review).getByRole("button", { name: "检查原请求结果" })).toBeTruthy();
+    expect(within(review).getByRole("button", { name: "原请求重试" })).toBeTruthy();
+    expect(within(review).queryByRole("button", { name: "结束原意图并重新读取" })).toBeNull();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(readUserPolicyAttachmentChange).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.length).toBe(1);
+  });
+
+  it("preserves an unknown policy completion across login expiry and never replays it after authentication", async () => {
+    const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
+    const readUserPolicyAttachmentChange = vi.fn().mockRejectedValue(new HttpProblem(401, "IAM_SESSION_EXPIRED"));
+    const repository = accounts({ execute, readUserPolicyAttachmentChange });
+    const auth = iam();
+    const { user } = await openAccess(repository, auth);
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("combobox", { name: "关联策略" }));
+    await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
+    await user.click(screen.getByRole("button", { name: "审阅关联" }));
+    await user.click(screen.getByRole("button", { name: "确认关联" }));
+    await user.click(await screen.findByRole("button", { name: "检查原请求结果" }));
+    expect(await screen.findByRole("button", { name: "登录控制台" })).toBeTruthy();
+    expect(sessionStorage.length).toBe(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledTimes(2));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    expect(await screen.findByText(/当前登录会话已失效/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "检查原请求结果" })).toBeTruthy();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(readUserPolicyAttachmentChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores only the same actor's non-secret policy completion reminder after reload", async () => {
+    const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
+    const readUserPolicyAttachmentChange = vi.fn().mockRejectedValue(new HttpProblem(404, "IAM_NOT_FOUND"));
+    const repository = accounts({ execute, readUserPolicyAttachmentChange });
+    const first = await openAccess(repository);
+    await first.user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await first.user.click(screen.getByRole("combobox", { name: "关联策略" }));
+    await first.user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
+    await first.user.click(screen.getByRole("button", { name: "审阅关联" }));
+    await first.user.click(screen.getByRole("button", { name: "确认关联" }));
+    expect(await screen.findByText("策略关系结果待确认")).toBeTruthy();
+    const key = sessionStorage.key(0)!;
+    const reminder = JSON.parse(sessionStorage.getItem(key)!);
+    expect(reminder).toMatchObject({
+      kind: "attach", accountId: account.id, actorId: rootUser.id, userId: childUser.id,
+      policyId: platformPolicy.id, policyResourceVersion: platformPolicy.resourceVersion,
+      requestId: expect.stringMatching(/^ui-user-attachment-[0-9a-f]{32}$/), phase: "unknown"
+    });
+    expect(JSON.stringify(reminder)).not.toContain(credential);
+    first.view.unmount();
+
+    const resumed = await openAccess(repository);
+    await resumed.user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    expect(await screen.findByText("策略关系结果待确认")).toBeTruthy();
+    expect(screen.getByText(/本地提醒丢失也不能证明原请求失败/)).toBeTruthy();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "检查原请求结果" })).toBeTruthy();
+    resumed.view.unmount();
+
+    sessionStorage.setItem(key, JSON.stringify({ ...reminder, actorId: "different-actor" }));
+    const foreign = await openAccess(repository);
+    await foreign.user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    expect(screen.queryByText("策略关系结果待确认")).toBeNull();
+    expect(screen.getByRole("button", { name: "审阅关联" })).toBeTruthy();
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps an uncertain direct attachment across IAM routes without issuing a new request", async () => {
     const execute = vi.fn().mockRejectedValueOnce(new Error("connection lost after commit")).mockResolvedValue(undefined);
     const { user } = await openAccess(accounts({ execute }));
@@ -3407,6 +3538,38 @@ describe("account access", () => {
     expect(repository.execute).not.toHaveBeenCalled();
   });
 
+  it("confirms an uncertain direct revocation only from the original immutable completion", async () => {
+    const revokePolicyAttachment = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
+    const readUserPolicyAttachmentChange = vi.fn(async (_credential: string, expected: UserPolicyAttachmentChangeExpectation) => {
+      if (expected.operation !== "REVOKE") throw new Error("unexpected operation");
+      return {
+        operation: "REVOKE" as const,
+        accountId: expected.accountId,
+        actorPrincipalId: expected.actorPrincipalId,
+        requestId: expected.requestId,
+        completedAt: timestamp,
+        attachmentId: expected.attachmentId,
+        expectedResourceVersion: expected.expectedResourceVersion,
+        revocation: { id: expected.attachmentId, resourceVersion: expected.expectedResourceVersion + 1, revokedAt: timestamp }
+      };
+    });
+    const { user } = await openAccess(accounts({ revokePolicyAttachment, readUserPolicyAttachmentChange }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }));
+    await user.click(screen.getByRole("button", { name: "确认撤销" }));
+    await user.click(await screen.findByRole("button", { name: "检查原请求结果" }));
+    expect(await screen.findByText("原策略关系请求已确认")).toBeTruthy();
+    expect(screen.getByText(/已确认撤销关联 attachment-child-a-system\.paas-viewer/)).toBeTruthy();
+    expect(readUserPolicyAttachmentChange).toHaveBeenCalledWith(credential, {
+      operation: "REVOKE", accountId: account.id, actorPrincipalId: rootUser.id,
+      requestId: expect.stringMatching(/^ui-user-revocation-[0-9a-f]{32}$/),
+      attachmentId: "attachment-child-a-system.paas-viewer", expectedResourceVersion: 1
+    });
+    expect(revokePolicyAttachment).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "原请求重试" })).toBeNull();
+    expect(sessionStorage.length).toBe(0);
+  });
+
   it("closes a conflicting direct revocation intent without claiming the attachment was removed", async () => {
     const revokePolicyAttachment = vi.fn().mockRejectedValue(new HttpProblem(409, "IAM_CONFLICT"));
     const { user } = await openAccess(accounts({ revokePolicyAttachment }));
@@ -3416,7 +3579,8 @@ describe("account access", () => {
     const review = screen.getByRole("region", { name: "确认撤销直接关联" });
     await within(review).findByText(/未完成可信确认/);
     expect(within(review).queryByRole("button", { name: "原请求重试" })).toBeNull();
-    expect((within(review).getByRole("button", { name: "确认撤销" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(review).queryByRole("button", { name: "确认撤销" })).toBeNull();
+    expect(within(review).queryByRole("button", { name: "检查原请求结果" })).toBeNull();
     await user.click(within(review).getByRole("button", { name: "结束原意图并重新读取" }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "确认撤销直接关联" })).toBeNull());
     expect(revokePolicyAttachment).toHaveBeenCalledTimes(1);
