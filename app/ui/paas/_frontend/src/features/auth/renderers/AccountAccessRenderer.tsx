@@ -22,7 +22,7 @@ import { CurrentAccessDiagnosisPreview } from "./CurrentAccessDiagnosisPreview";
 import { AccessAnalysisPreview, SecurityReportDirectoryPreview } from "./AccessReports";
 import { AccessRoles } from "./AccessRoles";
 import { RoleCreationWizard } from "./RoleCreationWizard";
-import { AccessProviders, AccessRoleSsoMappings } from "./AccessIdentity";
+import { AccessFederationWorkspace } from "./AccessIdentity";
 import { AccessCredentials } from "./AccessCredentials";
 import { LiveAccessCredentials } from "./LiveAccessCredentials";
 import { AccessSecuritySettings, AccessUserSso } from "./AccessSecuritySettings";
@@ -261,7 +261,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "roles" ? <AccessRoles key={entityId ?? "roles"} workspace={workspace} scene={scene} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} /> :
       view === "service-authorizations" ? <ServiceAuthorizationPreview workspace={workspace} onClose={() => onNavigate("roles")} /> :
       view === "policy-configuration" ? <PolicyConfigurationReview key={entityId ?? "policy-configuration"} workspace={workspace} scene={scene} entityId={entityId} onOpen={onNavigate} /> :
-      view === "providers" ? <Tabs.Root defaultValue="providers"><Tabs.List aria-label={w("providers")}><Tabs.Trigger value="providers">{w("provider")}</Tabs.Trigger><Tabs.Trigger value="mappings">{w("roleSsoMappings")}</Tabs.Trigger></Tabs.List><Tabs.Content value="providers"><AccessProviders workspace={workspace} /></Tabs.Content><Tabs.Content value="mappings"><AccessRoleSsoMappings workspace={workspace} /></Tabs.Content></Tabs.Root> :
+      view === "providers" ? <AccessFederationWorkspace workspace={workspace} /> :
       view === "federations" ? <AccessEnterpriseAccounts workspace={workspace} onUsers={() => onNavigate("users")} /> :
       view === "keys" ? <AccessCredentials workspace={workspace} scene={scene} onInspectPermissions={(ownerId) => onNavigate("users", ownerId, undefined, "policies")} /> :
       <AccessUserSso workspace={workspace} /> : null}

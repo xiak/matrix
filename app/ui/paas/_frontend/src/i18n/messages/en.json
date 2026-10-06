@@ -4339,6 +4339,40 @@
         }
       }
     },
+    "federationBoundary": {
+      "title": "Federation boundaries",
+      "hint": "An identity provider establishes protocol trust; User SSO and Role SSO remain separate identity and session paths.",
+      "state": "MOCK · not enabled",
+      "boundary": "Read-only information architecture · No consumable IdentityProvider mutation, protocol-validation, or mapping contract exists yet. Role SSO also cannot reuse the current USER-only TrustPolicy wire. This view cannot save configuration, connect an enterprise IdP, validate assertions, create users, grant access, or issue sessions.",
+      "current": "Current area",
+      "concept": "Related boundary",
+      "input": "Trusted input",
+      "result": "Identity result",
+      "authorization": "Permission source",
+      "modes": {
+        "provider": {
+          "title": "Identity provider",
+          "description": "Account-scoped SAML/OIDC protocol trust configuration; existing or enabled configuration is not a successful sign-in.",
+          "input": "Account, protocol, issuer, and versioned trust material",
+          "result": "An external assertion or token after protocol validation",
+          "authorization": "Grants no resource access and replaces neither a User nor a Role"
+        },
+        "user": {
+          "title": "User SSO",
+          "description": "Maps a verified external identity to an existing USER in the same Account, then creates an interactive sign-in Session.",
+          "input": "Verified external identity and unique USER mapping",
+          "result": "A new sign-in Session for the existing USER",
+          "authorization": "Direct USER policies and Group inheritance, capped by the permission boundary; IdP claims carry no permission"
+        },
+        "role": {
+          "title": "Role SSO",
+          "description": "Maps a verified assertion to candidate Roles; a short-lived session requires both future external trust mapping and the current assume/PDP checks.",
+          "input": "Verified assertion, candidate mapping, future external trust, and assume checks",
+          "result": "A bounded, auditable RoleSession",
+          "authorization": "Role policies and permission boundary; a mapping is not a grant"
+        }
+      }
+    },
     "userSsoConcept": {
       "title": "User SSO",
       "subtitle": "Account-scoped enterprise identity sign-in boundary",
@@ -4384,12 +4418,6 @@
         "identity": { "title": "Unique external identity mapping", "detail": "Account-scoped uniqueness, disablement, and unlink semantics are required across IdentityProvider, ExternalIdentity, and an existing USER." },
         "recovery": { "title": "Emergency and recovery path", "detail": "A controlled recovery path is required before enablement. Recovery cannot bypass MFA, revive a disabled user, or restore revoked access." },
         "audit": { "title": "Session and audit evidence", "detail": "Sign-in, mapping, rejection, unlinking, and configuration changes need correlated authoritative audit evidence; the page never synthesizes success." }
-      },
-      "comparisonTitle": "Do not conflate the two SSO paths",
-      "comparisonHint": "Both may use an enterprise IdP, but they produce different identities and authorization paths.",
-      "comparison": {
-        "user": { "title": "User SSO", "detail": "External identity → existing USER → sign-in Session → that user's existing permissions." },
-        "role": { "title": "Role SSO", "detail": "External identity → Role Trust → assumption permission → RoleSession → role policies and permission boundary." }
       }
     },
     "userSsoBackToEdit": "Back to editing",

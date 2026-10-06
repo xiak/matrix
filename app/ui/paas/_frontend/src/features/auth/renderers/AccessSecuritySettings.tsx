@@ -9,6 +9,7 @@ import { PasswordRulesPreview } from "./PasswordRulesPreview";
 import { SessionIdleSettingsPreview } from "./SessionIdleSettingsPreview";
 import { PasskeyConceptPreview } from "./PasskeyConceptPreview";
 import { AccountAccessKeyNetworkPreview } from "./AccessKeyNetworkPreview";
+import { FederationBoundaryOverview } from "./FederationBoundaryOverview";
 import styles from "./AccountAccessRenderer.module.css";
 import securityStyles from "./MfaPreviewExperience.module.css";
 
@@ -64,13 +65,18 @@ export function AccessUserSso({ workspace }: { workspace: AccessWorkspace }) {
   const providerName = (providerId: string) => providers.find((provider) => provider.id === providerId)?.name ?? providerId;
   const providerEnabled = (providerId: string) => Boolean(providers.find((provider) => provider.id === providerId)?.enabled);
 
-  return <Card><Card.Header>
+  return (
+    <div className={styles.stack}>
+      <FederationBoundaryOverview current="user" />
+      <Card>
+        <Card.Header>
     <div className={styles.cardHeadingCopy}>
       <Typography.Title as="h2" id={titleId} level={3}>{t("title")}</Typography.Title>
       <Typography.Text tone="muted">{t("subtitle")}</Typography.Text>
     </div>
     <div className={styles.headingBadges}><Badge status="warning">MOCK</Badge><Badge status="neutral">{t("state")}</Badge></div>
-  </Card.Header><Card.Body className={styles.stack}>
+        </Card.Header>
+        <Card.Body className={styles.stack}>
     <Alert status="info">{t("boundary")}</Alert>
 
     <section aria-labelledby={`${titleId}-projection`} className={styles.stack}>
@@ -124,12 +130,8 @@ export function AccessUserSso({ workspace }: { workspace: AccessWorkspace }) {
       </ol>
     </section>
 
-    <section aria-labelledby={`${titleId}-comparison`} className={styles.stack}>
-      <div className={styles.cardHeadingCopy}><h3 className={styles.stepTitle} id={`${titleId}-comparison`}>{t("comparisonTitle")}</h3><p className={styles.note}>{t("comparisonHint")}</p></div>
-      <dl className={styles.facts}>
-        <div><dt>{t("comparison.user.title")}</dt><dd>{t("comparison.user.detail")}</dd></div>
-        <div><dt>{t("comparison.role.title")}</dt><dd>{t("comparison.role.detail")}</dd></div>
-      </dl>
-    </section>
-  </Card.Body></Card>;
+        </Card.Body>
+      </Card>
+    </div>
+  );
 }

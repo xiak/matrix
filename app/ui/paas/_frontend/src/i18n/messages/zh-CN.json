@@ -4339,6 +4339,40 @@
         }
       }
     },
+    "federationBoundary": {
+      "title": "联合身份边界",
+      "hint": "身份提供商只负责协议信任；用户 SSO 与角色 SSO 是两条独立的身份和会话路径。",
+      "state": "MOCK · 未启用",
+      "boundary": "只读信息架构 · 当前没有可消费的 IdentityProvider 写入、协议验证或映射契约。角色 SSO 也不能复用当前只接受 USER 的 TrustPolicy wire。这里不会保存配置、连接企业 IdP、验证断言、创建用户、授予权限或签发会话。",
+      "current": "当前区域",
+      "concept": "关联边界",
+      "input": "可信输入",
+      "result": "身份结果",
+      "authorization": "权限来源",
+      "modes": {
+        "provider": {
+          "title": "身份提供商",
+          "description": "Account 内的 SAML/OIDC 协议信任配置；配置存在或启用都不等于登录成功。",
+          "input": "Account、协议、Issuer 与版本化信任材料",
+          "result": "完成协议校验后的外部断言或 Token",
+          "authorization": "不授予资源权限，也不替代 User 或 Role"
+        },
+        "user": {
+          "title": "用户 SSO",
+          "description": "把已验证的外部身份映射到同 Account 中已经存在的 USER，再建立交互式登录 Session。",
+          "input": "已验证外部身份与唯一 USER 映射",
+          "result": "既有 USER 的新登录 Session",
+          "authorization": "USER 直接策略与用户组继承，并受权限边界约束；IdP claim 不携权"
+        },
+        "role": {
+          "title": "角色 SSO",
+          "description": "把已验证断言映射为候选 Role；未来外部信任映射和当前承担权限／PDP 都通过后才可签发短期会话。",
+          "input": "已验证断言、候选映射、未来外部 Trust 与承担检查",
+          "result": "有界、可审计的 RoleSession",
+          "authorization": "Role 策略与权限边界；映射本身不是授权"
+        }
+      }
+    },
     "userSsoConcept": {
       "title": "用户 SSO",
       "subtitle": "账号级企业身份登录边界",
@@ -4384,12 +4418,6 @@
         "identity": { "title": "外部身份唯一映射", "detail": "需定义 IdentityProvider、ExternalIdentity 与既有 USER 的账号级唯一性、停用和断联语义。" },
         "recovery": { "title": "应急与恢复路径", "detail": "启用前必须保留受控恢复；恢复不能绕过 MFA、复活停用用户或恢复已撤销权限。" },
         "audit": { "title": "Session 与审计证据", "detail": "登录、映射、拒绝、断联和配置变更需产生可关联的权威审计，页面不合成成功事实。" }
-      },
-      "comparisonTitle": "不要混淆两种 SSO",
-      "comparisonHint": "二者都可使用企业 IdP，但得到的身份与授权路径不同。",
-      "comparison": {
-        "user": { "title": "用户 SSO", "detail": "外部身份 → 既有 USER → 登录 Session → 该用户已有权限。" },
-        "role": { "title": "角色 SSO", "detail": "外部身份 → Role Trust → 承担权限 → RoleSession → 角色策略与权限边界。" }
       }
     },
     "userSsoBackToEdit": "返回编辑",

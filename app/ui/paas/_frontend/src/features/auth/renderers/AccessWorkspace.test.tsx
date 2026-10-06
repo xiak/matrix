@@ -3027,6 +3027,10 @@ describe("CAM-style access workspace", () => {
   it("keeps the identity-provider concept directory read-only until IAM fixes its protocol contract", async () => {
     const { user, repository, extension } = await open("providers");
     const before = await extension.read("preview");
+    const boundary = screen.getByRole("region", { name: "联合身份边界" });
+    expect(within(boundary).getByRole("article", { name: "身份提供商" }).getAttribute("aria-current")).toBe("step");
+    expect(within(boundary).getByRole("article", { name: "用户 SSO" }).textContent).toContain("IdP claim 不携权");
+    expect(within(boundary).getByRole("article", { name: "角色 SSO" }).textContent).toContain("映射本身不是授权");
     expect(screen.queryByRole("button", { name: "新建身份提供商" })).toBeNull();
     expect(screen.getByText(/不允许新建、编辑、启用或删除身份源/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "EnterpriseSSO" }));
@@ -3043,6 +3047,7 @@ describe("CAM-style access workspace", () => {
     const { user, repository, extension } = await open("providers");
     const before = await extension.read("preview");
     await user.click(screen.getByRole("tab", { name: "断言映射预览" }));
+    expect(within(screen.getByRole("region", { name: "联合身份边界" })).getByRole("article", { name: "角色 SSO" }).getAttribute("aria-current")).toBe("step");
     expect(screen.queryByRole("button", { name: "新建映射规则预览" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "AuditAssertionRule" }));
     const journey = screen.getByRole("region", { name: "角色 SSO 登录链路" });
@@ -3730,6 +3735,9 @@ describe("CAM-style access workspace", () => {
     const { repository, extension } = await open("user-sso");
     const before = await extension.read("preview");
     expect(screen.getByRole("heading", { name: "用户 SSO" })).toBeTruthy();
+    const federationBoundary = screen.getByRole("region", { name: "联合身份边界" });
+    expect(within(federationBoundary).getByRole("article", { name: "用户 SSO" }).getAttribute("aria-current")).toBe("step");
+    expect(within(federationBoundary).getByText(/身份提供商只负责协议信任/)).toBeTruthy();
     expect(screen.getByText("MOCK · 只读投影")).toBeTruthy();
     const providers = screen.getByRole("table", { name: "账号身份提供商" });
     const identities = screen.getByRole("table", { name: "外部身份映射" });
@@ -3742,8 +3750,6 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("账号级身份提供商")).toBeTruthy();
     expect(screen.getByText("登录 Session")).toBeTruthy();
     expect(screen.getByText("用户权限")).toBeTruthy();
-    expect(screen.getByText("用户 SSO", { selector: "dt" })).toBeTruthy();
-    expect(screen.getByText("角色 SSO", { selector: "dt" })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/JWKS|EntityDescriptor|签名公钥|客户端 Secret|私钥/);
     expect(screen.queryByRole("button", { name: /配置|连接|启用|登录/ })).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();

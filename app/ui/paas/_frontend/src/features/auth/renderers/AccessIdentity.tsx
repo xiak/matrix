@@ -2,11 +2,29 @@
 
 import { useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge } from "@ui/xiak";
+import { Alert, Badge, Tabs } from "@ui/xiak";
 import type { AccessWorkspace, RoleSsoMappingPreview } from "../domain/accessWorkspace";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { FederationBoundaryOverview } from "./FederationBoundaryOverview";
 import { RoleSsoJourneyPreview } from "./RoleSsoJourneyPreview";
 import styles from "./AccountAccessRenderer.module.css";
+
+export function AccessFederationWorkspace({ workspace }: { workspace: AccessWorkspace }) {
+  const t = useTranslations("IamWorkspace");
+  const [section, setSection] = useState<"providers" | "mappings">("providers");
+
+  return <div className={styles.stack}>
+    <FederationBoundaryOverview current={section === "providers" ? "provider" : "role"} />
+    <Tabs.Root value={section} onValueChange={(value) => setSection(value as "providers" | "mappings")}>
+      <Tabs.List aria-label={t("providers")}>
+        <Tabs.Trigger value="providers">{t("provider")}</Tabs.Trigger>
+        <Tabs.Trigger value="mappings">{t("roleSsoMappings")}</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content value="providers"><AccessProviders workspace={workspace} /></Tabs.Content>
+      <Tabs.Content value="mappings"><AccessRoleSsoMappings workspace={workspace} /></Tabs.Content>
+    </Tabs.Root>
+  </div>;
+}
 
 export function AccessProviders({ workspace }: { workspace: AccessWorkspace }) {
   const t = useTranslations("IamWorkspace");
