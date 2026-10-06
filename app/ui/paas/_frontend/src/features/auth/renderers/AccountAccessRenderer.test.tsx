@@ -410,6 +410,9 @@ describe("account access", () => {
     expect(f.boundaries.set).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "确认变更" }));
     await screen.findByText("权限边界变更已确认，用户状态已重新读取。");
+    const boundarySummary = screen.getByRole("region", { name: "权限边界" });
+    expect(within(boundarySummary).getByText("ReadOnlyAccess", { exact: true })).toBeTruthy();
+    expect(within(boundarySummary).getByText(tenantPolicy.id, { selector: "code" })).toBeTruthy();
     expect(f.boundaries.set).toHaveBeenLastCalledWith(credential, account.id, childUser.id, { policyId: tenantPolicy.id, policyResourceVersion: tenantPolicy.resourceVersion, resourceVersion: childUser.resourceVersion, requestId: expect.any(String) });
     await chooseBoundary(user, "LogBoundary · customer.logs");
     await user.click(screen.getByRole("button", { name: "确认变更" }));

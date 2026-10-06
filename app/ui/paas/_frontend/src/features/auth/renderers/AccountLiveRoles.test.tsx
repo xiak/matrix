@@ -275,6 +275,8 @@ describe("AccountLiveRoles", () => {
       requestId: expect.stringMatching(/^role-boundary-/)
     }));
     expect(await screen.findByText("IAM 已确认权限上限变更，并完成权威状态回读。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: boundaryPolicy.displayName })).toBeTruthy();
+    expect(screen.getByText(boundaryPolicy.id, { selector: "code" })).toBeTruthy();
     expect(readPermissionBoundary).toHaveBeenCalledTimes(2);
     expect(api.read).toHaveBeenCalledTimes(2);
   });

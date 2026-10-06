@@ -82,6 +82,7 @@ function LiveRoleAuthorizationOverview({ access, client, onAccessChanged, onOpen
   const activePolicies = policies.filter((policy) => policy.status === "ACTIVE" && policy.scope === "TENANT" && (policy.accountId === null || policy.accountId === client.accountId));
   const selected = activePolicies.find((policy) => policy.id === value);
   const currentPolicyId = boundary?.policy?.policyId ?? "";
+  const currentPolicy = activePolicies.find((policy) => policy.id === currentPolicyId);
   const eligible = phase === "ready" && value !== currentPolicyId && (value ? Boolean(selected && canSet) : Boolean(boundary?.policy && canRemove));
   const locked = operation.state === "pending" || operation.state === "conflict" || operation.state === "refreshFailed";
   const restrictionReason = setCapability?.restrictionReason ?? removeCapability?.restrictionReason ?? "AUTHORITY_REQUIRED";
@@ -165,7 +166,7 @@ function LiveRoleAuthorizationOverview({ access, client, onAccessChanged, onOpen
 
   const boundaryValue = phase === "loading" ? <span aria-label={t("boundaryLoading")} role="status"><Skeleton /></span>
     : phase === "error" ? <Badge status="neutral">{t("boundaryUnknown")}</Badge>
-      : boundary?.policy ? <span><button className={styles.userLink} onClick={() => onOpen("policies", currentPolicyId)} type="button">{boundary.policy.policyId}</button><small>{t("boundaryPolicyVersion", { version: boundary.policy.versionId, revision: boundary.resourceVersion })}</small></span>
+      : boundary?.policy ? <span><button className={styles.userLink} onClick={() => onOpen("policies", currentPolicyId)} type="button">{currentPolicy?.displayName ?? boundary.policy.policyId}</button>{currentPolicy ? <small><code>{boundary.policy.policyId}</code></small> : null}<small>{t("boundaryPolicyVersion", { version: boundary.policy.versionId, revision: boundary.resourceVersion })}</small></span>
         : <span><Badge status="warning">{t("boundaryClosed")}</Badge><small>{t("boundaryClosedHint")}</small></span>;
   return <>
     <AuthorizationOverview title={t("authorizationOverview")} hint={t("liveAuthorizationOverviewHint")} items={[

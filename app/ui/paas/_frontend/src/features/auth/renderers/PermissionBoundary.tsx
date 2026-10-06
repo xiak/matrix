@@ -37,10 +37,10 @@ export function PermissionBoundary({ owner, workspace, value, onSave, onOpen }: 
   return <section className={styles.stack} aria-label={t("boundary")}><div className={styles.actionHeader}><h3>{t("boundary")}</h3><Button ref={editTrigger} variant="ghost" onClick={() => setEditing(true)}>{t("editBoundary")}</Button></div><p className={styles.note}>{owner === "user" ? u("hint") : t("boundaryHint")}</p>{value ? <div><button className={styles.userLink} onClick={() => onOpen(value)}>{workspace.policies.find((policy) => policy.id === value)?.name ?? value}</button></div> : <p className={styles.note}>{owner === "role" ? t("boundaryClosedHint") : u("none")}</p>}</section>;
 }
 
-export function UserBoundarySummary({ boundary }: { boundary: UserPermissionBoundary }) {
+export function UserBoundarySummary({ boundary, policyName }: { boundary: UserPermissionBoundary; policyName?: string }) {
   const t = useTranslations("UserBoundary");
   return boundary.policy ? <dl className={styles.facts}>
-    <div><dt>{t("policyId")}</dt><dd><Typography.Code>{boundary.policy.policyId}</Typography.Code></dd></div>
+    <div><dt>{t("policyId")}</dt><dd>{policyName ? <span><strong>{policyName}</strong><small><Typography.Code>{boundary.policy.policyId}</Typography.Code></small></span> : <Typography.Code>{boundary.policy.policyId}</Typography.Code>}</dd></div>
     <div><dt>{t("defaultVersion")}</dt><dd>{boundary.policy.versionId}</dd></div>
     <div><dt>{t("contentDigest")}</dt><dd><Typography.Code>{boundary.policy.contentDigest}</Typography.Code></dd></div>
   </dl> : <p className={styles.note}>{t("none")}</p>;
@@ -73,6 +73,7 @@ export function LivePermissionBoundary({ client, snapshot, onChanged }: {
   const boundary = confirmed ?? snapshot.boundary;
   const policies = snapshot.policies.filter((policy) => policy.status === "ACTIVE" && policy.scope === "TENANT" && (policy.accountId === null || policy.accountId === client.accountId));
   const selected = policies.find((policy) => policy.id === value);
+  const currentPolicy = policies.find((policy) => policy.id === boundary.policy?.policyId);
   const canChange = snapshot.user.canSetPermissionBoundary || (boundary.policy !== null && snapshot.user.canRemovePermissionBoundary);
   const eligible = value !== (boundary.policy?.policyId ?? "") && (value
     ? selected !== undefined && snapshot.user.canSetPermissionBoundary
@@ -135,7 +136,7 @@ export function LivePermissionBoundary({ client, snapshot, onChanged }: {
   return <section className={styles.identitySection} aria-label={r("boundary")}>
     <div className={styles.actionHeader}><h3>{r("boundary")}</h3>{!editing && canChange ? <Button ref={editTrigger} variant="secondary" disabled={locked} onClick={() => { setValue(boundary.policy?.policyId ?? ""); setEditing(true); setOperation({ state: "idle" }); }}>{r("editBoundary")}</Button> : null}</div>
     <p className={styles.note}>{t("hint")}</p>
-    <UserBoundarySummary boundary={boundary} />
+    <UserBoundarySummary boundary={boundary} policyName={currentPolicy?.displayName} />
     <p className={styles.note}>{t("userRevision", { version: boundary.resourceVersion })}</p>
     {!canChange ? <p className={styles.note}>{t("readOnly")}</p> : null}
     {operation.state === "completed" ? <Alert status="success">{t("completed")}</Alert> : null}
