@@ -185,9 +185,29 @@ func TestNotificationContactReplacementDocumentsPurposeBoundStepUp(t *testing.T)
 	}
 	schemas := document["components"].(object)["schemas"].(object)
 	stepUp := schemas["StartStepUpRequest"].(object)
-	encoded, _ := json.Marshal(stepUp["allOf"])
-	if !bytes.Contains(encoded, []byte(iamv1.StepUpReplaceNotificationContact)) ||
-		!bytes.Contains(encoded, []byte("NotificationContactReplacementIntent")) {
+	var replacement object
+	for _, constraint := range stepUp["allOf"].([]any) {
+		for _, candidate := range constraint.(object)["oneOf"].([]any) {
+			branch := candidate.(object)
+			properties := branch["properties"].(object)
+			operation, ok := properties["operation"].(object)
+			if ok && operation["const"] == string(iamv1.StepUpReplaceNotificationContact) {
+				if replacement != nil {
+					t.Fatal("step-up schema has duplicate replacement branches")
+				}
+				replacement = branch
+			}
+		}
+	}
+	if replacement == nil {
 		t.Fatal("step-up schema does not bind the exact replacement intent")
+	}
+	required, ok := replacement["required"].([]string)
+	properties := replacement["properties"].(object)
+	contact, contactOK := properties["notificationContact"].(object)
+	if !ok || len(required) != 1 || required[0] != "notificationContact" ||
+		properties["securitySettings"] != false || !contactOK ||
+		contact["$ref"] != "#/components/schemas/NotificationContactReplacementIntent" {
+		t.Fatal("replacement step-up branch permits another intent shape")
 	}
 }

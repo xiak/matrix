@@ -354,7 +354,7 @@ func buildPaths() object {
 			[]any{openapi31.PathIDParameter("groupId"), openapi31.PathIDParameter("membershipId")},
 		)},
 		"/v1/policy-attachments": object{"post": mutationOperation(
-			"createPolicyAttachment", "Create a direct user or group policy attachment", "CreatePolicyAttachmentRequest", "PolicyAttachment", "200", nil, nil,
+			"createPolicyAttachment", "Create a direct user, group, or role policy attachment", "CreatePolicyAttachmentRequest", "PolicyAttachment", "200", nil, nil,
 		)},
 		"/v1/policy-attachment-changes/by-request/{requestId}": object{"get": readOperation(
 			"getPolicyAttachmentChangeByRequest", "Read the original actor's immutable attachment command result; no current relation inference or replay permit", "PolicyAttachmentChange", nil,

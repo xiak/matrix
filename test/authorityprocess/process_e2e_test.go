@@ -1238,7 +1238,7 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 	for index, database := range databases {
 		// The supported migrator always applies the current idempotent role
 		// bootstrap before schema SQL. The new purpose-only analysis group does
-		// not exist in the IAM62 cluster, so a bare Up would test an impossible
+		// not exist in the IAM65 predecessor, so a bare Up would test an impossible
 		// production sequence rather than the retained database.
 		if err := iammigration.Bootstrap(ctx, database); err != nil {
 			t.Fatal("bootstrap current purpose roles for predecessor recovery copy", err)

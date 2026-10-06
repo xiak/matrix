@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted foundation; current IAM authentication-recovery lifecycle slice is accepted
+- Status: Accepted foundation; current IAM `66/35/3+r13` signed lifecycle has passed the local isolated runtime gate and awaits a successful exact-source independent CI result after the first run reached its orchestration timeout
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; the accepted isolated-IAM authentication-recovery slice is manifest `v2` with the exact `64/34/3` revision 11 profile. Revision 11 adds the installation-side authentication-recovery ABI and is accepted only for the focused signed A/B and independent CI evidence below
+- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current isolated-IAM candidate is exactly `66/35/3` revision 13; earlier accepted slices remain historical evidence, not an alternate current profile
 
 ## Outcome
 
@@ -203,6 +203,85 @@ timestamps, and correlation IDs; it excludes secrets, tokens, configuration
 values, database rows, native errors, arbitrary logs, and absolute paths.
 
 ## Incremental acceptance
+
+### Current IAM policy-completion lifecycle candidate
+
+The fixed production source `8abbea36da422fdb758233b68221ad8139b00904`
+assembled signed A=`matrix-v0.1.0-iam-r13.1-8abbea36da42` and immediate
+B=`matrix-v0.1.0-iam-r13.2-8abbea36da42`. Both carry the identical IAM schema
+66, Audit schema 35, PaaS schema 3 and `contractRevision=13`; the IAM
+authorization Profile revision is 14. This candidate includes the immutable
+policy-attachment completion/read contract used to resolve an uncertain write
+response without repeating a different mutation.
+
+The release builder now distinguishes two image identities that Docker exposes
+for different purposes. A base dependency is admitted only when inspection
+contains the exact expected repository manifest digest, and every generated
+Dockerfile uses the digest-qualified reference. The bundle archive and release
+manifest continue to authenticate the actual portable config image ID returned
+by save/load. A local `.Id` can no longer be compared with a registry manifest
+digest, a mutable tag cannot substitute for the pinned reference, and the
+PostgreSQL archive records its inspected config identity rather than a constant
+named after the registry digest. Missing, malformed, foreign-repository or
+wrong-digest metadata fails before build effects. Focused race/vet,
+architecture and an opt-in real Docker 27.5.1 inspection gate passed before
+the signed releases were assembled.
+
+A fresh task-owned Docker 27.5.1 classic-image-store engine began with zero
+inner images, containers and volumes. Its outer network mode was `none`; the
+outer container had no default route, was limited to 2 CPUs, 4 GiB and 768
+PIDs, and no host, shared engine or remote service was restarted. The private
+SMTP input was created with the production codec and was not included in either
+bundle. Its task-only Postfix 3.10.13 fixture first passed certificate-name
+verification, authenticated STARTTLS/SASL submission, real Maildir receipt,
+bad-credential rejection and external-relay rejection. The fixture archive is
+exactly
+`sha256:61d6532dfba0e1ab7f8ef6a1122f41696f1a93f4e3258bad179af3b1e84ff924`
+and its classic portable config image identity is
+`sha256:ddaa1e5a8ebc3363614646a452761593a7418c22a795ebd21a3bc82332867eb9`.
+It proves only this isolated local SMTP/Maildir path, not Internet delivery or
+recipient reading.
+
+The effectful `TestOfflinePhase1Lifecycle` gate passed in 609.38 seconds. It
+installed A from the empty namespace, verified status/readiness and restricted
+database identities, exercised IAM through APISIX, retained two accounts and
+their primary/member revocation state, verified the notification contact,
+bound TOTP and completed a fresh MFA login with a real security notice, applied
+an explicit access-analyzer disposition, created two application generations,
+verified tenant and installation Audit chains, created a protected backup,
+proved failed-candidate automatic rollback, upgraded to B, explicitly rolled
+back to A, restored the selected backup with session reissuance, rolled back
+and stopped the application with capacity release, and produced bounded
+zero-secret support evidence.
+
+After that gate, the operator-private SMTP input was removed from the runtime
+state. Only the exact task-owned outer engine was stopped and started; its
+identity, persistent Docker volume, installation state volume, `network=none`
+boundary and Docker 27.5.1 daemon were rechecked. The read-only after-restart
+gate then passed in 68.40 seconds: a fresh MFA login succeeded, both accounts'
+primary/recovery/revocation state remained exact, status/verify succeeded and
+the complete offline lifecycle marker was present. This is local signed-runtime
+evidence for the exact source and profile. The independent CI for that source
+must still complete successfully before this candidate is recorded as the
+accepted current combination; it does not admit another profile, Docker image
+store, arbitrary N-1 binary or cross-profile recovery.
+
+The Linux-created delivery archives were then re-extracted in the same
+network-disabled engine and compared by complete path set, per-file SHA-256 and
+Unix mode; directories are `0700`, `bin/mx` is `0700`, every other payload is
+`0600`, and no link is present. The copies streamed back to the workspace have
+the same engine-side hashes:
+
+- A `matrix-v0.1.0-iam-r13.1-8abbea36da42-linux-amd64.tar.gz`:
+  `e186ad906cf087ff7f109916221f82bb530f1d65d81384fc03ba7fd71734662b`;
+- B `matrix-v0.1.0-iam-r13.2-8abbea36da42-linux-amd64.tar.gz`:
+  `f7de52d6d9ea93996f7bbe10ff3ccfb4ad9c9ecf40a412da2df84800920afca9`;
+- public `release-trust.json`:
+  `af23e4b4ecf998169e28d5c4b43a58d4127fc68aa5f4068b80a3162ae8b44a6a`.
+
+The archives contain only the signed release directory. The public trust file
+is separate; the signing key, SMTP configuration, fixture private material and
+installation state are absent.
 
 ### Current IAM authentication-recovery lifecycle candidate
 

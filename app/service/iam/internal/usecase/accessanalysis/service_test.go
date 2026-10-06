@@ -56,10 +56,13 @@ func TestScannerCompletesClosedAccessKeyDisposition(t *testing.T) {
 			ConditionGeneration: 1, TargetResourceVersion: 3, ActivityRevision: 1, AccessKeyID: "key-one",
 			AccessKeyResourceVersion: 3, UserID: "user-one", EvaluatedAt: now}}
 	repository := &scannerRepository{dispositionClaims: []DispositionClaim{claim}}
-	sequence := 0
-	scanner, err := NewScanner(repository, func(string) (string, error) {
-		sequence++
-		return fmt.Sprintf("generated-%d", sequence), nil
+	generatedByPurpose := map[string]int{}
+	scanner, err := NewScanner(repository, func(purpose string) (string, error) {
+		if purpose == "access-disposition-attempt" {
+			return claim.AttemptID, nil
+		}
+		generatedByPurpose[purpose]++
+		return fmt.Sprintf("%s-%d", purpose, generatedByPurpose[purpose]), nil
 	}, "scanner-one")
 	if err != nil {
 		t.Fatal(err)
@@ -69,8 +72,18 @@ func TestScannerCompletesClosedAccessKeyDisposition(t *testing.T) {
 		t.Fatal("disposition result differs", result, err)
 	}
 	completion := repository.dispositionCompletions[0]
-	if completion.KeyEventID != "generated-2" || completion.KeyRequestID != "generated-3" ||
-		completion.FindingEventID != "generated-4" || completion.FindingRequestID != "generated-5" {
+	identifiers := []string{string(completion.KeyEventID), completion.KeyRequestID, string(completion.FindingEventID), completion.FindingRequestID}
+	seen := map[string]struct{}{}
+	for _, identifier := range identifiers {
+		if _, duplicate := seen[identifier]; duplicate {
+			t.Fatal("disposition reused an identifier", completion)
+		}
+		seen[identifier] = struct{}{}
+	}
+	if !strings.HasPrefix(string(completion.KeyEventID), "audit-event-") ||
+		!strings.HasPrefix(string(completion.FindingEventID), "audit-event-") ||
+		!strings.HasPrefix(completion.KeyRequestID, "access-disposition-request-") ||
+		!strings.HasPrefix(completion.FindingRequestID, "access-disposition-request-") {
 		t.Fatal("disposition identifiers differ", completion)
 	}
 }

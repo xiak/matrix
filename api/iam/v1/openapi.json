@@ -46296,7 +46296,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "Create a direct user or group policy attachment"
+        "summary": "Create a direct user, group, or role policy attachment"
       }
     },
     "/v1/policy-attachments/{attachmentId}:revoke": {

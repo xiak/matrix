@@ -190,7 +190,9 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 
 ## 固定消费者的集成检查
 
-当前签名发布候选已与安装 owner 冻结为IAM61/Audit31/PaaS3+`contractRevision=6`。固定`67a2a19cf42f76cff7c24abddc830dd7bc093039`的同profile签名A/B已通过本任务独立Linux引擎的安装、升级、保数据回滚、选定备份恢复、支持包及任务自有引擎重启生命周期，报告receipt、JSON、CSV、Audit事实和备份时间边界均由真实数据断言；重启后的完整status/verify/support门禁89.43秒通过。精确源码独立CI仍在队列，因此该组合尚未标记最终验收。该候选只允许相同完整profile的升级、数据保留回滚和选定备份恢复；旧4/3/1+r4及其他完整profile必须在副作用前拒绝，IAM60→61 SQL数据保留不能冒充跨profile发布兼容。以下既有消费者必须在候选中通过真实数据检查；中间源码、同 schema 数字或静态编译不能替代：
+当前签名发布候选以固定源码`8abbea36da422fdb758233b68221ad8139b00904`冻结为IAM66/Audit35/PaaS3+`contractRevision=13`，IAM授权Profile revision14；A/B分别为`matrix-v0.1.0-iam-r13.1-8abbea36da42`和`matrix-v0.1.0-iam-r13.2-8abbea36da42`。任务独立、无外部路由、2CPU/4GiB/PIDs768的Docker27.5.1经典存储引擎从零镜像/容器/卷完成609.38秒效果型门禁：A安装、受限数据库身份、APISIX下的双Account/IAM、真实SMTP联系人、TOTP/MFA、安全通知、访问分析显式处置、两代应用、Audit链、保护备份、失败候选自动回退、B升级、显式平台回滚、选定备份恢复、应用回滚/停止/容量释放和support零秘密均通过。删除运行现场的私密SMTP输入后，只重启同一任务外层引擎，68.40秒只读门禁再次通过新鲜MFA登录、双Account主身份/恢复/撤权保留及status/verify/完整生命周期。发布构建同时以真实Docker27证明registry manifest digest、digest-qualified构建引用及portable config image ID彼此分离，mutable tag、错仓库或错digest不能进入签名包。精确源码首次独立CI遇到下述编排上限，修正后的复验尚未完成，因此该组合尚未标记最终验收。候选只允许相同完整profile的升级、数据保留回滚和选定备份恢复；其他完整profile必须在副作用前拒绝，IAM65→66 SQL数据保留不能冒充跨profile发布兼容。以下既有消费者必须在候选中通过真实数据检查；中间源码、同 schema 数字或静态编译不能替代：
+
+固定源码的[Verification 37540304178](https://github.com/xiak/matrix/actions/runs/37540304178)不能记为成功：`authority-runtime`的两组业务步骤分别在12分07秒和6分40秒完成，但连同准备和清理于20分钟编排上限被GitHub标记`cancelled`；其余串行lane仍继续执行。当前修正不增加任何fixture的业务context、Go测试期限、密码成本或数据库并发，只把该job外层预算从20分钟调为25分钟，为已成功测试后的确定清理保留边界。只读测试审计没有发现可安全删除的整项测试；它发现从通用storage排除的专用selector在零匹配或顶层SKIP时仍可能以Go退出码0假绿，因此这些lane改由单一CI helper核对每个预期顶层测试确有`run`和`pass`且没有`skip`，容量容器同样使用该门禁。helper的正常、零匹配和显式SKIP三条本地行为已验证；新的精确源码独立CI仍是接受条件，不能用本地脚本检查回填失败run。
 
 - `lookup_service` 五列与 `ServiceIdentity` 安装/purpose 语义；`claim_audit_event` 七列及物理 owner 的租约/完成身份。
 - `CanonicalizeEvent`、旧 tenant/installation bytes/hash/cursor/链与严格 event-bound producer proof。
