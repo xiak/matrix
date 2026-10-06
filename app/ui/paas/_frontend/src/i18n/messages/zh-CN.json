@@ -2373,6 +2373,12 @@
       "title": "检查 IAM 契约与真实鉴权边界",
       "lead": "以下是未来受控接入流程必须证明的审阅项。它们是 UX 检查清单，不代表当前浏览器已经调用在线校验服务。",
       "pending": "待核验",
+      "sections": {
+        "label": "IAM 契约校验视图",
+        "checks": "检查结果",
+        "changes": "候选修订",
+        "actions": "Action 声明"
+      },
       "items": {
         "namespace": { "title": "命名空间与版本所有权", "hint": "确认产品、callingService、Action 前缀和 revision 由对应产品团队维护，且同一修订不能覆盖不同内容摘要。" },
         "resources": { "title": "Action 与资源模型一致", "hint": "逐项核对 resourceKind、授权目标形状、结果资源及 TENANT／平台范围边界。" },

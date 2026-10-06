@@ -679,11 +679,16 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.getByText(/不是在线校验结果/)).toBeTruthy();
     expect(screen.getByText(/subjectTypes 与 userAuthenticationMethods/)).toBeTruthy();
     expect(screen.getAllByText("待核验")).toHaveLength(5);
+    expect(screen.getByRole("tab", { name: "检查结果" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByRole("region", { name: "候选修订影响" })).toBeNull();
+    expect(screen.queryByRole("table", { name: "逐项核对权限声明" })).toBeNull();
     const diagnostics = screen.getByRole("region", { name: "接入诊断快照" });
     expect(within(diagnostics).getByText("paas@1")).toBeTruthy();
     expect(within(diagnostics).getByText("PAAS")).toBeTruthy();
     expect(within(diagnostics).getByText("运行时证据未验证")).toBeTruthy();
     expect(within(diagnostics).getAllByText(/IAM 已认证身份/).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("tab", { name: "候选修订" }));
+    expect(screen.queryByRole("region", { name: "接入诊断快照" })).toBeNull();
     const impact = screen.getByRole("region", { name: "候选修订影响" });
     expect(within(impact).getByText("合成候选 · MOCK")).toBeTruthy();
     expect(within(impact).getByText("新增声明 1")).toBeTruthy();
@@ -691,6 +696,8 @@ describe("policy creation entry and directory contract", () => {
     expect(within(impact).getByText("改变声明 1")).toBeTruthy();
     expect(within(impact).getByText("paas.candidate-preview.read")).toBeTruthy();
     expect(within(impact).getByText(/不代表权限扩大或收窄/)).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Action 声明" }));
+    expect(screen.queryByRole("region", { name: "候选修订影响" })).toBeNull();
     const reviewActions = screen.getByRole("table", { name: "逐项核对权限声明" });
     expect(within(reviewActions).getByText("paas.application.read")).toBeTruthy();
     expect(within(reviewActions).getByText("实例（支持已声明前缀）")).toBeTruthy();
@@ -731,6 +738,7 @@ describe("policy creation entry and directory contract", () => {
     expect(within(review).getByText(/managedservice\.service-installation\.service-role\.unbind/)).toBeTruthy();
     expect(within(review).getAllByText("匹配")).toHaveLength(4);
     expect(within(review).getByText(/不代表客户账号已经同意/)).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Action 声明" }));
     expect(screen.getByText("产品 PEP 有界批量候选检查")).toBeTruthy();
   });
   it("pages action evidence instead of mounting an unbounded onboarding review", async () => {
@@ -745,6 +753,7 @@ describe("policy creation entry and directory contract", () => {
     await user.click(await screen.findByRole("button", { name: "paas" }));
     await user.click(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("tab", { name: "Action 声明" }));
     const review = screen.getByRole("table", { name: "逐项核对权限声明" });
     expect(within(review).getAllByRole("row")).toHaveLength(11);
     expect(within(review).getByText("paas.review-0001.read")).toBeTruthy();
@@ -780,6 +789,7 @@ describe("policy creation entry and directory contract", () => {
     const user = userEvent.setup();
     render(<LocaleProvider><AuthorizationProfilePublishingPreview entry={current} candidate={candidate} onClose={vi.fn()} /></LocaleProvider>);
     await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("tab", { name: "候选修订" }));
     const impact = screen.getByRole("region", { name: "候选修订影响" });
     const changes = within(impact).getByRole("table", { name: "候选修订变更清单" });
     expect(within(changes).getAllByRole("row")).toHaveLength(11);

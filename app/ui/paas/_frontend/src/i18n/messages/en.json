@@ -2373,6 +2373,12 @@
       "title": "Review the IAM contract and real enforcement boundary",
       "lead": "A future controlled onboarding flow must prove each item below. This is a UX checklist, not evidence that the browser called an online validation service.",
       "pending": "Needs verification",
+      "sections": {
+        "label": "IAM contract validation views",
+        "checks": "Check results",
+        "changes": "Candidate revision",
+        "actions": "Action declarations"
+      },
       "items": {
         "namespace": { "title": "Namespace and version ownership", "hint": "Confirm that product, callingService, Action prefixes, and revision are owned by the product team, and that one revision cannot be overwritten with a different digest." },
         "resources": { "title": "Action and resource model alignment", "hint": "Review resourceKind, authorization target shapes, result resources, and TENANT versus platform scope for every Action." },

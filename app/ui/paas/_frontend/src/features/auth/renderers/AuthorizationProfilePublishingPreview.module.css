@@ -27,6 +27,7 @@
 .stageIcon { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: var(--xiak-radius-panel); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
 .stageIcon svg { width: 19px; height: 19px; }
 .stageBody { display: grid; gap: var(--xiak-spacing-comfortable); }
+.validationPanel { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); padding-block-start: var(--xiak-spacing-comfortable); }
 
 .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--xiak-spacing-comfortable); margin: 0; }
 .facts > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }

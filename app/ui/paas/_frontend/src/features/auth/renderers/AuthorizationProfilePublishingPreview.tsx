@@ -3,7 +3,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, FileCode2, LockKeyhole, ShieldCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, Steps, Table, TablePagination } from "@ui/xiak";
+import { Alert, Badge, Button, Card, Steps, Table, TablePagination, Tabs } from "@ui/xiak";
 import {
   authorizationResourceShapeKind,
   type AuthorizationProfileAction,
@@ -15,6 +15,8 @@ import { AuthorizationActionTable } from "./AuthorizationActionTable";
 import styles from "./AuthorizationProfilePublishingPreview.module.css";
 
 const stageIds = ["declaration", "validation", "release"] as const;
+const validationSectionIds = ["checks", "changes", "actions"] as const;
+type ValidationSection = typeof validationSectionIds[number];
 
 const declarationFields = [
   "resourceKind", "scope", "resourceShapes", "subjectTypes", "userAuthenticationMethods",
@@ -235,6 +237,7 @@ export function AuthorizationProfilePublishingPreview({ entry, candidate: suppli
   const t = useTranslations("AuthorizationProfilePublishingPreview");
   const catalog = useTranslations("AuthorizationProfileCatalog");
   const [stage, setStage] = useState(0);
+  const [validationSection, setValidationSection] = useState<ValidationSection>("checks");
   const [actionPage, setActionPage] = useState(1);
   const [actionPageSize, setActionPageSize] = useState(10);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -292,30 +295,43 @@ export function AuthorizationProfilePublishingPreview({ entry, candidate: suppli
       <Card.Header className={styles.stageHeader}><span className={styles.stageIcon}><ShieldCheck aria-hidden="true" /></span><div><span>{t("stageLabel", { current: 2, total: 3 })}</span><h3 ref={stageHeading} tabIndex={-1}>{t("validation.title")}</h3></div></Card.Header>
       <Card.Body className={styles.stageBody}>
         <p className={styles.lead}>{t("validation.lead")}</p>
-        <ul className={styles.reviewList}>
-          {(["namespace", "resources", "subjects", "conditions", "enforcement"] as const).map((item, index) => <li key={item}><span aria-hidden="true">{index + 1}</span><div><strong>{t(`validation.items.${item}.title`)}</strong><p>{t(`validation.items.${item}.hint`)}</p></div><Badge status="neutral">{t("validation.pending")}</Badge></li>)}
-        </ul>
         <div className={styles.snapshot}>
           <div><span>{t("validation.snapshot.actions")}</span><strong>{profile.actions.length}</strong></div>
           <div><span>{t("validation.snapshot.resources")}</span><strong>{resources.length}</strong></div>
           <div><span>{t("validation.snapshot.conditions")}</span><strong>{conditions.length}</strong></div>
         </div>
-        <section className={styles.diagnostics} aria-labelledby="authorization-profile-diagnostics-title">
-          <div className={styles.diagnosticsHeading}><h4 id="authorization-profile-diagnostics-title">{t("validation.diagnostics.title")}</h4><p>{t("validation.diagnostics.hint")}</p></div>
-          <dl className={styles.diagnosticGrid}>
-            <div><dt>{t("validation.diagnostics.profileReference")}</dt><dd><code>{profile.product}@{profile.revision}</code><small><code>{entry.contentDigest}</code></small></dd></div>
-            <div><dt>{t("validation.diagnostics.conditionSources")}</dt><dd>{conditionFacts.length ? conditionFacts.map((condition) => <span key={`${condition.key}:${condition.source}:${condition.valueType}`}><code>{condition.key}</code><small>{catalog(`conditionSources.${condition.source}`)} · {catalog(`conditionValueTypes.${condition.valueType}`)}</small></span>) : t("validation.diagnostics.noConditionSources")}</dd></div>
-            <div><dt>{t("validation.diagnostics.pepOwner")}</dt><dd><code>{profile.callingService}</code><small>{t("validation.diagnostics.pepOwnerHint")}</small></dd></div>
-            <div><dt>{t("validation.diagnostics.runtimeEvidence")}</dt><dd><Badge status="warning">{t("validation.diagnostics.notVerified")}</Badge><small>{t("validation.diagnostics.runtimeEvidenceHint")}</small></dd></div>
-          </dl>
-        </section>
-        <ProfileChangeImpactReview current={entry} candidate={candidate} />
-        {profile.product === previewManagedServiceRoleTemplate.spec.product ? <ServiceTemplateCompatibilityReview entry={entry} /> : null}
-        <section aria-label={t("validation.reviewActionsTitle")} className={styles.reviewActions}>
-          <div><h4>{t("validation.reviewActionsTitle")}</h4><p>{t("validation.reviewActionsHint")}</p></div>
-          <AuthorizationActionTable actions={reviewActions} label={t("validation.reviewActionsTitle")} />
-          <Table.Footer note={catalog("completeActions", { count: profile.actions.length })}><TablePagination page={currentActionPage} pages={actionPages} pageSize={actionPageSize} onPageChange={setActionPage} onPageSizeChange={(size) => { setActionPageSize(size); setActionPage(1); }} labels={{ summary: catalog("page", { page: currentActionPage, pages: actionPages }), pageSize: catalog("pageSize"), previous: catalog("previous"), next: catalog("next") }} /></Table.Footer>
-        </section>
+        <Tabs.Root value={validationSection} onValueChange={(value) => setValidationSection(value as ValidationSection)}>
+          <Tabs.List aria-label={t("validation.sections.label")}>
+            {validationSectionIds.map((section) => <Tabs.Trigger key={section} value={section}>{t(`validation.sections.${section}`)}</Tabs.Trigger>)}
+          </Tabs.List>
+          <Tabs.Content className={styles.validationPanel} value="checks">
+            {validationSection === "checks" ? <>
+              <ul className={styles.reviewList}>
+                {(["namespace", "resources", "subjects", "conditions", "enforcement"] as const).map((item, index) => <li key={item}><span aria-hidden="true">{index + 1}</span><div><strong>{t(`validation.items.${item}.title`)}</strong><p>{t(`validation.items.${item}.hint`)}</p></div><Badge status="neutral">{t("validation.pending")}</Badge></li>)}
+              </ul>
+              <section className={styles.diagnostics} aria-labelledby="authorization-profile-diagnostics-title">
+                <div className={styles.diagnosticsHeading}><h4 id="authorization-profile-diagnostics-title">{t("validation.diagnostics.title")}</h4><p>{t("validation.diagnostics.hint")}</p></div>
+                <dl className={styles.diagnosticGrid}>
+                  <div><dt>{t("validation.diagnostics.profileReference")}</dt><dd><code>{profile.product}@{profile.revision}</code><small><code>{entry.contentDigest}</code></small></dd></div>
+                  <div><dt>{t("validation.diagnostics.conditionSources")}</dt><dd>{conditionFacts.length ? conditionFacts.map((condition) => <span key={`${condition.key}:${condition.source}:${condition.valueType}`}><code>{condition.key}</code><small>{catalog(`conditionSources.${condition.source}`)} · {catalog(`conditionValueTypes.${condition.valueType}`)}</small></span>) : t("validation.diagnostics.noConditionSources")}</dd></div>
+                  <div><dt>{t("validation.diagnostics.pepOwner")}</dt><dd><code>{profile.callingService}</code><small>{t("validation.diagnostics.pepOwnerHint")}</small></dd></div>
+                  <div><dt>{t("validation.diagnostics.runtimeEvidence")}</dt><dd><Badge status="warning">{t("validation.diagnostics.notVerified")}</Badge><small>{t("validation.diagnostics.runtimeEvidenceHint")}</small></dd></div>
+                </dl>
+              </section>
+              {profile.product === previewManagedServiceRoleTemplate.spec.product ? <ServiceTemplateCompatibilityReview entry={entry} /> : null}
+            </> : null}
+          </Tabs.Content>
+          <Tabs.Content className={styles.validationPanel} value="changes">
+            {validationSection === "changes" ? <ProfileChangeImpactReview current={entry} candidate={candidate} /> : null}
+          </Tabs.Content>
+          <Tabs.Content className={styles.validationPanel} value="actions">
+            {validationSection === "actions" ? <section aria-label={t("validation.reviewActionsTitle")} className={styles.reviewActions}>
+              <div><h4>{t("validation.reviewActionsTitle")}</h4><p>{t("validation.reviewActionsHint")}</p></div>
+              <AuthorizationActionTable actions={reviewActions} label={t("validation.reviewActionsTitle")} />
+              <Table.Footer note={catalog("completeActions", { count: profile.actions.length })}><TablePagination page={currentActionPage} pages={actionPages} pageSize={actionPageSize} onPageChange={setActionPage} onPageSizeChange={(size) => { setActionPageSize(size); setActionPage(1); }} labels={{ summary: catalog("page", { page: currentActionPage, pages: actionPages }), pageSize: catalog("pageSize"), previous: catalog("previous"), next: catalog("next") }} /></Table.Footer>
+            </section> : null}
+          </Tabs.Content>
+        </Tabs.Root>
         <Alert status="info">{t("validation.notProof")}</Alert>
       </Card.Body>
     </Card> : null}
