@@ -66,6 +66,26 @@ func TestLocalImageInspectionAdmitsOnlyFixedBasesAndBuildTags(t *testing.T) {
 	}
 }
 
+func TestLocalFixedBaseImageInspection(t *testing.T) {
+	if os.Getenv("MATRIX_RELEASEBUILD_DOCKER_TEST") != "1" {
+		t.Skip("set MATRIX_RELEASEBUILD_DOCKER_TEST=1 with the sealed base images in a Docker 27 classic store")
+	}
+	images, err := verifyBaseImages(context.Background(), NewLocalEffects())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != len(baseImageSpecifications) {
+		t.Fatalf("verified base image count = %d, want %d", len(images), len(baseImageSpecifications))
+	}
+	for _, specification := range baseImageSpecifications {
+		image, found := images[specification.reference]
+		if !found || image.ID == specification.manifestDigest ||
+			!hasRepositoryDigest(image.RepositoryDigests, specification.repository, specification.manifestDigest) {
+			t.Fatalf("base image identities were not independently verified: %#v", image)
+		}
+	}
+}
+
 func TestLocalGoBuildRejectsUnownedPackage(t *testing.T) {
 	called := false
 	effects := &LocalEffects{run: func(context.Context, localCommand) ([]byte, error) {
