@@ -17,6 +17,8 @@ import (
 
 type fakeEffects struct {
 	baseMismatch bool
+	baseMissing  bool
+	baseForeign  bool
 	binaries     map[string]struct{}
 	images       map[string]ImageMetadata
 	dockerfiles  map[string]string
@@ -40,20 +42,33 @@ func (fake *fakeEffects) BuildGoBinary(_ context.Context, _ string, packagePath,
 
 func (fake *fakeEffects) InspectImage(_ context.Context, reference string) (ImageMetadata, error) {
 	switch reference {
-	case APISIXBaseReference:
-		id := APISIXBaseImageID
-		if fake.baseMismatch {
-			id = testDigest("wrong-apisix")
-		}
-		return ImageMetadata{ID: id, OS: "linux", Architecture: "amd64"}, nil
-	case AlpineBaseReference:
-		return ImageMetadata{ID: AlpineBaseImageID, OS: "linux", Architecture: "amd64"}, nil
-	case DockerBaseReference:
-		return ImageMetadata{ID: DockerBaseImageID, OS: "linux", Architecture: "amd64"}, nil
-	case PostgresReference:
-		return ImageMetadata{ID: PostgresImageID, OS: "linux", Architecture: "amd64"}, nil
+	case APISIXBasePinnedReference:
+		return fake.baseImage("apache/apisix", APISIXBaseManifestDigest), nil
+	case AlpineBasePinnedReference:
+		return fake.baseImage("alpine", AlpineBaseManifestDigest), nil
+	case DockerBasePinnedReference:
+		return fake.baseImage("docker", DockerBaseManifestDigest), nil
+	case PostgresPinnedReference:
+		return fake.baseImage("postgres", PostgresManifestDigest), nil
 	default:
 		return fake.images[reference], nil
+	}
+}
+
+func (fake *fakeEffects) baseImage(repository, manifestDigest string) ImageMetadata {
+	digests := []string{repository + "@" + manifestDigest}
+	if fake.baseMismatch {
+		digests = []string{repository + "@" + testDigest("wrong-"+repository)}
+	}
+	if fake.baseMissing {
+		digests = nil
+	}
+	if fake.baseForeign {
+		digests = []string{"foreign.example/" + repository + "@" + manifestDigest}
+	}
+	return ImageMetadata{
+		ID: testDigest("config:" + repository), RepositoryDigests: digests,
+		OS: "linux", Architecture: "amd64",
 	}
 }
 
@@ -143,7 +158,7 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 	}
 	iamDockerfile := effects.dockerfiles["iam"]
 	for _, required := range []string{
-		"FROM " + AlpineBaseReference + " AS matrix-system-roots",
+		"FROM " + AlpineBasePinnedReference + " AS matrix-system-roots",
 		"FROM scratch",
 		"COPY --from=matrix-system-roots /etc/ssl/cert.pem /etc/ssl/cert.pem",
 		"COPY --from=matrix-system-roots /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt",
@@ -155,43 +170,61 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 			t.Fatalf("IAM image recipe lacks %q", required)
 		}
 	}
+	if !strings.Contains(effects.dockerfiles["apisix"], "FROM "+APISIXBasePinnedReference+"\n") ||
+		!strings.Contains(effects.dockerfiles["paas"], "FROM "+DockerBasePinnedReference+"\n") {
+		t.Fatal("release image recipes do not pin their base manifest digests")
+	}
 	for _, image := range verified.Manifest.Images {
 		loadIdentity, found := effects.saved[image.SourceDigest]
 		if !found || image.ImageID != loadIdentity.ID || image.ImageID == image.SourceDigest {
 			t.Fatalf("image %s did not preserve distinct source and portable load identities", image.Component)
 		}
+		if image.Component == "postgres" && image.SourceDigest == PostgresManifestDigest {
+			t.Fatal("PostgreSQL archive used the registry manifest digest as a local image identity")
+		}
 	}
 }
 
-func TestAssembleRejectsChangedBaseBeforeWritingOrBuilding(t *testing.T) {
-	base := t.TempDir()
-	repository := filepath.Join(base, "repository")
-	if err := os.Mkdir(repository, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repository, "go.mod"), []byte("module github.com/xiak/matrix\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	effects := newFakeEffects()
-	effects.baseMismatch = true
-	output := filepath.Join(base, "bundle")
-	_, err := Assemble(context.Background(), Config{
-		RepositoryRoot: repository, Output: output,
-		Version: "v0.1.0", BuildID: "release-test", SourceCommit: strings.Repeat("a", 40),
-		CreatedAt: time.Date(2026, 8, 26, 15, 30, 0, 0, time.UTC),
-		Signer: SigningMaterial{
-			KeyID:      "xiak-release-2026",
-			PrivateKey: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x42}, ed25519.SeedSize)),
-		},
-	}, effects)
-	if err == nil {
-		t.Fatal("changed fixed base image was accepted")
-	}
-	if _, statErr := os.Lstat(output); !os.IsNotExist(statErr) {
-		t.Fatal("failed base verification published a bundle")
-	}
-	if len(effects.binaries) != 0 || len(effects.dockerfiles) != 0 {
-		t.Fatal("base mismatch started release build effects")
+func TestAssembleRejectsUntrustedBaseBeforeWritingOrBuilding(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		prepare func(*fakeEffects)
+	}{
+		{"changed-digest", func(effects *fakeEffects) { effects.baseMismatch = true }},
+		{"missing-digest", func(effects *fakeEffects) { effects.baseMissing = true }},
+		{"foreign-repository", func(effects *fakeEffects) { effects.baseForeign = true }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := t.TempDir()
+			repository := filepath.Join(base, "repository")
+			if err := os.Mkdir(repository, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(repository, "go.mod"), []byte("module github.com/xiak/matrix\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			effects := newFakeEffects()
+			test.prepare(effects)
+			output := filepath.Join(base, "bundle")
+			_, err := Assemble(context.Background(), Config{
+				RepositoryRoot: repository, Output: output,
+				Version: "v0.1.0", BuildID: "release-test", SourceCommit: strings.Repeat("a", 40),
+				CreatedAt: time.Date(2026, 8, 26, 15, 30, 0, 0, time.UTC),
+				Signer: SigningMaterial{
+					KeyID:      "xiak-release-2026",
+					PrivateKey: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x42}, ed25519.SeedSize)),
+				},
+			}, effects)
+			if err == nil {
+				t.Fatal("untrusted fixed base image was accepted")
+			}
+			if _, statErr := os.Lstat(output); !os.IsNotExist(statErr) {
+				t.Fatal("failed base verification published a bundle")
+			}
+			if len(effects.binaries) != 0 || len(effects.dockerfiles) != 0 {
+				t.Fatal("base mismatch started release build effects")
+			}
+		})
 	}
 }
 

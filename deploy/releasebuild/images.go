@@ -42,7 +42,7 @@ func encodeDockerfile(recipe imageRecipe, config Config) ([]byte, error) {
 	var document strings.Builder
 	if recipe.systemRoots {
 		document.WriteString("FROM ")
-		document.WriteString(AlpineBaseReference)
+		document.WriteString(AlpineBasePinnedReference)
 		document.WriteString(" AS matrix-system-roots\n")
 	}
 	document.WriteString("FROM ")

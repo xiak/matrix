@@ -69,15 +69,17 @@ func (effects *LocalEffects) InspectImage(ctx context.Context, reference string)
 		return ImageMetadata{}, errors.New("Docker image inspection effect failed")
 	}
 	var records []struct {
-		ID           string `json:"Id"`
-		OS           string `json:"Os"`
-		Architecture string `json:"Architecture"`
+		ID                string   `json:"Id"`
+		RepositoryDigests []string `json:"RepoDigests"`
+		OS                string   `json:"Os"`
+		Architecture      string   `json:"Architecture"`
 	}
 	if err := json.Unmarshal(output, &records); err != nil || len(records) != 1 {
 		return ImageMetadata{}, errors.New("Docker image inspection output is invalid")
 	}
 	result := ImageMetadata{
-		ID: records[0].ID, OS: records[0].OS, Architecture: records[0].Architecture,
+		ID: records[0].ID, RepositoryDigests: append([]string(nil), records[0].RepositoryDigests...),
+		OS: records[0].OS, Architecture: records[0].Architecture,
 	}
 	if validateImageMetadata(result) != nil {
 		return ImageMetadata{}, errors.New("Docker image inspection output is invalid")
@@ -237,8 +239,9 @@ func allowedBinaryPackage(value string) bool {
 }
 
 func allowedImageReference(value string) bool {
-	return value == APISIXBaseReference || value == AlpineBaseReference || value == DockerBaseReference ||
-		value == PostgresReference || buildTagPattern.MatchString(value)
+	return value == APISIXBasePinnedReference || value == AlpineBasePinnedReference ||
+		value == DockerBasePinnedReference || value == PostgresPinnedReference ||
+		buildTagPattern.MatchString(value)
 }
 
 func compareVersion(left, right string) int {

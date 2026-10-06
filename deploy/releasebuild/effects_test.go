@@ -33,24 +33,33 @@ func TestLocalImageBuildEffectIsNetworkAndPullClosed(t *testing.T) {
 
 func TestLocalImageInspectionAdmitsOnlyFixedBasesAndBuildTags(t *testing.T) {
 	called := 0
+	configID := testDigest("local-config")
 	effects := &LocalEffects{run: func(_ context.Context, command localCommand) ([]byte, error) {
 		called++
 		if command.program != "docker" || len(command.args) != 3 ||
 			command.args[0] != "image" || command.args[1] != "inspect" {
 			t.Fatalf("unexpected image inspection command: %#v", command)
 		}
-		return []byte(`[{"Id":"` + APISIXBaseImageID + `","Os":"linux","Architecture":"amd64"}]`), nil
+		return []byte(`[{"Id":"` + configID + `","RepoDigests":["apache/apisix@` +
+			APISIXBaseManifestDigest + `"],"Os":"linux","Architecture":"amd64"}]`), nil
 	}}
 	for _, reference := range []string{
-		APISIXBaseReference, AlpineBaseReference, DockerBaseReference, PostgresReference,
+		APISIXBasePinnedReference, AlpineBasePinnedReference, DockerBasePinnedReference, PostgresPinnedReference,
 		"matrix-release-build/iam:0123456789abcdef01234567",
 	} {
-		if _, err := effects.InspectImage(context.Background(), reference); err != nil {
+		metadata, err := effects.InspectImage(context.Background(), reference)
+		if err != nil {
 			t.Fatalf("fixed image reference %q rejected: %v", reference, err)
 		}
+		if metadata.ID != configID || len(metadata.RepositoryDigests) != 1 ||
+			metadata.RepositoryDigests[0] != "apache/apisix@"+APISIXBaseManifestDigest {
+			t.Fatalf("image identity dimensions were collapsed: %#v", metadata)
+		}
 	}
-	if _, err := effects.InspectImage(context.Background(), "caller.example/arbitrary:latest"); err == nil {
-		t.Fatal("caller-selected image reference was admitted")
+	for _, rejected := range []string{APISIXBaseReference, "caller.example/arbitrary:latest"} {
+		if _, err := effects.InspectImage(context.Background(), rejected); err == nil {
+			t.Fatalf("mutable or caller-selected image reference %q was admitted", rejected)
+		}
 	}
 	if called != 5 {
 		t.Fatalf("provider inspection calls = %d, want 5", called)

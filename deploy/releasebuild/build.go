@@ -48,9 +48,10 @@ type Result struct {
 }
 
 type ImageMetadata struct {
-	ID           string
-	OS           string
-	Architecture string
+	ID                string
+	RepositoryDigests []string
+	OS                string
+	Architecture      string
 }
 
 type Effects interface {
@@ -70,7 +71,8 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
-	if err := verifyBaseImages(ctx, effects); err != nil {
+	baseImages, err := verifyBaseImages(ctx, effects)
+	if err != nil {
 		return Result{}, err
 	}
 
@@ -97,7 +99,7 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 		return Result{}, err
 	}
 
-	images, tags, err := buildImages(ctx, config, effects, workspace, bundle, binaries)
+	images, tags, err := buildImages(ctx, config, effects, workspace, bundle, binaries, baseImages)
 	defer removeBuildTags(tags, effects)
 	if err != nil {
 		return Result{}, err
@@ -202,14 +204,17 @@ func buildImages(
 	workspace string,
 	bundle string,
 	binaries map[string]string,
+	baseImages map[string]ImageMetadata,
 ) ([]installationrelease.Image, []string, error) {
 	token, err := randomBuildToken(config.Entropy)
 	if err != nil {
 		return nil, nil, err
 	}
-	metadata := map[string]ImageMetadata{
-		"postgres": {ID: PostgresImageID, OS: "linux", Architecture: "amd64"},
+	postgres, found := baseImages[PostgresPinnedReference]
+	if !found || validateImageMetadata(postgres) != nil {
+		return nil, nil, errors.New("fixed PostgreSQL image identity is unavailable")
 	}
+	metadata := map[string]ImageMetadata{"postgres": postgres}
 	tags := make([]string, 0, len(imageRecipes))
 	for _, recipe := range imageRecipes {
 		contextRoot := filepath.Join(workspace, "images", recipe.component)
@@ -253,19 +258,50 @@ func buildImages(
 	return images, tags, nil
 }
 
-func verifyBaseImages(ctx context.Context, effects Effects) error {
-	for _, required := range []struct{ reference, id string }{
-		{APISIXBaseReference, APISIXBaseImageID},
-		{AlpineBaseReference, AlpineBaseImageID},
-		{DockerBaseReference, DockerBaseImageID},
-		{PostgresReference, PostgresImageID},
-	} {
+func verifyBaseImages(ctx context.Context, effects Effects) (map[string]ImageMetadata, error) {
+	verified := make(map[string]ImageMetadata, len(baseImageSpecifications))
+	for _, required := range baseImageSpecifications {
 		image, err := effects.InspectImage(ctx, required.reference)
-		if err != nil || image.ID != required.id || validateImageMetadata(image) != nil {
-			return errors.New("required fixed base image is unavailable or changed")
+		if err != nil || validateImageMetadata(image) != nil ||
+			!hasRepositoryDigest(image.RepositoryDigests, required.repository, required.manifestDigest) {
+			return nil, errors.New("required fixed base image is unavailable or changed")
+		}
+		verified[required.reference] = image
+	}
+	return verified, nil
+}
+
+func hasRepositoryDigest(values []string, repository, digest string) bool {
+	if repository == "" || len(values) == 0 || len(values) > 32 || !validImageDigest(digest) {
+		return false
+	}
+	found := false
+	for _, value := range values {
+		name, actualDigest, ok := strings.Cut(value, "@")
+		if !ok || name == "" || !validImageDigest(actualDigest) {
+			return false
+		}
+		if actualDigest == digest && repositoryNameMatches(name, repository) {
+			found = true
 		}
 	}
-	return nil
+	return found
+}
+
+func repositoryNameMatches(actual, expected string) bool {
+	if actual == expected || actual == "docker.io/"+expected {
+		return true
+	}
+	return !strings.Contains(expected, "/") &&
+		(actual == "library/"+expected || actual == "docker.io/library/"+expected)
+}
+
+func validImageDigest(value string) bool {
+	if len(value) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	return err == nil
 }
 
 func inventoryPayloads(bundle string) ([]installationrelease.File, error) {
@@ -364,12 +400,10 @@ func randomBuildToken(entropy io.Reader) (string, error) {
 }
 
 func validateImageMetadata(image ImageMetadata) error {
-	if len(image.ID) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(image.ID, "sha256:") ||
-		image.OS != "linux" || image.Architecture != "amd64" {
+	if !validImageDigest(image.ID) || image.OS != "linux" || image.Architecture != "amd64" {
 		return errors.New("image metadata is invalid")
 	}
-	_, err := hex.DecodeString(strings.TrimPrefix(image.ID, "sha256:"))
-	return err
+	return nil
 }
 
 func hashRegularFile(target string) (uint64, string, error) {

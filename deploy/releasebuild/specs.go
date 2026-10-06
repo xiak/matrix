@@ -1,17 +1,34 @@
 package releasebuild
 
 const (
-	APISIXBaseReference   = "apache/apisix:3.17.0-debian"
-	APISIXBaseImageID     = "sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092"
-	AlpineBaseReference   = "alpine:3.24.1"
-	AlpineBaseImageID     = "sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
-	DockerBaseReference   = "docker:27.5.1-dind-alpine3.21"
-	DockerBaseImageID     = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
-	PostgresReference     = "postgres:18"
-	PostgresImageID       = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
-	minimumDockerVersion  = "27.5.1"
-	minimumComposeVersion = "2.33.0"
+	APISIXBaseReference       = "apache/apisix:3.17.0-debian"
+	APISIXBaseManifestDigest  = "sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092"
+	APISIXBasePinnedReference = APISIXBaseReference + "@" + APISIXBaseManifestDigest
+	AlpineBaseReference       = "alpine:3.24.1"
+	AlpineBaseManifestDigest  = "sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+	AlpineBasePinnedReference = AlpineBaseReference + "@" + AlpineBaseManifestDigest
+	DockerBaseReference       = "docker:27.5.1-dind-alpine3.21"
+	DockerBaseManifestDigest  = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
+	DockerBasePinnedReference = DockerBaseReference + "@" + DockerBaseManifestDigest
+	PostgresReference         = "postgres:18"
+	PostgresManifestDigest    = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
+	PostgresPinnedReference   = PostgresReference + "@" + PostgresManifestDigest
+	minimumDockerVersion      = "27.5.1"
+	minimumComposeVersion     = "2.33.0"
 )
+
+type baseImageSpecification struct {
+	reference      string
+	repository     string
+	manifestDigest string
+}
+
+var baseImageSpecifications = []baseImageSpecification{
+	{APISIXBasePinnedReference, "apache/apisix", APISIXBaseManifestDigest},
+	{AlpineBasePinnedReference, "alpine", AlpineBaseManifestDigest},
+	{DockerBasePinnedReference, "docker", DockerBaseManifestDigest},
+	{PostgresPinnedReference, "postgres", PostgresManifestDigest},
+}
 
 type binarySpecification struct {
 	name        string
@@ -48,7 +65,7 @@ type imageRecipe struct {
 
 var imageRecipes = []imageRecipe{
 	{
-		component: "apisix", baseReference: APISIXBaseReference,
+		component: "apisix", baseReference: APISIXBasePinnedReference,
 		binaries: []string{"matrix-health"},
 	},
 	{
@@ -65,7 +82,7 @@ var imageRecipes = []imageRecipe{
 		systemRoots: true,
 	},
 	{
-		component: "paas", baseReference: DockerBaseReference,
+		component: "paas", baseReference: DockerBasePinnedReference,
 		binaries: []string{
 			"matrix-paas", "matrix-paas-audit-dispatcher", "matrix-paas-migrate",
 			"matrix-paas-worker", "matrix-health",
