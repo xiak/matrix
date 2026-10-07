@@ -98,6 +98,28 @@ export const previewExperienceSnapshot: ExperienceSnapshot = {
       href: "/console/installations/"
     }
   ],
+  applicationReadSnapshots: [
+    {
+      etag: "\"12\"",
+      application: {
+        apiVersion: "paas.matrix.xiak.com/v1",
+        kind: "Application",
+        metadata: {
+          id: "app-checkout-api",
+          name: "结算 API",
+          scope: { kind: "TENANT", tenantId: "org-xiak" },
+          labels: {
+            environment: "production",
+            team: "commerce",
+            "data-classification": "internal"
+          },
+          resourceVersion: 12,
+          createdAt: "2026-09-02T02:18:00Z",
+          updatedAt: "2026-09-08T09:10:00Z"
+        }
+      }
+    }
+  ],
   applicationTagSnapshots: [
     {
       resourceId: "app-checkout-api",

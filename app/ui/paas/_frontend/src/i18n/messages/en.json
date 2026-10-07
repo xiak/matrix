@@ -3593,6 +3593,36 @@
     },
     "globalRegion": "Global",
     "backToApplications": "Back to applications",
+    "applicationRead": {
+      "eyebrow": "Exact application read · MOCK",
+      "title": "Application details",
+      "states": {
+        "ready": "Read succeeded",
+        "forbidden": "Read forbidden",
+        "unavailable": "Temporarily unavailable"
+      },
+      "boundary": "This content comes from Application Hosting's exact-resource read response. The identity service decides only whether the current identity may read it; the browser neither evaluates policies nor treats directory visibility as authorization.",
+      "scope": "Resource scope",
+      "resourceVersion": "Resource version",
+      "etag": "Response ETag",
+      "labels": "Resource labels",
+      "labelCount": "{count, plural, one {# label} other {# labels}}",
+      "createdAt": "Created",
+      "updatedAt": "Updated",
+      "messages": {
+        "forbidden": "The signed-in identity cannot read this application. To prevent unauthorized probing, the page does not confirm whether the target exists or reveal its tenant, metadata or management actions.",
+        "unavailable": "The identity and authorization service is unavailable, so this read cannot be confirmed. The page does not reuse stale data or expose management actions; retry the same resource identifier later."
+      },
+      "retry": "Read again",
+      "tryOutcomes": "Try MOCK read states",
+      "scenarioLabel": "Simulated response",
+      "scenarioHint": "Only the product-data region changes. The title, back action and console frame remain stable.",
+      "options": {
+        "ready": "200 · Application returned",
+        "forbidden": "403 · Resource existence not confirmed",
+        "unavailable": "503 · Identity service unavailable"
+      }
+    },
     "resourceTags": "Resource tags",
     "resourceTagsHint": "Resource metadata persisted by Application Hosting. IAM consumes only trusted tag conditions declared by the product Profile.",
     "resourceTagsTable": "Application resource tags",

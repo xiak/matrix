@@ -1,4 +1,4 @@
-import type { ExperienceApplicationDeploymentSnapshot, ExperienceApplicationTagSnapshot, ExperienceResource, ExperienceOperation, ExperiencePipeline, ExperienceServiceHealth } from "../domain/experience";
+import type { ExperienceApplicationDeploymentSnapshot, ExperienceApplicationReadSnapshot, ExperienceApplicationTagSnapshot, ExperienceResource, ExperienceOperation, ExperiencePipeline, ExperienceServiceHealth } from "../domain/experience";
 import type { Region, ServiceInstallation } from "../domain/resources";
 import type { ConsoleSection, ServiceView } from "../domain/selection";
 
@@ -178,6 +178,7 @@ export type ConsoleContentScene =
       kind: "resources";
       directory: "applications";
       resources: UnifiedResourceScene[];
+      readSnapshots: ExperienceApplicationReadSnapshot[];
       tagSnapshots: ExperienceApplicationTagSnapshot[];
       deploymentSnapshots: ExperienceApplicationDeploymentSnapshot[];
     }

@@ -293,7 +293,7 @@ function legacyContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot):
   if (section === "messages") return { kind: "messages", messages: [], preview: false };
   if (section === "logs") return { kind: "logs", data: null };
   if (section === "resources") return { kind: "resources", directory: "all", resources: [] };
-  if (section === "applications") return { kind: "resources", directory: "applications", resources: [], tagSnapshots: [], deploymentSnapshots: [] };
+  if (section === "applications") return { kind: "resources", directory: "applications", resources: [], readSnapshots: [], tagSnapshots: [], deploymentSnapshots: [] };
   if (section === "operations") return { kind: "operations", operations: [] };
   if (section === "devops") return { kind: "devops", metrics: [], pipelines: [] };
   if (section === "observability") return { kind: "observability", metrics: [], services: [], alerts: [] };
@@ -348,6 +348,7 @@ function experienceContent(section: ConsoleSection, snapshot: ControlPlaneSnapsh
     kind: "resources",
     directory: "applications",
     resources: resourceScenes({ ...experience, resources: experience.resources.filter((resource) => resource.kind === "APPLICATION") }),
+    readSnapshots: experience.applicationReadSnapshots,
     tagSnapshots: experience.applicationTagSnapshots,
     deploymentSnapshots: experience.applicationDeploymentSnapshots
   };

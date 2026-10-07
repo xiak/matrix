@@ -1885,11 +1885,24 @@ without a Dialog; viewport, document and body width remained 430px.
 
 Application hosting now owns a query-addressable resource-detail surface rather
 than sending its resource row back to the same undifferentiated directory. The
-same-path transition retains the shared console frame and immediately renders
-known resource identity, state, project, region and product facts; it does not
-open a Dialog or replace fixed content with a page-wide skeleton. The isolated
-preview adds the product-owned tag snapshot, its ETag and an explicit mapping
-for the one `resource.tag/environment` condition declared by the current MOCK
+same-path transition retains the shared console frame and immediately renders a
+stable application locator, title region and return action; only the
+product-data region changes, so it does not open a Dialog or replace fixed
+content with a page-wide skeleton. The preview directory remains an explicit
+local fixture and does not claim a product list, cursor or paging contract. Its
+separate exact-read snapshot mirrors only the fixed
+`GET /v1/applications/{applicationId}` response: `apiVersion`, `kind`, public
+metadata, tenant scope and the strong response ETag. The current Account comes
+from the authenticated identity; the browser never offers an Account or tenant
+selector. A `200` state renders that returned Application, while `403` removes
+the name, tenant metadata, Deployment and tag actions and explicitly refuses to
+confirm whether the requested identifier exists. A `503` state likewise keeps
+the stable locator but discards stale product data and offers only an equal
+re-read of the same identifier. Neither state performs local policy evaluation
+or upgrades directory visibility into authorization. Product-owned Deployment
+and tag workspaces mount only after a readable Application. The isolated preview
+then adds the product-owned tag snapshot, its ETag and an explicit mapping for
+the one `resource.tag/environment` condition declared by the current MOCK
 Profile. Other resource tags remain visibly outside that Profile. Its new
 content-area workflow deliberately does not reuse the batch metadata editor:
 one set/update or delete command owns one tag key, one review and one simulated
@@ -1929,6 +1942,20 @@ warning or error. The original long-lived DEV tab still retains historical HMR
 translation errors from before the message catalog landed; they are not
 current-runtime evidence. This is application-side MOCK UX evidence, not real
 resource-tag mutation, backend CI or authorization acceptance.
+
+The exact-read follow-up consumes only the fixed
+`0f06607398f643311c5a284cf0867e931ed33d9b` Application read boundary; it does
+not consume the still-unfixed Application directory, cursor or page contract.
+The focused scene/shell run passed 100 cases and the complete frontend suite
+passed 63 files/1,102 cases plus three export-normalization cases. Typecheck,
+lint, architecture and 228-pair theme-style gates passed; the production build
+generated 46 routes, normalized 44 segment files and synchronized 254 embedded
+files. Desktop and `390 × 844` DEV exercised `200` → `403` → `503` → equal
+re-read recovery: the shared frame and application locator remained present,
+forbidden/unavailable states mounted no Deployment or tag actions, compact
+document/body widths remained 390px, and no Dialog or horizontal page overflow
+appeared. This is isolated product UX evidence, not a product-list contract,
+real IAM permit, resource-existence oracle or LIVE Application integration.
 
 Same-path detail-query tests retain encoded IDs, draft-leave protection and
 replace semantics without a Next page-tree navigation. Real static deep links

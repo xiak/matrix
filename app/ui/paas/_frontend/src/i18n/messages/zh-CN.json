@@ -3593,6 +3593,36 @@
     },
     "globalRegion": "全局",
     "backToApplications": "返回应用",
+    "applicationRead": {
+      "eyebrow": "应用精确读取 · MOCK",
+      "title": "应用详情",
+      "states": {
+        "ready": "读取成功",
+        "forbidden": "无权读取",
+        "unavailable": "暂时不可用"
+      },
+      "boundary": "内容来自应用托管的单资源读取响应。权限服务只决定当前身份能否读取；浏览器不会计算策略，也不会把目录可见性解释为授权。",
+      "scope": "资源范围",
+      "resourceVersion": "资源版本",
+      "etag": "响应 ETag",
+      "labels": "资源标签",
+      "labelCount": "{count} 个",
+      "createdAt": "创建时间",
+      "updatedAt": "更新时间",
+      "messages": {
+        "forbidden": "当前登录身份无权读取这个应用。为避免越权探测，页面不确认目标是否存在，也不显示所属租户、资源元数据或管理操作。",
+        "unavailable": "身份与权限服务暂时不可用，无法确认这次读取是否获准。页面不会沿用旧数据或开放管理操作；请按同一资源标识重试。"
+      },
+      "retry": "重新读取",
+      "tryOutcomes": "体验 MOCK 读取状态",
+      "scenarioLabel": "模拟返回结果",
+      "scenarioHint": "仅替换详情中的产品数据区域；标题、返回入口和控制台框架保持不变。",
+      "options": {
+        "ready": "200 · 返回 Application",
+        "forbidden": "403 · 不确认资源是否存在",
+        "unavailable": "503 · 身份服务不可用"
+      }
+    },
     "resourceTags": "资源标签",
     "resourceTagsHint": "由应用托管保存的资源元数据；IAM 只消费产品 Profile 明确声明的可信标签条件。",
     "resourceTagsTable": "应用资源标签",

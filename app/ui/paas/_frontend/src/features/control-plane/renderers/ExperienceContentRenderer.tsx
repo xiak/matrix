@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
 import { useFormatter, useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
@@ -15,7 +15,7 @@ import {
   Database,
   Server,
 } from "lucide-react";
-import { Alert, Table, TableToolbar, EmptyState, Badge, Button, Card, Progress, ContentLayout, Typography } from "@ui/xiak";
+import { Alert, Table, TableToolbar, EmptyState, Badge, Button, Card, FormField, Progress, Select, ContentLayout, Typography } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type {
   AlertScene,
@@ -248,15 +248,27 @@ function ResourceDirectory({ scene, scope }: {
   );
 }
 
-function ApplicationResourceDetail({ resource, tagSnapshot, deploymentSnapshot }: {
+type ApplicationReadOutcome = "ready" | "forbidden" | "unavailable";
+
+const applicationReadOutcomes: ApplicationReadOutcome[] = ["ready", "forbidden", "unavailable"];
+
+function ApplicationResourceDetail({ resource, readSnapshot, tagSnapshot, deploymentSnapshot }: {
   resource: UnifiedResourceScene;
+  readSnapshot: Extract<ConsoleContentScene, { kind: "resources"; directory: "applications" }>["readSnapshots"][number] | undefined;
   tagSnapshot: Extract<ConsoleContentScene, { kind: "resources"; directory: "applications" }>["tagSnapshots"][number] | undefined;
   deploymentSnapshot: Extract<ConsoleContentScene, { kind: "resources"; directory: "applications" }>["deploymentSnapshots"][number] | undefined;
 }) {
   const t = useTranslations("CloudExperience");
-  const resourceKinds = useTranslations("GlobalSearch.resourceKinds");
   const format = useConsoleFormat();
   const heading = useRef<HTMLHeadingElement>(null);
+  const scenarioId = useId();
+  const [outcome, setOutcome] = useState<ApplicationReadOutcome>("ready");
+  const effectiveOutcome: ApplicationReadOutcome = outcome === "ready" && !readSnapshot ? "unavailable" : outcome;
+  const failureOutcome: Exclude<ApplicationReadOutcome, "ready"> = effectiveOutcome === "forbidden" ? "forbidden" : "unavailable";
+  const application = effectiveOutcome === "ready" ? readSnapshot?.application : undefined;
+  const metadata = application?.metadata;
+  const readable = Boolean(metadata);
+  const labelCount = Object.keys(metadata?.labels ?? {}).length;
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [resource.id]);
   return <section aria-labelledby="application-resource-detail-title" className={styles.resourceDetail}>
     <Link className={styles.backLink} href="/console/applications/"><ArrowLeft aria-hidden="true" />{t("backToApplications")}</Link>
@@ -264,21 +276,43 @@ function ApplicationResourceDetail({ resource, tagSnapshot, deploymentSnapshot }
       <Card.Header>
         <div className={styles.resourceIdentity}>
           <span className={styles.resourceIdentityIcon}><Boxes aria-hidden="true" /></span>
-          <div><span>{resourceKinds(resource.kind)}</span><h2 id="application-resource-detail-title" ref={heading} tabIndex={-1}>{resource.name}</h2><code>{resource.id}</code></div>
-          <Badge status={resource.status}>{t(`resourceStates.${resource.state}`)}</Badge>
+          <div>
+            <span>{application ? `${application.kind} · ${application.apiVersion}` : t("applicationRead.eyebrow")}</span>
+            <h2 id="application-resource-detail-title" ref={heading} tabIndex={-1}>{metadata?.name ?? t("applicationRead.title")}</h2>
+            <code>{resource.id}</code>
+          </div>
+          <Badge status={effectiveOutcome === "ready" ? "success" : effectiveOutcome === "forbidden" ? "danger" : "warning"}>{t(`applicationRead.states.${effectiveOutcome}`)}</Badge>
         </div>
       </Card.Header>
       <Card.Body>
-        <dl className={styles.resourceFacts}>
-          <div><dt>{t("project")}</dt><dd>{resource.projectName}</dd></div>
-          <div><dt>{t("region")}</dt><dd>{resource.regionName}</dd></div>
-          <div><dt>{t("owningProduct")}</dt><dd>{resource.productName}</dd></div>
-          <div><dt>{t("updated")}</dt><dd>{format.timestamp(resource.updatedAt)}</dd></div>
-        </dl>
+        <div className={styles.applicationReadBody}>
+          {readable && metadata && readSnapshot ? <>
+            <Alert status="info">{t("applicationRead.boundary")}</Alert>
+            <dl className={styles.resourceFacts}>
+              <div><dt>{t("applicationRead.scope")}</dt><dd>{metadata.scope.kind} · <code>{metadata.scope.tenantId}</code></dd></div>
+              <div><dt>{t("applicationRead.resourceVersion")}</dt><dd>{metadata.resourceVersion}</dd></div>
+              <div><dt>{t("applicationRead.etag")}</dt><dd><code>{readSnapshot.etag}</code></dd></div>
+              <div><dt>{t("applicationRead.labels")}</dt><dd>{t("applicationRead.labelCount", { count: labelCount })}</dd></div>
+              <div><dt>{t("applicationRead.createdAt")}</dt><dd>{format.timestamp(metadata.createdAt)}</dd></div>
+              <div><dt>{t("applicationRead.updatedAt")}</dt><dd>{format.timestamp(metadata.updatedAt)}</dd></div>
+            </dl>
+          </> : <div className={styles.applicationReadState}>
+            <Alert status={failureOutcome === "forbidden" ? "danger" : "warning"}>{t(`applicationRead.messages.${failureOutcome}`)}</Alert>
+            {failureOutcome === "unavailable" && readSnapshot ? <Button type="button" variant="secondary" onClick={() => setOutcome("ready")}>{t("applicationRead.retry")}</Button> : null}
+          </div>}
+          <details className={styles.scenarioDetails}>
+            <summary>{t("applicationRead.tryOutcomes")} · {t(`applicationRead.states.${effectiveOutcome}`)}</summary>
+            <FormField id={scenarioId} label={t("applicationRead.scenarioLabel")} hint={t("applicationRead.scenarioHint")}>
+              <Select id={scenarioId} value={outcome} options={applicationReadOutcomes.map((value) => ({ value, label: t(`applicationRead.options.${value}`) }))} onValueChange={(value) => setOutcome(value as ApplicationReadOutcome)} />
+            </FormField>
+          </details>
+        </div>
       </Card.Body>
     </Card>
-    <ApplicationDeploymentManagement key={`${resource.id}:${deploymentSnapshot?.deployment.resourceVersion ?? "unavailable"}`} resource={resource} initialSnapshot={deploymentSnapshot} />
-    <ApplicationTagManagement key={`${resource.id}:${tagSnapshot?.etag ?? "unavailable"}`} resource={resource} initialSnapshot={tagSnapshot} />
+    {readable ? <>
+      <ApplicationDeploymentManagement key={`${resource.id}:${deploymentSnapshot?.deployment.resourceVersion ?? "unavailable"}`} resource={resource} initialSnapshot={deploymentSnapshot} />
+      <ApplicationTagManagement key={`${resource.id}:${tagSnapshot?.etag ?? "unavailable"}`} resource={resource} initialSnapshot={tagSnapshot} />
+    </> : null}
   </section>;
 }
 
@@ -291,7 +325,7 @@ function Resources({ scene, scope }: {
   const selectedId = scene.directory === "applications" ? params.get("resource") : null;
   if (!selectedId || scene.directory !== "applications") return <ResourceDirectory scene={scene} scope={scope} />;
   const selected = scene.resources.find((resource) => resource.id === selectedId);
-  if (selected) return <ApplicationResourceDetail resource={selected} tagSnapshot={scene.tagSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} deploymentSnapshot={scene.deploymentSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} />;
+  if (selected) return <ApplicationResourceDetail key={selected.id} resource={selected} readSnapshot={scene.readSnapshots.find((snapshot) => snapshot.application.metadata.id === selected.id)} tagSnapshot={scene.tagSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} deploymentSnapshot={scene.deploymentSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} />;
   return <Card><Card.Body><EmptyState title={t("resourceNotFound")} description={t("resourceNotFoundHint")} action={<Button asChild variant="secondary"><Link href="/console/applications/">{t("backToApplications")}</Link></Button>} /></Card.Body></Card>;
 }
 

@@ -1024,6 +1024,10 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("heading", { level: 2, name: "结算 API" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("link", { name: "返回应用" }).getAttribute("href")).toBe("/console/applications/");
+    expect(screen.getByText("Application · paas.matrix.xiak.com/v1")).toBeTruthy();
+    expect(screen.getByText("org-xiak")).toBeTruthy();
+    expect(screen.getByText(/权限服务只决定当前身份能否读取/)).toBeTruthy();
+    expect(screen.getByText("体验 MOCK 读取状态 · 读取成功")).toBeTruthy();
     const tags = screen.getByRole("table", { name: "应用资源标签" });
     expect(within(tags).getByText("environment")).toBeTruthy();
     expect(within(tags).getByText("production")).toBeTruthy();
@@ -1038,6 +1042,34 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText('"17"')).toBeTruthy();
     expect(screen.getByRole("button", { name: "更新部署" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "更多部署操作" })).toBeTruthy();
+  });
+
+  it("keeps the application frame stable and hides unverified data for forbidden and unavailable exact reads", async () => {
+    navigation.query = "resource=app-checkout-api";
+    const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+
+    await user.click(screen.getByText("体验 MOCK 读取状态 · 读取成功"));
+    await user.click(screen.getByRole("combobox", { name: "模拟返回结果" }));
+    await user.click(screen.getByRole("option", { name: "403 · 不确认资源是否存在" }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "应用服务" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "应用详情" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "返回应用" })).toBeTruthy();
+    expect(screen.getByText(/页面不确认目标是否存在/)).toBeTruthy();
+    expect(screen.queryByText("org-xiak")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "部署与版本" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "管理标签" })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.click(screen.getByRole("combobox", { name: "模拟返回结果" }));
+    await user.click(screen.getByRole("option", { name: "503 · 身份服务不可用" }));
+    expect(screen.getByText(/页面不会沿用旧数据或开放管理操作/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新读取" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "部署与版本" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(screen.getByRole("heading", { level: 2, name: "结算 API" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "部署与版本" })).toBeTruthy();
   });
 
   it("reviews a deployment update and returns an accepted Operation instead of claiming completion", async () => {
