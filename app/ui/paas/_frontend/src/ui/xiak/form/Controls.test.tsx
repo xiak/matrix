@@ -26,6 +26,15 @@ describe("shared themed controls", () => {
     await user.click(checkbox.parentElement!);
     expect(select).toHaveBeenCalledWith(true);
   });
+  it("keeps primary row navigation semantic for buttons and links", async () => {
+    const user = userEvent.setup(), open = vi.fn();
+    render(<><Table.PrimaryAction onClick={open}>admin</Table.PrimaryAction><Table.PrimaryAction asChild><a href="/policies/reader">Reader</a></Table.PrimaryAction></>);
+    const button = screen.getByRole("button", { name: "admin" });
+    expect((button as HTMLButtonElement).type).toBe("button");
+    await user.click(button);
+    expect(open).toHaveBeenCalledOnce();
+    expect(screen.getByRole("link", { name: "Reader" }).getAttribute("href")).toBe("/policies/reader");
+  });
   it("pages a controlled collection and preserves the caller's size change contract", async () => {
     const user = userEvent.setup(), size = vi.fn();
     function Pages() {

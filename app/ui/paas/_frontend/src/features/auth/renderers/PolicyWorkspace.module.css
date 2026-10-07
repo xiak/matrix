@@ -18,9 +18,6 @@
 .policyTable[data-custom-only] { min-width: 760px; }
 .description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; color: var(--xiak-color-text-muted); }
 .policyIdentity { display: flex; align-items: center; flex-wrap: wrap; gap: var(--xiak-spacing-narrow) var(--xiak-spacing-tight); }
-.nameLink { min-width: 0; max-width: 100%; overflow-wrap: anywhere; border: 0; background: none; padding: 0; color: var(--xiak-color-accent-text); cursor: pointer; font: inherit; font-weight: var(--xiak-font-weight-semibold); text-align: start; }
-.nameLink:hover { text-decoration: underline; }
-.nameLink:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 3px; }
 .summaryToolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--xiak-spacing-default); }
 .summaryToolbar > :last-child { flex: 0 1 340px; }
 .serviceBlock { display: grid; gap: var(--xiak-spacing-narrow); }

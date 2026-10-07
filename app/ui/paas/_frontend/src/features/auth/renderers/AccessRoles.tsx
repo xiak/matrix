@@ -1,7 +1,7 @@
 "use client";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, EmptyState, FormField, Tabs, TextArea, type PageCommandsHandle } from "@ui/xiak";
+import { Alert, Badge, Button, Card, EmptyState, FormField, Table, Tabs, TextArea, type PageCommandsHandle } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessRole, AccessWorkspace } from "../domain/accessWorkspace";
@@ -139,7 +139,7 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
       </Tabs.Root>
       </>}
     </WorkspaceDetail> : <WorkspaceCollection title={t("roles")} description={t("roleHint")} items={workspace.roles} keywords={(role) => [role.description, trustSearchText(role)].join(" ")} create={{ label: t("createRole"), onClick: onCreate }} secondaryActions={[{ id: "service-authorization", label: r("serviceAuthorization"), variant: "secondary", onSelect: () => onOpen("service-authorizations") }]} createFocusRef={collectionActionFocus} columns={[t("name"), r("directoryTrust"), r("directoryAuthorization"), r("directorySession"), t("created")]} row={(role) => <>
-      <td><button className={styles.userLink} onClick={() => onOpen("roles", role.id)}>{role.name}</button><small>{role.description}</small></td>
+      <td><Table.PrimaryAction onClick={() => onOpen("roles", role.id)}>{role.name}</Table.PrimaryAction><small>{role.description}</small></td>
       <td className={styles.roleDirectoryTrust}><Badge>{r("customerRole")}</Badge><small>{r("trustedUserCount", { count: role.trustedUserIds.length })}</small></td>
       <td className={styles.roleDirectorySummary}><strong>{r("attachedPolicyCount", { count: role.policyIds.length })}</strong><small>{t("permissionBoundary")} · {role.boundaryPolicyId ? t("configured") : r("boundaryClosed")}</small></td>
       <td className={styles.roleDirectorySession}><strong>{r("maximumSessionMinutes", { minutes: role.sessionMinutes })}</strong><small>{r("consoleEntry")} · {t(role.consoleAccess ? "enabled" : "disabled")}</small></td>

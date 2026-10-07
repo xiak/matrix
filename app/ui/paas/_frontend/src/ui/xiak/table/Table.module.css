@@ -29,6 +29,28 @@
 .table td strong { display: block; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
 .table td small { display: block; margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
 .table td code { white-space: nowrap; }
+.primaryAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: var(--xiak-control-height-small);
+  min-height: var(--xiak-control-height-small);
+  max-width: 100%;
+  border: 0;
+  border-radius: var(--xiak-radius-small);
+  padding: var(--xiak-spacing-micro) 0;
+  background: transparent;
+  color: var(--xiak-color-accent-text);
+  font: inherit;
+  font-weight: var(--xiak-font-weight-semibold);
+  text-align: start;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.primaryAction:hover:not(:disabled) { text-decoration: underline; }
+.primaryAction:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 2px; }
+.primaryAction:disabled { color: var(--xiak-color-text-disabled); cursor: not-allowed; text-decoration: none; }
 .table .selectionCell { width: var(--xiak-table-selection-width); min-width: 0; padding-inline: var(--xiak-spacing-narrow); text-align: center; }
 .table th.selectionCell { padding-block: var(--xiak-spacing-narrow); }
 .selectionCell > label { display: flex; justify-content: center; min-height: var(--xiak-control-height-small); gap: 0; }

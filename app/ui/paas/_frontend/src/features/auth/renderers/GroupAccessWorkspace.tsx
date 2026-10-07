@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode, type RefObject } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, EmptyState, TableSkeleton, Tabs } from "@ui/xiak";
+import { Alert, Badge, Button, EmptyState, Table, TableSkeleton, Tabs } from "@ui/xiak";
 import { AuthorizationOverview, WorkspaceCollection, WorkspaceDetail, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -95,7 +95,7 @@ export function GroupDirectory({ groups, create, loadMore, status, footerNote, l
     columns={[t("name"), ...(showMemberCount ? [t("members")] : []), g("directPolicies"), t("created")]}
     row={(group) => <>
       <td>
-        <button className={styles.userLink} onClick={() => onOpen(group.id)}>{group.name}</button>
+        <Table.PrimaryAction onClick={() => onOpen(group.id)}>{group.name}</Table.PrimaryAction>
         <small>{group.description}</small>
       </td>
       {showMemberCount ? <td>{t("memberCount", { count: group.memberCount! })}</td> : null}

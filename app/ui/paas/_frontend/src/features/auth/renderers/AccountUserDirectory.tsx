@@ -23,7 +23,7 @@ function AccountUserRow({ user, principalId, workspace, grants, checked, disable
   return <tr data-selected={checked || undefined}>
     <TableSelectionCell label={batch("selectUser", { name: user.loginName })} checked={checked} disabled={disabled} onChange={onSelect} />
     <td><div className={styles.userIdentity}>
-      {user.canRead ? <button className={styles.userLink} aria-label={t("viewUser", { name: user.loginName })} onClick={onOpen} type="button">{user.loginName}</button> : <strong>{user.loginName}</strong>}
+      {user.canRead ? <Table.PrimaryAction aria-label={t("viewUser", { name: user.loginName })} onClick={onOpen}>{user.loginName}</Table.PrimaryAction> : <strong>{user.loginName}</strong>}
       {user.name && user.name !== user.loginName ? <span className={styles.userDisplayName}>{user.name}</span> : null}
     </div><small className={styles.userIdentifier}>{user.id}</small></td>
     <td>{t("child")}{user.id === principalId ? <small>{t("signedIn")}</small> : null}</td>
@@ -47,7 +47,7 @@ function AccountOwnerSummary({ scene, onOpen }: { scene: AccountAccessScene; onO
     <div className={styles.accountOwnerIdentity}>
       <span className={styles.accountOwnerLabel}>{t("resourceOwner")}</span>
       <div className={styles.userIdentity}>
-        <button className={styles.userLink} aria-label={t("viewUser", { name: owner.loginName })} onClick={onOpen} type="button">{owner.loginName}</button>
+        <Table.PrimaryAction aria-label={t("viewUser", { name: owner.loginName })} onClick={onOpen}>{owner.loginName}</Table.PrimaryAction>
         {owner.name && owner.name !== owner.loginName ? <span className={styles.userDisplayName}>{owner.name}</span> : null}
       </div>
       <small className={styles.userIdentifier}>{scene.accountName} · {scene.accountId}</small>

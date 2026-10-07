@@ -1,4 +1,5 @@
-import type { ComponentPropsWithoutRef, ReactNode, Ref, TableHTMLAttributes } from "react";
+import { Slot } from "@radix-ui/react-slot";
+import { forwardRef, type ComponentPropsWithoutRef, type ReactNode, type Ref, type TableHTMLAttributes } from "react";
 import { classNames } from "../utils";
 import styles from "./Table.module.css";
 import { Checkbox } from "../choice/Choice";
@@ -21,7 +22,15 @@ function Footer({ className, children, note, ...props }: ComponentPropsWithoutRe
   </div>;
 }
 
-export const Table = Object.assign(TableRoot, { Footer });
+const PrimaryAction = forwardRef<HTMLButtonElement, ComponentPropsWithoutRef<"button"> & { asChild?: boolean }>(function PrimaryAction(
+  { asChild = false, className, type = "button", ...props },
+  ref
+) {
+  const Element = asChild ? Slot : "button";
+  return <Element {...props} className={classNames(styles.primaryAction, className)} ref={ref} type={asChild ? undefined : type} />;
+});
+
+export const Table = Object.assign(TableRoot, { Footer, PrimaryAction });
 
 export function TableSelectionCell({ header, id, label, checked, disabled, onChange, "aria-describedby": describedBy }: { header?: boolean; id?: string; label: string; checked: boolean | "mixed"; disabled?: boolean; "aria-describedby"?: string; onChange(checked: boolean): void }) {
   const Cell = header ? "th" : "td";

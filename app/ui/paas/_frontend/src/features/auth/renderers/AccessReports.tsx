@@ -3,7 +3,7 @@
 import { useMemo, useState, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { ArrowRight } from "lucide-react";
-import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, Tabs, Typography } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, Table, Tabs, Typography } from "@ui/xiak";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { SessionSummary } from "../domain/session";
@@ -224,7 +224,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           columns={[t("unused.principal"), t("unused.findingType"), t("unused.status"), t("unused.lastObserved"), t("unused.reviewWindow")]}
           keywords={(finding) => `${finding.subjectId} ${finding.findingType} ${finding.lifecycle}`}
           filter={{ label: t("unused.status"), defaultValue: "ACTIVE", options: (["ACTIVE", "ARCHIVED", "RESOLVED"] as const).map((value) => ({ value, label: t(`unused.lifecycle.${value}`) })), matches: (finding, value) => finding.lifecycle === value }}
-          row={(finding) => <><td><button className={styles.userLink} onClick={() => setSelectedUnusedFinding(finding)}>{finding.name}</button><small>{finding.subjectId}</small></td><td>{t(`unused.types.${finding.findingType}`)}</td><td><Badge status={unusedFindingStatus[finding.lifecycle]} title={finding.lifecycle}>{t(`unused.lifecycle.${finding.lifecycle}`)}</Badge></td><td><WorkspaceTime value={finding.lastObservedAt} /></td><td>{t("unused.days", { count: finding.windowDays })}</td></>}
+          row={(finding) => <><td><Table.PrimaryAction onClick={() => setSelectedUnusedFinding(finding)}>{finding.name}</Table.PrimaryAction><small>{finding.subjectId}</small></td><td>{t(`unused.types.${finding.findingType}`)}</td><td><Badge status={unusedFindingStatus[finding.lifecycle]} title={finding.lifecycle}>{t(`unused.lifecycle.${finding.lifecycle}`)}</Badge></td><td><WorkspaceTime value={finding.lastObservedAt} /></td><td>{t("unused.days", { count: finding.windowDays })}</td></>}
           footerNote={t("unused.directoryHint")} />
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="rule">
@@ -500,7 +500,7 @@ export function SecurityReportDirectoryPreview({ workspace, scene, currentSessio
       </dl>
     </div>}
     row={(entry) => <>
-      <td><button className={styles.userLink} onClick={() => setSelected(entry)}>{entry.report.reportId}</button><small>{t("formatValue", { version: entry.report.formatVersion })}</small></td>
+      <td><Table.PrimaryAction onClick={() => setSelected(entry)}>{entry.report.reportId}</Table.PrimaryAction><small>{t("formatValue", { version: entry.report.formatVersion })}</small></td>
       <td><WorkspaceTime value={entry.report.observedAt} /></td>
       <td><span>{t("coverageValue", { count: entry.report.coverage.filter((item) => item.state === "COMPLETE").length, total: entry.report.coverage.length })}</span><small>{t("iamOnly")}</small></td>
       <td>{entry.report.totals.rows}</td>
