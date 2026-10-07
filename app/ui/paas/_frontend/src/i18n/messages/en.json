@@ -4754,12 +4754,16 @@
         "loadFailedHint": "This response is not an authoritative empty directory. Retry or verify the identity's access-analysis authority and service status.",
         "tabs": { "coverage": "Source coverage" },
         "errors": {
+          "expired": "The login session expired. The page cleared its Analyzer, Finding, and pending-command projections. Sign in again and review from current authority.",
           "forbidden": "The current identity cannot read or manage access analysis. Other IAM workspaces remain available.",
           "routeUnavailable": "The access-analysis API is not published in this environment.",
           "conflict": "The resource version changed. The page has reloaded authoritative state; review the latest result before retrying.",
           "invalid": "The server rejected this configuration or lifecycle transition.",
           "unavailable": "Access analysis is temporarily unavailable. The page does not replace failure with MOCK data or an empty list."
         },
+        "retryOriginalMutation": "Retry original command",
+        "uncertainMutation": "The original command result is unknown. An explicit retry must use the same backend client, target, version, input, and request ID {id}; the page never creates a second command automatically.",
+        "foreignMutation": "The backend client changed while command {id} remains unresolved. This client neither replays that command nor starts another write.",
         "notices": {
           "created": "The access analyzer was created. Findings may remain empty until a complete observation window exists.",
           "updated": "The analyzer rule was updated. This does not immediately recompute Findings or remediate an object.",
@@ -5089,7 +5093,11 @@
       "title": "Account security report",
       "pageActions": "Report actions",
       "generate": "Generate current-account report",
+      "retryOriginal": "Retry original generation",
       "singleIntent": "This page has generated one report. Re-enter the page to start a new explicit intent.",
+      "uncertainIntent": "The original generation result is still unknown. A retry uses the same operation ID {id}; it does not create a new generation intent.",
+      "foreignIntent": "The backend client changed while generation {id} remains unresolved. This client neither replays that request nor starts a second generation intent.",
+      "foreignIntentReason": "A generation request remains unresolved on the original client. Restore that client and inspect the same operation ID first.",
       "boundary": "LIVE · This page uses only IAM's fixed create, read-by-ID, and download endpoints. There is no report list, background job, deletion, share URL, or cross-product risk inference.",
       "scopeTitle": "Generation scope and service boundary",
       "scopeHint": "IAM synchronously seals a consistent snapshot for the current account. Fixed content renders immediately; only the report result waits for network data.",
@@ -5120,6 +5128,7 @@
       "errorTitle": "{operation} failed",
       "operations": { "create": "Report generation", "read": "Report read", "download": "Report download" },
       "errors": {
+        "expired": "The login session expired. The page cleared the report ID, creation result, and report content. Sign in again before authorizing another read.",
         "forbidden": "The current Session lacks the exact permission for this step. Knowing a reportId or creating a report never bypasses reauthorization.",
         "notFound": "The reportId is unknown, expired and cleaned up, or not visible to the current account. The page will not fall back to MOCK data.",
         "conflict": "The account has reached its unexpired-report limit or server state changed. Existing reports are never overwritten or deleted automatically.",

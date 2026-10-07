@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
@@ -91,6 +91,23 @@ describe("live account security report", () => {
     expect(await screen.findByText(/不会回退到 MOCK 数据/)).toBeTruthy();
   });
 
+  it("clears report identifiers and content when the login session expires", async () => {
+    const user = userEvent.setup();
+    const read = vi.fn()
+      .mockResolvedValueOnce(report)
+      .mockRejectedValueOnce(new HttpProblem(401, "UNAUTHORIZED"));
+    view(client({ read }));
+    await user.type(screen.getByLabelText("报告 ID"), report.metadata.id);
+    await user.click(screen.getByRole("button", { name: "读取报告" }));
+    expect(await screen.findByRole("heading", { name: report.metadata.id })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "读取报告" }));
+
+    expect(await screen.findByText(/页面已清除报告标识、生成结果和报告内容/)).toBeTruthy();
+    expect((screen.getByLabelText("报告 ID") as HTMLInputElement).value).toBe("");
+    expect(screen.queryByRole("heading", { name: report.metadata.id })).toBeNull();
+  });
+
   it("downloads only through the client that re-reads and verifies current metadata", async () => {
     const user = userEvent.setup();
     const value = client();
@@ -105,5 +122,78 @@ describe("live account security report", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:report");
     expect(screen.getByText(/重新读取最新元数据并核对精确字节数与 SHA-256/)).toBeTruthy();
+  });
+
+  it("keeps an unknown generation bound to its exact client and retries the original request ID", async () => {
+    const user = userEvent.setup();
+    const create = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(503, "UNAVAILABLE"))
+      .mockResolvedValueOnce({ outcome: "EQUAL_REPLAY", metadata: report.metadata });
+    const original = client({ create });
+    const replacement = client();
+    const rendered = view(original);
+
+    await user.click(screen.getByRole("button", { name: "生成当前账号安全报告" }));
+    expect(await screen.findByRole("button", { name: "重试原生成请求" })).toBeTruthy();
+    const originalRequestId = create.mock.calls[0]?.[0].requestId as string;
+    expect(screen.getByText(new RegExp(originalRequestId))).toBeTruthy();
+
+    rendered.rerender(<LocaleProvider><LiveSecurityReport client={replacement} /></LocaleProvider>);
+
+    const blocked = screen.getByRole("button", { name: "生成当前账号安全报告" }) as HTMLButtonElement;
+    expect(blocked.disabled).toBe(true);
+    expect(screen.getByText(new RegExp(originalRequestId))).toBeTruthy();
+    expect(replacement.create).not.toHaveBeenCalled();
+
+    rendered.rerender(<LocaleProvider><LiveSecurityReport client={original} /></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "重试原生成请求" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(create.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ formatVersion: 1, requestId: originalRequestId }));
+    expect(await screen.findByRole("heading", { name: report.metadata.id })).toBeTruthy();
+  });
+
+  it("clears report projection on exact client replacement and ignores an old pending read", async () => {
+    const user = userEvent.setup();
+    let resolveOldRead!: (value: AccountSecurityReport) => void;
+    const oldRead = new Promise<AccountSecurityReport>((resolve) => { resolveOldRead = resolve; });
+    const original = client({ read: vi.fn().mockReturnValue(oldRead) });
+    const replacement = client();
+    const rendered = view(original);
+    await user.type(screen.getByLabelText("报告 ID"), report.metadata.id);
+    await user.click(screen.getByRole("button", { name: "读取报告" }));
+
+    rendered.rerender(<LocaleProvider><LiveSecurityReport client={replacement} /></LocaleProvider>);
+
+    expect(screen.queryByRole("heading", { name: report.metadata.id })).toBeNull();
+    expect((screen.getByLabelText("报告 ID") as HTMLInputElement).value).toBe("");
+    await act(async () => {
+      resolveOldRead(report);
+      await oldRead;
+    });
+    expect(screen.queryByRole("heading", { name: report.metadata.id })).toBeNull();
+    expect(replacement.read).not.toHaveBeenCalled();
+  });
+
+  it("does not save a download completed by a client that has been replaced", async () => {
+    const user = userEvent.setup();
+    let resolveOldDownload!: (value: Awaited<ReturnType<SecurityReportClient["download"]>>) => void;
+    const oldDownload = new Promise<Awaited<ReturnType<SecurityReportClient["download"]>>>((resolve) => { resolveOldDownload = resolve; });
+    const original = client({ download: vi.fn().mockReturnValue(oldDownload) });
+    const replacement = client();
+    const createObjectURL = vi.fn().mockReturnValue("blob:stale-report");
+    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL: vi.fn() });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const rendered = view(original);
+    await user.type(screen.getByLabelText("报告 ID"), report.metadata.id);
+    await user.click(screen.getByRole("button", { name: "读取报告" }));
+    await user.click(await screen.findByRole("button", { name: "下载已校验 CSV" }));
+
+    rendered.rerender(<LocaleProvider><LiveSecurityReport client={replacement} /></LocaleProvider>);
+    await act(async () => {
+      resolveOldDownload({ metadata: report.metadata, bytes: new TextEncoder().encode("report"), filename: "stale.csv" });
+      await oldDownload;
+    });
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
   });
 });

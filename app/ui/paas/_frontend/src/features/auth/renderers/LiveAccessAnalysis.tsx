@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, RadioGroup, Select, Table, TablePagination, TableSkeleton, Tabs, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
@@ -11,8 +11,18 @@ import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccessFindingRecoveryBoundary, AccessRecoveryGapBoundary } from "./AccessRecoveryBoundary";
 import styles from "./AccountAccessRenderer.module.css";
 
-type Failure = "forbidden" | "routeUnavailable" | "conflict" | "invalid" | "unavailable";
+type Failure = "expired" | "forbidden" | "routeUnavailable" | "conflict" | "invalid" | "unavailable";
 type FindingSelection = { analyzerId: string; findingId: string; targetId: string };
+type AccessAnalysisMutation =
+  | { operation: "create"; command: { type: "UNUSED_ACCESS" } }
+  | { operation: "update"; analyzerId: string; command: { status: AccessAnalyzer["status"]; unusedAccessAgeDays: number; resourceVersion: number } }
+  | { operation: "setDisposition"; analyzerId: string; command: { disposition: AccessDispositionRule; resourceVersion: number } }
+  | { operation: "archive" | "unarchive"; analyzerId: string; findingId: string; command: { resourceVersion: number } };
+type AccessAnalysisMutationIntent = AccessAnalysisMutation & {
+  client: AccessAnalysisClient;
+  phase: "submitting" | "unknown";
+  requestId: string;
+};
 
 const findingBadge: Record<AccessFinding["status"], "warning" | "neutral" | "success"> = {
   ACTIVE: "warning",
@@ -28,6 +38,7 @@ const coverageBadge: Record<AccessObservationCoverage["state"], "success" | "war
 
 function failureCode(error: unknown): Failure {
   if (error instanceof HttpProblem) {
+    if (error.status === 401) return "expired";
     if (error.status === 403) return "forbidden";
     if (error.status === 404) return "routeUnavailable";
     if (error.status === 409) return "conflict";
@@ -48,11 +59,50 @@ function targetView(finding: AccessFinding): { view: AccountAccessView; id?: str
   return { view: "keys" };
 }
 
-export function LiveAccessAnalysis({ client, onNavigate }: {
+type LiveAccessAnalysisProps = {
   client: AccessAnalysisClient;
   onNavigate(view: AccountAccessView, id?: string): void;
-}) {
+};
+
+type LiveAccessAnalysisGenerationProps = LiveAccessAnalysisProps & {
+  blockedIntent: AccessAnalysisMutationIntent | null;
+  currentIntent: AccessAnalysisMutationIntent | null;
+  onBegin(intent: AccessAnalysisMutationIntent): AccessAnalysisMutationIntent | null;
+  onResolved(client: AccessAnalysisClient, requestId: string): void;
+  onUnknown(client: AccessAnalysisClient, requestId: string): void;
+};
+
+export function LiveAccessAnalysis(props: LiveAccessAnalysisProps) {
+  const [binding, setBinding] = useState(() => ({ client: props.client, generation: 0 }));
+  const [intent, setIntent] = useState<AccessAnalysisMutationIntent | null>(null);
+  let current = binding;
+  if (binding.client !== props.client) {
+    current = { client: props.client, generation: binding.generation + 1 };
+    setBinding(current);
+  }
+  const currentIntent = intent?.client === props.client ? intent : null;
+  const blockedIntent = intent && intent.client !== props.client ? intent : null;
+  const begin = (candidate: AccessAnalysisMutationIntent) => {
+    if (intent) {
+      if (intent.client !== props.client) return null;
+      const resumed = { ...intent, phase: "submitting" as const };
+      setIntent(resumed);
+      return resumed;
+    }
+    setIntent(candidate);
+    return candidate;
+  };
+  const resolve = (source: AccessAnalysisClient, requestId: string) => setIntent((pending) =>
+    pending?.client === source && pending.requestId === requestId ? null : pending);
+  const markUnknown = (source: AccessAnalysisClient, requestId: string) => setIntent((pending) =>
+    pending?.client === source && pending.requestId === requestId ? { ...pending, phase: "unknown" } : pending);
+  return <LiveAccessAnalysisGeneration key={current.generation} {...props} blockedIntent={blockedIntent} currentIntent={currentIntent}
+    onBegin={begin} onResolved={resolve} onUnknown={markUnknown} />;
+}
+
+function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, onBegin, onNavigate, onResolved, onUnknown }: LiveAccessAnalysisGenerationProps) {
   const t = useTranslations("IamWorkspace.accessAnalysis");
+  const mounted = useRef(true);
   const [section, setSection] = useState<"coverage" | "unused" | "rule">("unused");
   const [analyzers, setAnalyzers] = useState<AccessAnalyzer[] | null>(null);
   const [analyzersLoading, setAnalyzersLoading] = useState(true);
@@ -72,6 +122,11 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
   const [reloadRevision, setReloadRevision] = useState(0);
   const analyzer = analyzers?.[0] ?? null;
   const currentCursor = cursorStack[pageIndex];
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -134,87 +189,147 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
     setReloadRevision((current) => current + 1);
   };
 
-  const createAnalyzer = async () => {
-    setBusy(true); setError(null); setNotice(null);
-    try {
-      const created = await client.createAnalyzer({ type: "UNUSED_ACCESS", requestId: requestToken("ui-access-analyzer-create-") });
-      setFindingsLoading(true); setAnalyzers([created]); setNotice("created"); setSection("rule");
-    } catch (failure) { setError(failureCode(failure)); }
-    finally { setBusy(false); }
+  const replaceFinding = (updated: AccessFinding) => {
+    setSelected((current) => current?.id === updated.id ? updated : current);
+    setFindings((current) => current ? {
+      ...current,
+      items: filter === "ALL" || filter === updated.status
+        ? current.items.map((item) => item.id === updated.id ? updated : item)
+        : current.items.filter((item) => item.id !== updated.id)
+    } : current);
   };
+
+  const refreshAfterConflict = async (intent: AccessAnalysisMutationIntent) => {
+    if (intent.operation === "create") {
+      const directory = await client.listAnalyzers();
+      if (!mounted.current) return;
+      setAnalyzers(directory.items);
+      setFindingsLoading(directory.items.length > 0);
+      return;
+    }
+    if (intent.operation === "update" || intent.operation === "setDisposition") {
+      const latest = await client.readAnalyzer(intent.analyzerId);
+      if (!mounted.current) return;
+      setAnalyzers([latest]);
+      setCursorStack([undefined]); setPageIndex(0); setFindings(null); setFindingsLoading(true);
+      return;
+    }
+    setSelectedLoading(true);
+    try {
+      const latest = await client.readFinding(intent.analyzerId, intent.findingId);
+      if (mounted.current) replaceFinding(latest);
+    } finally {
+      if (mounted.current) setSelectedLoading(false);
+    }
+  };
+
+  const executeMutation = async (intent: AccessAnalysisMutationIntent) => {
+    const findingMutation = intent.operation === "archive" || intent.operation === "unarchive";
+    setBusy(true); setNotice(null);
+    if (findingMutation) setDetailError(null); else setError(null);
+    try {
+      let result: AccessAnalyzer | AccessFinding;
+      if (intent.operation === "create") {
+        result = await client.createAnalyzer({ ...intent.command, requestId: intent.requestId });
+      } else if (intent.operation === "update") {
+        result = await client.updateAnalyzer(intent.analyzerId, { ...intent.command, requestId: intent.requestId });
+      } else if (intent.operation === "setDisposition") {
+        result = await client.setDisposition(intent.analyzerId, { ...intent.command, requestId: intent.requestId });
+      } else {
+        const command = { ...intent.command, requestId: intent.requestId };
+        result = intent.operation === "archive"
+          ? await client.archiveFinding(intent.analyzerId, intent.findingId, command)
+          : await client.unarchiveFinding(intent.analyzerId, intent.findingId, command);
+      }
+      onResolved(client, intent.requestId);
+      if (!mounted.current) return;
+      if (intent.operation === "create") {
+        setFindingsLoading(true); setAnalyzers([result as AccessAnalyzer]); setNotice("created"); setSection("rule");
+      } else if (intent.operation === "update") {
+        setAnalyzers([result as AccessAnalyzer]); setNotice("updated");
+        setCursorStack([undefined]); setPageIndex(0); setFindings(null); setFindingsLoading(true);
+      } else if (intent.operation === "setDisposition") {
+        setAnalyzers([result as AccessAnalyzer]); setNotice("dispositionUpdated");
+      } else {
+        const finding = result as AccessFinding;
+        replaceFinding(finding);
+        setNotice(finding.status === "ARCHIVED" ? "archived" : "unarchived");
+      }
+    } catch (failure) {
+      const code = failureCode(failure);
+      if (code === "unavailable") onUnknown(client, intent.requestId);
+      else onResolved(client, intent.requestId);
+      if (!mounted.current) return;
+      if (findingMutation) setDetailError(code); else setError(code);
+      if (code === "expired") {
+        setAnalyzers(null); setFindings(null); setSelectedReference(null); setSelected(null);
+      } else if (code === "conflict") {
+        try {
+          await refreshAfterConflict(intent);
+        } catch (readFailure) {
+          if (mounted.current) {
+            const readCode = failureCode(readFailure);
+            if (findingMutation) setDetailError(readCode); else setError(readCode);
+          }
+        }
+      }
+    } finally { if (mounted.current) setBusy(false); }
+  };
+
+  const startMutation = async (mutation: AccessAnalysisMutation) => {
+    if (currentIntent || blockedIntent || busy) return;
+    const prefix = mutation.operation === "create" ? "ui-access-analyzer-create-"
+      : mutation.operation === "update" ? "ui-access-analyzer-update-"
+        : mutation.operation === "setDisposition" ? "ui-access-analyzer-set-disposition-"
+          : `ui-access-finding-${mutation.operation}-`;
+    const candidate = { ...mutation, client, phase: "submitting" as const, requestId: requestToken(prefix) } as AccessAnalysisMutationIntent;
+    const started = onBegin(candidate);
+    if (started) await executeMutation(started);
+  };
+
+  const retryMutation = async () => {
+    if (!currentIntent || busy) return;
+    const started = onBegin(currentIntent);
+    if (started) await executeMutation(started);
+  };
+
+  const createAnalyzer = async () => startMutation({ operation: "create", command: { type: "UNUSED_ACCESS" } });
 
   const updateAnalyzer = async (next: { status: AccessAnalyzer["status"]; unusedAccessAgeDays: number }) => {
     if (!analyzer) return;
-    setBusy(true); setError(null); setNotice(null);
-    try {
-      const updated = await client.updateAnalyzer(analyzer.id, {
-        ...next, resourceVersion: analyzer.resourceVersion, requestId: requestToken("ui-access-analyzer-update-")
-      });
-      setAnalyzers([updated]); setNotice("updated");
-      setCursorStack([undefined]); setPageIndex(0); setFindings(null); setFindingsLoading(true);
-    } catch (failure) {
-      const code = failureCode(failure);
-      setError(code);
-      if (code === "conflict") setReloadRevision((current) => current + 1);
-    } finally { setBusy(false); }
+    await startMutation({ operation: "update", analyzerId: analyzer.id, command: { ...next, resourceVersion: analyzer.resourceVersion } });
   };
 
   const setDisposition = async (disposition: AccessDispositionRule) => {
     if (!analyzer) return;
-    setBusy(true); setError(null); setNotice(null);
-    try {
-      const updated = await client.setDisposition(analyzer.id, {
-        disposition,
-        resourceVersion: analyzer.resourceVersion,
-        requestId: requestToken("ui-access-analyzer-set-disposition-")
-      });
-      setAnalyzers([updated]); setNotice("dispositionUpdated");
-    } catch (failure) {
-      const code = failureCode(failure);
-      setError(code);
-      if (code === "conflict") setReloadRevision((current) => current + 1);
-    } finally { setBusy(false); }
+    await startMutation({ operation: "setDisposition", analyzerId: analyzer.id, command: { disposition, resourceVersion: analyzer.resourceVersion } });
   };
 
   const transitionFinding = async (finding: AccessFinding) => {
     if (finding.status === "RESOLVED") return;
-    setBusy(true); setDetailError(null); setNotice(null);
-    try {
-      const command = { resourceVersion: finding.resourceVersion, requestId: requestToken(`ui-access-finding-${finding.status === "ACTIVE" ? "archive" : "unarchive"}-`) };
-      const updated = finding.status === "ACTIVE"
-        ? await client.archiveFinding(finding.analyzerId, finding.id, command)
-        : await client.unarchiveFinding(finding.analyzerId, finding.id, command);
-      setSelected(updated);
-      setFindings((current) => current ? {
-        ...current,
-        items: filter === "ALL" || filter === updated.status
-          ? current.items.map((item) => item.id === updated.id ? updated : item)
-          : current.items.filter((item) => item.id !== updated.id)
-      } : current);
-      setNotice(updated.status === "ARCHIVED" ? "archived" : "unarchived");
-    } catch (failure) {
-      const code = failureCode(failure);
-      setDetailError(code);
-      if (code === "conflict") {
-        setSelectedLoading(true);
-        try {
-          setSelected(await client.readFinding(finding.analyzerId, finding.id));
-        } catch (readFailure) {
-          setSelected(null);
-          setDetailError(failureCode(readFailure));
-        } finally {
-          setSelectedLoading(false);
-        }
-      }
-    } finally { setBusy(false); }
+    await startMutation({
+      operation: finding.status === "ACTIVE" ? "archive" : "unarchive",
+      analyzerId: finding.analyzerId,
+      findingId: finding.id,
+      command: { resourceVersion: finding.resourceVersion }
+    });
   };
+
+  const retryingOriginal = Boolean(currentIntent && !busy);
+  const writeBlocked = Boolean(busy || currentIntent || blockedIntent);
+  const mutationBoundary = retryingOriginal && currentIntent
+    ? <Alert status="warning"><div className={styles.confirmation}><strong>{t("live.uncertainMutation", { id: currentIntent.requestId })}</strong><Button variant="secondary" onClick={() => void retryMutation()}>{t("live.retryOriginalMutation")}</Button></div></Alert>
+    : blockedIntent
+      ? <Alert status="warning">{t("live.foreignMutation", { id: blockedIntent.requestId })}</Alert>
+      : null;
 
   if (selectedReference) return <WorkspaceDetail title={t("live.findingTitle", { id: selected?.target.id ?? selectedReference.targetId })} onBack={() => {
     setSelectedReference(null); setSelected(null); setDetailError(null); setNotice(null);
   }}>
-    {detailError ? <Alert status="danger"><div className={styles.confirmation}><strong>{t(`live.errors.${detailError}`)}</strong><Button variant="secondary" onClick={() => {
+    {mutationBoundary}
+    {detailError ? <Alert status="danger"><div className={styles.confirmation}><strong>{t(`live.errors.${detailError}`)}</strong>{!currentIntent ? <Button variant="secondary" onClick={() => {
       setSelected(null); setSelectedLoading(true); setDetailError(null); setSelectedRevision((current) => current + 1);
-    }}>{t("live.retry")}</Button></div></Alert> : null}
+    }}>{t("live.retry")}</Button> : null}</div></Alert> : null}
     {notice ? <Alert status="success">{t(`live.notices.${notice}`)}</Alert> : null}
     <Alert status="info">{t("live.findingBoundary")}</Alert>
     {selectedLoading ? <Card><TableSkeleton header={false} label={t("live.loadingFindingDetail")} labelVisible={false} rows={5} /></Card> : null}
@@ -238,7 +353,7 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
         <Alert status="warning">{selected.resolutionReason === "AUTOMATIC_DISPOSITION" ? t("live.automaticDispositionEvidence") : t("unused.noAutomaticAction")}</Alert>
       </Card.Body>
       <Card.Footer><div className={styles.actions}>
-        {selected.status !== "RESOLVED" ? <Button disabled={busy} onClick={() => void transitionFinding(selected)}>{t(selected.status === "ACTIVE" ? "live.archive" : "live.unarchive")}</Button> : null}
+        {selected.status !== "RESOLVED" ? <Button disabled={writeBlocked} onClick={() => void transitionFinding(selected)}>{t(selected.status === "ACTIVE" ? "live.archive" : "live.unarchive")}</Button> : null}
         <Button variant="secondary" onClick={() => { const target = targetView(selected); onNavigate(target.view, target.id); }}>{t("unused.reviewTarget")}</Button>
       </div></Card.Footer>
     </Card> : null}
@@ -247,7 +362,8 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
   return <div className={styles.detailWorkspace}>
     <ContentPage.Heading title={t("title")} scrollKey={`access-analysis-live:${client.accountId}`} />
     <Alert status="info">{t("live.connectedBoundary")}</Alert>
-    {error ? <Alert status="danger"><div className={styles.confirmation}><strong>{t(`live.errors.${error}`)}</strong><Button variant="secondary" onClick={reload}>{t("live.retry")}</Button></div></Alert> : null}
+    {mutationBoundary}
+    {error ? <Alert status="danger"><div className={styles.confirmation}><strong>{t(`live.errors.${error}`)}</strong>{!currentIntent ? <Button variant="secondary" onClick={reload}>{t("live.retry")}</Button> : null}</div></Alert> : null}
     {notice ? <Alert status="success">{t(`live.notices.${notice}`)}</Alert> : null}
     <Tabs.Root value={section} onValueChange={(value) => setSection(value as typeof section)}>
       <Tabs.List aria-label={t("sections")} className={styles.accessAnalysisTabs}>
@@ -258,7 +374,7 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
       {analyzersLoading ? <Tabs.Content value={section}><Card><TableSkeleton header label={t("live.loading")} labelVisible={false} rows={4} /></Card></Tabs.Content> : analyzers === null ? <Tabs.Content value={section} className={styles.stack}>
         <EmptyState title={t("live.loadFailedTitle")} description={t("live.loadFailedHint")} action={<Button variant="secondary" onClick={reload}>{t("live.retry")}</Button>} />
       </Tabs.Content> : !analyzer ? <Tabs.Content value={section} className={styles.stack}>
-        <EmptyState title={t("live.noAnalyzerTitle")} description={t("live.noAnalyzerHint")} action={<Button disabled={busy || error === "forbidden"} onClick={() => void createAnalyzer()}>{t("live.createAnalyzer")}</Button>} />
+        <EmptyState title={t("live.noAnalyzerTitle")} description={t("live.noAnalyzerHint")} action={<Button disabled={writeBlocked || error === "forbidden"} onClick={() => void createAnalyzer()}>{t("live.createAnalyzer")}</Button>} />
       </Tabs.Content> : <>
         <Tabs.Content className={styles.stack} value="coverage">
           {findingsLoading ? <Card><TableSkeleton header label={t("live.loadingCoverage")} labelVisible={false} rows={6} /></Card> : !findings ? <EmptyState title={t("live.loadFailedTitle")} description={t("live.loadFailedHint")} action={<Button variant="secondary" onClick={reload}>{t("live.retry")}</Button>} /> : <Card>
@@ -280,8 +396,8 @@ export function LiveAccessAnalysis({ client, onNavigate }: {
           </Card>
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="rule">
-          <LiveAnalyzerRule key={`${analyzer.resourceVersion}:${analyzer.status}:${analyzer.unusedAccessAgeDays}`} analyzer={analyzer} busy={busy} onSave={updateAnalyzer} />
-          <LiveDispositionRule key={`${analyzer.resourceVersion}:${analyzer.disposition.mode}:${analyzer.disposition.findingDelayDays}`} analyzer={analyzer} busy={busy} onSave={setDisposition} />
+          <LiveAnalyzerRule analyzer={analyzer} busy={writeBlocked} onSave={updateAnalyzer} />
+          <LiveDispositionRule analyzer={analyzer} busy={writeBlocked} onSave={setDisposition} />
         </Tabs.Content>
       </>}
     </Tabs.Root>
@@ -309,7 +425,7 @@ function LiveAnalyzerRule({ analyzer, busy, onSave }: {
         <div><dt>{t("rule.resourceVersion")}</dt><dd>{analyzer.resourceVersion}</dd></div>
       </dl>
       <FormField id={`${id}-days`} label={t("rule.window")} hint={t("rule.windowHint")} error={invalid ? t("rule.windowInvalid") : undefined}><Input id={`${id}-days`} disabled={busy} type="number" min={1} max={365} step={1} value={days} onChange={(event) => setDays(event.target.value)} /></FormField>
-      <RadioGroup label={t("rule.status")} value={status} onValueChange={(next) => setStatus(next as AccessAnalyzer["status"])} options={(['ACTIVE', 'DISABLED'] as const).map((next) => ({ value: next, label: t(`rule.statuses.${next}`) }))} />
+      <RadioGroup disabled={busy} label={t("rule.status")} value={status} onValueChange={(next) => setStatus(next as AccessAnalyzer["status"])} options={(['ACTIVE', 'DISABLED'] as const).map((next) => ({ value: next, label: t(`rule.statuses.${next}`) }))} />
       <Alert status="warning">{t("live.noAutomaticRemediation")}</Alert>
     </Card.Body>
     <Card.Footer><Button disabled={busy || invalid || unchanged} onClick={() => void onSave({ status, unusedAccessAgeDays: value })}>{t("live.saveRule")}</Button></Card.Footer>
@@ -343,7 +459,7 @@ function LiveDispositionRule({ analyzer, busy, onSave }: {
     <Card.Header><div><Typography.Title as="h2" level={3}>{t("editTitle")}</Typography.Title><Typography.Text tone="muted">{t("configurationHint")}</Typography.Text></div><Badge status="info">{t("live")}</Badge></Card.Header>
     <Card.Body className={styles.detail}>
       <Alert status="info">{t("liveWorkflowBoundary")}</Alert>
-      <RadioGroup label={t("mode")} value={mode} onValueChange={(value) => setMode(value as AccessDispositionRule["mode"])} options={(["REVIEW_ONLY", "DISABLE_UNUSED_ACCESS_KEYS"] as const).map((value) => ({ value, label: t(`modes.${value}`) }))} />
+      <RadioGroup disabled={busy} label={t("mode")} value={mode} onValueChange={(value) => setMode(value as AccessDispositionRule["mode"])} options={(["REVIEW_ONLY", "DISABLE_UNUSED_ACCESS_KEYS"] as const).map((value) => ({ value, label: t(`modes.${value}`) }))} />
       {automatic ? <FormField id={`${id}-live-delay`} label={t("delay")} hint={t("delayHint")} error={invalidDelay ? t("delayInvalid") : undefined}><Input id={`${id}-live-delay`} disabled={busy} required type="number" min={1} max={30} step={1} invalid={invalidDelay} aria-describedby={`${id}-live-delay-hint${invalidDelay ? ` ${id}-live-delay-error` : ""}`} value={delayValue} onChange={(event) => setDelayValue(event.target.value)} /></FormField> : <Alert status="info">{t("reviewOnlyMeaning")}</Alert>}
       <Alert status="warning">{t("scopeBoundary")}</Alert>
       <Alert status="info">{t("permissionBoundary")}</Alert>
