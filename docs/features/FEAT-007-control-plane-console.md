@@ -2011,20 +2011,25 @@ footer render independently of the asynchronous page. A polite status is
 immediate and only table rows receive the shared 200 ms delayed skeleton, so a
 fast response does not flash a page-wide placeholder. The request identity is
 the repository reader, cursor and explicit retry revision; current loading is
-derived from that identity rather than synchronously reset by an effect. A
+derived from that identity rather than synchronously reset by an effect. Cursor
+history and the cross-window tenant guard are owned by that reader identity: a
+new authenticated reader immediately restarts at the first authorization window
+and cannot send a predecessor's opaque cursor or inherit its tenant guard. A
 completed window is retained while opening and returning from a same-path
-Application detail, but previous-window navigation re-reads it and therefore
-re-authorizes it. A cross-window tenant change fails closed. `400`, `401`, `403`
-and service/protocol failure stay distinct: an invalid continuation restarts at
-the first window, forbidden does not reveal whether resources exist, and failure
-never reuses stale or MOCK rows. Exact detail keeps its stable locator and
-regional delayed placeholder, with distinct forbidden, absent and retryable
-states. Product-owned Deployment and tag MOCK workspaces remain isolated and
-mount only for the preview's readable snapshot; LIVE does not invent those write
-contracts.
+Application detail under the same reader, but previous-window navigation re-reads
+it and therefore re-authorizes it. A cross-window tenant change fails closed.
+Exact detail is independently keyed by reader, resource ID and retry revision;
+changing identity or target immediately removes the predecessor's name, tenant,
+ETag and version while retaining only the stable detail frame and regional
+loading feedback. `400`, `401`, `403` and service/protocol failure stay distinct:
+an invalid continuation restarts at the first window, forbidden does not reveal
+whether resources exist, and failure never reuses stale or MOCK rows. Exact
+detail keeps distinct forbidden, absent and retryable states. Product-owned
+Deployment and tag MOCK workspaces remain isolated and mount only for the
+preview's readable snapshot; LIVE does not invent those write contracts.
 
-Source and synchronized embedded assets are committed at `6d443dbe8`. The
-complete frontend suite passed 63 files/1,126 cases plus three
+Source and synchronized embedded assets are committed at `d784f4e5a`. The
+complete frontend suite passed 63 files/1,128 cases plus three
 export-normalization cases. Typecheck, lint, architecture and 228-pair
 theme-style gates passed; the production build generated 47 routes, normalized
 45 segment files and matched all 259 embedded files, and complete repository Go
