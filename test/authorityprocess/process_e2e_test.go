@@ -6192,13 +6192,14 @@ func ingestPlatformAuditFixture(t *testing.T, endpoint string, decision iamv1.Au
 	t.Helper()
 	// This tests the authenticated producer/Audit boundary, not host admission
 	// or a PaaS Operation; those effects have their own real-runtime gates.
+	requestDigest := sha256.Sum256([]byte("platform-audit-fixture-request"))
 	event := auditv1.Event{
 		APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-platform-process",
 		InstallationID: decision.InstallationID,
 		Actor:          auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(decision.Subject.ID)},
 		IAMDecisionID:  auditv1.DecisionID(decision.ID), Action: auditv1.ActionPaaSExecutionTargetRegistered,
 		Target: auditv1.TargetReference{Kind: auditv1.TargetExecutionTarget, ID: decision.Resource.ID},
-		Result: auditv1.ResultSucceeded, RequestDigest: "sha256:" + strings.Repeat("1", 64),
+		Result: auditv1.ResultSucceeded, RequestDigest: "sha256:" + hex.EncodeToString(requestDigest[:]),
 		RequestID: decision.RequestID, CorrelationID: decision.RequestID,
 		OperationID: "operation-platform-audit-fixture", OccurredAt: decision.DecidedAt,
 	}
@@ -12903,6 +12904,7 @@ func isGeneratedProductRequestID(value string) bool {
 
 func TestAuthorityPlaintextInspection(t *testing.T) {
 	code := "123456"
+	edgeAssertion := strings.Repeat("1", 64)
 	event := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-secret-inspection", TenantID: "account-one",
 		Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: "user-one"}, Action: auditv1.ActionIAMAuthenticatorBound,
 		Target: auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: "user-one"}, Result: auditv1.ResultSucceeded,
@@ -12950,6 +12952,7 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 		{"malformed-audit-digest", strings.Replace(string(encoded), event.RequestDigest, "sha256:"+code, 1), code, true, false},
 		{"additional-audit-disclosure", strings.Replace(string(encoded), `"request-one"`, `"request-123456"`, 1), code, true, false},
 		{"full-digest-material", string(encoded), event.RequestDigest, true, false},
+		{"credential-used-as-digest-body", strings.Replace(string(encoded), event.RequestDigest, "sha256:"+edgeAssertion, 1), edgeAssertion, true, false},
 		{"empty-input", `{}`, "", false, true},
 		{"invalid-json", `{"code":`, code, false, true},
 		{"trailing-json", `{} {}`, code, false, true},
