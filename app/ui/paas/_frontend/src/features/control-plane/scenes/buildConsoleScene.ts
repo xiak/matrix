@@ -1,73 +1,33 @@
+import { serviceForSection, serviceNavigation } from "./serviceDirectory";
+import { accountAccessViews, type AccountAccessView } from "@/features/auth/domain/accounts";
+import type {
+  ExperienceAlert,
+  ExperienceOperation,
+  ExperienceResource,
+  ExperienceSnapshot
+} from "../domain/experience";
 import type {
   ControlPlaneSnapshot,
-  QuotaShape,
   ServiceInstallation
 } from "../domain/resources";
-import type { ConsoleSection } from "../domain/selection";
+import { consoleRouteHref, type ConsoleSection, type ServiceView, type ControlPlaneRouteSelection } from "../domain/selection";
 import type {
+  AlertScene,
   ConsoleContentScene,
+  ConsoleFrameScene,
+  ConsoleMessageScene,
   ConsoleNavigationItemScene,
   ConsoleScene,
   EntitlementScene,
   InstallationScene,
   OfferingScene,
+  OperationScene,
+  PipelineScene,
   RegionScene,
-  SceneStatus
+  SceneStatus,
+  ServiceHealthScene,
+  UnifiedResourceScene
 } from "./consoleScene";
-
-const sectionCopy: Record<ConsoleSection, {
-  title: string;
-  eyebrow: string;
-  description: string;
-}> = {
-  overview: {
-    title: "控制面概览",
-    eyebrow: "Platform overview",
-    description: "查看组织配额、受管区域与服务安装的当前状态。"
-  },
-  catalog: {
-    title: "服务目录",
-    eyebrow: "Managed service catalog",
-    description: "选择平台已验证并由发布制品固定的数据库服务。"
-  },
-  quotas: {
-    title: "服务配额",
-    eyebrow: "Quota entitlements",
-    description: "激活有限的服务额度，并追踪已保留和已使用数量。"
-  },
-  installations: {
-    title: "服务实例",
-    eyebrow: "Service installations",
-    description: "将已激活的 PostgreSQL 配额安装到一个就绪区域。"
-  },
-  regions: {
-    title: "区域与基础设施",
-    eyebrow: "Regions",
-    description: "Phase 2 使用薄 IaaS：仅显示安装器受管的本机区域能力。"
-  },
-  access: {
-    title: "访问管理",
-    eyebrow: "Identity and access",
-    description: "管理当前租户的子账号、角色与主账号专属别名。"
-  }
-};
-
-function dateTime(value: string | null): string {
-  if (!value) return "尚未检查";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.valueOf())) return "未知时间";
-  return new Intl.DateTimeFormat("zh-CN", {
-    dateStyle: "medium",
-    timeStyle: "short"
-  }).format(parsed);
-}
-
-function shapeSummary(shape: QuotaShape): string {
-  const cpu = shape.cpuMillicores % 1000 === 0
-    ? `${shape.cpuMillicores / 1000} vCPU`
-    : `${shape.cpuMillicores}m CPU`;
-  return `${cpu} · ${shape.memoryMiB} MiB · ${shape.storageGiB} GiB`;
-}
 
 function offeringScenes(snapshot: ControlPlaneSnapshot): OfferingScene[] {
   return snapshot.offerings.map((offering) => ({
@@ -92,17 +52,20 @@ function installationStatus(phase: ServiceInstallation["phase"]): SceneStatus {
 function installationScenes(snapshot: ControlPlaneSnapshot): InstallationScene[] {
   const offerings = new Map(snapshot.offerings.map((item) => [item.id, item]));
   const regions = new Map(snapshot.regions.map((item) => [item.id, item]));
-  return snapshot.installations.map((installation) => ({
-    id: installation.id,
-    name: installation.name,
-    engine: `${offerings.get(installation.offeringId)?.displayName ?? "Managed service"} ${installation.engineVersion}`,
-    regionName: regions.get(installation.regionId)?.displayName ?? installation.regionId,
-    phase: installation.phase,
-    status: installationStatus(installation.phase),
-    endpoint: installation.endpoint,
-    operationId: installation.operation.id,
-    observedAt: dateTime(installation.operation.observedAt)
-  }));
+  return snapshot.installations.map((installation) => {
+    const offering = offerings.get(installation.offeringId);
+    return {
+      id: installation.id,
+      name: installation.name,
+      engine: `${offering?.engineFamily ?? "Managed service"} ${installation.engineVersion}`,
+      regionName: regions.get(installation.regionId)?.displayName ?? installation.regionId,
+      phase: installation.phase,
+      status: installationStatus(installation.phase),
+      endpoint: installation.endpoint,
+      operationId: installation.operation.id,
+      observedAt: installation.operation.observedAt
+    };
+  });
 }
 
 function entitlementScenes(snapshot: ControlPlaneSnapshot): EntitlementScene[] {
@@ -114,11 +77,11 @@ function entitlementScenes(snapshot: ControlPlaneSnapshot): EntitlementScene[] {
       id: entitlement.id,
       offeringName: offering?.displayName ?? entitlement.offeringId,
       shapeName: shape?.displayName ?? entitlement.quotaShapeId,
-      resourceSummary: shape ? shapeSummary(shape) : "资源规格不可用",
+      resources: shape ? { cpuMillicores: shape.cpuMillicores, memoryMiB: shape.memoryMiB, storageGiB: shape.storageGiB } : null,
       purchased: entitlement.purchasedCount,
       inUse: entitlement.reservedCount + entitlement.consumedCount,
       available: Math.max(0, entitlement.purchasedCount - entitlement.reservedCount - entitlement.consumedCount),
-      activatedAt: dateTime(entitlement.activatedAt)
+      activatedAt: entitlement.activatedAt
     };
   });
 }
@@ -127,44 +90,213 @@ function regionScenes(snapshot: ControlPlaneSnapshot): RegionScene[] {
   return snapshot.regions.map((region) => ({
     id: region.id,
     name: region.displayName,
-    profile: "本机受管区域",
+    profile: region.profile,
     state: region.state,
     status: region.state === "READY" ? "success" : region.state === "STALE" ? "warning" : "danger",
-    capacity: `${region.capacity.cpuMillicores / 1000} vCPU · ${region.capacity.memoryMiB} MiB · ${region.capacity.storageGiB} GiB`,
-    inspectedAt: dateTime(region.inspectedAt)
+    capacity: region.capacity,
+    inspectedAt: region.inspectedAt
   }));
 }
 
-function navigation(section: ConsoleSection, snapshot?: ControlPlaneSnapshot): ConsoleNavigationItemScene[] {
-  return [
-    { id: "catalog", label: "服务目录", description: "可用产品", href: "/console/catalog/", icon: "catalog", selected: section === "catalog", count: snapshot?.offerings.length },
-    { id: "quotas", label: "服务配额", description: "组织额度", href: "/console/quotas/", icon: "quota", selected: section === "quotas", count: snapshot?.entitlements.length },
-    { id: "installations", label: "服务实例", description: "安装与运行", href: "/console/installations/", icon: "installation", selected: section === "installations", count: snapshot?.installations.length },
-    { id: "regions", label: "区域配置", description: "薄 IaaS 能力", href: "/console/regions/", icon: "region", selected: section === "regions", count: snapshot?.regions.length },
-    { id: "access", label: "访问管理", description: "账号与权限", href: "/console/access/", icon: "access", selected: section === "access" }
-  ];
+function resourceStatus(state: ExperienceResource["state"]): SceneStatus {
+  if (state === "HEALTHY") return "success";
+  if (state === "RUNNING") return "info";
+  if (state === "DEGRADED") return "warning";
+  return "danger";
 }
 
-function productRail(section: ConsoleSection): ConsoleScene["rail"] {
-  return [
-    { id: "overview", label: "控制面概览", href: "/console/", icon: "overview", selected: section === "overview" },
-    { id: "managed-database", label: "托管数据库", href: "/console/catalog/", icon: "database", selected: section !== "overview" && section !== "access" },
-    { id: "access", label: "访问管理", href: "/console/access/", icon: "access", selected: section === "access" }
-  ];
+function resourceScenes(experience?: ExperienceSnapshot): UnifiedResourceScene[] {
+  return experience?.resources.map((resource) => ({ ...resource, status: resourceStatus(resource.state) })) ?? [];
+}
+
+function operationStatus(state: ExperienceOperation["state"]): SceneStatus {
+  return state === "SUCCEEDED" ? "success" : state === "RUNNING" ? "info" : "danger";
+}
+
+function operationScenes(experience?: ExperienceSnapshot): OperationScene[] {
+  return experience?.operations.map((operation) => ({ ...operation, status: operationStatus(operation.state) })) ?? [];
+}
+
+function pipelineScenes(experience?: ExperienceSnapshot): PipelineScene[] {
+  return experience?.pipelines.map((pipeline) => ({ ...pipeline, status: operationStatus(pipeline.state) })) ?? [];
+}
+
+function serviceHealthScenes(experience?: ExperienceSnapshot): ServiceHealthScene[] {
+  return experience?.serviceHealth.map((service) => ({ ...service, status: resourceStatus(service.state) })) ?? [];
+}
+
+function alertStatus(alert: ExperienceAlert): Pick<AlertScene, "status"> {
+  return { status: alert.severity === "CRITICAL" ? "danger" : alert.severity === "WARNING" ? "warning" : "info" };
+}
+
+function alertScenes(experience?: ExperienceSnapshot): AlertScene[] {
+  return experience?.alerts.map((alert) => ({ ...alert, ...alertStatus(alert) })) ?? [];
+}
+
+function isHomeSection(section: ConsoleSection): boolean {
+  return ["overview", "messages", "resources", "operations"].includes(section);
+}
+
+function messageScenes(experience?: ExperienceSnapshot): ConsoleMessageScene[] {
+  if (!experience) return [];
+  const alerts: ConsoleMessageScene[] = alertScenes(experience).filter((item) => item.state === "FIRING").map((item) => ({
+    id: `alert:${item.id}:${item.startedAt}`, category: "alert", title: item.title,
+    description: `${item.serviceName} · ${item.owner}`, createdAt: item.startedAt,
+    status: item.status, href: "/console/observability/alerts/"
+  }));
+  const operations: ConsoleMessageScene[] = experience.operations.flatMap((item) => item.state === "RUNNING" || !item.finishedAt ? [] : [{
+    id: `operation:${item.id}:${item.state}:${item.finishedAt}`, category: "operation" as const, title: item.action,
+    description: `${item.target} · ${item.productName} · ${item.actor.id}`, createdAt: item.finishedAt,
+    status: operationStatus(item.state), result: item.state, href: "/console/operations/"
+  }]);
+  const announcements: ConsoleMessageScene[] = experience.announcements.map((item) => ({
+    id: `platform:${item.id}`, category: "platform", title: item.title,
+    description: item.body, createdAt: item.publishedAt, status: "info"
+  }));
+  return [...alerts, ...operations, ...announcements].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+function isPaaSSection(section: ConsoleSection): boolean {
+  return ["catalog", "quotas", "installations", "applications"].includes(section);
+}
+
+function navigation(
+  section: ConsoleSection,
+  experience?: ExperienceSnapshot,
+  view?: ServiceView
+): ConsoleNavigationItemScene[] {
+  if (!experience && section !== "access" && section !== "audit") {
+    return [
+      { id: "catalog", messageKey: "catalog", href: "/console/catalog/", icon: "catalog", selected: section === "catalog" },
+      { id: "quotas", messageKey: "quotas", href: "/console/quotas/", icon: "quota", selected: section === "quotas" },
+      { id: "installations", messageKey: "installations", href: "/console/installations/", icon: "installation", selected: section === "installations" },
+      { id: "regions", messageKey: "regions", href: "/console/regions/", icon: "region", selected: section === "regions" },
+      { id: "access", messageKey: "access", href: "/console/access/", icon: "access", selected: false }
+    ];
+  }
+  if (experience && isHomeSection(section)) {
+    return [
+      { id: "overview", messageKey: "overview", href: "/console/", icon: "overview", selected: section === "overview" },
+      { id: "resources", messageKey: "resources", href: "/console/resources/", icon: "resources", selected: section === "resources", count: experience.resources.length },
+      { id: "operations", messageKey: "operations", href: "/console/operations/", icon: "operations", selected: section === "operations", count: experience.operations.filter((item) => item.state === "RUNNING").length },
+      { id: "messages", messageKey: "messages", href: "/console/messages/", icon: "messages", selected: section === "messages" }
+    ];
+  }
+  const service = serviceForSection(section);
+  const selectedView = view === "create-user" ? "users"
+    : view === "create-policy" ? "policies"
+      : view === "create-group" ? "groups"
+        : view === "create-role" || view === "service-authorizations" ? "roles"
+          : view;
+  return service ? serviceNavigation[service.id].map((page) => ({
+    id: page.id, messageKey: page.id,
+    group: "group" in page ? page.group : undefined,
+    href: consoleRouteHref(page), icon: page.icon,
+    selected: page.section === section && ("view" in page ? page.view : undefined) === selectedView
+  })) : [];
+
+}
+
+function productRail(section: ConsoleSection, experience?: ExperienceSnapshot): ConsoleScene["rail"] {
+  if (!experience) {
+    return [
+      { id: "overview", href: "/console/", icon: "overview", selected: section === "overview" },
+      { id: "managed-database", href: "/console/catalog/", icon: "database", selected: section !== "overview" && section !== "audit" && section !== "access" },
+      { id: "audit", href: "/console/audit/", icon: "audit", selected: section === "audit" },
+      { id: "access", href: "/console/access/", icon: "access", selected: section === "access" }
+    ];
+  }
+  return []; // Preview shortcuts are the user\'s favorites, not a fixed product list.
+}
+
+function productContext(section: ConsoleSection, experience?: ExperienceSnapshot): Pick<ConsoleScene, "productId" | "productIcon"> {
+  if (!experience) {
+    return section === "access"
+      ? { productId: "iam", productIcon: "access" }
+      : { productId: "postgresql", productIcon: "database" };
+  }
+  if (isHomeSection(section)) return { productId: "console", productIcon: "overview" };
+  if (section === "regions") return { productId: "regions", productIcon: "overview" };
+  if (section === "applications") return { productId: "applications", productIcon: "overview" };
+  if (section === "logs") return { productId: "logs", productIcon: "observability" };
+  if (isPaaSSection(section)) return { productId: "postgresql", productIcon: "database" };
+  if (section === "devops") return { productId: "devops", productIcon: "devops" };
+  if (section === "observability") return { productId: "monitoring", productIcon: "observability" };
+  if (section === "audit") return { productId: "audit", productIcon: "audit" };
+  return { productId: "iam", productIcon: "access" };
+}
+
+function globalSearch(experience?: ExperienceSnapshot): ConsoleScene["search"] {
+  return experience?.resources.map((resource) => ({
+    id: `resource-${resource.id}`,
+    label: resource.name,
+    description: `${resource.projectName} · ${resource.regionName}`,
+    keywords: [resource.id, resource.kind, resource.productName],
+    resourceKind: resource.kind,
+    href: resource.href,
+    category: "resource" as const,
+    icon: resource.productId
+  })) ?? [];
+}
+
+function baseScene(section: ConsoleSection, experience?: ExperienceSnapshot): Omit<ConsoleScene, "content" | "workspace" | "navigation"> {
+  return {
+    section,
+    ...productContext(section, experience),
+    preview: Boolean(experience),
+    scope: experience ? {
+      organization: experience.organization,
+      regions: experience.regions
+    } : null,
+    search: globalSearch(experience),
+    messages: messageScenes(experience),
+    activeOperationCount: experience?.operations.filter((item) => item.state === "RUNNING").length ?? 0,
+    rail: productRail(section, experience)
+  };
+}
+
+// Route-known presentation is available before resource reads; it is not an
+// empty business snapshot and cannot enable a mutation workspace.
+export function buildConsoleFrame({ section, view }: ControlPlaneRouteSelection, experience?: ExperienceSnapshot): ConsoleFrameScene {
+  return {
+    ...baseScene(section, experience),
+    navigation: navigation(section, experience, view)
+  };
 }
 
 // IAM navigation must remain available without permission to read PaaS resources.
-export function buildAccessConsoleScene(): ConsoleScene {
-  return { section: "access", ...sectionCopy.access, rail: productRail("access"), navigation: navigation("access"), content: { kind: "access" }, workspace: null };
+export function buildAccessConsoleScene(experience?: ExperienceSnapshot, view?: ServiceView): ConsoleScene {
+  return {
+    ...buildConsoleFrame({ section: "access", view }, experience),
+    content: { kind: "access", view: (accountAccessViews as readonly string[]).includes(view ?? "") ? view as AccountAccessView : "overview" },
+    workspace: null
+  };
 }
 
-function content(section: ConsoleSection, snapshot: ControlPlaneSnapshot): ConsoleContentScene {
+// Audit owns an independent bounded context and loads only its local record
+// region. It does not participate in the managed-service resource snapshot.
+export function buildAuditConsoleScene(experience?: ExperienceSnapshot): ConsoleScene {
+  return {
+    ...buildConsoleFrame({ section: "audit" }, experience),
+    content: { kind: "audit" },
+    workspace: null
+  };
+}
+
+function legacyContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot): ConsoleContentScene {
   const offerings = offeringScenes(snapshot);
   const installations = installationScenes(snapshot);
   if (section === "catalog") return { kind: "catalog", offerings };
   if (section === "quotas") return { kind: "quotas", entitlements: entitlementScenes(snapshot) };
   if (section === "installations") return { kind: "installations", installations };
   if (section === "regions") return { kind: "regions", regions: regionScenes(snapshot) };
+  if (section === "messages") return { kind: "messages", messages: [], preview: false };
+  if (section === "logs") return { kind: "logs", data: null };
+  if (section === "resources") return { kind: "resources", directory: "all", resources: [] };
+  if (section === "applications") return { kind: "resources", directory: "applications", listing: "unavailable", resources: [], readSnapshots: [], tagSnapshots: [], deploymentSnapshots: [] };
+  if (section === "operations") return { kind: "operations", operations: [] };
+  if (section === "devops") return { kind: "devops", metrics: [], pipelines: [] };
+  if (section === "observability") return { kind: "observability", metrics: [], services: [], alerts: [] };
 
   const ready = snapshot.installations.filter((item) => item.phase === "READY").length;
   const active = snapshot.installations.filter((item) => item.phase === "PENDING" || item.phase === "PROVISIONING").length;
@@ -177,20 +309,90 @@ function content(section: ConsoleSection, snapshot: ControlPlaneSnapshot): Conso
     offering: offerings[0] ?? null,
     recentInstallations: installations.slice(0, 5),
     metrics: [
-      { id: "offerings", label: "可用产品", value: String(snapshot.offerings.filter((item) => item.state === "AVAILABLE").length), detail: "当前仅开放真实可安装产品", status: "info" },
-      { id: "quota", label: "可用配额", value: String(availableQuota), detail: "尚未被保留或消费的实例数", status: availableQuota > 0 ? "success" : "warning" },
-      { id: "services", label: "就绪实例", value: String(ready), detail: `${active} 个安装任务处理中`, status: active > 0 ? "info" : "neutral" },
-      { id: "regions", label: "就绪区域", value: String(snapshot.regions.filter((item) => item.state === "READY").length), detail: "本机能力由安装器管理", status: snapshot.regions.some((item) => item.state === "READY") ? "success" : "warning" }
+      { id: "offerings", value: snapshot.offerings.filter((item) => item.state === "AVAILABLE").length, status: "info" },
+      { id: "quota", value: availableQuota, status: availableQuota > 0 ? "success" : "warning" },
+      { id: "services", value: ready, detailCount: active, status: active > 0 ? "info" : "neutral" },
+      { id: "regions", value: snapshot.regions.filter((item) => item.state === "READY").length, status: snapshot.regions.some((item) => item.state === "READY") ? "success" : "warning" }
     ]
   };
 }
 
+function experienceContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot | undefined, experience: ExperienceSnapshot): ConsoleContentScene | null {
+  const resources = resourceScenes(experience);
+  const operations = operationScenes(experience);
+  const alerts = alertScenes(experience);
+  if (section === "overview") {
+    if (!snapshot) return null;
+    const healthy = experience.resources.filter((item) => item.state === "HEALTHY" || item.state === "RUNNING").length;
+    const firing = experience.alerts.filter((item) => item.state === "FIRING").length;
+    const running = experience.operations.filter((item) => item.state === "RUNNING").length;
+    return {
+      kind: "cloud-overview",
+      regionCount: snapshot.regions.length,
+      readyRegions: snapshot.regions.filter((item) => item.state === "READY").length,
+      metrics: [
+        { id: "all-resources", value: experience.resources.length, detailCount: experience.projects.filter((item) => item.id !== "all").length, status: "info" },
+        { id: "healthy-resources", value: healthy, status: "success" },
+        { id: "active-operations", value: running, status: running > 0 ? "info" : "neutral" },
+        { id: "active-alerts", value: firing, status: firing > 0 ? "warning" : "success" }
+      ],
+      recentResources: resources.slice(0, 5),
+      operations: operations.filter((item) => item.state === "RUNNING"),
+      alerts: alerts.filter((item) => item.state === "FIRING").slice(0, 2)
+    };
+  }
+  if (section === "messages") return { kind: "messages", messages: messageScenes(experience), preview: true };
+  if (section === "logs") return { kind: "logs", data: experience.logs };
+  if (section === "resources") return { kind: "resources", directory: "all", resources };
+  if (section === "applications") return {
+    kind: "resources",
+    directory: "applications",
+    listing: "preview-fixture",
+    resources: resourceScenes({ ...experience, resources: experience.resources.filter((resource) => resource.kind === "APPLICATION") }),
+    readSnapshots: experience.applicationReadSnapshots,
+    tagSnapshots: experience.applicationTagSnapshots,
+    deploymentSnapshots: experience.applicationDeploymentSnapshots
+  };
+  if (section === "operations") return { kind: "operations", operations };
+  if (section === "devops") {
+    const successful = experience.pipelines.filter((item) => item.state === "SUCCEEDED").length;
+    const running = experience.pipelines.filter((item) => item.state === "RUNNING").length;
+    return {
+      kind: "devops",
+      metrics: [
+        { id: "pipeline-success", value: 0.946, detailCount: successful, status: "success" },
+        { id: "pipeline-running", value: running, status: running > 0 ? "info" : "neutral" },
+        { id: "lead-time", value: 18, status: "success" },
+        { id: "deployment-frequency", value: 12, status: "info" }
+      ],
+      pipelines: pipelineScenes(experience)
+    };
+  }
+  if (section === "observability") {
+    const degraded = experience.serviceHealth.filter((item) => item.state === "DEGRADED" || item.state === "FAILED").length;
+    return {
+      kind: "observability",
+      metrics: [
+        { id: "service-health", value: experience.serviceHealth.length, detailCount: degraded, status: degraded > 0 ? "warning" : "success" },
+        { id: "availability", value: 0.9994, status: "success" },
+        { id: "alert-firing", value: experience.alerts.filter((item) => item.state === "FIRING").length, status: "warning" },
+        { id: "ingestion", value: 1.8, status: "info" }
+      ],
+      services: serviceHealthScenes(experience),
+      alerts
+    };
+  }
+  return null;
+}
+
 export function buildConsoleScene(
   section: ConsoleSection,
-  snapshot: ControlPlaneSnapshot
+  snapshot: ControlPlaneSnapshot,
+  experience?: ExperienceSnapshot,
+  view?: ServiceView
 ): ConsoleScene {
-  if (section === "access") return buildAccessConsoleScene();
-  const copy = sectionCopy[section];
+  if (section === "access") return buildAccessConsoleScene(experience, view);
+  if (section === "audit") return buildAuditConsoleScene(experience);
   const installations = installationScenes(snapshot);
   const activeOperations = snapshot.installations.filter(
     (item) => item.phase === "PENDING" || item.phase === "PROVISIONING"
@@ -206,13 +408,12 @@ export function buildConsoleScene(
         available: item.available
       };
     });
+  const content = (experience ? experienceContent(section, snapshot, experience) : null) ?? legacyContent(section, snapshot);
+  if (content.kind === "devops" || content.kind === "observability" || content.kind === "logs") content.view = view;
 
   return {
-    section,
-    ...copy,
-    rail: productRail(section),
-    navigation: navigation(section, snapshot),
-    content: content(section, snapshot),
+    ...buildConsoleFrame({ section, view }, experience),
+    content,
     workspace: section === "quotas"
       ? {
           kind: "quota-order",
@@ -224,7 +425,7 @@ export function buildConsoleScene(
               shapes: item.quotaShapes.map((shape) => ({
                 id: shape.id,
                 label: shape.displayName,
-                resourceSummary: shapeSummary(shape)
+                resources: { cpuMillicores: shape.cpuMillicores, memoryMiB: shape.memoryMiB, storageGiB: shape.storageGiB }
               }))
             }))
         }
@@ -236,7 +437,7 @@ export function buildConsoleScene(
               .filter((item) => item.state === "READY")
               .map((item) => ({ id: item.id, label: item.displayName }))
           }
-        : section === "overview"
+        : !experience && section === "overview"
           ? {
               kind: "platform-status",
               readyRegions: snapshot.regions.filter((item) => item.state === "READY").length,

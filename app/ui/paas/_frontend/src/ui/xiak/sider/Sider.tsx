@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef } from "react";
+import { forwardRef, type ComponentPropsWithoutRef } from "react";
 import { classNames } from "../utils";
 import styles from "./Sider.module.css";
 
@@ -10,9 +10,11 @@ function RailMenu({ className, ...props }: ComponentPropsWithoutRef<"nav">) {
   return <nav className={classNames(styles.rail, className)} {...props} />;
 }
 
-function ContextMenu({ className, ...props }: ComponentPropsWithoutRef<"div">) {
-  return <div className={classNames(styles.context, className)} {...props} />;
-}
+const ContextMenu = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"div">>(
+  function ContextMenu({ className, ...props }, ref) {
+    return <div className={classNames(styles.context, className)} ref={ref} {...props} />;
+  }
+);
 
 function ResizeHandle({ className, ...props }: ComponentPropsWithoutRef<"div">) {
   return (

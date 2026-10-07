@@ -1,3 +1,4 @@
+@layer xiak {
 .layout {
   display: flex;
   min-width: 0;
@@ -37,4 +38,5 @@
 
 .workspace[data-visible="true"] {
   display: flex;
+}
 }

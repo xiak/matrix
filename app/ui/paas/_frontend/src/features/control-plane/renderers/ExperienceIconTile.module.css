@@ -1,0 +1,25 @@
+.tile {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--xiak-radius-control);
+  background: var(--xiak-color-accent-haze);
+  color: var(--xiak-color-accent-text);
+}
+
+.tile[data-product="devops"] {
+  background: var(--xiak-color-product-devops-bg);
+  color: var(--xiak-color-product-devops);
+}
+
+.tile[data-product="observability"] {
+  background: var(--xiak-color-product-observability-bg);
+  color: var(--xiak-color-product-observability);
+}
+
+.tile svg {
+  width: 18px;
+  height: 18px;
+}

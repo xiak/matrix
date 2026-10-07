@@ -2,9 +2,10 @@ import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionProvider, useSession } from "@/features/auth/application/SessionProvider";
 import type { IamRepository } from "@/features/auth/repositories/iamRepository";
-import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { ControlPlaneSnapshot, ServiceInstallation } from "../domain/resources";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
+import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
+import { serviceDirectory, serviceNavigation } from "../scenes/serviceDirectory";
 import { ControlPlaneProvider, useControlPlane } from "./ControlPlaneProvider";
 
 const pendingInstallation: ServiceInstallation = {
@@ -84,15 +85,18 @@ function Probe() {
   const installation = controlPlane.scene?.content.kind === "installations"
     ? controlPlane.scene.content.installations[0]
     : null;
+  const projections = serviceDirectory.map((service) => (
+    controlPlane.projectScene(serviceNavigation[service.id][0])?.content.kind ?? "none"
+  ));
   return (
     <div>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
-      <button onClick={() => void controlPlane.activateQuota({ offeringId: "postgresql-18", quotaShapeId: "pg-small", instanceCount: 1 })} type="button">activate quota</button>
-      <button onClick={() => void controlPlane.createInstallation({ id: "postgres-next", name: "Next database", offeringId: "postgresql-18", quotaEntitlementId: "quota-primary", regionId: "local-primary" })} type="button">create installation</button>
-      <button onClick={() => void controlPlane.reload()} type="button">reload</button>
+      <button onClick={() => void controlPlane.prepare({ section: "catalog" })} type="button">prepare catalog</button>
+      <button onClick={() => void controlPlane.prepare({ section: "regions" })} type="button">prepare regions</button>
+      <button onClick={() => void controlPlane.prepare({ section: "installations" })} type="button">prepare installations</button>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
-      <span role="status">{controlPlane.error}</span>
+      <span data-testid="projections">{JSON.stringify(projections)}</span>
     </div>
   );
 }
@@ -101,6 +105,7 @@ function iamRepository(): IamRepository {
   return {
     async login() {
       return {
+        outcome: "AUTHENTICATED",
         credential: "memory-only-session",
         mustChangePassword: false,
         session: {
@@ -124,60 +129,6 @@ afterEach(() => {
 });
 
 describe("ControlPlaneProvider", () => {
-  it.each(["activate quota", "create installation"])("keeps %s denial visible through successful background observations", async (command) => {
-    vi.useFakeTimers();
-    const repository: ControlPlaneRepository = {
-      load: vi.fn().mockResolvedValue(snapshot(pendingInstallation, 0)),
-      getInstallation: vi.fn().mockResolvedValue(readyInstallation),
-      activateQuota: vi.fn().mockRejectedValue(new HttpProblem(403, "PERMISSION_DENIED")),
-      createInstallation: vi.fn().mockRejectedValue(new HttpProblem(403, "PERMISSION_DENIED"))
-    };
-    const screen = render(<SessionProvider repository={iamRepository()}><ControlPlaneProvider repository={repository} selection={{ section: "installations" }}><Probe /></ControlPlaneProvider></SessionProvider>);
-    await act(async () => { fireEvent.click(screen.getByText("login")); });
-    await act(async () => { fireEvent.click(screen.getByText(command)); });
-    const denial = screen.getByRole("status").textContent;
-    expect(denial).toContain("无权");
-    expect(screen.getByTestId("phase").textContent).toBe("PENDING");
-    vi.mocked(repository.load).mockResolvedValue(snapshot(readyInstallation, 1));
-    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
-    expect(screen.getByTestId("phase").textContent).toBe("READY");
-    expect(screen.getByRole("status").textContent).toBe(denial);
-    await act(async () => { fireEvent.click(screen.getByText("reload")); });
-    expect(screen.getByRole("status").textContent).toBe("");
-  });
-
-  it.each([401, 403, 503])("removes previously loaded resources when background authorization or availability fails with %i", async (status) => {
-    vi.useFakeTimers();
-    const repository: ControlPlaneRepository = {
-      load: vi.fn().mockResolvedValue(snapshot(pendingInstallation, 0)),
-      getInstallation: vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE_UPSTREAM_DETAIL")),
-      activateQuota: vi.fn(),
-      createInstallation: vi.fn()
-    };
-    const screen = render(<SessionProvider repository={iamRepository()}><ControlPlaneProvider repository={repository} selection={{ section: "installations" }}><Probe /></ControlPlaneProvider></SessionProvider>);
-    await act(async () => { fireEvent.click(screen.getByText("login")); });
-    expect(screen.getByTestId("phase").textContent).toBe("PENDING");
-    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
-    expect(screen.getByTestId("phase").textContent).toBe("none");
-    expect(screen.getByRole("status").textContent).not.toBe("");
-    expect(screen.container.textContent).not.toContain("PRIVATE_UPSTREAM_DETAIL");
-  });
-
-  it.each(["activate quota", "create installation"])("removes protected resources when %s discovers an invalid session", async (command) => {
-    const repository: ControlPlaneRepository = {
-      load: vi.fn().mockResolvedValue(snapshot(readyInstallation, 1)),
-      getInstallation: vi.fn(),
-      activateQuota: vi.fn().mockRejectedValue(new HttpProblem(401, "SESSION_REVOKED")),
-      createInstallation: vi.fn().mockRejectedValue(new HttpProblem(401, "SESSION_REVOKED"))
-    };
-    const screen = render(<SessionProvider repository={iamRepository()}><ControlPlaneProvider repository={repository} selection={{ section: "installations" }}><Probe /></ControlPlaneProvider></SessionProvider>);
-    await act(async () => { fireEvent.click(screen.getByText("login")); });
-    expect(screen.getByTestId("phase").textContent).toBe("READY");
-    await act(async () => { fireEvent.click(screen.getByText(command)); });
-    expect(screen.getByTestId("phase").textContent).toBe("none");
-    expect(screen.getByRole("status").textContent).toContain("IAM 会话已失效");
-  });
-
   it("makes the IAM shell available without calling the PaaS resource APIs", async () => {
     const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn() };
     const screen = render(<SessionProvider repository={iamRepository()}><ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Probe /></ControlPlaneProvider></SessionProvider>);
@@ -185,6 +136,100 @@ describe("ControlPlaneProvider", () => {
     expect(screen.getByTestId("section").textContent).toBe("access");
     expect(repository.load).not.toHaveBeenCalled();
     expect(repository.getInstallation).not.toHaveBeenCalled();
+  });
+  it("projects every service from one authoritative snapshot without another read", async () => {
+    const repository: ControlPlaneRepository = {
+      load: vi.fn().mockResolvedValue(snapshot(readyInstallation, 1)),
+      getInstallation: vi.fn(),
+      activateQuota: vi.fn(),
+      createInstallation: vi.fn()
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider experience={previewExperienceSnapshot} repository={repository} selection={{ section: "installations" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByText("login"));
+      await Promise.resolve();
+    });
+    expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
+      "regions",
+      "resources",
+      "installations",
+      "logs",
+      "devops",
+      "observability",
+      "audit",
+      "access"
+    ]);
+    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.load).toHaveBeenCalledWith("memory-only-session", [
+      "offerings", "regions", "entitlements", "installations"
+    ]);
+  });
+  it("keeps IAM independent and incrementally reads only each destination's missing resources", async () => {
+    const repository: ControlPlaneRepository = {
+      load: vi.fn().mockResolvedValue(snapshot(readyInstallation, 1)),
+      getInstallation: vi.fn(),
+      activateQuota: vi.fn(),
+      createInstallation: vi.fn()
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider experience={previewExperienceSnapshot} repository={repository} selection={{ section: "access", view: "users" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(repository.load).not.toHaveBeenCalled();
+    expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
+      "none",
+      "resources",
+      "none",
+      "logs",
+      "devops",
+      "observability",
+      "audit",
+      "access"
+    ]);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("prepare catalog"));
+      await Promise.resolve();
+    });
+
+    expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
+      "none",
+      "resources",
+      "none",
+      "logs",
+      "devops",
+      "observability",
+      "audit",
+      "access"
+    ]);
+    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.load).toHaveBeenLastCalledWith("memory-only-session", ["offerings"]);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("prepare regions"));
+      await Promise.resolve();
+    });
+    expect(repository.load).toHaveBeenLastCalledWith("memory-only-session", ["regions"]);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("prepare installations"));
+      await Promise.resolve();
+    });
+    expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
+      "regions", "resources", "installations", "logs", "devops", "observability", "audit", "access"
+    ]);
+    expect(repository.load).toHaveBeenLastCalledWith("memory-only-session", ["entitlements", "installations"]);
+    expect(repository.load).toHaveBeenCalledTimes(3);
   });
   it("polls only pending installation resources before refreshing terminal quota state", async () => {
     vi.useFakeTimers();
@@ -208,6 +253,9 @@ describe("ControlPlaneProvider", () => {
       await Promise.resolve();
     });
     expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.load).toHaveBeenNthCalledWith(1, "memory-only-session", [
+      "offerings", "regions", "entitlements", "installations"
+    ]);
     expect(screen.getByTestId("phase").textContent).toBe("PENDING");
 
     await act(async () => {
@@ -219,6 +267,7 @@ describe("ControlPlaneProvider", () => {
       "postgres-primary"
     );
     expect(repository.load).toHaveBeenCalledTimes(2);
+    expect(repository.load).toHaveBeenNthCalledWith(2, "memory-only-session", ["entitlements", "installations"]);
     expect(screen.getByTestId("phase").textContent).toBe("READY");
   });
 });

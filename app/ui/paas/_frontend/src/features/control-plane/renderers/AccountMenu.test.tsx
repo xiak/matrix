@@ -1,0 +1,115 @@
+import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { useState } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AccountMenu, type AccountIdentity } from "./AccountMenu";
+
+const identity: AccountIdentity = {
+  accountType: "主账号",
+  loginName: "preview-admin",
+  principalId: "principal-admin",
+  tenant: { id: "org-xiak", name: "Xiak 科技" }
+};
+
+function AccountMenuHarness({ accessHref, onLogout = vi.fn(), roleAccessHref, roleSessionActive = false }: { accessHref?: string | null; onLogout?: () => void; roleAccessHref?: string; roleSessionActive?: boolean }) {
+  const [open, setOpen] = useState(false);
+  return <LocaleProvider><AccountMenu accessHref={accessHref} identity={identity} onLogout={onLogout} onOpenChange={setOpen} open={open} revoking={false} roleAccessHref={roleAccessHref} roleSessionActive={roleSessionActive} /></LocaleProvider>;
+}
+
+afterEach(cleanup);
+
+describe("AccountMenu", () => {
+  it("keeps preference radio groups distinct from the account-action menu", async () => {
+    const user = userEvent.setup();
+    const onLogout = vi.fn();
+    render(<AccountMenuHarness onLogout={onLogout} />);
+
+    await user.click(screen.getByRole("button", { name: "打开账号菜单，当前用户 preview-admin" }));
+
+    const dialog = screen.getByRole("dialog", { name: "账号菜单" });
+    expect(dialog.textContent).toContain("preview-admin");
+    expect(dialog.textContent).toContain("principal-admin");
+    expect(dialog.textContent).toContain("Xiak 科技");
+    const tenant = screen.getByRole("group", { name: "当前租户" });
+    expect(tenant.textContent).toContain("org-xiak");
+    expect(tenant.textContent).toContain("账号类型");
+    expect(tenant.textContent).toContain("主账号");
+    expect(within(tenant).queryByRole("radio")).toBeNull();
+    const preferences = screen.getByRole("group", { name: "显示偏好" });
+    expect(within(preferences).getAllByRole("group")).toHaveLength(2);
+    expect(within(preferences).queryByRole("menuitem")).toBeNull();
+    expect(within(screen.getByRole("group", { name: "主题" })).getAllByRole("radio")).toHaveLength(4);
+    expect(within(screen.getByRole("group", { name: "语言" })).getAllByRole("radio")).toHaveLength(2);
+    const actions = screen.getByRole("menu", { name: "账号操作" });
+    expect(within(actions).queryByRole("radio")).toBeNull();
+    expect(screen.getAllByRole("menuitem")).toHaveLength(2);
+    expect(screen.getByRole("menuitem", { name: /账号与权限.*用户、角色与租户/ })).toBeTruthy();
+
+    await user.click(screen.getByRole("menuitem", { name: "注销并撤销 IAM 会话" }));
+    expect(onLogout).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports roving menu focus and restores the trigger on Escape", async () => {
+    const user = userEvent.setup();
+    render(<AccountMenuHarness />);
+    const trigger = screen.getByRole("button", { name: "打开账号菜单，当前用户 preview-admin" });
+
+    await user.click(trigger);
+    const access = screen.getByRole("menuitem", { name: /账号与权限/ });
+    const logout = screen.getByRole("menuitem", { name: "注销并撤销 IAM 会话" });
+    expect(document.activeElement).toBe(access);
+
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(logout);
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(access);
+    await user.keyboard("{End}");
+    expect(document.activeElement).toBe(logout);
+    await user.keyboard("{Home}");
+    expect(document.activeElement).toBe(access);
+    await user.keyboard("{ArrowUp}");
+    expect(document.activeElement).toBe(logout);
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog", { name: "账号菜单" })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("adds the preview-only role self-service entry to the same roving action group", async () => {
+    const user = userEvent.setup();
+    render(<AccountMenuHarness roleAccessHref="/console/access/role-access/" />);
+
+    await user.click(screen.getByRole("button", { name: "打开账号菜单，当前用户 preview-admin" }));
+    const access = screen.getByRole("menuitem", { name: /账号与权限/ });
+    const roleAccess = screen.getByRole("menuitem", { name: /角色会话.*发现、承担或退出临时角色/ });
+    const logout = screen.getByRole("menuitem", { name: "注销并撤销 IAM 会话" });
+    expect(screen.getAllByRole("menuitem")).toHaveLength(3);
+    expect(document.activeElement).toBe(access);
+
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(roleAccess);
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(logout);
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(access);
+  });
+
+  it("replaces USER administration and logout actions while a role identity is active", async () => {
+    const user = userEvent.setup();
+    const onLogout = vi.fn();
+    render(<AccountMenuHarness accessHref={null} onLogout={onLogout} roleAccessHref="/console/access/role-access/" roleSessionActive />);
+
+    await user.click(screen.getByRole("button", { name: "打开账号菜单，当前用户 preview-admin" }));
+    const roleAccess = screen.getByRole("menuitem", { name: /角色会话.*发现、承担或退出临时角色/ });
+    const exit = screen.getByRole("menuitem", { name: "结束当前角色会话" });
+    expect(screen.queryByRole("menuitem", { name: /账号与权限/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "注销并撤销 IAM 会话" })).toBeNull();
+    expect(document.activeElement).toBe(roleAccess);
+
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(exit);
+    await user.click(exit);
+    expect(onLogout).toHaveBeenCalledTimes(1);
+  });
+});

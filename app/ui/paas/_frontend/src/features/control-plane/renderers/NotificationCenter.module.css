@@ -1,0 +1,8 @@
+.root { position: relative; }
+.activeTasks { display: flex; align-items: center; gap: var(--xiak-spacing-default); min-height: 64px; padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable); border-bottom: var(--xiak-border-subtle); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
+.activeTasks:hover { background: var(--xiak-color-accent-haze-hover); }
+.activeTasks:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: -2px; }
+.activeTasks > svg { flex: none; width: 18px; height: 18px; }
+.activeTasks > svg:last-child { margin-inline-start: auto; }
+.activeTasks > span { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
+.activeTasks small { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); }

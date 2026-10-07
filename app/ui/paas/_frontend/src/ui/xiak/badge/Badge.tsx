@@ -6,10 +6,11 @@ export type BadgeProps = ComponentPropsWithoutRef<"span"> & {
   status?: "neutral" | "info" | "success" | "warning" | "danger";
 };
 
-export function Badge({ className, status = "neutral", ...props }: BadgeProps) {
+export function Badge({ className, status, ...props }: BadgeProps) {
   return (
     <span
-      className={classNames(styles.badge, styles[status], className)}
+      className={classNames(styles.badge, styles[status ?? "neutral"], className)}
+      data-status={status}
       {...props}
     />
   );

@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef } from "react";
+import { forwardRef, type ComponentPropsWithoutRef } from "react";
 import { classNames } from "../utils";
 import styles from "./Layout.module.css";
 
@@ -14,8 +14,10 @@ function Content({ className, ...props }: ComponentPropsWithoutRef<"main">) {
   return <main className={classNames(styles.content, className)} {...props} />;
 }
 
-function Workspace({ className, ...props }: ComponentPropsWithoutRef<"aside">) {
-  return <aside className={classNames(styles.workspace, className)} {...props} />;
-}
+const Workspace = forwardRef<HTMLElement, ComponentPropsWithoutRef<"aside">>(
+  function Workspace({ className, ...props }, ref) {
+    return <aside className={classNames(styles.workspace, className)} ref={ref} {...props} />;
+  }
+);
 
 export const Layout = Object.assign(LayoutRoot, { Header, Content, Workspace });

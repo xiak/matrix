@@ -1,3 +1,4 @@
+@layer xiak {
 .badge {
   display: inline-flex;
   min-height: var(--xiak-badge-height);
@@ -6,14 +7,14 @@
   border: var(--xiak-border-transparent);
   border-radius: var(--xiak-radius-control);
   padding: 0 var(--xiak-spacing-tight);
-  font-size: var(--xiak-font-size-caption);
-  font-weight: var(--xiak-font-weight-semibold);
+  font-size: var(--xiak-font-size-small);
+  font-weight: var(--xiak-font-weight-medium);
   font-variant-numeric: tabular-nums;
   line-height: 1;
   white-space: nowrap;
 }
 
-.badge::before {
+.badge[data-status]::before {
   width: var(--xiak-status-dot-size);
   height: var(--xiak-status-dot-size);
   border-radius: var(--xiak-radius-pill);
@@ -44,4 +45,5 @@
 .danger {
   background: var(--xiak-color-status-danger-bg);
   color: var(--xiak-color-status-danger);
+}
 }

@@ -1,31 +1,12 @@
-.select {
-  width: 100%;
-  min-width: 0;
-  min-height: var(--xiak-control-height);
-  border: var(--xiak-border-control);
-  border-radius: var(--xiak-radius-control);
-  padding: 0 var(--xiak-spacing-default);
-  background: var(--xiak-color-bg-input);
-  color: var(--xiak-color-text-strong);
-  font: inherit;
-  outline: none;
-  cursor: pointer;
-  transition:
-    border-color var(--xiak-motion-fast) var(--xiak-ease-standard),
-    box-shadow var(--xiak-motion-fast) var(--xiak-ease-standard);
-}
-
-.select:hover:not(:disabled) {
-  border-color: var(--xiak-color-border-control-hover);
-}
-
-.select:focus {
-  border-color: var(--xiak-color-border-focus);
-  box-shadow: var(--xiak-shadow-focus);
-}
-
-.select:disabled {
-  background: var(--xiak-color-bg-control-hover);
-  color: var(--xiak-color-text-disabled);
-  cursor: not-allowed;
+@layer xiak {
+.root { position: relative; display: inline-block; min-width: 0; width: 100%; }
+.trigger[role="combobox"] { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); text-align: start; cursor: pointer; }
+.trigger[data-state="open"] { border-color: var(--xiak-color-border-focus); }
+.trigger[data-placeholder] { color: var(--xiak-color-text-placeholder); }
+.value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon { width: var(--xiak-icon-size); height: var(--xiak-icon-size); flex: none; color: var(--xiak-color-text-muted); transition: transform var(--xiak-motion-fast) var(--xiak-ease-standard); }
+.trigger[data-state="open"] .icon { transform: rotate(180deg); }
+.trigger:disabled .icon { color: var(--xiak-color-text-disabled); }
+.popup[role="listbox"] { min-width: var(--radix-dropdown-menu-trigger-width); max-width: min(420px, var(--radix-dropdown-menu-content-available-width)); max-height: min(320px, var(--radix-dropdown-menu-content-available-height)); overscroll-behavior: contain; }
+.native { position: absolute; width: 1px; height: 1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
