@@ -2163,6 +2163,10 @@ describe("account access", () => {
     const reviewSnapshot = within(summary).getByRole("region", { name: "待 IAM 校验的产品声明" });
     expect(within(reviewSnapshot).getByText("paas @ r1", { selector: "code" })).toBeTruthy();
     expect(within(reviewSnapshot).getByText(/后续 Profile 新增 Action 不会自动扩大已发布版本/)).toBeTruthy();
+    const semantics = within(summary).getByRole("region", { name: "授权语义" });
+    expect(within(semantics).getByText("ALLOW 0 条 · DENY 1 条")).toBeTruthy();
+    expect(within(semantics).getByText(/发布版本本身不授权/)).toBeTruthy();
+    expect(within(semantics).getByText(/匹配的 Deny 会覆盖匹配的 Allow/)).toBeTruthy();
     expect(within(summary).getByText("拒绝")).toBeTruthy();
     expect(within(summary).getByText("paas.application.read", { selector: "code" })).toBeTruthy();
     expect(within(summary).getByText("app-prod", { selector: "code" })).toBeTruthy();
@@ -2260,6 +2264,9 @@ describe("account access", () => {
     expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
     const summary = screen.getByRole("region", { name: "声明摘要" });
     expect(within(summary).getByRole("region", { name: "待 IAM 校验的产品声明" })).toBeTruthy();
+    const semantics = within(summary).getByRole("region", { name: "授权语义" });
+    expect(within(semantics).getByText("ALLOW 1 条 · DENY 0 条")).toBeTruthy();
+    expect(within(semantics).queryByText(/显式 Deny/)).toBeNull();
     expect(within(summary).getByText("paas.application.read", { selector: "code" })).toBeTruthy();
     expect(within(summary).queryByRole("region", { name: "已选 Action 的产品声明" })).toBeNull();
     await user.click(within(summary).getByRole("button", { name: "查看声明详情" }));

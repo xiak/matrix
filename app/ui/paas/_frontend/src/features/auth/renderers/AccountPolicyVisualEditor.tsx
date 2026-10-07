@@ -84,6 +84,8 @@ export function PolicyVisualReview({ document, directory, headingLevel = 3 }: {
   const t = useTranslations("PolicyVisualAuthoring");
   const id = useId();
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const allowCount = document.statements.filter((item) => item.effect === "ALLOW").length;
+  const denyCount = document.statements.length - allowCount;
   const statement = document.statements[selectedIndex];
   if (!statement) return null;
   const actionNames = new Set(statement.actions);
@@ -96,6 +98,11 @@ export function PolicyVisualReview({ document, directory, headingLevel = 3 }: {
       <span>{t("reviewStatementCount", { count: document.statements.length })}</span>
     </div>
     <CatalogSnapshot document={document} directory={directory} review />
+    <section className={styles.reviewSemantics} aria-label={t("reviewSemanticsTitle")}>
+      <div><strong>{t("reviewSemanticsTitle")}</strong><span>{t("reviewEffectSummary", { allow: allowCount, deny: denyCount })}</span></div>
+      <p>{t("reviewAttachmentBoundary")}</p>
+      {denyCount ? <Alert status="warning">{t("reviewDenyNotice", { count: denyCount })}</Alert> : null}
+    </section>
     {document.statements.length > 1 ? <FormField id={id + "-statement"} label={t("reviewChooseStatement")}>
       <Select id={id + "-statement"} value={String(selectedIndex)} onValueChange={(value) => setSelectedIndex(Number(value))}
         options={document.statements.map((item, at) => ({ value: String(at), label: t("statementOption", { number: at + 1, sid: item.sid }) }))} />

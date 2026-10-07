@@ -9,6 +9,11 @@
 .catalogSnapshot > div { display: flex; min-width: 0; flex-wrap: wrap; gap: var(--xiak-spacing-tight); }
 .catalogSnapshot code { border-radius: var(--xiak-radius-small); padding: 2px var(--xiak-spacing-tight); background: var(--xiak-color-bg-panel); color: var(--xiak-color-text-strong); font-family: var(--xiak-font-mono); font-size: var(--xiak-font-size-caption); overflow-wrap: anywhere; }
 .catalogSnapshot p { margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.55; }
+.reviewSemantics { display: grid; min-width: 0; gap: var(--xiak-spacing-tight); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel); }
+.reviewSemantics > div { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--xiak-spacing-tight); }
+.reviewSemantics strong { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-small); }
+.reviewSemantics span { color: var(--xiak-color-text-base); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-semibold); }
+.reviewSemantics p { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.55; }
 .reviewFields { display: grid; gap: var(--xiak-spacing-default); margin: 0; }
 .reviewFields > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
 .reviewFields dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }

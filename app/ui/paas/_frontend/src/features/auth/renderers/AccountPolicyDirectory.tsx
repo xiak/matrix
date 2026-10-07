@@ -172,7 +172,10 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
   const [busy, setBusy] = useState(false);
   const requestLeave = useAccessDraft({ dirty: text !== initialText, busy, title: t("publishCancelTitle"),
     description: t("publishCancelHint"), form: heading });
-  useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, [reviewing]);
+  // The editor and review have different heights. Move the scroll container
+  // with the focused heading so a transition never opens midway through the
+  // incoming view.
+  useLayoutEffect(() => { heading.current?.focus(); }, [reviewing]);
   const openReview = () => {
     setError(null);
     if (new TextEncoder().encode(text).length > 64 * 1024) { setError(t("publishTooLarge")); return; }

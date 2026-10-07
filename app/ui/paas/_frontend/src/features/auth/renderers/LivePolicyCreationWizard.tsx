@@ -72,8 +72,10 @@ export function LivePolicyCreationWizard(props: {
   const requestLeave = useAccessDraft({ dirty: Boolean(name || text !== initialText) && !client?.pending && !createdId && !previewComplete, busy,
     title: t("cancelTitle"), description: t("cancelHint"), form });
   useLayoutEffect(() => {
-    if (review) reviewHeading.current?.focus({ preventScroll: true });
-    else if (returningFromReview.current) { nameInput.current?.focus({ preventScroll: true }); returningFromReview.current = false; }
+    // Editing can be much taller than review. Let focus reveal the new view's
+    // heading instead of retaining an outgoing scroll offset below it.
+    if (review) reviewHeading.current?.focus();
+    else if (returningFromReview.current) { nameInput.current?.focus(); returningFromReview.current = false; }
   }, [review]);
   const inspect = () => onBack();
   if (client?.pending) return <WorkspaceDetail title={t("title")} onBack={inspect}>
