@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；既有账号控制台正在消费新 IAM 契约，尚未完成本 FEAT 的完整页面与真实浏览器验收。
+- 状态：实施中；UX/UI固定快照已在精确绿色IAM基线上完成隔离集成、全前端/嵌入/Go及三视口MOCK门禁，当前代码固定于`74e3c0983`。真实IAM进程浏览器、慢响应/故障注入、跨浏览器未知结果恢复、当前Profile签名发布及整个FEAT验收仍未完成。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -51,11 +51,13 @@
 
 固定 `ef51b1d509e7e38dfb2146416c7e057a97638765` 的 [Verification 34850453837](https://github.com/xiak/matrix/actions/runs/34850453837) 已通过 GitHub API 核实精确 SHA，Go、authority-process、node-process 全部 completed/success。该对象仅当前身份消费，不包含后续边界管理表单。
 
-### 本人登录会话的固定 UI 交接
+### 完整控制台快照集成
 
-已只读核对`feat/cloud-console-ux`的固定`8e8b0f608827fb00c9a0e677e78ec12a7e047315`及其后继`ec5e832ad42cafea31cd731cfdbaa046b3537229`。前者实现本人会话页面、严格列表/撤销适配器、当前会话标识和未知结果保留原意图，消费后端固定`3080922f6ae1871f1c351d5ee30f03551fc3c605`；后者是全服务导航修复，不代替会话功能。此次只确认固定源交接，没有导入其 UI、嵌入产物或验收状态。
+UX/UI owner固定`d7d6b09a4c056c5380d6e0c1d87b9fc97ab9a9e5`后，没有把其844个历史提交或后端/安装/文档状态并入本分支。隔离候选`db13087079b98d10dfcc544bc26d11b64d3df318`以独立CI全绿的`b377d34a282e581fb8cbdbc6461e7da31c10aaf5`为唯一父提交，只用同一树快照替换`app/ui/paas/**`：652个路径，范围外差异为0；候选UI树`e44e128e4c4776f37bdfd5af20a8a1712d7cf148`与UX固定源逐字一致。常规receive-pack两次得到GitHub 500后，候选通过Git Data API从IAM根树替换准确子树；取回后再次核对父提交、根树、UI树、路径范围和内容。当前分支以带来源记录的`74e3c0983`消费该候选，没有移动或改写任一原分支。
 
-其前端检查、MOCK和DEV浏览器证据由[该固定对象的 FEAT-007](https://github.com/xiak/matrix/blob/8e8b0f608827fb00c9a0e677e78ec12a7e047315/docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence)拥有；明确没有执行真实会话撤销。IAM-UI-06/S1仍缺真实IAM+PG的双登录、A撤销B后B下一受保护请求被拒且A保持、实际当前退出，以及forced-change/分页/未知结果的组合验收。页面、确认框或模拟响应不能代替这些行为。UX/UI当前人工优先级保留MOCK入口并暂不启动最终登录验证，因此保持此门禁未验收，不擅自启用真实登录或操作其环境；后续按明确安排使用既有独立受限fixture。MFA及密码规则仍是各自未完成切片，不计入这次S1前端交付。
+候选在IAM基线的独立临时检出中通过typecheck、lint、架构检查、228组多主题对比度、63/63文件共1155/1155项测试和3项归一化测试；Next 16.3.3生成47个静态页面、规范化45个分段，259个嵌入文件逐字一致；全仓`go test ./...`与`go vet ./...`通过。独立DEV在1280、390×844和320×720检查无页面横向溢出，移动操作收敛到统一Page actions，新建Account在内容区而非伪Dialog，320px详情保留身份事实，浏览器warning/error为0。临时预览、快照和归档均已删除，原UX MOCK预览未被替换。首次用工作区外`node_modules` Junction构建被Turbopack拒绝，改用候选目录内`npm ci`后上述生产构建通过；不能把该环境失败写成代码通过，也不能手改可重复生成的minified产物。
+
+Account开通、状态与原主身份恢复客户端严格要求原`requestId`及目标`resourceVersion`，成功只消费裸`Account`；目标GET只表示当前状态/capability，不冒充命令完成回执。UNKNOWN只允许原owner/session/client精确重放，409重读不推断成功，401只失效准确Session；root恢复不改变Account状态或角色。未有真实endpoint的能力继续保持独立MOCK或失败关闭，不能借完整页面快照宣称后端已经实现。
 
 ### User 边界管理增量证据
 
@@ -77,4 +79,4 @@ UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PD
 
 在原 auth renderer 的 detail/note 文本容器补可断行规则，109项前端测试、type/lint/架构/20组对比度通过，两次2-worker嵌入构建逐文件匹配59项。全新数据库与重建 UI 的第二轮浏览器，在实际360×800视口完成设置 A、替换 B、移除和同一成员会话刷新；截图显示完整换行，详情边界容器 clientWidth/scrollWidth均212，自身投影均262，右边界均在视口内。fixture通过154.51s（包155.986s），实际事实和 Audit 链再次验证通过。只证明该边界交互，不包括完整策略编辑器、所有错误页面或整个010验收。
 
-按用户分工，后续 UI 实现和浏览器验收交由 UX/UI 工程师继续。当前这次样式/fixture改动尚无自身独立CI；原自动独立进程回归已启动，但执行句柄后来不可用且没有取得终态输出，不能列为通过。交接固定对象保留上述证据与缺口，接收方在自己的分支复核，不继承整体验收状态。
+集成后的当前工作树重新执行`npm ci`并从头通过`npm run check`：typecheck、lint、架构、228组对比度、63/63文件共1155/1155项测试、3项归一化、47页生产构建、45项规范化和259文件嵌入一致性均成功；随后以`GOMAXPROCS=2`通过`go test -count=1 -p 2 ./...`与`go vet -p 2 ./...`。本机Node 23.11.1不在项目声明的受支持engine范围，因此这些是组合回归证据，不是正式Node运行时或release验收。当前仍未实跑完整平台→root→管理员→成员→资源的真实IAM进程浏览器路径，也未覆盖慢响应/故障注入、completion receipt、跨浏览器reload后的UNKNOWN恢复、APISIX或签名安装；这些缺口完成前，不能把MOCK三视口或组件测试标为IAM-UI-01–08整体通过。
