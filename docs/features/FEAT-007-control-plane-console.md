@@ -1704,23 +1704,32 @@ and `git diff --check` gates must pass on the same committed worktree.
 Verified through 2026-10-07 against the current all-service navigation, compact IAM
 shell, responsive access-analysis hierarchy and primary directory actions.
 
-Current compact IAM evidence is fixed at `24e7a3780` and `88c21ccb3`, with the latter
-also owning the synchronized embedded export. Fixed chrome, page title, back navigation
-and the consolidated page-action trigger paint without waiting for directory data.
+Current compact IAM evidence is fixed at `24e7a3780`, `88c21ccb3` and `6b65fe6b5`,
+with the last source also owning the synchronized embedded export. Fixed chrome, page
+title, back navigation and the consolidated page-action trigger paint without waiting
+for directory data.
 Access analysis keeps its three known primary sections on one row above 360 px; at or
 below 360 px the same three controls become equal-width columns and may wrap their own
 labels, without turning an arbitrary tab set into a second mobile implementation.
 
-The public `Table.PrimaryAction` now owns the primary object entry for User, Group,
-Policy, Role, security-report and Tenant directories. It preserves native button/link
-semantics, focus visibility and disabled behavior, guarantees a 32 px minimum target,
-and leaves metadata as ordinary table content instead of making the full row clickable
-or restoring a generic operation column. A real `320 × 720` DEV pass measured every
-one of those entries at 32 px or taller, kept document and viewport width equal on all
-six routes, and opened the selected User directly in the existing content area with no
-Dialog. The same 16-route IAM audit found no page overflow, duplicate IDs, extra `h1`,
-unnamed actions or unlabelled tables; browser warning/error logs remained empty. The
-complete 63-file/1,115-case frontend suite plus three normalization cases,
+The public `Table.PrimaryAction` now owns the primary object entry throughout IAM
+directories and relationship tables: User, Group, Policy, Role, security report,
+Tenant, authorization Profile, policy/trust versions, policy usage and configuration,
+service authorization/template/session, AccessKey and access-analysis Finding. It
+preserves native button/link semantics, focus visibility and disabled behavior,
+guarantees a 32 px minimum target, and leaves metadata and secondary relationships as
+ordinary table content instead of making the full row clickable or restoring a generic
+operation column. Rich owner selectors and compact principal tags retain their distinct
+composition rather than being flattened into text links.
+
+A real `320 × 720` DEV pass measured the migrated entries at 32 px or taller across
+User policy/group relations, Group member/policy relations, Policy version/usage and
+service summary, authorization Profiles, service authorization and AccessKey tables.
+Every checked view kept document and viewport width equal and opened the selected
+object directly in the existing content area with no Dialog. The broader 16-route IAM
+audit found no page overflow, duplicate IDs, extra `h1`, unnamed actions or unlabelled
+tables; a clean DEV session emitted no browser warning/error. The complete
+63-file/1,115-case frontend suite plus three normalization cases,
 type/lint/architecture/228-pair style gates, 46-route export, 44 normalized paths,
 synchronized embed, and repository-wide Go test/vet passed. This is shared shell and
 interaction evidence; exact IAM semantics, LIVE authorization and remaining
