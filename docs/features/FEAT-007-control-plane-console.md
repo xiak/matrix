@@ -2067,16 +2067,30 @@ The IAM service-authorization directory now follows the same addressable task
 contract as the other content workspaces. The Role collection dispatches
 `/console/access/service-authorizations/` instead of retaining an inline-open
 flag; the service-authorization renderer alone owns its remote data and local
-detail state. Direct parsing keeps the Role navigation item selected, the
-shared content header supplies the Role parent/back route, and the DEV MOCK
-entry returns to the requested deep link after its memory-only session is
-re-entered. Focused scene, route, MOCK and LIVE renderer cases cover that
-boundary; the browser observed the exact URL, selected Role navigation, no
-Dialog, deterministic return to `/console/access/roles/`, and no warning or
-error log. The complete 63-file/1,089-case frontend suite plus three export
-normalization cases, typecheck, lint, architecture, 228-pair style gates,
-46-page static build, 254-file embedded equivalence and repository Go test/vet
-all passed.
+detail state. Its LIVE relation directory, cursor-page cache, platform-template
+directory and selected detail are owned by the exact client adapter instance,
+not only by Account ID or `sessionRevision`. The provider may replace that
+adapter while retaining the authenticated Session revision. Such a replacement
+therefore keeps the fixed heading, responsibility explanation, tabs and query
+controls, immediately removes the former client's rows or detail, and shows a
+data-region skeleton until the new client resolves. A late result from the old
+client cannot repopulate the new surface, and a forbidden replacement cannot
+recover the former data. Query and filter preferences remain local operator
+state rather than being treated as authorization evidence.
+
+Direct parsing keeps the Role navigation item selected, the shared content
+header supplies the Role parent/back route, and the DEV MOCK entry returns to
+the requested deep link after its memory-only session is re-entered. The page
+observes templates, Account authorization relations and exact binding history;
+it does not turn an ACTIVE template into consent or expose a generic IAM bind /
+unbind form. Those writes remain owned by the corresponding product-resource
+workflow. Seven focused renderer cases cover stable loading, client replacement,
+late-result isolation, detail ownership, paging and denial. The browser observed
+the exact route from Role actions at 1280 px with document/body widths equal to
+the viewport, no Dialog and no warning/error log. The complete 63-file/1,131-case
+frontend suite plus three export-normalization cases, typecheck, lint,
+architecture, 228-pair style gates, 47-page static build, 45 normalized segment
+files, 259-file embedded equivalence and repository Go test/vet all passed.
 
 These gates do not establish a universal click-latency budget, a new whole-repository
 or PostgreSQL runtime regression, a new APISIX installation/upgrade, or complete
