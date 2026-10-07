@@ -334,11 +334,12 @@ function AuthenticatedAccess({ repository, initialView }: { repository: AccountR
 
 async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users") {
   const user = userEvent.setup({ delay: null });
-  const view = render(<LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={repository} initialView={initialView} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>);
+  const tree = (activeRepository: AccountRepository) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
+  const view = render(tree(repository));
   await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
   await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledWith(credential));
-  return { user, view, repository };
+  return { user, view, repository, replaceRepository: (next: AccountRepository) => view.rerender(tree(next)) };
 }
 
 async function invokeMoreAction(user: ReturnType<typeof userEvent.setup>, label: string) {
@@ -2695,6 +2696,29 @@ describe("account access", () => {
     expect((search as HTMLInputElement).value).toBe("paas");
     await act(async () => resolve(profileDirectory()));
     expect(within(await screen.findByRole("table", { name: "产品权限能力目录" })).getByRole("button", { name: "paas" })).toBeTruthy();
+  });
+
+  it("hides the previous identity's permission catalog while a replacement client reauthorizes", async () => {
+    const firstLoad = vi.fn().mockResolvedValue(profileDirectory());
+    let rejectReplacement!: (reason: unknown) => void;
+    const replacementResult = new Promise<AuthorizationProfileDirectory>((_resolve, reject) => { rejectReplacement = reject; });
+    const replacementLoad = vi.fn(() => replacementResult);
+    const { user, replaceRepository } = await openAccess(accounts({ listAuthorizationProfiles: firstLoad }), iam(), "policies");
+    await user.click(await screen.findByRole("tab", { name: "权限能力目录" }));
+    await user.click(await screen.findByRole("button", { name: "paas" }));
+    expect(screen.getByRole("heading", { level: 2, name: "paas" })).toBeTruthy();
+    expect(screen.getByText(`sha256:${"a".repeat(64)}`)).toBeTruthy();
+
+    act(() => replaceRepository(accounts({ listAuthorizationProfiles: replacementLoad })));
+    expect(screen.queryByRole("heading", { level: 2, name: "paas" })).toBeNull();
+    expect(screen.queryByText(`sha256:${"a".repeat(64)}`)).toBeNull();
+    expect(screen.getAllByText("正在读取权限能力目录…").length).toBeGreaterThan(0);
+    await waitFor(() => expect(replacementLoad).toHaveBeenCalled());
+
+    await act(async () => rejectReplacement(new HttpProblem(403, "IAM_FORBIDDEN")));
+    expect(await screen.findByText(/当前身份无权读取权限能力目录/)).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "产品权限能力目录" })).toBeNull();
+    expect(screen.queryByRole("heading", { level: 2, name: "paas" })).toBeNull();
   });
 
   it("pages a complete product snapshot locally and preserves the page when returning from detail", async () => {

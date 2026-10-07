@@ -21,7 +21,12 @@ import { AuthorizationProfilePublishingPreview } from "./AuthorizationProfilePub
 import styles from "./AccountAccessRenderer.module.css";
 
 type CatalogState = { status: "loading" } | AuthorizationProfileLoad;
+type CatalogResult = {
+  client: AuthorizationProfileClient;
+  state: CatalogState;
+};
 type CatalogSurface = "tenant" | "platform-preview";
+const loadingCatalogState: CatalogState = { status: "loading" };
 
 function scopeStatus(scope: AuthorizationProfileAction["scope"]): "success" | "warning" | "neutral" {
   if (scope === "TENANT") return "success";
@@ -50,7 +55,8 @@ export function AuthorizationProfilePublishingWorkspace() {
 function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: AuthorizationProfileClient; publishingEnabled: boolean }) {
   const t = useTranslations("AuthorizationProfileCatalog");
   const toolbarLabels = useTableToolbarLabels();
-  const [state, setState] = useState<CatalogState>({ status: "loading" });
+  const [result, setResult] = useState<CatalogResult>(() => ({ client, state: loadingCatalogState }));
+  const state: CatalogState = result.client === client ? result.state : loadingCatalogState;
   const [query, setQuery] = useState("");
   const [actionQuery, setActionQuery] = useState("");
   const [scopeFilter, setScopeFilter] = useState<"all" | AuthorizationAuthorityScope>("all");
@@ -60,26 +66,26 @@ function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: Au
   const [productPageSize, setProductPageSize] = useState(10);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
-  const [publishingPreview, setPublishingPreview] = useState(false);
+  const [selection, setSelection] = useState<{ client: AuthorizationProfileClient; product: string | null }>(() => ({ client, product: null }));
+  const selectedProduct = selection.client === client ? selection.product : null;
+  const [publishingPreviewOwner, setPublishingPreviewOwner] = useState<AuthorizationProfileClient | null>(null);
+  const publishingPreview = publishingPreviewOwner === client;
   const selectedHeading = useRef<HTMLHeadingElement>(null);
   const publishingTrigger = useRef<HTMLButtonElement>(null);
   const restorePublishingFocus = useRef(false);
-  const returnProduct = useRef<string | null>(null);
+  const returnProduct = useRef<{ client: AuthorizationProfileClient; product: string } | null>(null);
   const productButtons = useRef(new Map<string, HTMLButtonElement>());
   const request = useRef(0);
 
   const load = useCallback(() => {
-    if (!client) return;
     const current = ++request.current;
-    setState({ status: "loading" });
-    void client.load().then((result) => { if (current === request.current) setState(result); });
+    setResult({ client, state: loadingCatalogState });
+    void client.load().then((next) => { if (current === request.current) setResult({ client, state: next }); });
   }, [client]);
 
   useEffect(() => {
-    if (!client) return;
     const current = ++request.current;
-    void client.load().then((result) => { if (current === request.current) setState(result); });
+    void client.load().then((next) => { if (current === request.current) setResult({ client, state: next }); });
     return () => { request.current += 1; };
   }, [client]);
   useLayoutEffect(() => {
@@ -93,10 +99,10 @@ function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: Au
   useEffect(() => { if (selected) selectedHeading.current?.focus(); }, [selected]);
   useLayoutEffect(() => {
     if (state.status !== "ready" || selected || !returnProduct.current) return;
-    const product = returnProduct.current;
+    const target = returnProduct.current;
     returnProduct.current = null;
-    productButtons.current.get(product)?.focus();
-  }, [selected, state.status]);
+    if (target.client === client) productButtons.current.get(target.product)?.focus();
+  }, [client, selected, state.status]);
   const filteredEntries = useMemo(() => {
     const words = query.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
     return entries.filter((entry) => {
@@ -134,12 +140,12 @@ function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: Au
     setPage(1);
   };
   const open = (entry: AuthorizationProfileEntry) => {
-    returnProduct.current = entry.profile.product;
+    returnProduct.current = { client, product: entry.profile.product };
     resetActions();
-    setSelectedProduct(entry.profile.product);
+    setSelection({ client, product: entry.profile.product });
   };
-  const back = () => setSelectedProduct(null);
-  const closePublishingPreview = () => { restorePublishingFocus.current = true; setPublishingPreview(false); };
+  const back = () => setSelection({ client, product: null });
+  const closePublishingPreview = () => { restorePublishingFocus.current = true; setPublishingPreviewOwner(null); };
 
   if (selected && publishingPreview) return <AuthorizationProfilePublishingPreview entry={selected} onClose={closePublishingPreview} />;
 
@@ -168,7 +174,7 @@ function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: Au
         hint: t(`responsibility.${owner}.hint`),
         status: owner === "product" ? "info" as const : owner === "iam" ? "warning" as const : "success" as const,
         action: owner === "iam" && publishingEnabled
-          ? <Button ref={publishingTrigger} variant="secondary" size="small" onClick={() => setPublishingPreview(true)}>{t("previewPublishing")}</Button>
+          ? <Button ref={publishingTrigger} variant="secondary" size="small" onClick={() => setPublishingPreviewOwner(client)}>{t("previewPublishing")}</Button>
           : undefined
       }))}
     />
