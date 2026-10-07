@@ -11675,11 +11675,11 @@ func proveApplicationTenantProcesses(t *testing.T, ctx context.Context, admin *p
 	directoryCursors := make([]string, len(tenants))
 	for i := range tenants {
 		tenant, other := &tenants[i], &tenants[1-i]
-		assertDirectoryPage := func(response processResponse, wantCursor bool) paasv1.ApplicationList {
+		assertDirectoryPage := func(response processResponse) paasv1.ApplicationList {
 			t.Helper()
 			var page paasv1.ApplicationList
 			if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &page) != nil ||
-				paasv1.ValidateApplicationList(page) != nil || (page.NextAfter != "") != wantCursor || len(page.Items) == 0 {
+				paasv1.ValidateApplicationList(page) != nil || len(page.Items) == 0 {
 				t.Fatalf("login-session Application directory status=%d page=%#v", response.Status, page)
 			}
 			for index, item := range page.Items {
@@ -11706,12 +11706,40 @@ func proveApplicationTenantProcesses(t *testing.T, ctx context.Context, admin *p
 			}
 			return page
 		}
-		first := assertDirectoryPage(performJSON(t, http.MethodGet, endpoint+"/v1/applications", tenant.login.Credential, nil), true)
-		directoryCursors[i] = first.NextAfter
-		second := assertDirectoryPage(performJSON(t, http.MethodGet,
-			endpoint+"/v1/applications?after="+url.QueryEscape(first.NextAfter), tenant.login.Credential, nil), false)
-		if second.Items[0].Metadata.ID <= first.Items[len(first.Items)-1].Metadata.ID {
-			t.Fatal("login-session Application directory cursor repeated a scanned candidate")
+		nextAfter := ""
+		lastID := paasv1.ResourceID("")
+		seenFixtures := map[paasv1.ResourceID]bool{}
+		for pageIndex := 0; ; pageIndex++ {
+			if pageIndex > 8 {
+				t.Fatal("login-session Application directory did not terminate")
+			}
+			path := endpoint + "/v1/applications"
+			if nextAfter != "" {
+				path += "?after=" + url.QueryEscape(nextAfter)
+			}
+			page := assertDirectoryPage(performJSON(t, http.MethodGet, path, tenant.login.Credential, nil))
+			if pageIndex == 0 {
+				if page.NextAfter == "" {
+					t.Fatal("login-session Application directory did not exercise continuation")
+				}
+				directoryCursors[i] = page.NextAfter
+			}
+			for _, item := range page.Items {
+				if lastID != "" && item.Metadata.ID <= lastID {
+					t.Fatal("login-session Application directory cursor repeated a scanned candidate")
+				}
+				lastID = item.Metadata.ID
+				if strings.HasPrefix(string(item.Metadata.ID), "bearer-directory-") {
+					seenFixtures[item.Metadata.ID] = true
+				}
+			}
+			if page.NextAfter == "" {
+				break
+			}
+			nextAfter = page.NextAfter
+		}
+		if len(seenFixtures) != paasv1.ApplicationDirectoryPageSize {
+			t.Fatalf("login-session Application directory fixtures=%d want=%d", len(seenFixtures), paasv1.ApplicationDirectoryPageSize)
 		}
 	}
 	beforeCrossCursorDecisions := 0
