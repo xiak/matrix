@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { KeyRound, Network, RefreshCcw, ShieldCheck } from "lucide-react";
-import { Alert, Badge, Button, Card, FormField, Input, PasswordInput, Typography } from "@ui/xiak";
+import { Alert, Badge, Button, Card, FormField, Input, LoadingNotice, PasswordInput, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { AccountSecuritySettingsClient, AccountSecuritySettingsLoad } from "../application/AccountAccessProvider";
 import { usePersonalSecurity } from "../application/PersonalSecurityProvider";
@@ -234,7 +234,7 @@ export function LiveAccountSecuritySettings({ client }: { client: AccountSecurit
       <Card.Header><div className={styles.cardTitle}><span><ShieldCheck aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("accountControlTitle")}</Typography.Title><Typography.Text tone="muted">{t("accountControlHint")}</Typography.Text></div></div></Card.Header>
       <Card.Body className={styles.policyForm} aria-busy={result.status === "loading" || refreshing}>
         {!client ? <Alert status="warning">{t("accountReadUnavailable")}</Alert> : null}
-        {client && result.status === "loading" ? <Typography.Text role="status" tone="muted">{t("accountReadLoading")}</Typography.Text> : null}
+        {client && result.status === "loading" ? <LoadingNotice className={accessStyles.note} label={t("accountReadLoading")} /> : null}
         {refreshing ? <Typography.Text role="status" tone="muted">{t("accountReadRefreshing")}</Typography.Text> : null}
         {currentSettings ? <>
           <dl className={styles.facts}>

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { KeyRound } from "lucide-react";
-import { Alert, Badge, Button, Card, Checkbox, ContentPage, Table, Typography } from "@ui/xiak";
+import { Alert, Badge, Button, Card, Checkbox, ContentPage, Table, TableSkeleton, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { AccessKeyAccess, AccessKeyDirectory, AccessKeyStatus } from "../domain/accessKeys";
 import type { IamAction } from "../domain/accounts";
@@ -265,7 +265,10 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
         ? <Button disabled={Boolean(flow) || createIntent.phase === "unknown" && !createCapability?.available} onClick={resumeCreate} size="small" variant="ghost">{t("keyLiveResume")}</Button>
         : !scopedOwner && scene.users.some((user) => user.id === createIntent.userId) ? <Button onClick={() => chooseOwner(createIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
     {error ? <Alert status="danger">{t(`keyLiveErrors.${error}`)} <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button></Alert> : null}
-    {loading && !directory ? <Card><Card.Body><p className={styles.note} role="status">{t("keyLiveLoading")}</p></Card.Body></Card> : null}
+    {loading && !directory ? <Card>
+      <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div></Card.Header>
+      <TableSkeleton header={false} label={t("keyLiveLoading")} labelVisible={false} rows={2} />
+    </Card> : null}
     {flow && directory ? <LiveKeyWorkflow flow={flow} owner={owner} directory={directory} client={client}
       retryingOriginal={flow.kind === "create" && createIntent?.phase === "unknown" && createIntent.requestId === flow.requestId}
       onChanged={() => load(owner.id, false)} onClose={() => setFlow(null)}

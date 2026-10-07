@@ -3,7 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Alert, ContentPage, FormField, Table, TablePagination, TableSkeleton, EmptyState, Badge, Button, Card, Input, Typography, PageSkeleton, Tabs, type PageCommandsHandle } from "@ui/xiak";
+import { Alert, ContentPage, FormField, Table, TablePagination, TableSkeleton, EmptyState, Badge, Button, Card, Input, LoadingNotice, Typography, PageSkeleton, Tabs, type PageCommandsHandle } from "@ui/xiak";
 import { useAccountAccess, useAccountCapabilities } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
@@ -230,7 +230,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     {access.error && !workflow ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
     {access.success && !workflow && view !== "policies" ? <Alert status="success">{t(access.success)}</Alert> : null}
     {access.workspaceError && !workflow && view !== "policies" ? <Alert status="danger">{w(`errors.${access.workspaceError}`)}</Alert> : null}
-    {access.loading ? scene ? <p className={styles.note} role="status">{t("loading")}</p> : <AccountAccessInitialLoading entityId={entityId} view={view} /> : null}
+    {access.loading ? scene ? <LoadingNotice className={styles.note} label={t("loading")} /> : <AccountAccessInitialLoading entityId={entityId} view={view} /> : null}
     {scene ? denied ? <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button onClick={() => onNavigate("overview")} variant="secondary">{t("backToOverview")}</Button>} /> :
       view === "overview" ? <AccountOverview scene={scene} onNavigate={onNavigate} /> :
       view === "users" ? <AccountUserDirectory key={`${entityId ?? "users"}:${userTab ?? "identity"}`} entityId={entityId} initialDetailTab={userTab} scene={scene} onCreate={() => onNavigate("create-user")} onOpen={onNavigate} /> :

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, FormField, Input, Select, TextArea } from "@ui/xiak";
+import { Alert, Badge, Button, FormField, Input, LoadingNotice, Select, TextArea } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { accountError, type RoleAccessClient } from "../application/AccountAccessProvider";
 import type { AccountPolicy, PolicyAttachmentChangeOperationExpectation } from "../domain/accounts";
@@ -286,7 +286,7 @@ export function LiveRolePolicyEditor({ access, client, mode, onAccessChanged, on
     operation={{ busy: operation.state.phase === "pending" || operation.state.phase === "checking", clearError: noop }} draft={{ dirty: Boolean(selectedId) || review || operation.locked, title: t(mode === "add" ? "addPolicies" : "removePolicies"), description: p("unknownHint") }}>
     <PolicyAttachmentChangeFeedback state={operation.state} onRetryRead={operation.retryRead} />
     <Alert>{t(mode === "add" ? "liveAttachPolicyHint" : "liveRevokePolicyHint")}</Alert>
-    {review ? <><dl className={styles.facts}><div><dt>{t(mode === "add" ? "adding" : "removing")}</dt><dd>{selectedLabel}</dd></div><div><dt>{t("policyId")}</dt><dd><code>{selectedPolicyId ?? selectedLabel}</code></dd></div></dl><Button variant="ghost" disabled={operation.locked} onClick={() => { operation.reset(); setReview(false); }}>{t("backToSelection")}</Button></> : loading ? <p className={styles.note} role="status">{t("policyDirectoryLoading")}</p> : !available ? <Alert status="warning">{t("policyDirectoryUnavailable")}</Alert> : choices.length ? <FormField id={`${id}-policy`} label={t(mode === "add" ? "policyToAttach" : "policyToRevoke")} hint={t("singlePolicyCommandHint")}><Select id={`${id}-policy`} disabled={operation.locked} value={selectedId} options={[{ value: "", label: t("choosePolicy") }, ...choices]} onValueChange={(value) => { operation.reset(); setSelectedId(value); }} /></FormField> : <Alert>{t(mode === "add" ? "noEligiblePolicies" : "noRevocablePolicies")}</Alert>}
+    {review ? <><dl className={styles.facts}><div><dt>{t(mode === "add" ? "adding" : "removing")}</dt><dd>{selectedLabel}</dd></div><div><dt>{t("policyId")}</dt><dd><code>{selectedPolicyId ?? selectedLabel}</code></dd></div></dl><Button variant="ghost" disabled={operation.locked} onClick={() => { operation.reset(); setReview(false); }}>{t("backToSelection")}</Button></> : loading ? <LoadingNotice className={styles.note} label={t("policyDirectoryLoading")} /> : !available ? <Alert status="warning">{t("policyDirectoryUnavailable")}</Alert> : choices.length ? <FormField id={`${id}-policy`} label={t(mode === "add" ? "policyToAttach" : "policyToRevoke")} hint={t("singlePolicyCommandHint")}><Select id={`${id}-policy`} disabled={operation.locked} value={selectedId} options={[{ value: "", label: t("choosePolicy") }, ...choices]} onValueChange={(value) => { operation.reset(); setSelectedId(value); }} /></FormField> : <Alert>{t(mode === "add" ? "noEligiblePolicies" : "noRevocablePolicies")}</Alert>}
   </WorkspaceInlineForm>;
 }
 

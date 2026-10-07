@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CardGridSkeleton, LOADING_FEEDBACK_DELAY_MS, PageSkeleton, TableSkeleton, type PageSkeletonLayout } from "./PageSkeleton";
+import { CardGridSkeleton, LoadingNotice, LOADING_FEEDBACK_DELAY_MS, PageSkeleton, TableSkeleton, type PageSkeletonLayout } from "./PageSkeleton";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
@@ -32,6 +32,26 @@ describe("PageSkeleton", () => {
     act(() => vi.advanceTimersByTime(1));
     expect(status.querySelector("[aria-hidden]")).not.toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("announces a short read immediately without painting its visible notice for a fast response", () => {
+    vi.useFakeTimers();
+    const view = render(<LoadingNotice label="Refreshing account data…" />);
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("Refreshing account data…");
+    expect(status.querySelector('[aria-hidden="true"]')).toBeNull();
+    act(() => vi.advanceTimersByTime(LOADING_FEEDBACK_DELAY_MS - 1));
+    expect(status.querySelector('[aria-hidden="true"]')).toBeNull();
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("paints a non-announcing visible notice when a short read becomes sustained", () => {
+    vi.useFakeTimers();
+    render(<LoadingNotice label="Refreshing account data…" />);
+    act(() => vi.advanceTimersByTime(LOADING_FEEDBACK_DELAY_MS));
+    const visible = screen.getByRole("status").querySelector('[aria-hidden="true"]');
+    expect(visible?.textContent).toBe("Refreshing account data…");
   });
 
   it("restarts feedback for a new destination and cancels the regional timer on fast completion", () => {

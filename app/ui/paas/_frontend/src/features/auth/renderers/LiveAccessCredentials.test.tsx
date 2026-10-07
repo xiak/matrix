@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
@@ -58,6 +58,20 @@ function settings(): AccountSecuritySettingsClient {
 afterEach(cleanup);
 
 describe("LiveAccessCredentials", () => {
+  it("mounts the selected user and directory identity before access-key rows resolve", async () => {
+    let resolveDirectory!: (value: typeof directory) => void;
+    const api = client({ list: vi.fn(() => new Promise<typeof directory>((resolve) => { resolveDirectory = resolve; })) });
+    render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+
+    expect(screen.getByRole("heading", { name: "访问密钥" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "用户访问密钥" })).toBeTruthy();
+    expect(screen.getByText("正在读取该用户的访问密钥…").closest('[role="status"]')).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "访问密钥" })).toBeNull();
+
+    await act(async () => resolveDirectory(directory));
+    expect(await screen.findByRole("button", { name: key.id })).toBeTruthy();
+  });
+
   it("opens a known user's keys in context without a second user directory", async () => {
     const api = client();
     render(<LocaleProvider><LiveAccessCredentials accountSecuritySettings={settings()} client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);

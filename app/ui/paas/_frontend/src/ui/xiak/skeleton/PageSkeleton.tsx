@@ -22,6 +22,15 @@ export function LoadingFeedback({ label, labelVisible = true, children }: { labe
   </div>;
 }
 
+// Short reads still need immediate assistive feedback, but a visible loading
+// message that survives for only a frame makes stable content appear to flash.
+// Keep the announcement immediate and delay only the visual notice.
+export function LoadingNotice({ className, label }: { className?: string; label: string }) {
+  return <LoadingFeedback label={label} labelVisible={false}>
+    <p aria-hidden="true" className={className}>{label}</p>
+  </LoadingFeedback>;
+}
+
 function CardPlaceholders({ cards }: { cards: number }) {
   return <div aria-hidden="true" className={styles.cards}>
     {Array.from({ length: cards }, (_, index) => <div className={styles.metric} key={index}>

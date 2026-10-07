@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Button, FormField, Tabs, TextArea } from "@ui/xiak";
+import { Alert, Button, FormField, LoadingNotice, Tabs, TextArea } from "@ui/xiak";
 import { useAccountAccess, type AuthorizationProfileLoad } from "../application/AccountAccessProvider";
 import type { AccountPolicyDocument, AuthorizationProfileDirectory } from "../domain/accounts";
 import { visualDraftFromJSON } from "../domain/accountPolicyVisualAuthoring";
@@ -48,7 +48,7 @@ export function AccountPolicyDocumentAuthor({ text, onChange, error, onClearErro
       <Tabs.Content value="visual">{catalog.status === "ready" && visualDocument ?
         <AccountPolicyVisualEditor document={visualDocument} directory={catalog.directory} onChange={(document) => {
           setVisualDocument(document); onChange(JSON.stringify(document, null, 2)); onClearError();
-        }} /> : catalog.status === "loading" ? <p className={styles.note} role="status">{t("visualLoading")}</p> :
+        }} /> : catalog.status === "loading" ? <LoadingNotice className={styles.note} label={t("visualLoading")} /> :
           <div className={styles.policyVisualFailure}><Alert status="warning">{visualError ?? (catalog.status === "idle" || catalog.status === "ready" ? t("visualCatalogUnavailable") : t(`visualCatalogErrors.${catalog.status}`))}</Alert>
             {visualError ? <Button variant="secondary" onClick={() => { onModeChange("json"); onVisualReadyChange(false); setVisualError(null); }}>{t("returnToJson")}</Button> :
               catalog.status !== "expired" ? <Button variant="secondary" onClick={openVisual}>{t("retryCatalog")}</Button> : null}</div>}</Tabs.Content>
