@@ -45,6 +45,12 @@
   min-width: 820px;
 }
 
+@container xiak-table (max-width: 560px) {
+  .table[data-mobile-layout="grid"] {
+    min-width: 0;
+  }
+}
+
 .identifier {
   color: var(--xiak-color-text-strong);
   overflow-wrap: anywhere;

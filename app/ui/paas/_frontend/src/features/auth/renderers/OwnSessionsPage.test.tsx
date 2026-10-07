@@ -28,16 +28,21 @@ describe("OwnSessionsPage", () => {
     expect(screen.getByText(/会话不是物理设备/)).toBeTruthy();
     await waitFor(() => expect(screen.getByText("session-ux-preview-002")).toBeTruthy());
 
+    const table = screen.getByRole("table", { name: "有效登录会话" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("grid");
     expect(screen.getByRole("columnheader", { name: "会话 ID" })).toBeTruthy();
     expect(screen.queryByRole("columnheader", { name: /IP/ })).toBeNull();
     expect(screen.queryByRole("columnheader", { name: /最近活动/ })).toBeNull();
     const currentRow = screen.getByText("session-ux-preview").closest("tr");
     expect(currentRow).not.toBeNull();
+    expect([...currentRow!.cells].map((cell) => cell.getAttribute("data-label"))).toEqual(["会话 ID", "签发时间", "到期时间", "状态", "操作"]);
+    expect(currentRow!.cells[0]?.getAttribute("data-mobile-span")).toBe("full");
     expect(within(currentRow!).getByRole("button", { name: /退出当前会话/ })).toBeTruthy();
 
     const otherRow = screen.getByText("session-ux-preview-002").closest("tr");
     expect(otherRow).not.toBeNull();
     fireEvent.click(within(otherRow!).getByRole("button", { name: "结束会话" }));
+    expect(otherRow!.cells[4]?.getAttribute("data-mobile-span")).toBe("full");
     expect(screen.getByText("结束后，该会话的后续受保护请求会被拒绝。")).toBeTruthy();
     await act(async () => fireEvent.click(within(otherRow!).getByRole("button", { name: "确认结束" })));
     await waitFor(() => expect(screen.queryByText("session-ux-preview-002")).toBeNull());

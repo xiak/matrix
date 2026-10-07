@@ -122,17 +122,17 @@ export function OwnSessionsPage() {
       </Card.Header>
       {sessions.loading && !page ? <TableSkeleton header={false} label={t("loading")} rows={3} /> : null}
       {page ? <>
-        <Table aria-label={t("table")} className={styles.table}>
+        <Table aria-label={t("table")} className={styles.table} mobileLayout="grid">
           <thead><tr><th scope="col">{t("sessionId")}</th><th scope="col">{t("issuedAt")}</th><th scope="col">{t("expiresAt")}</th><th scope="col">{t("status")}</th><th scope="col">{t("actions")}</th></tr></thead>
           <tbody>{page.items.map((item) => {
             const isCurrent = item.id === page.currentSessionId;
             const confirming = confirmingId === item.id;
             return <tr key={item.id}>
-              <td><code className={styles.identifier}>{item.id}</code></td>
-              <td><time dateTime={item.issuedAt} title={item.issuedAt}>{formatTime(item.issuedAt)}</time></td>
-              <td><time dateTime={item.expiresAt} title={item.expiresAt}>{formatTime(item.expiresAt)}</time></td>
-              <td><div className={styles.status}><Badge status={isCurrent ? "success" : "neutral"}>{t(isCurrent ? "current" : "active")}</Badge>{isCurrent ? <span>{t("currentHint")}</span> : null}</div></td>
-              <td>{confirming ? <div className={styles.confirmation} role="group" aria-label={t("confirmTitle")}>
+              <td data-label={t("sessionId")} data-mobile-span="full"><code className={styles.identifier}>{item.id}</code></td>
+              <td data-label={t("issuedAt")}><time dateTime={item.issuedAt} title={item.issuedAt}>{formatTime(item.issuedAt)}</time></td>
+              <td data-label={t("expiresAt")}><time dateTime={item.expiresAt} title={item.expiresAt}>{formatTime(item.expiresAt)}</time></td>
+              <td data-label={t("status")}><div className={styles.status}><Badge status={isCurrent ? "success" : "neutral"}>{t(isCurrent ? "current" : "active")}</Badge>{isCurrent ? <span>{t("currentHint")}</span> : null}</div></td>
+              <td data-label={t("actions")} data-mobile-span={confirming ? "full" : undefined}>{confirming ? <div className={styles.confirmation} role="group" aria-label={t("confirmTitle")}>
                 <span>{t("confirmHint")}</span>
                 <div><Button disabled={sessions.revokingId === item.id} onClick={() => { void confirmRevoke(item.id); }} size="small" variant="secondary">{t("confirm")}</Button><Button disabled={Boolean(sessions.revokingId)} onClick={() => setConfirmingId(null)} size="small" variant="ghost">{t("cancel")}</Button></div>
               </div> : isCurrent ? <Button disabled={session.phase === "revoking"} onClick={() => { void session.logout(); }} size="small" variant="ghost"><LogOut aria-hidden="true" />{t("exitCurrent")}</Button>
