@@ -540,6 +540,8 @@ LIVE 仍固定为 `LIVE · NOT_CONNECTED`，但接入边界不再只给空状态
 
 本次验收中完整串行前端为 63 个测试文件／1107 条用例；最终源代码又定向通过 `AccessWorkspace` 197 条与双语消息契约 4 条用例、类型、lint、架构和 228 组主题对比。生产构建生成 46 页，254 个 Go 嵌入文件等价，`go test ./app/ui/paas/...` 与 `go vet ./app/ui/paas/...` 通过。真实 DEV 在桌面及 `390 × 844` 验证三卡信息流和当前区域高亮，手机无横向溢出，浏览器 warning/error 为空。
 
+2026-10-07，已推送代码 [`3441db975`](https://github.com/xiak/matrix/commit/3441db9756f6c2dbe28056f6653ed0c3a5f4d7e3) 进一步 replacement-first 收敛角色 SSO 与用户 SSO 的页面层级：共享 `FederationBoundaryOverview` 已拥有页面状态、当前区域和统一边界说明，后续卡片不再重复页面名称、“规划中 · 后端未接入”状态或同义边界 Alert，而直接进入目标登录链路和开放前置条件；Account 归属保留在链路标题区，二级标题恢复连续语义层级。页面仍没有输入、写按钮、Dialog、repository、HTTP wire 或成功态，不改变任何 IAM 契约。`AccessWorkspace` 193 条定向用例、双语消息 4 条用例及完整 63 文件／1114 条前端用例通过；类型、lint、架构、228 组主题对比、46 条生产路由、44 个归一化分段、254 个 Go 嵌入文件以及全仓 `go test -p 2 ./...`／`go vet -p 2 ./...` 均通过。真实 DEV 桌面页面只呈现一份联合身份边界；`390 × 844` 角色 SSO 页 document/body/viewport 同为 390px，无横向溢出或 Dialog，页面切换后浏览器 warning/error 为空。
+
 角色断言映射的审阅与详情复用同一个只读“角色 SSO 登录链路”组件，按 IdP 校验、断言校验、候选角色映射、Role TrustPolicy、调用方承担权限和 STS RoleSession 六段解释 IAM-EXT-03 目标语义。组件只读取现有本地 provider、映射和 Role 样例来标注“配置样例／验证前不可信／候选映射／待真实校验／未签发”，没有新增后端资源、状态、命令、repository、HTTP wire、requestId 或有效权限结论。该证据仍不接受真实 IdP 发现、断言验证、Role 选择、STS 签发或会话审计。
 
 ### 成员自服务 Role 承担 MOCK 的开发验收证据
