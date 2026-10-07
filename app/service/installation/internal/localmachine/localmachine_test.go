@@ -102,29 +102,32 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 			t.Fatalf("security-mail material %s is not protected: %v", relative, err)
 		}
 	}
-	cursorKeys := map[string][]byte{}
-	for _, relative := range []string{layout.IAMCursorKey, layout.AuditCursorKey, layout.PaaSCursorKey} {
+	authorityKeys := map[string][]byte{}
+	for _, relative := range []string{
+		layout.IAMCursorKey, layout.AuditCursorKey, layout.PaaSCursorKey,
+		layout.AuditEdgeAssertion, layout.PaaSEdgeAssertion,
+	} {
 		content := readTestFile(t, plan.Root, relative)
 		decoded, decodeErr := hex.DecodeString(string(content))
 		if decodeErr != nil || len(content) != 64 || len(decoded) != 32 || string(content) != strings.ToLower(string(content)) {
 			clear(content)
 			clear(decoded)
-			t.Fatalf("staged cursor key %s is invalid", relative)
+			t.Fatalf("staged authority key %s is invalid", relative)
 		}
-		for other, key := range cursorKeys {
+		for other, key := range authorityKeys {
 			if bytes.Equal(key, decoded) {
 				clear(content)
 				clear(decoded)
-				t.Fatalf("cursor key %s reused %s material", relative, other)
+				t.Fatalf("authority key %s reused %s material", relative, other)
 			}
 		}
-		cursorKeys[relative] = decoded
+		authorityKeys[relative] = decoded
 		clear(content)
 	}
 	defer func() {
-		for path, key := range cursorKeys {
+		for path, key := range authorityKeys {
 			clear(key)
-			delete(cursorKeys, path)
+			delete(authorityKeys, path)
 		}
 	}()
 
@@ -238,12 +241,18 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		"X-Matrix-External-Origin: \"" + plan.NorthboundOrigin + "\"": 2,
 		"X-Matrix-External-Request-Target: \"$request_uri\"":          2,
 		"X-Matrix-External-Source-IP: \"$remote_addr\"":               2,
-		"- Forwarded":                        6,
-		"- X-Forwarded-For":                  6,
-		"- X-Real-IP":                        6,
-		"- X-Matrix-External-Origin":         6,
-		"- X-Matrix-External-Request-Target": 6,
-		"- X-Matrix-External-Source-IP":      6,
+		"- Forwarded":                                              6,
+		"- X-Forwarded-For":                                        6,
+		"- X-Real-IP":                                              6,
+		"- X-Matrix-External-Origin":                               6,
+		"- X-Matrix-External-Request-Target":                       6,
+		"- X-Matrix-External-Source-IP":                            6,
+		"- X-Matrix-Edge-Assertion":                                7,
+		"serverless-post-function:":                                2,
+		`io.open("/run/matrix/audit-edge-assertion", "rb")`:        1,
+		`io.open("/run/matrix/paas-edge-assertion", "rb")`:         1,
+		"local value = file:read(65)":                              2,
+		`ngx.req.set_header("X-Matrix-Edge-Assertion", assertion)`: 2,
 	} {
 		if actual := bytes.Count(apisix, []byte(required)); actual != count {
 			t.Fatalf("APISIX trusted-edge directive %q count=%d want=%d", required, actual, count)
@@ -267,6 +276,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	mainConfig := readTestFile(t, plan.Root, layout.APISIXConfig)
 	for _, required := range []string{
 		"config_provider: yaml", "stream_plugins: []", "user: root",
+		"serverless-post-function",
 		"client_body_temp_path /tmp/",
 	} {
 		if !bytes.Contains(mainConfig, []byte(required)) {
@@ -304,6 +314,8 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		readTestFile(t, plan.Root, layout.IAMCursorKey),
 		readTestFile(t, plan.Root, layout.AuditCursorKey),
 		readTestFile(t, plan.Root, layout.PaaSCursorKey),
+		readTestFile(t, plan.Root, layout.AuditEdgeAssertion),
+		readTestFile(t, plan.Root, layout.PaaSEdgeAssertion),
 	}
 	for _, credential := range serviceCredentials {
 		secrets = append(secrets, credential)
@@ -322,6 +334,25 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		); !errors.Is(err, platformcommand.ErrEffectConflict) {
 			t.Fatalf("unsafe APISIX runtime replay error=%v", err)
 		}
+	}
+}
+
+func TestStageRejectsReusedProductEdgeAssertion(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage edge assertion fixture: %v", err)
+	}
+	paasAssertion := readTestFile(t, plan.Root, layout.PaaSEdgeAssertion)
+	defer clear(paasAssertion)
+	auditPath, err := managedPath(plan.Root, filepath.FromSlash(layout.AuditEdgeAssertion))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(auditPath, paasAssertion, 0o600); err != nil {
+		t.Fatalf("reuse product edge assertion: %v", err)
+	}
+	if err := stageInstallation(plan, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("reused product edge assertion error = %v", err)
 	}
 }
 
@@ -1777,7 +1808,7 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.ReleaseTrust, layout.IAMBootstrap, layout.AuditIAMCredential,
 		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
-		layout.PaaSCursorKey,
+		layout.PaaSCursorKey, layout.AuditEdgeAssertion, layout.PaaSEdgeAssertion,
 		layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring,
 		layout.IAMEmailVerificationKeyring, layout.IAMSecurityMailSMTPChannel,
 		layout.IAMCursorKey,

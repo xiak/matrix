@@ -5,6 +5,7 @@ package externalrequest
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"net"
@@ -19,6 +20,7 @@ const (
 	HeaderExternalOrigin        = "X-Matrix-External-Origin"
 	HeaderExternalRequestTarget = "X-Matrix-External-Request-Target"
 	HeaderExternalSourceIP      = "X-Matrix-External-Source-IP"
+	HeaderEdgeAssertion         = "X-Matrix-Edge-Assertion"
 )
 
 var (
@@ -35,6 +37,7 @@ type Boundary struct {
 	externalPrefix string
 	audience       iamv1.ProductID
 	installationID string
+	edgeDigest     [sha256.Size]byte
 }
 
 // AccessKeyRequest contains the client-signed HTTP request plus one
@@ -45,14 +48,18 @@ type AccessKeyRequest struct {
 	SourceIP      string
 }
 
-func NewBoundary(origin, externalPrefix, installationID string, audience iamv1.ProductID) (*Boundary, error) {
+func NewBoundary(
+	origin, externalPrefix, installationID string,
+	audience iamv1.ProductID,
+	edgeAssertion []byte,
+) (*Boundary, error) {
 	parsed, err := parseOrigin(origin)
 	if err != nil {
 		return nil, ErrInvalidConfiguration
 	}
 	if externalPrefix == "" || externalPrefix == "/" || strings.HasSuffix(externalPrefix, "/") ||
 		!strings.HasPrefix(externalPrefix, "/") || strings.ContainsAny(externalPrefix, "?#") ||
-		iamv1.ValidateID("installationId", installationID) != nil {
+		iamv1.ValidateID("installationId", installationID) != nil || !validEdgeAssertion(edgeAssertion) {
 		return nil, ErrInvalidConfiguration
 	}
 	probe := iamv1.AccessKeyHTTPRequest{
@@ -63,7 +70,8 @@ func NewBoundary(origin, externalPrefix, installationID string, audience iamv1.P
 		return nil, ErrInvalidConfiguration
 	}
 	return &Boundary{origin: origin, scheme: parsed.Scheme, authority: parsed.Host,
-		externalPrefix: externalPrefix, audience: audience, installationID: installationID}, nil
+		externalPrefix: externalPrefix, audience: audience, installationID: installationID,
+		edgeDigest: sha256.Sum256(edgeAssertion)}, nil
 }
 
 // ValidateOrigin admits one explicit canonical public scheme/authority with a
@@ -113,7 +121,10 @@ func (boundary *Boundary) AccessKeyRequest(request *http.Request, body []byte) (
 		len(request.Header.Values(HeaderExternalOrigin)) != 1 ||
 		len(request.Header.Values(HeaderExternalRequestTarget)) != 1 ||
 		len(request.Header.Values(HeaderExternalSourceIP)) != 1 ||
-		request.Header.Get(HeaderExternalOrigin) != boundary.origin || hasForbiddenSemantics(request) {
+		len(request.Header.Values(HeaderEdgeAssertion)) != 1 ||
+		request.Header.Get(HeaderExternalOrigin) != boundary.origin ||
+		!boundary.hasEdgeAssertion(request.Header.Get(HeaderEdgeAssertion)) ||
+		hasForbiddenSemantics(request) {
 		return invalid()
 	}
 	source, err := iamv1.ParseAuthorizationSourceIP(request.Header.Get(HeaderExternalSourceIP))
@@ -147,6 +158,29 @@ func (boundary *Boundary) AccessKeyRequest(request *http.Request, body []byte) (
 		return invalid()
 	}
 	return AccessKeyRequest{SignedRequest: signed, SourceIP: source.String()}, nil
+}
+
+func validEdgeAssertion(assertion []byte) bool {
+	if len(assertion) != 64 {
+		return false
+	}
+	for _, character := range assertion {
+		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+			return false
+		}
+	}
+	decoded := make([]byte, 32)
+	_, err := hex.Decode(decoded, assertion)
+	clear(decoded)
+	return err == nil
+}
+
+func (boundary *Boundary) hasEdgeAssertion(assertion string) bool {
+	if boundary == nil || len(assertion) != 64 {
+		return false
+	}
+	digest := sha256.Sum256([]byte(assertion))
+	return subtle.ConstantTimeCompare(digest[:], boundary.edgeDigest[:]) == 1
 }
 
 func (boundary *Boundary) mapTarget(target string, request *http.Request) (string, string, error) {

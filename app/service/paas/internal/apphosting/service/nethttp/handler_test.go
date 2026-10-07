@@ -1710,8 +1710,9 @@ func mustAccessKeyHandler(t *testing.T, authorizer port.Authorizer, workflow Wor
 	t.Helper()
 	handler, err := NewHandler(authorizer, workflow, &fakeInstallationVerifier{}, Config{
 		NorthboundOrigin: "https://api.example.test:443", InstallationID: "installation-one",
-		CursorKey:    testApplicationCursorKey(),
-		NewRequestID: func() (string, error) { return "request-test", nil },
+		EdgeAssertion: testEdgeAssertion(),
+		CursorKey:     testApplicationCursorKey(),
+		NewRequestID:  func() (string, error) { return "request-test", nil },
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return paasv1.Readiness{APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
 				SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 0, time.UTC)}, nil
@@ -1750,12 +1751,17 @@ func testApplicationCursorKey() []byte {
 	return []byte("0123456789abcdef0123456789abcdef")
 }
 
+func testEdgeAssertion() []byte {
+	return []byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+}
+
 func mustDirectoryHandler(t *testing.T, authorizer port.Authorizer, workflow Workflow) http.Handler {
 	t.Helper()
 	sequence := 0
 	handler, err := NewHandler(authorizer, workflow, &fakeInstallationVerifier{}, Config{
 		NorthboundOrigin: "https://api.example.test:443", InstallationID: "installation-one",
-		CursorKey: testApplicationCursorKey(),
+		EdgeAssertion: testEdgeAssertion(),
+		CursorKey:     testApplicationCursorKey(),
 		NewRequestID: func() (string, error) {
 			id := fmt.Sprintf("request-directory-%03d", sequence)
 			sequence++
@@ -1807,6 +1813,7 @@ func setAccessKeyEdgeHeaders(t *testing.T, request *http.Request, externalTarget
 	request.Header.Set(externalrequest.HeaderExternalOrigin, "https://api.example.test:443")
 	request.Header.Set(externalrequest.HeaderExternalRequestTarget, externalTarget)
 	request.Header.Set(externalrequest.HeaderExternalSourceIP, "192.0.2.10")
+	request.Header.Set(externalrequest.HeaderEdgeAssertion, string(testEdgeAssertion()))
 	request.Header.Set("X-Real-IP", "192.0.2.10")
 	request.Header.Set("X-Forwarded-For", "192.0.2.10")
 }

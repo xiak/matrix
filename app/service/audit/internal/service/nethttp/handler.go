@@ -52,6 +52,7 @@ type Config struct {
 	NewRequestID     func() (string, error)
 	NorthboundOrigin string
 	InstallationID   string
+	EdgeAssertion    []byte
 }
 
 type handler struct {
@@ -71,15 +72,18 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 		config.NewRequestID = newRequestID
 	}
 	value := &handler{workflow: workflow, config: config}
-	if config.NorthboundOrigin != "" || config.InstallationID != "" {
+	if config.NorthboundOrigin != "" || config.InstallationID != "" || len(config.EdgeAssertion) != 0 {
 		boundary, err := externalrequest.NewBoundary(
-			config.NorthboundOrigin, "/api/audit", config.InstallationID, iamv1.ProductAudit,
+			config.NorthboundOrigin, "/api/audit", config.InstallationID,
+			iamv1.ProductAudit, config.EdgeAssertion,
 		)
 		if err != nil {
 			return nil, errors.New("Audit AccessKey northbound boundary is invalid")
 		}
 		value.accessKeyBoundary = boundary
 	}
+	config.EdgeAssertion = nil
+	value.config = config
 	routes := http.NewServeMux()
 	routes.HandleFunc("/ready", value.ready)
 	routes.HandleFunc("/v1/events", value.ingest)

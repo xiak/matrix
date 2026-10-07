@@ -140,6 +140,22 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		return err
 	}
 	clear(cursorKey)
+	paasEdgeAssertion, err := ensureRandomHex(plan.Root, layout.PaaSEdgeAssertion, entropy)
+	if err != nil {
+		return err
+	}
+	defer clear(paasEdgeAssertion)
+	auditEdgeAssertion, err := ensureRandomHex(plan.Root, layout.AuditEdgeAssertion, entropy)
+	if err != nil {
+		return err
+	}
+	defer clear(auditEdgeAssertion)
+	if bytes.Equal(paasEdgeAssertion, auditEdgeAssertion) {
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("product edge assertions reuse credential material"),
+		)
+	}
 	backupKey, err := ensureRandomHex(plan.Root, layout.BackupSealKey, entropy)
 	if err != nil {
 		return err

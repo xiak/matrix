@@ -23,6 +23,7 @@ func TestAuditHTTPAcceptsAccessKeyOnlyForExactTenantQueryRoutes(t *testing.T) {
 		NewRequestID:     func() (string, error) { return "request-http-key", nil },
 		NorthboundOrigin: "https://api.example.test:443",
 		InstallationID:   "installation-one",
+		EdgeAssertion:    testAuditEdgeAssertion(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -546,7 +547,12 @@ func accessKeyJSONRequest(t *testing.T, method, target, externalTarget string, b
 	request.Header.Set(externalrequest.HeaderExternalOrigin, "https://api.example.test:443")
 	request.Header.Set(externalrequest.HeaderExternalRequestTarget, externalTarget)
 	request.Header.Set(externalrequest.HeaderExternalSourceIP, "192.0.2.10")
+	request.Header.Set(externalrequest.HeaderEdgeAssertion, string(testAuditEdgeAssertion()))
 	request.Header.Set("X-Real-IP", "192.0.2.10")
 	request.Header.Set("X-Forwarded-For", "192.0.2.10")
 	return request
+}
+
+func testAuditEdgeAssertion() []byte {
+	return []byte("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
 }

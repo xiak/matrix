@@ -999,6 +999,7 @@ func forgedEdgeHeaders(authorization string) map[string]string {
 		"X-Matrix-External-Origin":         "https://attacker.invalid:443",
 		"X-Matrix-External-Request-Target": "/api/audit/v1/records:query",
 		"X-Matrix-External-Source-IP":      "198.51.100.250",
+		"X-Matrix-Edge-Assertion":          strings.Repeat("f", 64),
 		"X-Matrix-Subject-Credential":      "forged-user-carrier",
 	}
 }

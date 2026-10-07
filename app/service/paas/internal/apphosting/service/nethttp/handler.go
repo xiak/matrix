@@ -68,6 +68,7 @@ type Config struct {
 	MaximumBodyBytes int64
 	NorthboundOrigin string
 	InstallationID   string
+	EdgeAssertion    []byte
 	CursorKey        []byte
 	NewRequestID     func() (string, error)
 	Now              func() time.Time
@@ -124,15 +125,17 @@ func NewHandler(
 	}
 	config.CursorKey = nil
 	var accessKeyBoundary *externalrequest.Boundary
-	if config.NorthboundOrigin != "" {
+	if config.NorthboundOrigin != "" || len(config.EdgeAssertion) != 0 {
 		var err error
 		accessKeyBoundary, err = externalrequest.NewBoundary(
-			config.NorthboundOrigin, "/api/paas", config.InstallationID, iamv1.ProductPaaS,
+			config.NorthboundOrigin, "/api/paas", config.InstallationID,
+			iamv1.ProductPaaS, config.EdgeAssertion,
 		)
 		if err != nil {
 			return nil, errors.New("AccessKey northbound boundary is invalid")
 		}
 	}
+	config.EdgeAssertion = nil
 	value := &handler{
 		authorizer: authorizer, workflow: workflow,
 		installationVerifier: installationVerifier, accessKeyBoundary: accessKeyBoundary,

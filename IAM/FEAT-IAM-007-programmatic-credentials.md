@@ -336,17 +336,23 @@ IAM在一个事务中认证调用服务、验证一次MAC和当前AccessKey状�
 
 存储替换遵循pre-v1最新前驱原则：只保留当前schema到下一schema的一次真实数据迁移，把现有一对一AccessKey决定证据无损正规化为“签名请求证据＋决定引用”；不维护所有未发布开发草稿的兼容矩阵。原决定、Audit canonical、nonce已消费状态、使用观测与AccessKey撤销状态必须保留，迁移/等值重放/备份恢复不能让旧nonce重新可用。最低门禁覆盖零/一/五十项、集合Deny、部分/全部实例Deny、重复/乱序/错Profile/Action/标签、同nonce并发、事务提交未知、撤权/停用竞争、两个IAM副本、重启和直接前驱保留数据。产品候选、RLS、游标及返回资源核对由[008](./FEAT-IAM-008-product-enforcement.md#下一纵向切片租户-application-目录与安全游标)拥有。
 
-固定`71c7882b4f8a1aa11ee1a2408b8ae111f375f25a`已把一次MAC、一次nonce、集合与实例决定共同引用同一请求证据的协议接入真实Application目录。IAM批量事务覆盖0–50个严格候选、集合Deny、逐项Allow/Deny、证据正规化、历史保留及重放/并发攻击；产品读取、RLS、游标和返回资源核对的实现状态与证据只归[008的当前目录切片](./FEAT-IAM-008-product-enforcement.md#当前纵向切片租户-application-目录与安全游标)，不在本FEAT复制。独立[Verification 37571650568](https://github.com/xiak/matrix/actions/runs/37571650568)仍在串行运行，未取得最终结论，因此本段当前只记固定实现和本地证据，不提前标记独立CI或发布验收成功。
+固定`71c7882b4f8a1aa11ee1a2408b8ae111f375f25a`已把一次MAC、一次nonce、集合与实例决定共同引用同一请求证据的协议接入真实Application目录。IAM批量事务覆盖0–50个严格候选、集合Deny、逐项Allow/Deny、证据正规化、历史保留及重放/并发攻击；产品读取、RLS、游标和返回资源核对的实现状态与证据只归[008的当前目录切片](./FEAT-IAM-008-product-enforcement.md#当前纵向切片租户-application-目录与安全游标)，不在本FEAT复制。独立[Verification 37571650568](https://github.com/xiak/matrix/actions/runs/37571650568)仍在串行运行，但`authority-runtime`的“Retained data and actual authority processes”步骤已经终态failure；同run中Go、node、storage、recovery-storage、roles及session-idle成功不能覆盖该失败，因此该固定对象不能登记为独立CI通过。其余lane的后续终态仍需保留为准确证据，不能提前取消或由本地结果回填。
 
 ### 当前纵向切片：可信APISIX北向入口与安装封存
 
 安装命令新增且只在首次安装接受`--northbound-origin`；值必须是规范小写authority、显式端口的`http` origin，且端口与当前APISIX监听端口完全相同。当前拓扑没有TLS证书或可信上游代理配置，因此拒绝`https`，不把“签名协议能表达https”偷换成部署已经提供https。安装成功将origin与release、installation和安全邮件承诺一并封存到journal；同命令重放必须精确相同，非install命令不能注入另一个origin。升级、回滚、恢复及配置重建从sealed journal取得原值，source/target topology任一不一致都在停止服务或改journal之前拒绝。此拓扑不提供运行期可编辑origin，也不接受Host或转发头作为替代配置。
 
-APISIX现有六条API路由统一删除caller的`Matrix-Subject-Credential`、`Forwarded`、`X-Forwarded-For`、`X-Real-IP`及三个`X-Matrix-External-*`头。只有普通PaaS与租户Audit路由随后设置封存origin、原始`$request_uri`和直接`$remote_addr`；IAM、installation verify、managed-services和UI不会因此获得程序签名能力。PaaS/Audit PEP除了核对三个Matrix事实，还要求APISIX标准`X-Real-IP`和`X-Forwarded-For`各恰好一个并等于同一规范source，且`Forwarded`不存在。直接访问内部服务时即使能伪造三个Matrix头，也必须同时跨越未发布端口边界和标准转发一致性检查；当前安装仍只发布APISIX一个端口。
+APISIX现有六条API路由与UI路由统一删除caller的`Matrix-Subject-Credential`、`Forwarded`、`X-Forwarded-For`、`X-Real-IP`、三个`X-Matrix-External-*`头及`X-Matrix-Edge-Assertion`。只有普通PaaS与租户Audit路由随后设置封存origin、原始`$request_uri`和直接`$remote_addr`；IAM、installation verify、managed-services和UI不会因此获得程序签名能力。PaaS/Audit PEP除了核对三个Matrix事实，还要求APISIX标准`X-Real-IP`和`X-Forwarded-For`各恰好一个并等于同一规范source，且`Forwarded`不存在。
 
-真实安装门禁在现有Phase1 owner内创建普通租户成员及显式key管理员Policy，给成员创建只允许APISIX控制网络gateway精确CIDR的AccessKey。客户端请求同时伪造公有source、标准转发头、Matrix origin/target/source和用户载体；只有APISIX删除并用实际origin/target/source重建后，签名Application目录才返回本Account唯一资源。签错target必须401，随后停用key的新nonce必须立即403，最后删除key并撤销临时管理附件；历史事实进入原租户Audit链。升级、回滚、备份恢复和进程重启继续核对sealed origin，不能因重建配置恢复caller头或复活key。
+仅靠这些可预测头不能证明请求实际经过APISIX，因为同一控制网络内的另一个进程可以构造相同文本。本安装因此生成两份互不相同的256位随机边缘断言，分别限定给PaaS和Audit；每份只读挂载给APISIX与对应目标服务，不挂载给IAM、worker、dispatcher、UI或另一产品。APISIX先由`proxy-rewrite`删除caller值，再由低优先级的rewrite后置函数从受保护文件取得对应值并覆盖头；文件缺失、超长或非规范小写十六进制时返回503。目标进程启动时通过受保护文件读取同一值，构造边界后立即清除明文，只保留摘要，并在解析签名、调用IAM或消费nonce前以常量时间核对恰好一个断言头。PaaS断言不能用于Audit，Audit断言也不能用于PaaS。
 
-本片不增加IAM/Audit/PaaS数据库schema；发布组合保持IAM67/Audit35/PaaS3，并将不可兼容的安装journal/topology/edge ABI推进到`contractRevision=15`。当前工作树已在`GOMAXPROCS=2`下通过全仓race/p2（含architecture与authorityprocess）、vet、模块校验、API生成后零diff及Linux amd64/CGO关闭构建。固定APISIX 3.17.0源码的upstream location确实使用`X-Real-IP $remote_addr`和`X-Forwarded-For $proxy_add_x_forwarded_for`，但签名A/B真实Docker安装尚未执行，因为本机Docker daemon当前不可连接。未取得真实APISIX运行结果前，本段保持“当前切片”，不能把上游源码、配置文本、unit test或进程直连门禁写成签名安装已验收。
+这是一条当前单机Compose拓扑内、用途隔离的边缘到服务通道凭据，不冒充逐请求签名或mTLS。所有容器继续`cap_drop: ALL`，只有APISIX发布端口；该边界拒绝没有对应文件的控制网络进程直接伪造请求，但不声称能抵抗APISIX、目标进程或宿主root本身失陷。未来改为TLS终止、独立节点或服务网格时，应替换为具备同等用途和安装绑定的认证通道，而不是保留静态头作为兼容旁路。
+
+真实安装门禁在现有Phase1 owner内创建普通租户成员及显式key管理员Policy，给成员创建只允许APISIX控制网络gateway精确CIDR的AccessKey。客户端请求同时伪造公有source、标准转发头、Matrix origin/target/source、边缘断言和用户载体；只有APISIX删除并用实际origin/target/source及正确产品断言重建后，签名Application目录才返回本Account唯一资源。签错target必须401，随后停用key的新nonce必须立即403，最后删除key并撤销临时管理附件；历史事实进入原租户Audit链。升级、回滚、备份恢复和进程重启继续核对sealed origin与两份受保护断言，不能因重建配置恢复caller头、交换产品断言或复活key。
+
+本片不增加IAM/Audit/PaaS数据库schema；发布组合保持IAM67/Audit35/PaaS3，并将不可兼容的安装journal/topology/edge ABI推进到`contractRevision=15`。头部重建基线已在`GOMAXPROCS=2`下通过全仓race/p2（含architecture与authorityprocess）、vet、模块校验、API生成后零diff及Linux amd64/CGO关闭构建。后继用途隔离断言增量当前通过边缘契约、PaaS/Audit HTTP、进程配置、安装拓扑/本地效果、Phase1客户端、authorityprocess编译及architecture的聚焦race；真实进程门禁已加入“错误产品断言在IAM前401且nonce/决定/outbox/证据均不变化，原同签名换回正确断言才成功”的断言，完整全仓与真实数据库运行仍待执行。
+
+固定APISIX 3.17.0源码确认`proxy-rewrite`在rewrite phase以priority 1008执行，而`serverless-post-function`以priority -2000执行并缓存已加载函数，因此caller头先被删除、产品断言后被覆盖；原upstream location仍使用`X-Real-IP $remote_addr`和`X-Forwarded-For $proxy_add_x_forwarded_for`。但签名A/B真实Docker安装尚未执行，因为本机Docker daemon当前不可连接。未取得真实APISIX运行结果前，本段保持“当前切片”，不能把上游源码、配置文本、unit test或进程直连门禁写成签名安装已验收。
 
 ## 验收
 

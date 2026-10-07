@@ -79,6 +79,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	notificationDSNMounts := 0
 	accessAnalysisDSNMounts := 0
 	paasCursorKeyMounts := 0
+	auditEdgeAssertionMounts := 0
+	paasEdgeAssertionMounts := 0
 	expectedEntrypoints := map[string]string{
 		"audit":                       "/matrix/bin/matrix-audit",
 		"iam":                         "/matrix/bin/matrix-iam",
@@ -93,6 +95,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	expectedEnvironmentKeys := map[string][]string{
 		"audit": {
 			"MATRIX_AUDIT_CURSOR_KEY_FILE", "MATRIX_AUDIT_DATABASE_DSN_FILE",
+			"MATRIX_AUDIT_EDGE_ASSERTION_FILE",
 			"MATRIX_AUDIT_IAM_ENDPOINT", "MATRIX_AUDIT_INSTALLATION_ID", "MATRIX_AUDIT_LISTEN_ADDRESS",
 			"MATRIX_AUDIT_NORTHBOUND_ORIGIN",
 			"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE",
@@ -117,7 +120,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE",
 		},
 		"paas-api": {
-			"MATRIX_PAAS_CURSOR_KEY_FILE", "MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
+			"MATRIX_PAAS_CURSOR_KEY_FILE", "MATRIX_PAAS_DATABASE_DSN_FILE",
+			"MATRIX_PAAS_EDGE_ASSERTION_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
 			"MATRIX_PAAS_INSTALLATION_ID", "MATRIX_PAAS_LISTEN_ADDRESS",
 			"MATRIX_PAAS_NORTHBOUND_ORIGIN",
 			"MATRIX_PAAS_RELEASE_ID", "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE",
@@ -357,6 +361,20 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 						t.Fatalf("PaaS cursor key crossed its API-only boundary: %#v", mount)
 					}
 				}
+				if source == path.Join(options.Root, layout.AuditEdgeAssertion) {
+					auditEdgeAssertionMounts++
+					if (name != "audit" && name != "apisix") ||
+						target != "/run/matrix/audit-edge-assertion" || mount["read_only"] != true {
+						t.Fatalf("Audit edge assertion crossed its edge/Audit boundary: %#v", mount)
+					}
+				}
+				if source == path.Join(options.Root, layout.PaaSEdgeAssertion) {
+					paasEdgeAssertionMounts++
+					if (name != "paas-api" && name != "apisix") ||
+						target != "/run/matrix/paas-edge-assertion" || mount["read_only"] != true {
+						t.Fatalf("PaaS edge assertion crossed its edge/PaaS boundary: %#v", mount)
+					}
+				}
 				if name == "paas-worker" && source == options.Root+"/runtime/executor" {
 					foundExecutorRoot = target == source
 				}
@@ -384,6 +402,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					"/usr/local/apisix/conf/nginx.conf": {
 						path.Join(options.Root, layout.APISIXNginx), false,
 					},
+					"/run/matrix/audit-edge-assertion": {
+						path.Join(options.Root, layout.AuditEdgeAssertion), true,
+					},
+					"/run/matrix/paas-edge-assertion": {
+						path.Join(options.Root, layout.PaaSEdgeAssertion), true,
+					},
 				}
 				if len(volumes) != len(expected) {
 					t.Fatalf("APISIX mount count=%d want=%d", len(volumes), len(expected))
@@ -409,9 +433,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			foundAPISIXRuntimeBoundary,
 		)
 	}
-	if emailKeyringMounts != 2 || securityMailChannelMounts != 1 || notificationDSNMounts != 1 || accessAnalysisDSNMounts != 1 || paasCursorKeyMounts != 1 {
-		t.Fatalf("private mount closure: mail-keyring=%d mail-channel=%d mail-dsn=%d analysis-dsn=%d paas-cursor=%d",
-			emailKeyringMounts, securityMailChannelMounts, notificationDSNMounts, accessAnalysisDSNMounts, paasCursorKeyMounts)
+	if emailKeyringMounts != 2 || securityMailChannelMounts != 1 || notificationDSNMounts != 1 ||
+		accessAnalysisDSNMounts != 1 || paasCursorKeyMounts != 1 ||
+		auditEdgeAssertionMounts != 2 || paasEdgeAssertionMounts != 2 {
+		t.Fatalf("private mount closure: mail-keyring=%d mail-channel=%d mail-dsn=%d analysis-dsn=%d paas-cursor=%d audit-edge=%d paas-edge=%d",
+			emailKeyringMounts, securityMailChannelMounts, notificationDSNMounts,
+			accessAnalysisDSNMounts, paasCursorKeyMounts, auditEdgeAssertionMounts, paasEdgeAssertionMounts)
 	}
 	encoded := string(result.ComposeJSON)
 	for _, forbidden := range []string{"latest", "secret-value", "dockerfile", "registry"} {

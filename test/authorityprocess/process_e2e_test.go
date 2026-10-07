@@ -2445,6 +2445,10 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	iamWrappingKeyPath := writeProcessAccessKeyWrapping(t, temporary, bootstrap)
 	iamTOTPKeyPath := writeProcessTOTPKeyring(t, temporary, bootstrap)
 	iamEmailKeyPath := writeProcessEmailVerificationKeyring(t, temporary, bootstrap)
+	paasEdgeAssertion := strings.Repeat("1", 64)
+	auditEdgeAssertion := strings.Repeat("2", 64)
+	paasEdgeAssertionPath := writeProtectedFile(t, temporary, "paas-edge-assertion", []byte(paasEdgeAssertion))
+	auditEdgeAssertionPath := writeProtectedFile(t, temporary, "audit-edge-assertion", []byte(auditEdgeAssertion))
 
 	iamAddress := freeAddress(t)
 	auditAddress := freeAddress(t)
@@ -2473,6 +2477,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"MATRIX_AUDIT_LISTEN_ADDRESS=" + auditAddress,
 		"MATRIX_AUDIT_INSTALLATION_ID=" + bootstrap.InstallationID,
 		"MATRIX_AUDIT_NORTHBOUND_ORIGIN=https://api.matrix.test:443",
+		"MATRIX_AUDIT_EDGE_ASSERTION_FILE=" + auditEdgeAssertionPath,
 	}
 	iamDispatcherEnvironment := func(credentialPath string, workerID string) []string {
 		return []string{
@@ -2497,6 +2502,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"MATRIX_PAAS_LISTEN_ADDRESS=" + paasAddress,
 		"MATRIX_PAAS_INSTALLATION_ID=" + bootstrap.InstallationID,
 		"MATRIX_PAAS_NORTHBOUND_ORIGIN=https://api.matrix.test:443",
+		"MATRIX_PAAS_EDGE_ASSERTION_FILE=" + paasEdgeAssertionPath,
 		"MATRIX_PAAS_RELEASE_ID=matrix-v0.1.0-process",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"MATRIX_PAAS_CURSOR_KEY_FILE=" + paasCursorKeyPath,
@@ -2523,6 +2529,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		iamServiceCredential,
 		paasServiceCredential,
 		auditServiceCredential,
+		paasEdgeAssertion,
+		auditEdgeAssertion,
 		"mx1.ProcessWrongIAMCredential000000000000000001",
 		verifierCredential,
 	}
@@ -2742,6 +2750,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		t.Fatal("two-process current access diagnosis persisted a decision or Audit outbox fact")
 	}
 	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential,
+		paasEdgeAssertion, auditEdgeAssertion,
 		func(admit func()) {
 			auditProcess.stop()
 			admit()
@@ -6385,8 +6394,8 @@ func expireIAMSession(
 	}
 }
 
-func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, paasEndpoint, home, customer string,
-	withAuditOutage func(func()), restartIAM func()) []string {
+func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, paasEndpoint, home, customer,
+	paasEdgeAssertion, auditEdgeAssertion string, withAuditOutage func(func()), restartIAM func()) []string {
 	t.Helper()
 	call := func(server, method, path, bearer string, body any, status int, result any) {
 		t.Helper()
@@ -6661,7 +6670,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			}),
 		}
 	}
-	invokeProduct := func(value signedProductRequest, status int) processResponse {
+	invokeProductWithEdge := func(value signedProductRequest, status int, edgeAssertion string) processResponse {
 		t.Helper()
 		header, err := iamv1.EncodeAccessKeyAuthorization(value.signed.Parameters, value.signed.Signature)
 		if err != nil {
@@ -6686,6 +6695,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
 		request.Header.Set("X-Matrix-External-Request-Target", value.externalPath)
 		request.Header.Set("X-Matrix-External-Source-IP", value.sourceIP)
+		request.Header.Set("X-Matrix-Edge-Assertion", edgeAssertion)
 		request.Header.Set("X-Real-IP", value.sourceIP)
 		request.Header.Set("X-Forwarded-For", value.sourceIP)
 		response, err := processHTTPClient().Do(request)
@@ -6698,6 +6708,10 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			t.Fatalf("signed PaaS %s status=%d want=%d body=%s err=%v", value.route, response.StatusCode, status, body, err)
 		}
 		return processResponse{Status: response.StatusCode, Body: body, Header: response.Header.Clone()}
+	}
+	invokeProduct := func(value signedProductRequest, status int) processResponse {
+		t.Helper()
+		return invokeProductWithEdge(value, status, paasEdgeAssertion)
 	}
 	prepareAudit := func(account *accountFixture, route string, payload any) signedProductRequest {
 		t.Helper()
@@ -6717,7 +6731,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			}),
 		}
 	}
-	invokeAudit := func(value signedProductRequest, status int) processResponse {
+	invokeAuditWithEdge := func(value signedProductRequest, status int, edgeAssertion string) processResponse {
 		t.Helper()
 		header, err := iamv1.EncodeAccessKeyAuthorization(value.signed.Parameters, value.signed.Signature)
 		if err != nil {
@@ -6734,6 +6748,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
 		request.Header.Set("X-Matrix-External-Request-Target", value.externalPath)
 		request.Header.Set("X-Matrix-External-Source-IP", value.sourceIP)
+		request.Header.Set("X-Matrix-Edge-Assertion", edgeAssertion)
 		request.Header.Set("X-Real-IP", value.sourceIP)
 		request.Header.Set("X-Forwarded-For", value.sourceIP)
 		response, err := processHTTPClient().Do(request)
@@ -6746,6 +6761,10 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			t.Fatalf("signed Audit %s status=%d want=%d body=%s err=%v", value.route, response.StatusCode, status, body, err)
 		}
 		return processResponse{Status: response.StatusCode, Body: body, Header: response.Header.Clone()}
+	}
+	invokeAudit := func(value signedProductRequest, status int) processResponse {
+		t.Helper()
+		return invokeAuditWithEdge(value, status, auditEdgeAssertion)
 	}
 	recordAuditDecision := func(account *accountFixture, response processResponse, action iamv1.Action, kind iamv1.ResourceKind, sourceIP string, allowed bool) {
 		t.Helper()
@@ -6969,6 +6988,13 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		application := paasv1.CreateApplicationRequest{ID: "program-key-application", Name: "program-key-application",
 			Labels: map[string]string{"environment": environment, "team": "programmatic"}}
 		applicationRequest := prepareProduct(account, "/v1/applications", prefix+"-application-create", application)
+		if index == 0 {
+			beforeWrongEdge := counts(account.key.Key.ID)
+			invokeProductWithEdge(applicationRequest, http.StatusUnauthorized, auditEdgeAssertion)
+			if counts(account.key.Key.ID) != beforeWrongEdge {
+				t.Fatal("Audit edge assertion reached the PaaS authorization authority")
+			}
+		}
 		operations := []paasv1.Operation{decodeProductOperation(account, invokeProduct(applicationRequest, http.StatusCreated), paasv1.OperationCreateApplication, application.ID)}
 		invokeProduct(applicationRequest, http.StatusConflict)
 		readRequest := prepareProductRead(account, "/v1/applications/"+string(application.ID))
@@ -7356,6 +7382,13 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			assertProductAudit(account, operations[operationIndex], action)
 		}
 		auditQuery := prepareAudit(account, "/v1/records:query", auditv1.QueryRecordsRequest{PageSize: 1})
+		if index == 0 {
+			beforeWrongEdge := counts(account.key.Key.ID)
+			invokeAuditWithEdge(auditQuery, http.StatusUnauthorized, paasEdgeAssertion)
+			if counts(account.key.Key.ID) != beforeWrongEdge {
+				t.Fatal("PaaS edge assertion reached the Audit authorization authority")
+			}
+		}
 		auditQueryResponse := invokeAudit(auditQuery, http.StatusOK)
 		if iamv1.DecodeRequest(bytes.NewReader(auditQueryResponse.Body), &auditPages[index]) != nil ||
 			auditv1.ValidateRecordPage(auditPages[index]) != nil ||
@@ -8122,6 +8155,8 @@ func proveTenantAccountProcesses(
 	auditEndpoint string,
 	paasEndpoint string,
 	bearer string,
+	paasEdgeAssertion string,
+	auditEdgeAssertion string,
 	withAuditOutage func(func()),
 	restartIAM func(),
 ) []string {
@@ -8209,7 +8244,8 @@ func proveTenantAccountProcesses(
 	roleOperator := loginIAM(t, endpoint, "customer.primary", changed, "process-role-operator-login")
 	sensitive = append(sensitive, roleOperator.Credential)
 	sensitive = append(sensitive, proveRoleManagementProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, roleOperator.Credential, withAuditOutage, restartIAM)...)
-	sensitive = append(sensitive, proveAccessKeyProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
+	sensitive = append(sensitive, proveAccessKeyProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential,
+		paasEdgeAssertion, auditEdgeAssertion, withAuditOutage, restartIAM)...)
 	proveSecurityReportProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, restartIAM)
 	sensitive = append(sensitive, proveAccessAnalyzerProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, restartIAM)...)
 	sensitive = append(sensitive, proveOwnSessionProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)

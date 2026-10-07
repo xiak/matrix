@@ -28,6 +28,7 @@ const (
 	listenAddressEnvironment         = "MATRIX_AUDIT_LISTEN_ADDRESS"
 	installationIDEnvironment        = "MATRIX_AUDIT_INSTALLATION_ID"
 	northboundOriginEnvironment      = "MATRIX_AUDIT_NORTHBOUND_ORIGIN"
+	edgeAssertionFileEnvironment     = "MATRIX_AUDIT_EDGE_ASSERTION_FILE"
 )
 
 type configuration struct {
@@ -38,6 +39,7 @@ type configuration struct {
 	listenAddress         string
 	installationID        string
 	northboundOrigin      string
+	edgeAssertionFile     string
 }
 
 func main() {
@@ -93,6 +95,15 @@ func run(ctx context.Context) error {
 		clear(cursorKey)
 		return errors.New("Audit cursor key is invalid")
 	}
+	var edgeAssertion []byte
+	if config.edgeAssertionFile != "" {
+		edgeAssertion, err = processconfig.ReadFile(config.edgeAssertionFile, 64, true)
+		if err != nil {
+			clear(cursorKey)
+			return errors.New("Audit edge assertion is unavailable")
+		}
+	}
+	defer clear(edgeAssertion)
 	iamClient, err := iamhttp.NewClient(iamhttp.Config{
 		Endpoint: config.iamEndpoint, ServiceCredential: credential,
 	})
@@ -113,7 +124,9 @@ func run(ctx context.Context) error {
 	handler, err := audithttp.NewHandler(workflow, audithttp.Config{
 		NorthboundOrigin: config.northboundOrigin,
 		InstallationID:   config.installationID,
+		EdgeAssertion:    edgeAssertion,
 	})
+	clear(edgeAssertion)
 	if err != nil {
 		return err
 	}
@@ -129,13 +142,20 @@ func loadConfiguration() (configuration, error) {
 		listenAddress:         os.Getenv(listenAddressEnvironment),
 		installationID:        os.Getenv(installationIDEnvironment),
 		northboundOrigin:      os.Getenv(northboundOriginEnvironment),
+		edgeAssertionFile:     os.Getenv(edgeAssertionFileEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.iamEndpoint == "" ||
 		config.serviceCredentialFile == "" || config.cursorKeyFile == "" ||
 		config.listenAddress == "" {
 		return configuration{}, errors.New("Audit process configuration is incomplete")
 	}
-	if (config.installationID == "") != (config.northboundOrigin == "") {
+	accessKeyFields := 0
+	for _, value := range []string{config.installationID, config.northboundOrigin, config.edgeAssertionFile} {
+		if value != "" {
+			accessKeyFields++
+		}
+	}
+	if accessKeyFields != 0 && accessKeyFields != 3 {
 		return configuration{}, errors.New("Audit AccessKey configuration is incomplete")
 	}
 	return config, nil

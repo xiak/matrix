@@ -55,6 +55,7 @@ func TestPaaSConfigurationRequiresCursorCustodyAndProcessIdentity(t *testing.T) 
 	required := []string{
 		databaseDSNFileEnvironment, iamEndpointEnvironment, serviceCredentialFileEnvironment,
 		cursorKeyFileEnvironment, listenAddressEnvironment, installationIDEnvironment,
+		northboundOriginEnvironment, edgeAssertionFileEnvironment,
 		releaseIDEnvironment, verificationDigestEnvironment,
 	}
 	for _, field := range required {

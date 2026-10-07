@@ -261,6 +261,8 @@ func compileServices(
 	paasAuditCredential := path.Join(root, layout.PaaSAuditCredential)
 	auditCursorKey := path.Join(root, layout.AuditCursorKey)
 	paasCursorKey := path.Join(root, layout.PaaSCursorKey)
+	auditEdgeAssertion := path.Join(root, layout.AuditEdgeAssertion)
+	paasEdgeAssertion := path.Join(root, layout.PaaSEdgeAssertion)
 	apisixRoutes := path.Join(root, layout.APISIXRoutes)
 	apisixConfig := path.Join(root, layout.APISIXConfig)
 	apisixUID := path.Join(root, layout.APISIXUID)
@@ -348,6 +350,7 @@ func compileServices(
 		"MATRIX_AUDIT_IAM_ENDPOINT":            "http://iam:8080",
 		"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE": "/run/matrix/audit-iam-credential",
 		"MATRIX_AUDIT_CURSOR_KEY_FILE":         "/run/matrix/audit-cursor-key",
+		"MATRIX_AUDIT_EDGE_ASSERTION_FILE":     "/run/matrix/audit-edge-assertion",
 		"MATRIX_AUDIT_INSTALLATION_ID":         options.InstallationID,
 		"MATRIX_AUDIT_NORTHBOUND_ORIGIN":       options.NorthboundOrigin,
 		"MATRIX_AUDIT_LISTEN_ADDRESS":          "0.0.0.0:8080",
@@ -356,6 +359,7 @@ func compileServices(
 		bind(auditRuntimeDSN, "/run/matrix/audit-runtime-dsn", true),
 		bind(auditIAMCredential, "/run/matrix/audit-iam-credential", true),
 		bind(auditCursorKey, "/run/matrix/audit-cursor-key", true),
+		bind(auditEdgeAssertion, "/run/matrix/audit-edge-assertion", true),
 	}
 	audit.DependsOn = healthy("postgres", "iam")
 
@@ -423,6 +427,7 @@ func compileServices(
 		"MATRIX_PAAS_RELEASE_ID":                   manifest.Release.ID,
 		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE":      "/run/matrix/paas-iam-credential",
 		"MATRIX_PAAS_CURSOR_KEY_FILE":              "/run/matrix/paas-cursor-key",
+		"MATRIX_PAAS_EDGE_ASSERTION_FILE":          "/run/matrix/paas-edge-assertion",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST": verificationArtifactDigest(manifest),
 		"MATRIX_PAAS_LISTEN_ADDRESS":               "0.0.0.0:8080",
 	}
@@ -430,6 +435,7 @@ func compileServices(
 		bind(paasAPIDSN, "/run/matrix/paas-api-dsn", true),
 		bind(paasIAMCredential, "/run/matrix/paas-iam-credential", true),
 		bind(paasCursorKey, "/run/matrix/paas-cursor-key", true),
+		bind(paasEdgeAssertion, "/run/matrix/paas-edge-assertion", true),
 	}
 	paasAPI.Tmpfs = append(paasAPI.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasAPI.DependsOn = healthy("postgres", "iam")
@@ -503,6 +509,8 @@ func compileServices(
 		bind(apisixRoutes, "/usr/local/apisix/conf/apisix.yaml", true),
 		bind(apisixUID, "/usr/local/apisix/conf/apisix.uid", true),
 		bind(apisixNginx, "/usr/local/apisix/conf/nginx.conf", false),
+		bind(auditEdgeAssertion, "/run/matrix/audit-edge-assertion", true),
+		bind(paasEdgeAssertion, "/run/matrix/paas-edge-assertion", true),
 	}
 	apisix.Tmpfs = append(
 		apisix.Tmpfs,

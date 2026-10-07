@@ -10,8 +10,13 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
+const testEdgeAssertion = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
 func TestBoundaryReconstructsExactExternalRequest(t *testing.T) {
-	boundary, err := NewBoundary("https://api.example.test:443", "/api/paas", "installation-one", iamv1.ProductPaaS)
+	boundary, err := NewBoundary(
+		"https://api.example.test:443", "/api/paas", "installation-one",
+		iamv1.ProductPaaS, []byte(testEdgeAssertion),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,6 +25,7 @@ func TestBoundaryReconstructsExactExternalRequest(t *testing.T) {
 	request.Header.Set(HeaderExternalOrigin, "https://api.example.test:443")
 	request.Header.Set(HeaderExternalRequestTarget, "/api/paas/v1/applications")
 	request.Header.Set(HeaderExternalSourceIP, "2001:db8::1")
+	request.Header.Set(HeaderEdgeAssertion, testEdgeAssertion)
 	request.Header.Set("X-Real-IP", "2001:db8::1")
 	request.Header.Set("X-Forwarded-For", "2001:db8::1")
 	request.Header.Set("Content-Type", "application/json")
@@ -42,7 +48,10 @@ func TestBoundaryReconstructsExactExternalRequest(t *testing.T) {
 }
 
 func TestBoundaryRejectsAmbiguousOrForgedEdgeFacts(t *testing.T) {
-	boundary, err := NewBoundary("https://api.example.test:443", "/api/audit", "installation-one", iamv1.ProductAudit)
+	boundary, err := NewBoundary(
+		"https://api.example.test:443", "/api/audit", "installation-one",
+		iamv1.ProductAudit, []byte(testEdgeAssertion),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +63,9 @@ func TestBoundaryRejectsAmbiguousOrForgedEdgeFacts(t *testing.T) {
 		{"duplicate origin", func(r *http.Request) { r.Header.Add(HeaderExternalOrigin, "https://api.example.test:443") }},
 		{"missing source IP", func(r *http.Request) { r.Header.Del(HeaderExternalSourceIP) }},
 		{"duplicate source IP", func(r *http.Request) { r.Header.Add(HeaderExternalSourceIP, "192.0.2.10") }},
+		{"missing edge assertion", func(r *http.Request) { r.Header.Del(HeaderEdgeAssertion) }},
+		{"wrong edge assertion", func(r *http.Request) { r.Header.Set(HeaderEdgeAssertion, strings.Repeat("f", 64)) }},
+		{"duplicate edge assertion", func(r *http.Request) { r.Header.Add(HeaderEdgeAssertion, testEdgeAssertion) }},
 		{"noncanonical source IP", func(r *http.Request) { r.Header.Set(HeaderExternalSourceIP, "::ffff:192.0.2.10") }},
 		{"invalid source IP", func(r *http.Request) { r.Header.Set(HeaderExternalSourceIP, "not-an-address") }},
 		{"missing real IP", func(r *http.Request) { r.Header.Del("X-Real-IP") }},
@@ -77,6 +89,7 @@ func TestBoundaryRejectsAmbiguousOrForgedEdgeFacts(t *testing.T) {
 			request.Header.Set(HeaderExternalOrigin, "https://api.example.test:443")
 			request.Header.Set(HeaderExternalRequestTarget, "/api/audit/v1/records:query")
 			request.Header.Set(HeaderExternalSourceIP, "192.0.2.10")
+			request.Header.Set(HeaderEdgeAssertion, testEdgeAssertion)
 			request.Header.Set("X-Real-IP", "192.0.2.10")
 			request.Header.Set("X-Forwarded-For", "192.0.2.10")
 			request.Header.Set("Content-Type", "application/json")
@@ -90,8 +103,21 @@ func TestBoundaryRejectsAmbiguousOrForgedEdgeFacts(t *testing.T) {
 
 func TestBoundaryRequiresCanonicalExplicitOrigin(t *testing.T) {
 	for _, origin := range []string{"", "https://api.example.test", "HTTPS://api.example.test:443", "https://API.example.test:443", "https://user@api.example.test:443", "https://api.example.test:443/"} {
-		if _, err := NewBoundary(origin, "/api/paas", "installation-one", iamv1.ProductPaaS); err == nil {
+		if _, err := NewBoundary(
+			origin, "/api/paas", "installation-one", iamv1.ProductPaaS, []byte(testEdgeAssertion),
+		); err == nil {
 			t.Fatalf("origin %q was accepted", origin)
+		}
+	}
+	for _, assertion := range []string{
+		"", strings.Repeat("a", 63), strings.Repeat("a", 65), strings.Repeat("A", 64),
+		strings.Repeat("g", 64), strings.Repeat("a", 63) + "\n",
+	} {
+		if _, err := NewBoundary(
+			"https://api.example.test:443", "/api/paas", "installation-one",
+			iamv1.ProductPaaS, []byte(assertion),
+		); err == nil {
+			t.Fatalf("edge assertion %q was accepted", assertion)
 		}
 	}
 }

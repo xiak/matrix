@@ -199,7 +199,7 @@ PaaS Profile下一修订增加`paas.application-label.set`和`paas.application-l
 
 本片只把`POST /v1/applications`接入已固定的Matrix AccessKey签名与IAM当前PDP，不同时开放Application读取、标签修改、Configuration、Revision、Deployment、Operation或Audit查询。PaaS Profile revision 7仅将`paas.application.create`的USER认证方法声明为规范集合`[ACCESS_KEY, LOGIN_SESSION]`；其他动作的载体集合不变。签名入口必须命中精确method和内部route，产品前缀、任意resource kind或调用者提交的Action都不能扩大映射。
 
-边缘必须删除caller提供的外部请求头，再覆盖一个实际NorthboundOrigin和一个原始request-target。PaaS以显式配置`MATRIX_PAAS_NORTHBOUND_ORIGIN`、两个可信边缘头、实际内部路由和socket source IP重建唯一`SignedRequest`，并核对外部`/api/paas/`到内部`/v1/`的逐字节映射；配置缺失、来源/目标歧义、未覆盖的语义header或其他route均在调用IAM和业务用例前关闭。配置只定义部署权威，不授予调用者Account、主体或动作。
+边缘必须删除caller提供的外部请求头，再覆盖实际NorthboundOrigin、原始request-target、直接source IP及[007拥有的用途隔离边缘断言](./FEAT-IAM-007-programmatic-credentials.md#当前纵向切片可信apisix北向入口与安装封存)。PaaS以显式文件/部署配置、可信边缘事实、实际内部路由和socket来源重建唯一`SignedRequest`，并核对外部`/api/paas/`到内部`/v1/`的逐字节映射；配置缺失、断言错误、来源/目标歧义、未覆盖的语义header或其他route均在调用IAM和业务用例前关闭。配置只定义部署权威，不授予调用者Account、主体或动作。
 
 PaaS通过独立AccessKey authorizer调用IAM `POST /v1/authorize:access-key`；服务Bearer只证明当前PaaS服务，不能替代最终USER/key。adapter核对响应的request digest、Profile/Action/资源、USER及`accessKeyId`与原签名完全一致，不能在失败时回退登录bearer。Allow进入原Application创建事务，Account仍从决定推导；最终Operation、PaaS outbox及Audit actor保存同一USER和key ID，资源归Account而非key。业务幂等身份包含key ID：同一key的新nonce可重试原业务意图，另一把key不能借用原完成结果。
 

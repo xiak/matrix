@@ -38,6 +38,7 @@ const (
 	listenAddressEnvironment         = "MATRIX_PAAS_LISTEN_ADDRESS"
 	installationIDEnvironment        = "MATRIX_PAAS_INSTALLATION_ID"
 	northboundOriginEnvironment      = "MATRIX_PAAS_NORTHBOUND_ORIGIN"
+	edgeAssertionFileEnvironment     = "MATRIX_PAAS_EDGE_ASSERTION_FILE"
 	releaseIDEnvironment             = "MATRIX_PAAS_RELEASE_ID"
 	verificationDigestEnvironment    = "MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST"
 )
@@ -50,6 +51,7 @@ type configuration struct {
 	listenAddress         string
 	installationID        string
 	northboundOrigin      string
+	edgeAssertionFile     string
 	releaseID             string
 	verificationDigest    string
 }
@@ -102,6 +104,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer clear(cursorKey)
+	edgeAssertion, err := processconfig.ReadFile(config.edgeAssertionFile, 64, true)
+	if err != nil {
+		return errors.New("PaaS edge assertion is unavailable")
+	}
+	defer clear(edgeAssertion)
 	authorizer, err := iamhttp.NewClient(iamhttp.Config{
 		Endpoint: config.iamEndpoint, ServiceCredential: credential,
 	})
@@ -140,6 +147,7 @@ func run(ctx context.Context) error {
 	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, installationVerifier, paashttp.Config{
 		NorthboundOrigin: config.northboundOrigin,
 		InstallationID:   config.installationID,
+		EdgeAssertion:    edgeAssertion,
 		CursorKey:        cursorKey,
 		Readiness: func(readinessContext context.Context) (paasv1.Readiness, error) {
 			readiness, err := repository.Readiness(readinessContext)
@@ -153,6 +161,7 @@ func run(ctx context.Context) error {
 		},
 	})
 	clear(cursorKey)
+	clear(edgeAssertion)
 	if err != nil {
 		return err
 	}
@@ -201,12 +210,14 @@ func loadConfiguration() (configuration, error) {
 		listenAddress:         os.Getenv(listenAddressEnvironment),
 		installationID:        os.Getenv(installationIDEnvironment),
 		northboundOrigin:      os.Getenv(northboundOriginEnvironment),
+		edgeAssertionFile:     os.Getenv(edgeAssertionFileEnvironment),
 		releaseID:             os.Getenv(releaseIDEnvironment),
 		verificationDigest:    os.Getenv(verificationDigestEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.iamEndpoint == "" ||
 		config.serviceCredentialFile == "" || config.cursorKeyFile == "" || config.listenAddress == "" ||
-		config.installationID == "" || config.releaseID == "" ||
+		config.installationID == "" || config.northboundOrigin == "" || config.edgeAssertionFile == "" ||
+		config.releaseID == "" ||
 		config.verificationDigest == "" {
 		return configuration{}, errors.New("PaaS process configuration is incomplete")
 	}

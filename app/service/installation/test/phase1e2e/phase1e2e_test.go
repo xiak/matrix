@@ -313,7 +313,8 @@ func TestPhase1AccessKeySignerBindsExactNorthboundRequest(t *testing.T) {
 		})
 	}
 	for _, name := range []string{"Authorization", "Forwarded", "X-Forwarded-For", "X-Real-IP",
-		"X-Matrix-External-Origin", "X-Matrix-External-Request-Target", "X-Matrix-External-Source-IP", "X-Matrix-Subject-Credential"} {
+		"X-Matrix-External-Origin", "X-Matrix-External-Request-Target", "X-Matrix-External-Source-IP",
+		"X-Matrix-Edge-Assertion", "X-Matrix-Subject-Credential"} {
 		if forgedEdgeHeaders("signed")[name] == "" {
 			t.Fatalf("forged edge attack omitted %s", name)
 		}

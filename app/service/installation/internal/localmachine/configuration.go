@@ -239,6 +239,7 @@ func apisixMainConfig() []byte {
 plugins:
   - proxy-rewrite
   - serverless-pre-function
+  - serverless-post-function
 stream_plugins: []
 nginx_config:
   user: root
@@ -281,6 +282,7 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - X-Matrix-Edge-Assertion
             - Forwarded
             - X-Forwarded-For
             - X-Real-IP
@@ -301,6 +303,7 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - X-Matrix-Edge-Assertion
             - Forwarded
             - X-Forwarded-For
             - X-Real-IP
@@ -322,6 +325,7 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - X-Matrix-Edge-Assertion
             - Forwarded
             - X-Forwarded-For
             - X-Real-IP
@@ -332,6 +336,27 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
             X-Matrix-External-Origin: %q
             X-Matrix-External-Request-Target: "$request_uri"
             X-Matrix-External-Source-IP: "$remote_addr"
+      serverless-post-function:
+        phase: rewrite
+        functions:
+          - |
+            local assertion
+            return function()
+              if assertion == nil then
+                local file = io.open("/run/matrix/audit-edge-assertion", "rb")
+                if file == nil then
+                  return 503
+                end
+                local value = file:read(65)
+                file:close()
+                if type(value) ~= "string" or #value ~= 64 or string.find(value, "[^0-9a-f]") ~= nil then
+                  return 503
+                end
+                assertion = value
+              end
+              ngx.req.clear_header("X-Matrix-Edge-Assertion")
+              ngx.req.set_header("X-Matrix-Edge-Assertion", assertion)
+            end
     upstream:
       type: roundrobin
       nodes:
@@ -346,6 +371,7 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - X-Matrix-Edge-Assertion
             - Forwarded
             - X-Forwarded-For
             - X-Real-IP
@@ -367,6 +393,7 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - X-Matrix-Edge-Assertion
             - Forwarded
             - X-Forwarded-For
             - X-Real-IP
@@ -377,6 +404,27 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
             X-Matrix-External-Origin: %q
             X-Matrix-External-Request-Target: "$request_uri"
             X-Matrix-External-Source-IP: "$remote_addr"
+      serverless-post-function:
+        phase: rewrite
+        functions:
+          - |
+            local assertion
+            return function()
+              if assertion == nil then
+                local file = io.open("/run/matrix/paas-edge-assertion", "rb")
+                if file == nil then
+                  return 503
+                end
+                local value = file:read(65)
+                file:close()
+                if type(value) ~= "string" or #value ~= 64 or string.find(value, "[^0-9a-f]") ~= nil then
+                  return 503
+                end
+                assertion = value
+              end
+              ngx.req.clear_header("X-Matrix-Edge-Assertion")
+              ngx.req.set_header("X-Matrix-Edge-Assertion", assertion)
+            end
     upstream:
       type: roundrobin
       nodes:
@@ -392,6 +440,7 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - X-Matrix-Edge-Assertion
             - Forwarded
             - X-Forwarded-For
             - X-Real-IP
@@ -411,6 +460,7 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
           remove:
             - Authorization
             - Matrix-Subject-Credential
+            - X-Matrix-Edge-Assertion
     upstream:
       type: roundrobin
       nodes:
