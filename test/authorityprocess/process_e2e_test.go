@@ -15,10 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/format"
-	"go/parser"
-	"go/token"
 	"io"
 	"net"
 	"net/http"
@@ -2118,77 +2114,16 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	if err := admin.QueryRow(ctx, "SELECT document FROM iam.authorization_decisions WHERE id=$1", before.ID).Scan(&retainedDecision); err != nil {
 		t.Fatal(err)
 	}
-	// Go's overlay changes only this build's source declaration. The checked-out
-	// catalog and all other executables retain the current revision; no runtime
-	// selector is added, and archived declarations are not changed by the overlay.
-	sourcePath := filepath.Join(root, "api/iam/v1/enums.go")
-	fileset := token.NewFileSet()
-	syntax, err := parser.ParseFile(fileset, sourcePath, nil, parser.ParseComments)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The added action keeps the original capabilities; only read loses this
-	// condition in the future build. Even a resource-nonmatching old Deny must
-	// then fail closed, rather than disappear behind another Allow.
-	replacement, err := parser.ParseExpr(fmt.Sprintf(`func() AuthorizationProfile {
-		profile := paasProfileRevisionTwelve
-		profile.Revision = %d
-		var added AuthorizationProfileAction
-		for index, action := range profile.Actions {
-			if action.Action == ActionPaaSApplicationRead {
-				added = action
-				profile.Actions[index].Conditions = nil
-				for _, condition := range action.Conditions {
-					if condition.Key != ConditionIAMPrincipalID { profile.Actions[index].Conditions = append(profile.Actions[index].Conditions, condition) }
-				}
-			}
-		}
-		added.Action = Action("paas.application.inspect")
-		profile.Actions = append(profile.Actions, added)
-		return profile
-	}()`, profile.Revision))
-	if err != nil {
-		t.Fatal("parse future Profile fixture", err)
-	}
-	replaced := 0
-	ast.Inspect(syntax, func(node ast.Node) bool {
-		declaration, ok := node.(*ast.ValueSpec)
-		if !ok || len(declaration.Names) != 1 || declaration.Names[0].Name != "authorizationProfiles" || len(declaration.Values) != 1 {
-			return true
-		}
-		catalog, ok := declaration.Values[0].(*ast.CompositeLit)
-		if !ok {
-			return false
-		}
-		for index, element := range catalog.Elts {
-			current, ok := element.(*ast.Ident)
-			if ok && current.Name == "paasProfileRevisionTwelve" {
-				catalog.Elts[index] = replacement
-				replaced++
-			}
-		}
-		return false
-	})
-	if replaced != 1 {
-		t.Fatalf("future Profile fixture replaced %d PaaS catalog entries", replaced)
-	}
-	var futureSource bytes.Buffer
-	if err := format.Node(&futureSource, fileset, syntax); err != nil {
-		t.Fatal("format future Profile fixture", err)
-	}
-	overlaySource := writeProtectedFile(t, temporary, "future-profile-enums.go", futureSource.Bytes())
-	overlayJSON, err := json.Marshal(map[string]any{"Replace": map[string]string{sourcePath: overlaySource}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	overlay := writeProtectedFile(t, temporary, "future-profile-overlay.json", overlayJSON)
+	// The explicitly tagged build changes only this fixture's declaration.
+	// Ordinary and release builds use the production catalog transform; no
+	// runtime selector exists and archived declarations remain unchanged.
 	build := func(name, packagePath string) string {
 		t.Helper()
 		if runtime.GOOS == "windows" {
 			name += ".exe"
 		}
 		path := filepath.Join(temporary, name)
-		command := exec.CommandContext(ctx, "go", "build", "-p", "2", "-overlay", overlay, "-o", path, packagePath)
+		command := exec.CommandContext(ctx, "go", "build", "-p", "2", "-tags", "matrix_authority_future_profile_fixture", "-o", path, packagePath)
 		command.Dir = root
 		command.Env = append(os.Environ(), "GOMAXPROCS=2", "GOMEMLIMIT=512MiB")
 		if output, err := command.CombinedOutput(); err != nil {

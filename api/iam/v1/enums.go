@@ -471,7 +471,7 @@ func AllServicePurposes() []ServicePurpose {
 // These release-owned declarations are the only current action catalog.
 // ActionDefinition and contract enum order are derived projections, not a second
 // editable source. Product revision changes must accompany changed declarations.
-var authorizationProfiles = [...]AuthorizationProfile{
+var authorizationProfiles = authorizationProfilesForBuild([]AuthorizationProfile{
 	iamPolicyAttachmentChangeProfile(),
 	paasProfileRevisionTwelve,
 	managedServiceProfileRevisionFour,
@@ -479,7 +479,7 @@ var authorizationProfiles = [...]AuthorizationProfile{
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
 		declaredProfileAction(ActionInstallationVerify, ResourceInstallation, AuthorityScopeInstallationProbe, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 	),
-}
+})
 
 // Revision one is required to interpret already sealed policy/decision content.
 // It is not selected as current and cannot be edited to add Role permissions.
@@ -1076,7 +1076,7 @@ func iamPolicyAttachmentChangeProfile() AuthorizationProfile {
 	return profile
 }
 
-var actionDefinitions = projectActionDefinitions(authorizationProfiles[:])
+var actionDefinitions = projectActionDefinitions(authorizationProfiles)
 
 // Source declarations cannot change during this executable's lifetime. Compute
 // their commitments once, not for every projected capability. This contains no
