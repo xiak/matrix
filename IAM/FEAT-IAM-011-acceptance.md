@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；AC-11的服务副本与受限容量测量首片已通过。新增独立账号干扰测量固定`7f02d41960f6ca74e49b24f895ad8fc649fc5e49`的[独立CI35338576115](https://github.com/xiak/matrix/actions/runs/35338576115)已核对精确SHA、五项全部completed/success，并核实完整容量样本和原安全门禁实际执行，本增量已验收。原配对首片固定`b6f57d0126f66be62ec0615ee22d10b7d7226a10`及其[独立CI35309235630](https://github.com/xiak/matrix/actions/runs/35309235630)保持；旧`f6cfe47d`失败不回填。完整容量/公平性/HA、安装及整体需求未验收。
+- 状态：实施中；AC-11的服务副本、受限容量测量及有界开放环过载/恢复观察已通过各自门禁。最新增量固定`b377d34a282e581fb8cbdbc6461e7da31c10aaf5`的[独立CI37620326080](https://github.com/xiak/matrix/actions/runs/37620326080)已核对精确SHA，15项全部completed/success；它只接受下述固定资源工作集、业务隔离和恢复证据，不宣称通用QPS、账号公平SLO或数据库HA。原独立账号干扰测量`7f02d419`及配对首片`b6f57d01`的既有证据保持；旧失败不回填。完整容量/公平性/HA、当前Profile签名发布、LIVE UI及整体需求仍未验收。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -192,9 +192,9 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 
 ## 固定消费者的集成检查
 
-最近一次已实跑的签名发布基线以固定源码`8abbea36da422fdb758233b68221ad8139b00904`冻结为IAM66/Audit35/PaaS3+`contractRevision=13`，IAM授权Profile revision14；A/B分别为`matrix-v0.1.0-iam-r13.1-8abbea36da42`和`matrix-v0.1.0-iam-r13.2-8abbea36da42`。任务独立、无外部路由、2CPU/4GiB/PIDs768的Docker27.5.1经典存储引擎从零镜像/容器/卷完成609.38秒效果型门禁：A安装、受限数据库身份、APISIX下的双Account/IAM、真实SMTP联系人、TOTP/MFA、安全通知、访问分析显式处置、两代应用、Audit链、保护备份、失败候选自动回退、B升级、显式平台回滚、选定备份恢复、应用回滚/停止/容量释放和support零秘密均通过。删除运行现场的私密SMTP输入后，只重启同一任务外层引擎，68.40秒只读门禁再次通过新鲜MFA登录、双Account主身份/恢复/撤权保留及status/verify/完整生命周期。发布构建同时以真实Docker27证明registry manifest digest、digest-qualified构建引用及portable config image ID彼此分离，mutable tag、错仓库或错digest不能进入签名包。精确源码首次独立CI遇到下述编排上限，修正后的复验尚未完成，因此该组合尚未标记最终验收。该历史基线只允许相同完整profile的升级、数据保留回滚和选定备份恢复；其他完整profile必须在副作用前拒绝，IAM65→66 SQL数据保留不能冒充跨profile发布兼容。当前IAM67/Audit35/PaaS3+`contractRevision=15`尚未构建并实跑签名A/B，不能继承本段安装结论。以下既有消费者必须在新的匹配候选中通过真实数据检查；中间源码、同schema数字或静态编译不能替代：
+最近一次已实跑的签名发布基线以固定源码`8abbea36da422fdb758233b68221ad8139b00904`冻结为IAM66/Audit35/PaaS3+`contractRevision=13`，IAM授权Profile revision14；A/B分别为`matrix-v0.1.0-iam-r13.1-8abbea36da42`和`matrix-v0.1.0-iam-r13.2-8abbea36da42`。任务独立、无外部路由、2CPU/4GiB/PIDs768的Docker27.5.1经典存储引擎从零镜像/容器/卷完成609.38秒效果型门禁：A安装、受限数据库身份、APISIX下的双Account/IAM、真实SMTP联系人、TOTP/MFA、安全通知、访问分析显式处置、两代应用、Audit链、保护备份、失败候选自动回退、B升级、显式平台回滚、选定备份恢复、应用回滚/停止/容量释放和support零秘密均通过。删除运行现场的私密SMTP输入后，只重启同一任务外层引擎，68.40秒只读门禁再次通过新鲜MFA登录、双Account主身份/恢复/撤权保留及status/verify/完整生命周期。发布构建同时以真实Docker27证明registry manifest digest、digest-qualified构建引用及portable config image ID彼此分离，mutable tag、错仓库或错digest不能进入签名包。该源码后继的CI编排及安全门禁已经由下述`b377d34a`独立CI全绿证明，但旧签名二进制和完整Profile没有因此变成当前发布候选。该历史基线只允许相同完整profile的升级、数据保留回滚和选定备份恢复；其他完整profile必须在副作用前拒绝，IAM65→66 SQL数据保留不能冒充跨profile发布兼容。当前IAM67/Audit35/PaaS3+`contractRevision=15`尚未构建并实跑签名A/B，不能继承本段安装结论。以下既有消费者必须在新的匹配候选中通过真实数据检查；中间源码、同schema数字或静态编译不能替代：
 
-固定源码的[Verification 37540304178](https://github.com/xiak/matrix/actions/runs/37540304178)不能记为成功：`authority-runtime`的两组业务步骤分别在12分07秒和6分40秒完成，但连同准备和清理于20分钟编排上限被GitHub标记`cancelled`；其余串行lane仍继续执行。当前修正不增加任何fixture的业务context、Go测试期限、密码成本或数据库并发，只把该job外层预算从20分钟调为25分钟，为已成功测试后的确定清理保留边界。只读测试审计没有发现可安全删除的整项测试；它发现从通用storage排除的专用selector在零匹配或顶层SKIP时仍可能以Go退出码0假绿，因此这些lane改由单一CI helper核对每个预期顶层测试确有`run`和`pass`且没有`skip`，容量容器同样使用该门禁。helper的正常、零匹配和显式SKIP三条本地行为已验证；新的精确源码独立CI仍是接受条件，不能用本地脚本检查回填失败run。
+固定源码的[Verification 37540304178](https://github.com/xiak/matrix/actions/runs/37540304178)不能记为成功：`authority-runtime`的两组业务步骤分别在12分07秒和6分40秒完成，但连同准备和清理于20分钟编排上限被GitHub标记`cancelled`；其余串行lane仍继续执行。修正不增加任何fixture的业务context、Go测试期限、密码成本或数据库并发，只把该job外层预算从20分钟调为25分钟，为已成功测试后的确定清理保留边界。只读测试审计没有发现可安全删除的整项测试；它发现从通用storage排除的专用selector在零匹配或顶层SKIP时仍可能以Go退出码0假绿，因此这些lane改由单一CI helper核对每个预期顶层测试确有`run`和`pass`且没有`skip`，容量容器同样使用该门禁。helper的正常、零匹配和显式SKIP三条本地行为已验证。最终`b377d34a`的[Verification 37620326080](https://github.com/xiak/matrix/actions/runs/37620326080)中，`authority-runtime`从12:55:15Z运行到13:15:54Z并成功，实际执行本人会话/锁后到期、保留数据及独立进程路径；其余专用lane及最终`authority-process`汇总也全部成功，因此只接受修正后的编排与选择器门禁，不回填原cancelled run。
 
 - `lookup_service` 五列与 `ServiceIdentity` 安装/purpose 语义；`claim_audit_event` 七列及物理 owner 的租约/完成身份。
 - `CanonicalizeEvent`、旧 tenant/installation bytes/hash/cursor/链与严格 event-bound producer proof。
@@ -223,7 +223,9 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 
 第一次受限真运行在全新PG18数据库执行到完整开放环矩阵后以232.376秒失败：A错误密码压力下，B的100次有效密码登录得到2个泛化401、2个200和96个429。原因是同一个B USER的100次并发有效登录把该主体自身的共享尝试抑制混入账号间公平比较；该结果不能解释为A跨账号消费了B的安全预算，也不能当作公平性通过。门禁改为两个Account分别提交错误密码，以401表示实际取得密码计算槽、429表示本副本明确过载；有效密码仅在压力完成后验证恢复，没有放宽401/429契约或删除原失败。
 
-修正后的同一完整测试在另一个全新PG18数据库、固定Go1.26.5 Linux runner中通过199.462秒。runner为2CPU/1536MiB/PIDs256、GOMAXPROCS2/GOMEMLIMIT512MiB，PG为1CPU/768MiB/PIDs192，独立网络、无宿主端口。单账号开放环每5毫秒计划100次、在途8，得到8次401和92次封闭429；双lane业务隔离中A为22次401/78次429，B复杂PDP为100/100正确，虽计划完成P99约2.89秒且CPU限流6.31秒，仍无5xx、错主体或业务队列串扰。双账号密码准入各100次且全局在途16，A为3次401/97次429、B为4次401/96次429；这一次近似对等样本只证明观测器和当前运行结果，**不证明**生产已有账号保留份额或公平SLO。压力后两个IAM副本分别完成新正常登录，凭据在另一副本读取到准确Account/USER；后继撤权、全部原测量决定、outbox及Audit链检查随原门禁通过。结束前数据库客户端为0，本轮唯一容器、网络及两个卷按标签核对后已删除，没有操作其他任务资源。固定提交与独立CI尚未完成，因此该开放环增量仍是候选证据，不能把整个AC-11标为验收。
+修正后的同一完整测试在另一个全新PG18数据库、固定Go1.26.5 Linux runner中通过199.462秒。runner为2CPU/1536MiB/PIDs256、GOMAXPROCS2/GOMEMLIMIT512MiB，PG为1CPU/768MiB/PIDs192，独立网络、无宿主端口。单账号开放环每5毫秒计划100次、在途8，得到8次401和92次封闭429；双lane业务隔离中A为22次401/78次429，B复杂PDP为100/100正确，虽计划完成P99约2.89秒且CPU限流6.31秒，仍无5xx、错主体或业务队列串扰。双账号密码准入各100次且全局在途16，A为3次401/97次429、B为4次401/96次429；这一次近似对等样本只证明观测器和当前运行结果，**不证明**生产已有账号保留份额或公平SLO。压力后两个IAM副本分别完成新正常登录，凭据在另一副本读取到准确Account/USER；后继撤权、全部原测量决定、outbox及Audit链检查随原门禁通过。结束前数据库客户端为0，本轮唯一容器、网络及两个卷按标签核对后已删除，没有操作其他任务资源。该增量最终固定于`b377d34a`，其[Verification 37620326080](https://github.com/xiak/matrix/actions/runs/37620326080)的独立`authority-capacity`从13:24:08Z运行到13:34:41Z并成功，最终15项汇总全部成功；据此接受该受限工作集的有界开放环观察、业务隔离与恢复证据，但不能把整个AC-11、公平份额或HA标为验收。
+
+前一固定`598b07543b6318c4dbb0caa4bd7d4c83e381d503`的[Verification 37612663234](https://github.com/xiak/matrix/actions/runs/37612663234)不能记为成功：`authority-runtime`的明文扫描发现平台Audit测试夹具把64字符边缘断言同时用作合成`requestDigest`正文，正确报告`audit.document $.requestDigest (credential)`，后继串行lane被取消，最终汇总失败。这不是生产凭据泄漏，也不能通过放宽扫描器解决。`b377d34a`改为散列独立的固定请求材料，并增加“完整凭据被用作digest正文时仍必须命中”的负向回归；聚焦race、全仓race/vet、稳定生成、Linux构建和模块校验在本地通过，随后上述独立CI的实际`authority-runtime`及全汇总成功，旧失败不回填。
 
 ## 运行约束
 
