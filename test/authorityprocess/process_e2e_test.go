@@ -7705,6 +7705,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	withAuditOutage(func() {
 		invoke(replica, sign(b, "program-signed-outage"), http.StatusOK)
 		keyPath := b.path + "/" + string(b.key.Key.ID)
+		var disabledCursorRequest signedProductRequest
 		for index, status := range []iamv1.AccessKeyStatus{iamv1.AccessKeyDisabled, iamv1.AccessKeyEnabled, iamv1.AccessKeyDisabled} {
 			var changed iamv1.SetAccessKeyStatusResponse
 			call(replica, http.MethodPost, keyPath+":set-status", b.manager, iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: uint64(index + 1), Status: status, RequestID: fmt.Sprintf("program-status-%d", index)}, http.StatusOK, &changed)
@@ -7713,9 +7714,17 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			}
 			if index == 0 {
 				beforeRevokedCursor := counts(b.key.Key.ID)
-				invokeProduct(prepareProductDirectory(b, directoryCursors[1]), http.StatusUnauthorized)
-				if counts(b.key.Key.ID) != beforeRevokedCursor {
-					t.Fatal("disabled AccessKey cursor consumed nonce or wrote authority")
+				disabledCursorRequest = prepareProductDirectory(b, directoryCursors[1])
+				invokeProduct(disabledCursorRequest, http.StatusForbidden)
+				if counts(b.key.Key.ID) != [4]int{beforeRevokedCursor[0] + 1, beforeRevokedCursor[1] + 1, beforeRevokedCursor[2] + 1, beforeRevokedCursor[3]} {
+					t.Fatal("disabled AccessKey cursor did not commit exactly one Deny and nonce")
+				}
+			}
+			if index == 1 {
+				beforeReplay := counts(b.key.Key.ID)
+				invokeProduct(disabledCursorRequest, http.StatusConflict)
+				if counts(b.key.Key.ID) != beforeReplay {
+					t.Fatal("restored AccessKey reused a consumed disabled-state packet")
 				}
 			}
 		}
