@@ -7,9 +7,11 @@ import type {
   AccountPasswordSettings,
   AccountSessionSettings,
   RetainedAccountSecuritySettings,
+  RecoverAccountRootCredentialsCommand,
   AccountSecuritySettingsChange,
   AccountSecuritySettingsUpdate,
   SecuritySettingsUpdateIntent,
+  SetAccountLifecycleStatusCommand,
   AccountPolicy,
   AccountPolicyDetail,
   AccountPolicyDocument,
@@ -23,6 +25,7 @@ import type {
   AuthorizationProfileDirectory,
   AuthorizationResourceShape,
   CapabilityRestriction,
+  CreateAccountLifecycleCommand,
   DirectoryPage,
   Group,
   GroupAccess,
@@ -2686,7 +2689,96 @@ async function downloadAccountSecurityReportCSV(credential: string, metadata: Ac
   return { metadata, bytes, filename };
 }
 
+async function listAccountLifecycle(credential: string, after?: string): Promise<DirectoryPage<AccountAccess>> {
+  return accountPage<AccountAccess>(
+    await requestJSON<unknown>(`/api/iam/v1/accounts${pageQuery(after)}`, { headers: accountHeaders(credential) }),
+    "AccountList",
+    parseAccountAccess,
+    (item) => item.account.id,
+    after
+  );
+}
+
+async function readAccountLifecycle(credential: string, accountId: string): Promise<AccountAccess> {
+  const target = accountIdentifier(accountId);
+  const access = parseAccountAccess(await requestJSON<unknown>(
+    `/api/iam/v1/accounts/${encodeURIComponent(target)}`,
+    { headers: accountHeaders(credential) }
+  ));
+  if (access.account.id !== target) throw new Error("INVALID_IAM_RESPONSE");
+  return access;
+}
+
+async function createAccountLifecycle(credential: string, command: CreateAccountLifecycleCommand): Promise<Account> {
+  const target = accountIdentifier(command.id);
+  const requestId = accountIdentifier(command.requestId);
+  const account = parseAccount(await requestJSON<unknown>("/api/iam/v1/accounts", {
+    method: "POST",
+    headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: target,
+      displayName: command.displayName,
+      rootLoginName: command.rootLoginName,
+      rootDisplayName: command.rootDisplayName,
+      initialPassword: command.initialPassword,
+      requestId
+    })
+  }));
+  if (account.id !== target || account.displayName !== command.displayName || account.status !== "ACTIVE" ||
+      account.rootIdentity.loginName !== command.rootLoginName || account.loginAlias !== null || account.resourceVersion !== 1) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return account;
+}
+
+async function setAccountLifecycleStatus(
+  credential: string,
+  accountId: string,
+  command: SetAccountLifecycleStatusCommand
+): Promise<Account> {
+  const target = accountIdentifier(accountId);
+  const requestId = accountIdentifier(command.requestId);
+  const account = parseAccount(await requestJSON<unknown>(
+    `/api/iam/v1/accounts/${encodeURIComponent(target)}:set-status`,
+    {
+      method: "POST",
+      headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+      body: JSON.stringify({ status: command.status, resourceVersion: command.resourceVersion, requestId })
+    }
+  ));
+  if (account.id !== target || account.status !== command.status || account.resourceVersion <= command.resourceVersion) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return account;
+}
+
+async function recoverAccountRootCredentials(
+  credential: string,
+  accountId: string,
+  command: RecoverAccountRootCredentialsCommand
+): Promise<Account> {
+  const target = accountIdentifier(accountId);
+  const requestId = accountIdentifier(command.requestId);
+  const account = parseAccount(await requestJSON<unknown>(
+    `/api/iam/v1/accounts/${encodeURIComponent(target)}:recover-root-credentials`,
+    {
+      method: "POST",
+      headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+      body: JSON.stringify({ initialPassword: command.initialPassword, resourceVersion: command.resourceVersion, requestId })
+    }
+  ));
+  if (account.id !== target || account.resourceVersion <= command.resourceVersion) throw new Error("INVALID_IAM_RESPONSE");
+  return account;
+}
+
 export const httpAccountRepository: AccountRepository = {
+  accountLifecycle: {
+    list: listAccountLifecycle,
+    read: readAccountLifecycle,
+    create: createAccountLifecycle,
+    setStatus: setAccountLifecycleStatus,
+    recoverRootCredentials: recoverAccountRootCredentials
+  },
   securityReports: {
     async create(credential, accountId, command) {
       const owner = accountIdentifier(accountId);
@@ -3266,7 +3358,7 @@ export const httpAccountRepository: AccountRepository = {
     ), expectedAccountId, exactRoleId, after);
   },
   async listAccounts(credential, after) {
-    return accountPage<AccountAccess>(await requestJSON<unknown>(`/api/iam/v1/accounts${pageQuery(after)}`, { headers: accountHeaders(credential) }), "AccountList", parseAccountAccess, (item) => item.account.id, after);
+    return listAccountLifecycle(credential, after);
   },
   async listGroups(credential, accountId, after) {
     const wire = accountRecord(await requestJSON<unknown>(
@@ -3396,14 +3488,14 @@ export const httpAccountRepository: AccountRepository = {
     ), { ...expectation, accountId: accountIdentifier(expectation.accountId), actorPrincipalId: accountIdentifier(expectation.actorPrincipalId), requestId });
   },
   async execute(credential, command) {
+    if (command.kind === "create-account" || command.kind === "set-account-status" || command.kind === "recover-root-credentials") {
+      throw new Error("ACCOUNT_LIFECYCLE_CLIENT_REQUIRED");
+    }
     const requestId = command.kind === "create-policy-attachment" || command.kind === "reset-password" ? command.requestId : requestToken("ui-account-");
     let path: string;
     let body: object;
     switch (command.kind) {
       case "create-user": path = "/api/iam/v1/users"; body = { loginName: command.loginName, displayName: command.displayName, initialPassword: command.initialPassword }; break;
-      case "create-account": path = "/api/iam/v1/accounts"; body = { id: command.id, displayName: command.displayName, rootLoginName: command.rootLoginName, rootDisplayName: command.rootDisplayName, initialPassword: command.initialPassword }; break;
-      case "set-account-status": path = `/api/iam/v1/accounts/${encodeURIComponent(command.accountId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
-      case "recover-root-credentials": path = `/api/iam/v1/accounts/${encodeURIComponent(command.accountId)}:recover-root-credentials`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
       case "set-alias": path = "/api/iam/v1/account:alias"; body = { alias: command.alias, resourceVersion: command.resourceVersion }; break;
       case "update-user": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:update`; body = { displayName: command.displayName, resourceVersion: command.resourceVersion }; break;
       case "delete-user": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:delete`; body = { resourceVersion: command.resourceVersion }; break;
@@ -3412,12 +3504,9 @@ export const httpAccountRepository: AccountRepository = {
       case "create-policy-attachment": path = "/api/iam/v1/policy-attachments"; body = { target: { kind: "USER", id: command.userId }, policyId: command.policyId, policyResourceVersion: command.policyResourceVersion }; break;
     }
     const result = await requestJSON<unknown>(path, { method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" }, body: JSON.stringify({ ...body, requestId }) });
-    if (command.kind === "create-account" || command.kind === "set-alias" || command.kind === "set-account-status" || command.kind === "recover-root-credentials") {
+    if (command.kind === "set-alias") {
       const parsed = parseAccount(result);
-      if (command.kind === "create-account" && (parsed.id !== command.id || parsed.rootIdentity.loginName !== command.rootLoginName)) throw new Error("INVALID_IAM_RESPONSE");
-      if (command.kind === "set-alias" && (parsed.loginAlias !== command.alias || parsed.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
-      if ((command.kind === "set-account-status" || command.kind === "recover-root-credentials") && (parsed.id !== command.accountId || parsed.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
-      if (command.kind === "set-account-status" && parsed.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
+      if (parsed.loginAlias !== command.alias || parsed.resourceVersion <= command.resourceVersion) throw new Error("INVALID_IAM_RESPONSE");
       return;
     }
     if (command.kind === "create-policy-attachment") {

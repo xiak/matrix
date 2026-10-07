@@ -30,6 +30,7 @@ import { AccessCollaborationBoundaries } from "./AccessCollaborationBoundaries";
 import { AccountPolicyDirectory } from "./AccountPolicyDirectory";
 import { LivePolicyCreationWizard } from "./LivePolicyCreationWizard";
 import { AccountTenantWorkspace } from "./AccountTenantWorkspace";
+import { LiveAccountTenants } from "./LiveAccountTenants";
 import { OrganizationGovernancePreview } from "./OrganizationGovernancePreview";
 import { OwnSessionsPage } from "./OwnSessionsPage";
 import { LivePersonalSecuritySettings } from "./LivePersonalSecuritySettings";
@@ -238,6 +239,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "overview" ? <AccountOverview scene={scene} onNavigate={onNavigate} /> :
       view === "users" ? <AccountUserDirectory key={`${entityId ?? "users"}:${userTab ?? "identity"}`} entityId={entityId} initialDetailTab={userTab} scene={scene} onCreate={() => onNavigate("create-user")} onOpen={onNavigate} /> :
       view === "create-user" ? <CreateUserWizard onBack={() => onNavigate("users")} /> :
+      view === "tenants" && access.accountLifecycle ? <LiveAccountTenants client={access.accountLifecycle} scene={scene} /> :
       view === "tenants" ? <TenantDirectory scene={scene} /> :
       view === "settings" ? <><SettingsSectionNav preview={Boolean(workspace)} /><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : <><LivePersonalSecuritySettings /><LiveAccountSecuritySettings client={access.accountSecuritySettings} /></>}</> :
       view === "policies" && !workspace ? <AccountPolicyDirectory scene={scene} entityId={entityId} onOpen={(id) => onNavigate("policies", id)} onCreate={() => onNavigate("create-policy")} /> :

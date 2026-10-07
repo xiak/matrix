@@ -8,6 +8,7 @@ import type {
   OwnSessionRevocation
 } from "../domain/session";
 import type {
+  Account,
   AccountAccess,
   AccountCommand,
   AccountIdentity,
@@ -17,7 +18,10 @@ import type {
   AccountSecuritySettings,
   AccountSecuritySettingsChange,
   AccountSecuritySettingsUpdate,
+  CreateAccountLifecycleCommand,
+  RecoverAccountRootCredentialsCommand,
   SecuritySettingsUpdateIntent,
+  SetAccountLifecycleStatusCommand,
   DirectoryPage,
   Group,
   GroupAccess,
@@ -140,6 +144,13 @@ export interface IamRepository {
 }
 
 export interface AccountRepository {
+  accountLifecycle?: {
+    list(credential: string, after?: string): Promise<DirectoryPage<AccountAccess>>;
+    read(credential: string, accountId: string): Promise<AccountAccess>;
+    create(credential: string, command: CreateAccountLifecycleCommand): Promise<Account>;
+    setStatus(credential: string, accountId: string, command: SetAccountLifecycleStatusCommand): Promise<Account>;
+    recoverRootCredentials(credential: string, accountId: string, command: RecoverAccountRootCredentialsCommand): Promise<Account>;
+  };
   // Security reports have no collection endpoint. The authenticated Session
   // selects the account; accountId only binds returned resources locally.
   securityReports?: {

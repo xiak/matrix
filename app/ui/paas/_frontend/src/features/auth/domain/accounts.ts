@@ -82,6 +82,27 @@ export type Account = {
   resourceVersion: number;
 };
 
+export type CreateAccountLifecycleCommand = {
+  id: string;
+  displayName: string;
+  rootLoginName: string;
+  rootDisplayName: string;
+  initialPassword: string;
+  requestId: string;
+};
+
+export type SetAccountLifecycleStatusCommand = {
+  status: "ACTIVE" | "DISABLED";
+  resourceVersion: number;
+  requestId: string;
+};
+
+export type RecoverAccountRootCredentialsCommand = {
+  initialPassword: string;
+  resourceVersion: number;
+  requestId: string;
+};
+
 export type AccountSecuritySettings = {
   accountId: string;
   resourceVersion: number;

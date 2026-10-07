@@ -4,6 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import { useSession, useSessionCredential } from "./SessionProvider";
 import type {
+  Account,
+  AccountAccess as AccountAccessResource,
   AccountCommand,
   AccountPolicyDetail,
   AccountPolicyDocument,
@@ -13,6 +15,7 @@ import type {
   AccountPolicy,
   AuthorizationProfileDirectory,
   CapabilityRestriction,
+  CreateAccountLifecycleCommand,
   DirectoryPage,
   Group,
   GroupAccess,
@@ -25,6 +28,8 @@ import type {
   PolicyAttachmentChangeOperationExpectation,
   PolicyAttachmentRevocation,
   RolePolicyAttachment,
+  RecoverAccountRootCredentialsCommand,
+  SetAccountLifecycleStatusCommand,
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
   UserPermissionBoundary,
@@ -271,6 +276,52 @@ export type SecurityReportClient = {
   create(command: { formatVersion: 1; requestId: string }): Promise<AccountSecurityReportCreation>;
   read(reportId: string): Promise<AccountSecurityReport>;
   download(reportId: string): Promise<AccountSecurityReportDownload>;
+};
+
+export type AccountLifecycleMutation =
+  | { kind: "create"; command: CreateAccountLifecycleCommand }
+  | { kind: "set-status"; accountId: string; command: SetAccountLifecycleStatusCommand }
+  | { kind: "recover-root-credentials"; accountId: string; command: RecoverAccountRootCredentialsCommand };
+
+export type AccountLifecyclePending = Readonly<{
+  kind: AccountLifecycleMutation["kind"];
+  accountId: string;
+  requestId: string;
+  phase: "submitting" | "unknown";
+  ownerCurrent: boolean;
+}>;
+
+export type AccountLifecycleMutationResult =
+  | { status: "applied"; account: Account }
+  | { status: "conflict" }
+  | { status: "unknown" }
+  | { status: "blocked" }
+  | { status: "rejected"; reason: AccountError };
+
+export type AccountLifecycleClient = {
+  identity: object;
+  sessionRevision: number;
+  canCreate: boolean;
+  createRestrictionReason: CapabilityRestriction | null;
+  pending: AccountLifecyclePending | null;
+  list(after?: string): Promise<DirectoryPage<AccountAccessResource>>;
+  read(accountId: string): Promise<AccountAccessResource>;
+  create(command: CreateAccountLifecycleCommand): Promise<AccountLifecycleMutationResult>;
+  setStatus(accountId: string, command: SetAccountLifecycleStatusCommand): Promise<AccountLifecycleMutationResult>;
+  recoverRootCredentials(accountId: string, command: RecoverAccountRootCredentialsCommand): Promise<AccountLifecycleMutationResult>;
+  retry(): Promise<AccountLifecycleMutationResult>;
+};
+
+type AccountLifecycleOwner = Readonly<{
+  repository: NonNullable<AccountRepository["accountLifecycle"]>;
+  credential: string;
+  sessionRevision: number;
+}>;
+
+type StoredAccountLifecycleMutation = {
+  owner: AccountLifecycleOwner;
+  mutation: AccountLifecycleMutation;
+  phase: "submitting" | "unknown";
 };
 
 export type AccessKeyCreateIntent = Readonly<{
@@ -573,6 +624,7 @@ type AccountAccess = {
   policyRead: AccountPolicyReadClient | null;
   policyCreate: PolicyCreateClient | null;
   policyVersionMutation: PolicyVersionMutationClient | null;
+  accountLifecycle: AccountLifecycleClient | null;
   accountSecuritySettings: AccountSecuritySettingsClient | null;
   accessAnalysis: AccessAnalysisClient | null;
   securityReports: SecurityReportClient | null;
@@ -616,6 +668,20 @@ export function accountError(error: unknown): AccountError {
     if (error.status === 422 || error.status === 400) return "invalid";
   }
   return "unavailable";
+}
+
+function accountLifecycleTarget(mutation: AccountLifecycleMutation): string {
+  return mutation.kind === "create" ? mutation.command.id : mutation.accountId;
+}
+
+function accountLifecycleRequestId(mutation: AccountLifecycleMutation): string {
+  return mutation.command.requestId;
+}
+
+function executeAccountLifecycleMutation(owner: AccountLifecycleOwner, mutation: AccountLifecycleMutation): Promise<Account> {
+  if (mutation.kind === "create") return owner.repository.create(owner.credential, mutation.command);
+  if (mutation.kind === "set-status") return owner.repository.setStatus(owner.credential, mutation.accountId, mutation.command);
+  return owner.repository.recoverRootCredentials(owner.credential, mutation.accountId, mutation.command);
 }
 
 async function readWhenAuthorized<T>(read: () => Promise<T>): Promise<T | null> {
@@ -670,6 +736,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const currentViewSession = useRef(viewSession);
   const verifiedIdentitySession = useRef<typeof viewSession | null>(null);
   useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
+  const accountLifecycleOwner = useMemo<AccountLifecycleOwner | null>(() => {
+    if (!active || !credential || !repository.accountLifecycle) return null;
+    return { repository: repository.accountLifecycle, credential, sessionRevision };
+  }, [active, credential, repository, sessionRevision]);
+  const accountLifecycleMutationRef = useRef<StoredAccountLifecycleMutation | null>(null);
+  const [storedAccountLifecycleMutation, setStoredAccountLifecycleMutation] = useState<StoredAccountLifecycleMutation | null>(null);
+  useLayoutEffect(() => { accountLifecycleMutationRef.current = storedAccountLifecycleMutation; }, [storedAccountLifecycleMutation]);
   const [storedRoleSessionRevokeIntent, setStoredRoleSessionRevokeIntent] = useState<{ session: typeof viewSession; intent: RoleSessionRevokeIntent } | null>(null);
   const roleSessionRevokeIntent = storedRoleSessionRevokeIntent?.session === viewSession ? storedRoleSessionRevokeIntent.intent : null;
   const userPolicyChangeIdentityKey = active && tenantId && principalId && !repository.workspace
@@ -942,6 +1015,129 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       throw failure;
     }
   }, [active, credential, expireSession, principalId, repository, scene, sessionRevision, tenantId]);
+
+  const projectAccountSnapshot = useCallback((account: Account, access?: AccountAccessResource) => {
+    setScene((current) => {
+      if (!current) return current;
+      const index = current.accounts.findIndex((item) => item.id === account.id);
+      if (index < 0) return current;
+      const existing = current.accounts[index]!;
+      const projected = access ? buildAccountTenantScene(access) : {
+        ...existing,
+        name: account.displayName,
+        loginAlias: account.loginAlias,
+        rootLoginName: account.rootIdentity.loginName,
+        rootPrincipalId: account.rootIdentity.principalId,
+        enabled: account.status === "ACTIVE",
+        resourceVersion: account.resourceVersion
+      };
+      if (existing.name === projected.name && existing.loginAlias === projected.loginAlias &&
+          existing.rootLoginName === projected.rootLoginName && existing.rootPrincipalId === projected.rootPrincipalId &&
+          existing.enabled === projected.enabled && existing.resourceVersion === projected.resourceVersion &&
+          existing.canSetStatus === projected.canSetStatus && existing.statusRestrictionReason === projected.statusRestrictionReason &&
+          existing.canRecoverRoot === projected.canRecoverRoot && existing.recoveryRestrictionReason === projected.recoveryRestrictionReason) {
+        return current;
+      }
+      const accounts = [...current.accounts];
+      accounts[index] = projected;
+      return { ...current, accounts };
+    });
+  }, []);
+
+  const runAccountLifecycleMutation = useCallback(async (
+    mutation?: AccountLifecycleMutation
+  ): Promise<AccountLifecycleMutationResult> => {
+    const current = accountLifecycleMutationRef.current;
+    let submission: StoredAccountLifecycleMutation;
+    if (mutation) {
+      if (!accountLifecycleOwner) return { status: "rejected", reason: "unavailable" };
+      if (current) return { status: "blocked" };
+      submission = { owner: accountLifecycleOwner, mutation, phase: "submitting" };
+    } else {
+      if (!current || current.phase !== "unknown" || current.owner !== accountLifecycleOwner) return { status: "blocked" };
+      submission = { ...current, phase: "submitting" };
+    }
+    accountLifecycleMutationRef.current = submission;
+    setStoredAccountLifecycleMutation(submission);
+    try {
+      const account = await executeAccountLifecycleMutation(submission.owner, submission.mutation);
+      if (accountLifecycleMutationRef.current !== submission) return { status: "blocked" };
+      accountLifecycleMutationRef.current = null;
+      setStoredAccountLifecycleMutation(null);
+      projectAccountSnapshot(account);
+      return { status: "applied", account };
+    } catch (failure) {
+      if (accountLifecycleMutationRef.current !== submission) return { status: "blocked" };
+      if (failure instanceof HttpProblem && failure.status === 409) {
+        accountLifecycleMutationRef.current = null;
+        setStoredAccountLifecycleMutation(null);
+        return { status: "conflict" };
+      }
+      if (failure instanceof HttpProblem && [400, 401, 403, 404, 413, 415, 422].includes(failure.status)) {
+        accountLifecycleMutationRef.current = null;
+        setStoredAccountLifecycleMutation(null);
+        const reason = accountError(failure);
+        if (failure.status === 401 && expireSession(submission.owner.credential, submission.owner.sessionRevision)) {
+          verifiedIdentitySession.current = null;
+          setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+        }
+        return { status: "rejected", reason };
+      }
+      const unknown: StoredAccountLifecycleMutation = { ...submission, phase: "unknown" };
+      accountLifecycleMutationRef.current = unknown;
+      setStoredAccountLifecycleMutation(unknown);
+      return { status: "unknown" };
+    }
+  }, [accountLifecycleOwner, expireSession, projectAccountSnapshot]);
+
+  const accountLifecycle = useMemo<AccountLifecycleClient | null>(() => {
+    if (!accountLifecycleOwner || !scene || repository.workspace || !scene.canReadAccounts) return null;
+    const owner = accountLifecycleOwner;
+    const pending = storedAccountLifecycleMutation ? {
+      kind: storedAccountLifecycleMutation.mutation.kind,
+      accountId: accountLifecycleTarget(storedAccountLifecycleMutation.mutation),
+      requestId: accountLifecycleRequestId(storedAccountLifecycleMutation.mutation),
+      phase: storedAccountLifecycleMutation.phase,
+      ownerCurrent: storedAccountLifecycleMutation.owner === owner
+    } satisfies AccountLifecyclePending : null;
+    const read = async <T,>(request: Promise<T>): Promise<T> => {
+      try { return await request; }
+      catch (failure) {
+        if (failure instanceof HttpProblem && failure.status === 401 && expireSession(owner.credential, owner.sessionRevision)) {
+          verifiedIdentitySession.current = null;
+          setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+        }
+        throw failure;
+      }
+    };
+    return {
+      identity: owner,
+      sessionRevision,
+      canCreate: scene.canCreateAccounts,
+      createRestrictionReason: scene.createAccountsRestrictionReason,
+      pending,
+      list: async (after) => {
+        const page = await read(owner.repository.list(owner.credential, after));
+        if (after === undefined) {
+          setScene((current) => current ? {
+            ...current,
+            accounts: page.items.map(buildAccountTenantScene),
+            nextAccountPage: page.nextAfter
+          } : current);
+        }
+        return page;
+      },
+      read: async (accountId) => {
+        const access = await read(owner.repository.read(owner.credential, accountId));
+        projectAccountSnapshot(access.account, access);
+        return access;
+      },
+      create: (command) => runAccountLifecycleMutation({ kind: "create", command }),
+      setStatus: (accountId, command) => runAccountLifecycleMutation({ kind: "set-status", accountId, command }),
+      recoverRootCredentials: (accountId, command) => runAccountLifecycleMutation({ kind: "recover-root-credentials", accountId, command }),
+      retry: () => runAccountLifecycleMutation()
+    };
+  }, [accountLifecycleOwner, expireSession, projectAccountSnapshot, repository.workspace, runAccountLifecycleMutation, scene, sessionRevision, storedAccountLifecycleMutation]);
 
   const groups = useMemo<GroupAccessClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId) return null;
@@ -1894,6 +2090,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     policyRead,
     policyCreate,
     policyVersionMutation,
+    accountLifecycle,
     accessAnalysis,
     securityReports,
     accessKeys,
@@ -2036,7 +2233,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountLifecycle, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

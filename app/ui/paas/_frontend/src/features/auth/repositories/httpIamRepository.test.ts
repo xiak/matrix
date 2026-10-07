@@ -2569,18 +2569,78 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("binds lifecycle requests to the exact account root and resource version", async () => {
+    const lifecycle = httpAccountRepository.accountLifecycle!;
     const disabled = { ...account, status: "DISABLED" };
     let fetcher = reply(disabled);
-    await httpAccountRepository.execute("bearer", { kind: "set-account-status", accountId: account.id,
-      status: "DISABLED", resourceVersion: 1 });
+    await lifecycle.setStatus("bearer", account.id, {
+      status: "DISABLED", resourceVersion: 1, requestId: "account-status-request"
+    });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/accounts/account-acme:set-status");
-    expect(requestBody(fetcher)).toEqual({ status: "DISABLED", resourceVersion: 1, requestId: expect.any(String) });
+    expect(requestBody(fetcher)).toEqual({ status: "DISABLED", resourceVersion: 1, requestId: "account-status-request" });
 
     fetcher = reply(disabled);
-    await httpAccountRepository.execute("bearer", { kind: "recover-root-credentials", accountId: account.id,
-      initialPassword: "Recovery-Test-Password-49!", resourceVersion: 1 });
+    await lifecycle.recoverRootCredentials("bearer", account.id, {
+      initialPassword: "Recovery-Test-Password-49!", resourceVersion: 1, requestId: "account-recovery-request"
+    });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/accounts/account-acme:recover-root-credentials");
-    expect(requestBody(fetcher)).toEqual({ initialPassword: "Recovery-Test-Password-49!", resourceVersion: 1, requestId: expect.any(String) });
+    expect(requestBody(fetcher)).toEqual({ initialPassword: "Recovery-Test-Password-49!", resourceVersion: 1, requestId: "account-recovery-request" });
+
+    fetcher = reply({ ...account, id: "account-new", displayName: "New account", rootIdentity: { principalId: "root-new", loginName: "new.owner" }, loginAlias: null, resourceVersion: 1 });
+    await lifecycle.create("bearer", {
+      id: "account-new", displayName: "New account", rootLoginName: "new.owner", rootDisplayName: "New owner",
+      initialPassword: "Create-Test-Password-49!", requestId: "account-create-request"
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/accounts");
+    expect(requestBody(fetcher)).toEqual({
+      id: "account-new", displayName: "New account", rootLoginName: "new.owner", rootDisplayName: "New owner",
+      initialPassword: "Create-Test-Password-49!", requestId: "account-create-request"
+    });
+    await expect(httpAccountRepository.execute("bearer", { kind: "set-account-status", accountId: account.id,
+      status: "DISABLED", resourceVersion: 1 })).rejects.toThrow("ACCOUNT_LIFECYCLE_CLIENT_REQUIRED");
+  });
+
+  it("fails closed when an account lifecycle response does not prove the requested target and transition", async () => {
+    const lifecycle = httpAccountRepository.accountLifecycle!;
+    const fetcher = reply(accountAccess(account));
+    await expect(lifecycle.read("bearer", account.id)).resolves.toMatchObject({ account: { id: account.id } });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/accounts/${account.id}`);
+
+    reply(accountAccess({ ...account, id: "another-account" }));
+    await expect(lifecycle.read("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+
+    for (const body of [
+      { ...account, id: "another-account", status: "DISABLED", resourceVersion: 3 },
+      { ...account, status: "ACTIVE", resourceVersion: 3 },
+      { ...account, status: "DISABLED", resourceVersion: 1 }
+    ]) {
+      reply(body);
+      await expect(lifecycle.setStatus("bearer", account.id, {
+        status: "DISABLED", resourceVersion: 2, requestId: "account-status-invalid-response"
+      })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    for (const body of [
+      { ...account, id: "another-account", resourceVersion: 3 },
+      { ...account, resourceVersion: 2 }
+    ]) {
+      reply(body);
+      await expect(lifecycle.recoverRootCredentials("bearer", account.id, {
+        initialPassword: "Recovery-Test-Password-49!", resourceVersion: 2, requestId: "account-recovery-invalid-response"
+      })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    for (const body of [
+      { ...account, id: "account-new", displayName: "Wrong", rootIdentity: { principalId: "root-new", loginName: "new.owner" }, loginAlias: null, resourceVersion: 1 },
+      { ...account, id: "account-new", displayName: "New account", rootIdentity: { principalId: "root-new", loginName: "other.owner" }, loginAlias: null, resourceVersion: 1 },
+      { ...account, id: "account-new", displayName: "New account", rootIdentity: { principalId: "root-new", loginName: "new.owner" }, loginAlias: "forged", resourceVersion: 1 },
+      { ...account, id: "account-new", displayName: "New account", rootIdentity: { principalId: "root-new", loginName: "new.owner" }, loginAlias: null, resourceVersion: 2 }
+    ]) {
+      reply(body);
+      await expect(lifecycle.create("bearer", {
+        id: "account-new", displayName: "New account", rootLoginName: "new.owner", rootDisplayName: "New owner",
+        initialPassword: "Create-Test-Password-49!", requestId: "account-create-invalid-response"
+      })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 
   it("binds profile updates and irreversible deletion to one user revision", async () => {

@@ -157,6 +157,32 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
   } as AccountRepository;
 }
 
+function liveAccountLifecycle(overrides: Partial<NonNullable<AccountRepository["accountLifecycle"]>> = {}): NonNullable<AccountRepository["accountLifecycle"]> {
+  let current = structuredClone(account);
+  return {
+    list: vi.fn().mockImplementation(async () => ({ items: [accountAccess(current)], nextAfter: null })),
+    read: vi.fn().mockImplementation(async (_credential: string, accountId: string) => {
+      if (accountId !== current.id) throw new HttpProblem(404, "ACCOUNT_NOT_FOUND");
+      return accountAccess(structuredClone(current));
+    }),
+    create: vi.fn().mockImplementation(async (_credential: string, command) => {
+      current = { id: command.id, displayName: command.displayName, status: "ACTIVE", rootIdentity: { principalId: `root-${command.id}`, loginName: command.rootLoginName }, loginAlias: null, resourceVersion: 1 };
+      return structuredClone(current);
+    }),
+    setStatus: vi.fn().mockImplementation(async (_credential: string, accountId: string, command) => {
+      if (accountId !== current.id || command.resourceVersion !== current.resourceVersion) throw new HttpProblem(409, "IAM_CONFLICT");
+      current = { ...current, status: command.status, resourceVersion: current.resourceVersion + 1 };
+      return structuredClone(current);
+    }),
+    recoverRootCredentials: vi.fn().mockImplementation(async (_credential: string, accountId: string, command) => {
+      if (accountId !== current.id || command.resourceVersion !== current.resourceVersion) throw new HttpProblem(409, "IAM_CONFLICT");
+      current = { ...current, resourceVersion: current.resourceVersion + 1 };
+      return structuredClone(current);
+    }),
+    ...overrides
+  };
+}
+
 function livePolicyVersions() {
   let policy: AccountPolicy = { ...tenantPolicy, id: "customer.logs", management: "CUSTOMER", accountId: account.id,
     displayName: "LogBoundary", defaultVersionId: "version-logs", resourceVersion: 4 };
@@ -850,6 +876,183 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "返回列表" }));
     expect(screen.getByRole("table", { name: "租户账号列表" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "开通租户" })).toBe(document.activeElement);
+  });
+
+  it("keeps the live account detail shell stable while exact target capabilities load", async () => {
+    let resolveRead!: (value: AccountAccess) => void;
+    const pendingRead = new Promise<AccountAccess>((resolve) => { resolveRead = resolve; });
+    const lifecycle = liveAccountLifecycle({ read: vi.fn().mockReturnValue(pendingRead) });
+    const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
+    await user.click(await screen.findByRole("button", { name: "Team A" }));
+
+    expect(screen.getByRole("heading", { name: "Team A" })).toBeTruthy();
+    expect(screen.getByText("正在重新鉴权并读取目标账户…")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "停用账户" })).toBeNull();
+
+    resolveRead(accountAccess(structuredClone(account)));
+    expect(await screen.findByRole("button", { name: "停用账户" })).toBeTruthy();
+    expect(lifecycle.read).toHaveBeenCalledWith(credential, account.id);
+  });
+
+  it("locks an unknown account status result to the exact request and retries it byte-for-byte", async () => {
+    const disabled = { ...account, status: "DISABLED" as const, resourceVersion: 2 };
+    const read = vi.fn()
+      .mockResolvedValueOnce(accountAccess(structuredClone(account)))
+      .mockResolvedValue(accountAccess(structuredClone(disabled)));
+    const setStatus = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockResolvedValueOnce(structuredClone(disabled));
+    const lifecycle = liveAccountLifecycle({ read, setStatus });
+    const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
+    await user.click(await screen.findByRole("button", { name: "Team A" }));
+    await user.click(await screen.findByRole("button", { name: "停用账户" }));
+    await user.click(screen.getByRole("button", { name: "确认停用账户" }));
+
+    expect(await screen.findByText("原操作结果未知")).toBeTruthy();
+    const original = setStatus.mock.calls[0]![2];
+    expect(original).toMatchObject({ status: "DISABLED", resourceVersion: 1, requestId: expect.any(String) });
+    await user.click(screen.getByRole("button", { name: "精确重试原请求" }));
+
+    await waitFor(() => expect(setStatus).toHaveBeenCalledTimes(2));
+    expect(setStatus.mock.calls[1]![2]).toEqual(original);
+    expect(await screen.findByText("账户状态已更新；目标能力已重新读取。")).toBeTruthy();
+    expect(screen.getAllByText("已停用")).toHaveLength(2);
+
+    await user.click(screen.getByTestId("nav-roles"));
+    await user.click(screen.getByTestId("nav-tenants"));
+    const row = within(await screen.findByRole("table", { name: "租户账号列表" })).getByRole("row", { name: /Team A/ });
+    expect(within(row).getByText("已停用")).toBeTruthy();
+  });
+
+  it("keeps an unknown account mutation locked when the tenant view is left and reopened", async () => {
+    const setStatus = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const lifecycle = liveAccountLifecycle({ setStatus });
+    const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
+    await user.click(await screen.findByRole("button", { name: "Team A" }));
+    await user.click(await screen.findByRole("button", { name: "停用账户" }));
+    await user.click(screen.getByRole("button", { name: "确认停用账户" }));
+
+    expect(await screen.findByText("原操作结果未知")).toBeTruthy();
+    const originalRequestId = setStatus.mock.calls[0]![2].requestId;
+    await user.click(screen.getByTestId("nav-roles"));
+    await user.click(screen.getByTestId("nav-tenants"));
+
+    expect(await screen.findByText("原操作结果未知")).toBeTruthy();
+    expect(screen.getByText(originalRequestId)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "开通租户" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(setStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("never replays an unknown account mutation through a replacement repository client", async () => {
+    const oldSetStatus = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const oldRepository = accounts({ accountLifecycle: liveAccountLifecycle({ setStatus: oldSetStatus }) });
+    const newSetStatus = vi.fn();
+    const newRepository = accounts({ accountLifecycle: liveAccountLifecycle({ setStatus: newSetStatus }) });
+    const { user, replaceRepository } = await openAccess(oldRepository, iam(), "tenants");
+    await user.click(await screen.findByRole("button", { name: "Team A" }));
+    await user.click(await screen.findByRole("button", { name: "停用账户" }));
+    await user.click(screen.getByRole("button", { name: "确认停用账户" }));
+    expect(await screen.findByText("原操作结果未知")).toBeTruthy();
+
+    replaceRepository(newRepository);
+    await waitFor(() => expect(newRepository.currentIdentity).toHaveBeenCalledWith(credential));
+    expect(await screen.findByText("原操作属于此前的客户端")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "精确重试原请求" })).toBeNull();
+    expect((screen.getByRole("button", { name: "开通租户" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(oldSetStatus).toHaveBeenCalledTimes(1);
+    expect(newSetStatus).not.toHaveBeenCalled();
+  });
+
+  it("rereads after a lifecycle conflict but requires a new explicit request with a new version and requestId", async () => {
+    const latest = { ...account, resourceVersion: 4 };
+    const disabled = { ...latest, status: "DISABLED" as const, resourceVersion: 5 };
+    const read = vi.fn()
+      .mockResolvedValueOnce(accountAccess(structuredClone(account)))
+      .mockResolvedValueOnce(accountAccess(structuredClone(latest)))
+      .mockResolvedValue(accountAccess(structuredClone(disabled)));
+    const setStatus = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(409, "IAM_CONFLICT"))
+      .mockResolvedValueOnce(structuredClone(disabled));
+    const lifecycle = liveAccountLifecycle({ read, setStatus });
+    const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
+    await user.click(await screen.findByRole("button", { name: "Team A" }));
+    await user.click(await screen.findByRole("button", { name: "停用账户" }));
+    await user.click(screen.getByRole("button", { name: "确认停用账户" }));
+
+    expect(await screen.findByText("资源已变化，原请求未被确认")).toBeTruthy();
+    expect(screen.getByText("当前状态：正常 · 资源版本 4")).toBeTruthy();
+    const first = setStatus.mock.calls[0]![2];
+    await user.click(screen.getByRole("button", { name: "确认停用账户" }));
+    await waitFor(() => expect(setStatus).toHaveBeenCalledTimes(2));
+    const second = setStatus.mock.calls[1]![2];
+    expect(second.resourceVersion).toBe(4);
+    expect(second.requestId).not.toBe(first.requestId);
+    expect(await screen.findByText("账户状态已更新；目标能力已重新读取。")).toBeTruthy();
+  });
+
+  it("does not claim refreshed capabilities when the post-mutation target read fails", async () => {
+    const disabled = { ...account, status: "DISABLED" as const, resourceVersion: 2 };
+    const read = vi.fn()
+      .mockResolvedValueOnce(accountAccess(structuredClone(account)))
+      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const lifecycle = liveAccountLifecycle({ read, setStatus: vi.fn().mockResolvedValue(structuredClone(disabled)) });
+    const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
+    await user.click(await screen.findByRole("button", { name: "Team A" }));
+    await user.click(await screen.findByRole("button", { name: "停用账户" }));
+    await user.click(screen.getByRole("button", { name: "确认停用账户" }));
+
+    expect(await screen.findByText("操作已返回成功，但目标账户的重新鉴权读取失败。请重试读取；旧能力不会继续用于操作。")).toBeTruthy();
+    expect(screen.queryByText("账户状态已更新；目标能力已重新读取。")).toBeNull();
+    expect(screen.queryByRole("button", { name: "恢复账户访问" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "恢复根身份凭据" })).toBeNull();
+  });
+
+  it("keeps system-owned account lifecycle actions unavailable from exact target capabilities", async () => {
+    const protectedAccess: AccountAccess = { account: structuredClone(account), capabilities: [
+      capability("iam.account.set-status", "ACCOUNT", account.id, "SYSTEM_ACCOUNT_PROTECTED"),
+      capability("iam.account.recover-root-credentials", "ACCOUNT", account.id, "SYSTEM_ACCOUNT_PROTECTED")
+    ] };
+    const lifecycle = liveAccountLifecycle({ read: vi.fn().mockResolvedValue(protectedAccess) });
+    const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
+    await user.click(await screen.findByRole("button", { name: "Team A" }));
+    expect((await screen.findByRole("button", { name: "停用账户" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "恢复根身份凭据" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(lifecycle.setStatus).not.toHaveBeenCalled();
+    expect(lifecycle.recoverRootCredentials).not.toHaveBeenCalled();
+  });
+
+  it("expires the exact session and clears the account projection after a lifecycle 401", async () => {
+    const lifecycle = liveAccountLifecycle({ read: vi.fn().mockRejectedValue(new HttpProblem(401, "private upstream")) });
+    const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
+    await user.click(await screen.findByRole("button", { name: "Team A" }));
+
+    expect(await screen.findByRole("button", { name: "登录控制台" })).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "租户账号列表" })).toBeNull();
+    expect(screen.queryByText("Team A")).toBeNull();
+  });
+
+  it("keeps status and authority unchanged when root credentials are recovered", async () => {
+    const disabled = { ...account, status: "DISABLED" as const, resourceVersion: 3 };
+    const recovered = { ...disabled, resourceVersion: 4 };
+    const read = vi.fn()
+      .mockResolvedValueOnce(accountAccess(structuredClone(disabled)))
+      .mockResolvedValue(accountAccess(structuredClone(recovered)));
+    const recoverRootCredentials = vi.fn().mockResolvedValue(structuredClone(recovered));
+    const lifecycle = liveAccountLifecycle({ read, recoverRootCredentials });
+    const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
+    await user.click(await screen.findByRole("button", { name: "Team A" }));
+    await user.click(await screen.findByRole("button", { name: "恢复根身份凭据" }));
+    await user.type(screen.getByLabelText("初始密码"), "Recovery-Test-Password-49!");
+    await user.click(screen.getByRole("button", { name: "确认恢复根身份" }));
+
+    expect(await screen.findByText("根身份凭据已恢复；原会话已撤销，首次登录必须修改密码。账户状态和平台角色没有改变。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "恢复账户访问" })).toBeTruthy();
+    expect(screen.getAllByText("已停用").length).toBeGreaterThan(0);
+    expect(recoverRootCredentials).toHaveBeenCalledWith(credential, account.id, {
+      initialPassword: "Recovery-Test-Password-49!",
+      resourceVersion: disabled.resourceVersion,
+      requestId: expect.any(String)
+    });
   });
 
   it("starts on a dedicated overview and opens the user workspace without an extra fetch", async () => {
