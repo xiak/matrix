@@ -142,10 +142,16 @@ generic provider schemas before a real second implementation exists.
     adapter may demonstrate this interaction, but the live console must not
     invent a catalog response or expose tenant publish, disable or registration
     controls before IAM owns a fixed query and lifecycle contract. Operators
-    reach read-only permission definitions contextually from policy authoring;
-    a Product-management publisher workspace is deferred until that authority
-    and API exist. This follows the provider-owned permission inventories and
-    contextual editors documented by the AWS
+    reach read-only permission definitions contextually from policy authoring.
+    The isolated DEV experience may separately show an internal Product/IAM
+    onboarding workspace under Platform management so those teams can review
+    declarations, PEP evidence and release gates before an API exists. That
+    workspace reuses the same catalog presentation, is absent from LIVE
+    navigation, keeps every gate unverified or unavailable, and cannot create,
+    validate, approve or publish anything. A real Product-management publisher
+    workspace remains deferred until that authority and API exist. This follows
+    the provider-owned permission inventories and contextual editors documented
+    by the AWS
     [Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/reference_policies_actions-resources-contextkeys.html),
     Azure [resource-provider permissions](https://learn.microsoft.com/en-us/azure/role-based-access-control/resource-provider-operations),
     Google Cloud [custom-role permission selection](https://cloud.google.com/iam/docs/creating-custom-roles),
@@ -1702,15 +1708,25 @@ and `git diff --check` gates must pass on the same committed worktree.
 ### Current shared-navigation development evidence
 
 Verified through 2026-10-07 against the current all-service navigation, compact IAM
-shell, responsive access-analysis hierarchy and primary directory actions.
+shell, responsive access-analysis hierarchy, primary directory actions and the
+provider-owned product-permission onboarding boundary.
 
-Current compact IAM evidence is fixed at `24e7a3780`, `88c21ccb3` and `6b65fe6b5`,
-with the last source also owning the synchronized embedded export. Fixed chrome, page
-title, back navigation and the consolidated page-action trigger paint without waiting
-for directory data.
+Current compact IAM evidence is fixed at `24e7a3780`, `88c21ccb3`, `6b65fe6b5` and
+`1357e965d`, with the last source also owning the synchronized embedded export. Fixed
+chrome, page title, back navigation and the consolidated page-action trigger paint
+without waiting for directory data.
 Access analysis keeps its three known primary sections on one row above 360 px; at or
 below 360 px the same three controls become equal-width columns and may wrap their own
 labels, without turning an arbitrary tab set into a second mobile implementation.
+
+The tenant Policy > permission-capability catalog remains the read-only consumer of
+published `AuthorizationProfile` declarations and never exposes internal onboarding,
+including in the isolated preview. A distinct Platform management > product-permission
+onboarding route reuses that same catalog for Product/IAM declaration, PEP-evidence and
+release-gate review. It is present only in the isolated MOCK workspace, is absent from
+LIVE navigation, fails closed on direct LIVE access, and cannot create, validate,
+approve or publish a Profile. This preserves one catalog projection without presenting
+an unimplemented backend lifecycle as a tenant capability.
 
 The public `Table.PrimaryAction` now owns the primary object entry throughout IAM
 directories and relationship tables: User, Group, Policy, Role, security report,
@@ -1728,12 +1744,15 @@ service summary, authorization Profiles, service authorization and AccessKey tab
 Every checked view kept document and viewport width equal and opened the selected
 object directly in the existing content area with no Dialog. The broader 16-route IAM
 audit found no page overflow, duplicate IDs, extra `h1`, unnamed actions or unlabelled
-tables; a clean DEV session emitted no browser warning/error. The complete
-63-file/1,115-case frontend suite plus three normalization cases,
-type/lint/architecture/228-pair style gates, 46-route export, 44 normalized paths,
-synchronized embed, and repository-wide Go test/vet passed. This is shared shell and
-interaction evidence; exact IAM semantics, LIVE authorization and remaining
-real-runtime/browser acceptance stay with
+tables. The current onboarding slice additionally exercised both the platform route
+and tenant catalog at desktop and `390 × 844`: the internal action appeared only on the
+platform surface, the tenant surface retained zero such actions and no Dialog, and a
+clean DEV session emitted no browser warning/error. The complete 63-file/1,119-case
+frontend suite plus three normalization cases, type/lint/architecture/228-pair style
+gates, 47-page export, 45 normalized paths, 259-file synchronized embed, and
+repository-wide Go test/vet passed. This is shared shell and interaction evidence;
+exact IAM semantics, LIVE authorization and remaining real-runtime/browser acceptance
+stay with
 [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md).
 
 The shared delayed-feedback regression matrix is fixed at `ba7e57a9a`. It now
