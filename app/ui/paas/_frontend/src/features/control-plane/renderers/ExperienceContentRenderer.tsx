@@ -371,23 +371,28 @@ function ApplicationResourceDetail({ resource, readSnapshot, tagSnapshot, deploy
 function LiveApplicationResourceDetail({ resourceId }: { resourceId: string }) {
   const t = useTranslations("CloudExperience");
   const { readApplication } = useControlPlane();
-  const [load, setLoad] = useState<ApplicationReadView>({ status: "loading" });
+  const [retryRevision, setRetryRevision] = useState(0);
+  const [result, setResult] = useState<{
+    reader: typeof readApplication;
+    resourceId: string;
+    retryRevision: number;
+    load: ApplicationReadView;
+  }>(() => ({ reader: readApplication, resourceId, retryRevision: -1, load: { status: "loading" } }));
+  const load: ApplicationReadView = result.reader === readApplication && result.resourceId === resourceId && result.retryRevision === retryRevision
+    ? result.load
+    : { status: "loading" };
   const revision = useRef(0);
   useEffect(() => {
     let active = true;
     const current = ++revision.current;
     void readApplication(resourceId).then((next) => {
-      if (active && revision.current === current) setLoad(next);
+      if (active && revision.current === current) setResult({ reader: readApplication, resourceId, retryRevision, load: next });
     });
     return () => { active = false; };
-  }, [readApplication, resourceId]);
+  }, [readApplication, resourceId, retryRevision]);
 
   function retry() {
-    const current = ++revision.current;
-    setLoad({ status: "loading" });
-    void readApplication(resourceId).then((next) => {
-      if (revision.current === current) setLoad(next);
-    });
+    setRetryRevision((value) => value + 1);
   }
 
   return <section aria-labelledby="application-resource-detail-title" className={styles.resourceDetail}>
@@ -397,6 +402,17 @@ function LiveApplicationResourceDetail({ resourceId }: { resourceId: string }) {
 }
 
 type ApplicationDirectoryView = ApplicationDirectoryLoad | { status: "loading" };
+type ApplicationDirectoryReader = ReturnType<typeof useControlPlane>["listApplications"];
+type ApplicationDirectoryNavigation = {
+  reader: ApplicationDirectoryReader;
+  cursors: Array<string | undefined>;
+  pageIndex: number;
+  refreshRevision: number;
+};
+
+function initialApplicationDirectoryNavigation(reader: ApplicationDirectoryReader): ApplicationDirectoryNavigation {
+  return { reader, cursors: [undefined], pageIndex: 0, refreshRevision: 0 };
+}
 
 const applicationDirectoryFailureMessages = {
   invalidCursor: "applicationDirectory.messages.invalidCursor",
@@ -519,9 +535,9 @@ function LiveApplicationDirectory({ load, pageIndex, onPrevious, onNext, onRetry
 
 function LiveApplicationResources({ selectedId }: { selectedId: string | null }) {
   const { listApplications } = useControlPlane();
-  const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
-  const [pageIndex, setPageIndex] = useState(0);
-  const [refreshRevision, setRefreshRevision] = useState(0);
+  const [navigation, setNavigation] = useState<ApplicationDirectoryNavigation>(() => initialApplicationDirectoryNavigation(listApplications));
+  const activeNavigation = navigation.reader === listApplications ? navigation : initialApplicationDirectoryNavigation(listApplications);
+  const { cursors, pageIndex, refreshRevision } = activeNavigation;
   const [result, setResult] = useState<{
     reader: typeof listApplications;
     cursor: string | undefined;
@@ -530,7 +546,7 @@ function LiveApplicationResources({ selectedId }: { selectedId: string | null })
   }>(() => ({ reader: listApplications, cursor: undefined, refreshRevision: -1, load: { status: "loading" } }));
   const requestRevision = useRef(0);
   const completedRequest = useRef<{ reader: typeof listApplications; cursor: string | undefined; refreshRevision: number } | null>(null);
-  const directoryTenant = useRef<string | undefined>(undefined);
+  const directoryTenant = useRef<{ reader: typeof listApplications; tenantId?: string }>({ reader: listApplications });
   const cursor = cursors[pageIndex];
   const load: ApplicationDirectoryView = result.reader === listApplications && result.cursor === cursor && result.refreshRevision === refreshRevision
     ? result.load
@@ -540,6 +556,7 @@ function LiveApplicationResources({ selectedId }: { selectedId: string | null })
     if (selectedId) return;
     const completed = completedRequest.current;
     if (completed?.reader === listApplications && completed.cursor === cursor && completed.refreshRevision === refreshRevision) return;
+    if (directoryTenant.current.reader !== listApplications) directoryTenant.current = { reader: listApplications };
     let active = true;
     const revision = ++requestRevision.current;
     void listApplications(cursor).then((next) => {
@@ -547,10 +564,10 @@ function LiveApplicationResources({ selectedId }: { selectedId: string | null })
       let resolved: ApplicationDirectoryView = next;
       if (next.status === "ready" && next.page.items.length > 0) {
         const tenantId = next.page.items[0]!.metadata.scope.tenantId;
-        if (directoryTenant.current && directoryTenant.current !== tenantId) {
+        if (directoryTenant.current.tenantId && directoryTenant.current.tenantId !== tenantId) {
           resolved = { status: "unavailable" };
         } else {
-          directoryTenant.current = tenantId;
+          directoryTenant.current = { reader: listApplications, tenantId };
         }
       }
       completedRequest.current = { reader: listApplications, cursor, refreshRevision };
@@ -559,12 +576,25 @@ function LiveApplicationResources({ selectedId }: { selectedId: string | null })
     return () => { active = false; };
   }, [cursor, listApplications, refreshRevision, selectedId]);
 
-  if (selectedId) return <LiveApplicationResourceDetail resourceId={selectedId} />;
+  if (selectedId) return <LiveApplicationResourceDetail key={selectedId} resourceId={selectedId} />;
   return <LiveApplicationDirectory load={load} pageIndex={pageIndex}
-    onPrevious={() => setPageIndex((value) => Math.max(0, value - 1))}
-    onNext={(next) => { setCursors((current) => [...current.slice(0, pageIndex + 1), next]); setPageIndex((value) => value + 1); }}
-    onRetry={() => setRefreshRevision((value) => value + 1)}
-    onRestart={() => { directoryTenant.current = undefined; setCursors([undefined]); setPageIndex(0); setRefreshRevision((value) => value + 1); }} />;
+    onPrevious={() => setNavigation((current) => {
+      const base = current.reader === listApplications ? current : initialApplicationDirectoryNavigation(listApplications);
+      return { ...base, pageIndex: Math.max(0, base.pageIndex - 1) };
+    })}
+    onNext={(next) => setNavigation((current) => {
+      const base = current.reader === listApplications ? current : initialApplicationDirectoryNavigation(listApplications);
+      return { ...base, cursors: [...base.cursors.slice(0, base.pageIndex + 1), next], pageIndex: base.pageIndex + 1 };
+    })}
+    onRetry={() => setNavigation((current) => {
+      const base = current.reader === listApplications ? current : initialApplicationDirectoryNavigation(listApplications);
+      return { ...base, refreshRevision: base.refreshRevision + 1 };
+    })}
+    onRestart={() => {
+      directoryTenant.current = { reader: listApplications };
+      const base = navigation.reader === listApplications ? navigation : initialApplicationDirectoryNavigation(listApplications);
+      setNavigation({ ...initialApplicationDirectoryNavigation(listApplications), refreshRevision: base.refreshRevision + 1 });
+    }} />;
 }
 
 function Resources({ scene, scope }: {

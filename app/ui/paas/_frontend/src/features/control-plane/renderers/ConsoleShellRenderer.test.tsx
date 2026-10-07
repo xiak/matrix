@@ -242,7 +242,10 @@ async function renderConsole({
     logout
   };
   const user = userEvent.setup({ delay: null });
+  let replaceRepository: (next: ControlPlaneRepository) => void = () => {};
   function RoutedPage() {
+    const [activeRepository, setActiveRepository] = useState(repository);
+    replaceRepository = setActiveRepository;
     const [href, setHref] = useState(consoleRouteHref({ section, view: initialView }));
     if (heldRoute) navigation.push.mockImplementation((target: string) => {
       const url = new URL(target, "https://matrix.invalid");
@@ -250,7 +253,7 @@ async function renderConsole({
       setHref(target);
     });
     if (heldRoute && href === heldRoute.href && !heldRoute.ready) throw heldRoute.promise;
-    return <ConsoleShellRenderer accountRepository={accountRepository} experience={experience} repository={repository} selection={parseControlPlanePathname(new URL(href, "https://matrix.invalid").pathname)} />;
+    return <ConsoleShellRenderer accountRepository={accountRepository} experience={experience} repository={activeRepository} selection={parseControlPlanePathname(new URL(href, "https://matrix.invalid").pathname)} />;
   }
   const view = render(
     <LocaleProvider><SessionProvider repository={iam}>
@@ -265,7 +268,7 @@ async function renderConsole({
   if (openWorkspace) await user.click(await screen.findByRole("button", { name: section === "quotas" ? "激活配额" : section === "installations" ? "安装服务" : "查看平台状态" }));
   const loginDestination = navigation.replace.mock.calls.at(-1)?.[0];
   navigation.replace.mockClear();
-  return { user, view, repository, loginDestination };
+  return { user, view, repository, replaceRepository, loginDestination };
 }
 
 afterEach(() => {
@@ -1142,6 +1145,38 @@ describe("ConsoleShellRenderer", () => {
     expect(listApplications).toHaveBeenNthCalledWith(3, "renderer-test-memory-only-session", undefined);
   });
 
+  it("discards Application cursor and tenant history when the authenticated reader changes", async () => {
+    const nextAfter = "pc1.First_identity_next";
+    const listApplications = vi.fn()
+      .mockResolvedValueOnce({ items: [], nextAfter } satisfies ApplicationDirectoryPage)
+      .mockResolvedValueOnce(liveApplicationDirectoryPage);
+    const { user, repository, replaceRepository } = await renderConsole({ section: "applications", listApplications });
+
+    await user.click(await screen.findByRole("button", { name: "下一个授权窗口" }));
+    expect(await screen.findByRole("link", { name: "live-checkout" })).toBeTruthy();
+    expect(screen.getByText("第 2 个授权窗口")).toBeTruthy();
+
+    const secondIdentityPage: ApplicationDirectoryPage = {
+      items: [{
+        ...liveApplicationReadSnapshot.application,
+        metadata: {
+          ...liveApplicationReadSnapshot.application.metadata,
+          id: "app-second-identity",
+          name: "second-identity",
+          scope: { kind: "TENANT", tenantId: "organization-second" }
+        }
+      }],
+      nextAfter: null
+    };
+    const secondList = vi.fn().mockResolvedValue(secondIdentityPage);
+    act(() => replaceRepository({ ...repository, listApplications: secondList }));
+
+    expect(await screen.findByRole("link", { name: "second-identity" })).toBeTruthy();
+    expect(screen.getByText("第 1 个授权窗口")).toBeTruthy();
+    expect(secondList).toHaveBeenCalledTimes(1);
+    expect(secondList).toHaveBeenCalledWith("renderer-test-memory-only-session", undefined);
+  });
+
   it("does not leak MOCK rows when the LIVE Application directory is forbidden", async () => {
     const listApplications = vi.fn().mockRejectedValue(new HttpProblem(403, "PERMISSION_DENIED"));
     await renderConsole({ section: "applications", listApplications });
@@ -1174,6 +1209,42 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("heading", { name: "部署与版本" })).toBeNull();
     expect(screen.queryByRole("button", { name: "管理标签" })).toBeNull();
     expect(readApplication).toHaveBeenCalledWith("renderer-test-memory-only-session", "app-live-checkout");
+  });
+
+  it("hides exact Application data from the previous authenticated reader before re-reading", async () => {
+    navigation.query = "resource=app-live-checkout";
+    const readApplication = vi.fn().mockResolvedValue(liveApplicationReadSnapshot);
+    const { repository, replaceRepository } = await renderConsole({ section: "applications", readApplication });
+
+    expect(await screen.findByRole("heading", { level: 2, name: "live-checkout" })).toBeTruthy();
+    expect(screen.getByText("organization-test")).toBeTruthy();
+
+    let resolveSecond!: (value: ApplicationReadSnapshot) => void;
+    const secondRead = vi.fn(() => new Promise<ApplicationReadSnapshot>((resolve) => { resolveSecond = resolve; }));
+    act(() => replaceRepository({ ...repository, readApplication: secondRead }));
+
+    expect(screen.getByRole("heading", { level: 2, name: "应用详情" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("正在读取这个应用");
+    expect(screen.queryByText("organization-test")).toBeNull();
+    expect(screen.queryByText('"7"')).toBeNull();
+    expect(secondRead).toHaveBeenCalledWith("renderer-test-memory-only-session", "app-live-checkout");
+
+    await act(async () => resolveSecond({
+      etag: '"8"',
+      application: {
+        ...liveApplicationReadSnapshot.application,
+        metadata: {
+          ...liveApplicationReadSnapshot.application.metadata,
+          name: "second-reader",
+          scope: { kind: "TENANT", tenantId: "organization-second" },
+          resourceVersion: 8
+        }
+      }
+    }));
+
+    expect(screen.getByRole("heading", { level: 2, name: "second-reader" })).toBeTruthy();
+    expect(screen.getByText("organization-second")).toBeTruthy();
+    expect(screen.getByText('"8"')).toBeTruthy();
   });
 
   it("does not leak LIVE Application metadata or management actions after a forbidden read", async () => {
