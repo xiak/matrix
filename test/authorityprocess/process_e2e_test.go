@@ -7516,16 +7516,16 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	if counts(b.key.Key.ID) != beforeCrossCursor {
 		t.Fatal("cross-Account Application cursor consumed nonce or wrote authority")
 	}
-	tamperedParts := strings.Split(directoryCursors[0], ".")
-	if len(tamperedParts) != 3 || len(tamperedParts[2]) < 2 {
+	if paasv1.ValidateApplicationCursor(directoryCursors[0]) != nil {
 		t.Fatal("Application cursor fixture has an unexpected shape")
 	}
-	if tamperedParts[2][0] == 'A' {
-		tamperedParts[2] = "B" + tamperedParts[2][1:]
-	} else {
-		tamperedParts[2] = "A" + tamperedParts[2][1:]
+	tamperedCursor := directoryCursors[0][:len(directoryCursors[0])-1] + "A"
+	if tamperedCursor == directoryCursors[0] {
+		tamperedCursor = directoryCursors[0][:len(directoryCursors[0])-1] + "B"
 	}
-	tamperedCursor := strings.Join(tamperedParts, ".")
+	if paasv1.ValidateApplicationCursor(tamperedCursor) != nil {
+		t.Fatal("tampered Application cursor no longer exercises an authenticated envelope")
+	}
 	beforeTamperedCursor := counts(a.key.Key.ID)
 	invokeProduct(prepareProductDirectory(a, tamperedCursor), http.StatusBadRequest)
 	if counts(a.key.Key.ID) != beforeTamperedCursor {
