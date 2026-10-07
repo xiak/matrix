@@ -105,6 +105,8 @@
 
 本候选在`GOMAXPROCS=2`下通过全仓无缓存race、vet、模块校验、architecture、格式、workflow YAML/Bash语法及diff检查；默认测试明确SKIP需要Docker的双节点路径，不能把编译通过当成运行通过。上述精确CI独立任务已经把当前两个IAM、Audit、dispatcher与双PostgreSQL18真实运行39.48秒：日志记录`confirmed_rpo_bytes=0`、数据库切换RTO 625毫秒、从故障探测到IAM/Audit恢复3199毫秒；原CREATE/REVOKE回执、撤权Deny、待投递outbox、受限登录、单次Audit记录、完整租户链和旧主删卷重建只读standby均由同一用例断言，任务清理成功。该数值只是本次GitHub托管runner和测试端点的观测，不是生产SLO；门禁也不提供自动选主、生产代理、跨故障域或匹配Profile的签名安装拓扑，这些仍须安装owner另行交付和验收。
 
+同一精确CI不能记作整轮成功：`authority-runtime`在实际多进程路径完成主要业务断言后，凭据明文扫描器把当前六位TOTP与Audit服务端随机生成的`audit.platform-records.read` request/correlation ID中的相同子串判为泄露并失败。该结果不被回填；固定`ea39b029e`把低熵结构例外收窄到数据库中`source=AUDIT`的四个封闭读/验链事实、合法SourceAudit事件、`request-<32hex>`形状及相同correlation，其他数据库来源、错误action、非标准ID、错配correlation、精确验证码和所有长凭据继续失败。该修复已通过全仓无缓存race、全仓vet、architecture及专属正反例，但新的精确独立CI成功前仍不能代替远端真实门禁。
+
 AC-11 的服务副本证据：2026-09-11 现有 `TestIndependentIAMAuditAndPaaSProcesses` 在本任务独立 PG18 下通过，两个真实 IAM 进程分别使用最多 2 连接的受限登录。原实例会话可在另一实例使用，跨副本 grant/revoke 与 session revoke 生效；原实例停止后另一实例仍正确允许租户读取并拒绝已撤平台权限；仅副本登录 NOLOGIN+断开该登录连接期间返回 503，恢复后继续工作。原 5721 保留升级与该组合门禁合计 56.307s。没有负载均衡自动切换、数据库主备切换、容量/公平性 SLO 或完整 HA 验收结论，AC-11 尚未满足。
 
 ### 受限运行测量首片
