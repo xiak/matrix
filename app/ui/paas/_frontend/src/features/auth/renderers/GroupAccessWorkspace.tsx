@@ -126,7 +126,7 @@ function GroupMemberTable({ members, authoritativeTotal, directoryComplete = tru
     keywords={(member) => [member.userId, member.description ?? "", a(member.identityType), member.state ? a(`states.${member.state}`) : ""].join(" ")}
     columns={[t("name"), a("userType"), t("state")]} row={(member, blocked) => <>
       <td data-label={t("name")}>
-        <button className={styles.userLink} disabled={blocked} onClick={() => onOpen(member.userId)}>{member.name}</button>
+        <Table.PrimaryAction disabled={blocked} onClick={() => onOpen(member.userId)}>{member.name}</Table.PrimaryAction>
         <small>{member.description}</small>
       </td>
       <td data-label={a("userType")}>{a(member.identityType)}</td>
@@ -149,7 +149,7 @@ function GroupPolicyTable({ policies, onOpen }: {
     status={(shown) => relationship("completeResults", { shown, total: policies.length })} footerNote={relationship("completeScope")}
     emptyTitle={g("noPolicies")} keywords={(policy) => [policy.policyId, policy.description ?? "", policy.kind ? t(policy.kind) : ""].join(" ")} columns={columns} row={(policy, blocked) => <>
       <td data-label={t("name")}>
-        <button className={styles.userLink} disabled={blocked} onClick={() => onOpen(policy.policyId)}>{policy.name}</button>
+        <Table.PrimaryAction disabled={blocked} onClick={() => onOpen(policy.policyId)}>{policy.name}</Table.PrimaryAction>
         <small>{policy.description}</small>
       </td>
       <td data-label={t("type")}>{policy.kind ? t(policy.kind) : "—"}</td>

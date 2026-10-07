@@ -9,9 +9,6 @@
 .sectionHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .sectionHeading > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .sectionHeading span { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
-.link { padding: 0; border: 0; background: transparent; color: var(--xiak-color-accent-text); font: inherit; font-weight: var(--xiak-font-weight-semibold); text-align: left; cursor: pointer; }
-.link:hover { text-decoration: underline; }
-.link:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 4px; border-radius: var(--xiak-radius-small); }
 .root td small { display: block; margin-top: var(--xiak-spacing-micro); color: var(--xiak-color-text-muted); overflow-wrap: anywhere; }
 .root td small code { white-space: normal; overflow-wrap: anywhere; }
 .detailGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-comfortable); }

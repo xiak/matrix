@@ -106,7 +106,7 @@ function PolicyVersionHistory({ policy, usageCount, workspace, scene, onWorkflow
     <Table aria-label={t("versions")} mobileLayout="stack">
       <thead><tr><th scope="col">{t("version")}</th><th scope="col">{t("created")}</th></tr></thead>
       <tbody>{[...policy.versions].reverse().map((item) => <tr key={item.id}>
-        <td data-label={t("version")}><div className={styles.rowActionCell}><span><button className={styles.userLink} data-version-inspect={item.id} aria-label={t("inspectVersion", { version: item.id })} onClick={() => open({ action: "inspect", version: item.id })}>v{item.id}</button> {item.id === policy.defaultVersion ? <Badge status="success">{t("defaultVersion")}</Badge> : null}</span>{policy.kind === "custom" && item.id !== policy.defaultVersion ? <PolicyVersionActions version={item.id} onIntent={open} /> : null}</div></td>
+        <td data-label={t("version")}><div className={styles.rowActionCell}><span><Table.PrimaryAction data-version-inspect={item.id} aria-label={t("inspectVersion", { version: item.id })} onClick={() => open({ action: "inspect", version: item.id })}>v{item.id}</Table.PrimaryAction> {item.id === policy.defaultVersion ? <Badge status="success">{t("defaultVersion")}</Badge> : null}</span>{policy.kind === "custom" && item.id !== policy.defaultVersion ? <PolicyVersionActions version={item.id} onIntent={open} /> : null}</div></td>
         <td data-label={t("created")}><WorkspaceTime value={item.createdAt} /></td>
       </tr>)}</tbody>
     </Table>
@@ -137,7 +137,7 @@ function PolicyUseSection({ title, hint, empty, subjects, onOpen }: { title: str
     {subjects.length ? <>
       <TableToolbar labels={toolbarLabels} search={{ label: t("usageSearch"), placeholder: t("usageSearchPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
         status={t("usageResults", { shown: filtered.length, total: subjects.length })} />
-      {visible.length ? <Table aria-label={title} aria-busy={filtering || undefined} mobileLayout="stack"><thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th></tr></thead><tbody>{visible.map((subject) => <tr key={subject.view + subject.id}><td data-label={t("name")}><button className={styles.userLink} disabled={filtering} onClick={() => onOpen(subject.view, subject.id)}>{subject.name}</button></td><td data-label={t("type")}>{t(subject.view === "users" ? "subusers" : subject.view)}</td></tr>)}</tbody></Table>
+      {visible.length ? <Table aria-label={title} aria-busy={filtering || undefined} mobileLayout="stack"><thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th></tr></thead><tbody>{visible.map((subject) => <tr key={subject.view + subject.id}><td data-label={t("name")}><Table.PrimaryAction disabled={filtering} onClick={() => onOpen(subject.view, subject.id)}>{subject.name}</Table.PrimaryAction></td><td data-label={t("type")}>{t(subject.view === "users" ? "subusers" : subject.view)}</td></tr>)}</tbody></Table>
         : <EmptyState title={t("noResults")} description={t("noResultsHint")} action={<Button onClick={clearSearch} variant="secondary">{toolbarLabels.resetQuery}</Button>} />}
       <Table.Footer note={t("usagePageHint")}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={filtering}
         onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}

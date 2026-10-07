@@ -112,7 +112,7 @@ if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperatio
           <Card.Body><p className={styles.note}>{w("highPoliciesHint")}</p></Card.Body>
           <Table className={styles.compactTable} aria-label={w("highPolicies")}>
             <thead><tr><th scope="col">{w("name")}</th><th scope="col">{w("associations")}</th></tr></thead>
-            <tbody>{reviewPolicies.map((policy) => <tr key={policy.id}><td><Link className={styles.userLink} href={`/console/access/policies/?id=${encodeURIComponent(policy.id)}`} onNavigate={open("policies", policy.id)}>{policy.name}</Link></td><td>{policyUsageCounts(workspace, policy.id).total}</td></tr>)}</tbody>
+            <tbody>{reviewPolicies.map((policy) => <tr key={policy.id}><td><Table.PrimaryAction asChild><Link href={`/console/access/policies/?id=${encodeURIComponent(policy.id)}`} onNavigate={open("policies", policy.id)}>{policy.name}</Link></Table.PrimaryAction></td><td>{policyUsageCounts(workspace, policy.id).total}</td></tr>)}</tbody>
           </Table>
         </Card> : null}
       </div>

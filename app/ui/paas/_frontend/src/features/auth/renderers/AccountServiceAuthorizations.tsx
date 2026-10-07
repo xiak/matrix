@@ -124,7 +124,7 @@ function RelationDirectory({ client, onOpen }: {
         <thead><tr><th scope="col">{t("fields.service")}</th><th scope="col">{t("fields.role")}</th><th scope="col">{t("fields.bindings")}</th><th scope="col">{t("fields.stateAndTime")}</th></tr></thead>
         <tbody>{current.items.map((item) => <tr key={item.relation.role.id}>
           <td data-label={t("fields.service")}><strong>{t(`purposes.${item.relation.servicePrincipal.purpose}`)}</strong><small><code>{item.relation.servicePrincipal.installationId}</code></small><small><code>{item.relation.servicePrincipal.principalId}</code></small></td>
-          <td data-label={t("fields.role")}><button className={styles.userLink} onClick={(event) => onOpen(item, event.currentTarget)}>{item.relation.role.name}</button><small><code>{item.relation.role.id}</code></small><small>{item.relation.role.description}</small></td>
+          <td data-label={t("fields.role")}><Table.PrimaryAction onClick={(event) => onOpen(item, event.currentTarget)}>{item.relation.role.name}</Table.PrimaryAction><small><code>{item.relation.role.id}</code></small><small>{item.relation.role.description}</small></td>
           <td data-label={t("fields.bindings")}><strong>{t("relations.bindingCount", { active: item.activeBindingCount, total: item.bindingCount })}</strong><small><code>{item.relation.template.id} @v{item.relation.template.version}</code></small></td>
           <td data-label={t("fields.stateAndTime")}><Badge status={item.relation.role.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${item.relation.role.status}`)}</Badge><small><WorkspaceTime value={item.relation.role.updatedAt} /></small></td>
         </tr>)}</tbody>
@@ -239,7 +239,7 @@ function TemplateDirectory({ client, onOpen }: { client: ServiceRoleTemplateClie
       {filtered.length ? <Table aria-label={t("tableLabel")} aria-busy={query !== deferredQuery || undefined} mobileLayout="stack">
         <thead><tr><th scope="col">{t("fields.template")}</th><th scope="col">{t("fields.roleName")}</th><th scope="col">{t("fields.workloadKinds")}</th><th scope="col">{t("fields.policySnapshot")}</th><th scope="col">{t("fields.templateState")}</th></tr></thead>
         <tbody>{visible.map((template) => <tr key={template.id}>
-          <td data-label={t("fields.template")}><button className={styles.userLink} onClick={(event) => onOpen(template, event.currentTarget)}>{template.id}</button><small>v{template.version} · <code>{template.spec.product}</code></small></td>
+          <td data-label={t("fields.template")}><Table.PrimaryAction onClick={(event) => onOpen(template, event.currentTarget)}>{template.id}</Table.PrimaryAction><small>v{template.version} · <code>{template.spec.product}</code></small></td>
           <td data-label={t("fields.roleName")}><code>{template.spec.roleName}</code><small>{template.spec.roleDescription}</small></td>
           <td data-label={t("fields.workloadKinds")}><div className={styles.roleTags}>{template.spec.workloads.map((workload) => <Badge key={workload.resourceKind}>{workload.resourceKind}</Badge>)}</div></td>
           <td data-label={t("fields.policySnapshot")}><code>{template.spec.policyVersion.policyId}</code><small>{template.spec.policyVersion.versionId}</small></td>

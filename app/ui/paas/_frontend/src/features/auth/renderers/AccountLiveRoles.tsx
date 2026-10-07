@@ -265,7 +265,7 @@ function LiveRoleTrustHistory({ client, roleId, currentVersionId }: { client: Ro
   return <div className={styles.stack} aria-busy={loadingMore}>
     <Alert>{t("trustHistoryHint")}</Alert>
     {items.length ? <><Table aria-label={t("trustHistory")} mobileLayout="stack"><thead><tr><th scope="col">{t("trustVersion")}</th><th scope="col">{w("created")}</th><th scope="col">{t("trustedUsers")}</th><th scope="col">{w("state")}</th></tr></thead><tbody>{items.slice((current - 1) * pageSize, current * pageSize).map((version) => <tr key={version.id}>
-      <td data-label={t("trustVersion")}><button className={styles.userLink} onClick={() => setSelected(version)}>{version.id}</button><small>{version.contentDigest}</small></td>
+      <td data-label={t("trustVersion")}><Table.PrimaryAction onClick={() => setSelected(version)}>{version.id}</Table.PrimaryAction><small>{version.contentDigest}</small></td>
       <td data-label={w("created")}><WorkspaceTime value={version.createdAt} /></td><td data-label={t("trustedUsers")}>{trustPrincipalCount(version)}</td>
       <td data-label={w("state")}><Badge status={version.id === currentVersionId ? "success" : "neutral"}>{t(version.id === currentVersionId ? "currentTrust" : "historicalTrust")}</Badge></td>
     </tr>)}</tbody></Table><Table.Footer note={t("trustHistoryPageHint")}><TablePagination page={current} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} trailing={directory?.nextAfter ? <Button size="small" variant="secondary" disabled={loadingMore} onClick={() => void loadMore()}>{t("loadMore")}</Button> : null} labels={{ summary: w("page", { page: current, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer></> : <EmptyState title={t("noTrustHistory")} description={t("noTrustHistoryHint")} />}
@@ -393,7 +393,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
           {access.policyAttachments.length ? <Table aria-label={t("livePermissions")} mobileLayout="stack">
             <thead><tr><th scope="col">{t("policyId")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("attachmentVersion")}</th><th scope="col">{t("updated")}</th></tr></thead>
             <tbody>{access.policyAttachments.map((attachment) => <tr key={attachment.id}>
-              <td data-label={t("policyId")}><button className={styles.userLink} onClick={() => onOpen("policies", attachment.policyId)} type="button">{attachment.policyId}</button><small>{attachment.id}</small></td>
+              <td data-label={t("policyId")}><Table.PrimaryAction onClick={() => onOpen("policies", attachment.policyId)}>{attachment.policyId}</Table.PrimaryAction><small>{attachment.id}</small></td>
               <td data-label={t("scope")}>{t("tenantScope")}</td>
               <td data-label={t("attachmentVersion")}>v{attachment.resourceVersion}</td>
               <td data-label={t("updated")}><WorkspaceTime value={attachment.updatedAt} /></td>
@@ -522,7 +522,7 @@ export function AccountLiveRoles({ client, serviceRoleTemplates, serviceLinkedRo
       <Table aria-label={w("roles")} aria-busy={query !== deferredQuery} mobileLayout="stack">
         <thead><tr><th scope="col">{w("name")}</th><th scope="col">{w("state")}</th><th scope="col">{t("maximumSession")}</th><th scope="col">{t("updated")}</th></tr></thead>
         <tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(({ role }) => <tr key={role.id}>
-          <td data-label={w("name")}><button className={styles.userLink} onClick={() => onOpen("roles", role.id)}>{role.name}</button><small>{role.description || role.id}</small></td>
+          <td data-label={w("name")}><Table.PrimaryAction onClick={() => onOpen("roles", role.id)}>{role.name}</Table.PrimaryAction><small>{role.description || role.id}</small></td>
           <td data-label={w("state")}><Badge status={role.status === "ACTIVE" ? "success" : "neutral"}>{t(role.status === "ACTIVE" ? "active" : "disabled")}</Badge></td>
           <td data-label={t("maximumSession")}>{durationLabel(role.maxSessionDurationSeconds)}</td>
           <td data-label={t("updated")}><WorkspaceTime value={role.updatedAt} /></td>

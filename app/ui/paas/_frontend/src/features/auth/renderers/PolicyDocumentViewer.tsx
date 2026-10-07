@@ -74,7 +74,7 @@ function PolicyServiceTable({ services, page, pageSize, onOpen, buttonRef }: {
         {group.map((entry) => {
           const only = entry.rules.length === 1 ? entry.rules[0]! : null;
           return <tr key={entry.key}>
-            <td><button type="button" ref={(node) => buttonRef(entry.key, node)} className={policyStyles.serviceLink} onClick={() => onOpen(entry.key)} aria-label={p("openService", { service: r(`services.${entry.service}`), effect: t(effect) })}>{r(`services.${entry.service}`)}</button><code>{entry.service}</code></td>
+            <td><Table.PrimaryAction ref={(node) => buttonRef(entry.key, node)} onClick={() => onOpen(entry.key)} aria-label={p("openService", { service: r(`services.${entry.service}`), effect: t(effect) })}>{r(`services.${entry.service}`)}</Table.PrimaryAction><small><code>{entry.service}</code></small></td>
             <td data-label={t("action")}><span>{p("actionCoverage", { count: entry.actions.length, total: policyActions.filter((action) => action.service === entry.service).length })}</span></td>
             <td data-label={t("resource")}>{only ? <PolicyResourcesSummary resources={only.resources} /> : <span>{p("separateRules", { count: entry.rules.length })}</span>}</td>
             <td data-label={p("conditionColumn")}>{only ? <ConditionSummary value={only.condition} /> : <span>{p("separateRules", { count: entry.rules.length })}</span>}</td>

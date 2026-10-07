@@ -202,14 +202,13 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
       <tbody>{visibleProducts.map((entry) => {
         const scopes = [...new Set(entry.profile.actions.map((action) => action.scope))];
         return <tr key={entry.profile.product}>
-          <td data-label={t("product")}><button
+          <td data-label={t("product")}><Table.PrimaryAction
             ref={(node) => {
               if (node) productButtons.current.set(entry.profile.product, node);
               else productButtons.current.delete(entry.profile.product);
             }}
-            className={styles.userLink}
             onClick={() => open(entry)}
-          >{entry.profile.product}</button></td>
+          >{entry.profile.product}</Table.PrimaryAction></td>
           <td data-label={t("callingService")}>{entry.profile.callingService}</td>
           <td data-label={t("revision")}>{entry.profile.revision}</td>
           <td data-label={t("actions")}>{entry.profile.actions.length}</td>

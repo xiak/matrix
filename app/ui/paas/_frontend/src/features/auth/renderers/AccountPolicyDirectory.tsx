@@ -366,7 +366,7 @@ function AccountPolicyVersions({ policy, listVersions, readVersion, mutation, on
         <Table aria-label={t("versionTable")} mobileLayout="stack" className={styles.policyVersionTable}>
           <thead><tr><th scope="col">{t("versionId")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("versionContract")}</th><th scope="col">{t("digest")}</th></tr></thead>
           <tbody>{state.directory.items.map((item) => <tr key={item.versionId}>
-            <td data-label={t("versionId")}><div className={styles.rowActionCell}><button className={styles.userLink} data-version-id={item.versionId} onClick={() => { opener.current = item.versionId; setSelected({ status: "loading" }); setSelectedId(item.versionId); }}>{item.versionId}</button>{mutation && item.versionId !== state.directory.policy.defaultVersionId ? <ActionMenu iconOnly label={t("versionActions", { version: item.versionId })} actions={[
+            <td data-label={t("versionId")}><div className={styles.rowActionCell}><Table.PrimaryAction data-version-id={item.versionId} onClick={() => { opener.current = item.versionId; setSelected({ status: "loading" }); setSelectedId(item.versionId); }}>{item.versionId}</Table.PrimaryAction>{mutation && item.versionId !== state.directory.policy.defaultVersionId ? <ActionMenu iconOnly label={t("versionActions", { version: item.versionId })} actions={[
               { id: "set-default", label: t("setDefault"), disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "set-default", versionId: item.versionId }); } },
               { id: "retire", label: t("retireVersion"), danger: true, disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "retire", versionId: item.versionId }); } }
             ]} /> : null}</div></td>
@@ -479,7 +479,7 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
         {rows.length ? <Table aria-label={t("table")} className={styles.policyMetadataTable} mobileLayout="stack">
           <thead><tr><th scope="col">{t("policy")}</th><th scope="col">{t("management")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("status")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("updated")}</th></tr></thead>
           <tbody>{rows.map((policy) => <tr key={policy.id}>
-            <td data-label={t("policy")}><button className={styles.userLink} onClick={() => onOpen(policy.id)}>{policy.displayName}</button><small className={styles.userIdentifier}>{policy.id}</small></td>
+            <td data-label={t("policy")}><Table.PrimaryAction onClick={() => onOpen(policy.id)}>{policy.displayName}</Table.PrimaryAction><small className={styles.userIdentifier}>{policy.id}</small></td>
             <td data-label={t("management")}><Badge>{t(policy.management === "SYSTEM" ? "system" : "customer")}</Badge></td>
             <td data-label={t("scope")}>{t(policy.scope === "TENANT" ? "tenant" : "installation")}</td>
             <td data-label={t("status")}><Badge status={policy.status === "ACTIVE" ? "success" : "neutral"}>{t(policy.status === "ACTIVE" ? "active" : "retired")}</Badge></td>

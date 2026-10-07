@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
-import { Badge, Button, EmptyState, FormField, Input, TableSkeleton, Tabs } from "@ui/xiak";
+import { Badge, Button, EmptyState, FormField, Input, Table, TableSkeleton, Tabs } from "@ui/xiak";
 import { useAccountAccess, type UserBoundarySnapshot } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
@@ -160,14 +160,14 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
           columns={[t("name"), t("type"), t("documentEffect"), t("grantSource")]} emptyTitle={t("noSelection")}
           status={(shown) => relationship("completeResults", { shown, total: attachedPolicies.length })} footerNote={relationship("completeScope")}
           keywords={(policy) => [policy.description, t(policy.kind), ...groups.filter((group) => group.policyIds.includes(policy.id)).map((group) => group.name)].join(" ")}
-          row={(policy, blocked) => <><td><button className={styles.userLink} disabled={blocked} onClick={() => onOpen("policies", policy.id)}>{policy.name}</button><small>{policy.description}</small></td><td>{t(policy.kind)}</td><td><Badge status={policiesWithDeny.has(policy.id) ? "danger" : "neutral"}>{t(policiesWithDeny.has(policy.id) ? "containsDeny" : "allowStatementsOnly")}</Badge></td><td><div className={styles.stack}>{direct.includes(policy.id) ? <span>{t("directPolicies")}</span> : null}{groups.filter((group) => group.policyIds.includes(policy.id)).map((group) => <button key={group.id} className={styles.userLink} disabled={blocked} onClick={() => onOpen("groups", group.id)}>{t("inheritedFrom", { name: group.name })}</button>)}</div></td></>} />
+          row={(policy, blocked) => <><td><Table.PrimaryAction disabled={blocked} onClick={() => onOpen("policies", policy.id)}>{policy.name}</Table.PrimaryAction><small>{policy.description}</small></td><td>{t(policy.kind)}</td><td><Badge status={policiesWithDeny.has(policy.id) ? "danger" : "neutral"}>{t(policiesWithDeny.has(policy.id) ? "containsDeny" : "allowStatementsOnly")}</Badge></td><td><div className={styles.stack}>{direct.includes(policy.id) ? <span>{t("directPolicies")}</span> : null}{groups.filter((group) => group.policyIds.includes(policy.id)).map((group) => <button key={group.id} className={styles.userLink} disabled={blocked} onClick={() => onOpen("groups", group.id)}>{t("inheritedFrom", { name: group.name })}</button>)}</div></td></>} />
         <PermissionBoundary owner="user" workspace={workspace} value={boundary} onSave={(policyId) => access.executeWorkspace({ kind: "set-user-boundary", principalId: user.id, policyId })} onOpen={(id) => onOpen("policies", id)} />
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="groups"><div><Button variant="secondary" onClick={() => setAssociation("groups")}>{t("edit")}</Button></div><WorkspaceRelationshipDirectory title={t("userGroups")} searchLabel={t("searchUserGroups")} items={groups}
         columns={[t("name"), t("permissions")]} emptyTitle={t("empty")}
         status={(shown) => relationship("completeResults", { shown, total: groups.length })} footerNote={relationship("completeScope")}
         keywords={(group) => [group.description, ...group.policyIds].join(" ")}
-        row={(group, blocked) => <><td><button className={styles.userLink} disabled={blocked} onClick={() => onOpen("groups", group.id)}>{group.name}</button><small>{group.description}</small></td><td>{group.policyIds.length}</td></>} /></Tabs.Content>
+        row={(group, blocked) => <><td><Table.PrimaryAction disabled={blocked} onClick={() => onOpen("groups", group.id)}>{group.name}</Table.PrimaryAction><small>{group.description}</small></td><td>{group.policyIds.length}</td></>} /></Tabs.Content>
       <Tabs.Content className={styles.stack} value="security"><dl className={styles.facts}><div><dt>{a("status")}</dt><dd>{a(`states.${user.state}`)}</dd></div>{profile ? <><div><dt>{wizard("forceReset")}</dt><dd>{wizard(profile.passwordResetRequired ? "enabled" : "disabled")}</dd></div><div><dt>{wizard("loginProtection")}</dt><dd>{wizard(profile.loginProtection ? "enabled" : "disabled")}</dd></div></> : null}<div><dt>{a("directPolicyAttachments")}</dt><dd>{user.attachments.map((attachment) => attachment.label).join(" · ") || a("noGrantLabel")}</dd></div></dl><p className={styles.note}>{wizard("mockSecurity")}</p>{user.protected ? <p className={styles.note}>{a("protectedHint")}</p> : null}<div><Button ref={securityActionFocus} variant="secondary" onClick={() => { setFocusDetailHeading(false); setWorkflow("security"); }}>{a("manage")}</Button></div></Tabs.Content>
       <Tabs.Content value="keys"><AccessCredentials embedded scene={{ ...scene, users: [user] }} workspace={{ ...workspace, keys: workspace.keys.filter((key) => key.ownerId === user.id) }} /></Tabs.Content>
     </Tabs.Root>

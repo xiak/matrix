@@ -102,9 +102,6 @@
 .serviceTable td code, .operationTable td code { display: block; white-space: normal; overflow-wrap: anywhere; font-size: var(--xiak-font-size-small); color: var(--xiak-color-text-muted); }
 .effectGroup th { background: var(--xiak-color-bg-panel-hover); }
 .effectGroup th > span + span { margin-inline-start: var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-weight: var(--xiak-font-weight-regular); }
-.serviceLink { display: block; padding: 0; margin-block-end: var(--xiak-spacing-narrow); border: 0; background: none; color: var(--xiak-color-accent-text); font: inherit; font-weight: var(--xiak-font-weight-medium); text-align: start; cursor: pointer; }
-.serviceLink:hover { text-decoration: underline; }
-.serviceLink:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 4px; }
 .serviceHeading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); min-width: 0; padding-bottom: var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); }
 .serviceHeading h3 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); overflow-wrap: anywhere; }
 .serviceHeading h3 code { margin-inline-start: var(--xiak-spacing-tight); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-regular); }

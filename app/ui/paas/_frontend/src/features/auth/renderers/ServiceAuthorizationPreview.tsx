@@ -143,7 +143,7 @@ function TemplateDirectory({ triggerRef, onOpen }: {
     <Table aria-label={t("directory.tableLabel")} mobileLayout="stack">
       <thead><tr><th scope="col">{t("fields.product")}</th><th scope="col">{t("fields.servicePurpose")}</th><th scope="col">{t("fields.permissionCeiling")}</th><th scope="col">{t("fields.supportedWorkload")}</th><th scope="col">{t("fields.templateState")}</th></tr></thead>
       <tbody><tr>
-        <td data-label={t("fields.product")}><button className={styles.link} ref={triggerRef} onClick={onOpen}>{t("template.name")}</button><small><code>{previewTemplate.id}</code></small></td>
+        <td data-label={t("fields.product")}><Table.PrimaryAction ref={triggerRef} onClick={onOpen}>{t("template.name")}</Table.PrimaryAction><small><code>{previewTemplate.id}</code></small></td>
         <td data-label={t("fields.servicePurpose")}><code>{previewTemplate.servicePurpose}</code><small>{t("template.purpose")}</small></td>
         <td data-label={t("fields.permissionCeiling")}><code>{previewTemplate.policyId}</code><small>{previewTemplate.policyVersionId}</small></td>
         <td data-label={t("fields.supportedWorkload")}><code>{previewTemplate.workload.resourceKind}</code><small>{previewTemplate.workload.bindAction}</small></td>
@@ -169,7 +169,7 @@ function AccountAuthorizationDirectory({ accountId, triggerRef, onOpen }: {
     <Table aria-label={t("accountDirectory.tableLabel")} mobileLayout="stack">
       <thead><tr><th scope="col">{t("accountDirectory.columns.authorization")}</th><th scope="col">{t("accountDirectory.columns.role")}</th><th scope="col">{t("accountDirectory.columns.resource")}</th><th scope="col">{t("accountDirectory.columns.state")}</th></tr></thead>
       <tbody><tr>
-        <td data-label={t("accountDirectory.columns.authorization")}><button aria-label={t("accountDirectory.open", { name: t("template.name") })} className={styles.link} ref={triggerRef} onClick={onOpen}>{t("template.name")}</button><small>{t("template.purpose")}</small><small><code>{previewTemplate.product} · {previewTemplate.servicePurpose}</code></small></td>
+        <td data-label={t("accountDirectory.columns.authorization")}><Table.PrimaryAction aria-label={t("accountDirectory.open", { name: t("template.name") })} ref={triggerRef} onClick={onOpen}>{t("template.name")}</Table.PrimaryAction><small>{t("template.purpose")}</small><small><code>{previewTemplate.product} · {previewTemplate.servicePurpose}</code></small></td>
         <td data-label={t("accountDirectory.columns.role")}><code>{previewTemplate.roleName}</code><small>{t("fields.targetAccount")} · <code>{accountId}</code></small></td>
         <td data-label={t("accountDirectory.columns.resource")}><strong>{t("accountDirectory.bindingCount", { active: previewAccountAccess.activeBindingCount, total: previewAccountAccess.bindingCount })}</strong><small><code>{previewWorkload.kind}: {previewWorkload.id}</code></small></td>
         <td data-label={t("accountDirectory.columns.state")}><Badge status="success">{previewAccountAccess.roleStatus}</Badge><small><WorkspaceTime value={previewAccountAccess.updatedAt} /></small></td>
@@ -330,7 +330,7 @@ function ServiceRoleSessionDirectoryPreview({ accountId }: { accountId: string }
     {visibleSessions.length ? <><Table aria-label={t("observation.session.tableLabel")} className={styles.sessionDirectoryTable} mobileLayout="stack">
       <thead><tr><th scope="col">{t("observation.session.fields.id")}</th><th scope="col">{t("observation.session.fields.sourceIdentity")}</th><th scope="col">{t("observation.session.fields.role")}</th><th scope="col">{t("observation.session.fields.lifecycle")}</th></tr></thead>
       <tbody>{visibleSessions.map((session) => <tr key={session.id}>
-        <td data-label={t("observation.session.fields.id")}><button className={`${styles.link} ${styles.directoryIdentifier}`} title={session.id} ref={(node) => { if (node) sessionTriggers.current.set(session.id, node); else sessionTriggers.current.delete(session.id); }} onClick={() => { setReviewing(false); setSelectedId(session.id); }}>{session.id}</button></td>
+        <td data-label={t("observation.session.fields.id")}><Table.PrimaryAction className={styles.directoryIdentifier} title={session.id} ref={(node) => { if (node) sessionTriggers.current.set(session.id, node); else sessionTriggers.current.delete(session.id); }} onClick={() => { setReviewing(false); setSelectedId(session.id); }}>{session.id}</Table.PrimaryAction></td>
         <td data-label={t("observation.session.fields.sourceIdentity")}><Badge status="info">{session.source.type}</Badge><code>{session.source.principalId}</code><small><code>{session.source.installationId}</code> · {session.source.purpose}</small></td>
         <td data-label={t("observation.session.fields.role")}><strong>{t("template.name")}</strong><small className={styles.directoryIdentifier} title={session.roleName}><code>{session.roleName}</code></small></td>
         <td data-label={t("observation.session.fields.lifecycle")}><WorkspaceTime value={session.expiresAt} /><small><Badge status={session.lifecycle === "EXPIRED" ? "neutral" : "info"}>{t(`observation.session.states.${session.lifecycle}`)}</Badge></small></td>
