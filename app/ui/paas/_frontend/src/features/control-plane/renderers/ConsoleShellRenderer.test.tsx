@@ -256,7 +256,7 @@ describe("ConsoleShellRenderer", () => {
     { selection: { section: "catalog" }, role: "region", name: "产品规格" },
     { selection: { section: "quotas" }, role: "region", name: "服务配额" },
     { selection: { section: "regions" }, role: "region", name: "区域与节点" },
-    { selection: { section: "applications" }, role: "article", name: "统一资源列表" },
+    { selection: { section: "applications" }, role: "article", name: "应用目录" },
     { selection: { section: "resources" }, role: "article", name: "统一资源列表" },
     { selection: { section: "installations" }, role: "article", name: "组织服务实例" },
     { selection: { section: "operations" }, role: "article", name: "操作与任务" },
@@ -1014,6 +1014,27 @@ describe("ConsoleShellRenderer", () => {
     expect(within(sidebar).queryByText("应用托管")).toBeNull();
     expect(within(navigation).queryByText("Service navigation")).toBeNull();
     expect(within(navigation).getByRole("link", { name: /^Applications/ }).getAttribute("href")).toMatch(/^\/console\/applications\/?$/);
+  });
+
+  it("labels the application preview as a local fixture rather than a server or authorization result", async () => {
+    await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+
+    expect(screen.getByRole("heading", { level: 2, name: "应用目录" })).toBeTruthy();
+    expect(screen.getByText("隔离 MOCK")).toBeTruthy();
+    expect(screen.getByText(/本地导航 fixture.*不是服务端列表或授权结果/)).toBeTruthy();
+    expect(screen.getByRole("table", { name: "统一资源列表" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /结算 API/ }).getAttribute("href")).toContain("resource=app-checkout-api");
+  });
+
+  it("does not misrepresent an unavailable application directory as a successful empty list", async () => {
+    await renderConsole({ section: "applications" });
+
+    expect(screen.getByRole("heading", { level: 2, name: "应用目录" })).toBeTruthy();
+    expect(screen.getByText("列表能力尚未接入")).toBeTruthy();
+    expect(screen.getByText(/不是成功返回 0 条资源.*不会回退到 MOCK/)).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "统一资源列表" })).toBeNull();
+    expect(screen.queryByRole("searchbox", { name: "搜索资源" })).toBeNull();
+    expect(screen.queryByText("结算 API")).toBeNull();
   });
 
   it("renders an application resource and its product-owned tag snapshot in the content area", async () => {

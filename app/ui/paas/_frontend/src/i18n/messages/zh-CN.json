@@ -3593,6 +3593,15 @@
     },
     "globalRegion": "全局",
     "backToApplications": "返回应用",
+    "applicationDirectory": {
+      "title": "应用目录",
+      "previewBadge": "隔离 MOCK",
+      "previewHint": "当前仅展示本地导航 fixture；它不是服务端列表或授权结果。打开应用后会单独模拟精确读取。",
+      "liveHint": "应用托管产品侧列表能力",
+      "unavailableBadge": "尚未接入",
+      "unavailableTitle": "列表能力尚未接入",
+      "unavailableHint": "后端尚未提供已固定的应用列表、游标与分页契约。这不是成功返回 0 条资源，也不会回退到 MOCK 数据。"
+    },
     "applicationRead": {
       "eyebrow": "应用精确读取 · MOCK",
       "title": "应用详情",

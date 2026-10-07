@@ -97,7 +97,10 @@ export function ConsoleContentLoadingRenderer({ experience = false, label, selec
   if (section === "installations") {
     return <DataPanel description={managed("installationStateHint")} label={label} title={managed("organizationInstances")} />;
   }
-  if (section === "applications" || section === "resources") {
+  if (section === "applications") {
+    return <DataPanel description={cloud(experience ? "applicationDirectory.previewHint" : "applicationDirectory.liveHint")} label={label} title={cloud("applicationDirectory.title")} />;
+  }
+  if (section === "resources") {
     return <DataPanel label={label} title={cloud("resourceTable")} />;
   }
   if (section === "operations") {

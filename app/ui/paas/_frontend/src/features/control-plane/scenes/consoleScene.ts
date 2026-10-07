@@ -177,6 +177,7 @@ export type ConsoleContentScene =
   | {
       kind: "resources";
       directory: "applications";
+      listing: "preview-fixture" | "unavailable";
       resources: UnifiedResourceScene[];
       readSnapshots: ExperienceApplicationReadSnapshot[];
       tagSnapshots: ExperienceApplicationTagSnapshot[];

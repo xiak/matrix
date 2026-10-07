@@ -3593,6 +3593,15 @@
     },
     "globalRegion": "Global",
     "backToApplications": "Back to applications",
+    "applicationDirectory": {
+      "title": "Application directory",
+      "previewBadge": "Isolated MOCK",
+      "previewHint": "This is a local navigation fixture, not a server-side list or authorization result. Opening an application simulates a separate exact-resource read.",
+      "liveHint": "Application Hosting product-side listing capability",
+      "unavailableBadge": "Not connected",
+      "unavailableTitle": "Listing capability is not connected",
+      "unavailableHint": "The backend has not fixed an application list, cursor, or paging contract. This is not a successful zero-resource result, and the page does not fall back to MOCK data."
+    },
     "applicationRead": {
       "eyebrow": "Exact application read · MOCK",
       "title": "Application details",

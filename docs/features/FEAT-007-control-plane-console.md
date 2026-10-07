@@ -1888,9 +1888,15 @@ than sending its resource row back to the same undifferentiated directory. The
 same-path transition retains the shared console frame and immediately renders a
 stable application locator, title region and return action; only the
 product-data region changes, so it does not open a Dialog or replace fixed
-content with a page-wide skeleton. The preview directory remains an explicit
-local fixture and does not claim a product list, cursor or paging contract. Its
-separate exact-read snapshot mirrors only the fixed
+content with a page-wide skeleton. The scene now carries the Application
+directory source explicitly instead of forcing the renderer to infer it from
+`resources: []`. Preview renders a visibly labelled isolated local-navigation
+fixture and states that it is neither a server-side collection nor an
+authorization result. Non-preview renders a distinct unavailable state with no
+search, table, count or fixture fallback; it therefore cannot misrepresent an
+unfixed product list as a successful zero-resource response. Neither state
+claims a product list, cursor or paging contract. The separate exact-read
+snapshot mirrors only the fixed
 `GET /v1/applications/{applicationId}` response: `apiVersion`, `kind`, public
 metadata, tenant scope and the strong response ETag. The current Account comes
 from the authenticated identity; the browser never offers an Account or tenant
@@ -1943,19 +1949,24 @@ translation errors from before the message catalog landed; they are not
 current-runtime evidence. This is application-side MOCK UX evidence, not real
 resource-tag mutation, backend CI or authorization acceptance.
 
-The exact-read follow-up consumes only the fixed
+The directory-state and exact-read follow-up consumes only the fixed
 `0f06607398f643311c5a284cf0867e931ed33d9b` Application read boundary; it does
 not consume the still-unfixed Application directory, cursor or page contract.
-The focused scene/shell run passed 100 cases and the complete frontend suite
-passed 63 files/1,102 cases plus three export-normalization cases. Typecheck,
-lint, architecture and 228-pair theme-style gates passed; the production build
+The focused scene/shell run passed 102 cases. The complete frontend suite passed
+63 files/1,104 cases plus three export-normalization cases. Typecheck, lint,
+architecture and 228-pair theme-style gates passed; the production build
 generated 46 routes, normalized 44 segment files and synchronized 254 embedded
-files. Desktop and `390 × 844` DEV exercised `200` → `403` → `503` → equal
-re-read recovery: the shared frame and application locator remained present,
-forbidden/unavailable states mounted no Deployment or tag actions, compact
-document/body widths remained 390px, and no Dialog or horizontal page overflow
-appeared. This is isolated product UX evidence, not a product-list contract,
-real IAM permit, resource-existence oracle or LIVE Application integration.
+files, and the complete repository Go test/vet gates passed. Preview coverage
+and desktop DEV visibly distinguish the fixture before the rows. Non-preview
+coverage proves that unavailable mounts no table, search or fixture row and
+never describes itself as an empty success. At `390 × 844`, the preview
+directory and directory-to-exact-read transition kept viewport, document and
+body width at 390px with no Dialog, horizontal page overflow or browser
+warning/error. The exact-read state matrix separately exercised `200` → `403`
+→ `503` → equal re-read recovery: the shared frame and resource locator remained
+present, while forbidden/unavailable mounted no Deployment or tag actions.
+This is isolated product UX evidence, not a product-list contract, real IAM
+permit, resource-existence oracle or LIVE Application integration.
 
 Same-path detail-query tests retain encoded IDs, draft-leave protection and
 replace semantics without a Next page-tree navigation. Real static deep links

@@ -240,8 +240,31 @@ function ResourceDirectory({ scene, scope }: {
     return scene.resources.filter((item) => (!scope || scope.regionId === "all" || item.regionId === scope.regionId || item.regionId === "all") && (!normalized || [item.name, item.id, item.kind, resourceKinds(item.kind), t(`resourceStates.${item.state}`), item.productName, item.projectName, item.regionName]
       .some((value) => value.toLowerCase().includes(normalized))));
   }, [query, scene.resources, resourceKinds, t, scope]);
+  if (scene.directory === "applications" && scene.listing === "unavailable") {
+    return (
+      <Card aria-labelledby="application-directory-title">
+        <Card.Header>
+          <div>
+            <Typography.Title as="h2" id="application-directory-title" level={3}>{t("applicationDirectory.title")}</Typography.Title>
+            <Typography.Text tone="muted">{t("applicationDirectory.liveHint")}</Typography.Text>
+          </div>
+          <Badge status="warning">{t("applicationDirectory.unavailableBadge")}</Badge>
+        </Card.Header>
+        <Card.Body>
+          <EmptyState title={t("applicationDirectory.unavailableTitle")} description={t("applicationDirectory.unavailableHint")} />
+        </Card.Body>
+      </Card>
+    );
+  }
   return (
     <Card>
+      {scene.directory === "applications" ? <Card.Header>
+        <div>
+          <Typography.Title as="h2" level={3}>{t("applicationDirectory.title")}</Typography.Title>
+          <Typography.Text tone="muted">{t("applicationDirectory.previewHint")}</Typography.Text>
+        </div>
+        <Badge status="info">{t("applicationDirectory.previewBadge")}</Badge>
+      </Card.Header> : null}
       <TableToolbar labels={toolbarLabels} search={{ label: t("searchResources"), placeholder: t("resourcesPlaceholder"), value: query, onChange: setQuery }} status={t("resultCount", { count: resources.length })} />
       <ResourceTable resources={resources} scope={scope} />
     </Card>

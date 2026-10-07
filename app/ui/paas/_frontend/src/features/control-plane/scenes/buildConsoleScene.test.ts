@@ -102,6 +102,7 @@ describe("buildConsoleScene", () => {
       expect(scene.content.resources.map((resource) => resource.id)).toEqual(["app-checkout-api"]);
       expect(scene.content.resources[0]?.kind).toBe("APPLICATION");
       if (scene.content.directory === "applications") {
+        expect(scene.content.listing).toBe("preview-fixture");
         expect(scene.content.readSnapshots).toEqual(previewExperienceSnapshot.applicationReadSnapshots);
         expect(scene.content.tagSnapshots).toEqual(previewExperienceSnapshot.applicationTagSnapshots);
         expect(scene.content.deploymentSnapshots).toEqual(previewExperienceSnapshot.applicationDeploymentSnapshots);
@@ -109,7 +110,7 @@ describe("buildConsoleScene", () => {
     }
     expect(scene.navigation.find((item) => item.id === "applications")?.selected).toBe(true);
     const live = buildConsoleScene("applications", snapshot);
-    expect(live.content).toEqual({ kind: "resources", directory: "applications", resources: [], readSnapshots: [], tagSnapshots: [], deploymentSnapshots: [] });
+    expect(live.content).toEqual({ kind: "resources", directory: "applications", listing: "unavailable", resources: [], readSnapshots: [], tagSnapshots: [], deploymentSnapshots: [] });
   });
   it("projects real resources into the complete console shell", () => {
     const scene = buildConsoleScene("overview", snapshot);
