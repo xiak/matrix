@@ -172,23 +172,26 @@
 
 .resetRequestId { min-width: 0; overflow-wrap: anywhere; }
 
-@media (max-width: 600px) {
+@container matrix-page-content (max-width: 360px) {
   .accessAnalysisTabs {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0;
-    overflow-x: auto;
-    overscroll-behavior-inline: contain;
-    scrollbar-width: thin;
+    overflow-x: hidden;
   }
 
   .accessAnalysisTabs > button {
-    flex: 1 0 auto;
-    min-width: max-content;
-    padding-inline: var(--xiak-spacing-narrow);
-    white-space: nowrap;
+    min-width: 0;
+    width: 100%;
+    padding-inline: var(--xiak-spacing-micro);
+    white-space: normal;
+    overflow-wrap: anywhere;
     line-height: var(--xiak-line-height-body);
     text-align: center;
   }
+}
+
+@media (max-width: 600px) {
 
   .settingsSectionLink { min-height: var(--xiak-control-height); padding: var(--xiak-spacing-tight); text-align: center; }
   .settingsSectionLink span { display: none; }
