@@ -751,7 +751,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     )) return false;
     userPolicyChangeRef.current = next ? { session: viewSession, intent: next } : null;
     setStoredUserPolicyChange({ session: viewSession, intent: next });
-    if (next && (next.phase === "submitting" || next.phase === "unknown" || next.phase === "checking")) storeUserPolicyChangeIntent(next);
+    if (next && (next.phase === "submitting" || next.phase === "unknown" || next.phase === "checking" || next.phase === "confirmed")) storeUserPolicyChangeIntent(next);
     else if (current) clearUserPolicyChangeIntent(current);
     return true;
   }, [principalId, tenantId, viewSession]);
@@ -1752,10 +1752,11 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     const stored = userPolicyChangeRef.current;
     const intent = stored?.session === viewSession && stored.intent.requestId === requestId ? stored.intent : null;
     if (!active || !credential || !scene || !intent || intent.accountId !== tenantId || loading || mutationPending.current ||
-      (intent.phase !== "review" && intent.phase !== "unknown")) return false;
-    // First submission must still match the selected directory revision. UNKNOWN
-    // recovery replays the frozen command even if a later directory read changed.
-    if (intent.kind === "attach" && intent.phase === "review" && !scene.policies.some((policy) => policy.id === intent.policyId &&
+      intent.phase !== "review") return false;
+    // A first submission must still match the selected directory revision.
+    // Once its result is unknown, recovery is read-only through the immutable
+    // completion query; this write path never replays the command.
+    if (intent.kind === "attach" && !scene.policies.some((policy) => policy.id === intent.policyId &&
       policy.status === "ACTIVE" && policy.resourceVersion === intent.policyResourceVersion)) {
       rememberUserPolicyChange(requestId, { ...intent, phase: "conflict", error: "conflict" });
       return false;

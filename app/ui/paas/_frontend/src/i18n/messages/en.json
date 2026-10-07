@@ -1618,7 +1618,6 @@
     "platformAttachmentReviewHint": "This is a platform-installation attachment. Only an operator with the exact platform grant capability may submit it. Check the target and policy; boundaries and explicit denies can still restrict access.",
     "confirmAttachPolicy": "Confirm attachment",
     "changeAttachmentSelection": "Back to selection",
-    "retryOriginalAttachment": "Retry original request",
     "checkOriginalAttachment": "Check original request",
     "checkingOriginalAttachment": "Checking original request",
     "endAttachmentIntent": "End intent and reread",

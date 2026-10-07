@@ -1618,7 +1618,6 @@
     "platformAttachmentReviewHint": "这是平台安装作用域的直接关联，仅具有对应平台授权能力的操作者可提交。请核对目标身份与策略；权限边界和显式拒绝仍可限制最终访问。",
     "confirmAttachPolicy": "确认关联",
     "changeAttachmentSelection": "返回选择",
-    "retryOriginalAttachment": "原请求重试",
     "checkOriginalAttachment": "检查原请求结果",
     "checkingOriginalAttachment": "正在检查原请求",
     "endAttachmentIntent": "结束原意图并重新读取",

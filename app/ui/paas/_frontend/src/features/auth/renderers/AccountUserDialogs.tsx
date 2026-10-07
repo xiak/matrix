@@ -201,7 +201,6 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
           </> : null}
           {relationIntent.phase === "unknown" || relationIntent.phase === "checking" ? <>
             <Button disabled={disabled || relationIntent.phase === "checking"} onClick={() => void access.inspectUserPolicyChange(relationIntent.requestId)}>{t(relationIntent.phase === "checking" ? "checkingOriginalAttachment" : "checkOriginalAttachment")}</Button>
-            <Button disabled={disabled || relationIntent.phase === "checking"} onClick={() => void access.submitUserPolicyChange(relationIntent.requestId)} variant="secondary">{t("retryOriginalAttachment")}</Button>
           </> : null}
           {relationIntent.phase === "confirmed" ? <Button disabled={disabled} onClick={() => {
             if (access.endUserPolicyChange(relationIntent.requestId)) setSelectedPolicy(null);
