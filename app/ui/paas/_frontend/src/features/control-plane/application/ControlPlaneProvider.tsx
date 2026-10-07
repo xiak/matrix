@@ -13,6 +13,7 @@ import {
 import { useEffectiveCredential } from "@/features/auth/application/RoleSessionProvider";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { ExperienceSnapshot } from "../domain/experience";
+import { validApplicationId, type ApplicationReadLoad } from "../domain/application";
 import type {
   ActivateQuotaCommand,
   ControlPlaneSnapshot,
@@ -48,6 +49,7 @@ type ControlPlaneContextValue = {
   reload(): Promise<void>;
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
   createInstallation(command: CreateInstallationCommand): Promise<boolean>;
+  readApplication(applicationId: string): Promise<ApplicationReadLoad>;
   inspectServiceAuthorization(accountId: string, installationId: string): Promise<ManagedServiceAuthorizationLoad>;
   serviceAuthorizationIntent: ManagedServiceAuthorizationIntent | null;
   beginServiceAuthorization(accountId: string, installationId: string, observation: ManagedServiceAuthorizationObservation, kind: "bind" | "unbind"): void;
@@ -383,6 +385,21 @@ export function ControlPlaneProvider({
     }
   }, [credential, repository]);
 
+  const readApplication = useCallback(async (applicationId: string): Promise<ApplicationReadLoad> => {
+    if (!validApplicationId(applicationId)) return { status: "invalid" };
+    if (!credential || !repository.readApplication) return { status: "unavailable" };
+    try {
+      return { status: "ready", snapshot: await repository.readApplication(credential, applicationId) };
+    } catch (readError) {
+      if (!(readError instanceof HttpProblem)) return { status: "unavailable" };
+      if (readError.status === 400) return { status: "invalid" };
+      if (readError.status === 401) return { status: "expired" };
+      if (readError.status === 403) return { status: "forbidden" };
+      if (readError.status === 404) return { status: "notFound" };
+      return { status: "unavailable" };
+    }
+  }, [credential, repository]);
+
   const commitServiceAuthorizationIntent = useCallback((intent: ManagedServiceAuthorizationIntent | null) => {
     serviceAuthorizationIntentRef.current = intent;
     setServiceAuthorizationIntent(intent);
@@ -499,13 +516,14 @@ export function ControlPlaneProvider({
     reload,
     activateQuota,
     createInstallation,
+    readApplication,
     inspectServiceAuthorization,
     serviceAuthorizationIntent,
     beginServiceAuthorization,
     submitServiceAuthorization,
     closeServiceAuthorizationIntent,
     reopenServiceAuthorizationIntent
-  }), [activateQuota, beginServiceAuthorization, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, isAccess, loading, mutation, prepare, projectScene, reload, reopenServiceAuthorizationIntent, scene, selection, serviceAuthorizationIntent, submitServiceAuthorization]);
+  }), [activateQuota, beginServiceAuthorization, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, isAccess, loading, mutation, prepare, projectScene, readApplication, reload, reopenServiceAuthorizationIntent, scene, selection, serviceAuthorizationIntent, submitServiceAuthorization]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

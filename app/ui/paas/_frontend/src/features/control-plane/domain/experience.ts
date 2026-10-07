@@ -1,3 +1,5 @@
+import type { ApplicationReadSnapshot } from "./application";
+
 export type ExperienceResourceState = "HEALTHY" | "RUNNING" | "DEGRADED" | "FAILED";
 export type ExperienceOperationState = "SUCCEEDED" | "RUNNING" | "FAILED";
 export type ExperienceAlertSeverity = "CRITICAL" | "WARNING" | "INFO";
@@ -15,23 +17,6 @@ export type ExperienceResource = {
   state: ExperienceResourceState;
   updatedAt: string;
   href: string;
-};
-
-export type ExperienceApplicationReadSnapshot = {
-  etag: string;
-  application: {
-    apiVersion: "paas.matrix.xiak.com/v1";
-    kind: "Application";
-    metadata: {
-      id: string;
-      name: string;
-      scope: { kind: "TENANT"; tenantId: string };
-      labels?: Record<string, string>;
-      resourceVersion: number;
-      createdAt: string;
-      updatedAt: string;
-    };
-  };
 };
 
 export type ExperienceApplicationTagSnapshot = {
@@ -128,7 +113,7 @@ export type ExperienceSnapshot = {
   projects: Array<{ id: string; name: string }>;
   regions: Array<{ id: string; name: string }>;
   resources: ExperienceResource[];
-  applicationReadSnapshots: ExperienceApplicationReadSnapshot[];
+  applicationReadSnapshots: ApplicationReadSnapshot[];
   applicationTagSnapshots: ExperienceApplicationTagSnapshot[];
   applicationDeploymentSnapshots: ExperienceApplicationDeploymentSnapshot[];
   operations: ExperienceOperation[];

@@ -3603,11 +3603,17 @@
       "unavailableHint": "The backend has not fixed an application list, cursor, or paging contract. This is not a successful zero-resource result, and the page does not fall back to MOCK data."
     },
     "applicationRead": {
-      "eyebrow": "Exact application read · MOCK",
+      "previewEyebrow": "Exact application read · MOCK",
+      "liveEyebrow": "Exact application read",
       "title": "Application details",
+      "loading": "Reading this application…",
       "states": {
+        "loading": "Reading",
         "ready": "Read succeeded",
+        "invalid": "Invalid identifier",
+        "expired": "Session expired",
         "forbidden": "Read forbidden",
+        "notFound": "Not found",
         "unavailable": "Temporarily unavailable"
       },
       "boundary": "This content comes from Application Hosting's exact-resource read response. The identity service decides only whether the current identity may read it; the browser neither evaluates policies nor treats directory visibility as authorization.",
@@ -3619,7 +3625,10 @@
       "createdAt": "Created",
       "updatedAt": "Updated",
       "messages": {
+        "invalid": "The resource identifier does not satisfy the public Application contract, so the browser did not send a request. Open the application again from a trusted entry point.",
+        "expired": "The current sign-in session has expired. The page does not reuse stale application data; sign in again before reading this resource.",
         "forbidden": "The signed-in identity cannot read this application. To prevent unauthorized probing, the page does not confirm whether the target exists or reveal its tenant, metadata or management actions.",
+        "notFound": "Application Hosting did not return this resource in the current tenant scope. It may have been deleted, or this link may be stale.",
         "unavailable": "The identity and authorization service is unavailable, so this read cannot be confirmed. The page does not reuse stale data or expose management actions; retry the same resource identifier later."
       },
       "retry": "Read again",

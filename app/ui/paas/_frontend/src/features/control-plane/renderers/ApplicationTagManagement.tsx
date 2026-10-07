@@ -5,6 +5,7 @@ import { ArrowRight, Tags } from "lucide-react";
 import { Alert, Badge, Button, Card, EmptyState, FormField, Input, RadioGroup, Select, Steps, Table, Typography, useUnsavedChanges } from "@ui/xiak";
 import { useTranslations } from "next-intl";
 import type { ExperienceApplicationTagSnapshot } from "../domain/experience";
+import { applicationLabelLooksSensitive, validApplicationLabelValue, validApplicationName } from "../domain/application";
 import type { UnifiedResourceScene } from "../scenes/consoleScene";
 import { useConsoleFormat } from "./useConsoleFormat";
 import styles from "./ApplicationTagManagement.module.css";
@@ -24,26 +25,6 @@ type MockCompletedOperation = {
   updatedAt: string;
   terminalAt: string;
 };
-
-const labelKeyPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-const rawSensitiveMarkers = [
-  "authorization: bearer", "bearer ", "password=", "passwd=", "secret=", "client_secret=", "token=",
-  "access_token=", "refresh_token=", "id_token=", "api_key=", "private_key=", "-----begin private key-----",
-  "aws_secret_access_key", "credential_material=", "session_cookie="
-] as const;
-
-function byteLength(value: string) {
-  return new TextEncoder().encode(value).length;
-}
-
-function invalidValue(value: string) {
-  return byteLength(value) > 128 || value.trim() !== value || /[\u0000-\u001f\u007f]/.test(value);
-}
-
-function looksSensitive(value: string) {
-  const normalized = value.toLowerCase();
-  return rawSensitiveMarkers.some((marker) => normalized.includes(marker));
-}
 
 function nextMockEtag(current: string) {
   const matched = current.match(/:tags:(\d+)(?="?$)/);
@@ -137,11 +118,11 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
   }
 
   function validate() {
-    if (!labelKeyPattern.test(key)) return "key" as const;
+    if (!validApplicationName(key)) return "key" as const;
     if (kind === "delete" && !current) return "missing" as const;
     if (kind === "set" && tags.length >= 64 && !current) return "limit" as const;
-    if (kind === "set" && (value === "" || invalidValue(value))) return "value" as const;
-    if (kind === "set" && looksSensitive(value)) return "sensitive" as const;
+    if (kind === "set" && applicationLabelLooksSensitive(value)) return "sensitive" as const;
+    if (kind === "set" && (value === "" || !validApplicationLabelValue(value))) return "value" as const;
     if (kind === "set" && current?.value === value) return "unchanged" as const;
     return null;
   }

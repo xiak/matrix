@@ -469,6 +469,10 @@
   gap: var(--xiak-spacing-comfortable);
 }
 
+.applicationReadLoading {
+  min-block-size: 176px;
+}
+
 .applicationReadState {
   display: grid;
   justify-items: start;

@@ -15,6 +15,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import type { ControlPlaneSnapshot } from "../domain/resources";
 import type { ExperienceSnapshot } from "../domain/experience";
+import type { ApplicationReadSnapshot } from "../domain/application";
 import { consoleRouteHref, type ControlPlaneRouteSelection, type ConsoleSection, type ServiceView } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
@@ -90,6 +91,23 @@ const snapshot: ControlPlaneSnapshot = {
   installations: []
 };
 
+const liveApplicationReadSnapshot: ApplicationReadSnapshot = {
+  etag: '"7"',
+  application: {
+    apiVersion: "paas.matrix.xiak.com/v1",
+    kind: "Application",
+    metadata: {
+      id: "app-live-checkout",
+      name: "live-checkout",
+      scope: { kind: "TENANT", tenantId: "organization-test" },
+      labels: { environment: "production" },
+      resourceVersion: 7,
+      createdAt: "2026-09-08T08:00:00Z",
+      updatedAt: "2026-09-08T09:00:00Z"
+    }
+  }
+};
+
 const liveServiceRoleTemplate: ServiceRoleTemplate = {
   id: "managedservice.installation-reader",
   version: 1,
@@ -163,6 +181,7 @@ async function renderConsole({
   openWorkspace = false,
   load = vi.fn().mockResolvedValue(snapshot),
   inspectServiceAuthorization,
+  readApplication,
   bindServiceRole,
   unbindServiceRole,
   logout = vi.fn().mockResolvedValue(undefined),
@@ -177,6 +196,7 @@ async function renderConsole({
   openWorkspace?: boolean;
   load?: ControlPlaneRepository["load"];
   inspectServiceAuthorization?: ControlPlaneRepository["inspectServiceAuthorization"];
+  readApplication?: ControlPlaneRepository["readApplication"];
   bindServiceRole?: ControlPlaneRepository["bindServiceRole"];
   unbindServiceRole?: ControlPlaneRepository["unbindServiceRole"];
   logout?: IamRepository["logout"];
@@ -189,6 +209,7 @@ async function renderConsole({
     getInstallation: vi.fn(),
     activateQuota: vi.fn(),
     createInstallation: vi.fn(),
+    readApplication,
     inspectServiceAuthorization,
     bindServiceRole,
     unbindServiceRole
@@ -1035,6 +1056,69 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("table", { name: "统一资源列表" })).toBeNull();
     expect(screen.queryByRole("searchbox", { name: "搜索资源" })).toBeNull();
     expect(screen.queryByText("结算 API")).toBeNull();
+  });
+
+  it("keeps a LIVE Application frame stable while the exact product read is pending", async () => {
+    navigation.query = "resource=app-live-checkout";
+    let resolveRead!: (value: ApplicationReadSnapshot) => void;
+    const readApplication = vi.fn(() => new Promise<ApplicationReadSnapshot>((resolve) => { resolveRead = resolve; }));
+    await renderConsole({ section: "applications", readApplication });
+
+    expect(screen.getByRole("heading", { level: 1, name: "应用托管" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "应用详情" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "返回应用" })).toBeTruthy();
+    expect(screen.getByText("app-live-checkout")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("正在读取这个应用");
+    expect(screen.queryByText("organization-test")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await act(async () => resolveRead(liveApplicationReadSnapshot));
+
+    expect(screen.getByRole("heading", { level: 2, name: "live-checkout" })).toBeTruthy();
+    expect(screen.getByText("organization-test")).toBeTruthy();
+    expect(screen.getByText('"7"')).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "部署与版本" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "管理标签" })).toBeNull();
+    expect(readApplication).toHaveBeenCalledWith("renderer-test-memory-only-session", "app-live-checkout");
+  });
+
+  it("does not leak LIVE Application metadata or management actions after a forbidden read", async () => {
+    navigation.query = "resource=app-live-checkout";
+    const readApplication = vi.fn().mockRejectedValue(new HttpProblem(403, "APPLICATION_READ_FORBIDDEN"));
+    await renderConsole({ section: "applications", readApplication });
+
+    expect(await screen.findByText(/页面不确认目标是否存在/)).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "应用详情" })).toBeTruthy();
+    expect(screen.getByText("app-live-checkout")).toBeTruthy();
+    expect(screen.queryByText("live-checkout")).toBeNull();
+    expect(screen.queryByText("organization-test")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "部署与版本" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "管理标签" })).toBeNull();
+  });
+
+  it("retries the same LIVE Application locator after an unavailable exact read", async () => {
+    navigation.query = "resource=app-live-checkout";
+    const readApplication = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(503, "AUTHORIZATION_UNAVAILABLE"))
+      .mockResolvedValueOnce(liveApplicationReadSnapshot);
+    const { user } = await renderConsole({ section: "applications", readApplication });
+
+    expect(await screen.findByText(/不会沿用旧数据或开放管理操作/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重新读取" }));
+
+    expect(await screen.findByRole("heading", { level: 2, name: "live-checkout" })).toBeTruthy();
+    expect(readApplication).toHaveBeenCalledTimes(2);
+    expect(readApplication.mock.calls.every(([, id]) => id === "app-live-checkout")).toBe(true);
+  });
+
+  it("rejects an invalid LIVE Application locator locally without making a product request", async () => {
+    navigation.query = "resource=app%2Fcheckout";
+    const readApplication = vi.fn();
+    await renderConsole({ section: "applications", readApplication });
+
+    expect(await screen.findByText(/浏览器没有发起网络请求/)).toBeTruthy();
+    expect(screen.getByText("app/checkout")).toBeTruthy();
+    expect(readApplication).not.toHaveBeenCalled();
   });
 
   it("renders an application resource and its product-owned tag snapshot in the content area", async () => {

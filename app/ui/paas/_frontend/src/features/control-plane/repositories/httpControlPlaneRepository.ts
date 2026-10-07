@@ -1,4 +1,10 @@
-import { requestJSON, requestToken } from "@/infrastructure/http/jsonRequest";
+import { requestJSON, requestJSONResponse, requestToken } from "@/infrastructure/http/jsonRequest";
+import {
+  validApplicationId,
+  validApplicationLabels,
+  validApplicationName,
+  type ApplicationReadSnapshot
+} from "../domain/application";
 import type {
   ActivateQuotaCommand,
   ControlPlaneSnapshot,
@@ -67,6 +73,7 @@ const publicIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const installationIdentifierPattern = /^[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]$/;
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const timestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
+const strongApplicationETagPattern = /^"[1-9][0-9]*"$/;
 
 function publicIdentifier(value: unknown): string {
   if (typeof value !== "string" || !publicIdentifierPattern.test(value)) {
@@ -85,6 +92,77 @@ function timestamp(value: unknown): string {
 
 function timestampOrder(value: string): string {
   return value.slice(0, 19) + "." + value.slice(19, -1).slice(1).padEnd(6, "0");
+}
+
+function invalidApplicationResponse(): never {
+  throw new Error("INVALID_APPLICATION_RESPONSE");
+}
+
+function applicationRecord(value: unknown): UnknownRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) invalidApplicationResponse();
+  return value as UnknownRecord;
+}
+
+function applicationExactKeys(wire: UnknownRecord, required: readonly string[], optional: readonly string[] = []): void {
+  const allowed = new Set([...required, ...optional]);
+  if (required.some((key) => !(key in wire)) || Object.keys(wire).some((key) => !allowed.has(key))) {
+    invalidApplicationResponse();
+  }
+}
+
+function applicationTimestamp(value: unknown): string {
+  if (typeof value !== "string" || !timestampPattern.test(value) || Number.isNaN(Date.parse(value)) ||
+      new Date(value).toISOString().slice(0, 19) !== value.slice(0, 19)) {
+    invalidApplicationResponse();
+  }
+  return value;
+}
+
+function parseApplicationRead(value: unknown, requestedId: string, etag: string | null): ApplicationReadSnapshot {
+  const wire = applicationRecord(value);
+  applicationExactKeys(wire, ["apiVersion", "kind", "metadata"]);
+  const metadata = applicationRecord(wire.metadata);
+  applicationExactKeys(metadata, ["id", "name", "scope", "resourceVersion", "createdAt", "updatedAt"], ["labels"]);
+  const scope = applicationRecord(metadata.scope);
+  applicationExactKeys(scope, ["kind", "tenantId"]);
+
+  if (wire.apiVersion !== "paas.matrix.xiak.com/v1" || wire.kind !== "Application" ||
+      typeof metadata.id !== "string" || !validApplicationId(metadata.id) || metadata.id !== requestedId ||
+      typeof metadata.name !== "string" || !validApplicationName(metadata.name) ||
+      scope.kind !== "TENANT" || typeof scope.tenantId !== "string" || !validApplicationId(scope.tenantId) ||
+      typeof metadata.resourceVersion !== "number" || !Number.isSafeInteger(metadata.resourceVersion) || metadata.resourceVersion < 1 ||
+      typeof etag !== "string" || !strongApplicationETagPattern.test(etag) || etag !== `"${metadata.resourceVersion}"`) {
+    invalidApplicationResponse();
+  }
+
+  const createdAt = applicationTimestamp(metadata.createdAt);
+  const updatedAt = applicationTimestamp(metadata.updatedAt);
+  if (timestampOrder(updatedAt) < timestampOrder(createdAt)) invalidApplicationResponse();
+
+  let labels: Record<string, string> | undefined;
+  if ("labels" in metadata) {
+    const labelWire = applicationRecord(metadata.labels);
+    if (Object.values(labelWire).some((item) => typeof item !== "string")) invalidApplicationResponse();
+    labels = { ...labelWire } as Record<string, string>;
+    if (!validApplicationLabels(labels)) invalidApplicationResponse();
+  }
+
+  return {
+    etag,
+    application: {
+      apiVersion: "paas.matrix.xiak.com/v1",
+      kind: "Application",
+      metadata: {
+        id: metadata.id,
+        name: metadata.name,
+        scope: { kind: "TENANT", tenantId: scope.tenantId },
+        ...(labels ? { labels } : {}),
+        resourceVersion: metadata.resourceVersion,
+        createdAt,
+        updatedAt
+      }
+    }
+  };
 }
 
 function parseTemplateReference(value: unknown): ServiceRoleTemplateReference {
@@ -407,6 +485,15 @@ export const httpControlPlaneRepository: ControlPlaneRepository = {
       throw new Error("INVALID_INSTALLATION_ID_RESPONSE");
     }
     return installation;
+  },
+
+  async readApplication(credential, applicationId) {
+    if (!validApplicationId(applicationId)) throw new Error("INVALID_APPLICATION_REQUEST");
+    const response = await requestJSONResponse<unknown>(
+      `/api/paas/v1/applications/${encodeURIComponent(applicationId)}`,
+      { headers: authorization(credential) }
+    );
+    return parseApplicationRead(response.body, applicationId, response.headers.get("ETag"));
   },
 
   async activateQuota(credential, command: ActivateQuotaCommand) {

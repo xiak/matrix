@@ -14,6 +14,28 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
+function applicationBody() {
+  return {
+    apiVersion: "paas.matrix.xiak.com/v1",
+    kind: "Application",
+    metadata: {
+      id: "app-checkout-api",
+      name: "checkout-api",
+      scope: { kind: "TENANT", tenantId: "org-xiak" },
+      labels: { environment: "production", team: "commerce" },
+      resourceVersion: 7,
+      createdAt: "2026-09-08T08:00:00.123456Z",
+      updatedAt: "2026-09-08T09:00:00.654321Z"
+    }
+  };
+}
+
+function applicationResponse(body: unknown, etag: string | null = '"7"'): Response {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (etag !== null) headers.set("ETag", etag);
+  return new Response(JSON.stringify(body), { status: 200, headers });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -124,6 +146,67 @@ describe("httpControlPlaneRepository", () => {
       "memory-only-session",
       "postgres-primary"
     )).rejects.toThrow("INVALID_INSTALLATION_ID_RESPONSE");
+  });
+
+  it("reads one Application through the exact product route and retains its strong ETag", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(applicationResponse(applicationBody()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.readApplication!("memory-only-session", "app-checkout-api"))
+      .resolves.toEqual({ etag: '"7"', application: applicationBody() });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [path, rawInit] = fetchMock.mock.calls[0]!;
+    const init = rawInit as RequestInit;
+    expect(path).toBe("/api/paas/v1/applications/app-checkout-api");
+    expect(init.cache).toBe("no-store");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer memory-only-session");
+    expect(new Headers(init.headers).get("Accept")).toBe("application/json");
+  });
+
+  it("fails closed on malformed Application bodies, unsafe labels and non-canonical ETags", async () => {
+    const invalid = [
+      { body: { ...applicationBody(), unexpected: true }, etag: '"7"' },
+      { body: { ...applicationBody(), metadata: { ...applicationBody().metadata, unexpected: true } }, etag: '"7"' },
+      { body: { ...applicationBody(), metadata: { ...applicationBody().metadata, id: "app-other" } }, etag: '"7"' },
+      { body: { ...applicationBody(), metadata: { ...applicationBody().metadata, scope: { kind: "PLATFORM" } } }, etag: '"7"' },
+      { body: { ...applicationBody(), metadata: { ...applicationBody().metadata, resourceVersion: 0 } }, etag: '"0"' },
+      { body: { ...applicationBody(), metadata: { ...applicationBody().metadata, updatedAt: "2026-09-08T07:00:00Z" } }, etag: '"7"' },
+      { body: { ...applicationBody(), metadata: { ...applicationBody().metadata, labels: { environment: "secret=raw-value" } } }, etag: '"7"' },
+      { body: applicationBody(), etag: null },
+      { body: applicationBody(), etag: 'W/"7"' },
+      { body: applicationBody(), etag: '"8"' }
+    ];
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (const candidate of invalid) {
+      fetchMock.mockResolvedValueOnce(applicationResponse(candidate.body, candidate.etag));
+      await expect(httpControlPlaneRepository.readApplication!("memory-only-session", "app-checkout-api"))
+        .rejects.toThrow("INVALID_APPLICATION_RESPONSE");
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(invalid.length);
+  });
+
+  it("preserves product authorization and absence responses for the UI state machine", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: "APPLICATION_READ_FORBIDDEN" }), { status: 403 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: "APPLICATION_NOT_FOUND" }), { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.readApplication!("memory-only-session", "app-checkout-api"))
+      .rejects.toMatchObject({ status: 403, code: "APPLICATION_READ_FORBIDDEN" });
+    await expect(httpControlPlaneRepository.readApplication!("memory-only-session", "app-checkout-api"))
+      .rejects.toMatchObject({ status: 404, code: "APPLICATION_NOT_FOUND" });
+  });
+
+  it("rejects an invalid Application locator before making a request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.readApplication!("memory-only-session", "app/checkout"))
+      .rejects.toThrow("INVALID_APPLICATION_REQUEST");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("observes the exact published template and active binding without sending an account selector", async () => {

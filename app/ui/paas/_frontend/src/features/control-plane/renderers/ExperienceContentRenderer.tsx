@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
 import { useFormatter, useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
@@ -15,7 +15,7 @@ import {
   Database,
   Server,
 } from "lucide-react";
-import { Alert, Table, TableToolbar, EmptyState, Badge, Button, Card, FormField, Progress, Select, ContentLayout, Typography } from "@ui/xiak";
+import { Alert, Table, TableToolbar, EmptyState, Badge, Button, Card, FormField, LoadingFeedback, Progress, Select, Skeleton, ContentLayout, Typography } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type {
   AlertScene,
@@ -30,6 +30,8 @@ import { ConsoleMetrics } from "./ConsoleMetrics";
 import { useConsoleFormat } from "./useConsoleFormat";
 import { ApplicationTagManagement } from "./ApplicationTagManagement";
 import { ApplicationDeploymentManagement } from "./ApplicationDeploymentManagement";
+import { useControlPlane } from "../application/ControlPlaneProvider";
+import type { ApplicationReadLoad, ApplicationReadSnapshot } from "../domain/application";
 
 export type ResourceScope = {
   regionId: string;
@@ -272,8 +274,87 @@ function ResourceDirectory({ scene, scope }: {
 }
 
 type ApplicationReadOutcome = "ready" | "forbidden" | "unavailable";
+type ApplicationReadView = ApplicationReadLoad | { status: "loading" };
 
 const applicationReadOutcomes: ApplicationReadOutcome[] = ["ready", "forbidden", "unavailable"];
+const applicationReadFactKeys = ["scope", "resourceVersion", "etag", "labels", "createdAt", "updatedAt"] as const;
+const applicationReadFailureMessages = {
+  invalid: "applicationRead.messages.invalid",
+  expired: "applicationRead.messages.expired",
+  forbidden: "applicationRead.messages.forbidden",
+  notFound: "applicationRead.messages.notFound",
+  unavailable: "applicationRead.messages.unavailable"
+} as const;
+
+function applicationReadBadge(status: ApplicationReadView["status"]) {
+  if (status === "ready") return "success" as const;
+  if (status === "loading") return "info" as const;
+  if (status === "forbidden") return "danger" as const;
+  return "warning" as const;
+}
+
+function ApplicationReadPanel({ resourceId, load, previewControls, onRetry }: {
+  resourceId: string;
+  load: ApplicationReadView;
+  previewControls?: ReactNode;
+  onRetry?(): void;
+}) {
+  const t = useTranslations("CloudExperience");
+  const format = useConsoleFormat();
+  const heading = useRef<HTMLHeadingElement>(null);
+  const snapshot: ApplicationReadSnapshot | undefined = load.status === "ready" ? load.snapshot : undefined;
+  const application = snapshot?.application;
+  const metadata = application?.metadata;
+  const labelCount = Object.keys(metadata?.labels ?? {}).length;
+  let body: ReactNode;
+  if (load.status === "ready") {
+    const readyMetadata = load.snapshot.application.metadata;
+    body = <>
+      <Alert status="info">{t("applicationRead.boundary")}</Alert>
+      <dl className={styles.resourceFacts}>
+        <div><dt>{t("applicationRead.scope")}</dt><dd>{readyMetadata.scope.kind} · <code>{readyMetadata.scope.tenantId}</code></dd></div>
+        <div><dt>{t("applicationRead.resourceVersion")}</dt><dd>{readyMetadata.resourceVersion}</dd></div>
+        <div><dt>{t("applicationRead.etag")}</dt><dd><code>{load.snapshot.etag}</code></dd></div>
+        <div><dt>{t("applicationRead.labels")}</dt><dd>{t("applicationRead.labelCount", { count: labelCount })}</dd></div>
+        <div><dt>{t("applicationRead.createdAt")}</dt><dd>{format.timestamp(readyMetadata.createdAt)}</dd></div>
+        <div><dt>{t("applicationRead.updatedAt")}</dt><dd>{format.timestamp(readyMetadata.updatedAt)}</dd></div>
+      </dl>
+    </>;
+  } else if (load.status === "loading") {
+    body = <div className={styles.applicationReadLoading}>
+      <LoadingFeedback label={t("applicationRead.loading")}>
+        <dl aria-hidden="true" className={styles.resourceFacts}>
+          {applicationReadFactKeys.map((key) => <div key={key}><dt>{t(`applicationRead.${key}`)}</dt><dd><Skeleton /></dd></div>)}
+        </dl>
+      </LoadingFeedback>
+    </div>;
+  } else {
+    body = <div className={styles.applicationReadState}>
+      <Alert status={load.status === "forbidden" ? "danger" : load.status === "notFound" ? "info" : "warning"}>{t(applicationReadFailureMessages[load.status])}</Alert>
+      {load.status === "unavailable" && onRetry ? <Button type="button" variant="secondary" onClick={onRetry}>{t("applicationRead.retry")}</Button> : null}
+    </div>;
+  }
+  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [resourceId]);
+  return <Card>
+    <Card.Header>
+      <div className={styles.resourceIdentity}>
+        <span className={styles.resourceIdentityIcon}><Boxes aria-hidden="true" /></span>
+        <div>
+          <span>{application ? `${application.kind} · ${application.apiVersion}` : t(previewControls ? "applicationRead.previewEyebrow" : "applicationRead.liveEyebrow")}</span>
+          <h2 id="application-resource-detail-title" ref={heading} tabIndex={-1}>{metadata?.name ?? t("applicationRead.title")}</h2>
+          <code>{resourceId}</code>
+        </div>
+        <Badge status={applicationReadBadge(load.status)}>{t(`applicationRead.states.${load.status}`)}</Badge>
+      </div>
+    </Card.Header>
+    <Card.Body>
+      <div className={styles.applicationReadBody}>
+        {body}
+        {previewControls}
+      </div>
+    </Card.Body>
+  </Card>;
+}
 
 function ApplicationResourceDetail({ resource, readSnapshot, tagSnapshot, deploymentSnapshot }: {
   resource: UnifiedResourceScene;
@@ -282,60 +363,53 @@ function ApplicationResourceDetail({ resource, readSnapshot, tagSnapshot, deploy
   deploymentSnapshot: Extract<ConsoleContentScene, { kind: "resources"; directory: "applications" }>["deploymentSnapshots"][number] | undefined;
 }) {
   const t = useTranslations("CloudExperience");
-  const format = useConsoleFormat();
-  const heading = useRef<HTMLHeadingElement>(null);
   const scenarioId = useId();
   const [outcome, setOutcome] = useState<ApplicationReadOutcome>("ready");
   const effectiveOutcome: ApplicationReadOutcome = outcome === "ready" && !readSnapshot ? "unavailable" : outcome;
-  const failureOutcome: Exclude<ApplicationReadOutcome, "ready"> = effectiveOutcome === "forbidden" ? "forbidden" : "unavailable";
-  const application = effectiveOutcome === "ready" ? readSnapshot?.application : undefined;
-  const metadata = application?.metadata;
-  const readable = Boolean(metadata);
-  const labelCount = Object.keys(metadata?.labels ?? {}).length;
-  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [resource.id]);
+  const load: ApplicationReadView = effectiveOutcome === "ready" && readSnapshot
+    ? { status: "ready", snapshot: readSnapshot }
+    : { status: effectiveOutcome === "forbidden" ? "forbidden" : "unavailable" };
+  const readable = load.status === "ready";
   return <section aria-labelledby="application-resource-detail-title" className={styles.resourceDetail}>
     <Link className={styles.backLink} href="/console/applications/"><ArrowLeft aria-hidden="true" />{t("backToApplications")}</Link>
-    <Card>
-      <Card.Header>
-        <div className={styles.resourceIdentity}>
-          <span className={styles.resourceIdentityIcon}><Boxes aria-hidden="true" /></span>
-          <div>
-            <span>{application ? `${application.kind} · ${application.apiVersion}` : t("applicationRead.eyebrow")}</span>
-            <h2 id="application-resource-detail-title" ref={heading} tabIndex={-1}>{metadata?.name ?? t("applicationRead.title")}</h2>
-            <code>{resource.id}</code>
-          </div>
-          <Badge status={effectiveOutcome === "ready" ? "success" : effectiveOutcome === "forbidden" ? "danger" : "warning"}>{t(`applicationRead.states.${effectiveOutcome}`)}</Badge>
-        </div>
-      </Card.Header>
-      <Card.Body>
-        <div className={styles.applicationReadBody}>
-          {readable && metadata && readSnapshot ? <>
-            <Alert status="info">{t("applicationRead.boundary")}</Alert>
-            <dl className={styles.resourceFacts}>
-              <div><dt>{t("applicationRead.scope")}</dt><dd>{metadata.scope.kind} · <code>{metadata.scope.tenantId}</code></dd></div>
-              <div><dt>{t("applicationRead.resourceVersion")}</dt><dd>{metadata.resourceVersion}</dd></div>
-              <div><dt>{t("applicationRead.etag")}</dt><dd><code>{readSnapshot.etag}</code></dd></div>
-              <div><dt>{t("applicationRead.labels")}</dt><dd>{t("applicationRead.labelCount", { count: labelCount })}</dd></div>
-              <div><dt>{t("applicationRead.createdAt")}</dt><dd>{format.timestamp(metadata.createdAt)}</dd></div>
-              <div><dt>{t("applicationRead.updatedAt")}</dt><dd>{format.timestamp(metadata.updatedAt)}</dd></div>
-            </dl>
-          </> : <div className={styles.applicationReadState}>
-            <Alert status={failureOutcome === "forbidden" ? "danger" : "warning"}>{t(`applicationRead.messages.${failureOutcome}`)}</Alert>
-            {failureOutcome === "unavailable" && readSnapshot ? <Button type="button" variant="secondary" onClick={() => setOutcome("ready")}>{t("applicationRead.retry")}</Button> : null}
-          </div>}
-          <details className={styles.scenarioDetails}>
+    <ApplicationReadPanel resourceId={resource.id} load={load} onRetry={readSnapshot ? () => setOutcome("ready") : undefined} previewControls={<details className={styles.scenarioDetails}>
             <summary>{t("applicationRead.tryOutcomes")} · {t(`applicationRead.states.${effectiveOutcome}`)}</summary>
             <FormField id={scenarioId} label={t("applicationRead.scenarioLabel")} hint={t("applicationRead.scenarioHint")}>
               <Select id={scenarioId} value={outcome} options={applicationReadOutcomes.map((value) => ({ value, label: t(`applicationRead.options.${value}`) }))} onValueChange={(value) => setOutcome(value as ApplicationReadOutcome)} />
             </FormField>
-          </details>
-        </div>
-      </Card.Body>
-    </Card>
+          </details>} />
     {readable ? <>
       <ApplicationDeploymentManagement key={`${resource.id}:${deploymentSnapshot?.deployment.resourceVersion ?? "unavailable"}`} resource={resource} initialSnapshot={deploymentSnapshot} />
       <ApplicationTagManagement key={`${resource.id}:${tagSnapshot?.etag ?? "unavailable"}`} resource={resource} initialSnapshot={tagSnapshot} />
     </> : null}
+  </section>;
+}
+
+function LiveApplicationResourceDetail({ resourceId }: { resourceId: string }) {
+  const t = useTranslations("CloudExperience");
+  const { readApplication } = useControlPlane();
+  const [load, setLoad] = useState<ApplicationReadView>({ status: "loading" });
+  const revision = useRef(0);
+  useEffect(() => {
+    let active = true;
+    const current = ++revision.current;
+    void readApplication(resourceId).then((next) => {
+      if (active && revision.current === current) setLoad(next);
+    });
+    return () => { active = false; };
+  }, [readApplication, resourceId]);
+
+  function retry() {
+    const current = ++revision.current;
+    setLoad({ status: "loading" });
+    void readApplication(resourceId).then((next) => {
+      if (revision.current === current) setLoad(next);
+    });
+  }
+
+  return <section aria-labelledby="application-resource-detail-title" className={styles.resourceDetail}>
+    <Link className={styles.backLink} href="/console/applications/"><ArrowLeft aria-hidden="true" />{t("backToApplications")}</Link>
+    <ApplicationReadPanel resourceId={resourceId} load={load} onRetry={retry} />
   </section>;
 }
 
@@ -347,6 +421,7 @@ function Resources({ scene, scope }: {
   const params = useSearchParams();
   const selectedId = scene.directory === "applications" ? params.get("resource") : null;
   if (!selectedId || scene.directory !== "applications") return <ResourceDirectory scene={scene} scope={scope} />;
+  if (scene.listing === "unavailable") return <LiveApplicationResourceDetail key={selectedId} resourceId={selectedId} />;
   const selected = scene.resources.find((resource) => resource.id === selectedId);
   if (selected) return <ApplicationResourceDetail key={selected.id} resource={selected} readSnapshot={scene.readSnapshots.find((snapshot) => snapshot.application.metadata.id === selected.id)} tagSnapshot={scene.tagSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} deploymentSnapshot={scene.deploymentSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} />;
   return <Card><Card.Body><EmptyState title={t("resourceNotFound")} description={t("resourceNotFoundHint")} action={<Button asChild variant="secondary"><Link href="/console/applications/">{t("backToApplications")}</Link></Button>} /></Card.Body></Card>;
