@@ -18,6 +18,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	options := Options{
 		InstallationID: "mxi-" + strings.Repeat("a", 32),
 		Root:           "/srv/matrix", Listener: "127.0.0.1", Port: 8443,
+		NorthboundOrigin: "http://matrix.example.test:8443",
 	}
 	result, err := Compile(manifest, options)
 	if err != nil {
@@ -92,7 +93,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	expectedEnvironmentKeys := map[string][]string{
 		"audit": {
 			"MATRIX_AUDIT_CURSOR_KEY_FILE", "MATRIX_AUDIT_DATABASE_DSN_FILE",
-			"MATRIX_AUDIT_IAM_ENDPOINT", "MATRIX_AUDIT_LISTEN_ADDRESS",
+			"MATRIX_AUDIT_IAM_ENDPOINT", "MATRIX_AUDIT_INSTALLATION_ID", "MATRIX_AUDIT_LISTEN_ADDRESS",
+			"MATRIX_AUDIT_NORTHBOUND_ORIGIN",
 			"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE",
 		},
 		"iam": {
@@ -117,6 +119,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		"paas-api": {
 			"MATRIX_PAAS_CURSOR_KEY_FILE", "MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
 			"MATRIX_PAAS_INSTALLATION_ID", "MATRIX_PAAS_LISTEN_ADDRESS",
+			"MATRIX_PAAS_NORTHBOUND_ORIGIN",
 			"MATRIX_PAAS_RELEASE_ID", "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE",
 			"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST",
 		},
@@ -225,6 +228,11 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			slices.Sort(actualKeys)
 			if !slices.Equal(actualKeys, keys) {
 				t.Fatalf("service %q environment keys=%v want=%v", name, actualKeys, keys)
+			}
+			if name == "audit" || name == "paas-api" {
+				if environment["MATRIX_"+strings.ToUpper(strings.TrimSuffix(name, "-api"))+"_NORTHBOUND_ORIGIN"] != options.NorthboundOrigin {
+					t.Fatalf("service %q lost the sealed northbound origin", name)
+				}
 			}
 		}
 		switch name {
@@ -417,6 +425,7 @@ func TestCompileRejectsUntrustedTopologyInputs(t *testing.T) {
 	valid := Options{
 		InstallationID: "mxi-" + strings.Repeat("a", 32),
 		Root:           "/srv/matrix", Listener: "0.0.0.0", Port: 9080,
+		NorthboundOrigin: "http://matrix.example.test:9080",
 	}
 	tests := map[string]func(*Options){
 		"relative root": func(value *Options) { value.Root = "srv/matrix" },
@@ -428,6 +437,9 @@ func TestCompileRejectsUntrustedTopologyInputs(t *testing.T) {
 		"listener hostname":          func(value *Options) { value.Listener = "localhost" },
 		"listener multicast":         func(value *Options) { value.Listener = "224.0.0.1" },
 		"listener port":              func(value *Options) { value.Port = 0 },
+		"missing northbound origin":  func(value *Options) { value.NorthboundOrigin = "" },
+		"TLS without edge transport": func(value *Options) { value.NorthboundOrigin = "https://matrix.example.test:9080" },
+		"origin port mismatch":       func(value *Options) { value.NorthboundOrigin = "http://matrix.example.test:9443" },
 		"installation ID": func(value *Options) {
 			value.InstallationID = "customer"
 		},
@@ -450,7 +462,7 @@ func TestCompileRejectsUntrustedTopologyInputs(t *testing.T) {
 
 func TestOptionsCannotCarryProviderNativeTopology(t *testing.T) {
 	typeOfOptions := reflect.TypeFor[Options]()
-	want := []string{"InstallationID", "Root", "Listener", "Port"}
+	want := []string{"InstallationID", "Root", "Listener", "Port", "NorthboundOrigin"}
 	got := make([]string, 0, typeOfOptions.NumField())
 	for index := 0; index < typeOfOptions.NumField(); index++ {
 		got = append(got, typeOfOptions.Field(index).Name)

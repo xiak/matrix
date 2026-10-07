@@ -43,15 +43,16 @@ var (
 // InstallPlan is authenticated input plus the installation-owned identity.
 // TrustBytes contains a public key document, never credential material.
 type InstallPlan struct {
-	Root           string
-	InstallationID string
-	CorrelationID  string
-	Listener       string
-	Port           uint16
-	Bundle         release.VerifiedBundle
-	Trust          release.TrustRoot
-	TrustBytes     []byte
-	SecurityMail   SecurityMailInput
+	Root             string
+	InstallationID   string
+	CorrelationID    string
+	Listener         string
+	Port             uint16
+	NorthboundOrigin string
+	Bundle           release.VerifiedBundle
+	Trust            release.TrustRoot
+	TrustBytes       []byte
+	SecurityMail     SecurityMailInput
 }
 
 // SecurityMailInput is the canonical private operator input admitted by the
@@ -80,6 +81,7 @@ type InstalledPlan struct {
 	CorrelationID      string
 	Listener           string
 	Port               uint16
+	NorthboundOrigin   string
 	ReleaseID          string
 	ReleaseDigest      string
 	PreviousID         string
@@ -192,6 +194,13 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	if (request.Action == lifecycle.ActionInstall || request.Action == lifecycle.ActionUpgrade) &&
 		strings.TrimSpace(request.SecurityMailConfiguration) == "" {
 		return cli.Result{}, fault(cli.FaultInvalidArgument, "SECURITY_MAIL_CONFIGURATION_REQUIRED")
+	}
+	if request.NorthboundOrigin != "" && request.Action != lifecycle.ActionInstall {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_UNSUPPORTED")
+	}
+	if request.Action == lifecycle.ActionInstall &&
+		topology.ValidateNorthboundOrigin(request.NorthboundOrigin, defaultPort) != nil {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_INVALID")
 	}
 	switch request.Action {
 	case lifecycle.ActionInstall:
@@ -415,7 +424,7 @@ func supportOutputBinding(root, output string) (string, string, error) {
 func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
 	return InstalledPlan{
 		Root: root, InstallationID: state.InstallationID,
-		Listener: defaultListener, Port: defaultPort,
+		Listener: defaultListener, Port: defaultPort, NorthboundOrigin: state.NorthboundOrigin,
 		ReleaseID: state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
 		PreviousID: state.PreviousRelease, PreviousDigest: state.PreviousReleaseDigest,
 		SecurityMailDigest: state.SecurityMailDigest,
@@ -427,7 +436,7 @@ func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
 func previousInstalledPlan(root string, state lifecycle.Journal) InstalledPlan {
 	return InstalledPlan{
 		Root: root, InstallationID: state.InstallationID,
-		Listener: defaultListener, Port: defaultPort,
+		Listener: defaultListener, Port: defaultPort, NorthboundOrigin: state.NorthboundOrigin,
 		ReleaseID: state.PreviousRelease, ReleaseDigest: state.PreviousReleaseDigest,
 		SecurityMailDigest: state.SecurityMailDigest,
 		TrustKeyID:         state.ReleaseTrust.KeyID,
@@ -524,6 +533,9 @@ func (backend *Backend) install(
 		if state.SecurityMailDigest != securityMail.Digest {
 			return cli.Result{}, fault(cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
 		}
+		if state.NorthboundOrigin != request.NorthboundOrigin {
+			return cli.Result{}, fault(cli.FaultConflict, "NORTHBOUND_ORIGIN_CONFLICT")
+		}
 		correlationID := ""
 		if state.Last != nil {
 			correlationID = state.Last.Command.ID
@@ -551,6 +563,7 @@ func (backend *Backend) install(
 		InputDigest:        verified.ManifestSHA256,
 		TargetReleaseID:    verified.Manifest.Release.ID,
 		SecurityMailDigest: securityMail.Digest,
+		NorthboundOrigin:   request.NorthboundOrigin,
 		RequestedAt:        canonicalNow(backend.now()),
 	}
 	started, err := lifecycle.Start(state, command)
@@ -571,7 +584,7 @@ func (backend *Backend) install(
 	plan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: verified,
+		Listener:      defaultListener, Port: defaultPort, NorthboundOrigin: request.NorthboundOrigin, Bundle: verified,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 		SecurityMail: securityMail,
 	}
@@ -709,7 +722,7 @@ func (backend *Backend) upgrade(
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: targetBundle,
+		Listener:      defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: targetBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 		SecurityMail: securityMail,
 	}
@@ -828,7 +841,7 @@ func (backend *Backend) rollback(
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: currentBundle,
+		Listener:      defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: currentBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(currentPlan.TrustBytes)
@@ -963,14 +976,14 @@ func (backend *Backend) recover(
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: currentBundle,
+		Listener:      defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: currentBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(currentPlan.TrustBytes)
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: targetBundle,
+		Listener:      defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: targetBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(targetPlan.TrustBytes)

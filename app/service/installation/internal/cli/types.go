@@ -25,6 +25,7 @@ type Request struct {
 	Bundle                    string
 	TrustKey                  string
 	SecurityMailConfiguration string
+	NorthboundOrigin          string
 	BackupID                  string
 	SupportOutput             string
 }

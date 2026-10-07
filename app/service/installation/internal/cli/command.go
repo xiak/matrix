@@ -45,6 +45,7 @@ type commandOptions struct {
 	bundle                    string
 	trustKey                  string
 	securityMailConfiguration string
+	northboundOrigin          string
 	backupID                  string
 	supportOutput             string
 }
@@ -125,6 +126,7 @@ func newPlatformCommand(
 			request := Request{
 				Action: action, Root: options.root, Bundle: options.bundle, TrustKey: options.trustKey,
 				SecurityMailConfiguration: options.securityMailConfiguration,
+				NorthboundOrigin:          options.northboundOrigin,
 				BackupID:                  options.backupID, SupportOutput: options.supportOutput,
 			}
 			result, err := backend.Run(command.Context(), request)
@@ -151,6 +153,7 @@ func bindCommandFlags(flags *pflag.FlagSet, action lifecycle.Action, options *co
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
 		flags.StringVar(&options.trustKey, "trust-key", "", "out-of-band release trust root")
 		flags.StringVar(&options.securityMailConfiguration, "security-mail-configuration", "", "protected SMTP security-mail configuration file")
+		flags.StringVar(&options.northboundOrigin, "northbound-origin", "", "canonical public HTTP origin with explicit port")
 	case lifecycle.ActionUpgrade:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
 		flags.StringVar(&options.securityMailConfiguration, "security-mail-configuration", "", "protected SMTP security-mail configuration file")
@@ -168,8 +171,8 @@ func validateCommandFlags(action lifecycle.Action, options *commandOptions) erro
 	switch action {
 	case lifecycle.ActionInstall:
 		if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.trustKey) == "" ||
-			strings.TrimSpace(options.securityMailConfiguration) == "" {
-			return errors.New("offline bundle, trust key and security-mail configuration are required")
+			strings.TrimSpace(options.securityMailConfiguration) == "" || strings.TrimSpace(options.northboundOrigin) == "" {
+			return errors.New("offline bundle, trust key, security-mail configuration and northbound origin are required")
 		}
 	case lifecycle.ActionUpgrade:
 		if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.securityMailConfiguration) == "" {

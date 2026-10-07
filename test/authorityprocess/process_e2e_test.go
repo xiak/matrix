@@ -6686,6 +6686,8 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
 		request.Header.Set("X-Matrix-External-Request-Target", value.externalPath)
 		request.Header.Set("X-Matrix-External-Source-IP", value.sourceIP)
+		request.Header.Set("X-Real-IP", value.sourceIP)
+		request.Header.Set("X-Forwarded-For", value.sourceIP)
 		response, err := processHTTPClient().Do(request)
 		if err != nil {
 			t.Fatal("invoke signed PaaS request", err)
@@ -6732,6 +6734,8 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
 		request.Header.Set("X-Matrix-External-Request-Target", value.externalPath)
 		request.Header.Set("X-Matrix-External-Source-IP", value.sourceIP)
+		request.Header.Set("X-Real-IP", value.sourceIP)
+		request.Header.Set("X-Forwarded-For", value.sourceIP)
 		response, err := processHTTPClient().Do(request)
 		if err != nil {
 			t.Fatal("invoke signed Audit request", err)

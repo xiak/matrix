@@ -19,7 +19,7 @@ func TestPlatformCommandSurfaceBuildsExactRequests(t *testing.T) {
 		args []string
 		want Request
 	}{
-		{"install", []string{"platform", "install", "--bundle", "/media/release", "--root", "/srv/matrix", "--trust-key", "/media/trust.json", "--security-mail-configuration", "/media/security-mail.json"}, Request{Action: lifecycle.ActionInstall, Root: "/srv/matrix", Bundle: "/media/release", TrustKey: "/media/trust.json", SecurityMailConfiguration: "/media/security-mail.json"}},
+		{"install", []string{"platform", "install", "--bundle", "/media/release", "--root", "/srv/matrix", "--trust-key", "/media/trust.json", "--security-mail-configuration", "/media/security-mail.json", "--northbound-origin", "http://matrix.example.test:8080"}, Request{Action: lifecycle.ActionInstall, Root: "/srv/matrix", Bundle: "/media/release", TrustKey: "/media/trust.json", SecurityMailConfiguration: "/media/security-mail.json", NorthboundOrigin: "http://matrix.example.test:8080"}},
 		{"verify", []string{"platform", "verify", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionVerify, Root: "/srv/matrix"}},
 		{"status", []string{"platform", "status", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionStatus, Root: "/srv/matrix"}},
 		{"backup", []string{"platform", "backup", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionBackup, Root: "/srv/matrix"}},
@@ -98,6 +98,7 @@ func TestRunWritesVersionedStableJSON(t *testing.T) {
 		"--format", "json", "platform", "install", "--bundle", "/media/release",
 		"--root", "/srv/matrix", "--trust-key", "/media/trust.json",
 		"--security-mail-configuration", "/media/security-mail.json",
+		"--northbound-origin", "http://matrix.example.test:8080",
 	}, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backend)
 	if exit != ExitSuccess || errOut.Len() != 0 {
 		t.Fatalf("run exit/output = %d / %q", exit, errOut.String())

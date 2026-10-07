@@ -117,7 +117,7 @@ func (boundary *Boundary) AccessKeyRequest(request *http.Request, body []byte) (
 		return invalid()
 	}
 	source, err := iamv1.ParseAuthorizationSourceIP(request.Header.Get(HeaderExternalSourceIP))
-	if err != nil {
+	if err != nil || !hasTrustedEdgeForwarding(request, source.String()) {
 		return invalid()
 	}
 	parameters, signature, err := iamv1.ParseAccessKeyAuthorization(request.Header.Get("Authorization"))
@@ -197,7 +197,7 @@ func hasForbiddenSemantics(request *http.Request) bool {
 	}
 	for _, name := range []string{
 		"Cookie", "Matrix-Subject-Credential", "Content-Encoding", "X-HTTP-Method-Override", "Trailer",
-		"Forwarded", "X-Forwarded-For", "X-Real-IP",
+		"Forwarded",
 		"Range", "Content-Range", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "Prefer", "Digest", "Want-Digest",
 	} {
 		if len(request.Header.Values(name)) != 0 {
@@ -205,6 +205,24 @@ func hasForbiddenSemantics(request *http.Request) bool {
 		}
 	}
 	return false
+}
+
+// hasTrustedEdgeForwarding verifies the standard forwarding headers emitted
+// by the pinned APISIX proxy after its rewrite plugin has removed all caller
+// values. They are not authorization inputs; requiring them to agree with the
+// Matrix source fact prevents a direct internal caller from fabricating only
+// the purpose-specific header.
+func hasTrustedEdgeForwarding(request *http.Request, sourceIP string) bool {
+	if request == nil || sourceIP == "" {
+		return false
+	}
+	for _, name := range []string{"X-Real-IP", "X-Forwarded-For"} {
+		values := request.Header.Values(name)
+		if len(values) != 1 || values[0] != sourceIP {
+			return false
+		}
+	}
+	return true
 }
 
 func first(values []string) string {

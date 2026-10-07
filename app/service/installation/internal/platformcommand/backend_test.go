@@ -45,6 +45,7 @@ func TestInstallCommitsPinnedReleaseOnlyAfterEffectsAndReplays(t *testing.T) {
 	state := readJournal(t, root)
 	if state.CurrentReleaseID != fixture.Manifest.Release.ID ||
 		state.CurrentReleaseDigest != fixture.ManifestDigest ||
+		state.NorthboundOrigin != request.NorthboundOrigin ||
 		state.ReleaseTrust.KeyID != fixture.Trust.KeyID ||
 		state.ReleaseTrust.Fingerprint != fixture.Trust.PublicKeyFingerprint ||
 		state.Active != nil || state.Last == nil ||
@@ -63,6 +64,25 @@ func TestInstallCommitsPinnedReleaseOnlyAfterEffectsAndReplays(t *testing.T) {
 	for _, phase := range effectingInstallPhases() {
 		if effects.calls[phase] != 1 {
 			t.Fatalf("replay repeated phase %s", phase)
+		}
+	}
+	changedOrigin := request
+	changedOrigin.NorthboundOrigin = "http://other.example.test:8080"
+	_, err = backend.Run(context.Background(), changedOrigin)
+	assertFault(t, err, cli.FaultConflict, "NORTHBOUND_ORIGIN_CONFLICT")
+}
+
+func TestInstallRejectsUnsupportedNorthboundOriginBeforeState(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	backend := newTestBackend(t, &installEffects{})
+	for _, origin := range []string{"", "https://matrix.example.test:8080", "http://matrix.example.test:8443", "http://MATRIX.example.test:8080"} {
+		root := filepath.Join(t.TempDir(), "matrix")
+		request := installRequest(root, fixture)
+		request.NorthboundOrigin = origin
+		_, err := backend.Run(context.Background(), request)
+		assertFault(t, err, cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_INVALID")
+		if _, statErr := os.Stat(root); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("invalid origin %q changed installation state", origin)
 		}
 	}
 }
@@ -1149,7 +1169,7 @@ func (effects *installEffects) ApplyInstallPhase(
 	effects.calls[phase]++
 	if plan.Root == "" || plan.InstallationID == "" || plan.Bundle.Manifest.Release.ID == "" ||
 		plan.CorrelationID == "" || plan.Trust.KeyID == "" ||
-		len(plan.TrustBytes) == 0 || plan.Port == 0 || plan.SecurityMail.Digest == "" ||
+		len(plan.TrustBytes) == 0 || plan.Port == 0 || plan.NorthboundOrigin == "" || plan.SecurityMail.Digest == "" ||
 		installationv1.ValidateSecurityMailConfiguration(plan.SecurityMail.Configuration) != nil {
 		return errors.New("install plan is incomplete")
 	}
@@ -1183,6 +1203,7 @@ func (effects *installEffects) ApplyUpgradePhase(
 		plan.Target.Bundle.Manifest.Release.ID == "" || plan.BackupID == "" ||
 		plan.CreatedAt.IsZero() || plan.Source.CorrelationID == "" ||
 		plan.Source.CorrelationID != plan.Target.CorrelationID ||
+		plan.Source.NorthboundOrigin == "" || plan.Source.NorthboundOrigin != plan.Target.NorthboundOrigin ||
 		plan.Target.SecurityMail.Digest == "" ||
 		installationv1.ValidateSecurityMailConfiguration(plan.Target.SecurityMail.Configuration) != nil {
 		return errors.New("upgrade plan is incomplete")
@@ -1213,7 +1234,8 @@ func (effects *installEffects) ApplyRollbackPhase(
 	if plan.Current.Bundle.Manifest.Release.ID == "" ||
 		plan.Previous.ReleaseID == "" || plan.Previous.ReleaseDigest == "" ||
 		plan.Current.CorrelationID == "" ||
-		plan.Current.CorrelationID != plan.Previous.CorrelationID {
+		plan.Current.CorrelationID != plan.Previous.CorrelationID ||
+		plan.Current.NorthboundOrigin == "" || plan.Current.NorthboundOrigin != plan.Previous.NorthboundOrigin {
 		return errors.New("explicit rollback plan is incomplete")
 	}
 	if phase == effects.explicitRollbackFailPhase &&
@@ -1233,7 +1255,7 @@ func (effects *installEffects) InspectBackup(
 	effects.recoveryInspectCalls++
 	if plan.Root == "" || plan.InstallationID == "" || plan.ReleaseID == "" ||
 		plan.ReleaseDigest == "" || plan.TrustKeyID == "" || plan.TrustFingerprint == "" ||
-		plan.Port == 0 || backupID == "" {
+		plan.Port == 0 || plan.NorthboundOrigin == "" || backupID == "" {
 		return RecoverySource{}, errors.New("recovery inspection plan is incomplete")
 	}
 	if effects.recoveryInspectErr != nil {
@@ -1271,6 +1293,7 @@ func (effects *installEffects) ApplyRecoveryPhase(
 		plan.Current.InstallationID != plan.Target.InstallationID ||
 		plan.Current.Bundle.Manifest.Release.ID == "" ||
 		plan.Target.Bundle.Manifest.Release.ID == "" ||
+		plan.Current.NorthboundOrigin == "" || plan.Current.NorthboundOrigin != plan.Target.NorthboundOrigin ||
 		plan.BackupID == "" || plan.BackupDigest == "" ||
 		plan.Current.CorrelationID == "" ||
 		plan.Current.CorrelationID != plan.Target.CorrelationID {
@@ -1291,7 +1314,7 @@ func (effects *installEffects) ObserveInstallation(
 	effects.observeCalls++
 	if plan.Root == "" || plan.InstallationID == "" || plan.ReleaseID == "" ||
 		plan.ReleaseDigest == "" || plan.TrustKeyID == "" || plan.TrustFingerprint == "" ||
-		plan.Port == 0 {
+		plan.Port == 0 || plan.NorthboundOrigin == "" {
 		return false, errors.New("installed plan is incomplete")
 	}
 	return effects.observeReady, effects.observeErr
@@ -1304,7 +1327,7 @@ func (effects *installEffects) VerifyInstallation(
 	effects.verifyCalls++
 	if plan.Root == "" || plan.InstallationID == "" || plan.ReleaseID == "" ||
 		plan.ReleaseDigest == "" || plan.TrustKeyID == "" || plan.TrustFingerprint == "" ||
-		plan.Port == 0 || plan.CorrelationID == "" {
+		plan.Port == 0 || plan.NorthboundOrigin == "" || plan.CorrelationID == "" {
 		return errors.New("installed plan is incomplete")
 	}
 	return effects.verifyErr
@@ -1317,7 +1340,7 @@ func (effects *installEffects) CreateBackup(
 	effects.backupCalls++
 	effects.backupPlan = plan
 	if plan.Root == "" || plan.InstallationID == "" || plan.ReleaseID == "" ||
-		plan.BackupID == "" || plan.CreatedAt.IsZero() {
+		plan.NorthboundOrigin == "" || plan.BackupID == "" || plan.CreatedAt.IsZero() {
 		return errors.New("backup plan is incomplete")
 	}
 	return effects.backupErr
@@ -1330,7 +1353,7 @@ func (effects *installEffects) WriteSupportEvidence(
 	effects.supportCalls++
 	effects.supportPlan = plan
 	if plan.Root == "" || plan.InstallationID == "" || plan.ReleaseID == "" ||
-		plan.Output == "" || plan.CorrelationID == "" || plan.GeneratedAt.IsZero() {
+		plan.NorthboundOrigin == "" || plan.Output == "" || plan.CorrelationID == "" || plan.GeneratedAt.IsZero() {
 		return errors.New("support plan is incomplete")
 	}
 	return effects.supportErr
@@ -1362,6 +1385,7 @@ func installRequest(root string, fixture releasetest.Fixture) cli.Request {
 		Action: lifecycle.ActionInstall, Root: root,
 		Bundle: fixture.Root, TrustKey: fixture.TrustPath,
 		SecurityMailConfiguration: "/private/security-mail.json",
+		NorthboundOrigin:          "http://matrix.example.test:8080",
 	}
 }
 

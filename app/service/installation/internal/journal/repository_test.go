@@ -297,6 +297,7 @@ func activeInstallJournal(t *testing.T) lifecycle.Journal {
 		ID: "cmd-" + strings.Repeat("b", 32), Action: lifecycle.ActionInstall,
 		InputDigest:        "sha256:" + strings.Repeat("c", 64),
 		SecurityMailDigest: "sha256:" + strings.Repeat("d", 64),
+		NorthboundOrigin:   "http://matrix.example.test:8080",
 		TargetReleaseID:    "matrix-v0.1.0-aaaaaaaaaaaa",
 		RequestedAt:        time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC),
 	})

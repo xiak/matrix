@@ -20,6 +20,8 @@ func TestBoundaryReconstructsExactExternalRequest(t *testing.T) {
 	request.Header.Set(HeaderExternalOrigin, "https://api.example.test:443")
 	request.Header.Set(HeaderExternalRequestTarget, "/api/paas/v1/applications")
 	request.Header.Set(HeaderExternalSourceIP, "2001:db8::1")
+	request.Header.Set("X-Real-IP", "2001:db8::1")
+	request.Header.Set("X-Forwarded-For", "2001:db8::1")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "create-one")
 	external, err := boundary.AccessKeyRequest(request, body)
@@ -54,6 +56,10 @@ func TestBoundaryRejectsAmbiguousOrForgedEdgeFacts(t *testing.T) {
 		{"duplicate source IP", func(r *http.Request) { r.Header.Add(HeaderExternalSourceIP, "192.0.2.10") }},
 		{"noncanonical source IP", func(r *http.Request) { r.Header.Set(HeaderExternalSourceIP, "::ffff:192.0.2.10") }},
 		{"invalid source IP", func(r *http.Request) { r.Header.Set(HeaderExternalSourceIP, "not-an-address") }},
+		{"missing real IP", func(r *http.Request) { r.Header.Del("X-Real-IP") }},
+		{"duplicate real IP", func(r *http.Request) { r.Header.Add("X-Real-IP", "192.0.2.10") }},
+		{"missing forwarded for", func(r *http.Request) { r.Header.Del("X-Forwarded-For") }},
+		{"duplicate forwarded for", func(r *http.Request) { r.Header.Add("X-Forwarded-For", "192.0.2.10") }},
 		{"target prefix", func(r *http.Request) { r.Header.Set(HeaderExternalRequestTarget, "/api/paas/v1/records:query") }},
 		{"target mapping", func(r *http.Request) { r.Header.Set(HeaderExternalRequestTarget, "/api/audit/v1/integrity:verify") }},
 		{"empty query", func(r *http.Request) { r.Header.Set(HeaderExternalRequestTarget, "/api/audit/v1/records:query?") }},
@@ -62,8 +68,8 @@ func TestBoundaryRejectsAmbiguousOrForgedEdgeFacts(t *testing.T) {
 		{"media parameters", func(r *http.Request) { r.Header.Set("Content-Type", "application/json; charset=utf-8") }},
 		{"unsigned method override", func(r *http.Request) { r.Header.Set("X-HTTP-Method-Override", "GET") }},
 		{"forwarded source", func(r *http.Request) { r.Header.Set("Forwarded", "for=192.0.2.11") }},
-		{"forwarded for", func(r *http.Request) { r.Header.Set("X-Forwarded-For", "192.0.2.11") }},
-		{"real IP", func(r *http.Request) { r.Header.Set("X-Real-IP", "192.0.2.11") }},
+		{"forwarded for mismatch", func(r *http.Request) { r.Header.Set("X-Forwarded-For", "192.0.2.11") }},
+		{"real IP mismatch", func(r *http.Request) { r.Header.Set("X-Real-IP", "192.0.2.11") }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte(`{"pageSize":10}`)
@@ -71,6 +77,8 @@ func TestBoundaryRejectsAmbiguousOrForgedEdgeFacts(t *testing.T) {
 			request.Header.Set(HeaderExternalOrigin, "https://api.example.test:443")
 			request.Header.Set(HeaderExternalRequestTarget, "/api/audit/v1/records:query")
 			request.Header.Set(HeaderExternalSourceIP, "192.0.2.10")
+			request.Header.Set("X-Real-IP", "192.0.2.10")
+			request.Header.Set("X-Forwarded-For", "192.0.2.10")
 			request.Header.Set("Content-Type", "application/json")
 			test.mutate(request)
 			if _, err := boundary.AccessKeyRequest(request, body); err == nil {

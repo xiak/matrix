@@ -3,13 +3,16 @@ package phase1e2e
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -72,6 +75,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		"--root", value.config.root,
 		"--trust-key", value.config.trustKey,
 		"--security-mail-configuration", value.config.securityMail,
+		"--northbound-origin", value.config.edge,
 	}, value.pathLeakage())
 	if err != nil || install.ReleaseID != value.releases.a.Manifest.Release.ID || !install.Changed {
 		return fail("release-a-install")
@@ -713,6 +717,12 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		}
 		clear(quota.body)
 		if index == 0 {
+			if err := value.verifySignedAccessKeyEdge(ctx, &tenant, installationID); err != nil {
+				return err
+			}
+			emit("signed-access-key-through-trusted-apisix")
+		}
+		if index == 0 {
 			if err := value.edge.mutateIAM(ctx, "/policy-attachments/"+string(tenant.ChildAttachment.ID)+":revoke", tenant.OldPrimaryCredential,
 				iamv1.RevokePolicyAttachmentRequest{ResourceVersion: tenant.ChildAttachment.ResourceVersion, RequestID: "phase1-revoke-child-attachment"}, nil, http.StatusOK); err != nil {
 				return fail("tenant-role-revoke")
@@ -757,6 +767,240 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		return err
 	}
 	return nil
+}
+
+func (value *gate) verifySignedAccessKeyEdge(
+	ctx context.Context,
+	tenant *tenantRetention,
+	installationID string,
+) error {
+	if tenant == nil {
+		return fail("signed-access-key-fixture")
+	}
+	sourceCIDR, err := installedEdgeSourceCIDR(ctx, installationID)
+	if err != nil {
+		return fail("signed-access-key-edge-source")
+	}
+	rule := func(sid string, actions []iamv1.Action, kind iamv1.ResourceKind) iamv1.PolicyStatement {
+		return iamv1.PolicyStatement{SID: sid, Effect: iamv1.PolicyAllow, Actions: actions,
+			Resources: []iamv1.PolicyResourceSelector{{Kind: kind, Match: iamv1.PolicyResourceAnyInAuthority}}}
+	}
+	var policy iamv1.PolicyDetail
+	if err := value.edge.mutateIAM(ctx, "/policies", tenant.OldPrimaryCredential, iamv1.CreatePolicyRequest{
+		DisplayName: "Phase 1 access key custodian", RequestID: "phase1-access-key-custodian-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{
+				rule("user-keys", []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate}, iamv1.ResourceUser),
+				rule("key-state", []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus,
+					iamv1.ActionIAMAccessKeySetNetworkRestrictions, iamv1.ActionIAMAccessKeyDelete}, iamv1.ResourceAccessKey),
+			}},
+	}, &policy, http.StatusCreated); err != nil || iamv1.ValidatePolicyDetail(policy) != nil {
+		return fail("signed-access-key-custodian-policy")
+	}
+	var grant iamv1.PolicyAttachment
+	if err := value.edge.mutateIAM(ctx, "/policy-attachments", tenant.OldPrimaryCredential,
+		iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(tenant.Account.RootIdentity.PrincipalID)},
+			PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion,
+			RequestID: "phase1-access-key-custodian-grant",
+		}, &grant, http.StatusOK); err != nil || iamv1.ValidatePolicyAttachment(grant) != nil {
+		return fail("signed-access-key-custodian-grant")
+	}
+
+	path := "/users/" + string(tenant.Child.ID) + "/access-keys"
+	var directory iamv1.AccessKeyList
+	if _, err := value.edge.get(ctx, "/api/iam/v1"+path, tenant.OldPrimaryCredential, &directory); err != nil ||
+		iamv1.ValidateAccessKeyList(directory) != nil || directory.AccountID != tenant.Account.ID ||
+		directory.UserID != tenant.Child.ID || len(directory.Items) != 0 ||
+		len(directory.Capabilities) != 1 || !directory.Capabilities[0].Available {
+		return fail("signed-access-key-directory")
+	}
+	var created iamv1.CreateAccessKeyResponse
+	if err := value.edge.mutateIAM(ctx, path, tenant.OldPrimaryCredential, iamv1.CreateAccessKeyRequest{
+		UserResourceVersion: directory.UserResourceVersion,
+		NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{sourceCIDR}},
+		RequestID:           "phase1-access-key-create",
+	}, &created, http.StatusCreated); err != nil || iamv1.ValidateCreateAccessKeyResponse(created) != nil ||
+		created.Key.AccountID != tenant.Account.ID || created.Key.UserID != tenant.Child.ID {
+		return fail("signed-access-key-create")
+	}
+	secret := created.Secret.CopyBytes()
+	defer clear(secret)
+	value.edge.addForbidden(secret)
+
+	wrong, err := signAccessKeyRequest(created, installationID, value.config.edge,
+		"/api/paas/v1/applications/not-the-requested-directory")
+	if err != nil {
+		return fail("signed-access-key-wrong-target-signature")
+	}
+	wrongBytes := wrong.CopyBytes()
+	value.edge.addForbidden(wrongBytes)
+	wrongResponse, wrongErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(wrongBytes)), http.StatusUnauthorized)
+	clear(wrongBytes)
+	clear(wrongResponse.body)
+	if wrongErr != nil {
+		return fail("signed-access-key-target-binding")
+	}
+
+	authorization, err := signAccessKeyRequest(created, installationID, value.config.edge, "/api/paas/v1/applications")
+	if err != nil {
+		return fail("signed-access-key-signature")
+	}
+	authorizationBytes := authorization.CopyBytes()
+	value.edge.addForbidden(authorizationBytes)
+	response, requestErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(authorizationBytes)), http.StatusOK)
+	clear(authorizationBytes)
+	if requestErr != nil {
+		clear(response.body)
+		return fail("signed-access-key-edge-request")
+	}
+	var applications paasv1.ApplicationList
+	if decodeOne(response.body, &applications) != nil || paasv1.ValidateApplicationList(applications) != nil ||
+		len(applications.Items) != 1 || applications.Items[0].Metadata.ID != tenantApplicationID ||
+		applications.Items[0].Metadata.Scope.TenantID != paasv1.TenantID(tenant.Account.ID) || applications.NextAfter != "" {
+		clear(response.body)
+		return fail("signed-access-key-tenant-directory")
+	}
+	clear(response.body)
+
+	var disabled iamv1.SetAccessKeyStatusResponse
+	if err := value.edge.mutateIAM(ctx, path+"/"+string(created.Key.ID)+":set-status", tenant.OldPrimaryCredential,
+		iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: created.Key.ResourceVersion,
+			Status: iamv1.AccessKeyDisabled, RequestID: "phase1-access-key-disable"},
+		&disabled, http.StatusOK); err != nil || iamv1.ValidateSetAccessKeyStatusResponse(disabled) != nil ||
+		disabled.Key.Status != iamv1.AccessKeyDisabled {
+		return fail("signed-access-key-disable")
+	}
+	disabledAuthorization, err := signAccessKeyRequest(created, installationID, value.config.edge, "/api/paas/v1/applications")
+	if err != nil {
+		return fail("signed-access-key-disabled-signature")
+	}
+	disabledBytes := disabledAuthorization.CopyBytes()
+	value.edge.addForbidden(disabledBytes)
+	disabledResponse, disabledErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(disabledBytes)), http.StatusForbidden)
+	clear(disabledBytes)
+	clear(disabledResponse.body)
+	if disabledErr != nil {
+		return fail("signed-access-key-disabled-admitted")
+	}
+
+	var deletion iamv1.DeleteAccessKeyResponse
+	if err := value.edge.mutateIAM(ctx, path+"/"+string(created.Key.ID)+":delete", tenant.OldPrimaryCredential,
+		iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: disabled.Key.ResourceVersion, RequestID: "phase1-access-key-delete"},
+		&deletion, http.StatusOK); err != nil || iamv1.ValidateDeleteAccessKeyResponse(deletion) != nil ||
+		deletion.Deletion.ID != created.Key.ID || deletion.Deletion.AccountID != tenant.Account.ID {
+		return fail("signed-access-key-delete")
+	}
+	if err := value.edge.mutateIAM(ctx, "/policy-attachments/"+string(grant.ID)+":revoke", tenant.OldPrimaryCredential,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: grant.ResourceVersion, RequestID: "phase1-access-key-custodian-revoke"},
+		nil, http.StatusOK); err != nil {
+		return fail("signed-access-key-custodian-revoke")
+	}
+	return nil
+}
+
+func installedEdgeSourceCIDR(ctx context.Context, installationID string) (string, error) {
+	ids, err := dockerLines(ctx, "container", "ls", "--quiet",
+		"--filter", "label=com.xiak.matrix.managed=true",
+		"--filter", "label=com.xiak.matrix.installation="+installationID,
+		"--filter", "label=com.xiak.matrix.role=apisix")
+	if err != nil || len(ids) != 1 {
+		return "", errors.New("installed edge is unavailable")
+	}
+	inspections, err := inspectContainers(ctx, ids)
+	if err != nil || len(inspections) != 1 {
+		return "", errors.New("installed edge inspection failed")
+	}
+	var gateways []netip.Addr
+	for _, network := range inspections[0].NetworkSettings.Networks {
+		address, parseErr := netip.ParseAddr(network.Gateway)
+		if parseErr == nil && address.IsValid() && !address.IsUnspecified() && !address.IsMulticast() {
+			gateways = append(gateways, address.Unmap())
+		}
+	}
+	if len(gateways) != 1 {
+		return "", errors.New("installed edge source is ambiguous")
+	}
+	return netip.PrefixFrom(gateways[0], gateways[0].BitLen()).String(), nil
+}
+
+func signAccessKeyRequest(
+	created iamv1.CreateAccessKeyResponse,
+	installationID, origin, target string,
+) (iamv1.Secret, error) {
+	if iamv1.ValidateCreateAccessKeyResponse(created) != nil {
+		return iamv1.Secret{}, errors.New("access key creation result is invalid")
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "http" || parsed.Host == "" || origin != parsed.Scheme+"://"+parsed.Host {
+		return iamv1.Secret{}, errors.New("signed request origin is invalid")
+	}
+	escapedPath, rawQuery, hasQuery := strings.Cut(target, "?")
+	if escapedPath == "" || hasQuery && rawQuery == "" {
+		return iamv1.Secret{}, errors.New("signed request target is invalid")
+	}
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		clear(nonceBytes)
+		return iamv1.Secret{}, errors.New("signed request nonce failed")
+	}
+	nonce, err := iamv1.NewSecret(base64.RawURLEncoding.EncodeToString(nonceBytes))
+	clear(nonceBytes)
+	if err != nil {
+		return iamv1.Secret{}, errors.New("signed request nonce is invalid")
+	}
+	empty := sha256.Sum256(nil)
+	parameters := iamv1.AccessKeySignatureParameters{
+		AccessKeyID: created.Key.ID, InstallationID: installationID, Audience: iamv1.ProductPaaS,
+		SignedAt: time.Now().UTC().Unix(), Nonce: nonce,
+	}
+	httpRequest := iamv1.AccessKeyHTTPRequest{
+		Method: http.MethodGet, Scheme: parsed.Scheme, Authority: parsed.Host,
+		EscapedPath: escapedPath, RawQuery: rawQuery,
+		BodyDigest: "sha256:" + hex.EncodeToString(empty[:]),
+	}
+	canonical, err := iamv1.AccessKeySigningBytes(parameters, httpRequest)
+	if err != nil {
+		return iamv1.Secret{}, errors.New("signed request canonicalization failed")
+	}
+	defer clear(canonical)
+	secret := created.Secret.CopyBytes()
+	defer clear(secret)
+	const prefix = "mak1."
+	if !bytes.HasPrefix(secret, []byte(prefix)) {
+		return iamv1.Secret{}, errors.New("access key secret format is invalid")
+	}
+	material, err := base64.RawURLEncoding.DecodeString(string(secret[len(prefix):]))
+	if err != nil || len(material) != 32 {
+		clear(material)
+		return iamv1.Secret{}, errors.New("access key secret material is invalid")
+	}
+	defer clear(material)
+	mac := hmac.New(sha256.New, material)
+	_, _ = mac.Write(canonical)
+	signatureBytes := mac.Sum(nil)
+	defer clear(signatureBytes)
+	signature, err := iamv1.NewSecret(base64.RawURLEncoding.EncodeToString(signatureBytes))
+	if err != nil {
+		return iamv1.Secret{}, errors.New("access key signature is invalid")
+	}
+	return iamv1.EncodeAccessKeyAuthorization(parameters, signature)
+}
+
+func forgedEdgeHeaders(authorization string) map[string]string {
+	return map[string]string{
+		"Authorization":                    authorization,
+		"Forwarded":                        "for=198.51.100.250;proto=https;host=attacker.invalid",
+		"X-Forwarded-For":                  "198.51.100.250",
+		"X-Real-IP":                        "198.51.100.250",
+		"X-Matrix-External-Origin":         "https://attacker.invalid:443",
+		"X-Matrix-External-Request-Target": "/api/audit/v1/records:query",
+		"X-Matrix-External-Source-IP":      "198.51.100.250",
+		"X-Matrix-Subject-Credential":      "forged-user-carrier",
+	}
 }
 
 func (value *gate) persistTenantRetention() error {

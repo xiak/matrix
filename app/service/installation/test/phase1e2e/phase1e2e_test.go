@@ -1,11 +1,15 @@
 package phase1e2e
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"math/big"
 	"net"
@@ -248,6 +252,71 @@ func TestEdgeClientChecksSuccessAndProblemMediaTypes(t *testing.T) {
 				t.Fatalf("response contract accepted=%t, want %t", err == nil, check.valid)
 			}
 		})
+	}
+}
+
+func TestPhase1AccessKeySignerBindsExactNorthboundRequest(t *testing.T) {
+	createdAt := time.Date(2026, time.October, 7, 1, 2, 3, 456000000, time.UTC)
+	material := bytes.Repeat([]byte{0x2a}, 32)
+	secret, err := iamv1.NewSecret("mak1." + base64.RawURLEncoding.EncodeToString(material))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := iamv1.CreateAccessKeyResponse{
+		Outcome: "APPLIED",
+		Key: iamv1.AccessKey{
+			APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: "key-phase1",
+			AccountID: "account-phase1", UserID: "user-phase1", Status: iamv1.AccessKeyEnabled,
+			NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"172.18.0.1/32"}},
+			ResourceVersion:     1, CreatedAt: createdAt, UpdatedAt: createdAt,
+		},
+		Secret: secret,
+	}
+	header, err := signAccessKeyRequest(created, "installation-phase1", "http://127.0.0.1:8080",
+		"/api/paas/v1/applications?after=pc1.opaque")
+	if err != nil {
+		t.Fatal(err)
+	}
+	headerBytes := header.CopyBytes()
+	defer clear(headerBytes)
+	parameters, signature, err := iamv1.ParseAccessKeyAuthorization(string(headerBytes))
+	if err != nil || parameters.AccessKeyID != created.Key.ID || parameters.InstallationID != "installation-phase1" ||
+		parameters.Audience != iamv1.ProductPaaS || parameters.SignedAt <= 0 {
+		t.Fatalf("signed header parameters = %#v / %v", parameters, err)
+	}
+	httpRequest := iamv1.AccessKeyHTTPRequest{
+		Method: http.MethodGet, Scheme: "http", Authority: "127.0.0.1:8080",
+		EscapedPath: "/api/paas/v1/applications", RawQuery: "after=pc1.opaque", BodyDigest: fixedDigest(""),
+	}
+	canonical, err := iamv1.AccessKeySigningBytes(parameters, httpRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(canonical)
+	mac := hmac.New(sha256.New, material)
+	_, _ = mac.Write(canonical)
+	wantSignature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	gotSignature := signature.CopyBytes()
+	defer clear(gotSignature)
+	if string(gotSignature) != wantSignature {
+		t.Fatal("phase1 signer did not bind the exact external request")
+	}
+	for name, input := range map[string]struct{ origin, target string }{
+		"https topology": {"https://127.0.0.1:8080", "/api/paas/v1/applications"},
+		"origin path":    {"http://127.0.0.1:8080/base", "/api/paas/v1/applications"},
+		"empty query":    {"http://127.0.0.1:8080", "/api/paas/v1/applications?"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := signAccessKeyRequest(created, "installation-phase1", input.origin, input.target); err == nil {
+				t.Fatal("invalid signed fixture input accepted")
+			}
+		})
+	}
+	for _, name := range []string{"Authorization", "Forwarded", "X-Forwarded-For", "X-Real-IP",
+		"X-Matrix-External-Origin", "X-Matrix-External-Request-Target", "X-Matrix-External-Source-IP", "X-Matrix-Subject-Credential"} {
+		if forgedEdgeHeaders("signed")[name] == "" {
+			t.Fatalf("forged edge attack omitted %s", name)
+		}
 	}
 }
 

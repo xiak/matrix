@@ -189,15 +189,16 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	}
 
 	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
-		InstallationID: plan.InstallationID,
-		Root:           "/matrix-installation-root",
-		Listener:       plan.Listener,
-		Port:           plan.Port,
+		InstallationID:   plan.InstallationID,
+		Root:             "/matrix-installation-root",
+		Listener:         plan.Listener,
+		Port:             plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		t.Fatalf("compile fixture topology: %v", err)
 	}
-	if err := publishInstallationConfiguration(plan.Root, plan.Bundle.Manifest, compiled); err != nil {
+	if err := publishInstallationConfiguration(plan, plan.Bundle.Manifest, compiled); err != nil {
 		t.Fatalf("publish installation configuration: %v", err)
 	}
 	catalogBytes := readTestFile(t, plan.Root, layout.ArtifactCatalog)
@@ -231,6 +232,21 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	} {
 		if !bytes.Contains(apisix, []byte(required)) {
 			t.Fatalf("APISIX configuration lacks fixed verifier route %q", required)
+		}
+	}
+	for required, count := range map[string]int{
+		"X-Matrix-External-Origin: \"" + plan.NorthboundOrigin + "\"": 2,
+		"X-Matrix-External-Request-Target: \"$request_uri\"":          2,
+		"X-Matrix-External-Source-IP: \"$remote_addr\"":               2,
+		"- Forwarded":                        6,
+		"- X-Forwarded-For":                  6,
+		"- X-Real-IP":                        6,
+		"- X-Matrix-External-Origin":         6,
+		"- X-Matrix-External-Request-Target": 6,
+		"- X-Matrix-External-Source-IP":      6,
+	} {
+		if actual := bytes.Count(apisix, []byte(required)); actual != count {
+			t.Fatalf("APISIX trusted-edge directive %q count=%d want=%d", required, actual, count)
 		}
 	}
 	if bytes.Contains(apisix, []byte("matrix-service-auth")) ||
@@ -268,7 +284,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	if err := os.WriteFile(nginxPath, providerContent, 0o600); err != nil {
 		t.Fatalf("simulate APISIX runtime write: %v", err)
 	}
-	if err := publishInstallationConfiguration(plan.Root, plan.Bundle.Manifest, compiled); err != nil {
+	if err := publishInstallationConfiguration(plan, plan.Bundle.Manifest, compiled); err != nil {
 		t.Fatalf("replay configuration with provider-owned runtime file: %v", err)
 	}
 	if actual := readTestFile(t, plan.Root, layout.APISIXNginx); !bytes.Equal(actual, providerContent) {
@@ -302,7 +318,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 			t.Fatalf("drift APISIX runtime permissions: %v", err)
 		}
 		if err := publishInstallationConfiguration(
-			plan.Root, plan.Bundle.Manifest, compiled,
+			plan, plan.Bundle.Manifest, compiled,
 		); !errors.Is(err, platformcommand.ErrEffectConflict) {
 			t.Fatalf("unsafe APISIX runtime replay error=%v", err)
 		}
@@ -549,7 +565,7 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 	}
 	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: plan.Root,
-		Listener: plan.Listener, Port: plan.Port,
+		Listener: plan.Listener, Port: plan.Port, NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		t.Fatalf("compile migration topology: %v", err)
@@ -635,7 +651,7 @@ func TestMigrateUpgradeUsesTargetBinariesOnTheOwnedSourceNetwork(t *testing.T) {
 	defer clear(source.TrustBytes)
 	compiled, err := topology.Compile(plan.Target.Bundle.Manifest, topology.Options{
 		InstallationID: plan.Target.InstallationID, Root: plan.Target.Root,
-		Listener: plan.Target.Listener, Port: plan.Target.Port,
+		Listener: plan.Target.Listener, Port: plan.Target.Port, NorthboundOrigin: plan.Target.NorthboundOrigin,
 	})
 	if err != nil {
 		t.Fatalf("compile migration upgrade target: %v", err)
@@ -834,6 +850,12 @@ func TestAuthenticateInstalledPlanPinsSealedTrustAndRelease(t *testing.T) {
 			name: "release digest",
 			mutate: func(value *platformcommand.InstalledPlan) {
 				value.ReleaseDigest = "sha256:" + strings.Repeat("d", 64)
+			},
+		},
+		{
+			name: "northbound origin",
+			mutate: func(value *platformcommand.InstalledPlan) {
+				value.NorthboundOrigin = "https://matrix.example.test:8080"
 			},
 		},
 	} {
@@ -1633,7 +1655,7 @@ func newInstallPlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	return platformcommand.InstallPlan{
 		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
 		CorrelationID: "cmd-11111111111111111111111111111111",
-		Listener:      "0.0.0.0", Port: 8080, Bundle: bundle,
+		Listener:      "0.0.0.0", Port: 8080, NorthboundOrigin: "http://matrix.example.test:8080", Bundle: bundle,
 		Trust: fixture.Trust, TrustBytes: trustBytes,
 		SecurityMail: testSecurityMailInput(t),
 	}
@@ -1682,7 +1704,7 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	source := platformcommand.InstallPlan{
 		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
 		CorrelationID: "cmd-11111111111111111111111111111111",
-		Listener:      "0.0.0.0", Port: 8080, Bundle: bundles[0],
+		Listener:      "0.0.0.0", Port: 8080, NorthboundOrigin: "http://matrix.example.test:8080", Bundle: bundles[0],
 		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
 		SecurityMail: testSecurityMailInput(t),
 	}
@@ -1710,7 +1732,7 @@ func assertReleaseConfiguration(t *testing.T, plan platformcommand.InstallPlan) 
 	t.Helper()
 	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: plan.Root,
-		Listener: plan.Listener, Port: plan.Port,
+		Listener: plan.Listener, Port: plan.Port, NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		t.Fatalf("compile expected release configuration: %v", err)
@@ -1731,7 +1753,7 @@ func installedPlanFrom(plan platformcommand.InstallPlan) platformcommand.Install
 	return platformcommand.InstalledPlan{
 		Root: plan.Root, InstallationID: plan.InstallationID,
 		CorrelationID: plan.CorrelationID,
-		Listener:      plan.Listener, Port: plan.Port,
+		Listener:      plan.Listener, Port: plan.Port, NorthboundOrigin: plan.NorthboundOrigin,
 		ReleaseID:          plan.Bundle.Manifest.Release.ID,
 		ReleaseDigest:      plan.Bundle.ManifestSHA256,
 		SecurityMailDigest: plan.SecurityMail.Digest,

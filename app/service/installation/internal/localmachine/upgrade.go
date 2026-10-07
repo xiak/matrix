@@ -193,6 +193,7 @@ func validateUpgradeIdentity(
 		source.InstallationID != target.InstallationID ||
 		source.CorrelationID == "" || source.CorrelationID != target.CorrelationID ||
 		source.Listener != target.Listener || source.Port != target.Port ||
+		source.NorthboundOrigin == "" || source.NorthboundOrigin != target.NorthboundOrigin ||
 		source.Trust != target.Trust ||
 		!bytes.Equal(source.TrustBytes, target.TrustBytes) ||
 		target.Bundle.Manifest.Release.ID == source.Bundle.Manifest.Release.ID ||
@@ -314,10 +315,11 @@ func compileUpgradeExpectation(
 	plan platformcommand.InstallPlan,
 ) (platformComposeExpectation, error) {
 	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
-		InstallationID: plan.InstallationID,
-		Root:           plan.Root,
-		Listener:       plan.Listener,
-		Port:           plan.Port,
+		InstallationID:   plan.InstallationID,
+		Root:             plan.Root,
+		Listener:         plan.Listener,
+		Port:             plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		return platformComposeExpectation{}, errors.Join(

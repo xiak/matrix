@@ -16,6 +16,9 @@ import (
 func authenticateInstalledPlan(
 	installed platformcommand.InstalledPlan,
 ) (platformcommand.InstallPlan, error) {
+	if topology.ValidateNorthboundOrigin(installed.NorthboundOrigin, installed.Port) != nil {
+		return platformcommand.InstallPlan{}, errors.New("installed northbound origin is invalid")
+	}
 	trustPath, err := managedPath(
 		installed.Root, filepath.FromSlash(layout.ReleaseTrust),
 	)
@@ -84,7 +87,7 @@ func authenticateInstalledPlan(
 	return platformcommand.InstallPlan{
 		Root: installed.Root, InstallationID: installed.InstallationID,
 		CorrelationID: installed.CorrelationID,
-		Listener:      installed.Listener, Port: installed.Port,
+		Listener:      installed.Listener, Port: installed.Port, NorthboundOrigin: installed.NorthboundOrigin,
 		Bundle: bundle, Trust: trust, TrustBytes: trustBytes,
 	}, nil
 }
@@ -119,10 +122,11 @@ func verifiedInstallationConfiguration(
 		return verifiedInstallation{}, err
 	}
 	compiled, err := topology.Compile(staged.Manifest, topology.Options{
-		InstallationID: plan.InstallationID,
-		Root:           plan.Root,
-		Listener:       plan.Listener,
-		Port:           plan.Port,
+		InstallationID:   plan.InstallationID,
+		Root:             plan.Root,
+		Listener:         plan.Listener,
+		Port:             plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		return verifiedInstallation{}, err
@@ -137,7 +141,7 @@ func verifiedInstallationConfiguration(
 	}{
 		{layout.Compose, compiled.ComposeJSON},
 		{layout.ArtifactCatalog, catalog},
-		{layout.APISIXRoutes, apisixStandaloneConfig()},
+		{layout.APISIXRoutes, apisixStandaloneConfig(plan.NorthboundOrigin)},
 		{layout.APISIXConfig, apisixMainConfig()},
 		{layout.APISIXUID, []byte(compiled.ProjectName)},
 	}

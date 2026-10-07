@@ -79,7 +79,7 @@ func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
 		Authorities:      AuthoritySchemas{IAM: 67, Audit: 35, PaaS: 3},
-		ContractRevision: 14,
+		ContractRevision: 15,
 	}
 }
 

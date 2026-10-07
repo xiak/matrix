@@ -55,15 +55,22 @@ func newEdgeClient(endpoint string) *edgeClient {
 }
 
 func (client *edgeClient) close() {
-	if client != nil && client.http != nil {
+	if client == nil {
+		return
+	}
+	if client.http != nil {
 		client.http.CloseIdleConnections()
 	}
+	for _, value := range client.forbidden {
+		clear(value)
+	}
+	client.forbidden = nil
 }
 
 func (client *edgeClient) addForbidden(values ...[]byte) {
 	for _, value := range values {
 		if len(value) != 0 {
-			client.forbidden = append(client.forbidden, value)
+			client.forbidden = append(client.forbidden, bytes.Clone(value))
 		}
 	}
 }

@@ -11,21 +11,25 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/release"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 const ContractVersion = "matrix-platform-compose/v1"
 
 type Options struct {
-	InstallationID string
-	Root           string
-	Listener       string
-	Port           uint16
+	InstallationID   string
+	Root             string
+	Listener         string
+	Port             uint16
+	NorthboundOrigin string
 }
 
 type Result struct {
@@ -56,10 +60,11 @@ func ContractDigest() string {
 
 func contractDescription() contract {
 	options := Options{
-		InstallationID: "mxi-00000000000000000000000000000000",
-		Root:           "/matrix-installation-root",
-		Listener:       "0.0.0.0",
-		Port:           1,
+		InstallationID:   "mxi-00000000000000000000000000000000",
+		Root:             "/matrix-installation-root",
+		Listener:         "0.0.0.0",
+		Port:             1,
+		NorthboundOrigin: "http://matrix.example.test:1",
 	}
 	manifest := release.Manifest{Release: release.ReleaseIdentity{
 		ID: "matrix-v0.0.0-000000000000", SourceCommit: strings.Repeat("0", 40),
@@ -86,7 +91,7 @@ func contractDescription() contract {
 	return contract{
 		Version: ContractVersion,
 		Substitutions: []string{
-			"installationId", "installationRoot", "listenerAddress", "listenerPort",
+			"installationId", "installationRoot", "listenerAddress", "listenerPort", "northboundOrigin",
 			"releaseId", "releaseBuildId", "sourceCommit", "signedImageIds",
 			"verificationArtifactDigest",
 		},
@@ -142,7 +147,27 @@ func validateOptions(options Options) error {
 	if options.Port == 0 {
 		problems = append(problems, errors.New("platform listener port is invalid"))
 	}
+	problems = append(problems, ValidateNorthboundOrigin(options.NorthboundOrigin, options.Port))
 	return errors.Join(problems...)
+}
+
+// ValidateNorthboundOrigin admits the public origin actually served by the
+// current direct, plaintext APISIX edge. TLS termination and trusted proxy
+// chains require a separate topology contract; accepting https here would
+// advertise a transport this release does not configure.
+func ValidateNorthboundOrigin(origin string, listenerPort uint16) error {
+	if externalrequest.ValidateOrigin(origin) != nil || listenerPort == 0 {
+		return errors.New("platform northbound origin is invalid")
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "http" {
+		return errors.New("platform northbound origin is invalid")
+	}
+	_, port, err := net.SplitHostPort(parsed.Host)
+	if err != nil || port != strconv.FormatUint(uint64(listenerPort), 10) {
+		return errors.New("platform northbound origin is invalid")
+	}
+	return nil
 }
 
 type composeDocument struct {
@@ -323,6 +348,8 @@ func compileServices(
 		"MATRIX_AUDIT_IAM_ENDPOINT":            "http://iam:8080",
 		"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE": "/run/matrix/audit-iam-credential",
 		"MATRIX_AUDIT_CURSOR_KEY_FILE":         "/run/matrix/audit-cursor-key",
+		"MATRIX_AUDIT_INSTALLATION_ID":         options.InstallationID,
+		"MATRIX_AUDIT_NORTHBOUND_ORIGIN":       options.NorthboundOrigin,
 		"MATRIX_AUDIT_LISTEN_ADDRESS":          "0.0.0.0:8080",
 	}
 	audit.Volumes = []mount{
@@ -392,6 +419,7 @@ func compileServices(
 		"MATRIX_PAAS_DATABASE_DSN_FILE":            "/run/matrix/paas-api-dsn",
 		"MATRIX_PAAS_IAM_ENDPOINT":                 "http://iam:8080",
 		"MATRIX_PAAS_INSTALLATION_ID":              options.InstallationID,
+		"MATRIX_PAAS_NORTHBOUND_ORIGIN":            options.NorthboundOrigin,
 		"MATRIX_PAAS_RELEASE_ID":                   manifest.Release.ID,
 		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE":      "/run/matrix/paas-iam-credential",
 		"MATRIX_PAAS_CURSOR_KEY_FILE":              "/run/matrix/paas-cursor-key",

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"regexp"
 	"time"
+
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 const APIVersion = "installation.matrix.xiak.com/v1"
@@ -75,6 +77,7 @@ type Command struct {
 	AuthenticationRecoveryDigest string    `json:"authenticationRecoveryDigest,omitempty"`
 	TargetReleaseID              string    `json:"targetReleaseId,omitempty"`
 	SecurityMailDigest           string    `json:"securityMailDigest,omitempty"`
+	NorthboundOrigin             string    `json:"northboundOrigin,omitempty"`
 	BackupID                     string    `json:"backupId,omitempty"`
 	RequestedAt                  time.Time `json:"requestedAt"`
 }
@@ -103,6 +106,7 @@ type Journal struct {
 	PreviousRelease             string       `json:"previousReleaseId,omitempty"`
 	PreviousReleaseDigest       string       `json:"previousReleaseDigest,omitempty"`
 	SecurityMailDigest          string       `json:"securityMailDigest,omitempty"`
+	NorthboundOrigin            string       `json:"northboundOrigin,omitempty"`
 	AuthenticationRecoveryEpoch uint64       `json:"authenticationRecoveryEpoch,omitempty"`
 	Active                      *Execution   `json:"active,omitempty"`
 	Last                        *Execution   `json:"last,omitempty"`
@@ -318,6 +322,10 @@ func ValidateJournal(journal Journal) error {
 		(journal.SecurityMailDigest != "" && !digestPattern.MatchString(journal.SecurityMailDigest)) {
 		problems = append(problems, errors.New("installation security mail commitment is invalid"))
 	}
+	if (journal.CurrentReleaseID == "") != (journal.NorthboundOrigin == "") ||
+		(journal.NorthboundOrigin != "" && externalrequest.ValidateOrigin(journal.NorthboundOrigin) != nil) {
+		problems = append(problems, errors.New("installation northbound origin is invalid"))
+	}
 	if journal.AuthenticationRecoveryEpoch > 9007199254740991 {
 		problems = append(problems, errors.New("authentication recovery epoch is invalid"))
 	}
@@ -355,39 +363,41 @@ func validateCommand(command Command) error {
 	switch command.Action {
 	case ActionInstall:
 		if !digestPattern.MatchString(command.InputDigest) ||
-			!releaseIDPattern.MatchString(command.TargetReleaseID) || !digestPattern.MatchString(command.SecurityMailDigest) || command.BackupID != "" ||
+			!releaseIDPattern.MatchString(command.TargetReleaseID) || !digestPattern.MatchString(command.SecurityMailDigest) ||
+			externalrequest.ValidateOrigin(command.NorthboundOrigin) != nil || command.BackupID != "" ||
 			command.BackupDigest != "" {
 			return errors.New("release-changing command input is invalid")
 		}
 	case ActionUpgrade:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
-			!backupIDPattern.MatchString(command.BackupID) || !digestPattern.MatchString(command.SecurityMailDigest) || command.BackupDigest != "" {
+			!backupIDPattern.MatchString(command.BackupID) || !digestPattern.MatchString(command.SecurityMailDigest) ||
+			command.NorthboundOrigin != "" || command.BackupDigest != "" {
 			return errors.New("upgrade command input is invalid")
 		}
 	case ActionRecover:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
 			!backupIDPattern.MatchString(command.BackupID) ||
-			!digestPattern.MatchString(command.BackupDigest) || command.SecurityMailDigest != "" ||
+			!digestPattern.MatchString(command.BackupDigest) || command.SecurityMailDigest != "" || command.NorthboundOrigin != "" ||
 			command.AuthenticationRecoveryEpoch == 0 || command.AuthenticationRecoveryEpoch > 9007199254740991 ||
 			!digestPattern.MatchString(command.AuthenticationRecoveryDigest) {
 			return errors.New("recovery command input is invalid")
 		}
 	case ActionBackup:
 		if command.InputDigest != "" || command.TargetReleaseID != "" ||
-			!backupIDPattern.MatchString(command.BackupID) || command.BackupDigest != "" || command.SecurityMailDigest != "" {
+			!backupIDPattern.MatchString(command.BackupID) || command.BackupDigest != "" || command.SecurityMailDigest != "" || command.NorthboundOrigin != "" {
 			return errors.New("backup command input is invalid")
 		}
 	case ActionSupport:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			command.TargetReleaseID != "" || command.BackupID != "" ||
-			command.BackupDigest != "" || command.SecurityMailDigest != "" {
+			command.BackupDigest != "" || command.SecurityMailDigest != "" || command.NorthboundOrigin != "" {
 			return errors.New("support command input is invalid")
 		}
 	case ActionVerify, ActionStatus, ActionRollback:
 		if command.InputDigest != "" || command.TargetReleaseID != "" || command.BackupID != "" ||
-			command.BackupDigest != "" || command.SecurityMailDigest != "" {
+			command.BackupDigest != "" || command.SecurityMailDigest != "" || command.NorthboundOrigin != "" {
 			return errors.New("installation command contains unrelated input")
 		}
 	default:
@@ -517,6 +527,7 @@ func sameCommandInput(left, right Command) bool {
 	return left.ID == right.ID && left.Action == right.Action &&
 		left.InputDigest == right.InputDigest && left.TargetReleaseID == right.TargetReleaseID &&
 		left.SecurityMailDigest == right.SecurityMailDigest &&
+		left.NorthboundOrigin == right.NorthboundOrigin &&
 		left.BackupID == right.BackupID && left.BackupDigest == right.BackupDigest &&
 		left.AuthenticationRecoveryEpoch == right.AuthenticationRecoveryEpoch &&
 		left.AuthenticationRecoveryDigest == right.AuthenticationRecoveryDigest
@@ -571,6 +582,7 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 		journal.PreviousRelease = ""
 		journal.PreviousReleaseDigest = ""
 		journal.SecurityMailDigest = execution.Command.SecurityMailDigest
+		journal.NorthboundOrigin = execution.Command.NorthboundOrigin
 	case ActionUpgrade:
 		journal.PreviousRelease = execution.SourceRelease
 		journal.PreviousReleaseDigest = execution.SourceDigest
@@ -615,6 +627,10 @@ func validateCompletedPointers(journal Journal, execution Execution) error {
 			journal.SecurityMailDigest != execution.Command.SecurityMailDigest {
 			return errors.New("successful command lost its security mail commitment")
 		}
+		if execution.Command.Action == ActionInstall &&
+			journal.NorthboundOrigin != execution.Command.NorthboundOrigin {
+			return errors.New("successful installation lost its northbound origin")
+		}
 		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionRollback ||
 			execution.Command.Action == ActionRecover) && journal.PreviousRelease != "" {
 			return errors.New("successful command retained an invalid previous release")
@@ -632,9 +648,20 @@ func validateCompletedPointers(journal Journal, execution Execution) error {
 	return nil
 }
 
-// ValidateTransition prevents persistence from advancing the non-rollback
-// authentication recovery epoch outside the exact terminal recovery step.
+// ValidateTransition prevents persistence from changing sealed installation
+// identity outside its exact terminal workflow transition.
 func ValidateTransition(before, after Journal) error {
+	if before.NorthboundOrigin != after.NorthboundOrigin {
+		if before.Active == nil || before.Active.Command.Action != ActionInstall ||
+			after.Active != nil || after.Last == nil {
+			return errors.New("northbound origin lacks a terminal installation transition")
+		}
+		expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
+		if err != nil || expected.NorthboundOrigin != after.NorthboundOrigin ||
+			expected.Last == nil || *expected.Last != *after.Last {
+			return errors.New("northbound origin transition is invalid")
+		}
+	}
 	if before.AuthenticationRecoveryEpoch == after.AuthenticationRecoveryEpoch {
 		return nil
 	}

@@ -29,6 +29,11 @@ func TestInstallUsesExactReplayAndPublishesOnlyAfterReady(t *testing.T) {
 	if _, err := Start(started.Journal, changed); !errors.Is(err, ErrCommandConflict) {
 		t.Fatalf("changed input replay error = %v, want conflict", err)
 	}
+	changedOrigin := replayedCommand
+	changedOrigin.NorthboundOrigin = "http://other.example.test:8080"
+	if _, err := Start(started.Journal, changedOrigin); !errors.Is(err, ErrCommandConflict) {
+		t.Fatalf("changed origin replay error = %v, want conflict", err)
+	}
 	other := lifecycleCommand(ActionInstall, releaseA, '1', 1)
 	if _, err := Start(started.Journal, other); !errors.Is(err, ErrCommandInProgress) {
 		t.Fatalf("parallel command error = %v, want in progress", err)
@@ -37,6 +42,7 @@ func TestInstallUsesExactReplayAndPublishesOnlyAfterReady(t *testing.T) {
 	completed := completeActive(t, started.Journal)
 	if completed.CurrentReleaseID != releaseA || completed.CurrentReleaseDigest != digest('1') ||
 		completed.PreviousRelease != "" || completed.PreviousReleaseDigest != "" ||
+		completed.NorthboundOrigin != "http://matrix.example.test:8080" ||
 		completed.Active != nil || completed.Last == nil || completed.Last.Outcome != OutcomeSucceeded {
 		t.Fatalf("completed install journal = %#v", completed)
 	}
@@ -157,6 +163,12 @@ func TestJournalRejectsUnboundReleaseContentAndTrust(t *testing.T) {
 	changedTrust.ReleaseTrust.Fingerprint = "sha256:invalid"
 	if err := ValidateJournal(changedTrust); err == nil {
 		t.Fatal("invalid pinned trust fingerprint must fail")
+	}
+
+	changedOrigin := installed
+	changedOrigin.NorthboundOrigin = "http://other.example.test:8080"
+	if err := ValidateTransition(installed, changedOrigin); err == nil {
+		t.Fatal("northbound origin changed outside terminal installation")
 	}
 }
 
@@ -282,6 +294,9 @@ func lifecycleCommand(action Action, target string, digestByte byte, offset int)
 	}
 	if action == ActionInstall || action == ActionUpgrade {
 		command.SecurityMailDigest = digest('a')
+	}
+	if action == ActionInstall {
+		command.NorthboundOrigin = "http://matrix.example.test:8080"
 	}
 	return command
 }

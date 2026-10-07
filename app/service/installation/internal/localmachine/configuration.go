@@ -3,6 +3,7 @@ package localmachine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -40,12 +41,12 @@ func configureInstallation(
 	}
 	compiled, err := topology.Compile(staged.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: plan.Root,
-		Listener: plan.Listener, Port: plan.Port,
+		Listener: plan.Listener, Port: plan.Port, NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	return publishInstallationConfiguration(plan.Root, staged.Manifest, compiled)
+	return publishInstallationConfiguration(plan, staged.Manifest, compiled)
 }
 
 func configureUpgrade(
@@ -103,7 +104,7 @@ func replaceReleaseConfiguration(
 ) error {
 	options := topology.Options{
 		InstallationID: plan.InstallationID, Root: plan.Root,
-		Listener: plan.Listener, Port: plan.Port,
+		Listener: plan.Listener, Port: plan.Port, NorthboundOrigin: plan.NorthboundOrigin,
 	}
 	beforeTopology, err := topology.Compile(before, options)
 	if err != nil {
@@ -145,7 +146,7 @@ func replaceReleaseConfiguration(
 		path    string
 		content []byte
 	}{
-		{layout.APISIXRoutes, apisixStandaloneConfig()},
+		{layout.APISIXRoutes, apisixStandaloneConfig(plan.NorthboundOrigin)},
 		{layout.APISIXConfig, apisixMainConfig()},
 		{layout.APISIXUID, []byte(afterTopology.ProjectName)},
 	} {
@@ -164,10 +165,11 @@ func replaceReleaseConfiguration(
 }
 
 func publishInstallationConfiguration(
-	root string,
+	plan platformcommand.InstallPlan,
 	manifest release.Manifest,
 	compiled topology.Result,
 ) error {
+	root := plan.Root
 	if err := writeManagedOnce(
 		root, filepath.FromSlash(layout.Compose), compiled.ComposeJSON,
 	); err != nil {
@@ -184,7 +186,7 @@ func publishInstallationConfiguration(
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
 	if err := writeManagedOnce(
-		root, filepath.FromSlash(layout.APISIXRoutes), apisixStandaloneConfig(),
+		root, filepath.FromSlash(layout.APISIXRoutes), apisixStandaloneConfig(plan.NorthboundOrigin),
 	); err != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
@@ -252,8 +254,8 @@ nginx_config:
 `)
 }
 
-func apisixStandaloneConfig() []byte {
-	return []byte(`routes:
+func apisixStandaloneConfig(northboundOrigin string) []byte {
+	return []byte(fmt.Sprintf(`routes:
   -
     id: matrix-ready
     uri: /ready
@@ -279,6 +281,12 @@ func apisixStandaloneConfig() []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - Forwarded
+            - X-Forwarded-For
+            - X-Real-IP
+            - X-Matrix-External-Origin
+            - X-Matrix-External-Request-Target
+            - X-Matrix-External-Source-IP
     upstream:
       type: roundrobin
       nodes:
@@ -293,6 +301,12 @@ func apisixStandaloneConfig() []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - Forwarded
+            - X-Forwarded-For
+            - X-Real-IP
+            - X-Matrix-External-Origin
+            - X-Matrix-External-Request-Target
+            - X-Matrix-External-Source-IP
     upstream:
       type: roundrobin
       nodes:
@@ -308,6 +322,16 @@ func apisixStandaloneConfig() []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - Forwarded
+            - X-Forwarded-For
+            - X-Real-IP
+            - X-Matrix-External-Origin
+            - X-Matrix-External-Request-Target
+            - X-Matrix-External-Source-IP
+          set:
+            X-Matrix-External-Origin: %q
+            X-Matrix-External-Request-Target: "$request_uri"
+            X-Matrix-External-Source-IP: "$remote_addr"
     upstream:
       type: roundrobin
       nodes:
@@ -322,6 +346,12 @@ func apisixStandaloneConfig() []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - Forwarded
+            - X-Forwarded-For
+            - X-Real-IP
+            - X-Matrix-External-Origin
+            - X-Matrix-External-Request-Target
+            - X-Matrix-External-Source-IP
     upstream:
       type: roundrobin
       nodes:
@@ -337,6 +367,16 @@ func apisixStandaloneConfig() []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - Forwarded
+            - X-Forwarded-For
+            - X-Real-IP
+            - X-Matrix-External-Origin
+            - X-Matrix-External-Request-Target
+            - X-Matrix-External-Source-IP
+          set:
+            X-Matrix-External-Origin: %q
+            X-Matrix-External-Request-Target: "$request_uri"
+            X-Matrix-External-Source-IP: "$remote_addr"
     upstream:
       type: roundrobin
       nodes:
@@ -352,6 +392,12 @@ func apisixStandaloneConfig() []byte {
         headers:
           remove:
             - Matrix-Subject-Credential
+            - Forwarded
+            - X-Forwarded-For
+            - X-Real-IP
+            - X-Matrix-External-Origin
+            - X-Matrix-External-Request-Target
+            - X-Matrix-External-Source-IP
     upstream:
       type: roundrobin
       nodes:
@@ -370,5 +416,5 @@ func apisixStandaloneConfig() []byte {
       nodes:
         "paas-ui:8080": 1
 #END
-`)
+`, northboundOrigin, northboundOrigin))
 }

@@ -632,6 +632,7 @@ func authenticateRecoveryPlan(
 		plan.Current.CorrelationID == "" ||
 		plan.Current.CorrelationID != plan.Target.CorrelationID ||
 		plan.Current.Listener != plan.Target.Listener || plan.Current.Port != plan.Target.Port ||
+		plan.Current.NorthboundOrigin == "" || plan.Current.NorthboundOrigin != plan.Target.NorthboundOrigin ||
 		plan.Current.Trust != plan.Target.Trust ||
 		!bytes.Equal(plan.Current.TrustBytes, plan.Target.TrustBytes) ||
 		!backupIDPattern.MatchString(plan.BackupID) || !validSHA256(plan.BackupDigest) ||
