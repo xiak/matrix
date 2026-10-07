@@ -12,6 +12,7 @@ import type { RoleAccess, RoleCapability, RoleCapabilityAction, RoleListing, Rol
 import { AuthorizationOverview, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { LiveRoleSessions } from "./LiveRoleSessions";
 import { LiveRoleDelete, LiveRoleMetadataEditor, LiveRolePolicyEditor, LiveRoleStatusEditor, LiveRoleTrustEditor } from "./LiveRoleManagement";
+import { readPendingPolicyAttachmentChange } from "./PolicyAttachmentChangeFlow";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -289,23 +290,31 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
   const [workflow, setWorkflow] = useState<"metadata" | "status" | "trust" | "addPolicy" | "removePolicy" | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const restorePendingPolicyChange = useCallback(() => {
+    const pending = readPendingPolicyAttachmentChange({ accountId: client.accountId, actorPrincipalId: client.actorPrincipalId,
+      target: { kind: "ROLE", id: roleId } });
+    if (pending) setWorkflow((current) => current ?? (pending.operation === "CREATE" ? "addPolicy" : "removePolicy"));
+  }, [client.accountId, client.actorPrincipalId, roleId]);
+
   const retry = useCallback(() => {
     setPhase("loading");
     setError(null);
     client.read(roleId).then((value) => {
       setAccess(value);
+      restorePendingPolicyChange();
       setPhase("ready");
     }, (failure: unknown) => {
       setError(a(`errors.${accountError(failure)}`));
       setPhase("error");
     });
-  }, [a, client, roleId]);
+  }, [a, client, restorePendingPolicyChange, roleId]);
 
   useEffect(() => {
     let current = true;
     client.read(roleId).then((value) => {
       if (!current) return;
       setAccess(value);
+      restorePendingPolicyChange();
       setPhase("ready");
     }, (failure: unknown) => {
       if (!current) return;
@@ -313,7 +322,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
       setPhase("error");
     });
     return () => { current = false; };
-  }, [a, client, roleId]);
+  }, [a, client, restorePendingPolicyChange, roleId]);
 
   const updateCapability = access ? roleCapability(access, "iam.role.update") : null;
   const statusCapability = access ? roleCapability(access, "iam.role.set-status") : null;

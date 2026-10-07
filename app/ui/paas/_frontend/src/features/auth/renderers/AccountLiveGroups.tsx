@@ -8,7 +8,8 @@ import type {
   AccountAccessView,
   GroupAccess,
   GroupMembershipAccess,
-  IamAction
+  IamAction,
+  PolicyAttachmentChangeOperationExpectation
 } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { findActionCapability } from "../scenes/accountAccessScene";
@@ -20,6 +21,7 @@ import {
   type GroupDirectoryRecord
 } from "./GroupAccessWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
+import { PolicyAttachmentChangeFeedback, readPendingPolicyAttachmentChange, usePolicyAttachmentCommand } from "./PolicyAttachmentChangeFlow";
 
 type OpenGroupEntity = (view: AccountAccessView, id?: string) => void;
 type GroupChange = { kind: "members" | "policies"; mode: "add" | "remove" };
@@ -110,10 +112,16 @@ function LiveGroupAssociationEditor({ client, access, memberships, scene, change
   const t = useTranslations("GroupWorkspace");
   const w = useTranslations("IamWorkspace");
   const a = useTranslations("AccountAccess");
-  const [selection, setSelection] = useState<string[]>([]);
-  const [review, setReview] = useState(false);
+  const p = useTranslations("PolicyAttachmentChange");
+  const policyScope = useMemo(() => ({ accountId: client.accountId, actorPrincipalId: client.actorPrincipalId,
+    target: { kind: "GROUP" as const, id: access.group.id } }), [access.group.id, client.accountId, client.actorPrincipalId]);
+  const [restoredPolicyIntent] = useState(() => change.kind === "policies" ? readPendingPolicyAttachmentChange(policyScope) : null);
+  const [selection, setSelection] = useState<string[]>(() => restoredPolicyIntent
+    ? [restoredPolicyIntent.operation === "CREATE" ? restoredPolicyIntent.policyId : restoredPolicyIntent.attachmentId]
+    : []);
+  const [review, setReview] = useState(Boolean(restoredPolicyIntent));
   const [operation, setOperation] = useState<OperationState>({ busy: false, error: null });
-  const requestId = useRef(commandId());
+  const requestId = useRef(restoredPolicyIntent?.requestId ?? commandId());
   const clearError = useCallback(() => setOperation((current) => current.error ? { ...current, error: null } : current), []);
   const memberById = useMemo(() => new Map(scene.users.map((user) => [user.id, user])), [scene.users]);
   const policyById = useMemo(() => new Map(scene.policies.map((policy) => [policy.id, policy])), [scene.policies]);
@@ -141,11 +149,38 @@ function LiveGroupAssociationEditor({ client, access, memberships, scene, change
   }, [a, access.capabilities, access.policyAttachments, activeUserIds, attachedPolicyIds, change.kind, change.mode, memberById, memberships, policyById, scene.policies, scene.users, t, w]);
   const label = t(`${change.mode}${change.kind === "members" ? "Members" : "Policies"}`);
   const selected = options.find((option) => option.id === selection[0]);
+  const policyCommand = usePolicyAttachmentCommand<PolicyAttachmentChangeOperationExpectation>({
+    scope: policyScope,
+    execute: async (intent) => {
+      if (intent.operation === "CREATE") {
+        if (intent.target.kind !== "GROUP" || intent.target.id !== access.group.id) throw new Error("INVALID_GROUP_POLICY_TARGET");
+        return client.createPolicyAttachment(access.group.id, {
+          policyId: intent.policyId,
+          policyResourceVersion: intent.policyResourceVersion,
+          requestId: intent.requestId
+        });
+      }
+      return client.revokePolicyAttachment(intent.attachmentId, {
+        resourceVersion: intent.expectedResourceVersion,
+        requestId: intent.requestId
+      });
+    },
+    inspect: (intent) => client.inspectPolicyAttachmentChange(intent),
+    refresh: onChanged
+  });
+  const policyBusy = change.kind === "policies" && (policyCommand.state.phase === "pending" || policyCommand.state.phase === "checking");
+  const policyLocked = change.kind === "policies" && policyCommand.locked;
+  const recoveringPolicy = change.kind === "policies" && (policyCommand.state.phase === "unknown" || policyCommand.state.phase === "checking" || policyCommand.state.phase === "refreshFailed");
+  const selectedName = selected?.name ?? (policyCommand.intent?.operation === "CREATE"
+    ? policyCommand.intent.policyId
+    : policyCommand.intent?.attachmentId);
 
   const select = (ids: string[]) => {
+    if (policyLocked) return;
     setSelection(ids);
     setReview(false);
     requestId.current = commandId();
+    policyCommand.reset();
     clearError();
   };
 
@@ -153,10 +188,12 @@ function LiveGroupAssociationEditor({ client, access, memberships, scene, change
     title={`${label} · ${access.group.name}`}
     backLabel={t("backToGroupDetails")}
     onClose={onClose}
-    submitLabel={t(review ? "confirmChange" : "reviewChange")}
-    submitDisabled={!selection.length}
-    operation={operationProps(operation, clearError)}
+    submitLabel={change.kind === "policies" && policyCommand.state.phase === "unknown" ? p("checkOriginalRequest") : change.kind === "policies" && policyCommand.state.phase === "checking" ? p("checking") : t(review ? "confirmChange" : "reviewChange")}
+    submitDisabled={change.kind === "policies" && policyCommand.state.phase === "refreshFailed" || !recoveringPolicy && !selection.length}
+    operation={operationProps(change.kind === "policies" ? { busy: policyBusy, error: null } : operation, clearError)}
+    draft={{ dirty: Boolean(selection.length) || review || change.kind === "policies" && policyLocked, title: label, description: change.kind === "policies" ? p("unknownHint") : t("singleRelationImpact") }}
     onSubmit={async () => {
+      if (change.kind === "policies" && policyCommand.state.phase === "unknown") return policyCommand.inspectOriginal();
       if (!selected) return false;
       if (!review) { setReview(true); return false; }
       setOperation({ busy: true, error: null });
@@ -170,11 +207,11 @@ function LiveGroupAssociationEditor({ client, access, memberships, scene, change
         } else if (change.mode === "add") {
           const policy = scene.policies.find((entry) => entry.id === selected.id);
           if (!policy) throw new Error("STALE_GROUP_POLICY");
-          await client.createPolicyAttachment(access.group.id, { policyId: policy.id, policyResourceVersion: policy.resourceVersion, requestId: requestId.current });
+          return policyCommand.run({ operation: "CREATE", target: { kind: "GROUP", id: access.group.id }, policyId: policy.id, policyResourceVersion: policy.resourceVersion, requestId: requestId.current });
         } else {
           const attachment = access.policyAttachments.find((entry) => entry.id === selected.id);
           if (!attachment) throw new Error("STALE_GROUP_ATTACHMENT");
-          await client.revokePolicyAttachment(attachment.id, { resourceVersion: attachment.resourceVersion, requestId: requestId.current });
+          return policyCommand.run({ operation: "REVOKE", attachmentId: attachment.id, expectedResourceVersion: attachment.resourceVersion, requestId: requestId.current });
         }
         await onChanged();
         return true;
@@ -188,11 +225,12 @@ function LiveGroupAssociationEditor({ client, access, memberships, scene, change
       }
     }}
   >
+    {change.kind === "policies" ? <PolicyAttachmentChangeFeedback state={policyCommand.state} onRetryRead={policyCommand.retryRead} /> : null}
     {review ? <>
       <Alert status={change.mode === "remove" ? "warning" : "info"}>{t("singleRelationImpact")}</Alert>
-      <div className={styles.roleTags}><Badge>{selected?.name}</Badge></div>
+      <div className={styles.roleTags}><Badge>{selectedName}</Badge></div>
       {change.mode === "remove" ? <Alert status="warning">{t("remainingSources")}</Alert> : null}
-      <div><Button type="button" variant="secondary" onClick={() => { setReview(false); clearError(); }}>{t("backToSelection")}</Button></div>
+      <div><Button type="button" variant="secondary" disabled={change.kind === "policies" && policyLocked} onClick={() => { policyCommand.reset(); setReview(false); clearError(); }}>{t("backToSelection")}</Button></div>
     </> : <>
       <Alert>{t(change.kind === "members" ? "membershipHint" : "policyChangeHint")}</Alert>
       <WorkspaceSelection label={label} options={options} value={selection} onChange={select} limit={1} />
@@ -269,6 +307,12 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
   const removePolicyTrigger = useRef<HTMLButtonElement>(null);
   const previousChange = useRef<GroupChange | null>(null);
 
+  const restorePendingPolicyChange = useCallback(() => {
+    const pending = readPendingPolicyAttachmentChange({ accountId: client.accountId, actorPrincipalId: client.actorPrincipalId,
+      target: { kind: "GROUP", id: entityId } });
+    if (pending) setChange((current) => current ?? { kind: "policies", mode: pending.operation === "CREATE" ? "add" : "remove" });
+  }, [client.accountId, client.actorPrincipalId, entityId]);
+
   const applyFailure = useCallback((failure: unknown) => {
     setPageError(a(`errors.${accountError(failure)}`));
     setPhase("error");
@@ -310,13 +354,14 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
       if (version !== requestVersion.current) return;
       setPageError(null);
       setAccess(nextAccess);
+      restorePendingPolicyChange();
       setPhase("ready");
       void loadMemberships(nextAccess, !initial);
     } catch (failure) {
       if (version !== requestVersion.current) return;
       applyFailure(failure);
     }
-  }, [applyFailure, client, entityId, loadMemberships]);
+  }, [applyFailure, client, entityId, loadMemberships, restorePendingPolicyChange]);
 
   useEffect(() => {
     const version = ++requestVersion.current;
@@ -325,6 +370,7 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
       if (version !== requestVersion.current) return;
       setPageError(null);
       setAccess(nextAccess);
+      restorePendingPolicyChange();
       setPhase("ready");
       void loadMemberships(nextAccess);
     }, (failure: unknown) => {
@@ -334,7 +380,7 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
       requestVersion.current += 1;
       membershipRequestVersion.current += 1;
     };
-  }, [applyFailure, client, entityId, loadMemberships]);
+  }, [applyFailure, client, entityId, loadMemberships, restorePendingPolicyChange]);
 
   const userById = useMemo(() => new Map(scene.users.map((user) => [user.id, user])), [scene.users]);
   const policyById = useMemo(() => new Map(scene.policies.map((policy) => [policy.id, policy])), [scene.policies]);

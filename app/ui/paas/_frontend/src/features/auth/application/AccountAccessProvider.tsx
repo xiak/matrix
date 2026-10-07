@@ -20,9 +20,11 @@ import type {
   GroupMembership,
   GroupMembershipPage,
   GroupPolicyAttachment,
+  PolicyAttachmentChange,
+  PolicyAttachmentChangeExpectation,
+  PolicyAttachmentChangeOperationExpectation,
   PolicyAttachmentRevocation,
-  UserPolicyAttachmentChange,
-  UserPolicyAttachmentChangeExpectation,
+  RolePolicyAttachment,
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
   UserPermissionBoundary,
@@ -37,7 +39,7 @@ import { accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, t
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
-import type { CreateRoleCommand, CreateRolePolicyAttachmentCommand, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand } from "../domain/roles";
+import type { CreateRoleCommand, CreateRolePolicyAttachmentCommand, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand } from "../domain/roles";
 import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
 import type { AccountSecurityReport, AccountSecurityReportCreation, AccountSecurityReportDownload } from "../domain/securityReports";
 import type { SecurityStepUp } from "../domain/personalSecurity";
@@ -60,6 +62,7 @@ export type UserBoundaryClient = {
 
 export type GroupAccessClient = {
   accountId: string;
+  actorPrincipalId: string;
   canList: boolean;
   listRestrictionReason: CapabilityRestriction | null;
   canCreate: boolean;
@@ -74,6 +77,7 @@ export type GroupAccessClient = {
   removeMembership(groupId: string, membershipId: string, command: { resourceVersion: number; requestId: string }): Promise<GroupMembership>;
   createPolicyAttachment(groupId: string, command: { policyId: string; policyResourceVersion: number; requestId: string }): Promise<GroupPolicyAttachment>;
   revokePolicyAttachment(attachmentId: string, command: { resourceVersion: number; requestId: string }): Promise<PolicyAttachmentRevocation>;
+  inspectPolicyAttachmentChange(expectation: PolicyAttachmentChangeOperationExpectation): Promise<PolicyAttachmentChange>;
 };
 
 export type AuthorizationProfileLoad =
@@ -265,6 +269,7 @@ export type AccessKeyCreateIntent = Readonly<{
 
 export type RoleAccessClient = {
   accountId: string;
+  actorPrincipalId: string;
   sessionRevision: number;
   canCreate: boolean;
   createRestrictionReason: CapabilityRestriction | null;
@@ -282,6 +287,7 @@ export type RoleAccessClient = {
   delete(roleId: string, command: DeleteRoleCommand): Promise<RoleDeletion>;
   createPolicyAttachment(roleId: string, command: CreateRolePolicyAttachmentCommand): Promise<RolePolicyAttachment>;
   revokePolicyAttachment(attachmentId: string, command: { resourceVersion: number; requestId: string }): Promise<PolicyAttachmentRevocation>;
+  inspectPolicyAttachmentChange(expectation: PolicyAttachmentChangeOperationExpectation): Promise<PolicyAttachmentChange>;
   listSessions(roleId: string, filter: RoleSessionFilter, after?: string): Promise<RoleSessionDirectory>;
   readSession(roleId: string, sessionId: string): Promise<RoleSessionAccess>;
   revokeSession(roleId: string, sessionId: string, requestId: string): Promise<RoleSessionRevocation>;
@@ -308,7 +314,7 @@ type UserPolicyChangeBase = {
   requestId: string;
   phase: "review" | "submitting" | "unknown" | "checking" | "confirmed" | "conflict" | "rejected";
   lookupStatus: "unchecked" | "stillUnknown" | "forbidden" | "unavailable" | "expired" | "confirmed";
-  completion: UserPolicyAttachmentChange | null;
+  completion: PolicyAttachmentChange | null;
   error: AccountError | null;
 };
 export type UserPolicyChangeIntent = UserPolicyChangeBase & (
@@ -902,11 +908,32 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return buildAccountUserScene({ id: scene.accountId, loginAlias: scene.loginAlias }, scene.policies, access);
   }, [active, credential, repository, scene, tenantId]);
 
+  const inspectPolicyAttachmentChange = useCallback(async (expectation: PolicyAttachmentChangeOperationExpectation): Promise<PolicyAttachmentChange> => {
+    const read = repository.readPolicyAttachmentChange;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || scene.currentUserId !== principalId || !read) {
+      throw new Error("IAM_POLICY_ATTACHMENT_COMPLETION_UNAVAILABLE");
+    }
+    const bound: PolicyAttachmentChangeExpectation = {
+      ...expectation,
+      accountId: scene.accountId,
+      actorPrincipalId: scene.currentUserId
+    };
+    try {
+      return await read(credential, bound);
+    } catch (failure) {
+      if (failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
+        setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+      }
+      throw failure;
+    }
+  }, [active, credential, expireSession, principalId, repository, scene, sessionRevision, tenantId]);
+
   const groups = useMemo<GroupAccessClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId) return null;
     const accountId = scene.accountId;
     return {
       accountId,
+      actorPrincipalId: scene.currentUserId,
       canList: scene.canListGroups,
       listRestrictionReason: scene.listGroupsRestrictionReason,
       canCreate: scene.canCreateGroups,
@@ -920,9 +947,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       createMembership: (groupId, command) => protectedMutation(() => repository.createGroupMembership(credential, accountId, groupId, command)),
       removeMembership: (groupId, membershipId, command) => protectedMutation(() => repository.removeGroupMembership(credential, accountId, groupId, membershipId, command)),
       createPolicyAttachment: (groupId, command) => protectedMutation(() => repository.createGroupPolicyAttachment(credential, accountId, groupId, command)),
-      revokePolicyAttachment: (attachmentId, command) => protectedMutation(() => repository.revokePolicyAttachment(credential, attachmentId, command))
+      revokePolicyAttachment: (attachmentId, command) => protectedMutation(() => repository.revokePolicyAttachment(credential, attachmentId, command)),
+      inspectPolicyAttachmentChange
     };
-  }, [active, credential, protectedMutation, repository, scene, tenantId]);
+  }, [active, credential, inspectPolicyAttachmentChange, protectedMutation, repository, scene, tenantId]);
 
   const permissionBoundaries = useMemo<UserBoundaryClient | null>(() => {
     const boundaryRepository = repository.permissionBoundaries;
@@ -1621,6 +1649,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
     return {
       accountId,
+      actorPrincipalId: scene.currentUserId,
       sessionRevision,
       canCreate: scene.canCreateRoles,
       createRestrictionReason: scene.createRolesRestrictionReason,
@@ -1644,11 +1673,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       delete: (roleId, command) => protectedMutation(() => scoped(roleRepository.delete(credential, accountId, roleId, command))),
       createPolicyAttachment: (roleId, command) => protectedMutation(() => scoped(roleRepository.createPolicyAttachment(credential, accountId, roleId, command))),
       revokePolicyAttachment: (attachmentId, command) => protectedMutation(() => scoped(repository.revokePolicyAttachment(credential, attachmentId, command))),
+      inspectPolicyAttachmentChange,
       listSessions: (roleId, filter, after) => scoped(roleRepository.listSessions(credential, accountId, roleId, filter, after)),
       readSession: (roleId, sessionId) => scoped(roleRepository.readSession(credential, accountId, roleId, sessionId)),
       revokeSession: (roleId, sessionId, requestId) => scoped(roleRepository.revokeSession(credential, accountId, roleId, sessionId, requestId))
     };
-  }, [active, credential, expireSession, protectedMutation, repository, scene, sessionRevision, tenantId]);
+  }, [active, credential, expireSession, inspectPolicyAttachmentChange, protectedMutation, repository, scene, sessionRevision, tenantId]);
 
   const loadUsersPage = useCallback(async (after: string) => {
     if (!active || !credential || !scene || loading || mutationPending.current) return;
@@ -1759,16 +1789,16 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const inspectUserPolicyChange = useCallback(async (requestId: string): Promise<boolean> => {
     const stored = userPolicyChangeRef.current;
     const intent = stored?.session === viewSession && stored.intent.requestId === requestId ? stored.intent : null;
-    const read = repository.readUserPolicyAttachmentChange;
+    const read = repository.readPolicyAttachmentChange;
     if (!active || !credential || !scene || !intent || intent.phase !== "unknown" || intent.accountId !== tenantId ||
         intent.actorId !== principalId || loading || mutationPending.current) return false;
     if (!read) {
       rememberUserPolicyChange(requestId, { ...intent, lookupStatus: "unavailable", completion: null, error: "unavailable" });
       return false;
     }
-    const expectation: UserPolicyAttachmentChangeExpectation = intent.kind === "attach" ? {
+    const expectation: PolicyAttachmentChangeExpectation = intent.kind === "attach" ? {
       operation: "CREATE", accountId: intent.accountId, actorPrincipalId: intent.actorId, requestId: intent.requestId,
-      userId: intent.userId, policyId: intent.policyId, policyResourceVersion: intent.policyResourceVersion
+      target: { kind: "USER", id: intent.userId }, policyId: intent.policyId, policyResourceVersion: intent.policyResourceVersion
     } : {
       operation: "REVOKE", accountId: intent.accountId, actorPrincipalId: intent.actorId, requestId: intent.requestId,
       attachmentId: intent.attachmentId, expectedResourceVersion: intent.attachmentResourceVersion

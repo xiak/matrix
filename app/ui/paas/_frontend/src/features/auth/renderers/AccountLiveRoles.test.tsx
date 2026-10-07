@@ -83,6 +83,7 @@ const serviceSessionItem = {
 function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
   return {
     accountId: role.accountId,
+    actorPrincipalId: "root-acme",
     sessionRevision: 1,
     canCreate: true,
     createRestrictionReason: null,
@@ -100,6 +101,7 @@ function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
     delete: vi.fn().mockResolvedValue({ id: role.id, accountId: role.accountId, name: role.name, resourceVersion: role.resourceVersion + 1, revokedPolicyAttachments: 1, deletedAt: timestamp }),
     createPolicyAttachment: vi.fn().mockResolvedValue(access.policyAttachments[0]),
     revokePolicyAttachment: vi.fn().mockResolvedValue({ id: access.policyAttachments[0]!.id, resourceVersion: 2, revokedAt: timestamp }),
+    inspectPolicyAttachmentChange: vi.fn().mockRejectedValue(new Error("unused policy attachment completion")),
     listSessions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, observedAt: timestamp, items: [], nextAfter: null }),
     readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
     revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke")),
@@ -116,7 +118,7 @@ function RolesHarness({ api, serviceRoleTemplates, entityId, onOpen = vi.fn() }:
   return <UnsavedChangesProvider><AccountLiveRoles client={api} serviceRoleTemplates={serviceRoleTemplates} entityId={entityId} onCreate={vi.fn()} onOpen={onOpen} revokeIntent={intent} onRevokeIntentChange={changeIntent} /></UnsavedChangesProvider>;
 }
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); sessionStorage.clear(); });
 
 describe("AccountLiveRoles", () => {
   it("keeps the fixed directory shell visible while only role data loads", async () => {
@@ -242,6 +244,56 @@ describe("AccountLiveRoles", () => {
 
     await waitFor(() => expect(createPolicyAttachment).toHaveBeenCalledWith(role.id, expect.objectContaining({ policyId: boundaryPolicy.id, policyResourceVersion: boundaryPolicy.resourceVersion, requestId: expect.stringMatching(/^role-attachment-/) })));
     expect(await screen.findByRole("button", { name: boundaryPolicy.id })).toBeTruthy();
+  });
+
+  it("checks the immutable completion record after a role policy response is lost without replaying the write", async () => {
+    const user = userEvent.setup();
+    const attachment = { id: "attachment-boundary", accountId: role.accountId, target: { kind: "ROLE" as const, id: role.id }, policyId: boundaryPolicy.id,
+      scope: "TENANT" as const, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+    const updatedAccess: RoleAccess = { ...access, policyAttachments: [...access.policyAttachments, attachment] };
+    const createPolicyAttachment = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const inspectPolicyAttachmentChange: RoleAccessClient["inspectPolicyAttachmentChange"] = vi.fn(async (expectation) => {
+      if (expectation.operation !== "CREATE") throw new Error("unexpected operation");
+      return {
+        operation: "CREATE" as const, accountId: role.accountId, actorPrincipalId: "root-acme", requestId: expectation.requestId,
+        completedAt: timestamp, target: expectation.target, policyId: expectation.policyId,
+        policyResourceVersion: expectation.policyResourceVersion, attachment
+      };
+    });
+    const api = client({
+      listTenantPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }),
+      createPolicyAttachment,
+      inspectPolicyAttachmentChange,
+      read: vi.fn().mockResolvedValueOnce(access).mockResolvedValue(updatedAccess)
+    });
+    const initial = render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
+    await user.click(await screen.findByRole("combobox", { name: "要关联的策略" }));
+    await user.click(await screen.findByRole("option", { name: `${boundaryPolicy.displayName} · ${boundaryPolicy.id}` }));
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "确认关联策略" }));
+
+    expect(await screen.findByText("策略关联结果尚未确认")).toBeTruthy();
+    const original = createPolicyAttachment.mock.calls[0]?.[1];
+    expect(original).toEqual(expect.objectContaining({ requestId: expect.stringMatching(/^role-attachment-/) }));
+    expect(sessionStorage.length).toBe(1);
+
+    initial.unmount();
+    const foreign = render(<LocaleProvider><RolesHarness api={{ ...api, actorPrincipalId: "another-admin" }} entityId={role.id} /></LocaleProvider>);
+    expect(await screen.findByRole("heading", { name: role.name })).toBeTruthy();
+    expect(screen.queryByText("策略关联结果尚未确认")).toBeNull();
+    foreign.unmount();
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+    expect(await screen.findByText("策略关联结果尚未确认")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
+    await waitFor(() => expect(inspectPolicyAttachmentChange).toHaveBeenCalledWith({
+      operation: "CREATE", requestId: original.requestId, target: { kind: "ROLE", id: role.id },
+      policyId: boundaryPolicy.id, policyResourceVersion: boundaryPolicy.resourceVersion
+    }));
+    expect(createPolicyAttachment).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("button", { name: boundaryPolicy.id })).toBeTruthy();
+    expect(sessionStorage.length).toBe(0);
   });
 
   it("keeps one delete intent after an unknown result and retries the exact request", async () => {

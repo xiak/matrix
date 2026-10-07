@@ -2662,7 +2662,7 @@ describe("IAM HTTP account boundary", () => {
       accountId: account.id,
       actorPrincipalId: account.rootIdentity.principalId,
       requestId: `ui-user-attachment-${"a".repeat(32)}`,
-      userId: user.id,
+      target: { kind: "USER" as const, id: user.id },
       policyId: tenantAttachment.policyId,
       policyResourceVersion: 3
     };
@@ -2679,7 +2679,7 @@ describe("IAM HTTP account boundary", () => {
         resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp
     };
     let fetcher = reply(createCompletion);
-    await expect(httpAccountRepository.readUserPolicyAttachmentChange!("bearer", createExpectation)).resolves.toEqual({
+    await expect(httpAccountRepository.readPolicyAttachmentChange!("bearer", createExpectation)).resolves.toEqual({
       operation: "CREATE", accountId: account.id, actorPrincipalId: account.rootIdentity.principalId,
       requestId: createExpectation.requestId, completedAt: timestamp,
       target: { kind: "USER", id: user.id }, policyId: tenantAttachment.policyId,
@@ -2687,6 +2687,27 @@ describe("IAM HTTP account boundary", () => {
     });
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/policy-attachment-changes/by-request/${createExpectation.requestId}`);
     expect(firstRequest(fetcher)[1]).not.toHaveProperty("body");
+
+    for (const candidate of [
+      { target: { kind: "GROUP" as const, id: group.id }, attachment: groupAttachment, parsed: {
+        id: groupAttachment.id, accountId: account.id, target: { kind: "GROUP", id: group.id }, policyId: groupAttachment.policyId,
+        scope: "TENANT", installationId: null, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp
+      } },
+      { target: { kind: "ROLE" as const, id: role.id }, attachment: roleAttachment, parsed: {
+        id: roleAttachment.id, accountId: account.id, target: { kind: "ROLE", id: role.id }, policyId: roleAttachment.policyId,
+        scope: "TENANT", resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp
+      } }
+    ]) {
+      const expectation = { ...createExpectation, requestId: `completion-${candidate.target.kind.toLowerCase()}`, target: candidate.target };
+      fetcher = reply({ ...createCompletion, requestId: expectation.requestId, target: candidate.target, attachment: candidate.attachment });
+      await expect(httpAccountRepository.readPolicyAttachmentChange!("bearer", expectation)).resolves.toEqual({
+        operation: "CREATE", accountId: account.id, actorPrincipalId: account.rootIdentity.principalId,
+        requestId: expectation.requestId, completedAt: timestamp, target: candidate.target,
+        policyId: tenantAttachment.policyId, policyResourceVersion: 3,
+        attachment: expect.objectContaining(candidate.parsed)
+      });
+      expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/policy-attachment-changes/by-request/${expectation.requestId}`);
+    }
 
     const revokeExpectation = {
       operation: "REVOKE" as const,
@@ -2703,7 +2724,7 @@ describe("IAM HTTP account boundary", () => {
       requestId: revokeExpectation.requestId, completedAt: timestamp,
       attachmentId: tenantAttachment.id, expectedResourceVersion: 1, revocation
     });
-    await expect(httpAccountRepository.readUserPolicyAttachmentChange!("bearer", revokeExpectation)).resolves.toEqual({
+    await expect(httpAccountRepository.readPolicyAttachmentChange!("bearer", revokeExpectation)).resolves.toEqual({
       operation: "REVOKE", accountId: account.id, actorPrincipalId: account.rootIdentity.principalId,
       requestId: revokeExpectation.requestId, completedAt: timestamp,
       attachmentId: tenantAttachment.id, expectedResourceVersion: 1,
@@ -2719,7 +2740,7 @@ describe("IAM HTTP account boundary", () => {
       accountId: account.id,
       actorPrincipalId: account.rootIdentity.principalId,
       requestId: `ui-user-attachment-${"c".repeat(32)}`,
-      userId: user.id,
+      target: { kind: "USER" as const, id: user.id },
       policyId: tenantAttachment.policyId,
       policyResourceVersion: 3
     };
@@ -2743,7 +2764,7 @@ describe("IAM HTTP account boundary", () => {
       { ...valid, credential: "MUST_NOT_BE_ACCEPTED" }
     ]) {
       reply(body);
-      await expect(httpAccountRepository.readUserPolicyAttachmentChange!("bearer", expectation)).rejects.toThrow("INVALID_IAM_RESPONSE");
+      await expect(httpAccountRepository.readPolicyAttachmentChange!("bearer", expectation)).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
 
     const revokeExpectation = {
@@ -2769,7 +2790,7 @@ describe("IAM HTTP account boundary", () => {
       { ...validRevoke, target: { kind: "USER", id: user.id } }
     ]) {
       reply(body);
-      await expect(httpAccountRepository.readUserPolicyAttachmentChange!("bearer", revokeExpectation)).rejects.toThrow("INVALID_IAM_RESPONSE");
+      await expect(httpAccountRepository.readPolicyAttachmentChange!("bearer", revokeExpectation)).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
 

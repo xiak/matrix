@@ -313,6 +313,13 @@ export type GroupPolicyAttachment = Omit<UserPolicyAttachment, "target" | "scope
   installationId: null;
 };
 
+export type RolePolicyAttachment = Omit<UserPolicyAttachment, "target" | "scope" | "installationId"> & {
+  target: { kind: "ROLE"; id: string };
+  scope: "TENANT";
+};
+
+export type DirectPolicyAttachment = UserPolicyAttachment | GroupPolicyAttachment | RolePolicyAttachment;
+
 export type GroupMembership = {
   id: string;
   accountId: string;
@@ -375,16 +382,16 @@ type PolicyAttachmentChangeBase = {
   completedAt: string;
 };
 
-// Immutable completion evidence for one direct User policy relationship
-// command. It records the original result, not the relationship's current
-// state and not a reusable authorization decision.
-export type UserPolicyAttachmentChange = PolicyAttachmentChangeBase & (
+// Immutable completion evidence for one direct User, Group, or Role policy
+// relationship command. It records the original result, not the
+// relationship's current state and not a reusable authorization decision.
+export type PolicyAttachmentChange = PolicyAttachmentChangeBase & (
   | {
       operation: "CREATE";
-      target: { kind: "USER"; id: string };
+      target: DirectPolicyAttachment["target"];
       policyId: string;
       policyResourceVersion: number;
-      attachment: UserPolicyAttachment;
+      attachment: DirectPolicyAttachment;
     }
   | {
       operation: "REVOKE";
@@ -394,14 +401,14 @@ export type UserPolicyAttachmentChange = PolicyAttachmentChangeBase & (
     }
 );
 
-export type UserPolicyAttachmentChangeExpectation = {
+export type PolicyAttachmentChangeOperationExpectation =
+  | { operation: "CREATE"; requestId: string; target: DirectPolicyAttachment["target"]; policyId: string; policyResourceVersion: number }
+  | { operation: "REVOKE"; requestId: string; attachmentId: string; expectedResourceVersion: number };
+
+export type PolicyAttachmentChangeExpectation = {
   accountId: string;
   actorPrincipalId: string;
-  requestId: string;
-} & (
-  | { operation: "CREATE"; userId: string; policyId: string; policyResourceVersion: number }
-  | { operation: "REVOKE"; attachmentId: string; expectedResourceVersion: number }
-);
+} & PolicyAttachmentChangeOperationExpectation;
 
 export type PolicyGrantSource =
   | { kind: "DIRECT"; attachment: UserPolicyAttachment }

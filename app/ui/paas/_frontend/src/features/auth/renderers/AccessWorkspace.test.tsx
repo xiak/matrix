@@ -6,7 +6,7 @@ import { LocaleProvider, useLocalePreference } from "@/i18n/LocaleProvider";
 import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
-import { accountAccessViews, type AccountAccessView, type AccountIdentity, type ActionCapability, type AuthorizationProfileAction, type AuthorizationProfileEntry, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
+import { accountAccessViews, type AccountAccessView, type AccountIdentity, type AccountPolicy, type ActionCapability, type AuthorizationProfileAction, type AuthorizationProfileEntry, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
 import type { AccessPolicy } from "../domain/accessWorkspace";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorkspace";
@@ -127,11 +127,11 @@ async function open(initialView: AccountAccessView, options?: { live?: boolean; 
     readPasswordResetCompletion: options?.repository?.readPasswordResetCompletion ?? vi.fn(async () => { throw new HttpProblem(404, "PREVIEW_RESET_RESULT_UNOBSERVED"); })
   };
   const user = userEvent.setup({ delay: null });
-  render(<LocaleProvider><SessionProvider repository={login}><UnsavedChangesProvider><Harness initialView={initialView} initialEntityId={options?.entityId} repository={repository} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>);
+  const rendered = render(<LocaleProvider><SessionProvider repository={login}><UnsavedChangesProvider><Harness initialView={initialView} initialEntityId={options?.entityId} repository={repository} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>);
   await user.click(screen.getByRole("button", { name: "Enter" }));
   await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalled());
   await waitFor(() => expect(screen.queryByLabelText("正在读取 IAM 账号信息…")).toBeNull());
-  return { user, repository, extension };
+  return { user, repository, extension, unmount: rendered.unmount };
 }
 async function seedBoundAccountRuleOperator(extension: ReturnType<typeof createPreviewAccessWorkspace>) {
   await extension.execute("preview", { kind: "confirm-personal-mfa" });
@@ -2293,6 +2293,79 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("tab", { name: "成员" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "成员 (2)" })).toBeNull();
   });
+  it("checks the immutable completion record after a group policy response is lost without replaying the write", async () => {
+    const policy: AccountPolicy = {
+      id: "policy-group-audit", management: "CUSTOMER", accountId: account.id, displayName: "GroupAuditAccess",
+      scope: "TENANT", status: "ACTIVE", defaultVersionId: "v1", resourceVersion: 4,
+      createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z"
+    };
+    const liveGroup: GroupAccess = {
+      group: { id: "group-policy", accountId: account.id, name: "PolicyOperators", description: "Backend-owned group", resourceVersion: 2, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [
+        capability("iam.group.read", "GROUP", "group-policy"),
+        capability("iam.group-membership.list", "GROUP", "group-policy"),
+        capability("iam.group-policy-attachment.create", "GROUP", "group-policy")
+      ]
+    };
+    const attachment = {
+      id: "attachment-group-audit", accountId: account.id, target: { kind: "GROUP" as const, id: liveGroup.group.id },
+      policyId: policy.id, scope: "TENANT" as const, installationId: null, resourceVersion: 1,
+      createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z"
+    };
+    const updatedGroup: GroupAccess = { ...liveGroup, policyAttachments: [attachment] };
+    const createGroupPolicyAttachment = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const readPolicyAttachmentChange: NonNullable<AccountRepository["readPolicyAttachmentChange"]> = vi.fn(async (_credential, expectation) => {
+      if (expectation.operation !== "CREATE") throw new Error("unexpected operation");
+      return {
+        operation: "CREATE" as const, accountId: expectation.accountId, actorPrincipalId: expectation.actorPrincipalId,
+        requestId: expectation.requestId, completedAt: attachment.createdAt, target: expectation.target,
+        policyId: expectation.policyId, policyResourceVersion: expectation.policyResourceVersion, attachment
+      };
+    });
+    const getGroup = vi.fn().mockResolvedValueOnce(liveGroup).mockResolvedValue(updatedGroup);
+    const repositoryOverrides: Partial<AccountRepository> = {
+      listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => ({
+        accountId: account.id, scope: platform ? "INSTALLATION" as const : "TENANT" as const,
+        installationId: platform ? "installation-preview" : null, items: platform ? [] : [policy]
+      })),
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup,
+      listGroupMemberships: vi.fn().mockResolvedValue({ accountId: account.id, groupId: liveGroup.group.id, items: [], nextAfter: null }),
+      createGroupPolicyAttachment,
+      readPolicyAttachmentChange
+    };
+    const first = await open("groups", { live: true, repository: repositoryOverrides });
+    const { user } = first;
+
+    await user.click(within(await screen.findByRole("table", { name: "用户组" })).getByRole("button", { name: liveGroup.group.name }));
+    await user.click(await screen.findByRole("tab", { name: "直接关联策略 (0)" }));
+    await user.click(screen.getByRole("button", { name: "关联策略" }));
+    const workflow = within(screen.getByRole("group", { name: `关联策略 · ${liveGroup.group.name}` }));
+    await user.click(workflow.getByRole("checkbox", { name: policy.displayName }));
+    await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    await user.click(workflow.getByRole("button", { name: "确认变更" }));
+
+    expect(await workflow.findByText("策略关联结果尚未确认")).toBeTruthy();
+    const original = createGroupPolicyAttachment.mock.calls[0]?.[3];
+    expect(sessionStorage.length).toBe(1);
+
+    first.unmount();
+    const resumed = await open("groups", { live: true, repository: repositoryOverrides });
+    await resumed.user.click(within(await screen.findByRole("table", { name: "用户组" })).getByRole("button", { name: liveGroup.group.name }));
+    const resumedWorkflow = within(await screen.findByRole("group", { name: `关联策略 · ${liveGroup.group.name}` }));
+    expect(await resumedWorkflow.findByText("策略关联结果尚未确认")).toBeTruthy();
+    await resumed.user.click(resumedWorkflow.getByRole("button", { name: "检查原请求结果" }));
+    await waitFor(() => expect(readPolicyAttachmentChange).toHaveBeenCalledWith("preview-only", {
+      operation: "CREATE", accountId: account.id, actorPrincipalId: rootUser.id, requestId: original.requestId,
+      target: { kind: "GROUP", id: liveGroup.group.id }, policyId: policy.id, policyResourceVersion: policy.resourceVersion
+    }));
+    expect(createGroupPolicyAttachment).toHaveBeenCalledTimes(1);
+    await resumed.user.click(await screen.findByRole("tab", { name: "直接关联策略 (1)" }));
+    expect(await screen.findByRole("button", { name: policy.displayName })).toBeTruthy();
+    expect(sessionStorage.length).toBe(0);
+  });
+
   it("creates only an empty group, then adds each member and policy relationship separately", async () => {
     const { user, repository, extension } = await open("groups");
     await user.click(await screen.findByRole("button", { name: "新建用户组" }));

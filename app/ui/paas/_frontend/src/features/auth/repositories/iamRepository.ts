@@ -25,13 +25,14 @@ import type {
   GroupMembership,
   GroupMembershipPage,
   GroupPolicyAttachment,
+  PolicyAttachmentChange,
+  PolicyAttachmentChangeExpectation,
   PolicyAttachmentRevocation,
   PolicyDirectory,
   AuthorizationProfileDirectory,
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
-  UserPolicyAttachmentChange,
-  UserPolicyAttachmentChangeExpectation,
+  RolePolicyAttachment,
   UserAccess,
   UserPermissionBoundary
 } from "../domain/accounts";
@@ -41,7 +42,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import type { AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
-import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CreateRolePolicyAttachmentCommand, CurrentRoleIdentity, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand, UserRoleSession } from "../domain/roles";
+import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CreateRolePolicyAttachmentCommand, CurrentRoleIdentity, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand, UserRoleSession } from "../domain/roles";
 import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
 import type { AccountSecurityReport, AccountSecurityReportCreation, AccountSecurityReportDownload } from "../domain/securityReports";
 
@@ -304,6 +305,6 @@ export interface AccountRepository {
   }): Promise<PolicyAttachmentRevocation>;
   // Reads one immutable command receipt. Only requestId is sent; all other
   // fields are local response-binding expectations, never authority selectors.
-  readUserPolicyAttachmentChange?(credential: string, expectation: UserPolicyAttachmentChangeExpectation): Promise<UserPolicyAttachmentChange>;
+  readPolicyAttachmentChange?(credential: string, expectation: PolicyAttachmentChangeExpectation): Promise<PolicyAttachmentChange>;
   execute(credential: string, command: AccountCommand): Promise<void>;
 }

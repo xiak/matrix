@@ -1,15 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, FormField, Input, Select, TextArea } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { accountError, type RoleAccessClient } from "../application/AccountAccessProvider";
-import type { AccountPolicy } from "../domain/accounts";
+import type { AccountPolicy, PolicyAttachmentChangeOperationExpectation } from "../domain/accounts";
 import {
   roleTrustDocumentFromUnknown,
   validateRoleMetadataInput,
-  type CreateRolePolicyAttachmentCommand,
   type DeleteRoleCommand,
   type RoleAccess,
   type RoleTrustDocument,
@@ -18,6 +17,7 @@ import {
   type UpdateRoleCommand
 } from "../domain/roles";
 import { WorkspaceDelete, WorkspaceInlineForm } from "./AccessWorkspaceUi";
+import { PolicyAttachmentChangeFeedback, usePolicyAttachmentCommand } from "./PolicyAttachmentChangeFlow";
 import { RoleTags } from "./RoleConfiguration";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -226,12 +226,34 @@ export function LiveRolePolicyEditor({ access, client, mode, onAccessChanged, on
   onClose(): void;
 }) {
   const t = useTranslations("RoleWorkspace");
+  const p = useTranslations("PolicyAttachmentChange");
   const id = useId();
+  const policyScope = useMemo(() => ({ accountId: client.accountId, actorPrincipalId: client.actorPrincipalId,
+    target: { kind: "ROLE" as const, id: access.role.id } }), [access.role.id, client.accountId, client.actorPrincipalId]);
   const [policies, setPolicies] = useState<AccountPolicy[]>([]), [available, setAvailable] = useState(true), [loading, setLoading] = useState(mode === "add");
-  const [selectedId, setSelectedId] = useState(""), [review, setReview] = useState(false), [validation, setValidation] = useState<string | undefined>();
-  const create = useRoleCommand<CreateRolePolicyAttachmentCommand, unknown>({ client, roleId: access.role.id, execute: (intent) => client.createPolicyAttachment(access.role.id, intent), onAccessChanged });
-  const revoke = useRoleCommand<{ attachmentId: string; resourceVersion: number; requestId: string }, unknown>({ client, roleId: access.role.id, execute: (intent) => client.revokePolicyAttachment(intent.attachmentId, { resourceVersion: intent.resourceVersion, requestId: intent.requestId }), onAccessChanged });
-  const operation = mode === "add" ? create : revoke;
+  const operation = usePolicyAttachmentCommand<PolicyAttachmentChangeOperationExpectation>({
+    scope: policyScope,
+    execute: async (intent) => {
+      if (intent.operation === "CREATE") {
+        if (intent.target.kind !== "ROLE" || intent.target.id !== access.role.id) throw new Error("INVALID_ROLE_POLICY_TARGET");
+        return client.createPolicyAttachment(access.role.id, {
+          policyId: intent.policyId,
+          policyResourceVersion: intent.policyResourceVersion,
+          requestId: intent.requestId
+        });
+      }
+      return client.revokePolicyAttachment(intent.attachmentId, {
+        resourceVersion: intent.expectedResourceVersion,
+        requestId: intent.requestId
+      });
+    },
+    inspect: (intent) => client.inspectPolicyAttachmentChange(intent),
+    refresh: async () => onAccessChanged(await client.read(access.role.id))
+  });
+  const [selectedId, setSelectedId] = useState(() => operation.intent
+    ? operation.intent.operation === "CREATE" ? operation.intent.policyId : operation.intent.attachmentId
+    : "");
+  const [review, setReview] = useState(Boolean(operation.intent)), [validation, setValidation] = useState<string | undefined>();
   useEffect(() => {
     if (mode !== "add") return;
     let current = true;
@@ -246,22 +268,25 @@ export function LiveRolePolicyEditor({ access, client, mode, onAccessChanged, on
     ? policies.filter((policy) => policy.status === "ACTIVE" && policy.scope === "TENANT" && !attached.has(policy.id)).map((policy) => ({ value: policy.id, label: `${policy.displayName} · ${policy.id}` }))
     : access.policyAttachments.filter((attachment) => access.capabilities.some((capability) => capability.action === "iam.role-policy-attachment.revoke" && capability.resource.kind === "POLICY_ATTACHMENT" && capability.resource.id === attachment.id && capability.available)).map((attachment) => ({ value: attachment.id, label: attachment.policyId }));
   const selectedPolicy = policies.find((policy) => policy.id === selectedId), selectedAttachment = access.policyAttachments.find((attachment) => attachment.id === selectedId);
+  const recovering = operation.state.phase === "unknown" || operation.state.phase === "checking" || operation.state.phase === "refreshFailed";
+  const selectedPolicyId = mode === "add" ? selectedPolicy?.id ?? (operation.intent?.operation === "CREATE" ? operation.intent.policyId : undefined) : selectedAttachment?.policyId;
+  const selectedLabel = mode === "add" ? selectedPolicy?.displayName ?? selectedPolicyId : selectedAttachment?.policyId ?? (operation.intent?.operation === "REVOKE" ? operation.intent.attachmentId : undefined);
   const submit = async () => {
-    if (operation.state.phase === "uncertain") return operation.run();
+    if (operation.state.phase === "unknown") return operation.inspectOriginal();
     if (!review) {
       if (!selectedId || (mode === "add" ? !selectedPolicy : !selectedAttachment)) { setValidation(t("selectOnePolicy")); return false; }
       setValidation(undefined); setReview(true); return false;
     }
-    if (mode === "add" && selectedPolicy) return create.run({ policyId: selectedPolicy.id, policyResourceVersion: selectedPolicy.resourceVersion, requestId: requestToken("role-attachment-") });
-    if (mode === "remove" && selectedAttachment) return revoke.run({ attachmentId: selectedAttachment.id, resourceVersion: selectedAttachment.resourceVersion, requestId: requestToken("role-revocation-") });
+    if (mode === "add" && selectedPolicy) return operation.run({ operation: "CREATE", target: { kind: "ROLE", id: access.role.id }, policyId: selectedPolicy.id, policyResourceVersion: selectedPolicy.resourceVersion, requestId: requestToken("role-attachment-") });
+    if (mode === "remove" && selectedAttachment) return operation.run({ operation: "REVOKE", attachmentId: selectedAttachment.id, expectedResourceVersion: selectedAttachment.resourceVersion, requestId: requestToken("role-revocation-") });
     return false;
   };
   return <WorkspaceInlineForm title={t(mode === "add" ? "addPolicies" : "removePolicies")} onClose={onClose} onSubmit={submit}
-    submitDisabled={operation.submitBlocked || loading || !available || !choices.length} submitLabel={operation.state.phase === "uncertain" ? t("retryOriginalRequest") : review ? t(mode === "add" ? "confirmAttachPolicy" : "confirmRevokePolicy") : t("reviewChange")} validationError={validation}
-    operation={{ busy: operation.state.phase === "pending", clearError: noop }} draft={{ dirty: Boolean(selectedId) || review || needsLeaveGuard(operation.state), title: t(mode === "add" ? "addPolicies" : "removePolicies"), description: t("roleMutationLeaveHint") }}>
-    <RoleCommandFeedback state={operation.state} onRefreshConflict={async () => { if (await operation.refreshConflict()) { setReview(false); setSelectedId(""); } }} onRetryRead={async () => { if (await operation.retryRead()) onClose(); }} />
+    submitDisabled={operation.state.phase === "refreshFailed" || !recovering && (loading || !available || !choices.length)} submitLabel={operation.state.phase === "unknown" ? p("checkOriginalRequest") : operation.state.phase === "checking" ? p("checking") : review ? t(mode === "add" ? "confirmAttachPolicy" : "confirmRevokePolicy") : t("reviewChange")} validationError={validation}
+    operation={{ busy: operation.state.phase === "pending" || operation.state.phase === "checking", clearError: noop }} draft={{ dirty: Boolean(selectedId) || review || operation.locked, title: t(mode === "add" ? "addPolicies" : "removePolicies"), description: p("unknownHint") }}>
+    <PolicyAttachmentChangeFeedback state={operation.state} onRetryRead={operation.retryRead} />
     <Alert>{t(mode === "add" ? "liveAttachPolicyHint" : "liveRevokePolicyHint")}</Alert>
-    {review ? <><dl className={styles.facts}><div><dt>{t(mode === "add" ? "adding" : "removing")}</dt><dd>{mode === "add" ? selectedPolicy?.displayName : selectedAttachment?.policyId}</dd></div><div><dt>{t("policyId")}</dt><dd><code>{mode === "add" ? selectedPolicy?.id : selectedAttachment?.policyId}</code></dd></div></dl><Button variant="ghost" disabled={operation.locked} onClick={() => { operation.reset(); setReview(false); }}>{t("backToSelection")}</Button></> : loading ? <p className={styles.note} role="status">{t("policyDirectoryLoading")}</p> : !available ? <Alert status="warning">{t("policyDirectoryUnavailable")}</Alert> : choices.length ? <FormField id={`${id}-policy`} label={t(mode === "add" ? "policyToAttach" : "policyToRevoke")} hint={t("singlePolicyCommandHint")}><Select id={`${id}-policy`} disabled={operation.locked} value={selectedId} options={[{ value: "", label: t("choosePolicy") }, ...choices]} onValueChange={setSelectedId} /></FormField> : <Alert>{t(mode === "add" ? "noEligiblePolicies" : "noRevocablePolicies")}</Alert>}
+    {review ? <><dl className={styles.facts}><div><dt>{t(mode === "add" ? "adding" : "removing")}</dt><dd>{selectedLabel}</dd></div><div><dt>{t("policyId")}</dt><dd><code>{selectedPolicyId ?? selectedLabel}</code></dd></div></dl><Button variant="ghost" disabled={operation.locked} onClick={() => { operation.reset(); setReview(false); }}>{t("backToSelection")}</Button></> : loading ? <p className={styles.note} role="status">{t("policyDirectoryLoading")}</p> : !available ? <Alert status="warning">{t("policyDirectoryUnavailable")}</Alert> : choices.length ? <FormField id={`${id}-policy`} label={t(mode === "add" ? "policyToAttach" : "policyToRevoke")} hint={t("singlePolicyCommandHint")}><Select id={`${id}-policy`} disabled={operation.locked} value={selectedId} options={[{ value: "", label: t("choosePolicy") }, ...choices]} onValueChange={(value) => { operation.reset(); setSelectedId(value); }} /></FormField> : <Alert>{t(mode === "add" ? "noEligiblePolicies" : "noRevocablePolicies")}</Alert>}
   </WorkspaceInlineForm>;
 }
 

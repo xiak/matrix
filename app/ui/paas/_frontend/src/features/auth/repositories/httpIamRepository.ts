@@ -31,6 +31,8 @@ import type {
   GroupMembershipPage,
   GroupPolicyAttachment,
   IamAction,
+  PolicyAttachmentChange,
+  PolicyAttachmentChangeExpectation,
   PolicyDirectory,
   PolicyGrantSource,
   PolicyAttachmentRevocation,
@@ -42,8 +44,7 @@ import type {
   User,
   UserAccess,
   UserPolicyAttachment,
-  UserPolicyAttachmentChange,
-  UserPolicyAttachmentChangeExpectation,
+  RolePolicyAttachment,
   UserPermissionBoundary
 } from "../domain/accounts";
 import type {
@@ -72,7 +73,7 @@ import type {
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
-import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDeletion, RoleDirectory, RoleListing, RolePermissionBoundary, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
+import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDeletion, RoleDirectory, RoleListing, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
 import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessDispositionRule, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
 import { sourceCidrValid } from "../domain/policyLanguage";
 import { accessKeyAuthorizationSourceIpValid, accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, type AccessKeyNetworkRestrictions, type AccessKeyUsageObservation } from "../domain/accessKeyNetwork";
@@ -331,7 +332,7 @@ function parsePolicyAttachmentRevocation(value: unknown): PolicyAttachmentRevoca
   };
 }
 
-function parseUserPolicyAttachmentChange(value: unknown, expected: UserPolicyAttachmentChangeExpectation): UserPolicyAttachmentChange {
+function parsePolicyAttachmentChange(value: unknown, expected: PolicyAttachmentChangeExpectation): PolicyAttachmentChange {
   const wire = accountRecord(value);
   const base = ["apiVersion", "kind", "operation", "accountId", "actorPrincipalId", "requestId", "completedAt"];
   const operation = wire.operation;
@@ -348,16 +349,18 @@ function parseUserPolicyAttachmentChange(value: unknown, expected: UserPolicyAtt
   if (operation === "CREATE" && expected.operation === "CREATE") {
     const target = accountRecord(wire.target);
     exactKeys(target, ["kind", "id"]);
-    const userId = accountIdentifier(target.id);
+    if (target.kind !== "USER" && target.kind !== "GROUP" && target.kind !== "ROLE") throw new Error("INVALID_IAM_RESPONSE");
+    const targetId = accountIdentifier(target.id);
     const policyId = accountIdentifier(wire.policyId);
     const policyResourceVersion = accountVersion(wire.policyResourceVersion);
-    const attachment = parsePolicyAttachment(wire.attachment);
-    if (target.kind !== "USER" || userId !== expected.userId || policyId !== expected.policyId ||
+    const attachment = target.kind === "USER" ? parsePolicyAttachment(wire.attachment) :
+      target.kind === "GROUP" ? parseGroupPolicyAttachment(wire.attachment) : parseRolePolicyAttachment(wire.attachment, accountId, targetId);
+    if (target.kind !== expected.target.kind || targetId !== expected.target.id || policyId !== expected.policyId ||
         policyResourceVersion !== expected.policyResourceVersion || attachment.accountId !== accountId ||
-        attachment.target.id !== userId || attachment.policyId !== policyId || attachment.resourceVersion !== 1 ||
+        attachment.target.kind !== target.kind || attachment.target.id !== targetId || attachment.policyId !== policyId || attachment.resourceVersion !== 1 ||
         attachment.createdAt !== completedAt || attachment.updatedAt !== completedAt) throw new Error("INVALID_IAM_RESPONSE");
     return { operation, accountId, actorPrincipalId, requestId, completedAt,
-      target: { kind: "USER", id: userId }, policyId, policyResourceVersion, attachment };
+      target: { kind: target.kind, id: targetId }, policyId, policyResourceVersion, attachment };
   }
   if (operation === "REVOKE" && expected.operation === "REVOKE") {
     const attachmentId = accountIdentifier(wire.attachmentId);
@@ -3385,9 +3388,9 @@ export const httpAccountRepository: AccountRepository = {
     }
     return result;
   },
-  async readUserPolicyAttachmentChange(credential, expectation) {
+  async readPolicyAttachmentChange(credential, expectation) {
     const requestId = accountIdentifier(expectation.requestId);
-    return parseUserPolicyAttachmentChange(await requestJSON<unknown>(
+    return parsePolicyAttachmentChange(await requestJSON<unknown>(
       `/api/iam/v1/policy-attachment-changes/by-request/${encodeURIComponent(requestId)}`,
       { headers: accountHeaders(credential) }
     ), { ...expectation, accountId: accountIdentifier(expectation.accountId), actorPrincipalId: accountIdentifier(expectation.actorPrincipalId), requestId });

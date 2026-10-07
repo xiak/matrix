@@ -6544,5 +6544,22 @@
       "invalid": "包含无效或非网络地址的 CIDR；不接受主机位、zone 或 IPv4-mapped IPv6。",
       "duplicate": "规范化后存在重复 CIDR，请删除重复项。"
     }
+  },
+  "PolicyAttachmentChange": {
+    "unknownTitle": "策略关联结果尚未确认",
+    "unknownHint": "原请求和全部输入已冻结。请查询原请求的完成记录；当前关联目录不能证明该写入成功或失败。",
+    "requestId": "原请求 ID",
+    "checkOriginalRequest": "检查原请求结果",
+    "checking": "正在检查原请求…",
+    "refreshFailed": "IAM 已确认原请求完成，但当前详情暂时无法重新读取。不要创建第二个关联请求。",
+    "retryRead": "重新读取详情",
+    "conflict": "对象版本已变化。请返回选择并基于当前权威状态重新审阅。",
+    "lookup": {
+      "expired": "当前登录已失效。重新登录后仍应使用同一请求 ID 检查结果。",
+      "forbidden": "当前身份不能读取该完成记录；原结果仍保持未知。",
+      "conflict": "完成记录与原请求不一致；客户端不会接受该结果。",
+      "invalid": "完成记录未通过严格契约校验；原结果仍保持未知。",
+      "unavailable": "暂时没有可接受的完成记录；404、服务错误和网络错误都不能证明写入失败。"
+    }
   }
 }

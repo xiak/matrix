@@ -1,4 +1,4 @@
-import type { CapabilityRestriction, PolicyVersionReference } from "./accounts";
+import type { CapabilityRestriction, PolicyVersionReference, RolePolicyAttachment } from "./accounts";
 import type { ServicePrincipalReference } from "./serviceAuthorization";
 
 export type RoleStatus = "ACTIVE" | "DISABLED";
@@ -182,17 +182,6 @@ export type RoleDeletion = {
   resourceVersion: number;
   revokedPolicyAttachments: number;
   deletedAt: string;
-};
-
-export type RolePolicyAttachment = {
-  id: string;
-  accountId: string;
-  target: { kind: "ROLE"; id: string };
-  policyId: string;
-  scope: "TENANT";
-  resourceVersion: number;
-  createdAt: string;
-  updatedAt: string;
 };
 
 export type CreateRolePolicyAttachmentCommand = {

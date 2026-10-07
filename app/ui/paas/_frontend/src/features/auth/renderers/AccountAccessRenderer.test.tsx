@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
-import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPolicyAttachmentChangeExpectation, UserPermissionBoundary } from "../domain/accounts";
+import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact, SecurityStepUp } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/roles";
@@ -2963,6 +2963,7 @@ describe("account access", () => {
     const create = vi.fn(() => new Promise<typeof managedRole>((resolve) => { resolveCreate = resolve; }));
     const roleClient = (operation: RoleAccessClient["create"]): RoleAccessClient => ({
       accountId: account.id,
+      actorPrincipalId: identity.user.id,
       sessionRevision: 1,
       canCreate: true,
       createRestrictionReason: null,
@@ -2979,6 +2980,7 @@ describe("account access", () => {
       setTrustPolicy: vi.fn().mockRejectedValue(new Error("unused role trust")),
       delete: vi.fn().mockRejectedValue(new Error("unused role delete")),
       createPolicyAttachment: vi.fn().mockRejectedValue(new Error("unused role attachment")),
+      inspectPolicyAttachmentChange: vi.fn().mockRejectedValue(new Error("unused policy attachment completion")),
       revokePolicyAttachment: vi.fn().mockRejectedValue(new Error("unused role revocation")),
       listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
       readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
@@ -3222,7 +3224,7 @@ describe("account access", () => {
 
   it("confirms an uncertain direct attachment only from its immutable completion without replaying the write", async () => {
     const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
-    const readUserPolicyAttachmentChange = vi.fn(async (_credential: string, expected: UserPolicyAttachmentChangeExpectation) => {
+    const readPolicyAttachmentChange = vi.fn(async (_credential: string, expected: PolicyAttachmentChangeExpectation) => {
       if (expected.operation !== "CREATE") throw new Error("unexpected operation");
       return {
         operation: "CREATE" as const,
@@ -3230,13 +3232,13 @@ describe("account access", () => {
         actorPrincipalId: expected.actorPrincipalId,
         requestId: expected.requestId,
         completedAt: timestamp,
-        target: { kind: "USER" as const, id: expected.userId },
+        target: expected.target,
         policyId: expected.policyId,
         policyResourceVersion: expected.policyResourceVersion,
-        attachment: attachment(expected.userId, platformPolicy)
+        attachment: attachment(expected.target.id, platformPolicy)
       };
     });
-    const { user } = await openAccess(accounts({ execute, readUserPolicyAttachmentChange }));
+    const { user } = await openAccess(accounts({ execute, readPolicyAttachmentChange }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
@@ -3248,10 +3250,10 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
     expect(await screen.findByText("原策略关系请求已确认")).toBeTruthy();
     expect(screen.getByText(/attachment-child-a-system\.platform-admin/)).toBeTruthy();
-    expect(readUserPolicyAttachmentChange).toHaveBeenCalledWith(credential, {
+    expect(readPolicyAttachmentChange).toHaveBeenCalledWith(credential, {
       operation: "CREATE", accountId: account.id, actorPrincipalId: rootUser.id,
       requestId: expect.stringMatching(/^ui-user-attachment-[0-9a-f]{32}$/),
-      userId: childUser.id, policyId: platformPolicy.id, policyResourceVersion: platformPolicy.resourceVersion
+      target: { kind: "USER", id: childUser.id }, policyId: platformPolicy.id, policyResourceVersion: platformPolicy.resourceVersion
     });
     expect(execute).toHaveBeenCalledTimes(1);
     expect(sessionStorage.length).toBe(0);
@@ -3268,10 +3270,10 @@ describe("account access", () => {
     [0, /IAM 暂时无法返回可验证的完成记录/]
   ])("keeps an uncertain direct attachment locked when completion lookup fails with %s", async (status, message) => {
     const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
-    const readUserPolicyAttachmentChange = vi.fn().mockRejectedValue(status === 0
+    const readPolicyAttachmentChange = vi.fn().mockRejectedValue(status === 0
       ? new Error("network unavailable")
       : new HttpProblem(status, status === 404 ? "IAM_NOT_FOUND" : status === 403 ? "IAM_FORBIDDEN" : "IAM_UNAVAILABLE"));
-    const { user } = await openAccess(accounts({ execute, readUserPolicyAttachmentChange }));
+    const { user } = await openAccess(accounts({ execute, readPolicyAttachmentChange }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
@@ -3284,14 +3286,14 @@ describe("account access", () => {
     expect(within(review).getByRole("button", { name: "原请求重试" })).toBeTruthy();
     expect(within(review).queryByRole("button", { name: "结束原意图并重新读取" })).toBeNull();
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(readUserPolicyAttachmentChange).toHaveBeenCalledTimes(1);
+    expect(readPolicyAttachmentChange).toHaveBeenCalledTimes(1);
     expect(sessionStorage.length).toBe(1);
   });
 
   it("preserves an unknown policy completion across login expiry and never replays it after authentication", async () => {
     const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
-    const readUserPolicyAttachmentChange = vi.fn().mockRejectedValue(new HttpProblem(401, "IAM_SESSION_EXPIRED"));
-    const repository = accounts({ execute, readUserPolicyAttachmentChange });
+    const readPolicyAttachmentChange = vi.fn().mockRejectedValue(new HttpProblem(401, "IAM_SESSION_EXPIRED"));
+    const repository = accounts({ execute, readPolicyAttachmentChange });
     const auth = iam();
     const { user } = await openAccess(repository, auth);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
@@ -3311,13 +3313,13 @@ describe("account access", () => {
     expect(await screen.findByText(/当前登录会话已失效/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "检查原请求结果" })).toBeTruthy();
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(readUserPolicyAttachmentChange).toHaveBeenCalledTimes(1);
+    expect(readPolicyAttachmentChange).toHaveBeenCalledTimes(1);
   });
 
   it("restores only the same actor's non-secret policy completion reminder after reload", async () => {
     const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
-    const readUserPolicyAttachmentChange = vi.fn().mockRejectedValue(new HttpProblem(404, "IAM_NOT_FOUND"));
-    const repository = accounts({ execute, readUserPolicyAttachmentChange });
+    const readPolicyAttachmentChange = vi.fn().mockRejectedValue(new HttpProblem(404, "IAM_NOT_FOUND"));
+    const repository = accounts({ execute, readPolicyAttachmentChange });
     const first = await openAccess(repository);
     await first.user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     await first.user.click(screen.getByRole("combobox", { name: "关联策略" }));
@@ -3562,7 +3564,7 @@ describe("account access", () => {
 
   it("confirms an uncertain direct revocation only from the original immutable completion", async () => {
     const revokePolicyAttachment = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
-    const readUserPolicyAttachmentChange = vi.fn(async (_credential: string, expected: UserPolicyAttachmentChangeExpectation) => {
+    const readPolicyAttachmentChange = vi.fn(async (_credential: string, expected: PolicyAttachmentChangeExpectation) => {
       if (expected.operation !== "REVOKE") throw new Error("unexpected operation");
       return {
         operation: "REVOKE" as const,
@@ -3575,14 +3577,14 @@ describe("account access", () => {
         revocation: { id: expected.attachmentId, resourceVersion: expected.expectedResourceVersion + 1, revokedAt: timestamp }
       };
     });
-    const { user } = await openAccess(accounts({ revokePolicyAttachment, readUserPolicyAttachmentChange }));
+    const { user } = await openAccess(accounts({ revokePolicyAttachment, readPolicyAttachmentChange }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     await user.click(screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }));
     await user.click(screen.getByRole("button", { name: "确认撤销" }));
     await user.click(await screen.findByRole("button", { name: "检查原请求结果" }));
     expect(await screen.findByText("原策略关系请求已确认")).toBeTruthy();
     expect(screen.getByText(/已确认撤销关联 attachment-child-a-system\.paas-viewer/)).toBeTruthy();
-    expect(readUserPolicyAttachmentChange).toHaveBeenCalledWith(credential, {
+    expect(readPolicyAttachmentChange).toHaveBeenCalledWith(credential, {
       operation: "REVOKE", accountId: account.id, actorPrincipalId: rootUser.id,
       requestId: expect.stringMatching(/^ui-user-revocation-[0-9a-f]{32}$/),
       attachmentId: "attachment-child-a-system.paas-viewer", expectedResourceVersion: 1

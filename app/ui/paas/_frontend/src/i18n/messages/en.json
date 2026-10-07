@@ -6523,5 +6523,22 @@
       "invalid": "A CIDR is invalid or is not a network address; host bits, zones, and IPv4-mapped IPv6 are not accepted.",
       "duplicate": "Normalization produced duplicate CIDRs. Remove the duplicate entry."
     }
+  },
+  "PolicyAttachmentChange": {
+    "unknownTitle": "Policy relationship outcome not confirmed",
+    "unknownHint": "The original request and every input are frozen. Inspect that request's completion record; the current relationship directory cannot prove whether the write succeeded or failed.",
+    "requestId": "Original request ID",
+    "checkOriginalRequest": "Check original request",
+    "checking": "Checking original request…",
+    "refreshFailed": "IAM confirmed the original request, but the current detail cannot be read again yet. Do not create a second relationship request.",
+    "retryRead": "Read detail again",
+    "conflict": "The object version changed. Return to selection and review again from the current authoritative state.",
+    "lookup": {
+      "expired": "The current login expired. After signing in again, inspect the same request ID.",
+      "forbidden": "This identity cannot read the completion record; the original outcome remains unknown.",
+      "conflict": "The completion record does not match the original request and was not accepted.",
+      "invalid": "The completion record failed strict contract validation; the original outcome remains unknown.",
+      "unavailable": "No acceptable completion record is available. A 404, service error, or network error does not prove the write failed."
+    }
   }
 }
