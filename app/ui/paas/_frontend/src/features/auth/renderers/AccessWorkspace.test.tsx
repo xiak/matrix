@@ -1082,6 +1082,8 @@ describe("CAM-style access workspace", () => {
     await user.clear(userSearch);
     await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
     const keyDirectory = await screen.findByRole("table", { name: "访问密钥" });
+    expect(within(keyDirectory).getAllByRole("columnheader")).toHaveLength(4);
+    expect(within(keyDirectory).queryByText("密钥资源版本")).toBeNull();
     expect(within(keyDirectory).getByText("已禁用")).toBeTruthy();
     expect(within(keyDirectory).getByRole("columnheader", { name: "安全观测" })).toBeTruthy();
     expect(within(keyDirectory).getByText("账号 + 密钥")).toBeTruthy();
@@ -3055,6 +3057,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("region", { name: "创建时采用的来源范围" })).toBeTruthy();
+    expect(screen.getByText("操作已完成。")).toBeTruthy();
     expect((await extension.read("preview")).keys.find((key) => key.ownerId === "principal-chen")?.networkRestrictions).toEqual({ allowedSourceCidrs: ["198.51.100.0/24"] });
     const secret = (await screen.findByText(/^MOCK_NOT_A_CREDENTIAL_/)).textContent!;
     expect(JSON.stringify(await extension.read("preview"))).not.toContain(secret);
@@ -3249,6 +3252,7 @@ describe("CAM-style access workspace", () => {
     await select(user, "MOCK 返回场景", "提交已生效，但响应丢失");
     await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
     expect(await screen.findByText("UNKNOWN")).toBeTruthy();
+    expect(screen.queryByText("操作已完成。")).toBeNull();
     expect(screen.getByRole("region", { name: "原创建请求冻结的来源范围" })).toBeTruthy();
     expect(screen.queryByText(/^MOCK_NOT_A_CREDENTIAL_/)).toBeNull();
     expect((await extension.read("preview")).pendingKeyCreation).toMatchObject({ networkRestrictions: { allowedSourceCidrs: ["198.51.100.0/24"] } });
@@ -3259,15 +3263,15 @@ describe("CAM-style access workspace", () => {
     expect(await screen.findByText("UNKNOWN")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "返回列表" })).toBeNull();
     await select(user, "原请求查询结果", "暂未找到（保持未知）");
-    await user.click(screen.getByRole("button", { name: "按原 requestId 查询" }));
-    expect(await screen.findByText(/原 requestId 暂未查询到确定结果/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查询原操作结果" }));
+    expect(await screen.findByText(/原操作暂未查询到确定结果/)).toBeTruthy();
     expect((await extension.read("preview")).pendingKeyCreation?.status).toBe("UNKNOWN");
     await select(user, "原请求查询结果", "查询暂不可用（保持未知）");
-    await user.click(screen.getByRole("button", { name: "按原 requestId 查询" }));
-    expect(await screen.findByText(/暂时无法查询原 requestId/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查询原操作结果" }));
+    expect(await screen.findByText(/暂时无法查询原操作/)).toBeTruthy();
     expect((await extension.read("preview")).pendingKeyCreation?.status).toBe("UNKNOWN");
     await select(user, "原请求查询结果", "已找到原创建结果");
-    await user.click(screen.getByRole("button", { name: "按原 requestId 查询" }));
+    await user.click(screen.getByRole("button", { name: "查询原操作结果" }));
     expect(screen.getByText("不可恢复 · 不可重显")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看并处置这把密钥" }));
     expect(screen.getByText(/没有已验证的最近授权事实/)).toBeTruthy();

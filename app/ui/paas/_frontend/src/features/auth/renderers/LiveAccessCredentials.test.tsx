@@ -66,6 +66,7 @@ describe("LiveAccessCredentials", () => {
     expect(screen.queryByRole("button", { name: "管理 alex 的访问密钥" })).toBeNull();
     expect(await screen.findByRole("button", { name: key.id })).toBeTruthy();
     const table = screen.getByRole("table", { name: "访问密钥" });
+    expect(within(table).getAllByRole("columnheader")).toHaveLength(4);
     expect(within(table).getByRole("columnheader", { name: "安全观测" })).toBeTruthy();
     expect(await within(table).findByText("账号 + 密钥")).toBeTruthy();
     expect(within(table).getByText("有历史观测")).toBeTruthy();
@@ -170,6 +171,8 @@ describe("LiveAccessCredentials", () => {
     await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
     const review = screen.getByRole("heading", { name: "核对并创建访问密钥" });
     expect(review).toBeTruthy();
+    expect(screen.queryByText("操作标识")).toBeNull();
+    expect(screen.queryByText("用户资源版本")).toBeNull();
     await user.click(screen.getByRole("button", { name: "确认创建" }));
 
     expect(await screen.findByText("mak1.one-time-secret")).toBeTruthy();
@@ -193,7 +196,9 @@ describe("LiveAccessCredentials", () => {
     await screen.findByRole("button", { name: key.id });
     await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
     await user.click(screen.getByRole("button", { name: "确认创建" }));
-    expect(await screen.findByText("未收到可信结果时不要生成新的 requestId", { exact: false })).toBeTruthy();
+    expect(await screen.findByText("不要重复发起创建", { exact: false })).toBeTruthy();
+    expect(screen.getByText("操作标识")).toBeTruthy();
+    expect(screen.getByText(/^ui-access-key-create-/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "确认创建" }));
     expect(await screen.findByRole("heading", { name: "原创建请求已完成" })).toBeTruthy();
 

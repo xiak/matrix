@@ -19,8 +19,8 @@ import styles from "./AccessCredentials.module.css";
 type KeyFlow =
   | { kind: "create"; ownerId: string; requestId: string; scenario: "success" | "response-lost"; networkRestrictions: AccessKeyNetworkRestrictions }
   | { kind: "issued"; ownerId: string; requestId: string; key: { id: string; secret: string }; networkRestrictions: AccessKeyNetworkRestrictions }
-  | { kind: "uncertain"; ownerId: string; requestId: string; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions }
-  | { kind: "recovered"; ownerId: string; requestId: string; keyId: string; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions }
+  | { kind: "uncertain"; ownerId: string; requestId: string; networkRestrictions: AccessKeyNetworkRestrictions }
+  | { kind: "recovered"; ownerId: string; requestId: string; keyId: string; networkRestrictions: AccessKeyNetworkRestrictions }
   | { kind: "status"; keyId: string; requestId: string; status: AccessKey["status"] }
   | { kind: "delete"; keyId: string; requestId: string };
 
@@ -159,8 +159,6 @@ function InlineFlow({ flow, owner, accountNetwork, keyValue, onChange, onClose, 
         <dl className={styles.reviewFacts}>
           <div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div>
           <div><dt>{t("state")}</dt><dd>{t(owner.enabled ? "enabled" : "disabled")}</dd></div>
-          <div><dt>{t("keyUserRevision")}</dt><dd>v{owner.resourceVersion}</dd></div>
-          <div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div>
         </dl>
         <section aria-labelledby={`${networkId}-title`} className={styles.createNetwork}>
           <div className={styles.createNetworkHeading}><h3 id={`${networkId}-title`}>{t("keyCreateNetworkTitle")}</h3><p>{t("keyCreateNetworkHint")}</p></div>
@@ -191,7 +189,7 @@ function InlineFlow({ flow, owner, accountNetwork, keyValue, onChange, onClose, 
 
       {flow.kind === "uncertain" ? <>
         <Alert status="warning">{t("keyCreateUncertain", { id: flow.requestId })}</Alert>
-        <dl className={styles.reviewFacts}><div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div><div><dt>{t("keyUserRevision")}</dt><dd>v{flow.userResourceVersion}</dd></div><div><dt>{t("keyIntentState")}</dt><dd><Badge status="warning">UNKNOWN</Badge></dd></div></dl>
+        <dl className={styles.reviewFacts}><div><dt>{t("keyOperationReference")}</dt><dd><code>{flow.requestId}</code></dd></div><div><dt>{t("keyIntentState")}</dt><dd><Badge status="warning">UNKNOWN</Badge></dd></div></dl>
         <section className={styles.networkReceipt} aria-label={t("keyCreateNetworkFrozen")}><h3>{t("keyCreateNetworkFrozen")}</h3><AccessKeyNetworkLayers account={{ status: "ready", value: accountNetwork }} keyValue={flow.networkRestrictions} /></section>
         <p className={styles.note}>{t("keyIntentLocked")}</p>
         <FormField id={inspectionId} label={t("keyInspectionScenario")} hint={t("keyInspectionScenarioHint")}>
@@ -206,7 +204,7 @@ function InlineFlow({ flow, owner, accountNetwork, keyValue, onChange, onClose, 
 
       {flow.kind === "recovered" ? <>
         <Alert status="warning">{t("keyRecovered", { id: flow.keyId })}</Alert>
-        <dl className={styles.reviewFacts}><div><dt>{t("keyId")}</dt><dd><code>{flow.keyId}</code></dd></div><div><dt>{t("keySecret")}</dt><dd>{t("keySecretUnavailable")}</dd></div><div><dt>{t("keyUserRevision")}</dt><dd>v{flow.userResourceVersion}</dd></div><div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div></dl>
+        <dl className={styles.reviewFacts}><div><dt>{t("keyId")}</dt><dd><code>{flow.keyId}</code></dd></div><div><dt>{t("keySecret")}</dt><dd>{t("keySecretUnavailable")}</dd></div><div><dt>{t("keyOperationReference")}</dt><dd><code>{flow.requestId}</code></dd></div></dl>
         <section className={styles.networkReceipt} aria-label={t("keyCreateNetworkResult")}><h3>{t("keyCreateNetworkResult")}</h3><AccessKeyNetworkLayers account={{ status: "ready", value: accountNetwork }} keyValue={flow.networkRestrictions} /></section>
         <p className={styles.note}>{t("keyRecoveredNext")}</p>
         <div className={styles.actions}><Button onClick={() => onOpenKey(flow.keyId)}>{t("keyInspectAndReplace")}</Button></div>
@@ -214,14 +212,14 @@ function InlineFlow({ flow, owner, accountNetwork, keyValue, onChange, onClose, 
 
       {flow.kind === "status" && keyValue ? <>
         <Alert status={flow.status === "DISABLED" ? "warning" : "info"}>{t(flow.status === "DISABLED" ? "keyDisableImpact" : "keyEnableImpact")}</Alert>
-        <dl className={styles.reviewFacts}><div><dt>{t("keyId")}</dt><dd><code>{keyValue.id}</code></dd></div><div><dt>{t("state")}</dt><dd>{t(keyValue.status === "ENABLED" ? "enabled" : "disabled")} → {t(flow.status === "ENABLED" ? "enabled" : "disabled")}</dd></div><div><dt>{t("keyRevision")}</dt><dd>v{keyValue.resourceVersion}</dd></div><div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div></dl>
+        <dl className={styles.reviewFacts}><div><dt>{t("keyId")}</dt><dd><code>{keyValue.id}</code></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("state")}</dt><dd>{t(keyValue.status === "ENABLED" ? "enabled" : "disabled")} → {t(flow.status === "ENABLED" ? "enabled" : "disabled")}</dd></div></dl>
         {flow.status === "ENABLED" && owner.state !== "active" ? <Alert status="warning">{t(owner.state === "passwordChangeRequired" ? "keyOwnerPasswordChangeRequired" : "keyOwnerDisabled")}</Alert> : null}
         <div className={styles.actions}><Button disabled={access.busy || (flow.status === "ENABLED" && owner.state !== "active")} onClick={() => void applyStatus()}>{t(flow.status === "ENABLED" ? "enable" : "disable")}</Button><Button disabled={access.busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
       </> : null}
 
       {flow.kind === "delete" && keyValue ? <>
         <Alert status="danger">{t("keyDeleteImpact")}</Alert>
-        <dl className={styles.reviewFacts}><div><dt>{t("keyId")}</dt><dd><code>{keyValue.id}</code></dd></div><div><dt>{t("state")}</dt><dd>{t("disabled")}</dd></div><div><dt>{t("keyRevision")}</dt><dd>v{keyValue.resourceVersion}</dd></div></dl>
+        <dl className={styles.reviewFacts}><div><dt>{t("keyId")}</dt><dd><code>{keyValue.id}</code></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("state")}</dt><dd>{t("disabled")}</dd></div></dl>
         <Checkbox checked={deleteConfirmed} onChange={(event) => setDeleteConfirmed(event.target.checked)}>{t("keyDeleteAcknowledge")}</Checkbox>
         <div className={styles.actions}><Button disabled={access.busy || !deleteConfirmed} onClick={() => void remove()} variant="danger">{t("deleteConfirm")}</Button><Button disabled={access.busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
       </> : null}
@@ -370,8 +368,8 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
   const ownerKeys = owner ? workspace.keys.filter((key) => key.ownerId === owner.id) : [];
   const selected = ownerKeys.find((key) => key.id === selectedId) ?? null;
   const pendingFlow: KeyFlow | null = !selected && pending ? pending.status === "UNKNOWN"
-    ? { kind: "uncertain", ownerId: pending.ownerId, requestId: pending.requestId, userResourceVersion: pending.userResourceVersion, networkRestrictions: pending.networkRestrictions }
-    : { kind: "recovered", ownerId: pending.ownerId, requestId: pending.requestId, keyId: pending.keyId, userResourceVersion: pending.userResourceVersion, networkRestrictions: pending.networkRestrictions }
+    ? { kind: "uncertain", ownerId: pending.ownerId, requestId: pending.requestId, networkRestrictions: pending.networkRestrictions }
+    : { kind: "recovered", ownerId: pending.ownerId, requestId: pending.requestId, keyId: pending.keyId, networkRestrictions: pending.networkRestrictions }
     : null;
   const activeFlow = flow ?? pendingFlow;
   const flowKey = activeFlow && (activeFlow.kind === "status" || activeFlow.kind === "delete") ? ownerKeys.find((key) => key.id === activeFlow.keyId) ?? null : null;
@@ -410,7 +408,7 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
     secondary: [{ id: "network", label: network("configureKey"), onSelect: () => setEditingNetwork(true) }, { id: "delete", label: t("delete"), danger: true, disabled: selected.status === "ENABLED", disabledReason: selected.status === "ENABLED" ? t("errors.disableFirst") : undefined, onSelect: () => setFlow({ kind: "delete", keyId: selected.id, requestId: requestToken("ui-access-key-delete-") }) }]
   }}>
     <Card><Card.Body className={styles.detailBody}>
-      <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.status === "ENABLED" ? "success" : "neutral"}>{t(selected.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div><div><dt>{t("keyRevision")}</dt><dd>v{selected.resourceVersion}</dd></div></dl>
+      <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.status === "ENABLED" ? "success" : "neutral"}>{t(selected.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
     </Card.Body></Card>
     <AccessKeyNetworkDetail account={{ status: "ready", value: workspace.settings.accessKeyNetwork }} keyValue={selected} />
     <AccessKeyUsagePreview usage={selected.usage} />
@@ -424,7 +422,7 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
     {activeFlow ? <InlineFlow flow={activeFlow} owner={owner} accountNetwork={workspace.settings.accessKeyNetwork} keyValue={flowKey} onChange={setFlow} onClose={closeFlow} onOpenKey={openKey} /> : <>
       <Card>
         <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={ownerKeys.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: ownerKeys.length })}</Badge></Card.Header>
-        <Card.Body className={styles.tableBody}>{ownerKeys.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keyRevision")}</th><th scope="col">{network("securitySignals")}</th></tr></thead><tbody>{ownerKeys.map((key) => <tr key={key.id}><td data-label={t("keyId")}><button className={styles.keyLink} onClick={() => setSelectedId(key.id)}>{key.id}</button></td><td data-label={t("state")}><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={key.createdAt} /></td><td data-label={t("keyRevision")}>v{key.resourceVersion}</td><td data-label={network("securitySignals")}><AccessKeySecuritySignals account={{ status: "ready", value: workspace.settings.accessKeyNetwork }} keyValue={key} usage={key.usage} /></td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body>
+        <Card.Body className={styles.tableBody}>{ownerKeys.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{network("securitySignals")}</th></tr></thead><tbody>{ownerKeys.map((key) => <tr key={key.id}><td data-label={t("keyId")}><button className={styles.keyLink} onClick={() => setSelectedId(key.id)}>{key.id}</button></td><td data-label={t("state")}><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={key.createdAt} /></td><td data-label={network("securitySignals")}><AccessKeySecuritySignals account={{ status: "ready", value: workspace.settings.accessKeyNetwork }} keyValue={key} usage={key.usage} /></td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body>
       </Card>
       <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
       <RotationGuide />

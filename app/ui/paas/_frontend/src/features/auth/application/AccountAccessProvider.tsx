@@ -47,6 +47,21 @@ import type { SecurityStepUp } from "../domain/personalSecurity";
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
 
+function workspaceCommandHasConfirmedCompletion(command: AccessWorkspaceCommand): boolean {
+  switch (command.kind) {
+    case "create-key":
+    case "save-account-rule":
+      return command.responseMode === "success";
+    case "verify-personal-notification-address":
+    case "begin-personal-notification-replacement":
+    case "confirm-personal-notification-replacement":
+    case "inspect-personal-notification-replacement":
+      return false;
+    default:
+      return true;
+  }
+}
+
 export type UserBoundarySnapshot = {
   user: AccountUserScene;
   boundary: UserPermissionBoundary;
@@ -1901,13 +1916,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         if (result.workspace.accountId !== tenantId || result.workspace.mode !== "preview") throw new Error("INVALID_IAM_TENANT");
         setWorkspace(result.workspace);
         if (command.kind === "create-subuser" || command.kind === "delete-user" || command.kind === "update-user" || command.kind === "import-enterprise-members") { setLoading(true); setRevision((current) => current + 1); }
-        if (!(command.kind === "save-account-rule" && command.responseMode === "response-lost") &&
-            command.kind !== "verify-personal-notification-address" &&
-            command.kind !== "begin-personal-notification-replacement" &&
-            command.kind !== "confirm-personal-notification-replacement" &&
-            command.kind !== "inspect-personal-notification-replacement") {
-          setSuccess("completed");
-        }
+        if (workspaceCommandHasConfirmedCompletion(command)) setSuccess("completed");
         return { issuedKey: result.issuedKey, recoveryCodes: result.recoveryCodes };
       } catch (failure) {
         const code = failure instanceof AccessWorkspaceError ? failure.code : accountError(failure);
