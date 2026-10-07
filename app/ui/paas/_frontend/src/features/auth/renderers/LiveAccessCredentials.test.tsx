@@ -122,7 +122,8 @@ describe("LiveAccessCredentials", () => {
     expect(screen.getByText("拒绝")).toBeTruthy();
     expect(screen.getByText(/最近一次拒绝也不证明密钥已禁用/)).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "配置来源网络" }));
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(within(screen.getByRole("menu", { name: "更多操作" })).getByRole("menuitem", { name: "配置来源网络" }));
     const field = screen.getByRole("textbox", { name: "允许的来源 CIDR" });
     await user.clear(field);
     await user.type(field, "203.0.113.0/24");
@@ -131,6 +132,28 @@ describe("LiveAccessCredentials", () => {
       accessKeyResourceVersion: 1, networkRestrictions: { allowedSourceCidrs: ["203.0.113.0/24"] }
     })));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("uses the shared detail title and stable page actions instead of repeating key controls in the body", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><LiveAccessCredentials client={client()} scene={scene} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "管理 alex 的访问密钥" }));
+    await user.click(await screen.findByRole("button", { name: key.id }));
+
+    expect(await screen.findByRole("heading", { level: 1, name: key.id })).toBeTruthy();
+    expect(screen.queryByRole("heading", { level: 2, name: key.id })).toBeNull();
+    expect(screen.getByRole("button", { name: "禁用" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    const menu = within(screen.getByRole("menu", { name: "更多操作" }));
+    expect(menu.getByRole("menuitem", { name: "配置来源网络" }).getAttribute("aria-disabled")).toBeNull();
+    const remove = menu.getByRole("menuitem", { name: "删除" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(remove.getAttribute("aria-describedby")!)?.textContent).toBe("请先禁用密钥，再执行删除。");
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect(screen.getByRole("heading", { level: 1, name: "alex · 访问密钥" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: key.id })).toBeTruthy();
   });
 
   it("loads only the selected user's directory and keeps fixed page content visible", async () => {

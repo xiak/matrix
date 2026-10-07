@@ -14,7 +14,7 @@ import { AccessKeyOwnerDirectory } from "./AccessKeyOwnerDirectory";
 import { accessKeyNetworkRestrictionsEqual, parseAccessKeyNetworkDraft, type AccessKeyNetworkDraftIssue } from "../domain/accessKeyNetwork";
 import { AccessKeyNetworkDetail, AccessKeyNetworkDraftField, AccessKeySecuritySignals, AccessKeyUsagePreview, type AccessKeyAccountNetworkState } from "./AccessKeyNetworkPreview";
 import { ProgrammaticAccessGuide, RotationGuide } from "./AccessCredentials";
-import { WorkspaceTime } from "./AccessWorkspaceUi";
+import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccessCredentials.module.css";
 
 type LiveKeyError = "forbidden" | "routeUnavailable" | "conflict" | "unavailable";
@@ -255,6 +255,51 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
   };
   const createCapability = directory ? capability(directory, "iam.access-key.create") : null;
 
+  if (!flow && selected) {
+    const statusCapability = capability(selected, "iam.access-key.set-status");
+    const networkCapability = capability(selected, "iam.access-key.set-network-restrictions");
+    const deleteCapability = capability(selected, "iam.access-key.delete");
+    const restrictionReason = (value: typeof statusCapability) => value?.restrictionReason
+      ? restrictions(value.restrictionReason) : undefined;
+    return <section className={styles.root}>
+      <WorkspaceDetail embedded={Boolean(scopedOwner)} title={selected.key.id} onBack={() => setSelected(null)} actions={{
+        primary: {
+          id: "status",
+          label: t(selected.key.status === "ENABLED" ? "disable" : "enable"),
+          variant: "secondary",
+          disabled: !statusCapability?.available,
+          disabledReason: !statusCapability?.available ? restrictionReason(statusCapability) : undefined,
+          onSelect: () => setFlow({ kind: "status", access: selected, status: selected.key.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") })
+        },
+        secondary: [{
+          id: "network",
+          label: network("configureKey"),
+          disabled: !networkCapability?.available,
+          disabledReason: !networkCapability?.available ? restrictionReason(networkCapability) : undefined,
+          onSelect: () => setFlow({ kind: "network", access: selected, requestId: requestToken("ui-access-key-network-") })
+        }, {
+          id: "delete",
+          label: t("delete"),
+          danger: true,
+          disabled: selected.key.status !== "DISABLED" || !deleteCapability?.available,
+          disabledReason: selected.key.status !== "DISABLED" ? t("errors.disableFirst")
+            : !deleteCapability?.available ? restrictionReason(deleteCapability) : undefined,
+          onSelect: () => setFlow({ kind: "delete", access: selected, requestId: requestToken("ui-access-key-delete-") })
+        }]
+      }}>
+        {!scopedOwner ? <Alert status="info">{t("keyLiveProductBoundary")}</Alert> : null}
+        {error ? <Alert status="danger">{t(`keyLiveErrors.${error}`)} <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button></Alert> : null}
+        <Card><Card.Body className={styles.detailBody}>
+          <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.key.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.key.status === "ENABLED" ? "success" : "neutral"}>{t(selected.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.key.createdAt} /></dd></div></dl>
+        </Card.Body></Card>
+        <AccessKeyNetworkDetail account={accountNetwork} keyValue={selected.key} source="LIVE" />
+        <AccessKeyUsagePreview source="LIVE" usage={selected.usage} />
+        <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
+        <RotationGuide />
+      </WorkspaceDetail>
+    </section>;
+  }
+
   return <section className={styles.root}>
     {scopedOwner ? <div className={styles.embeddedHeading}><h3>{t("keys")}</h3><Button disabled={Boolean(flow || createIntent) || !createCapability?.available} onClick={startCreate} size="small">{t("createKey")}</Button></div>
       : <ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`live-access-keys:${owner.id}`} back={{ label: t("back"), onClick: closeOwner }} actions={!flow && directory ? <ContentPage.Commands label={t("keys")} primary={{ id: "create-key", label: t("createKey"), disabled: Boolean(createIntent) || !createCapability?.available, disabledReason: createCapability?.restrictionReason ? restrictions(createCapability.restrictionReason) : undefined, onSelect: startCreate }} /> : undefined} focus />}
@@ -273,16 +318,6 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
       retryingOriginal={flow.kind === "create" && createIntent?.phase === "unknown" && createIntent.requestId === flow.requestId}
       onChanged={() => load(owner.id, false)} onClose={() => setFlow(null)}
       onInspectRecovered={(keyId) => { setFlow(null); const found = directory.items.find((item) => item.key.id === keyId); if (found) void openKey(found); else void load(owner.id); }} /> : null}
-    {!flow && selected ? <>
-      <Card><Card.Header><div><Typography.Title as="h2" level={3}>{selected.key.id}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={selected.key.status === "ENABLED" ? "success" : "neutral"}>{t(selected.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></Card.Header><Card.Body className={styles.detailBody}>
-        <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.key.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.key.createdAt} /></dd></div></dl>
-        <div className={styles.actions}><Button onClick={() => setSelected(null)} variant="ghost">{t("back")}</Button><Button disabled={!capability(selected, "iam.access-key.set-network-restrictions")?.available} onClick={() => setFlow({ kind: "network", access: selected, requestId: requestToken("ui-access-key-network-") })} variant="secondary">{network("configureKey")}</Button><Button disabled={!capability(selected, "iam.access-key.set-status")?.available} onClick={() => setFlow({ kind: "status", access: selected, status: selected.key.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") })} variant="secondary">{t(selected.key.status === "ENABLED" ? "disable" : "enable")}</Button><Button disabled={selected.key.status !== "DISABLED" || !capability(selected, "iam.access-key.delete")?.available} onClick={() => setFlow({ kind: "delete", access: selected, requestId: requestToken("ui-access-key-delete-") })} variant="danger">{t("delete")}</Button></div>
-      </Card.Body></Card>
-      <AccessKeyNetworkDetail account={accountNetwork} keyValue={selected.key} source="LIVE" />
-      <AccessKeyUsagePreview source="LIVE" usage={selected.usage} />
-      <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
-      <RotationGuide />
-    </> : null}
     {!flow && !selected && directory ? <>
       <Card><Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={directory.items.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: directory.items.length })}</Badge></Card.Header><Card.Body className={styles.tableBody}>{directory.items.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keySecuritySignals")}</th></tr></thead><tbody>{directory.items.map((item) => <tr key={item.key.id}><td data-label={t("keyId")}><button className={styles.keyLink} onClick={() => void openKey(item)}>{item.key.id}</button></td><td data-label={t("state")}><Badge status={item.key.status === "ENABLED" ? "success" : "neutral"}>{t(item.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={item.key.createdAt} /></td><td data-label={t("keySecuritySignals")}><AccessKeySecuritySignals account={accountNetwork} keyValue={item.key} usage={item.usage} /></td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body></Card>
       <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
