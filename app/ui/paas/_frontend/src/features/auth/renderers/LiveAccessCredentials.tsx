@@ -25,6 +25,17 @@ type LiveKeyFlow =
   | { kind: "status"; access: AccessKeyAccess; status: AccessKeyStatus; requestId: string }
   | { kind: "network"; access: AccessKeyAccess; requestId: string }
   | { kind: "delete"; access: AccessKeyAccess; requestId: string };
+type AccessKeyDirectoryState =
+  | { status: "loading" }
+  | { status: "ready"; directory: AccessKeyDirectory }
+  | { status: "error"; error: LiveKeyError };
+type OwnedAccessKeyDirectory = { client: AccessKeyClient; userId: string; state: AccessKeyDirectoryState };
+type OwnedAccessKeySelection = { client: AccessKeyClient; userId: string; access: AccessKeyAccess };
+type OwnedLiveKeyFlow = { client: AccessKeyClient; userId: string; flow: LiveKeyFlow };
+type OwnedLiveKeyError = { client: AccessKeyClient; userId: string; error: LiveKeyError };
+type AccessKeyIntentBinding = { client: AccessKeyClient; observed: AccessKeyCreateIntent | null; requestId: string | null };
+
+const loadingAccessKeyDirectory: AccessKeyDirectoryState = { status: "loading" };
 
 function keyError(error: unknown): LiveKeyError {
   if (error instanceof HttpProblem) {
@@ -54,6 +65,7 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
   const restrictions = useTranslations("AccountAccess.restrictions");
   const networkFieldId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
+  const mounted = useRef(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<LiveKeyError | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -62,6 +74,10 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
   const [networkDraft, setNetworkDraft] = useState(() => initialNetwork.allowedSourceCidrs.join("\n"));
   const [networkIssue, setNetworkIssue] = useState<AccessKeyNetworkDraftIssue | null>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [flow.kind]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const createCapability = capability(directory, "iam.access-key.create");
   const actionCapability = flow.kind === "status" ? capability(flow.access, "iam.access-key.set-status")
@@ -81,6 +97,7 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
     try {
       if (flow.kind === "create") {
         const result = await client.create(owner.id, { userResourceVersion: flow.userResourceVersion, networkRestrictions: parsedNetwork && parsedNetwork.ok ? parsedNetwork.restrictions : flow.networkRestrictions, requestId: flow.requestId });
+        if (!mounted.current) return;
         if (result.outcome === "APPLIED") onCloseWith({ kind: "issued", keyId: result.key.id, secret: result.secret, requestId: flow.requestId });
         else onCloseWith({ kind: "replayed", keyId: result.key.id });
         void onChanged();
@@ -93,10 +110,11 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
       } else if (flow.kind === "delete") {
         await client.delete(owner.id, flow.access.key.id, { accessKeyResourceVersion: flow.access.key.resourceVersion, requestId: flow.requestId });
       }
+      if (!mounted.current) return;
       await onChanged();
-      onClose();
-    } catch (failure) { setError(keyError(failure)); }
-    finally { setBusy(false); }
+      if (mounted.current) onClose();
+    } catch (failure) { if (mounted.current) setError(keyError(failure)); }
+    finally { if (mounted.current) setBusy(false); }
   };
   const [replacement, setReplacement] = useState<LiveKeyFlow | null>(null);
   const onCloseWith = (next: LiveKeyFlow) => setReplacement(next);
@@ -126,7 +144,7 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
         <Alert status="warning">{t("keyLiveSecretWarning")}</Alert>
         <div className={styles.secretGrid}><div><span>{t("keyId")}</span><AccountIdentifier label={t("keyId")} value={active.keyId} /></div><div><span>{t("keySecret")}</span><AccountIdentifier label={t("keySecret")} value={active.secret} /></div></div>
         <Checkbox checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)}>{t("keyLiveAcknowledge")}</Checkbox>
-        <div className={styles.actions}><Button disabled={!acknowledged} onClick={() => { client.acknowledgeIssued(active.requestId, active.keyId); onClose(); }}>{t("done")}</Button></div>
+        <div className={styles.actions}><Button disabled={!acknowledged} onClick={() => { if (client.acknowledgeIssued(active.requestId, active.keyId)) onClose(); }}>{t("done")}</Button></div>
       </> : null}
       {active.kind === "replayed" ? <>
         <Alert status="warning">{t("keyLiveReplay", { id: active.keyId })}</Alert>
@@ -171,18 +189,47 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
   const network = useTranslations("AccessKeyNetworkPreview");
   const restrictions = useTranslations("AccountAccess.restrictions");
   const [ownerId, setOwnerId] = useState<string | null>(scopedOwner?.id ?? null);
-  const [directory, setDirectory] = useState<AccessKeyDirectory | null>(null);
-  const [selected, setSelected] = useState<AccessKeyAccess | null>(null);
-  const [flow, setFlow] = useState<LiveKeyFlow | null>(null);
-  const [loading, setLoading] = useState(Boolean(scopedOwner));
-  const [error, setError] = useState<LiveKeyError | null>(null);
+  const owner = scopedOwner ?? scene.users.find((user) => user.id === ownerId) ?? null;
+  const activeOwnerId = owner?.id ?? null;
+  const [directoryView, setDirectoryView] = useState<OwnedAccessKeyDirectory | null>(() => scopedOwner
+    ? { client, userId: scopedOwner.id, state: loadingAccessKeyDirectory } : null);
+  const directoryState = activeOwnerId && directoryView?.client === client && directoryView.userId === activeOwnerId
+    ? directoryView.state : activeOwnerId ? loadingAccessKeyDirectory : null;
+  const directory = directoryState?.status === "ready" ? directoryState.directory : null;
+  const loading = directoryState?.status === "loading";
+  const directoryError = directoryState?.status === "error" ? directoryState.error : null;
+  const [selection, setSelection] = useState<OwnedAccessKeySelection | null>(null);
+  const selected = activeOwnerId && selection?.client === client && selection.userId === activeOwnerId ? selection.access : null;
+  const [flowView, setFlowView] = useState<OwnedLiveKeyFlow | null>(null);
+  const flow = activeOwnerId && flowView?.client === client && flowView.userId === activeOwnerId ? flowView.flow : null;
+  const [interactionErrorView, setInteractionErrorView] = useState<OwnedLiveKeyError | null>(null);
+  const interactionError = activeOwnerId && interactionErrorView?.client === client && interactionErrorView.userId === activeOwnerId
+    ? interactionErrorView.error : null;
+  const error = interactionError ?? directoryError;
+  const setFlow = (next: LiveKeyFlow | null) => {
+    if (next && activeOwnerId) {
+      setFlowView({ client, userId: activeOwnerId, flow: next });
+      return;
+    }
+    setFlowView((current) => current?.client === client && current.userId === activeOwnerId ? null : current);
+  };
+  const [storedIntentBinding, setStoredIntentBinding] = useState<AccessKeyIntentBinding>(() => ({ client, observed: createIntent, requestId: createIntent?.requestId ?? null }));
+  let intentBinding = storedIntentBinding;
+  if (storedIntentBinding.observed !== createIntent) {
+    intentBinding = {
+      client: createIntent && storedIntentBinding.requestId === createIntent.requestId ? storedIntentBinding.client : client,
+      observed: createIntent,
+      requestId: createIntent?.requestId ?? null
+    };
+    setStoredIntentBinding(intentBinding);
+  }
+  const currentCreateIntent = createIntent && intentBinding.client === client && intentBinding.requestId === createIntent.requestId ? createIntent : null;
   const [accountNetworkView, setAccountNetworkView] = useState<{
     client: AccountSecuritySettingsClient | null;
     state: AccessKeyAccountNetworkState;
   }>({ client: accountSecuritySettings, state: accountSecuritySettings ? { status: "loading" } : { status: "unavailable" } });
-  const requestRevision = useRef(0);
-  const scopedOwnerId = scopedOwner?.id ?? null;
-  const owner = scopedOwner ?? scene.users.find((user) => user.id === ownerId) ?? null;
+  const requestRevisions = useRef(new WeakMap<AccessKeyClient, Map<string, number>>());
+  const detailRequestRevisions = useRef(new WeakMap<AccessKeyClient, Map<string, number>>());
   const accountNetwork = accountNetworkView.client === accountSecuritySettings
     ? accountNetworkView.state : accountSecuritySettings ? { status: "loading" as const } : { status: "unavailable" as const };
 
@@ -197,43 +244,55 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
   }, [accountSecuritySettings]);
 
   const load = useCallback(async (userId: string, foreground = true) => {
-    const request = ++requestRevision.current;
-    if (foreground) setLoading(true);
-    setError(null);
+    const revisions = requestRevisions.current;
+    const clientRevisions = revisions.get(client) ?? new Map<string, number>();
+    revisions.set(client, clientRevisions);
+    const request = (clientRevisions.get(userId) ?? 0) + 1;
+    clientRevisions.set(userId, request);
+    if (foreground) {
+      setDirectoryView({ client, userId, state: loadingAccessKeyDirectory });
+      setSelection((current) => current?.client === client && current.userId === userId ? current : null);
+      setFlowView((current) => current?.client === client && current.userId === userId ? current : null);
+    }
+    setInteractionErrorView((current) => current?.client === client && current.userId === userId ? null : current);
     try {
       const next = await client.list(userId);
-      if (request !== requestRevision.current) return;
-      setDirectory(next);
-      setSelected((current) => current ? next.items.find((item) => item.key.id === current.key.id) ?? null : null);
+      if (clientRevisions.get(userId) !== request) return;
+      setDirectoryView((current) => current?.client === client && current.userId === userId
+        ? { client, userId, state: { status: "ready", directory: next } } : current);
+      setSelection((current) => {
+        if (current?.client !== client || current.userId !== userId) return current;
+        const access = next.items.find((item) => item.key.id === current.access.key.id);
+        return access ? { client, userId, access } : null;
+      });
     } catch (failure) {
-      if (request === requestRevision.current) { setDirectory(null); setSelected(null); setError(keyError(failure)); }
-    } finally { if (request === requestRevision.current) setLoading(false); }
+      if (clientRevisions.get(userId) === request) {
+        setDirectoryView((current) => current?.client === client && current.userId === userId
+          ? { client, userId, state: { status: "error", error: keyError(failure) } } : current);
+        setSelection((current) => current?.client === client && current.userId === userId ? null : current);
+      }
+    }
   }, [client]);
 
   useEffect(() => {
-    if (!scopedOwnerId) return;
-    const request = ++requestRevision.current;
-    void client.list(scopedOwnerId).then(
-      (next) => { if (request === requestRevision.current) { setDirectory(next); setLoading(false); } },
-      (failure) => { if (request === requestRevision.current) { setError(keyError(failure)); setLoading(false); } }
-    );
-    return () => { requestRevision.current += 1; };
-  }, [client, scopedOwnerId]);
+    if (!activeOwnerId) return;
+    void Promise.resolve().then(() => load(activeOwnerId));
+  }, [activeOwnerId, load]);
 
   const chooseOwner = (userId: string) => {
-    requestRevision.current += 1;
-    setDirectory(null); setSelected(null); setFlow(null); setError(null); setLoading(true); setOwnerId(userId);
-    void load(userId);
+    setDirectoryView(null); setSelection(null); setFlowView(null); setInteractionErrorView(null); setOwnerId(userId);
   };
   const closeOwner = () => {
-    requestRevision.current += 1;
-    setOwnerId(null); setDirectory(null); setSelected(null); setFlow(null); setError(null); setLoading(false);
+    setOwnerId(null); setDirectoryView(null); setSelection(null); setFlowView(null); setInteractionErrorView(null);
   };
 
   if (!owner) return <section className={styles.root}>
     <ContentPage.Heading title={t("keys")} scrollKey="live-access-key-user-directory" />
     <Alert status="info"><KeyRound aria-hidden="true" />{t("keyBoundary")}</Alert>
-    {createIntent ? <Alert status="warning">{t("keyLivePendingOwner", { id: createIntent.userId })} {scene.users.some((user) => user.id === createIntent.userId) ? <Button onClick={() => chooseOwner(createIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
+    {createIntent ? <Alert status="warning">{currentCreateIntent
+      ? t("keyLivePendingOwner", { id: currentCreateIntent.userId })
+      : t("keyClientChangedIntent", { id: createIntent.requestId })} {currentCreateIntent && scene.users.some((user) => user.id === currentCreateIntent.userId)
+        ? <Button onClick={() => chooseOwner(currentCreateIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
     <AccessKeyOwnerDirectory scene={scene} busy={userDirectory?.busy} loading={userDirectory?.loading} onOpen={chooseOwner} onReadPage={userDirectory?.readPage} />
     <RotationGuide />
   </section>;
@@ -243,15 +302,27 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
     if (directory) setFlow({ kind: "create", requestId: requestToken("ui-access-key-create-"), userResourceVersion: directory.userResourceVersion, networkRestrictions: { allowedSourceCidrs: [] } });
   };
   const resumeCreate = () => {
-    if (!createIntent || createIntent.userId !== owner.id) return;
-    setFlow(createIntent.phase === "unknown"
-      ? { kind: "create", requestId: createIntent.requestId, userResourceVersion: createIntent.userResourceVersion, networkRestrictions: createIntent.networkRestrictions }
-      : { kind: "replayed", keyId: createIntent.keyId });
+    if (!currentCreateIntent || currentCreateIntent.userId !== owner.id) return;
+    setFlow(currentCreateIntent.phase === "unknown"
+      ? { kind: "create", requestId: currentCreateIntent.requestId, userResourceVersion: currentCreateIntent.userResourceVersion, networkRestrictions: currentCreateIntent.networkRestrictions }
+      : { kind: "replayed", keyId: currentCreateIntent.keyId });
   };
   const openKey = async (access: AccessKeyAccess) => {
-    setSelected(access); setFlow(null); setError(null);
-    try { setSelected(await client.read(owner.id, access.key.id)); }
-    catch (failure) { setError(keyError(failure)); }
+    const userId = owner.id;
+    const revisions = detailRequestRevisions.current;
+    const clientRevisions = revisions.get(client) ?? new Map<string, number>();
+    revisions.set(client, clientRevisions);
+    const request = (clientRevisions.get(userId) ?? 0) + 1;
+    clientRevisions.set(userId, request);
+    setSelection({ client, userId, access }); setFlow(null); setInteractionErrorView(null);
+    try {
+      const next = await client.read(userId, access.key.id);
+      if (clientRevisions.get(userId) === request) setSelection((current) => current?.client === client && current.userId === userId
+        ? { client, userId, access: next } : current);
+    } catch (failure) {
+      if (clientRevisions.get(userId) === request) setInteractionErrorView((current) => current && (current.client !== client || current.userId !== userId)
+        ? current : { client, userId, error: keyError(failure) });
+    }
   };
   const createCapability = directory ? capability(directory, "iam.access-key.create") : null;
 
@@ -262,7 +333,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
     const restrictionReason = (value: typeof statusCapability) => value?.restrictionReason
       ? restrictions(value.restrictionReason) : undefined;
     return <section className={styles.root}>
-      <WorkspaceDetail embedded={Boolean(scopedOwner)} title={selected.key.id} onBack={() => setSelected(null)} actions={{
+      <WorkspaceDetail embedded={Boolean(scopedOwner)} title={selected.key.id} onBack={() => setSelection(null)} actions={{
         primary: {
           id: "status",
           label: t(selected.key.status === "ENABLED" ? "disable" : "enable"),
@@ -304,18 +375,22 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
     {scopedOwner ? <div className={styles.embeddedHeading}><h3>{t("keys")}</h3><Button disabled={Boolean(flow || createIntent) || !createCapability?.available} onClick={startCreate} size="small">{t("createKey")}</Button></div>
       : <ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`live-access-keys:${owner.id}`} back={{ label: t("back"), onClick: closeOwner }} actions={!flow && directory ? <ContentPage.Commands label={t("keys")} primary={{ id: "create-key", label: t("createKey"), disabled: Boolean(createIntent) || !createCapability?.available, disabledReason: createCapability?.restrictionReason ? restrictions(createCapability.restrictionReason) : undefined, onSelect: startCreate }} /> : undefined} focus />}
     {!scopedOwner ? <Alert status="info">{t("keyLiveProductBoundary")}</Alert> : null}
-    {createIntent && !flow ? <Alert status="warning">{createIntent.userId === owner.id
-      ? createIntent.phase === "unknown" ? t("keyCreateUncertain", { id: createIntent.requestId }) : t("keyRecovered", { id: createIntent.keyId })
-      : t("keyLivePendingOwner", { id: createIntent.userId })} {createIntent.userId === owner.id
-        ? <Button disabled={Boolean(flow) || createIntent.phase === "unknown" && !createCapability?.available} onClick={resumeCreate} size="small" variant="ghost">{t("keyLiveResume")}</Button>
-        : !scopedOwner && scene.users.some((user) => user.id === createIntent.userId) ? <Button onClick={() => chooseOwner(createIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
+    {createIntent && !flow ? <Alert status="warning">{currentCreateIntent
+      ? currentCreateIntent.userId === owner.id
+        ? currentCreateIntent.phase === "unknown" ? t("keyCreateUncertain", { id: currentCreateIntent.requestId }) : t("keyRecovered", { id: currentCreateIntent.keyId })
+        : t("keyLivePendingOwner", { id: currentCreateIntent.userId })
+      : t("keyClientChangedIntent", { id: createIntent.requestId })} {currentCreateIntent
+        ? currentCreateIntent.userId === owner.id
+          ? <Button disabled={Boolean(flow) || currentCreateIntent.phase === "unknown" && !createCapability?.available} onClick={resumeCreate} size="small" variant="ghost">{t("keyLiveResume")}</Button>
+          : !scopedOwner && scene.users.some((user) => user.id === currentCreateIntent.userId) ? <Button onClick={() => chooseOwner(currentCreateIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null
+        : null}</Alert> : null}
     {error ? <Alert status="danger">{t(`keyLiveErrors.${error}`)} <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button></Alert> : null}
     {loading && !directory ? <Card>
       <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div></Card.Header>
       <TableSkeleton header={false} label={t("keyLiveLoading")} labelVisible={false} rows={2} />
     </Card> : null}
     {flow && directory ? <LiveKeyWorkflow flow={flow} owner={owner} directory={directory} client={client}
-      retryingOriginal={flow.kind === "create" && createIntent?.phase === "unknown" && createIntent.requestId === flow.requestId}
+      retryingOriginal={flow.kind === "create" && currentCreateIntent?.phase === "unknown" && currentCreateIntent.requestId === flow.requestId}
       onChanged={() => load(owner.id, false)} onClose={() => setFlow(null)}
       onInspectRecovered={(keyId) => { setFlow(null); const found = directory.items.find((item) => item.key.id === keyId); if (found) void openKey(found); else void load(owner.id); }} /> : null}
     {!flow && !selected && directory ? <>

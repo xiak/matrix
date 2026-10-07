@@ -4597,6 +4597,7 @@
     "keyLiveResume": "继续处理原请求",
     "keyLiveRetryOriginal": "重试原请求",
     "keyLivePendingOwner": "用户 {id} 的访问密钥创建尚未完成处置。其他用户和新请求暂不能创建访问密钥。",
+    "keyClientChangedIntent": "后端连接已切换，原创建请求 {id} 不会通过当前连接重放。新建仍保持锁定；请恢复原连接或按操作标识核对结果。",
     "keyConfirmCreate": "确认创建",
     "keyLiveCreated": "访问密钥已创建",
     "keyLiveSecretWarning": "请立即将 Secret 保存到受保护的凭据存储。离开此步骤后无法再次查看；不要复制到聊天、工单或源码中。",

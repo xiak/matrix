@@ -4597,6 +4597,7 @@
     "keyLiveResume": "Resume original request",
     "keyLiveRetryOriginal": "Retry original request",
     "keyLivePendingOwner": "Access-key creation for user {id} still needs resolution. Creating for another user or starting a new request is blocked.",
+    "keyClientChangedIntent": "The backend connection changed, so original creation request {id} will not be replayed through this connection. New creation remains locked; restore the original connection or investigate the operation reference.",
     "keyConfirmCreate": "Confirm creation",
     "keyLiveCreated": "Access key created",
     "keyLiveSecretWarning": "Save the Secret in protected credential storage now. It cannot be viewed again after you leave this step. Never paste it into chat, tickets, or source code.",

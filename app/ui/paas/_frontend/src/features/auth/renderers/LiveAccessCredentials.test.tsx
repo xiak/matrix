@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
-import type { AccessKeyClient, AccessKeyCreateIntent, AccountSecuritySettingsClient, AuthorizationProfileClient } from "../application/AccountAccessProvider";
+import type { AccessKeyClient, AccessKeyCreateIntent, AccountSecuritySettingsClient, AuthorizationProfileClient, AuthorizationProfileLoad } from "../application/AccountAccessProvider";
+import type { AuthorizationProfileDirectory } from "../domain/accounts";
+import type { AccessKeyAccess, AccessKeyDirectory } from "../domain/accessKeys";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { LiveAccessCredentials } from "./LiveAccessCredentials";
 
@@ -31,6 +33,13 @@ const directory = {
     { action: "iam.access-key.set-network-restrictions" as const, resource: { kind: "ACCESS_KEY" as const, id: key.id }, available: true, restrictionReason: null },
     { action: "iam.access-key.delete" as const, resource: { kind: "ACCESS_KEY" as const, id: key.id }, available: false, restrictionReason: "TARGET_MUST_BE_DISABLED" as const }
   ] }]
+};
+const replacementKey = { ...key, id: "mak1.alex-replacement", resourceVersion: 2, updatedAt: "2026-09-21T09:00:00Z" };
+const replacementDirectory = {
+  ...directory,
+  items: [{ ...directory.items[0]!, key: replacementKey, capabilities: directory.items[0]!.capabilities.map((entry) => ({
+    ...entry, resource: { ...entry.resource, id: replacementKey.id }
+  })) }]
 };
 
 function client(overrides: Partial<AccessKeyClient> = {}): AccessKeyClient {
@@ -68,8 +77,41 @@ describe("LiveAccessCredentials", () => {
     expect(screen.getByText("正在读取该用户的访问密钥…").closest('[role="status"]')).toBeTruthy();
     expect(screen.queryByRole("table", { name: "访问密钥" })).toBeNull();
 
+    await waitFor(() => expect(api.list).toHaveBeenCalledWith(owner.id));
     await act(async () => resolveDirectory(directory));
     expect(await screen.findByRole("button", { name: key.id })).toBeTruthy();
+  });
+
+  it("binds directory and detail reads to the exact client while preserving the selected user frame", async () => {
+    let resolveOldDetail!: (value: typeof directory.items[0]) => void;
+    let resolveReplacement!: (value: typeof replacementDirectory) => void;
+    const first = client({ read: vi.fn(() => new Promise<AccessKeyAccess>((resolve) => { resolveOldDetail = resolve; })) });
+    const replacement = client({
+      list: vi.fn(() => new Promise<AccessKeyDirectory>((resolve) => { resolveReplacement = resolve; })),
+      read: vi.fn().mockResolvedValue(replacementDirectory.items[0])
+    });
+    const user = userEvent.setup();
+    const view = render(<LocaleProvider><LiveAccessCredentials client={first} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: key.id }));
+    expect(screen.getByRole("heading", { name: key.id })).toBeTruthy();
+
+    view.rerender(<LocaleProvider><LiveAccessCredentials client={replacement} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+    expect(screen.getByRole("heading", { name: "访问密钥" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: key.id })).toBeNull();
+    expect(screen.queryByRole("button", { name: key.id })).toBeNull();
+    expect(screen.getByText("正在读取该用户的访问密钥…").closest('[role="status"]')).toBeTruthy();
+
+    await waitFor(() => expect(replacement.list).toHaveBeenCalledWith(owner.id));
+    await act(async () => resolveReplacement(replacementDirectory));
+    expect(await screen.findByRole("button", { name: replacementKey.id })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: key.id })).toBeNull();
+    await user.click(screen.getByRole("button", { name: replacementKey.id }));
+    expect(await screen.findByRole("heading", { name: replacementKey.id })).toBeTruthy();
+
+    await act(async () => resolveOldDetail(directory.items[0]!));
+    expect(screen.getByRole("heading", { name: replacementKey.id })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: key.id })).toBeNull();
   });
 
   it("opens a known user's keys in context without a second user directory", async () => {
@@ -198,6 +240,41 @@ describe("LiveAccessCredentials", () => {
     expect(onInspectPermissions).toHaveBeenCalledWith(owner.id);
   });
 
+  it("reloads an open product credential boundary for the exact replacement catalog client", async () => {
+    const user = userEvent.setup();
+    const api = client();
+    const firstDirectory: AuthorizationProfileDirectory = { accountId: scene.accountId, items: [{ profile: {
+      product: "paas", revision: 7, callingService: "PAAS", actions: [{
+        action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["USER"],
+        userAuthenticationMethods: ["ACCESS_KEY"], resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }]
+      }]
+    }, contentDigest: `sha256:${"a".repeat(64)}` }] };
+    const replacementDirectory: AuthorizationProfileDirectory = { accountId: scene.accountId, items: [{ profile: {
+      product: "audit", revision: 4, callingService: "AUDIT", actions: [{
+        action: "audit.record.read", resourceKind: "AUDIT_RECORD", scope: "TENANT", subjectTypes: ["USER"],
+        userAuthenticationMethods: ["ACCESS_KEY"], resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }]
+      }]
+    }, contentDigest: `sha256:${"b".repeat(64)}` }] };
+    const first: AuthorizationProfileClient = { accountId: scene.accountId, preview: false, load: vi.fn().mockResolvedValue({ status: "ready", directory: firstDirectory }) };
+    let resolveReplacement!: (value: AuthorizationProfileLoad) => void;
+    const replacement: AuthorizationProfileClient = { accountId: scene.accountId, preview: false, load: vi.fn(() => new Promise<AuthorizationProfileLoad>((resolve) => { resolveReplacement = resolve; })) };
+    const view = render(<LocaleProvider><LiveAccessCredentials authorizationProfiles={first} client={api} scene={scene} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "管理 alex 的访问密钥" }));
+    await screen.findByRole("button", { name: key.id });
+    await user.click(screen.getByText("编程访问边界"));
+    expect(await screen.findByText("paas.application.create")).toBeTruthy();
+
+    view.rerender(<LocaleProvider><LiveAccessCredentials authorizationProfiles={replacement} client={api} scene={scene} /></LocaleProvider>);
+    expect(screen.queryByText("paas.application.create")).toBeNull();
+    await waitFor(() => expect(replacement.load).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("正在读取当前权限能力目录…")).toBeTruthy();
+
+    await act(async () => resolveReplacement({ status: "ready", directory: replacementDirectory }));
+    expect(await screen.findByText("audit.record.read")).toBeTruthy();
+    expect(screen.queryByText("paas.application.create")).toBeNull();
+  });
+
   it("reveals an applied Secret once and clears it after acknowledgement", async () => {
     const user = userEvent.setup();
     const api = client();
@@ -219,6 +296,31 @@ describe("LiveAccessCredentials", () => {
     expect(screen.queryByText("mak1.one-time-secret")).toBeNull();
     expect(api.create).toHaveBeenCalledWith(owner.id, expect.objectContaining({ networkRestrictions: { allowedSourceCidrs: [] } }));
     expect(api.acknowledgeIssued).toHaveBeenCalledOnce();
+  });
+
+  it("removes an unacknowledged one-time Secret immediately when the client changes", async () => {
+    const user = userEvent.setup();
+    const first = client();
+    let resolveReplacement!: (value: typeof replacementDirectory) => void;
+    const replacement = client({ list: vi.fn(() => new Promise<AccessKeyDirectory>((resolve) => { resolveReplacement = resolve; })) });
+    const view = render(<LocaleProvider><LiveAccessCredentials client={first} scene={scene} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "管理 alex 的访问密钥" }));
+    await screen.findByRole("button", { name: key.id });
+    await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    expect(await screen.findByText("mak1.one-time-secret")).toBeTruthy();
+
+    view.rerender(<LocaleProvider><LiveAccessCredentials client={replacement} scene={scene} /></LocaleProvider>);
+    expect(screen.queryByText("mak1.one-time-secret")).toBeNull();
+    expect(screen.getByRole("heading", { level: 1, name: "alex · 访问密钥" })).toBeTruthy();
+    expect(screen.getByText("正在读取该用户的访问密钥…").closest('[role="status"]')).toBeTruthy();
+
+    await waitFor(() => expect(replacement.list).toHaveBeenCalledWith(owner.id));
+    await act(async () => resolveReplacement(replacementDirectory));
+    expect(await screen.findByRole("button", { name: replacementKey.id })).toBeTruthy();
+    expect(first.acknowledgeIssued).not.toHaveBeenCalled();
+    expect(replacement.acknowledgeIssued).not.toHaveBeenCalled();
   });
 
   it("retains the original requestId when an uncertain create is retried", async () => {
@@ -261,5 +363,21 @@ describe("LiveAccessCredentials", () => {
     expect(await screen.findByRole("heading", { name: "原创建请求已完成" })).toBeTruthy();
     expect(create).toHaveBeenCalledWith(owner.id, { userResourceVersion: intent.userResourceVersion, networkRestrictions: intent.networkRestrictions, requestId: intent.requestId });
     expect(screen.queryByText("mak1.one-time-secret")).toBeNull();
+  });
+
+  it("keeps an unknown creation locked but refuses to replay it through a replacement client", async () => {
+    const intent: AccessKeyCreateIntent = { accountId: scene.accountId, actorId: "root-acme", userId: owner.id,
+      userResourceVersion: owner.resourceVersion, networkRestrictions: { allowedSourceCidrs: [] }, requestId: `ui-access-key-create-${"b".repeat(32)}`, phase: "unknown" };
+    const first = client();
+    const replacement = client();
+    const view = render(<LocaleProvider><LiveAccessCredentials client={first} scene={scene} createIntent={intent} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+    expect(await screen.findByRole("button", { name: "继续处理原请求" })).toBeTruthy();
+
+    view.rerender(<LocaleProvider><LiveAccessCredentials client={replacement} scene={scene} createIntent={intent} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+    expect(await screen.findByText(`后端连接已切换，原创建请求 ${intent.requestId} 不会通过当前连接重放。新建仍保持锁定；请恢复原连接或按操作标识核对结果。`)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "继续处理原请求" })).toBeNull();
+    expect(screen.getByRole("button", { name: "新建访问密钥" }).hasAttribute("disabled")).toBe(true);
+    expect(first.create).not.toHaveBeenCalled();
+    expect(replacement.create).not.toHaveBeenCalled();
   });
 });

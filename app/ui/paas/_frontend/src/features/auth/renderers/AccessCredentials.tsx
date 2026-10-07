@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type SyntheticEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import { useTranslations } from "next-intl";
 import { KeyRound, RotateCw } from "lucide-react";
 import { Alert, Badge, Button, Card, Checkbox, ContentPage, FormField, Select, Table, TablePagination, Typography } from "@ui/xiak";
@@ -276,15 +276,26 @@ function ProgrammaticRequestBoundaryPreview({ actions }: { actions: readonly str
   </details>;
 }
 
+type ProgrammaticGuideStatus = "idle" | "ready" | "forbidden" | "routeUnavailable" | "unavailable" | "expired";
+type ProgrammaticGuideResult = {
+  client: AuthorizationProfileClient | null;
+  directory: AuthorizationProfileDirectory | null;
+  status: ProgrammaticGuideStatus;
+};
+
 export function ProgrammaticAccessGuide({ owner, client, onInspectPermissions }: {
   owner: AccountUserScene;
   client: AuthorizationProfileClient | null;
   onInspectPermissions?(ownerId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
-  const [loading, setLoading] = useState(false);
-  const [directory, setDirectory] = useState<AuthorizationProfileDirectory | null>(null);
-  const [status, setStatus] = useState<"idle" | "ready" | "forbidden" | "routeUnavailable" | "unavailable" | "expired">("idle");
+  const details = useRef<HTMLDetailsElement>(null);
+  const request = useRef(0);
+  const [result, setResult] = useState<ProgrammaticGuideResult>(() => ({ client, directory: null, status: "idle" }));
+  const visibleResult: ProgrammaticGuideResult = result.client === client ? result : { client, directory: null, status: "idle" };
+  const { directory, status } = visibleResult;
+  const [loadingClient, setLoadingClient] = useState<AuthorizationProfileClient | null>(null);
+  const loading = Boolean(client && loadingClient === client);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const accepted = useMemo(() => directory?.items.flatMap((entry) => entry.profile.actions
@@ -294,27 +305,35 @@ export function ProgrammaticAccessGuide({ owner, client, onInspectPermissions }:
   const currentPage = Math.min(page, pages);
   const visible = accepted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
-  const load = async () => {
-    if (!client || loading) {
-      if (!client) setStatus("routeUnavailable");
+  const load = useCallback(async () => {
+    const source = client;
+    const revision = ++request.current;
+    if (!source) {
+      setResult({ client: null, directory: null, status: "routeUnavailable" });
       return;
     }
-    setLoading(true);
-    const result = await client.load();
-    if (result.status === "ready") {
-      setDirectory(result.directory);
-      setStatus("ready");
-    } else {
-      setDirectory(null);
-      setStatus(result.status);
+    setLoadingClient(source);
+    setResult({ client: source, directory: null, status: "idle" });
+    try {
+      const next = await source.load();
+      if (request.current !== revision) return;
+      setResult({ client: source, directory: next.status === "ready" ? next.directory : null, status: next.status });
+    } catch {
+      if (request.current === revision) setResult({ client: source, directory: null, status: "unavailable" });
+    } finally {
+      if (request.current === revision) setLoadingClient(null);
     }
-    setLoading(false);
-  };
+  }, [client]);
+  useEffect(() => {
+    request.current += 1;
+    if (details.current?.open) void Promise.resolve().then(load);
+    return () => { request.current += 1; };
+  }, [client, load]);
   const onToggle = (event: SyntheticEvent<HTMLDetailsElement>) => {
-    if (event.currentTarget.open && status === "idle") void load();
+    if (event.currentTarget.open && status === "idle" && !loading) void load();
   };
 
-  return <details className={styles.programmaticGuide} onToggle={onToggle}>
+  return <details className={styles.programmaticGuide} onToggle={onToggle} ref={details}>
     <summary>
       <span className={styles.programmaticHeading}><KeyRound aria-hidden="true" /><span><strong>{t("keyProgrammaticTitle")}</strong><small>{t("keyProgrammaticHint", { name: owner.loginName })}</small></span></span>
       <span className={styles.programmaticSummary}>{t("keyProgrammaticInspect")}</span>
