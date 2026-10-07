@@ -1949,24 +1949,47 @@ translation errors from before the message catalog landed; they are not
 current-runtime evidence. This is application-side MOCK UX evidence, not real
 resource-tag mutation, backend CI or authorization acceptance.
 
-The directory-state and exact-read follow-up consumes only the fixed
-`0f06607398f643311c5a284cf0867e931ed33d9b` Application read boundary; it does
-not consume the still-unfixed Application directory, cursor or page contract.
-The focused scene/shell run passed 102 cases. The complete frontend suite passed
-63 files/1,104 cases plus three export-normalization cases. Typecheck, lint,
+The Application read follow-up consumes only the fixed
+`0f06607398f643311c5a284cf0867e931ed33d9b` product boundary and now integrates
+the LIVE exact-resource endpoint at `/api/paas/v1/applications/{applicationId}`.
+It deliberately does not consume the still-unfixed Application list, cursor or
+page contract: a deep link can read one resource, while the LIVE directory
+continues to render unavailable with no table, search, count or fixture
+fallback. The public Application model and portable label validation now have a
+single frontend domain owner shared by the adapter and MOCK tag editor. The
+adapter rejects an invalid locator before I/O and parses successful responses
+fail closed: exact fields and constants, route/body identity, TENANT scope,
+positive safe resource version, ordered contract timestamps, bounded safe
+labels and a canonical strong ETag equal to that version are all required.
+Unknown fields, raw sensitive label material, a weak/missing/mismatched ETag or
+cross-resource response becomes unavailable data rather than a partial success.
+
+The detail frame owns only this local asynchronous read; it is not added to the
+page-level resource cache and therefore does not invalidate the header,
+navigation, directory or whole scene. Return action, destination title, stable
+locator and state badge render immediately. A polite status appears immediately
+and the six-field placeholder is delayed 200 ms within the data region, avoiding
+a skeleton flash for a fast response. `401`, `403`, `404` and invalid locators
+remain distinct from `5xx`; forbidden reads do not confirm existence or mount
+tenant metadata, Deployment or tag actions, unavailable reads can retry only the
+same locator, and neither case reuses stale data. Product-owned Deployment and
+tag MOCK workspaces remain isolated and mount only for the preview's readable
+snapshot; LIVE exact read does not invent those write contracts.
+
+Source and the synchronized embed are pushed at `207f0e6ed`. The focused
+repository/shell run passed 105 cases. The complete frontend suite passed 63
+files/1,112 cases plus three export-normalization cases. Typecheck, lint,
 architecture and 228-pair theme-style gates passed; the production build
-generated 46 routes, normalized 44 segment files and synchronized 254 embedded
-files, and the complete repository Go test/vet gates passed. Preview coverage
-and desktop DEV visibly distinguish the fixture before the rows. Non-preview
-coverage proves that unavailable mounts no table, search or fixture row and
-never describes itself as an empty success. At `390 × 844`, the preview
-directory and directory-to-exact-read transition kept viewport, document and
-body width at 390px with no Dialog, horizontal page overflow or browser
-warning/error. The exact-read state matrix separately exercised `200` → `403`
-→ `503` → equal re-read recovery: the shared frame and resource locator remained
-present, while forbidden/unavailable mounted no Deployment or tag actions.
-This is isolated product UX evidence, not a product-list contract, real IAM
-permit, resource-existence oracle or LIVE Application integration.
+generated 46 routes, normalized 44 segment files and synchronized 254 exact
+embedded files, and the complete repository Go test/vet gates passed. Desktop
+`1280 × 720` and compact `390 × 844` DEV retained the Application title, return
+action and locator with viewport, document and body widths equal, no Dialog and
+no browser warning/error. The visible MOCK state matrix exercised `200` → `403`
+→ `503` → equal re-read recovery; adapter and shell tests cover the LIVE pending,
+success, invalid, forbidden, absent and unavailable boundaries. This is a real
+LIVE exact-read client boundary plus isolated product UX evidence, not an
+Application list contract, browser-side policy evaluation, resource-existence
+oracle, completed Deployment/tag integration or full-stack release acceptance.
 
 Same-path detail-query tests retain encoded IDs, draft-leave protection and
 replace semantics without a Next page-tree navigation. Real static deep links
