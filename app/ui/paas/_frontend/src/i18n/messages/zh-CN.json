@@ -4344,10 +4344,6 @@
     "serviceNoConsole": "服务角色只用于工作负载，不允许控制台登录。",
     "roleSecurity": "MOCK · 不签发真实 STS 凭证，不改变当前登录",
     "roleSsoJourney": {
-      "title": "角色 SSO",
-      "subtitle": "企业身份承担短期角色的安全边界",
-      "state": "规划中 · 后端未接入",
-      "boundary": "规划信息架构 · 当前没有可消费的 IdentityProvider、外部信任映射或联合 RoleSession 契约。本页不保存配置、不连接企业 IdP、不接收断言或 Token，也不创建角色或签发会话。",
       "journeyTitle": "目标登录链路",
       "journeyHint": "固定安全语义可以先确认；每一步都必须由未来的权威后端事实驱动，不能由浏览器样例推断。",
       "states": {
@@ -4425,10 +4421,6 @@
       }
     },
     "userSsoConcept": {
-      "title": "用户 SSO",
-      "subtitle": "账号级企业身份登录边界",
-      "state": "规划中 · 后端未接入",
-      "boundary": "规划信息架构 · 当前没有可消费的 IdentityProvider、ExternalIdentity 或企业登录契约。本页不制造账号目录、不连接 IdP、不验证断言或 Token、不保存秘密、不创建映射，也不启动登录。",
       "journeyTitle": "用户登录链路",
       "journeyHint": "固定语义先显示；每一步只有在 IAM 返回权威事实后才能变成可用状态。",
       "journey": {

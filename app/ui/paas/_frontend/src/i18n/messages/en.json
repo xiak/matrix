@@ -4344,10 +4344,6 @@
     "serviceNoConsole": "Service roles are for workloads and cannot sign into the console.",
     "roleSecurity": "MOCK · No real STS credentials or login changes",
     "roleSsoJourney": {
-      "title": "Role SSO",
-      "subtitle": "Security boundary for enterprise identities assuming short-lived roles",
-      "state": "Planned · backend not connected",
-      "boundary": "Planned information architecture · No consumable IdentityProvider, external trust mapping, or federated RoleSession contract exists yet. This page saves no configuration, contacts no enterprise IdP, accepts no assertion or token, creates no role, and issues no session.",
       "journeyTitle": "Target sign-in path",
       "journeyHint": "The stable security semantics can be reviewed now. Every step must eventually be driven by authoritative backend facts, never inferred from browser samples.",
       "states": {
@@ -4425,10 +4421,6 @@
       }
     },
     "userSsoConcept": {
-      "title": "User SSO",
-      "subtitle": "Account-scoped enterprise identity sign-in boundary",
-      "state": "Planned · backend not connected",
-      "boundary": "Planned information architecture · No consumable IdentityProvider, ExternalIdentity, or enterprise sign-in contract exists yet. This page invents no account directory, contacts no IdP, validates no assertion or token, stores no secret, creates no mapping, and starts no sign-in.",
       "journeyTitle": "User sign-in path",
       "journeyHint": "Stable semantics render immediately; a step can become available only when IAM returns authoritative facts.",
       "journey": {

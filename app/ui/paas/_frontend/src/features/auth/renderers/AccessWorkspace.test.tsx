@@ -3076,7 +3076,8 @@ describe("CAM-style access workspace", () => {
     expect(within(journey).getByText(/目标角色仍须独立验证/)).toBeTruthy();
     expect(within(journey).getByText("独立检查承担角色权限")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "开放配置前置条件" })).toBeTruthy();
-    expect(screen.getAllByText("规划中 · 后端未接入").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("规划中 · 后端未接入")).toHaveLength(1);
+    expect(screen.getAllByText("角色 SSO")).toHaveLength(1);
     expect(document.body.textContent).not.toMatch(/EnterpriseSSO|AuditAssertionRule|external-subject/);
     expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
@@ -3760,11 +3761,11 @@ describe("CAM-style access workspace", () => {
   it("keeps account user SSO read-only until IAM publishes provider, mapping and sign-in contracts", async () => {
     const { repository, extension } = await open("user-sso");
     const before = await extension.read("preview");
-    expect(screen.getByRole("heading", { name: "用户 SSO" })).toBeTruthy();
+    expect(screen.getAllByText("用户 SSO")).toHaveLength(1);
     const federationBoundary = screen.getByRole("region", { name: "联合身份边界" });
     expect(within(federationBoundary).getByRole("article", { name: "用户 SSO" }).getAttribute("aria-current")).toBe("step");
     expect(within(federationBoundary).getByText(/身份提供商只负责协议信任/)).toBeTruthy();
-    expect(screen.getAllByText("规划中 · 后端未接入").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("规划中 · 后端未接入")).toHaveLength(1);
     expect(screen.getByText("账号级身份提供商")).toBeTruthy();
     expect(screen.getByText("登录 Session")).toBeTruthy();
     expect(screen.getByText("用户权限")).toBeTruthy();

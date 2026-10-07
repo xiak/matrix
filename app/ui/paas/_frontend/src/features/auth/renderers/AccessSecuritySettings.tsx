@@ -1,7 +1,7 @@
 "use client";
 import { useId, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Card, Tabs, Typography } from "@ui/xiak";
+import { Alert, Badge, Card, Tabs } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import { MfaSecurityPreview } from "./MfaPreviewExperience";
 import { AccountSecuritySettingsPreview } from "./AccountSecuritySettingsPreview";
@@ -64,19 +64,10 @@ export function AccessUserSso({ workspace }: { workspace: AccessWorkspace }) {
     <div className={styles.stack}>
       <FederationBoundaryOverview current="user" />
       <Card>
-        <Card.Header>
-    <div className={styles.cardHeadingCopy}>
-      <Typography.Title as="h2" id={titleId} level={3}>{t("title")}</Typography.Title>
-      <Typography.Text tone="muted">{t("subtitle")}</Typography.Text>
-    </div>
-    <div className={styles.headingBadges}><Badge status="warning">{t("state")}</Badge></div>
-        </Card.Header>
         <Card.Body className={styles.stack}>
-    <Alert status="info">{t("boundary")}</Alert>
-
     <section aria-labelledby={`${titleId}-journey`} className={styles.stack}>
       <div className={styles.securityCheckHeading}>
-        <div className={styles.cardHeadingCopy}><h3 className={styles.stepTitle} id={`${titleId}-journey`}>{t("journeyTitle")}</h3><p className={styles.note}>{t("journeyHint")}</p></div>
+        <div className={styles.cardHeadingCopy}><h2 className={styles.stepTitle} id={`${titleId}-journey`}>{t("journeyTitle")}</h2><p className={styles.note}>{t("journeyHint")}</p></div>
         <Badge status="neutral">{workspace.accountId}</Badge>
       </div>
       <ol className={styles.securityChecks}>
@@ -91,7 +82,7 @@ export function AccessUserSso({ workspace }: { workspace: AccessWorkspace }) {
     </section>
 
     <section aria-labelledby={`${titleId}-readiness`} className={styles.stack}>
-      <div className={styles.cardHeadingCopy}><h3 className={styles.stepTitle} id={`${titleId}-readiness`}>{t("readinessTitle")}</h3><p className={styles.note}>{t("readinessHint")}</p></div>
+      <div className={styles.cardHeadingCopy}><h2 className={styles.stepTitle} id={`${titleId}-readiness`}>{t("readinessTitle")}</h2><p className={styles.note}>{t("readinessHint")}</p></div>
       <ol className={styles.securityChecks}>
         {readiness.map((item, index) => <li key={item}>
           <Badge status="neutral">{index + 1}</Badge>

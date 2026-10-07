@@ -2,7 +2,7 @@
 
 import { useId } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Card, Typography } from "@ui/xiak";
+import { Badge, Card } from "@ui/xiak";
 import styles from "./AccountAccessRenderer.module.css";
 
 const journey = ["provider", "assertion", "mapping", "trust", "permission", "session"] as const;
@@ -18,19 +18,14 @@ export function RoleSsoJourneyPreview({ accountId }: { accountId: string }) {
   const titleId = useId();
 
   return <Card>
-    <Card.Header>
-      <div className={styles.cardHeadingCopy}>
-        <Typography.Title as="h2" id={titleId} level={3}>{t("title")}</Typography.Title>
-        <Typography.Text tone="muted">{t("subtitle")}</Typography.Text>
-      </div>
-      <div className={styles.headingBadges}><Badge status="warning">{t("state")}</Badge><Badge status="neutral">{accountId}</Badge></div>
-    </Card.Header>
     <Card.Body className={styles.stack}>
-      <Alert status="info">{t("boundary")}</Alert>
       <section aria-labelledby={`${titleId}-journey`} className={styles.stack}>
-        <div className={styles.cardHeadingCopy}>
-          <h3 className={styles.stepTitle} id={`${titleId}-journey`}>{t("journeyTitle")}</h3>
-          <p className={styles.note}>{t("journeyHint")}</p>
+        <div className={styles.securityCheckHeading}>
+          <div className={styles.cardHeadingCopy}>
+            <h2 className={styles.stepTitle} id={`${titleId}-journey`}>{t("journeyTitle")}</h2>
+            <p className={styles.note}>{t("journeyHint")}</p>
+          </div>
+          <Badge status="neutral">{accountId}</Badge>
         </div>
         <ol className={styles.securityChecks}>
           {journey.map((step, index) => <li key={step}>
@@ -47,7 +42,7 @@ export function RoleSsoJourneyPreview({ accountId }: { accountId: string }) {
       </section>
       <section aria-labelledby={`${titleId}-readiness`} className={styles.stack}>
         <div className={styles.cardHeadingCopy}>
-          <h3 className={styles.stepTitle} id={`${titleId}-readiness`}>{t("readinessTitle")}</h3>
+          <h2 className={styles.stepTitle} id={`${titleId}-readiness`}>{t("readinessTitle")}</h2>
           <p className={styles.note}>{t("readinessHint")}</p>
         </div>
         <ol className={styles.securityChecks}>
