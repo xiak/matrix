@@ -57,7 +57,7 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 查询先用当前认证得到的 Account/USER 在受限函数内定位同 actor 的原 receipt；不存在、旧开发版本没有 receipt、错误 actor 或错误 Account 均统一为 `404 NOT_FOUND`。找到后才按 receipt 封存 scope 对准确 POLICY_ATTACHMENT 资源执行只读动作：tenant 使用 `iam.policy-attachment-change.read`，installation 使用 `iam.platform-policy-attachment-change.read`。这两个动作不属于创建/撤销能力，不自动进入既有系统策略版本；需要使用者显式采用包含它们的新不可变策略版本。当前 Session 无该只读权限返回403；损坏、重复或无法与原关系事实核对的 receipt 返回503并失败关闭。查询不产生新的业务 Audit 事实、不重新执行原命令，也不把原操作者曾有写权限当作今天仍有读权限。
 
-首版 receipt 没有 TTL、过期列、清理 worker 或删除入口；UPDATE、DELETE 和 TRUNCATE 均由数据库常开保护拒绝。在受支持的数据库生命周期及相同完整 Profile 的备份恢复内，同一 actor 使用新的正常 LOGIN_SESSION 仍可在当前读取授权下取得原结果。若未来需要有界保留，必须以新的契约修订先定义“尚未确认的客户端状态如何在删除前取得终态”，不能直接增加后台清理。当前只有准确 `200` completion 能解除 UNKNOWN；`404/403/5xx`、当前关系状态或本地等待时长都不能证明原事务回滚，也不能成为重放写请求或自动清除未知锁的依据。
+首版 receipt 没有 TTL、过期列、清理 worker 或删除入口；UPDATE、DELETE 和 TRUNCATE 均由数据库常开保护拒绝。在当前保留数据中，同一 actor 使用新的正常 LOGIN_SESSION 仍可在当前读取授权下取得原结果；相同完整 Profile 的备份恢复只能保留所选备份内已经存在的 receipt，不能为备份时点之后的命令合成结果。若未来需要有界保留，必须以新的契约修订先定义“尚未确认的客户端状态如何在删除前取得终态”，不能直接增加后台清理。当前只有准确 `200` completion 能解除 UNKNOWN；`404/403/5xx`、当前关系状态、本地等待时长或恢复到较早备份都不能证明原事务回滚，也不能成为重放写请求或自动清除未知锁的依据。
 
 PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是从可变 `policy_attachments` 或可投递 outbox 临时拼接结果。主键为 `(account_id,actor_principal_id,request_id)`，同时保存 operation、输入承诺、准确原输入、结果文档、attachment ID、scope/installation、原 decision/event ID 和完成时间；CHECK、复合外键、FORCE RLS、拒绝 UPDATE/DELETE/TRUNCATE 及受限函数 ACL 进入同一 schema verifier。创建或撤销必须在原关系、决定、Audit outbox 的同一事务中写入唯一 receipt；receipt 写入失败则整笔业务变化回滚。查询只返回保存的结果文档，并重新验证输入承诺、结果字段、关系身份及原 event/requestDigest 对应，不以今天的关系状态补字段。
 
