@@ -434,8 +434,10 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 			  WHERE event_document->>'requestId' IN ('retained-old-viewer','retained-old-viewer-revoke','retained-request-tag-developer')),
 			'policies',(SELECT jsonb_agg(to_jsonb(policy) ORDER BY id) FROM iam.policies policy
 			  WHERE id IN ('system.account-administrator','system.platform-operator')),
-			'versions',(SELECT jsonb_agg(to_jsonb(stored_version) ORDER BY policy_id,id) FROM iam.policy_versions stored_version
-			  WHERE policy_id IN ('system.account-administrator','system.platform-operator')))`).Scan(&state); err != nil {
+			'defaultVersions',(SELECT jsonb_agg(to_jsonb(stored_version) ORDER BY stored_version.policy_id,stored_version.id)
+			  FROM iam.policies policy JOIN iam.policy_versions stored_version
+			    ON (stored_version.policy_id,stored_version.id)=(policy.id,policy.default_version_id)
+			  WHERE policy.id IN ('system.account-administrator','system.platform-operator')))`).Scan(&state); err != nil {
 			t.Fatal("read predecessor attachment completion and built-in policy state", err)
 		}
 		return state
