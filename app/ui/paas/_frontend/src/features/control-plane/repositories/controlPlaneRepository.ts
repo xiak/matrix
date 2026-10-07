@@ -12,7 +12,7 @@ import type {
   ManagedServiceRoleUnbindingReceipt,
   UnbindManagedServiceRoleCommand
 } from "../domain/serviceAuthorization";
-import type { ApplicationReadSnapshot } from "../domain/application";
+import type { ApplicationDirectoryPage, ApplicationReadSnapshot } from "../domain/application";
 
 export const controlPlaneResourceKinds = [
   "offerings",
@@ -34,6 +34,10 @@ export interface ControlPlaneRepository {
     credential: string,
     applicationId: string
   ): Promise<ApplicationReadSnapshot>;
+  listApplications?(
+    credential: string,
+    after?: string
+  ): Promise<ApplicationDirectoryPage>;
   activateQuota(
     credential: string,
     command: ActivateQuotaCommand

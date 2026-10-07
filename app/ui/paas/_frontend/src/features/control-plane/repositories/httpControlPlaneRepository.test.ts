@@ -36,6 +36,15 @@ function applicationResponse(body: unknown, etag: string | null = '"7"'): Respon
   return new Response(JSON.stringify(body), { status: 200, headers });
 }
 
+function applicationDirectoryBody(items: unknown[] = [applicationBody()], nextAfter?: string) {
+  return {
+    apiVersion: "paas.matrix.xiak.com/v1",
+    kind: "ApplicationList",
+    items,
+    ...(nextAfter ? { nextAfter } : {})
+  };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -206,6 +215,68 @@ describe("httpControlPlaneRepository", () => {
 
     await expect(httpControlPlaneRepository.readApplication!("memory-only-session", "app/checkout"))
       .rejects.toThrow("INVALID_APPLICATION_REQUEST");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reads authorization-filtered Application windows and passes opaque continuations unchanged", async () => {
+    const firstCursor = "pc1.First_window-123";
+    const secondCursor = "pc1.Second_window-456";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(applicationDirectoryBody([applicationBody()], firstCursor)))
+      .mockResolvedValueOnce(jsonResponse(applicationDirectoryBody([], secondCursor)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.listApplications!("memory-only-session"))
+      .resolves.toEqual({ items: [applicationBody()], nextAfter: firstCursor });
+    await expect(httpControlPlaneRepository.listApplications!("memory-only-session", firstCursor))
+      .resolves.toEqual({ items: [], nextAfter: secondCursor });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/paas/v1/applications", expect.objectContaining({
+      cache: "no-store",
+      headers: expect.objectContaining({ Authorization: "Bearer memory-only-session" })
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `/api/paas/v1/applications?after=${firstCursor}`, expect.any(Object));
+  });
+
+  it("fails closed on malformed, cross-tenant, unordered or looping Application windows", async () => {
+    const first = applicationBody();
+    const second = {
+      ...applicationBody(),
+      metadata: { ...applicationBody().metadata, id: "app-inventory-api", name: "inventory-api" }
+    };
+    const fiftyOne = Array.from({ length: 51 }, (_, index) => ({
+      ...applicationBody(),
+      metadata: { ...applicationBody().metadata, id: `app-${String(index).padStart(3, "0")}`, name: `app-${String(index).padStart(3, "0")}` }
+    }));
+    const currentCursor = "pc1.Current_window";
+    const invalid = [
+      { ...applicationDirectoryBody(), unexpected: true },
+      { ...applicationDirectoryBody(), items: null },
+      applicationDirectoryBody(fiftyOne),
+      applicationDirectoryBody([first, { ...second, metadata: { ...second.metadata, scope: { kind: "TENANT", tenantId: "org-other" } } }]),
+      applicationDirectoryBody([second, first]),
+      applicationDirectoryBody([first, first]),
+      { ...applicationDirectoryBody(), nextAfter: "application-id" },
+      applicationDirectoryBody([], currentCursor)
+    ];
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (const candidate of invalid) {
+      fetchMock.mockResolvedValueOnce(jsonResponse(candidate));
+      const after = candidate === invalid.at(-1) ? currentCursor : undefined;
+      await expect(httpControlPlaneRepository.listApplications!("memory-only-session", after))
+        .rejects.toThrow("INVALID_APPLICATION_RESPONSE");
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(invalid.length);
+  });
+
+  it("rejects a non-canonical Application continuation before making a request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.listApplications!("memory-only-session", "app-checkout-api"))
+      .rejects.toThrow("INVALID_APPLICATION_CURSOR");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

@@ -17,12 +17,22 @@ export type ApplicationReadSnapshot = {
   application: ApplicationResource;
 };
 
+export type ApplicationDirectoryPage = {
+  items: ApplicationResource[];
+  nextAfter: string | null;
+};
+
+export type ApplicationDirectoryLoad =
+  | { status: "ready"; page: ApplicationDirectoryPage }
+  | { status: "invalidCursor" | "expired" | "forbidden" | "unavailable" };
+
 export type ApplicationReadLoad =
   | { status: "ready"; snapshot: ApplicationReadSnapshot }
   | { status: "invalid" | "expired" | "forbidden" | "notFound" | "unavailable" };
 
 const applicationIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const applicationNamePattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const applicationCursorPattern = /^pc1\.[A-Za-z0-9_-]+$/;
 const rawSensitiveMaterialMarkers = [
   "authorization: bearer", "bearer ", "password=", "passwd=", "secret=", "client_secret=", "token=",
   "access_token=", "refresh_token=", "id_token=", "api_key=", "private_key=", "-----begin private key-----",
@@ -35,6 +45,10 @@ export function validApplicationId(value: string): boolean {
 
 export function validApplicationName(value: string): boolean {
   return applicationNamePattern.test(value);
+}
+
+export function validApplicationCursor(value: string): boolean {
+  return value.length >= 5 && value.length <= 384 && applicationCursorPattern.test(value);
 }
 
 export function applicationLabelLooksSensitive(value: string): boolean {

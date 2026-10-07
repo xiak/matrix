@@ -15,7 +15,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import type { ControlPlaneSnapshot } from "../domain/resources";
 import type { ExperienceSnapshot } from "../domain/experience";
-import type { ApplicationReadSnapshot } from "../domain/application";
+import type { ApplicationDirectoryPage, ApplicationReadSnapshot } from "../domain/application";
 import { consoleRouteHref, type ControlPlaneRouteSelection, type ConsoleSection, type ServiceView } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
@@ -108,6 +108,11 @@ const liveApplicationReadSnapshot: ApplicationReadSnapshot = {
   }
 };
 
+const liveApplicationDirectoryPage: ApplicationDirectoryPage = {
+  items: [liveApplicationReadSnapshot.application],
+  nextAfter: null
+};
+
 const liveServiceRoleTemplate: ServiceRoleTemplate = {
   id: "managedservice.installation-reader",
   version: 1,
@@ -182,6 +187,7 @@ async function renderConsole({
   load = vi.fn().mockResolvedValue(snapshot),
   inspectServiceAuthorization,
   readApplication,
+  listApplications,
   bindServiceRole,
   unbindServiceRole,
   logout = vi.fn().mockResolvedValue(undefined),
@@ -197,6 +203,7 @@ async function renderConsole({
   load?: ControlPlaneRepository["load"];
   inspectServiceAuthorization?: ControlPlaneRepository["inspectServiceAuthorization"];
   readApplication?: ControlPlaneRepository["readApplication"];
+  listApplications?: ControlPlaneRepository["listApplications"];
   bindServiceRole?: ControlPlaneRepository["bindServiceRole"];
   unbindServiceRole?: ControlPlaneRepository["unbindServiceRole"];
   logout?: IamRepository["logout"];
@@ -210,6 +217,7 @@ async function renderConsole({
     activateQuota: vi.fn(),
     createInstallation: vi.fn(),
     readApplication,
+    listApplications,
     inspectServiceAuthorization,
     bindServiceRole,
     unbindServiceRole
@@ -326,7 +334,7 @@ describe("ConsoleShellRenderer", () => {
   });
 
   it.each([
-    { section: "applications", table: "统一资源列表" },
+    { section: "applications", table: "当前身份可见的应用目录" },
     { section: "installations", table: "服务实例列表" },
     { section: "devops", table: "流水线运行列表" }
   ] as const)("keeps $section data readable as labelled records on compact tables", async ({ section, table }) => {
@@ -776,7 +784,7 @@ describe("ConsoleShellRenderer", () => {
 
   it.each([
     { href: "/console/regions/", service: /区域与节点/, title: "区域与节点", reads: 1, marker: { role: "text", name: "本机主区域" } },
-    { href: "/console/applications/", service: /应用托管/, title: "应用服务", reads: 0, marker: { role: "table", name: "统一资源列表" } },
+    { href: "/console/applications/", service: /应用托管/, title: "应用服务", reads: 0, marker: { role: "table", name: "当前身份可见的应用目录" } },
     { href: "/console/installations/", service: /云数据库 PostgreSQL/, title: "数据库实例", reads: 1, marker: { role: "heading", name: "组织服务实例" } },
     { href: "/console/logs/", service: /日志服务/, title: "日志概览", reads: 0, marker: { role: "text", name: "Matrix · Log Service" } },
     { href: "/console/devops/", service: /研发效能 DevOps/, title: "交付总览", reads: 0, marker: { role: "heading", name: "最近流水线" } },
@@ -1067,19 +1075,81 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("heading", { level: 2, name: "应用目录" })).toBeTruthy();
     expect(screen.getByText("隔离 MOCK")).toBeTruthy();
     expect(screen.getByText(/本地导航 fixture.*不是服务端列表或授权结果/)).toBeTruthy();
-    expect(screen.getByRole("table", { name: "统一资源列表" })).toBeTruthy();
+    expect(screen.getByText(/提前验收真实目录的信息层级.*不代表当前身份已通过服务端授权/)).toBeTruthy();
+    expect(screen.getByRole("table", { name: "当前身份可见的应用目录" })).toBeTruthy();
     expect(screen.getByRole("link", { name: /结算 API/ }).getAttribute("href")).toContain("resource=app-checkout-api");
+    expect(screen.queryByRole("searchbox")).toBeNull();
   });
 
-  it("does not misrepresent an unavailable application directory as a successful empty list", async () => {
+  it("does not misrepresent an unavailable LIVE Application directory as a successful empty list", async () => {
     await renderConsole({ section: "applications" });
 
     expect(screen.getByRole("heading", { level: 2, name: "应用目录" })).toBeTruthy();
-    expect(screen.getByText("列表能力尚未接入")).toBeTruthy();
-    expect(screen.getByText(/不是成功返回 0 条资源.*不会回退到 MOCK/)).toBeTruthy();
-    expect(screen.queryByRole("table", { name: "统一资源列表" })).toBeNull();
+    expect(await screen.findByRole("heading", { level: 3, name: "暂时不可用" })).toBeTruthy();
+    expect(screen.getByText(/不会展示旧数据或体验 MOCK/)).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "当前身份可见的应用目录" })).toBeNull();
     expect(screen.queryByRole("searchbox", { name: "搜索资源" })).toBeNull();
     expect(screen.queryByText("结算 API")).toBeNull();
+  });
+
+  it("keeps the LIVE Application directory frame and fixed table labels stable while data is pending", async () => {
+    const listApplications = vi.fn(() => new Promise<ApplicationDirectoryPage>(() => {}));
+    await renderConsole({ section: "applications", listApplications });
+
+    expect(screen.getByRole("heading", { level: 1, name: "应用托管" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "应用目录" })).toBeTruthy();
+    const table = screen.getByRole("table", { name: "当前身份可见的应用目录" });
+    expect(table.getAttribute("aria-busy")).toBe("true");
+    expect(within(table).getByRole("columnheader", { name: "应用" })).toBeTruthy();
+    expect(within(table).getByRole("columnheader", { name: "资源版本" })).toBeTruthy();
+    expect(within(table).getByRole("status").textContent).toContain("正在读取当前授权窗口");
+    expect(screen.getByText(/每个窗口最多扫描 50 个候选/)).toBeTruthy();
+    expect(screen.queryByRole("searchbox")).toBeNull();
+  });
+
+  it("renders the strict LIVE Application directory without inventing totals, search or page size", async () => {
+    const listApplications = vi.fn().mockResolvedValue(liveApplicationDirectoryPage);
+    await renderConsole({ section: "applications", listApplications });
+
+    const resourceLink = await screen.findByRole("link", { name: "live-checkout" });
+    const table = screen.getByRole("table", { name: "当前身份可见的应用目录" });
+    expect(resourceLink.getAttribute("href")).toBe("/console/applications/?resource=app-live-checkout");
+    expect(within(table).getByText("app-live-checkout")).toBeTruthy();
+    expect(within(table).getByText("v7")).toBeTruthy();
+    expect(screen.getByText("第 1 个授权窗口")).toBeTruthy();
+    expect(screen.getByText(/不包含总数、页大小或权限/)).toBeTruthy();
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(listApplications).toHaveBeenCalledWith("renderer-test-memory-only-session", undefined);
+  });
+
+  it("continues through an empty authorized window and re-authorizes previous windows", async () => {
+    const nextAfter = "pc1.Next_window-123";
+    const emptyWindow: ApplicationDirectoryPage = { items: [], nextAfter };
+    const listApplications = vi.fn()
+      .mockResolvedValueOnce(emptyWindow)
+      .mockResolvedValueOnce(liveApplicationDirectoryPage)
+      .mockResolvedValueOnce(emptyWindow);
+    const { user } = await renderConsole({ section: "applications", listApplications });
+
+    expect(await screen.findByText("当前窗口没有可见应用")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "下一个授权窗口" }));
+    expect(await screen.findByRole("link", { name: "live-checkout" })).toBeTruthy();
+    expect(listApplications).toHaveBeenNthCalledWith(2, "renderer-test-memory-only-session", nextAfter);
+
+    await user.click(screen.getByRole("button", { name: "上一个授权窗口" }));
+    expect(await screen.findByText("当前窗口没有可见应用")).toBeTruthy();
+    expect(listApplications).toHaveBeenNthCalledWith(3, "renderer-test-memory-only-session", undefined);
+  });
+
+  it("does not leak MOCK rows when the LIVE Application directory is forbidden", async () => {
+    const listApplications = vi.fn().mockRejectedValue(new HttpProblem(403, "PERMISSION_DENIED"));
+    await renderConsole({ section: "applications", listApplications });
+
+    expect(await screen.findByRole("heading", { level: 3, name: "无权列出" })).toBeTruthy();
+    expect(screen.getByText(/不会确认目录中是否存在资源.*不会回退到体验 MOCK/)).toBeTruthy();
+    expect(screen.queryByText("结算 API")).toBeNull();
+    expect(screen.queryByRole("table", { name: "当前身份可见的应用目录" })).toBeNull();
   });
 
   it("keeps a LIVE Application frame stable while the exact product read is pending", async () => {

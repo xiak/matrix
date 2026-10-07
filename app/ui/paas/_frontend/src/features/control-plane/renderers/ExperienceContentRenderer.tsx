@@ -15,7 +15,7 @@ import {
   Database,
   Server,
 } from "lucide-react";
-import { Alert, Table, TableToolbar, EmptyState, Badge, Button, Card, FormField, LoadingFeedback, Progress, Select, Skeleton, ContentLayout, Typography } from "@ui/xiak";
+import { Alert, Table, TablePagination, TableToolbar, EmptyState, Badge, Button, Card, FormField, LoadingFeedback, Progress, Select, Skeleton, ContentLayout, Typography } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type {
   AlertScene,
@@ -31,7 +31,12 @@ import { useConsoleFormat } from "./useConsoleFormat";
 import { ApplicationTagManagement } from "./ApplicationTagManagement";
 import { ApplicationDeploymentManagement } from "./ApplicationDeploymentManagement";
 import { useControlPlane } from "../application/ControlPlaneProvider";
-import type { ApplicationReadLoad, ApplicationReadSnapshot } from "../domain/application";
+import type {
+  ApplicationDirectoryLoad,
+  ApplicationDirectoryPage,
+  ApplicationReadLoad,
+  ApplicationReadSnapshot
+} from "../domain/application";
 
 export type ResourceScope = {
   regionId: string;
@@ -242,31 +247,9 @@ function ResourceDirectory({ scene, scope }: {
     return scene.resources.filter((item) => (!scope || scope.regionId === "all" || item.regionId === scope.regionId || item.regionId === "all") && (!normalized || [item.name, item.id, item.kind, resourceKinds(item.kind), t(`resourceStates.${item.state}`), item.productName, item.projectName, item.regionName]
       .some((value) => value.toLowerCase().includes(normalized))));
   }, [query, scene.resources, resourceKinds, t, scope]);
-  if (scene.directory === "applications" && scene.listing === "unavailable") {
-    return (
-      <Card aria-labelledby="application-directory-title">
-        <Card.Header>
-          <div>
-            <Typography.Title as="h2" id="application-directory-title" level={3}>{t("applicationDirectory.title")}</Typography.Title>
-            <Typography.Text tone="muted">{t("applicationDirectory.liveHint")}</Typography.Text>
-          </div>
-          <Badge status="warning">{t("applicationDirectory.unavailableBadge")}</Badge>
-        </Card.Header>
-        <Card.Body>
-          <EmptyState title={t("applicationDirectory.unavailableTitle")} description={t("applicationDirectory.unavailableHint")} />
-        </Card.Body>
-      </Card>
-    );
-  }
+  if (scene.directory === "applications") return <PreviewApplicationDirectory page={{ items: scene.readSnapshots.map((snapshot) => snapshot.application), nextAfter: null }} />;
   return (
     <Card>
-      {scene.directory === "applications" ? <Card.Header>
-        <div>
-          <Typography.Title as="h2" level={3}>{t("applicationDirectory.title")}</Typography.Title>
-          <Typography.Text tone="muted">{t("applicationDirectory.previewHint")}</Typography.Text>
-        </div>
-        <Badge status="info">{t("applicationDirectory.previewBadge")}</Badge>
-      </Card.Header> : null}
       <TableToolbar labels={toolbarLabels} search={{ label: t("searchResources"), placeholder: t("resourcesPlaceholder"), value: query, onChange: setQuery }} status={t("resultCount", { count: resources.length })} />
       <ResourceTable resources={resources} scope={scope} />
     </Card>
@@ -413,6 +396,177 @@ function LiveApplicationResourceDetail({ resourceId }: { resourceId: string }) {
   </section>;
 }
 
+type ApplicationDirectoryView = ApplicationDirectoryLoad | { status: "loading" };
+
+const applicationDirectoryFailureMessages = {
+  invalidCursor: "applicationDirectory.messages.invalidCursor",
+  expired: "applicationDirectory.messages.expired",
+  forbidden: "applicationDirectory.messages.forbidden",
+  unavailable: "applicationDirectory.messages.unavailable"
+} as const;
+
+function ApplicationDirectoryTable({ page }: { page: ApplicationDirectoryPage }) {
+  const t = useTranslations("CloudExperience");
+  const format = useConsoleFormat();
+  return <Table aria-label={t("applicationDirectory.table")} mobileLayout="grid">
+    <thead><tr>
+      <th scope="col">{t("applicationDirectory.columns.application")}</th>
+      <th scope="col">{t("applicationDirectory.columns.version")}</th>
+      <th scope="col">{t("applicationDirectory.columns.labels")}</th>
+      <th scope="col">{t("applicationDirectory.columns.updated")}</th>
+    </tr></thead>
+    <tbody>{page.items.map((application) => {
+      const metadata = application.metadata;
+      return <tr key={metadata.id}>
+        <td data-label={t("applicationDirectory.columns.application")}><Table.PrimaryAction asChild><Link href={`/console/applications/?resource=${encodeURIComponent(metadata.id)}`}>{metadata.name}</Link></Table.PrimaryAction><small><code>{metadata.id}</code></small></td>
+        <td data-label={t("applicationDirectory.columns.version")}>v{metadata.resourceVersion}</td>
+        <td data-label={t("applicationDirectory.columns.labels")}>{t("applicationRead.labelCount", { count: Object.keys(metadata.labels ?? {}).length })}</td>
+        <td data-label={t("applicationDirectory.columns.updated")} data-mobile-span="full">{format.timestamp(metadata.updatedAt)}</td>
+      </tr>;
+    })}</tbody>
+  </Table>;
+}
+
+function ApplicationDirectoryLoadingTable() {
+  const t = useTranslations("CloudExperience");
+  return <Table aria-busy="true" aria-label={t("applicationDirectory.table")} mobileLayout="grid">
+    <thead><tr>
+      <th scope="col">{t("applicationDirectory.columns.application")}</th>
+      <th scope="col">{t("applicationDirectory.columns.version")}</th>
+      <th scope="col">{t("applicationDirectory.columns.labels")}</th>
+      <th scope="col">{t("applicationDirectory.columns.updated")}</th>
+    </tr></thead>
+    <tbody><tr><td className={styles.applicationDirectoryLoadingCell} colSpan={4}>
+      <LoadingFeedback label={t("applicationDirectory.loading")} labelVisible={false}>
+        <div aria-hidden="true" className={styles.applicationDirectorySkeleton}>
+          {Array.from({ length: 4 }, (_, index) => <div className={styles.applicationDirectorySkeletonRow} key={index}><Skeleton /><Skeleton /><Skeleton /><Skeleton /></div>)}
+        </div>
+      </LoadingFeedback>
+    </td></tr></tbody>
+  </Table>;
+}
+
+function PreviewApplicationDirectory({ page }: { page: ApplicationDirectoryPage }) {
+  const t = useTranslations("CloudExperience");
+  return <Card aria-labelledby="application-directory-title">
+    <Card.Header>
+      <div>
+        <Typography.Title as="h2" id="application-directory-title" level={3}>{t("applicationDirectory.title")}</Typography.Title>
+        <Typography.Text tone="muted">{t("applicationDirectory.previewHint")}</Typography.Text>
+      </div>
+      <Badge status="info">{t("applicationDirectory.previewBadge")}</Badge>
+    </Card.Header>
+    <Card.Body className={styles.applicationDirectoryBody}>
+      <p className={styles.applicationDirectoryBoundary}>{t("applicationDirectory.previewBoundary")}</p>
+      {page.items.length ? <ApplicationDirectoryTable page={page} /> : <EmptyState title={t("applicationDirectory.emptyTitle")} description={t("applicationDirectory.previewEmptyHint")} />}
+    </Card.Body>
+    <Table.Footer note={t("applicationDirectory.previewCursorBoundary")}><TablePagination mode="cursor" summary={t("applicationDirectory.window", { page: 1 })}
+      previous={{ label: t("applicationDirectory.previous"), disabled: true, onClick() {} }}
+      next={{ label: t("applicationDirectory.next"), disabled: true, onClick() {} }} /></Table.Footer>
+  </Card>;
+}
+
+function LiveApplicationDirectory({ load, pageIndex, onPrevious, onNext, onRetry, onRestart }: {
+  load: ApplicationDirectoryView;
+  pageIndex: number;
+  onPrevious(): void;
+  onNext(cursor: string): void;
+  onRetry(): void;
+  onRestart(): void;
+}) {
+  const t = useTranslations("CloudExperience");
+  const ready = load.status === "ready" ? load.page : null;
+  const status = load.status === "loading" ? "info" : load.status === "ready" ? "success" : load.status === "forbidden" ? "danger" : "warning";
+  const badge = load.status === "ready" ? "ready" : load.status;
+  let content: ReactNode;
+  if (load.status === "loading") {
+    content = <ApplicationDirectoryLoadingTable />;
+  } else if (load.status === "ready" && load.page.items.length > 0) {
+    content = <ApplicationDirectoryTable page={load.page} />;
+  } else if (load.status === "ready") {
+    content = <EmptyState
+      title={t(load.page.nextAfter ? "applicationDirectory.emptyWindowTitle" : "applicationDirectory.emptyTitle")}
+      description={t(load.page.nextAfter ? "applicationDirectory.emptyWindowHint" : "applicationDirectory.emptyHint")}
+    />;
+  } else {
+    content = <EmptyState
+      title={t(`applicationDirectory.states.${load.status}`)}
+      description={t(applicationDirectoryFailureMessages[load.status])}
+      action={load.status === "invalidCursor"
+        ? <Button type="button" variant="secondary" onClick={onRestart}>{t("applicationDirectory.restart")}</Button>
+        : load.status === "unavailable" ? <Button type="button" variant="secondary" onClick={onRetry}>{t("applicationDirectory.retry")}</Button> : undefined}
+    />;
+  }
+  return <Card aria-labelledby="application-directory-title">
+    <Card.Header>
+      <div>
+        <Typography.Title as="h2" id="application-directory-title" level={3}>{t("applicationDirectory.title")}</Typography.Title>
+        <Typography.Text tone="muted">{t("applicationDirectory.liveHint")}</Typography.Text>
+      </div>
+      <Badge status={status}>{t(`applicationDirectory.states.${badge}`)}</Badge>
+    </Card.Header>
+    <Card.Body className={styles.applicationDirectoryBody}>
+      <p className={styles.applicationDirectoryBoundary}>{t("applicationDirectory.boundary")}</p>
+      {content}
+    </Card.Body>
+    {load.status === "loading" || ready ? <Table.Footer note={t("applicationDirectory.cursorBoundary")}>
+      <TablePagination mode="cursor" disabled={load.status === "loading"} summary={t("applicationDirectory.window", { page: pageIndex + 1 })}
+        previous={{ label: t("applicationDirectory.previous"), disabled: pageIndex === 0, onClick: onPrevious }}
+        next={{ label: t("applicationDirectory.next"), disabled: !ready?.nextAfter, onClick: () => { if (ready?.nextAfter) onNext(ready.nextAfter); } }} />
+    </Table.Footer> : null}
+  </Card>;
+}
+
+function LiveApplicationResources({ selectedId }: { selectedId: string | null }) {
+  const { listApplications } = useControlPlane();
+  const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const [result, setResult] = useState<{
+    reader: typeof listApplications;
+    cursor: string | undefined;
+    refreshRevision: number;
+    load: ApplicationDirectoryView;
+  }>(() => ({ reader: listApplications, cursor: undefined, refreshRevision: -1, load: { status: "loading" } }));
+  const requestRevision = useRef(0);
+  const completedRequest = useRef<{ reader: typeof listApplications; cursor: string | undefined; refreshRevision: number } | null>(null);
+  const directoryTenant = useRef<string | undefined>(undefined);
+  const cursor = cursors[pageIndex];
+  const load: ApplicationDirectoryView = result.reader === listApplications && result.cursor === cursor && result.refreshRevision === refreshRevision
+    ? result.load
+    : { status: "loading" };
+
+  useEffect(() => {
+    if (selectedId) return;
+    const completed = completedRequest.current;
+    if (completed?.reader === listApplications && completed.cursor === cursor && completed.refreshRevision === refreshRevision) return;
+    let active = true;
+    const revision = ++requestRevision.current;
+    void listApplications(cursor).then((next) => {
+      if (!active || requestRevision.current !== revision) return;
+      let resolved: ApplicationDirectoryView = next;
+      if (next.status === "ready" && next.page.items.length > 0) {
+        const tenantId = next.page.items[0]!.metadata.scope.tenantId;
+        if (directoryTenant.current && directoryTenant.current !== tenantId) {
+          resolved = { status: "unavailable" };
+        } else {
+          directoryTenant.current = tenantId;
+        }
+      }
+      completedRequest.current = { reader: listApplications, cursor, refreshRevision };
+      setResult({ reader: listApplications, cursor, refreshRevision, load: resolved });
+    });
+    return () => { active = false; };
+  }, [cursor, listApplications, refreshRevision, selectedId]);
+
+  if (selectedId) return <LiveApplicationResourceDetail resourceId={selectedId} />;
+  return <LiveApplicationDirectory load={load} pageIndex={pageIndex}
+    onPrevious={() => setPageIndex((value) => Math.max(0, value - 1))}
+    onNext={(next) => { setCursors((current) => [...current.slice(0, pageIndex + 1), next]); setPageIndex((value) => value + 1); }}
+    onRetry={() => setRefreshRevision((value) => value + 1)}
+    onRestart={() => { directoryTenant.current = undefined; setCursors([undefined]); setPageIndex(0); setRefreshRevision((value) => value + 1); }} />;
+}
+
 function Resources({ scene, scope }: {
   scene: Extract<ConsoleContentScene, { kind: "resources" }>;
   scope?: ResourceScope;
@@ -420,8 +574,8 @@ function Resources({ scene, scope }: {
   const t = useTranslations("CloudExperience");
   const params = useSearchParams();
   const selectedId = scene.directory === "applications" ? params.get("resource") : null;
+  if (scene.directory === "applications" && scene.listing === "unavailable") return <LiveApplicationResources selectedId={selectedId} />;
   if (!selectedId || scene.directory !== "applications") return <ResourceDirectory scene={scene} scope={scope} />;
-  if (scene.listing === "unavailable") return <LiveApplicationResourceDetail key={selectedId} resourceId={selectedId} />;
   const selected = scene.resources.find((resource) => resource.id === selectedId);
   if (selected) return <ApplicationResourceDetail key={selected.id} resource={selected} readSnapshot={scene.readSnapshots.find((snapshot) => snapshot.application.metadata.id === selected.id)} tagSnapshot={scene.tagSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} deploymentSnapshot={scene.deploymentSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} />;
   return <Card><Card.Body><EmptyState title={t("resourceNotFound")} description={t("resourceNotFoundHint")} action={<Button asChild variant="secondary"><Link href="/console/applications/">{t("backToApplications")}</Link></Button>} /></Card.Body></Card>;

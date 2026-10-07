@@ -3610,10 +3610,43 @@
       "title": "Application directory",
       "previewBadge": "Isolated MOCK",
       "previewHint": "This is a local navigation fixture, not a server-side list or authorization result. Opening an application simulates a separate exact-resource read.",
-      "liveHint": "Application Hosting product-side listing capability",
-      "unavailableBadge": "Not connected",
-      "unavailableTitle": "Listing capability is not connected",
-      "unavailableHint": "The backend has not fixed an application list, cursor, or paging contract. This is not a successful zero-resource result, and the page does not fall back to MOCK data."
+      "previewBoundary": "Use this table to review the real directory's hierarchy, primary action, and compact layout ahead of integration. Its rows come from an isolated fixture and do not imply server authorization.",
+      "previewEmptyHint": "The isolated fixture has no Application. This is not an empty result from the server-authorized directory.",
+      "previewCursorBoundary": "The local fixture has one review window and neither creates nor simulates a secure cursor. The real directory re-authorizes every window.",
+      "liveHint": "Tenant Applications visible to the current identity, returned by Application Hosting",
+      "states": {
+        "loading": "Reading",
+        "ready": "Authorization filtered",
+        "invalidCursor": "Continuation expired",
+        "expired": "Session expired",
+        "forbidden": "Listing forbidden",
+        "unavailable": "Temporarily unavailable"
+      },
+      "boundary": "Application Hosting re-authorizes every window. Each window scans at most 50 candidates and returns only resources this identity may read. Denied items stay hidden, and the cursor is never a permit.",
+      "table": "Applications visible to the current identity",
+      "columns": {
+        "application": "Application",
+        "version": "Resource version",
+        "labels": "Labels",
+        "updated": "Updated"
+      },
+      "loading": "Reading the current authorization window…",
+      "emptyTitle": "No visible applications",
+      "emptyHint": "Application Hosting completed this directory read, but the current identity is not allowed to read an Application.",
+      "emptyWindowTitle": "No visible applications in this window",
+      "emptyWindowHint": "Every resource in this candidate window was filtered by authorization. More candidates remain, so you can continue to the next window.",
+      "messages": {
+        "invalidCursor": "The secure continuation has expired, is invalid, or no longer matches this identity. The page does not guess a position; restart from the first window.",
+        "expired": "The current sign-in session has expired. The page does not continue with an old cursor or cached directory; sign in again before reading it.",
+        "forbidden": "The current identity cannot list Applications. The page does not confirm whether the directory contains resources and does not fall back to experience MOCK data.",
+        "unavailable": "The product or authorization service cannot complete this directory authorization. The page does not show stale or experience MOCK data; retry the same window later."
+      },
+      "retry": "Read again",
+      "restart": "Restart at the first window",
+      "window": "Authorization window {page}",
+      "previous": "Previous authorization window",
+      "next": "Next authorization window",
+      "cursorBoundary": "The secure cursor only locates a candidate scan window. It carries no total, page size, or permission. An empty window may still have a next page."
     },
     "applicationRead": {
       "previewEyebrow": "Exact application read · MOCK",

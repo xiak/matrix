@@ -479,6 +479,40 @@
   gap: var(--xiak-spacing-default);
 }
 
+.applicationDirectoryBody {
+  display: grid;
+  gap: var(--xiak-spacing-default);
+}
+
+.applicationDirectoryBoundary {
+  margin: 0;
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+  line-height: var(--xiak-line-height-body);
+}
+
+.applicationDirectoryLoadingCell {
+  padding: 0 !important;
+}
+
+.applicationDirectorySkeleton {
+  display: grid;
+}
+
+.applicationDirectorySkeletonRow {
+  display: grid;
+  min-height: 52px;
+  grid-template-columns: minmax(180px, 2fr) minmax(72px, .65fr) minmax(92px, .8fr) minmax(160px, 1fr);
+  align-items: center;
+  gap: var(--xiak-spacing-comfortable);
+  border-bottom: var(--xiak-border-subtle);
+  padding: var(--xiak-spacing-default);
+}
+
+.applicationDirectorySkeletonRow:last-child {
+  border-bottom: 0;
+}
+
 .scenarioDetails {
   border-top: var(--xiak-border-subtle);
   padding-top: var(--xiak-spacing-default);
@@ -689,6 +723,14 @@
 
   .resourceFacts {
     grid-template-columns: 1fr;
+  }
+
+  .applicationDirectorySkeletonRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .applicationDirectorySkeletonRow > :not(:first-child) {
+    display: none;
   }
 
   .tagHeading {

@@ -3610,10 +3610,43 @@
       "title": "应用目录",
       "previewBadge": "隔离 MOCK",
       "previewHint": "当前仅展示本地导航 fixture；它不是服务端列表或授权结果。打开应用后会单独模拟精确读取。",
-      "liveHint": "应用托管产品侧列表能力",
-      "unavailableBadge": "尚未接入",
-      "unavailableTitle": "列表能力尚未接入",
-      "unavailableHint": "后端尚未提供已固定的应用列表、游标与分页契约。这不是成功返回 0 条资源，也不会回退到 MOCK 数据。"
+      "previewBoundary": "此表只用于提前验收真实目录的信息层级、主操作和小屏布局；行数据来自隔离 fixture，不代表当前身份已通过服务端授权。",
+      "previewEmptyHint": "隔离 fixture 中没有 Application；这不是服务端授权目录的空结果。",
+      "previewCursorBoundary": "本地 fixture 只有一个演示窗口，不生成或模拟安全游标；真实目录会对每个窗口重新鉴权。",
+      "liveHint": "应用托管返回当前身份可见的租户 Application",
+      "states": {
+        "loading": "正在读取",
+        "ready": "授权过滤",
+        "invalidCursor": "续页已失效",
+        "expired": "会话已过期",
+        "forbidden": "无权列出",
+        "unavailable": "暂时不可用"
+      },
+      "boundary": "目录由产品侧逐页重新鉴权。每个窗口最多扫描 50 个候选，仅返回当前身份获准读取的资源；拒绝项不会暴露，游标也不是访问许可。",
+      "table": "当前身份可见的应用目录",
+      "columns": {
+        "application": "应用",
+        "version": "资源版本",
+        "labels": "标签",
+        "updated": "更新时间"
+      },
+      "loading": "正在读取当前授权窗口…",
+      "emptyTitle": "当前没有可见应用",
+      "emptyHint": "产品侧已完成本次目录读取，但当前身份没有获准读取的 Application。",
+      "emptyWindowTitle": "当前窗口没有可见应用",
+      "emptyWindowHint": "这个候选窗口中的资源均被权限过滤；目录仍有后续候选，可继续读取下一窗口。",
+      "messages": {
+        "invalidCursor": "安全续页游标已失效、过期或不再匹配当前身份。页面不会猜测位置；请从第一个窗口重新开始。",
+        "expired": "当前登录会话已过期，页面不会继续使用旧游标或缓存目录。请重新登录后再读取。",
+        "forbidden": "当前身份无权列出 Application。页面不会确认目录中是否存在资源，也不会回退到体验 MOCK。",
+        "unavailable": "产品或权限服务暂时无法完成本次目录鉴权。页面不会展示旧数据或体验 MOCK；可以稍后重试同一窗口。"
+      },
+      "retry": "重新读取",
+      "restart": "从第一个窗口开始",
+      "window": "第 {page} 个授权窗口",
+      "previous": "上一个授权窗口",
+      "next": "下一个授权窗口",
+      "cursorBoundary": "安全游标只定位候选扫描窗口；它不包含总数、页大小或权限。空窗口仍可能有下一页。"
     },
     "applicationRead": {
       "previewEyebrow": "应用精确读取 · MOCK",

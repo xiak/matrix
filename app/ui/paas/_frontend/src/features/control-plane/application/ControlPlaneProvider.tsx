@@ -13,7 +13,12 @@ import {
 import { useEffectiveCredential } from "@/features/auth/application/RoleSessionProvider";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { ExperienceSnapshot } from "../domain/experience";
-import { validApplicationId, type ApplicationReadLoad } from "../domain/application";
+import {
+  validApplicationCursor,
+  validApplicationId,
+  type ApplicationDirectoryLoad,
+  type ApplicationReadLoad
+} from "../domain/application";
 import type {
   ActivateQuotaCommand,
   ControlPlaneSnapshot,
@@ -50,6 +55,7 @@ type ControlPlaneContextValue = {
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
   createInstallation(command: CreateInstallationCommand): Promise<boolean>;
   readApplication(applicationId: string): Promise<ApplicationReadLoad>;
+  listApplications(after?: string): Promise<ApplicationDirectoryLoad>;
   inspectServiceAuthorization(accountId: string, installationId: string): Promise<ManagedServiceAuthorizationLoad>;
   serviceAuthorizationIntent: ManagedServiceAuthorizationIntent | null;
   beginServiceAuthorization(accountId: string, installationId: string, observation: ManagedServiceAuthorizationObservation, kind: "bind" | "unbind"): void;
@@ -400,6 +406,20 @@ export function ControlPlaneProvider({
     }
   }, [credential, repository]);
 
+  const listApplications = useCallback(async (after?: string): Promise<ApplicationDirectoryLoad> => {
+    if (after !== undefined && !validApplicationCursor(after)) return { status: "invalidCursor" };
+    if (!credential || !repository.listApplications) return { status: "unavailable" };
+    try {
+      return { status: "ready", page: await repository.listApplications(credential, after) };
+    } catch (directoryError) {
+      if (!(directoryError instanceof HttpProblem)) return { status: "unavailable" };
+      if (directoryError.status === 400) return { status: "invalidCursor" };
+      if (directoryError.status === 401) return { status: "expired" };
+      if (directoryError.status === 403) return { status: "forbidden" };
+      return { status: "unavailable" };
+    }
+  }, [credential, repository]);
+
   const commitServiceAuthorizationIntent = useCallback((intent: ManagedServiceAuthorizationIntent | null) => {
     serviceAuthorizationIntentRef.current = intent;
     setServiceAuthorizationIntent(intent);
@@ -517,13 +537,14 @@ export function ControlPlaneProvider({
     activateQuota,
     createInstallation,
     readApplication,
+    listApplications,
     inspectServiceAuthorization,
     serviceAuthorizationIntent,
     beginServiceAuthorization,
     submitServiceAuthorization,
     closeServiceAuthorizationIntent,
     reopenServiceAuthorizationIntent
-  }), [activateQuota, beginServiceAuthorization, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, isAccess, loading, mutation, prepare, projectScene, readApplication, reload, reopenServiceAuthorizationIntent, scene, selection, serviceAuthorizationIntent, submitServiceAuthorization]);
+  }), [activateQuota, beginServiceAuthorization, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, isAccess, listApplications, loading, mutation, prepare, projectScene, readApplication, reload, reopenServiceAuthorizationIntent, scene, selection, serviceAuthorizationIntent, submitServiceAuthorization]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

@@ -1,8 +1,11 @@
 import { requestJSON, requestJSONResponse, requestToken } from "@/infrastructure/http/jsonRequest";
 import {
+  validApplicationCursor,
   validApplicationId,
   validApplicationLabels,
   validApplicationName,
+  type ApplicationDirectoryPage,
+  type ApplicationResource,
   type ApplicationReadSnapshot
 } from "../domain/application";
 import type {
@@ -118,7 +121,7 @@ function applicationTimestamp(value: unknown): string {
   return value;
 }
 
-function parseApplicationRead(value: unknown, requestedId: string, etag: string | null): ApplicationReadSnapshot {
+function parseApplication(value: unknown): ApplicationResource {
   const wire = applicationRecord(value);
   applicationExactKeys(wire, ["apiVersion", "kind", "metadata"]);
   const metadata = applicationRecord(wire.metadata);
@@ -127,11 +130,10 @@ function parseApplicationRead(value: unknown, requestedId: string, etag: string 
   applicationExactKeys(scope, ["kind", "tenantId"]);
 
   if (wire.apiVersion !== "paas.matrix.xiak.com/v1" || wire.kind !== "Application" ||
-      typeof metadata.id !== "string" || !validApplicationId(metadata.id) || metadata.id !== requestedId ||
+      typeof metadata.id !== "string" || !validApplicationId(metadata.id) ||
       typeof metadata.name !== "string" || !validApplicationName(metadata.name) ||
       scope.kind !== "TENANT" || typeof scope.tenantId !== "string" || !validApplicationId(scope.tenantId) ||
-      typeof metadata.resourceVersion !== "number" || !Number.isSafeInteger(metadata.resourceVersion) || metadata.resourceVersion < 1 ||
-      typeof etag !== "string" || !strongApplicationETagPattern.test(etag) || etag !== `"${metadata.resourceVersion}"`) {
+      typeof metadata.resourceVersion !== "number" || !Number.isSafeInteger(metadata.resourceVersion) || metadata.resourceVersion < 1) {
     invalidApplicationResponse();
   }
 
@@ -148,21 +150,53 @@ function parseApplicationRead(value: unknown, requestedId: string, etag: string 
   }
 
   return {
-    etag,
-    application: {
-      apiVersion: "paas.matrix.xiak.com/v1",
-      kind: "Application",
-      metadata: {
-        id: metadata.id,
-        name: metadata.name,
-        scope: { kind: "TENANT", tenantId: scope.tenantId },
-        ...(labels ? { labels } : {}),
-        resourceVersion: metadata.resourceVersion,
-        createdAt,
-        updatedAt
-      }
+    apiVersion: "paas.matrix.xiak.com/v1",
+    kind: "Application",
+    metadata: {
+      id: metadata.id,
+      name: metadata.name,
+      scope: { kind: "TENANT", tenantId: scope.tenantId },
+      ...(labels ? { labels } : {}),
+      resourceVersion: metadata.resourceVersion,
+      createdAt,
+      updatedAt
     }
   };
+}
+
+function parseApplicationRead(value: unknown, requestedId: string, etag: string | null): ApplicationReadSnapshot {
+  const application = parseApplication(value);
+  if (application.metadata.id !== requestedId || typeof etag !== "string" ||
+      !strongApplicationETagPattern.test(etag) || etag !== `"${application.metadata.resourceVersion}"`) {
+    invalidApplicationResponse();
+  }
+  return { etag, application };
+}
+
+function parseApplicationDirectory(value: unknown, requestedAfter?: string): ApplicationDirectoryPage {
+  const wire = applicationRecord(value);
+  applicationExactKeys(wire, ["apiVersion", "kind", "items"], ["nextAfter"]);
+  if (wire.apiVersion !== "paas.matrix.xiak.com/v1" || wire.kind !== "ApplicationList" ||
+      !Array.isArray(wire.items) || wire.items.length > 50) {
+    invalidApplicationResponse();
+  }
+  const items = wire.items.map(parseApplication);
+  const tenantId = items[0]?.metadata.scope.tenantId;
+  for (let index = 0; index < items.length; index += 1) {
+    const current = items[index]!;
+    if (current.metadata.scope.tenantId !== tenantId ||
+        (index > 0 && current.metadata.id <= items[index - 1]!.metadata.id)) {
+      invalidApplicationResponse();
+    }
+  }
+  let nextAfter: string | null = null;
+  if ("nextAfter" in wire) {
+    if (typeof wire.nextAfter !== "string" || !validApplicationCursor(wire.nextAfter) || wire.nextAfter === requestedAfter) {
+      invalidApplicationResponse();
+    }
+    nextAfter = wire.nextAfter;
+  }
+  return { items, nextAfter };
 }
 
 function parseTemplateReference(value: unknown): ServiceRoleTemplateReference {
@@ -494,6 +528,15 @@ export const httpControlPlaneRepository: ControlPlaneRepository = {
       { headers: authorization(credential) }
     );
     return parseApplicationRead(response.body, applicationId, response.headers.get("ETag"));
+  },
+
+  async listApplications(credential, after) {
+    if (after !== undefined && !validApplicationCursor(after)) throw new Error("INVALID_APPLICATION_CURSOR");
+    const path = after === undefined
+      ? "/api/paas/v1/applications"
+      : `/api/paas/v1/applications?after=${encodeURIComponent(after)}`;
+    const value = await requestJSON<unknown>(path, { headers: authorization(credential) });
+    return parseApplicationDirectory(value, after);
   },
 
   async activateQuota(credential, command: ActivateQuotaCommand) {
