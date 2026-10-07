@@ -1,0 +1,95 @@
+.root,
+.body,
+.scenarios,
+.outcome {
+  min-width: 0;
+}
+
+.heading {
+  align-items: center;
+  gap: var(--xiak-spacing-default);
+}
+
+.heading > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.heading h2 {
+  margin: 0;
+}
+
+.body {
+  display: grid;
+  gap: var(--xiak-spacing-default);
+}
+
+.scenarios {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.scenarios legend {
+  color: var(--xiak-color-text-strong);
+  font-weight: 600;
+  margin-bottom: var(--xiak-spacing-tight);
+}
+
+.choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--xiak-spacing-tight);
+}
+
+.choice {
+  align-items: start;
+  border: 1px solid var(--xiak-color-border-subtle);
+  border-radius: var(--xiak-radius-panel);
+  cursor: pointer;
+  display: flex;
+  gap: var(--xiak-spacing-tight);
+  min-width: 0;
+  padding: var(--xiak-spacing-default);
+}
+
+.selected {
+  border-color: var(--xiak-color-accent-primary);
+  background: var(--xiak-color-accent-haze);
+}
+
+.choice input {
+  accent-color: var(--xiak-color-accent-primary);
+  flex: none;
+  margin: 0.25em 0 0;
+}
+
+.choice span,
+.outcome {
+  display: grid;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.choice strong,
+.outcome strong {
+  color: var(--xiak-color-text-strong);
+}
+
+.choice small,
+.outcome span,
+.boundary {
+  color: var(--xiak-color-text-muted);
+  line-height: 1.6;
+}
+
+.boundary {
+  font-size: var(--xiak-font-size-small);
+  margin: 0;
+}
+
+@container xiak-card (max-width: 700px) {
+  .choices {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

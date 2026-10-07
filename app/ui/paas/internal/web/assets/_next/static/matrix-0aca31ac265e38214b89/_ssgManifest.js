@@ -1,0 +1,1 @@
+self.__SSG_MANIFEST=new Set(["\u002Fconsole\u002Faccess\u002F[view]","\u002Fconsole\u002Fdevops\u002F[view]","\u002Fconsole\u002Flogs\u002F[view]","\u002Fconsole\u002Fobservability\u002F[view]"]);self.__SSG_MANIFEST_CB&&self.__SSG_MANIFEST_CB()

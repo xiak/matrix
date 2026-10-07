@@ -1,0 +1,13 @@
+@layer xiak {
+.card { min-height: 128px; }
+.body { display: grid; gap: var(--xiak-spacing-tight); }
+.heading { display: flex; min-height: 28px; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.value { color: var(--xiak-color-text-strong); font-family: var(--xiak-font-numeric); font-size: var(--xiak-font-size-metric); font-weight: var(--xiak-font-weight-semibold); font-variant-numeric: tabular-nums; line-height: 1.2; overflow-wrap: anywhere; }
+.hint { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); line-height: 1.6; }
+.icon { display: grid; flex: none; width: 28px; height: 28px; place-items: center; border-radius: var(--xiak-radius-control); color: var(--xiak-color-status-neutral); background: var(--xiak-color-status-neutral-bg); }
+.icon svg { width: var(--xiak-icon-size); height: var(--xiak-icon-size); }
+.icon[data-status="info"] { color: var(--xiak-color-status-info); background: var(--xiak-color-status-info-bg); }
+.icon[data-status="success"] { color: var(--xiak-color-status-success); background: var(--xiak-color-status-success-bg); }
+.icon[data-status="warning"] { color: var(--xiak-color-status-warning); background: var(--xiak-color-status-warning-bg); }
+.icon[data-status="danger"] { color: var(--xiak-color-status-danger); background: var(--xiak-color-status-danger-bg); }
+}

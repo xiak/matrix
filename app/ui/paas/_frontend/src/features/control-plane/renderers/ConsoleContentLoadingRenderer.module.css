@@ -1,0 +1,85 @@
+@layer features {
+.stack {
+  display: grid;
+  gap: var(--xiak-spacing-roomy);
+}
+
+.identity {
+  display: flex;
+  min-height: 156px;
+  align-items: flex-end;
+  border: var(--xiak-border-width) var(--xiak-border-style) var(--xiak-color-border-accent);
+  border-radius: var(--xiak-radius-panel);
+  padding: var(--xiak-spacing-generous);
+  background:
+    radial-gradient(circle at 86% 24%, var(--xiak-color-accent-glow) 0, transparent 34%),
+    linear-gradient(120deg, var(--xiak-color-accent-haze), var(--xiak-color-bg-panel));
+}
+
+.identity > div {
+  display: grid;
+  max-width: 680px;
+  gap: var(--xiak-spacing-tight);
+}
+
+.identity p {
+  margin: 0;
+  color: var(--xiak-color-text-muted);
+  line-height: 1.65;
+}
+
+.dashboardPlaceholder {
+  display: grid;
+  gap: var(--xiak-spacing-roomy);
+}
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--xiak-spacing-comfortable);
+}
+
+.metricPlaceholder,
+.readinessPlaceholder {
+  display: grid;
+  gap: var(--xiak-spacing-tight);
+}
+
+.metricPlaceholder {
+  min-height: 126px;
+}
+
+.metricLabel,
+.metricHint {
+  min-height: 12px;
+}
+
+.metricLabel {
+  width: 46%;
+}
+
+.metricValue {
+  width: 38%;
+  min-height: 30px;
+}
+
+.metricHint {
+  width: 72%;
+}
+
+.readinessPlaceholder {
+  min-height: 132px;
+}
+
+@container matrix-page-content (max-width: 1040px) {
+  .metricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container matrix-page-content (max-width: 480px) {
+  .metricGrid {
+    grid-template-columns: 1fr;
+  }
+}
+}

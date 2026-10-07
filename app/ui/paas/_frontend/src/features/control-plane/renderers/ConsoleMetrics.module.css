@@ -1,0 +1,13 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--xiak-spacing-comfortable);
+}
+
+@container matrix-page-content (max-width: 1040px) {
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container matrix-page-content (max-width: 480px) {
+  .grid { grid-template-columns: 1fr; }
+}

@@ -1,10 +1,3 @@
-.metricGrid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--xiak-spacing-comfortable);
-}
-
-.metricHeading,
 .productTopline,
 .regionHeading {
   display: flex;
@@ -13,34 +6,6 @@
   gap: var(--xiak-spacing-default);
 }
 
-.metricHeading {
-  color: var(--xiak-color-text-muted);
-  font-size: var(--xiak-font-size-small);
-}
-
-.metricHeading svg {
-  width: 17px;
-  height: 17px;
-  flex: none;
-  color: var(--xiak-color-text-subtle);
-  stroke-width: 1.75;
-}
-
-.metricHeading svg[data-status="warning"] {
-  color: var(--xiak-color-status-warning);
-}
-
-.metric strong {
-  display: block;
-  margin-top: var(--xiak-spacing-comfortable);
-  color: var(--xiak-color-text-strong);
-  font-size: 2rem;
-  font-weight: var(--xiak-font-weight-semibold);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: var(--xiak-letter-spacing-heading);
-}
-
-.metric p,
 .featureCard p,
 .productDescription,
 .regionCard p {
@@ -49,12 +14,7 @@
   line-height: 1.6;
 }
 
-.metric p {
-  font-size: var(--xiak-font-size-caption);
-}
-
-.textLink,
-.primaryLink {
+.textLink {
   display: inline-flex;
   align-items: center;
   gap: var(--xiak-spacing-narrow);
@@ -64,23 +24,192 @@
   outline: none;
 }
 
-.textLink:hover,
-.primaryLink:hover {
+.textLink:hover {
   color: var(--xiak-color-accent-text-hover);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 
-.textLink:focus-visible,
-.primaryLink:focus-visible {
+.textLink:focus-visible {
   border-radius: var(--xiak-radius-small);
   box-shadow: var(--xiak-shadow-focus);
 }
 
-.textLink svg,
-.primaryLink svg {
+.textLink svg {
   width: 15px;
   height: 15px;
+}
+
+.instanceLink {
+  display: block;
+  max-width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--xiak-color-accent-text);
+  font: inherit;
+  font-weight: var(--xiak-font-weight-semibold);
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.instanceLink:hover {
+  color: var(--xiak-color-accent-text-hover);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.instanceLink:focus-visible {
+  border-radius: var(--xiak-radius-small);
+  box-shadow: var(--xiak-shadow-focus);
+  outline: none;
+}
+
+.installationDetail {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-comfortable);
+}
+
+.detailHeading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--xiak-spacing-default);
+}
+
+.detailHeading > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-micro);
+}
+
+.detailTitle {
+  min-width: 0;
+  margin: 0;
+  color: var(--xiak-color-text-strong);
+  font-size: var(--xiak-font-size-title);
+  line-height: var(--xiak-line-height-compact);
+  overflow-wrap: anywhere;
+}
+
+.detailTitle:focus {
+  outline: none;
+}
+
+.installationFacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-block: var(--xiak-border-subtle);
+}
+
+.installationFacts > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+  padding: var(--xiak-spacing-default);
+}
+
+.installationFacts dt {
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+}
+
+.installationFacts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--xiak-color-text-strong);
+  font-weight: var(--xiak-font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.authorizationCard {
+  overflow: hidden;
+}
+
+.authorizationHeading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--xiak-spacing-default);
+}
+
+.authorizationHeading > span:first-child {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: var(--xiak-radius-panel);
+  background: var(--xiak-color-accent-haze);
+  color: var(--xiak-color-accent-text);
+}
+
+.authorizationHeading > span:first-child svg {
+  width: 19px;
+  height: 19px;
+}
+
+.authorizationHeading > div,
+.authorizationBody {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-default);
+}
+
+.authorizationHeading > div {
+  gap: var(--xiak-spacing-micro);
+}
+
+.authorizationFacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-block: var(--xiak-border-subtle);
+}
+
+.authorizationFacts > div {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--xiak-spacing-narrow);
+  padding: var(--xiak-spacing-default);
+}
+
+.authorizationFacts > div + div {
+  border-inline-start: var(--xiak-border-subtle);
+}
+
+.authorizationFacts dt {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-small);
+}
+
+.authorizationFacts dd {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+  margin: 0;
+  color: var(--xiak-color-text-strong);
+  font-weight: var(--xiak-font-weight-semibold);
+}
+
+.authorizationFacts code {
+  overflow-wrap: anywhere;
+}
+
+.authorizationFacts small {
+  min-width: 0;
+  color: var(--xiak-color-text-subtle);
+  font-weight: var(--xiak-font-weight-regular);
+}
+
+.authorizationActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--xiak-spacing-default);
 }
 
 .featureCard {
@@ -130,6 +259,11 @@
   width: 15px;
   height: 15px;
   color: var(--xiak-color-text-subtle);
+}
+
+.catalogPage {
+  display: grid;
+  gap: var(--xiak-spacing-roomy);
 }
 
 .catalogGrid,
@@ -230,88 +364,6 @@
   justify-items: end;
 }
 
-.tableWrap {
-  width: 100%;
-  overflow: auto;
-  outline: none;
-}
-
-.tableWrap:focus-visible {
-  outline: 2px solid var(--xiak-color-border-focus);
-  outline-offset: -2px;
-}
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-
-.table th,
-.table td {
-  border-bottom: var(--xiak-border-subtle);
-  padding: var(--xiak-spacing-comfortable) var(--xiak-spacing-roomy);
-  color: var(--xiak-color-text-muted);
-  font-size: var(--xiak-font-size-small);
-  white-space: nowrap;
-}
-
-.table th {
-  padding-block: var(--xiak-spacing-default);
-  background: var(--xiak-color-bg-canvas);
-  color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-caption);
-  font-weight: var(--xiak-font-weight-medium);
-}
-
-.table tbody tr:hover {
-  background: var(--xiak-color-bg-panel-hover);
-}
-
-.table tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-.table td strong,
-.table td small {
-  display: block;
-}
-
-.table td strong {
-  color: var(--xiak-color-text-strong);
-  font-size: var(--xiak-font-size-body);
-}
-
-.table td small {
-  margin-top: var(--xiak-spacing-narrow);
-  color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-caption);
-}
-
-.empty {
-  display: grid;
-  min-height: 280px;
-  place-items: center;
-  align-content: center;
-  gap: var(--xiak-spacing-tight);
-  border-radius: var(--xiak-radius-panel);
-  padding: var(--xiak-spacing-roomy);
-  background: var(--xiak-color-bg-panel);
-  text-align: center;
-}
-
-.empty > svg {
-  width: 36px;
-  height: 36px;
-  margin-bottom: var(--xiak-spacing-tight);
-  color: var(--xiak-color-text-subtle);
-}
-
-.empty span {
-  max-width: 520px;
-  line-height: 1.6;
-}
-
 .regionCard {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -333,7 +385,7 @@
   flex-wrap: wrap;
 }
 
-.regionHeading span {
+.regionHeading > div > span {
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-small);
 }
@@ -345,11 +397,7 @@
 }
 
 @container matrix-page-content (max-width: 900px) {
-  .metricGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .quotaRow {
+    .quotaRow {
     grid-template-columns: minmax(180px, 1fr) auto;
   }
 
@@ -368,6 +416,41 @@
 }
 
 @container matrix-page-content (max-width: 560px) {
+  .detailHeading {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .detailHeading > :last-child {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .installationFacts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .installationFacts > div + div {
+    border-top: var(--xiak-border-subtle);
+  }
+
+  .authorizationHeading {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .authorizationHeading > :last-child {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .authorizationFacts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .authorizationFacts > div + div {
+    border-block-start: var(--xiak-border-subtle);
+    border-inline-start: 0;
+  }
+
   .quotaRow {
     grid-template-columns: 1fr;
   }
@@ -383,11 +466,7 @@
 }
 
 @container matrix-page-content (max-width: 420px) {
-  .metricGrid {
-    grid-template-columns: 1fr;
-  }
-
-  .regionCard {
+    .regionCard {
     grid-template-columns: minmax(0, 1fr);
   }
 

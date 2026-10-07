@@ -1,3 +1,4 @@
+@layer xiak {
 .text {
   color: var(--xiak-color-text-base);
 }
@@ -21,7 +22,7 @@
 .title {
   margin: 0;
   color: var(--xiak-color-text-strong);
-  font-weight: var(--xiak-font-weight-bold);
+  font-weight: var(--xiak-font-weight-semibold);
   letter-spacing: var(--xiak-letter-spacing-heading);
 }
 
@@ -55,4 +56,5 @@
   color: var(--xiak-color-text-code);
   font-family: var(--xiak-font-mono);
   font-size: var(--xiak-font-size-small);
+}
 }

@@ -1,4 +1,6 @@
+@layer xiak {
 .page {
+  container: matrix-content-frame / inline-size;
   display: flex;
   width: 100%;
   height: 100%;
@@ -9,6 +11,7 @@
 }
 
 .header {
+  position: relative;
   display: flex;
   min-height: var(--xiak-content-header-height);
   flex: none;
@@ -20,23 +23,59 @@
   background: var(--xiak-color-bg-header);
 }
 
+.headerContent { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.headerActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; max-width: 100%; flex: none; }
+.headerActions:empty, .headerActions[hidden] { display: none; }
+.commandBar, .expandedCommands { display: flex; min-width: 0; align-items: center; gap: var(--xiak-spacing-tight); }
+.expandedCommands > button { flex: none; }
+.desktopOverflowCommand { flex: none; }
+.expandedCommands > [data-danger="true"]:not(:disabled) { color: var(--xiak-color-danger-text); }
+.commandBar > .overflowCommand { display: none; }
+.identity { display: flex; flex: 1; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; }
+.parentLink { flex: none; }
+.separator { flex: none; width: var(--xiak-font-size-small); height: var(--xiak-font-size-small); color: var(--xiak-color-text-subtle); }
+.title { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-page-context); font-weight: var(--xiak-font-weight-semibold); outline: none; }
+.standaloneHeading { display: flex; min-width: 0; justify-content: space-between; align-items: center; gap: var(--xiak-spacing-default); }
+
 .body {
+  --xiak-scroll-inset: var(--xiak-spacing-roomy);
+  --xiak-scroll-inset-inline: var(--xiak-spacing-roomy);
   container-name: matrix-page-content;
   container-type: inline-size;
   min-width: 0;
   min-height: 0;
   flex: 1;
   overflow: auto;
-  padding: var(--xiak-spacing-roomy);
+  padding: var(--xiak-scroll-inset) var(--xiak-scroll-inset-inline);
 }
+
+.stage { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
+.content { min-width: 0; }
+.pending { position: absolute; inset: 0; background: var(--xiak-color-bg-canvas); }
 
 @media (max-width: 760px) {
   .header {
     min-height: var(--xiak-content-header-height-compact);
     padding-inline: var(--xiak-spacing-default);
+    padding-block: 0;
+    gap: var(--xiak-spacing-tight);
   }
 
+  .headerContent { gap: var(--xiak-spacing-tight); }
+  .commandBar > .expandedCommands { display: none; }
+  .commandBar > .overflowCommand { display: inline-flex; }
+
   .body {
-    padding: var(--xiak-spacing-default);
+    --xiak-scroll-inset: var(--xiak-spacing-comfortable);
+    --xiak-scroll-inset-inline: var(--xiak-spacing-default);
   }
+}
+@container matrix-content-frame (max-width: 960px) {
+  .commandBar > .expandedCommands { display: none; }
+  .commandBar > .overflowCommand { display: inline-flex; }
+}
+@media (max-width: 480px) {
+  .parentLink { width: var(--xiak-control-height-small); padding-inline: 0; }
+  .parentLink > span, .separator { display: none; }
+}
 }

@@ -1,0 +1,4500 @@
+import { useState } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { LocaleProvider, useLocalePreference } from "@/i18n/LocaleProvider";
+import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
+import { SessionProvider, useSession } from "../application/SessionProvider";
+import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
+import { accountAccessViews, type AccountAccessView, type AccountIdentity, type AccountPolicy, type ActionCapability, type AuthorizationProfileAction, type AuthorizationProfileEntry, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
+import type { AccessPolicy } from "../domain/accessWorkspace";
+import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
+import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorkspace";
+import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
+import type { PolicyDocument } from "../domain/policyDocument";
+import { AccountAccessRenderer } from "./AccountAccessRenderer";
+import { AuthorizationProfilePublishingPreview, compareAuthorizationProfileEntries } from "./AuthorizationProfilePublishingPreview";
+import type { AccountUserDetailTab } from "./AccountUserWorkspace";
+import { GroupDetail, GroupDirectory } from "./GroupAccessWorkspace";
+import { AccessAnalysisPreview, AccessReportPreview, AccessReports } from "./AccessReports";
+import { accountSecurityReportLimits, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildAccountSecurityReportDirectoryPreview, buildCredentialReport, createAccountSecurityReportPreview } from "../scenes/accessReport";
+import { buildAccountAccessScene } from "../scenes/accountAccessScene";
+import { previewAccountRepository, previewCredential, previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
+import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+
+vi.mock("next/link", () => ({
+  default: ({ onNavigate, href, children, ...props }: React.ComponentProps<"a"> & { onNavigate?(event: { preventDefault(): void }): void }) => <a {...props} href={href} onClick={(event) => {
+    event.preventDefault(); // Real Next routing is a browser gate; jsdom exercises the feature's destination callback.
+    if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) onNavigate?.({ preventDefault() {} });
+  }}>{children}</a>
+}));
+
+const account = { id: "org-xiak", displayName: "Example", status: "ACTIVE" as const, rootIdentity: { principalId: "admin", loginName: "admin" }, loginAlias: "example", resourceVersion: 1 };
+const rootUser: User = { id: "admin", accountId: "org-xiak", loginName: "admin", displayName: "Administrator", status: "ACTIVE", mustChangePassword: false, resourceVersion: 1 };
+const capability = (action: IamAction, kind: ActionCapability["resource"]["kind"], id: string, reason: CapabilityRestriction | null = null): ActionCapability => ({ action, resource: { kind, id }, available: reason === null, restrictionReason: reason });
+const currentCapabilities = (available = true): ActionCapability[] => [
+  capability("iam.account.create", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.account.read", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.account.alias-set", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.user.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.user.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.policy.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.group.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.group.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
+];
+const userAccess = (name: string): UserAccess => {
+  const user: User = { ...rootUser, id: "principal-" + name, loginName: name, displayName: name };
+  return { user, policyAttachments: [], capabilities: [
+    capability("iam.user.read", "USER", user.id), capability("iam.user.update", "USER", user.id),
+    capability("iam.user.delete", "USER", user.id, "TARGET_MUST_BE_DISABLED"),
+    capability("iam.user.permission-boundary.set", "USER", user.id), capability("iam.user.permission-boundary.remove", "USER", user.id),
+    capability("iam.user.set-status", "USER", user.id), capability("iam.user.reset-password", "USER", user.id),
+    capability("iam.policy-attachment.create", "USER", user.id), capability("iam.platform-policy-attachment.create", "USER", user.id)
+  ] };
+};
+const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT_IDENTITY", policySources: [], permissionBoundary: { accountId: account.id, userId: rootUser.id, resourceVersion: rootUser.resourceVersion, policy: null }, capabilities: currentCapabilities() };
+const users: UserAccess[] = ["lin", "chen"].map(userAccess);
+const reviewUsers: UserAccess[] = [...users, ...["qiao", "wu"].map(userAccess)];
+const login: IamRepository = { login: async () => ({ outcome: "AUTHENTICATED", credential: "preview-only", mustChangePassword: false, session: { id: "session", organizationId: "org-xiak", principalId: "admin", status: "ACTIVE", issuedAt: "2026-09-09T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" } }), changePassword: async () => {}, logout: async () => {} };
+const relationshipPolicies = (count: number, prefix: string): AccessPolicy[] => Array.from({ length: count }, (_, index) => ({
+  id: `${prefix.toLowerCase()}-${index + 1}`,
+  name: `${prefix}${String(index + 1).padStart(2, "0")}`,
+  description: `Relationship policy ${index + 1}`,
+  kind: "custom",
+  tags: [],
+  versions: [{ id: 1, document: { version: "1", statement: [{ effect: "allow", action: ["logs:search"], resource: ["*"] }] }, createdAt: "2026-09-01T00:00:00Z" }],
+  defaultVersion: 1,
+  lastVersion: 1,
+  createdAt: "2026-09-01T00:00:00Z",
+  updatedAt: "2026-09-01T00:00:00Z"
+}));
+
+function AccountRefresh() {
+  const access = useAccountAccess();
+  return <button data-testid="refresh-account" onClick={access.reload}>Refresh account</button>;
+}
+
+function ReauthenticationGuardProbe() {
+  const access = useAccountAccess();
+  return <>
+    <button data-testid="guard-workspace" onClick={() => void access.executeWorkspace({ kind: "save-account-key-network-preview", expectedRuleVersion: 1, accessKeyNetwork: { allowedSourceCidrs: [] } })}>Protected workspace mutation</button>
+    <button data-testid="guard-group" onClick={() => void access.groups?.create({ name: "BlockedGroup", description: "must not reach adapter", requestId: "blocked-group" }).catch(() => undefined)}>Protected group mutation</button>
+  </>;
+}
+
+function Harness({ repository, initialView, initialEntityId }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string }) {
+  const requestLeave = useLeaveConfirmation();
+  const session = useSession();
+  const locale = useLocalePreference();
+  const [view, setView] = useState(initialView);
+  const [entityId, setEntityId] = useState(initialEntityId);
+  const [policyMethod, setPolicyMethod] = useState<string>();
+  const [userTab, setUserTab] = useState<AccountUserDetailTab>();
+  if (!session.current) return <button onClick={() => void session.login("admin", "preview")}>Enter</button>;
+  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><AccountRefresh /><ReauthenticationGuardProbe /><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); setUserTab(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "") + ":" + (userTab ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} userTab={userTab} onNavigate={(next, id, method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); setUserTab(nextUserTab); })} /></AccountAccessProvider>;
+}
+async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; users?: UserAccess[]; repository?: Partial<AccountRepository>; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
+  const directoryUsers = options?.users ?? users;
+  const extension = createPreviewAccessWorkspace("org-xiak", () => directoryUsers.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+  await options?.seed?.(extension);
+  const repository: AccountRepository = {
+    currentIdentity: vi.fn().mockResolvedValue(options?.reader ? { ...identity, policySources: [], capabilities: currentCapabilities(false) } : identity),
+    listUsers: options?.reader ? vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) : vi.fn().mockResolvedValue({ items: directoryUsers, nextAfter: null }),
+    getUser: vi.fn().mockImplementation(async (_credential: string, userId: string) => {
+      const entry = directoryUsers.find((candidate) => candidate.user.id === userId);
+      if (!entry) throw new HttpProblem(403, "FORBIDDEN");
+      return entry;
+    }),
+    listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => ({ accountId: "org-xiak", scope: platform ? "INSTALLATION" : "TENANT", installationId: platform ? "preview" : null, items: [] })),
+    listAuthorizationProfiles: vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: { product: "paas", revision: 1, callingService: "PAAS", actions: [{ action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }], conditions: [
+      { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+      { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" }
+    ] }] }, contentDigest: `sha256:${"a".repeat(64)}` }] }),
+    listAccounts: vi.fn().mockResolvedValue({ items: [], nextAfter: null }),
+    listGroups: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    getGroup: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    createGroup: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    updateGroup: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    deleteGroup: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    listGroupMemberships: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    createGroupMembership: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    removeGroupMembership: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    createGroupPolicyAttachment: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    revokePolicyAttachment: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    execute: vi.fn().mockResolvedValue(undefined),
+    workspace: options?.live ? undefined : { read: vi.fn(extension.read), execute: vi.fn(extension.execute) },
+    ...options?.repository,
+    readPasswordResetCompletion: options?.repository?.readPasswordResetCompletion ?? vi.fn(async () => { throw new HttpProblem(404, "PREVIEW_RESET_RESULT_UNOBSERVED"); })
+  };
+  const user = userEvent.setup({ delay: null });
+  const rendered = render(<LocaleProvider><SessionProvider repository={login}><UnsavedChangesProvider><Harness initialView={initialView} initialEntityId={options?.entityId} repository={repository} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>);
+  await user.click(screen.getByRole("button", { name: "Enter" }));
+  await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalled());
+  await waitFor(() => expect(screen.queryByLabelText("正在读取 IAM 账号信息…")).toBeNull());
+  return { user, repository, extension, unmount: rendered.unmount };
+}
+async function seedBoundAccountRuleOperator(extension: ReturnType<typeof createPreviewAccessWorkspace>) {
+  await extension.execute("preview", { kind: "confirm-personal-mfa" });
+  await extension.execute("preview", { kind: "complete-personal-mfa-reauthentication" });
+}
+async function seedBoundNotificationOperator(extension: ReturnType<typeof createPreviewAccessWorkspace>) {
+  await extension.execute("preview", { kind: "verify-personal-notification-address", address: "preview.security@example.com" });
+  await seedBoundAccountRuleOperator(extension);
+}
+async function seedUnknownAccountRuleChange(extension: ReturnType<typeof createPreviewAccessWorkspace>) {
+  await seedBoundAccountRuleOperator(extension);
+  await extension.execute("preview", { kind: "save-account-rule", requestId: "seed-unknown-account-rule", expectedRuleVersion: 1, expectedLoginProtection: false, loginProtection: true, responseMode: "response-lost" });
+}
+async function select(user: ReturnType<typeof userEvent.setup>, label: string, option: string) {
+  if (!screen.queryByRole("combobox", { name: label })) await user.click(screen.getByRole("button", { name: /^筛选(?: \d+)?$/ }));
+  await user.click(screen.getByRole("combobox", { name: label }));
+  await user.click(screen.getByRole("option", { name: option }));
+}
+
+async function openPageActionMenu(user: ReturnType<typeof userEvent.setup>) {
+  const trigger = (await screen.findAllByRole("button", { name: "更多操作" }))
+    .find((button) => !(button as HTMLButtonElement).disabled);
+  expect(trigger).toBeDefined();
+  await user.click(trigger!);
+  return screen.findByRole("menu", { name: "更多操作" });
+}
+
+async function invokePageAction(user: ReturnType<typeof userEvent.setup>, label: string) {
+  const direct = screen.queryByRole("button", { name: label });
+  if (direct) {
+    await user.click(direct);
+    return;
+  }
+  const menu = await openPageActionMenu(user);
+  await user.click(within(menu).getByRole("menuitem", { name: label }));
+}
+async function openSecuritySection(user: ReturnType<typeof userEvent.setup>, name: "本人安全" | "账号策略" | "会话安全") {
+  await user.click(await screen.findByRole("tab", { name }));
+}
+async function logActions(user: ReturnType<typeof userEvent.setup>, actions: string[]) {
+  await select(user, "产品服务", "日志服务");
+  for (const action of actions) await user.click(screen.getByRole("checkbox", { name: action }));
+}
+async function expectRetainedFailure(dialog: HTMLElement) {
+  await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain("重试"));
+  expect(document.activeElement).toBe(within(dialog).getByRole("alert"));
+}
+const scrollIntoView = vi.fn();
+Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+
+afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); resetPreviewEnvironment(); scrollIntoView.mockReset(); });
+
+describe("selection-driven user directory", () => {
+  it("opens MOCK user security management in the content area and restores its source action", async () => {
+    const { user } = await open("users");
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await user.click(screen.getByRole("tab", { name: "安全设置" }));
+    await user.click(screen.getByRole("button", { name: "管理" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 1, name: "管理 lin" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "返回用户详情" }));
+    expect(screen.getByRole("tab", { name: "安全设置" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "管理" })).toBe(document.activeElement);
+  });
+
+  it("keeps a MOCK password-reset uncertainty in memory without browser storage", async () => {
+    const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
+      if (command.kind === "reset-password") throw new Error("preview response lost");
+    });
+    const { user } = await open("users", { repository: { execute } });
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await user.click(screen.getByRole("tab", { name: "安全设置" }));
+    await user.click(screen.getByRole("button", { name: "管理" }));
+    await user.click(screen.getByRole("button", { name: "重置密码" }));
+    await user.type(screen.getByLabelText(/^初始密码/), "Preview-Only-Test-Password-74!");
+    await user.click(screen.getByRole("button", { name: "审阅重置" }));
+    await user.click(screen.getByRole("button", { name: "确认重置密码" }));
+    expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("queries the original uncertain reset without replaying the password mutation", async () => {
+    const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
+      if (command.kind === "reset-password") throw new Error("preview response lost");
+    });
+    const readPasswordResetCompletion = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(404, "RESET_NOT_OBSERVED"))
+      .mockImplementation(async (_credential: string, request: { accountId: string; actorId: string; userId: string; requestId: string; resourceVersion: number }) => ({
+        accountId: request.accountId, actorPrincipalId: request.actorId, userId: request.userId,
+        requestId: request.requestId, expectedResourceVersion: request.resourceVersion,
+        resultingResourceVersion: request.resourceVersion + 1, eventId: "event-original", occurredAt: "2026-09-11T08:00:00Z"
+      }));
+    const { user } = await open("users", { repository: { execute, readPasswordResetCompletion } });
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await user.click(screen.getByRole("tab", { name: "安全设置" }));
+    await user.click(screen.getByRole("button", { name: "管理" }));
+    await user.click(screen.getByRole("button", { name: "重置密码" }));
+    await user.type(screen.getByLabelText(/^初始密码/), "Preview-Only-Test-Password-74!");
+    await user.click(screen.getByRole("button", { name: "审阅重置" }));
+    await user.click(screen.getByRole("button", { name: "确认重置密码" }));
+    await screen.findByText("重置密码结果尚未确认");
+    await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    expect(await screen.findByText(/未查到原请求的提交记录/)).toBeTruthy();
+    expect(screen.getByText("重置密码结果尚未确认")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "完成审阅" })).toBeNull();
+    expect(execute).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    expect(await screen.findByText("原重置请求已确认提交")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "完成审阅" })).toBeTruthy();
+    expect(readPasswordResetCompletion).toHaveBeenCalledTimes(2);
+    expect(readPasswordResetCompletion.mock.calls[0]?.[1]).toEqual(readPasswordResetCompletion.mock.calls[1]?.[1]);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("keeps a reset unresolved when result lookup is forbidden or unavailable", async () => {
+    const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
+      if (command.kind === "reset-password") throw new Error("preview response lost");
+    });
+    const readPasswordResetCompletion = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(403, "FORBIDDEN"))
+      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const { user } = await open("users", { repository: { execute, readPasswordResetCompletion } });
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await user.click(screen.getByRole("tab", { name: "安全设置" }));
+    await user.click(screen.getByRole("button", { name: "管理" }));
+    await user.click(screen.getByRole("button", { name: "重置密码" }));
+    await user.type(screen.getByLabelText(/^初始密码/), "Preview-Only-Test-Password-74!");
+    await user.click(screen.getByRole("button", { name: "审阅重置" }));
+    await user.click(screen.getByRole("button", { name: "确认重置密码" }));
+    await screen.findByText("重置密码结果尚未确认");
+    await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    expect(await screen.findByText(/当前会话无权查询或已失效/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    expect(await screen.findByText(/查询失败或响应无法验证/)).toBeTruthy();
+    expect(screen.getByText("重置密码结果尚未确认")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "完成审阅" })).toBeNull();
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  async function openBatch() {
+    resetPreviewEnvironment();
+    const repository = { ...previewAccountRepository, listUsers: vi.fn(previewAccountRepository.listUsers), execute: vi.fn(previewAccountRepository.execute), executeUserBatch: vi.fn(previewAccountRepository.executeUserBatch!) };
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={previewIamRepository}><UnsavedChangesProvider><Harness initialView="users" repository={repository} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "Enter" }));
+    await screen.findByRole("checkbox", { name: "选择用户 lin" });
+    return { user, repository };
+  }
+  async function action(user: ReturnType<typeof userEvent.setup>, label: string) {
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: label }));
+  }
+  it("keeps criteria distinct from an empty-result reset and clears batch targets across details", async () => {
+    const { user } = await openBatch();
+    await user.type(screen.getByRole("searchbox", { name: "搜索用户" }), "lin");
+    await select(user, "筛选用户状态", "已禁用");
+    expect(screen.getByText("没有匹配的用户")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "清除筛选" })).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "重置查询" }));
+    expect((screen.getByRole("searchbox", { name: "搜索用户" }) as HTMLInputElement).value).toBe("");
+    await user.type(screen.getByRole("searchbox", { name: "搜索用户" }), "lin");
+    await user.click(screen.getByRole("checkbox", { name: "选择用户 lin" }));
+    await user.click(screen.getByRole("button", { name: "查看用户 lin" }));
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect((screen.getByRole("searchbox", { name: "搜索用户" }) as HTMLInputElement).value).toBe("lin");
+    expect((screen.getByRole("checkbox", { name: "选择用户 lin" }) as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByRole("button", { name: "更多操作" }).hasAttribute("disabled")).toBe(true);
+  });
+  it("has no operation column, supports mixed page selection, and clears selection on filtering and paging", async () => {
+    const { user, repository } = await openBatch();
+    const table = screen.getByRole("table", { name: "租户用户列表" });
+    expect(screen.getByText("第 1 / 1 页")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "每页条数" })).toBeTruthy();
+    expect(within(table).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(screen.getByRole("button", { name: "更多操作" }).hasAttribute("disabled")).toBe(true);
+    await user.click(screen.getByRole("checkbox", { name: "选择用户 lin" }));
+    const page = screen.getByRole("checkbox", { name: "选择当前筛选页的全部用户" }) as HTMLInputElement;
+    expect(page.indeterminate).toBe(true);
+    expect(screen.getByText("已选 1 位用户")).toBeTruthy();
+    await user.click(page);
+    expect(page.checked).toBe(true);
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    const menu = within(screen.getByRole("menu", { name: "更多操作" }));
+    expect(menu.getByRole("menuitem", { name: "添加到用户组" }).getAttribute("aria-disabled")).not.toBe("true");
+    expect(menu.getByRole("menuitem", { name: /删除用户/ }).getAttribute("aria-disabled")).not.toBe("true");
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "更多操作" }));
+    await user.type(screen.getByRole("searchbox", { name: "搜索用户" }), "lin");
+    expect(screen.queryByText(/已选 \d 位用户/)).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: "选择当前筛选页的全部用户" }));
+    expect(screen.getByText("已选 1 位用户")).toBeTruthy();
+    await select(user, "每页条数", "20");
+    await waitFor(() => expect(screen.getByRole("button", { name: "更多操作" }).hasAttribute("disabled")).toBe(true));
+    expect(repository.executeUserBatch).not.toHaveBeenCalled();
+  });
+  it("reviews additive user memberships and retains existing associations", async () => {
+    const { user, repository } = await openBatch();
+    await user.click(screen.getByRole("checkbox", { name: "选择当前筛选页的全部用户" }));
+    await action(user, "添加到用户组");
+    let workflow = within(screen.getByRole("group", { name: "添加到用户组 · 4 位用户" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
+    expect(workflow.getByRole("table", { name: "本次操作的用户" })).toBeTruthy();
+    await user.click(workflow.getByRole("checkbox", { name: "DeliveryTeam" }));
+    await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    expect(repository.executeUserBatch).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    workflow = within(screen.getByRole("group", { name: "Add to user groups · 4 users" }));
+    expect(workflow.getByText(/The account owner is not a group member/)).toBeTruthy();
+    await user.click(workflow.getByRole("button", { name: "Confirm action" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Add to user groups · 4 users" })).toBeNull());
+    expect(repository.executeUserBatch).toHaveBeenCalledTimes(1);
+    expect(repository.execute).not.toHaveBeenCalled();
+    const state = await previewAccountRepository.workspace!.read(previewCredential);
+    expect(state.groups[0]?.memberIds).toEqual(expect.arrayContaining(["principal-lin", "principal-chen"]));
+    expect(state.groups[0]?.memberIds).not.toContain("admin");
+    expect(state.groups[1]?.memberIds).toContain("principal-chen");
+    expect(within(screen.getByRole("region", { name: "Account owner" })).getByRole("button", { name: "View user admin" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "More actions" }).hasAttribute("disabled")).toBe(true);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Create user" })));
+  });
+  it("returns a cancelled association workflow to the stable selection command", async () => {
+    const { user, repository } = await openBatch();
+    await user.click(screen.getByRole("checkbox", { name: "选择用户 lin" }));
+    await action(user, "关联策略");
+    const workflow = within(screen.getByRole("group", { name: "关联策略 · 1 位用户" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(workflow.getByRole("button", { name: "取消" }));
+
+    expect(screen.getByText("已选 1 位用户")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "更多操作" })));
+    expect(repository.executeUserBatch).not.toHaveBeenCalled();
+  });
+  it("preserves targets on failure, locks duplicate submissions and requires explicit destructive acknowledgement", async () => {
+    const { user, repository } = await openBatch();
+    await user.click(screen.getByRole("checkbox", { name: "选择用户 lin" }));
+    await user.click(screen.getByRole("checkbox", { name: "选择用户 chen" }));
+    await action(user, "禁用用户");
+    let dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByRole("button", { name: "确认执行" }).hasAttribute("disabled")).toBe(true);
+    await user.click(dialog.getByRole("button", { name: "取消" }));
+    expect(repository.executeUserBatch).not.toHaveBeenCalled();
+    expect(screen.getByText("已选 2 位用户")).toBeTruthy();
+    await action(user, "禁用用户");
+    dialog = within(screen.getByRole("dialog"));
+    await user.click(dialog.getByRole("checkbox", { name: /我已确认/ }));
+    let reject!: (reason: Error) => void;
+    repository.executeUserBatch.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    await user.dblClick(dialog.getByRole("button", { name: "确认执行" }));
+    expect(repository.executeUserBatch).toHaveBeenCalledTimes(1);
+    expect(dialog.getByRole("button", { name: "取消" }).hasAttribute("disabled")).toBe(true);
+    await act(async () => reject(new Error("offline")));
+    await expectRetainedFailure(screen.getByRole("dialog"));
+    expect(screen.getByText("已选 2 位用户")).toBeTruthy();
+    await user.click(dialog.getByRole("button", { name: "确认执行" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const after = (await previewAccountRepository.listUsers(previewCredential)).items;
+    expect(after.filter((entry) => ["lin", "chen"].includes(entry.user.loginName)).every((entry) => entry.user.status === "DISABLED")).toBe(true);
+    expect(after.filter((entry) => !["lin", "chen"].includes(entry.user.loginName)).every((entry) => entry.user.status === "ACTIVE")).toBe(true);
+    expect(repository.executeUserBatch).toHaveBeenCalledTimes(2);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("keeps live single-user management reachable without pretending to support bulk requests", async () => {
+    const { user, repository } = await open("users", { live: true });
+    expect(screen.getByRole("button", { name: "更多操作" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(/当前连接未提供批量操作/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查看用户 lin" }));
+    expect(await screen.findByRole("heading", { name: "lin" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "返回列表" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText(/不根据用户状态推断访问方式/)).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("service-based policy document exploration", () => {
+  it("keeps both effect groups and the second service page when returning from operation details", async () => {
+    const source: PolicyDocument = { version: "1", statement: [
+      { effect: "allow", action: ["*"], resource: ["*"] },
+      { effect: "deny", action: ["*"], resource: ["*"] }
+    ] };
+    const user = userEvent.setup();
+    render(<LocaleProvider><PolicyDocumentViewer document={source} /></LocaleProvider>);
+    let summary = within(screen.getByRole("table", { name: "策略摘要" }));
+    expect(summary.getAllByRole("button")).toHaveLength(10);
+    expect(summary.getAllByText("7 个服务")).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    summary = within(screen.getByRole("table", { name: "策略摘要" }));
+    expect(summary.getAllByRole("button")).toHaveLength(4);
+    expect(summary.queryByText("允许")).toBeNull();
+    expect(summary.getByText("7 个服务")).toBeTruthy();
+    await user.click(summary.getByRole("button", { name: "查看访问管理的拒绝操作" }));
+    await user.click(screen.getByRole("button", { name: "返回服务摘要" }));
+    expect(within(screen.getByRole("table", { name: "策略摘要" })).getAllByRole("button")).toHaveLength(4);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "查看访问管理的拒绝操作" }));
+    expect((screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("drills into an operation without merging conditions and restores the searched service and keyboard focus", async () => {
+    const source: PolicyDocument = { version: "1", statement: [
+      { effect: "allow", action: ["logs:search"], resource: ["matrix:logs:org-xiak:*:topic/prod/*"], condition: { sourceIp: ["192.0.2.0/24"] } },
+      { effect: "allow", action: ["logs:search"], resource: ["matrix:logs:org-xiak:*:topic/test/*"], condition: { sourceIp: ["198.51.100.0/24"] } },
+      { effect: "deny", action: ["logs:delete"], resource: ["*"] }
+    ] };
+    const user = userEvent.setup();
+    render(<LocaleProvider><PolicyDocumentViewer document={source} /></LocaleProvider>);
+    const search = screen.getByRole("searchbox", { name: "搜索服务或操作" });
+    await user.type(search, "logs");
+    const summary = within(screen.getByRole("table", { name: "策略摘要" }));
+    expect(summary.getByRole("button", { name: "查看日志服务的允许操作" })).toBeTruthy();
+    expect(summary.getByRole("button", { name: "查看日志服务的拒绝操作" })).toBeTruthy();
+    expect(summary.getAllByText("按 2 条声明分别限定")).toHaveLength(2);
+    expect(summary.queryByText("192.0.2.0/24")).toBeNull();
+    summary.getByRole("button", { name: "查看日志服务的允许操作" }).focus();
+    await user.keyboard("{Enter}");
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "日志服务 logs" }));
+    const detail = within(screen.getByRole("table", { name: "操作明细" }));
+    const rows = detail.getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.textContent).toContain("logs:search");
+    expect(rows[0]!.textContent).toContain("192.0.2.0/24");
+    expect(rows[0]!.textContent).not.toContain("198.51.100.0/24");
+    expect(rows[1]!.textContent).toContain("声明 2");
+    expect(rows[1]!.textContent).not.toContain("prod/*");
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    expect(JSON.parse(screen.getByRole("region", { name: "策略内容" }).textContent!)).toEqual(source);
+    await user.click(screen.getByRole("tab", { name: "策略摘要" }));
+    expect(screen.getByRole("table", { name: "操作明细" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回服务摘要" }));
+    expect((screen.getByRole("searchbox", { name: "搜索服务或操作" }) as HTMLInputElement).value).toBe("logs");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "查看日志服务的允许操作" }));
+    await user.click(screen.getByRole("button", { name: "查看日志服务的拒绝操作" }));
+    expect(within(screen.getByRole("table", { name: "操作明细" })).getByText("logs:delete")).toBeTruthy();
+  });
+  it("bounds operation rows, searches localized descriptions and retains exact wildcard source rules", async () => {
+    localStorage.setItem("matrix.locale", "en");
+    const source: PolicyDocument = { version: "1", statement: Array.from({ length: 13 }, (_, index) => ({
+      effect: "allow", action: ["logs:search"], resource: ["matrix:logs:org-xiak:*:topic/topic-" + index]
+    })) };
+    const user = userEvent.setup();
+    render(<LocaleProvider><PolicyDocumentViewer document={source} /></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "View Allow operations for Log service" }));
+    expect(within(screen.getByRole("table", { name: "Operation details" })).getAllByRole("row")).toHaveLength(11);
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(within(screen.getByRole("table", { name: "Operation details" })).getAllByRole("row")).toHaveLength(4);
+    const search = screen.getByRole("searchbox", { name: "Search action names or IDs" });
+    await user.type(search, "content");
+    expect(within(screen.getByRole("table", { name: "Operation details" })).getAllByRole("row")).toHaveLength(11);
+    await user.clear(search); await user.type(search, "missing-operation");
+    expect(screen.getByText("No matching actions")).toBeTruthy();
+    cleanup();
+    const wildcard: PolicyDocument = { version: "1", statement: [{ effect: "allow", action: ["logs:*"], resource: ["*"] }] };
+    render(<LocaleProvider><PolicyDocumentViewer document={wildcard} /></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "View Allow operations for Log service" }));
+    await user.click(screen.getByText("Inspect source action rules"));
+    expect(screen.getByText("logs:*")).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "Operation details" })).queryByText("iam:read")).toBeNull();
+  });
+});
+
+describe("policy creation entry and directory contract", () => {
+  it.each(["按策略生成器创建", "按策略语法创建", "按标签授权", "按产品功能或项目权限创建"])("keeps empty-draft editor tabs clickable from %s", async (method) => {
+    const { user, repository } = await open("policies");
+    await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: new RegExp("^" + method) }));
+    // Selecting a template is not applying it: this reproduces the screenshot.
+    await select(user, "从已有策略开始", "ProductionLogReader");
+    for (const name of ["JSON 编辑", "可视化编辑", "JSON 编辑", "按资源标签", "JSON 编辑", "产品功能", "JSON 编辑"]) {
+      const tab = screen.getByRole("tab", { name });
+      expect(tab.hasAttribute("disabled")).toBe(false);
+      await user.click(tab);
+      expect(tab.getAttribute("aria-selected")).toBe("true");
+    }
+    expect(JSON.parse((screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value)).toEqual({ version: "1", statement: [{ effect: "allow", action: [], resource: ["*"] }] });
+    expect(screen.queryByText(/当前 JSON 无法无损转换/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.queryByLabelText("名称", { exact: true })).toBeNull();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("keeps cleared feature selections and incomplete conditions editable across JSON tabs", async () => {
+    const { user, repository } = await open("create-policy");
+    await user.click(screen.getByRole("tab", { name: "产品功能" }));
+    await user.click(screen.getByRole("checkbox", { name: /^检索日志/ }));
+    await user.click(screen.getByRole("checkbox", { name: /^检索日志/ }));
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    expect((screen.getByRole("tab", { name: "可视化编辑" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("tab", { name: "产品功能" }) as HTMLButtonElement).disabled).toBe(false);
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    await user.click(screen.getByRole("button", { name: "添加授权声明" }));
+    await logActions(user, ["logs:search"]);
+    await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
+    await user.type(screen.getByLabelText("标签值 1"), "production");
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    const text = (screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value;
+    expect((screen.getByRole("tab", { name: "可视化编辑" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("tab", { name: "按资源标签" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("tab", { name: "产品功能" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("tab", { name: "按资源标签" }));
+    expect((screen.getByLabelText("标签键 1") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("标签值 1") as HTMLInputElement).value).toBe("production");
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    expect((screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value).toBe(text);
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("leaves malformed or unrepresentable drafts in JSON without discarding their content", async () => {
+    const { user, repository } = await open("create-policy");
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    const editor = screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement;
+    const statement = { effect: "allow", action: [], resource: ["*"] };
+    for (const text of [
+      '{ "version":',
+      JSON.stringify({ version: "1", statement: [statement], principal: "unknown" }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, notAction: ["logs:delete"] }] }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, action: ["logs:unknown"] }] }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, condition: { requestTag: { env: "prod" } } }] }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, condition: { resourceTag: [{ key: "env", value: "prod", other: "retain" }] } }] }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, resource: ["*", "matrix:logs:org-xiak:*:topic/prod/*"] }] }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, condition: { notBefore: "invalid date" } }] })
+    ]) {
+      fireEvent.change(editor, { target: { value: text } });
+      for (const name of ["可视化编辑", "按资源标签", "产品功能"]) expect((screen.getByRole("tab", { name }) as HTMLButtonElement).disabled).toBe(true);
+      expect(editor.value).toBe(text);
+    }
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("previews the current IAM policy author from the MOCK directory without creating or granting", async () => {
+    const { user, repository } = await open("policies");
+    await user.click(screen.getByRole("button", { name: "体验新版策略编辑" }));
+    expect(screen.getByRole("heading", { name: "体验 IAM 策略声明" })).toBeTruthy();
+    expect(screen.getByText(/审阅与完成体验均不调用真实 IAM/)).toBeTruthy();
+    expect(repository.listAuthorizationProfiles).not.toHaveBeenCalled();
+    await user.type(screen.getByRole("textbox", { name: "策略名称" }), "DemoReader");
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    await user.click(await screen.findByRole("radio", { name: /paas.application.read/ }));
+    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-demo");
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+    const summary = screen.getByRole("region", { name: "声明摘要" });
+    expect(within(summary).getByText("paas.application.read", { selector: "code" })).toBeTruthy();
+    expect(within(summary).getByText("app-demo", { selector: "code" })).toBeTruthy();
+    expect(screen.getByText("查看完整 JSON").closest("details")?.open).toBe(false);
+    await user.click(screen.getByRole("button", { name: "返回编辑" }));
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "策略名称" }));
+    expect((screen.getByRole("textbox", { name: "资源 ID 或前缀" }) as HTMLInputElement).value).toBe("app-demo");
+    expect(screen.getByRole("checkbox", { name: /paas.application.read/ })).toHaveProperty("checked", true);
+    expect(repository.listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    await user.click(screen.getByRole("button", { name: "完成体验" }));
+    expect(screen.getByText(/没有创建策略、关联身份或授予资源权限/)).toBeTruthy();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "返回策略目录" }));
+    expect(screen.getByRole("table", { name: "策略" })).toBeTruthy();
+  });
+  it("reviews one visual statement at a time when a policy has multiple statements", async () => {
+    const { user } = await open("policies");
+    await user.click(screen.getByRole("button", { name: "体验新版策略编辑" }));
+    await user.type(screen.getByRole("textbox", { name: "策略名称" }), "Two statements");
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    await user.click(await screen.findByRole("radio", { name: /paas.application.read/ }));
+    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-first");
+    await user.click(screen.getByRole("button", { name: "添加声明" }));
+    await user.click(screen.getByRole("radio", { name: /paas.application.read/ }));
+    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-second");
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    const summary = screen.getByRole("region", { name: "声明摘要" });
+    expect(within(summary).getByText("共 2 条声明")).toBeTruthy();
+    expect(within(summary).getByText("app-first", { selector: "code" })).toBeTruthy();
+    expect(within(summary).queryByText("app-second", { selector: "code" })).toBeNull();
+    await select(user, "选择要核对的声明", "声明 2 · statement-2");
+    expect(within(summary).getByText("app-second", { selector: "code" })).toBeTruthy();
+    expect(within(summary).queryByText("app-first", { selector: "code" })).toBeNull();
+  });
+  it("matches CAM directory columns, omits preset metadata in custom view and restores chooser focus", async () => {
+    const { user, repository } = await open("policies");
+    const headings = () => within(screen.getByRole("table", { name: "策略" })).getAllByRole("columnheader").slice(1).map((cell) => cell.textContent).filter(Boolean);
+    const table = screen.getByRole("table", { name: "策略" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getByRole("checkbox", { name: "选择本页策略" }).closest("th")?.textContent).toBe("选择本页策略");
+    expect(headings()).toEqual(["策略名", "所属产品", "权限级别", "描述", "上次修改时间"]);
+    const customRow = within(table).getByRole("button", { name: "AssumeLogReviewRole" }).closest("tr")!;
+    expect(customRow.cells[2]?.getAttribute("data-mobile-empty")).toBe("true");
+    expect(customRow.cells[3]?.getAttribute("data-mobile-empty")).toBe("true");
+    expect(customRow.cells[4]?.getAttribute("data-label")).toBe("描述");
+    const productRow = within(table).getByRole("button", { name: "MatrixAuditReadOnly" }).closest("tr")!;
+    expect(productRow.cells[2]?.hasAttribute("data-mobile-empty")).toBe(false);
+    await select(user, "权限级别", "全局权限");
+    await user.click(screen.getByRole("tab", { name: "自定义策略" }));
+    expect(headings()).toEqual(["策略名", "描述", "上次修改时间"]);
+    expect(screen.getByRole("button", { name: "ProductionLogReader" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "权限级别" })).toBeNull();
+    const create = screen.getByRole("button", { name: "新建自定义策略" });
+    await user.click(create);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "选择创建策略方式" })).toBe(document.activeElement);
+    for (const name of [/^按策略生成器创建/, /^按策略语法创建/, /^按标签授权/, /^按产品功能或项目权限创建/]) expect(screen.getByRole("button", { name })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "新建自定义策略" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("previews the exact-shaped permission catalog without presenting it as the IAM registry", async () => {
+    const { user, repository } = await open("policies");
+    await screen.findByRole("table", { name: "策略" });
+    expect(screen.getByRole("button", { name: "新建自定义策略" })).toBeTruthy();
+    expect(repository.listAuthorizationProfiles).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
+    expect(await screen.findByRole("table", { name: "产品权限能力目录" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "新建自定义策略" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "更多操作" })).toBeNull();
+    expect(screen.getByText(/隔离 MOCK 的权限能力目录示例/)).toBeTruthy();
+    expect(repository.listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "paas" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "新建自定义策略" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "查看内部接入流程（MOCK）" })).toBeNull();
+    expect(screen.getByRole("heading", { level: 2, name: "paas" })).toBe(document.activeElement);
+  });
+  it("keeps product onboarding in the platform MOCK workspace without inventing a live publish contract", async () => {
+    const { user, repository } = await open("authorization-profiles");
+    expect(await screen.findByRole("heading", { name: "产品权限接入" })).toBeTruthy();
+    expect(screen.getByText(/隔离 MOCK 的内部协作体验/)).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "paas" }));
+    expect(screen.getByRole("heading", { level: 3, name: "产品接入与租户授权是三段独立职责" })).toBeTruthy();
+    expect(screen.getByText("定义能力并落实 PEP")).toBeTruthy();
+    expect(screen.getByText("校验契约并受信发布")).toBeTruthy();
+    expect(screen.getByText("消费目录并分配权限")).toBeTruthy();
+    const trigger = screen.getByRole("button", { name: "查看内部接入流程（MOCK）" });
+    scrollIntoView.mockClear();
+    await user.click(trigger);
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 2, name: "产品接入审阅 · paas" })).toBe(document.activeElement);
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "start", inline: "nearest" });
+    expect(screen.getByText(/不是租户自助发布入口/)).toBeTruthy();
+    expect(screen.getByText(`sha256:${"a".repeat(64)}`)).toBeTruthy();
+    expect(screen.getByText("责任人：产品研发团队")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("heading", { level: 3, name: "检查 IAM 契约与真实鉴权边界" })).toBe(document.activeElement);
+    expect(screen.getByText(/不是在线校验结果/)).toBeTruthy();
+    expect(screen.getByText(/subjectTypes 与 userAuthenticationMethods/)).toBeTruthy();
+    expect(screen.getAllByText("待核验")).toHaveLength(5);
+    expect(screen.getByRole("tab", { name: "检查结果" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByRole("region", { name: "候选修订影响" })).toBeNull();
+    expect(screen.queryByRole("table", { name: "逐项核对权限声明" })).toBeNull();
+    const diagnostics = screen.getByRole("region", { name: "接入诊断快照" });
+    expect(within(diagnostics).getByText("paas@1")).toBeTruthy();
+    expect(within(diagnostics).getByText("PAAS")).toBeTruthy();
+    expect(within(diagnostics).getByText("运行时证据未验证")).toBeTruthy();
+    expect(within(diagnostics).getAllByText(/IAM 已认证身份/).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("tab", { name: "候选修订" }));
+    expect(screen.queryByRole("region", { name: "接入诊断快照" })).toBeNull();
+    const impact = screen.getByRole("region", { name: "候选修订影响" });
+    expect(within(impact).getByText("合成候选 · MOCK")).toBeTruthy();
+    expect(within(impact).getByText("新增声明 1")).toBeTruthy();
+    expect(within(impact).getByText("移除声明 0")).toBeTruthy();
+    expect(within(impact).getByText("改变声明 1")).toBeTruthy();
+    expect(within(impact).getByText("paas.candidate-preview.read")).toBeTruthy();
+    expect(within(impact).getByText(/不代表权限扩大或收窄/)).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Action 声明" }));
+    expect(screen.queryByRole("region", { name: "候选修订影响" })).toBeNull();
+    const reviewActions = screen.getByRole("table", { name: "逐项核对权限声明" });
+    expect(within(reviewActions).getByText("paas.application.read")).toBeTruthy();
+    expect(within(reviewActions).getByText("实例（支持已声明前缀）")).toBeTruthy();
+    expect(within(reviewActions).getByText(/用户凭证: 登录会话/)).toBeTruthy();
+    expect(within(reviewActions).getAllByText(/IAM 事务时间/).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("heading", { level: 3, name: "审阅不可变发布引用与消费边界" })).toBe(document.activeElement);
+    const releaseGates = screen.getByRole("region", { name: "发布门禁状态" });
+    expect(within(releaseGates).getByText("仅 MOCK 输入")).toBeTruthy();
+    expect(within(releaseGates).getByText("未执行")).toBeTruthy();
+    expect(within(releaseGates).getByText("未验证")).toBeTruthy();
+    expect(within(releaseGates).getByText("未接入")).toBeTruthy();
+    const publish = screen.getByRole("button", { name: "发布修订（未接入）" }) as HTMLButtonElement;
+    expect(publish.disabled).toBe(true);
+    expect(screen.getByText(/没有对应发布 Action/)).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "结束体验" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" })).toBe(document.activeElement));
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest", inline: "nearest" });
+  });
+  it("does not expose the internal onboarding workflow from a live route", async () => {
+    await open("authorization-profiles", { live: true });
+    expect(await screen.findByText("此能力尚未接入后端")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "查看内部接入流程（MOCK）" })).toBeNull();
+    expect(screen.queryByRole("table", { name: "产品权限能力目录" })).toBeNull();
+  });
+  it("cross-checks the managed-service template without implying customer authorization", async () => {
+    const { user } = await open("authorization-profiles", { repository: {
+      listAuthorizationProfiles: vi.fn(() => previewAccountRepository.listAuthorizationProfiles(previewCredential))
+    } });
+    await user.click(await screen.findByRole("button", { name: "managedservice" }));
+    await user.click(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+
+    const review = screen.getByRole("region", { name: "服务授权模板交叉校验" });
+    expect(within(review).getByText("契约兼容 · MOCK")).toBeTruthy();
+    expect(within(review).getByText("managedservice@4")).toBeTruthy();
+    expect(within(review).getByText("managedservice.installation-reader@v1")).toBeTruthy();
+    expect(within(review).getByText(/managedservice\.service-installation\.service-role\.bind/)).toBeTruthy();
+    expect(within(review).getByText(/managedservice\.service-installation\.service-role\.unbind/)).toBeTruthy();
+    expect(within(review).getAllByText("匹配")).toHaveLength(4);
+    expect(within(review).getByText(/不代表客户账号已经同意/)).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Action 声明" }));
+    expect(screen.getByText("产品 PEP 有界批量候选检查")).toBeTruthy();
+  });
+  it("pages action evidence instead of mounting an unbounded onboarding review", async () => {
+    const actions = Array.from({ length: 1202 }, (_, index) => ({
+      action: `paas.review-${String(index + 1).padStart(4, "0")}.read`, resourceKind: "APPLICATION", scope: "TENANT",
+      resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }]
+    }));
+    const { user } = await open("authorization-profiles", { repository: { listAuthorizationProfiles: vi.fn().mockResolvedValue({
+      accountId: "org-xiak", items: [{ profile: { product: "paas", revision: 1, callingService: "PAAS", actions }, contentDigest: `sha256:${"a".repeat(64)}` }]
+    }) } });
+    await user.click(await screen.findByRole("button", { name: "paas" }));
+    await user.click(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("tab", { name: "Action 声明" }));
+    const review = screen.getByRole("table", { name: "逐项核对权限声明" });
+    expect(within(review).getAllByRole("row")).toHaveLength(11);
+    expect(within(review).getByText("paas.review-0001.read")).toBeTruthy();
+    expect(within(review).queryByText("paas.review-0011.read")).toBeNull();
+    await user.click(within(review.closest("section")!).getByRole("button", { name: "下一页" }));
+    expect(within(review).getAllByRole("row")).toHaveLength(11);
+    expect(within(review).getByText("paas.review-0011.read")).toBeTruthy();
+    expect(within(review).queryByText("paas.review-0001.read")).toBeNull();
+    expect(screen.getByText(/分页仅改变显示/)).toBeTruthy();
+  });
+  it("compares complete candidate declarations without turning a revision into a publish decision", async () => {
+    const action = (index: number, resourceKind = "APPLICATION"): AuthorizationProfileAction => ({
+      action: `paas.review-${String(index + 1).padStart(4, "0")}.read`, resourceKind, scope: "TENANT",
+      resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }], subjectTypes: ["USER"],
+      userAuthenticationMethods: ["LOGIN_SESSION"]
+    });
+    const current: AuthorizationProfileEntry = {
+      profile: { product: "paas", revision: 1, callingService: "PAAS", actions: Array.from({ length: 1202 }, (_, index) => action(index)) },
+      contentDigest: `sha256:${"a".repeat(64)}`
+    };
+    const identical = compareAuthorizationProfileEntries(current, current);
+    expect(identical).toMatchObject({ status: "ready", added: 0, removed: 0, changed: 0, changes: [] });
+    const changedService = compareAuthorizationProfileEntries(current, {
+      ...current, profile: { ...current.profile, revision: 2, callingService: "AUDIT" }
+    });
+    expect(changedService.status).toBe("ready");
+    if (changedService.status === "ready") expect(changedService.changes[0]).toMatchObject({ action: "AuthorizationProfile.callingService", fields: ["callingService"] });
+
+    const candidate: AuthorizationProfileEntry = {
+      profile: { ...current.profile, revision: 2, actions: Array.from({ length: 1202 }, (_, index) => action(index, "APPLICATION_REVISION")) },
+      contentDigest: `sha256:${"b".repeat(64)}`
+    };
+    const user = userEvent.setup();
+    render(<LocaleProvider><AuthorizationProfilePublishingPreview entry={current} candidate={candidate} onClose={vi.fn()} /></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("tab", { name: "候选修订" }));
+    const impact = screen.getByRole("region", { name: "候选修订影响" });
+    const changes = within(impact).getByRole("table", { name: "候选修订变更清单" });
+    expect(within(changes).getAllByRole("row")).toHaveLength(11);
+    expect(within(changes).getByText("paas.review-0001.read")).toBeTruthy();
+    expect(within(changes).queryByText("paas.review-0011.read")).toBeNull();
+    await user.click(within(impact).getByRole("button", { name: "下一页" }));
+    expect(within(changes).getAllByRole("row")).toHaveLength(11);
+    expect(within(changes).getByText("paas.review-0011.read")).toBeTruthy();
+    expect(within(changes).queryByText("paas.review-0001.read")).toBeNull();
+    expect(within(impact).getByText(/revision 和 digest 仅标识不可变内容/)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it.each([
+    ["visual", "按策略生成器创建", "可视化编辑"],
+    ["json", "按策略语法创建", "JSON 编辑"],
+    ["tags", "按标签授权", "按资源标签"],
+    ["features", "按产品功能或项目权限创建", "产品功能"]
+  ] as const)("creates via %s with one reviewed document and no live IAM writes", async (method, title, tab) => {
+    const { user, repository, extension } = await open("policies");
+    await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: new RegExp("^" + title) }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("tab", { name: tab }).getAttribute("aria-selected")).toBe("true");
+    if (method === "json") {
+      fireEvent.change(screen.getByLabelText("策略内容", { selector: "textarea" }), { target: { value: JSON.stringify({ version: "1", statement: [{ effect: "allow", action: ["logs:search"], resource: ["*"] }] }) } });
+    } else if (method === "features") {
+      await user.click(screen.getByRole("checkbox", { name: /^检索日志/ }));
+      const product = screen.getByRole("checkbox", { name: "日志服务" }) as HTMLInputElement;
+      expect(product.indeterminate).toBe(true);
+      fireEvent.change(screen.getByRole("searchbox", { name: "搜索产品或功能" }), { target: { value: "数据库" } });
+      await user.clear(screen.getByRole("searchbox", { name: "搜索产品或功能" }));
+      expect((screen.getByRole("checkbox", { name: /^检索日志/ }) as HTMLInputElement).checked).toBe(true);
+    } else {
+      await logActions(user, ["logs:search"]);
+      if (method === "tags") {
+        expect(screen.getByRole("heading", { name: "标签授权的信任边界" })).toBeTruthy();
+        expect(screen.getByText("资源标签事实")).toBeTruthy();
+        expect(screen.getByText("请求标签变更")).toBeTruthy();
+        expect(screen.getByText("身份与策略标签")).toBeTruthy();
+        expect(screen.getByText(/修改资源标签可能改变之后的访问结果/)).toBeTruthy();
+        expect(screen.queryByRole("checkbox", { name: "logs:list" })).toBeNull();
+        expect(screen.getByRole("heading", { name: "生效条件（资源标签必填）" })).toBeTruthy();
+        await user.click(screen.getByRole("button", { name: "下一步" }));
+        expect(screen.queryByLabelText("名称", { exact: true })).toBeNull();
+        expect(screen.getByText("请为每条声明开启「按资源标签限制」并填写标签。若不需要标签限制，请切换到可视化编辑。")).toBeTruthy();
+        expect(repository.workspace!.execute).not.toHaveBeenCalled();
+        await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
+        fireEvent.change(screen.getByLabelText("标签键 1"), { target: { value: "environment" } });
+        fireEvent.change(screen.getByLabelText("标签值 1"), { target: { value: "production" } });
+      }
+    }
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.change(screen.getByLabelText("名称", { exact: true }), { target: { value: "Method-" + method } });
+    await user.click(screen.getByRole("button", { name: "上一步" }));
+    expect(screen.getByRole("tab", { name: tab }).getAttribute("aria-selected")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    if (method === "tags") expect(screen.getByRole("heading", { name: "标签授权的信任边界" })).toBeTruthy();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "创建策略" }));
+    await screen.findByRole("heading", { name: "策略已保存" });
+    const saved = (await extension.read("preview")).policies.find((policy) => policy.name === "Method-" + method)!;
+    expect(saved.versions[0]?.document.statement).toEqual([{ effect: "allow", action: ["logs:search"], resource: ["*"], ...(method === "tags" ? { condition: { resourceTag: [{ key: "environment", value: "production" }] } } : {}) }]);
+    expect(repository.workspace!.execute).toHaveBeenCalledTimes(1);
+    expect(repository.execute).not.toHaveBeenCalled();
+  }, 10_000);
+  it("never converts restricted or wildcard JSON into a broader product-feature grant", async () => {
+    const { user, repository } = await open("create-policy");
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    const editor = screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement;
+    for (const statement of [
+      { effect: "allow", action: ["logs:*"], resource: ["*"] },
+      { effect: "deny", action: ["logs:search"], resource: ["*"] },
+      { effect: "allow", action: ["logs:search"], resource: ["*"], condition: { resourceTag: [{ key: "env", value: "test" }] } },
+      { effect: "allow", action: ["logs:search"], resource: ["matrix:logs:org-xiak:*:topic/prod/*"] }
+    ]) {
+      const text = JSON.stringify({ version: "1", statement: [statement] });
+      fireEvent.change(editor, { target: { value: text } });
+      expect((screen.getByRole("tab", { name: "产品功能" }) as HTMLButtonElement).disabled).toBe(true);
+      expect(editor.value).toBe(text);
+    }
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("CAM-style access workspace", () => {
+  it("returns to the same user query and criteria without retaining bulk selection", async () => {
+    const { user } = await open("users");
+    await user.type(screen.getByRole("searchbox", { name: "搜索用户" }), "lin");
+    await select(user, "筛选用户状态", "正常");
+    await user.click(screen.getByRole("button", { name: "查看用户 lin" }));
+    expect(screen.getByRole("heading", { name: "lin" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect((screen.getByRole("searchbox", { name: "搜索用户" }) as HTMLInputElement).value).toBe("lin");
+    expect(screen.getByRole("button", { name: "移除筛选：筛选用户状态: 正常" })).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "租户用户列表" })).getAllByRole("row")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "更多操作" }).hasAttribute("disabled")).toBe(true);
+  });
+  it("retains incompatible conditions and restricts resource choices to the selected operation capabilities", async () => {
+    const { user, repository } = await open("create-policy");
+    expect((screen.getByRole("checkbox", { name: "限制来源 IP" }) as HTMLInputElement).disabled).toBe(true);
+    await logActions(user, ["logs:search"]);
+    await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
+    await user.type(screen.getByLabelText("标签键 1"), "env");
+    await user.type(screen.getByLabelText("标签值 1"), "prod");
+    await user.click(screen.getByRole("checkbox", { name: "logs:list" }));
+    expect((screen.getByLabelText("标签值 1") as HTMLInputElement).value).toBe("prod");
+    expect(screen.getByText(/现有条件不被全部所选操作支持/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(screen.getByRole("checkbox", { name: "logs:list" })).toBeTruthy();
+    await user.click(screen.getByRole("checkbox", { name: "logs:list" }));
+    expect(screen.queryByText(/现有条件不被全部所选操作支持/)).toBeNull();
+    await select(user, "资源授权范围", "指定资源");
+    await user.click(screen.getByRole("combobox", { name: "资源服务 1" }));
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["日志服务"]);
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("combobox", { name: "资源类型 1" }));
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["日志主题"]);
+    await user.keyboard("{Escape}");
+  });
+
+  it("paginates policies and keeps the current page when returning from a detail", async () => {
+    const { user } = await open("policies", { seed: async (extension) => {
+      for (let index = 0; index < 13; index++) await extension.execute("preview", { kind: "save-policy", name: "Paged" + String(index).padStart(2, "0"), description: "", document: { version: "1", statement: [{ effect: "allow", action: ["logs:search"], resource: ["*"] }] } });
+    } });
+    let table = await screen.findByRole("table", { name: "策略" });
+    await user.type(screen.getByRole("searchbox", { name: "搜索策略名称、描述或标签" }), "Paged");
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    await user.click(within(table).getByRole("checkbox", { name: "选择 Paged00" }));
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    table = screen.getByRole("table", { name: "策略" });
+    expect(within(table).getAllByRole("row")).toHaveLength(4);
+    expect(screen.getByText("已选 1 个策略")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Paged12" }));
+    await screen.findByRole("heading", { name: "Paged12" });
+    await user.click(screen.getByTestId("go-policies"));
+    table = await screen.findByRole("table", { name: "策略" });
+    expect(within(table).getAllByRole("row")).toHaveLength(4);
+    expect(within(table).getByRole("button", { name: "Paged12" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+  it("adds inventory resources without overwriting manual patterns and retains tag-mode drafts and error locations", async () => {
+    const { user, repository } = await open("create-policy");
+    await user.click(await screen.findByRole("tab", { name: "按资源标签" }));
+    await logActions(user, ["logs:search"]);
+    expect(screen.getAllByText("资源级 · 日志主题").length).toBeGreaterThan(0);
+    await select(user, "资源授权范围", "指定资源");
+    await user.type(screen.getByLabelText("资源 ID 或前缀 1"), "manual/*");
+    await select(user, "从体验资源选择", "production/payment · cn-shanghai-a");
+    await user.click(screen.getByRole("button", { name: "添加所选资源" }));
+    expect((screen.getByLabelText("资源 ID 或前缀 1") as HTMLInputElement).value).toBe("manual/*");
+    expect((screen.getByLabelText("资源 ID 或前缀 2") as HTMLInputElement).value).toBe("production/payment");
+    await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
+    await user.click(screen.getByLabelText("标签键 1")); await user.paste("environment");
+    await user.click(screen.getByLabelText("标签值 1")); await user.paste("production");
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    const input = screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement;
+    const draft = JSON.parse(input.value);
+    expect(draft.statement[0].resource).toEqual(["matrix:logs:org-xiak:*:topic/manual/*", "matrix:logs:org-xiak:cn-shanghai-a:topic/production/payment"]);
+    expect(draft.statement[0].condition.resourceTag).toEqual([{ key: "environment", value: "production" }]);
+    draft.statement[0].action = ["logs:unknown"];
+    fireEvent.change(input, { target: { value: JSON.stringify(draft) } });
+    await user.click(screen.getByRole("button", { name: "查看 $.statement[0]" }));
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toContain("logs:unknown");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(input.value).toContain("manual/*");
+    expect((screen.getByRole("tab", { name: "按资源标签" }) as HTMLButtonElement).disabled).toBe(true);
+  }, 10_000);
+  it("retains independent policy directory filters across details and page navigation", async () => {
+    const { user } = await open("policies");
+    const directory = await screen.findByRole("table", { name: "策略" });
+    expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(within(directory).queryByRole("button", { name: "授权用户/组/角色" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "预设策略" }));
+    await select(user, "所属产品", "访问管理");
+    await select(user, "权限级别", "云产品权限");
+    await select(user, "排序方式", "最近修改");
+    await user.type(screen.getByRole("searchbox"), "Audit");
+    await user.click(screen.getByRole("button", { name: "MatrixAuditReadOnly" }));
+    expect(await screen.findByRole("heading", { name: "MatrixAuditReadOnly" })).toBeTruthy();
+    await user.click(screen.getByTestId("go-policies"));
+    expect(await screen.findByRole("table", { name: "策略" })).toBeTruthy();
+    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("Audit");
+    expect(screen.getByRole("tab", { name: "预设策略" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "移除筛选：所属产品: 访问管理" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "移除筛选：权限级别: 云产品权限" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "排序方式" }).textContent).toContain("最近修改");
+    expect(within(screen.getByRole("table", { name: "策略" })).getAllByRole("row")).toHaveLength(2);
+  });
+  it("reviews batch attachments, preserves a failed selection and commits only after confirmation", async () => {
+    const { user, repository, extension } = await open("policies");
+    await user.click(await screen.findByRole("checkbox", { name: "选择 MatrixReadOnlyAccess" }));
+    await user.click(screen.getByRole("checkbox", { name: "选择 ProductionLogReader" }));
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "批量关联" }));
+    const workflow = screen.getByRole("form", { name: "批量关联" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(within(workflow).getByRole("checkbox", { name: /lin/ }));
+    await user.click(within(workflow).getByRole("button", { name: "下一步：审阅" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(within(workflow).getByRole("region", { name: "新增关联" }).textContent).toContain("lin");
+    expect(document.activeElement).toBe(within(workflow).getByRole("heading", { name: "审阅关联变更" }));
+    await user.click(within(workflow).getByRole("button", { name: "上一步" }));
+    expect((within(workflow).getByRole("checkbox", { name: /lin/ }) as HTMLInputElement).checked).toBe(true);
+    await user.click(within(workflow).getByRole("button", { name: "下一步：审阅" }));
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(within(workflow).getByRole("button", { name: "确认关联" }));
+    await expectRetainedFailure(workflow);
+    expect((await extension.read("preview")).userPolicies["principal-lin"]).toEqual(["policy-prod-logs"]);
+    await user.click(within(workflow).getByRole("button", { name: "确认关联" }));
+    expect(await screen.findByRole("heading", { name: "关联已更新" })).toBeTruthy();
+    expect((await extension.read("preview")).userPolicies["principal-lin"]).toEqual(["policy-prod-logs", "policy-read"]);
+    await user.click(screen.getByRole("button", { name: "完成并返回" }));
+    expect(await screen.findByRole("table", { name: "策略" })).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("explains the remaining direct path when a group attachment is removed", async () => {
+    const { user, repository } = await open("policies", { seed: async (extension) => {
+      await extension.execute("preview", { kind: "associate-policy", id: "policy-prod-logs", userIds: ["principal-lin"], groupIds: ["group-delivery"], roleIds: [] });
+    } });
+    await user.click(await screen.findByRole("button", { name: "ProductionLogReader" }));
+    await user.click(screen.getByRole("button", { name: "关联用户 / 组 / 角色" }));
+    const workflow = screen.getByRole("form", { name: "关联用户 / 组 / 角色 · ProductionLogReader" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(within(workflow).getByRole("button", { name: /移除 DeliveryTeam/ }));
+    await user.click(within(workflow).getByRole("button", { name: "下一步：审阅" }));
+    expect(within(workflow).getByText("lin 仍直接关联此策略。")).toBeTruthy();
+    expect(within(workflow).getByRole("region", { name: "移除关联" }).textContent).toContain("DeliveryTeam");
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("links local security-review candidates to their exact policy, using default content rather than names", async () => {
+    const { user, repository } = await open("overview", { seed: async (extension) => {
+      await extension.execute("preview", { kind: "save-policy", name: "ReviewGrant", description: "", document: { version: "1", statement: [{ effect: "allow", action: ["iam:grantUser"], resource: ["*"] }] }, tags: [], targets: { userIds: ["principal-lin"], groupIds: ["group-delivery", "group-auditors"], roleIds: [] } });
+    } });
+    const table = await screen.findByRole("table", { name: "需要安全复核的策略" });
+    const link = within(table).getByRole("link", { name: "ReviewGrant" });
+    const id = new URL(link.getAttribute("href")!, "https://matrix.example.invalid").searchParams.get("id");
+    expect(id).toBeTruthy();
+    expect(within(table).queryByRole("link", { name: "MatrixReadOnlyAccess" })).toBeNull();
+    expect(link.closest("tr")!.textContent).toContain("3");
+    expect(screen.getByText(/此列表不是有效权限评估/)).toBeTruthy();
+    await user.click(link);
+    expect(screen.getByLabelText("Entity destination").textContent).toBe(id);
+    expect(await screen.findByRole("heading", { name: "ReviewGrant" })).toBeTruthy();
+    expect(screen.getByText(/包含权限管理操作/)).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("searches products and descriptions in both languages without confusing action types with policy categories", async () => {
+    const { user } = await open("policies");
+    const table = await screen.findByRole("table", { name: "策略" });
+    const row = within(table).getByRole("button", { name: "ProductionLogReader" }).closest("tr")!;
+    expect(within(row).queryByText("读取")).toBeNull();
+    expect(within(table).getAllByText("全局权限")).toHaveLength(2);
+    await user.type(screen.getByRole("searchbox", { name: "搜索策略名称、描述或标签" }), "日志服务 production");
+    expect(screen.getByRole("button", { name: "ProductionLogReader" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "MatrixAuditReadOnly" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    await user.clear(screen.getByRole("searchbox"));
+    await user.type(screen.getByRole("searchbox"), "Log read");
+    expect(screen.getByRole("button", { name: "ProductionLogReader" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "MatrixAuditReadOnly" })).toBeNull();
+  });
+  it("keeps inactive keys, policy configuration and missing authenticator evidence semantically distinct", async () => {
+    const { user } = await open("overview", { seed: async (extension) => {
+      await extension.execute("preview", { kind: "change-group-members", id: "group-delivery", added: [], removed: ["principal-lin"] });
+      await extension.execute("preview", { kind: "change-group-policies", id: "group-auditors", added: [], removed: ["policy-audit"] });
+      await extension.execute("preview", { kind: "change-group-policies", id: "group-operators", added: [], removed: ["policy-delivery", "policy-tag-logs"] });
+      await extension.execute("preview", { kind: "set-key-status", id: "MOCK-pipeline-key", ownerState: "active", status: "DISABLED", resourceVersion: 2, requestId: "disable-pipeline-key" });
+      await seedBoundAccountRuleOperator(extension);
+      await extension.execute("preview", { kind: "save-account-rule", requestId: "seed-account-rule", expectedRuleVersion: 1, expectedLoginProtection: false, loginProtection: true, responseMode: "success" });
+    } });
+    expect(await screen.findByText(/0 个启用的模拟长期密钥/)).toBeTruthy();
+    expect(screen.getByText(/这里显示账户策略，不代表用户已经绑定 MFA/)).toBeTruthy();
+    expect(screen.getByText(/当前数据未提供认证器绑定事实/)).toBeTruthy();
+    expect(screen.getAllByText("状态未知").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("已完成")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查看长期访问密钥" }));
+    const ownerDirectory = await screen.findByRole("table", { name: "选择要管理的用户" });
+    expect(within(ownerDirectory).getAllByRole("columnheader")).toHaveLength(2);
+    expect(within(ownerDirectory).queryByRole("columnheader", { name: "管理方式" })).toBeNull();
+    expect(screen.getByRole("button", { name: "管理 chen 的访问密钥" })).toBeTruthy();
+    const userSearch = screen.getByRole("searchbox", { name: "搜索已加载用户" });
+    await user.type(userSearch, "lin");
+    expect(await screen.findByRole("button", { name: "管理 lin 的访问密钥" })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "管理 chen 的访问密钥" })).toBeNull());
+    await user.clear(userSearch);
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
+    const keyDirectory = await screen.findByRole("table", { name: "访问密钥" });
+    expect(within(keyDirectory).getAllByRole("columnheader")).toHaveLength(4);
+    expect(within(keyDirectory).queryByText("密钥资源版本")).toBeNull();
+    expect(within(keyDirectory).getByText("已禁用")).toBeTruthy();
+    expect(within(keyDirectory).getByRole("columnheader", { name: "安全观测" })).toBeTruthy();
+    expect(within(keyDirectory).getByText("账号 + 密钥")).toBeTruthy();
+    expect(within(keyDirectory).getByText("有历史观测")).toBeTruthy();
+    expect(screen.queryByText("最近使用")).toBeNull();
+    await user.click(within(keyDirectory).getByRole("button", { name: "MOCK-pipeline-key" }));
+    expect(screen.getByRole("heading", { name: "最近授权观测" })).toBeTruthy();
+    expect(screen.getByText("audit.record.read")).toBeTruthy();
+    expect(screen.getByText("198.51.100.42")).toBeTruthy();
+    expect(screen.getByText(/最近一次允许不代表当前仍允许/)).toBeTruthy();
+  });
+  it("filters mock user associations by direct and group sources and opens the same management detail", async () => {
+    const { user } = await open("users");
+    const table = await screen.findByRole("table", { name: "租户用户列表" });
+    expect(within(table).getByRole("columnheader", { name: "策略关联" })).toBeTruthy();
+    expect(within(table).getAllByText("用户组 1 项")).toHaveLength(2);
+    expect(within(table).getByText("直接 1 项")).toBeTruthy();
+    await select(user, "筛选策略来源", "直接关联");
+    expect(screen.queryByRole("button", { name: "查看用户 chen" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查看用户 lin" }));
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-lin");
+    expect(await screen.findByRole("heading", { name: "lin" })).toBeTruthy();
+  });
+  it("keeps access methods independent of permissions and exposes identity details even without a profile", async () => {
+    const { user, repository, extension } = await open("users");
+    const method = (scope: HTMLElement, name: string) => within(within(scope).getByText(name, { exact: true }).closest("li")!);
+    const row = (await screen.findByRole("button", { name: "查看用户 lin" })).closest("tr")!;
+    const lin = within(row);
+    expect(method(row, "控制台访问").getByText("已启用")).toBeTruthy();
+    expect(method(row, "编程访问").getByText("已启用")).toBeTruthy();
+    await user.click(lin.getByRole("button", { name: "查看用户 lin" }));
+    expect(screen.getByRole("tab", { name: "身份信息" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText(/授予管理员权限不会将其变成主账号/)).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "访问方式" }));
+    expect(method(document.body, "编程访问").getByText("已启用")).toBeTruthy();
+    expect(screen.getByText(/不代表资源权限/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    expect(method(document.body, "Programmatic access").getByText("Enabled")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Back to list" }));
+    const extensionRead = repository.workspace!.read;
+    vi.mocked(extensionRead).mockImplementationOnce(async () => {
+      const state = await extension.read("preview");
+      delete state.userProfiles["principal-chen"];
+      return state;
+    });
+    // Refresh is the explicit owner of related access-method data. Cursor paging
+    // must not reload the identity, policy directories or preview workspace.
+    await user.click(screen.getByTestId("refresh-account"));
+    await waitFor(() => expect(method(screen.getByRole("button", { name: "View user chen" }).closest("tr")!, "Console access").getByText("Configuration not provided")).toBeTruthy());
+    await user.click(await screen.findByRole("button", { name: "View user chen" }));
+    expect(screen.getByRole("tab", { name: "Identity" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Access methods" }));
+    expect(method(document.body, "Console access").getByText("Configuration not provided")).toBeTruthy();
+    expect(method(document.body, "Console access").queryByText("Disabled")).toBeNull();
+  });
+  it("presents the account owner outside user selection and group membership", async () => {
+    const { user, repository, extension } = await open("users");
+    const owner = within(await screen.findByRole("region", { name: "账号所有者" }));
+    expect(owner.getByText("账号所有者")).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "租户用户列表" })).queryByRole("button", { name: "查看用户 admin" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "选择用户 admin" })).toBeNull();
+    await user.click(owner.getByRole("button", { name: "查看用户 admin" }));
+    expect(screen.queryByRole("tab", { name: "所属用户组" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "权限策略" }));
+    expect(screen.getByText(/根身份不是普通用户，不加入用户组/)).toBeTruthy();
+    await user.click(screen.getByTestId("go-groups"));
+    await user.click(await screen.findByRole("button", { name: "DeliveryTeam" }));
+    await user.click(screen.getByRole("button", { name: "添加成员" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(within(screen.getByRole("group", { name: "添加成员 · DeliveryTeam" })).queryByRole("checkbox", { name: "admin" })).toBeNull();
+    expect((await extension.read("preview")).groups[0]?.memberIds).not.toContain("admin");
+    expect((await extension.read("preview")).userPolicies["admin"]).toBeUndefined();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("does not count empty membership or a boundary as a granting policy in the mock directory", async () => {
+    const { user } = await open("users", { seed: async (extension) => {
+      await extension.execute("preview", { kind: "change-group-policies", id: "group-auditors", added: [], removed: ["policy-audit"] });
+      await extension.execute("preview", { kind: "set-user-boundary", principalId: "principal-chen", policyId: "policy-read" });
+    } });
+    await select(user, "筛选策略来源", "未关联授权策略");
+    expect(await screen.findByRole("button", { name: "查看用户 chen" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "查看用户 lin" })).toBeNull();
+  });
+  it.each(["create-user", "create-group", "create-policy", "create-role"] as const)("protects the %s draft from menu navigation and leaves without partial mutations only on confirmation", async (view) => {
+    const { user, repository } = await open(view);
+    let verify: () => void;
+    if (view === "create-user") {
+      await user.click(await screen.findByRole("button", { name: "下一步" }));
+      await user.type(screen.getByLabelText("子用户名"), "retained.user");
+      verify = () => expect((screen.getByLabelText("子用户名") as HTMLInputElement).value).toBe("retained.user");
+    } else if (view === "create-group") {
+      await user.type(await screen.findByLabelText("名称", { exact: true }), "RetainedGroup");
+      verify = () => expect((screen.getByLabelText("名称", { exact: true }) as HTMLInputElement).value).toBe("RetainedGroup");
+    } else if (view === "create-role") {
+      await user.click(await screen.findByRole("checkbox", { name: "lin" }));
+      verify = () => expect((screen.getAllByRole("checkbox", { name: "lin" })[0] as HTMLInputElement).checked).toBe(true);
+    } else {
+      await user.click(await screen.findByRole("tab", { name: "JSON 编辑" }));
+      fireEvent.change(screen.getByLabelText("策略内容", { selector: "textarea" }), { target: { value: "{ incomplete policy draft" } });
+      verify = () => expect((screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value).toBe("{ incomplete policy draft");
+    }
+    await user.click(screen.getByTestId("go-users"));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "继续编辑" }));
+    verify();
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByRole("button", { name: "放弃并离开" }));
+    expect(await screen.findByRole("button", { name: "创建用户" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+
+  it("keeps the preview role workspace unavailable to a read-only viewer", async () => {
+    const { user, repository } = await open("roles", { reader: true });
+    expect(await screen.findByRole("heading", { name: "没有此页面的管理权限" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "新建角色" })).toBeNull();
+    await user.click(screen.getByTestId("go-create-role"));
+    expect(await screen.findByRole("heading", { name: "没有此页面的管理权限" })).toBeTruthy();
+    expect(repository.workspace!.read).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("uses the shared stacked mobile contract for compact workspace directories", async () => {
+    await open("roles");
+    const directory = await screen.findByRole("table", { name: "角色" });
+    expect(directory.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(within(directory).getByRole("button", { name: "ProductionLogReviewRole" }).closest("td")?.getAttribute("data-label")).toBe("名称");
+    expect(within(directory).getByText("客户角色（CUSTOMER）").closest("td")?.getAttribute("data-label")).toBe("信任入口");
+  });
+  it("previews service authorization as an inline consent review without creating a role or grant", async () => {
+    const { user, repository, extension } = await open("roles");
+    const before = await extension.read("preview");
+    await invokePageAction(user, "服务授权");
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 1, name: "服务授权" })).toBe(document.activeElement);
+    expect(screen.getByText(/真实同意或撤销必须从对应云产品的具体资源入口发起/)).toBeTruthy();
+    expect(screen.getByText(/只读查看本账号已经形成的服务关联角色关系/)).toBeTruthy();
+    const accountDirectory = screen.getByRole("table", { name: "当前账号服务授权" });
+    expect(within(accountDirectory).getByText("1 个有效 / 1 个全部")).toBeTruthy();
+    expect(within(accountDirectory).getByText("ManagedServiceInstallationReader")).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
+    const templateDirectory = screen.getByRole("table", { name: "服务授权模板" });
+    expect(within(templateDirectory).getByRole("columnheader", { name: "平台模板状态" })).toBeTruthy();
+    expect(within(templateDirectory).getByRole("columnheader", { name: "支持的工作负载" })).toBeTruthy();
+    expect(within(templateDirectory).queryByRole("columnheader", { name: "当前账号状态" })).toBeNull();
+    expect(within(templateDirectory).getByText("固定模板契约 · MOCK")).toBeTruthy();
+    expect(within(templateDirectory).getByText("managedservice.installation-reader")).toBeTruthy();
+    expect(screen.getByText(/普通服务角色仍在角色列表中单独管理/)).toBeTruthy();
+
+    const template = screen.getByRole("button", { name: "托管服务安装访问" });
+    await user.click(template);
+    expect(screen.getByRole("heading", { level: 1, name: "服务授权模板" })).toBe(document.activeElement);
+    expect(screen.getByText("ManagedServiceInstallationReader")).toBeTruthy();
+    expect(screen.getByText("最长会话").nextElementSibling?.textContent).toBe("15 分钟");
+    expect(screen.getByText("绑定 Action").nextElementSibling?.textContent).toBe("managedservice.service-installation.service-role.bind");
+    expect(screen.queryByText("目标账号")).toBeNull();
+    expect(screen.queryByText("发起授权的产品资源")).toBeNull();
+    expect(screen.queryByText("preview.paas.service")).toBeNull();
+    expect(screen.getByText(/服务访问不使用普通客户角色或自由字符串主体/)).toBeTruthy();
+    expect(screen.getByText(/权限上限覆盖目标账号内声明类型的资源/)).toBeTruthy();
+
+    const review = screen.getByRole("button", { name: "审阅服务授权" });
+    await user.click(review);
+    expect(screen.getByRole("heading", { level: 1, name: "审阅服务授权" })).toBe(document.activeElement);
+    expect(screen.getByRole("heading", { level: 3, name: "确认服务身份与单一用途" })).toBeTruthy();
+    expect(screen.getByText("managedservice.service-installation.service-role.bind")).toBeTruthy();
+    expect(screen.getByText("iam.service-linked-role.create")).toBeTruthy();
+    expect(screen.getByText("iam.role.pass")).toBeTruthy();
+    expect(screen.getByText(/必须同时校验操作者、目标账号与角色、实际工作负载、service purpose 和发起授权的产品资源/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByText("ManagedServiceInstallationReader · v1")).toBeTruthy();
+    const statement = screen.getByRole("region", { name: "声明 1" });
+    expect(within(statement).getByText("managedservice.service-installation.read")).toBeTruthy();
+    expect(within(statement).getByText("SERVICE_INSTALLATION")).toBeTruthy();
+    expect(within(statement).getByText("SERVICE_INSTALLATION").parentElement?.textContent).toContain("当前权威范围内全部");
+    expect(within(statement).queryByText("service-installation-example")).toBeNull();
+    expect(within(statement).getByText("无条件限制")).toBeTruthy();
+    expect(screen.getByText(/模板 ACTIVE 或目录可见都不授予租户权限/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    const authorize = screen.getByRole("button", { name: "授权服务（未接入）" }) as HTMLButtonElement;
+    expect(authorize.disabled).toBe(true);
+    expect(screen.getAllByText("固定模板契约 · MOCK").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("当前账号未授权").length).toBeGreaterThan(0);
+    expect(screen.getByText(/IAM 角色目录没有真实产品资源上下文/)).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(await extension.read("preview")).toEqual(before);
+
+    await user.click(screen.getByRole("button", { name: "结束审阅" }));
+    expect(screen.getByRole("button", { name: "审阅服务授权" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "返回服务授权" }));
+    expect(screen.getByRole("button", { name: "托管服务安装访问" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "返回角色列表" }));
+    expect(await screen.findByRole("heading", { name: "角色" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "服务授权" })).toBeNull();
+  });
+  it("keeps the fixed service-template contract independent of tenant policy revisions", async () => {
+    const { user } = await open("roles", { seed: async (extension) => {
+      extension.transact((source) => ({ workspace: { ...source, policies: source.policies.map((policy) => policy.id !== "policy-delivery" ? policy : {
+        ...policy,
+        defaultVersion: 2,
+        lastVersion: 2,
+        versions: [...policy.versions, { id: 2, document: { version: "1" as const, statement: [{ effect: "allow" as const, action: ["iam:*"], resource: ["*"] }] }, createdAt: "2026-09-10T09:00:00Z" }]
+      }) } }));
+    } });
+    await invokePageAction(user, "服务授权");
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
+    await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
+    expect(screen.queryByRole("button", { name: /打开策略详情/ })).toBeNull();
+    expect(screen.getByText(/权限上限覆盖目标账号内声明类型的资源/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByText("ManagedServiceInstallationReader · v1")).toBeTruthy();
+    expect(screen.getByText("managedservice.service-installation.read")).toBeTruthy();
+    expect(screen.queryByText("iam:*")).toBeNull();
+  });
+  it("does not treat removal of an ordinary tenant policy as service-template revocation", async () => {
+    const { user } = await open("roles", { seed: async (extension) => {
+      extension.transact((source) => ({ workspace: { ...source, policies: source.policies.filter((policy) => policy.id !== "policy-delivery") } }));
+    } });
+    await invokePageAction(user, "服务授权");
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
+    expect(within(screen.getByRole("table", { name: "服务授权模板" })).getByText("system.managedservice-installation-reader")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
+    await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByText("managedservice.service-installation.read")).toBeTruthy();
+    expect(screen.queryByText("managedservice:*")).toBeNull();
+  });
+  it("summarizes trust, grants, boundary and new-session limits in the role directory", async () => {
+    await open("roles", { seed: async (extension) => {
+      extension.transact((source) => ({ workspace: { ...source, roles: source.roles.map((role) => role.id === "role-log-reviewer" ? {
+        ...role,
+        boundaryPolicyId: "policy-delivery-boundary"
+      } : role) } }));
+    } });
+    const table = await screen.findByRole("table", { name: "角色" });
+    expect(within(table).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    for (const heading of ["名称", "信任入口", "授权与边界", "新会话", "创建时间"]) {
+      expect(within(table).getByRole("columnheader", { name: heading })).toBeTruthy();
+    }
+    const row = within(table).getByRole("button", { name: "ProductionLogReviewRole" }).closest("tr")!;
+    expect(within(row).getByText("客户角色（CUSTOMER）")).toBeTruthy();
+    expect(within(row).getByText("1 位可信用户")).toBeTruthy();
+    expect(within(row).getByText("1 项策略")).toBeTruthy();
+    expect(within(row).getByText("权限边界 · 已配置")).toBeTruthy();
+    expect(within(row).getByText("最长 30 分钟")).toBeTruthy();
+    expect(within(row).getByText("控制台访问 · 已启用")).toBeTruthy();
+  });
+  it("separates role trust admission, grants and boundary without claiming effective access", async () => {
+    await open("roles", { entityId: "role-log-reviewer", seed: async (extension) => {
+      extension.transact((source) => ({ workspace: { ...source, roles: source.roles.map((role) => role.id === "role-log-reviewer" ? {
+        ...role,
+        policyIds: ["policy-tag-logs", "policy-production-guard"],
+        boundaryPolicyId: "policy-delivery-boundary"
+      } : role) } }));
+    } });
+    const overview = await screen.findByRole("region", { name: "角色授权模型" });
+    expect(within(overview).getByText("承担入口").closest("div")?.textContent).toContain("1 位可信用户");
+    expect(within(overview).getByText("权限策略").closest("div")?.textContent).toContain("2 项");
+    expect(within(overview).getByText("含拒绝声明的策略").closest("div")?.textContent).toContain("1 项");
+    expect(within(overview).getByText("权限边界").closest("div")?.textContent).toContain("已配置");
+    expect(within(overview).getByText(/信任关系只控制谁可以申请承担角色/)).toBeTruthy();
+    const policies = screen.getByRole("table", { name: "权限策略" });
+    const denyRow = within(policies).getByRole("button", { name: "ProtectProductionDeployments" }).closest("tr")!;
+    expect(within(denyRow).getByText("含显式拒绝").getAttribute("data-status")).toBe("danger");
+    expect(within(policies).getByText("仅允许声明")).toBeTruthy();
+  });
+  it("creates a role in the content area with explicit trust, no preselected grants and a preserved localized draft", async () => {
+    const { user, repository, extension } = await open("roles");
+    await user.click(await screen.findByRole("button", { name: "新建角色" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("alert").textContent).toContain("至少选择一名当前租户用户");
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    expect(screen.getByRole("alert").textContent).toContain("at least one current-tenant user");
+    await user.click(screen.getByRole("checkbox", { name: "lin" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect((screen.getByRole("checkbox", { name: "MatrixReadOnlyAccess" }) as HTMLInputElement).checked).toBe(false);
+    await user.click(screen.getByRole("checkbox", { name: "MatrixReadOnlyAccess" }));
+    await select(user, "Permission boundary", "ProductionLogReader");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.type(screen.getByLabelText("Name", { exact: true }), "PreviewSupport");
+    await user.type(screen.getByLabelText("Description", { exact: true }), "Support logs only");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Continue editing" }));
+    expect(screen.getByText("PreviewSupport")).toBeTruthy();
+    const beforeCreate = await extension.read("preview");
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(screen.getByRole("button", { name: "Create role" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("retry"));
+    expect(await extension.read("preview")).toEqual(beforeCreate);
+    expect(screen.getByText("PreviewSupport")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Create role" }));
+    await screen.findByRole("heading", { name: "Role created" });
+    const state = await extension.read("preview-only"), created = state.roles.find((role) => role.name === "PreviewSupport")!;
+    expect(created).toMatchObject({ trustedUserIds: ["principal-lin"], policyIds: ["policy-read"], boundaryPolicyId: "policy-prod-logs", consoleAccess: false });
+    expect(state.roleSessions).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "View role" }));
+    expect(screen.getByLabelText("Entity destination").textContent).toBe(created.id);
+    await user.click(screen.getByRole("tab", { name: "Trust relationship" }));
+    expect(JSON.parse(screen.getByRole("region", { name: "Same-account USER trust document preview" }).textContent!)).toEqual({ languageVersion: "1", statements: [{ sid: "trusted-users", effect: "ALLOW", principals: [{ type: "USER", id: "principal-lin" }] }] });
+  });
+  it("reviews exact trust additions/removals, validates before review, and retains the review on failure without changing other role fields", async () => {
+    const { user, repository, extension } = await open("roles", { seed: async (extension) => {
+      await extension.execute("preview", { kind: "create-role", name: "SupportRole", description: "Support only", trustedUserIds: ["principal-lin"], policyIds: ["policy-read"], boundaryPolicyId: "policy-prod-logs", tags: [{ key: "team", value: "support" }], sessionMinutes: 45, consoleAccess: true });
+    } });
+    const before = await extension.read("preview"), original = before.roles.find((role) => role.name === "SupportRole")!;
+    await user.click(await screen.findByRole("button", { name: "SupportRole" }));
+    await user.click(screen.getByRole("tab", { name: "信任关系" }));
+    const trigger = screen.getByRole("button", { name: "修改信任关系" });
+    await user.click(trigger);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    let workflow = screen.getByRole("group", { name: "修改信任关系" }), panel = within(workflow);
+    expect((panel.getByRole("button", { name: "审阅变更" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(panel.getByRole("checkbox", { name: "lin" }));
+    await user.click(panel.getByRole("button", { name: "审阅变更" }));
+    expect(panel.getByRole("alert").textContent).toContain("至少选择一名当前租户用户");
+    expect(document.activeElement).toBe(panel.getByRole("alert"));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    await user.click(panel.getByRole("checkbox", { name: "chen" }));
+    await user.click(panel.getByRole("button", { name: "审阅变更" }));
+    expect(document.activeElement).toBe(panel.getByRole("heading", { name: "审阅信任关系变更" }));
+    expect(panel.getByRole("article", { name: "变更前" }).textContent).toContain("linprincipal-lin移除信任");
+    expect(panel.getByRole("article", { name: "变更后" }).textContent).toContain("chenprincipal-chen新增信任");
+    await user.click(panel.getByText("查看完整信任文档对比"));
+    const prior = JSON.parse(panel.getByRole("region", { name: "变更前 · 信任文档" }).textContent!);
+    const proposed = JSON.parse(panel.getByRole("region", { name: "变更后 · 信任文档" }).textContent!);
+    expect(prior).toEqual({ languageVersion: "1", statements: [{ sid: "trusted-users", effect: "ALLOW", principals: [{ type: "USER", id: "principal-lin" }] }] });
+    expect(proposed).toEqual({ languageVersion: "1", statements: [{ sid: "trusted-users", effect: "ALLOW", principals: [{ type: "USER", id: "principal-chen" }] }] });
+    await user.click(panel.getByRole("button", { name: "取消" }));
+    expect(await extension.read("preview")).toEqual(before);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "修改信任关系" }));
+    await user.click(screen.getByRole("button", { name: "修改信任关系" }));
+    workflow = screen.getByRole("group", { name: "修改信任关系" }); panel = within(workflow);
+    await user.click(panel.getByRole("checkbox", { name: "lin" }));
+    await user.click(panel.getByRole("checkbox", { name: "chen" }));
+    await user.click(panel.getByRole("button", { name: "审阅变更" }));
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(panel.getByRole("button", { name: "保存" }));
+    await expectRetainedFailure(workflow);
+    expect(await extension.read("preview")).toEqual(before);
+    expect(panel.getByRole("article", { name: "变更后" }).textContent).toContain("principal-chen");
+    await user.click(panel.getByRole("button", { name: "返回选择" }));
+    expect((panel.getByRole("checkbox", { name: "chen" }) as HTMLInputElement).checked).toBe(true);
+    expect(document.activeElement).toBe(panel.getByRole("searchbox"));
+    await user.click(panel.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    expect(panel.getByRole("article", { name: "After" }).textContent).toContain("Newly trusted");
+    expect(panel.getByRole("article", { name: "Before" }).textContent).toContain("Trust removed");
+    await user.click(panel.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Edit trust" })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit trust" }));
+    const after = await extension.read("preview");
+    expect(after.roles.find((role) => role.id === original.id)).toEqual({ ...original, trustedUserIds: ["principal-chen"] });
+    for (const key of ["policies", "groups", "userPolicies", "roleSessions", "userBoundaries"] as const) expect(after[key]).toEqual(before[key]);
+  });
+  it("does not submit a reordered but unchanged trust set or permit a carrier change", async () => {
+    const { user, repository } = await open("roles", { seed: async (extension) => {
+      await extension.execute("preview", { kind: "create-role", name: "TeamRole", description: "", trustedUserIds: ["principal-lin", "principal-chen"], policyIds: [], tags: [], sessionMinutes: 60, consoleAccess: false });
+    } });
+    await user.click(await screen.findByRole("button", { name: "TeamRole" }));
+    await user.click(screen.getByRole("tab", { name: "信任关系" }));
+    await user.click(screen.getByRole("button", { name: "修改信任关系" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const workflow = screen.getByRole("group", { name: "修改信任关系" }), panel = within(workflow);
+    expect(panel.queryByRole("combobox", { name: "信任主体类型" })).toBeNull();
+    await user.click(panel.getByRole("checkbox", { name: "lin" }));
+    await user.click(panel.getByRole("checkbox", { name: "lin" }));
+    expect((panel.getByRole("button", { name: "审阅变更" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(workflow.querySelector("form")!);
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("searches and paginates the complete role policy relationship snapshot", async () => {
+    const policies = relationshipPolicies(12, "RoleRelationPolicy");
+    const { user } = await open("roles", { entityId: "role-log-reviewer", seed: async (extension) => {
+      extension.transact((source) => ({ workspace: {
+        ...source,
+        policies: [...source.policies, ...policies],
+        roles: source.roles.map((role) => role.id === "role-log-reviewer" ? { ...role, policyIds: policies.map((policy) => policy.id) } : role)
+      } }));
+    } });
+    const table = await screen.findByRole("table", { name: "权限策略" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("显示 12 / 共 12 条")).toBeTruthy();
+    const search = screen.getByRole("searchbox", { name: "搜索角色关联策略" });
+    await user.type(search, "RoleRelationPolicy12");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+    await user.clear(search);
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    await user.click(within(table).getByRole("button", { name: "RoleRelationPolicy12" }));
+    expect(await screen.findByRole("heading", { name: "RoleRelationPolicy12" })).toBeTruthy();
+  });
+  it("retains role metadata through a pending command and retry, locking dismissal only until it settles", async () => {
+    const { user, repository, extension } = await open("roles", { entityId: "role-log-reviewer" });
+    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-log-reviewer")!;
+    await user.click(await screen.findByRole("button", { name: "编辑角色信息" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const workflow = screen.getByRole("group", { name: "编辑角色信息" }), panel = within(workflow), form = workflow.querySelector("form")!;
+    fireEvent.change(panel.getByLabelText("描述"), { target: { value: "Retained metadata" } });
+    await user.click(panel.getByRole("button", { name: "添加标签" }));
+    await user.type(panel.getByLabelText("标签键 1"), "team");
+    await user.type(panel.getByLabelText("标签值 1"), "delivery");
+    let rejectWrite!: (error: Error) => void;
+    vi.mocked(repository.workspace!.execute).mockImplementationOnce(() => new Promise((_, reject) => { rejectWrite = reject; }));
+    await user.click(panel.getByRole("button", { name: "保存" }));
+    expect(form.getAttribute("aria-busy")).toBe("true");
+    expect((panel.getByRole("button", { name: "取消" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(form);
+    expect(repository.workspace!.execute).toHaveBeenCalledOnce();
+    expect(await extension.read("preview")).toEqual(before);
+    await act(async () => { rejectWrite(new Error("offline")); });
+    await expectRetainedFailure(workflow);
+    expect((panel.getByLabelText("描述") as HTMLTextAreaElement).value).toBe("Retained metadata");
+    expect((panel.getByLabelText("标签值 1") as HTMLInputElement).value).toBe("delivery");
+    expect((panel.getByRole("button", { name: "取消" }) as HTMLButtonElement).disabled).toBe(false);
+    await user.click(panel.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "编辑角色信息" })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "编辑角色信息" }));
+    expect((await extension.read("preview")).roles.find((role) => role.id === original.id)).toEqual({ ...original, description: "Retained metadata", tags: [{ key: "team", value: "delivery" }] });
+  });
+  it.each(["add", "remove"] as const)("retains a reviewed role policy %s delta after failure and retries without replacing unrelated grants", async (mode) => {
+    const { user, repository, extension } = await open("roles", { entityId: "role-log-reviewer" });
+    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-log-reviewer")!;
+    const workflowName = mode === "add" ? "关联策略" : "移除策略";
+    await user.click(await screen.findByRole("button", { name: workflowName }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const workflow = screen.getByRole("group", { name: workflowName }), panel = within(workflow);
+    const policyName = mode === "add" ? "MatrixReadOnlyAccess" : "ProductionLogsByTag";
+    await user.click(panel.getByRole("checkbox", { name: policyName }));
+    await user.type(panel.getByRole("searchbox"), "no-matching-policy");
+    expect(panel.getByRole("button", { name: "移除 " + policyName })).toBeTruthy();
+    await user.click(panel.getByRole("button", { name: "审阅变更" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(panel.getByRole("button", { name: "保存" }));
+    await expectRetainedFailure(workflow);
+    expect(await extension.read("preview")).toEqual(before);
+    expect(panel.getByRole("list").textContent).toBe(policyName);
+    await user.click(panel.getByRole("button", { name: "返回选择" }));
+    expect((panel.getByRole("checkbox", { name: policyName }) as HTMLInputElement).checked).toBe(true);
+    await user.click(panel.getByRole("button", { name: "审阅变更" }));
+    await user.click(panel.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: workflowName })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: mode === "remove" ? "关联策略" : workflowName }));
+    const after = await extension.read("preview");
+    expect(after.roles.find((role) => role.id === original.id)).toEqual({ ...original, policyIds: mode === "add" ? ["policy-tag-logs", "policy-read"] : [] });
+    expect(after.userPolicies).toEqual(before.userPolicies);
+    expect(after.policies).toEqual(before.policies);
+  });
+  it.each(["set", "remove"] as const)("retains a reviewed role boundary %s after failure without changing policy grants", async (mode) => {
+    const { user, repository, extension } = await open("roles", { entityId: "role-log-reviewer", users: reviewUsers, seed: async (extension) => {
+      if (mode === "remove") await extension.execute("preview", { kind: "set-role-boundary", id: "role-log-reviewer", policyId: "policy-read" });
+    } });
+    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-log-reviewer")!;
+    await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const workflow = screen.getByRole("group", { name: "修改权限边界" }), panel = within(workflow);
+    expect(panel.getByRole("button", { name: "返回角色详情" })).toBeTruthy();
+    await select(user, "权限边界", mode === "set" ? "ProductionLogReader" : "不设置权限上限 · 角色承担关闭");
+    await user.click(panel.getByRole("button", { name: "审阅变更" }));
+    expect(panel.getByText(/已有体验会话也会失败关闭/)).toBeTruthy();
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(panel.getByRole("button", { name: "保存" }));
+    await expectRetainedFailure(workflow);
+    expect(await extension.read("preview")).toEqual(before);
+    expect(panel.getByText(mode === "set" ? "ProductionLogReader" : "MatrixReadOnlyAccess")).toBeTruthy();
+    await user.click(panel.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "修改权限边界" })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "修改权限边界" }));
+    const after = await extension.read("preview");
+    expect(after.roles.find((role) => role.id === original.id)).toEqual({ ...original, boundaryPolicyId: mode === "set" ? "policy-prod-logs" : undefined });
+    expect(after.userPolicies).toEqual(before.userPolicies);
+    expect(after.policies).toEqual(before.policies);
+  });
+  it("preserves session-setting inputs after failure and never extends an existing session on retry", async () => {
+    const { user, repository, extension } = await open("roles", { entityId: "role-log-reviewer", users: reviewUsers, seed: async (extension) => {
+      await extension.execute("preview", { kind: "create-role-session", roleId: "role-log-reviewer", caller: { type: "user", id: "principal-qiao" }, sessionMinutes: 30 });
+    } });
+    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-log-reviewer")!;
+    await user.click(await screen.findByRole("tab", { name: "会话设置" }));
+    await user.click(screen.getByRole("button", { name: "修改会话设置" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const workflow = screen.getByRole("group", { name: "修改会话设置" }), panel = within(workflow);
+    fireEvent.change(panel.getByLabelText("会话时长（分钟）"), { target: { value: "120" } });
+    expect((panel.getByRole("checkbox", { name: "允许通过控制台访问" }) as HTMLInputElement).disabled).toBe(false);
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(panel.getByRole("button", { name: "保存" }));
+    await expectRetainedFailure(workflow);
+    expect(await extension.read("preview")).toEqual(before);
+    expect((panel.getByLabelText("会话时长（分钟）") as HTMLInputElement).value).toBe("120");
+    await user.click(panel.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "修改会话设置" })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "修改会话设置" }));
+    const after = await extension.read("preview");
+    expect(after.roles.find((role) => role.id === original.id)).toEqual({ ...original, sessionMinutes: 120 });
+    expect(after.roleSessions).toEqual(before.roleSessions);
+  });
+  it("retains role deletion confirmation on failure, supports cancellation and retries only the named role", async () => {
+    const { user, repository, extension } = await open("roles", { entityId: "role-log-reviewer" });
+    const before = await extension.read("preview");
+    await invokePageAction(user, "删除");
+    let dialog = screen.getByRole("dialog"), panel = within(dialog);
+    await user.type(panel.getByLabelText("输入名称以确认"), "wrong-name");
+    await user.click(panel.getByRole("button", { name: "确认删除" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    fireEvent.change(panel.getByLabelText("输入名称以确认"), { target: { value: "ProductionLogReviewRole" } });
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(panel.getByRole("button", { name: "确认删除" }));
+    await expectRetainedFailure(dialog);
+    expect((panel.getByLabelText("输入名称以确认") as HTMLInputElement).value).toBe("ProductionLogReviewRole");
+    expect(await extension.read("preview")).toEqual(before);
+    await user.click(panel.getByRole("button", { name: "取消" }));
+    await invokePageAction(user, "删除");
+    dialog = screen.getByRole("dialog"); panel = within(dialog);
+    await user.type(panel.getByLabelText("输入名称以确认"), "ProductionLogReviewRole");
+    await user.click(panel.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const after = await extension.read("preview");
+    expect(after.roles).toEqual(before.roles.filter((role) => role.id !== "role-log-reviewer"));
+    expect(after.policies).toEqual(before.policies);
+    expect(after.userPolicies).toEqual(before.userPolicies);
+  });
+  it("keeps role-session administration separate from self-service assumption and preserves exact revoke intent", async () => {
+    let activeSessionId = "", revokedSessionId = "";
+    const { user, repository, extension } = await open("roles", { entityId: "role-log-reviewer", users: reviewUsers, seed: async (extension) => {
+      await extension.execute("preview", { kind: "create-role-session", roleId: "role-log-reviewer", caller: { type: "user", id: "principal-qiao" }, sessionMinutes: 30 });
+      revokedSessionId = (await extension.read("preview-only")).roleSessions[0]!.id;
+      await extension.execute("preview", { kind: "revoke-role-session", id: revokedSessionId });
+      await extension.execute("preview", { kind: "create-role-session", roleId: "role-log-reviewer", caller: { type: "user", id: "principal-qiao" }, sessionMinutes: 30 });
+      activeSessionId = (await extension.read("preview-only")).roleSessions.at(-1)!.id;
+    } });
+    await user.click(await screen.findByRole("tab", { name: "临时会话" }));
+    expect(screen.queryByRole("button", { name: "创建体验会话" })).toBeNull();
+    expect(screen.queryByText("模拟访问")).toBeNull();
+    expect(screen.getByText("管理员 MOCK 目录", { exact: false })).toBeTruthy();
+    const sourceGuide = screen.getByRole("region", { name: "会话来源与权限边界" });
+    expect(within(sourceGuide).getByText("人员用户")).toBeTruthy();
+    expect(within(sourceGuide).getByText("服务账号")).toBeTruthy();
+    expect(within(sourceGuide).queryByRole("button")).toBeNull();
+    expect(screen.getByRole("table", { name: "临时会话" }).textContent).toContain(activeSessionId);
+    expect(screen.getByRole("table", { name: "临时会话" }).textContent).not.toContain(revokedSessionId);
+    await select(user, "会话生命周期", "全部历史");
+    expect(screen.getByRole("table", { name: "临时会话" }).textContent).toContain(revokedSessionId);
+    await select(user, "来源用户", "qiao · principal-qiao");
+    await user.type(screen.getByRole("searchbox", { name: "输入完整会话 ID" }), activeSessionId);
+    const table = screen.getByRole("table", { name: "临时会话" });
+    expect(within(table).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(table.textContent).toContain(activeSessionId);
+    expect(table.textContent).not.toContain(revokedSessionId);
+    const trigger = within(table).getByRole("button", { name: `会话 ${activeSessionId} 的操作` });
+    await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: "撤销会话" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const workflow = screen.getByRole("group", { name: "撤销会话" }), panel = within(workflow);
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(panel.getByRole("button", { name: "撤销会话" }));
+    await expectRetainedFailure(workflow);
+    expect((await extension.read("preview-only")).roleSessions.find((session) => session.id === activeSessionId)?.revokedAt).toBeUndefined();
+    await user.click(panel.getByRole("button", { name: "撤销会话" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "撤销会话" })).toBeNull());
+    expect(screen.getByRole("table", { name: "临时会话" }).textContent).toContain("已撤销");
+    expect((await extension.read("preview-only")).roleSessions.find((session) => session.id === activeSessionId)?.revokedAt).toBeTruthy();
+    expect(document.activeElement).toBe(within(screen.getByRole("table", { name: "临时会话" })).getByRole("button", { name: `会话 ${activeSessionId} 的操作` }));
+  });
+  it("reviews user boundary changes separately and links boundary usage back to its exact owner", async () => {
+    const { user, extension } = await open("users", { entityId: "principal-lin" });
+    await user.click(await screen.findByRole("tab", { name: "权限策略" }));
+    const policies = screen.getByRole("table", { name: "用户关联策略（模拟）" });
+    expect(policies.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(policies).getByText("ProductionLogReader").closest("td")?.getAttribute("data-label")).toBe("名称");
+    expect(screen.queryByRole("button", { name: "平台内置角色" })).toBeNull();
+    await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
+    const boundaryEditor = screen.getByRole("group", { name: "修改权限边界" });
+    expect(within(boundaryEditor).getByRole("button", { name: "返回用户详情" })).toBeTruthy();
+    expect(within(boundaryEditor).queryByRole("button", { name: "返回角色详情" })).toBeNull();
+    await select(user, "权限边界", "MatrixReadOnlyAccess");
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(within(boundaryEditor).getByText(/用户的权限上限/)).toBeTruthy();
+    expect(within(boundaryEditor).queryByText(/角色体验会话/)).toBeNull();
+    expect((await extension.read("preview-only")).userBoundaries["principal-lin"]).toBeUndefined();
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(within(screen.getByRole("region", { name: "权限边界" })).getByRole("button", { name: "MatrixReadOnlyAccess" }));
+    await user.click(screen.getByRole("tab", { name: /策略用法/ }));
+    expect(screen.getByRole("heading", { name: /作为权限策略使用/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /作为权限边界使用/ })).toBeTruthy();
+    const uses = screen.getByRole("table", { name: "作为权限边界使用" });
+    await user.click(within(uses).getByRole("button", { name: "lin" }));
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-lin");
+    expect((await extension.read("preview-only")).userPolicies["principal-lin"]).toEqual(["policy-prod-logs"]);
+  });
+  it("searches and paginates a large policy association snapshot before opening an exact owner", async () => {
+    const { user } = await open("policies", { entityId: "policy-prod-logs", seed: async (extension) => {
+      for (let index = 1; index <= 12; index += 1) await extension.execute("preview", {
+        kind: "create-role",
+        name: `UsageRole${String(index).padStart(2, "0")}`,
+        description: "Policy usage pagination fixture",
+        trustedUserIds: ["principal-lin"],
+        policyIds: ["policy-prod-logs"],
+        tags: [],
+        sessionMinutes: 60,
+        consoleAccess: false
+      });
+    } });
+    await user.click(await screen.findByRole("tab", { name: /策略用法/ }));
+    const section = screen.getByRole("heading", { name: "作为权限策略使用 (13)" }).closest("section")!;
+    const table = within(section).getByRole("table", { name: "作为权限策略使用" });
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(within(section).getByText("显示 13 / 共 13 个关联对象")).toBeTruthy();
+    expect(within(section).getByText("第 1 / 2 页")).toBeTruthy();
+
+    const search = within(section).getByRole("searchbox", { name: "搜索策略关联对象" });
+    await user.type(search, "UsageRole12");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+    expect(within(section).getByText("显示 1 / 共 13 个关联对象")).toBeTruthy();
+    await user.clear(search);
+    await waitFor(() => expect(within(section).getByText("第 1 / 2 页")).toBeTruthy());
+    await user.click(within(section).getByRole("button", { name: "下一页" }));
+    expect(within(table).getByRole("button", { name: "UsageRole12" })).toBeTruthy();
+    await user.click(within(table).getByRole("button", { name: "UsageRole12" }));
+    expect(await screen.findByRole("heading", { name: "UsageRole12" })).toBeTruthy();
+  });
+  it("surfaces user grant provenance and default-version denies without claiming effective access", async () => {
+    const { user } = await open("users", { entityId: "principal-qiao", users: reviewUsers });
+    await user.click(await screen.findByRole("tab", { name: "权限策略" }));
+    const overview = screen.getByRole("region", { name: "授权概览" });
+    expect(within(overview).getByText("直接关联").closest("div")?.textContent).toContain("3 项");
+    expect(within(overview).getByText("从用户组继承").closest("div")?.textContent).toContain("2 项");
+    expect(within(overview).getByText("含拒绝声明的策略").closest("div")?.textContent).toContain("1 项");
+    expect(within(overview).getByText("权限边界").closest("div")?.textContent).toContain("已配置");
+    expect(within(overview).getByText(/只汇总授权来源和策略当前默认版本/)).toBeTruthy();
+    const policies = screen.getByRole("table", { name: "用户关联策略（模拟）" });
+    const denyRow = within(policies).getByRole("button", { name: "ProtectProductionDeployments" }).closest("tr")!;
+    expect(within(denyRow).getByText("含显式拒绝").getAttribute("data-status")).toBe("danger");
+    expect(within(policies).getAllByText("仅允许声明")).toHaveLength(3);
+    expect(screen.queryByText("模拟访问")).toBeNull();
+    await user.click(within(screen.getByRole("tabpanel", { name: "权限策略" })).getByRole("button", { name: "检查策略配置" }));
+    expect(await screen.findByRole("button", { name: "生成本地检查表" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "用户" }).textContent).toContain("qiao");
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-qiao");
+  });
+  it("edits mock user metadata in the content area and restores the page action", async () => {
+    const { user } = await open("users", { entityId: "principal-lin" });
+    const edit = await screen.findByRole("button", { name: "编辑" });
+    await user.click(edit);
+    const workflow = screen.getByRole("group", { name: "编辑 · lin" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const field = within(workflow).getByLabelText("名称");
+    await user.clear(field);
+    await user.type(field, "林工程师 · 更新");
+    await user.click(within(workflow).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "编辑 · lin" })).toBeNull());
+    expect(screen.getByText("操作已完成。")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "编辑" })));
+  });
+  it("searches and paginates complete user policy and group relationship snapshots", async () => {
+    const policies = relationshipPolicies(12, "UserRelationPolicy");
+    const { user } = await open("users", { entityId: "principal-lin", seed: async (extension) => {
+      extension.transact((source) => ({ workspace: {
+        ...source,
+        policies: [...source.policies, ...policies],
+        userPolicies: { ...source.userPolicies, "principal-lin": policies.map((policy) => policy.id) },
+        groups: [...source.groups.map((group) => ({ ...group, memberIds: group.memberIds.filter((id) => id !== "principal-lin") })), ...Array.from({ length: 12 }, (_, index) => ({ id: `user-group-${index + 1}`, name: `UserGroup${String(index + 1).padStart(2, "0")}`, description: `Membership ${index + 1}`, memberIds: ["principal-lin"], policyIds: [], createdAt: "2026-09-01T00:00:00Z" }))]
+      } }));
+    } });
+    await user.click(await screen.findByRole("tab", { name: "权限策略" }));
+    const policyTable = screen.getByRole("table", { name: "用户关联策略（模拟）" });
+    expect(policyTable.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(policyTable).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("显示 12 / 共 12 条")).toBeTruthy();
+    const policySearch = screen.getByRole("searchbox", { name: "搜索用户关联策略" });
+    await user.type(policySearch, "UserRelationPolicy12");
+    await waitFor(() => expect(within(policyTable).getAllByRole("row")).toHaveLength(2));
+    await user.clear(policySearch);
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    await user.click(within(policyTable).getByRole("button", { name: "UserRelationPolicy12" }));
+    expect(await screen.findByRole("heading", { name: "UserRelationPolicy12" })).toBeTruthy();
+
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await user.click(await screen.findByRole("tab", { name: "所属用户组" }));
+    const groupTable = screen.getByRole("table", { name: "所属用户组" });
+    expect(groupTable.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(groupTable).getAllByRole("row")).toHaveLength(11);
+    await user.type(screen.getByRole("searchbox", { name: "搜索所属用户组" }), "UserGroup12");
+    await waitFor(() => expect(within(groupTable).getAllByRole("row")).toHaveLength(2));
+    await user.click(within(groupTable).getByRole("button", { name: "UserGroup12" }));
+    expect(await screen.findByRole("heading", { name: "UserGroup12" })).toBeTruthy();
+  });
+  it.each([
+    { tab: "权限策略", trigger: "关联策略", title: "管理直接关联策略", option: "MatrixReadOnlyAccess", change: "新增关联", kind: "policies" },
+    { tab: "所属用户组", trigger: "编辑", title: "管理所属用户组", option: "DeliveryTeam", change: "移除关联", kind: "groups" }
+  ] as const)("keeps $kind association changes in the content area and retries without losing review", async ({ tab, trigger, title, option, change, kind }) => {
+    const { user, repository, extension } = await open("users", { entityId: "principal-lin" });
+    await user.click(await screen.findByRole("tab", { name: tab }));
+    const panel = screen.getByRole("tabpanel", { name: tab });
+    await user.click(within(panel).getByRole("button", { name: trigger }));
+    const workflow = screen.getByRole("form", { name: `${title} · lin` });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(within(workflow).getByRole("checkbox", { name: option }));
+    await user.click(within(workflow).getByRole("button", { name: "下一步：审阅" }));
+    expect(within(workflow).getByRole("region", { name: `${change} · 1` }).textContent).toContain(option);
+    expect(within(workflow).getByText("principal-lin")).toBeTruthy();
+    expect(within(workflow).getByText("org-xiak")).toBeTruthy();
+    if (kind === "policies") {
+      expect(within(workflow).getByRole("region", { name: `${change} · 1` }).textContent).toContain("policy-read · 预设策略 · 默认版本 v1");
+      expect(within(workflow).getAllByText("保存前核对新增、移除和保持的关系。其他授权来源不会因本次变更自动消失。")).toHaveLength(1);
+    }
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(within(workflow).getByRole("button", { name: "确认关联" }));
+    await expectRetainedFailure(workflow);
+    expect(within(workflow).getByRole("region", { name: `${change} · 1` }).textContent).toContain(option);
+    await user.click(within(workflow).getByRole("button", { name: "确认关联" }));
+    expect(await screen.findByRole("heading", { name: "关联已更新" })).toBeTruthy();
+    const saved = await extension.read("preview-only");
+    if (kind === "policies") expect(saved.userPolicies["principal-lin"]).toEqual(["policy-prod-logs", "policy-read"]);
+    else expect(saved.groups.find((group) => group.id === "group-delivery")?.memberIds).not.toContain("principal-lin");
+    await user.click(screen.getByRole("button", { name: "完成并返回" }));
+    expect(await screen.findByRole("heading", { name: "lin" })).toBeTruthy();
+  });
+  it("creates through a full-page wizard with inline validation, preserved selections and localized errors", async () => {
+    const { user, repository, extension } = await open("create-user");
+    await screen.findByRole("heading", { name: "选择使用场景" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.type(screen.getByLabelText("子用户名"), "wizard.new");
+    await user.type(screen.getByLabelText("用户显示名称"), "Wizard User");
+    await user.click(screen.getByRole("checkbox", { name: "控制台访问" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("alert").textContent).toBe("访问方式必须选择一个。");
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    expect(screen.getByRole("alert").textContent).toBe("Select at least one access method.");
+    await user.click(screen.getByRole("checkbox", { name: "Console access" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("checkbox", { name: "Select all on this page" }));
+    expect(screen.getByText(/Selected policies or groups include an all-action wildcard grant/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Clear page selection" }));
+    expect(screen.queryByText(/Selected policies or groups include an all-action wildcard grant/)).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: "MatrixReadOnlyAccess" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search name, ID, description or tags" }), "no-match");
+    expect(screen.getByRole("button", { name: "Remove MatrixReadOnlyAccess" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Join groups" }));
+    await user.click(screen.getByRole("checkbox", { name: "DeliveryTeam" }));
+    await user.click(screen.getByRole("button", { name: "User information" }));
+    expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe("Wizard User");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByRole("button", { name: "Remove DeliveryTeam" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Add tag" }));
+    await user.type(screen.getByLabelText("Tag key 1"), "team");
+    await user.type(screen.getByLabelText("Tag value 1"), "platform");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(screen.getByText("MatrixReadOnlyAccess")).toBeTruthy();
+    expect(screen.getByText("DeliveryTeam")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Confirm mock user" }));
+    await screen.findByRole("heading", { name: "User created" });
+    const saved = await extension.read("preview");
+    expect(saved.userProfiles["principal-wizard.new"]?.tags).toEqual([{ key: "team", value: "platform" }]);
+    expect(saved.userPolicies["principal-wizard.new"]).toEqual(["policy-read"]);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(sessionStorage.length).toBe(0);
+  });
+  it("bounds user policy selection by page and capacity while preserving independent group selections without writes", async () => {
+    const { user, repository } = await open("create-user", { seed: async (extension) => {
+      extension.transact((source) => ({ workspace: { ...source, policies: [...source.policies, ...Array.from({ length: 42 }, (_, index) => ({
+        id: `policy-batch-${index}`, name: "Batch" + String(index).padStart(2, "0"), description: "", kind: "custom" as const, tags: [],
+        versions: [{ id: 1, document: { version: "1" as const, statement: [{ effect: "allow" as const, action: ["logs:search"], resource: ["*"] }] }, createdAt: "2026-09-01T00:00:00Z" }],
+        defaultVersion: 1, lastVersion: 1, createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z"
+      }))] } }));
+    } });
+    await user.click(await screen.findByRole("button", { name: "下一步" }));
+    await user.type(screen.getByLabelText("子用户名"), "bulk.draft");
+    await user.type(screen.getByLabelText("用户显示名称"), "Bulk Draft");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.type(screen.getByRole("searchbox"), "Batch");
+    expect(within(screen.getByRole("table", { name: "可选策略" })).getAllByRole("row")).toHaveLength(21);
+    await user.click(screen.getByRole("checkbox", { name: "选择本页全部" }));
+    expect(screen.getByText("直接策略 20/30 · 用户组 0/30", { exact: false })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(screen.getByRole("checkbox", { name: "选择本页全部" })).toHaveProperty("disabled", true);
+    expect(screen.getByText(/本页还有 20 项未选，剩余可选 10 项/)).toBeTruthy();
+    const rows = within(screen.getByRole("table", { name: "可选策略" })).getAllByRole("checkbox").slice(1);
+    for (const row of rows.slice(0, 10)) fireEvent.click(row);
+    expect(screen.getByText("直接策略 30/30 · 用户组 0/30", { exact: false })).toBeTruthy();
+    expect(rows[10]).toHaveProperty("disabled", true);
+    expect(rows[0]).toHaveProperty("disabled", false);
+    await user.click(screen.getByRole("button", { name: "取消本页选择" }));
+    expect(screen.getByText("直接策略 20/30 · 用户组 0/30", { exact: false })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "加入用户组" }));
+    await user.click(screen.getByRole("checkbox", { name: "DeliveryTeam" }));
+    expect(screen.getByText("直接策略 20/30 · 用户组 1/30", { exact: false })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "直接关联策略" }));
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    expect(screen.getByText("Direct policies 20/30 · Groups 1/30", { exact: false })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove DeliveryTeam" })).toBeTruthy();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
+  }, 15000);
+  it("keeps a draft when cancel is dismissed and never creates it when discarded", async () => {
+    const { user, repository } = await open("create-user");
+    await screen.findByRole("heading", { name: "选择使用场景" });
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.type(screen.getByLabelText("用户显示名称"), "Unsaved User");
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await user.click(screen.getByRole("button", { name: "继续编辑" }));
+    expect((screen.getByLabelText("用户显示名称") as HTMLInputElement).value).toBe("Unsaved User");
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await user.click(screen.getByRole("button", { name: "放弃并离开" }));
+    await screen.findByRole("table", { name: "租户用户列表" });
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("treats access-only changes as a draft before any name has been entered", async () => {
+    const { user, repository } = await open("create-user");
+    await screen.findByRole("heading", { name: "选择使用场景" });
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("checkbox", { name: "编程访问" }));
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.getByRole("dialog", { name: "放弃创建用户？" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "继续编辑" }));
+    expect((screen.getByRole("checkbox", { name: "编程访问" }) as HTMLInputElement).checked).toBe(true);
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("opens and filters the preview operation history from overview", async () => {
+    const { user } = await open("overview");
+    await user.click(await screen.findByRole("button", { name: "查看全部记录" }));
+    expect(screen.getByText(/不作为真实安全审计凭证/)).toBeTruthy();
+    await user.type(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" }), "no-matching-target");
+    expect(screen.getByText("没有匹配的结果")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect(screen.getByRole("button", { name: "查看全部记录" })).toBeTruthy();
+  });
+  it.each(["groups", "policies", "policy-configuration", "access-diagnosis", "access-analysis", "security-reports", "roles", "providers", "user-sso", "federations", "keys", "settings"] as const)("renders %s with consistent localized controls", async (view) => {
+    const { user } = await open(view);
+    expect(screen.getByRole("region", { name: "账号与权限" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    expect(screen.getByRole("region", { name: "Identity and access" })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/\p{Script=Han}/u);
+  });
+  it("keeps the group directory action-free and moves management into the selected group", async () => {
+    const { user } = await open("groups");
+    const directory = await screen.findByRole("table", { name: "用户组" });
+    expect(within(directory).queryByText("操作")).toBeNull();
+    expect(within(directory).queryByRole("button", { name: "编辑" })).toBeNull();
+    expect(within(directory).queryByRole("button", { name: "删除" })).toBeNull();
+    expect(within(directory).getAllByText("1 项直接关联")).toHaveLength(2);
+    await user.click(within(directory).getByRole("button", { name: "DeliveryTeam" }));
+    expect(screen.getByRole("button", { name: "编辑" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
+    const actions = await openPageActionMenu(user);
+    expect(within(actions).getByRole("menuitem", { name: "删除" })).toBeTruthy();
+    await user.keyboard("{Escape}");
+    const members = screen.getByRole("table", { name: "成员" });
+    expect(within(members).queryByText("操作")).toBeNull();
+    expect(within(members).queryByRole("button", { name: /从用户组移除/ })).toBeNull();
+    expect(screen.getByRole("tab", { name: "直接关联策略 (1)" })).toBeTruthy();
+  });
+  it("omits the member-count column when the repository has not supplied an authoritative total", () => {
+    render(<LocaleProvider><GroupDirectory
+      groups={[{
+        id: "group-paged",
+        name: "PagedTeam",
+        description: "Memberships are loaded independently",
+        directPolicyCount: 2,
+        createdAt: "2026-09-08T09:00:00Z"
+      }]}
+      onOpen={vi.fn()}
+    /></LocaleProvider>);
+    const table = screen.getByRole("table", { name: "用户组" });
+    expect(within(table).queryByRole("columnheader", { name: "成员" })).toBeNull();
+    expect(within(table).getByRole("columnheader", { name: "直接关联策略" })).toBeTruthy();
+    expect(within(table).getByText("2 项直接关联")).toBeTruthy();
+  });
+  it("keeps the group directory structure mounted while live rows load or fail", async () => {
+    let resolveGroups!: (page: { items: GroupAccess[]; nextAfter: null }) => void;
+    const listGroups = vi.fn()
+      .mockImplementationOnce(() => new Promise<{ items: GroupAccess[]; nextAfter: null }>((resolve) => { resolveGroups = resolve; }))
+      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockResolvedValueOnce({ items: [], nextAfter: null });
+    const { user } = await open("groups", { live: true, repository: { listGroups } });
+
+    expect(screen.getByRole("heading", { name: "用户组" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "新建用户组" })).toBeTruthy();
+    expect(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" })).toBeTruthy();
+    expect(screen.getByText("正在读取用户组…")).toBeTruthy();
+    expect(screen.queryByText("暂无记录")).toBeNull();
+
+    await act(async () => { resolveGroups({ items: [], nextAfter: null }); });
+    expect(await screen.findByText("暂无记录")).toBeTruthy();
+
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("go-groups"));
+    expect(await screen.findByText("暂时无法读取用户组")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "用户组" })).toBeTruthy();
+    expect(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("暂无记录")).toBeTruthy();
+    expect(listGroups).toHaveBeenCalledTimes(3);
+  });
+  it("keeps a stable group detail heading and back path while the live object loads", async () => {
+    let resolveGroup!: (access: GroupAccess) => void;
+    const liveGroup: GroupAccess = {
+      group: { id: "group-slow", accountId: account.id, name: "SlowTeam", description: "Loaded after the detail shell", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [capability("iam.group.read", "GROUP", "group-slow")]
+    };
+    const { user } = await open("groups", { live: true, entityId: liveGroup.group.id, repository: {
+      getGroup: vi.fn(() => new Promise<GroupAccess>((resolve) => { resolveGroup = resolve; }))
+    } });
+
+    expect(screen.getByRole("heading", { name: "用户组" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "返回列表" })).toBeTruthy();
+    expect(screen.getByText("正在读取用户组详情…")).toBeTruthy();
+    expect(screen.queryByText("Loaded after the detail shell")).toBeNull();
+
+    await act(async () => { resolveGroup(liveGroup); });
+    expect(await screen.findByRole("heading", { name: "SlowTeam" })).toBeTruthy();
+    expect(screen.getByText("Loaded after the detail shell")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect(await screen.findByRole("heading", { name: "用户组" })).toBeTruthy();
+  });
+  it("keeps already loaded group members visible during refresh but not after a failed authoritative read", () => {
+    const detail = {
+      id: "group-refetch", name: "RefetchTeam", description: "", createdAt: "2026-09-11T08:00:00Z", directPolicyCount: 0,
+      members: [{ id: "membership-lin", userId: "principal-lin", name: "lin", identityType: "child" as const }], policies: [], membersDirectoryComplete: false
+    };
+    const renderDetail = (availability: "refreshing" | "error") => <LocaleProvider><GroupDetail
+      group={{ ...detail, membersAvailability: availability }} controls={{}} onBack={vi.fn()} onOpenMember={vi.fn()} onOpenPolicy={vi.fn()}
+    /></LocaleProvider>;
+    const { rerender } = render(renderDetail("refreshing"));
+    expect(screen.getByText("正在更新成员关系；更新完成前暂不可修改。")).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "成员" })).getByRole("button", { name: "lin" })).toBeTruthy();
+    expect(screen.getByText(/搜索和分页仅作用于当前已载入记录/)).toBeTruthy();
+    rerender(renderDetail("error"));
+    expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
+    expect(screen.getByText("成员关系暂时无法载入")).toBeTruthy();
+  });
+  it("searches and paginates loaded group members without turning an opaque cursor into a total", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-paged-members", accountId: account.id, name: "PagedMembers", description: "Cursor-backed memberships", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [capability("iam.group.read", "GROUP", "group-paged-members"), capability("iam.group-membership.list", "GROUP", "group-paged-members")]
+    };
+    const membership = (index: number): GroupMembershipAccess => ({
+      membership: { id: `membership-${index}`, accountId: account.id, groupId: liveGroup.group.id, userId: `principal-paged-${String(index).padStart(2, "0")}`, createdBy: rootUser.id, resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      capabilities: []
+    });
+    const listGroupMemberships = vi.fn()
+      .mockResolvedValueOnce({ accountId: account.id, groupId: liveGroup.group.id, items: Array.from({ length: 11 }, (_, index) => membership(index + 1)), nextAfter: "cursor-page-2" })
+      .mockResolvedValueOnce({ accountId: account.id, groupId: liveGroup.group.id, items: [membership(12), membership(13)], nextAfter: null });
+    const { user } = await open("groups", { live: true, entityId: liveGroup.group.id, repository: {
+      getGroup: vi.fn().mockResolvedValue(liveGroup),
+      listGroupMemberships
+    } });
+    const table = await screen.findByRole("table", { name: "成员" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("显示 11 / 已载入 11 条")).toBeTruthy();
+    expect(screen.getByText(/搜索和分页仅作用于当前已载入记录/)).toBeTruthy();
+
+    const search = screen.getByRole("searchbox", { name: "搜索用户组成员" });
+    await user.type(search, "principal-paged-11");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+    expect(screen.getByText("显示 1 / 已载入 11 条")).toBeTruthy();
+    await user.clear(search);
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(within(table).getByRole("button", { name: "principal-paged-11" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "载入更多成员" }));
+    await waitFor(() => expect(screen.getByText("显示 13 / 已载入 13 条")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "载入更多成员" })).toBeNull();
+    expect(screen.getByText(/完整关系快照/)).toBeTruthy();
+    expect(listGroupMemberships).toHaveBeenCalledTimes(2);
+  });
+  it("paginates complete direct-policy relationships and preserves exact policy navigation", async () => {
+    const onOpenPolicy = vi.fn();
+    const user = userEvent.setup({ delay: null });
+    render(<LocaleProvider><GroupDetail group={{
+      id: "group-many-policies", name: "ManyPolicies", description: "", createdAt: "2026-09-11T08:00:00Z", directPolicyCount: 12,
+      members: [], memberCount: 0, policies: Array.from({ length: 12 }, (_, index) => ({ id: `attachment-${index + 1}`, policyId: `policy-${index + 1}`, name: `Policy${String(index + 1).padStart(2, "0")}`, kind: "custom" as const, version: 1 }))
+    }} controls={{}} onBack={vi.fn()} onOpenMember={vi.fn()} onOpenPolicy={onOpenPolicy} /></LocaleProvider>);
+    await user.click(screen.getByRole("tab", { name: "直接关联策略 (12)" }));
+    const table = screen.getByRole("table", { name: "权限策略" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("显示 12 / 共 12 条")).toBeTruthy();
+    await user.type(screen.getByRole("searchbox", { name: "搜索直接关联策略" }), "Policy12");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+    await user.click(within(table).getByRole("button", { name: "Policy12" }));
+    expect(onOpenPolicy).toHaveBeenCalledWith("policy-12");
+  });
+  it("reveals the live group object before its membership relationship page finishes", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-progressive", accountId: account.id, name: "ProgressiveTeam", description: "Group facts load independently", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [
+        capability("iam.group.read", "GROUP", "group-progressive"),
+        capability("iam.group-membership.list", "GROUP", "group-progressive")
+      ]
+    };
+    let resolveMemberships!: (page: { accountId: string; groupId: string; items: GroupMembershipAccess[]; nextAfter: null }) => void;
+    const listGroupMemberships = vi.fn(() => new Promise<{ accountId: string; groupId: string; items: GroupMembershipAccess[]; nextAfter: null }>((resolve) => { resolveMemberships = resolve; }));
+    const { user } = await open("groups", { live: true, repository: {
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup: vi.fn().mockResolvedValue(liveGroup),
+      listGroupMemberships
+    } });
+    const directory = await screen.findByRole("table", { name: "用户组" });
+    await user.click(within(directory).getByRole("button", { name: "ProgressiveTeam" }));
+    expect(await screen.findByRole("heading", { name: "ProgressiveTeam" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "用户组授权模型" })).toBeNull();
+    expect(screen.getByText("正在读取成员关系…")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
+    await act(async () => { resolveMemberships({ accountId: account.id, groupId: liveGroup.group.id, items: [], nextAfter: null }); });
+    expect(await screen.findByText("暂无成员")).toBeTruthy();
+    expect(screen.queryByText("正在读取成员关系…")).toBeNull();
+  });
+  it("keeps live group facts available when membership loading fails and retries only that relation", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-retry", accountId: account.id, name: "RetryTeam", description: "Relationship failure stays local", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [
+        capability("iam.group.read", "GROUP", "group-retry"),
+        capability("iam.group-membership.list", "GROUP", "group-retry")
+      ]
+    };
+    const getGroup = vi.fn().mockResolvedValue(liveGroup);
+    const listGroupMemberships = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary relationship failure"))
+      .mockResolvedValueOnce({ accountId: account.id, groupId: liveGroup.group.id, items: [], nextAfter: null });
+    const { user } = await open("groups", { live: true, repository: {
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup,
+      listGroupMemberships
+    } });
+    const directory = await screen.findByRole("table", { name: "用户组" });
+    await user.click(within(directory).getByRole("button", { name: "RetryTeam" }));
+    expect(await screen.findByRole("heading", { name: "RetryTeam" })).toBeTruthy();
+    expect(await screen.findByText("成员关系暂时无法载入")).toBeTruthy();
+    expect(screen.getByText("Relationship failure stays local")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("暂无成员")).toBeTruthy();
+    expect(getGroup).toHaveBeenCalledTimes(1);
+    expect(listGroupMemberships).toHaveBeenCalledTimes(2);
+  });
+  it("edits live group metadata in the content area and restores the source action", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-inline", accountId: account.id, name: "InlineTeam", description: "Backend-owned metadata", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [
+        capability("iam.group.read", "GROUP", "group-inline"),
+        capability("iam.group.update", "GROUP", "group-inline"),
+        capability("iam.group-membership.list", "GROUP", "group-inline")
+      ]
+    };
+    const { user } = await open("groups", { live: true, repository: {
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup: vi.fn().mockResolvedValue(liveGroup),
+      listGroupMemberships: vi.fn().mockResolvedValue({ accountId: account.id, groupId: liveGroup.group.id, items: [], nextAfter: null })
+    } });
+    await user.click(within(await screen.findByRole("table", { name: "用户组" })).getByRole("button", { name: "InlineTeam" }));
+    const edit = await screen.findByRole("button", { name: "编辑" });
+    await user.click(edit);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const editor = screen.getByRole("group", { name: "编辑 · InlineTeam" });
+    expect(within(editor).getByDisplayValue("Backend-owned metadata")).toBeTruthy();
+    await user.click(within(editor).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "编辑" })));
+  });
+  it("does not keep stale group controls or members after an authoritative group refresh fails", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-stale", accountId: account.id, name: "StaleTeam", description: "Before update", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [], capabilities: [
+        capability("iam.group.read", "GROUP", "group-stale"),
+        capability("iam.group.update", "GROUP", "group-stale"),
+        capability("iam.group-membership.list", "GROUP", "group-stale")
+      ]
+    };
+    const getGroup = vi.fn().mockResolvedValueOnce(liveGroup).mockRejectedValueOnce(new Error("authoritative read failed"));
+    const { user } = await open("groups", { live: true, repository: {
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup,
+      listGroupMemberships: vi.fn().mockResolvedValue({ accountId: account.id, groupId: liveGroup.group.id, items: [{
+        membership: { id: "membership-lin", accountId: account.id, groupId: liveGroup.group.id, userId: "principal-lin", createdBy: rootUser.id, resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+        capabilities: []
+      }], nextAfter: null }),
+      updateGroup: vi.fn().mockResolvedValue({ ...liveGroup.group, resourceVersion: 2 })
+    } });
+    await user.click(within(await screen.findByRole("table", { name: "用户组" })).getByRole("button", { name: "StaleTeam" }));
+    expect(within(await screen.findByRole("table", { name: "成员" })).getByRole("button", { name: "lin" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    const editor = within(screen.getByRole("group", { name: "编辑 · StaleTeam" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(editor.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(getGroup).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("对象不可用")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "编辑" })).toBeNull();
+  });
+  it("uses the fixed live group contract without inventing totals and retries one unchanged relation intent", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-live", accountId: account.id, name: "LiveOperators", description: "Backend-owned group", resourceVersion: 4, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [
+        capability("iam.group.read", "GROUP", "group-live"),
+        capability("iam.group.update", "GROUP", "group-live"),
+        capability("iam.group.delete", "GROUP", "group-live"),
+        capability("iam.group-membership.list", "GROUP", "group-live"),
+        capability("iam.group-membership.create", "GROUP", "group-live"),
+        capability("iam.group-policy-attachment.create", "GROUP", "group-live")
+      ]
+    };
+    const membership = (id: string, userId: string): GroupMembershipAccess => ({
+      membership: { id, accountId: account.id, groupId: liveGroup.group.id, userId, createdBy: rootUser.id, resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      capabilities: [capability("iam.group-membership.remove", "GROUP_MEMBERSHIP", id)]
+    });
+    const lin = membership("membership-lin", "principal-lin");
+    const chen = membership("membership-chen", "principal-chen");
+    let resolveRefresh!: (page: { accountId: string; groupId: string; items: GroupMembershipAccess[]; nextAfter: null }) => void;
+    const listMemberships = vi.fn()
+      .mockResolvedValueOnce({ accountId: account.id, groupId: liveGroup.group.id, items: [lin], nextAfter: null })
+      .mockImplementationOnce(() => new Promise<{ accountId: string; groupId: string; items: GroupMembershipAccess[]; nextAfter: null }>((resolve) => { resolveRefresh = resolve; }));
+    const createMembership = vi.fn()
+      .mockRejectedValueOnce(new Error("unknown outcome"))
+      .mockResolvedValueOnce(chen.membership);
+    const { user } = await open("groups", { live: true, repository: {
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup: vi.fn().mockResolvedValue(liveGroup),
+      listGroupMemberships: listMemberships,
+      createGroupMembership: createMembership
+    } });
+    const directory = await screen.findByRole("table", { name: "用户组" });
+    expect(within(directory).queryByRole("columnheader", { name: "成员" })).toBeNull();
+    expect(screen.getByText(/搜索和筛选仅作用于当前已载入记录/)).toBeTruthy();
+    await user.click(within(directory).getByRole("button", { name: "LiveOperators" }));
+    expect(await screen.findByRole("heading", { name: "LiveOperators" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "成员" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "成员 (1)" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "添加成员" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const workflow = within(screen.getByRole("group", { name: "添加成员 · LiveOperators" }));
+    await user.click(workflow.getByRole("checkbox", { name: "chen" }));
+    await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    await user.click(workflow.getByRole("button", { name: "确认变更" }));
+    await waitFor(() => expect(createMembership).toHaveBeenCalledTimes(1));
+    const retained = createMembership.mock.calls[0]?.[3]?.requestId;
+    expect(retained).toEqual(expect.any(String));
+    expect(workflow.getByText(/暂时无法完成操作/)).toBeTruthy();
+    await user.click(workflow.getByRole("button", { name: "确认变更" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "添加成员 · LiveOperators" })).toBeNull());
+    expect(createMembership).toHaveBeenCalledTimes(2);
+    expect(createMembership.mock.calls[1]?.[3]?.requestId).toBe(retained);
+    expect(screen.getByText("正在更新成员关系；更新完成前暂不可修改。")).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "成员" })).getByRole("button", { name: "lin" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "移除成员" }).hasAttribute("disabled")).toBe(true);
+    await act(async () => { resolveRefresh({ accountId: account.id, groupId: liveGroup.group.id, items: [lin, chen], nextAfter: null }); });
+    expect(within(screen.getByRole("table", { name: "成员" })).getByRole("button", { name: "chen" })).toBeTruthy();
+    expect(screen.queryByText("正在更新成员关系；更新完成前暂不可修改。")).toBeNull();
+    expect(screen.getByRole("tab", { name: "成员" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "成员 (2)" })).toBeNull();
+  });
+  it("checks the immutable completion record after a group policy response is lost without replaying the write", async () => {
+    const policy: AccountPolicy = {
+      id: "policy-group-audit", management: "CUSTOMER", accountId: account.id, displayName: "GroupAuditAccess",
+      scope: "TENANT", status: "ACTIVE", defaultVersionId: "v1", resourceVersion: 4,
+      createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z"
+    };
+    const liveGroup: GroupAccess = {
+      group: { id: "group-policy", accountId: account.id, name: "PolicyOperators", description: "Backend-owned group", resourceVersion: 2, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [
+        capability("iam.group.read", "GROUP", "group-policy"),
+        capability("iam.group-membership.list", "GROUP", "group-policy"),
+        capability("iam.group-policy-attachment.create", "GROUP", "group-policy")
+      ]
+    };
+    const attachment = {
+      id: "attachment-group-audit", accountId: account.id, target: { kind: "GROUP" as const, id: liveGroup.group.id },
+      policyId: policy.id, scope: "TENANT" as const, installationId: null, resourceVersion: 1,
+      createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z"
+    };
+    const updatedGroup: GroupAccess = { ...liveGroup, policyAttachments: [attachment] };
+    const createGroupPolicyAttachment = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const readPolicyAttachmentChange: NonNullable<AccountRepository["readPolicyAttachmentChange"]> = vi.fn(async (_credential, expectation) => {
+      if (expectation.operation !== "CREATE") throw new Error("unexpected operation");
+      return {
+        operation: "CREATE" as const, accountId: expectation.accountId, actorPrincipalId: expectation.actorPrincipalId,
+        requestId: expectation.requestId, completedAt: attachment.createdAt, target: expectation.target,
+        policyId: expectation.policyId, policyResourceVersion: expectation.policyResourceVersion, attachment
+      };
+    });
+    const getGroup = vi.fn().mockResolvedValueOnce(liveGroup).mockResolvedValue(updatedGroup);
+    const repositoryOverrides: Partial<AccountRepository> = {
+      listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => ({
+        accountId: account.id, scope: platform ? "INSTALLATION" as const : "TENANT" as const,
+        installationId: platform ? "installation-preview" : null, items: platform ? [] : [policy]
+      })),
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup,
+      listGroupMemberships: vi.fn().mockResolvedValue({ accountId: account.id, groupId: liveGroup.group.id, items: [], nextAfter: null }),
+      createGroupPolicyAttachment,
+      readPolicyAttachmentChange
+    };
+    const first = await open("groups", { live: true, repository: repositoryOverrides });
+    const { user } = first;
+
+    await user.click(within(await screen.findByRole("table", { name: "用户组" })).getByRole("button", { name: liveGroup.group.name }));
+    await user.click(await screen.findByRole("tab", { name: "直接关联策略 (0)" }));
+    await user.click(screen.getByRole("button", { name: "关联策略" }));
+    const workflow = within(screen.getByRole("group", { name: `关联策略 · ${liveGroup.group.name}` }));
+    await user.click(workflow.getByRole("checkbox", { name: policy.displayName }));
+    await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    await user.click(workflow.getByRole("button", { name: "确认变更" }));
+
+    expect(await workflow.findByText("策略关联结果尚未确认")).toBeTruthy();
+    const original = createGroupPolicyAttachment.mock.calls[0]?.[3];
+    expect(sessionStorage.length).toBe(1);
+
+    first.unmount();
+    const resumed = await open("groups", { live: true, repository: repositoryOverrides });
+    await resumed.user.click(within(await screen.findByRole("table", { name: "用户组" })).getByRole("button", { name: liveGroup.group.name }));
+    const resumedWorkflow = within(await screen.findByRole("group", { name: `关联策略 · ${liveGroup.group.name}` }));
+    expect(await resumedWorkflow.findByText("策略关联结果尚未确认")).toBeTruthy();
+    await resumed.user.click(resumedWorkflow.getByRole("button", { name: "检查原请求结果" }));
+    await waitFor(() => expect(readPolicyAttachmentChange).toHaveBeenCalledWith("preview-only", {
+      operation: "CREATE", accountId: account.id, actorPrincipalId: rootUser.id, requestId: original.requestId,
+      target: { kind: "GROUP", id: liveGroup.group.id }, policyId: policy.id, policyResourceVersion: policy.resourceVersion
+    }));
+    expect(createGroupPolicyAttachment).toHaveBeenCalledTimes(1);
+    await resumed.user.click(await screen.findByRole("tab", { name: "直接关联策略 (1)" }));
+    expect(await screen.findByRole("button", { name: policy.displayName })).toBeTruthy();
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("creates only an empty group, then adds each member and policy relationship separately", async () => {
+    const { user, repository, extension } = await open("groups");
+    await user.click(await screen.findByRole("button", { name: "新建用户组" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.type(screen.getByLabelText("名称"), "Platform Operators");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.queryByRole("checkbox", { name: "lin" })).toBeNull();
+    expect(screen.getByText("本次只创建空用户组；不会添加成员或关联策略。")).toBeTruthy();
+    expect(screen.getByText("0 项直接关联")).toBeTruthy();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "新建用户组" }));
+    await screen.findByRole("heading", { name: "用户组已创建" });
+    const created = (await extension.read("preview")).groups.at(-1)!;
+    expect(created.memberIds).toEqual([]);
+    expect(created.policyIds).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "查看用户组" }));
+    expect(screen.getByLabelText("Entity destination").textContent).toBe(created.id);
+    await user.click(screen.getByRole("button", { name: "添加成员" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const memberWorkflow = within(screen.getByRole("group", { name: "添加成员 · Platform Operators" }));
+    expect(memberWorkflow.getByRole("button", { name: "审阅变更" })).toHaveProperty("disabled", true);
+    await user.click(memberWorkflow.getByRole("checkbox", { name: "lin" }));
+    await user.click(memberWorkflow.getByRole("button", { name: "审阅变更" }));
+    expect(memberWorkflow.getByText(/本次变更涉及 1 位成员/)).toBeTruthy();
+    expect((await extension.read("preview")).groups.at(-1)?.memberIds).toEqual([]);
+    await user.click(memberWorkflow.getByRole("button", { name: "确认变更" }));
+    expect(screen.getByRole("tab", { name: "成员 (1)" })).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect((await extension.read("preview")).groups.at(-1)?.memberIds).toEqual(["principal-lin"]);
+    await user.click(screen.getByRole("tab", { name: "直接关联策略 (0)" }));
+    await user.click(screen.getByRole("button", { name: "关联策略" }));
+    const policyWorkflow = within(screen.getByRole("group", { name: "关联策略 · Platform Operators" }));
+    await user.click(policyWorkflow.getByRole("checkbox", { name: "MatrixReadOnlyAccess" }));
+    expect(policyWorkflow.getByRole("checkbox", { name: "MatrixAuditReadOnly" })).toHaveProperty("disabled", true);
+    expect(policyWorkflow.getByText(/每次选择 1 项/)).toBeTruthy();
+    await user.click(policyWorkflow.getByRole("button", { name: "审阅变更" }));
+    expect((await extension.read("preview")).groups.at(-1)?.policyIds).toEqual([]);
+    await user.click(policyWorkflow.getByRole("button", { name: "确认变更" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "关联策略 · Platform Operators" })).toBeNull());
+    expect(screen.getByRole("tab", { name: "直接关联策略 (1)" })).toBeTruthy();
+    expect((await extension.read("preview")).groups.at(-1)?.policyIds).toEqual(["policy-read"]);
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    await user.type(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" }), "Platform Operators");
+    expect(screen.queryByRole("button", { name: "DeliveryTeam" })).toBeNull();
+  });
+  it("preserves a group draft through back, locale change and dismissed cancellation, and discards without writes", async () => {
+    const { user, repository, extension } = await open("create-group");
+    const before = await extension.read("preview");
+    await screen.findByRole("heading", { name: "填写用户组信息" });
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(document.activeElement).toBe(screen.getByLabelText("名称"));
+    await user.type(screen.getByLabelText("名称"), "deliveryteam");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByText("用户组名称已存在。")).toBeTruthy();
+    await user.clear(screen.getByLabelText("名称")); await user.type(screen.getByLabelText("名称"), "Draft Team");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "上一步" }));
+    expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe("Draft Team");
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Continue editing" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("This creates only an empty group; no members or policies are attached.")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Discard and leave" }));
+    await screen.findByRole("table", { name: "User groups" });
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(await extension.read("preview")).toEqual(before);
+  });
+  it("keeps failed member changes editable and retries the exact delta without losing existing members", async () => {
+    const { user, repository, extension } = await open("groups", { entityId: "group-delivery" });
+    const before = await extension.read("preview");
+    await user.click(await screen.findByRole("button", { name: "添加成员" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    let workflow = within(screen.getByRole("group", { name: "添加成员 · DeliveryTeam" }));
+    await user.click(workflow.getByRole("checkbox", { name: "chen" }));
+    await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(workflow.getByRole("button", { name: "确认变更" }));
+    await waitFor(() => expect(workflow.getAllByRole("alert").some((alert) => alert.textContent?.includes("重试"))).toBe(true));
+    expect(await extension.read("preview")).toEqual(before);
+    await user.click(workflow.getByRole("button", { name: "返回选择" }));
+    expect((workflow.getByRole("checkbox", { name: "chen" }) as HTMLInputElement).checked).toBe(true);
+    await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    await user.click(workflow.getByRole("button", { name: "确认变更" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "添加成员 · DeliveryTeam" })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "添加成员" }));
+    expect((await extension.read("preview")).groups[0]?.memberIds).toEqual(["principal-lin", "principal-chen"]);
+    await user.click(screen.getByRole("button", { name: "移除成员" }));
+    workflow = within(screen.getByRole("group", { name: "移除成员 · DeliveryTeam" }));
+    await user.click(workflow.getByRole("checkbox", { name: "chen" }));
+    await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    expect(workflow.getByText(/不代表撤销全部访问权限/)).toBeTruthy();
+    await user.click(workflow.getByRole("button", { name: "取消" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "移除成员" }));
+    expect((await extension.read("preview")).groups[0]?.memberIds).toEqual(["principal-lin", "principal-chen"]);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("cross-links exact group, member and policy entities with named grant sources on both sides", async () => {
+    const { user } = await open("groups", { entityId: "group-delivery", seed: async (extension) => {
+      await extension.execute("preview", { kind: "change-group-policies", id: "group-delivery", added: ["policy-prod-logs"], removed: [] });
+    } });
+    await user.click(await screen.findByRole("button", { name: "lin" }));
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-lin");
+    await user.click(screen.getByRole("tab", { name: "权限策略" }));
+    const policyRow = screen.getByRole("button", { name: "ProductionLogReader" }).closest("tr")!;
+    expect(within(policyRow).getByText("直接关联")).toBeTruthy();
+    await user.click(within(policyRow).getByRole("button", { name: "继承自 DeliveryTeam" }));
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("group-delivery");
+    await user.click(screen.getByRole("tab", { name: "直接关联策略 (2)" }));
+    await user.click(screen.getByRole("button", { name: "ProductionLogReader" }));
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("policy-prod-logs");
+    await user.click(screen.getByRole("tab", { name: /策略用法/ }));
+    expect(screen.getByRole("button", { name: "lin" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "DeliveryTeam" }));
+    expect(screen.getByRole("heading", { name: "DeliveryTeam" })).toBeTruthy();
+  });
+  it("summarizes the preview group inheritance model only from complete current policy documents", async () => {
+    const { user } = await open("groups", { entityId: "group-delivery", seed: async (extension) => {
+      await extension.execute("preview", { kind: "change-group-policies", id: "group-delivery", added: ["policy-production-guard"], removed: [] });
+    } });
+    const overview = await screen.findByRole("region", { name: "用户组授权模型" });
+    expect(within(overview).getByText("1 位成员")).toBeTruthy();
+    expect(within(overview).getByText("2 项直接关联")).toBeTruthy();
+    expect(within(overview).getByText(/不代表成员某次请求的最终判定/)).toBeTruthy();
+    expect(within(overview).getByText("用户组不设置")).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "直接关联策略 (2)" }));
+    const denyRow = screen.getByRole("button", { name: "ProtectProductionDeployments" }).closest("tr")!;
+    expect(within(denyRow).getByText("含显式拒绝")).toBeTruthy();
+    const allowRow = screen.getByRole("button", { name: "MatrixDeliveryAccess" }).closest("tr")!;
+    expect(within(allowRow).getByText("仅允许声明")).toBeTruthy();
+  });
+  it("changes group policies only after review and keeps metadata edits independent", async () => {
+    const { user, extension } = await open("groups", { entityId: "group-delivery" });
+    await user.click(await screen.findByRole("button", { name: "编辑" }));
+    const metadata = within(screen.getByRole("group", { name: "编辑 · DeliveryTeam" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(metadata.queryByRole("checkbox")).toBeNull();
+    await user.type(metadata.getByLabelText("描述"), " updated");
+    await user.click(metadata.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "编辑 · DeliveryTeam" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "编辑" })));
+    const before = await extension.read("preview");
+    await user.click(screen.getByRole("tab", { name: "直接关联策略 (1)" }));
+    await user.click(screen.getByRole("button", { name: "关联策略" }));
+    let workflow = within(screen.getByRole("group", { name: "关联策略 · DeliveryTeam" }));
+    await user.click(workflow.getByRole("checkbox", { name: "MatrixReadOnlyAccess" }));
+    await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    expect(await extension.read("preview")).toEqual(before);
+    await user.click(workflow.getByRole("button", { name: "确认变更" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "关联策略 · DeliveryTeam" })).toBeNull());
+    const after = await extension.read("preview");
+    expect(after.groups[0]?.memberIds).toEqual(before.groups[0]?.memberIds);
+    expect(after.groups[0]?.policyIds).toEqual(["policy-delivery", "policy-read"]);
+    await user.click(screen.getByRole("button", { name: "解除策略" }));
+    workflow = within(screen.getByRole("group", { name: "解除策略 · DeliveryTeam" }));
+    await user.click(workflow.getByRole("checkbox", { name: "MatrixReadOnlyAccess" }));
+    await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    await user.click(workflow.getByRole("button", { name: "确认变更" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "解除策略 · DeliveryTeam" })).toBeNull());
+    expect((await extension.read("preview")).groups[0]).toEqual(before.groups[0]);
+  });
+  it.each(["users", "groups", "policies", "roles"] as const)("does not substitute another identity for an unavailable %s deep link", async (view) => {
+    const { user, repository } = await open(view, { entityId: "foreign-or-missing" });
+    await screen.findByText("对象不可用");
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect(screen.queryByText("对象不可用")).toBeNull();
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("directory");
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("reports an unknown local worksheet identity without evaluating another user", async () => {
+    const { user } = await open("policy-configuration", { entityId: "missing-user" });
+    await user.click(await screen.findByRole("button", { name: "生成本地检查表" }));
+    expect(screen.queryByText("策略允许")).toBeNull();
+    expect(screen.getByText("本地输入需要修正")).toBeTruthy();
+    expect(screen.getAllByText(/找不到该用户 fixture/).length).toBeGreaterThan(0);
+    expect(screen.getByText("NOT_EVALUATED")).toBeTruthy();
+  });
+  it("keeps fixed evidence visible and generates a clearly non-authoritative access diagnosis", async () => {
+    const { user, repository, extension } = await open("access-diagnosis", { users: reviewUsers });
+    const before = await extension.read("preview");
+    expect(screen.getByText(/结果不是 Decision、permit、授权凭证或资源存在性证明/)).toBeTruthy();
+    expect(screen.getByText("合成身份 fixture")).toBeTruthy();
+    expect(screen.getByText("USER · principal-lin")).toBeTruthy();
+    expect(screen.getByText("logs · r1")).toBeTruthy();
+    expect(screen.getByText("logs:search")).toBeTruthy();
+    expect(screen.getByText("topic:production/payment")).toBeTruthy();
+    expect(screen.getByText(/^sha256:[0-9a-f]{64}$/)).toBeTruthy();
+    expect(screen.getByText("未观测真实请求")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "诊断解释" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "生成 MOCK 诊断" }));
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "诊断解释" }));
+    expect(screen.getByText("ALLOWED · MOCK")).toBeTruthy();
+    expect(screen.getByText(/不是授权凭证/)).toBeTruthy();
+    expect(screen.getByText("mock-diagnosis:path")).toBeTruthy();
+    expect(screen.getByText("mock-current-access:path")).toBeTruthy();
+    expect(screen.getByText("CurrentAccessDiagnosis")).toBeTruthy();
+    expect(screen.getByText("iam.matrix.xiak.com/v1")).toBeTruthy();
+    expect(screen.getByText("ALLOWED 结果不携带拒绝原因。")).toBeTruthy();
+    const layers = screen.getByRole("region", { name: "限制层" });
+    expect(within(layers).getByText("USER_BOUNDARY")).toBeTruthy();
+    expect(within(layers).getByText("NOT_APPLICABLE")).toBeTruthy();
+    const boundary = screen.getByRole("region", { name: "不在授权诊断范围" });
+    expect(within(boundary).getAllByText("NOT_EVALUATED")).toHaveLength(2);
+    expect(screen.getByRole("table", { name: "匹配授权来源" })).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "匹配授权来源" })).getByText("policy-prod-logs · v1")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "合成策略证据" })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await extension.read("preview")).toEqual(before);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("replaces a stale diagnosis when the synthetic scenario changes and explains deny sources", async () => {
+    const { user } = await open("access-diagnosis", { users: reviewUsers });
+    await user.click(screen.getByRole("button", { name: "生成 MOCK 诊断" }));
+    expect(screen.getByText("ALLOWED · MOCK")).toBeTruthy();
+    await select(user, "合成场景", "显式拒绝样例");
+    expect(screen.queryByRole("heading", { name: "诊断解释" })).toBeNull();
+    expect(screen.getByText("paas:deploy")).toBeTruthy();
+    expect(screen.getByText("application:checkout-api")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "生成 MOCK 诊断" }));
+    expect(screen.getByText("DENIED · MOCK")).toBeTruthy();
+    expect(screen.getByText("EXPLICIT_DENY")).toBeTruthy();
+    expect(screen.getByText(/至少一个已匹配来源或上限层包含显式 Deny/)).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "匹配授权来源" })).getAllByText("DENY").length).toBeGreaterThan(0);
+    await select(user, "合成场景", "权限边界限制样例");
+    await user.click(screen.getByRole("button", { name: "生成 MOCK 诊断" }));
+    expect(screen.getByText("USER_PERMISSION_BOUNDARY")).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "限制层" })).getByText("BLOCKED")).toBeTruthy();
+  });
+  it("does not expose the local diagnosis evaluator to a live account before the contract is connected", async () => {
+    const { repository } = await open("access-diagnosis", { live: true });
+    expect(screen.getByText("LIVE · NOT_CONNECTED")).toBeTruthy();
+    expect(screen.getByText("当前访问诊断尚未接入")).toBeTruthy();
+    expect(screen.getByText("从一次真实产品操作开始诊断")).toBeTruthy();
+    expect(screen.getByText(/产品控制面或同安全边界 BFF/)).toBeTruthy();
+    expect(screen.getByText(/不能直连内部 \/v1\/authorize:diagnose/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "生成 MOCK 诊断" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "合成场景" })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText(/ALLOWED · 样例/)).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("keeps a visual policy draft editable and creates a version only on save", async () => {
+    const { user, extension } = await open("policies");
+    const before = (await extension.read("preview")).policies;
+    await user.click(await screen.findByRole("button", { name: "新建自定义策略" }));
+    await user.click(screen.getByRole("button", { name: /^按策略生成器创建/ }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await logActions(user, ["logs:read", "logs:search"]);
+    await select(user, "资源授权范围", "指定资源");
+    const resourceId = screen.getByLabelText("资源 ID 或前缀 1");
+    await user.clear(resourceId); await user.type(resourceId, "production/*");
+    expect((screen.getByRole("checkbox", { name: "logs:search" }) as HTMLInputElement).checked).toBe(true);
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    expect((screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value).toContain("logs:search");
+    expect((await extension.read("preview")).policies).toEqual(before);
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.type(screen.getByLabelText("名称", { exact: true }), "ReadCluster");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect((await extension.read("preview")).policies).toEqual(before);
+    await user.click(screen.getByRole("button", { name: "创建策略" }));
+    expect((await extension.read("preview")).policies.at(-1)?.versions[0]?.document.statement[0]?.action).toEqual(["logs:read", "logs:search"]);
+  }, 10_000);
+  it("round-trips typed resources and all condition types, preserving restrictions in review and save", async () => {
+    const { user, extension, repository } = await open("create-policy");
+    await logActions(user, ["logs:search"]);
+    await select(user, "资源授权范围", "指定资源");
+    fireEvent.change(screen.getByLabelText("资源 ID 或前缀 1"), { target: { value: "production/*" } });
+    await user.click(screen.getByRole("checkbox", { name: "限制来源 IP" }));
+    expect(screen.getByText(/来源 IP 只能由受信入口写入请求上下文/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("来源 IP 范围（CIDR）"), { target: { value: "192.0.2.0/24\n2001:db8::/32" } });
+    await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
+    fireEvent.change(screen.getByLabelText("标签键 1"), { target: { value: "environment" } });
+    fireEvent.change(screen.getByLabelText("标签值 1"), { target: { value: "production" } });
+    await user.click(screen.getByRole("checkbox", { name: "设置生效时间下限" }));
+    await user.click(screen.getByRole("checkbox", { name: "设置生效时间上限" }));
+    fireEvent.change(screen.getByLabelText("不早于（UTC，含边界）"), { target: { value: "2026-09-09T00:00" } });
+    fireEvent.change(screen.getByLabelText("不晚于（UTC，含边界）"), { target: { value: "2026-09-10T00:00" } });
+    const condition = { sourceIp: ["192.0.2.0/24", "2001:db8::/32"], resourceTag: [{ key: "environment", value: "production" }], notBefore: "2026-09-09T00:00:00.000Z", notAfter: "2026-09-10T00:00:00.000Z" };
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    expect(JSON.parse((screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value).statement[0].condition).toEqual(condition);
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    expect((screen.getByLabelText("资源 ID 或前缀 1") as HTMLInputElement).value).toBe("production/*");
+    expect((screen.getByLabelText("来源 IP 范围（CIDR）") as HTMLTextAreaElement).value).toBe("192.0.2.0/24\n2001:db8::/32");
+    expect((screen.getByLabelText("标签值 1") as HTMLInputElement).value).toBe("production");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByLabelText("名称", { exact: true })); await user.paste("ConditionalLogAccess");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    const summary = within(screen.getByRole("table", { name: "策略摘要" }));
+    expect(summary.getByText(/2001:db8::\/32/)).toBeTruthy();
+    expect(summary.getByText('environment = "production"')).toBeTruthy();
+    expect(summary.getByText(/2026-09-10T00:00:00.000Z/)).toBeTruthy();
+    await user.click(summary.getByRole("button", { name: "查看日志服务的允许操作" }));
+    expect(within(screen.getByRole("table", { name: "操作明细" })).getByText("logs:search")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "审阅并保存" })).toBeTruthy();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "返回服务摘要" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "创建策略" }));
+    await screen.findByRole("heading", { name: "策略已保存" });
+    expect((await extension.read("preview")).policies.at(-1)?.versions[0]?.document.statement[0]).toEqual({ effect: "allow", action: ["logs:search"], resource: ["matrix:logs:org-xiak:*:topic/production/*"], condition });
+    expect(repository.execute).not.toHaveBeenCalled();
+  }, 10_000);
+  it("blocks empty conditions and incompatible account actions instead of silently widening resource scope", async () => {
+    const { user, repository } = await open("create-policy");
+    await logActions(user, ["logs:search"]);
+    await select(user, "资源授权范围", "指定资源");
+    await user.type(screen.getByLabelText("资源 ID 或前缀 1"), "production/*");
+    await user.click(screen.getByRole("checkbox", { name: "logs:list" }));
+    expect((screen.getByRole("checkbox", { name: "按资源标签限制" }) as HTMLInputElement).disabled).toBe(true);
+    const conditionCapabilities = screen.getByRole("region", { name: "条件能力" });
+    expect(within(conditionCapabilities).getAllByText("全部操作支持").length).toBeGreaterThan(0);
+    expect(within(conditionCapabilities).getByText("部分操作支持")).toBeTruthy();
+    expect(within(conditionCapabilities).getByText("1 / 2 个所选操作")).toBeTruthy();
+    await user.click(screen.getByRole("combobox", { name: "资源授权范围" }));
+    expect(screen.getByRole("option", { name: "指定资源" }).getAttribute("aria-disabled")).toBe("true");
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getAllByRole("alert").some((alert) => alert.textContent?.includes("资源"))).toBe(true);
+    expect((screen.getByLabelText("资源 ID 或前缀 1") as HTMLInputElement).value).toBe("production/*");
+    await user.click(screen.getByRole("checkbox", { name: "logs:list" }));
+    await user.click(screen.getByRole("checkbox", { name: "限制来源 IP" }));
+    fireEvent.change(screen.getByLabelText("来源 IP 范围（CIDR）"), { target: { value: "192.0.2.42/24" } });
+    expect(screen.getByText(/主机位必须为 0/)).toBeTruthy();
+    expect(screen.getByLabelText("来源 IP 范围（CIDR）").getAttribute("aria-invalid")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    const validationAlert = document.querySelector<HTMLElement>("[data-policy-validation]")!;
+    expect(validationAlert.textContent).toContain("条件");
+    expect(document.activeElement).toBe(screen.getByLabelText("来源 IP 范围（CIDR）"));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  }, 10_000);
+  it("confirms a service change, retaining other statements and condition restrictions", async () => {
+    const { user } = await open("create-policy");
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    const initial = { version: "1", statement: [
+      { effect: "allow", action: ["logs:search"], resource: ["matrix:logs:org-xiak:*:topic/production/*"], condition: { sourceIp: ["192.0.2.0/24"] } },
+      { effect: "deny", action: ["database:delete"], resource: ["*"] }
+    ] };
+    const json = () => screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement;
+    await user.clear(json()); await user.paste(JSON.stringify(initial));
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    await user.click(within(screen.getByRole("region", { name: "声明 1" })).getByRole("combobox", { name: "产品服务" }));
+    await user.click(screen.getByRole("option", { name: "PostgreSQL 数据库" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
+    expect((screen.getByLabelText("资源 ID 或前缀 1") as HTMLInputElement).value).toBe("production/*");
+    await user.click(within(screen.getByRole("region", { name: "声明 1" })).getByRole("combobox", { name: "产品服务" }));
+    await user.click(screen.getByRole("option", { name: "PostgreSQL 数据库" }));
+    await user.click(screen.getByRole("button", { name: "切换服务" }));
+    await user.click(within(screen.getByRole("region", { name: "声明 1" })).getByRole("checkbox", { name: "database:read" }));
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    expect(JSON.parse(json().value).statement).toEqual([{ ...initial.statement[0], action: ["database:read"], resource: ["*"] }, initial.statement[1]]);
+  });
+  it("inventories local policy references, clears stale worksheets and remains preview-only", async () => {
+    const { user, repository } = await open("policy-configuration");
+    const context = screen.getByText("补充请求上下文（仅记录）").closest("details")!;
+    expect(context.open).toBe(false);
+    expect(within(context).getByText(/本页不探测浏览器地址/)).toBeTruthy();
+    expect(screen.getByText(/mock-profile-v1/)).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "生成本地检查表" }));
+    expect(screen.queryByText("策略允许")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "本地策略配置检查表" }));
+    const coverage = screen.getByRole("region", { name: "检查范围" });
+    expect(within(coverage).getByText("输入 fixture")).toBeTruthy();
+    expect(within(coverage).getByText("关联策略文档")).toBeTruthy();
+    expect(within(coverage).getByText("权限边界配置")).toBeTruthy();
+    expect(within(coverage).getByText("运行时授权")).toBeTruthy();
+    expect(within(coverage).getByText("NOT_EVALUATED")).toBeTruthy();
+    const table = screen.getByRole("table", { name: "配置声明清单" });
+    expect(screen.getByText("第 1 / 1 页")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "每页条数" })).toBeTruthy();
+    expect(within(table).getAllByText("已载入").length).toBeGreaterThan(0);
+    expect(within(table).getByText("直接关联")).toBeTruthy();
+    expect(within(table).getByText("用户组继承")).toBeTruthy();
+    expect(within(table).getByText("ProductionLogReader")).toBeTruthy();
+    expect(within(table).getByText("DeliveryTeam")).toBeTruthy();
+    expect(within(table).queryByText("MATCH")).toBeNull();
+    await select(user, "用户", "chen");
+    expect(screen.queryByRole("heading", { name: "本地策略配置检查表" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
+    expect(screen.getByText("检查表已生成")).toBeTruthy();
+    expect(screen.queryByText("默认拒绝")).toBeNull();
+    expect(screen.queryByText("NOT_MATCH")).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("prefills local configuration scenarios without mutation or automatic conclusions and links reference sources", async () => {
+    const { user, repository, extension } = await open("policy-configuration", { users: reviewUsers });
+    const before = await extension.read("preview");
+    await select(user, "查看本地配置场景", "直接关联与组继承");
+    const example = screen.getByRole("combobox", { name: "查看本地配置场景" });
+    expect(document.getElementById(example.getAttribute("aria-describedby")!)?.textContent).toContain("直接关联和用户组继承配置");
+    expect(screen.getByRole("combobox", { name: "用户" }).textContent).toContain("qiao");
+    expect(screen.queryByRole("heading", { name: "本地策略配置检查表" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
+    expect(screen.queryByText("策略允许", { exact: true })).toBeNull();
+    expect(screen.getByText(/不能用于授权、审计或修复/)).toBeTruthy();
+    const evidence = within(screen.getByRole("table", { name: "配置声明清单" }));
+    expect(evidence.getAllByRole("button", { name: "ProductionLogsByTag" })).toHaveLength(2);
+    expect(evidence.getAllByText("直接关联").length).toBeGreaterThan(0);
+    expect(evidence.getAllByText("用户组继承").length).toBeGreaterThan(0);
+    expect(await extension.read("preview")).toEqual(before);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    await user.click(evidence.getAllByRole("button", { name: "ReleaseOperators" })[0]!);
+    expect(await screen.findByRole("heading", { name: "ReleaseOperators" })).toBeTruthy();
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("group-operators");
+  });
+  it("retains a compatible action across resources and clears it across services", async () => {
+    const { user } = await open("policy-configuration");
+    await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
+    await select(user, "测试资源", "archive/payment · cn-shanghai-a");
+    expect(screen.getByRole("combobox", { name: "请求操作" }).textContent).toContain("logs:search");
+    expect(screen.getByRole("button", { name: "生成本地检查表" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByRole("heading", { name: "本地策略配置检查表" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
+    expect(screen.getByText("检查表已生成")).toBeTruthy();
+    expect(screen.queryByText("默认拒绝", { exact: true })).toBeNull();
+    await select(user, "测试资源", "account · global");
+    expect(screen.getByRole("combobox", { name: "请求操作" }).textContent).toBe("选择操作");
+    expect(screen.getByRole("button", { name: "生成本地检查表" }).hasAttribute("disabled")).toBe(true);
+    await select(user, "产品服务", "PostgreSQL 数据库");
+    expect(screen.getByRole("combobox", { name: "请求操作" }).textContent).toBe("选择操作");
+    expect(screen.getByRole("button", { name: "生成本地检查表" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByRole("heading", { name: "本地策略配置检查表" })).toBeNull();
+  });
+  it("lists Deny and boundary declarations without evaluating or prioritizing them", async () => {
+    const { user } = await open("policy-configuration", { users: reviewUsers });
+    await select(user, "查看本地配置场景", "包含 Deny 声明");
+    await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
+    expect(screen.queryByText("显式拒绝", { exact: true })).toBeNull();
+    let evidence = within(screen.getByRole("table", { name: "配置声明清单" }));
+    expect(evidence.getByRole("button", { name: "ProtectProductionDeployments" })).toBeTruthy();
+    expect(evidence.getByText("Deny 声明")).toBeTruthy();
+    expect(evidence.queryByText("MATCH")).toBeNull();
+    await select(user, "查看本地配置场景", "配置权限边界");
+    expect(screen.queryByRole("heading", { name: "本地策略配置检查表" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
+    expect(screen.queryByText("默认拒绝", { exact: true })).toBeNull();
+    evidence = within(screen.getByRole("table", { name: "配置声明清单" }));
+    expect(evidence.getByRole("button", { name: "MatrixDeliveryAccess" })).toBeTruthy();
+    await user.click(evidence.getAllByRole("button", { name: "ReleaseOperatorBoundary" })[0]!);
+    expect(await screen.findByRole("heading", { name: "ReleaseOperatorBoundary" })).toBeTruthy();
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("policy-delivery-boundary");
+  });
+  it("keeps disabled and unreferenced user fixtures separate from runtime authorization", async () => {
+    const { user } = await open("policy-configuration", { users: reviewUsers.map((entry) => entry.user.id === "principal-lin" ? { ...entry, user: { ...entry.user, status: "DISABLED" } } : entry) });
+    expect(screen.getByText(/本地用户 fixture 标记为停用/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
+    expect(screen.queryByText("策略允许", { exact: true })).toBeNull();
+    expect(screen.getByText(/NOT_EVALUATED：未调用后端 PDP/)).toBeTruthy();
+    await select(user, "查看本地配置场景", "未关联策略文档");
+    expect(screen.queryByText(/本地用户 fixture 标记为停用/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
+    expect(screen.queryByText("默认拒绝", { exact: true })).toBeNull();
+    expect(screen.queryByRole("table", { name: "配置声明清单" })).toBeNull();
+    expect(screen.getByText("未找到关联策略声明")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查看用户 wu" }));
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-wu");
+    await user.click(screen.getByRole("tab", { name: "访问方式" }));
+    expect(screen.getByText(/访问方式决定如何登录或调用 API，不代表资源权限/)).toBeTruthy();
+  });
+  it("shows condition fields without letting source input produce an authorization result", async () => {
+    const { user } = await open("policy-configuration", { seed: async (extension) => {
+      await extension.execute("preview", { kind: "save-policy", id: "policy-prod-logs", name: "ProductionLogReader", description: "", document: { version: "1", statement: [{ effect: "deny", action: ["logs:search"], resource: ["*"], condition: { sourceIp: ["192.0.2.0/24"] } }] } });
+    } });
+    await user.click(screen.getByText("补充请求上下文（仅记录）"));
+    expect(screen.getByText("补充请求上下文（仅记录）").closest("details")?.open).toBe(true);
+    await user.clear(screen.getByLabelText("来源 IP"));
+    await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
+    expect(screen.queryByText("无法确定")).toBeNull();
+    expect(screen.queryByText("CONTEXT_MISSING")).toBeNull();
+    expect(screen.getByText("条件字段：来源 IP")).toBeTruthy();
+    expect(screen.getByText("Deny 声明")).toBeTruthy();
+    await user.type(screen.getByLabelText("来源 IP"), "::ffff:192.0.2.42");
+    await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
+    expect(screen.queryByText("显式拒绝", { exact: true })).toBeNull();
+    expect(screen.getByText("条件字段：来源 IP")).toBeTruthy();
+    expect(screen.getByText("v2 · 声明 1")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    expect(screen.getByText("Deny statement", { exact: true })).toBeTruthy();
+    expect(screen.getByText("NOT_EVALUATED")).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/\p{Script=Han}/u);
+  });
+  it("preserves every statement through visual/JSON edits, ordering and removal", async () => {
+    const { user, repository } = await open("create-policy");
+    await user.click(await screen.findByRole("tab", { name: "JSON 编辑" }));
+    const statements = [
+      { effect: "allow", action: ["logs:search", "logs:read"], resource: ["matrix:logs:org-xiak:*:topic/production/*"] },
+      { effect: "deny", action: ["logs:delete"], resource: ["*"] }
+    ];
+    const editor = () => screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement;
+    await user.clear(editor()); await user.paste(JSON.stringify({ version: "1", statement: statements }));
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    for (const action of ["logs:search", "logs:read"]) expect((within(screen.getByRole("region", { name: "声明 1" })).getByRole("checkbox", { name: action }) as HTMLInputElement).checked).toBe(true);
+    await user.click(screen.getByRole("button", { name: "上移声明 2" }));
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    expect(JSON.parse(editor().value).statement).toEqual([statements[1], statements[0]]);
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    await user.click(screen.getByRole("button", { name: "删除声明 2" }));
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    expect(JSON.parse(editor().value).statement).toEqual([statements[1]]);
+    const unrepresentable = JSON.stringify({ version: "1", statement: [{ ...statements[0], resource: [" matrix:logs:org-xiak:*:topic/production/* "] }] });
+    await user.clear(editor()); await user.paste(unrepresentable);
+    expect(screen.getByRole("tab", { name: "可视化编辑" }).hasAttribute("disabled")).toBe(true);
+    expect(editor().value).toBe(unrepresentable);
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("confirms template replacement even after returning to an earlier step and discards only on confirmation", async () => {
+    const { user, repository } = await open("create-policy");
+    await logActions(user, ["logs:search"]);
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.type(screen.getByLabelText("名称", { exact: true }), "TemplateDraft");
+    await user.click(screen.getByRole("button", { name: "上一步" }));
+    await select(user, "从已有策略开始", "MatrixReadOnlyAccess");
+    await user.click(screen.getByRole("button", { name: "使用模板" }));
+    expect(screen.getByRole("dialog", { name: "替换当前策略草稿？" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "保留当前草稿" }));
+    expect((screen.getByRole("checkbox", { name: "logs:search" }) as HTMLInputElement).checked).toBe(true);
+    await user.click(screen.getByRole("button", { name: "使用模板" }));
+    await user.click(screen.getByRole("button", { name: "替换声明" }));
+    const templateActions = (screen.getByLabelText("操作", { exact: true }) as HTMLTextAreaElement).value.split("\n");
+    expect(templateActions).toContain("logs:search");
+    expect(templateActions).not.toContain("logs:delete");
+    expect(templateActions).toContain("regions:readNode");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect((screen.getByLabelText("名称", { exact: true }) as HTMLInputElement).value).toBe("TemplateDraft");
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.getByRole("dialog", { name: "放弃策略编辑？" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "继续编辑" }));
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await user.click(screen.getByRole("button", { name: "放弃并离开" }));
+    expect(await screen.findByRole("button", { name: "新建自定义策略" })).toBeTruthy();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("retains metadata and cross-type selections through search, back and a failed save", async () => {
+    const { user, repository, extension } = await open("create-policy");
+    const before = (await extension.read("preview")).policies;
+    await logActions(user, ["logs:search"]);
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.type(screen.getByLabelText("名称", { exact: true }), "AtomicPolicy");
+    await user.click(screen.getByRole("button", { name: "添加标签" }));
+    await user.type(screen.getByLabelText("标签键 1"), "team");
+    await user.type(screen.getByLabelText("标签值 1"), "platform");
+    await user.click(screen.getByRole("checkbox", { name: "chen" }));
+    await user.type(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" }), "no-match");
+    expect(screen.getByRole("button", { name: "移除 chen" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: /^用户组/ }));
+    await user.click(screen.getByRole("checkbox", { name: "DeliveryTeam" }));
+    await user.click(screen.getByRole("tab", { name: /^角色/ }));
+    await user.click(screen.getByRole("checkbox", { name: "ProductionLogReviewRole" }));
+    await user.click(screen.getByRole("button", { name: "上一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect((screen.getByLabelText("标签值 1") as HTMLInputElement).value).toBe("platform");
+    expect(screen.getByRole("button", { name: "移除 ProductionLogReviewRole" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("network unavailable"));
+    await user.click(screen.getByRole("button", { name: "创建策略" }));
+    expect(await screen.findByText("暂时无法完成操作，请重试。")).toBeTruthy();
+    expect((await extension.read("preview")).policies).toEqual(before);
+    expect(screen.getByText("team : platform")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "创建策略" }));
+    await screen.findByRole("heading", { name: "策略已保存" });
+    const state = await extension.read("preview");
+    const saved = state.policies.find((policy) => policy.name === "AtomicPolicy")!;
+    expect(saved.tags).toEqual([{ key: "team", value: "platform" }]);
+    expect(state.userPolicies["principal-chen"]).toContain(saved.id);
+    expect(state.groups.find((group) => group.id === "group-delivery")?.policyIds).toContain(saved.id);
+    expect(state.roles.find((role) => role.id === "role-log-reviewer")?.policyIds).toContain(saved.id);
+    expect(repository.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "完成并返回策略列表" }));
+    await user.click(await screen.findByRole("button", { name: "AtomicPolicy" }));
+    expect(within(screen.getByRole("region", { name: "策略标签" })).getByText("team : platform")).toBeTruthy();
+  }, 10_000);
+  it("replaces only a nominated nondefault revision and keeps the review intact on failure", async () => {
+    const { user, repository, extension } = await open("policies", { seed: async (extension) => {
+      for (let version = 2; version <= 5; version++) await extension.execute("preview", {
+        kind: "save-policy", id: "policy-prod-logs", name: "ProductionLogReader", description: "Preview",
+        document: { version: "1", statement: [{ effect: "allow", action: ["logs:read"], resource: ["matrix:logs:org-xiak:*:topic/version-" + version] }] }
+      });
+    } });
+    await user.click(await screen.findByRole("button", { name: "ProductionLogReader" }));
+    await invokePageAction(user, "编辑");
+    await user.click(screen.getByRole("checkbox", { name: "logs:read" }));
+    await user.click(screen.getByRole("checkbox", { name: "logs:search" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "保存策略" }));
+    expect(screen.getByRole("combobox", { name: "替换哪个历史版本" }).getAttribute("aria-invalid")).toBe("true");
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("combobox", { name: "替换哪个历史版本" }));
+    expect(screen.queryByRole("option", { name: "v5" })).toBeNull();
+    await user.click(screen.getByRole("option", { name: "v2" }));
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("retry"));
+    const before = await extension.read("preview");
+    await user.click(screen.getByRole("button", { name: "保存策略" }));
+    expect(await screen.findByText("暂时无法完成操作，请重试。")).toBeTruthy();
+    expect(await extension.read("preview")).toEqual(before);
+    expect(screen.getByRole("combobox", { name: "替换哪个历史版本" }).textContent).toContain("v2");
+    await user.click(screen.getByRole("button", { name: "保存策略" }));
+    await screen.findByRole("heading", { name: "策略已保存" });
+    const saved = (await extension.read("preview")).policies.find((policy) => policy.id === "policy-prod-logs")!;
+    expect(saved.versions.map((version) => version.id)).toEqual([1, 3, 4, 5, 6]);
+    expect(saved.defaultVersion).toBe(6);
+  });
+  it("keeps unsupported policy restrictions in the draft and refuses to save", async () => {
+    const { user, repository, extension } = await open("policies");
+    const before = (await extension.read("preview")).policies;
+    await user.click(await screen.findByRole("button", { name: "新建自定义策略" }));
+    await user.click(screen.getByRole("button", { name: /^按策略语法创建/ }));
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    const editor = screen.getByLabelText("策略内容", { selector: "textarea" });
+    const text = '{"version":"1","statement":[{"effect":"allow","action":["logs:read"],"resource":["*"],"condition":{"ip":"192.0.2.0/24"}}]}';
+    await user.clear(editor); await user.paste(text);
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("alert").textContent).toContain("不会忽略这些限制");
+    expect((editor as HTMLTextAreaElement).value).toBe(text);
+    expect(screen.getByRole("tab", { name: "可视化编辑" }).hasAttribute("disabled")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    expect(screen.getByRole("alert").textContent).not.toMatch(/\p{Script=Han}/u);
+    expect((editor as HTMLTextAreaElement).value).toBe(text);
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect((await extension.read("preview")).policies).toEqual(before);
+  });
+  it("updates description without creating a version or changing policy grants", async () => {
+    const { user, extension } = await open("policies");
+    await user.click(await screen.findByRole("button", { name: "ProductionLogReader" }));
+    expect(screen.getByRole("table", { name: "策略摘要" })).toBeTruthy();
+    const before = (await extension.read("preview")).policies.find((policy) => policy.id === "policy-prod-logs")!;
+    await user.click(screen.getByRole("button", { name: "编辑描述" }));
+    const workflow = screen.getByRole("group", { name: "编辑描述" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const editor = screen.getByLabelText("描述");
+    await user.clear(editor); await user.paste("Only an updated description");
+    await user.click(within(workflow).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "编辑描述" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "编辑描述" })));
+    const saved = (await extension.read("preview")).policies.find((policy) => policy.id === before.id)!;
+    expect(saved).toEqual({ ...before, description: "Only an updated description", updatedAt: expect.any(String) });
+    expect(Date.parse(saved.updatedAt)).toBeGreaterThan(Date.parse(before.updatedAt));
+  });
+  it("copies a custom policy without copying its identity, history or associations", async () => {
+    const { user, extension } = await open("policies");
+    await user.click(await screen.findByRole("button", { name: "ProductionLogReader" }));
+    const before = await extension.read("preview");
+    const source = before.policies.find((policy) => policy.id === "policy-prod-logs")!;
+    await invokePageAction(user, "复制为自定义策略");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    const name = screen.getByLabelText("名称", { exact: true }) as HTMLInputElement;
+    expect(name.readOnly).toBe(false);
+    expect(name.value).toBe("ProductionLogReader-copy");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "创建策略" }));
+    const after = await extension.read("preview");
+    const copied = after.policies.find((policy) => policy.name === "ProductionLogReader-copy")!;
+    expect(copied.id).not.toBe(source.id);
+    expect(copied.kind).toBe("custom");
+    expect(copied.versions.map((version) => version.id)).toEqual([1]);
+    expect(copied.versions[0]!.document).toEqual(source.versions[0]!.document);
+    expect(after.userPolicies).toEqual(before.userPolicies);
+    expect(after.groups).toEqual(before.groups);
+    expect(after.roles).toEqual(before.roles);
+  });
+  it("inspects history without activating it and reviews both documents before rollback", async () => {
+    const { user, repository, extension } = await open("policies");
+    await user.click(await screen.findByRole("button", { name: "ProductionLogReader" }));
+    await invokePageAction(user, "编辑");
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    const editor = screen.getByLabelText("策略内容", { selector: "textarea" });
+    const text = '{"version":"1","statement":[{"effect":"allow","action":["logs:search"],"resource":["matrix:logs:org-xiak:*:topic/production/*"]},{"effect":"deny","action":["logs:delete"],"resource":["*"]}]}';
+    await user.clear(editor); await user.paste(text);
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect((screen.getByLabelText("名称", { exact: true }) as HTMLInputElement).readOnly).toBe(true);
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "保存策略" }));
+    await user.click(await screen.findByRole("button", { name: "完成并查看策略" }));
+    expect(screen.getByRole("button", { name: "查看日志服务的允许操作" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看日志服务的拒绝操作" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "策略版本" }));
+    expect(within(screen.getByRole("table", { name: "策略版本" })).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查看版本 v1" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "查看版本 v1" })).toBeTruthy();
+    expect(screen.getByText(/只读查看/)).toBeTruthy();
+    expect((await extension.read("preview")).policies.find((policy) => policy.id === "policy-prod-logs")?.defaultVersion).toBe(2);
+    await user.click(screen.getByRole("button", { name: "返回策略版本" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "查看版本 v1" }));
+    await user.click(screen.getByRole("button", { name: "版本 v1 的更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "将 v1 设为默认版本" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("region", { name: "策略内容变更" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "受影响对象" }).textContent).toContain("lin");
+    await user.click(screen.getByText("展开完整 JSON 对比"));
+    expect(screen.getByRole("region", { name: "当前生效 · v2" }).textContent).toContain("deny");
+    expect(screen.getByRole("region", { name: "切换后生效 · v1" }).textContent).not.toContain("deny");
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect((await extension.read("preview")).policies.find((policy) => policy.id === "policy-prod-logs")?.defaultVersion).toBe(2);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "版本 v1 的更多操作" }));
+    await user.click(screen.getByRole("button", { name: "版本 v1 的更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "将 v1 设为默认版本" }));
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("retry"));
+    await user.click(screen.getByRole("button", { name: "设为默认版本" }));
+    expect(await screen.findByText("暂时无法完成操作，请重试。")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "将 v1 设为默认版本" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "设为默认版本" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "将 v1 设为默认版本" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "版本 v1 的更多操作" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("group", { name: "策略版本" }));
+    await user.click(screen.getByRole("button", { name: "版本 v2 的更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "删除版本 v2" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "删除版本 v2" })).toBeNull());
+    const state = await extension.read("preview");
+    expect(state.policies.find((policy) => policy.id === "policy-prod-logs")?.versions.map((version) => version.id)).toEqual([1]);
+    expect(document.activeElement).toBe(screen.getByRole("group", { name: "策略版本" }));
+    expect(state.userPolicies["principal-lin"]).toContain("policy-prod-logs");
+  });
+  it("shows a mock secret once in the content area, then removes it after acknowledgement", async () => {
+    const { user, extension } = await open("keys");
+    await user.click(await screen.findByRole("button", { name: "管理 chen 的访问密钥" }));
+    await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByRole("heading", { name: "核对并创建访问密钥" })).toBe(document.activeElement);
+    expect(screen.getByText(/同一个原子创建请求中提交/)).toBeTruthy();
+    const network = screen.getByRole("textbox", { name: "允许的来源 CIDR" });
+    await user.type(network, "198.51.100.0/24");
+    await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("region", { name: "创建时采用的来源范围" })).toBeTruthy();
+    expect(screen.getByText("操作已完成。")).toBeTruthy();
+    expect((await extension.read("preview")).keys.find((key) => key.ownerId === "principal-chen")?.networkRestrictions).toEqual({ allowedSourceCidrs: ["198.51.100.0/24"] });
+    const secret = (await screen.findByText(/^MOCK_NOT_A_CREDENTIAL_/)).textContent!;
+    expect(JSON.stringify(await extension.read("preview"))).not.toContain(secret);
+    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "已完成" }));
+    expect(screen.queryByText(secret)).toBeNull();
+    expect(screen.getByRole("table", { name: "访问密钥" })).toBeTruthy();
+    expect(JSON.stringify(localStorage) + JSON.stringify(sessionStorage)).not.toContain(secret);
+  });
+  it("keeps Role SSO as planning information architecture without fake providers, mappings, or actions", async () => {
+    const { repository, extension } = await open("providers");
+    const before = await extension.read("preview");
+    expect(within(screen.getByRole("region", { name: "联合身份边界" })).getByRole("article", { name: "角色 SSO" }).getAttribute("aria-current")).toBe("step");
+    const journey = screen.getByRole("region", { name: "目标登录链路" });
+    expect(within(journey).getByText("验证并解析外部断言")).toBeTruthy();
+    expect(within(journey).getByText(/目标角色仍须独立验证/)).toBeTruthy();
+    expect(within(journey).getByText("独立检查承担角色权限")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "开放配置前置条件" })).toBeTruthy();
+    expect(screen.getAllByText("规划中 · 后端未接入")).toHaveLength(1);
+    expect(screen.getAllByText("角色 SSO")).toHaveLength(1);
+    expect(document.body.textContent).not.toMatch(/EnterpriseSSO|AuditAssertionRule|external-subject/);
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect("providers" in before).toBe(false);
+    expect("roleSsoMappings" in before).toBe(false);
+    expect(await extension.read("preview")).toEqual(before);
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("retains key-state failures, requires disable before deletion, and keeps cancellation non-mutating", async () => {
+    const { user, repository, extension } = await open("keys");
+    const before = await extension.read("preview");
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
+    const directory = await screen.findByRole("table", { name: "访问密钥" });
+    expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(within(directory).queryByRole("button", { name: "禁用" })).toBeNull();
+    expect(within(directory).queryByRole("button", { name: "删除" })).toBeNull();
+    await user.click(within(directory).getByRole("button", { name: "MOCK-pipeline-key" }));
+    const actions = await openPageActionMenu(user);
+    expect(within(actions).getByRole("menuitem", { name: "删除" }).getAttribute("aria-disabled")).toBe("true");
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(await extension.read("preview")).toEqual(before);
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    expect(await screen.findByText("暂时无法完成操作，请重试。")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "禁用 MOCK-pipeline-key" })).toBeTruthy();
+    expect(await extension.read("preview")).toEqual(before);
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "禁用 MOCK-pipeline-key" })).toBeNull());
+    await invokePageAction(user, "删除");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "删除 MOCK-pipeline-key" })).toBeNull());
+    expect((await extension.read("preview")).keys).toEqual([]);
+    expect(screen.getByText("尚未创建访问密钥")).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("edits one key network layer inline and keeps the account layer independently visible", async () => {
+    const { user, extension } = await open("keys");
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
+    await user.click(within(await screen.findByRole("table", { name: "访问密钥" })).getByRole("button", { name: "MOCK-pipeline-key" }));
+    expect(screen.getByRole("heading", { name: "来源网络限制" })).toBeTruthy();
+    expect(screen.getByText("账号层")).toBeTruthy();
+    expect(screen.getByText("密钥层")).toBeTruthy();
+    expect(screen.getByText("203.0.113.0/24")).toBeTruthy();
+    expect(screen.getByText("203.0.113.64/26")).toBeTruthy();
+    await invokePageAction(user, "配置来源网络");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "编辑密钥级来源" })).toBe(document.activeElement);
+    const input = screen.getByRole("textbox", { name: "允许的来源 CIDR" });
+    await user.clear(input);
+    await user.type(input, "198.51.100.0/24");
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByRole("heading", { name: "审阅密钥级来源变更" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "应用到 MOCK" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "来源网络限制" })).toBeTruthy());
+    const key = (await extension.read("preview")).keys.find((entry) => entry.id === "MOCK-pipeline-key")!;
+    expect(key.networkRestrictions).toEqual({ allowedSourceCidrs: ["198.51.100.0/24"] });
+    expect(key.resourceVersion).toBe(3);
+  });
+  it("loads the programmatic credential boundary only on demand and does not infer product support", async () => {
+    const listAuthorizationProfiles = vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: {
+      product: "paas", revision: 6, callingService: "PAAS", actions: [{ action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["USER"], userAuthenticationMethods: ["LOGIN_SESSION"], resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }] }]
+    }, contentDigest: `sha256:${"a".repeat(64)}` }] });
+    const { user } = await open("keys", { repository: { listAuthorizationProfiles } });
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
+    expect(listAuthorizationProfiles).not.toHaveBeenCalled();
+    const summary = screen.getByText("编程访问边界").closest("summary")!;
+    await user.click(summary);
+    expect(await screen.findByText(/没有声明任何 USER \+ ACCESS_KEY 产品 Action/)).toBeTruthy();
+    expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/浏览器不会保存 Secret、生成签名或发送测试业务请求/)).toBeTruthy();
+  });
+  it("lists exact access-key carrier declarations without presenting them as a user grant", async () => {
+    const listAuthorizationProfiles = vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: {
+      product: "paas", revision: 9, callingService: "PAAS", actions: [
+        ...[
+          ["paas.application.create", "APPLICATION"],
+          ["paas.configuration.create", "CONFIGURATION"],
+          ["paas.configuration-revision.create", "CONFIGURATION_REVISION"],
+          ["paas.application-revision.create", "APPLICATION_REVISION"],
+          ["paas.deployment.create", "DEPLOYMENT"]
+        ].map(([action, resourceKind]): AuthorizationProfileAction => ({ action: action!, resourceKind: resourceKind!, resultResourceKind: resourceKind!,
+          scope: "TENANT", subjectTypes: ["USER"], userAuthenticationMethods: ["LOGIN_SESSION", "ACCESS_KEY"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }] })),
+        { action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["ROLE", "USER"], userAuthenticationMethods: ["LOGIN_SESSION", "ACCESS_KEY"],
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }], conditions: [{ key: "resource.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_RESOURCE_TAG" }] }
+      ]
+    }, contentDigest: `sha256:${"b".repeat(64)}` }] });
+    const { user } = await open("keys", { repository: { listAuthorizationProfiles } });
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
+    await user.click(screen.getByText("编程访问边界").closest("summary")!);
+    const boundary = within(await screen.findByRole("table", { name: "编程访问边界" }));
+    expect(boundary.getByText("paas.application.create")).toBeTruthy();
+    expect(boundary.getByText("paas.configuration.create")).toBeTruthy();
+    expect(boundary.getByText("paas.configuration-revision.create")).toBeTruthy();
+    expect(boundary.getByText("paas.application-revision.create")).toBeTruthy();
+    expect(boundary.getByText("paas.deployment.create")).toBeTruthy();
+    expect(boundary.getByText("paas.application.read")).toBeTruthy();
+    expect(boundary.getAllByText("权限声明修订 9")).toHaveLength(6);
+    expect(screen.getByText(/只表示产品声明接受这种凭据载体，不表示当前用户已获授权/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "核对该用户的权限来源" })).toBeTruthy();
+    expect(screen.getByText(/下一步只检查策略与用户组等配置来源/)).toBeTruthy();
+    const requestBoundary = screen.getByText("签名产品请求的结果边界").closest("details")!;
+    expect(requestBoundary.open).toBe(false);
+    await user.click(screen.getByText("签名产品请求的结果边界").closest("summary")!);
+    expect(screen.getByRole("combobox", { name: "操作类型" }).textContent).toContain("5 个精确签名创建 Action");
+    expect(screen.getByText("Operation")).toBeTruthy();
+    expect(screen.queryByText("Application", { selector: "code" })).toBeNull();
+    expect(screen.getByText("UNAUTHENTICATED")).toBeTruthy();
+    expect(screen.getByText("PERMISSION_DENIED")).toBeTruthy();
+    expect(screen.getByText("CONFLICT")).toBeTruthy();
+    expect(screen.getByText("IDENTITY_UNAVAILABLE")).toBeTruthy();
+    expect(screen.getByText("INVALID_ARGUMENT")).toBeTruthy();
+    expect(screen.getByText(/b6d15c89/)).toBeTruthy();
+    await select(user, "操作类型", "1 个精确签名读取 Action");
+    expect(screen.getByText("Application", { selector: "code" })).toBeTruthy();
+    expect(screen.getByText("NOT_FOUND")).toBeTruthy();
+    expect(screen.queryByText("Operation", { selector: "code" })).toBeNull();
+    expect(screen.getByText(/b6d15c89/)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "核对该用户的权限来源" }));
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-lin");
+    expect(screen.getByRole("tab", { name: "权限策略" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText(/直接策略与用户组继承分别展示/)).toBeTruthy();
+  });
+  it("explains the fixed Audit r3 public outcomes without signing or sending a browser request", async () => {
+    const listAuthorizationProfiles = vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: {
+      product: "audit", revision: 3, callingService: "AUDIT", actions: [
+        { action: "audit.record.read", resourceKind: "AUDIT_RECORD", scope: "TENANT", subjectTypes: ["USER", "ROLE"], userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "LIST" }] },
+        { action: "audit.integrity.verify", resourceKind: "AUDIT_CHAIN", scope: "TENANT", subjectTypes: ["USER", "ROLE"], userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "LIST" }] }
+      ]
+    }, contentDigest: "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186" }] });
+    const { user } = await open("keys", { repository: { listAuthorizationProfiles } });
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
+    await user.click(screen.getByText("编程访问边界").closest("summary")!);
+    const carrier = within(await screen.findByRole("table", { name: "编程访问边界" }));
+    expect(carrier.getByText("audit.record.read")).toBeTruthy();
+    expect(carrier.getByText("audit.integrity.verify")).toBeTruthy();
+    await user.click(screen.getByText("签名产品请求的结果边界").closest("summary")!);
+    expect(screen.getByRole("combobox", { name: "操作类型" }).textContent).toContain("1 个审计记录查询 Action");
+    expect(screen.getByText("AuditRecordPage", { selector: "code" })).toBeTruthy();
+    expect(screen.queryByText("ChainVerification", { selector: "code" })).toBeNull();
+    expect(screen.getByText("audit.authentication.failed")).toBeTruthy();
+    expect(screen.getByText("audit.authorization.denied")).toBeTruthy();
+    expect(screen.getByText("audit.state.conflict")).toBeTruthy();
+    expect(screen.getByText("audit.argument.invalid")).toBeTruthy();
+    expect(screen.getByText("audit.unavailable")).toBeTruthy();
+    expect(screen.getByText(/620960989/)).toBeTruthy();
+    expect(screen.getAllByText("不作推断")).toHaveLength(6);
+    await select(user, "操作类型", "1 个审计链完整性校验 Action");
+    expect(screen.getByText("ChainVerification", { selector: "code" })).toBeTruthy();
+    expect(screen.queryByText("AuditRecordPage", { selector: "code" })).toBeNull();
+    expect(screen.getByText("audit.state.conflict")).toBeTruthy();
+    expect(screen.getAllByText("不作推断")).toHaveLength(6);
+    expect(screen.getByText(/本页不会发送请求/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /签名|发送|测试请求/ })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("locks an uncertain access-key creation to its original request and never reveals the lost secret", async () => {
+    const { user, extension } = await open("keys");
+    await user.click(await screen.findByRole("button", { name: "管理 chen 的访问密钥" }));
+    await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
+    await user.type(screen.getByRole("textbox", { name: "允许的来源 CIDR" }), "198.51.100.0/24");
+    await select(user, "MOCK 返回场景", "提交已生效，但响应丢失");
+    await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
+    expect(await screen.findByText("UNKNOWN")).toBeTruthy();
+    expect(screen.queryByText("操作已完成。")).toBeNull();
+    expect(screen.getByRole("region", { name: "原创建请求冻结的来源范围" })).toBeTruthy();
+    expect(screen.queryByText(/^MOCK_NOT_A_CREDENTIAL_/)).toBeNull();
+    expect((await extension.read("preview")).pendingKeyCreation).toMatchObject({ networkRestrictions: { allowedSourceCidrs: ["198.51.100.0/24"] } });
+    expect((await extension.read("preview")).pendingKeyCreation).not.toHaveProperty("keyId");
+    expect(screen.queryByRole("button", { name: "新建访问密钥" })).toBeNull();
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("go-keys"));
+    expect(await screen.findByText("UNKNOWN")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "返回列表" })).toBeNull();
+    await select(user, "原请求查询结果", "暂未找到（保持未知）");
+    await user.click(screen.getByRole("button", { name: "查询原操作结果" }));
+    expect(await screen.findByText(/原操作暂未查询到确定结果/)).toBeTruthy();
+    expect((await extension.read("preview")).pendingKeyCreation?.status).toBe("UNKNOWN");
+    await select(user, "原请求查询结果", "查询暂不可用（保持未知）");
+    await user.click(screen.getByRole("button", { name: "查询原操作结果" }));
+    expect(await screen.findByText(/暂时无法查询原操作/)).toBeTruthy();
+    expect((await extension.read("preview")).pendingKeyCreation?.status).toBe("UNKNOWN");
+    await select(user, "原请求查询结果", "已找到原创建结果");
+    await user.click(screen.getByRole("button", { name: "查询原操作结果" }));
+    expect(screen.getByText("不可恢复 · 不可重显")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查看并处置这把密钥" }));
+    expect(screen.getByText(/没有已验证的最近授权事实/)).toBeTruthy();
+    expect((await extension.read("preview")).keys.filter((key) => key.ownerId === "principal-chen")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    await invokePageAction(user, "删除");
+    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: /删除 MOCK-/ })).toBeNull());
+    expect((await extension.read("preview")).pendingKeyCreation).toBeNull();
+  });
+  it("loads security responsibilities on demand and preserves an opened account-policy draft", async () => {
+    const { user } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    expect(screen.getByRole("heading", { name: "身份验证方法" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "多因素认证要求" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "会话空闲策略" })).toBeNull();
+
+    await openSecuritySection(user, "账号策略");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    const draft = screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }) as HTMLInputElement;
+    await user.click(draft);
+    expect(draft.checked).toBe(true);
+
+    await openSecuritySection(user, "本人安全");
+    expect(screen.getByRole("tab", { name: "本人安全" }).getAttribute("aria-selected")).toBe("true");
+    await openSecuritySection(user, "账号策略");
+    expect((screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }) as HTMLInputElement).checked).toBe(true);
+
+    await openSecuritySection(user, "会话安全");
+    expect(screen.getByRole("heading", { name: "会话空闲策略" })).toBeTruthy();
+  });
+  it("reviews and applies an account AccessKey network replacement inline after step-up", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
+    expect(screen.getByRole("heading", { name: "访问密钥来源网络" })).toBeTruthy();
+    expect(screen.getByText("2001:db8:1200::/48")).toBeTruthy();
+    expect(screen.getByText("203.0.113.0/24")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "编辑账号级来源" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "编辑账号级 AccessKey 来源" })).toBe(document.activeElement);
+    const input = screen.getByRole("textbox", { name: "允许的来源 CIDR" });
+    await user.clear(input);
+    await user.type(input, "198.51.100.0/24");
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByRole("heading", { name: "审阅账号级来源变更" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "验证并应用到 MOCK" }));
+    expect(screen.getByRole("heading", { name: "验证身份后更新账号安全规则" })).toBe(document.activeElement);
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await waitFor(async () => expect((await extension.read("preview")).settings.accessKeyNetwork).toEqual({ allowedSourceCidrs: ["198.51.100.0/24"] }));
+    const workspace = await extension.read("preview");
+    expect(workspace.settings.accountRuleVersion).toBe(2);
+    expect(workspace.personalMfa.reauthenticationRequired).toBe(true);
+  });
+  it("previews account password rule editing and effective requirements without an IAM write", async () => {
+    const { user, extension } = await open("settings");
+    await openSecuritySection(user, "账号策略");
+    const before = await extension.read("preview");
+    expect(screen.getByText(/此处不读取或保存 IAM 密码规则/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "体验规则编辑" }));
+    expect(screen.getByRole("heading", { name: "编辑样例规则" })).toBe(document.activeElement);
+    const minimum = screen.getByRole("spinbutton", { name: "最短长度" });
+    await user.clear(minimum);
+    await user.type(minimum, "14");
+    expect((screen.getByRole("button", { name: "审阅样例变更" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/草稿值尚未通过范围检查/)).toBeTruthy();
+    expect(screen.getByText(/未读取真实用户、当前账户配置或本人实际要求/)).toBeTruthy();
+    await user.clear(minimum);
+    await user.type(minimum, "20");
+    await user.click(screen.getByRole("checkbox", { name: "要求十进制数字" }));
+    const history = screen.getByRole("spinbutton", { name: "额外历史密码数" });
+    await user.clear(history);
+    await user.type(history, "0");
+    await select(user, "身份与改密场景", "首次登录强制改密");
+    expect(screen.getByText(/首次登录只能走受限的强制改密流程/)).toBeTruthy();
+    expect(screen.getByText("本页草稿 · 未保存")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "审阅样例变更" }));
+    expect(screen.getByRole("heading", { name: "审阅样例变更" })).toBe(document.activeElement);
+    expect(screen.getByText(/真实修改还需要当前版本/)).toBeTruthy();
+    await user.click(screen.getByText("查看提交异常的设计状态"));
+    await select(user, "模拟异常", "提交结果未知");
+    expect(screen.getByText(/不能靠刷新配置或版本号判断原请求是否提交/)).toBeTruthy();
+    await select(user, "身份与改密场景", "受保护身份");
+    expect(screen.getByText("平台固定产品底线")).toBeTruthy();
+    expect(screen.getByText(/租户规则不能放宽或锁死这些身份/)).toBeTruthy();
+    const historyBoundary = screen.getByText("历史完成结果如何呈现").closest("details")!;
+    await user.click(screen.getByText("历史完成结果如何呈现"));
+    expect(historyBoundary.open).toBe(true);
+    expect(screen.getByText(/未返回密码规则内容.*不能用当前配置或本页草稿补齐/)).toBeTruthy();
+    expect(screen.getByText(/不会因此退出后来重新登录的会话/)).toBeTruthy();
+    expect(screen.getByText(/这不是本人实际要求、密码强度证明或前端放行判断/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "结束预览" }));
+    expect(screen.queryByRole("button", { name: /保存密码规则/ })).toBeNull();
+    expect((await extension.read("preview")).settings).toEqual(before.settings);
+  }, 20000);
+  it("keeps unknown password age distinct from expiry and never mints a preview session", async () => {
+    const { user, extension } = await open("settings");
+    await openSecuritySection(user, "账号策略");
+    const before = await extension.read("preview");
+    expect(screen.getByRole("heading", { name: "密码年龄与登录路径 · 场景模拟" })).toBeTruthy();
+    expect(screen.getByText("未知；没有可证明的最近改密时间")).toBeTruthy();
+    expect(screen.getByText(/年龄未知不等于已过期.*前端不能自行切换仪式/)).toBeTruthy();
+    expect(screen.getByRole("list", { name: "受限改密路径" }).children).toHaveLength(4);
+    await select(user, "选择模拟的服务端证据", "未启用到期 · 年龄未知");
+    expect(screen.getByText(/年龄未知本身不锁死正常登录.*不能写成刚改密/)).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "受限改密路径" })).toBeNull();
+    await select(user, "选择模拟的服务端证据", "已启用到期 · 已证实过期");
+    expect(screen.getByText("IAM 已证实过期；不展示虚构日期")).toBeTruthy();
+    expect(screen.getByText(/只有 IAM 已证实过期时才能称为过期/)).toBeTruthy();
+    expect(screen.getByRole("list", { name: "受限改密路径" })).toBeTruthy();
+    await select(user, "模拟到期处置模式", "管理员重置");
+    expect(screen.queryByRole("list", { name: "受限改密路径" })).toBeNull();
+    expect(screen.getByRole("list", { name: "管理员重置指引" }).children).toHaveLength(4);
+    expect(screen.getByRole("list", { name: "管理员重置指引" }).textContent).toContain("ADMIN_RESET_REQUIRED · EXPIRED");
+    expect(screen.getByText(/不提供改密表单、身份恢复或自动重发入口/)).toBeTruthy();
+    await select(user, "选择模拟的服务端证据", "已启用到期 · 年龄未知");
+    expect(screen.getByText(/年龄未知不是已过期.*ADMIN_RESET_REQUIRED · AGE_UNKNOWN/)).toBeTruthy();
+    expect(screen.getByRole("list", { name: "管理员重置指引" })).toBeTruthy();
+    await select(user, "选择模拟的服务端证据", "未启用到期 · 年龄未知");
+    expect(screen.queryByRole("list", { name: "管理员重置指引" })).toBeNull();
+    await select(user, "选择模拟的服务端证据", "已启用到期 · 已证实未到期");
+    expect(screen.getByText(/已证实未到期只排除这一项改密原因/)).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "受限改密路径" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "管理员重置指引" })).toBeNull();
+    expect((await extension.read("preview")).settings).toEqual(before.settings);
+    expect(screen.queryByRole("button", { name: /确认改密|保存密码规则/ })).toBeNull();
+  }, 20000);
+  it("models personal MFA, scoped step-up and the frozen account requirement without invented settings", async () => {
+    const { user, extension } = await open("settings");
+    expect(screen.getByRole("heading", { name: "身份验证方法" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "多因素认证要求" })).toBeNull();
+    await openSecuritySection(user, "账号策略");
+    expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "登录时的 MFA 要求" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "密码规则" })).toBeTruthy();
+    expect(screen.getByText(/此处不读取或保存 IAM 密码规则/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /保存密码规则/ })).toBeNull();
+    expect(screen.getByText("当前规则")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
+    expect(screen.getByText(/操作者本人必须先绑定验证器/)).toBeTruthy();
+    await openSecuritySection(user, "本人安全");
+    await user.click(screen.getByRole("button", { name: "查看本人身份验证方法" }));
+    expect(screen.getByRole("heading", { name: "身份验证方法" })).toBe(document.activeElement);
+    expect(screen.queryByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" })).toBeNull();
+    expect(screen.queryByLabelText("密码最小长度")).toBeNull();
+    expect(screen.queryByLabelText("会话时长（分钟）")).toBeNull();
+    expect(screen.getByRole("heading", { name: "安全通知" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "验证第一条地址" })).toBeTruthy();
+
+    expect((screen.getByRole("button", { name: "绑定验证器" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "验证第一条地址" }));
+    await user.type(screen.getByLabelText("安全通知邮箱"), "mfa.owner@example.com");
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.click(screen.getByRole("button", { name: "创建验证意图" }));
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "48392017");
+    await user.click(screen.getByRole("button", { name: "确认地址" }));
+    const bind = screen.getByRole("button", { name: "绑定验证器" }) as HTMLButtonElement;
+    expect(bind.disabled).toBe(false);
+    await user.click(bind);
+    expect(screen.getByRole("heading", { name: "验证身份后绑定验证器" })).toBeTruthy();
+    expect(screen.getByText(/不增加任何 IAM 权限/)).toBeTruthy();
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    const enrollmentHeading = screen.getByRole("heading", { name: "设置身份验证器" });
+    expect(enrollmentHeading).toBe(document.activeElement);
+    expect(screen.getByText(/必须先完成强制改密/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    expect(enrollmentHeading).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
+    expect(enrollmentHeading).toBe(document.activeElement);
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并绑定" }));
+    expect(enrollmentHeading).toBe(document.activeElement);
+    expect((await extension.read("preview")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
+    const firstCode = extension.recoveryCodes()[0]!;
+    const oneTimeCodes = screen.getByText(firstCode).closest("article")!;
+    expect(oneTimeCodes).toBeTruthy();
+    expect(extension.recoveryCodes()).toHaveLength(10);
+    expect(within(oneTimeCodes).queryByRole("button", { name: "取消" })).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: "我已安全保存这些恢复码" }));
+    await user.click(screen.getByRole("button", { name: "完成设置" }));
+    expect(screen.getByRole("button", { name: "Enter" })).toBeTruthy();
+    expect((await extension.read("preview")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
+  });
+  it("returns focus to the replacement trigger after cancelling either inline stage", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.getByRole("button", { name: "替换验证器" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    expect(await screen.findByRole("heading", { name: "替换身份验证器" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "替换验证器" })).toBe(document.activeElement));
+    expect((await extension.read("preview")).personalMfa).toMatchObject({ factorState: "bound", reauthenticationRequired: false });
+  });
+  it("keeps authenticator replacement inline and reveals rotated recovery codes only after confirmation", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    const oldCodes = extension.recoveryCodes();
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    expect(screen.getByRole("heading", { name: "验证身份后替换验证器" })).toBeTruthy();
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    expect(await screen.findByRole("heading", { name: "替换身份验证器" })).toBe(document.activeElement);
+    expect((await extension.read("preview")).personalMfa).toMatchObject({ factorState: "bound", reauthenticationRequired: false, pendingReplacement: { accountRuleVersion: 1 } });
+    expect(extension.recoveryCodes()).toEqual(oldCodes);
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
+    await user.type(screen.getByLabelText("6 位动态验证码"), "731942");
+    await user.click(screen.getByRole("button", { name: "验证并绑定" }));
+    const rotated = extension.recoveryCodes();
+    expect(rotated).toHaveLength(10);
+    expect(rotated.some((code) => oldCodes.includes(code))).toBe(false);
+    expect(screen.getByText(rotated[0]!)).toBeTruthy();
+    expect((await extension.read("preview")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle", demoCode: "731942" });
+    await user.click(screen.getByRole("checkbox", { name: "我已安全保存这些恢复码" }));
+    await user.click(screen.getByRole("button", { name: "完成设置" }));
+    expect(screen.queryByText(rotated[0]!)).toBeNull();
+    expect(screen.getByRole("button", { name: "Enter" })).toBeTruthy();
+  });
+  it("stops an uncertain replacement confirmation without repeating the write or re-showing setup material", async () => {
+    const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    const previousCodes = extension.recoveryCodes();
+    const execute = vi.mocked(repository.workspace!.execute);
+    const original = execute.getMockImplementation()!;
+    execute.mockImplementation((credential, command) => command.kind === "confirm-personal-mfa-replacement"
+      ? Promise.reject(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      : original(credential, command));
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await screen.findByRole("heading", { name: "替换身份验证器" });
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
+    await user.type(screen.getByLabelText("6 位动态验证码"), "731942");
+    await user.click(screen.getByRole("button", { name: "验证并绑定" }));
+    expect(await screen.findByRole("heading", { name: "本次替换已停止" })).toBe(document.activeElement);
+    expect(screen.getByText(/当前无法证明替换已完成/)).toBeTruthy();
+    expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
+    expect(screen.queryByRole("button", { name: "验证并绑定" })).toBeNull();
+    expect(execute.mock.calls.filter(([, command]) => command.kind === "confirm-personal-mfa-replacement")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "返回安全设置" }));
+    expect(screen.getByRole("heading", { name: "验证器替换尚未确认" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "身份验证方法" })).toBe(document.activeElement);
+    expect(screen.getByText(/不能据此判断旧或新验证器是否有效，也不能直接取消/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "取消本次替换" })).toBeNull();
+    expect((await extension.read("preview")).personalMfa.pendingReplacement?.status).toBe("CONFIRMATION_UNKNOWN");
+    await user.click(screen.getByRole("button", { name: "模拟查询原意图" }));
+    expect(await screen.findByRole("button", { name: "取消本次替换" })).toBeTruthy();
+    expect((await extension.read("preview")).personalMfa.pendingReplacement?.status).toBe("PENDING");
+    expect(extension.recoveryCodes()).toEqual(previousCodes);
+  });
+  it("hides replacement secrets while confirmation is in flight and goes directly to one-time codes", async () => {
+    const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    const execute = vi.mocked(repository.workspace!.execute);
+    const original = execute.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    execute.mockImplementation((credential, command) => command.kind === "confirm-personal-mfa-replacement"
+      ? gate.then(() => original(credential, command))
+      : original(credential, command));
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await screen.findByRole("heading", { name: "替换身份验证器" });
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
+    await user.type(screen.getByLabelText("6 位动态验证码"), "731942");
+    await user.click(screen.getByRole("button", { name: "验证并绑定" }));
+    expect(screen.getByRole("heading", { name: "正在核对替换结果" })).toBe(document.activeElement);
+    expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
+    expect(screen.queryByRole("button", { name: "验证并绑定" })).toBeNull();
+    await act(async () => release());
+    expect(screen.queryByRole("heading", { name: "本次替换已停止" })).toBeNull();
+    expect(await screen.findByText(extension.recoveryCodes()[0]!)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "替换身份验证器" })).toBe(document.activeElement);
+  });
+  it("removes replacement setup material when the account rule changes before confirmation", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await screen.findByRole("heading", { name: "替换身份验证器" });
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    expect(screen.getByText("MTRX-DEMO-NOT-A-SECRET")).toBeTruthy();
+    extension.transact((source) => ({ workspace: { ...source, settings: { ...source.settings, accountRuleVersion: source.settings.accountRuleVersion + 1 } } }));
+    await user.click(screen.getByTestId("refresh-account"));
+    expect(await screen.findByRole("heading", { name: "本次替换已停止" })).toBeTruthy();
+    expect(screen.getByText(/验证期限或账号规则已变化/)).toBeTruthy();
+    expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
+    expect(screen.queryByRole("button", { name: "验证并绑定" })).toBeNull();
+  });
+  it("closes the replacement setup view after its absolute proof deadline", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await screen.findByRole("heading", { name: "替换身份验证器" });
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    expect(screen.getByText("MTRX-DEMO-NOT-A-SECRET")).toBeTruthy();
+    extension.transact((source) => ({ workspace: { ...source, personalMfa: { ...source.personalMfa, pendingReplacement: { ...source.personalMfa.pendingReplacement!, expiresAt: new Date(Date.now() - 1).toISOString() } } } }));
+    await user.click(screen.getByTestId("refresh-account"));
+    expect(await screen.findByRole("heading", { name: "本次替换已停止" })).toBeTruthy();
+    expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
+    expect((await extension.read("preview")).personalMfa.pendingReplacement).toBeTruthy();
+  });
+  it("does not reissue replacement setup material after leaving the page and permits cancellation", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await screen.findByRole("heading", { name: "替换身份验证器" });
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("go-settings"));
+    expect(await screen.findByRole("heading", { name: "验证器替换尚未确认" })).toBeTruthy();
+    expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
+    expect((screen.getByRole("button", { name: "替换验证器" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "取消本次替换" }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "替换验证器" }) as HTMLButtonElement).disabled).toBe(false));
+    expect((await extension.read("preview")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: false, recoveryState: "idle" });
+  });
+  it("shows the same regenerated MOCK recovery batch that the repository accepts", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    const previous = extension.recoveryCodes();
+    await user.click(screen.getByRole("button", { name: "生成新恢复码" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    expect(await screen.findByRole("heading", { name: "保存新的恢复码" })).toBeTruthy();
+    expect(extension.recoveryCodes()).toHaveLength(10);
+    expect(extension.recoveryCodes().some((code) => previous.includes(code))).toBe(false);
+    expect(screen.getByText(extension.recoveryCodes()[0]!)).toBeTruthy();
+  });
+  it("keeps account-rule editing closed until a newly bound operator signs in again", async () => {
+    const { user, extension } = await open("settings", { seed: async (workspace) => { await workspace.execute("preview", { kind: "confirm-personal-mfa" }); } });
+    await openSecuritySection(user, "账号策略");
+    expect(screen.getByText(/通过正常登录重新验证后再修改账号规则/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "编辑模拟规则" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "重新登录以继续" })).toBeTruthy();
+    expect(await extension.read("preview")).toMatchObject({ personalMfa: { factorState: "bound", reauthenticationRequired: true } });
+  });
+  it("blocks workspace and group management while the old session requires reauthentication", async () => {
+    const createGroup = vi.fn().mockRejectedValue(new Error("must not be called"));
+    const { user, repository } = await open("overview", {
+      repository: { createGroup },
+      seed: async (extension) => { extension.transact((source) => ({ workspace: { ...source, personalMfa: { factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" } } })); }
+    });
+    await user.click(screen.getByTestId("guard-workspace"));
+    await user.click(screen.getByTestId("guard-group"));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(createGroup).not.toHaveBeenCalled();
+    expect(await screen.findByText(/当前会话不能继续执行受保护操作/)).toBeTruthy();
+  });
+  it("keeps first security-notification address verification personal, inline, and explicitly MOCK", async () => {
+    const { user, repository, extension } = await open("settings");
+    const trigger = screen.getByRole("button", { name: "验证第一条地址" });
+    await user.click(trigger);
+    const flowTitle = screen.getByRole("heading", { name: "验证第一条安全通知地址" });
+    await waitFor(() => expect(flowTitle).toBe(document.activeElement));
+    await user.click(within(flowTitle.closest("article")!).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "验证第一条地址" })).toBe(document.activeElement));
+
+    await user.click(screen.getByRole("button", { name: "验证第一条地址" }));
+    await user.type(screen.getByLabelText("安全通知邮箱"), "preview.security@example.com");
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.click(screen.getByRole("button", { name: "创建验证意图" }));
+    const verifyTitle = screen.getByRole("heading", { name: "确认安全通知地址" });
+    await waitFor(() => expect(verifyTitle).toBe(document.activeElement));
+    expect(screen.getByText("PENDING · 等待验证码")).toBeTruthy();
+    expect(screen.getByText("等待投递器处理")).toBeTruthy();
+    expect(screen.getByText(/没有渠道受理、最终送达或已读证据/)).toBeTruthy();
+    expect(screen.queryByText("渠道已受理")).toBeNull();
+    expect(screen.queryByText("已送达")).toBeNull();
+
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "00000000");
+    await user.click(screen.getByRole("button", { name: "确认地址" }));
+    expect(screen.getByText("验证码无效、已使用或已过期。地址仍未验证。")).toBeTruthy();
+    await user.clear(screen.getByLabelText("8 位邮箱验证码"));
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "48392017");
+    await user.click(screen.getByRole("button", { name: "确认地址" }));
+
+    const notification = screen.getByRole("region", { name: "安全通知" });
+    await waitFor(() => expect(within(notification).getByRole("heading", { name: "安全通知" })).toBe(document.activeElement));
+    expect(within(notification).getByText("preview.security@example.com")).toBeTruthy();
+    expect(within(notification).queryByText("PENDING · 等待验证码")).toBeNull();
+    expect(within(notification).getAllByText("已验证").length).toBeGreaterThan(0);
+    expect(within(notification).getByText(/不提供弱化旁路/)).toBeTruthy();
+    expect((await extension.read("preview")).personalNotificationAddress).toBe("preview.security@example.com");
+    const replacementTrigger = within(notification).getByRole("button", { name: "查看安全更换流程" });
+    expect((replacementTrigger as HTMLButtonElement).disabled).toBe(true);
+    expect(replacementTrigger.getAttribute("title")).toContain("先绑定验证器");
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("go-settings"));
+    expect(within(screen.getByRole("region", { name: "安全通知" })).getByText("preview.security@example.com")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "绑定验证器" }).hasAttribute("disabled")).toBe(false);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("replaces a verified security-notification address when the target code confirmation commits atomically", async () => {
+    const { user, repository, extension } = await open("settings", { seed: seedBoundNotificationOperator });
+    const notification = screen.getByRole("region", { name: "安全通知" });
+    await user.click(within(notification).getByRole("button", { name: "查看安全更换流程" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.type(screen.getByLabelText("新的安全通知邮箱"), "next.security@example.com");
+    await user.click(screen.getByRole("button", { name: "继续本人验证" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("当前验证器验证码"), "000000");
+    await user.click(screen.getByRole("button", { name: "验证并发送新地址验证码" }));
+    expect(screen.getByText(/密码或 TOTP 不正确/)).toBeTruthy();
+    expect((await extension.read("preview")).pendingNotificationAddressReplacement).toBeNull();
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("当前验证器验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并发送新地址验证码" }));
+    expect((await extension.read("preview")).personalNotificationAddress).toBe("preview.security@example.com");
+    expect(screen.getByText(/旧地址仍是唯一可信收件地址/)).toBeTruthy();
+
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "48392017");
+    await user.click(screen.getByRole("button", { name: "验证并原子切换" }));
+
+    await waitFor(() => expect(screen.getAllByText("next.security@example.com", { selector: "dd" }).length).toBeGreaterThan(0));
+    expect(await extension.read("preview")).toMatchObject({ personalNotificationAddress: "next.security@example.com", pendingNotificationAddressReplacement: null });
+    expect(screen.getByText(/不声称真实投递/)).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("locks an unknown notification-address replacement across navigation until the original verification is inspected", async () => {
+    const { user, repository, extension } = await open("settings", { seed: seedBoundNotificationOperator });
+    await user.click(screen.getByRole("button", { name: "查看安全更换流程" }));
+    await user.type(screen.getByLabelText("新的安全通知邮箱"), "unknown.security@example.com");
+    await user.click(screen.getByRole("button", { name: "继续本人验证" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("当前验证器验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并发送新地址验证码" }));
+    await user.click(screen.getByText("MOCK 异常场景"));
+    await user.click(screen.getByRole("combobox", { name: "模拟确认响应" }));
+    await user.click(screen.getByRole("option", { name: "响应丢失 · 结果未知" }));
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "48392017");
+    await user.click(screen.getByRole("button", { name: "验证并原子切换" }));
+
+    const pending = (await extension.read("preview")).pendingNotificationAddressReplacement;
+    expect(pending).toMatchObject({ targetAddress: "unknown.security@example.com", status: "CONFIRM_UNKNOWN" });
+    await user.click(screen.getByRole("button", { name: "暂时关闭" }));
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("go-settings"));
+    await user.click(screen.getByRole("button", { name: "继续安全更换" }));
+    expect(screen.getByText(pending!.mockVerificationId)).toBeTruthy();
+    expect(screen.getByText("unknown.security@example.com", { selector: "dd" })).toBeTruthy();
+
+    await user.click(screen.getByText("MOCK 异常场景"));
+    await user.click(screen.getByRole("combobox", { name: "模拟查询结果" }));
+    await user.click(screen.getByRole("option", { name: "暂时未找到" }));
+    await user.click(screen.getByRole("button", { name: "查询原验证" }));
+    expect(screen.getByText(/原验证继续锁定/)).toBeTruthy();
+    expect((await extension.read("preview")).pendingNotificationAddressReplacement).toMatchObject({ mockVerificationId: pending!.mockVerificationId, status: "CONFIRM_UNKNOWN" });
+
+    await user.click(screen.getByRole("combobox", { name: "模拟查询结果" }));
+    await user.click(screen.getByRole("option", { name: "查到已应用" }));
+    await user.click(screen.getByRole("button", { name: "查询原验证" }));
+    expect(await extension.read("preview")).toMatchObject({ personalNotificationAddress: "unknown.security@example.com", pendingNotificationAddressReplacement: null });
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("does not claim a MOCK address was verified when its workspace write fails", async () => {
+    const { user, repository, extension } = await open("settings");
+    await user.click(screen.getByRole("button", { name: "验证第一条地址" }));
+    await user.type(screen.getByLabelText("安全通知邮箱"), "preview@example.invalid");
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.click(screen.getByRole("button", { name: "创建验证意图" }));
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "48392017");
+    await user.click(screen.getByRole("button", { name: "确认地址" }));
+    expect(await screen.findByText(/暂时无法确认这条地址/)).toBeTruthy();
+    expect((await extension.read("preview")).personalNotificationAddress).toBeNull();
+    expect(screen.queryByText("安全通知地址已在当前页面的 MOCK 状态中验证")).toBeNull();
+  });
+  it("keeps account user SSO read-only until IAM publishes provider, mapping and sign-in contracts", async () => {
+    const { repository, extension } = await open("user-sso");
+    const before = await extension.read("preview");
+    expect(screen.getAllByText("用户 SSO")).toHaveLength(1);
+    const federationBoundary = screen.getByRole("region", { name: "联合身份边界" });
+    expect(within(federationBoundary).getByRole("article", { name: "用户 SSO" }).getAttribute("aria-current")).toBe("step");
+    expect(within(federationBoundary).getByText(/身份提供商只负责协议信任/)).toBeTruthy();
+    expect(screen.getAllByText("规划中 · 后端未接入")).toHaveLength(1);
+    expect(screen.getByText("账号级身份提供商")).toBeTruthy();
+    expect(screen.getByText("登录 Session")).toBeTruthy();
+    expect(screen.getByText("用户权限")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "启用前置" })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/EnterpriseSSO|external-subject|JWKS|EntityDescriptor|签名公钥|客户端 Secret|私钥/);
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByRole("button", { name: /配置|连接|启用|登录/ })).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect("providers" in before).toBe(false);
+    expect("externalIdentities" in before).toBe(false);
+    expect(await extension.read("preview")).toEqual(before);
+    expect((await extension.read("preview")).roleSessions).toEqual(before.roleSessions);
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("shows the reviewed rule version and requires a new login after an applied account-rule change", async () => {
+    const { user, extension, repository } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    const ruleInput = screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" });
+    expect(ruleInput).toBe(document.activeElement);
+    await user.click(ruleInput);
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    expect(screen.getByRole("heading", { name: "审阅账号安全规则变更" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "上一步" }));
+    expect(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    expect(screen.getByText("规则版本").nextElementSibling?.textContent).toBe("1");
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await waitFor(async () => expect((await extension.read("preview")).settings.accountRuleVersion).toBe(2));
+    expect((await extension.read("preview")).personalMfa.reauthenticationRequired).toBe(true);
+    expect((screen.getByRole("button", { name: "编辑模拟规则" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/身份验证方法或账号规则的变更已生效/)).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("locks an unknown account-rule save, discards secrets and keeps the lock across navigation", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await user.click(screen.getByText("体验异常结果（仅 MOCK）"));
+    await select(user, "MOCK 保存结果", "提交后响应丢失（结果未知）");
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "demo-password" } });
+    fireEvent.change(screen.getByLabelText("6 位动态验证码"), { target: { value: "624810" } });
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+
+    const unknown = await screen.findByRole("heading", { name: "账号规则的保存结果未知" });
+    await waitFor(() => expect(unknown).toBe(document.activeElement));
+    expect(screen.queryByText("操作已完成。")).toBeNull();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+    expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
+    const pending = (await extension.read("preview")).pendingAccountRuleChange;
+    expect(pending).toMatchObject({ baselineLoginProtection: false, requestedLoginProtection: true, status: "UNKNOWN" });
+    expect((await extension.read("preview")).personalMfa.reauthenticationRequired).toBe(true);
+    expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
+    expect(screen.getByText(/账号规则保存结果未知。先重新登录/)).toBeTruthy();
+    expect(screen.queryByText(/身份验证方法或账号规则的变更已生效/)).toBeNull();
+    await openSecuritySection(user, "本人安全");
+    expect(screen.getByRole("button", { name: "替换验证器" }).getAttribute("title")).toContain("账号规则结果尚未确定");
+
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("go-settings"));
+    await openSecuritySection(user, "账号策略");
+    expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
+    expect((await extension.read("preview")).pendingAccountRuleChange).toEqual(pending);
+  });
+  it("recovers an unknown account-rule only through the original intent", async () => {
+    const { user, extension } = await open("settings", { seed: seedUnknownAccountRuleChange });
+    await openSecuritySection(user, "账号策略");
+    const pending = (await extension.read("preview")).pendingAccountRuleChange;
+    expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
+    expect(screen.getByText(/账号规则保存结果未知。先重新登录/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重新登录以继续" }));
+    expect(screen.getByRole("button", { name: "Enter" })).toBeTruthy();
+    await extension.execute("preview", { kind: "complete-personal-mfa-reauthentication" });
+    await user.click(screen.getByRole("button", { name: "Enter" }));
+    await openSecuritySection(user, "账号策略");
+    expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "按原意图查询" })).toBeTruthy();
+    await select(user, "MOCK 原意图查询结果", "暂未查询到确定结果（保持未知）");
+    await user.click(screen.getByRole("button", { name: "按原意图查询" }));
+    expect(await screen.findByText(/状态仍为未知，不能重新保存/)).toBeTruthy();
+    expect((await extension.read("preview")).pendingAccountRuleChange).toEqual(pending);
+    await select(user, "MOCK 原意图查询结果", "确认原变更已应用");
+    await user.click(screen.getByRole("button", { name: "按原意图查询" }));
+    expect(await screen.findByText(/已保存模拟强制 MFA 要求/)).toBeTruthy();
+    expect((await extension.read("preview")).settings.loginProtection).toBe(true);
+    expect((await extension.read("preview")).personalMfa.reauthenticationRequired).toBe(false);
+    expect(screen.queryByText(/身份验证方法或账号规则的变更已生效/)).toBeNull();
+    expect((screen.getByRole("button", { name: "编辑模拟规则" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((await extension.read("preview")).pendingAccountRuleChange).toBeNull();
+  });
+  it("journals an unavailable account-rule save before exposing UNKNOWN and keeps it locked after reload", async () => {
+    const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("timeout"));
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+
+    const pending = (await extension.read("preview")).pendingAccountRuleChange;
+    expect(pending).toMatchObject({ baselineLoginProtection: false, requestedLoginProtection: true, status: "UNKNOWN" });
+    expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
+    expect(screen.queryByText("操作已完成。")).toBeNull();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("refresh-account"));
+    await waitFor(() => expect(repository.workspace!.read).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByTestId("go-settings"));
+    await openSecuritySection(user, "账号策略");
+    expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
+    expect((await extension.read("preview")).pendingAccountRuleChange).toEqual(pending);
+  });
+  it("keeps account-rule writes closed when both the save and recovery journal are unavailable", async () => {
+    const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    vi.mocked(repository.workspace!.execute)
+      .mockRejectedValueOnce(new Error("save timeout"))
+      .mockRejectedValueOnce(new Error("recovery journal timeout"));
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+
+    expect((await extension.read("preview")).pendingAccountRuleChange).toBeNull();
+    expect(await screen.findByText(/保存与本地恢复日志同时不可用/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("refresh-account"));
+    await waitFor(() => expect(repository.workspace!.read).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByTestId("go-settings"));
+    await openSecuritySection(user, "账号策略");
+    expect(await screen.findByText(/保存与本地恢复日志同时不可用/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
+  });
+  it("keeps readable account rules unchanged when update capability is denied", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
+    const before = await extension.read("preview");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await user.click(screen.getByText("体验异常结果（仅 MOCK）"));
+    await select(user, "MOCK 保存结果", "读取允许，但更新被拒绝");
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    expect(await screen.findByRole("heading", { name: "当前身份不能更新账号规则" })).toBeTruthy();
+    expect(screen.getByText(/能看到当前值不代表可以修改/)).toBeTruthy();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    expect(await extension.read("preview")).toEqual(before);
+  });
+  it("discards a stale account-rule review and its operation-bound proof after conflict", async () => {
+    const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
+    const before = await extension.read("preview");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new HttpProblem(409, "IAM_STATE_CONFLICT"));
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+
+    const conflict = await screen.findByRole("heading", { name: "规则已在审阅期间发生变化" });
+    await waitFor(() => expect(conflict).toBe(document.activeElement));
+    expect(screen.getByText("本次证明已作废，不能用于新的规则版本")).toBeTruthy();
+    expect(screen.getByText(/不会自动重放保存/)).toBeTruthy();
+    expect(await extension.read("preview")).toEqual(before);
+
+    await user.click(screen.getByRole("button", { name: "重新载入当前规则" }));
+    await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: "编辑模拟规则" })).toBeTruthy();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    expect((screen.getByLabelText("当前密码") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("6 位动态验证码") as HTMLInputElement).value).toBe("");
+  });
+  it.each(["groups", "policy-configuration"] as const)("never loads the %s preview graph after the directory denies management", async (view) => {
+    const { repository } = await open(view, { reader: true });
+    await screen.findByText("没有此页面的管理权限");
+    expect(repository.workspace?.read).not.toHaveBeenCalled();
+    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "新建用户组" })).toBeNull();
+  });
+  it.each(["keys", "create-policy", "policy-language", "policy-configuration"] as const)("shows an honest unavailable state for %s on the live adapter", async (view) => {
+    const { repository } = await open(view, { live: true });
+    await screen.findByText("此能力尚未接入后端");
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "新建密钥" })).toBeNull();
+  });
+  it("replaces enterprise-member writes with deferred cross-account and organization boundaries", async () => {
+    const { user, repository } = await open("federations");
+    expect(await screen.findByRole("heading", { level: 2, name: "跨账号与组织能力" })).toBeTruthy();
+    expect(screen.getByText(/当前账号仍是隔离的资源与身份边界/)).toBeTruthy();
+    const preview = screen.getByRole("region", { name: "跨账号协作信任链路" });
+    expect(within(preview).getByText(/不发送邀请、不创建账号关系、不签发会话/)).toBeTruthy();
+    expect(within(preview).getByText("org-xiak")).toBeTruthy();
+    expect(within(preview).getByRole("heading", { level: 3, name: "先选择正确的跨账号模式" })).toBeTruthy();
+    expect(within(preview).getByRole("heading", { level: 3, name: "角色承担协作链路" })).toBeTruthy();
+    expect(within(preview).getByText("承担目标账号 Role")).toBeTruthy();
+    expect(within(preview).getByText("直接共享一个业务资源")).toBeTruthy();
+    expect(within(preview).getByText(/对应产品的资源详情，不是 IAM 通用编辑器/)).toBeTruthy();
+    expect(within(preview).getByText(/当前没有任何产品发布可消费的资源策略或 ACL 契约/)).toBeTruthy();
+    expect(within(preview).getByText("外部账号确认主体与意图")).toBeTruthy();
+    expect(within(preview).getByText(/Role trust 与外部主体的承担权限都必须满足/)).toBeTruthy();
+    expect(within(preview).getByText(/任一账号撤销协作后/)).toBeTruthy();
+    expect(within(preview).queryByRole("button")).toBeNull();
+    expect(screen.queryByText(/企业微信|导入为子用户|模拟关联/)).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("tab", { name: "组织治理预览" }));
+    const governance = screen.getByRole("region", { name: "组织目录与权限护栏" });
+    expect(within(governance).getByText(/不创建组织节点、不移动账号、不发布策略/)).toBeTruthy();
+    expect(within(governance).getByText(/护栏只能收窄权限，不能产生 Allow/)).toBeTruthy();
+    expect(within(governance).queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("keeps the credential snapshot separate from the immutable account security report", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const credentials = buildCredentialReport(workspace, scene, "2026-09-09T00:00:00Z");
+    expect(credentials).toMatchObject({ mode: "MOCK", kind: "credentials", accountId: "org-xiak" });
+    expect(credentials.users).toHaveLength(2);
+    expect(JSON.stringify(credentials)).not.toContain("EntityDescriptor");
+
+    const session = { id: "preview-session", organizationId: "org-xiak", principalId: scene.currentUserId, status: "ACTIVE" as const, issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" };
+    const created = createAccountSecurityReportPreview(workspace, scene, "2026-09-09T00:00:00Z", "request-one", session);
+    expect(created.outcome).toBe("COMPLETED");
+    if (created.outcome !== "COMPLETED") throw new Error("report not created");
+    expect(created.report).toMatchObject({
+      mode: "MOCK", accountId: "org-xiak", requestId: "request-one", reportId: "security-report-request-one",
+      formatVersion: 1, observedAt: "2026-09-09T00:00:00.000Z", expiresAt: "2026-09-16T00:00:00.000Z", immutable: true,
+      accountSecuritySettingsVersion: workspace.settings.accountRuleVersion,
+      totals: { users: 3, accessKeys: workspace.keys.length, rows: 4 + workspace.keys.length }
+    });
+    expect(created.report.users).toHaveLength(3);
+    expect(created.report.users.filter((item) => item.root)).toEqual([expect.objectContaining({ id: "admin", lastPasswordLogin: { state: "OBSERVED", observedAt: session.issuedAt } })]);
+    expect(created.report.users.filter((item) => !item.root).every((item) => item.lastPasswordLogin.state === "NOT_OBSERVED_IN_RETAINED_IAM_STATE")).toBe(true);
+    expect(created.report.accessKeys).toEqual(workspace.keys.map((key) => expect.objectContaining({ id: key.id, userId: key.ownerId })));
+    expect(created.report.coverage.filter((item) => item.state === "COMPLETE").map((item) => item.source)).toEqual(["IAM_ACCOUNT", "IAM_USERS", "IAM_LOGIN_SESSIONS", "IAM_ACCESS_KEYS"]);
+    expect(created.report.coverage.filter((item) => item.state === "NOT_INCLUDED")).toHaveLength(5);
+    expect(buildAccountSecurityReportDirectoryPreview(workspace, scene, "2026-09-09T12:00:00Z", session).map((entry) => ({ id: entry.id, status: entry.status }))).toEqual([
+      { id: "security-report-mock-directory-recent", status: "available" },
+      { id: "security-report-mock-directory-expiring", status: "expiringSoon" },
+      { id: "security-report-mock-directory-expired", status: "expired" }
+    ]);
+    expect(() => createAccountSecurityReportPreview(workspace, { ...scene, accountId: "org-foreign" }, "2026-09-09T00:00:00Z", "request-one")).toThrow("INVALID_IAM_TENANT");
+
+    const atUserLimit = { ...scene, users: Array.from({ length: accountSecurityReportLimits.users - 1 }, (_, index) => ({ ...scene.users[0]!, id: `principal-${index}` })) };
+    expect(createAccountSecurityReportPreview(workspace, atUserLimit, "2026-09-09T00:00:00Z", "request-limit").outcome).toBe("COMPLETED");
+
+    const oversized = { ...scene, users: Array.from({ length: accountSecurityReportLimits.users }, (_, index) => ({ ...scene.users[0]!, id: `principal-${index}` })) };
+    expect(createAccountSecurityReportPreview(workspace, oversized, "2026-09-09T00:00:00Z", "request-two")).toEqual({ outcome: "REJECTED", reason: "USER_LIMIT" });
+  });
+  it("separates review, configured, unknown, and not-applicable security evidence", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const snapshot = buildAccessSecuritySnapshot(workspace);
+    expect(snapshot.counts).toEqual({ review: 3, configured: 1, notApplicable: 0, unknown: 1 });
+    expect(snapshot.evidenceCounts).toEqual({ observed: 4, incomplete: 0, unobserved: 1, notApplicable: 0 });
+    expect(snapshot.checks.find((check) => check.id === "mfaEvidence")?.state).toBe("unknown");
+    expect(snapshot.checks.find((check) => check.id === "mfaEvidence")?.evidence).toBe("unobserved");
+
+    const withoutApplicableUsers = structuredClone(workspace);
+    withoutApplicableUsers.userProfiles = {};
+    withoutApplicableUsers.userPolicies = {};
+    withoutApplicableUsers.keys = [];
+    const empty = buildAccessSecuritySnapshot(withoutApplicableUsers);
+    expect(empty.checks.find((check) => check.id === "activeKeys")?.state).toBe("notApplicable");
+    expect(empty.checks.find((check) => check.id === "loginProtection")?.state).toBe("notApplicable");
+    expect(empty.checks.find((check) => check.id === "mfaEvidence")?.state).toBe("notApplicable");
+
+    const partial = buildAccessSecuritySnapshot(withoutApplicableUsers, false);
+    expect(partial.checks.find((check) => check.id === "directGrants")).toMatchObject({ state: "unknown", evidence: "incomplete" });
+    expect(partial.checks.find((check) => check.id === "mfaEvidence")).toMatchObject({ state: "unknown", evidence: "unobserved" });
+
+    const partialWithVisibleUsers = structuredClone(workspace);
+    partialWithVisibleUsers.userPolicies = Object.fromEntries(Object.keys(partialWithVisibleUsers.userPolicies).map((id) => [id, []]));
+    partialWithVisibleUsers.userProfiles = Object.fromEntries(Object.entries(partialWithVisibleUsers.userProfiles).map(([id, profile]) => [id, { ...profile, passwordResetRequired: false }]));
+    const partialWithoutVisibleFindings = buildAccessSecuritySnapshot(partialWithVisibleUsers, false);
+    expect(partialWithoutVisibleFindings.checks.find((check) => check.id === "directGrants")).toMatchObject({ state: "unknown", count: 0, evidence: "incomplete" });
+    expect(partialWithoutVisibleFindings.checks.find((check) => check.id === "pendingPasswords")).toMatchObject({ state: "unknown", count: 0, evidence: "incomplete" });
+  });
+  it("does not turn key metadata, missing events or role sessions into usage evidence", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const observed = buildAccessActivityObservations(workspace);
+    expect(observed.find((item) => item.id === "successfulLogin")).toMatchObject({ state: "unknown", occurredAt: null, source: null });
+    expect(observed.filter((item) => item.id !== "successfulLogin")).toEqual([
+      { id: "accessKeyUse", state: "unknown", occurredAt: null, source: null },
+      { id: "roleUse", state: "unknown", occurredAt: null, source: null },
+      { id: "businessOutcome", state: "unknown", occurredAt: null, source: null }
+    ]);
+    const currentSession = { id: "preview-session", organizationId: "org-xiak", principalId: identity.user.id, status: "ACTIVE" as const, issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" };
+    expect(buildAccessActivityObservations(workspace, currentSession).find((item) => item.id === "successfulLogin")).toMatchObject({ state: "observed", occurredAt: currentSession.issuedAt, source: "CURRENT_PREVIEW_SESSION" });
+    expect(buildAccessActivityObservations(workspace, { ...currentSession, organizationId: "other-account" }).find((item) => item.id === "successfulLogin")).toMatchObject({ state: "unknown", occurredAt: null });
+    const withoutLogin = structuredClone(workspace);
+    withoutLogin.events = [];
+    expect(buildAccessActivityObservations(withoutLogin).find((item) => item.id === "successfulLogin")).toMatchObject({ state: "unknown", occurredAt: null });
+    withoutLogin.keys = [];
+    expect(buildAccessActivityObservations(withoutLogin).find((item) => item.id === "accessKeyUse")).toMatchObject({ state: "notApplicable", occurredAt: null });
+  });
+  it("presents security evidence before report exports and links checks to their owning pages", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const onNavigate = vi.fn();
+    const onOpenReport = vi.fn();
+    const user = userEvent.setup();
+    render(<LocaleProvider><AccessReports workspace={workspace} scene={scene} currentSession={{ id: "preview-session", organizationId: "org-xiak", principalId: identity.user.id, status: "ACTIVE", issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" }} onNavigate={onNavigate} onOpenReport={onOpenReport} /></LocaleProvider>);
+    const card = screen.getByRole("heading", { name: "身份安全概览" }).closest("article")!;
+    expect(within(card).getByLabelText("身份安全检查状态")).toBeTruthy();
+    expect(within(card).getByLabelText("身份安全证据覆盖")).toBeTruthy();
+    expect(within(card).getByText("MFA 绑定证据")).toBeTruthy();
+    expect(within(card).getByLabelText("活动观测")).toBeTruthy();
+    expect(within(card).getByText("访问密钥使用")).toBeTruthy();
+    expect(within(card).getByText(/没有签名请求的使用证据/)).toBeTruthy();
+    expect(within(card).getAllByText("状态未知").length).toBeGreaterThanOrEqual(1);
+    expect(within(card).getAllByText("证据: 未观测").length).toBeGreaterThanOrEqual(1);
+    await user.click(within(card).getByRole("button", { name: "审阅报告" }));
+    await user.click(screen.getByRole("menuitem", { name: "用户凭证报告" }));
+    expect(onOpenReport).toHaveBeenCalledWith("credentials");
+    await user.click(within(card).getByRole("button", { name: "审阅报告" }));
+    await user.click(screen.getByRole("menuitem", { name: "账号安全报告" }));
+    expect(onNavigate).toHaveBeenCalledWith("security-reports");
+    await user.click(within(card).getByRole("button", { name: "查看长期访问密钥" }));
+    expect(onNavigate).toHaveBeenCalledWith("keys");
+    await user.click(within(card).getByRole("button", { name: "访问分析" }));
+    expect(onNavigate).toHaveBeenCalledWith("access-analysis");
+  });
+  it("keeps the security-report directory synthetic while validating retention and detail flows", async () => {
+    const { user, repository, extension } = await open("security-reports");
+    const before = await extension.read("preview");
+    expect(screen.getByRole("heading", { name: "安全报告" })).toBeTruthy();
+    expect(screen.getByText(/没有报告列表 API/)).toBeTruthy();
+    const directory = screen.getByRole("table", { name: "安全报告" });
+    expect(directory.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(directory).getByText("可读取")).toBeTruthy();
+    expect(within(directory).getByText("即将到期")).toBeTruthy();
+    expect(within(directory).getByText("已到期")).toBeTruthy();
+
+    await select(user, "保留状态", "已到期");
+    expect(within(directory).getAllByRole("row")).toHaveLength(2);
+    await user.click(within(directory).getByRole("button", { name: "security-report-mock-directory-expired" }));
+    expect(screen.getByRole("heading", { name: "报告已到期" })).toBeTruthy();
+    expect(screen.getByText(/详情正文和下载入口均不可用/)).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "报告摘要" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "下载 CSV v1" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+
+    await select(user, "保留状态", "可读取");
+    await user.click(within(screen.getByRole("table", { name: "安全报告" })).getByRole("button", { name: "security-report-mock-directory-recent" }));
+    expect(screen.getByRole("heading", { name: "账号安全报告" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "报告摘要" })).toBeTruthy();
+    expect(await extension.read("preview")).toEqual(before);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("offers the fixed live create and read-by-ID entry without fabricating a report directory", async () => {
+    const securityReports = {
+      create: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")),
+      read: vi.fn().mockRejectedValue(new HttpProblem(404, "NOT_FOUND")),
+      download: vi.fn().mockRejectedValue(new HttpProblem(404, "NOT_FOUND"))
+    };
+    const { repository } = await open("security-reports", { live: true, repository: { securityReports } });
+    expect(screen.getByText(/只使用 IAM 已固定的生成、按 ID 读取和下载接口/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "生成当前账号安全报告" })).toBeTruthy();
+    expect(screen.getByLabelText("报告 ID")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "安全报告" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "生成报告（MOCK）" })).toBeNull();
+    expect(screen.queryByText(/LIVE · NOT_CONNECTED/)).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("reviews configured trust entry points and synthetic unused access without inventing effective access", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const analysis = buildAccessAnalysisPreview(workspace, scene);
+    expect(analysis.coverage).toEqual([
+      { id: "IAM_PASSWORD_SESSIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "IAM_ACCESS_KEY_AUTHORIZATIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "IAM_ROLE_SESSIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "IAM_ROLE_AUTHORIZATIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "PAAS_RESULTS", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null },
+      { id: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null }
+    ]);
+    expect(analysis.unusedFindings).toHaveLength(123);
+    expect(analysis.unusedFindings.slice(0, 3).map(({ accountId, findingType, lifecycle }) => ({ accountId, findingType, lifecycle }))).toEqual([
+      { accountId: "org-xiak", findingType: "unusedPassword", lifecycle: "ACTIVE" },
+      { accountId: "org-xiak", findingType: "unusedAccessKey", lifecycle: "ARCHIVED" },
+      { accountId: "org-xiak", findingType: "unusedRole", lifecycle: "RESOLVED" }
+    ]);
+    expect(Object.fromEntries((["ACTIVE", "ARCHIVED", "RESOLVED"] as const).map((lifecycle) => [
+      lifecycle,
+      analysis.unusedFindings.filter((finding) => finding.lifecycle === lifecycle).length
+    ]))).toEqual({ ACTIVE: 41, ARCHIVED: 41, RESOLVED: 41 });
+    expect(analysis.unusedFindings.every((finding) => finding.analyzerId === analysis.rule.id)).toBe(true);
+    expect(analysis.unusedFindings.slice(0, 3).map(({ id, observedFrom, observedThrough }) => ({ id, observedFrom, observedThrough }))).toEqual([
+      { id: "mock-unused-password", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "mock-unused-access-key", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
+      { id: "mock-unused-role", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" }
+    ]);
+    expect(analysis.unusedFindings.slice(0, 3).map(({ recoveryEpoch, recoveryCommandId, recoveryCompletedAt }) => ({ recoveryEpoch, recoveryCommandId, recoveryCompletedAt }))).toEqual([
+      { recoveryEpoch: 2, recoveryCommandId: "mock-recovery-command-2", recoveryCompletedAt: "2026-06-10T03:00:00Z" },
+      { recoveryEpoch: 0, recoveryCommandId: null, recoveryCompletedAt: null },
+      { recoveryEpoch: 0, recoveryCommandId: null, recoveryCompletedAt: null }
+    ]);
+    expect(analysis.unusedFindings[1]?.lifecycleEvidence.map(({ lifecycle, source }) => `${lifecycle}:${source}`)).toEqual([
+      "ACTIVE:SYNTHETIC_ANALYZER", "ARCHIVED:SYNTHETIC_HUMAN_REVIEW"
+    ]);
+    expect(analysis.unusedFindings[2]?.lifecycleEvidence.map(({ lifecycle, source }) => `${lifecycle}:${source}`)).toEqual([
+      "ACTIVE:SYNTHETIC_ANALYZER", "RESOLVED:SYNTHETIC_ANALYZER"
+    ]);
+    expect(analysis.scanPreview).toEqual({
+      state: "FAILED", evidence: "PREVIOUS_SNAPSHOT_STALE",
+      lastSucceededAt: "2026-09-09T03:00:00Z", lastAttemptedAt: "2026-09-10T03:00:00Z"
+    });
+    expect(analysis.rule).toEqual({
+      id: "access-analyzer-preview",
+      accountId: "org-xiak",
+      type: "UNUSED_ACCESS",
+      resourceVersion: 3,
+      windowDays: 90,
+      status: "ACTIVE",
+      evidence: "SYNTHETIC_COMPLETE_WINDOW",
+      disposition: { mode: "REVIEW_ONLY", findingDelayDays: 0 }
+    });
+    expect(() => buildAccessAnalysisPreview(workspace, { ...scene, accountId: "org-foreign" })).toThrow("INVALID_IAM_TENANT");
+    const onNavigate = vi.fn();
+    const user = userEvent.setup();
+    render(<LocaleProvider><AccessAnalysisPreview workspace={workspace} scene={scene} onBack={vi.fn()} onNavigate={onNavigate} /></LocaleProvider>);
+    expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
+    expect(screen.getByText(/配置存在不代表权限已生效/)).toBeTruthy();
+    expect(screen.getByText("密码登录会话")).toBeTruthy();
+    expect(screen.getAllByText("证据不足").length).toBe(4);
+    expect(screen.getAllByText("未纳入").length).toBe(2);
+    expect(screen.getAllByText("SOURCE_NOT_READY").length).toBe(4);
+    const paasCoverage = screen.getByText("PaaS 业务结果").closest("div")!;
+    expect(paasCoverage.querySelector("time")).toBeNull();
+    expect(screen.getByRole("heading", { name: "暂无可核验的外部入口" })).toBeTruthy();
+    expect(screen.getByText(/当前没有固定的外部身份或通用服务主体信任契约/)).toBeTruthy();
+    expect(onNavigate).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
+    expect(screen.getByText(/当前真实数据不满足该前提/)).toBeTruthy();
+    expect(screen.getByText(/123 条样例由浏览器确定性生成/)).toBeTruthy();
+    expect(screen.getByText(/不是服务端总数、游标、排序或容量验收/)).toBeTruthy();
+    expect(screen.getByText(/归档与取消归档只改变当前浏览器会话中的样例状态/)).toBeTruthy();
+    expect(screen.queryByText(/页面没有归档、取消归档/)).toBeNull();
+    expect(screen.getByText(/只有归档和取消归档可在当前 MOCK 会话内切换/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "扫描与证据新鲜度" })).toBeTruthy();
+    expect(screen.getByText("上一份证据 · 非最新")).toBeTruthy();
+    expect(screen.getByText(/不能闪成空列表/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /开始扫描|重新扫描|重试扫描/ })).toBeNull();
+    const table = screen.getByRole("table", { name: "未使用访问发现样例" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    await user.click(screen.getByRole("button", { name: /^筛选/ }));
+    const lifecycleFilter = screen.getByRole("combobox", { name: "发现状态" });
+    expect(lifecycleFilter.textContent).toContain("待复核");
+    expect(screen.getByText("共 41 条")).toBeTruthy();
+    expect(screen.getByText("第 1 / 5 页")).toBeTruthy();
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(within(table).getAllByText("待复核")).toHaveLength(10);
+    expect(within(table).queryByText("已归档")).toBeNull();
+    await user.click(lifecycleFilter);
+    await user.click(screen.getByRole("option", { name: "全部类型" }));
+    expect(screen.getByText("共 123 条")).toBeTruthy();
+    expect(screen.getByText("第 1 / 13 页")).toBeTruthy();
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(within(table).getAllByText("已归档").length).toBeGreaterThan(0);
+    expect(within(table).getAllByText("已解决").length).toBeGreaterThan(0);
+    expect(within(table).queryByRole("button", { name: /删除|停用/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(screen.getByText("第 2 / 13 页")).toBeTruthy();
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    await user.click(screen.getByRole("button", { name: "上一页" }));
+    const resolved = analysis.unusedFindings[2]!;
+    await user.click(within(table).getByRole("button", { name: resolved.name }));
+    expect(screen.getByRole("heading", { name: `审阅 · ${resolved.name}` })).toBeTruthy();
+    expect(screen.getByText(/已解决只能由后继扫描确认/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /归档发现|取消归档|解决/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    await select(user, "发现状态", "全部类型");
+    const restoredTable = screen.getByRole("table", { name: "未使用访问发现样例" });
+    const first = analysis.unusedFindings[0]!;
+    await user.click(within(restoredTable).getByRole("button", { name: first.name }));
+    expect(screen.getByRole("heading", { name: `审阅 · ${first.name}` })).toBeTruthy();
+    expect(screen.getByText(first.id)).toBeTruthy();
+    expect(screen.getByText(first.analyzerId)).toBeTruthy();
+    expect(screen.getByText(/只用于关联这份合成 MOCK 的排障上下文/)).toBeTruthy();
+    expect(screen.getByText("完整窗口（合成样例）")).toBeTruthy();
+    const observedWindow = screen.getByText("证据观测窗口").closest("div")!;
+    expect(within(observedWindow).getByText("2026年6月11日 03:00")).toBeTruthy();
+    expect(within(observedWindow).getByText("2026年9月9日 03:00")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "恢复代次与观测可信度" })).toBeTruthy();
+    expect(screen.getByText("恢复后代次")).toBeTruthy();
+    expect(screen.getByText("mock-recovery-command-2")).toBeTruthy();
+    expect(screen.getByText(/不是安装恢复记录、后端 Finding 或自动处置凭据/)).toBeTruthy();
+    const lifecycleEvidence = screen.getByRole("region", { name: "状态证据时间线" });
+    expect(within(lifecycleEvidence).getByText("待复核")).toBeTruthy();
+    expect(within(lifecycleEvidence).getByText(/合成扫描证据/)).toBeTruthy();
+    expect(screen.getByText(/不是处置许可/)).toBeTruthy();
+    expect(screen.getByText(/不能从一条未使用发现直接删除身份或权限/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "归档发现" }));
+    expect(screen.getByRole("heading", { name: `归档发现 · ${first.name}` })).toBeTruthy();
+    expect(screen.getByText(/只改变当前浏览器会话中的 Finding 状态/)).toBeTruthy();
+    expect(screen.getByText(/不会删除 Finding/)).toBeTruthy();
+    expect(screen.getByText(/不修改用户、登录密码、访问密钥、角色、策略、会话或任何权限/)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "确认归档（MOCK）" }));
+    expect(screen.getByText(/已在当前浏览器会话中归档该 Finding/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "取消归档" })).toBeTruthy();
+    expect(screen.getByText("人工完成复核并归档")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "取消归档" }));
+    expect(screen.getByRole("heading", { name: `取消归档 · ${first.name}` })).toBeTruthy();
+    expect(screen.getByText(/不会重新运行扫描/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认取消归档（MOCK）" }));
+    expect(screen.getByText(/已在当前浏览器会话中取消归档/)).toBeTruthy();
+    expect(screen.getByText("人工取消归档并恢复待复核")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "归档发现" })).toBeTruthy();
+    await invokePageAction(user, "查看对应对象");
+    expect(onNavigate).toHaveBeenCalledWith(first.target.view, first.target.id);
+    await invokePageAction(user, "查看分析规则");
+    expect(screen.getByText("账号级访问分析规则")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("opens access analysis as a bookmarkable content page without mutating IAM state", async () => {
+    const { user, repository, extension } = await open("access-analysis");
+    const before = await extension.read("preview");
+    expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
+    expect(screen.getByText(/配置存在不代表权限已生效/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "暂无可核验的外部入口" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
+    expect(screen.getByRole("table", { name: "未使用访问发现样例" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "返回列表" })).toBeNull();
+    expect(await extension.read("preview")).toEqual(before);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("previews candidate rule bounds without mutating backend Finding or object state", async () => {
+    const { user, repository, extension } = await open("access-analysis");
+    const before = await extension.read("preview");
+
+    await user.click(screen.getByRole("tab", { name: "分析规则" }));
+    expect(screen.getByText("账号级访问分析规则")).toBeTruthy();
+    expect(screen.getByText(/没有真实后台扫描/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "编辑规则（MOCK）" }));
+    const window = screen.getByRole("spinbutton", { name: "完整观测窗口" });
+    await user.clear(window);
+    await user.type(window, "366");
+    expect(screen.getByText("请输入 1–365 的整数天数。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "下一步：审阅" }).getAttribute("disabled")).not.toBeNull();
+    await user.clear(window);
+    await user.type(window, "365");
+    await user.click(screen.getByRole("radio", { name: "已停用" }));
+    await user.click(screen.getByRole("button", { name: "下一步：审阅" }));
+    expect(screen.getByRole("heading", { name: "审阅访问分析规则" })).toBeTruthy();
+    expect(screen.getByText("已停用")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "应用 MOCK 规则" }));
+    expect(screen.getByText(/MOCK Analyzer 已更新到资源版本 4/)).toBeTruthy();
+    expect(screen.getByText("365 天")).toBeTruthy();
+    expect(screen.getByText("自动处置规则")).toBeTruthy();
+    expect(screen.getByText("REVIEW_ONLY")).toBeTruthy();
+    expect(screen.getByText(/User 与 Role 仍然只报告/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "配置自动处置（MOCK）" }));
+    expect(screen.getByText(/此流程只验证显式 opt-in/)).toBeTruthy();
+    expect(screen.getByText(/普通 Analyzer 更新权限不能顺带开启写效果/)).toBeTruthy();
+    await user.click(screen.getByRole("radio", { name: "自动停用闲置访问密钥" }));
+    const delay = screen.getByRole("spinbutton", { name: "Finding 观察宽限期" });
+    await user.clear(delay);
+    await user.type(delay, "31");
+    expect(screen.getByText("请输入 1–30 的整数天数。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "下一步：审阅" }).getAttribute("disabled")).not.toBeNull();
+    await user.clear(delay);
+    await user.type(delay, "7");
+    await user.click(screen.getByRole("button", { name: "下一步：审阅" }));
+    expect(screen.getByRole("heading", { name: "审阅自动处置规则" })).toBeTruthy();
+    expect(screen.getByText("UNUSED_ACCESS_KEY")).toBeTruthy();
+    expect(screen.getByText("DISABLE_ACCESS_KEY")).toBeTruthy();
+    expect(screen.getByText(/Finding 也不是处置许可/)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "应用 MOCK 自动处置规则" }));
+    expect(screen.getByText(/MOCK 自动处置规则已更新到资源版本 5/)).toBeTruthy();
+    expect(screen.getAllByText("DISABLE_UNUSED_ACCESS_KEYS").length).toBeGreaterThan(0);
+    expect(screen.getByText("iam.access-analyzer.set-disposition")).toBeTruthy();
+
+    await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
+    await user.click(within(screen.getByRole("table", { name: "未使用访问发现样例" })).getByRole("button", { name: "lin" }));
+    expect(screen.getByText("MOCK 样例")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "归档发现" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /解决/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "归档发现" }));
+    expect(screen.getByRole("heading", { name: "归档发现 · lin" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回发现详情" }));
+    expect(screen.getByRole("heading", { name: "审阅 · lin" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await extension.read("preview")).toEqual(before);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("does not fabricate live access analysis before its evidence contract exists", async () => {
+    const { repository } = await open("access-analysis", { live: true });
+    expect(screen.getByText(/LIVE · NOT_CONNECTED/)).toBeTruthy();
+    expect(screen.getByText("访问分析尚未接入")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "已配置入口" })).toBeNull();
+    expect(screen.queryByRole("table", { name: "未使用访问发现样例" })).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("confirms and seals the IAM-only account security report without a dialog or fabricated CSV", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const user = userEvent.setup();
+    render(<LocaleProvider><AccessReportPreview kind="security" workspace={workspace} scene={scene} currentSession={{ id: "preview-session", organizationId: "org-xiak", principalId: scene.currentUserId, status: "ACTIVE", issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" }} onBack={vi.fn()} /></LocaleProvider>);
+    expect(screen.getByRole("heading", { name: "生成账号安全报告" })).toBeTruthy();
+    expect(screen.getByText(/只验证 AccountSecurityReport 的信息架构与操作顺序/)).toBeTruthy();
+    expect(screen.getByText("org-xiak")).toBeTruthy();
+    expect(screen.getByText(/POST 只携带 requestId 和固定 formatVersion=1/)).toBeTruthy();
+    expect(screen.getByText(/整个生成请求失败/)).toBeTruthy();
+    expect(screen.getByText("未到期报告已达 20 份")).toBeTruthy();
+    expect(screen.getByText("拒绝新建")).toBeTruthy();
+    expect(screen.getByText(/不会自动覆盖或删除最旧报告/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /删除.*报告|覆盖.*报告/ })).toBeNull();
+    let reportActions = await openPageActionMenu(user);
+    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v1" }).getAttribute("aria-disabled")).toBe("true");
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "生成报告" }));
+    expect(screen.getByRole("heading", { name: "账号安全报告" })).toBeTruthy();
+    expect(screen.getByText("不可变报告已封存")).toBeTruthy();
+    expect(screen.getByText(/security-report-mock-/)).toBeTruthy();
+    expect(screen.getByText(`v${workspace.settings.accountRuleVersion}`)).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "报告摘要" })).toBeTruthy();
+    expect(screen.getByText("IAM 用户")).toBeTruthy();
+    expect(screen.getAllByText("未纳入")).toHaveLength(5);
+    await user.click(screen.getByRole("tab", { name: "用户证据 (3)" }));
+    const userEvidence = screen.getByRole("table", { name: "用户证据" });
+    expect(within(userEvidence).getByText("Root")).toBeTruthy();
+    expect(screen.getAllByText("保留的 IAM 状态中未观测")).toHaveLength(2);
+    await user.click(screen.getByRole("tab", { name: "访问密钥证据 (1)" }));
+    const keyEvidence = screen.getByRole("table", { name: "访问密钥证据" });
+    expect(within(keyEvidence).getByText(workspace.keys[0]!.id)).toBeTruthy();
+    expect(within(keyEvidence).queryByText(/secret/i)).toBeNull();
+    expect((screen.getByRole("button", { name: "生成报告" }) as HTMLButtonElement).disabled).toBe(true);
+    reportActions = await openPageActionMenu(user);
+    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v1" }).getAttribute("aria-disabled")).toBe("true");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("keeps a maximum-size account security report paged instead of mounting every evidence row", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const atCapacityWorkspace = {
+      ...workspace,
+      keys: Array.from({ length: accountSecurityReportLimits.accessKeys }, (_, index) => ({
+        ...workspace.keys[0]!,
+        id: `AKID-CAPACITY-${String(index).padStart(4, "0")}`
+      }))
+    };
+    const atCapacityUsers = Array.from({ length: accountSecurityReportLimits.users - 1 }, (_, index) => ({
+      ...users[0]!,
+      user: {
+        ...users[0]!.user,
+        id: `principal-capacity-${String(index).padStart(4, "0")}`,
+        loginName: `capacity-${index}`,
+        displayName: `Capacity ${index}`
+      }
+    }));
+    const scene = buildAccountAccessScene(identity, { items: atCapacityUsers, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const user = userEvent.setup();
+    render(<LocaleProvider><AccessReportPreview kind="security" workspace={atCapacityWorkspace} scene={scene} onBack={vi.fn()} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "生成报告" }));
+    await user.click(screen.getByRole("tab", { name: "用户证据 (1000)" }));
+    expect(within(screen.getByRole("table", { name: "用户证据" })).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("第 1 / 100 页")).toBeTruthy();
+
+    await user.click(screen.getByRole("tab", { name: "访问密钥证据 (2000)" }));
+    expect(within(screen.getByRole("table", { name: "访问密钥证据" })).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("第 1 / 200 页")).toBeTruthy();
+  });
+  it("blocks an oversized account security report before submission with an actionable reason", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const oversizedUsers = Array.from({ length: accountSecurityReportLimits.users }, (_, index) => ({
+      ...users[0]!,
+      user: { ...users[0]!.user, id: `principal-limit-${index}`, loginName: `limit-${index}`, displayName: `Limit ${index}` }
+    }));
+    const scene = buildAccountAccessScene(identity, { items: oversizedUsers, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    render(<LocaleProvider><AccessReportPreview kind="security" workspace={workspace} scene={scene} onBack={vi.fn()} /></LocaleProvider>);
+    const generate = screen.getByRole("button", { name: "生成报告" }) as HTMLButtonElement;
+    expect(generate.disabled).toBe(true);
+    expect(screen.getByText(/USER 超过 1000 个/)).toBeTruthy();
+    expect(screen.queryByText("不可变报告已封存")).toBeNull();
+  });
+});

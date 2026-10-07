@@ -1,0 +1,249 @@
+"use client";
+
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { Alert, Badge, Button, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
+import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
+import { useAccountAccess, type AuthorizationProfileClient, type AuthorizationProfileLoad } from "../application/AccountAccessProvider";
+import {
+  admittedAuthorizationSubjects,
+  admittedAuthorizationUserAuthenticationMethods,
+  type AuthorizationAuthorityScope,
+  type AuthorizationProfileAction,
+  type AuthorizationProfileEntry,
+  type AuthorizationSubjectType,
+  type AuthorizationUserAuthenticationMethod
+} from "../domain/accounts";
+import { AuthorizationActionTable } from "./AuthorizationActionTable";
+import { AuthorizationOwnershipFlow } from "./AuthorizationOwnershipFlow";
+import { AuthorizationProfilePublishingPreview } from "./AuthorizationProfilePublishingPreview";
+import styles from "./AccountAccessRenderer.module.css";
+
+type CatalogState = { status: "loading" } | AuthorizationProfileLoad;
+type CatalogResult = {
+  client: AuthorizationProfileClient;
+  state: CatalogState;
+};
+type CatalogSurface = "tenant" | "platform-preview";
+const loadingCatalogState: CatalogState = { status: "loading" };
+
+function scopeStatus(scope: AuthorizationProfileAction["scope"]): "success" | "warning" | "neutral" {
+  if (scope === "TENANT") return "success";
+  if (scope === "INSTALLATION") return "warning";
+  return "neutral";
+}
+
+export function AccountAuthorizationProfileCatalog({ surface = "tenant" }: { surface?: CatalogSurface } = {}) {
+  const t = useTranslations("AuthorizationProfileCatalog");
+  const publishing = useTranslations("AuthorizationProfilePublishingPreview");
+  const client = useAccountAccess().authorizationProfiles;
+  if (!client) return <EmptyState title={t("notConnected")} description={t("notConnectedHint")} />;
+  if (surface === "platform-preview" && !client.preview) return <EmptyState title={publishing("workspaceUnavailable")} description={publishing("workspaceUnavailableHint")} />;
+  return <AuthorizationProfileCatalog key={`${client.accountId}:${client.preview ? "preview" : "live"}:${surface}`} client={client} publishingEnabled={surface === "platform-preview"} />;
+}
+
+export function AuthorizationProfilePublishingWorkspace() {
+  const t = useTranslations("AuthorizationProfilePublishingPreview");
+  return <div className={styles.stack}>
+    <ContentPage.Heading title={t("workspaceTitle")} scrollKey="authorization-profile-publishing" />
+    <p className={styles.note}>{t("workspaceHint")}</p>
+    <AccountAuthorizationProfileCatalog surface="platform-preview" />
+  </div>;
+}
+
+function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: AuthorizationProfileClient; publishingEnabled: boolean }) {
+  const t = useTranslations("AuthorizationProfileCatalog");
+  const toolbarLabels = useTableToolbarLabels();
+  const [result, setResult] = useState<CatalogResult>(() => ({ client, state: loadingCatalogState }));
+  const state: CatalogState = result.client === client ? result.state : loadingCatalogState;
+  const [query, setQuery] = useState("");
+  const [actionQuery, setActionQuery] = useState("");
+  const [scopeFilter, setScopeFilter] = useState<"all" | AuthorizationAuthorityScope>("all");
+  const [subjectFilter, setSubjectFilter] = useState<"all" | AuthorizationSubjectType>("all");
+  const [credentialFilter, setCredentialFilter] = useState<"all" | AuthorizationUserAuthenticationMethod>("all");
+  const [productPage, setProductPage] = useState(1);
+  const [productPageSize, setProductPageSize] = useState(10);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [selection, setSelection] = useState<{ client: AuthorizationProfileClient; product: string | null }>(() => ({ client, product: null }));
+  const selectedProduct = selection.client === client ? selection.product : null;
+  const [publishingPreviewOwner, setPublishingPreviewOwner] = useState<AuthorizationProfileClient | null>(null);
+  const publishingPreview = publishingPreviewOwner === client;
+  const selectedHeading = useRef<HTMLHeadingElement>(null);
+  const publishingTrigger = useRef<HTMLButtonElement>(null);
+  const restorePublishingFocus = useRef(false);
+  const returnProduct = useRef<{ client: AuthorizationProfileClient; product: string } | null>(null);
+  const productButtons = useRef(new Map<string, HTMLButtonElement>());
+  const request = useRef(0);
+
+  const load = useCallback(() => {
+    const current = ++request.current;
+    setResult({ client, state: loadingCatalogState });
+    void client.load().then((next) => { if (current === request.current) setResult({ client, state: next }); });
+  }, [client]);
+
+  useEffect(() => {
+    const current = ++request.current;
+    void client.load().then((next) => { if (current === request.current) setResult({ client, state: next }); });
+    return () => { request.current += 1; };
+  }, [client]);
+  useLayoutEffect(() => {
+    if (publishingPreview || !restorePublishingFocus.current) return;
+    restorePublishingFocus.current = false;
+    publishingTrigger.current?.focus();
+    publishingTrigger.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [publishingPreview]);
+  const entries = useMemo(() => state.status === "ready" ? state.directory.items : [], [state]);
+  const selected = useMemo(() => entries.find((entry) => entry.profile.product === selectedProduct) ?? null, [entries, selectedProduct]);
+  useEffect(() => { if (selected) selectedHeading.current?.focus(); }, [selected]);
+  useLayoutEffect(() => {
+    if (state.status !== "ready" || selected || !returnProduct.current) return;
+    const target = returnProduct.current;
+    returnProduct.current = null;
+    if (target.client === client) productButtons.current.get(target.product)?.focus();
+  }, [client, selected, state.status]);
+  const filteredEntries = useMemo(() => {
+    const words = query.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return entries.filter((entry) => {
+      const value = [entry.profile.product, entry.profile.callingService, ...entry.profile.actions.map((action) => action.action)].join(" ").toLowerCase();
+      return words.every((word) => value.includes(word));
+    });
+  }, [entries, query]);
+
+  const filteredActions = useMemo(() => {
+    if (!selected) return [];
+    const words = actionQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return selected.profile.actions.filter((action) => {
+      const subjects = admittedAuthorizationSubjects(action);
+      const credentials = admittedAuthorizationUserAuthenticationMethods(action);
+      if (scopeFilter !== "all" && action.scope !== scopeFilter) return false;
+      if (subjectFilter !== "all" && !subjects.includes(subjectFilter)) return false;
+      if (credentialFilter !== "all" && !credentials.includes(credentialFilter)) return false;
+      const value = [action.action, action.resourceKind, action.scope, action.resultResourceKind ?? "", ...subjects, ...credentials,
+        ...(action.conditions ?? []).map((condition) => condition.key)].join(" ").toLowerCase();
+      return words.every((word) => value.includes(word));
+    });
+  }, [actionQuery, credentialFilter, scopeFilter, selected, subjectFilter]);
+
+  const productPages = Math.max(1, Math.ceil(filteredEntries.length / productPageSize));
+  const currentProductPage = Math.min(productPage, productPages);
+  const visibleProducts = filteredEntries.slice((currentProductPage - 1) * productPageSize, currentProductPage * productPageSize);
+  const pages = Math.max(1, Math.ceil(filteredActions.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const visibleActions = filteredActions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const resetActions = () => {
+    setActionQuery("");
+    setScopeFilter("all");
+    setSubjectFilter("all");
+    setCredentialFilter("all");
+    setPage(1);
+  };
+  const open = (entry: AuthorizationProfileEntry) => {
+    returnProduct.current = { client, product: entry.profile.product };
+    resetActions();
+    setSelection({ client, product: entry.profile.product });
+  };
+  const back = () => setSelection({ client, product: null });
+  const closePublishingPreview = () => { restorePublishingFocus.current = true; setPublishingPreviewOwner(null); };
+
+  if (selected && publishingPreview) return <AuthorizationProfilePublishingPreview entry={selected} onClose={closePublishingPreview} />;
+
+  if (selected) return <section aria-label={t("productDetail", { product: selected.profile.product })} className={styles.catalogSection}>
+    <div className={styles.catalogDetailHeading}>
+      <Button variant="ghost" size="small" onClick={back}><ArrowLeft aria-hidden="true" />{t("back")}</Button>
+      <h2 ref={selectedHeading} tabIndex={-1}>{selected.profile.product}</h2>
+      {client.preview ? <Badge status="warning">{t("mock")}</Badge> : null}
+    </div>
+    <p className={styles.note}>{t("detailHint")}</p>
+    <p className={styles.note}>{t("admissionHint")}</p>
+    <dl className={styles.catalogFacts}>
+      <div><dt>{t("revision")}</dt><dd>{selected.profile.revision}</dd></div>
+      <div><dt>{t("callingService")}</dt><dd>{selected.profile.callingService}</dd></div>
+      <div><dt>{t("actions")}</dt><dd>{selected.profile.actions.length}</dd></div>
+      <div className={styles.catalogDigest}><dt>{t("digest")}</dt><dd><code>{selected.contentDigest}</code></dd></div>
+    </dl>
+    {selected.profile.actions.some((action) => action.scope !== "TENANT") ? <Alert status="warning">{t("platformScopeHint")}</Alert> : null}
+    <AuthorizationOwnershipFlow
+      title={t("responsibility.title")}
+      hint={t("responsibility.hint")}
+      steps={(["product", "iam", "tenant"] as const).map((owner) => ({
+        id: owner,
+        badge: t(`responsibility.${owner}.badge`),
+        title: t(`responsibility.${owner}.title`),
+        hint: t(`responsibility.${owner}.hint`),
+        status: owner === "product" ? "info" as const : owner === "iam" ? "warning" as const : "success" as const,
+        action: owner === "iam" && publishingEnabled
+          ? <Button ref={publishingTrigger} variant="secondary" size="small" onClick={() => setPublishingPreviewOwner(client)}>{t("previewPublishing")}</Button>
+          : undefined
+      }))}
+    />
+    <TableToolbar labels={toolbarLabels}
+      search={{ label: t("searchActions"), placeholder: t("searchActionsPlaceholder"), value: actionQuery, onChange: (value) => { setActionQuery(value); setPage(1); } }}
+      filters={[
+        { id: "scope", label: t("scopeFilter"), value: scopeFilter, options: [
+          { value: "all", label: t("allScopes") },
+          { value: "TENANT", label: t("scopes.TENANT") },
+          { value: "INSTALLATION", label: t("scopes.INSTALLATION") },
+          { value: "INSTALLATION_PROBE", label: t("scopes.INSTALLATION_PROBE") }
+        ], onChange: (value) => { setScopeFilter(value as "all" | AuthorizationAuthorityScope); setPage(1); } },
+        { id: "subject", label: t("subjectFilter"), value: subjectFilter, options: [
+          { value: "all", label: t("allSubjects") },
+          { value: "USER", label: t("subjects.USER") },
+          { value: "ROLE", label: t("subjects.ROLE") },
+          { value: "SERVICE_ACCOUNT", label: t("subjects.SERVICE_ACCOUNT") }
+        ], onChange: (value) => { setSubjectFilter(value as "all" | AuthorizationSubjectType); setPage(1); } },
+        { id: "credential", label: t("credentialFilter"), value: credentialFilter, options: [
+          { value: "all", label: t("allCredentials") },
+          { value: "LOGIN_SESSION", label: t("credentials.LOGIN_SESSION") },
+          { value: "ACCESS_KEY", label: t("credentials.ACCESS_KEY") }
+        ], onChange: (value) => { setCredentialFilter(value as "all" | AuthorizationUserAuthenticationMethod); setPage(1); } }
+      ]}
+      status={t("actionCount", { count: filteredActions.length })} />
+    {visibleActions.length ? <AuthorizationActionTable actions={visibleActions} label={t("actionTable", { product: selected.profile.product })} />
+      : <EmptyState title={t("noActions")} description={t("noActionsHint")} action={<Button variant="secondary" onClick={resetActions}>{toolbarLabels.resetQuery}</Button>} />}
+    <Table.Footer note={t("completeActions", { count: selected.profile.actions.length })}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+  </section>;
+
+  return <section aria-label={t("title")} className={styles.catalogSection}>
+    <CatalogNotice preview={client.preview} publishingPreview={publishingEnabled} />
+    <TableToolbar labels={toolbarLabels}
+      search={{ label: t("searchProducts"), placeholder: t("searchProductsPlaceholder"), value: query, onChange: (value) => { setQuery(value); setProductPage(1); } }}
+      status={state.status === "ready" ? t("productCount", { count: filteredEntries.length }) : state.status === "loading" ? t("loading") : undefined} />
+    {state.status === "loading" ? <TableSkeleton label={t("loading")} rows={4} /> : null}
+    {state.status !== "ready" && state.status !== "loading" ? <>
+      <Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`errors.${state.status}`)}</Alert>
+      {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => load()}>{t("retry")}</Button></div> : null}
+    </> : null}
+    {state.status === "ready" ? <>{visibleProducts.length ? <Table aria-label={t("table")} mobileLayout="stack" className={styles.catalogProductTable}>
+      <thead><tr><th scope="col">{t("product")}</th><th scope="col">{t("callingService")}</th><th scope="col">{t("revision")}</th><th scope="col">{t("actions")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("digest")}</th></tr></thead>
+      <tbody>{visibleProducts.map((entry) => {
+        const scopes = [...new Set(entry.profile.actions.map((action) => action.scope))];
+        return <tr key={entry.profile.product}>
+          <td data-label={t("product")}><Table.PrimaryAction
+            ref={(node) => {
+              if (node) productButtons.current.set(entry.profile.product, node);
+              else productButtons.current.delete(entry.profile.product);
+            }}
+            onClick={() => open(entry)}
+          >{entry.profile.product}</Table.PrimaryAction></td>
+          <td data-label={t("callingService")}>{entry.profile.callingService}</td>
+          <td data-label={t("revision")}>{entry.profile.revision}</td>
+          <td data-label={t("actions")}>{entry.profile.actions.length}</td>
+          <td data-label={t("scope")}><div className={styles.catalogBadges}>{scopes.map((scope) => <Badge status={scopeStatus(scope)} key={scope}>{t(`scopes.${scope}`)}</Badge>)}</div></td>
+          <td data-label={t("digest")}><code className={styles.catalogDigestShort} title={entry.contentDigest}>{entry.contentDigest.slice(0, 18)}…</code></td>
+        </tr>;
+      })}</tbody>
+    </Table> : <EmptyState title={t("noProducts")} description={t("noProductsHint")} action={<Button variant="secondary" onClick={() => { setQuery(""); setProductPage(1); }}>{toolbarLabels.resetQuery}</Button>} />}
+    <Table.Footer note={t("completeProducts", { count: entries.length })}><TablePagination page={currentProductPage} pages={productPages} pageSize={productPageSize} onPageChange={setProductPage} onPageSizeChange={(size) => { setProductPageSize(size); setProductPage(1); }} labels={{ summary: t("page", { page: currentProductPage, pages: productPages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer></> : null}
+  </section>;
+}
+
+function CatalogNotice({ preview, publishingPreview }: { preview: boolean; publishingPreview: boolean }) {
+  const t = useTranslations("AuthorizationProfileCatalog");
+  const publishing = useTranslations("AuthorizationProfilePublishingPreview");
+  return <div className={styles.catalogNotice}>
+    <Alert status={publishingPreview ? "warning" : preview ? "warning" : "info"}>{publishingPreview ? publishing("workspaceBoundary") : t(preview ? "mockNotice" : "notice")}</Alert>
+    <p className={styles.note}>{t("ownershipHint")}</p>
+  </div>;
+}

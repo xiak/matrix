@@ -1,3 +1,5 @@
+import type { AccessKeyNetworkRestrictions } from "./accessKeyNetwork";
+
 export type PolicyScope = "TENANT" | "INSTALLATION";
 export type PolicyManagement = "SYSTEM" | "CUSTOMER";
 export type PolicyStatus = "ACTIVE" | "RETIRED";
@@ -21,6 +23,8 @@ export type IamAction =
   | "iam.group-membership.remove"
   | "iam.group-policy-attachment.create"
   | "iam.group-policy-attachment.revoke"
+  | "iam.role.list"
+  | "iam.role.create"
   | "iam.user.read"
   | "iam.user.update"
   | "iam.user.delete"
@@ -32,7 +36,13 @@ export type IamAction =
   | "iam.policy-attachment.create"
   | "iam.platform-policy-attachment.create"
   | "iam.policy-attachment.revoke"
-  | "iam.platform-policy-attachment.revoke";
+  | "iam.platform-policy-attachment.revoke"
+  | "iam.access-key.list"
+  | "iam.access-key.create"
+  | "iam.access-key.read"
+  | "iam.access-key.set-status"
+  | "iam.access-key.set-network-restrictions"
+  | "iam.access-key.delete";
 
 export type CapabilityRestriction =
   | "AUTHORITY_REQUIRED"
@@ -43,14 +53,20 @@ export type CapabilityRestriction =
   | "SYSTEM_ACCOUNT_PROTECTED"
   | "TARGET_DISABLED"
   | "TARGET_CREDENTIAL_CHANGE_REQUIRED"
-  | "TARGET_MUST_BE_DISABLED";
+  | "TARGET_MUST_BE_DISABLED"
+  | "SESSION_NOT_REVOCABLE"
+  | "ACCESS_KEY_LIMIT_REACHED"
+  | "RESOURCE_VERSION_EXHAUSTED";
 
 export type ActionCapability = {
   action: IamAction;
-  resource: { kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT"; id: string };
+  resource: { kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY"; id: string };
   available: boolean;
   restrictionReason: CapabilityRestriction | null;
 };
+
+export const accountAccessViews = ["users", "create-user", "groups", "create-group", "policies", "create-policy", "policy-language", "policy-configuration", "access-diagnosis", "roles", "create-role", "service-authorizations", "role-access", "providers", "user-sso", "federations", "keys", "sessions", "access-analysis", "security-reports", "settings", "authorization-profiles", "tenants"] as const;
+export type AccountAccessView = "overview" | typeof accountAccessViews[number];
 
 export type RootIdentity = {
   principalId: string;
@@ -64,6 +80,76 @@ export type Account = {
   rootIdentity: RootIdentity;
   loginAlias: string | null;
   resourceVersion: number;
+};
+
+export type CreateAccountLifecycleCommand = {
+  id: string;
+  displayName: string;
+  rootLoginName: string;
+  rootDisplayName: string;
+  initialPassword: string;
+  requestId: string;
+};
+
+export type SetAccountLifecycleStatusCommand = {
+  status: "ACTIVE" | "DISABLED";
+  resourceVersion: number;
+  requestId: string;
+};
+
+export type RecoverAccountRootCredentialsCommand = {
+  initialPassword: string;
+  resourceVersion: number;
+  requestId: string;
+};
+
+export type AccountSecuritySettings = {
+  accountId: string;
+  resourceVersion: number;
+  mfa: { requiredForUsers: boolean };
+  password: AccountPasswordSettings;
+  session: AccountSessionSettings;
+  accessKeyNetwork: AccessKeyNetworkRestrictions;
+  updatedAt: string;
+};
+
+export type AccountPasswordSettings = {
+  minimumLength: number;
+  requireLowercase: boolean;
+  requireUppercase: boolean;
+  requireDigit: boolean;
+  requireSymbol: boolean;
+  historyCount: number;
+  maxAgeDays: number;
+  expiryMode: "CHANGE_PASSWORD" | "ADMIN_RESET";
+};
+
+export type AccountSessionSettings = { idleTimeoutMinutes: number };
+
+export type RetainedAccountSecuritySettings = Omit<AccountSecuritySettings, "password" | "session" | "accessKeyNetwork"> & {
+  password: (Omit<AccountPasswordSettings, "maxAgeDays" | "expiryMode"> & Partial<Pick<AccountPasswordSettings, "maxAgeDays" | "expiryMode">>) | null;
+  session: AccountSessionSettings | null;
+  accessKeyNetwork: AccessKeyNetworkRestrictions | null;
+};
+
+export type SecuritySettingsUpdateIntent = {
+  expectedResourceVersion: number;
+  mfa: { requiredForUsers: boolean };
+  password: AccountPasswordSettings;
+  session: AccountSessionSettings;
+  accessKeyNetwork: AccessKeyNetworkRestrictions;
+};
+
+export type AccountSecuritySettingsChange = {
+  requestId: string;
+  expectedResourceVersion: number;
+  settings: RetainedAccountSecuritySettings;
+  callerSessionEnded: true;
+};
+
+export type AccountSecuritySettingsUpdate = {
+  outcome: "APPLIED" | "EQUAL_REPLAY";
+  change: AccountSecuritySettingsChange;
 };
 
 export type User = {
@@ -108,6 +194,116 @@ export type PolicyDirectory = {
   items: AccountPolicy[];
 };
 
+export type AccountPolicyDocument = {
+  languageVersion: "1";
+  scope: "TENANT";
+  statements: {
+    sid: string;
+    effect: "ALLOW" | "DENY";
+    actions: string[];
+    resources: { kind: string; match: "EXACT" | "PREFIX_IN_AUTHORITY" | "ANY_IN_AUTHORITY"; id?: string }[];
+    conditions?: { key: string; operator: string; values: string[] }[];
+  }[];
+};
+
+export type AccountPolicyVersion = {
+  policyId: string;
+  versionId: string;
+  document: AccountPolicyDocument;
+  contentDigest: string;
+  contractVersion: 1 | 2;
+  compilation?: {
+    compilationVersion: "1";
+    profiles: { product: string; revision: number; contentDigest: string }[];
+    resolvedStatements: { sid: string; actions: string[] }[];
+  };
+};
+
+export type AccountPolicyDetail = { policy: AccountPolicy; version: AccountPolicyVersion };
+export type AccountPolicyVersionDirectory = { policy: AccountPolicy; items: AccountPolicyVersion[] };
+
+// Product-owned authorization declarations are policy-authoring metadata. They
+// are not Policy records, grants, effective permissions or tenant-owned
+// registration state, so keep their open action namespace separate from the
+// console's closed management-action union above.
+export type AuthorizationAuthorityScope = "TENANT" | "INSTALLATION" | "INSTALLATION_PROBE";
+export type AuthorizationResourceMode = "INSTANCE" | "COLLECTION";
+export type AuthorizationCollectionUsage = "COLLECTION_LIST" | "COLLECTION_CREATE";
+export type AuthorizationConditionKey =
+  | "iam.account-id"
+  | "iam.current-time"
+  | "iam.principal-id"
+  | "request.source-ip"
+  | "request.tag/environment"
+  | "resource.tag/environment";
+export type AuthorizationSubjectType = "USER" | "SERVICE_ACCOUNT" | "ROLE";
+export type AuthorizationUserAuthenticationMethod = "LOGIN_SESSION" | "ACCESS_KEY";
+
+export type AuthorizationProfileCondition = {
+  key: AuthorizationConditionKey;
+  valueType: "STRING" | "TIME" | "IP";
+  source: "IAM_AUTHENTICATED_IDENTITY" | "IAM_TRANSACTION_TIME" | "CALLING_SERVICE_NETWORK" |
+    "CALLING_SERVICE_REQUEST_TAG" | "CALLING_SERVICE_RESOURCE_TAG";
+};
+
+export type AuthorizationResourceShape = {
+  mode: AuthorizationResourceMode;
+  prefixAllowed: boolean;
+  collectionUsage?: AuthorizationCollectionUsage;
+};
+
+export type AuthorizationProfileAction = {
+  action: string;
+  resourceKind: string;
+  scope: AuthorizationAuthorityScope;
+  resourceShapes: AuthorizationResourceShape[];
+  // Product PEP transport capability for bounded candidate filtering. This is
+  // declaration metadata, never an allow decision or a policy grant.
+  instanceListBatch?: boolean;
+  conditions?: AuthorizationProfileCondition[];
+  resultResourceKind?: string;
+  // Missing sets retain the sealed legacy ceiling; they never mean all
+  // subjects or all USER credential carriers.
+  subjectTypes?: AuthorizationSubjectType[];
+  userAuthenticationMethods?: AuthorizationUserAuthenticationMethod[];
+};
+
+// An omitted admission set retains IAM's sealed legacy ceiling; absence never
+// means that every subject or credential carrier is supported.
+export function admittedAuthorizationSubjects(action: AuthorizationProfileAction): AuthorizationSubjectType[] {
+  return action.subjectTypes ?? (action.scope === "INSTALLATION_PROBE" ? ["SERVICE_ACCOUNT"] : ["USER"]);
+}
+
+export function admittedAuthorizationUserAuthenticationMethods(
+  action: AuthorizationProfileAction
+): AuthorizationUserAuthenticationMethod[] {
+  return admittedAuthorizationSubjects(action).includes("USER")
+    ? action.userAuthenticationMethods ?? ["LOGIN_SESSION"]
+    : [];
+}
+
+export function authorizationResourceShapeKind(shape: AuthorizationResourceShape): "INSTANCE" | "INSTANCE_PREFIX" | "COLLECTION_LIST" | "COLLECTION_CREATE" {
+  if (shape.mode === "COLLECTION") return shape.collectionUsage === "COLLECTION_CREATE" ? "COLLECTION_CREATE" : "COLLECTION_LIST";
+  return shape.prefixAllowed ? "INSTANCE_PREFIX" : "INSTANCE";
+}
+
+export type AuthorizationProfile = {
+  product: string;
+  revision: number;
+  callingService: string;
+  actions: AuthorizationProfileAction[];
+};
+
+export type AuthorizationProfileEntry = {
+  profile: AuthorizationProfile;
+  contentDigest: string;
+};
+
+export type AuthorizationProfileDirectory = {
+  accountId: string;
+  items: AuthorizationProfileEntry[];
+};
+
 export type AccountIdentity = {
   account: Account;
   user: User;
@@ -123,6 +319,8 @@ export type PolicyVersionReference = {
   contentDigest: string;
 };
 
+// A bound revision of the user's permission ceiling, never a positive grant.
+// Only an explicit null policy means that this user has no tenant boundary.
 export type UserPermissionBoundary = {
   accountId: string;
   userId: string;
@@ -135,6 +333,13 @@ export type GroupPolicyAttachment = Omit<UserPolicyAttachment, "target" | "scope
   scope: "TENANT";
   installationId: null;
 };
+
+export type RolePolicyAttachment = Omit<UserPolicyAttachment, "target" | "scope" | "installationId"> & {
+  target: { kind: "ROLE"; id: string };
+  scope: "TENANT";
+};
+
+export type DirectPolicyAttachment = UserPolicyAttachment | GroupPolicyAttachment | RolePolicyAttachment;
 
 export type GroupMembership = {
   id: string;
@@ -159,9 +364,22 @@ export type Group = {
   updatedAt: string;
 };
 
-export type GroupAccess = { group: Group; policyAttachments: GroupPolicyAttachment[]; capabilities: ActionCapability[] };
-export type GroupMembershipAccess = { membership: GroupMembership; capabilities: ActionCapability[] };
-export type GroupMembershipPage = DirectoryPage<GroupMembershipAccess> & { accountId: string; groupId: string };
+export type GroupAccess = {
+  group: Group;
+  policyAttachments: GroupPolicyAttachment[];
+  capabilities: ActionCapability[];
+};
+
+export type GroupMembershipAccess = {
+  membership: GroupMembership;
+  capabilities: ActionCapability[];
+};
+
+export type GroupMembershipPage = DirectoryPage<GroupMembershipAccess> & {
+  accountId: string;
+  groupId: string;
+};
+
 export type GroupDeletion = {
   id: string;
   accountId: string;
@@ -171,7 +389,47 @@ export type GroupDeletion = {
   revokedPolicyAttachments: number;
   deletedAt: string;
 };
-export type PolicyAttachmentRevocation = { id: string; resourceVersion: number; revokedAt: string };
+
+export type PolicyAttachmentRevocation = {
+  id: string;
+  resourceVersion: number;
+  revokedAt: string;
+};
+
+type PolicyAttachmentChangeBase = {
+  accountId: string;
+  actorPrincipalId: string;
+  requestId: string;
+  completedAt: string;
+};
+
+// Immutable completion evidence for one direct User, Group, or Role policy
+// relationship command. It records the original result, not the
+// relationship's current state and not a reusable authorization decision.
+export type PolicyAttachmentChange = PolicyAttachmentChangeBase & (
+  | {
+      operation: "CREATE";
+      target: DirectPolicyAttachment["target"];
+      policyId: string;
+      policyResourceVersion: number;
+      attachment: DirectPolicyAttachment;
+    }
+  | {
+      operation: "REVOKE";
+      attachmentId: string;
+      expectedResourceVersion: number;
+      revocation: PolicyAttachmentRevocation;
+    }
+);
+
+export type PolicyAttachmentChangeOperationExpectation =
+  | { operation: "CREATE"; requestId: string; target: DirectPolicyAttachment["target"]; policyId: string; policyResourceVersion: number }
+  | { operation: "REVOKE"; requestId: string; attachmentId: string; expectedResourceVersion: number };
+
+export type PolicyAttachmentChangeExpectation = {
+  accountId: string;
+  actorPrincipalId: string;
+} & PolicyAttachmentChangeOperationExpectation;
 
 export type PolicyGrantSource =
   | { kind: "DIRECT"; attachment: UserPolicyAttachment }
@@ -181,9 +439,26 @@ export type UserAccess = { user: User; policyAttachments: UserPolicyAttachment[]
 export type AccountAccess = { account: Account; capabilities: ActionCapability[] };
 export type DirectoryPage<T> = { items: T[]; nextAfter: string | null };
 
+export type PasswordResetRequestIdentity = Readonly<{
+  accountId: string;
+  actorId: string;
+  userId: string;
+  resourceVersion: number;
+  requestId: string;
+}>;
+
+export type UserPasswordResetCompletion = Readonly<{
+  accountId: string;
+  actorPrincipalId: string;
+  userId: string;
+  requestId: string;
+  expectedResourceVersion: number;
+  resultingResourceVersion: number;
+  eventId: string;
+  occurredAt: string;
+}>;
+
 export type AccountCommand =
-  | { kind: "set-user-boundary"; accountId: string; userId: string; policyId: string; policyResourceVersion: number; resourceVersion: number; requestId: string }
-  | { kind: "remove-user-boundary"; accountId: string; userId: string; resourceVersion: number; requestId: string }
   | { kind: "create-user"; loginName: string; displayName: string; initialPassword: string }
   | { kind: "create-account"; id: string; displayName: string; rootLoginName: string; rootDisplayName: string; initialPassword: string }
   | { kind: "set-account-status"; accountId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
@@ -192,6 +467,5 @@ export type AccountCommand =
   | { kind: "update-user"; userId: string; displayName: string; resourceVersion: number }
   | { kind: "delete-user"; userId: string; resourceVersion: number }
   | { kind: "set-status"; userId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
-  | { kind: "reset-password"; userId: string; initialPassword: string; resourceVersion: number }
-  | { kind: "create-policy-attachment"; userId: string; policyId: string; policyResourceVersion: number }
-  | { kind: "revoke-policy-attachment"; attachmentId: string; resourceVersion: number };
+  | { kind: "reset-password"; userId: string; initialPassword: string; resourceVersion: number; requestId: string }
+  | { kind: "create-policy-attachment"; userId: string; policyId: string; policyResourceVersion: number; requestId: string };

@@ -1,0 +1,277 @@
+import { Suspense, useEffect, useRef, useState } from "react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ConsoleLink, ConsoleNavigationProvider, useConsoleNavigation } from "./ConsoleNavigation";
+import { parseControlPlanePathname } from "./parseControlPlaneRoute";
+import { useUnsavedChanges } from "@ui/xiak";
+import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { ConsoleHeader } from "../renderers/ConsoleHeader";
+
+const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+const staticHeaderRender = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
+vi.mock("../renderers/AccountMenu", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../renderers/AccountMenu")>();
+  return { ...actual, AccountMenu: (props: React.ComponentProps<typeof actual.AccountMenu>) => { staticHeaderRender(); return <actual.AccountMenu {...props} />; } };
+});
+vi.mock("next/link", () => ({
+  default: ({ onNavigate, onClick, href, children, replace, scroll, ...props }: React.ComponentProps<"a"> & { replace?: boolean; scroll?: boolean; onNavigate?(event: { preventDefault(): void }): void }) => <a {...props} href={href} data-replace={replace} data-scroll={scroll} onClick={(event) => {
+    onClick?.(event);
+    if (event.defaultPrevented) return;
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || props.target === "_blank" || props.download !== undefined) {
+      event.preventDefault(); // jsdom has no second-tab/download navigation; do not invoke onNavigate.
+      return;
+    }
+    event.preventDefault();
+    onNavigate?.({ preventDefault() {} });
+  }}>{children}</a>
+}));
+
+const requests = new Map<string, { promise: Promise<void>; release(): void; ready: boolean }>();
+function hold(href: string) {
+  let resolve!: () => void;
+  const request = { promise: new Promise<void>((done) => { resolve = done; }), ready: false, release() { request.ready = true; resolve(); } };
+  requests.set(href, request);
+  return request;
+}
+
+function RouteContent({ href }: { href: string }) {
+  useEffect(() => { window.history.replaceState(null, "", href); }, [href]);
+  const request = requests.get(href);
+  if (request && !request.ready) throw request.promise;
+  return <output aria-label="Current content">{href}</output>;
+}
+
+function NavigationControls({ onAccepted }: { onAccepted?(): void }) {
+  const navigation = useConsoleNavigation();
+  return <>
+    <output aria-label="Pending destination">{navigation.pendingHref ?? "idle"}</output>
+    <output aria-label="Pending section">{navigation.pendingSelection?.section ?? "idle"}</output>
+    <ConsoleLink href="/console/">Home</ConsoleLink>
+    <ConsoleLink href="/console/resources/">Resources</ConsoleLink>
+    <ConsoleLink href="/console/logs/" onAccepted={onAccepted}>Logs</ConsoleLink>
+    <ConsoleLink href="/console/access/groups/?id=group%2Fexample">Group detail</ConsoleLink>
+    <ConsoleLink href="/console/access/groups/">Group directory</ConsoleLink>
+    <ConsoleLink href="/console/access/roles/">Roles</ConsoleLink>
+    <ConsoleLink href="/console/quotas/" onNavigate={(event) => event.preventDefault()}>Blocked</ConsoleLink>
+    <button onClick={() => navigation.navigate("/console/operations/")} type="button">Search result</button>
+  </>;
+}
+
+const draftCopy = { title: "Leave workflow?", description: "The draft is not saved.", stay: "Keep editing", leave: "Leave", close: "Close", busyTitle: "Saving", busyDescription: "Wait", failure: "Navigation failed", retry: "Retry" };
+function DraftProbe() {
+  const [value, setValue] = useState("");
+  const form = useRef<HTMLFormElement>(null);
+  useUnsavedChanges({ dirty: Boolean(value), busy: false, copy: draftCopy, focusRef: form });
+  return <form ref={form}><input aria-label="Workflow draft" value={value} onChange={(event) => setValue(event.target.value)} /></form>;
+}
+
+const headerProps: React.ComponentProps<typeof ConsoleHeader> = {
+  scene: { preview: true, search: [], scope: null, activeOperationCount: 0, messages: [] },
+  productName: "Console", scope: { regionId: "all", onRegionChange() {} }, identity: { accountType: "Primary", loginName: "preview", principalId: "preview", tenant: { name: "Preview" } }, onLogout() {}, revoking: false
+};
+
+function Harness({ initialHref = "/console/", onAccepted, withDraft = false, withHeader = false }: { initialHref?: string; onAccepted?(): void; withDraft?: boolean; withHeader?: boolean }) {
+  const [href, setHref] = useState(initialHref);
+  router.push.mockImplementation((target: string) => setHref(target));
+  return <ConsoleNavigationProvider selection={parseControlPlanePathname(href.split(/[?#]/)[0] ?? "")}>
+    {withHeader ? <ConsoleHeader {...headerProps} /> : null}
+    <NavigationControls onAccepted={onAccepted} />
+    <Suspense fallback={<span>Route fallback</span>}><RouteContent href={href} />{withDraft && href === initialHref ? <DraftProbe /> : null}</Suspense>
+  </ConsoleNavigationProvider>;
+}
+
+afterEach(() => { cleanup(); requests.clear(); vi.clearAllMocks(); window.history.replaceState(null, "", "/"); });
+
+describe("Console navigation", () => {
+  it("updates only the header's route-progress subscriber while a destination is pending", async () => {
+    const user = userEvent.setup(), request = hold("/console/resources/");
+    render(<LocaleProvider><Harness withHeader /></LocaleProvider>);
+    const header = screen.getByLabelText("全局导航");
+    expect(within(header).queryByRole("progressbar")).toBeNull();
+    staticHeaderRender.mockClear();
+    await user.click(screen.getByRole("link", { name: "Resources" }));
+    expect(within(header).getByRole("progressbar", { name: "正在打开资源中心…" })).toBeTruthy();
+    expect(staticHeaderRender).not.toHaveBeenCalled();
+    await act(async () => request.release());
+    expect(within(header).queryByRole("progressbar")).toBeNull();
+    expect(staticHeaderRender).not.toHaveBeenCalled();
+  });
+
+  it("waits for leave consent before starting a real route transition or changing the destination", async () => {
+    const user = userEvent.setup(), request = hold("/console/resources/");
+    render(<Harness withDraft />);
+    await user.type(screen.getByLabelText("Workflow draft"), "keep this policy");
+    await user.click(screen.getByRole("link", { name: "Resources" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(router.push).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect((screen.getByLabelText("Workflow draft") as HTMLInputElement).value).toBe("keep this policy");
+    await user.click(screen.getByRole("link", { name: "Resources" }));
+    await user.click(screen.getByRole("button", { name: "Leave" }));
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/console/resources/", { scroll: false });
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("/console/resources/");
+    await act(async () => request.release());
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/resources/");
+    expect(screen.queryByLabelText("Workflow draft")).toBeNull();
+  });
+
+  it("guards imperative search visits but not same-page, modified or cancelled anchor navigation", async () => {
+    const user = userEvent.setup();
+    render(<Harness withDraft />);
+    await user.type(screen.getByLabelText("Workflow draft"), "draft");
+    await user.click(screen.getByRole("link", { name: "Home" }));
+    fireEvent.click(screen.getByRole("link", { name: "Resources" }), { ctrlKey: true });
+    await user.click(screen.getByRole("link", { name: "Blocked" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Search result" }));
+    expect(router.push).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Leave" }));
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/console/operations/", { scroll: false });
+  });
+
+  it("preserves replace and scroll options and records a service visit only after acceptance", async () => {
+    const accepted = vi.fn(), user = userEvent.setup();
+    render(<ConsoleNavigationProvider selection={{ section: "overview" }}><DraftProbe /><ConsoleLink href="/console/logs/" replace scroll={false} onAccepted={accepted}>Service</ConsoleLink></ConsoleNavigationProvider>);
+    await user.type(screen.getByLabelText("Workflow draft"), "draft");
+    await user.click(screen.getByRole("link", { name: "Service" }));
+    expect(accepted).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    await user.click(screen.getByRole("link", { name: "Service" }));
+    await user.click(screen.getByRole("button", { name: "Leave" }));
+    expect(router.replace).toHaveBeenCalledExactlyOnceWith("/console/logs/", { scroll: false });
+    expect(router.push).not.toHaveBeenCalled();
+    expect(accepted).toHaveBeenCalledTimes(1);
+  });
+
+  it("changes encoded entity queries and returns to the directory without fetching a page tree", async () => {
+    const href = "/console/access/groups/?id=group%2Fexample";
+    const user = userEvent.setup();
+    render(<Harness initialHref="/console/access/groups/" />);
+    await user.click(screen.getByRole("link", { name: "Group detail" }));
+    expect(window.location.pathname + window.location.search).toBe(href);
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
+    await user.click(screen.getByRole("link", { name: "Group detail" }));
+    await user.click(screen.getByRole("link", { name: "Group directory" }));
+    expect(window.location.pathname + window.location.search).toBe("/console/access/groups/");
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it("keeps client query navigation behind the draft guard", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialHref="/console/access/groups/" withDraft />);
+    await user.type(screen.getByLabelText("Workflow draft"), "keep membership changes");
+    await user.click(screen.getByRole("link", { name: "Group detail" }));
+    expect(window.location.search).toBe("");
+    expect(router.push).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Leave" }));
+    expect(window.location.search).toBe("?id=group%2Fexample");
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it("honors query replacement without a page request or another history entry", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/console/access/groups/?id=group%2Fexample");
+    const replace = vi.spyOn(window.history, "replaceState");
+    function ReplaceQuery() {
+      const navigation = useConsoleNavigation();
+      return <button onClick={() => navigation.navigate("/console/access/groups/?id=another", { replace: true })}>Replace query</button>;
+    }
+    render(<ConsoleNavigationProvider selection={parseControlPlanePathname("/console/access/groups/")}><ReplaceQuery /></ConsoleNavigationProvider>);
+    await user.click(screen.getByRole("button", { name: "Replace query" }));
+    expect(replace).toHaveBeenCalledExactlyOnceWith(null, "", "/console/access/groups/?id=another");
+    expect(router.replace).not.toHaveBeenCalled();
+    replace.mockRestore();
+  });
+  it("exposes a real pending destination while a route suspends and clears it on commit", async () => {
+    const request = hold("/console/resources/");
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("link", { name: "Resources" }));
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("/console/resources/");
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/");
+    expect(screen.getByRole("link", { name: "Resources" }).getAttribute("aria-busy")).toBe("true");
+    await act(async () => request.release());
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/resources/");
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
+  });
+
+  it("exposes the destination frame immediately, independently of regional loading feedback", async () => {
+    const request = hold("/console/resources/");
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("link", { name: "Resources" }));
+    expect(screen.getByLabelText("Pending section").textContent).toBe("resources");
+    await act(async () => request.release());
+    expect(screen.getByLabelText("Pending section").textContent).toBe("idle");
+  });
+
+  it("runs accepted-navigation effects only after the destination frame is in the DOM", async () => {
+    const request = hold("/console/logs/");
+    const observed: string[] = [];
+    render(<Harness onAccepted={() => observed.push(screen.getByLabelText("Pending section").textContent ?? "missing")} />);
+
+    fireEvent.click(screen.getByRole("link", { name: "Logs" }));
+
+    expect(observed).toEqual(["logs"]);
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("/console/logs/");
+    await act(async () => request.release());
+  });
+
+  it("keeps the latest destination when navigation interrupts a slower visit", async () => {
+    const first = hold("/console/resources/");
+    const latest = hold("/console/logs/");
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("link", { name: "Resources" }));
+    await user.click(screen.getByRole("link", { name: "Logs" }));
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("/console/logs/");
+    await act(async () => latest.release());
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/logs/");
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
+    await act(async () => first.release());
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/logs/");
+  });
+
+  it("remains interactive after 200 rapid interrupted IAM menu visits", async () => {
+    const groups = hold("/console/access/groups/");
+    const roles = hold("/console/access/roles/");
+    render(<Harness />);
+
+    const groupsLink = screen.getByRole("link", { name: "Group directory" });
+    const rolesLink = screen.getByRole("link", { name: "Roles" });
+    for (let index = 0; index < 200; index += 1) {
+      fireEvent.click(index % 2 === 0 ? groupsLink : rolesLink);
+    }
+
+    expect(router.push).toHaveBeenCalledTimes(200);
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("/console/access/roles/");
+    expect(rolesLink.getAttribute("aria-busy")).toBe("true");
+    expect(groupsLink.getAttribute("aria-busy")).toBeNull();
+
+    await act(async () => roles.release());
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/access/roles/");
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
+    expect(rolesLink.getAttribute("aria-busy")).toBeNull();
+
+    await act(async () => groups.release());
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/access/roles/");
+    fireEvent.click(groupsLink);
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/access/groups/");
+  });
+
+  it("does not fabricate waits for cached/same-page visits or intercept modified/cancelled links", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("link", { name: "Home" }));
+    fireEvent.click(screen.getByRole("link", { name: "Resources" }), { ctrlKey: true });
+    await user.click(screen.getByRole("link", { name: "Blocked" }));
+    expect(router.push).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
+    await user.click(screen.getByRole("button", { name: "Search result" }));
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/console/operations/", { scroll: false });
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/operations/");
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
+  });
+});

@@ -1,0 +1,732 @@
+"use client";
+
+import { Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
+import { useFormatter, useTranslations } from "next-intl";
+import { useSearchParams } from "next/navigation";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  Boxes,
+  CheckCircle2,
+  ChevronDown,
+  CloudCog,
+  Database,
+  Server,
+} from "lucide-react";
+import { Alert, Table, TablePagination, TableToolbar, EmptyState, Badge, Button, Card, FormField, LoadingFeedback, Progress, Select, Skeleton, ContentLayout, Typography } from "@ui/xiak";
+import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
+import type {
+  AlertScene,
+  ConsoleContentScene,
+  OperationScene,
+  UnifiedResourceScene
+} from "../scenes/consoleScene";
+import { CommonServiceLinks } from "./ServiceDirectory";
+import { useConsoleUiStore } from "../application/consoleUiStore";
+import styles from "./ExperienceContentRenderer.module.css";
+import { ConsoleMetrics } from "./ConsoleMetrics";
+import { useConsoleFormat } from "./useConsoleFormat";
+import { ApplicationTagManagement } from "./ApplicationTagManagement";
+import { ApplicationDeploymentManagement } from "./ApplicationDeploymentManagement";
+import { useControlPlane } from "../application/ControlPlaneProvider";
+import type {
+  ApplicationDirectoryLoad,
+  ApplicationDirectoryPage,
+  ApplicationReadLoad,
+  ApplicationReadSnapshot
+} from "../domain/application";
+
+export type ResourceScope = {
+  regionId: string;
+};
+
+function ResourceTable({ resources, scope, compact = false }: {
+  resources: UnifiedResourceScene[];
+  scope?: ResourceScope;
+  compact?: boolean;
+}) {
+  const t = useTranslations("CloudExperience");
+  const scopeMessages = useTranslations("RegionScope");
+  const resourceKinds = useTranslations("GlobalSearch.resourceKinds");
+  const format = useConsoleFormat();
+  const scoped = resources.filter((resource) => (
+    (!scope || scope.regionId === "all" || resource.regionId === scope.regionId || resource.regionId === "all")
+  ));
+  if (scoped.length === 0) {
+    return <EmptyState title={scopeMessages("emptyTitle")} description={scopeMessages("emptyHint")} />;
+  }
+  return (
+    <Table aria-label={t("resourceTable")} mobileLayout="grid">
+        <thead>
+          <tr>
+            <th scope="col">{t("resource")}</th><th scope="col">{t("product")}</th>{compact ? null : <th scope="col">{t("project")}</th>}<th scope="col">{t("region")}</th><th scope="col">{t("state")}</th><th scope="col">{t("updated")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {scoped.map((resource) => (
+            <tr key={resource.id}>
+              <td><Link className={styles.resourceLink} href={resource.href}>{resource.name}</Link><small>{resource.id} · {resourceKinds(resource.kind)}</small></td>
+              <td data-label={t("product")}>{resource.productName}</td>
+              {compact ? null : <td data-label={t("project")}>{resource.projectName}</td>}
+              <td data-label={t("region")}>{resource.regionId === "all" ? t("globalRegion") : resource.regionName}</td>
+              <td data-label={t("state")}><Badge status={resource.status}>{t(`resourceStates.${resource.state}`)}</Badge></td>
+              <td data-label={t("updated")} data-mobile-span="full">{format.timestamp(resource.updatedAt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+  );
+}
+
+function OperationSummary({ operation }: { operation: OperationScene }) {
+  const t = useTranslations("CloudExperience");
+  const format = useConsoleFormat();
+  return <>
+    <span className={styles.operationMarker} data-status={operation.status} aria-hidden="true" />
+    <div className={styles.operationMain}>
+      <div className={styles.operationHeading}>
+        <div><strong>{operation.action}</strong><span>{operation.target}</span></div>
+        <Badge status={operation.status}>{t(`operationStates.${operation.state}`)}</Badge>
+      </div>
+      {operation.status === "info" ? <Progress aria-label={t("progressLabel", { name: operation.action })} max={100} value={operation.progress} /> : null}
+      <div className={styles.operationMeta}>
+        <span>{operation.productName}</span><span>{t(`subjectTypes.${operation.actor.type}`)} · {operation.actor.id}</span><span>{format.timestamp(operation.startedAt)}</span>
+      </div>
+    </div>
+  </>;
+}
+
+function OperationCredential({ operation }: { operation: OperationScene }) {
+  const t = useTranslations("CloudExperience");
+  if (operation.actor.accessKeyId) return <>{t("accessKeyCredential")} · <Typography.Code>{operation.actor.accessKeyId}</Typography.Code></>;
+  if (operation.actor.roleSession) return <>{t("roleSessionCredential")} · <Typography.Code>{operation.actor.roleSession.sessionId}</Typography.Code></>;
+  return <>{t("credentialNotRecorded")}</>;
+}
+
+function OperationSessionSource({ operation }: { operation: OperationScene }) {
+  const t = useTranslations("CloudExperience");
+  const session = operation.actor.roleSession;
+  if (!session) return null;
+  if (session.sourceUserId) return <>{t("subjectTypes.USER")} · <Typography.Code>{session.sourceUserId}</Typography.Code></>;
+  if (session.sourceServicePrincipalId) return <>{t("subjectTypes.SERVICE_ACCOUNT")} · <Typography.Code>{session.sourceServicePrincipalId}</Typography.Code></>;
+  return null;
+}
+
+function OperationList({ operations, compact = false }: { operations: OperationScene[]; compact?: boolean }) {
+  const t = useTranslations("CloudExperience");
+  const format = useConsoleFormat();
+  if (operations.length === 0) {
+    return <EmptyState title={t("operationsEmpty")} description={t("operationsEmptyHint")} />;
+  }
+  return (
+    <div className={styles.operationList}>
+      {operations.map((operation) => compact ? (
+        <article className={styles.operationRow} key={operation.id}>
+          <div className={styles.operationCompactSummary}><OperationSummary operation={operation} /></div>
+        </article>
+      ) : (
+        <details className={styles.operationRow} key={operation.id}>
+          <summary aria-label={t("operationSummary", { name: `${operation.action} · ${operation.target} · ${t(`operationStates.${operation.state}`)}` })} className={styles.operationSummary}>
+            <OperationSummary operation={operation} />
+            <span className={styles.operationDetailCue}>{t("details")}<ChevronDown aria-hidden="true" /></span>
+          </summary>
+          <div className={styles.operationDetails}>
+            <Alert status={operation.status === "danger" ? "danger" : operation.status === "success" ? "success" : "info"}>{t(`guidance.${operation.state}`)}</Alert>
+            <dl>
+              <div><dt>{t("operationId")}</dt><dd><Typography.Code>{operation.id}</Typography.Code></dd></div>
+              <div><dt>{t("progress")}</dt><dd>{format.number(operation.progress / 100, { style: "percent" })}</dd></div>
+              <div><dt>{t("actor")}</dt><dd>{t(`subjectTypes.${operation.actor.type}`)} · <Typography.Code>{operation.actor.id}</Typography.Code></dd></div>
+              <div><dt>{t("credentialAttribution")}</dt><dd><OperationCredential operation={operation} /></dd></div>
+              {operation.actor.roleSession ? <div><dt>{t("sessionSource")}</dt><dd><OperationSessionSource operation={operation} /></dd></div> : null}
+              <div><dt>{t("owningProduct")}</dt><dd>{operation.productName}</dd></div>
+              <div><dt>{t("target")}</dt><dd>{operation.target}</dd></div>
+              <div><dt>{t("started")}</dt><dd>{format.timestamp(operation.startedAt)}</dd></div>
+            </dl>
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function AlertList({ alerts }: { alerts: AlertScene[] }) {
+  const t = useTranslations("Notifications");
+  const format = useFormatter();
+  if (alerts.length === 0) {
+    return <EmptyState compact icon={<CheckCircle2 />} title={t("noAlerts")} />;
+  }
+  return (
+    <div className={styles.alertList}>
+      {alerts.map((alert) => (
+        <article className={styles.alertRow} key={alert.id}>
+          <span className={styles.alertIcon} data-status={alert.status}><AlertTriangle aria-hidden="true" /></span>
+          <div><strong>{alert.title}</strong><span>{alert.serviceName} · {alert.owner} · {format.dateTime(new Date(alert.startedAt), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}</span></div>
+          <Badge status={alert.status}>{t(`severities.${alert.severity}`)}</Badge>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function CloudOverview({ scene, scope }: {
+  scene: Extract<ConsoleContentScene, { kind: "cloud-overview" }>;
+  scope?: ResourceScope;
+}) {
+  const directory = useTranslations("ServiceDirectory");
+  const t = useTranslations("CloudExperience");
+  const setHeaderPanel = useConsoleUiStore((state) => state.setHeaderPanel);
+  const ready = scene.regionCount > 0 && scene.readyRegions === scene.regionCount;
+  return (
+    <div className={styles.pageStack}>
+      <section className={styles.welcomeCard}>
+        <div>
+          <Typography.Eyebrow>{t("welcomeEyebrow")}</Typography.Eyebrow>
+          <Typography.Title as="h2" level={2}>{t("welcome")}</Typography.Title>
+          <p>{t("runningSummary", { count: scene.metrics.find((item) => item.id === "active-operations")?.value ?? 0 })} {t("pendingSummary", { count: scene.metrics.find((item) => item.id === "active-alerts")?.value ?? 0 })}</p>
+        </div>
+        <div className={styles.quickActions}>
+          <Button aria-haspopup="dialog" onClick={() => setHeaderPanel("products")}>{t("createResources")} <ArrowRight aria-hidden="true" /></Button>
+          <Button asChild variant="secondary"><Link href="/console/resources/">{t("viewResources")}</Link></Button>
+        </div>
+      </section>
+
+      <ConsoleMetrics metrics={scene.metrics} />
+
+      <ContentLayout>
+        <ContentLayout.Main>
+          <Card>
+            <Card.Header>
+              <div><Typography.Title as="h2" level={3}>{directory("common")}</Typography.Title><Typography.Text tone="muted">{directory("commonHint")}</Typography.Text></div>
+              <Button aria-haspopup="dialog" onClick={() => setHeaderPanel("products")} size="small" variant="ghost">{t("allProducts")} <ArrowRight aria-hidden="true" /></Button>
+            </Card.Header>
+            <Card.Body><CommonServiceLinks /></Card.Body>
+          </Card>
+          <Card>
+            <Card.Header>
+              <div><Typography.Title as="h2" level={3}>{t("recentResources")}</Typography.Title><Typography.Text tone="muted">{t("recentResourcesHint")}</Typography.Text></div>
+              <Link className={styles.textLink} href="/console/resources/">{t("resourceCenter")} <ArrowRight aria-hidden="true" /></Link>
+            </Card.Header>
+            <ResourceTable compact resources={scene.recentResources} scope={scope} />
+          </Card>
+        </ContentLayout.Main>
+        <ContentLayout.Aside>
+          <Card>
+            <Card.Header><div><Typography.Title as="h2" level={3}>{t("attention")}</Typography.Title><Typography.Text tone="muted">{t("attentionHint")}</Typography.Text></div></Card.Header>
+            <Card.Body className={styles.attentionBody}>
+              <AlertList alerts={scene.alerts} />
+              <div className={styles.asideDivider} />
+              <OperationList compact operations={scene.operations} />
+            </Card.Body>
+          </Card>
+          <Card className={styles.readinessCard}>
+            <Card.Body>
+              <div className={styles.readinessTop}><span className={styles.readinessIcon}><CloudCog aria-hidden="true" /></span><Badge status={ready ? "success" : "warning"}>{t(ready ? "platformReady" : "platformAttention")}</Badge></div>
+              <Typography.Title as="h3" level={3}>{t("regionCount", { count: scene.regionCount })}</Typography.Title>
+              <p>{t("regionsReadyHint", { count: scene.readyRegions })}</p>
+              <Link className={styles.textLink} href="/console/regions/">{t("viewRegionState")} <ArrowRight aria-hidden="true" /></Link>
+            </Card.Body>
+          </Card>
+        </ContentLayout.Aside>
+      </ContentLayout>
+    </div>
+  );
+}
+
+function ResourceDirectory({ scene, scope }: {
+  scene: Extract<ConsoleContentScene, { kind: "resources" }>;
+  scope?: ResourceScope;
+}) {
+  const toolbarLabels = useTableToolbarLabels();
+  const t = useTranslations("CloudExperience");
+  const resourceKinds = useTranslations("GlobalSearch.resourceKinds");
+  const [query, setQuery] = useState("");
+  const resources = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return scene.resources.filter((item) => (!scope || scope.regionId === "all" || item.regionId === scope.regionId || item.regionId === "all") && (!normalized || [item.name, item.id, item.kind, resourceKinds(item.kind), t(`resourceStates.${item.state}`), item.productName, item.projectName, item.regionName]
+      .some((value) => value.toLowerCase().includes(normalized))));
+  }, [query, scene.resources, resourceKinds, t, scope]);
+  if (scene.directory === "applications") return <PreviewApplicationDirectory page={{ items: scene.readSnapshots.map((snapshot) => snapshot.application), nextAfter: null }} />;
+  return (
+    <Card>
+      <TableToolbar labels={toolbarLabels} search={{ label: t("searchResources"), placeholder: t("resourcesPlaceholder"), value: query, onChange: setQuery }} status={t("resultCount", { count: resources.length })} />
+      <ResourceTable resources={resources} scope={scope} />
+    </Card>
+  );
+}
+
+type ApplicationReadOutcome = "ready" | "forbidden" | "unavailable";
+type ApplicationReadView = ApplicationReadLoad | { status: "loading" };
+
+const applicationReadOutcomes: ApplicationReadOutcome[] = ["ready", "forbidden", "unavailable"];
+const applicationReadFactKeys = ["scope", "resourceVersion", "etag", "labels", "createdAt", "updatedAt"] as const;
+const applicationReadFailureMessages = {
+  invalid: "applicationRead.messages.invalid",
+  expired: "applicationRead.messages.expired",
+  forbidden: "applicationRead.messages.forbidden",
+  notFound: "applicationRead.messages.notFound",
+  unavailable: "applicationRead.messages.unavailable"
+} as const;
+
+function applicationReadBadge(status: ApplicationReadView["status"]) {
+  if (status === "ready") return "success" as const;
+  if (status === "loading") return "info" as const;
+  if (status === "forbidden") return "danger" as const;
+  return "warning" as const;
+}
+
+function ApplicationReadPanel({ resourceId, load, previewControls, onRetry }: {
+  resourceId: string;
+  load: ApplicationReadView;
+  previewControls?: ReactNode;
+  onRetry?(): void;
+}) {
+  const t = useTranslations("CloudExperience");
+  const format = useConsoleFormat();
+  const heading = useRef<HTMLHeadingElement>(null);
+  const snapshot: ApplicationReadSnapshot | undefined = load.status === "ready" ? load.snapshot : undefined;
+  const application = snapshot?.application;
+  const metadata = application?.metadata;
+  const labelCount = Object.keys(metadata?.labels ?? {}).length;
+  let body: ReactNode;
+  if (load.status === "ready") {
+    const readyMetadata = load.snapshot.application.metadata;
+    body = <>
+      <Alert status="info">{t("applicationRead.boundary")}</Alert>
+      <dl className={styles.resourceFacts}>
+        <div><dt>{t("applicationRead.scope")}</dt><dd>{readyMetadata.scope.kind} · <code>{readyMetadata.scope.tenantId}</code></dd></div>
+        <div><dt>{t("applicationRead.resourceVersion")}</dt><dd>{readyMetadata.resourceVersion}</dd></div>
+        <div><dt>{t("applicationRead.etag")}</dt><dd><code>{load.snapshot.etag}</code></dd></div>
+        <div><dt>{t("applicationRead.labels")}</dt><dd>{t("applicationRead.labelCount", { count: labelCount })}</dd></div>
+        <div><dt>{t("applicationRead.createdAt")}</dt><dd>{format.timestamp(readyMetadata.createdAt)}</dd></div>
+        <div><dt>{t("applicationRead.updatedAt")}</dt><dd>{format.timestamp(readyMetadata.updatedAt)}</dd></div>
+      </dl>
+    </>;
+  } else if (load.status === "loading") {
+    body = <div className={styles.applicationReadLoading}>
+      <LoadingFeedback label={t("applicationRead.loading")}>
+        <dl aria-hidden="true" className={styles.resourceFacts}>
+          {applicationReadFactKeys.map((key) => <div key={key}><dt>{t(`applicationRead.${key}`)}</dt><dd><Skeleton /></dd></div>)}
+        </dl>
+      </LoadingFeedback>
+    </div>;
+  } else {
+    body = <div className={styles.applicationReadState}>
+      <Alert status={load.status === "forbidden" ? "danger" : load.status === "notFound" ? "info" : "warning"}>{t(applicationReadFailureMessages[load.status])}</Alert>
+      {load.status === "unavailable" && onRetry ? <Button type="button" variant="secondary" onClick={onRetry}>{t("applicationRead.retry")}</Button> : null}
+    </div>;
+  }
+  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [resourceId]);
+  return <Card>
+    <Card.Header>
+      <div className={styles.resourceIdentity}>
+        <span className={styles.resourceIdentityIcon}><Boxes aria-hidden="true" /></span>
+        <div>
+          <span>{application ? `${application.kind} · ${application.apiVersion}` : t(previewControls ? "applicationRead.previewEyebrow" : "applicationRead.liveEyebrow")}</span>
+          <h2 id="application-resource-detail-title" ref={heading} tabIndex={-1}>{metadata?.name ?? t("applicationRead.title")}</h2>
+          <code>{resourceId}</code>
+        </div>
+        <Badge status={applicationReadBadge(load.status)}>{t(`applicationRead.states.${load.status}`)}</Badge>
+      </div>
+    </Card.Header>
+    <Card.Body>
+      <div className={styles.applicationReadBody}>
+        {body}
+        {previewControls}
+      </div>
+    </Card.Body>
+  </Card>;
+}
+
+function ApplicationResourceDetail({ resource, readSnapshot, tagSnapshot, deploymentSnapshot }: {
+  resource: UnifiedResourceScene;
+  readSnapshot: Extract<ConsoleContentScene, { kind: "resources"; directory: "applications" }>["readSnapshots"][number] | undefined;
+  tagSnapshot: Extract<ConsoleContentScene, { kind: "resources"; directory: "applications" }>["tagSnapshots"][number] | undefined;
+  deploymentSnapshot: Extract<ConsoleContentScene, { kind: "resources"; directory: "applications" }>["deploymentSnapshots"][number] | undefined;
+}) {
+  const t = useTranslations("CloudExperience");
+  const scenarioId = useId();
+  const [outcome, setOutcome] = useState<ApplicationReadOutcome>("ready");
+  const effectiveOutcome: ApplicationReadOutcome = outcome === "ready" && !readSnapshot ? "unavailable" : outcome;
+  const load: ApplicationReadView = effectiveOutcome === "ready" && readSnapshot
+    ? { status: "ready", snapshot: readSnapshot }
+    : { status: effectiveOutcome === "forbidden" ? "forbidden" : "unavailable" };
+  const readable = load.status === "ready";
+  return <section aria-labelledby="application-resource-detail-title" className={styles.resourceDetail}>
+    <Link className={styles.backLink} href="/console/applications/"><ArrowLeft aria-hidden="true" />{t("backToApplications")}</Link>
+    <ApplicationReadPanel resourceId={resource.id} load={load} onRetry={readSnapshot ? () => setOutcome("ready") : undefined} previewControls={<details className={styles.scenarioDetails}>
+            <summary>{t("applicationRead.tryOutcomes")} · {t(`applicationRead.states.${effectiveOutcome}`)}</summary>
+            <FormField id={scenarioId} label={t("applicationRead.scenarioLabel")} hint={t("applicationRead.scenarioHint")}>
+              <Select id={scenarioId} value={outcome} options={applicationReadOutcomes.map((value) => ({ value, label: t(`applicationRead.options.${value}`) }))} onValueChange={(value) => setOutcome(value as ApplicationReadOutcome)} />
+            </FormField>
+          </details>} />
+    {readable ? <>
+      <ApplicationDeploymentManagement key={`${resource.id}:${deploymentSnapshot?.deployment.resourceVersion ?? "unavailable"}`} resource={resource} initialSnapshot={deploymentSnapshot} />
+      <ApplicationTagManagement key={`${resource.id}:${tagSnapshot?.etag ?? "unavailable"}`} resource={resource} initialSnapshot={tagSnapshot} />
+    </> : null}
+  </section>;
+}
+
+function LiveApplicationResourceDetail({ resourceId }: { resourceId: string }) {
+  const t = useTranslations("CloudExperience");
+  const { readApplication } = useControlPlane();
+  const [retryRevision, setRetryRevision] = useState(0);
+  const [result, setResult] = useState<{
+    reader: typeof readApplication;
+    resourceId: string;
+    retryRevision: number;
+    load: ApplicationReadView;
+  }>(() => ({ reader: readApplication, resourceId, retryRevision: -1, load: { status: "loading" } }));
+  const load: ApplicationReadView = result.reader === readApplication && result.resourceId === resourceId && result.retryRevision === retryRevision
+    ? result.load
+    : { status: "loading" };
+  const revision = useRef(0);
+  useEffect(() => {
+    let active = true;
+    const current = ++revision.current;
+    void readApplication(resourceId).then((next) => {
+      if (active && revision.current === current) setResult({ reader: readApplication, resourceId, retryRevision, load: next });
+    });
+    return () => { active = false; };
+  }, [readApplication, resourceId, retryRevision]);
+
+  function retry() {
+    setRetryRevision((value) => value + 1);
+  }
+
+  return <section aria-labelledby="application-resource-detail-title" className={styles.resourceDetail}>
+    <Link className={styles.backLink} href="/console/applications/"><ArrowLeft aria-hidden="true" />{t("backToApplications")}</Link>
+    <ApplicationReadPanel resourceId={resourceId} load={load} onRetry={retry} />
+  </section>;
+}
+
+type ApplicationDirectoryView = ApplicationDirectoryLoad | { status: "loading" };
+type ApplicationDirectoryReader = ReturnType<typeof useControlPlane>["listApplications"];
+type ApplicationDirectoryNavigation = {
+  reader: ApplicationDirectoryReader;
+  cursors: Array<string | undefined>;
+  pageIndex: number;
+  refreshRevision: number;
+};
+
+function initialApplicationDirectoryNavigation(reader: ApplicationDirectoryReader): ApplicationDirectoryNavigation {
+  return { reader, cursors: [undefined], pageIndex: 0, refreshRevision: 0 };
+}
+
+const applicationDirectoryFailureMessages = {
+  invalidCursor: "applicationDirectory.messages.invalidCursor",
+  expired: "applicationDirectory.messages.expired",
+  forbidden: "applicationDirectory.messages.forbidden",
+  unavailable: "applicationDirectory.messages.unavailable"
+} as const;
+
+function ApplicationDirectoryTable({ page }: { page: ApplicationDirectoryPage }) {
+  const t = useTranslations("CloudExperience");
+  const format = useConsoleFormat();
+  return <Table aria-label={t("applicationDirectory.table")} mobileLayout="grid">
+    <thead><tr>
+      <th scope="col">{t("applicationDirectory.columns.application")}</th>
+      <th scope="col">{t("applicationDirectory.columns.version")}</th>
+      <th scope="col">{t("applicationDirectory.columns.labels")}</th>
+      <th scope="col">{t("applicationDirectory.columns.updated")}</th>
+    </tr></thead>
+    <tbody>{page.items.map((application) => {
+      const metadata = application.metadata;
+      return <tr key={metadata.id}>
+        <td data-label={t("applicationDirectory.columns.application")}><Table.PrimaryAction asChild><Link href={`/console/applications/?resource=${encodeURIComponent(metadata.id)}`}>{metadata.name}</Link></Table.PrimaryAction><small><code>{metadata.id}</code></small></td>
+        <td data-label={t("applicationDirectory.columns.version")}>v{metadata.resourceVersion}</td>
+        <td data-label={t("applicationDirectory.columns.labels")}>{t("applicationRead.labelCount", { count: Object.keys(metadata.labels ?? {}).length })}</td>
+        <td data-label={t("applicationDirectory.columns.updated")} data-mobile-span="full">{format.timestamp(metadata.updatedAt)}</td>
+      </tr>;
+    })}</tbody>
+  </Table>;
+}
+
+function ApplicationDirectoryLoadingTable() {
+  const t = useTranslations("CloudExperience");
+  return <Table aria-busy="true" aria-label={t("applicationDirectory.table")} mobileLayout="grid">
+    <thead><tr>
+      <th scope="col">{t("applicationDirectory.columns.application")}</th>
+      <th scope="col">{t("applicationDirectory.columns.version")}</th>
+      <th scope="col">{t("applicationDirectory.columns.labels")}</th>
+      <th scope="col">{t("applicationDirectory.columns.updated")}</th>
+    </tr></thead>
+    <tbody><tr><td className={styles.applicationDirectoryLoadingCell} colSpan={4}>
+      <LoadingFeedback label={t("applicationDirectory.loading")} labelVisible={false}>
+        <div aria-hidden="true" className={styles.applicationDirectorySkeleton}>
+          {Array.from({ length: 4 }, (_, index) => <div className={styles.applicationDirectorySkeletonRow} key={index}><Skeleton /><Skeleton /><Skeleton /><Skeleton /></div>)}
+        </div>
+      </LoadingFeedback>
+    </td></tr></tbody>
+  </Table>;
+}
+
+function PreviewApplicationDirectory({ page }: { page: ApplicationDirectoryPage }) {
+  const t = useTranslations("CloudExperience");
+  return <Card aria-labelledby="application-directory-title">
+    <Card.Header>
+      <div>
+        <Typography.Title as="h2" id="application-directory-title" level={3}>{t("applicationDirectory.title")}</Typography.Title>
+        <Typography.Text tone="muted">{t("applicationDirectory.previewHint")}</Typography.Text>
+      </div>
+      <Badge status="info">{t("applicationDirectory.previewBadge")}</Badge>
+    </Card.Header>
+    <Card.Body className={styles.applicationDirectoryBody}>
+      <p className={styles.applicationDirectoryBoundary}>{t("applicationDirectory.previewBoundary")}</p>
+      {page.items.length ? <ApplicationDirectoryTable page={page} /> : <EmptyState title={t("applicationDirectory.emptyTitle")} description={t("applicationDirectory.previewEmptyHint")} />}
+    </Card.Body>
+    <Table.Footer note={t("applicationDirectory.previewCursorBoundary")}><TablePagination mode="cursor" summary={t("applicationDirectory.window", { page: 1 })}
+      previous={{ label: t("applicationDirectory.previous"), disabled: true, onClick() {} }}
+      next={{ label: t("applicationDirectory.next"), disabled: true, onClick() {} }} /></Table.Footer>
+  </Card>;
+}
+
+function LiveApplicationDirectory({ load, pageIndex, onPrevious, onNext, onRetry, onRestart }: {
+  load: ApplicationDirectoryView;
+  pageIndex: number;
+  onPrevious(): void;
+  onNext(cursor: string): void;
+  onRetry(): void;
+  onRestart(): void;
+}) {
+  const t = useTranslations("CloudExperience");
+  const ready = load.status === "ready" ? load.page : null;
+  const status = load.status === "loading" ? "info" : load.status === "ready" ? "success" : load.status === "forbidden" ? "danger" : "warning";
+  const badge = load.status === "ready" ? "ready" : load.status;
+  let content: ReactNode;
+  if (load.status === "loading") {
+    content = <ApplicationDirectoryLoadingTable />;
+  } else if (load.status === "ready" && load.page.items.length > 0) {
+    content = <ApplicationDirectoryTable page={load.page} />;
+  } else if (load.status === "ready") {
+    content = <EmptyState
+      title={t(load.page.nextAfter ? "applicationDirectory.emptyWindowTitle" : "applicationDirectory.emptyTitle")}
+      description={t(load.page.nextAfter ? "applicationDirectory.emptyWindowHint" : "applicationDirectory.emptyHint")}
+    />;
+  } else {
+    content = <EmptyState
+      title={t(`applicationDirectory.states.${load.status}`)}
+      description={t(applicationDirectoryFailureMessages[load.status])}
+      action={load.status === "invalidCursor"
+        ? <Button type="button" variant="secondary" onClick={onRestart}>{t("applicationDirectory.restart")}</Button>
+        : load.status === "unavailable" ? <Button type="button" variant="secondary" onClick={onRetry}>{t("applicationDirectory.retry")}</Button> : undefined}
+    />;
+  }
+  return <Card aria-labelledby="application-directory-title">
+    <Card.Header>
+      <div>
+        <Typography.Title as="h2" id="application-directory-title" level={3}>{t("applicationDirectory.title")}</Typography.Title>
+        <Typography.Text tone="muted">{t("applicationDirectory.liveHint")}</Typography.Text>
+      </div>
+      <Badge status={status}>{t(`applicationDirectory.states.${badge}`)}</Badge>
+    </Card.Header>
+    <Card.Body className={styles.applicationDirectoryBody}>
+      <p className={styles.applicationDirectoryBoundary}>{t("applicationDirectory.boundary")}</p>
+      {content}
+    </Card.Body>
+    {load.status === "loading" || ready ? <Table.Footer note={t("applicationDirectory.cursorBoundary")}>
+      <TablePagination mode="cursor" disabled={load.status === "loading"} summary={t("applicationDirectory.window", { page: pageIndex + 1 })}
+        previous={{ label: t("applicationDirectory.previous"), disabled: pageIndex === 0, onClick: onPrevious }}
+        next={{ label: t("applicationDirectory.next"), disabled: !ready?.nextAfter, onClick: () => { if (ready?.nextAfter) onNext(ready.nextAfter); } }} />
+    </Table.Footer> : null}
+  </Card>;
+}
+
+function LiveApplicationResources({ selectedId }: { selectedId: string | null }) {
+  const { listApplications } = useControlPlane();
+  const [navigation, setNavigation] = useState<ApplicationDirectoryNavigation>(() => initialApplicationDirectoryNavigation(listApplications));
+  const activeNavigation = navigation.reader === listApplications ? navigation : initialApplicationDirectoryNavigation(listApplications);
+  const { cursors, pageIndex, refreshRevision } = activeNavigation;
+  const [result, setResult] = useState<{
+    reader: typeof listApplications;
+    cursor: string | undefined;
+    refreshRevision: number;
+    load: ApplicationDirectoryView;
+  }>(() => ({ reader: listApplications, cursor: undefined, refreshRevision: -1, load: { status: "loading" } }));
+  const requestRevision = useRef(0);
+  const completedRequest = useRef<{ reader: typeof listApplications; cursor: string | undefined; refreshRevision: number } | null>(null);
+  const directoryTenant = useRef<{ reader: typeof listApplications; tenantId?: string }>({ reader: listApplications });
+  const cursor = cursors[pageIndex];
+  const load: ApplicationDirectoryView = result.reader === listApplications && result.cursor === cursor && result.refreshRevision === refreshRevision
+    ? result.load
+    : { status: "loading" };
+
+  useEffect(() => {
+    if (selectedId) return;
+    const completed = completedRequest.current;
+    if (completed?.reader === listApplications && completed.cursor === cursor && completed.refreshRevision === refreshRevision) return;
+    if (directoryTenant.current.reader !== listApplications) directoryTenant.current = { reader: listApplications };
+    let active = true;
+    const revision = ++requestRevision.current;
+    void listApplications(cursor).then((next) => {
+      if (!active || requestRevision.current !== revision) return;
+      let resolved: ApplicationDirectoryView = next;
+      if (next.status === "ready" && next.page.items.length > 0) {
+        const tenantId = next.page.items[0]!.metadata.scope.tenantId;
+        if (directoryTenant.current.tenantId && directoryTenant.current.tenantId !== tenantId) {
+          resolved = { status: "unavailable" };
+        } else {
+          directoryTenant.current = { reader: listApplications, tenantId };
+        }
+      }
+      completedRequest.current = { reader: listApplications, cursor, refreshRevision };
+      setResult({ reader: listApplications, cursor, refreshRevision, load: resolved });
+    });
+    return () => { active = false; };
+  }, [cursor, listApplications, refreshRevision, selectedId]);
+
+  if (selectedId) return <LiveApplicationResourceDetail key={selectedId} resourceId={selectedId} />;
+  return <LiveApplicationDirectory load={load} pageIndex={pageIndex}
+    onPrevious={() => setNavigation((current) => {
+      const base = current.reader === listApplications ? current : initialApplicationDirectoryNavigation(listApplications);
+      return { ...base, pageIndex: Math.max(0, base.pageIndex - 1) };
+    })}
+    onNext={(next) => setNavigation((current) => {
+      const base = current.reader === listApplications ? current : initialApplicationDirectoryNavigation(listApplications);
+      return { ...base, cursors: [...base.cursors.slice(0, base.pageIndex + 1), next], pageIndex: base.pageIndex + 1 };
+    })}
+    onRetry={() => setNavigation((current) => {
+      const base = current.reader === listApplications ? current : initialApplicationDirectoryNavigation(listApplications);
+      return { ...base, refreshRevision: base.refreshRevision + 1 };
+    })}
+    onRestart={() => {
+      directoryTenant.current = { reader: listApplications };
+      const base = navigation.reader === listApplications ? navigation : initialApplicationDirectoryNavigation(listApplications);
+      setNavigation({ ...initialApplicationDirectoryNavigation(listApplications), refreshRevision: base.refreshRevision + 1 });
+    }} />;
+}
+
+function Resources({ scene, scope }: {
+  scene: Extract<ConsoleContentScene, { kind: "resources" }>;
+  scope?: ResourceScope;
+}) {
+  const t = useTranslations("CloudExperience");
+  const params = useSearchParams();
+  const selectedId = scene.directory === "applications" ? params.get("resource") : null;
+  if (scene.directory === "applications" && scene.listing === "unavailable") return <LiveApplicationResources selectedId={selectedId} />;
+  if (!selectedId || scene.directory !== "applications") return <ResourceDirectory scene={scene} scope={scope} />;
+  const selected = scene.resources.find((resource) => resource.id === selectedId);
+  if (selected) return <ApplicationResourceDetail key={selected.id} resource={selected} readSnapshot={scene.readSnapshots.find((snapshot) => snapshot.application.metadata.id === selected.id)} tagSnapshot={scene.tagSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} deploymentSnapshot={scene.deploymentSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} />;
+  return <Card><Card.Body><EmptyState title={t("resourceNotFound")} description={t("resourceNotFoundHint")} action={<Button asChild variant="secondary"><Link href="/console/applications/">{t("backToApplications")}</Link></Button>} /></Card.Body></Card>;
+}
+
+function Operations({ scene }: { scene: Extract<ConsoleContentScene, { kind: "operations" }> }) {
+  const t = useTranslations("CloudExperience");
+  const toolbarLabels = useTableToolbarLabels();
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<"all" | OperationScene["state"]>("all");
+  const operations = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return scene.operations.filter((operation) => (
+      (status === "all" || operation.state === status) &&
+      (!normalized || [operation.id, operation.action, operation.target, operation.productName, operation.actor.id, operation.actor.type,
+        operation.actor.accessKeyId, operation.actor.roleSession?.sessionId, operation.actor.roleSession?.sourceUserId,
+        operation.actor.roleSession?.sourceServicePrincipalId, t(`subjectTypes.${operation.actor.type}`), t(`operationStates.${operation.state}`)]
+        .some((value) => value?.toLowerCase().includes(normalized)))
+    ));
+  }, [query, scene.operations, status, t]);
+
+  return (
+    <Card>
+      <TableToolbar labels={toolbarLabels} search={{ label: t("searchOperations"), placeholder: t("operationsPlaceholder"), value: query, onChange: setQuery }} filters={[{ id: "state", label: t("filterOperationState"), value: status, onChange: (value) => setStatus(value as typeof status), options: [{ value: "all", label: t("allStates") }, ...(["RUNNING", "FAILED", "SUCCEEDED"] as const).map((state) => ({ value: state, label: t(`operationStates.${state}`) }))] }]} status={t("resultCount", { count: operations.length })} tools={<Badge status="info">{t("runningCount", { count: scene.operations.filter((item) => item.state === "RUNNING").length })}</Badge>} />
+      <Card.Body>
+        {operations.length || scene.operations.length === 0 ? <OperationList operations={operations} /> : <EmptyState title={t("noMatchingOperations")} description={t("noMatchingOperationsHint")} />}
+      </Card.Body>
+    </Card>
+  );
+}
+
+function DevOps({ scene }: { scene: Extract<ConsoleContentScene, { kind: "devops" }> }) {
+  const t = useTranslations("CloudExperience");
+  const format = useConsoleFormat();
+  const environments = [...new Set(scene.pipelines.map((pipeline) => pipeline.environment))].map((name) => {
+    const runs = scene.pipelines.filter((pipeline) => pipeline.environment === name);
+    const status = runs.some((run) => run.state === "FAILED") ? "warning" : runs.some((run) => run.state === "RUNNING") ? "info" : "success";
+    return { name, count: runs.length, status } as const;
+  });
+  if (scene.pipelines.length === 0) return <EmptyState title={t("pipelinesEmpty")} description={t("pipelinesEmptyHint")} />;
+  return (
+    <div className={styles.pageStack}>
+      {!scene.view ? <ConsoleMetrics metrics={scene.metrics} /> : null}
+      {scene.view !== "environments" ? <Card>
+        <Card.Header>
+          <div><Typography.Title as="h2" level={3}>{t("recentPipelines")}</Typography.Title><Typography.Text tone="muted">{t("pipelinesHint")}</Typography.Text></div>
+          <span className={styles.headerHint}>{t("mockSnapshot")}</span>
+        </Card.Header>
+        <Table aria-label={t("pipelinesTable")} mobileLayout="grid">
+              <thead><tr><th scope="col">{t("pipeline")}</th><th scope="col">{t("code")}</th><th scope="col">{t("environment")}</th><th scope="col">{t("state")}</th><th scope="col">{t("duration")}</th><th scope="col">{t("triggered")}</th></tr></thead>
+              <tbody>{scene.pipelines.map((pipeline) => (
+                <tr key={pipeline.id}>
+                  <td><strong>{pipeline.name}</strong><small>{pipeline.repository}</small></td>
+                  <td data-label={t("code")}><strong>{pipeline.branch}</strong><small>{pipeline.commit}</small></td>
+                  <td data-label={t("environment")}>{pipeline.environment}</td><td data-label={t("state")}><Badge status={pipeline.status}>{t(`operationStates.${pipeline.state}`)}</Badge></td><td data-label={t("duration")}>{format.duration(pipeline.durationSeconds)}</td><td data-label={t("triggered")} data-mobile-span="full">{format.timestamp(pipeline.triggeredAt)}</td>
+                </tr>
+              ))}</tbody>
+            </Table>
+      </Card> : null}
+      {scene.view !== "pipelines" ? <section className={styles.deliveryGrid} aria-label={t("deliveryEnvironments")}>
+        {environments.map((environment) => (
+          <Card key={environment.name}><Card.Body className={styles.environmentCard}><span className={styles.environmentIcon}><Server aria-hidden="true" /></span><div><strong>{environment.name}</strong><span>{t("environmentRuns", { count: environment.count })}</span></div><Badge status={environment.status}>{t(environment.status === "success" ? "stable" : environment.status === "info" ? "deploying" : "needsAttention")}</Badge></Card.Body></Card>
+        ))}
+      </section> : null}
+    </div>
+  );
+}
+
+function Trend({ values, label }: { values: number[]; label: string }) {
+  const width = 180;
+  const height = 48;
+  const points = values.map((value, index) => `${(index / Math.max(1, values.length - 1)) * width},${height - (value / 100) * height}`).join(" ");
+  return (
+    <svg aria-label={label} className={styles.trend} preserveAspectRatio="none" role="img" viewBox={`0 0 ${width} ${height}`}>
+      <polyline fill="none" points={points} vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function Observability({ scene }: { scene: Extract<ConsoleContentScene, { kind: "observability" }> }) {
+  const t = useTranslations("CloudExperience");
+  const format = useFormatter();
+  const health = <Card>
+            <Card.Header><div><Typography.Title as="h2" level={3}>{t("serviceHealth")}</Typography.Title><Typography.Text tone="muted">{t("serviceHealthHint")}</Typography.Text></div><span className={styles.headerHint}>MOCK</span></Card.Header>
+            <Card.Body className={styles.healthList}>
+              {scene.services.length === 0 ? <EmptyState title={t("healthEmpty")} description={t("healthEmptyHint")} /> : null}
+              {scene.services.map((service) => (
+                <article className={styles.healthRow} key={service.id}>
+                  <div className={styles.healthIdentity}><span className={styles.serviceIcon}><Server aria-hidden="true" /></span><div><strong>{service.name}</strong><span>{service.productName}</span></div></div>
+                  <Trend label={t("healthTrend", { name: service.name })} values={service.trend} />
+                  <dl className={styles.healthFacts}><div><dt>{t("availability")}</dt><dd>{format.number(service.availability, { style: "percent", maximumFractionDigits: 2 })}</dd></div><div><dt>{t("latency")}</dt><dd>{format.number(service.latencyMs)} ms</dd></div><div><dt>{t("errorRate")}</dt><dd>{format.number(service.errorRate, { style: "percent", maximumFractionDigits: 2 })}</dd></div></dl>
+                  <Badge status={service.status}>{t(`resourceStates.${service.state}`)}</Badge>
+                </article>
+              ))}
+            </Card.Body>
+          </Card>;
+  const alerts = <Card>
+            <Card.Header><div><Typography.Title as="h2" level={3}>{t("currentAlerts")}</Typography.Title><Typography.Text tone="muted">{t("alertsHint")}</Typography.Text></div></Card.Header>
+            <Card.Body><AlertList alerts={scene.alerts} /></Card.Body>
+          </Card>;
+  if (scene.view === "health") return health;
+  if (scene.view === "alerts") return alerts;
+  return <div className={styles.pageStack}>
+    <ConsoleMetrics metrics={scene.metrics} />
+    <ContentLayout>
+      <ContentLayout.Main>{health}</ContentLayout.Main>
+      <ContentLayout.Aside>
+        {alerts}
+        {scene.services.length > 0 ? <Card className={styles.signalCard}><Card.Body><span className={styles.signalIcon}><Database aria-hidden="true" /></span><div><strong>{t("collectionHealthy")}</strong><span>{t("collectionHint")}</span></div><Badge status="success">{t("resourceStates.HEALTHY")}</Badge></Card.Body></Card> : null}
+      </ContentLayout.Aside>
+    </ContentLayout>
+  </div>;
+}
+
+export function ExperienceContentRenderer({ scene, scope }: {
+  scene: Extract<ConsoleContentScene, { kind: "cloud-overview" | "resources" | "operations" | "devops" | "observability" }>;
+  scope?: ResourceScope;
+}) {
+  if (scene.kind === "cloud-overview") return <CloudOverview scene={scene} scope={scope} />;
+  if (scene.kind === "resources") return <Suspense fallback={<ResourceDirectory scene={scene} scope={scope} />}><Resources scene={scene} scope={scope} /></Suspense>;
+  if (scene.kind === "operations") return <Operations scene={scene} />;
+  if (scene.kind === "devops") return <DevOps scene={scene} />;
+  return <Observability scene={scene} />;
+}

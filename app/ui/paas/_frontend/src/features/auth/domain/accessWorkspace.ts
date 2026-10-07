@@ -1,0 +1,595 @@
+import { parsePolicyDocument, type PolicyDocument } from "./policyDocument";
+import { AccessWorkspaceError } from "./accessWorkspaceError";
+import { validateRoleTrust, type RoleSessionCaller } from "./roleTrust";
+import { evaluateRoleAssumption, type AccessTestRequest } from "./policyEvaluation";
+import { accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, type AccessKeyNetworkRestrictions, type AccessKeyUsageObservation } from "./accessKeyNetwork";
+
+// Preview-only configuration. The diagnostic evaluator never replaces live IAM.
+export type AccessPolicy = {
+  id: string; name: string; description: string; kind: "system" | "custom";
+  tags: { key: string; value: string }[];
+  // Directory metadata only; never an input to authorization evaluation.
+  systemCategory?: "global" | "product";
+  versions: { id: number; document: PolicyDocument; createdAt: string }[];
+  defaultVersion: number; lastVersion: number; createdAt: string; updatedAt: string;
+};
+export type PolicyTargets = { userIds: string[]; groupIds: string[]; roleIds: string[] };
+export type AccessGroup = { id: string; name: string; description: string; memberIds: string[]; policyIds: string[]; createdAt: string };
+export type AccessRole = {
+  id: string; name: string; description: string;
+  trustedUserIds: string[]; policyIds: string[]; boundaryPolicyId?: string;
+  tags: { key: string; value: string }[]; sessionMinutes: number; consoleAccess: boolean; createdAt: string;
+};
+export type AccessRoleSession = { id: string; roleId: string; caller: RoleSessionCaller; createdAt: string; expiresAt: string; revokedAt?: string };
+export type AccessKey = {
+  id: string;
+  ownerId: string;
+  status: "ENABLED" | "DISABLED";
+  resourceVersion: number;
+  createdAt: string;
+  networkRestrictions: AccessKeyNetworkRestrictions;
+  usage: AccessKeyUsageObservation;
+};
+export type AccessKeyOwnerState = "active" | "passwordChangeRequired" | "disabled";
+export type PendingAccessKeyCreation =
+  | { ownerId: string; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string; status: "UNKNOWN" }
+  | { ownerId: string; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string; keyId: string; status: "COMMITTED_SECRET_LOST" };
+/** Preview recovery state only; it does not define a future IAM wire contract. */
+export type PendingAccountRuleChange = {
+  requestId: string;
+  baselineRuleVersion: number;
+  baselineLoginProtection: boolean;
+  requestedLoginProtection: boolean;
+  status: "UNKNOWN" | "UNRECOVERABLE";
+};
+/** Browser-memory rehearsal only; names deliberately do not define an IAM wire contract. */
+export type PendingNotificationAddressReplacement = {
+  mockVerificationId: string;
+  previousAddress: string;
+  targetAddress: string;
+  status: "PENDING_VERIFICATION" | "CONFIRM_UNKNOWN";
+};
+export type AccessSettings = {
+  loginProtection: boolean; accountRuleVersion: number;
+  accessKeyNetwork: AccessKeyNetworkRestrictions;
+};
+export type PersonalMfaPreviewState = {
+  factorState: "never-bound" | "bound" | "removed";
+  reauthenticationRequired: boolean;
+  recoveryState: "idle" | "rebind-required";
+  /** Non-secret, preview-only intent; provisioning material stays in the current view. */
+  pendingReplacement?: { requestId: string; expiresAt: string; accountRuleVersion: number; status: "PENDING" | "CONFIRMATION_UNKNOWN" };
+  demoCode?: "624810" | "731942";
+};
+export function validPreviewNotificationAddress(value: string): boolean {
+  const parts = value.split("@");
+  if (parts.length !== 2) return false;
+  const [local, domain] = parts;
+  if (!local || local.length > 64 || !/^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/.test(local)) return false;
+  return Boolean(domain && domain.length <= 253 && domain.includes(".") && domain.split(".").every((label) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label)));
+}
+export function previewTotpCode(state: PersonalMfaPreviewState): "624810" | "731942" { return state.demoCode ?? "624810"; }
+export function nextPreviewTotpCode(state: PersonalMfaPreviewState): "624810" | "731942" { return previewTotpCode(state) === "624810" ? "731942" : "624810"; }
+export type AccessEvent = { id: string; action: Exclude<AccessWorkspaceCommand["kind"], "remember-account-rule-change-unknown" | "mark-personal-mfa-replacement-unknown" | "inspect-personal-mfa-replacement" | "verify-personal-notification-address" | "begin-personal-notification-replacement" | "confirm-personal-notification-replacement" | "inspect-personal-notification-replacement"> | "sign-in" | "batch-users"; target: string; at: string };
+export type PreviewUserProfile = {
+  consoleAccess: boolean; programmaticAccess: boolean; passwordResetRequired: boolean;
+  loginProtection: boolean; tags: { key: string; value: string }[];
+};
+export function previewUserPrincipalId(loginName: string): string { return `principal-${loginName}`; }
+export type AccessWorkspace = {
+  mode: "preview"; accountId: string; groups: AccessGroup[]; policies: AccessPolicy[];
+  roles: AccessRole[]; keys: AccessKey[];
+  userPolicies: Record<string, string[]>; settings: AccessSettings; events: AccessEvent[];
+  personalMfa: PersonalMfaPreviewState;
+  personalNotificationAddress: string | null;
+  userProfiles: Record<string, PreviewUserProfile>;
+  userBoundaries: Record<string, string>; roleSessions: AccessRoleSession[];
+  pendingKeyCreation: PendingAccessKeyCreation | null;
+  pendingAccountRuleChange: PendingAccountRuleChange | null;
+  pendingNotificationAddressReplacement: PendingNotificationAddressReplacement | null;
+  testResources: { id: string; reference: string; tags?: Record<string, string> }[];
+  // Synthetic diagnostic inputs, not canned decisions or authorization rules.
+  testRequests: { id: "path" | "duplicate" | "tags" | "deny" | "boundary" | "ungranted"; request: AccessTestRequest }[];
+};
+export type AccessWorkspaceCommand =
+  | { kind: "create-subuser"; loginName: string; displayName: string; profile: PreviewUserProfile; policyIds: string[]; groupIds: string[] }
+  | { kind: "create-group"; name: string; description: string }
+  | { kind: "update-group"; id: string; name: string; description: string }
+  | { kind: "change-group-members"; id: string; added: string[]; removed: string[] }
+  | { kind: "change-group-policies"; id: string; added: string[]; removed: string[] }
+  | { kind: "delete-group"; id: string }
+  | { kind: "save-policy"; id?: string; name: string; description: string; document: PolicyDocument; tags?: AccessPolicy["tags"]; targets?: PolicyTargets; replaceVersion?: number }
+  | { kind: "update-policy-description"; id: string; description: string }
+  | { kind: "set-policy-version"; id: string; version: number }
+  | { kind: "delete-policy-version"; id: string; version: number }
+  | { kind: "delete-policy"; id: string }
+  | { kind: "associate-policy"; id: string; userIds: string[]; groupIds: string[]; roleIds: string[] }
+  | { kind: "attach-policies"; policyIds: string[]; targets: PolicyTargets }
+  | { kind: "create-role"; name: string; description: string; trustedUserIds: string[]; policyIds: string[]; boundaryPolicyId?: string; tags: AccessRole["tags"]; sessionMinutes: number; consoleAccess: boolean }
+  | { kind: "update-role-metadata"; id: string; description: string; tags: AccessRole["tags"] }
+  | { kind: "update-role-trust"; id: string; trustedUserIds: string[] }
+  | { kind: "update-role-settings"; id: string; sessionMinutes: number; consoleAccess: boolean }
+  | { kind: "change-role-policies"; id: string; added: string[]; removed: string[] }
+  | { kind: "set-role-boundary"; id: string; policyId?: string }
+  | { kind: "set-user-boundary"; principalId: string; policyId?: string }
+  | { kind: "create-role-session"; roleId: string; caller: RoleSessionCaller; sessionMinutes: number; sourceIp?: string }
+  | { kind: "revoke-role-session"; id: string }
+  | { kind: "delete-role"; id: string }
+  | { kind: "create-key"; ownerId: string; ownerState: AccessKeyOwnerState; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string; responseMode: "success" | "response-lost" }
+  | { kind: "inspect-key-creation"; ownerId: string; requestId: string; resultMode: "found" | "not-found" | "unavailable" }
+  | { kind: "set-key-status"; id: string; ownerState: AccessKeyOwnerState; status: AccessKey["status"]; resourceVersion: number; requestId: string }
+  | { kind: "save-key-network-preview"; id: string; resourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions }
+  | { kind: "delete-key"; id: string; resourceVersion: number; requestId: string }
+  | { kind: "confirm-personal-mfa" }
+  | { kind: "verify-personal-notification-address"; address: string }
+  | { kind: "begin-personal-notification-replacement"; mockVerificationId: string; targetAddress: string }
+  | { kind: "confirm-personal-notification-replacement"; mockVerificationId: string; responseMode: "success" | "response-lost" }
+  | { kind: "inspect-personal-notification-replacement"; mockVerificationId: string; resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable" }
+  | { kind: "begin-personal-mfa-replacement"; requestId: string; proofStartedAt: string }
+  | { kind: "mark-personal-mfa-replacement-unknown"; requestId: string }
+  | { kind: "inspect-personal-mfa-replacement"; requestId: string }
+  | { kind: "cancel-personal-mfa-replacement"; requestId: string }
+  | { kind: "confirm-personal-mfa-replacement"; requestId: string }
+  | { kind: "regenerate-personal-recovery-codes" }
+  | { kind: "remove-personal-mfa" }
+  | { kind: "begin-personal-mfa-recovery" }
+  | { kind: "complete-personal-mfa-reauthentication" }
+  | { kind: "set-user-policies"; principalId: string; policyIds: string[] }
+  | { kind: "set-user-groups"; principalId: string; groupIds: string[] }
+  | { kind: "update-user"; principalId: string; displayName: string }
+  | { kind: "delete-user"; principalId: string }
+  | { kind: "save-account-rule"; requestId: string; expectedRuleVersion: number; expectedLoginProtection: boolean; loginProtection: boolean; responseMode: "success" | "response-lost" }
+  | { kind: "save-account-key-network-preview"; expectedRuleVersion: number; accessKeyNetwork: AccessKeyNetworkRestrictions }
+  /** Preview client journal only; this is not a future IAM mutation contract. */
+  | { kind: "remember-account-rule-change-unknown"; requestId: string; expectedRuleVersion: number; expectedLoginProtection: boolean; loginProtection: boolean }
+  | { kind: "inspect-account-rule-change"; requestId: string; resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable" };
+
+export const policyVersionLimit = 5;
+
+export function policyGrantTargets(state: AccessWorkspace, policyId: string): PolicyTargets {
+  return {
+    userIds: Object.entries(state.userPolicies).filter(([, ids]) => ids.includes(policyId)).map(([id]) => id),
+    groupIds: state.groups.filter((group) => group.policyIds.includes(policyId)).map((group) => group.id),
+    roleIds: state.roles.filter((role) => role.policyIds.includes(policyId)).map((role) => role.id)
+  };
+}
+
+export function policyBoundaryTargets(state: AccessWorkspace, policyId: string) {
+  return {
+    userIds: Object.entries(state.userBoundaries).filter(([, id]) => id === policyId).map(([id]) => id),
+    roleIds: state.roles.filter((role) => role.boundaryPolicyId === policyId).map((role) => role.id)
+  };
+}
+
+export function policyUsageCounts(state: AccessWorkspace, policyId: string) {
+  const grants = policyGrantTargets(state, policyId);
+  const boundaries = policyBoundaryTargets(state, policyId);
+  const permissionAttachments = grants.userIds.length + grants.groupIds.length + grants.roleIds.length;
+  const permissionBoundaries = boundaries.userIds.length + boundaries.roleIds.length;
+  return { permissionAttachments, permissionBoundaries, total: permissionAttachments + permissionBoundaries };
+}
+
+// Shared single/bulk cleanup, after the caller validates identity and authority.
+// One clone and one pass per collection, regardless of selected user count.
+export function withoutUserAccess(source: AccessWorkspace, principalIds: readonly string[], at: string): AccessWorkspace {
+  const state = structuredClone(source);
+  const ids = new Set(principalIds);
+  for (const group of state.groups) group.memberIds = group.memberIds.filter((id) => !ids.has(id));
+  for (const id of ids) { delete state.userPolicies[id]; delete state.userProfiles[id]; delete state.userBoundaries[id]; }
+  for (const role of state.roles) role.trustedUserIds = role.trustedUserIds.filter((id) => !ids.has(id));
+  for (const session of state.roleSessions) if (session.caller.type === "user" && ids.has(session.caller.id) && !session.revokedAt) session.revokedAt = at;
+  state.keys = state.keys.filter((key) => !ids.has(key.ownerId));
+  if (state.pendingKeyCreation && ids.has(state.pendingKeyCreation.ownerId)) state.pendingKeyCreation = null;
+  return state;
+}
+
+// Pure, deterministic preview transitions. Adapters supply identity, IDs and time.
+export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: AccessWorkspaceCommand, context: { id: string; at: string; userIds: string[]; primaryPrincipalId: string; resolvedKeyId?: string; sameReplacementSession?: boolean }): AccessWorkspace {
+  const state = command.kind === "delete-user" ? withoutUserAccess(source, [command.principalId], context.at) : structuredClone(source);
+  const invalid = (): never => { throw new AccessWorkspaceError("invalid"); };
+  // RootIdentity is the account's protected ownership relation, not a User.
+  // Every user relation stays constrained to the authoritative User directory,
+  // even if an adapter supplies the root ID or a foreign identity.
+  if (!context.primaryPrincipalId || context.userIds.includes(context.primaryPrincipalId)) invalid();
+  const canJoinGroup = (principalId: string) => context.userIds.includes(principalId);
+  const exists = <T extends { id: string }>(items: T[], id: string): T => {
+    const item = items.find((entry) => entry.id === id);
+    if (!item) throw new AccessWorkspaceError("notFound");
+    return item;
+  };
+  const validateName = (items: { id: string; name: string }[], name: string, id?: string) => {
+    if (!name.trim() || name.length > 64 || /[<>\u0000-\u001f]/.test(name)) invalid();
+    if (items.some((entry) => entry.id !== id && entry.name.toLowerCase() === name.trim().toLowerCase())) throw new AccessWorkspaceError("duplicate");
+    if (id) exists(items, id);
+  };
+  const policies = (ids: string[]) => { ids.forEach((id) => exists(state.policies, id)); return [...new Set(ids)]; };
+  const roleSettings = (minutes: number) => {
+    if (!Number.isInteger(minutes) || minutes < 15 || minutes > 720) invalid();
+  };
+  const roleMetadata = (description: string, tags: AccessRole["tags"]) => {
+    if (description.length > 256 || tags.length > 10 || tags.some((tag) => !tag.key.trim() || tag.key.length > 64 || tag.value.length > 128 || /[<>\u0000-\u001f]/.test(tag.key + tag.value)) || new Set(tags.map((tag) => tag.key.trim())).size !== tags.length) invalid();
+    return tags.map((tag) => ({ key: tag.key.trim(), value: tag.value }));
+  };
+  const associatePolicy = (policyId: string, targets: PolicyTargets) => {
+    if ([targets.userIds, targets.groupIds, targets.roleIds].some((ids) => ids.length > 30)) invalid();
+    if (targets.userIds.some((user) => !context.userIds.includes(user))) invalid();
+    targets.groupIds.forEach((group) => exists(state.groups, group));
+    targets.roleIds.forEach((role) => exists(state.roles, role));
+    const update = (ids: string[], selected: boolean) => selected ? [...new Set([...ids, policyId])] : ids.filter((policy) => policy !== policyId);
+    for (const user of context.userIds) if (state.userPolicies[user] || targets.userIds.includes(user)) state.userPolicies[user] = update(state.userPolicies[user] ?? [], targets.userIds.includes(user));
+    for (const group of state.groups) group.policyIds = update(group.policyIds, targets.groupIds.includes(group.id));
+    for (const role of state.roles) role.policyIds = update(role.policyIds, targets.roleIds.includes(role.id));
+  };
+  const put = <T extends { id: string }>(items: T[], value: T) => [...items.filter((entry) => entry.id !== value.id), value];
+  const id = "id" in command && command.id ? command.id : context.id;
+  const createdAt = context.at;
+  let target = id;
+  let recordEvent = true;
+  switch (command.kind) {
+    case "create-subuser": {
+      const principalId = previewUserPrincipalId(command.loginName);
+      const profile = command.profile;
+      if (!/^[a-z][a-z0-9._-]{2,63}$/.test(command.loginName) || !command.displayName.trim() || command.displayName.length > 128 ||
+        (!profile.consoleAccess && !profile.programmaticAccess) || profile.tags.length > 10 ||
+        profile.tags.some((tag) => !tag.key.trim() || tag.key.length > 64 || tag.value.length > 128 || /[<>\u0000-\u001f]/.test(tag.key + tag.value)) ||
+        new Set(profile.tags.map((tag) => tag.key.trim())).size !== profile.tags.length || command.policyIds.length > 30 || command.groupIds.length > 30) invalid();
+      if (principalId === context.primaryPrincipalId || context.userIds.includes(principalId) || state.userProfiles[principalId]) throw new AccessWorkspaceError("duplicate");
+      const selectedPolicies = policies(command.policyIds);
+      command.groupIds.forEach((group) => exists(state.groups, group));
+      state.userProfiles[principalId] = { consoleAccess: profile.consoleAccess, programmaticAccess: profile.programmaticAccess, passwordResetRequired: profile.consoleAccess && profile.passwordResetRequired, loginProtection: profile.consoleAccess && profile.loginProtection, tags: profile.tags.map((tag) => ({ key: tag.key.trim(), value: tag.value.trim() })) };
+      state.userPolicies[principalId] = selectedPolicies;
+      for (const group of state.groups) if (command.groupIds.includes(group.id)) group.memberIds.push(principalId);
+      target = principalId; break;
+    }
+    case "create-group": {
+      validateName(state.groups, command.name);
+      if (command.description.length > 256) invalid();
+      state.groups.push({ id, name: command.name.trim(), description: command.description, memberIds: [], policyIds: [], createdAt });
+      target = command.name; break;
+    }
+    case "update-group": {
+      validateName(state.groups, command.name, id);
+      if (command.description.length > 256) invalid();
+      const group = exists(state.groups, id);
+      group.name = command.name.trim(); group.description = command.description;
+      target = group.name; break;
+    }
+    case "change-group-members": {
+      const group = exists(state.groups, id);
+      if (command.added.length + command.removed.length > 30 || command.added.some((member) => !canJoinGroup(member) || command.removed.includes(member)) || command.removed.some((member) => !group.memberIds.includes(member))) invalid();
+      group.memberIds = [...new Set([...group.memberIds.filter((member) => !command.removed.includes(member)), ...command.added])]; target = group.name; break;
+    }
+    case "change-group-policies": {
+      const group = exists(state.groups, id);
+      if (command.added.length + command.removed.length > 30 || command.added.some((policy) => command.removed.includes(policy)) || command.removed.some((policy) => !group.policyIds.includes(policy))) invalid();
+      group.policyIds = [...new Set([...group.policyIds.filter((policy) => !command.removed.includes(policy)), ...policies(command.added)])]; target = group.name; break;
+    }
+    case "delete-group":
+      exists(state.groups, id); state.groups = state.groups.filter((entry) => entry.id !== id); break;
+    case "save-policy": {
+      validateName(state.policies, command.name, command.id);
+      const previous = state.policies.find((entry) => entry.id === id);
+      if (previous?.kind === "system") throw new AccessWorkspaceError("systemPolicy");
+      if (previous && command.name.trim() !== previous.name) throw new AccessWorkspaceError("immutablePolicyName");
+      if (command.description.length > 256) invalid();
+      const document = parsePolicyDocument(JSON.stringify(command.document), state.accountId);
+      const tags = command.tags ?? previous?.tags ?? [];
+      if (tags.length > 10 || tags.some((tag) => !tag.key.trim() || tag.key.length > 64 || tag.value.length > 128 || /[<>\u0000-\u001f]/.test(tag.key + tag.value)) || new Set(tags.map((tag) => tag.key.trim())).size !== tags.length) invalid();
+      const normalizedTags = tags.map((tag) => ({ key: tag.key.trim(), value: tag.value.trim() }));
+      const current = previous?.versions.find((entry) => entry.id === previous.defaultVersion);
+      if (previous && current && JSON.stringify(current.document) === JSON.stringify(document)) {
+        if (command.replaceVersion !== undefined) invalid();
+        if (previous.description !== command.description || JSON.stringify(previous.tags) !== JSON.stringify(normalizedTags)) previous.updatedAt = context.at;
+        previous.description = command.description;
+        previous.tags = normalizedTags;
+      } else {
+        let history = previous?.versions ?? [];
+        if (command.replaceVersion !== undefined) {
+          if (!previous || history.length !== policyVersionLimit) invalid();
+          if (command.replaceVersion === previous!.defaultVersion) throw new AccessWorkspaceError("defaultVersion");
+          if (!history.some((entry) => entry.id === command.replaceVersion)) throw new AccessWorkspaceError("notFound");
+          history = history.filter((entry) => entry.id !== command.replaceVersion);
+        }
+        if (history.length >= policyVersionLimit) throw new AccessWorkspaceError("versionLimit");
+        // The high-water mark survives removal, so identifiers are never reused.
+        const version = (previous?.lastVersion ?? 0) + 1;
+        state.policies = put(state.policies, { id, name: command.name.trim(), description: command.description, tags: normalizedTags, kind: "custom", versions: [...history, { id: version, document, createdAt }], defaultVersion: version, lastVersion: version, createdAt: previous?.createdAt ?? createdAt, updatedAt: context.at });
+      }
+      if (command.targets) associatePolicy(id, command.targets);
+      target = command.name; break;
+    }
+    case "update-policy-description": {
+      const policy = exists(state.policies, id);
+      if (policy.kind === "system") throw new AccessWorkspaceError("systemPolicy");
+      if (command.description.length > 256) invalid();
+      if (policy.description !== command.description) policy.updatedAt = context.at;
+      policy.description = command.description;
+      target = policy.name; break;
+    }
+    case "set-policy-version": {
+      const policy = exists(state.policies, id);
+      if (policy.kind === "system") throw new AccessWorkspaceError("systemPolicy");
+      if (!policy.versions.some((entry) => entry.id === command.version)) invalid();
+      if (policy.defaultVersion !== command.version) policy.updatedAt = context.at;
+      policy.defaultVersion = command.version; break;
+    }
+    case "delete-policy-version": {
+      const policy = exists(state.policies, id);
+      if (policy.kind === "system") throw new AccessWorkspaceError("systemPolicy");
+      if (!policy.versions.some((entry) => entry.id === command.version)) throw new AccessWorkspaceError("notFound");
+      if (policy.defaultVersion === command.version) throw new AccessWorkspaceError("defaultVersion");
+      policy.versions = policy.versions.filter((entry) => entry.id !== command.version);
+      policy.updatedAt = context.at;
+      target = policy.name; break;
+    }
+    case "delete-policy":
+      if (exists(state.policies, id).kind === "system") throw new AccessWorkspaceError("systemPolicy");
+      if (policyUsageCounts(state, id).total) throw new AccessWorkspaceError("referenced");
+      state.policies = state.policies.filter((entry) => entry.id !== id); break;
+    case "associate-policy": {
+      exists(state.policies, id);
+      associatePolicy(id, command);
+      break;
+    }
+    case "attach-policies": {
+      const selected = command.targets;
+      if (!command.policyIds.length || command.policyIds.length > 30 || ![...selected.userIds, ...selected.groupIds, ...selected.roleIds].length ||
+        [selected.userIds, selected.groupIds, selected.roleIds].some((ids) => ids.length > 30) || selected.userIds.some((user) => !context.userIds.includes(user))) invalid();
+      const grants = policies(command.policyIds);
+      selected.groupIds.forEach((group) => exists(state.groups, group));
+      selected.roleIds.forEach((role) => exists(state.roles, role));
+      // Additive batch, validated before mutation; clone is committed atomically
+      // by the repository. Existing grants and boundaries are never replaced.
+      for (const user of selected.userIds) state.userPolicies[user] = [...new Set([...(state.userPolicies[user] ?? []), ...grants])];
+      for (const group of state.groups) if (selected.groupIds.includes(group.id)) group.policyIds = [...new Set([...group.policyIds, ...grants])];
+      for (const role of state.roles) if (selected.roleIds.includes(role.id)) role.policyIds = [...new Set([...role.policyIds, ...grants])];
+      target = grants.map((id) => exists(state.policies, id).name).join(", "); break;
+    }
+    case "create-role": {
+      validateName(state.roles, command.name);
+      validateRoleTrust(command, context.userIds);
+      roleSettings(command.sessionMinutes);
+      if (command.policyIds.length > 30) invalid();
+      if (command.boundaryPolicyId) exists(state.policies, command.boundaryPolicyId);
+      state.roles.push({ id, name: command.name.trim(), description: command.description, trustedUserIds: [...new Set(command.trustedUserIds)], policyIds: policies(command.policyIds), boundaryPolicyId: command.boundaryPolicyId, tags: roleMetadata(command.description, command.tags), sessionMinutes: command.sessionMinutes, consoleAccess: command.consoleAccess, createdAt });
+      target = command.name; break;
+    }
+    case "update-role-metadata": {
+      const role = exists(state.roles, id);
+      role.tags = roleMetadata(command.description, command.tags); role.description = command.description; break;
+    }
+    case "update-role-trust": {
+      const role = exists(state.roles, id);
+      validateRoleTrust(command, context.userIds);
+      role.trustedUserIds = [...new Set(command.trustedUserIds)]; break;
+    }
+    case "update-role-settings": {
+      const role = exists(state.roles, id);
+      roleSettings(command.sessionMinutes);
+      role.sessionMinutes = command.sessionMinutes; role.consoleAccess = command.consoleAccess; break;
+    }
+    case "change-role-policies": {
+      const role = exists(state.roles, id);
+      if (!command.added.length && !command.removed.length || command.added.length + command.removed.length > 30 || command.added.some((id) => command.removed.includes(id)) || command.removed.some((id) => !role.policyIds.includes(id))) invalid();
+      role.policyIds = [...new Set([...role.policyIds.filter((id) => !command.removed.includes(id)), ...policies(command.added)])]; break;
+    }
+    case "set-role-boundary": {
+      const role = exists(state.roles, id);
+      if (command.policyId) exists(state.policies, command.policyId);
+      role.boundaryPolicyId = command.policyId; break;
+    }
+    case "set-user-boundary":
+      if (!context.userIds.includes(command.principalId)) invalid();
+      if (command.policyId) { exists(state.policies, command.policyId); state.userBoundaries[command.principalId] = command.policyId; }
+      else delete state.userBoundaries[command.principalId];
+      target = command.principalId; break;
+    case "create-role-session": {
+      const role = exists(state.roles, command.roleId);
+      if (!Number.isFinite(Date.parse(context.at)) || !Number.isInteger(command.sessionMinutes) || command.sessionMinutes < 15 || command.sessionMinutes > role.sessionMinutes) invalid();
+      const result = evaluateRoleAssumption(state, context.userIds, { roleId: role.id, caller: command.caller, sourceIp: command.sourceIp, at: context.at });
+      if (!result.allowed) throw new AccessWorkspaceError(result.reason === "callerDenied" ? "callerDenied" : result.reason === "authorityRequired" ? "authorityRequired" : "trustDenied");
+      if (state.roleSessions.filter((session) => !session.revokedAt && Date.parse(session.expiresAt) > Date.parse(context.at)).length >= 100) throw new AccessWorkspaceError("sessionLimit");
+      state.roleSessions.push({ id, roleId: role.id, caller: structuredClone(command.caller), createdAt, expiresAt: new Date(Date.parse(context.at) + command.sessionMinutes * 60000).toISOString() });
+      target = role.name; break;
+    }
+    case "revoke-role-session": {
+      const session = exists(state.roleSessions, id);
+      if (!session.revokedAt) session.revokedAt = context.at;
+      break;
+    }
+    case "delete-role":
+      exists(state.roles, id);
+      state.roles = state.roles.filter((entry) => entry.id !== id); break;
+    case "create-key":
+      if (state.pendingKeyCreation || command.ownerState !== "active" || !context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !accessKeyNetworkRestrictionsValid(command.networkRestrictions) || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
+      state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt, networkRestrictions: structuredClone(command.networkRestrictions), usage: { observedAt: createdAt } });
+      if (command.responseMode === "response-lost") state.pendingKeyCreation = { ownerId: command.ownerId, userResourceVersion: command.userResourceVersion, networkRestrictions: structuredClone(command.networkRestrictions), requestId: command.requestId, status: "UNKNOWN" };
+      target = "MOCK-" + id; break;
+    case "inspect-key-creation": {
+      const pending = state.pendingKeyCreation;
+      const resolvedKeyId = context.resolvedKeyId;
+      if (command.resultMode !== "found" || !resolvedKeyId) throw new AccessWorkspaceError("invalid");
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.status !== "UNKNOWN" || pending.ownerId !== command.ownerId || pending.requestId !== command.requestId) invalid();
+      const recoveredKey = exists(state.keys, resolvedKeyId);
+      if (recoveredKey.ownerId !== command.ownerId) invalid();
+      state.pendingKeyCreation = { ...pending, keyId: recoveredKey.id, status: "COMMITTED_SECRET_LOST" };
+      target = recoveredKey.id; break;
+    }
+    case "set-key-status": {
+      const key = exists(state.keys, id);
+      if (!Number.isInteger(command.resourceVersion) || command.resourceVersion !== key.resourceVersion || !command.requestId.trim() || (command.status === "ENABLED" && command.ownerState !== "active")) invalid();
+      key.status = command.status;
+      key.resourceVersion += 1;
+      break;
+    }
+    case "save-key-network-preview": {
+      const key = exists(state.keys, id);
+      if (!Number.isInteger(command.resourceVersion) || command.resourceVersion !== key.resourceVersion || !accessKeyNetworkRestrictionsValid(command.networkRestrictions) || accessKeyNetworkRestrictionsEqual(command.networkRestrictions, key.networkRestrictions)) invalid();
+      key.networkRestrictions = structuredClone(command.networkRestrictions);
+      key.resourceVersion += 1;
+      break;
+    }
+    case "delete-key":
+      if (!Number.isInteger(command.resourceVersion) || !command.requestId.trim()) invalid();
+      if (exists(state.keys, id).resourceVersion !== command.resourceVersion) invalid();
+      if (exists(state.keys, id).status === "ENABLED") throw new AccessWorkspaceError("disableFirst");
+      state.keys = state.keys.filter((entry) => entry.id !== id);
+      if (state.pendingKeyCreation?.status === "COMMITTED_SECRET_LOST" && state.pendingKeyCreation.keyId === id) state.pendingKeyCreation = null;
+      break;
+    case "verify-personal-notification-address":
+      if (state.personalNotificationAddress || !validPreviewNotificationAddress(command.address)) invalid();
+      state.personalNotificationAddress = command.address;
+      recordEvent = false;
+      target = context.primaryPrincipalId; break;
+    case "begin-personal-notification-replacement": {
+      const previousAddress = state.personalNotificationAddress;
+      const targetAddress = command.targetAddress.trim().toLowerCase();
+      if (!previousAddress) throw new AccessWorkspaceError("invalid");
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired ||
+          state.personalMfa.pendingReplacement || state.pendingNotificationAddressReplacement ||
+          !/^mock-notification-verification-[0-9a-f-]{36}$/.test(command.mockVerificationId) ||
+          !validPreviewNotificationAddress(targetAddress) || targetAddress === previousAddress.toLowerCase()) invalid();
+      state.pendingNotificationAddressReplacement = {
+        mockVerificationId: command.mockVerificationId,
+        previousAddress,
+        targetAddress,
+        status: "PENDING_VERIFICATION"
+      };
+      recordEvent = false;
+      break;
+    }
+    case "confirm-personal-notification-replacement": {
+      const pending = state.pendingNotificationAddressReplacement;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.mockVerificationId !== command.mockVerificationId || pending.status !== "PENDING_VERIFICATION" ||
+          state.personalNotificationAddress !== pending.previousAddress) invalid();
+      if (command.responseMode === "response-lost") pending.status = "CONFIRM_UNKNOWN";
+      else {
+        state.personalNotificationAddress = pending.targetAddress;
+        state.pendingNotificationAddressReplacement = null;
+      }
+      recordEvent = false;
+      break;
+    }
+    case "inspect-personal-notification-replacement": {
+      const pending = state.pendingNotificationAddressReplacement;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.mockVerificationId !== command.mockVerificationId || pending.status !== "CONFIRM_UNKNOWN") invalid();
+      if (command.resultMode === "found-applied") state.personalNotificationAddress = pending.targetAddress;
+      if (command.resultMode === "found-applied" || command.resultMode === "found-rejected") state.pendingNotificationAddressReplacement = null;
+      recordEvent = false;
+      break;
+    }
+    case "confirm-personal-mfa":
+      if (state.personalMfa.factorState === "bound" || state.personalMfa.pendingReplacement || (state.personalMfa.reauthenticationRequired && state.personalMfa.recoveryState !== "rebind-required")) invalid();
+      state.personalMfa = { factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" };
+      target = context.primaryPrincipalId; break;
+    case "begin-personal-mfa-replacement": {
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement || state.pendingAccountRuleChange || !command.requestId.trim()) invalid();
+      const proofStartedAt = Date.parse(command.proofStartedAt);
+      const startedAt = Date.parse(context.at);
+      if (!Number.isFinite(proofStartedAt) || !Number.isFinite(startedAt) || proofStartedAt > startedAt || startedAt - proofStartedAt >= 120_000) invalid();
+      const expiresAt = new Date(proofStartedAt + 120_000).toISOString();
+      state.personalMfa.pendingReplacement = { requestId: command.requestId, expiresAt, accountRuleVersion: state.settings.accountRuleVersion, status: "PENDING" };
+      target = context.primaryPrincipalId; break;
+    }
+    case "mark-personal-mfa-replacement-unknown": {
+      const pending = state.personalMfa.pendingReplacement;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.requestId !== command.requestId || !context.sameReplacementSession || pending.status !== "PENDING") invalid();
+      pending.status = "CONFIRMATION_UNKNOWN";
+      recordEvent = false;
+      break;
+    }
+    case "inspect-personal-mfa-replacement": {
+      const pending = state.personalMfa.pendingReplacement;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.requestId !== command.requestId || pending.status !== "CONFIRMATION_UNKNOWN") invalid();
+      // This explicitly simulates an authoritative by-request read in the
+      // isolated preview. It is not a real IAM observation or a wire contract.
+      pending.status = "PENDING";
+      recordEvent = false;
+      break;
+    }
+    case "cancel-personal-mfa-replacement":
+      if (state.personalMfa.pendingReplacement?.requestId !== command.requestId || state.personalMfa.pendingReplacement.status !== "PENDING") invalid();
+      delete state.personalMfa.pendingReplacement;
+      target = context.primaryPrincipalId; break;
+    case "confirm-personal-mfa-replacement": {
+      const pending = state.personalMfa.pendingReplacement;
+      if (!pending || pending.requestId !== command.requestId || pending.status !== "PENDING" || !context.sameReplacementSession || new Date(context.at).getTime() >= new Date(pending.expiresAt).getTime() || pending.accountRuleVersion !== state.settings.accountRuleVersion || state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange) invalid();
+      state.personalMfa = { factorState: "bound", reauthenticationRequired: true, recoveryState: "idle", demoCode: nextPreviewTotpCode(state.personalMfa) };
+      target = context.primaryPrincipalId; break;
+    }
+    case "regenerate-personal-recovery-codes":
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement || state.pendingAccountRuleChange) invalid();
+      target = context.primaryPrincipalId; break;
+    case "remove-personal-mfa":
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement) invalid();
+      state.personalMfa = { factorState: "removed", reauthenticationRequired: true, recoveryState: "idle" };
+      target = context.primaryPrincipalId; break;
+    case "begin-personal-mfa-recovery":
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement) invalid();
+      state.personalMfa = { factorState: "removed", reauthenticationRequired: true, recoveryState: "rebind-required" };
+      target = context.primaryPrincipalId; break;
+    case "complete-personal-mfa-reauthentication":
+      if (state.personalMfa.factorState === "never-bound" || state.personalMfa.recoveryState !== "idle") invalid();
+      state.personalMfa = { ...state.personalMfa, reauthenticationRequired: false };
+      target = context.primaryPrincipalId; break;
+    case "set-user-policies":
+      if (!context.userIds.includes(command.principalId)) invalid();
+      state.userPolicies[command.principalId] = policies(command.policyIds); target = command.principalId; break;
+    case "set-user-groups":
+      if (!canJoinGroup(command.principalId) || command.groupIds.length > 30) invalid();
+      command.groupIds.forEach((group) => exists(state.groups, group));
+      for (const group of state.groups) group.memberIds = command.groupIds.includes(group.id) ? [...new Set([...group.memberIds, command.principalId])] : group.memberIds.filter((user) => user !== command.principalId);
+      target = command.principalId; break;
+    case "update-user":
+      if (!context.userIds.includes(command.principalId) || !command.displayName.trim() || command.displayName.length > 128) invalid();
+      target = command.principalId; break;
+    case "delete-user":
+      if (!context.userIds.includes(command.principalId)) invalid();
+      target = command.principalId; break;
+    case "save-account-rule": {
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement || state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection || command.loginProtection === state.settings.loginProtection) invalid();
+      if (command.responseMode === "response-lost") {
+        state.pendingAccountRuleChange = { requestId: command.requestId, baselineRuleVersion: command.expectedRuleVersion, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
+        state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
+      }
+      else {
+        state.settings = { ...state.settings, loginProtection: command.loginProtection, accountRuleVersion: command.expectedRuleVersion + 1 };
+        state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
+      }
+      target = source.accountId; break;
+    }
+    case "save-account-key-network-preview": {
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement || state.pendingAccountRuleChange || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion !== state.settings.accountRuleVersion || !accessKeyNetworkRestrictionsValid(command.accessKeyNetwork) || accessKeyNetworkRestrictionsEqual(command.accessKeyNetwork, state.settings.accessKeyNetwork)) invalid();
+      state.settings = { ...state.settings, accessKeyNetwork: structuredClone(command.accessKeyNetwork), accountRuleVersion: command.expectedRuleVersion + 1 };
+      state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
+      target = source.accountId; break;
+    }
+    case "remember-account-rule-change-unknown": {
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement || state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection || command.loginProtection === state.settings.loginProtection) invalid();
+      state.pendingAccountRuleChange = { requestId: command.requestId, baselineRuleVersion: command.expectedRuleVersion, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
+      state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
+      recordEvent = false;
+      target = source.accountId; break;
+    }
+    case "inspect-account-rule-change": {
+      const pending = state.pendingAccountRuleChange;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.requestId !== command.requestId || state.personalMfa.reauthenticationRequired) invalid();
+      if (pending.status === "UNRECOVERABLE") throw new AccessWorkspaceError("accountRuleResultUnavailable");
+      if (command.resultMode === "not-found") throw new AccessWorkspaceError("accountRuleResultNotFound");
+      if (command.resultMode === "unavailable") throw new AccessWorkspaceError("accountRuleResultUnavailable");
+      if (command.resultMode === "found-applied") {
+        state.settings = { ...state.settings, loginProtection: pending.requestedLoginProtection, accountRuleVersion: pending.baselineRuleVersion + 1 };
+      }
+      state.pendingAccountRuleChange = null;
+      target = source.accountId; break;
+    }
+  }
+  if (recordEvent && command.kind !== "remember-account-rule-change-unknown" && command.kind !== "mark-personal-mfa-replacement-unknown" && command.kind !== "inspect-personal-mfa-replacement" && command.kind !== "verify-personal-notification-address" && command.kind !== "begin-personal-notification-replacement" && command.kind !== "confirm-personal-notification-replacement" && command.kind !== "inspect-personal-notification-replacement") state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);
+  return state;
+}

@@ -1,60 +1,117 @@
 "use client";
 
-import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
+  Fragment,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent
+} from "react";
+import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
+import {
+  Activity,
+  Bell,
   Boxes,
-  ChevronRight,
+  Building2,
+  ChartNoAxesCombined,
   CircleGauge,
+  Clock3,
   Database,
+  FileText,
+  Star,
   Gauge,
+  GitBranch,
+  KeyRound,
+  Network,
   LayoutDashboard,
-  LogOut,
   MapPin,
   Menu,
   PackageSearch,
+  PackagePlus,
   PanelRightClose,
-  PanelRightOpen,
   RefreshCcw,
+  ScrollText,
   ServerCog,
+  Settings2,
   ShieldCheck,
+  Users,
+  Workflow,
   X
 } from "lucide-react";
-import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
 import { useSession } from "@/features/auth/application/SessionProvider";
+import { useRoleSession } from "@/features/auth/application/RoleSessionProvider";
+import { AccountAccessProvider, useAccountCapabilities } from "@/features/auth/application/AccountAccessProvider";
+import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
+import type { AccountRepository } from "@/features/auth/repositories/iamRepository";
 import {
   App,
+  Alert,
+  EmptyState,
   Button,
   ContentPage,
   Layout,
   Sider,
-  Skeleton,
-  Typography
+  PageSkeleton,
+  Progress,
+  useLeaveConfirmation
 } from "@ui/xiak";
 import { ControlPlaneProvider, useControlPlane } from "../application/ControlPlaneProvider";
 import { useConsoleUiStore } from "../application/consoleUiStore";
-import type { ControlPlaneRouteSelection } from "../domain/selection";
+import type { ExperienceSnapshot } from "../domain/experience";
+import { consoleRouteHref, type ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type {
+  ConsoleWorkspaceScene,
   NavigationIconKind,
   RailIconKind
 } from "../scenes/consoleScene";
+import { ConsoleHeader } from "./ConsoleHeader";
+import { ConsoleContentLoadingRenderer } from "./ConsoleContentLoadingRenderer";
 import { ConsoleContentRenderer } from "./ConsoleContentRenderer";
 import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
 import styles from "./ConsoleShellRenderer.module.css";
+import { useServiceDirectory } from "./ServiceDirectory";
+import { serviceForSection, type ServiceId } from "../scenes/serviceDirectory";
+import { ConsoleNavigationProvider, useConsoleNavigation } from "../routes/ConsoleNavigation";
+import { buildConsoleFrame } from "../scenes/buildConsoleScene";
 
 const railIcons = {
   overview: LayoutDashboard,
   database: Database,
+  devops: GitBranch,
+  observability: ChartNoAxesCombined,
+  audit: ScrollText,
   access: ShieldCheck
 } satisfies Record<RailIconKind, typeof Database>;
 
+const favoriteIcons = { regions: MapPin, applications: Boxes, postgresql: Database, devops: GitBranch, monitoring: ChartNoAxesCombined, logs: FileText, audit: ScrollText, iam: ShieldCheck } satisfies Record<ServiceId, typeof Database>;
+
 const navigationIcons = {
+  policy: FileText,
+  sso: Network,
+  key: KeyRound,
+  sessions: Clock3,
+  users: Users,
+  settings: Settings2,
+  tenants: Building2,
+  overview: LayoutDashboard,
+  messages: Bell,
+  resources: Boxes,
+  operations: Activity,
   catalog: PackageSearch,
   quota: Gauge,
   installation: ServerCog,
   region: MapPin,
+  pipeline: Workflow,
+  observability: ChartNoAxesCombined,
+  audit: ScrollText,
   access: ShieldCheck
 } satisfies Record<NavigationIconKind, typeof Database>;
 
@@ -62,90 +119,126 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
   return (
     <App.Frame className={styles.shellContainer}>
       <App.Background />
-      <App.Layers>
-        <App.Layer>{children}</App.Layer>
-      </App.Layers>
+      <App.Layers><App.Layer>{children}</App.Layer></App.Layers>
     </App.Frame>
   );
 }
 
-function LoadingShell({ error, logout, retry, revoking, sessionError }: {
-  error: string | null;
-  logout(): void;
-  retry(): void;
-  revoking: boolean;
-  sessionError: string | null;
-}) {
-  return (
-    <ShellFrame>
-      <App>
-        <App.Base>
-          <Layout.Header className={styles.topbar}>
-            <div className={styles.topbarBrand}><Boxes aria-hidden="true" /><strong>Matrix</strong></div>
-            <div className={styles.topbarPath}><span>Control Plane</span><ChevronRight aria-hidden="true" /><span>Managed Services</span></div>
-            <Button
-              aria-label="注销并撤销 IAM 会话"
-              className={styles.loadingLogout}
-              disabled={revoking}
-              onClick={logout}
-              size="small"
-              variant="ghost"
-            >
-              <LogOut aria-hidden="true" />{revoking ? "正在注销…" : "注销"}
-            </Button>
-          </Layout.Header>
-          <Layout>
-            <Sider className={styles.sider}>
-              <Sider.RailMenu className={styles.railLoading}>
-                <div className={styles.railLogo}><Boxes aria-hidden="true" /></div>
-                <Skeleton /><Skeleton />
-              </Sider.RailMenu>
-              <Sider.ContextMenu className={`${styles.contextMenu} ${styles.contextLoading}`}>
-                <Skeleton />
-                <Skeleton />
-                <Skeleton />
-                <Skeleton />
-              </Sider.ContextMenu>
-            </Sider>
-            <Layout.Content>
-              <ContentPage>
-                <ContentPage.Header><Skeleton className={styles.headerSkeleton} /></ContentPage.Header>
-                <ContentPage.Body>
-                  {sessionError ? (
-                    <div className={styles.errorBanner} role="alert">
-                      <ShieldCheck aria-hidden="true" /><span>{sessionError}</span>
-                    </div>
-                  ) : null}
-                  {error ? (
-                    <div className={styles.unavailable} role="alert">
-                      <ServerCog aria-hidden="true" />
-                      <Typography.Title as="h2" level={2}>控制面未能加载</Typography.Title>
-                      <p>{error}</p>
-                      <Button onClick={retry} variant="secondary"><RefreshCcw aria-hidden="true" />重试</Button>
-                      <Link href="/console/access/">进入访问管理</Link>
-                    </div>
-                  ) : (
-                    <div className={styles.loadingGrid} aria-label="正在加载控制面">
-                      <Skeleton /><Skeleton /><Skeleton /><Skeleton />
-                    </div>
-                  )}
-                </ContentPage.Body>
-              </ContentPage>
-            </Layout.Content>
-          </Layout>
-        </App.Base>
-      </App>
-    </ShellFrame>
-  );
+// Header state must not invalidate the service page, its forms or sidebars.
+// Only these overlay boundaries subscribe to the header's open/closed state.
+function HeaderBackdrop() {
+  const t = useTranslations("Console");
+  const panel = useConsoleUiStore((state) => state.headerPanel);
+  const setPanel = useConsoleUiStore((state) => state.setHeaderPanel);
+  if (!panel || panel === "products") return null;
+  return <button tabIndex={-1} aria-label={t("closeOverlay")} className={styles.globalBackdrop} onClick={() => setPanel(null)} type="button" />;
+}
+
+function ServiceLayout({ children }: { children: React.ReactNode }) {
+  const catalogOpen = useConsoleUiStore((state) => state.headerPanel === "products");
+  return <Layout inert={catalogOpen}>{children}</Layout>;
 }
 
 type WorkspaceSize = "compact" | "medium" | "wide";
 
-function ConsoleShell() {
+// Route-level identity is known before feature data or heading contributions
+// arrive. Keep query subscriptions here rather than rerendering the shell.
+function ConsolePageHeader({ selection, pendingHref, title, ...props }: Omit<ComponentProps<typeof ContentPage.Header>, "back"> & { selection: ControlPlaneRouteSelection; pendingHref: string | null }) {
+  const query = useSearchParams();
+  const { navigate } = useConsoleNavigation();
+  const navigationText = useTranslations("ServiceNavigation");
+  const w = useTranslations("IamWorkspace");
+  const workflowParents = { "create-user": "users", "create-group": "groups", "create-policy": "policies", "policy-language": "policies", "create-role": "roles", "service-authorizations": "roles" } as const;
+  const view = selection.view;
+  const id = pendingHref ? new URL(pendingHref, "https://matrix.invalid").searchParams.get("id") : query.get("id");
+  const parent = selection.section !== "access" || !view ? null : view in workflowParents ? workflowParents[view as keyof typeof workflowParents] : id && ["users", "groups", "policies", "roles"].includes(view) ? view : null;
+  return <ContentPage.Header {...props} title={title} back={parent ? { label: w("back"), parentLabel: navigationText(`items.${parent}.label`), disabled: Boolean(pendingHref), onClick: () => navigate(`/console/access/${parent}/`) } : undefined} />;
+}
+
+const workspaceActions = {
+  "quota-order": { icon: PackagePlus, primary: true },
+  "installation-order": { icon: ServerCog, primary: true },
+  "platform-status": { icon: Activity, primary: false }
+} satisfies Record<NonNullable<ConsoleWorkspaceScene>["kind"], {
+  icon: typeof Activity;
+  primary: boolean;
+}>;
+
+const focusableControlSelector = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex="0"]:not([role="separator"])'
+].join(",");
+
+function loopOverlayFocus(
+  event: ReactKeyboardEvent<HTMLElement>,
+  container: HTMLElement | null
+) {
+  if (event.key !== "Tab" || !container) return;
+  const controls = Array.from(
+    container.querySelectorAll<HTMLElement>(focusableControlSelector)
+  ).filter((control) => control.getAttribute("aria-hidden") !== "true");
+  const first = controls[0];
+  const last = controls[controls.length - 1];
+  if (!first || !last) return;
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
+  const t = useTranslations("Console");
+  const collection = useTranslations("Collection");
+  const authErrors = useTranslations("Auth.errors");
+  const accountMessages = useTranslations("AccountMenu");
+  const accountText = useTranslations("AccountAccess");
+  const dashboard = useTranslations("Dashboard");
+  const directory = useTranslations("ServiceDirectory");
+  const navigationText = useTranslations("ServiceNavigation");
+  const iamWorkspaceText = useTranslations("IamWorkspace");
+  const roleWorkspaceText = useTranslations("RoleWorkspace");
+  const profilePublishingText = useTranslations("AuthorizationProfilePublishingPreview");
+  const services = useServiceDirectory();
+  const navigation = useConsoleNavigation();
+  const favorites = useConsoleUiStore((state) => state.favoriteServices);
   const router = useRouter();
+  const requestLeave = useLeaveConfirmation();
   const session = useSession();
+  const roleSession = useRoleSession();
   const controlPlane = useControlPlane();
+  const projectScene = controlPlane.projectScene;
+  const prepareControlPlane = controlPlane.prepare;
+  const accountCapabilities = useAccountCapabilities();
   const scene = controlPlane.scene;
+  const pendingSelection = navigation.pendingSelection;
+  const staticFrame = useMemo(() => buildConsoleFrame(navigation.selection, experience), [navigation.selection, experience]);
+  const destinationFrame = useMemo(() => pendingSelection ? buildConsoleFrame(pendingSelection, experience) : null, [pendingSelection, experience]);
+  const committedFrame = scene ?? staticFrame;
+  const frame = destinationFrame ?? committedFrame;
+  const pendingScene = useMemo(
+    () => pendingSelection ? projectScene(pendingSelection) : null,
+    [pendingSelection, projectScene]
+  );
+  const pendingContent = pendingScene?.content ?? null;
+  const content = pendingContent ?? scene?.content;
+  const contentTransitionPending = Boolean(pendingSelection && !pendingContent);
+  const contentTransitionKey = pendingContent && pendingSelection
+    ? consoleRouteHref(pendingSelection)
+    : navigation.currentHref;
+  const sidebarPanel = useRef<HTMLDivElement>(null);
+  const sidebarTrigger = useRef<HTMLButtonElement>(null);
+  const sidebarCloseButton = useRef<HTMLButtonElement>(null);
+  const workspacePanel = useRef<HTMLElement>(null);
+  const workspaceTrigger = useRef<{ focus(): void }>(null);
+  const workspaceCloseButton = useRef<HTMLButtonElement>(null);
+  const workspaceFocusRequested = useRef(false);
   const sidebarOverlayOpen = useConsoleUiStore((state) => state.sidebarOverlayOpen);
   const workspaceOpen = useConsoleUiStore((state) => state.workspaceOpen);
   const openSidebar = useConsoleUiStore((state) => state.openSidebar);
@@ -153,55 +246,128 @@ function ConsoleShell() {
   const toggleWorkspace = useConsoleUiStore((state) => state.toggleWorkspace);
   const closeWorkspace = useConsoleUiStore((state) => state.closeWorkspace);
   const [workspaceSize, setWorkspaceSize] = useState<WorkspaceSize>("medium");
+  const [activatedWorkspaceKey, setActivatedWorkspaceKey] = useState<string | null>(null);
+  const [regionId, setRegionId] = useState("all");
+  const setHeaderPanel = useConsoleUiStore((state) => state.setHeaderPanel);
+  const principal = session.current;
+  const organizationId = committedFrame.scope?.organization.id;
+  const effectiveOrganizationId = organizationId ?? principal?.session.organizationId;
+  const organizationName = committedFrame.scope?.organization.name;
+  const headerIdentity = useMemo(() => roleSession.identity ? ({
+    accountType: accountMessages("role"),
+    loginName: roleSession.identity.role.name,
+    principalId: roleSession.identity.role.id,
+    tenant: { id: roleSession.identity.account.id, name: roleSession.identity.account.displayName }
+  }) : ({
+    accountType: accountMessages(principal?.loginName.includes("@") ? "child" : "primary"),
+    loginName: principal?.loginName ?? t("user"),
+    principalId: principal?.session.principalId ?? "IAM session",
+    tenant: { id: effectiveOrganizationId, name: organizationName ?? principal?.session.organizationId ?? t("unspecifiedTenant") }
+  }), [principal, effectiveOrganizationId, organizationName, accountMessages, roleSession.identity, t]);
+  const headerScope = useMemo(() => ({ regionId, onRegionChange: setRegionId }), [regionId]);
+  useEffect(() => () => useConsoleUiStore.getState().resetSessionUi(), []);
+
+  const closeSidebarAndRestoreFocus = useCallback(() => {
+    const shouldRestore = sidebarOverlayOpen;
+    closeSidebar();
+    if (shouldRestore) window.setTimeout(() => sidebarTrigger.current?.focus(), 0);
+  }, [closeSidebar, sidebarOverlayOpen]);
+
+  const closeWorkspaceAndRestoreFocus = useCallback(() => {
+    closeWorkspace();
+    window.setTimeout(() => workspaceTrigger.current?.focus(), 0);
+  }, [closeWorkspace]);
+
+  const workspaceKey = scene?.workspace ? `${scene.section}:${scene.workspace.kind}` : null;
+  useEffect(() => { closeWorkspace(); }, [workspaceKey, closeWorkspace]);
 
   useEffect(() => {
-    if (!sidebarOverlayOpen && !workspaceOpen) return;
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closeSidebar();
-        closeWorkspace();
+    if (!navigation.pendingHref) return;
+    closeSidebar();
+    closeWorkspace();
+  }, [navigation.pendingHref, closeSidebar, closeWorkspace]);
+
+  // Static product discovery never starts a business-data read. The accepted
+  // destination owns preparation, including favorites, search and direct links.
+  useEffect(() => {
+    if (!pendingSelection || pendingSelection.section === "access") return;
+    void prepareControlPlane(pendingSelection);
+  }, [pendingSelection, prepareControlPlane]);
+
+  useEffect(() => {
+    if (sidebarOverlayOpen) sidebarCloseButton.current?.focus();
+  }, [sidebarOverlayOpen]);
+
+  useEffect(() => {
+    if (!workspaceOpen || !workspaceFocusRequested.current) return;
+    workspaceFocusRequested.current = false;
+    workspaceCloseButton.current?.focus();
+  }, [workspaceOpen]);
+
+  useEffect(() => {
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const headerPanel = useConsoleUiStore.getState().headerPanel;
+      if (headerPanel === "products") return;
+      if (headerPanel) {
+        setHeaderPanel(null);
+        return;
       }
+      if (sidebarOverlayOpen) {
+        closeSidebarAndRestoreFocus();
+        return;
+      }
+      if (workspaceOpen) closeWorkspaceAndRestoreFocus();
     };
-    window.addEventListener("keydown", escape);
-    return () => window.removeEventListener("keydown", escape);
-  }, [closeSidebar, closeWorkspace, sidebarOverlayOpen, workspaceOpen]);
+    window.addEventListener("keydown", dismiss);
+    return () => window.removeEventListener("keydown", dismiss);
+  }, [setHeaderPanel, closeSidebarAndRestoreFocus, closeWorkspaceAndRestoreFocus, sidebarOverlayOpen, workspaceOpen]);
 
-  async function logout() {
-    if (await session.logout()) router.replace("/");
-  }
+  const sessionLogout = session.logout;
+  const logout = useCallback(async () => {
+    if (roleSession.mode === "ROLE") {
+      await roleSession.exitRole();
+      setHeaderPanel(null);
+      return;
+    }
+    if (await sessionLogout()) {
+      router.replace("/");
+      return;
+    }
+    setHeaderPanel(null);
+  }, [roleSession, sessionLogout, router, setHeaderPanel]);
+  const headerLogout = useCallback(() => { setHeaderPanel(null); requestLeave(logout); }, [setHeaderPanel, requestLeave, logout]);
 
-  if (!scene) {
-    return (
-      <LoadingShell
-        error={controlPlane.error}
-        logout={() => void logout()}
-        retry={() => void controlPlane.reload()}
-        revoking={session.phase === "revoking"}
-        sessionError={session.error}
-      />
-    );
-  }
-
-  const workspaceVisible = Boolean(scene.workspace && workspaceOpen);
-  const principal = session.current;
-  const feedback = <>
-    {session.error ? (
-      <div className={styles.errorBanner} role="alert">
-        <ShieldCheck aria-hidden="true" /><span>{session.error}</span>
-      </div>
-    ) : null}
-    {controlPlane.error ? (
-      <div className={styles.errorBanner} role="alert">
-        <ServerCog aria-hidden="true" /><span>{controlPlane.error}</span>
-      </div>
-    ) : null}
-  </>;
+  const workspaceVisible = Boolean(scene?.workspace && workspaceOpen && !navigation.pendingHref);
+  const workspaceMounted = Boolean(scene?.workspace && (workspaceVisible || activatedWorkspaceKey === workspaceKey));
+  const workspaceAction = scene?.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
+  const WorkspaceActionIcon = workspaceAction?.icon;
+  const activeService = frame.preview ? serviceForSection(frame.section) : undefined;
+  const ProductContextIcon = activeService ? favoriteIcons[activeService.id] : railIcons[frame.productIcon];
+  const productName = frame.productId === "console" ? t("consoleName") : directory(`services.${frame.productId}.name`);
+  const headerProductName = committedFrame.productId === "console" ? t("consoleName") : directory(`services.${committedFrame.productId}.name`);
+  const selectedPage = frame.navigation.find((item) => item.selected);
+  const localNavigation = frame.navigation.filter((item) => {
+    if (frame.section === "access" && roleSession.mode !== "USER") return item.id === "access";
+    if (frame.section !== "access" || item.id === "access" || item.id === "sessions" || item.id === "settings") return true;
+    if (item.id === "users") return accountCapabilities.canListUsers;
+    if (item.id === "groups") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canListGroups;
+    if (item.id === "policies") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canViewPolicies;
+    if (item.id === "roles") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.supportsLiveRoles && accountCapabilities.canListRoles;
+    if (item.id === "authorization-profiles") return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canListUsers;
+    if (item.id === "tenants") return accountCapabilities.canReadAccounts;
+    return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canListUsers;
+  });
+  const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "policy-language": iamWorkspaceText("policyLanguagePreview"), "create-role": iamWorkspaceText("createRole"), "service-authorizations": roleWorkspaceText("serviceAuthorization"), "role-access": accountText("roleAccessTitle"), "authorization-profiles": profilePublishingText("workspaceTitle"), tenants: accountText("tenantAccounts") };
+  const accessView = frame.section === "access" ? pendingSelection?.view ?? navigation.selection.view : undefined;
+  const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : frame.section === "overview" ? dashboard("title") : t(`pages.${frame.section}.title`);
+  const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
     const update = (pointer: PointerEvent) => {
       const width = window.innerWidth - pointer.clientX;
-      setWorkspaceSize(width < 320 ? "compact" : width > 430 ? "wide" : "medium");
+      setWorkspaceSize(width < 330 ? "compact" : width > 450 ? "wide" : "medium");
     };
     const finish = () => {
       window.removeEventListener("pointermove", update);
@@ -211,148 +377,137 @@ function ConsoleShell() {
     window.addEventListener("pointerup", finish);
   }
 
+  function toggleWorkspaceWithFocus() {
+    if (workspaceVisible) {
+      closeWorkspaceAndRestoreFocus();
+      return;
+    }
+    workspaceFocusRequested.current = true;
+    setActivatedWorkspaceKey(workspaceKey);
+    toggleWorkspace();
+  }
+
+  function handleSidebarKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!sidebarOverlayOpen) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSidebarAndRestoreFocus();
+      return;
+    }
+    loopOverlayFocus(event, sidebarPanel.current);
+  }
+
+  function handleWorkspaceKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeWorkspaceAndRestoreFocus();
+      return;
+    }
+    if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 920px)").matches) {
+      loopOverlayFocus(event, workspacePanel.current);
+    }
+  }
+
   return (
     <ShellFrame>
       <App>
-        <App.Base
-          className={styles.shellBase}
-          data-sidebar-overlay-open={sidebarOverlayOpen ? "true" : "false"}
-          data-workspace-overlay-open={workspaceVisible ? "true" : "false"}
-        >
-          <Layout.Header className={styles.topbar}>
-            <div className={styles.topbarBrand}><Boxes aria-hidden="true" /><strong>Matrix</strong></div>
-            <div className={styles.topbarPath}>
-              <span>Control Plane</span><ChevronRight aria-hidden="true" /><strong>{scene.title}</strong>
-            </div>
-            <div className={styles.topbarStatus}>
-              <ShieldCheck aria-hidden="true" />
-              <span>{principal?.session.organizationId ?? "organization"}</span>
-            </div>
-          </Layout.Header>
+        <App.Base className={styles.shellBase} data-sidebar-overlay-open={sidebarOverlayOpen ? "true" : "false"} data-workspace-overlay-open={workspaceVisible ? "true" : "false"}>
+          <ConsoleHeader
+            identity={headerIdentity}
+            onLogout={headerLogout}
+            revoking={session.phase === "revoking" || roleSession.busy === "exit" || roleSession.busy === "restore" || roleSession.mode === "BLOCKED"}
+            roleAccessHref={frame.preview || roleSession.supported ? "/console/access/role-access/" : undefined}
+            roleSessionActive={roleSession.mode !== "USER"}
+            scene={committedFrame}
+            productName={frame.preview ? headerProductName : productName}
+            scope={headerScope}
+          />
 
-          <Layout>
+          <HeaderBackdrop />
+
+          <ServiceLayout>
             <Sider className={styles.sider}>
-              <Sider.RailMenu aria-label="产品导航" className={styles.rail}>
-                <Link aria-label="Matrix 控制面" className={styles.railLogo} href="/console/">
-                  <Boxes aria-hidden="true" />
-                </Link>
+              <Sider.RailMenu data-surface="shell" aria-label={frame.preview ? navigationText("favorites") : t("productNavigation")} className={styles.rail}>
+                <Link aria-label={t("dashboardHome")} className={styles.railHome} href="/console/" onAccepted={closeSidebarAndRestoreFocus}><LayoutDashboard aria-hidden="true" /></Link>
                 <span className={styles.railDivider} />
-                {scene.rail.map((item) => {
+                {frame.preview ? favorites.flatMap((id) => services.filter((service) => service.id === id)).map((service) => {
+                  const Icon = favoriteIcons[service.id];
+                  const selected = service.id === activeService?.id;
+                  return <Link aria-current={selected ? "page" : undefined} aria-label={service.label} className={styles.railItem} data-selected={selected ? "true" : undefined} href={service.href} key={service.id} onAccepted={() => { closeSidebarAndRestoreFocus(); useConsoleUiStore.getState().visitService(service.id); }} title={service.label}><span className={styles.railIndicator} /><Icon aria-hidden="true" /><span className={styles.railTooltip}>{service.label}</span></Link>;
+                }) : frame.rail.slice(1).map((item) => {
                   const Icon = railIcons[item.icon];
+                  const label = directory(`services.${item.id === "access" ? "iam" : item.id === "audit" ? "audit" : "postgresql"}.name`);
                   return (
-                    <Link
-                      aria-current={item.selected ? "page" : undefined}
-                      aria-label={item.label}
-                      className={styles.railItem}
-                      data-selected={item.selected ? "true" : undefined}
-                      href={item.href}
-                      key={item.id}
-                      onClick={closeSidebar}
-                    >
-                      <span className={styles.railIndicator} />
-                      <Icon aria-hidden="true" />
-                      <span className={styles.railTooltip}>{item.label}</span>
+                    <Link aria-current={item.selected ? "page" : undefined} aria-label={label} className={styles.railItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onAccepted={closeSidebarAndRestoreFocus}>
+                      <span className={styles.railIndicator} /><Icon aria-hidden="true" /><span className={styles.railTooltip}>{label}</span>
                     </Link>
                   );
                 })}
+                {frame.preview ? <button aria-label={navigationText("addFavorite")} className={styles.railItem} onClick={() => setHeaderPanel("products")} title={navigationText("addFavorite")} type="button"><Star aria-hidden="true" /><span className={styles.railTooltip}>{navigationText("addFavorite")}</span></button> : null}
               </Sider.RailMenu>
 
-              <Sider.ContextMenu className={styles.contextMenu}>
+              <Sider.ContextMenu
+                aria-label={sidebarOverlayOpen ? t("productNavigation") : undefined}
+                aria-modal={sidebarOverlayOpen ? true : undefined}
+                className={styles.contextMenu}
+                id="console-product-navigation"
+                onKeyDown={handleSidebarKeyDown}
+                ref={sidebarPanel}
+                role={sidebarOverlayOpen ? "dialog" : undefined}
+              >
                 <div className={styles.contextHeader}>
-                  <div><Typography.Eyebrow>{scene.section === "access" ? "Identity and access" : "Managed services"}</Typography.Eyebrow><strong>{scene.section === "access" ? "访问管理" : "托管数据库"}</strong></div>
-                  {scene.section === "access" ? <ShieldCheck aria-hidden="true" /> : <Database aria-hidden="true" />}
+                  <span className={styles.contextProductIcon}><ProductContextIcon aria-hidden="true" /></span>
+                  <strong title={productName}>{productName}</strong>
+                  <Button aria-label={t("closeNavigation")} className={styles.contextCloseButton} onClick={closeSidebarAndRestoreFocus} ref={sidebarCloseButton} iconOnly size="small" variant="ghost"><X aria-hidden="true" /></Button>
                 </div>
-                <nav aria-label="控制台导航" className={styles.contextNavigation}>
-                  <p>控制面</p>
-                  {scene.navigation.map((item) => {
+                <nav aria-label={t("navigation")} className={styles.contextNavigation} data-compact={frame.section === "access" ? "true" : undefined}>
+                  {localNavigation.map((item, index) => {
                     const Icon = navigationIcons[item.icon];
                     return (
-                      <Link
-                        aria-current={item.selected ? "page" : undefined}
-                        className={styles.contextItem}
-                        data-selected={item.selected ? "true" : undefined}
-                        href={item.href}
-                        key={item.id}
-                        onClick={closeSidebar}
-                      >
-                        <Icon aria-hidden="true" />
-                        <span><strong>{item.label}</strong><small>{item.description}</small></span>
-                        {typeof item.count === "number" ? <em>{item.count}</em> : null}
+                      <Fragment key={item.id}>
+                      {item.group && item.group !== localNavigation[index - 1]?.group ? <p>{iamWorkspaceText(item.group)}</p> : null}
+                      <Link aria-current={item.selected ? "page" : undefined} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} onAccepted={closeSidebarAndRestoreFocus}>
+                        <Icon aria-hidden="true" /><span><strong>{navigationText(`items.${item.messageKey}.label`)}</strong>{frame.section !== "access" ? <small title={navigationText(`items.${item.messageKey}.hint`)}>{navigationText(`items.${item.messageKey}.hint`)}</small> : null}</span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
                       </Link>
+                      </Fragment>
                     );
                   })}
                 </nav>
                 <div className={styles.contextCallout}>
                   <CircleGauge aria-hidden="true" />
-                  <div><strong>本机部署</strong><span>PostgreSQL · 托管服务</span></div>
-                </div>
-                <div className={styles.userDock}>
-                  <div className={styles.avatar} aria-hidden="true">
-                    {principal?.loginName.slice(0, 1).toUpperCase() ?? "U"}
-                  </div>
-                  <div className={styles.userIdentity}>
-                    <strong>{principal?.loginName ?? "用户"}</strong>
-                    <span>{principal?.session.principalId ?? "IAM session"}</span>
-                  </div>
-                  <button
-                    aria-label="注销并撤销 IAM 会话"
-                    className={styles.logoutButton}
-                    disabled={session.phase === "revoking"}
-                    onClick={() => void logout()}
-                    type="button"
-                  >
-                    <LogOut aria-hidden="true" />
-                  </button>
+                  <div><strong>{frame.preview ? t("previewEnvironment") : t("localDeployment")}</strong><span>{frame.preview ? t("previewDescription") : t("deploymentDescription")}</span></div>
                 </div>
               </Sider.ContextMenu>
               <Sider.ResizeHandle />
             </Sider>
 
-            <button aria-label="关闭导航" className={styles.overlayBackdrop} onClick={closeSidebar} type="button" />
+            <button aria-hidden="true" aria-label={t("closeNavigation")} className={styles.overlayBackdrop} onClick={closeSidebarAndRestoreFocus} tabIndex={-1} type="button" />
 
             <Layout.Content>
-              <ContentPage>
-                <ContentPage.Header>
-                  <div className={styles.pageHeading}>
-                    <button aria-label="打开产品导航" className={styles.mobileMenuButton} onClick={openSidebar} type="button"><Menu aria-hidden="true" /></button>
-                    <div><Typography.Eyebrow>{scene.eyebrow}</Typography.Eyebrow><Typography.Title as="h1" level={2}>{scene.title}</Typography.Title></div>
+              <ContentPage parentLabel={pageTitle} pending={Boolean(pendingSelection)} data-navigating={pendingSelection ? "true" : undefined}>
+                <Suspense fallback={<ContentPage.Header title={pageTitle} />}><ConsolePageHeader title={pageTitle} selection={pendingSelection ?? navigation.selection} pendingHref={navigation.pendingHref} navigationFocusKey={navigation.navigationFocusKey} className={styles.pageHeader}
+                  leading={<Button aria-controls="console-product-navigation" aria-expanded={sidebarOverlayOpen} aria-label={t("openNavigation")} className={styles.mobileMenuButton} onClick={openSidebar} ref={sidebarTrigger} iconOnly size="small" variant="ghost"><Menu aria-hidden="true" /></Button>}
+                  trailing={workspaceAction && WorkspaceActionIcon ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={{ id: "workspace", label: t(`workspaceActions.${scene!.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`), icon: workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />, disabled: Boolean(pendingSelection), controls: "console-workspace", expanded: workspaceVisible, onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary" }} /> : undefined}
+                  progress={!pendingSelection && controlPlane.loading && frame.section !== "access" ? <Progress aria-label={loadingLabel} className={styles.navigationProgress} /> : null} /></Suspense>
+                <ContentPage.Body inactive={Boolean(pendingContent)} transitionKey={contentTransitionKey} pending={contentTransitionPending} loading={contentTransitionPending && pendingSelection ? <div className={styles.pageCanvas}><ConsoleContentLoadingRenderer experience={Boolean(experience)} key={navigation.pendingHref} label={loadingLabel} selection={pendingSelection} /></div> : undefined}>
+                  <div aria-busy={controlPlane.loading && frame.section !== "access"} className={styles.pageCanvas}>
+                    {session.error ? <Alert className={styles.feedback} status="danger">{authErrors(session.error)}</Alert> : null}
+                    {controlPlane.error ? scene ? <Alert className={styles.feedback} status="danger">{t(`errors.${controlPlane.error}`)}</Alert> : <div role="alert"><EmptyState title={t("loadFailed")} description={t(`errors.${controlPlane.error}`)} icon={<ServerCog />} action={<div className={styles.recoveryActions}>
+                      <Button onClick={() => void controlPlane.reload()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
+                      <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
+                    </div>} /></div> : null}
+                    {content ? <ConsoleContentRenderer accountId={frame.scope?.organization.id ?? principal?.session.organizationId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={navigation.selection} /> : null}
                   </div>
-                  <div className={styles.pageActions}>
-                    {scene.section !== "access" ? <Button aria-label="刷新" disabled={controlPlane.loading} onClick={() => void controlPlane.reload()} size="small" variant="ghost">
-                      <RefreshCcw aria-hidden="true" /><span>刷新</span>
-                    </Button> : null}
-                    {scene.workspace ? (
-                      <Button
-                        aria-controls="console-workspace"
-                        aria-expanded={workspaceVisible}
-                        aria-label={workspaceVisible ? "收起面板" : "打开面板"}
-                        onClick={toggleWorkspace}
-                        size="small"
-                        variant={workspaceVisible ? "secondary" : "ghost"}
-                      >
-                        {workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />}
-                        <span>{workspaceVisible ? "收起面板" : "打开面板"}</span>
-                      </Button>
-                    ) : null}
-                  </div>
-                </ContentPage.Header>
-                <ContentPage.Body>
-                  <div className={styles.pageIntro}>{scene.description}</div>
-                  {!workspaceVisible ? feedback : null}
-                  <ConsoleContentRenderer scene={scene.content} />
                 </ContentPage.Body>
               </ContentPage>
             </Layout.Content>
 
-            <button aria-label="关闭上下文面板" className={styles.workspaceBackdrop} onClick={closeWorkspace} type="button" />
-            <Layout.Workspace
-              className={styles.workspacePane}
-              data-size={workspaceSize}
-              data-visible={workspaceVisible ? "true" : "false"}
-              id="console-workspace"
-            >
+            <button aria-hidden="true" aria-label={t("closeWorkspace")} className={styles.workspaceBackdrop} onClick={closeWorkspaceAndRestoreFocus} tabIndex={-1} type="button" />
+            <Layout.Workspace inert={!workspaceVisible} aria-hidden={!workspaceVisible} className={styles.workspacePane} data-size={workspaceSize} data-visible={workspaceVisible ? "true" : "false"} id="console-workspace" onKeyDown={handleWorkspaceKeyDown} ref={workspacePanel}>
               <div
-                aria-label="调整上下文面板宽度"
+                aria-label={t("resizeWorkspace")}
                 aria-orientation="vertical"
                 aria-valuemax={3}
                 aria-valuemin={1}
@@ -370,33 +525,39 @@ function ConsoleShell() {
                 role="separator"
                 tabIndex={0}
               />
-              <button aria-label="关闭上下文面板" className={styles.workspaceCloseButton} onClick={closeWorkspace} type="button"><X aria-hidden="true" /></button>
-              {scene.workspace ? <ConsoleWorkspaceRenderer feedback={workspaceVisible ? feedback : null} scene={scene.workspace} /> : null}
+              <Button aria-label={t("closeWorkspace")} className={styles.workspaceCloseButton} onClick={closeWorkspaceAndRestoreFocus} ref={workspaceCloseButton} iconOnly size="small" variant="ghost"><X aria-hidden="true" /></Button>
+              {workspaceMounted && scene?.workspace ? <ConsoleWorkspaceRenderer scene={scene.workspace} /> : null}
             </Layout.Workspace>
-          </Layout>
+          </ServiceLayout>
         </App.Base>
       </App>
     </ShellFrame>
   );
 }
 
-export function ConsoleShellRenderer({
-  repository,
-  selection
-}: {
+function ConsoleSignIn({ returnTo }: { returnTo: string }) {
+  const query = useSearchParams().toString();
+  return <LoginRenderer returnTo={returnTo + (query ? "?" + query : "")} />;
+}
+
+export function ConsoleShellRenderer({ accountRepository, experience, repository, selection }: {
+  accountRepository?: AccountRepository;
+  experience?: ExperienceSnapshot;
   repository?: ControlPlaneRepository;
   selection: ControlPlaneRouteSelection;
 }) {
   const session = useSession();
-  if (
-    !session.current ||
-    (session.phase !== "authenticated" && session.phase !== "updating-password" && session.phase !== "revoking")
-  ) {
-    return <LoginRenderer />;
-  }
+  const roleSession = useRoleSession();
+  const t = useTranslations("Auth");
+  const returnTo = consoleRouteHref(selection);
+  if (!session.current || (session.phase !== "authenticated" && session.phase !== "revoking")) return <Suspense fallback={<ShellFrame><PageSkeleton label={t("welcome")} layout="access" /></ShellFrame>}><ConsoleSignIn returnTo={returnTo} /></Suspense>;
   return (
-    <ControlPlaneProvider repository={repository} selection={selection}>
-      <ConsoleShell />
-    </ControlPlaneProvider>
+    <ConsoleNavigationProvider selection={selection}>
+      <AccountAccessProvider active={roleSession.mode === "USER" && selection.section === "access" && selection.view !== "sessions" && selection.view !== "role-access"} repository={accountRepository}>
+        <ControlPlaneProvider experience={experience} repository={repository} selection={selection}>
+          <ConsoleShell experience={experience} />
+        </ControlPlaneProvider>
+      </AccountAccessProvider>
+    </ConsoleNavigationProvider>
   );
 }

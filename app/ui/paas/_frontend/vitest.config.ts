@@ -9,7 +9,12 @@ export default defineConfig({
     }
   },
   test: {
+    // Large jsdom interaction files contend for CPU and cross the existing
+    // five-second test budget when run together. Serialize files instead of
+    // hiding that contention behind a longer per-test timeout.
+    maxWorkers: 1,
     environment: "jsdom",
+    setupFiles: ["./src/test/setup.ts"],
     globals: false,
     include: ["src/**/*.test.{ts,tsx}"],
     restoreMocks: true

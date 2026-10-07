@@ -21,6 +21,10 @@ function addTree(digest, target) {
 
 function staticBuildId() {
   const digest = createHash("sha256");
+  digest.update("NEXT_PUBLIC_MATRIX_UX_PREVIEW");
+  digest.update("\0");
+  digest.update(process.env.NEXT_PUBLIC_MATRIX_UX_PREVIEW === "1" ? "enabled" : "disabled");
+  digest.update("\0");
   for (const file of ["package.json", "package-lock.json", "next.config.mjs", "tsconfig.json"]) {
     digest.update(file);
     digest.update("\0");
@@ -28,19 +32,20 @@ function staticBuildId() {
     digest.update("\0");
   }
   addTree(digest, join(project, "src"));
+  addTree(digest, join(project, "public"));
+  addTree(digest, join(project, "scripts"));
   return `matrix-${digest.digest("hex").slice(0, 20)}`;
 }
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  agentRules: false,
+  allowedDevOrigins: ["127.0.0.1"],
   generateBuildId: async () => staticBuildId(),
   output: "export",
   reactStrictMode: true,
   trailingSlash: true,
   poweredByHeader: false,
-  experimental: {
-    cpus: 2,
-  },
 };
 
 export default nextConfig;

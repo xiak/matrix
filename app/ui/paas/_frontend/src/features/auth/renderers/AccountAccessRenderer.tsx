@@ -1,484 +1,275 @@
 "use client";
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { requestToken } from "@/infrastructure/http/jsonRequest";
-import { Building2, KeyRound, Plus, RefreshCcw, ShieldCheck, UserRound, Users } from "lucide-react";
-import { Badge, Button, Card, Input, Select, Typography } from "@ui/xiak";
-import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
+import { useTranslations } from "next-intl";
+import { Plus } from "lucide-react";
+import { Alert, ContentPage, FormField, Table, TablePagination, TableSkeleton, EmptyState, Badge, Button, Card, Input, LoadingNotice, Typography, PageSkeleton, Tabs, type PageCommandsHandle } from "@ui/xiak";
+import { useAccountAccess, useAccountCapabilities } from "../application/AccountAccessProvider";
+import type { AccountAccessView } from "../domain/accounts";
+import type { AccountAccessScene } from "../scenes/accountAccessScene";
+import { AccountIdentifier, AccountOverview } from "./AccountOverview";
+import { AccountUserDirectory } from "./AccountUserDirectory";
+import { CreateTenantWorkspace } from "./AccountUserDialogs";
+import { CreateUserWizard } from "./CreateUserWizard";
+import { AccessGroups } from "./AccessGroups";
+import { AccountLiveGroups } from "./AccountLiveGroups";
+import { GroupCreationWizard } from "./GroupCreationWizard";
+import { AccessPolicies } from "./AccessPolicies";
+import { PolicyAuthoringWizard } from "./PolicyAuthoringWizard";
+import { policyCreationMethod, type PolicyCreationMethod } from "./PolicyCreationMethods";
+import { PolicyConfigurationReview } from "./PolicyConfigurationReview";
+import { CurrentAccessDiagnosisPreview } from "./CurrentAccessDiagnosisPreview";
+import { AccessAnalysisPreview, SecurityReportDirectoryPreview } from "./AccessReports";
+import { AccessRoles } from "./AccessRoles";
+import { RoleCreationWizard } from "./RoleCreationWizard";
+import { AccessFederationWorkspace } from "./AccessIdentity";
+import { AccessCredentials } from "./AccessCredentials";
+import { LiveAccessCredentials } from "./LiveAccessCredentials";
+import { AccessSecuritySettings, AccessUserSso } from "./AccessSecuritySettings";
+import { AccessCollaborationBoundaries } from "./AccessCollaborationBoundaries";
+import { AccountPolicyDirectory } from "./AccountPolicyDirectory";
+import { LivePolicyCreationWizard } from "./LivePolicyCreationWizard";
+import { AccountTenantWorkspace } from "./AccountTenantWorkspace";
+import { LiveAccountTenants } from "./LiveAccountTenants";
+import { OrganizationGovernancePreview } from "./OrganizationGovernancePreview";
+import { OwnSessionsPage } from "./OwnSessionsPage";
+import { LivePersonalSecuritySettings } from "./LivePersonalSecuritySettings";
+import { LiveAccountSecuritySettings } from "./LiveAccountSecuritySettings";
+import { RoleSelfServicePreview } from "./RoleSelfServicePreview";
+import { LiveRoleSelfService } from "./LiveRoleSelfService";
+import { useRoleSession } from "../application/RoleSessionProvider";
 import { useSession } from "../application/SessionProvider";
-import type { AccountCommand, ActionCapability, UserPermissionBoundary } from "../domain/accounts";
-import type { AccountRepository } from "../repositories/iamRepository";
-import type { AccountAccessScene, AccountUserScene, TenantAccountScene } from "../scenes/accountAccessScene";
+import { AccountLiveRoles } from "./AccountLiveRoles";
+import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
+import { LiveAccessAnalysis } from "./LiveAccessAnalysis";
+import { LiveSecurityReport } from "./LiveSecurityReport";
+import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
+import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
+import { AuthorizationProfilePublishingWorkspace } from "./AccountAuthorizationProfileCatalog";
+import type { AccountUserDetailTab } from "./AccountUserWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
 
-const loginPattern = "[a-z][a-z0-9._\\-]{2,63}";
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
+const accountSignInSettingsId = "account-sign-in-settings";
 
-function restrictionMessage(reason: ActionCapability["restrictionReason"]): string {
-  switch (reason) {
-    case "CURRENT_CREDENTIAL_CHANGE_REQUIRED": return "当前登录凭据必须先完成密码修改。";
-    case "SELF_PROTECTED": return "当前登录用户不能通过子用户管理删除自身或改变自身安全状态。";
-    case "ROOT_IDENTITY_PROTECTED": return "主账号最终控制身份不能加入用户组或被子用户管理替代。";
-    case "INSTALLATION_AUTHORITY_PROTECTED": return "目标关联安装级权限，必须使用受保护的平台恢复或管理流程。";
-    case "SYSTEM_ACCOUNT_PROTECTED": return "安装服务所属的系统账号不能停用。";
-    case "TARGET_DISABLED": return "目标用户已停用，恢复后才能新增策略关联。";
-    case "TARGET_CREDENTIAL_CHANGE_REQUIRED": return "目标用户须先完成初始密码修改，才能取得安装级权限。";
-    case "TARGET_MUST_BE_DISABLED": return "删除用户前必须先禁用，确认现有会话已经失效。";
-    default: return "当前身份没有执行此操作所需的权限。";
-  }
-}
+function SettingsSectionNav({ preview }: { preview: boolean }) {
+  const t = useTranslations("AccountAccess");
+  const sections = preview ? [
+    { id: accountSignInSettingsId, label: t("settingsSignIn"), hint: t("settingsSignInHint") },
+    { id: "security-settings-workspace", label: t("securityWorkspaceTitle"), hint: t("securityWorkspaceNavHint") }
+  ] : [
+    { id: accountSignInSettingsId, label: t("settingsSignIn"), hint: t("settingsSignInHint") },
+    { id: "live-personal-security", label: t("settingsPersonalSecurity"), hint: t("settingsPersonalSecurityHint") },
+    { id: "live-account-security", label: t("settingsAccountSecurity"), hint: t("settingsAccountSecurityHint") }
+  ];
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <label className={styles.field}><span>{label}</span>{children}</label>;
-}
-
-function PasswordField({ value, onChange }: { value: string; onChange(value: string): void }) {
-  return <Field label="初始密码">
-    <Input autoComplete="new-password" maxLength={128} minLength={14} onChange={(event) => onChange(event.target.value)} required type="password" value={value} />
-    <small>14–128 字节，不含空格，至少包含大写、小写、数字、符号中的三类。首次登录必须修改。</small>
-  </Field>;
-}
-
-function CreateAccountForm({ tenant, onClose }: { tenant: boolean; onClose(): void }) {
-  const access = useAccountAccess();
-  const [password, setPassword] = useState("");
-  async function submit(event: FormEvent<HTMLFormElement>) {
+  function openSection(event: MouseEvent<HTMLAnchorElement>, id: string) {
     event.preventDefault();
-    const fields = new FormData(event.currentTarget);
-    const loginName = String(fields.get("loginName") ?? "").trim();
-    const displayName = String(fields.get("displayName") ?? "").trim();
-    const initialPassword = password;
-    setPassword("");
-    const accepted = await access.execute(tenant ? {
-      kind: "create-account", id: String(fields.get("accountId") ?? "").trim(),
-      displayName: String(fields.get("accountName") ?? "").trim(),
-      rootLoginName: loginName, rootDisplayName: displayName, initialPassword
-    } : { kind: "create-user", loginName, displayName, initialPassword });
-    if (accepted) onClose();
-  }
-  return <Card>
-    <Card.Header><Typography.Title as="h2" level={3}>{tenant ? "开通租户账号" : "创建子用户"}</Typography.Title></Card.Header>
-    <Card.Body>
-      <form aria-label={tenant ? "开通租户账号" : "创建子用户"} className={styles.form} onSubmit={submit}>
-        {tenant ? <>
-          <Field label="租户 ID"><Input autoComplete="off" maxLength={128} name="accountId" pattern="[A-Za-z0-9][A-Za-z0-9._:\-]{0,127}" placeholder="例如 team-alpha" required /><small>资源与安全归属。创建后不可更改，也是子账号登录的稳定后缀。</small></Field>
-          <Field label="租户名称"><Input maxLength={128} name="accountName" required /></Field>
-        </> : null}
-        <Field label={tenant ? "主账号登录名" : "子用户名"}><Input autoComplete="off" maxLength={64} minLength={3} name="loginName" pattern={loginPattern} placeholder={tenant ? "例如 team-admin" : "例如 developer"} required /><small>以小写字母开头，可包含小写字母、数字、点、下划线和短横线。{tenant ? "主账号登录名全平台唯一。" : "仅填写用户名，不包含 @ 后缀。"}</small></Field>
-        <Field label="用户显示名称"><Input maxLength={128} name="displayName" required /></Field>
-        <PasswordField onChange={setPassword} value={password} />
-        <p className={styles.note}>{tenant ? "新租户拥有独立主账号与资源空间。主账号不获得平台权限，开通者也不获得该租户的资源权限。请通过安全渠道交付初始密码。" : "子用户按授权使用所属租户的资源与配额，不是另一个租户。请通过安全渠道交付初始密码。"}</p>
-        <div className={styles.actions}>
-          <Button disabled={access.busy || access.loading || !password} type="submit">{access.busy ? "正在创建…" : tenant ? "确认开通" : "创建用户"}</Button>
-          <Button disabled={access.busy} onClick={onClose} variant="ghost">取消</Button>
-        </div>
-      </form>
-    </Card.Body>
-  </Card>;
-}
-
-function UserBoundaryForm({ scene, user }: { scene: AccountAccessScene; user: AccountUserScene }) {
-  const access = useAccountAccess();
-  const [boundary, setBoundary] = useState<UserPermissionBoundary | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
-  const [selection, setSelection] = useState<{ id: string; resourceVersion: number } | null>(null);
-  const [confirmation, setConfirmation] = useState<"set" | "remove" | null>(null);
-  const [pending, setPending] = useState<AccountCommand | null>(null);
-  const [revision, setRevision] = useState(0);
-  const read = access.readUserBoundary;
-  useEffect(() => {
-    let active = true;
-    read(user.id).then((value) => {
-      if (!active) return;
-      if (value.resourceVersion !== user.resourceVersion) {
-        setProblem("用户修订已变化，请刷新账号信息后重新核对。");
-        return;
-      }
-      setBoundary(value);
-      setPending(null); setConfirmation(null);
-    }, () => { if (active) setProblem("权限边界读取失败，当前状态未知；请重新读取，不会按无边界处理。"); });
-    return () => { active = false; };
-  }, [read, revision, user.id, user.resourceVersion]);
-  const policies = scene.policies.filter((policy) => policy.scope === "TENANT" && policy.status === "ACTIVE" && policy.id !== boundary?.policy?.policyId);
-  const selected = selection ? policies.find((policy) => policy.id === selection.id) : null;
-  const changed = selection !== null && selected?.resourceVersion !== selection.resourceVersion;
-  const disabled = access.busy || access.loading;
-  const operationAllowed = (pending ? pending.kind === "remove-user-boundary" : confirmation === "remove") ? user.canRemoveBoundary : user.canSetBoundary;
-  async function submit() {
-    if (!boundary || disabled || !operationAllowed) return;
-    const command: AccountCommand | null = pending ?? (confirmation === "remove" ? {
-      kind: "remove-user-boundary", accountId: scene.accountId, userId: user.id,
-      resourceVersion: boundary.resourceVersion, requestId: requestToken("ui-boundary-")
-    } : confirmation === "set" && selection && !changed ? {
-      kind: "set-user-boundary", accountId: scene.accountId, userId: user.id, policyId: selection.id,
-      policyResourceVersion: selection.resourceVersion, resourceVersion: boundary.resourceVersion, requestId: requestToken("ui-boundary-")
-    } : null);
-    if (!command) return;
-    setPending(command);
-    if (await access.execute(command)) {
-      setPending(null); setConfirmation(null); setSelection(null);
-    }
-  }
-  function refresh() {
-    setBoundary(null); setProblem(null); setRevision((value) => value + 1);
-  }
-  return <section aria-label="用户权限边界" className={styles.detail}>
-    <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>租户权限边界</strong></div>
-    <p className={styles.note}>边界只限制直接和用户组授权的最大范围，本身不授予权限，也不改变平台权限。</p>
-    {problem ? <p className={styles.error} role="alert">{problem}</p> : !boundary ? <p role="status">正在读取权限边界…</p> : <>
-      <p>{boundary.policy ? `当前边界：${boundary.policy.policyId} · ${boundary.policy.versionId}` : "当前未设置边界。"}</p>
-      {!pending && !confirmation ? <>
-        {user.canSetBoundary && scene.tenantPoliciesAvailable ? <form aria-label="选择权限边界" className={styles.inlineForm} onSubmit={(event) => { event.preventDefault(); if (selection && !changed) setConfirmation("set"); }}>
-          <Field label="边界策略"><Select disabled={disabled} value={changed ? "" : selection?.id ?? ""} onChange={(event) => {
-            const policy = policies.find((item) => item.id === event.target.value);
-            setSelection(policy ? { id: policy.id, resourceVersion: policy.resourceVersion } : null);
-          }}><option value="">{changed ? "策略修订已变化，请重新选择" : "请选择租户策略"}</option>{policies.map((policy) => <option key={policy.id} value={policy.id}>{policy.displayName}</option>)}</Select></Field>
-          <Button disabled={disabled || !selection || changed} type="submit" variant="secondary">{boundary.policy ? "替换边界" : "设置边界"}</Button>
-        </form> : null}
-        {user.canSetBoundary && !scene.tenantPoliciesAvailable ? <p className={styles.note}>没有可读取的租户策略目录，不能选择边界策略。</p> : null}
-        {user.canRemoveBoundary && boundary.policy ? <Button disabled={disabled} onClick={() => setConfirmation("remove")} variant="danger">移除边界</Button> : null}
-        {!user.canSetBoundary && !user.canRemoveBoundary ? <p className={styles.note}>{restrictionMessage(user.boundaryRestrictionReason)}</p> : null}
-      </> : <div className={styles.confirmation}>
-        <p>{pending ? "上次请求尚待核对。重试会使用原请求编号和原修订，不自动生成新意图。" : confirmation === "remove" ? "移除后，原有直接或用户组授权可能重新生效。确认解除此权限上限？" : "设置或替换会改变该用户的最大租户权限，下一次受保护请求生效。确认提交？"}</p>
-        <Button disabled={disabled || !operationAllowed || (!pending && confirmation === "set" && changed)} onClick={submit} variant="danger">{pending ? "重试原边界请求" : confirmation === "remove" ? "确认移除边界" : "确认设置边界"}</Button>
-        {!pending ? <Button disabled={disabled} onClick={() => setConfirmation(null)} variant="ghost">取消</Button> : null}
-        {changed && !pending ? <p role="alert">策略修订已变化，请取消并重新选择。</p> : null}
-      </div>}
-    </>}
-    <Button disabled={disabled} onClick={refresh} size="small" variant="ghost">重新读取并核对边界</Button>
-  </section>;
-}
-
-function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user: AccountUserScene; onClose(): void }) {
-  const access = useAccountAccess();
-  const [password, setPassword] = useState("");
-  const [confirmStatus, setConfirmStatus] = useState(false);
-  const [resettingPassword, setResettingPassword] = useState(false);
-  const [editingProfile, setEditingProfile] = useState(false);
-  const [displayName, setDisplayName] = useState(user.name);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [revokeId, setRevokeId] = useState<string | null>(null);
-  const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
-  const availablePolicies = scene.policies.filter((policy) => policy.status === "ACTIVE" &&
-    (policy.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy) &&
-    !user.attachments.some((attachment) => attachment.policyId === policy.id));
-  const currentSelection = selectedPolicy ? availablePolicies.find((policy) => policy.id === selectedPolicy.id) : null;
-  const selectionChanged = selectedPolicy !== null && currentSelection?.resourceVersion !== selectedPolicy.resourceVersion;
-  const disabled = access.busy || access.loading;
-
-  async function resetPassword(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const initialPassword = password;
-    setPassword("");
-    if (await access.execute({ kind: "reset-password", userId: user.id, resourceVersion: user.resourceVersion, initialPassword })) setResettingPassword(false);
-  }
-  return <Card>
-    <Card.Header className={styles.cardHeader}>
-      <div><Typography.Title as="h2" level={3}>{user.name}</Typography.Title><Typography.Text tone="muted">{user.qualifiedName}</Typography.Text></div>
-      <Button onClick={onClose} size="small" variant="ghost">关闭详情</Button>
-    </Card.Header>
-    <Card.Body className={styles.detail}>
-      <div className={styles.sectionHeading}><UserRound aria-hidden="true" /><strong>用户资料</strong></div>
-      {editingProfile ? <form className={styles.inlineForm} onSubmit={async (event) => {
-        event.preventDefault();
-        const next = displayName.trim();
-        if (next && await access.execute({ kind: "update-user", userId: user.id, displayName: next, resourceVersion: user.resourceVersion })) setEditingProfile(false);
-      }}>
-        <Field label="显示名称"><Input disabled={disabled} maxLength={128} minLength={1} onChange={(event) => setDisplayName(event.target.value)} required value={displayName} /></Field>
-        <Button disabled={disabled || !displayName.trim()} type="submit">保存名称</Button>
-        <Button disabled={disabled} onClick={() => { setDisplayName(user.name); setEditingProfile(false); }} variant="ghost">取消</Button>
-      </form> : user.canUpdate ? <Button disabled={disabled} onClick={() => setEditingProfile(true)} size="small" variant="secondary">修改显示名称</Button>
-        : <p className={styles.note}>{restrictionMessage(user.updateRestrictionReason)}</p>}
-      <p className={styles.note}>用户 ID、登录名和所属账号创建后不可修改。</p>
-      {user.canRead ? <UserBoundaryForm scene={scene} user={user} /> : null}
-      <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>已关联策略</strong></div>
-      <p className={styles.note}>策略按明确权威范围生效，不限于该用户创建的资源。管理员交接通过关联、撤销策略完成，不转让原主账号。</p>
-      <ul className={styles.bindingList}>
-        {user.attachments.map((attachment) => <li key={attachment.id}>
-          <span>{attachment.label} <Badge status="neutral">{attachment.scope === "INSTALLATION" ? "平台" : "租户"}</Badge></span>
-          {!attachment.canRevoke ? <span>{restrictionMessage(attachment.revokeRestrictionReason)}</span> : revokeId === attachment.id ? <div className={styles.actions}>
-            <span>立即撤销？</span><Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "revoke-policy-attachment", attachmentId: attachment.id, resourceVersion: attachment.resourceVersion })) setRevokeId(null); }} size="small" variant="danger">确认撤销</Button>
-            <Button disabled={disabled} onClick={() => setRevokeId(null)} size="small" variant="ghost">取消</Button>
-          </div> : <Button aria-label={`撤销${attachment.label}`} disabled={disabled} onClick={() => setRevokeId(attachment.id)} size="small" variant="ghost">撤销</Button>}
-        </li>)}
-      </ul>
-      {user.attachments.length === 0 ? <p className={styles.note}>尚未关联策略。用户可登录查看自身账号，但不能访问受保护资源。</p> : null}
-      {availablePolicies.length > 0 || selectedPolicy ? <form className={styles.inlineForm} onSubmit={async (event) => {
-        event.preventDefault();
-        if (selectedPolicy && !selectionChanged && await access.execute({ kind: "create-policy-attachment", userId: user.id,
-          policyId: selectedPolicy.id, policyResourceVersion: selectedPolicy.resourceVersion })) setSelectedPolicy(null);
-      }}>
-        <Field label="关联策略"><Select disabled={disabled} onChange={(event) => {
-          const policy = availablePolicies.find((item) => item.id === event.target.value);
-          setSelectedPolicy(policy ? { id: policy.id, resourceVersion: policy.resourceVersion } : null);
-        }} required value={selectionChanged ? "" : selectedPolicy?.id ?? ""}><option disabled value="">{selectionChanged ? "策略版本已变化，请重新选择" : "请选择策略"}</option>{availablePolicies.map((item) => <option key={item.id} value={item.id}>{item.displayName} · {item.scopeLabel}</option>)}</Select></Field>
-        <Button disabled={disabled || !selectedPolicy || selectionChanged} type="submit" variant="secondary">关联策略</Button>
-        {selectionChanged ? <p className={styles.note} role="alert">策略版本已经变化，请重新选择后再提交。</p> : null}
-      </form> : null}
-      {!user.canAttachTenantPolicy && !user.canAttachPlatformPolicy ? <p className={styles.note}>{restrictionMessage(user.tenantAttachmentRestrictionReason ?? user.platformAttachmentRestrictionReason)}</p> : null}
-      <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>登录与安全</strong></div>
-      <div className={styles.actions}>
-        {user.canSetStatus ? <Button disabled={disabled} onClick={() => { setConfirmStatus(true); setResettingPassword(false); setConfirmDelete(false); setPassword(""); }} variant="secondary">{user.enabled ? "禁用用户" : "启用用户"}</Button> : null}
-        {user.canResetPassword ? <Button disabled={disabled} onClick={() => { setResettingPassword(true); setConfirmStatus(false); }} variant="secondary">重置密码</Button> : null}
-        {user.canDelete ? <Button disabled={disabled} onClick={() => { setConfirmDelete(true); setConfirmStatus(false); setResettingPassword(false); }} variant="danger">删除用户</Button> : null}
-      </div>
-      {!user.canSetStatus ? <p className={styles.note}>状态：{restrictionMessage(user.statusRestrictionReason)}</p> : null}
-      {!user.canResetPassword ? <p className={styles.note}>密码：{restrictionMessage(user.passwordRestrictionReason)}</p> : null}
-      {!user.canDelete ? <p className={styles.note}>删除：{restrictionMessage(user.deleteRestrictionReason)}</p> : null}
-        {confirmStatus ? <div className={styles.confirmation}>
-          <p>{user.enabled ? "禁用将撤销该用户的现有会话，下一次受保护请求即被拒绝；不会删除租户资源或停止已有工作负载。" : "启用后可使用有效密码重新登录；已撤销的会话不会恢复。"}</p>
-          <div className={styles.actions}>
-            <Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "set-status", userId: user.id, status: user.enabled ? "DISABLED" : "ACTIVE", resourceVersion: user.resourceVersion })) setConfirmStatus(false); }} variant={user.enabled ? "danger" : "primary"}>{user.enabled ? "确认禁用" : "确认启用"}</Button>
-            <Button disabled={disabled} onClick={() => setConfirmStatus(false)} variant="ghost">取消</Button>
-          </div>
-        </div> : null}
-        {resettingPassword ? <form className={styles.form} onSubmit={resetPassword}>
-          <PasswordField onChange={setPassword} value={password} />
-          <p className={styles.note}>重置将撤销所有现有会话。用户下次登录必须修改初始密码；禁用状态不会被自动解除。</p>
-          <div className={styles.actions}><Button disabled={disabled || !password} type="submit">确认重置密码</Button><Button disabled={disabled} onClick={() => { setResettingPassword(false); setPassword(""); }} variant="ghost">取消</Button></div>
-        </form> : null}
-        {confirmDelete ? <div className={styles.confirmation}>
-          <p>删除不可撤销。登录名与用户 ID 将永久保留，密码和现有会话失效，当前策略关联会被撤销；租户资源、运行中的工作负载和审计记录不会删除。</p>
-          <div className={styles.actions}>
-            <Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "delete-user", userId: user.id, resourceVersion: user.resourceVersion })) onClose(); }} variant="danger">确认永久删除</Button>
-            <Button disabled={disabled} onClick={() => setConfirmDelete(false)} variant="ghost">取消</Button>
-          </div>
-        </div> : null}
-    </Card.Body>
-  </Card>;
-}
-
-function UserDirectory({ scene }: { scene: AccountAccessScene }) {
-  const access = useAccountAccess();
-  const [creating, setCreating] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = scene.users.find((user) => user.id === selectedId);
-  return <div className={styles.stack}>
-    <Card>
-      <Card.Header className={styles.cardHeader}>
-        <div><Typography.Title as="h2" level={3}>子用户</Typography.Title><Typography.Text tone="muted">独立身份与凭据，按授权访问所属租户的资源</Typography.Text></div>
-        {scene.canCreateUsers ? <Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />创建用户</Button> : null}
-      </Card.Header>
-      <div aria-label="租户用户列表" className={styles.tableWrap} role="region" tabIndex={0}>
-        <table className={styles.table}>
-          <thead><tr><th>用户</th><th>策略</th><th>状态</th><th>操作</th></tr></thead>
-          <tbody>{scene.users.map((user) => <tr key={user.id}>
-            <td><strong>{user.name}</strong><small>{user.qualifiedName}</small></td>
-            <td><div className={styles.roleTags}>{user.attachments.length ? user.attachments.map((attachment) => <Badge key={attachment.id} status="neutral">{attachment.label}</Badge>) : "未授权"}</div></td>
-            <td><Badge status={user.enabled ? "success" : "neutral"}>{user.statusLabel}</Badge></td>
-            <td><Button aria-label={`管理 ${user.loginName}`} disabled={access.busy || access.loading} onClick={() => { setSelectedId(user.id); setCreating(false); }} size="small" variant="ghost">管理</Button></td>
-          </tr>)}</tbody>
-        </table>
-        {!scene.users.length ? <p className={styles.empty}>当前页没有子用户。可创建子用户并按需授予权限。</p> : null}
-      </div>
-      <Card.Footer><span className={styles.note}>每页最多 100 名子用户；主账号信息见用户设置</span><div className={styles.actions}><Button disabled={access.busy || access.loading} onClick={() => { setSelectedId(null); access.usersPage(""); }} size="small" variant="ghost">首页</Button><Button disabled={access.busy || access.loading || !scene.nextUserPage} onClick={() => { setSelectedId(null); access.usersPage(scene.nextUserPage!); }} size="small" variant="secondary">下一页</Button></div></Card.Footer>
-    </Card>
-    {creating ? <CreateAccountForm onClose={() => setCreating(false)} tenant={false} /> : null}
-    {selected ? <UserAccess key={`${selected.id}:${selected.resourceVersion}`} onClose={() => setSelectedId(null)} scene={scene} user={selected} /> : null}
-  </div>;
-}
-
-function PasswordSettings() {
-  const session = useSession();
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmation, setConfirmation] = useState("");
-  const [revokeOthers, setRevokeOthers] = useState(true);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const pending = session.phase === "updating-password" || session.phase === "revoking";
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setFormError(null);
-    setMessage(null);
-    session.clearError();
-    if (newPassword !== confirmation) {
-      setFormError("两次输入的新密码不一致");
-      return;
-    }
-    const submission = session.changePassword(currentPassword, newPassword, revokeOthers);
-    setCurrentPassword("");
-    setNewPassword("");
-    setConfirmation("");
-    if (await submission) {
-      setMessage(revokeOthers
-        ? "密码已更新，其他登录会话已退出，当前会话保留。"
-        : "密码已更新，当前会话及其他仍有效的登录会话保留。");
-    }
+    const target = document.getElementById(id);
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView?.({ block: "start" });
   }
 
-  return <Card>
-    <Card.Header><div><Typography.Title as="h2" level={3}>修改登录密码</Typography.Title><Typography.Text tone="muted">仅修改当前登录账号的密码</Typography.Text></div></Card.Header>
-    <Card.Body>
-      <form className={styles.form} onSubmit={submit}>
-        <Field label="当前密码"><Input autoComplete="current-password" disabled={pending} maxLength={128} onChange={(event) => setCurrentPassword(event.target.value)} required type="password" value={currentPassword} /></Field>
-        <Field label="新密码"><Input aria-describedby="account-password-policy" autoComplete="new-password" disabled={pending} maxLength={128} minLength={14} onChange={(event) => setNewPassword(event.target.value)} required type="password" value={newPassword} /></Field>
-        <Field label="确认新密码"><Input autoComplete="new-password" disabled={pending} maxLength={128} minLength={14} onChange={(event) => setConfirmation(event.target.value)} required type="password" value={confirmation} /></Field>
-        <p className={styles.note} id="account-password-policy">14–128 字节，不含空格，至少包含大写、小写、数字、符号中的三类。</p>
-        <label className={styles.sessionOption}><Input checked={revokeOthers} className={styles.sessionCheckbox} disabled={pending} onChange={(event) => setRevokeOthers(event.target.checked)} type="checkbox" /><span>同时退出其他登录会话（推荐）</span></label>
-        <p className={styles.note}>当前会话保留。不勾选时仅保留其他仍有效的会话，已退出或已撤销的会话不会恢复。</p>
-        {formError ? <p className={styles.error} role="alert">{formError}</p> : null}
-        {message ? <p className={styles.success} role="status">{message}</p> : null}
-        <div><Button disabled={pending || !currentPassword || !newPassword || !confirmation} type="submit">{pending ? "正在更新密码…" : "更新密码"}</Button></div>
-      </form>
-    </Card.Body>
-  </Card>;
+  return <nav aria-label={t("settingsNavigation")} className={styles.settingsSectionNav}>
+    {sections.map((section) => <a className={styles.settingsSectionLink} href={`#${section.id}`} key={section.id} onClick={(event) => openSection(event, section.id)}>
+      <strong>{section.label}</strong>
+      <span>{section.hint}</span>
+    </a>)}
+  </nav>;
 }
 
 function UserSettings({ scene }: { scene: AccountAccessScene }) {
+  const t = useTranslations("AccountAccess");
   const access = useAccountAccess();
+  const aliasId = useId();
   const [alias, setAlias] = useState(scene.loginAlias ?? "");
-  return <div className={styles.stack}>
-    <PasswordSettings />
-    <Card>
-    <Card.Header className={styles.cardHeader}><div><Typography.Title as="h2" level={3}>主账号别名</Typography.Title><Typography.Text tone="muted">主账号的专属登录标识</Typography.Text></div><Badge status={scene.loginAlias ? "success" : "neutral"}>{scene.loginAlias ? "已设置" : "未设置"}</Badge></Card.Header>
+  return <Card>
+    <Card.Header><div><Typography.Title as="h2" id={accountSignInSettingsId} level={3} tabIndex={-1}>{t("alias")}</Typography.Title><Typography.Text tone="muted">{t("aliasSubtitle")}</Typography.Text></div><Badge status={scene.loginAlias ? "success" : "neutral"}>{scene.loginAlias ? t("aliasSet") : t("aliasUnset")}</Badge></Card.Header>
     <Card.Body className={styles.detail}>
-      <p className={styles.note}>子用户可使用别名替代租户 ID 登录。它不是邮箱、域名，也不是主账号的用户名。</p>
+      <p className={styles.note}>{t("aliasHint")}</p>
       <dl className={styles.facts}>
-        <div><dt>租户 ID</dt><dd><Typography.Code>{scene.accountId}</Typography.Code></dd></div>
-        <div><dt>主账号登录名</dt><dd>{scene.rootLoginName}</dd></div>
-        <div><dt>固定 ID 登录</dt><dd><Typography.Code>username@{scene.accountId}</Typography.Code></dd></div>
-        <div><dt>别名登录</dt><dd>{scene.loginAlias ? <Typography.Code>username@{scene.loginAlias}</Typography.Code> : "设置别名后可用"}</dd></div>
+        <div><dt>{t("accountId")}</dt><dd><AccountIdentifier label={t("accountId")} value={scene.accountId} /></dd></div>
+        <div><dt>{t("primaryLogin")}</dt><dd>{scene.rootLoginName}</dd></div>
+        <div><dt>{t("idLogin")}</dt><dd><AccountIdentifier label={t("idLogin")} value={`username@${scene.accountId}`} /></dd></div>
+        <div><dt>{t("aliasLogin")}</dt><dd>{scene.loginAlias ? <AccountIdentifier label={t("aliasLogin")} value={`username@${scene.loginAlias}`} /> : t("aliasPending")}</dd></div>
       </dl>
       {scene.canSetAlias ? <form className={styles.form} onSubmit={async (event) => { event.preventDefault(); await access.execute({ kind: "set-alias", alias: alias.trim(), resourceVersion: scene.accountVersion }); }}>
-        <Field label="主账号别名"><Input autoComplete="off" maxLength={63} minLength={3} onChange={(event) => setAlias(event.target.value)} pattern={aliasPattern} placeholder="例如 acme" required value={alias} /><small>3–63 位，以小写字母开头，可包含数字和短横线，结尾不能是短横线。全平台唯一。</small></Field>
-        <p className={styles.note}>修改后旧别名不能用于登录，并为本租户保留。现有会话与资源归属不变，租户 ID 登录仍然有效。</p>
-        <div><Button disabled={access.busy || access.loading || !alias.trim() || alias.trim() === scene.loginAlias} type="submit">{access.busy ? "正在保存…" : "保存别名"}</Button></div>
-      </form> : <p className={styles.note}>请联系所属主账号的管理员设置或修改别名。</p>}
-    </Card.Body>
-    </Card>
-  </div>;
-}
-
-function TenantAccess({ account, onClose }: { account: TenantAccountScene; onClose(): void }) {
-  const access = useAccountAccess();
-  const [confirmation, setConfirmation] = useState<"status" | "recovery" | null>(null);
-  const [password, setPassword] = useState("");
-  const disabled = access.busy || access.loading;
-  function cancel() { setConfirmation(null); setPassword(""); }
-
-  async function recover(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const initialPassword = password;
-    setPassword("");
-    if (await access.execute({ kind: "recover-root-credentials", accountId: account.id,
-      initialPassword, resourceVersion: account.resourceVersion })) cancel();
-  }
-
-  return <Card>
-    <Card.Header className={styles.cardHeader}><div><Typography.Title as="h2" level={3}>{account.name}</Typography.Title><Typography.Text tone="muted">租户访问与原主账号恢复</Typography.Text></div><Button onClick={onClose} size="small" variant="ghost">关闭租户详情</Button></Card.Header>
-    <Card.Body className={styles.detail}>
-      <dl className={styles.facts}>
-        <div><dt>租户 ID</dt><dd><Typography.Code>{account.id}</Typography.Code></dd></div>
-        <div><dt>主账号登录名</dt><dd>{account.rootLoginName}</dd></div>
-        <div><dt>原主账号用户 ID</dt><dd><Typography.Code>{account.rootPrincipalId}</Typography.Code></dd></div>
-        <div><dt>访问状态</dt><dd><Badge status={account.enabled ? "success" : "neutral"}>{account.enabled ? "正常" : "已停用"}</Badge></dd></div>
-        <div><dt>资源版本</dt><dd>{account.resourceVersion}</dd></div>
-      </dl>
-      <p className={styles.note}>这里只管理租户元数据，不授予租户资源、Secret 或审计读取权限。安装服务所属租户不能停用，由 IAM 校验。</p>
-      <div className={styles.actions}>
-        {account.canSetStatus ? <Button disabled={disabled} onClick={() => { setConfirmation("status"); setPassword(""); }} variant="secondary">{account.enabled ? "停用租户" : "恢复租户访问"}</Button> : null}
-        {account.canRecoverRoot ? <Button disabled={disabled} onClick={() => { setConfirmation("recovery"); setPassword(""); }} variant="secondary">恢复原主账号</Button> : null}
-      </div>
-      {!account.canSetStatus ? <p className={styles.note}>租户状态：{restrictionMessage(account.statusRestrictionReason)}</p> : null}
-      {!account.canRecoverRoot ? <p className={styles.note}>主账号恢复：{restrictionMessage(account.recoveryRestrictionReason)}</p> : null}
-      {confirmation === "status" ? <div className={styles.confirmation}>
-        <p>{account.enabled ? "确认停用此租户？下一次受保护请求将被拒绝，新变更被冻结，现有会话被撤销。不删除数据、不停止已有工作负载，也不取消已接受的 Operation 或历史审计投递。" : "确认恢复此租户的访问？用户须重新登录；已撤销的会话或策略关联不会恢复。"}</p>
-        <div className={styles.actions}>
-          <Button disabled={disabled} onClick={async () => {
-            if (await access.execute({ kind: "set-account-status", accountId: account.id,
-              status: account.enabled ? "DISABLED" : "ACTIVE", resourceVersion: account.resourceVersion })) cancel();
-          }} variant={account.enabled ? "danger" : "primary"}>{account.enabled ? "确认停用租户" : "确认恢复访问"}</Button>
-          <Button disabled={disabled} onClick={cancel} variant="ghost">取消</Button>
-        </div>
-      </div> : null}
-      {confirmation === "recovery" ? <form aria-label="恢复原主账号" className={styles.form} onSubmit={recover}>
-        <p className={styles.note}>仅恢复上方原主账号的凭证和租户管理员策略，不把子账号提升为主账号，也不授予平台策略。有未撤销平台策略关联的身份必须走离线恢复。</p>
-        <PasswordField onChange={setPassword} value={password} />
-        <p className={styles.note}>确认后将启用原主账号、撤销其旧会话，下次登录必须改密。不会自动恢复租户访问。请通过安全渠道交付临时密码。</p>
-        <div className={styles.actions}><Button disabled={disabled || !password} type="submit" variant="danger">确认恢复原主账号</Button><Button disabled={disabled} onClick={cancel} variant="ghost">取消</Button></div>
-      </form> : null}
+        <FormField id={aliasId} label={t("alias")} hint={t("aliasRule")}><Input id={aliasId} aria-describedby={`${aliasId}-hint`} autoComplete="off" maxLength={63} minLength={3} onChange={(event) => setAlias(event.target.value)} pattern={aliasPattern} placeholder={t("aliasPlaceholder")} required value={alias} /></FormField>
+        <p className={styles.note}>{t("aliasChangeHint")}</p>
+        <div><Button disabled={access.busy || access.loading || !alias.trim() || alias.trim() === scene.loginAlias} type="submit">{access.busy ? t("saving") : t("saveAlias")}</Button></div>
+      </form> : <p className={styles.note}>{t("aliasAdminHint")}</p>}
     </Card.Body>
   </Card>;
 }
 
 function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
+  const t = useTranslations("AccountAccess");
+  const w = useTranslations("IamWorkspace");
+  const collection = useTranslations("Collection");
   const access = useAccountAccess();
   const [creating, setCreating] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [section, setSection] = useState<"accounts" | "governance">("accounts");
+  const [cursorPage, setCursorPage] = useState(1);
+  const createActionFocus = useRef<PageCommandsHandle>(null);
+  const previousCreating = useRef(false);
   const selected = scene.accounts.find((account) => account.id === selectedId);
+  useLayoutEffect(() => {
+    const wasCreating = previousCreating.current;
+    previousCreating.current = creating;
+    if (wasCreating && !creating) createActionFocus.current?.focus("create");
+  }, [creating]);
+  if (selected) return <AccountTenantWorkspace account={selected} key={`${selected.id}:${selected.resourceVersion}`} onBack={() => setSelectedId(null)} />;
+  if (creating) return <CreateTenantWorkspace onClose={() => setCreating(false)} />;
+  return <Tabs.Root value={section} onValueChange={(value) => setSection(value as typeof section)}>
+    <Tabs.List aria-label={t("tenantManagementSections")}>
+      <Tabs.Trigger value="accounts">{t("tenantAccounts")}</Tabs.Trigger>
+      <Tabs.Trigger value="governance">{t("organizationGovernance.tab")}</Tabs.Trigger>
+    </Tabs.List>
+    <Tabs.Content value="accounts"><div className={styles.stack}>
+      <Card>
+        <ContentPage.Heading title={t("tenantAccounts")} scrollKey="tenant-directory" actions={scene.canCreateAccounts ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
+        <Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
+            <tbody>{scene.accounts.map((account) => <tr key={account.id}><td data-label={t("tenant")}><Table.PrimaryAction onClick={() => { setSelectedId(account.id); setCreating(false); }}>{account.name}</Table.PrimaryAction><small>{account.id}</small></td><td data-label={t("primaryLogin")}>{account.rootLoginName}</td><td data-label={t("alias")}>{account.loginAlias ?? t("aliasUnset")}</td><td data-label={t("status")}><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
+          </Table>
+          {!scene.accounts.length ? <EmptyState title={t("noTenants")} /> : null}
+        <Table.Footer note={t("tenantScopeHint")}><TablePagination mode="cursor" disabled={access.busy || access.loading} summary={w("cursorPage", { page: cursorPage })}
+          previous={{ label: t("firstPage"), disabled: cursorPage <= 1, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage(1); access.accountsPage(""); } }}
+          next={{ label: t("nextPage"), disabled: !scene.nextAccountPage, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage((current) => current + 1); access.accountsPage(scene.nextAccountPage!); } }} /></Table.Footer>
+      </Card>
+    </div></Tabs.Content>
+    <Tabs.Content value="governance"><OrganizationGovernancePreview /></Tabs.Content>
+  </Tabs.Root>;
+}
+
+type AccountAccessRendererProps = { view?: AccountAccessView; entityId?: string; policyMethod?: string; userTab?: AccountUserDetailTab; onNavigate(view: AccountAccessView, id?: string, method?: PolicyCreationMethod, userTab?: AccountUserDetailTab): void };
+
+function AccountAccessInitialLoading({ entityId, view }: { entityId?: string; view: AccountAccessView }) {
+  const t = useTranslations("AccountAccess");
+  const w = useTranslations("IamWorkspace");
+  const r = useTranslations("RoleWorkspace");
+  const profilePublishing = useTranslations("AuthorizationProfilePublishingPreview");
+  const title = entityId ?? ({
+    overview: t("title"),
+    users: t("usersTitle"),
+    tenants: t("tenantAccounts"),
+    settings: t("settings"),
+    groups: w("groups"),
+    policies: w("policies"),
+    roles: w("roles"),
+    "service-authorizations": r("serviceAuthorization"),
+    "policy-configuration": w("policyConfigurationReview"),
+    "access-diagnosis": w("currentAccessDiagnosis"),
+    "access-analysis": w("accessAnalysis.title"),
+    "security-reports": w("securityReportDirectory.title"),
+    "authorization-profiles": profilePublishing("workspaceTitle"),
+    providers: w("providers"),
+    federations: w("federations"),
+    keys: w("keys"),
+    "user-sso": w("userSso"),
+    "create-user": t("createUserTitle"),
+    "create-group": w("createGroup"),
+    "create-policy": w("createPolicy"),
+    "policy-language": w("policyLanguagePreview"),
+    "create-role": w("createRole"),
+    sessions: t("title"),
+    "role-access": t("roleAccessTitle")
+  } satisfies Record<AccountAccessView, string>)[view];
+  const collection = view === "users" || view === "tenants" || view === "groups" || view === "policies" || view === "roles";
+
   return <div className={styles.stack}>
-    <Card>
-      <Card.Header className={styles.cardHeader}><div><Typography.Title as="h2" level={3}>租户账号</Typography.Title><Typography.Text tone="muted">平台运营者管理租户生命周期；不等于租户管理员</Typography.Text></div>{scene.canCreateAccounts ? <Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />开通租户</Button> : null}</Card.Header>
-      <div aria-label="租户账号列表" className={styles.tableWrap} role="region" tabIndex={0}>
-        <table className={styles.table}><thead><tr><th>租户</th><th>主账号登录名</th><th>主账号别名</th><th>状态</th><th>操作</th></tr></thead>
-          <tbody>{scene.accounts.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>{account.id}</small></td><td>{account.rootLoginName}</td><td>{account.loginAlias ?? "未设置"}</td><td><Badge status={account.enabled ? "success" : "neutral"}>{account.enabled ? "正常" : "已停用"}</Badge></td><td><Button aria-label={`管理租户 ${account.id}`} disabled={access.busy || access.loading} onClick={() => { setSelectedId(account.id); setCreating(false); }} size="small" variant="ghost">管理</Button></td></tr>)}</tbody>
-        </table>
-        {!scene.accounts.length ? <p className={styles.empty}>{scene.canReadAccounts ? "当前页没有租户。" : "当前身份不能读取租户目录。"}</p> : null}
-      </div>
-      <Card.Footer><span className={styles.note}>开通不等于跨租户授权</span><div className={styles.actions}><Button disabled={access.busy || access.loading} onClick={() => { setSelectedId(null); setCreating(false); access.accountsPage(""); }} size="small" variant="ghost">首页</Button><Button disabled={access.busy || access.loading || !scene.nextAccountPage} onClick={() => { setSelectedId(null); setCreating(false); access.accountsPage(scene.nextAccountPage!); }} size="small" variant="secondary">下一页</Button></div></Card.Footer>
-    </Card>
-    {creating ? <CreateAccountForm onClose={() => setCreating(false)} tenant /> : null}
-    {selected ? <TenantAccess account={selected} key={`${selected.id}:${selected.resourceVersion}`} onClose={() => setSelectedId(null)} /> : null}
+    <ContentPage.Heading title={title} scrollKey={`loading:${view}:${entityId ?? "directory"}`} />
+    {collection
+      ? <Card><TableSkeleton header label={t("loading")} labelVisible={false} rows={5} /></Card>
+      : <PageSkeleton label={t("loading")} labelVisible={false} layout={view === "overview" ? "dashboard" : "access"} />}
   </div>;
 }
 
-function PermissionCatalog({ scene }: { scene: AccountAccessScene }) {
-  return <Card>
-    <Card.Header><div><Typography.Title as="h2" level={3}>策略目录</Typography.Title><Typography.Text tone="muted">来自当前账号与平台范围的实时元数据</Typography.Text></div></Card.Header>
-    <Card.Body className={styles.detail}>
-      <p className={styles.note}>未授权默认拒绝。主账号和子用户创建的资源都归租户，配额也归租户，不随创建者停用而改变；不同租户默认不能互相访问。</p>
-      <dl className={styles.permissionList}>{scene.policies.map((policy) => <div key={policy.id}>
-        <dt>{policy.displayName} <Badge status={policy.status === "ACTIVE" ? "success" : "neutral"}>{policy.statusLabel}</Badge></dt>
-        <dd><Typography.Code>{policy.id}</Typography.Code> · {policy.ownerLabel} · {policy.scopeLabel} · 修订 {policy.resourceVersion} · 默认版本 {policy.defaultVersionId}</dd>
-      </div>)}</dl>
-      {!scene.policies.length ? <p className={styles.note}>当前身份没有可读取的策略目录。</p> : null}
-      <p className={styles.note}>目录只用于展示和选择，不是访问许可。每次关联都提交用户实际选择时的策略修订，并由服务端重新鉴权；新增产品策略不需要修改页面中的角色名称判断。</p>
-    </Card.Body>
-  </Card>;
+export function AccountAccessRenderer(props: AccountAccessRendererProps) {
+  const roleSession = useRoleSession();
+  if (roleSession.mode !== "USER") return roleSession.supported ? <LiveRoleSelfService /> : <RoleSelfServicePreview />;
+  if (props.view === "sessions") return <OwnSessionsPage />;
+  if (props.view === "role-access") return roleSession.supported ? <LiveRoleSelfService /> : <RoleSelfServicePreview />;
+  return <ManagedAccountAccessRenderer {...props} />;
 }
 
-function AccountAccessContent() {
+function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMethod, userTab, onNavigate }: AccountAccessRendererProps) {
+  const t = useTranslations("AccountAccess");
+  const w = useTranslations("IamWorkspace");
   const access = useAccountAccess();
+  const session = useSession();
+  const capabilities = useAccountCapabilities();
   const scene = access.scene;
-  const [selection, setSelection] = useState<"users" | "permissions" | "settings" | "tenants">("users");
-  const canAccessUsers = scene ? scene.canManage || scene.canCreateUsers : false;
-  const canAccessAccounts = scene ? scene.canReadAccounts || scene.canCreateAccounts : false;
-  const fallback = canAccessUsers ? "users" : scene?.canViewPolicies ? "permissions" : canAccessAccounts ? "tenants" : "settings";
-  const tab = (selection === "users" && !canAccessUsers) || (selection === "permissions" && !scene?.canViewPolicies) ||
-    (selection === "tenants" && !canAccessAccounts) ? fallback : selection;
-  return <section aria-label="账号与权限" aria-busy={access.loading || access.busy} className={styles.stack}>
-    <div className={styles.toolbar}>
-      <div aria-label="访问管理页面" className={styles.tabs} role="group">
-        {canAccessUsers ? <Button aria-pressed={tab === "users"} onClick={() => setSelection("users")} variant={tab === "users" ? "secondary" : "ghost"}><Users aria-hidden="true" />用户</Button> : null}
-        {scene?.canViewPolicies ? <Button aria-pressed={tab === "permissions"} onClick={() => setSelection("permissions")} variant={tab === "permissions" ? "secondary" : "ghost"}><ShieldCheck aria-hidden="true" />策略</Button> : null}
-        <Button aria-pressed={tab === "settings"} onClick={() => setSelection("settings")} variant={tab === "settings" ? "secondary" : "ghost"}><UserRound aria-hidden="true" />用户设置</Button>
-        {canAccessAccounts ? <Button aria-pressed={tab === "tenants"} onClick={() => setSelection("tenants")} variant={tab === "tenants" ? "secondary" : "ghost"}><Building2 aria-hidden="true" />租户管理</Button> : null}
+  const workspace = access.workspace;
+  const unknownReset = access.passwordResetUnknown;
+  const resetLookup = access.passwordResetLookup;
+  const clearFeedback = access.clearFeedback;
+  const workflow = view === "create-user" || view === "create-policy" || view === "policy-language" || view === "create-group" || view === "create-role";
+  useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
+  const previewOnly = ["create-policy", "policy-language", "policy-configuration", "access-diagnosis", "access-analysis", "security-reports", "roles", "create-role", "service-authorizations", "providers", "user-sso", "federations", "keys", "authorization-profiles"].includes(view);
+  const denied = scene && (
+    (view === "users" && !scene.canListUsers) ||
+    (view === "create-user" && !scene.canCreateUsers) ||
+    (view === "groups" && !(workspace ? scene.canListUsers : scene.canListGroups)) ||
+    (view === "roles" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !scene.canListRoles)) ||
+    (view === "service-authorizations" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !scene.canListRoles)) ||
+    (view === "create-role" && !workspace && (!access.roles || !scene.canCreateRoles)) ||
+    (view === "create-group" && !(workspace ? scene.canListUsers : scene.canCreateGroups)) ||
+    (view === "tenants" && !scene.canReadAccounts) ||
+    (view === "policies" && !(workspace ? scene.canListUsers : scene.canViewPolicies)) ||
+    (previewOnly && capabilities.hasPreviewWorkspace && !scene.canListUsers)
+  );
+  return <section aria-label={t("title")} aria-busy={access.loading || access.busy} className={styles.stack}>
+    {unknownReset ? <Alert status={resetLookup?.status === "confirmed" ? "success" : "warning"}><div className={styles.confirmation}>
+      <strong>{t(resetLookup?.status === "confirmed" ? "resetConfirmedTitle" : "resetUnknownTitle")}</strong>
+      <p>{t("resetUnknownTarget", { user: unknownReset.userQualifiedName, version: unknownReset.resourceVersion })}</p>
+      <p>{resetLookup?.status === "confirmed" ? t("resetConfirmedHint", { version: resetLookup.completion.resultingResourceVersion, time: resetLookup.completion.occurredAt }) : t("resetUnknownHint")}</p>
+      {resetLookup && resetLookup.status !== "confirmed" ? <p role="status">{t(`resetLookup.${resetLookup.status}`)}</p> : null}
+      <p>{t("resetUnknownRequestId")} <code className={styles.resetRequestId}>{unknownReset.requestId}</code></p>
+      <div className={styles.actions}>
+        {resetLookup?.status !== "confirmed" ? <Button disabled={access.busy || access.loading} onClick={() => void access.lookupUnknownPasswordReset(unknownReset.requestId)} variant="secondary">{t("queryOriginalReset")}</Button> : null}
+        {resetLookup?.status === "confirmed" ? <Button disabled={access.busy} onClick={() => access.acknowledgeUnknownPasswordReset(unknownReset.requestId)} variant="ghost">{t("dismissConfirmedReset")}</Button> : null}
       </div>
-      <Button aria-label="刷新账号信息" disabled={access.loading || access.busy} onClick={access.reload} size="small" variant="ghost"><RefreshCcw aria-hidden="true" />刷新</Button>
-    </div>
-    {access.error ? <p className={styles.error} role="alert">{access.error}</p> : null}
-    {access.success ? <p className={styles.success} role="status">{access.success}</p> : null}
-    {access.loading ? <p className={styles.note} role="status">正在读取 IAM 账号信息…</p> : null}
-    {scene ? <>
-      <div className={styles.identity}>
-        <ShieldCheck aria-hidden="true" />
-        <div><small>所属租户 · 资源归属</small><strong>{scene.accountName}</strong><small>{scene.accountId}</small></div>
-        <div><small>当前登录用户</small><strong>{scene.identityLabel}<Badge status="info">{scene.isRoot ? "主账号" : "IAM 子用户"}</Badge></strong><small>{scene.identityAttachments.map((attachment) => attachment.label).join(" · ") || "尚未关联权限策略"}</small></div>
-      </div>
-      <div aria-label="当前用户权限边界" className={styles.note}>
-        <strong>租户权限上限：</strong>{scene.permissionBoundary ? <>
-          <span>{scene.permissionBoundary.policyId}</span>
-          <span> · 当前版本 {scene.permissionBoundary.versionId}</span>
-          <p>边界仅限制权限，不授予权限。实际访问还需要直接或用户组授权，并由服务端逐次检查。</p>
-        </> : <span>{scene.isRoot ? "主账号不设置子用户权限边界。" : "未设置权限边界，不代表拥有任何权限。"}</span>}
-      </div>
-      {tab === "users" ? <UserDirectory scene={scene} /> : tab === "tenants" ? <TenantDirectory scene={scene} /> : tab === "permissions" ? <PermissionCatalog scene={scene} /> : <UserSettings key={scene.accountVersion} scene={scene} />}
-    </> : null}
+    </div></Alert> : null}
+    {access.error && !workflow ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
+    {access.success && !workflow && view !== "policies" ? <Alert status="success">{t(access.success)}</Alert> : null}
+    {access.workspaceError && !workflow && view !== "policies" ? <Alert status="danger">{w(`errors.${access.workspaceError}`)}</Alert> : null}
+    {access.loading ? scene ? <LoadingNotice className={styles.note} label={t("loading")} /> : <AccountAccessInitialLoading entityId={entityId} view={view} /> : null}
+    {scene ? denied ? <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button onClick={() => onNavigate("overview")} variant="secondary">{t("backToOverview")}</Button>} /> :
+      view === "overview" ? <AccountOverview scene={scene} onNavigate={onNavigate} /> :
+      view === "users" ? <AccountUserDirectory key={`${entityId ?? "users"}:${userTab ?? "identity"}`} entityId={entityId} initialDetailTab={userTab} scene={scene} onCreate={() => onNavigate("create-user")} onOpen={onNavigate} /> :
+      view === "create-user" ? <CreateUserWizard onBack={() => onNavigate("users")} /> :
+      view === "tenants" && access.accountLifecycle ? <LiveAccountTenants client={access.accountLifecycle} scene={scene} /> :
+      view === "tenants" ? <TenantDirectory scene={scene} /> :
+      view === "settings" ? <><SettingsSectionNav preview={Boolean(workspace)} /><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : <><LivePersonalSecuritySettings /><LiveAccountSecuritySettings client={access.accountSecuritySettings} /></>}</> :
+      view === "policies" && !workspace ? <AccountPolicyDirectory scene={scene} entityId={entityId} onOpen={(id) => onNavigate("policies", id)} onCreate={() => onNavigate("create-policy")} /> :
+      view === "create-policy" && !workspace && access.policyCreate ? <LivePolicyCreationWizard client={access.policyCreate}
+        onBack={() => onNavigate("policies")} onDone={(id) => onNavigate("policies", id)} /> :
+      view === "policy-language" && workspace ? <LivePolicyCreationWizard preview onBack={() => onNavigate("policies")} /> :
+      view === "create-group" ? <GroupCreationWizard workspace={workspace ?? undefined} onBack={() => onNavigate("groups")} onDone={(id) => onNavigate("groups", id)} /> :
+      view === "groups" && workspace ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
+      view === "groups" && access.groups ? <AccountLiveGroups key={`${access.groups.accountId}:${entityId ?? "groups"}`} client={access.groups} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
+      view === "roles" && !workspace && access.roles ? <AccountLiveRoles key={`${access.roles.accountId}:${access.roles.sessionRevision}:${entityId ?? "roles"}`} client={access.roles} serviceRoleTemplates={access.serviceRoleTemplates} serviceLinkedRoles={access.serviceLinkedRoles} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} revokeIntent={access.roleSessionRevokeIntent} onRevokeIntentChange={access.changeRoleSessionRevokeIntent} /> :
+      view === "service-authorizations" && !workspace && (access.serviceLinkedRoles || access.serviceRoleTemplates) ? <AccountServiceAuthorizations key={access.serviceLinkedRoles?.sessionRevision ?? access.serviceRoleTemplates?.sessionRevision} relations={access.serviceLinkedRoles ?? null} templates={access.serviceRoleTemplates ?? null} onBack={() => onNavigate("roles")} /> :
+      view === "create-role" && !workspace && access.roles ? <LiveRoleCreationWizard client={access.roles} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
+      view === "keys" && !workspace && access.accessKeys ? <LiveAccessCredentials accountSecuritySettings={access.accountSecuritySettings} authorizationProfiles={access.authorizationProfiles} client={access.accessKeys} scene={scene} createIntent={access.accessKeyCreateIntent}
+        userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} onInspectPermissions={(ownerId) => onNavigate("users", ownerId, undefined, "policies")} /> :
+      view === "access-diagnosis" ? <CurrentAccessDiagnosisPreview workspace={workspace ?? undefined} scene={scene} onOpen={onNavigate} /> :
+      view === "access-analysis" && !workspace && access.accessAnalysis ? <LiveAccessAnalysis key={`${access.accessAnalysis.accountId}:${access.accessAnalysis.sessionRevision}`} client={access.accessAnalysis} onNavigate={onNavigate} /> :
+      view === "access-analysis" ? <AccessAnalysisPreview workspace={workspace ?? undefined} scene={scene} onNavigate={onNavigate} /> :
+      view === "security-reports" && !workspace && access.securityReports ? <LiveSecurityReport key={`${access.securityReports.accountId}:${access.securityReports.sessionRevision}`} client={access.securityReports} /> :
+      view === "security-reports" ? <SecurityReportDirectoryPreview workspace={workspace ?? undefined} scene={scene} currentSession={session.current?.session} /> :
+      !workspace ? <EmptyState title={w("notConnected")} description={w("notConnectedHint")} /> :
+      view === "create-policy" ? <PolicyAuthoringWizard method={policyCreationMethod(policyMethod)} workspace={workspace} scene={scene} doneLabel={w("finishBack")} onBack={() => onNavigate("policies")} onDone={() => onNavigate("policies")} /> :
+      view === "create-role" ? <RoleCreationWizard workspace={workspace} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
+      view === "policies" ? <AccessPolicies key={entityId ?? "policies"} entityId={entityId} workspace={workspace} scene={scene} onCreate={(method) => onNavigate("create-policy", undefined, method)} onOpen={onNavigate} /> :
+      view === "roles" ? <AccessRoles key={entityId ?? "roles"} workspace={workspace} scene={scene} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} /> :
+      view === "service-authorizations" ? <ServiceAuthorizationPreview workspace={workspace} onClose={() => onNavigate("roles")} /> :
+      view === "policy-configuration" ? <PolicyConfigurationReview key={entityId ?? "policy-configuration"} workspace={workspace} scene={scene} entityId={entityId} onOpen={onNavigate} /> :
+      view === "authorization-profiles" ? <AuthorizationProfilePublishingWorkspace /> :
+      view === "providers" ? <AccessFederationWorkspace workspace={workspace} /> :
+      view === "federations" ? <AccessCollaborationBoundaries accountId={workspace.accountId} /> :
+      view === "keys" ? <AccessCredentials workspace={workspace} scene={scene} onInspectPermissions={(ownerId) => onNavigate("users", ownerId, undefined, "policies")} /> :
+      <AccessUserSso workspace={workspace} /> : null}
   </section>;
-}
-
-export function AccountAccessRenderer({ repository }: { repository?: AccountRepository }) {
-  return <AccountAccessProvider repository={repository}><AccountAccessContent /></AccountAccessProvider>;
 }

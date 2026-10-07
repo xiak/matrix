@@ -1,0 +1,180 @@
+"use client";
+
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
+import { Plus } from "lucide-react";
+import { Table, TableSelectionCell, TableToolbar, TablePagination, ContentPage, EmptyState, Badge, Button, Card, type PageCommandsHandle } from "@ui/xiak";
+import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
+import { useAccountAccess } from "../application/AccountAccessProvider";
+import type { AccountAccessView } from "../domain/accounts";
+import type { AccessWorkspace } from "../domain/accessWorkspace";
+import type { AccountAccessScene } from "../scenes/accountAccessScene";
+import { AccountLiveUserWorkspace, AccountPrimaryWorkspace, AccountUserAccessMethods, AccountUserWorkspace, type AccountUserDetailTab } from "./AccountUserWorkspace";
+import { isUserBatchAssociationAction, UserBatchConfirmationDialog, UserBatchWorkflow, type DirectoryUser } from "./UserBatchOperation";
+import { userBatchActions, userBatchDisabledReason, userBatchLimit, type UserBatchAction } from "../domain/userBatch";
+import styles from "./AccountAccessRenderer.module.css";
+
+function AccountUserRow({ user, principalId, workspace, grants, checked, disabled, onSelect, onOpen }: {
+  user: DirectoryUser; principalId: string; workspace: AccessWorkspace | null;
+  grants?: { direct: number; inherited: number }; checked: boolean; disabled: boolean;
+  onSelect(checked: boolean): void; onOpen(): void;
+}) {
+  const t = useTranslations("AccountAccess"), w = useTranslations("IamWorkspace"), batch = useTranslations("UserBatch");
+  return <tr data-selected={checked || undefined}>
+    <TableSelectionCell label={batch("selectUser", { name: user.loginName })} checked={checked} disabled={disabled} onChange={onSelect} />
+    <td><div className={styles.userIdentity}>
+      {user.canRead ? <Table.PrimaryAction aria-label={t("viewUser", { name: user.loginName })} onClick={onOpen}>{user.loginName}</Table.PrimaryAction> : <strong>{user.loginName}</strong>}
+      {user.name && user.name !== user.loginName ? <span className={styles.userDisplayName}>{user.name}</span> : null}
+    </div><small className={styles.userIdentifier}>{user.id}</small></td>
+    <td>{t("child")}{user.id === principalId ? <small>{t("signedIn")}</small> : null}</td>
+    <td data-label={t("accessMethods")}><AccountUserAccessMethods user={user} workspace={workspace} /></td>
+    <td data-label={w("policyAssociations")}>{workspace ? <div className={styles.permissionSources}>
+      {grants!.direct > 0 ? <span>{w("directPolicyCount", { count: grants!.direct })}</span> : null}
+      {grants!.inherited > 0 ? <span>{w("groupPolicyCount", { count: grants!.inherited })}</span> : null}
+      {!grants!.direct && !grants!.inherited ? w("noPolicyGrants") : null}
+    </div> : <div className={styles.roleTags}>{user.attachments.length ? <>
+      {user.attachments.slice(0, 2).map((attachment) => <Badge key={attachment.id} status={attachment.policyStatus === "RETIRED" ? "neutral" : undefined}>{attachment.label}</Badge>)}
+      {user.attachments.length > 2 ? <span>{t("morePolicyAttachments", { count: user.attachments.length - 2 })}</span> : null}
+    </> : t("noGrantLabel")}</div>}</td>
+    <td>{user.state ? <Badge status={user.state === "disabled" ? "neutral" : user.state === "passwordChangeRequired" ? "warning" : "success"}>{t(`states.${user.state}`)}</Badge> : t("unknown")}</td>
+  </tr>;
+}
+
+function AccountOwnerSummary({ scene, onOpen }: { scene: AccountAccessScene; onOpen(): void }) {
+  const t = useTranslations("AccountAccess");
+  const owner = scene.accountOwner;
+  return <section className={styles.accountOwner} aria-label={t("resourceOwner")}>
+    <div className={styles.accountOwnerIdentity}>
+      <span className={styles.accountOwnerLabel}>{t("resourceOwner")}</span>
+      <div className={styles.userIdentity}>
+        <Table.PrimaryAction aria-label={t("viewUser", { name: owner.loginName })} onClick={onOpen}>{owner.loginName}</Table.PrimaryAction>
+        {owner.name && owner.name !== owner.loginName ? <span className={styles.userDisplayName}>{owner.name}</span> : null}
+      </div>
+      <small className={styles.userIdentifier}>{scene.accountName} · {scene.accountId}</small>
+    </div>
+    <div className={styles.accountOwnerMeta}>
+      <Badge>{t("primary")}</Badge>
+      {owner.isCurrent ? <Badge status="success">{t("signedIn")}</Badge> : null}
+      <span>{t("ownerGrantSummary")}</span>
+    </div>
+  </section>;
+}
+
+export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCreate, onOpen }: { scene: AccountAccessScene; entityId?: string; initialDetailTab?: AccountUserDetailTab; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
+  const t = useTranslations("AccountAccess");
+  const w = useTranslations("IamWorkspace");
+  const batch = useTranslations("UserBatch");
+  const collection = useTranslations("Collection");
+  const toolbarLabels = useTableToolbarLabels();
+  const access = useAccountAccess();
+  const workspace = access.workspace;
+  const { userDirectoryView } = access;
+  const [query, setQuery] = useState(() => userDirectoryView.read().query);
+  const [state, setState] = useState(() => userDirectoryView.read().state);
+  const [role, setRole] = useState(() => userDirectoryView.read().role);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [cursorPage, setCursorPage] = useState(1);
+  const deferredQuery = useDeferredValue(query);
+  const filtering = deferredQuery !== query;
+  useEffect(() => { if (!entityId) userDirectoryView.remember({ query, state, role }); }, [userDirectoryView, query, state, role, entityId]);
+  const createRef = useRef<HTMLButtonElement>(null);
+  const batchActionFocus = useRef<PageCommandsHandle>(null);
+  const restoreBatchAction = useRef<string | null>(null);
+  const [selection, setSelection] = useState<{ scene: AccountAccessScene; ids: string[] }>({ scene, ids: [] });
+  const [batchOperation, setBatchOperation] = useState<{ action: UserBatchAction; users: DirectoryUser[] } | null>(null);
+  const checkedIds = new Set(selection.scene === scene ? selection.ids : []);
+  const clearSelection = () => setSelection({ scene, ids: [] });
+  const closeBatch = () => {
+    if (batchOperation && !restoreBatchAction.current) restoreBatchAction.current = batchOperation.action;
+    setBatchOperation(null);
+  };
+  const completeBatch = () => {
+    restoreBatchAction.current = "create";
+    clearSelection();
+  };
+  useEffect(() => {
+    if (batchOperation || access.loading || access.busy || !restoreBatchAction.current) return;
+    const action = restoreBatchAction.current;
+    const timer = window.setTimeout(() => {
+      batchActionFocus.current?.focus(action);
+      restoreBatchAction.current = null;
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [access.busy, access.loading, batchOperation]);
+  const changeFilter = (change: () => void) => { clearSelection(); setPage(1); change(); };
+  const detail = scene.users.find((user) => user.id === entityId);
+  const words = useMemo(() => deferredQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean), [deferredQuery]);
+  const associations = useMemo(() => {
+    const result = new Map(scene.users.map((user) => [user.id, { direct: new Set(workspace?.userPolicies[user.id] ?? []).size, inherited: 0 }]));
+    if (!workspace) return result;
+    const inherited = new Map<string, Set<string>>();
+    for (const group of workspace.groups) for (const userId of group.memberIds) {
+      if (!result.has(userId)) continue;
+      const policies = inherited.get(userId) ?? new Set<string>();
+      for (const policyId of group.policyIds) policies.add(policyId);
+      inherited.set(userId, policies);
+    }
+    for (const [userId, policies] of inherited) result.get(userId)!.inherited = policies.size;
+    return result;
+  }, [scene.users, workspace]);
+  const filtered = useMemo(() => scene.users.filter((user) => {
+    const text = [user.name, user.loginName, user.id, user.qualifiedName, t("child")].join(" ").normalize("NFKC").toLowerCase();
+    const grants = associations.get(user.id);
+    const roleMatches = workspace ?
+      role === "all" || (role === "ungranted" ? !grants!.direct && !grants!.inherited : role === "direct" ? grants!.direct > 0 : grants!.inherited > 0) :
+      role === "all" || (role === "ungranted" ? !user.attachments.length : role === "direct" ? user.attachments.length > 0 : user.attachments.some((attachment) => attachment.scope === "INSTALLATION"));
+    return words.every((word) => text.includes(word)) && (state === "all" || state === user.state) && roleMatches;
+  }), [associations, role, scene.users, state, t, words, workspace]);
+  const hasFilters = Boolean(query || state !== "all" || role !== "all");
+  const clearFilters = () => { clearSelection(); setPage(1); setQuery(""); setState("all"); setRole("all"); };
+  const cursorMode = cursorPage > 1 || !scene.directoryComplete;
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const visible = cursorMode ? filtered : filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const checkedUsers = filtered.filter((user) => checkedIds.has(user.id));
+  const visibleCheckedUsers = visible.filter((user) => checkedIds.has(user.id));
+  const allChecked = visible.length > 0 && visibleCheckedUsers.length === visible.length;
+  const blocked = access.busy || access.loading || filtering || !access.supportsUserBatch;
+  const batchContext = { canListUsers: scene.canListUsers, supported: access.supportsUserBatch, rootId: scene.accountOwner.id, actorId: scene.currentUserId, targets: checkedUsers.map((user) => ({ id: user.id, enabled: user.enabled, canSetStatus: user.canSetStatus, canAttachPolicy: user.canAttachTenantPolicy, protected: user.protected })) };
+  if (entityId === scene.accountOwner.id) return <AccountPrimaryWorkspace scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
+  if (entityId && !detail) return <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
+  if (detail && access.workspace) return <AccountUserWorkspace user={detail} workspace={access.workspace} scene={scene} initialTab={initialDetailTab} onBack={() => onOpen("users")} onOpen={onOpen} />;
+  if (detail) return detail.canRead ? <AccountLiveUserWorkspace key={`${detail.id}:${detail.resourceVersion}`} summary={detail} onBack={() => onOpen("users")} /> : <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
+  if (batchOperation && isUserBatchAssociationAction(batchOperation.action)) return <div className={styles.userDirectory}><Card><Card.Body>
+    <UserBatchWorkflow action={batchOperation.action} users={batchOperation.users} onClose={closeBatch} onCompleted={completeBatch} />
+  </Card.Body></Card></div>;
+  return <div className={styles.userDirectory}>
+    <Card>
+      <ContentPage.Heading title={t("usersTitle")} scrollKey="user-directory" actions={<ContentPage.Commands label={collection("pageActions")} primaryRef={createRef} focusRef={batchActionFocus}
+        selection={{ label: batch("more"), disabled: blocked || !checkedUsers.length, hint: batch(access.supportsUserBatch ? "selectHint" : "unsupportedHint"),
+          selectionLabel: checkedUsers.length ? batch("selected", { count: checkedUsers.length }) : undefined, clearLabel: batch("clear"), onClear: clearSelection,
+          actions: userBatchActions.map((action) => { const reason = userBatchDisabledReason(action, batchContext); return { id: action, label: batch(`actions.${action}`), danger: action === "delete", disabledReason: reason ? batch(`reasons.${reason}`) : undefined, onSelect: () => setBatchOperation({ action, users: checkedUsers }) }; }) }}
+        primary={scene.canCreateUsers ? { id: "create", label: t("createUser"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: onCreate } : undefined}
+      />} />
+      <AccountOwnerSummary scene={scene} onOpen={() => onOpen("users", scene.accountOwner.id)} />
+      <TableToolbar labels={toolbarLabels} search={{ label: t("searchUsers"), placeholder: t("searchUsersPlaceholder"), value: query, onChange: (value) => changeFilter(() => setQuery(value)) }}
+        status={[t("userResults", { shown: filtered.length, loaded: scene.users.length }), ...(checkedUsers.length ? [batch("selected", { count: checkedUsers.length })] : [])].join(" · ")} filters={[
+          { id: "state", label: t("filterUserState"), value: state, onChange: (value) => changeFilter(() => setState(value)), options: [{ value: "all", label: t("allStates") }, ...(["active", "passwordChangeRequired", "disabled"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] },
+          { id: "role", label: w("filterPolicySource"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "platform", label: t("platformPolicyAttachments") }] }
+        ]} />
+      {!access.supportsUserBatch || visible.length > userBatchLimit ? <p className={styles.selectionHint}>{batch(!access.supportsUserBatch ? "unsupportedHint" : "limitHint", { limit: userBatchLimit })}</p> : null}
+      {filtered.length ? <Table aria-label={t("userTable")} aria-busy={filtering || undefined} className={styles.userTable} mobileLayout="stack">
+          <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : visibleCheckedUsers.length ? "mixed" : false} disabled={blocked || visible.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? visible.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{w("policyAssociations")}</th><th scope="col">{t("status")}</th></tr></thead>
+          <tbody>{visible.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.currentUserId} workspace={workspace} grants={associations.get(user.id)}
+            checked={checkedIds.has(user.id)} disabled={blocked || !checkedIds.has(user.id) && checkedUsers.length >= userBatchLimit}
+            onSelect={(checked) => setSelection({ scene, ids: checked ? [...checkedIds, user.id] : [...checkedIds].filter((id) => id !== user.id) })}
+            onOpen={() => onOpen("users", user.id)} />)}</tbody>
+        </Table> : <EmptyState title={t(hasFilters ? "noMatchingUsers" : "noUsers")} description={t(hasFilters ? "noMatchingUsersHint" : "noUsersHint")} action={hasFilters ? <Button onClick={clearFilters} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} />}
+      <Table.Footer note={t("userPageHint")}>
+        {cursorMode ? <TablePagination mode="cursor" disabled={access.busy || access.loading} summary={w("cursorPage", { page: cursorPage })}
+          previous={{ label: t("firstPage"), disabled: cursorPage <= 1, onClick: () => { clearSelection(); setCursorPage(1); setPage(1); access.usersPage(""); } }}
+          next={{ label: t("nextPage"), disabled: !scene.nextUserPage, onClick: () => { clearSelection(); setCursorPage((current) => current + 1); setPage(1); access.usersPage(scene.nextUserPage!); } }} />
+          : <TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={access.busy || access.loading}
+            onPageChange={(nextPage) => { clearSelection(); setPage(nextPage); }} onPageSizeChange={(size) => { clearSelection(); setPageSize(size); setPage(1); }}
+            labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} />}
+      </Table.Footer>
+    </Card>
+    {batchOperation && !isUserBatchAssociationAction(batchOperation.action) ? <UserBatchConfirmationDialog action={batchOperation.action} users={batchOperation.users} fallbackFocusRef={createRef} onClose={closeBatch} onCompleted={completeBatch} /> : null}
+  </div>;
+}
