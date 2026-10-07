@@ -336,7 +336,7 @@ IAM在一个事务中认证调用服务、验证一次MAC和当前AccessKey状�
 
 存储替换遵循pre-v1最新前驱原则：只保留当前schema到下一schema的一次真实数据迁移，把现有一对一AccessKey决定证据无损正规化为“签名请求证据＋决定引用”；不维护所有未发布开发草稿的兼容矩阵。原决定、Audit canonical、nonce已消费状态、使用观测与AccessKey撤销状态必须保留，迁移/等值重放/备份恢复不能让旧nonce重新可用。最低门禁覆盖零/一/五十项、集合Deny、部分/全部实例Deny、重复/乱序/错Profile/Action/标签、同nonce并发、事务提交未知、撤权/停用竞争、两个IAM副本、重启和直接前驱保留数据。产品候选、RLS、游标及返回资源核对由[008](./FEAT-IAM-008-product-enforcement.md#下一纵向切片租户-application-目录与安全游标)拥有。
 
-固定`71c7882b4f8a1aa11ee1a2408b8ae111f375f25a`已将目录落到真实`GET /v1/applications?after=<opaque>`：PaaS每页先按已解析Account读取最多50个候选，再把一个collection和0–50个instance请求交给单次IAM批量事务；只返回逐项Allow且重读版本/标签一致的资源。游标由PaaS安装密钥加密，绑定安装、Account、USER/key、Profile、Action和固定查询，15分钟到期；不能由cursor、body、header或路径切换Account。caller传递的明文ID、重复`after`、额外query、大小写或percent-encoding别名在IAM前关闭。聚焦PaaS race、全仓普通Go/vet及生成稳定已经本地通过；独立[Verification 37571650568](https://github.com/xiak/matrix/actions/runs/37571650568)仍在串行运行，未取得最终结论，因此本段当前只记固定实现和本地证据，不提前标记独立CI或发布验收成功。
+固定`71c7882b4f8a1aa11ee1a2408b8ae111f375f25a`已把一次MAC、一次nonce、集合与实例决定共同引用同一请求证据的协议接入真实Application目录。IAM批量事务覆盖0–50个严格候选、集合Deny、逐项Allow/Deny、证据正规化、历史保留及重放/并发攻击；产品读取、RLS、游标和返回资源核对的实现状态与证据只归[008的当前目录切片](./FEAT-IAM-008-product-enforcement.md#当前纵向切片租户-application-目录与安全游标)，不在本FEAT复制。独立[Verification 37571650568](https://github.com/xiak/matrix/actions/runs/37571650568)仍在串行运行，未取得最终结论，因此本段当前只记固定实现和本地证据，不提前标记独立CI或发布验收成功。
 
 ### 当前纵向切片：可信APISIX北向入口与安装封存
 
