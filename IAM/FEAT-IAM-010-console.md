@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；UX/UI固定快照已在精确绿色IAM基线上完成隔离集成、全前端/嵌入/Go及三视口MOCK门禁，当前代码固定于`74e3c0983`。真实IAM进程浏览器、慢响应/故障注入、跨浏览器未知结果恢复、当前Profile签名发布及整个FEAT验收仍未完成。
+- 状态：实施中；UX/UI固定快照已在精确绿色IAM基线上完成隔离集成、全前端/嵌入/Go及三视口MOCK门禁，UI快照固定于`74e3c0983`，当前组合源码固定于`448400628734d4c708d7859492fba1cf1b663284`并通过独立控制台及全仓CI。真实IAM进程浏览器、慢响应/故障注入、跨浏览器未知结果恢复、当前Profile签名发布及整个FEAT验收仍未完成。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -80,3 +80,5 @@ UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PD
 在原 auth renderer 的 detail/note 文本容器补可断行规则，109项前端测试、type/lint/架构/20组对比度通过，两次2-worker嵌入构建逐文件匹配59项。全新数据库与重建 UI 的第二轮浏览器，在实际360×800视口完成设置 A、替换 B、移除和同一成员会话刷新；截图显示完整换行，详情边界容器 clientWidth/scrollWidth均212，自身投影均262，右边界均在视口内。fixture通过154.51s（包155.986s），实际事实和 Audit 链再次验证通过。只证明该边界交互，不包括完整策略编辑器、所有错误页面或整个010验收。
 
 集成后的当前工作树重新执行`npm ci`并从头通过`npm run check`：typecheck、lint、架构、228组对比度、63/63文件共1155/1155项测试、3项归一化、47页生产构建、45项规范化和259文件嵌入一致性均成功；随后以`GOMAXPROCS=2`通过`go test -count=1 -p 2 ./...`与`go vet -p 2 ./...`。本机Node 23.11.1不在项目声明的受支持engine范围，因此这些是组合回归证据，不是正式Node运行时或release验收。当前仍未实跑完整平台→root→管理员→成员→资源的真实IAM进程浏览器路径，也未覆盖慢响应/故障注入、completion receipt、跨浏览器reload后的UNKNOWN恢复、APISIX或签名安装；这些缺口完成前，不能把MOCK三视口或组件测试标为IAM-UI-01–08整体通过。
+
+固定`448400628734d4c708d7859492fba1cf1b663284`在原Verification工作流增加独立`console`作业，使用受支持的Node 22.22.2、固定npm 11.6.4执行干净`npm ci`、完整`npm run check`，并要求源码与259个嵌入文件无生成差异；后端原串行门禁及资源预算未变。[Verification 37644376405](https://github.com/xiak/matrix/actions/runs/37644376405)首轮中`authority-replacement`和`authority-replacement-qualification`因GitHub runner连续五次获取失败而在零runner、零步骤状态结束，其余实际执行作业（包括`console`）均成功；整轮终态后仅通过官方failed-jobs入口重跑这两项及依赖汇总。attempt 2已核对精确SHA、16项全部completed/success，两个替换作业均取得runner并真实通过，最终`authority-process`成功。该证据接受受支持Node运行时上的独立控制台构建/测试门禁，不替代上述真实IAM浏览器、故障恢复、APISIX或签名发布缺口。

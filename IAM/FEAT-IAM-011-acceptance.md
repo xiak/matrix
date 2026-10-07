@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；AC-11的服务副本、受限容量测量及有界开放环过载/恢复观察已通过各自门禁。最新增量固定`b377d34a282e581fb8cbdbc6461e7da31c10aaf5`的[独立CI37620326080](https://github.com/xiak/matrix/actions/runs/37620326080)已核对精确SHA，15项全部completed/success；它只接受下述固定资源工作集、业务隔离和恢复证据，不宣称通用QPS、账号公平SLO或数据库HA。原独立账号干扰测量`7f02d419`及配对首片`b6f57d01`的既有证据保持；旧失败不回填。完整容量/公平性/HA、当前Profile签名发布、LIVE UI及整体需求仍未验收。
+- 状态：实施中；AC-11的服务副本、受限容量测量及有界开放环过载/恢复观察已通过各自门禁。容量增量固定`b377d34a282e581fb8cbdbc6461e7da31c10aaf5`的[独立CI37620326080](https://github.com/xiak/matrix/actions/runs/37620326080)已核对精确SHA，15项全部completed/success；后继控制台组合固定`448400628734d4c708d7859492fba1cf1b663284`的[独立CI37644376405](https://github.com/xiak/matrix/actions/runs/37644376405)在定向恢复两项GitHub runner获取故障后，attempt 2的16项全部completed/success。它们只接受下述固定资源工作集、业务隔离、恢复及独立控制台门禁证据，不宣称通用QPS、账号公平SLO或数据库HA。原独立账号干扰测量`7f02d419`及配对首片`b6f57d01`的既有证据保持；旧失败不回填。完整容量/公平性/HA、当前Profile签名发布、LIVE UI及整体需求仍未验收。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
