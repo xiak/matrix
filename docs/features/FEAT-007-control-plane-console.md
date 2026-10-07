@@ -1919,20 +1919,19 @@ The 99-case LIVE account-access renderer file, typecheck/lint, architecture and
 test/vet passed. Desktop and `430 × 900` DEV showed the count and row reason
 without a Dialog; viewport, document and body width remained 430px.
 
-Application hosting now owns a query-addressable resource-detail surface rather
-than sending its resource row back to the same undifferentiated directory. The
+Application hosting owns a query-addressable resource-detail surface rather
+than sending its resource row back to an undifferentiated directory. The
 same-path transition retains the shared console frame and immediately renders a
 stable application locator, title region and return action; only the
 product-data region changes, so it does not open a Dialog or replace fixed
-content with a page-wide skeleton. The scene now carries the Application
-directory source explicitly instead of forcing the renderer to infer it from
-`resources: []`. Preview renders a visibly labelled isolated local-navigation
-fixture and states that it is neither a server-side collection nor an
-authorization result. Non-preview renders a distinct unavailable state with no
-search, table, count or fixture fallback; it therefore cannot misrepresent an
-unfixed product list as a successful zero-resource response. Neither state
-claims a product list, cursor or paging contract. The separate exact-read
-snapshot mirrors only the fixed
+content with a page-wide skeleton. The scene carries the Application directory
+source explicitly instead of forcing the renderer to infer it from
+`resources: []`. Preview and LIVE now share the same directory information
+architecture, compact table and content-area detail transition. Preview remains
+visibly labelled as an isolated local fixture and states that its rows and one
+disabled review window are neither a server-side collection, secure cursor nor
+authorization result. LIVE never falls back to those rows. The separate
+exact-read snapshot mirrors only the fixed
 `GET /v1/applications/{applicationId}` response: `apiVersion`, `kind`, public
 metadata, tenant scope and the strong response ETag. The current Account comes
 from the authenticated identity; the browser never offers an Account or tenant
@@ -1985,47 +1984,57 @@ translation errors from before the message catalog landed; they are not
 current-runtime evidence. This is application-side MOCK UX evidence, not real
 resource-tag mutation, backend CI or authorization acceptance.
 
-The Application read follow-up consumes only the fixed
-`0f06607398f643311c5a284cf0867e931ed33d9b` product boundary and now integrates
-the LIVE exact-resource endpoint at `/api/paas/v1/applications/{applicationId}`.
-It deliberately does not consume the still-unfixed Application list, cursor or
-page contract: a deep link can read one resource, while the LIVE directory
-continues to render unavailable with no table, search, count or fixture
-fallback. The public Application model and portable label validation now have a
-single frontend domain owner shared by the adapter and MOCK tag editor. The
-adapter rejects an invalid locator before I/O and parses successful responses
-fail closed: exact fields and constants, route/body identity, TENANT scope,
-positive safe resource version, ordered contract timestamps, bounded safe
-labels and a canonical strong ETag equal to that version are all required.
-Unknown fields, raw sensitive label material, a weak/missing/mismatched ETag or
-cross-resource response becomes unavailable data rather than a partial success.
+The Application client now consumes two fixed product boundaries. Exact read
+continues to use `0f06607398f643311c5a284cf0867e931ed33d9b` at
+`/api/paas/v1/applications/{applicationId}`. The directory follows the bounded,
+authorization-filtered contract introduced at `53dc915ef` and hardened at
+`71c7882b4`: `GET /api/paas/v1/applications` accepts only an optional opaque
+`after` cursor, returns at most 50 strictly ID-ordered Applications from one
+tenant and may return an empty `items` window with `nextAfter`. It has no client
+Account selector, total, page number, page-size selector, search, filter or sort
+contract. Every previous/next navigation performs another product-side read and
+authorization pass; the browser never treats a cursor as a permit or raw
+resource ID.
 
-The detail frame owns only this local asynchronous read; it is not added to the
-page-level resource cache and therefore does not invalidate the header,
-navigation, directory or whole scene. Return action, destination title, stable
-locator and state badge render immediately. A polite status appears immediately
-and the six-field placeholder is delayed 200 ms within the data region, avoiding
-a skeleton flash for a fast response. `401`, `403`, `404` and invalid locators
-remain distinct from `5xx`; forbidden reads do not confirm existence or mount
-tenant metadata, Deployment or tag actions, unavailable reads can retry only the
-same locator, and neither case reuses stale data. Product-owned Deployment and
-tag MOCK workspaces remain isolated and mount only for the preview's readable
-snapshot; LIVE exact read does not invent those write contracts.
+The strict adapter rejects invalid cursors before I/O and parses both directory
+and exact-read responses fail closed. Application constants, public metadata,
+TENANT scope, positive safe resource version, ordered contract timestamps,
+bounded safe labels, per-window tenant consistency, strict ID order and
+canonical continuation shape are required. Exact read additionally requires the
+route/body identity and a strong ETag equal to the resource version. Unknown
+fields, raw sensitive label material, a malformed or looping continuation,
+cross-tenant page, duplicate/unordered resource, or weak/missing/mismatched ETag
+becomes unavailable data rather than a partial success.
 
-Source and the synchronized embed are pushed at `207f0e6ed`. The focused
-repository/shell run passed 105 cases. The complete frontend suite passed 63
-files/1,112 cases plus three export-normalization cases. Typecheck, lint,
-architecture and 228-pair theme-style gates passed; the production build
-generated 46 routes, normalized 44 segment files and synchronized 254 exact
-embedded files, and the complete repository Go test/vet gates passed. Desktop
-`1280 × 720` and compact `390 × 844` DEV retained the Application title, return
-action and locator with viewport, document and body widths equal, no Dialog and
-no browser warning/error. The visible MOCK state matrix exercised `200` → `403`
-→ `503` → equal re-read recovery; adapter and shell tests cover the LIVE pending,
-success, invalid, forbidden, absent and unavailable boundaries. This is a real
-LIVE exact-read client boundary plus isolated product UX evidence, not an
-Application list contract, browser-side policy evaluation, resource-existence
-oracle, completed Deployment/tag integration or full-stack release acceptance.
+The directory frame, title, boundary explanation, fixed columns and cursor
+footer render independently of the asynchronous page. A polite status is
+immediate and only table rows receive the shared 200 ms delayed skeleton, so a
+fast response does not flash a page-wide placeholder. The request identity is
+the repository reader, cursor and explicit retry revision; current loading is
+derived from that identity rather than synchronously reset by an effect. A
+completed window is retained while opening and returning from a same-path
+Application detail, but previous-window navigation re-reads it and therefore
+re-authorizes it. A cross-window tenant change fails closed. `400`, `401`, `403`
+and service/protocol failure stay distinct: an invalid continuation restarts at
+the first window, forbidden does not reveal whether resources exist, and failure
+never reuses stale or MOCK rows. Exact detail keeps its stable locator and
+regional delayed placeholder, with distinct forbidden, absent and retryable
+states. Product-owned Deployment and tag MOCK workspaces remain isolated and
+mount only for the preview's readable snapshot; LIVE does not invent those write
+contracts.
+
+Source and synchronized embedded assets are committed at `6d443dbe8`. The
+complete frontend suite passed 63 files/1,126 cases plus three
+export-normalization cases. Typecheck, lint, architecture and 228-pair
+theme-style gates passed; the production build generated 47 routes, normalized
+45 segment files and matched all 259 embedded files, and complete repository Go
+test/vet passed. Desktop and compact `390 × 844` DEV exercised fixture directory
+→ exact detail → return with viewport, document and body widths equal, no Dialog
+and no browser warning/error. This accepts a strict client for the fixed
+directory and exact-read contracts plus a clearly isolated MOCK UX preview. It
+does not claim browser-side policy evaluation, a resource-existence oracle,
+completed Deployment/tag integration, the IAM branch's independent CI/release
+acceptance or a full-stack LIVE browser release.
 
 Same-path detail-query tests retain encoded IDs, draft-leave protection and
 replace semantics without a Next page-tree navigation. Real static deep links
