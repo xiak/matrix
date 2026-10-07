@@ -37,16 +37,16 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 
 | 需求 | 当前状态 | 权威边界 |
 | --- | --- | --- |
-| IAM-PEP-01 | 已实现当前后端主体 | 固定 `1dc1079c` 已将 IAM、PaaS、managedservice、Audit、installation 的版本化 Profile、完整摘要、当前头及请求/决定绑定接入唯一契约并通过独立 CI。后继 PaaS Profile revision 3 增加 `request.source-ip`，固定 `94cc8d7f` 已有真实 PG18、独立进程及唯一前驱保留数据证据，独立 CI 尚未收口。当前仍是源码/开发 readiness，不是签名发布组合。 |
+| IAM-PEP-01 | 已实现当前后端主体并由累计 CI 覆盖 | 固定 `1dc1079c` 已将 IAM、PaaS、managedservice、Audit、installation 的版本化 Profile、完整摘要、当前头及请求/决定绑定接入唯一契约并通过独立 CI。后继 PaaS Profile revision 3 增加 `request.source-ip`，固定 `94cc8d7f` 已有真实 PG18、独立进程及唯一前驱保留数据证据；该代码位于累计固定 `91649497` 的祖先链，并由其完整独立 CI 覆盖。当前仍是源码/开发 readiness，不是签名发布组合。 |
 | IAM-PEP-02 | PaaS apphosting 与 managedservice 已实现 | HTTP owner 从真实 path/body 和实际 `RemoteAddr` 构造 Action、资源、集合用途及可信网络上下文；账号和主体来自当前 IAM 凭据。IAM 决定必须逐字段绑定原请求，业务事务再按数据库所属账号取数，query/body/header 不能选择另一账号。 |
-| IAM-PEP-03 | 首个无游标目录已固定，发布未完成 | 固定`a7f2e83b`使managedservice先以`COLLECTION_LIST`完成目录准入，再从受信本地catalog取得真实候选，按ID排序后通过一次1–50项批量PDP逐实例过滤。两个账号同名/同 ID/key、伪造 tenant/cursor/after、错序/遗漏/替换决定、跨账号实例、撤权后下一请求及ROLE全拒绝已有行为或真实进程门禁；租户资源cursor和其他产品目录仍未接入，独立CI与发布组合未完成。 |
+| IAM-PEP-03 | 首个无游标目录已固定并由累计 CI 覆盖，发布未完成 | 固定`a7f2e83b`使managedservice先以`COLLECTION_LIST`完成目录准入，再从受信本地catalog取得真实候选，按ID排序后通过一次1–50项批量PDP逐实例过滤。两个账号同名/同 ID/key、伪造 tenant/cursor/after、错序/遗漏/替换决定、跨账号实例、撤权后下一请求及ROLE全拒绝已有行为或真实进程门禁；该代码位于累计固定`91649497`的祖先链并由其完整独立CI覆盖。租户资源cursor、其他产品目录和最终发布组合仍未完成。 |
 | IAM-PEP-04 | 当前应用托管与 managedservice 路径已实现 | Application、Configuration、Revision、QuotaEntitlement、ServiceInstallation 的创建由封闭集合请求开始，最终资源、Operation 和 outbox 由同一业务事务建立；IAM 原决定只证明集合准入，不证明 caller 填写的最终 ID 或 payload。真实双账号门禁核对配额、Operation、幂等、拒绝无部分效果及 Audit 关联。 |
-| IAM-SVC-01/02 | 最小产品运行闭环及管理员管理已在本地候选实现，发布未完成 | ServiceIdentity自身仍不获得目标Account权限；只有不可变模板、精确系统策略上限、当前Account同意和真实workload binding同时有效时，IAM才发行目标Account的60秒RoleSession。managedservice用该临时身份经唯一PDP读取实际`ServiceInstallation`后立即自退出；服务home Account与目标Account分开保存，SERVICE与USER来源严格互斥。当前AccountAdministrator能以独立权限查询和终止服务会话，只有服务Role绑定管理权限的USER、服务凭据及ROLE自身均不能获得管理能力。当前候选已通过真实PG18纵向、累计Role管理及209.46秒独立进程组合，后者实际覆盖双副本list/read/revoke、解绑后历史观察、等值重放、跨Account拒绝与唯一Audit事实；仍缺固定提交、独立CI和最终发布组合。 |
+| IAM-SVC-01/02 | 最小产品运行闭环及管理员管理已固定并通过累计 CI，发布未完成 | ServiceIdentity自身仍不获得目标Account权限；只有不可变模板、精确系统策略上限、当前Account同意和真实workload binding同时有效时，IAM才发行目标Account的60秒RoleSession。managedservice用该临时身份经唯一PDP读取实际`ServiceInstallation`后立即自退出；服务home Account与目标Account分开保存，SERVICE与USER来源严格互斥。当前AccountAdministrator能以独立权限查询和终止服务会话，只有服务Role绑定管理权限的USER、服务凭据及ROLE自身均不能获得管理能力。真实PG18纵向、累计Role管理及209.46秒独立进程组合覆盖双副本list/read/revoke、解绑后历史观察、等值重放、跨Account拒绝与唯一Audit事实；累计固定`a464299b`及其14项成功的独立CI覆盖该后端闭环。最终签名发布组合和LIVE UI仍未完成。 |
 | IAM-TAG-01/02 | Application创建、读取及标签写入已有固定实现，发布未完成 | PaaS Application创建从真实body构造`request.tag/environment`；读取及写入从PaaS数据库预读同一Application构造`resource.tag/environment`，设置/删除再绑定准确`request.tag/environment`。决定、资源版本、SQL效果、Operation及Audit证据精确关联，标签写入的并发CAS与跨Account隔离已有真实门禁。Role/User标签仍只是元数据；其他资源标签、LIVE UI和签名发布组合尚未实现。 |
 
 `app/service/paas/internal/managedservice/port/security.go` 原 action→resource switch 是该产品适配器的封闭边界，不是通用求值器按产品名称分叉，但它重复了 release-owned Profile。本轮候选已删除这份重复映射：port 直接使用 IAM Action/ResourceKind 类型，通过 `NewAuthorizationRequest` 和 managedservice 当前 Profile 的完整引用/calling service 核对形状；IAM HTTP adapter不再执行第二次字符串翻译。七种合法集合/实例形状及其他产品、错资源、错集合用途/ID攻击的聚焦测试通过；全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，并由累计`a464299b`的独立CI覆盖。后继产品适配器同样应消费自己编译进发布物且已由 IAM Profile 摘要认证的声明，通用 IAM 求值器仍只解释统一 Profile/Policy 语义。
 
-同片后继候选把 apphosting 的 PaaS→IAM 资源词汇翻译收敛到 port 的单一构造器，HTTP adapter不再维护第二份资源 switch，Action/资源形状、当前 Profile 引用、PAAS calling service 和可信 source IP 一次绑定。apphosting 仍保留14个路由动作的显式 PEP 子集：同一PaaS Profile中的平台主机/安装动作不能因“属于PaaS”进入应用托管。14条合法形状及同产品错PEP、其他产品、错资源/集合/source IP攻击的聚焦测试通过；同一全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，尚待独立CI。
+同片后继把 apphosting 的 PaaS→IAM 资源词汇翻译收敛到 port 的单一构造器，HTTP adapter不再维护第二份资源 switch，Action/资源形状、当前 Profile 引用、PAAS calling service 和可信 source IP 一次绑定。apphosting 仍保留14个路由动作的显式 PEP 子集：同一PaaS Profile中的平台主机/安装动作不能因“属于PaaS”进入应用托管。14条合法形状及同产品错PEP、其他产品、错资源/集合/source IP攻击的聚焦测试通过；同一全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，并由累计固定`a464299b`的独立CI覆盖。
 
 ## 当前纵向切片：账号同意的服务相关角色
 
