@@ -1711,8 +1711,8 @@ Verified through 2026-10-07 against the current all-service navigation, compact 
 shell, responsive access-analysis hierarchy, primary directory actions and the
 provider-owned product-permission onboarding boundary.
 
-Current compact IAM evidence is fixed at `24e7a3780`, `88c21ccb3`, `6b65fe6b5` and
-`1357e965d`, with the last source also owning the synchronized embedded export. Fixed
+Current compact IAM evidence is fixed at `a43fd4e1e`, which also owns the synchronized
+embedded export. Fixed
 chrome, page title, back navigation and the consolidated page-action trigger paint
 without waiting for directory data.
 Access analysis keeps its three known primary sections on one row above 360 px; at or
@@ -1726,7 +1726,14 @@ onboarding route reuses that same catalog for Product/IAM declaration, PEP-evide
 release-gate review. It is present only in the isolated MOCK workspace, is absent from
 LIVE navigation, fails closed on direct LIVE access, and cannot create, validate,
 approve or publish a Profile. This preserves one catalog projection without presenting
-an unimplemented backend lifecycle as a tenant capability.
+an unimplemented backend lifecycle as a tenant capability. The rendered directory
+result, selected product, internal onboarding step and return-focus target are owned by
+the exact `AuthorizationProfileClient`, not merely by Account ID or preview mode. A
+replacement authenticated client for the same Account therefore removes the previous
+product detail and digest in the same render, retains only the stable catalog frame and
+local loading feedback, and cannot recover the prior rows when the replacement is
+forbidden. Search and page preferences remain local operator state rather than being
+misclassified as server authorization data.
 
 The public `Table.PrimaryAction` now owns the primary object entry throughout IAM
 directories and relationship tables: User, Group, Policy, Role, security report,
@@ -1747,7 +1754,7 @@ audit found no page overflow, duplicate IDs, extra `h1`, unnamed actions or unla
 tables. The current onboarding slice additionally exercised both the platform route
 and tenant catalog at desktop and `390 × 844`: the internal action appeared only on the
 platform surface, the tenant surface retained zero such actions and no Dialog, and a
-clean DEV session emitted no browser warning/error. The complete 63-file/1,119-case
+clean DEV session emitted no browser warning/error. The complete 63-file/1,129-case
 frontend suite plus three normalization cases, type/lint/architecture/228-pair style
 gates, 47-page export, 45 normalized paths, 259-file synchronized embed, and
 repository-wide Go test/vet passed. This is shared shell and interaction evidence;
