@@ -678,6 +678,7 @@ func TestApplicationDirectoryQueryIsClosed(t *testing.T) {
 		{"after=" + validCursor + "&pageSize=50", "", false},
 		{"accountId=tenant-a", "", false},
 		{"after=%0A", "", false},
+		{"after=%70c1.opaque_continuation", "", false},
 	} {
 		t.Run(test.raw, func(t *testing.T) {
 			got, err := parseApplicationAfter(test.raw)

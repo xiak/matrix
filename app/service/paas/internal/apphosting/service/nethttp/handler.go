@@ -591,6 +591,12 @@ func parseApplicationAfter(rawQuery string) (string, error) {
 	if !found || len(values) != 1 || paasv1.ValidateApplicationCursor(values[0]) != nil {
 		return "", errors.New("application directory query is invalid")
 	}
+	// Cursor characters are already restricted to the unreserved wire set.
+	// Requiring the exact representation keeps bearer and signed requests on
+	// one query shape instead of accepting percent-encoded aliases.
+	if rawQuery != "after="+values[0] {
+		return "", errors.New("application directory query is invalid")
+	}
 	return values[0], nil
 }
 
