@@ -320,6 +320,19 @@ func (client *edgeClient) mutateIAM(ctx context.Context, path string, bearer []b
 	return nil
 }
 
+func (client *edgeClient) policyAttachmentChange(
+	ctx context.Context,
+	bearer []byte,
+	requestID string,
+) (iamv1.PolicyAttachmentChange, error) {
+	var result iamv1.PolicyAttachmentChange
+	if _, err := client.get(ctx, "/api/iam/v1/policy-attachment-changes/by-request/"+requestID, bearer, &result); err != nil ||
+		iamv1.ValidatePolicyAttachmentChange(result) != nil || result.RequestID != requestID {
+		return iamv1.PolicyAttachmentChange{}, errors.New("IAM policy attachment change response failed")
+	}
+	return result, nil
+}
+
 func (client *edgeClient) createSecurityReport(
 	ctx context.Context,
 	bearer []byte,

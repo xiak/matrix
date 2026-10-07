@@ -45,8 +45,18 @@ type iamRetention struct {
 	AdministratorContact  iamv1.NotificationContact
 	MFA                   mfaRetention
 	AccessAnalyzer        iamv1.AccessAnalyzer
+	PolicyChanges         policyAttachmentChangeRetention
 	Tenants               []tenantRetention
 	PlatformAuditHashes   map[string]struct{}
+}
+
+// policyAttachmentChangeRetention contains immutable command results rather
+// than current relationship state. Both receipts are captured before the
+// protected backup so recovery can retain them without weakening the
+// authentication/authorization-state qualification of that backup.
+type policyAttachmentChangeRetention struct {
+	PreBackupCreate iamv1.PolicyAttachmentChange
+	PreBackupRevoke iamv1.PolicyAttachmentChange
 }
 
 // mfaRetention is a mode-0600 test-only fixture outside both the signed
