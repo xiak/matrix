@@ -1027,8 +1027,8 @@
         "hint": "Enterprise sign-in"
       },
       "federations": {
-        "label": "Federated accounts",
-        "hint": "WeCom and member provisioning"
+        "label": "External collaboration",
+        "hint": "Cross-account and organization boundaries"
       },
       "keys": {
         "label": "Access keys",
@@ -4211,7 +4211,7 @@
     "policies": "Policies",
     "roles": "Roles",
     "providers": "Role SSO",
-    "federations": "Federated accounts",
+    "federations": "External collaboration",
     "keys": "Access keys",
     "userSso": "User SSO",
     "settings": "User settings",
@@ -5323,9 +5323,6 @@
       "set-user-groups": "Update memberships",
       "update-user": "Edit user",
       "delete-user": "Delete user",
-      "save-enterprise": "Connect WeCom",
-      "delete-enterprise": "Disconnect enterprise",
-      "import-enterprise-members": "Import enterprise members",
       "create-role": "Create role",
       "update-role-metadata": "Update role metadata",
       "update-role-trust": "Change role trust",
@@ -5336,25 +5333,13 @@
       "create-role-session": "Create preview session",
       "revoke-role-session": "Revoke preview session"
     },
-    "wecom": "WeCom",
-    "enterpriseName": "Enterprise name",
-    "corporationId": "Corporation ID",
-    "visibleMembers": "Visible members",
-    "department": "Department",
-    "connectEnterprise": "Connect WeCom (mock)",
-    "disconnectEnterprise": "Disconnect",
-    "importMembers": "Import as subusers",
-    "imported": "Imported",
-    "notImported": "Not imported",
-    "enterpriseStart": "Connect enterprise identities and import your team",
-    "enterpriseHint": "Connect WeCom and import members from the authorized visibility scope as subusers. Member provisioning and SSO are separate configurations.",
-    "enterpriseFlow": "Connect enterprise → set visible scope → import members → assign permissions",
-    "enterpriseMock": "This demo does not scan QR codes, install WeCom apps, connect directories or send invitations. Use mock enterprise information only.",
-    "importHint": "Import creates mock users in this preview session with no permissions. Assign access afterward through users or groups.",
-    "backToEnterpriseDirectory": "Back to enterprise member access",
-    "backToEnterpriseDetails": "Back to enterprise details",
-    "externalCollaborationSections": "External identities and collaboration",
-    "enterpriseMemberAccess": "Enterprise member access",
+    "collaborationBoundaries": {
+      "title": "Cross-account and organization capabilities",
+      "description": "Review deferred security boundaries and production prerequisites; this is not a writable configuration center.",
+      "deferred": "Deferred capability",
+      "boundary": "IAM-EXT-06/08/09 read-only capability catalog · The current account remains the isolated resource and identity boundary. This page creates no invitation, external trust, organization node, guardrail, resource share, or anonymous access, and it generates no request ID or success state.",
+      "sections": "Cross-account and organization capabilities"
+    },
     "crossAccountCollaboration": {
       "tab": "Cross-account collaboration",
       "title": "Cross-account collaboration trust path",

@@ -25,7 +25,7 @@ import type {
   UserAccess,
   UserPolicyAttachment
 } from "../domain/accounts";
-import { enterprisePrincipalId, previewTotpCode, previewUserPrincipalId, type AccessWorkspace } from "../domain/accessWorkspace";
+import { previewTotpCode, previewUserPrincipalId, type AccessWorkspace } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import { applyUserBatch } from "../domain/userBatch";
@@ -917,16 +917,6 @@ export const previewAccountRepository: AccountRepository = {
         displayName: command.displayName.trim(), status: "ACTIVE",
         mustChangePassword: command.profile.consoleAccess && command.profile.passwordResetRequired, resourceVersion: 1
       });
-      if (command.kind === "import-enterprise-members") {
-        for (const memberId of command.memberIds) {
-          const principalId = enterprisePrincipalId(command.id, memberId);
-          const member = result.workspace.enterpriseMembers.find((entry) => entry.id === memberId)!;
-          if (!users.some((entry) => entry.id === principalId)) users.push({
-            id: principalId, accountId: account.id, loginName: `wecom.${command.id.slice(0, 8)}.${memberId}`,
-            displayName: member.name, status: "ACTIVE", mustChangePassword: false, resourceVersion: 1
-          });
-        }
-      }
       if (command.kind === "delete-user") {
         users = users.filter((user) => user.id !== command.principalId);
         delete userPlatformPolicies[command.principalId];

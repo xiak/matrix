@@ -1915,7 +1915,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         const result = await repository.workspace.execute(credential, command);
         if (result.workspace.accountId !== tenantId || result.workspace.mode !== "preview") throw new Error("INVALID_IAM_TENANT");
         setWorkspace(result.workspace);
-        if (command.kind === "create-subuser" || command.kind === "delete-user" || command.kind === "update-user" || command.kind === "import-enterprise-members") { setLoading(true); setRevision((current) => current + 1); }
+        if (command.kind === "create-subuser" || command.kind === "delete-user" || command.kind === "update-user") { setLoading(true); setRevision((current) => current + 1); }
         if (workspaceCommandHasConfirmedCompletion(command)) setSuccess("completed");
         return { issuedKey: result.issuedKey, recoveryCodes: result.recoveryCodes };
       } catch (failure) {

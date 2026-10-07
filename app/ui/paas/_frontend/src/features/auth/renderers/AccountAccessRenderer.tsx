@@ -26,7 +26,7 @@ import { AccessFederationWorkspace } from "./AccessIdentity";
 import { AccessCredentials } from "./AccessCredentials";
 import { LiveAccessCredentials } from "./LiveAccessCredentials";
 import { AccessSecuritySettings, AccessUserSso } from "./AccessSecuritySettings";
-import { AccessEnterpriseAccounts } from "./AccessEnterpriseAccounts";
+import { AccessCollaborationBoundaries } from "./AccessCollaborationBoundaries";
 import { AccountPolicyDirectory } from "./AccountPolicyDirectory";
 import { LivePolicyCreationWizard } from "./LivePolicyCreationWizard";
 import { AccountTenantWorkspace } from "./AccountTenantWorkspace";
@@ -262,7 +262,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "service-authorizations" ? <ServiceAuthorizationPreview workspace={workspace} onClose={() => onNavigate("roles")} /> :
       view === "policy-configuration" ? <PolicyConfigurationReview key={entityId ?? "policy-configuration"} workspace={workspace} scene={scene} entityId={entityId} onOpen={onNavigate} /> :
       view === "providers" ? <AccessFederationWorkspace workspace={workspace} /> :
-      view === "federations" ? <AccessEnterpriseAccounts workspace={workspace} onUsers={() => onNavigate("users")} /> :
+      view === "federations" ? <AccessCollaborationBoundaries accountId={workspace.accountId} /> :
       view === "keys" ? <AccessCredentials workspace={workspace} scene={scene} onInspectPermissions={(ownerId) => onNavigate("users", ownerId, undefined, "policies")} /> :
       <AccessUserSso workspace={workspace} /> : null}
   </section>;

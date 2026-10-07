@@ -49,9 +49,6 @@ export type PendingNotificationAddressReplacement = {
   targetAddress: string;
   status: "PENDING_VERIFICATION" | "CONFIRM_UNKNOWN";
 };
-export type EnterpriseMember = { id: string; name: string; department: string };
-export type EnterpriseAccount = { id: string; name: string; corporationId: string; visibleMemberIds: string[]; importedMemberIds: string[]; createdAt: string };
-export function enterprisePrincipalId(accountId: string, memberId: string): string { return "principal-wecom-" + accountId + "-" + memberId; }
 export type AccessSettings = {
   loginProtection: boolean; accountRuleVersion: number;
   accessKeyNetwork: AccessKeyNetworkRestrictions;
@@ -85,7 +82,6 @@ export type AccessWorkspace = {
   userPolicies: Record<string, string[]>; settings: AccessSettings; events: AccessEvent[];
   personalMfa: PersonalMfaPreviewState;
   personalNotificationAddress: string | null;
-  enterprises: EnterpriseAccount[]; enterpriseMembers: EnterpriseMember[];
   userProfiles: Record<string, PreviewUserProfile>;
   userBoundaries: Record<string, string>; roleSessions: AccessRoleSession[];
   pendingKeyCreation: PendingAccessKeyCreation | null;
@@ -142,9 +138,6 @@ export type AccessWorkspaceCommand =
   | { kind: "set-user-groups"; principalId: string; groupIds: string[] }
   | { kind: "update-user"; principalId: string; displayName: string }
   | { kind: "delete-user"; principalId: string }
-  | { kind: "save-enterprise"; id?: string; name: string; corporationId: string; visibleMemberIds: string[] }
-  | { kind: "delete-enterprise"; id: string }
-  | { kind: "import-enterprise-members"; id: string; memberIds: string[] }
   | { kind: "save-account-rule"; requestId: string; expectedRuleVersion: number; expectedLoginProtection: boolean; loginProtection: boolean; responseMode: "success" | "response-lost" }
   | { kind: "save-account-key-network-preview"; expectedRuleVersion: number; accessKeyNetwork: AccessKeyNetworkRestrictions }
   /** Preview client journal only; this is not a future IAM mutation contract. */
@@ -187,7 +180,6 @@ export function withoutUserAccess(source: AccessWorkspace, principalIds: readonl
   for (const session of state.roleSessions) if (session.caller.type === "user" && ids.has(session.caller.id) && !session.revokedAt) session.revokedAt = at;
   state.keys = state.keys.filter((key) => !ids.has(key.ownerId));
   if (state.pendingKeyCreation && ids.has(state.pendingKeyCreation.ownerId)) state.pendingKeyCreation = null;
-  for (const enterprise of state.enterprises) enterprise.importedMemberIds = enterprise.importedMemberIds.filter((member) => !ids.has(enterprisePrincipalId(enterprise.id, member)));
   return state;
 }
 
@@ -559,23 +551,6 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     case "delete-user":
       if (!context.userIds.includes(command.principalId)) invalid();
       target = command.principalId; break;
-    case "save-enterprise": {
-      validateName(state.enterprises, command.name, command.id);
-      if (!command.corporationId.trim() || command.corporationId.length > 128 || command.visibleMemberIds.some((member) => !state.enterpriseMembers.some((entry) => entry.id === member))) invalid();
-      if (state.enterprises.some((entry) => entry.id !== id && entry.corporationId === command.corporationId.trim())) throw new AccessWorkspaceError("duplicate");
-      const previous = state.enterprises.find((entry) => entry.id === id);
-      state.enterprises = put(state.enterprises, { id, name: command.name.trim(), corporationId: command.corporationId.trim(), visibleMemberIds: [...new Set(command.visibleMemberIds)], importedMemberIds: previous?.importedMemberIds ?? [], createdAt: previous?.createdAt ?? createdAt });
-      target = command.name; break;
-    }
-    case "delete-enterprise":
-      if (exists(state.enterprises, id).importedMemberIds.length) throw new AccessWorkspaceError("referenced");
-      state.enterprises = state.enterprises.filter((entry) => entry.id !== id); break;
-    case "import-enterprise-members": {
-      const enterprise = exists(state.enterprises, id);
-      if (!command.memberIds.length || command.memberIds.some((member) => !enterprise.visibleMemberIds.includes(member))) invalid();
-      enterprise.importedMemberIds = [...new Set([...enterprise.importedMemberIds, ...command.memberIds])];
-      target = enterprise.name; break;
-    }
     case "save-account-rule": {
       if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement || state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection || command.loginProtection === state.settings.loginProtection) invalid();
       if (command.responseMode === "response-lost") {

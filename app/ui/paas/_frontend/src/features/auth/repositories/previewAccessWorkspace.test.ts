@@ -958,22 +958,4 @@ describe("access workspace preview invariants", () => {
     expect(rejected.personalMfa.reauthenticationRequired).toBe(false);
     expect(rejected.pendingAccountRuleChange).toBeNull();
   });
-  it("imports visible enterprise members as ungranted preview users and resets them only through the explicit demo reset", async () => {
-    resetPreviewEnvironment();
-    const originalUsers = (await previewAccountRepository.listUsers(previewCredential)).items;
-    const extension = previewAccountRepository.workspace!;
-    const connected = await extension.execute(previewCredential, { kind: "save-enterprise", name: "MOCK Enterprise", corporationId: "MOCK_CORP", visibleMemberIds: ["dev01"] });
-    const id = connected.workspace.enterprises[0]!.id;
-    await expect(extension.execute(previewCredential, { kind: "import-enterprise-members", id, memberIds: ["ops01"] })).rejects.toThrow("invalid");
-    await extension.execute(previewCredential, { kind: "import-enterprise-members", id, memberIds: ["dev01"] });
-    const imported = (await previewAccountRepository.listUsers(previewCredential)).items.find((entry) => entry.user.loginName.startsWith("wecom."))!;
-    expect(imported.user.displayName).toBe("Dev Member");
-    expect(imported.policyAttachments).toEqual([]);
-    await expect(extension.execute(previewCredential, { kind: "delete-enterprise", id })).rejects.toThrow("referenced");
-    await extension.execute(previewCredential, { kind: "delete-user", principalId: imported.user.id });
-    await extension.execute(previewCredential, { kind: "delete-enterprise", id });
-    resetPreviewEnvironment();
-    expect((await previewAccountRepository.listUsers(previewCredential)).items).toEqual(originalUsers);
-    expect((await extension.read(previewCredential)).enterprises).toHaveLength(0);
-  });
 });

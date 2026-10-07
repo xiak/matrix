@@ -42,7 +42,6 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
       { id: "boundary", request: { principalId: "principal-qiao", action: "paas:delete", resourceId: "paas-storefront-staging" } },
       { id: "ungranted", request: { principalId: "principal-wu", action: "logs:search", resourceId: "logs-production/payment" } }
     ],
-    enterprises: [],
     userProfiles: {
       "principal-lin": { consoleAccess: true, programmaticAccess: true, passwordResetRequired: false, loginProtection: false, tags: [] },
       "principal-chen": { consoleAccess: true, programmaticAccess: false, passwordResetRequired: false, loginProtection: false, tags: [] },
@@ -50,7 +49,6 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
       "principal-wu": { consoleAccess: true, programmaticAccess: false, passwordResetRequired: false, loginProtection: false, tags: [] }
     },
     userBoundaries: { "principal-qiao": "policy-delivery-boundary" }, roleSessions: [], pendingKeyCreation: null, pendingAccountRuleChange: null, pendingNotificationAddressReplacement: null,
-    enterpriseMembers: [{ id: "dev01", name: "Dev Member", department: "Delivery" }, { id: "ops01", name: "Ops Member", department: "Operations" }, { id: "audit01", name: "Audit Member", department: "Security" }],
     groups: [
       { id: "group-delivery", name: "DeliveryTeam", description: "Application delivery team", memberIds: ["principal-lin"], policyIds: ["policy-delivery"], createdAt: at },
       { id: "group-auditors", name: "SecurityAuditors", description: "Read-only security review", memberIds: ["principal-chen"], policyIds: ["policy-audit"], createdAt: at },

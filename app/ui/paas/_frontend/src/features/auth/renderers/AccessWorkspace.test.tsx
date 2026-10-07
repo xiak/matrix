@@ -3984,32 +3984,10 @@ describe("CAM-style access workspace", () => {
     expect(repository.execute).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "新建密钥" })).toBeNull();
   });
-  it("keeps enterprise member provisioning separate from the role SSO provider directory", async () => {
-    const { user, extension } = await open("federations");
-    await user.click(await screen.findByRole("button", { name: "模拟关联企业微信" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("heading", { level: 3, name: "模拟关联企业微信" })).toBe(document.activeElement);
-    await user.type(screen.getByLabelText("企业名称"), "Preview Enterprise");
-    await user.click(screen.getByRole("checkbox", { name: /Dev Member/ }));
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    const directory = await screen.findByRole("table", { name: "企业微信" });
-    await waitFor(() => expect(screen.getByRole("button", { name: "模拟关联企业微信" })).toBe(document.activeElement));
-    expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
-    expect(within(directory).queryByRole("button", { name: "导入为子用户" })).toBeNull();
-    await user.click(within(directory).getByRole("button", { name: "Preview Enterprise" }));
-    await user.click(await screen.findByRole("button", { name: "导入为子用户" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("heading", { level: 3, name: "导入为子用户 · Preview Enterprise" })).toBe(document.activeElement);
-    await user.click(screen.getByRole("checkbox", { name: /Dev Member/ }));
-    await user.click(screen.getByRole("button", { name: "导入为子用户" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "导入为子用户" })).toBe(document.activeElement));
-    const state = await extension.read("preview");
-    expect(state.enterprises[0]?.importedMemberIds).toEqual(["dev01"]);
-    expect("providers" in state).toBe(false);
-  });
-  it("separates role assumption from product-owned resource sharing without inventing a command", async () => {
+  it("replaces enterprise-member writes with deferred cross-account and organization boundaries", async () => {
     const { user, repository } = await open("federations");
-    await user.click(await screen.findByRole("tab", { name: "跨账号协作" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "跨账号与组织能力" })).toBeTruthy();
+    expect(screen.getByText(/当前账号仍是隔离的资源与身份边界/)).toBeTruthy();
     const preview = screen.getByRole("region", { name: "跨账号协作信任链路" });
     expect(within(preview).getByText(/不发送邀请、不创建账号关系、不签发会话/)).toBeTruthy();
     expect(within(preview).getByText("org-xiak")).toBeTruthy();
@@ -4023,6 +4001,18 @@ describe("CAM-style access workspace", () => {
     expect(within(preview).getByText(/Role trust 与外部主体的承担权限都必须满足/)).toBeTruthy();
     expect(within(preview).getByText(/任一账号撤销协作后/)).toBeTruthy();
     expect(within(preview).queryByRole("button")).toBeNull();
+    expect(screen.queryByText(/企业微信|导入为子用户|模拟关联/)).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("tab", { name: "组织治理预览" }));
+    const governance = screen.getByRole("region", { name: "组织目录与权限护栏" });
+    expect(within(governance).getByText(/不创建组织节点、不移动账号、不发布策略/)).toBeTruthy();
+    expect(within(governance).getByText(/护栏只能收窄权限，不能产生 Allow/)).toBeTruthy();
+    expect(within(governance).queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(repository.execute).not.toHaveBeenCalled();
   });
   it("keeps the credential snapshot separate from the immutable account security report", async () => {

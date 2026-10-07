@@ -1027,8 +1027,8 @@
         "hint": "企业单点登录"
       },
       "federations": {
-        "label": "联合账号",
-        "hint": "企业微信与成员接入"
+        "label": "跨账号协作",
+        "hint": "跨账号与组织边界"
       },
       "keys": {
         "label": "访问密钥",
@@ -4211,7 +4211,7 @@
     "policies": "策略",
     "roles": "角色",
     "providers": "角色 SSO",
-    "federations": "联合账号",
+    "federations": "跨账号协作",
     "keys": "访问密钥",
     "userSso": "用户 SSO",
     "settings": "用户设置",
@@ -5337,9 +5337,6 @@
       "set-user-groups": "调整用户组",
       "update-user": "编辑用户",
       "delete-user": "删除用户",
-      "save-enterprise": "关联企业微信",
-      "delete-enterprise": "取消企业关联",
-      "import-enterprise-members": "导入企业成员",
       "create-role": "创建角色",
       "update-role-metadata": "修改角色信息",
       "update-role-trust": "修改信任关系",
@@ -5350,25 +5347,13 @@
       "create-role-session": "创建体验会话",
       "revoke-role-session": "撤销体验会话"
     },
-    "wecom": "企业微信",
-    "enterpriseName": "企业名称",
-    "corporationId": "企业 ID",
-    "visibleMembers": "成员可见范围",
-    "department": "部门",
-    "connectEnterprise": "模拟关联企业微信",
-    "disconnectEnterprise": "取消关联",
-    "importMembers": "导入为子用户",
-    "imported": "已导入",
-    "notImported": "未导入",
-    "enterpriseStart": "连接企业身份，一次导入团队",
-    "enterpriseHint": "关联企业微信后，从授权可见范围中选择成员导入为子用户。成员接入与 SSO 配置分别管理。",
-    "enterpriseFlow": "关联企业 → 设置可见范围 → 导入成员 → 分配权限",
-    "enterpriseMock": "演示不会扫码、安装企业微信应用、连接通讯录或发送邀请。请只使用模拟企业信息。",
-    "importHint": "导入只创建当前体验会话中的模拟用户，默认不授予任何权限。之后在用户或用户组中授权。",
-    "backToEnterpriseDirectory": "返回企业成员接入",
-    "backToEnterpriseDetails": "返回企业详情",
-    "externalCollaborationSections": "外部身份与协作",
-    "enterpriseMemberAccess": "企业成员接入",
+    "collaborationBoundaries": {
+      "title": "跨账号与组织能力",
+      "description": "查看延期能力的安全边界与正式接入前提；这里不是可提交的配置中心。",
+      "deferred": "延期能力",
+      "boundary": "IAM-EXT-06／08／09 只读能力目录 · 当前账号仍是隔离的资源与身份边界。页面不创建邀请、外部信任、组织节点、护栏、资源共享或匿名访问，也不会生成请求号或成功状态。",
+      "sections": "跨账号与组织能力"
+    },
     "crossAccountCollaboration": {
       "tab": "跨账号协作",
       "title": "跨账号协作信任链路",
