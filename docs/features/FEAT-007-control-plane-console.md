@@ -1701,22 +1701,30 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-Verified through 2026-10-04 against the current all-service navigation,
-IAM policy-version authoring, current-access diagnosis, group relationship refresh and authorization hierarchy, AccessKey network and authorization evidence, isolated first-enrollment, account-rule and session-expiry previews.
+Verified through 2026-10-07 against the current all-service navigation, compact IAM
+shell, responsive access-analysis hierarchy and primary directory actions.
 
-Current compact IAM shell evidence is fixed at source `0114419d2` and synchronized
-embed `80789db67`. The page title, back navigation and one consolidated page-action
-trigger remain on one stable header row; fixed chrome paints immediately while only
-data-owning regions may load. Access analysis keeps its three mode labels in one
-readable, horizontally scrollable 44 px control row instead of wrapping or moving the
-page. A real `390 × 844` DEV pass covered Access analysis, Policy list/detail, compact
-page actions, User list and User selection actions: document, body and viewport widths
-stayed at 390 px, no unintended Dialog or horizontal page overflow appeared and browser
-warning/error logs remained empty. The complete 62-file/1,069-case frontend suite,
-three normalization cases, type/lint/architecture/228-pair style gates, 45-route
-export, 43 normalized paths, 249-file embed equality and repository-wide Go test/vet
-passed. This is shared compact-shell and presentation evidence; exact IAM semantics,
-LIVE authorization and remaining real-runtime/browser acceptance stay with
+Current compact IAM evidence is fixed at `24e7a3780` and `88c21ccb3`, with the latter
+also owning the synchronized embedded export. Fixed chrome, page title, back navigation
+and the consolidated page-action trigger paint without waiting for directory data.
+Access analysis keeps its three known primary sections on one row above 360 px; at or
+below 360 px the same three controls become equal-width columns and may wrap their own
+labels, without turning an arbitrary tab set into a second mobile implementation.
+
+The public `Table.PrimaryAction` now owns the primary object entry for User, Group,
+Policy, Role, security-report and Tenant directories. It preserves native button/link
+semantics, focus visibility and disabled behavior, guarantees a 32 px minimum target,
+and leaves metadata as ordinary table content instead of making the full row clickable
+or restoring a generic operation column. A real `320 × 720` DEV pass measured every
+one of those entries at 32 px or taller, kept document and viewport width equal on all
+six routes, and opened the selected User directly in the existing content area with no
+Dialog. The same 16-route IAM audit found no page overflow, duplicate IDs, extra `h1`,
+unnamed actions or unlabelled tables; browser warning/error logs remained empty. The
+complete 63-file/1,115-case frontend suite plus three normalization cases,
+type/lint/architecture/228-pair style gates, 46-route export, 44 normalized paths,
+synchronized embed, and repository-wide Go test/vet passed. This is shared shell and
+interaction evidence; exact IAM semantics, LIVE authorization and remaining
+real-runtime/browser acceptance stay with
 [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md).
 
 The shared delayed-feedback regression matrix is fixed at `ba7e57a9a`. It now
