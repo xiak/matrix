@@ -44,6 +44,7 @@ import { LiveAccessAnalysis } from "./LiveAccessAnalysis";
 import { LiveSecurityReport } from "./LiveSecurityReport";
 import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
 import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
+import { AuthorizationProfilePublishingWorkspace } from "./AccountAuthorizationProfileCatalog";
 import type { AccountUserDetailTab } from "./AccountUserWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -146,6 +147,7 @@ function AccountAccessInitialLoading({ entityId, view }: { entityId?: string; vi
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const r = useTranslations("RoleWorkspace");
+  const profilePublishing = useTranslations("AuthorizationProfilePublishingPreview");
   const title = entityId ?? ({
     overview: t("title"),
     users: t("usersTitle"),
@@ -159,6 +161,7 @@ function AccountAccessInitialLoading({ entityId, view }: { entityId?: string; vi
     "access-diagnosis": w("currentAccessDiagnosis"),
     "access-analysis": w("accessAnalysis.title"),
     "security-reports": w("securityReportDirectory.title"),
+    "authorization-profiles": profilePublishing("workspaceTitle"),
     providers: w("providers"),
     federations: w("federations"),
     keys: w("keys"),
@@ -202,7 +205,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   const clearFeedback = access.clearFeedback;
   const workflow = view === "create-user" || view === "create-policy" || view === "policy-language" || view === "create-group" || view === "create-role";
   useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
-  const previewOnly = ["create-policy", "policy-language", "policy-configuration", "access-diagnosis", "access-analysis", "security-reports", "roles", "create-role", "service-authorizations", "providers", "user-sso", "federations", "keys"].includes(view);
+  const previewOnly = ["create-policy", "policy-language", "policy-configuration", "access-diagnosis", "access-analysis", "security-reports", "roles", "create-role", "service-authorizations", "providers", "user-sso", "federations", "keys", "authorization-profiles"].includes(view);
   const denied = scene && (
     (view === "users" && !scene.canListUsers) ||
     (view === "create-user" && !scene.canCreateUsers) ||
@@ -261,6 +264,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "roles" ? <AccessRoles key={entityId ?? "roles"} workspace={workspace} scene={scene} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} /> :
       view === "service-authorizations" ? <ServiceAuthorizationPreview workspace={workspace} onClose={() => onNavigate("roles")} /> :
       view === "policy-configuration" ? <PolicyConfigurationReview key={entityId ?? "policy-configuration"} workspace={workspace} scene={scene} entityId={entityId} onOpen={onNavigate} /> :
+      view === "authorization-profiles" ? <AuthorizationProfilePublishingWorkspace /> :
       view === "providers" ? <AccessFederationWorkspace workspace={workspace} /> :
       view === "federations" ? <AccessCollaborationBoundaries accountId={workspace.accountId} /> :
       view === "keys" ? <AccessCredentials workspace={workspace} scene={scene} onInspectPermissions={(ownerId) => onNavigate("users", ownerId, undefined, "policies")} /> :

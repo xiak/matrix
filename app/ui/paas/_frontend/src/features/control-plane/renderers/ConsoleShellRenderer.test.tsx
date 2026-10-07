@@ -907,6 +907,30 @@ describe("ConsoleShellRenderer", () => {
     expect(accountRepository.currentIdentity).toHaveBeenCalledTimes(1);
   });
 
+  it("shows product permission onboarding only in the isolated preview navigation", async () => {
+    await renderConsole({
+      accountRepository: previewAccountRepository,
+      experience: previewExperienceSnapshot,
+      iamRepository: previewIamRepository,
+      section: "access",
+      view: "users"
+    });
+    const menu = await screen.findByRole("navigation", { name: "控制台导航" });
+    expect(within(menu).getByRole("link", { name: "产品权限接入" }).getAttribute("href")).toBe("/console/access/authorization-profiles/");
+  });
+
+  it("keeps product permission onboarding out of LIVE navigation", async () => {
+    const liveRepository: AccountRepository = { ...previewAccountRepository, workspace: undefined };
+    await renderConsole({
+      accountRepository: liveRepository,
+      iamRepository: previewIamRepository,
+      section: "access",
+      view: "users"
+    });
+    const menu = await screen.findByRole("navigation", { name: "控制台导航" });
+    expect(within(menu).queryByRole("link", { name: "产品权限接入" })).toBeNull();
+  });
+
   it("projects preview-owned service content immediately when navigation starts from IAM", async () => {
     let releaseRoute!: () => void;
     const load = vi.fn().mockResolvedValue(snapshot);

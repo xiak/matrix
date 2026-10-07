@@ -652,12 +652,13 @@ describe("policy creation entry and directory contract", () => {
     await user.click(screen.getByRole("button", { name: "paas" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("button", { name: "新建自定义策略" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "查看内部接入流程（MOCK）" })).toBeNull();
     expect(screen.getByRole("heading", { level: 2, name: "paas" })).toBe(document.activeElement);
   });
-  it("previews product-owned profile onboarding inline without inventing a live publish contract", async () => {
-    const { user, repository } = await open("policies");
-    await screen.findByRole("table", { name: "策略" });
-    await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
+  it("keeps product onboarding in the platform MOCK workspace without inventing a live publish contract", async () => {
+    const { user, repository } = await open("authorization-profiles");
+    expect(await screen.findByRole("heading", { name: "产品权限接入" })).toBeTruthy();
+    expect(screen.getByText(/隔离 MOCK 的内部协作体验/)).toBeTruthy();
     await user.click(await screen.findByRole("button", { name: "paas" }));
     expect(screen.getByRole("heading", { level: 3, name: "产品接入与租户授权是三段独立职责" })).toBeTruthy();
     expect(screen.getByText("定义能力并落实 PEP")).toBeTruthy();
@@ -720,12 +721,16 @@ describe("policy creation entry and directory contract", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" })).toBe(document.activeElement));
     expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest", inline: "nearest" });
   });
+  it("does not expose the internal onboarding workflow from a live route", async () => {
+    await open("authorization-profiles", { live: true });
+    expect(await screen.findByText("此能力尚未接入后端")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "查看内部接入流程（MOCK）" })).toBeNull();
+    expect(screen.queryByRole("table", { name: "产品权限能力目录" })).toBeNull();
+  });
   it("cross-checks the managed-service template without implying customer authorization", async () => {
-    const { user } = await open("policies", { repository: {
+    const { user } = await open("authorization-profiles", { repository: {
       listAuthorizationProfiles: vi.fn(() => previewAccountRepository.listAuthorizationProfiles(previewCredential))
     } });
-    await screen.findByRole("table", { name: "策略" });
-    await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
     await user.click(await screen.findByRole("button", { name: "managedservice" }));
     await user.click(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
@@ -746,10 +751,9 @@ describe("policy creation entry and directory contract", () => {
       action: `paas.review-${String(index + 1).padStart(4, "0")}.read`, resourceKind: "APPLICATION", scope: "TENANT",
       resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }]
     }));
-    const { user } = await open("policies", { repository: { listAuthorizationProfiles: vi.fn().mockResolvedValue({
+    const { user } = await open("authorization-profiles", { repository: { listAuthorizationProfiles: vi.fn().mockResolvedValue({
       accountId: "org-xiak", items: [{ profile: { product: "paas", revision: 1, callingService: "PAAS", actions }, contentDigest: `sha256:${"a".repeat(64)}` }]
     }) } });
-    await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
     await user.click(await screen.findByRole("button", { name: "paas" }));
     await user.click(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));

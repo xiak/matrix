@@ -68,6 +68,7 @@ export const serviceNavigation = {
     { id: "access-analysis", section: "access", view: "access-analysis", icon: "audit", group: "security" },
     { id: "security-reports", section: "access", view: "security-reports", icon: "audit", group: "security" },
     { id: "settings", section: "access", view: "settings", icon: "settings", group: "security" },
+    { id: "authorization-profiles", section: "access", view: "authorization-profiles", icon: "catalog", group: "administration" },
     { id: "tenants", section: "access", view: "tenants", icon: "tenants", group: "administration" }
   ]
 } as const satisfies Record<ServiceId, readonly ServicePage[]>;

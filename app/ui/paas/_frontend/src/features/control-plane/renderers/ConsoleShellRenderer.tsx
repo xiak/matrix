@@ -204,6 +204,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const navigationText = useTranslations("ServiceNavigation");
   const iamWorkspaceText = useTranslations("IamWorkspace");
   const roleWorkspaceText = useTranslations("RoleWorkspace");
+  const profilePublishingText = useTranslations("AuthorizationProfilePublishingPreview");
   const services = useServiceDirectory();
   const navigation = useConsoleNavigation();
   const favorites = useConsoleUiStore((state) => state.favoriteServices);
@@ -353,10 +354,11 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
     if (item.id === "groups") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canListGroups;
     if (item.id === "policies") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canViewPolicies;
     if (item.id === "roles") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.supportsLiveRoles && accountCapabilities.canListRoles;
+    if (item.id === "authorization-profiles") return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canListUsers;
     if (item.id === "tenants") return accountCapabilities.canReadAccounts;
     return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canListUsers;
   });
-  const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "policy-language": iamWorkspaceText("policyLanguagePreview"), "create-role": iamWorkspaceText("createRole"), "service-authorizations": roleWorkspaceText("serviceAuthorization"), "role-access": accountText("roleAccessTitle"), tenants: accountText("tenantAccounts") };
+  const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "policy-language": iamWorkspaceText("policyLanguagePreview"), "create-role": iamWorkspaceText("createRole"), "service-authorizations": roleWorkspaceText("serviceAuthorization"), "role-access": accountText("roleAccessTitle"), "authorization-profiles": profilePublishingText("workspaceTitle"), tenants: accountText("tenantAccounts") };
   const accessView = frame.section === "access" ? pendingSelection?.view ?? navigation.selection.view : undefined;
   const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : frame.section === "overview" ? dashboard("title") : t(`pages.${frame.section}.title`);
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");

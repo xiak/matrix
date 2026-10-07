@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
+import { Alert, Badge, Button, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess, type AuthorizationProfileClient, type AuthorizationProfileLoad } from "../application/AccountAccessProvider";
 import {
@@ -21,6 +21,7 @@ import { AuthorizationProfilePublishingPreview } from "./AuthorizationProfilePub
 import styles from "./AccountAccessRenderer.module.css";
 
 type CatalogState = { status: "loading" } | AuthorizationProfileLoad;
+type CatalogSurface = "tenant" | "platform-preview";
 
 function scopeStatus(scope: AuthorizationProfileAction["scope"]): "success" | "warning" | "neutral" {
   if (scope === "TENANT") return "success";
@@ -28,14 +29,25 @@ function scopeStatus(scope: AuthorizationProfileAction["scope"]): "success" | "w
   return "neutral";
 }
 
-export function AccountAuthorizationProfileCatalog() {
+export function AccountAuthorizationProfileCatalog({ surface = "tenant" }: { surface?: CatalogSurface } = {}) {
   const t = useTranslations("AuthorizationProfileCatalog");
+  const publishing = useTranslations("AuthorizationProfilePublishingPreview");
   const client = useAccountAccess().authorizationProfiles;
   if (!client) return <EmptyState title={t("notConnected")} description={t("notConnectedHint")} />;
-  return <AuthorizationProfileCatalog key={`${client.accountId}:${client.preview ? "preview" : "live"}`} client={client} />;
+  if (surface === "platform-preview" && !client.preview) return <EmptyState title={publishing("workspaceUnavailable")} description={publishing("workspaceUnavailableHint")} />;
+  return <AuthorizationProfileCatalog key={`${client.accountId}:${client.preview ? "preview" : "live"}:${surface}`} client={client} publishingEnabled={surface === "platform-preview"} />;
 }
 
-function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileClient }) {
+export function AuthorizationProfilePublishingWorkspace() {
+  const t = useTranslations("AuthorizationProfilePublishingPreview");
+  return <div className={styles.stack}>
+    <ContentPage.Heading title={t("workspaceTitle")} scrollKey="authorization-profile-publishing" />
+    <p className={styles.note}>{t("workspaceHint")}</p>
+    <AccountAuthorizationProfileCatalog surface="platform-preview" />
+  </div>;
+}
+
+function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: AuthorizationProfileClient; publishingEnabled: boolean }) {
   const t = useTranslations("AuthorizationProfileCatalog");
   const toolbarLabels = useTableToolbarLabels();
   const [state, setState] = useState<CatalogState>({ status: "loading" });
@@ -155,7 +167,7 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
         title: t(`responsibility.${owner}.title`),
         hint: t(`responsibility.${owner}.hint`),
         status: owner === "product" ? "info" as const : owner === "iam" ? "warning" as const : "success" as const,
-        action: owner === "iam" && client.preview
+        action: owner === "iam" && publishingEnabled
           ? <Button ref={publishingTrigger} variant="secondary" size="small" onClick={() => setPublishingPreview(true)}>{t("previewPublishing")}</Button>
           : undefined
       }))}
@@ -188,7 +200,7 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
   </section>;
 
   return <section aria-label={t("title")} className={styles.catalogSection}>
-    <CatalogNotice preview={client.preview} />
+    <CatalogNotice preview={client.preview} publishingPreview={publishingEnabled} />
     <TableToolbar labels={toolbarLabels}
       search={{ label: t("searchProducts"), placeholder: t("searchProductsPlaceholder"), value: query, onChange: (value) => { setQuery(value); setProductPage(1); } }}
       status={state.status === "ready" ? t("productCount", { count: filteredEntries.length }) : state.status === "loading" ? t("loading") : undefined} />
@@ -221,10 +233,11 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
   </section>;
 }
 
-function CatalogNotice({ preview }: { preview: boolean }) {
+function CatalogNotice({ preview, publishingPreview }: { preview: boolean; publishingPreview: boolean }) {
   const t = useTranslations("AuthorizationProfileCatalog");
+  const publishing = useTranslations("AuthorizationProfilePublishingPreview");
   return <div className={styles.catalogNotice}>
-    <Alert status={preview ? "warning" : "info"}>{t(preview ? "mockNotice" : "notice")}</Alert>
+    <Alert status={publishingPreview ? "warning" : preview ? "warning" : "info"}>{publishingPreview ? publishing("workspaceBoundary") : t(preview ? "mockNotice" : "notice")}</Alert>
     <p className={styles.note}>{t("ownershipHint")}</p>
   </div>;
 }

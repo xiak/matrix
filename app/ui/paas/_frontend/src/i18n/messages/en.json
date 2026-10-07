@@ -1002,6 +1002,10 @@
         "label": "User settings",
         "hint": "Password and security"
       },
+      "authorization-profiles": {
+        "label": "Product permission onboarding",
+        "hint": "Declarations, enforcement evidence and trusted release gates"
+      },
       "tenants": {
         "label": "Tenant management",
         "hint": "Platform-level account creation"
@@ -2345,6 +2349,11 @@
     }
   },
   "AuthorizationProfilePublishingPreview": {
+    "workspaceTitle": "Product permission onboarding",
+    "workspaceHint": "A workspace for product and IAM teams to review permission declarations, real PEP enforcement ownership and trusted release gates before backend contracts exist. Tenant policy authors do not register product capabilities here.",
+    "workspaceBoundary": "This is an isolated MOCK of an internal collaboration flow, not a tenant feature. No draft, validation, approval or publication API is connected, so every gate remains not run or unverified.",
+    "workspaceUnavailable": "Product permission onboarding is not connected",
+    "workspaceUnavailableHint": "The live console has no fixed profile draft, online validation or publication contract and will not substitute MOCK data.",
     "back": "Back to product declaration",
     "title": "Product onboarding review · {product}",
     "subtitle": "An internal engineering workflow prototype from product declaration to trusted registration",

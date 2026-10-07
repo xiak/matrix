@@ -65,7 +65,7 @@ export type ActionCapability = {
   restrictionReason: CapabilityRestriction | null;
 };
 
-export const accountAccessViews = ["users", "create-user", "groups", "create-group", "policies", "create-policy", "policy-language", "policy-configuration", "access-diagnosis", "roles", "create-role", "service-authorizations", "role-access", "providers", "user-sso", "federations", "keys", "sessions", "access-analysis", "security-reports", "settings", "tenants"] as const;
+export const accountAccessViews = ["users", "create-user", "groups", "create-group", "policies", "create-policy", "policy-language", "policy-configuration", "access-diagnosis", "roles", "create-role", "service-authorizations", "role-access", "providers", "user-sso", "federations", "keys", "sessions", "access-analysis", "security-reports", "settings", "authorization-profiles", "tenants"] as const;
 export type AccountAccessView = "overview" | typeof accountAccessViews[number];
 
 export type RootIdentity = {

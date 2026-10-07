@@ -1002,6 +1002,10 @@
         "label": "用户设置",
         "hint": "密码与安全配置"
       },
+      "authorization-profiles": {
+        "label": "产品权限接入",
+        "hint": "声明、鉴权证据与受信发布门禁"
+      },
       "tenants": {
         "label": "租户管理",
         "hint": "平台级账号开通"
@@ -2345,6 +2349,11 @@
     }
   },
   "AuthorizationProfilePublishingPreview": {
+    "workspaceTitle": "产品权限接入",
+    "workspaceHint": "供产品研发与 IAM 平台提前核对权限声明、真实 PEP 鉴权责任和受信发布门禁；租户策略作者不在这里注册产品能力。",
+    "workspaceBoundary": "这是隔离 MOCK 的内部协作体验，不是租户功能，也没有连接草稿、校验、审批或发布 API；所有门禁状态都保持未执行或未验证。",
+    "workspaceUnavailable": "产品权限接入尚未连接",
+    "workspaceUnavailableHint": "真实控制台没有已固定的产品声明草稿、在线校验或发布契约，也不会使用 MOCK 数据替代。",
     "back": "返回产品声明",
     "title": "产品接入审阅 · {product}",
     "subtitle": "从产品权限声明到受信登记的内部工程流程原型",
