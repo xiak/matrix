@@ -57,6 +57,8 @@
 
 最终源码的全仓`go test -race -count=1 -p 2 ./...`（含architecture）及`go vet -p 2 ./...`通过，使用同一Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB。默认外部门禁SKIP不计为真实环境验收；真库范围仅为上述已运行的两项。gofmt与diff检查通过，本片没有生产API/SQL/schema/profile、安装器或UI变更。
 
+后继固定`8dee0a2c1b85b080657064b9f4ecffda9301ad7d`只扩展现有`phase1e2e` owner：备份前直接读取策略附件CREATE/REVOKE完成回执，封存原非敏感结果，并要求后续每次租户状态核对使用原actor的新有效Session逐字段读取同一结果；关系终态、服务健康或Audit存在都不能替代该回执。其[Verification 37665764059](https://github.com/xiak/matrix/actions/runs/37665764059)已由GitHub API核实精确SHA，Go、node、console、十二项串行authority门禁及最终汇总共十六项全部`completed/success`。该独立CI不运行外部`MATRIX_PHASE1_E2E`签名生命周期，不能据此声称当前Profile的安装、升级、回滚、所选备份恢复和重启已执行新增断言；该真实运行仍是单独的发布门禁。
+
 ## 可用性与容量门禁
 
 ### 当前CI任务分配
