@@ -45,8 +45,19 @@ type iamRetention struct {
 	AdministratorContact  iamv1.NotificationContact
 	MFA                   mfaRetention
 	AccessAnalyzer        iamv1.AccessAnalyzer
+	PolicyChanges         policyAttachmentChangeRetention
 	Tenants               []tenantRetention
 	PlatformAuditHashes   map[string]struct{}
+}
+
+// policyAttachmentChangeRetention contains immutable command results rather
+// than current relationship state. PostBackupCreate remains nil in the
+// mode-0600 fixture because that fixture is sealed before the protected
+// backup; the in-process gate fills it only after the backup completes.
+type policyAttachmentChangeRetention struct {
+	PreBackupCreate  iamv1.PolicyAttachmentChange
+	PreBackupRevoke  iamv1.PolicyAttachmentChange
+	PostBackupCreate *iamv1.PolicyAttachmentChange
 }
 
 // mfaRetention is a mode-0600 test-only fixture outside both the signed
