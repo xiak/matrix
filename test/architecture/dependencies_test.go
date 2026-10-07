@@ -346,11 +346,20 @@ func TestInstallationKeepsGoOnlyClosedLifecycleBoundaries(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			// The acceptance fixture speaks the real PostgreSQL protocol so a
+			// stable host endpoint can survive container role changes. Keep that
+			// dependency confined to this test owner; product installation code
+			// still has no database client or HA runtime dependency.
+			postgresHAFixtureDependency := strings.HasPrefix(
+				relative,
+				"app/service/installation/test/postgresqlha/",
+			) && (imported == "github.com/jackc/pgx/v5" ||
+				imported == "github.com/jackc/pgx/v5/pgconn")
 			if strings.HasPrefix(imported, "k8s.io/") {
 				t.Errorf("%s: installation command cannot import Kubernetes CLI closure %q", relative, imported)
 			}
 			if strings.Contains(strings.Split(imported, "/")[0], ".") &&
-				!strings.HasPrefix(imported, modulePath) {
+				!strings.HasPrefix(imported, modulePath) && !postgresHAFixtureDependency {
 				if _, allowed := allowedExternal[imported]; !allowed {
 					t.Errorf("%s: installation has unapproved external dependency %q", relative, imported)
 				}

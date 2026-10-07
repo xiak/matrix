@@ -91,6 +91,14 @@
 - IAM 与数据库连接中断时不得返回旧 Allow；未知写结果只核对原意图。恢复连接后已提交撤权仍有效，已提交 outbox 可恢复投递。
 - 数据库真实主备切换的 RPO/RTO、确认提交保留、旧主 fencing 与失败关闭，只能在安装 owner 提供的独立受限部署上验收；无该部署时保留显式未验收项，不重启共享服务、不以单库重连冒充主备切换。
 
+### PostgreSQL受控切换基础夹具
+
+当前候选从固定`a11ea2df77bd6be0f99b2229380e9d2d76d084d6`选择性采用现有installation测试owner中的三份夹具、最窄架构依赖例外和独立CI任务，不导入该分支的发布Profile、FEAT状态或checkpoint。夹具只接受已拉取并解析为完整`sha256:`身份的PostgreSQL 18镜像和唯一任务标签；两个数据库节点分别限制为0.5CPU、512MiB内存/无额外swap、128 PIDs，使用物理复制、`synchronous_commit=remote_apply`和固定同步standby身份。切换先关闭稳定端点并终止已有连接，再核对单主/备库角色和已确认LSN回放，删除旧主容器形成fence后才提升备库、切换端点并重新探测；角色、回放、fence或路由任一证据不确定时保持端点关闭。旧主只能删除原数据卷后从新主重建为只读standby。清理只删除同时匹配准确task/slice标签的容器、卷和网络。
+
+基础门禁写入一个真实确认事务，保存primary flush与standby replay LSN，要求切换后记录仍恰好存在、相对该checkpoint的`ConfirmedRPOBytes=0`、fence→promote→switch→ready时间顺序成立且本轮RTO不超过45秒；另一路故意使standby角色不可观察，要求切换拒绝、稳定端点不可写且健康原主不被误删。donor后继固定`3fa5e8959d8c41bf51d41698df0fff73cafa089a`的[Verification 37555449639](https://github.com/xiak/matrix/actions/runs/37555449639)中该独立`installation-postgres-ha`任务实际completed/success，但同一run的authority-runtime及最终汇总失败，因此这里只把该任务当作夹具来源证据，不继承整个提交验收。当前分支本地无Docker服务，仅已通过不触发Docker的配置拒绝、package/architecture聚焦race、vet、workflow YAML/Bash语法和diff检查；精确当前源码的真实CI仍待执行。
+
+该夹具不是产品HA实现：稳定端点是测试进程内TCP转发器，没有自动选主、跨故障域、签名安装拓扑或生产代理；marker表也没有运行IAM/Audit/PaaS进程、受限登录、在途授权/撤权、未知提交、outbox/Audit链或连接池重建。因此它只关闭可重复物理复制/fencing基础环境缺口，不能把AC-11数据库HA标记为通过。下一纵向门禁必须让当前真实authority组合通过该端点建立受限状态，在确认checkpoint前提交授权与撤销，切换期间观察失败关闭和未知写处理，切换后从另一IAM副本证明已确认状态、撤权及历史outbox不丢失，并在旧主重入后证明不能复权；实际发布支持仍须安装owner提供匹配Profile的签名拓扑。
+
 AC-11 的服务副本证据：2026-09-11 现有 `TestIndependentIAMAuditAndPaaSProcesses` 在本任务独立 PG18 下通过，两个真实 IAM 进程分别使用最多 2 连接的受限登录。原实例会话可在另一实例使用，跨副本 grant/revoke 与 session revoke 生效；原实例停止后另一实例仍正确允许租户读取并拒绝已撤平台权限；仅副本登录 NOLOGIN+断开该登录连接期间返回 503，恢复后继续工作。原 5721 保留升级与该组合门禁合计 56.307s。没有负载均衡自动切换、数据库主备切换、容量/公平性 SLO 或完整 HA 验收结论，AC-11 尚未满足。
 
 ### 受限运行测量首片

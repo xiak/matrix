@@ -62,6 +62,75 @@ jobs:
           npm run check
           git diff --exit-code -- . ../internal/web/assets
 
+  installation-postgres-ha:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: go.sum
+      - name: Verify task-local PostgreSQL replication and controlled failover
+        env:
+          POSTGRES_IMAGE: postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
+          POSTGRES_HA_TASK: matrix-pg-ha-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          sudo timeout 30s systemctl start docker
+          timeout 30s docker info --format '{{.ServerVersion}}'
+
+          cleanup_task() {
+            local task="$1"
+            local identity actual slice
+            mapfile -t containers < <(docker container ls --all --quiet --no-trunc --filter "label=matrix.task=$task")
+            for identity in "${containers[@]}"; do
+              actual="$(docker inspect --format '{{ index .Config.Labels "matrix.task" }}' "$identity")"
+              slice="$(docker inspect --format '{{ index .Config.Labels "matrix.slice" }}' "$identity")"
+              test "$actual" = "$task" && test "$slice" = postgres-ha-acceptance
+              docker rm --force "$identity"
+            done
+            mapfile -t volumes < <(docker volume ls --quiet --filter "label=matrix.task=$task")
+            for identity in "${volumes[@]}"; do
+              actual="$(docker volume inspect --format '{{ index .Labels "matrix.task" }}' "$identity")"
+              slice="$(docker volume inspect --format '{{ index .Labels "matrix.slice" }}' "$identity")"
+              test "$actual" = "$task" && test "$slice" = postgres-ha-acceptance
+              docker volume rm "$identity"
+            done
+            mapfile -t networks < <(docker network ls --quiet --no-trunc --filter "label=matrix.task=$task")
+            for identity in "${networks[@]}"; do
+              actual="$(docker network inspect --format '{{ index .Labels "matrix.task" }}' "$identity")"
+              slice="$(docker network inspect --format '{{ index .Labels "matrix.slice" }}' "$identity")"
+              test "$actual" = "$task" && test "$slice" = postgres-ha-acceptance
+              docker network rm "$identity"
+            done
+          }
+          cleanup() {
+            cleanup_task "$POSTGRES_HA_TASK-lifecycle"
+            cleanup_task "$POSTGRES_HA_TASK-failclosed"
+            if test -n "${postgres_image_id:-}" && docker image inspect "$postgres_image_id" >/dev/null 2>&1; then
+              docker image rm "$postgres_image_id"
+            fi
+          }
+          postgres_image_id=''
+          trap cleanup EXIT INT TERM
+
+          docker pull "$POSTGRES_IMAGE"
+          postgres_image_id="$(docker image inspect --format '{{.Id}}' "$POSTGRES_IMAGE")"
+          test "${#postgres_image_id}" = 71
+          MATRIX_POSTGRES_HA_ACCEPTANCE=1 \
+            MATRIX_POSTGRES_HA_IMAGE_ID="$postgres_image_id" \
+            MATRIX_POSTGRES_HA_TASK="$POSTGRES_HA_TASK" \
+            go test -v -race -p 1 -count=1 -timeout 6m \
+              ./app/service/installation/test/postgresqlha
+          cleanup
+          trap - EXIT INT TERM
+          test -z "$(docker container ls --all --quiet --filter 'label=matrix.slice=postgres-ha-acceptance')"
+          test -z "$(docker volume ls --quiet --filter 'label=matrix.slice=postgres-ha-acceptance')"
+          test -z "$(docker network ls --quiet --filter 'label=matrix.slice=postgres-ha-acceptance')"
+
   authority-gates:
     name: ${{ matrix.lane }}
     runs-on: ubuntu-24.04
@@ -502,16 +571,18 @@ jobs:
 
   authority-process:
     # Preserve the branch-protection check. The matrix result is success only
-    # when ALL named lanes succeeded; failure/cancellation/skip must close it.
-    needs: authority-gates
+    # when ALL named lanes and the isolated PostgreSQL HA fixture succeeded;
+    # failure/cancellation/skip must close it.
+    needs: [authority-gates, installation-postgres-ha]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - name: Require every authority lane to succeed
+      - name: Require every authority and PostgreSQL HA gate to succeed
         env:
           AUTHORITY_RESULT: ${{ needs.authority-gates.result }}
-        run: test "$AUTHORITY_RESULT" = success
+          POSTGRES_HA_RESULT: ${{ needs.installation-postgres-ha.result }}
+        run: test "$AUTHORITY_RESULT" = success && test "$POSTGRES_HA_RESULT" = success
 
   node-process:
     runs-on: ubuntu-24.04
