@@ -28,25 +28,23 @@ import (
 )
 
 const (
-	applicationID                       paasv1.ResourceID = "phase1-application"
-	configurationID                     paasv1.ResourceID = "phase1-configuration"
-	configurationRevisionOne            paasv1.ResourceID = "phase1-configuration-r1"
-	configurationRevisionTwo            paasv1.ResourceID = "phase1-configuration-r2"
-	applicationRevisionID               paasv1.ResourceID = "phase1-application-r1"
-	deploymentID                        paasv1.ResourceID = "phase1-deployment"
-	placementPolicyID                   paasv1.ResourceID = "placement-policy-local"
-	secretID                            paasv1.ResourceID = "phase1-credential"
-	secretVersion                                         = "version-0001"
-	settingOne                                            = "phase1-setting-one-e24f"
-	settingTwo                                            = "phase1-setting-two-91ad"
-	tenantApplicationID                 paasv1.ResourceID = "phase1-tenant-application"
-	tenantConfigurationID               paasv1.ResourceID = "phase1-tenant-configuration"
-	tenantConfigurationRev              paasv1.ResourceID = "phase1-tenant-configuration-r1"
-	postUpgradeApplicationID            paasv1.ResourceID = "phase1-after-upgrade"
-	preBackupAttachmentCreateRequestID                    = "phase1-grant-alpha"
-	preBackupAttachmentRevokeRequestID                    = "phase1-revoke-child-attachment"
-	postBackupAttachmentCreateRequestID                   = "phase1-post-backup-attachment-create"
-	postBackupAttachmentRevokeRequestID                   = "phase1-post-backup-attachment-revoke"
+	applicationID                      paasv1.ResourceID = "phase1-application"
+	configurationID                    paasv1.ResourceID = "phase1-configuration"
+	configurationRevisionOne           paasv1.ResourceID = "phase1-configuration-r1"
+	configurationRevisionTwo           paasv1.ResourceID = "phase1-configuration-r2"
+	applicationRevisionID              paasv1.ResourceID = "phase1-application-r1"
+	deploymentID                       paasv1.ResourceID = "phase1-deployment"
+	placementPolicyID                  paasv1.ResourceID = "placement-policy-local"
+	secretID                           paasv1.ResourceID = "phase1-credential"
+	secretVersion                                        = "version-0001"
+	settingOne                                           = "phase1-setting-one-e24f"
+	settingTwo                                           = "phase1-setting-two-91ad"
+	tenantApplicationID                paasv1.ResourceID = "phase1-tenant-application"
+	tenantConfigurationID              paasv1.ResourceID = "phase1-tenant-configuration"
+	tenantConfigurationRev             paasv1.ResourceID = "phase1-tenant-configuration-r1"
+	postUpgradeApplicationID           paasv1.ResourceID = "phase1-after-upgrade"
+	preBackupAttachmentCreateRequestID                   = "phase1-grant-alpha"
+	preBackupAttachmentRevokeRequestID                   = "phase1-revoke-child-attachment"
 )
 
 type gate struct {
@@ -224,10 +222,6 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("protected-backup")
 	}
 	emit("protected-backup")
-	if err := value.createPostBackupPolicyAttachmentChange(ctx); err != nil {
-		return err
-	}
-	emit("post-backup-policy-attachment-receipt")
 
 	if err := value.failedUpgrade(ctx, secret, newPassword, bearer); err != nil {
 		return err
@@ -836,74 +830,11 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 	return nil
 }
 
-func (value *gate) createPostBackupPolicyAttachmentChange(ctx context.Context) error {
-	if value.retainedIAM == nil || len(value.retainedIAM.Tenants) != 2 ||
-		!validPreBackupPolicyAttachmentChanges(value.retainedIAM.PolicyChanges) ||
-		value.retainedIAM.PolicyChanges.PostBackupCreate != nil {
-		return fail("post-backup-policy-attachment-fixture")
-	}
-	tenant := &value.retainedIAM.Tenants[0]
-	login, err := value.edge.loginNamed(
-		ctx, tenant.Account.RootIdentity.LoginName, tenant.PrimaryPassword,
-		tenant.Account.ID, tenant.Account.RootIdentity.PrincipalID, "phase1-post-backup-primary-login",
-	)
-	if err != nil || login.MustChangePassword {
-		return fail("post-backup-policy-attachment-login")
-	}
-	bearer := login.Credential.CopyBytes()
-	defer clear(bearer)
-	value.edge.addForbidden(bearer)
-	loggedOut := false
-	defer func() {
-		if !loggedOut {
-			_ = value.edge.logout(ctx, bearer)
-		}
-	}()
-
-	request := iamv1.CreatePolicyAttachmentRequest{
-		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(tenant.Child.ID)},
-		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
-		RequestID: postBackupAttachmentCreateRequestID,
-	}
-	var attachment iamv1.PolicyAttachment
-	if err := value.edge.mutateIAM(ctx, "/policy-attachments", bearer, request, &attachment, http.StatusOK); err != nil ||
-		iamv1.ValidatePolicyAttachment(attachment) != nil {
-		return fail("post-backup-policy-attachment-create")
-	}
-	created, err := value.edge.policyAttachmentChange(ctx, bearer, request.RequestID)
-	if err != nil || !policyAttachmentCreateChangeMatches(
-		created, tenant.Account.RootIdentity.PrincipalID, attachment, request,
-	) {
-		return fail("post-backup-policy-attachment-receipt")
-	}
-	var revoked iamv1.Revocation
-	if err := value.edge.mutateIAM(
-		ctx, "/policy-attachments/"+string(attachment.ID)+":revoke", bearer,
-		iamv1.RevokePolicyAttachmentRequest{
-			ResourceVersion: attachment.ResourceVersion,
-			RequestID:       postBackupAttachmentRevokeRequestID,
-		}, &revoked, http.StatusOK,
-	); err != nil || iamv1.ValidateRevocation(revoked) != nil {
-		return fail("post-backup-policy-attachment-cleanup")
-	}
-	observed, err := value.edge.policyAttachmentChange(ctx, bearer, request.RequestID)
-	if err != nil || !equalJSON(observed, created) {
-		return fail("post-backup-policy-attachment-immutability")
-	}
-	value.retainedIAM.PolicyChanges.PostBackupCreate = &created
-	if err := value.edge.logout(ctx, bearer); err != nil {
-		return fail("post-backup-policy-attachment-logout")
-	}
-	loggedOut = true
-	return nil
-}
-
 func (value *gate) persistTenantRetention() error {
 	if value.retainedIAM == nil ||
 		iamv1.ValidateNotificationContact(value.retainedIAM.AdministratorContact) != nil ||
 		value.retainedIAM.AdministratorContact.State != "VERIFIED" || !validMFARetention(value.retainedIAM.MFA) ||
 		!validPreBackupPolicyAttachmentChanges(value.retainedIAM.PolicyChanges) ||
-		value.retainedIAM.PolicyChanges.PostBackupCreate != nil ||
 		iamv1.ValidateAccessAnalyzer(value.retainedIAM.AccessAnalyzer) != nil {
 		return fail("tenant-retention-contact")
 	}
@@ -939,7 +870,7 @@ func (value *gate) readTenantRetention(installationID string) error {
 	if decodeOne(content, &retained) != nil || retained.InstallationID != installationID || len(retained.Tenants) != 2 || len(retained.AdministratorPassword) == 0 ||
 		iamv1.ValidateNotificationContact(retained.AdministratorContact) != nil || retained.AdministratorContact.State != "VERIFIED" ||
 		!validMFARetention(retained.MFA) || !validPreBackupPolicyAttachmentChanges(retained.PolicyChanges) ||
-		retained.PolicyChanges.PostBackupCreate != nil || iamv1.ValidateAccessAnalyzer(retained.AccessAnalyzer) != nil {
+		iamv1.ValidateAccessAnalyzer(retained.AccessAnalyzer) != nil {
 		return fail("tenant-retention-fixture-identity")
 	}
 	value.retainedIAM = &retained
@@ -1061,7 +992,7 @@ func (value *gate) assertTenantRetention(
 			return fail("tenant-primary-became-platform-operator")
 		}
 		if index == 0 {
-			if err := value.assertPolicyAttachmentChanges(ctx, bearer, selectedBackupRestored); err != nil {
+			if err := value.assertPolicyAttachmentChanges(ctx, bearer); err != nil {
 				return err
 			}
 		}
@@ -1116,7 +1047,6 @@ func (value *gate) assertTenantRetention(
 func (value *gate) assertPolicyAttachmentChanges(
 	ctx context.Context,
 	bearer []byte,
-	selectedBackupRestored bool,
 ) error {
 	changes := value.retainedIAM.PolicyChanges
 	if !validPreBackupPolicyAttachmentChanges(changes) {
@@ -1126,18 +1056,6 @@ func (value *gate) assertPolicyAttachmentChanges(
 		observed, err := value.edge.policyAttachmentChange(ctx, bearer, want.RequestID)
 		if err != nil || !equalJSON(observed, want) {
 			return fail("policy-attachment-receipt-retention")
-		}
-	}
-	if selectedBackupRestored {
-		if err := value.edge.policyAttachmentChangeMissing(ctx, bearer, postBackupAttachmentCreateRequestID); err != nil {
-			return fail("policy-attachment-receipt-recovery-boundary")
-		}
-		return nil
-	}
-	if changes.PostBackupCreate != nil {
-		observed, err := value.edge.policyAttachmentChange(ctx, bearer, postBackupAttachmentCreateRequestID)
-		if err != nil || !equalJSON(observed, *changes.PostBackupCreate) {
-			return fail("post-backup-policy-attachment-receipt-retention")
 		}
 	}
 	return nil

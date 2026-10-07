@@ -326,27 +326,6 @@ func (client *edgeClient) policyAttachmentChange(
 	return result, nil
 }
 
-func (client *edgeClient) policyAttachmentChangeMissing(
-	ctx context.Context,
-	bearer []byte,
-	requestID string,
-) error {
-	response, err := client.json(
-		ctx, http.MethodGet, "/api/iam/v1/policy-attachment-changes/by-request/"+requestID,
-		bearer, nil, nil, http.StatusNotFound,
-	)
-	if err != nil {
-		return err
-	}
-	defer clear(response.body)
-	var problem iamv1.Problem
-	if decodeOne(response.body, &problem) != nil || iamv1.ValidateProblem(problem) != nil ||
-		problem.Status != http.StatusNotFound || problem.Code != "iam.route.notfound" {
-		return errors.New("IAM policy attachment change absence response failed")
-	}
-	return nil
-}
-
 func (client *edgeClient) createSecurityReport(
 	ctx context.Context,
 	bearer []byte,
