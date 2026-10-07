@@ -1865,6 +1865,35 @@ browser warning/error log remained empty. The viewport was reset after the audit
 | Cross-product Operation subject attribution | The MOCK operation center replaces its ambiguous actor string with the public PaaS `SubjectRef` shape from fixed source `b6d15c89a`: `type`, `id`, optional `accessKeyId` and optional Role-session lineage remain separate facts. A collapsed row shows only product, typed initiating identity and time; its content-area disclosure shows the exact identity, non-secret AccessKey ID or Role-session ID, and the Role session's source User or service account. Search includes those public attribution identifiers without exposing or accepting a Secret, signature, nonce, request digest, internal evidence or Account selector. A missing `accessKeyId` is not inferred to be another credential, and a Role is not collapsed into its source identity. This is a reusable MOCK projection over the existing public Operation response, not a new audit model, LIVE operation client or proof that a business request was authorized. The unpushed revision-10 Profile candidate is deliberately absent. Source and synchronized embed are pushed at `1fd55d773`; the focused renderer file passed 7 cases and the complete frontend suite passed 57 files/933 cases plus three normalization cases, type/lint/architecture/228-pair style gates, 42-route export, 233-file embed equality and repository Go test/vet. Desktop and `390 × 844` DEV verified the collapsed hierarchy and expanded AccessKey attribution with viewport/document/body all 390px, no Dialog, horizontal overflow or browser warning/error. |
 | Audit query progressive disclosure | The Audit directory keeps its stable title, tenant boundary and current records visible while structured query controls stay collapsed by default. One persistent query trigger reports the number of applied semantic conditions, while refresh remains fixed at the opposite edge and never shifts when the filter form opens. Applying or resetting a valid query closes the form and restores focus to the trigger; invalid Role-session lineage remains local and keeps the fields available for correction. A later query preserves the last successful table with `aria-busy` and localized refresh status instead of replacing the whole content area with a short-lived skeleton. The UI consumes only the fixed Audit query contract: time, Action, typed actor lineage and page size; it does not invent an `operationId`, source, result or target filter merely because public Audit records contain those fields. The current directory follows public-cloud audit scanning hierarchy: the exact Action is the single semantic record entry, source/time/sequence form its secondary event line, and the former separate time column is removed. Non-secret AccessKey attribution and complete Role-session lineage remain visible beside the actor without exposing a Secret, signature or internal decision material. Record detail keeps Action in its event heading and now names the producer source as the primary source fact rather than repeating Action as both value and label. The result guide and record-specific evidence card distinguish `ACCEPTED`, `SUCCEEDED`, `ALLOWED` and `DENIED` from Operation completion, product execution, resource existence and business success; the browser therefore does not upgrade one immutable event into a current permission or final outcome. Source and synchronized embed are pushed at `3ba107f82`. The complete frontend suite passed 58 files/1010 cases plus three normalization cases, type/lint/architecture/228-pair style gates, 45-page export, 249-file embed equality and repository Go test/vet. A fresh `1280px` DEV session verified the directory guide and `ALLOWED` detail with no Dialog, horizontal overflow or browser warning/error; prior desktop and `390 × 844` checks covered the remaining result examples and compact hierarchy. This remains MOCK evidence over the fixed Audit projection, not a new filter, entity reverse lookup, LIVE mutation or authorization conclusion. |
 
+The Access Analyzer and account-security-report LIVE renderers now bind every
+data projection and in-flight result to the exact concrete client rather than
+only Account and session revision. Source and synchronized embed are fixed at
+`667327125d33b4a42ff62d200e9285bbdea12b72`. Replacing a client clears the old
+Analyzer directory, Finding detail, report identifier, creation result and
+report body in the same committed render; late list, detail, mutation and CSV
+download completions cannot restore or save data into the replacement view.
+Analyzer create/update/disposition and Finding archive/unarchive freeze the
+exact target, expected resource version, complete input and request ID. A
+transport/`503` unknown result blocks other writes and offers only an explicit
+equal replay through the original client. A `409` performs the exact Analyzer
+or Finding reread while preserving the user's draft, but never substitutes the
+new version into the old command or resubmits automatically; a later confirmed
+choice creates a new request ID. Security-report generation applies the same
+original-client/original-request rule, while retaining the fixed create,
+read-by-ID and download-only surface with no LIVE directory. A credential
+`401` clears sensitive projections, `403` never falls back to MOCK and `404`
+does not expand object existence. The two focused files pass 26 cases; the
+complete frontend gate passes 63 files/1,145 cases plus three normalization
+cases, typecheck, lint, architecture, 228-pair theme styles, 47 generated
+pages, 45 normalized segment files and 259-file embedded equality. Full
+repository Go test/vet also pass. Real DEV at desktop, `390 × 844` and
+`320 × 720` keeps one H1, zero Dialogs and exact viewport/document/body widths;
+the 320px Analyzer tablist remains 236px wide with no overflow, and the browser
+warning/error log is empty. The isolated MOCK routes remain available on 4317.
+This accepts client ownership, idempotent UX and responsive presentation only;
+real-IAM mutation/browser and installed-release acceptance remain open, and
+backend receipt authority stays with IAM.
+
 The LIVE Role detail now reads the fixed IAM-006 immutable trust-version
 directory from source `c53abadc98b28a192ec676bf279a0b6c52343ce2`. The tab is
 lazy: stable Role facts and controls render first, and only its own table uses
