@@ -16,8 +16,8 @@ export type AccessPolicy = {
 export type PolicyTargets = { userIds: string[]; groupIds: string[]; roleIds: string[] };
 export type AccessGroup = { id: string; name: string; description: string; memberIds: string[]; policyIds: string[]; createdAt: string };
 export type AccessRole = {
-  id: string; name: string; description: string; principalType: "account" | "service";
-  principal: string; trustedUserIds: string[]; policyIds: string[]; boundaryPolicyId?: string;
+  id: string; name: string; description: string;
+  trustedUserIds: string[]; policyIds: string[]; boundaryPolicyId?: string;
   tags: { key: string; value: string }[]; sessionMinutes: number; consoleAccess: boolean; createdAt: string;
 };
 export type AccessRoleSession = { id: string; roleId: string; caller: RoleSessionCaller; createdAt: string; expiresAt: string; revokedAt?: string };
@@ -109,9 +109,9 @@ export type AccessWorkspaceCommand =
   | { kind: "delete-policy"; id: string }
   | { kind: "associate-policy"; id: string; userIds: string[]; groupIds: string[]; roleIds: string[] }
   | { kind: "attach-policies"; policyIds: string[]; targets: PolicyTargets }
-  | { kind: "create-role"; name: string; description: string; principalType: AccessRole["principalType"]; principal: string; trustedUserIds: string[]; policyIds: string[]; boundaryPolicyId?: string; tags: AccessRole["tags"]; sessionMinutes: number; consoleAccess: boolean }
+  | { kind: "create-role"; name: string; description: string; trustedUserIds: string[]; policyIds: string[]; boundaryPolicyId?: string; tags: AccessRole["tags"]; sessionMinutes: number; consoleAccess: boolean }
   | { kind: "update-role-metadata"; id: string; description: string; tags: AccessRole["tags"] }
-  | { kind: "update-role-trust"; id: string; principal: string; trustedUserIds: string[] }
+  | { kind: "update-role-trust"; id: string; trustedUserIds: string[] }
   | { kind: "update-role-settings"; id: string; sessionMinutes: number; consoleAccess: boolean }
   | { kind: "change-role-policies"; id: string; added: string[]; removed: string[] }
   | { kind: "set-role-boundary"; id: string; policyId?: string }
@@ -211,8 +211,8 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     if (id) exists(items, id);
   };
   const policies = (ids: string[]) => { ids.forEach((id) => exists(state.policies, id)); return [...new Set(ids)]; };
-  const roleSettings = (minutes: number, consoleAccess: boolean, type: AccessRole["principalType"]) => {
-    if (!Number.isInteger(minutes) || minutes < 15 || minutes > 720 || (type === "service" && consoleAccess)) invalid();
+  const roleSettings = (minutes: number) => {
+    if (!Number.isInteger(minutes) || minutes < 15 || minutes > 720) invalid();
   };
   const roleMetadata = (description: string, tags: AccessRole["tags"]) => {
     if (description.length > 256 || tags.length > 10 || tags.some((tag) => !tag.key.trim() || tag.key.length > 64 || tag.value.length > 128 || /[<>\u0000-\u001f]/.test(tag.key + tag.value)) || new Set(tags.map((tag) => tag.key.trim())).size !== tags.length) invalid();
@@ -355,11 +355,11 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     }
     case "create-role": {
       validateName(state.roles, command.name);
-      validateRoleTrust(state, command, context.userIds);
-      roleSettings(command.sessionMinutes, command.consoleAccess, command.principalType);
+      validateRoleTrust(command, context.userIds);
+      roleSettings(command.sessionMinutes);
       if (command.policyIds.length > 30) invalid();
       if (command.boundaryPolicyId) exists(state.policies, command.boundaryPolicyId);
-      state.roles.push({ id, name: command.name.trim(), description: command.description, principalType: command.principalType, principal: command.principal, trustedUserIds: [...new Set(command.trustedUserIds)], policyIds: policies(command.policyIds), boundaryPolicyId: command.boundaryPolicyId, tags: roleMetadata(command.description, command.tags), sessionMinutes: command.sessionMinutes, consoleAccess: command.consoleAccess, createdAt });
+      state.roles.push({ id, name: command.name.trim(), description: command.description, trustedUserIds: [...new Set(command.trustedUserIds)], policyIds: policies(command.policyIds), boundaryPolicyId: command.boundaryPolicyId, tags: roleMetadata(command.description, command.tags), sessionMinutes: command.sessionMinutes, consoleAccess: command.consoleAccess, createdAt });
       target = command.name; break;
     }
     case "update-role-metadata": {
@@ -368,12 +368,12 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     }
     case "update-role-trust": {
       const role = exists(state.roles, id);
-      validateRoleTrust(state, { ...role, ...command }, context.userIds);
-      role.principal = command.principal; role.trustedUserIds = [...new Set(command.trustedUserIds)]; break;
+      validateRoleTrust(command, context.userIds);
+      role.trustedUserIds = [...new Set(command.trustedUserIds)]; break;
     }
     case "update-role-settings": {
       const role = exists(state.roles, id);
-      roleSettings(command.sessionMinutes, command.consoleAccess, role.principalType);
+      roleSettings(command.sessionMinutes);
       role.sessionMinutes = command.sessionMinutes; role.consoleAccess = command.consoleAccess; break;
     }
     case "change-role-policies": {

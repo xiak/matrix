@@ -58,12 +58,12 @@ export function RoleSessions({ role, workspace, scene }: { role: AccessRole; wor
     previousIntent.current = intent;
   }, [intent]);
 
-  const callerLabel = (session: AccessRoleSession) => session.caller.type === "user" ? scene.users.find((user) => user.id === session.caller.id)?.loginName ?? session.caller.id : session.caller.id;
+  const callerLabel = (session: AccessRoleSession) => scene.users.find((user) => user.id === session.caller.id)?.loginName ?? session.caller.id;
   const normalizedSessionId = sessionId.trim();
   const sessions = allSessions.filter((session) => {
     const status = roleSessionStatus(workspace, session, userIds, now);
     const lifecycleMatches = lifecycle === "all" || (lifecycle === "unrevoked" && status === "active") || lifecycle === status;
-    return (!normalizedSessionId || session.id === normalizedSessionId) && (sourceUserId === "all" || (session.caller.type === "user" && session.caller.id === sourceUserId)) && lifecycleMatches;
+    return (!normalizedSessionId || session.id === normalizedSessionId) && (sourceUserId === "all" || session.caller.id === sourceUserId) && lifecycleMatches;
   });
   const pages = Math.max(1, Math.ceil(sessions.length / pageSize)), current = Math.min(page, pages);
   const showHistory = () => { setSessionId(""); setSourceUserId("all"); setLifecycle("all"); setPage(1); };

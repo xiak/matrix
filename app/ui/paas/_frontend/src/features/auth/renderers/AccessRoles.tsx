@@ -20,17 +20,16 @@ function RoleMetadataEditor({ role, onClose }: { role: AccessRole; onClose(): vo
   return <WorkspaceInlineForm title={t("editMetadata")} backLabel={t("backToRoleDetails")} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "update-role-metadata", id: role.id, description, tags }))}><div><strong>{role.name}</strong><p className={styles.note}>{role.id}</p></div><FormField id={id} label={w("description")}><TextArea id={id} maxLength={256} rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></FormField><RoleTags value={tags} onChange={setTags} /></WorkspaceInlineForm>;
 }
 function RoleTrustReview({ role, proposed, scene }: { role: AccessRole; proposed: RoleTrust; scene: AccountAccessScene }) {
-  const t = useTranslations("RoleWorkspace"), w = useTranslations("IamWorkspace");
-  const subjects = (trust: RoleTrust) => trust.principalType === "account" ? trust.trustedUserIds : [trust.principal];
-  const previous = subjects(role), next = subjects(proposed);
-  const name = (id: string) => role.principalType === "account" ? scene.users.find((user) => user.id === id)?.loginName ?? id : id;
+  const t = useTranslations("RoleWorkspace");
+  const previous = role.trustedUserIds, next = proposed.trustedUserIds;
+  const name = (id: string) => scene.users.find((user) => user.id === id)?.loginName ?? id;
   return <div className={styles.stack}>
     <h3 className={styles.stepTitle} data-trust-review-heading tabIndex={-1}>{t("reviewTrust")}</h3>
     <div><strong>{role.name}</strong><p className={styles.note}>{role.id}</p></div>
     <Alert status="warning">{t("trustChangeHint")}</Alert>
     <div className={styles.policyComparison}>{(["before", "after"] as const).map((side) => <Card key={side} aria-label={t(side)}>
       <Card.Header><h4 className={styles.stepTitle}>{t(side)}</h4></Card.Header>
-      <Card.Body><p className={styles.note}>{w(role.principalType === "service" ? "servicePrincipal" : role.principalType)}</p>
+      <Card.Body><p className={styles.note}>{t("sameAccountUsers")}</p>
         <ul className={styles.bindingList}>{(side === "before" ? previous : next).map((id) => <li key={id}>
           <div><strong>{name(id)}</strong>{name(id) !== id ? <p className={styles.note}>{id}</p> : null}</div>
           {side === "before" && !next.includes(id) ? <Badge status="warning">{t("removedTrust")}</Badge> : side === "after" && !previous.includes(id) ? <Badge status="success">{t("addedTrust")}</Badge> : null}
@@ -47,7 +46,7 @@ function RoleTrustEditor({ role, workspace, scene, onClose }: { role: AccessRole
   const t = useTranslations("RoleWorkspace"), w = useTranslations("IamWorkspace"), access = useAccountAccess();
   const [trust, setTrust] = useState<RoleTrust>(role), [review, setReview] = useState(false), [invalid, setInvalid] = useState(false);
   const stage = useRef<HTMLElement>(null), heading = useRef<HTMLHeadingElement>(null), invalidAlert = useRef<HTMLDivElement>(null), errorAlert = useRef<HTMLDivElement>(null), previousReview = useRef(review);
-  const changed = role.principal !== trust.principal || role.trustedUserIds.length !== trust.trustedUserIds.length || role.trustedUserIds.some((id) => !trust.trustedUserIds.includes(id));
+  const changed = role.trustedUserIds.length !== trust.trustedUserIds.length || role.trustedUserIds.some((id) => !trust.trustedUserIds.includes(id));
   useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
   useLayoutEffect(() => {
     if (previousReview.current === review) return;
@@ -57,17 +56,17 @@ function RoleTrustEditor({ role, workspace, scene, onClose }: { role: AccessRole
   useLayoutEffect(() => { if (invalid) invalidAlert.current?.querySelector<HTMLElement>('[role="alert"]')?.focus({ preventScroll: true }); }, [invalid]);
   useLayoutEffect(() => { if (access.workspaceError) errorAlert.current?.querySelector<HTMLElement>('[role="alert"]')?.focus({ preventScroll: true }); }, [access.workspaceError]);
   const submit = async () => {
-    try { validateRoleTrust(workspace, trust, scene.users.map((user) => user.id)); } catch { setInvalid(true); return false; }
+    try { validateRoleTrust(trust, scene.users.map((user) => user.id)); } catch { setInvalid(true); return false; }
     setInvalid(false);
     if (!review) { setReview(true); return false; }
-    if (await access.executeWorkspace({ kind: "update-role-trust", id: role.id, principal: trust.principal, trustedUserIds: trust.trustedUserIds })) onClose();
+    if (await access.executeWorkspace({ kind: "update-role-trust", id: role.id, trustedUserIds: trust.trustedUserIds })) onClose();
     return false;
   };
   return <section ref={stage} className={styles.stack} role="group" aria-label={t("editTrust")}>
     <div className={styles.sectionHeading}><Button variant="ghost" disabled={access.busy} onClick={onClose}>{t("backToTrust")}</Button><h3 className={styles.detailTitle} ref={heading} tabIndex={-1}>{t("editTrust")}</h3></div>
     {access.workspaceError ? <div ref={errorAlert}><Alert status="danger" tabIndex={-1}>{w(`errors.${access.workspaceError}`)}</Alert></div> : null}
     <form className={styles.stack} aria-busy={access.busy || undefined} onSubmit={(event) => { event.preventDefault(); if (!access.busy && changed) void submit(); }}>
-      <fieldset className={styles.editorFields} disabled={access.busy}>{review ? <><RoleTrustReview role={role} proposed={trust} scene={scene} /><Button variant="ghost" onClick={() => { access.clearWorkspaceError(); setReview(false); }}>{t("backToSelection")}</Button></> : <><RoleTrustFields locked workspace={workspace} users={scene.users.map((user) => ({ id: user.id, name: user.loginName }))} value={trust} onChange={(value) => { setTrust(value); setInvalid(false); access.clearWorkspaceError(); }} />{invalid ? <div ref={invalidAlert}><Alert status="danger" tabIndex={-1}>{t("invalidTrust")}</Alert></div> : null}{!changed ? <p className={styles.note}>{t("noTrustChanges")}</p> : null}</>}</fieldset>
+      <fieldset className={styles.editorFields} disabled={access.busy}>{review ? <><RoleTrustReview role={role} proposed={trust} scene={scene} /><Button variant="ghost" onClick={() => { access.clearWorkspaceError(); setReview(false); }}>{t("backToSelection")}</Button></> : <><RoleTrustFields workspace={workspace} users={scene.users.map((user) => ({ id: user.id, name: user.loginName }))} value={trust} onChange={(value) => { setTrust(value); setInvalid(false); access.clearWorkspaceError(); }} />{invalid ? <div ref={invalidAlert}><Alert status="danger" tabIndex={-1}>{t("invalidTrust")}</Alert></div> : null}{!changed ? <p className={styles.note}>{t("noTrustChanges")}</p> : null}</>}</fieldset>
       <div className={styles.actions}><Button type="submit" disabled={access.busy || !changed}>{review ? w("save") : t("reviewChange")}</Button><Button type="button" variant="secondary" disabled={access.busy} onClick={onClose}>{w("cancel")}</Button></div>
     </form>
   </section>;
@@ -75,7 +74,7 @@ function RoleTrustEditor({ role, workspace, scene, onClose }: { role: AccessRole
 function RoleSettingsEditor({ role, onClose }: { role: AccessRole; onClose(): void }) {
   const t = useTranslations("RoleWorkspace"), access = useAccountAccess();
   const [settings, setSettings] = useState({ sessionMinutes: role.sessionMinutes, consoleAccess: role.consoleAccess });
-  return <WorkspaceInlineForm title={t("editSettings")} backLabel={t("backToRoleDetails")} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "update-role-settings", id: role.id, ...settings }))}><Alert>{t("settingsChangeHint")}</Alert><RoleSessionSettings value={settings} onChange={setSettings} service={role.principalType === "service"} /></WorkspaceInlineForm>;
+  return <WorkspaceInlineForm title={t("editSettings")} backLabel={t("backToRoleDetails")} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "update-role-settings", id: role.id, ...settings }))}><Alert>{t("settingsChangeHint")}</Alert><RoleSessionSettings value={settings} onChange={setSettings} /></WorkspaceInlineForm>;
 }
 function RolePolicyEditor({ role, workspace, mode, onClose }: { role: AccessRole; workspace: AccessWorkspace; mode: "add" | "remove"; onClose(): void }) {
   const t = useTranslations("RoleWorkspace"), w = useTranslations("IamWorkspace"), access = useAccountAccess();
@@ -104,7 +103,7 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
     (fallback ?? target)?.focus({ preventScroll: true });
   }, [workflow]);
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("roles")}>{t("back")}</Button>} />;
-  const principalLabel = (role: AccessRole) => role.principal;
+  const trustSearchText = (role: AccessRole) => role.trustedUserIds.map((id) => scene.users.find((user) => user.id === id)?.loginName ?? id).join(" ");
   const selectedPolicies = selected?.policyIds.map((id) => workspace.policies.find((policy) => policy.id === id)).filter((policy) => policy !== undefined) ?? [];
   const selectedPolicyRows = selected?.policyIds.map((id) => { const policy = workspace.policies.find((item) => item.id === id); return { id, name: policy?.name ?? id, policy }; }) ?? [];
   const policiesWithDeny = new Set(selectedPolicies.filter((policy) => {
@@ -118,10 +117,10 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
         : workflow === "trust" ? <RoleTrustEditor role={selected} workspace={workspace} scene={scene} onClose={() => setWorkflow(null)} />
         : workflow === "settings" ? <RoleSettingsEditor role={selected} onClose={() => setWorkflow(null)} />
         : workflow === "add" || workflow === "remove" ? <RolePolicyEditor role={selected} workspace={workspace} mode={workflow} onClose={() => setWorkflow(null)} />
-        : <><p className={styles.note}>{selected.description || "—"}</p><dl className={styles.facts}><div><dt>ID</dt><dd>{selected.id}</dd></div><div><dt>{t("principalType")}</dt><dd>{t(selected.principalType === "service" ? "servicePrincipal" : selected.principalType)}</dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
+        : <><p className={styles.note}>{selected.description || "—"}</p><dl className={styles.facts}><div><dt>ID</dt><dd>{selected.id}</dd></div><div><dt>{r("roleType")}</dt><dd>{r("customerRole")}</dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
       {selected.tags.length ? <div className={styles.actions} aria-label={r("tags")}>{selected.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}</div> : null}
       <AuthorizationOverview title={r("authorizationOverview")} hint={r("authorizationOverviewHint")} items={[
-        { label: r("trustAdmission"), value: selected.principalType === "account" ? r("trustedUserCount", { count: selected.trustedUserIds.length }) : principalLabel(selected) },
+        { label: r("trustAdmission"), value: r("trustedUserCount", { count: selected.trustedUserIds.length }) },
         { label: t("permissions"), value: <><strong>{selected.policyIds.length}</strong> {t(selected.policyIds.length === 1 ? "item" : "items")}</> },
         { label: t("policiesWithDeny"), value: <><strong>{policiesWithDeny.size}</strong> {t(policiesWithDeny.size === 1 ? "item" : "items")}</> },
         { label: t("permissionBoundary"), value: selected.boundaryPolicyId ? t("configured") : <Badge status="warning">{r("boundaryClosed")}</Badge> }
@@ -134,14 +133,14 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
           row={(item, blocked) => <><td><button className={styles.userLink} disabled={blocked} onClick={() => onOpen("policies", item.id)}>{item.name}</button><small>{item.policy?.description}</small></td><td>{item.policy ? t(item.policy.kind) : "—"}</td><td>{item.policy ? "v" + item.policy.defaultVersion : "—"}</td><td>{item.policy ? <Badge status={policiesWithDeny.has(item.policy.id) ? "danger" : "neutral"}>{t(policiesWithDeny.has(item.policy.id) ? "containsDeny" : "allowStatementsOnly")}</Badge> : "—"}</td></>} />
           <PermissionBoundary owner="role" workspace={workspace} value={selected.boundaryPolicyId} onOpen={(id) => onOpen("policies", id)} onSave={(policyId) => access.executeWorkspace({ kind: "set-role-boundary", id: selected.id, policyId })} />
         </Tabs.Content>
-        <Tabs.Content className={styles.stack} value="trust"><div><Button ref={trustTrigger} variant="secondary" onClick={() => openWorkflow("trust")}>{r("editTrust")}</Button></div><Alert>{r(`trustHints.${selected.principalType}`)}</Alert><dl className={styles.facts}><div><dt>{t("principal")}</dt><dd>{principalLabel(selected)}</dd></div>{selected.principalType === "account" ? <div><dt>{r("trustedUsers")}</dt><dd><div className={styles.actions}>{selected.trustedUserIds.map((id) => <button key={id} className={styles.userLink} onClick={() => onOpen("users", id)}>{scene.users.find((user) => user.id === id)?.loginName ?? id}</button>)}</div></dd></div> : null}</dl><pre className={styles.code} role="region" aria-label={r(selected.principalType === "account" ? "trustDocument" : "syntheticTrust")} tabIndex={0}>{JSON.stringify(roleTrustPreview(selected), null, 2)}</pre>{selected.principalType === "account" ? <p className={styles.note}>{r("requiredAction")} <code>iam.role.assume</code> · <code>{selected.id}</code></p> : null}</Tabs.Content>
+        <Tabs.Content className={styles.stack} value="trust"><div><Button ref={trustTrigger} variant="secondary" onClick={() => openWorkflow("trust")}>{r("editTrust")}</Button></div><Alert>{r("trustHints.user")}</Alert><dl className={styles.facts}><div><dt>{r("roleType")}</dt><dd>{r("customerRole")}</dd></div><div><dt>{r("trustedUsers")}</dt><dd><div className={styles.actions}>{selected.trustedUserIds.map((id) => <button key={id} className={styles.userLink} onClick={() => onOpen("users", id)}>{scene.users.find((user) => user.id === id)?.loginName ?? id}</button>)}</div></dd></div></dl><pre className={styles.code} role="region" aria-label={r("trustDocument")} tabIndex={0}>{JSON.stringify(roleTrustPreview(selected), null, 2)}</pre><p className={styles.note}>{r("requiredAction")} <code>iam.role.assume</code> · <code>{selected.id}</code></p></Tabs.Content>
         <Tabs.Content value="sessions"><RoleSessions role={selected} workspace={workspace} scene={scene} /></Tabs.Content>
         <Tabs.Content className={styles.stack} value="settings"><div><Button ref={settingsTrigger} variant="secondary" onClick={() => openWorkflow("settings")}>{r("editSettings")}</Button></div><dl className={styles.facts}><div><dt>{t("sessionMinutes")}</dt><dd>{selected.sessionMinutes}</dd></div><div><dt>{t("consoleAccess")}</dt><dd>{t(selected.consoleAccess ? "enabled" : "disabled")}</dd></div></dl><Alert>{r("settingsChangeHint")}</Alert></Tabs.Content>
       </Tabs.Root>
       </>}
-    </WorkspaceDetail> : <WorkspaceCollection title={t("roles")} description={t("roleHint")} items={workspace.roles} keywords={(role) => [role.description, principalLabel(role)].join(" ")} filter={{ label: t("principalType"), options: ["account", "service"].map((value) => ({ value, label: t(value === "service" ? "servicePrincipal" : "account") })), matches: (role, value) => role.principalType === value }} create={{ label: t("createRole"), onClick: onCreate }} secondaryActions={[{ id: "service-authorization", label: r("serviceAuthorization"), variant: "secondary", onSelect: () => onOpen("service-authorizations") }]} createFocusRef={collectionActionFocus} columns={[t("name"), r("directoryTrust"), r("directoryAuthorization"), r("directorySession"), t("created")]} row={(role) => <>
+    </WorkspaceDetail> : <WorkspaceCollection title={t("roles")} description={t("roleHint")} items={workspace.roles} keywords={(role) => [role.description, trustSearchText(role)].join(" ")} create={{ label: t("createRole"), onClick: onCreate }} secondaryActions={[{ id: "service-authorization", label: r("serviceAuthorization"), variant: "secondary", onSelect: () => onOpen("service-authorizations") }]} createFocusRef={collectionActionFocus} columns={[t("name"), r("directoryTrust"), r("directoryAuthorization"), r("directorySession"), t("created")]} row={(role) => <>
       <td><button className={styles.userLink} onClick={() => onOpen("roles", role.id)}>{role.name}</button><small>{role.description}</small></td>
-      <td className={styles.roleDirectoryTrust}><Badge>{t(role.principalType === "service" ? "servicePrincipal" : role.principalType)}</Badge><small>{principalLabel(role)}</small></td>
+      <td className={styles.roleDirectoryTrust}><Badge>{r("customerRole")}</Badge><small>{r("trustedUserCount", { count: role.trustedUserIds.length })}</small></td>
       <td className={styles.roleDirectorySummary}><strong>{r("attachedPolicyCount", { count: role.policyIds.length })}</strong><small>{t("permissionBoundary")} · {role.boundaryPolicyId ? t("configured") : r("boundaryClosed")}</small></td>
       <td className={styles.roleDirectorySession}><strong>{r("maximumSessionMinutes", { minutes: role.sessionMinutes })}</strong><small>{r("consoleEntry")} · {t(role.consoleAccess ? "enabled" : "disabled")}</small></td>
       <td><WorkspaceTime value={role.createdAt} /></td>

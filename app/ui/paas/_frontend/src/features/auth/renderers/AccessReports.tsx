@@ -8,7 +8,7 @@ import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { SessionSummary } from "../domain/session";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { accountSecurityReportLimits, accountSecurityReportLimitViolation, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildAccountSecurityReportDirectoryPreview, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisRulePreview, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type AccountSecurityReportDirectoryEntry, type AccountSecurityReportDirectoryStatus, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
+import { accountSecurityReportLimits, accountSecurityReportLimitViolation, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildAccountSecurityReportDirectoryPreview, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisRulePreview, type AccessSecurityCheckState, type AccountSecurityReportDirectoryEntry, type AccountSecurityReportDirectoryStatus, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
 import { AccessAnalysisDispositionWorkflow, AccessAnalysisRulesPanel, AccessAnalysisRuleWorkflow, type AccessAnalysisRuleSavedKind } from "./AccessAnalysisRulePreview";
 import { AccessFindingRecoveryBoundary } from "./AccessRecoveryBoundary";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
@@ -19,12 +19,6 @@ const badgeStatus: Record<AccessSecurityCheckState, "warning" | "success" | "neu
   configured: "success",
   notApplicable: "neutral",
   unknown: "info"
-};
-
-const trustEntryStatus: Record<AccessAnalysisTrustEntry["configuration"], "info" | "warning" | "neutral"> = {
-  configured: "info",
-  incomplete: "warning",
-  disabled: "neutral"
 };
 
 const unusedFindingStatus: Record<UnusedAccessFindingPreview["lifecycle"], "warning" | "neutral" | "success"> = {
@@ -85,7 +79,6 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
 }) {
   const t = useTranslations("IamWorkspace.accessAnalysis");
   const [section, setSection] = useState<"external" | "unused" | "rule">("external");
-  const [selectedTrustEntry, setSelectedTrustEntry] = useState<AccessAnalysisTrustEntry | null>(null);
   const [selectedUnusedFinding, setSelectedUnusedFinding] = useState<UnusedAccessFindingPreview | null>(null);
   const [editingRule, setEditingRule] = useState<AccessAnalysisRuleSavedKind | null>(null);
   const [ruleOverride, setRuleOverride] = useState<AccessAnalysisRulePreview | null>(null);
@@ -109,7 +102,6 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
     };
   }), [analysis, unusedReviewOverrides]);
   const rule = ruleOverride?.accountId === workspace?.accountId ? ruleOverride : analysis?.rule ?? null;
-  const selectedTrust = selectedTrustEntry?.accountId === workspace?.accountId ? selectedTrustEntry : null;
   const selectedUnusedId = selectedUnusedFinding && selectedUnusedFinding.accountId === workspace?.accountId ? selectedUnusedFinding.id : null;
   const selectedUnused = selectedUnusedId
     ? unusedFindings.find((finding) => finding.id === selectedUnusedId) ?? null
@@ -120,30 +112,6 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
     <Alert status="info">{t("liveBoundary")}</Alert>
     <EmptyState title={t("liveUnavailableTitle")} description={t("liveUnavailableHint")} />
   </div>;
-
-  if (selectedTrust) return <WorkspaceDetail key={selectedTrust.id} title={t("external.detailTitle", { name: selectedTrust.name })} onBack={() => setSelectedTrustEntry(null)}>
-    <Alert status="info">{t("external.configurationEvidence")}</Alert>
-    <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>{selectedTrust.name}</Typography.Title><Typography.Text tone="muted">{selectedTrust.principal}</Typography.Text></div><Badge status={trustEntryStatus[selectedTrust.configuration]}>{t(`external.states.${selectedTrust.configuration}`)}</Badge></Card.Header>
-      <Card.Body className={styles.detail}>
-        <dl className={styles.facts}>
-          <div><dt>{t("account")}</dt><dd><code>{selectedTrust.accountId}</code></dd></div>
-          <div><dt>{t("external.entryType")}</dt><dd>{t(`external.kinds.${selectedTrust.kind}`)}</dd></div>
-          <div><dt>{t("external.principal")}</dt><dd><code>{selectedTrust.principal}</code></dd></div>
-          <div><dt>{t("external.role")}</dt><dd>{selectedTrust.roleName}<small>{selectedTrust.roleId}</small></dd></div>
-          <div><dt>{t("external.source")}</dt><dd>{selectedTrust.sourceName}{selectedTrust.sourceId !== selectedTrust.sourceName ? <small>{selectedTrust.sourceId}</small> : null}</dd></div>
-          <div><dt>{t("external.createdAt")}</dt><dd><WorkspaceTime value={selectedTrust.createdAt} /></dd></div>
-          <div><dt>{t("external.evidenceCoverage")}</dt><dd>{t("external.configurationOnly")}</dd></div>
-        </dl>
-        <section aria-labelledby="external-access-recommendation" className={styles.stack}>
-          <Typography.Title as="h3" id="external-access-recommendation" level={3}>{t("external.recommendationTitle")}</Typography.Title>
-          <p className={styles.note}>{t(`external.recommendations.${selectedTrust.kind}`)}</p>
-          <Alert status="warning">{t("external.noEffectiveAccessConclusion")}</Alert>
-        </section>
-      </Card.Body>
-      <Card.Footer><Button onClick={() => onNavigate(selectedTrust.target.view, selectedTrust.target.id)}>{t("external.reviewTarget")}<ArrowRight aria-hidden="true" /></Button></Card.Footer>
-    </Card>
-  </WorkspaceDetail>;
 
   if (editingRule === "analyzer" && rule) return <AccessAnalysisRuleWorkflow rule={rule} onBack={() => setEditingRule(null)} onApply={(next) => { setRuleOverride(next); setRuleSaved("analyzer"); setEditingRule(null); setSection("rule"); }} />;
 
@@ -216,7 +184,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
   const content = <>
     <Alert status="info">{t("previewBoundary")}</Alert>
     <Tabs.Root value={section} onValueChange={(value) => setSection(value as "external" | "unused" | "rule")}>
-      <Tabs.List aria-label={t("sections")} className={styles.accessAnalysisTabs}><Tabs.Trigger value="external">{t("tabs.external")} ({analysis.trustEntries.length})</Tabs.Trigger><Tabs.Trigger value="unused">{t("tabs.unused")} ({unusedFindings.length})</Tabs.Trigger><Tabs.Trigger value="rule">{t("tabs.rule")}</Tabs.Trigger></Tabs.List>
+      <Tabs.List aria-label={t("sections")} className={styles.accessAnalysisTabs}><Tabs.Trigger value="external">{t("tabs.external")}</Tabs.Trigger><Tabs.Trigger value="unused">{t("tabs.unused")} ({unusedFindings.length})</Tabs.Trigger><Tabs.Trigger value="rule">{t("tabs.rule")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content className={styles.stack} value="external">
         <Card>
           <Card.Header><div><Typography.Title as="h2" level={3}>{t("external.coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("external.coverageHint")}</Typography.Text></div><Badge status="info">{t("mockConfiguration")}</Badge></Card.Header>
@@ -224,11 +192,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
             <dl className={styles.activityEvidence} aria-label={t("external.coverageTitle")}>{analysis.coverage.map((item) => <div key={item.id}><dt>{t(`external.coverage.${item.id}.title`)}</dt><dd><Badge status={item.state === "INSUFFICIENT_COVERAGE" ? "warning" : "neutral"}>{t(`external.coverageStates.${item.state}`)}</Badge><span>{t(`external.coverageReasons.${item.reason}`)}</span><code>{item.reason}</code>{item.observedFrom && item.observedThrough ? <small>{t("external.observedWindow")} <WorkspaceTime value={item.observedFrom} /> – <WorkspaceTime value={item.observedThrough} /></small> : null}<span>{t(`external.coverage.${item.id}.hint`)}</span></dd></div>)}</dl>
           </Card.Body>
         </Card>
-        <WorkspaceCollection embedded title={t("external.entries")} description={t("external.directoryHint")} items={analysis.trustEntries}
-          columns={[t("external.entry"), t("external.principal"), t("external.source"), t("external.role"), t("external.status")]}
-          keywords={(entry) => `${entry.name} ${entry.principal} ${entry.roleName} ${entry.sourceName}`}
-          row={(entry) => <><td><button className={styles.userLink} onClick={() => setSelectedTrustEntry(entry)}>{entry.name}</button><small>{t(`external.kinds.${entry.kind}`)}</small></td><td><code>{entry.principal}</code></td><td>{entry.sourceName}{entry.sourceId !== entry.sourceName ? <small>{entry.sourceId}</small> : null}</td><td>{entry.roleName}<small>{entry.roleId}</small></td><td><Badge status={trustEntryStatus[entry.configuration]}>{t(`external.states.${entry.configuration}`)}</Badge></td></>}
-          footerNote={t("external.directoryHint")} />
+        <EmptyState title={t("external.unavailableTitle")} description={t("external.unavailableHint")} />
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="unused">
         <Card>

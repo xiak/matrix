@@ -86,21 +86,6 @@ export type AccessAnalysisCoverage =
     observedFrom: null;
     observedThrough: null;
   };
-export type AccessAnalysisTrustEntry = {
-  id: string;
-  accountId: string;
-  name: string;
-  kind: "serviceWorkload";
-  principal: string;
-  roleId: string;
-  roleName: string;
-  sourceId: string;
-  sourceName: string;
-  configuration: "configured" | "incomplete" | "disabled";
-  createdAt: string;
-  target: { view: Extract<AccountAccessView, "roles">; id: string };
-};
-
 function assertReportAccount(workspace: AccessWorkspace, scene: AccountAccessScene) {
   if (workspace.accountId !== scene.accountId) throw new Error("INVALID_IAM_TENANT");
 }
@@ -240,34 +225,16 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
   return findings;
 }
 
-// This preview inventories tenant configuration only. A configured assertion
-// mapping preview or service role is not proof that a principal can currently assume
-// the role, reach a resource, or has ever used the path.
+// This preview exposes evidence-source readiness only. It deliberately does
+// not manufacture external federation or generic service-principal entries.
 export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: AccountAccessScene): {
   accountId: string;
   coverage: AccessAnalysisCoverage[];
-  trustEntries: AccessAnalysisTrustEntry[];
   unusedFindings: UnusedAccessFindingPreview[];
   scanPreview: AccessAnalysisScanPreview;
   rule: AccessAnalysisRulePreview;
 } {
   assertReportAccount(workspace, scene);
-  const serviceEntries: AccessAnalysisTrustEntry[] = workspace.roles
-    .filter((role) => role.principalType === "service")
-    .map((role) => ({
-      id: `service:${role.id}`,
-      accountId: workspace.accountId,
-      name: role.name,
-      kind: "serviceWorkload",
-      principal: role.principal,
-      roleId: role.id,
-      roleName: role.name,
-      sourceId: role.principal,
-      sourceName: role.principal,
-      configuration: "configured",
-      createdAt: role.createdAt,
-      target: { view: "roles", id: role.id }
-    }));
   return {
     accountId: workspace.accountId,
     coverage: [
@@ -278,7 +245,6 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
       { id: "PAAS_RESULTS", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null },
       { id: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null }
     ],
-    trustEntries: serviceEntries,
     unusedFindings: buildUnusedAccessFindingPreview(workspace, scene),
     scanPreview: {
       state: "FAILED",

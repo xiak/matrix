@@ -10,7 +10,7 @@ const userIds = ["principal-lin", "principal-chen"];
 const request: AccessTestRequest = { principalId: "principal-lin", action: "logs:search", resourceId: "logs-production/payment", sourceIp: "192.0.2.42", at: "2026-09-09T12:00:00Z" };
 const grant = (condition?: PolicyCondition, effect: "allow" | "deny" = "allow"): PolicyDocument => ({ version: "1", statement: [{ effect, action: ["logs:search"], resource: ["*"], ...(condition !== undefined ? { condition } : {}) }] });
 const roleContext = { id: "role-logs", at: request.at!, userIds, primaryPrincipalId: "principal-admin" };
-const accountRole = { kind: "create-role" as const, name: "LogSupport", description: "Synthetic support role", principalType: "account" as const, principal: "org-xiak", trustedUserIds: ["principal-lin"], policyIds: ["policy-read"], boundaryPolicyId: "policy-prod-logs", tags: [{ key: "team", value: "support" }], sessionMinutes: 60, consoleAccess: false };
+const accountRole = { kind: "create-role" as const, name: "LogSupport", description: "Synthetic support role", trustedUserIds: ["principal-lin"], policyIds: ["policy-read"], boundaryPolicyId: "policy-prod-logs", tags: [{ key: "team", value: "support" }], sessionMinutes: 60, consoleAccess: false };
 const assumption = { roleId: roleContext.id, caller: { type: "user" as const, id: "principal-lin" }, sourceIp: request.sourceIp, at: request.at! };
 function roleWorkspace() { return applyAccessWorkspaceCommand(initialAccessWorkspace("org-xiak"), accountRole, roleContext); }
 function issueSession(workspace: AccessWorkspace) { return applyAccessWorkspaceCommand(workspace, { kind: "create-role-session", ...assumption, sessionMinutes: 30 }, { ...roleContext, id: "session-logs" }); }
@@ -152,10 +152,7 @@ describe("role trust, boundaries and temporary session diagnostics", () => {
     expect(source.roles.some((role) => role.id === roleContext.id)).toBe(false);
     expect(workspace.events.some((event) => event.action === "update-role-metadata")).toBe(true);
   });
-  it.each([
-    { principal: "org-other" }, { trustedUserIds: [] }, { trustedUserIds: ["*"] }, { trustedUserIds: ["foreign-user"] },
-    { principalType: "service" as const, principal: "unregistered.matrix.internal", trustedUserIds: [] }
-  ])("rejects unverified or overbroad trust atomically: %j", (patch) => {
+  it.each([{ trustedUserIds: [] }, { trustedUserIds: ["*"] }, { trustedUserIds: ["foreign-user"] }])("rejects unverified or overbroad trust atomically: %j", (patch) => {
     const workspace = initialAccessWorkspace("org-xiak"), before = structuredClone(workspace);
     expect(() => applyAccessWorkspaceCommand(workspace, { ...accountRole, ...patch }, roleContext)).toThrow("invalidTrust");
     expect(workspace).toEqual(before);
@@ -240,7 +237,7 @@ describe("role trust, boundaries and temporary session diagnostics", () => {
   });
   it("rechecks trust when issuing, revokes individual sessions and rejects missing role/caller", () => {
     let workspace = roleWorkspace(); workspace.userPolicies["principal-lin"] = ["policy-admin"]; workspace = issueSession(workspace);
-    workspace = applyAccessWorkspaceCommand(workspace, { kind: "update-role-trust", id: roleContext.id, principal: "org-xiak", trustedUserIds: ["principal-chen"] }, roleContext);
+    workspace = applyAccessWorkspaceCommand(workspace, { kind: "update-role-trust", id: roleContext.id, trustedUserIds: ["principal-chen"] }, roleContext);
     expect(() => issueSession(workspace)).toThrow("trustDenied");
     expect(evaluateRoleSessionAccess(workspace, userIds, "session-logs", request, request.at!).decision).toBe("allow");
     expect(evaluateRoleSessionAccess(workspace, ["principal-chen"], "session-logs", request, request.at!).error).toBe("unavailableSession");
@@ -248,12 +245,6 @@ describe("role trust, boundaries and temporary session diagnostics", () => {
     expect(evaluateRoleSessionAccess(revoked, userIds, "session-logs", request, request.at!).error).toBe("revokedSession");
     workspace = applyAccessWorkspaceCommand(workspace, { kind: "delete-role", id: roleContext.id }, roleContext);
     expect(evaluateRoleSessionAccess(workspace, userIds, "session-logs", request, request.at!).error).toBe("unavailableSession");
-  });
-  it("only recognizes registered workloads and never invents a role session", () => {
-    const workspace = initialAccessWorkspace("org-xiak");
-    expect(evaluateRoleAssumption(workspace, userIds, { ...assumption, roleId: "role-pipeline", caller: { type: "service", id: "devops.matrix.internal" } }).allowed).toBe(true);
-    expect(evaluateRoleAssumption(workspace, userIds, { ...assumption, roleId: "role-pipeline", caller: { type: "service", id: "forged.matrix.internal" } }).allowed).toBe(false);
-    expect(workspace.roleSessions).toHaveLength(0);
   });
   it("validates operation limits without replacing policies not included in a delta", () => {
     let workspace = roleWorkspace();
@@ -346,6 +337,6 @@ describe("user permission explanation", () => {
     expect(evaluateUserAccess(workspace, userIds, request).decision).toBe("indeterminate");
     workspace.userPolicies["principal-lin"]!.push("missing-policy");
     expect(evaluateUserAccess(workspace, userIds, request).evidence.some((entry) => entry.reason === "invalidPolicy")).toBe(true);
-    expect(evaluateUserAccess(workspace, userIds, { ...request, action: "iam:assumeRole", resourceId: "iam-role-pipeline" }).error).toBe("requiresRoleTrust");
+    expect(evaluateUserAccess(workspace, userIds, { ...request, action: "iam:assumeRole", resourceId: "iam-role-log-reviewer" }).error).toBe("requiresRoleTrust");
   });
 });

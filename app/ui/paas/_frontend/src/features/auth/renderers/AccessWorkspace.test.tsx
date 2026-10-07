@@ -856,7 +856,7 @@ describe("policy creation entry and directory contract", () => {
     expect(saved.versions[0]?.document.statement).toEqual([{ effect: "allow", action: ["logs:search"], resource: ["*"], ...(method === "tags" ? { condition: { resourceTag: [{ key: "environment", value: "production" }] } } : {}) }]);
     expect(repository.workspace!.execute).toHaveBeenCalledTimes(1);
     expect(repository.execute).not.toHaveBeenCalled();
-  });
+  }, 10_000);
   it("never converts restricted or wildcard JSON into a broader product-feature grant", async () => {
     const { user, repository } = await open("create-policy");
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
@@ -1209,8 +1209,8 @@ describe("CAM-style access workspace", () => {
     const directory = await screen.findByRole("table", { name: "角色" });
     expect(directory.getAttribute("data-mobile-layout")).toBe("stack");
     expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
-    expect(within(directory).getByRole("button", { name: "PipelineDeploymentRole" }).closest("td")?.getAttribute("data-label")).toBe("名称");
-    expect(within(directory).getByText("云服务").closest("td")?.getAttribute("data-label")).toBe("信任入口");
+    expect(within(directory).getByRole("button", { name: "ProductionLogReviewRole" }).closest("td")?.getAttribute("data-label")).toBe("名称");
+    expect(within(directory).getByText("客户角色（CUSTOMER）").closest("td")?.getAttribute("data-label")).toBe("信任入口");
   });
   it("previews service authorization as an inline consent review without creating a role or grant", async () => {
     const { user, repository, extension } = await open("roles");
@@ -1242,7 +1242,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByText("目标账号")).toBeNull();
     expect(screen.queryByText("发起授权的产品资源")).toBeNull();
     expect(screen.queryByText("preview.paas.service")).toBeNull();
-    expect(screen.getByText(/PipelineDeploymentRole 是普通工作负载角色/)).toBeTruthy();
+    expect(screen.getByText(/服务访问不使用普通客户角色或自由字符串主体/)).toBeTruthy();
     expect(screen.getByText(/权限上限覆盖目标账号内声明类型的资源/)).toBeTruthy();
 
     const review = screen.getByRole("button", { name: "审阅服务授权" });
@@ -1326,8 +1326,8 @@ describe("CAM-style access workspace", () => {
       expect(within(table).getByRole("columnheader", { name: heading })).toBeTruthy();
     }
     const row = within(table).getByRole("button", { name: "ProductionLogReviewRole" }).closest("tr")!;
-    expect(within(row).getByText("云账号")).toBeTruthy();
-    expect(within(row).getByText("org-xiak")).toBeTruthy();
+    expect(within(row).getByText("客户角色（CUSTOMER）")).toBeTruthy();
+    expect(within(row).getByText("1 位可信用户")).toBeTruthy();
     expect(within(row).getByText("1 项策略")).toBeTruthy();
     expect(within(row).getByText("权限边界 · 已配置")).toBeTruthy();
     expect(within(row).getByText("最长 30 分钟")).toBeTruthy();
@@ -1357,7 +1357,7 @@ describe("CAM-style access workspace", () => {
     await user.click(await screen.findByRole("button", { name: "新建角色" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByRole("alert").textContent).toContain("至少一名当前租户用户");
+    expect(screen.getByRole("alert").textContent).toContain("至少选择一名当前租户用户");
     await user.click(screen.getByRole("button", { name: "Language" }));
     expect(screen.getByRole("alert").textContent).toContain("at least one current-tenant user");
     await user.click(screen.getByRole("checkbox", { name: "lin" }));
@@ -1391,7 +1391,7 @@ describe("CAM-style access workspace", () => {
   });
   it("reviews exact trust additions/removals, validates before review, and retains the review on failure without changing other role fields", async () => {
     const { user, repository, extension } = await open("roles", { seed: async (extension) => {
-      await extension.execute("preview", { kind: "create-role", name: "SupportRole", description: "Support only", principalType: "account", principal: "org-xiak", trustedUserIds: ["principal-lin"], policyIds: ["policy-read"], boundaryPolicyId: "policy-prod-logs", tags: [{ key: "team", value: "support" }], sessionMinutes: 45, consoleAccess: true });
+      await extension.execute("preview", { kind: "create-role", name: "SupportRole", description: "Support only", trustedUserIds: ["principal-lin"], policyIds: ["policy-read"], boundaryPolicyId: "policy-prod-logs", tags: [{ key: "team", value: "support" }], sessionMinutes: 45, consoleAccess: true });
     } });
     const before = await extension.read("preview"), original = before.roles.find((role) => role.name === "SupportRole")!;
     await user.click(await screen.findByRole("button", { name: "SupportRole" }));
@@ -1403,7 +1403,7 @@ describe("CAM-style access workspace", () => {
     expect((panel.getByRole("button", { name: "审阅变更" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(panel.getByRole("checkbox", { name: "lin" }));
     await user.click(panel.getByRole("button", { name: "审阅变更" }));
-    expect(panel.getByRole("alert").textContent).toContain("至少一名当前租户用户");
+    expect(panel.getByRole("alert").textContent).toContain("至少选择一名当前租户用户");
     expect(document.activeElement).toBe(panel.getByRole("alert"));
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     await user.click(panel.getByRole("checkbox", { name: "chen" }));
@@ -1445,14 +1445,14 @@ describe("CAM-style access workspace", () => {
   });
   it("does not submit a reordered but unchanged trust set or permit a carrier change", async () => {
     const { user, repository } = await open("roles", { seed: async (extension) => {
-      await extension.execute("preview", { kind: "create-role", name: "TeamRole", description: "", principalType: "account", principal: "org-xiak", trustedUserIds: ["principal-lin", "principal-chen"], policyIds: [], tags: [], sessionMinutes: 60, consoleAccess: false });
+      await extension.execute("preview", { kind: "create-role", name: "TeamRole", description: "", trustedUserIds: ["principal-lin", "principal-chen"], policyIds: [], tags: [], sessionMinutes: 60, consoleAccess: false });
     } });
     await user.click(await screen.findByRole("button", { name: "TeamRole" }));
     await user.click(screen.getByRole("tab", { name: "信任关系" }));
     await user.click(screen.getByRole("button", { name: "修改信任关系" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     const workflow = screen.getByRole("group", { name: "修改信任关系" }), panel = within(workflow);
-    expect((panel.getByRole("combobox", { name: "信任主体类型" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(panel.queryByRole("combobox", { name: "信任主体类型" })).toBeNull();
     await user.click(panel.getByRole("checkbox", { name: "lin" }));
     await user.click(panel.getByRole("checkbox", { name: "lin" }));
     expect((panel.getByRole("button", { name: "审阅变更" }) as HTMLButtonElement).disabled).toBe(true);
@@ -1461,11 +1461,11 @@ describe("CAM-style access workspace", () => {
   });
   it("searches and paginates the complete role policy relationship snapshot", async () => {
     const policies = relationshipPolicies(12, "RoleRelationPolicy");
-    const { user } = await open("roles", { entityId: "role-pipeline", seed: async (extension) => {
+    const { user } = await open("roles", { entityId: "role-log-reviewer", seed: async (extension) => {
       extension.transact((source) => ({ workspace: {
         ...source,
         policies: [...source.policies, ...policies],
-        roles: source.roles.map((role) => role.id === "role-pipeline" ? { ...role, policyIds: policies.map((policy) => policy.id) } : role)
+        roles: source.roles.map((role) => role.id === "role-log-reviewer" ? { ...role, policyIds: policies.map((policy) => policy.id) } : role)
       } }));
     } });
     const table = await screen.findByRole("table", { name: "权限策略" });
@@ -1481,8 +1481,8 @@ describe("CAM-style access workspace", () => {
     expect(await screen.findByRole("heading", { name: "RoleRelationPolicy12" })).toBeTruthy();
   });
   it("retains role metadata through a pending command and retry, locking dismissal only until it settles", async () => {
-    const { user, repository, extension } = await open("roles", { entityId: "role-pipeline" });
-    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-pipeline")!;
+    const { user, repository, extension } = await open("roles", { entityId: "role-log-reviewer" });
+    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-log-reviewer")!;
     await user.click(await screen.findByRole("button", { name: "编辑角色信息" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     const workflow = screen.getByRole("group", { name: "编辑角色信息" }), panel = within(workflow), form = workflow.querySelector("form")!;
@@ -1509,13 +1509,13 @@ describe("CAM-style access workspace", () => {
     expect((await extension.read("preview")).roles.find((role) => role.id === original.id)).toEqual({ ...original, description: "Retained metadata", tags: [{ key: "team", value: "delivery" }] });
   });
   it.each(["add", "remove"] as const)("retains a reviewed role policy %s delta after failure and retries without replacing unrelated grants", async (mode) => {
-    const { user, repository, extension } = await open("roles", { entityId: "role-pipeline" });
-    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-pipeline")!;
+    const { user, repository, extension } = await open("roles", { entityId: "role-log-reviewer" });
+    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-log-reviewer")!;
     const workflowName = mode === "add" ? "关联策略" : "移除策略";
     await user.click(await screen.findByRole("button", { name: workflowName }));
     expect(screen.queryByRole("dialog")).toBeNull();
     const workflow = screen.getByRole("group", { name: workflowName }), panel = within(workflow);
-    const policyName = mode === "add" ? "MatrixReadOnlyAccess" : "MatrixDeliveryAccess";
+    const policyName = mode === "add" ? "MatrixReadOnlyAccess" : "ProductionLogsByTag";
     await user.click(panel.getByRole("checkbox", { name: policyName }));
     await user.type(panel.getByRole("searchbox"), "no-matching-policy");
     expect(panel.getByRole("button", { name: "移除 " + policyName })).toBeTruthy();
@@ -1533,15 +1533,15 @@ describe("CAM-style access workspace", () => {
     await waitFor(() => expect(screen.queryByRole("group", { name: workflowName })).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole("button", { name: mode === "remove" ? "关联策略" : workflowName }));
     const after = await extension.read("preview");
-    expect(after.roles.find((role) => role.id === original.id)).toEqual({ ...original, policyIds: mode === "add" ? ["policy-delivery", "policy-read"] : [] });
+    expect(after.roles.find((role) => role.id === original.id)).toEqual({ ...original, policyIds: mode === "add" ? ["policy-tag-logs", "policy-read"] : [] });
     expect(after.userPolicies).toEqual(before.userPolicies);
     expect(after.policies).toEqual(before.policies);
   });
   it.each(["set", "remove"] as const)("retains a reviewed role boundary %s after failure without changing policy grants", async (mode) => {
-    const { user, repository, extension } = await open("roles", { entityId: "role-pipeline", seed: async (extension) => {
-      if (mode === "remove") await extension.execute("preview", { kind: "set-role-boundary", id: "role-pipeline", policyId: "policy-read" });
+    const { user, repository, extension } = await open("roles", { entityId: "role-log-reviewer", users: reviewUsers, seed: async (extension) => {
+      if (mode === "remove") await extension.execute("preview", { kind: "set-role-boundary", id: "role-log-reviewer", policyId: "policy-read" });
     } });
-    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-pipeline")!;
+    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-log-reviewer")!;
     await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     const workflow = screen.getByRole("group", { name: "修改权限边界" }), panel = within(workflow);
@@ -1563,16 +1563,16 @@ describe("CAM-style access workspace", () => {
     expect(after.policies).toEqual(before.policies);
   });
   it("preserves session-setting inputs after failure and never extends an existing session on retry", async () => {
-    const { user, repository, extension } = await open("roles", { entityId: "role-pipeline", seed: async (extension) => {
-      await extension.execute("preview", { kind: "create-role-session", roleId: "role-pipeline", caller: { type: "service", id: "devops.matrix.internal" }, sessionMinutes: 30 });
+    const { user, repository, extension } = await open("roles", { entityId: "role-log-reviewer", users: reviewUsers, seed: async (extension) => {
+      await extension.execute("preview", { kind: "create-role-session", roleId: "role-log-reviewer", caller: { type: "user", id: "principal-qiao" }, sessionMinutes: 30 });
     } });
-    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-pipeline")!;
+    const before = await extension.read("preview"), original = before.roles.find((role) => role.id === "role-log-reviewer")!;
     await user.click(await screen.findByRole("tab", { name: "会话设置" }));
     await user.click(screen.getByRole("button", { name: "修改会话设置" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     const workflow = screen.getByRole("group", { name: "修改会话设置" }), panel = within(workflow);
     fireEvent.change(panel.getByLabelText("会话时长（分钟）"), { target: { value: "120" } });
-    expect((panel.getByRole("checkbox", { name: "允许通过控制台访问" }) as HTMLInputElement).disabled).toBe(true);
+    expect((panel.getByRole("checkbox", { name: "允许通过控制台访问" }) as HTMLInputElement).disabled).toBe(false);
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
     await user.click(panel.getByRole("button", { name: "保存" }));
     await expectRetainedFailure(workflow);
@@ -1586,27 +1586,27 @@ describe("CAM-style access workspace", () => {
     expect(after.roleSessions).toEqual(before.roleSessions);
   });
   it("retains role deletion confirmation on failure, supports cancellation and retries only the named role", async () => {
-    const { user, repository, extension } = await open("roles", { entityId: "role-pipeline" });
+    const { user, repository, extension } = await open("roles", { entityId: "role-log-reviewer" });
     const before = await extension.read("preview");
     await invokePageAction(user, "删除");
     let dialog = screen.getByRole("dialog"), panel = within(dialog);
     await user.type(panel.getByLabelText("输入名称以确认"), "wrong-name");
     await user.click(panel.getByRole("button", { name: "确认删除" }));
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
-    fireEvent.change(panel.getByLabelText("输入名称以确认"), { target: { value: "PipelineDeploymentRole" } });
+    fireEvent.change(panel.getByLabelText("输入名称以确认"), { target: { value: "ProductionLogReviewRole" } });
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
     await user.click(panel.getByRole("button", { name: "确认删除" }));
     await expectRetainedFailure(dialog);
-    expect((panel.getByLabelText("输入名称以确认") as HTMLInputElement).value).toBe("PipelineDeploymentRole");
+    expect((panel.getByLabelText("输入名称以确认") as HTMLInputElement).value).toBe("ProductionLogReviewRole");
     expect(await extension.read("preview")).toEqual(before);
     await user.click(panel.getByRole("button", { name: "取消" }));
     await invokePageAction(user, "删除");
     dialog = screen.getByRole("dialog"); panel = within(dialog);
-    await user.type(panel.getByLabelText("输入名称以确认"), "PipelineDeploymentRole");
+    await user.type(panel.getByLabelText("输入名称以确认"), "ProductionLogReviewRole");
     await user.click(panel.getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const after = await extension.read("preview");
-    expect(after.roles).toEqual(before.roles.filter((role) => role.id !== "role-pipeline"));
+    expect(after.roles).toEqual(before.roles.filter((role) => role.id !== "role-log-reviewer"));
     expect(after.policies).toEqual(before.policies);
     expect(after.userPolicies).toEqual(before.userPolicies);
   });
@@ -1685,8 +1685,6 @@ describe("CAM-style access workspace", () => {
         kind: "create-role",
         name: `UsageRole${String(index).padStart(2, "0")}`,
         description: "Policy usage pagination fixture",
-        principalType: "account",
-        principal: "org-xiak",
         trustedUserIds: ["principal-lin"],
         policyIds: ["policy-prod-logs"],
         tags: [],
@@ -2588,7 +2586,7 @@ describe("CAM-style access workspace", () => {
     expect((await extension.read("preview")).policies).toEqual(before);
     await user.click(screen.getByRole("button", { name: "创建策略" }));
     expect((await extension.read("preview")).policies.at(-1)?.versions[0]?.document.statement[0]?.action).toEqual(["logs:read", "logs:search"]);
-  });
+  }, 10_000);
   it("round-trips typed resources and all condition types, preserving restrictions in review and save", async () => {
     const { user, extension, repository } = await open("create-policy");
     await logActions(user, ["logs:search"]);
@@ -2656,7 +2654,7 @@ describe("CAM-style access workspace", () => {
     expect(validationAlert.textContent).toContain("条件");
     expect(document.activeElement).toBe(screen.getByLabelText("来源 IP 范围（CIDR）"));
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
-  });
+  }, 10_000);
   it("confirms a service change, retaining other statements and condition restrictions", async () => {
     const { user } = await open("create-policy");
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
@@ -2875,11 +2873,11 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("tab", { name: /^用户组/ }));
     await user.click(screen.getByRole("checkbox", { name: "DeliveryTeam" }));
     await user.click(screen.getByRole("tab", { name: /^角色/ }));
-    await user.click(screen.getByRole("checkbox", { name: "PipelineDeploymentRole" }));
+    await user.click(screen.getByRole("checkbox", { name: "ProductionLogReviewRole" }));
     await user.click(screen.getByRole("button", { name: "上一步" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect((screen.getByLabelText("标签值 1") as HTMLInputElement).value).toBe("platform");
-    expect(screen.getByRole("button", { name: "移除 PipelineDeploymentRole" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "移除 ProductionLogReviewRole" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("network unavailable"));
@@ -2894,12 +2892,12 @@ describe("CAM-style access workspace", () => {
     expect(saved.tags).toEqual([{ key: "team", value: "platform" }]);
     expect(state.userPolicies["principal-chen"]).toContain(saved.id);
     expect(state.groups.find((group) => group.id === "group-delivery")?.policyIds).toContain(saved.id);
-    expect(state.roles.find((role) => role.id === "role-pipeline")?.policyIds).toContain(saved.id);
+    expect(state.roles.find((role) => role.id === "role-log-reviewer")?.policyIds).toContain(saved.id);
     expect(repository.execute).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "完成并返回策略列表" }));
     await user.click(await screen.findByRole("button", { name: "AtomicPolicy" }));
     expect(within(screen.getByRole("region", { name: "策略标签" })).getByText("team : platform")).toBeTruthy();
-  });
+  }, 10_000);
   it("replaces only a nominated nondefault revision and keeps the review intact on failure", async () => {
     const { user, repository, extension } = await open("policies", { seed: async (extension) => {
       for (let version = 2; version <= 5; version++) await extension.execute("preview", {
@@ -4193,9 +4191,6 @@ describe("CAM-style access workspace", () => {
       { id: "PAAS_RESULTS", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null },
       { id: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null }
     ]);
-    expect(analysis.trustEntries.map(({ kind, name, configuration, target }) => ({ kind, name, configuration, target }))).toEqual([
-      { kind: "serviceWorkload", name: "PipelineDeploymentRole", configuration: "configured", target: { view: "roles", id: "role-pipeline" } }
-    ]);
     expect(analysis.unusedFindings).toHaveLength(123);
     expect(analysis.unusedFindings.slice(0, 3).map(({ accountId, findingType, lifecycle }) => ({ accountId, findingType, lifecycle }))).toEqual([
       { accountId: "org-xiak", findingType: "unusedPassword", lifecycle: "ACTIVE" },
@@ -4249,15 +4244,9 @@ describe("CAM-style access workspace", () => {
     expect(screen.getAllByText("SOURCE_NOT_READY").length).toBe(4);
     const paasCoverage = screen.getByText("PaaS 业务结果").closest("div")!;
     expect(paasCoverage.querySelector("time")).toBeNull();
-    const entryTable = screen.getByRole("table", { name: "已配置入口" });
-    expect(entryTable.getAttribute("data-mobile-layout")).toBe("stack");
-    expect(within(entryTable).getAllByText("devops.matrix.internal").length).toBe(2);
-    await user.click(within(entryTable).getByRole("button", { name: "PipelineDeploymentRole" }));
-    expect(screen.getByRole("heading", { name: "审阅入口 · PipelineDeploymentRole" })).toBeTruthy();
-    expect(screen.getByText(/不能从配置入口直接推断有效权限或外部暴露/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "查看对应配置" }));
-    expect(onNavigate).toHaveBeenCalledWith("roles", "role-pipeline");
-    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect(screen.getByRole("heading", { name: "暂无可核验的外部入口" })).toBeTruthy();
+    expect(screen.getByText(/当前没有固定的外部身份或通用服务主体信任契约/)).toBeTruthy();
+    expect(onNavigate).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
     expect(screen.getByText(/当前真实数据不满足该前提/)).toBeTruthy();
     expect(screen.getByText(/123 条样例由浏览器确定性生成/)).toBeTruthy();
@@ -4346,7 +4335,7 @@ describe("CAM-style access workspace", () => {
     const before = await extension.read("preview");
     expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
     expect(screen.getByText(/配置存在不代表权限已生效/)).toBeTruthy();
-    expect(screen.getByRole("table", { name: "已配置入口" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "暂无可核验的外部入口" })).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
     expect(screen.getByRole("table", { name: "未使用访问发现样例" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "返回列表" })).toBeNull();

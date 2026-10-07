@@ -2,7 +2,7 @@ import { type AccessWorkspace } from "./accessWorkspace";
 import { parsePolicyDocument, type PolicyCondition } from "./policyDocument";
 import { actionMatches, parsePolicyResource, resourceMatches, sourceIpMatches, utcTimeValid, type PolicyResource } from "./policyLanguage";
 import { policyActions } from "./previewAuthorizationCatalog";
-import { roleServicePrincipals, roleSessionStatus, type RoleSessionCaller } from "./roleTrust";
+import { roleSessionStatus, type RoleSessionCaller } from "./roleTrust";
 
 export type AccessTestRequest = { principalId: string; action: string; resourceId: string; sourceIp?: string; at?: string };
 export type AccessTestEvidence = {
@@ -106,18 +106,15 @@ export function evaluateRoleAssumption(workspace: AccessWorkspace, userIds: read
   const role = workspace.roles.find((entry) => entry.id === request.roleId);
   if (!role) return { allowed: false, reason: "unknownRole" };
   const caller = request.caller;
-  let trusted = false;
-  if (role.principalType === "account") trusted = caller.type === "user" && role.principal === workspace.accountId && userIds.includes(caller.id) && role.trustedUserIds.includes(caller.id);
-  if (role.principalType === "service") trusted = caller.type === "service" && caller.id === role.principal && roleServicePrincipals.some((id) => id === caller.id);
-  // External assertions are configuration-only in the isolated preview. No
-  // published IdP/session contract exists, so this evaluator must not turn a
-  // local mapping sample into a successful role assumption.
+  const trusted = userIds.includes(caller.id) && role.trustedUserIds.includes(caller.id);
+  // The isolated customer-role preview accepts only directory-backed USER
+  // identities. Service-linked roles and external federation have separate
+  // contracts and must never enter this evaluator through a free-form ID.
   if (!trusted || !utcTimeValid(request.at)) return { allowed: false, reason: "trustDenied" };
   // The fixed IAM contract treats a null Role boundary as a closed assumption
   // state, never as an unlimited ceiling. This preview reason is intentionally
   // coarse and does not expose or promise the backend's internal check order.
   if (!role.boundaryPolicyId) return { allowed: false, reason: "authorityRequired" };
-  if (caller.type !== "user") return { allowed: true, reason: "allowed" };
   const resource: PolicyResource = { service: "iam", tenant: workspace.accountId, region: "global", type: "role", id: role.id };
   const callerDecision = evaluatePolicies(workspace, { principalId: caller.id, action: "iam:assumeRole", resourceId: role.id, at: request.at, sourceIp: request.sourceIp }, resource, Object.fromEntries(role.tags.map((tag) => [tag.key, tag.value])), userSources(workspace, caller.id), workspace.userBoundaries[caller.id]);
   return { allowed: callerDecision.decision === "allow", reason: callerDecision.decision === "allow" ? "allowed" : "callerDenied", callerDecision };

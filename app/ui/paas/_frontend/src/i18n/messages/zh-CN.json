@@ -2542,7 +2542,7 @@
       "snapshotBoundary": "这份 MOCK 使用固定模板词汇，但摘要仍是隔离样例。权限上限覆盖目标账号内声明类型的资源，精确业务资源必须由独立 WorkloadRoleBinding 和产品 PEP 共同收窄。",
       "snapshotTitle": "权限上限动作",
       "snapshotCount": "{count} 条声明",
-      "ordinaryRole": "现有 PipelineDeploymentRole 是普通工作负载角色，不是本服务授权的既有实例；本页不会把普通角色或租户策略冒充为已发布的服务模板。",
+      "modelBoundary": "服务访问不使用普通客户角色或自由字符串主体。它必须来自受信模板、已登记服务主体、账号同意和精确资源绑定。",
       "review": "审阅服务授权",
       "observeAuthorized": "查看授权后观察"
     },
@@ -3839,7 +3839,7 @@
       "review": "核对创建意图。权限策略、权限边界及调用者的承担授权必须在角色详情中分别配置。"
     },
     "steps": {
-      "trust": "选择可信身份",
+      "trust": "选择可信用户",
       "permissions": "配置角色权限",
       "details": "填写角色信息",
       "review": "审阅并创建"
@@ -3851,17 +3851,17 @@
       "review": "核对信任对象、权限来源和限制后再创建角色。"
     },
     "trustHints": {
-      "account": "仅支持明确选择当前体验租户的用户。信任只是承担准入；在真实 IAM 中，用户还需单独获得该角色的 iam.role.assume 授权。不支持跨账号或通配身份。",
-      "service": "选择已注册的模拟工作负载。这里不校验真实工作负载，也不创建服务关联角色。",
-      "provider": "选择已启用的模拟身份提供商，仅预览它与角色之间的信任配置。角色 SSO 承担流程尚未接入；本地断言映射预览不接收或校验真实 SAML/OIDC 断言，也不创建会话。"
+      "user": "客户角色当前只接受本账号内明确的 USER。信任只控制承担准入；用户还需单独获得该角色的 iam.role.assume 授权。不支持跨账号、外部身份或自由字符串服务主体。"
     },
     "tenant": "当前租户：{id}",
+    "roleType": "角色类型",
+    "customerRole": "客户角色（CUSTOMER）",
+    "sameAccountUsers": "同账号 USER",
     "trustedUsers": "可信用户",
     "authorizationOverview": "角色授权模型",
     "authorizationOverviewHint": "信任关系只控制谁可以申请承担角色；资源权限来自策略并受权限边界限制。这里汇总当前默认策略文档，不代表某次请求的最终判定。",
     "trustAdmission": "承担入口",
     "trustedUserCount": "{count} 位可信用户",
-    "choosePrincipal": "请选择身份",
     "durationHint": "15–720 分钟，限制新会话可申请的最长有效期。",
     "liveDurationHint": "1–720 分钟。该上限仅约束以后签发的新会话。",
     "consoleHint": "仅声明控制台访问意图；体验环境不会实际登录为该角色。",
@@ -3877,13 +3877,13 @@
     "permissionsHint": "角色会话仅使用这里的策略和强制权限边界，不叠加调用者自身的权限。可以先创建角色，但不设置权限上限时角色承担关闭。",
     "noPermissions": "未关联策略 · 默认拒绝资源访问",
     "searchAttachedPolicies": "搜索角色关联策略",
-    "nameHint": "1–64 个字符。创建后角色名称和载体类型不可修改。",
-    "invalidTrust": "请选择已启用的身份提供商、已注册服务，或至少一名当前租户用户。",
+    "nameHint": "1–64 个字符。创建后角色名称不可修改。",
+    "invalidTrust": "请至少选择一名当前租户用户。",
     "invalidName": "请输入 1–64 个字符的名称，不含尖括号或控制字符。",
     "duplicate": "已存在同名角色。",
     "invalidMetadata": "请检查标签及会话有效期；标签键不可重复，有效期为 15–720 分钟。",
     "tags": "角色标签",
-    "reviewHint": "创建信任关系并不自动授予调用者扮演权限。真实 IAM 中，同账号用户仍需单独获得 iam.role.assume 授权；服务和身份提供商示例仅为 MOCK。",
+    "reviewHint": "创建信任关系并不自动授予调用者承担权限。同账号用户仍需单独获得 iam.role.assume 授权；服务访问由独立的服务关联角色流程管理。",
     "cancelTitle": "放弃角色草稿？",
     "cancelHint": "将丢弃尚未保存的信任配置、策略及角色信息，不会创建任何角色。",
     "liveCancelHint": "将丢弃尚未提交的可信用户及角色信息，不会创建任何角色。",
@@ -3920,9 +3920,8 @@
     "sessions": "临时会话",
     "sessionSettings": "会话设置",
     "trustDocument": "同账号 USER 信任文档预览",
-    "syntheticTrust": "仅 MOCK 的信任对象预览",
     "requiredAction": "上方是文档形状预览，不会写入真实 IAM。真实调用用户还需被单独授权以下操作与目标角色 ID：",
-    "deleteImpact": "删除角色后，其体验会话将无法继续通过资源诊断。用户和策略保留；如有关联的断言映射预览，需要先移除引用。",
+    "deleteImpact": "删除客户角色后，其体验会话将无法继续通过资源诊断；用户、策略和独立的服务授权关系均保留。",
     "backToSessions": "返回会话目录",
     "sessionDirectoryHint": "这里是角色会话的管理员 MOCK 目录，只支持精确来源用户、会话 ID 与生命周期筛选以及单条撤销。状态仅表示 IAM 观测到的未撤销、到期或已撤销，不证明当前仍有业务权限；承担角色请使用账号菜单中的“角色访问”。",
     "exactSessionSearch": "输入完整会话 ID",
@@ -4761,33 +4760,8 @@
           "PAAS_RESULTS": { "title": "PaaS 业务结果", "hint": "候选片不纳入产品业务结果，也不伪造观测区间。" },
           "EXTERNAL_FEDERATION": { "title": "外部联合身份活动", "hint": "外部 IdP 活动来源尚未实现，也不伪造观测区间。" }
         },
-        "entries": "已配置入口",
-        "directoryHint": "列表只表达当前 MOCK 配置关系；承担角色仍需独立的信任、调用方授权、权限边界、拒绝规则和资源侧检查。",
-        "entry": "入口",
-        "entryType": "入口类型",
-        "principal": "主体",
-        "source": "身份来源",
-        "role": "目标角色",
-        "status": "配置状态",
-        "createdAt": "配置创建时间",
-        "evidenceCoverage": "证据覆盖",
-        "configurationOnly": "仅配置快照",
-        "detailTitle": "审阅入口 · {name}",
-        "configurationEvidence": "当前证据只来自租户内 MOCK 配置，不包含真实身份签发、角色会话、策略求值或业务资源访问结果。",
-        "recommendationTitle": "人工复核路径",
-        "noEffectiveAccessConclusion": "不能从配置入口直接推断有效权限或外部暴露，也不能在这里自动禁用身份、删除角色或撤销策略。",
-        "reviewTarget": "查看对应配置",
-        "kinds": {
-          "serviceWorkload": "服务工作负载入口"
-        },
-        "states": {
-          "configured": "配置完整",
-          "incomplete": "配置不完整",
-          "disabled": "已停用"
-        },
-        "recommendations": {
-          "serviceWorkload": "核对服务主体所有者、工作负载绑定、角色信任、策略与权限边界，再通过服务端会话和业务审计验证调用。"
-        }
+        "unavailableTitle": "暂无可核验的外部入口",
+        "unavailableHint": "当前没有固定的外部身份或通用服务主体信任契约，因此不生成假对象。服务访问请到“服务授权”查看受信模板、账号关系与精确资源绑定；外部联合身份待 IAM 契约发布后接入。"
       },
       "unused": {
         "scan": {

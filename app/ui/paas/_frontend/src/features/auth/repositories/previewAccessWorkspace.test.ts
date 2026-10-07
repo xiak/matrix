@@ -396,7 +396,7 @@ describe("access workspace preview invariants", () => {
   it("attaches a batch additively and atomically without changing members, boundaries or unrelated grants", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => context.userIds, context.primaryPrincipalId);
     const before = await extension.read("preview");
-    const command = { kind: "attach-policies" as const, policyIds: ["policy-read", "policy-prod-logs", "policy-read"], targets: { userIds: ["principal-lin"], groupIds: ["group-delivery"], roleIds: ["role-pipeline"] } };
+    const command = { kind: "attach-policies" as const, policyIds: ["policy-read", "policy-prod-logs", "policy-read"], targets: { userIds: ["principal-lin"], groupIds: ["group-delivery"], roleIds: ["role-log-reviewer"] } };
     for (const invalid of [
       { ...command, policyIds: ["policy-read", "foreign-policy"] },
       { ...command, targets: { ...command.targets, groupIds: ["foreign-group"] } },
@@ -411,7 +411,7 @@ describe("access workspace preview invariants", () => {
     const { workspace: next } = await extension.execute("preview", command);
     expect(next.userPolicies["principal-lin"]).toEqual(["policy-prod-logs", "policy-read"]);
     expect(next.groups[0]?.policyIds).toEqual(["policy-delivery", "policy-read", "policy-prod-logs"]);
-    expect(next.roles[0]?.policyIds).toEqual(["policy-delivery", "policy-read", "policy-prod-logs"]);
+    expect(next.roles[0]?.policyIds).toEqual(["policy-tag-logs", "policy-read", "policy-prod-logs"]);
     expect(next.groups.map((group) => group.memberIds)).toEqual(before.groups.map((group) => group.memberIds));
     expect(next.userBoundaries).toEqual(before.userBoundaries);
     expect(next.roles.map((role) => role.boundaryPolicyId)).toEqual(before.roles.map((role) => role.boundaryPolicyId));
@@ -557,13 +557,13 @@ describe("access workspace preview invariants", () => {
   });
   it("creates metadata and selected associations as one atomic transition", () => {
     const source = initialAccessWorkspace("org-xiak");
-    const targets = { userIds: ["principal-lin"], groupIds: ["group-delivery"], roleIds: ["role-pipeline"] };
+    const targets = { userIds: ["principal-lin"], groupIds: ["group-delivery"], roleIds: ["role-log-reviewer"] };
     const command = { kind: "save-policy" as const, name: "ScopedLogs", description: "", document, tags: [{ key: "team", value: "platform" }], targets };
     const created = applyAccessWorkspaceCommand(source, command, context);
     expect(created.policies.at(-1)?.tags).toEqual(command.tags);
     expect(created.userPolicies["principal-lin"]).toContain(context.id);
     expect(created.groups.find((group) => group.id === "group-delivery")?.policyIds).toContain(context.id);
-    expect(created.roles.find((role) => role.id === "role-pipeline")?.policyIds).toContain(context.id);
+    expect(created.roles.find((role) => role.id === "role-log-reviewer")?.policyIds).toContain(context.id);
     expect(() => applyAccessWorkspaceCommand(source, { ...command, targets: { ...targets, roleIds: ["missing-role"] } }, context)).toThrow("notFound");
     expect(() => applyAccessWorkspaceCommand(source, { ...command, tags: [{ key: " team", value: "" }, { key: "team", value: "" }] }, context)).toThrow("invalid");
     expect(() => applyAccessWorkspaceCommand(source, { ...command, targets: { ...targets, userIds: Array(31).fill("principal-lin") } }, context)).toThrow("invalid");
@@ -596,16 +596,16 @@ describe("access workspace preview invariants", () => {
     let state = initialAccessWorkspace("org-xiak");
     expect(() => applyAccessWorkspaceCommand(state, { kind: "delete-policy", id: "policy-admin" }, context)).toThrow("systemPolicy");
     expect(() => applyAccessWorkspaceCommand(state, { kind: "delete-policy", id: "policy-prod-logs" }, context)).toThrow("referenced");
-    state = applyAccessWorkspaceCommand(state, { kind: "associate-policy", id: "policy-prod-logs", userIds: [], groupIds: ["group-delivery"], roleIds: ["role-pipeline"] }, context);
+    state = applyAccessWorkspaceCommand(state, { kind: "associate-policy", id: "policy-prod-logs", userIds: [], groupIds: ["group-delivery"], roleIds: ["role-log-reviewer"] }, context);
     expect(policyUsageCounts(state, "policy-prod-logs")).toEqual({ permissionAttachments: 2, permissionBoundaries: 0, total: 2 });
     expect(state.userPolicies["principal-lin"]).not.toContain("policy-prod-logs");
     state = applyAccessWorkspaceCommand(state, { kind: "associate-policy", id: "policy-prod-logs", userIds: [], groupIds: [], roleIds: [] }, context);
     expect(applyAccessWorkspaceCommand(state, { kind: "delete-policy", id: "policy-prod-logs" }, context).policies.some((policy) => policy.id === "policy-prod-logs")).toBe(false);
   });
-  it("keeps service roles non-interactive", () => {
+  it("keeps generic service-principal roles out of the customer-role preview", () => {
     const state = initialAccessWorkspace("org-xiak");
-    const role = state.roles.find((entry) => entry.id === "role-pipeline")!;
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "update-role-settings", id: role.id, sessionMinutes: 60, consoleAccess: true }, context)).toThrow("invalid");
+    expect(state.roles.map((role) => role.id)).toEqual(["role-log-reviewer"]);
+    expect(state.roles.every((role) => role.trustedUserIds.length > 0)).toBe(true);
   });
   it("limits keys per subuser and requires disabling before deletion", () => {
     let state = initialAccessWorkspace("org-xiak");

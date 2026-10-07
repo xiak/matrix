@@ -2542,7 +2542,7 @@
       "snapshotBoundary": "This MOCK uses fixed template vocabulary, but the digests remain isolated samples. The permission ceiling covers the declared resource kind in the target account; a separate WorkloadRoleBinding and the product PEP narrow it to an exact product resource.",
       "snapshotTitle": "Permission-ceiling actions",
       "snapshotCount": "{count} statements",
-      "ordinaryRole": "The existing PipelineDeploymentRole is an ordinary workload role, not an existing instance of this service authorization. This page does not present an ordinary role or tenant policy as a published service template.",
+      "modelBoundary": "Service access does not use an ordinary customer role or a free-form principal string. It requires a trusted template, registered service principal, account consent, and an exact resource binding.",
       "review": "Review service authorization",
       "observeAuthorized": "View authorized-state observation"
     },
@@ -3839,7 +3839,7 @@
       "review": "Review this creation intent. Permission policies, the permission boundary and the caller's assume grant are configured separately from role details."
     },
     "steps": {
-      "trust": "Trusted identity",
+      "trust": "Trusted users",
       "permissions": "Permissions",
       "details": "Role details",
       "review": "Review and create"
@@ -3851,17 +3851,17 @@
       "review": "Review trust, grants and restrictions before creating the role."
     },
     "trustHints": {
-      "account": "Only explicitly selected users in this preview account can be trusted. Trust controls admission; in live IAM, users also need a separate iam.role.assume grant for this role. Cross-account and wildcard trust are not supported.",
-      "service": "Choose a registered synthetic workload. This simulates a service identity; it does not verify a real workload or create a service-linked role.",
-      "provider": "Choose an enabled synthetic identity provider only to preview its trust relationship with the role. Role SSO assumption is not connected; a local assertion-mapping preview does not accept or verify any real SAML/OIDC assertion and creates no session."
+      "user": "A customer role currently accepts only explicit USER identities in this account. Trust controls admission; users still need a separate iam.role.assume grant. Cross-account, external-identity, and free-form service principals are unsupported."
     },
     "tenant": "Current tenant: {id}",
+    "roleType": "Role type",
+    "customerRole": "Customer role (CUSTOMER)",
+    "sameAccountUsers": "Same-account USER",
     "trustedUsers": "Trusted users",
     "authorizationOverview": "Role authorization model",
     "authorizationOverviewHint": "Trust controls who may request the role; resource access comes from policies and is limited by the permission boundary. This summarizes current default policy documents, not a request-level decision.",
     "trustAdmission": "Assume admission",
     "trustedUserCount": "{count, plural, one {# trusted user} other {# trusted users}}",
-    "choosePrincipal": "Choose an identity",
     "durationHint": "15–720 minutes. This is the maximum duration for new sessions.",
     "liveDurationHint": "1–720 minutes. This limit applies only to newly issued sessions.",
     "consoleHint": "Declares console-entry intent only. This preview never signs in as the role.",
@@ -3877,13 +3877,13 @@
     "permissionsHint": "Role sessions use these policies and the mandatory permission boundary, not the caller's own permissions. You may create the role first, but assumption stays closed until a ceiling is set.",
     "noPermissions": "No policies attached · resource access is denied",
     "searchAttachedPolicies": "Search attached role policies",
-    "nameHint": "1–64 characters. The role name and carrier type cannot be changed after creation.",
-    "invalidTrust": "Choose an enabled provider, a registered service, or at least one current-tenant user.",
+    "nameHint": "1–64 characters. The role name cannot be changed after creation.",
+    "invalidTrust": "Select at least one current-tenant user.",
     "invalidName": "Enter a name of 1–64 characters without angle brackets or control characters.",
     "duplicate": "A role with this name already exists.",
     "invalidMetadata": "Check tags and session duration. Use unique tag keys and a duration of 15–720 minutes.",
     "tags": "Role tags",
-    "reviewHint": "Creating trust does not grant callers permission to assume the role. In live IAM, same-account users still need a separate iam.role.assume grant; service and provider examples are MOCK-only.",
+    "reviewHint": "Creating trust does not grant callers permission to assume the role. Same-account users still need a separate iam.role.assume grant; service access is managed through the separate service-linked-role flow.",
     "cancelTitle": "Discard role draft?",
     "cancelHint": "The unsaved trust, policies and role details will be discarded. Nothing has been created.",
     "liveCancelHint": "The unsubmitted trusted users and role details will be discarded. Nothing will be created.",
@@ -3920,9 +3920,8 @@
     "sessions": "Temporary sessions",
     "sessionSettings": "Session settings",
     "trustDocument": "Same-account USER trust document preview",
-    "syntheticTrust": "MOCK-only trusted principal preview",
     "requiredAction": "The document above is a shape preview; it is not written to live IAM. A live caller needs a separate grant for this action and target role ID:",
-    "deleteImpact": "Deleting the role makes its preview sessions unavailable. Policies and users are preserved. Remove assertion-mapping previews before deleting.",
+    "deleteImpact": "Deleting the customer role makes its preview sessions unavailable. Users, policies, and separate service-authorization relations are preserved.",
     "backToSessions": "Back to session directory",
     "sessionDirectoryHint": "This is the administrator MOCK directory for role sessions. It supports exact source-user, session-ID and lifecycle filters plus one-session revocation. Lifecycle only records IAM's unrevoked, expired or revoked observation; it does not prove current business authority. Use Role access in the account menu to assume a role.",
     "exactSessionSearch": "Enter the complete session ID",
@@ -4747,27 +4746,8 @@
           "PAAS_RESULTS": { "title": "PaaS business results", "hint": "The candidate slice excludes product business results and exposes no fabricated observation interval." },
           "EXTERNAL_FEDERATION": { "title": "External federation activity", "hint": "The external IdP activity source is not implemented and exposes no fabricated observation interval." }
         },
-        "entries": "Configured entry points",
-        "directoryHint": "Rows describe MOCK configuration only. Role assumption still requires independent trust, caller authorization, permission-boundary, deny-rule and resource-side checks.",
-        "entry": "Entry point",
-        "entryType": "Entry type",
-        "principal": "Principal",
-        "source": "Identity source",
-        "role": "Target role",
-        "status": "Configuration state",
-        "createdAt": "Configuration created",
-        "evidenceCoverage": "Evidence coverage",
-        "configurationOnly": "Configuration snapshot only",
-        "detailTitle": "Review entry point · {name}",
-        "configurationEvidence": "Current evidence comes only from tenant-local MOCK configuration. It includes no real identity issuance, role session, policy evaluation or business-resource access result.",
-        "recommendationTitle": "Human review path",
-        "noEffectiveAccessConclusion": "A configured entry point cannot establish effective permission or external exposure, and this page must not automatically disable an identity, delete a role or revoke a policy.",
-        "reviewTarget": "View corresponding configuration",
-        "kinds": { "serviceWorkload": "Service workload entry" },
-        "states": { "configured": "Configuration complete", "incomplete": "Configuration incomplete", "disabled": "Disabled" },
-        "recommendations": {
-          "serviceWorkload": "Verify service-principal ownership, workload binding, role trust, policies and permission boundary, then confirm calls through authoritative role-session and business audit sources."
-        }
+        "unavailableTitle": "No verifiable external entry points",
+        "unavailableHint": "No fixed external-identity or generic service-principal trust contract exists, so this preview creates no fake objects. Use Service authorization for trusted templates, account relations, and exact resource bindings; external federation will appear only after IAM publishes its contract."
       },
       "unused": {
         "scan": {

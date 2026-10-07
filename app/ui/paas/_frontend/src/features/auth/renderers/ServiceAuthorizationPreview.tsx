@@ -212,7 +212,7 @@ function TemplateDetail({ reviewRef, observationRef, onReview, onObserve }: {
       <Card><Card.Header className={styles.cardHeading}><ShieldCheck aria-hidden="true" /><div><span>{t("detail.permissionLabel")}</span><h4>{previewTemplate.snapshotName} · v{previewTemplate.revision}</h4></div></Card.Header><Card.Body className={styles.cardBody}><p>{t("detail.permissionHint")}</p><Alert status="info">{t("detail.snapshotBoundary")}</Alert></Card.Body></Card>
     </div>
     <div className={styles.snapshot}><div><strong>{t("detail.snapshotTitle")}</strong><span>{t("detail.snapshotCount", { count: previewSnapshot.statements.length })}</span></div><ul>{previewSnapshot.statements.flatMap((statement) => statement.actions).map((action) => <li key={action}><code>{action}</code></li>)}</ul></div>
-    <Alert status="info">{t("detail.ordinaryRole")}</Alert>
+    <Alert status="info">{t("detail.modelBoundary")}</Alert>
     <div className={styles.actions}><Button ref={reviewRef} onClick={onReview}>{t("detail.review")}</Button><Button ref={observationRef} variant="secondary" onClick={onObserve}>{t("detail.observeAuthorized")}</Button></div>
   </div>;
 }

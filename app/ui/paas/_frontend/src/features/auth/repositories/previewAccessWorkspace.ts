@@ -25,7 +25,6 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
     { service: "devops", type: "pipeline", id: "storefront-release", environment: "production" },
     { service: "monitoring", type: "monitor", id: "payment-health", environment: "production" },
     { service: "iam", type: "user", id: "principal-lin", environment: "production" },
-    { service: "iam", type: "role", id: "role-pipeline", environment: "production" },
     { service: "iam", type: "role", id: "role-log-reviewer", environment: "production" },
     { service: "iam", type: "auditEvent", id: "event-01", environment: "production" }
   ];
@@ -69,8 +68,7 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
       { id: "policy-assume-reviewer", name: "AssumeLogReviewRole", description: "Allow requesting only ProductionLogReviewRole; the role must independently trust the caller", tags: [], kind: "custom", createdAt: at, updatedAt: at, defaultVersion: 1, lastVersion: 1, versions: [{ id: 1, document: { version: "1", statement: [{ effect: "allow", action: ["iam:assumeRole"], resource: [reviewerResource] }] }, createdAt: at }] }
     ],
     roles: [
-      { id: "role-pipeline", name: "PipelineDeploymentRole", description: "Workload identity for application delivery", principalType: "service", principal: "devops.matrix.internal", trustedUserIds: [], tags: [], policyIds: ["policy-delivery"], boundaryPolicyId: "policy-delivery", sessionMinutes: 60, consoleAccess: false, createdAt: at },
-      { id: "role-log-reviewer", name: "ProductionLogReviewRole", description: "Qiao can review production logs in a role session without inheriting personal deployment grants", principalType: "account", principal: accountId, trustedUserIds: ["principal-qiao"], tags: [], policyIds: ["policy-tag-logs"], boundaryPolicyId: "policy-tag-logs", sessionMinutes: 30, consoleAccess: true, createdAt: at }
+      { id: "role-log-reviewer", name: "ProductionLogReviewRole", description: "Qiao can review production logs in a role session without inheriting personal deployment grants", trustedUserIds: ["principal-qiao"], tags: [], policyIds: ["policy-tag-logs"], boundaryPolicyId: "policy-tag-logs", sessionMinutes: 30, consoleAccess: true, createdAt: at }
     ],
     keys: [{
       id: "MOCK-pipeline-key", ownerId: "principal-lin", status: "ENABLED", resourceVersion: 2, createdAt: at,
