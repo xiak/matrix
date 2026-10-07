@@ -7715,10 +7715,30 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			if index == 0 {
 				beforeRevokedCursor := counts(b.key.Key.ID)
 				disabledCursorRequest = prepareProductDirectory(b, directoryCursors[1])
-				invokeProduct(disabledCursorRequest, http.StatusForbidden)
+				disabledCursorResponse := invokeProduct(disabledCursorRequest, http.StatusForbidden)
 				if counts(b.key.Key.ID) != [4]int{beforeRevokedCursor[0] + 1, beforeRevokedCursor[1] + 1, beforeRevokedCursor[2] + 1, beforeRevokedCursor[3]} {
 					t.Fatal("disabled AccessKey cursor did not commit exactly one Deny and nonce")
 				}
+				disabledRequestID := disabledCursorResponse.Header.Get("X-Request-ID")
+				if disabledRequestID == "" {
+					t.Fatal("disabled AccessKey cursor omitted its request identity")
+				}
+				var disabledDecision iamv1.DecisionID
+				var exactDisabledDecision bool
+				if err := database.QueryRow(ctx, `SELECT id,NOT allowed AND contract_version=7
+					AND principal_id=$2 AND access_key_id=$3 AND action_name=$4
+					AND target_kind=$5 AND target_id='collection' AND resource_mode='COLLECTION'
+					AND collection_usage=$6 AND document#>>'{networkContext,sourceIp}'=$8
+					FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$7`,
+					b.target.AccountID, b.target.ID, b.key.Key.ID, iamv1.ActionPaaSApplicationRead,
+					iamv1.ResourceApplication, iamv1.AuthorizationCollectionList, disabledRequestID, b.sourceIP).
+					Scan(&disabledDecision, &exactDisabledDecision); err != nil || !exactDisabledDecision {
+					t.Fatal("disabled AccessKey cursor lost its exact Deny decision", err)
+				}
+				if decisions[b.key.Key.ID][disabledDecision] {
+					t.Fatal("disabled AccessKey cursor reused an existing decision")
+				}
+				decisions[b.key.Key.ID][disabledDecision] = true
 			}
 			if index == 1 {
 				beforeReplay := counts(b.key.Key.ID)
