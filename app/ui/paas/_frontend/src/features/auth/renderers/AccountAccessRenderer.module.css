@@ -8,7 +8,7 @@
 
 .editorFields { display: grid; gap: var(--xiak-spacing-comfortable); min-width: 0; padding: 0; margin: 0; border: 0; }
 .detailTitle { margin: 0; outline: none; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); overflow-wrap: anywhere; }
-.settingsSectionNav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); min-width: 0; gap: 1px; overflow: hidden; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-border-subtle); }
+.settingsSectionNav { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); min-width: 0; gap: 1px; overflow: hidden; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-border-subtle); }
 .settingsSectionLink { display: grid; align-content: center; min-width: 0; min-height: 60px; gap: var(--xiak-spacing-micro); padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable); background: var(--xiak-color-bg-panel); color: var(--xiak-color-text-muted); text-decoration: none; }
 .settingsSectionLink:hover { background: var(--xiak-color-bg-panel-hover); }
 .settingsSectionLink:focus-visible { position: relative; z-index: 1; outline: 2px solid var(--xiak-color-border-focus); outline-offset: -2px; }
