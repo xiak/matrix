@@ -84,8 +84,7 @@ if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperatio
       ["users", "subusers", scene.users.length],
       ["groups", "groups", workspace.groups.length],
       ["policies", "customPolicyCount", workspace.policies.filter((policy) => policy.kind === "custom").length],
-      ["roles", "roles", workspace.roles.length],
-      ["providers", "providerCount", workspace.providers.length]
+      ["roles", "roles", workspace.roles.length]
     ] as const).map(([view, label, count]) => <Link className={styles.metricLink} key={view} href={`/console/access/${view}/`} onNavigate={open(view)}><span>{w(label)}</span><strong>{format.number(count)}</strong></Link>)}</div> : null}
     <div className={styles.overviewGrid}>
       <div className={styles.stack}>

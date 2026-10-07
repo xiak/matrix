@@ -4180,9 +4180,7 @@
     "createKey": "新建访问密钥",
     "groupHint": "按团队管理成员与权限。成员继承用户组关联的模拟策略。",
     "policyHint": "使用预设策略或自定义最小权限规则，再关联到用户、用户组或角色。",
-    "roleHint": "为账号、云服务或外部身份授予临时角色，不分发长期凭证。",
-    "providerHint": "只读查看 SAML 2.0 或 OIDC 身份源、角色信任与短期会话之间的概念关系。",
-    "roleSsoMappingHint": "预览外部断言主体经身份提供商信任映射到目标角色的配置关系。此目录不是账号目录，也不证明登录、会话签发或有效授权。",
+    "roleHint": "为账号内用户或云服务授予临时角色，不分发长期凭证。外部身份信任将在后端契约发布后单独接入。",
     "keyHint": "推荐为专用子用户创建访问密钥。每个用户最多保留 2 把；轮换时先迁移工作负载，再禁用并删除旧密钥。",
     "search": "搜索名称、ID 或关键字",
     "clear": "清空搜索",
@@ -4288,39 +4286,27 @@
     "principalType": "信任主体类型",
     "account": "云账号",
     "servicePrincipal": "云服务",
-    "provider": "身份提供商",
     "principal": "信任主体",
     "sessionMinutes": "会话时长（分钟）",
     "consoleAccess": "允许通过控制台访问",
     "trust": "信任关系",
     "serviceNoConsole": "服务角色只用于工作负载，不允许控制台登录。",
     "roleSecurity": "MOCK · 不签发真实 STS 凭证，不改变当前登录",
-    "protocol": "协议",
-    "providerIssuer": "身份提供商 Issuer",
-    "providerRedirectUri": "登录 Redirect URI",
-    "providerProtocolConfiguration": "协议专属配置",
-    "providerSamlConfigurationState": "等待 IAM-EXT 固定 SAML 配置契约",
-    "providerPreviewBoundary": "MOCK · 只读概念投影。SAML/OIDC 的协议专属配置、信任与登录契约尚未冻结；页面不允许新建、编辑、启用或删除身份源，不连接外部 IdP、不验证断言或 Token，也不签发登录会话。",
-    "roleSsoMappings": "断言映射预览",
-    "roleSsoSubjectSample": "外部主体样例（非规则）",
-    "roleSsoTargetRole": "目标角色",
-    "roleSsoMappingPreviewBoundary": "MOCK · 这是身份提供商、外部主体样例与角色信任关系的本地信息流，不是 IAM 账号、claim 规则或已发布后端资源；不进行目录同步、真实登录、会话签发或有效权限判定。",
     "roleSsoJourney": {
-      "title": "角色 SSO 登录链路",
-      "concept": "概念预览",
-      "boundary": "IAM-EXT-03 概念预览 · 本页只解释企业身份源到短期角色会话的安全边界，不接收真实断言或 Token，不发现远端 IdP，不生成请求号，也不签发或保存 RoleSession。",
+      "title": "角色 SSO",
+      "subtitle": "企业身份承担短期角色的安全边界",
+      "state": "规划中 · 后端未接入",
+      "boundary": "规划信息架构 · 当前没有可消费的 IdentityProvider、外部信任映射或联合 RoleSession 契约。本页不保存配置、不连接企业 IdP、不接收断言或 Token，也不创建角色或签发会话。",
+      "journeyTitle": "目标登录链路",
+      "journeyHint": "固定安全语义可以先确认；每一步都必须由未来的权威后端事实驱动，不能由浏览器样例推断。",
       "states": {
-        "configuration": "配置样例",
-        "untrusted": "验证前不可信",
-        "candidate": "候选映射",
-        "disabled": "映射已停用",
-        "notVerified": "待真实校验",
+        "notReady": "等待后端契约",
         "notIssued": "未签发"
       },
       "steps": {
         "provider": {
-          "title": "验证企业身份提供商",
-          "detail": "当前身份源只是账号、协议与 Issuer 的本地投影；OIDC 回调也只是样例。SAML/OIDC 专属配置及真实入口完成协议验证前，不能把配置存在解释成登录成功。"
+          "title": "登记并验证企业身份提供商",
+          "detail": "未来的账号级 SAML/OIDC 配置必须由权威服务维护协议专属材料、版本、验证状态和停用语义；配置存在不等于登录成功。"
         },
         "assertion": {
           "title": "验证并解析外部断言",
@@ -4328,7 +4314,7 @@
         },
         "mapping": {
           "title": "形成允许选择的候选角色",
-          "detail": "主体样例只解释已验证身份如何形成候选角色，不定义精确值匹配或 claim DSL。真实多角色选择必须来自后端封闭映射集合，不能让调用者任意填写角色。"
+          "detail": "已验证身份只能从后端封闭映射集合得到候选角色；映射规则、唯一性和多角色选择契约尚未发布，调用者不能任意填写角色。"
         },
         "trust": {
           "title": "独立检查 Role TrustPolicy",
@@ -4340,15 +4326,24 @@
         },
         "session": {
           "title": "签发有界 STS RoleSession",
-          "detail": "只有身份映射、Role Trust 与承担权限都成立后才可能签发。真实会话必须保留原 Provider 和 opaque 外部身份供审计；本预览不签发会话或凭据。"
+          "detail": "只有身份映射、Role Trust 与承担权限都成立后才可能签发。真实会话必须保留原始身份链路并受时长、撤销和审计约束；本页不签发会话或凭据。"
         }
+      },
+      "readinessTitle": "开放配置前置条件",
+      "readinessHint": "以下契约和真实运行门禁全部通过后，才应出现新建、连接、测试或启停操作。",
+      "readiness": {
+        "protocol": { "title": "协议配置与验证生命周期", "detail": "固定 SAML/OIDC 专属字段、秘密材料归属、轮换、校验失败与停用后的失败关闭行为。" },
+        "mapping": { "title": "候选角色映射", "detail": "定义受限 claim 输入、唯一性、冲突处理与封闭的候选 Role 集合，映射本身不授予权限。" },
+        "trust": { "title": "外部 Role Trust 与承担权限", "detail": "发布可消费的外部信任主体契约，并与调用者承担角色权限、策略评估和权限边界分别校验。" },
+        "recovery": { "title": "停用、撤销与恢复", "detail": "明确 Provider 停用、映射删除、会话撤销、应急恢复和既有会话处理语义。" },
+        "audit": { "title": "会话与审计证据", "detail": "登录、映射、拒绝、承担和撤销必须产生可关联的权威证据，界面不能合成成功事实。" }
       }
     },
     "federationBoundary": {
       "title": "联合身份边界",
       "hint": "身份提供商只负责协议信任；用户 SSO 与角色 SSO 是两条独立的身份和会话路径。",
-      "state": "MOCK · 未启用",
-      "boundary": "只读信息架构 · 当前没有可消费的 IdentityProvider 写入、协议验证或映射契约。角色 SSO 也不能复用当前只接受 USER 的 TrustPolicy wire。这里不会保存配置、连接企业 IdP、验证断言、创建用户、授予权限或签发会话。",
+      "state": "规划中 · 后端未接入",
+      "boundary": "只读信息架构 · 当前没有可消费的 IdentityProvider、协议验证、外部身份映射或联合会话契约。角色 SSO 也不能复用当前只接受 USER 的 TrustPolicy wire。这里不会保存配置、连接企业 IdP、创建用户、授予权限或签发会话。",
       "current": "当前区域",
       "concept": "关联边界",
       "input": "可信输入",
@@ -4381,36 +4376,13 @@
     "userSsoConcept": {
       "title": "用户 SSO",
       "subtitle": "账号级企业身份登录边界",
-      "state": "MOCK · 只读投影",
-      "boundary": "IAM-EXT-01/02 概念预览 · 只展示当前账号内 IdentityProvider 与 ExternalIdentity 的稳定关系，不连接 IdP、不验证断言或 Token、不保存秘密、不创建映射，也不启动登录。",
-      "projectionTitle": "账号联合身份投影",
-      "projectionHint": "Provider、Issuer 与 Account 显式绑定；协议专属配置保持未冻结。ExternalIdentity 只指向同账号中的既有 USER。",
-      "providerDirectory": "账号身份提供商",
-      "externalIdentityDirectory": "外部身份映射",
-      "providerId": "Provider",
-      "provider": "身份提供商",
-      "account": "账号",
-      "accountProtocol": "账号 / 协议",
-      "endpoints": "联合端点",
-      "issuer": "Issuer",
-      "redirectUri": "Redirect URI",
-      "protocolConfiguration": "协议专属配置",
-      "samlConfigurationPending": "未冻结 · 等待 IAM-EXT",
-      "providerState": "配置状态",
-      "externalIdentity": "Opaque 外部身份",
-      "targetUser": "目标 USER",
-      "mappingState": "映射状态",
-      "projectionAvailable": "配置可参与校验 · 未验证",
-      "mappingConfigured": "只读映射 · 未签发",
-      "newSessionBlocked": "新 Session 签发阻断",
-      "enabledProviderBoundary": "Provider 启用只表示该配置可参与后端校验，不表示登录成功、身份可信或权限已授予。",
-      "disabledProviderEffect": "Provider 停用后，依赖它的新 Session 签发必须失败；既有 Session 不会据此自动撤销，USER 策略和用户组授权也不会改变。",
-      "invalidProjection": "存在跨账号、未知 Provider 或未知 USER 的投影；这些记录已失败关闭，不参与展示或会话判断。",
+      "state": "规划中 · 后端未接入",
+      "boundary": "规划信息架构 · 当前没有可消费的 IdentityProvider、ExternalIdentity 或企业登录契约。本页不制造账号目录、不连接 IdP、不验证断言或 Token、不保存秘密、不创建映射，也不启动登录。",
       "journeyTitle": "用户登录链路",
       "journeyHint": "固定语义先显示；每一步只有在 IAM 返回权威事实后才能变成可用状态。",
       "journey": {
-        "provider": { "title": "账号级身份提供商", "state": "配置投影 · 未验证", "detail": "SAML 或 OIDC 配置属于当前账号；存在配置不等于外部身份已验证，也不等于可以签发 Session。" },
-        "mapping": { "title": "外部身份映射", "state": "只读投影", "detail": "Opaque 外部身份只能映射到同账号中的一个既有 USER；不会自动创建用户，也不会把外部组变成 Matrix 用户组或策略。" },
+        "provider": { "title": "账号级身份提供商", "state": "等待后端契约", "detail": "未来的 SAML 或 OIDC 配置必须归属当前账号；存在配置不等于外部身份已验证，也不等于可以签发 Session。" },
+        "mapping": { "title": "外部身份映射", "state": "等待后端契约", "detail": "未来的 opaque 外部身份只能映射到同账号中的一个既有 USER；不会自动创建用户，也不会把外部组变成 Matrix 用户组或策略。" },
         "session": { "title": "登录 Session", "state": "未签发", "detail": "断言或 Token 通过协议、路由和映射校验后，才可为该 USER 建立新的登录 Session；旧 Session 不会被追溯升级。" },
         "authorization": { "title": "用户权限", "state": "独立决定", "detail": "登录成功只确认身份。资源权限仍来自既有用户直接策略与用户组继承，不能由 IdP 声明直接授予。" }
       },
@@ -4806,7 +4778,6 @@
         "noEffectiveAccessConclusion": "不能从配置入口直接推断有效权限或外部暴露，也不能在这里自动禁用身份、删除角色或撤销策略。",
         "reviewTarget": "查看对应配置",
         "kinds": {
-          "roleSsoMapping": "断言映射预览",
           "serviceWorkload": "服务工作负载入口"
         },
         "states": {
@@ -4815,7 +4786,6 @@
           "disabled": "已停用"
         },
         "recommendations": {
-          "roleSsoMapping": "通过权威登录与审计来源核对 IdP、角色信任和断言映射规则；本地预览不能证明真实登录、会话或有效权限。",
           "serviceWorkload": "核对服务主体所有者、工作负载绑定、角色信任、策略与权限边界，再通过服务端会话和业务审计验证调用。"
         }
       },
@@ -5243,7 +5213,6 @@
     "signIn": "登录",
     "allEvents": "查看全部记录",
     "customPolicyCount": "自定义策略",
-    "providerCount": "身份提供商",
     "subusers": "子用户",
     "securityScore": "身份安全建议",
     "configure": "去配置",

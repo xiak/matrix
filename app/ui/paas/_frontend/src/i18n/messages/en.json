@@ -4180,9 +4180,7 @@
     "createKey": "Create access key",
     "groupHint": "Manage membership and preview permissions by team. Members inherit the group's simulated policies.",
     "policyHint": "Use predefined policies or write least-privilege rules, then associate them with users, groups or roles.",
-    "roleHint": "Grant temporary roles to accounts, cloud services or external identities without distributing long-lived credentials.",
-    "providerHint": "Inspect the conceptual relationship between SAML 2.0 or OIDC identity sources, role trust, and short-lived sessions.",
-    "roleSsoMappingHint": "Preview how an external assertion subject could pass through provider trust to a target role. This is not an account directory and does not prove sign-in, session issuance, or effective access.",
+    "roleHint": "Grant temporary roles to users in this account or cloud services without distributing long-lived credentials. External identity trust will be integrated separately after its backend contract is published.",
     "keyHint": "Use a dedicated subuser for programmatic access. Keep at most 2 access keys per user; migrate workloads before disabling and deleting the old key.",
     "search": "Search by name, ID or keyword",
     "clear": "Clear search",
@@ -4288,39 +4286,27 @@
     "principalType": "Trusted principal type",
     "account": "Cloud account",
     "servicePrincipal": "Cloud service",
-    "provider": "Identity provider",
     "principal": "Trusted principal",
     "sessionMinutes": "Session duration (minutes)",
     "consoleAccess": "Allow console access",
     "trust": "Trust relationship",
     "serviceNoConsole": "Service roles are for workloads and cannot sign into the console.",
     "roleSecurity": "MOCK · No real STS credentials or login changes",
-    "protocol": "Protocol",
-    "providerIssuer": "Identity-provider Issuer",
-    "providerRedirectUri": "Sign-in Redirect URI",
-    "providerProtocolConfiguration": "Protocol-specific configuration",
-    "providerSamlConfigurationState": "Awaiting the IAM-EXT SAML configuration contract",
-    "providerPreviewBoundary": "MOCK · Read-only concept projection. Protocol-specific SAML/OIDC configuration, trust, and sign-in contracts are not frozen. This page cannot create, edit, enable, or delete an identity source, connect to an external IdP, validate assertions or tokens, or issue login sessions.",
-    "roleSsoMappings": "Assertion mapping preview",
-    "roleSsoSubjectSample": "External subject sample (not a rule)",
-    "roleSsoTargetRole": "Target role",
-    "roleSsoMappingPreviewBoundary": "MOCK · This is a local information-flow sample across a provider, an external-subject sample, and role trust. It is not an IAM account, claim rule, or published backend resource and performs no directory sync, real sign-in, session issuance, or effective-access decision.",
     "roleSsoJourney": {
-      "title": "Role SSO sign-in path",
-      "concept": "Concept preview",
-      "boundary": "IAM-EXT-03 concept preview · This page only explains the security boundaries from an enterprise identity source to a short-lived role session. It accepts no real assertion or token, discovers no remote IdP, creates no request ID, and issues or stores no RoleSession.",
+      "title": "Role SSO",
+      "subtitle": "Security boundary for enterprise identities assuming short-lived roles",
+      "state": "Planned · backend not connected",
+      "boundary": "Planned information architecture · No consumable IdentityProvider, external trust mapping, or federated RoleSession contract exists yet. This page saves no configuration, contacts no enterprise IdP, accepts no assertion or token, creates no role, and issues no session.",
+      "journeyTitle": "Target sign-in path",
+      "journeyHint": "The stable security semantics can be reviewed now. Every step must eventually be driven by authoritative backend facts, never inferred from browser samples.",
       "states": {
-        "configuration": "Configuration sample",
-        "untrusted": "Untrusted until verified",
-        "candidate": "Candidate mapping",
-        "disabled": "Mapping disabled",
-        "notVerified": "Awaiting real verification",
+        "notReady": "Awaiting backend contract",
         "notIssued": "Not issued"
       },
       "steps": {
         "provider": {
-          "title": "Verify the enterprise identity provider",
-          "detail": "The current identity source is only a local Account, protocol, and Issuer projection; the OIDC callback is also just a sample. Configuration alone is not a successful sign-in before protocol-specific SAML/OIDC configuration and real validation exist."
+          "title": "Register and verify the enterprise identity provider",
+          "detail": "A future account-scoped SAML/OIDC configuration must have authoritative ownership of protocol-specific material, versions, verification state, and disablement semantics. Configuration existence is not a successful sign-in."
         },
         "assertion": {
           "title": "Verify and parse the external assertion",
@@ -4328,7 +4314,7 @@
         },
         "mapping": {
           "title": "Build the set of selectable candidate roles",
-          "detail": "The subject sample only illustrates how a verified identity may produce candidate roles; it defines neither exact-value matching nor a claim DSL. A real multi-role choice must come from a closed backend mapping set, not an arbitrary caller-supplied role."
+          "detail": "A verified identity may receive candidates only from a closed backend mapping set. Mapping rules, uniqueness, and multi-role selection are not published yet, and callers cannot supply arbitrary roles."
         },
         "trust": {
           "title": "Evaluate the Role TrustPolicy independently",
@@ -4340,15 +4326,24 @@
         },
         "session": {
           "title": "Issue a bounded STS RoleSession",
-          "detail": "Issuance is possible only after mapping, Role Trust, and assumption permission all hold. A real session must retain the original Provider and opaque external identity for audit; this preview issues no session or credential."
+          "detail": "Issuance is possible only after mapping, Role Trust, and assumption permission all hold. A real session must retain the original identity chain and obey duration, revocation, and audit constraints; this page issues no session or credential."
         }
+      },
+      "readinessTitle": "Prerequisites before configuration opens",
+      "readinessHint": "Create, connect, test, enable, or disable actions should appear only after every contract and real-runtime gate below passes.",
+      "readiness": {
+        "protocol": { "title": "Protocol configuration and validation lifecycle", "detail": "Freeze SAML/OIDC-specific fields, secret-material ownership, rotation, validation failure, and fail-closed disablement behavior." },
+        "mapping": { "title": "Candidate-role mapping", "detail": "Define constrained claim input, uniqueness, conflict handling, and a closed candidate Role set. A mapping is never a grant." },
+        "trust": { "title": "External Role Trust and assumption permission", "detail": "Publish a consumable external-principal trust contract and evaluate it separately from caller assumption permission, policy evaluation, and permission boundaries." },
+        "recovery": { "title": "Disablement, revocation, and recovery", "detail": "Define provider disablement, mapping removal, session revocation, emergency recovery, and existing-session behavior." },
+        "audit": { "title": "Session and audit evidence", "detail": "Sign-in, mapping, denial, assumption, and revocation need correlated authoritative evidence; the UI cannot synthesize success." }
       }
     },
     "federationBoundary": {
       "title": "Federation boundaries",
       "hint": "An identity provider establishes protocol trust; User SSO and Role SSO remain separate identity and session paths.",
-      "state": "MOCK · not enabled",
-      "boundary": "Read-only information architecture · No consumable IdentityProvider mutation, protocol-validation, or mapping contract exists yet. Role SSO also cannot reuse the current USER-only TrustPolicy wire. This view cannot save configuration, connect an enterprise IdP, validate assertions, create users, grant access, or issue sessions.",
+      "state": "Planned · backend not connected",
+      "boundary": "Read-only information architecture · No consumable IdentityProvider, protocol-validation, external-identity mapping, or federated-session contract exists yet. Role SSO also cannot reuse the current USER-only TrustPolicy wire. This view cannot save configuration, connect an enterprise IdP, create users, grant access, or issue sessions.",
       "current": "Current area",
       "concept": "Related boundary",
       "input": "Trusted input",
@@ -4381,36 +4376,13 @@
     "userSsoConcept": {
       "title": "User SSO",
       "subtitle": "Account-scoped enterprise identity sign-in boundary",
-      "state": "MOCK · read-only projection",
-      "boundary": "IAM-EXT-01/02 concept preview · Shows only stable IdentityProvider and ExternalIdentity relationships in the current Account. It contacts no IdP, validates no assertion or token, stores no secret, creates no mapping, and starts no sign-in.",
-      "projectionTitle": "Account federation projection",
-      "projectionHint": "Provider, Issuer, and Account are bound explicitly while protocol-specific configuration remains unfrozen. An ExternalIdentity points only to an existing USER in the same Account.",
-      "providerDirectory": "Account identity providers",
-      "externalIdentityDirectory": "External identity mappings",
-      "providerId": "Provider",
-      "provider": "Identity provider",
-      "account": "Account",
-      "accountProtocol": "Account / protocol",
-      "endpoints": "Federation endpoints",
-      "issuer": "Issuer",
-      "redirectUri": "Redirect URI",
-      "protocolConfiguration": "Protocol-specific configuration",
-      "samlConfigurationPending": "Unfrozen · awaiting IAM-EXT",
-      "providerState": "Configuration state",
-      "externalIdentity": "Opaque external identity",
-      "targetUser": "Target USER",
-      "mappingState": "Mapping state",
-      "projectionAvailable": "Available to validation · not verified",
-      "mappingConfigured": "Read-only mapping · not issued",
-      "newSessionBlocked": "New Session issuance blocked",
-      "enabledProviderBoundary": "An enabled Provider only makes the configuration available to backend validation. It is not a successful sign-in, a trusted identity, or a grant.",
-      "disabledProviderEffect": "Disabling a Provider must block new Session issuance that depends on it. It does not automatically revoke existing Sessions or change USER policies and group grants.",
-      "invalidProjection": "A cross-Account, unknown-Provider, or unknown-USER projection was found. Those records fail closed and do not participate in display or Session decisions.",
+      "state": "Planned · backend not connected",
+      "boundary": "Planned information architecture · No consumable IdentityProvider, ExternalIdentity, or enterprise sign-in contract exists yet. This page invents no account directory, contacts no IdP, validates no assertion or token, stores no secret, creates no mapping, and starts no sign-in.",
       "journeyTitle": "User sign-in path",
       "journeyHint": "Stable semantics render immediately; a step can become available only when IAM returns authoritative facts.",
       "journey": {
-        "provider": { "title": "Account identity provider", "state": "Configuration projection · not verified", "detail": "SAML or OIDC configuration belongs to the current Account. Its existence is not external-identity verification or permission to issue a Session." },
-        "mapping": { "title": "External identity mapping", "state": "Read-only projection", "detail": "An opaque external identity can map only to one existing USER in the same Account. It neither creates a user nor turns external groups into Matrix groups or policies." },
+        "provider": { "title": "Account identity provider", "state": "Awaiting backend contract", "detail": "A future SAML or OIDC configuration must belong to the current Account. Its existence is not external-identity verification or permission to issue a Session." },
+        "mapping": { "title": "External identity mapping", "state": "Awaiting backend contract", "detail": "A future opaque external identity may map only to one existing USER in the same Account. It neither creates a user nor turns external groups into Matrix groups or policies." },
         "session": { "title": "Sign-in Session", "state": "Not issued", "detail": "Only after protocol, routing, and mapping checks pass can IAM establish a new Session for that USER. Existing Sessions are never upgraded retroactively." },
         "authorization": { "title": "User authorization", "state": "Evaluated separately", "detail": "Successful sign-in establishes identity only. Resource access still comes from existing direct user policies and group inheritance, never directly from an IdP claim." }
       },
@@ -4791,10 +4763,9 @@
         "recommendationTitle": "Human review path",
         "noEffectiveAccessConclusion": "A configured entry point cannot establish effective permission or external exposure, and this page must not automatically disable an identity, delete a role or revoke a policy.",
         "reviewTarget": "View corresponding configuration",
-        "kinds": { "roleSsoMapping": "Assertion mapping preview", "serviceWorkload": "Service workload entry" },
+        "kinds": { "serviceWorkload": "Service workload entry" },
         "states": { "configured": "Configuration complete", "incomplete": "Configuration incomplete", "disabled": "Disabled" },
         "recommendations": {
-          "roleSsoMapping": "Verify IdP state, role trust and assertion-mapping rules through authoritative sign-in and audit sources. This local preview cannot prove a real sign-in, session or effective access.",
           "serviceWorkload": "Verify service-principal ownership, workload binding, role trust, policies and permission boundary, then confirm calls through authoritative role-session and business audit sources."
         }
       },
@@ -5222,7 +5193,6 @@
     "signIn": "Sign in",
     "allEvents": "View all events",
     "customPolicyCount": "Custom policies",
-    "providerCount": "Identity providers",
     "subusers": "Subusers",
     "securityScore": "Identity security recommendations",
     "configure": "Configure",

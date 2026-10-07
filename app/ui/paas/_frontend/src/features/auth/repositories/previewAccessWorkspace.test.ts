@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyAccessWorkspaceCommand, externalIdentityProjectionIssue, policyUsageCounts } from "../domain/accessWorkspace";
+import { applyAccessWorkspaceCommand, policyUsageCounts } from "../domain/accessWorkspace";
 import { analyzePolicyDocument, containsDenyStatement, parsePolicyDocument, policyDocumentDiagnostics, policyStatementKey, resourcesForPolicyActions, summarizePolicyServices, type PolicyDocument } from "../domain/policyDocument";
 import { expandPolicyActions } from "../domain/policyLanguage";
 import { policyActions, policyServices } from "../domain/previewAuthorizationCatalog";
@@ -602,20 +602,10 @@ describe("access workspace preview invariants", () => {
     state = applyAccessWorkspaceCommand(state, { kind: "associate-policy", id: "policy-prod-logs", userIds: [], groupIds: [], roleIds: [] }, context);
     expect(applyAccessWorkspaceCommand(state, { kind: "delete-policy", id: "policy-prod-logs" }, context).policies.some((policy) => policy.id === "policy-prod-logs")).toBe(false);
   });
-  it("keeps role trust aligned with the read-only role SSO projection", () => {
+  it("keeps service roles non-interactive", () => {
     const state = initialAccessWorkspace("org-xiak");
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "delete-role", id: "role-audit" }, context)).toThrow("referenced");
     const role = state.roles.find((entry) => entry.id === "role-pipeline")!;
     expect(() => applyAccessWorkspaceCommand(state, { kind: "update-role-settings", id: role.id, sessionMinutes: 60, consoleAccess: true }, context)).toThrow("invalid");
-  });
-  it("fails closed when an external identity leaves the current account projection", () => {
-    const state = initialAccessWorkspace("org-xiak");
-    const identity = state.externalIdentities[0]!;
-    expect(externalIdentityProjectionIssue(identity, state)).toBeNull();
-    expect(externalIdentityProjectionIssue({ ...identity, accountId: "org-foreign" }, state)).toBe("account");
-    expect(externalIdentityProjectionIssue({ ...identity, providerId: "idp-unknown" }, state)).toBe("provider");
-    expect(externalIdentityProjectionIssue({ ...identity, subject: "\u0000" }, state)).toBe("subject");
-    expect(externalIdentityProjectionIssue({ ...identity, userId: "principal-unknown" }, state)).toBe("user");
   });
   it("limits keys per subuser and requires disabling before deletion", () => {
     let state = initialAccessWorkspace("org-xiak");

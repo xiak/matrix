@@ -16,44 +16,11 @@ export type AccessPolicy = {
 export type PolicyTargets = { userIds: string[]; groupIds: string[]; roleIds: string[] };
 export type AccessGroup = { id: string; name: string; description: string; memberIds: string[]; policyIds: string[]; createdAt: string };
 export type AccessRole = {
-  // `provider` is a browser-preview discriminator, never an IAM PrincipalType wire value.
-  id: string; name: string; description: string; principalType: "account" | "service" | "provider";
+  id: string; name: string; description: string; principalType: "account" | "service";
   principal: string; trustedUserIds: string[]; policyIds: string[]; boundaryPolicyId?: string;
   tags: { key: string; value: string }[]; sessionMinutes: number; consoleAccess: boolean; createdAt: string;
 };
 export type AccessRoleSession = { id: string; roleId: string; caller: RoleSessionCaller; createdAt: string; expiresAt: string; revokedAt?: string };
-type IdentityProviderBase = {
-  id: string; accountId: string; name: string; protocol: "SAML" | "OIDC";
-  issuer: string; enabled: boolean; createdAt: string;
-};
-/** Read-only concept projection; neither branch defines a SAML/OIDC backend wire. */
-export type IdentityProvider = IdentityProviderBase & (
-  | { protocol: "SAML" }
-  | { protocol: "OIDC"; redirectUri: string }
-);
-export type ExternalIdentityPreview = {
-  id: string;
-  accountId: string;
-  providerId: string;
-  subject: string;
-  userId: string;
-  enabled: boolean;
-};
-
-/** Read-only Account projection; it never creates a User or a login Session. */
-export function externalIdentityProjectionIssue(
-  identity: ExternalIdentityPreview,
-  workspace: Pick<AccessWorkspace, "accountId" | "providers" | "userProfiles">
-): "account" | "provider" | "subject" | "user" | null {
-  if (identity.accountId !== workspace.accountId) return "account";
-  const provider = workspace.providers.find((entry) => entry.id === identity.providerId);
-  if (!provider || provider.accountId !== workspace.accountId) return "provider";
-  if (!identity.subject.trim() || identity.subject.length > 256 || /\p{Cc}/u.test(identity.subject)) return "subject";
-  if (!Object.prototype.hasOwnProperty.call(workspace.userProfiles, identity.userId)) return "user";
-  return null;
-}
-/** Read-only design sample; this is not an IAM account, claim DSL, or published backend resource. */
-export type RoleSsoMappingPreview = { id: string; name: string; subjectSample: string; providerId: string; roleId: string; enabled: boolean; createdAt: string };
 export type AccessKey = {
   id: string;
   ownerId: string;
@@ -114,7 +81,7 @@ export type PreviewUserProfile = {
 export function previewUserPrincipalId(loginName: string): string { return `principal-${loginName}`; }
 export type AccessWorkspace = {
   mode: "preview"; accountId: string; groups: AccessGroup[]; policies: AccessPolicy[];
-  roles: AccessRole[]; providers: IdentityProvider[]; externalIdentities: ExternalIdentityPreview[]; roleSsoMappings: RoleSsoMappingPreview[]; keys: AccessKey[];
+  roles: AccessRole[]; keys: AccessKey[];
   userPolicies: Record<string, string[]>; settings: AccessSettings; events: AccessEvent[];
   personalMfa: PersonalMfaPreviewState;
   personalNotificationAddress: string | null;
@@ -402,7 +369,6 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     case "update-role-trust": {
       const role = exists(state.roles, id);
       validateRoleTrust(state, { ...role, ...command }, context.userIds);
-      if (state.roleSsoMappings.some((entry) => entry.roleId === id && entry.providerId !== command.principal)) throw new AccessWorkspaceError("referenced");
       role.principal = command.principal; role.trustedUserIds = [...new Set(command.trustedUserIds)]; break;
     }
     case "update-role-settings": {
@@ -441,7 +407,6 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     }
     case "delete-role":
       exists(state.roles, id);
-      if (state.roleSsoMappings.some((entry) => entry.roleId === id)) throw new AccessWorkspaceError("referenced");
       state.roles = state.roles.filter((entry) => entry.id !== id); break;
     case "create-key":
       if (state.pendingKeyCreation || command.ownerState !== "active" || !context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !accessKeyNetworkRestrictionsValid(command.networkRestrictions) || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();

@@ -16,16 +16,13 @@ export function validateRoleTrust(workspace: AccessWorkspace, trust: RoleTrust, 
     case "service":
       if (trust.trustedUserIds.length || !roleServicePrincipals.some((id) => id === trust.principal)) invalid();
       break;
-    case "provider":
-      if (trust.trustedUserIds.length || !workspace.providers.some((provider) => provider.id === trust.principal && provider.enabled)) invalid();
-      break;
     default: invalid();
   }
 }
 export function roleTrustPreview(role: RoleTrust) {
   if (role.principalType !== "account") return {
     mockOnly: true,
-    principalType: role.principalType === "provider" ? "MOCK_IDENTITY_PROVIDER" : role.principalType,
+    principalType: role.principalType,
     principalId: role.principal
   };
   return {

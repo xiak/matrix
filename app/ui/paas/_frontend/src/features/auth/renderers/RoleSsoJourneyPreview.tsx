@@ -2,77 +2,64 @@
 
 import { useId } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Typography } from "@ui/xiak";
-import type { AccessRole, IdentityProvider, RoleSsoMappingPreview } from "../domain/accessWorkspace";
+import { Alert, Badge, Card, Typography } from "@ui/xiak";
 import styles from "./AccountAccessRenderer.module.css";
 
-type JourneyMapping = Pick<RoleSsoMappingPreview, "name" | "subjectSample" | "enabled">;
-type JourneyStepKey = "provider" | "assertion" | "mapping" | "trust" | "permission" | "session";
-type JourneyStepState = "configuration" | "untrusted" | "candidate" | "disabled" | "notVerified" | "notIssued";
+const journey = ["provider", "assertion", "mapping", "trust", "permission", "session"] as const;
+const readiness = ["protocol", "mapping", "trust", "recovery", "audit"] as const;
 
 /**
- * Read-only concept projection for IAM-EXT-03. It explains the security
- * boundaries between provider verification, mapping, Role trust and STS
- * without defining a backend resource or issuing a session.
+ * Read-only Role SSO readiness model. It explains the gates a future IAM
+ * implementation must satisfy without manufacturing providers, mappings,
+ * trusted assertions or issued sessions in browser memory.
  */
-export function RoleSsoJourneyPreview({ provider, mapping, role }: {
-  provider?: IdentityProvider;
-  mapping: JourneyMapping;
-  role?: AccessRole;
-}) {
+export function RoleSsoJourneyPreview({ accountId }: { accountId: string }) {
   const t = useTranslations("IamWorkspace.roleSsoJourney");
   const titleId = useId();
-  const trustConfigured = Boolean(provider && role?.principalType === "provider" && role.principal === provider.id);
-  const steps: { key: JourneyStepKey; state: JourneyStepState; status: "neutral" | "warning" }[] = [
-    {
-      key: "provider",
-      state: provider?.enabled ? "configuration" : "disabled",
-      status: provider?.enabled ? "neutral" as const : "warning" as const
-    },
-    {
-      key: "assertion",
-      state: "untrusted",
-      status: "warning" as const
-    },
-    {
-      key: "mapping",
-      state: mapping.enabled ? "candidate" : "disabled",
-      status: mapping.enabled ? "neutral" as const : "warning" as const
-    },
-    {
-      key: "trust",
-      state: trustConfigured ? "configuration" : "notVerified",
-      status: trustConfigured ? "neutral" as const : "warning" as const
-    },
-    {
-      key: "permission",
-      state: "notVerified",
-      status: "warning" as const
-    },
-    {
-      key: "session",
-      state: "notIssued",
-      status: "neutral" as const
-    }
-  ];
 
-  return <section aria-labelledby={titleId} className={styles.stack}>
-    <div className={styles.securityCheckHeading}>
-      <Typography.Title as="h3" id={titleId} level={3}>{t("title")}</Typography.Title>
-      <Badge status="neutral">{t("concept")}</Badge>
-    </div>
-    <Alert status="info">{t("boundary")}</Alert>
-    <ol className={styles.securityChecks}>
-      {steps.map((step, index) => <li key={step.key}>
-        <Badge status="neutral">{index + 1}</Badge>
-        <div className={styles.securityCheckCopy}>
-          <div className={styles.securityCheckHeading}>
-            <strong>{t(`steps.${step.key}.title`)}</strong>
-            <Badge status={step.status}>{t(`states.${step.state}`)}</Badge>
-          </div>
-          <p>{t(`steps.${step.key}.detail`)}</p>
+  return <Card>
+    <Card.Header>
+      <div className={styles.cardHeadingCopy}>
+        <Typography.Title as="h2" id={titleId} level={3}>{t("title")}</Typography.Title>
+        <Typography.Text tone="muted">{t("subtitle")}</Typography.Text>
+      </div>
+      <div className={styles.headingBadges}><Badge status="warning">{t("state")}</Badge><Badge status="neutral">{accountId}</Badge></div>
+    </Card.Header>
+    <Card.Body className={styles.stack}>
+      <Alert status="info">{t("boundary")}</Alert>
+      <section aria-labelledby={`${titleId}-journey`} className={styles.stack}>
+        <div className={styles.cardHeadingCopy}>
+          <h3 className={styles.stepTitle} id={`${titleId}-journey`}>{t("journeyTitle")}</h3>
+          <p className={styles.note}>{t("journeyHint")}</p>
         </div>
-      </li>)}
-    </ol>
-  </section>;
+        <ol className={styles.securityChecks}>
+          {journey.map((step, index) => <li key={step}>
+            <Badge status="neutral">{index + 1}</Badge>
+            <div className={styles.securityCheckCopy}>
+              <div className={styles.securityCheckHeading}>
+                <strong>{t(`steps.${step}.title`)}</strong>
+                <Badge status="warning">{t(step === "session" ? "states.notIssued" : "states.notReady")}</Badge>
+              </div>
+              <p>{t(`steps.${step}.detail`)}</p>
+            </div>
+          </li>)}
+        </ol>
+      </section>
+      <section aria-labelledby={`${titleId}-readiness`} className={styles.stack}>
+        <div className={styles.cardHeadingCopy}>
+          <h3 className={styles.stepTitle} id={`${titleId}-readiness`}>{t("readinessTitle")}</h3>
+          <p className={styles.note}>{t("readinessHint")}</p>
+        </div>
+        <ol className={styles.securityChecks}>
+          {readiness.map((item, index) => <li key={item}>
+            <Badge status="neutral">{index + 1}</Badge>
+            <div className={styles.securityCheckCopy}>
+              <div className={styles.securityCheckHeading}><strong>{t(`readiness.${item}.title`)}</strong><Badge status="warning">{t("states.notReady")}</Badge></div>
+              <p>{t(`readiness.${item}.detail`)}</p>
+            </div>
+          </li>)}
+        </ol>
+      </section>
+    </Card.Body>
+  </Card>;
 }

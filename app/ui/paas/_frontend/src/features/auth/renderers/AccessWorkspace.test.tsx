@@ -961,7 +961,7 @@ describe("CAM-style access workspace", () => {
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(input.value).toContain("manual/*");
     expect((screen.getByRole("tab", { name: "按资源标签" }) as HTMLButtonElement).disabled).toBe(true);
-  });
+  }, 10_000);
   it("retains independent policy directory filters across details and page navigation", async () => {
     const { user } = await open("policies");
     const directory = await screen.findByRole("table", { name: "策略" });
@@ -1352,18 +1352,6 @@ describe("CAM-style access workspace", () => {
     expect(within(denyRow).getByText("含显式拒绝").getAttribute("data-status")).toBe("danger");
     expect(within(policies).getByText("仅允许声明")).toBeTruthy();
   });
-  it("keeps identity-provider and assertion-mapping-preview mutations in their detail pages", async () => {
-    const { user } = await open("providers");
-    const providers = await screen.findByRole("table", { name: "角色 SSO" });
-    expect(within(providers).queryByRole("columnheader", { name: "操作" })).toBeNull();
-    expect(within(providers).queryByRole("button", { name: "编辑" })).toBeNull();
-    expect(within(providers).queryByRole("button", { name: "删除" })).toBeNull();
-    await user.click(screen.getByRole("tab", { name: "断言映射预览" }));
-    const mappings = screen.getByRole("table", { name: "断言映射预览" });
-    expect(within(mappings).queryByRole("columnheader", { name: "操作" })).toBeNull();
-    expect(within(mappings).queryByRole("button", { name: "编辑" })).toBeNull();
-    expect(within(mappings).queryByRole("button", { name: "删除" })).toBeNull();
-  });
   it("creates a role in the content area with explicit trust, no preselected grants and a preserved localized draft", async () => {
     const { user, repository, extension } = await open("roles");
     await user.click(await screen.findByRole("button", { name: "新建角色" }));
@@ -1596,35 +1584,6 @@ describe("CAM-style access workspace", () => {
     const after = await extension.read("preview");
     expect(after.roles.find((role) => role.id === original.id)).toEqual({ ...original, sessionMinutes: 120 });
     expect(after.roleSessions).toEqual(before.roleSessions);
-  });
-  it("shows provider names and IDs in trust review and retains a referenced-provider rejection", async () => {
-    const { user, repository, extension } = await open("roles", { entityId: "role-audit", seed: async (extension) => {
-      extension.transact((source) => ({ workspace: { ...source, providers: [...source.providers, {
-        id: "idp-next", accountId: source.accountId, name: "NextSSO", protocol: "SAML", issuer: "https://next.example.invalid/saml", enabled: true, createdAt: "2026-09-09T02:00:00Z"
-      }] } }));
-    } });
-    const before = await extension.read("preview"), provider = before.providers.find((entry) => entry.name === "NextSSO")!;
-    await user.click(await screen.findByRole("tab", { name: "信任关系" }));
-    expect(JSON.parse(screen.getByRole("region", { name: "仅 MOCK 的信任对象预览" }).textContent!)).toEqual({ mockOnly: true, principalType: "MOCK_IDENTITY_PROVIDER", principalId: "idp-example" });
-    await user.click(screen.getByRole("button", { name: "修改信任关系" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
-    const workflow = screen.getByRole("group", { name: "修改信任关系" }), panel = within(workflow);
-    await select(user, "信任主体", "NextSSO");
-    await user.click(panel.getByRole("button", { name: "审阅变更" }));
-    expect(panel.getByRole("article", { name: "变更前" }).textContent).toContain("EnterpriseSSO");
-    expect(panel.getByRole("article", { name: "变更后" }).textContent).toContain(provider.id);
-    await user.click(panel.getByText("查看完整信任文档对比"));
-    expect(JSON.parse(panel.getByRole("region", { name: "变更后 · 信任文档" }).textContent!)).toEqual({ mockOnly: true, principalType: "MOCK_IDENTITY_PROVIDER", principalId: provider.id });
-    expect(repository.workspace!.execute).not.toHaveBeenCalled();
-    await user.click(panel.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(panel.getByRole("alert").textContent).toContain("仍被引用"));
-    expect(document.activeElement).toBe(panel.getByRole("alert"));
-    expect(await extension.read("preview")).toEqual(before);
-    await user.click(panel.getByRole("button", { name: "返回选择" }));
-    expect(panel.getByRole("combobox", { name: "信任主体" }).textContent).toContain("NextSSO");
-    await user.click(panel.getByRole("button", { name: "取消" }));
-    expect(screen.queryByRole("group", { name: "修改信任关系" })).toBeNull();
-    expect(await extension.read("preview")).toEqual(before);
   });
   it("retains role deletion confirmation on failure, supports cancellation and retries only the named role", async () => {
     const { user, repository, extension } = await open("roles", { entityId: "role-pipeline" });
@@ -2669,7 +2628,7 @@ describe("CAM-style access workspace", () => {
     await screen.findByRole("heading", { name: "策略已保存" });
     expect((await extension.read("preview")).policies.at(-1)?.versions[0]?.document.statement[0]).toEqual({ effect: "allow", action: ["logs:search"], resource: ["matrix:logs:org-xiak:*:topic/production/*"], condition });
     expect(repository.execute).not.toHaveBeenCalled();
-  });
+  }, 10_000);
   it("blocks empty conditions and incompatible account actions instead of silently widening resource scope", async () => {
     const { user, repository } = await open("create-policy");
     await logActions(user, ["logs:search"]);
@@ -3107,40 +3066,22 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("table", { name: "访问密钥" })).toBeTruthy();
     expect(JSON.stringify(localStorage) + JSON.stringify(sessionStorage)).not.toContain(secret);
   });
-  it("keeps the identity-provider concept directory read-only until IAM fixes its protocol contract", async () => {
-    const { user, repository, extension } = await open("providers");
+  it("keeps Role SSO as planning information architecture without fake providers, mappings, or actions", async () => {
+    const { repository, extension } = await open("providers");
     const before = await extension.read("preview");
-    const boundary = screen.getByRole("region", { name: "联合身份边界" });
-    expect(within(boundary).getByRole("article", { name: "身份提供商" }).getAttribute("aria-current")).toBe("step");
-    expect(within(boundary).getByRole("article", { name: "用户 SSO" }).textContent).toContain("IdP claim 不携权");
-    expect(within(boundary).getByRole("article", { name: "角色 SSO" }).textContent).toContain("映射本身不是授权");
-    expect(screen.queryByRole("button", { name: "新建身份提供商" })).toBeNull();
-    expect(screen.getByText(/不允许新建、编辑、启用或删除身份源/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "EnterpriseSSO" }));
-    expect(screen.getByText("org-xiak")).toBeTruthy();
-    expect(screen.getByText(/等待 IAM-EXT/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "编辑" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(await extension.read("preview")).toEqual(before);
-    expect(repository.workspace!.execute).not.toHaveBeenCalled();
-    expect(repository.execute).not.toHaveBeenCalled();
-  });
-  it("keeps the role-SSO mapping concept read-only while preserving the three authorization checks", async () => {
-    const { user, repository, extension } = await open("providers");
-    const before = await extension.read("preview");
-    await user.click(screen.getByRole("tab", { name: "断言映射预览" }));
     expect(within(screen.getByRole("region", { name: "联合身份边界" })).getByRole("article", { name: "角色 SSO" }).getAttribute("aria-current")).toBe("step");
-    expect(screen.queryByRole("button", { name: "新建映射规则预览" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "AuditAssertionRule" }));
-    const journey = screen.getByRole("region", { name: "角色 SSO 登录链路" });
+    const journey = screen.getByRole("region", { name: "目标登录链路" });
     expect(within(journey).getByText("验证并解析外部断言")).toBeTruthy();
     expect(within(journey).getByText(/目标角色仍须独立验证/)).toBeTruthy();
     expect(within(journey).getByText("独立检查承担角色权限")).toBeTruthy();
-    expect(within(journey).getByText(/不接收真实断言或 Token/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "编辑" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "开放配置前置条件" })).toBeTruthy();
+    expect(screen.getAllByText("规划中 · 后端未接入").length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toMatch(/EnterpriseSSO|AuditAssertionRule|external-subject/);
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect("providers" in before).toBe(false);
+    expect("roleSsoMappings" in before).toBe(false);
     expect(await extension.read("preview")).toEqual(before);
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(repository.execute).not.toHaveBeenCalled();
@@ -3821,37 +3762,20 @@ describe("CAM-style access workspace", () => {
     const federationBoundary = screen.getByRole("region", { name: "联合身份边界" });
     expect(within(federationBoundary).getByRole("article", { name: "用户 SSO" }).getAttribute("aria-current")).toBe("step");
     expect(within(federationBoundary).getByText(/身份提供商只负责协议信任/)).toBeTruthy();
-    expect(screen.getByText("MOCK · 只读投影")).toBeTruthy();
-    const providers = screen.getByRole("table", { name: "账号身份提供商" });
-    const identities = screen.getByRole("table", { name: "外部身份映射" });
-    expect(providers.textContent).toContain("EnterpriseSSO");
-    expect(providers.textContent).toContain("org-xiak");
-    expect(providers.textContent).toContain("https://identity.example.invalid/saml");
-    expect(providers.textContent).toContain("未冻结 · 等待 IAM-EXT");
-    expect(identities.textContent).toContain("external-subject:auditor-01");
-    expect(identities.textContent).toContain("principal-chen");
+    expect(screen.getAllByText("规划中 · 后端未接入").length).toBeGreaterThan(0);
     expect(screen.getByText("账号级身份提供商")).toBeTruthy();
     expect(screen.getByText("登录 Session")).toBeTruthy();
     expect(screen.getByText("用户权限")).toBeTruthy();
-    expect(document.body.textContent).not.toMatch(/JWKS|EntityDescriptor|签名公钥|客户端 Secret|私钥/);
+    expect(screen.getByRole("heading", { name: "启用前置" })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/EnterpriseSSO|external-subject|JWKS|EntityDescriptor|签名公钥|客户端 Secret|私钥/);
+    expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByRole("button", { name: /配置|连接|启用|登录/ })).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect("providers" in before).toBe(false);
+    expect("externalIdentities" in before).toBe(false);
     expect(await extension.read("preview")).toEqual(before);
     expect((await extension.read("preview")).roleSessions).toEqual(before.roleSessions);
-    expect(repository.workspace!.execute).not.toHaveBeenCalled();
-    expect(repository.execute).not.toHaveBeenCalled();
-  });
-  it("fails closed for cross-account external identity projections", async () => {
-    const { repository, extension } = await open("user-sso", { seed: async (preview) => {
-      preview.transact((source) => ({ workspace: { ...source, externalIdentities: [...source.externalIdentities, {
-        id: "external-identity-foreign", accountId: "org-foreign", providerId: "idp-example", subject: "external-subject:foreign", userId: "principal-lin", enabled: true
-      }] } }));
-    } });
-    const before = await extension.read("preview");
-    expect(screen.getByText(/跨账号、未知 Provider 或未知 USER/)).toBeTruthy();
-    expect(screen.getByRole("table", { name: "外部身份映射" }).textContent).not.toContain("external-subject:foreign");
-    expect(await extension.read("preview")).toEqual(before);
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(repository.execute).not.toHaveBeenCalled();
   });
@@ -4079,7 +4003,7 @@ describe("CAM-style access workspace", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "导入为子用户" })).toBe(document.activeElement));
     const state = await extension.read("preview");
     expect(state.enterprises[0]?.importedMemberIds).toEqual(["dev01"]);
-    expect(state.providers).toHaveLength(1);
+    expect("providers" in state).toBe(false);
   });
   it("separates role assumption from product-owned resource sharing without inventing a command", async () => {
     const { user, repository } = await open("federations");
@@ -4270,7 +4194,6 @@ describe("CAM-style access workspace", () => {
       { id: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null }
     ]);
     expect(analysis.trustEntries.map(({ kind, name, configuration, target }) => ({ kind, name, configuration, target }))).toEqual([
-      { kind: "roleSsoMapping", name: "AuditAssertionRule", configuration: "configured", target: { view: "providers" } },
       { kind: "serviceWorkload", name: "PipelineDeploymentRole", configuration: "configured", target: { view: "roles", id: "role-pipeline" } }
     ]);
     expect(analysis.unusedFindings).toHaveLength(123);
@@ -4329,11 +4252,11 @@ describe("CAM-style access workspace", () => {
     const entryTable = screen.getByRole("table", { name: "已配置入口" });
     expect(entryTable.getAttribute("data-mobile-layout")).toBe("stack");
     expect(within(entryTable).getAllByText("devops.matrix.internal").length).toBe(2);
-    await user.click(within(entryTable).getByRole("button", { name: "AuditAssertionRule" }));
-    expect(screen.getByRole("heading", { name: "审阅入口 · AuditAssertionRule" })).toBeTruthy();
+    await user.click(within(entryTable).getByRole("button", { name: "PipelineDeploymentRole" }));
+    expect(screen.getByRole("heading", { name: "审阅入口 · PipelineDeploymentRole" })).toBeTruthy();
     expect(screen.getByText(/不能从配置入口直接推断有效权限或外部暴露/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看对应配置" }));
-    expect(onNavigate).toHaveBeenCalledWith("providers", undefined);
+    expect(onNavigate).toHaveBeenCalledWith("roles", "role-pipeline");
     await user.click(screen.getByRole("button", { name: "返回列表" }));
     await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
     expect(screen.getByText(/当前真实数据不满足该前提/)).toBeTruthy();

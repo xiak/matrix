@@ -154,8 +154,7 @@ describe("role trust, boundaries and temporary session diagnostics", () => {
   });
   it.each([
     { principal: "org-other" }, { trustedUserIds: [] }, { trustedUserIds: ["*"] }, { trustedUserIds: ["foreign-user"] },
-    { principalType: "service" as const, principal: "unregistered.matrix.internal", trustedUserIds: [] },
-    { principalType: "provider" as const, principal: "unknown-provider", trustedUserIds: [] }
+    { principalType: "service" as const, principal: "unregistered.matrix.internal", trustedUserIds: [] }
   ])("rejects unverified or overbroad trust atomically: %j", (patch) => {
     const workspace = initialAccessWorkspace("org-xiak"), before = structuredClone(workspace);
     expect(() => applyAccessWorkspaceCommand(workspace, { ...accountRole, ...patch }, roleContext)).toThrow("invalidTrust");
@@ -250,11 +249,10 @@ describe("role trust, boundaries and temporary session diagnostics", () => {
     workspace = applyAccessWorkspaceCommand(workspace, { kind: "delete-role", id: roleContext.id }, roleContext);
     expect(evaluateRoleSessionAccess(workspace, userIds, "session-logs", request, request.at!).error).toBe("unavailableSession");
   });
-  it("only recognizes registered workloads and never treats a mapping preview as a role session", () => {
+  it("only recognizes registered workloads and never invents a role session", () => {
     const workspace = initialAccessWorkspace("org-xiak");
     expect(evaluateRoleAssumption(workspace, userIds, { ...assumption, roleId: "role-pipeline", caller: { type: "service", id: "devops.matrix.internal" } }).allowed).toBe(true);
     expect(evaluateRoleAssumption(workspace, userIds, { ...assumption, roleId: "role-pipeline", caller: { type: "service", id: "forged.matrix.internal" } }).allowed).toBe(false);
-    expect(workspace.roleSsoMappings[0]).toMatchObject({ providerId: "idp-example", roleId: "role-audit", enabled: true });
     expect(workspace.roleSessions).toHaveLength(0);
   });
   it("validates operation limits without replacing policies not included in a delta", () => {

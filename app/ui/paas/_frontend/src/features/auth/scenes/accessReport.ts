@@ -90,7 +90,7 @@ export type AccessAnalysisTrustEntry = {
   id: string;
   accountId: string;
   name: string;
-  kind: "roleSsoMapping" | "serviceWorkload";
+  kind: "serviceWorkload";
   principal: string;
   roleId: string;
   roleName: string;
@@ -98,7 +98,7 @@ export type AccessAnalysisTrustEntry = {
   sourceName: string;
   configuration: "configured" | "incomplete" | "disabled";
   createdAt: string;
-  target: { view: Extract<AccountAccessView, "providers" | "roles">; id?: string };
+  target: { view: Extract<AccountAccessView, "roles">; id: string };
 };
 
 function assertReportAccount(workspace: AccessWorkspace, scene: AccountAccessScene) {
@@ -252,29 +252,6 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
   rule: AccessAnalysisRulePreview;
 } {
   assertReportAccount(workspace, scene);
-  const mappingEntries: AccessAnalysisTrustEntry[] = workspace.roleSsoMappings.map((mapping) => {
-    const provider = workspace.providers.find((candidate) => candidate.id === mapping.providerId);
-    const role = workspace.roles.find((candidate) => candidate.id === mapping.roleId);
-    const configuration = !mapping.enabled
-      ? "disabled"
-      : !provider?.enabled || !role || role.principalType !== "provider" || role.principal !== mapping.providerId
-        ? "incomplete"
-        : "configured";
-    return {
-      id: `role-sso-mapping:${mapping.id}`,
-      accountId: workspace.accountId,
-      name: mapping.name,
-      kind: "roleSsoMapping",
-      principal: mapping.subjectSample,
-      roleId: mapping.roleId,
-      roleName: role?.name ?? mapping.roleId,
-      sourceId: mapping.providerId,
-      sourceName: provider?.name ?? mapping.providerId,
-      configuration,
-      createdAt: mapping.createdAt,
-      target: { view: "providers" }
-    };
-  });
   const serviceEntries: AccessAnalysisTrustEntry[] = workspace.roles
     .filter((role) => role.principalType === "service")
     .map((role) => ({
@@ -301,7 +278,7 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
       { id: "PAAS_RESULTS", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null },
       { id: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null }
     ],
-    trustEntries: [...mappingEntries, ...serviceEntries],
+    trustEntries: serviceEntries,
     unusedFindings: buildUnusedAccessFindingPreview(workspace, scene),
     scanPreview: {
       state: "FAILED",

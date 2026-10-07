@@ -227,7 +227,6 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
         <WorkspaceCollection embedded title={t("external.entries")} description={t("external.directoryHint")} items={analysis.trustEntries}
           columns={[t("external.entry"), t("external.principal"), t("external.source"), t("external.role"), t("external.status")]}
           keywords={(entry) => `${entry.name} ${entry.principal} ${entry.roleName} ${entry.sourceName}`}
-          filter={{ label: t("external.entryType"), options: (["roleSsoMapping", "serviceWorkload"] as const).map((value) => ({ value, label: t(`external.kinds.${value}`) })), matches: (entry, value) => entry.kind === value }}
           row={(entry) => <><td><button className={styles.userLink} onClick={() => setSelectedTrustEntry(entry)}>{entry.name}</button><small>{t(`external.kinds.${entry.kind}`)}</small></td><td><code>{entry.principal}</code></td><td>{entry.sourceName}{entry.sourceId !== entry.sourceName ? <small>{entry.sourceId}</small> : null}</td><td>{entry.roleName}<small>{entry.roleId}</small></td><td><Badge status={trustEntryStatus[entry.configuration]}>{t(`external.states.${entry.configuration}`)}</Badge></td></>}
           footerNote={t("external.directoryHint")} />
       </Tabs.Content>
