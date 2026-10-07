@@ -110,6 +110,7 @@ jobs:
           cleanup() {
             cleanup_task "$POSTGRES_HA_TASK-lifecycle"
             cleanup_task "$POSTGRES_HA_TASK-failclosed"
+            cleanup_task "$POSTGRES_HA_TASK-authority"
             if test -n "${postgres_image_id:-}" && docker image inspect "$postgres_image_id" >/dev/null 2>&1; then
               docker image rm "$postgres_image_id"
             fi
@@ -125,6 +126,11 @@ jobs:
             MATRIX_POSTGRES_HA_TASK="$POSTGRES_HA_TASK" \
             go test -v -race -p 1 -count=1 -timeout 6m \
               ./app/service/installation/test/postgresqlha
+          MATRIX_POSTGRES_HA_AUTHORITY_ACCEPTANCE=1 \
+            MATRIX_POSTGRES_HA_IMAGE_ID="$postgres_image_id" \
+            MATRIX_POSTGRES_HA_TASK="$POSTGRES_HA_TASK" \
+            go test -v -race -p 1 -count=1 -timeout 6m \
+              ./test/authorityprocess -run '^TestIAMPostgreSQLFailoverProcesses$'
           cleanup
           trap - EXIT INT TERM
           test -z "$(docker container ls --all --quiet --filter 'label=matrix.slice=postgres-ha-acceptance')"

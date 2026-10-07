@@ -97,7 +97,11 @@
 
 基础门禁写入一个真实确认事务，保存primary flush与standby replay LSN，要求切换后记录仍恰好存在、相对该checkpoint的`ConfirmedRPOBytes=0`、fence→promote→switch→ready时间顺序成立且本轮RTO不超过45秒；另一路故意使standby角色不可观察，要求切换拒绝、稳定端点不可写且健康原主不被误删。donor后继固定`3fa5e8959d8c41bf51d41698df0fff73cafa089a`的[Verification 37555449639](https://github.com/xiak/matrix/actions/runs/37555449639)中该独立`installation-postgres-ha`任务实际completed/success，但同一run的authority-runtime及最终汇总失败，因此这里只把该任务当作夹具来源证据，不继承整个提交验收。当前分支本地无Docker服务，仅已通过不触发Docker的配置拒绝、package/architecture聚焦race、vet、workflow YAML/Bash语法和diff检查；精确当前源码的真实CI仍待执行。
 
-该夹具不是产品HA实现：稳定端点是测试进程内TCP转发器，没有自动选主、跨故障域、签名安装拓扑或生产代理；marker表也没有运行IAM/Audit/PaaS进程、受限登录、在途授权/撤权、未知提交、outbox/Audit链或连接池重建。因此它只关闭可重复物理复制/fencing基础环境缺口，不能把AC-11数据库HA标记为通过。下一纵向门禁必须让当前真实authority组合通过该端点建立受限状态，在确认checkpoint前提交授权与撤销，切换期间观察失败关闭和未知写处理，切换后从另一IAM副本证明已确认状态、撤权及历史outbox不丢失，并在旧主重入后证明不能复权；实际发布支持仍须安装owner提供匹配Profile的签名拓扑。
+该夹具不是产品HA实现：稳定端点是测试进程内TCP转发器，没有自动选主、跨故障域、签名安装拓扑或生产代理；基础marker场景本身也不能证明authority运行语义。因此它只关闭可重复物理复制/fencing基础环境缺口，不能把AC-11数据库HA标记为通过。
+
+当前后继候选在既有`test/authorityprocess` owner中让两个真实IAM、Audit和IAM dispatcher通过该端点使用各自受限数据库登录：root与普通User完成真实登录/改密，普通User先由系统策略附件取得PaaS读取权限；停止dispatcher后撤销附件并保存CREATE/REVOKE完成回执与待投递outbox，再取得同步checkpoint。切换期间持续以被撤主体请求授权，唯一可接受结果是当前Deny、明确503或传输不可用，任何旧Allow或其他状态都失败；调用方不把未知响应当成permit，也不自动重放为写成功。切换后重新建立管理连接，核对两个IAM仍拒绝、原完成回执逐字段不变、待投递事实仍在；新的受限worker完成投递后，每个IAM outbox event在Audit恰好一条并完成租户链验证。旧主删除原卷、从新主重建为只读standby后仍不能复权。
+
+本候选在`GOMAXPROCS=2`下通过全仓无缓存race、vet、模块校验、architecture、格式、workflow YAML/Bash语法及diff检查；默认测试明确SKIP需要Docker的双节点路径，不能把编译通过当成运行通过。真实双节点/真实进程运行只能由独立受限CI证明；在精确当前提交的该作业成功前，不将上述运行结果写成已发生证据。即使该门禁通过，它仍只证明测试端点下的当前authority故障边界，不提供自动选主、生产代理、跨故障域或匹配Profile的签名安装拓扑；这些仍须安装owner另行交付和验收。
 
 AC-11 的服务副本证据：2026-09-11 现有 `TestIndependentIAMAuditAndPaaSProcesses` 在本任务独立 PG18 下通过，两个真实 IAM 进程分别使用最多 2 连接的受限登录。原实例会话可在另一实例使用，跨副本 grant/revoke 与 session revoke 生效；原实例停止后另一实例仍正确允许租户读取并拒绝已撤平台权限；仅副本登录 NOLOGIN+断开该登录连接期间返回 503，恢复后继续工作。原 5721 保留升级与该组合门禁合计 56.307s。没有负载均衡自动切换、数据库主备切换、容量/公平性 SLO 或完整 HA 验收结论，AC-11 尚未满足。
 
