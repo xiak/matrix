@@ -20,9 +20,24 @@ import styles from "./AccountAccessRenderer.module.css";
 type FailureStatus = "forbidden" | "routeUnavailable" | "unavailable" | "expired";
 type RelationState = { status: "loading" } | ServiceLinkedRoleDirectoryLoad;
 type TemplateState = { status: "loading" } | ServiceRoleTemplateLoad;
+type RelationDirectoryResult = {
+  client: ServiceLinkedRoleClient;
+  state: RelationState;
+  pages: ServiceLinkedRoleDirectory[];
+  pageIndex: number;
+};
+type TemplateResult = { client: ServiceRoleTemplateClient; state: TemplateState };
+type PagingState<Client> = { client: Client; busy: boolean; failure: FailureStatus | null };
 type Selection =
-  | { kind: "relation"; roleId: string; roleName: string }
-  | { kind: "template"; template: ServiceRoleTemplate };
+  | { kind: "relation"; client: ServiceLinkedRoleClient; roleId: string; roleName: string }
+  | { kind: "template"; client: ServiceRoleTemplateClient; template: ServiceRoleTemplate };
+
+const loadingRelationState: RelationState = { status: "loading" };
+const loadingTemplateState: TemplateState = { status: "loading" };
+
+function loadingRelationResult(client: ServiceLinkedRoleClient): RelationDirectoryResult {
+  return { client, state: loadingRelationState, pages: [], pageIndex: 0 };
+}
 
 function durationLabel(seconds: number): string {
   if (seconds % 3600 === 0) return `${seconds / 3600} h`;
@@ -62,24 +77,23 @@ function RelationDirectory({ client, onOpen }: {
   onOpen(listing: ServiceLinkedRoleListing, trigger: HTMLButtonElement): void;
 }) {
   const t = useTranslations("ServiceAuthorizationDirectory");
-  const [state, setState] = useState<RelationState>({ status: "loading" });
-  const [pages, setPages] = useState<ServiceLinkedRoleDirectory[]>([]);
-  const [pageIndex, setPageIndex] = useState(0);
-  const [paging, setPaging] = useState(false);
-  const [pageFailure, setPageFailure] = useState<FailureStatus | null>(null);
+  const [result, setResult] = useState<RelationDirectoryResult>(() => loadingRelationResult(client));
+  const visibleResult = result.client === client ? result : loadingRelationResult(client);
+  const { state, pages, pageIndex } = visibleResult;
+  const [pagingState, setPagingState] = useState<PagingState<ServiceLinkedRoleClient>>(() => ({ client, busy: false, failure: null }));
+  const paging = pagingState.client === client && pagingState.busy;
+  const pageFailure = pagingState.client === client ? pagingState.failure : null;
   const request = useRef(0);
-  const pagingRequest = useRef(false);
+  const pagingRequest = useRef<ServiceLinkedRoleClient | null>(null);
 
   const load = useCallback(() => {
     const revision = ++request.current;
-    setState({ status: "loading" });
-    setPages([]);
-    setPageIndex(0);
-    setPageFailure(null);
+    pagingRequest.current = null;
+    setResult(loadingRelationResult(client));
+    setPagingState({ client, busy: false, failure: null });
     client.list().then((result) => {
       if (request.current !== revision) return;
-      setState(result);
-      if (result.status === "ready") setPages([result.directory]);
+      setResult({ client, state: result, pages: result.status === "ready" ? [result.directory] : [], pageIndex: 0 });
     });
   }, [client]);
 
@@ -87,28 +101,33 @@ function RelationDirectory({ client, onOpen }: {
     const revision = ++request.current;
     client.list().then((result) => {
       if (request.current !== revision) return;
-      setState(result);
-      if (result.status === "ready") setPages([result.directory]);
+      setResult({ client, state: result, pages: result.status === "ready" ? [result.directory] : [], pageIndex: 0 });
     });
     return () => { request.current += 1; };
   }, [client]);
 
   const current = pages[pageIndex] ?? (state.status === "ready" ? state.directory : null);
   const nextPage = async () => {
-    if (!current || pagingRequest.current || !current.nextAfter) return;
-    if (pages[pageIndex + 1]) { setPageIndex((value) => value + 1); setPageFailure(null); return; }
-    pagingRequest.current = true;
-    setPaging(true); setPageFailure(null);
+    if (!current || pagingRequest.current === client || !current.nextAfter) return;
+    if (pages[pageIndex + 1]) {
+      setResult((value) => value.client === client ? { ...value, pageIndex: value.pageIndex + 1 } : value);
+      setPagingState({ client, busy: false, failure: null });
+      return;
+    }
+    pagingRequest.current = client;
+    setPagingState({ client, busy: true, failure: null });
     const revision = request.current;
-    const result = await client.list(current.nextAfter);
+    const next = await client.list(current.nextAfter);
     if (request.current !== revision) return;
-    if (result.status === "ready") {
+    if (next.status === "ready") {
       const known = new Set(pages.flatMap((page) => page.items.map((item) => item.relation.role.id)));
-      if (result.directory.items.some((item) => known.has(item.relation.role.id))) setPageFailure("unavailable");
-      else { setPages((value) => [...value, result.directory]); setPageIndex((value) => value + 1); }
-    } else setPageFailure(result.status);
-    pagingRequest.current = false;
-    setPaging(false);
+      if (next.directory.items.some((item) => known.has(item.relation.role.id))) setPagingState({ client, busy: false, failure: "unavailable" });
+      else {
+        setResult((value) => value.client === client ? { ...value, pages: [...value.pages, next.directory], pageIndex: value.pageIndex + 1 } : value);
+        setPagingState({ client, busy: false, failure: null });
+      }
+    } else setPagingState({ client, busy: false, failure: next.status });
+    pagingRequest.current = null;
   };
 
   return <section className={styles.stack} aria-labelledby="service-linked-role-directory-title">
@@ -129,7 +148,10 @@ function RelationDirectory({ client, onOpen }: {
           <td data-label={t("fields.stateAndTime")}><Badge status={item.relation.role.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${item.relation.role.status}`)}</Badge><small><WorkspaceTime value={item.relation.role.updatedAt} /></small></td>
         </tr>)}</tbody>
       </Table> : <EmptyState title={t("relations.emptyTitle")} description={t("relations.emptyDescription")} />}
-      <CursorFooter page={pageIndex + 1} hasNext={Boolean(current.nextAfter || pages[pageIndex + 1])} busy={paging} previous={() => { setPageIndex((value) => Math.max(0, value - 1)); setPageFailure(null); }} next={nextPage}
+      <CursorFooter page={pageIndex + 1} hasNext={Boolean(current.nextAfter || pages[pageIndex + 1])} busy={paging} previous={() => {
+        setResult((value) => value.client === client ? { ...value, pageIndex: Math.max(0, value.pageIndex - 1) } : value);
+        setPagingState({ client, busy: false, failure: null });
+      }} next={nextPage}
         note={current.nextAfter ? t("relations.more") : t("relations.complete", { count: current.items.length })} />
       {pageFailure ? <Alert status="warning">{t(`errors.relations.${pageFailure}.description`)}</Alert> : null}
     </> : null}
@@ -188,7 +210,8 @@ function TemplateDirectory({ client, onOpen }: { client: ServiceRoleTemplateClie
   const t = useTranslations("ServiceRoleTemplateDirectory");
   const w = useTranslations("IamWorkspace");
   const toolbarLabels = useTableToolbarLabels();
-  const [state, setState] = useState<TemplateState>({ status: "loading" });
+  const [result, setResult] = useState<TemplateResult>(() => ({ client, state: loadingTemplateState }));
+  const state = result.client === client ? result.state : loadingTemplateState;
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const [purpose, setPurpose] = useState<"all" | ServiceRoleTemplate["spec"]["servicePurpose"]>("all");
@@ -198,12 +221,12 @@ function TemplateDirectory({ client, onOpen }: { client: ServiceRoleTemplateClie
   const request = useRef(0);
   const retry = useCallback(() => {
     const revision = ++request.current;
-    setState({ status: "loading" });
-    client.load().then((result) => { if (request.current === revision) setState(result); });
+    setResult({ client, state: loadingTemplateState });
+    client.load().then((next) => { if (request.current === revision) setResult({ client, state: next }); });
   }, [client]);
   useEffect(() => {
     const revision = ++request.current;
-    client.load().then((result) => { if (request.current === revision) setState(result); });
+    client.load().then((next) => { if (request.current === revision) setResult({ client, state: next }); });
     return () => { request.current += 1; };
   }, [client]);
   const filtered = useMemo(() => {
@@ -361,15 +384,22 @@ export function AccountServiceAuthorizations({ relations, templates, onBack }: {
   const t = useTranslations("ServiceAuthorizationDirectory");
   const [section, setSection] = useState(relations ? "authorizations" : "templates");
   const [selection, setSelection] = useState<Selection | null>(null);
-  const returnFocus = useRef<HTMLButtonElement | null>(null);
-  const previousSelection = useRef<Selection | null>(selection);
+  const visibleSelection = selection?.kind === "relation"
+    ? selection.client === relations ? selection : null
+    : selection?.client === templates ? selection : null;
+  const returnFocus = useRef<{ client: ServiceLinkedRoleClient | ServiceRoleTemplateClient; element: HTMLButtonElement } | null>(null);
+  const previousSelection = useRef<Selection | null>(visibleSelection);
   useLayoutEffect(() => {
-    if (previousSelection.current && !selection) returnFocus.current?.focus({ preventScroll: true });
-    previousSelection.current = selection;
-  }, [selection]);
+    if (previousSelection.current && !visibleSelection) {
+      const target = returnFocus.current;
+      const currentClient = previousSelection.current.kind === "relation" ? relations : templates;
+      if (target?.client === currentClient) target.element.focus({ preventScroll: true });
+    }
+    previousSelection.current = visibleSelection;
+  }, [relations, templates, visibleSelection]);
 
-  if (selection?.kind === "relation" && relations) return <RelationDetail client={relations} roleId={selection.roleId} initialName={selection.roleName} onBack={() => setSelection(null)} />;
-  if (selection?.kind === "template") return <TemplateDetail template={selection.template} onBack={() => setSelection(null)} />;
+  if (visibleSelection?.kind === "relation") return <RelationDetail client={visibleSelection.client} roleId={visibleSelection.roleId} initialName={visibleSelection.roleName} onBack={() => setSelection(null)} />;
+  if (visibleSelection?.kind === "template") return <TemplateDetail template={visibleSelection.template} onBack={() => setSelection(null)} />;
 
   return <Card aria-description={t("hint")}>
     <ContentPage.Heading title={t("title")} scrollKey="service-authorization-directory" back={{ label: t("backToRoles"), onClick: onBack }} focus />
@@ -380,8 +410,14 @@ export function AccountServiceAuthorizations({ relations, templates, onBack }: {
         {relations ? <Tabs.Trigger value="authorizations">{t("sections.authorizations")}</Tabs.Trigger> : null}
         {templates ? <Tabs.Trigger value="templates">{t("sections.templates")}</Tabs.Trigger> : null}
       </Tabs.List>
-      {relations ? <Tabs.Content className={styles.stack} value="authorizations">{section === "authorizations" ? <RelationDirectory client={relations} onOpen={(listing, trigger) => { returnFocus.current = trigger; setSelection({ kind: "relation", roleId: listing.relation.role.id, roleName: listing.relation.role.name }); }} /> : null}</Tabs.Content> : null}
-      {templates ? <Tabs.Content className={styles.stack} value="templates">{section === "templates" ? <TemplateDirectory client={templates} onOpen={(template, trigger) => { returnFocus.current = trigger; setSelection({ kind: "template", template }); }} /> : null}</Tabs.Content> : null}
+      {relations ? <Tabs.Content className={styles.stack} value="authorizations">{section === "authorizations" ? <RelationDirectory client={relations} onOpen={(listing, trigger) => {
+        returnFocus.current = { client: relations, element: trigger };
+        setSelection({ kind: "relation", client: relations, roleId: listing.relation.role.id, roleName: listing.relation.role.name });
+      }} /> : null}</Tabs.Content> : null}
+      {templates ? <Tabs.Content className={styles.stack} value="templates">{section === "templates" ? <TemplateDirectory client={templates} onOpen={(template, trigger) => {
+        returnFocus.current = { client: templates, element: trigger };
+        setSelection({ kind: "template", client: templates, template });
+      }} /> : null}</Tabs.Content> : null}
     </Tabs.Root>
   </Card>;
 }

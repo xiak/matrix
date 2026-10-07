@@ -6,7 +6,8 @@ import type {
   ServiceLinkedRoleAccessLoad,
   ServiceLinkedRoleClient,
   ServiceLinkedRoleDirectoryLoad,
-  ServiceRoleTemplateClient
+  ServiceRoleTemplateClient,
+  ServiceRoleTemplateLoad
 } from "../application/AccountAccessProvider";
 import type {
   ServiceLinkedRoleAccess,
@@ -146,6 +147,62 @@ describe("AccountServiceAuthorizations", () => {
     expect(within(table).getByText(relation.role.name)).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("button", { name: /授权|解绑|撤销|承担/ })).toBeNull();
+  });
+
+  it("hides a previous relation directory immediately when the live client is replaced", async () => {
+    const first: ServiceLinkedRoleClient = {
+      accountId: "account-xiak",
+      sessionRevision: 1,
+      list: vi.fn().mockResolvedValue({ status: "ready", directory }),
+      read: vi.fn()
+    };
+    let resolveReplacement!: (value: ServiceLinkedRoleDirectoryLoad) => void;
+    const replacement: ServiceLinkedRoleClient = {
+      accountId: "account-xiak",
+      sessionRevision: 1,
+      list: vi.fn().mockImplementation(() => new Promise((done) => { resolveReplacement = done; })),
+      read: vi.fn()
+    };
+    const view = render(<LocaleProvider><AccountServiceAuthorizations relations={first} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+    expect(await screen.findByRole("button", { name: relation.role.name })).toBeTruthy();
+
+    view.rerender(<LocaleProvider><AccountServiceAuthorizations relations={replacement} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+    expect(screen.getByRole("heading", { name: "服务授权" })).toBeTruthy();
+    expect(screen.getByText("正在读取当前账号的服务授权")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: relation.role.name })).toBeNull();
+
+    resolveReplacement({ status: "forbidden" });
+    expect(await screen.findByText("无权查看当前账号服务授权")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: relation.role.name })).toBeNull();
+  });
+
+  it("binds template rows and an open template detail to the exact live client", async () => {
+    const first: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templates }) };
+    let resolveReplacement!: (value: ServiceRoleTemplateLoad) => void;
+    const replacementDirectory: ServiceRoleTemplateDirectory = { items: [{
+      ...templates.items[0]!,
+      id: "managedservice.replacement-reader",
+      spec: { ...templates.items[0]!.spec, roleName: "ManagedServiceReplacementReader" }
+    }] };
+    const replacement: ServiceRoleTemplateClient = {
+      sessionRevision: 1,
+      load: vi.fn().mockImplementation(() => new Promise((done) => { resolveReplacement = done; }))
+    };
+    const user = userEvent.setup();
+    const view = render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={first} onBack={vi.fn()} /></LocaleProvider>);
+    expect(await screen.findByRole("button", { name: templateReference.id })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: templateReference.id }));
+    expect(screen.getByRole("heading", { name: `服务授权模板 · ${templateReference.id}` })).toBeTruthy();
+
+    view.rerender(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={replacement} onBack={vi.fn()} /></LocaleProvider>);
+    expect(screen.queryByRole("heading", { name: `服务授权模板 · ${templateReference.id}` })).toBeNull();
+    expect(screen.getByRole("heading", { name: "服务授权" })).toBeTruthy();
+    expect(screen.getAllByText("正在读取服务授权模板").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: templateReference.id })).toBeNull();
+
+    resolveReplacement({ status: "ready", directory: replacementDirectory });
+    expect(await screen.findByRole("button", { name: "managedservice.replacement-reader" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: templateReference.id })).toBeNull();
   });
 
   it("opens backend-confirmed binding history in content and preserves revoked records", async () => {
