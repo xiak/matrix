@@ -17,7 +17,9 @@ import (
 )
 
 var _ port.Authorizer = (*Client)(nil)
+var _ port.BatchAuthorizer = (*Client)(nil)
 var _ port.AccessKeyAuthorizer = (*Client)(nil)
+var _ port.AccessKeyListAuthorizer = (*Client)(nil)
 var _ verifyinstallation.IAM = (*Client)(nil)
 
 type Config struct {
@@ -168,6 +170,135 @@ func (client *Client) AuthorizeAccessKey(
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	return authorization, nil
+}
+
+func (client *Client) AuthorizeBatch(
+	ctx context.Context,
+	request port.AuthorizationBatchRequest,
+) (port.AuthorizationBatch, error) {
+	if client == nil || client.http == nil {
+		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+	}
+	if ctx == nil || port.ValidateAuthorizationBatchRequest(request) != nil {
+		return port.AuthorizationBatch{}, port.ErrUnauthenticated
+	}
+	subjectCredential, err := parseBearer(request.Credential)
+	if err != nil {
+		return port.AuthorizationBatch{}, port.ErrUnauthenticated
+	}
+	iamRequests := make([]iamv1.AuthorizationRequest, len(request.Requests))
+	for index := range request.Requests {
+		mapped, mapErr := toIAMRequest(request.Requests[index])
+		if mapErr != nil {
+			return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+		}
+		iamRequests[index] = mapped
+	}
+	iamRequest := iamv1.AuthorizationBatchRequest{Requests: iamRequests}
+	body, err := json.Marshal(iamRequest)
+	if err != nil {
+		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+	}
+	defer clear(body)
+	response, err := client.http.Do(ctx, http.MethodPost, "/v1/authorize:batch",
+		bytes.NewReader(body), "application/json", client.serviceCredential, subjectCredential)
+	if err != nil {
+		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return port.AuthorizationBatch{}, authorizationStatusError(response.StatusCode)
+	}
+	var decision iamv1.AuthorizationBatchDecision
+	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &decision) != nil ||
+		iamv1.CheckAuthorizationBatchDecisionForRequest(decision, iamRequest) != nil {
+		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+	}
+	result, err := authorizationBatchFromDecision(decision)
+	if err != nil || port.ValidateAuthorizationBatchForRequest(result, request) != nil {
+		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+	}
+	return result, nil
+}
+
+func (client *Client) AuthorizeAccessKeyList(
+	ctx context.Context,
+	request port.AccessKeyListAuthorizationRequest,
+) (port.AccessKeyListAuthorization, error) {
+	if client == nil || client.http == nil {
+		return port.AccessKeyListAuthorization{}, port.ErrAuthorizationUnavailable
+	}
+	if ctx == nil || port.ValidateAccessKeyListAuthorizationRequest(request) != nil {
+		return port.AccessKeyListAuthorization{}, port.ErrUnauthenticated
+	}
+	iamRequest, err := port.NewIAMAccessKeyListAuthorizationRequest(request)
+	if err != nil {
+		return port.AccessKeyListAuthorization{}, port.ErrAuthorizationUnavailable
+	}
+	body, err := iamv1.EncodeAccessKeyListAuthorizationRequest(iamRequest)
+	if err != nil {
+		return port.AccessKeyListAuthorization{}, port.ErrUnauthenticated
+	}
+	defer clear(body)
+	response, err := client.http.Do(ctx, http.MethodPost, "/v1/authorize:access-key-list",
+		bytes.NewReader(body), "application/json", client.serviceCredential, iamv1.Secret{})
+	if err != nil {
+		return port.AccessKeyListAuthorization{}, port.ErrAuthorizationUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return port.AccessKeyListAuthorization{}, authorizationStatusError(response.StatusCode)
+	}
+	decision, err := iamv1.DecodeAccessKeyListAuthorization(response.Body)
+	if err != nil || iamv1.CheckAccessKeyListAuthorizationForRequest(decision, iamRequest) != nil {
+		return port.AccessKeyListAuthorization{}, port.ErrAuthorizationUnavailable
+	}
+	if !decision.Collection.Allowed {
+		return port.AccessKeyListAuthorization{}, port.ErrPermissionDenied
+	}
+	collection, err := authorizationFromDecision(decision.Collection)
+	if err != nil {
+		return port.AccessKeyListAuthorization{}, err
+	}
+	batchDecision := iamv1.AuthorizationBatchDecision{
+		APIVersion: iamv1.APIVersion, Kind: "AuthorizationBatchDecision",
+		TenantID: decision.Collection.TenantID, Subject: *decision.Collection.Subject,
+		Profile: *decision.Collection.Profile, Action: decision.Collection.Action,
+		ResourceKind: decision.Collection.Resource.Kind, NetworkContext: decision.Collection.NetworkContext,
+		CorrelationID: decision.Collection.CorrelationID, DecidedAt: decision.Collection.DecidedAt,
+		Decisions: decision.Instances,
+	}
+	instances, err := authorizationBatchFromDecision(batchDecision)
+	if err != nil {
+		return port.AccessKeyListAuthorization{}, port.ErrAuthorizationUnavailable
+	}
+	result := port.AccessKeyListAuthorization{Collection: collection, Instances: instances}
+	if port.ValidateAccessKeyListAuthorizationForRequest(result, request) != nil {
+		return port.AccessKeyListAuthorization{}, port.ErrAuthorizationUnavailable
+	}
+	return result, nil
+}
+
+func authorizationBatchFromDecision(decision iamv1.AuthorizationBatchDecision) (port.AuthorizationBatch, error) {
+	subject, err := toPaaSSubject(decision.Subject)
+	if err != nil {
+		return port.AuthorizationBatch{}, err
+	}
+	result := port.AuthorizationBatch{
+		TenantID: paasv1.TenantID(decision.TenantID), Subject: subject,
+		Items: make([]port.AuthorizationBatchItem, len(decision.Decisions)),
+	}
+	for index, item := range decision.Decisions {
+		resource, mapErr := toPaaSResource(item.Resource)
+		if mapErr != nil {
+			return port.AuthorizationBatch{}, mapErr
+		}
+		result.Items[index] = port.AuthorizationBatchItem{
+			Resource: resource, Allowed: item.Allowed, DecisionID: string(item.ID), RequestID: item.RequestID,
+			RequestTags: slices.Clone(item.RequestTags), ResourceTags: slices.Clone(item.ResourceTags),
+		}
+	}
+	return result, nil
 }
 
 func (client *Client) ResolveAccessKeySubject(
@@ -380,6 +511,22 @@ func toPaaSSubject(value iamv1.Subject) (paasv1.SubjectRef, error) {
 		return paasv1.SubjectRef{}, errors.New("IAM subject cannot map to PaaS")
 	}
 	return result, nil
+}
+
+func toPaaSResource(value iamv1.ResourceReference) (paasv1.ResourceRef, error) {
+	kinds := map[iamv1.ResourceKind]string{
+		iamv1.ResourceApplication:           port.ResourceApplication,
+		iamv1.ResourceConfiguration:         port.ResourceConfiguration,
+		iamv1.ResourceConfigurationRevision: port.ResourceConfigurationRevision,
+		iamv1.ResourceApplicationRevision:   port.ResourceApplicationRevision,
+		iamv1.ResourceDeployment:            port.ResourceDeployment,
+		iamv1.ResourceOperation:             port.ResourceOperation,
+	}
+	kind, known := kinds[value.Kind]
+	if !known || paasv1.ValidateID("resource.id", value.ID) != nil {
+		return paasv1.ResourceRef{}, errors.New("IAM resource cannot map to PaaS")
+	}
+	return paasv1.ResourceRef{Kind: kind, ID: paasv1.ResourceID(value.ID)}, nil
 }
 
 func parseBearer(value string) (iamv1.Secret, error) {

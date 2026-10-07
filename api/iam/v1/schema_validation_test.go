@@ -1357,11 +1357,71 @@ func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	listCollection, err := NewAuthorizationRequest(ActionPaaSApplicationRead,
+		ResourceReference{Kind: ResourceApplication, ID: "collection"}, AuthorizationResourceCollection,
+		AuthorizationCollectionList, "request-list", "correlation-list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listInstance, err := NewAuthorizationRequest(ActionPaaSApplicationRead,
+		ResourceReference{Kind: ResourceApplication, ID: "application-one"}, AuthorizationResourceInstance,
+		"", "request-list-one", "correlation-list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listInput := AccessKeyListAuthorizationRequest{Collection: listCollection,
+		Instances: []AuthorizationRequest{listInstance}, SignedRequest: input.SignedRequest}
+	listEncoded, err := EncodeAccessKeyListAuthorizationRequest(listInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(listEncoded)
+	listDenied := AccessKeyListAuthorization{APIVersion: APIVersion, Kind: "AccessKeyListAuthorization", SignedRequestDigest: digest,
+		Collection: AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-list-denied",
+			Reason: DecisionDenied, Action: listCollection.Action, Resource: listCollection.Resource,
+			Profile: &listCollection.Profile, ResourceMode: listCollection.ResourceMode, CollectionUsage: listCollection.CollectionUsage,
+			RequestID: listCollection.RequestID, CorrelationID: listCollection.CorrelationID,
+			DecidedAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)}, Instances: []AuthorizationDecision{}}
+	if CheckAccessKeyListAuthorizationForRequest(listDenied, listInput) != nil {
+		t.Fatal("invalid list denial fixture")
+	}
+	listDeniedWire, err := json.Marshal(listDenied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keySubject := Subject{Type: SubjectUser, ID: "user-one", AccessKeyID: input.SignedRequest.Parameters.AccessKeyID}
+	listAllowed := AccessKeyListAuthorization{APIVersion: APIVersion, Kind: "AccessKeyListAuthorization", SignedRequestDigest: digest,
+		Collection: AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-list-allowed",
+			Allowed: true, Reason: DecisionAllowed, TenantID: "account-one", Subject: &keySubject,
+			Action: listCollection.Action, Resource: listCollection.Resource, Profile: &listCollection.Profile,
+			ResourceMode: listCollection.ResourceMode, CollectionUsage: listCollection.CollectionUsage,
+			RequestID: listCollection.RequestID, CorrelationID: listCollection.CorrelationID,
+			DecidedAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)},
+		Instances: []AuthorizationDecision{{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-list-one",
+			Allowed: true, Reason: DecisionAllowed, TenantID: "account-one", Subject: &keySubject,
+			Action: listInstance.Action, Resource: listInstance.Resource, Profile: &listInstance.Profile,
+			ResourceMode: listInstance.ResourceMode, RequestID: listInstance.RequestID, CorrelationID: listInstance.CorrelationID,
+			DecidedAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)}}}
+	if CheckAccessKeyListAuthorizationForRequest(listAllowed, listInput) != nil {
+		t.Fatal("invalid list allow fixture")
+	}
+	listAllowedWire, err := json.Marshal(listAllowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listLeaked := listDenied
+	listLeaked.Instances = append([]AuthorizationDecision(nil), listAllowed.Instances...)
+	listLeakedWire, err := json.Marshal(listLeaked)
+	if err != nil {
+		t.Fatal(err)
+	}
 	schemas := map[string]*jsonschema.Schema{
-		"AccessKeyAuthorizationRequest":  compileIAMOpenAPISchema(t, api, "AccessKeyAuthorizationRequest"),
-		"AccessKeyAuthorization":         compileIAMOpenAPISchema(t, api, "AccessKeyAuthorization"),
-		"ResolveAccessKeySubjectRequest": compileIAMOpenAPISchema(t, api, "ResolveAccessKeySubjectRequest"),
-		"AccessKeySubjectContext":        compileIAMOpenAPISchema(t, api, "AccessKeySubjectContext"),
+		"AccessKeyAuthorizationRequest":     compileIAMOpenAPISchema(t, api, "AccessKeyAuthorizationRequest"),
+		"AccessKeyAuthorization":            compileIAMOpenAPISchema(t, api, "AccessKeyAuthorization"),
+		"AccessKeyListAuthorizationRequest": compileIAMOpenAPISchema(t, api, "AccessKeyListAuthorizationRequest"),
+		"AccessKeyListAuthorization":        compileIAMOpenAPISchema(t, api, "AccessKeyListAuthorization"),
+		"ResolveAccessKeySubjectRequest":    compileIAMOpenAPISchema(t, api, "ResolveAccessKeySubjectRequest"),
+		"AccessKeySubjectContext":           compileIAMOpenAPISchema(t, api, "AccessKeySubjectContext"),
 	}
 	for _, sample := range []struct {
 		name, kind, wire   string
@@ -1393,6 +1453,12 @@ func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *tes
 		{"private-nonce", "AccessKeyAuthorization", replace(string(response), `"decision":`, `"nonce":"private","decision":`), false, false},
 		{"private-key-evidence", "AccessKeyAuthorization", replace(string(response), `"decision":`, `"keyEvidence":{},"decision":`), false, false},
 		{"wrong-content-digest", "AccessKeyAuthorization", replace(string(response), `"signedRequestDigest":"sha256:`, `"signedRequestDigest":"sha512:`), false, false},
+		{"list-explicit-wire", "AccessKeyListAuthorizationRequest", string(listEncoded), true, true},
+		{"list-account-selector", "AccessKeyListAuthorizationRequest", replace(string(listEncoded), `"collection":`, `"accountId":"other","collection":`), false, false},
+		{"list-denied", "AccessKeyListAuthorization", string(listDeniedWire), true, true},
+		{"list-deny-leaks-candidate", "AccessKeyListAuthorization", string(listLeakedWire), false, false},
+		{"list-allowed", "AccessKeyListAuthorization", string(listAllowedWire), true, true},
+		{"list-allow-login-subject", "AccessKeyListAuthorization", replace(string(listAllowedWire), `,"accessKeyId":"access-key-a"`, ``), false, false},
 		{"resolve-explicit-wire", "ResolveAccessKeySubjectRequest", string(resolveEncoded), true, true},
 		{"resolve-account-selector", "ResolveAccessKeySubjectRequest", replace(string(resolveEncoded), `"profile":`, `"accountId":"other","profile":`), false, false},
 		{"resolve-action-selector", "ResolveAccessKeySubjectRequest", replace(string(resolveEncoded), `"profile":`, `"action":"paas.application.read","profile":`), false, false},
@@ -1413,6 +1479,10 @@ func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *tes
 				_, err = DecodeAccessKeyAuthorizationRequest(strings.NewReader(sample.wire))
 			case "AccessKeyAuthorization":
 				_, err = DecodeAccessKeyAuthorization(strings.NewReader(sample.wire))
+			case "AccessKeyListAuthorizationRequest":
+				_, err = DecodeAccessKeyListAuthorizationRequest(strings.NewReader(sample.wire))
+			case "AccessKeyListAuthorization":
+				_, err = DecodeAccessKeyListAuthorization(strings.NewReader(sample.wire))
 			case "ResolveAccessKeySubjectRequest":
 				_, err = DecodeResolveAccessKeySubjectRequest(strings.NewReader(sample.wire))
 			case "AccessKeySubjectContext":

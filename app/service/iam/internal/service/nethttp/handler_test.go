@@ -299,6 +299,111 @@ func TestSignedAuthorizationTransportDoesNotAcceptSubjectSelectors(t *testing.T)
 	}
 }
 
+func TestSignedListAuthorizationTransportDoesNotAcceptSubjectSelectors(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	endpoint := newTestHandler(t, workflow)
+	collection, err := iamv1.NewAuthorizationRequest(
+		iamv1.ActionPaaSApplicationRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"},
+		iamv1.AuthorizationResourceCollection,
+		iamv1.AuthorizationCollectionList,
+		"signed-list-collection",
+		"signed-list-correlation",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := func(id, requestID string) iamv1.AuthorizationRequest {
+		t.Helper()
+		request, requestErr := iamv1.NewAuthorizationRequest(
+			iamv1.ActionPaaSApplicationRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id},
+			iamv1.AuthorizationResourceInstance,
+			"",
+			requestID,
+			"signed-list-correlation",
+		)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		return request
+	}
+	nonce, _ := iamv1.NewSecret(strings.Repeat("A", 22))
+	signature, _ := iamv1.NewSecret(strings.Repeat("A", 43))
+	input := iamv1.AccessKeyListAuthorizationRequest{
+		Collection: collection,
+		Instances: []iamv1.AuthorizationRequest{
+			instance("application-a", "signed-list-a"),
+			instance("application-b", "signed-list-b"),
+		},
+		SignedRequest: iamv1.AccessKeySignedRequest{
+			Parameters: iamv1.AccessKeySignatureParameters{
+				AccessKeyID: "key-one", InstallationID: "installation-one", Audience: iamv1.ProductPaaS,
+				SignedAt: 1700000000, Nonce: nonce,
+			},
+			HTTP: iamv1.AccessKeyHTTPRequest{
+				Method: "GET", Scheme: "https", Authority: "fixture.invalid:443", EscapedPath: "/api/paas/v1/applications",
+				RawQuery: "after=cursor-one", BodyDigest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			},
+			Signature: signature,
+		},
+	}
+	body, err := iamv1.EncodeAccessKeyListAuthorizationRequest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(body)
+	for _, name := range []string{"valid", "subject-header", "duplicate-bearer", "query-selector", "body-selector", "encoding", "method", "media"} {
+		t.Run(name, func(t *testing.T) {
+			wire := body
+			if name == "body-selector" {
+				wire = append(append([]byte(nil), body[:len(body)-1]...), []byte(`,"accountId":"another-account"}`)...)
+				defer clear(wire)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/authorize:access-key-list", bytes.NewReader(wire))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer service-credential")
+			want := http.StatusBadRequest
+			switch name {
+			case "valid":
+				want = http.StatusOK
+			case "subject-header":
+				request.Header.Set("Matrix-Subject-Credential", "cannot-select-a-user")
+			case "duplicate-bearer":
+				request.Header.Add("Authorization", "Bearer another-service")
+				want = http.StatusUnauthorized
+			case "query-selector":
+				request.URL.RawQuery = "tenantId=another-account"
+			case "encoding":
+				request.Header.Set("Content-Encoding", "gzip")
+				want = http.StatusUnsupportedMediaType
+			case "method":
+				request.Method = http.MethodGet
+				want = http.StatusMethodNotAllowed
+			case "media":
+				request.Header.Set("Content-Type", "application/json; charset=utf-8")
+				want = http.StatusUnsupportedMediaType
+			}
+			before := workflow.keyListCalls
+			response := httptest.NewRecorder()
+			endpoint.ServeHTTP(response, request)
+			if response.Code != want {
+				t.Fatalf("list transport status=%d want=%d", response.Code, want)
+			}
+			if name == "valid" {
+				result, decodeErr := iamv1.DecodeAccessKeyListAuthorization(bytes.NewReader(response.Body.Bytes()))
+				if decodeErr != nil || iamv1.CheckAccessKeyListAuthorizationForRequest(result, input) != nil ||
+					workflow.keyListCalls != before+1 || !reflect.DeepEqual(workflow.keyListRequest, input) ||
+					response.Header().Get("Cache-Control") != "no-store" {
+					t.Fatal("signed list wire or sanitized response differs", decodeErr)
+				}
+			} else if workflow.keyListCalls != before {
+				t.Fatal("invalid list transport reached authority")
+			}
+		})
+	}
+}
+
 func TestSignedSubjectResolutionTransportIsExactAndNonAuthorizing(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	endpoint := newTestHandler(t, workflow)
@@ -2428,6 +2533,8 @@ type httpWorkflow struct {
 	diagnoseCalls                    int
 	authorizeBatchCalls              int
 	keyCalls                         int
+	keyListCalls                     int
+	keyListRequest                   iamv1.AccessKeyListAuthorizationRequest
 	keyResolveCalls                  int
 	keyResolveRequest                iamv1.ResolveAccessKeySubjectRequest
 	verifyInstallationCalls          int
@@ -3274,6 +3381,18 @@ func (workflow *httpWorkflow) AuthorizeAccessKey(_ context.Context, _ iamv1.Secr
 	decision.Action, decision.Resource, decision.RequestID, decision.CorrelationID = request.Authorization.Action, request.Authorization.Resource, request.Authorization.RequestID, request.Authorization.CorrelationID
 	decision.Profile, decision.ResourceMode, decision.CollectionUsage = &request.Authorization.Profile, request.Authorization.ResourceMode, request.Authorization.CollectionUsage
 	return iamv1.AccessKeyAuthorization{APIVersion: iamv1.APIVersion, Kind: "AccessKeyAuthorization", Decision: decision, SignedRequestDigest: digest}, err
+}
+
+func (workflow *httpWorkflow) AuthorizeAccessKeyList(_ context.Context, _ iamv1.Secret, request iamv1.AccessKeyListAuthorizationRequest) (iamv1.AccessKeyListAuthorization, error) {
+	workflow.keyListCalls++
+	workflow.keyListRequest = request
+	digest, err := iamv1.AccessKeySignedRequestDigest(request.SignedRequest)
+	decision := workflow.decision
+	decision.Allowed, decision.Reason, decision.Subject, decision.TenantID, decision.InstallationID = false, iamv1.DecisionDenied, nil, "", ""
+	decision.Action, decision.Resource, decision.RequestID, decision.CorrelationID = request.Collection.Action, request.Collection.Resource, request.Collection.RequestID, request.Collection.CorrelationID
+	decision.Profile, decision.ResourceMode, decision.CollectionUsage = &request.Collection.Profile, request.Collection.ResourceMode, request.Collection.CollectionUsage
+	return iamv1.AccessKeyListAuthorization{APIVersion: iamv1.APIVersion, Kind: "AccessKeyListAuthorization",
+		Collection: decision, Instances: []iamv1.AuthorizationDecision{}, SignedRequestDigest: digest}, err
 }
 
 func (workflow *httpWorkflow) ResolveAccessKeySubject(_ context.Context, _ iamv1.Secret, request iamv1.ResolveAccessKeySubjectRequest) (iamv1.AccessKeySubjectContext, error) {

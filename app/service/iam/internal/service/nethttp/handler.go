@@ -173,6 +173,7 @@ type Workflow interface {
 	ResolveAccessKeySubject(context.Context, iamv1.Secret, iamv1.ResolveAccessKeySubjectRequest) (iamv1.AccessKeySubjectContext, error)
 	AuthorizeBatch(context.Context, iamv1.Secret, iamv1.Secret, iamv1.AuthorizationBatchRequest) (iamv1.AuthorizationBatchDecision, error)
 	AuthorizeAccessKey(context.Context, iamv1.Secret, iamv1.AccessKeyAuthorizationRequest) (iamv1.AccessKeyAuthorization, error)
+	AuthorizeAccessKeyList(context.Context, iamv1.Secret, iamv1.AccessKeyListAuthorizationRequest) (iamv1.AccessKeyListAuthorization, error)
 	VerifyInstallation(
 		context.Context,
 		iamv1.Secret,
@@ -257,6 +258,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/internal/access-key-subject:resolve", value.resolveAccessKeySubject)
 	routes.HandleFunc("/v1/authorize:batch", value.authorizeBatch)
 	routes.HandleFunc("/v1/authorize:access-key", value.authorizeAccessKey)
+	routes.HandleFunc("/v1/authorize:access-key-list", value.authorizeAccessKeyList)
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
 	routes.HandleFunc("/v1/users", value.users)
 	routes.HandleFunc("/v1/users/", value.user)
@@ -1307,6 +1309,35 @@ func (value *handler) authorizeAccessKey(response http.ResponseWriter, request *
 		return
 	}
 	result, err := value.workflow.AuthorizeAccessKey(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) authorizeAccessKeyList(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	if len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	if len(request.Header.Values("Content-Encoding")) != 0 || len(request.Header.Values("Content-Type")) != 1 || request.Header.Get("Content-Type") != "application/json" {
+		writeProblem(response, requestID(request), http.StatusUnsupportedMediaType, "iam.media.unsupported", "IAM media type unsupported")
+		return
+	}
+	body, err := iamv1.DecodeAccessKeyListAuthorizationRequest(request.Body)
+	if err != nil {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.json.invalid", "IAM JSON invalid")
+		return
+	}
+	result, err := value.workflow.AuthorizeAccessKeyList(request.Context(), credential, body)
 	if err != nil {
 		value.writeError(response, request, err)
 		return

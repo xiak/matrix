@@ -102,6 +102,31 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 			t.Fatalf("security-mail material %s is not protected: %v", relative, err)
 		}
 	}
+	cursorKeys := map[string][]byte{}
+	for _, relative := range []string{layout.IAMCursorKey, layout.AuditCursorKey, layout.PaaSCursorKey} {
+		content := readTestFile(t, plan.Root, relative)
+		decoded, decodeErr := hex.DecodeString(string(content))
+		if decodeErr != nil || len(content) != 64 || len(decoded) != 32 || string(content) != strings.ToLower(string(content)) {
+			clear(content)
+			clear(decoded)
+			t.Fatalf("staged cursor key %s is invalid", relative)
+		}
+		for other, key := range cursorKeys {
+			if bytes.Equal(key, decoded) {
+				clear(content)
+				clear(decoded)
+				t.Fatalf("cursor key %s reused %s material", relative, other)
+			}
+		}
+		cursorKeys[relative] = decoded
+		clear(content)
+	}
+	defer func() {
+		for path, key := range cursorKeys {
+			clear(key)
+			delete(cursorKeys, path)
+		}
+	}()
 
 	serviceCredentials := make(map[iamv1.ServicePurpose][]byte, len(bootstrap.Services))
 	for _, service := range bootstrap.Services {
@@ -260,6 +285,9 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		administrator,
 		readTestFile(t, plan.Root, layout.PostgresPassword),
 		readTestFile(t, plan.Root, layout.BackupSealKey),
+		readTestFile(t, plan.Root, layout.IAMCursorKey),
+		readTestFile(t, plan.Root, layout.AuditCursorKey),
+		readTestFile(t, plan.Root, layout.PaaSCursorKey),
 	}
 	for _, credential := range serviceCredentials {
 		secrets = append(secrets, credential)
@@ -1727,6 +1755,7 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.ReleaseTrust, layout.IAMBootstrap, layout.AuditIAMCredential,
 		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
+		layout.PaaSCursorKey,
 		layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring,
 		layout.IAMEmailVerificationKeyring, layout.IAMSecurityMailSMTPChannel,
 		layout.IAMCursorKey,
@@ -1734,7 +1763,7 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.InitialAdministratorPassword,
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,
 		layout.IAMWorker, layout.IAMCredentialRecovery, layout.IAMAuthenticationRecovery,
-		layout.IAMBackupCustody, layout.IAMNotificationWorker,
+		layout.IAMBackupCustody, layout.IAMNotificationWorker, layout.IAMAccessAnalysisWorker,
 		layout.AuditRuntime, layout.PaaSAPI, layout.PaaSWorker,
 	}
 	result := make(map[string]string, len(paths))

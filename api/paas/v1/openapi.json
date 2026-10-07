@@ -301,6 +301,36 @@
         ],
         "type": "object"
       },
+      "ApplicationList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Application"
+            },
+            "maxItems": 50,
+            "type": "array"
+          },
+          "kind": {
+            "const": "ApplicationList"
+          },
+          "nextAfter": {
+            "maxLength": 384,
+            "minLength": 5,
+            "pattern": "^pc1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "items"
+        ],
+        "type": "object"
+      },
       "ApplicationRevision": {
         "additionalProperties": false,
         "properties": {
@@ -3051,6 +3081,62 @@
       }
     },
     "/v1/applications": {
+      "get": {
+        "operationId": "listApplications",
+        "parameters": [
+          {
+            "description": "Opaque PaaS continuation. Pass nextAfter unchanged; raw Application IDs and other selectors are rejected.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maxLength": 384,
+              "minLength": 5,
+              "pattern": "^pc1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplicationList"
+                }
+              }
+            },
+            "description": "Current tenant-scoped resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List Applications visible to the current IAM subject"
+      },
       "post": {
         "operationId": "createApplication",
         "parameters": [

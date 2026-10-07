@@ -916,6 +916,7 @@ type AuthorizationMutation struct {
 // Only the successful MAC path constructs this private, once-only evidence.
 // SQL resolves the service's full immutable identity from ServiceLookupDigest.
 type AccessKeyAuthorizationEvidence struct {
+	RequestEvidenceID              string            `json:"requestEvidenceId"`
 	AccessKeyID                    iamv1.AccessKeyID `json:"accessKeyId"`
 	ResourceVersion                uint64            `json:"resourceVersion"`
 	AccountSecuritySettingsVersion uint64            `json:"accountSecuritySettingsVersion"`

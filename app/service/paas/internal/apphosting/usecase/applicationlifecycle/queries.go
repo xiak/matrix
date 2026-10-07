@@ -6,9 +6,141 @@ import (
 	"fmt"
 	"maps"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 )
+
+func (usecase *Usecase) InspectApplicationDirectory(
+	ctx context.Context,
+	subject port.AuthorizationSubjectContext,
+	after paasv1.ResourceID,
+) (ApplicationDirectorySnapshot, error) {
+	if usecase == nil || usecase.repository == nil || ctx == nil ||
+		port.ValidateAuthorizationSubjectContext(subject) != nil ||
+		(after != "" && paasv1.ValidateID("after", string(after)) != nil) {
+		return ApplicationDirectorySnapshot{}, ErrInvalidArgument
+	}
+	var applications []paasv1.Application
+	var transactionErr error
+	for attempt := 0; attempt < usecase.config.MaxTransactionAttempts; attempt++ {
+		applications = nil
+		transactionErr = usecase.repository.WithinReadOnlyTransaction(ctx, subject.TenantID,
+			func(transactionContext context.Context, transaction Transaction) error {
+				var err error
+				applications, err = transaction.ListApplicationsAfter(transactionContext, after, paasv1.ApplicationDirectoryPageSize+1)
+				return err
+			})
+		if transactionErr == nil {
+			hasMore := len(applications) > paasv1.ApplicationDirectoryPageSize
+			if hasMore {
+				applications = applications[:paasv1.ApplicationDirectoryPageSize]
+			}
+			candidates := make([]ApplicationAuthorizationSnapshot, len(applications))
+			for index, application := range applications {
+				candidates[index] = ApplicationAuthorizationSnapshot{ID: application.Metadata.ID,
+					ResourceVersion: application.Metadata.ResourceVersion, Labels: maps.Clone(application.Metadata.Labels)}
+			}
+			return ApplicationDirectorySnapshot{Candidates: candidates, HasMore: hasMore}, nil
+		}
+		if !errors.Is(transactionErr, ErrRetryableTransaction) {
+			return ApplicationDirectorySnapshot{}, transactionErr
+		}
+		if err := ctx.Err(); err != nil {
+			return ApplicationDirectorySnapshot{}, err
+		}
+	}
+	return ApplicationDirectorySnapshot{}, fmt.Errorf("application directory inspection attempts exhausted: %w", transactionErr)
+}
+
+func (usecase *Usecase) ReadApplicationDirectory(
+	ctx context.Context,
+	command ReadApplicationDirectoryCommand,
+) ([]paasv1.Application, error) {
+	if usecase == nil || usecase.repository == nil || ctx == nil || validateApplicationDirectoryCommand(command) != nil {
+		return nil, ErrInvalidArgument
+	}
+	ids := make([]paasv1.ResourceID, len(command.Snapshot.Candidates))
+	for index, candidate := range command.Snapshot.Candidates {
+		ids[index] = candidate.ID
+	}
+	var applications []paasv1.Application
+	var transactionErr error
+	for attempt := 0; attempt < usecase.config.MaxTransactionAttempts; attempt++ {
+		applications = nil
+		transactionErr = usecase.repository.WithinReadOnlyTransaction(ctx, command.Subject.TenantID,
+			func(transactionContext context.Context, transaction Transaction) error {
+				var err error
+				applications, err = transaction.LoadApplications(transactionContext, ids)
+				if err != nil {
+					return err
+				}
+				if len(applications) != len(command.Snapshot.Candidates) {
+					return ErrAuthorizationSnapshotChanged
+				}
+				for index, application := range applications {
+					candidate := command.Snapshot.Candidates[index]
+					decision := command.Decisions.Items[index]
+					if application.Metadata.ID != candidate.ID ||
+						application.Metadata.ResourceVersion != candidate.ResourceVersion ||
+						!maps.Equal(application.Metadata.Labels, candidate.Labels) ||
+						port.ValidateAuthorizationResourceTagsForAction(port.Authorization{
+							TenantID: command.Decisions.TenantID, Subject: command.Decisions.Subject,
+							DecisionID: decision.DecisionID, RequestID: decision.RequestID,
+							RequestTags: decision.RequestTags, ResourceTags: decision.ResourceTags,
+						}, port.AuthorizeApplicationRead, application.Metadata.Labels) != nil {
+						return ErrAuthorizationSnapshotChanged
+					}
+				}
+				return nil
+			})
+		if transactionErr == nil {
+			allowed := make([]paasv1.Application, 0, len(applications))
+			for index, application := range applications {
+				if command.Decisions.Items[index].Allowed {
+					allowed = append(allowed, application)
+				}
+			}
+			return allowed, nil
+		}
+		if !errors.Is(transactionErr, ErrRetryableTransaction) {
+			return nil, transactionErr
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("application directory read attempts exhausted: %w", transactionErr)
+}
+
+func validateApplicationDirectoryCommand(command ReadApplicationDirectoryCommand) error {
+	if port.ValidateAuthorizationSubjectContext(command.Subject) != nil ||
+		command.Decisions.Items == nil || len(command.Decisions.Items) != len(command.Snapshot.Candidates) ||
+		command.Decisions.TenantID != command.Subject.TenantID ||
+		!command.Decisions.Subject.Equal(command.Subject.Subject) ||
+		len(command.Snapshot.Candidates) > paasv1.ApplicationDirectoryPageSize ||
+		(command.Snapshot.HasMore && len(command.Snapshot.Candidates) != paasv1.ApplicationDirectoryPageSize) {
+		return ErrInvalidArgument
+	}
+	previous := paasv1.ResourceID("")
+	seenRequests := make(map[string]bool, len(command.Decisions.Items))
+	for index, candidate := range command.Snapshot.Candidates {
+		decision := command.Decisions.Items[index]
+		if paasv1.ValidateID("candidate.id", string(candidate.ID)) != nil ||
+			candidate.ResourceVersion == 0 || candidate.ResourceVersion > 9007199254740991 ||
+			paasv1.ValidateLabels(candidate.Labels) != nil ||
+			(index > 0 && candidate.ID <= previous) ||
+			decision.Resource != (paasv1.ResourceRef{Kind: port.ResourceApplication, ID: candidate.ID}) ||
+			paasv1.ValidateID("decision.requestId", decision.RequestID) != nil || seenRequests[decision.RequestID] ||
+			paasv1.ValidateID("decision.id", decision.DecisionID) != nil || len(decision.RequestTags) != 0 ||
+			iamv1.CheckAuthorizationResourceTagsForAction(decision.ResourceTags, port.AuthorizeApplicationRead, candidate.Labels) != nil {
+			return ErrInvalidArgument
+		}
+		seenRequests[decision.RequestID] = true
+		previous = candidate.ID
+	}
+	return nil
+}
 
 func (usecase *Usecase) InspectApplicationAuthorization(
 	ctx context.Context,

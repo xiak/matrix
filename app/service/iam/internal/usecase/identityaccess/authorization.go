@@ -114,11 +114,11 @@ func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredent
 		if err != nil {
 			return ErrUnavailable
 		}
-		evidence := &AccessKeyAuthorizationEvidence{AccessKeyID: credential.Subject.Key.ID, ResourceVersion: credential.Subject.Key.ResourceVersion,
-			AccountSecuritySettingsVersion: credential.Subject.AccountSecuritySettingsVersion,
-			FormatVersion:                  credential.Material.FormatVersion, WrappingKeyID: credential.Material.WrappingKeyID, MaterialCommitment: credential.MaterialCommitment,
-			InstallationID: credential.Subject.InstallationID, ServiceLookupDigest: caller.LookupDigest, Audience: parameters.Audience,
-			SignedRequestDigest: verified.signedDigest, NonceDigest: nonceDigest, SignedAt: parameters.SignedAt}
+		evidenceID, err := service.config.NewID("evidence")
+		if err != nil || iamv1.ValidateID("requestEvidenceId", evidenceID) != nil {
+			return ErrUnavailable
+		}
+		evidence := newAccessKeyAuthorizationEvidence(evidenceID, caller, credential, parameters, verified.signedDigest, nonceDigest)
 		decision, err := service.decideAndRecord(ctx, tx, request.Authorization, requestDigest, now,
 			authorizationActor{organizationID: credential.Subject.Organization.ID,
 				subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: string(credential.Subject.Principal.ID), AccessKeyID: credential.Subject.Key.ID}, accessKeyEvidence: evidence},
@@ -140,6 +140,100 @@ func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredent
 		return iamv1.AccessKeyAuthorization{}, ErrUnavailable
 	}
 	return result, nil
+}
+
+func (service *Authority) AuthorizeAccessKeyList(ctx context.Context, serviceCredential iamv1.Secret, request iamv1.AccessKeyListAuthorizationRequest) (iamv1.AccessKeyListAuthorization, error) {
+	if iamv1.ValidateAccessKeyListAuthorizationRequest(request) != nil {
+		return iamv1.AccessKeyListAuthorization{}, ErrInvalidArgument
+	}
+	requests := make([]iamv1.AuthorizationRequest, 1, len(request.Instances)+1)
+	requests[0] = request.Collection
+	requests = append(requests, request.Instances...)
+	digests := make([]string, len(requests))
+	for index := range requests {
+		digest, err := digestSanitized("authorization", requests[index])
+		if err != nil {
+			return iamv1.AccessKeyListAuthorization{}, err
+		}
+		digests[index] = digest
+	}
+	var result iamv1.AccessKeyListAuthorization
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		verified, err := service.verifyAccessKeyRequest(ctx, tx, serviceCredential, request.Collection.Profile, request.SignedRequest)
+		if err != nil {
+			return err
+		}
+		caller, credential := verified.caller, verified.credential
+		parameters := request.SignedRequest.Parameters
+		definition, found := iamv1.LookupActionDefinition(request.Collection.Action)
+		if !found || definition.CallingService != caller.Identity.Purpose || definition.Product != parameters.Audience {
+			return ErrUnauthenticated
+		}
+		nonceDigest, err := iamv1.AccessKeyNonceDigest(parameters)
+		if err != nil {
+			return ErrUnavailable
+		}
+		evidenceID, err := service.config.NewID("evidence")
+		if err != nil || iamv1.ValidateID("requestEvidenceId", evidenceID) != nil {
+			return ErrUnavailable
+		}
+		evidence := newAccessKeyAuthorizationEvidence(evidenceID, caller, credential, parameters, verified.signedDigest, nonceDigest)
+		actor := authorizationActor{organizationID: credential.Subject.Organization.ID,
+			subject:           iamv1.Subject{Type: iamv1.SubjectUser, ID: string(credential.Subject.Principal.ID), AccessKeyID: credential.Subject.Key.ID},
+			accessKeyEvidence: evidence}
+		decide := func(item iamv1.AuthorizationRequest, digest string) (iamv1.AuthorizationDecision, error) {
+			return service.decideAndRecord(ctx, tx, item, digest, now, actor,
+				func(id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
+					return authority.DecideAccessKey(credential.Subject, caller.Identity.Purpose, item, id, now, parameters.SignedAt)
+				})
+		}
+		collection, err := decide(request.Collection, digests[0])
+		if err != nil {
+			return err
+		}
+		instances := make([]iamv1.AuthorizationDecision, 0)
+		if collection.Allowed {
+			instances = make([]iamv1.AuthorizationDecision, 0, len(request.Instances))
+			for index, item := range request.Instances {
+				decision, decisionErr := decide(item, digests[index+1])
+				if decisionErr != nil {
+					return decisionErr
+				}
+				instances = append(instances, decision)
+			}
+		}
+		result = iamv1.AccessKeyListAuthorization{APIVersion: iamv1.APIVersion, Kind: "AccessKeyListAuthorization",
+			Collection: collection, Instances: instances, SignedRequestDigest: verified.signedDigest}
+		return nil
+	})
+	if err != nil {
+		return iamv1.AccessKeyListAuthorization{}, err
+	}
+	if iamv1.CheckAccessKeyListAuthorizationForRequest(result, request) != nil {
+		return iamv1.AccessKeyListAuthorization{}, ErrUnavailable
+	}
+	return result, nil
+}
+
+func newAccessKeyAuthorizationEvidence(
+	requestEvidenceID string,
+	caller ServiceCredential,
+	credential AccessKeyCredential,
+	parameters iamv1.AccessKeySignatureParameters,
+	signedDigest string,
+	nonceDigest string,
+) *AccessKeyAuthorizationEvidence {
+	return &AccessKeyAuthorizationEvidence{RequestEvidenceID: requestEvidenceID,
+		AccessKeyID: credential.Subject.Key.ID, ResourceVersion: credential.Subject.Key.ResourceVersion,
+		AccountSecuritySettingsVersion: credential.Subject.AccountSecuritySettingsVersion,
+		FormatVersion:                  credential.Material.FormatVersion, WrappingKeyID: credential.Material.WrappingKeyID,
+		MaterialCommitment: credential.MaterialCommitment, InstallationID: credential.Subject.InstallationID,
+		ServiceLookupDigest: caller.LookupDigest, Audience: parameters.Audience,
+		SignedRequestDigest: signedDigest, NonceDigest: nonceDigest, SignedAt: parameters.SignedAt}
 }
 
 // ResolveAccessKeySubject authenticates one fresh signed request for the

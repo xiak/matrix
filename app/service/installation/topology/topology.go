@@ -235,6 +235,7 @@ func compileServices(
 	paasIAMCredential := path.Join(root, layout.PaaSIAMCredential)
 	paasAuditCredential := path.Join(root, layout.PaaSAuditCredential)
 	auditCursorKey := path.Join(root, layout.AuditCursorKey)
+	paasCursorKey := path.Join(root, layout.PaaSCursorKey)
 	apisixRoutes := path.Join(root, layout.APISIXRoutes)
 	apisixConfig := path.Join(root, layout.APISIXConfig)
 	apisixUID := path.Join(root, layout.APISIXUID)
@@ -393,12 +394,14 @@ func compileServices(
 		"MATRIX_PAAS_INSTALLATION_ID":              options.InstallationID,
 		"MATRIX_PAAS_RELEASE_ID":                   manifest.Release.ID,
 		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE":      "/run/matrix/paas-iam-credential",
+		"MATRIX_PAAS_CURSOR_KEY_FILE":              "/run/matrix/paas-cursor-key",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST": verificationArtifactDigest(manifest),
 		"MATRIX_PAAS_LISTEN_ADDRESS":               "0.0.0.0:8080",
 	}
 	paasAPI.Volumes = []mount{
 		bind(paasAPIDSN, "/run/matrix/paas-api-dsn", true),
 		bind(paasIAMCredential, "/run/matrix/paas-iam-credential", true),
+		bind(paasCursorKey, "/run/matrix/paas-cursor-key", true),
 	}
 	paasAPI.Tmpfs = append(paasAPI.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasAPI.DependsOn = healthy("postgres", "iam")

@@ -20,6 +20,98 @@ func (transaction *applicationTransaction) LoadApplication(
 	return transaction.loadApplication(ctx, id, false)
 }
 
+func (transaction *applicationTransaction) ListApplicationsAfter(
+	ctx context.Context,
+	after paasv1.ResourceID,
+	limit int,
+) ([]paasv1.Application, error) {
+	if (after != "" && paasv1.ValidateID("after", string(after)) != nil) || limit < 1 ||
+		limit > paasv1.ApplicationDirectoryPageSize+1 {
+		return nil, errors.New("application directory query is invalid")
+	}
+	rows, err := transaction.tx.Query(ctx,
+		`SELECT resource_version, document
+		   FROM paas.applications
+		  WHERE tenant_id = $1
+		    AND id > $2 COLLATE "C"
+		  ORDER BY id COLLATE "C" ASC
+		  LIMIT $3`,
+		string(transaction.tenantID), string(after), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list Applications: %w", err)
+	}
+	defer rows.Close()
+	applications := make([]paasv1.Application, 0, limit)
+	for rows.Next() {
+		var resourceVersion uint64
+		var document []byte
+		if err := rows.Scan(&resourceVersion, &document); err != nil {
+			return nil, fmt.Errorf("scan Application directory: %w", err)
+		}
+		application, err := decodeStoredApplication(transaction.tenantID, resourceVersion, document)
+		if err != nil {
+			return nil, err
+		}
+		if application.Metadata.ID <= after ||
+			(len(applications) > 0 && application.Metadata.ID <= applications[len(applications)-1].Metadata.ID) {
+			return nil, errors.New("stored Application directory order mismatch")
+		}
+		applications = append(applications, application)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Application directory: %w", err)
+	}
+	return applications, nil
+}
+
+func (transaction *applicationTransaction) LoadApplications(
+	ctx context.Context,
+	ids []paasv1.ResourceID,
+) ([]paasv1.Application, error) {
+	if ids == nil || len(ids) > paasv1.ApplicationDirectoryPageSize {
+		return nil, errors.New("Application snapshot identifiers are invalid")
+	}
+	values := make([]string, len(ids))
+	for index, id := range ids {
+		if paasv1.ValidateID("application.id", string(id)) != nil ||
+			(index > 0 && id <= ids[index-1]) {
+			return nil, errors.New("Application snapshot identifiers are invalid")
+		}
+		values[index] = string(id)
+	}
+	if len(values) == 0 {
+		return []paasv1.Application{}, nil
+	}
+	rows, err := transaction.tx.Query(ctx,
+		`SELECT resource_version, document
+		   FROM paas.applications
+		  WHERE tenant_id = $1
+		    AND id = ANY($2::text[])
+		  ORDER BY id COLLATE "C" ASC`,
+		string(transaction.tenantID), values)
+	if err != nil {
+		return nil, fmt.Errorf("load Application snapshot: %w", err)
+	}
+	defer rows.Close()
+	applications := make([]paasv1.Application, 0, len(ids))
+	for rows.Next() {
+		var resourceVersion uint64
+		var document []byte
+		if err := rows.Scan(&resourceVersion, &document); err != nil {
+			return nil, fmt.Errorf("scan Application snapshot: %w", err)
+		}
+		application, err := decodeStoredApplication(transaction.tenantID, resourceVersion, document)
+		if err != nil {
+			return nil, err
+		}
+		applications = append(applications, application)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Application snapshot: %w", err)
+	}
+	return applications, nil
+}
+
 func (transaction *applicationTransaction) LoadApplicationForUpdate(
 	ctx context.Context,
 	id paasv1.ResourceID,
@@ -54,18 +146,32 @@ func (transaction *applicationTransaction) loadApplication(
 	if err != nil {
 		return paasv1.Application{}, false, fmt.Errorf("load Application: %w", err)
 	}
-	var value paasv1.Application
-	if err := decodeDocument("Application", document, &value); err != nil {
+	value, err := decodeStoredApplication(transaction.tenantID, resourceVersion, document)
+	if err != nil {
 		return paasv1.Application{}, false, err
 	}
-	if err := paasv1.ValidateApplication(value); err != nil {
-		return paasv1.Application{}, false, fmt.Errorf("validate stored Application: %w", err)
-	}
-	if value.Metadata.ID != id || value.Metadata.Scope.TenantID != transaction.tenantID ||
-		value.Metadata.ResourceVersion != resourceVersion {
+	if value.Metadata.ID != id {
 		return paasv1.Application{}, false, errors.New("stored Application relational identity mismatch")
 	}
 	return value, true, nil
+}
+
+func decodeStoredApplication(
+	tenantID paasv1.TenantID,
+	resourceVersion uint64,
+	document []byte,
+) (paasv1.Application, error) {
+	var value paasv1.Application
+	if err := decodeDocument("Application", document, &value); err != nil {
+		return paasv1.Application{}, err
+	}
+	if err := paasv1.ValidateApplication(value); err != nil {
+		return paasv1.Application{}, fmt.Errorf("validate stored Application: %w", err)
+	}
+	if value.Metadata.Scope.TenantID != tenantID || value.Metadata.ResourceVersion != resourceVersion {
+		return paasv1.Application{}, errors.New("stored Application relational identity mismatch")
+	}
+	return value, nil
 }
 
 func (transaction *applicationTransaction) LoadConfiguration(

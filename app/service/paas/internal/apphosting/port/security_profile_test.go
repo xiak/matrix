@@ -243,6 +243,80 @@ func TestAccessKeyAdmissionIsLimitedToDeclaredGraphAndInstanceActions(t *testing
 	}
 }
 
+func TestApplicationDirectoryAuthorizationShapesAreExactAndBounded(t *testing.T) {
+	requests := make([]AuthorizationRequest, 2)
+	for index, id := range []paasv1.ResourceID{"application-a", "application-b"} {
+		requests[index] = AuthorizationRequest{
+			Credential: "Bearer subject", Action: AuthorizeApplicationRead,
+			Resource:     paasv1.ResourceRef{Kind: ResourceApplication, ID: id},
+			ResourceMode: iamv1.AuthorizationResourceInstance, SourceIP: "192.0.2.23",
+			ResourceLabels: map[string]string{"environment": []string{"production", "staging"}[index]},
+			RequestID:      "request-" + string(rune('a'+index)), CorrelationID: "request-collection",
+		}
+	}
+	batch := AuthorizationBatchRequest{Credential: "Bearer subject", Requests: requests}
+	if ValidateAuthorizationBatchRequest(batch) != nil {
+		t.Fatal("valid Application candidate batch rejected")
+	}
+	result := AuthorizationBatch{TenantID: "account-a", Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-a"},
+		Items: make([]AuthorizationBatchItem, len(requests))}
+	for index, request := range requests {
+		mapped, err := NewIAMAuthorizationRequest(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result.Items[index] = AuthorizationBatchItem{Resource: request.Resource, Allowed: index == 0,
+			DecisionID: "decision-" + string(rune('a'+index)), RequestID: request.RequestID,
+			RequestTags: mapped.RequestTags, ResourceTags: mapped.ResourceTags}
+	}
+	if ValidateAuthorizationBatchForRequest(result, batch) != nil {
+		t.Fatal("exact Application candidate decisions rejected")
+	}
+	changed := batch
+	changed.Requests = append([]AuthorizationRequest(nil), batch.Requests...)
+	changed.Requests[1].CorrelationID = "other-correlation"
+	if ValidateAuthorizationBatchRequest(changed) == nil {
+		t.Fatal("mixed-correlation candidate batch accepted")
+	}
+	changed = batch
+	changed.Requests = append([]AuthorizationRequest(nil), batch.Requests...)
+	changed.Requests[0], changed.Requests[1] = changed.Requests[1], changed.Requests[0]
+	if ValidateAuthorizationBatchRequest(changed) == nil {
+		t.Fatal("reordered candidate batch accepted")
+	}
+
+	nonce, _ := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAA")
+	signature, _ := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	signed := iamv1.AccessKeySignedRequest{
+		Parameters: iamv1.AccessKeySignatureParameters{AccessKeyID: "key-a", InstallationID: "installation-a",
+			Audience: iamv1.ProductPaaS, SignedAt: 1800000000, Nonce: nonce},
+		HTTP: iamv1.AccessKeyHTTPRequest{Method: "GET", Scheme: "https", Authority: "api.example.test:443",
+			EscapedPath: "/api/paas/v1/applications", RawQuery: "after=pc1.opaque",
+			BodyDigest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+		Signature: signature,
+	}
+	collection := AccessKeyAuthorizationRequest{Action: AuthorizeApplicationRead,
+		Resource:     paasv1.ResourceRef{Kind: ResourceApplication, ID: "collection"},
+		ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionList,
+		SourceIP: "192.0.2.23", RequestID: "request-collection", CorrelationID: "request-collection", SignedRequest: signed}
+	instances := make([]AccessKeyAuthorizationRequest, len(requests))
+	for index, request := range requests {
+		instances[index] = AccessKeyAuthorizationRequest{Action: request.Action, Resource: request.Resource,
+			ResourceMode: request.ResourceMode, SourceIP: request.SourceIP, ResourceLabels: request.ResourceLabels,
+			RequestID: request.RequestID, CorrelationID: request.CorrelationID, SignedRequest: signed}
+	}
+	accessKeyList := AccessKeyListAuthorizationRequest{Collection: collection, Instances: instances}
+	if _, err := NewIAMAccessKeyListAuthorizationRequest(accessKeyList); err != nil {
+		t.Fatalf("valid signed Application list rejected: %v", err)
+	}
+	changedList := accessKeyList
+	changedList.Instances = append([]AccessKeyAuthorizationRequest(nil), accessKeyList.Instances...)
+	changedList.Instances[1].CorrelationID = "other-correlation"
+	if ValidateAccessKeyListAuthorizationRequest(changedList) == nil {
+		t.Fatal("mixed-correlation signed list accepted")
+	}
+}
+
 func TestApplicationReadAuthorizationBindsOnlyProfileDeclaredResourceLabels(t *testing.T) {
 	request := AuthorizationRequest{
 		Credential: "Bearer subject", Action: AuthorizeApplicationRead,

@@ -121,9 +121,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "9044bd6610b8f2c0cfe0887daf45e8ccf9a4ff90"
-	const sourceSchema uint64 = 65
-	const currentSchema uint64 = 66
+	const source = "0f06607398f643311c5a284cf0867e931ed33d9b"
+	const sourceSchema uint64 = 66
+	const currentSchema uint64 = 67
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -542,8 +542,9 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}) {
 		t.Fatalf("actual predecessor did not update its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
 	}
-	// The immediate IAM65 predecessor already owns explicit REVIEW_ONLY. IAM66
-	// must preserve it instead of inventing a migration default or authority.
+	// The immediate schema-66 predecessor already owns explicit REVIEW_ONLY.
+	// The current schema must preserve it instead of inventing a migration
+	// default or authority.
 	migratedAccessAnalyzerExpected := retainedAccessAnalyzer
 	if iamv1.ValidateAccessAnalyzer(migratedAccessAnalyzerExpected) != nil {
 		t.Fatal("predecessor analyzer differs beyond the intentional REVIEW_ONLY default")
@@ -730,7 +731,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("migration changed the predecessor access analyzer")
 	}
 	// The immutable predecessor receipt deliberately keeps its original bytes.
-	// An exact create replay through IAM66 must project the new safe default at the
+	// An exact create replay through the current authority must project the safe default at the
 	// read boundary instead of mutating history or returning an obsolete wire
 	// shape that the current contract cannot decode.
 	accessAnalyzerResponse = performJSON(t, http.MethodPost, endpoint+"/v1/account/access-analyzers", primary.Credential,
@@ -1233,9 +1234,8 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 	}
 	for index, database := range databases {
 		// The supported migrator always applies the current idempotent role
-		// bootstrap before schema SQL. The new purpose-only analysis group does
-		// not exist in the IAM65 predecessor, so a bare Up would test an impossible
-		// production sequence rather than the retained database.
+		// bootstrap before schema SQL. Reproduce that production sequence rather
+		// than invoking Up against an artificially incomplete role topology.
 		if err := iammigration.Bootstrap(ctx, database); err != nil {
 			t.Fatal("bootstrap current purpose roles for predecessor recovery copy", err)
 		}
@@ -2441,6 +2441,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		[]byte(hex.EncodeToString(bytes.Repeat([]byte{0x6a}, 32))),
 	)
 	iamCursorKeyPath := writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32)))
+	paasCursorKeyPath := writeProtectedFile(t, temporary, "paas-cursor-key", []byte(strings.Repeat("7c", 32)))
 	iamWrappingKeyPath := writeProcessAccessKeyWrapping(t, temporary, bootstrap)
 	iamTOTPKeyPath := writeProcessTOTPKeyring(t, temporary, bootstrap)
 	iamEmailKeyPath := writeProcessEmailVerificationKeyring(t, temporary, bootstrap)
@@ -2498,6 +2499,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"MATRIX_PAAS_NORTHBOUND_ORIGIN=https://api.matrix.test:443",
 		"MATRIX_PAAS_RELEASE_ID=matrix-v0.1.0-process",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"MATRIX_PAAS_CURSOR_KEY_FILE=" + paasCursorKeyPath,
 	}
 	paasDispatcherEnvironment := func(credentialPath string, workerID string) []string {
 		return []string{
@@ -6525,13 +6527,17 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		t.Cleanup(func() { clear(body) })
 		return body
 	}
-	counts := func(key iamv1.AccessKeyID) [3]int {
+	counts := func(key iamv1.AccessKeyID) [4]int {
 		t.Helper()
-		var values [3]int
+		var values [4]int
 		if err := database.QueryRow(ctx, `SELECT
 		 (SELECT count(*) FROM iam.access_key_authorization_evidence WHERE access_key_id=$1),
 		 (SELECT count(*) FROM iam.authorization_decisions WHERE access_key_id=$1),
-		 (SELECT count(*) FROM iam.audit_outbox WHERE event_document#>>'{actor,accessKeyId}'=$1)`, key).Scan(&values[0], &values[1], &values[2]); err != nil {
+		 (SELECT count(*) FROM iam.audit_outbox WHERE event_document#>>'{actor,accessKeyId}'=$1),
+		 (SELECT count(*) FROM iam.access_key_authorization_evidence_links AS link
+		    JOIN iam.authorization_decisions AS decision
+		      ON decision.tenant_id=link.tenant_id AND decision.id=link.decision_id
+		   WHERE decision.access_key_id=$1)`, key).Scan(&values[0], &values[1], &values[2], &values[3]); err != nil {
 			t.Fatal("read signed process completion", err)
 		}
 		return values
@@ -6600,6 +6606,26 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
 				Method: http.MethodGet, Scheme: "https", Authority: "api.matrix.test:443",
 				EscapedPath: externalPath, BodyDigest: "sha256:" + hex.EncodeToString(digest[:]),
+			}),
+		}
+	}
+	prepareProductDirectory := func(account *accountFixture, after string) signedProductRequest {
+		t.Helper()
+		route, escapedPath, rawQuery := "/v1/applications", "/api/paas/v1/applications", ""
+		if after != "" {
+			rawQuery = "after=" + url.QueryEscape(after)
+			route += "?" + rawQuery
+		}
+		externalTarget := escapedPath
+		if rawQuery != "" {
+			externalTarget += "?" + rawQuery
+		}
+		digest := sha256.Sum256(nil)
+		return signedProductRequest{
+			method: http.MethodGet, route: route, externalPath: externalTarget, sourceIP: account.sourceIP,
+			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
+				Method: http.MethodGet, Scheme: "https", Authority: "api.matrix.test:443",
+				EscapedPath: escapedPath, RawQuery: rawQuery, BodyDigest: "sha256:" + hex.EncodeToString(digest[:]),
 			}),
 		}
 	}
@@ -6912,6 +6938,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		return deployment
 	}
 	var restartReplay iamv1.AccessKeyAuthorizationRequest
+	directoryCursors := make([]string, len(accounts))
 	auditPages := make([]auditv1.RecordPage, len(accounts))
 	var deletedAuditPacket signedProductRequest
 	for index := range accounts {
@@ -6957,7 +6984,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			t.Fatal("signed Application read crossed Account ownership or changed labels")
 		}
 		invokeProduct(readRequest, http.StatusConflict)
-		if counts(account.key.Key.ID) != [3]int{beforeRead[0] + 1, beforeRead[1] + 1, beforeRead[2] + 1} {
+		if counts(account.key.Key.ID) != [4]int{beforeRead[0] + 1, beforeRead[1] + 1, beforeRead[2] + 1, beforeRead[3]} {
 			t.Fatal("signed Application read did not consume exactly one nonce/decision/fact")
 		}
 		readRequestID := readResponse.Header.Get("X-Request-ID")
@@ -6980,6 +7007,118 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			decisions[account.key.Key.ID] = map[iamv1.DecisionID]bool{}
 		}
 		decisions[account.key.Key.ID][readDecision] = true
+		for directoryIndex := range paasv1.ApplicationDirectoryPageSize {
+			fixture := readApplication
+			fixture.Metadata.ID = paasv1.ResourceID(fmt.Sprintf("accesskey-directory-%03d", directoryIndex))
+			fixture.Metadata.Name = string(fixture.Metadata.ID)
+			fixture.Metadata.ResourceVersion = 1
+			fixture.Metadata.Labels = map[string]string{"environment": environment, "team": "directory"}
+			if err := paasv1.ValidateApplication(fixture); err != nil {
+				t.Fatal("invalid process Application directory fixture", err)
+			}
+			encoded, err := json.Marshal(fixture)
+			if err != nil {
+				t.Fatal("encode process Application directory fixture", err)
+			}
+			if _, err := database.Exec(ctx, `INSERT INTO paas.applications(tenant_id,id,resource_version,document)
+				VALUES ($1,$2,1,$3::jsonb)`, account.target.AccountID, fixture.Metadata.ID, string(encoded)); err != nil {
+				t.Fatal("seed process Application directory fixture", err)
+			}
+		}
+		recordDirectoryDecisions := func(response processResponse, expectedIDs []paasv1.ResourceID, before [4]int) {
+			t.Helper()
+			correlationID := response.Header.Get("X-Request-ID")
+			if correlationID == "" {
+				t.Fatal("signed Application directory omitted request identity")
+			}
+			rows, err := database.Query(ctx, `SELECT id,target_id,allowed,contract_version=7,
+				document#>>'{networkContext,sourceIp}'=$4
+				FROM iam.authorization_decisions
+				WHERE tenant_id=$1 AND access_key_id=$2 AND correlation_id=$3
+				ORDER BY CASE WHEN target_id='collection' THEN 0 ELSE 1 END,target_id`,
+				account.target.AccountID, account.key.Key.ID, correlationID, account.sourceIP)
+			if err != nil {
+				t.Fatal("read signed Application directory decisions", err)
+			}
+			defer rows.Close()
+			seen := make([]paasv1.ResourceID, 0, len(expectedIDs))
+			decisionCount := 0
+			for rows.Next() {
+				var id iamv1.DecisionID
+				var target string
+				var allowed, contract, source bool
+				if rows.Scan(&id, &target, &allowed, &contract, &source) != nil || !allowed || !contract || !source || decisions[account.key.Key.ID][id] {
+					t.Fatal("signed Application directory decision lost exact Account/key/request binding")
+				}
+				decisions[account.key.Key.ID][id] = true
+				decisionCount++
+				if target != "collection" {
+					seen = append(seen, paasv1.ResourceID(target))
+				}
+			}
+			if rows.Err() != nil || decisionCount != len(expectedIDs)+1 || !slices.Equal(seen, expectedIDs) {
+				t.Fatalf("signed Application directory decisions=%d items=%v want=%v err=%v", decisionCount, seen, expectedIDs, rows.Err())
+			}
+			after := counts(account.key.Key.ID)
+			if after != [4]int{before[0] + 1, before[1] + decisionCount, before[2] + decisionCount, before[3] + len(expectedIDs)} {
+				t.Fatalf("signed Application directory evidence=%v before=%v", after, before)
+			}
+		}
+		firstDirectoryRequest := prepareProductDirectory(account, "")
+		beforeDirectory := counts(account.key.Key.ID)
+		firstDirectoryResponse := invokeProduct(firstDirectoryRequest, http.StatusOK)
+		var firstDirectory paasv1.ApplicationList
+		if iamv1.DecodeRequest(bytes.NewReader(firstDirectoryResponse.Body), &firstDirectory) != nil ||
+			paasv1.ValidateApplicationList(firstDirectory) != nil || len(firstDirectory.Items) != paasv1.ApplicationDirectoryPageSize ||
+			firstDirectory.NextAfter == "" {
+			t.Fatalf("signed Application directory first page is invalid: %#v", firstDirectory)
+		}
+		firstIDs := make([]paasv1.ResourceID, len(firstDirectory.Items))
+		for directoryIndex, item := range firstDirectory.Items {
+			firstIDs[directoryIndex] = item.Metadata.ID
+			wantID := paasv1.ResourceID(fmt.Sprintf("accesskey-directory-%03d", directoryIndex))
+			if item.Metadata.ID != wantID || item.Metadata.Scope.TenantID != paasv1.TenantID(account.target.AccountID) ||
+				item.Metadata.Labels["environment"] != environment {
+				t.Fatal("signed Application directory crossed Account ownership or ordering")
+			}
+		}
+		recordDirectoryDecisions(firstDirectoryResponse, firstIDs, beforeDirectory)
+		directoryCursors[index] = firstDirectory.NextAfter
+		invokeProduct(firstDirectoryRequest, http.StatusConflict)
+		lastID := firstIDs[len(firstIDs)-1]
+		nextAfter := firstDirectory.NextAfter
+		sawApplication := false
+		for pageIndex := 1; nextAfter != ""; pageIndex++ {
+			if pageIndex > 4 {
+				t.Fatal("signed Application directory did not terminate within its bounded fixture")
+			}
+			continuationRequest := prepareProductDirectory(account, nextAfter)
+			beforeDirectory = counts(account.key.Key.ID)
+			continuationResponse := invokeProduct(continuationRequest, http.StatusOK)
+			var continuation paasv1.ApplicationList
+			if iamv1.DecodeRequest(bytes.NewReader(continuationResponse.Body), &continuation) != nil ||
+				paasv1.ValidateApplicationList(continuation) != nil || len(continuation.Items) == 0 {
+				t.Fatalf("signed Application directory continuation is invalid: %#v", continuation)
+			}
+			continuationIDs := make([]paasv1.ResourceID, len(continuation.Items))
+			for itemIndex, item := range continuation.Items {
+				continuationIDs[itemIndex] = item.Metadata.ID
+				if item.Metadata.ID <= lastID || item.Metadata.Scope.TenantID != paasv1.TenantID(account.target.AccountID) ||
+					item.Metadata.Labels["environment"] != "" && item.Metadata.Labels["environment"] != environment {
+					t.Fatal("signed Application directory continuation crossed Account ownership, ordering or labels")
+				}
+				lastID = item.Metadata.ID
+				if item.Metadata.ID == application.ID {
+					sawApplication = true
+				}
+			}
+			recordDirectoryDecisions(continuationResponse, continuationIDs, beforeDirectory)
+			invokeProduct(continuationRequest, http.StatusConflict)
+			nextAfter = continuation.NextAfter
+		}
+		if !sawApplication {
+			t.Fatal("signed Application directory omitted the AccessKey-created resource")
+		}
 		readStoredApplication := func() paasv1.Application {
 			t.Helper()
 			var document []byte
@@ -7285,6 +7424,27 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			restartReplay = request
 		}
 	}
+	beforeCrossCursor := counts(b.key.Key.ID)
+	crossCursorRequest := prepareProductDirectory(b, directoryCursors[0])
+	invokeProduct(crossCursorRequest, http.StatusBadRequest)
+	if counts(b.key.Key.ID) != beforeCrossCursor {
+		t.Fatal("cross-Account Application cursor consumed nonce or wrote authority")
+	}
+	tamperedParts := strings.Split(directoryCursors[0], ".")
+	if len(tamperedParts) != 3 || len(tamperedParts[2]) < 2 {
+		t.Fatal("Application cursor fixture has an unexpected shape")
+	}
+	if tamperedParts[2][0] == 'A' {
+		tamperedParts[2] = "B" + tamperedParts[2][1:]
+	} else {
+		tamperedParts[2] = "A" + tamperedParts[2][1:]
+	}
+	tamperedCursor := strings.Join(tamperedParts, ".")
+	beforeTamperedCursor := counts(a.key.Key.ID)
+	invokeProduct(prepareProductDirectory(a, tamperedCursor), http.StatusBadRequest)
+	if counts(a.key.Key.ID) != beforeTamperedCursor {
+		t.Fatal("tampered Application cursor consumed nonce or wrote authority")
+	}
 	continuedAuditQuery := prepareAudit(a, "/v1/records:query", auditv1.QueryRecordsRequest{PageSize: 1, Cursor: auditPages[0].NextCursor})
 	continuedAuditResponse := invokeAudit(continuedAuditQuery, http.StatusOK)
 	var continuedAuditPage auditv1.RecordPage
@@ -7465,6 +7625,13 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			if changed.Key.ResourceVersion != uint64(index+2) || changed.Key.Status != status {
 				t.Fatal("program status CAS differs")
 			}
+			if index == 0 {
+				beforeRevokedCursor := counts(b.key.Key.ID)
+				invokeProduct(prepareProductDirectory(b, directoryCursors[1]), http.StatusUnauthorized)
+				if counts(b.key.Key.ID) != beforeRevokedCursor {
+					t.Fatal("disabled AccessKey cursor consumed nonce or wrote authority")
+				}
+			}
 		}
 		call(endpoint, http.MethodPost, keyPath+":delete", b.manager, iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 4, RequestID: "program-delete"}, http.StatusOK, nil)
 		invoke(endpoint, deletedPacket, http.StatusUnauthorized)
@@ -7528,16 +7695,41 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		account := &accounts[index]
 		key := account.key.Key.ID
 		want := len(decisions[key])
-		if counts(key) != [3]int{want, want, want} {
-			t.Fatal("signed processes left partial/duplicate private evidence or facts")
+		got := counts(key)
+		if got[1] != want || got[2] != want || got[0]+got[3] != want {
+			t.Fatalf("signed processes left partial/duplicate private evidence or facts: counts=%v decisions=%d", got, want)
+		}
+		var exactlyLinked int
+		if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.authorization_decisions AS decision
+			WHERE decision.access_key_id=$1 AND
+			 ((SELECT count(*) FROM iam.access_key_authorization_evidence AS evidence
+			    WHERE evidence.tenant_id=decision.tenant_id AND evidence.decision_id=decision.id) +
+			  (SELECT count(*) FROM iam.access_key_authorization_evidence_links AS link
+			    WHERE link.tenant_id=decision.tenant_id AND link.decision_id=decision.id))=1`, key).Scan(&exactlyLinked); err != nil || exactlyLinked != want {
+			t.Fatalf("signed decisions do not each reference exactly one immutable request evidence: linked=%d want=%d err=%v",
+				exactlyLinked, want, err)
 		}
 		actor := auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(account.target.ID), AccessKeyID: string(key)}
 		query := auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMAuthorizationDecided, Actor: &actor}
-		page := queryAudit(t, auditEndpoint, account.owner, query, http.StatusOK)
-		if len(page.Records) != want || page.TenantID != auditv1.TenantID(account.target.AccountID) || want == 0 {
+		records := make([]auditv1.AuditRecord, 0, want)
+		for pageIndex := 0; ; pageIndex++ {
+			if pageIndex > 4 {
+				t.Fatal("signed Audit history did not terminate within its bounded fixture")
+			}
+			page := queryAudit(t, auditEndpoint, account.owner, query, http.StatusOK)
+			if page.TenantID != auditv1.TenantID(account.target.AccountID) {
+				t.Fatal("signed Audit history crossed Account ownership")
+			}
+			records = append(records, page.Records...)
+			if page.NextCursor == "" {
+				break
+			}
+			query.Cursor = page.NextCursor
+		}
+		if len(records) != want || want == 0 {
 			t.Fatal("signed historical facts did not survive deletion/outage/restart")
 		}
-		for _, record := range page.Records {
+		for _, record := range records {
 			if record.Event.Actor != actor || !decisions[key][iamv1.DecisionID(record.Event.IAMDecisionID)] {
 				t.Fatal("signed Audit history lost original USER/key/decision attribution")
 			}
@@ -7549,10 +7741,11 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			}
 		}
 		other := &accounts[1-index]
+		query.Cursor = ""
 		if len(queryAudit(t, auditEndpoint, other.owner, query, http.StatusOK).Records) != 0 {
 			t.Fatal("another account read key-attributed Audit facts")
 		}
-		forged := page.Records[0].Event
+		forged := records[0].Event
 		forged.Actor.AccessKeyID = string(other.key.Key.ID)
 		if response := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", iamServiceCredential, forged); response.Status != http.StatusForbidden {
 			t.Fatal("historical producer accepted another key's attribution")
@@ -10346,6 +10539,8 @@ func proveRoleBusinessProcesses(t *testing.T, ctx context.Context, admin *pgx.Co
 	if configuration.Status != http.StatusCreated || json.Unmarshal(configuration.Body, &configured) != nil || !configured.RequestedBy.Equal(actor) {
 		t.Fatal("role configuration creation lost actor or authority")
 	}
+	proveUserRoleApplicationDirectory(t, ctx, admin, paasEndpoint, credential, role, session, user.ID,
+		[]paasv1.ResourceID{first.Target.ID, second.Target.ID})
 	call(http.MethodGet, iamEndpoint, "/v1/users", credential, nil, http.StatusUnauthorized, nil)
 	assertPlatformAuditAccess(t, auditEndpoint, credential, http.StatusForbidden)
 	call(http.MethodGet, paasEndpoint, "/managed-services/v1/quota-entitlements", credential, nil, http.StatusForbidden, nil)
@@ -10436,6 +10631,68 @@ func proveRoleBusinessProcesses(t *testing.T, ctx context.Context, admin *pgx.Co
 		t.Fatal("role business facts broke the immutable tenant chain")
 	}
 	return []string{credential, otherCredential}
+}
+
+func proveUserRoleApplicationDirectory(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	paasEndpoint string,
+	credential string,
+	role iamv1.Role,
+	session iamv1.RoleSession,
+	sourceUser iamv1.PrincipalID,
+	want []paasv1.ResourceID,
+) {
+	t.Helper()
+	found := make(map[paasv1.ResourceID]bool, len(want))
+	after := ""
+	for pageIndex := 0; pageIndex < 16; pageIndex++ {
+		path := "/v1/applications"
+		if after != "" {
+			path += "?after=" + url.QueryEscape(after)
+		}
+		response := performJSON(t, http.MethodGet, paasEndpoint+path, credential, nil)
+		var page paasv1.ApplicationList
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &page) != nil ||
+			paasv1.ValidateApplicationList(page) != nil {
+			t.Fatalf("USER-origin Role Application directory status=%d page=%#v", response.Status, page)
+		}
+		for _, item := range page.Items {
+			if item.Metadata.Scope.TenantID != paasv1.TenantID(role.AccountID) {
+				t.Fatal("USER-origin Role Application directory crossed Account ownership")
+			}
+			found[item.Metadata.ID] = true
+		}
+		correlationID := response.Header.Get("X-Request-ID")
+		var decisions, collections, instances int
+		var exact bool
+		directoryErr := admin.QueryRow(ctx, `SELECT count(*),
+			count(*) FILTER (WHERE resource_mode='COLLECTION' AND collection_usage='LIST' AND target_id='collection'),
+			count(*) FILTER (WHERE resource_mode='INSTANCE' AND collection_usage IS NULL AND target_id<>'collection'),
+			COALESCE(bool_and(allowed AND contract_version=7 AND principal_id IS NULL
+			 AND subject_type='ROLE' AND role_id=$2 AND source_principal_id=$3
+			 AND source_service_principal_id IS NULL AND role_evidence->>'sessionId'=$4
+			 AND action_name=$6 AND target_kind=$7),false)
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND correlation_id=$5`,
+			role.AccountID, role.ID, sourceUser, session.ID, correlationID,
+			iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication).Scan(
+			&decisions, &collections, &instances, &exact)
+		if correlationID == "" || directoryErr != nil || !exact || collections != 1 ||
+			instances != len(page.Items) || decisions != len(page.Items)+1 {
+			t.Fatal("USER-origin Role directory lost collection/batch authority or session lineage", directoryErr)
+		}
+		if page.NextAfter == "" {
+			for _, id := range want {
+				if !found[id] {
+					t.Fatalf("USER-origin Role Application directory omitted %s", id)
+				}
+			}
+			return
+		}
+		after = page.NextAfter
+	}
+	t.Fatal("USER-origin Role Application directory did not terminate")
 }
 
 func proveGroupResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, ownerBearer string,
@@ -10952,6 +11209,23 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		assertStatus(performJSON(t, http.MethodGet, paasEndpoint+
 			"/v1/applications/service-role-subject-probe", tenant.serviceRoleSecret, nil),
 			http.StatusForbidden, "same-service RoleSession apphosting decision")
+		directoryDenied := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", tenant.serviceRoleSecret, nil)
+		assertStatus(directoryDenied, http.StatusForbidden, "same-service RoleSession Application directory")
+		directoryCorrelation := directoryDenied.Header.Get("X-Request-ID")
+		var exactDirectoryDeny bool
+		directoryErr := admin.QueryRow(ctx, `SELECT count(*)=1
+			AND bool_and(contract_version=7 AND NOT allowed AND principal_id IS NULL
+			 AND subject_type='ROLE' AND role_id=$2 AND source_principal_id IS NULL
+			 AND source_service_principal_id='service-paas'
+			 AND role_evidence->>'sessionId'=$3 AND action_name=$4
+			 AND target_kind=$5 AND target_id='collection'
+			 AND resource_mode='COLLECTION' AND collection_usage='LIST')
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND correlation_id=$6`,
+			tenant.id, tenant.serviceRoleReceipt.RoleID, tenant.serviceRoleSession.ID,
+			iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication, directoryCorrelation).Scan(&exactDirectoryDeny)
+		if directoryCorrelation == "" || directoryErr != nil || !exactDirectoryDeny {
+			t.Fatal("service-origin Role directory did not close at its collection decision", directoryErr)
+		}
 		var exactServiceRoleDeny bool
 		if err := admin.QueryRow(ctx, `SELECT contract_version=7 AND NOT allowed
 			AND subject_type='ROLE' AND role_id=$2 AND source_principal_id IS NULL
@@ -11369,6 +11643,90 @@ func proveApplicationTenantProcesses(t *testing.T, ctx context.Context, admin *p
 				t.Fatal("application resource lost its current IAM tenant or actor")
 			}
 		}
+		var sharedDocument []byte
+		if err := admin.QueryRow(ctx, `SELECT document FROM paas.applications WHERE tenant_id=$1 AND id=$2`,
+			tenant.login.Session.AccountID, shared.Target.ID).Scan(&sharedDocument); err != nil {
+			t.Fatal("read login-session Application directory fixture", err)
+		}
+		var directoryFixture paasv1.Application
+		if iamv1.DecodeRequest(bytes.NewReader(sharedDocument), &directoryFixture) != nil ||
+			paasv1.ValidateApplication(directoryFixture) != nil {
+			t.Fatal("decode login-session Application directory fixture")
+		}
+		for directoryIndex := range paasv1.ApplicationDirectoryPageSize {
+			fixture := directoryFixture
+			fixture.Metadata.ID = paasv1.ResourceID(fmt.Sprintf("bearer-directory-%03d", directoryIndex))
+			fixture.Metadata.Name = string(fixture.Metadata.ID)
+			fixture.Metadata.ResourceVersion = 1
+			fixture.Metadata.Labels = map[string]string{"environment": tenant.environment, "team": "directory"}
+			if err := paasv1.ValidateApplication(fixture); err != nil {
+				t.Fatal("invalid login-session Application directory fixture", err)
+			}
+			encoded, err := json.Marshal(fixture)
+			if err != nil {
+				t.Fatal("encode login-session Application directory fixture", err)
+			}
+			if _, err := admin.Exec(ctx, `INSERT INTO paas.applications(tenant_id,id,resource_version,document)
+				VALUES ($1,$2,1,$3::jsonb)`, tenant.login.Session.AccountID, fixture.Metadata.ID, string(encoded)); err != nil {
+				t.Fatal("seed login-session Application directory fixture", err)
+			}
+		}
+	}
+	directoryCursors := make([]string, len(tenants))
+	for i := range tenants {
+		tenant, other := &tenants[i], &tenants[1-i]
+		assertDirectoryPage := func(response processResponse, wantCursor bool) paasv1.ApplicationList {
+			t.Helper()
+			var page paasv1.ApplicationList
+			if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &page) != nil ||
+				paasv1.ValidateApplicationList(page) != nil || (page.NextAfter != "") != wantCursor || len(page.Items) == 0 {
+				t.Fatalf("login-session Application directory status=%d page=%#v", response.Status, page)
+			}
+			for index, item := range page.Items {
+				if item.Metadata.Scope.TenantID != paasv1.TenantID(tenant.login.Session.AccountID) ||
+					item.Metadata.Scope.TenantID == paasv1.TenantID(other.login.Session.AccountID) ||
+					(index > 0 && item.Metadata.ID <= page.Items[index-1].Metadata.ID) ||
+					item.Metadata.Labels["environment"] == other.environment {
+					t.Fatal("login-session Application directory crossed Account ownership, ordering or labels")
+				}
+			}
+			correlationID := response.Header.Get("X-Request-ID")
+			var decisions, collections, instances int
+			var exact bool
+			if correlationID == "" || admin.QueryRow(ctx, `SELECT count(*),
+				count(*) FILTER (WHERE resource_mode='COLLECTION' AND collection_usage='LIST' AND target_id='collection'),
+				count(*) FILTER (WHERE resource_mode='INSTANCE' AND collection_usage IS NULL AND target_id<>'collection'),
+				COALESCE(bool_and(allowed AND contract_version=7 AND principal_id=$2 AND access_key_id IS NULL
+				 AND action_name=$4 AND target_kind=$5),false)
+				FROM iam.authorization_decisions WHERE tenant_id=$1 AND correlation_id=$3`,
+				tenant.login.Session.AccountID, tenant.login.Session.PrincipalID, correlationID,
+				iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication).Scan(&decisions, &collections, &instances, &exact) != nil ||
+				!exact || collections != 1 || instances != len(page.Items) || decisions != len(page.Items)+1 {
+				t.Fatal("login-session Application directory did not use one collection and one bounded batch")
+			}
+			return page
+		}
+		first := assertDirectoryPage(performJSON(t, http.MethodGet, endpoint+"/v1/applications", tenant.login.Credential, nil), true)
+		directoryCursors[i] = first.NextAfter
+		second := assertDirectoryPage(performJSON(t, http.MethodGet,
+			endpoint+"/v1/applications?after="+url.QueryEscape(first.NextAfter), tenant.login.Credential, nil), false)
+		if second.Items[0].Metadata.ID <= first.Items[len(first.Items)-1].Metadata.ID {
+			t.Fatal("login-session Application directory cursor repeated a scanned candidate")
+		}
+	}
+	beforeCrossCursorDecisions := 0
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1`,
+		tenants[1].login.Session.AccountID).Scan(&beforeCrossCursorDecisions); err != nil {
+		t.Fatal("count cross-Account cursor authority", err)
+	}
+	if response := performJSON(t, http.MethodGet, endpoint+"/v1/applications?after="+
+		url.QueryEscape(directoryCursors[0]), tenants[1].login.Credential, nil); response.Status != http.StatusBadRequest {
+		t.Fatalf("cross-Account login-session Application cursor status=%d", response.Status)
+	}
+	var afterCrossCursorDecisions int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1`,
+		tenants[1].login.Session.AccountID).Scan(&afterCrossCursorDecisions); err != nil || afterCrossCursorDecisions != beforeCrossCursorDecisions {
+		t.Fatal("cross-Account login-session Application cursor wrote authority", err)
 	}
 	resourceTagKey, err := iamv1.NewResourceTagConditionKey("environment")
 	if err != nil {
@@ -12334,19 +12692,28 @@ func authorityPlaintextLocationWithStructural(document string, beforeOTP map[str
 				// eventId and iamDecisionId are validated, server-generated structural
 				// identities. A random identifier may contain a later six-digit OTP
 				// substring without persisting that OTP; an exact six-digit value is
-				// still rejected. The same applies only to the exact request ID shape
-				// generated by the current product PEP for an authorization decision.
-				// Other request/correlation/operation and actor/target IDs remain
-				// untrusted because a caller or business payload can influence them.
-				trustedAuthorizationRequestID := false
-				if validEvent && key == "requestId" && event.Action == auditv1.ActionIAMAuthorizationDecided {
+				// still rejected. The same applies to the exact request ID shape
+				// generated by the current product PEP for an authorization decision,
+				// its exact correlation copy, and the target ID already required by the
+				// event contract to equal the server-generated IAM decision ID. A
+				// different correlation/operation or actor/target ID remains untrusted
+				// because a caller or business payload can influence it.
+				trustedAuthorizationRequestIdentity := false
+				if validEvent && event.Action == auditv1.ActionIAMAuthorizationDecided {
 					text, stringValue := child.(string)
-					trustedAuthorizationRequestID = stringValue && isGeneratedProductRequestID(text)
+					trustedAuthorizationRequestIdentity = stringValue && isGeneratedProductRequestID(text) &&
+						(key == "requestId" || (key == "correlationId" && text == event.RequestID))
 				}
+				trustedAuthorizationTarget := validEvent && key == "target" &&
+					event.Action == auditv1.ActionIAMAuthorizationDecided &&
+					event.Target.Kind == auditv1.TargetAuthorizationDecision &&
+					event.Target.ID == string(event.IAMDecisionID)
 				ignoreCode := validEvent && (key == "requestDigest" || key == "occurredAt" ||
-					key == "eventId" || key == "iamDecisionId") || trustedAuthorizationRequestID ||
+					key == "eventId" || key == "iamDecisionId") || trustedAuthorizationRequestIdentity ||
 					(earlierIdentity && key == "id")
-				if location := inspect(child, ignoreCode, earlierEvent && (key == "actor" || key == "target"), path+"."+field); location != "" {
+				if location := inspect(child, ignoreCode,
+					(earlierEvent && (key == "actor" || key == "target")) || trustedAuthorizationTarget,
+					path+"."+field); location != "" {
 					return location
 				}
 			}
@@ -12454,10 +12821,12 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 	t.Run("server-generated-authorization-request-id", func(t *testing.T) {
 		authorization := event
 		authorization.Action = auditv1.ActionIAMAuthorizationDecided
-		authorization.Target = auditv1.TargetReference{Kind: auditv1.TargetAuthorizationDecision, ID: "decision-inspection"}
+		authorization.Target = auditv1.TargetReference{Kind: auditv1.TargetAuthorizationDecision,
+			ID: "decision-" + strings.Repeat("c", 13) + code + strings.Repeat("d", 13)}
 		authorization.Result = auditv1.ResultAllowed
-		authorization.IAMDecisionID = "decision-inspection"
+		authorization.IAMDecisionID = auditv1.DecisionID(authorization.Target.ID)
 		authorization.RequestID = "request-" + strings.Repeat("a", 13) + code + strings.Repeat("b", 13)
+		authorization.CorrelationID = authorization.RequestID
 		encoded, err := json.Marshal(authorization)
 		if err != nil || auditv1.ValidateEvent(authorization) != nil {
 			t.Fatal("invalid authorization request identity fixture")
@@ -12475,6 +12844,11 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 				return value
 			}(),
 			func() auditv1.Event { value := authorization; value.RequestID = "request-" + code; return value }(),
+			func() auditv1.Event {
+				value := authorization
+				value.CorrelationID = "request-" + strings.Repeat("e", 13) + code + strings.Repeat("f", 13)
+				return value
+			}(),
 		} {
 			changedEncoded, marshalErr := json.Marshal(changed)
 			location, scanErr := authorityPlaintextLocation(string(changedEncoded), nil, code)

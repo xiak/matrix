@@ -956,9 +956,9 @@ func TestDeclaredModesBindBothDecisionsAndRejectUntrustedProfileContexts(t *test
 		"noncurrent revision": func(r *iamv1.AuthorizationRequest) { r.Profile.Revision++ },
 		"wrong digest":        func(r *iamv1.AuthorizationRequest) { r.Profile.ContentDigest = "sha256:" + strings.Repeat("0", 64) },
 		"missing mode":        func(r *iamv1.AuthorizationRequest) { r.ResourceMode = "" },
-		"undeclared collection": func(r *iamv1.AuthorizationRequest) {
+		"undeclared create collection": func(r *iamv1.AuthorizationRequest) {
 			r.ResourceMode = iamv1.AuthorizationResourceCollection
-			r.CollectionUsage = iamv1.AuthorizationCollectionList
+			r.CollectionUsage = iamv1.AuthorizationCollectionCreate
 		},
 		"instance usage":      func(r *iamv1.AuthorizationRequest) { r.CollectionUsage = iamv1.AuthorizationCollectionCreate },
 		"missing correlation": func(r *iamv1.AuthorizationRequest) { r.CorrelationID = "" },
@@ -2657,10 +2657,13 @@ func TestCurrentEvaluationUsesFrozenInterpretationBeforeNonmatchingDeny(t *testi
 			d.Statements[0].Resources[0].Kind = "OTHER_RESOURCE"
 		}, true},
 		{"different result kind", func(p *iamv1.AuthorizationProfile, _ *iamv1.PolicyDocument) {
+			p.Actions[0].ResourceShapes = []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance, PrefixAllowed: true}}
+			p.Actions[0].InstanceListBatch = false
 			p.Actions[0].ResultResourceKind = "OTHER_RESULT"
 		}, true},
 		{"collection cannot become instance", func(p *iamv1.AuthorizationProfile, _ *iamv1.PolicyDocument) {
 			p.Actions[0].ResourceShapes = []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionList}}
+			p.Actions[0].InstanceListBatch = false
 		}, true},
 		{"unused prefix capability removed", func(p *iamv1.AuthorizationProfile, _ *iamv1.PolicyDocument) {
 			p.Actions[0].ResourceShapes[0].PrefixAllowed = false

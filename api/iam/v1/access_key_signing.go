@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -99,6 +100,28 @@ type AccessKeyAuthorization struct {
 	SignedRequestDigest string                `json:"signedRequestDigest"`
 }
 
+// AccessKeyListAuthorizationRequest binds one collection guard and its exact,
+// product-owned candidate set to a single signed HTTP request. The product
+// derives candidates from its Account-scoped store; this transport carries no
+// Account or Subject selector and never accepts more than one bounded page.
+type AccessKeyListAuthorizationRequest struct {
+	Collection    AuthorizationRequest
+	Instances     []AuthorizationRequest
+	SignedRequest AccessKeySignedRequest
+}
+
+// AccessKeyListAuthorization records the collection guard first and, only
+// when it allows, one ordered decision for every submitted candidate. An empty
+// Instances array is meaningful. The response is bound to the same signed
+// request and cannot be cached as a permit for another page.
+type AccessKeyListAuthorization struct {
+	APIVersion          string                  `json:"apiVersion"`
+	Kind                string                  `json:"kind"`
+	Collection          AuthorizationDecision   `json:"collection"`
+	Instances           []AuthorizationDecision `json:"instances"`
+	SignedRequestDigest string                  `json:"signedRequestDigest"`
+}
+
 // ResolveAccessKeySubjectRequest proves possession of one key for the exact
 // product HTTP request before the product opens an Account-scoped lookup. It
 // intentionally carries no Action, resource, Account or Subject selector.
@@ -126,6 +149,17 @@ func (AccessKeyAuthorizationRequest) GoString() string {
 }
 func (AccessKeyAuthorizationRequest) MarshalJSON() ([]byte, error) {
 	return nil, ErrInvalidAccessKeySignature
+}
+
+func (AccessKeyListAuthorizationRequest) String() string { return "[REDACTED]" }
+func (AccessKeyListAuthorizationRequest) GoString() string {
+	return "iamv1.AccessKeyListAuthorizationRequest{[REDACTED]}"
+}
+func (AccessKeyListAuthorizationRequest) MarshalJSON() ([]byte, error) {
+	return nil, ErrInvalidAccessKeySignature
+}
+func (*AccessKeyListAuthorizationRequest) UnmarshalJSON([]byte) error {
+	return ErrInvalidAccessKeySignature
 }
 func (*AccessKeyAuthorizationRequest) UnmarshalJSON([]byte) error {
 	return ErrInvalidAccessKeySignature
@@ -186,6 +220,76 @@ func DecodeAccessKeyAuthorizationRequest(reader io.Reader) (AccessKeyAuthorizati
 	value := AccessKeyAuthorizationRequest{Authorization: wire.Authorization, SignedRequest: signed}
 	if err != nil || ValidateAccessKeyAuthorizationRequest(value) != nil {
 		return AccessKeyAuthorizationRequest{}, ErrInvalidAccessKeySignature
+	}
+	return value, nil
+}
+
+func ValidateAccessKeyListAuthorizationRequest(value AccessKeyListAuthorizationRequest) error {
+	collection := value.Collection
+	if ValidateAuthorizationRequest(collection) != nil || ValidateAccessKeySignedRequest(value.SignedRequest) != nil ||
+		collection.Profile.Product != value.SignedRequest.Parameters.Audience ||
+		collection.ResourceMode != AuthorizationResourceCollection || collection.CollectionUsage != AuthorizationCollectionList ||
+		len(collection.ResourceTags) != 0 ||
+		checkSourceProfileInstanceListBatch(collection.Profile, collection.Action, collection.Resource.Kind) != nil ||
+		value.Instances == nil || len(value.Instances) > MaxAuthorizationBatchItems {
+		return ErrInvalidAccessKeySignature
+	}
+	seenRequests := map[string]bool{collection.RequestID: true}
+	previousResource := ""
+	for _, request := range value.Instances {
+		if ValidateAuthorizationRequest(request) != nil || request.Profile != collection.Profile ||
+			request.Action != collection.Action || request.Resource.Kind != collection.Resource.Kind ||
+			request.ResourceMode != AuthorizationResourceInstance || request.CollectionUsage != "" ||
+			request.CorrelationID != collection.CorrelationID ||
+			!authorizationNetworkContextsEqual(request.NetworkContext, collection.NetworkContext) ||
+			!slices.Equal(request.RequestTags, collection.RequestTags) ||
+			request.Resource.ID <= previousResource || seenRequests[request.RequestID] {
+			return ErrInvalidAccessKeySignature
+		}
+		seenRequests[request.RequestID] = true
+		previousResource = request.Resource.ID
+	}
+	// Carrier capability is evaluated after successful MAC verification so a
+	// signed request against a stale/unsupported declaration consumes its nonce
+	// and records Deny instead of becoming replayable after a later grant.
+	return nil
+}
+
+func EncodeAccessKeyListAuthorizationRequest(value AccessKeyListAuthorizationRequest) ([]byte, error) {
+	if ValidateAccessKeyListAuthorizationRequest(value) != nil {
+		return nil, ErrInvalidAccessKeySignature
+	}
+	signed, err := EncodeAccessKeySignedRequest(value.SignedRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(signed)
+	encoded, err := json.Marshal(struct {
+		Collection    AuthorizationRequest   `json:"collection"`
+		Instances     []AuthorizationRequest `json:"instances"`
+		SignedRequest json.RawMessage        `json:"signedRequest"`
+	}{value.Collection, value.Instances, signed})
+	if err != nil || int64(len(encoded)) > MaxRequestBytes {
+		clear(encoded)
+		return nil, ErrInvalidAccessKeySignature
+	}
+	return encoded, nil
+}
+
+func DecodeAccessKeyListAuthorizationRequest(reader io.Reader) (AccessKeyListAuthorizationRequest, error) {
+	var wire struct {
+		Collection    AuthorizationRequest   `json:"collection"`
+		Instances     []AuthorizationRequest `json:"instances"`
+		SignedRequest json.RawMessage        `json:"signedRequest"`
+	}
+	if contractjson.DecodeObject(reader, MaxRequestBytes, &wire) != nil {
+		return AccessKeyListAuthorizationRequest{}, ErrInvalidAccessKeySignature
+	}
+	defer clear(wire.SignedRequest)
+	signed, err := DecodeAccessKeySignedRequest(bytes.NewReader(wire.SignedRequest))
+	value := AccessKeyListAuthorizationRequest{Collection: wire.Collection, Instances: wire.Instances, SignedRequest: signed}
+	if err != nil || ValidateAccessKeyListAuthorizationRequest(value) != nil {
+		return AccessKeyListAuthorizationRequest{}, ErrInvalidAccessKeySignature
 	}
 	return value, nil
 }
@@ -279,6 +383,54 @@ func DecodeAccessKeyAuthorization(reader io.Reader) (AccessKeyAuthorization, err
 	return result, nil
 }
 
+func ValidateAccessKeyListAuthorization(value AccessKeyListAuthorization) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKeyListAuthorization" ||
+		ValidateAuthorizationDecision(value.Collection) != nil ||
+		ValidateDigest("signedRequestDigest", value.SignedRequestDigest) != nil ||
+		value.Instances == nil || len(value.Instances) > MaxAuthorizationBatchItems {
+		return ErrInvalidAccessKeySignature
+	}
+	if !value.Collection.Allowed {
+		if len(value.Instances) != 0 {
+			return ErrInvalidAccessKeySignature
+		}
+		return nil
+	}
+	if value.Collection.Subject == nil || value.Collection.Subject.Type != SubjectUser ||
+		value.Collection.Subject.AccessKeyID == "" || value.Collection.InstallationID != "" ||
+		value.Collection.Profile == nil || value.Collection.ResourceMode != AuthorizationResourceCollection ||
+		value.Collection.CollectionUsage != AuthorizationCollectionList {
+		return ErrInvalidAccessKeySignature
+	}
+	previousResource := ""
+	seenRequests := make(map[string]bool, len(value.Instances)+1)
+	seenRequests[value.Collection.RequestID] = true
+	for _, decision := range value.Instances {
+		if ValidateAuthorizationDecision(decision) != nil || decision.Profile == nil ||
+			*decision.Profile != *value.Collection.Profile || decision.Action != value.Collection.Action ||
+			decision.Resource.Kind != value.Collection.Resource.Kind || decision.ResourceMode != AuthorizationResourceInstance ||
+			decision.CollectionUsage != "" || decision.CorrelationID != value.Collection.CorrelationID ||
+			!decision.DecidedAt.Equal(value.Collection.DecidedAt) ||
+			!authorizationNetworkContextsEqual(decision.NetworkContext, value.Collection.NetworkContext) ||
+			decision.Resource.ID <= previousResource || seenRequests[decision.RequestID] ||
+			decision.Allowed && (decision.TenantID != value.Collection.TenantID || decision.Subject == nil ||
+				!authorizationSubjectsEqual(*decision.Subject, *value.Collection.Subject)) {
+			return ErrInvalidAccessKeySignature
+		}
+		seenRequests[decision.RequestID] = true
+		previousResource = decision.Resource.ID
+	}
+	return nil
+}
+
+func DecodeAccessKeyListAuthorization(reader io.Reader) (AccessKeyListAuthorization, error) {
+	var result AccessKeyListAuthorization
+	if contractjson.DecodeObject(reader, MaxRequestBytes, &result) != nil || ValidateAccessKeyListAuthorization(result) != nil {
+		return AccessKeyListAuthorization{}, ErrInvalidAccessKeySignature
+	}
+	return result, nil
+}
+
 // The actual product PEP compares the once-only result to the request it sent.
 // A digest match is not permission to cache or replay this response.
 func CheckAccessKeyAuthorizationForRequest(value AccessKeyAuthorization, request AccessKeyAuthorizationRequest) error {
@@ -290,6 +442,34 @@ func CheckAccessKeyAuthorizationForRequest(value AccessKeyAuthorization, request
 	if err != nil || digest != value.SignedRequestDigest ||
 		value.Decision.Allowed && value.Decision.Subject.AccessKeyID != request.SignedRequest.Parameters.AccessKeyID {
 		return ErrInvalidAccessKeySignature
+	}
+	return nil
+}
+
+// CheckAccessKeyListAuthorizationForRequest binds the collection guard and
+// every candidate decision to the exact signed list request. A denied
+// collection returns no per-instance decisions and therefore reveals nothing
+// from the product-owned candidate set.
+func CheckAccessKeyListAuthorizationForRequest(value AccessKeyListAuthorization, request AccessKeyListAuthorizationRequest) error {
+	if ValidateAccessKeyListAuthorizationRequest(request) != nil || ValidateAccessKeyListAuthorization(value) != nil ||
+		CheckAuthorizationDecisionForRequest(value.Collection, request.Collection) != nil {
+		return ErrInvalidAccessKeySignature
+	}
+	digest, err := AccessKeySignedRequestDigest(request.SignedRequest)
+	if err != nil || digest != value.SignedRequestDigest {
+		return ErrInvalidAccessKeySignature
+	}
+	if !value.Collection.Allowed {
+		return nil
+	}
+	if value.Collection.Subject.AccessKeyID != request.SignedRequest.Parameters.AccessKeyID ||
+		len(value.Instances) != len(request.Instances) {
+		return ErrInvalidAccessKeySignature
+	}
+	for index := range request.Instances {
+		if CheckAuthorizationDecisionForRequest(value.Instances[index], request.Instances[index]) != nil {
+			return ErrInvalidAccessKeySignature
+		}
 	}
 	return nil
 }

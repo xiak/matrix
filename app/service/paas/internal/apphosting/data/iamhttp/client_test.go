@@ -146,6 +146,103 @@ func TestClientMapsConsumedAccessKeyNonceWithoutRetryingAsBearer(t *testing.T) {
 	}
 }
 
+func TestClientAuthorizesOneBearerCandidateBatch(t *testing.T) {
+	request := testApplicationBatchRequest()
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		if httpRequest.URL.Path != "/v1/authorize:batch" ||
+			httpRequest.Header.Get("Matrix-Subject-Credential") != testSubjectCredential {
+			t.Fatalf("IAM batch path=%s headers=%#v", httpRequest.URL.Path, httpRequest.Header)
+		}
+		var input iamv1.AuthorizationBatchRequest
+		if iamv1.DecodeRequest(httpRequest.Body, &input) != nil || len(input.Requests) != 2 {
+			t.Fatalf("IAM batch input=%#v", input)
+		}
+		decidedAt := time.Date(2026, 10, 7, 1, 2, 3, 0, time.UTC)
+		subject := iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"}
+		decisions := make([]iamv1.AuthorizationDecision, len(input.Requests))
+		for index, item := range input.Requests {
+			decisions[index] = iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
+				ID: iamv1.DecisionID(fmt.Sprintf("decision-batch-%d", index)), Allowed: index == 0,
+				Reason: []iamv1.DecisionReason{iamv1.DecisionAllowed, iamv1.DecisionDenied}[index],
+				Action: item.Action, Resource: item.Resource,
+				RequestID: item.RequestID, DecidedAt: decidedAt, Profile: &item.Profile,
+				ResourceMode: item.ResourceMode, NetworkContext: item.NetworkContext,
+				RequestTags: item.RequestTags, ResourceTags: item.ResourceTags, CorrelationID: item.CorrelationID}
+			if decisions[index].Allowed {
+				decisions[index].TenantID, decisions[index].Subject = "organization-a", &subject
+			}
+		}
+		result := iamv1.AuthorizationBatchDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationBatchDecision",
+			TenantID: "organization-a", Subject: subject, Profile: input.Requests[0].Profile,
+			Action: input.Requests[0].Action, ResourceKind: input.Requests[0].Resource.Kind,
+			NetworkContext: input.Requests[0].NetworkContext, CorrelationID: input.Requests[0].CorrelationID,
+			DecidedAt: decidedAt, Decisions: decisions}
+		if iamv1.CheckAuthorizationBatchDecisionForRequest(result, input) != nil {
+			t.Fatal("fixture batch is not request-bound")
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(result)
+	}))
+	defer server.Close()
+
+	result, err := newTestClient(t, server.URL).AuthorizeBatch(t.Context(), request)
+	if err != nil || port.ValidateAuthorizationBatchForRequest(result, request) != nil ||
+		result.TenantID != "organization-a" || len(result.Items) != 2 ||
+		!result.Items[0].Allowed || result.Items[1].Allowed {
+		t.Fatalf("PaaS batch=%#v err=%v", result, err)
+	}
+}
+
+func TestClientAuthorizesOneSignedApplicationListWithoutBearerFallback(t *testing.T) {
+	request := testAccessKeyListAuthorizationRequest(t)
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		calls++
+		if httpRequest.URL.Path != "/v1/authorize:access-key-list" ||
+			httpRequest.Header.Get("Matrix-Subject-Credential") != "" {
+			t.Fatalf("IAM signed list path=%s headers=%#v", httpRequest.URL.Path, httpRequest.Header)
+		}
+		input, err := iamv1.DecodeAccessKeyListAuthorizationRequest(httpRequest.Body)
+		if err != nil || len(input.Instances) != 2 {
+			t.Fatalf("IAM signed list input=%#v err=%v", input, err)
+		}
+		digest, _ := iamv1.AccessKeySignedRequestDigest(input.SignedRequest)
+		decidedAt := time.Date(2026, 10, 7, 1, 2, 3, 0, time.UTC)
+		subject := iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer", AccessKeyID: "key-one"}
+		decide := func(item iamv1.AuthorizationRequest, id string, allowed bool) iamv1.AuthorizationDecision {
+			reason := iamv1.DecisionDenied
+			if allowed {
+				reason = iamv1.DecisionAllowed
+			}
+			decision := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
+				ID: iamv1.DecisionID(id), Allowed: allowed, Reason: reason,
+				Action: item.Action, Resource: item.Resource, RequestID: item.RequestID, DecidedAt: decidedAt,
+				Profile: &item.Profile, ResourceMode: item.ResourceMode, CollectionUsage: item.CollectionUsage,
+				NetworkContext: item.NetworkContext, RequestTags: item.RequestTags, ResourceTags: item.ResourceTags,
+				CorrelationID: item.CorrelationID}
+			if allowed {
+				decision.TenantID, decision.Subject = "organization-a", &subject
+			}
+			return decision
+		}
+		result := iamv1.AccessKeyListAuthorization{APIVersion: iamv1.APIVersion, Kind: "AccessKeyListAuthorization",
+			Collection: decide(input.Collection, "decision-collection", true), SignedRequestDigest: digest,
+			Instances: []iamv1.AuthorizationDecision{decide(input.Instances[0], "decision-a", true), decide(input.Instances[1], "decision-b", false)}}
+		if iamv1.CheckAccessKeyListAuthorizationForRequest(result, input) != nil {
+			t.Fatal("fixture signed list is not request-bound")
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(result)
+	}))
+	defer server.Close()
+
+	result, err := newTestClient(t, server.URL).AuthorizeAccessKeyList(t.Context(), request)
+	if calls != 1 || err != nil || port.ValidateAccessKeyListAuthorizationForRequest(result, request) != nil ||
+		len(result.Instances.Items) != 2 || !result.Instances.Items[0].Allowed || result.Instances.Items[1].Allowed {
+		t.Fatalf("PaaS signed list calls=%d result=%#v err=%v", calls, result, err)
+	}
+}
+
 func TestClientResolvesExactAccessKeySubjectWithoutPermitOrSubjectBearer(t *testing.T) {
 	signed := testAccessKeyAuthorizationRequest(t).SignedRequest
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -616,4 +713,42 @@ func testAccessKeyAuthorizationRequest(t *testing.T) port.AccessKeyAuthorization
 			Signature: signature,
 		},
 	}
+}
+
+func testApplicationBatchRequest() port.AuthorizationBatchRequest {
+	requests := make([]port.AuthorizationRequest, 2)
+	for index, id := range []paasv1.ResourceID{"application-a", "application-b"} {
+		requests[index] = port.AuthorizationRequest{Credential: "Bearer " + testSubjectCredential,
+			Action: port.AuthorizeApplicationRead, Resource: paasv1.ResourceRef{Kind: port.ResourceApplication, ID: id},
+			ResourceMode: iamv1.AuthorizationResourceInstance, SourceIP: "192.0.2.10",
+			ResourceLabels: map[string]string{"environment": []string{"production", "staging"}[index]},
+			RequestID:      fmt.Sprintf("request-%d", index), CorrelationID: "request-collection"}
+	}
+	return port.AuthorizationBatchRequest{Credential: "Bearer " + testSubjectCredential, Requests: requests}
+}
+
+func testAccessKeyListAuthorizationRequest(t *testing.T) port.AccessKeyListAuthorizationRequest {
+	t.Helper()
+	base := testAccessKeyAuthorizationRequest(t)
+	base.Action = port.AuthorizeApplicationRead
+	base.Resource = paasv1.ResourceRef{Kind: port.ResourceApplication, ID: "collection"}
+	base.ResourceMode = iamv1.AuthorizationResourceCollection
+	base.CollectionUsage = iamv1.AuthorizationCollectionList
+	base.RequestLabels = nil
+	base.RequestID, base.CorrelationID = "request-collection", "request-collection"
+	base.SignedRequest.HTTP.Method = http.MethodGet
+	base.SignedRequest.HTTP.EscapedPath = "/api/paas/v1/applications"
+	base.SignedRequest.HTTP.RawQuery = "after=pc1.opaque"
+	base.SignedRequest.HTTP.ContentType = ""
+	base.SignedRequest.HTTP.IdempotencyKey = ""
+	base.SignedRequest.HTTP.BodyDigest = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	instances := make([]port.AccessKeyAuthorizationRequest, 2)
+	for index, id := range []paasv1.ResourceID{"application-a", "application-b"} {
+		instances[index] = port.AccessKeyAuthorizationRequest{Action: port.AuthorizeApplicationRead,
+			Resource:     paasv1.ResourceRef{Kind: port.ResourceApplication, ID: id},
+			ResourceMode: iamv1.AuthorizationResourceInstance, SourceIP: "192.0.2.10",
+			ResourceLabels: map[string]string{"environment": []string{"production", "staging"}[index]},
+			RequestID:      fmt.Sprintf("request-%d", index), CorrelationID: "request-collection", SignedRequest: base.SignedRequest}
+	}
+	return port.AccessKeyListAuthorizationRequest{Collection: base, Instances: instances}
 }

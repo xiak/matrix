@@ -22,6 +22,7 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 	required := []string{
 		"Tenant",
 		"Application",
+		"ApplicationList",
 		"CreateApplicationRequest",
 		"Configuration",
 		"CreateConfigurationRequest",
@@ -86,7 +87,7 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 
 	want := map[string][]string{
 		"/ready":                           {"get"},
-		"/v1/applications":                 {"post"},
+		"/v1/applications":                 {"get", "post"},
 		"/v1/applications/{applicationId}": {"get"},
 		"/v1/applications/{applicationId}/labels/{labelKey}": {"put", "delete"},
 		"/v1/configurations":                                      {"post"},
@@ -390,6 +391,7 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"SecretVersionReference":             reflect.TypeOf(SecretVersionReference{}),
 		"ComponentBinding":                   reflect.TypeOf(ComponentBinding{}),
 		"Application":                        reflect.TypeOf(Application{}),
+		"ApplicationList":                    reflect.TypeOf(ApplicationList{}),
 		"CreateApplicationRequest":           reflect.TypeOf(CreateApplicationRequest{}),
 		"Configuration":                      reflect.TypeOf(Configuration{}),
 		"CreateConfigurationRequest":         reflect.TypeOf(CreateConfigurationRequest{}),

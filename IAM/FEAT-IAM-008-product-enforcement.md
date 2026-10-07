@@ -251,6 +251,18 @@ PaaS Profile下一revision只为`paas.application.label.set|delete`向USER增加
 
 上述AccessKey产品路径及后继Audit租户读取、网络限制与使用观测累计进入`91649497a0c53be1174d8835326a2df51fe74a55`；其[Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260)已核实精确SHA并全部completed/success。该终态覆盖当前整仓、真实authority storage/runtime/process分片及node gate，接受当前已列出的产品消费后端；不表示未列动作自动获得ACCESS_KEY，不替代APISIX可信边缘、签名安装、LIVE UI或最终发布组合。
 
+## 下一纵向切片：租户 Application 目录与安全游标
+
+本片把`GET /v1/applications?after=<opaque>`作为首个有游标的租户资源目录，不顺带开放Configuration、Revision、Deployment或Operation目录，也不增加caller可选页大小、Account、Subject、Action、标签或排序selector。响应使用固定候选扫描预算50，按Application ID的`C`排序；`after`只接受本服务签发的续页值，空值表示首屏。候选必须从当前身份推导的Account中经PaaS强制RLS读取，不能先按全局ID取资源再靠IAM过滤。
+
+一次页面读取先以同一当前凭据取得`paas.application.read`的`COLLECTION_LIST`决定，再对本页真实候选使用该Action的`INSTANCE`批量PDP。PaaS Profile的新revision必须同时声明集合形状和`instanceListBatch`，现有INSTANCE读取、声明标签条件、USER/ROLE及已发布认证载体不被改写。批量项从数据库快照取得精确ID、resourceVersion和Profile声明的`resource.tag/environment`；Allow后返回的资源仍与授权快照逐项核对，Deny只过滤对应项，任何遗漏、重复、错序、错Account/Subject/Profile/Action/标签或IAM不确定结果都使整页失败关闭。
+
+游标由PaaS产品边界独立持有的每安装32-byte密钥认证，不复用IAM/Audit内部游标密钥、codec或包。载荷绑定安装、Account、严格Subject（ROLE包含完整session lineage，AccessKey包含key ID）、当前PaaS Profile引用、Action、固定查询形状、最后已扫描候选和15分钟失效时间；不能携带权限或业务对象正文。游标指向最后扫描候选而不是最后返回项，因此部分/全部Deny不会重复扫描；即使返回空页，只要固定预算后仍有候选也可返回续页。每页重新认证并执行集合和实例授权，游标不是permit；撤会话、撤Role/binding、停用User/Account、停用AccessKey、撤附件或推进Profile后，下一页必须按当前状态拒绝或重新过滤。
+
+LOGIN_SESSION与ROLE继续使用现有`authorize`加`authorize:batch`协议。ACCESS_KEY不能把一个签名列表请求拆成多次`authorize:access-key`，而必须使用[007拥有的一次MAC、一次nonce、集合与实例决定共同引用同一请求证据的签名目录协议](./FEAT-IAM-007-programmatic-credentials.md#下一纵向切片accesskey签名目录批量授权)。未知提交结果保持不确定，产品不得改用登录bearer、换nonce自动重放业务请求，或把非permit的subject-resolution结果当作目录授权。
+
+最低门禁覆盖两个Account拥有同ID/同名但不同标签的Application、USER、两类ROLE来源及ACCESS_KEY；全Allow、部分Allow、全Deny、显式Deny优先、零项、恰好50项和超过50项；伪造/过期/另一安装/另一Account/另一Subject/另一Profile/另一Action游标；游标指向未返回Deny项；第二页前撤权、停用或标签变化；批次错序/遗漏/替换；nonce重放、同key并发、IAM失联、outbox故障和进程重启。真实PG18须证明RLS、只读快照、签名请求证据唯一性、决定与tenant Audit链原子性；独立IAM/Audit/PaaS进程及签名安装组合须证明每安装游标密钥多副本一致、密钥缺失或错误时失败关闭。Profile、AccessKey证据或安装拓扑的具体版本只在实现冻结时推进，本节本身不把该切片标为已实现。
+
 ## 验收
 
 真实两个产品/两个 Account 的同名/同 ID/key、跨租户资源/cursor/配额/Operation、修改 tag 攻击、多个相关资源任一拒绝即无效果；服务跨租户请求必须有目标角色和用途；verifier probe 无业务写权。暂停之后的已提交事实可投递，新请求拒绝。独立 PG18/RLS/受限进程、真实部署和 UI 路径均通过才接受。

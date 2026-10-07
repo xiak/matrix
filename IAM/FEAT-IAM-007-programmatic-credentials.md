@@ -326,6 +326,16 @@ Account值归现有`AccountSecuritySettings.accessKeyNetwork`，不是授权Poli
 
 后继Audit目录修正已累计进入`91649497a0c53be1174d8835326a2df51fe74a55`；其[Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260)已核实精确SHA并全部completed/success，当前真实PG18、双IAM/Audit/PaaS与恢复门禁均覆盖网络更新事实、Allow/Deny使用摘要及即时生效。原`472596b1`失败保持历史失败，不回填；该成功只接受K3后端切片，不替代签名APISIX、安装备份托管、LIVE UI或最终发布。
 
+### 下一纵向切片：AccessKey签名目录批量授权
+
+产品目录不能为一个已签名HTTP请求重复调用单项`authorize:access-key`。当前nonce证据按`(access_key_id, nonce_digest)`唯一，重复单项调用要么错误冲突，要么诱使实现放宽防重放；两者都不能作为目录协议。新增目的限定的内部`POST /v1/authorize:access-key-list`，请求只包含一个`COLLECTION_LIST`授权请求、0–50个严格升序的同Action/ResourceKind `INSTANCE`请求和同一`AccessKeySignedRequest`。集合与实例必须使用同一当前Profile、network context及correlation ID，各request ID唯一；Profile同时声明集合形状、实例形状、`instanceListBatch`和USER `ACCESS_KEY`，否则在写入任何状态前拒绝。
+
+IAM在一个事务中认证调用服务、验证一次MAC和当前AccessKey状态，并只消费一次nonce。签名请求证据按请求保存一次；集合决定与实例决定分别保存并引用同一证据，不能为每项复制nonce记录，也不能仅给第一项留凭据来源。集合Deny提交集合Deny和唯一证据，返回空实例结果；集合Allow才对全部候选使用同一事务时刻和权威快照逐项求值。任一决定、证据或Audit outbox失败使整批回滚且不返回部分结果；并发同nonce最多一个事务提交。现有单项`authorize:access-key`也应使用同一规范化请求证据关系，避免长期保留两套防重放模型。
+
+响应绑定已认证Account、严格USER/accessKeyId、完整Profile/Action/ResourceKind/correlation、集合决定、按请求顺序的0–50个实例决定及`signedRequestDigest`。每项Allow仍只是该实例的permit；集合Allow不能推导实例Allow，实例Allow也不能绕过集合Deny。subject-resolution继续只是同一签名请求的非授权预读上下文。提交结果不确定时，产品不能改用LOGIN_SESSION、替换nonce自动重放同一业务请求，或缓存部分结果。
+
+存储替换遵循pre-v1最新前驱原则：只保留当前schema到下一schema的一次真实数据迁移，把现有一对一AccessKey决定证据无损正规化为“签名请求证据＋决定引用”；不维护所有未发布开发草稿的兼容矩阵。原决定、Audit canonical、nonce已消费状态、使用观测与AccessKey撤销状态必须保留，迁移/等值重放/备份恢复不能让旧nonce重新可用。最低门禁覆盖零/一/五十项、集合Deny、部分/全部实例Deny、重复/乱序/错Profile/Action/标签、同nonce并发、事务提交未知、撤权/停用竞争、两个IAM副本、重启和直接前驱保留数据。产品候选、RLS、游标及返回资源核对由[008](./FEAT-IAM-008-product-enforcement.md#下一纵向切片租户-application-目录与安全游标)拥有。
+
 ## 验收
 
 标准签名正负向量、body/path/query/header 替换、过期/未来时间/重放与错服务；并发 disable/rotate/request、双账号同名用户隔离；普通 JSON/错误/日志/审计无 key material；真实 PaaS 读写与 Audit 的程序身份可关联，重启仍拒绝旧 key。

@@ -77,6 +77,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	securityMailChannelMounts := 0
 	notificationDSNMounts := 0
 	accessAnalysisDSNMounts := 0
+	paasCursorKeyMounts := 0
 	expectedEntrypoints := map[string]string{
 		"audit":                       "/matrix/bin/matrix-audit",
 		"iam":                         "/matrix/bin/matrix-iam",
@@ -114,7 +115,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE",
 		},
 		"paas-api": {
-			"MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
+			"MATRIX_PAAS_CURSOR_KEY_FILE", "MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
 			"MATRIX_PAAS_INSTALLATION_ID", "MATRIX_PAAS_LISTEN_ADDRESS",
 			"MATRIX_PAAS_RELEASE_ID", "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE",
 			"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST",
@@ -342,6 +343,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 						t.Fatalf("access analysis database identity crossed its worker boundary: %#v", mount)
 					}
 				}
+				if source == path.Join(options.Root, layout.PaaSCursorKey) {
+					paasCursorKeyMounts++
+					if name != "paas-api" || target != "/run/matrix/paas-cursor-key" || mount["read_only"] != true {
+						t.Fatalf("PaaS cursor key crossed its API-only boundary: %#v", mount)
+					}
+				}
 				if name == "paas-worker" && source == options.Root+"/runtime/executor" {
 					foundExecutorRoot = target == source
 				}
@@ -394,9 +401,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			foundAPISIXRuntimeBoundary,
 		)
 	}
-	if emailKeyringMounts != 2 || securityMailChannelMounts != 1 || notificationDSNMounts != 1 || accessAnalysisDSNMounts != 1 {
-		t.Fatalf("IAM private mount closure: mail-keyring=%d mail-channel=%d mail-dsn=%d analysis-dsn=%d",
-			emailKeyringMounts, securityMailChannelMounts, notificationDSNMounts, accessAnalysisDSNMounts)
+	if emailKeyringMounts != 2 || securityMailChannelMounts != 1 || notificationDSNMounts != 1 || accessAnalysisDSNMounts != 1 || paasCursorKeyMounts != 1 {
+		t.Fatalf("private mount closure: mail-keyring=%d mail-channel=%d mail-dsn=%d analysis-dsn=%d paas-cursor=%d",
+			emailKeyringMounts, securityMailChannelMounts, notificationDSNMounts, accessAnalysisDSNMounts, paasCursorKeyMounts)
 	}
 	encoded := string(result.ComposeJSON)
 	for _, forbidden := range []string{"latest", "secret-value", "dockerfile", "registry"} {

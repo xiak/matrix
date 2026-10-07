@@ -1,11 +1,60 @@
 package paasv1
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestApplicationListIsBoundedOrderedAndOpaque(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 1, 2, 3, 4_000, time.UTC)
+	application := func(id ResourceID, tenant TenantID) Application {
+		return Application{APIVersion: APIVersion, Kind: "Application", Metadata: ResourceMetadata{
+			ID: id, Name: string(id), Scope: ResourceScope{Kind: AuthorityTenant, TenantID: tenant},
+			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+		}}
+	}
+	value := ApplicationList{APIVersion: APIVersion, Kind: "ApplicationList",
+		Items:     []Application{application("app-a", "account-a"), application("app-b", "account-a")},
+		NextAfter: "pc1.opaque_continuation",
+	}
+	if err := ValidateApplicationList(value); err != nil {
+		t.Fatal(err)
+	}
+	schema := compileOpenAPISchema(t, loadOpenAPI(t), "ApplicationList")
+	if err := schema.Validate(schemaInstance(t, value)); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*ApplicationList){
+		"nil items":         func(v *ApplicationList) { v.Items = nil },
+		"wrong kind":        func(v *ApplicationList) { v.Kind = "Application" },
+		"raw after id":      func(v *ApplicationList) { v.NextAfter = "app-b" },
+		"other cursor kind": func(v *ApplicationList) { v.NextAfter = "ic1.foreign" },
+		"cross account":     func(v *ApplicationList) { v.Items[1].Metadata.Scope.TenantID = "account-b" },
+		"duplicate":         func(v *ApplicationList) { v.Items[1] = v.Items[0] },
+		"reordered":         func(v *ApplicationList) { v.Items[0], v.Items[1] = v.Items[1], v.Items[0] },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := value
+			candidate.Items = append([]Application(nil), value.Items...)
+			mutate(&candidate)
+			if ValidateApplicationList(candidate) == nil {
+				t.Fatal("invalid application list accepted")
+			}
+		})
+	}
+	tooMany := value
+	tooMany.NextAfter = ""
+	tooMany.Items = make([]Application, ApplicationDirectoryPageSize+1)
+	for index := range tooMany.Items {
+		tooMany.Items[index] = application(ResourceID(fmt.Sprintf("app-%03d", index)), "account-a")
+	}
+	if ValidateApplicationList(tooMany) == nil {
+		t.Fatal("over-budget application list accepted")
+	}
+}
 
 func TestValidateSetApplicationLabelRequest(t *testing.T) {
 	for _, value := range []string{"production", "staging-blue"} {

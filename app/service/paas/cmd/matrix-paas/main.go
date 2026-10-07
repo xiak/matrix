@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -33,6 +34,7 @@ const (
 	databaseDSNFileEnvironment       = "MATRIX_PAAS_DATABASE_DSN_FILE"
 	iamEndpointEnvironment           = "MATRIX_PAAS_IAM_ENDPOINT"
 	serviceCredentialFileEnvironment = "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE"
+	cursorKeyFileEnvironment         = "MATRIX_PAAS_CURSOR_KEY_FILE"
 	listenAddressEnvironment         = "MATRIX_PAAS_LISTEN_ADDRESS"
 	installationIDEnvironment        = "MATRIX_PAAS_INSTALLATION_ID"
 	northboundOriginEnvironment      = "MATRIX_PAAS_NORTHBOUND_ORIGIN"
@@ -44,6 +46,7 @@ type configuration struct {
 	databaseDSNFile       string
 	iamEndpoint           string
 	serviceCredentialFile string
+	cursorKeyFile         string
 	listenAddress         string
 	installationID        string
 	northboundOrigin      string
@@ -94,6 +97,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return errors.New("PaaS service credential is invalid")
 	}
+	cursorKey, err := readPaaSCursorKey(config.cursorKeyFile)
+	if err != nil {
+		return err
+	}
+	defer clear(cursorKey)
 	authorizer, err := iamhttp.NewClient(iamhttp.Config{
 		Endpoint: config.iamEndpoint, ServiceCredential: credential,
 	})
@@ -132,6 +140,7 @@ func run(ctx context.Context) error {
 	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, installationVerifier, paashttp.Config{
 		NorthboundOrigin: config.northboundOrigin,
 		InstallationID:   config.installationID,
+		CursorKey:        cursorKey,
 		Readiness: func(readinessContext context.Context) (paasv1.Readiness, error) {
 			readiness, err := repository.Readiness(readinessContext)
 			if err != nil || readiness.State != paasv1.ReadinessReady {
@@ -143,6 +152,7 @@ func run(ctx context.Context) error {
 			return readiness, nil
 		},
 	})
+	clear(cursorKey)
 	if err != nil {
 		return err
 	}
@@ -187,6 +197,7 @@ func loadConfiguration() (configuration, error) {
 		databaseDSNFile:       os.Getenv(databaseDSNFileEnvironment),
 		iamEndpoint:           os.Getenv(iamEndpointEnvironment),
 		serviceCredentialFile: os.Getenv(serviceCredentialFileEnvironment),
+		cursorKeyFile:         os.Getenv(cursorKeyFileEnvironment),
 		listenAddress:         os.Getenv(listenAddressEnvironment),
 		installationID:        os.Getenv(installationIDEnvironment),
 		northboundOrigin:      os.Getenv(northboundOriginEnvironment),
@@ -194,10 +205,32 @@ func loadConfiguration() (configuration, error) {
 		verificationDigest:    os.Getenv(verificationDigestEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.iamEndpoint == "" ||
-		config.serviceCredentialFile == "" || config.listenAddress == "" ||
+		config.serviceCredentialFile == "" || config.cursorKeyFile == "" || config.listenAddress == "" ||
 		config.installationID == "" || config.releaseID == "" ||
 		config.verificationDigest == "" {
 		return configuration{}, errors.New("PaaS process configuration is incomplete")
 	}
 	return config, nil
+}
+
+func readPaaSCursorKey(path string) ([]byte, error) {
+	encoded, err := processconfig.ReadFile(path, 64, true)
+	if err != nil {
+		return nil, errors.New("PaaS cursor key is unavailable")
+	}
+	defer clear(encoded)
+	if len(encoded) != 64 {
+		return nil, errors.New("PaaS cursor key is invalid")
+	}
+	for _, character := range encoded {
+		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+			return nil, errors.New("PaaS cursor key is invalid")
+		}
+	}
+	key := make([]byte, 32)
+	if _, err := hex.Decode(key, encoded); err != nil {
+		clear(key)
+		return nil, errors.New("PaaS cursor key is invalid")
+	}
+	return key, nil
 }

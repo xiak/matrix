@@ -134,6 +134,16 @@ func buildPaths() schema {
 			"get": readOperation(resource.readID, "Get "+resource.kind, resource.parameter, resource.kind),
 		}
 	}
+	paths["/v1/applications"].(schema)["get"] = schema{
+		"operationId": "listApplications",
+		"summary":     "List Applications visible to the current IAM subject",
+		"parameters": []any{schema{
+			"name": "after", "in": "query", "required": false,
+			"description": "Opaque PaaS continuation. Pass nextAfter unchanged; raw Application IDs and other selectors are rejected.",
+			"schema":      schema{"type": "string", "pattern": `^pc1\.[A-Za-z0-9_-]+$`, "minLength": 5, "maxLength": paasv1.MaxApplicationCursorBytes},
+		}},
+		"responses": readResponses("ApplicationList"),
+	}
 	setLabel := mutationOperationWithPath(
 		"setApplicationLabel", "Set Application label", "applicationId", "SetApplicationLabelRequest", true, "200",
 	)
@@ -419,7 +429,7 @@ func structContracts() map[string]reflect.Type {
 		paasv1.FilesystemUsage{}, paasv1.FilesystemUsageValue{},
 		paasv1.PlacementPolicySpec{}, paasv1.PlacementPolicy{}, paasv1.PlacementDecision{},
 		paasv1.ArtifactRef{}, paasv1.ResourceRequirements{}, paasv1.ApplicationEndpoint{}, paasv1.ComponentInput{},
-		paasv1.SecretVersionReference{}, paasv1.ComponentBinding{}, paasv1.Application{}, paasv1.CreateApplicationRequest{}, paasv1.SetApplicationLabelRequest{}, paasv1.Configuration{},
+		paasv1.SecretVersionReference{}, paasv1.ComponentBinding{}, paasv1.Application{}, paasv1.ApplicationList{}, paasv1.CreateApplicationRequest{}, paasv1.SetApplicationLabelRequest{}, paasv1.Configuration{},
 		paasv1.CreateConfigurationRequest{}, paasv1.ConfigurationRevisionSpec{}, paasv1.ConfigurationRevision{},
 		paasv1.CreateConfigurationRevisionRequest{}, paasv1.ApplicationRevisionComponent{}, paasv1.ApplicationRevisionSpec{},
 		paasv1.ApplicationRevision{}, paasv1.CreateApplicationRevisionRequest{}, paasv1.DeploymentComponent{}, paasv1.DeploymentSpec{},
@@ -479,6 +489,9 @@ func structSchema(contract reflect.Type) schema {
 }
 
 func schemaForField(owner string, field reflect.StructField, jsonName string) schema {
+	if owner == "ApplicationList" && field.Name == "NextAfter" {
+		return schema{"type": "string", "pattern": `^pc1\.[A-Za-z0-9_-]+$`, "minLength": 5, "maxLength": paasv1.MaxApplicationCursorBytes}
+	}
 	if owner == "DeploymentEndpointObservation" &&
 		(field.Name == "ComponentName" || field.Name == "EndpointName" || field.Name == "Address") {
 		return ref("Name")
@@ -557,7 +570,7 @@ func schemaForType(contract reflect.Type, jsonName string) schema {
 
 func applySemanticOverlays(schemas map[string]any) {
 	resourceKinds := map[string]string{
-		"Application": "Application", "Configuration": "Configuration",
+		"Application": "Application", "ApplicationList": "ApplicationList", "Configuration": "Configuration",
 		"ConfigurationRevision": "ConfigurationRevision", "ApplicationRevision": "ApplicationRevision",
 		"Deployment": "Deployment", "DeploymentGeneration": "DeploymentGeneration",
 		"ExecutionPool": "ExecutionPool", "ExecutionTarget": "ExecutionTarget",
@@ -653,6 +666,8 @@ func applySemanticOverlays(schemas map[string]any) {
 	}}
 	setArrayMinimum(schemas, "PlacementPolicySpec", "eligibleExecutionPoolIds", 1)
 	setArrayMinimum(schemas, "ApplicationRevisionSpec", "components", 1)
+	applicationListItems := object(schemas["ApplicationList"])["properties"].(schema)["items"].(schema)
+	applicationListItems["maxItems"] = paasv1.ApplicationDirectoryPageSize
 	setArrayMinimum(schemas, "DeploymentSpec", "components", 1)
 	setArrayMinimum(schemas, "AdapterCapabilitiesContract", "actions", 1)
 	setIntegerMinimum(schemas, "ApplicationEndpoint", "port", 1)

@@ -392,6 +392,10 @@ func buildPaths() object {
 			"authorizeAccessKey", "Verify one signed product request and atomically record its decision and permanent nonce consumption", "AccessKeyAuthorizationRequest", "AccessKeyAuthorization", "200",
 			[]any{object{"ServiceCredential": []string{}}}, nil,
 		)},
+		"/v1/authorize:access-key-list": object{"post": mutationOperation(
+			"authorizeAccessKeyList", "Verify one signed list request and atomically record its collection guard plus one bounded candidate-decision set", "AccessKeyListAuthorizationRequest", "AccessKeyListAuthorization", "200",
+			[]any{object{"ServiceCredential": []string{}}}, nil,
+		)},
 		"/v1/installation:verify": object{"post": mutationOperation(
 			"verifyInstallation", "Authorize the credential-bound installation verifier", "AuthorizationRequest", "AuthorizationDecision", "200",
 			[]any{object{"ServiceCredential": []string{}}}, nil,
@@ -870,6 +874,7 @@ func structContracts() map[string]reflect.Type {
 		"AuthorizationBatchRequest":                     openapi31.StructType[iamv1.AuthorizationBatchRequest](),
 		"AuthorizationBatchDecision":                    openapi31.StructType[iamv1.AuthorizationBatchDecision](),
 		"AccessKeyAuthorization":                        openapi31.StructType[iamv1.AccessKeyAuthorization](),
+		"AccessKeyListAuthorization":                    openapi31.StructType[iamv1.AccessKeyListAuthorization](),
 		"AccessKeySubjectContext":                       openapi31.StructType[iamv1.AccessKeySubjectContext](),
 		"AccessKeyHTTPRequest":                          openapi31.StructType[iamv1.AccessKeyHTTPRequest](),
 		"Readiness":                                     openapi31.StructType[iamv1.Readiness](),
@@ -1281,6 +1286,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	}
 	if owner == "AuthorizationBatchRequest" && jsonName == "requests" || owner == "AuthorizationBatchDecision" && jsonName == "decisions" {
 		base["minItems"], base["maxItems"] = 1, iamv1.MaxAuthorizationBatchItems
+	}
+	if owner == "AccessKeyListAuthorization" && jsonName == "instances" {
+		base["minItems"], base["maxItems"] = 0, iamv1.MaxAuthorizationBatchItems
 	}
 	if (owner == "Policy" || owner == "CreatePolicyRequest" || owner == "UpdatePolicyRequest" || owner == "UpdateUserRequest" ||
 		owner == "RoleAccountDisplay" || owner == "RoleSourceUserDisplay") && jsonName == "displayName" {
@@ -1696,6 +1704,13 @@ func applySemanticOverlays(schemas object) {
 		"required": []string{"authorization", "signedRequest"}, "properties": object{
 			"authorization": openapi31.Ref("AuthorizationRequest"), "signedRequest": openapi31.Ref("AccessKeySignedRequest")},
 		"description": "Service-bound internal request only. No subject/account selector. The actual PEP binds HTTP data and audience; IAM verifies the MAC and database-time window. Duplicate nonce conflicts, never replays a permit."}
+	schemas["AccessKeyListAuthorizationRequest"] = object{"type": "object", "additionalProperties": false,
+		"required": []string{"collection", "instances", "signedRequest"}, "properties": object{
+			"collection": openapi31.Ref("AuthorizationRequest"),
+			"instances": object{"type": "array", "minItems": 0, "maxItems": iamv1.MaxAuthorizationBatchItems,
+				"items": openapi31.Ref("AuthorizationRequest")},
+			"signedRequest": openapi31.Ref("AccessKeySignedRequest")},
+		"description": "Service-bound internal list authorization only. One signed request binds one COLLECTION_LIST guard and an explicit sorted set of zero to fifty product-owned instance candidates. No subject/account/cursor selector is accepted."}
 	schemas["ResolveAccessKeySubjectRequest"] = object{"type": "object", "additionalProperties": false,
 		"required": []string{"profile", "signedRequest"}, "properties": object{
 			"profile": openapi31.Ref("AuthorizationProfileReference"), "signedRequest": openapi31.Ref("AccessKeySignedRequest")},
@@ -1703,6 +1718,16 @@ func applySemanticOverlays(schemas object) {
 	schemas["AccessKeyAuthorization"].(object)["allOf"] = []any{object{
 		"if": object{"properties": object{"decision": object{"properties": object{"allowed": object{"const": true}}}}},
 		"then": object{"properties": object{"decision": object{"properties": object{"installationId": false, "subject": object{
+			"required": []string{"accessKeyId"}, "properties": object{"type": object{"const": "USER"}}}}}}},
+	}}
+	schemas["AccessKeyListAuthorization"].(object)["allOf"] = []any{object{
+		"properties": object{"collection": object{"properties": object{
+			"resourceMode": object{"const": "COLLECTION"}, "collectionUsage": object{"const": "COLLECTION_LIST"},
+		}}},
+	}, object{
+		"if":   object{"properties": object{"collection": object{"properties": object{"allowed": object{"const": false}}}}},
+		"then": object{"properties": object{"instances": object{"maxItems": 0}}},
+		"else": object{"properties": object{"collection": object{"properties": object{"installationId": false, "subject": object{
 			"required": []string{"accessKeyId"}, "properties": object{"type": object{"const": "USER"}}}}}}},
 	}}
 	schemas["AccessKeySubjectContext"].(object)["allOf"] = []any{object{
@@ -1886,7 +1911,8 @@ func applySemanticOverlays(schemas object) {
 		"AuthorizationSubjectContext": "AuthorizationSubjectContext",
 		"CurrentAccessDiagnosis":      "CurrentAccessDiagnosis",
 		"Revocation":                  "Revocation", "AuthorizationDecision": "AuthorizationDecision", "AuthorizationBatchDecision": "AuthorizationBatchDecision",
-		"Readiness": "Readiness",
+		"AccessKeyListAuthorization": "AccessKeyListAuthorization",
+		"Readiness":                  "Readiness",
 	}
 	for owner, kind := range kinds {
 		properties := schemas[owner].(object)["properties"].(object)

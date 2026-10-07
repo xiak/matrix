@@ -473,7 +473,7 @@ func AllServicePurposes() []ServicePurpose {
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = authorizationProfilesForBuild([]AuthorizationProfile{
 	iamPolicyAttachmentChangeProfile(),
-	paasProfileRevisionTwelve,
+	paasProfileRevisionThirteen,
 	managedServiceProfileRevisionFour,
 	auditProfileRevisionFour,
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
@@ -527,7 +527,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), iamSecurityReportProfile(), iamAccessAnalyzerProfile(), iamAccessFindingProfile(), iamAccessDispositionProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), iamSecurityReportProfile(), iamAccessAnalyzerProfile(), iamAccessFindingProfile(), iamAccessDispositionProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(paasProfileRevisionTwelve), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -587,6 +587,22 @@ var paasProfileRevisionNine = applicationReadAccessKeyProfile(paasProfileRevisio
 var paasProfileRevisionTen = paasInstanceReadAccessKeyProfile(paasProfileRevisionNine)
 var paasProfileRevisionEleven = paasDeploymentMutationAccessKeyProfile(paasProfileRevisionTen)
 var paasProfileRevisionTwelve = applicationLabelAccessKeyProfile(paasProfileRevisionEleven)
+var paasProfileRevisionThirteen = applicationListBatchProfile(paasProfileRevisionTwelve)
+
+func applicationListBatchProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	for index := range profile.Actions {
+		if profile.Actions[index].Action != ActionPaaSApplicationRead {
+			continue
+		}
+		profile.Actions[index].ResourceShapes = append(profile.Actions[index].ResourceShapes,
+			AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList})
+		profile.Actions[index].InstanceListBatch = true
+		return profile
+	}
+	panic("PaaS application read declaration is missing")
+}
 
 func applicationCreateAccessKeyProfile(previous AuthorizationProfile) AuthorizationProfile {
 	profile := cloneAuthorizationProfile(previous)

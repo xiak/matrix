@@ -58,6 +58,7 @@ type AuthorizationRequest struct {
 	RequestLabels   map[string]string
 	ResourceLabels  map[string]string
 	RequestID       string
+	CorrelationID   string
 }
 
 // AccessKeyAuthorizationRequest carries the exact external request extracted
@@ -72,7 +73,43 @@ type AccessKeyAuthorizationRequest struct {
 	RequestLabels   map[string]string
 	ResourceLabels  map[string]string
 	RequestID       string
+	CorrelationID   string
 	SignedRequest   iamv1.AccessKeySignedRequest
+}
+
+// AuthorizationBatchRequest is one bounded set of exact candidate instances
+// evaluated under one bearer authentication and IAM transaction snapshot.
+// The collection guard is deliberately separate and must already allow.
+type AuthorizationBatchRequest struct {
+	Credential string
+	Requests   []AuthorizationRequest
+}
+
+type AuthorizationBatchItem struct {
+	Resource     paasv1.ResourceRef
+	Allowed      bool
+	DecisionID   string
+	RequestID    string
+	RequestTags  []iamv1.AuthorizationTag
+	ResourceTags []iamv1.AuthorizationTag
+}
+
+type AuthorizationBatch struct {
+	TenantID paasv1.TenantID
+	Subject  paasv1.SubjectRef
+	Items    []AuthorizationBatchItem
+}
+
+// AccessKeyListAuthorizationRequest binds a collection guard and one ordered
+// candidate page to exactly one externally signed HTTP request.
+type AccessKeyListAuthorizationRequest struct {
+	Collection AccessKeyAuthorizationRequest
+	Instances  []AccessKeyAuthorizationRequest
+}
+
+type AccessKeyListAuthorization struct {
+	Collection Authorization
+	Instances  AuthorizationBatch
 }
 
 // Authorization is the trusted IAM result consumed by apphosting. Tenant and
@@ -112,11 +149,19 @@ type Authorizer interface {
 	ResolveSubject(context.Context, SubjectResolutionRequest) (AuthorizationSubjectContext, error)
 }
 
+type BatchAuthorizer interface {
+	AuthorizeBatch(context.Context, AuthorizationBatchRequest) (AuthorizationBatch, error)
+}
+
 // AccessKeyAuthorizer is a separate capability so products cannot silently
 // reinterpret a signed request as a login bearer.
 type AccessKeyAuthorizer interface {
 	ResolveAccessKeySubject(context.Context, iamv1.AccessKeySignedRequest) (AuthorizationSubjectContext, error)
 	AuthorizeAccessKey(context.Context, AccessKeyAuthorizationRequest) (Authorization, error)
+}
+
+type AccessKeyListAuthorizer interface {
+	AuthorizeAccessKeyList(context.Context, AccessKeyListAuthorizationRequest) (AccessKeyListAuthorization, error)
 }
 
 func ValidateAuthorizationRequest(value AuthorizationRequest) error {
@@ -143,7 +188,7 @@ func ValidateAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) 
 // authentication proof in IAM's AccessKey request.
 func NewIAMAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) (iamv1.AuthorizationRequest, error) {
 	request, err := newIAMAuthorizationRequest(value.Action, value.Resource, value.ResourceMode,
-		value.CollectionUsage, value.SourceIP, value.RequestLabels, value.ResourceLabels, value.RequestID)
+		value.CollectionUsage, value.SourceIP, value.RequestLabels, value.ResourceLabels, value.RequestID, value.CorrelationID)
 	if err != nil || iamv1.ValidateAccessKeySignedRequest(value.SignedRequest) != nil ||
 		request.Profile.Product != value.SignedRequest.Parameters.Audience ||
 		iamv1.CheckAuthorizationProfileUserAuthentication(
@@ -179,7 +224,7 @@ func authorizationProfile() iamv1.AuthorizationProfile {
 // names and binds the network fact observed by the PEP.
 func NewIAMAuthorizationRequest(value AuthorizationRequest) (iamv1.AuthorizationRequest, error) {
 	return newIAMAuthorizationRequest(value.Action, value.Resource, value.ResourceMode,
-		value.CollectionUsage, value.SourceIP, value.RequestLabels, value.ResourceLabels, value.RequestID)
+		value.CollectionUsage, value.SourceIP, value.RequestLabels, value.ResourceLabels, value.RequestID, value.CorrelationID)
 }
 
 func newIAMAuthorizationRequest(
@@ -191,6 +236,7 @@ func newIAMAuthorizationRequest(
 	requestLabels map[string]string,
 	resourceLabels map[string]string,
 	requestID string,
+	correlationID string,
 ) (iamv1.AuthorizationRequest, error) {
 	if !isAppHostingAction(action) {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization action is outside apphosting")
@@ -213,8 +259,11 @@ func newIAMAuthorizationRequest(
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, err
 	}
+	if correlationID == "" {
+		correlationID = requestID
+	}
 	request, err := iamv1.NewAuthorizationRequest(action, iamResource,
-		resourceMode, collectionUsage, requestID, requestID)
+		resourceMode, collectionUsage, requestID, correlationID)
 	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
 	if err != nil || !known || iamv1.CheckAuthorizationProfileReference(profile, request.Profile) != nil ||
 		profile.CallingService != iamv1.ServicePaaS {
@@ -233,6 +282,104 @@ func newIAMAuthorizationRequest(
 		return iamv1.AuthorizationRequest{}, errors.New("authorization resource tags are invalid")
 	}
 	return request, nil
+}
+
+func ValidateAuthorizationBatchRequest(value AuthorizationBatchRequest) error {
+	if value.Credential == "" || value.Requests == nil || len(value.Requests) < 1 ||
+		len(value.Requests) > iamv1.MaxAuthorizationBatchItems {
+		return errors.New("authorization batch is invalid")
+	}
+	requests := make([]iamv1.AuthorizationRequest, len(value.Requests))
+	for index, request := range value.Requests {
+		if request.Credential != value.Credential || ValidateAuthorizationRequest(request) != nil {
+			return errors.New("authorization batch item is invalid")
+		}
+		mapped, err := NewIAMAuthorizationRequest(request)
+		if err != nil {
+			return errors.New("authorization batch item is invalid")
+		}
+		requests[index] = mapped
+	}
+	if iamv1.ValidateAuthorizationBatchRequest(iamv1.AuthorizationBatchRequest{Requests: requests}) != nil {
+		return errors.New("authorization batch is outside the PaaS profile")
+	}
+	return nil
+}
+
+func ValidateAuthorizationBatchForRequest(value AuthorizationBatch, request AuthorizationBatchRequest) error {
+	if ValidateAuthorizationBatchRequest(request) != nil || value.Items == nil || len(value.Items) != len(request.Requests) ||
+		paasv1.ValidateID("authorization.tenantId", string(value.TenantID)) != nil ||
+		paasv1.ValidateSubjectRef(value.Subject) != nil ||
+		(value.Subject.Type != paasv1.SubjectUser && value.Subject.Type != paasv1.SubjectRole) {
+		return errors.New("authorization batch response is invalid")
+	}
+	for index, item := range value.Items {
+		mapped, err := NewIAMAuthorizationRequest(request.Requests[index])
+		if err != nil || item.Resource != request.Requests[index].Resource || item.RequestID != request.Requests[index].RequestID ||
+			paasv1.ValidateID("authorization.decisionId", item.DecisionID) != nil ||
+			!slices.Equal(item.RequestTags, mapped.RequestTags) || !slices.Equal(item.ResourceTags, mapped.ResourceTags) {
+			return errors.New("authorization batch response differs")
+		}
+	}
+	return nil
+}
+
+func NewIAMAccessKeyListAuthorizationRequest(value AccessKeyListAuthorizationRequest) (iamv1.AccessKeyListAuthorizationRequest, error) {
+	collection, err := NewIAMAccessKeyAuthorizationRequest(value.Collection)
+	if err != nil || value.Instances == nil || len(value.Instances) > iamv1.MaxAuthorizationBatchItems {
+		return iamv1.AccessKeyListAuthorizationRequest{}, errors.New("access-key list authorization request is invalid")
+	}
+	instances := make([]iamv1.AuthorizationRequest, len(value.Instances))
+	signedDigest, err := iamv1.AccessKeySignedRequestDigest(value.Collection.SignedRequest)
+	if err != nil {
+		return iamv1.AccessKeyListAuthorizationRequest{}, errors.New("access-key list authorization request is invalid")
+	}
+	for index, request := range value.Instances {
+		requestDigest, digestErr := iamv1.AccessKeySignedRequestDigest(request.SignedRequest)
+		mapped, mapErr := NewIAMAccessKeyAuthorizationRequest(request)
+		if digestErr != nil || mapErr != nil || requestDigest != signedDigest {
+			return iamv1.AccessKeyListAuthorizationRequest{}, errors.New("access-key list authorization item is invalid")
+		}
+		instances[index] = mapped
+	}
+	result := iamv1.AccessKeyListAuthorizationRequest{
+		Collection: collection, Instances: instances, SignedRequest: value.Collection.SignedRequest,
+	}
+	if iamv1.ValidateAccessKeyListAuthorizationRequest(result) != nil {
+		return iamv1.AccessKeyListAuthorizationRequest{}, errors.New("access-key list authorization request is outside the PaaS profile")
+	}
+	return result, nil
+}
+
+func ValidateAccessKeyListAuthorizationRequest(value AccessKeyListAuthorizationRequest) error {
+	_, err := NewIAMAccessKeyListAuthorizationRequest(value)
+	return err
+}
+
+func ValidateAccessKeyListAuthorizationForRequest(
+	value AccessKeyListAuthorization,
+	request AccessKeyListAuthorizationRequest,
+) error {
+	if ValidateAccessKeyListAuthorizationRequest(request) != nil ||
+		ValidateAccessKeyAuthorizationForRequest(value.Collection, request.Collection) != nil ||
+		value.Instances.Items == nil ||
+		paasv1.ValidateID("authorization.tenantId", string(value.Instances.TenantID)) != nil ||
+		paasv1.ValidateSubjectRef(value.Instances.Subject) != nil ||
+		value.Collection.RequestID != request.Collection.RequestID ||
+		value.Collection.TenantID != value.Instances.TenantID ||
+		!value.Collection.Subject.Equal(value.Instances.Subject) ||
+		len(value.Instances.Items) != len(request.Instances) {
+		return errors.New("access-key list authorization response differs")
+	}
+	for index, item := range value.Instances.Items {
+		mapped, err := NewIAMAccessKeyAuthorizationRequest(request.Instances[index])
+		if err != nil || item.Resource != request.Instances[index].Resource || item.RequestID != request.Instances[index].RequestID ||
+			paasv1.ValidateID("authorization.decisionId", item.DecisionID) != nil ||
+			!slices.Equal(item.RequestTags, mapped.RequestTags) || !slices.Equal(item.ResourceTags, mapped.ResourceTags) {
+			return errors.New("access-key list authorization response differs")
+		}
+	}
+	return nil
 }
 
 // isAppHostingAction is the PEP route boundary within the wider PaaS product

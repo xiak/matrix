@@ -1,7 +1,7 @@
 SET LOCAL ROLE matrix_iam_owner;
 DO $verify_policy_attachment_changes$
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 66::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 67::bigint THEN
       RAISE EXCEPTION 'IAM policy attachment change schema version differs'; END IF;
     IF NOT iam.policy_attachment_change_contract_ready() THEN
       RAISE EXCEPTION 'IAM policy attachment change contract differs'; END IF;

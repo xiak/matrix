@@ -276,6 +276,17 @@ type Application struct {
 	Metadata   ResourceMetadata `json:"metadata"`
 }
 
+// ApplicationList is one bounded, policy-filtered candidate window. An empty
+// Items array can still carry NextAfter when every candidate in that window
+// was denied. The cursor is an opaque continuation, never an authorization
+// permit or a raw Application identifier.
+type ApplicationList struct {
+	APIVersion string        `json:"apiVersion"`
+	Kind       string        `json:"kind"`
+	Items      []Application `json:"items"`
+	NextAfter  string        `json:"nextAfter,omitempty"`
+}
+
 // CreateApplicationRequest contains only caller-owned desired fields. Scope,
 // resource version, timestamps, requester, and Audit identity come from the
 // server-side authorization and transaction boundaries.

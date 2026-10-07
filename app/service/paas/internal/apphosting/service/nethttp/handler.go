@@ -15,9 +15,11 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
@@ -51,6 +53,8 @@ type Workflow interface {
 	Submit(context.Context, applicationlifecycle.SubmitCommand) (applicationlifecycle.Result, error)
 	Rollback(context.Context, applicationlifecycle.RollbackCommand) (applicationlifecycle.Result, error)
 	InspectApplicationAuthorization(context.Context, port.AuthorizationSubjectContext, paasv1.ResourceID) (applicationlifecycle.ApplicationAuthorizationSnapshot, error)
+	InspectApplicationDirectory(context.Context, port.AuthorizationSubjectContext, paasv1.ResourceID) (applicationlifecycle.ApplicationDirectorySnapshot, error)
+	ReadApplicationDirectory(context.Context, applicationlifecycle.ReadApplicationDirectoryCommand) ([]paasv1.Application, error)
 	GetApplication(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.Application, error)
 	GetConfiguration(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.Configuration, error)
 	GetConfigurationRevision(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ConfigurationRevision, error)
@@ -64,7 +68,9 @@ type Config struct {
 	MaximumBodyBytes int64
 	NorthboundOrigin string
 	InstallationID   string
+	CursorKey        []byte
 	NewRequestID     func() (string, error)
+	Now              func() time.Time
 	Readiness        func(context.Context) (paasv1.Readiness, error)
 }
 
@@ -80,6 +86,7 @@ type handler struct {
 	workflow             Workflow
 	installationVerifier InstallationVerifier
 	accessKeyBoundary    *externalrequest.Boundary
+	applicationCursors   applicationCursorCodec
 	config               Config
 	routes               *http.ServeMux
 }
@@ -105,6 +112,17 @@ func NewHandler(
 	if config.NewRequestID == nil {
 		config.NewRequestID = newRequestID
 	}
+	if config.Now == nil {
+		config.Now = time.Now
+	}
+	if paasv1.ValidateID("installationId", config.InstallationID) != nil {
+		return nil, errors.New("PaaS installation identity is required")
+	}
+	applicationCursors, err := newApplicationCursorCodec(config.CursorKey)
+	if err != nil {
+		return nil, errors.New("PaaS application cursor key is invalid")
+	}
+	config.CursorKey = nil
 	var accessKeyBoundary *externalrequest.Boundary
 	if config.NorthboundOrigin != "" {
 		var err error
@@ -117,11 +135,13 @@ func NewHandler(
 	}
 	value := &handler{
 		authorizer: authorizer, workflow: workflow,
-		installationVerifier: installationVerifier, accessKeyBoundary: accessKeyBoundary, config: config,
+		installationVerifier: installationVerifier, accessKeyBoundary: accessKeyBoundary,
+		applicationCursors: applicationCursors, config: config,
 	}
 	routes := http.NewServeMux()
 	routes.HandleFunc("GET /ready", value.ready)
 	routes.HandleFunc("POST /v1/applications", value.createApplication)
+	routes.HandleFunc("GET /v1/applications", value.listApplications)
 	routes.HandleFunc("GET /v1/applications/{applicationId}", value.getApplication)
 	routes.HandleFunc("PUT /v1/applications/{applicationId}/labels/{labelKey}", value.setApplicationLabel)
 	routes.HandleFunc("DELETE /v1/applications/{applicationId}/labels/{labelKey}", value.deleteApplicationLabel)
@@ -246,6 +266,9 @@ type accessKeyRequestContext struct {
 
 func accessKeyActionsForRoute(method, path string) ([]iamv1.Action, bool) {
 	if method == http.MethodGet {
+		if path == "/v1/applications" {
+			return []iamv1.Action{port.AuthorizeApplicationRead}, true
+		}
 		for _, route := range []struct {
 			prefix string
 			idName string
@@ -335,7 +358,8 @@ func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, requ
 	if request.URL != nil {
 		expectedActions, accepted = accessKeyActionsForRoute(request.Method, request.URL.Path)
 	}
-	if value.accessKeyBoundary == nil || !accepted || request.URL.RawQuery != "" {
+	queryAllowed := request.Method == http.MethodGet && request.URL.Path == "/v1/applications"
+	if value.accessKeyBoundary == nil || !accepted || request.URL.RawQuery != "" && !queryAllowed {
 		requestID, ok := value.beginRequest(response)
 		if !ok {
 			return false
@@ -386,6 +410,188 @@ func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, requ
 	*request = *request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, accessKeyContext))
 	clear(body)
 	return true
+}
+
+func (value *handler) listApplications(response http.ResponseWriter, request *http.Request) {
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	afterToken, err := parseApplicationAfter(request.URL.RawQuery)
+	if err != nil {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument,
+			"Invalid argument", "application directory accepts only one opaque after cursor", false)
+		return
+	}
+	subject, ok := value.resolveRequestSubject(response, request, requestID, port.AuthorizeApplicationRead)
+	if !ok {
+		return
+	}
+	after := paasv1.ResourceID("")
+	if afterToken != "" {
+		after, err = value.applicationCursors.decode(afterToken, value.config.InstallationID, subject, value.config.Now().UTC())
+		if err != nil {
+			writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument,
+				"Invalid argument", "application directory cursor is invalid or expired", false)
+			return
+		}
+	}
+
+	signedContext, signed := request.Context().Value(accessKeyContextKey{}).(accessKeyRequestContext)
+	var collection port.Authorization
+	if !signed {
+		collection, ok = value.authorizeRequestWithLabels(response, request, requestID,
+			port.AuthorizeApplicationRead, port.ResourceApplication, "collection",
+			iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList, nil, nil)
+		if !ok {
+			return
+		}
+		if port.ValidateAuthorizationForSubjectContext(collection, subject) != nil {
+			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+			return
+		}
+	}
+	snapshot, err := value.workflow.InspectApplicationDirectory(request.Context(), subject, after)
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+
+	decisions, ok := value.authorizeApplicationDirectory(response, request, requestID, subject, collection, snapshot, signedContext, signed)
+	if !ok {
+		return
+	}
+	items, err := value.workflow.ReadApplicationDirectory(request.Context(), applicationlifecycle.ReadApplicationDirectoryCommand{
+		Subject: subject, Snapshot: snapshot, Decisions: decisions,
+	})
+	if errors.Is(err, applicationlifecycle.ErrAuthorizationSnapshotChanged) {
+		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+		return
+	}
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	nextAfter := ""
+	if snapshot.HasMore {
+		last := snapshot.Candidates[len(snapshot.Candidates)-1].ID
+		nextAfter, err = value.applicationCursors.encode(value.config.InstallationID, subject, last, value.config.Now().UTC())
+		if err != nil {
+			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+			return
+		}
+	}
+	result := paasv1.ApplicationList{APIVersion: paasv1.APIVersion, Kind: "ApplicationList", Items: items, NextAfter: nextAfter}
+	if paasv1.ValidateApplicationList(result) != nil {
+		writeWorkflowError(response, requestID, errors.New("application directory result is invalid"))
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) authorizeApplicationDirectory(
+	response http.ResponseWriter,
+	request *http.Request,
+	correlationID string,
+	subject port.AuthorizationSubjectContext,
+	collection port.Authorization,
+	snapshot applicationlifecycle.ApplicationDirectorySnapshot,
+	signedContext accessKeyRequestContext,
+	signed bool,
+) (port.AuthorizationBatch, bool) {
+	sourceIP := signedContext.SourceIP
+	if !signed {
+		var err error
+		sourceIP, err = authorizationSourceIP(request.RemoteAddr)
+		if err != nil {
+			writeAuthorizationError(response, correlationID, port.ErrAuthorizationUnavailable)
+			return port.AuthorizationBatch{}, false
+		}
+	}
+	instanceRequests := make([]port.AuthorizationRequest, len(snapshot.Candidates))
+	for index, candidate := range snapshot.Candidates {
+		itemRequestID, err := value.config.NewRequestID()
+		if err != nil || paasv1.ValidateID("requestId", itemRequestID) != nil {
+			writeAuthorizationError(response, correlationID, port.ErrAuthorizationUnavailable)
+			return port.AuthorizationBatch{}, false
+		}
+		instanceRequests[index] = port.AuthorizationRequest{
+			Credential: request.Header.Get("Authorization"), Action: port.AuthorizeApplicationRead,
+			Resource:     paasv1.ResourceRef{Kind: port.ResourceApplication, ID: candidate.ID},
+			ResourceMode: iamv1.AuthorizationResourceInstance, SourceIP: sourceIP,
+			ResourceLabels: maps.Clone(candidate.Labels), RequestID: itemRequestID, CorrelationID: correlationID,
+		}
+	}
+	if signed {
+		authorizer, supported := value.authorizer.(port.AccessKeyListAuthorizer)
+		if !supported || !slices.Contains(signedContext.Actions, port.AuthorizeApplicationRead) {
+			writeAuthorizationError(response, correlationID, port.ErrAuthorizationUnavailable)
+			return port.AuthorizationBatch{}, false
+		}
+		collectionRequest := port.AccessKeyAuthorizationRequest{
+			Action:       port.AuthorizeApplicationRead,
+			Resource:     paasv1.ResourceRef{Kind: port.ResourceApplication, ID: "collection"},
+			ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionList,
+			SourceIP: sourceIP, RequestID: correlationID, CorrelationID: correlationID,
+			SignedRequest: signedContext.SignedRequest,
+		}
+		instances := make([]port.AccessKeyAuthorizationRequest, len(instanceRequests))
+		for index, item := range instanceRequests {
+			instances[index] = port.AccessKeyAuthorizationRequest{
+				Action: item.Action, Resource: item.Resource, ResourceMode: item.ResourceMode,
+				SourceIP: item.SourceIP, ResourceLabels: maps.Clone(item.ResourceLabels),
+				RequestID: item.RequestID, CorrelationID: item.CorrelationID, SignedRequest: signedContext.SignedRequest,
+			}
+		}
+		input := port.AccessKeyListAuthorizationRequest{Collection: collectionRequest, Instances: instances}
+		result, err := authorizer.AuthorizeAccessKeyList(request.Context(), input)
+		if err != nil {
+			writeAuthorizationError(response, correlationID, err)
+			return port.AuthorizationBatch{}, false
+		}
+		if port.ValidateAccessKeyListAuthorizationForRequest(result, input) != nil ||
+			port.ValidateAuthorizationForSubjectContext(result.Collection, subject) != nil ||
+			result.Instances.TenantID != subject.TenantID || !result.Instances.Subject.Equal(subject.Subject) {
+			writeAuthorizationError(response, correlationID, port.ErrAuthorizationUnavailable)
+			return port.AuthorizationBatch{}, false
+		}
+		return result.Instances, true
+	}
+	if len(instanceRequests) == 0 {
+		return port.AuthorizationBatch{TenantID: collection.TenantID, Subject: collection.Subject, Items: []port.AuthorizationBatchItem{}}, true
+	}
+	authorizer, supported := value.authorizer.(port.BatchAuthorizer)
+	if !supported {
+		writeAuthorizationError(response, correlationID, port.ErrAuthorizationUnavailable)
+		return port.AuthorizationBatch{}, false
+	}
+	input := port.AuthorizationBatchRequest{Credential: request.Header.Get("Authorization"), Requests: instanceRequests}
+	result, err := authorizer.AuthorizeBatch(request.Context(), input)
+	if err != nil {
+		writeAuthorizationError(response, correlationID, err)
+		return port.AuthorizationBatch{}, false
+	}
+	if port.ValidateAuthorizationBatchForRequest(result, input) != nil ||
+		result.TenantID != collection.TenantID || !result.Subject.Equal(collection.Subject) {
+		writeAuthorizationError(response, correlationID, port.ErrAuthorizationUnavailable)
+		return port.AuthorizationBatch{}, false
+	}
+	return result, true
+}
+
+func parseApplicationAfter(rawQuery string) (string, error) {
+	if rawQuery == "" {
+		return "", nil
+	}
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil || len(query) != 1 {
+		return "", errors.New("application directory query is invalid")
+	}
+	values, found := query["after"]
+	if !found || len(values) != 1 || paasv1.ValidateApplicationCursor(values[0]) != nil {
+		return "", errors.New("application directory query is invalid")
+	}
+	return values[0], nil
 }
 
 func (value *handler) createApplication(response http.ResponseWriter, request *http.Request) {

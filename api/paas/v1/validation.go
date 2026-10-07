@@ -11,11 +11,17 @@ import (
 )
 
 var (
-	idPattern              = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	namePattern            = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
-	environmentKeyPattern  = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
-	digestPattern          = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	contractVersionPattern = regexp.MustCompile(`^v[1-9][0-9]*$`)
+	idPattern                = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	namePattern              = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	environmentKeyPattern    = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
+	digestPattern            = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	contractVersionPattern   = regexp.MustCompile(`^v[1-9][0-9]*$`)
+	applicationCursorPattern = regexp.MustCompile(`^pc1\.[A-Za-z0-9_-]+$`)
+)
+
+const (
+	ApplicationDirectoryPageSize = 50
+	MaxApplicationCursorBytes    = 384
 )
 
 var sensitiveKeyFragments = [...]string{
@@ -412,6 +418,45 @@ func ValidateApplication(value Application) error {
 		problems = append(problems, errors.New("application must be tenant scoped"))
 	}
 	return errors.Join(problems...)
+}
+
+func ValidateApplicationList(value ApplicationList) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "ApplicationList" || value.Items == nil ||
+		len(value.Items) > ApplicationDirectoryPageSize {
+		problems = append(problems, errors.New("application list envelope is invalid"))
+	}
+	if value.NextAfter != "" && !applicationCursorPattern.MatchString(value.NextAfter) {
+		problems = append(problems, errors.New("application list cursor is invalid"))
+	}
+	if len(value.NextAfter) > MaxApplicationCursorBytes {
+		problems = append(problems, errors.New("application list cursor is too large"))
+	}
+	var tenantID TenantID
+	var previous ResourceID
+	for index, application := range value.Items {
+		problems = append(problems, ValidateApplication(application))
+		if index == 0 {
+			tenantID = application.Metadata.Scope.TenantID
+		} else if application.Metadata.Scope.TenantID != tenantID {
+			problems = append(problems, errors.New("application list crosses tenant scope"))
+		}
+		if index > 0 && application.Metadata.ID <= previous {
+			problems = append(problems, errors.New("application list is not strictly ordered"))
+		}
+		previous = application.Metadata.ID
+	}
+	return errors.Join(problems...)
+}
+
+// ValidateApplicationCursor validates only the public bounded envelope. The
+// PaaS-owned codec verifies authenticity, expiry and identity/profile binding.
+func ValidateApplicationCursor(value string) error {
+	if len(value) <= len("pc1.") || len(value) > MaxApplicationCursorBytes ||
+		!applicationCursorPattern.MatchString(value) {
+		return errors.New("application list cursor is invalid")
+	}
+	return nil
 }
 
 func ValidateSetApplicationLabelRequest(value SetApplicationLabelRequest) error {

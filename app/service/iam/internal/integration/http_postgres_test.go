@@ -19253,13 +19253,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		// Application read declares ACCESS_KEY, but this User has no PaaS grant.
 		// Subject resolution must stay read-only; only final authorization may
 		// commit a Deny and consume the nonce.
-		sign := func(key iamv1.CreateAccessKeyResponse, requestID string, offset time.Duration) iamv1.AccessKeyAuthorizationRequest {
+		signRequest := func(key iamv1.CreateAccessKeyResponse, covered iamv1.AccessKeyHTTPRequest, offset time.Duration) iamv1.AccessKeySignedRequest {
 			t.Helper()
-			request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
-				iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "signed-app"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
-			if err != nil {
-				t.Fatal(err)
-			}
 			var now time.Time
 			if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
 				t.Fatal(err)
@@ -19268,12 +19263,9 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			if _, err := rand.Read(nonce); err != nil {
 				t.Fatal(err)
 			}
-			bodyHash := sha256.Sum256(nil)
 			signed := iamv1.AccessKeySignedRequest{Parameters: iamv1.AccessKeySignatureParameters{
 				AccessKeyID: key.Key.ID, InstallationID: document.InstallationID, Audience: "paas", SignedAt: now.Add(offset).Unix(),
-				Nonce: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(nonce))},
-				HTTP: iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "iam-key-fixture.invalid:443",
-					EscapedPath: "/api/paas/v1/applications/signed-app", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])}}
+				Nonce: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(nonce))}, HTTP: covered}
 			canonical, err := iamv1.AccessKeySigningBytes(signed.Parameters, signed.HTTP)
 			if err != nil {
 				t.Fatal(err)
@@ -19289,11 +19281,56 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			mac := hmac.New(sha256.New, material)
 			_, _ = mac.Write(canonical)
 			signed.Signature = iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(mac.Sum(nil)))
+			return signed
+		}
+		sign := func(key iamv1.CreateAccessKeyResponse, requestID string, offset time.Duration) iamv1.AccessKeyAuthorizationRequest {
+			t.Helper()
+			request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+				iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "signed-app"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bodyHash := sha256.Sum256(nil)
+			signed := signRequest(key, iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "iam-key-fixture.invalid:443",
+				EscapedPath: "/api/paas/v1/applications/signed-app", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])}, offset)
 			return iamv1.AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: signed}
 		}
 		encode := func(request iamv1.AccessKeyAuthorizationRequest) []byte {
 			t.Helper()
 			encoded, err := iamv1.EncodeAccessKeyAuthorizationRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return encoded
+		}
+		signList := func(key iamv1.CreateAccessKeyResponse, prefix string, resourceIDs []string, sourceIP string) iamv1.AccessKeyListAuthorizationRequest {
+			t.Helper()
+			collection, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+				iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}, iamv1.AuthorizationResourceCollection,
+				iamv1.AuthorizationCollectionList, prefix+"-collection", prefix+"-correlation")
+			if err != nil {
+				t.Fatal(err)
+			}
+			collection.NetworkContext = &iamv1.AuthorizationNetworkContext{SourceIP: sourceIP}
+			instances := make([]iamv1.AuthorizationRequest, 0, len(resourceIDs))
+			for index, id := range resourceIDs {
+				request, requestErr := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+					iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id}, iamv1.AuthorizationResourceInstance,
+					"", prefix+"-instance-"+strconv.Itoa(index+1), prefix+"-correlation")
+				if requestErr != nil {
+					t.Fatal(requestErr)
+				}
+				request.NetworkContext = &iamv1.AuthorizationNetworkContext{SourceIP: sourceIP}
+				instances = append(instances, request)
+			}
+			bodyHash := sha256.Sum256(nil)
+			signed := signRequest(key, iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "iam-key-fixture.invalid:443",
+				EscapedPath: "/api/paas/v1/applications", RawQuery: "after=cursor-one", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])}, 0)
+			return iamv1.AccessKeyListAuthorizationRequest{Collection: collection, Instances: instances, SignedRequest: signed}
+		}
+		encodeList := func(request iamv1.AccessKeyListAuthorizationRequest) []byte {
+			t.Helper()
+			encoded, err := iamv1.EncodeAccessKeyListAuthorizationRequest(request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -19398,9 +19435,10 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			original := signedHistory[0]
 			var decisionBytes, policyBytes, boundaryBytes, evidenceBytes []byte
 			if err := database.QueryRow(ctx, `SELECT d.document,d.policy_evidence,d.boundary_evidence,
-			 jsonb_build_object('accessKeyId',e.access_key_id,'resourceVersion',e.key_resource_version,'formatVersion',e.format_version,
-			 'accountSecuritySettingsVersion',e.account_security_settings_version,
-			 'wrappingKeyId',e.wrapping_key_id,'materialCommitment',e.material_commitment,'installationId',e.installation_id,
+				 jsonb_build_object('accessKeyId',e.access_key_id,'resourceVersion',e.key_resource_version,'formatVersion',e.format_version,
+				 'accountSecuritySettingsVersion',e.account_security_settings_version,
+				 'requestEvidenceId',e.request_evidence_id,
+				 'wrappingKeyId',e.wrapping_key_id,'materialCommitment',e.material_commitment,'installationId',e.installation_id,
 			 'serviceLookupDigest',e.service_lookup_digest,'audience',e.audience,'signedRequestDigest',e.signed_request_digest,
 			 'nonceDigest',e.nonce_digest,'signedAt',e.signed_at)
 			 FROM iam.authorization_decisions d JOIN iam.access_key_authorization_evidence e ON e.tenant_id=d.tenant_id AND e.decision_id=d.id
@@ -19421,6 +19459,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 						t.Fatal("invalid committed recorder fixture")
 					}
 					signed := sign(first, decision.RequestID, 0)
+					evidence["requestEvidenceId"] = "signed-recorder-evidence-" + sample.name
 					evidence["nonceDigest"], _ = iamv1.AccessKeyNonceDigest(signed.SignedRequest.Parameters)
 					evidence["signedRequestDigest"], _ = iamv1.AccessKeySignedRequestDigest(signed.SignedRequest)
 					evidence["signedAt"] = signed.SignedRequest.Parameters.SignedAt
@@ -19552,6 +19591,131 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 				t.Fatalf("unauthenticated %s wrote evidence or status=%d", attack, response.Code)
 			}
 		}
+		t.Run("signed-list-one-evidence-and-atomic-candidates", func(t *testing.T) {
+			listCounts := func(key iamv1.AccessKeyID) [4]int {
+				t.Helper()
+				var result [4]int
+				if err := database.QueryRow(ctx, `SELECT
+				 (SELECT count(*) FROM iam.access_key_authorization_evidence WHERE access_key_id=$1),
+				 (SELECT count(*) FROM iam.access_key_authorization_evidence_links link
+				   JOIN iam.access_key_authorization_evidence evidence ON evidence.tenant_id=link.tenant_id AND evidence.decision_id=link.evidence_decision_id
+				   WHERE evidence.access_key_id=$1),
+				 (SELECT count(*) FROM iam.authorization_decisions WHERE access_key_id=$1),
+				 (SELECT count(*) FROM iam.audit_outbox WHERE event_document#>>'{actor,accessKeyId}'=$1)`, key).
+					Scan(&result[0], &result[1], &result[2], &result[3]); err != nil {
+					t.Fatal(err)
+				}
+				return result
+			}
+			authorize := func(endpoint http.Handler, request iamv1.AccessKeyListAuthorizationRequest, status int) iamv1.AccessKeyListAuthorization {
+				t.Helper()
+				encoded := encodeList(request)
+				defer clear(encoded)
+				response := performIAMRequest(endpoint, http.MethodPost, "/v1/authorize:access-key-list", paasCredential, encoded)
+				if response.Code != status {
+					t.Fatalf("signed list status=%d want=%d SQLSTATE=%v", response.Code, status, failures.lastSQLState.Load())
+				}
+				if status != http.StatusOK {
+					return iamv1.AccessKeyListAuthorization{}
+				}
+				var result iamv1.AccessKeyListAuthorization
+				if iamv1.DecodeRequest(bytes.NewReader(response.Body.Bytes()), &result) != nil ||
+					iamv1.CheckAccessKeyListAuthorizationForRequest(result, request) != nil {
+					t.Fatal("signed list response lost its exact page binding")
+				}
+				return result
+			}
+
+			deniedRequest := signList(first, "key-list-denied", []string{"application-a", "application-b"}, "198.51.100.10")
+			beforeDenied := listCounts(first.Key.ID)
+			denied := authorize(handler, deniedRequest, http.StatusOK)
+			if denied.Collection.Allowed || denied.Collection.Subject != nil || len(denied.Instances) != 0 ||
+				listCounts(first.Key.ID) != [4]int{beforeDenied[0] + 1, beforeDenied[1], beforeDenied[2] + 1, beforeDenied[3] + 1} {
+				t.Fatal("collection Deny exposed candidates or recorded more than its guard")
+			}
+			if replay := authorize(second, deniedRequest, http.StatusConflict); replay.Kind != "" || listCounts(first.Key.ID) != [4]int{beforeDenied[0] + 1, beforeDenied[1], beforeDenied[2] + 1, beforeDenied[3] + 1} {
+				t.Fatal("collection Deny replay changed authority state")
+			}
+
+			target, _ := newUser("key-list-user")
+			var productPolicy iamv1.PolicyDetail
+			call(handler, http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "List application reader",
+				RequestID: "key-list-product-policy", Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+					Statements: []iamv1.PolicyStatement{rule("application-read", []iamv1.Action{iamv1.ActionPaaSApplicationRead}, iamv1.ResourceApplication)}}},
+				http.StatusCreated, &productPolicy)
+			call(handler, http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+				Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)}, PolicyID: productPolicy.Policy.ID,
+				PolicyResourceVersion: productPolicy.Policy.ResourceVersion, RequestID: "key-list-product-grant"}, http.StatusOK, nil)
+			keyPath := "/v1/users/" + string(target.ID) + "/access-keys"
+			var created iamv1.CreateAccessKeyResponse
+			call(handler, http.MethodPost, keyPath, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion,
+				NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: "key-list-create"}, http.StatusCreated, &created)
+
+			allowedRequest := signList(created, "key-list-allowed", []string{"application-a", "application-b"}, "198.51.100.10")
+			beforeAllowed := listCounts(created.Key.ID)
+			allowed := authorize(second, allowedRequest, http.StatusOK)
+			if !allowed.Collection.Allowed || allowed.Collection.Subject == nil || len(allowed.Instances) != 2 ||
+				!allowed.Instances[0].Allowed || !allowed.Instances[1].Allowed ||
+				!allowed.Collection.DecidedAt.Equal(allowed.Instances[0].DecidedAt) || !allowed.Collection.DecidedAt.Equal(allowed.Instances[1].DecidedAt) ||
+				listCounts(created.Key.ID) != [4]int{beforeAllowed[0] + 1, beforeAllowed[1] + 2, beforeAllowed[2] + 3, beforeAllowed[3] + 3} {
+				t.Fatal("allowed list did not commit one evidence root and all candidate decisions atomically")
+			}
+			var firstEvidenceID string
+			if err := database.QueryRow(ctx, `SELECT request_evidence_id FROM iam.access_key_authorization_evidence
+				 WHERE tenant_id=$1 AND decision_id=$2`, target.AccountID, allowed.Collection.ID).Scan(&firstEvidenceID); err != nil {
+				t.Fatal("read list evidence identity", err)
+			}
+			for _, decision := range append([]iamv1.AuthorizationDecision{allowed.Collection}, allowed.Instances...) {
+				var complete bool
+				if err := database.QueryRow(ctx, "SELECT iam.access_key_authorization_evidence_matches($1,$2)", target.AccountID, decision.ID).Scan(&complete); err != nil || !complete {
+					t.Fatal("linked list decision lost immutable proof", decision.ID, err)
+				}
+			}
+			var exactLinks bool
+			if err := database.QueryRow(ctx, `SELECT count(*)=2 AND bool_and(evidence_decision_id=$2)
+				 FROM iam.access_key_authorization_evidence_links WHERE tenant_id=$1`, target.AccountID, allowed.Collection.ID).Scan(&exactLinks); err != nil || !exactLinks {
+				t.Fatal("candidate decisions did not link to the collection evidence", err)
+			}
+			if replay := authorize(handler, allowedRequest, http.StatusConflict); replay.Kind != "" || listCounts(created.Key.ID) != [4]int{beforeAllowed[0] + 1, beforeAllowed[1] + 2, beforeAllowed[2] + 3, beforeAllowed[3] + 3} {
+				t.Fatal("allowed list replay changed authority state")
+			}
+
+			secondRequest := signList(created, "key-list-second", []string{"application-c"}, "198.51.100.10")
+			secondResult := authorize(handler, secondRequest, http.StatusOK)
+			var secondEvidenceID string
+			if err := database.QueryRow(ctx, `SELECT request_evidence_id FROM iam.access_key_authorization_evidence
+				 WHERE tenant_id=$1 AND decision_id=$2`, target.AccountID, secondResult.Collection.ID).Scan(&secondEvidenceID); err != nil || secondEvidenceID == firstEvidenceID {
+				t.Fatal("two signed list requests shared a reusable evidence identity", err)
+			}
+
+			failedRequest := signList(created, "key-list-atomic-failure", []string{"application-d", "application-e"}, "198.51.100.10")
+			if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_signed_list_failure() RETURNS trigger LANGUAGE plpgsql AS $body$
+			 BEGIN IF NEW.event_document->>'requestId'='key-list-atomic-failure-instance-2' THEN
+			   RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='synthetic list candidate failure';
+			 END IF; RETURN NEW; END $body$;
+			 CREATE TRIGGER matrix_signed_list_failure BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_signed_list_failure()`); err != nil {
+				t.Fatal("install signed list failure", err)
+			}
+			removeFailure := func() {
+				cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+				defer stop()
+				if _, err := database.Exec(cleanup, `DROP TRIGGER IF EXISTS matrix_signed_list_failure ON iam.audit_outbox; DROP FUNCTION IF EXISTS public.matrix_signed_list_failure()`); err != nil {
+					t.Error("remove signed list failure", err)
+				}
+			}
+			defer removeFailure()
+			beforeFailure := listCounts(created.Key.ID)
+			authorize(handler, failedRequest, http.StatusServiceUnavailable)
+			if listCounts(created.Key.ID) != beforeFailure {
+				t.Fatal("later candidate failure retained collection, evidence, nonce, decision or outbox state")
+			}
+			removeFailure()
+			retried := authorize(second, failedRequest, http.StatusOK)
+			if !retried.Collection.Allowed || len(retried.Instances) != 2 ||
+				listCounts(created.Key.ID) != [4]int{beforeFailure[0] + 1, beforeFailure[1] + 2, beforeFailure[2] + 3, beforeFailure[3] + 3} {
+				t.Fatal("rolled-back list nonce did not complete exactly once")
+			}
+		})
 		t.Run("key-network-restriction-and-usage", func(t *testing.T) {
 			target, _ := newUser("key-network-user")
 			var productPolicy iamv1.PolicyDetail
@@ -20536,6 +20700,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		for _, attack := range []string{
 			"SELECT * FROM iam.access_keys", "SELECT ciphertext FROM iam.access_keys", "SELECT * FROM iam.access_key_intents",
 			"SELECT * FROM iam.access_key_authorization_evidence", "UPDATE iam.access_key_authorization_evidence SET signed_at=1",
+			"SELECT * FROM iam.access_key_authorization_evidence_links", "DELETE FROM iam.access_key_authorization_evidence_links",
 			"SELECT iam.access_key_authorization_evidence_matches('account','decision')",
 			"SELECT iam.record_access_key_evidence('account','actor','decision','{}'::jsonb)",
 			"SELECT iam.assert_current_access_key_authorization('account','actor','{}'::jsonb,'{}'::jsonb)",
@@ -20586,6 +20751,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	// The registry, revoked service and original completions survive replay.
 	const retained = `SELECT jsonb_build_object('keys',(SELECT jsonb_agg(to_jsonb(k) ORDER BY id) FROM iam.access_keys k),
 		'signedEvidence',(SELECT jsonb_agg(to_jsonb(e) ORDER BY tenant_id,decision_id) FROM iam.access_key_authorization_evidence e),
+		'signedEvidenceLinks',(SELECT jsonb_agg(to_jsonb(link) ORDER BY tenant_id,decision_id) FROM iam.access_key_authorization_evidence_links link),
 		'intents',(SELECT jsonb_agg(to_jsonb(i) ORDER BY actor_id,request_id) FROM iam.access_key_intents i),
 		'registry',(SELECT jsonb_agg(to_jsonb(r) ORDER BY wrapping_key_id) FROM iam.access_key_wrapping_registry r),
 		'locators',(SELECT jsonb_agg(to_jsonb(i) ORDER BY key_id) FROM iam.access_key_index i),
@@ -20662,9 +20828,12 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	for _, attack := range []string{
 		`ALTER TABLE iam.access_keys NO FORCE ROW LEVEL SECURITY`,
 		`ALTER TABLE iam.access_key_authorization_evidence NO FORCE ROW LEVEL SECURITY`,
+		`ALTER TABLE iam.access_key_authorization_evidence_links NO FORCE ROW LEVEL SECURITY`,
 		`GRANT SELECT(nonce_digest) ON iam.access_key_authorization_evidence TO matrix_iam_api`,
 		`ALTER TABLE iam.access_key_authorization_evidence DISABLE TRIGGER cannot_update`,
 		`ALTER TABLE iam.access_key_authorization_evidence DISABLE TRIGGER access_key_authorization_complete`,
+		`ALTER TABLE iam.access_key_authorization_evidence_links DISABLE TRIGGER cannot_update`,
+		`ALTER TABLE iam.access_key_authorization_evidence_links DISABLE TRIGGER access_key_authorization_complete`,
 		`ALTER TABLE iam.authorization_decisions DISABLE TRIGGER access_key_authorization_complete`,
 		`DO $attack$ DECLARE name text; BEGIN
 		 SELECT c.conname INTO STRICT name FROM pg_constraint c
@@ -20718,7 +20887,10 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	for _, attack := range []string{
 		`UPDATE iam.access_key_authorization_evidence SET signed_at=1`,
 		`DELETE FROM iam.access_key_authorization_evidence`,
-		`TRUNCATE iam.access_key_authorization_evidence`,
+		`TRUNCATE iam.access_key_authorization_evidence CASCADE`,
+		`UPDATE iam.access_key_authorization_evidence_links SET evidence_decision_id=decision_id`,
+		`DELETE FROM iam.access_key_authorization_evidence_links`,
+		`TRUNCATE iam.access_key_authorization_evidence_links`,
 		`UPDATE iam.access_key_index SET tenant_id='forged'`,
 		`DELETE FROM iam.access_key_index`,
 		`TRUNCATE iam.access_key_index`,

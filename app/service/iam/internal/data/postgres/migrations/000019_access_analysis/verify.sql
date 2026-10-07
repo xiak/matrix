@@ -3,7 +3,7 @@ DO $verify_access_analysis$
 BEGIN
     IF NOT iam.access_analysis_contract_ready() THEN
       RAISE EXCEPTION 'IAM access analysis contract is not ready'; END IF;
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 66::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 67::bigint THEN
       RAISE EXCEPTION 'IAM access analysis schema version differs'; END IF;
     IF to_regprocedure('iam.claim_access_analysis(text,text)') IS NULL
       OR to_regprocedure('iam.complete_access_analysis(text,text,bigint,text,jsonb)') IS NULL

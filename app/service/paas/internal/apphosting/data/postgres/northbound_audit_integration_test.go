@@ -463,6 +463,7 @@ func newIntegrationHTTPHandler(
 		workflow,
 		integrationInstallationVerifier{},
 		apphttp.Config{
+			InstallationID: "installation-integration", CursorKey: []byte("0123456789abcdef0123456789abcdef"),
 			NewRequestID: func() (string, error) {
 				sequence++
 				return fmt.Sprintf("http-request-%d", sequence), nil

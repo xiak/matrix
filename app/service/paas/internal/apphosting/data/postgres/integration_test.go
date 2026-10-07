@@ -78,6 +78,7 @@ func TestPostgresIntegration(t *testing.T) {
 	assertRoleSubjectStorage(t, ctx, admin, applicationResult.Operation)
 	assertAuditPersistenceAndFencing(t, ctx, admin, apiPool, workerPool, applicationResult)
 	assertApplicationLabelLifecycle(t, ctx, admin, apiPool, fixture, prefix)
+	assertApplicationDirectory(t, ctx, admin, apiPool, fixture, prefix)
 	assertOperationQueue(t, ctx, admin, workerPool, applicationResult)
 	planner, err := placement.NewV1Planner(5 * time.Minute)
 	if err != nil {
@@ -176,6 +177,161 @@ func TestPostgresIntegration(t *testing.T) {
 		prefix,
 	)
 	assertNorthboundIAMAudit(t, ctx, admin, apiPool, workerPool, fixture, prefix)
+}
+
+func assertApplicationDirectory(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	apiPool *pgxpool.Pool,
+	fixture integrationFixture,
+	prefix string,
+) {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	ids := make([]paasv1.ResourceID, paasv1.ApplicationDirectoryPageSize+2)
+	for index := range ids {
+		ids[index] = paasv1.ResourceID(fmt.Sprintf("%s-directory-%03d", prefix, index))
+		for _, tenant := range []struct {
+			id          paasv1.TenantID
+			environment string
+		}{
+			{fixture.tenantA, "production"},
+			{fixture.tenantB, "tenant-b"},
+		} {
+			application := paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application",
+				Metadata: integrationMetadata(ids[index], string(ids[index]), paasv1.AuthorityTenant, tenant.id, 1, now, false)}
+			application.Metadata.Labels = map[string]string{"environment": tenant.environment}
+			if err := paasv1.ValidateApplication(application); err != nil {
+				t.Fatalf("validate directory Application: %v", err)
+			}
+			execDocument(t, ctx, admin,
+				`INSERT INTO paas.applications (tenant_id, id, resource_version, document)
+				 VALUES ($1, $2, $3, $4::jsonb)`, tenant.id, ids[index], 1, integrationJSON(t, application))
+		}
+	}
+	repository, err := NewApplicationRepository(apiPool)
+	if err != nil {
+		t.Fatalf("create Application directory repository: %v", err)
+	}
+	for _, tenant := range []struct {
+		id              paasv1.TenantID
+		environment     string
+		forbiddenMarker string
+	}{
+		{fixture.tenantA, "production", "tenant-b"},
+		{fixture.tenantB, "tenant-b", "production"},
+	} {
+		err := repository.WithinReadOnlyTransaction(ctx, tenant.id,
+			func(transactionContext context.Context, transaction applicationlifecycle.Transaction) error {
+				values, err := transaction.ListApplicationsAfter(transactionContext, ids[0], paasv1.ApplicationDirectoryPageSize+1)
+				if err != nil {
+					return err
+				}
+				if len(values) != paasv1.ApplicationDirectoryPageSize+1 || values[0].Metadata.ID != ids[1] ||
+					values[len(values)-1].Metadata.ID != ids[paasv1.ApplicationDirectoryPageSize+1] {
+					return fmt.Errorf("unexpected candidate window %#v", values)
+				}
+				for index, value := range values {
+					if value.Metadata.Scope.TenantID != tenant.id || value.Metadata.Labels["environment"] != tenant.environment ||
+						value.Metadata.Labels["environment"] == tenant.forbiddenMarker ||
+						(index > 0 && value.Metadata.ID <= values[index-1].Metadata.ID) {
+						return errors.New("Application directory crossed tenant RLS or ordering")
+					}
+				}
+				loaded, err := transaction.LoadApplications(transactionContext, ids[1:paasv1.ApplicationDirectoryPageSize+1])
+				if err != nil || len(loaded) != paasv1.ApplicationDirectoryPageSize {
+					return fmt.Errorf("load exact Application snapshot: %w", err)
+				}
+				empty, err := transaction.LoadApplications(transactionContext, []paasv1.ResourceID{})
+				if err != nil || empty == nil || len(empty) != 0 {
+					return errors.New("empty Application snapshot changed shape")
+				}
+				return nil
+			})
+		if err != nil {
+			t.Fatalf("tenant %s Application directory: %v", tenant.id, err)
+		}
+	}
+
+	usecase, err := applicationlifecycle.NewUsecase(repository, applicationlifecycle.Config{MaxTransactionAttempts: 5})
+	if err != nil {
+		t.Fatalf("create Application directory use case: %v", err)
+	}
+	subject := integrationDirectorySubject(t, fixture.tenantA)
+	snapshot, err := usecase.InspectApplicationDirectory(ctx, subject, ids[0])
+	if err != nil || len(snapshot.Candidates) != paasv1.ApplicationDirectoryPageSize || !snapshot.HasMore ||
+		snapshot.Candidates[0].ID != ids[1] || snapshot.Candidates[len(snapshot.Candidates)-1].ID != ids[paasv1.ApplicationDirectoryPageSize] {
+		t.Fatalf("inspect real Application directory snapshot=%#v err=%v", snapshot, err)
+	}
+	decisions := integrationDirectoryDecisions(t, snapshot, subject)
+	command := applicationlifecycle.ReadApplicationDirectoryCommand{Subject: subject, Snapshot: snapshot, Decisions: decisions}
+	allowed, err := usecase.ReadApplicationDirectory(ctx, command)
+	if err != nil || len(allowed) != paasv1.ApplicationDirectoryPageSize/2 {
+		t.Fatalf("read filtered real Application directory=%d err=%v", len(allowed), err)
+	}
+	for _, value := range allowed {
+		if value.Metadata.Scope.TenantID != fixture.tenantA || value.Metadata.Labels["environment"] != "production" {
+			t.Fatalf("filtered directory leaked tenant or labels: %#v", value)
+		}
+	}
+
+	changed := paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application",
+		Metadata: integrationMetadata(ids[2], string(ids[2]), paasv1.AuthorityTenant, fixture.tenantA, 2, now, false)}
+	changed.Metadata.Labels = map[string]string{"environment": "restricted"}
+	if err := paasv1.ValidateApplication(changed); err != nil {
+		t.Fatal(err)
+	}
+	if tag, err := admin.Exec(ctx,
+		`UPDATE paas.applications SET resource_version=$3, document=$4::jsonb WHERE tenant_id=$1 AND id=$2`,
+		fixture.tenantA, ids[2], 2, integrationJSON(t, changed)); err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("change authorized Application snapshot: rows=%d err=%v", tag.RowsAffected(), err)
+	}
+	if result, err := usecase.ReadApplicationDirectory(ctx, command); !errors.Is(err, applicationlifecycle.ErrAuthorizationSnapshotChanged) || result != nil {
+		t.Fatalf("changed real Application snapshot returned %#v err=%v", result, err)
+	}
+	tenantB := readIntegrationApplication(t, ctx, admin, fixture.tenantB, ids[2])
+	if tenantB.Metadata.ResourceVersion != 1 || tenantB.Metadata.Labels["environment"] != "tenant-b" {
+		t.Fatalf("tenant A snapshot change crossed same-ID tenant B row: %#v", tenantB)
+	}
+}
+
+func integrationDirectorySubject(t *testing.T, tenantID paasv1.TenantID) port.AuthorizationSubjectContext {
+	t.Helper()
+	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	if !known {
+		t.Fatal("PaaS authorization profile is missing")
+	}
+	_, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port.AuthorizationSubjectContext{TenantID: tenantID,
+		Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-directory-user"},
+		Profile: iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}}
+}
+
+func integrationDirectoryDecisions(
+	t *testing.T,
+	snapshot applicationlifecycle.ApplicationDirectorySnapshot,
+	subject port.AuthorizationSubjectContext,
+) port.AuthorizationBatch {
+	t.Helper()
+	items := make([]port.AuthorizationBatchItem, len(snapshot.Candidates))
+	for index, candidate := range snapshot.Candidates {
+		request := port.AuthorizationRequest{Credential: "Bearer integration-directory",
+			Action: port.AuthorizeApplicationRead, Resource: paasv1.ResourceRef{Kind: port.ResourceApplication, ID: candidate.ID},
+			ResourceMode: iamv1.AuthorizationResourceInstance, SourceIP: "192.0.2.10", ResourceLabels: candidate.Labels,
+			RequestID: fmt.Sprintf("request-directory-%03d", index), CorrelationID: "request-directory"}
+		mapped, err := port.NewIAMAuthorizationRequest(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items[index] = port.AuthorizationBatchItem{Resource: request.Resource, Allowed: index%2 == 0,
+			DecisionID: fmt.Sprintf("decision-directory-%03d", index), RequestID: request.RequestID,
+			RequestTags: mapped.RequestTags, ResourceTags: mapped.ResourceTags}
+	}
+	return port.AuthorizationBatch{TenantID: subject.TenantID, Subject: subject.Subject, Items: items}
 }
 
 type integrationFixture struct {

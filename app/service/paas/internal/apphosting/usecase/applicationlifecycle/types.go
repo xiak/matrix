@@ -11,14 +11,15 @@ import (
 )
 
 var (
-	ErrNotFound                = errors.New("application lifecycle resource not found")
-	ErrInvalidArgument         = errors.New("application lifecycle request is invalid")
-	ErrAlreadyExists           = errors.New("application lifecycle resource already exists")
-	ErrResourceVersionConflict = errors.New("Deployment resource version conflict")
-	ErrIdempotencyConflict     = errors.New("application lifecycle idempotency conflict")
-	ErrNoDesiredChange         = errors.New("requested desired state is unchanged")
-	ErrOperationInProgress     = errors.New("Deployment has an operation in progress")
-	ErrRetryableTransaction    = errors.New("application lifecycle transaction must be retried")
+	ErrNotFound                     = errors.New("application lifecycle resource not found")
+	ErrInvalidArgument              = errors.New("application lifecycle request is invalid")
+	ErrAlreadyExists                = errors.New("application lifecycle resource already exists")
+	ErrResourceVersionConflict      = errors.New("Deployment resource version conflict")
+	ErrIdempotencyConflict          = errors.New("application lifecycle idempotency conflict")
+	ErrNoDesiredChange              = errors.New("requested desired state is unchanged")
+	ErrOperationInProgress          = errors.New("Deployment has an operation in progress")
+	ErrRetryableTransaction         = errors.New("application lifecycle transaction must be retried")
+	ErrAuthorizationSnapshotChanged = errors.New("application authorization snapshot changed")
 )
 
 type SubmitCommand struct {
@@ -120,6 +121,20 @@ type ApplicationAuthorizationSnapshot struct {
 	Labels          map[string]string
 }
 
+// ApplicationDirectorySnapshot is the exact product-owned candidate window
+// presented to IAM. HasMore is based on the next persisted candidate, not the
+// number of candidates that IAM later allows.
+type ApplicationDirectorySnapshot struct {
+	Candidates []ApplicationAuthorizationSnapshot
+	HasMore    bool
+}
+
+type ReadApplicationDirectoryCommand struct {
+	Subject   port.AuthorizationSubjectContext
+	Snapshot  ApplicationDirectorySnapshot
+	Decisions port.AuthorizationBatch
+}
+
 type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
 	FindOperationByFingerprint(
@@ -131,6 +146,8 @@ type Transaction interface {
 		paasv1.ResourceID,
 	) (paasv1.Deployment, bool, error)
 	LoadApplication(context.Context, paasv1.ResourceID) (paasv1.Application, bool, error)
+	ListApplicationsAfter(context.Context, paasv1.ResourceID, int) ([]paasv1.Application, error)
+	LoadApplications(context.Context, []paasv1.ResourceID) ([]paasv1.Application, error)
 	LoadApplicationForUpdate(context.Context, paasv1.ResourceID) (paasv1.Application, bool, error)
 	LoadConfiguration(context.Context, paasv1.ResourceID) (paasv1.Configuration, bool, error)
 	LoadConfigurationRevision(

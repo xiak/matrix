@@ -1934,6 +1934,128 @@ func TestAccessKeyAuthorizationTransportBindsOneRequestWithoutSelectors(t *testi
 	}
 }
 
+func TestAccessKeyListAuthorizationTransportBindsOneSignedCandidatePage(t *testing.T) {
+	collection, err := NewAuthorizationRequest(ActionPaaSApplicationRead,
+		ResourceReference{Kind: ResourceApplication, ID: "collection"}, AuthorizationResourceCollection,
+		AuthorizationCollectionList, "request-list", "correlation-list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := func(id, requestID string) AuthorizationRequest {
+		request, requestErr := NewAuthorizationRequest(ActionPaaSApplicationRead,
+			ResourceReference{Kind: ResourceApplication, ID: id}, AuthorizationResourceInstance, "", requestID, "correlation-list")
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		return request
+	}
+	signed := accessKeySigningFixture(t)
+	signed.HTTP.Method = "GET"
+	signed.HTTP.EscapedPath = "/api/paas/v1/applications"
+	signed.HTTP.RawQuery = "after=cursor-one"
+	signed.HTTP.ContentType, signed.HTTP.IdempotencyKey, signed.HTTP.IfMatch = "", "", ""
+	signed.HTTP.BodyDigest = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	request := AccessKeyListAuthorizationRequest{Collection: collection,
+		Instances: []AuthorizationRequest{instance("application-a", "request-a"), instance("application-b", "request-b")}, SignedRequest: signed}
+	encoded, err := EncodeAccessKeyListAuthorizationRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	decoded, err := DecodeAccessKeyListAuthorizationRequest(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(request, decoded) {
+		t.Fatal("dedicated list transport changed the signed candidate page", err)
+	}
+	if _, err := json.Marshal(request); err == nil || json.Unmarshal(encoded, &decoded) == nil ||
+		strings.Contains(fmt.Sprintf("%+v %#v", request, request), "Uz5Xlnd") {
+		t.Fatal("ordinary JSON or formatting exposed the list signature")
+	}
+	for name, mutate := range map[string]func(*AccessKeyListAuthorizationRequest){
+		"missing instances": func(value *AccessKeyListAuthorizationRequest) { value.Instances = nil },
+		"reordered": func(value *AccessKeyListAuthorizationRequest) {
+			value.Instances[0], value.Instances[1] = value.Instances[1], value.Instances[0]
+		},
+		"duplicate request": func(value *AccessKeyListAuthorizationRequest) {
+			value.Instances[0].RequestID = value.Collection.RequestID
+		},
+		"different correlation": func(value *AccessKeyListAuthorizationRequest) { value.Instances[0].CorrelationID = "other" },
+		"different request tags": func(value *AccessKeyListAuthorizationRequest) {
+			value.Instances[0].RequestTags = []AuthorizationTag{{Key: "environment", Value: "prod"}}
+		},
+		"collection resource tags": func(value *AccessKeyListAuthorizationRequest) {
+			value.Collection.ResourceTags = []AuthorizationTag{{Key: "environment", Value: "prod"}}
+		},
+		"different audience": func(value *AccessKeyListAuthorizationRequest) { value.SignedRequest.Parameters.Audience = ProductAudit },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := request
+			candidate.Instances = append([]AuthorizationRequest(nil), request.Instances...)
+			mutate(&candidate)
+			if ValidateAccessKeyListAuthorizationRequest(candidate) == nil {
+				t.Fatal("invalid signed list request accepted")
+			}
+		})
+	}
+	empty := request
+	empty.Instances = []AuthorizationRequest{}
+	if ValidateAccessKeyListAuthorizationRequest(empty) != nil {
+		t.Fatal("explicit empty candidate page rejected")
+	}
+	digest, err := AccessKeySignedRequestDigest(request.SignedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
+	denied := AccessKeyListAuthorization{APIVersion: APIVersion, Kind: "AccessKeyListAuthorization", SignedRequestDigest: digest,
+		Collection: AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-list", Reason: DecisionDenied,
+			Action: collection.Action, Resource: collection.Resource, RequestID: collection.RequestID, CorrelationID: collection.CorrelationID,
+			Profile: &collection.Profile, ResourceMode: collection.ResourceMode, CollectionUsage: collection.CollectionUsage, DecidedAt: now},
+		Instances: []AuthorizationDecision{}}
+	if CheckAccessKeyListAuthorizationForRequest(denied, request) != nil {
+		t.Fatal("request-bound collection Deny rejected")
+	}
+	withLeakedCandidate := denied
+	withLeakedCandidate.Instances = []AuthorizationDecision{{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-a", Reason: DecisionDenied,
+		Action: request.Instances[0].Action, Resource: request.Instances[0].Resource, RequestID: request.Instances[0].RequestID,
+		CorrelationID: request.Instances[0].CorrelationID, Profile: &request.Instances[0].Profile,
+		ResourceMode: request.Instances[0].ResourceMode, DecidedAt: now}}
+	if ValidateAccessKeyListAuthorization(withLeakedCandidate) == nil {
+		t.Fatal("collection Deny exposed per-instance decisions")
+	}
+	subject := Subject{Type: SubjectUser, ID: "user-one", AccessKeyID: request.SignedRequest.Parameters.AccessKeyID}
+	allowed := AccessKeyListAuthorization{APIVersion: APIVersion, Kind: "AccessKeyListAuthorization", SignedRequestDigest: digest,
+		Collection: AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-list-allowed",
+			Allowed: true, Reason: DecisionAllowed, TenantID: "account-one", Subject: &subject,
+			Action: collection.Action, Resource: collection.Resource, RequestID: collection.RequestID, CorrelationID: collection.CorrelationID,
+			Profile: &collection.Profile, ResourceMode: collection.ResourceMode, CollectionUsage: collection.CollectionUsage, DecidedAt: now},
+		Instances: []AuthorizationDecision{
+			{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-a", Allowed: true, Reason: DecisionAllowed,
+				TenantID: "account-one", Subject: &subject, Action: request.Instances[0].Action, Resource: request.Instances[0].Resource,
+				RequestID: request.Instances[0].RequestID, CorrelationID: request.Instances[0].CorrelationID,
+				Profile: &request.Instances[0].Profile, ResourceMode: request.Instances[0].ResourceMode, DecidedAt: now},
+			{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-b", Reason: DecisionDenied,
+				Action: request.Instances[1].Action, Resource: request.Instances[1].Resource,
+				RequestID: request.Instances[1].RequestID, CorrelationID: request.Instances[1].CorrelationID,
+				Profile: &request.Instances[1].Profile, ResourceMode: request.Instances[1].ResourceMode, DecidedAt: now},
+		}}
+	if CheckAccessKeyListAuthorizationForRequest(allowed, request) != nil {
+		t.Fatal("request-bound mixed Application candidate decisions were rejected")
+	}
+	changedAllowed := allowed
+	changedAllowed.Instances = append([]AuthorizationDecision(nil), allowed.Instances...)
+	changedAllowed.Instances[0].Resource.ID = "application-other"
+	if CheckAccessKeyListAuthorizationForRequest(changedAllowed, request) == nil {
+		t.Fatal("substituted Application decision was accepted")
+	}
+	wire, err := json.Marshal(denied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded, err := DecodeAccessKeyListAuthorization(bytes.NewReader(wire)); err != nil || !reflect.DeepEqual(denied, decoded) {
+		t.Fatal("sanitized list response changed on strict decode", err)
+	}
+}
+
 func TestAccessKeySubjectResolutionIsRequestBoundAndNeverASelector(t *testing.T) {
 	profile, known := LookupAuthorizationProfile(ProductPaaS)
 	if !known {
@@ -3278,7 +3400,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 		current, found := LookupAuthorizationProfile(product)
 		expectedRevision := uint64(4)
 		if product == ProductPaaS {
-			expectedRevision = 12
+			expectedRevision = 13
 		}
 		if !found || current.Revision != expectedRevision {
 			t.Fatal("missing explicit new product revision")
@@ -4102,7 +4224,7 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 12 {
+	if !found || profile.Revision != 13 {
 		t.Fatal("missing current PaaS role, tag, and AccessKey-capable declaration")
 	}
 	expected := map[Action]struct {
@@ -4159,25 +4281,28 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	}
 	reference := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: profileDigest}
 	keyActions := map[Action]struct {
-		shape  AuthorizationResourceShape
+		shapes []AuthorizationResourceShape
 		result ResourceKind
 	}{
-		ActionPaaSApplicationCreate:           {AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}, ResourceApplication},
-		ActionPaaSConfigurationCreate:         {AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}, ResourceConfiguration},
-		ActionPaaSConfigurationRevisionCreate: {AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}, ResourceConfigurationRevision},
-		ActionPaaSApplicationRevisionCreate:   {AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}, ResourceApplicationRevision},
-		ActionPaaSDeploymentCreate:            {AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}, ResourceDeployment},
-		ActionPaaSApplicationRead:             {AuthorizationResourceShape{Mode: AuthorizationResourceInstance, PrefixAllowed: true}, ""},
-		ActionPaaSConfigurationRead:           {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
-		ActionPaaSConfigurationRevisionRead:   {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
-		ActionPaaSApplicationRevisionRead:     {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
-		ActionPaaSDeploymentRead:              {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
-		ActionPaaSOperationRead:               {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
-		ActionPaaSDeploymentUpdate:            {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
-		ActionPaaSDeploymentStop:              {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
-		ActionPaaSDeploymentRollback:          {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
-		ActionPaaSApplicationLabelSet:         {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
-		ActionPaaSApplicationLabelDelete:      {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
+		ActionPaaSApplicationCreate:           {[]AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}, ResourceApplication},
+		ActionPaaSConfigurationCreate:         {[]AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}, ResourceConfiguration},
+		ActionPaaSConfigurationRevisionCreate: {[]AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}, ResourceConfigurationRevision},
+		ActionPaaSApplicationRevisionCreate:   {[]AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}, ResourceApplicationRevision},
+		ActionPaaSDeploymentCreate:            {[]AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}, ResourceDeployment},
+		ActionPaaSApplicationRead: {[]AuthorizationResourceShape{
+			{Mode: AuthorizationResourceInstance, PrefixAllowed: true},
+			{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList},
+		}, ""},
+		ActionPaaSConfigurationRead:         {[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}, ""},
+		ActionPaaSConfigurationRevisionRead: {[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}, ""},
+		ActionPaaSApplicationRevisionRead:   {[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}, ""},
+		ActionPaaSDeploymentRead:            {[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}, ""},
+		ActionPaaSOperationRead:             {[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}, ""},
+		ActionPaaSDeploymentUpdate:          {[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}, ""},
+		ActionPaaSDeploymentStop:            {[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}, ""},
+		ActionPaaSDeploymentRollback:        {[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}, ""},
+		ActionPaaSApplicationLabelSet:       {[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}, ""},
+		ActionPaaSApplicationLabelDelete:    {[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}, ""},
 	}
 	for _, action := range profile.Actions {
 		expected, keyAction := keyActions[action.Action]
@@ -4190,16 +4315,37 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 		if !keyAction {
 			continue
 		}
-		if action.Scope != AuthorityScopeTenant || len(action.ResourceShapes) != 1 {
+		if action.Scope != AuthorityScopeTenant || !slices.Equal(action.ResourceShapes, expected.shapes) {
 			t.Fatal("AccessKey action escaped its tenant resource shape", action.Action)
 		}
-		if action.ResultResourceKind != expected.result || action.ResourceShapes[0] != expected.shape {
+		if action.ResultResourceKind != expected.result {
 			t.Fatal("AccessKey action escaped its original resource shape", action.Action)
 		}
 		delete(keyActions, action.Action)
 	}
 	if len(keyActions) != 0 {
 		t.Fatal("PaaS product is missing AccessKey declarations", keyActions)
+	}
+	if CheckAuthorizationProfileInstanceListBatch(profile, reference, ActionPaaSApplicationRead, ResourceApplication) != nil {
+		t.Fatal("current PaaS profile does not admit its bounded Application list batch")
+	}
+	for _, action := range profile.Actions {
+		if action.Action != ActionPaaSApplicationRead && action.InstanceListBatch {
+			t.Fatal("PaaS list batch escaped Application read", action.Action)
+		}
+	}
+	historical := HistoricalAuthorizationProfiles()
+	priorIndex := slices.IndexFunc(historical, func(value AuthorizationProfile) bool {
+		return value.Product == ProductPaaS && value.Revision == 12
+	})
+	if priorIndex < 0 {
+		t.Fatal("missing retained PaaS revision twelve")
+	}
+	_, priorDigest, err := CanonicalizeAuthorizationProfile(historical[priorIndex])
+	if err != nil || CheckAuthorizationProfileInstanceListBatch(historical[priorIndex], AuthorizationProfileReference{
+		Product: ProductPaaS, Revision: 12, ContentDigest: priorDigest,
+	}, ActionPaaSApplicationRead, ResourceApplication) == nil {
+		t.Fatal("retained PaaS profile gained Application list batch authority")
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
 	if err != nil || CheckAuthorizationProfileReference(profile, AuthorizationProfileReference{Product: ProductPaaS, Revision: profile.Revision + 1, ContentDigest: digest}) == nil {
@@ -4341,7 +4487,7 @@ func TestProductProfilesDeclareParentInstanceAndCollectionResults(t *testing.T) 
 		{ActionIAMGroupMembershipCreate, ResourceGroup, ResourceGroupMembership, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
 		{ActionIAMAccountRead, ResourceAccount, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}},
 		{ActionPaaSApplicationCreate, ResourceApplication, ResourceApplication, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}},
-		{ActionPaaSApplicationRead, ResourceApplication, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}},
+		{ActionPaaSApplicationRead, ResourceApplication, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}},
 		{ActionPaaSApplicationLabelSet, ResourceApplication, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
 		{ActionPaaSApplicationLabelDelete, ResourceApplication, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
 		{ActionPaaSExecutionPoolCreate, ResourceExecutionPool, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},

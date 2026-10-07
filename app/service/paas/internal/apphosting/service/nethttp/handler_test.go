@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +30,7 @@ func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 		SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 678_000, time.UTC),
 	}
 	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeInstallationVerifier{}, Config{
+		InstallationID: "installation-test", CursorKey: testApplicationCursorKey(),
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return readiness, readyErr
 		},
@@ -410,6 +414,7 @@ func TestAccessKeyRouteAdmissionIsAnExactClosedMap(t *testing.T) {
 		path    string
 		actions []iamv1.Action
 	}{
+		{http.MethodGet, "/v1/applications", []iamv1.Action{port.AuthorizeApplicationRead}},
 		{http.MethodGet, "/v1/applications/application-a", []iamv1.Action{port.AuthorizeApplicationRead}},
 		{http.MethodGet, "/v1/configurations/configuration-a", []iamv1.Action{port.AuthorizeConfigurationRead}},
 		{http.MethodGet, "/v1/configuration-revisions/configuration-revision-a", []iamv1.Action{port.AuthorizeConfigurationRevisionRead}},
@@ -432,7 +437,6 @@ func TestAccessKeyRouteAdmissionIsAnExactClosedMap(t *testing.T) {
 		method string
 		path   string
 	}{
-		{http.MethodGet, "/v1/applications"},
 		{http.MethodGet, "/v1/configurations/configuration-a/extra"},
 		{http.MethodGet, "/v1/deployments/deployment-a/generations/0"},
 		{http.MethodGet, "/v1/deployments/deployment-a/generations/9007199254740992"},
@@ -451,6 +455,254 @@ func TestAccessKeyRouteAdmissionIsAnExactClosedMap(t *testing.T) {
 		if actions, admitted := accessKeyActionsForRoute(test.method, test.path); admitted || actions != nil {
 			t.Fatalf("undeclared route %s %s mapped to %v", test.method, test.path, actions)
 		}
+	}
+}
+
+func TestHandlerListsOnlyBearerAuthorizedApplicationCandidates(t *testing.T) {
+	metadataA := testMetadata("application-a", "application-a")
+	metadataA.Labels = map[string]string{"environment": "production", "team": "payments"}
+	metadataB := testMetadata("application-b", "application-b")
+	metadataB.Labels = map[string]string{"environment": "staging", "team": "payments"}
+	applicationA := paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application", Metadata: metadataA}
+	workflow := &fakeWorkflow{
+		directorySnapshot: applicationlifecycle.ApplicationDirectorySnapshot{Candidates: []applicationlifecycle.ApplicationAuthorizationSnapshot{
+			{ID: metadataA.ID, ResourceVersion: metadataA.ResourceVersion, Labels: metadataA.Labels},
+			{ID: metadataB.ID, ResourceVersion: metadataB.ResourceVersion, Labels: metadataB.Labels},
+		}},
+		directoryItems: []paasv1.Application{applicationA},
+	}
+	authorizer := &fakeAuthorizer{batchResult: &port.AuthorizationBatch{
+		TenantID: "tenant-authorized", Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized"},
+		Items: []port.AuthorizationBatchItem{
+			{Resource: paasv1.ResourceRef{Kind: port.ResourceApplication, ID: metadataA.ID}, Allowed: true,
+				DecisionID: "decision-a", RequestID: "request-directory-001",
+				ResourceTags: []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}},
+			{Resource: paasv1.ResourceRef{Kind: port.ResourceApplication, ID: metadataB.ID}, Allowed: false,
+				DecisionID: "decision-b", RequestID: "request-directory-002",
+				ResourceTags: []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}},
+		},
+	}}
+	handler := mustDirectoryHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodGet, "/v1/applications", nil)
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
+	}
+	var result paasv1.ApplicationList
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || paasv1.ValidateApplicationList(result) != nil ||
+		len(result.Items) != 1 || result.Items[0].Metadata.ID != metadataA.ID || result.NextAfter != "" {
+		t.Fatalf("list result=%#v err=%v", result, err)
+	}
+	if authorizer.resolveCalls != 1 || authorizer.authorizeCalls != 1 || authorizer.batchCalls != 1 ||
+		authorizer.request.ResourceMode != iamv1.AuthorizationResourceCollection ||
+		authorizer.request.CollectionUsage != iamv1.AuthorizationCollectionList ||
+		len(authorizer.batchRequest.Requests) != 2 ||
+		authorizer.batchRequest.Requests[0].CorrelationID != "request-directory-000" ||
+		workflow.directoryInspectCalls != 1 || workflow.directoryAfter != "" ||
+		len(workflow.directoryReadCommand.Decisions.Items) != 2 {
+		t.Fatalf("directory flow authorizer=%#v workflow=%#v", authorizer, workflow)
+	}
+}
+
+func TestHandlerUsesOneAccessKeyListAuthorizationForCandidatePage(t *testing.T) {
+	metadata := testMetadata("application-key", "application-key")
+	metadata.Labels = map[string]string{"environment": "production"}
+	application := paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application", Metadata: metadata}
+	workflow := &fakeWorkflow{
+		directorySnapshot: applicationlifecycle.ApplicationDirectorySnapshot{Candidates: []applicationlifecycle.ApplicationAuthorizationSnapshot{{
+			ID: metadata.ID, ResourceVersion: metadata.ResourceVersion, Labels: metadata.Labels,
+		}}},
+		directoryItems: []paasv1.Application{application},
+	}
+	authorizer := &fakeAuthorizer{}
+	handler := mustDirectoryHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodGet, "/v1/applications", nil)
+	setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/applications")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("AccessKey list status=%d body=%s", response.Code, response.Body.String())
+	}
+	var result paasv1.ApplicationList
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || paasv1.ValidateApplicationList(result) != nil ||
+		len(result.Items) != 1 || result.Items[0].Metadata.ID != metadata.ID {
+		t.Fatalf("AccessKey list result=%#v err=%v", result, err)
+	}
+	if authorizer.keyResolveCalls != 1 || authorizer.accessKeyListCalls != 1 ||
+		authorizer.accessKeyCalls != 0 || authorizer.batchCalls != 0 || authorizer.authorizeCalls != 0 ||
+		len(authorizer.accessKeyListRequest.Instances) != 1 ||
+		authorizer.accessKeyListRequest.Collection.CollectionUsage != iamv1.AuthorizationCollectionList ||
+		authorizer.accessKeyListRequest.Instances[0].CorrelationID != "request-directory-000" {
+		t.Fatalf("AccessKey directory did not use one signed list call: %#v", authorizer)
+	}
+}
+
+func TestAccessKeyApplicationDirectoryBindsSignedQueryAndCursorSubject(t *testing.T) {
+	metadataA := testMetadata("application-key-a", "application-key-a")
+	metadataA.Labels = map[string]string{"environment": "production"}
+	applicationA := paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application", Metadata: metadataA}
+	workflow := &fakeWorkflow{
+		directorySnapshot: applicationlifecycle.ApplicationDirectorySnapshot{Candidates: []applicationlifecycle.ApplicationAuthorizationSnapshot{{
+			ID: metadataA.ID, ResourceVersion: metadataA.ResourceVersion, Labels: metadataA.Labels,
+		}}, HasMore: true},
+		directoryItems: []paasv1.Application{applicationA},
+	}
+	authorizer := &fakeAuthorizer{}
+	handler := mustDirectoryHandler(t, authorizer, workflow)
+	first := httptest.NewRequest(http.MethodGet, "/v1/applications", nil)
+	setAccessKeyEdgeHeaders(t, first, "/api/paas/v1/applications")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, first)
+	if response.Code != http.StatusOK {
+		t.Fatalf("first signed page status=%d body=%s", response.Code, response.Body.String())
+	}
+	var page paasv1.ApplicationList
+	if json.Unmarshal(response.Body.Bytes(), &page) != nil || page.NextAfter == "" {
+		t.Fatalf("first signed page=%#v", page)
+	}
+
+	metadataB := testMetadata("application-key-b", "application-key-b")
+	metadataB.Labels = map[string]string{"environment": "staging"}
+	applicationB := paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application", Metadata: metadataB}
+	workflow.directorySnapshot = applicationlifecycle.ApplicationDirectorySnapshot{Candidates: []applicationlifecycle.ApplicationAuthorizationSnapshot{{
+		ID: metadataB.ID, ResourceVersion: metadataB.ResourceVersion, Labels: metadataB.Labels,
+	}}}
+	workflow.directoryItems = []paasv1.Application{applicationB}
+	rawQuery := "after=" + url.QueryEscape(page.NextAfter)
+	second := httptest.NewRequest(http.MethodGet, "/v1/applications?"+rawQuery, nil)
+	setAccessKeyEdgeHeaders(t, second, "/api/paas/v1/applications?"+rawQuery)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, second)
+	if response.Code != http.StatusOK || workflow.directoryAfter != metadataA.ID ||
+		authorizer.accessKeyListCalls != 2 || authorizer.authorizeCalls != 0 || authorizer.batchCalls != 0 ||
+		authorizer.accessKeyListRequest.Collection.SignedRequest.HTTP.RawQuery != rawQuery {
+		t.Fatalf("signed continuation status=%d after=%q authorizer=%#v body=%s",
+			response.Code, workflow.directoryAfter, authorizer, response.Body.String())
+	}
+
+	inspections := workflow.directoryInspectCalls
+	different := workflow.directorySubject
+	different.Subject.ID = "user-other"
+	authorizer.resolveResult = &different
+	substitution := httptest.NewRequest(http.MethodGet, "/v1/applications?"+rawQuery, nil)
+	setAccessKeyEdgeHeaders(t, substitution, "/api/paas/v1/applications?"+rawQuery)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, substitution)
+	if response.Code != http.StatusBadRequest || workflow.directoryInspectCalls != inspections ||
+		authorizer.accessKeyListCalls != 2 || authorizer.keyResolveCalls != 3 {
+		t.Fatalf("cursor subject substitution status=%d inspections=%d/%d calls=%d/%d body=%s",
+			response.Code, workflow.directoryInspectCalls, inspections, authorizer.accessKeyListCalls,
+			authorizer.keyResolveCalls, response.Body.String())
+	}
+}
+
+func TestApplicationDirectoryCursorTracksLastScannedCandidateAndReauthorizes(t *testing.T) {
+	applications := make([]paasv1.Application, paasv1.ApplicationDirectoryPageSize+1)
+	candidates := make([]applicationlifecycle.ApplicationAuthorizationSnapshot, paasv1.ApplicationDirectoryPageSize)
+	for index := range applications {
+		metadata := testMetadata(paasv1.ResourceID(fmt.Sprintf("application-%03d", index)), fmt.Sprintf("application-%03d", index))
+		metadata.Labels = map[string]string{"environment": "production"}
+		applications[index] = paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application", Metadata: metadata}
+		if index < len(candidates) {
+			candidates[index] = applicationlifecycle.ApplicationAuthorizationSnapshot{
+				ID: metadata.ID, ResourceVersion: metadata.ResourceVersion, Labels: metadata.Labels,
+			}
+		}
+	}
+	workflow := &fakeWorkflow{
+		directorySnapshot: applicationlifecycle.ApplicationDirectorySnapshot{Candidates: candidates, HasMore: true},
+		directoryItems:    []paasv1.Application{},
+	}
+	authorizer := &fakeAuthorizer{batchAllowed: make([]bool, len(candidates))}
+	handler := mustDirectoryHandler(t, authorizer, workflow)
+
+	first := httptest.NewRequest(http.MethodGet, "/v1/applications", nil)
+	first.Header.Set("Authorization", "Bearer opaque-credential")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, first)
+	if response.Code != http.StatusOK {
+		t.Fatalf("denied candidate window status=%d body=%s", response.Code, response.Body.String())
+	}
+	var page paasv1.ApplicationList
+	if json.Unmarshal(response.Body.Bytes(), &page) != nil || paasv1.ValidateApplicationList(page) != nil ||
+		page.Items == nil || len(page.Items) != 0 || page.NextAfter == "" || strings.Contains(page.NextAfter, "application-049") {
+		t.Fatalf("denied candidate page=%#v", page)
+	}
+
+	last := applications[len(applications)-1]
+	workflow.directorySnapshot = applicationlifecycle.ApplicationDirectorySnapshot{Candidates: []applicationlifecycle.ApplicationAuthorizationSnapshot{{
+		ID: last.Metadata.ID, ResourceVersion: last.Metadata.ResourceVersion, Labels: last.Metadata.Labels,
+	}}}
+	workflow.directoryItems = []paasv1.Application{last}
+	authorizer.batchAllowed = []bool{true}
+	second := httptest.NewRequest(http.MethodGet, "/v1/applications?after="+url.QueryEscape(page.NextAfter), nil)
+	second.Header.Set("Authorization", "Bearer opaque-credential")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, second)
+	if response.Code != http.StatusOK || workflow.directoryAfter != "application-049" {
+		t.Fatalf("continuation status=%d after=%q body=%s", response.Code, workflow.directoryAfter, response.Body.String())
+	}
+	var continuation paasv1.ApplicationList
+	if json.Unmarshal(response.Body.Bytes(), &continuation) != nil || len(continuation.Items) != 1 ||
+		continuation.Items[0].Metadata.ID != "application-050" || continuation.NextAfter != "" ||
+		authorizer.resolveCalls != 2 || authorizer.authorizeCalls != 2 || authorizer.batchCalls != 2 {
+		t.Fatalf("continuation=%#v authorizer=%#v", continuation, authorizer)
+	}
+
+	inspections := workflow.directoryInspectCalls
+	authorizer.resolveErr = port.ErrUnauthenticated
+	revoked := httptest.NewRequest(http.MethodGet, "/v1/applications?after="+url.QueryEscape(page.NextAfter), nil)
+	revoked.Header.Set("Authorization", "Bearer opaque-credential")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, revoked)
+	if response.Code != http.StatusUnauthorized || workflow.directoryInspectCalls != inspections || authorizer.resolveCalls != 3 {
+		t.Fatalf("revoked continuation status=%d inspections=%d/%d resolve=%d", response.Code,
+			workflow.directoryInspectCalls, inspections, authorizer.resolveCalls)
+	}
+}
+
+func TestApplicationDirectoryQueryIsClosed(t *testing.T) {
+	validCursor := "pc1.opaque_continuation"
+	for _, test := range []struct {
+		raw  string
+		want string
+		ok   bool
+	}{
+		{"", "", true},
+		{"after=" + validCursor, validCursor, true},
+		{"after=application-a", "", false},
+		{"after=", "", false},
+		{"after=" + validCursor + "&after=" + validCursor, "", false},
+		{"after=" + validCursor + "&pageSize=50", "", false},
+		{"accountId=tenant-a", "", false},
+		{"after=%0A", "", false},
+	} {
+		t.Run(test.raw, func(t *testing.T) {
+			got, err := parseApplicationAfter(test.raw)
+			if (err == nil) != test.ok || got != test.want {
+				t.Fatalf("parse got=%q err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestHandlerRequiresInstallationBoundApplicationCursorKey(t *testing.T) {
+	base := Config{InstallationID: "installation-one", CursorKey: testApplicationCursorKey(),
+		Readiness: func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil }}
+	for name, mutate := range map[string]func(*Config){
+		"missing installation": func(v *Config) { v.InstallationID = "" },
+		"missing key":          func(v *Config) { v.CursorKey = nil },
+		"short key":            func(v *Config) { v.CursorKey = make([]byte, 31) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := base
+			mutate(&candidate)
+			if _, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeInstallationVerifier{}, candidate); err == nil {
+				t.Fatal("invalid cursor authority accepted")
+			}
+		})
 	}
 }
 
@@ -1023,19 +1275,97 @@ func TestHandlerFailsClosedWithoutCanonicalSocketPeer(t *testing.T) {
 }
 
 type fakeAuthorizer struct {
-	request          port.AuthorizationRequest
-	accessKeyRequest port.AccessKeyAuthorizationRequest
-	resolveRequest   port.SubjectResolutionRequest
-	resolveCalls     int
-	keyResolveCalls  int
-	authorizeCalls   int
-	accessKeyCalls   int
-	err              error
-	accessKeyErr     error
-	resolveErr       error
-	result           *port.Authorization
-	accessKeyResult  *port.Authorization
-	resolveResult    *port.AuthorizationSubjectContext
+	request              port.AuthorizationRequest
+	accessKeyRequest     port.AccessKeyAuthorizationRequest
+	batchRequest         port.AuthorizationBatchRequest
+	accessKeyListRequest port.AccessKeyListAuthorizationRequest
+	resolveRequest       port.SubjectResolutionRequest
+	resolveCalls         int
+	keyResolveCalls      int
+	authorizeCalls       int
+	accessKeyCalls       int
+	batchCalls           int
+	accessKeyListCalls   int
+	err                  error
+	accessKeyErr         error
+	batchErr             error
+	accessKeyListErr     error
+	resolveErr           error
+	result               *port.Authorization
+	accessKeyResult      *port.Authorization
+	batchResult          *port.AuthorizationBatch
+	batchAllowed         []bool
+	accessKeyListResult  *port.AccessKeyListAuthorization
+	resolveResult        *port.AuthorizationSubjectContext
+}
+
+func (authorizer *fakeAuthorizer) AuthorizeBatch(
+	_ context.Context,
+	request port.AuthorizationBatchRequest,
+) (port.AuthorizationBatch, error) {
+	authorizer.batchCalls++
+	authorizer.batchRequest = request
+	if authorizer.batchErr != nil {
+		return port.AuthorizationBatch{}, authorizer.batchErr
+	}
+	if authorizer.batchResult != nil {
+		return *authorizer.batchResult, nil
+	}
+	result := port.AuthorizationBatch{
+		TenantID: "tenant-authorized", Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized"},
+		Items: make([]port.AuthorizationBatchItem, len(request.Requests)),
+	}
+	for index, item := range request.Requests {
+		mapped, err := port.NewIAMAuthorizationRequest(item)
+		if err != nil {
+			return port.AuthorizationBatch{}, err
+		}
+		allowed := true
+		if authorizer.batchAllowed != nil {
+			allowed = index < len(authorizer.batchAllowed) && authorizer.batchAllowed[index]
+		}
+		result.Items[index] = port.AuthorizationBatchItem{Resource: item.Resource, Allowed: allowed,
+			DecisionID: "decision-batch-" + strconv.Itoa(index), RequestID: item.RequestID,
+			RequestTags: mapped.RequestTags, ResourceTags: mapped.ResourceTags}
+	}
+	return result, nil
+}
+
+func (authorizer *fakeAuthorizer) AuthorizeAccessKeyList(
+	_ context.Context,
+	request port.AccessKeyListAuthorizationRequest,
+) (port.AccessKeyListAuthorization, error) {
+	authorizer.accessKeyListCalls++
+	authorizer.accessKeyListRequest = request
+	if authorizer.accessKeyListErr != nil {
+		return port.AccessKeyListAuthorization{}, authorizer.accessKeyListErr
+	}
+	if authorizer.accessKeyListResult != nil {
+		return *authorizer.accessKeyListResult, nil
+	}
+	collectionRequest, err := port.NewIAMAccessKeyAuthorizationRequest(request.Collection)
+	if err != nil {
+		return port.AccessKeyListAuthorization{}, err
+	}
+	subject := paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized",
+		AccessKeyID: string(request.Collection.SignedRequest.Parameters.AccessKeyID)}
+	result := port.AccessKeyListAuthorization{
+		Collection: port.Authorization{TenantID: "tenant-authorized", Subject: subject,
+			DecisionID: "decision-collection", RequestID: request.Collection.RequestID,
+			RequestTags: collectionRequest.RequestTags, ResourceTags: collectionRequest.ResourceTags},
+		Instances: port.AuthorizationBatch{TenantID: "tenant-authorized", Subject: subject,
+			Items: make([]port.AuthorizationBatchItem, len(request.Instances))},
+	}
+	for index, item := range request.Instances {
+		mapped, mapErr := port.NewIAMAccessKeyAuthorizationRequest(item)
+		if mapErr != nil {
+			return port.AccessKeyListAuthorization{}, mapErr
+		}
+		result.Instances.Items[index] = port.AuthorizationBatchItem{Resource: item.Resource, Allowed: true,
+			DecisionID: "decision-key-list-" + strconv.Itoa(index), RequestID: item.RequestID,
+			RequestTags: mapped.RequestTags, ResourceTags: mapped.ResourceTags}
+	}
+	return result, nil
 }
 
 func (authorizer *fakeAuthorizer) ResolveAccessKeySubject(
@@ -1160,6 +1490,14 @@ type fakeWorkflow struct {
 	inspectErr                         error
 	getApplicationResult               *paasv1.Application
 	getApplicationErr                  error
+	directorySnapshot                  applicationlifecycle.ApplicationDirectorySnapshot
+	directoryAfter                     paasv1.ResourceID
+	directorySubject                   port.AuthorizationSubjectContext
+	directoryInspectCalls              int
+	directoryInspectErr                error
+	directoryReadCommand               applicationlifecycle.ReadApplicationDirectoryCommand
+	directoryItems                     []paasv1.Application
+	directoryReadErr                   error
 }
 
 type fakeInstallationVerifier struct {
@@ -1316,6 +1654,29 @@ func (workflow *fakeWorkflow) InspectApplicationAuthorization(
 	}, nil
 }
 
+func (workflow *fakeWorkflow) InspectApplicationDirectory(
+	_ context.Context,
+	subject port.AuthorizationSubjectContext,
+	after paasv1.ResourceID,
+) (applicationlifecycle.ApplicationDirectorySnapshot, error) {
+	workflow.directoryInspectCalls++
+	workflow.directorySubject, workflow.directoryAfter = subject, after
+	return workflow.directorySnapshot, workflow.directoryInspectErr
+}
+
+func (workflow *fakeWorkflow) ReadApplicationDirectory(
+	_ context.Context,
+	command applicationlifecycle.ReadApplicationDirectoryCommand,
+) ([]paasv1.Application, error) {
+	workflow.directoryReadCommand = command
+	if workflow.directoryItems == nil {
+		return nil, workflow.directoryReadErr
+	}
+	items := make([]paasv1.Application, len(workflow.directoryItems))
+	copy(items, workflow.directoryItems)
+	return items, workflow.directoryReadErr
+}
+
 func (workflow *fakeWorkflow) GetConfiguration(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.Configuration, error) {
 	return paasv1.Configuration{}, errors.New("unexpected GetConfiguration")
 }
@@ -1348,6 +1709,7 @@ func mustAccessKeyHandler(t *testing.T, authorizer port.Authorizer, workflow Wor
 	t.Helper()
 	handler, err := NewHandler(authorizer, workflow, &fakeInstallationVerifier{}, Config{
 		NorthboundOrigin: "https://api.example.test:443", InstallationID: "installation-one",
+		CursorKey:    testApplicationCursorKey(),
 		NewRequestID: func() (string, error) { return "request-test", nil },
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return paasv1.Readiness{APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
@@ -1368,6 +1730,7 @@ func mustHandlerWithVerifier(
 ) http.Handler {
 	t.Helper()
 	handler, err := NewHandler(authorizer, workflow, verifier, Config{
+		InstallationID: "installation-test", CursorKey: testApplicationCursorKey(),
 		NewRequestID: func() (string, error) { return "request-test", nil },
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return paasv1.Readiness{
@@ -1378,6 +1741,33 @@ func mustHandlerWithVerifier(
 	})
 	if err != nil {
 		t.Fatalf("create HTTP handler: %v", err)
+	}
+	return handler
+}
+
+func testApplicationCursorKey() []byte {
+	return []byte("0123456789abcdef0123456789abcdef")
+}
+
+func mustDirectoryHandler(t *testing.T, authorizer port.Authorizer, workflow Workflow) http.Handler {
+	t.Helper()
+	sequence := 0
+	handler, err := NewHandler(authorizer, workflow, &fakeInstallationVerifier{}, Config{
+		NorthboundOrigin: "https://api.example.test:443", InstallationID: "installation-one",
+		CursorKey: testApplicationCursorKey(),
+		NewRequestID: func() (string, error) {
+			id := fmt.Sprintf("request-directory-%03d", sequence)
+			sequence++
+			return id, nil
+		},
+		Now: func() time.Time { return time.Date(2026, time.October, 7, 1, 2, 3, 0, time.UTC) },
+		Readiness: func(context.Context) (paasv1.Readiness, error) {
+			return paasv1.Readiness{APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
+				SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 0, time.UTC)}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("create directory HTTP handler: %v", err)
 	}
 	return handler
 }

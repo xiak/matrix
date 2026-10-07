@@ -37,6 +37,7 @@ const (
 	PaaSAuditCredential                 = "secrets/authority/paas-audit-credential"
 	InstallationVerifierCredential      = "secrets/authority/installation-verifier-iam-credential"
 	AuditCursorKey                      = "secrets/authority/audit-cursor-key"
+	PaaSCursorKey                       = "secrets/authority/paas-cursor-key"
 	BackupSealKey                       = "secrets/authority/backup-seal-key"
 	InitialAdministratorPassword        = "secrets/operator/initial-admin-password"
 	IAMAuthenticationRecoveryCompletion = "state/iam-authentication-recovery/completion.json"

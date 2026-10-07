@@ -1,12 +1,16 @@
 package applicationlifecycle
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 )
@@ -378,6 +382,107 @@ func TestSubmitRetriesRolledBackSerializableTransaction(t *testing.T) {
 	}
 }
 
+func TestInspectApplicationDirectoryUsesOneBoundedSortedCandidateWindow(t *testing.T) {
+	applications := make([]paasv1.Application, paasv1.ApplicationDirectoryPageSize+2)
+	for index := range applications {
+		applications[index] = lifecycleDirectoryApplication(index)
+	}
+	slices.Reverse(applications)
+	transaction := lifecycleTransaction()
+	transaction.applications = applications
+	repository := &fakeLifecycleRepository{transaction: transaction, afterCallbackErrors: []error{ErrRetryableTransaction}}
+
+	snapshot, err := mustLifecycleUsecase(t, repository).InspectApplicationDirectory(
+		t.Context(), lifecycleDirectorySubject(t), "application-000",
+	)
+	if err != nil {
+		t.Fatalf("inspect application directory: %v", err)
+	}
+	if repository.calls != 2 || !snapshot.HasMore || len(snapshot.Candidates) != paasv1.ApplicationDirectoryPageSize ||
+		snapshot.Candidates[0].ID != "application-001" || snapshot.Candidates[len(snapshot.Candidates)-1].ID != "application-050" {
+		t.Fatalf("candidate window calls=%d snapshot=%#v", repository.calls, snapshot)
+	}
+	for index, candidate := range snapshot.Candidates {
+		if index > 0 && candidate.ID <= snapshot.Candidates[index-1].ID {
+			t.Fatalf("candidate window is not strictly ordered: %#v", snapshot.Candidates)
+		}
+		candidate.Labels["environment"] = "mutated"
+		if applications[paasv1.ApplicationDirectoryPageSize-index].Metadata.Labels["environment"] == "mutated" {
+			t.Fatal("directory snapshot aliases repository-owned labels")
+		}
+	}
+
+	empty, err := mustLifecycleUsecase(t, &fakeLifecycleRepository{transaction: transaction}).InspectApplicationDirectory(
+		t.Context(), lifecycleDirectorySubject(t), "application-999",
+	)
+	if err != nil || empty.Candidates == nil || len(empty.Candidates) != 0 || empty.HasMore {
+		t.Fatalf("empty candidate window=%#v err=%v", empty, err)
+	}
+}
+
+func TestReadApplicationDirectoryFiltersDecisionsAndRechecksEveryCandidate(t *testing.T) {
+	original := []paasv1.Application{lifecycleDirectoryApplication(1), lifecycleDirectoryApplication(2)}
+	snapshot := lifecycleDirectorySnapshot(original, false)
+	command := ReadApplicationDirectoryCommand{
+		Subject: lifecycleDirectorySubject(t), Snapshot: snapshot,
+		Decisions: lifecycleDirectoryDecisions(t, snapshot, []bool{true, false}),
+	}
+	transaction := lifecycleTransaction()
+	transaction.applications = append([]paasv1.Application(nil), original...)
+	result, err := mustLifecycleUsecase(t, &fakeLifecycleRepository{transaction: transaction}).ReadApplicationDirectory(t.Context(), command)
+	if err != nil || len(result) != 1 || result[0].Metadata.ID != original[0].Metadata.ID {
+		t.Fatalf("filtered application directory=%#v err=%v", result, err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func([]paasv1.Application) []paasv1.Application
+	}{
+		{"missing denied candidate", func(values []paasv1.Application) []paasv1.Application { return values[:1] }},
+		{"allowed version changed", func(values []paasv1.Application) []paasv1.Application {
+			values[0].Metadata.ResourceVersion++
+			return values
+		}},
+		{"denied label changed", func(values []paasv1.Application) []paasv1.Application {
+			values[1].Metadata.Labels = map[string]string{"environment": "restricted"}
+			return values
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := []paasv1.Application{lifecycleDirectoryApplication(1), lifecycleDirectoryApplication(2)}
+			transaction := lifecycleTransaction()
+			transaction.applications = test.mutate(values)
+			result, err := mustLifecycleUsecase(t, &fakeLifecycleRepository{transaction: transaction}).ReadApplicationDirectory(t.Context(), command)
+			if !errors.Is(err, ErrAuthorizationSnapshotChanged) || result != nil {
+				t.Fatalf("changed authorization snapshot returned %#v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestReadApplicationDirectoryRejectsChangedDecisionEvidenceAndRetries(t *testing.T) {
+	applications := []paasv1.Application{lifecycleDirectoryApplication(1), lifecycleDirectoryApplication(2)}
+	snapshot := lifecycleDirectorySnapshot(applications, false)
+	command := ReadApplicationDirectoryCommand{Subject: lifecycleDirectorySubject(t), Snapshot: snapshot,
+		Decisions: lifecycleDirectoryDecisions(t, snapshot, []bool{true, true})}
+	transaction := lifecycleTransaction()
+	transaction.applications = applications
+	repository := &fakeLifecycleRepository{transaction: transaction, afterCallbackErrors: []error{ErrRetryableTransaction}}
+	result, err := mustLifecycleUsecase(t, repository).ReadApplicationDirectory(t.Context(), command)
+	if err != nil || repository.calls != 2 || len(result) != 2 {
+		t.Fatalf("directory retry calls=%d result=%#v err=%v", repository.calls, result, err)
+	}
+
+	changed := command
+	changed.Decisions.Items = append([]port.AuthorizationBatchItem(nil), command.Decisions.Items...)
+	changed.Decisions.Items[1].ResourceTags = append([]iamv1.AuthorizationTag(nil), changed.Decisions.Items[0].ResourceTags...)
+	result, err = mustLifecycleUsecase(t, &fakeLifecycleRepository{transaction: transaction}).ReadApplicationDirectory(t.Context(), changed)
+	if !errors.Is(err, ErrInvalidArgument) || result != nil {
+		t.Fatalf("changed decision evidence returned %#v err=%v", result, err)
+	}
+}
+
 type fakeLifecycleRepository struct {
 	transaction         Transaction
 	afterCallbackErrors []error
@@ -423,6 +528,7 @@ type fakeLifecycleTransaction struct {
 	submission                 *Submission
 	application                paasv1.Application
 	applicationFound           bool
+	applications               []paasv1.Application
 	configuration              paasv1.Configuration
 	configurationFound         bool
 	configurationRevision      paasv1.ConfigurationRevision
@@ -465,6 +571,48 @@ func (transaction *fakeLifecycleTransaction) LoadApplication(
 		return paasv1.Application{}, false, nil
 	}
 	return transaction.application, transaction.applicationFound, nil
+}
+
+func (transaction *fakeLifecycleTransaction) ListApplicationsAfter(
+	_ context.Context,
+	after paasv1.ResourceID,
+	limit int,
+) ([]paasv1.Application, error) {
+	values := append([]paasv1.Application(nil), transaction.applications...)
+	if values == nil && transaction.applicationFound {
+		values = []paasv1.Application{transaction.application}
+	}
+	slices.SortFunc(values, func(left, right paasv1.Application) int {
+		return cmp.Compare(left.Metadata.ID, right.Metadata.ID)
+	})
+	result := make([]paasv1.Application, 0, min(limit, len(values)))
+	for _, value := range values {
+		if value.Metadata.ID > after && len(result) < limit {
+			result = append(result, value)
+		}
+	}
+	return result, nil
+}
+
+func (transaction *fakeLifecycleTransaction) LoadApplications(
+	_ context.Context,
+	ids []paasv1.ResourceID,
+) ([]paasv1.Application, error) {
+	values := transaction.applications
+	if values == nil && transaction.applicationFound {
+		values = []paasv1.Application{transaction.application}
+	}
+	byID := make(map[paasv1.ResourceID]paasv1.Application, len(values))
+	for _, value := range values {
+		byID[value.Metadata.ID] = value
+	}
+	result := make([]paasv1.Application, 0, len(ids))
+	for _, id := range ids {
+		if value, found := byID[id]; found {
+			result = append(result, value)
+		}
+	}
+	return result, nil
 }
 
 func (transaction *fakeLifecycleTransaction) LoadApplicationForUpdate(
@@ -657,6 +805,69 @@ func lifecycleAuthorization() port.Authorization {
 		RequestID:  "request-a",
 		AuditID:    "audit-flow-a",
 	}
+}
+
+func lifecycleDirectorySubject(t *testing.T) port.AuthorizationSubjectContext {
+	t.Helper()
+	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	if !known {
+		t.Fatal("PaaS authorization profile is missing")
+	}
+	_, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port.AuthorizationSubjectContext{
+		TenantID: "tenant-a", Subject: lifecycleRequester(),
+		Profile: iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest},
+	}
+}
+
+func lifecycleDirectoryApplication(index int) paasv1.Application {
+	id := paasv1.ResourceID(fmt.Sprintf("application-%03d", index))
+	metadata := lifecycleMetadata(id, string(id), uint64(index+1), false)
+	metadata.Labels = map[string]string{"environment": []string{"production", "staging"}[index%2]}
+	return paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application", Metadata: metadata}
+}
+
+func lifecycleDirectorySnapshot(applications []paasv1.Application, hasMore bool) ApplicationDirectorySnapshot {
+	candidates := make([]ApplicationAuthorizationSnapshot, len(applications))
+	for index, application := range applications {
+		candidates[index] = ApplicationAuthorizationSnapshot{ID: application.Metadata.ID,
+			ResourceVersion: application.Metadata.ResourceVersion,
+			Labels:          map[string]string{"environment": application.Metadata.Labels["environment"]}}
+	}
+	return ApplicationDirectorySnapshot{Candidates: candidates, HasMore: hasMore}
+}
+
+func lifecycleDirectoryDecisions(
+	t *testing.T,
+	snapshot ApplicationDirectorySnapshot,
+	allowed []bool,
+) port.AuthorizationBatch {
+	t.Helper()
+	if len(snapshot.Candidates) != len(allowed) {
+		t.Fatal("directory decision fixture length mismatch")
+	}
+	items := make([]port.AuthorizationBatchItem, len(snapshot.Candidates))
+	for index, candidate := range snapshot.Candidates {
+		request := port.AuthorizationRequest{
+			Credential: "Bearer directory", Action: port.AuthorizeApplicationRead,
+			Resource:     paasv1.ResourceRef{Kind: port.ResourceApplication, ID: candidate.ID},
+			ResourceMode: iamv1.AuthorizationResourceInstance, SourceIP: "192.0.2.10",
+			ResourceLabels: candidate.Labels, RequestID: fmt.Sprintf("request-directory-%03d", index),
+			CorrelationID: "request-directory",
+		}
+		mapped, err := port.NewIAMAuthorizationRequest(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items[index] = port.AuthorizationBatchItem{
+			Resource: request.Resource, Allowed: allowed[index], DecisionID: fmt.Sprintf("decision-directory-%03d", index),
+			RequestID: request.RequestID, RequestTags: mapped.RequestTags, ResourceTags: mapped.ResourceTags,
+		}
+	}
+	return port.AuthorizationBatch{TenantID: "tenant-a", Subject: lifecycleRequester(), Items: items}
 }
 
 func lifecycleRequester() paasv1.SubjectRef {

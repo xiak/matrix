@@ -86,6 +86,7 @@ ALTER TABLE iam.access_keys ENABLE ALWAYS TRIGGER access_key_identity_registered
 CREATE TABLE IF NOT EXISTS iam.access_key_authorization_evidence (
     tenant_id text COLLATE "C" NOT NULL,
     decision_id text COLLATE "C" NOT NULL,
+    request_evidence_id text COLLATE "C" NOT NULL,
     user_id text COLLATE "C" NOT NULL,
     access_key_id text COLLATE "C" NOT NULL,
     key_resource_version bigint NOT NULL,
@@ -116,14 +117,17 @@ CREATE TABLE IF NOT EXISTS iam.access_key_authorization_evidence (
       key_resource_version BETWEEN 1 AND 9007199254740991 AND format_version=1
       AND signed_at BETWEEN 1 AND 253402300799 AND isfinite(service_created_at)
       AND audience COLLATE "C" ~ '^[a-z][a-z0-9_-]{0,63}$'
+      AND request_evidence_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
       AND material_commitment ~ '^sha256:[0-9a-f]{64}$'
       AND signed_request_digest ~ '^sha256:[0-9a-f]{64}$' AND nonce_digest ~ '^sha256:[0-9a-f]{64}$')
 );
+ALTER TABLE iam.access_key_authorization_evidence ADD COLUMN IF NOT EXISTS request_evidence_id text COLLATE "C";
 ALTER TABLE iam.access_key_authorization_evidence ADD COLUMN IF NOT EXISTS account_security_settings_version bigint;
 ALTER TABLE iam.access_key_authorization_evidence ADD COLUMN IF NOT EXISTS evaluated_at timestamptz(6);
 ALTER TABLE iam.access_key_authorization_evidence NO FORCE ROW LEVEL SECURITY;
 UPDATE iam.access_key_authorization_evidence evidence
-SET evaluated_at=decision.decided_at,
+SET request_evidence_id=COALESCE(evidence.request_evidence_id,evidence.decision_id),
+    evaluated_at=decision.decided_at,
     account_security_settings_version=COALESCE((SELECT max(change.expected_version+1)
         FROM iam.account_security_settings_changes change
         WHERE change.tenant_id=evidence.tenant_id AND change.created_at<=decision.decided_at),1)
@@ -139,11 +143,35 @@ DO $access_key_evidence_network_cutover$ BEGIN
 END $access_key_evidence_network_cutover$;
 ALTER TABLE iam.access_key_authorization_evidence ALTER COLUMN account_security_settings_version SET NOT NULL;
 ALTER TABLE iam.access_key_authorization_evidence ALTER COLUMN evaluated_at SET NOT NULL;
+ALTER TABLE iam.access_key_authorization_evidence ALTER COLUMN request_evidence_id SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS access_key_authorization_request_evidence_uq
+    ON iam.access_key_authorization_evidence(tenant_id,request_evidence_id);
+ALTER TABLE iam.access_key_authorization_evidence DROP CONSTRAINT IF EXISTS access_key_authorization_values;
+ALTER TABLE iam.access_key_authorization_evidence ADD CONSTRAINT access_key_authorization_values CHECK(
+    key_resource_version BETWEEN 1 AND 9007199254740991 AND format_version=1
+    AND signed_at BETWEEN 1 AND 253402300799 AND isfinite(service_created_at)
+    AND audience COLLATE "C" ~ '^[a-z][a-z0-9_-]{0,63}$'
+    AND request_evidence_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND material_commitment ~ '^sha256:[0-9a-f]{64}$'
+    AND signed_request_digest ~ '^sha256:[0-9a-f]{64}$' AND nonce_digest ~ '^sha256:[0-9a-f]{64}$');
 ALTER TABLE iam.access_key_authorization_evidence DROP CONSTRAINT IF EXISTS access_key_authorization_network_values;
 ALTER TABLE iam.access_key_authorization_evidence ADD CONSTRAINT access_key_authorization_network_values CHECK(
     account_security_settings_version BETWEEN 1 AND 9007199254740991 AND isfinite(evaluated_at));
 CREATE INDEX IF NOT EXISTS access_key_authorization_usage_idx
     ON iam.access_key_authorization_evidence(tenant_id,access_key_id,evaluated_at DESC,decision_id DESC);
+
+-- One signed request owns one immutable evidence row. Additional decisions in
+-- the same bounded list transaction reference that row; a later replay gets a
+-- fresh private request_evidence_id and cannot attach another decision.
+CREATE TABLE IF NOT EXISTS iam.access_key_authorization_evidence_links (
+    tenant_id text COLLATE "C" NOT NULL,
+    decision_id text COLLATE "C" NOT NULL,
+    evidence_decision_id text COLLATE "C" NOT NULL,
+    PRIMARY KEY(tenant_id,decision_id),
+    FOREIGN KEY(tenant_id,decision_id) REFERENCES iam.authorization_decisions(tenant_id,id),
+    FOREIGN KEY(tenant_id,evidence_decision_id) REFERENCES iam.access_key_authorization_evidence(tenant_id,decision_id),
+    CONSTRAINT access_key_authorization_evidence_link_values CHECK(decision_id<>evidence_decision_id)
+);
 
 -- The result is a nonsecret completion snapshot, not today's key state. An
 -- intent cannot be reused with another target, command or input commitment.
@@ -258,13 +286,13 @@ CREATE CONSTRAINT TRIGGER access_key_creation_complete AFTER INSERT OR UPDATE ON
 ALTER TABLE iam.access_keys ENABLE ALWAYS TRIGGER access_key_creation_complete;
 
 DO $key_protection$ DECLARE table_name text; BEGIN
-    FOREACH table_name IN ARRAY ARRAY['access_keys','access_key_intents','access_key_authorization_evidence'] LOOP
+    FOREACH table_name IN ARRAY ARRAY['access_keys','access_key_intents','access_key_authorization_evidence','access_key_authorization_evidence_links'] LOOP
         EXECUTE format('ALTER TABLE iam.%I ENABLE ROW LEVEL SECURITY',table_name);
         EXECUTE format('ALTER TABLE iam.%I FORCE ROW LEVEL SECURITY',table_name);
         EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON iam.%I',table_name);
         EXECUTE format('CREATE POLICY tenant_isolation ON iam.%I USING(tenant_id=iam.current_tenant_id()) WITH CHECK(tenant_id=iam.current_tenant_id())',table_name);
     END LOOP;
-    FOREACH table_name IN ARRAY ARRAY['access_keys','access_key_intents','access_key_wrapping_registry','access_key_index','access_key_authorization_evidence'] LOOP
+    FOREACH table_name IN ARRAY ARRAY['access_keys','access_key_intents','access_key_wrapping_registry','access_key_index','access_key_authorization_evidence','access_key_authorization_evidence_links'] LOOP
         EXECUTE format('DROP TRIGGER IF EXISTS cannot_delete ON iam.%I',table_name);
         EXECUTE format('CREATE TRIGGER cannot_delete BEFORE DELETE ON iam.%I FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change()',table_name);
         EXECUTE format('ALTER TABLE iam.%I ENABLE ALWAYS TRIGGER cannot_delete',table_name);
@@ -272,7 +300,7 @@ DO $key_protection$ DECLARE table_name text; BEGIN
         EXECUTE format('CREATE TRIGGER cannot_truncate BEFORE TRUNCATE ON iam.%I FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change()',table_name);
         EXECUTE format('ALTER TABLE iam.%I ENABLE ALWAYS TRIGGER cannot_truncate',table_name);
     END LOOP;
-    FOREACH table_name IN ARRAY ARRAY['access_key_intents','access_key_wrapping_registry','access_key_index','access_key_authorization_evidence'] LOOP
+    FOREACH table_name IN ARRAY ARRAY['access_key_intents','access_key_wrapping_registry','access_key_index','access_key_authorization_evidence','access_key_authorization_evidence_links'] LOOP
         EXECUTE format('DROP TRIGGER IF EXISTS cannot_update ON iam.%I',table_name);
         EXECUTE format('CREATE TRIGGER cannot_update BEFORE UPDATE ON iam.%I FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change()',table_name);
         EXECUTE format('ALTER TABLE iam.%I ENABLE ALWAYS TRIGGER cannot_update',table_name);
@@ -409,9 +437,9 @@ BEGIN
     IF evidence IS NULL OR jsonb_typeof(evidence)<>'object'
        OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(evidence) key) IS DISTINCT FROM
          ARRAY['accessKeyId','accountSecuritySettingsVersion','audience','formatVersion','installationId','materialCommitment',
-           'nonceDigest','resourceVersion','serviceLookupDigest','signedAt','signedRequestDigest','wrappingKeyId'] THEN
+           'nonceDigest','requestEvidenceId','resourceVersion','serviceLookupDigest','signedAt','signedRequestDigest','wrappingKeyId'] THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='signed authorization evidence is invalid'; END IF;
-    FOREACH field IN ARRAY ARRAY['accessKeyId','installationId','wrappingKeyId'] LOOP
+    FOREACH field IN ARRAY ARRAY['accessKeyId','installationId','requestEvidenceId','wrappingKeyId'] LOOP
         IF jsonb_typeof(evidence->field)<>'string' OR (evidence->>field) COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
             RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='signed authorization identity is invalid'; END IF;
     END LOOP;
@@ -453,22 +481,50 @@ END $function$;
 CREATE OR REPLACE FUNCTION iam.record_access_key_evidence(tenant text,actor text,decision text,evidence jsonb)
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE caller iam.service_credential_index%ROWTYPE; credential iam.service_credentials%ROWTYPE;
+    existing iam.access_key_authorization_evidence%ROWTYPE; evaluated timestamptz(6);
 BEGIN
     SELECT * INTO STRICT caller FROM iam.service_credential_index WHERE lookup_digest=evidence->>'serviceLookupDigest';
     PERFORM set_config('matrix.iam_tenant_id',caller.tenant_id,true);
     SELECT * INTO STRICT credential FROM iam.service_credentials c WHERE c.tenant_id=caller.tenant_id
       AND c.principal_id=caller.principal_id AND c.lookup_digest=caller.lookup_digest;
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
-    INSERT INTO iam.access_key_authorization_evidence(tenant_id,decision_id,user_id,access_key_id,key_resource_version,
+    SELECT d.decided_at INTO STRICT evaluated FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=decision;
+    SELECT * INTO existing FROM iam.access_key_authorization_evidence stored
+      WHERE stored.access_key_id=evidence->>'accessKeyId' AND stored.nonce_digest=evidence->>'nonceDigest';
+    IF FOUND THEN
+        IF existing.tenant_id IS DISTINCT FROM tenant OR existing.user_id IS DISTINCT FROM actor
+           OR existing.request_evidence_id IS DISTINCT FROM evidence->>'requestEvidenceId'
+           OR existing.access_key_id IS DISTINCT FROM evidence->>'accessKeyId'
+           OR existing.key_resource_version IS DISTINCT FROM (evidence->>'resourceVersion')::bigint
+           OR existing.format_version IS DISTINCT FROM (evidence->>'formatVersion')::integer
+           OR existing.wrapping_key_id IS DISTINCT FROM evidence->>'wrappingKeyId'
+           OR existing.material_commitment IS DISTINCT FROM evidence->>'materialCommitment'
+           OR existing.installation_id IS DISTINCT FROM evidence->>'installationId'
+           OR existing.service_tenant_id IS DISTINCT FROM credential.tenant_id
+           OR existing.service_principal_id IS DISTINCT FROM credential.principal_id
+           OR existing.service_purpose IS DISTINCT FROM credential.purpose
+           OR existing.service_lookup_digest IS DISTINCT FROM credential.lookup_digest
+           OR existing.service_verification_digest IS DISTINCT FROM credential.verification_digest
+           OR existing.service_created_at IS DISTINCT FROM credential.created_at
+           OR existing.audience IS DISTINCT FROM evidence->>'audience'
+           OR existing.signed_request_digest IS DISTINCT FROM evidence->>'signedRequestDigest'
+           OR existing.signed_at IS DISTINCT FROM (evidence->>'signedAt')::bigint
+           OR existing.account_security_settings_version IS DISTINCT FROM (evidence->>'accountSecuritySettingsVersion')::bigint
+           OR existing.evaluated_at IS DISTINCT FROM evaluated THEN
+            RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='signed authorization nonce was already consumed'; END IF;
+        INSERT INTO iam.access_key_authorization_evidence_links(tenant_id,decision_id,evidence_decision_id)
+          VALUES(tenant,decision,existing.decision_id);
+        RETURN;
+    END IF;
+    INSERT INTO iam.access_key_authorization_evidence(tenant_id,decision_id,request_evidence_id,user_id,access_key_id,key_resource_version,
       format_version,wrapping_key_id,material_commitment,installation_id,service_tenant_id,service_principal_id,service_purpose,
       service_lookup_digest,service_verification_digest,service_created_at,audience,signed_request_digest,nonce_digest,signed_at,
       account_security_settings_version,evaluated_at)
-    VALUES(tenant,decision,actor,evidence->>'accessKeyId',(evidence->>'resourceVersion')::bigint,(evidence->>'formatVersion')::integer,
+    VALUES(tenant,decision,evidence->>'requestEvidenceId',actor,evidence->>'accessKeyId',(evidence->>'resourceVersion')::bigint,(evidence->>'formatVersion')::integer,
       evidence->>'wrappingKeyId',evidence->>'materialCommitment',evidence->>'installationId',credential.tenant_id,credential.principal_id,
       credential.purpose,credential.lookup_digest,credential.verification_digest,credential.created_at,
       evidence->>'audience',evidence->>'signedRequestDigest',evidence->>'nonceDigest',(evidence->>'signedAt')::bigint,
-      (evidence->>'accountSecuritySettingsVersion')::bigint,
-      (SELECT d.decided_at FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=decision));
+      (evidence->>'accountSecuritySettingsVersion')::bigint,evaluated);
 END $function$;
 
 -- Historical ownership is permanent, not current key material, permissions,
@@ -479,7 +535,9 @@ RETURNS boolean LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function
 DECLARE proof iam.access_key_authorization_evidence%ROWTYPE; valid boolean;
 BEGIN
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
-    SELECT * INTO proof FROM iam.access_key_authorization_evidence e WHERE e.tenant_id=tenant AND e.decision_id=decision;
+    SELECT * INTO proof FROM iam.access_key_authorization_evidence e WHERE e.tenant_id=tenant AND (
+      e.decision_id=decision OR EXISTS(SELECT 1 FROM iam.access_key_authorization_evidence_links link
+        WHERE link.tenant_id=tenant AND link.decision_id=decision AND link.evidence_decision_id=e.decision_id));
     IF NOT FOUND THEN RETURN EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=decision AND d.access_key_id IS NULL); END IF;
     SELECT EXISTS(SELECT 1 FROM iam.authorization_decisions d
       JOIN iam.access_keys k ON k.tenant_id=d.tenant_id AND k.user_id=d.principal_id AND k.id=d.access_key_id
@@ -529,6 +587,10 @@ DROP TRIGGER IF EXISTS access_key_authorization_complete ON iam.access_key_autho
 CREATE CONSTRAINT TRIGGER access_key_authorization_complete AFTER INSERT ON iam.access_key_authorization_evidence
     DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.assert_access_key_authorization_complete();
 ALTER TABLE iam.access_key_authorization_evidence ENABLE ALWAYS TRIGGER access_key_authorization_complete;
+DROP TRIGGER IF EXISTS access_key_authorization_complete ON iam.access_key_authorization_evidence_links;
+CREATE CONSTRAINT TRIGGER access_key_authorization_complete AFTER INSERT ON iam.access_key_authorization_evidence_links
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.assert_access_key_authorization_complete();
+ALTER TABLE iam.access_key_authorization_evidence_links ENABLE ALWAYS TRIGGER access_key_authorization_complete;
 
 -- Same account -> sorted actor/target USER -> credential/session -> key/intent.
 -- NO KEY UPDATE does not deadlock upgrading the already recorded decision FK.
@@ -809,6 +871,7 @@ END $function$;
 REVOKE ALL ON iam.access_keys,iam.access_key_intents,iam.access_key_wrapping_registry FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 REVOKE ALL ON TABLE iam.access_key_index FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 REVOKE ALL ON TABLE iam.access_key_authorization_evidence FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+REVOKE ALL ON TABLE iam.access_key_authorization_evidence_links FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 REVOKE ALL ON FUNCTION iam.assert_current_access_key_authorization(text,text,jsonb,jsonb),iam.record_access_key_evidence(text,text,text,jsonb),
     iam.access_key_authorization_evidence_matches(text,text),iam.assert_access_key_authorization_complete(),
     iam.access_key_source_allowed(jsonb,text)
@@ -832,7 +895,7 @@ CREATE OR REPLACE FUNCTION iam.access_key_contract_ready()
 RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE required record; entrypoint record; relation_oid oid;
 BEGIN
-    FOR required IN SELECT * FROM (VALUES ('access_keys',true),('access_key_intents',true),('access_key_wrapping_registry',false),('access_key_index',false),('access_key_authorization_evidence',true),
+    FOR required IN SELECT * FROM (VALUES ('access_keys',true),('access_key_intents',true),('access_key_wrapping_registry',false),('access_key_index',false),('access_key_authorization_evidence',true),('access_key_authorization_evidence_links',true),
       ('service_credentials',true),('service_credential_index',false)) expected(name,tenant_scoped) LOOP
         relation_oid:=to_regclass('iam.'||required.name);
         IF relation_oid IS NULL OR NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=relation_oid
@@ -857,6 +920,8 @@ BEGIN
       ('access_key_authorization_evidence',ARRAY['tenant_id','user_id','access_key_id'],'access_keys',ARRAY['tenant_id','user_id','id']),
       ('access_key_authorization_evidence',ARRAY['installation_id','wrapping_key_id'],'access_key_wrapping_registry',ARRAY['installation_id','wrapping_key_id']),
       ('access_key_authorization_evidence',ARRAY['service_tenant_id','service_principal_id','service_lookup_digest'],'service_credentials',ARRAY['tenant_id','principal_id','lookup_digest']),
+      ('access_key_authorization_evidence_links',ARRAY['tenant_id','decision_id'],'authorization_decisions',ARRAY['tenant_id','id']),
+      ('access_key_authorization_evidence_links',ARRAY['tenant_id','evidence_decision_id'],'access_key_authorization_evidence',ARRAY['tenant_id','decision_id']),
       ('access_key_index',ARRAY['tenant_id','user_id','key_id'],'access_keys',ARRAY['tenant_id','user_id','id']),
       ('access_key_wrapping_registry',ARRAY['installation_id'],'bootstrap_receipts',ARRAY['installation_id']),
       ('access_keys',ARRAY['tenant_id','user_id'],'principals',ARRAY['tenant_id','id']),
@@ -879,7 +944,8 @@ BEGIN
     FOR required IN SELECT * FROM (VALUES
       ('service_credentials',ARRAY['tenant_id','principal_id','lookup_digest']),('service_credential_index',ARRAY['lookup_digest']),
       ('access_key_index',ARRAY['key_id']),
-      ('access_key_authorization_evidence',ARRAY['tenant_id','decision_id']),('access_key_authorization_evidence',ARRAY['access_key_id','nonce_digest']),
+      ('access_key_authorization_evidence',ARRAY['tenant_id','decision_id']),('access_key_authorization_evidence',ARRAY['tenant_id','request_evidence_id']),('access_key_authorization_evidence',ARRAY['access_key_id','nonce_digest']),
+      ('access_key_authorization_evidence_links',ARRAY['tenant_id','decision_id']),
       ('access_keys',ARRAY['id']),('access_keys',ARRAY['tenant_id','id']),('access_keys',ARRAY['tenant_id','user_id','id']),
       ('access_key_intents',ARRAY['tenant_id','actor_id','request_id']),
       ('access_key_wrapping_registry',ARRAY['installation_id','wrapping_key_id'])
@@ -895,6 +961,7 @@ BEGIN
       ('access_keys','access_keys_network_restrictions'),
       ('access_key_authorization_evidence','access_key_authorization_values'),
       ('access_key_authorization_evidence','access_key_authorization_network_values'),
+      ('access_key_authorization_evidence_links','access_key_authorization_evidence_link_values'),
       ('access_keys','access_keys_status_check'),('access_keys','access_keys_resource_version_check'),
       ('access_keys','access_keys_id_check'),('access_keys','access_keys_creation_request_id_check'),('access_keys','access_keys_creation_request_digest_check'),
       ('access_key_intents','access_key_intent_snapshot'),('access_key_intents','access_key_intents_action_name_check'),
@@ -907,6 +974,7 @@ BEGIN
     END LOOP;
     FOR required IN SELECT * FROM (VALUES
       ('access_keys','access_keys_live_user_idx',ARRAY['tenant_id','user_id','id'],false,'(deleted_at IS NULL)'),
+      ('access_key_authorization_evidence','access_key_authorization_request_evidence_uq',ARRAY['tenant_id','request_evidence_id'],true,NULL),
       ('access_key_authorization_evidence','access_key_authorization_usage_idx',ARRAY['tenant_id','access_key_id','evaluated_at','decision_id'],false,NULL),
       ('access_key_intents','access_key_creation_intent_uq',ARRAY['tenant_id','key_id'],true,'(action_name = ''iam.access-key.create''::text)')
     ) expected(table_name,index_name,columns,unique_index,predicate) LOOP
@@ -926,6 +994,7 @@ BEGIN
       ('service_credential_index','tenant_id','text'::regtype,true),('service_credential_index','principal_id','text'::regtype,true),
       ('service_credential_index','lookup_digest','text'::regtype,true),
       ('access_key_authorization_evidence','tenant_id','text'::regtype,true),('access_key_authorization_evidence','decision_id','text'::regtype,true),
+      ('access_key_authorization_evidence','request_evidence_id','text'::regtype,true),
       ('access_key_authorization_evidence','user_id','text'::regtype,true),('access_key_authorization_evidence','access_key_id','text'::regtype,true),
       ('access_key_authorization_evidence','key_resource_version','bigint'::regtype,true),('access_key_authorization_evidence','format_version','integer'::regtype,true),
       ('access_key_authorization_evidence','wrapping_key_id','text'::regtype,true),('access_key_authorization_evidence','material_commitment','text'::regtype,true),
@@ -937,6 +1006,8 @@ BEGIN
       ('access_key_authorization_evidence','signed_at','bigint'::regtype,true),
       ('access_key_authorization_evidence','account_security_settings_version','bigint'::regtype,true),
       ('access_key_authorization_evidence','evaluated_at','timestamptz'::regtype,true),
+      ('access_key_authorization_evidence_links','tenant_id','text'::regtype,true),('access_key_authorization_evidence_links','decision_id','text'::regtype,true),
+      ('access_key_authorization_evidence_links','evidence_decision_id','text'::regtype,true),
       ('access_key_index','key_id','text'::regtype,true),('access_key_index','tenant_id','text'::regtype,true),('access_key_index','user_id','text'::regtype,true),
       ('access_keys','id','text'::regtype,true),('access_keys','tenant_id','text'::regtype,true),
       ('access_keys','user_id','text'::regtype,true),('access_keys','installation_id','text'::regtype,true),
@@ -958,7 +1029,7 @@ BEGIN
         IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass('iam.'||required.table_name)
           AND a.attname=required.column_name AND a.atttypid=required.column_type AND a.attnotnull=required.required_value
           AND a.attnum>0 AND NOT a.attisdropped AND a.attgenerated='' AND a.attidentity=''
-          AND (required.column_name NOT IN ('id','tenant_id','user_id','actor_id','created_by','creation_request_id','installation_id','wrapping_key_id','request_id','key_id','decision_id','event_id','principal_id','purpose','lookup_digest','verification_digest',
+          AND (required.column_name NOT IN ('id','tenant_id','user_id','actor_id','created_by','creation_request_id','installation_id','wrapping_key_id','request_id','request_evidence_id','key_id','decision_id','evidence_decision_id','event_id','principal_id','purpose','lookup_digest','verification_digest',
             'access_key_id','service_tenant_id','service_principal_id','service_purpose','service_lookup_digest','service_verification_digest','audience')
             OR a.attcollation='pg_catalog."C"'::regcollation)
           AND (a.atttypid<>'timestamptz'::regtype OR a.atttypmod=6)) THEN RETURN false; END IF;
@@ -977,6 +1048,10 @@ BEGIN
       ('access_key_authorization_evidence','cannot_delete','iam.reject_policy_history_change()',false,11),
       ('access_key_authorization_evidence','cannot_truncate','iam.reject_policy_history_change()',false,34),
       ('access_key_authorization_evidence','access_key_authorization_complete','iam.assert_access_key_authorization_complete()',true,5),
+      ('access_key_authorization_evidence_links','cannot_update','iam.reject_policy_history_change()',false,19),
+      ('access_key_authorization_evidence_links','cannot_delete','iam.reject_policy_history_change()',false,11),
+      ('access_key_authorization_evidence_links','cannot_truncate','iam.reject_policy_history_change()',false,34),
+      ('access_key_authorization_evidence_links','access_key_authorization_complete','iam.assert_access_key_authorization_complete()',true,5),
       ('authorization_decisions','access_key_authorization_complete','iam.assert_access_key_authorization_complete()',true,5),
       ('access_keys','access_key_identity_registered','iam.register_access_key_identity()',false,5),
       ('access_keys','access_key_transition','iam.guard_access_key_change()',false,19),

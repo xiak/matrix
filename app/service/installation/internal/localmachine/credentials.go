@@ -135,6 +135,11 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		return err
 	}
 	clear(cursorKey)
+	cursorKey, err = ensureRandomHex(plan.Root, layout.PaaSCursorKey, entropy)
+	if err != nil {
+		return err
+	}
+	clear(cursorKey)
 	backupKey, err := ensureRandomHex(plan.Root, layout.BackupSealKey, entropy)
 	if err != nil {
 		return err
