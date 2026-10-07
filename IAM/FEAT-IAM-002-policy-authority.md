@@ -1,6 +1,6 @@
 # FEAT-IAM-002：策略权限权威替换
 
-- 状态：单一策略权威的语言、持久化、迁移、当前求值、管理入口、历史证据及关联写入结果不确定时的封闭完成查询已经实现；旧 RoleBinding 只保留为不可变历史词汇，不再是在线授权入口。当前策略附件完成查询已进入匹配 Profile 的签名 A/B，并通过本任务隔离运行时的安装、升级、回滚、恢复及重启验证；精确源码独立 CI 与完整 LIVE UI/浏览器门禁仍未完成，因此整体未验收。
+- 状态：单一策略权威的语言、持久化、迁移、当前求值、管理入口、历史证据及关联写入结果不确定时的封闭完成查询已经实现；旧 RoleBinding 只保留为不可变历史词汇，不再是在线授权入口。当前策略附件完成查询已经进入匹配 Profile 的签名 A/B，组合安装、升级、回滚、恢复及重启也已在本任务隔离运行时通过；但该签名生命周期尚未直接读取并核对备份前的 CREATE/REVOKE 完成回执，不能由关系终态或服务健康间接代替。该直接门禁、精确源码独立 CI 与完整 LIVE UI/浏览器门禁完成前，整体不标记验收。
 - 依赖：001 已验收的 CAT-01–04，固定安装消费者已对齐当前策略附件 wire；完整产品 Profile 的集成仍由 008 证明。
 - Owner：IAM `authority`、`identityaccess`、PostgreSQL；Audit 只保存事实。
 
@@ -115,7 +115,7 @@ PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是�
 
 滚动即时前序门禁以固定`9044bd6610b8f2c0cfe0887daf45e8ccf9a4ff90`的IAM65真实程序产生数据，再由IAM66双迁移、等值bootstrap和重启，149.47s通过（包152.950s）。旧认证恢复qualification因系统策略/授权投影变化而按预期失败关闭，当前schema重新取得有界qualification后才能完成；迁移只采用准确IAM65默认系统策略版本，未来产品Profile产生的另一不可变版本不会被误选，后继显式默认版本也不会被等值重放覆盖。该门禁同时证明旧命令不补造receipt、会话/凭据/撤销历史不复活；它不等于跨完整release profile安装准入。
 
-当前签名发布组合的详细版本、归档和运行证据只由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md)与[011](FEAT-IAM-011-acceptance.md)维护，本文件不复制会随发布候选变化的数值。仍未完成的是完整 LIVE UI/真实浏览器与固定提交的精确源码独立 CI，由010/011、UX/UI和安装 owner 分别验收；这些缺口完成前本 FEAT 不标记 Accepted。
+当前签名发布组合的详细版本、归档和运行证据只由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md)与[011](FEAT-IAM-011-acceptance.md)维护，本文件不复制会随发布候选变化的数值。仍未完成的是：在匹配 Profile 的签名生命周期中，以同一原 actor 的新有效 Session 直接查询备份前 CREATE/REVOKE 两条完成回执，并跨 A→B 升级、回滚、所选备份恢复与重启核对原不可变结果；完整 LIVE UI/真实浏览器；以及固定提交的精确源码独立 CI。它们分别由安装 owner、010/011 与 UX/UI、独立 CI 验收；完成前本 FEAT 不标记 Accepted。
 
 首个固定候选`2e18b09293adf9bdf7ffbd3fa0042de566f76e9b`的[Verification 37528963643](https://github.com/xiak/matrix/actions/runs/37528963643)不计为通过：`go`与`node-process`成功，但`authority-storage`动态发现新增真库fixture后，因工作流未创建其独立数据库及注入DSN而明确SKIP并按设计失败，后继分片不替代这一缺口。修正只为该准确fixture增加独立数据库/DSN，不放宽SKIP失败规则；同一入口在本任务PG18以CI形状重新运行22.63s通过（包26.301s），仍须由修正固定提交的独立CI最终确认。
 
