@@ -424,6 +424,23 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		!reflect.DeepEqual(*legacyTagGrantCreate.Attachment, retainedTagGrant) {
 		t.Fatal("actual predecessor did not persist its exact request-tag grant completion")
 	}
+	attachmentContractState := func() []byte {
+		t.Helper()
+		var state []byte
+		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
+			'changes',(SELECT jsonb_agg(to_jsonb(receipt) ORDER BY tenant_id,actor_principal_id,request_id)
+			  FROM iam.policy_attachment_changes receipt),
+			'facts',(SELECT jsonb_agg(event_document ORDER BY event_id) FROM iam.audit_outbox
+			  WHERE event_document->>'requestId' IN ('retained-old-viewer','retained-old-viewer-revoke','retained-request-tag-developer')),
+			'policies',(SELECT jsonb_agg(to_jsonb(policy) ORDER BY id) FROM iam.policies policy
+			  WHERE id IN ('system.account-administrator','system.platform-operator')),
+			'versions',(SELECT jsonb_agg(to_jsonb(stored_version) ORDER BY policy_id,id) FROM iam.policy_versions stored_version
+			  WHERE policy_id IN ('system.account-administrator','system.platform-operator')))`).Scan(&state); err != nil {
+			t.Fatal("read predecessor attachment completion and built-in policy state", err)
+		}
+		return state
+	}
+	predecessorAttachmentContract := attachmentContractState()
 	retainedTagRequest := iamv1.AuthorizationRequest{
 		Action:   iamv1.ActionPaaSApplicationCreate,
 		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"},
@@ -644,26 +661,22 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		currentSchema).Scan(&shape); err != nil || !shape {
 		t.Fatal("retained database did not satisfy current IAM readiness and fail-closed defaults", err)
 	}
-	var attachmentChangeUpgrade bool
+	if current := attachmentContractState(); !bytes.Equal(predecessorAttachmentContract, current) {
+		t.Fatal("IAM66 attachment completions, facts or built-in policy state changed during IAM67 migration")
+	}
+	var attachmentChangeAuthority bool
 	if err := admin.QueryRow(ctx, `SELECT
-		(SELECT count(*)=3 FROM iam.policy_attachment_changes)
-		AND EXISTS(SELECT 1 FROM iam.audit_outbox WHERE event_document->>'requestId'='retained-old-viewer'
-		  AND event_document->>'action'='iam.policy-attachment.created')
-		AND EXISTS(SELECT 1 FROM iam.policy_versions WHERE policy_id='system.account-administrator'
-		  AND id='version-e49a3d4626b4352752cd43a67fae9c64622a45b9390d4cb32f2e4e549702f715')
-		AND EXISTS(SELECT 1 FROM iam.policy_versions WHERE policy_id='system.platform-operator'
-		  AND id='version-adfc4caf50c1e501ad8ca42b1178a88027ad0c748a7aaf82569d12aa71678e79')
-		AND EXISTS(SELECT 1 FROM iam.policies p JOIN iam.policy_versions v ON (v.policy_id,v.id)=(p.id,p.default_version_id),
+		EXISTS(SELECT 1 FROM iam.policies p JOIN iam.policy_versions v ON (v.policy_id,v.id)=(p.id,p.default_version_id),
 		  LATERAL jsonb_array_elements(v.document->'statements') statement,
 		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
-		  WHERE p.id='system.account-administrator' AND p.resource_version=2
+		  WHERE p.id='system.account-administrator'
 		    AND action_value='iam.policy-attachment-change.read')
 		AND EXISTS(SELECT 1 FROM iam.policies p JOIN iam.policy_versions v ON (v.policy_id,v.id)=(p.id,p.default_version_id),
 		  LATERAL jsonb_array_elements(v.document->'statements') statement,
 		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
-		  WHERE p.id='system.platform-operator' AND p.resource_version=2
-		    AND action_value='iam.platform-policy-attachment-change.read')`).Scan(&attachmentChangeUpgrade); err != nil || !attachmentChangeUpgrade {
-		t.Fatal("IAM66 attachment completions changed or exact built-in policy adoption was lost", err)
+		  WHERE p.id='system.platform-operator'
+		    AND action_value='iam.platform-policy-attachment-change.read')`).Scan(&attachmentChangeAuthority); err != nil || !attachmentChangeAuthority {
+		t.Fatal("IAM66 built-in attachment completion read authority was lost", err)
 	}
 	current := start(currentBinary, currentSchema)
 	for requestID, expected := range map[string]iamv1.PolicyAttachmentChange{
@@ -10742,7 +10755,7 @@ func proveUserRoleApplicationDirectory(
 		var decisions, collections, instances int
 		var exact bool
 		directoryErr := admin.QueryRow(ctx, `SELECT count(*),
-			count(*) FILTER (WHERE resource_mode='COLLECTION' AND collection_usage='LIST' AND target_id='collection'),
+			count(*) FILTER (WHERE resource_mode='COLLECTION' AND collection_usage=$8 AND target_id='collection'),
 			count(*) FILTER (WHERE resource_mode='INSTANCE' AND collection_usage IS NULL AND target_id<>'collection'),
 			COALESCE(bool_and(allowed AND contract_version=7 AND principal_id IS NULL
 			 AND subject_type='ROLE' AND role_id=$2 AND source_principal_id=$3
@@ -10750,7 +10763,7 @@ func proveUserRoleApplicationDirectory(
 			 AND action_name=$6 AND target_kind=$7),false)
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND document->>'correlationId'=$5`,
 			role.AccountID, role.ID, sourceUser, session.ID, correlationID,
-			iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication).Scan(
+			iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication, iamv1.AuthorizationCollectionList).Scan(
 			&decisions, &collections, &instances, &exact)
 		if correlationID == "" || directoryErr != nil || !exact || collections != 1 ||
 			instances != len(page.Items) || decisions != len(page.Items)+1 {
@@ -11293,10 +11306,11 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			 AND source_service_principal_id='service-paas'
 			 AND role_evidence->>'sessionId'=$3 AND action_name=$4
 			 AND target_kind=$5 AND target_id='collection'
-			 AND resource_mode='COLLECTION' AND collection_usage='LIST')
+			 AND resource_mode='COLLECTION' AND collection_usage=$7)
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND document->>'correlationId'=$6`,
 			tenant.id, tenant.serviceRoleReceipt.RoleID, tenant.serviceRoleSession.ID,
-			iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication, directoryCorrelation).Scan(&exactDirectoryDeny)
+			iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication, directoryCorrelation,
+			iamv1.AuthorizationCollectionList).Scan(&exactDirectoryDeny)
 		if directoryCorrelation == "" || directoryErr != nil || !exactDirectoryDeny {
 			t.Fatal("service-origin Role directory did not close at its collection decision", directoryErr)
 		}
@@ -11768,13 +11782,13 @@ func proveApplicationTenantProcesses(t *testing.T, ctx context.Context, admin *p
 			var decisions, collections, instances int
 			var exact bool
 			if correlationID == "" || admin.QueryRow(ctx, `SELECT count(*),
-				count(*) FILTER (WHERE resource_mode='COLLECTION' AND collection_usage='LIST' AND target_id='collection'),
+				count(*) FILTER (WHERE resource_mode='COLLECTION' AND collection_usage=$6 AND target_id='collection'),
 				count(*) FILTER (WHERE resource_mode='INSTANCE' AND collection_usage IS NULL AND target_id<>'collection'),
 				COALESCE(bool_and(allowed AND contract_version=7 AND principal_id=$2 AND access_key_id IS NULL
 				 AND action_name=$4 AND target_kind=$5),false)
 				FROM iam.authorization_decisions WHERE tenant_id=$1 AND document->>'correlationId'=$3`,
 				tenant.login.Session.AccountID, tenant.login.Session.PrincipalID, correlationID,
-				iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication).Scan(&decisions, &collections, &instances, &exact) != nil ||
+				iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication, iamv1.AuthorizationCollectionList).Scan(&decisions, &collections, &instances, &exact) != nil ||
 				!exact || collections != 1 || instances != len(page.Items) || decisions != len(page.Items)+1 {
 				t.Fatal("login-session Application directory did not use one collection and one bounded batch")
 			}
