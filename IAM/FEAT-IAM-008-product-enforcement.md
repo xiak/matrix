@@ -263,7 +263,7 @@ LOGIN_SESSION与ROLE继续使用现有`authorize`加`authorize:batch`协议。AC
 
 最低门禁覆盖两个Account拥有同ID/同名但不同标签的Application、USER、两类ROLE来源及ACCESS_KEY；全Allow、部分Allow、全Deny、显式Deny优先、零项、恰好50项和超过50项；伪造/过期/另一安装/另一Account/另一Subject/另一Profile/另一Action游标；游标指向未返回Deny项；第二页前撤权、停用或标签变化；批次错序/遗漏/替换；nonce重放、同key并发、IAM失联、outbox故障和进程重启。真实PG18须证明RLS、只读快照、签名请求证据唯一性、决定与tenant Audit链原子性；独立IAM/Audit/PaaS进程及签名安装组合须证明每安装游标密钥多副本一致、密钥缺失或错误时失败关闭。
 
-固定`71c7882b4f8a1aa11ee1a2408b8ae111f375f25a`已将本片落到真实`GET /v1/applications?after=<opaque>`。PaaS先从当前凭据解析不可切换的Account，在强制RLS下按ID读取最多50个候选，再以一个collection和0–50个instance请求调用一次对应授权协议；只返回逐项Allow且重读版本/标签仍一致的资源。游标由PaaS安装密钥加密并绑定安装、Account、严格主体、Profile、Action、固定查询和最后扫描ID，15分钟到期。明文ID、重复`after`、额外query、大小写和percent-encoding路由别名均在IAM前拒绝；候选跨Account父引用、游标换Account/主体/Profile、第二页撤权、部分与全部Deny、零/一/五十/超过五十项、同nonce并发及重启由现有owner覆盖。聚焦PaaS race、全仓普通Go/vet及API生成稳定已本地通过；独立[Verification 37571650568](https://github.com/xiak/matrix/actions/runs/37571650568)仍在串行运行，签名安装组合也未完成，所以本节仍为当前切片而非最终验收。
+固定`71c7882b4f8a1aa11ee1a2408b8ae111f375f25a`已将本片落到真实`GET /v1/applications?after=<opaque>`。PaaS先从当前凭据解析不可切换的Account，在强制RLS下按ID读取最多50个候选，再以一个collection和0–50个instance请求调用一次对应授权协议；只返回逐项Allow且重读版本/标签仍一致的资源。游标由PaaS安装密钥加密并绑定安装、Account、严格主体、Profile、Action、固定查询和最后扫描ID，15分钟到期。明文ID、重复`after`、额外query、大小写和percent-encoding路由别名均在IAM前拒绝；候选跨Account父引用、游标换Account/主体/Profile、第二页撤权、部分与全部Deny、零/一/五十/超过五十项、同nonce并发及重启由现有owner覆盖。聚焦PaaS race、全仓普通Go/vet及API生成稳定已本地通过；独立[Verification 37571650568](https://github.com/xiak/matrix/actions/runs/37571650568)已终态completed/failure，十三项job成功，但`authority-runtime`的过期滚动前驱/decision查询断言失败并使最终`authority-process`汇总失败。当前修复尚未取得新精确SHA的独立CI，签名安装组合也未完成，所以本节仍为当前切片而非最终验收。
 
 ## 验收
 

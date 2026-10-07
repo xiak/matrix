@@ -336,7 +336,7 @@ IAM在一个事务中认证调用服务、验证一次MAC和当前AccessKey状�
 
 存储替换遵循pre-v1最新前驱原则：只保留当前schema到下一schema的一次真实数据迁移，把现有一对一AccessKey决定证据无损正规化为“签名请求证据＋决定引用”；不维护所有未发布开发草稿的兼容矩阵。原决定、Audit canonical、nonce已消费状态、使用观测与AccessKey撤销状态必须保留，迁移/等值重放/备份恢复不能让旧nonce重新可用。最低门禁覆盖零/一/五十项、集合Deny、部分/全部实例Deny、重复/乱序/错Profile/Action/标签、同nonce并发、事务提交未知、撤权/停用竞争、两个IAM副本、重启和直接前驱保留数据。产品候选、RLS、游标及返回资源核对由[008](./FEAT-IAM-008-product-enforcement.md#下一纵向切片租户-application-目录与安全游标)拥有。
 
-固定`71c7882b4f8a1aa11ee1a2408b8ae111f375f25a`已把一次MAC、一次nonce、集合与实例决定共同引用同一请求证据的协议接入真实Application目录。IAM批量事务覆盖0–50个严格候选、集合Deny、逐项Allow/Deny、证据正规化、历史保留及重放/并发攻击；产品读取、RLS、游标和返回资源核对的实现状态与证据只归[008的当前目录切片](./FEAT-IAM-008-product-enforcement.md#当前纵向切片租户-application-目录与安全游标)，不在本FEAT复制。独立[Verification 37571650568](https://github.com/xiak/matrix/actions/runs/37571650568)仍在串行运行，但`authority-runtime`的“Retained data and actual authority processes”步骤已经终态failure；同run中Go、node、storage、recovery-storage、roles及session-idle成功不能覆盖该失败，因此该固定对象不能登记为独立CI通过。其余lane的后续终态仍需保留为准确证据，不能提前取消或由本地结果回填。
+固定`71c7882b4f8a1aa11ee1a2408b8ae111f375f25a`已把一次MAC、一次nonce、集合与实例决定共同引用同一请求证据的协议接入真实Application目录。IAM批量事务覆盖0–50个严格候选、集合Deny、逐项Allow/Deny、证据正规化、历史保留及重放/并发攻击；产品读取、RLS、游标和返回资源核对的实现状态与证据只归[008的当前目录切片](./FEAT-IAM-008-product-enforcement.md#当前纵向切片租户-application-目录与安全游标)，不在本FEAT复制。独立[Verification 37571650568](https://github.com/xiak/matrix/actions/runs/37571650568)已终态completed/failure：十三项job成功，`authority-runtime`因[011记录的两项过期测试断言](./FEAT-IAM-011-acceptance.md#开发期升级兼容窗口)失败，最终`authority-process`汇总随之失败；没有取消或跳过。其他lane成功不能覆盖该失败，因此该固定对象不能登记为独立CI通过；当前修复仍须以新精确SHA重跑真实前驱和独立进程门禁。
 
 ### 当前纵向切片：可信APISIX北向入口与安装封存
 

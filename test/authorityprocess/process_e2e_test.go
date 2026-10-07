@@ -259,6 +259,26 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	member := createIAMUser(t, endpoint, primary.Credential, "retained.sessions", "Retained sessions", initialReaderPassword, "own-upgrade-user")
 	oldGrant := createIAMPolicyAttachment(t, endpoint, primary.Credential, member.ID, iamv1.SystemPolicyPaaSViewer, "retained-old-viewer")
 	revokeIAMPolicyAttachment(t, endpoint, primary.Credential, oldGrant.ID, oldGrant.ResourceVersion, "retained-old-viewer-revoke")
+	readAttachmentChange := func(requestID string) iamv1.PolicyAttachmentChange {
+		t.Helper()
+		response := performJSON(t, http.MethodGet,
+			endpoint+"/v1/policy-attachment-changes/by-request/"+requestID, primary.Credential, nil)
+		var change iamv1.PolicyAttachmentChange
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &change) != nil ||
+			iamv1.ValidatePolicyAttachmentChange(change) != nil || change.RequestID != requestID {
+			t.Fatalf("actual predecessor did not preserve policy attachment change %s status=%d", requestID, response.Status)
+		}
+		return change
+	}
+	legacyAttachmentCreate := readAttachmentChange("retained-old-viewer")
+	legacyAttachmentRevoke := readAttachmentChange("retained-old-viewer-revoke")
+	if legacyAttachmentCreate.Operation != iamv1.PolicyAttachmentChangeCreate || legacyAttachmentCreate.Attachment == nil ||
+		!reflect.DeepEqual(*legacyAttachmentCreate.Attachment, oldGrant) ||
+		legacyAttachmentRevoke.Operation != iamv1.PolicyAttachmentChangeRevoke ||
+		legacyAttachmentRevoke.AttachmentID != oldGrant.ID ||
+		legacyAttachmentRevoke.ExpectedResourceVersion != oldGrant.ResourceVersion {
+		t.Fatal("actual predecessor did not persist its exact create and revoke attachment completions")
+	}
 	realm := member.LoginName + "@" + string(member.AccountID)
 	a := loginIAM(t, endpoint, realm, initialReaderPassword, "own-upgrade-first")
 	changePasswordIAM(t, endpoint, a.Credential, initialReaderPassword, changedReaderPassword, "own-upgrade-password")
@@ -397,6 +417,12 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		iamv1.SystemPolicyPaaSDeveloper, "retained-request-tag-developer")
 	if retainedTagGrant.Target.ID != string(member.ID) {
 		t.Fatal("predecessor request-tag grant changed target")
+	}
+	legacyTagGrantCreate := readAttachmentChange("retained-request-tag-developer")
+	if legacyTagGrantCreate.Operation != iamv1.PolicyAttachmentChangeCreate ||
+		legacyTagGrantCreate.Attachment == nil ||
+		!reflect.DeepEqual(*legacyTagGrantCreate.Attachment, retainedTagGrant) {
+		t.Fatal("actual predecessor did not persist its exact request-tag grant completion")
 	}
 	retainedTagRequest := iamv1.AuthorizationRequest{
 		Action:   iamv1.ActionPaaSApplicationCreate,
@@ -620,7 +646,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	}
 	var attachmentChangeUpgrade bool
 	if err := admin.QueryRow(ctx, `SELECT
-		(SELECT count(*)=0 FROM iam.policy_attachment_changes)
+		(SELECT count(*)=3 FROM iam.policy_attachment_changes)
 		AND EXISTS(SELECT 1 FROM iam.audit_outbox WHERE event_document->>'requestId'='retained-old-viewer'
 		  AND event_document->>'action'='iam.policy-attachment.created')
 		AND EXISTS(SELECT 1 FROM iam.policy_versions WHERE policy_id='system.account-administrator'
@@ -637,13 +663,21 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
 		  WHERE p.id='system.platform-operator' AND p.resource_version=2
 		    AND action_value='iam.platform-policy-attachment-change.read')`).Scan(&attachmentChangeUpgrade); err != nil || !attachmentChangeUpgrade {
-		t.Fatal("schema65 attachment history was backfilled or exact built-in policy adoption was lost", err)
+		t.Fatal("IAM66 attachment completions changed or exact built-in policy adoption was lost", err)
 	}
 	current := start(currentBinary, currentSchema)
-	legacyAttachmentCompletion := performJSON(t, http.MethodGet,
-		endpoint+"/v1/policy-attachment-changes/by-request/retained-old-viewer", primary.Credential, nil)
-	if legacyAttachmentCompletion.Status != http.StatusNotFound {
-		t.Fatal("current authority synthesized a completion receipt for an old attachment fact", legacyAttachmentCompletion.Status)
+	for requestID, expected := range map[string]iamv1.PolicyAttachmentChange{
+		"retained-old-viewer":            legacyAttachmentCreate,
+		"retained-old-viewer-revoke":     legacyAttachmentRevoke,
+		"retained-request-tag-developer": legacyTagGrantCreate,
+	} {
+		response := performJSON(t, http.MethodGet,
+			endpoint+"/v1/policy-attachment-changes/by-request/"+requestID, primary.Credential, nil)
+		var retained iamv1.PolicyAttachmentChange
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &retained) != nil ||
+			iamv1.ValidatePolicyAttachmentChange(retained) != nil || !reflect.DeepEqual(retained, expected) {
+			t.Fatalf("current authority changed predecessor attachment completion %s status=%d", requestID, response.Status)
+		}
 	}
 	reusedAttachmentRequest := performJSON(t, http.MethodPost, endpoint+"/v1/policy-attachments", primary.Credential,
 		iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(forcedUser.ID)},
@@ -7064,7 +7098,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			rows, err := database.Query(ctx, `SELECT id,target_id,allowed,contract_version=7,
 				document#>>'{networkContext,sourceIp}'=$4
 				FROM iam.authorization_decisions
-				WHERE tenant_id=$1 AND access_key_id=$2 AND correlation_id=$3
+				WHERE tenant_id=$1 AND access_key_id=$2 AND document->>'correlationId'=$3
 				ORDER BY CASE WHEN target_id='collection' THEN 0 ELSE 1 END,target_id`,
 				account.target.AccountID, account.key.Key.ID, correlationID, account.sourceIP)
 			if err != nil {
@@ -10714,7 +10748,7 @@ func proveUserRoleApplicationDirectory(
 			 AND subject_type='ROLE' AND role_id=$2 AND source_principal_id=$3
 			 AND source_service_principal_id IS NULL AND role_evidence->>'sessionId'=$4
 			 AND action_name=$6 AND target_kind=$7),false)
-			FROM iam.authorization_decisions WHERE tenant_id=$1 AND correlation_id=$5`,
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND document->>'correlationId'=$5`,
 			role.AccountID, role.ID, sourceUser, session.ID, correlationID,
 			iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication).Scan(
 			&decisions, &collections, &instances, &exact)
@@ -11260,7 +11294,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			 AND role_evidence->>'sessionId'=$3 AND action_name=$4
 			 AND target_kind=$5 AND target_id='collection'
 			 AND resource_mode='COLLECTION' AND collection_usage='LIST')
-			FROM iam.authorization_decisions WHERE tenant_id=$1 AND correlation_id=$6`,
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND document->>'correlationId'=$6`,
 			tenant.id, tenant.serviceRoleReceipt.RoleID, tenant.serviceRoleSession.ID,
 			iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication, directoryCorrelation).Scan(&exactDirectoryDeny)
 		if directoryCorrelation == "" || directoryErr != nil || !exactDirectoryDeny {
@@ -11738,7 +11772,7 @@ func proveApplicationTenantProcesses(t *testing.T, ctx context.Context, admin *p
 				count(*) FILTER (WHERE resource_mode='INSTANCE' AND collection_usage IS NULL AND target_id<>'collection'),
 				COALESCE(bool_and(allowed AND contract_version=7 AND principal_id=$2 AND access_key_id IS NULL
 				 AND action_name=$4 AND target_kind=$5),false)
-				FROM iam.authorization_decisions WHERE tenant_id=$1 AND correlation_id=$3`,
+				FROM iam.authorization_decisions WHERE tenant_id=$1 AND document->>'correlationId'=$3`,
 				tenant.login.Session.AccountID, tenant.login.Session.PrincipalID, correlationID,
 				iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication).Scan(&decisions, &collections, &instances, &exact) != nil ||
 				!exact || collections != 1 || instances != len(page.Items) || decisions != len(page.Items)+1 {
