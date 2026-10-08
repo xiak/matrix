@@ -140,7 +140,8 @@ END $function$;
 -- Resolve and lock the exact delegation proof used by a policy attachment
 -- mutation. Root and installation-scoped commands use closed states instead
 -- of pretending to carry an ordinary tenant permission boundary. A delegated
--- tenant writer may manage only a direct USER with the same current ceiling.
+-- tenant writer may manage a direct USER or a Group whose complete membership
+-- is constrained by the same current ceiling.
 CREATE OR REPLACE FUNCTION iam.lock_policy_attachment_delegation(
     submitted_tenant text,submitted_actor text,submitted_decision text,submitted_action text,
     submitted_target_kind text,submitted_target_id text,submitted_authority_scope text,submitted_policy_id text
@@ -148,6 +149,7 @@ CREATE OR REPLACE FUNCTION iam.lock_policy_attachment_delegation(
 RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE actor_is_root boolean; actor_version bigint; actor_evidence jsonb; target_evidence jsonb;
     ceiling_policy_id text; ceiling iam.policies%ROWTYPE; attached iam.policies%ROWTYPE;
+    member_document jsonb; member_count bigint; member_digest text;
 BEGIN
     IF COALESCE(submitted_tenant,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
       OR COALESCE(submitted_actor,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -175,14 +177,42 @@ BEGIN
     END IF;
     PERFORM iam.assert_current_user_boundary_evidence(submitted_tenant,submitted_actor,submitted_action,actor_evidence);
 
+    -- The public attachment mutation already owns the actor USER. Membership
+    -- writers likewise own their actor and candidate USER before the Group.
+    -- Lock every current member in stable order before the Group barrier; the
+    -- private Group authorization generation forces a fresh Serializable
+    -- snapshot if a concurrent member/attachment wins.
+    IF submitted_target_kind='GROUP' THEN
+        PERFORM principal.id FROM iam.principals principal
+          WHERE principal.tenant_id=submitted_tenant AND principal.id<>submitted_actor
+            AND EXISTS(SELECT 1 FROM iam.group_memberships member
+              WHERE member.tenant_id=submitted_tenant AND member.group_id=submitted_target_id
+                AND member.user_id=principal.id AND member.removed_at IS NULL)
+          ORDER BY principal.id FOR NO KEY UPDATE;
+    END IF;
     -- Boundary writers first lock the same principal rows, so an absent row
     -- cannot be inserted around this check. Existing rows are then locked in
-    -- stable USER order before either policy row is acquired.
+    -- stable USER order before the Group and either policy row are acquired.
     PERFORM boundary.user_id FROM iam.user_permission_boundaries boundary
       WHERE boundary.tenant_id=submitted_tenant AND boundary.revoked_at IS NULL
         AND (boundary.user_id=submitted_actor
-          OR (submitted_target_kind='USER' AND boundary.user_id=submitted_target_id))
+          OR (submitted_target_kind='USER' AND boundary.user_id=submitted_target_id)
+          OR (submitted_target_kind='GROUP' AND EXISTS(SELECT 1 FROM iam.group_memberships member
+              WHERE member.tenant_id=submitted_tenant AND member.group_id=submitted_target_id
+                AND member.user_id=boundary.user_id AND member.removed_at IS NULL)))
       ORDER BY boundary.user_id FOR NO KEY UPDATE;
+
+    IF submitted_target_kind='GROUP' THEN
+        PERFORM 1 FROM iam.groups target_group
+          WHERE target_group.tenant_id=submitted_tenant AND target_group.id=submitted_target_id
+            AND target_group.deleted_at IS NULL FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment group is unavailable';
+        END IF;
+        PERFORM member.id FROM iam.group_memberships member
+          WHERE member.tenant_id=submitted_tenant AND member.group_id=submitted_target_id
+            AND member.removed_at IS NULL ORDER BY member.id FOR UPDATE;
+    END IF;
 
     IF actor_is_root THEN
         target_evidence:='{"state":"ROOT"}'::jsonb;
@@ -191,25 +221,73 @@ BEGIN
         actor_evidence:='{"state":"NOT_APPLICABLE"}'::jsonb;
         target_evidence:='{"state":"NOT_APPLICABLE"}'::jsonb;
     ELSE
-        IF submitted_target_kind<>'USER' OR actor_evidence->>'state' IS DISTINCT FROM 'BOUND'
+        IF submitted_target_kind NOT IN ('USER','GROUP') OR actor_evidence->>'state' IS DISTINCT FROM 'BOUND'
           OR EXISTS(SELECT 1 FROM iam.policy_attachments attachment
               WHERE attachment.tenant_id=submitted_tenant AND attachment.target_kind='USER'
-                AND attachment.target_id IN(submitted_actor,submitted_target_id) AND attachment.authority_scope='INSTALLATION'
-                AND attachment.revoked_at IS NULL)
-          OR EXISTS(SELECT 1 FROM iam.account_roots root
-              WHERE root.account_id=submitted_tenant AND root.principal_id=submitted_target_id) THEN
+                AND attachment.target_id=submitted_actor AND attachment.authority_scope='INSTALLATION'
+                AND attachment.revoked_at IS NULL) THEN
             RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated policy attachment is unavailable';
         END IF;
-        target_evidence:=iam.current_user_boundary_evidence(submitted_tenant,submitted_target_id);
-        IF target_evidence->>'state' IS DISTINCT FROM 'BOUND'
-          OR target_evidence#>>'{version,policyId}' IS DISTINCT FROM actor_evidence#>>'{version,policyId}'
-          OR target_evidence#>>'{version,versionId}' IS DISTINCT FROM actor_evidence#>>'{version,versionId}'
-          OR target_evidence#>>'{version,contentDigest}' IS DISTINCT FROM actor_evidence#>>'{version,contentDigest}'
-          OR target_evidence->'contractVersion' IS DISTINCT FROM actor_evidence->'contractVersion'
-          OR target_evidence->'compilation' IS DISTINCT FROM actor_evidence->'compilation' THEN
-            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment target boundary is unavailable';
-        END IF;
         ceiling_policy_id:=actor_evidence#>>'{version,policyId}';
+        IF submitted_target_kind='USER' THEN
+            IF EXISTS(SELECT 1 FROM iam.policy_attachments attachment
+                WHERE attachment.tenant_id=submitted_tenant AND attachment.target_kind='USER'
+                  AND attachment.target_id=submitted_target_id AND attachment.authority_scope='INSTALLATION'
+                  AND attachment.revoked_at IS NULL)
+              OR EXISTS(SELECT 1 FROM iam.account_roots root
+                  WHERE root.account_id=submitted_tenant AND root.principal_id=submitted_target_id) THEN
+                RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated policy attachment is unavailable';
+            END IF;
+            target_evidence:=iam.current_user_boundary_evidence(submitted_tenant,submitted_target_id);
+            IF target_evidence->>'state' IS DISTINCT FROM 'BOUND'
+              OR target_evidence#>>'{version,policyId}' IS DISTINCT FROM ceiling_policy_id
+              OR target_evidence#>>'{version,versionId}' IS DISTINCT FROM actor_evidence#>>'{version,versionId}'
+              OR target_evidence#>>'{version,contentDigest}' IS DISTINCT FROM actor_evidence#>>'{version,contentDigest}'
+              OR target_evidence->'contractVersion' IS DISTINCT FROM actor_evidence->'contractVersion'
+              OR target_evidence->'compilation' IS DISTINCT FROM actor_evidence->'compilation' THEN
+                RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment target boundary is unavailable';
+            END IF;
+        ELSE
+            IF EXISTS(SELECT 1 FROM iam.policy_attachments attachment
+                WHERE attachment.tenant_id=submitted_tenant AND attachment.target_kind='GROUP'
+                  AND attachment.target_id=submitted_target_id AND attachment.revoked_at IS NULL
+                  AND attachment.delegation_ceiling_policy_id IS NOT NULL
+                  AND attachment.delegation_ceiling_policy_id<>ceiling_policy_id)
+              OR EXISTS(SELECT 1 FROM iam.group_memberships member
+                JOIN iam.principals principal ON (principal.tenant_id,principal.id)=(member.tenant_id,member.user_id)
+                CROSS JOIN LATERAL (SELECT iam.current_user_boundary_evidence(member.tenant_id,member.user_id) AS evidence) current_boundary
+                WHERE member.tenant_id=submitted_tenant AND member.group_id=submitted_target_id
+                  AND member.removed_at IS NULL AND (
+                    principal.principal_type<>'USER' OR principal.status<>'ACTIVE' OR principal.deleted_at IS NOT NULL
+                    OR EXISTS(SELECT 1 FROM iam.account_roots root
+                      WHERE root.account_id=member.tenant_id AND root.principal_id=member.user_id)
+                    OR EXISTS(SELECT 1 FROM iam.policy_attachments attachment
+                      WHERE attachment.tenant_id=member.tenant_id AND attachment.target_kind='USER'
+                        AND attachment.target_id=member.user_id AND attachment.authority_scope='INSTALLATION'
+                        AND attachment.revoked_at IS NULL)
+                    OR current_boundary.evidence->>'state' IS DISTINCT FROM 'BOUND'
+                    OR current_boundary.evidence#>>'{version,policyId}' IS DISTINCT FROM ceiling_policy_id
+                    OR current_boundary.evidence#>>'{version,versionId}' IS DISTINCT FROM actor_evidence#>>'{version,versionId}'
+                    OR current_boundary.evidence#>>'{version,contentDigest}' IS DISTINCT FROM actor_evidence#>>'{version,contentDigest}'
+                    OR current_boundary.evidence->'contractVersion' IS DISTINCT FROM actor_evidence->'contractVersion'
+                    OR current_boundary.evidence->'compilation' IS DISTINCT FROM actor_evidence->'compilation')) THEN
+                RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment group boundary is unavailable';
+            END IF;
+            SELECT count(*),COALESCE(jsonb_agg(jsonb_build_object(
+                'membershipId',member.id,'userId',member.user_id,
+                'boundary',iam.current_user_boundary_evidence(member.tenant_id,member.user_id)) ORDER BY member.id),'[]'::jsonb)
+              INTO member_count,member_document FROM iam.group_memberships member
+              WHERE member.tenant_id=submitted_tenant AND member.group_id=submitted_target_id
+                AND member.removed_at IS NULL;
+            member_digest:='sha256:'||encode(sha256(
+              convert_to('matrix.iam.group-delegation-members.v1','UTF8')||decode('00','hex')
+              ||convert_to(submitted_tenant,'UTF8')||decode('00','hex')
+              ||convert_to(submitted_target_id,'UTF8')||decode('00','hex')
+              ||convert_to(ceiling_policy_id,'UTF8')||decode('00','hex')
+              ||convert_to(member_document::text,'UTF8')),'hex');
+            target_evidence:=jsonb_build_object('state','GROUP_BOUND','ceilingPolicyId',ceiling_policy_id,
+              'memberCount',member_count,'membersDigest',member_digest);
+        END IF;
     END IF;
 
     PERFORM policy.id FROM iam.policies policy
@@ -945,7 +1023,31 @@ BEGIN
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='boundary decision is invalid'; END IF;
     SELECT * INTO current_binding FROM iam.user_permission_boundaries b
-        WHERE b.tenant_id=tenant AND b.user_id=change_user_permission_boundary.user_id AND b.revoked_at IS NULL;
+        WHERE b.tenant_id=tenant AND b.user_id=change_user_permission_boundary.user_id AND b.revoked_at IS NULL
+        FOR UPDATE;
+    -- A delegated Group attachment is a live upper-bound contract for every
+    -- member. Boundary removal/replacement must first remove the member or
+    -- revoke the attachment; changing the boundary in place would otherwise
+    -- create an authorization path outside the sealed closure.
+    PERFORM target_group.id FROM iam.group_memberships member
+      JOIN iam.groups target_group ON (target_group.tenant_id,target_group.id)=(member.tenant_id,member.group_id)
+      WHERE member.tenant_id=tenant AND member.user_id=change_user_permission_boundary.user_id AND member.removed_at IS NULL
+        AND target_group.deleted_at IS NULL ORDER BY target_group.id FOR UPDATE OF target_group;
+    PERFORM attachment.id FROM iam.group_memberships member
+      JOIN iam.policy_attachments attachment ON attachment.tenant_id=member.tenant_id
+        AND attachment.target_kind='GROUP' AND attachment.target_id=member.group_id
+      WHERE member.tenant_id=tenant AND member.user_id=change_user_permission_boundary.user_id AND member.removed_at IS NULL
+        AND attachment.revoked_at IS NULL AND attachment.delegation_ceiling_policy_id IS NOT NULL
+      ORDER BY attachment.id FOR NO KEY UPDATE OF attachment;
+    IF EXISTS(SELECT 1 FROM iam.group_memberships member
+      JOIN iam.policy_attachments attachment ON attachment.tenant_id=member.tenant_id
+        AND attachment.target_kind='GROUP' AND attachment.target_id=member.group_id
+      WHERE member.tenant_id=tenant AND member.user_id=change_user_permission_boundary.user_id AND member.removed_at IS NULL
+        AND attachment.revoked_at IS NULL AND attachment.delegation_ceiling_policy_id IS NOT NULL
+        AND (change_user_permission_boundary.policy_id=''
+          OR attachment.delegation_ceiling_policy_id<>change_user_permission_boundary.policy_id)) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='group delegation ceiling protects the user boundary';
+    END IF;
     PERFORM 1 FROM iam.policies p WHERE p.id IN(policy_id,current_binding.policy_id) ORDER BY p.id FOR UPDATE;
     IF policy_id<>'' THEN
         SELECT * INTO policy FROM iam.policies p WHERE p.id=change_user_permission_boundary.policy_id
@@ -953,7 +1055,6 @@ BEGIN
         IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary policy is unavailable'; END IF;
         IF policy.resource_version<>expected_policy_version THEN RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='boundary policy revision conflicts'; END IF;
     END IF;
-    PERFORM 1 FROM iam.user_permission_boundaries b WHERE b.tenant_id=tenant AND b.id=current_binding.id FOR UPDATE;
     SELECT event_document INTO previous FROM iam.audit_outbox o WHERE o.tenant_id=tenant AND o.event_document->>'action'=fact_name
         AND o.event_document#>>'{actor,id}'=actor AND o.event_document->>'requestId'=event->>'requestId';
     IF FOUND THEN

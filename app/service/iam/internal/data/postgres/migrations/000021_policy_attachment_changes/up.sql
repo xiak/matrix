@@ -111,6 +111,28 @@ ALTER TABLE iam.policy_attachment_changes ADD CONSTRAINT policy_attachment_chang
       AND ((actor_boundary_evidence->'contractVersion'='1'::jsonb AND NOT actor_boundary_evidence ? 'compilation')
         OR (actor_boundary_evidence->'contractVersion'='2'::jsonb
           AND jsonb_typeof(actor_boundary_evidence->'compilation')='object')))
+    OR (authority_scope='TENANT' AND target_kind='GROUP'
+      AND actor_boundary_evidence->>'state'='BOUND'
+      AND actor_boundary_evidence-ARRAY['state','userResourceVersion','boundaryId','resourceVersion','version','contractVersion','compilation']='{}'::jsonb
+      AND jsonb_typeof(actor_boundary_evidence->'userResourceVersion')='number'
+      AND jsonb_typeof(actor_boundary_evidence->'resourceVersion')='number'
+      AND COALESCE(actor_boundary_evidence->>'userResourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+      AND COALESCE(actor_boundary_evidence->>'resourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+      AND COALESCE(actor_boundary_evidence->>'boundaryId','') COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND jsonb_typeof(actor_boundary_evidence->'version')='object'
+      AND (actor_boundary_evidence->'version') ?& ARRAY['policyId','versionId','contentDigest']
+      AND (actor_boundary_evidence->'version')-ARRAY['policyId','versionId','contentDigest']='{}'::jsonb
+      AND ((actor_boundary_evidence->'contractVersion'='1'::jsonb AND NOT actor_boundary_evidence ? 'compilation')
+        OR (actor_boundary_evidence->'contractVersion'='2'::jsonb
+          AND jsonb_typeof(actor_boundary_evidence->'compilation')='object'))
+      AND target_boundary_evidence->>'state'='GROUP_BOUND'
+      AND target_boundary_evidence-ARRAY['state','ceilingPolicyId','memberCount','membersDigest']='{}'::jsonb
+      AND target_boundary_evidence->>'ceilingPolicyId'=actor_boundary_evidence#>>'{version,policyId}'
+      AND target_boundary_evidence->>'ceilingPolicyId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND jsonb_typeof(target_boundary_evidence->'memberCount')='number'
+      AND COALESCE(target_boundary_evidence->>'memberCount','') ~ '^(0|[1-9][0-9]{0,15})$'
+      AND (target_boundary_evidence->>'memberCount')::numeric<=9007199254740991
+      AND target_boundary_evidence->>'membersDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$')
   )
   AND ((operation='CREATE' AND policy_resource_version BETWEEN 1 AND 9007199254740991
       AND expected_resource_version IS NULL)
@@ -187,7 +209,7 @@ BEGIN
         OR (delegation->'actorBoundary'='{"state":"NOT_APPLICABLE"}'::jsonb
           AND delegation->'targetBoundary'='{"state":"NOT_APPLICABLE"}'::jsonb)
         OR (delegation->'actorBoundary'->>'state'='BOUND'
-          AND delegation->'targetBoundary'->>'state'='BOUND')
+          AND delegation->'targetBoundary'->>'state' IN ('BOUND','GROUP_BOUND'))
       ) THEN
       RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='policy attachment authority evidence is invalid';
     END IF;
@@ -302,6 +324,21 @@ BEGIN
             WHERE (principal.tenant_id,principal.id)=(receipt.tenant_id,receipt.target_id)
               AND principal.principal_type='USER'
               AND principal.resource_version>=(receipt.target_boundary_evidence->>'userResourceVersion')::bigint)
+      WHEN receipt.actor_boundary_evidence->>'state'='BOUND'
+        AND receipt.target_boundary_evidence->>'state'='GROUP_BOUND' THEN
+          receipt.authority_scope='TENANT' AND receipt.target_kind='GROUP'
+          AND receipt.actor_boundary_evidence=decision.boundary_evidence
+          AND receipt.target_boundary_evidence->>'ceilingPolicyId'=receipt.actor_boundary_evidence#>>'{version,policyId}'
+          AND iam.recorded_policy_version_matches(receipt.actor_boundary_evidence)
+          AND (attachment.delegation_ceiling_policy_id=receipt.target_boundary_evidence->>'ceilingPolicyId'
+            OR (receipt.operation='REVOKE' AND attachment.delegation_ceiling_policy_id IS NULL
+              AND EXISTS(SELECT 1 FROM iam.policy_attachment_changes creation
+                WHERE creation.tenant_id=receipt.tenant_id AND creation.attachment_id=receipt.attachment_id
+                  AND creation.operation='CREATE' AND creation.actor_boundary_evidence->>'state'='ROOT'
+                  AND creation.target_boundary_evidence->>'state'='ROOT')))
+          AND EXISTS(SELECT 1 FROM iam.groups target_group
+            WHERE (target_group.tenant_id,target_group.id)=(receipt.tenant_id,receipt.target_id)
+              AND target_group.created_at<=receipt.completed_at)
       ELSE false END;
     IF attachment.id IS NULL OR decision.id IS NULL OR event IS NULL
       OR attachment.target_kind IS DISTINCT FROM receipt.target_kind

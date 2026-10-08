@@ -1,6 +1,6 @@
 SET LOCAL ROLE matrix_iam_owner;
 
--- Schema 71 keeps one signed AccessKey request the durable nonce owner and
+-- Schema 72 keeps one signed AccessKey request the durable nonce owner and
 -- seals direct-USER policy attachment delegation evidence while
 -- binding that proof into each current attachment Audit fact.
 -- The actual tables/functions are evolved in the access-key owner so clean
@@ -18,7 +18,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $functio
 DECLARE predecessor record;
 BEGIN
     SELECT * INTO predecessor FROM iam.readiness_v66();
-    RETURN QUERY SELECT predecessor.ready AND iam.access_key_contract_ready(),71::bigint,predecessor.checked_at;
+    RETURN QUERY SELECT predecessor.ready AND iam.access_key_contract_ready(),72::bigint,predecessor.checked_at;
 END $function$;
 REVOKE ALL ON FUNCTION iam.readiness() FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,
   matrix_iam_backup_custody,matrix_iam_notification_worker,matrix_iam_authentication_recovery,matrix_iam_access_analysis_worker;

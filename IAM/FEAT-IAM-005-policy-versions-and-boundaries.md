@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；安全委派的封存上限、受控对象闭包与事务证据设计已冻结。CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`，本地契约、PG18、并发、自然会话过期、独立进程及滚动前驱门禁已通过，其独立CI仍在运行。直接 USER 策略附件的同边界创建/撤销、不可变完成证据及 Audit 事件级证据摘要已进入当前候选并通过本地 IAM/Audit 真库与滚动前驱门禁；Group、Policy发布及Role的完整委派闭包、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 附件的同边界证据已固定，当前候选又完成 Group 附件对现有/未来成员的封存上限闭包并通过本地 PostgreSQL 18 与滚动前驱门禁；Policy 发布/改版的非 root 闭包、Role 闭包、当前候选独立 CI、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -226,7 +226,7 @@ LANG-08 的“不能扩大自身许可”精确定义为：受委派管理员及
 | --- | --- |
 | 创建 USER | 请求必须带精确 boundary policyId 与 policyResourceVersion，且与管理者上限相同；USER、初始凭据、边界关系、User 修订、单一命令结果和成功事实同事务提交。缺失、不同上限或先创建后补边界均拒绝。原 Root 可显式创建无普通边界的 USER。 |
 | 停复用、重置密码、删除 USER | 目标不能是原 Root、平台绑定身份或跨 Account USER；非 root 只能管理当前仍绑定同一委派上限的 USER。等待锁期间任一边界、会话、凭据或身份状态变化都要重新检查。 |
-| 创建/修改 Group membership | 若 Group 存在由非 root 创建的当前策略附件，所有当前成员和新成员必须使用附件封存的同一委派上限；不同上限、无边界、Root 或服务身份拒绝。移除成员不能清除附件的上限证明。 |
+| 创建/修改 Group membership | 若 Group 存在由非 root 创建的当前策略附件，所有当前成员和新成员必须使用附件封存的同一委派上限；不同上限、无边界、Root、平台绑定 USER 或服务身份拒绝。移除成员不能清除附件的上限证明；成员仍在该 Group 时，其边界不得移除或替换成另一 Policy。 |
 | 创建/管理 Role | 当前纵向片继续保持 Root-only。以后开放时，创建必须原子设置与管理者相同的 Role boundary，且 trust、附件、SessionPolicy 与原始身份仍取交集；不能先创建可承担的无边界 Role。 |
 
 创建 USER 的 boundary 字段是现有 `UserPermissionBoundary` 关系的原子输入，不是第二个边界对象。产品尚未正式发布，本次直接替换旧的“非 root 可先创建无边界 USER”请求形状，不保留可绕过的兼容入口。现有 Root 路径通过显式空值表达无普通边界，不能依赖字段缺失产生两种含义。
@@ -239,11 +239,11 @@ LANG-08 的“不能扩大自身许可”精确定义为：受委派管理员及
 - 对管理者本人或包含管理者的 Group 做附件变更，可以在 Root 已封存的上限内改变实际权限，但不能越过上限。这是权限边界委派的明确语义；若 Root 只希望委派作者职责，应不授予附件动作，而不是依赖隐藏的 self 特例。
 - PolicyVersion 的语义、条件、Deny、资源通配和默认指针不做通用包含关系计算。委派安全只依赖不可由管理者改变的上限交集、精确对象闭包和数据库关系证明。
 
-**内部证据而非新 permit。** 每个非 root 成功命令在现有命令完成记录中封存 `actorBoundary` 和必要的 `targetBoundary`：Policy ID、当前 versionId/contentDigest、边界关系修订、主体修订及受控 target kind/ID。Group 附件另保存同一上限 Policy ID，供以后 membership 写入锁内检查。该证据不进入普通请求，不返回可复用授权令牌，也不复制 Policy 文档；成功 Audit 事实的 content digest 绑定请求与精确委派证据。Root 命令使用封闭的 `ROOT` 证据状态，不能伪造成某个普通边界。
+**内部证据而非新 permit。** 每个非 root 成功命令在现有命令完成记录中封存 `actorBoundary` 和必要的 `targetBoundary`：Policy ID、当前 versionId/contentDigest、边界关系修订、主体修订及受控 target kind/ID。Group 附件另保存同一上限 Policy ID，完成记录使用 `GROUP_BOUND` 封存成员数量及稳定成员摘要，供以后 membership 与边界写入锁内检查。该证据不进入普通请求，不返回可复用授权令牌，也不复制 Policy 文档或成员清单；成功 Audit 事实的 content digest 绑定请求与精确委派证据。Root 命令使用封闭的 `ROOT` 证据状态，不能伪造成某个普通边界。
 
 等值命令重放只返回原已提交结果，不重新产生效果；原上限随后变更、主体停用或权限撤销不抹去历史事实。没有完成记录的新请求必须按当前上限重新授权。响应丢失、事务结果不确定或数据库证据损坏时失败关闭，不能重新选择另一个 boundary 或降级成 Root 路径。
 
-**事务顺序。** 所有相关写入采用同一顺序：Account → actor/目标 USER（稳定 ID 排序）→ actor 当前 Session/credential generation → User/Role boundary 关系 → Group/Role 与 membership（稳定 ID 排序）→ 涉及的 boundary Policy（稳定 ID 排序）→ 被修改 Policy/default pointer/attachment → completion/outbox。Root 修改或移除边界、非 root 创建 USER/附件、Group membership、Policy 默认切换及密码重置共用这套顺序。并发结果只能是旧上限下的完整提交或边界变更后的明确拒绝，不能出现已改凭据但无边界、已有关联但无委派证明、或事实与状态分裂。
+**事务顺序。** 所有相关写入采用同一相容顺序：Account → actor/目标/成员 USER（同类按稳定 ID）→ actor 当前 Session/credential generation → User/Role boundary 关系 → Group/Role 与 membership（稳定 ID）→ 涉及的 boundary Policy（稳定 ID）→ 被修改 Policy/default pointer/attachment → completion/outbox。Group 的数据库内部授权代际在 membership 或附件变更时单调推进，迫使较早 SERIALIZABLE 快照重试后重新读取闭包；它不是客户端可写的版本。Root 修改或移除边界、非 root 创建 USER/附件、Group membership、Policy 默认切换及密码重置共用相容锁序。并发结果只能是旧上限下的完整提交或边界变更后的明确拒绝，不能出现已改凭据但无边界、已有关联但无委派证明、不同上限成员进入已封存 Group，或事实与状态分裂。
 
 **必须通过的 LANG-08 门禁。** 在现有 API/authority/IAM PostgreSQL/Audit proof/独立进程 owner 中扩展，不新增平行测试框架：
 
@@ -318,15 +318,17 @@ Allow/Deny/边界交集表、条件缺失/类型/大小攻击、跨账号资源�
 
 后继纵向片把 status、password reset 和 delete 统一收进受限存储的同一管理屏障：请求必须来自当前有效直接 USER Session，普通管理员及目标 USER 必须仍绑定准确相同的 CUSTOMER/TENANT ceiling Policy/default version/digest/编译证据；Root 保留原有管理路径。无边界、不同或 SYSTEM ceiling、原 Root、平台绑定、跨 Account、自身目标、陈旧修订和已撤销 Session 均失败关闭。密码哈希仍在事务外计算，但准备和最终提交各自重新验证同一 bearer、当前决定与上限；status、reset、delete、边界及平台附件写入使用稳定 USER 锁序。删除只终结目标凭据与当前边界，不改变账号资源、工作负载或历史关系/事实。
 
-本任务独立 PG18 的同边界管理聚焦 race 39.38s、完整策略存储 315.98s、IAM HTTP 115.77s、真实五分钟自然 idle 383.26s（package 386.855s）及双 IAM/Audit/PaaS 进程 247.84s均通过。门禁覆盖同边界创建→重置→停复用→删除、临时会话撤销、三条准确成功事实、错误 ceiling 无部分状态、reset 与 Root 边界移除的实际锁等待，以及安全设置夹具先封存边界再签发一次性证明；主体修订后的旧证明仍返回401，未为修复测试而放宽。修正后的完整安全设置 108.67s、StepUp 405.02s、设置竞争 102.56s及放宽窗口 118.05s 亦在四个新数据库串行通过：租户创建者以准确同边界的新 Session 工作，平台操作员只负责平台附件，安全设置提交终止的旧 Session 不被测试复活。真实 SMTP 子场景未配置并明确跳过，不计为邮件交付证据。这组管理路径固定于`a146626f`的 IAM69/Audit35/PaaS3、`contractRevision=17`，现在是后继 IAM70 直接附件证据实现的前驱；其独立 CI 仍在运行，不能提前记为通过。固定 `20f1507d94b61864fc32215fb5096f049cc24408` 已进一步形成当前 IAM71 的唯一滚动前驱；当前附件事件摘要形状使用下述 IAM71/Audit36/PaaS3、`contractRevision=19`，仍需本候选自己的独立 CI 和相同完整 profile 签名发布，因此本地证据不构成整个 LANG-08、跨 profile 安装兼容或 LIVE UI 验收。
+本任务独立 PG18 的同边界管理聚焦 race 39.38s、完整策略存储 315.98s、IAM HTTP 115.77s、真实五分钟自然 idle 383.26s（package 386.855s）及双 IAM/Audit/PaaS 进程 247.84s均通过。门禁覆盖同边界创建→重置→停复用→删除、临时会话撤销、三条准确成功事实、错误 ceiling 无部分状态、reset 与 Root 边界移除的实际锁等待，以及安全设置夹具先封存边界再签发一次性证明；主体修订后的旧证明仍返回401，未为修复测试而放宽。修正后的完整安全设置 108.67s、StepUp 405.02s、设置竞争 102.56s及放宽窗口 118.05s 亦在四个新数据库串行通过：租户创建者以准确同边界的新 Session 工作，平台操作员只负责平台附件，安全设置提交终止的旧 Session 不被测试复活。真实 SMTP 子场景未配置并明确跳过，不计为邮件交付证据。这组管理路径固定于`a146626f`的 IAM69/Audit35/PaaS3、`contractRevision=17`，后继直接附件证据又沿固定 `20f1507d94b61864fc32215fb5096f049cc24408` 前移。它们是当前 Group 闭包的历史回滚点，不替代 011 所记录的唯一滚动前驱、当前完整 Profile、独立 CI 或相同完整 profile 签名发布。
 
-直接 USER 策略附件的委派写入复用同一封存上限，不增加第二套 permit：Root 成功命令保存封闭 `ROOT` actor/target 状态；非 root 只接受同 Account、非 Root、无平台附件且与 actor 精确引用同一 CUSTOMER/TENANT boundary 默认版本、摘要、编译证据和关系修订的直接 USER。无边界、不同上限、SYSTEM 上限、平台身份、跨 Account、Group 或 Role 目标均在受限数据库事务内拒绝。创建和撤销按主体、边界、Policy、attachment 的稳定锁序重新验证；Root 并发移除上限必须等待在途委派命令，移除提交后的新命令失败关闭。当前仍未开放 Group/Role 委派，不以直接 USER 的证明推断集合闭包已经完成。
+策略附件委派复用同一封存上限，不增加第二套 permit：Root 成功命令保存封闭 `ROOT` actor/target 状态；非 root 的直接 USER 目标只接受同 Account、非 Root、无平台附件且与 actor 精确引用同一 CUSTOMER/TENANT boundary 默认版本、摘要、编译证据和关系修订的 USER。非 root 的 GROUP 目标必须锁内证明每个活跃成员都是同 Account、非 Root、无平台附件并引用同一 boundary；空组同样把 actor ceiling 封存在附件上，后续成员写入必须匹配。无边界、不同上限、SYSTEM 上限、平台身份、跨 Account 或 Role 目标均拒绝。创建和撤销按主体、边界、Group/membership、Policy、attachment 的相容锁序重新验证；Root 并发移除上限或成员边界变更必须等待在途委派命令，先提交的边界变更会让后续附件/入组失败关闭。Role 委派仍未开放。
 
-完成记录追加不可变 `actorBoundaryEvidence` 与 `targetBoundaryEvidence`，当前命令只能写 `ROOT`、明确不适用或精确 `BOUND` 形状。当前四类附件成功事实再携带 `authorityEvidenceDigest`：IAM 在 actor、target、Policy 与边界均持锁时，以原请求 commitment 和完整委派证据生成域分离摘要；Audit canonical/content digest 绑定该字段，但不接受它作为 permit，也不暴露 Policy 正文或边界字段。字段只允许用于 `iam.policy-attachment.created/revoked` 与 `iam.platform-policy-attachment.created/revoked`，其他 action 携带时失败关闭。
+完成记录追加不可变 `actorBoundaryEvidence` 与 `targetBoundaryEvidence`，当前命令只能写 `ROOT`、明确不适用、精确 `BOUND` 或仅用于 GROUP 的 `GROUP_BOUND` 形状。`GROUP_BOUND` 包含 ceiling Policy ID、成员数量及确定性成员摘要，不包含可复用成员列表。当前四类附件成功事实再携带 `authorityEvidenceDigest`：IAM 在 actor、target、Policy、Group/membership 与边界均持锁时，以原请求 commitment 和完整委派证据生成域分离摘要；Audit canonical/content digest 绑定该字段，但不接受它作为 permit，也不暴露 Policy 正文或边界字段。字段只允许用于 `iam.policy-attachment.created/revoked` 与 `iam.platform-policy-attachment.created/revoked`，其他 action 携带时失败关闭。
 
 固定 `20f1507d94b61864fc32215fb5096f049cc24408` 的 IAM70 已保存准确 receipt 边界证据，但其已提交 Audit 事实早于事件级摘要。IAM70→IAM71 的实际 predecessor executable/migrator、双迁移、等值 bootstrap 和重启门禁 154.13s 通过：原 receipt 证据逐字节保留，新增摘要列为 `NULL`，旧事件继续省略字段，未根据当前状态倒签；升级后的新附件写入则立即以当前函数重算并绑定事件摘要。当前 IAM71 空库聚焦 race 20.43s 证明 `ROOT`、`BOUND`、平台直接 USER 的 `NOT_APPLICABLE` 三种写入均满足 receipt 重算和事件匹配，篡改失败关闭；完整策略存储 race 289.15s 进一步覆盖既有语言、Profile、组继承、边界、策略版本、凭据竞争、平台保护、RLS/不可变证据及 schema/bootstrap 重放。Audit36 HTTP 真库子流程 1.48s 证明带摘要的新事实进入正确链、旧附件事实无字段仍按原 canonical 验证、其他 action 伪造字段拒绝。更早没有准确边界证据的保留记录继续为 `PREDECESSOR_UNPROVEN`，不能取得当前摘要或新授权。
 
-该事件级闭环完成了直接 USER 附件在 LANG-08 中的 Audit content-digest 绑定；它不证明 Group、Policy 发布/改版或 Role 的完整委派闭包，也不替代当前 Profile 的签名 A/B 生命周期、独立 CI 或 LIVE UI 验收。
+该事件级闭环先完成了直接 USER 附件在 LANG-08 中的 Audit content-digest 绑定。当前 Group 增量又在本任务专属 PostgreSQL 18 新库通过 `TestIAMPolicyAttachmentChangePostgres` race 26.960s、完整策略存储 race 330.80s、IAM HTTP race 125.21s、Audit HTTP race 1.58s 和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 279.34s：空组封存、同 ceiling 成员、无边界/不同边界/Root/平台绑定攻击、成员边界移除/替换阻断、Root 创建附件的受限撤销，以及 attach/add-member 的确定性并发均无部分状态或隐藏 deadlock；创建与撤销的 `GROUP_BOUND` 证据和事件摘要可重算，独立进程继续保持准确链、撤权和重启/丢包完成语义。实际固定 IAM71 程序到 IAM72 的滚动前驱门禁最新 148.99s 保留原附件证据与事件摘要，并让新增 ceiling 对历史行保持 `NULL`。该候选尚无独立 CI；它也不证明 Policy 发布/改版或 Role 的完整委派闭包，不替代当前 Profile 的签名 A/B 生命周期或 LIVE UI 验收。
+
+同一最终工作树通过全仓无缓存 race（含 architecture）、全仓 vet、模块校验、API 重新生成零差异及 Linux amd64/CGO 关闭的全仓构建；无外部 DSN 的默认 SKIP 不计真实数据库或进程证据。
 
 ### User 边界后端证据
 

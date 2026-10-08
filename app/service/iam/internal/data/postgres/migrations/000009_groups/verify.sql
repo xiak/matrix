@@ -19,6 +19,30 @@ BEGIN
             RAISE EXCEPTION 'IAM group ownership or forced isolation is invalid';
         END IF;
     END LOOP;
+    IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute AS attribute
+        WHERE attribute.attrelid='iam.groups'::regclass AND attribute.attname='authorization_generation'
+          AND attribute.atttypid='bigint'::regtype AND attribute.attnotnull AND NOT attribute.attisdropped)
+       OR EXISTS(SELECT 1 FROM pg_catalog.pg_attrdef AS default_value
+        JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid=default_value.adrelid
+          AND attribute.attnum=default_value.adnum
+        WHERE default_value.adrelid='iam.groups'::regclass AND attribute.attname='authorization_generation')
+       OR NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint AS constraint_value
+        WHERE constraint_value.conrelid='iam.groups'::regclass AND constraint_value.conname='groups_values_valid'
+          AND constraint_value.contype='c' AND constraint_value.convalidated) THEN
+        RAISE EXCEPTION 'IAM group authorization generation contract is invalid';
+    END IF;
+    function_name := 'iam.bump_group_authorization_generation(text,text)';
+    IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS entry
+        WHERE entry.oid=to_regprocedure(function_name) AND entry.proowner='matrix_iam_owner'::regrole
+          AND NOT entry.prosecdef AND NOT entry.proretset AND entry.provolatile='v'
+          AND entry.prorettype='bigint'::regtype
+          AND 'search_path=pg_catalog, pg_temp'=ANY(entry.proconfig))
+       OR has_function_privilege('matrix_iam_api',function_name,'EXECUTE')
+       OR has_function_privilege('matrix_iam_worker',function_name,'EXECUTE')
+       OR has_function_privilege('matrix_iam_credential_recovery',function_name,'EXECUTE')
+       OR has_function_privilege('public',function_name,'EXECUTE') THEN
+        RAISE EXCEPTION 'IAM group authorization generation mutator is exposed or incompatible';
+    END IF;
     FOR protection IN SELECT * FROM (VALUES
         ('groups','groups_guard_change'),('groups','groups_cannot_delete'),('groups','groups_cannot_truncate'),
         ('group_memberships','group_memberships_guard_change'),('group_memberships','group_memberships_cannot_delete'),

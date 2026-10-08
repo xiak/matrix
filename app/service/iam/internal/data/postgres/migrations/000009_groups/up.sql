@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS iam.groups (
     name text COLLATE "C" NOT NULL,
     description text NOT NULL DEFAULT '',
     resource_version bigint NOT NULL,
+    authorization_generation bigint NOT NULL,
     created_at timestamptz(6) NOT NULL,
     updated_at timestamptz(6) NOT NULL,
     deleted_at timestamptz(6),
@@ -17,12 +18,29 @@ CREATE TABLE IF NOT EXISTS iam.groups (
         AND length(name) BETWEEN 1 AND 64 AND btrim(name)=name
         AND length(description)<=512 AND btrim(description)=description
         AND resource_version BETWEEN 1 AND 9007199254740991
+        AND authorization_generation BETWEEN 1 AND 9007199254740991
         AND updated_at>=created_at
         AND ((deleted_at IS NULL AND deleted_memberships_count IS NULL AND revoked_attachments_count IS NULL)
           OR (deleted_at IS NOT NULL AND deleted_memberships_count IS NOT NULL AND revoked_attachments_count IS NOT NULL
               AND deleted_at=updated_at AND deleted_at>=created_at AND resource_version>=2
               AND deleted_memberships_count>=0 AND revoked_attachments_count>=0))
     )
+);
+
+ALTER TABLE iam.groups ADD COLUMN IF NOT EXISTS authorization_generation bigint NOT NULL DEFAULT 1;
+ALTER TABLE iam.groups ALTER COLUMN authorization_generation DROP DEFAULT;
+ALTER TABLE iam.groups DROP CONSTRAINT IF EXISTS groups_values_valid;
+ALTER TABLE iam.groups ADD CONSTRAINT groups_values_valid CHECK (
+    id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND length(name) BETWEEN 1 AND 64 AND btrim(name)=name
+    AND length(description)<=512 AND btrim(description)=description
+    AND resource_version BETWEEN 1 AND 9007199254740991
+    AND authorization_generation BETWEEN 1 AND 9007199254740991
+    AND updated_at>=created_at
+    AND ((deleted_at IS NULL AND deleted_memberships_count IS NULL AND revoked_attachments_count IS NULL)
+      OR (deleted_at IS NOT NULL AND deleted_memberships_count IS NOT NULL AND revoked_attachments_count IS NOT NULL
+          AND deleted_at=updated_at AND deleted_at>=created_at AND resource_version>=2
+          AND deleted_memberships_count>=0 AND revoked_attachments_count>=0))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS groups_active_name_uq ON iam.groups(tenant_id,name) WHERE deleted_at IS NULL;
@@ -63,8 +81,17 @@ CREATE INDEX IF NOT EXISTS group_memberships_active_user_idx
 CREATE OR REPLACE FUNCTION iam.guard_group_change()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
+    IF current_setting('matrix.iam_group_authorization_change',true)='trusted' THEN
+        IF to_jsonb(NEW)-'authorization_generation' IS DISTINCT FROM to_jsonb(OLD)-'authorization_generation'
+          OR NEW.authorization_generation<>OLD.authorization_generation+1
+          OR NEW.authorization_generation>9007199254740991 THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM group authorization transition is invalid';
+        END IF;
+        RETURN NEW;
+    END IF;
     IF ROW(NEW.tenant_id,NEW.id,NEW.created_at) IS DISTINCT FROM ROW(OLD.tenant_id,OLD.id,OLD.created_at)
        OR OLD.deleted_at IS NOT NULL OR NEW.resource_version<>OLD.resource_version+1
+       OR NEW.authorization_generation<>OLD.authorization_generation
        OR NEW.updated_at<>transaction_timestamp() THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM group transition is invalid';
     END IF;
@@ -78,6 +105,27 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM group deletion transition is invalid';
     END IF;
     RETURN NEW;
+END $function$;
+
+-- Every membership or policy-attachment transition writes this private
+-- generation while holding the Group row. Concurrent writers that began from
+-- an older Serializable snapshot therefore retry before they can admit a
+-- member or attachment against stale closure evidence.
+CREATE OR REPLACE FUNCTION iam.bump_group_authorization_generation(tenant text,group_id text)
+RETURNS bigint LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE previous text; next_generation bigint;
+BEGIN
+    previous:=current_setting('matrix.iam_group_authorization_change',true);
+    PERFORM set_config('matrix.iam_group_authorization_change','trusted',true);
+    UPDATE iam.groups AS target SET authorization_generation=target.authorization_generation+1
+      WHERE target.tenant_id=tenant AND target.id=group_id AND target.deleted_at IS NULL
+        AND target.authorization_generation<9007199254740991
+      RETURNING target.authorization_generation INTO next_generation;
+    PERFORM set_config('matrix.iam_group_authorization_change',COALESCE(previous,''),true);
+    IF next_generation IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='group authorization generation is unavailable';
+    END IF;
+    RETURN next_generation;
 END $function$;
 
 CREATE OR REPLACE FUNCTION iam.guard_group_membership_change()
@@ -241,8 +289,8 @@ BEGIN
         END IF;
         RETURN iam.group_snapshot(tenant,group_id);
     END IF;
-    INSERT INTO iam.groups(tenant_id,id,name,description,resource_version,created_at,updated_at)
-    VALUES(tenant,group_id,group_name,group_description,1,effective_now,effective_now);
+    INSERT INTO iam.groups(tenant_id,id,name,description,resource_version,authorization_generation,created_at,updated_at)
+    VALUES(tenant,group_id,group_name,group_description,1,1,effective_now,effective_now);
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
     VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
     RETURN iam.group_snapshot(tenant,group_id);
@@ -348,6 +396,7 @@ END $function$;
 CREATE OR REPLACE FUNCTION iam.create_group_membership(tenant text,actor text,decision text,membership_id text,group_id text,user_id text,event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE stored iam.group_memberships%ROWTYPE; effective_now timestamptz(6):=transaction_timestamp();
+    ceiling_policy_id text; ceiling_count bigint; target_evidence jsonb;
 BEGIN
     IF actor=user_id OR COALESCE(membership_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='group membership is forbidden';
@@ -359,8 +408,38 @@ BEGIN
        AND NOT EXISTS(SELECT 1 FROM iam.account_roots AS root WHERE root.account_id=tenant AND root.principal_id=principal.id)
      FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='membership user is unavailable'; END IF;
+    -- Boundary writers hold the same USER row first. Lock the current
+    -- relation before the Group so every closure writer uses one order.
+    PERFORM boundary.id FROM iam.user_permission_boundaries AS boundary
+      WHERE boundary.tenant_id=tenant AND boundary.user_id=create_group_membership.user_id AND boundary.revoked_at IS NULL
+      FOR NO KEY UPDATE;
     PERFORM 1 FROM iam.groups WHERE tenant_id=tenant AND id=group_id AND deleted_at IS NULL FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='membership group is unavailable'; END IF;
+    PERFORM attachment.id FROM iam.policy_attachments AS attachment
+      WHERE attachment.tenant_id=tenant AND attachment.target_kind='GROUP'
+        AND attachment.target_id=group_id AND attachment.revoked_at IS NULL
+      ORDER BY attachment.id FOR NO KEY UPDATE;
+    SELECT min(attachment.delegation_ceiling_policy_id),
+           count(DISTINCT attachment.delegation_ceiling_policy_id)
+      INTO ceiling_policy_id,ceiling_count
+      FROM iam.policy_attachments AS attachment
+      WHERE attachment.tenant_id=tenant AND attachment.target_kind='GROUP'
+        AND attachment.target_id=group_id AND attachment.revoked_at IS NULL
+        AND attachment.delegation_ceiling_policy_id IS NOT NULL;
+    IF ceiling_count>1 THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='group delegation ceilings conflict';
+    END IF;
+    IF ceiling_policy_id IS NOT NULL THEN
+        target_evidence:=iam.current_user_boundary_evidence(tenant,user_id);
+        IF target_evidence->>'state' IS DISTINCT FROM 'BOUND'
+          OR target_evidence#>>'{version,policyId}' IS DISTINCT FROM ceiling_policy_id
+          OR EXISTS(SELECT 1 FROM iam.policy_attachments AS attachment
+              WHERE attachment.tenant_id=tenant AND attachment.target_kind='USER'
+                AND attachment.target_id=user_id AND attachment.authority_scope='INSTALLATION'
+                AND attachment.revoked_at IS NULL) THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='membership delegation ceiling is unavailable';
+        END IF;
+    END IF;
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group-membership.create','GROUP',group_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.group-membership.created','GROUP_MEMBERSHIP',membership_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
@@ -379,6 +458,7 @@ BEGIN
     IF (SELECT count(*) FROM iam.group_memberships AS m WHERE m.tenant_id=tenant AND m.user_id=create_group_membership.user_id AND m.removed_at IS NULL)>=100 THEN
         RAISE EXCEPTION USING ERRCODE='54000', MESSAGE='user group membership budget exceeded';
     END IF;
+    PERFORM iam.bump_group_authorization_generation(tenant,group_id);
     INSERT INTO iam.group_memberships(tenant_id,id,group_id,user_id,created_by,resource_version,created_at,updated_at)
     VALUES(tenant,membership_id,group_id,user_id,actor,1,effective_now,effective_now);
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
@@ -416,6 +496,7 @@ BEGIN
     IF stored.resource_version<>expected_version OR stored.resource_version=9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='membership revision conflicts';
     END IF;
+    PERFORM iam.bump_group_authorization_generation(tenant,group_id);
     UPDATE iam.group_memberships SET resource_version=resource_version+1,updated_at=effective_now,
         removed_at=effective_now,removed_by=actor WHERE tenant_id=tenant AND id=membership_id;
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
@@ -426,6 +507,7 @@ END $function$;
 REVOKE ALL ON TABLE iam.groups,iam.group_memberships FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 REVOKE ALL ON FUNCTION iam.assert_group_actor(text,text),iam.assert_group_intent(text,text,jsonb),iam.group_snapshot(text,text),iam.group_access_snapshot(text,text),
     iam.group_membership_snapshot(text,text),iam.guard_group_change(),iam.guard_group_membership_change(),
+    iam.bump_group_authorization_generation(text,text),
     iam.list_groups(text,text,text,text),iam.read_group(text,text,text,text),
     iam.create_group(text,text,text,text,text,text,jsonb),iam.update_group(text,text,text,text,text,text,bigint,jsonb),
     iam.delete_group(text,text,text,text,bigint,jsonb),iam.list_group_memberships(text,text,text,text,text),

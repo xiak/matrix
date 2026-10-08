@@ -1,6 +1,6 @@
 # FEAT-IAM-004：用户组与授权委派
 
-- 状态：后端、前端接口适配及签名游标已实现；组 UI 闭环与最终发布集成未完成，整体未验收。固定门禁证据见本文件末尾。
+- 状态：Group 后端、前端接口适配及签名游标已实现；当前候选进一步完成了非 root 管理员在同一封存权限边界内关联 Group、约束现有及未来成员并保存事件级委派证据的后端闭环。本地 PostgreSQL 18 及滚动前驱门禁已通过；独立 CI、组 UI 闭环与最终签名发布集成未完成，整体未验收。固定门禁证据见本文件末尾。
 - 依赖：002、003。
 - Owner：IAM Group、GroupMembership、组策略附件和组继承证据。
 
@@ -16,6 +16,7 @@
 | IAM-GRP-06 | 移除成员、撤销组附件或删除组提交后开始的下一次受保护请求必须失权；不声称取消此前已接受的 Operation、长连接或后台任务 |
 | IAM-GRP-07 | Group 无登录凭据、不成为 Subject、不拥有应用、数据库、配额、Operation 或 Audit；User 删除前由 003 统一撤销其成员关系 |
 | IAM-GRP-08 | 委派动作是封闭 Action/Resource 契约；UI 只消费 actor-relative capability，不能按组名、策略名、角色名或业务服务名推断权限 |
+| IAM-GRP-09 | 非 root 只能为全部活跃成员都受同一委派上限约束的 Group 创建或撤销 tenant Policy 附件；空组同样封存上限，后续成员必须匹配，成员边界不能在仍依赖该上限时被移除或替换 |
 
 公开产品中用户组、成员多对多和组策略继承的可观察事实由[访问管理来源分析](../doc/access-management/sources/tencent-cam-architecture-analysis.md#用户组)唯一维护。本 FEAT 只定义 Matrix 自研契约，不复制供应商 API 名称、配额或内部实现推测。
 
@@ -26,6 +27,8 @@
 `GroupMembership` 包含稳定 `id`、`accountId`、`groupId`、`userId`、`createdBy`、`resourceVersion`、创建/更新时间；终态回执必须同时带 `removedAt` 和 `removedBy`。同一 User/Group 同时最多一个活跃关系；移除是终态。重新加入产生新关系，旧关系及 Audit 不复活。列表只返回活跃关系。首片只支持单项命令；批量操作保留为后续同一对象的有界 API，不通过循环调用伪装原子批量。
 
 `PolicyGrantSource` 是当前授权快照中的来源联合：DIRECT 只绑定 User 的 PolicyAttachment；GROUP 还必须绑定当前 GroupMembership。它不是 permit，不能缓存或由调用方提交。`AuthorizationDecision` 保持现有公开形状；私有 `policy_evidence` 对 GROUP 来源增加 membership ID/version，Audit producer proof 仍验证事实发生时的不可变决定，而不是之后重新执行用户权限。
+
+Group 附件的公开 `PolicyAttachment` 形状不增加调用者可写的上限字段。数据库只在非 root 成功关联 Group 时封存内部 `delegation_ceiling_policy_id`；Root 创建的 Group 附件保持明确无该委派证明。该值不是新 Policy、permit、请求 selector 或通用属性，不能由客户端提交，也不能在 Root 历史附件上迁移补造。Group 另有数据库内部单调 `authorization_generation`，仅用于让成员与附件的并发写入在 SERIALIZABLE 重试后重新读取完整闭包；它不是公开 `resourceVersion`，不能被客户端推进。
 
 首片公开路由如下；Account 均由当前有效 session 推导，不接受 header、query、body 或 cursor 改写：
 
@@ -73,13 +76,17 @@ IAM 调用方目录新增以下精确动作，不以字符串前缀或任意 act
 
 成功事实为 `iam.group.created|updated|deleted`、`iam.group-membership.created|removed`，target 分别是 GROUP 或 GROUP_MEMBERSHIP。组策略关联继续使用既有不可变 `iam.policy-attachment.created|revoked` 事实，具体 USER/GROUP 管理动作由关联时的 IAM decision 证明；不能为同一附件再造平行 Audit action。删除 Group 在一个事务中 tombstone Group，并终态移除活跃 membership、撤销活跃 tenant policy attachment；单一 group.deleted 事实是该封闭级联的权威原因，删除回执只返回非敏感计数。
 
+非 root 的 Group 附件完成证据使用封闭 `GROUP_BOUND` 目标状态，包含准确 ceiling Policy ID、发生时成员数量和按稳定关系/USER/边界证据计算的成员摘要。创建与撤销事实的 `authorityEvidenceDigest` 绑定原命令承诺和这份证据；它只证明发生时的封闭事务，不公开成员明细、不成为后续写入许可，也不替代每次成员变更对当前上限的重新验证。
+
 ## 持久化、求值与事务
 
 `groups`、`group_memberships` 是 Account RLS 下的独立表。现有 `policy_attachments` 的内部主体列破坏性改名为通用 `target_id`，target kind 决定它引用 User、ServiceIdentity、Group 或后续 Role；不能增加并行 group attachment 表。实际旧 IAM 数据迁移必须保留所有直接附件 ID、修订、scope、installation、撤销时间和历史决定 bytes，未知/冲突关系失败关闭。
 
 User session 的权威策略快照以有界 UNION 读取直接附件和当前成员关系可达的组附件。GROUP 来源必须同时满足：Account/User/Group 活跃且未删除、membership 未移除、attachment 未撤销、Policy ACTIVE、默认版本和 digest 一致。任何关系损坏、来源超过预算、membership 证据缺失或同 ID 冲突都拒绝整个决定；不能截断后面的 Deny。CurrentIdentity 用 `policySources` 展示直接/继承来源，User/Group 管理详情只返回各自直接附件。
 
-写锁顺序固定为 Account → actor User → 按 ID 排序的 target User → Group → GroupMembership → Policy → PolicyAttachment。SERIALIZABLE 冲突重试必须重新认证和读取整个来源快照；未知提交结果不按普通冲突盲重试。创建 membership 拒绝 actor 把自己加入 Group，避免仅有成员管理动作时自助提权；平台 scope Policy 永不允许关联 Group。RootIdentity、已删除/停用 User、ServiceIdentity 和跨 Account User 在锁内再次拒绝。
+公开写入先稳定锁定 Account 与 actor User。非 root Group 附件路径随后按稳定 ID 锁定全部当前成员 USER 及其边界，再锁定 Group、当前 membership、Policy 与 attachment；membership 创建先锁定候选 USER/边界，再锁定 Group 及其活跃附件。两条路径都在变更前后推进 Group 的内部授权代际，使较早 SERIALIZABLE 快照必须重试并重新读取闭包。User 边界移除或替换也会锁定该 User 当前活跃 Group 关系及带封存上限的附件；若仍有匹配关系依赖原上限则拒绝，必须先移除 membership 或撤销对应 Group 附件。SERIALIZABLE 冲突重试必须重新认证和读取整个来源快照；未知提交结果不按普通冲突盲重试。
+
+创建 membership 继续拒绝 actor 把自己加入 Group，避免仅有成员管理动作时自助提权；平台 scope Policy 永不允许关联 Group。RootIdentity、已删除/停用 User、ServiceIdentity、带安装级附件的 USER、无边界 USER、不同边界 USER 和跨 Account User 在锁内再次拒绝。空组可由非 root 关联 tenant Policy，但该附件立即封存 actor 的 ceiling；以后加入的每个成员都必须精确匹配，而不是把“当时无成员”解释为无限上限。
 
 User 删除沿 003 的 User principal 锁后终态移除其所有活跃 membership，避免 tombstone 留下继承路径。Group 删除与成员/附件 grant/revoke 使用同一锁序；失败、CAS 冲突或并发撤权时 Group、membership、attachment、decision evidence 和 outbox 均无部分变化。删除 Group/User 不转移或删除租户资源和已接受 Operation。
 
@@ -89,7 +96,7 @@ User 删除沿 003 的 User principal 锁后终态移除其所有活跃 membersh
 
 真实 HTTP/PG18 至少创建两个 Account、同名 Group、每组多个 User：创建组→加成员→给组关联 PaaS tenant Policy→成员登录访问资源→移除成员后下一请求拒绝；直接附件仍可独立允许，组 Deny 必须压过直接 Allow。来源查询与保存决定分别证明 DIRECT/GROUP、准确 membership/attachment/version/digest，伪造、撤销或跨 Account 来源不能被 record/replay 接受。
 
-负向矩阵覆盖跨 Account Group/User/Policy/membership/attachment ID，RootIdentity/ServiceIdentity/Role/Group 入组，self-add，停用或删除 User，installation Policy，错误/旧/最大 resourceVersion，重复/变体 requestId，101 个活跃组、257 个有效附件及坏记录位于有效 Allow 之后。并发 add/remove、Group delete/add、attach/delete、actor grant revoke 必须以最终状态和事实数证明无双活、无部分写入、无已撤来源复活。
+负向矩阵覆盖跨 Account Group/User/Policy/membership/attachment ID，RootIdentity/ServiceIdentity/Role/Group 入组，self-add，停用或删除 User，installation Policy，错误/旧/最大 resourceVersion，重复/变体 requestId，101 个活跃组、257 个有效附件及坏记录位于有效 Allow 之后。委派矩阵还必须覆盖空组封存、准确同边界成员、无边界/不同边界/Root/平台绑定成员、成员边界移除或替换，以及 Root 创建但没有委派 ceiling 的 Group 附件。并发 add/remove、Group delete/add、attach/delete、attach/add-member、boundary/remove-member 与 actor grant revoke 必须以最终状态和事实数证明无双活、无部分写入、无已撤来源复活。
 
 当前 schema 的等值重放、带数据重启必须保持直接附件、历史 decision/Audit canonical bytes 和撤销状态。开发历史的升级起点按 [011 首版基线规则](./FEAT-IAM-011-acceptance.md#未发布阶段与首版基线) 选择，不要求本片从 schema 1 跑完整历史链；已做的固定旧 binary 实验是风险替换证据，不等于对全部开发版本承诺兼容。
 
@@ -106,8 +113,12 @@ User 删除沿 003 的 User principal 锁后终态移除其所有活跃 membersh
 - 源码和内嵌产物稳定后的全仓 Go race/vet、架构检查、模块校验、生成一致性及 Linux amd64 构建通过。
 - 前端 typecheck/lint/架构/20 组对比度、101 项测试通过；两次 2-worker 静态构建的 59 个内嵌文件一致。接口不解析游标、不与资源 ID 排序比较，拒绝原始 ID/换行/超长/重复 continuation；成员关系、目标 capability 和未知结果原意图边界继续保留。这是本地前端证据，不冒充独立前端 CI。
 
-当前开发服务与实际数据库/readiness 为 IAM9/Audit6/PaaS1；既有签名发布 profile 未改写，组合门禁明确不把该开发 tuple 当作已可发布 profile。实际 IAM8 固定 binary 的保留数据实验仅为本次内部列替换的可选诊断，不使全部未发布版本成为默认升级义务。
+当前 Group 委派增量在本任务专属 PostgreSQL 18 新库完成本地验证：`TestIAMPolicyAttachmentChangePostgres` race 26.960s，覆盖空组封存、同 ceiling 成员、无边界/不同边界/Root/平台绑定攻击、成员边界变更阻断、Root 创建附件的受限撤销、创建与撤销的 `GROUP_BOUND` 证据、无隐藏 deadlock 和确定性并发 attach/add-member；完整 `TestIAMPolicyAuthorityStoragePostgres` race 330.80s、`TestIAMHTTPPostgresVerticalSlice` race 125.21s、Audit HTTP race 1.58s 和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 279.34s 继续通过。固定 IAM71 程序产生真实保留数据后升级至当前 IAM72 的 `TestIAMRetainedPredecessorProcessUpgrade` 最新 148.99s 通过，既有附件证据及 Audit 摘要保持，新增内部 ceiling 对保留行明确为 `NULL`。这些是当前工作树的本地证据；独立 CI、签名 A/B 生命周期和 UX/UI 浏览器验收仍待固定提交后完成。
 
-本片交付组 HTTP/数据库/授权与签名分页闭环和前端 domain/wire/repository；未新增第二套组页面。组目录、详情、表单及真实多成员鼠标闭环由既定 UX/UI owner 消费固定提交后完成。最终安装 key 分发/签名发布组合及 011 容量/HA 门禁仍需实施验证，本 FEAT 不因此标为 Accepted。
+同一最终工作树通过全仓无缓存 `go test -race -p 2 ./...`（含 architecture）、`go vet -p 2 ./...`、模块校验、API 重新生成零差异及 Linux amd64/CGO 关闭的全仓构建；默认缺少外部 DSN 的 SKIP 不计真实运行证据。
+
+当前准确 readiness、完整开发 Profile 与唯一滚动前驱由 [011](./FEAT-IAM-011-acceptance.md#未发布阶段与首版基线) 维护；本 FEAT 不复制会继续移动的版本数字。既有签名发布 profile 不会因源码 schema 数字变化自动获得升级许可，组合门禁也不把本地 SQL 可迁移解释为可发布。
+
+本片交付组 HTTP/数据库/授权、同 ceiling 委派闭包、事件证据、签名分页和前端 domain/wire/repository；未新增第二套组页面。组目录、详情、表单及真实多成员鼠标闭环由既定 UX/UI owner 消费固定提交后完成。最终安装 key 分发/签名发布组合及 011 容量/HA 门禁仍需实施验证，本 FEAT 不因此标为 Accepted。
 
 替换前已推送回滚点为 `0bd6dd9dd8166fe31c67edb8cd49cd523606a401`，精确 [Verification 34805149946](https://github.com/xiak/matrix/actions/runs/34805149946) 三项 success。签名分页固定实现为 `8117c54c112c842106d82fe934e460a280862549`；GitHub API 核实精确 [Verification 34808378047](https://github.com/xiak/matrix/actions/runs/34808378047) 的 Go、authority-process、node-process 全部 completed/success。本轮自有 PG18 容器、网络和合成测试数据卷已清理，不需要保留运行现场才能续作；未操作其他任务环境。

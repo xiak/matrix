@@ -14267,6 +14267,11 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 	applyIAMSchema(t, ctx, database)
 	createIAMHTTPRole(t, ctx, database)
 	failures := &iamTransactionFailureTrace{}
+	t.Cleanup(func() {
+		if count := failures.deadlock.Load(); count != 0 {
+			t.Errorf("policy attachment change gate hid %d database deadlocks behind retry", count)
+		}
+	})
 	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, failures)
 	document := iamHTTPBootstrap(t)
 	initial, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
@@ -14428,9 +14433,18 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 				{SID: "direct-attachment-change", Effect: iamv1.PolicyAllow,
 					Actions:   []iamv1.Action{iamv1.ActionIAMPolicyAttachmentRevoke, iamv1.ActionIAMPolicyAttachmentChangeRead},
 					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicyAttachment, Match: iamv1.PolicyResourceAnyInAuthority}}},
-				{SID: "group-create-is-closed-until-membership-proof", Effect: iamv1.PolicyAllow,
-					Actions:   []iamv1.Action{iamv1.ActionIAMGroupPolicyAttachmentCreate},
+				{SID: "group-delegated-create", Effect: iamv1.PolicyAllow,
+					Actions: []iamv1.Action{
+						iamv1.ActionIAMGroupPolicyAttachmentCreate,
+						iamv1.ActionIAMGroupMembershipCreate,
+					},
 					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceGroup, Match: iamv1.PolicyResourceAnyInAuthority}}},
+				{SID: "group-delegated-revoke", Effect: iamv1.PolicyAllow,
+					Actions:   []iamv1.Action{iamv1.ActionIAMGroupPolicyAttachmentRevoke},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicyAttachment, Match: iamv1.PolicyResourceAnyInAuthority}}},
+				{SID: "group-delegated-member-remove", Effect: iamv1.PolicyAllow,
+					Actions:   []iamv1.Action{iamv1.ActionIAMGroupMembershipRemove},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceGroupMembership, Match: iamv1.PolicyResourceAnyInAuthority}}},
 			}}, RequestID: "attachment-change-delegation-ceiling",
 	}, http.StatusCreated, &delegationCeiling)
 	setBoundary := func(user iamv1.User, requestID string, policy iamv1.PolicyDetail) iamv1.UserPermissionBoundary {
@@ -14569,11 +14583,100 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 	var closedGroup iamv1.Group
 	call(http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{Name: "Closed delegated group", RequestID: "attachment-change-group"},
 		http.StatusCreated, &closedGroup)
+	// Root-created Group attachments remain unrestricted administrative state;
+	// only a delegated create seals the internal membership ceiling.
+	var rootGroupAttachment iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(closedGroup.ID)},
+		PolicyID: iamv1.SystemPolicyAuditReader, PolicyResourceVersion: 1, RequestID: "attachment-change-root-group-create",
+	}, http.StatusOK, &rootGroupAttachment)
+	var rootGroupUnsealed bool
+	if err := database.QueryRow(ctx, `SELECT delegation_ceiling_policy_id IS NULL
+		FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2`, delegated.AccountID, rootGroupAttachment.ID).
+		Scan(&rootGroupUnsealed); err != nil || !rootGroupUnsealed {
+		t.Fatal("Root-created Group attachment acquired a delegated ceiling", err)
+	}
+	delegatedGroupRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(closedGroup.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "attachment-change-group-target",
+	}
+	var delegatedGroupAttachment iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", delegatedBearer, delegatedGroupRequest, http.StatusOK, &delegatedGroupAttachment)
+	var emptyGroupProof bool
+	if err := database.QueryRow(ctx, `SELECT
+		attachment.delegation_ceiling_policy_id=$5
+		AND receipt.actor_boundary_evidence->>'state'='BOUND'
+		AND receipt.target_boundary_evidence->>'state'='GROUP_BOUND'
+		AND receipt.target_boundary_evidence->>'ceilingPolicyId'=$5
+		AND (receipt.target_boundary_evidence->>'memberCount')::bigint=0
+		AND receipt.target_boundary_evidence->>'membersDigest' ~ '^sha256:[0-9a-f]{64}$'
+		AND receipt.authority_evidence_digest=iam.policy_attachment_authority_evidence_digest(
+		  receipt.input_commitment,jsonb_build_object('actorBoundary',receipt.actor_boundary_evidence,
+		    'targetBoundary',receipt.target_boundary_evidence))
+		AND outbox.event_document->>'authorityEvidenceDigest'=receipt.authority_evidence_digest
+		FROM iam.policy_attachments attachment
+		JOIN iam.policy_attachment_changes receipt ON receipt.tenant_id=attachment.tenant_id
+		  AND receipt.attachment_id=attachment.id AND receipt.actor_principal_id=$3 AND receipt.request_id=$4
+		JOIN iam.audit_outbox outbox ON (outbox.tenant_id,outbox.event_id)=(receipt.tenant_id,receipt.event_id)
+		WHERE attachment.tenant_id=$1 AND attachment.id=$2`, delegated.AccountID, delegatedGroupAttachment.ID,
+		delegated.ID, delegatedGroupRequest.RequestID, delegationCeiling.Policy.ID).Scan(&emptyGroupProof); err != nil || !emptyGroupProof {
+		t.Fatal("empty delegated Group attachment lost its sealed ceiling/evidence", err)
+	}
+	var matchingMembership iamv1.GroupMembership
+	call(http.MethodPost, "/v1/groups/"+string(closedGroup.ID)+"/memberships", delegatedBearer,
+		iamv1.CreateGroupMembershipRequest{UserID: other.ID, RequestID: "attachment-change-group-member-create"},
+		http.StatusOK, &matchingMembership)
+	var protectedBoundary iamv1.UserPermissionBoundary
+	call(http.MethodGet, "/v1/users/"+string(other.ID)+"/permission-boundary", root, nil, http.StatusOK, &protectedBoundary)
+	call(http.MethodDelete, "/v1/users/"+string(other.ID)+"/permission-boundary", root,
+		iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: protectedBoundary.ResourceVersion,
+			RequestID: "attachment-change-group-boundary-remove-blocked"}, http.StatusForbidden, nil)
+	if state, _ := failures.lastSQLState.Load().(string); state != "42501" {
+		t.Fatalf("active delegated Group did not protect boundary removal: sqlstate=%q", state)
+	}
+	call(http.MethodPut, "/v1/users/"+string(other.ID)+"/permission-boundary", root,
+		iamv1.SetUserPermissionBoundaryRequest{PolicyID: systemPolicy.Policy.ID,
+			PolicyResourceVersion: systemPolicy.Policy.ResourceVersion, ResourceVersion: protectedBoundary.ResourceVersion,
+			RequestID: "attachment-change-group-boundary-replace-blocked"}, http.StatusForbidden, nil)
+	if state, _ := failures.lastSQLState.Load().(string); state != "42501" {
+		t.Fatalf("active delegated Group did not protect boundary replacement: sqlstate=%q", state)
+	}
+	call(http.MethodPost, "/v1/groups/"+string(closedGroup.ID)+"/memberships/"+string(matchingMembership.ID)+":remove",
+		delegatedBearer, iamv1.RemoveGroupMembershipRequest{ResourceVersion: matchingMembership.ResourceVersion,
+			RequestID: "attachment-change-group-member-remove"}, http.StatusOK, nil)
+	call(http.MethodDelete, "/v1/users/"+string(other.ID)+"/permission-boundary", root,
+		iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: protectedBoundary.ResourceVersion,
+			RequestID: "attachment-change-group-boundary-remove"}, http.StatusOK, nil)
+	call(http.MethodPost, "/v1/groups/"+string(closedGroup.ID)+"/memberships", delegatedBearer,
+		iamv1.CreateGroupMembershipRequest{UserID: other.ID, RequestID: "attachment-change-group-member-unbounded"},
+		http.StatusForbidden, nil)
+	setBoundary(other, "attachment-change-group-member-boundary-restore", delegationCeiling)
+	for _, candidate := range []struct {
+		user      iamv1.PrincipalID
+		requestID string
+	}{
+		{target.ID, "attachment-change-group-member-no-boundary"},
+		{differentTarget.ID, "attachment-change-group-member-different-boundary"},
+		{document.Administrator.ID, "attachment-change-group-member-root"},
+	} {
+		call(http.MethodPost, "/v1/groups/"+string(closedGroup.ID)+"/memberships", delegatedBearer,
+			iamv1.CreateGroupMembershipRequest{UserID: candidate.user, RequestID: candidate.requestID},
+			http.StatusForbidden, nil)
+		if state, _ := failures.lastSQLState.Load().(string); state != "42501" {
+			t.Fatalf("delegated Group admitted %s without the sealed ceiling: sqlstate=%q", candidate.requestID, state)
+		}
+	}
 	var platformTargetGrant iamv1.PolicyAttachment
 	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
 		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(other.ID)},
 		PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "attachment-change-target-platform-grant",
 	}, http.StatusOK, &platformTargetGrant)
+	call(http.MethodPost, "/v1/groups/"+string(closedGroup.ID)+"/memberships", delegatedBearer,
+		iamv1.CreateGroupMembershipRequest{UserID: other.ID, RequestID: "attachment-change-group-member-platform"},
+		http.StatusForbidden, nil)
+	if state, _ := failures.lastSQLState.Load().(string); state != "42501" {
+		t.Fatalf("delegated Group admitted a platform-bound USER: sqlstate=%q", state)
+	}
 	closed := []iamv1.CreatePolicyAttachmentRequest{
 		{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer,
 			PolicyResourceVersion: 1, RequestID: "attachment-change-unbounded-target"},
@@ -14583,8 +14686,6 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 			PolicyResourceVersion: 1, RequestID: "attachment-change-root-target"},
 		{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(other.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer,
 			PolicyResourceVersion: 1, RequestID: "attachment-change-platform-target"},
-		{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(closedGroup.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer,
-			PolicyResourceVersion: 1, RequestID: "attachment-change-group-target"},
 	}
 	var attachmentsBefore int
 	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1`, delegated.AccountID).
@@ -14606,10 +14707,201 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 		  AND request_id=ANY($3::text[])),
 		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=ANY($3::text[])),
 		(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1)`, delegated.AccountID, delegated.ID,
-		[]string{closed[0].RequestID, closed[1].RequestID, closed[2].RequestID, closed[3].RequestID, closed[4].RequestID}).
+		[]string{closed[0].RequestID, closed[1].RequestID, closed[2].RequestID, closed[3].RequestID}).
 		Scan(&closedDecisions, &closedFacts, &attachmentsAfter); err != nil || closedDecisions != 0 || closedFacts != 0 || attachmentsAfter != attachmentsBefore {
 		t.Fatalf("closed delegated attachment path left state: decisions=%d facts=%d attachments=%d err=%v",
 			closedDecisions, closedFacts, attachmentsAfter-attachmentsBefore, err)
+	}
+	negativeMembershipRequests := []string{
+		"attachment-change-group-member-unbounded",
+		"attachment-change-group-member-no-boundary",
+		"attachment-change-group-member-different-boundary",
+		"attachment-change-group-member-root",
+		"attachment-change-group-member-platform",
+	}
+	var activeClosedMembers, negativeMemberDecisions, negativeMemberFacts, blockedBoundaryFacts int
+	var restoredCeiling bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.group_memberships WHERE tenant_id=$1 AND group_id=$2 AND removed_at IS NULL),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=ANY($3::text[])),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=ANY($3::text[])),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN
+		  ('attachment-change-group-boundary-remove-blocked','attachment-change-group-boundary-replace-blocked')),
+		(iam.current_user_boundary_evidence($1,$4)#>>'{version,policyId}')=$5`, delegated.AccountID, closedGroup.ID,
+		negativeMembershipRequests, other.ID, delegationCeiling.Policy.ID).
+		Scan(&activeClosedMembers, &negativeMemberDecisions, &negativeMemberFacts, &blockedBoundaryFacts, &restoredCeiling); err != nil ||
+		activeClosedMembers != 0 || negativeMemberDecisions != 0 || negativeMemberFacts != 0 || blockedBoundaryFacts != 0 || !restoredCeiling {
+		t.Fatalf("delegated Group negative admission left state: members=%d decisions=%d facts=%d boundaryFacts=%d restored=%t err=%v",
+			activeClosedMembers, negativeMemberDecisions, negativeMemberFacts, blockedBoundaryFacts, restoredCeiling, err)
+	}
+
+	// The Group generation is a database-only serialization barrier. Hold a
+	// delegated empty-Group attachment after it has mutated the Group, start a
+	// Root membership from an older Serializable snapshot, and require the
+	// retried membership to observe the newly sealed ceiling and fail closed.
+	var concurrentGroup iamv1.Group
+	call(http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{
+		Name: "Concurrent delegated group", RequestID: "attachment-change-group-race",
+	}, http.StatusCreated, &concurrentGroup)
+	concurrentAttachmentRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(concurrentGroup.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+		RequestID: "attachment-change-group-race-attachment",
+	}
+	const concurrentMembershipRequestID = "attachment-change-group-race-membership"
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_group_delegation_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.event_document->>'requestId'=TG_ARGV[0]
+		THEN PERFORM pg_advisory_xact_lock_shared(54854,30); END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_group_delegation_barrier BEFORE INSERT ON iam.audit_outbox
+		FOR EACH ROW EXECUTE FUNCTION public.matrix_group_delegation_barrier('`+concurrentAttachmentRequest.RequestID+`');
+		CREATE FUNCTION public.matrix_group_membership_snapshot_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.request_id=TG_ARGV[0]
+		THEN PERFORM pg_advisory_xact_lock_shared(54854,31); END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_group_membership_snapshot_barrier BEFORE INSERT ON iam.authorization_decisions
+		FOR EACH ROW EXECUTE FUNCTION public.matrix_group_membership_snapshot_barrier('`+concurrentMembershipRequestID+`');
+		SELECT pg_advisory_lock(54854,30); SELECT pg_advisory_lock(54854,31)`); err != nil {
+		t.Fatal("install Group delegation linearization barrier", err)
+	}
+	var groupBarrierOnce sync.Once
+	cleanupGroupBarrier := func() {
+		groupBarrierOnce.Do(func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			if _, err := database.Exec(cleanup, `SELECT pg_advisory_unlock(54854,30);
+				SELECT pg_advisory_unlock(54854,31);
+				DROP TRIGGER IF EXISTS matrix_group_delegation_barrier ON iam.audit_outbox;
+				DROP TRIGGER IF EXISTS matrix_group_membership_snapshot_barrier ON iam.authorization_decisions;
+				DROP FUNCTION IF EXISTS public.matrix_group_delegation_barrier();
+				DROP FUNCTION IF EXISTS public.matrix_group_membership_snapshot_barrier()`); err != nil {
+				t.Error("remove Group delegation linearization barrier", err)
+			}
+		})
+	}
+	defer cleanupGroupBarrier()
+	groupAttachmentDone, groupMembershipDone := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		groupAttachmentDone <- performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", delegatedBearer,
+			mustIAMJSON(t, concurrentAttachmentRequest))
+	}()
+	waitGroup, stopGroupWait := context.WithTimeout(ctx, 10*time.Second)
+	defer stopGroupWait()
+	var groupAttachmentPID int32
+	ticker = time.NewTicker(10 * time.Millisecond)
+	for groupAttachmentPID == 0 {
+		if err := database.QueryRow(waitGroup, `SELECT COALESCE(min(pid),0) FROM pg_locks
+			WHERE locktype='advisory' AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+			  AND classid=54854 AND objid=30`).Scan(&groupAttachmentPID); err != nil {
+			t.Fatal("observe delegated Group attachment barrier", err)
+		}
+		if groupAttachmentPID == 0 {
+			select {
+			case <-ticker.C:
+			case <-waitGroup.Done():
+				t.Fatal("delegated Group attachment did not reach its barrier")
+			}
+		}
+	}
+	ticker.Stop()
+	go func() {
+		groupMembershipDone <- performIAMRequest(handler, http.MethodPost,
+			"/v1/groups/"+string(concurrentGroup.ID)+"/memberships", root,
+			mustIAMJSON(t, iamv1.CreateGroupMembershipRequest{UserID: target.ID, RequestID: concurrentMembershipRequestID}))
+	}()
+	ticker = time.NewTicker(10 * time.Millisecond)
+	var groupMembershipPID int32
+	for groupMembershipPID == 0 {
+		if err := database.QueryRow(waitGroup, `SELECT COALESCE(min(pid),0) FROM pg_locks
+			WHERE locktype='advisory' AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+			  AND classid=54854 AND objid=31`).Scan(&groupMembershipPID); err != nil {
+			t.Fatal("observe stale Group membership snapshot barrier", err)
+		}
+		if groupMembershipPID == 0 {
+			select {
+			case <-ticker.C:
+			case <-waitGroup.Done():
+				t.Fatal("Group membership did not establish its pre-attachment snapshot")
+			}
+		}
+	}
+	ticker.Stop()
+	if _, err := database.Exec(waitGroup, "SELECT pg_advisory_unlock(54854,30)"); err != nil {
+		t.Fatal("release delegated Group attachment barrier", err)
+	}
+	select {
+	case response := <-groupAttachmentDone:
+		if response.Code != http.StatusOK {
+			t.Fatalf("concurrent delegated Group attachment status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-waitGroup.Done():
+		t.Fatal("concurrent delegated Group attachment did not finish")
+	}
+	if _, err := database.Exec(waitGroup, "SELECT pg_advisory_unlock(54854,31)"); err != nil {
+		t.Fatal("release stale Group membership snapshot barrier", err)
+	}
+	select {
+	case response := <-groupMembershipDone:
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("stale concurrent Group membership status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-waitGroup.Done():
+		t.Fatal("concurrent Group membership did not finish")
+	}
+	cleanupGroupBarrier()
+	var concurrentGroupAttachment iamv1.PolicyAttachment
+	response := call(http.MethodGet, "/v1/groups/"+string(concurrentGroup.ID), root, nil, http.StatusOK, nil)
+	var concurrentAccess iamv1.GroupAccess
+	if json.Unmarshal(response.Body.Bytes(), &concurrentAccess) != nil || len(concurrentAccess.PolicyAttachments) != 1 {
+		t.Fatal("concurrent delegated Group attachment is absent")
+	}
+	concurrentGroupAttachment = concurrentAccess.PolicyAttachments[0]
+	var concurrentSafe bool
+	if err := database.QueryRow(ctx, `SELECT
+		NOT EXISTS(SELECT 1 FROM iam.group_memberships WHERE tenant_id=$1 AND group_id=$2 AND removed_at IS NULL)
+		AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		AND EXISTS(SELECT 1 FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$4
+		  AND revoked_at IS NULL AND delegation_ceiling_policy_id=$5)`, delegated.AccountID, concurrentGroup.ID,
+		concurrentMembershipRequestID, concurrentGroupAttachment.ID, delegationCeiling.Policy.ID).Scan(&concurrentSafe); err != nil || !concurrentSafe {
+		t.Fatal("concurrent Group closure committed an unsafe membership or lost its attachment", err)
+	}
+	call(http.MethodPost, "/v1/policy-attachments/"+string(concurrentGroupAttachment.ID)+":revoke", delegatedBearer,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: concurrentGroupAttachment.ResourceVersion,
+			RequestID: "attachment-change-group-race-attachment-revoke"}, http.StatusOK, nil)
+
+	delegatedGroupRevoke := iamv1.RevokePolicyAttachmentRequest{ResourceVersion: delegatedGroupAttachment.ResourceVersion,
+		RequestID: "attachment-change-group-target-revoke"}
+	call(http.MethodPost, "/v1/policy-attachments/"+string(delegatedGroupAttachment.ID)+":revoke", delegatedBearer,
+		delegatedGroupRevoke, http.StatusOK, nil)
+	var delegatedGroupProof bool
+	if err := database.QueryRow(ctx, `SELECT count(*)=2 AND bool_and(
+		actor_boundary_evidence->>'state'='BOUND'
+		AND target_boundary_evidence->>'state'='GROUP_BOUND'
+		AND target_boundary_evidence->>'ceilingPolicyId'=$5
+		AND authority_evidence_digest=iam.policy_attachment_authority_evidence_digest(
+		  input_commitment,jsonb_build_object('actorBoundary',actor_boundary_evidence,'targetBoundary',target_boundary_evidence)))
+		FROM iam.policy_attachment_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND attachment_id=$3
+		  AND request_id IN ($4,$6)`, delegated.AccountID, delegated.ID, delegatedGroupAttachment.ID,
+		delegatedGroupRequest.RequestID, delegationCeiling.Policy.ID, delegatedGroupRevoke.RequestID).
+		Scan(&delegatedGroupProof); err != nil || !delegatedGroupProof {
+		t.Fatal("delegated Group create/revoke evidence is incomplete", err)
+	}
+	// A delegated administrator may safely revoke a Root-created Group
+	// attachment because every effective member remains capped by the sealed
+	// boundary. The historical verifier must distinguish this from a delegated
+	// CREATE that incorrectly omitted its ceiling.
+	const rootGroupDelegatedRevokeRequestID = "attachment-change-root-group-delegated-revoke"
+	call(http.MethodPost, "/v1/policy-attachments/"+string(rootGroupAttachment.ID)+":revoke", delegatedBearer,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: rootGroupAttachment.ResourceVersion,
+			RequestID: rootGroupDelegatedRevokeRequestID}, http.StatusOK, nil)
+	var rootGroupDelegatedRevocationProof bool
+	if err := database.QueryRow(ctx, `SELECT attachment.delegation_ceiling_policy_id IS NULL
+		AND receipt.actor_boundary_evidence->>'state'='BOUND'
+		AND receipt.target_boundary_evidence->>'state'='GROUP_BOUND'
+		AND iam.verified_policy_attachment_change($1,$2,$3) IS NOT NULL
+		FROM iam.policy_attachment_changes receipt
+		JOIN iam.policy_attachments attachment ON (attachment.tenant_id,attachment.id)=(receipt.tenant_id,receipt.attachment_id)
+		WHERE receipt.tenant_id=$1 AND receipt.actor_principal_id=$2 AND receipt.request_id=$3`,
+		delegated.AccountID, delegated.ID, rootGroupDelegatedRevokeRequestID).Scan(&rootGroupDelegatedRevocationProof); err != nil || !rootGroupDelegatedRevocationProof {
+		t.Fatal("delegated revocation of a Root-created Group attachment lost its closed historical proof", err)
 	}
 	var platformActorGrant iamv1.PolicyAttachment
 	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{

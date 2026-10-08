@@ -1,6 +1,6 @@
 # FEAT-IAM-002：策略权限权威替换
 
-- 状态：单一策略权威的语言、持久化、迁移、当前求值、管理入口、历史证据及关联写入结果不确定时的封闭完成查询已经实现；旧 RoleBinding 只保留为不可变历史词汇，不再是在线授权入口。直接 USER 附件已增加 Root/同边界委派的不可变完成证据，并将该次命令的证据摘要绑定到四类附件成功事实的 Audit canonical 内容；非 root 的 Group/Role 路径仍关闭。现有签名生命周期 owner 已增加直接读取并逐字段核对备份前 CREATE/REVOKE 完成回执的门禁，精确源码独立 CI 已通过；但当前证据形状尚缺匹配当前 Profile 的签名 A/B 生命周期实跑，源码 CI 不能替代安装、升级、回滚、所选备份恢复与重启的运行证据。该签名运行及完整 LIVE UI/浏览器门禁完成前，整体不标记验收。
+- 状态：单一策略权威的语言、持久化、迁移、当前求值、管理入口、历史证据及关联写入结果不确定时的封闭完成查询已经实现；旧 RoleBinding 只保留为不可变历史词汇，不再是在线授权入口。直接 USER 附件已增加 Root/同边界委派的不可变完成证据；当前候选又为非 root Group 附件增加封存上限、成员闭包和 `GROUP_BOUND` 完成证据，并把两类命令证据摘要绑定到附件成功事实的 Audit canonical 内容。Role 的非 root 关联仍关闭。现有签名生命周期 owner 已增加直接读取并逐字段核对备份前 CREATE/REVOKE 完成回执的门禁；但当前 Group 证据形状尚缺独立 CI 和匹配当前 Profile 的签名 A/B 生命周期实跑，源码/本地真库不能替代安装、升级、回滚、所选备份恢复与重启的运行证据。该签名运行及完整 LIVE UI/浏览器门禁完成前，整体不标记验收。
 - 依赖：001 已验收的 CAT-01–04，固定安装消费者已对齐当前策略附件 wire；完整产品 Profile 的集成仍由 008 证明。
 - Owner：IAM `authority`、`identityaccess`、PostgreSQL；Audit 只保存事实。
 
@@ -45,7 +45,7 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 目录增量后的 API/IAM/Audit owning packages 与架构默认无缓存 race、对应 vet、生成一致性及 diff 检查通过。真实固定 `5721b7b` executable 的保留数据升级/本地恢复/重启复验 20.37s，原权限与撤销历史不复活；这不证明跨 release-profile 安装准入。上述默认测试跳过的数据库用例不计作实跑。本轮专属 PG 容器、网络和一次性数据卷已核对归属后清理；其他 Phase、远端及 UX 的 MOCK 实例未改变。控制台源码已消费新目录和精确策略修订；当前源码的独立多服务门禁已通过，真实浏览器和签名完整 Profile 门禁仍待完成。
 
-直接 USER 关联管理使用 `POST /v1/policy-attachments` 与 `POST /v1/policy-attachments/{id}:revoke`；不保留旧 RoleBinding 路由。创建关联 ID 由账号、操作者及 requestId 的域分离摘要稳定生成，策略 ID/目标/预期策略版本进入输入摘要。仅相同未撤销关联和原输入可重放返回；改变输入、已撤销关联或另一现存有效关联冲突，不因重试分配新 ID 而复权。撤销检查预期关联版本；完成后仅原版本加一、相同输入和操作者的事实可精确重放，其余陈旧版本冲突。两种写入都在当前授权事务内验证目标 USER 与策略 scope、封存 installation、策略/关联修订和原 primary 保护。
+USER/GROUP 关联管理共用 `POST /v1/policy-attachments` 与 `POST /v1/policy-attachments/{id}:revoke`；不保留旧 RoleBinding 或 Group 专用附件路由。创建关联 ID 由账号、操作者及 requestId 的域分离摘要稳定生成，策略 ID/目标/预期策略版本进入输入摘要。仅相同未撤销关联和原输入可重放返回；改变输入、已撤销关联或另一现存有效关联冲突，不因重试分配新 ID 而复权。撤销检查预期关联版本；完成后仅原版本加一、相同输入和操作者的事实可精确重放，其余陈旧版本冲突。两种写入都在当前授权事务内验证 target、策略 scope、封存 installation、策略/关联修订和原 primary 保护；非 root Group 还必须满足 004/005 的同 ceiling 成员闭包。
 
 创建的未知结果处理边界：固定`42035189eb823e388509f54525889c1a18c6b79d`已要求必填requestId，客户端须保留同一操作者的原requestId、目标、policyId与预期策略修订；未知回包不能每次自动换意图。当前实现增加按原requestId查询不可变完成结果的只读入口，但它不把404/403/5xx解释为原事务未提交，不根据当前关系存在与否自动重发，也不允许客户端复制私有ID生成算法。查询资格与原执行资格严格分离，不能借历史结果重新授予权限或绕过当前读取授权。
 
@@ -61,9 +61,9 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是从可变 `policy_attachments` 或可投递 outbox 临时拼接结果。主键为 `(account_id,actor_principal_id,request_id)`，同时保存 operation、输入承诺、准确原输入、结果文档、attachment ID、scope/installation、原 decision/event ID 和完成时间；CHECK、复合外键、FORCE RLS、拒绝 UPDATE/DELETE/TRUNCATE 及受限函数 ACL 进入同一 schema verifier。创建或撤销必须在原关系、决定、Audit outbox 的同一事务中写入唯一 receipt；receipt 写入失败则整笔业务变化回滚。查询只返回保存的结果文档，并重新验证输入承诺、结果字段、关系身份及原 event/requestDigest 对应，不以今天的关系状态补字段。
 
-开发期只保留 011 定义的一个准确滚动前驱，不为每个中间数字保留兼容函数、双表写入或可选旧版本列表。当前 completion 为 Root 保存封闭 `ROOT` 证据，为安全委派的直接 USER 保存 actor/target 精确边界证据；四类附件成功事实还必须携带由原输入承诺和锁内委派证据派生的 `authorityEvidenceDigest`。它只把该次事实绑定到一份不可变证据，不暴露边界正文、不是 permit，也不能缓存后重用。新写入不能省略或伪造。
+开发期只保留 011 定义的一个准确滚动前驱，不为每个中间数字保留兼容函数、双表写入或可选旧版本列表。当前 completion 为 Root 保存封闭 `ROOT` 证据，为安全委派的直接 USER 保存 actor/target 精确 `BOUND` 证据，为安全委派的 Group 保存 actor 边界和 `GROUP_BOUND` 目标证据；四类附件成功事实还必须携带由原输入承诺和锁内委派证据派生的 `authorityEvidenceDigest`。它只把该次事实绑定到一份不可变证据，不暴露边界正文或成员列表、不是 permit，也不能缓存后重用。新写入不能省略或伪造。
 
-固定即时前驱已经拥有准确的 receipt 边界证据，但其既有 Audit canonical bytes 早于事件级摘要；升级必须原样保留这些证据和事实，将新增 receipt 摘要列保持为明确 `NULL`，并保持旧事件不出现该字段，不能根据当前身份、策略或 receipt 倒签摘要。更早、没有边界证据的保留历史仍只能是 `PREDECESSOR_UNPROVEN`，不能伪装成 `BOUND`、`ROOT` 或事件级承诺。上述历史状态都不能取得新写入资格；NOT_FOUND 仍不证明原事务回滚，客户端不得自动重发写命令。完整 release profile 在任何效果前继续拒绝形状不匹配的旧二进制；相同 schema 数字也不能替代函数、策略 Profile 和 receipt 形状核对。当前准确 schema/profile 与固定来源只由 011 的滚动窗口记录，避免本 FEAT 复制会移动的验收数字。
+当前固定即时前驱已经拥有准确的 receipt 边界证据和事件级摘要。升级必须逐字节保留这些证据与既有 Audit canonical 内容，并让新增的 Group 内部 ceiling 对全部保留附件保持明确 `NULL`；不能根据今天的成员、边界或策略给 Root/旧附件补造 `GROUP_BOUND`。更早、没有边界证据的历史仍只能是 `PREDECESSOR_UNPROVEN`，不能伪装成 `BOUND`、`GROUP_BOUND`、`ROOT` 或事件级承诺。上述历史状态都不能取得新写入资格；NOT_FOUND 仍不证明原事务回滚，客户端不得自动重发写命令。完整 release profile 在任何效果前继续拒绝形状不匹配的旧二进制；相同 schema 数字也不能替代函数、策略 Profile 和 receipt 形状核对。当前准确 schema/profile 与固定来源只由 011 的滚动窗口记录，避免本 FEAT 复制会移动的验收数字。
 
 最低验收包含：CREATE/REVOKE 提交后断开回包，再以同一和新有效 Session 查询精确原结果；后继撤销、重新关联、策略退休、主体停用后的历史不改写；错误 actor/Account/requestId、跨 scope、错误 installation、错误当前只读权限与 Role/AccessKey/ServiceIdentity 均拒绝；同 requestId 跨操作或变体竞争至多一个完成；事务末端、receipt/outbox/关系任一失败均零部分效果；篡改输入承诺、结果、event、scope 或 ACL 后失败关闭；固定即时前序保留数据升级不复活权限且不伪造历史 receipt。UI 对明确完成解除原未知提示，对404/403/5xx继续保持未知，绝不因当前目录状态自动重发。
 
@@ -83,13 +83,13 @@ PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是�
 
 该路径在现有 PG18 policy storage 门禁实跑通过：六种旧 initialRole 值均被 HTTP 400 拒绝，主体与 outbox 无部分新增；合法创建后的实际关联数为零。含既有密码竞争与策略存储检查的最新 race 整项 14.89s。新的关联请求 Go/schema 正反例、API/HTTP/usecase race、架构、vet 和生成一致性通过；该成员创建门禁不替代后文直接策略关联管理及完整场景的验收。
 
-关联创建契约为 `CreatePolicyAttachmentRequest {target, policyId, policyResourceVersion, requestId}`；修订必须是正的安全整数。首个直接主体管理切片只接受 USER，GROUP/ROLE/SERVICE_ACCOUNT 的管理入口待各自 FEAT 的真实用例接入后才开放。`RevokePolicyAttachmentRequest {resourceVersion, requestId}` 绑定准确关联修订，旧版本冲突不能静默撤销当前状态。两者都不接受 account/tenant/installation/scope selector；数据库内的策略与关联决定动作的权威范围，传入平台策略 ID 本身不授予平台权限。请求校验、生成 schema、HTTP 路由、用例和 SQL 修订检查已接通，旧 RoleBinding 管理路由及实际写入用例已删除。当前 Go/OpenAPI 的 `BuiltinRole`、`RoleBinding` 对象和旧请求 DTO 均已删除；固定旧 executable 只由测试私有 wire 读取历史响应。保留的旧 Action/Target 与恢复 `platformBindingId` 只能验证已发布历史，不能进入当前求值或授予。当前进程、安装测试客户端和控制台 repository adapter 也已切到策略关联；完整组合门禁尚未实跑，不把局部管理门禁当作整个替换验收。
+关联创建契约为 `CreatePolicyAttachmentRequest {target, policyId, policyResourceVersion, requestId}`；修订必须是正的安全整数。当前管理入口接受 USER 与 GROUP：USER 使用直接主体闭包，GROUP 使用 004/005 的封存同 ceiling 成员闭包；ROLE/SERVICE_ACCOUNT 不因该扩展获得新的租户管理入口。`RevokePolicyAttachmentRequest {resourceVersion, requestId}` 绑定准确关联修订，旧版本冲突不能静默撤销当前状态。两者都不接受 account/tenant/installation/scope/ceiling selector；数据库内的策略、target 当前关系与操作者边界共同决定权威范围，传入平台策略 ID 本身不授予平台权限。请求校验、生成 schema、HTTP 路由、用例和 SQL 修订检查已接通，旧 RoleBinding 管理路由及实际写入用例已删除。当前 Go/OpenAPI 的 `BuiltinRole`、`RoleBinding` 对象和旧请求 DTO 均已删除；固定旧 executable 只由测试私有 wire 读取历史响应。保留的旧 Action/Target 与恢复 `platformBindingId` 只能验证已发布历史，不能进入当前求值或授予。当前进程、安装测试客户端和控制台 repository adapter 也已切到策略关联；完整组合门禁尚未实跑，不把局部管理门禁当作整个替换验收。
 
 `Policy` 保存 management=SYSTEM/CUSTOMER、稳定 ID、显示名、scope、ACTIVE/RETIRED、默认版本 ID、资源修订与时间。CUSTOMER 必须属于一个 Account 且只能是 tenant scope；SYSTEM 无客户所有者并使用保留的 `system.` ID 命名空间。显示名不决定权限。退休仍保留默认版本和历史引用，不等于删除内容。
 
 `PolicyAttachment` 保存 Account、稳定关联 ID、target(kind/id)、policy ID、scope、封存 installation ID（仅平台/probe）、修订和创建/更新/撤销时间。平台关联只接受 USER，probe 只接受 SERVICE_ACCOUNT；租户 target 的 USER/SERVICE_ACCOUNT/GROUP/ROLE 描述授权载体，不扩展可登录主体类型。已撤销关联必须有更新后的修订与一致撤销时间，不提供恢复为活跃状态的变体。
 
-数据库的当前来源查询应返回 `AttachedPolicy`：关联、策略元数据和精确默认内容版本。`EvaluateAttachedPolicies` 先检查所有关系的 Account/主体/安装归属、状态和默认版本一致，再调用已有唯一语句评估器；任一损坏关系不能留下部分 Allow 或证据。当前直接主体路径拒绝未证明的 Group/Role 来源，继承证明由 004/006 接入后才启用。结果绑定准确关联 ID/修订以及命中的 policy/version/digest，按关联 ID 排序，不把允许权限重新解释为策略名称。
+数据库的当前来源查询返回 `AttachedPolicy`：关联、策略元数据和精确默认内容版本。`EvaluateAttachedPolicies` 先检查所有关系的 Account/主体/安装归属、状态和默认版本一致，再调用已有唯一语句评估器；任一损坏关系不能留下部分 Allow 或证据。直接 USER 与 004 已证明的 GroupMembership/Group attachment 来源可以进入当前快照；Role 来源在 006 的承担与边界闭包完成前继续拒绝。结果绑定准确关联 ID/修订以及命中的 policy/version/digest；GROUP 还绑定 membership ID/修订，按关联 ID 排序，不把允许权限重新解释为策略名称。
 
 以上对象、严格解码与关系校验已由现有 API/domain owner 实现。Go loader、`Decide`/`DecideService`、管理路由和固定消费者均读取 `policies`、`policy_versions`、`policy_attachments` 的当前关系快照；生产鉴权不再通过旧角色名装配权限。契约测试覆盖跨 Account、错主体、伪造安装、未证明继承、非默认版本、退休/撤销、摘要替换、重复关联、预算、Deny 证据顺序及未知提交结果的封闭查询；最终组合验收仍是必要剩余项。
 

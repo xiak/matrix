@@ -295,6 +295,7 @@ CREATE TABLE IF NOT EXISTS iam.policy_attachments (
     target_id text COLLATE "C" NOT NULL,
     target_kind text COLLATE "C" NOT NULL,
     policy_id text COLLATE "C" NOT NULL,
+    delegation_ceiling_policy_id text COLLATE "C",
     authority_scope text COLLATE "C" NOT NULL,
     installation_id text COLLATE "C",
     resource_version bigint NOT NULL,
@@ -304,6 +305,12 @@ CREATE TABLE IF NOT EXISTS iam.policy_attachments (
     PRIMARY KEY (tenant_id, id),
     FOREIGN KEY (policy_id,authority_scope) REFERENCES iam.policies(id,authority_scope)
 );
+
+ALTER TABLE iam.policy_attachments
+    ADD COLUMN IF NOT EXISTS delegation_ceiling_policy_id text COLLATE "C";
+ALTER TABLE iam.policy_attachments DROP CONSTRAINT IF EXISTS policy_attachments_delegation_ceiling_fk;
+ALTER TABLE iam.policy_attachments ADD CONSTRAINT policy_attachments_delegation_ceiling_fk
+    FOREIGN KEY (delegation_ceiling_policy_id) REFERENCES iam.policies(id);
 
 ALTER TABLE iam.policy_attachments DROP CONSTRAINT IF EXISTS policy_attachments_principal_fk;
 ALTER TABLE iam.policy_attachments DROP CONSTRAINT IF EXISTS policy_attachments_target_fk;
@@ -316,6 +323,8 @@ ALTER TABLE iam.policy_attachments ADD CONSTRAINT policy_attachments_values_vali
         id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND policy_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (delegation_ceiling_policy_id IS NULL
+          OR (target_kind='GROUP' AND delegation_ceiling_policy_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'))
         AND target_kind IN ('USER','SERVICE_ACCOUNT','GROUP','ROLE')
         AND ((authority_scope='TENANT' AND installation_id IS NULL)
           OR (authority_scope='INSTALLATION' AND target_kind='USER'
@@ -495,10 +504,13 @@ END $function$;
 CREATE OR REPLACE FUNCTION iam.guard_policy_attachment_change()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE subject_kind text; policy_scope text; policy_owner text; sealed_installation text;
+    ceiling_scope text; ceiling_owner text;
 BEGIN
     IF TG_OP='UPDATE' THEN
-        IF ROW(NEW.tenant_id,NEW.id,NEW.target_id,NEW.target_kind,NEW.policy_id,NEW.authority_scope,NEW.installation_id,NEW.created_at)
-            IS DISTINCT FROM ROW(OLD.tenant_id,OLD.id,OLD.target_id,OLD.target_kind,OLD.policy_id,OLD.authority_scope,OLD.installation_id,OLD.created_at)
+        IF ROW(NEW.tenant_id,NEW.id,NEW.target_id,NEW.target_kind,NEW.policy_id,NEW.delegation_ceiling_policy_id,
+               NEW.authority_scope,NEW.installation_id,NEW.created_at)
+            IS DISTINCT FROM ROW(OLD.tenant_id,OLD.id,OLD.target_id,OLD.target_kind,OLD.policy_id,OLD.delegation_ceiling_policy_id,
+               OLD.authority_scope,OLD.installation_id,OLD.created_at)
             OR OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL
             OR NEW.resource_version <> OLD.resource_version+1 OR NEW.updated_at <> transaction_timestamp()
             OR NEW.revoked_at <> NEW.updated_at THEN
@@ -536,6 +548,14 @@ BEGIN
     END IF;
     NEW.target_kind := subject_kind;
     NEW.authority_scope := policy_scope;
+    IF NEW.delegation_ceiling_policy_id IS NOT NULL THEN
+        SELECT policy.authority_scope,policy.owner_tenant_id INTO ceiling_scope,ceiling_owner
+          FROM iam.policies AS policy WHERE policy.id=NEW.delegation_ceiling_policy_id FOR KEY SHARE;
+        IF NOT FOUND OR subject_kind<>'GROUP' OR policy_scope<>'TENANT' OR ceiling_scope<>'TENANT'
+          OR ceiling_owner IS DISTINCT FROM NEW.tenant_id THEN
+            RAISE EXCEPTION USING ERRCODE='23503', MESSAGE='IAM attachment delegation ceiling conflicts';
+        END IF;
+    END IF;
     IF policy_scope='TENANT' THEN
         IF NEW.installation_id IS NOT NULL THEN
             RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='IAM tenant attachment cannot select an installation';
@@ -2102,6 +2122,28 @@ CREATE OR REPLACE FUNCTION iam.policy_attachment_contract_ready()
 RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
     SELECT (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
         WHERE n.nspname='iam' AND p.proname IN ('create_policy_attachment','revoke_policy_attachment'))=2
+      AND EXISTS(SELECT 1 FROM pg_attribute attribute
+        WHERE attribute.attrelid='iam.policy_attachments'::regclass AND NOT attribute.attisdropped
+          AND attribute.attname='delegation_ceiling_policy_id' AND attribute.atttypid='text'::regtype
+          AND NOT attribute.attnotnull AND NOT attribute.atthasdef)
+      AND EXISTS(SELECT 1 FROM pg_constraint constraint_value
+        WHERE constraint_value.conrelid='iam.policy_attachments'::regclass
+          AND constraint_value.conname='policy_attachments_delegation_ceiling_fk'
+          AND constraint_value.contype='f' AND constraint_value.convalidated)
+      AND EXISTS(SELECT 1 FROM pg_attribute attribute
+        WHERE attribute.attrelid=to_regclass('iam.groups') AND NOT attribute.attisdropped
+          AND attribute.attname='authorization_generation' AND attribute.atttypid='bigint'::regtype
+          AND attribute.attnotnull AND NOT attribute.atthasdef)
+      AND EXISTS(SELECT 1 FROM pg_constraint constraint_value
+        WHERE constraint_value.conrelid=to_regclass('iam.groups')
+          AND constraint_value.conname='groups_values_valid'
+          AND constraint_value.contype='c' AND constraint_value.convalidated)
+      AND EXISTS(SELECT 1 FROM pg_proc function_value
+        WHERE function_value.oid=to_regprocedure('iam.bump_group_authorization_generation(text,text)')
+          AND function_value.proowner='matrix_iam_owner'::regrole AND NOT function_value.prosecdef
+          AND function_value.provolatile='v' AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+          AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(function_value.proacl,acldefault('f',function_value.proowner))) privilege
+            WHERE privilege.grantee<>function_value.proowner))
       AND NOT EXISTS(SELECT 1 FROM (VALUES
         ('iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb,text)',10,false,'jsonb'::regtype),
         ('iam.revoke_policy_attachment(text,text,bigint,text,text,jsonb,text)',7,true,'record'::regtype)
@@ -4157,9 +4199,9 @@ BEGIN
            AND deleted_at IS NULL FOR NO KEY UPDATE;
         IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment target is unavailable'; END IF;
     ELSIF submitted_target_kind='GROUP' THEN
-        PERFORM 1 FROM iam.groups
-         WHERE tenant_id=submitted_tenant_id AND id=submitted_target_id AND deleted_at IS NULL FOR UPDATE;
-        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment group is unavailable'; END IF;
+        -- The delegation helper locks every current member/boundary before the
+        -- Group barrier so membership and attachment writers share one order.
+        NULL;
     ELSE
         PERFORM iam.assert_role_writer(submitted_tenant_id,submitted_actor_principal_id,actor_session_id,NULL);
         PERFORM 1 FROM iam.roles WHERE tenant_id=submitted_tenant_id AND id=submitted_target_id AND deleted_at IS NULL FOR UPDATE;
@@ -4225,8 +4267,14 @@ BEGIN
         END IF;
         RETURN iam.lookup_policy_attachment(submitted_tenant_id,stored.id);
     END IF;
-    INSERT INTO iam.policy_attachments(tenant_id,id,target_kind,target_id,policy_id,resource_version,created_at,updated_at)
-    VALUES(submitted_tenant_id,submitted_attachment_id,submitted_target_kind,submitted_target_id,submitted_policy_id,1,effective_now,effective_now);
+    IF submitted_target_kind='GROUP' THEN
+        PERFORM iam.bump_group_authorization_generation(submitted_tenant_id,submitted_target_id);
+    END IF;
+    INSERT INTO iam.policy_attachments(tenant_id,id,target_kind,target_id,policy_id,delegation_ceiling_policy_id,
+        resource_version,created_at,updated_at)
+    VALUES(submitted_tenant_id,submitted_attachment_id,submitted_target_kind,submitted_target_id,submitted_policy_id,
+        CASE WHEN delegation->'targetBoundary'->>'state'='GROUP_BOUND'
+          THEN delegation#>>'{targetBoundary,ceilingPolicyId}' END,1,effective_now,effective_now);
     IF submitted_target_kind='ROLE' THEN
         UPDATE iam.roles r SET security_generation=r.security_generation+1 WHERE r.tenant_id=submitted_tenant_id AND r.id=submitted_target_id;
     END IF;
@@ -4289,7 +4337,9 @@ BEGIN
           AND s.last_activity_at+make_interval(secs=>s.idle_timeout_seconds)>clock_timestamp() FOR SHARE OF c,s;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment session is unavailable'; END IF;
     IF stored.target_kind='GROUP' THEN
-        PERFORM 1 FROM iam.groups WHERE tenant_id=submitted_tenant_id AND id=stored.target_id FOR UPDATE;
+        -- lock_policy_attachment_delegation owns the member/boundary/Group
+        -- order and verifies the immutable ceiling before the attachment row.
+        NULL;
     ELSIF stored.target_kind='ROLE' THEN
         PERFORM iam.assert_role_writer(submitted_tenant_id,submitted_actor_principal_id,actor_session_id,NULL);
         PERFORM 1 FROM iam.roles WHERE tenant_id=submitted_tenant_id AND id=stored.target_id AND deleted_at IS NULL FOR UPDATE;
@@ -4342,6 +4392,9 @@ BEGIN
     END IF;
     IF stored.resource_version<>submitted_resource_version OR stored.resource_version=9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='attachment revision conflicts';
+    END IF;
+    IF stored.target_kind='GROUP' THEN
+        PERFORM iam.bump_group_authorization_generation(submitted_tenant_id,stored.target_id);
     END IF;
     UPDATE iam.policy_attachments AS attachment SET resource_version=stored.resource_version+1,
         updated_at=effective_now,revoked_at=effective_now
