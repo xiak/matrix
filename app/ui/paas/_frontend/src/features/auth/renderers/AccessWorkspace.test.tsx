@@ -4184,9 +4184,9 @@ describe("CAM-style access workspace", () => {
     expect(repository.execute).not.toHaveBeenCalled();
   });
   it("reviews configured trust entry points and synthetic unused access without inventing effective access", async () => {
-    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const extension = createPreviewAccessWorkspace("org-xiak", () => reviewUsers.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
     const workspace = await extension.read("preview");
-    const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const scene = buildAccountAccessScene(identity, { items: reviewUsers, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
     const analysis = buildAccessAnalysisPreview(workspace, scene);
     expect(analysis.coverage).toEqual([
       { id: "IAM_PASSWORD_SESSIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
@@ -4196,6 +4196,22 @@ describe("CAM-style access workspace", () => {
       { id: "PAAS_RESULTS", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null },
       { id: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null }
     ]);
+    expect(analysis.boundaryControlledIdentities).toEqual([{
+      id: "principal-qiao",
+      name: "qiao",
+      displayName: "qiao",
+      boundary: { policyId: "policy-delivery-boundary", policyName: "ReleaseOperatorBoundary", defaultVersion: 1 },
+      directPolicyIds: ["policy-tag-logs", "policy-production-guard", "policy-assume-reviewer"],
+      groupIds: ["group-operators"],
+      inheritedPolicyIds: ["policy-delivery", "policy-tag-logs"],
+      evidence: {
+        delegatedManager: "UNAVAILABLE",
+        createdBy: "UNAVAILABLE",
+        mutationClosure: "CONTRACT_PENDING",
+        runtimeEnforcement: "NOT_EVALUATED"
+      }
+    }]);
+    expect(analysis.delegationCoverage).toEqual({ boundaryReferences: 1, unresolvedReferences: 0 });
     expect(analysis.unusedFindings).toHaveLength(123);
     expect(analysis.unusedFindings.slice(0, 3).map(({ accountId, findingType, lifecycle }) => ({ accountId, findingType, lifecycle }))).toEqual([
       { accountId: "org-xiak", findingType: "unusedPassword", lifecycle: "ACTIVE" },
@@ -4237,6 +4253,10 @@ describe("CAM-style access workspace", () => {
       evidence: "SYNTHETIC_COMPLETE_WINDOW",
       disposition: { mode: "REVIEW_ONLY", findingDelayDays: 0 }
     });
+    const partialScene = buildAccountAccessScene(identity, { items: users, nextAfter: "next-users" }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const partialDelegation = buildAccessAnalysisPreview(workspace, partialScene);
+    expect(partialDelegation.boundaryControlledIdentities).toEqual([]);
+    expect(partialDelegation.delegationCoverage).toEqual({ boundaryReferences: 1, unresolvedReferences: 1 });
     expect(() => buildAccessAnalysisPreview(workspace, { ...scene, accountId: "org-foreign" })).toThrow("INVALID_IAM_TENANT");
     const onNavigate = vi.fn();
     const user = userEvent.setup();
@@ -4252,6 +4272,21 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "暂无可核验的外部入口" })).toBeTruthy();
     expect(screen.getByText(/当前没有固定的外部身份或通用服务主体信任契约/)).toBeTruthy();
     expect(onNavigate).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("tab", { name: "委派治理 (1)" }));
+    expect(screen.getByRole("heading", { name: "安全委派闭包" })).toBeTruthy();
+    expect(screen.getByText(/现有边界只证明这个身份受到一条准确策略上限约束/)).toBeTruthy();
+    expect(screen.getByText("已观察到边界的身份").closest("div")?.textContent).toContain("已解析 1 / 1 条引用");
+    expect(screen.getAllByText("证据缺失").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("契约待固定").length).toBeGreaterThan(0);
+    const delegationTable = screen.getByRole("table", { name: "边界受控身份" });
+    expect(delegationTable.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(delegationTable).getByText("ReleaseOperatorBoundary")).toBeTruthy();
+    expect(within(delegationTable).getByText("3 条直接策略")).toBeTruthy();
+    expect(within(delegationTable).getByText("1 个用户组 · 2 条去重继承策略")).toBeTruthy();
+    expect(screen.getByText(/不是 delegated-manager\/created-by 目录/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /创建委派|关联对象|替换边界|移除边界/ })).toBeNull();
+    await user.click(within(delegationTable).getByRole("button", { name: "qiao" }));
+    expect(onNavigate).toHaveBeenCalledWith("users", "principal-qiao");
     await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
     expect(screen.getByText(/当前真实数据不满足该前提/)).toBeTruthy();
     expect(screen.getByText(/123 条样例由浏览器确定性生成/)).toBeTruthy();
@@ -4341,6 +4376,10 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
     expect(screen.getByText(/配置存在不代表权限已生效/)).toBeTruthy();
     expect(screen.getByRole("heading", { name: "暂无可核验的外部入口" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "委派治理 (1)" }));
+    expect(screen.getByText("当前目录不足以解析边界身份")).toBeTruthy();
+    expect(screen.getByText(/已解析 0 \/ 1 条引用/)).toBeTruthy();
+    expect(screen.getByText(/证据覆盖不完整/)).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
     expect(screen.getByRole("table", { name: "未使用访问发现样例" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "返回列表" })).toBeNull();

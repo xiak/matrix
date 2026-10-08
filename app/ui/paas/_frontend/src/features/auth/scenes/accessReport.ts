@@ -86,6 +86,27 @@ export type AccessAnalysisCoverage =
     observedFrom: null;
     observedThrough: null;
   };
+
+export type BoundaryControlledIdentityPreview = {
+  id: string;
+  name: string;
+  displayName: string;
+  boundary: {
+    policyId: string;
+    policyName: string;
+    defaultVersion: number;
+  };
+  directPolicyIds: string[];
+  groupIds: string[];
+  inheritedPolicyIds: string[];
+  evidence: {
+    delegatedManager: "UNAVAILABLE";
+    createdBy: "UNAVAILABLE";
+    mutationClosure: "CONTRACT_PENDING";
+    runtimeEnforcement: "NOT_EVALUATED";
+  };
+};
+
 function assertReportAccount(workspace: AccessWorkspace, scene: AccountAccessScene) {
   if (workspace.accountId !== scene.accountId) throw new Error("INVALID_IAM_TENANT");
 }
@@ -225,16 +246,58 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
   return findings;
 }
 
+// This projection is intentionally narrower than a delegated-administration
+// model. A current boundary proves only that the identity is bounded. The
+// preview must not infer who created or manages it, which future mutations are
+// closed by that manager, or whether a concrete request will be allowed.
+export function buildBoundaryControlledIdentityPreview(workspace: AccessWorkspace, scene: AccountAccessScene): {
+  items: BoundaryControlledIdentityPreview[];
+  boundaryReferences: number;
+  unresolvedReferences: number;
+} {
+  assertReportAccount(workspace, scene);
+  const references = Object.entries(workspace.userBoundaries).sort(([left], [right]) => left.localeCompare(right));
+  const items = references.flatMap(([principalId, boundaryPolicyId]) => {
+    const user = scene.users.find((candidate) => candidate.id === principalId);
+    const boundary = workspace.policies.find((policy) => policy.id === boundaryPolicyId);
+    if (!user || !boundary) return [];
+    const groups = workspace.groups.filter((group) => group.memberIds.includes(principalId));
+    return [{
+      id: principalId,
+      name: user.loginName,
+      displayName: user.name,
+      boundary: {
+        policyId: boundary.id,
+        policyName: boundary.name,
+        defaultVersion: boundary.defaultVersion
+      },
+      directPolicyIds: [...(workspace.userPolicies[principalId] ?? [])],
+      groupIds: groups.map((group) => group.id),
+      inheritedPolicyIds: [...new Set(groups.flatMap((group) => group.policyIds))],
+      evidence: {
+        delegatedManager: "UNAVAILABLE",
+        createdBy: "UNAVAILABLE",
+        mutationClosure: "CONTRACT_PENDING",
+        runtimeEnforcement: "NOT_EVALUATED"
+      }
+    } satisfies BoundaryControlledIdentityPreview];
+  });
+  return { items, boundaryReferences: references.length, unresolvedReferences: references.length - items.length };
+}
+
 // This preview exposes evidence-source readiness only. It deliberately does
 // not manufacture external federation or generic service-principal entries.
 export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: AccountAccessScene): {
   accountId: string;
   coverage: AccessAnalysisCoverage[];
+  boundaryControlledIdentities: BoundaryControlledIdentityPreview[];
+  delegationCoverage: { boundaryReferences: number; unresolvedReferences: number };
   unusedFindings: UnusedAccessFindingPreview[];
   scanPreview: AccessAnalysisScanPreview;
   rule: AccessAnalysisRulePreview;
 } {
   assertReportAccount(workspace, scene);
+  const delegation = buildBoundaryControlledIdentityPreview(workspace, scene);
   return {
     accountId: workspace.accountId,
     coverage: [
@@ -245,6 +308,8 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
       { id: "PAAS_RESULTS", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null },
       { id: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null }
     ],
+    boundaryControlledIdentities: delegation.items,
+    delegationCoverage: { boundaryReferences: delegation.boundaryReferences, unresolvedReferences: delegation.unresolvedReferences },
     unusedFindings: buildUnusedAccessFindingPreview(workspace, scene),
     scanPreview: {
       state: "FAILED",

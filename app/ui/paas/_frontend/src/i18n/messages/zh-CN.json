@@ -4858,6 +4858,7 @@
       },
       "tabs": {
         "external": "来源与入口",
+        "delegation": "委派治理",
         "unused": "未使用访问",
         "rule": "分析规则"
       },
@@ -4887,6 +4888,35 @@
         },
         "unavailableTitle": "暂无可核验的外部入口",
         "unavailableHint": "当前没有固定的外部身份或通用服务主体信任契约，因此不生成假对象。服务访问请到“服务授权”查看受信模板、账号关系与精确资源绑定；外部联合身份待 IAM 契约发布后接入。"
+      },
+      "delegation": {
+        "title": "安全委派闭包",
+        "hint": "从当前 MOCK 工作区里已经设置权限边界的身份开始核对；没有证据的管理者、创建来源和后继变更不会被浏览器补出来。",
+        "mock": "MOCK · 概念预览",
+        "boundary": "现有边界只证明这个身份受到一条准确策略上限约束。它不证明谁创建或管理该身份，也不证明组、附件和策略版本变更已经纳入同一个安全闭包。",
+        "summary": "安全委派证据摘要",
+        "boundedIdentities": "已观察到边界的身份",
+        "boundedIdentityCoverage": "已解析 {shown} / {total} 条引用",
+        "unresolvedReferences": "还有 {count} 条边界引用未能在当前已加载的用户／策略目录中解析；这表示证据覆盖不完整，不等于对象不存在或未设置边界。",
+        "managerEvidence": "委派管理员证据",
+        "closureEvidence": "后继变更闭包",
+        "runtimeEvaluation": "请求级权限求值",
+        "evidence": {
+          "UNAVAILABLE": "证据缺失",
+          "CONTRACT_PENDING": "契约待固定",
+          "NOT_EVALUATED": "未执行求值"
+        },
+        "directory": "边界受控身份",
+        "directoryHint": "本表只投影工作区已有的 User、准确权限边界和当前授权来源；它不是 delegated-manager/created-by 目录，也不能作为允许后续管理操作的证明。",
+        "unresolvedTitle": "当前目录不足以解析边界身份",
+        "unresolvedHint": "保留已观察到的边界引用并等待对应 User 与 Policy 目录继续加载；不能显示为空成功，也不能据此猜测身份或策略。",
+        "identity": "受控身份",
+        "ceiling": "准确委派上限",
+        "sources": "当前授权来源",
+        "lineage": "管理来源与闭包",
+        "directCount": "{count} 条直接策略",
+        "groupSourceCount": "{groups} 个用户组 · {policies} 条去重继承策略",
+        "noMutation": "当前没有可验证的 delegated-manager、created-by 或组／附件／策略改版闭包契约，因此本预览不提供创建、关联、改版、替换或移除边界操作，也不会把 policyId 比较结果当成授权。"
       },
       "unused": {
         "scan": {

@@ -78,7 +78,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
   onNavigate(view: AccountAccessView, id?: string): void;
 }) {
   const t = useTranslations("IamWorkspace.accessAnalysis");
-  const [section, setSection] = useState<"external" | "unused" | "rule">("external");
+  const [section, setSection] = useState<"external" | "delegation" | "unused" | "rule">("external");
   const [selectedUnusedFinding, setSelectedUnusedFinding] = useState<UnusedAccessFindingPreview | null>(null);
   const [editingRule, setEditingRule] = useState<AccessAnalysisRuleSavedKind | null>(null);
   const [ruleOverride, setRuleOverride] = useState<AccessAnalysisRulePreview | null>(null);
@@ -183,8 +183,8 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
   }
   const content = <>
     <Alert status="info">{t("previewBoundary")}</Alert>
-    <Tabs.Root value={section} onValueChange={(value) => setSection(value as "external" | "unused" | "rule")}>
-      <Tabs.List aria-label={t("sections")} className={styles.accessAnalysisTabs}><Tabs.Trigger value="external">{t("tabs.external")}</Tabs.Trigger><Tabs.Trigger value="unused">{t("tabs.unused")} ({unusedFindings.length})</Tabs.Trigger><Tabs.Trigger value="rule">{t("tabs.rule")}</Tabs.Trigger></Tabs.List>
+    <Tabs.Root value={section} onValueChange={(value) => setSection(value as "external" | "delegation" | "unused" | "rule")}>
+      <Tabs.List aria-label={t("sections")} className={styles.accessAnalysisTabs}><Tabs.Trigger value="external">{t("tabs.external")}</Tabs.Trigger><Tabs.Trigger value="delegation">{t("tabs.delegation")} ({analysis.delegationCoverage.boundaryReferences})</Tabs.Trigger><Tabs.Trigger value="unused">{t("tabs.unused")} ({unusedFindings.length})</Tabs.Trigger><Tabs.Trigger value="rule">{t("tabs.rule")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content className={styles.stack} value="external">
         <Card>
           <Card.Header><div><Typography.Title as="h2" level={3}>{t("external.coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("external.coverageHint")}</Typography.Text></div><Badge status="info">{t("mockConfiguration")}</Badge></Card.Header>
@@ -193,6 +193,28 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           </Card.Body>
         </Card>
         <EmptyState title={t("external.unavailableTitle")} description={t("external.unavailableHint")} />
+      </Tabs.Content>
+      <Tabs.Content className={styles.stack} value="delegation">
+        <Card>
+          <Card.Header><div><Typography.Title as="h2" level={3}>{t("delegation.title")}</Typography.Title><Typography.Text tone="muted">{t("delegation.hint")}</Typography.Text></div><Badge status="info">{t("delegation.mock")}</Badge></Card.Header>
+          <Card.Body className={styles.securityReportBody}>
+            <Alert status="info">{t("delegation.boundary")}</Alert>
+            <dl className={`${styles.securityReportSummary} ${styles.scanSummary}`} aria-label={t("delegation.summary")}>
+              <div><dt>{t("delegation.boundedIdentities")}</dt><dd>{t("delegation.boundedIdentityCoverage", { shown: analysis.boundaryControlledIdentities.length, total: analysis.delegationCoverage.boundaryReferences })}</dd></div>
+              <div><dt>{t("delegation.managerEvidence")}</dt><dd>{t("delegation.evidence.UNAVAILABLE")}</dd></div>
+              <div><dt>{t("delegation.closureEvidence")}</dt><dd>{t("delegation.evidence.CONTRACT_PENDING")}</dd></div>
+              <div><dt>{t("delegation.runtimeEvaluation")}</dt><dd>{t("delegation.evidence.NOT_EVALUATED")}</dd></div>
+            </dl>
+            {analysis.delegationCoverage.unresolvedReferences ? <Alert status="warning">{t("delegation.unresolvedReferences", { count: analysis.delegationCoverage.unresolvedReferences })}</Alert> : null}
+          </Card.Body>
+        </Card>
+        <WorkspaceCollection embedded title={t("delegation.directory")} description={t("delegation.directoryHint")} items={analysis.boundaryControlledIdentities}
+          columns={[t("delegation.identity"), t("delegation.ceiling"), t("delegation.sources"), t("delegation.lineage")]}
+          unavailable={!analysis.boundaryControlledIdentities.length && analysis.delegationCoverage.unresolvedReferences ? { title: t("delegation.unresolvedTitle"), description: t("delegation.unresolvedHint") } : undefined}
+          keywords={(item) => `${item.displayName} ${item.boundary.policyId} ${item.boundary.policyName} ${item.directPolicyIds.join(" ")} ${item.groupIds.join(" ")} ${item.inheritedPolicyIds.join(" ")}`}
+          row={(item) => <><td><Table.PrimaryAction onClick={() => onNavigate("users", item.id)}>{item.name}</Table.PrimaryAction><small>{item.displayName} · {item.id}</small></td><td><strong>{item.boundary.policyName}</strong><small>{item.boundary.policyId} · v{item.boundary.defaultVersion}</small></td><td><span>{t("delegation.directCount", { count: item.directPolicyIds.length })}</span><small>{t("delegation.groupSourceCount", { groups: item.groupIds.length, policies: item.inheritedPolicyIds.length })}</small></td><td><Badge status="warning">{t(`delegation.evidence.${item.evidence.delegatedManager}`)}</Badge><small>{t(`delegation.evidence.${item.evidence.mutationClosure}`)}</small></td></>}
+          footerNote={t("delegation.directoryHint")} />
+        <Alert status="warning">{t("delegation.noMutation")}</Alert>
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="unused">
         <Card>

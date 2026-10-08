@@ -172,10 +172,10 @@
 
 .resetRequestId { min-width: 0; overflow-wrap: anywhere; }
 
-@container matrix-page-content (max-width: 360px) {
+@container matrix-page-content (max-width: 520px) {
   .accessAnalysisTabs {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0;
     overflow-x: hidden;
   }
