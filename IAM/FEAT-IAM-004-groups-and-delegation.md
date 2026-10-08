@@ -84,7 +84,7 @@ IAM 调用方目录新增以下精确动作，不以字符串前缀或任意 act
 
 User session 的权威策略快照以有界 UNION 读取直接附件和当前成员关系可达的组附件。GROUP 来源必须同时满足：Account/User/Group 活跃且未删除、membership 未移除、attachment 未撤销、Policy ACTIVE、默认版本和 digest 一致。任何关系损坏、来源超过预算、membership 证据缺失或同 ID 冲突都拒绝整个决定；不能截断后面的 Deny。CurrentIdentity 用 `policySources` 展示直接/继承来源，User/Group 管理详情只返回各自直接附件。
 
-公开写入先稳定锁定 Account 与 actor User。非 root Group 附件路径随后按稳定 ID 锁定全部当前成员 USER 及其边界，再锁定 Group、当前 membership、Policy 与 attachment；membership 创建先锁定候选 USER/边界，再锁定 Group 及其活跃附件。两条路径都在变更前后推进 Group 的内部授权代际，使较早 SERIALIZABLE 快照必须重试并重新读取闭包。User 边界移除或替换也会锁定该 User 当前活跃 Group 关系及带封存上限的附件；若仍有匹配关系依赖原上限则拒绝，必须先移除 membership 或撤销对应 Group 附件。SERIALIZABLE 冲突重试必须重新认证和读取整个来源快照；未知提交结果不按普通冲突盲重试。
+公开写入先稳定锁定 Account。非 root Group 附件把 actor 与全部当前成员组成完整 USER 集合，membership 创建把 actor 与候选组成完整 USER 集合；两条路径都在一次查询中按稳定 USER ID 加锁，再依次锁定边界、Group、当前 membership、Policy 与 attachment。禁止先锁各自 actor 后再交叉等待对方 USER；数据库 deadlock 不能由事务重试掩盖。两条路径都在变更前后推进 Group 的内部授权代际，使较早 SERIALIZABLE 快照必须重试并重新读取闭包。User 边界移除或替换也会锁定该 User 当前活跃 Group 关系及带封存上限的附件；若仍有匹配关系依赖原上限则拒绝，必须先移除 membership 或撤销对应 Group 附件。SERIALIZABLE 冲突重试必须重新认证和读取整个来源快照；未知提交结果不按普通冲突盲重试。
 
 创建 membership 继续拒绝 actor 把自己加入 Group，避免仅有成员管理动作时自助提权；平台 scope Policy 永不允许关联 Group。RootIdentity、已删除/停用 User、ServiceIdentity、带安装级附件的 USER、无边界 USER、不同边界 USER 和跨 Account User 在锁内再次拒绝。空组可由非 root 关联 tenant Policy，但该附件立即封存 actor 的 ceiling；以后加入的每个成员都必须精确匹配，而不是把“当时无成员”解释为无限上限。
 
@@ -96,7 +96,7 @@ User 删除沿 003 的 User principal 锁后终态移除其所有活跃 membersh
 
 真实 HTTP/PG18 至少创建两个 Account、同名 Group、每组多个 User：创建组→加成员→给组关联 PaaS tenant Policy→成员登录访问资源→移除成员后下一请求拒绝；直接附件仍可独立允许，组 Deny 必须压过直接 Allow。来源查询与保存决定分别证明 DIRECT/GROUP、准确 membership/attachment/version/digest，伪造、撤销或跨 Account 来源不能被 record/replay 接受。
 
-负向矩阵覆盖跨 Account Group/User/Policy/membership/attachment ID，RootIdentity/ServiceIdentity/Role/Group 入组，self-add，停用或删除 User，installation Policy，错误/旧/最大 resourceVersion，重复/变体 requestId，101 个活跃组、257 个有效附件及坏记录位于有效 Allow 之后。委派矩阵还必须覆盖空组封存、准确同边界成员、无边界/不同边界/Root/平台绑定成员、成员边界移除或替换，以及 Root 创建但没有委派 ceiling 的 Group 附件。并发 add/remove、Group delete/add、attach/delete、attach/add-member、boundary/remove-member 与 actor grant revoke 必须以最终状态和事实数证明无双活、无部分写入、无已撤来源复活。
+负向矩阵覆盖跨 Account Group/User/Policy/membership/attachment ID，RootIdentity/ServiceIdentity/Role/Group 入组，self-add，停用或删除 User，installation Policy，错误/旧/最大 resourceVersion，重复/变体 requestId，101 个活跃组、257 个有效附件及坏记录位于有效 Allow 之后。委派矩阵还必须覆盖空组封存、准确同边界成员、无边界/不同边界/Root/平台绑定成员、成员边界移除或替换，以及 Root 创建但没有委派 ceiling 的 Group 附件。并发 add/remove、Group delete/add、attach/delete、attach/add-member、boundary/remove-member 与 actor grant revoke 必须以最终状态和事实数证明无双活、无部分写入、无已撤来源复活；还要构造 A 给含 B 的组关联策略、同时 B 把 A 加入该组的反向 USER 锁环，要求两个合法命令各提交一次且 `40P01` 计数为零。
 
 当前 schema 的等值重放、带数据重启必须保持直接附件、历史 decision/Audit canonical bytes 和撤销状态。开发历史的升级起点按 [011 首版基线规则](./FEAT-IAM-011-acceptance.md#未发布阶段与首版基线) 选择，不要求本片从 schema 1 跑完整历史链；已做的固定旧 binary 实验是风险替换证据，不等于对全部开发版本承诺兼容。
 
@@ -113,7 +113,7 @@ User 删除沿 003 的 User principal 锁后终态移除其所有活跃 membersh
 - 源码和内嵌产物稳定后的全仓 Go race/vet、架构检查、模块校验、生成一致性及 Linux amd64 构建通过。
 - 前端 typecheck/lint/架构/20 组对比度、101 项测试通过；两次 2-worker 静态构建的 59 个内嵌文件一致。接口不解析游标、不与资源 ID 排序比较，拒绝原始 ID/换行/超长/重复 continuation；成员关系、目标 capability 和未知结果原意图边界继续保留。这是本地前端证据，不冒充独立前端 CI。
 
-当前 Group 委派增量在本任务专属 PostgreSQL 18 新库完成本地验证：`TestIAMPolicyAttachmentChangePostgres` race 26.960s，覆盖空组封存、同 ceiling 成员、无边界/不同边界/Root/平台绑定攻击、成员边界变更阻断、Root 创建附件的受限撤销、创建与撤销的 `GROUP_BOUND` 证据、无隐藏 deadlock 和确定性并发 attach/add-member；完整 `TestIAMPolicyAuthorityStoragePostgres` race 330.80s、`TestIAMHTTPPostgresVerticalSlice` race 125.21s、Audit HTTP race 1.58s 和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 279.34s 继续通过。固定 IAM71 程序产生真实保留数据后升级至当前 IAM72 的 `TestIAMRetainedPredecessorProcessUpgrade` 最新 148.99s 通过，既有附件证据及 Audit 摘要保持，新增内部 ceiling 对保留行明确为 `NULL`。这些是当前工作树的本地证据；独立 CI、签名 A/B 生命周期和 UX/UI 浏览器验收仍待固定提交后完成。
+当前 Group 委派增量在本任务专属 PostgreSQL 18 新库完成本地验证：新增反向锁环在修复前确定触发一次 `40P01`，统一 USER-ID 锁序后 `TestIAMPolicyAttachmentChangePostgres` race 28.299s 通过；它同时覆盖空组封存、同 ceiling 成员、无边界/不同边界/Root/平台绑定攻击、成员边界变更阻断、Root 创建附件的受限撤销、创建与撤销的 `GROUP_BOUND` 证据，以及两个合法反向写入各一份关系/事实且无隐藏 deadlock。完整 `TestIAMPolicyAuthorityStoragePostgres` race 311.679s、`TestIAMHTTPPostgresVerticalSlice` race 127.828s、Audit HTTP race 4.505s 和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 279.704s 继续通过。固定 IAM71 程序产生真实保留数据后升级至当前 IAM72 的 `TestIAMRetainedPredecessorProcessUpgrade` 最新 131.990s 通过，既有附件证据及 Audit 摘要保持，新增内部 ceiling 对保留行明确为 `NULL`。这些是当前工作树的本地证据；独立 CI、签名 A/B 生命周期和 UX/UI 浏览器验收仍待固定提交后完成。
 
 同一最终工作树通过全仓无缓存 `go test -race -p 2 ./...`（含 architecture）、`go vet -p 2 ./...`、模块校验、API 重新生成零差异及 Linux amd64/CGO 关闭的全仓构建；默认缺少外部 DSN 的 SKIP 不计真实运行证据。
 

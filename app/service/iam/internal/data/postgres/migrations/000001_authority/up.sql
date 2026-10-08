@@ -4176,12 +4176,19 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',submitted_tenant_id,true);
     PERFORM 1 FROM iam.accounts WHERE id=submitted_tenant_id AND status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
-    -- Lock both real USER rows in one stable order, including self-targets.
-    -- Credential, logout and platform-grant writers serialize on these rows.
+    -- Lock the complete real USER set in one stable order: actor, direct USER
+    -- target, or every current member of a Group target. Credential, logout,
+    -- membership and platform-grant writers serialize on these rows.
     -- The decision already holds an actor FK KEY SHARE: protect mutable
     -- identity state without competing to upgrade that immutable key reference.
     PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id
-        AND (p.id=submitted_actor_principal_id OR (submitted_target_kind='USER' AND p.id=submitted_target_id))
+        AND (p.id=submitted_actor_principal_id
+          OR (submitted_target_kind='USER' AND p.id=submitted_target_id)
+          OR (submitted_target_kind='GROUP' AND EXISTS(
+              SELECT 1 FROM iam.group_memberships AS membership
+               WHERE membership.tenant_id=submitted_tenant_id
+                 AND membership.group_id=submitted_target_id
+                 AND membership.user_id=p.id AND membership.removed_at IS NULL)))
         ORDER BY p.id FOR NO KEY UPDATE;
     PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id AND p.id=submitted_actor_principal_id
         AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL AND NOT p.must_change_password;
@@ -4322,9 +4329,16 @@ BEGIN
     initial_target_kind:=stored.target_kind; initial_target_id:=stored.target_id;
     initial_policy_id:=stored.policy_id; initial_scope:=stored.authority_scope;
     -- The immutable target may be read before locking; mutation locks always
-    -- start with the same sorted actor/USER set as attachment creation.
+    -- start with the same complete sorted actor/USER set as attachment
+    -- creation, including every current Group member.
     PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id
-        AND (p.id=submitted_actor_principal_id OR (stored.target_kind='USER' AND p.id=stored.target_id))
+        AND (p.id=submitted_actor_principal_id
+          OR (stored.target_kind='USER' AND p.id=stored.target_id)
+          OR (stored.target_kind='GROUP' AND EXISTS(
+              SELECT 1 FROM iam.group_memberships AS membership
+               WHERE membership.tenant_id=submitted_tenant_id
+                 AND membership.group_id=stored.target_id
+                 AND membership.user_id=p.id AND membership.removed_at IS NULL)))
         ORDER BY p.id FOR NO KEY UPDATE;
     PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id AND p.id=submitted_actor_principal_id
         AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL AND NOT p.must_change_password;

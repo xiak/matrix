@@ -69,7 +69,7 @@ PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是�
 
 新事实为 `iam.policy-attachment.created/revoked`（tenant chain）与 `iam.platform-policy-attachment.created/revoked`（installation chain），target 均为 POLICY_ATTACHMENT；必须有当前 USER 决定，不接受 SYSTEM、probe 或 target.tenantId 变体。平台关联 ID 的物理 owner 仍为调用身份的 home Account，不允许用跨账号 target ID 借平台权限修改其他租户。事实、关联和决定/outbox 同事务；公开命令不提供系统策略发布或服务主体授权旁路。
 
-用例负责系统策略装配、附件授予撤销、当前来源收集和决定持久化。写入按 scope → principal → policy → attachment 锁序；撤销与密码/状态保护使用相同 principal 锁。账号级普通变更对 organization 使用共享锁，不把不同成员的所有写入串成独占队列；租户生命周期与安装 primary 恢复需要独占 scope。凭据变更继续按 principal → credential → session 加锁，退出先读取不可变主体引用，再按 principal → session 重新锁定当前记录。API/worker/verifier 无越权 DML，查询走 RLS/受限函数。安装恢复用例要查询新的显式平台附件，保持封存 primary tuple 与原 receipt。
+用例负责系统策略装配、附件授予撤销、当前来源收集和决定持久化。写入按 scope → 完整 USER 集合（同类按稳定 ID 一次排序）→ policy → attachment 锁序；Group 附件的集合包含 actor 与全部当前成员，membership 创建的集合包含 actor 与候选，不能分别先锁各自 actor 后再交叉等待。撤销与密码/状态保护使用相同 principal 锁。账号级普通变更对 organization 使用共享锁，不把不同成员的所有写入串成独占队列；租户生命周期与安装 primary 恢复需要独占 scope。凭据变更继续按 principal → credential → session 加锁，退出先读取不可变主体引用，再按 principal → session 重新锁定当前记录。API/worker/verifier 无越权 DML，查询走 RLS/受限函数。安装恢复用例要查询新的显式平台附件，保持封存 primary tuple 与原 receipt。
 
 任何未撤销 INSTALLATION scope 的 USER 关联均阻止普通租户管理员通过状态/密码接口接管该身份；保护不依赖策略显示名、某个预置策略 ID、策略是否仍 ACTIVE 或用户当前是否可登录。仅退休策略或先停用用户不能绕过，关联正式撤销后才恢复普通成员管理规则。离线恢复仍只消费原封存 platform attachment ID/修订及安装归属，不因此允许任意平台关联转化成恢复资格。
 

@@ -401,12 +401,23 @@ BEGIN
     IF actor=user_id OR COALESCE(membership_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='group membership is forbidden';
     END IF;
-    PERFORM iam.assert_group_actor(tenant,actor);
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts AS account WHERE account.id=tenant AND account.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='group account is unavailable'; END IF;
+    -- Attachment writers lock their actor and every current Group member.
+    -- Membership creation therefore locks actor and candidate together in the
+    -- same stable USER-ID order before it validates either mutable identity.
+    PERFORM 1 FROM iam.principals AS principal
+     WHERE principal.tenant_id=tenant AND principal.id IN (actor,user_id)
+     ORDER BY principal.id FOR NO KEY UPDATE;
+    PERFORM 1 FROM iam.principals AS principal
+     WHERE principal.tenant_id=tenant AND principal.id=actor AND principal.principal_type='USER'
+       AND principal.status='ACTIVE' AND NOT principal.must_change_password AND principal.deleted_at IS NULL;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='group actor is unavailable'; END IF;
     PERFORM 1 FROM iam.principals AS principal
      WHERE principal.tenant_id=tenant AND principal.id=user_id AND principal.principal_type='USER'
        AND principal.status='ACTIVE' AND principal.deleted_at IS NULL
-       AND NOT EXISTS(SELECT 1 FROM iam.account_roots AS root WHERE root.account_id=tenant AND root.principal_id=principal.id)
-     FOR UPDATE;
+       AND NOT EXISTS(SELECT 1 FROM iam.account_roots AS root WHERE root.account_id=tenant AND root.principal_id=principal.id);
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='membership user is unavailable'; END IF;
     -- Boundary writers hold the same USER row first. Lock the current
     -- relation before the Group so every closure writer uses one order.

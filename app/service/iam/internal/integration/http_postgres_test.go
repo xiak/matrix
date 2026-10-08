@@ -14334,7 +14334,7 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-other", "displayName": "Attachment change other",
 		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-change-other"}, http.StatusCreated, &other)
 	otherBearer := localRecoveryLogin(t, handler, other.LoginName+"@"+string(other.AccountID), initialDeveloperPassword, true)
-	localRecoveryChangePassword(t, handler, otherBearer, initialDeveloperPassword, changedDeveloperPassword)
+	otherBearer = localRecoveryChangePassword(t, handler, otherBearer, initialDeveloperPassword, changedDeveloperPassword)
 
 	createRequest := iamv1.CreatePolicyAttachmentRequest{
 		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)},
@@ -14503,6 +14503,142 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 		delegationCeiling.Policy.ID, delegatedRevoke.RequestID).Scan(&delegatedProof); err != nil || !delegatedProof {
 		t.Fatal("delegated policy attachment completion lost its exact actor/target ceiling", err)
 	}
+	// Two same-ceiling delegated administrators can touch the same Group from
+	// opposite directions. A Group attachment locks its actor and every current
+	// member, while membership creation locks its actor and candidate. Hold the
+	// lexicographically later USER so both requests reach the opposite earlier
+	// USER: every writer must acquire the complete USER set in the same order,
+	// never hide an A->B/B->A deadlock behind the transaction retry loop.
+	var otherAdministratorGrant iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(other.ID)},
+		PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1,
+		RequestID: "attachment-change-other-admin-grant",
+	}, http.StatusOK, &otherAdministratorGrant)
+	otherBearer = localRecoveryLogin(t, handler, other.LoginName+"@"+string(other.AccountID), changedDeveloperPassword, false)
+	attachmentActor, attachmentBearer := delegated, delegatedBearer
+	membershipActor, membershipBearer := other, otherBearer
+	if string(attachmentActor.ID) > string(membershipActor.ID) {
+		attachmentActor, membershipActor = membershipActor, attachmentActor
+		attachmentBearer, membershipBearer = membershipBearer, attachmentBearer
+	}
+	var lockOrderGroup iamv1.Group
+	call(http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{
+		Name: "Delegated lock order", RequestID: "attachment-change-group-lock-order",
+	}, http.StatusCreated, &lockOrderGroup)
+	call(http.MethodPost, "/v1/groups/"+string(lockOrderGroup.ID)+"/memberships", root,
+		iamv1.CreateGroupMembershipRequest{UserID: membershipActor.ID,
+			RequestID: "attachment-change-group-lock-order-member"}, http.StatusOK, nil)
+	lockOrderAttachmentRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(lockOrderGroup.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+		RequestID: "attachment-change-group-lock-order-attachment",
+	}
+	lockOrderMembershipRequest := iamv1.CreateGroupMembershipRequest{
+		UserID: attachmentActor.ID, RequestID: "attachment-change-group-lock-order-membership",
+	}
+	blockerConfig := config.Copy()
+	blocker, err := pgx.ConnectConfig(ctx, blockerConfig)
+	if err != nil {
+		t.Fatal("connect Group lock-order blocker")
+	}
+	t.Cleanup(func() { _ = blocker.Close(context.Background()) })
+	blockerTransaction, err := blocker.Begin(ctx)
+	if err != nil {
+		t.Fatal("begin Group lock-order blocker")
+	}
+	blockerOpen := true
+	t.Cleanup(func() {
+		if blockerOpen {
+			_ = blockerTransaction.Rollback(context.Background())
+		}
+	})
+	if _, err := blockerTransaction.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", string(membershipActor.AccountID)); err != nil {
+		t.Fatal("scope Group lock-order blocker", err)
+	}
+	var blockerPID int32
+	if err := blockerTransaction.QueryRow(ctx, `SELECT pg_backend_pid() FROM iam.principals
+		WHERE tenant_id=$1 AND id=$2 FOR SHARE`, membershipActor.AccountID, membershipActor.ID).Scan(&blockerPID); err != nil {
+		t.Fatal("hold later Group USER lock", err)
+	}
+	deadlocksBefore := failures.deadlock.Load()
+	lockOrderAttachmentDone := make(chan *httptest.ResponseRecorder, 1)
+	lockOrderMembershipDone := make(chan *httptest.ResponseRecorder, 1)
+	lockOrderAttachmentBody := mustIAMJSON(t, lockOrderAttachmentRequest)
+	lockOrderMembershipBody := mustIAMJSON(t, lockOrderMembershipRequest)
+	go func() {
+		lockOrderAttachmentDone <- performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments",
+			attachmentBearer, lockOrderAttachmentBody)
+	}()
+	waitLockOrder, stopLockOrderWait := context.WithTimeout(ctx, 10*time.Second)
+	defer stopLockOrderWait()
+	observeBlockedPID := func(query string, blockingPID int32, description string) int32 {
+		t.Helper()
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var pid int32
+			if err := database.QueryRow(waitLockOrder, `SELECT COALESCE(min(pid),0) FROM pg_stat_activity
+				WHERE datname=current_database() AND usename=$1 AND state='active'
+				  AND query LIKE $2 AND $3=ANY(pg_blocking_pids(pid))`, iamHTTPTestRole, query, blockingPID).Scan(&pid); err != nil {
+				t.Fatalf("observe %s: %v", description, err)
+			}
+			if pid != 0 {
+				return pid
+			}
+			select {
+			case <-ticker.C:
+			case <-waitLockOrder.Done():
+				t.Fatalf("%s did not reach its row lock", description)
+			}
+		}
+	}
+	attachmentPID := observeBlockedPID("%create_policy_attachment(%", blockerPID, "Group attachment waiting on its later member")
+	go func() {
+		lockOrderMembershipDone <- performIAMRequest(handler, http.MethodPost,
+			"/v1/groups/"+string(lockOrderGroup.ID)+"/memberships", membershipBearer, lockOrderMembershipBody)
+	}()
+	observeBlockedPID("%create_group_membership(%", attachmentPID, "Group membership waiting on its earlier candidate")
+	if err := blockerTransaction.Commit(waitLockOrder); err != nil {
+		t.Fatal("release Group lock-order blocker", err)
+	}
+	blockerOpen = false
+	var lockOrderAttachment iamv1.PolicyAttachment
+	select {
+	case response := <-lockOrderAttachmentDone:
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &lockOrderAttachment) != nil {
+			t.Fatalf("Group lock-order attachment status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-waitLockOrder.Done():
+		t.Fatal("Group lock-order attachment did not finish")
+	}
+	select {
+	case response := <-lockOrderMembershipDone:
+		if response.Code != http.StatusOK {
+			t.Fatalf("Group lock-order membership status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-waitLockOrder.Done():
+		t.Fatal("Group lock-order membership did not finish")
+	}
+	if got := failures.deadlock.Load(); got != deadlocksBefore {
+		t.Fatalf("opposite Group writers hid %d database deadlocks behind retry", got-deadlocksBefore)
+	}
+	var lockOrderClosed bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.group_memberships WHERE tenant_id=$1 AND group_id=$2 AND removed_at IS NULL)=2
+		AND (SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$3
+		  AND target_kind='GROUP' AND target_id=$2 AND revoked_at IS NULL AND delegation_ceiling_policy_id=$4)=1
+		AND (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1
+		  AND event_document->>'requestId' IN ($5,$6)
+		  AND event_document->>'action' IN ('iam.policy-attachment.created','iam.group-membership.created'))=2`,
+		attachmentActor.AccountID, lockOrderGroup.ID,
+		lockOrderAttachment.ID, delegationCeiling.Policy.ID, lockOrderAttachmentRequest.RequestID,
+		lockOrderMembershipRequest.RequestID).Scan(&lockOrderClosed); err != nil || !lockOrderClosed {
+		t.Fatal("opposite Group writers lost their single committed relationships/facts", err)
+	}
+	call(http.MethodPost, "/v1/policy-attachments/"+string(lockOrderAttachment.ID)+":revoke", attachmentBearer,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: lockOrderAttachment.ResourceVersion,
+			RequestID: "attachment-change-group-lock-order-revoke"}, http.StatusOK, nil)
 	var raceTarget iamv1.User
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-race", "displayName": "Attachment boundary race",
 		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-change-race-user"}, http.StatusCreated, &raceTarget)
