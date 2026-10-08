@@ -4110,6 +4110,7 @@ DECLARE
     target_user iam.principals%ROWTYPE;
     action_name text;
     event_action text;
+    delegation jsonb;
 BEGIN
     IF COALESCE(submitted_tenant_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_attachment_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -4156,7 +4157,7 @@ BEGIN
     END IF;
     SELECT * INTO policy FROM iam.policies
      WHERE id=submitted_policy_id AND status='ACTIVE'
-       AND (owner_tenant_id IS NULL OR owner_tenant_id=submitted_tenant_id) FOR SHARE;
+       AND (owner_tenant_id IS NULL OR owner_tenant_id=submitted_tenant_id);
     IF NOT FOUND OR policy.authority_scope NOT IN ('TENANT','INSTALLATION')
        OR (submitted_target_kind IN ('GROUP','ROLE') AND policy.authority_scope<>'TENANT') THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment policy is unavailable';
@@ -4175,6 +4176,22 @@ BEGIN
                     ELSE 'iam.policy-attachment.created' END;
     PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
         action_name,submitted_target_kind,submitted_target_id,'INSTANCE',NULL);
+    delegation:=iam.lock_policy_attachment_delegation(submitted_tenant_id,submitted_actor_principal_id,
+        submitted_decision_id,action_name,submitted_target_kind,submitted_target_id,policy.authority_scope,policy.id);
+    IF delegation IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='policy attachment delegation is unavailable';
+    END IF;
+    -- The helper holds the attached policy and, for delegated tenant writes,
+    -- the common ceiling in stable order. Re-read every mutable policy field
+    -- after that barrier instead of trusting the pre-lock action selection.
+    SELECT * INTO policy FROM iam.policies
+     WHERE id=submitted_policy_id AND status='ACTIVE'
+       AND (owner_tenant_id IS NULL OR owner_tenant_id=submitted_tenant_id);
+    IF NOT FOUND OR policy.authority_scope NOT IN ('TENANT','INSTALLATION')
+       OR (submitted_target_kind IN ('GROUP','ROLE') AND policy.authority_scope<>'TENANT')
+       OR policy.resource_version<>submitted_policy_version THEN
+        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='policy revision conflicts';
+    END IF;
     PERFORM iam.assert_audit_event(submitted_audit_event,submitted_tenant_id,event_action,'POLICY_ATTACHMENT',submitted_attachment_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_actor_principal_id,submitted_audit_event);
     IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM submitted_decision_id THEN
@@ -4219,6 +4236,10 @@ DECLARE
     stored iam.policy_attachments%ROWTYPE;
     action_name text;
     event_action text;
+    initial_target_kind text;
+    initial_target_id text;
+    initial_policy_id text;
+    initial_scope text;
 BEGIN
     IF COALESCE(submitted_tenant_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_attachment_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -4235,6 +4256,8 @@ BEGIN
        OR (stored.target_kind IN ('GROUP','ROLE') AND stored.authority_scope<>'TENANT') THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment is unavailable';
     END IF;
+    initial_target_kind:=stored.target_kind; initial_target_id:=stored.target_id;
+    initial_policy_id:=stored.policy_id; initial_scope:=stored.authority_scope;
     -- The immutable target may be read before locking; mutation locks always
     -- start with the same sorted actor/USER set as attachment creation.
     PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id
@@ -4259,9 +4282,6 @@ BEGIN
     ELSE
         PERFORM 1 FROM iam.principals WHERE tenant_id=submitted_tenant_id AND id=stored.target_id FOR NO KEY UPDATE;
     END IF;
-    PERFORM 1 FROM iam.policies WHERE id=stored.policy_id FOR SHARE;
-    SELECT * INTO stored FROM iam.policy_attachments
-     WHERE tenant_id=submitted_tenant_id AND id=submitted_attachment_id FOR UPDATE;
     action_name := CASE WHEN stored.target_kind='GROUP' THEN 'iam.group-policy-attachment.revoke'
                    WHEN stored.target_kind='ROLE' THEN 'iam.role-policy-attachment.revoke'
                    WHEN stored.authority_scope='INSTALLATION' THEN 'iam.platform-policy-attachment.revoke'
@@ -4270,6 +4290,15 @@ BEGIN
                     ELSE 'iam.policy-attachment.revoked' END;
     PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
         action_name,'POLICY_ATTACHMENT',submitted_attachment_id,'INSTANCE',NULL);
+    PERFORM iam.lock_policy_attachment_delegation(submitted_tenant_id,submitted_actor_principal_id,
+        submitted_decision_id,action_name,stored.target_kind,stored.target_id,stored.authority_scope,stored.policy_id);
+    SELECT * INTO stored FROM iam.policy_attachments
+     WHERE tenant_id=submitted_tenant_id AND id=submitted_attachment_id FOR UPDATE;
+    IF NOT FOUND OR stored.target_kind IS DISTINCT FROM initial_target_kind
+      OR stored.target_id IS DISTINCT FROM initial_target_id OR stored.policy_id IS DISTINCT FROM initial_policy_id
+      OR stored.authority_scope IS DISTINCT FROM initial_scope THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='attachment changed during revocation';
+    END IF;
     IF stored.target_kind='USER' AND stored.policy_id='system.account-administrator' AND EXISTS (
         SELECT 1 FROM iam.account_roots WHERE account_id=submitted_tenant_id AND principal_id=stored.target_id
     ) THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary authority is protected'; END IF;

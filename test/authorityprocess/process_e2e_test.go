@@ -121,9 +121,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "a477e38174763bb88b4401b33a32b027ed34540a"
-	const sourceSchema uint64 = 68
-	const currentSchema uint64 = 69
+	const source = "a146626f9b301da43c2a6614a122a7e92bc2d558"
+	const sourceSchema uint64 = 69
+	const currentSchema uint64 = 70
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -428,7 +428,8 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Helper()
 		var state []byte
 		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
-			'changes',(SELECT jsonb_agg(to_jsonb(receipt) ORDER BY tenant_id,actor_principal_id,request_id)
+			'changes',(SELECT jsonb_agg(to_jsonb(receipt) - 'actor_boundary_evidence' - 'target_boundary_evidence'
+			  ORDER BY tenant_id,actor_principal_id,request_id)
 			  FROM iam.policy_attachment_changes receipt),
 			'facts',(SELECT jsonb_agg(event_document ORDER BY event_id) FROM iam.audit_outbox
 			  WHERE event_document->>'requestId' IN ('retained-old-viewer','retained-old-viewer-revoke','retained-request-tag-developer')),
@@ -443,6 +444,10 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		return state
 	}
 	predecessorAttachmentContract := attachmentContractState()
+	var predecessorAttachmentReceiptCount int64
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachment_changes`).Scan(&predecessorAttachmentReceiptCount); err != nil || predecessorAttachmentReceiptCount != 5 {
+		t.Fatal("predecessor attachment completion fixture is incomplete", err, predecessorAttachmentReceiptCount)
+	}
 	retainedTagRequest := iamv1.AuthorizationRequest{
 		Action:   iamv1.ActionPaaSApplicationCreate,
 		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"},
@@ -664,7 +669,14 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("retained database did not satisfy current IAM readiness and fail-closed defaults", err)
 	}
 	if current := attachmentContractState(); !bytes.Equal(predecessorAttachmentContract, current) {
-		t.Fatal("IAM68 attachment completions, facts or built-in policy state changed during IAM69 migration")
+		t.Fatal("IAM69 attachment completions, facts or built-in policy state changed during IAM70 migration")
+	}
+	var predecessorEvidencePreserved bool
+	if err := admin.QueryRow(ctx, `SELECT count(*)=$1
+		AND bool_and(actor_boundary_evidence='{"state":"PREDECESSOR_UNPROVEN"}'::jsonb)
+		AND bool_and(target_boundary_evidence='{"state":"PREDECESSOR_UNPROVEN"}'::jsonb)
+		FROM iam.policy_attachment_changes`, predecessorAttachmentReceiptCount).Scan(&predecessorEvidencePreserved); err != nil || !predecessorEvidencePreserved {
+		t.Fatal("IAM70 did not preserve IAM69 attachment receipts as explicitly unproven predecessor evidence", err)
 	}
 	var attachmentChangeAuthority bool
 	if err := admin.QueryRow(ctx, `SELECT
@@ -678,7 +690,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
 		  WHERE p.id='system.platform-operator'
 		    AND action_value='iam.platform-policy-attachment-change.read')`).Scan(&attachmentChangeAuthority); err != nil || !attachmentChangeAuthority {
-		t.Fatal("IAM68 built-in attachment completion read authority was lost", err)
+		t.Fatal("IAM69 built-in attachment completion read authority was lost", err)
 	}
 	current := start(currentBinary, currentSchema)
 	for requestID, expected := range map[string]iamv1.PolicyAttachmentChange{

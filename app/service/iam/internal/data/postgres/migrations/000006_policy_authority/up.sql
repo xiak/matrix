@@ -100,35 +100,138 @@ BEGIN
         'version',iam.policy_version_snapshot(version));
 END $function$;
 
+CREATE OR REPLACE FUNCTION iam.current_user_boundary_evidence(tenant text,user_id text)
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE boundary jsonb; evidence jsonb;
+BEGIN
+    boundary:=iam.current_user_boundary(tenant,user_id);
+    evidence:=jsonb_build_object('state',boundary->>'state','userResourceVersion',boundary->'userResourceVersion');
+    IF boundary->>'state'='BOUND' THEN
+        evidence:=evidence||jsonb_strip_nulls(jsonb_build_object(
+            'boundaryId',boundary->>'boundaryId','resourceVersion',boundary->'resourceVersion',
+            'version',jsonb_build_object('policyId',boundary#>>'{version,value,policyId}',
+                'versionId',boundary#>>'{version,value,versionId}',
+                'contentDigest',boundary#>>'{version,value,contentDigest}'),
+            'contractVersion',boundary#>'{version,value,contractVersion}',
+            'compilation',boundary#>'{version,value,compilation}'));
+    END IF;
+    RETURN evidence;
+END $function$;
+
 CREATE OR REPLACE FUNCTION iam.assert_current_user_boundary_evidence(tenant text,actor text,action_name text,evidence jsonb)
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE actor_type text; boundary jsonb; expected jsonb;
+DECLARE actor_type text; expected jsonb;
 BEGIN
     SELECT principal_type INTO actor_type FROM iam.principals WHERE tenant_id=tenant AND id=actor;
     IF actor_type IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary actor is unavailable'; END IF;
-    IF actor_type='USER' THEN
-        boundary:=iam.current_user_boundary(tenant,actor);
-    END IF;
     IF iam.resource_kind_for_action(action_name) IS NULL OR iam.is_platform_action(action_name) IS NULL THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='boundary action is not registered';
     END IF;
     IF actor_type<>'USER' OR iam.is_platform_action(action_name) OR action_name='installation.verify' THEN
         expected:=jsonb_build_object('state','NOT_APPLICABLE');
     ELSE
-        expected:=jsonb_build_object('state',boundary->>'state','userResourceVersion',boundary->'userResourceVersion');
-        IF boundary->>'state'='BOUND' THEN
-            expected:=expected||jsonb_strip_nulls(jsonb_build_object('boundaryId',boundary->>'boundaryId','resourceVersion',boundary->'resourceVersion',
-                'version',jsonb_build_object('policyId',boundary#>>'{version,value,policyId}','versionId',boundary#>>'{version,value,versionId}',
-                    'contentDigest',boundary#>>'{version,value,contentDigest}'),
-                'contractVersion',boundary#>'{version,value,contractVersion}','compilation',boundary#>'{version,value,compilation}'));
-        END IF;
+        expected:=iam.current_user_boundary_evidence(tenant,actor);
     END IF;
     IF evidence IS DISTINCT FROM expected THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='authorization boundary evidence is not current';
     END IF;
 END $function$;
+
+-- Resolve and lock the exact delegation proof used by a policy attachment
+-- mutation. Root and installation-scoped commands use closed states instead
+-- of pretending to carry an ordinary tenant permission boundary. A delegated
+-- tenant writer may manage only a direct USER with the same current ceiling.
+CREATE OR REPLACE FUNCTION iam.lock_policy_attachment_delegation(
+    submitted_tenant text,submitted_actor text,submitted_decision text,submitted_action text,
+    submitted_target_kind text,submitted_target_id text,submitted_authority_scope text,submitted_policy_id text
+)
+RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE actor_is_root boolean; actor_version bigint; actor_evidence jsonb; target_evidence jsonb;
+    ceiling_policy_id text; ceiling iam.policies%ROWTYPE; attached iam.policies%ROWTYPE;
+BEGIN
+    IF COALESCE(submitted_tenant,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(submitted_actor,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(submitted_decision,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(submitted_action,'') COLLATE "C" !~ '^[a-z0-9][a-z0-9._:-]{0,127}$'
+      OR submitted_target_kind NOT IN ('USER','GROUP','ROLE')
+      OR COALESCE(submitted_target_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR submitted_authority_scope NOT IN ('TENANT','INSTALLATION')
+      OR COALESCE(submitted_policy_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='policy attachment delegation input is invalid';
+    END IF;
+    SELECT principal.resource_version,EXISTS(SELECT 1 FROM iam.account_roots root
+        WHERE root.account_id=submitted_tenant AND root.principal_id=submitted_actor)
+      INTO actor_version,actor_is_root FROM iam.principals principal
+      WHERE principal.tenant_id=submitted_tenant AND principal.id=submitted_actor AND principal.principal_type='USER'
+        AND principal.status='ACTIVE' AND principal.deleted_at IS NULL;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment actor is unavailable';
+    END IF;
+    SELECT recorded.boundary_evidence INTO actor_evidence FROM iam.authorization_decisions recorded
+      WHERE recorded.tenant_id=submitted_tenant AND recorded.id=submitted_decision AND recorded.principal_id=submitted_actor
+        AND recorded.action_name=submitted_action AND recorded.allowed;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment decision is unavailable';
+    END IF;
+    PERFORM iam.assert_current_user_boundary_evidence(submitted_tenant,submitted_actor,submitted_action,actor_evidence);
+
+    -- Boundary writers first lock the same principal rows, so an absent row
+    -- cannot be inserted around this check. Existing rows are then locked in
+    -- stable USER order before either policy row is acquired.
+    PERFORM boundary.user_id FROM iam.user_permission_boundaries boundary
+      WHERE boundary.tenant_id=submitted_tenant AND boundary.revoked_at IS NULL
+        AND (boundary.user_id=submitted_actor
+          OR (submitted_target_kind='USER' AND boundary.user_id=submitted_target_id))
+      ORDER BY boundary.user_id FOR NO KEY UPDATE;
+
+    IF actor_is_root THEN
+        target_evidence:='{"state":"ROOT"}'::jsonb;
+        actor_evidence:=jsonb_build_object('state','ROOT','userResourceVersion',actor_version);
+    ELSIF submitted_authority_scope='INSTALLATION' THEN
+        actor_evidence:='{"state":"NOT_APPLICABLE"}'::jsonb;
+        target_evidence:='{"state":"NOT_APPLICABLE"}'::jsonb;
+    ELSE
+        IF submitted_target_kind<>'USER' OR actor_evidence->>'state' IS DISTINCT FROM 'BOUND'
+          OR EXISTS(SELECT 1 FROM iam.policy_attachments attachment
+              WHERE attachment.tenant_id=submitted_tenant AND attachment.target_kind='USER'
+                AND attachment.target_id IN(submitted_actor,submitted_target_id) AND attachment.authority_scope='INSTALLATION'
+                AND attachment.revoked_at IS NULL)
+          OR EXISTS(SELECT 1 FROM iam.account_roots root
+              WHERE root.account_id=submitted_tenant AND root.principal_id=submitted_target_id) THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated policy attachment is unavailable';
+        END IF;
+        target_evidence:=iam.current_user_boundary_evidence(submitted_tenant,submitted_target_id);
+        IF target_evidence->>'state' IS DISTINCT FROM 'BOUND'
+          OR target_evidence#>>'{version,policyId}' IS DISTINCT FROM actor_evidence#>>'{version,policyId}'
+          OR target_evidence#>>'{version,versionId}' IS DISTINCT FROM actor_evidence#>>'{version,versionId}'
+          OR target_evidence#>>'{version,contentDigest}' IS DISTINCT FROM actor_evidence#>>'{version,contentDigest}'
+          OR target_evidence->'contractVersion' IS DISTINCT FROM actor_evidence->'contractVersion'
+          OR target_evidence->'compilation' IS DISTINCT FROM actor_evidence->'compilation' THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment target boundary is unavailable';
+        END IF;
+        ceiling_policy_id:=actor_evidence#>>'{version,policyId}';
+    END IF;
+
+    PERFORM policy.id FROM iam.policies policy
+      WHERE policy.id IN (submitted_policy_id,ceiling_policy_id) ORDER BY policy.id FOR SHARE;
+    SELECT * INTO attached FROM iam.policies policy WHERE policy.id=submitted_policy_id;
+    IF NOT FOUND OR attached.status<>'ACTIVE' OR attached.authority_scope<>submitted_authority_scope
+      OR (attached.owner_tenant_id IS NOT NULL AND attached.owner_tenant_id<>submitted_tenant) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment policy is unavailable';
+    END IF;
+    IF ceiling_policy_id IS NOT NULL THEN
+        SELECT * INTO ceiling FROM iam.policies policy WHERE policy.id=ceiling_policy_id;
+        IF NOT FOUND OR ceiling.management<>'CUSTOMER' OR ceiling.owner_tenant_id<>submitted_tenant
+          OR ceiling.authority_scope<>'TENANT' OR ceiling.status<>'ACTIVE' THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment ceiling is unavailable';
+        END IF;
+    END IF;
+    RETURN jsonb_build_object('actorBoundary',actor_evidence,'targetBoundary',target_evidence);
+END $function$;
+
 REVOKE ALL ON FUNCTION iam.guard_user_permission_boundary_change(),iam.current_user_boundary(text,text),
-    iam.assert_current_user_boundary_evidence(text,text,text,jsonb)
+    iam.current_user_boundary_evidence(text,text),iam.assert_current_user_boundary_evidence(text,text,text,jsonb),
+    iam.lock_policy_attachment_delegation(text,text,text,text,text,text,text,text)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 
 DROP FUNCTION IF EXISTS iam.assert_customer_policy_document(text,text);

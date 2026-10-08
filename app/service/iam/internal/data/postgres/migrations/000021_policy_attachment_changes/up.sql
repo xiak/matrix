@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS iam.policy_attachment_changes (
     installation_id text COLLATE "C",
     policy_resource_version bigint,
     expected_resource_version bigint,
+    actor_boundary_evidence jsonb NOT NULL,
+    target_boundary_evidence jsonb NOT NULL,
     input_commitment text COLLATE "C" NOT NULL,
     result_document jsonb NOT NULL,
     decision_id text COLLATE "C" NOT NULL,
@@ -32,29 +34,79 @@ CREATE TABLE IF NOT EXISTS iam.policy_attachment_changes (
     CONSTRAINT policy_attachment_changes_decision_fk
       FOREIGN KEY(tenant_id,decision_id) REFERENCES iam.authorization_decisions(tenant_id,id),
     CONSTRAINT policy_attachment_changes_event_fk
-      FOREIGN KEY(tenant_id,event_id) REFERENCES iam.audit_outbox(tenant_id,event_id),
-    CONSTRAINT policy_attachment_changes_shape CHECK (
-      tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-      AND actor_principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-      AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-      AND attachment_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-      AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-      AND policy_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-      AND decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-      AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-      AND target_kind IN ('USER','GROUP','ROLE')
-      AND input_commitment COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-      AND jsonb_typeof(result_document)='object'
-      AND ((authority_scope='TENANT' AND installation_id IS NULL)
-        OR (authority_scope='INSTALLATION' AND target_kind='USER'
-          AND installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'))
-      AND ((operation='CREATE'
-          AND policy_resource_version BETWEEN 1 AND 9007199254740991
-          AND expected_resource_version IS NULL)
-        OR (operation='REVOKE'
-          AND policy_resource_version IS NULL
-          AND expected_resource_version BETWEEN 1 AND 9007199254740990))
-    )
+      FOREIGN KEY(tenant_id,event_id) REFERENCES iam.audit_outbox(tenant_id,event_id)
+);
+
+-- The only supported retained predecessor had no delegation proof on its
+-- immutable completion rows. Preserve those rows explicitly without guessing
+-- a boundary from current state; all new inserts must provide a current closed
+-- proof and cannot use this one-time column default.
+ALTER TABLE iam.policy_attachment_changes ADD COLUMN IF NOT EXISTS actor_boundary_evidence jsonb NOT NULL
+  DEFAULT '{"state":"PREDECESSOR_UNPROVEN"}'::jsonb;
+ALTER TABLE iam.policy_attachment_changes ADD COLUMN IF NOT EXISTS target_boundary_evidence jsonb NOT NULL
+  DEFAULT '{"state":"PREDECESSOR_UNPROVEN"}'::jsonb;
+ALTER TABLE iam.policy_attachment_changes ALTER COLUMN actor_boundary_evidence DROP DEFAULT;
+ALTER TABLE iam.policy_attachment_changes ALTER COLUMN target_boundary_evidence DROP DEFAULT;
+ALTER TABLE iam.policy_attachment_changes DROP CONSTRAINT IF EXISTS policy_attachment_changes_shape;
+ALTER TABLE iam.policy_attachment_changes ADD CONSTRAINT policy_attachment_changes_shape CHECK (
+  tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+  AND actor_principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+  AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+  AND attachment_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+  AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+  AND policy_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+  AND decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+  AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+  AND target_kind IN ('USER','GROUP','ROLE')
+  AND input_commitment COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+  AND jsonb_typeof(result_document)='object'
+  AND ((authority_scope='TENANT' AND installation_id IS NULL)
+    OR (authority_scope='INSTALLATION' AND target_kind='USER'
+      AND installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'))
+  AND jsonb_typeof(actor_boundary_evidence)='object'
+  AND jsonb_typeof(target_boundary_evidence)='object'
+  AND (
+    (actor_boundary_evidence='{"state":"PREDECESSOR_UNPROVEN"}'::jsonb
+      AND target_boundary_evidence='{"state":"PREDECESSOR_UNPROVEN"}'::jsonb)
+    OR (actor_boundary_evidence->>'state'='ROOT'
+      AND actor_boundary_evidence-ARRAY['state','userResourceVersion']='{}'::jsonb
+      AND jsonb_typeof(actor_boundary_evidence->'userResourceVersion')='number'
+      AND COALESCE(actor_boundary_evidence->>'userResourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+      AND target_boundary_evidence='{"state":"ROOT"}'::jsonb)
+    OR (authority_scope='INSTALLATION'
+      AND actor_boundary_evidence='{"state":"NOT_APPLICABLE"}'::jsonb
+      AND target_boundary_evidence='{"state":"NOT_APPLICABLE"}'::jsonb)
+    OR (authority_scope='TENANT' AND target_kind='USER'
+      AND actor_boundary_evidence->>'state'='BOUND' AND target_boundary_evidence->>'state'='BOUND'
+      AND actor_boundary_evidence-ARRAY['state','userResourceVersion','boundaryId','resourceVersion','version','contractVersion','compilation']='{}'::jsonb
+      AND target_boundary_evidence-ARRAY['state','userResourceVersion','boundaryId','resourceVersion','version','contractVersion','compilation']='{}'::jsonb
+      AND jsonb_typeof(actor_boundary_evidence->'userResourceVersion')='number'
+      AND jsonb_typeof(target_boundary_evidence->'userResourceVersion')='number'
+      AND jsonb_typeof(actor_boundary_evidence->'resourceVersion')='number'
+      AND jsonb_typeof(target_boundary_evidence->'resourceVersion')='number'
+      AND COALESCE(actor_boundary_evidence->>'userResourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+      AND COALESCE(target_boundary_evidence->>'userResourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+      AND COALESCE(actor_boundary_evidence->>'resourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+      AND COALESCE(target_boundary_evidence->>'resourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+      AND COALESCE(actor_boundary_evidence->>'boundaryId','') COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND COALESCE(target_boundary_evidence->>'boundaryId','') COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND jsonb_typeof(actor_boundary_evidence->'version')='object'
+      AND jsonb_typeof(target_boundary_evidence->'version')='object'
+      AND (actor_boundary_evidence->'version') ?& ARRAY['policyId','versionId','contentDigest']
+      AND (target_boundary_evidence->'version') ?& ARRAY['policyId','versionId','contentDigest']
+      AND (actor_boundary_evidence->'version')-ARRAY['policyId','versionId','contentDigest']='{}'::jsonb
+      AND (target_boundary_evidence->'version')-ARRAY['policyId','versionId','contentDigest']='{}'::jsonb
+      AND actor_boundary_evidence->'version'=target_boundary_evidence->'version'
+      AND actor_boundary_evidence->'contractVersion'=target_boundary_evidence->'contractVersion'
+      AND actor_boundary_evidence->'compilation' IS NOT DISTINCT FROM target_boundary_evidence->'compilation'
+      AND ((actor_boundary_evidence->'contractVersion'='1'::jsonb AND NOT actor_boundary_evidence ? 'compilation')
+        OR (actor_boundary_evidence->'contractVersion'='2'::jsonb
+          AND jsonb_typeof(actor_boundary_evidence->'compilation')='object')))
+  )
+  AND ((operation='CREATE' AND policy_resource_version BETWEEN 1 AND 9007199254740991
+      AND expected_resource_version IS NULL)
+    OR (operation='REVOKE' AND policy_resource_version IS NULL
+      AND expected_resource_version BETWEEN 1 AND 9007199254740990))
 );
 
 ALTER TABLE iam.policy_attachment_changes ENABLE ROW LEVEL SECURITY;
@@ -138,7 +190,7 @@ CREATE OR REPLACE FUNCTION iam.verified_policy_attachment_change(
 RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE receipt iam.policy_attachment_changes%ROWTYPE; attachment iam.policy_attachments%ROWTYPE;
     decision iam.authorization_decisions%ROWTYPE; event jsonb; expected_action text; expected_event text;
-    expected_digest text; expected_result jsonb;
+    expected_digest text; expected_result jsonb; delegation_valid boolean:=false;
 BEGIN
     SELECT * INTO receipt FROM iam.policy_attachment_changes r
       WHERE (r.tenant_id,r.actor_principal_id,r.request_id)=(tenant,actor,original_request);
@@ -166,6 +218,44 @@ BEGIN
     expected_digest:=iam.policy_attachment_change_input_digest(receipt.operation,receipt.target_kind,receipt.target_id,
       receipt.policy_id,receipt.policy_resource_version,receipt.attachment_id,receipt.expected_resource_version,receipt.request_id);
     expected_result:=iam.policy_attachment_change_document(receipt);
+    delegation_valid:=CASE
+      WHEN receipt.actor_boundary_evidence='{"state":"PREDECESSOR_UNPROVEN"}'::jsonb
+        AND receipt.target_boundary_evidence='{"state":"PREDECESSOR_UNPROVEN"}'::jsonb THEN true
+      WHEN receipt.actor_boundary_evidence->>'state'='ROOT'
+        AND receipt.target_boundary_evidence='{"state":"ROOT"}'::jsonb THEN
+          EXISTS(SELECT 1 FROM iam.account_roots root
+            WHERE root.account_id=receipt.tenant_id AND root.principal_id=receipt.actor_principal_id)
+          AND EXISTS(SELECT 1 FROM iam.principals principal
+            WHERE (principal.tenant_id,principal.id)=(receipt.tenant_id,receipt.actor_principal_id)
+              AND principal.resource_version>=(receipt.actor_boundary_evidence->>'userResourceVersion')::bigint)
+          AND (decision.boundary_evidence='{"state":"NOT_APPLICABLE"}'::jsonb
+            OR (decision.boundary_evidence->>'state'='NONE'
+              AND decision.boundary_evidence->'userResourceVersion'=receipt.actor_boundary_evidence->'userResourceVersion'))
+      WHEN receipt.actor_boundary_evidence='{"state":"NOT_APPLICABLE"}'::jsonb
+        AND receipt.target_boundary_evidence='{"state":"NOT_APPLICABLE"}'::jsonb THEN
+          receipt.authority_scope='INSTALLATION'
+          AND decision.boundary_evidence='{"state":"NOT_APPLICABLE"}'::jsonb
+      WHEN receipt.actor_boundary_evidence->>'state'='BOUND'
+        AND receipt.target_boundary_evidence->>'state'='BOUND' THEN
+          receipt.authority_scope='TENANT' AND receipt.target_kind='USER'
+          AND receipt.actor_boundary_evidence=decision.boundary_evidence
+          AND receipt.actor_boundary_evidence->'version'=receipt.target_boundary_evidence->'version'
+          AND receipt.actor_boundary_evidence->'contractVersion'=receipt.target_boundary_evidence->'contractVersion'
+          AND receipt.actor_boundary_evidence->'compilation' IS NOT DISTINCT FROM receipt.target_boundary_evidence->'compilation'
+          AND iam.recorded_policy_version_matches(receipt.actor_boundary_evidence)
+          AND iam.recorded_policy_version_matches(receipt.target_boundary_evidence)
+          AND EXISTS(SELECT 1 FROM iam.user_permission_boundaries boundary
+            WHERE boundary.tenant_id=receipt.tenant_id AND boundary.user_id=receipt.target_id
+              AND boundary.id=receipt.target_boundary_evidence->>'boundaryId'
+              AND boundary.policy_id=receipt.target_boundary_evidence#>>'{version,policyId}'
+              AND boundary.resource_version>=(receipt.target_boundary_evidence->>'resourceVersion')::bigint
+              AND boundary.created_at<=receipt.completed_at
+              AND (boundary.revoked_at IS NULL OR boundary.revoked_at>receipt.completed_at))
+          AND EXISTS(SELECT 1 FROM iam.principals principal
+            WHERE (principal.tenant_id,principal.id)=(receipt.tenant_id,receipt.target_id)
+              AND principal.principal_type='USER'
+              AND principal.resource_version>=(receipt.target_boundary_evidence->>'userResourceVersion')::bigint)
+      ELSE false END;
     IF attachment.id IS NULL OR decision.id IS NULL OR event IS NULL
       OR attachment.target_kind IS DISTINCT FROM receipt.target_kind
       OR attachment.target_id IS DISTINCT FROM receipt.target_id
@@ -192,7 +282,8 @@ BEGIN
       OR (receipt.authority_scope='TENANT' AND (event->>'tenantId' IS DISTINCT FROM receipt.tenant_id OR event ? 'installationId'))
       OR (receipt.authority_scope='INSTALLATION' AND (event->>'installationId' IS DISTINCT FROM receipt.installation_id OR event ? 'tenantId'))
       OR receipt.input_commitment IS DISTINCT FROM expected_digest
-      OR receipt.result_document IS DISTINCT FROM expected_result THEN
+      OR receipt.result_document IS DISTINCT FROM expected_result
+      OR NOT delegation_valid THEN
       RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='policy attachment change evidence is unavailable';
     END IF;
     RETURN receipt.result_document;
@@ -215,7 +306,7 @@ DECLARE action_name text:=NEW.event_document->>'action'; operation text; tenant 
     actor text:=NEW.event_document#>>'{actor,id}'; original_request text:=NEW.event_document->>'requestId';
     attachment iam.policy_attachments%ROWTYPE; policy iam.policies%ROWTYPE; decision text:=NEW.event_document->>'iamDecisionId';
     original_action text; expected_digest text; prior_scope text; result jsonb; receipt iam.policy_attachment_changes%ROWTYPE;
-    policy_revision bigint; expected_revision bigint;
+    policy_revision bigint; expected_revision bigint; delegation jsonb;
 BEGIN
     IF action_name NOT IN ('iam.policy-attachment.created','iam.policy-attachment.revoked',
       'iam.platform-policy-attachment.created','iam.platform-policy-attachment.revoked') THEN RETURN NEW; END IF;
@@ -246,6 +337,8 @@ BEGIN
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,original_action,
       CASE WHEN operation='CREATE' THEN attachment.target_kind ELSE 'POLICY_ATTACHMENT' END,
       CASE WHEN operation='CREATE' THEN attachment.target_id ELSE attachment.id END,'INSTANCE',NULL);
+    delegation:=iam.lock_policy_attachment_delegation(tenant,actor,decision,original_action,
+      attachment.target_kind,attachment.target_id,attachment.authority_scope,attachment.policy_id);
     PERFORM iam.assert_audit_event(NEW.event_document,tenant,action_name,'POLICY_ATTACHMENT',attachment.id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,NEW.event_document);
     IF NEW.event_document->>'iamDecisionId' IS DISTINCT FROM decision THEN
@@ -259,17 +352,20 @@ BEGIN
     receipt.target_id:=attachment.target_id; receipt.policy_id:=attachment.policy_id;
     receipt.authority_scope:=attachment.authority_scope; receipt.installation_id:=attachment.installation_id;
     receipt.policy_resource_version:=policy_revision; receipt.expected_resource_version:=expected_revision;
+    receipt.actor_boundary_evidence:=delegation->'actorBoundary';
+    receipt.target_boundary_evidence:=delegation->'targetBoundary';
     receipt.input_commitment:=expected_digest; receipt.decision_id:=decision; receipt.event_id:=NEW.event_id;
     receipt.completed_at:=NEW.created_at; result:=iam.policy_attachment_change_document(receipt); receipt.result_document:=result;
     prior_scope:=current_setting('matrix.iam_policy_attachment_change',true);
     PERFORM set_config('matrix.iam_policy_attachment_change','trusted',true);
     INSERT INTO iam.policy_attachment_changes(tenant_id,actor_principal_id,request_id,operation,attachment_id,
       target_kind,target_id,policy_id,authority_scope,installation_id,policy_resource_version,expected_resource_version,
-      input_commitment,result_document,decision_id,event_id,completed_at)
+      actor_boundary_evidence,target_boundary_evidence,input_commitment,result_document,decision_id,event_id,completed_at)
       VALUES(receipt.tenant_id,receipt.actor_principal_id,receipt.request_id,receipt.operation,receipt.attachment_id,
         receipt.target_kind,receipt.target_id,receipt.policy_id,receipt.authority_scope,receipt.installation_id,
-        receipt.policy_resource_version,receipt.expected_resource_version,receipt.input_commitment,receipt.result_document,
-        receipt.decision_id,receipt.event_id,receipt.completed_at);
+        receipt.policy_resource_version,receipt.expected_resource_version,receipt.actor_boundary_evidence,
+        receipt.target_boundary_evidence,receipt.input_commitment,receipt.result_document,receipt.decision_id,
+        receipt.event_id,receipt.completed_at);
     PERFORM set_config('matrix.iam_policy_attachment_change',COALESCE(prior_scope,''),true);
     IF iam.verified_policy_attachment_change(tenant,actor,original_request) IS DISTINCT FROM result THEN
       RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='policy attachment change receipt is unavailable'; END IF;
@@ -437,6 +533,14 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
       AND relation.relowner='matrix_iam_owner'::regrole AND relation.relrowsecurity AND relation.relforcerowsecurity
       AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(relation.relacl,acldefault('r',relation.relowner))) privilege
         WHERE privilege.grantee<>relation.relowner))
+    AND (SELECT count(*)=2 FROM pg_attribute attribute
+      WHERE attribute.attrelid='iam.policy_attachment_changes'::regclass AND NOT attribute.attisdropped
+        AND attribute.attname IN ('actor_boundary_evidence','target_boundary_evidence')
+        AND attribute.atttypid='jsonb'::regtype AND attribute.attnotnull AND NOT attribute.atthasdef)
+    AND EXISTS(SELECT 1 FROM pg_constraint constraint_value
+      WHERE constraint_value.conrelid='iam.policy_attachment_changes'::regclass
+        AND constraint_value.conname='policy_attachment_changes_shape'
+        AND constraint_value.contype='c' AND constraint_value.convalidated)
     AND EXISTS(SELECT 1 FROM pg_policies p WHERE p.schemaname='iam' AND p.tablename='policy_attachment_changes'
       AND p.policyname='tenant_isolation' AND p.qual='(tenant_id = iam.current_tenant_id())'
       AND p.with_check='(tenant_id = iam.current_tenant_id())')
@@ -447,6 +551,13 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
     AND EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid='iam.audit_outbox'::regclass AND NOT t.tgisinternal
       AND t.tgenabled='A' AND t.tgname='policy_attachment_change_capture'
       AND t.tgfoid=to_regprocedure('iam.capture_policy_attachment_change()'))
+    AND (SELECT count(*)=2 FROM pg_proc f WHERE f.oid IN (
+      to_regprocedure('iam.current_user_boundary_evidence(text,text)'),
+      to_regprocedure('iam.lock_policy_attachment_delegation(text,text,text,text,text,text,text,text)'))
+      AND f.proowner='matrix_iam_owner'::regrole AND NOT f.prosecdef
+      AND f.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+      AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(f.proacl,acldefault('f',f.proowner))) privilege
+        WHERE privilege.grantee<>f.proowner))
     AND (SELECT count(*)=2 FROM pg_proc f WHERE f.oid IN (
       to_regprocedure('iam.lookup_policy_attachment_change_reference(text,text,text,text)'),
       to_regprocedure('iam.read_policy_attachment_change(text,text,text,text,text,text,text,text)'))

@@ -14261,7 +14261,7 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal("connect policy attachment change database")
 	}
-	defer database.Close(context.Background())
+	t.Cleanup(func() { _ = database.Close(context.Background()) })
 	assertIAMPostgres18(t, ctx, database)
 	assertCleanIAMSchema(t, ctx, database)
 	applyIAMSchema(t, ctx, database)
@@ -14400,11 +14400,14 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 		{revokeRequest.RequestID, "iam.policy-attachment.revoked"},
 	} {
 		var receipts, facts int
+		var rootProof bool
 		if err := database.QueryRow(ctx, `SELECT
 			(SELECT count(*) FROM iam.policy_attachment_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3),
 			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{actor,id}'=$2
-			 AND event_document->>'requestId'=$3 AND event_document->>'action'=$4)`,
-			target.AccountID, document.Administrator.ID, item.requestID, item.action).Scan(&receipts, &facts); err != nil || receipts != 1 || facts != 1 {
+			 AND event_document->>'requestId'=$3 AND event_document->>'action'=$4),
+			(SELECT actor_boundary_evidence->>'state'='ROOT' AND target_boundary_evidence='{"state":"ROOT"}'::jsonb
+			 FROM iam.policy_attachment_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)`,
+			target.AccountID, document.Administrator.ID, item.requestID, item.action).Scan(&receipts, &facts, &rootProof); err != nil || receipts != 1 || facts != 1 || !rootProof {
 			t.Fatal("attachment completion is not one-to-one with its original fact", err)
 		}
 	}
@@ -14412,11 +14415,44 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 	// The original actor must still hold today's dedicated read authority. A
 	// former administrator keeps no read access merely because it performed
 	// the historical write, while another actor cannot discover the receipt.
+	// The delegated writer and direct USER target first receive the exact same
+	// customer ceiling. The positive AccountAdministrator policy is necessary
+	// but cannot replace that independently locked delegation proof.
+	var delegationCeiling iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{
+		DisplayName: "Policy attachment delegation ceiling",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{
+				{SID: "direct-user-create", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyAttachmentCreate},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}},
+				{SID: "direct-attachment-change", Effect: iamv1.PolicyAllow,
+					Actions:   []iamv1.Action{iamv1.ActionIAMPolicyAttachmentRevoke, iamv1.ActionIAMPolicyAttachmentChangeRead},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicyAttachment, Match: iamv1.PolicyResourceAnyInAuthority}}},
+				{SID: "group-create-is-closed-until-membership-proof", Effect: iamv1.PolicyAllow,
+					Actions:   []iamv1.Action{iamv1.ActionIAMGroupPolicyAttachmentCreate},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceGroup, Match: iamv1.PolicyResourceAnyInAuthority}}},
+			}}, RequestID: "attachment-change-delegation-ceiling",
+	}, http.StatusCreated, &delegationCeiling)
+	setBoundary := func(user iamv1.User, requestID string, policy iamv1.PolicyDetail) iamv1.UserPermissionBoundary {
+		t.Helper()
+		path := "/v1/users/" + string(user.ID) + "/permission-boundary"
+		var current, selected iamv1.UserPermissionBoundary
+		call(http.MethodGet, path, root, nil, http.StatusOK, &current)
+		call(http.MethodPut, path, root, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion,
+			ResourceVersion: current.ResourceVersion, RequestID: requestID,
+		}, http.StatusOK, &selected)
+		return selected
+	}
+	otherBoundary := setBoundary(other, "attachment-change-target-boundary", delegationCeiling)
+	if otherBoundary.Policy == nil || otherBoundary.Policy.PolicyID != delegationCeiling.Policy.ID {
+		t.Fatal("delegated attachment target lost its exact ceiling")
+	}
 	var delegated iamv1.User
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-admin", "displayName": "Attachment change admin",
 		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-change-admin"}, http.StatusCreated, &delegated)
 	delegatedBearer := localRecoveryLogin(t, handler, delegated.LoginName+"@"+string(delegated.AccountID), initialDeveloperPassword, true)
-	localRecoveryChangePassword(t, handler, delegatedBearer, initialDeveloperPassword, changedDeveloperPassword)
+	delegatedBearer = localRecoveryChangePassword(t, handler, delegatedBearer, initialDeveloperPassword, changedDeveloperPassword)
 	var administratorGrant iamv1.PolicyAttachment
 	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
 		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegated.ID)},
@@ -14427,13 +14463,196 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(other.ID)},
 		PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: "attachment-change-delegated-create",
 	}
+	call(http.MethodPost, "/v1/policy-attachments", delegatedBearer, delegatedRequest, http.StatusForbidden, nil)
+	managerBoundary := setBoundary(delegated, "attachment-change-admin-boundary", delegationCeiling)
+	if managerBoundary.Policy == nil || managerBoundary.Policy.PolicyID != delegationCeiling.Policy.ID {
+		t.Fatal("delegated attachment manager lost its exact ceiling")
+	}
 	var delegatedAttachment iamv1.PolicyAttachment
 	call(http.MethodPost, "/v1/policy-attachments", delegatedBearer, delegatedRequest, http.StatusOK, &delegatedAttachment)
 	read(delegatedBearer, delegatedRequest.RequestID, http.StatusOK)
 	read(root, delegatedRequest.RequestID, http.StatusNotFound)
+	delegatedRevoke := iamv1.RevokePolicyAttachmentRequest{ResourceVersion: delegatedAttachment.ResourceVersion,
+		RequestID: "attachment-change-delegated-revoke"}
+	call(http.MethodPost, "/v1/policy-attachments/"+string(delegatedAttachment.ID)+":revoke", delegatedBearer,
+		delegatedRevoke, http.StatusOK, nil)
+	read(delegatedBearer, delegatedRevoke.RequestID, http.StatusOK)
+	var delegatedProof bool
+	if err := database.QueryRow(ctx, `SELECT count(*)=2 AND bool_and(
+		actor_boundary_evidence->>'state'='BOUND'
+		AND target_boundary_evidence->>'state'='BOUND'
+		AND actor_boundary_evidence#>>'{version,policyId}'=$4
+		AND target_boundary_evidence#>>'{version,policyId}'=$4
+		AND actor_boundary_evidence->'version'=target_boundary_evidence->'version')
+		FROM iam.policy_attachment_changes WHERE tenant_id=$1 AND actor_principal_id=$2
+		AND request_id IN ($3,$5)`, delegated.AccountID, delegated.ID, delegatedRequest.RequestID,
+		delegationCeiling.Policy.ID, delegatedRevoke.RequestID).Scan(&delegatedProof); err != nil || !delegatedProof {
+		t.Fatal("delegated policy attachment completion lost its exact actor/target ceiling", err)
+	}
+	var raceTarget iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-race", "displayName": "Attachment boundary race",
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-change-race-user"}, http.StatusCreated, &raceTarget)
+	raceBoundary := setBoundary(raceTarget, "attachment-change-race-boundary", delegationCeiling)
+	raceRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(raceTarget.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "attachment-change-race-create",
+	}
+	raceCreateBody := mustIAMJSON(t, raceRequest)
+	raceRemoveBody := mustIAMJSON(t, iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: raceBoundary.ResourceVersion,
+		RequestID: "attachment-change-race-boundary-remove"})
+	awaitAttachment, releaseAttachment := holdIAMRequest(t, ctx, database, raceRequest.RequestID, true, auditv1.ActionIAMPolicyAttachmentCreated)
+	createDone, removeDone := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		createDone <- performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", delegatedBearer, raceCreateBody)
+	}()
+	creatorPID := awaitAttachment()
+	go func() {
+		removeDone <- performIAMRequest(handler, http.MethodDelete, "/v1/users/"+string(raceTarget.ID)+"/permission-boundary", root,
+			raceRemoveBody)
+	}()
+	wait, stopWait := context.WithTimeout(ctx, 10*time.Second)
+	defer stopWait()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var blocked bool
+		if err := database.QueryRow(wait, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+			WHERE datname=current_database() AND usename=$1 AND pid<>$2
+			  AND state='active' AND wait_event_type='Lock' AND $2=ANY(pg_blocking_pids(pid)))`,
+			iamHTTPTestRole, creatorPID).Scan(&blocked); err != nil {
+			t.Fatal("observe boundary removal behind policy attachment", err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-wait.Done():
+			t.Fatal("boundary removal did not serialize behind policy attachment")
+		}
+	}
+	releaseAttachment()
+	var raceAttachment iamv1.PolicyAttachment
+	select {
+	case response := <-createDone:
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &raceAttachment) != nil {
+			t.Fatalf("racing attachment result status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-ctx.Done():
+		t.Fatal("racing attachment did not finish")
+	}
+	select {
+	case response := <-removeDone:
+		if response.Code != http.StatusOK {
+			t.Fatalf("serialized boundary removal status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-ctx.Done():
+		t.Fatal("serialized boundary removal did not finish")
+	}
+	call(http.MethodPost, "/v1/policy-attachments", delegatedBearer, iamv1.CreatePolicyAttachmentRequest{
+		Target: raceRequest.Target, PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1,
+		RequestID: "attachment-change-race-after-removal",
+	}, http.StatusForbidden, nil)
+	call(http.MethodPost, "/v1/policy-attachments/"+string(raceAttachment.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: raceAttachment.ResourceVersion,
+			RequestID: "attachment-change-race-cleanup"}, http.StatusOK, nil)
+	// Every request below obtains a real positive decision from the delegated
+	// administrator policy and its ceiling. The storage transaction must still
+	// reject targets outside the exact direct-USER closure without an attachment
+	// row or success fact.
+	var differentTarget iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-different", "displayName": "Different boundary target",
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-change-different"}, http.StatusCreated, &differentTarget)
+	var systemPolicy iamv1.PolicyDetail
+	call(http.MethodGet, "/v1/policies/"+string(iamv1.SystemPolicyPaaSViewer), root, nil, http.StatusOK, &systemPolicy)
+	setBoundary(differentTarget, "attachment-change-different-boundary", systemPolicy)
+	var closedGroup iamv1.Group
+	call(http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{Name: "Closed delegated group", RequestID: "attachment-change-group"},
+		http.StatusCreated, &closedGroup)
+	var platformTargetGrant iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(other.ID)},
+		PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "attachment-change-target-platform-grant",
+	}, http.StatusOK, &platformTargetGrant)
+	closed := []iamv1.CreatePolicyAttachmentRequest{
+		{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer,
+			PolicyResourceVersion: 1, RequestID: "attachment-change-unbounded-target"},
+		{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(differentTarget.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer,
+			PolicyResourceVersion: 1, RequestID: "attachment-change-different-target"},
+		{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(document.Administrator.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer,
+			PolicyResourceVersion: 1, RequestID: "attachment-change-root-target"},
+		{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(other.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer,
+			PolicyResourceVersion: 1, RequestID: "attachment-change-platform-target"},
+		{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(closedGroup.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer,
+			PolicyResourceVersion: 1, RequestID: "attachment-change-group-target"},
+	}
+	var attachmentsBefore int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1`, delegated.AccountID).
+		Scan(&attachmentsBefore); err != nil {
+		t.Fatal("count policy attachments before closed delegation attempts", err)
+	}
+	for _, request := range closed {
+		call(http.MethodPost, "/v1/policy-attachments", delegatedBearer, request, http.StatusForbidden, nil)
+		if state, _ := failures.lastSQLState.Load().(string); state != "42501" {
+			t.Fatalf("closed delegated attachment %s did not reach the storage guard: sqlstate=%q", request.RequestID, state)
+		}
+	}
+	call(http.MethodPost, "/v1/policy-attachments/"+string(platformTargetGrant.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: platformTargetGrant.ResourceVersion,
+			RequestID: "attachment-change-target-platform-revoke"}, http.StatusOK, nil)
+	var closedDecisions, closedFacts, attachmentsAfter int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2
+		  AND request_id=ANY($3::text[])),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=ANY($3::text[])),
+		(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1)`, delegated.AccountID, delegated.ID,
+		[]string{closed[0].RequestID, closed[1].RequestID, closed[2].RequestID, closed[3].RequestID, closed[4].RequestID}).
+		Scan(&closedDecisions, &closedFacts, &attachmentsAfter); err != nil || closedDecisions != 0 || closedFacts != 0 || attachmentsAfter != attachmentsBefore {
+		t.Fatalf("closed delegated attachment path left state: decisions=%d facts=%d attachments=%d err=%v",
+			closedDecisions, closedFacts, attachmentsAfter-attachmentsBefore, err)
+	}
+	var platformActorGrant iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegated.ID)},
+		PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "attachment-change-actor-platform-grant",
+	}, http.StatusOK, &platformActorGrant)
+	platformActorRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(other.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "attachment-change-platform-actor",
+	}
+	var platformActorAttachmentsBefore int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1`, delegated.AccountID).
+		Scan(&platformActorAttachmentsBefore); err != nil {
+		t.Fatal("count attachments before platform actor rejection", err)
+	}
+	// A platform attachment intentionally invalidates the actor's prior
+	// session. Reauthenticate so the negative reaches the delegation guard
+	// instead of succeeding only because an old bearer was revoked.
+	platformDelegatedBearer := localRecoveryLogin(t, handler,
+		delegated.LoginName+"@"+string(delegated.AccountID), changedDeveloperPassword, false)
+	call(http.MethodPost, "/v1/policy-attachments", platformDelegatedBearer, platformActorRequest, http.StatusForbidden, nil)
+	if state, _ := failures.lastSQLState.Load().(string); state != "42501" {
+		t.Fatalf("platform-bound delegated actor did not reach the storage guard: sqlstate=%q", state)
+	}
+	var platformActorDecisions, platformActorFacts, platformActorAttachmentsAfter int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3),
+		(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1)`,
+		delegated.AccountID, delegated.ID, platformActorRequest.RequestID).
+		Scan(&platformActorDecisions, &platformActorFacts, &platformActorAttachmentsAfter); err != nil ||
+		platformActorDecisions != 0 || platformActorFacts != 0 || platformActorAttachmentsAfter != platformActorAttachmentsBefore {
+		t.Fatalf("platform-bound delegated actor left state: decisions=%d facts=%d attachments=%d err=%v",
+			platformActorDecisions, platformActorFacts, platformActorAttachmentsAfter-platformActorAttachmentsBefore, err)
+	}
+	call(http.MethodPost, "/v1/policy-attachments/"+string(platformActorGrant.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: platformActorGrant.ResourceVersion,
+			RequestID: "attachment-change-actor-platform-revoke"}, http.StatusOK, nil)
 	call(http.MethodPost, "/v1/policy-attachments/"+string(administratorGrant.ID)+":revoke", root,
 		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: administratorGrant.ResourceVersion, RequestID: "attachment-change-admin-revoke"},
 		http.StatusOK, nil)
+	delegatedBearer = localRecoveryLogin(t, handler,
+		delegated.LoginName+"@"+string(delegated.AccountID), changedDeveloperPassword, false)
 	read(delegatedBearer, delegatedRequest.RequestID, http.StatusForbidden)
 	var retained int
 	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachment_changes
@@ -14500,6 +14719,23 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 	}
 	err = tx.QueryRow(ctx, "SELECT iam.verified_policy_attachment_change($1,$2,$3)",
 		target.AccountID, document.Administrator.ID, createRequest.RequestID).Scan(&ignored)
+	_ = tx.Rollback(ctx)
+	assertSQLState(err, "23514")
+	tx, err = database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `ALTER TABLE iam.policy_attachment_changes DISABLE TRIGGER policy_attachment_changes_cannot_be_updated;
+		UPDATE iam.policy_attachment_changes SET
+		  actor_boundary_evidence=jsonb_set(actor_boundary_evidence,'{version,contentDigest}',to_jsonb($4::text)),
+		  target_boundary_evidence=jsonb_set(target_boundary_evidence,'{version,contentDigest}',to_jsonb($4::text))
+		WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3`, delegated.AccountID, delegated.ID,
+		delegatedRequest.RequestID, "sha256:"+strings.Repeat("f", 64)); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal("inject isolated delegation evidence damage")
+	}
+	err = tx.QueryRow(ctx, "SELECT iam.verified_policy_attachment_change($1,$2,$3)",
+		delegated.AccountID, delegated.ID, delegatedRequest.RequestID).Scan(&ignored)
 	_ = tx.Rollback(ctx)
 	assertSQLState(err, "23514")
 	tx, err = database.Begin(ctx)

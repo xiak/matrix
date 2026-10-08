@@ -1,6 +1,6 @@
 # FEAT-IAM-002：策略权限权威替换
 
-- 状态：单一策略权威的语言、持久化、迁移、当前求值、管理入口、历史证据及关联写入结果不确定时的封闭完成查询已经实现；旧 RoleBinding 只保留为不可变历史词汇，不再是在线授权入口。现有签名生命周期 owner 已增加直接读取并逐字段核对备份前 CREATE/REVOKE 完成回执的门禁，精确源码独立 CI 已通过；但该增量尚缺匹配当前 Profile 的签名 A/B 生命周期实跑，源码 CI 不能替代安装、升级、回滚、所选备份恢复与重启的运行证据。该签名运行及完整 LIVE UI/浏览器门禁完成前，整体不标记验收。
+- 状态：单一策略权威的语言、持久化、迁移、当前求值、管理入口、历史证据及关联写入结果不确定时的封闭完成查询已经实现；旧 RoleBinding 只保留为不可变历史词汇，不再是在线授权入口。直接 USER 附件已增加 Root/同边界委派的不可变完成证据，非 root 的 Group/Role 路径仍关闭。现有签名生命周期 owner 已增加直接读取并逐字段核对备份前 CREATE/REVOKE 完成回执的门禁，精确源码独立 CI 已通过；但新证据形状尚缺匹配当前 Profile 的签名 A/B 生命周期实跑，源码 CI 不能替代安装、升级、回滚、所选备份恢复与重启的运行证据。该签名运行及完整 LIVE UI/浏览器门禁完成前，整体不标记验收。
 - 依赖：001 已验收的 CAT-01–04，固定安装消费者已对齐当前策略附件 wire；完整产品 Profile 的集成仍由 008 证明。
 - Owner：IAM `authority`、`identityaccess`、PostgreSQL；Audit 只保存事实。
 
@@ -61,7 +61,7 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 PostgreSQL 新增一个不可变 `policy_attachment_changes` owner，而不是从可变 `policy_attachments` 或可投递 outbox 临时拼接结果。主键为 `(account_id,actor_principal_id,request_id)`，同时保存 operation、输入承诺、准确原输入、结果文档、attachment ID、scope/installation、原 decision/event ID 和完成时间；CHECK、复合外键、FORCE RLS、拒绝 UPDATE/DELETE/TRUNCATE 及受限函数 ACL 进入同一 schema verifier。创建或撤销必须在原关系、决定、Audit outbox 的同一事务中写入唯一 receipt；receipt 写入失败则整笔业务变化回滚。查询只返回保存的结果文档，并重新验证输入承诺、结果字段、关系身份及原 event/requestDigest 对应，不以今天的关系状态补字段。
 
-该能力最初落在 IAM schema 66、release `contractRevision=13` 和 IAM 授权 Profile revision 14；当前源码组合已推进为 IAM68、`contractRevision=16`，IAM 授权 Profile 仍为 revision 14。开发期只保留准确滚动前驱 `2b015b271bf22174a54698d720705db722ba6075` 的 IAM67，不为每个中间数字保留兼容函数或双表写入。该前驱已经产生真实 receipt，当前迁移必须原样保留旧 viewer 创建/撤销及 request-tag developer 创建三条完成结果，不能补造、删除或增加记录；被替代窗口不再定义当前 N-1 行为。NOT_FOUND 仍不证明原事务回滚，客户端不得自动重发写命令。完整 release profile 在任何效果前继续拒绝形状不匹配的旧二进制；相同 schema 数字也不能替代函数、策略 Profile 和 receipt 形状核对。
+开发期只保留 011 定义的一个准确滚动前驱，不为每个中间数字保留兼容函数、双表写入或可选旧版本列表。当前 completion 为 Root 保存封闭 `ROOT` 证据，为安全委派的直接 USER 保存 actor/target 精确边界证据；新写入不能省略或伪造。固定前驱已存在的 receipt 必须原样保留公开完成结果、事实和读取语义，但其新增证据只能标为 `PREDECESSOR_UNPROVEN`，不能按当前规则倒签成 `BOUND` 或 `ROOT`。该状态不是 permit，也不能取得新写入资格；NOT_FOUND 仍不证明原事务回滚，客户端不得自动重发写命令。完整 release profile 在任何效果前继续拒绝形状不匹配的旧二进制；相同 schema 数字也不能替代函数、策略 Profile 和 receipt 形状核对。当前准确 schema/profile 与固定来源只由 011 的滚动窗口记录，避免本 FEAT 复制会移动的验收数字。
 
 最低验收包含：CREATE/REVOKE 提交后断开回包，再以同一和新有效 Session 查询精确原结果；后继撤销、重新关联、策略退休、主体停用后的历史不改写；错误 actor/Account/requestId、跨 scope、错误 installation、错误当前只读权限与 Role/AccessKey/ServiceIdentity 均拒绝；同 requestId 跨操作或变体竞争至多一个完成；事务末端、receipt/outbox/关系任一失败均零部分效果；篡改输入承诺、结果、event、scope 或 ACL 后失败关闭；固定即时前序保留数据升级不复活权限且不伪造历史 receipt。UI 对明确完成解除原未知提示，对404/403/5xx继续保持未知，绝不因当前目录状态自动重发。
 

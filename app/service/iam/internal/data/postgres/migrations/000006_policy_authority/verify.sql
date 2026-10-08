@@ -58,7 +58,9 @@ BEGIN
         OR has_function_privilege('public','iam.current_policy_snapshot(text,text)','EXECUTE') THEN
         RAISE EXCEPTION 'IAM internal policy projection is public';
     END IF;
-    FOREACH function_name IN ARRAY ARRAY['iam.current_user_boundary(text,text)','iam.assert_current_user_boundary_evidence(text,text,text,jsonb)'] LOOP
+    FOREACH function_name IN ARRAY ARRAY['iam.current_user_boundary(text,text)',
+        'iam.current_user_boundary_evidence(text,text)','iam.assert_current_user_boundary_evidence(text,text,text,jsonb)',
+        'iam.lock_policy_attachment_delegation(text,text,text,text,text,text,text,text)'] LOOP
         IF to_regprocedure(function_name) IS NULL OR has_function_privilege('matrix_iam_api',function_name,'EXECUTE')
             OR has_function_privilege('matrix_iam_worker',function_name,'EXECUTE')
             OR has_function_privilege('matrix_iam_credential_recovery',function_name,'EXECUTE')
@@ -77,7 +79,7 @@ END $verify_policy_authority$;
 DO $verify_customer_policy_publication$
 DECLARE function_name text;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 69::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 70::bigint THEN
         RAISE EXCEPTION 'IAM policy publication schema version is invalid';
     END IF;
     IF iam.policy_version_contract_ready() IS DISTINCT FROM true THEN
