@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；完整安全委派、签名边缘、最终发布和UI验收仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；安全委派的封存上限、受控对象闭包与事务证据设计已冻结，生产实现、签名边缘、最终发布和UI验收仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -208,6 +208,51 @@ policy_versions 增加无默认、必填的 contract_version，1只标识切换�
 评估器处理类型化 Statement。必需的 IAM 身份/时间/已使用网络上下文缺失使整个决定失败关闭；未来可选业务属性缺失时条件不匹配，否定条件也不能因此自动放行。显式 Null 存在检查尚未启用，不能把 null 输入当成受支持算子。多个条件同时满足，多值规则明确为 any/all；禁止隐式字符串类型转换。资源列表中每个必要资源都要通过，不以某个资源成功代替全部。
 
 变更在 account → principal → policy → default pointer/attachment 锁顺序内检查管理者当前委派上限。当前高风险发布与边界写入仅限原 Account Root；仅持有管理策略不足以开放这些写入。后续 LANG-08 必须证明受委派者不能经创建/改版/附件或去除边界扩大自身许可，不能用通用子集推理的假实现宣称安全委派。
+
+#### 安全委派：封存上限与受控对象闭包
+
+LANG-08 的“不能扩大自身许可”精确定义为：受委派管理员及其能够创建、取得凭据或纳入授权路径的身份，最终有效权限不得超过原 Account Root 预先封存的委派上限。上限内的授权组合是被明确委派的管理职责；越过上限、改写上限或把未受上限约束的身份变成替代登录路径均为提权。该模型沿用现有 User/Role permission boundary 的交集语义，不新增可认证的管理员类型、第二套策略语言或通用 `Delegation` 角色。
+
+**权威上限。** 当前最小切片只允许直接 USER 会话执行受委派管理；RoleSession、ServiceIdentity、AccessKey worker 和安装恢复能力均不是管理者。原 Account Root 保持最终控制权，不需要普通 User boundary。非 root 管理者必须同时满足当前 PDP 允许和以下锁内条件：
+
+- 管理者有一个当前有效的 TENANT User permission boundary；该边界引用的 Policy ID 是本次委派上限。边界的当前默认 versionId、contentDigest、关系修订和管理者 User 修订共同构成精确上限证明，不能由请求、header、cursor 或缓存选择。
+- 任一正在充当 User 或 Role permission boundary 的 Policy 都是受保护上限。非 root 不能为它创建/退休版本、切换默认、改名或删除；只有原 Root 能修改这类 Policy。这样不会用“新文档看起来是旧文档子集”的不完整推理判断上限是否仍安全。
+- 非 root 不能设置、替换或移除任何 User/Role permission boundary。系统策略里存在对应 Action 也不覆盖此保护；能力投影必须明确显示需要 Root，而不能先显示可用再由写入暗中拒绝。
+- SYSTEM/INSTALLATION/INSTALLATION_PROBE 策略、原 Root、带平台绑定的 USER、服务身份和跨 Account 对象永远不进入租户委派闭包；平台操作者权限也不能作为租户委派上限。
+
+**受控身份闭包。** 仅约束管理者本身仍不够：管理者可以创建另一个 USER、取得其初始或重置密码，再通过该身份绕过自己的上限。因此由非 root 创建或进行凭据/权限管理的目标也必须受同一个 Policy ID 的当前边界约束。
+
+| 操作 | 非 root 的额外不变量 |
+| --- | --- |
+| 创建 USER | 请求必须带精确 boundary policyId 与 policyResourceVersion，且与管理者上限相同；USER、初始凭据、边界关系、User 修订、单一命令结果和成功事实同事务提交。缺失、不同上限或先创建后补边界均拒绝。原 Root 可显式创建无普通边界的 USER。 |
+| 停复用、重置密码、删除 USER | 目标不能是原 Root、平台绑定身份或跨 Account USER；非 root 只能管理当前仍绑定同一委派上限的 USER。等待锁期间任一边界、会话、凭据或身份状态变化都要重新检查。 |
+| 创建/修改 Group membership | 若 Group 存在由非 root 创建的当前策略附件，所有当前成员和新成员必须使用附件封存的同一委派上限；不同上限、无边界、Root 或服务身份拒绝。移除成员不能清除附件的上限证明。 |
+| 创建/管理 Role | 当前纵向片继续保持 Root-only。以后开放时，创建必须原子设置与管理者相同的 Role boundary，且 trust、附件、SessionPolicy 与原始身份仍取交集；不能先创建可承担的无边界 Role。 |
+
+创建 USER 的 boundary 字段是现有 `UserPermissionBoundary` 关系的原子输入，不是第二个边界对象。产品尚未正式发布，本次直接替换旧的“非 root 可先创建无边界 USER”请求形状，不保留可绕过的兼容入口。现有 Root 路径通过显式空值表达无普通边界，不能依赖字段缺失产生两种含义。
+
+**Policy 与附件写入。** 非 root 在当前 PDP 和上述上限成立后可以创建 CUSTOMER Policy、发布普通 Policy 的不可变版本以及管理普通附件；创建 Policy 本身仍不自动授予任何权限。实际变更还要满足：
+
+- 被修改的 Policy 不能是任何当前 User/Role boundary。默认版本切换必须枚举并锁定全部当前附件/边界引用；存在 Root 创建且没有委派上限证明的附件、不同上限的附件或任何边界引用时，非 root 不得切换。改名不改变权限，但仍不得修改受保护上限 Policy。
+- User 附件目标必须是同 Account、非 Root、非平台绑定 USER，且当前边界 Policy ID 与管理者上限完全相同。Group 附件把同一上限写入附件的内部委派证明；其全部当前成员必须匹配该上限，空组也保留该证明以约束后续成员。Role 附件在本片仍 Root-only；以后开放时必须验证 Role boundary 与管理者上限相同。
+- 非 root 撤销附件同样执行上限检查。撤销含 Deny 的 Policy 可能扩大有效 Allow，不能误判为天然单调；安全性来自结果仍受同一封存上限约束，而不是来自“撤销只会减少权限”的假设。
+- 对管理者本人或包含管理者的 Group 做附件变更，可以在 Root 已封存的上限内改变实际权限，但不能越过上限。这是权限边界委派的明确语义；若 Root 只希望委派作者职责，应不授予附件动作，而不是依赖隐藏的 self 特例。
+- PolicyVersion 的语义、条件、Deny、资源通配和默认指针不做通用包含关系计算。委派安全只依赖不可由管理者改变的上限交集、精确对象闭包和数据库关系证明。
+
+**内部证据而非新 permit。** 每个非 root 成功命令在现有命令完成记录中封存 `actorBoundary` 和必要的 `targetBoundary`：Policy ID、当前 versionId/contentDigest、边界关系修订、主体修订及受控 target kind/ID。Group 附件另保存同一上限 Policy ID，供以后 membership 写入锁内检查。该证据不进入普通请求，不返回可复用授权令牌，也不复制 Policy 文档；成功 Audit 事实的 content digest 绑定请求与精确委派证据。Root 命令使用封闭的 `ROOT` 证据状态，不能伪造成某个普通边界。
+
+等值命令重放只返回原已提交结果，不重新产生效果；原上限随后变更、主体停用或权限撤销不抹去历史事实。没有完成记录的新请求必须按当前上限重新授权。响应丢失、事务结果不确定或数据库证据损坏时失败关闭，不能重新选择另一个 boundary 或降级成 Root 路径。
+
+**事务顺序。** 所有相关写入采用同一顺序：Account → actor/目标 USER（稳定 ID 排序）→ actor 当前 Session/credential generation → User/Role boundary 关系 → Group/Role 与 membership（稳定 ID 排序）→ 涉及的 boundary Policy（稳定 ID 排序）→ 被修改 Policy/default pointer/attachment → completion/outbox。Root 修改或移除边界、非 root 创建 USER/附件、Group membership、Policy 默认切换及密码重置共用这套顺序。并发结果只能是旧上限下的完整提交或边界变更后的明确拒绝，不能出现已改凭据但无边界、已有关联但无委派证明、或事实与状态分裂。
+
+**必须通过的 LANG-08 门禁。** 在现有 API/authority/IAM PostgreSQL/Audit proof/独立进程 owner 中扩展，不新增平行测试框架：
+
+- 原 Root 仍可管理普通无边界身份；只有管理 Action 而无 User boundary 的非 root 被拒。边界管理 Action、AccountAdministrator 系统策略或自定义管理策略均不能单独绕过上限。
+- 同一上限下由非 root 原子创建 USER、重置其密码、创建/改版 Policy、关联 USER/Group 并通过真实 PaaS 访问允许资源；任何直接/组/Role/替代登录路径都不能访问上限拒绝的第二个真实资源。
+- 缺失/不同/跨 Account/退休/损坏 boundary，Root/平台身份目标，伪造 policyId/resourceVersion/target/cursor，修改上限 Policy、非 root 去除边界以及向受控 Group 加入不匹配成员全部拒绝且无部分状态、凭据、决定或成功事实。
+- 创建 USER 与 Root 切换上限、附件与 Group membership、默认切换与边界设置/移除、密码重置与目标边界变化、附件撤销与命中 Deny 的并发只有一个合法结果；实际锁等待后 actor/session/Action 撤销在下一次受保护写入生效。
+- 两个 IAM 实例、重启、schema/bootstrap 等值重放和当前唯一滚动前驱保留数据均不能丢失委派证明或复活旧权限。旧决定/outbox 继续按发生时证据投递；当前请求不能借历史 proof 取得权限。
+- 真实 Audit 链精确关联 actor、decision、target 与委派证据摘要；不记录 Policy 正文、密码或密钥。UI 只消费服务返回的 capability/稳定错误，不能在前端自行判断边界相等或把按钮隐藏当作安全门禁。
 
 #### 权限边界：User 纵向闭环
 
