@@ -1872,7 +1872,7 @@ func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 		},
 		{
 			name: "create user", target: "/v1/users", status: http.StatusCreated,
-			body: `{"loginName":"developer","displayName":"Developer","initialPassword":"Initial-Developer-Password-84!","requestId":"request-user"}`,
+			body: `{"loginName":"developer","displayName":"Developer","initialPassword":"Initial-Developer-Password-84!","permissionBoundary":null,"requestId":"request-user"}`,
 		},
 		{
 			name: "put binding", target: "/v1/policy-attachments", status: http.StatusOK,
@@ -1907,7 +1907,7 @@ func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 	missingCredential := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/users",
-		strings.NewReader(`{"loginName":"developer","displayName":"Developer","initialPassword":"Initial-Developer-Password-84!","requestId":"request-user"}`),
+		strings.NewReader(`{"loginName":"developer","displayName":"Developer","initialPassword":"Initial-Developer-Password-84!","permissionBoundary":null,"requestId":"request-user"}`),
 	)
 	missingCredential.Header.Set("Content-Type", "application/json")
 	missingResponse := httptest.NewRecorder()

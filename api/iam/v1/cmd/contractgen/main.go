@@ -760,6 +760,7 @@ func structContracts() map[string]reflect.Type {
 		"StartNotificationContactReplacementRequest":    openapi31.StructType[iamv1.StartNotificationContactReplacementRequest](),
 		"StartNotificationContactVerificationRequest":   openapi31.StructType[iamv1.StartNotificationContactVerificationRequest](),
 		"ConfirmNotificationContactVerificationRequest": openapi31.StructType[iamv1.ConfirmNotificationContactVerificationRequest](),
+		"CreateUserPermissionBoundary":                  openapi31.StructType[iamv1.CreateUserPermissionBoundary](),
 		"CreateUserRequest":                             openapi31.StructType[iamv1.CreateUserRequest](),
 		"AccessKey":                                     openapi31.StructType[iamv1.AccessKey](),
 		"AccessKeyAuthorizationObservation":             openapi31.StructType[iamv1.AccessKeyAuthorizationObservation](),
@@ -1398,6 +1399,14 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	createUser := schemas["CreateUserRequest"].(object)
+	createUserRequired := append(createUser["required"].([]string), "permissionBoundary")
+	slices.Sort(createUserRequired)
+	createUser["required"] = createUserRequired
+	createUser["properties"].(object)["permissionBoundary"] = object{
+		"anyOf":       []any{object{"type": "null"}, openapi31.Ref("CreateUserPermissionBoundary")},
+		"description": "Explicit Root-only null or an exact existing permission-boundary policy revision. Omission is never an implicit unlimited user.",
+	}
 	schemas["PolicyAttachmentChange"].(object)["oneOf"] = []any{
 		object{"required": []string{"target", "policyId", "policyResourceVersion", "attachment"}, "properties": object{
 			"operation":    object{"const": string(iamv1.PolicyAttachmentChangeCreate)},

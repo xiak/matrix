@@ -984,6 +984,12 @@ func ValidateCreateUserRequest(value CreateUserRequest) error {
 	if !value.InitialPassword.Present() {
 		problems = append(problems, ErrInvalidSecret)
 	}
+	if value.PermissionBoundary != nil {
+		problems = append(problems,
+			ValidateID("permissionBoundary.policyId", string(value.PermissionBoundary.PolicyID)),
+			validatePositiveVersion(value.PermissionBoundary.PolicyResourceVersion),
+		)
+	}
 	return errors.Join(problems...)
 }
 

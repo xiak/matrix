@@ -982,12 +982,16 @@ type OtherSessionRevocationMutation struct {
 }
 
 type UserMutation struct {
-	User                    iamv1.User
-	PasswordHash            authority.PasswordHash
-	ExpectedSettingsVersion uint64
-	ActorPrincipalID        iamv1.PrincipalID
-	DecisionID              iamv1.DecisionID
-	AuditEvent              auditv1.Event
+	User                          iamv1.User
+	PasswordHash                  authority.PasswordHash
+	ExpectedSettingsVersion       uint64
+	ActorPrincipalID              iamv1.PrincipalID
+	ActorSessionID                iamv1.SessionID
+	BoundaryID                    string
+	BoundaryPolicyID              iamv1.PolicyID
+	BoundaryPolicyResourceVersion uint64
+	DecisionID                    iamv1.DecisionID
+	AuditEvent                    auditv1.Event
 }
 
 type PolicyCreation struct {

@@ -18030,6 +18030,24 @@
         ],
         "type": "object"
       },
+      "CreateUserPermissionBoundary": {
+        "additionalProperties": false,
+        "properties": {
+          "policyId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "policyResourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policyId",
+          "policyResourceVersion"
+        ],
+        "type": "object"
+      },
       "CreateUserRequest": {
         "additionalProperties": false,
         "properties": {
@@ -18046,6 +18064,17 @@
             "pattern": "^[a-z][a-z0-9._-]{2,63}$",
             "type": "string"
           },
+          "permissionBoundary": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CreateUserPermissionBoundary"
+              }
+            ],
+            "description": "Explicit Root-only null or an exact existing permission-boundary policy revision. Omission is never an implicit unlimited user."
+          },
           "requestId": {
             "$ref": "#/components/schemas/ID"
           }
@@ -18054,6 +18083,7 @@
           "displayName",
           "initialPassword",
           "loginName",
+          "permissionBoundary",
           "requestId"
         ],
         "type": "object"

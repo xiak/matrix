@@ -638,6 +638,22 @@ func TestUserCreationUsesAccountRulesOutsideTheTransaction(t *testing.T) {
 	if err != nil || created.LoginName != request.LoginName || tx.userCreationMutation == nil || tx.userCreationMutation.ExpectedSettingsVersion != 7 {
 		t.Fatal("creation lost its exact rule version", err)
 	}
+	if tx.userCreationMutation.ActorSessionID != login.Session.ID || tx.userCreationMutation.BoundaryID != "" ||
+		tx.userCreationMutation.BoundaryPolicyID != "" || tx.userCreationMutation.BoundaryPolicyResourceVersion != 0 {
+		t.Fatal("explicit Root null acquired an implicit permission boundary")
+	}
+	request.LoginName, request.RequestID = "rules.bounded", "rules-create-bounded"
+	request.PermissionBoundary = &iamv1.CreateUserPermissionBoundary{
+		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+	}
+	created, err = service.CreateUser(t.Context(), login.Credential, request)
+	if err != nil || created.LoginName != request.LoginName || tx.userCreationMutation == nil ||
+		tx.userCreationMutation.ActorSessionID != login.Session.ID ||
+		tx.userCreationMutation.BoundaryID == "" ||
+		tx.userCreationMutation.BoundaryPolicyID != request.PermissionBoundary.PolicyID ||
+		tx.userCreationMutation.BoundaryPolicyResourceVersion != request.PermissionBoundary.PolicyResourceVersion {
+		t.Fatal("creation lost its exact atomic boundary selection", err)
+	}
 }
 
 func TestAdministratorPasswordResetPreparesOutsideLocksAndRechecksAuthority(t *testing.T) {

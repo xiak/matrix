@@ -17,9 +17,10 @@ type passwordDigestInput struct {
 }
 
 type createUserDigestInput struct {
-	LoginName   string `json:"loginName"`
-	DisplayName string `json:"displayName"`
-	RequestID   string `json:"requestId"`
+	LoginName          string                              `json:"loginName"`
+	DisplayName        string                              `json:"displayName"`
+	PermissionBoundary *iamv1.CreateUserPermissionBoundary `json:"permissionBoundary"`
+	RequestID          string                              `json:"requestId"`
 }
 
 type revokeDigestInput struct {
@@ -261,7 +262,8 @@ func (service *Authority) CreateUser(
 		return iamv1.User{}, ErrInvalidArgument
 	}
 	requestDigest, err := digestSanitized("user-create", createUserDigestInput{
-		LoginName: request.LoginName, DisplayName: request.DisplayName, RequestID: request.RequestID,
+		LoginName: request.LoginName, DisplayName: request.DisplayName,
+		PermissionBoundary: request.PermissionBoundary, RequestID: request.RequestID,
 	})
 	if err != nil {
 		return iamv1.User{}, err
@@ -331,6 +333,17 @@ func (service *Authority) CreateUser(
 		if err != nil {
 			return ErrUnavailable
 		}
+		boundaryID := ""
+		boundaryPolicyID := iamv1.PolicyID("")
+		var boundaryPolicyResourceVersion uint64
+		if request.PermissionBoundary != nil {
+			boundaryID, err = service.config.NewID("boundary")
+			if err != nil {
+				return ErrUnavailable
+			}
+			boundaryPolicyID = request.PermissionBoundary.PolicyID
+			boundaryPolicyResourceVersion = request.PermissionBoundary.PolicyResourceVersion
+		}
 		proposed := iamv1.User{
 			APIVersion:         iamv1.APIVersion,
 			Kind:               "User",
@@ -358,12 +371,16 @@ func (service *Authority) CreateUser(
 			return err
 		}
 		created, err = transaction.CreateUser(transactionContext, UserMutation{
-			User:                    proposed,
-			PasswordHash:            passwordHash,
-			ExpectedSettingsVersion: settingsVersion,
-			ActorPrincipalID:        subject.Subject.Principal.ID,
-			DecisionID:              decision.ID,
-			AuditEvent:              event,
+			User:                          proposed,
+			PasswordHash:                  passwordHash,
+			ExpectedSettingsVersion:       settingsVersion,
+			ActorPrincipalID:              subject.Subject.Principal.ID,
+			ActorSessionID:                subject.Subject.Session.ID,
+			BoundaryID:                    boundaryID,
+			BoundaryPolicyID:              boundaryPolicyID,
+			BoundaryPolicyResourceVersion: boundaryPolicyResourceVersion,
+			DecisionID:                    decision.ID,
+			AuditEvent:                    event,
 		})
 		return err
 	})

@@ -289,7 +289,7 @@ func proveDirectPolicyAttachments(t *testing.T, ctx context.Context, handler htt
 	for _, path := range []string{"/v1/role-bindings", "/v1/role-bindings/old:revoke"} {
 		post(path, primary, map[string]any{}, http.StatusNotFound)
 	}
-	response := post("/v1/users", primary, map[string]any{"loginName": "policy-member", "displayName": "Policy member", "initialPassword": initialDeveloperPassword, "requestId": "policy-member-create"}, http.StatusCreated)
+	response := post("/v1/users", primary, map[string]any{"loginName": "policy-member", "displayName": "Policy member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "policy-member-create"}, http.StatusCreated)
 	var member iamv1.User
 	if json.Unmarshal(response.Body.Bytes(), &member) != nil || iamv1.ValidateUser(member) != nil {
 		t.Fatal("invalid new member")
@@ -491,6 +491,251 @@ func proveDirectPolicyAttachments(t *testing.T, ctx context.Context, handler htt
 	}
 	if rows.Err() != nil || facts != 2 {
 		t.Fatal("missing platform attachment facts")
+	}
+}
+
+func proveDelegatedUserCreation(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	call := func(method, path, bearer string, body any, want int, target any) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		var err error
+		if body != nil {
+			encoded, err = json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != want {
+			t.Fatalf("delegated user creation %s %s: status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+		}
+		if target != nil && json.Unmarshal(response.Body.Bytes(), target) != nil {
+			t.Fatal("decode delegated user creation response")
+		}
+		return response
+	}
+	var current iamv1.CurrentIdentity
+	call(http.MethodGet, "/v1/auth/me", root, nil, http.StatusOK, &current)
+	account := current.Account.ID
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "delegated-user-create", Effect: iamv1.PolicyAllow,
+			Actions: []iamv1.Action{iamv1.ActionIAMUserCreate}, Resources: []iamv1.PolicyResourceSelector{{
+				Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(account),
+			}}}}}
+	var ceiling iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Delegated user ceiling",
+		Document: document, RequestID: "delegated-user-ceiling"}, http.StatusCreated, &ceiling)
+	createRootUser := func(name, requestID string) iamv1.User {
+		t.Helper()
+		var user iamv1.User
+		call(http.MethodPost, "/v1/users", root, map[string]any{
+			"loginName": name, "displayName": "Delegated creator", "initialPassword": initialDeveloperPassword,
+			"permissionBoundary": nil, "requestId": requestID,
+		}, http.StatusCreated, &user)
+		if iamv1.ValidateUser(user) != nil {
+			t.Fatal("invalid delegated creator")
+		}
+		return user
+	}
+	attachCeiling := func(user iamv1.User, requestID string) {
+		t.Helper()
+		call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(user.ID)},
+			PolicyID: ceiling.Policy.ID, PolicyResourceVersion: ceiling.Policy.ResourceVersion, RequestID: requestID,
+		}, http.StatusOK, nil)
+	}
+
+	unbounded := createRootUser("delegate.unbounded", "delegate-unbounded-create")
+	attachCeiling(unbounded, "delegate-unbounded-grant")
+	unboundedSession := localRecoveryLogin(t, handler, unbounded.LoginName+"@"+string(account), initialDeveloperPassword, true)
+	unboundedSession = localRecoveryChangePassword(t, handler, unboundedSession, initialDeveloperPassword, "Delegate-Unbounded-Password-73!")
+	call(http.MethodPost, "/v1/users", unboundedSession, map[string]any{
+		"loginName": "delegate.unbounded.target", "displayName": "Rejected unbounded target", "initialPassword": initialDeveloperPassword,
+		"permissionBoundary": map[string]any{"policyId": ceiling.Policy.ID, "policyResourceVersion": ceiling.Policy.ResourceVersion},
+		"requestId":          "delegate-unbounded-target",
+	}, http.StatusForbidden, nil)
+
+	systemBounded := createRootUser("delegate.system", "delegate-system-create")
+	attachCeiling(systemBounded, "delegate-system-grant")
+	var emptySystemBoundary iamv1.UserPermissionBoundary
+	systemBoundaryPath := "/v1/users/" + string(systemBounded.ID) + "/permission-boundary"
+	call(http.MethodGet, systemBoundaryPath, root, nil, http.StatusOK, &emptySystemBoundary)
+	call(http.MethodPut, systemBoundaryPath, root, iamv1.SetUserPermissionBoundaryRequest{
+		PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1,
+		ResourceVersion: emptySystemBoundary.ResourceVersion, RequestID: "delegate-system-boundary",
+	}, http.StatusOK, nil)
+	systemSession := localRecoveryLogin(t, handler, systemBounded.LoginName+"@"+string(account), initialDeveloperPassword, true)
+	systemSession = localRecoveryChangePassword(t, handler, systemSession, initialDeveloperPassword, "Delegate-System-Password-74!")
+	call(http.MethodPost, "/v1/users", systemSession, map[string]any{
+		"loginName": "delegate.system.target", "displayName": "Rejected system-bounded target", "initialPassword": initialDeveloperPassword,
+		"permissionBoundary": map[string]any{"policyId": iamv1.SystemPolicyAccountAdministrator, "policyResourceVersion": 1},
+		"requestId":          "delegate-system-target",
+	}, http.StatusForbidden, nil)
+
+	manager := createRootUser("delegate.bounded", "delegate-bounded-create")
+	attachCeiling(manager, "delegate-bounded-grant")
+	var initialBoundary iamv1.UserPermissionBoundary
+	boundaryPath := "/v1/users/" + string(manager.ID) + "/permission-boundary"
+	call(http.MethodGet, boundaryPath, root, nil, http.StatusOK, &initialBoundary)
+	var managerBoundary iamv1.UserPermissionBoundary
+	call(http.MethodPut, boundaryPath, root, iamv1.SetUserPermissionBoundaryRequest{
+		PolicyID: ceiling.Policy.ID, PolicyResourceVersion: ceiling.Policy.ResourceVersion,
+		ResourceVersion: initialBoundary.ResourceVersion, RequestID: "delegate-bounded-boundary",
+	}, http.StatusOK, &managerBoundary)
+	managerSession := localRecoveryLogin(t, handler, manager.LoginName+"@"+string(account), initialDeveloperPassword, true)
+	managerSession = localRecoveryChangePassword(t, handler, managerSession, initialDeveloperPassword, "Delegate-Bounded-Password-84!")
+	call(http.MethodGet, boundaryPath, root, nil, http.StatusOK, &managerBoundary)
+
+	missing := performIAMRequest(handler, http.MethodPost, "/v1/users", managerSession,
+		[]byte(`{"loginName":"delegate.missing","displayName":"Missing boundary","initialPassword":"Initial-Developer-Password-84!","requestId":"delegate-missing"}`))
+	if missing.Code != http.StatusBadRequest {
+		t.Fatalf("omitted delegated boundary status=%d body=%s", missing.Code, missing.Body.String())
+	}
+	call(http.MethodPost, "/v1/users", managerSession, map[string]any{
+		"loginName": "delegate.null", "displayName": "Null boundary", "initialPassword": initialDeveloperPassword,
+		"permissionBoundary": nil, "requestId": "delegate-null",
+	}, http.StatusForbidden, nil)
+	call(http.MethodPost, "/v1/users", managerSession, map[string]any{
+		"loginName": "delegate.different", "displayName": "Different boundary", "initialPassword": initialDeveloperPassword,
+		"permissionBoundary": map[string]any{"policyId": iamv1.SystemPolicyPaaSViewer, "policyResourceVersion": 1},
+		"requestId":          "delegate-different",
+	}, http.StatusForbidden, nil)
+	call(http.MethodPost, "/v1/users", managerSession, map[string]any{
+		"loginName": "delegate.stale", "displayName": "Stale boundary", "initialPassword": initialDeveloperPassword,
+		"permissionBoundary": map[string]any{"policyId": ceiling.Policy.ID, "policyResourceVersion": ceiling.Policy.ResourceVersion + 1},
+		"requestId":          "delegate-stale",
+	}, http.StatusConflict, nil)
+
+	var target iamv1.User
+	call(http.MethodPost, "/v1/users", managerSession, map[string]any{
+		"loginName": "delegate.target", "displayName": "Bounded target", "initialPassword": initialDeveloperPassword,
+		"permissionBoundary": map[string]any{"policyId": ceiling.Policy.ID, "policyResourceVersion": ceiling.Policy.ResourceVersion},
+		"requestId":          "delegate-target",
+	}, http.StatusCreated, &target)
+	var targetBoundary iamv1.UserPermissionBoundary
+	call(http.MethodGet, "/v1/users/"+string(target.ID)+"/permission-boundary", root, nil, http.StatusOK, &targetBoundary)
+	if iamv1.ValidateUserPermissionBoundary(targetBoundary) != nil || targetBoundary.Policy == nil ||
+		targetBoundary.Policy.PolicyID != ceiling.Policy.ID {
+		t.Fatal("delegated target lost its atomic permission boundary")
+	}
+	t.Run("creation_linearizes_before_boundary_removal", func(t *testing.T) {
+		createBody := mustIAMJSON(t, map[string]any{
+			"loginName": "delegate.race.target", "displayName": "Racing bounded target", "initialPassword": initialDeveloperPassword,
+			"permissionBoundary": map[string]any{"policyId": ceiling.Policy.ID, "policyResourceVersion": ceiling.Policy.ResourceVersion},
+			"requestId":          "delegate-race-target",
+		})
+		removeBody := mustIAMJSON(t, iamv1.RemoveUserPermissionBoundaryRequest{
+			ResourceVersion: managerBoundary.ResourceVersion, RequestID: "delegate-race-remove",
+		})
+		awaitCreate, releaseCreate := holdIAMRequest(t, ctx, database, "delegate-race-target", true, auditv1.ActionIAMUserCreated)
+		createDone, removeDone := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			createDone <- performIAMRequest(handler, http.MethodPost, "/v1/users", managerSession, createBody)
+		}()
+		creatorPID := awaitCreate()
+		go func() {
+			removeDone <- performIAMRequest(handler, http.MethodDelete, boundaryPath, root, removeBody)
+		}()
+		wait, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var blocked bool
+			if err := database.QueryRow(wait, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+				WHERE datname=current_database() AND usename=$1 AND pid<>$2
+				  AND state='active' AND wait_event_type='Lock' AND $2=ANY(pg_blocking_pids(pid)))`,
+				iamHTTPTestRole, creatorPID).Scan(&blocked); err != nil {
+				t.Fatal("observe boundary removal behind delegated creation", err)
+			}
+			if blocked {
+				break
+			}
+			select {
+			case <-ticker.C:
+			case <-wait.Done():
+				t.Fatal("boundary removal did not serialize behind delegated creation")
+			}
+		}
+		releaseCreate()
+		var created, removed *httptest.ResponseRecorder
+		select {
+		case created = <-createDone:
+		case <-ctx.Done():
+			t.Fatal("delegated creation did not finish after its barrier")
+		}
+		select {
+		case removed = <-removeDone:
+		case <-ctx.Done():
+			t.Fatal("boundary removal did not finish after delegated creation")
+		}
+		var raceTarget iamv1.User
+		var removedBoundary iamv1.UserPermissionBoundary
+		if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &raceTarget) != nil ||
+			removed.Code != http.StatusOK || json.Unmarshal(removed.Body.Bytes(), &removedBoundary) != nil || removedBoundary.Policy != nil {
+			t.Fatalf("delegated creation/removal outcomes create=%d remove=%d", created.Code, removed.Code)
+		}
+		var raceBoundary iamv1.UserPermissionBoundary
+		call(http.MethodGet, "/v1/users/"+string(raceTarget.ID)+"/permission-boundary", root, nil, http.StatusOK, &raceBoundary)
+		if raceBoundary.Policy == nil || raceBoundary.Policy.PolicyID != ceiling.Policy.ID {
+			t.Fatal("completed delegated creation lost its sealed boundary after creator removal")
+		}
+		call(http.MethodPost, "/v1/users", managerSession, map[string]any{
+			"loginName": "delegate.after.remove", "displayName": "Removed creator target", "initialPassword": initialDeveloperPassword,
+			"permissionBoundary": map[string]any{"policyId": ceiling.Policy.ID, "policyResourceVersion": ceiling.Policy.ResourceVersion},
+			"requestId":          "delegate-after-remove",
+		}, http.StatusForbidden, nil)
+	})
+	t.Run("boundary_removal_precedes_creation", func(t *testing.T) {
+		removalFirst := createRootUser("delegate.removal.first", "delegate-removal-first-manager")
+		attachCeiling(removalFirst, "delegate-removal-first-grant")
+		removalPath := "/v1/users/" + string(removalFirst.ID) + "/permission-boundary"
+		var emptyBoundary, selectedBoundary iamv1.UserPermissionBoundary
+		call(http.MethodGet, removalPath, root, nil, http.StatusOK, &emptyBoundary)
+		call(http.MethodPut, removalPath, root, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: ceiling.Policy.ID, PolicyResourceVersion: ceiling.Policy.ResourceVersion,
+			ResourceVersion: emptyBoundary.ResourceVersion, RequestID: "delegate-removal-first-boundary",
+		}, http.StatusOK, &selectedBoundary)
+		removalSession := localRecoveryLogin(t, handler, removalFirst.LoginName+"@"+string(account), initialDeveloperPassword, true)
+		removalSession = localRecoveryChangePassword(t, handler, removalSession, initialDeveloperPassword, "Delegate-Removal-First-Password-85!")
+		call(http.MethodGet, removalPath, root, nil, http.StatusOK, &selectedBoundary)
+		removeBody := mustIAMJSON(t, iamv1.RemoveUserPermissionBoundaryRequest{
+			ResourceVersion: selectedBoundary.ResourceVersion, RequestID: "delegate-removal-first-remove",
+		})
+		createBody := mustIAMJSON(t, map[string]any{
+			"loginName": "delegate.removal.first.target", "displayName": "Removal-first target", "initialPassword": initialDeveloperPassword,
+			"permissionBoundary": map[string]any{"policyId": ceiling.Policy.ID, "policyResourceVersion": ceiling.Policy.ResourceVersion},
+			"requestId":          "delegate-removal-first-target",
+		})
+		removed := performIAMRequest(handler, http.MethodDelete, removalPath, root, removeBody)
+		created := performIAMRequest(handler, http.MethodPost, "/v1/users", removalSession, createBody)
+		if removed.Code != http.StatusOK || created.Code != http.StatusForbidden {
+			t.Fatalf("boundary removal/creation outcomes remove=%d create=%d", removed.Code, created.Code)
+		}
+	})
+	var principalRows, credentialRows, loginRows, boundaryRows, createdFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.principals WHERE tenant_id=$1 AND id=$2 AND resource_version=1),
+		(SELECT count(*) FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2),
+		(SELECT count(*) FROM iam.login_index WHERE tenant_id=$1 AND principal_id=$2),
+		(SELECT count(*) FROM iam.user_permission_boundaries WHERE tenant_id=$1 AND user_id=$2 AND policy_id=$3 AND resource_version=1 AND revoked_at IS NULL),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.user.created'
+		 AND event_document#>>'{target,id}'=$2 AND event_document->>'requestId'='delegate-target')`,
+		account, target.ID, ceiling.Policy.ID).Scan(&principalRows, &credentialRows, &loginRows, &boundaryRows, &createdFacts); err != nil ||
+		principalRows != 1 || credentialRows != 1 || loginRows != 1 || boundaryRows != 1 || createdFacts != 1 {
+		t.Fatalf("delegated creation split state: principal=%d credential=%d login=%d boundary=%d fact=%d err=%v",
+			principalRows, credentialRows, loginRows, boundaryRows, createdFacts, err)
+	}
+	var rejectedRows, rejectedFacts, systemAllowedDecisions int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.principals WHERE tenant_id=$1 AND login_name IN ('delegate.unbounded.target','delegate.system.target','delegate.null','delegate.different','delegate.stale','delegate.after.remove','delegate.removal.first.target')),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.user.created'
+		 AND event_document->>'requestId' IN ('delegate-unbounded-target','delegate-system-target','delegate-null','delegate-different','delegate-stale','delegate-after-remove','delegate-removal-first-target')),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id='delegate-system-target' AND allowed)`, account).
+		Scan(&rejectedRows, &rejectedFacts, &systemAllowedDecisions); err != nil || rejectedRows != 0 || rejectedFacts != 0 || systemAllowedDecisions != 1 {
+		t.Fatalf("rejected delegated creation left state or skipped the storage guard: principals=%d facts=%d systemAllowed=%d err=%v",
+			rejectedRows, rejectedFacts, systemAllowedDecisions, err)
 	}
 }
 
@@ -1097,6 +1342,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	runFlow("account security settings read authority", proveAccountSecuritySettingsRead)
 	runFlow("user_permission_boundaries", proveUserPermissionBoundaries)
 	runFlow("user_boundary_policy_competition", proveUserBoundaryPolicyRaces)
+	runFlow("delegated user creation stays inside the sealed boundary", proveDelegatedUserCreation)
 	runFlow("direct policy attachment management", proveDirectPolicyAttachments)
 	runFlow("group inheritance and terminal membership", proveGroupInheritance)
 	runFlow("customer policy publication and current authority", proveCustomerPolicyPublication)
@@ -2460,7 +2706,7 @@ func proveAccountSecuritySettingsRead(t *testing.T, ctx context.Context, handler
 		t.Helper()
 		var user iamv1.User
 		call(http.MethodPost, "/v1/users", administrator, map[string]any{"loginName": "settings-reader", "displayName": "Settings reader",
-			"initialPassword": initialDeveloperPassword, "requestId": id}, http.StatusCreated, &user)
+			"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": id}, http.StatusCreated, &user)
 		bearer := localRecoveryLogin(t, handler, user.LoginName+"@"+string(user.AccountID), initialDeveloperPassword, true)
 		return user, localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	}
@@ -2617,7 +2863,7 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 		}
 	}
 	var member iamv1.User
-	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "boundary-member", "displayName": "Boundary member", "initialPassword": initialDeveloperPassword, "requestId": "boundary-member-create"}, http.StatusCreated, &member)
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "boundary-member", "displayName": "Boundary member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "boundary-member-create"}, http.StatusCreated, &member)
 	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	path := "/v1/users/" + string(member.ID) + "/permission-boundary"
@@ -11777,7 +12023,7 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 	create := func(root, name string) iamv1.User {
 		t.Helper()
 		var user iamv1.User
-		call(0, http.MethodPost, "/v1/users", root, map[string]any{"loginName": name, "displayName": "Attempt gate user", "initialPassword": password, "requestId": "attempt-user-" + name}, http.StatusCreated, &user)
+		call(0, http.MethodPost, "/v1/users", root, map[string]any{"loginName": name, "displayName": "Attempt gate user", "initialPassword": password, "permissionBoundary": nil, "requestId": "attempt-user-" + name}, http.StatusCreated, &user)
 		return user
 	}
 	user := create(root.Credential, "guessuser")
@@ -12220,7 +12466,7 @@ func TestIAMOwnSessionBulkPostgres(t *testing.T) {
 	create := func(bearer, name string) iamv1.User {
 		t.Helper()
 		var user iamv1.User
-		call(0, http.MethodPost, "/v1/users", bearer, map[string]any{"loginName": name, "displayName": "Bulk session user", "initialPassword": password, "requestId": "bulk-user-" + name}, http.StatusCreated, &user)
+		call(0, http.MethodPost, "/v1/users", bearer, map[string]any{"loginName": name, "displayName": "Bulk session user", "initialPassword": password, "permissionBoundary": nil, "requestId": "bulk-user-" + name}, http.StatusCreated, &user)
 		return user
 	}
 	user, unrelated := create(root, "bulkuser"), create(root, "unrelated")
@@ -13000,7 +13246,7 @@ func proveOwnLoginSessions(t *testing.T, ctx context.Context, handlers []http.Ha
 	createUser := func(t *testing.T, bearer, name string) iamv1.User {
 		t.Helper()
 		var result iamv1.User
-		call(t, 0, http.MethodPost, "/v1/users", bearer, map[string]any{"loginName": name, "displayName": "Own sessions", "initialPassword": temporary, "requestId": "own-create-" + name}, http.StatusCreated, &result)
+		call(t, 0, http.MethodPost, "/v1/users", bearer, map[string]any{"loginName": name, "displayName": "Own sessions", "initialPassword": temporary, "permissionBoundary": nil, "requestId": "own-create-" + name}, http.StatusCreated, &result)
 		return result
 	}
 	user := createUser(t, root, "ownsession")
@@ -13344,7 +13590,7 @@ func proveOwnSessionWriters(t *testing.T, ctx context.Context, handlers []http.H
 	createUser := func(t *testing.T, bearer, name string) iamv1.User {
 		t.Helper()
 		var result iamv1.User
-		call(t, 0, http.MethodPost, "/v1/users", bearer, map[string]any{"loginName": name, "displayName": "Own sessions", "initialPassword": temporary, "requestId": "own-create-" + name}, http.StatusCreated, &result)
+		call(t, 0, http.MethodPost, "/v1/users", bearer, map[string]any{"loginName": name, "displayName": "Own sessions", "initialPassword": temporary, "permissionBoundary": nil, "requestId": "own-create-" + name}, http.StatusCreated, &result)
 		return result
 	}
 	path := func(session iamv1.SessionID) string { return "/v1/auth/sessions/" + string(session) + ":revoke" }
@@ -13850,11 +14096,11 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 	root = localRecoveryChangePassword(t, handler, root, adminPassword, changedAdminPassword)
 	var target, other iamv1.User
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-target", "displayName": "Attachment change target",
-		"initialPassword": initialDeveloperPassword, "requestId": "attachment-change-target"}, http.StatusCreated, &target)
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-change-target"}, http.StatusCreated, &target)
 	targetBearer := localRecoveryLogin(t, handler, target.LoginName+"@"+string(target.AccountID), initialDeveloperPassword, true)
 	targetBearer = localRecoveryChangePassword(t, handler, targetBearer, initialDeveloperPassword, changedDeveloperPassword)
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-other", "displayName": "Attachment change other",
-		"initialPassword": initialDeveloperPassword, "requestId": "attachment-change-other"}, http.StatusCreated, &other)
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-change-other"}, http.StatusCreated, &other)
 	otherBearer := localRecoveryLogin(t, handler, other.LoginName+"@"+string(other.AccountID), initialDeveloperPassword, true)
 	localRecoveryChangePassword(t, handler, otherBearer, initialDeveloperPassword, changedDeveloperPassword)
 
@@ -13941,7 +14187,7 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 	// the historical write, while another actor cannot discover the receipt.
 	var delegated iamv1.User
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-admin", "displayName": "Attachment change admin",
-		"initialPassword": initialDeveloperPassword, "requestId": "attachment-change-admin"}, http.StatusCreated, &delegated)
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-change-admin"}, http.StatusCreated, &delegated)
 	delegatedBearer := localRecoveryLogin(t, handler, delegated.LoginName+"@"+string(delegated.AccountID), initialDeveloperPassword, true)
 	localRecoveryChangePassword(t, handler, delegatedBearer, initialDeveloperPassword, changedDeveloperPassword)
 	var administratorGrant iamv1.PolicyAttachment
@@ -14125,7 +14371,7 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 	}
 	var member iamv1.User
 	call(t, "/v1/users", root, map[string]any{"loginName": "attachment-session-target", "displayName": "Attachment session target",
-		"initialPassword": initialDeveloperPassword, "requestId": "attachment-session-target"}, http.StatusCreated, &member)
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-session-target"}, http.StatusCreated, &member)
 	memberBearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
 	localRecoveryChangePassword(t, handler, memberBearer, initialDeveloperPassword, changedDeveloperPassword)
 	var group iamv1.Group
@@ -14158,7 +14404,7 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 					var bearer string
 					if actor.ID == "" { // Also allow a revoke-only subtest selection.
 						call(t, "/v1/users", root, map[string]any{"loginName": "attachment-actor-" + caseID, "displayName": "Attachment actor",
-							"initialPassword": initialDeveloperPassword, "requestId": "attachment-actor-" + caseID}, http.StatusCreated, &actor)
+							"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-actor-" + caseID}, http.StatusCreated, &actor)
 						actorName = actor.LoginName + "@" + string(actor.AccountID)
 						bearer = localRecoveryLogin(t, handler, actorName, initialDeveloperPassword, true)
 						currentPassword = changedDeveloperPassword
@@ -14765,7 +15011,7 @@ func proveUserBoundaryPolicyRaces(t *testing.T, ctx context.Context, handler htt
 		t.Run(mode, func(t *testing.T) {
 			prefix := "boundary-compete-" + mode
 			var user iamv1.User
-			call(http.MethodPost, "/v1/users", map[string]any{"loginName": prefix, "displayName": prefix, "initialPassword": initialDeveloperPassword, "requestId": prefix + "-user"}, http.StatusCreated, &user)
+			call(http.MethodPost, "/v1/users", map[string]any{"loginName": prefix, "displayName": prefix, "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": prefix + "-user"}, http.StatusCreated, &user)
 			path := "/v1/users/" + string(user.ID) + "/permission-boundary"
 			var policy iamv1.PolicyDetail
 			call(http.MethodPost, "/v1/policies", iamv1.CreatePolicyRequest{DisplayName: prefix, Document: document, RequestID: prefix + "-policy"}, http.StatusCreated, &policy)
@@ -14927,7 +15173,7 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	get("/v1/policies/"+string(iamv1.SystemPolicyPlatformOperator), root, http.StatusForbidden, nil)
 	get("/v1/policies/missing-policy", root, http.StatusForbidden, nil)
 	var member iamv1.User
-	post("/v1/users", root, map[string]any{"loginName": "customer-policy-member", "displayName": "Policy member", "initialPassword": initialDeveloperPassword, "requestId": "customer-policy-member-create"}, http.StatusCreated, &member)
+	post("/v1/users", root, map[string]any{"loginName": "customer-policy-member", "displayName": "Policy member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "customer-policy-member-create"}, http.StatusCreated, &member)
 	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
 	post("/v1/policies", bearer, create, http.StatusForbidden, nil)
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
@@ -15152,7 +15398,7 @@ func proveSourceIPPolicyConditions(t *testing.T, ctx context.Context, handler ht
 		}
 	}
 	var member iamv1.User
-	post("/v1/users", root, map[string]any{"loginName": "network-member", "displayName": "Network member", "initialPassword": initialDeveloperPassword, "requestId": "network-member-create"}, http.StatusCreated, &member)
+	post("/v1/users", root, map[string]any{"loginName": "network-member", "displayName": "Network member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "network-member-create"}, http.StatusCreated, &member)
 	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
@@ -15320,7 +15566,7 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 		t.Fatal("invalid version inventory")
 	}
 	var member iamv1.User
-	post("/v1/users", root, map[string]any{"loginName": "version-member", "displayName": "Version member", "initialPassword": initialDeveloperPassword, "requestId": "version-member-create"}, http.StatusCreated, &member)
+	post("/v1/users", root, map[string]any{"loginName": "version-member", "displayName": "Version member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "version-member-create"}, http.StatusCreated, &member)
 	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: initial.Policy.ID, PolicyResourceVersion: 2, RequestID: "version-member-grant"}, http.StatusOK, nil)
@@ -15776,7 +16022,7 @@ func proveIdentityStringConditions(t *testing.T, ctx context.Context, handler ht
 		}
 	}
 	var other iamv1.User
-	post("/v1/users", root, map[string]any{"loginName": "string-other", "displayName": "Other group member", "initialPassword": initialDeveloperPassword, "requestId": "string-other-create"}, http.StatusCreated, &other)
+	post("/v1/users", root, map[string]any{"loginName": "string-other", "displayName": "Other group member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "string-other-create"}, http.StatusCreated, &other)
 	otherBearer := localRecoveryLogin(t, handler, other.LoginName+"@"+string(other.AccountID), initialDeveloperPassword, true)
 	otherBearer = localRecoveryChangePassword(t, handler, otherBearer, initialDeveloperPassword, changedDeveloperPassword)
 	var group iamv1.Group
@@ -15886,7 +16132,7 @@ func proveIdentityStringConditions(t *testing.T, ctx context.Context, handler ht
 	foreignRoot := localRecoveryLogin(t, handler, foreignAccount.RootIdentity.LoginName, initialDeveloperPassword, true)
 	foreignRoot = localRecoveryChangePassword(t, handler, foreignRoot, initialDeveloperPassword, changedDeveloperPassword)
 	var foreignMember iamv1.User
-	post("/v1/users", foreignRoot, map[string]any{"loginName": member.LoginName, "displayName": "Same named member B", "initialPassword": initialDeveloperPassword, "requestId": "identity-member-b"}, http.StatusCreated, &foreignMember)
+	post("/v1/users", foreignRoot, map[string]any{"loginName": member.LoginName, "displayName": "Same named member B", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "identity-member-b"}, http.StatusCreated, &foreignMember)
 	foreignBearer := localRecoveryLogin(t, handler, foreignMember.LoginName+"@"+string(foreignMember.AccountID), initialDeveloperPassword, true)
 	foreignBearer = localRecoveryChangePassword(t, handler, foreignBearer, initialDeveloperPassword, changedDeveloperPassword)
 	var foreignGroup iamv1.Group
@@ -16126,7 +16372,7 @@ func proveCustomerPolicyMetadata(t *testing.T, ctx context.Context, handler http
 		t.Fatal("rename duplicated or lost success facts")
 	}
 	var member iamv1.User
-	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "metadata-member", "displayName": "Metadata member", "initialPassword": initialDeveloperPassword, "requestId": "metadata-member-create"}, http.StatusCreated, &member)
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "metadata-member", "displayName": "Metadata member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "metadata-member-create"}, http.StatusCreated, &member)
 	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "metadata-member-admin"}, http.StatusOK, nil)
@@ -16254,7 +16500,7 @@ func proveCustomerPolicyDeletion(t *testing.T, ctx context.Context, handler http
 	path := "/v1/policies/" + string(policy.Policy.ID)
 	deletion := iamv1.DeletePolicyRequest{ResourceVersion: 1, RequestID: "delete-policy"}
 	var member iamv1.User
-	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "deletion.member", "displayName": "Deletion member", "initialPassword": initialDeveloperPassword, "requestId": "deletion-member-create"}, http.StatusCreated, &member)
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "deletion.member", "displayName": "Deletion member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "deletion-member-create"}, http.StatusCreated, &member)
 	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	var attachment iamv1.PolicyAttachment
@@ -16558,7 +16804,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 	other := localRecoveryLogin(t, handler, "group.other", initialDeveloperPassword, true)
 	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
 	var member iamv1.User
-	post("/v1/users", operator, map[string]any{"loginName": "group.member", "displayName": "Group member", "initialPassword": initialDeveloperPassword, "requestId": "group-member-user-create"}, http.StatusCreated, &member)
+	post("/v1/users", operator, map[string]any{"loginName": "group.member", "displayName": "Group member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "group-member-user-create"}, http.StatusCreated, &member)
 	bearer := localRecoveryLogin(t, handler, "group.member@"+string(member.AccountID), initialDeveloperPassword, true)
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	var group, foreign, replay iamv1.Group
@@ -16573,7 +16819,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 		t.Fatal("same-name groups are not isolated")
 	}
 	var foreignUser iamv1.User
-	post("/v1/users", other, map[string]any{"loginName": "group.member", "displayName": "Other group member", "initialPassword": initialDeveloperPassword, "requestId": "foreign-group-user"}, http.StatusCreated, &foreignUser)
+	post("/v1/users", other, map[string]any{"loginName": "group.member", "displayName": "Other group member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "foreign-group-user"}, http.StatusCreated, &foreignUser)
 	var foreignMembership iamv1.GroupMembership
 	post("/v1/groups/"+string(foreign.ID)+"/memberships", other,
 		iamv1.CreateGroupMembershipRequest{UserID: foreignUser.ID, RequestID: "foreign-group-join"}, http.StatusOK, &foreignMembership)
@@ -16857,7 +17103,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 		}
 	}
 	var delegate iamv1.User
-	post("/v1/users", operator, map[string]any{"loginName": "group.delegate", "displayName": "Group delegate", "initialPassword": initialDeveloperPassword, "requestId": "group-delegate-user"}, http.StatusCreated, &delegate)
+	post("/v1/users", operator, map[string]any{"loginName": "group.delegate", "displayName": "Group delegate", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "group-delegate-user"}, http.StatusCreated, &delegate)
 	delegateBearer := localRecoveryLogin(t, handler, "group.delegate@"+string(delegate.AccountID), initialDeveloperPassword, true)
 	delegateBearer = localRecoveryChangePassword(t, handler, delegateBearer, initialDeveloperPassword, changedDeveloperPassword)
 	var delegation iamv1.PolicyAttachment
@@ -16882,7 +17128,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 		t.Fatal("actor revocation left partial group state or a success fact without its effect")
 	}
 	var capacityUser iamv1.User
-	post("/v1/users", operator, map[string]any{"loginName": "group.capacity", "displayName": "Capacity member", "initialPassword": initialDeveloperPassword, "requestId": "group-capacity-user-create"}, http.StatusCreated, &capacityUser)
+	post("/v1/users", operator, map[string]any{"loginName": "group.capacity", "displayName": "Capacity member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "group-capacity-user-create"}, http.StatusCreated, &capacityUser)
 	capacityBearer := localRecoveryLogin(t, handler, "group.capacity@"+string(capacityUser.AccountID), initialDeveloperPassword, true)
 	capacityBearer = localRecoveryChangePassword(t, handler, capacityBearer, initialDeveloperPassword, changedDeveloperPassword)
 	var lastGroup iamv1.Group
@@ -16972,7 +17218,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 	memberPath := "/v1/groups/" + string(pagedGroup.ID) + "/memberships"
 	for index := 0; index < 101; index++ {
 		var pageUser iamv1.User
-		post("/v1/users", operator, map[string]any{"loginName": fmt.Sprintf("cursor.member.%03d", index), "displayName": "Cursor member", "initialPassword": initialDeveloperPassword, "requestId": fmt.Sprintf("cursor-many-user-%03d", index)}, http.StatusCreated, &pageUser)
+		post("/v1/users", operator, map[string]any{"loginName": fmt.Sprintf("cursor.member.%03d", index), "displayName": "Cursor member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": fmt.Sprintf("cursor-many-user-%03d", index)}, http.StatusCreated, &pageUser)
 		post(memberPath, operator, iamv1.CreateGroupMembershipRequest{UserID: pageUser.ID, RequestID: fmt.Sprintf("cursor-many-member-%03d", index)}, http.StatusOK, nil)
 	}
 	var memberFirst, memberSecond iamv1.GroupMembershipList
@@ -17209,7 +17455,7 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 		t.Fatal("foreign primary used home account directory")
 	}
 	read("/v1/platform-policies", other, http.StatusForbidden)
-	created := post("/v1/users", operator, map[string]any{"loginName": "catalog.reader", "displayName": "Directory reader", "initialPassword": initialDeveloperPassword, "requestId": "catalog-reader-create"}, http.StatusCreated)
+	created := post("/v1/users", operator, map[string]any{"loginName": "catalog.reader", "displayName": "Directory reader", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "catalog-reader-create"}, http.StatusCreated)
 	var member iamv1.User
 	if json.Unmarshal(created.Body.Bytes(), &member) != nil || iamv1.ValidateUser(member) != nil {
 		t.Fatal("invalid catalog member")
@@ -17316,7 +17562,7 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 	post("/v1/policy-attachments", bearer, request, http.StatusForbidden)
 	read("/v1/platform-policies", bearer, http.StatusForbidden)
 	// A separately granted platform attachment is not tenant directory access.
-	platformCreated := post("/v1/users", operator, map[string]any{"loginName": "catalog.platform", "displayName": "Platform directory", "initialPassword": initialDeveloperPassword, "requestId": "catalog-platform-create"}, http.StatusCreated)
+	platformCreated := post("/v1/users", operator, map[string]any{"loginName": "catalog.platform", "displayName": "Platform directory", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "catalog-platform-create"}, http.StatusCreated)
 	var platformMember iamv1.User
 	if json.Unmarshal(platformCreated.Body.Bytes(), &platformMember) != nil || iamv1.ValidateUser(platformMember) != nil {
 		t.Fatal("invalid platform catalog member")
@@ -17422,7 +17668,7 @@ func provePolicyDefaultAttachmentRaces(t *testing.T, ctx context.Context, handle
 			policyID := iamv1.PolicyID("customer.publication-" + transition)
 			requestID := "publication-" + transition
 			created := performIAMRequest(handler, http.MethodPost, "/v1/users", operator,
-				[]byte(`{"loginName":"publication.`+transition+`","displayName":"Publication member","initialPassword":"Publication-Initial-Password-49!","requestId":"`+requestID+`-user"}`))
+				[]byte(`{"loginName":"publication.`+transition+`","displayName":"Publication member","initialPassword":"Publication-Initial-Password-49!","permissionBoundary":null,"requestId":"`+requestID+`-user"}`))
 			var member iamv1.User
 			if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &member) != nil || iamv1.ValidateUser(member) != nil {
 				t.Fatal("create publication race member")
@@ -17583,7 +17829,7 @@ func provePolicyScopeCredentialProtection(t *testing.T, ctx context.Context, han
 	}
 	for _, role := range removedBuiltinRoleNames {
 		body, _ := json.Marshal(map[string]any{"loginName": "policy.rejected", "displayName": "Rejected role carrier",
-			"initialPassword": initial, "initialRole": role, "requestId": "rejected-initial-role"})
+			"initialPassword": initial, "permissionBoundary": nil, "initialRole": role, "requestId": "rejected-initial-role"})
 		if response := performIAMRequest(handler, http.MethodPost, "/v1/users", operator, body); response.Code != http.StatusBadRequest {
 			t.Fatalf("removed initialRole reached user creation: status=%d", response.Code)
 		}
@@ -17593,7 +17839,7 @@ func provePolicyScopeCredentialProtection(t *testing.T, ctx context.Context, han
 		t.Fatal("rejected initial authority partially created an identity or fact")
 	}
 	created := performIAMRequest(handler, http.MethodPost, "/v1/users", operator,
-		[]byte(`{"loginName":"policy.scope.protected","displayName":"Policy scope protection","initialPassword":"Policy-Scope-Initial-Password-49!","requestId":"scope-protection-create"}`))
+		[]byte(`{"loginName":"policy.scope.protected","displayName":"Policy scope protection","initialPassword":"Policy-Scope-Initial-Password-49!","permissionBoundary":null,"requestId":"scope-protection-create"}`))
 	var member iamv1.User
 	if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &member) != nil {
 		t.Fatal("create policy scope protection member")
@@ -17787,7 +18033,7 @@ func TestIAMSecurityReportPostgres(t *testing.T) {
 	root = localRecoveryChangePassword(t, handler, root, adminPassword, changedAdminPassword)
 	var manager iamv1.User
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "security-report-manager", "displayName": "Security report manager",
-		"initialPassword": initialDeveloperPassword, "requestId": "security-report-manager-create"}, http.StatusCreated, &manager)
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "security-report-manager-create"}, http.StatusCreated, &manager)
 	managerBearer := localRecoveryLogin(t, handler, manager.LoginName+"@"+string(manager.AccountID), initialDeveloperPassword, true)
 	managerBearer = localRecoveryChangePassword(t, handler, managerBearer, initialDeveloperPassword, changedDeveloperPassword)
 
@@ -18234,7 +18480,7 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 
 	var unusedUser iamv1.User
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "access-analyzer-unused", "displayName": "Unused access",
-		"initialPassword": initialDeveloperPassword, "requestId": "access-analyzer-unused-create"}, http.StatusCreated, &unusedUser)
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "access-analyzer-unused-create"}, http.StatusCreated, &unusedUser)
 	if _, err := database.Exec(ctx, `UPDATE iam.principals SET created_at=clock_timestamp()-interval '31 days'
 		WHERE tenant_id=$1 AND id=$2`, document.Organization.ID, unusedUser.ID); err != nil {
 		t.Fatal("backdate synthetic unused principal", err)
@@ -18372,12 +18618,12 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 
 	var keyUser iamv1.User
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "access-analyzer-key-user", "displayName": "Unused key owner",
-		"initialPassword": initialDeveloperPassword, "requestId": "access-analyzer-key-user-create"}, http.StatusCreated, &keyUser)
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "access-analyzer-key-user-create"}, http.StatusCreated, &keyUser)
 	keyUserBearer := localRecoveryLogin(t, handler, keyUser.LoginName+"@"+string(keyUser.AccountID), initialDeveloperPassword, true)
 	_ = localRecoveryChangePassword(t, handler, keyUserBearer, initialDeveloperPassword, changedDeveloperPassword)
 	var keyManager iamv1.User
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "access-analyzer-key-manager", "displayName": "Unused key manager",
-		"initialPassword": initialDeveloperPassword, "requestId": "access-analyzer-key-manager-create"}, http.StatusCreated, &keyManager)
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "access-analyzer-key-manager-create"}, http.StatusCreated, &keyManager)
 	keyManagerBearer := localRecoveryLogin(t, handler, keyManager.LoginName+"@"+string(keyManager.AccountID), initialDeveloperPassword, true)
 	keyManagerBearer = localRecoveryChangePassword(t, handler, keyManagerBearer, initialDeveloperPassword, changedDeveloperPassword)
 	var keyManagerPolicy iamv1.PolicyDetail
@@ -18956,7 +19202,7 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 	// inactivity rule; absence of a claim is itself the fail-closed result.
 	var platformUser iamv1.User
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "access-analyzer-platform", "displayName": "Protected platform user",
-		"initialPassword": initialDeveloperPassword, "requestId": "access-analyzer-platform-create"}, http.StatusCreated, &platformUser)
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "access-analyzer-platform-create"}, http.StatusCreated, &platformUser)
 	platformBearer := localRecoveryLogin(t, handler, platformUser.LoginName+"@"+string(platformUser.AccountID), initialDeveloperPassword, true)
 	platformBearer = localRecoveryChangePassword(t, handler, platformBearer, initialDeveloperPassword, changedDeveloperPassword)
 	rootKeyPath := "/v1/users/" + string(document.Administrator.ID) + "/access-keys"
@@ -19125,7 +19371,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	newUser := func(name string) (iamv1.User, string) {
 		t.Helper()
 		var user iamv1.User
-		call(handler, http.MethodPost, "/v1/users", root, map[string]any{"loginName": name, "displayName": name, "initialPassword": initialDeveloperPassword, "requestId": name}, http.StatusCreated, &user)
+		call(handler, http.MethodPost, "/v1/users", root, map[string]any{"loginName": name, "displayName": name, "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": name}, http.StatusCreated, &user)
 		login := localRecoveryLogin(t, handler, name+"@"+string(user.AccountID), initialDeveloperPassword, true)
 		login = localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
 		var me iamv1.CurrentIdentity
@@ -20025,7 +20271,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		otherRoot = localRecoveryChangePassword(t, handler, otherRoot, initialDeveloperPassword, changedDeveloperPassword)
 		var target iamv1.User
 		call(handler, http.MethodPost, "/v1/users", otherRoot, map[string]any{"loginName": "key-user", "displayName": "Same name, different owner",
-			"initialPassword": initialDeveloperPassword, "requestId": "signing-other-user"}, http.StatusCreated, &target)
+			"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "signing-other-user"}, http.StatusCreated, &target)
 		bearer := localRecoveryLogin(t, handler, "key-user@"+string(account.ID), initialDeveloperPassword, true)
 		bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 		var current iamv1.CurrentIdentity
@@ -21011,7 +21257,7 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 			} else {
 				response := performIAMRequest(handler, http.MethodPost, "/v1/users", root, mustIAMJSON(t, map[string]any{
 					"loginName": "private-reference-target", "displayName": "Private reference target",
-					"initialPassword": initialDeveloperPassword, "requestId": "private-reference-target"}))
+					"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "private-reference-target"}))
 				var member iamv1.User
 				if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &member) != nil {
 					t.Fatal("create private reference target")
@@ -21084,7 +21330,7 @@ func proveRoleSessionManagement(t *testing.T, ctx context.Context, handler http.
 	newUser := func(name string) (iamv1.User, string) {
 		t.Helper()
 		var user iamv1.User
-		call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": name, "displayName": name, "initialPassword": initialDeveloperPassword, "requestId": name + "-create"}, http.StatusCreated, &user)
+		call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": name, "displayName": name, "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": name + "-create"}, http.StatusCreated, &user)
 		login := localRecoveryLogin(t, handler, name+"@"+string(user.AccountID), initialDeveloperPassword, true)
 		return user, localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
 	}
@@ -21270,7 +21516,7 @@ func proveRoleSessionManagement(t *testing.T, ctx context.Context, handler http.
 	call(http.MethodPost, "/v1/accounts", root, map[string]any{"id": "account-session-other", "displayName": "Other account", "rootLoginName": "other-session-root", "rootDisplayName": "Other root", "initialPassword": initialDeveloperPassword, "requestId": "other-session-account"}, http.StatusCreated, nil)
 	otherRoot := localRecoveryLogin(t, handler, "other-session-root", initialDeveloperPassword, true)
 	otherRoot = localRecoveryChangePassword(t, handler, otherRoot, initialDeveloperPassword, changedDeveloperPassword)
-	call(http.MethodPost, "/v1/users", otherRoot, map[string]any{"loginName": source.LoginName, "displayName": source.DisplayName, "initialPassword": initialDeveloperPassword, "requestId": "other-same-source"}, http.StatusCreated, nil)
+	call(http.MethodPost, "/v1/users", otherRoot, map[string]any{"loginName": source.LoginName, "displayName": source.DisplayName, "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "other-same-source"}, http.StatusCreated, nil)
 	call(http.MethodGet, path+"/sessions", otherRoot, nil, http.StatusForbidden, nil)
 	call(http.MethodGet, sessionPath(first.Session.ID), otherRoot, nil, http.StatusForbidden, nil)
 	call(http.MethodPost, sessionPath(second.Session.ID)+":revoke", otherRoot, iamv1.RevokeRoleSessionRequest{RequestID: "foreign-revoke"}, http.StatusForbidden, nil)
@@ -21418,7 +21664,7 @@ func proveRoleSessionManagementSecurity(t *testing.T, ctx context.Context, handl
 	newUser := func(t *testing.T, account iamv1.Account, root, name string) (iamv1.User, string) {
 		t.Helper()
 		response := performIAMRequest(handler, http.MethodPost, "/v1/users", root, mustIAMJSON(t, map[string]any{
-			"loginName": name, "displayName": name, "initialPassword": initialDeveloperPassword, "requestId": name}))
+			"loginName": name, "displayName": name, "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": name}))
 		var user iamv1.User
 		if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &user) != nil {
 			t.Fatal("create management security user")
@@ -21738,7 +21984,7 @@ func proveRoleSelfDiscovery(t *testing.T, ctx context.Context, handler http.Hand
 	}
 	var member iamv1.User
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "discovery-member", "displayName": "Discovery member",
-		"initialPassword": initialDeveloperPassword, "requestId": "discovery-member-create"}, http.StatusCreated, &member)
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "discovery-member-create"}, http.StatusCreated, &member)
 	login := member.LoginName + "@" + string(member.AccountID)
 	bearer := localRecoveryLogin(t, handler, login, initialDeveloperPassword, true)
 	const directory = "/v1/auth/assumable-roles"
@@ -22384,7 +22630,7 @@ func proveRoleSessionIssuance(t *testing.T, ctx context.Context, handler http.Ha
 		return response
 	}
 	var member iamv1.User
-	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "sts-member", "displayName": "STS member", "initialPassword": initialDeveloperPassword, "requestId": "sts-member-create"}, http.StatusCreated, &member)
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "sts-member", "displayName": "STS member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "sts-member-create"}, http.StatusCreated, &member)
 	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	var role iamv1.Role
@@ -22848,7 +23094,7 @@ func proveRoleAuthorityRevisions(t *testing.T, ctx context.Context, handler http
 				}
 			}
 			var member iamv1.User
-			call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": prefix, "displayName": prefix, "initialPassword": initialDeveloperPassword, "requestId": prefix + "-member"}, http.StatusCreated, &member)
+			call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": prefix, "displayName": prefix, "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": prefix + "-member"}, http.StatusCreated, &member)
 			login := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
 			login = localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
 			trust := iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "source", Effect: iamv1.PolicyAllow,
@@ -22997,7 +23243,7 @@ func proveRoleAuthorityRevisions(t *testing.T, ctx context.Context, handler http
 						// issuance's authority. Account-wide invalidation cannot pass.
 						var unrelated iamv1.User
 						call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": prefix + "-other", "displayName": "Unrelated",
-							"initialPassword": initialDeveloperPassword, "requestId": prefix + "-other"}, http.StatusCreated, &unrelated)
+							"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": prefix + "-other"}, http.StatusCreated, &unrelated)
 						otherGrant := attach(iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(unrelated.ID)}, denyPolicy, "-other-deny")
 						business(token, "-unrelated-grant", http.StatusOK)
 						call(http.MethodPost, "/v1/policy-attachments/"+string(otherGrant.ID)+":revoke", root,
@@ -23229,7 +23475,7 @@ func proveRolePolicyIntersection(t *testing.T, ctx context.Context, handler http
 		}
 	}
 	var user iamv1.User
-	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "role.intersection", "displayName": "Role intersection", "initialPassword": initialDeveloperPassword, "requestId": "intersection-user"}, http.StatusCreated, &user)
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "role.intersection", "displayName": "Role intersection", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "intersection-user"}, http.StatusCreated, &user)
 	login := localRecoveryLogin(t, handler, user.LoginName+"@"+string(user.AccountID), initialDeveloperPassword, true)
 	login = localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
 	for index, policy := range []iamv1.PolicyID{iamv1.SystemPolicyAccountAdministrator, iamv1.SystemPolicyPaaSDeveloper} {
@@ -23355,7 +23601,7 @@ func proveRoleAuthorizationSecurityInterleavings(t *testing.T, ctx context.Conte
 					user = identity.User
 				} else {
 					call(http.MethodPost, "/v1/users", owner, map[string]any{"loginName": prefix, "displayName": prefix,
-						"initialPassword": initialDeveloperPassword, "requestId": prefix + "-user"}, &user)
+						"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": prefix + "-user"}, &user)
 					login = localRecoveryLogin(t, handler, prefix+"@"+string(user.AccountID), initialDeveloperPassword, true)
 					login = localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
 					call(http.MethodPost, "/v1/policy-attachments", owner, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(user.ID)},
@@ -23653,7 +23899,7 @@ func proveRoleSourceCascadeSerialization(t *testing.T, ctx context.Context, hand
 	for index := range users {
 		id := fmt.Sprintf("source-cascade-user-%d", index)
 		call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": id, "displayName": id,
-			"initialPassword": initialDeveloperPassword, "requestId": id}, &users[index])
+			"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": id}, &users[index])
 		login := localRecoveryLogin(t, handler, id+"@"+string(users[index].AccountID), initialDeveloperPassword, true)
 		logins[index] = localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
 		call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
@@ -23846,7 +24092,7 @@ func proveRoleSessionSelfExit(t *testing.T, ctx context.Context, handler http.Ha
 		}
 		id := "role-exit-" + scenario
 		var user iamv1.User
-		call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": id, "displayName": id, "initialPassword": initialDeveloperPassword, "requestId": id + "-user"}, http.StatusCreated, &user)
+		call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": id, "displayName": id, "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": id + "-user"}, http.StatusCreated, &user)
 		login := localRecoveryLogin(t, handler, id+"@"+string(account.ID), initialDeveloperPassword, true)
 		login = localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
 		var sourceGrant iamv1.PolicyAttachment
@@ -24375,7 +24621,7 @@ func TestIAMDirectoryPaginationPostgres(t *testing.T) {
 		for i := 0; i < 101; i++ {
 			response := request(http.MethodPost, "/v1/users", primaryB, map[string]any{
 				"loginName": fmt.Sprintf("page.user.%03d", i), "displayName": "Directory user",
-				"initialPassword": childPassword, "requestId": fmt.Sprintf("page-user-create-%03d", i),
+				"initialPassword": childPassword, "permissionBoundary": nil, "requestId": fmt.Sprintf("page-user-create-%03d", i),
 			}, http.StatusCreated)
 			var created iamv1.User
 			if json.Unmarshal(response.Body.Bytes(), &created) != nil || iamv1.ValidateUser(created) != nil || created.AccountID != tenantB || expectedUsers[created.ID] {
@@ -24717,7 +24963,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		http.MethodPost,
 		"/v1/users",
 		loginWire.Credential,
-		[]byte(`{"loginName":"developer","displayName":"Platform Developer","initialPassword":"`+initialDeveloperPassword+`","requestId":"request-create-developer"}`),
+		[]byte(`{"loginName":"developer","displayName":"Platform Developer","initialPassword":"`+initialDeveloperPassword+`","permissionBoundary":null,"requestId":"request-create-developer"}`),
 	)
 	if createUser.Code != http.StatusCreated {
 		t.Fatalf("IAM create user status=%d body=%s", createUser.Code, createUser.Body.String())
@@ -24794,7 +25040,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		http.MethodPost,
 		"/v1/users",
 		developerWire.Credential,
-		[]byte(`{"loginName":"denied.user","displayName":"Denied User","initialPassword":"Denied-User-Password-68!","requestId":"request-denied-user"}`),
+		[]byte(`{"loginName":"denied.user","displayName":"Denied User","initialPassword":"Denied-User-Password-68!","permissionBoundary":null,"requestId":"request-denied-user"}`),
 	)
 	if deniedUser.Code != http.StatusForbidden ||
 		bytes.Contains(deniedUser.Body.Bytes(), []byte("Denied-User-Password")) {
@@ -25973,7 +26219,7 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 	call(paasCredential, root, duplicateWorkload, http.StatusConflict)
 	response = performIAMRequest(handler, http.MethodPost, "/v1/users", root, mustIAMJSON(t, map[string]any{
 		"loginName": "service-role-peer", "displayName": "Service role peer administrator",
-		"initialPassword": initialDeveloperPassword, "requestId": "service-role-peer-create",
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "service-role-peer-create",
 	}))
 	var peer iamv1.User
 	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &peer) != nil || iamv1.ValidateUser(peer) != nil {
@@ -26437,7 +26683,7 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 	other := localRecoveryLogin(t, handler, "role.other", initialDeveloperPassword, true)
 	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
 	var member iamv1.User
-	post(t, "/v1/users", root, map[string]any{"loginName": "role.member", "displayName": "Role member", "initialPassword": initialDeveloperPassword, "requestId": "role-member-create"}, http.StatusCreated, &member)
+	post(t, "/v1/users", root, map[string]any{"loginName": "role.member", "displayName": "Role member", "initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "role-member-create"}, http.StatusCreated, &member)
 	bearer := localRecoveryLogin(t, handler, "role.member@"+string(member.AccountID), initialDeveloperPassword, true)
 	forced := iamv1.CreateRoleRequest{Name: "Unaccepted", Tags: []iamv1.RoleTag{}, TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}}, RequestID: "role-forced"}
 	post(t, "/v1/roles", bearer, forced, http.StatusForbidden, nil)
@@ -27474,6 +27720,7 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 	}
 	create := request(http.MethodPost, "/v1/users", operator, map[string]any{
 		"loginName": "password.policy", "displayName": "Password policy", "initialPassword": initial,
+		"permissionBoundary": nil,
 	}, http.StatusCreated)
 	var principal iamv1.User
 	if json.Unmarshal(create.Body.Bytes(), &principal) != nil {
@@ -27845,7 +28092,7 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 	latestTarget := identity(afterPlatform).User
 	const delegateInitial, delegatePassword = "Reset-Delegate-Initial-Password-83!", "Reset-Delegate-Normal-Password-94!"
 	var delegate iamv1.User
-	if json.Unmarshal(request(http.MethodPost, "/v1/users", operator, map[string]any{"loginName": "reset.delegate", "displayName": "Reset delegate", "initialPassword": delegateInitial}, http.StatusCreated).Body.Bytes(), &delegate) != nil {
+	if json.Unmarshal(request(http.MethodPost, "/v1/users", operator, map[string]any{"loginName": "reset.delegate", "displayName": "Reset delegate", "initialPassword": delegateInitial, "permissionBoundary": nil}, http.StatusCreated).Body.Bytes(), &delegate) != nil {
 		t.Fatal("decode reset delegate")
 	}
 	delegateRealm := delegate.LoginName + "@" + string(delegate.AccountID)
@@ -28082,7 +28329,7 @@ func provePasswordSessionRaces(t *testing.T, ctx context.Context, handler http.H
 					t.Fatalf("create password recovery race: %d", response.Code)
 				}
 			} else {
-				response := request("/v1/users", operator, map[string]any{"loginName": name, "displayName": "Password race user", "initialPassword": initial})
+				response := request("/v1/users", operator, map[string]any{"loginName": name, "displayName": "Password race user", "initialPassword": initial, "permissionBoundary": nil})
 				var principal iamv1.User
 				if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &principal) != nil {
 					t.Fatalf("create password race user: %d", response.Code)
@@ -28338,7 +28585,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	}
 	createUser := func(bearer, name string, policy iamv1.PolicyID, expected int) iamv1.User {
 		t.Helper()
-		body := map[string]any{"loginName": name, "displayName": "Account test user", "initialPassword": childPassword, "requestId": "request-account-user"}
+		body := map[string]any{"loginName": name, "displayName": "Account test user", "initialPassword": childPassword, "permissionBoundary": nil, "requestId": "request-account-user"}
 		response := request(http.MethodPost, "/v1/users", bearer, body, expected)
 		var result iamv1.User
 		if expected == http.StatusCreated && (json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidateUser(result) != nil) {
@@ -28402,7 +28649,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	setAlias(primaryB, "customer-a", 2, http.StatusConflict)
 	setAlias(primaryB, tenantA, 2, http.StatusConflict)
 	setAlias(root, "stale-alias", 1, http.StatusConflict)
-	request(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "bad.verifier", "displayName": "Rejected initial role", "initialPassword": childPassword, "initialRole": "INSTALLATION_VERIFIER", "requestId": "rejected-verifier-initial-role"}, http.StatusBadRequest)
+	request(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "bad.verifier", "displayName": "Rejected initial role", "initialPassword": childPassword, "permissionBoundary": nil, "initialRole": "INSTALLATION_VERIFIER", "requestId": "rejected-verifier-initial-role"}, http.StatusBadRequest)
 
 	childA := createUser(root, "shared.user", iamv1.SystemPolicyPaaSViewer, http.StatusCreated)
 	childB := createUser(primaryB, "shared.user", "", http.StatusCreated)
@@ -28741,7 +28988,7 @@ func proveUserProfileAndDeletion(t *testing.T, ctx context.Context, handler http
 		t.Helper()
 		response := request(http.MethodPost, "/v1/users", root, map[string]any{
 			"loginName": name, "displayName": "Disposable account user", "initialPassword": initialPassword,
-			"requestId": "request-create-" + strings.ReplaceAll(name, ".", "-"),
+			"permissionBoundary": nil, "requestId": "request-create-" + strings.ReplaceAll(name, ".", "-"),
 		}, http.StatusCreated)
 		var result iamv1.User
 		if json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidateUser(result) != nil {
@@ -28869,7 +29116,7 @@ func proveUserProfileAndDeletion(t *testing.T, ctx context.Context, handler http
 	request(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized)
 	login("profile.delete@"+accountID, changedPassword, http.StatusUnauthorized)
 	request(http.MethodPost, "/v1/users", root, map[string]any{
-		"loginName": user.LoginName, "displayName": "Reused identity", "initialPassword": initialPassword, "requestId": "request-reuse-deleted-login",
+		"loginName": user.LoginName, "displayName": "Reused identity", "initialPassword": initialPassword, "permissionBoundary": nil, "requestId": "request-reuse-deleted-login",
 	}, http.StatusConflict)
 	list := request(http.MethodGet, "/v1/users", root, nil, http.StatusOK)
 	var directory iamv1.UserList
@@ -28908,7 +29155,7 @@ func proveUserProfileAndDeletion(t *testing.T, ctx context.Context, handler http
 	request(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized)
 	login("profile.delete@"+accountID, changedPassword, http.StatusUnauthorized)
 	request(http.MethodPost, "/v1/users", root, map[string]any{
-		"loginName": user.LoginName, "displayName": "Replay reuse attack", "initialPassword": initialPassword, "requestId": "request-replay-reuse-deleted-login",
+		"loginName": user.LoginName, "displayName": "Replay reuse attack", "initialPassword": initialPassword, "permissionBoundary": nil, "requestId": "request-replay-reuse-deleted-login",
 	}, http.StatusConflict)
 	var replayDeleted, replayReserved bool
 	var replayCredentials, replayActiveSessions, replayActiveAttachments, replayDeleteFacts int
@@ -29047,7 +29294,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	}
 	createMember := func(bearer, name string, policy iamv1.PolicyID) iamv1.User {
 		t.Helper()
-		body := map[string]any{"loginName": name, "displayName": "Lifecycle member", "initialPassword": initial, "requestId": "request-lifecycle-member"}
+		body := map[string]any{"loginName": name, "displayName": "Lifecycle member", "initialPassword": initial, "permissionBoundary": nil, "requestId": "request-lifecycle-member"}
 		response := request(http.MethodPost, "/v1/users", bearer, body, http.StatusCreated)
 		var result iamv1.User
 		if json.Unmarshal(response.Body.Bytes(), &result) != nil {
@@ -29490,7 +29737,7 @@ func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http
 	const initial = "Proof-Actor-Initial-Password-93!"
 	const changed = "Proof-Actor-Changed-Password-84!"
 	for tenant, root := range tenants {
-		created := post("/v1/users", root, map[string]any{"loginName": "proof.actor", "displayName": "Proof actor", "initialPassword": initial, "requestId": "request-proof-actor"}, http.StatusCreated)
+		created := post("/v1/users", root, map[string]any{"loginName": "proof.actor", "displayName": "Proof actor", "initialPassword": initial, "permissionBoundary": nil, "requestId": "request-proof-actor"}, http.StatusCreated)
 		var principal iamv1.User
 		if json.Unmarshal(created.Body.Bytes(), &principal) != nil {
 			t.Fatal("decode proof actor")
@@ -29749,7 +29996,7 @@ func provePlatformCredentialProtection(t *testing.T, ctx context.Context, handle
 		t.Run(mutation, func(t *testing.T) {
 			created := request("/v1/users", operator, map[string]any{
 				"loginName": "platform.race." + mutation, "displayName": "Platform race user",
-				"initialPassword": initial, "requestId": "request-race-create-" + mutation,
+				"initialPassword": initial, "permissionBoundary": nil, "requestId": "request-race-create-" + mutation,
 			})
 			var principal iamv1.User
 			if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &principal) != nil {

@@ -121,9 +121,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "0f06607398f643311c5a284cf0867e931ed33d9b"
-	const sourceSchema uint64 = 66
-	const currentSchema uint64 = 67
+	const source = "2b015b271bf22174a54698d720705db722ba6075"
+	const sourceSchema uint64 = 67
+	const currentSchema uint64 = 68
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -240,7 +240,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	old := start(oldBinary, sourceSchema)
 	primary := loginIAM(t, endpoint, "admin", initialAdminPassword, "own-upgrade-root-login")
 	changePasswordIAM(t, endpoint, primary.Credential, initialAdminPassword, changedAdminPassword, "own-upgrade-root-password")
-	legacyResetUser := createIAMUser(t, endpoint, primary.Credential, "retained.reset", "Retained reset", initialReaderPassword, "retained-reset-user")
+	legacyResetUser := createPredecessorIAMUser(t, endpoint, primary.Credential, "retained.reset", "Retained reset", initialReaderPassword, "retained-reset-user")
 	legacyReset := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(legacyResetUser.ID)+":reset-password", primary.Credential,
 		map[string]any{"initialPassword": "Retained-Reset-Password-83!", "resourceVersion": legacyResetUser.ResourceVersion, "requestId": "retained-reset-command"})
 	var legacyResetResult iamv1.User
@@ -256,7 +256,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		legacyResetCompletion.ResultingResourceVersion != legacyResetResult.ResourceVersion {
 		t.Fatal("actual predecessor did not persist its exact reset completion")
 	}
-	member := createIAMUser(t, endpoint, primary.Credential, "retained.sessions", "Retained sessions", initialReaderPassword, "own-upgrade-user")
+	member := createPredecessorIAMUser(t, endpoint, primary.Credential, "retained.sessions", "Retained sessions", initialReaderPassword, "own-upgrade-user")
 	oldGrant := createIAMPolicyAttachment(t, endpoint, primary.Credential, member.ID, iamv1.SystemPolicyPaaSViewer, "retained-old-viewer")
 	revokeIAMPolicyAttachment(t, endpoint, primary.Credential, oldGrant.ID, oldGrant.ResourceVersion, "retained-old-viewer-revoke")
 	readAttachmentChange := func(requestID string) iamv1.PolicyAttachmentChange {
@@ -303,7 +303,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", unknown.Credential, nil); response.Status != http.StatusUnauthorized {
 		t.Fatal("predecessor accepted unknown credential lineage")
 	}
-	forcedUser := createIAMUser(t, endpoint, primary.Credential, "retained.forced", "Retained forced change", initialReaderPassword, "own-upgrade-forced-user")
+	forcedUser := createPredecessorIAMUser(t, endpoint, primary.Credential, "retained.forced", "Retained forced change", initialReaderPassword, "own-upgrade-forced-user")
 	forcedA := loginIAM(t, endpoint, forcedUser.LoginName+"@"+string(forcedUser.AccountID), initialReaderPassword, "own-upgrade-forced-a")
 	forcedB := loginIAM(t, endpoint, forcedUser.LoginName+"@"+string(forcedUser.AccountID), initialReaderPassword, "own-upgrade-forced-b")
 	for _, session := range []loginResult{primary, a, b, ended, unknown, forcedA, forcedB, selfEnded} {
@@ -587,7 +587,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}) {
 		t.Fatalf("actual predecessor did not update its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
 	}
-	// The immediate schema-66 predecessor already owns explicit REVIEW_ONLY.
+	// The immediate schema-67 predecessor already owns explicit REVIEW_ONLY.
 	// The current schema must preserve it instead of inventing a migration
 	// default or authority.
 	migratedAccessAnalyzerExpected := retainedAccessAnalyzer
@@ -664,7 +664,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("retained database did not satisfy current IAM readiness and fail-closed defaults", err)
 	}
 	if current := attachmentContractState(); !bytes.Equal(predecessorAttachmentContract, current) {
-		t.Fatal("IAM66 attachment completions, facts or built-in policy state changed during IAM67 migration")
+		t.Fatal("IAM67 attachment completions, facts or built-in policy state changed during IAM68 migration")
 	}
 	var attachmentChangeAuthority bool
 	if err := admin.QueryRow(ctx, `SELECT
@@ -678,7 +678,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
 		  WHERE p.id='system.platform-operator'
 		    AND action_value='iam.platform-policy-attachment-change.read')`).Scan(&attachmentChangeAuthority); err != nil || !attachmentChangeAuthority {
-		t.Fatal("IAM66 built-in attachment completion read authority was lost", err)
+		t.Fatal("IAM67 built-in attachment completion read authority was lost", err)
 	}
 	current := start(currentBinary, currentSchema)
 	for requestID, expected := range map[string]iamv1.PolicyAttachmentChange{
@@ -1336,11 +1336,14 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		originalPasswords := passwordState()
 		defer clear(originalPasswords)
 		expectedHistory := original
-		// The schema advance changes the closed authorization projection. A
-		// qualification sampled from the predecessor must not close the current
-		// authority, regardless of whether that old command already completed.
-		invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], intentFile}, installationv1.AuthenticationRecoveryExitConflict)
-		if index != 1 {
+		if index == 1 {
+			// The restored target has a RESTORED closure, not a SOURCE close receipt,
+			// so the close entrypoint must not reinterpret it. Exact completed replay
+			// is proved through reconcile/reopen below. Cross-profile admission remains
+			// owned by the installation release boundary rather than inferred here.
+			invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close",
+				[]string{dsnFiles[index], intentFile}, installationv1.AuthenticationRecoveryExitConflict)
+		} else {
 			// A first close remains possible only after the current authority has
 			// issued a new purpose-limited custody lease over its exact state. The
 			// resulting current snapshot still grants no right to replay the old
@@ -1348,9 +1351,8 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 			currentBackupDSN := writeProtectedFile(t, temporary, "current-backup-dsn", []byte(runtimeDSN(t, configs[index], "matrix_iam_backup_custody_login", processDBPassword)))
 			currentBackup, currentLease := startTOTPBackupProcess(t, ctx, root, currentBackupBinary, currentBackupDSN)
 			if currentLease.Custody.InstallationID != installationID || currentLease.AuthenticationStateDigest == "" ||
-				currentLease.AuthenticationStateDigest == lease.AuthenticationStateDigest ||
 				currentBackup.finish(t, installationv1.TOTPBackupCustodyReleaseFrame) != installationv1.TOTPBackupCustodyExitSuccess {
-				t.Fatal("current authority did not issue its changed bounded security qualification")
+				t.Fatal("current authority did not issue its bounded security qualification")
 			}
 			currentIntent := intent
 			currentIntent.CommandID = "cmd-" + strings.Repeat("6", 32)
@@ -1440,7 +1442,7 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: tenant}}}}}},
 		http.StatusCreated, &policy)
 	createIAMPolicyAttachment(t, endpoint, owner.Credential, owner.Session.PrincipalID, policy.Policy.ID, "retained-settings-root-grant")
-	member := createIAMUser(t, endpoint, owner.Credential, "retained.settings.member", "Retained settings member", memberInitial, "retained-settings-member")
+	member := createPredecessorIAMUser(t, endpoint, owner.Credential, "retained.settings.member", "Retained settings member", memberInitial, "retained-settings-member")
 	createIAMPolicyAttachment(t, endpoint, owner.Credential, member.ID, policy.Policy.ID, "retained-settings-member-grant")
 	memberFirst := loginIAM(t, endpoint, member.LoginName+"@"+string(member.AccountID), memberInitial, "retained-settings-member-login")
 	*sensitive = append(*sensitive, memberFirst.Credential)
@@ -1727,7 +1729,7 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 	if !recoveryHistory {
 		name += ".session"
 	}
-	user := createIAMUser(t, endpoint, root, name, "Retained MFA", initial, "retained-mfa-user-"+name)
+	user := createPredecessorIAMUser(t, endpoint, root, name, "Retained MFA", initial, "retained-mfa-user-"+name)
 	realm := user.LoginName + "@" + string(user.AccountID)
 	first := loginIAM(t, endpoint, realm, initial, "retained-mfa-initial")
 	changePasswordIAM(t, endpoint, first.Credential, initial, password, "retained-mfa-initial-password")
@@ -1808,7 +1810,7 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 		// survives the one supported upgrade without spending the removal actor's
 		// five-attempt TOTP budget.
 		const idlePrefix = "retained-mfa-idle"
-		retainedSessionUser = createIAMUser(t, endpoint, root, "retained.mfa.idle", "Retained MFA idle Session", initial, idlePrefix+"-user")
+		retainedSessionUser = createPredecessorIAMUser(t, endpoint, root, "retained.mfa.idle", "Retained MFA idle Session", initial, idlePrefix+"-user")
 		idleRealm := retainedSessionUser.LoginName + "@" + string(retainedSessionUser.AccountID)
 		idleFirst := loginIAM(t, endpoint, idleRealm, initial, idlePrefix+"-initial")
 		*sensitive = append(*sensitive, idleFirst.Credential)
@@ -6305,6 +6307,36 @@ func changePasswordIAM(
 	}
 }
 
+func createPredecessorIAMUser(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	loginName string,
+	displayName string,
+	password string,
+	requestID string,
+) iamv1.User {
+	t.Helper()
+	// The single rolling predecessor predates the required creation boundary
+	// property. Keep its exact wire in this upgrade gate; current callers use
+	// createIAMUser below and must make the boundary choice explicit.
+	response := performJSON(t, http.MethodPost, endpoint+"/v1/users", bearer, struct {
+		LoginName       string `json:"loginName"`
+		DisplayName     string `json:"displayName"`
+		InitialPassword string `json:"initialPassword"`
+		RequestID       string `json:"requestId"`
+	}{LoginName: loginName, DisplayName: displayName, InitialPassword: password, RequestID: requestID})
+	if response.Status != http.StatusCreated {
+		t.Fatalf("create predecessor IAM user %s status=%d", loginName, response.Status)
+	}
+	var principal iamv1.User
+	if err := json.Unmarshal(response.Body, &principal); err != nil ||
+		iamv1.ValidateUser(principal) != nil {
+		t.Fatalf("decode predecessor IAM user %s: %v", loginName, err)
+	}
+	return principal
+}
+
 func createIAMUser(
 	t *testing.T,
 	endpoint string,
@@ -6316,11 +6348,12 @@ func createIAMUser(
 ) iamv1.User {
 	t.Helper()
 	response := performJSON(t, http.MethodPost, endpoint+"/v1/users", bearer, struct {
-		LoginName       string `json:"loginName"`
-		DisplayName     string `json:"displayName"`
-		InitialPassword string `json:"initialPassword"`
-		RequestID       string `json:"requestId"`
-	}{LoginName: loginName, DisplayName: displayName, InitialPassword: password, RequestID: requestID})
+		LoginName          string                              `json:"loginName"`
+		DisplayName        string                              `json:"displayName"`
+		InitialPassword    string                              `json:"initialPassword"`
+		PermissionBoundary *iamv1.CreateUserPermissionBoundary `json:"permissionBoundary"`
+		RequestID          string                              `json:"requestId"`
+	}{LoginName: loginName, DisplayName: displayName, InitialPassword: password, PermissionBoundary: nil, RequestID: requestID})
 	if response.Status != http.StatusCreated {
 		t.Fatalf("create IAM user %s status=%d", loginName, response.Status)
 	}

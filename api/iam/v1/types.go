@@ -1,9 +1,12 @@
 package iamv1
 
 import (
+	"encoding/json"
+	"errors"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
+	"github.com/xiak/matrix/api/contractjson"
 )
 
 type AccountID string
@@ -599,10 +602,36 @@ type ChangePasswordResponse struct {
 }
 
 type CreateUserRequest struct {
-	LoginName       string `json:"loginName"`
-	DisplayName     string `json:"displayName"`
-	InitialPassword Secret `json:"initialPassword"`
-	RequestID       string `json:"requestId"`
+	LoginName          string                        `json:"loginName"`
+	DisplayName        string                        `json:"displayName"`
+	InitialPassword    Secret                        `json:"initialPassword"`
+	PermissionBoundary *CreateUserPermissionBoundary `json:"permissionBoundary"`
+	RequestID          string                        `json:"requestId"`
+}
+
+// CreateUserPermissionBoundary is an atomic reference to the existing User
+// permission-boundary owner. It is not a second boundary object or a permit.
+// A JSON null is the Root-only request for no ordinary boundary.
+type CreateUserPermissionBoundary struct {
+	PolicyID              PolicyID `json:"policyId"`
+	PolicyResourceVersion uint64   `json:"policyResourceVersion"`
+}
+
+func (value *CreateUserRequest) UnmarshalJSON(source []byte) error {
+	if value == nil {
+		return errors.New("create user request is invalid")
+	}
+	type wire CreateUserRequest
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil {
+		return errors.New("create user request is invalid")
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil || fields["permissionBoundary"] == nil {
+		return errors.New("create user permission boundary is required")
+	}
+	*value = CreateUserRequest(decoded)
+	return nil
 }
 
 // RootIdentity is the immutable relation from an account to its original

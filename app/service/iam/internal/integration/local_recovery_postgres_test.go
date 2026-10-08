@@ -371,7 +371,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 
 	// A separate normally provisioned platform USER can race revocation without
 	// relying on the recovered primary's now-revoked bearer.
-	created := performIAMRequest(handler, http.MethodPost, "/v1/users", primary, []byte(`{"loginName":"recovery.operator","displayName":"Recovery operator","initialPassword":"Other-Operator-Initial-91!","requestId":"create-recovery-operator"}`))
+	created := performIAMRequest(handler, http.MethodPost, "/v1/users", primary, []byte(`{"loginName":"recovery.operator","displayName":"Recovery operator","initialPassword":"Other-Operator-Initial-91!","permissionBoundary":null,"requestId":"create-recovery-operator"}`))
 	var operator iamv1.User
 	if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &operator) != nil {
 		t.Fatal("create separate platform operator")

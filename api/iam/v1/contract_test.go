@@ -8149,6 +8149,15 @@ func TestQualifiedLoginIsAnAccountNamespaceNotAnEmail(t *testing.T) {
 	if ValidateCreateUserRequest(create) != nil {
 		t.Fatal("creation without implicit authority must be accepted")
 	}
+	withoutBoundary := []byte(`{"loginName":"developer","displayName":"Developer","initialPassword":"Initial-Password-49!","requestId":"missing-boundary"}`)
+	if DecodeRequest(bytes.NewReader(withoutBoundary), &create) == nil {
+		t.Fatal("creation accepted an omitted permissionBoundary")
+	}
+	invalidBoundary := decodeIAMExample[CreateUserRequest](t, "examples/create-user-request.json")
+	invalidBoundary.PermissionBoundary = &CreateUserPermissionBoundary{PolicyID: "policy-one"}
+	if ValidateCreateUserRequest(invalidBoundary) == nil {
+		t.Fatal("creation accepted a boundary without an exact policy revision")
+	}
 	for _, role := range removedBuiltinRoleNames {
 		encoded, err := json.Marshal(map[string]any{"loginName": "developer", "displayName": "Developer", "initialPassword": "Initial-Password-49!", "requestId": "initial-role-rejected", "initialRole": role})
 		if err != nil {

@@ -993,9 +993,17 @@ func (value *transaction) CreateUser(
 	ctx context.Context,
 	mutation identityaccess.UserMutation,
 ) (iamv1.User, error) {
+	boundaryValid := mutation.BoundaryPolicyID == "" && mutation.BoundaryID == "" && mutation.BoundaryPolicyResourceVersion == 0
+	if mutation.BoundaryPolicyID != "" {
+		boundaryValid = iamv1.ValidateID("boundaryId", mutation.BoundaryID) == nil &&
+			iamv1.ValidateID("boundaryPolicyId", string(mutation.BoundaryPolicyID)) == nil &&
+			mutation.BoundaryPolicyResourceVersion > 0 && mutation.BoundaryPolicyResourceVersion <= 9007199254740991
+	}
 	if iamv1.ValidateUser(mutation.User) != nil ||
 		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
+		iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||
 		iamv1.ValidateID("decisionId", string(mutation.DecisionID)) != nil ||
+		!boundaryValid ||
 		mutation.PasswordHash == "" || mutation.ExpectedSettingsVersion == 0 || mutation.ExpectedSettingsVersion > 9007199254740991 ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.User{}, identityaccess.ErrInvalidArgument
@@ -1007,14 +1015,18 @@ func (value *transaction) CreateUser(
 	var createdAt, updatedAt time.Time
 	err = value.tx.QueryRow(
 		ctx,
-		"SELECT * FROM iam.create_user($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)",
+		"SELECT * FROM iam.create_user($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)",
 		string(mutation.User.AccountID),
 		string(mutation.User.ID),
 		mutation.User.LoginName,
 		mutation.User.DisplayName,
 		string(mutation.PasswordHash),
 		string(mutation.ActorPrincipalID),
+		string(mutation.ActorSessionID),
 		string(mutation.DecisionID),
+		mutation.BoundaryID,
+		string(mutation.BoundaryPolicyID),
+		mutation.BoundaryPolicyResourceVersion,
 		event,
 		mutation.ExpectedSettingsVersion,
 	).Scan(&createdAt, &updatedAt)

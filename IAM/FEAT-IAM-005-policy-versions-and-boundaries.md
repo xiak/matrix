@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；安全委派的封存上限、受控对象闭包与事务证据设计已冻结，生产实现、签名边缘、最终发布和UI验收仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；安全委派的封存上限、受控对象闭包与事务证据设计已冻结，首个 CreateUser 原子边界纵向片已实现并通过本地契约、PG18、并发和滚动前驱门禁，后续凭据管理、Group/Policy/attachment 闭包、签名发布及 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -307,6 +307,14 @@ CurrentIdentity/capabilities 与所有目录每页重新调用当前 PDP；curso
 ## 验收
 
 Allow/Deny/边界交集表、条件缺失/类型/大小攻击、跨账号资源与 namespace、未知版本/Action、显式 Deny 全来源优先；真实数据库改版/附件/边界并发，旧 session 下次请求立即反映；旧事实仍可验证投递；UI 与 API 使用同一文档。fuzz 只证明当前 grammar 不崩溃且失败关闭，不快照实现细节。
+
+### 安全委派 CreateUser 纵向片证据
+
+当前请求契约要求 `permissionBoundary` 属性必须出现：原 Account Root 只能用显式 `null` 表示创建无普通边界 USER；非 root 必须提交准确 `policyId` 与 `policyResourceVersion`。旧的字段缺失 wire 只留在唯一固定 IAM67 前驱程序的测试客户端，当前 API、OpenAPI、示例和所有当前调用者不保留缺失旁路。请求摘要绑定这项选择；调用者不能以 header、target、cursor 或默认值改变它。
+
+当前 `iam.create_user` 在同一 SERIALIZABLE 事务内重检活跃 Account、直接 USER actor、当前 bearer Session/credential generation、原 Root 关系、平台绑定、当前 User boundary、CUSTOMER/TENANT ceiling Policy/default version 和原授权决定，然后原子写入 USER、初始凭据、login index、可选 boundary 与单一 `iam.user.created` 事实。普通管理 Action 而没有 boundary、显式 null、不同/陈旧/跨账号/退休 boundary、SYSTEM policy 充当委派 ceiling 及平台身份均拒绝；其中 SYSTEM 负向用例先取得真实 Allow decision，再由存储事务拒绝，证明不是客户端或 PDP 偶然隐藏。Root 仍可显式创建无边界或有合法边界 USER，但没有因此取得 PLATFORM_OPERATOR。
+
+本任务专属 PostgreSQL 18 的最终聚焦 race 门禁 37.828s 通过：创建先进入写事务时，Root 的边界移除真实等待，创建的 USER 带原 ceiling 完整提交后移除才完成；Root 已提交移除后，同一仍有效 Session 的新创建返回 403，且没有 principal、credential、login、boundary 或成功事实。最终完整 `TestIAMPolicyAuthorityStoragePostgres` 216.928s 通过，保留原策略/组/边界/凭据竞争、不可变 evidence、schema/bootstrap 重放及受限存储攻击。固定 IAM67 程序产生真实账号、会话、MFA、恢复、策略/附件、完成记录、receipt、canonical/proof 后升级到 IAM68 的唯一滚动前驱门禁 158.131s 通过；旧 wire 仅用于产生前驱数据，当前重启、等值重放和历史 proof 均未复活权限。当前完整源码 profile 为 IAM68/Audit35/PaaS3、`contractRevision=16`；这不是跨 profile 签名安装兼容声明，也不代表 LANG-08 余下闭包或 UI 已验收。
 
 ### User 边界后端证据
 

@@ -3848,6 +3848,7 @@ BEGIN
 END $function$;
 
 DROP FUNCTION IF EXISTS iam.create_user(text,text,text,text,text,text,text,jsonb);
+DROP FUNCTION IF EXISTS iam.create_user(text,text,text,text,text,text,text,jsonb,bigint);
 CREATE OR REPLACE FUNCTION iam.create_user(
     submitted_tenant_id text,
     submitted_principal_id text,
@@ -3855,7 +3856,11 @@ CREATE OR REPLACE FUNCTION iam.create_user(
     submitted_display_name text,
     submitted_password_hash text,
     submitted_actor_principal_id text,
+    submitted_actor_session_id text,
     submitted_decision_id text,
+    submitted_boundary_id text,
+    submitted_boundary_policy_id text,
+    submitted_boundary_policy_version bigint,
     submitted_audit_event jsonb,
     submitted_settings_version bigint
 )
@@ -3866,26 +3871,97 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE
     effective_now timestamptz(6) := transaction_timestamp();
+    actor_is_root boolean := false;
+    actor_boundary_policy_id text;
+    boundary_policy iam.policies%ROWTYPE;
 BEGIN
     IF submitted_tenant_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_principal_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_actor_principal_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_actor_session_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_decision_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_login_name COLLATE "C" !~ '^[a-z][a-z0-9._-]{2,63}$'
        OR length(submitted_display_name) NOT BETWEEN 1 AND 128
        OR btrim(submitted_display_name) <> submitted_display_name
        OR submitted_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
+       OR submitted_boundary_id IS NULL OR submitted_boundary_policy_id IS NULL
+       OR submitted_boundary_policy_version IS NULL
+       OR (submitted_boundary_policy_id='' AND
+            (submitted_boundary_id<>'' OR submitted_boundary_policy_version<>0))
+       OR (submitted_boundary_policy_id<>'' AND
+            (submitted_boundary_policy_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+             OR submitted_boundary_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+             OR submitted_boundary_policy_version NOT BETWEEN 1 AND 9007199254740991))
        OR submitted_settings_version IS NULL OR submitted_settings_version NOT BETWEEN 1 AND 9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'user mutation is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',submitted_tenant_id,true);
+    PERFORM 1 FROM iam.accounts a WHERE a.id=submitted_tenant_id AND a.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND OR submitted_settings_version IS DISTINCT FROM (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=submitted_tenant_id) THEN
+        RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='password settings changed concurrently';
+    END IF;
+    -- Credential, boundary, platform-binding and status writers take the same
+    -- Account -> USER barrier. A waiting serializable request must retry and
+    -- reauthorize rather than create an unbounded replacement identity.
+    PERFORM 1 FROM iam.principals p
+     WHERE p.tenant_id=submitted_tenant_id AND p.id=submitted_actor_principal_id
+       AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL
+       AND NOT p.must_change_password FOR NO KEY UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='user creator is unavailable'; END IF;
+    PERFORM 1 FROM iam.user_credentials c JOIN iam.sessions s
+      ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
+     WHERE c.tenant_id=submitted_tenant_id AND c.principal_id=submitted_actor_principal_id
+       AND s.id=submitted_actor_session_id AND s.status='ACTIVE' AND s.revoked_at IS NULL
+       AND s.expires_at>clock_timestamp() AND s.credential_version=c.credential_version
+       AND s.last_activity_at IS NOT NULL AND s.idle_timeout_seconds IS NOT NULL
+       AND s.last_activity_at+make_interval(secs=>s.idle_timeout_seconds)>clock_timestamp()
+     FOR SHARE OF c,s;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='user creator session is unavailable'; END IF;
+    PERFORM 1 FROM iam.account_roots r
+     WHERE r.account_id=submitted_tenant_id AND r.principal_id=submitted_actor_principal_id FOR SHARE;
+    actor_is_root:=FOUND;
+    IF NOT actor_is_root THEN
+        IF submitted_boundary_policy_id='' OR EXISTS(
+            SELECT 1 FROM iam.policy_attachments a
+             WHERE a.tenant_id=submitted_tenant_id AND a.target_kind='USER'
+               AND a.target_id=submitted_actor_principal_id AND a.authority_scope='INSTALLATION'
+               AND a.revoked_at IS NULL
+        ) THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated user creator is unavailable';
+        END IF;
+        SELECT b.policy_id INTO actor_boundary_policy_id
+          FROM iam.user_permission_boundaries b
+         WHERE b.tenant_id=submitted_tenant_id AND b.user_id=submitted_actor_principal_id
+           AND b.revoked_at IS NULL FOR SHARE;
+        IF NOT FOUND OR actor_boundary_policy_id IS DISTINCT FROM submitted_boundary_policy_id THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated user boundary is unavailable';
+        END IF;
+    END IF;
+    IF submitted_boundary_policy_id<>'' THEN
+        SELECT * INTO boundary_policy FROM iam.policies p
+         WHERE p.id=submitted_boundary_policy_id AND p.status='ACTIVE' AND p.authority_scope='TENANT'
+           AND (p.owner_tenant_id IS NULL OR p.owner_tenant_id=submitted_tenant_id) FOR SHARE;
+        IF NOT FOUND OR boundary_policy.resource_version<>submitted_boundary_policy_version THEN
+            RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='user boundary policy revision conflicts';
+        END IF;
+        IF NOT actor_is_root AND (boundary_policy.management<>'CUSTOMER'
+            OR boundary_policy.owner_tenant_id IS DISTINCT FROM submitted_tenant_id) THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated user boundary policy is unavailable';
+        END IF;
+        PERFORM 1 FROM iam.policy_versions v
+         WHERE v.policy_id=boundary_policy.id AND v.id=boundary_policy.default_version_id
+           AND v.authority_scope='TENANT' AND v.retired_at IS NULL FOR SHARE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='user boundary version is unavailable'; END IF;
     END IF;
     PERFORM iam.assert_allowed_decision(
         submitted_tenant_id, submitted_actor_principal_id,
         submitted_decision_id, 'iam.user.create', 'ACCOUNT', submitted_tenant_id
     ,'INSTANCE',NULL);
-    PERFORM 1 FROM iam.accounts a WHERE a.id=submitted_tenant_id AND a.status='ACTIVE' FOR SHARE;
-    IF NOT FOUND OR submitted_settings_version IS DISTINCT FROM (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=submitted_tenant_id) THEN
-        RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='password settings changed concurrently';
-    END IF;
     PERFORM iam.assert_audit_event(
         submitted_audit_event, submitted_tenant_id,
         'iam.user.created', 'USER', submitted_principal_id, 'SUCCEEDED'
@@ -3911,6 +3987,14 @@ BEGIN
     );
     INSERT INTO iam.login_index (login_name, tenant_id, principal_id)
     VALUES (submitted_login_name, submitted_tenant_id, submitted_principal_id);
+    IF submitted_boundary_policy_id<>'' THEN
+        INSERT INTO iam.user_permission_boundaries(
+            tenant_id,id,user_id,policy_id,resource_version,created_at,updated_at
+        ) VALUES (
+            submitted_tenant_id,submitted_boundary_id,submitted_principal_id,
+            submitted_boundary_policy_id,1,effective_now,effective_now
+        );
+    END IF;
     INSERT INTO iam.audit_outbox (
         tenant_id, event_id, event_document, next_attempt_at,
         created_at, updated_at
@@ -4413,7 +4497,7 @@ GRANT EXECUTE ON FUNCTION iam.revoke_session(
     text, text, text, text, jsonb, text
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.create_user(
-    text, text, text, text, text, text, text, jsonb, bigint
+    text, text, text, text, text, text, text, text, text, text, bigint, jsonb, bigint
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.create_policy_attachment(
     text, text, text, text, text, bigint, text, text, jsonb, text

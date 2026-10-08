@@ -2,5 +2,6 @@
   "loginName": "developer",
   "displayName": "Example Developer",
   "initialPassword": "Example-Only-Developer-Password-51!",
+  "permissionBoundary": null,
   "requestId": "request-create-user"
 }
