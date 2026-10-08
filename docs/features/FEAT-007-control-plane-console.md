@@ -1711,13 +1711,20 @@ Verified through 2026-10-08 against the current all-service navigation, compact 
 shell, responsive access-analysis hierarchy, primary directory actions and the
 provider-owned product-permission onboarding boundary.
 
-Current compact IAM evidence is fixed at `a43fd4e1e`, which also owns the synchronized
-embedded export. Fixed
+Current compact IAM shell evidence is fixed at `a43fd4e1e`; the current access-analysis
+delegation follow-up and synchronized embedded export are fixed at `a383d3930`. Fixed
 chrome, page title, back navigation and the consolidated page-action trigger paint
 without waiting for directory data.
-Access analysis keeps its three known primary sections on one row above 360 px; at or
-below 360 px the same three controls become equal-width columns and may wrap their own
-labels, without turning an arbitrary tab set into a second mobile implementation.
+Access analysis keeps its four known primary sections on one row above a 520 px content
+container; at or below 520 px the same controls form a stable 2×2 grid and may wrap their
+own labels, without turning an arbitrary tab set into a second mobile implementation.
+At `390 × 844`, all four sections remain visible, the boundary-controlled identity table
+fits its 304 px container without page overflow, and the browser warning/error log stays
+empty. The complete gate passed 63 frontend files/1,156 cases plus three export-normalization
+cases, typecheck, lint, architecture, 228 theme contrast pairs, 47 generated pages, 45
+normalized route files, 259 embedded files and PaaS UI Go test/vet. This is isolated MOCK
+layout and interaction evidence; delegated-authority semantics and exclusions remain owned
+by FEAT-IAM-010.
 
 The 2026-10-08 source/embed follow-up `3d34f04d5` projects implemented LIVE IAM
 workspaces from repository capabilities instead of the preview workspace flag. AccessKey,
