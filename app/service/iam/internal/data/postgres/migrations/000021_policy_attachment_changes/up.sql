@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS iam.policy_attachment_changes (
     expected_resource_version bigint,
     actor_boundary_evidence jsonb NOT NULL,
     target_boundary_evidence jsonb NOT NULL,
+    authority_evidence_digest text COLLATE "C",
     input_commitment text COLLATE "C" NOT NULL,
     result_document jsonb NOT NULL,
     decision_id text COLLATE "C" NOT NULL,
@@ -45,8 +46,14 @@ ALTER TABLE iam.policy_attachment_changes ADD COLUMN IF NOT EXISTS actor_boundar
   DEFAULT '{"state":"PREDECESSOR_UNPROVEN"}'::jsonb;
 ALTER TABLE iam.policy_attachment_changes ADD COLUMN IF NOT EXISTS target_boundary_evidence jsonb NOT NULL
   DEFAULT '{"state":"PREDECESSOR_UNPROVEN"}'::jsonb;
+-- The immediate IAM70 predecessor already has exact boundary evidence, but
+-- its Audit bytes predate the event-level commitment. NULL is therefore an
+-- explicit retained predecessor state, never a value inferred from current
+-- identity or policy rows. New trigger-owned receipts always set this column.
+ALTER TABLE iam.policy_attachment_changes ADD COLUMN IF NOT EXISTS authority_evidence_digest text COLLATE "C";
 ALTER TABLE iam.policy_attachment_changes ALTER COLUMN actor_boundary_evidence DROP DEFAULT;
 ALTER TABLE iam.policy_attachment_changes ALTER COLUMN target_boundary_evidence DROP DEFAULT;
+ALTER TABLE iam.policy_attachment_changes ALTER COLUMN authority_evidence_digest DROP DEFAULT;
 ALTER TABLE iam.policy_attachment_changes DROP CONSTRAINT IF EXISTS policy_attachment_changes_shape;
 ALTER TABLE iam.policy_attachment_changes ADD CONSTRAINT policy_attachment_changes_shape CHECK (
   tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -59,6 +66,8 @@ ALTER TABLE iam.policy_attachment_changes ADD CONSTRAINT policy_attachment_chang
   AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
   AND target_kind IN ('USER','GROUP','ROLE')
   AND input_commitment COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+  AND (authority_evidence_digest IS NULL
+    OR authority_evidence_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$')
   AND jsonb_typeof(result_document)='object'
   AND ((authority_scope='TENANT' AND installation_id IS NULL)
     OR (authority_scope='INSTALLATION' AND target_kind='USER'
@@ -156,6 +165,37 @@ BEGIN
       ||convert_to(domain,'UTF8')||decode('00','hex')||convert_to(document,'UTF8')),'hex');
 END $function$;
 
+-- Bind the exact request commitment to the authority evidence selected while
+-- the actor, target and policy rows are locked. The event carries only this
+-- one-way commitment; it is not an authorization permit and cannot disclose
+-- the boundary document. Historical receipts deliberately cannot call this
+-- function with PREDECESSOR_UNPROVEN evidence.
+CREATE OR REPLACE FUNCTION iam.policy_attachment_authority_evidence_digest(
+  input_commitment text,delegation jsonb
+)
+RETURNS text LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF COALESCE(input_commitment,'') COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+      OR jsonb_typeof(delegation) IS DISTINCT FROM 'object'
+      OR NOT (delegation ?& ARRAY['actorBoundary','targetBoundary'])
+      OR delegation-ARRAY['actorBoundary','targetBoundary']<>'{}'::jsonb
+      OR jsonb_typeof(delegation->'actorBoundary') IS DISTINCT FROM 'object'
+      OR jsonb_typeof(delegation->'targetBoundary') IS DISTINCT FROM 'object'
+      OR NOT (
+        (delegation->'actorBoundary'->>'state'='ROOT'
+          AND delegation->'targetBoundary'='{"state":"ROOT"}'::jsonb)
+        OR (delegation->'actorBoundary'='{"state":"NOT_APPLICABLE"}'::jsonb
+          AND delegation->'targetBoundary'='{"state":"NOT_APPLICABLE"}'::jsonb)
+        OR (delegation->'actorBoundary'->>'state'='BOUND'
+          AND delegation->'targetBoundary'->>'state'='BOUND')
+      ) THEN
+      RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='policy attachment authority evidence is invalid';
+    END IF;
+    RETURN 'sha256:'||encode(sha256(
+      convert_to('matrix.iam.policy-attachment-authority-evidence.v1','UTF8')||decode('00','hex')
+      ||convert_to(input_commitment,'UTF8')||decode('00','hex')||convert_to(delegation::text,'UTF8')),'hex');
+END $function$;
+
 CREATE OR REPLACE FUNCTION iam.policy_attachment_change_document(receipt iam.policy_attachment_changes)
 RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE completed text:=to_char(receipt.completed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"');
@@ -190,7 +230,8 @@ CREATE OR REPLACE FUNCTION iam.verified_policy_attachment_change(
 RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE receipt iam.policy_attachment_changes%ROWTYPE; attachment iam.policy_attachments%ROWTYPE;
     decision iam.authorization_decisions%ROWTYPE; event jsonb; expected_action text; expected_event text;
-    expected_digest text; expected_result jsonb; delegation_valid boolean:=false;
+    expected_digest text; expected_authority_digest text; expected_result jsonb;
+    predecessor_unbound boolean:=false; delegation_valid boolean:=false;
 BEGIN
     SELECT * INTO receipt FROM iam.policy_attachment_changes r
       WHERE (r.tenant_id,r.actor_principal_id,r.request_id)=(tenant,actor,original_request);
@@ -217,6 +258,12 @@ BEGIN
       ELSE 'iam.policy-attachment.revoked' END;
     expected_digest:=iam.policy_attachment_change_input_digest(receipt.operation,receipt.target_kind,receipt.target_id,
       receipt.policy_id,receipt.policy_resource_version,receipt.attachment_id,receipt.expected_resource_version,receipt.request_id);
+    predecessor_unbound:=receipt.authority_evidence_digest IS NULL;
+    IF NOT predecessor_unbound THEN
+      expected_authority_digest:=iam.policy_attachment_authority_evidence_digest(expected_digest,
+        jsonb_build_object('actorBoundary',receipt.actor_boundary_evidence,
+          'targetBoundary',receipt.target_boundary_evidence));
+    END IF;
     expected_result:=iam.policy_attachment_change_document(receipt);
     delegation_valid:=CASE
       WHEN receipt.actor_boundary_evidence='{"state":"PREDECESSOR_UNPROVEN"}'::jsonb
@@ -277,6 +324,10 @@ BEGIN
       OR event#>>'{target,id}' IS DISTINCT FROM receipt.attachment_id
       OR event->>'requestId' IS DISTINCT FROM receipt.request_id
       OR event->>'requestDigest' IS DISTINCT FROM expected_digest
+      OR (predecessor_unbound AND event ? 'authorityEvidenceDigest')
+      OR (NOT predecessor_unbound AND (
+        receipt.authority_evidence_digest IS DISTINCT FROM expected_authority_digest
+        OR event->>'authorityEvidenceDigest' IS DISTINCT FROM receipt.authority_evidence_digest))
       OR event->>'iamDecisionId' IS DISTINCT FROM receipt.decision_id
       OR (event->>'occurredAt')::timestamptz IS DISTINCT FROM receipt.completed_at
       OR (receipt.authority_scope='TENANT' AND (event->>'tenantId' IS DISTINCT FROM receipt.tenant_id OR event ? 'installationId'))
@@ -305,7 +356,8 @@ RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function
 DECLARE action_name text:=NEW.event_document->>'action'; operation text; tenant text:=NEW.tenant_id;
     actor text:=NEW.event_document#>>'{actor,id}'; original_request text:=NEW.event_document->>'requestId';
     attachment iam.policy_attachments%ROWTYPE; policy iam.policies%ROWTYPE; decision text:=NEW.event_document->>'iamDecisionId';
-    original_action text; expected_digest text; prior_scope text; result jsonb; receipt iam.policy_attachment_changes%ROWTYPE;
+    original_action text; expected_digest text; expected_authority_digest text; prior_scope text;
+    result jsonb; receipt iam.policy_attachment_changes%ROWTYPE;
     policy_revision bigint; expected_revision bigint; delegation jsonb;
 BEGIN
     IF action_name NOT IN ('iam.policy-attachment.created','iam.policy-attachment.revoked',
@@ -345,7 +397,9 @@ BEGIN
       RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='policy attachment change decision is invalid'; END IF;
     expected_digest:=iam.policy_attachment_change_input_digest(operation,attachment.target_kind,attachment.target_id,
       attachment.policy_id,policy_revision,attachment.id,expected_revision,original_request);
-    IF NEW.event_document->>'requestDigest' IS DISTINCT FROM expected_digest THEN
+    expected_authority_digest:=iam.policy_attachment_authority_evidence_digest(expected_digest,delegation);
+    IF NEW.event_document->>'requestDigest' IS DISTINCT FROM expected_digest
+      OR NEW.event_document->>'authorityEvidenceDigest' IS DISTINCT FROM expected_authority_digest THEN
       RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='policy attachment change commitment is invalid'; END IF;
     receipt.tenant_id:=tenant; receipt.actor_principal_id:=actor; receipt.request_id:=original_request;
     receipt.operation:=operation; receipt.attachment_id:=attachment.id; receipt.target_kind:=attachment.target_kind;
@@ -354,17 +408,20 @@ BEGIN
     receipt.policy_resource_version:=policy_revision; receipt.expected_resource_version:=expected_revision;
     receipt.actor_boundary_evidence:=delegation->'actorBoundary';
     receipt.target_boundary_evidence:=delegation->'targetBoundary';
+    receipt.authority_evidence_digest:=expected_authority_digest;
     receipt.input_commitment:=expected_digest; receipt.decision_id:=decision; receipt.event_id:=NEW.event_id;
     receipt.completed_at:=NEW.created_at; result:=iam.policy_attachment_change_document(receipt); receipt.result_document:=result;
     prior_scope:=current_setting('matrix.iam_policy_attachment_change',true);
     PERFORM set_config('matrix.iam_policy_attachment_change','trusted',true);
     INSERT INTO iam.policy_attachment_changes(tenant_id,actor_principal_id,request_id,operation,attachment_id,
       target_kind,target_id,policy_id,authority_scope,installation_id,policy_resource_version,expected_resource_version,
-      actor_boundary_evidence,target_boundary_evidence,input_commitment,result_document,decision_id,event_id,completed_at)
+      actor_boundary_evidence,target_boundary_evidence,authority_evidence_digest,input_commitment,
+      result_document,decision_id,event_id,completed_at)
       VALUES(receipt.tenant_id,receipt.actor_principal_id,receipt.request_id,receipt.operation,receipt.attachment_id,
         receipt.target_kind,receipt.target_id,receipt.policy_id,receipt.authority_scope,receipt.installation_id,
         receipt.policy_resource_version,receipt.expected_resource_version,receipt.actor_boundary_evidence,
-        receipt.target_boundary_evidence,receipt.input_commitment,receipt.result_document,receipt.decision_id,
+        receipt.target_boundary_evidence,receipt.authority_evidence_digest,receipt.input_commitment,
+        receipt.result_document,receipt.decision_id,
         receipt.event_id,receipt.completed_at);
     PERFORM set_config('matrix.iam_policy_attachment_change',COALESCE(prior_scope,''),true);
     IF iam.verified_policy_attachment_change(tenant,actor,original_request) IS DISTINCT FROM result THEN
@@ -537,6 +594,10 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
       WHERE attribute.attrelid='iam.policy_attachment_changes'::regclass AND NOT attribute.attisdropped
         AND attribute.attname IN ('actor_boundary_evidence','target_boundary_evidence')
         AND attribute.atttypid='jsonb'::regtype AND attribute.attnotnull AND NOT attribute.atthasdef)
+    AND EXISTS(SELECT 1 FROM pg_attribute attribute
+      WHERE attribute.attrelid='iam.policy_attachment_changes'::regclass AND NOT attribute.attisdropped
+        AND attribute.attname='authority_evidence_digest' AND attribute.atttypid='text'::regtype
+        AND NOT attribute.attnotnull AND NOT attribute.atthasdef)
     AND EXISTS(SELECT 1 FROM pg_constraint constraint_value
       WHERE constraint_value.conrelid='iam.policy_attachment_changes'::regclass
         AND constraint_value.conname='policy_attachment_changes_shape'
@@ -551,9 +612,10 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
     AND EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid='iam.audit_outbox'::regclass AND NOT t.tgisinternal
       AND t.tgenabled='A' AND t.tgname='policy_attachment_change_capture'
       AND t.tgfoid=to_regprocedure('iam.capture_policy_attachment_change()'))
-    AND (SELECT count(*)=2 FROM pg_proc f WHERE f.oid IN (
+    AND (SELECT count(*)=3 FROM pg_proc f WHERE f.oid IN (
       to_regprocedure('iam.current_user_boundary_evidence(text,text)'),
-      to_regprocedure('iam.lock_policy_attachment_delegation(text,text,text,text,text,text,text,text)'))
+      to_regprocedure('iam.lock_policy_attachment_delegation(text,text,text,text,text,text,text,text)'),
+      to_regprocedure('iam.policy_attachment_authority_evidence_digest(text,jsonb)'))
       AND f.proowner='matrix_iam_owner'::regrole AND NOT f.prosecdef
       AND f.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
       AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(f.proacl,acldefault('f',f.proowner))) privilege
@@ -582,6 +644,7 @@ REVOKE ALL ON TABLE iam.policy_attachment_changes
   FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
     matrix_iam_notification_worker,matrix_iam_authentication_recovery,matrix_iam_access_analysis_worker;
 REVOKE ALL ON FUNCTION iam.policy_attachment_change_input_digest(text,text,text,text,bigint,text,bigint,text),
+  iam.policy_attachment_authority_evidence_digest(text,jsonb),
   iam.policy_attachment_change_document(iam.policy_attachment_changes),
   iam.verified_policy_attachment_change(text,text,text),iam.guard_policy_attachment_change_insert(),
   iam.capture_policy_attachment_change(),iam.assert_policy_attachment_change_reader(text,text,text),

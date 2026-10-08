@@ -52,11 +52,14 @@ type Event struct {
 	Target         TargetReference `json:"target"`
 	Result         Result          `json:"result"`
 	RequestDigest  string          `json:"requestDigest"`
-	RequestID      string          `json:"requestId"`
-	CorrelationID  string          `json:"correlationId"`
-	OperationID    OperationID     `json:"operationId,omitempty"`
-	TraceParent    string          `json:"traceparent,omitempty"`
-	OccurredAt     time.Time       `json:"occurredAt"`
+	// AuthorityEvidenceDigest binds action-specific producer evidence without
+	// exposing that evidence or turning it into a reusable authorization permit.
+	AuthorityEvidenceDigest string      `json:"authorityEvidenceDigest,omitempty"`
+	RequestID               string      `json:"requestId"`
+	CorrelationID           string      `json:"correlationId"`
+	OperationID             OperationID `json:"operationId,omitempty"`
+	TraceParent             string      `json:"traceparent,omitempty"`
+	OccurredAt              time.Time   `json:"occurredAt"`
 }
 
 // Equal compares the complete fact, including independently decoded lineage.

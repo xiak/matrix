@@ -121,9 +121,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "a146626f9b301da43c2a6614a122a7e92bc2d558"
-	const sourceSchema uint64 = 69
-	const currentSchema uint64 = 70
+	const source = "20f1507d94b61864fc32215fb5096f049cc24408"
+	const sourceSchema uint64 = 70
+	const currentSchema uint64 = 71
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -428,7 +428,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Helper()
 		var state []byte
 		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
-			'changes',(SELECT jsonb_agg(to_jsonb(receipt) - 'actor_boundary_evidence' - 'target_boundary_evidence'
+			'changes',(SELECT jsonb_agg(to_jsonb(receipt) - 'authority_evidence_digest'
 			  ORDER BY tenant_id,actor_principal_id,request_id)
 			  FROM iam.policy_attachment_changes receipt),
 			'facts',(SELECT jsonb_agg(event_document ORDER BY event_id) FROM iam.audit_outbox
@@ -592,7 +592,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}) {
 		t.Fatalf("actual predecessor did not update its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
 	}
-	// The immediate schema-68 predecessor already owns explicit REVIEW_ONLY.
+	// The immediate schema-70 predecessor already owns explicit REVIEW_ONLY.
 	// The current schema must preserve it instead of inventing a migration
 	// default or authority.
 	migratedAccessAnalyzerExpected := retainedAccessAnalyzer
@@ -669,14 +669,17 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("retained database did not satisfy current IAM readiness and fail-closed defaults", err)
 	}
 	if current := attachmentContractState(); !bytes.Equal(predecessorAttachmentContract, current) {
-		t.Fatal("IAM69 attachment completions, facts or built-in policy state changed during IAM70 migration")
+		t.Fatal("IAM70 attachment completions, facts or built-in policy state changed during IAM71 migration")
 	}
 	var predecessorEvidencePreserved bool
 	if err := admin.QueryRow(ctx, `SELECT count(*)=$1
-		AND bool_and(actor_boundary_evidence='{"state":"PREDECESSOR_UNPROVEN"}'::jsonb)
-		AND bool_and(target_boundary_evidence='{"state":"PREDECESSOR_UNPROVEN"}'::jsonb)
+		AND bool_and(authority_evidence_digest IS NULL)
+		AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox outbox
+		  JOIN iam.policy_attachment_changes receipt
+		    ON (receipt.tenant_id,receipt.event_id)=(outbox.tenant_id,outbox.event_id)
+		  WHERE outbox.event_document ? 'authorityEvidenceDigest')
 		FROM iam.policy_attachment_changes`, predecessorAttachmentReceiptCount).Scan(&predecessorEvidencePreserved); err != nil || !predecessorEvidencePreserved {
-		t.Fatal("IAM70 did not preserve IAM69 attachment receipts as explicitly unproven predecessor evidence", err)
+		t.Fatal("IAM71 invented an Audit authority-evidence commitment for retained IAM70 receipts", err)
 	}
 	var attachmentChangeAuthority bool
 	if err := admin.QueryRow(ctx, `SELECT
@@ -690,7 +693,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
 		  WHERE p.id='system.platform-operator'
 		    AND action_value='iam.platform-policy-attachment-change.read')`).Scan(&attachmentChangeAuthority); err != nil || !attachmentChangeAuthority {
-		t.Fatal("IAM69 built-in attachment completion read authority was lost", err)
+		t.Fatal("IAM70 built-in attachment completion read authority was lost", err)
 	}
 	current := start(currentBinary, currentSchema)
 	for requestID, expected := range map[string]iamv1.PolicyAttachmentChange{
@@ -770,6 +773,18 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		currentAttachmentChange.Operation != iamv1.PolicyAttachmentChangeCreate || currentAttachmentChange.Attachment == nil ||
 		!reflect.DeepEqual(*currentAttachmentChange.Attachment, currentGrant) {
 		t.Fatal("current authority did not persist and read its exact attachment completion", currentAttachmentCompletion.Status)
+	}
+	var currentAuthorityEvidenceBound bool
+	if err := admin.QueryRow(ctx, `SELECT receipt.authority_evidence_digest IS NOT NULL
+		AND receipt.authority_evidence_digest=iam.policy_attachment_authority_evidence_digest(
+		  receipt.input_commitment,jsonb_build_object('actorBoundary',receipt.actor_boundary_evidence,
+		    'targetBoundary',receipt.target_boundary_evidence))
+		AND outbox.event_document->>'authorityEvidenceDigest'=receipt.authority_evidence_digest
+		FROM iam.policy_attachment_changes receipt JOIN iam.audit_outbox outbox
+		  ON (outbox.tenant_id,outbox.event_id)=(receipt.tenant_id,receipt.event_id)
+		WHERE receipt.attachment_id=$1 AND receipt.request_id='retained-current-viewer'`,
+		currentGrant.ID).Scan(&currentAuthorityEvidenceBound); err != nil || !currentAuthorityEvidenceBound {
+		t.Fatal("IAM71 did not bind a post-upgrade attachment fact to its locked authority evidence", err)
 	}
 	predecessorReportResponse = performJSON(t, http.MethodGet,
 		endpoint+"/v1/account/security-reports/"+string(predecessorReportCreation.Metadata.ID), primary.Credential, nil)

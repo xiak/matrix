@@ -78,22 +78,23 @@ func CanonicalizeEvent(source Source, event Event) (document, contentDigest stri
 		CanonicalVersion: "matrix.audit.canonical-event.v1",
 		Source:           source,
 		Event: canonicalEvent{
-			APIVersion:     event.APIVersion,
-			Kind:           event.Kind,
-			EventID:        event.EventID,
-			TenantID:       event.TenantID,
-			InstallationID: event.InstallationID,
-			Actor:          event.Actor,
-			IAMDecisionID:  event.IAMDecisionID,
-			Action:         event.Action,
-			Target:         event.Target,
-			Result:         event.Result,
-			RequestDigest:  event.RequestDigest,
-			RequestID:      event.RequestID,
-			CorrelationID:  event.CorrelationID,
-			OperationID:    event.OperationID,
-			TraceParent:    event.TraceParent,
-			OccurredAt:     event.OccurredAt.Format("2006-01-02T15:04:05.000000Z"),
+			APIVersion:              event.APIVersion,
+			Kind:                    event.Kind,
+			EventID:                 event.EventID,
+			TenantID:                event.TenantID,
+			InstallationID:          event.InstallationID,
+			Actor:                   event.Actor,
+			IAMDecisionID:           event.IAMDecisionID,
+			Action:                  event.Action,
+			Target:                  event.Target,
+			Result:                  event.Result,
+			RequestDigest:           event.RequestDigest,
+			AuthorityEvidenceDigest: event.AuthorityEvidenceDigest,
+			RequestID:               event.RequestID,
+			CorrelationID:           event.CorrelationID,
+			OperationID:             event.OperationID,
+			TraceParent:             event.TraceParent,
+			OccurredAt:              event.OccurredAt.Format("2006-01-02T15:04:05.000000Z"),
 		},
 	}
 	encoded, err := json.Marshal(wire)
@@ -111,20 +112,21 @@ type canonicalEnvelope struct {
 }
 
 type canonicalEvent struct {
-	APIVersion     string          `json:"apiVersion"`
-	Kind           string          `json:"kind"`
-	EventID        EventID         `json:"eventId"`
-	TenantID       TenantID        `json:"tenantId,omitempty"`
-	InstallationID string          `json:"installationId,omitempty"`
-	Actor          ActorReference  `json:"actor"`
-	IAMDecisionID  DecisionID      `json:"iamDecisionId,omitempty"`
-	Action         Action          `json:"action"`
-	Target         TargetReference `json:"target"`
-	Result         Result          `json:"result"`
-	RequestDigest  string          `json:"requestDigest"`
-	RequestID      string          `json:"requestId"`
-	CorrelationID  string          `json:"correlationId"`
-	OperationID    OperationID     `json:"operationId,omitempty"`
-	TraceParent    string          `json:"traceparent,omitempty"`
-	OccurredAt     string          `json:"occurredAt"`
+	APIVersion              string          `json:"apiVersion"`
+	Kind                    string          `json:"kind"`
+	EventID                 EventID         `json:"eventId"`
+	TenantID                TenantID        `json:"tenantId,omitempty"`
+	InstallationID          string          `json:"installationId,omitempty"`
+	Actor                   ActorReference  `json:"actor"`
+	IAMDecisionID           DecisionID      `json:"iamDecisionId,omitempty"`
+	Action                  Action          `json:"action"`
+	Target                  TargetReference `json:"target"`
+	Result                  Result          `json:"result"`
+	RequestDigest           string          `json:"requestDigest"`
+	AuthorityEvidenceDigest string          `json:"authorityEvidenceDigest,omitempty"`
+	RequestID               string          `json:"requestId"`
+	CorrelationID           string          `json:"correlationId"`
+	OperationID             OperationID     `json:"operationId,omitempty"`
+	TraceParent             string          `json:"traceparent,omitempty"`
+	OccurredAt              string          `json:"occurredAt"`
 }

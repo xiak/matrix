@@ -455,6 +455,8 @@ BEGIN
        OR jsonb_typeof(submitted_event->'action') <> 'string'
        OR jsonb_typeof(submitted_event->'result') <> 'string'
        OR jsonb_typeof(submitted_event->'requestDigest') <> 'string'
+       OR (submitted_event ? 'authorityEvidenceDigest'
+            AND jsonb_typeof(submitted_event->'authorityEvidenceDigest') <> 'string')
        OR jsonb_typeof(submitted_event->'requestId') <> 'string'
        OR jsonb_typeof(submitted_event->'correlationId') <> 'string'
        OR jsonb_typeof(submitted_event->'occurredAt') <> 'string'
@@ -468,6 +470,7 @@ BEGIN
        OR (submitted_event - ARRAY[
             'apiVersion', 'kind', 'eventId', 'tenantId', 'installationId', 'actor',
             'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
+            'authorityEvidenceDigest',
             'requestId', 'correlationId', 'operationId', 'traceparent',
             'occurredAt'
        ]) <> '{}'::jsonb
@@ -562,6 +565,12 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_event->>'requestDigest', '') COLLATE "C"
             !~ '^sha256:[0-9a-f]{64}$'
+       OR (submitted_event ? 'authorityEvidenceDigest' AND (
+            COALESCE(submitted_event->>'authorityEvidenceDigest','') COLLATE "C"
+              !~ '^sha256:[0-9a-f]{64}$'
+            OR action_name NOT IN (
+              'iam.policy-attachment.created','iam.policy-attachment.revoked',
+              'iam.platform-policy-attachment.created','iam.platform-policy-attachment.revoked')))
        OR COALESCE(submitted_event->>'requestId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_event->>'correlationId', '') COLLATE "C"
@@ -632,7 +641,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        35::bigint,
+        36::bigint,
         transaction_timestamp()
 $function$;
 

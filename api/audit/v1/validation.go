@@ -112,6 +112,16 @@ func ValidateEvent(value Event) error {
 			problems = append(problems, errors.New("Audit action cannot contain an Operation"))
 		}
 	}
+	attachmentAuthorityEvidence := value.Action == ActionIAMPolicyAttachmentCreated ||
+		value.Action == ActionIAMPolicyAttachmentRevoked ||
+		value.Action == ActionIAMPlatformPolicyAttachmentCreated ||
+		value.Action == ActionIAMPlatformPolicyAttachmentRevoked
+	if value.AuthorityEvidenceDigest != "" {
+		problems = append(problems, ValidateDigest("authorityEvidenceDigest", value.AuthorityEvidenceDigest))
+		if !attachmentAuthorityEvidence {
+			problems = append(problems, errors.New("Audit action cannot contain authority evidence"))
+		}
+	}
 	if value.IAMDecisionID != "" {
 		problems = append(problems, ValidateID("iamDecisionId", string(value.IAMDecisionID)))
 	}

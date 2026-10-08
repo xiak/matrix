@@ -8513,6 +8513,9 @@
           "apiVersion": {
             "const": "audit.matrix.xiak.com/v1"
           },
+          "authorityEvidenceDigest": {
+            "type": "string"
+          },
           "correlationId": {
             "$ref": "#/components/schemas/ID"
           },

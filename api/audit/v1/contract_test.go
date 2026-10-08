@@ -34,6 +34,40 @@ func TestCanonicalEventPreservesTenantBytesAndDigest(t *testing.T) {
 	}
 }
 
+func TestCanonicalPolicyAttachmentEvidenceIsActionBound(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-attachment",
+		TenantID: "account-example", Actor: ActorReference{Type: ActorUser, ID: "user-example"},
+		IAMDecisionID: "decision-example", Action: ActionIAMPolicyAttachmentCreated,
+		Target: TargetReference{Kind: TargetPolicyAttachment, ID: "attachment-example"}, Result: ResultSucceeded,
+		RequestDigest: "sha256:" + strings.Repeat("1", 64), AuthorityEvidenceDigest: "sha256:" + strings.Repeat("2", 64),
+		RequestID: "request-example", CorrelationID: "request-example",
+		OccurredAt: time.Date(2026, 10, 9, 1, 2, 3, 0, time.UTC),
+	}
+	const expected = `{"canonicalVersion":"matrix.audit.canonical-event.v1","source":"IAM","event":{"apiVersion":"audit.matrix.xiak.com/v1","kind":"AuditEvent","eventId":"event-attachment","tenantId":"account-example","actor":{"type":"USER","id":"user-example"},"iamDecisionId":"decision-example","action":"iam.policy-attachment.created","target":{"kind":"POLICY_ATTACHMENT","id":"attachment-example"},"result":"SUCCEEDED","requestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","authorityEvidenceDigest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","requestId":"request-example","correlationId":"request-example","occurredAt":"2026-10-09T01:02:03.000000Z"}}`
+	document, digest, err := CanonicalizeEvent(SourceIAM, event)
+	expectedDigest := sha256.Sum256([]byte(expected))
+	if err != nil || document != expected || digest != "sha256:"+hex.EncodeToString(expectedDigest[:]) {
+		t.Fatalf("attachment authority evidence is not canonical: %v", err)
+	}
+	for name, mutate := range map[string]func(*Event){
+		"invalid digest":   func(value *Event) { value.AuthorityEvidenceDigest = "sha256:short" },
+		"unrelated action": func(value *Event) { value.Action = ActionIAMPolicyCreated; value.Target.Kind = TargetPolicy },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := event
+			mutate(&changed)
+			if ValidateEventForSource(SourceIAM, changed) == nil {
+				t.Fatal("authority evidence escaped its closed attachment action")
+			}
+		})
+	}
+	event.AuthorityEvidenceDigest = ""
+	if _, _, err := CanonicalizeEvent(SourceIAM, event); err != nil {
+		t.Fatal("historical attachment event without new evidence no longer decodes", err)
+	}
+}
+
 func TestSelfServiceFactsRequireTheActualTenantUser(t *testing.T) {
 	for _, contract := range []struct {
 		action Action

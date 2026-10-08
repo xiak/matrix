@@ -332,6 +332,51 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 	assertAuditedReadSerialization(t, ctx, admin, pool, repository, iam)
 	assertCompetingAuditEvents(t, ctx, admin, repository, iam)
 	assertIndependentAuditChainWriters(t, ctx, admin, repository, iam)
+	t.Run("policy_attachment_authority_evidence", func(t *testing.T) {
+		current := integrationEvent("event-attachment-evidence", "organization-a",
+			auditv1.ActionIAMPolicyAttachmentCreated, auditv1.TargetPolicyAttachment,
+			"attachment-evidence", iam.now.Add(time.Minute))
+		current.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "principal-attachment-writer"}
+		current.IAMDecisionID = "decision-attachment-evidence"
+		current.AuthorityEvidenceDigest = "sha256:" + strings.Repeat("7", 64)
+		accepted := ingestAuditEvent(t, handler, producerCredentialA, current, http.StatusCreated)
+		_, expectedDigest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, current)
+		if err != nil || accepted.Record.Event.AuthorityEvidenceDigest != current.AuthorityEvidenceDigest ||
+			accepted.Record.ContentDigest != expectedDigest {
+			t.Fatal("Audit did not bind the attachment authority-evidence digest into canonical content", err)
+		}
+		var storedDigest, storedEvidence string
+		if err := admin.QueryRow(ctx, `SELECT content_digest,event_document->>'authorityEvidenceDigest'
+			FROM audit.records WHERE source='IAM' AND event_id=$1`, current.EventID).
+			Scan(&storedDigest, &storedEvidence); err != nil || storedDigest != expectedDigest ||
+			storedEvidence != current.AuthorityEvidenceDigest {
+			t.Fatal("stored attachment authority evidence differs from canonical content", err)
+		}
+
+		// The same closed action without the new field remains readable for an
+		// exact historical event; absence never authorizes a current IAM write.
+		historical := current
+		historical.EventID = "event-attachment-historical"
+		historical.RequestID = "request-event-attachment-historical"
+		historical.CorrelationID = "correlation-event-attachment-historical"
+		historical.IAMDecisionID = "decision-attachment-historical"
+		historical.AuthorityEvidenceDigest = ""
+		ingestAuditEvent(t, handler, producerCredentialA, historical, http.StatusCreated)
+
+		unrelated := historical
+		unrelated.EventID = "event-unrelated-authority-evidence"
+		unrelated.RequestID = "request-event-unrelated-authority-evidence"
+		unrelated.CorrelationID = "correlation-event-unrelated-authority-evidence"
+		unrelated.IAMDecisionID = "decision-unrelated-authority-evidence"
+		unrelated.Action = auditv1.ActionIAMUserCreated
+		unrelated.Target = auditv1.TargetReference{Kind: auditv1.TargetUser, ID: "user-unrelated-evidence"}
+		unrelated.AuthorityEvidenceDigest = "sha256:" + strings.Repeat("8", 64)
+		var ignored any
+		err = admin.QueryRow(ctx, `SELECT audit.assert_event($1,$2,$3,$4::jsonb)`,
+			string(auditv1.SourceIAM), unrelated.EventID, "tenant:organization-a",
+			string(mustJSON(t, unrelated))).Scan(&ignored)
+		assertPostgresCode(t, err, "22023")
+	})
 	iam.failure = errors.New("native IAM failure contains " + readerCredentialA + " and native-provider-path")
 	failure := performAuditRequest(
 		handler,

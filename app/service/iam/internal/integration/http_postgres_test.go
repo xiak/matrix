@@ -14645,6 +14645,18 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 		t.Fatalf("platform-bound delegated actor left state: decisions=%d facts=%d attachments=%d err=%v",
 			platformActorDecisions, platformActorFacts, platformActorAttachmentsAfter-platformActorAttachmentsBefore, err)
 	}
+	// The same non-Root platform actor may perform its installation-scoped
+	// duty. That path has no tenant boundary delegation, but its explicit
+	// NOT_APPLICABLE evidence must still be bound into both facts.
+	var operatorPlatformAttachment iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", platformDelegatedBearer, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)},
+		PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1,
+		RequestID: "attachment-change-platform-operator-create",
+	}, http.StatusOK, &operatorPlatformAttachment)
+	call(http.MethodPost, "/v1/policy-attachments/"+string(operatorPlatformAttachment.ID)+":revoke", platformDelegatedBearer,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: operatorPlatformAttachment.ResourceVersion,
+			RequestID: "attachment-change-platform-operator-revoke"}, http.StatusOK, nil)
 	call(http.MethodPost, "/v1/policy-attachments/"+string(platformActorGrant.ID)+":revoke", root,
 		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: platformActorGrant.ResourceVersion,
 			RequestID: "attachment-change-actor-platform-revoke"}, http.StatusOK, nil)
@@ -14673,6 +14685,29 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 		platformChange.Attachment.InstallationID != document.InstallationID {
 		t.Fatal("platform completion lost its sealed installation scope")
 	}
+	var evidenceBound bool
+	if err := database.QueryRow(ctx, `SELECT count(*)>0
+		AND count(*) FILTER (WHERE receipt.actor_boundary_evidence->>'state'='ROOT')>0
+		AND count(*) FILTER (WHERE receipt.actor_boundary_evidence->>'state'='BOUND')>0
+		AND count(*) FILTER (WHERE receipt.actor_boundary_evidence->>'state'='NOT_APPLICABLE')>0
+		AND bool_and(receipt.authority_evidence_digest=
+		  iam.policy_attachment_authority_evidence_digest(receipt.input_commitment,
+		    jsonb_build_object('actorBoundary',receipt.actor_boundary_evidence,
+		      'targetBoundary',receipt.target_boundary_evidence))
+		  AND outbox.event_document->>'authorityEvidenceDigest'=receipt.authority_evidence_digest)
+		FROM iam.policy_attachment_changes receipt JOIN iam.audit_outbox outbox
+		  ON (outbox.tenant_id,outbox.event_id)=(receipt.tenant_id,receipt.event_id)
+		WHERE receipt.actor_boundary_evidence->>'state'<>'PREDECESSOR_UNPROVEN'`).Scan(&evidenceBound); err != nil || !evidenceBound {
+		t.Fatal("current attachment facts do not bind every locked authority-evidence class", err)
+	}
+	var ignoredAuditEvent any
+	err = database.QueryRow(ctx, `SELECT iam.assert_audit_event(
+		jsonb_set(outbox.event_document,'{authorityEvidenceDigest}',to_jsonb($1::text),true),
+		outbox.tenant_id,outbox.event_document->>'action',outbox.event_document#>>'{target,kind}',
+		outbox.event_document#>>'{target,id}',outbox.event_document->>'result')
+		FROM iam.audit_outbox outbox WHERE outbox.event_document->>'requestId'='attachment-change-target' LIMIT 1`,
+		"sha256:"+strings.Repeat("e", 64)).Scan(&ignoredAuditEvent)
+	assertSQLState(err, "22023")
 	var rootSession string
 	if err := database.QueryRow(ctx, `SELECT id FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2
 		AND status='ACTIVE' AND revoked_at IS NULL ORDER BY issued_at DESC LIMIT 1`, document.Organization.ID, document.Administrator.ID).Scan(&rootSession); err != nil {
@@ -14733,6 +14768,22 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 		delegatedRequest.RequestID, "sha256:"+strings.Repeat("f", 64)); err != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatal("inject isolated delegation evidence damage")
+	}
+	err = tx.QueryRow(ctx, "SELECT iam.verified_policy_attachment_change($1,$2,$3)",
+		delegated.AccountID, delegated.ID, delegatedRequest.RequestID).Scan(&ignored)
+	_ = tx.Rollback(ctx)
+	assertSQLState(err, "23514")
+	tx, err = database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE iam.audit_outbox SET event_document=jsonb_set(
+		event_document,'{authorityEvidenceDigest}',to_jsonb($4::text),true)
+		WHERE tenant_id=$1 AND event_document#>>'{actor,id}'=$2 AND event_document->>'requestId'=$3`,
+		delegated.AccountID, delegated.ID, delegatedRequest.RequestID,
+		"sha256:"+strings.Repeat("d", 64)); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal("inject isolated attachment authority-evidence digest damage")
 	}
 	err = tx.QueryRow(ctx, "SELECT iam.verified_policy_attachment_change($1,$2,$3)",
 		delegated.AccountID, delegated.ID, delegatedRequest.RequestID).Scan(&ignored)

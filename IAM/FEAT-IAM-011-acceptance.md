@@ -35,9 +35,11 @@
 
 未发布迁移可以在风险替换前保存已验证并推送的 Git 回滚点后合并、改写或删除，不在工作树保留废弃实现作为兼容层。默认门禁是最终结构的空库安装、等值重放、带真实数据的重启/恢复、迁移失败无部分效果，以及当前版本的 RLS、受限身份、撤权和 Audit/outbox 不变量。它们不能因免除开发历史兼容而取消。
 
-开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项 FEAT 累积各自的旧 binary/schema 路径。窗口前移时在同一切片删除被替代的入口、夹具、环境变量和条件分支，不以常规 SKIP、别名或可选旧版本列表保留测试仓库。当前唯一窗口为固定 `a146626f9b301da43c2a6614a122a7e92bc2d558` 的 IAM69 到 IAM70，完整源码组合为 IAM70/Audit35/PaaS3、`contractRevision=18`。前驱与当前客户端都使用显式 CreateUser 边界 wire：Root-only `null` 或准确 boundary；不再保留字段缺失客户端、IAM68 executable 或更早迁移入口。
+开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项 FEAT 累积各自的旧 binary/schema 路径。窗口前移时在同一切片删除被替代的入口、夹具、环境变量和条件分支，不以常规 SKIP、别名或可选旧版本列表保留测试仓库。当前唯一窗口为固定 `20f1507d94b61864fc32215fb5096f049cc24408` 的 IAM70 到 IAM71，完整源码组合为 IAM71/Audit36/PaaS3、`contractRevision=19`。前驱与当前客户端都使用显式 CreateUser 边界 wire：Root-only `null` 或准确 boundary；不再保留字段缺失客户端、IAM69 executable 或更早迁移入口。
 
-本任务专属 PostgreSQL 18 上的 `TestIAMRetainedPredecessorProcessUpgrade` 最终 116.275s 通过：实际 IAM69 程序和 migrator 产生账号、策略/附件及五条完成记录、会话、强制改密、共享失败计数、TOTP 绑定/移除/重绑、认证恢复、备份 custody、SOURCE/RESTORED/CLOSED receipt、旧 canonical/proof，再由 IAM70 双迁移、等值 bootstrap 和重启验证保留。旧快照不能重新 close/reconcile/reopen，撤销和终态不复活；旧附件完成记录的公开结果、事实和内置策略逐字节保持，新委派证据只标记 `PREDECESSOR_UNPROVEN`，不伪装成当前 `ROOT` 或 `BOUND` 证明。当前直接 USER 附件委派聚焦 race 门禁 24.878s 通过 Root/同边界正向、无边界/不同边界/平台身份（含重新登录后的平台绑定管理者）/Root/Group 攻击、边界撤销锁等待及证据篡改；最终源码的当前空库完整策略存储门禁 203.392s 亦已通过。此前 IAM69 的同边界 status/reset/delete、IAM HTTP、独立进程、自然 idle 与设置/StepUp 门禁证据保持；本轮固定前驱 `a146626f` 的独立 CI 仍在运行，IAM70 尚无相同完整 profile 的签名 A/B 生命周期，因此不得把本地 SQL 升级证明解释为跨 profile 发布兼容或整体验收。N+1 也不通过构造另一个假想 schema 提前测试。
+本任务专属 PostgreSQL 18 上的 `TestIAMRetainedPredecessorProcessUpgrade` 最终 154.13s 通过：实际 IAM70 程序和 migrator 产生账号、策略/附件完成记录、会话、强制改密、共享失败计数、TOTP 绑定/移除/重绑、认证恢复、备份 custody、SOURCE/RESTORED/CLOSED receipt、旧 canonical/proof，再由 IAM71 双迁移、等值 bootstrap 和重启验证保留。旧快照不能重新 close/reconcile/reopen，撤销和终态不复活；IAM70 已有的准确 actor/target 边界证据、公开结果、事实和内置策略逐字节保持，其新增 `authority_evidence_digest` 列明确为 `NULL`，旧 Audit 事件仍无该字段，不能倒签历史；升级后的新附件写入立即使用 IAM71 摘要契约。
+
+当前 IAM71 直接 USER 附件聚焦 race 门禁 20.43s 通过 `ROOT`、同边界 `BOUND`、平台直接 USER `NOT_APPLICABLE` 正向、越界攻击、并发边界撤销、receipt/事件摘要重算和篡改拒绝；完整策略存储 race 289.15s 通过既有语言、Profile、组继承、边界、策略版本、凭据竞争、平台保护、RLS/不可变证据及 schema/bootstrap 重放。Audit36 HTTP 真库子流程 1.48s 通过带摘要的新附件事实、无字段的历史附件事实及非附件 action 伪造字段拒绝。此前 IAM69/70 的同边界 status/reset/delete、IAM HTTP、独立进程、自然 idle 与设置/StepUp 门禁证据保持；固定 `a146626f` 的独立 CI 仍在运行，固定 IAM70 前驱及当前 IAM71 尚无各自的完整独立 CI 或相同完整 profile 签名 A/B 生命周期，因此不得把本地 SQL/HTTP 升级证明解释为跨 profile 发布兼容或整体验收。N+1 也不通过构造另一个假想 schema 提前测试。
 
 只有明确要求保留某个现存安装的数据，或存在无法同次替换的真实消费者时，才增加例外并记录准确固定起点、现实消费者、不能原子迁移的原因和退出条件；不能用曾经做过一次实验代替这些证据。已发布Audit记录的编码/哈希和安装器的效果前拒绝，仍是当前必须保持的合同，不与未发布IAM中间版本测试混同。旧binary实验的历史运行证据保留在Git及其原交付记录，不作为后续默认完整矩阵。联调消费者在各自工作区使用固定提交原子对齐，不擅自清空对方环境。
 

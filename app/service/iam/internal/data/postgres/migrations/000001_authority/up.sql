@@ -1601,6 +1601,9 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE
     local_recovery boolean := expected_action = 'iam.installation-primary.credentials-recovered';
+    attachment_authority_evidence boolean := expected_action IN (
+        'iam.policy-attachment.created','iam.policy-attachment.revoked',
+        'iam.platform-policy-attachment.created','iam.platform-policy-attachment.revoked');
     platform_lifecycle boolean := expected_action IN (
         'iam.account.created','iam.account.disabled','iam.account.enabled','iam.account-root.credentials-recovered',
         'iam.tenant.created','iam.tenant.disabled','iam.tenant.enabled','iam.tenant-administrator.recovered',
@@ -1616,6 +1619,8 @@ BEGIN
        OR jsonb_typeof(submitted_event->'action') <> 'string'
        OR jsonb_typeof(submitted_event->'result') <> 'string'
        OR jsonb_typeof(submitted_event->'requestDigest') <> 'string'
+       OR (submitted_event ? 'authorityEvidenceDigest'
+            AND jsonb_typeof(submitted_event->'authorityEvidenceDigest') <> 'string')
        OR jsonb_typeof(submitted_event->'requestId') <> 'string'
        OR jsonb_typeof(submitted_event->'correlationId') <> 'string'
        OR jsonb_typeof(submitted_event->'occurredAt') <> 'string'
@@ -1629,6 +1634,7 @@ BEGIN
        OR (submitted_event - ARRAY[
             'apiVersion', 'kind', 'eventId', 'tenantId', 'installationId', 'actor',
             'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
+            'authorityEvidenceDigest',
             'requestId', 'correlationId', 'operationId', 'traceparent',
             'occurredAt'
        ]) <> '{}'::jsonb
@@ -1703,6 +1709,10 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_event->>'requestDigest', '') COLLATE "C"
             !~ '^sha256:[0-9a-f]{64}$'
+       OR (attachment_authority_evidence AND COALESCE(
+            submitted_event->>'authorityEvidenceDigest','') COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$')
+       OR (NOT attachment_authority_evidence AND submitted_event ? 'authorityEvidenceDigest')
        OR COALESCE(submitted_event->>'requestId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_event->>'correlationId', '') COLLATE "C"
@@ -4192,6 +4202,9 @@ BEGIN
        OR policy.resource_version<>submitted_policy_version THEN
         RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='policy revision conflicts';
     END IF;
+    submitted_audit_event:=jsonb_set(submitted_audit_event,'{authorityEvidenceDigest}',
+      to_jsonb(iam.policy_attachment_authority_evidence_digest(
+        submitted_audit_event->>'requestDigest',delegation)),true);
     PERFORM iam.assert_audit_event(submitted_audit_event,submitted_tenant_id,event_action,'POLICY_ATTACHMENT',submitted_attachment_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_actor_principal_id,submitted_audit_event);
     IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM submitted_decision_id THEN
@@ -4206,6 +4219,7 @@ BEGIN
                AND event_document->>'action'=event_action AND event_document#>>'{target,id}'=stored.id
                AND event_document->>'requestId'=submitted_audit_event->>'requestId'
                AND event_document->>'requestDigest'=submitted_audit_event->>'requestDigest'
+               AND event_document->>'authorityEvidenceDigest'=submitted_audit_event->>'authorityEvidenceDigest'
                AND event_document#>>'{actor,id}'=submitted_actor_principal_id) THEN
             RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='attachment intent conflicts';
         END IF;
@@ -4240,6 +4254,7 @@ DECLARE
     initial_target_id text;
     initial_policy_id text;
     initial_scope text;
+    delegation jsonb;
 BEGIN
     IF COALESCE(submitted_tenant_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_attachment_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -4290,8 +4305,11 @@ BEGIN
                     ELSE 'iam.policy-attachment.revoked' END;
     PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
         action_name,'POLICY_ATTACHMENT',submitted_attachment_id,'INSTANCE',NULL);
-    PERFORM iam.lock_policy_attachment_delegation(submitted_tenant_id,submitted_actor_principal_id,
+    delegation:=iam.lock_policy_attachment_delegation(submitted_tenant_id,submitted_actor_principal_id,
         submitted_decision_id,action_name,stored.target_kind,stored.target_id,stored.authority_scope,stored.policy_id);
+    IF delegation IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='policy attachment delegation is unavailable';
+    END IF;
     SELECT * INTO stored FROM iam.policy_attachments
      WHERE tenant_id=submitted_tenant_id AND id=submitted_attachment_id FOR UPDATE;
     IF NOT FOUND OR stored.target_kind IS DISTINCT FROM initial_target_kind
@@ -4302,6 +4320,9 @@ BEGIN
     IF stored.target_kind='USER' AND stored.policy_id='system.account-administrator' AND EXISTS (
         SELECT 1 FROM iam.account_roots WHERE account_id=submitted_tenant_id AND principal_id=stored.target_id
     ) THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary authority is protected'; END IF;
+    submitted_audit_event:=jsonb_set(submitted_audit_event,'{authorityEvidenceDigest}',
+      to_jsonb(iam.policy_attachment_authority_evidence_digest(
+        submitted_audit_event->>'requestDigest',delegation)),true);
     PERFORM iam.assert_audit_event(submitted_audit_event,submitted_tenant_id,event_action,'POLICY_ATTACHMENT',submitted_attachment_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_actor_principal_id,submitted_audit_event);
     IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM submitted_decision_id THEN
@@ -4313,6 +4334,7 @@ BEGIN
             AND event_document->>'action'=event_action AND event_document#>>'{target,id}'=stored.id
             AND event_document->>'requestId'=submitted_audit_event->>'requestId'
             AND event_document->>'requestDigest'=submitted_audit_event->>'requestDigest'
+            AND event_document->>'authorityEvidenceDigest'=submitted_audit_event->>'authorityEvidenceDigest'
             AND event_document#>>'{actor,id}'=submitted_actor_principal_id
         ) THEN RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='revocation intent conflicts'; END IF;
         RETURN QUERY SELECT stored.resource_version,stored.revoked_at,false;
