@@ -111,6 +111,8 @@
 
 后继修正不复制canonical解码器：数据库查询为同一Audit记录的原文与canonical行同时携带该行权威`event_document`，严格解码且验证SourceAudit后，原文要求逐字节相同，canonical则由唯一`auditv1.CanonicalizeEvent`重建并逐字节相同，才能从原事件的封闭action与服务端ID推导低熵结构值。错配原文、改写canonical、canonical反向冒充权威事件及无效SourceAudit均失败关闭；非Audit来源仍无例外。修正后专属正反例、整个authorityprocess/architecture race、全仓race及vet通过；本地无Docker/PG18，故仍需新的精确远端真库成功证据。
 
+该真库证据已由生产代码修正`120c74945b27a1d863ab978ab174787b8bfdcb6b`及其精确证据头`1ef064768b4c06de7149a2711bac0c364130dcb2`的[Verification 37715120172](https://github.com/xiak/matrix/actions/runs/37715120172)关闭：attempt 1共十六个执行job及最终`authority-process`汇总，十七项均`completed/success`。原失败路径`authority-runtime`在20分25秒内完成，`TestIndependentIAMAuditAndPaaSProcesses`以236.75秒通过，`TestAuthorityPlaintextInspection`及其原文/canonical权威来源、错配、伪装和无效来源正反例以0.06秒通过；`authority-capacity`在8分29秒内完成，原容量与密码历史容量分别以132.57秒和278.54秒通过。日志不再出现`invalid Audit access plaintext inspection source`或原低熵误报。该结果接受当前固定源码的扫描器回归及其PG18门禁，不替代IAM67/Audit35/PaaS3+`contractRevision=15`的签名A/B生命周期或LIVE UI验收。
+
 AC-11 的服务副本证据：2026-09-11 现有 `TestIndependentIAMAuditAndPaaSProcesses` 在本任务独立 PG18 下通过，两个真实 IAM 进程分别使用最多 2 连接的受限登录。原实例会话可在另一实例使用，跨副本 grant/revoke 与 session revoke 生效；原实例停止后另一实例仍正确允许租户读取并拒绝已撤平台权限；仅副本登录 NOLOGIN+断开该登录连接期间返回 503，恢复后继续工作。原 5721 保留升级与该组合门禁合计 56.307s。没有负载均衡自动切换、数据库主备切换、容量/公平性 SLO 或完整 HA 验收结论，AC-11 尚未满足。
 
 ### 受限运行测量首片
