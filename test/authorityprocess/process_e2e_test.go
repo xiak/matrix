@@ -12710,21 +12710,21 @@ func assertAuthorityPlaintextAbsent(
 	if earlier.Err() != nil {
 		t.Fatal("incomplete synthetic OTP chronology")
 	}
-	rows, err := admin.Query(ctx, `SELECT 'iam.outbox',event_document::text FROM iam.audit_outbox
-		UNION ALL SELECT 'paas.outbox',document::text FROM paas.audit_outbox
-		UNION ALL SELECT 'paas.operation',document::text FROM paas.operations
-		UNION ALL SELECT 'managedservice.outbox',document::text FROM managedservice.audit_outbox
-		UNION ALL SELECT 'managedservice.operation',row_to_json(o)::text FROM managedservice.operations o
-		UNION ALL SELECT 'audit.document.' || source,event_document::text FROM audit.records
-		UNION ALL SELECT 'audit.canonical.' || source,canonical_document FROM audit.records
-		UNION ALL SELECT 'iam.local-recovery',row_to_json(r)::text FROM iam.local_credential_recoveries r`)
+	rows, err := admin.Query(ctx, `SELECT 'iam.outbox',event_document::text,''::text FROM iam.audit_outbox
+		UNION ALL SELECT 'paas.outbox',document::text,''::text FROM paas.audit_outbox
+		UNION ALL SELECT 'paas.operation',document::text,''::text FROM paas.operations
+		UNION ALL SELECT 'managedservice.outbox',document::text,''::text FROM managedservice.audit_outbox
+		UNION ALL SELECT 'managedservice.operation',row_to_json(o)::text,''::text FROM managedservice.operations o
+		UNION ALL SELECT 'audit.document.' || source,event_document::text,event_document::text FROM audit.records
+		UNION ALL SELECT 'audit.canonical.' || source,canonical_document,event_document::text FROM audit.records
+		UNION ALL SELECT 'iam.local-recovery',row_to_json(r)::text,''::text FROM iam.local_credential_recoveries r`)
 	if err != nil {
 		t.Fatal("inspect authority plaintext storage")
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var source, document string
-		if rows.Scan(&source, &document) != nil {
+		var source, document, auditAuthorityDocument string
+		if rows.Scan(&source, &document, &auditAuthorityDocument) != nil {
 			t.Fatal("read authority plaintext inspection")
 		}
 		structuralLowEntropy := map[string]struct{}{}
@@ -12748,7 +12748,7 @@ func assertAuthorityPlaintextAbsent(
 				structuralLowEntropy[operation.TerminalAt.Format(time.RFC3339Nano)] = struct{}{}
 			}
 		}
-		auditStructural, err := auditAccessStructuralLowEntropy(source, document)
+		auditStructural, err := auditAccessStructuralLowEntropy(source, document, auditAuthorityDocument)
 		if err != nil {
 			t.Fatal("invalid Audit access plaintext inspection source")
 		}
@@ -12912,14 +12912,25 @@ func isGeneratedProductRequestID(value string) bool {
 	return true
 }
 
-func auditAccessStructuralLowEntropy(source, document string) (map[string]struct{}, error) {
+func auditAccessStructuralLowEntropy(source, inspectedDocument, authorityDocument string) (map[string]struct{}, error) {
 	result := map[string]struct{}{}
 	if source != "audit.document.AUDIT" && source != "audit.canonical.AUDIT" {
 		return result, nil
 	}
 	var event auditv1.Event
-	if auditv1.DecodeRequest(strings.NewReader(document), &event) != nil {
+	if auditv1.DecodeRequest(strings.NewReader(authorityDocument), &event) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceAudit, event) != nil {
 		return nil, errors.New("invalid Audit record document")
+	}
+	if source == "audit.document.AUDIT" {
+		if inspectedDocument != authorityDocument {
+			return nil, errors.New("Audit record document differs from its authority")
+		}
+	} else {
+		canonical, _, err := auditv1.CanonicalizeEvent(auditv1.SourceAudit, event)
+		if err != nil || canonical != inspectedDocument {
+			return nil, errors.New("Audit canonical document differs from its authority")
+		}
 	}
 	if isServerGeneratedAuditAccessEvent(event) {
 		result[event.RequestID] = struct{}{}
@@ -13076,18 +13087,31 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 					access.InstallationID = "installation-one"
 				}
 				encoded, err := json.Marshal(access)
-				if err != nil || auditv1.ValidateEventForSource(auditv1.SourceAudit, access) != nil {
+				canonical, _, canonicalErr := auditv1.CanonicalizeEvent(auditv1.SourceAudit, access)
+				if err != nil || canonicalErr != nil || auditv1.ValidateEventForSource(auditv1.SourceAudit, access) != nil {
 					t.Fatal("invalid audited access request identity fixture")
 				}
-				for _, source := range []string{"audit.document.AUDIT", "audit.canonical.AUDIT"} {
-					structural, structuralErr := auditAccessStructuralLowEntropy(source, string(encoded))
-					location, scanErr := authorityPlaintextLocationWithStructural(string(encoded), nil, structural, code)
+				for _, sample := range []struct{ source, document string }{
+					{"audit.document.AUDIT", string(encoded)},
+					{"audit.canonical.AUDIT", canonical},
+				} {
+					structural, structuralErr := auditAccessStructuralLowEntropy(sample.source, sample.document, string(encoded))
+					location, scanErr := authorityPlaintextLocationWithStructural(sample.document, nil, structural, code)
 					if structuralErr != nil || scanErr != nil || location != "" {
 						t.Fatal("server-generated audited access request identity was treated as persisted OTP")
 					}
 				}
+				if _, err := auditAccessStructuralLowEntropy("audit.document.AUDIT", canonical, string(encoded)); err == nil {
+					t.Fatal("mismatched Audit event document obtained a structural exception")
+				}
+				if _, err := auditAccessStructuralLowEntropy("audit.canonical.AUDIT", canonical+" ", string(encoded)); err == nil {
+					t.Fatal("mismatched Audit canonical document obtained a structural exception")
+				}
+				if _, err := auditAccessStructuralLowEntropy("audit.canonical.AUDIT", canonical, canonical); err == nil {
+					t.Fatal("canonical envelope was accepted as the authoritative Audit event")
+				}
 				for _, source := range []string{"iam.outbox", "audit.document.IAM", "audit.canonical.PAAS"} {
-					structural, structuralErr := auditAccessStructuralLowEntropy(source, string(encoded))
+					structural, structuralErr := auditAccessStructuralLowEntropy(source, string(encoded), string(encoded))
 					location, scanErr := authorityPlaintextLocationWithStructural(string(encoded), nil, structural, code)
 					if structuralErr != nil || scanErr != nil || location == "" {
 						t.Fatal("non-Audit source escaped plaintext inspection")
@@ -13121,9 +13145,9 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 			}(),
 		} {
 			changedEncoded, marshalErr := json.Marshal(changed)
-			structural, structuralErr := auditAccessStructuralLowEntropy("audit.document.AUDIT", string(changedEncoded))
+			structural, structuralErr := auditAccessStructuralLowEntropy("audit.document.AUDIT", string(changedEncoded), string(changedEncoded))
 			location, scanErr := authorityPlaintextLocationWithStructural(string(changedEncoded), nil, structural, code)
-			if marshalErr != nil || structuralErr != nil || scanErr != nil || location == "" {
+			if marshalErr != nil || scanErr != nil || structuralErr == nil && location == "" {
 				t.Fatal("caller-controlled or noncanonical Audit access identity escaped plaintext inspection")
 			}
 		}

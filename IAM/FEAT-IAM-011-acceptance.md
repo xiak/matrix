@@ -107,6 +107,8 @@
 
 同一精确CI不能记作整轮成功：`authority-runtime`在实际多进程路径完成主要业务断言后，凭据明文扫描器把当前六位TOTP与Audit服务端随机生成的`audit.platform-records.read` request/correlation ID中的相同子串判为泄露并失败。该结果不被回填；固定`ea39b029e`把低熵结构例外收窄到数据库中`source=AUDIT`的四个封闭读/验链事实、合法SourceAudit事件、`request-<32hex>`形状及相同correlation，其他数据库来源、错误action、非标准ID、错配correlation、精确验证码和所有长凭据继续失败。该修复已通过全仓无缓存race、全仓vet、architecture及专属正反例，但新的精确独立CI成功前仍不能代替远端真实门禁。
 
+精确修复SHA `8e2c82ca8edddcc036db3780d832a160ee0adbc0`的[Verification 37701822012](https://github.com/xiak/matrix/actions/runs/37701822012)再次在`authority-runtime`失败，但失败已前移为扫描器将`audit.canonical.AUDIT`的canonical envelope当成原始`AuditEvent`严格解码，报告`invalid Audit access plaintext inspection source`；原业务流程和第一组会话/密码/TOTP门禁均已通过。后继修正不复制canonical解码器：数据库查询为同一Audit记录的原文与canonical行同时携带该行权威`event_document`，严格解码且验证SourceAudit后，原文要求逐字节相同，canonical则由唯一`auditv1.CanonicalizeEvent`重建并逐字节相同，才能从原事件的封闭action与服务端ID推导低熵结构值。错配原文、改写canonical、canonical反向冒充权威事件及无效SourceAudit均失败关闭；非Audit来源仍无例外。修正后专属正反例、整个authorityprocess/architecture race、全仓race及vet通过；本地无Docker/PG18，故仍需新的精确远端真库成功证据。
+
 AC-11 的服务副本证据：2026-09-11 现有 `TestIndependentIAMAuditAndPaaSProcesses` 在本任务独立 PG18 下通过，两个真实 IAM 进程分别使用最多 2 连接的受限登录。原实例会话可在另一实例使用，跨副本 grant/revoke 与 session revoke 生效；原实例停止后另一实例仍正确允许租户读取并拒绝已撤平台权限；仅副本登录 NOLOGIN+断开该登录连接期间返回 503，恢复后继续工作。原 5721 保留升级与该组合门禁合计 56.307s。没有负载均衡自动切换、数据库主备切换、容量/公平性 SLO 或完整 HA 验收结论，AC-11 尚未满足。
 
 ### 受限运行测量首片
