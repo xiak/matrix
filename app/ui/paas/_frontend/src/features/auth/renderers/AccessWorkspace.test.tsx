@@ -1838,6 +1838,10 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("button", { name: "Remove MatrixReadOnlyAccess" })).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Join groups" }));
     await user.click(screen.getByRole("checkbox", { name: "DeliveryTeam" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByRole("alert").textContent).toContain("Choose a delegation ceiling");
+    await user.click(screen.getByLabelText("Permission boundary"));
+    await user.click(screen.getByRole("option", { name: /ReleaseOperatorBoundary/ }));
     await user.click(screen.getByRole("button", { name: "User information" }));
     expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe("Wizard User");
     await user.click(screen.getByRole("button", { name: "Next" }));
@@ -1850,11 +1854,13 @@ describe("CAM-style access workspace", () => {
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(screen.getByText("MatrixReadOnlyAccess")).toBeTruthy();
     expect(screen.getByText("DeliveryTeam")).toBeTruthy();
+    expect(screen.getByText("ReleaseOperatorBoundary", { exact: true })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Confirm mock user" }));
     await screen.findByRole("heading", { name: "User created" });
     const saved = await extension.read("preview");
     expect(saved.userProfiles["principal-wizard.new"]?.tags).toEqual([{ key: "team", value: "platform" }]);
     expect(saved.userPolicies["principal-wizard.new"]).toEqual(["policy-read"]);
+    expect(saved.userBoundaries["principal-wizard.new"]).toBe("policy-delivery-boundary");
     expect(repository.execute).not.toHaveBeenCalled();
     expect(sessionStorage.length).toBe(0);
   });

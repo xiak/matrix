@@ -1318,26 +1318,18 @@ describe("account access", () => {
     expect(await screen.findByRole("table", { name: "租户用户列表" })).toBeTruthy();
   });
 
-  it("separates the resource owner from subusers and defaults creation to no business grant", async () => {
+  it("separates the resource owner from subusers and does not call the superseded boundary-less LIVE create contract", async () => {
     const { user, repository, view } = await openAccess();
     await screen.findByText("Developer A");
     expect(screen.queryByRole("button", { name: "管理 admin" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "创建用户" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("form", { name: "创建子用户" })).toBeTruthy();
-    await user.type(screen.getByLabelText(/^子用户名/), "new.developer");
-    await user.type(screen.getByLabelText("用户显示名称"), "New Developer");
-    await user.type(screen.getByLabelText(/^初始密码/), "New-Child-Test-Password-49!");
-    await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByText("新用户将按默认拒绝创建，不在创建请求中捆绑权限。")).toBeTruthy();
-    expect(screen.queryByRole("combobox", { name: /^初始权限/ })).toBeNull();
+    expect(screen.queryByRole("form", { name: "创建子用户" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "安全委派创建尚未接入" })).toBeTruthy();
+    expect(screen.getByText(/用户 \+ 初始凭据 \+ 权限边界/)).toBeTruthy();
+    expect(screen.queryByLabelText(/^初始密码/)).toBeNull();
     expect(repository.execute).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.queryByDisplayValue("New-Child-Test-Password-49!")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "确认创建用户" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-user", loginName: "new.developer", displayName: "New Developer", initialPassword: "New-Child-Test-Password-49!" }));
     expect(view.container.textContent).not.toContain(credential);
-    expect(view.container.innerHTML).not.toContain("New-Child-Test-Password-49!");
   });
 
   it("sets an independent account alias with an optimistic version and shows both login forms", async () => {

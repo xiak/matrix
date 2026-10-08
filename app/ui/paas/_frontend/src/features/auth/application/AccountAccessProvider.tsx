@@ -657,7 +657,13 @@ type AccountAccess = {
 };
 
 const AccountAccessContext = createContext<AccountAccess | null>(null);
-type AccountCapabilities = Pick<AccountAccessScene, "canListUsers" | "canListGroups" | "canListRoles" | "canReadAccounts" | "canCreateAccounts" | "canViewPolicies"> & { hasPreviewWorkspace: boolean; supportsLiveRoles: boolean };
+type AccountCapabilities = Pick<AccountAccessScene, "canListUsers" | "canListGroups" | "canListRoles" | "canReadAccounts" | "canCreateAccounts" | "canViewPolicies"> & {
+  hasPreviewWorkspace: boolean;
+  supportsLiveRoles: boolean;
+  supportsLiveAccessKeys: boolean;
+  supportsLiveAccessAnalysis: boolean;
+  supportsLiveSecurityReports: boolean;
+};
 const AccountCapabilitiesContext = createContext<AccountCapabilities | null>(null);
 
 export function accountError(error: unknown): AccountError {
@@ -928,8 +934,24 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const canViewPolicies = Boolean(scene?.canViewPolicies);
   const hasPreviewWorkspace = Boolean(repository.workspace);
   const supportsLiveRoles = Boolean(repository.roles);
+  const supportsLiveAccessKeys = Boolean(!repository.workspace && repository.accessKeys && canListUsers);
+  const supportsLiveAccessAnalysis = Boolean(!repository.workspace && repository.accessAnalysis);
+  const supportsLiveSecurityReports = Boolean(!repository.workspace && repository.securityReports);
   // Navigation observes permission changes, not every form's pending/error state.
-  const capabilities = useMemo(() => ({ canListUsers, canListGroups, canListRoles, canReadAccounts, canCreateAccounts, canViewPolicies, hasPreviewWorkspace, supportsLiveRoles }), [canCreateAccounts, canListGroups, canListRoles, canListUsers, canReadAccounts, canViewPolicies, hasPreviewWorkspace, supportsLiveRoles]);
+  const capabilities = useMemo(() => ({
+    canListUsers,
+    canListGroups,
+    canListRoles,
+    canReadAccounts,
+    canCreateAccounts,
+    canViewPolicies,
+    hasPreviewWorkspace,
+    supportsLiveRoles,
+    supportsLiveAccessKeys,
+    supportsLiveAccessAnalysis,
+    supportsLiveSecurityReports
+  }), [canCreateAccounts, canListGroups, canListRoles, canListUsers, canReadAccounts, canViewPolicies, hasPreviewWorkspace,
+    supportsLiveAccessAnalysis, supportsLiveAccessKeys, supportsLiveRoles, supportsLiveSecurityReports]);
 
   useEffect(() => {
     if (!active || !credential || !tenantId) return;

@@ -433,13 +433,15 @@ describe("access workspace preview invariants", () => {
     resetPreviewEnvironment();
     const extension = previewAccountRepository.workspace!;
     const before = await extension.read(previewCredential);
-    const command = { kind: "create-subuser" as const, loginName: "wizard.test", displayName: "Wizard Test", profile: { consoleAccess: true, programmaticAccess: true, passwordResetRequired: true, loginProtection: true, tags: [{ key: "team", value: "platform" }], password: "MUST_NOT_BE_RETAINED" }, policyIds: ["policy-read"], groupIds: ["group-delivery"] };
+    const command = { kind: "create-subuser" as const, loginName: "wizard.test", displayName: "Wizard Test", profile: { consoleAccess: true, programmaticAccess: true, passwordResetRequired: true, loginProtection: true, tags: [{ key: "team", value: "platform" }], password: "MUST_NOT_BE_RETAINED" }, policyIds: ["policy-read"], groupIds: ["group-delivery"], boundaryPolicyId: "policy-delivery-boundary" };
     await expect(extension.execute(previewCredential, { ...command, groupIds: ["foreign-group"] })).rejects.toThrow("notFound");
+    await expect(extension.execute(previewCredential, { ...command, boundaryPolicyId: "foreign-boundary" })).rejects.toThrow("notFound");
     expect(await extension.read(previewCredential)).toEqual(before);
     expect((await previewAccountRepository.listUsers(previewCredential)).items.some((entry) => entry.user.loginName === command.loginName)).toBe(false);
     const result = await extension.execute(previewCredential, command);
     const principalId = "principal-wizard.test";
     expect(result.workspace.userPolicies[principalId]).toEqual(["policy-read"]);
+    expect(result.workspace.userBoundaries[principalId]).toBe("policy-delivery-boundary");
     expect(result.workspace.groups.find((group) => group.id === "group-delivery")?.memberIds).toContain(principalId);
     expect(result.workspace.userProfiles[principalId]?.tags).toEqual([{ key: "team", value: "platform" }]);
     expect(JSON.stringify(result.workspace)).not.toContain("MUST_NOT_BE_RETAINED");
@@ -455,11 +457,12 @@ describe("access workspace preview invariants", () => {
   });
   it("rejects preview creation without an access method or with duplicate tag keys", () => {
     const state = initialAccessWorkspace("org-xiak");
-    const command = { kind: "create-subuser" as const, loginName: "new.user", displayName: "New", profile: { consoleAccess: false, programmaticAccess: false, passwordResetRequired: true, loginProtection: true, tags: [] }, policyIds: [], groupIds: [] };
+    const command = { kind: "create-subuser" as const, loginName: "new.user", displayName: "New", profile: { consoleAccess: false, programmaticAccess: false, passwordResetRequired: true, loginProtection: true, tags: [] }, policyIds: [], groupIds: [], boundaryPolicyId: null };
     expect(() => applyAccessWorkspaceCommand(state, command, context)).toThrow("invalid");
     expect(() => applyAccessWorkspaceCommand(state, { ...command, profile: { ...command.profile, programmaticAccess: true, tags: [{ key: "team", value: "one" }, { key: " team ", value: "two" }] } }, context)).toThrow("invalid");
     const next = applyAccessWorkspaceCommand(state, { ...command, profile: { ...command.profile, programmaticAccess: true } }, context);
     expect(next.userProfiles["principal-new.user"]).toMatchObject({ consoleAccess: false, passwordResetRequired: false, loginProtection: false });
+    expect(next.userBoundaries["principal-new.user"]).toBeUndefined();
   });
   it("creates only an empty group and leaves policy attachments to a separate command", () => {
     const source = initialAccessWorkspace("org-xiak");

@@ -354,6 +354,15 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
     if (item.id === "groups") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canListGroups;
     if (item.id === "policies") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canViewPolicies;
     if (item.id === "roles") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.supportsLiveRoles && accountCapabilities.canListRoles;
+    if (item.id === "keys") return accountCapabilities.hasPreviewWorkspace
+      ? accountCapabilities.canListUsers
+      : accountCapabilities.supportsLiveAccessKeys;
+    if (item.id === "access-analysis") return accountCapabilities.hasPreviewWorkspace
+      ? accountCapabilities.canListUsers
+      : accountCapabilities.supportsLiveAccessAnalysis;
+    if (item.id === "security-reports") return accountCapabilities.hasPreviewWorkspace
+      ? accountCapabilities.canListUsers
+      : accountCapabilities.supportsLiveSecurityReports;
     if (item.id === "authorization-profiles") return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canListUsers;
     if (item.id === "tenants") return accountCapabilities.canReadAccounts;
     return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canListUsers;

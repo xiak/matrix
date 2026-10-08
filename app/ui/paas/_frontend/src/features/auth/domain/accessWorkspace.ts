@@ -92,7 +92,7 @@ export type AccessWorkspace = {
   testRequests: { id: "path" | "duplicate" | "tags" | "deny" | "boundary" | "ungranted"; request: AccessTestRequest }[];
 };
 export type AccessWorkspaceCommand =
-  | { kind: "create-subuser"; loginName: string; displayName: string; profile: PreviewUserProfile; policyIds: string[]; groupIds: string[] }
+  | { kind: "create-subuser"; loginName: string; displayName: string; profile: PreviewUserProfile; policyIds: string[]; groupIds: string[]; boundaryPolicyId: string | null }
   | { kind: "create-group"; name: string; description: string }
   | { kind: "update-group"; id: string; name: string; description: string }
   | { kind: "change-group-members"; id: string; added: string[]; removed: string[] }
@@ -232,10 +232,12 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       if (!/^[a-z][a-z0-9._-]{2,63}$/.test(command.loginName) || !command.displayName.trim() || command.displayName.length > 128 ||
         (!profile.consoleAccess && !profile.programmaticAccess) || profile.tags.length > 10 ||
         profile.tags.some((tag) => !tag.key.trim() || tag.key.length > 64 || tag.value.length > 128 || /[<>\u0000-\u001f]/.test(tag.key + tag.value)) ||
-        new Set(profile.tags.map((tag) => tag.key.trim())).size !== profile.tags.length || command.policyIds.length > 30 || command.groupIds.length > 30) invalid();
+        new Set(profile.tags.map((tag) => tag.key.trim())).size !== profile.tags.length || command.policyIds.length > 30 || command.groupIds.length > 30 ||
+        command.boundaryPolicyId !== null && typeof command.boundaryPolicyId !== "string") invalid();
       if (principalId === context.primaryPrincipalId || context.userIds.includes(principalId) || state.userProfiles[principalId]) throw new AccessWorkspaceError("duplicate");
       const selectedPolicies = policies(command.policyIds);
       command.groupIds.forEach((group) => exists(state.groups, group));
+      if (command.boundaryPolicyId !== null) state.userBoundaries[principalId] = exists(state.policies, command.boundaryPolicyId).id;
       state.userProfiles[principalId] = { consoleAccess: profile.consoleAccess, programmaticAccess: profile.programmaticAccess, passwordResetRequired: profile.consoleAccess && profile.passwordResetRequired, loginProtection: profile.consoleAccess && profile.loginProtection, tags: profile.tags.map((tag) => ({ key: tag.key.trim(), value: tag.value.trim() })) };
       state.userPolicies[principalId] = selectedPolicies;
       for (const group of state.groups) if (command.groupIds.includes(group.id)) group.memberIds.push(principalId);

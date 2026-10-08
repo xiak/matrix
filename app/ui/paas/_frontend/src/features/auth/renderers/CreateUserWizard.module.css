@@ -18,6 +18,8 @@
 .accessOptions, .tagActions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--xiak-spacing-roomy); }
 .securityOptions { display: grid; gap: var(--xiak-spacing-default); }
 .passwordField, .livePermissions { display: grid; gap: var(--xiak-spacing-roomy); max-width: 560px; }
+.boundarySection { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-comfortable); padding-top: var(--xiak-spacing-roomy); border-top: var(--xiak-border-subtle); max-width: 920px; }
+.boundarySection h3 { margin: 0 0 var(--xiak-spacing-tight); color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-semibold); }
 .error { color: var(--xiak-color-danger-text); font-size: var(--xiak-font-size-body); }
 .copyPane { padding: var(--xiak-spacing-roomy); }
 .tags { max-width: 920px; display: grid; gap: var(--xiak-spacing-roomy); }
