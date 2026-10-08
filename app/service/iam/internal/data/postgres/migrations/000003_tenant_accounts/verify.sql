@@ -4,7 +4,7 @@ BEGIN
         OR NOT iam.root_password_recovery_contract_ready() THEN
         RAISE EXCEPTION 'IAM security settings contract is unavailable';
     END IF;
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 68::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 69::bigint THEN
         RAISE EXCEPTION 'IAM account/proof schema version is incompatible';
     END IF;
     IF NOT EXISTS (
@@ -66,10 +66,10 @@ BEGIN
         OR NOT has_function_privilege('matrix_iam_api','iam.set_account_status(text,text,text,text,text,bigint,jsonb)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.set_account_alias(text,text,text,text,bigint,jsonb)','EXECUTE')
-        OR NOT has_function_privilege('matrix_iam_api','iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text,bigint)','EXECUTE')
+        OR NOT has_function_privilege('matrix_iam_api','iam.change_user(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text,bigint)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.read_user(text,text,text,text)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.update_user(text,text,text,text,text,bigint,jsonb)','EXECUTE')
-        OR NOT has_function_privilege('matrix_iam_api','iam.delete_user(text,text,text,text,bigint,jsonb)','EXECUTE')
+        OR NOT has_function_privilege('matrix_iam_api','iam.delete_user(text,text,text,text,bigint,text,jsonb)','EXECUTE')
         OR has_function_privilege('public','iam.create_account(text,text,text,text,text,text,text,text,text,jsonb)','EXECUTE')
         OR has_function_privilege('public','iam.read_account_as_platform(text,text,text,text)','EXECUTE')
         OR has_function_privilege('public','iam.read_root_password_recovery(text,text,text,text,bigint)','EXECUTE')
@@ -80,10 +80,10 @@ BEGIN
         OR has_function_privilege('matrix_iam_worker','iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.read_user(text,text,text,text)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.update_user(text,text,text,text,text,bigint,jsonb)','EXECUTE')
-        OR has_function_privilege('matrix_iam_worker','iam.delete_user(text,text,text,text,bigint,jsonb)','EXECUTE')
+        OR has_function_privilege('matrix_iam_worker','iam.delete_user(text,text,text,text,bigint,text,jsonb)','EXECUTE')
         OR has_function_privilege('public','iam.read_user(text,text,text,text)','EXECUTE')
         OR has_function_privilege('public','iam.update_user(text,text,text,text,text,bigint,jsonb)','EXECUTE')
-        OR has_function_privilege('public','iam.delete_user(text,text,text,text,bigint,jsonb)','EXECUTE')
+        OR has_function_privilege('public','iam.delete_user(text,text,text,text,bigint,text,jsonb)','EXECUTE')
         OR to_regprocedure('iam.can_produce_audit(text,text,text,text)') IS NOT NULL
         OR to_regprocedure('iam.is_bootstrap_administrator(text,text)') IS NOT NULL
         OR to_regprocedure('iam.read_organization(text,text,text,text)') IS NOT NULL

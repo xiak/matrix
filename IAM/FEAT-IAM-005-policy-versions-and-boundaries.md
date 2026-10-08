@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；安全委派的封存上限、受控对象闭包与事务证据设计已冻结，首个 CreateUser 原子边界纵向片已实现并通过本地契约、PG18、并发和滚动前驱门禁，后续凭据管理、Group/Policy/attachment 闭包、签名发布及 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；安全委派的封存上限、受控对象闭包与事务证据设计已冻结。CreateUser 原子边界已固定于`a477e381`；同一封存上限内的停复用、密码重置和删除已通过本地契约、PG18、并发、自然会话过期、独立进程及滚动前驱门禁，当前候选仍待独立CI。Group/Policy/attachment 闭包、签名发布及 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -308,13 +308,17 @@ CurrentIdentity/capabilities 与所有目录每页重新调用当前 PDP；curso
 
 Allow/Deny/边界交集表、条件缺失/类型/大小攻击、跨账号资源与 namespace、未知版本/Action、显式 Deny 全来源优先；真实数据库改版/附件/边界并发，旧 session 下次请求立即反映；旧事实仍可验证投递；UI 与 API 使用同一文档。fuzz 只证明当前 grammar 不崩溃且失败关闭，不快照实现细节。
 
-### 安全委派 CreateUser 纵向片证据
+### 安全委派用户创建与同边界管理纵向片证据
 
-当前请求契约要求 `permissionBoundary` 属性必须出现：原 Account Root 只能用显式 `null` 表示创建无普通边界 USER；非 root 必须提交准确 `policyId` 与 `policyResourceVersion`。旧的字段缺失 wire 只留在唯一固定 IAM67 前驱程序的测试客户端，当前 API、OpenAPI、示例和所有当前调用者不保留缺失旁路。请求摘要绑定这项选择；调用者不能以 header、target、cursor 或默认值改变它。
+当前请求契约要求 `permissionBoundary` 属性必须出现：原 Account Root 只能用显式 `null` 表示创建无普通边界 USER；非 root 必须提交准确 `policyId` 与 `policyResourceVersion`。字段缺失 wire 已随滚动窗口前移从当前 API、OpenAPI、示例和唯一前驱客户端删除，旧形状只保留在 Git 固定历史中，不作为兼容入口。请求摘要绑定这项选择；调用者不能以 header、target、cursor 或默认值改变它。
 
 当前 `iam.create_user` 在同一 SERIALIZABLE 事务内重检活跃 Account、直接 USER actor、当前 bearer Session/credential generation、原 Root 关系、平台绑定、当前 User boundary、CUSTOMER/TENANT ceiling Policy/default version 和原授权决定，然后原子写入 USER、初始凭据、login index、可选 boundary 与单一 `iam.user.created` 事实。普通管理 Action 而没有 boundary、显式 null、不同/陈旧/跨账号/退休 boundary、SYSTEM policy 充当委派 ceiling 及平台身份均拒绝；其中 SYSTEM 负向用例先取得真实 Allow decision，再由存储事务拒绝，证明不是客户端或 PDP 偶然隐藏。Root 仍可显式创建无边界或有合法边界 USER，但没有因此取得 PLATFORM_OPERATOR。
 
-本任务专属 PostgreSQL 18 的最终聚焦 race 门禁 37.828s 通过：创建先进入写事务时，Root 的边界移除真实等待，创建的 USER 带原 ceiling 完整提交后移除才完成；Root 已提交移除后，同一仍有效 Session 的新创建返回 403，且没有 principal、credential、login、boundary 或成功事实。最终完整 `TestIAMPolicyAuthorityStoragePostgres` 216.928s 通过，保留原策略/组/边界/凭据竞争、不可变 evidence、schema/bootstrap 重放及受限存储攻击。固定 IAM67 程序产生真实账号、会话、MFA、恢复、策略/附件、完成记录、receipt、canonical/proof 后升级到 IAM68 的唯一滚动前驱门禁 158.131s 通过；旧 wire 仅用于产生前驱数据，当前重启、等值重放和历史 proof 均未复活权限。当前完整源码 profile 为 IAM68/Audit35/PaaS3、`contractRevision=16`；这不是跨 profile 签名安装兼容声明，也不代表 LANG-08 余下闭包或 UI 已验收。
+本任务专属 PostgreSQL 18 的首片聚焦 race 门禁 37.828s 通过：创建先进入写事务时，Root 的边界移除真实等待，创建的 USER 带原 ceiling 完整提交后移除才完成；Root 已提交移除后，同一仍有效 Session 的新创建返回 403，且没有 principal、credential、login、boundary 或成功事实。完整 `TestIAMPolicyAuthorityStoragePostgres` 216.928s 通过，保留原策略/组/边界/凭据竞争、不可变 evidence、schema/bootstrap 重放及受限存储攻击。该生产片固定为`a477e38174763bb88b4401b33a32b027ed34540a`，profile 为 IAM68/Audit35/PaaS3、`contractRevision=16`。其[Verification 37816414824](https://github.com/xiak/matrix/actions/runs/37816414824)的`authority-session-idle`揭示原安全设置夹具仍让无边界普通管理员创建 USER，整轮不能记为成功；不能用同一 run 已通过的任务覆盖该失败。
+
+后继纵向片把 status、password reset 和 delete 统一收进受限存储的同一管理屏障：请求必须来自当前有效直接 USER Session，普通管理员及目标 USER 必须仍绑定准确相同的 CUSTOMER/TENANT ceiling Policy/default version/digest/编译证据；Root 保留原有管理路径。无边界、不同或 SYSTEM ceiling、原 Root、平台绑定、跨 Account、自身目标、陈旧修订和已撤销 Session 均失败关闭。密码哈希仍在事务外计算，但准备和最终提交各自重新验证同一 bearer、当前决定与上限；status、reset、delete、边界及平台附件写入使用稳定 USER 锁序。删除只终结目标凭据与当前边界，不改变账号资源、工作负载或历史关系/事实。
+
+本任务独立 PG18 的同边界管理聚焦 race 39.38s、完整策略存储 315.98s、IAM HTTP 115.77s、当前提交的真实五分钟自然 idle 383.26s（package 386.855s）及双 IAM/Audit/PaaS 进程 247.84s均通过。门禁覆盖同边界创建→重置→停复用→删除、临时会话撤销、三条准确成功事实、错误 ceiling 无部分状态、reset 与 Root 边界移除的实际锁等待，以及安全设置夹具先封存边界再签发一次性证明；主体修订后的旧证明仍返回401，未为修复测试而放宽。修正后的完整安全设置 108.67s、StepUp 405.02s、设置竞争 102.56s及放宽窗口 118.05s 亦在四个新数据库串行通过：租户创建者以准确同边界的新 Session 工作，平台操作员只负责平台附件，安全设置提交终止的旧 Session 不被测试复活。真实 SMTP 子场景未配置并明确跳过，不计为邮件交付证据。固定`a477e381`的真实 IAM68 executable 产生保留数据后升级到 IAM69 的唯一滚动前驱门禁140.72s通过，当前 profile 为 IAM69/Audit35/PaaS3、`contractRevision=17`；当前全仓 race、vet、API 生成稳定及 diff 检查通过。独立CI和相同完整 profile 的签名发布尚未完成，因此本地证据不构成整个 LANG-08、跨 profile 安装兼容或 LIVE UI 验收。
 
 ### User 边界后端证据
 

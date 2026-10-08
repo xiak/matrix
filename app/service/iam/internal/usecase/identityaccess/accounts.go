@@ -1095,7 +1095,8 @@ func (service *Authority) SetUserStatus(ctx context.Context, credential iamv1.Se
 				return iamv1.User{}, err
 			}
 			return tx.ChangeUser(ctx, UserChange{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
-				PrincipalID: id, DecisionID: decision.ID, ResourceVersion: request.ResourceVersion, Status: &request.Status, AuditEvent: event})
+				ActorSessionID: subject.Subject.Session.ID,
+				PrincipalID:    id, DecisionID: decision.ID, ResourceVersion: request.ResourceVersion, Status: &request.Status, AuditEvent: event})
 		})
 }
 
@@ -1145,6 +1146,7 @@ func (service *Authority) DeleteUser(ctx context.Context, credential iamv1.Secre
 			}
 			return tx.DeleteUser(ctx, UserDeletionMutation{AccountID: subject.Subject.Organization.ID,
 				ActorPrincipalID: subject.Subject.Principal.ID, PrincipalID: id, DecisionID: decision.ID,
+				ActorSessionID:  subject.Subject.Session.ID,
 				ResourceVersion: request.ResourceVersion, AuditEvent: event})
 		})
 }
@@ -1171,7 +1173,8 @@ func (service *Authority) ResetUserPassword(ctx context.Context, credential iamv
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (PasswordReplacementMaterial, error) {
 			originalSession = subject.Subject.Session
 			return tx.ReadPasswordReset(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
-				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id, request.ResourceVersion)
+				ActorPrincipalID: subject.Subject.Principal.ID, ActorSessionID: subject.Subject.Session.ID,
+				DecisionID: decision.ID}, id, request.ResourceVersion)
 		})
 	if err != nil {
 		return iamv1.User{}, err
@@ -1193,7 +1196,8 @@ func (service *Authority) ResetUserPassword(ctx context.Context, credential iamv
 			if err != nil {
 				return iamv1.User{}, err
 			}
-			return tx.ChangeUser(ctx, UserChange{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, PrincipalID: id,
+			return tx.ChangeUser(ctx, UserChange{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				ActorSessionID: subject.Subject.Session.ID, PrincipalID: id,
 				DecisionID: decision.ID, ResourceVersion: request.ResourceVersion, PasswordHash: &hash, ExpectedPassword: &original, AuditEvent: event})
 		})
 }

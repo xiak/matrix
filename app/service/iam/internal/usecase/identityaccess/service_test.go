@@ -689,7 +689,8 @@ func TestAdministratorPasswordResetPreparesOutsideLocksAndRechecksAuthority(t *t
 		PasswordSettings: authority.DefaultPasswordSettings(), SettingsVersion: 1}
 	prepared, writes := false, 0
 	tx.passwordResetRead = func(read AccountRead, target iamv1.PrincipalID, version uint64) (PasswordReplacementMaterial, error) {
-		if read.AccountID != user.AccountID || read.ActorPrincipalID != tx.principal.ID || target != user.ID || version != user.ResourceVersion || read.DecisionID == "" {
+		if read.AccountID != user.AccountID || read.ActorPrincipalID != tx.principal.ID || read.ActorSessionID != login.Session.ID ||
+			target != user.ID || version != user.ResourceVersion || read.DecisionID == "" {
 			t.Fatal("password material read was not bound to the authorized original target")
 		}
 		prepared = true
@@ -699,7 +700,8 @@ func TestAdministratorPasswordResetPreparesOutsideLocksAndRechecksAuthority(t *t
 		if !prepared || mutation.ExpectedPassword == nil || mutation.ExpectedPassword.PasswordHash != material.PasswordHash ||
 			mutation.ExpectedPassword.CredentialGeneration != material.CredentialGeneration || mutation.ExpectedPassword.HistoryDigest != material.HistoryDigest ||
 			!slices.Equal(mutation.ExpectedPassword.PasswordHistory, material.PasswordHistory) ||
-			mutation.AccountID != user.AccountID || mutation.PrincipalID != user.ID || mutation.Status != nil || mutation.PasswordHash == nil {
+			mutation.AccountID != user.AccountID || mutation.ActorSessionID != login.Session.ID ||
+			mutation.PrincipalID != user.ID || mutation.Status != nil || mutation.PasswordHash == nil {
 			t.Fatal("final reset lost exact preparation")
 		}
 		matches, err := authority.NewPasswordHasher(nil).Verify(replacement, *mutation.PasswordHash)

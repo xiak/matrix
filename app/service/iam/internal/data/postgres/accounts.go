@@ -651,15 +651,18 @@ func (value *transaction) UpdateUser(ctx context.Context, mutation identityacces
 }
 
 func (value *transaction) DeleteUser(ctx context.Context, mutation identityaccess.UserDeletionMutation) (iamv1.UserDeletion, error) {
+	if iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil {
+		return iamv1.UserDeletion{}, identityaccess.ErrInvalidArgument
+	}
 	event, err := json.Marshal(mutation.AuditEvent)
 	if err != nil {
 		return iamv1.UserDeletion{}, identityaccess.ErrUnavailable
 	}
 	defer clear(event)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, `SELECT iam.delete_user($1,$2,$3,$4,$5,$6::jsonb)`,
+	err = value.tx.QueryRow(ctx, `SELECT iam.delete_user($1,$2,$3,$4,$5,$6,$7::jsonb)`,
 		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PrincipalID,
-		mutation.ResourceVersion, event).Scan(&encoded)
+		mutation.ResourceVersion, mutation.ActorSessionID, event).Scan(&encoded)
 	if err != nil {
 		return iamv1.UserDeletion{}, mapAuthorizationDatabaseError("delete IAM user", err)
 	}
@@ -676,11 +679,14 @@ func (value *transaction) DeleteUser(ctx context.Context, mutation identityacces
 }
 
 func (value *transaction) ReadPasswordReset(ctx context.Context, read identityaccess.AccountRead, user iamv1.PrincipalID, version uint64) (identityaccess.PasswordReplacementMaterial, error) {
+	if iamv1.ValidateID("actorSessionId", string(read.ActorSessionID)) != nil {
+		return identityaccess.PasswordReplacementMaterial{}, identityaccess.ErrInvalidArgument
+	}
 	var result identityaccess.PasswordReplacementMaterial
 	var history []string
 	var settings []byte
-	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.read_password_reset($1,$2,$3,$4,$5)",
-		read.AccountID, read.ActorPrincipalID, read.DecisionID, user, version).Scan(
+	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.read_password_reset($1,$2,$3,$4,$5,$6)",
+		read.AccountID, read.ActorPrincipalID, read.DecisionID, read.ActorSessionID, user, version).Scan(
 		&result.PasswordHash, &result.CredentialGeneration, &history, &result.HistoryDigest, &settings, &result.SettingsVersion)
 	if err != nil {
 		return identityaccess.PasswordReplacementMaterial{}, mapAuthorizationDatabaseError("read password reset", err)
@@ -720,6 +726,9 @@ func (value *transaction) ChangeUser(ctx context.Context, mutation identityacces
 	if (mutation.Status == nil) == (mutation.PasswordHash == nil) || (mutation.PasswordHash == nil) != (mutation.ExpectedPassword == nil) {
 		return iamv1.User{}, identityaccess.ErrInvalidArgument
 	}
+	if iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil {
+		return iamv1.User{}, identityaccess.ErrInvalidArgument
+	}
 	event, err := json.Marshal(mutation.AuditEvent)
 	if err != nil {
 		return iamv1.User{}, identityaccess.ErrUnavailable
@@ -741,9 +750,10 @@ func (value *transaction) ChangeUser(ctx context.Context, mutation identityacces
 		expectedGeneration, expectedHash, expectedHistory = expected.CredentialGeneration, string(expected.PasswordHash), expected.HistoryDigest
 		expectedSettings = expected.SettingsVersion
 	}
-	err = value.tx.QueryRow(ctx, `SELECT iam.change_user($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12)`,
-		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PrincipalID,
-		mutation.ResourceVersion, status, hash, event, expectedGeneration, expectedHash, expectedHistory, expectedSettings).Scan(&encoded)
+	err = value.tx.QueryRow(ctx, `SELECT iam.change_user($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13)`,
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.ActorSessionID,
+		mutation.PrincipalID, mutation.ResourceVersion, status, hash, event,
+		expectedGeneration, expectedHash, expectedHistory, expectedSettings).Scan(&encoded)
 	if err != nil {
 		return iamv1.User{}, mapAuthorizationDatabaseError("change IAM user", err)
 	}

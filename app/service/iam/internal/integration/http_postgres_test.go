@@ -519,10 +519,15 @@ func proveDelegatedUserCreation(t *testing.T, ctx context.Context, handler http.
 	call(http.MethodGet, "/v1/auth/me", root, nil, http.StatusOK, &current)
 	account := current.Account.ID
 	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
-		Statements: []iamv1.PolicyStatement{{SID: "delegated-user-create", Effect: iamv1.PolicyAllow,
-			Actions: []iamv1.Action{iamv1.ActionIAMUserCreate}, Resources: []iamv1.PolicyResourceSelector{{
-				Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(account),
-			}}}}}
+		Statements: []iamv1.PolicyStatement{
+			{SID: "delegated-user-create", Effect: iamv1.PolicyAllow,
+				Actions: []iamv1.Action{iamv1.ActionIAMUserCreate}, Resources: []iamv1.PolicyResourceSelector{{
+					Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(account),
+				}}},
+			{SID: "delegated-user-manage", Effect: iamv1.PolicyAllow,
+				Actions:   []iamv1.Action{iamv1.ActionIAMUserSetStatus, iamv1.ActionIAMUserPasswordReset, iamv1.ActionIAMUserDelete},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}},
+		}}
 	var ceiling iamv1.PolicyDetail
 	call(http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Delegated user ceiling",
 		Document: document, RequestID: "delegated-user-ceiling"}, http.StatusCreated, &ceiling)
@@ -619,6 +624,174 @@ func proveDelegatedUserCreation(t *testing.T, ctx context.Context, handler http.
 		targetBoundary.Policy.PolicyID != ceiling.Policy.ID {
 		t.Fatal("delegated target lost its atomic permission boundary")
 	}
+	t.Run("same_ceiling_user_credentials_and_status", func(t *testing.T) {
+		temporarySession := localRecoveryLogin(t, handler, target.LoginName+"@"+string(account), initialDeveloperPassword, true)
+		var reset iamv1.User
+		call(http.MethodPost, "/v1/users/"+string(target.ID)+":reset-password", managerSession, map[string]any{
+			"initialPassword": "Delegate-Target-Reset-Password-86!", "resourceVersion": target.ResourceVersion,
+			"requestId": "delegate-target-reset",
+		}, http.StatusOK, &reset)
+		if reset.ResourceVersion != target.ResourceVersion+1 || !reset.MustChangePassword {
+			t.Fatal("delegated password reset lost the target revision or forced-change boundary")
+		}
+		call(http.MethodGet, "/v1/auth/me", temporarySession, nil, http.StatusUnauthorized, nil)
+		var resetBoundary iamv1.UserPermissionBoundary
+		call(http.MethodGet, "/v1/users/"+string(target.ID)+"/permission-boundary", root, nil, http.StatusOK, &resetBoundary)
+		if resetBoundary.Policy == nil || resetBoundary.Policy.PolicyID != ceiling.Policy.ID ||
+			resetBoundary.ResourceVersion != reset.ResourceVersion {
+			t.Fatal("delegated password reset detached the sealed target boundary")
+		}
+		var disabled, enabled iamv1.User
+		call(http.MethodPost, "/v1/users/"+string(target.ID)+":set-status", managerSession, iamv1.SetUserStatusRequest{
+			Status: iamv1.PrincipalDisabled, ResourceVersion: reset.ResourceVersion, RequestID: "delegate-target-disable",
+		}, http.StatusOK, &disabled)
+		call(http.MethodPost, "/v1/users/"+string(target.ID)+":set-status", managerSession, iamv1.SetUserStatusRequest{
+			Status: iamv1.PrincipalActive, ResourceVersion: disabled.ResourceVersion, RequestID: "delegate-target-enable",
+		}, http.StatusOK, &enabled)
+		if enabled.Status != iamv1.PrincipalActive || enabled.ResourceVersion != disabled.ResourceVersion+1 {
+			t.Fatal("delegated status restoration lost its exact target state")
+		}
+		var enabledBoundary iamv1.UserPermissionBoundary
+		call(http.MethodGet, "/v1/users/"+string(target.ID)+"/permission-boundary", root, nil, http.StatusOK, &enabledBoundary)
+		if enabledBoundary.Policy == nil || enabledBoundary.Policy.PolicyID != ceiling.Policy.ID ||
+			enabledBoundary.ResourceVersion != enabled.ResourceVersion {
+			t.Fatal("delegated status changes detached the sealed target boundary")
+		}
+		target = enabled
+	})
+
+	t.Run("unbounded_and_different_ceiling_targets_are_closed", func(t *testing.T) {
+		unboundedTarget := createRootUser("delegate.unbounded.managed", "delegate-unbounded-managed-create")
+		call(http.MethodPost, "/v1/users/"+string(unboundedTarget.ID)+":set-status", managerSession, iamv1.SetUserStatusRequest{
+			Status: iamv1.PrincipalDisabled, ResourceVersion: unboundedTarget.ResourceVersion, RequestID: "delegate-unbounded-disable",
+		}, http.StatusForbidden, nil)
+		call(http.MethodPost, "/v1/users/"+string(unboundedTarget.ID)+":reset-password", managerSession, map[string]any{
+			"initialPassword": "Delegate-Unbounded-Reset-Password-87!", "resourceVersion": unboundedTarget.ResourceVersion,
+			"requestId": "delegate-unbounded-reset",
+		}, http.StatusForbidden, nil)
+		var empty, different iamv1.UserPermissionBoundary
+		path := "/v1/users/" + string(unboundedTarget.ID) + "/permission-boundary"
+		call(http.MethodGet, path, root, nil, http.StatusOK, &empty)
+		call(http.MethodPut, path, root, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+			ResourceVersion: empty.ResourceVersion, RequestID: "delegate-different-managed-boundary",
+		}, http.StatusOK, &different)
+		call(http.MethodPost, "/v1/users/"+string(unboundedTarget.ID)+":set-status", managerSession, iamv1.SetUserStatusRequest{
+			Status: iamv1.PrincipalDisabled, ResourceVersion: different.ResourceVersion, RequestID: "delegate-different-disable",
+		}, http.StatusForbidden, nil)
+		call(http.MethodPost, "/v1/users/"+string(current.User.ID)+":reset-password", managerSession, map[string]any{
+			"initialPassword": "Delegate-Root-Reset-Password-88!", "resourceVersion": current.User.ResourceVersion,
+			"requestId": "delegate-root-reset",
+		}, http.StatusForbidden, nil)
+	})
+
+	t.Run("same_ceiling_user_deletion", func(t *testing.T) {
+		var disposable iamv1.User
+		call(http.MethodPost, "/v1/users", managerSession, map[string]any{
+			"loginName": "delegate.disposable", "displayName": "Disposable bounded target", "initialPassword": initialDeveloperPassword,
+			"permissionBoundary": map[string]any{"policyId": ceiling.Policy.ID, "policyResourceVersion": ceiling.Policy.ResourceVersion},
+			"requestId":          "delegate-disposable-create",
+		}, http.StatusCreated, &disposable)
+		var disabled iamv1.User
+		call(http.MethodPost, "/v1/users/"+string(disposable.ID)+":set-status", managerSession, iamv1.SetUserStatusRequest{
+			Status: iamv1.PrincipalDisabled, ResourceVersion: disposable.ResourceVersion, RequestID: "delegate-disposable-disable",
+		}, http.StatusOK, &disabled)
+		var deleted iamv1.UserDeletion
+		call(http.MethodPost, "/v1/users/"+string(disposable.ID)+":delete", managerSession, iamv1.DeleteUserRequest{
+			ResourceVersion: disabled.ResourceVersion, RequestID: "delegate-disposable-delete",
+		}, http.StatusOK, &deleted)
+		if deleted.ID != disposable.ID || deleted.ResourceVersion != disabled.ResourceVersion+1 {
+			t.Fatal("delegated deletion lost its exact bounded target")
+		}
+		var credentials, activeBoundaries, facts int
+		if err := database.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2),
+			(SELECT count(*) FROM iam.user_permission_boundaries WHERE tenant_id=$1 AND user_id=$2 AND revoked_at IS NULL),
+			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{target,id}'=$2
+			 AND event_document->>'requestId' IN ('delegate-disposable-create','delegate-disposable-disable','delegate-disposable-delete'))`,
+			account, disposable.ID).Scan(&credentials, &activeBoundaries, &facts); err != nil || credentials != 0 || activeBoundaries != 0 || facts != 3 {
+			t.Fatalf("delegated deletion split state: credentials=%d boundaries=%d facts=%d err=%v", credentials, activeBoundaries, facts, err)
+		}
+	})
+
+	t.Run("password_reset_serializes_with_target_boundary", func(t *testing.T) {
+		var raceTarget iamv1.User
+		call(http.MethodPost, "/v1/users", managerSession, map[string]any{
+			"loginName": "delegate.reset.race", "displayName": "Reset boundary race target", "initialPassword": initialDeveloperPassword,
+			"permissionBoundary": map[string]any{"policyId": ceiling.Policy.ID, "policyResourceVersion": ceiling.Policy.ResourceVersion},
+			"requestId":          "delegate-reset-race-create",
+		}, http.StatusCreated, &raceTarget)
+		boundaryRacePath := "/v1/users/" + string(raceTarget.ID) + "/permission-boundary"
+		var raceBoundary iamv1.UserPermissionBoundary
+		call(http.MethodGet, boundaryRacePath, root, nil, http.StatusOK, &raceBoundary)
+		resetBody := mustIAMJSON(t, map[string]any{
+			"initialPassword": "Delegate-Reset-Race-Password-89!", "resourceVersion": raceTarget.ResourceVersion,
+			"requestId": "delegate-reset-race",
+		})
+		removeBody := mustIAMJSON(t, iamv1.RemoveUserPermissionBoundaryRequest{
+			ResourceVersion: raceBoundary.ResourceVersion, RequestID: "delegate-reset-race-remove-stale",
+		})
+		awaitReset, releaseReset := holdIAMRequest(t, ctx, database, "delegate-reset-race", true, auditv1.ActionIAMUserPasswordReset)
+		resetDone, removeDone := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			resetDone <- performIAMRequest(handler, http.MethodPost, "/v1/users/"+string(raceTarget.ID)+":reset-password", managerSession, resetBody)
+		}()
+		resetPID := awaitReset()
+		go func() {
+			removeDone <- performIAMRequest(handler, http.MethodDelete, boundaryRacePath, root, removeBody)
+		}()
+		wait, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var blocked bool
+			if err := database.QueryRow(wait, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+				WHERE datname=current_database() AND usename=$1 AND pid<>$2
+				  AND state='active' AND wait_event_type='Lock' AND $2=ANY(pg_blocking_pids(pid)))`,
+				iamHTTPTestRole, resetPID).Scan(&blocked); err != nil {
+				t.Fatal("observe boundary removal behind delegated password reset", err)
+			}
+			if blocked {
+				break
+			}
+			select {
+			case <-ticker.C:
+			case <-wait.Done():
+				t.Fatal("boundary removal did not serialize behind delegated password reset")
+			}
+		}
+		releaseReset()
+		var resetResponse, staleRemoval *httptest.ResponseRecorder
+		select {
+		case resetResponse = <-resetDone:
+		case <-ctx.Done():
+			t.Fatal("delegated password reset did not finish after its barrier")
+		}
+		select {
+		case staleRemoval = <-removeDone:
+		case <-ctx.Done():
+			t.Fatal("stale boundary removal did not finish after password reset")
+		}
+		var reset iamv1.User
+		if resetResponse.Code != http.StatusOK || json.Unmarshal(resetResponse.Body.Bytes(), &reset) != nil ||
+			staleRemoval.Code != http.StatusConflict || reset.ResourceVersion != raceTarget.ResourceVersion+1 {
+			t.Fatalf("reset/boundary outcomes reset=%d remove=%d", resetResponse.Code, staleRemoval.Code)
+		}
+		var currentBoundary, removedBoundary iamv1.UserPermissionBoundary
+		call(http.MethodGet, boundaryRacePath, root, nil, http.StatusOK, &currentBoundary)
+		if currentBoundary.Policy == nil || currentBoundary.Policy.PolicyID != ceiling.Policy.ID ||
+			currentBoundary.ResourceVersion != reset.ResourceVersion {
+			t.Fatal("winning password reset lost its target ceiling")
+		}
+		call(http.MethodDelete, boundaryRacePath, root, iamv1.RemoveUserPermissionBoundaryRequest{
+			ResourceVersion: currentBoundary.ResourceVersion, RequestID: "delegate-reset-race-remove-current",
+		}, http.StatusOK, &removedBoundary)
+		call(http.MethodPost, "/v1/users/"+string(raceTarget.ID)+":reset-password", managerSession, map[string]any{
+			"initialPassword": "Delegate-Reset-After-Removal-Password-91!", "resourceVersion": removedBoundary.ResourceVersion,
+			"requestId": "delegate-reset-after-removal",
+		}, http.StatusForbidden, nil)
+	})
 	t.Run("creation_linearizes_before_boundary_removal", func(t *testing.T) {
 		createBody := mustIAMJSON(t, map[string]any{
 			"loginName": "delegate.race.target", "displayName": "Racing bounded target", "initialPassword": initialDeveloperPassword,
@@ -716,26 +889,29 @@ func proveDelegatedUserCreation(t *testing.T, ctx context.Context, handler http.
 	})
 	var principalRows, credentialRows, loginRows, boundaryRows, createdFacts int
 	if err := database.QueryRow(ctx, `SELECT
-		(SELECT count(*) FROM iam.principals WHERE tenant_id=$1 AND id=$2 AND resource_version=1),
+		(SELECT count(*) FROM iam.principals WHERE tenant_id=$1 AND id=$2 AND resource_version=$4),
 		(SELECT count(*) FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2),
 		(SELECT count(*) FROM iam.login_index WHERE tenant_id=$1 AND principal_id=$2),
 		(SELECT count(*) FROM iam.user_permission_boundaries WHERE tenant_id=$1 AND user_id=$2 AND policy_id=$3 AND resource_version=1 AND revoked_at IS NULL),
 		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.user.created'
 		 AND event_document#>>'{target,id}'=$2 AND event_document->>'requestId'='delegate-target')`,
-		account, target.ID, ceiling.Policy.ID).Scan(&principalRows, &credentialRows, &loginRows, &boundaryRows, &createdFacts); err != nil ||
+		account, target.ID, ceiling.Policy.ID, target.ResourceVersion).Scan(&principalRows, &credentialRows, &loginRows, &boundaryRows, &createdFacts); err != nil ||
 		principalRows != 1 || credentialRows != 1 || loginRows != 1 || boundaryRows != 1 || createdFacts != 1 {
 		t.Fatalf("delegated creation split state: principal=%d credential=%d login=%d boundary=%d fact=%d err=%v",
 			principalRows, credentialRows, loginRows, boundaryRows, createdFacts, err)
 	}
-	var rejectedRows, rejectedFacts, systemAllowedDecisions int
+	var rejectedRows, rejectedFacts, rejectedManagementFacts, systemAllowedDecisions int
 	if err := database.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM iam.principals WHERE tenant_id=$1 AND login_name IN ('delegate.unbounded.target','delegate.system.target','delegate.null','delegate.different','delegate.stale','delegate.after.remove','delegate.removal.first.target')),
 		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.user.created'
 		 AND event_document->>'requestId' IN ('delegate-unbounded-target','delegate-system-target','delegate-null','delegate-different','delegate-stale','delegate-after-remove','delegate-removal-first-target')),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1
+		 AND event_document->>'requestId' IN ('delegate-unbounded-disable','delegate-unbounded-reset','delegate-different-disable','delegate-root-reset','delegate-reset-after-removal')),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id='delegate-system-target' AND allowed)`, account).
-		Scan(&rejectedRows, &rejectedFacts, &systemAllowedDecisions); err != nil || rejectedRows != 0 || rejectedFacts != 0 || systemAllowedDecisions != 1 {
-		t.Fatalf("rejected delegated creation left state or skipped the storage guard: principals=%d facts=%d systemAllowed=%d err=%v",
-			rejectedRows, rejectedFacts, systemAllowedDecisions, err)
+		Scan(&rejectedRows, &rejectedFacts, &rejectedManagementFacts, &systemAllowedDecisions); err != nil || rejectedRows != 0 ||
+		rejectedFacts != 0 || rejectedManagementFacts != 0 || systemAllowedDecisions != 1 {
+		t.Fatalf("rejected delegated management left state or skipped the storage guard: principals=%d createFacts=%d managementFacts=%d systemAllowed=%d err=%v",
+			rejectedRows, rejectedFacts, rejectedManagementFacts, systemAllowedDecisions, err)
 	}
 }
 
@@ -7372,6 +7548,34 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 				var currentSession iamv1.LoginResponse
 				callMFA(secondHandler, http.MethodPost, "/v1/auth/challenges/"+original.Challenge.ID+":verify", iamv1.Secret{}, loginBytes, http.StatusOK, &currentSession)
 				clear(loginBytes)
+				var settingsDelegationPolicy iamv1.PolicyDetail
+				var delegatedBoundary *iamv1.CreateUserPermissionBoundary
+				if recoveryCase == "regenerate-settings-intent" {
+					settingsDelegationPolicy, err = service.CreatePolicy(ctx, completed.Credential, iamv1.CreatePolicyRequest{
+						DisplayName: "Account security settings", RequestID: "settings-explicit-policy",
+						Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+							Statements: []iamv1.PolicyStatement{{SID: "settings", Effect: "ALLOW",
+								Actions:   []iamv1.Action{iamv1.ActionIAMSecuritySettingsRead, iamv1.ActionIAMSecuritySettingsUpdate, iamv1.ActionIAMUserCreate},
+								Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(member.AccountID)}}},
+								{SID: "userManage", Effect: "ALLOW", Actions: []iamv1.Action{iamv1.ActionIAMUserPasswordReset, iamv1.ActionIAMUserSetStatus},
+									Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}}}}})
+					if err != nil {
+						t.Fatal("create explicit security settings permission", err)
+					}
+					memberStateForBoundary, readErr := service.GetUser(ctx, completed.Credential, member.ID, "settings-boundary-user")
+					if readErr != nil {
+						t.Fatal("read delegated settings operator for boundary", readErr)
+					}
+					if _, err := service.SetUserPermissionBoundary(ctx, completed.Credential, member.ID, iamv1.SetUserPermissionBoundaryRequest{
+						PolicyID: settingsDelegationPolicy.Policy.ID, PolicyResourceVersion: settingsDelegationPolicy.Policy.ResourceVersion,
+						ResourceVersion: memberStateForBoundary.User.ResourceVersion, RequestID: "settings-boundary-set",
+					}); err != nil {
+						t.Fatal("seal delegated settings operator boundary", err)
+					}
+					delegatedBoundary = &iamv1.CreateUserPermissionBoundary{
+						PolicyID: settingsDelegationPolicy.Policy.ID, PolicyResourceVersion: settingsDelegationPolicy.Policy.ResourceVersion,
+					}
+				}
 				request := iamv1.StartStepUpRequest{RequestID: "regenerate-original", Operation: iamv1.StepUpRegenerateRecoveryCodes, ExpectedFactorRevision: 2}
 				if strings.HasPrefix(recoveryCase, "replace-") {
 					request.RequestID, request.Operation = "replace-original", iamv1.StepUpReplaceTOTP
@@ -9374,6 +9578,25 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 							t.Fatal(err)
 						}
 					}
+					const ruleCreatorName = "password.rules.creator"
+					ruleCreator, err := service.CreateUser(ctx, completed.Credential, iamv1.CreateUserRequest{LoginName: ruleCreatorName,
+						DisplayName: "Password rules creator", InitialPassword: initial, PermissionBoundary: delegatedBoundary, RequestID: "settings-rule-creator"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					ruleCreatorLogin, err := service.Login(ctx, iamv1.LoginRequest{LoginName: ruleCreatorName + "@" + string(account), Password: initial, RequestID: "settings-rule-creator-login"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := service.ChangePassword(ctx, ruleCreatorLogin.Credential, iamv1.ChangePasswordRequest{
+						CurrentPassword: initial, NewPassword: current, RequestID: "settings-rule-creator-password"}); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := service.CreatePolicyAttachment(ctx, completed.Credential, iamv1.CreatePolicyAttachmentRequest{
+						Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(ruleCreator.ID)}, PolicyID: settingsDelegationPolicy.Policy.ID,
+						PolicyResourceVersion: settingsDelegationPolicy.Policy.ResourceVersion, RequestID: "settings-rule-creator-policy"}); err != nil {
+						t.Fatal(err)
+					}
 					before := stateDigest()
 					callMFA(secondHandler, http.MethodPost, "/v1/auth/recovery-codes:regenerate", currentSession.Credential, commandBytes, http.StatusConflict, nil)
 					if stateDigest() != before {
@@ -9398,17 +9621,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					updateBytes := mustIAMJSON(t, update)
 					// A real operation-bound proof is not an authorization grant.
 					callMFA(firstHandler, http.MethodPut, settingsPath, currentSession.Credential, updateBytes, http.StatusForbidden, nil)
-					policy, err := service.CreatePolicy(ctx, completed.Credential, iamv1.CreatePolicyRequest{
-						DisplayName: "Account security settings", RequestID: "settings-explicit-policy",
-						Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
-							Statements: []iamv1.PolicyStatement{{SID: "settings", Effect: "ALLOW",
-								Actions:   []iamv1.Action{iamv1.ActionIAMSecuritySettingsRead, iamv1.ActionIAMSecuritySettingsUpdate, iamv1.ActionIAMUserCreate},
-								Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(member.AccountID)}}},
-								{SID: "passwordReset", Effect: "ALLOW", Actions: []iamv1.Action{iamv1.ActionIAMUserPasswordReset},
-									Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}}}}})
-					if err != nil {
-						t.Fatal("create explicit security settings permission", err)
-					}
+					policy := settingsDelegationPolicy
 					var settingsAttachment iamv1.PolicyAttachment
 					callMFA(firstHandler, http.MethodPost, "/v1/policy-attachments", completed.Credential,
 						mustIAMJSON(t, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
@@ -9509,6 +9722,16 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						callMFA(firstHandler, http.MethodPost, "/v1/policy-attachments", completed.Credential,
 							mustIAMJSON(t, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(weak.ID)},
 								PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "settings-mail-explicit-administrator"}), http.StatusOK, nil)
+						weakForBoundary, err := service.GetUser(ctx, completed.Credential, weak.ID, "settings-mail-boundary-user")
+						if err != nil {
+							t.Fatal("read mail operator for delegated boundary", err)
+						}
+						if _, err := service.SetUserPermissionBoundary(ctx, completed.Credential, weak.ID, iamv1.SetUserPermissionBoundaryRequest{
+							PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion,
+							ResourceVersion: weakForBoundary.User.ResourceVersion, RequestID: "settings-mail-boundary-set",
+						}); err != nil {
+							t.Fatal("seal mail operator delegated boundary", err)
+						}
 					}
 					forced, err := service.CreateUser(ctx, completed.Credential, iamv1.CreateUserRequest{LoginName: "settings-first-enrollment", DisplayName: "First enrollment",
 						InitialPassword: initial, RequestID: "settings-first-create"})
@@ -9742,7 +9965,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					}
 					t.Run("configured-password-writers", func(t *testing.T) {
 						create := iamv1.CreateUserRequest{LoginName: "password-rules-target", DisplayName: "Rules target", RequestID: "settings-password-create",
-							InitialPassword: iamHTTPSecret(t, "Short-Password-83!")}
+							InitialPassword: iamHTTPSecret(t, "Short-Password-83!"), PermissionBoundary: delegatedBoundary}
 						if _, err := secondService.CreateUser(ctx, qualified.Credential, create); !errors.Is(err, identityaccess.ErrInvalidArgument) {
 							t.Fatal("creation ignored current length requirement", err)
 						}
@@ -10004,11 +10227,15 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						}
 					})
 					t.Run("password-rules-installation-attachment", func(t *testing.T) {
+						creator, err := service.Login(ctx, iamv1.LoginRequest{LoginName: ruleCreatorName + "@" + string(account), Password: current, RequestID: "settings-current-rule-creator"})
+						if err != nil || creator.Outcome != iamv1.LoginAuthenticated {
+							t.Fatal("fresh delegated rules creator login", err)
+						}
 						operator, err := service.Login(ctx, iamv1.LoginRequest{LoginName: ruleOperatorName + "@" + string(account), Password: current, RequestID: "settings-current-rule-operator"})
 						if err != nil || operator.Outcome != iamv1.LoginAuthenticated {
 							t.Fatal("fresh installation operator login", err)
 						}
-						provePasswordRulesAttachmentPreparation(t, ctx, admin, repo, service, operator.Credential,
+						provePasswordRulesAttachmentPreparation(t, ctx, admin, repo, service, creator.Credential, operator.Credential, delegatedBoundary,
 							identityaccess.Config{CursorKey: bytes.Repeat([]byte{0x39}, 32), AccessKeyWrapping: &wrapping, TOTPKeyring: &totp, EmailVerificationKeyring: &mail})
 					})
 					t.Run("historical-settings-mail", func(t *testing.T) {
@@ -11087,15 +11314,15 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 // Actual attachment writers run after the short preparation has released its
 // connection/locks, and the password writer must reject their stale result.
 func provePasswordRulesAttachmentPreparation(t *testing.T, ctx context.Context, database *pgx.Conn, repository identityaccess.Repository,
-	service *identityaccess.Authority, operator iamv1.Secret, config identityaccess.Config) {
+	service *identityaccess.Authority, creator, platformOperator iamv1.Secret, boundary *iamv1.CreateUserPermissionBoundary, config identityaccess.Config) {
 	t.Helper()
 	for _, grant := range []bool{false, true} {
 		t.Run(fmt.Sprintf("grant-before-write-%t", grant), func(t *testing.T) {
 			initial := iamHTTPSecret(t, "Rules-Protection-Initial-Password-65!")
 			current := iamHTTPSecret(t, "Rules-Protection-Current-Password-83!")
 			name := fmt.Sprintf("rules.protection.%t", grant)
-			user, err := service.CreateUser(ctx, operator, iamv1.CreateUserRequest{LoginName: name, DisplayName: "Rules protection",
-				InitialPassword: initial, RequestID: name + "-create"})
+			user, err := service.CreateUser(ctx, creator, iamv1.CreateUserRequest{LoginName: name, DisplayName: "Rules protection",
+				InitialPassword: initial, PermissionBoundary: boundary, RequestID: name + "-create"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -11108,7 +11335,7 @@ func provePasswordRulesAttachmentPreparation(t *testing.T, ctx context.Context, 
 			}
 			attach := func() iamv1.PolicyAttachment {
 				t.Helper()
-				value, err := service.CreatePolicyAttachment(ctx, operator, iamv1.CreatePolicyAttachmentRequest{
+				value, err := service.CreatePolicyAttachment(ctx, platformOperator, iamv1.CreatePolicyAttachmentRequest{
 					Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(user.ID)}, PolicyID: iamv1.SystemPolicyPlatformOperator,
 					PolicyResourceVersion: 1, RequestID: name + "-grant"})
 				if err != nil {
@@ -11176,7 +11403,7 @@ func provePasswordRulesAttachmentPreparation(t *testing.T, ctx context.Context, 
 			}
 			if grant {
 				attachment = attach()
-			} else if _, err := service.RevokePolicyAttachment(ctx, operator, attachment.ID, iamv1.RevokePolicyAttachmentRequest{
+			} else if _, err := service.RevokePolicyAttachment(ctx, platformOperator, attachment.ID, iamv1.RevokePolicyAttachmentRequest{
 				ResourceVersion: attachment.ResourceVersion, RequestID: name + "-revoke"}); err != nil {
 				t.Fatal("actual platform revocation", err)
 			}
@@ -27786,9 +28013,9 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 	// sessions, and false cannot preserve another such temporary session.
 	beforeReset := identity(current)
 	for _, exposure := range []struct{ entry, role string }{
-		{"iam.read_password_reset(text,text,text,text,bigint)", "matrix_iam_worker"},
-		{"iam.read_password_reset(text,text,text,text,bigint)", "matrix_iam_credential_recovery"},
-		{"iam.lock_managed_user(text,text,text,bigint)", "matrix_iam_api"},
+		{"iam.read_password_reset(text,text,text,text,text,bigint)", "matrix_iam_worker"},
+		{"iam.read_password_reset(text,text,text,text,text,bigint)", "matrix_iam_credential_recovery"},
+		{"iam.lock_managed_user(text,text,text,text,text,text,bigint)", "matrix_iam_api"},
 		{"iam.read_root_password_recovery(text,text,text,text,bigint)", "matrix_iam_worker"},
 		{"iam.read_root_password_recovery(text,text,text,text,bigint)", "matrix_iam_credential_recovery"},
 		{"iam.lock_recoverable_root(text,bigint)", "matrix_iam_api"},
@@ -28116,6 +28343,32 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 	if json.Unmarshal(request(http.MethodPost, "/v1/policy-attachments", operator, map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegate.ID)}, "policyId": resetPolicy.Policy.ID, "policyResourceVersion": resetPolicy.Policy.ResourceVersion}, http.StatusOK).Body.Bytes(), &resetGrant) != nil {
 		t.Fatal("decode reset grant")
 	}
+	// Delegated credential management is valid only inside the exact ceiling
+	// sealed onto both manager and target. The ordinary reset attachment grants
+	// the action; these boundaries only cap it and cannot authorize by themselves.
+	var delegateBoundary, targetBoundary iamv1.UserPermissionBoundary
+	delegateBoundaryPath := "/v1/users/" + string(delegate.ID) + "/permission-boundary"
+	targetBoundaryPath := "/v1/users/" + string(principal.ID) + "/permission-boundary"
+	if json.Unmarshal(request(http.MethodGet, delegateBoundaryPath, operator, nil, http.StatusOK).Body.Bytes(), &delegateBoundary) != nil ||
+		json.Unmarshal(request(http.MethodGet, targetBoundaryPath, operator, nil, http.StatusOK).Body.Bytes(), &targetBoundary) != nil {
+		t.Fatal("decode reset delegation boundaries")
+	}
+	for _, selected := range []struct {
+		path     string
+		boundary iamv1.UserPermissionBoundary
+	}{
+		{delegateBoundaryPath, delegateBoundary},
+		{targetBoundaryPath, targetBoundary},
+	} {
+		var bounded iamv1.UserPermissionBoundary
+		if json.Unmarshal(request(http.MethodPut, selected.path, operator, map[string]any{
+			"policyId": resetPolicy.Policy.ID, "policyResourceVersion": resetPolicy.Policy.ResourceVersion,
+			"resourceVersion": selected.boundary.ResourceVersion,
+		}, http.StatusOK).Body.Bytes(), &bounded) != nil || bounded.Policy == nil || bounded.Policy.PolicyID != resetPolicy.Policy.ID {
+			t.Fatal("seal password reset delegation boundary")
+		}
+	}
+	latestTarget = identity(afterPlatform).User
 	delegateBearer = login(delegateRealm, delegatePassword)
 	request(http.MethodGet, completionPath, delegateBearer, nil, http.StatusNotFound)
 	request(http.MethodGet, "/v1/users", delegateBearer, nil, http.StatusForbidden)
@@ -28474,12 +28727,16 @@ func proveIAMOutboxClaims(t *testing.T, ctx context.Context, admin *pgx.Conn, co
 			if claim.AccountID != "organization-http-integration" || claim.InstallationID != "installation-http-integration" || claim.Event.TenantID != "" {
 				t.Fatal("installation claim did not retain its sealed physical owner")
 			}
-			platformClaim = claim
+			if platformClaim.EventID == "" && claim.Event.Action == auditv1.ActionIAMAccountCreated {
+				platformClaim = claim
+			}
 		} else {
 			if string(claim.AccountID) != string(claim.Event.TenantID) {
 				t.Fatal("tenant claim changed owner")
 			}
-			tenantClaim = claim
+			if tenantClaim.EventID == "" && claim.Event.Action == auditv1.ActionIAMAuthorizationDecided {
+				tenantClaim = claim
+			}
 		}
 		if err := repository.Complete(ctx, auditdispatch.Completion{EventID: claim.EventID,
 			WorkerID: "iam-http-scope-worker", FencingToken: claim.FencingToken, Outcome: auditdispatch.OutcomeDelivered}); err != nil {
@@ -29926,7 +30183,7 @@ func assertPlatformAuthorityHTTP(t *testing.T, ctx context.Context, handler http
 	revoke := func(actor string, id iamv1.PolicyAttachmentID, expected int) {
 		t.Helper()
 		response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments/"+string(id)+":revoke", actor,
-			[]byte(`{"resourceVersion":1,"requestId":"request-platform-policy-revoke"}`))
+			mustIAMJSON(t, map[string]any{"resourceVersion": 1, "requestId": "request-platform-policy-revoke-" + string(id)}))
 		if response.Code != expected {
 			t.Fatalf("platform role revocation status=%d expected=%d body=%s", response.Code, expected, response.Body.String())
 		}

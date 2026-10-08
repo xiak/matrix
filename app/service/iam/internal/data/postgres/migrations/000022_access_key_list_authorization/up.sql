@@ -1,6 +1,6 @@
 SET LOCAL ROLE matrix_iam_owner;
 
--- Schema 68 makes one signed AccessKey request the durable nonce owner while
+-- Schema 69 keeps one signed AccessKey request the durable nonce owner while
 -- allowing its bounded list decisions to reference that same immutable proof.
 -- The actual tables/functions are evolved in the access-key owner so clean
 -- installs and retained schema-67 upgrades converge on one final contract.
@@ -17,7 +17,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $functio
 DECLARE predecessor record;
 BEGIN
     SELECT * INTO predecessor FROM iam.readiness_v66();
-    RETURN QUERY SELECT predecessor.ready AND iam.access_key_contract_ready(),68::bigint,predecessor.checked_at;
+    RETURN QUERY SELECT predecessor.ready AND iam.access_key_contract_ready(),69::bigint,predecessor.checked_at;
 END $function$;
 REVOKE ALL ON FUNCTION iam.readiness() FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,
   matrix_iam_backup_custody,matrix_iam_notification_worker,matrix_iam_authentication_recovery,matrix_iam_access_analysis_worker;

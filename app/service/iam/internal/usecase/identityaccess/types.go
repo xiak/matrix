@@ -712,6 +712,7 @@ func (PasswordReplacementMaterial) MarshalJSON() ([]byte, error) { return nil, E
 type UserChange struct {
 	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	PrincipalID      iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	ResourceVersion  uint64
@@ -734,6 +735,7 @@ type UserProfileMutation struct {
 type UserDeletionMutation struct {
 	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	PrincipalID      iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	ResourceVersion  uint64

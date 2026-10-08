@@ -1533,8 +1533,9 @@ BEGIN
 END
 $function$;
 
+DROP FUNCTION IF EXISTS iam.delete_user(text,text,text,text,bigint,jsonb);
 CREATE OR REPLACE FUNCTION iam.delete_user(tenant text, actor text, decision text,
-    user_id text, expected_version bigint, event jsonb)
+    user_id text, expected_version bigint, actor_session_id text, event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE
     stored iam.principals%ROWTYPE;
@@ -1544,23 +1545,9 @@ BEGIN
     IF expected_version IS NULL OR expected_version<1 THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='user deletion is invalid';
     END IF;
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.delete','USER',user_id,'INSTANCE',NULL);
-    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
-    PERFORM 1 FROM iam.accounts AS account WHERE account.id=tenant AND account.status='ACTIVE' FOR SHARE;
-    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user account is unavailable'; END IF;
+    PERFORM iam.lock_managed_user(tenant,actor,actor_session_id,decision,'iam.user.delete',user_id,expected_version);
     SELECT * INTO stored FROM iam.principals AS principal
-     WHERE principal.tenant_id=tenant AND principal.id=user_id FOR UPDATE;
-    IF NOT FOUND OR stored.principal_type<>'USER' OR stored.deleted_at IS NOT NULL OR user_id=actor
-        OR EXISTS(SELECT 1 FROM iam.account_roots AS root
-            WHERE root.account_id=tenant AND root.principal_id=user_id)
-        OR EXISTS(SELECT 1 FROM iam.policy_attachments AS attachment
-            WHERE attachment.tenant_id=tenant AND attachment.target_id=user_id AND attachment.target_kind='USER'
-              AND attachment.authority_scope='INSTALLATION' AND attachment.revoked_at IS NULL) THEN
-        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user is not deletable';
-    END IF;
-    IF expected_version<>stored.resource_version OR stored.resource_version=9007199254740991 THEN
-        RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='user version changed';
-    END IF;
+     WHERE principal.tenant_id=tenant AND principal.id=user_id;
     IF stored.status<>'DISABLED' THEN
         RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='user must be disabled before deletion';
     END IF;
@@ -1742,17 +1729,55 @@ GRANT EXECUTE ON FUNCTION iam.read_user_password_reset_completion(text,text,text
 
 -- Status changes and password preparation/finalization share the same protected
 -- identity check and Account -> USER lock order as platform attachment changes.
-CREATE OR REPLACE FUNCTION iam.lock_managed_user(tenant text, actor text, user_id text, expected_version bigint)
+DROP FUNCTION IF EXISTS iam.lock_managed_user(text,text,text,bigint);
+CREATE OR REPLACE FUNCTION iam.lock_managed_user(tenant text, actor text, actor_session_id text,
+    decision text, action_name text, user_id text, expected_version bigint)
 RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $function$
-DECLARE stored iam.principals%ROWTYPE;
+DECLARE
+    stored iam.principals%ROWTYPE;
+    actor_is_root boolean;
+    actor_evidence jsonb;
+    target_boundary jsonb;
+    ceiling iam.policies%ROWTYPE;
 BEGIN
+    IF COALESCE(tenant,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(actor,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(actor_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(decision,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(user_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='managed user input is invalid';
+    END IF;
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM 1 FROM iam.accounts AS organization
         WHERE organization.id=tenant AND organization.status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user account is unavailable';
     END IF;
-    SELECT * INTO stored FROM iam.principals AS p WHERE p.tenant_id=tenant AND p.id=user_id FOR UPDATE;
+    -- Every credential, status, boundary and platform-binding writer takes the
+    -- same stable USER barrier. The decision's immutable FK lock alone cannot
+    -- protect mutable authorization or credential state.
+    PERFORM p.id FROM iam.principals AS p
+      WHERE p.tenant_id=tenant AND p.id IN(actor,user_id)
+      ORDER BY p.id FOR NO KEY UPDATE;
+    PERFORM 1 FROM iam.principals AS p
+      WHERE p.tenant_id=tenant AND p.id=actor AND p.principal_type='USER'
+        AND p.status='ACTIVE' AND p.deleted_at IS NULL AND NOT p.must_change_password;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='managed user actor is unavailable';
+    END IF;
+    PERFORM 1 FROM iam.user_credentials AS credential JOIN iam.sessions AS session
+      ON session.tenant_id=credential.tenant_id AND session.principal_id=credential.principal_id
+     WHERE credential.tenant_id=tenant AND credential.principal_id=actor AND session.id=actor_session_id
+       AND session.status='ACTIVE' AND session.revoked_at IS NULL AND session.expires_at>clock_timestamp()
+       AND session.credential_version=credential.credential_version
+       AND session.last_activity_at IS NOT NULL AND session.idle_timeout_seconds IS NOT NULL
+       AND session.last_activity_at+make_interval(secs=>session.idle_timeout_seconds)>clock_timestamp()
+     FOR SHARE OF credential,session;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='managed user session is unavailable';
+    END IF;
+    SELECT * INTO stored FROM iam.principals AS p WHERE p.tenant_id=tenant AND p.id=user_id;
     IF NOT FOUND OR stored.principal_type <> 'USER' OR stored.deleted_at IS NOT NULL OR user_id=actor
         OR EXISTS(SELECT 1 FROM iam.account_roots AS root WHERE root.account_id=tenant AND root.principal_id=user_id)
         OR EXISTS(SELECT 1 FROM iam.policy_attachments AS binding
@@ -1763,17 +1788,53 @@ BEGIN
     IF expected_version IS NULL OR expected_version < 1 OR expected_version <> stored.resource_version THEN
         RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='user version changed';
     END IF;
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,action_name,'USER',user_id,'INSTANCE',NULL);
+    SELECT decision_record.boundary_evidence INTO actor_evidence
+      FROM iam.authorization_decisions AS decision_record
+     WHERE decision_record.tenant_id=tenant AND decision_record.id=decision
+       AND decision_record.principal_id=actor;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='managed user decision is unavailable';
+    END IF;
+    PERFORM iam.assert_current_user_boundary_evidence(tenant,actor,action_name,actor_evidence);
+    SELECT EXISTS(SELECT 1 FROM iam.account_roots AS root
+      WHERE root.account_id=tenant AND root.principal_id=actor) INTO actor_is_root;
+    IF NOT actor_is_root THEN
+        IF actor_evidence->>'state' IS DISTINCT FROM 'BOUND'
+            OR EXISTS(SELECT 1 FROM iam.policy_attachments AS attachment
+                WHERE attachment.tenant_id=tenant AND attachment.target_kind='USER'
+                  AND attachment.target_id=actor AND attachment.authority_scope='INSTALLATION'
+                  AND attachment.revoked_at IS NULL) THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='delegated user manager is unavailable';
+        END IF;
+        target_boundary:=iam.current_user_boundary(tenant,user_id);
+        IF target_boundary->>'state' IS DISTINCT FROM 'BOUND'
+            OR target_boundary#>>'{version,value,policyId}' IS DISTINCT FROM actor_evidence#>>'{version,policyId}'
+            OR target_boundary#>>'{version,value,versionId}' IS DISTINCT FROM actor_evidence#>>'{version,versionId}'
+            OR target_boundary#>>'{version,value,contentDigest}' IS DISTINCT FROM actor_evidence#>>'{version,contentDigest}'
+            OR target_boundary#>'{version,value,contractVersion}' IS DISTINCT FROM actor_evidence->'contractVersion'
+            OR target_boundary#>'{version,value,compilation}' IS DISTINCT FROM actor_evidence->'compilation' THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='managed user boundary is unavailable';
+        END IF;
+        SELECT * INTO ceiling FROM iam.policies AS policy
+         WHERE policy.id=actor_evidence#>>'{version,policyId}' AND policy.management='CUSTOMER'
+           AND policy.owner_tenant_id=tenant AND policy.authority_scope='TENANT' AND policy.status='ACTIVE'
+         FOR SHARE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='managed user ceiling is unavailable';
+        END IF;
+    END IF;
 END
 $function$;
 
 DROP FUNCTION IF EXISTS iam.read_password_reset(text,text,text,text,bigint);
-CREATE OR REPLACE FUNCTION iam.read_password_reset(tenant text, actor text, decision text, user_id text, expected_version bigint)
+CREATE OR REPLACE FUNCTION iam.read_password_reset(tenant text, actor text, decision text, actor_session_id text,
+    user_id text, expected_version bigint)
 RETURNS TABLE(password_hash text,credential_generation bigint,password_history text[],history_digest text,password_settings jsonb,settings_version bigint)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE credential iam.user_credentials%ROWTYPE;
 BEGIN
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.reset-password','USER',user_id,'INSTANCE',NULL);
-    PERFORM iam.lock_managed_user(tenant,actor,user_id,expected_version);
+    PERFORM iam.lock_managed_user(tenant,actor,actor_session_id,decision,'iam.user.reset-password',user_id,expected_version);
     SELECT * INTO credential FROM iam.user_credentials c WHERE c.tenant_id=tenant AND c.principal_id=user_id FOR UPDATE;
     IF NOT FOUND OR NOT iam.valid_password_history(credential.password_history,credential.password_history_digest,
         credential.credential_version,credential.password_changed_at) THEN
@@ -1788,8 +1849,9 @@ $function$;
 
 DROP FUNCTION IF EXISTS iam.change_user(text,text,text,text,bigint,text,text,jsonb);
 DROP FUNCTION IF EXISTS iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text);
+DROP FUNCTION IF EXISTS iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text,bigint);
 CREATE OR REPLACE FUNCTION iam.change_user(tenant text, actor text, decision text,
-    user_id text, expected_version bigint, new_status text, new_password_hash text, event jsonb,
+    actor_session_id text, user_id text, expected_version bigint, new_status text, new_password_hash text, event jsonb,
     expected_generation bigint, expected_password_hash text, expected_history_digest text, expected_settings_version bigint)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE credential iam.user_credentials%ROWTYPE; action text; event_action text;
@@ -1812,8 +1874,7 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='password reset is invalid';
         END IF;
     END IF;
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,action,'USER',user_id,'INSTANCE',NULL);
-    PERFORM iam.lock_managed_user(tenant,actor,user_id,expected_version);
+    PERFORM iam.lock_managed_user(tenant,actor,actor_session_id,decision,action,user_id,expected_version);
     IF new_password_hash IS NOT NULL THEN
         IF NOT iam.user_password_reset_contract_ready() THEN
             RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='password reset contract is unavailable';
@@ -1881,8 +1942,8 @@ REVOKE ALL ON FUNCTION iam.read_account(text,text), iam.read_account_as_platform
     iam.set_account_alias(text,text,text,text,bigint,jsonb),
     iam.read_user(text,text,text,text),
     iam.update_user(text,text,text,text,text,bigint,jsonb),
-    iam.delete_user(text,text,text,text,bigint,jsonb),
-    iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text,bigint) FROM PUBLIC, matrix_iam_worker;
+    iam.delete_user(text,text,text,text,bigint,text,jsonb),
+    iam.change_user(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text,bigint) FROM PUBLIC, matrix_iam_worker;
 GRANT EXECUTE ON FUNCTION iam.read_account(text,text), iam.read_account_as_platform(text,text,text,text),
     iam.read_root_password_recovery(text,text,text,text,bigint), iam.set_account_status(text,text,text,text,text,bigint,jsonb),
     iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text),
@@ -1892,13 +1953,13 @@ GRANT EXECUTE ON FUNCTION iam.read_account(text,text), iam.read_account_as_platf
     iam.set_account_alias(text,text,text,text,bigint,jsonb),
     iam.read_user(text,text,text,text),
     iam.update_user(text,text,text,text,text,bigint,jsonb),
-    iam.delete_user(text,text,text,text,bigint,jsonb),
-    iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text,bigint) TO matrix_iam_api;
+    iam.delete_user(text,text,text,text,bigint,text,jsonb),
+    iam.change_user(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text,bigint) TO matrix_iam_api;
 
-REVOKE ALL ON FUNCTION iam.lock_managed_user(text,text,text,bigint),iam.read_password_reset(text,text,text,text,bigint)
+REVOKE ALL ON FUNCTION iam.lock_managed_user(text,text,text,text,text,text,bigint),iam.read_password_reset(text,text,text,text,text,bigint)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_notification_worker,
         matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
-GRANT EXECUTE ON FUNCTION iam.read_password_reset(text,text,text,text,bigint) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.read_password_reset(text,text,text,text,text,bigint) TO matrix_iam_api;
 
 CREATE OR REPLACE FUNCTION iam.user_password_reset_completion_contract_ready()
 RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
@@ -1965,15 +2026,19 @@ CREATE OR REPLACE FUNCTION iam.user_password_reset_contract_ready()
 RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
     SELECT to_regprocedure('iam.change_user(text,text,text,text,bigint,text,text,jsonb)') IS NULL
       AND to_regprocedure('iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text)') IS NULL
+      AND to_regprocedure('iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text,bigint)') IS NULL
+      AND to_regprocedure('iam.delete_user(text,text,text,text,bigint,jsonb)') IS NULL
+      AND to_regprocedure('iam.read_password_reset(text,text,text,text,bigint)') IS NULL
+      AND to_regprocedure('iam.lock_managed_user(text,text,text,bigint)') IS NULL
       AND iam.user_password_reset_completion_contract_ready()
       AND (SELECT count(*)=4 FROM pg_catalog.pg_proc p JOIN (VALUES
         ('iam.read_user_password_reset_completion(text,text,text,text,text,bigint)',true,'jsonb',false,'tenant,actor,decision,user_id,command_id,expected_version'),
-        ('iam.lock_managed_user(text,text,text,bigint)',false,'void',false,'tenant,actor,user_id,expected_version'),
-        ('iam.read_password_reset(text,text,text,text,bigint)',true,
+        ('iam.lock_managed_user(text,text,text,text,text,text,bigint)',false,'void',false,'tenant,actor,actor_session_id,decision,action_name,user_id,expected_version'),
+        ('iam.read_password_reset(text,text,text,text,text,bigint)',true,
          'TABLE(password_hash text, credential_generation bigint, password_history text[], history_digest text, password_settings jsonb, settings_version bigint)',true,
-         'tenant,actor,decision,user_id,expected_version,password_hash,credential_generation,password_history,history_digest,password_settings,settings_version'),
-        ('iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text,bigint)',true,'jsonb',false,
-         'tenant,actor,decision,user_id,expected_version,new_status,new_password_hash,event,expected_generation,expected_password_hash,expected_history_digest,expected_settings_version'))
+         'tenant,actor,decision,actor_session_id,user_id,expected_version,password_hash,credential_generation,password_history,history_digest,password_settings,settings_version'),
+        ('iam.change_user(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text,bigint)',true,'jsonb',false,
+         'tenant,actor,decision,actor_session_id,user_id,expected_version,new_status,new_password_hash,event,expected_generation,expected_password_hash,expected_history_digest,expected_settings_version'))
         expected(signature,definer,result_type,returns_set,names)
         ON p.oid=to_regprocedure(expected.signature) AND p.prosecdef=expected.definer
           AND pg_get_function_result(p.oid)=expected.result_type AND p.proretset=expected.returns_set
