@@ -244,9 +244,9 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		"- Forwarded":                                              6,
 		"- X-Forwarded-For":                                        6,
 		"- X-Real-IP":                                              6,
-		"- X-Matrix-External-Origin":                               6,
-		"- X-Matrix-External-Request-Target":                       6,
-		"- X-Matrix-External-Source-IP":                            6,
+		"- X-Matrix-External-Origin":                               4,
+		"- X-Matrix-External-Request-Target":                       4,
+		"- X-Matrix-External-Source-IP":                            4,
 		"- X-Matrix-Edge-Assertion":                                7,
 		"serverless-post-function:":                                2,
 		`io.open("/run/matrix/audit-edge-assertion", "rb")`:        1,
@@ -256,6 +256,30 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	} {
 		if actual := bytes.Count(apisix, []byte(required)); actual != count {
 			t.Fatalf("APISIX trusted-edge directive %q count=%d want=%d", required, actual, count)
+		}
+	}
+	for _, route := range []struct {
+		start string
+		end   string
+	}{
+		{"id: matrix-audit\n", "id: matrix-paas-installation-verification\n"},
+		{"id: matrix-paas\n", "id: matrix-managed-services\n"},
+	} {
+		start := bytes.Index(apisix, []byte(route.start))
+		end := bytes.Index(apisix, []byte(route.end))
+		if start < 0 || end <= start {
+			t.Fatalf("APISIX trusted-edge route %q is absent", route.start)
+		}
+		configured := apisix[start:end]
+		for _, header := range []string{
+			"X-Matrix-External-Origin",
+			"X-Matrix-External-Request-Target",
+			"X-Matrix-External-Source-IP",
+		} {
+			if !bytes.Contains(configured, []byte("            "+header+":")) ||
+				bytes.Contains(configured, []byte("            - "+header)) {
+				t.Fatalf("APISIX trusted-edge route %q does not overwrite %s exactly once", route.start, header)
+			}
 		}
 	}
 	if bytes.Contains(apisix, []byte("matrix-service-auth")) ||

@@ -329,9 +329,9 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
             - Forwarded
             - X-Forwarded-For
             - X-Real-IP
-            - X-Matrix-External-Origin
-            - X-Matrix-External-Request-Target
-            - X-Matrix-External-Source-IP
+          # proxy-rewrite applies removals after mutations. Setting these
+          # edge-owned facts already overwrites caller input; listing the
+          # same names under remove would erase the trusted replacements.
           set:
             X-Matrix-External-Origin: %q
             X-Matrix-External-Request-Target: "$request_uri"
@@ -397,9 +397,9 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
             - Forwarded
             - X-Forwarded-For
             - X-Real-IP
-            - X-Matrix-External-Origin
-            - X-Matrix-External-Request-Target
-            - X-Matrix-External-Source-IP
+          # proxy-rewrite applies removals after mutations. Setting these
+          # edge-owned facts already overwrites caller input; listing the
+          # same names under remove would erase the trusted replacements.
           set:
             X-Matrix-External-Origin: %q
             X-Matrix-External-Request-Target: "$request_uri"
