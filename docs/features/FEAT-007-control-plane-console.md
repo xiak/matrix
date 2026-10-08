@@ -1707,7 +1707,7 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-Verified through 2026-10-07 against the current all-service navigation, compact IAM
+Verified through 2026-10-08 against the current all-service navigation, compact IAM
 shell, responsive access-analysis hierarchy, primary directory actions and the
 provider-owned product-permission onboarding boundary.
 
@@ -1718,6 +1718,17 @@ without waiting for directory data.
 Access analysis keeps its three known primary sections on one row above 360 px; at or
 below 360 px the same three controls become equal-width columns and may wrap their own
 labels, without turning an arbitrary tab set into a second mobile implementation.
+
+The 2026-10-08 source/embed follow-up `3d34f04d5` projects implemented LIVE IAM
+workspaces from repository capabilities instead of the preview workspace flag. AccessKey,
+access analysis and security report routes are therefore visible when their strict LIVE
+clients are bound; Role SSO, User SSO, cross-account previews and authorization-Profile
+publishing remain absent from LIVE navigation. This changes only route discoverability:
+the destination still owns authorization and exact failure closure, and Root names or
+menu visibility never synthesize a capability. The same slice keeps the secure delegated
+User workflow inside the existing content route: MOCK can review an explicit permission
+boundary while LIVE renders a stable non-submittable state until IAM publishes a fixed
+atomic contract. It does not introduce another shell, page loader or navigation path.
 
 The tenant Policy > permission-capability catalog remains the read-only consumer of
 published `AuthorizationProfile` declarations and never exposes internal onboarding,
