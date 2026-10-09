@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"net"
@@ -81,6 +82,22 @@ func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
 	b.Manifest.Database.ContractRevision++
 	if validateReleasePair(a, b) == nil {
 		t.Fatal("different release contract revision admitted to offline lifecycle gate")
+	}
+}
+
+func TestCreateUserWireCarriesExplicitRootBoundary(t *testing.T) {
+	encoded, err := json.Marshal(createUserWire{
+		LoginName: "signed.fixture", DisplayName: "Signed fixture",
+		InitialPassword: "Example-Only-Signed-Fixture-Password-51!", RequestID: "signed-fixture-create",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	var request iamv1.CreateUserRequest
+	if json.Unmarshal(encoded, &request) != nil || iamv1.ValidateCreateUserRequest(request) != nil ||
+		request.PermissionBoundary != nil {
+		t.Fatal("signed lifecycle user creation did not carry the explicit protected-Root boundary choice")
 	}
 }
 

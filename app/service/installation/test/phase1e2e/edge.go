@@ -147,6 +147,17 @@ type changePasswordWire struct {
 	RevokeOtherSessions *bool  `json:"revokeOtherSessions,omitempty"`
 }
 
+// createUserWire keeps the Root-only no-boundary choice explicit. Omission is
+// invalid because it could hide a stale client when delegated creation grows
+// a required ceiling; JSON null is the intentional protected-Root request.
+type createUserWire struct {
+	LoginName          string                              `json:"loginName"`
+	DisplayName        string                              `json:"displayName"`
+	InitialPassword    string                              `json:"initialPassword"`
+	PermissionBoundary *iamv1.CreateUserPermissionBoundary `json:"permissionBoundary"`
+	RequestID          string                              `json:"requestId"`
+}
+
 type startNotificationContactWire struct {
 	Email     string `json:"email"`
 	Password  string `json:"password"`

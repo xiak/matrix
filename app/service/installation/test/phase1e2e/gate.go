@@ -707,9 +707,9 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		if err := value.edge.changePassword(ctx, tenant.OldPrimaryCredential, tenant.PreviousPrimaryPassword, tenant.PrimaryPassword, false, &keepOtherSessions); err != nil {
 			return fail("tenant-primary-retain-valid-session-" + label)
 		}
-		if err := value.edge.mutateIAM(ctx, "/users", tenant.OldPrimaryCredential, map[string]any{
-			"loginName": "developer", "displayName": "Offline developer", "initialPassword": string(tenant.InitialPassword),
-			"requestId": "phase1-child-" + label,
+		if err := value.edge.mutateIAM(ctx, "/users", tenant.OldPrimaryCredential, createUserWire{
+			LoginName: "developer", DisplayName: "Offline developer", InitialPassword: string(tenant.InitialPassword),
+			RequestID: "phase1-child-" + label,
 		}, &tenant.Child, http.StatusCreated); err != nil || iamv1.ValidateUser(tenant.Child) != nil ||
 			tenant.Child.AccountID != tenantID {
 			return fail("tenant-child-create-" + label)

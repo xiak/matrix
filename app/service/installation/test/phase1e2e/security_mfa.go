@@ -193,9 +193,9 @@ func (value *gate) verifySignedMFA(
 	}
 	value.edge.addForbidden(bytes.Clone(initialPassword), bytes.Clone(password))
 	var user iamv1.User
-	if err := value.edge.mutateIAM(ctx, "/users", operator, map[string]any{
-		"loginName": "signed.mfa", "displayName": "Signed MFA lifecycle",
-		"initialPassword": string(initialPassword), "requestId": "phase1-signed-mfa-user",
+	if err := value.edge.mutateIAM(ctx, "/users", operator, createUserWire{
+		LoginName: "signed.mfa", DisplayName: "Signed MFA lifecycle",
+		InitialPassword: string(initialPassword), RequestID: "phase1-signed-mfa-user",
 	}, &user, http.StatusCreated); err != nil || iamv1.ValidateUser(user) != nil {
 		clear(password)
 		return mfaRetention{}, fail("signed-mfa-user")
