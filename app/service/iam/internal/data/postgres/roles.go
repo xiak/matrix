@@ -710,6 +710,9 @@ func (value *transaction) CreateRole(ctx context.Context, mutation identityacces
 	if iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil || iamv1.ValidateRole(role) != nil || mutation.TrustVersion.AccountID != role.AccountID || mutation.TrustVersion.RoleID != role.ID || mutation.TrustVersion.ID != role.CurrentTrustVersionID {
 		return iamv1.Role{}, identityaccess.ErrInvalidArgument
 	}
+	if mutation.BoundaryID != "" && iamv1.ValidateID("boundaryId", mutation.BoundaryID) != nil {
+		return iamv1.Role{}, identityaccess.ErrInvalidArgument
+	}
 	trust, err := encodeRoleTrust(mutation.TrustVersion)
 	if err != nil {
 		return iamv1.Role{}, err
@@ -724,8 +727,8 @@ func (value *transaction) CreateRole(ctx context.Context, mutation identityacces
 	}
 	defer clear(event)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.create_role($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9)", role.AccountID,
-		mutation.ActorPrincipalID, mutation.DecisionID, role.ID, mutation.TrustVersion.ID, metadata, trust, event, mutation.ActorSessionID).Scan(&encoded)
+	err = value.tx.QueryRow(ctx, "SELECT iam.create_role($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9::jsonb,$10)", role.AccountID,
+		mutation.ActorPrincipalID, mutation.DecisionID, role.ID, mutation.TrustVersion.ID, metadata, trust, mutation.BoundaryID, event, mutation.ActorSessionID).Scan(&encoded)
 	if err != nil {
 		return iamv1.Role{}, mapAuthorizationDatabaseError("create IAM role", err)
 	}

@@ -30547,6 +30547,535 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		}
 		call(t, http.MethodDelete, policyPath, root, iamv1.DeletePolicyRequest{ResourceVersion: ceiling.Policy.ResourceVersion, RequestID: "role-boundary-delete-policy"}, http.StatusOK, nil)
 	})
+	t.Run("delegated bounded role", func(t *testing.T) {
+		ceilingRequest := iamv1.CreatePolicyRequest{DisplayName: "Delegated role ceiling", RequestID: "delegated-role-ceiling-create",
+			Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{
+					{SID: "create-role", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRoleCreate},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(member.AccountID)}}},
+					{SID: "use-role", Effect: iamv1.PolicyAllow,
+						Actions:   []iamv1.Action{iamv1.ActionIAMRoleRead, iamv1.ActionIAMRoleAssume, iamv1.ActionIAMRolePolicyAttachmentCreate},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceAnyInAuthority}}},
+					{SID: "revoke-role-policy", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRolePolicyAttachmentRevoke},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicyAttachment, Match: iamv1.PolicyResourceAnyInAuthority}}},
+					{SID: "selected-application", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "delegated-role-selected"}}},
+				}}}
+		var ceiling iamv1.PolicyDetail
+		post(t, "/v1/policies", root, ceilingRequest, http.StatusCreated, &ceiling)
+		boundaryPath := "/v1/users/" + string(member.ID) + "/permission-boundary"
+		var userBoundary iamv1.UserPermissionBoundary
+		get(t, boundaryPath, root, http.StatusOK, &userBoundary)
+		call(t, http.MethodPut, boundaryPath, root, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: ceiling.Policy.ID, PolicyResourceVersion: ceiling.Policy.ResourceVersion,
+			ResourceVersion: userBoundary.ResourceVersion, RequestID: "delegated-role-actor-boundary",
+		}, http.StatusOK, &userBoundary)
+		delegatedBearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+		delegatedRequest := iamv1.CreateRoleRequest{Name: "Delegated readers", Tags: []iamv1.RoleTag{}, RequestID: "delegated-role-create",
+			TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "member", Effect: iamv1.PolicyAllow,
+				Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: member.ID}}}}}}
+		var delegatedRole, delegatedReplay iamv1.Role
+		post(t, "/v1/roles", delegatedBearer, delegatedRequest, http.StatusCreated, &delegatedRole)
+		post(t, "/v1/roles", delegatedBearer, delegatedRequest, http.StatusCreated, &delegatedReplay)
+		if iamv1.ValidateRole(delegatedRole) != nil || !reflect.DeepEqual(delegatedRole, delegatedReplay) {
+			t.Fatal("delegated role creation replay changed its result")
+		}
+		rolePath := "/v1/roles/" + string(delegatedRole.ID)
+		var roleBoundary iamv1.RolePermissionBoundary
+		get(t, rolePath+"/permission-boundary", delegatedBearer, http.StatusOK, &roleBoundary)
+		if iamv1.ValidateRolePermissionBoundary(roleBoundary) != nil || roleBoundary.Policy == nil ||
+			roleBoundary.Policy.PolicyID != ceiling.Policy.ID || roleBoundary.Policy.VersionID != ceiling.Version.ID ||
+			roleBoundary.Policy.ContentDigest != ceiling.Version.ContentDigest || roleBoundary.ResourceVersion != delegatedRole.ResourceVersion {
+			t.Fatal("delegated role did not atomically inherit the actor ceiling")
+		}
+		var delegatedAttachment iamv1.PolicyAttachment
+		post(t, "/v1/policy-attachments", delegatedBearer, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(delegatedRole.ID)},
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "delegated-role-attach",
+		}, http.StatusOK, &delegatedAttachment)
+		var delegatedAttachmentReplay iamv1.PolicyAttachment
+		post(t, "/v1/policy-attachments", delegatedBearer, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(delegatedRole.ID)},
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "delegated-role-attach",
+		}, http.StatusOK, &delegatedAttachmentReplay)
+		if !reflect.DeepEqual(delegatedAttachment, delegatedAttachmentReplay) {
+			t.Fatal("delegated role attachment replay changed its result")
+		}
+		mismatchedCeilingRequest := ceilingRequest
+		mismatchedCeilingRequest.DisplayName = "Mismatched role ceiling"
+		mismatchedCeilingRequest.RequestID = "delegated-role-mismatched-ceiling-create"
+		var mismatchedCeiling iamv1.PolicyDetail
+		post(t, "/v1/policies", root, mismatchedCeilingRequest, http.StatusCreated, &mismatchedCeiling)
+		mismatchedRoleRequest := delegatedRequest
+		mismatchedRoleRequest.Name = "Mismatched readers"
+		mismatchedRoleRequest.RequestID = "delegated-role-mismatched-create"
+		var mismatchedRole iamv1.Role
+		post(t, "/v1/roles", root, mismatchedRoleRequest, http.StatusCreated, &mismatchedRole)
+		var mismatchedBoundary iamv1.RolePermissionBoundary
+		get(t, "/v1/roles/"+string(mismatchedRole.ID)+"/permission-boundary", root, http.StatusOK, &mismatchedBoundary)
+		call(t, http.MethodPut, "/v1/roles/"+string(mismatchedRole.ID)+"/permission-boundary", root,
+			iamv1.SetRolePermissionBoundaryRequest{PolicyID: mismatchedCeiling.Policy.ID,
+				PolicyResourceVersion: mismatchedCeiling.Policy.ResourceVersion,
+				ResourceVersion:       mismatchedBoundary.ResourceVersion,
+				RequestID:             "delegated-role-mismatched-boundary"}, http.StatusOK, &mismatchedBoundary)
+		post(t, "/v1/policy-attachments", delegatedBearer, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(mismatchedRole.ID)},
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "delegated-role-mismatched-attach",
+		}, http.StatusForbidden, nil)
+		nextCeilingDocument := ceilingRequest.Document
+		nextCeilingDocument.Statements = append([]iamv1.PolicyStatement(nil), ceilingRequest.Document.Statements...)
+		nextCeilingDocument.Statements[0].SID = "create-role-v2"
+		var nextCeilingVersion iamv1.PolicyVersionDetail
+		post(t, "/v1/policies/"+string(ceiling.Policy.ID)+"/versions", root, iamv1.CreatePolicyVersionRequest{
+			Document: nextCeilingDocument, ResourceVersion: ceiling.Policy.ResourceVersion,
+			RequestID: "delegated-role-ceiling-version-create",
+		}, http.StatusCreated, &nextCeilingVersion)
+		defaultRaceRequest := delegatedRequest
+		defaultRaceRequest.Name = "Delegated default race"
+		defaultRaceRequest.RequestID = "delegated-role-create-default-race"
+		defaultRaceCreate, defaultRaceSwitch := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		defaultRaceCreateBytes := mustIAMJSON(t, defaultRaceRequest)
+		defaultRaceSwitchBytes := mustIAMJSON(t, iamv1.SetDefaultPolicyVersionRequest{
+			VersionID: nextCeilingVersion.Version.ID, ResourceVersion: nextCeilingVersion.Policy.ResourceVersion,
+			RequestID: "delegated-role-ceiling-default-race",
+		})
+		releaseDefaultRace := holdRecordedIdentityDecisions(t, ctx, database,
+			defaultRaceRequest.RequestID, "delegated-role-ceiling-default-race")
+		go func() {
+			defaultRaceCreate <- performIAMRequest(handler, http.MethodPost, "/v1/roles", delegatedBearer, defaultRaceCreateBytes)
+		}()
+		go func() {
+			defaultRaceSwitch <- performIAMRequest(handler, http.MethodPost,
+				"/v1/policies/"+string(ceiling.Policy.ID)+":set-default-version", root, defaultRaceSwitchBytes)
+		}()
+		releaseDefaultRace()
+		var defaultCreateResponse, defaultSwitchResponse *httptest.ResponseRecorder
+		for range 2 {
+			select {
+			case defaultCreateResponse = <-defaultRaceCreate:
+			case defaultSwitchResponse = <-defaultRaceSwitch:
+			case <-ctx.Done():
+				t.Fatal("delegated role creation and ceiling default switch did not terminate")
+			}
+		}
+		if defaultSwitchResponse == nil {
+			t.Fatal("competing ceiling default switch returned no response")
+		}
+		if defaultSwitchResponse.Code != http.StatusOK {
+			t.Fatalf("competing ceiling default switch status=%d body=%s",
+				defaultSwitchResponse.Code, defaultSwitchResponse.Body.String())
+		}
+		if json.Unmarshal(defaultSwitchResponse.Body.Bytes(), &ceiling) != nil || iamv1.ValidatePolicyDetail(ceiling) != nil ||
+			ceiling.Version.ID != nextCeilingVersion.Version.ID || ceiling.Policy.DefaultVersionID != nextCeilingVersion.Version.ID {
+			t.Fatal("competing ceiling default switch returned an invalid current version")
+		}
+		if defaultCreateResponse == nil {
+			t.Fatal("competing delegated role creation returned no response")
+		}
+		if defaultCreateResponse.Code != http.StatusCreated &&
+			defaultCreateResponse.Code != http.StatusForbidden && defaultCreateResponse.Code != http.StatusConflict {
+			t.Fatalf("competing delegated role creation status=%d body=%s",
+				defaultCreateResponse.Code, defaultCreateResponse.Body.String())
+		}
+		defaultCreateWon := defaultCreateResponse.Code == http.StatusCreated
+		if defaultCreateWon {
+			var created iamv1.Role
+			if json.Unmarshal(defaultCreateResponse.Body.Bytes(), &created) != nil || iamv1.ValidateRole(created) != nil {
+				t.Fatal("winning default-race role creation returned an invalid role")
+			}
+			var currentBoundary iamv1.RolePermissionBoundary
+			get(t, "/v1/roles/"+string(created.ID)+"/permission-boundary", delegatedBearer, http.StatusOK, &currentBoundary)
+			if currentBoundary.Policy == nil || currentBoundary.Policy.PolicyID != ceiling.Policy.ID ||
+				currentBoundary.Policy.VersionID != ceiling.Version.ID || currentBoundary.Policy.ContentDigest != ceiling.Version.ContentDigest {
+				t.Fatal("winning default-race role did not follow the committed current ceiling")
+			}
+		}
+		var defaultRaceRoles, defaultRaceTrusts, defaultRaceBoundaries, defaultRaceFacts int
+		if err := database.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM iam.roles WHERE tenant_id=$1 AND metadata->>'name'=$2),
+			(SELECT count(*) FROM iam.role_trust_versions trust JOIN iam.roles role_value
+			  ON (role_value.tenant_id,role_value.id)=(trust.tenant_id,trust.role_id)
+			  WHERE role_value.tenant_id=$1 AND role_value.metadata->>'name'=$2),
+			(SELECT count(*) FROM iam.role_permission_boundaries boundary JOIN iam.roles role_value
+			  ON (role_value.tenant_id,role_value.id)=(boundary.tenant_id,boundary.role_id)
+			  WHERE role_value.tenant_id=$1 AND role_value.metadata->>'name'=$2 AND boundary.revoked_at IS NULL),
+			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3
+			  AND event_document->>'action'='iam.role.created')`, member.AccountID, defaultRaceRequest.Name,
+			defaultRaceRequest.RequestID).Scan(&defaultRaceRoles, &defaultRaceTrusts, &defaultRaceBoundaries, &defaultRaceFacts); err != nil {
+			t.Fatal("inspect delegated role/default competition", err)
+		}
+		wantDefaultRaceState := 0
+		if defaultCreateWon {
+			wantDefaultRaceState = 1
+		}
+		if defaultRaceRoles != wantDefaultRaceState || defaultRaceTrusts != wantDefaultRaceState ||
+			defaultRaceBoundaries != wantDefaultRaceState || defaultRaceFacts != wantDefaultRaceState {
+			t.Fatalf("role/default competition left partial authority: roles=%d trusts=%d boundaries=%d facts=%d won=%t",
+				defaultRaceRoles, defaultRaceTrusts, defaultRaceBoundaries, defaultRaceFacts, defaultCreateWon)
+		}
+		thirdCeilingDocument := nextCeilingDocument
+		thirdCeilingDocument.Statements = append([]iamv1.PolicyStatement(nil), nextCeilingDocument.Statements...)
+		thirdCeilingDocument.Statements[0].SID = "create-role-v3"
+		var thirdCeilingVersion iamv1.PolicyVersionDetail
+		post(t, "/v1/policies/"+string(ceiling.Policy.ID)+"/versions", root, iamv1.CreatePolicyVersionRequest{
+			Document: thirdCeilingDocument, ResourceVersion: ceiling.Policy.ResourceVersion,
+			RequestID: "delegated-role-ceiling-version-three-create",
+		}, http.StatusCreated, &thirdCeilingVersion)
+		attachmentDefaultRoleRequest := delegatedRequest
+		attachmentDefaultRoleRequest.Name = "Delegated attachment default race"
+		attachmentDefaultRoleRequest.RequestID = "delegated-role-attachment-default-role-create"
+		var attachmentDefaultRole iamv1.Role
+		post(t, "/v1/roles", delegatedBearer, attachmentDefaultRoleRequest, http.StatusCreated, &attachmentDefaultRole)
+		attachmentDefaultRequest := iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(attachmentDefaultRole.ID)},
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+			RequestID: "delegated-role-attach-default-race",
+		}
+		attachmentDefaultCreate, attachmentDefaultSwitch := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		attachmentDefaultCreateBytes := mustIAMJSON(t, attachmentDefaultRequest)
+		attachmentDefaultSwitchBytes := mustIAMJSON(t, iamv1.SetDefaultPolicyVersionRequest{
+			VersionID: thirdCeilingVersion.Version.ID, ResourceVersion: thirdCeilingVersion.Policy.ResourceVersion,
+			RequestID: "delegated-role-attachment-ceiling-default-race",
+		})
+		releaseAttachmentDefaultRace := holdRecordedIdentityDecisions(t, ctx, database,
+			attachmentDefaultRequest.RequestID, "delegated-role-attachment-ceiling-default-race")
+		go func() {
+			attachmentDefaultCreate <- performIAMRequest(handler, http.MethodPost,
+				"/v1/policy-attachments", delegatedBearer, attachmentDefaultCreateBytes)
+		}()
+		go func() {
+			attachmentDefaultSwitch <- performIAMRequest(handler, http.MethodPost,
+				"/v1/policies/"+string(ceiling.Policy.ID)+":set-default-version", root, attachmentDefaultSwitchBytes)
+		}()
+		releaseAttachmentDefaultRace()
+		var attachmentDefaultResponse, attachmentSwitchResponse *httptest.ResponseRecorder
+		for range 2 {
+			select {
+			case attachmentDefaultResponse = <-attachmentDefaultCreate:
+			case attachmentSwitchResponse = <-attachmentDefaultSwitch:
+			case <-ctx.Done():
+				t.Fatal("delegated role attachment and ceiling default switch did not terminate")
+			}
+		}
+		if attachmentSwitchResponse == nil {
+			t.Fatal("competing attachment ceiling switch returned no response")
+		}
+		if attachmentSwitchResponse.Code != http.StatusOK ||
+			json.Unmarshal(attachmentSwitchResponse.Body.Bytes(), &ceiling) != nil || iamv1.ValidatePolicyDetail(ceiling) != nil ||
+			ceiling.Version.ID != thirdCeilingVersion.Version.ID || ceiling.Policy.DefaultVersionID != thirdCeilingVersion.Version.ID {
+			t.Fatalf("competing attachment ceiling switch status=%d body=%s",
+				attachmentSwitchResponse.Code, attachmentSwitchResponse.Body.String())
+		}
+		if attachmentDefaultResponse == nil {
+			t.Fatal("competing delegated role attachment returned no response")
+		}
+		if attachmentDefaultResponse.Code != http.StatusOK && attachmentDefaultResponse.Code != http.StatusForbidden &&
+			attachmentDefaultResponse.Code != http.StatusConflict {
+			t.Fatalf("competing delegated role attachment/default status=%d body=%s",
+				attachmentDefaultResponse.Code, attachmentDefaultResponse.Body.String())
+		}
+		attachmentDefaultWon := attachmentDefaultResponse.Code == http.StatusOK
+		if attachmentDefaultWon {
+			var attached iamv1.PolicyAttachment
+			if json.Unmarshal(attachmentDefaultResponse.Body.Bytes(), &attached) != nil || iamv1.ValidatePolicyAttachment(attached) != nil ||
+				attached.Target.Kind != iamv1.PolicyTargetRole || attached.Target.ID != string(attachmentDefaultRole.ID) {
+				t.Fatal("winning attachment/default command returned an invalid role relation")
+			}
+		}
+		var attachmentDefaultActive, attachmentDefaultCompletion, attachmentDefaultFact int
+		if err := database.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND target_kind='ROLE' AND target_id=$2
+			  AND policy_id=$3 AND revoked_at IS NULL),
+			(SELECT count(*) FROM iam.policy_attachment_changes receipt WHERE receipt.tenant_id=$1
+			  AND receipt.actor_principal_id=$4 AND receipt.request_id=$5 AND receipt.target_kind='ROLE'
+			  AND receipt.target_id=$2 AND receipt.actor_boundary_evidence->>'state'='BOUND'
+			  AND receipt.target_boundary_evidence->>'state'='ROLE_BOUND'
+			  AND iam.verified_policy_attachment_change(receipt.tenant_id,receipt.actor_principal_id,receipt.request_id) IS NOT NULL),
+			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$5
+			  AND event_document->>'action'='iam.policy-attachment.created')`, member.AccountID, attachmentDefaultRole.ID,
+			iamv1.SystemPolicyPaaSViewer, member.ID, attachmentDefaultRequest.RequestID).Scan(
+			&attachmentDefaultActive, &attachmentDefaultCompletion, &attachmentDefaultFact); err != nil {
+			t.Fatal("inspect delegated attachment/default competition", err)
+		}
+		wantAttachmentDefaultState := 0
+		if attachmentDefaultWon {
+			wantAttachmentDefaultState = 1
+		}
+		if attachmentDefaultActive != wantAttachmentDefaultState || attachmentDefaultCompletion != wantAttachmentDefaultState ||
+			attachmentDefaultFact != wantAttachmentDefaultState {
+			t.Fatalf("attachment/default competition left partial authority: attachment=%d completion=%d fact=%d won=%t",
+				attachmentDefaultActive, attachmentDefaultCompletion, attachmentDefaultFact, attachmentDefaultWon)
+		}
+		var attachmentDefaultBoundary iamv1.RolePermissionBoundary
+		get(t, "/v1/roles/"+string(attachmentDefaultRole.ID)+"/permission-boundary", delegatedBearer,
+			http.StatusOK, &attachmentDefaultBoundary)
+		if attachmentDefaultBoundary.Policy == nil || attachmentDefaultBoundary.Policy.PolicyID != ceiling.Policy.ID ||
+			attachmentDefaultBoundary.Policy.VersionID != ceiling.Version.ID ||
+			attachmentDefaultBoundary.Policy.ContentDigest != ceiling.Version.ContentDigest {
+			t.Fatal("attachment/default competition retained a stale role ceiling")
+		}
+		concurrentRequest := delegatedRequest
+		concurrentRequest.Name = "Delegated concurrent"
+		concurrentRequest.RequestID = "delegated-role-concurrent-create"
+		var concurrentRole iamv1.Role
+		post(t, "/v1/roles", delegatedBearer, concurrentRequest, http.StatusCreated, &concurrentRole)
+		concurrentRolePath := "/v1/roles/" + string(concurrentRole.ID)
+		attachmentResult, boundaryResult := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		attachmentBytes := mustIAMJSON(t, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(concurrentRole.ID)},
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "delegated-role-concurrent-attach",
+		})
+		boundaryBytes := mustIAMJSON(t, iamv1.RemoveRolePermissionBoundaryRequest{
+			ResourceVersion: concurrentRole.ResourceVersion, RequestID: "delegated-role-concurrent-boundary-remove",
+		})
+		releaseDecisions := holdRecordedIdentityDecisions(t, ctx, database,
+			"delegated-role-concurrent-attach", "delegated-role-concurrent-boundary-remove")
+		go func() {
+			attachmentResult <- performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", delegatedBearer, attachmentBytes)
+		}()
+		go func() {
+			boundaryResult <- performIAMRequest(handler, http.MethodDelete, concurrentRolePath+"/permission-boundary", root, boundaryBytes)
+		}()
+		releaseDecisions()
+		var attachmentResponse, boundaryResponse *httptest.ResponseRecorder
+		for range 2 {
+			select {
+			case attachmentResponse = <-attachmentResult:
+			case boundaryResponse = <-boundaryResult:
+			case <-ctx.Done():
+				t.Fatal("delegated attachment and role boundary removal did not terminate")
+			}
+		}
+		if boundaryResponse == nil {
+			t.Fatal("competing role boundary removal returned no response")
+		}
+		if boundaryResponse.Code != http.StatusOK {
+			t.Fatalf("competing role boundary removal status=%d body=%s", boundaryResponse.Code, boundaryResponse.Body.String())
+		}
+		if attachmentResponse == nil {
+			t.Fatal("competing delegated attachment returned no response")
+		}
+		if attachmentResponse.Code != http.StatusOK && attachmentResponse.Code != http.StatusForbidden {
+			t.Fatalf("competing delegated attachment status=%d body=%s", attachmentResponse.Code, attachmentResponse.Body.String())
+		}
+		attachmentWon := attachmentResponse.Code == http.StatusOK
+		if attachmentWon {
+			var attached iamv1.PolicyAttachment
+			if json.Unmarshal(attachmentResponse.Body.Bytes(), &attached) != nil || iamv1.ValidatePolicyAttachment(attached) != nil ||
+				attached.Target.Kind != iamv1.PolicyTargetRole || attached.Target.ID != string(concurrentRole.ID) {
+				t.Fatal("winning delegated attachment returned an invalid role relation")
+			}
+		}
+		var activeBoundary, activeAttachment, completion, successFact int
+		if err := database.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM iam.role_permission_boundaries WHERE tenant_id=$1 AND role_id=$2 AND revoked_at IS NULL),
+			(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND target_kind='ROLE' AND target_id=$2
+			 AND policy_id=$3 AND revoked_at IS NULL),
+			(SELECT count(*) FROM iam.policy_attachment_changes WHERE tenant_id=$1 AND actor_principal_id=$4
+			 AND request_id='delegated-role-concurrent-attach' AND target_kind='ROLE' AND target_id=$2
+			 AND actor_boundary_evidence->>'state'='BOUND' AND target_boundary_evidence->>'state'='ROLE_BOUND'),
+			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1
+			 AND event_document->>'requestId'='delegated-role-concurrent-attach'
+			 AND event_document->>'action'='iam.policy-attachment.created')`,
+			member.AccountID, concurrentRole.ID, iamv1.SystemPolicyPaaSViewer, member.ID).Scan(
+			&activeBoundary, &activeAttachment, &completion, &successFact); err != nil {
+			t.Fatal("inspect competing role authority", err)
+		}
+		wantCommitted := 0
+		if attachmentWon {
+			wantCommitted = 1
+		}
+		if activeBoundary != 0 || activeAttachment != wantCommitted || completion != wantCommitted || successFact != wantCommitted {
+			t.Fatalf("role boundary competition left partial authority: boundary=%d attachment=%d completion=%d fact=%d won=%t",
+				activeBoundary, activeAttachment, completion, successFact, attachmentWon)
+		}
+		var concurrentAccess iamv1.RoleAccess
+		get(t, concurrentRolePath, delegatedBearer, http.StatusOK, &concurrentAccess)
+		post(t, concurrentRolePath+":assume", delegatedBearer, iamv1.AssumeRoleRequest{
+			ResourceVersion: concurrentAccess.Role.ResourceVersion, RequestID: "delegated-role-concurrent-assume",
+		}, http.StatusForbidden, nil)
+		var issued iamv1.AssumeRoleResponse
+		post(t, rolePath+":assume", delegatedBearer, iamv1.AssumeRoleRequest{
+			ResourceVersion: delegatedRole.ResourceVersion, RequestID: "delegated-role-assume",
+		}, http.StatusOK, &issued)
+		if iamv1.ValidateAssumeRoleResponse(issued) != nil || issued.Outcome != "APPLIED" || !issued.Credential.Present() {
+			t.Fatal("delegated bounded role could not issue an exact role session")
+		}
+		rawCredential := issued.Credential.CopyBytes()
+		roleBearer := string(rawCredential)
+		clear(rawCredential)
+		authorize := func(resourceID, requestID string, want bool) {
+			t.Helper()
+			request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+				iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: resourceID},
+				iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, roleBearer)
+			var decision iamv1.AuthorizationDecision
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil ||
+				iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil || decision.Allowed != want {
+				t.Fatalf("delegated bounded role decision resource=%s status=%d allowed=%t want=%t body=%s",
+					resourceID, response.Code, decision.Allowed, want, response.Body.String())
+			}
+		}
+		authorize("delegated-role-selected", "delegated-role-selected-read", true)
+		authorize("delegated-role-other", "delegated-role-other-read", false)
+		var delegatedRevocation, delegatedRevocationReplay iamv1.Revocation
+		post(t, "/v1/policy-attachments/"+string(delegatedAttachment.ID)+":revoke", delegatedBearer,
+			iamv1.RevokePolicyAttachmentRequest{ResourceVersion: delegatedAttachment.ResourceVersion, RequestID: "delegated-role-revoke"}, http.StatusOK, &delegatedRevocation)
+		post(t, "/v1/policy-attachments/"+string(delegatedAttachment.ID)+":revoke", delegatedBearer,
+			iamv1.RevokePolicyAttachmentRequest{ResourceVersion: delegatedAttachment.ResourceVersion, RequestID: "delegated-role-revoke"}, http.StatusOK, &delegatedRevocationReplay)
+		if !reflect.DeepEqual(delegatedRevocation, delegatedRevocationReplay) {
+			t.Fatal("delegated role revocation replay changed its result")
+		}
+		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "delegated-role-selected"},
+			iamv1.AuthorizationResourceInstance, "", "delegated-role-revoked-read", "delegated-role-revoked-read")
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, roleBearer)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("revoked delegated role attachment retained a usable session: status=%d body=%s", response.Code, response.Body.String())
+		}
+		var platformAttachment iamv1.PolicyAttachment
+		post(t, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
+			PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "delegated-role-actor-platform-grant",
+		}, http.StatusOK, &platformAttachment)
+		delegatedBearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+		platformRejected := delegatedRequest
+		platformRejected.Name = "Platform rejected"
+		platformRejected.RequestID = "delegated-role-platform-rejected"
+		post(t, "/v1/roles", delegatedBearer, platformRejected, http.StatusForbidden, nil)
+		post(t, "/v1/policy-attachments/"+string(platformAttachment.ID)+":revoke", root,
+			iamv1.RevokePolicyAttachmentRequest{ResourceVersion: platformAttachment.ResourceVersion,
+				RequestID: "delegated-role-actor-platform-revoke"}, http.StatusOK, nil)
+		delegatedBearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+		boundaryRaceRequest := delegatedRequest
+		boundaryRaceRequest.Name = "Delegated boundary race"
+		boundaryRaceRequest.RequestID = "delegated-role-create-boundary-race"
+		boundaryRaceCreate, boundaryRaceRemove := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		boundaryRaceCreateBytes := mustIAMJSON(t, boundaryRaceRequest)
+		boundaryRaceRemoveBytes := mustIAMJSON(t, iamv1.RemoveUserPermissionBoundaryRequest{
+			ResourceVersion: userBoundary.ResourceVersion, RequestID: "delegated-role-actor-boundary-remove",
+		})
+		releaseBoundaryRace := holdRecordedIdentityDecisions(t, ctx, database,
+			boundaryRaceRequest.RequestID, "delegated-role-actor-boundary-remove")
+		go func() {
+			boundaryRaceCreate <- performIAMRequest(handler, http.MethodPost, "/v1/roles", delegatedBearer, boundaryRaceCreateBytes)
+		}()
+		go func() {
+			boundaryRaceRemove <- performIAMRequest(handler, http.MethodDelete, boundaryPath, root, boundaryRaceRemoveBytes)
+		}()
+		releaseBoundaryRace()
+		var boundaryCreateResponse, boundaryRemoveResponse *httptest.ResponseRecorder
+		for range 2 {
+			select {
+			case boundaryCreateResponse = <-boundaryRaceCreate:
+			case boundaryRemoveResponse = <-boundaryRaceRemove:
+			case <-ctx.Done():
+				t.Fatal("delegated role creation and actor boundary removal did not terminate")
+			}
+		}
+		if boundaryRemoveResponse == nil {
+			t.Fatal("competing actor boundary removal returned no response")
+		}
+		if boundaryRemoveResponse.Code != http.StatusOK || json.Unmarshal(boundaryRemoveResponse.Body.Bytes(), &userBoundary) != nil ||
+			iamv1.ValidateUserPermissionBoundary(userBoundary) != nil || userBoundary.Policy != nil {
+			t.Fatalf("competing actor boundary removal status=%d body=%s",
+				boundaryRemoveResponse.Code, boundaryRemoveResponse.Body.String())
+		}
+		if boundaryCreateResponse == nil {
+			t.Fatal("competing boundary-race role creation returned no response")
+		}
+		if boundaryCreateResponse.Code != http.StatusCreated &&
+			boundaryCreateResponse.Code != http.StatusForbidden && boundaryCreateResponse.Code != http.StatusConflict {
+			t.Fatalf("competing boundary-race role creation status=%d body=%s",
+				boundaryCreateResponse.Code, boundaryCreateResponse.Body.String())
+		}
+		boundaryCreateWon := boundaryCreateResponse.Code == http.StatusCreated
+		if boundaryCreateWon {
+			var created iamv1.Role
+			if json.Unmarshal(boundaryCreateResponse.Body.Bytes(), &created) != nil || iamv1.ValidateRole(created) != nil {
+				t.Fatal("winning boundary-race role creation returned an invalid role")
+			}
+		}
+		var boundaryRaceRoles, boundaryRaceTrusts, boundaryRaceBoundaries, boundaryRaceFacts int
+		if err := database.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM iam.roles WHERE tenant_id=$1 AND metadata->>'name'=$2),
+			(SELECT count(*) FROM iam.role_trust_versions trust JOIN iam.roles role_value
+			  ON (role_value.tenant_id,role_value.id)=(trust.tenant_id,trust.role_id)
+			  WHERE role_value.tenant_id=$1 AND role_value.metadata->>'name'=$2),
+			(SELECT count(*) FROM iam.role_permission_boundaries boundary JOIN iam.roles role_value
+			  ON (role_value.tenant_id,role_value.id)=(boundary.tenant_id,boundary.role_id)
+			  WHERE role_value.tenant_id=$1 AND role_value.metadata->>'name'=$2 AND boundary.revoked_at IS NULL),
+			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3
+			  AND event_document->>'action'='iam.role.created')`, member.AccountID, boundaryRaceRequest.Name,
+			boundaryRaceRequest.RequestID).Scan(&boundaryRaceRoles, &boundaryRaceTrusts, &boundaryRaceBoundaries, &boundaryRaceFacts); err != nil {
+			t.Fatal("inspect delegated role/actor-boundary competition", err)
+		}
+		wantBoundaryRaceState := 0
+		if boundaryCreateWon {
+			wantBoundaryRaceState = 1
+		}
+		if boundaryRaceRoles != wantBoundaryRaceState || boundaryRaceTrusts != wantBoundaryRaceState ||
+			boundaryRaceBoundaries != wantBoundaryRaceState || boundaryRaceFacts != wantBoundaryRaceState {
+			t.Fatalf("role/actor-boundary competition left partial authority: roles=%d trusts=%d boundaries=%d facts=%d won=%t",
+				boundaryRaceRoles, boundaryRaceTrusts, boundaryRaceBoundaries, boundaryRaceFacts, boundaryCreateWon)
+		}
+		post(t, "/v1/roles", delegatedBearer, delegatedRequest, http.StatusCreated, &delegatedReplay)
+		if !reflect.DeepEqual(delegatedRole, delegatedReplay) {
+			t.Fatal("removing the actor ceiling rewrote an exact committed role creation")
+		}
+		delegatedRequest.Name, delegatedRequest.RequestID = "Delegated rejected", "delegated-role-create-after-boundary"
+		post(t, "/v1/roles", delegatedBearer, delegatedRequest, http.StatusForbidden, nil)
+		var rejectedClean bool
+		if err := database.QueryRow(ctx, `SELECT
+			NOT EXISTS(SELECT 1 FROM iam.roles WHERE tenant_id=$1 AND metadata->>'name' IN ('Platform rejected','Delegated rejected'))
+			AND NOT EXISTS(SELECT 1 FROM iam.policy_attachments WHERE tenant_id=$1 AND target_kind='ROLE' AND target_id=$2
+			  AND policy_id=$3 AND revoked_at IS NULL)
+			AND NOT EXISTS(SELECT 1 FROM iam.policy_attachment_changes WHERE tenant_id=$1
+			  AND request_id='delegated-role-mismatched-attach')
+			AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1
+			  AND event_document->>'requestId' IN ('delegated-role-mismatched-attach','delegated-role-platform-rejected','delegated-role-create-after-boundary')
+			  AND event_document->>'action' IN ('iam.role.created','iam.policy-attachment.created'))`,
+			member.AccountID, mismatchedRole.ID, iamv1.SystemPolicyPaaSViewer).Scan(&rejectedClean); err != nil || !rejectedClean {
+			t.Fatal("rejected delegated Role commands retained partial authority", err)
+		}
+		var roleCount, trustCount, boundaryCount, factCount, receiptCount int
+		var exactEvidence bool
+		if err := database.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM iam.roles WHERE tenant_id=$1 AND id=$2 AND management='CUSTOMER' AND resource_version=1),
+			(SELECT count(*) FROM iam.role_trust_versions WHERE tenant_id=$1 AND role_id=$2 AND id=$3),
+			(SELECT count(*) FROM iam.role_permission_boundaries WHERE tenant_id=$1 AND role_id=$2 AND policy_id=$4 AND resource_version=1 AND revoked_at IS NULL),
+			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.role.created'
+			 AND event_document#>>'{actor,id}'=$5 AND event_document#>>'{target,id}'=$2 AND event_document->>'requestId'=$6),
+			(SELECT count(*) FROM iam.policy_attachment_changes receipt
+			 WHERE receipt.tenant_id=$1 AND receipt.actor_principal_id=$5
+			   AND receipt.request_id IN ('delegated-role-attach','delegated-role-revoke')
+			   AND receipt.target_kind='ROLE' AND receipt.target_id=$2
+			   AND receipt.actor_boundary_evidence->>'state'='BOUND'
+			   AND receipt.target_boundary_evidence->>'state'='ROLE_BOUND'
+			   AND receipt.target_boundary_evidence->>'ceilingPolicyId'=$4
+			   AND iam.verified_policy_attachment_change(receipt.tenant_id,receipt.actor_principal_id,receipt.request_id) IS NOT NULL),
+			(SELECT COALESCE(bool_and(decision.boundary_evidence->>'state'='BOUND'
+			 AND decision.boundary_evidence#>>'{version,policyId}'=$4),false)
+			 FROM iam.audit_outbox fact JOIN iam.authorization_decisions decision
+			   ON (decision.tenant_id,decision.id)=(fact.tenant_id,fact.event_document->>'iamDecisionId')
+			 WHERE fact.tenant_id=$1 AND fact.event_document->>'action'='iam.role.created'
+			   AND fact.event_document#>>'{actor,id}'=$5 AND fact.event_document#>>'{target,id}'=$2
+			   AND fact.event_document->>'requestId'=$6)`,
+			member.AccountID, delegatedRole.ID, delegatedRole.CurrentTrustVersionID, ceiling.Policy.ID, member.ID, "delegated-role-create").Scan(
+			&roleCount, &trustCount, &boundaryCount, &factCount, &receiptCount, &exactEvidence); err != nil || roleCount != 1 || trustCount != 1 ||
+			boundaryCount != 1 || factCount != 1 || receiptCount != 2 || !exactEvidence {
+			t.Fatalf("delegated role lost atomic state/evidence: roles=%d trusts=%d boundaries=%d facts=%d receipts=%d evidence=%t err=%v",
+				roleCount, trustCount, boundaryCount, factCount, receiptCount, exactEvidence, err)
+		}
+	})
+
 	t.Run("outbox failure rolls back role authority", func(t *testing.T) {
 		block := func() {
 			t.Helper()
@@ -30606,13 +31135,15 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		if err := database.QueryRow(ctx, `SELECT
 			(SELECT bool_and(relrowsecurity AND relforcerowsecurity AND relowner='matrix_iam_owner'::regrole) FROM pg_class WHERE oid IN ('iam.roles'::regclass,'iam.role_trust_versions'::regclass)),
 			NOT has_table_privilege('matrix_iam_api','iam.roles','INSERT,UPDATE,DELETE,TRUNCATE') AND NOT has_table_privilege('matrix_iam_worker','iam.role_trust_versions','SELECT,INSERT,UPDATE,DELETE'),
-			NOT has_function_privilege('matrix_iam_worker','iam.create_role(text,text,text,text,text,jsonb,jsonb,jsonb,text)','EXECUTE') AND NOT has_function_privilege('matrix_iam_credential_recovery','iam.delete_role(text,text,text,text,bigint,jsonb,text)','EXECUTE')`).Scan(&isolated, &immutable, &scoped); err != nil || !isolated || !immutable || !scoped {
+			to_regprocedure('iam.create_role(text,text,text,text,text,jsonb,jsonb,jsonb,text)') IS NULL
+			AND NOT has_function_privilege('matrix_iam_worker','iam.create_role(text,text,text,text,text,jsonb,jsonb,text,jsonb,text)','EXECUTE')
+			AND NOT has_function_privilege('matrix_iam_credential_recovery','iam.delete_role(text,text,text,text,bigint,jsonb,text)','EXECUTE')`).Scan(&isolated, &immutable, &scoped); err != nil || !isolated || !immutable || !scoped {
 			t.Fatal("role storage or callable permissions are overbroad", err)
 		}
 		for _, signature := range []string{
 			"iam.list_roles(text,text,text,text)", "iam.read_role(text,text,text,text)",
 			"iam.read_role_permission_boundary(text,text,text,text)", "iam.change_role_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text)",
-			"iam.create_role(text,text,text,text,text,jsonb,jsonb,jsonb,text)", "iam.update_role(text,text,text,text,bigint,jsonb,jsonb,text)",
+			"iam.create_role(text,text,text,text,text,jsonb,jsonb,text,jsonb,text)", "iam.update_role(text,text,text,text,bigint,jsonb,jsonb,text)",
 			"iam.set_role_status(text,text,text,text,bigint,text,jsonb,text)", "iam.set_role_trust_policy(text,text,text,text,text,bigint,jsonb,jsonb,text)",
 			"iam.delete_role(text,text,text,text,bigint,jsonb,text)", "iam.list_role_trust_versions(text,text,text,text,text)", "iam.read_role_trust_version(text,text,text,text,text)",
 		} {

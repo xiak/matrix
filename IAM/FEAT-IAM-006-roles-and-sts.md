@@ -1,6 +1,7 @@
 # FEAT-IAM-006：角色、信任与 STS
 
 - 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。必须同时消费公开schema数量边界修正`0567c8b2699521b137db0f8b69f17630c59f04fb`，其本地契约及三项独立CI也已通过。服务来源RoleSession发行、回执、当前PDP、binding撤销即时失效以及严格SERVICE来源的管理员目录/读取/代撤销，已累计固定到`a464299b`并通过本地真实PG18、累计Role管理、独立进程及整仓门禁；其[Verification 36779942782](https://github.com/xiak/matrix/actions/runs/36779942782)已核对精确SHA，14项全部completed/success。UX/UI、完整容量和发布仍未完成，整体006未验收。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。
+- 当前增量：IAM-ROLE-10受限Role委派后端已通过本节记录的真库、并发、最近前驱、独立进程和全仓本地门禁；仍待固定推送、独立CI和010/UX/UI接入，不提前标记006完成。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -17,6 +18,7 @@
 | IAM-ROLE-07 | console 切换显式提示账号/角色和到期；恢复原身份需要原有效 session |
 | IAM-ROLE-08 | 获授权的管理员在精确Role范围分页查询非秘密会话记录，并显式撤销单个会话；读取、撤销和自服务承担权限分离 |
 | IAM-ROLE-09 | 当前有效ServiceIdentity只能通过精确WorkloadRoleBinding承担SERVICE_LINKED Role；服务来源与USER来源严格互斥，解绑或来源失效影响下一请求且历史事实仍可验证 |
+| IAM-ROLE-10 | 租户内委派管理只能在当前 User permission boundary 上限内创建 Role 并管理其租户策略附件；新 Role 的同一上限必须与 Role、初始 Trust 和成功事实原子提交，不得暴露无上限窗口或客户端 boundary selector |
 
 ## 详细设计
 
@@ -46,7 +48,7 @@ TrustPolicy与005身份权限文档不是一个可互换的DSL。复用api/contr
 
 ### R1 API与权限边界
 
-下表为 R1 已实现的封闭管理 API。所有请求先走当前有效USER/Account的PDP，所有写入再经原root关系、当前会话与版本的锁内复核；Root不是授权旁路，非root即使有动作Allow也不能新增/编辑高风险角色授权。读取可由实际租户策略授权。当前身份的Role列表/创建能力与Role详情逐资源能力由服务器计算，不在UI猜角色名称或全局allowedActions。
+下表为 R1 已实现的封闭管理 API。所有请求先走当前有效USER/Account的PDP，所有写入再经当前会话、对象版本和对应存储不变量的锁内复核；Root不是授权旁路。Role 元数据、状态、Trust、boundary 与删除仍只允许原 Account Root；非root 仅可沿本FEAT的“受限角色委派纵向闭环”创建自动继承其当前 ceiling 的 Role，并管理同一 ceiling Role 的租户策略附件，不能把动作 Allow 扩成无上限角色管理。读取可由实际租户策略授权。当前身份的Role列表/创建能力与Role详情逐资源能力由服务器计算，不在UI猜角色名称或全局allowedActions。
 
 | 路由 | Action / 授权资源 | 输入或返回 |
 | --- | --- | --- |
@@ -69,7 +71,7 @@ R1对应租户IAM/USER事实为`iam.role.created/updated/disabled/enabled/trust-
 
 在现有IAM authority内增加roles和role_trust_versions；Role关系有真实Account外键、名称唯一、不可逆墓碑、不可变信任及指针归属约束。扩展原policy_attachments的ROLE目标约束，不把ROLE伪装成USER或GROUP，不平行建立角色附件表。API只获封闭函数执行权，worker/recovery/verifier不能管理角色，所有表仍受现有owner/RLS隔离。
 
-沿现有adapter形状设计`list_roles/read_role`各4参、`list_role_trust_versions/read_role_trust_version`各5参；封闭写函数`create_role/set_role_trust_policy`各9参、`update_role/set_role_status`各8参、`delete_role`7参，均返回jsonb。所有Role写函数末尾是私有`actor_session_id text`，只能由实际已认证bearer的Session.ID提供。公共固定参数始终包含IAM推导的account、actor、decision；其他只为准确Role/预期修订/闭合元数据或信任承诺/单一event，不能是任意SQL命令。最终完整逐参类型、ACL和proconfig随实施固定，不以参量数当兼容证明。
+沿现有adapter形状，`list_roles/read_role`各4参、`list_role_trust_versions/read_role_trust_version`各5参；当前封闭写函数中`create_role(text,text,text,text,text,jsonb,jsonb,text,jsonb,text)`为10参，私有`boundary_id`只能由IAM为受限创建生成且Root必须传空；`set_role_trust_policy`9参、`update_role/set_role_status`各8参、`delete_role`7参，均返回jsonb。所有Role写函数末尾是私有`actor_session_id text`，只能由实际已认证bearer的Session.ID提供。公共固定参数始终包含IAM推导的account、actor、decision；其他只为准确Role/预期修订/闭合元数据或信任承诺/单一event，不能是任意SQL命令。旧9参`create_role`已删除，完整类型、ACL和proconfig由readiness验证，不以参量数本身当兼容证明。
 
 现有授权决定不保存SessionID，`assert_allowed_decision`不能用于重建调用会话。先按稳定ID锁actor及涉及的USER目标，再检查指定Session的真实Account/USER、ACTIVE/未撤销/未过期、非临时改密及与user_credentials相同generation；空、NULL、其他USER或代际不符一律拒绝。不得任选actor的另一有效session，不把私有SessionID加入北向request、AuthorizationRequest/decision、摘要、outbox或历史proof，也不追称旧决定包含该lineage。
 
@@ -78,6 +80,42 @@ R1对应租户IAM/USER事实为`iam.role.created/updated/disabled/enabled/trust-
 R1固定源码为IAM24/Audit14/PaaS1，新增Role对象、受限函数和闭合审计事实；发布profile不变。IAM产品Profile追加r2，并保留已登记r1的原始声明；当前SYSTEM默认值、已撤销附件和旧信任/决定不能由schema/bootstrap重放改写。新装使用新源码声明与系统种子；已有数据是否能调用新Role action仍取决于明确当前附件，不因注册目录而授予权限。保留数据正向资格由原root显式发布/关联当前TENANT策略证明，不暗改旧SYSTEM默认或重做安装bootstrap。完整release兼容仍由最终累计组合及安装owner验收，不为本管理切片单独分配发行revision，也不把开发中相同schema数字视为可跨二进制兼容。
 
 锁序必须基于实际现有Account/主体/Policy/附件事务核对，不能仅照一条概念箭头实现。复用现有SERIALIZABLE和有界重试，跨对象先后顺序与实际管理、附件和删除路径保持一致；同类批量锁按稳定ID取得，写root关系、当前会话、预期修订与对象范围在锁内重查。不得把Account读锁误称为独占串行化全部授权变更。同resourceVersion的状态/信任/删除竞争只可一个结果，末尾outbox失败全部回滚。未来R2需把source session、RoleSession与credential generation加入同一已验证顺序。
+
+### 受限角色委派纵向闭环
+
+本切片把已实现的 Role、TrustPolicy、Role permission boundary、策略附件和 RoleSession 串成可用的租户内委派路径，不新建角色类型、管理员别名或第二套授权器。第一个闭环仅开放“创建带上限的 CUSTOMER Role→在同一上限下关联/撤销可见 ACTIVE/TENANT Policy（内置或客户策略）→被信任 USER 通过原 AssumeRole 路径访问实际资源”。Role 元数据更新、停复用、Trust 后续修改、删除及 boundary 替换/移除继续只允许原 Account Root，后续逐片放开；本片不把一个创建权限扩张成全部 Role 管理权。
+
+`POST /v1/roles` 的公开请求保持不变，不增加 policyId、boundaryId、accountId、actorSessionId 或管理者选择器。Root 继续创建没有隐式 boundary 的 Role，且该 Role 在显式设置 boundary 前不能承担。非 root 只能是当前 Account 的直接 ACTIVE USER；实际 bearer Session、credential generation、非强制改密、当前 `iam.role.create` 允许决定、唯一 CUSTOMER/TENANT User boundary 及其精确默认版本必须在同一受限存储事务内重验。操作者存在任一未撤销 INSTALLATION 附件、上限缺失/非 CUSTOMER/非 TENANT/跨 Account/已退役/已换默认版本时失败关闭。
+
+非 root 创建成功时，IAM 从当前决定的 boundary evidence 推导准确 ceiling Policy，为结果 Role 生成不透明 boundary ID，并在一个事务写入 Role、初始不可变 TrustVersion、当前 Role boundary、原授权决定关联和唯一 `iam.role.created` outbox 事实。boundary 是创建后对象的安全不变量，不是另一次隐式 `iam.role.permission-boundary.set` 命令，因此不伪造第二条管理决定或成功事实。创建不自动添加正向 Policy 附件、不发行 RoleSession，也不把 Trust 命中当成业务权限。
+
+精确创建重放必须同时匹配 Role、TrustVersion、原 Role boundary、决定及 outbox；当前 actor ceiling 后续移除不改写已提交结果，但新 requestId 必须重新授权并被拒绝。任一已提交证据缺失或篡改都返回不可用，不根据当前 Role/Policy 补造历史。旧 Root 创建历史不回填 boundary 或委派证据，schema/bootstrap 等值重放不得使它变成可承担的有上限 Role。
+
+现有 PolicyAttachment API 的 ROLE 分支继续使用 `iam.role-policy-attachment.create/revoke`，不增加 Role 专用附件表或新路由。非 root 写入除原决定外，还要在锁内证明目标是同 Account 的 ACTIVE/CUSTOMER Role，其当前 Role boundary 与 actor ceiling 的 PolicyID、默认 versionId、contentDigest、contractVersion 和 compilation 完全相同，且 actor 无平台附件。只允许 TENANT Policy；跨 Account、SYSTEM/SERVICE_LINKED/已停用或已删除 Role、缺失/不同 Role boundary、INSTALLATION Policy 和任一 caller selector 拒绝。附件本身可以比 ceiling 文档宽，但实际 Role 权限仍是全部正向附件与必需 Role boundary 的交集；不把文档子集比较写成第二 PDP。
+
+Role 目标附件的完成证据继续使用现有 `actorBoundaryEvidence`/`targetBoundaryEvidence` 和 `authorityEvidenceDigest`；目标证据新增封闭 `ROLE_BOUND` 形状，绑定准确 Role 修订、boundary 关系、PolicyVersion 及编译承诺，不保存可重用 permit。原 USER/GROUP/ROOT/NOT_APPLICABLE 形状与旧 Audit canonical 不改。附件撤销、Role boundary 变更、Policy 默认切换、actor ceiling 变更和 RoleSession 当前授权共用现有单调代际；下一次保护请求失效，旧已提交事实按发生时证据继续投递。
+
+存储锁序以实际 writer 冻结而不是沿用概念箭头。Role 创建先取 Account 共享锁，再按稳定 ID 锁 actor 与 Trust 中全部 USER，随后锁 actor credential/Session；受限 actor 再锁当前 User boundary 和 ceiling Policy，最后原子插入 Role、Trust 与 Role boundary。ROLE 附件命令复用授权事务已取得的 Account、actor、credential/Session，随后按稳定 USER 顺序锁 User boundary，再锁目标 Role、Role boundary，最后按稳定 Policy ID 锁 ceiling/附件 Policy；取得 Policy 锁后必须再次核对决定中的当前 boundary 版本与摘要，才写 PolicyAttachment、completion 与 outbox。Root 的 Role boundary writer 不反向取得 actor boundary：它锁 Role 后再锁相关 Policy 与 Role boundary；与受限附件竞争时以 Role/Role boundary 串行并在锁内重验。真实并发门禁必须允许“附件完整提交后 boundary 移除使承担关闭”或“boundary 先移除后附件完整拒绝”两种终态，禁止 `40P01`、重试掩盖死锁、幽灵附件或无 receipt 的成功事实。末尾 boundary/附件/completion/outbox 故障必须无部分 Role、Trust 或权限。
+
+**必须通过的纵向门禁。** 沿用现有 Role/Policy 契约、IAM HTTP/PG、Audit proof 和 authorityprocess owner，不新建测试框架：
+
+- Root 原样创建无隐式 boundary Role；同 ceiling 管理 USER 创建带同 boundary Role，再关联可见 ACTIVE/TENANT 内置或客户 Policy，被信任 USER 用真实 RoleSession/PaaS 访问一个允许资源并被同 boundary 拒绝第二个资源；撤销附件后旧 RoleSession 下一请求失效。
+- 缺失/不同/SYSTEM/跨 Account/退役 ceiling，平台绑定 actor，跨 Account/SYSTEM/SERVICE_LINKED/停用/删除 Role，缺失或不同 Role boundary，INSTALLATION Policy，伪造 roleId/policyId/resourceVersion/target/scope/Session/boundary selector 全部失败且无部分状态。
+- 创建的精确/变体重放，创建后 actor ceiling 移除，以及附件的精确重放/陈旧修订；completion、decision、boundary、outbox 或 `authorityEvidenceDigest` 篡改失败关闭，不重建历史。
+- 创建与 logout/actor ceiling 移除/默认切换，附件与 Role boundary 移除/替换、Policy 默认切换/退役及另一附件命令的真实锁等待只有一个合法结果；明确断言无 deadlock、无幽灵 Role/boundary/附件/成功事实。
+- 受限 runtime 不能读写内部关系/证据或调用 helper；旧函数形状、ACL、RLS、trigger、`SECURITY DEFINER`/`search_path` 漂移关闭 readiness。唯一滚动前驱的 Root Role/Trust/附件/RoleSession、旧 Audit canonical/proof 和撤权终态保留，不回填委派 boundary 或成功证据。
+- 两个 IAM 实例、实际 PaaS/Audit/dispatcher、重启与等值 schema/bootstrap 重放均保持当前撤权和历史事实。UI 仅消费后端返回的 capability/稳定错误，由010/UX/UI owner 在后端固定后接入，不以隐藏按钮或本地比较 boundary 代替服务端门禁。
+
+### 受限角色委派本地证据
+
+2026-10-09，候选实现将实际开发形状推进为 IAM79/Audit36/PaaS3、完整发布契约 revision27；公开 Role/PolicyAttachment 请求未增加 boundary、Account 或 Session selector，旧9参 `create_role` 已删除。任务专属 PostgreSQL 18.4 容器限制为2 CPU、2 GiB、PIDs512，Go 1.26.3 使用 `GOMAXPROCS=2`、`-p 1/2` 串行重型门禁：
+
+- 完整 Role 管理 PG/race 76.52秒（包80.110秒）通过：受限USER原子创建同 ceiling Role、精确重放、同/不同 ceiling ROLE附件、实际 AssumeRole/PaaS Allow与Deny、撤销后旧RoleSession拒绝、平台绑定与缺失ceiling拒绝且无部分状态。Role创建分别与ceiling默认版本切换、actor ceiling移除在两条真实决定后同步竞争；ROLE附件分别与ceiling默认版本切换、Root移除Role boundary竞争。每组只出现完整提交后按当前上限生效/失效，或完整拒绝；无40P01、幽灵Role/Trust/boundary/附件、缺receipt成功事实。
+- Policy authority存储 PG/race 314.64秒（包318.258秒）、IAM HTTP/PG race 123.130秒、Audit HTTP/PG race 4.390秒通过，覆盖Policy锁后二次当前ceiling校验、新的`ROLE_BOUND`封闭形状、不可变completion/verifier、RLS/ACL/触发器/search_path漂移、当前profile与等值schema重放。
+- 唯一滚动前驱替换为固定`05525c7c03e83b9ed892e0354140b46685394101`的真实IAM78 migrator和runtime；IAM78→79门禁131.29秒（包134.710秒）通过。旧程序实际创建的Root Role、Trust、显式boundary、ROLE附件和RoleSession逐项保留，原Root receipt没有被改成`ROLE_BOUND`；当前程序再完成受限Role创建、附件和承担。该证据只支持pre-v1最近前驱，不宣称任意历史或跨不匹配release profile兼容。
+- 双IAM、Audit、PaaS和dispatcher独立进程race 257.49秒（包260.943秒）通过，保留受限运行登录、真实业务资源、RoleSession撤权、outbox历史投递、Audit链与重启。全仓普通及race、vet、模块校验、OpenAPI生成无差异和Linux amd64/CGO关闭构建通过。
+
+该证据不包含UX/UI或签名安装验收；后端固定并通过独立CI后才向010/UX/UI owner交付契约，不在本分支实现页面。独立CI终态尚待确认，不能由本地结果提前登记为完整006验收。
 
 ### R2发行、当前权限与历史边界
 
@@ -347,7 +385,7 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 
 - R1：两个真实Account可有同名Role；同名User/Role不混用。Root当前授权成功，普通用户/服务/platform-only/另一账号/过期或forced-change会话拒绝；读许可不能写或承担。真实同账号信任、Role策略附件、版本重放与并发更新/删除/撤权，所有失败无部分Role、信任、附件或成功事实。角色没有任何长期凭据或登录能力。
 - R1：运行数据库验证Role/信任/附件的范围、不可变性、RLS、函数形状/ACL、失联与当前Profile漂移；原root/current authority、source registry、User/Group/Boundary、平台凭据保护、claim及旧canonical回归保持。产品Profile追加不自动放大旧策略默认/附件；原数据重放、重启后删除和撤权不复活。
-- R1：旧SYSTEM默认下原Root的新Role动作在显式发布/关联TENANT策略前拒绝，原policy管理路径仍可达；非Root即使普通策略Allow仍被写保护拒绝。删除或停用User不改写旧Trust版本；新信任写入不接受已删除User。附件只接受真实同账号ROLE discriminator，不扩大原User/Group/Service或平台附件面。
+- R1：旧SYSTEM默认下原Root的新Role动作在显式发布/关联TENANT策略前拒绝，原policy管理路径仍可达；非Root只有同时具备当前动作 Allow、唯一 CUSTOMER/TENANT User boundary、无平台附件及锁内同 ceiling 证明时，才能创建自动带相同 boundary 的 Role 或管理其租户策略附件，其他Role写入继续拒绝。删除或停用User不改写旧Trust版本；新信任写入不接受已删除User。附件只接受真实同账号ROLE discriminator，不扩大原User/Group/Service或平台附件面。
 - R1：新的私有会话参数与Role/USER/GROUP/平台USER附件共同通过当前身份、logout、change(true/false/forced)、reset/recover、停用/撤权的并发锁序门禁；旧9/6调用机械失败，新函数ACL/proconfig/readiness形状准确，所有失败不产生部分关系或成功事实。不得靠有界重试掩盖actor/target的反向锁序。
 - R2：双边任一缺失拒绝；角色边界/SessionPolicy不能扩权；管理员承担只读Role后不能用原用户Allow写入。错误Role/Account/token/source/generation、会话过期/撤销、并发assume/revoke/delete/change/reset/logout失败关闭。反复停启、撤信任再恢复及原命令重放均不能复活旧RoleSession。
 - R2/R3：真实独立IAM/PaaS/Audit临时会话业务路径、原始actor与不可变Audit关联；身份变化后原outbox继续投递但当前producer凭据仍须有效；进程重启/两IAM路由无关、数据失联失败关闭。真实UI显示当前角色、账号、原身份与到期；退出角色不创建或复活原登录会话。

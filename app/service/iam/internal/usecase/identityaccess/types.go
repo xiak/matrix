@@ -416,6 +416,7 @@ type RoleCandidates struct {
 type RoleCreation struct {
 	Role             iamv1.Role
 	TrustVersion     iamv1.RoleTrustVersion
+	BoundaryID       string
 	ActorPrincipalID iamv1.PrincipalID
 	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID

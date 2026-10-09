@@ -4218,9 +4218,10 @@ BEGIN
         -- Group barrier so membership and attachment writers share one order.
         NULL;
     ELSE
-        PERFORM iam.assert_role_writer(submitted_tenant_id,submitted_actor_principal_id,actor_session_id,NULL);
-        PERFORM 1 FROM iam.roles WHERE tenant_id=submitted_tenant_id AND id=submitted_target_id AND deleted_at IS NULL FOR UPDATE;
-        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment role is unavailable'; END IF;
+        -- The delegation helper locks the actor ceiling before the Role and
+        -- its boundary. Doing that here in the opposite order deadlocks with
+        -- a ceiling default-version writer.
+        NULL;
     END IF;
     SELECT * INTO policy FROM iam.policies
      WHERE id=submitted_policy_id AND status='ACTIVE'
@@ -4363,9 +4364,9 @@ BEGIN
         -- order and verifies the immutable ceiling before the attachment row.
         NULL;
     ELSIF stored.target_kind='ROLE' THEN
-        PERFORM iam.assert_role_writer(submitted_tenant_id,submitted_actor_principal_id,actor_session_id,NULL);
-        PERFORM 1 FROM iam.roles WHERE tenant_id=submitted_tenant_id AND id=stored.target_id AND deleted_at IS NULL FOR UPDATE;
-        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment role is unavailable'; END IF;
+        -- The delegation helper owns the ceiling -> Role -> Role boundary
+        -- order for root and delegated revocations alike.
+        NULL;
     ELSE
         PERFORM 1 FROM iam.principals WHERE tenant_id=submitted_tenant_id AND id=stored.target_id FOR NO KEY UPDATE;
     END IF;

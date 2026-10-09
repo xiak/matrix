@@ -473,6 +473,7 @@ CREATE OR REPLACE FUNCTION iam.lock_policy_attachment_delegation(
 RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE actor_is_root boolean; actor_version bigint; actor_evidence jsonb; target_evidence jsonb;
     ceiling_policy_id text; ceiling iam.policies%ROWTYPE; attached iam.policies%ROWTYPE;
+    target_role record; target_role_boundary record;
     member_document jsonb; member_count bigint; member_digest text;
 BEGIN
     IF COALESCE(submitted_tenant,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -536,6 +537,16 @@ BEGIN
         PERFORM member.id FROM iam.group_memberships member
           WHERE member.tenant_id=submitted_tenant AND member.group_id=submitted_target_id
             AND member.removed_at IS NULL ORDER BY member.id FOR UPDATE;
+    ELSIF submitted_target_kind='ROLE' THEN
+        SELECT * INTO target_role FROM iam.roles role_value
+          WHERE role_value.tenant_id=submitted_tenant AND role_value.id=submitted_target_id
+            AND role_value.deleted_at IS NULL FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment role is unavailable';
+        END IF;
+        SELECT * INTO target_role_boundary FROM iam.role_permission_boundaries boundary
+          WHERE boundary.tenant_id=submitted_tenant AND boundary.role_id=submitted_target_id
+            AND boundary.revoked_at IS NULL FOR NO KEY UPDATE;
     END IF;
 
     IF actor_is_root THEN
@@ -545,7 +556,7 @@ BEGIN
         actor_evidence:='{"state":"NOT_APPLICABLE"}'::jsonb;
         target_evidence:='{"state":"NOT_APPLICABLE"}'::jsonb;
     ELSE
-        IF submitted_target_kind NOT IN ('USER','GROUP') OR actor_evidence->>'state' IS DISTINCT FROM 'BOUND'
+        IF submitted_target_kind NOT IN ('USER','GROUP','ROLE') OR actor_evidence->>'state' IS DISTINCT FROM 'BOUND'
           OR EXISTS(SELECT 1 FROM iam.policy_attachments attachment
               WHERE attachment.tenant_id=submitted_tenant AND attachment.target_kind='USER'
                 AND attachment.target_id=submitted_actor AND attachment.authority_scope='INSTALLATION'
@@ -571,7 +582,7 @@ BEGIN
               OR target_evidence->'compilation' IS DISTINCT FROM actor_evidence->'compilation' THEN
                 RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment target boundary is unavailable';
             END IF;
-        ELSE
+        ELSIF submitted_target_kind='GROUP' THEN
             IF EXISTS(SELECT 1 FROM iam.policy_attachments attachment
                 WHERE attachment.tenant_id=submitted_tenant AND attachment.target_kind='GROUP'
                   AND attachment.target_id=submitted_target_id AND attachment.revoked_at IS NULL
@@ -611,11 +622,30 @@ BEGIN
               ||convert_to(member_document::text,'UTF8')),'hex');
             target_evidence:=jsonb_build_object('state','GROUP_BOUND','ceilingPolicyId',ceiling_policy_id,
               'memberCount',member_count,'membersDigest',member_digest);
+        ELSE
+            IF target_role.management<>'CUSTOMER' OR target_role.status<>'ACTIVE'
+              OR target_role_boundary.id IS NULL
+              OR target_role_boundary.policy_id IS DISTINCT FROM ceiling_policy_id THEN
+                RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy attachment role boundary is unavailable';
+            END IF;
+            target_evidence:=jsonb_strip_nulls(jsonb_build_object(
+              'state','ROLE_BOUND','roleResourceVersion',target_role.resource_version,
+              'boundaryId',target_role_boundary.id,'resourceVersion',target_role_boundary.resource_version,
+              'ceilingPolicyId',ceiling_policy_id,'version',actor_evidence->'version',
+              'contractVersion',actor_evidence->'contractVersion','compilation',actor_evidence->'compilation'));
         END IF;
     END IF;
 
     PERFORM policy.id FROM iam.policies policy
       WHERE policy.id IN (submitted_policy_id,ceiling_policy_id) ORDER BY policy.id FOR SHARE;
+    -- A ceiling default can change after the decision and the first evidence
+    -- check but before these Policy locks. Recheck only after both Policy rows
+    -- are stable; the held USER boundary and Policy locks then protect the
+    -- exact version/digest until attachment, completion and outbox commit.
+    IF actor_evidence->>'state'='BOUND' THEN
+        PERFORM iam.assert_current_user_boundary_evidence(
+          submitted_tenant,submitted_actor,submitted_action,actor_evidence);
+    END IF;
     SELECT * INTO attached FROM iam.policies policy WHERE policy.id=submitted_policy_id;
     IF NOT FOUND OR attached.status<>'ACTIVE' OR attached.authority_scope<>submitted_authority_scope
       OR (attached.owner_tenant_id IS NOT NULL AND attached.owner_tenant_id<>submitted_tenant) THEN

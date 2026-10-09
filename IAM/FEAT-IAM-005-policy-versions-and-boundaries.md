@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 与 Group 附件的同边界闭包已固定；固定`927c8e0`完成非 root 在同一封存上限内创建 CUSTOMER Policy 首版并显式关联，固定`b54397e`再开放同一受控 USER 创建不可变、非默认 PolicyVersion 草稿，固定`f62943f`进一步开放受控默认版本切换并通过独立 CI，固定`f6c881d7`完成同一受控 USER 对非默认 PolicyVersion 的逻辑退休并通过独立 CI，固定`20c1e724`完成同一受控 USER 对普通 CUSTOMER Policy 的元数据改名并通过独立 CI。Policy 删除及 Role 闭包、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 与 Group 附件的同边界闭包已固定；固定`927c8e0`完成非 root 在同一封存上限内创建 CUSTOMER Policy 首版并显式关联，固定`b54397e`再开放同一受控 USER 创建不可变、非默认 PolicyVersion 草稿，固定`f62943f`进一步开放受控默认版本切换并通过独立 CI，固定`f6c881d7`完成同一受控 USER 对非默认 PolicyVersion 的逻辑退休并通过独立 CI，固定`20c1e724`完成同一受控 USER 对普通 CUSTOMER Policy 的元数据改名并通过独立 CI。固定`05525c7c`已完成受限 USER 对无当前引用 CUSTOMER Policy 的终态删除并通过独立 CI；Role 闭包的当前候选尚待精确固定提交的独立 CI，签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -78,6 +78,8 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 私有删除入口增加当前 actor Session 输入，公共 API 不接受 session/ceiling/force selector；旧内部函数形状在同一未发布切片删除。Account、actor USER/Session、actor boundary、ceiling/目标 Policy 与全部当前引用使用现有相容锁序。门禁必须覆盖：同 ceiling 管理员删除无引用 Policy 与精确重放；ceiling、SYSTEM、跨 Account、附件/User boundary/Role boundary 目标和平台绑定 actor 拒绝；请求通过 PDP 后并发 logout、actor ceiling 移除、目标新增附件或 boundary、改名/发布/默认切换及另一删除只有合法完整结果；完成插入或 outbox 末尾故障全回滚；完成证据篡改、旧函数/ACL/trigger/SECURITY DEFINER 漂移失败关闭；唯一滚动前驱的 Root 删除、旧 Audit canonical/proof 与全部不可变版本保留且不补造非 root 完成。
 
 普通管理目录只列 ACTIVE 策略，删除释放活跃 CUSTOMER 名额和显示名；原创建意图不能复用，但新创建意图可以使用相同显示名并得到新稳定 ID。删除后的普通内容读取、改名、发布/切换与重新关联均拒绝，历史事实按其原证据投递，不从当前目录反推历史是否存在。目录不提供未声明的回收站或历史查询 API；原始内容仍受不可变存储保护。真实门禁必须证明有超过目录预算的历史退休记录时仍能列出/创建当前策略，不能以扩大预算掩盖终生容量问题。附件创建与删除在同一 Policy 锁序列化；只有创建关联成功或策略终态成功之一，不能留下活跃的退休策略附件。
+
+固定`05525c7c03e83b9ed892e0354140b46685394101`将上述非 root 终态删除固定为 IAM78/Audit36/PaaS3、`contractRevision=26`。其 [Verification 37940817559](https://github.com/xiak/matrix/actions/runs/37940817559) 已按精确 SHA 核实`completed/success`，Go、console、node、PostgreSQL HA、十二个串行 authority lane 及最终汇总共17项全部成功。该证据不代替相同完整 profile 的签名 A/B 生命周期或 LIVE UI，也不证明后继 Role 闭包候选。
 
 #### 版本删除与再次发布
 

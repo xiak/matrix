@@ -797,9 +797,6 @@ func (service *Authority) CreateRole(ctx context.Context, credential iamv1.Secre
 			if err != nil {
 				return iamv1.Role{}, err
 			}
-			if !root {
-				return iamv1.Role{}, ErrForbidden
-			}
 			identityDigest, err := digestSanitized("role-identity", struct {
 				AccountID iamv1.AccountID   `json:"accountId"`
 				ActorID   iamv1.PrincipalID `json:"actorId"`
@@ -817,6 +814,19 @@ func (service *Authority) CreateRole(ctx context.Context, credential iamv1.Secre
 			if err != nil {
 				return iamv1.Role{}, ErrInvalidArgument
 			}
+			boundaryID := ""
+			if !root {
+				boundaryDigest, err := digestSanitized("role-boundary-identity", struct {
+					AccountID iamv1.AccountID   `json:"accountId"`
+					ActorID   iamv1.PrincipalID `json:"actorId"`
+					RoleID    iamv1.RoleID      `json:"roleId"`
+					RequestID string            `json:"requestId"`
+				}{subject.Subject.Organization.ID, subject.Subject.Principal.ID, id, request.RequestID})
+				if err != nil {
+					return iamv1.Role{}, err
+				}
+				boundaryID = "role-boundary-" + boundaryDigest[len("sha256:"):]
+			}
 			duration := iamv1.DefaultRoleSessionDurationSeconds
 			if request.MaxSessionDurationSeconds != nil {
 				duration = *request.MaxSessionDurationSeconds
@@ -830,7 +840,7 @@ func (service *Authority) CreateRole(ctx context.Context, credential iamv1.Secre
 			if err != nil {
 				return iamv1.Role{}, err
 			}
-			return tx.CreateRole(ctx, RoleCreation{Role: role, TrustVersion: trust, ActorPrincipalID: subject.Subject.Principal.ID,
+			return tx.CreateRole(ctx, RoleCreation{Role: role, TrustVersion: trust, BoundaryID: boundaryID, ActorPrincipalID: subject.Subject.Principal.ID,
 				ActorSessionID: subject.Subject.Session.ID, DecisionID: decision.ID, AuditEvent: event})
 		})
 }

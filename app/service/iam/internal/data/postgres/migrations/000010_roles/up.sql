@@ -312,6 +312,51 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role trust subject is unavailable'; END IF;
 END $function$;
 
+-- Creation has a narrower delegated boundary than every other Role write.
+-- It locks the authenticated actor and every USER named by the immutable
+-- TrustPolicy in one order, but deliberately does not require current root or
+-- boundary authority: exact committed replays remain observable after the
+-- actor's ceiling is removed. create_role performs the current-authority check
+-- only when no committed Role exists.
+CREATE OR REPLACE FUNCTION iam.lock_role_creation_actor(tenant text,actor text,actor_session_id text,trust jsonb)
+RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE user_ids text[]; actor_is_root boolean; actor_version bigint;
+BEGIN
+    IF COALESCE(actor_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR trust IS NULL OR jsonb_typeof(trust)<>'object'
+      OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(trust) key) IS DISTINCT FROM ARRAY['canonicalDocument','contentDigest']
+      OR jsonb_typeof(trust->'canonicalDocument')<>'string' OR jsonb_typeof(trust->'contentDigest')<>'string'
+      OR NOT iam.role_trust_content_valid(trust->>'canonicalDocument',trust->>'contentDigest') THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role creation authority is invalid'; END IF;
+    SELECT COALESCE(array_agg(DISTINCT principal->>'id'),'{}') INTO user_ids
+      FROM jsonb_array_elements((trust->>'canonicalDocument')::jsonb->'statements') statement,
+           jsonb_array_elements(statement->'principals') principal;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role account is unavailable'; END IF;
+    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=tenant AND (p.id=actor OR p.id=ANY(user_ids))
+      ORDER BY p.id FOR NO KEY UPDATE;
+    SELECT p.resource_version,EXISTS(SELECT 1 FROM iam.account_roots root
+        WHERE root.account_id=tenant AND root.principal_id=p.id)
+      INTO actor_version,actor_is_root FROM iam.principals p
+      WHERE p.tenant_id=tenant AND p.id=actor AND p.principal_type='USER'
+        AND p.status='ACTIVE' AND p.deleted_at IS NULL AND NOT p.must_change_password;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role publisher is unavailable'; END IF;
+    PERFORM 1 FROM iam.user_credentials c JOIN iam.sessions s ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
+      WHERE c.tenant_id=tenant AND c.principal_id=actor AND s.id=actor_session_id
+        AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp()
+        AND s.credential_version=c.credential_version
+        AND (actor_is_root OR (s.last_activity_at IS NOT NULL AND s.idle_timeout_seconds IS NOT NULL
+          AND s.last_activity_at+make_interval(secs=>s.idle_timeout_seconds)>clock_timestamp()))
+      FOR SHARE OF c,s;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role session is unavailable'; END IF;
+    IF (SELECT count(*) FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=ANY(user_ids)
+        AND p.principal_type='USER' AND p.deleted_at IS NULL)<>cardinality(user_ids) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role trust subject is unavailable'; END IF;
+    RETURN jsonb_build_object('state',CASE WHEN actor_is_root THEN 'ROOT' ELSE 'USER' END,
+      'userResourceVersion',actor_version);
+END $function$;
+
 CREATE OR REPLACE FUNCTION iam.assert_role_intent(tenant text,actor text,event jsonb)
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
@@ -384,34 +429,89 @@ BEGIN
     RETURN result;
 END $function$;
 
-CREATE OR REPLACE FUNCTION iam.create_role(tenant text,actor text,decision text,role_id text,trust_id text,metadata jsonb,trust jsonb,event jsonb,actor_session_id text)
+DROP FUNCTION IF EXISTS iam.create_role(text,text,text,text,text,jsonb,jsonb,jsonb,text);
+DROP FUNCTION IF EXISTS iam.create_role(text,text,text,text,text,jsonb,jsonb,text,jsonb,text);
+CREATE OR REPLACE FUNCTION iam.create_role(tenant text,actor text,decision text,role_id text,trust_id text,metadata jsonb,trust jsonb,boundary_id text,event jsonb,actor_session_id text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE stored iam.roles%ROWTYPE; effective_now timestamptz(6):=transaction_timestamp();
+DECLARE stored iam.roles%ROWTYPE; actor_authority jsonb; current_boundary jsonb; original_boundary jsonb;
+    committed_decision text; ceiling_policy iam.policies%ROWTYPE; effective_now timestamptz(6):=transaction_timestamp();
 BEGIN
     IF COALESCE(role_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(trust_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR (COALESCE(boundary_id,'')<>'' AND boundary_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
        OR NOT iam.role_metadata_valid(metadata) OR trust IS NULL THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role creation input is invalid'; END IF;
-    PERFORM iam.assert_role_writer(tenant,actor,actor_session_id,trust);
+    actor_authority:=iam.lock_role_creation_actor(tenant,actor,actor_session_id,trust);
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.role.create','ACCOUNT',tenant,'INSTANCE',NULL);
+    SELECT recorded.boundary_evidence INTO current_boundary FROM iam.authorization_decisions recorded
+      WHERE recorded.tenant_id=tenant AND recorded.id=decision AND recorded.principal_id=actor
+        AND recorded.action_name='iam.role.create' AND recorded.allowed;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role creation decision is unavailable'; END IF;
     PERFORM iam.assert_audit_event(event,tenant,'iam.role.created','ROLE',role_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role decision correlation is invalid'; END IF;
     PERFORM iam.assert_role_intent(tenant,actor,event);
     SELECT * INTO stored FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id FOR UPDATE;
     IF FOUND THEN
+        SELECT fact.event_document->>'iamDecisionId' INTO committed_decision FROM iam.audit_outbox fact
+          WHERE fact.tenant_id=tenant AND fact.event_document->>'action'='iam.role.created'
+            AND fact.event_document#>>'{target,id}'=role_id AND fact.event_document->>'requestId'=event->>'requestId'
+            AND fact.event_document->>'requestDigest'=event->>'requestDigest'
+            AND fact.event_document#>>'{actor,id}'=actor;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role creation intent conflicts'; END IF;
+        SELECT recorded.boundary_evidence INTO original_boundary FROM iam.authorization_decisions recorded
+          WHERE recorded.tenant_id=tenant AND recorded.id=committed_decision AND recorded.principal_id=actor
+            AND recorded.action_name='iam.role.create' AND recorded.allowed;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role creation intent conflicts'; END IF;
         IF stored.management<>'CUSTOMER' OR stored.deleted_at IS NOT NULL OR stored.resource_version<>1
            OR stored.metadata IS DISTINCT FROM metadata OR stored.current_trust_version_id<>trust_id
            OR NOT EXISTS(SELECT 1 FROM iam.role_trust_versions v WHERE v.tenant_id=tenant AND v.role_id=create_role.role_id AND v.id=trust_id
                AND v.canonical_document=trust->>'canonicalDocument' AND v.content_digest=trust->>'contentDigest')
-           OR NOT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=tenant AND event_document->>'action'='iam.role.created' AND event_document#>>'{target,id}'=role_id
-               AND event_document->>'requestId'=event->>'requestId' AND event_document->>'requestDigest'=event->>'requestDigest' AND event_document#>>'{actor,id}'=actor) THEN
+           OR (original_boundary->>'state'='BOUND' AND (COALESCE(boundary_id,'')=''
+               OR NOT EXISTS(SELECT 1 FROM iam.role_permission_boundaries b
+                 WHERE b.tenant_id=tenant AND b.id=boundary_id AND b.role_id=create_role.role_id
+                   AND b.policy_id=original_boundary#>>'{version,policyId}' AND b.resource_version=1 AND b.revoked_at IS NULL
+                   AND b.created_at=stored.created_at AND b.updated_at=stored.created_at)))
+           OR (original_boundary->>'state'<>'BOUND' AND (COALESCE(boundary_id,'')<>''
+               OR EXISTS(SELECT 1 FROM iam.role_permission_boundaries b
+                 WHERE b.tenant_id=tenant AND b.role_id=create_role.role_id AND b.revoked_at IS NULL))) THEN
             RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role creation intent conflicts'; END IF;
         RETURN iam.role_snapshot(tenant,role_id);
+    END IF;
+    original_boundary:=current_boundary;
+    IF actor_authority->>'state'='ROOT' THEN
+        IF COALESCE(boundary_id,'')<>'' OR original_boundary->>'state' IS DISTINCT FROM 'NONE' THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='root role creation boundary is invalid'; END IF;
+        PERFORM iam.assert_current_user_boundary_evidence(tenant,actor,'iam.role.create',original_boundary);
+    ELSE
+        IF actor_authority->>'state'<>'USER' OR COALESCE(boundary_id,'')=''
+          OR original_boundary->>'state' IS DISTINCT FROM 'BOUND'
+          OR EXISTS(SELECT 1 FROM iam.policy_attachments attachment
+              WHERE attachment.tenant_id=tenant AND attachment.target_kind='USER'
+                AND attachment.target_id=actor AND attachment.authority_scope='INSTALLATION'
+                AND attachment.revoked_at IS NULL) THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='delegated role creation is unavailable'; END IF;
+        PERFORM boundary.id FROM iam.user_permission_boundaries boundary
+          WHERE boundary.tenant_id=tenant AND boundary.user_id=actor
+            AND boundary.id=original_boundary->>'boundaryId'
+            AND boundary.policy_id=original_boundary#>>'{version,policyId}'
+            AND boundary.resource_version=(original_boundary->>'resourceVersion')::bigint
+            AND boundary.revoked_at IS NULL FOR NO KEY UPDATE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='delegated role ceiling is unavailable'; END IF;
+        SELECT * INTO ceiling_policy FROM iam.policies policy
+          WHERE policy.id=original_boundary#>>'{version,policyId}'
+            AND policy.owner_tenant_id=tenant AND policy.management='CUSTOMER'
+            AND policy.authority_scope='TENANT' AND policy.status='ACTIVE' FOR SHARE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='delegated role ceiling is unavailable'; END IF;
+        PERFORM iam.assert_current_user_boundary_evidence(tenant,actor,'iam.role.create',original_boundary);
     END IF;
     INSERT INTO iam.roles(tenant_id,id,metadata,management,status,resource_version,current_trust_version_id,created_at,updated_at)
       VALUES(tenant,role_id,metadata,'CUSTOMER','ACTIVE',1,trust_id,effective_now,effective_now);
     INSERT INTO iam.role_trust_versions(tenant_id,role_id,id,canonical_document,content_digest,created_at)
       VALUES(tenant,role_id,trust_id,trust->>'canonicalDocument',trust->>'contentDigest',effective_now);
+    IF actor_authority->>'state'='USER' THEN
+        INSERT INTO iam.role_permission_boundaries(tenant_id,id,role_id,policy_id,resource_version,created_at,updated_at)
+          VALUES(tenant,boundary_id,role_id,original_boundary#>>'{version,policyId}',1,effective_now,effective_now);
+    END IF;
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
       VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
     RETURN iam.role_snapshot(tenant,role_id);
@@ -1773,7 +1873,7 @@ BEGIN
       ('iam.revoke_role_session_by_request(text,text,text,text,jsonb)',false),
       ('iam.change_role_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text)',true),
       ('iam.list_role_trust_versions(text,text,text,text,text)',false),('iam.read_role_trust_version(text,text,text,text,text)',false),
-      ('iam.create_role(text,text,text,text,text,jsonb,jsonb,jsonb,text)',true),
+      ('iam.create_role(text,text,text,text,text,jsonb,jsonb,text,jsonb,text)',true),
       ('iam.update_role(text,text,text,text,bigint,jsonb,jsonb,text)',true),
       ('iam.set_role_status(text,text,text,text,bigint,text,jsonb,text)',true),
       ('iam.set_role_trust_policy(text,text,text,text,text,bigint,jsonb,jsonb,text)',true),
@@ -1802,7 +1902,7 @@ BEGIN
     END LOOP;
     FOREACH signature IN ARRAY ARRAY['iam.role_metadata_valid(jsonb)','iam.role_trust_content_valid(text,text)',
       'iam.guard_role_session_directory_revision()','iam.advance_role_session_directory_revision()','iam.managed_role_session_snapshot(text,text,text)',
-      'iam.guard_role_change()','iam.assert_role_writer(text,text,text,jsonb)','iam.role_snapshot(text,text)',
+      'iam.guard_role_change()','iam.assert_role_writer(text,text,text,jsonb)','iam.lock_role_creation_actor(text,text,text,jsonb)','iam.role_snapshot(text,text)',
       'iam.guard_role_directory_revision()','iam.advance_role_directory_revision()',
       'iam.guard_role_source_authority_generation()','iam.advance_role_source_authority_generation()','iam.role_source_authority_snapshot(text,text)',
       'iam.role_trust_snapshot(text,text,text)','iam.role_access_snapshot(text,text)',
@@ -1904,20 +2004,20 @@ END $function$;
 
 REVOKE ALL ON iam.roles,iam.role_trust_versions,iam.role_permission_boundaries FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 REVOKE ALL ON FUNCTION iam.role_metadata_valid(jsonb),iam.role_trust_content_valid(text,text),
-    iam.guard_role_change(),iam.assert_role_writer(text,text,text,jsonb),iam.role_snapshot(text,text),
+    iam.guard_role_change(),iam.assert_role_writer(text,text,text,jsonb),iam.lock_role_creation_actor(text,text,text,jsonb),iam.role_snapshot(text,text),
     iam.role_trust_snapshot(text,text,text),iam.role_access_snapshot(text,text),
     iam.guard_role_boundary_change(),iam.role_permission_boundary_snapshot(text,text),
     iam.read_role_permission_boundary(text,text,text,text),iam.change_role_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text),
     iam.assert_role_intent(text,text,jsonb),iam.role_event_matches(text,text,jsonb),iam.role_contract_ready(),
     iam.list_roles(text,text,text,text),iam.read_role(text,text,text,text),
-    iam.create_role(text,text,text,text,text,jsonb,jsonb,jsonb,text),
+    iam.create_role(text,text,text,text,text,jsonb,jsonb,text,jsonb,text),
     iam.update_role(text,text,text,text,bigint,jsonb,jsonb,text),iam.set_role_status(text,text,text,text,bigint,text,jsonb,text),
     iam.set_role_trust_policy(text,text,text,text,text,bigint,jsonb,jsonb,text),iam.delete_role(text,text,text,text,bigint,jsonb,text),
     iam.list_role_trust_versions(text,text,text,text,text),iam.read_role_trust_version(text,text,text,text,text)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.list_roles(text,text,text,text),iam.read_role(text,text,text,text),
     iam.read_role_permission_boundary(text,text,text,text),iam.change_role_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text),
-    iam.create_role(text,text,text,text,text,jsonb,jsonb,jsonb,text),
+    iam.create_role(text,text,text,text,text,jsonb,jsonb,text,jsonb,text),
     iam.update_role(text,text,text,text,bigint,jsonb,jsonb,text),iam.set_role_status(text,text,text,text,bigint,text,jsonb,text),
     iam.set_role_trust_policy(text,text,text,text,text,bigint,jsonb,jsonb,text),iam.delete_role(text,text,text,text,bigint,jsonb,text),
     iam.list_role_trust_versions(text,text,text,text,text),iam.read_role_trust_version(text,text,text,text,text) TO matrix_iam_api;

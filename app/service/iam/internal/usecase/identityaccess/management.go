@@ -454,15 +454,6 @@ func (service *Authority) CreatePolicyAttachment(ctx context.Context, credential
 		if policy.ResourceVersion != request.PolicyResourceVersion {
 			return ErrConflict
 		}
-		if request.Target.Kind == iamv1.PolicyTargetRole {
-			root, err := roleRoot(ctx, tx, subject)
-			if err != nil {
-				return err
-			}
-			if !root {
-				return ErrForbidden
-			}
-		}
 		identityDigest, err := digestSanitized("policy-attachment-identity", struct {
 			AccountID iamv1.AccountID   `json:"accountId"`
 			ActorID   iamv1.PrincipalID `json:"actorId"`
@@ -562,15 +553,6 @@ func (service *Authority) RevokePolicyAttachment(ctx context.Context, credential
 			return nil
 		}
 		event, err := service.newManagementEvent(subject, fact, auditv1.TargetPolicyAttachment, string(id), decision.ID, digest, request.RequestID, now)
-		if attachment.Target.Kind == iamv1.PolicyTargetRole {
-			root, err := roleRoot(ctx, tx, subject)
-			if err != nil {
-				return err
-			}
-			if !root {
-				return ErrForbidden
-			}
-		}
 		if err != nil {
 			return err
 		}
