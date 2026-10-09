@@ -1707,12 +1707,13 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-Verified through 2026-10-08 against the current all-service navigation, compact IAM
+Verified through 2026-10-10 against the current all-service navigation, compact IAM
 shell, responsive access-analysis hierarchy, primary directory actions and the
 provider-owned product-permission onboarding boundary.
 
 Current compact IAM shell evidence is fixed at `a43fd4e1e`; the current access-analysis
-delegation follow-up and synchronized embedded export are fixed at `a383d3930`. Fixed
+delegation follow-up is fixed at `a383d3930`, and the current strict Role-delegation UX
+plus synchronized embedded export are fixed at `824ce8ae8`. Fixed
 chrome, page title, back navigation and the consolidated page-action trigger paint
 without waiting for directory data.
 Access analysis keeps its four known primary sections on one row above a 520 px content
@@ -1720,10 +1721,12 @@ container; at or below 520 px the same controls form a stable 2×2 grid and may 
 own labels, without turning an arbitrary tab set into a second mobile implementation.
 At `390 × 844`, all four sections remain visible, the boundary-controlled identity table
 fits its 304 px container without page overflow, and the browser warning/error log stays
-empty. The complete gate passed 63 frontend files/1,156 cases plus three export-normalization
+empty. The current complete gate passed 63 frontend files/1,158 cases plus three export-normalization
 cases, typecheck, lint, architecture, 228 theme contrast pairs, 47 generated pages, 45
 normalized route files, 259 embedded files and PaaS UI Go test/vet. This is isolated MOCK
-layout and interaction evidence; delegated-authority semantics and exclusions remain owned
+layout and interaction evidence. The same DEV pass rechecked the Role detail at desktop and
+`390 × 844`; document/body/viewport widths stayed at 390 px, no horizontal overflow occurred,
+and the browser warning/error log stayed empty. Delegated-authority semantics and exclusions remain owned
 by FEAT-IAM-010.
 
 The 2026-10-08 source/embed follow-up `3d34f04d5` projects implemented LIVE IAM
