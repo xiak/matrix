@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 与 Group 附件的同边界闭包已固定；固定`927c8e0`完成非 root 在同一封存上限内创建 CUSTOMER Policy 首版并显式关联，固定`b54397e`再开放同一受控 USER 创建不可变、非默认 PolicyVersion 草稿。当前 IAM75 候选进一步开放受控默认版本切换；版本退休、元数据/Policy 删除及 Role 闭包、当前候选独立 CI、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 与 Group 附件的同边界闭包已固定；固定`927c8e0`完成非 root 在同一封存上限内创建 CUSTOMER Policy 首版并显式关联，固定`b54397e`再开放同一受控 USER 创建不可变、非默认 PolicyVersion 草稿，固定`f62943f`进一步开放受控默认版本切换并通过独立 CI。版本退休、元数据/Policy 删除及 Role 闭包、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -342,11 +342,11 @@ Allow/Deny/边界交集表、条件缺失/类型/大小攻击、跨账号资源�
 
 固定`927c8e016245feb2e770b5beee34be69bc9bab02`的 IAM73 Policy 首版委派在新库通过聚焦 HTTP/PG race 41.416s、完整策略存储 race 303.163s、IAM HTTP race 123.318s、Audit HTTP race 4.513s和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 266.287s。Root 封存一个同时包含作者动作、同上限目标附件动作和精确 PaaS 读取动作的 CUSTOMER/TENANT ceiling；只有管理策略无边界的 USER 仍被存储拒绝，设置相同 ceiling 后可以创建一份不自动关联的 CUSTOMER Policy，再显式关联给相同 ceiling 的目标并在真实授权中只允许指定应用。决定中的 `BOUND` 证据、单一 Policy/首版/事实和零隐式附件均由数据库核对；等值 HTTP 重放保留每次授权决定但只返回原业务结果。并发登出、并发移除 ceiling、平台绑定 USER 和后续版本发布均失败关闭，决定、Policy、Version 和事实无部分状态；移除 ceiling 后对已提交 command 的精确重放仍只返回历史结果。实际固定 `9b2671c0c76ed3dc444610e0c958591c4b4f9854` 的 IAM72 executable/migrator 到 IAM73 的唯一滚动前驱门禁 146.628s 通过，双迁移、故障回滚、重启及既有 Session/MFA/恢复/策略/附件完成/Audit proof 均保留。该固定点不证明后继 Policy 改版/default、Role 完整闭包、签名 A/B 生命周期或 LIVE UI 验收。
 
-固定`b54397e31a08367a0433412f9588a6f3f1846218`保留 IAM74 非默认版本草稿及其已验证闭包。当前 IAM75 候选在本任务专属 PostgreSQL 18 新库通过非 root 默认切换聚焦 race 19.69s、完整策略存储 race 306.50s、IAM HTTP race 118.73s、Audit HTTP race 1.47s和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 273.23s。直接 USER 与 Group 当前消费者在同一 ceiling 下由一次事务锁定并封存 closure digest；新 Group 成员在决定快照后提交会触发可观测的 SERIALIZABLE 整事务重试，成员移除则真实等待已锁定闭包。默认指针切换后，旧版本授权在下一次 PaaS 请求拒绝，新版本生效；空附件 Policy 也只产生一个不可变完成结果。
+固定`b54397e31a08367a0433412f9588a6f3f1846218`保留 IAM74 非默认版本草稿及其已验证闭包。固定`f62943fadf44f31b8bc04c2bf60f1861f3f45cfc`的 IAM75 后继在本任务专属 PostgreSQL 18 新库通过非 root 默认切换聚焦 race 19.69s、完整策略存储 race 306.50s、IAM HTTP race 118.73s、Audit HTTP race 1.47s和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 273.23s。直接 USER 与 Group 当前消费者在同一 ceiling 下由一次事务锁定并封存 closure digest；新 Group 成员在决定快照后提交会触发可观测的 SERIALIZABLE 整事务重试，成员移除则真实等待已锁定闭包。默认指针切换后，旧版本授权在下一次 PaaS 请求拒绝，新版本生效；空附件 Policy 也只产生一个不可变完成结果。
 
 负向门禁覆盖 Root/旧前驱无证明附件、Role 附件、User/Role boundary 引用、平台绑定 actor、错误/变体/陈旧版本、并发登出及 actor ceiling 移除；完成记录插入故障会把决定、默认指针、outbox 和完成记录一起回滚。已提交精确重放在 ceiling 后续移除后只返回原结果；缺失完成或篡改原 actor/decision/outbox 关联返回不可用且不重建历史。完成表强制 RLS、无 runtime 表权限、私有 helper 无执行权，UPDATE/DELETE/TRUNCATE、受限直接插入以及 ACL、SECURITY DEFINER、trigger 漂移均失败关闭。固定 IAM74 executable/migrator 到 IAM75 的唯一滚动前驱门禁 123.59s 通过，双迁移、等值 bootstrap、重启和既有 Session/MFA/恢复/策略/附件完成/Audit canonical/proof 均保留。
 
-该工作树的实际完整组合为 IAM75/Audit36/PaaS3、`contractRevision=23`，已通过全仓无缓存 `go test -race -count=1 -p 2 ./...`（含 architecture）、全仓 vet、模块校验、API 重新生成零差异、Linux amd64/CGO 关闭的全仓构建及 diff 检查；无外部 DSN 的默认 SKIP 不计真实数据库或进程证据。当前候选仍待固定提交后的独立 CI；它不证明非 root 版本退休、元数据/Policy 删除、Role 完整闭包、相同 profile 签名 A/B 生命周期或 LIVE UI 验收。
+该固定点的实际完整组合为 IAM75/Audit36/PaaS3、`contractRevision=23`，已通过全仓无缓存 `go test -race -count=1 -p 2 ./...`（含 architecture）、全仓 vet、模块校验、API 重新生成零差异、Linux amd64/CGO 关闭的全仓构建及 diff 检查；无外部 DSN 的默认 SKIP 不计真实数据库或进程证据。[Verification 37878838338](https://github.com/xiak/matrix/actions/runs/37878838338) 已按精确 SHA 核实 completed/success，17 个 job 全部成功。该证据不证明非 root 版本退休、元数据/Policy 删除、Role 完整闭包、相同 profile 签名 A/B 生命周期或 LIVE UI 验收。
 
 ### User 边界后端证据
 
