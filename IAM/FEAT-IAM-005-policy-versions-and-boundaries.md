@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 附件的同边界证据已固定，当前候选又完成 Group 附件对现有/未来成员的封存上限闭包并通过本地 PostgreSQL 18 与滚动前驱门禁；Policy 发布/改版的非 root 闭包、Role 闭包、当前候选独立 CI、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 与 Group 附件的同边界闭包已固定；当前 IAM73 候选又完成非 root 在同一封存上限内创建 CUSTOMER Policy 首版并显式关联的纵向闭环。后续版本发布/默认切换/元数据和删除的非 root 闭包、Role 闭包、当前候选独立 CI、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -239,6 +239,10 @@ LANG-08 的“不能扩大自身许可”精确定义为：受委派管理员及
 - 对管理者本人或包含管理者的 Group 做附件变更，可以在 Root 已封存的上限内改变实际权限，但不能越过上限。这是权限边界委派的明确语义；若 Root 只希望委派作者职责，应不授予附件动作，而不是依赖隐藏的 self 特例。
 - PolicyVersion 的语义、条件、Deny、资源通配和默认指针不做通用包含关系计算。委派安全只依赖不可由管理者改变的上限交集、精确对象闭包和数据库关系证明。
 
+首个 Policy 作者委派纵向切片只开放“创建一份 CUSTOMER/TENANT Policy 及其首个不可变默认版本”，不同时开放后续版本发布、默认版本切换、元数据修改、删除或 Role 委派。调用者必须是当前 Account 的直接 USER 会话，同时满足普通 `iam.policy.create` 决定与一个当前有效的 CUSTOMER/TENANT User permission boundary；请求不能选择或携带边界。写事务在 Account、actor USER、当前 Session/credential generation、边界关系和边界 Policy 的相容锁序下重新验证决定中封存的精确 `boundaryEvidence`，并拒绝无边界、过期或已替换边界、带任一未撤销 INSTALLATION 策略附件的 USER、Root/ServiceIdentity/RoleSession 冒充、跨 Account 及失效会话。原 Account Root 保留既有创建路径且不需要普通边界。
+
+该切片的正向闭环是：Root 封存包含作者动作、附件动作与业务读取动作的上限，为受委派作者和目标 USER 设置同一上限；作者创建策略后不会获得隐式附件，再把该策略显式关联给同上限目标，目标只能读取策略声明且仍在上限内的资源。门禁同时证明无管理策略、只有管理策略但无边界、不同/变化边界、平台绑定、并发登出或凭据/身份撤销、伪造决定及末尾 outbox 失败都不会留下 Policy、PolicyVersion、决定或成功事实的部分状态；等值重放只返回原提交结果。默认版本和后续版本接口仍由 `requirePolicyPublisher` 保持 Root-only，不能借本切片绕过。
+
 **内部证据而非新 permit。** 每个非 root 成功命令在现有命令完成记录中封存 `actorBoundary` 和必要的 `targetBoundary`：Policy ID、当前 versionId/contentDigest、边界关系修订、主体修订及受控 target kind/ID。Group 附件另保存同一上限 Policy ID，完成记录使用 `GROUP_BOUND` 封存成员数量及稳定成员摘要，供以后 membership 与边界写入锁内检查。该证据不进入普通请求，不返回可复用授权令牌，也不复制 Policy 文档或成员清单；成功 Audit 事实的 content digest 绑定请求与精确委派证据。Root 命令使用封闭的 `ROOT` 证据状态，不能伪造成某个普通边界。
 
 等值命令重放只返回原已提交结果，不重新产生效果；原上限随后变更、主体停用或权限撤销不抹去历史事实。没有完成记录的新请求必须按当前上限重新授权。响应丢失、事务结果不确定或数据库证据损坏时失败关闭，不能重新选择另一个 boundary 或降级成 Root 路径。
@@ -326,9 +330,11 @@ Allow/Deny/边界交集表、条件缺失/类型/大小攻击、跨账号资源�
 
 固定 `20f1507d94b61864fc32215fb5096f049cc24408` 的 IAM70 已保存准确 receipt 边界证据，但其已提交 Audit 事实早于事件级摘要。IAM70→IAM71 的实际 predecessor executable/migrator、双迁移、等值 bootstrap 和重启门禁 154.13s 通过：原 receipt 证据逐字节保留，新增摘要列为 `NULL`，旧事件继续省略字段，未根据当前状态倒签；升级后的新附件写入则立即以当前函数重算并绑定事件摘要。当前 IAM71 空库聚焦 race 20.43s 证明 `ROOT`、`BOUND`、平台直接 USER 的 `NOT_APPLICABLE` 三种写入均满足 receipt 重算和事件匹配，篡改失败关闭；完整策略存储 race 289.15s 进一步覆盖既有语言、Profile、组继承、边界、策略版本、凭据竞争、平台保护、RLS/不可变证据及 schema/bootstrap 重放。Audit36 HTTP 真库子流程 1.48s 证明带摘要的新事实进入正确链、旧附件事实无字段仍按原 canonical 验证、其他 action 伪造字段拒绝。更早没有准确边界证据的保留记录继续为 `PREDECESSOR_UNPROVEN`，不能取得当前摘要或新授权。
 
-该事件级闭环先完成了直接 USER 附件在 LANG-08 中的 Audit content-digest 绑定。当前 Group 增量又在本任务专属 PostgreSQL 18 新库通过 `TestIAMPolicyAttachmentChangePostgres` race 28.299s、完整策略存储 race 311.679s、IAM HTTP race 127.828s、Audit HTTP race 4.505s 和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 279.704s：空组封存、同 ceiling 成员、无边界/不同边界/Root/平台绑定攻击、成员边界移除/替换阻断、Root 创建附件的受限撤销，以及 attach/add-member 的确定性并发均无部分状态或隐藏 deadlock。新增反向锁环先在旧锁序确定触发一次 `40P01`，改为 actor/全部当前成员或候选组成完整 USER 集合并按稳定 ID 一次加锁后，两个合法命令各提交一次关系与事实且 deadlock 计数为零；创建与撤销的 `GROUP_BOUND` 证据和事件摘要可重算，独立进程继续保持准确链、撤权和重启/丢包完成语义。实际固定 IAM71 程序到 IAM72 的滚动前驱门禁最新 131.990s 保留原附件证据与事件摘要，并让新增 ceiling 对历史行保持 `NULL`。该候选尚无独立 CI；它也不证明 Policy 发布/改版或 Role 的完整委派闭包，不替代当前 Profile 的签名 A/B 生命周期或 LIVE UI 验收。
+该事件级闭环先完成了直接 USER 附件在 LANG-08 中的 Audit content-digest 绑定，后继 Group 增量在本任务专属 PostgreSQL 18 证明空组封存、同 ceiling 成员、无边界/不同边界/Root/平台绑定攻击、成员边界移除/替换阻断、Root 创建附件的受限撤销，以及 attach/add-member 的确定性并发均无部分状态或隐藏 deadlock。新增反向锁环先在旧锁序确定触发一次 `40P01`，改为 actor/全部当前成员或候选组成完整 USER 集合并按稳定 ID 一次加锁后，两个合法命令各提交一次关系与事实且 deadlock 计数为零；创建与撤销的 `GROUP_BOUND` 证据和事件摘要可重算，独立进程继续保持准确链、撤权和重启/丢包完成语义。
 
-同一最终工作树通过全仓无缓存 race（含 architecture）、全仓 vet、模块校验、API 重新生成零差异及 Linux amd64/CGO 关闭的全仓构建；无外部 DSN 的默认 SKIP 不计真实数据库或进程证据。
+当前 IAM73 Policy 首版委派候选在新库通过聚焦 HTTP/PG race 41.416s、完整策略存储 race 303.163s、IAM HTTP race 123.318s、Audit HTTP race 4.513s和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 266.287s。Root 封存一个同时包含作者动作、同上限目标附件动作和精确 PaaS 读取动作的 CUSTOMER/TENANT ceiling；只有管理策略无边界的 USER 仍被存储拒绝，设置相同 ceiling 后可以创建一份不自动关联的 CUSTOMER Policy，再显式关联给相同 ceiling 的目标并在真实授权中只允许指定应用。决定中的 `BOUND` 证据、单一 Policy/首版/事实和零隐式附件均由数据库核对；等值 HTTP 重放保留每次授权决定但只返回原业务结果。并发登出、并发移除 ceiling、平台绑定 USER 和后续版本发布均失败关闭，决定、Policy、Version 和事实无部分状态；移除 ceiling 后对已提交 command 的精确重放仍只返回历史结果。实际固定 `9b2671c0c76ed3dc444610e0c958591c4b4f9854` 的 IAM72 executable/migrator 到 IAM73 的唯一滚动前驱门禁 146.628s 通过，双迁移、故障回滚、重启及既有 Session/MFA/恢复/策略/附件完成/Audit proof 均保留。独立 CI 仍待固定提交后确认；它不证明后续 Policy 改版/default、Role 完整闭包、签名 A/B 生命周期或 LIVE UI 验收。
+
+同一 IAM73 工作树已通过全仓无缓存 race（含 architecture）、全仓 vet、模块校验、API 重新生成零差异及 Linux amd64/CGO 关闭的全仓构建；无外部 DSN 的默认 SKIP 不计真实数据库或进程证据。
 
 ### User 边界后端证据
 

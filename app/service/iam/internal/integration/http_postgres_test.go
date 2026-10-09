@@ -16121,33 +16121,266 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	get("/v1/policies/"+string(policy.Policy.ID), bearer, http.StatusForbidden, nil)
 	post("/v1/policies", bearer, create, http.StatusForbidden, nil)
-	authorize := func(id string, want bool) {
+	authorize := func(session, id, requestID string, want bool) {
 		t.Helper()
 		body := mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
-			Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id}, RequestID: "customer-policy-read", CorrelationID: "customer-policy-read"}, iamv1.AuthorizationResourceInstance, ""))
-		response := performIAMRequestWithSubject(handler, body, paasCredential, bearer)
+			Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id}, RequestID: requestID, CorrelationID: requestID}, iamv1.AuthorizationResourceInstance, ""))
+		response := performIAMRequestWithSubject(handler, body, paasCredential, session)
 		var decision iamv1.AuthorizationDecision
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || decision.Allowed != want {
 			t.Fatalf("custom policy decision for %s: status=%d allowed=%t want=%t", id, response.Code, decision.Allowed, want)
 		}
 	}
-	authorize("customer-selected-app", false)
+	authorize(bearer, "customer-selected-app", "customer-policy-read-denied", false)
 	var attachment iamv1.PolicyAttachment
 	grant := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
 		PolicyID: policy.Policy.ID, PolicyResourceVersion: 1, RequestID: "customer-policy-attach"}
 	post("/v1/policy-attachments", root, grant, http.StatusOK, &attachment)
-	authorize("customer-selected-app", true)
-	authorize("customer-unselected-app", false)
+	authorize(bearer, "customer-selected-app", "customer-policy-read-selected", true)
+	authorize(bearer, "customer-unselected-app", "customer-policy-read-unselected", false)
 	post("/v1/policy-attachments/"+string(attachment.ID)+":revoke", root,
 		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: "customer-policy-revoke"}, http.StatusOK, nil)
-	authorize("customer-selected-app", false)
-	// Even an explicit tenant administrator attachment does not yet delegate
-	// the high-risk publishing workflow; it never becomes an implicit root.
+	authorize(bearer, "customer-selected-app", "customer-policy-read-revoked", false)
+	// An administrator grant is necessary for ordinary PDP authorization, but
+	// it never makes this USER an implicit Root. Storage still requires the
+	// current immutable delegation ceiling from the same authorization decision.
 	grant.PolicyID, grant.RequestID = iamv1.SystemPolicyAccountAdministrator, "customer-policy-admin"
 	post("/v1/policy-attachments", root, grant, http.StatusOK, nil)
 	get("/v1/policies/"+string(policy.Policy.ID), bearer, http.StatusOK, nil)
 	variant.RequestID, variant.DisplayName = "customer-delegate-create", "Delegate policy"
 	post("/v1/policies", bearer, variant, http.StatusForbidden, nil)
+
+	var delegatedTarget iamv1.User
+	post("/v1/users", root, map[string]any{"loginName": "customer-policy-target", "displayName": "Policy target",
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "customer-policy-target-create"}, http.StatusCreated, &delegatedTarget)
+	targetBearer := localRecoveryLogin(t, handler, delegatedTarget.LoginName+"@"+string(delegatedTarget.AccountID), initialDeveloperPassword, true)
+	targetBearer = localRecoveryChangePassword(t, handler, targetBearer, initialDeveloperPassword, changedDeveloperPassword)
+	var delegationCeiling iamv1.PolicyDetail
+	post("/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Customer policy author ceiling", RequestID: "customer-policy-author-ceiling",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{
+				{SID: "author-policy", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyCreate},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(member.AccountID)}}},
+				{SID: "attach-to-controlled-user", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyAttachmentCreate},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceExact, ID: string(delegatedTarget.ID)}}},
+				{SID: "read-selected-application", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-app"}}},
+			}},
+	}, http.StatusCreated, &delegationCeiling)
+	setBoundary := func(user iamv1.User, requestID string) {
+		t.Helper()
+		path := "/v1/users/" + string(user.ID) + "/permission-boundary"
+		var current iamv1.UserPermissionBoundary
+		get(path, root, http.StatusOK, &current)
+		postResponse := performIAMRequest(handler, http.MethodPut, path, root, mustIAMJSON(t, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: delegationCeiling.Policy.ID, PolicyResourceVersion: delegationCeiling.Policy.ResourceVersion,
+			ResourceVersion: current.ResourceVersion, RequestID: requestID,
+		}))
+		if postResponse.Code != http.StatusOK {
+			t.Fatalf("set delegated policy author boundary: status=%d body=%s", postResponse.Code, postResponse.Body.String())
+		}
+	}
+	setBoundary(member, "customer-policy-author-boundary")
+	setBoundary(delegatedTarget, "customer-policy-target-boundary")
+	bearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	targetBearer = localRecoveryLogin(t, handler, delegatedTarget.LoginName+"@"+string(delegatedTarget.AccountID), changedDeveloperPassword, false)
+	delegatedCreate := iamv1.CreatePolicyRequest{DisplayName: "Delegated selected application read", RequestID: "customer-delegated-policy-create",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "selected", Effect: iamv1.PolicyAllow,
+				Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{
+					Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-app",
+				}}}}}}
+	var delegatedPolicy, delegatedReplay iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedCreate, http.StatusCreated, &delegatedPolicy)
+	post("/v1/policies", bearer, delegatedCreate, http.StatusCreated, &delegatedReplay)
+	if !bytes.Equal(mustIAMJSON(t, delegatedPolicy), mustIAMJSON(t, delegatedReplay)) {
+		t.Fatal("delegated policy replay changed its immutable result")
+	}
+	post("/v1/policies/"+string(delegatedPolicy.Policy.ID)+"/versions", bearer,
+		iamv1.CreatePolicyVersionRequest{Document: delegatedCreate.Document,
+			ResourceVersion: delegatedPolicy.Policy.ResourceVersion, RequestID: "customer-delegated-version-rejected"},
+		http.StatusForbidden, nil)
+	var delegatedDecisionCount, delegatedFactCount, delegatedVersionCount, delegatedAttachmentCount int
+	var delegatedBoundaryCurrent bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2
+		 AND action_name='iam.policy.create' AND request_id=$3 AND allowed),
+		(SELECT COALESCE(bool_and(boundary_evidence->>'state'='BOUND'
+		 AND boundary_evidence#>>'{version,policyId}'=$4),false) FROM iam.authorization_decisions
+		 WHERE tenant_id=$1 AND principal_id=$2 AND action_name='iam.policy.create' AND request_id=$3 AND allowed),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.created'
+		 AND event_document#>>'{actor,id}'=$2 AND event_document->>'requestId'=$3
+		 AND event_document#>>'{target,id}'=$5),
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$5),
+		(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND policy_id=$5 AND revoked_at IS NULL)`,
+		member.AccountID, member.ID, delegatedCreate.RequestID, delegationCeiling.Policy.ID, delegatedPolicy.Policy.ID).Scan(
+		&delegatedDecisionCount, &delegatedBoundaryCurrent, &delegatedFactCount, &delegatedVersionCount, &delegatedAttachmentCount); err != nil ||
+		delegatedDecisionCount != 2 || !delegatedBoundaryCurrent || delegatedFactCount != 1 || delegatedVersionCount != 1 || delegatedAttachmentCount != 0 {
+		t.Fatalf("delegated publication lost its exact ceiling or atomic result: decisions=%d boundary=%t facts=%d versions=%d attachments=%d err=%v",
+			delegatedDecisionCount, delegatedBoundaryCurrent, delegatedFactCount, delegatedVersionCount, delegatedAttachmentCount, err)
+	}
+	var delegatedAttachment iamv1.PolicyAttachment
+	post("/v1/policy-attachments", bearer, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegatedTarget.ID)},
+		PolicyID: delegatedPolicy.Policy.ID, PolicyResourceVersion: delegatedPolicy.Policy.ResourceVersion,
+		RequestID: "customer-delegated-policy-attach",
+	}, http.StatusOK, &delegatedAttachment)
+	if delegatedAttachment.Target.ID != string(delegatedTarget.ID) || delegatedAttachment.PolicyID != delegatedPolicy.Policy.ID {
+		t.Fatal("delegated policy attachment changed its controlled target")
+	}
+	authorize(targetBearer, "customer-delegated-app", "customer-delegated-read-selected", true)
+	authorize(targetBearer, "customer-delegated-other", "customer-delegated-read-other", false)
+
+	// A bearer that was current at HTTP authentication cannot publish after a
+	// concurrent logout. Pause the decision insert, complete the real logout,
+	// then require the storage transaction to reject and roll back its decision.
+	blockedBearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_publication_auth_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.request_id IN ('customer-delegated-policy-after-logout','customer-delegated-policy-after-boundary-remove')
+		THEN PERFORM pg_advisory_xact_lock(54831,20); END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_policy_publication_auth_barrier BEFORE INSERT ON iam.authorization_decisions
+		FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_publication_auth_barrier(); SELECT pg_advisory_lock(54831,20)`); err != nil {
+		t.Fatal("install policy publication authentication barrier", err)
+	}
+	defer func() {
+		if _, err := database.Exec(context.Background(), `SELECT pg_advisory_unlock(54831,20);
+			DROP TRIGGER IF EXISTS matrix_policy_publication_auth_barrier ON iam.authorization_decisions;
+			DROP FUNCTION IF EXISTS public.matrix_policy_publication_auth_barrier()`); err != nil {
+			t.Error("remove policy publication authentication barrier")
+		}
+	}()
+	blockedContext, cancelBlocked := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBlocked()
+	blockedCreate := delegatedCreate
+	blockedCreate.RequestID, blockedCreate.DisplayName = "customer-delegated-policy-after-logout", "Logged out delegated policy"
+	blockedCreateBody := mustIAMJSON(t, blockedCreate)
+	publicationDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		publicationDone <- performIAMRequest(handler, http.MethodPost, "/v1/policies", blockedBearer, blockedCreateBody)
+	}()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(blockedContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=20)`).Scan(&waiting); err != nil {
+			t.Fatal("observe policy publication authentication barrier", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-blockedContext.Done():
+				t.Fatal("policy publication never reached authentication barrier")
+			}
+		}
+	}
+	post("/v1/auth/logout", blockedBearer, map[string]any{"requestId": "customer-delegated-policy-logout"}, http.StatusOK, nil)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,20)`); err != nil {
+		t.Fatal("release policy publication authentication barrier", err)
+	}
+	select {
+	case response := <-publicationDone:
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("delegated publication survived concurrent logout: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-blockedContext.Done():
+		t.Fatal("delegated publication did not finish after concurrent logout")
+	}
+	var partialDelegatedPublication bool
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.policies WHERE owner_tenant_id=$1 AND display_name=$2)
+		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$3 AND request_id=$4)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4)`,
+		member.AccountID, blockedCreate.DisplayName, member.ID, blockedCreate.RequestID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("logged-out delegated publication left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
+
+	// A tenant administrator with any current installation-scoped USER binding
+	// is outside the delegated tenant closure even when PDP and its ordinary
+	// boundary would otherwise allow policy creation.
+	var platformBinding iamv1.PolicyAttachment
+	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
+		PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1,
+		RequestID: "customer-delegated-platform-binding",
+	}, http.StatusOK, &platformBinding)
+	bearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	platformBlocked := delegatedCreate
+	platformBlocked.RequestID, platformBlocked.DisplayName = "customer-delegated-platform-rejected", "Platform-bound delegated policy"
+	post("/v1/policies", bearer, platformBlocked, http.StatusForbidden, nil)
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.policies WHERE owner_tenant_id=$1 AND display_name=$2)
+		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$3 AND request_id=$4)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4)`,
+		member.AccountID, platformBlocked.DisplayName, member.ID, platformBlocked.RequestID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("platform-bound delegated publication left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
+	post("/v1/policy-attachments/"+string(platformBinding.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: platformBinding.ResourceVersion,
+			RequestID: "customer-delegated-platform-binding-revoke"}, http.StatusOK, nil)
+
+	// The decision's BOUND evidence is not a reusable permit. If Root removes
+	// the ceiling after PDP but before the protected write, the pending request
+	// must re-read the locked relationship and fail without partial state.
+	bearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	var currentBoundary iamv1.UserPermissionBoundary
+	get("/v1/users/"+string(member.ID)+"/permission-boundary", root, http.StatusOK, &currentBoundary)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_lock(54831,20)`); err != nil {
+		t.Fatal("hold boundary-removal publication barrier", err)
+	}
+	boundaryRaceContext, cancelBoundaryRace := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBoundaryRace()
+	boundaryBlocked := delegatedCreate
+	boundaryBlocked.RequestID, boundaryBlocked.DisplayName = "customer-delegated-policy-after-boundary-remove", "Removed-boundary delegated policy"
+	boundaryBlockedBody := mustIAMJSON(t, boundaryBlocked)
+	publicationDone = make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		publicationDone <- performIAMRequest(handler, http.MethodPost, "/v1/policies", bearer, boundaryBlockedBody)
+	}()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(boundaryRaceContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=20)`).Scan(&waiting); err != nil {
+			t.Fatal("observe boundary-removal publication barrier", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-boundaryRaceContext.Done():
+				t.Fatal("policy publication never reached boundary-removal barrier")
+			}
+		}
+	}
+	request(http.MethodDelete, "/v1/users/"+string(member.ID)+"/permission-boundary", root,
+		iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: currentBoundary.ResourceVersion,
+			RequestID: "customer-policy-author-boundary-remove"}, http.StatusOK, nil)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,20)`); err != nil {
+		t.Fatal("release boundary-removal publication barrier", err)
+	}
+	select {
+	case response := <-publicationDone:
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("delegated publication survived concurrent boundary removal: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-boundaryRaceContext.Done():
+		t.Fatal("delegated publication did not finish after boundary removal")
+	}
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.policies WHERE owner_tenant_id=$1 AND display_name=$2)
+		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$3 AND request_id=$4)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4)`,
+		member.AccountID, boundaryBlocked.DisplayName, member.ID, boundaryBlocked.RequestID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("boundary-removed delegated publication left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
+	var historicalReplay iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedCreate, http.StatusCreated, &historicalReplay)
+	if !bytes.Equal(mustIAMJSON(t, historicalReplay), mustIAMJSON(t, delegatedPolicy)) {
+		t.Fatal("boundary removal changed an exact committed policy result")
+	}
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1
+		AND event_document->>'action'='iam.policy.created' AND event_document->>'requestId'=$2`,
+		member.AccountID, delegatedCreate.RequestID).Scan(&delegatedFactCount); err != nil || delegatedFactCount != 1 {
+		t.Fatal("historical policy replay produced another business fact", err)
+	}
+
 	post("/v1/accounts", root, map[string]any{"id": "customer-policy-other", "displayName": "Other policy account", "rootLoginName": "customer-policy-other", "rootDisplayName": "Other root", "initialPassword": initialDeveloperPassword, "requestId": "customer-policy-other-create"}, http.StatusCreated, nil)
 	other := localRecoveryLogin(t, handler, "customer-policy-other", initialDeveloperPassword, true)
 	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)

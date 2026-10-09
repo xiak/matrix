@@ -616,11 +616,6 @@ func (service *Authority) CreatePolicy(ctx context.Context, credential iamv1.Sec
 			if err != nil {
 				return iamv1.PolicyDetail{}, err
 			}
-			// Publication starts root-only, in addition to the ordinary PDP. It
-			// does not turn the root relation into a second policy evaluator.
-			if account.RootIdentity.PrincipalID != subject.Subject.Principal.ID {
-				return iamv1.PolicyDetail{}, ErrForbidden
-			}
 			if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
 				return iamv1.PolicyDetail{}, err
 			}
@@ -661,7 +656,8 @@ func (service *Authority) CreatePolicy(ctx context.Context, credential iamv1.Sec
 				return iamv1.PolicyDetail{}, err
 			}
 			return tx.CreatePolicy(ctx, PolicyCreation{Policy: policy, Version: version,
-				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, AuditEvent: event})
+				ActorPrincipalID: subject.Subject.Principal.ID, ActorSessionID: subject.Subject.Session.ID,
+				DecisionID: decision.ID, AuditEvent: event})
 		})
 }
 

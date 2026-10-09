@@ -648,15 +648,18 @@ BEGIN
 END $function$;
 
 DROP FUNCTION IF EXISTS iam.create_policy(text,text,text,text,text,text,text,text,jsonb);
-CREATE OR REPLACE FUNCTION iam.create_policy(tenant text,actor text,decision text,policy_id text,display_name text,version_id text,canonical text,content_digest text,event jsonb,submitted_contract integer)
+DROP FUNCTION IF EXISTS iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer);
+CREATE OR REPLACE FUNCTION iam.create_policy(tenant text,actor text,decision text,policy_id text,display_name text,version_id text,canonical text,content_digest text,event jsonb,submitted_contract integer,actor_session_id text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE stored iam.policies%ROWTYPE; effective_now timestamptz(6):=transaction_timestamp();
+    actor_is_root boolean; actor_evidence jsonb; boundary_policy_id text;
 BEGIN
     IF submitted_contract IS DISTINCT FROM 2 THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy publication requires compiled content'; END IF;
     PERFORM iam.assert_policy_compilation(canonical,content_digest,'TENANT');
     IF COALESCE(policy_id,'') COLLATE "C" !~ '^policy-[0-9a-f]{64}$'
        OR version_id IS DISTINCT FROM 'version-'||substring(content_digest FROM 8)
        OR display_name IS NULL OR octet_length(display_name) NOT BETWEEN 1 AND 128
+       OR COALESCE(actor_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR btrim(display_name)<>display_name OR display_name ~ '[[:cntrl:]]' THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy creation input is invalid';
     END IF;
@@ -666,8 +669,17 @@ BEGIN
     PERFORM 1 FROM iam.principals WHERE tenant_id=tenant AND id=actor AND principal_type='USER'
         AND status='ACTIVE' AND NOT must_change_password AND deleted_at IS NULL FOR NO KEY UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy actor is unavailable'; END IF;
+    PERFORM 1 FROM iam.user_credentials credential JOIN iam.sessions session
+      ON (session.tenant_id,session.principal_id)=(credential.tenant_id,credential.principal_id)
+      WHERE credential.tenant_id=tenant AND credential.principal_id=actor AND session.id=actor_session_id
+        AND session.status='ACTIVE' AND session.revoked_at IS NULL AND session.expires_at>clock_timestamp()
+        AND session.credential_version=credential.credential_version
+        AND session.last_activity_at IS NOT NULL AND session.idle_timeout_seconds IS NOT NULL
+        AND session.last_activity_at+make_interval(secs=>session.idle_timeout_seconds)>clock_timestamp()
+      FOR SHARE OF credential,session;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy publisher session is unavailable'; END IF;
     PERFORM 1 FROM iam.account_roots WHERE account_id=tenant AND principal_id=actor FOR SHARE;
-    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy publisher is unavailable'; END IF;
+    actor_is_root:=FOUND;
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.create','ACCOUNT',tenant,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.policy.created','POLICY',policy_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
@@ -690,6 +702,30 @@ BEGIN
         END IF;
         RETURN iam.policy_detail_snapshot(tenant,policy_id);
     END IF;
+    IF NOT actor_is_root THEN
+        SELECT boundary.policy_id INTO boundary_policy_id FROM iam.user_permission_boundaries boundary
+          WHERE boundary.tenant_id=tenant AND boundary.user_id=actor AND boundary.revoked_at IS NULL
+          FOR NO KEY UPDATE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy publisher boundary is unavailable'; END IF;
+        PERFORM 1 FROM iam.policies boundary_policy
+          WHERE boundary_policy.id=boundary_policy_id AND boundary_policy.management='CUSTOMER'
+            AND boundary_policy.owner_tenant_id=tenant AND boundary_policy.authority_scope='TENANT'
+            AND boundary_policy.status='ACTIVE' FOR SHARE;
+        IF NOT FOUND OR EXISTS(SELECT 1 FROM iam.policy_attachments attachment
+          WHERE attachment.tenant_id=tenant AND attachment.target_kind='USER' AND attachment.target_id=actor
+            AND attachment.authority_scope='INSTALLATION' AND attachment.revoked_at IS NULL) THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='delegated policy publisher is unavailable';
+        END IF;
+    END IF;
+    SELECT recorded.boundary_evidence INTO actor_evidence FROM iam.authorization_decisions recorded
+      WHERE recorded.tenant_id=tenant AND recorded.id=decision AND recorded.principal_id=actor
+        AND recorded.action_name='iam.policy.create' AND recorded.allowed;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy publication decision is unavailable'; END IF;
+    PERFORM iam.assert_current_user_boundary_evidence(tenant,actor,'iam.policy.create',actor_evidence);
+    IF NOT actor_is_root AND (actor_evidence->>'state' IS DISTINCT FROM 'BOUND'
+      OR actor_evidence#>>'{version,policyId}' IS DISTINCT FROM boundary_policy_id) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy publisher boundary is unavailable';
+    END IF;
     IF (SELECT count(*) FROM iam.policies WHERE owner_tenant_id=tenant AND management='CUSTOMER' AND status='ACTIVE')>=128 THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='customer policy limit exceeded';
     END IF;
@@ -703,9 +739,9 @@ BEGIN
 END $function$;
 
 REVOKE ALL ON FUNCTION iam.assert_policy_compilation(text,text,text),iam.policy_detail_snapshot(text,text),
-    iam.read_policy(text,text,text,text),iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer)
+    iam.read_policy(text,text,text,text),iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer,text)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
-GRANT EXECUTE ON FUNCTION iam.read_policy(text,text,text,text),iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.read_policy(text,text,text,text),iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer,text) TO matrix_iam_api;
 
 CREATE OR REPLACE FUNCTION iam.policy_version_detail(tenant text,policy_id text,version_id text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$

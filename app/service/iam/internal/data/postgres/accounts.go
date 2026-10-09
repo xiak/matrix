@@ -368,9 +368,10 @@ func (value *transaction) CreatePolicy(ctx context.Context, mutation identityacc
 	}
 	defer clear(event)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.create_policy($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)",
+	err = value.tx.QueryRow(ctx, "SELECT iam.create_policy($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)",
 		mutation.Policy.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.Policy.ID,
-		mutation.Policy.DisplayName, mutation.Version.ID, canonical, digest, event, mutation.Version.ContractVersion).Scan(&encoded)
+		mutation.Policy.DisplayName, mutation.Version.ID, canonical, digest, event, mutation.Version.ContractVersion,
+		mutation.ActorSessionID).Scan(&encoded)
 	if err != nil {
 		return iamv1.PolicyDetail{}, mapAuthorizationDatabaseError("create IAM policy", err)
 	}

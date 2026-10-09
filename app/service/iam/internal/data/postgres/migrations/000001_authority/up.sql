@@ -252,11 +252,14 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
           AND c.conname='policy_versions_content_valid' AND c.contype='c' AND c.convalidated)
       AND (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.pronamespace='iam'::regnamespace
           AND p.proname IN ('create_policy','create_policy_version'))=2
-      AND (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.oid IN (
-          to_regprocedure('iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer)'),
-          to_regprocedure('iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer)'))
-          AND p.pronargdefaults=0 AND p.pronargs=10 AND p.prorettype='jsonb'::regtype
-          AND NOT p.proretset AND p.prosecdef AND p.proowner='matrix_iam_owner'::regrole)=2
+      AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc p
+          WHERE p.oid=to_regprocedure('iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer,text)')
+            AND p.pronargdefaults=0 AND p.pronargs=11 AND p.prorettype='jsonb'::regtype
+            AND NOT p.proretset AND p.prosecdef AND p.proowner='matrix_iam_owner'::regrole)
+      AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc p
+          WHERE p.oid=to_regprocedure('iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer)')
+            AND p.pronargdefaults=0 AND p.pronargs=10 AND p.prorettype='jsonb'::regtype
+            AND NOT p.proretset AND p.prosecdef AND p.proowner='matrix_iam_owner'::regrole)
       AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('iam.policy_version_snapshot(iam.policy_versions)')
           AND p.pronargs=1 AND p.pronargdefaults=0 AND p.prorettype='jsonb'::regtype AND NOT p.proretset
           AND NOT p.prosecdef AND p.proowner='matrix_iam_owner'::regrole)
@@ -2211,7 +2214,7 @@ BEGIN
            AND to_regprocedure('iam.create_group(text,text,text,text,text,text,jsonb)') IS NOT NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS policy_entry
                 WHERE policy_entry.oid IN (to_regprocedure('iam.read_policy(text,text,text,text)'),
-                    to_regprocedure('iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer)'),
+                    to_regprocedure('iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer,text)'),
                     to_regprocedure('iam.list_policy_versions(text,text,text,text)'),
                     to_regprocedure('iam.read_policy_version(text,text,text,text,text)'),
                     to_regprocedure('iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer)'),

@@ -79,7 +79,7 @@ END $verify_policy_authority$;
 DO $verify_customer_policy_publication$
 DECLARE function_name text;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 72::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 73::bigint THEN
         RAISE EXCEPTION 'IAM policy publication schema version is invalid';
     END IF;
     IF iam.policy_version_contract_ready() IS DISTINCT FROM true THEN
@@ -95,7 +95,7 @@ BEGIN
     FOREACH function_name IN ARRAY ARRAY['iam.read_policy(text,text,text,text)',
         'iam.read_user_permission_boundary(text,text,text,text)',
         'iam.change_user_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text)',
-        'iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer)',
+        'iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer,text)',
         'iam.list_policy_versions(text,text,text,text)','iam.read_policy_version(text,text,text,text,text)',
         'iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer)','iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)',
         'iam.update_policy(text,text,text,text,bigint,text,jsonb)','iam.delete_policy(text,text,text,text,bigint,jsonb)','iam.delete_policy_version(text,text,text,text,text,bigint,jsonb)'] LOOP

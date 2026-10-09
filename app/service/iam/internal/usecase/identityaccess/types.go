@@ -1000,6 +1000,7 @@ type PolicyCreation struct {
 	Policy           iamv1.Policy
 	Version          iamv1.PolicyVersion
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
 }
