@@ -181,7 +181,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='TOTP backup custody context is forbidden';
     END IF;
     IF NOT iam.totp_custody_contract_ready() OR NOT iam.totp_backup_custody_contract_ready()
-        OR NOT EXISTS(SELECT 1 FROM iam.readiness() WHERE ready AND schema_version=74) THEN
+        OR NOT EXISTS(SELECT 1 FROM iam.readiness() WHERE ready AND schema_version=75) THEN
         RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='TOTP backup custody shape is unavailable';
     END IF;
     registration:=iam.totp_keyset_snapshot();

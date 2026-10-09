@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 与 Group 附件的同边界闭包已固定；固定`927c8e0`完成非 root 在同一封存上限内创建 CUSTOMER Policy 首版并显式关联，当前 IAM74 候选进一步开放同一受控 USER 创建不可变、非默认 PolicyVersion 草稿。非 root 默认切换、版本退休、元数据/Policy 删除及 Role 闭包、当前候选独立 CI、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 与 Group 附件的同边界闭包已固定；固定`927c8e0`完成非 root 在同一封存上限内创建 CUSTOMER Policy 首版并显式关联，固定`b54397e`再开放同一受控 USER 创建不可变、非默认 PolicyVersion 草稿。当前 IAM75 候选进一步开放受控默认版本切换；版本退休、元数据/Policy 删除及 Role 闭包、当前候选独立 CI、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -247,6 +247,10 @@ LANG-08 的“不能扩大自身许可”精确定义为：受委派管理员及
 
 新命令沿 Account → actor USER → 当前 Session/credential generation → actor boundary 关系 → 按稳定 ID 排序的 ceiling/目标 Policy 锁序；目标 Policy 与 ceiling 相同时直接拒绝。与 Root 设置任一 User/Role boundary 的竞争由目标 Policy 锁形成 fence：新版本只能完整发生在 Policy 成为边界之前，或在等待后观察到当前边界引用并失败关闭。等值已提交命令可以在 ceiling 后续移除后返回原不可变结果，但新 requestId、变体内容或陈旧修订必须按当前资格重新检查。门禁必须证明默认版本及真实 PaaS 权限不因草稿创建改变，Root 既有路径保留；无边界、平台绑定、修改 ceiling、并发登出、并发移除 actor ceiling、并发把目标设为边界、末尾 outbox 失败都不留下决定、Policy 修订、Version 或成功事实的部分状态。默认切换的非 root 闭包留给后继切片，并须枚举当前附件及其委派证据后再开放。
 
+后继默认版本切换纵向片只再开放 `iam.policy.set-default-version`，仍不开放版本退休、Policy 元数据/删除或 Role 委派。调用者继续是当前直接 USER 会话并持有一个有效 CUSTOMER/TENANT ceiling；目标必须是同 Account 的另一份 ACTIVE CUSTOMER/TENANT Policy，候选版本已存在且未退休。空附件集合可以切换，因为它不会改变任何主体的当前授权；存在附件时，事务必须枚举并锁定全部当前消费者及其不可变创建完成记录：直接 USER 必须是非 Root、非平台绑定、未删除且当前边界仍精确指向调用者 ceiling，创建完成必须是同 ceiling 的 `BOUND` 证明；Group 附件必须带同 ceiling 的 `GROUP_BOUND` 创建证明，全部当前成员仍满足相同 USER 闭包，空组保留其 ceiling。任何 Role 附件、`ROOT`/`PREDECESSOR_UNPROVEN` 创建证明、不同 ceiling、缺失完成记录或目标 Policy 的任一 User/Role boundary 引用都失败关闭；不通过比较两份 Policy 文档来猜测权限包含关系。
+
+切换事务按 Account → 全部相关 USER 稳定 ID → actor Session/credential generation → USER/Role boundary → Group/Role/membership 稳定 ID → ceiling/目标 Policy → 当前附件执行；附件创建/撤销、Group membership、边界设置/移除与默认切换必须共享这些 barrier。成功完成记录只封存 actor 的当前 `BOUND` evidence、当前附件数量和不含成员清单的稳定 closure digest，并关联原 decision/outbox；Audit 事实仍沿既有 `iam.policy.default-version-set` canonical，不增加可缓存 permit。精确已提交命令仅在目标 Policy 仍处于原结果修订和默认指针时返回历史结果；它可以在 actor ceiling 后续移除后无效果地重放，但新意图必须重新证明全部当前闭包。门禁至少覆盖直接 USER 与 Group 的正向切换、Root/旧前驱无证明附件、Role 附件、User/Role boundary、平台身份、登出/ceiling 移除及附件/成员/边界并发，且真实业务请求在下一次调用读取新默认版本。
+
 **内部证据而非新 permit。** 每个非 root 成功命令在现有命令完成记录中封存 `actorBoundary` 和必要的 `targetBoundary`：Policy ID、当前 versionId/contentDigest、边界关系修订、主体修订及受控 target kind/ID。Group 附件另保存同一上限 Policy ID，完成记录使用 `GROUP_BOUND` 封存成员数量及稳定成员摘要，供以后 membership 与边界写入锁内检查。该证据不进入普通请求，不返回可复用授权令牌，也不复制 Policy 文档或成员清单；成功 Audit 事实的 content digest 绑定请求与精确委派证据。Root 命令使用封闭的 `ROOT` 证据状态，不能伪造成某个普通边界。
 
 等值命令重放只返回原已提交结果，不重新产生效果；原上限随后变更、主体停用或权限撤销不抹去历史事实。没有完成记录的新请求必须按当前上限重新授权。响应丢失、事务结果不确定或数据库证据损坏时失败关闭，不能重新选择另一个 boundary 或降级成 Root 路径。
@@ -338,9 +342,11 @@ Allow/Deny/边界交集表、条件缺失/类型/大小攻击、跨账号资源�
 
 固定`927c8e016245feb2e770b5beee34be69bc9bab02`的 IAM73 Policy 首版委派在新库通过聚焦 HTTP/PG race 41.416s、完整策略存储 race 303.163s、IAM HTTP race 123.318s、Audit HTTP race 4.513s和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 266.287s。Root 封存一个同时包含作者动作、同上限目标附件动作和精确 PaaS 读取动作的 CUSTOMER/TENANT ceiling；只有管理策略无边界的 USER 仍被存储拒绝，设置相同 ceiling 后可以创建一份不自动关联的 CUSTOMER Policy，再显式关联给相同 ceiling 的目标并在真实授权中只允许指定应用。决定中的 `BOUND` 证据、单一 Policy/首版/事实和零隐式附件均由数据库核对；等值 HTTP 重放保留每次授权决定但只返回原业务结果。并发登出、并发移除 ceiling、平台绑定 USER 和后续版本发布均失败关闭，决定、Policy、Version 和事实无部分状态；移除 ceiling 后对已提交 command 的精确重放仍只返回历史结果。实际固定 `9b2671c0c76ed3dc444610e0c958591c4b4f9854` 的 IAM72 executable/migrator 到 IAM73 的唯一滚动前驱门禁 146.628s 通过，双迁移、故障回滚、重启及既有 Session/MFA/恢复/策略/附件完成/Audit proof 均保留。该固定点不证明后继 Policy 改版/default、Role 完整闭包、签名 A/B 生命周期或 LIVE UI 验收。
 
-当前 IAM74 非默认版本草稿候选在本任务专属 PostgreSQL 18 新库通过聚焦委派流程 41.160s、与不可变版本回归组合 57.570s、完整策略存储 race 297.193s、IAM HTTP race 119.245s、Audit HTTP race 4.528s和最终独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 252.514s。门禁证明同 ceiling 作者可以在精确目标 Policy 上创建一份不可变草稿，默认指针、已有附件和真实 PaaS 授权不变；变体/陈旧修订、修改 ceiling、平台绑定、并发登出/移除 actor ceiling、目标成为 User boundary 及 Role boundary 引用全部失败关闭。移除 ceiling 后，已提交草稿的精确重放只返回原不可变结果，新意图不能借历史证明继续写。固定`927c8e016245feb2e770b5beee34be69bc9bab02`的 IAM73 executable/migrator 到 IAM74 的唯一滚动前驱门禁 130.579s 通过，双迁移、故障回滚、重启及既有 Session/MFA/恢复/策略/附件完成/Audit proof 均保留。
+固定`b54397e31a08367a0433412f9588a6f3f1846218`保留 IAM74 非默认版本草稿及其已验证闭包。当前 IAM75 候选在本任务专属 PostgreSQL 18 新库通过非 root 默认切换聚焦 race 19.69s、完整策略存储 race 306.50s、IAM HTTP race 118.73s、Audit HTTP race 1.47s和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 273.23s。直接 USER 与 Group 当前消费者在同一 ceiling 下由一次事务锁定并封存 closure digest；新 Group 成员在决定快照后提交会触发可观测的 SERIALIZABLE 整事务重试，成员移除则真实等待已锁定闭包。默认指针切换后，旧版本授权在下一次 PaaS 请求拒绝，新版本生效；空附件 Policy 也只产生一个不可变完成结果。
 
-同一 IAM74 工作树已通过全仓无缓存 `go test -race -count=1 -p 2 ./...`（含 architecture）、全仓 vet、模块校验、API 重新生成零差异、Linux amd64/CGO 关闭的全仓构建及 diff 检查；无外部 DSN 的默认 SKIP 不计真实数据库或进程证据。当前候选仍待固定提交后的独立 CI；它不证明非 root 默认切换/版本退休/元数据或 Policy 删除、Role 完整闭包、签名 A/B 生命周期或 LIVE UI 验收。
+负向门禁覆盖 Root/旧前驱无证明附件、Role 附件、User/Role boundary 引用、平台绑定 actor、错误/变体/陈旧版本、并发登出及 actor ceiling 移除；完成记录插入故障会把决定、默认指针、outbox 和完成记录一起回滚。已提交精确重放在 ceiling 后续移除后只返回原结果；缺失完成或篡改原 actor/decision/outbox 关联返回不可用且不重建历史。完成表强制 RLS、无 runtime 表权限、私有 helper 无执行权，UPDATE/DELETE/TRUNCATE、受限直接插入以及 ACL、SECURITY DEFINER、trigger 漂移均失败关闭。固定 IAM74 executable/migrator 到 IAM75 的唯一滚动前驱门禁 123.59s 通过，双迁移、等值 bootstrap、重启和既有 Session/MFA/恢复/策略/附件完成/Audit canonical/proof 均保留。
+
+该工作树的实际完整组合为 IAM75/Audit36/PaaS3、`contractRevision=23`，已通过全仓无缓存 `go test -race -count=1 -p 2 ./...`（含 architecture）、全仓 vet、模块校验、API 重新生成零差异、Linux amd64/CGO 关闭的全仓构建及 diff 检查；无外部 DSN 的默认 SKIP 不计真实数据库或进程证据。当前候选仍待固定提交后的独立 CI；它不证明非 root 版本退休、元数据/Policy 删除、Role 完整闭包、相同 profile 签名 A/B 生命周期或 LIVE UI 验收。
 
 ### User 边界后端证据
 

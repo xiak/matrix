@@ -499,8 +499,9 @@ func (value *transaction) SetDefaultPolicyVersion(ctx context.Context, mutation 
 	}
 	defer clear(event)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.set_default_policy_version($1,$2,$3,$4,$5,$6,$7::jsonb)",
-		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PolicyID, mutation.ResourceVersion, mutation.VersionID, event).Scan(&encoded)
+	err = value.tx.QueryRow(ctx, "SELECT iam.set_default_policy_version($1,$2,$3,$4,$5,$6,$7::jsonb,$8)",
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PolicyID, mutation.ResourceVersion,
+		mutation.VersionID, event, mutation.ActorSessionID).Scan(&encoded)
 	if err != nil {
 		return iamv1.PolicyDetail{}, mapAuthorizationDatabaseError("set IAM default policy version", err)
 	}

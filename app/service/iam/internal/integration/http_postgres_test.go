@@ -1118,8 +1118,8 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	}
 	t.Run("compiled_policy_storage_contract", func(t *testing.T) {
 		var ready bool
-		if err := admin.QueryRow(ctx, `SELECT iam.policy_version_contract_ready()`).Scan(&ready); err != nil || !ready {
-			t.Fatal("compiled version metadata, exact functions or private boundary unavailable")
+		if err := admin.QueryRow(ctx, `SELECT iam.policy_version_contract_ready() AND iam.policy_default_version_contract_ready()`).Scan(&ready); err != nil || !ready {
+			t.Fatal("compiled version/default metadata, exact functions or private boundary unavailable")
 		}
 		compiled, err := authority.SystemPolicyVersion(iamv1.SystemPolicyPaaSViewer)
 		if err != nil {
@@ -1226,6 +1226,28 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			if err = tx.QueryRow(ctx, `SELECT iam.policy_version_contract_ready()`).Scan(&ready); err != nil || ready {
 				tx.Rollback(ctx)
 				t.Fatal("readiness accepted a widened compiled storage contract")
+			}
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, statement := range []string{
+			`GRANT SELECT ON TABLE iam.policy_default_version_changes TO matrix_iam_worker`,
+			`GRANT EXECUTE ON FUNCTION iam.lock_policy_default_selection_delegation(text,text,text,text) TO matrix_iam_api`,
+			`ALTER FUNCTION iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb,text) SECURITY INVOKER`,
+			`ALTER TABLE iam.policy_default_version_changes DISABLE TRIGGER policy_default_version_changes_cannot_be_updated`,
+		} {
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(ctx, statement); err != nil {
+				tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			if err = tx.QueryRow(ctx, `SELECT iam.policy_default_version_contract_ready()`).Scan(&ready); err != nil || ready {
+				tx.Rollback(ctx)
+				t.Fatal("readiness accepted a widened delegated default-selection contract")
 			}
 			if err := tx.Rollback(ctx); err != nil {
 				t.Fatal(err)
@@ -1558,6 +1580,17 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	}
 	assertRejected("immutable-version-update", `UPDATE iam.policy_versions SET content_digest=content_digest`, "42501")
 	assertRejected("immutable-version-delete", `DELETE FROM iam.policy_versions`, "42501")
+	assertRejected("immutable-default-completion-update", `UPDATE iam.policy_default_version_changes SET attachment_closure_digest=attachment_closure_digest`, "42501")
+	assertRejected("immutable-default-completion-delete", `DELETE FROM iam.policy_default_version_changes`, "42501")
+	assertRejected("immutable-default-completion-truncate", `TRUNCATE iam.policy_default_version_changes`, "42501")
+	assertRejected("guarded-default-completion-insert", `INSERT INTO iam.policy_default_version_changes(
+		tenant_id,actor_principal_id,request_id,policy_id,expected_resource_version,version_id,actor_boundary_evidence,
+		attachment_count,attachment_closure_digest,decision_id,event_id,completed_at)
+		VALUES($1,$2,'forged-default-completion','missing-policy',1,'missing-version',
+		'{"state":"BOUND","userResourceVersion":1,"boundaryId":"missing-boundary","resourceVersion":1,
+		"version":{"policyId":"missing-policy","versionId":"missing-version","contentDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"contractVersion":1}'::jsonb,
+		0,'sha256:0000000000000000000000000000000000000000000000000000000000000000','missing-decision','missing-event',transaction_timestamp())`,
+		"42501", document.Organization.ID, document.Administrator.ID)
 	assertRejected("immutable-decision-evidence", `UPDATE iam.authorization_decisions SET policy_evidence='[]'::jsonb`, "42501")
 	assertRejected("immutable-boundary-evidence", `UPDATE iam.authorization_decisions SET boundary_evidence='{}'::jsonb`, "42501")
 	for _, attack := range []struct{ name, evidence string }{
@@ -1598,20 +1631,28 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	assertRejected("attachment-wrong-principal-kind", `INSERT INTO iam.policy_attachments(tenant_id,id,target_id,target_kind,policy_id,resource_version,created_at,updated_at) VALUES($1,'forged-kind',$2,'SERVICE_ACCOUNT','system.paas-viewer',1,transaction_timestamp(),transaction_timestamp())`, "23503", document.Organization.ID, document.Administrator.ID)
 	assertRejected("tenant-attachment-cannot-select-installation", `INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,installation_id,resource_version,created_at,updated_at) VALUES($1,'forged-tenant-scope',$2,'system.paas-viewer',$3,1,transaction_timestamp(),transaction_timestamp())`, "22023", document.Organization.ID, document.Administrator.ID, document.InstallationID)
 	for _, role := range []string{iamHTTPTestRole, iamHTTPWorkerRole, "matrix_iam_credential_recovery"} {
-		tx, err := admin.Begin(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
-			t.Fatal(err)
-		}
-		_, err = tx.Exec(ctx, `SELECT * FROM iam.policy_versions`)
-		var databaseError *pgconn.PgError
-		if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
-			t.Fatalf("runtime %s acquired policy table access: %v", role, err)
-		}
-		if err := tx.Rollback(ctx); err != nil {
-			t.Fatal(err)
+		for _, query := range []string{
+			`SELECT * FROM iam.policy_versions`,
+			`SELECT * FROM iam.policy_default_version_changes`,
+			`SELECT iam.lock_policy_default_selection_delegation('tenant','actor','decision','policy')`,
+		} {
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			_, err = tx.Exec(ctx, query)
+			var databaseError *pgconn.PgError
+			if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
+				_ = tx.Rollback(ctx)
+				t.Fatalf("runtime %s acquired private policy/default authority through %q: %v", role, query, err)
+			}
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	// A different immutable default must drive evaluation; replaying the
@@ -16163,10 +16204,21 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(member.AccountID)}}},
 				{SID: "draft-policy-versions", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyVersionCreate},
 					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicy, Match: iamv1.PolicyResourceAnyInAuthority}}},
+				{SID: "select-controlled-default", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicySetDefaultVersion},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicy, Match: iamv1.PolicyResourceAnyInAuthority}}},
 				{SID: "attach-to-controlled-user", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyAttachmentCreate},
 					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceExact, ID: string(delegatedTarget.ID)}}},
+				{SID: "attach-to-controlled-group", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMGroupPolicyAttachmentCreate},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceGroup, Match: iamv1.PolicyResourceAnyInAuthority}}},
 				{SID: "read-selected-application", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
-					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-app"}}},
+					Resources: []iamv1.PolicyResourceSelector{
+						{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-app"},
+						{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-default-v1"},
+						{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-default-v2"},
+						{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-default-race-v1"},
+						{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-default-race-v2"},
+						{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-default-race-v3"},
+					}},
 			}},
 	}, http.StatusCreated, &delegationCeiling)
 	setBoundary := func(user iamv1.User, requestID string) {
@@ -16220,10 +16272,6 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		iamv1.CreatePolicyVersionRequest{Document: delegatedDraftRequest.Document,
 			ResourceVersion: delegationCeiling.Policy.ResourceVersion, RequestID: "customer-delegated-ceiling-version-rejected"},
 		http.StatusForbidden, nil)
-	post("/v1/policies/"+string(delegatedPolicy.Policy.ID)+":set-default-version", bearer,
-		iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedDraft.Version.ID,
-			ResourceVersion: delegatedDraft.Policy.ResourceVersion, RequestID: "customer-delegated-default-rejected"},
-		http.StatusForbidden, nil)
 	var delegatedDecisionCount, delegatedFactCount, delegatedVersionCount, delegatedAttachmentCount int
 	var delegatedVersionDecisionCount, delegatedVersionFactCount int
 	var delegatedBoundaryCurrent, delegatedVersionBoundaryCurrent, delegatedDefaultUnchanged bool
@@ -16274,13 +16322,494 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	authorize(targetBearer, "customer-delegated-app-v2", "customer-delegated-read-draft", false)
 	authorize(targetBearer, "customer-delegated-other", "customer-delegated-read-other", false)
 
+	// Selecting a new default changes every current consumer on its next real
+	// authorization request. Build one direct USER and one Group closure under
+	// the same immutable ceiling, while proving that Root and Role attachment
+	// paths cannot be reclassified as delegated authority.
+	var delegatedGroupTarget, rootProofTarget iamv1.User
+	post("/v1/users", root, map[string]any{"loginName": "customer-policy-group-target", "displayName": "Policy Group target",
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "customer-policy-group-target-create"}, http.StatusCreated, &delegatedGroupTarget)
+	post("/v1/users", root, map[string]any{"loginName": "customer-policy-root-proof-target", "displayName": "Policy Root-proof target",
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "customer-policy-root-proof-target-create"}, http.StatusCreated, &rootProofTarget)
+	setBoundary(delegatedGroupTarget, "customer-policy-group-target-boundary")
+	setBoundary(rootProofTarget, "customer-policy-root-proof-target-boundary")
+	groupTargetBearer := localRecoveryLogin(t, handler, delegatedGroupTarget.LoginName+"@"+string(delegatedGroupTarget.AccountID), initialDeveloperPassword, true)
+	groupTargetBearer = localRecoveryChangePassword(t, handler, groupTargetBearer, initialDeveloperPassword, changedDeveloperPassword)
+	groupTargetBearer = localRecoveryLogin(t, handler, delegatedGroupTarget.LoginName+"@"+string(delegatedGroupTarget.AccountID), changedDeveloperPassword, false)
+
+	delegatedSwitchCreate := iamv1.CreatePolicyRequest{DisplayName: "Delegated default selection", RequestID: "customer-delegated-default-policy-create",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "default-v1", Effect: iamv1.PolicyAllow,
+				Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{
+					Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-default-v1",
+				}}}}}}
+	var delegatedSwitchPolicy iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedSwitchCreate, http.StatusCreated, &delegatedSwitchPolicy)
+	delegatedSwitchVersionRequest := iamv1.CreatePolicyVersionRequest{ResourceVersion: delegatedSwitchPolicy.Policy.ResourceVersion,
+		RequestID: "customer-delegated-default-version-create",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "default-v2", Effect: iamv1.PolicyAllow,
+				Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{
+					Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-default-v2",
+				}}}}}}
+	var delegatedSwitchVersion iamv1.PolicyVersionDetail
+	post("/v1/policies/"+string(delegatedSwitchPolicy.Policy.ID)+"/versions", bearer,
+		delegatedSwitchVersionRequest, http.StatusCreated, &delegatedSwitchVersion)
+	delegatedSwitchPath := "/v1/policies/" + string(delegatedSwitchPolicy.Policy.ID) + ":set-default-version"
+
+	var rootProofAttachment iamv1.PolicyAttachment
+	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(rootProofTarget.ID)},
+		PolicyID: delegatedSwitchPolicy.Policy.ID, PolicyResourceVersion: delegatedSwitchVersion.Policy.ResourceVersion,
+		RequestID: "customer-delegated-default-root-proof-attachment",
+	}, http.StatusOK, &rootProofAttachment)
+	rootProofSelection := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedSwitchVersion.Version.ID,
+		ResourceVersion: delegatedSwitchVersion.Policy.ResourceVersion, RequestID: "customer-delegated-default-root-proof-rejected"}
+	post(delegatedSwitchPath, bearer, rootProofSelection, http.StatusForbidden, nil)
+	post("/v1/policy-attachments/"+string(rootProofAttachment.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: rootProofAttachment.ResourceVersion,
+			RequestID: "customer-delegated-default-root-proof-revoke"}, http.StatusOK, nil)
+
+	var delegatedSwitchRole iamv1.Role
+	post("/v1/roles", root, iamv1.CreateRoleRequest{Name: "Delegated default forbidden role", Tags: []iamv1.RoleTag{},
+		RequestID: "customer-delegated-default-role-create",
+		TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{
+			SID: "member", Effect: iamv1.PolicyAllow, Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: member.ID}},
+		}}}}, http.StatusCreated, &delegatedSwitchRole)
+	var delegatedSwitchRoleAttachment iamv1.PolicyAttachment
+	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(delegatedSwitchRole.ID)},
+		PolicyID: delegatedSwitchPolicy.Policy.ID, PolicyResourceVersion: delegatedSwitchVersion.Policy.ResourceVersion,
+		RequestID: "customer-delegated-default-role-attachment",
+	}, http.StatusOK, &delegatedSwitchRoleAttachment)
+	roleAttachmentSelection := rootProofSelection
+	roleAttachmentSelection.RequestID = "customer-delegated-default-role-attachment-rejected"
+	post(delegatedSwitchPath, bearer, roleAttachmentSelection, http.StatusForbidden, nil)
+	post("/v1/policy-attachments/"+string(delegatedSwitchRoleAttachment.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: delegatedSwitchRoleAttachment.ResourceVersion,
+			RequestID: "customer-delegated-default-role-attachment-revoke"}, http.StatusOK, nil)
+
+	var delegatedSwitchDirectAttachment iamv1.PolicyAttachment
+	post("/v1/policy-attachments", bearer, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegatedTarget.ID)},
+		PolicyID: delegatedSwitchPolicy.Policy.ID, PolicyResourceVersion: delegatedSwitchVersion.Policy.ResourceVersion,
+		RequestID: "customer-delegated-default-direct-attachment",
+	}, http.StatusOK, &delegatedSwitchDirectAttachment)
+	var delegatedSwitchGroup iamv1.Group
+	post("/v1/groups", root, iamv1.CreateGroupRequest{Name: "Delegated default consumers", RequestID: "customer-delegated-default-group-create"},
+		http.StatusCreated, &delegatedSwitchGroup)
+	var delegatedSwitchMembership iamv1.GroupMembership
+	post("/v1/groups/"+string(delegatedSwitchGroup.ID)+"/memberships", root,
+		iamv1.CreateGroupMembershipRequest{UserID: delegatedGroupTarget.ID, RequestID: "customer-delegated-default-group-member"},
+		http.StatusOK, &delegatedSwitchMembership)
+	var delegatedSwitchGroupAttachment iamv1.PolicyAttachment
+	post("/v1/policy-attachments", bearer, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(delegatedSwitchGroup.ID)},
+		PolicyID: delegatedSwitchPolicy.Policy.ID, PolicyResourceVersion: delegatedSwitchVersion.Policy.ResourceVersion,
+		RequestID: "customer-delegated-default-group-attachment",
+	}, http.StatusOK, &delegatedSwitchGroupAttachment)
+	if delegatedSwitchDirectAttachment.PolicyID != delegatedSwitchPolicy.Policy.ID ||
+		delegatedSwitchGroupAttachment.PolicyID != delegatedSwitchPolicy.Policy.ID {
+		t.Fatal("delegated default consumers lost their selected Policy")
+	}
+	authorize(targetBearer, "customer-delegated-default-v1", "customer-delegated-default-direct-before", true)
+	authorize(targetBearer, "customer-delegated-default-v2", "customer-delegated-default-direct-draft", false)
+	authorize(groupTargetBearer, "customer-delegated-default-v1", "customer-delegated-default-group-before", true)
+	authorize(groupTargetBearer, "customer-delegated-default-v2", "customer-delegated-default-group-draft", false)
+
+	delegatedDefaultSelection := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedSwitchVersion.Version.ID,
+		ResourceVersion: delegatedSwitchVersion.Policy.ResourceVersion, RequestID: "customer-delegated-default-select"}
+	var delegatedSelected, delegatedSelectedReplay iamv1.PolicyDetail
+	post(delegatedSwitchPath, bearer, delegatedDefaultSelection, http.StatusOK, &delegatedSelected)
+	post(delegatedSwitchPath, bearer, delegatedDefaultSelection, http.StatusOK, &delegatedSelectedReplay)
+	if delegatedSelected.Policy.ResourceVersion != delegatedDefaultSelection.ResourceVersion+1 ||
+		delegatedSelected.Version.ID != delegatedSwitchVersion.Version.ID ||
+		!bytes.Equal(mustIAMJSON(t, delegatedSelected), mustIAMJSON(t, delegatedSelectedReplay)) {
+		t.Fatal("delegated default selection or exact replay changed its immutable result")
+	}
+	authorize(targetBearer, "customer-delegated-default-v1", "customer-delegated-default-direct-old", false)
+	authorize(targetBearer, "customer-delegated-default-v2", "customer-delegated-default-direct-after", true)
+	authorize(groupTargetBearer, "customer-delegated-default-v1", "customer-delegated-default-group-old", false)
+	authorize(groupTargetBearer, "customer-delegated-default-v2", "customer-delegated-default-group-after", true)
+	var delegatedDefaultCompletionCount, delegatedDefaultFactCount int
+	var delegatedDefaultCompletionValid, delegatedDefaultStateCurrent bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.policy_default_version_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.default-version-set'
+		 AND event_document#>>'{actor,id}'=$2 AND event_document->>'requestId'=$3 AND event_document#>>'{target,id}'=$4),
+		(SELECT actor_boundary_evidence->>'state'='BOUND' AND actor_boundary_evidence#>>'{version,policyId}'=$5
+		 AND attachment_count=2 AND attachment_closure_digest ~ '^sha256:[0-9a-f]{64}$'
+		 FROM iam.policy_default_version_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3),
+		(SELECT default_version_id=$6 AND resource_version=$7 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$4)`,
+		member.AccountID, member.ID, delegatedDefaultSelection.RequestID, delegatedSwitchPolicy.Policy.ID,
+		delegationCeiling.Policy.ID, delegatedSwitchVersion.Version.ID, delegatedSelected.Policy.ResourceVersion).Scan(
+		&delegatedDefaultCompletionCount, &delegatedDefaultFactCount, &delegatedDefaultCompletionValid,
+		&delegatedDefaultStateCurrent); err != nil || delegatedDefaultCompletionCount != 1 || delegatedDefaultFactCount != 1 ||
+		!delegatedDefaultCompletionValid || !delegatedDefaultStateCurrent {
+		t.Fatalf("delegated default selection lost closure, state or one-to-one fact: completion=%d fact=%d proof=%t state=%t err=%v",
+			delegatedDefaultCompletionCount, delegatedDefaultFactCount, delegatedDefaultCompletionValid, delegatedDefaultStateCurrent, err)
+	}
+	delegatedDefaultVariant := delegatedDefaultSelection
+	delegatedDefaultVariant.VersionID = delegatedSwitchPolicy.Version.ID
+	post(delegatedSwitchPath, bearer, delegatedDefaultVariant, http.StatusConflict, nil)
+	delegatedDefaultStale := delegatedDefaultSelection
+	delegatedDefaultStale.RequestID = "customer-delegated-default-stale"
+	post(delegatedSwitchPath, bearer, delegatedDefaultStale, http.StatusConflict, nil)
+	delegatedDefaultCurrent := delegatedDefaultSelection
+	delegatedDefaultCurrent.ResourceVersion = delegatedSelected.Policy.ResourceVersion
+	delegatedDefaultCurrent.RequestID = "customer-delegated-default-already-current"
+	post(delegatedSwitchPath, bearer, delegatedDefaultCurrent, http.StatusConflict, nil)
+
+	// An unattached Policy has no consumer authority to expand, but it still
+	// requires the actor's current sealed ceiling and one immutable completion.
+	delegatedEmptyCreate := delegatedSwitchCreate
+	delegatedEmptyCreate.DisplayName = "Delegated empty default selection"
+	delegatedEmptyCreate.RequestID = "customer-delegated-empty-default-policy-create"
+	var delegatedEmptyPolicy iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedEmptyCreate, http.StatusCreated, &delegatedEmptyPolicy)
+	delegatedEmptyVersionRequest := delegatedSwitchVersionRequest
+	delegatedEmptyVersionRequest.ResourceVersion = delegatedEmptyPolicy.Policy.ResourceVersion
+	delegatedEmptyVersionRequest.RequestID = "customer-delegated-empty-default-version-create"
+	var delegatedEmptyVersion iamv1.PolicyVersionDetail
+	post("/v1/policies/"+string(delegatedEmptyPolicy.Policy.ID)+"/versions", bearer,
+		delegatedEmptyVersionRequest, http.StatusCreated, &delegatedEmptyVersion)
+	delegatedEmptySelection := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedEmptyVersion.Version.ID,
+		ResourceVersion: delegatedEmptyVersion.Policy.ResourceVersion, RequestID: "customer-delegated-empty-default-select"}
+	var delegatedEmptySelected iamv1.PolicyDetail
+	post("/v1/policies/"+string(delegatedEmptyPolicy.Policy.ID)+":set-default-version", bearer,
+		delegatedEmptySelection, http.StatusOK, &delegatedEmptySelected)
+	var delegatedEmptyProof bool
+	if err := database.QueryRow(ctx, `SELECT attachment_count=0
+		AND attachment_closure_digest ~ '^sha256:[0-9a-f]{64}$'
+		FROM iam.policy_default_version_changes
+		WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3 AND policy_id=$4`,
+		member.AccountID, member.ID, delegatedEmptySelection.RequestID, delegatedEmptyPolicy.Policy.ID).Scan(&delegatedEmptyProof); err != nil || !delegatedEmptyProof ||
+		delegatedEmptySelected.Policy.ResourceVersion != delegatedEmptySelection.ResourceVersion+1 {
+		t.Fatal("unattached delegated default selection lost its empty closure", err)
+	}
+	missingCompletion, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := missingCompletion.Exec(ctx, `ALTER TABLE iam.policy_default_version_changes
+		DISABLE TRIGGER policy_default_version_changes_cannot_be_deleted;
+		DELETE FROM iam.policy_default_version_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3;
+		ALTER TABLE iam.policy_default_version_changes ENABLE ALWAYS TRIGGER policy_default_version_changes_cannot_be_deleted`,
+		member.AccountID, member.ID, delegatedEmptySelection.RequestID); err != nil {
+		_ = missingCompletion.Rollback(ctx)
+		t.Fatal("inject isolated missing delegated default completion", err)
+	}
+	if err := missingCompletion.Commit(ctx); err != nil {
+		t.Fatal("commit isolated missing delegated default completion", err)
+	}
+	post("/v1/policies/"+string(delegatedEmptyPolicy.Policy.ID)+":set-default-version", bearer,
+		delegatedEmptySelection, http.StatusServiceUnavailable, nil)
+	var missingCompletionClosed bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.policy_default_version_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)=0
+		AND (SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2
+		 AND action_name='iam.policy.set-default-version' AND request_id=$3)=1
+		AND (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.default-version-set'
+		 AND event_document->>'requestId'=$3)=1
+		AND (SELECT default_version_id=$4 AND resource_version=$5 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)
+		AND iam.policy_default_version_contract_ready()`, member.AccountID, member.ID, delegatedEmptySelection.RequestID,
+		delegatedEmptyVersion.Version.ID, delegatedEmptySelected.Policy.ResourceVersion, delegatedEmptyPolicy.Policy.ID).
+		Scan(&missingCompletionClosed); err != nil || !missingCompletionClosed {
+		t.Fatal("missing delegated default completion was recreated or changed committed authority", err)
+	}
+
+	// A membership committed after the default-selection decision snapshot must
+	// force the request to retry and include that new consumer in the sealed
+	// closure. It may never commit a stale snapshot that silently upgrades only
+	// the members observed before the race.
+	var delegatedConcurrentTarget iamv1.User
+	post("/v1/users", root, map[string]any{"loginName": "customer-policy-concurrent-target", "displayName": "Policy concurrent target",
+		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "customer-policy-concurrent-target-create"},
+		http.StatusCreated, &delegatedConcurrentTarget)
+	setBoundary(delegatedConcurrentTarget, "customer-policy-concurrent-target-boundary")
+	concurrentTargetBearer := localRecoveryLogin(t, handler,
+		delegatedConcurrentTarget.LoginName+"@"+string(delegatedConcurrentTarget.AccountID), initialDeveloperPassword, true)
+	concurrentTargetBearer = localRecoveryChangePassword(t, handler, concurrentTargetBearer,
+		initialDeveloperPassword, changedDeveloperPassword)
+	concurrentTargetBearer = localRecoveryLogin(t, handler,
+		delegatedConcurrentTarget.LoginName+"@"+string(delegatedConcurrentTarget.AccountID), changedDeveloperPassword, false)
+
+	delegatedRaceCreate := iamv1.CreatePolicyRequest{DisplayName: "Delegated default membership race",
+		RequestID: "customer-delegated-default-race-policy-create",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "race-v1", Effect: iamv1.PolicyAllow,
+				Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{
+					Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-default-race-v1",
+				}}}}}}
+	var delegatedRacePolicy iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedRaceCreate, http.StatusCreated, &delegatedRacePolicy)
+	delegatedRaceVersionRequest := iamv1.CreatePolicyVersionRequest{ResourceVersion: delegatedRacePolicy.Policy.ResourceVersion,
+		RequestID: "customer-delegated-default-race-version-create",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "race-v2", Effect: iamv1.PolicyAllow,
+				Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{
+					Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-default-race-v2",
+				}}}}}}
+	var delegatedRaceVersion iamv1.PolicyVersionDetail
+	post("/v1/policies/"+string(delegatedRacePolicy.Policy.ID)+"/versions", bearer,
+		delegatedRaceVersionRequest, http.StatusCreated, &delegatedRaceVersion)
+	var delegatedRaceAttachment iamv1.PolicyAttachment
+	post("/v1/policy-attachments", bearer, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(delegatedSwitchGroup.ID)},
+		PolicyID: delegatedRacePolicy.Policy.ID, PolicyResourceVersion: delegatedRaceVersion.Policy.ResourceVersion,
+		RequestID: "customer-delegated-default-race-group-attachment",
+	}, http.StatusOK, &delegatedRaceAttachment)
+	authorize(groupTargetBearer, "customer-delegated-default-race-v1", "customer-delegated-default-race-before", true)
+	authorize(groupTargetBearer, "customer-delegated-default-race-v2", "customer-delegated-default-race-draft", false)
+	authorize(concurrentTargetBearer, "customer-delegated-default-race-v1", "customer-delegated-default-race-new-member-before", false)
+	delegatedRaceSelection := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedRaceVersion.Version.ID,
+		ResourceVersion: delegatedRaceVersion.Policy.ResourceVersion, RequestID: "customer-delegated-default-race-select"}
+	if _, err := database.Exec(ctx, `CREATE SEQUENCE public.matrix_default_attempt_count;
+		CREATE FUNCTION public.matrix_default_attempt_count() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+		SET search_path=pg_catalog,pg_temp AS $body$
+		BEGIN
+			IF NEW.request_id='customer-delegated-default-race-select' THEN
+				PERFORM nextval('public.matrix_default_attempt_count'::regclass);
+			END IF;
+			RETURN NEW;
+		END $body$;
+		CREATE TRIGGER matrix_default_attempt_count BEFORE INSERT ON iam.authorization_decisions
+		FOR EACH ROW EXECUTE FUNCTION public.matrix_default_attempt_count()`); err != nil {
+		t.Fatal("install new-member default-selection attempt counter", err)
+	}
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if _, err := database.Exec(cleanup, `DROP TRIGGER IF EXISTS matrix_default_attempt_count ON iam.authorization_decisions;
+			DROP FUNCTION IF EXISTS public.matrix_default_attempt_count();
+			DROP SEQUENCE IF EXISTS public.matrix_default_attempt_count`); err != nil {
+			t.Error("remove new-member default-selection attempt counter", err)
+		}
+	})
+	awaitDefaultDecision, releaseDefaultDecision := holdIAMRequest(t, ctx, database, delegatedRaceSelection.RequestID, false, "")
+	newMemberDefaultDone := make(chan *httptest.ResponseRecorder, 1)
+	delegatedRacePath := "/v1/policies/" + string(delegatedRacePolicy.Policy.ID) + ":set-default-version"
+	delegatedRaceSelectionBody := mustIAMJSON(t, delegatedRaceSelection)
+	go func() {
+		newMemberDefaultDone <- performIAMRequest(handler, http.MethodPost, delegatedRacePath, bearer, delegatedRaceSelectionBody)
+	}()
+	_ = awaitDefaultDecision()
+	var delegatedConcurrentMembership iamv1.GroupMembership
+	post("/v1/groups/"+string(delegatedSwitchGroup.ID)+"/memberships", root,
+		iamv1.CreateGroupMembershipRequest{UserID: delegatedConcurrentTarget.ID,
+			RequestID: "customer-delegated-default-race-concurrent-member"},
+		http.StatusOK, &delegatedConcurrentMembership)
+	if delegatedConcurrentMembership.UserID != delegatedConcurrentTarget.ID {
+		t.Fatal("concurrent Group membership changed its controlled USER")
+	}
+	authorize(concurrentTargetBearer, "customer-delegated-default-race-v1", "customer-delegated-default-race-new-member-current", true)
+	releaseDefaultDecision()
+	var delegatedRaceSelected iamv1.PolicyDetail
+	select {
+	case response := <-newMemberDefaultDone:
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &delegatedRaceSelected) != nil {
+			t.Fatalf("new-member default selection failed: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("new-member default selection did not retry and finish")
+	}
+	var newMemberDefaultAttempts int64
+	if err := database.QueryRow(ctx, `SELECT last_value FROM public.matrix_default_attempt_count`).Scan(&newMemberDefaultAttempts); err != nil || newMemberDefaultAttempts < 2 {
+		t.Fatalf("new-member default selection did not prove a fresh serializable closure: attempts=%d err=%v", newMemberDefaultAttempts, err)
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER IF EXISTS matrix_key_linearization ON iam.authorization_decisions;
+		DROP FUNCTION IF EXISTS public.matrix_key_linearization();
+		DROP TRIGGER IF EXISTS matrix_default_attempt_count ON iam.authorization_decisions;
+		DROP FUNCTION IF EXISTS public.matrix_default_attempt_count();
+		DROP SEQUENCE IF EXISTS public.matrix_default_attempt_count`); err != nil {
+		t.Fatal("remove new-member default-selection barrier", err)
+	}
+	authorize(concurrentTargetBearer, "customer-delegated-default-race-v1", "customer-delegated-default-race-new-member-old", false)
+	authorize(concurrentTargetBearer, "customer-delegated-default-race-v2", "customer-delegated-default-race-new-member-selected", true)
+	var delegatedNewMemberProof bool
+	if err := database.QueryRow(ctx, `SELECT completion.attachment_count=1
+		AND completion.attachment_closure_digest ~ '^sha256:[0-9a-f]{64}$'
+		AND policy.default_version_id=$4 AND policy.resource_version=$5
+		FROM iam.policy_default_version_changes completion
+		JOIN iam.policies policy ON policy.owner_tenant_id=completion.tenant_id AND policy.id=completion.policy_id
+		WHERE completion.tenant_id=$1 AND completion.actor_principal_id=$2 AND completion.request_id=$3`,
+		member.AccountID, member.ID, delegatedRaceSelection.RequestID, delegatedRaceVersion.Version.ID,
+		delegatedRaceSelected.Policy.ResourceVersion).Scan(&delegatedNewMemberProof); err != nil || !delegatedNewMemberProof {
+		t.Fatal("concurrent Group member was not covered by the committed default-selection closure", err)
+	}
+
+	// Create another immutable draft, then hold its real default switch after it
+	// has locked and evaluated the full Group closure. A concurrent membership
+	// removal must wait for that writer, so both facts describe one serial order
+	// rather than a mixed snapshot.
+	delegatedRaceThirdRequest := iamv1.CreatePolicyVersionRequest{ResourceVersion: delegatedRaceSelected.Policy.ResourceVersion,
+		RequestID: "customer-delegated-default-race-version-three-create",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "race-v3", Effect: iamv1.PolicyAllow,
+				Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{
+					Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-delegated-default-race-v3",
+				}}}}}}
+	var delegatedRaceThirdVersion iamv1.PolicyVersionDetail
+	post("/v1/policies/"+string(delegatedRacePolicy.Policy.ID)+"/versions", bearer,
+		delegatedRaceThirdRequest, http.StatusCreated, &delegatedRaceThirdVersion)
+	delegatedRemovalSelection := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedRaceThirdVersion.Version.ID,
+		ResourceVersion: delegatedRaceThirdVersion.Policy.ResourceVersion,
+		RequestID:       "customer-delegated-default-race-removal-select"}
+	awaitDefaultWrite, releaseDefaultWrite := holdIAMRequest(t, ctx, database, delegatedRemovalSelection.RequestID, true,
+		auditv1.ActionIAMPolicyDefaultVersionSet)
+	defaultRaceDone := make(chan *httptest.ResponseRecorder, 1)
+	membershipRaceDone := make(chan *httptest.ResponseRecorder, 1)
+	delegatedRemovalSelectionBody := mustIAMJSON(t, delegatedRemovalSelection)
+	go func() {
+		defaultRaceDone <- performIAMRequest(handler, http.MethodPost, delegatedRacePath, bearer, delegatedRemovalSelectionBody)
+	}()
+	defaultWriterPID := awaitDefaultWrite()
+	membershipRemoval := iamv1.RemoveGroupMembershipRequest{ResourceVersion: delegatedSwitchMembership.ResourceVersion,
+		RequestID: "customer-delegated-default-race-member-remove"}
+	membershipRemovalPath := "/v1/groups/" + string(delegatedSwitchGroup.ID) + "/memberships/" + string(delegatedSwitchMembership.ID) + ":remove"
+	membershipRemovalBody := mustIAMJSON(t, membershipRemoval)
+	go func() {
+		membershipRaceDone <- performIAMRequest(handler, http.MethodPost, membershipRemovalPath, root, membershipRemovalBody)
+	}()
+	blockedRaceContext, cancelBlockedRace := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBlockedRace()
+	blockedRaceTicker := time.NewTicker(10 * time.Millisecond)
+	defer blockedRaceTicker.Stop()
+	for blocked := false; !blocked; {
+		if err := database.QueryRow(blockedRaceContext, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+			WHERE datname=current_database() AND usename=$1 AND state='active' AND wait_event_type='Lock'
+			AND $2=ANY(pg_blocking_pids(pid)))`, iamHTTPTestRole, defaultWriterPID).Scan(&blocked); err != nil {
+			t.Fatal("observe default-selection membership serialization", err)
+		}
+		if !blocked {
+			select {
+			case <-blockedRaceTicker.C:
+			case <-blockedRaceContext.Done():
+				t.Fatal("membership removal did not wait for default-selection closure")
+			}
+		}
+	}
+	releaseDefaultWrite()
+	for name, completed := range map[string]<-chan *httptest.ResponseRecorder{"default selection": defaultRaceDone, "membership removal": membershipRaceDone} {
+		select {
+		case response := <-completed:
+			if response.Code != http.StatusOK {
+				t.Fatalf("serialized %s failed: status=%d body=%s", name, response.Code, response.Body.String())
+			}
+		case <-blockedRaceContext.Done():
+			t.Fatalf("serialized %s did not finish", name)
+		}
+	}
+	var delegatedRaceProof bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT attachment_count=1 AND attachment_closure_digest ~ '^sha256:[0-9a-f]{64}$'
+		 FROM iam.policy_default_version_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		AND (SELECT default_version_id=$4 AND resource_version=$5 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)
+		AND (SELECT removed_at IS NOT NULL AND resource_version=$7 FROM iam.group_memberships WHERE tenant_id=$1 AND id=$8)
+		AND (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN($3,$9)
+		 AND event_document->>'action' IN('iam.policy.default-version-set','iam.group-membership.removed'))=2`,
+		member.AccountID, member.ID, delegatedRemovalSelection.RequestID, delegatedRaceThirdVersion.Version.ID,
+		delegatedRaceThirdVersion.Policy.ResourceVersion+1, delegatedRacePolicy.Policy.ID,
+		delegatedSwitchMembership.ResourceVersion+1, delegatedSwitchMembership.ID, membershipRemoval.RequestID).
+		Scan(&delegatedRaceProof); err != nil || !delegatedRaceProof {
+		t.Fatal("serialized default selection and membership removal lost closure or facts", err)
+	}
+	authorize(groupTargetBearer, "customer-delegated-default-race-v1", "customer-delegated-default-race-removed-v1", false)
+	authorize(groupTargetBearer, "customer-delegated-default-race-v2", "customer-delegated-default-race-removed-v2", false)
+	authorize(groupTargetBearer, "customer-delegated-default-race-v3", "customer-delegated-default-race-removed-v3", false)
+	authorize(concurrentTargetBearer, "customer-delegated-default-race-v2", "customer-delegated-default-race-concurrent-old", false)
+	authorize(concurrentTargetBearer, "customer-delegated-default-race-v3", "customer-delegated-default-race-concurrent-current", true)
+
+	// The immutable delegation completion is the last write in the transaction.
+	// Fail it deliberately and require the decision, Policy pointer and already
+	// inserted outbox fact to roll back together before an exact retry succeeds.
+	delegatedFaultCreate := delegatedEmptyCreate
+	delegatedFaultCreate.DisplayName = "Delegated default atomic failure"
+	delegatedFaultCreate.RequestID = "customer-delegated-default-fault-policy-create"
+	var delegatedFaultPolicy iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedFaultCreate, http.StatusCreated, &delegatedFaultPolicy)
+	delegatedFaultVersionRequest := delegatedEmptyVersionRequest
+	delegatedFaultVersionRequest.ResourceVersion = delegatedFaultPolicy.Policy.ResourceVersion
+	delegatedFaultVersionRequest.RequestID = "customer-delegated-default-fault-version-create"
+	var delegatedFaultVersion iamv1.PolicyVersionDetail
+	post("/v1/policies/"+string(delegatedFaultPolicy.Policy.ID)+"/versions", bearer,
+		delegatedFaultVersionRequest, http.StatusCreated, &delegatedFaultVersion)
+	delegatedFaultSelection := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedFaultVersion.Version.ID,
+		ResourceVersion: delegatedFaultVersion.Policy.ResourceVersion, RequestID: "customer-delegated-default-fault-select"}
+	delegatedFaultPath := "/v1/policies/" + string(delegatedFaultPolicy.Policy.ID) + ":set-default-version"
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_default_completion_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.request_id='customer-delegated-default-fault-select' THEN RAISE EXCEPTION 'injected default completion failure'; END IF;
+		RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_policy_default_completion_fault BEFORE INSERT ON iam.policy_default_version_changes
+		FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_default_completion_fault()`); err != nil {
+		t.Fatal("install delegated default completion fault", err)
+	}
+	defer func() {
+		if _, err := database.Exec(context.Background(), `DROP TRIGGER IF EXISTS matrix_policy_default_completion_fault ON iam.policy_default_version_changes;
+			DROP FUNCTION IF EXISTS public.matrix_policy_default_completion_fault()`); err != nil {
+			t.Error("remove delegated default completion fault", err)
+		}
+	}()
+	post(delegatedFaultPath, bearer, delegatedFaultSelection, http.StatusServiceUnavailable, nil)
+	var delegatedFaultPartial bool
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_default_version_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT default_version_id<>$4 OR resource_version<>$5 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
+		member.AccountID, member.ID, delegatedFaultSelection.RequestID, delegatedFaultPolicy.Version.ID,
+		delegatedFaultVersion.Policy.ResourceVersion, delegatedFaultPolicy.Policy.ID).Scan(&delegatedFaultPartial); err != nil || delegatedFaultPartial {
+		t.Fatalf("failed delegated default completion left partial authority: partial=%t err=%v", delegatedFaultPartial, err)
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_policy_default_completion_fault ON iam.policy_default_version_changes;
+		DROP FUNCTION public.matrix_policy_default_completion_fault()`); err != nil {
+		t.Fatal("remove delegated default completion fault before retry", err)
+	}
+	var delegatedFaultSelected iamv1.PolicyDetail
+	post(delegatedFaultPath, bearer, delegatedFaultSelection, http.StatusOK, &delegatedFaultSelected)
+	if delegatedFaultSelected.Version.ID != delegatedFaultVersion.Version.ID ||
+		delegatedFaultSelected.Policy.ResourceVersion != delegatedFaultSelection.ResourceVersion+1 {
+		t.Fatal("exact retry after default completion rollback changed the selected result")
+	}
+	mismatchedCompletion, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mismatchedCompletion.Exec(ctx, `ALTER TABLE iam.policy_default_version_changes
+		DISABLE TRIGGER policy_default_version_changes_cannot_be_updated;
+		UPDATE iam.policy_default_version_changes SET actor_boundary_evidence=jsonb_set(actor_boundary_evidence,
+		'{version,contentDigest}',to_jsonb(('sha256:'||repeat('f',64))::text))
+		WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3;
+		ALTER TABLE iam.policy_default_version_changes ENABLE ALWAYS TRIGGER policy_default_version_changes_cannot_be_updated`,
+		member.AccountID, member.ID, delegatedFaultSelection.RequestID); err != nil {
+		_ = mismatchedCompletion.Rollback(ctx)
+		t.Fatal("inject isolated mismatched delegated default evidence", err)
+	}
+	if err := mismatchedCompletion.Commit(ctx); err != nil {
+		t.Fatal("commit isolated mismatched delegated default evidence", err)
+	}
+	post(delegatedFaultPath, bearer, delegatedFaultSelection, http.StatusServiceUnavailable, nil)
+	var mismatchedCompletionClosed bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.policy_default_version_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)=1
+		AND (SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2
+		 AND action_name='iam.policy.set-default-version' AND request_id=$3)=1
+		AND (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.default-version-set'
+		 AND event_document->>'requestId'=$3)=1
+		AND (SELECT default_version_id=$4 AND resource_version=$5 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
+		member.AccountID, member.ID, delegatedFaultSelection.RequestID, delegatedFaultVersion.Version.ID,
+		delegatedFaultSelected.Policy.ResourceVersion, delegatedFaultPolicy.Policy.ID).Scan(&mismatchedCompletionClosed); err != nil || !mismatchedCompletionClosed {
+		t.Fatal("mismatched delegated default evidence was accepted or changed authority", err)
+	}
+
 	// A bearer that was current at HTTP authentication cannot publish after a
 	// concurrent logout. Pause the decision insert, complete the real logout,
 	// then require the storage transaction to reject and roll back its decision.
 	blockedBearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
 	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_publication_auth_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
 		BEGIN IF NEW.request_id IN ('customer-delegated-policy-after-logout','customer-delegated-version-after-logout',
-		'customer-delegated-policy-after-boundary-remove','customer-delegated-version-after-boundary-remove')
+		'customer-delegated-default-after-logout','customer-delegated-policy-after-boundary-remove',
+		'customer-delegated-version-after-boundary-remove','customer-delegated-default-after-boundary-remove')
 		THEN PERFORM pg_advisory_xact_lock(54831,20); END IF; RETURN NEW; END $body$;
 		CREATE TRIGGER matrix_policy_publication_auth_barrier BEFORE INSERT ON iam.authorization_decisions
 		FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_publication_auth_barrier(); SELECT pg_advisory_lock(54831,20)`); err != nil {
@@ -16394,6 +16923,55 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		t.Fatalf("logged-out delegated version left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
 
+	defaultBlockedBearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_lock(54831,20)`); err != nil {
+		t.Fatal("hold policy default authentication barrier", err)
+	}
+	blockedDefaultContext, cancelBlockedDefault := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBlockedDefault()
+	blockedDefault := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedSwitchPolicy.Version.ID,
+		ResourceVersion: delegatedSelected.Policy.ResourceVersion, RequestID: "customer-delegated-default-after-logout"}
+	blockedDefaultBody := mustIAMJSON(t, blockedDefault)
+	defaultPublicationDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		defaultPublicationDone <- performIAMRequest(handler, http.MethodPost, delegatedSwitchPath,
+			defaultBlockedBearer, blockedDefaultBody)
+	}()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(blockedDefaultContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=20)`).Scan(&waiting); err != nil {
+			t.Fatal("observe policy default authentication barrier", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-blockedDefaultContext.Done():
+				t.Fatal("policy default selection never reached authentication barrier")
+			}
+		}
+	}
+	post("/v1/auth/logout", defaultBlockedBearer, map[string]any{"requestId": "customer-delegated-default-logout"}, http.StatusOK, nil)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,20)`); err != nil {
+		t.Fatal("release policy default authentication barrier", err)
+	}
+	select {
+	case response := <-defaultPublicationDone:
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("delegated default selection survived concurrent logout: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-blockedDefaultContext.Done():
+		t.Fatal("delegated default selection did not finish after concurrent logout")
+	}
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_default_version_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT default_version_id<>$4 OR resource_version<>$5 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
+		member.AccountID, member.ID, blockedDefault.RequestID, delegatedSwitchVersion.Version.ID,
+		delegatedSelected.Policy.ResourceVersion, delegatedSwitchPolicy.Policy.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("logged-out delegated default selection left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
+
 	// A tenant administrator with any current installation-scoped USER binding
 	// is outside the delegated tenant closure even when PDP and its ordinary
 	// boundary would otherwise allow policy creation.
@@ -16410,13 +16988,18 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	platformVersionBlocked := blockedVersion
 	platformVersionBlocked.RequestID = "customer-delegated-platform-version-rejected"
 	post("/v1/policies/"+string(delegatedPolicy.Policy.ID)+"/versions", bearer, platformVersionBlocked, http.StatusForbidden, nil)
+	platformDefaultBlocked := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedSwitchPolicy.Version.ID,
+		ResourceVersion: delegatedSelected.Policy.ResourceVersion, RequestID: "customer-delegated-platform-default-rejected"}
+	post(delegatedSwitchPath, bearer, platformDefaultBlocked, http.StatusForbidden, nil)
 	if err := database.QueryRow(ctx, `SELECT
 		EXISTS(SELECT 1 FROM iam.policies WHERE owner_tenant_id=$1 AND display_name=$2)
-		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$3 AND request_id IN($4,$5))
-		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN($4,$5))
-		OR (SELECT count(*) FROM iam.policy_versions WHERE policy_id=$6)<>2`,
+		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$3 AND request_id IN($4,$5,$6))
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN($4,$5,$6))
+		OR (SELECT count(*) FROM iam.policy_versions WHERE policy_id=$7)<>2
+		OR (SELECT default_version_id<>$8 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$9)`,
 		member.AccountID, platformBlocked.DisplayName, member.ID, platformBlocked.RequestID,
-		platformVersionBlocked.RequestID, delegatedPolicy.Policy.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		platformVersionBlocked.RequestID, platformDefaultBlocked.RequestID, delegatedPolicy.Policy.ID,
+		delegatedSwitchVersion.Version.ID, delegatedSwitchPolicy.Policy.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("platform-bound delegated publication left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
 	post("/v1/policy-attachments/"+string(platformBinding.ID)+":revoke", root,
@@ -16530,6 +17113,62 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		member.AccountID, member.ID, boundaryBlockedVersion.RequestID, delegatedPolicy.Policy.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("boundary-removed delegated version left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
+
+	// Repeat the boundary fence for the consumer-changing default pointer. The
+	// request has passed PDP, but the storage transaction must observe Root's
+	// committed boundary removal before it can alter the selected version.
+	setBoundary(member, "customer-policy-author-boundary-reset-default")
+	bearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	get("/v1/users/"+string(member.ID)+"/permission-boundary", root, http.StatusOK, &currentBoundary)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_lock(54831,20)`); err != nil {
+		t.Fatal("hold boundary-removal default barrier", err)
+	}
+	boundaryDefaultContext, cancelBoundaryDefault := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBoundaryDefault()
+	boundaryBlockedDefault := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedSwitchPolicy.Version.ID,
+		ResourceVersion: delegatedSelected.Policy.ResourceVersion, RequestID: "customer-delegated-default-after-boundary-remove"}
+	boundaryBlockedDefaultBody := mustIAMJSON(t, boundaryBlockedDefault)
+	boundaryDefaultDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		boundaryDefaultDone <- performIAMRequest(handler, http.MethodPost, delegatedSwitchPath,
+			bearer, boundaryBlockedDefaultBody)
+	}()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(boundaryDefaultContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=20)`).Scan(&waiting); err != nil {
+			t.Fatal("observe boundary-removal default barrier", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-boundaryDefaultContext.Done():
+				t.Fatal("policy default selection never reached boundary-removal barrier")
+			}
+		}
+	}
+	request(http.MethodDelete, "/v1/users/"+string(member.ID)+"/permission-boundary", root,
+		iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: currentBoundary.ResourceVersion,
+			RequestID: "customer-policy-author-boundary-remove-default"}, http.StatusOK, nil)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,20)`); err != nil {
+		t.Fatal("release boundary-removal default barrier", err)
+	}
+	select {
+	case response := <-boundaryDefaultDone:
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("delegated default selection survived concurrent boundary removal: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-boundaryDefaultContext.Done():
+		t.Fatal("delegated default selection did not finish after boundary removal")
+	}
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_default_version_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT default_version_id<>$4 OR resource_version<>$5 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
+		member.AccountID, member.ID, boundaryBlockedDefault.RequestID, delegatedSwitchVersion.Version.ID,
+		delegatedSelected.Policy.ResourceVersion, delegatedSwitchPolicy.Policy.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("boundary-removed delegated default selection left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
 	// The already committed draft can still return its immutable result after
 	// the ceiling is removed; the decision is not a permit for a new version.
 	var historicalDraftReplay iamv1.PolicyVersionDetail
@@ -16542,6 +17181,27 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		AND event_document->>'action'='iam.policy-version.created' AND event_document->>'requestId'=$2`,
 		member.AccountID, delegatedDraftRequest.RequestID).Scan(&delegatedVersionFactCount); err != nil || delegatedVersionFactCount != 1 {
 		t.Fatal("historical policy version replay produced another business fact", err)
+	}
+	// The exact selected-default command is also a no-effect historical result.
+	// It may be recovered after the actor ceiling disappears, while a new
+	// selection under the now-unbounded administrator must still fail closed.
+	var historicalDefaultReplay iamv1.PolicyDetail
+	post(delegatedSwitchPath, bearer, delegatedDefaultSelection, http.StatusOK, &historicalDefaultReplay)
+	if !bytes.Equal(mustIAMJSON(t, historicalDefaultReplay), mustIAMJSON(t, delegatedSelected)) {
+		t.Fatal("boundary removal changed an exact committed default-selection result")
+	}
+	removedBoundarySelection := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedSwitchPolicy.Version.ID,
+		ResourceVersion: delegatedSelected.Policy.ResourceVersion, RequestID: "customer-delegated-default-after-boundary-remove"}
+	post(delegatedSwitchPath, bearer, removedBoundarySelection, http.StatusForbidden, nil)
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR (SELECT count(*) FROM iam.policy_default_version_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$4)<>1
+		OR (SELECT default_version_id<>$5 OR resource_version<>$6 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$7)`,
+		member.AccountID, member.ID, removedBoundarySelection.RequestID, delegatedDefaultSelection.RequestID,
+		delegatedSwitchVersion.Version.ID, delegatedSelected.Policy.ResourceVersion, delegatedSwitchPolicy.Policy.ID).
+		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("historical default replay or boundary-removed new intent changed authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
 	// The original create command no longer describes the current Policy
 	// revision after the draft was added, so it must conflict rather than
@@ -16632,11 +17292,19 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	if boundaryRaceView.Policy == nil || boundaryRaceView.Policy.PolicyID != delegatedPolicy.Policy.ID {
 		t.Fatal("target-boundary competition lost the committed boundary")
 	}
+	userBoundaryDefault := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedDraft.Version.ID,
+		ResourceVersion: delegatedDraft.Policy.ResourceVersion, RequestID: "customer-delegated-default-user-boundary-rejected"}
+	post("/v1/policies/"+string(delegatedPolicy.Policy.ID)+":set-default-version", bearer,
+		userBoundaryDefault, http.StatusForbidden, nil)
 	if err := database.QueryRow(ctx, `SELECT
 		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
 		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
-		OR (SELECT count(*) FROM iam.policy_versions WHERE policy_id=$4)<>2`,
-		member.AccountID, member.ID, targetBoundaryVersion.RequestID, delegatedPolicy.Policy.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$4)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4)
+		OR (SELECT count(*) FROM iam.policy_versions WHERE policy_id=$5)<>2
+		OR (SELECT default_version_id<>$6 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$5)`,
+		member.AccountID, member.ID, targetBoundaryVersion.RequestID, userBoundaryDefault.RequestID,
+		delegatedPolicy.Policy.ID, delegatedPolicy.Version.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("target-boundary competition left a partial delegated version: partial=%t err=%v", partialDelegatedPublication, err)
 	}
 	request(http.MethodDelete, boundaryRacePath, root,
@@ -16656,14 +17324,22 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	roleBoundaryVersion := blockedVersion
 	roleBoundaryVersion.RequestID = "customer-delegated-version-role-boundary-rejected"
 	post("/v1/policies/"+string(delegatedPolicy.Policy.ID)+"/versions", bearer, roleBoundaryVersion, http.StatusForbidden, nil)
+	roleBoundaryDefault := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedDraft.Version.ID,
+		ResourceVersion: delegatedDraft.Policy.ResourceVersion, RequestID: "customer-delegated-default-role-boundary-rejected"}
+	post("/v1/policies/"+string(delegatedPolicy.Policy.ID)+":set-default-version", bearer,
+		roleBoundaryDefault, http.StatusForbidden, nil)
 	if boundaryRaceRoleView.Policy == nil || boundaryRaceRoleView.Policy.PolicyID != delegatedPolicy.Policy.ID {
 		t.Fatal("role boundary did not retain the protected policy")
 	}
 	if err := database.QueryRow(ctx, `SELECT
 		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
 		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
-		OR (SELECT count(*) FROM iam.policy_versions WHERE policy_id=$4)<>2`,
-		member.AccountID, member.ID, roleBoundaryVersion.RequestID, delegatedPolicy.Policy.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$4)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4)
+		OR (SELECT count(*) FROM iam.policy_versions WHERE policy_id=$5)<>2
+		OR (SELECT default_version_id<>$6 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$5)`,
+		member.AccountID, member.ID, roleBoundaryVersion.RequestID, roleBoundaryDefault.RequestID,
+		delegatedPolicy.Policy.ID, delegatedPolicy.Version.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("role-boundary protection left a partial delegated version: partial=%t err=%v", partialDelegatedPublication, err)
 	}
 

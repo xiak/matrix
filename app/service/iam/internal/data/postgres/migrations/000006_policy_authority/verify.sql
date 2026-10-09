@@ -11,7 +11,8 @@ BEGIN
             RAISE EXCEPTION 'IAM legacy permission entrypoint remains present';
         END IF;
     END LOOP;
-    FOREACH table_name IN ARRAY ARRAY['policies','policy_versions','policy_attachments','user_permission_boundaries'] LOOP
+    FOREACH table_name IN ARRAY ARRAY['policies','policy_versions','policy_attachments','user_permission_boundaries',
+        'policy_default_version_changes'] LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_class AS relation
             WHERE relation.oid=to_regclass('iam.'||table_name) AND relation.relrowsecurity AND relation.relforcerowsecurity
             AND relation.relowner='matrix_iam_owner'::regrole) THEN
@@ -25,7 +26,11 @@ BEGIN
         ('policies','policy_metadata_cannot_be_truncated'),('policy_versions','policy_versions_are_immutable'),
         ('policy_versions','policy_versions_cannot_be_truncated'),('policy_attachments','policy_attachment_transitions'),
         ('policy_attachments','policy_attachments_cannot_be_deleted'),('policy_attachments','policy_attachments_cannot_be_truncated'),
-        ('authorization_decisions','authorization_decisions_are_immutable'),('authorization_decisions','authorization_decisions_cannot_be_truncated')
+        ('authorization_decisions','authorization_decisions_are_immutable'),('authorization_decisions','authorization_decisions_cannot_be_truncated'),
+        ('policy_default_version_changes','policy_default_version_change_insert_guard'),
+        ('policy_default_version_changes','policy_default_version_changes_cannot_be_updated'),
+        ('policy_default_version_changes','policy_default_version_changes_cannot_be_deleted'),
+        ('policy_default_version_changes','policy_default_version_changes_cannot_be_truncated')
     ) AS expected(table_name,trigger_name) LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_trigger AS trigger
             WHERE trigger.tgrelid=to_regclass('iam.'||protection.table_name) AND trigger.tgname=protection.trigger_name
@@ -79,7 +84,7 @@ END $verify_policy_authority$;
 DO $verify_customer_policy_publication$
 DECLARE function_name text;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 74::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 75::bigint THEN
         RAISE EXCEPTION 'IAM policy publication schema version is invalid';
     END IF;
     IF iam.policy_version_contract_ready() IS DISTINCT FROM true THEN
@@ -97,7 +102,7 @@ BEGIN
         'iam.change_user_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text)',
         'iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer,text)',
         'iam.list_policy_versions(text,text,text,text)','iam.read_policy_version(text,text,text,text,text)',
-        'iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer,text)','iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)',
+        'iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer,text)','iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb,text)',
         'iam.update_policy(text,text,text,text,bigint,text,jsonb)','iam.delete_policy(text,text,text,text,bigint,jsonb)','iam.delete_policy_version(text,text,text,text,text,bigint,jsonb)'] LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS entry WHERE entry.oid=to_regprocedure(function_name)
             AND entry.prorettype='jsonb'::regtype AND NOT entry.proretset AND entry.prosecdef
@@ -112,7 +117,9 @@ BEGIN
     FOREACH function_name IN ARRAY ARRAY['iam.policy_version_contract_ready()','iam.policy_version_snapshot(iam.policy_versions)',
         'iam.recorded_policy_version_matches(jsonb)',
         'iam.assert_policy_compilation(text,text,text)','iam.policy_detail_snapshot(text,text)',
-        'iam.policy_version_detail(text,text,text)','iam.guard_policy_version_change()','iam.lock_policy_publisher(text,text)','iam.lock_customer_policy_publisher(text,text,text)','iam.policy_version_intent_replayed(text,text,jsonb)'] LOOP
+        'iam.policy_version_detail(text,text,text)','iam.guard_policy_version_change()','iam.lock_policy_publisher(text,text)',
+        'iam.lock_customer_policy_publisher(text,text,text)','iam.policy_version_intent_replayed(text,text,jsonb)',
+        'iam.lock_policy_default_selection_delegation(text,text,text,text)','iam.policy_default_version_contract_ready()'] LOOP
         IF to_regprocedure(function_name) IS NULL OR has_function_privilege('matrix_iam_api',function_name,'EXECUTE')
            OR has_function_privilege('matrix_iam_worker',function_name,'EXECUTE')
            OR has_function_privilege('matrix_iam_credential_recovery',function_name,'EXECUTE')
@@ -120,6 +127,10 @@ BEGIN
             RAISE EXCEPTION 'IAM internal policy document boundary is invalid';
         END IF;
     END LOOP;
+    IF iam.policy_default_version_contract_ready() IS DISTINCT FROM true
+       OR to_regprocedure('iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)') IS NOT NULL THEN
+        RAISE EXCEPTION 'IAM delegated default policy version contract is invalid';
+    END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_index WHERE indexrelid=to_regclass('iam.customer_policies_active_name_uq')
         AND indrelid='iam.policies'::regclass AND indisunique AND indisvalid AND indnkeyatts=2 AND indpred IS NOT NULL)
        OR iam.resource_kind_for_action('iam.policy.create') IS DISTINCT FROM 'ACCOUNT'

@@ -72,6 +72,91 @@ ALTER TABLE iam.user_permission_boundaries ENABLE ALWAYS TRIGGER user_boundary_t
 ALTER TABLE iam.user_permission_boundaries ENABLE ALWAYS TRIGGER user_boundaries_cannot_be_deleted;
 ALTER TABLE iam.user_permission_boundaries ENABLE ALWAYS TRIGGER user_boundaries_cannot_be_truncated;
 
+-- A delegated default-version selection changes every current consumer on the
+-- next request. Keep its exact closure proof separate from mutable Policy and
+-- attachment rows so an exact no-effect replay can be distinguished from a
+-- new authorization attempt after the ceiling or consumer set changes.
+CREATE TABLE IF NOT EXISTS iam.policy_default_version_changes (
+    tenant_id text COLLATE "C" NOT NULL,
+    actor_principal_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    policy_id text COLLATE "C" NOT NULL,
+    expected_resource_version bigint NOT NULL,
+    version_id text COLLATE "C" NOT NULL,
+    actor_boundary_evidence jsonb NOT NULL,
+    attachment_count bigint NOT NULL,
+    attachment_closure_digest text COLLATE "C" NOT NULL,
+    decision_id text COLLATE "C" NOT NULL,
+    event_id text COLLATE "C" NOT NULL,
+    completed_at timestamptz(6) NOT NULL,
+    PRIMARY KEY(tenant_id,actor_principal_id,request_id),
+    FOREIGN KEY(tenant_id,actor_principal_id) REFERENCES iam.principals(tenant_id,id),
+    FOREIGN KEY(policy_id,version_id) REFERENCES iam.policy_versions(policy_id,id),
+    FOREIGN KEY(tenant_id,decision_id) REFERENCES iam.authorization_decisions(tenant_id,id),
+    FOREIGN KEY(tenant_id,event_id) REFERENCES iam.audit_outbox(tenant_id,event_id),
+    CONSTRAINT policy_default_version_changes_shape CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND actor_principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND policy_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND version_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND expected_resource_version BETWEEN 1 AND 9007199254740990
+        AND attachment_count BETWEEN 0 AND 9007199254740991
+        AND attachment_closure_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND jsonb_typeof(actor_boundary_evidence)='object'
+        AND actor_boundary_evidence->>'state'='BOUND'
+        AND actor_boundary_evidence-ARRAY['state','userResourceVersion','boundaryId','resourceVersion','version','contractVersion','compilation']='{}'::jsonb
+        AND jsonb_typeof(actor_boundary_evidence->'userResourceVersion')='number'
+        AND jsonb_typeof(actor_boundary_evidence->'resourceVersion')='number'
+        AND COALESCE(actor_boundary_evidence->>'userResourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+        AND COALESCE(actor_boundary_evidence->>'resourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+        AND COALESCE(actor_boundary_evidence->>'boundaryId','') COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND jsonb_typeof(actor_boundary_evidence->'version')='object'
+        AND (actor_boundary_evidence->'version') ?& ARRAY['policyId','versionId','contentDigest']
+        AND (actor_boundary_evidence->'version')-ARRAY['policyId','versionId','contentDigest']='{}'::jsonb
+        AND actor_boundary_evidence#>>'{version,policyId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND actor_boundary_evidence#>>'{version,versionId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND actor_boundary_evidence#>>'{version,contentDigest}' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND ((actor_boundary_evidence->'contractVersion'='1'::jsonb AND NOT actor_boundary_evidence ? 'compilation')
+          OR (actor_boundary_evidence->'contractVersion'='2'::jsonb
+            AND jsonb_typeof(actor_boundary_evidence->'compilation')='object')))
+);
+ALTER TABLE iam.policy_default_version_changes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.policy_default_version_changes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON iam.policy_default_version_changes;
+CREATE POLICY tenant_isolation ON iam.policy_default_version_changes
+    USING(tenant_id=iam.current_tenant_id()) WITH CHECK(tenant_id=iam.current_tenant_id());
+
+CREATE OR REPLACE FUNCTION iam.guard_policy_default_version_change_insert()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF current_setting('matrix.iam_policy_default_version_change',true) IS DISTINCT FROM 'trusted' THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy default version completion insertion is forbidden';
+    END IF;
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS policy_default_version_change_insert_guard ON iam.policy_default_version_changes;
+CREATE TRIGGER policy_default_version_change_insert_guard BEFORE INSERT ON iam.policy_default_version_changes
+    FOR EACH ROW EXECUTE FUNCTION iam.guard_policy_default_version_change_insert();
+DROP TRIGGER IF EXISTS policy_default_version_changes_cannot_be_updated ON iam.policy_default_version_changes;
+CREATE TRIGGER policy_default_version_changes_cannot_be_updated BEFORE UPDATE ON iam.policy_default_version_changes
+    FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+DROP TRIGGER IF EXISTS policy_default_version_changes_cannot_be_deleted ON iam.policy_default_version_changes;
+CREATE TRIGGER policy_default_version_changes_cannot_be_deleted BEFORE DELETE ON iam.policy_default_version_changes
+    FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+DROP TRIGGER IF EXISTS policy_default_version_changes_cannot_be_truncated ON iam.policy_default_version_changes;
+CREATE TRIGGER policy_default_version_changes_cannot_be_truncated BEFORE TRUNCATE ON iam.policy_default_version_changes
+    FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.policy_default_version_changes ENABLE ALWAYS TRIGGER policy_default_version_change_insert_guard;
+ALTER TABLE iam.policy_default_version_changes ENABLE ALWAYS TRIGGER policy_default_version_changes_cannot_be_updated;
+ALTER TABLE iam.policy_default_version_changes ENABLE ALWAYS TRIGGER policy_default_version_changes_cannot_be_deleted;
+ALTER TABLE iam.policy_default_version_changes ENABLE ALWAYS TRIGGER policy_default_version_changes_cannot_be_truncated;
+REVOKE ALL ON TABLE iam.policy_default_version_changes FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+REVOKE ALL ON FUNCTION iam.guard_policy_default_version_change_insert()
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+
 CREATE OR REPLACE FUNCTION iam.current_user_boundary(tenant text,user_id text)
 RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE subject iam.principals%ROWTYPE; binding iam.user_permission_boundaries%ROWTYPE;
@@ -922,43 +1007,390 @@ BEGIN
     RETURN iam.policy_version_detail(tenant,policy_id,version_id);
 END $function$;
 
-CREATE OR REPLACE FUNCTION iam.set_default_policy_version(tenant text,actor text,decision text,policy_id text,expected_version bigint,version_id text,event jsonb)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE policy iam.policies%ROWTYPE; replayed boolean; effective_now timestamptz(6):=transaction_timestamp();
+-- Lock and prove every current consumer affected by a delegated default
+-- switch. The caller already owns the Account, actor USER and authenticated
+-- Session. This helper continues the shared order through USER boundaries,
+-- Groups/Roles, Policies and finally attachment rows.
+CREATE OR REPLACE FUNCTION iam.lock_policy_default_selection_delegation(
+    tenant text,actor text,decision text,policy_id text
+)
+RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE actor_evidence jsonb; ceiling_policy_id text; target_policy iam.policies%ROWTYPE;
+    ceiling_policy iam.policies%ROWTYPE; attachment iam.policy_attachments%ROWTYPE;
+    target_principal iam.principals%ROWTYPE; target_group record;
+    target_evidence jsonb; creation_actor_evidence jsonb; creation_target_evidence jsonb;
+    creation_actor text; creation_request text; member_document jsonb; member_count bigint;
+    member_digest text; closure_document jsonb:='[]'::jsonb; attachment_count bigint:=0;
+    closure_digest text;
 BEGIN
-    IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990 THEN
-        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy revision is invalid';
+    SELECT recorded.boundary_evidence INTO actor_evidence FROM iam.authorization_decisions recorded
+      WHERE recorded.tenant_id=tenant AND recorded.id=decision AND recorded.principal_id=actor
+        AND recorded.action_name='iam.policy.set-default-version' AND recorded.allowed;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='default policy version decision is unavailable'; END IF;
+    PERFORM iam.assert_current_user_boundary_evidence(tenant,actor,'iam.policy.set-default-version',actor_evidence);
+    IF actor_evidence->>'state' IS DISTINCT FROM 'BOUND' THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='default policy version delegation is unavailable';
     END IF;
-    policy:=iam.lock_customer_policy_publisher(tenant,actor,policy_id);
+    ceiling_policy_id:=actor_evidence#>>'{version,policyId}';
+    IF ceiling_policy_id IS NULL OR ceiling_policy_id=policy_id OR EXISTS(
+        SELECT 1 FROM iam.policy_attachments a WHERE a.tenant_id=tenant AND a.target_kind='USER'
+          AND a.target_id=actor AND a.authority_scope='INSTALLATION' AND a.revoked_at IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='default policy version delegation is unavailable';
+    END IF;
+
+    -- Lock every real USER whose current closure can be changed, including a
+    -- USER boundary reference that will make the command fail closed.
+    PERFORM principal.id FROM iam.principals principal
+      WHERE principal.tenant_id=tenant AND principal.id<>actor AND (
+        EXISTS(SELECT 1 FROM iam.policy_attachments a WHERE a.tenant_id=tenant
+          AND a.policy_id=lock_policy_default_selection_delegation.policy_id AND a.revoked_at IS NULL
+          AND a.target_kind='USER' AND a.target_id=principal.id)
+        OR EXISTS(SELECT 1 FROM iam.policy_attachments a
+          JOIN iam.group_memberships member ON member.tenant_id=a.tenant_id
+            AND member.group_id=a.target_id AND member.removed_at IS NULL
+          WHERE a.tenant_id=tenant AND a.policy_id=lock_policy_default_selection_delegation.policy_id
+            AND a.target_kind='GROUP' AND a.revoked_at IS NULL AND member.user_id=principal.id)
+        OR EXISTS(SELECT 1 FROM iam.user_permission_boundaries boundary
+          WHERE boundary.tenant_id=tenant AND boundary.user_id=principal.id
+            AND boundary.policy_id=lock_policy_default_selection_delegation.policy_id
+            AND boundary.revoked_at IS NULL))
+      ORDER BY principal.id FOR NO KEY UPDATE;
+
+    -- USER boundary writers own the same principal first. Lock every current
+    -- relation in stable USER order before Group/Policy barriers.
+    PERFORM boundary.user_id FROM iam.user_permission_boundaries boundary
+      WHERE boundary.tenant_id=tenant AND boundary.revoked_at IS NULL AND (
+        boundary.user_id=actor OR boundary.policy_id=lock_policy_default_selection_delegation.policy_id
+        OR EXISTS(SELECT 1 FROM iam.policy_attachments a WHERE a.tenant_id=tenant
+          AND a.policy_id=lock_policy_default_selection_delegation.policy_id AND a.revoked_at IS NULL
+          AND a.target_kind='USER' AND a.target_id=boundary.user_id)
+        OR EXISTS(SELECT 1 FROM iam.policy_attachments a
+          JOIN iam.group_memberships member ON member.tenant_id=a.tenant_id
+            AND member.group_id=a.target_id AND member.removed_at IS NULL
+          WHERE a.tenant_id=tenant AND a.policy_id=lock_policy_default_selection_delegation.policy_id
+            AND a.target_kind='GROUP' AND a.revoked_at IS NULL AND member.user_id=boundary.user_id))
+      ORDER BY boundary.user_id FOR NO KEY UPDATE;
+
+    -- Role writers use Role -> Policy -> relationship; Group writers use
+    -- Group -> membership -> Policy. No command owns both target kinds, so the
+    -- two stable target sets can be acquired before the shared Policy rows.
+    PERFORM role_value.id FROM iam.roles role_value WHERE role_value.tenant_id=tenant AND (
+        EXISTS(SELECT 1 FROM iam.policy_attachments a WHERE a.tenant_id=tenant
+          AND a.policy_id=lock_policy_default_selection_delegation.policy_id AND a.revoked_at IS NULL
+          AND a.target_kind='ROLE' AND a.target_id=role_value.id)
+        OR EXISTS(SELECT 1 FROM iam.role_permission_boundaries boundary WHERE boundary.tenant_id=tenant
+          AND boundary.role_id=role_value.id AND boundary.policy_id=lock_policy_default_selection_delegation.policy_id
+          AND boundary.revoked_at IS NULL))
+      ORDER BY role_value.id FOR UPDATE;
+    PERFORM target.id FROM iam.groups target WHERE target.tenant_id=tenant AND EXISTS(
+        SELECT 1 FROM iam.policy_attachments a WHERE a.tenant_id=tenant
+          AND a.policy_id=lock_policy_default_selection_delegation.policy_id AND a.revoked_at IS NULL
+          AND a.target_kind='GROUP' AND a.target_id=target.id)
+      ORDER BY target.id FOR UPDATE;
+    PERFORM member.id FROM iam.group_memberships member WHERE member.tenant_id=tenant
+      AND member.removed_at IS NULL AND EXISTS(SELECT 1 FROM iam.policy_attachments a
+        WHERE a.tenant_id=tenant AND a.policy_id=lock_policy_default_selection_delegation.policy_id
+          AND a.revoked_at IS NULL AND a.target_kind='GROUP' AND a.target_id=member.group_id)
+      ORDER BY member.group_id,member.id FOR UPDATE;
+
+    PERFORM locked.id FROM iam.policies locked WHERE locked.id IN(ceiling_policy_id,policy_id)
+      ORDER BY locked.id FOR UPDATE;
+    SELECT * INTO target_policy FROM iam.policies target WHERE target.id=policy_id
+      AND target.owner_tenant_id=tenant AND target.management='CUSTOMER'
+      AND target.authority_scope='TENANT' AND target.status='ACTIVE';
+    SELECT * INTO ceiling_policy FROM iam.policies ceiling WHERE ceiling.id=ceiling_policy_id
+      AND ceiling.owner_tenant_id=tenant AND ceiling.management='CUSTOMER'
+      AND ceiling.authority_scope='TENANT' AND ceiling.status='ACTIVE';
+    IF target_policy.id IS NULL OR ceiling_policy.id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='default policy version target or ceiling is unavailable';
+    END IF;
+    -- A ceiling default may have changed while the original decision waited.
+    -- Re-evaluate its exact version/digest only after both Policy rows are held.
+    PERFORM iam.assert_current_user_boundary_evidence(tenant,actor,'iam.policy.set-default-version',actor_evidence);
+
+    PERFORM boundary.id FROM iam.role_permission_boundaries boundary
+      WHERE boundary.tenant_id=tenant AND boundary.policy_id=lock_policy_default_selection_delegation.policy_id
+        AND boundary.revoked_at IS NULL ORDER BY boundary.role_id FOR NO KEY UPDATE;
+    PERFORM current_attachment.id FROM iam.policy_attachments current_attachment
+      WHERE current_attachment.tenant_id=tenant
+        AND current_attachment.policy_id=lock_policy_default_selection_delegation.policy_id
+        AND current_attachment.revoked_at IS NULL ORDER BY current_attachment.id FOR NO KEY UPDATE;
+
+    IF EXISTS(SELECT 1 FROM iam.user_permission_boundaries boundary
+          WHERE boundary.policy_id=lock_policy_default_selection_delegation.policy_id AND boundary.revoked_at IS NULL)
+      OR EXISTS(SELECT 1 FROM iam.role_permission_boundaries boundary
+          WHERE boundary.policy_id=lock_policy_default_selection_delegation.policy_id AND boundary.revoked_at IS NULL)
+      OR EXISTS(SELECT 1 FROM iam.policy_attachments current_attachment
+          WHERE current_attachment.tenant_id=tenant
+            AND current_attachment.policy_id=lock_policy_default_selection_delegation.policy_id
+            AND current_attachment.revoked_at IS NULL
+            AND (current_attachment.authority_scope<>'TENANT' OR current_attachment.target_kind NOT IN ('USER','GROUP'))) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='default policy version consumer closure is unavailable';
+    END IF;
+
+    FOR attachment IN SELECT * FROM iam.policy_attachments current_attachment
+      WHERE current_attachment.tenant_id=tenant
+        AND current_attachment.policy_id=lock_policy_default_selection_delegation.policy_id
+        AND current_attachment.revoked_at IS NULL ORDER BY current_attachment.id
+    LOOP
+        IF (SELECT count(*) FROM iam.policy_attachment_changes change_value
+              WHERE change_value.tenant_id=tenant AND change_value.attachment_id=attachment.id
+                AND change_value.operation='CREATE')<>1 THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='default policy version attachment proof is unavailable';
+        END IF;
+        SELECT change_value.actor_principal_id,change_value.request_id,
+               change_value.actor_boundary_evidence,change_value.target_boundary_evidence
+          INTO creation_actor,creation_request,creation_actor_evidence,creation_target_evidence
+          FROM iam.policy_attachment_changes change_value
+          WHERE change_value.tenant_id=tenant AND change_value.attachment_id=attachment.id
+            AND change_value.operation='CREATE';
+        IF creation_actor_evidence->>'state' IS DISTINCT FROM 'BOUND'
+          OR creation_actor_evidence#>>'{version,policyId}' IS DISTINCT FROM ceiling_policy_id THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='default policy version attachment proof is unavailable';
+        END IF;
+
+        IF attachment.target_kind='USER' THEN
+            SELECT * INTO target_principal FROM iam.principals principal
+              WHERE principal.tenant_id=tenant AND principal.id=attachment.target_id
+                AND principal.principal_type='USER' AND principal.deleted_at IS NULL;
+            IF target_principal.id IS NULL
+              OR EXISTS(SELECT 1 FROM iam.account_roots root
+                  WHERE root.account_id=tenant AND root.principal_id=attachment.target_id)
+              OR EXISTS(SELECT 1 FROM iam.policy_attachments platform_attachment
+                  WHERE platform_attachment.tenant_id=tenant AND platform_attachment.target_kind='USER'
+                    AND platform_attachment.target_id=attachment.target_id
+                    AND platform_attachment.authority_scope='INSTALLATION'
+                    AND platform_attachment.revoked_at IS NULL) THEN
+                RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='default policy version USER consumer is unavailable';
+            END IF;
+            target_evidence:=iam.current_user_boundary_evidence(tenant,attachment.target_id);
+            IF creation_target_evidence->>'state' IS DISTINCT FROM 'BOUND'
+              OR creation_target_evidence#>>'{version,policyId}' IS DISTINCT FROM ceiling_policy_id
+              OR target_evidence->>'state' IS DISTINCT FROM 'BOUND'
+              OR target_evidence#>>'{version,policyId}' IS DISTINCT FROM ceiling_policy_id
+              OR target_evidence->'version' IS DISTINCT FROM actor_evidence->'version'
+              OR target_evidence->'contractVersion' IS DISTINCT FROM actor_evidence->'contractVersion'
+              OR target_evidence->'compilation' IS DISTINCT FROM actor_evidence->'compilation' THEN
+                RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='default policy version USER ceiling is unavailable';
+            END IF;
+        ELSE
+            SELECT * INTO target_group FROM iam.groups target
+              WHERE target.tenant_id=tenant AND target.id=attachment.target_id AND target.deleted_at IS NULL;
+            IF target_group.id IS NULL OR attachment.delegation_ceiling_policy_id IS DISTINCT FROM ceiling_policy_id
+              OR creation_target_evidence->>'state' IS DISTINCT FROM 'GROUP_BOUND'
+              OR creation_target_evidence->>'ceilingPolicyId' IS DISTINCT FROM ceiling_policy_id
+              OR EXISTS(SELECT 1 FROM iam.group_memberships member
+                JOIN iam.principals principal ON (principal.tenant_id,principal.id)=(member.tenant_id,member.user_id)
+                CROSS JOIN LATERAL (SELECT iam.current_user_boundary_evidence(member.tenant_id,member.user_id) AS evidence) current_boundary
+                WHERE member.tenant_id=tenant AND member.group_id=attachment.target_id AND member.removed_at IS NULL AND (
+                  principal.principal_type<>'USER' OR principal.deleted_at IS NOT NULL
+                  OR EXISTS(SELECT 1 FROM iam.account_roots root
+                    WHERE root.account_id=tenant AND root.principal_id=member.user_id)
+                  OR EXISTS(SELECT 1 FROM iam.policy_attachments platform_attachment
+                    WHERE platform_attachment.tenant_id=tenant AND platform_attachment.target_kind='USER'
+                      AND platform_attachment.target_id=member.user_id
+                      AND platform_attachment.authority_scope='INSTALLATION' AND platform_attachment.revoked_at IS NULL)
+                  OR current_boundary.evidence->>'state' IS DISTINCT FROM 'BOUND'
+                  OR current_boundary.evidence#>>'{version,policyId}' IS DISTINCT FROM ceiling_policy_id
+                  OR current_boundary.evidence->'version' IS DISTINCT FROM actor_evidence->'version'
+                  OR current_boundary.evidence->'contractVersion' IS DISTINCT FROM actor_evidence->'contractVersion'
+                  OR current_boundary.evidence->'compilation' IS DISTINCT FROM actor_evidence->'compilation')) THEN
+                RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='default policy version Group ceiling is unavailable';
+            END IF;
+            SELECT count(*),COALESCE(jsonb_agg(jsonb_build_object(
+                'membershipId',member.id,'userId',member.user_id,
+                'boundary',iam.current_user_boundary_evidence(member.tenant_id,member.user_id)) ORDER BY member.id),'[]'::jsonb)
+              INTO member_count,member_document FROM iam.group_memberships member
+              WHERE member.tenant_id=tenant AND member.group_id=attachment.target_id AND member.removed_at IS NULL;
+            member_digest:='sha256:'||encode(sha256(
+              convert_to('matrix.iam.policy-default-group-members.v1','UTF8')||decode('00','hex')
+              ||convert_to(tenant,'UTF8')||decode('00','hex')||convert_to(attachment.target_id,'UTF8')||decode('00','hex')
+              ||convert_to(ceiling_policy_id,'UTF8')||decode('00','hex')||convert_to(member_document::text,'UTF8')),'hex');
+            target_evidence:=jsonb_build_object('state','GROUP_BOUND','ceilingPolicyId',ceiling_policy_id,
+              'authorizationGeneration',target_group.authorization_generation,
+              'memberCount',member_count,'membersDigest',member_digest);
+        END IF;
+
+        closure_document:=closure_document||jsonb_build_array(jsonb_build_object(
+          'attachmentId',attachment.id,'targetKind',attachment.target_kind,'targetId',attachment.target_id,
+          'creationActorPrincipalId',creation_actor,'creationRequestId',creation_request,
+          'creationActorBoundary',creation_actor_evidence,'creationTargetBoundary',creation_target_evidence,
+          'currentTargetBoundary',target_evidence));
+        attachment_count:=attachment_count+1;
+    END LOOP;
+    closure_digest:='sha256:'||encode(sha256(
+      convert_to('matrix.iam.policy-default-closure.v1','UTF8')||decode('00','hex')
+      ||convert_to(tenant,'UTF8')||decode('00','hex')||convert_to(actor,'UTF8')||decode('00','hex')
+      ||convert_to(policy_id,'UTF8')||decode('00','hex')||convert_to(ceiling_policy_id,'UTF8')||decode('00','hex')
+      ||convert_to(closure_document::text,'UTF8')),'hex');
+    RETURN jsonb_build_object('actorBoundary',actor_evidence,'attachmentCount',attachment_count,
+      'attachmentClosureDigest',closure_digest);
+END $function$;
+
+DROP FUNCTION IF EXISTS iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb);
+CREATE OR REPLACE FUNCTION iam.set_default_policy_version(tenant text,actor text,decision text,policy_id text,
+    expected_version bigint,version_id text,event jsonb,actor_session_id text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE policy iam.policies%ROWTYPE; replayed boolean; actor_is_root boolean; delegation jsonb;
+    completed iam.policy_default_version_changes%ROWTYPE; prior_scope text;
+    effective_now timestamptz(6):=transaction_timestamp();
+BEGIN
+    IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990
+      OR COALESCE(actor_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy revision or publisher session is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy account is unavailable'; END IF;
+    PERFORM 1 FROM iam.principals principal WHERE principal.tenant_id=tenant AND principal.id=actor
+      AND principal.principal_type='USER' AND principal.status='ACTIVE' AND NOT principal.must_change_password
+      AND principal.deleted_at IS NULL FOR NO KEY UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy actor is unavailable'; END IF;
+    PERFORM 1 FROM iam.user_credentials credential JOIN iam.sessions session
+      ON (session.tenant_id,session.principal_id)=(credential.tenant_id,credential.principal_id)
+      WHERE credential.tenant_id=tenant AND credential.principal_id=actor AND session.id=actor_session_id
+        AND session.status='ACTIVE' AND session.revoked_at IS NULL AND session.expires_at>clock_timestamp()
+        AND session.credential_version=credential.credential_version
+        AND session.last_activity_at IS NOT NULL AND session.idle_timeout_seconds IS NOT NULL
+        AND session.last_activity_at+make_interval(secs=>session.idle_timeout_seconds)>clock_timestamp()
+      FOR SHARE OF credential,session;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy publisher session is unavailable'; END IF;
+    PERFORM 1 FROM iam.account_roots root WHERE root.account_id=tenant AND root.principal_id=actor FOR SHARE;
+    actor_is_root:=FOUND;
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.set-default-version','POLICY',policy_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.policy.default-version-set','POLICY',policy_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
-    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy version decision is invalid'; END IF;
-    IF NOT EXISTS(SELECT 1 FROM iam.policy_versions AS v WHERE v.policy_id=set_default_policy_version.policy_id AND v.id=version_id AND v.retired_at IS NULL) THEN
-        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy version is unavailable';
+    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy version decision is invalid';
     END IF;
+    -- Close foreign, SYSTEM and retired targets before consulting an old
+    -- request identity. The locked path repeats the same classification.
+    PERFORM 1 FROM iam.policies target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+      AND target.management='CUSTOMER' AND target.authority_scope='TENANT' AND target.status='ACTIVE';
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy is unavailable'; END IF;
     replayed:=iam.policy_version_intent_replayed(tenant,actor,event);
     IF replayed THEN
-        IF policy.resource_version<>expected_version+1 OR policy.default_version_id<>version_id THEN
+        SELECT * INTO policy FROM iam.policies target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+          AND target.management='CUSTOMER' AND target.authority_scope='TENANT' AND target.status='ACTIVE' FOR UPDATE;
+        IF NOT FOUND OR policy.resource_version<>expected_version+1 OR policy.default_version_id<>version_id THEN
             RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='default policy version replay conflicts';
         END IF;
+        IF NOT actor_is_root THEN
+            SELECT * INTO completed FROM iam.policy_default_version_changes change_value
+              WHERE (change_value.tenant_id,change_value.actor_principal_id,change_value.request_id)=
+                (tenant,actor,event->>'requestId');
+            IF NOT FOUND OR completed.policy_id IS DISTINCT FROM policy_id
+              OR completed.expected_resource_version IS DISTINCT FROM expected_version
+              OR completed.version_id IS DISTINCT FROM version_id
+              OR NOT EXISTS(SELECT 1 FROM iam.authorization_decisions original_decision
+                JOIN iam.audit_outbox original_event
+                  ON original_event.tenant_id=original_decision.tenant_id
+                  AND original_event.event_id=completed.event_id
+                WHERE original_decision.tenant_id=tenant AND original_decision.id=completed.decision_id
+                  AND original_decision.principal_id=actor AND original_decision.allowed
+                  AND original_decision.action_name='iam.policy.set-default-version'
+                  AND original_decision.target_kind='POLICY' AND original_decision.target_id=completed.policy_id
+                  AND original_decision.resource_mode='INSTANCE' AND original_decision.collection_usage IS NULL
+                  AND original_decision.contract_version=7 AND original_decision.subject_type='USER'
+                  AND original_decision.access_key_id IS NULL
+                  AND original_decision.request_id=completed.request_id
+                  AND original_decision.boundary_evidence=completed.actor_boundary_evidence
+                  AND original_event.event_document->>'action'='iam.policy.default-version-set'
+                  AND original_event.event_document#>>'{actor,id}'=actor
+                  AND original_event.event_document#>>'{target,kind}'='POLICY'
+                  AND original_event.event_document#>>'{target,id}'=completed.policy_id
+                  AND original_event.event_document->>'result'='SUCCEEDED'
+                  AND original_event.event_document->>'requestId'=completed.request_id
+                  AND original_event.event_document->>'requestDigest'=event->>'requestDigest'
+                  AND original_event.event_document->>'iamDecisionId'=completed.decision_id) THEN
+                RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='default policy version completion is unavailable';
+            END IF;
+        END IF;
         RETURN iam.policy_detail_snapshot(tenant,policy_id);
+    END IF;
+
+    IF actor_is_root THEN
+        SELECT * INTO policy FROM iam.policies target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+          AND target.management='CUSTOMER' AND target.authority_scope='TENANT' AND target.status='ACTIVE' FOR UPDATE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy is unavailable'; END IF;
+    ELSE
+        delegation:=iam.lock_policy_default_selection_delegation(tenant,actor,decision,policy_id);
+        SELECT * INTO policy FROM iam.policies target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+          AND target.management='CUSTOMER' AND target.authority_scope='TENANT' AND target.status='ACTIVE';
+        IF NOT FOUND OR delegation IS NULL THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='default policy version delegation is unavailable';
+        END IF;
+    END IF;
+    IF NOT EXISTS(SELECT 1 FROM iam.policy_versions version_value
+        WHERE version_value.policy_id=set_default_policy_version.policy_id
+          AND version_value.id=version_id AND version_value.retired_at IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy version is unavailable';
     END IF;
     IF policy.resource_version<>expected_version OR policy.default_version_id=version_id THEN
         RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='default policy version revision conflicts';
     END IF;
-    UPDATE iam.policies AS p SET default_version_id=version_id,resource_version=resource_version+1,updated_at=effective_now WHERE p.id=policy_id;
+    UPDATE iam.policies AS target SET default_version_id=version_id,resource_version=resource_version+1,
+      updated_at=effective_now WHERE target.id=policy_id;
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
       VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
+    IF NOT actor_is_root THEN
+        prior_scope:=current_setting('matrix.iam_policy_default_version_change',true);
+        PERFORM set_config('matrix.iam_policy_default_version_change','trusted',true);
+        INSERT INTO iam.policy_default_version_changes(tenant_id,actor_principal_id,request_id,policy_id,
+          expected_resource_version,version_id,actor_boundary_evidence,attachment_count,attachment_closure_digest,
+          decision_id,event_id,completed_at)
+        VALUES(tenant,actor,event->>'requestId',policy_id,expected_version,version_id,delegation->'actorBoundary',
+          (delegation->>'attachmentCount')::bigint,delegation->>'attachmentClosureDigest',decision,event->>'eventId',effective_now);
+        PERFORM set_config('matrix.iam_policy_default_version_change',COALESCE(prior_scope,''),true);
+    END IF;
     RETURN iam.policy_detail_snapshot(tenant,policy_id);
 END $function$;
 
+CREATE OR REPLACE FUNCTION iam.policy_default_version_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+  SELECT EXISTS(SELECT 1 FROM pg_class relation
+      WHERE relation.oid='iam.policy_default_version_changes'::regclass
+        AND relation.relowner='matrix_iam_owner'::regrole
+        AND relation.relrowsecurity AND relation.relforcerowsecurity
+        AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(relation.relacl,acldefault('r',relation.relowner))) privilege
+          WHERE privilege.grantee<>relation.relowner))
+    AND EXISTS(SELECT 1 FROM pg_constraint constraint_value
+      WHERE constraint_value.conrelid='iam.policy_default_version_changes'::regclass
+        AND constraint_value.conname='policy_default_version_changes_shape'
+        AND constraint_value.contype='c' AND constraint_value.convalidated)
+    AND (SELECT count(*)=4 FROM pg_trigger trigger_value
+      WHERE trigger_value.tgrelid='iam.policy_default_version_changes'::regclass
+        AND NOT trigger_value.tgisinternal AND trigger_value.tgenabled='A'
+        AND trigger_value.tgname IN ('policy_default_version_change_insert_guard',
+          'policy_default_version_changes_cannot_be_updated','policy_default_version_changes_cannot_be_deleted',
+          'policy_default_version_changes_cannot_be_truncated'))
+    AND EXISTS(SELECT 1 FROM pg_proc entry
+      WHERE entry.oid=to_regprocedure('iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb,text)')
+        AND entry.prosecdef AND entry.proowner='matrix_iam_owner'::regrole
+        AND entry.prorettype='jsonb'::regtype AND NOT entry.proretset
+        AND 'search_path=pg_catalog, pg_temp'=ANY(entry.proconfig))
+    AND to_regprocedure('iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)') IS NULL
+    AND EXISTS(SELECT 1 FROM pg_proc helper
+      WHERE helper.oid=to_regprocedure('iam.lock_policy_default_selection_delegation(text,text,text,text)')
+        AND NOT helper.prosecdef AND helper.proowner='matrix_iam_owner'::regrole
+        AND helper.prorettype='jsonb'::regtype AND NOT helper.proretset
+        AND 'search_path=pg_catalog, pg_temp'=ANY(helper.proconfig)
+        AND NOT has_function_privilege('public',helper.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_api',helper.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_worker',helper.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_credential_recovery',helper.oid,'EXECUTE'))
+$function$;
+REVOKE ALL ON FUNCTION iam.policy_default_version_contract_ready()
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+
 REVOKE ALL ON FUNCTION iam.policy_version_detail(text,text,text),iam.lock_customer_policy_publisher(text,text,text),iam.policy_version_intent_replayed(text,text,jsonb),
     iam.list_policy_versions(text,text,text,text),iam.read_policy_version(text,text,text,text,text),
-    iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer,text),iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)
+    iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer,text),iam.lock_policy_default_selection_delegation(text,text,text,text),
+    iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb,text)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.list_policy_versions(text,text,text,text),iam.read_policy_version(text,text,text,text,text),
-    iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer,text),iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb) TO matrix_iam_api;
+    iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer,text),
+    iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb,text) TO matrix_iam_api;
 
 CREATE OR REPLACE FUNCTION iam.update_policy(tenant text,actor text,decision text,policy_id text,expected_version bigint,display_name text,event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$

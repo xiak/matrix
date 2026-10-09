@@ -2218,7 +2218,7 @@ BEGIN
                     to_regprocedure('iam.list_policy_versions(text,text,text,text)'),
                     to_regprocedure('iam.read_policy_version(text,text,text,text,text)'),
                     to_regprocedure('iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer,text)'),
-                    to_regprocedure('iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)'),
+                    to_regprocedure('iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb,text)'),
                     to_regprocedure('iam.update_policy(text,text,text,text,bigint,text,jsonb)'),
                     to_regprocedure('iam.delete_policy(text,text,text,text,bigint,jsonb)'),
                     to_regprocedure('iam.delete_policy_version(text,text,text,text,text,bigint,jsonb)'))
@@ -2242,6 +2242,7 @@ BEGIN
                   AND directory.prosecdef AND directory.proowner='matrix_iam_owner'::regrole)
            AND iam.authorization_decision_contract_ready()
            AND iam.policy_version_contract_ready()
+           AND iam.policy_default_version_contract_ready()
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS lookup
                 WHERE lookup.oid=to_regprocedure('iam.lookup_session(text)')
                   AND cardinality(lookup.proallargtypes)=25 AND lookup.proargnames[23:25]=ARRAY['policies','boundary','credential_generation']
@@ -2263,9 +2264,10 @@ BEGIN
                   AND boundary_entry.prorettype='jsonb'::regtype AND NOT boundary_entry.proretset
                   AND boundary_entry.prosecdef AND boundary_entry.proowner='matrix_iam_owner'::regrole)=2
            AND (SELECT count(*) FROM pg_catalog.pg_class AS policy_table
-                WHERE policy_table.oid IN (to_regclass('iam.policies'),to_regclass('iam.policy_versions'),to_regclass('iam.policy_attachments'))
-                  AND policy_table.relrowsecurity AND policy_table.relforcerowsecurity
-                  AND policy_table.relowner='matrix_iam_owner'::regrole)=3
+                WHERE policy_table.oid IN (to_regclass('iam.policies'),to_regclass('iam.policy_versions'),to_regclass('iam.policy_attachments'),
+                    to_regclass('iam.policy_default_version_changes'))
+                   AND policy_table.relrowsecurity AND policy_table.relforcerowsecurity
+                   AND policy_table.relowner='matrix_iam_owner'::regrole)=4
            AND (SELECT count(*) FROM pg_catalog.pg_trigger AS protection
                 WHERE protection.tgrelid='iam.authorization_decisions'::regclass
                   AND protection.tgname IN ('authorization_decisions_are_immutable','authorization_decisions_cannot_be_truncated')
