@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 与 Group 附件的同边界闭包已固定；固定`927c8e0`完成非 root 在同一封存上限内创建 CUSTOMER Policy 首版并显式关联，固定`b54397e`再开放同一受控 USER 创建不可变、非默认 PolicyVersion 草稿，固定`f62943f`进一步开放受控默认版本切换并通过独立 CI，固定`f6c881d7`完成同一受控 USER 对非默认 PolicyVersion 的逻辑退休并通过独立 CI。元数据/Policy 删除及 Role 闭包、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 与 Group 附件的同边界闭包已固定；固定`927c8e0`完成非 root 在同一封存上限内创建 CUSTOMER Policy 首版并显式关联，固定`b54397e`再开放同一受控 USER 创建不可变、非默认 PolicyVersion 草稿，固定`f62943f`进一步开放受控默认版本切换并通过独立 CI，固定`f6c881d7`完成同一受控 USER 对非默认 PolicyVersion 的逻辑退休并通过独立 CI；当前候选再开放同一受控 USER 对普通 CUSTOMER Policy 的元数据改名。Policy 删除及 Role 闭包、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -29,7 +29,7 @@
 
 ### 版本、条件与委派
 
-首个管理纵向路径为原 Account Root 创建一份 CUSTOMER/TENANT Policy 和其初始默认版本 → 查询准确策略内容 → 沿既有附件关联给 User/Group → 业务请求实际按自定义权限允许或拒绝。创建不自动关联给创建者或任何主体。非 root 只开放下述经 LANG-08 封存上限证明的 Policy 首版创建、非默认版本草稿、受控默认切换和非默认版本逻辑退休；元数据/Policy 删除及 Role 委派继续关闭。不能仅因为能查看目录或关联系统策略就取得编辑任意权限文档的能力。这是后续完整版本/边界管理的起点，不代替其需求。
+首个管理纵向路径为原 Account Root 创建一份 CUSTOMER/TENANT Policy 和其初始默认版本 → 查询准确策略内容 → 沿既有附件关联给 User/Group → 业务请求实际按自定义权限允许或拒绝。创建不自动关联给创建者或任何主体。非 root 只开放下述经 LANG-08 封存上限证明的 Policy 首版创建、非默认版本草稿、受控默认切换、非默认版本逻辑退休和普通 Policy 元数据改名；Policy 删除及 Role 委派继续关闭。不能仅因为能查看目录或关联系统策略就取得编辑任意权限文档的能力。这是后续完整版本/边界管理的起点，不代替其需求。
 
 - `POST /v1/policies` 使用 `iam.policy.create` / 当前 ACCOUNT；入参仅 displayName、document、requestId，Account、管理类型、scope 和 ID 不能由调用者指定。document 只能为 TENANT；平台动作、系统名称空间和服务 probe 拒绝。
 - `GET /v1/policies/{policyId}` 使用 `iam.policy.read` / 精确 POLICY，返回策略与当前默认版本；只读取本账号 CUSTOMER 或可见的 TENANT 系统策略，不因主账号关系越过平台或其他账号。
@@ -60,6 +60,14 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 #### 策略元数据生命周期
 
 策略改名使用 `PATCH /v1/policies/{policyId}`，入参严格为 displayName、resourceVersion、requestId，返回当前默认 `PolicyDetail`。对应 `iam.policy.update` / 精确 POLICY，当前 PDP 与原 root/ACTIVE CUSTOMER 锁内约束均保留。显示名按账号内活跃 CUSTOMER 精确唯一；更新仅改变显示名、修订号和更新时间，不能改变稳定 ID、owner、默认版本、内容或附件。新意图的同名无变更、旧修订、重复活跃名称均冲突；精确重放仅在原结果修订仍当前时返回同一结果。成功事实为租户链 `iam.policy.updated`，只记录绑定意图摘要的 POLICY 目标，不记录正文。并发改名/默认切换/附件使用同一 Policy 修订锁；末尾 outbox 写失败必须全部回滚。
+
+非 root 改名只开放给当前 Account 的直接 ACTIVE USER。普通 `iam.policy.update` Allow 只是入口；同一受限存储事务还要验证 bearer 对应的当前 Session、credential generation、非强制改密状态，以及决定中封存并仍然有效的单一 CUSTOMER/TENANT User permission boundary。目标必须是同 Account 的另一份 ACTIVE/CUSTOMER/TENANT Policy，不能是 actor 自己的 ceiling、SYSTEM/跨 Account/退休 Policy，也不能正被任一 User 或 Role permission boundary 使用。带任一未撤销 INSTALLATION 附件的 actor 不属于租户内委派闭包。该命令不比较两份 Policy 文档，不把平台权限或历史决定当成管理 permit；原 Account Root 路径保持不变。
+
+非 root 成功改名写入按 account+actor+requestId 唯一、不可更新/删除/截断的完成记录，绑定准确 Policy、预期修订、显示名、发生时 actor boundary evidence、原 authorization decision 与单一 Audit outbox。元数据、Policy 修订、完成记录和 `iam.policy.updated` 同事务提交。精确已提交命令只有在 Policy 仍为原结果修订和显示名时才能返回同一结果；actor ceiling 后续移除不改写历史结果，新 requestId 则必须重新证明当前 ceiling。缺失或篡改完成记录、decision/outbox 或 boundary evidence 时失败关闭，不根据当前 Policy 状态重建历史。
+
+私有存储入口新增 actor Session 输入但公共 API 不接受该 selector；旧内部函数形状在同一未发布切片删除，不留可绕过 Session/ceiling 重检的兼容入口。Account、actor USER/Session、actor boundary 关系以及 ceiling/目标 Policy 使用与版本发布和退休相容的锁序。并发 logout、改密、ceiling 移除、平台附件写入、把目标设为 User/Role boundary 及另一 Policy 修订，只能形成变更前的完整成功或变更后的明确拒绝；失败不得留下 authorization decision、显示名、完成记录或成功事实的部分状态。
+
+该纵向门禁至少覆盖：同 ceiling 管理员对普通 Policy 改名与精确重放；ceiling、SYSTEM、跨 Account、User/Role boundary 目标和平台绑定 actor 拒绝；并发 logout 与 actor ceiling 移除在请求通过 PDP 后仍由存储锁内拒绝；完成记录插入故障全回滚；变体/陈旧命令冲突；ceiling 移除后的原命令无效果重放和新命令拒绝；完成证据篡改后失败关闭；受限 runtime 对完成表、helper、旧函数入口、trigger/ACL/SECURITY DEFINER 漂移的攻击；默认版本、PolicyVersion canonical/digest、附件和既有 Root 改名行为不变。Policy 终态删除及 Role 委派仍由后续切片拥有。
 
 策略删除使用 `DELETE /v1/policies/{policyId}`，入参仅 resourceVersion、requestId，使用 `iam.policy.delete` / 精确 POLICY。当前 PDP 和原 root/ACTIVE Account/USER 检查后，锁定本账号 CUSTOMER Policy；SYSTEM 和跨账号拒绝。任何未撤销附件（包括停用 User 或组的附件）都使删除冲突，不能隐式解除关联。删除只把 Policy 置为不可恢复的 RETIRED，resourceVersion +1，返回终态 `Policy` 元数据；保留默认指针、全部不可变版本、已撤销附件、决定和 outbox。等值删除重放仅匹配原意图和终态修订；不同命令、错误版本、旧创建/改名/切换不得复活对象。成功事实为租户链 `iam.policy.deleted` / POLICY，与终态同事务。
 

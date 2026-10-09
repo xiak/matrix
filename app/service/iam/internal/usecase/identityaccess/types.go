@@ -1040,6 +1040,7 @@ type PolicyVersionDeletion struct {
 type PolicyUpdate struct {
 	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	PolicyID         iamv1.PolicyID
 	DisplayName      string

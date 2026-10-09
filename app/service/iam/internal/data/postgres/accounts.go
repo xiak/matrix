@@ -521,8 +521,9 @@ func (value *transaction) UpdatePolicy(ctx context.Context, mutation identityacc
 	}
 	defer clear(event)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.update_policy($1,$2,$3,$4,$5,$6,$7::jsonb)",
-		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PolicyID, mutation.ResourceVersion, mutation.DisplayName, event).Scan(&encoded)
+	err = value.tx.QueryRow(ctx, "SELECT iam.update_policy($1,$2,$3,$4,$5,$6,$7::jsonb,$8)",
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PolicyID, mutation.ResourceVersion,
+		mutation.DisplayName, event, mutation.ActorSessionID).Scan(&encoded)
 	if err != nil {
 		return iamv1.PolicyDetail{}, mapAuthorizationDatabaseError("update IAM policy", err)
 	}

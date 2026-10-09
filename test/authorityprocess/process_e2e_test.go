@@ -121,9 +121,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "f62943fadf44f31b8bc04c2bf60f1861f3f45cfc"
-	const sourceSchema uint64 = 75
-	const currentSchema uint64 = 76
+	const source = "f6c881d7e12131ce6238b1a958d76bfba3271a88"
+	const sourceSchema uint64 = 76
+	const currentSchema uint64 = 77
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -484,6 +484,18 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		retainedRetirementResult.Policy.DefaultVersionID != retainedRetirementPolicy.Version.ID {
 		t.Fatal("actual predecessor did not retire its non-default version")
 	}
+	retirementResponse = performJSON(t, http.MethodPatch, endpoint+"/v1/policies/"+string(retainedRetirementPolicy.Policy.ID),
+		primary.Credential, iamv1.UpdatePolicyRequest{DisplayName: "Retained renamed policy",
+			ResourceVersion: retainedRetirementResult.Policy.ResourceVersion,
+			RequestID:       "retained-policy-metadata-update"})
+	var retainedMetadataResult iamv1.PolicyDetail
+	if retirementResponse.Status != http.StatusOK || json.Unmarshal(retirementResponse.Body, &retainedMetadataResult) != nil ||
+		iamv1.ValidatePolicyDetail(retainedMetadataResult) != nil ||
+		retainedMetadataResult.Policy.DisplayName != "Retained renamed policy" ||
+		retainedMetadataResult.Policy.ResourceVersion != retainedRetirementResult.Policy.ResourceVersion+1 ||
+		retainedMetadataResult.Policy.DefaultVersionID != retainedRetirementPolicy.Version.ID {
+		t.Fatal("actual predecessor did not rename its retained customer policy")
+	}
 	retirementState := func() []byte {
 		t.Helper()
 		var state []byte
@@ -493,7 +505,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		   FROM iam.policy_versions version_value WHERE version_value.policy_id=$1),
 		 'facts',(SELECT jsonb_agg(event_document ORDER BY event_id) FROM iam.audit_outbox
 		   WHERE event_document->>'requestId' IN ('retained-retirement-policy-create',
-		    'retained-retirement-version-create','retained-retirement-version-delete')))`,
+		    'retained-retirement-version-create','retained-retirement-version-delete','retained-policy-metadata-update')))`,
 			retainedRetirementPolicy.Policy.ID).Scan(&state); err != nil {
 			t.Fatal("read predecessor retired version history", err)
 		}
@@ -721,14 +733,17 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("retained database did not satisfy current IAM readiness and fail-closed defaults", err)
 	}
 	if current := attachmentContractState(); !bytes.Equal(predecessorAttachmentContract, current) {
-		t.Fatal("IAM75 attachment completions, facts or built-in policy state changed during IAM76 migration")
+		t.Fatal("IAM76 attachment completions, facts or built-in policy state changed during IAM77 migration")
 	}
 	if current := retirementState(); !bytes.Equal(predecessorRetirementState, current) {
-		t.Fatal("IAM76 changed retained IAM75 root retirement history")
+		t.Fatal("IAM77 changed retained IAM76 root policy history")
 	}
-	var retirementCompletions int64
-	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.policy_version_retirements`).Scan(&retirementCompletions); err != nil || retirementCompletions != 0 {
-		t.Fatal("IAM76 synthesized delegated completion for retained root retirement", err, retirementCompletions)
+	var retirementCompletions, metadataCompletions int64
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.policy_version_retirements),
+		(SELECT count(*) FROM iam.policy_metadata_updates)`).Scan(&retirementCompletions, &metadataCompletions); err != nil ||
+		retirementCompletions != 0 || metadataCompletions != 0 {
+		t.Fatal("IAM77 synthesized delegated completion for retained root policy history", err, retirementCompletions, metadataCompletions)
 	}
 	var predecessorEvidencePreserved bool
 	if err := admin.QueryRow(ctx, `SELECT count(*)=$1
@@ -739,12 +754,12 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  WHERE outbox.event_id IS NULL
 		    OR outbox.event_document->>'authorityEvidenceDigest' IS DISTINCT FROM receipt.authority_evidence_digest)
 		FROM iam.policy_attachment_changes`, predecessorAttachmentReceiptCount).Scan(&predecessorEvidencePreserved); err != nil || !predecessorEvidencePreserved {
-		t.Fatal("IAM76 changed a retained IAM75 authority-evidence commitment", err)
+		t.Fatal("IAM77 changed a retained IAM76 authority-evidence commitment", err)
 	}
 	var predecessorGroupCeilingDefaulted bool
 	if err := admin.QueryRow(ctx, `SELECT count(*)=$1 AND bool_and(delegation_ceiling_policy_id IS NULL)
 		FROM iam.policy_attachments`, predecessorAttachmentCount).Scan(&predecessorGroupCeilingDefaulted); err != nil || !predecessorGroupCeilingDefaulted {
-		t.Fatal("IAM76 assigned a delegated Group ceiling to a retained IAM75 direct attachment", err)
+		t.Fatal("IAM77 assigned a delegated Group ceiling to a retained IAM76 direct attachment", err)
 	}
 	var attachmentChangeAuthority bool
 	if err := admin.QueryRow(ctx, `SELECT
@@ -758,7 +773,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
 		  WHERE p.id='system.platform-operator'
 		    AND action_value='iam.platform-policy-attachment-change.read')`).Scan(&attachmentChangeAuthority); err != nil || !attachmentChangeAuthority {
-		t.Fatal("IAM75 built-in attachment completion read authority was lost", err)
+		t.Fatal("IAM76 built-in attachment completion read authority was lost", err)
 	}
 	current := start(currentBinary, currentSchema)
 	for requestID, expected := range map[string]iamv1.PolicyAttachmentChange{

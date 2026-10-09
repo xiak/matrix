@@ -799,15 +799,13 @@ func (service *Authority) UpdatePolicy(ctx context.Context, credential iamv1.Sec
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyUpdate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
-			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
-				return iamv1.PolicyDetail{}, err
-			}
 			event, err := service.newManagementEvent(subject, auditv1.ActionIAMPolicyUpdated, auditv1.TargetPolicy, string(id), decision.ID, requestDigest, request.RequestID, now)
 			if err != nil {
 				return iamv1.PolicyDetail{}, err
 			}
 			return tx.UpdatePolicy(ctx, PolicyUpdate{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
-				DecisionID: decision.ID, PolicyID: id, DisplayName: request.DisplayName, ResourceVersion: request.ResourceVersion, AuditEvent: event})
+				ActorSessionID: subject.Subject.Session.ID, DecisionID: decision.ID, PolicyID: id, DisplayName: request.DisplayName,
+				ResourceVersion: request.ResourceVersion, AuditEvent: event})
 		})
 }
 

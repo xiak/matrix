@@ -1281,6 +1281,34 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		for _, statement := range []string{
+			`GRANT SELECT ON TABLE iam.policy_metadata_updates TO matrix_iam_worker`,
+			`GRANT EXECUTE ON FUNCTION iam.lock_policy_metadata_update_delegation(text,text,text,text) TO matrix_iam_api`,
+			`GRANT EXECUTE ON FUNCTION iam.guard_policy_metadata_update_insert() TO matrix_iam_worker`,
+			`ALTER FUNCTION iam.update_policy(text,text,text,text,bigint,text,jsonb,text) SECURITY INVOKER`,
+			`ALTER TABLE iam.policy_metadata_updates DISABLE TRIGGER policy_metadata_updates_cannot_be_updated`,
+			`CREATE FUNCTION public.matrix_policy_metadata_update_passthrough() RETURNS trigger
+			 LANGUAGE plpgsql AS $fixture$ BEGIN RETURN NEW; END $fixture$;
+			 DROP TRIGGER policy_metadata_updates_cannot_be_updated ON iam.policy_metadata_updates;
+			 CREATE TRIGGER policy_metadata_updates_cannot_be_updated BEFORE UPDATE ON iam.policy_metadata_updates
+			 FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_metadata_update_passthrough()`,
+		} {
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(ctx, statement); err != nil {
+				tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			if err = tx.QueryRow(ctx, `SELECT iam.policy_metadata_update_contract_ready()`).Scan(&ready); err != nil || ready {
+				tx.Rollback(ctx)
+				t.Fatal("readiness accepted a widened delegated policy metadata contract")
+			}
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
 		var definition string
 		if err := admin.QueryRow(ctx, `SELECT pg_get_functiondef('iam.policy_version_snapshot(iam.policy_versions)'::regprocedure)`).Scan(&definition); err != nil {
 			t.Fatal(err)
@@ -1629,6 +1657,16 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		'{"state":"BOUND","userResourceVersion":1,"boundaryId":"missing-boundary","resourceVersion":1,
 		"version":{"policyId":"missing-policy","versionId":"missing-version","contentDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"contractVersion":1}'::jsonb,
 		'missing-decision','missing-event',transaction_timestamp())`, "42501", document.Organization.ID, document.Administrator.ID)
+	assertRejected("immutable-policy-metadata-completion-update", `UPDATE iam.policy_metadata_updates SET completed_at=completed_at`, "42501")
+	assertRejected("immutable-policy-metadata-completion-delete", `DELETE FROM iam.policy_metadata_updates`, "42501")
+	assertRejected("immutable-policy-metadata-completion-truncate", `TRUNCATE iam.policy_metadata_updates`, "42501")
+	assertRejected("guarded-policy-metadata-completion-insert", `INSERT INTO iam.policy_metadata_updates(
+		tenant_id,actor_principal_id,request_id,policy_id,expected_resource_version,display_name,actor_boundary_evidence,
+		decision_id,event_id,completed_at)
+		VALUES($1,$2,'forged-policy-metadata','missing-policy',1,'Forged metadata',
+		'{"state":"BOUND","userResourceVersion":1,"boundaryId":"missing-boundary","resourceVersion":1,
+		"version":{"policyId":"missing-policy","versionId":"missing-version","contentDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"contractVersion":1}'::jsonb,
+		'missing-decision','missing-event',transaction_timestamp())`, "42501", document.Organization.ID, document.Administrator.ID)
 	assertRejected("immutable-decision-evidence", `UPDATE iam.authorization_decisions SET policy_evidence='[]'::jsonb`, "42501")
 	assertRejected("immutable-boundary-evidence", `UPDATE iam.authorization_decisions SET boundary_evidence='{}'::jsonb`, "42501")
 	for _, attack := range []struct{ name, evidence string }{
@@ -1675,6 +1713,8 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			`SELECT iam.lock_policy_default_selection_delegation('tenant','actor','decision','policy')`,
 			`SELECT * FROM iam.policy_version_retirements`,
 			`SELECT iam.lock_policy_version_retirement_delegation('tenant','actor','decision','policy')`,
+			`SELECT * FROM iam.policy_metadata_updates`,
+			`SELECT iam.lock_policy_metadata_update_delegation('tenant','actor','decision','policy')`,
 		} {
 			tx, err := admin.Begin(ctx)
 			if err != nil {
@@ -16243,7 +16283,11 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 				{SID: "author-policy", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyCreate},
 					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(member.AccountID)}}},
 				{SID: "manage-policy-versions", Effect: iamv1.PolicyAllow,
-					Actions:   []iamv1.Action{iamv1.ActionIAMPolicyVersionCreate, iamv1.ActionIAMPolicyVersionDelete},
+					Actions: []iamv1.Action{
+						iamv1.ActionIAMPolicyUpdate,
+						iamv1.ActionIAMPolicyVersionCreate,
+						iamv1.ActionIAMPolicyVersionDelete,
+					},
 					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicy, Match: iamv1.PolicyResourceAnyInAuthority}}},
 				{SID: "select-controlled-default", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicySetDefaultVersion},
 					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicy, Match: iamv1.PolicyResourceAnyInAuthority}}},
@@ -16863,7 +16907,8 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		BEGIN IF NEW.request_id IN ('customer-delegated-policy-after-logout','customer-delegated-version-after-logout',
 		'customer-delegated-default-after-logout','customer-delegated-policy-after-boundary-remove',
 		'customer-delegated-version-after-boundary-remove','customer-delegated-default-after-boundary-remove',
-		'customer-delegated-retirement-after-logout','customer-delegated-retirement-after-boundary-remove')
+		'customer-delegated-retirement-after-logout','customer-delegated-retirement-after-boundary-remove',
+		'customer-delegated-metadata-after-logout','customer-delegated-metadata-concurrent-boundary-remove')
 		THEN PERFORM pg_advisory_xact_lock(54831,20); END IF; RETURN NEW; END $body$;
 		CREATE TRIGGER matrix_policy_publication_auth_barrier BEFORE INSERT ON iam.authorization_decisions
 		FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_publication_auth_barrier(); SELECT pg_advisory_lock(54831,20)`); err != nil {
@@ -17075,6 +17120,57 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		delegatedRetirementRaceVersion.Version.ID, delegatedRetirementRaceVersion.Policy.ResourceVersion).
 		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("logged-out delegated retirement left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
+
+	metadataBlockedBearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_lock(54831,20)`); err != nil {
+		t.Fatal("hold policy metadata authentication barrier", err)
+	}
+	blockedMetadataContext, cancelBlockedMetadata := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBlockedMetadata()
+	blockedMetadata := iamv1.UpdatePolicyRequest{DisplayName: "Logged out delegated metadata",
+		ResourceVersion: delegatedRetirementRaceVersion.Policy.ResourceVersion,
+		RequestID:       "customer-delegated-metadata-after-logout"}
+	blockedMetadataDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		blockedMetadataDone <- performIAMRequest(handler, http.MethodPatch,
+			"/v1/policies/"+string(delegatedRetirementRacePolicy.Policy.ID), metadataBlockedBearer, mustIAMJSON(t, blockedMetadata))
+	}()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(blockedMetadataContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=20)`).Scan(&waiting); err != nil {
+			t.Fatal("observe policy metadata authentication barrier", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-blockedMetadataContext.Done():
+				t.Fatal("policy metadata update never reached authentication barrier")
+			}
+		}
+	}
+	post("/v1/auth/logout", metadataBlockedBearer,
+		map[string]any{"requestId": "customer-delegated-metadata-logout"}, http.StatusOK, nil)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,20)`); err != nil {
+		t.Fatal("release policy metadata authentication barrier", err)
+	}
+	select {
+	case response := <-blockedMetadataDone:
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("delegated metadata update survived concurrent logout: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-blockedMetadataContext.Done():
+		t.Fatal("delegated metadata update did not finish after concurrent logout")
+	}
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_metadata_updates WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT display_name<>$4 OR resource_version<>$5 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
+		member.AccountID, member.ID, blockedMetadata.RequestID, delegatedRetirementRacePolicy.Policy.DisplayName,
+		delegatedRetirementRaceVersion.Policy.ResourceVersion, delegatedRetirementRacePolicy.Policy.ID).
+		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("logged-out delegated metadata update left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
 
 	// A tenant administrator with any current installation-scoped USER binding
@@ -17336,6 +17432,60 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("boundary-removed delegated retirement left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
+
+	setBoundary(member, "customer-policy-author-boundary-reset-metadata")
+	bearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	get("/v1/users/"+string(member.ID)+"/permission-boundary", root, http.StatusOK, &currentBoundary)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_lock(54831,20)`); err != nil {
+		t.Fatal("hold boundary-removal metadata barrier", err)
+	}
+	boundaryMetadataContext, cancelBoundaryMetadata := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBoundaryMetadata()
+	boundaryBlockedMetadata := iamv1.UpdatePolicyRequest{DisplayName: "Removed-boundary delegated metadata",
+		ResourceVersion: delegatedRetirementRaceVersion.Policy.ResourceVersion,
+		RequestID:       "customer-delegated-metadata-concurrent-boundary-remove"}
+	boundaryMetadataDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		boundaryMetadataDone <- performIAMRequest(handler, http.MethodPatch,
+			"/v1/policies/"+string(delegatedRetirementRacePolicy.Policy.ID), bearer, mustIAMJSON(t, boundaryBlockedMetadata))
+	}()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(boundaryMetadataContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=20)`).Scan(&waiting); err != nil {
+			t.Fatal("observe boundary-removal metadata barrier", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-boundaryMetadataContext.Done():
+				t.Fatal("policy metadata update never reached boundary-removal barrier")
+			}
+		}
+	}
+	request(http.MethodDelete, "/v1/users/"+string(member.ID)+"/permission-boundary", root,
+		iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: currentBoundary.ResourceVersion,
+			RequestID: "customer-policy-author-boundary-remove-metadata"}, http.StatusOK, nil)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,20)`); err != nil {
+		t.Fatal("release boundary-removal metadata barrier", err)
+	}
+	select {
+	case response := <-boundaryMetadataDone:
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("delegated metadata update survived concurrent boundary removal: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-boundaryMetadataContext.Done():
+		t.Fatal("delegated metadata update did not finish after boundary removal")
+	}
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_metadata_updates WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT display_name<>$4 OR resource_version<>$5 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
+		member.AccountID, member.ID, boundaryBlockedMetadata.RequestID, delegatedRetirementRacePolicy.Policy.DisplayName,
+		delegatedRetirementRaceVersion.Policy.ResourceVersion, delegatedRetirementRacePolicy.Policy.ID).
+		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("boundary-removed delegated metadata update left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
 	// The already committed draft can still return its immutable result after
 	// the ceiling is removed; the decision is not a permit for a new version.
 	var historicalDraftReplay iamv1.PolicyVersionDetail
@@ -17541,14 +17691,23 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	if boundaryRaceView.Policy == nil || boundaryRaceView.Policy.PolicyID != delegatedRetirementRacePolicy.Policy.ID {
 		t.Fatal("target-boundary retirement competition lost the committed boundary")
 	}
+	boundaryProtectedMetadata := iamv1.UpdatePolicyRequest{DisplayName: "Protected user boundary metadata rejected",
+		ResourceVersion: delegatedRetirementRaceVersion.Policy.ResourceVersion,
+		RequestID:       "customer-delegated-metadata-user-boundary-rejected"}
+	request(http.MethodPatch, "/v1/policies/"+string(delegatedRetirementRacePolicy.Policy.ID), bearer,
+		boundaryProtectedMetadata, http.StatusForbidden, nil)
 	if err := database.QueryRow(ctx, `SELECT
 		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
 		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
 		OR EXISTS(SELECT 1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$7)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$7)
+		OR EXISTS(SELECT 1 FROM iam.policy_metadata_updates WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$7)
 		OR (SELECT retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$4 AND id=$5)
-		OR (SELECT resource_version<>$6 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$4)`,
+		OR (SELECT resource_version<>$6 OR display_name<>$8 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$4)`,
 		member.AccountID, member.ID, targetBoundaryRetirement.RequestID, delegatedRetirementRacePolicy.Policy.ID,
-		delegatedRetirementRaceVersion.Version.ID, delegatedRetirementRaceVersion.Policy.ResourceVersion).
+		delegatedRetirementRaceVersion.Version.ID, delegatedRetirementRaceVersion.Policy.ResourceVersion,
+		boundaryProtectedMetadata.RequestID, delegatedRetirementRacePolicy.Policy.DisplayName).
 		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("target-boundary retirement competition left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
@@ -17577,6 +17736,11 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		RequestID: "customer-delegated-retirement-role-boundary-rejected"}
 	request(http.MethodDelete, "/v1/policies/"+string(delegatedPolicy.Policy.ID)+"/versions/"+string(delegatedDraft.Version.ID),
 		bearer, roleBoundaryRetirement, http.StatusForbidden, nil)
+	roleBoundaryMetadata := iamv1.UpdatePolicyRequest{DisplayName: "Protected role boundary metadata rejected",
+		ResourceVersion: delegatedDraft.Policy.ResourceVersion,
+		RequestID:       "customer-delegated-metadata-role-boundary-rejected"}
+	request(http.MethodPatch, "/v1/policies/"+string(delegatedPolicy.Policy.ID), bearer,
+		roleBoundaryMetadata, http.StatusForbidden, nil)
 	if boundaryRaceRoleView.Policy == nil || boundaryRaceRoleView.Policy.PolicyID != delegatedPolicy.Policy.ID {
 		t.Fatal("role boundary did not retain the protected policy")
 	}
@@ -17588,12 +17752,16 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$5)
 		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$5)
 		OR EXISTS(SELECT 1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$5)
+		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$9)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$9)
+		OR EXISTS(SELECT 1 FROM iam.policy_metadata_updates WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$9)
 		OR (SELECT count(*) FROM iam.policy_versions WHERE policy_id=$6)<>2
 		OR (SELECT retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$6 AND id=$7)
-		OR (SELECT default_version_id<>$8 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
+		OR (SELECT default_version_id<>$8 OR display_name<>$10 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
 		member.AccountID, member.ID, roleBoundaryVersion.RequestID, roleBoundaryDefault.RequestID,
 		roleBoundaryRetirement.RequestID, delegatedPolicy.Policy.ID, delegatedDraft.Version.ID,
-		delegatedPolicy.Version.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		delegatedPolicy.Version.ID, roleBoundaryMetadata.RequestID, delegatedPolicy.Policy.DisplayName).
+		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("role-boundary protection left a partial delegated version: partial=%t err=%v", partialDelegatedPublication, err)
 	}
 
@@ -17692,6 +17860,113 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	request(http.MethodDelete, retirementPath+string(delegatedRetirementVersion.Version.ID), bearer,
 		retirementAgain, http.StatusConflict, nil)
 
+	// Renaming changes no authority, but the delegated command still needs the
+	// actor's exact current ceiling and its own immutable completion. It cannot
+	// maintain the ceiling itself or a Policy currently used as any boundary.
+	delegatedMetadataCreate := delegatedSwitchCreate
+	delegatedMetadataCreate.DisplayName = "Delegated metadata source"
+	delegatedMetadataCreate.RequestID = "customer-delegated-metadata-policy-create"
+	var delegatedMetadataPolicy iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedMetadataCreate, http.StatusCreated, &delegatedMetadataPolicy)
+	metadataPath := "/v1/policies/" + string(delegatedMetadataPolicy.Policy.ID)
+	request(http.MethodPatch, "/v1/policies/"+string(delegationCeiling.Policy.ID), bearer,
+		iamv1.UpdatePolicyRequest{DisplayName: "Delegated ceiling rename rejected",
+			ResourceVersion: delegationCeiling.Policy.ResourceVersion,
+			RequestID:       "customer-delegated-metadata-ceiling-rejected"}, http.StatusForbidden, nil)
+	request(http.MethodPatch, "/v1/policies/"+string(iamv1.SystemPolicyAccountAdministrator), bearer,
+		iamv1.UpdatePolicyRequest{DisplayName: "Delegated system rename rejected", ResourceVersion: 1,
+			RequestID: "customer-delegated-metadata-system-rejected"}, http.StatusForbidden, nil)
+	delegatedMetadataUpdate := iamv1.UpdatePolicyRequest{DisplayName: "Delegated metadata renamed",
+		ResourceVersion: delegatedMetadataPolicy.Policy.ResourceVersion,
+		RequestID:       "customer-delegated-metadata-apply"}
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_metadata_completion_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.request_id='customer-delegated-metadata-apply' THEN RAISE EXCEPTION 'injected metadata completion failure'; END IF;
+		RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_policy_metadata_completion_fault BEFORE INSERT ON iam.policy_metadata_updates
+		FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_metadata_completion_fault()`); err != nil {
+		t.Fatal("install delegated metadata completion fault", err)
+	}
+	defer func() {
+		if _, err := database.Exec(context.Background(), `DROP TRIGGER IF EXISTS matrix_policy_metadata_completion_fault ON iam.policy_metadata_updates;
+			DROP FUNCTION IF EXISTS public.matrix_policy_metadata_completion_fault()`); err != nil {
+			t.Error("remove delegated metadata completion fault", err)
+		}
+	}()
+	request(http.MethodPatch, metadataPath, bearer, delegatedMetadataUpdate, http.StatusServiceUnavailable, nil)
+	var delegatedMetadataPartial bool
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_metadata_updates WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT display_name<>$4 OR resource_version<>$5 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
+		member.AccountID, member.ID, delegatedMetadataUpdate.RequestID, delegatedMetadataCreate.DisplayName,
+		delegatedMetadataPolicy.Policy.ResourceVersion, delegatedMetadataPolicy.Policy.ID).
+		Scan(&delegatedMetadataPartial); err != nil || delegatedMetadataPartial {
+		t.Fatalf("failed delegated metadata completion left partial state: partial=%t err=%v", delegatedMetadataPartial, err)
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_policy_metadata_completion_fault ON iam.policy_metadata_updates;
+		DROP FUNCTION public.matrix_policy_metadata_completion_fault()`); err != nil {
+		t.Fatal("remove delegated metadata completion fault before retry", err)
+	}
+	var delegatedMetadataRenamed, delegatedMetadataReplay iamv1.PolicyDetail
+	request(http.MethodPatch, metadataPath, bearer, delegatedMetadataUpdate, http.StatusOK, &delegatedMetadataRenamed)
+	request(http.MethodPatch, metadataPath, bearer, delegatedMetadataUpdate, http.StatusOK, &delegatedMetadataReplay)
+	if delegatedMetadataRenamed.Policy.DisplayName != delegatedMetadataUpdate.DisplayName ||
+		delegatedMetadataRenamed.Policy.ResourceVersion != delegatedMetadataUpdate.ResourceVersion+1 ||
+		delegatedMetadataRenamed.Version.ID != delegatedMetadataPolicy.Version.ID ||
+		!bytes.Equal(mustIAMJSON(t, delegatedMetadataRenamed), mustIAMJSON(t, delegatedMetadataReplay)) {
+		t.Fatal("delegated metadata update or exact replay changed its result or authority")
+	}
+	var delegatedMetadataProof bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT actor_boundary_evidence->>'state'='BOUND'
+		 AND actor_boundary_evidence#>>'{version,policyId}'=$4
+		 AND display_name=$5 AND completed_at=(SELECT updated_at FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)
+		 FROM iam.policy_metadata_updates WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		AND (SELECT count(*)=1 FROM iam.audit_outbox WHERE tenant_id=$1
+		 AND event_document->>'action'='iam.policy.updated' AND event_document#>>'{actor,id}'=$2
+		 AND event_document->>'requestId'=$3 AND event_document#>>'{target,id}'=$6)
+		AND (SELECT display_name=$5 AND resource_version=$7 AND default_version_id=$8
+		 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
+		member.AccountID, member.ID, delegatedMetadataUpdate.RequestID, delegationCeiling.Policy.ID,
+		delegatedMetadataUpdate.DisplayName, delegatedMetadataPolicy.Policy.ID,
+		delegatedMetadataRenamed.Policy.ResourceVersion, delegatedMetadataPolicy.Version.ID).
+		Scan(&delegatedMetadataProof); err != nil || !delegatedMetadataProof {
+		t.Fatal("delegated metadata update lost its ceiling, immutable completion or one-to-one fact", err)
+	}
+	metadataVariant := delegatedMetadataUpdate
+	metadataVariant.DisplayName = "Delegated metadata replay variant"
+	request(http.MethodPatch, metadataPath, bearer, metadataVariant, http.StatusConflict, nil)
+	metadataStale := delegatedMetadataUpdate
+	metadataStale.RequestID = "customer-delegated-metadata-stale"
+	request(http.MethodPatch, metadataPath, bearer, metadataStale, http.StatusConflict, nil)
+
+	var metadataPlatformBinding iamv1.PolicyAttachment
+	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
+		PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1,
+		RequestID: "customer-delegated-metadata-platform-binding",
+	}, http.StatusOK, &metadataPlatformBinding)
+	bearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	request(http.MethodPatch, metadataPath, bearer,
+		iamv1.UpdatePolicyRequest{DisplayName: "Platform-bound metadata rejected",
+			ResourceVersion: delegatedMetadataRenamed.Policy.ResourceVersion,
+			RequestID:       "customer-delegated-metadata-platform-rejected"}, http.StatusForbidden, nil)
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_metadata_updates WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT display_name<>$4 OR resource_version<>$5 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
+		member.AccountID, member.ID, "customer-delegated-metadata-platform-rejected",
+		delegatedMetadataRenamed.Policy.DisplayName, delegatedMetadataRenamed.Policy.ResourceVersion,
+		delegatedMetadataRenamed.Policy.ID).Scan(&delegatedMetadataPartial); err != nil || delegatedMetadataPartial {
+		t.Fatalf("platform-bound delegated metadata left partial state: partial=%t err=%v", delegatedMetadataPartial, err)
+	}
+	post("/v1/policy-attachments/"+string(metadataPlatformBinding.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: metadataPlatformBinding.ResourceVersion,
+			RequestID: "customer-delegated-metadata-platform-binding-revoke"}, http.StatusOK, nil)
+	bearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+
 	post("/v1/accounts", root, map[string]any{"id": "customer-policy-other", "displayName": "Other policy account", "rootLoginName": "customer-policy-other", "rootDisplayName": "Other root", "initialPassword": initialDeveloperPassword, "requestId": "customer-policy-other-create"}, http.StatusCreated, nil)
 	other := localRecoveryLogin(t, handler, "customer-policy-other", initialDeveloperPassword, true)
 	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
@@ -17708,6 +17983,10 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		RequestID: "customer-delegated-retirement-cross-account"}
 	request(http.MethodDelete, "/v1/policies/"+string(foreign.Policy.ID)+"/versions/"+string(foreign.Version.ID), bearer,
 		crossAccountRetirement, http.StatusForbidden, nil)
+	crossAccountMetadata := iamv1.UpdatePolicyRequest{DisplayName: "Cross-account metadata rejected",
+		ResourceVersion: foreign.Policy.ResourceVersion, RequestID: "customer-delegated-metadata-cross-account"}
+	request(http.MethodPatch, "/v1/policies/"+string(foreign.Policy.ID), bearer,
+		crossAccountMetadata, http.StatusForbidden, nil)
 	var currentActorBoundary iamv1.UserPermissionBoundary
 	get("/v1/users/"+string(member.ID)+"/permission-boundary", root, http.StatusOK, &currentActorBoundary)
 	request(http.MethodDelete, "/v1/users/"+string(member.ID)+"/permission-boundary", root,
@@ -17718,6 +17997,51 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		delegatedRetirement, http.StatusOK, &historicalRetirementReplay)
 	if !bytes.Equal(mustIAMJSON(t, historicalRetirementReplay), mustIAMJSON(t, delegatedRetired)) {
 		t.Fatal("ceiling removal changed an exact committed version retirement result")
+	}
+	var historicalMetadataReplay iamv1.PolicyDetail
+	request(http.MethodPatch, metadataPath, bearer, delegatedMetadataUpdate, http.StatusOK, &historicalMetadataReplay)
+	if !bytes.Equal(mustIAMJSON(t, historicalMetadataReplay), mustIAMJSON(t, delegatedMetadataRenamed)) {
+		t.Fatal("ceiling removal changed an exact committed metadata update result")
+	}
+	request(http.MethodPatch, metadataPath, bearer,
+		iamv1.UpdatePolicyRequest{DisplayName: "Boundary-removed metadata rejected",
+			ResourceVersion: delegatedMetadataRenamed.Policy.ResourceVersion,
+			RequestID:       "customer-delegated-metadata-after-boundary-remove"}, http.StatusForbidden, nil)
+	mismatchedMetadata, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mismatchedMetadata.Exec(ctx, `ALTER TABLE iam.policy_metadata_updates
+		DISABLE TRIGGER policy_metadata_updates_cannot_be_updated;
+		UPDATE iam.policy_metadata_updates SET actor_boundary_evidence=jsonb_set(actor_boundary_evidence,
+		'{version,contentDigest}',to_jsonb(('sha256:'||repeat('e',64))::text))
+		WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3;
+		ALTER TABLE iam.policy_metadata_updates ENABLE ALWAYS TRIGGER policy_metadata_updates_cannot_be_updated`,
+		member.AccountID, member.ID, delegatedMetadataUpdate.RequestID); err != nil {
+		_ = mismatchedMetadata.Rollback(ctx)
+		t.Fatal("inject isolated mismatched delegated metadata evidence", err)
+	}
+	if err := mismatchedMetadata.Commit(ctx); err != nil {
+		t.Fatal("commit isolated mismatched delegated metadata evidence", err)
+	}
+	request(http.MethodPatch, metadataPath, bearer, delegatedMetadataUpdate, http.StatusServiceUnavailable, nil)
+	var mismatchedMetadataClosed bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.policy_metadata_updates WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)=1
+		AND NOT EXISTS(SELECT 1 FROM iam.policy_metadata_updates update_value
+		 JOIN iam.authorization_decisions decision ON decision.tenant_id=update_value.tenant_id
+		  AND decision.principal_id=update_value.actor_principal_id AND decision.request_id=update_value.request_id
+		  AND decision.action_name='iam.policy.update' AND decision.allowed
+		 WHERE update_value.tenant_id=$1 AND update_value.actor_principal_id=$2 AND update_value.request_id=$3
+		  AND decision.boundary_evidence=update_value.actor_boundary_evidence)
+		AND (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.updated'
+		 AND event_document->>'requestId'=$3)=1
+		AND (SELECT display_name=$4 AND resource_version=$5 AND default_version_id=$6
+		 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$7)`,
+		member.AccountID, member.ID, delegatedMetadataUpdate.RequestID, delegatedMetadataRenamed.Policy.DisplayName,
+		delegatedMetadataRenamed.Policy.ResourceVersion, delegatedMetadataPolicy.Version.ID,
+		delegatedMetadataPolicy.Policy.ID).Scan(&mismatchedMetadataClosed); err != nil || !mismatchedMetadataClosed {
+		t.Fatal("mismatched delegated metadata evidence was accepted or changed authority", err)
 	}
 	boundaryRemovedRetirement := iamv1.DeletePolicyVersionRequest{ResourceVersion: delegatedRetired.Policy.ResourceVersion,
 		RequestID: "customer-delegated-retirement-after-boundary-remove"}
