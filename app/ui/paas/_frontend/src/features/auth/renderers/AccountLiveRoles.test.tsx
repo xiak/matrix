@@ -165,6 +165,35 @@ describe("AccountLiveRoles", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("uses only returned capabilities for delegated policy relationships and keeps other role management closed", async () => {
+    const delegatedAccess: RoleAccess = {
+      ...access,
+      capabilities: access.capabilities.map((candidate) => {
+        const available = candidate.action === "iam.role.read" || candidate.action === "iam.role-policy-attachment.create" || candidate.action === "iam.role-policy-attachment.revoke";
+        return { ...candidate, available, restrictionReason: available ? null : "AUTHORITY_REQUIRED" as const };
+      })
+    };
+    const api = client({ read: vi.fn().mockResolvedValue(delegatedAccess) });
+    const user = userEvent.setup();
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    expect(await screen.findByRole("heading", { name: role.name })).toBeTruthy();
+    expect(screen.getByText("浏览器不比较权限边界", { exact: false })).toBeTruthy();
+    expect(screen.getByText("不包含编辑、启停、信任、删除或边界管理权限", { exact: false })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "关联策略" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "移除策略" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "编辑角色信息" }).hasAttribute("disabled")).toBe(true);
+
+    await user.click(screen.getByRole("tab", { name: "信任策略 (1)" }));
+    expect(screen.getByRole("button", { name: "修改信任关系" }).hasAttribute("disabled")).toBe(true);
+    expect(api.createPolicyAttachment).not.toHaveBeenCalled();
+    expect(api.revokePolicyAttachment).not.toHaveBeenCalled();
+    expect(api.update).not.toHaveBeenCalled();
+    expect(api.setTrustPolicy).not.toHaveBeenCalled();
+    expect(api.setPermissionBoundary).not.toHaveBeenCalled();
+    expect(api.removePermissionBoundary).not.toHaveBeenCalled();
+  });
+
   it("edits complete role metadata inline and retries one uncertain command byte-for-byte", async () => {
     const user = userEvent.setup();
     const updatedRole = { ...role, description: "Review retained audit logs", resourceVersion: role.resourceVersion + 1 };

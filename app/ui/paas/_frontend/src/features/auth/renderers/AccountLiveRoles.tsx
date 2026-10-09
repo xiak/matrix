@@ -389,7 +389,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
             <Button variant="secondary" disabled={attachmentCapability?.available !== true} title={attachmentCapability?.available === true ? undefined : actionReason(attachmentCapability)} onClick={() => setWorkflow("addPolicy")}>{t("addPolicies")}</Button>
             <Button variant="ghost" disabled={!canRevokeAttachment} title={canRevokeAttachment ? undefined : t("noRevocablePolicies")} onClick={() => setWorkflow("removePolicy")}>{t("removePolicies")}</Button>
           </div>
-          <Alert>{t("permissionsAreRoleGrants")}</Alert>
+          <Alert>{t("permissionsAreRoleGrants")} {t("policyAttachmentAuthorityHint")}</Alert>
           {access.policyAttachments.length ? <Table aria-label={t("livePermissions")} mobileLayout="stack">
             <thead><tr><th scope="col">{t("policyId")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("attachmentVersion")}</th><th scope="col">{t("updated")}</th></tr></thead>
             <tbody>{access.policyAttachments.map((attachment) => <tr key={attachment.id}>
