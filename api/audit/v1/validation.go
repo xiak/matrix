@@ -112,7 +112,11 @@ func ValidateEvent(value Event) error {
 			problems = append(problems, errors.New("Audit action cannot contain an Operation"))
 		}
 	}
-	authorityEvidence := value.Action == ActionIAMRoleTrustSet ||
+	authorityEvidence := value.Action == ActionIAMRoleUpdated ||
+		value.Action == ActionIAMRoleDisabled ||
+		value.Action == ActionIAMRoleEnabled ||
+		value.Action == ActionIAMRoleDeleted ||
+		value.Action == ActionIAMRoleTrustSet ||
 		value.Action == ActionIAMPolicyAttachmentCreated ||
 		value.Action == ActionIAMPolicyAttachmentRevoked ||
 		value.Action == ActionIAMPlatformPolicyAttachmentCreated ||

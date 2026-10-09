@@ -121,9 +121,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "d08db07ec62e1ff56c3a6dad9e341cdc41c3ebc0"
-	const sourceSchema uint64 = 79
-	const currentSchema uint64 = 80
+	const source = "68ff14dbccab87729885baa44aa7808d9d0bf1f9"
+	const sourceSchema uint64 = 80
+	const currentSchema uint64 = 81
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -478,13 +478,65 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	retainedRoleCredential := string(retainedRoleCredentialBytes)
 	clear(retainedRoleCredentialBytes)
 	sensitive = append(sensitive, retainedRoleCredential)
+	retainedLifecycleRequest := iamv1.CreateRoleRequest{Name: "Retained root lifecycle", Tags: []iamv1.RoleTag{},
+		TrustPolicy: retainedRoleRequest.TrustPolicy, RequestID: "retained-root-lifecycle-create"}
+	roleResponse = performJSON(t, http.MethodPost, endpoint+"/v1/roles", primary.Credential, retainedLifecycleRequest)
+	var retainedLifecycleRole iamv1.Role
+	if roleResponse.Status != http.StatusCreated || json.Unmarshal(roleResponse.Body, &retainedLifecycleRole) != nil ||
+		iamv1.ValidateRole(retainedLifecycleRole) != nil || retainedLifecycleRole.ResourceVersion != 1 {
+		t.Fatalf("actual predecessor did not create its lifecycle Role: status=%d", roleResponse.Status)
+	}
+	retainedLifecyclePath := endpoint + "/v1/roles/" + string(retainedLifecycleRole.ID)
+	retainedLifecycleUpdate := iamv1.UpdateRoleRequest{Name: "Retained root lifecycle updated", Description: "predecessor completion",
+		Tags: []iamv1.RoleTag{{Key: "retained", Value: "lifecycle"}}, MaxSessionDurationSeconds: 900,
+		ResourceVersion: retainedLifecycleRole.ResourceVersion, RequestID: "retained-root-lifecycle-update"}
+	roleResponse = performJSON(t, http.MethodPatch, retainedLifecyclePath, primary.Credential, retainedLifecycleUpdate)
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &retainedLifecycleRole) != nil ||
+		retainedLifecycleRole.ResourceVersion != 2 || retainedLifecycleRole.MaxSessionDurationSeconds != 900 {
+		t.Fatalf("actual predecessor did not update its lifecycle Role: status=%d", roleResponse.Status)
+	}
+	roleResponse = performJSON(t, http.MethodPost, retainedLifecyclePath+":set-status", primary.Credential,
+		iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: retainedLifecycleRole.ResourceVersion,
+			RequestID: "retained-root-lifecycle-disable"})
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &retainedLifecycleRole) != nil ||
+		retainedLifecycleRole.ResourceVersion != 3 || retainedLifecycleRole.Status != iamv1.RoleDisabled {
+		t.Fatalf("actual predecessor did not disable its lifecycle Role: status=%d", roleResponse.Status)
+	}
+	roleResponse = performJSON(t, http.MethodPost, retainedLifecyclePath+":set-status", primary.Credential,
+		iamv1.SetRoleStatusRequest{Status: iamv1.RoleActive, ResourceVersion: retainedLifecycleRole.ResourceVersion,
+			RequestID: "retained-root-lifecycle-enable"})
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &retainedLifecycleRole) != nil ||
+		retainedLifecycleRole.ResourceVersion != 4 || retainedLifecycleRole.Status != iamv1.RoleActive {
+		t.Fatalf("actual predecessor did not re-enable its lifecycle Role: status=%d", roleResponse.Status)
+	}
+	roleResponse = performJSON(t, http.MethodDelete, retainedLifecyclePath, primary.Credential,
+		iamv1.DeleteRoleRequest{ResourceVersion: retainedLifecycleRole.ResourceVersion, RequestID: "retained-root-lifecycle-delete"})
+	var retainedLifecycleDeletion iamv1.RoleDeletion
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &retainedLifecycleDeletion) != nil ||
+		iamv1.ValidateRoleDeletion(retainedLifecycleDeletion) != nil || retainedLifecycleDeletion.ResourceVersion != 5 ||
+		retainedLifecycleDeletion.RevokedPolicyAttachments != 0 {
+		t.Fatalf("actual predecessor did not terminally delete its lifecycle Role: status=%d", roleResponse.Status)
+	}
+	retainedLifecycleState := func() []byte {
+		t.Helper()
+		var state []byte
+		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
+		 'role',(SELECT to_jsonb(role_value) FROM iam.roles role_value WHERE role_value.tenant_id=$1 AND role_value.id=$2),
+		 'facts',(SELECT jsonb_agg(event_document ORDER BY event_id) FROM iam.audit_outbox
+		   WHERE tenant_id=$1 AND event_document->>'requestId' IN ('retained-root-lifecycle-create','retained-root-lifecycle-update',
+		     'retained-root-lifecycle-disable','retained-root-lifecycle-enable','retained-root-lifecycle-delete')))`,
+			primary.Session.AccountID, retainedLifecycleRole.ID).Scan(&state); err != nil {
+			t.Fatal("read retained root Role lifecycle", err)
+		}
+		return state
+	}
+	predecessorLifecycleState := retainedLifecycleState()
 	retainedRoleState := func() []byte {
 		t.Helper()
 		var state []byte
 		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
 		 'role',(SELECT to_jsonb(role_value) FROM iam.roles role_value WHERE role_value.tenant_id=$1 AND role_value.id=$2),
-		 'trust',(SELECT jsonb_agg(jsonb_build_array(version_value.tenant_id,version_value.role_id,version_value.id,
-		   version_value.canonical_document,version_value.content_digest,version_value.created_at) ORDER BY version_value.id) FROM iam.role_trust_versions version_value
+		 'trust',(SELECT jsonb_agg(to_jsonb(version_value) ORDER BY version_value.id) FROM iam.role_trust_versions version_value
 		   WHERE version_value.tenant_id=$1 AND version_value.role_id=$2),
 		 'boundaries',(SELECT jsonb_agg(to_jsonb(boundary) ORDER BY boundary.id) FROM iam.role_permission_boundaries boundary
 		   WHERE boundary.tenant_id=$1 AND boundary.role_id=$2),
@@ -748,7 +800,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}) {
 		t.Fatalf("actual predecessor did not update its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
 	}
-	// The immediate schema-78 predecessor already owns explicit REVIEW_ONLY.
+	// The immediate schema-80 predecessor already owns explicit REVIEW_ONLY.
 	// The current schema must preserve it instead of inventing a migration
 	// default or authority.
 	migratedAccessAnalyzerExpected := retainedAccessAnalyzer
@@ -825,20 +877,35 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("retained database did not satisfy current IAM readiness and fail-closed defaults", err)
 	}
 	if current := attachmentContractState(); !bytes.Equal(predecessorAttachmentContract, current) {
-		t.Fatal("IAM79 attachment completions, facts or built-in policy state changed during IAM80 migration")
+		t.Fatal("IAM80 attachment completions, facts or built-in policy state changed during IAM81 migration")
 	}
 	if current := retainedRoleState(); !bytes.Equal(predecessorRoleState, current) {
-		t.Fatal("IAM80 changed the retained IAM79 root Role, Trust, boundary, attachment or RoleSession")
+		t.Fatal("IAM81 changed the retained IAM80 root Role, Trust, boundary, attachment or RoleSession")
 	}
-	var retainedTrustUnproven bool
-	if err := admin.QueryRow(ctx, `SELECT count(*)=2 AND bool_and(
-		actor_principal_id IS NULL AND request_id IS NULL AND expected_role_version IS NULL
-		AND input_commitment IS NULL AND decision_id IS NULL AND event_id IS NULL
-		AND actor_boundary_evidence IS NULL AND target_boundary_evidence IS NULL
-		AND authority_evidence_digest IS NULL)
+	if current := retainedLifecycleState(); !bytes.Equal(predecessorLifecycleState, current) {
+		t.Fatal("IAM81 changed retained IAM80 Root Role lifecycle state or facts")
+	}
+	var retainedTrustEvidence bool
+	if err := admin.QueryRow(ctx, `SELECT count(*)=2
+		AND count(*) FILTER (WHERE actor_principal_id IS NULL AND request_id IS NULL AND expected_role_version IS NULL
+		  AND input_commitment IS NULL AND decision_id IS NULL AND event_id IS NULL
+		  AND actor_boundary_evidence IS NULL AND target_boundary_evidence IS NULL
+		  AND authority_evidence_digest IS NULL)=1
+		AND count(*) FILTER (WHERE actor_principal_id=$3 AND request_id='retained-root-role-trust'
+		  AND expected_role_version=2 AND input_commitment IS NOT NULL AND decision_id IS NOT NULL AND event_id IS NOT NULL
+		  AND actor_boundary_evidence->>'state'='ROOT' AND target_boundary_evidence='{"state":"ROOT"}'::jsonb
+		  AND authority_evidence_digest ~ '^sha256:[0-9a-f]{64}$')=1
+		AND iam.verified_role_trust_change($1,$3,'retained-root-role-trust') IS NOT NULL
 		FROM iam.role_trust_versions WHERE tenant_id=$1 AND role_id=$2`,
-		primary.Session.AccountID, retainedRole.ID).Scan(&retainedTrustUnproven); err != nil || !retainedTrustUnproven {
-		t.Fatal("IAM80 synthesized current delegation proof for retained IAM79 Root Trust history", err)
+		primary.Session.AccountID, retainedRole.ID, primary.Session.PrincipalID).Scan(&retainedTrustEvidence); err != nil || !retainedTrustEvidence {
+		t.Fatal("IAM81 changed retained IAM80 Root Trust evidence or synthesized proof for initial Trust", err)
+	}
+	var synthesizedLifecycleReceipts int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.role_lifecycle_changes WHERE tenant_id=$1 AND role_id=$2
+		OR (tenant_id=$1 AND request_id IN ('retained-root-lifecycle-update','retained-root-lifecycle-disable',
+		  'retained-root-lifecycle-enable','retained-root-lifecycle-delete'))`,
+		primary.Session.AccountID, retainedLifecycleRole.ID).Scan(&synthesizedLifecycleReceipts); err != nil || synthesizedLifecycleReceipts != 0 {
+		t.Fatal("IAM81 synthesized lifecycle receipts for retained IAM80 Root facts", err, synthesizedLifecycleReceipts)
 	}
 	var retainedRootRoleEvidence bool
 	if err := admin.QueryRow(ctx, `SELECT
@@ -851,10 +918,10 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		 WHERE receipt.tenant_id=$1 AND receipt.request_id='retained-root-role-attachment'
 		   AND receipt.target_boundary_evidence->>'state'='ROLE_BOUND')`,
 		primary.Session.AccountID, retainedRole.ID).Scan(&retainedRootRoleEvidence); err != nil || !retainedRootRoleEvidence {
-		t.Fatal("IAM80 synthesized delegated Role evidence for retained root authority", err)
+		t.Fatal("IAM81 synthesized delegated Role evidence for retained root authority", err)
 	}
 	if current := retirementState(); !bytes.Equal(predecessorRetirementState, current) {
-		t.Fatal("IAM80 changed retained IAM79 root policy history")
+		t.Fatal("IAM81 changed retained IAM80 root policy history")
 	}
 	var retirementCompletions, metadataCompletions, deletionCompletions int64
 	if err := admin.QueryRow(ctx, `SELECT
@@ -862,7 +929,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		(SELECT count(*) FROM iam.policy_metadata_updates),
 		(SELECT count(*) FROM iam.policy_deletions)`).Scan(&retirementCompletions, &metadataCompletions, &deletionCompletions); err != nil ||
 		retirementCompletions != 0 || metadataCompletions != 0 || deletionCompletions != 0 {
-		t.Fatal("IAM80 synthesized delegated completion for retained root policy history", err,
+		t.Fatal("IAM81 synthesized delegated completion for retained root policy history", err,
 			retirementCompletions, metadataCompletions, deletionCompletions)
 	}
 	var predecessorEvidencePreserved bool
@@ -874,12 +941,12 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  WHERE outbox.event_id IS NULL
 		    OR outbox.event_document->>'authorityEvidenceDigest' IS DISTINCT FROM receipt.authority_evidence_digest)
 		FROM iam.policy_attachment_changes`, predecessorAttachmentReceiptCount).Scan(&predecessorEvidencePreserved); err != nil || !predecessorEvidencePreserved {
-		t.Fatal("IAM80 changed a retained IAM79 authority-evidence commitment", err)
+		t.Fatal("IAM81 changed a retained IAM80 authority-evidence commitment", err)
 	}
 	var predecessorGroupCeilingDefaulted bool
 	if err := admin.QueryRow(ctx, `SELECT count(*)=$1 AND bool_and(delegation_ceiling_policy_id IS NULL)
 		FROM iam.policy_attachments`, predecessorAttachmentCount).Scan(&predecessorGroupCeilingDefaulted); err != nil || !predecessorGroupCeilingDefaulted {
-		t.Fatal("IAM80 assigned a delegated Group ceiling to a retained IAM79 direct attachment", err)
+		t.Fatal("IAM81 assigned a delegated Group ceiling to a retained IAM80 direct attachment", err)
 	}
 	var attachmentChangeAuthority bool
 	if err := admin.QueryRow(ctx, `SELECT
@@ -893,7 +960,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
 		  WHERE p.id='system.platform-operator'
 		    AND action_value='iam.platform-policy-attachment-change.read')`).Scan(&attachmentChangeAuthority); err != nil || !attachmentChangeAuthority {
-		t.Fatal("IAM79 built-in attachment completion read authority was lost", err)
+		t.Fatal("IAM80 built-in attachment completion read authority was lost", err)
 	}
 	current := start(currentBinary, currentSchema)
 	roleResponse = performJSON(t, http.MethodGet, retainedRolePath, primary.Credential, nil)
@@ -1009,7 +1076,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  ON (attachment.tenant_id,attachment.id)=(receipt.tenant_id,receipt.attachment_id)
 		WHERE receipt.attachment_id=$1 AND receipt.request_id='retained-current-viewer'`,
 		currentGrant.ID).Scan(&currentAuthorityEvidenceBound); err != nil || !currentAuthorityEvidenceBound {
-		t.Fatal("IAM80 did not bind a post-upgrade direct attachment fact without inventing a Group ceiling", err)
+		t.Fatal("IAM81 did not bind a post-upgrade direct attachment fact without inventing a Group ceiling", err)
 	}
 	delegatedUser := createIAMUser(t, endpoint, primary.Credential, "retained.delegated", "Post-upgrade delegated role",
 		initialReaderPassword, "retained-delegated-user")
@@ -1027,6 +1094,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(primary.Session.AccountID)}}},
 			{SID: "use-role", Effect: iamv1.PolicyAllow,
 				Actions: []iamv1.Action{iamv1.ActionIAMRoleRead, iamv1.ActionIAMRoleAssume,
+					iamv1.ActionIAMRoleUpdate, iamv1.ActionIAMRoleSetStatus, iamv1.ActionIAMRoleDelete,
 					iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate},
 				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceAnyInAuthority}}},
 			{SID: "read-applications", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
@@ -1115,7 +1183,8 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatalf("current authority could not assume the post-upgrade delegated Role: status=%d body=%s", roleResponse.Status, roleResponse.Body)
 	}
 	delegatedRoleCredentialBytes := delegatedRoleIssuance.Credential.CopyBytes()
-	sensitive = append(sensitive, string(delegatedRoleCredentialBytes))
+	delegatedRoleCredential := string(delegatedRoleCredentialBytes)
+	sensitive = append(sensitive, delegatedRoleCredential)
 	clear(delegatedRoleCredentialBytes)
 	var delegatedReceiptBound bool
 	if err := admin.QueryRow(ctx, `SELECT receipt.actor_boundary_evidence->>'state'='BOUND'
@@ -1127,6 +1196,69 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  AND receipt.request_id='retained-delegated-role-attachment'`,
 		delegatedUser.AccountID, delegatedUser.ID, delegatedCeiling.Policy.ID).Scan(&delegatedReceiptBound); err != nil || !delegatedReceiptBound {
 		t.Fatal("post-upgrade delegated Role attachment lost its closed authority proof", err)
+	}
+	delegatedLifecycleUpdate := iamv1.UpdateRoleRequest{Name: "Post-upgrade bounded role updated",
+		Description: "same-ceiling lifecycle", Tags: []iamv1.RoleTag{{Key: "retained", Value: "current"}},
+		MaxSessionDurationSeconds: 900, ResourceVersion: delegatedRole.ResourceVersion,
+		RequestID: "retained-delegated-role-update"}
+	roleResponse = performJSON(t, http.MethodPatch, delegatedRolePath, delegatedUserSession.Credential, delegatedLifecycleUpdate)
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &delegatedRole) != nil ||
+		delegatedRole.ResourceVersion != delegatedLifecycleUpdate.ResourceVersion+1 || delegatedRole.MaxSessionDurationSeconds != 900 {
+		t.Fatalf("current authority could not update same-ceiling Role after upgrade: status=%d body=%s", roleResponse.Status, roleResponse.Body)
+	}
+	roleResponse = performJSON(t, http.MethodPatch, delegatedRolePath, delegatedUserSession.Credential, delegatedLifecycleUpdate)
+	var delegatedLifecycleReplay iamv1.Role
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &delegatedLifecycleReplay) != nil ||
+		!reflect.DeepEqual(delegatedLifecycleReplay, delegatedRole) {
+		t.Fatal("current authority changed the exact same-ceiling Role update replay", roleResponse.Status)
+	}
+	if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/role-session", delegatedRoleCredential, nil); response.Status != http.StatusUnauthorized {
+		t.Fatalf("post-upgrade Role update retained an old RoleSession: status=%d", response.Status)
+	}
+	delegatedDisable := iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: delegatedRole.ResourceVersion,
+		RequestID: "retained-delegated-role-disable"}
+	roleResponse = performJSON(t, http.MethodPost, delegatedRolePath+":set-status", delegatedUserSession.Credential, delegatedDisable)
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &delegatedRole) != nil || delegatedRole.Status != iamv1.RoleDisabled {
+		t.Fatalf("current authority could not disable same-ceiling Role after upgrade: status=%d", roleResponse.Status)
+	}
+	roleResponse = performJSON(t, http.MethodPost, delegatedRolePath+":set-status", delegatedUserSession.Credential, delegatedDisable)
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &delegatedLifecycleReplay) != nil ||
+		!reflect.DeepEqual(delegatedLifecycleReplay, delegatedRole) {
+		t.Fatal("current authority changed the exact same-ceiling Role disable replay", roleResponse.Status)
+	}
+	delegatedEnable := iamv1.SetRoleStatusRequest{Status: iamv1.RoleActive, ResourceVersion: delegatedRole.ResourceVersion,
+		RequestID: "retained-delegated-role-enable"}
+	roleResponse = performJSON(t, http.MethodPost, delegatedRolePath+":set-status", delegatedUserSession.Credential, delegatedEnable)
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &delegatedRole) != nil || delegatedRole.Status != iamv1.RoleActive {
+		t.Fatalf("current authority could not re-enable same-ceiling Role after upgrade: status=%d", roleResponse.Status)
+	}
+	roleResponse = performJSON(t, http.MethodPost, delegatedRolePath+":set-status", delegatedUserSession.Credential, delegatedEnable)
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &delegatedLifecycleReplay) != nil ||
+		!reflect.DeepEqual(delegatedLifecycleReplay, delegatedRole) {
+		t.Fatal("current authority changed the exact same-ceiling Role enable replay", roleResponse.Status)
+	}
+	delegatedDelete := iamv1.DeleteRoleRequest{ResourceVersion: delegatedRole.ResourceVersion,
+		RequestID: "retained-delegated-role-delete"}
+	roleResponse = performJSON(t, http.MethodDelete, delegatedRolePath, delegatedUserSession.Credential, delegatedDelete)
+	var delegatedDeletion, delegatedDeletionReplay iamv1.RoleDeletion
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &delegatedDeletion) != nil ||
+		iamv1.ValidateRoleDeletion(delegatedDeletion) != nil || delegatedDeletion.RevokedPolicyAttachments != 1 {
+		t.Fatalf("current authority could not delete same-ceiling Role after upgrade: status=%d", roleResponse.Status)
+	}
+	roleResponse = performJSON(t, http.MethodDelete, delegatedRolePath, delegatedUserSession.Credential, delegatedDelete)
+	if roleResponse.Status != http.StatusOK || json.Unmarshal(roleResponse.Body, &delegatedDeletionReplay) != nil ||
+		delegatedDeletionReplay != delegatedDeletion {
+		t.Fatal("current authority changed the exact same-ceiling Role deletion replay", roleResponse.Status)
+	}
+	var delegatedLifecycleProof bool
+	if err := admin.QueryRow(ctx, `SELECT count(*)=4
+		AND count(*) FILTER (WHERE actor_boundary_evidence->>'state'='BOUND'
+		  AND target_boundary_evidence->>'state'='ROLE_BOUND'
+		  AND authority_evidence_digest ~ '^sha256:[0-9a-f]{64}$')=4
+		AND iam.verified_role_lifecycle_change($1,$2,'retained-delegated-role-delete') IS NOT NULL
+		FROM iam.role_lifecycle_changes WHERE tenant_id=$1 AND actor_principal_id=$2 AND role_id=$3`,
+		delegatedUser.AccountID, delegatedUser.ID, delegatedRole.ID).Scan(&delegatedLifecycleProof); err != nil || !delegatedLifecycleProof {
+		t.Fatal("post-upgrade same-ceiling Role lifecycle lost its immutable proof", err)
 	}
 	predecessorReportResponse = performJSON(t, http.MethodGet,
 		endpoint+"/v1/account/security-reports/"+string(predecessorReportCreation.Metadata.ID), primary.Credential, nil)

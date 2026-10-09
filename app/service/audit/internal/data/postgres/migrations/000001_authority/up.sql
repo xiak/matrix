@@ -569,7 +569,8 @@ BEGIN
             COALESCE(submitted_event->>'authorityEvidenceDigest','') COLLATE "C"
               !~ '^sha256:[0-9a-f]{64}$'
             OR action_name NOT IN (
-              'iam.role.trust-set','iam.policy-attachment.created','iam.policy-attachment.revoked',
+              'iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.deleted','iam.role.trust-set',
+              'iam.policy-attachment.created','iam.policy-attachment.revoked',
               'iam.platform-policy-attachment.created','iam.platform-policy-attachment.revoked')))
        OR COALESCE(submitted_event->>'requestId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -641,7 +642,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        36::bigint,
+        37::bigint,
         transaction_timestamp()
 $function$;
 

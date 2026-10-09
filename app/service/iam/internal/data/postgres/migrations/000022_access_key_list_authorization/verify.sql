@@ -1,7 +1,7 @@
 SET LOCAL ROLE matrix_iam_owner;
 DO $verify_access_key_list_authorization$
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 80::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 81::bigint THEN
       RAISE EXCEPTION 'IAM access key list authorization schema version differs'; END IF;
     IF NOT iam.access_key_contract_ready() THEN
       RAISE EXCEPTION 'IAM access key list authorization contract differs'; END IF;

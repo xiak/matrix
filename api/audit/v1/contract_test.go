@@ -80,6 +80,20 @@ func TestCanonicalAuthorityEvidenceIsActionBound(t *testing.T) {
 	if _, _, err := CanonicalizeEvent(SourceIAM, roleTrust); err != nil {
 		t.Fatal("historical Role Trust event without evidence no longer decodes", err)
 	}
+	for _, action := range []Action{ActionIAMRoleUpdated, ActionIAMRoleDisabled, ActionIAMRoleEnabled, ActionIAMRoleDeleted} {
+		lifecycle := event
+		lifecycle.EventID = EventID("event-" + string(action))
+		lifecycle.Action = action
+		lifecycle.Target = TargetReference{Kind: TargetRole, ID: "role-lifecycle"}
+		lifecycle.AuthorityEvidenceDigest = "sha256:" + strings.Repeat("4", 64)
+		if _, _, err := CanonicalizeEvent(SourceIAM, lifecycle); err != nil {
+			t.Fatalf("current %s authority evidence was rejected: %v", action, err)
+		}
+		lifecycle.AuthorityEvidenceDigest = ""
+		if _, _, err := CanonicalizeEvent(SourceIAM, lifecycle); err != nil {
+			t.Fatalf("historical %s event without evidence no longer decodes: %v", action, err)
+		}
+	}
 }
 
 func TestSelfServiceFactsRequireTheActualTenantUser(t *testing.T) {

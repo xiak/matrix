@@ -1625,7 +1625,8 @@ AS $function$
 DECLARE
     local_recovery boolean := expected_action = 'iam.installation-primary.credentials-recovered';
     authority_evidence boolean := expected_action IN (
-        'iam.role.trust-set','iam.policy-attachment.created','iam.policy-attachment.revoked',
+        'iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.deleted','iam.role.trust-set',
+        'iam.policy-attachment.created','iam.policy-attachment.revoked',
         'iam.platform-policy-attachment.created','iam.platform-policy-attachment.revoked');
     platform_lifecycle boolean := expected_action IN (
         'iam.account.created','iam.account.disabled','iam.account.enabled','iam.account-root.credentials-recovered',

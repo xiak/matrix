@@ -1,7 +1,7 @@
 # FEAT-IAM-006：角色、信任与 STS
 
 - 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。必须同时消费公开schema数量边界修正`0567c8b2699521b137db0f8b69f17630c59f04fb`，其本地契约及三项独立CI也已通过。服务来源RoleSession发行、回执、当前PDP、binding撤销即时失效以及严格SERVICE来源的管理员目录/读取/代撤销，已累计固定到`a464299b`并通过本地真实PG18、累计Role管理、独立进程及整仓门禁；其[Verification 36779942782](https://github.com/xiak/matrix/actions/runs/36779942782)已核对精确SHA，14项全部completed/success。UX/UI、完整容量和发布仍未完成，整体006未验收。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。
-- 当前增量：IAM-ROLE-10受限Role委派后端及其重复屏障生命周期修正已固定为`d08db07ec62e1ff56c3a6dad9e341cdc41c3ebc0`；[Verification 37966295705](https://github.com/xiak/matrix/actions/runs/37966295705)已按精确SHA核实`completed/success`，17个job全部成功。该固定点没有改变公开请求结构，已交010/UX/UI owner独立接入；IAM-ROLE-11同上限Trust委派仍在本分支实施，不能由ROLE-10结果提前标记完成。
+- 当前增量：IAM-ROLE-10受限Role委派及屏障修正已固定为`d08db07ec62e1ff56c3a6dad9e341cdc41c3ebc0`并由[Verification 37966295705](https://github.com/xiak/matrix/actions/runs/37966295705)的17项成功作业接受；IAM-ROLE-11同上限Trust委派已固定推送为`68ff14dbccab87729885baa44aa7808d9d0bf1f9`，其本地真库、滚动前驱和独立进程门禁通过，但[Verification 37992491208](https://github.com/xiak/matrix/actions/runs/37992491208)只有3项非数据库作业成功，13项数据库作业均在测试启动前被Docker Hub鉴权/拉取504阻断，不能冒充独立CI成功。当前IAM-ROLE-12同上限生命周期委派正在IAM81/Audit37/PaaS3、完整发布契约revision29上收口；公开请求结构保持不变，UI仍由010/UX/UI owner独立接入，整体006未验收。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -20,6 +20,7 @@
 | IAM-ROLE-09 | 当前有效ServiceIdentity只能通过精确WorkloadRoleBinding承担SERVICE_LINKED Role；服务来源与USER来源严格互斥，解绑或来源失效影响下一请求且历史事实仍可验证 |
 | IAM-ROLE-10 | 租户内委派管理只能在当前 User permission boundary 上限内创建 Role 并管理其租户策略附件；新 Role 的同一上限必须与 Role、初始 Trust 和成功事实原子提交，不得暴露无上限窗口或客户端 boundary selector |
 | IAM-ROLE-11 | 租户内委派管理只能在当前 User permission boundary 与目标 Role permission boundary 精确同上限时修改该 ACTIVE CUSTOMER Role 的 Trust；当前权限、完成证明和服务端 capability 必须一致，不能借 Trust 修改获得 Root、平台或越 ceiling 权限 |
+| IAM-ROLE-12 | 租户内委派管理可在相同精确上限内更新 CUSTOMER Role 资料与最长会话、停复用及终态删除；每项均要求独立 Action、当前锁内证明和不可变完成证据，不能修改/移除 Role boundary、恢复旧 RoleSession 或把一个生命周期许可扩成完整 Role 管理 |
 
 ## 详细设计
 
@@ -129,6 +130,22 @@ IAM-ROLE-11复用现有`PUT /v1/roles/{roleId}/trust-policy`、`iam.role-trust.s
 本片沿用现有Role/Policy/IAM HTTP/PG、Audit proof和authorityprocess owner，最低验收为：同ceiling管理员修改Trust后新受信USER可沿原AssumeRole路径取得受boundary约束的RoleSession；精确重放不增加版本/事实；缺失或不同ceiling、平台绑定actor、错误Role/Account/resourceVersion/Session、停用或SERVICE_LINKED目标均无部分状态。Trust修改分别与actor boundary移除、ceiling默认版本切换、Root移除Role boundary及另一Role修订做真实锁等待，只能完整提交或完整拒绝且无`40P01`。篡改完成证明、原decision、boundary evidence、TrustVersion或outbox必须失败关闭。受限数据库身份不能直读写证据或调用helper；当前唯一滚动前驱保留Root Trust历史而不补委派证明。公开请求/OpenAPI保持不变，UI由010 owner在固定后端上独立完成。
 
 2026-10-10候选实际形状为IAM80/Audit36/PaaS3、完整发布契约revision28。任务独享PostgreSQL 18上完整Role聚焦`-race -p 2`门禁包72.085秒通过同上限详情/目录capability、Trust写与精确重放、新受信USER实际取得且只能使用boundary内RoleSession、不同上限/平台actor/撤除上限后的新写拒绝、后续Role修订冲突、Trust分别与Role修订、Role boundary、Policy默认版本和actor boundary的锁竞争、完成证明/事实一一对应，以及完成证明、原decision、boundary evidence、TrustVersion和outbox的隔离篡改失败关闭。额外确定性屏障先让默认版本切换提交，再释放已完成旧PDP求值的Trust请求；只有重新求值并把actor/target证明都绑定新默认版本才可成功。先提交actor boundary移除后，旧请求明确拒绝且无receipt/事实。Audit真库`-race`为1.57秒（包4.461秒），证明新Trust evidence进入唯一canonical且旧无字段事件仍可入链。固定IAM79→80真实程序门禁107.71秒（包109.940秒）通过：旧Root实际写入两代Trust后迁移仍保持全部新证明列为NULL和原事实字节，原Root Trust request精确重放仍返回原结果，当前同上限USER再写Trust时才生成可验证证明。双IAM/Audit/PaaS/dispatcher独立进程`-race`276.35秒（包279.825秒）继续通过受限运行身份、真实业务权限、重启、outbox与审计链；全仓和独立CI仍待运行，不提前接受ROLE-11或整体006。
+
+### 同上限角色生命周期委派
+
+IAM-ROLE-12沿用现有`PATCH /v1/roles/{roleId}`、`POST /v1/roles/{roleId}:set-status`和`DELETE /v1/roles/{roleId}`，不增加Account、boundary、actor或Session selector。非Root调用者只有在对应`iam.role.update`、`iam.role.set-status`或`iam.role.delete`对精确ROLE实例当前Allow，并且其唯一CUSTOMER/TENANT User boundary与目标CUSTOMER Role的当前boundary在Policy、默认版本、摘要、合同与编译承诺上完全相同时才可提交。调用者必须是当前ACTIVE USER、有效登录Session、非forced-change且没有INSTALLATION附件；SYSTEM/SERVICE_LINKED/跨Account/已删除Role、缺失或不同ceiling及不确定状态全部失败关闭。
+
+三个动作保持独立授权，不形成隐式“Role管理员”角色。资料更新只写既有name、description、tags和maxSessionDurationSeconds；最大时长变化沿现有Role安全代际使旧RoleSession下一请求失效，纯显示资料仍只推进公开修订和目录水位。停用和重新启用每次都推进安全代际，因此停用前的RoleSession不能因重新启用而复活。终态删除沿既有事务撤销全部活动租户策略附件和Role boundary，并使全部RoleSession失效；它不删除Account资源、工作负载、Operation或历史审计。非Root始终不能设置、替换或移除Role boundary；要改变ceiling只能由受保护Root路径完成，不能用删后同名重建保留原Role ID或凭据。
+
+新生命周期写入使用一个现有Role owner下的不可变完成关系，而不是为三个路由各造表。关系按`(accountId, actorPrincipalId, requestId)`唯一，封闭记录operation、roleId、原/结果resourceVersion、输入承诺、非敏感结果、原decision/event、actor/target boundary evidence、authorityEvidenceDigest和完成时间。结果只证明该事务已提交，不是后续写入permit；UPDATE/STATUS精确重放仅在Role仍处于该结果修订时返回原结果，Role后来发生其他修订则409。DELETE作为终态可返回同一删除结果。旧Root历史保持原Audit字节且不回填委派证据；新Root与受限写入共用同一完成形状，以避免并行实现。
+
+Audit仍使用既有`iam.role.updated/disabled/enabled/deleted`事实和ROLE目标，只给这些由当前事务生成的新事实增加按action封闭的`authorityEvidenceDigest`；不能改写旧事件或把生命周期证明复用到Trust、附件、boundary。原decision证明调用者动作，目标证据证明发生时的精确Role ceiling，两者与请求摘要、operation、roleId及原/结果修订共同进入单一摘要。事实、完成关系、Role/附件/boundary变化必须同事务提交；任一末端失败全部回滚。历史producer校验使用发生时不可变证据，不重新执行当前权限，但producer凭据仍须当前有效。
+
+锁序延续现有真实writer：Account后按稳定ID锁actor Principal并重验credential/Session；受限路径先锁actor User boundary，再锁目标Role、其Role boundary和共同ceiling Policy，取得Policy锁后再次核对decision中的当前boundary。删除随后按稳定ID锁并撤销目标Role附件和boundary；不得反向取得另一个USER或把自动重试当成无死锁证据。Root没有actor boundary，但仍按Role、Policy/关系的既有次序。与Trust、附件、Role boundary、ceiling默认切换、actor boundary移除及另一生命周期命令的竞争，只能得到一个完整串行终态或完整拒绝。
+
+最低验收沿用当前Role真库和独立进程owner：同ceiling管理员分别更新资料/最大时长、停用、启用和删除；详情/目录capability与真实写入一致，精确重放及后续修订冲突明确。最大时长、停复用和删除后旧RoleSession下一请求拒绝且重新启用不复活；新承担仅在当前ACTIVE/Trust/附件/boundary完整时成功。不同/缺失/退役ceiling、平台绑定actor、错误Account/Role/resourceVersion/Session、SERVICE_LINKED与boundary动作均无Role、关系、完成或事实部分状态。完成、decision、两侧boundary evidence、结果或outbox任一篡改使验证失败；受限runtime不能直接读写证明或调用helper。真实并发断言无`40P01`、无幽灵附件/boundary/RoleSession，滚动前驱保留旧Root生命周期事实而不补造完成关系。公开OpenAPI请求保持不变，UI仅消费服务端capability并继续由010/UX/UI owner实现。
+
+2026-10-10候选实际形状为IAM81/Audit37/PaaS3、完整发布契约revision29。任务独享PostgreSQL 18上的完整Role聚焦`-race -p 2`门禁95.88秒（包99.492秒）通过：同上限USER的资料/最长会话、停用、启用、终态删除及精确重放；停用态仍精确投影update/set-status/delete，Trust、附件和AssumeRole关闭，管理员可从该状态安全启用。旧RoleSession在安全代际改变后立即拒绝且重新启用不复活；四条完成关系与事实一一对应，删除同时封闭附件和Role boundary。新增确定性屏障证明旧PDP求值不能越过已提交的ceiling默认版本或actor boundary变化：默认切换后事务只可按新版本重新求值并绑定两侧新证据，actor boundary移除后明确403且零receipt/成功事实。生命周期写分别与Role boundary移除、Trust写、策略附件创建及另一生命周期写在真实锁上竞争，只有一个完整串行结果；无`40P01`、部分证明或开放关系。不同ceiling、跨Account、平台绑定actor及撤除上限后的调用均失败关闭；末端outbox失败回滚全部效果，receipt、原decision、boundary evidence、结果或outbox任一隔离篡改均以SQLSTATE 23514关闭。Audit真库`-race`1.70秒（包4.388秒）证明四类新事实进入唯一canonical且旧无证明字段事件仍可入链；固定IAM80 `68ff14dbccab87729885baa44aa7808d9d0bf1f9`→IAM81真实程序门禁164.78秒（包168.243秒）通过，旧Root实际生命周期行与事实字节保持且不补完成关系，升级后同上限USER才生成可验证证明。双IAM、Audit、PaaS和dispatcher独立进程`-race`257.44秒（包260.887秒）继续通过受限运行身份、提交后失联恢复、重启、真实业务权限、outbox与审计链；全仓无缓存race、vet、模块校验、API重生成零差异及Linux amd64/CGO关闭构建通过。签名发布和本候选独立CI仍待本片固定后运行，不能据此接受整体006。
 
 ### R2发行、当前权限与历史边界
 

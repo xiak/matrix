@@ -198,6 +198,85 @@ ALTER TABLE iam.role_trust_versions ADD CONSTRAINT role_trust_versions_event_fk
   FOREIGN KEY(tenant_id,event_id) REFERENCES iam.audit_outbox(tenant_id,event_id) DEFERRABLE INITIALLY DEFERRED;
 CREATE UNIQUE INDEX IF NOT EXISTS role_trust_versions_actor_request_uq
   ON iam.role_trust_versions(tenant_id,actor_principal_id,request_id) WHERE actor_principal_id IS NOT NULL;
+
+-- A lifecycle completion records the exact authority that committed one Role
+-- revision. It is historical evidence, never a reusable management permit.
+CREATE OR REPLACE FUNCTION iam.role_lifecycle_evidence_valid(actor_evidence jsonb,target_evidence jsonb,expected_version bigint)
+RETURNS boolean LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF expected_version NOT BETWEEN 1 AND 9007199254740990
+      OR jsonb_typeof(actor_evidence)<>'object' OR jsonb_typeof(target_evidence)<>'object' THEN RETURN false; END IF;
+    IF actor_evidence->>'state'='ROOT' THEN
+      RETURN actor_evidence-ARRAY['state','userResourceVersion']='{}'::jsonb
+        AND jsonb_typeof(actor_evidence->'userResourceVersion')='number'
+        AND COALESCE(actor_evidence->>'userResourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+        AND target_evidence='{"state":"ROOT"}'::jsonb;
+    END IF;
+    RETURN actor_evidence->>'state'='BOUND'
+      AND actor_evidence-ARRAY['state','userResourceVersion','boundaryId','resourceVersion','version','contractVersion','compilation']='{}'::jsonb
+      AND jsonb_typeof(actor_evidence->'userResourceVersion')='number'
+      AND jsonb_typeof(actor_evidence->'resourceVersion')='number'
+      AND COALESCE(actor_evidence->>'userResourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+      AND COALESCE(actor_evidence->>'resourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+      AND COALESCE(actor_evidence->>'boundaryId','') COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND jsonb_typeof(actor_evidence->'version')='object'
+      AND (actor_evidence->'version') ?& ARRAY['policyId','versionId','contentDigest']
+      AND (actor_evidence->'version')-ARRAY['policyId','versionId','contentDigest']='{}'::jsonb
+      AND ((actor_evidence->'contractVersion'='1'::jsonb AND NOT actor_evidence ? 'compilation')
+        OR (actor_evidence->'contractVersion'='2'::jsonb AND jsonb_typeof(actor_evidence->'compilation')='object'))
+      AND target_evidence->>'state'='ROLE_BOUND'
+      AND target_evidence-ARRAY['state','roleResourceVersion','boundaryId','resourceVersion','ceilingPolicyId','version','contractVersion','compilation']='{}'::jsonb
+      AND jsonb_typeof(target_evidence->'roleResourceVersion')='number'
+      AND jsonb_typeof(target_evidence->'resourceVersion')='number'
+      AND COALESCE(target_evidence->>'roleResourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+      AND COALESCE(target_evidence->>'resourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+      AND COALESCE(target_evidence->>'boundaryId','') COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND target_evidence->>'roleResourceVersion'=expected_version::text
+      AND target_evidence->>'ceilingPolicyId'=actor_evidence#>>'{version,policyId}'
+      AND target_evidence->>'ceilingPolicyId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND target_evidence->'version'=actor_evidence->'version'
+      AND target_evidence->'contractVersion'=actor_evidence->'contractVersion'
+      AND target_evidence->'compilation' IS NOT DISTINCT FROM actor_evidence->'compilation';
+END $function$;
+
+CREATE TABLE IF NOT EXISTS iam.role_lifecycle_changes (
+    tenant_id text COLLATE "C" NOT NULL,
+    actor_principal_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    operation text COLLATE "C" NOT NULL,
+    role_id text COLLATE "C" NOT NULL,
+    expected_resource_version bigint NOT NULL,
+    result_resource_version bigint NOT NULL,
+    input_commitment text COLLATE "C" NOT NULL,
+    result_document jsonb NOT NULL,
+    decision_id text COLLATE "C" NOT NULL,
+    event_id text COLLATE "C" NOT NULL,
+    actor_boundary_evidence jsonb NOT NULL,
+    target_boundary_evidence jsonb NOT NULL,
+    authority_evidence_digest text COLLATE "C" NOT NULL,
+    completed_at timestamptz(6) NOT NULL,
+    CONSTRAINT role_lifecycle_changes_pk PRIMARY KEY(tenant_id,actor_principal_id,request_id),
+    CONSTRAINT role_lifecycle_changes_event_uq UNIQUE(tenant_id,event_id),
+    CONSTRAINT role_lifecycle_changes_role_fk FOREIGN KEY(tenant_id,role_id) REFERENCES iam.roles(tenant_id,id),
+    CONSTRAINT role_lifecycle_changes_actor_fk FOREIGN KEY(tenant_id,actor_principal_id) REFERENCES iam.principals(tenant_id,id),
+    CONSTRAINT role_lifecycle_changes_decision_fk FOREIGN KEY(tenant_id,decision_id) REFERENCES iam.authorization_decisions(tenant_id,id),
+    CONSTRAINT role_lifecycle_changes_event_fk FOREIGN KEY(tenant_id,event_id) REFERENCES iam.audit_outbox(tenant_id,event_id) DEFERRABLE INITIALLY DEFERRED,
+    CONSTRAINT role_lifecycle_changes_shape CHECK (
+      operation IN ('UPDATE','ENABLE','DISABLE','DELETE')
+      AND tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND actor_principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND role_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND input_commitment COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+      AND authority_evidence_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+      AND expected_resource_version BETWEEN 1 AND 9007199254740990
+      AND result_resource_version=expected_resource_version+1
+      AND jsonb_typeof(result_document)='object'
+      AND iam.role_lifecycle_evidence_valid(actor_boundary_evidence,target_boundary_evidence,expected_resource_version)
+      AND isfinite(completed_at))
+);
 DO $role_fk$ BEGIN
     IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='iam.roles'::regclass AND conname='roles_current_trust_fk') THEN
         ALTER TABLE iam.roles ADD CONSTRAINT roles_current_trust_fk FOREIGN KEY(tenant_id,id,current_trust_version_id)
@@ -258,7 +337,7 @@ DROP TRIGGER IF EXISTS roles_guard_change ON iam.roles;
 CREATE TRIGGER roles_guard_change BEFORE UPDATE ON iam.roles FOR EACH ROW EXECUTE FUNCTION iam.guard_role_change();
 ALTER TABLE iam.roles ENABLE ALWAYS TRIGGER roles_guard_change;
 DO $role_protection$ DECLARE table_name text; BEGIN
-    FOREACH table_name IN ARRAY ARRAY['roles','role_trust_versions','role_permission_boundaries'] LOOP
+    FOREACH table_name IN ARRAY ARRAY['roles','role_trust_versions','role_permission_boundaries','role_lifecycle_changes'] LOOP
         EXECUTE format('ALTER TABLE iam.%I ENABLE ROW LEVEL SECURITY',table_name);
         EXECUTE format('ALTER TABLE iam.%I FORCE ROW LEVEL SECURITY',table_name);
         EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON iam.%I',table_name);
@@ -274,6 +353,9 @@ END $role_protection$;
 DROP TRIGGER IF EXISTS trust_cannot_update ON iam.role_trust_versions;
 CREATE TRIGGER trust_cannot_update BEFORE UPDATE ON iam.role_trust_versions FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
 ALTER TABLE iam.role_trust_versions ENABLE ALWAYS TRIGGER trust_cannot_update;
+DROP TRIGGER IF EXISTS lifecycle_cannot_update ON iam.role_lifecycle_changes;
+CREATE TRIGGER lifecycle_cannot_update BEFORE UPDATE ON iam.role_lifecycle_changes FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.role_lifecycle_changes ENABLE ALWAYS TRIGGER lifecycle_cannot_update;
 
 -- Sparse discovery needs an O(1), non-ABA directory watermark. This is not
 -- an account authority revision and readers never lock it for update. All
@@ -558,7 +640,7 @@ BEGIN
         JOIN iam.role_permission_boundaries boundary ON boundary.tenant_id=role_value.tenant_id
           AND boundary.role_id=role_value.id AND boundary.revoked_at IS NULL
         WHERE role_value.tenant_id=tenant AND role_value.id IN (SELECT value FROM jsonb_array_elements_text(role_ids))
-          AND role_value.management='CUSTOMER' AND role_value.status='ACTIVE' AND role_value.deleted_at IS NULL
+          AND role_value.management='CUSTOMER' AND role_value.status IN ('ACTIVE','DISABLED') AND role_value.deleted_at IS NULL
           AND boundary.policy_id=ceiling.id ORDER BY role_value.id) candidate;
     RETURN result;
 END $function$;
@@ -651,57 +733,288 @@ BEGIN
     RETURN iam.role_snapshot(tenant,role_id);
 END $function$;
 
+-- Lock the authenticated writer and its exact decision-side ceiling before a
+-- Role lifecycle target. Root is represented explicitly; a delegated USER
+-- must keep one current tenant boundary and may not also carry installation
+-- authority. The target and common ceiling are locked by the next helper.
+CREATE OR REPLACE FUNCTION iam.lock_role_lifecycle_actor(
+  tenant text,actor text,actor_session_id text,decision text,requested_action text,target_role_id text
+)
+RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE actor_version bigint; actor_is_root boolean; recorded jsonb;
+BEGIN
+    IF COALESCE(actor_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR requested_action NOT IN ('iam.role.update','iam.role.set-status','iam.role.delete')
+      OR COALESCE(target_role_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+      RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='role lifecycle actor input is invalid'; END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='role account is unavailable'; END IF;
+    PERFORM 1 FROM iam.principals principal WHERE (principal.tenant_id,principal.id)=(tenant,actor) FOR NO KEY UPDATE;
+    SELECT principal.resource_version,EXISTS(SELECT 1 FROM iam.account_roots root
+        WHERE (root.account_id,root.principal_id)=(tenant,principal.id))
+      INTO actor_version,actor_is_root FROM iam.principals principal
+      WHERE (principal.tenant_id,principal.id)=(tenant,actor) AND principal.principal_type='USER'
+        AND principal.status='ACTIVE' AND principal.deleted_at IS NULL AND NOT principal.must_change_password;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='role publisher is unavailable'; END IF;
+    PERFORM 1 FROM iam.user_credentials credential JOIN iam.sessions session_value
+      ON (session_value.tenant_id,session_value.principal_id)=(credential.tenant_id,credential.principal_id)
+      WHERE (credential.tenant_id,credential.principal_id)=(tenant,actor) AND session_value.id=actor_session_id
+        AND session_value.status='ACTIVE' AND session_value.revoked_at IS NULL
+        AND session_value.expires_at>clock_timestamp() AND session_value.credential_version=credential.credential_version
+        AND (actor_is_root OR (session_value.last_activity_at IS NOT NULL AND session_value.idle_timeout_seconds IS NOT NULL
+          AND session_value.last_activity_at+make_interval(secs=>session_value.idle_timeout_seconds)>clock_timestamp()))
+      FOR SHARE OF credential,session_value;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='role session is unavailable'; END IF;
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,requested_action,'ROLE',target_role_id,'INSTANCE',NULL);
+    SELECT value.boundary_evidence INTO recorded FROM iam.authorization_decisions value
+      WHERE (value.tenant_id,value.id)=(tenant,decision) AND value.principal_id=actor
+        AND value.action_name=requested_action AND value.target_kind='ROLE' AND value.target_id=target_role_id
+        AND value.resource_mode='INSTANCE' AND value.allowed;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='role lifecycle decision is unavailable'; END IF;
+    IF actor_is_root THEN
+      IF recorded->>'state' IS DISTINCT FROM 'NONE' OR recorded->'userResourceVersion' IS DISTINCT FROM to_jsonb(actor_version) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='root role lifecycle authority is unavailable'; END IF;
+      PERFORM iam.assert_current_user_boundary_evidence(tenant,actor,requested_action,recorded);
+      RETURN jsonb_build_object('state','ROOT','userResourceVersion',actor_version);
+    END IF;
+    IF recorded->>'state' IS DISTINCT FROM 'BOUND'
+      OR EXISTS(SELECT 1 FROM iam.policy_attachments attachment
+        WHERE attachment.tenant_id=tenant AND attachment.target_kind='USER' AND attachment.target_id=actor
+          AND attachment.authority_scope='INSTALLATION' AND attachment.revoked_at IS NULL) THEN
+      RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated role lifecycle authority is unavailable'; END IF;
+    PERFORM boundary.id FROM iam.user_permission_boundaries boundary
+      WHERE boundary.tenant_id=tenant AND boundary.user_id=actor AND boundary.id=recorded->>'boundaryId'
+        AND boundary.policy_id=recorded#>>'{version,policyId}'
+        AND boundary.resource_version=(recorded->>'resourceVersion')::bigint AND boundary.revoked_at IS NULL
+      FOR NO KEY UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated role lifecycle ceiling is unavailable'; END IF;
+    RETURN recorded;
+EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
+    RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated role lifecycle authority is unavailable';
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.lock_role_lifecycle_target(
+  tenant text,actor text,requested_action text,target_role_id text,actor_evidence jsonb
+)
+RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE stored iam.roles%ROWTYPE; role_boundary iam.role_permission_boundaries%ROWTYPE; ceiling iam.policies%ROWTYPE;
+BEGIN
+    SELECT * INTO stored FROM iam.roles role_value
+      WHERE (role_value.tenant_id,role_value.id)=(tenant,target_role_id) FOR UPDATE;
+    IF NOT FOUND OR stored.management<>'CUSTOMER' OR stored.deleted_at IS NOT NULL THEN
+      RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='role lifecycle target is unavailable'; END IF;
+    IF actor_evidence->>'state'='ROOT' THEN RETURN '{"state":"ROOT"}'::jsonb; END IF;
+    IF actor_evidence->>'state'<>'BOUND' THEN
+      RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated role lifecycle target is unavailable'; END IF;
+    SELECT * INTO role_boundary FROM iam.role_permission_boundaries boundary
+      WHERE boundary.tenant_id=tenant AND boundary.role_id=target_role_id
+        AND boundary.revoked_at IS NULL FOR NO KEY UPDATE;
+    IF NOT FOUND OR role_boundary.policy_id IS DISTINCT FROM actor_evidence#>>'{version,policyId}' THEN
+      RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated role lifecycle target ceiling is unavailable'; END IF;
+    SELECT * INTO ceiling FROM iam.policies policy WHERE policy.id=role_boundary.policy_id
+      AND policy.owner_tenant_id=tenant AND policy.management='CUSTOMER'
+      AND policy.authority_scope='TENANT' AND policy.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND OR ceiling.default_version_id IS DISTINCT FROM actor_evidence#>>'{version,versionId}' THEN
+      RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated role lifecycle target ceiling is unavailable'; END IF;
+    PERFORM iam.assert_current_user_boundary_evidence(tenant,actor,requested_action,actor_evidence);
+    RETURN jsonb_strip_nulls(jsonb_build_object('state','ROLE_BOUND','roleResourceVersion',stored.resource_version,
+      'boundaryId',role_boundary.id,'resourceVersion',role_boundary.resource_version,
+      'ceilingPolicyId',role_boundary.policy_id,'version',actor_evidence->'version',
+      'contractVersion',actor_evidence->'contractVersion','compilation',actor_evidence->'compilation'));
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.role_lifecycle_authority_evidence_digest(
+  input_commitment text,operation text,role_id text,expected_version bigint,result_version bigint,
+  result_document jsonb,actor_evidence jsonb,target_evidence jsonb
+)
+RETURNS text LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE evidence jsonb;
+BEGIN
+    IF COALESCE(input_commitment,'') COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+      OR operation NOT IN ('UPDATE','ENABLE','DISABLE','DELETE')
+      OR COALESCE(role_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR expected_version NOT BETWEEN 1 AND 9007199254740990 OR result_version<>expected_version+1
+      OR jsonb_typeof(result_document)<>'object'
+      OR NOT iam.role_lifecycle_evidence_valid(actor_evidence,target_evidence,expected_version) THEN
+      RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='role lifecycle authority evidence is invalid'; END IF;
+    evidence:=jsonb_build_object('actorBoundary',actor_evidence,'expectedResourceVersion',expected_version,
+      'operation',operation,'resultDocument',result_document,'resultResourceVersion',result_version,
+      'roleId',role_id,'targetBoundary',target_evidence);
+    RETURN 'sha256:'||encode(sha256(convert_to('matrix.iam.role-lifecycle-authority-evidence.v1','UTF8')
+      ||decode('00','hex')||convert_to(input_commitment,'UTF8')||decode('00','hex')||convert_to(evidence::text,'UTF8')),'hex');
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.verified_role_lifecycle_change(tenant text,actor text,original_request text)
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE receipt iam.role_lifecycle_changes%ROWTYPE; stored iam.roles%ROWTYPE;
+    recorded iam.authorization_decisions%ROWTYPE; event jsonb; expected_action text; expected_event text;
+    expected_result jsonb; expected_authority text; delegation_valid boolean;
+BEGIN
+    SELECT * INTO receipt FROM iam.role_lifecycle_changes value
+      WHERE (value.tenant_id,value.actor_principal_id,value.request_id)=(tenant,actor,original_request);
+    IF NOT FOUND THEN RETURN NULL; END IF;
+    SELECT * INTO stored FROM iam.roles role_value WHERE (role_value.tenant_id,role_value.id)=(tenant,receipt.role_id);
+    SELECT * INTO recorded FROM iam.authorization_decisions value
+      WHERE (value.tenant_id,value.id)=(tenant,receipt.decision_id);
+    SELECT value.event_document INTO event FROM iam.audit_outbox value
+      WHERE (value.tenant_id,value.event_id)=(tenant,receipt.event_id);
+    expected_action:=CASE receipt.operation WHEN 'UPDATE' THEN 'iam.role.update'
+      WHEN 'ENABLE' THEN 'iam.role.set-status' WHEN 'DISABLE' THEN 'iam.role.set-status' ELSE 'iam.role.delete' END;
+    expected_event:=CASE receipt.operation WHEN 'UPDATE' THEN 'iam.role.updated'
+      WHEN 'ENABLE' THEN 'iam.role.enabled' WHEN 'DISABLE' THEN 'iam.role.disabled' ELSE 'iam.role.deleted' END;
+    expected_result:=CASE WHEN receipt.operation='DELETE' THEN jsonb_build_object(
+      'apiVersion','iam.matrix.xiak.com/v1','kind','RoleDeletion','accountId',stored.tenant_id,'id',stored.id,
+      'name',stored.metadata->>'name','resourceVersion',stored.resource_version,
+      'revokedPolicyAttachments',stored.revoked_attachments_count,'deletedAt',stored.deleted_at)
+      ELSE iam.role_snapshot(tenant,receipt.role_id) END;
+    expected_authority:=iam.role_lifecycle_authority_evidence_digest(receipt.input_commitment,receipt.operation,
+      receipt.role_id,receipt.expected_resource_version,receipt.result_resource_version,receipt.result_document,
+      receipt.actor_boundary_evidence,receipt.target_boundary_evidence);
+    delegation_valid:=CASE
+      WHEN receipt.actor_boundary_evidence->>'state'='ROOT' AND receipt.target_boundary_evidence='{"state":"ROOT"}'::jsonb THEN
+        EXISTS(SELECT 1 FROM iam.account_roots root
+          WHERE (root.account_id,root.principal_id)=(receipt.tenant_id,receipt.actor_principal_id))
+        AND EXISTS(SELECT 1 FROM iam.principals principal
+          WHERE (principal.tenant_id,principal.id)=(receipt.tenant_id,receipt.actor_principal_id)
+            AND principal.resource_version>=(receipt.actor_boundary_evidence->>'userResourceVersion')::bigint)
+        AND recorded.boundary_evidence->>'state'='NONE'
+        AND recorded.boundary_evidence->'userResourceVersion'=receipt.actor_boundary_evidence->'userResourceVersion'
+      WHEN receipt.actor_boundary_evidence->>'state'='BOUND'
+        AND receipt.target_boundary_evidence->>'state'='ROLE_BOUND' THEN
+        receipt.actor_boundary_evidence=recorded.boundary_evidence
+        AND iam.recorded_policy_version_matches(receipt.actor_boundary_evidence)
+        AND EXISTS(SELECT 1 FROM iam.principals principal
+          WHERE (principal.tenant_id,principal.id)=(receipt.tenant_id,receipt.actor_principal_id)
+            AND principal.resource_version>=(receipt.actor_boundary_evidence->>'userResourceVersion')::bigint)
+        AND EXISTS(SELECT 1 FROM iam.user_permission_boundaries boundary
+          WHERE boundary.tenant_id=receipt.tenant_id AND boundary.user_id=receipt.actor_principal_id
+            AND boundary.id=receipt.actor_boundary_evidence->>'boundaryId'
+            AND boundary.policy_id=receipt.actor_boundary_evidence#>>'{version,policyId}'
+            AND boundary.resource_version>=(receipt.actor_boundary_evidence->>'resourceVersion')::bigint
+            AND boundary.created_at<=receipt.completed_at
+            AND (boundary.revoked_at IS NULL OR boundary.revoked_at>=receipt.completed_at))
+        AND EXISTS(SELECT 1 FROM iam.role_permission_boundaries boundary
+          WHERE boundary.tenant_id=receipt.tenant_id AND boundary.role_id=receipt.role_id
+            AND boundary.id=receipt.target_boundary_evidence->>'boundaryId'
+            AND boundary.policy_id=receipt.target_boundary_evidence->>'ceilingPolicyId'
+            AND boundary.resource_version>=(receipt.target_boundary_evidence->>'resourceVersion')::bigint
+            AND boundary.created_at<=receipt.completed_at
+            AND (boundary.revoked_at IS NULL OR boundary.revoked_at>=receipt.completed_at))
+      ELSE false END;
+    IF stored.id IS NULL OR recorded.id IS NULL OR event IS NULL OR NOT delegation_valid
+      OR stored.management<>'CUSTOMER' OR stored.resource_version IS DISTINCT FROM receipt.result_resource_version
+      OR stored.updated_at IS DISTINCT FROM receipt.completed_at
+      OR (receipt.operation='DELETE' AND stored.deleted_at IS DISTINCT FROM receipt.completed_at)
+      OR (receipt.operation<>'DELETE' AND stored.deleted_at IS NOT NULL)
+      OR expected_result IS DISTINCT FROM receipt.result_document
+      OR recorded.principal_id IS DISTINCT FROM receipt.actor_principal_id OR NOT recorded.allowed
+      OR recorded.action_name IS DISTINCT FROM expected_action OR recorded.target_kind<>'ROLE'
+      OR recorded.target_id IS DISTINCT FROM receipt.role_id OR recorded.request_id IS DISTINCT FROM receipt.request_id
+      OR recorded.resource_mode<>'INSTANCE'
+      OR event->>'tenantId' IS DISTINCT FROM receipt.tenant_id OR event ? 'installationId'
+      OR event#>>'{actor,type}'<>'USER' OR event#>>'{actor,id}' IS DISTINCT FROM receipt.actor_principal_id
+      OR event->>'action' IS DISTINCT FROM expected_event OR event#>>'{target,kind}'<>'ROLE'
+      OR event#>>'{target,id}' IS DISTINCT FROM receipt.role_id OR event->>'result'<>'SUCCEEDED'
+      OR event->>'requestId' IS DISTINCT FROM receipt.request_id
+      OR event->>'requestDigest' IS DISTINCT FROM receipt.input_commitment
+      OR event->>'authorityEvidenceDigest' IS DISTINCT FROM receipt.authority_evidence_digest
+      OR event->>'iamDecisionId' IS DISTINCT FROM receipt.decision_id
+      OR (event->>'occurredAt')::timestamptz IS DISTINCT FROM receipt.completed_at
+      OR receipt.authority_evidence_digest IS DISTINCT FROM expected_authority THEN
+      RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='role lifecycle change evidence is unavailable'; END IF;
+    RETURN receipt.result_document;
+EXCEPTION WHEN invalid_text_representation OR datetime_field_overflow OR numeric_value_out_of_range THEN
+    RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='role lifecycle change evidence is unavailable';
+END $function$;
+
 CREATE OR REPLACE FUNCTION iam.update_role(tenant text,actor text,decision text,role_id text,expected_version bigint,metadata jsonb,event jsonb,actor_session_id text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE stored iam.roles%ROWTYPE;
+DECLARE stored iam.roles%ROWTYPE; receipt iam.role_lifecycle_changes%ROWTYPE; actor_evidence jsonb; target_evidence jsonb;
+    result jsonb; authority_digest text; effective_now timestamptz(6):=transaction_timestamp();
 BEGIN
     IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740991 OR NOT iam.role_metadata_valid(metadata) THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role update input is invalid'; END IF;
-    PERFORM iam.assert_role_writer(tenant,actor,actor_session_id,NULL);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.role.update','ROLE',role_id,'INSTANCE',NULL);
+    actor_evidence:=iam.lock_role_lifecycle_actor(tenant,actor,actor_session_id,decision,'iam.role.update',role_id);
+    PERFORM iam.assert_role_intent(tenant,actor,event);
+    SELECT * INTO receipt FROM iam.role_lifecycle_changes value
+      WHERE (value.tenant_id,value.actor_principal_id,value.request_id)=(tenant,actor,event->>'requestId') FOR SHARE;
+    IF FOUND THEN
+      IF receipt.operation<>'UPDATE' OR receipt.role_id<>role_id OR receipt.expected_resource_version<>expected_version
+        OR receipt.input_commitment IS DISTINCT FROM event->>'requestDigest' THEN
+        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='role update intent conflicts'; END IF;
+      SELECT * INTO stored FROM iam.roles value WHERE (value.tenant_id,value.id)=(tenant,role_id) FOR UPDATE;
+      IF stored.resource_version IS DISTINCT FROM receipt.result_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='role update intent conflicts'; END IF;
+      RETURN iam.verified_role_lifecycle_change(tenant,actor,event->>'requestId');
+    END IF;
+    target_evidence:=iam.lock_role_lifecycle_target(tenant,actor,'iam.role.update',role_id,actor_evidence);
+    SELECT * INTO stored FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id FOR UPDATE;
+    IF stored.resource_version<>expected_version OR stored.resource_version=9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role revision conflicts'; END IF;
+    UPDATE iam.roles r SET metadata=update_role.metadata,resource_version=r.resource_version+1,updated_at=effective_now
+      WHERE r.tenant_id=tenant AND r.id=role_id;
+    result:=iam.role_snapshot(tenant,role_id);
+    authority_digest:=iam.role_lifecycle_authority_evidence_digest(event->>'requestDigest','UPDATE',role_id,
+      expected_version,expected_version+1,result,actor_evidence,target_evidence);
+    event:=jsonb_set(event,'{authorityEvidenceDigest}',to_jsonb(authority_digest),true);
     PERFORM iam.assert_audit_event(event,tenant,'iam.role.updated','ROLE',role_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role decision correlation is invalid'; END IF;
-    PERFORM iam.assert_role_intent(tenant,actor,event);
-    SELECT * INTO stored FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id FOR UPDATE;
-    IF NOT FOUND OR stored.deleted_at IS NOT NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role is unavailable'; END IF;
-    IF stored.resource_version=expected_version+1 AND stored.metadata=metadata AND iam.role_event_matches(tenant,actor,event) THEN
-        RETURN iam.role_snapshot(tenant,role_id);
-    END IF;
-    IF stored.resource_version<>expected_version OR stored.resource_version=9007199254740991 THEN
-        RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role revision conflicts'; END IF;
-    UPDATE iam.roles r SET metadata=update_role.metadata,resource_version=r.resource_version+1,updated_at=transaction_timestamp()
-      WHERE r.tenant_id=tenant AND r.id=role_id;
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
-      VALUES(tenant,event->>'eventId',event,transaction_timestamp(),transaction_timestamp(),transaction_timestamp());
-    RETURN iam.role_snapshot(tenant,role_id);
+      VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
+    INSERT INTO iam.role_lifecycle_changes(tenant_id,actor_principal_id,request_id,operation,role_id,
+      expected_resource_version,result_resource_version,input_commitment,result_document,decision_id,event_id,
+      actor_boundary_evidence,target_boundary_evidence,authority_evidence_digest,completed_at)
+      VALUES(tenant,actor,event->>'requestId','UPDATE',role_id,expected_version,expected_version+1,
+        event->>'requestDigest',result,decision,event->>'eventId',actor_evidence,target_evidence,authority_digest,effective_now);
+    RETURN iam.verified_role_lifecycle_change(tenant,actor,event->>'requestId');
 END $function$;
 
 CREATE OR REPLACE FUNCTION iam.set_role_status(tenant text,actor text,decision text,role_id text,expected_version bigint,requested_status text,event jsonb,actor_session_id text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE stored iam.roles%ROWTYPE; event_action text;
+DECLARE stored iam.roles%ROWTYPE; receipt iam.role_lifecycle_changes%ROWTYPE; event_action text; operation text;
+    actor_evidence jsonb; target_evidence jsonb; result jsonb; authority_digest text;
+    effective_now timestamptz(6):=transaction_timestamp();
 BEGIN
     IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740991 OR requested_status IS NULL OR requested_status NOT IN ('ACTIVE','DISABLED') THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role status input is invalid'; END IF;
     event_action:=CASE requested_status WHEN 'ACTIVE' THEN 'iam.role.enabled' ELSE 'iam.role.disabled' END;
-    PERFORM iam.assert_role_writer(tenant,actor,actor_session_id,NULL);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.role.set-status','ROLE',role_id,'INSTANCE',NULL);
+    operation:=CASE requested_status WHEN 'ACTIVE' THEN 'ENABLE' ELSE 'DISABLE' END;
+    actor_evidence:=iam.lock_role_lifecycle_actor(tenant,actor,actor_session_id,decision,'iam.role.set-status',role_id);
+    PERFORM iam.assert_role_intent(tenant,actor,event);
+    SELECT * INTO receipt FROM iam.role_lifecycle_changes value
+      WHERE (value.tenant_id,value.actor_principal_id,value.request_id)=(tenant,actor,event->>'requestId') FOR SHARE;
+    IF FOUND THEN
+      IF receipt.operation<>operation OR receipt.role_id<>role_id OR receipt.expected_resource_version<>expected_version
+        OR receipt.input_commitment IS DISTINCT FROM event->>'requestDigest' THEN
+        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='role status intent conflicts'; END IF;
+      SELECT * INTO stored FROM iam.roles value WHERE (value.tenant_id,value.id)=(tenant,role_id) FOR UPDATE;
+      IF stored.resource_version IS DISTINCT FROM receipt.result_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='role status intent conflicts'; END IF;
+      RETURN iam.verified_role_lifecycle_change(tenant,actor,event->>'requestId');
+    END IF;
+    target_evidence:=iam.lock_role_lifecycle_target(tenant,actor,'iam.role.set-status',role_id,actor_evidence);
+    SELECT * INTO stored FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id FOR UPDATE;
+    IF stored.resource_version<>expected_version OR stored.resource_version=9007199254740991 OR stored.status=requested_status THEN
+        RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role status revision conflicts'; END IF;
+    UPDATE iam.roles r SET status=requested_status,resource_version=r.resource_version+1,updated_at=effective_now
+      WHERE r.tenant_id=tenant AND r.id=role_id;
+    result:=iam.role_snapshot(tenant,role_id);
+    authority_digest:=iam.role_lifecycle_authority_evidence_digest(event->>'requestDigest',operation,role_id,
+      expected_version,expected_version+1,result,actor_evidence,target_evidence);
+    event:=jsonb_set(event,'{authorityEvidenceDigest}',to_jsonb(authority_digest),true);
     PERFORM iam.assert_audit_event(event,tenant,event_action,'ROLE',role_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role decision correlation is invalid'; END IF;
-    PERFORM iam.assert_role_intent(tenant,actor,event);
-    SELECT * INTO stored FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id FOR UPDATE;
-    IF NOT FOUND OR stored.deleted_at IS NOT NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role is unavailable'; END IF;
-    IF stored.resource_version=expected_version+1 AND stored.status=requested_status AND iam.role_event_matches(tenant,actor,event) THEN
-        RETURN iam.role_snapshot(tenant,role_id);
-    END IF;
-    IF stored.resource_version<>expected_version OR stored.resource_version=9007199254740991 OR stored.status=requested_status THEN
-        RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role status revision conflicts'; END IF;
-    UPDATE iam.roles r SET status=requested_status,resource_version=r.resource_version+1,updated_at=transaction_timestamp()
-      WHERE r.tenant_id=tenant AND r.id=role_id;
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
-      VALUES(tenant,event->>'eventId',event,transaction_timestamp(),transaction_timestamp(),transaction_timestamp());
-    RETURN iam.role_snapshot(tenant,role_id);
+      VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
+    INSERT INTO iam.role_lifecycle_changes(tenant_id,actor_principal_id,request_id,operation,role_id,
+      expected_resource_version,result_resource_version,input_commitment,result_document,decision_id,event_id,
+      actor_boundary_evidence,target_boundary_evidence,authority_evidence_digest,completed_at)
+      VALUES(tenant,actor,event->>'requestId',operation,role_id,expected_version,expected_version+1,
+        event->>'requestDigest',result,decision,event->>'eventId',actor_evidence,target_evidence,authority_digest,effective_now);
+    RETURN iam.verified_role_lifecycle_change(tenant,actor,event->>'requestId');
 END $function$;
 
 CREATE OR REPLACE FUNCTION iam.role_trust_authority_evidence_digest(input_commitment text,role_id text,trust_id text,
@@ -914,40 +1227,56 @@ END $function$;
 
 CREATE OR REPLACE FUNCTION iam.delete_role(tenant text,actor text,decision text,role_id text,expected_version bigint,event jsonb,actor_session_id text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE stored iam.roles%ROWTYPE; attachment_count integer; effective_now timestamptz(6):=transaction_timestamp();
+DECLARE stored iam.roles%ROWTYPE; receipt iam.role_lifecycle_changes%ROWTYPE; attachment_count integer;
+    actor_evidence jsonb; target_evidence jsonb; result jsonb; authority_digest text;
+    effective_now timestamptz(6):=transaction_timestamp();
 BEGIN
     IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role deletion input is invalid'; END IF;
-    PERFORM iam.assert_role_writer(tenant,actor,actor_session_id,NULL);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.role.delete','ROLE',role_id,'INSTANCE',NULL);
+    actor_evidence:=iam.lock_role_lifecycle_actor(tenant,actor,actor_session_id,decision,'iam.role.delete',role_id);
+    PERFORM iam.assert_role_intent(tenant,actor,event);
+    SELECT * INTO receipt FROM iam.role_lifecycle_changes value
+      WHERE (value.tenant_id,value.actor_principal_id,value.request_id)=(tenant,actor,event->>'requestId') FOR SHARE;
+    IF FOUND THEN
+      IF receipt.operation<>'DELETE' OR receipt.role_id<>role_id OR receipt.expected_resource_version<>expected_version
+        OR receipt.input_commitment IS DISTINCT FROM event->>'requestDigest' THEN
+        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='role deletion intent conflicts'; END IF;
+      SELECT * INTO stored FROM iam.roles value WHERE (value.tenant_id,value.id)=(tenant,role_id) FOR UPDATE;
+      IF stored.resource_version IS DISTINCT FROM receipt.result_resource_version OR stored.deleted_at IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='role deletion intent conflicts'; END IF;
+      RETURN iam.verified_role_lifecycle_change(tenant,actor,event->>'requestId');
+    END IF;
+    target_evidence:=iam.lock_role_lifecycle_target(tenant,actor,'iam.role.delete',role_id,actor_evidence);
+    SELECT * INTO stored FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id FOR UPDATE;
+    IF stored.resource_version<>expected_version OR stored.resource_version=9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role revision conflicts'; END IF;
+    PERFORM p.id FROM iam.policy_attachments p WHERE p.tenant_id=tenant AND p.target_kind='ROLE'
+      AND p.target_id=role_id AND p.revoked_at IS NULL ORDER BY p.id FOR UPDATE;
+    UPDATE iam.policy_attachments p SET resource_version=p.resource_version+1,updated_at=effective_now,revoked_at=effective_now
+      WHERE p.tenant_id=tenant AND p.target_kind='ROLE' AND p.target_id=role_id AND p.revoked_at IS NULL;
+    GET DIAGNOSTICS attachment_count=ROW_COUNT;
+    PERFORM b.id FROM iam.role_permission_boundaries b WHERE b.tenant_id=tenant AND b.role_id=delete_role.role_id
+      AND b.revoked_at IS NULL ORDER BY b.id FOR UPDATE;
+    UPDATE iam.role_permission_boundaries b SET resource_version=b.resource_version+1,updated_at=effective_now,revoked_at=effective_now
+      WHERE b.tenant_id=tenant AND b.role_id=delete_role.role_id AND b.revoked_at IS NULL;
+    UPDATE iam.roles r SET resource_version=r.resource_version+1,updated_at=effective_now,deleted_at=effective_now,revoked_attachments_count=attachment_count
+      WHERE r.tenant_id=tenant AND r.id=role_id RETURNING * INTO stored;
+    result:=jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','RoleDeletion','accountId',tenant,'id',stored.id,
+      'name',stored.metadata->>'name','resourceVersion',stored.resource_version,'revokedPolicyAttachments',stored.revoked_attachments_count,'deletedAt',stored.deleted_at);
+    authority_digest:=iam.role_lifecycle_authority_evidence_digest(event->>'requestDigest','DELETE',role_id,
+      expected_version,expected_version+1,result,actor_evidence,target_evidence);
+    event:=jsonb_set(event,'{authorityEvidenceDigest}',to_jsonb(authority_digest),true);
     PERFORM iam.assert_audit_event(event,tenant,'iam.role.deleted','ROLE',role_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role decision correlation is invalid'; END IF;
-    PERFORM iam.assert_role_intent(tenant,actor,event);
-    SELECT * INTO stored FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id FOR UPDATE;
-    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role is unavailable'; END IF;
-    IF stored.deleted_at IS NOT NULL THEN
-        IF stored.resource_version<>expected_version+1 OR NOT iam.role_event_matches(tenant,actor,event) THEN
-            RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role deletion intent conflicts'; END IF;
-    ELSE
-        IF stored.resource_version<>expected_version OR stored.resource_version=9007199254740991 THEN
-            RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role revision conflicts'; END IF;
-        PERFORM p.id FROM iam.policy_attachments p WHERE p.tenant_id=tenant AND p.target_kind='ROLE'
-          AND p.target_id=role_id AND p.revoked_at IS NULL ORDER BY p.id FOR UPDATE;
-        UPDATE iam.policy_attachments p SET resource_version=p.resource_version+1,updated_at=effective_now,revoked_at=effective_now
-          WHERE p.tenant_id=tenant AND p.target_kind='ROLE' AND p.target_id=role_id AND p.revoked_at IS NULL;
-        GET DIAGNOSTICS attachment_count=ROW_COUNT;
-        PERFORM b.id FROM iam.role_permission_boundaries b WHERE b.tenant_id=tenant AND b.role_id=delete_role.role_id
-          AND b.revoked_at IS NULL ORDER BY b.id FOR UPDATE;
-        UPDATE iam.role_permission_boundaries b SET resource_version=b.resource_version+1,updated_at=effective_now,revoked_at=effective_now
-          WHERE b.tenant_id=tenant AND b.role_id=delete_role.role_id AND b.revoked_at IS NULL;
-        UPDATE iam.roles r SET resource_version=r.resource_version+1,updated_at=effective_now,deleted_at=effective_now,revoked_attachments_count=attachment_count
-          WHERE r.tenant_id=tenant AND r.id=role_id RETURNING * INTO stored;
-        INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
-          VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
-    END IF;
-    RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','RoleDeletion','accountId',tenant,'id',stored.id,
-      'name',stored.metadata->>'name','resourceVersion',stored.resource_version,'revokedPolicyAttachments',stored.revoked_attachments_count,'deletedAt',stored.deleted_at);
+    INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+      VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
+    INSERT INTO iam.role_lifecycle_changes(tenant_id,actor_principal_id,request_id,operation,role_id,
+      expected_resource_version,result_resource_version,input_commitment,result_document,decision_id,event_id,
+      actor_boundary_evidence,target_boundary_evidence,authority_evidence_digest,completed_at)
+      VALUES(tenant,actor,event->>'requestId','DELETE',role_id,expected_version,expected_version+1,
+        event->>'requestDigest',result,decision,event->>'eventId',actor_evidence,target_evidence,authority_digest,effective_now);
+    RETURN iam.verified_role_lifecycle_change(tenant,actor,event->>'requestId');
 END $function$;
 
 CREATE OR REPLACE FUNCTION iam.list_role_trust_versions(tenant text,actor text,decision text,role_id text,after_id text)
@@ -2063,7 +2392,7 @@ CREATE OR REPLACE FUNCTION iam.role_contract_ready()
 RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE table_name text; required record; entrypoint record; signature text; relation_oid oid;
 BEGIN
-    FOREACH table_name IN ARRAY ARRAY['roles','role_trust_versions','role_permission_boundaries','role_sessions','role_directory_revisions','role_source_authority_generations','role_session_directory_revisions'] LOOP
+    FOREACH table_name IN ARRAY ARRAY['roles','role_trust_versions','role_permission_boundaries','role_lifecycle_changes','role_sessions','role_directory_revisions','role_source_authority_generations','role_session_directory_revisions'] LOOP
         relation_oid:=to_regclass('iam.'||table_name);
         IF relation_oid IS NULL OR NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=relation_oid
           AND c.relowner='matrix_iam_owner'::regrole AND c.relrowsecurity AND c.relforcerowsecurity) THEN RETURN false; END IF;
@@ -2083,6 +2412,21 @@ BEGIN
       ('role_trust_versions','actor_boundary_evidence','jsonb'::regtype,false),
       ('role_trust_versions','target_boundary_evidence','jsonb'::regtype,false),
       ('role_trust_versions','authority_evidence_digest','text'::regtype,false),
+      ('role_lifecycle_changes','tenant_id','text'::regtype,true),
+      ('role_lifecycle_changes','actor_principal_id','text'::regtype,true),
+      ('role_lifecycle_changes','request_id','text'::regtype,true),
+      ('role_lifecycle_changes','operation','text'::regtype,true),
+      ('role_lifecycle_changes','role_id','text'::regtype,true),
+      ('role_lifecycle_changes','expected_resource_version','bigint'::regtype,true),
+      ('role_lifecycle_changes','result_resource_version','bigint'::regtype,true),
+      ('role_lifecycle_changes','input_commitment','text'::regtype,true),
+      ('role_lifecycle_changes','result_document','jsonb'::regtype,true),
+      ('role_lifecycle_changes','decision_id','text'::regtype,true),
+      ('role_lifecycle_changes','event_id','text'::regtype,true),
+      ('role_lifecycle_changes','actor_boundary_evidence','jsonb'::regtype,true),
+      ('role_lifecycle_changes','target_boundary_evidence','jsonb'::regtype,true),
+      ('role_lifecycle_changes','authority_evidence_digest','text'::regtype,true),
+      ('role_lifecycle_changes','completed_at','timestamptz'::regtype,true),
       ('role_directory_revisions','tenant_id','text'::regtype,true),('role_directory_revisions','revision','bigint'::regtype,true),
       ('role_session_directory_revisions','tenant_id','text'::regtype,true),('role_session_directory_revisions','role_id','text'::regtype,true),
       ('role_session_directory_revisions','revision','bigint'::regtype,true),
@@ -2124,6 +2468,8 @@ BEGIN
       AND a.attname IN ('actor_principal_id','request_id','expected_role_version','input_commitment','decision_id',
         'event_id','actor_boundary_evidence','target_boundary_evidence','authority_evidence_digest')
       AND a.atthasdef) THEN RETURN false; END IF;
+    IF EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid='iam.role_lifecycle_changes'::regclass
+      AND a.attnum>0 AND NOT a.attisdropped AND a.atthasdef) THEN RETURN false; END IF;
     FOR required IN SELECT * FROM (VALUES
       ('iam.role_sessions','iam.roles',ARRAY['tenant_id','role_id'],ARRAY['tenant_id','id']),
       ('iam.role_directory_revisions','iam.accounts',ARRAY['tenant_id'],ARRAY['id']),
@@ -2133,6 +2479,9 @@ BEGIN
       ('iam.role_sessions','iam.principals',ARRAY['tenant_id','source_user_id'],ARRAY['tenant_id','id']),
       ('iam.role_trust_versions','iam.principals',ARRAY['tenant_id','actor_principal_id'],ARRAY['tenant_id','id']),
       ('iam.role_trust_versions','iam.authorization_decisions',ARRAY['tenant_id','decision_id'],ARRAY['tenant_id','id']),
+      ('iam.role_lifecycle_changes','iam.roles',ARRAY['tenant_id','role_id'],ARRAY['tenant_id','id']),
+      ('iam.role_lifecycle_changes','iam.principals',ARRAY['tenant_id','actor_principal_id'],ARRAY['tenant_id','id']),
+      ('iam.role_lifecycle_changes','iam.authorization_decisions',ARRAY['tenant_id','decision_id'],ARRAY['tenant_id','id']),
       ('iam.role_sessions','iam.sessions',ARRAY['tenant_id','source_session_id'],ARRAY['tenant_id','id']),
       ('iam.role_sessions','iam.role_trust_versions',ARRAY['tenant_id','role_id','trust_version_id'],ARRAY['tenant_id','role_id','id']),
       ('iam.role_sessions','iam.authorization_decisions',ARRAY['tenant_id','decision_id'],ARRAY['tenant_id','id']),
@@ -2147,6 +2496,8 @@ BEGIN
     END LOOP;
     FOR required IN SELECT * FROM (VALUES
       ('iam.role_sessions',ARRAY['tenant_id','source_user_id','request_id']),
+      ('iam.role_lifecycle_changes',ARRAY['tenant_id','actor_principal_id','request_id']),
+      ('iam.role_lifecycle_changes',ARRAY['tenant_id','event_id']),
       ('iam.role_directory_revisions',ARRAY['tenant_id']),
       ('iam.role_source_authority_generations',ARRAY['tenant_id','user_id']),
       ('iam.role_source_authority_generations',ARRAY['tenant_id','group_id']),
@@ -2171,6 +2522,7 @@ BEGIN
     END LOOP;
     FOR required IN SELECT * FROM (VALUES ('roles','roles_management_valid'),('roles','roles_security_generation_range'),
       ('role_trust_versions','role_trust_versions_change_shape'),
+      ('role_lifecycle_changes','role_lifecycle_changes_shape'),
       ('role_permission_boundaries','role_boundaries_terminal_state'),('role_directory_revisions','role_directory_revision_range'),
       ('role_source_authority_generations','role_source_exact_kind'),('role_source_authority_generations','role_source_generation_range'),
       ('role_session_directory_revisions','role_session_directory_revision_range'),
@@ -2192,6 +2544,13 @@ BEGIN
           =ARRAY['tenant_id','actor_principal_id','request_id']) THEN RETURN false; END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid='iam.role_trust_versions'::regclass
       AND c.conname='role_trust_versions_event_fk' AND c.contype='f' AND c.confrelid='iam.audit_outbox'::regclass
+      AND c.convalidated AND c.condeferrable AND c.condeferred AND c.confupdtype='a' AND c.confdeltype='a' AND c.confmatchtype='s'
+      AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(number,position)
+        JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.number ORDER BY k.position)=ARRAY['tenant_id','event_id']
+      AND ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(number,position)
+        JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=ARRAY['tenant_id','event_id']) THEN RETURN false; END IF;
+    IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid='iam.role_lifecycle_changes'::regclass
+      AND c.conname='role_lifecycle_changes_event_fk' AND c.contype='f' AND c.confrelid='iam.audit_outbox'::regclass
       AND c.convalidated AND c.condeferrable AND c.condeferred AND c.confupdtype='a' AND c.confdeltype='a' AND c.confmatchtype='s'
       AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(number,position)
         JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.number ORDER BY k.position)=ARRAY['tenant_id','event_id']
@@ -2243,6 +2602,8 @@ BEGIN
     FOREACH signature IN ARRAY ARRAY['iam.role_metadata_valid(jsonb)','iam.role_trust_content_valid(text,text)',
       'iam.guard_role_session_directory_revision()','iam.advance_role_session_directory_revision()','iam.managed_role_session_snapshot(text,text,text)',
       'iam.guard_role_change()','iam.assert_role_writer(text,text,text,jsonb)','iam.lock_role_delegation_actor(text,text,text,jsonb)','iam.role_snapshot(text,text)',
+      'iam.role_lifecycle_evidence_valid(jsonb,jsonb,bigint)',
+      'iam.lock_role_lifecycle_actor(text,text,text,text,text,text)','iam.lock_role_lifecycle_target(text,text,text,text,jsonb)',
       'iam.guard_role_directory_revision()','iam.advance_role_directory_revision()',
       'iam.guard_role_source_authority_generation()','iam.advance_role_source_authority_generation()','iam.role_source_authority_snapshot(text,text)',
       'iam.role_trust_snapshot(text,text,text)','iam.role_access_snapshot(text,text)',
@@ -2252,7 +2613,9 @@ BEGIN
 	  'iam.role_snapshot_version_matches(jsonb)','iam.role_authorization_evidence(text,text)','iam.assert_current_role_authorization(text,text,jsonb)',
       'iam.assert_role_intent(text,text,jsonb)','iam.role_event_matches(text,text,jsonb)',
       'iam.role_trust_authority_evidence_digest(text,text,text,text,bigint,jsonb,jsonb)',
-      'iam.verified_role_trust_change(text,text,text)'] LOOP
+      'iam.verified_role_trust_change(text,text,text)',
+      'iam.role_lifecycle_authority_evidence_digest(text,text,text,bigint,bigint,jsonb,jsonb,jsonb)',
+      'iam.verified_role_lifecycle_change(text,text,text)'] LOOP
         SELECT p.* INTO entrypoint FROM pg_proc p WHERE p.oid=to_regprocedure(signature);
         IF NOT FOUND THEN RETURN false; END IF;
         IF entrypoint.proowner<>'matrix_iam_owner'::regrole OR EXISTS(SELECT 1 FROM aclexplode(COALESCE(entrypoint.proacl,acldefault('f',entrypoint.proowner))) permission
@@ -2282,6 +2645,7 @@ BEGIN
       ('policy_attachments','attachments_advance_role_directory'),('group_memberships','memberships_advance_role_directory'),
       ('role_directory_revisions','role_directory_monotonic'),('role_directory_revisions','cannot_truncate'),
       ('role_trust_versions','trust_cannot_update'),('role_trust_versions','cannot_delete'),('role_trust_versions','cannot_truncate'),
+      ('role_lifecycle_changes','lifecycle_cannot_update'),('role_lifecycle_changes','cannot_delete'),('role_lifecycle_changes','cannot_truncate'),
       ('role_permission_boundaries','role_boundary_transitions'),('role_permission_boundaries','cannot_delete'),('role_permission_boundaries','cannot_truncate'),
       ('role_sessions','role_session_terminal_state'),('role_sessions','role_sessions_cannot_truncate'),
       ('role_session_index','role_session_index_immutable'),('role_session_index','role_session_index_cannot_truncate')) expected(table_name,trigger_name) LOOP
@@ -2344,14 +2708,17 @@ BEGIN
     RETURN true;
 END $function$;
 
-REVOKE ALL ON iam.roles,iam.role_trust_versions,iam.role_permission_boundaries FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+REVOKE ALL ON iam.roles,iam.role_trust_versions,iam.role_permission_boundaries,iam.role_lifecycle_changes FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 REVOKE ALL ON FUNCTION iam.role_metadata_valid(jsonb),iam.role_trust_content_valid(text,text),
     iam.guard_role_change(),iam.assert_role_writer(text,text,text,jsonb),iam.lock_role_delegation_actor(text,text,text,jsonb),iam.role_snapshot(text,text),
+    iam.role_lifecycle_evidence_valid(jsonb,jsonb,bigint),
+    iam.lock_role_lifecycle_actor(text,text,text,text,text,text),iam.lock_role_lifecycle_target(text,text,text,text,jsonb),
     iam.role_trust_snapshot(text,text,text),iam.role_access_snapshot(text,text),
     iam.guard_role_boundary_change(),iam.role_permission_boundary_snapshot(text,text),
     iam.read_role_permission_boundary(text,text,text,text),iam.change_role_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text),
     iam.assert_role_intent(text,text,jsonb),iam.role_event_matches(text,text,jsonb),
-    iam.role_trust_authority_evidence_digest(text,text,text,text,bigint,jsonb,jsonb),iam.verified_role_trust_change(text,text,text),iam.role_contract_ready(),
+    iam.role_trust_authority_evidence_digest(text,text,text,text,bigint,jsonb,jsonb),iam.verified_role_trust_change(text,text,text),
+    iam.role_lifecycle_authority_evidence_digest(text,text,text,bigint,bigint,jsonb,jsonb,jsonb),iam.verified_role_lifecycle_change(text,text,text),iam.role_contract_ready(),
     iam.list_roles(text,text,text,text),iam.read_role(text,text,text,text),iam.read_role_delegation_eligibility(text,text,text,jsonb),
     iam.create_role(text,text,text,text,text,jsonb,jsonb,text,jsonb,text),
     iam.update_role(text,text,text,text,bigint,jsonb,jsonb,text),iam.set_role_status(text,text,text,text,bigint,text,jsonb,text),

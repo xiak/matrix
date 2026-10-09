@@ -380,6 +380,30 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 		roleTrust.IAMDecisionID = "decision-role-trust-historical"
 		roleTrust.AuthorityEvidenceDigest = ""
 		ingestAuditEvent(t, handler, producerCredentialA, roleTrust, http.StatusCreated)
+		for index, action := range []auditv1.Action{auditv1.ActionIAMRoleUpdated, auditv1.ActionIAMRoleDisabled,
+			auditv1.ActionIAMRoleEnabled, auditv1.ActionIAMRoleDeleted} {
+			lifecycle := current
+			lifecycle.EventID = auditv1.EventID(fmt.Sprintf("event-role-lifecycle-evidence-%d", index))
+			lifecycle.RequestID = fmt.Sprintf("request-event-role-lifecycle-evidence-%d", index)
+			lifecycle.CorrelationID = fmt.Sprintf("correlation-event-role-lifecycle-evidence-%d", index)
+			lifecycle.IAMDecisionID = auditv1.DecisionID(fmt.Sprintf("decision-role-lifecycle-evidence-%d", index))
+			lifecycle.Action = action
+			lifecycle.Target = auditv1.TargetReference{Kind: auditv1.TargetRole, ID: fmt.Sprintf("role-lifecycle-%d", index)}
+			lifecycle.AuthorityEvidenceDigest = "sha256:" + strings.Repeat(fmt.Sprint(index+1), 64)
+			accepted = ingestAuditEvent(t, handler, producerCredentialA, lifecycle, http.StatusCreated)
+			_, expectedDigest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, lifecycle)
+			if err != nil || accepted.Record.Event.AuthorityEvidenceDigest != lifecycle.AuthorityEvidenceDigest ||
+				accepted.Record.ContentDigest != expectedDigest {
+				t.Fatalf("Audit did not bind %s Role lifecycle evidence", action)
+			}
+			historicalLifecycle := lifecycle
+			historicalLifecycle.EventID = auditv1.EventID(fmt.Sprintf("event-role-lifecycle-historical-%d", index))
+			historicalLifecycle.RequestID = fmt.Sprintf("request-event-role-lifecycle-historical-%d", index)
+			historicalLifecycle.CorrelationID = fmt.Sprintf("correlation-event-role-lifecycle-historical-%d", index)
+			historicalLifecycle.IAMDecisionID = auditv1.DecisionID(fmt.Sprintf("decision-role-lifecycle-historical-%d", index))
+			historicalLifecycle.AuthorityEvidenceDigest = ""
+			ingestAuditEvent(t, handler, producerCredentialA, historicalLifecycle, http.StatusCreated)
+		}
 
 		unrelated := historical
 		unrelated.EventID = "event-unrelated-authority-evidence"

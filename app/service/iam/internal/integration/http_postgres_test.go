@@ -30567,6 +30567,7 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(member.AccountID)}}},
 					{SID: "use-role", Effect: iamv1.PolicyAllow,
 						Actions: []iamv1.Action{iamv1.ActionIAMRoleRead, iamv1.ActionIAMRoleAssume,
+							iamv1.ActionIAMRoleUpdate, iamv1.ActionIAMRoleSetStatus, iamv1.ActionIAMRoleDelete,
 							iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate},
 						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceAnyInAuthority}}},
 					{SID: "revoke-role-policy", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRolePolicyAttachmentRevoke},
@@ -30603,14 +30604,14 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		}
 		var delegatedAccess iamv1.RoleAccess
 		get(t, rolePath, delegatedBearer, http.StatusOK, &delegatedAccess)
-		for _, action := range []iamv1.Action{iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate} {
+		for _, action := range []iamv1.Action{iamv1.ActionIAMRoleUpdate, iamv1.ActionIAMRoleSetStatus,
+			iamv1.ActionIAMRoleDelete, iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate} {
 			capability, found := findIAMCapability(delegatedAccess.Capabilities, action, iamv1.ResourceRole, string(delegatedRole.ID))
 			if !found || !capability.Available {
 				t.Fatalf("same-ceiling Role capability %s is unavailable", action)
 			}
 		}
-		for _, action := range []iamv1.Action{iamv1.ActionIAMRoleUpdate, iamv1.ActionIAMRoleSetStatus,
-			iamv1.ActionIAMRoleDelete, iamv1.ActionIAMRolePermissionBoundarySet, iamv1.ActionIAMRolePermissionBoundaryRemove} {
+		for _, action := range []iamv1.Action{iamv1.ActionIAMRolePermissionBoundarySet, iamv1.ActionIAMRolePermissionBoundaryRemove} {
 			capability, found := findIAMCapability(delegatedAccess.Capabilities, action, iamv1.ResourceRole, string(delegatedRole.ID))
 			if !found || capability.Available {
 				t.Fatalf("same-ceiling Role capability %s escaped its delegated boundary", action)
@@ -30633,6 +30634,436 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		if !listed {
 			t.Fatal("Role directory omitted the delegated Role")
 		}
+		t.Run("same-ceiling lifecycle", func(t *testing.T) {
+			lifecycleRequest := delegatedRequest
+			lifecycleRequest.Name = "Delegated lifecycle"
+			lifecycleRequest.RequestID = "delegated-role-lifecycle-create"
+			var lifecycleRole iamv1.Role
+			post(t, "/v1/roles", delegatedBearer, lifecycleRequest, http.StatusCreated, &lifecycleRole)
+			lifecyclePath := "/v1/roles/" + string(lifecycleRole.ID)
+			var lifecycleAccess iamv1.RoleAccess
+			get(t, lifecyclePath, delegatedBearer, http.StatusOK, &lifecycleAccess)
+			for _, action := range []iamv1.Action{iamv1.ActionIAMRoleUpdate, iamv1.ActionIAMRoleSetStatus, iamv1.ActionIAMRoleDelete} {
+				capability, found := findIAMCapability(lifecycleAccess.Capabilities, action, iamv1.ResourceRole, string(lifecycleRole.ID))
+				if !found || !capability.Available {
+					t.Fatalf("same-ceiling lifecycle capability %s is unavailable", action)
+				}
+			}
+			for _, action := range []iamv1.Action{iamv1.ActionIAMRolePermissionBoundarySet, iamv1.ActionIAMRolePermissionBoundaryRemove} {
+				capability, found := findIAMCapability(lifecycleAccess.Capabilities, action, iamv1.ResourceRole, string(lifecycleRole.ID))
+				if !found || capability.Available {
+					t.Fatalf("lifecycle capability %s permitted a ceiling mutation", action)
+				}
+			}
+			var lifecycleAttachment iamv1.PolicyAttachment
+			post(t, "/v1/policy-attachments", delegatedBearer, iamv1.CreatePolicyAttachmentRequest{
+				Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(lifecycleRole.ID)},
+				PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "delegated-role-lifecycle-attach",
+			}, http.StatusOK, &lifecycleAttachment)
+			issue := func(requestID string) (iamv1.RoleSession, string) {
+				t.Helper()
+				var assumed iamv1.AssumeRoleResponse
+				post(t, lifecyclePath+":assume", delegatedBearer, iamv1.AssumeRoleRequest{
+					ResourceVersion: lifecycleRole.ResourceVersion, RequestID: requestID,
+				}, http.StatusOK, &assumed)
+				if iamv1.ValidateAssumeRoleResponse(assumed) != nil || assumed.Outcome != "APPLIED" || !assumed.Credential.Present() {
+					t.Fatal("same-ceiling lifecycle Role did not issue a session")
+				}
+				raw := assumed.Credential.CopyBytes()
+				bearer := string(raw)
+				clear(raw)
+				return assumed.Session, bearer
+			}
+			assertCredential := func(bearer, requestID string, wantStatus int) {
+				t.Helper()
+				request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+					iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "delegated-role-selected"},
+					iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, bearer)
+				if response.Code != wantStatus {
+					t.Fatalf("lifecycle RoleSession status=%d want=%d body=%s", response.Code, wantStatus, response.Body.String())
+				}
+				if wantStatus == http.StatusOK {
+					var decision iamv1.AuthorizationDecision
+					if json.Unmarshal(response.Body.Bytes(), &decision) != nil ||
+						iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil || !decision.Allowed {
+						t.Fatal("same-ceiling lifecycle RoleSession lost its selected-resource authority")
+					}
+				}
+			}
+			_, beforeUpdate := issue("delegated-role-lifecycle-assume-before-update")
+			assertCredential(beforeUpdate, "delegated-role-lifecycle-read-before-update", http.StatusOK)
+			update := iamv1.UpdateRoleRequest{Name: "Delegated lifecycle updated", Description: "same ceiling",
+				Tags: []iamv1.RoleTag{{Key: "lifecycle", Value: "delegated"}}, MaxSessionDurationSeconds: 900,
+				ResourceVersion: lifecycleRole.ResourceVersion, RequestID: "delegated-role-lifecycle-update"}
+			var updateReplay iamv1.Role
+			call(t, http.MethodPatch, lifecyclePath, delegatedBearer, update, http.StatusOK, &lifecycleRole)
+			call(t, http.MethodPatch, lifecyclePath, delegatedBearer, update, http.StatusOK, &updateReplay)
+			if !reflect.DeepEqual(lifecycleRole, updateReplay) || lifecycleRole.ResourceVersion != update.ResourceVersion+1 ||
+				lifecycleRole.MaxSessionDurationSeconds != update.MaxSessionDurationSeconds {
+				t.Fatal("delegated Role profile update or exact replay changed its result")
+			}
+			assertCredential(beforeUpdate, "delegated-role-lifecycle-read-after-update", http.StatusUnauthorized)
+			_, beforeDisable := issue("delegated-role-lifecycle-assume-before-disable")
+			assertCredential(beforeDisable, "delegated-role-lifecycle-read-before-disable", http.StatusOK)
+			disable := iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: lifecycleRole.ResourceVersion,
+				RequestID: "delegated-role-lifecycle-disable"}
+			var statusReplay iamv1.Role
+			post(t, lifecyclePath+":set-status", delegatedBearer, disable, http.StatusOK, &lifecycleRole)
+			post(t, lifecyclePath+":set-status", delegatedBearer, disable, http.StatusOK, &statusReplay)
+			if !reflect.DeepEqual(lifecycleRole, statusReplay) || lifecycleRole.Status != iamv1.RoleDisabled {
+				t.Fatal("delegated Role disable or exact replay changed its result")
+			}
+			assertCredential(beforeDisable, "delegated-role-lifecycle-read-disabled", http.StatusUnauthorized)
+			var disabledAccess iamv1.RoleAccess
+			get(t, lifecyclePath, delegatedBearer, http.StatusOK, &disabledAccess)
+			for _, action := range []iamv1.Action{iamv1.ActionIAMRoleUpdate, iamv1.ActionIAMRoleSetStatus, iamv1.ActionIAMRoleDelete} {
+				capability, found := findIAMCapability(disabledAccess.Capabilities, action, iamv1.ResourceRole, string(lifecycleRole.ID))
+				if !found || !capability.Available {
+					t.Fatalf("disabled same-ceiling Role lost lifecycle capability %s", action)
+				}
+			}
+			for _, action := range []iamv1.Action{iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate} {
+				capability, found := findIAMCapability(disabledAccess.Capabilities, action, iamv1.ResourceRole, string(lifecycleRole.ID))
+				if !found || capability.Available {
+					t.Fatalf("disabled Role exposed active-only capability %s", action)
+				}
+			}
+			revokeCapability, found := findIAMCapability(disabledAccess.Capabilities,
+				iamv1.ActionIAMRolePolicyAttachmentRevoke, iamv1.ResourcePolicyAttachment, string(lifecycleAttachment.ID))
+			if !found || revokeCapability.Available {
+				t.Fatal("disabled Role exposed attachment revocation capability")
+			}
+			assumeCapability, found := findIAMCapability(disabledAccess.Capabilities,
+				iamv1.ActionIAMRoleAssume, iamv1.ResourceRole, string(lifecycleRole.ID))
+			if !found || assumeCapability.Available || assumeCapability.RestrictionReason != iamv1.CapabilityTargetDisabled {
+				t.Fatal("disabled Role did not expose its closed assumption state")
+			}
+			enable := iamv1.SetRoleStatusRequest{Status: iamv1.RoleActive, ResourceVersion: lifecycleRole.ResourceVersion,
+				RequestID: "delegated-role-lifecycle-enable"}
+			post(t, lifecyclePath+":set-status", delegatedBearer, enable, http.StatusOK, &lifecycleRole)
+			post(t, lifecyclePath+":set-status", delegatedBearer, enable, http.StatusOK, &statusReplay)
+			if !reflect.DeepEqual(lifecycleRole, statusReplay) || lifecycleRole.Status != iamv1.RoleActive {
+				t.Fatal("delegated Role enable or exact replay changed its result")
+			}
+			assertCredential(beforeDisable, "delegated-role-lifecycle-read-reenabled", http.StatusUnauthorized)
+			_, beforeDelete := issue("delegated-role-lifecycle-assume-before-delete")
+			assertCredential(beforeDelete, "delegated-role-lifecycle-read-before-delete", http.StatusOK)
+			remove := iamv1.DeleteRoleRequest{ResourceVersion: lifecycleRole.ResourceVersion,
+				RequestID: "delegated-role-lifecycle-delete"}
+			var deleted, deletedReplay iamv1.RoleDeletion
+			call(t, http.MethodDelete, lifecyclePath, delegatedBearer, remove, http.StatusOK, &deleted)
+			call(t, http.MethodDelete, lifecyclePath, delegatedBearer, remove, http.StatusOK, &deletedReplay)
+			if iamv1.ValidateRoleDeletion(deleted) != nil || deleted != deletedReplay || deleted.RevokedPolicyAttachments != 1 {
+				t.Fatal("delegated Role terminal deletion or exact replay changed its result")
+			}
+			assertCredential(beforeDelete, "delegated-role-lifecycle-read-after-delete", http.StatusUnauthorized)
+			call(t, http.MethodPatch, lifecyclePath, delegatedBearer, update, http.StatusConflict, nil)
+			var receipts, facts, openRelationships int
+			var deletionProof bool
+			if err := database.QueryRow(ctx, `SELECT
+				(SELECT count(*) FROM iam.role_lifecycle_changes change_value
+				 WHERE change_value.tenant_id=$1 AND change_value.actor_principal_id=$2 AND change_value.role_id=$3
+				   AND change_value.request_id IN ($4,$5,$6,$7)),
+				(SELECT count(*) FROM iam.audit_outbox fact WHERE fact.tenant_id=$1
+				 AND fact.event_document->>'requestId' IN ($4,$5,$6,$7)
+				 AND fact.event_document->>'authorityEvidenceDigest' ~ '^sha256:[0-9a-f]{64}$'),
+				(SELECT count(*) FROM iam.policy_attachments attachment WHERE attachment.tenant_id=$1
+				 AND attachment.target_kind='ROLE' AND attachment.target_id=$3 AND attachment.revoked_at IS NULL)
+				 +(SELECT count(*) FROM iam.role_permission_boundaries boundary WHERE boundary.tenant_id=$1
+				 AND boundary.role_id=$3 AND boundary.revoked_at IS NULL),
+				COALESCE(iam.verified_role_lifecycle_change($1,$2,$7) IS NOT NULL,false)`, lifecycleRole.AccountID, member.ID, lifecycleRole.ID,
+				update.RequestID, disable.RequestID, enable.RequestID, remove.RequestID).Scan(&receipts, &facts, &openRelationships, &deletionProof); err != nil {
+				t.Fatal("inspect delegated Role lifecycle evidence", err)
+			}
+			if receipts != 4 || facts != 4 || openRelationships != 0 || !deletionProof {
+				t.Fatalf("delegated Role lifecycle proof differs: receipts=%d facts=%d openRelationships=%d deletionProof=%t",
+					receipts, facts, openRelationships, deletionProof)
+			}
+		})
+		t.Run("same-ceiling lifecycle authority races", func(t *testing.T) {
+			freshRole := func(name, requestID string) iamv1.Role {
+				t.Helper()
+				request := delegatedRequest
+				request.Name, request.RequestID = name, requestID
+				var role iamv1.Role
+				post(t, "/v1/roles", delegatedBearer, request, http.StatusCreated, &role)
+				return role
+			}
+			updateRequest := func(role iamv1.Role, requestID string) iamv1.UpdateRoleRequest {
+				t.Helper()
+				return iamv1.UpdateRoleRequest{Name: role.Name, Description: requestID, Tags: []iamv1.RoleTag{},
+					MaxSessionDurationSeconds: role.MaxSessionDurationSeconds,
+					ResourceVersion:           role.ResourceVersion, RequestID: requestID}
+			}
+			assertLifecycleArtifacts := func(role iamv1.Role, requestID string, want int) {
+				t.Helper()
+				var receipts, facts int
+				if err := database.QueryRow(ctx, `SELECT
+					(SELECT count(*) FROM iam.role_lifecycle_changes WHERE tenant_id=$1 AND actor_principal_id=$2
+					 AND role_id=$3 AND request_id=$4),
+					(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4
+					 AND event_document->>'action' IN ('iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.deleted'))`,
+					role.AccountID, member.ID, role.ID, requestID).Scan(&receipts, &facts); err != nil || receipts != want || facts != want {
+					t.Fatalf("lifecycle artifacts request=%s receipts=%d facts=%d want=%d err=%v", requestID, receipts, facts, want, err)
+				}
+			}
+
+			// A lifecycle decision evaluated against the previous default must be
+			// retried against the committed current default before it can publish.
+			defaultRole := freshRole("Lifecycle default race", "delegated-lifecycle-default-role-create")
+			defaultUpdate := updateRequest(defaultRole, "delegated-lifecycle-default-update")
+			originalDefaultVersionID := ceiling.Version.ID
+			nextDocument := ceilingRequest.Document
+			nextDocument.Statements = append([]iamv1.PolicyStatement(nil), ceilingRequest.Document.Statements...)
+			nextDocument.Statements[0].SID = "create-role-lifecycle-default"
+			var nextDefault iamv1.PolicyVersionDetail
+			post(t, "/v1/policies/"+string(ceiling.Policy.ID)+"/versions", root, iamv1.CreatePolicyVersionRequest{
+				Document: nextDocument, ResourceVersion: ceiling.Policy.ResourceVersion,
+				RequestID: "delegated-lifecycle-default-version-create",
+			}, http.StatusCreated, &nextDefault)
+			awaitDefault, releaseDefault := holdIAMRequest(t, ctx, database, defaultUpdate.RequestID, false, "")
+			defaultResult := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				defaultResult <- performIAMRequest(handler, http.MethodPatch, "/v1/roles/"+string(defaultRole.ID),
+					delegatedBearer, mustIAMJSON(t, defaultUpdate))
+			}()
+			_ = awaitDefault()
+			call(t, http.MethodPost, "/v1/policies/"+string(ceiling.Policy.ID)+":set-default-version", root,
+				iamv1.SetDefaultPolicyVersionRequest{VersionID: nextDefault.Version.ID,
+					ResourceVersion: nextDefault.Policy.ResourceVersion, RequestID: "delegated-lifecycle-default-switch"},
+				http.StatusOK, &ceiling)
+			releaseDefault()
+			select {
+			case response := <-defaultResult:
+				if response.Code != http.StatusOK {
+					t.Fatalf("lifecycle did not re-evaluate after default switch: status=%d body=%s", response.Code, response.Body.String())
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("lifecycle update did not finish after default switch")
+			}
+			var currentDefaultProof bool
+			if err := database.QueryRow(ctx, `SELECT count(*)=1 AND bool_and(
+				decision.boundary_evidence#>>'{version,versionId}'=$5
+				AND receipt.actor_boundary_evidence#>>'{version,versionId}'=$5
+				AND receipt.target_boundary_evidence#>>'{version,versionId}'=$5)
+				FROM iam.authorization_decisions decision
+				JOIN iam.role_lifecycle_changes receipt ON (receipt.tenant_id,receipt.decision_id)=(decision.tenant_id,decision.id)
+				WHERE receipt.tenant_id=$1 AND receipt.role_id=$2 AND receipt.actor_principal_id=$3 AND receipt.request_id=$4`,
+				defaultRole.AccountID, defaultRole.ID, member.ID, defaultUpdate.RequestID,
+				nextDefault.Version.ID).Scan(&currentDefaultProof); err != nil || !currentDefaultProof {
+				t.Fatal("lifecycle retry retained stale default-version evidence", err)
+			}
+			if _, err := database.Exec(ctx, `DROP TRIGGER IF EXISTS matrix_key_linearization ON iam.authorization_decisions;
+				DROP FUNCTION IF EXISTS public.matrix_key_linearization()`); err != nil {
+				t.Fatal("remove lifecycle default-switch barrier", err)
+			}
+			// Restore the original default and retire the temporary version so this
+			// focused race does not consume one of the product's five live slots.
+			call(t, http.MethodPost, "/v1/policies/"+string(ceiling.Policy.ID)+":set-default-version", root,
+				iamv1.SetDefaultPolicyVersionRequest{VersionID: originalDefaultVersionID,
+					ResourceVersion: ceiling.Policy.ResourceVersion, RequestID: "delegated-lifecycle-default-restore"},
+				http.StatusOK, &ceiling)
+			call(t, http.MethodDelete, "/v1/policies/"+string(ceiling.Policy.ID)+"/versions/"+string(nextDefault.Version.ID), root,
+				iamv1.DeletePolicyVersionRequest{ResourceVersion: ceiling.Policy.ResourceVersion,
+					RequestID: "delegated-lifecycle-default-retire"}, http.StatusOK, &ceiling)
+
+			// A committed actor-boundary removal after PDP evaluation invalidates
+			// the pending effect and must leave neither receipt nor success fact.
+			actorRole := freshRole("Lifecycle actor race", "delegated-lifecycle-actor-role-create")
+			actorUpdate := updateRequest(actorRole, "delegated-lifecycle-actor-update")
+			awaitActor, releaseActor := holdIAMRequest(t, ctx, database, actorUpdate.RequestID, false, "")
+			actorResult := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				actorResult <- performIAMRequest(handler, http.MethodPatch, "/v1/roles/"+string(actorRole.ID),
+					delegatedBearer, mustIAMJSON(t, actorUpdate))
+			}()
+			_ = awaitActor()
+			call(t, http.MethodDelete, boundaryPath, root, iamv1.RemoveUserPermissionBoundaryRequest{
+				ResourceVersion: userBoundary.ResourceVersion, RequestID: "delegated-lifecycle-actor-remove",
+			}, http.StatusOK, &userBoundary)
+			releaseActor()
+			select {
+			case response := <-actorResult:
+				if response.Code != http.StatusForbidden {
+					t.Fatalf("lifecycle accepted removed actor ceiling: status=%d body=%s", response.Code, response.Body.String())
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("lifecycle update did not close after actor boundary removal")
+			}
+			assertLifecycleArtifacts(actorRole, actorUpdate.RequestID, 0)
+			if _, err := database.Exec(ctx, `DROP TRIGGER IF EXISTS matrix_key_linearization ON iam.authorization_decisions;
+				DROP FUNCTION IF EXISTS public.matrix_key_linearization()`); err != nil {
+				t.Fatal("remove lifecycle actor-boundary barrier", err)
+			}
+			call(t, http.MethodPut, boundaryPath, root, iamv1.SetUserPermissionBoundaryRequest{
+				PolicyID: ceiling.Policy.ID, PolicyResourceVersion: ceiling.Policy.ResourceVersion,
+				ResourceVersion: userBoundary.ResourceVersion, RequestID: "delegated-lifecycle-actor-restore",
+			}, http.StatusOK, &userBoundary)
+
+			// The target Role revision is the linearization point for a lifecycle
+			// update and Root removal of the Role ceiling.
+			boundaryRole := freshRole("Lifecycle boundary race", "delegated-lifecycle-boundary-role-create")
+			boundaryUpdate := updateRequest(boundaryRole, "delegated-lifecycle-boundary-update")
+			boundaryUpdateResult, boundaryRemoveResult := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+			releaseBoundary := holdRecordedIdentityDecisions(t, ctx, database,
+				boundaryUpdate.RequestID, "delegated-lifecycle-boundary-remove")
+			go func() {
+				boundaryUpdateResult <- performIAMRequest(handler, http.MethodPatch, "/v1/roles/"+string(boundaryRole.ID),
+					delegatedBearer, mustIAMJSON(t, boundaryUpdate))
+			}()
+			go func() {
+				boundaryRemoveResult <- performIAMRequest(handler, http.MethodDelete,
+					"/v1/roles/"+string(boundaryRole.ID)+"/permission-boundary", root,
+					mustIAMJSON(t, iamv1.RemoveRolePermissionBoundaryRequest{ResourceVersion: boundaryRole.ResourceVersion,
+						RequestID: "delegated-lifecycle-boundary-remove"}))
+			}()
+			releaseBoundary()
+			boundaryUpdateResponse, boundaryRemoveResponse := <-boundaryUpdateResult, <-boundaryRemoveResult
+			if (boundaryUpdateResponse.Code == http.StatusOK) == (boundaryRemoveResponse.Code == http.StatusOK) ||
+				(boundaryUpdateResponse.Code != http.StatusOK && boundaryUpdateResponse.Code != http.StatusForbidden && boundaryUpdateResponse.Code != http.StatusConflict) ||
+				(boundaryRemoveResponse.Code != http.StatusOK && boundaryRemoveResponse.Code != http.StatusConflict) {
+				t.Fatalf("lifecycle/Role-boundary competition was not exclusive: lifecycle=%d boundary=%d",
+					boundaryUpdateResponse.Code, boundaryRemoveResponse.Code)
+			}
+			updateWon := boundaryUpdateResponse.Code == http.StatusOK
+			assertLifecycleArtifacts(boundaryRole, boundaryUpdate.RequestID, map[bool]int{true: 1, false: 0}[updateWon])
+			var currentRoleVersion uint64
+			var activeBoundary int
+			if err := database.QueryRow(ctx, `SELECT role_value.resource_version,
+				(SELECT count(*) FROM iam.role_permission_boundaries boundary
+				 WHERE boundary.tenant_id=role_value.tenant_id AND boundary.role_id=role_value.id AND boundary.revoked_at IS NULL)
+				FROM iam.roles role_value WHERE role_value.tenant_id=$1 AND role_value.id=$2`,
+				boundaryRole.AccountID, boundaryRole.ID).Scan(&currentRoleVersion, &activeBoundary); err != nil ||
+				currentRoleVersion != boundaryRole.ResourceVersion+1 || activeBoundary != map[bool]int{true: 1, false: 0}[updateWon] {
+				t.Fatal("lifecycle/Role-boundary competition retained incoherent state", err)
+			}
+
+			// Trust and lifecycle writers share one Role revision; exactly one may
+			// bind authority evidence and publish its success fact.
+			trustRole := freshRole("Lifecycle Trust race", "delegated-lifecycle-trust-role-create")
+			trustUpdate := updateRequest(trustRole, "delegated-lifecycle-trust-update")
+			trustDocument := delegatedRequest.TrustPolicy
+			trustDocument.Statements = append([]iamv1.TrustPolicyStatement(nil), delegatedRequest.TrustPolicy.Statements...)
+			trustDocument.Statements[0].SID = "lifecycle-trust-race"
+			trustRequest := iamv1.SetRoleTrustPolicyRequest{Document: trustDocument,
+				ResourceVersion: trustRole.ResourceVersion, RequestID: "delegated-lifecycle-trust-set"}
+			trustUpdateResult, trustSetResult := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+			releaseTrust := holdRecordedIdentityDecisions(t, ctx, database, trustUpdate.RequestID, trustRequest.RequestID)
+			go func() {
+				trustUpdateResult <- performIAMRequest(handler, http.MethodPatch, "/v1/roles/"+string(trustRole.ID),
+					delegatedBearer, mustIAMJSON(t, trustUpdate))
+			}()
+			go func() {
+				trustSetResult <- performIAMRequest(handler, http.MethodPut, "/v1/roles/"+string(trustRole.ID)+"/trust-policy",
+					delegatedBearer, mustIAMJSON(t, trustRequest))
+			}()
+			releaseTrust()
+			trustUpdateResponse, trustSetResponse := <-trustUpdateResult, <-trustSetResult
+			if (trustUpdateResponse.Code == http.StatusOK) == (trustSetResponse.Code == http.StatusOK) ||
+				(trustUpdateResponse.Code != http.StatusOK && trustUpdateResponse.Code != http.StatusConflict) ||
+				(trustSetResponse.Code != http.StatusOK && trustSetResponse.Code != http.StatusConflict) {
+				t.Fatalf("lifecycle/Trust competition was not exclusive: lifecycle=%d trust=%d",
+					trustUpdateResponse.Code, trustSetResponse.Code)
+			}
+			assertLifecycleArtifacts(trustRole, trustUpdate.RequestID, map[bool]int{true: 1, false: 0}[trustUpdateResponse.Code == http.StatusOK])
+			var trustReceipts, trustFacts int
+			if err := database.QueryRow(ctx, `SELECT
+				(SELECT count(*) FROM iam.role_trust_versions WHERE tenant_id=$1 AND role_id=$2 AND actor_principal_id=$3
+				 AND request_id=$4 AND authority_evidence_digest IS NOT NULL),
+				(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN ($4,$5)
+				 AND event_document->>'action' IN ('iam.role.trust-set','iam.role.updated'))`,
+				trustRole.AccountID, trustRole.ID, member.ID, trustRequest.RequestID, trustUpdate.RequestID).Scan(&trustReceipts, &trustFacts); err != nil ||
+				trustReceipts != map[bool]int{true: 1, false: 0}[trustSetResponse.Code == http.StatusOK] || trustFacts != 1 {
+				t.Fatal("lifecycle/Trust competition retained partial evidence", err)
+			}
+
+			// Two independently authorized lifecycle actions still have a single
+			// target revision winner and a single immutable completion.
+			lifecycleRaceRole := freshRole("Lifecycle command race", "delegated-lifecycle-command-role-create")
+			commandUpdate := updateRequest(lifecycleRaceRole, "delegated-lifecycle-command-update")
+			commandStatus := iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled,
+				ResourceVersion: lifecycleRaceRole.ResourceVersion, RequestID: "delegated-lifecycle-command-status"}
+			commandUpdateResult, commandStatusResult := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+			releaseCommands := holdRecordedIdentityDecisions(t, ctx, database, commandUpdate.RequestID, commandStatus.RequestID)
+			go func() {
+				commandUpdateResult <- performIAMRequest(handler, http.MethodPatch, "/v1/roles/"+string(lifecycleRaceRole.ID),
+					delegatedBearer, mustIAMJSON(t, commandUpdate))
+			}()
+			go func() {
+				commandStatusResult <- performIAMRequest(handler, http.MethodPost, "/v1/roles/"+string(lifecycleRaceRole.ID)+":set-status",
+					delegatedBearer, mustIAMJSON(t, commandStatus))
+			}()
+			releaseCommands()
+			commandUpdateResponse, commandStatusResponse := <-commandUpdateResult, <-commandStatusResult
+			if (commandUpdateResponse.Code == http.StatusOK) == (commandStatusResponse.Code == http.StatusOK) ||
+				(commandUpdateResponse.Code != http.StatusOK && commandUpdateResponse.Code != http.StatusConflict) ||
+				(commandStatusResponse.Code != http.StatusOK && commandStatusResponse.Code != http.StatusConflict) {
+				t.Fatalf("lifecycle/lifecycle competition was not exclusive: update=%d status=%d",
+					commandUpdateResponse.Code, commandStatusResponse.Code)
+			}
+			var lifecycleReceipts, lifecycleFacts int
+			if err := database.QueryRow(ctx, `SELECT
+				(SELECT count(*) FROM iam.role_lifecycle_changes WHERE tenant_id=$1 AND actor_principal_id=$2
+				 AND role_id=$3 AND request_id IN ($4,$5)),
+				(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN ($4,$5)
+				 AND event_document->>'action' IN ('iam.role.updated','iam.role.disabled'))`,
+				lifecycleRaceRole.AccountID, member.ID, lifecycleRaceRole.ID, commandUpdate.RequestID,
+				commandStatus.RequestID).Scan(&lifecycleReceipts, &lifecycleFacts); err != nil || lifecycleReceipts != 1 || lifecycleFacts != 1 {
+				t.Fatal("lifecycle/lifecycle competition retained partial evidence", err)
+			}
+
+			// Deletion and attachment creation use the same target lock. Deletion
+			// is terminal; a winning attachment is revoked by that same transaction.
+			attachmentRole := freshRole("Lifecycle attachment race", "delegated-lifecycle-attachment-role-create")
+			attachmentRequest := iamv1.CreatePolicyAttachmentRequest{
+				Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(attachmentRole.ID)},
+				PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+				RequestID: "delegated-lifecycle-attachment-create",
+			}
+			deleteRequest := iamv1.DeleteRoleRequest{ResourceVersion: attachmentRole.ResourceVersion,
+				RequestID: "delegated-lifecycle-attachment-delete"}
+			attachmentResult, deleteResult := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+			releaseAttachment := holdRecordedIdentityDecisions(t, ctx, database, attachmentRequest.RequestID, deleteRequest.RequestID)
+			go func() {
+				attachmentResult <- performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments",
+					delegatedBearer, mustIAMJSON(t, attachmentRequest))
+			}()
+			go func() {
+				deleteResult <- performIAMRequest(handler, http.MethodDelete, "/v1/roles/"+string(attachmentRole.ID),
+					delegatedBearer, mustIAMJSON(t, deleteRequest))
+			}()
+			releaseAttachment()
+			attachmentResponse, deleteResponse := <-attachmentResult, <-deleteResult
+			if attachmentResponse.Code != http.StatusOK && attachmentResponse.Code != http.StatusForbidden {
+				t.Fatalf("lifecycle/attachment competition returned attachment status=%d body=%s",
+					attachmentResponse.Code, attachmentResponse.Body.String())
+			}
+			var deletion iamv1.RoleDeletion
+			if deleteResponse.Code != http.StatusOK || json.Unmarshal(deleteResponse.Body.Bytes(), &deletion) != nil ||
+				iamv1.ValidateRoleDeletion(deletion) != nil {
+				t.Fatalf("lifecycle/attachment competition did not complete deletion: status=%d body=%s",
+					deleteResponse.Code, deleteResponse.Body.String())
+			}
+			wantRevocations := uint32(0)
+			if attachmentResponse.Code == http.StatusOK {
+				wantRevocations = 1
+			}
+			var activeAttachments, attachmentFacts int
+			if err := database.QueryRow(ctx, `SELECT
+				(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND target_kind='ROLE' AND target_id=$2 AND revoked_at IS NULL),
+				(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3
+				 AND event_document->>'action'='iam.policy-attachment.created')`,
+				attachmentRole.AccountID, attachmentRole.ID, attachmentRequest.RequestID).Scan(&activeAttachments, &attachmentFacts); err != nil ||
+				activeAttachments != 0 || deletion.RevokedPolicyAttachments != wantRevocations ||
+				attachmentFacts != map[bool]int{true: 1, false: 0}[attachmentResponse.Code == http.StatusOK] {
+				t.Fatal("lifecycle/attachment competition retained partial authority", err)
+			}
+			assertLifecycleArtifacts(attachmentRole, deleteRequest.RequestID, 1)
+		})
 		delegatedTrust := delegatedRequest.TrustPolicy
 		delegatedTrust.Statements = append([]iamv1.TrustPolicyStatement(nil), delegatedRequest.TrustPolicy.Statements...)
 		delegatedTrust.Statements[0].Principals = append([]iamv1.TrustPrincipal(nil), delegatedRequest.TrustPolicy.Statements[0].Principals...)
@@ -30725,12 +31156,39 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		}, http.StatusForbidden, nil)
 		var mismatchedAccess iamv1.RoleAccess
 		get(t, "/v1/roles/"+string(mismatchedRole.ID), delegatedBearer, http.StatusOK, &mismatchedAccess)
-		for _, action := range []iamv1.Action{iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate} {
+		for _, action := range []iamv1.Action{iamv1.ActionIAMRoleUpdate, iamv1.ActionIAMRoleSetStatus,
+			iamv1.ActionIAMRoleDelete, iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate} {
 			capability, found := findIAMCapability(mismatchedAccess.Capabilities, action, iamv1.ResourceRole, string(mismatchedRole.ID))
 			if !found || capability.Available {
 				t.Fatalf("mismatched-ceiling Role capability %s became available", action)
 			}
 		}
+		mismatchedPath := "/v1/roles/" + string(mismatchedRole.ID)
+		call(t, http.MethodPatch, mismatchedPath, delegatedBearer, iamv1.UpdateRoleRequest{
+			Name: mismatchedRole.Name, Description: "rejected", Tags: []iamv1.RoleTag{},
+			MaxSessionDurationSeconds: mismatchedRole.MaxSessionDurationSeconds,
+			ResourceVersion:           mismatchedRole.ResourceVersion, RequestID: "delegated-role-mismatched-update",
+		}, http.StatusForbidden, nil)
+		post(t, mismatchedPath+":set-status", delegatedBearer, iamv1.SetRoleStatusRequest{
+			Status: iamv1.RoleDisabled, ResourceVersion: mismatchedRole.ResourceVersion,
+			RequestID: "delegated-role-mismatched-status",
+		}, http.StatusForbidden, nil)
+		call(t, http.MethodDelete, mismatchedPath, delegatedBearer, iamv1.DeleteRoleRequest{
+			ResourceVersion: mismatchedRole.ResourceVersion, RequestID: "delegated-role-mismatched-delete",
+		}, http.StatusForbidden, nil)
+		foreignPath := "/v1/roles/" + string(foreign.ID)
+		call(t, http.MethodPatch, foreignPath, delegatedBearer, iamv1.UpdateRoleRequest{
+			Name: foreign.Name, Description: "cross-account-rejected", Tags: foreign.Tags,
+			MaxSessionDurationSeconds: foreign.MaxSessionDurationSeconds,
+			ResourceVersion:           foreign.ResourceVersion, RequestID: "delegated-role-cross-account-update",
+		}, http.StatusForbidden, nil)
+		post(t, foreignPath+":set-status", delegatedBearer, iamv1.SetRoleStatusRequest{
+			Status: iamv1.RoleDisabled, ResourceVersion: foreign.ResourceVersion,
+			RequestID: "delegated-role-cross-account-status",
+		}, http.StatusForbidden, nil)
+		call(t, http.MethodDelete, foreignPath, delegatedBearer, iamv1.DeleteRoleRequest{
+			ResourceVersion: foreign.ResourceVersion, RequestID: "delegated-role-cross-account-delete",
+		}, http.StatusForbidden, nil)
 		call(t, http.MethodPut, "/v1/roles/"+string(mismatchedRole.ID)+"/trust-policy", delegatedBearer,
 			iamv1.SetRoleTrustPolicyRequest{Document: delegatedTrust, ResourceVersion: mismatchedBoundary.ResourceVersion,
 				RequestID: "delegated-role-mismatched-trust"}, http.StatusForbidden, nil)
@@ -31364,6 +31822,18 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		call(t, http.MethodPut, rolePath+"/trust-policy", delegatedBearer, iamv1.SetRoleTrustPolicyRequest{
 			Document: delegatedRequest.TrustPolicy, ResourceVersion: delegatedRole.ResourceVersion,
 			RequestID: "delegated-role-platform-trust-rejected"}, http.StatusForbidden, nil)
+		call(t, http.MethodPatch, rolePath, delegatedBearer, iamv1.UpdateRoleRequest{
+			Name: delegatedRole.Name, Description: "platform-rejected", Tags: delegatedRole.Tags,
+			MaxSessionDurationSeconds: delegatedRole.MaxSessionDurationSeconds,
+			ResourceVersion:           delegatedRole.ResourceVersion, RequestID: "delegated-role-platform-update-rejected",
+		}, http.StatusForbidden, nil)
+		post(t, rolePath+":set-status", delegatedBearer, iamv1.SetRoleStatusRequest{
+			Status: iamv1.RoleDisabled, ResourceVersion: delegatedRole.ResourceVersion,
+			RequestID: "delegated-role-platform-status-rejected",
+		}, http.StatusForbidden, nil)
+		call(t, http.MethodDelete, rolePath, delegatedBearer, iamv1.DeleteRoleRequest{
+			ResourceVersion: delegatedRole.ResourceVersion, RequestID: "delegated-role-platform-delete-rejected",
+		}, http.StatusForbidden, nil)
 		platformRejected := delegatedRequest
 		platformRejected.Name = "Platform rejected"
 		platformRejected.RequestID = "delegated-role-platform-rejected"
@@ -31454,19 +31924,44 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		call(t, http.MethodPut, rolePath+"/trust-policy", delegatedBearer, iamv1.SetRoleTrustPolicyRequest{
 			Document: delegatedRequest.TrustPolicy, ResourceVersion: delegatedRole.ResourceVersion,
 			RequestID: "delegated-role-trust-after-boundary"}, http.StatusForbidden, nil)
+		call(t, http.MethodPatch, rolePath, delegatedBearer, iamv1.UpdateRoleRequest{
+			Name: delegatedRole.Name, Description: "boundary-rejected", Tags: delegatedRole.Tags,
+			MaxSessionDurationSeconds: delegatedRole.MaxSessionDurationSeconds,
+			ResourceVersion:           delegatedRole.ResourceVersion, RequestID: "delegated-role-update-after-boundary",
+		}, http.StatusForbidden, nil)
+		post(t, rolePath+":set-status", delegatedBearer, iamv1.SetRoleStatusRequest{
+			Status: iamv1.RoleDisabled, ResourceVersion: delegatedRole.ResourceVersion,
+			RequestID: "delegated-role-status-after-boundary",
+		}, http.StatusForbidden, nil)
+		call(t, http.MethodDelete, rolePath, delegatedBearer, iamv1.DeleteRoleRequest{
+			ResourceVersion: delegatedRole.ResourceVersion, RequestID: "delegated-role-delete-after-boundary",
+		}, http.StatusForbidden, nil)
 		var rejectedClean bool
 		if err := database.QueryRow(ctx, `SELECT
 			NOT EXISTS(SELECT 1 FROM iam.roles WHERE tenant_id=$1 AND metadata->>'name' IN ('Platform rejected','Delegated rejected'))
+			AND EXISTS(SELECT 1 FROM iam.roles WHERE tenant_id=$4 AND id=$5 AND resource_version=$6
+			  AND status='ACTIVE' AND deleted_at IS NULL)
 			AND NOT EXISTS(SELECT 1 FROM iam.policy_attachments WHERE tenant_id=$1 AND target_kind='ROLE' AND target_id=$2
 			  AND policy_id=$3 AND revoked_at IS NULL)
 			AND NOT EXISTS(SELECT 1 FROM iam.policy_attachment_changes WHERE tenant_id=$1
 			  AND request_id='delegated-role-mismatched-attach')
+			AND NOT EXISTS(SELECT 1 FROM iam.role_lifecycle_changes WHERE tenant_id=$1
+			  AND request_id IN ('delegated-role-mismatched-update','delegated-role-mismatched-status','delegated-role-mismatched-delete',
+			    'delegated-role-cross-account-update','delegated-role-cross-account-status','delegated-role-cross-account-delete',
+			    'delegated-role-platform-update-rejected','delegated-role-platform-status-rejected','delegated-role-platform-delete-rejected',
+			    'delegated-role-update-after-boundary','delegated-role-status-after-boundary','delegated-role-delete-after-boundary'))
 			AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1
 			  AND event_document->>'requestId' IN ('delegated-role-mismatched-attach','delegated-role-mismatched-trust',
-			    'delegated-role-platform-trust-rejected','delegated-role-platform-rejected','delegated-role-create-after-boundary',
-			    'delegated-role-trust-after-boundary')
-			  AND event_document->>'action' IN ('iam.role.created','iam.role.trust-set','iam.policy-attachment.created'))`,
-			member.AccountID, mismatchedRole.ID, iamv1.SystemPolicyPaaSViewer).Scan(&rejectedClean); err != nil || !rejectedClean {
+			    'delegated-role-mismatched-update','delegated-role-mismatched-status','delegated-role-mismatched-delete',
+			    'delegated-role-cross-account-update','delegated-role-cross-account-status','delegated-role-cross-account-delete',
+			    'delegated-role-platform-trust-rejected','delegated-role-platform-update-rejected',
+			    'delegated-role-platform-status-rejected','delegated-role-platform-delete-rejected',
+			    'delegated-role-platform-rejected','delegated-role-create-after-boundary','delegated-role-trust-after-boundary',
+			    'delegated-role-update-after-boundary','delegated-role-status-after-boundary','delegated-role-delete-after-boundary')
+			  AND event_document->>'action' IN ('iam.role.created','iam.role.trust-set','iam.policy-attachment.created',
+			    'iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.deleted'))`,
+			member.AccountID, mismatchedRole.ID, iamv1.SystemPolicyPaaSViewer,
+			foreign.AccountID, foreign.ID, foreign.ResourceVersion).Scan(&rejectedClean); err != nil || !rejectedClean {
 			t.Fatal("rejected delegated Role commands retained partial authority", err)
 		}
 		var roleCount, trustCount, boundaryCount, factCount, receiptCount int
@@ -31537,13 +32032,18 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		block()
 		atomicPath := "/v1/roles/" + string(target.ID)
 		call(t, http.MethodPut, atomicPath+"/trust-policy", root, iamv1.SetRoleTrustPolicyRequest{Document: forced.TrustPolicy, ResourceVersion: 1, RequestID: "role-atomic-trust"}, http.StatusForbidden, nil)
+		call(t, http.MethodPatch, atomicPath, root, iamv1.UpdateRoleRequest{Name: target.Name, Description: "must roll back",
+			Tags: target.Tags, MaxSessionDurationSeconds: target.MaxSessionDurationSeconds,
+			ResourceVersion: target.ResourceVersion, RequestID: "role-atomic-update"}, http.StatusForbidden, nil)
 		post(t, atomicPath+":set-status", root, iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: 1, RequestID: "role-atomic-status"}, http.StatusForbidden, nil)
 		call(t, http.MethodDelete, atomicPath, root, iamv1.DeleteRoleRequest{ResourceVersion: 1, RequestID: "role-atomic-delete"}, http.StatusForbidden, nil)
 		var unchanged bool
 		if err := database.QueryRow(ctx, `SELECT r.resource_version=1 AND r.current_trust_version_id=$3 AND r.status='ACTIVE' AND r.deleted_at IS NULL
 			AND (SELECT count(*) FROM iam.role_trust_versions v WHERE v.tenant_id=r.tenant_id AND v.role_id=r.id)=1
 			AND EXISTS(SELECT 1 FROM iam.policy_attachments a WHERE a.tenant_id=r.tenant_id AND a.id=$4 AND a.resource_version=1 AND a.revoked_at IS NULL)
-			AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox o WHERE o.tenant_id=r.tenant_id AND o.event_document->>'requestId' IN ('role-atomic-trust','role-atomic-status','role-atomic-delete'))
+			AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox o WHERE o.tenant_id=r.tenant_id AND o.event_document->>'requestId' IN ('role-atomic-trust','role-atomic-update','role-atomic-status','role-atomic-delete'))
+			AND NOT EXISTS(SELECT 1 FROM iam.role_lifecycle_changes c WHERE c.tenant_id=r.tenant_id AND c.role_id=r.id
+			  AND c.request_id IN ('role-atomic-update','role-atomic-status','role-atomic-delete'))
 			FROM iam.roles r WHERE r.tenant_id=$1 AND r.id=$2`, target.AccountID, target.ID, target.CurrentTrustVersionID, attachment.ID).Scan(&unchanged); err != nil || !unchanged {
 			t.Fatal("final fact failure partially changed role, trust or attachment", err)
 		}
@@ -31557,12 +32057,16 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 	t.Run("storage ownership and immutable history", func(t *testing.T) {
 		var isolated, immutable, scoped bool
 		if err := database.QueryRow(ctx, `SELECT
-			(SELECT bool_and(relrowsecurity AND relforcerowsecurity AND relowner='matrix_iam_owner'::regrole) FROM pg_class WHERE oid IN ('iam.roles'::regclass,'iam.role_trust_versions'::regclass)),
+			(SELECT bool_and(relrowsecurity AND relforcerowsecurity AND relowner='matrix_iam_owner'::regrole) FROM pg_class
+			 WHERE oid IN ('iam.roles'::regclass,'iam.role_trust_versions'::regclass,'iam.role_lifecycle_changes'::regclass)),
 			NOT has_table_privilege('matrix_iam_api','iam.roles','INSERT,UPDATE,DELETE,TRUNCATE')
 			AND NOT has_table_privilege('matrix_iam_api','iam.role_trust_versions','SELECT,INSERT,UPDATE,DELETE,TRUNCATE')
-			AND NOT has_table_privilege('matrix_iam_worker','iam.role_trust_versions','SELECT,INSERT,UPDATE,DELETE'),
+			AND NOT has_table_privilege('matrix_iam_api','iam.role_lifecycle_changes','SELECT,INSERT,UPDATE,DELETE,TRUNCATE')
+			AND NOT has_table_privilege('matrix_iam_worker','iam.role_trust_versions','SELECT,INSERT,UPDATE,DELETE')
+			AND NOT has_table_privilege('matrix_iam_worker','iam.role_lifecycle_changes','SELECT,INSERT,UPDATE,DELETE'),
 			to_regprocedure('iam.create_role(text,text,text,text,text,jsonb,jsonb,jsonb,text)') IS NULL
 			AND NOT has_function_privilege('matrix_iam_worker','iam.create_role(text,text,text,text,text,jsonb,jsonb,text,jsonb,text)','EXECUTE')
+			AND NOT has_function_privilege('matrix_iam_worker','iam.verified_role_lifecycle_change(text,text,text)','EXECUTE')
 			AND NOT has_function_privilege('matrix_iam_credential_recovery','iam.delete_role(text,text,text,text,bigint,jsonb,text)','EXECUTE')`).Scan(&isolated, &immutable, &scoped); err != nil || !isolated || !immutable || !scoped {
 			t.Fatal("role storage or callable permissions are overbroad", err)
 		}
@@ -31600,6 +32104,13 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 			"ALTER TABLE iam.role_trust_versions DROP CONSTRAINT role_trust_versions_event_fk",
 			"DROP INDEX iam.role_trust_versions_actor_request_uq",
 			"GRANT EXECUTE ON FUNCTION iam.verified_role_trust_change(text,text,text) TO matrix_iam_worker",
+			"ALTER TABLE iam.role_lifecycle_changes DISABLE ROW LEVEL SECURITY",
+			"ALTER TABLE iam.role_lifecycle_changes DISABLE TRIGGER lifecycle_cannot_update",
+			"ALTER TABLE iam.role_lifecycle_changes DROP CONSTRAINT role_lifecycle_changes_shape",
+			"ALTER TABLE iam.role_lifecycle_changes DROP CONSTRAINT role_lifecycle_changes_event_fk",
+			"ALTER TABLE iam.role_lifecycle_changes DROP CONSTRAINT role_lifecycle_changes_event_uq",
+			"GRANT SELECT ON iam.role_lifecycle_changes TO matrix_iam_api",
+			"GRANT EXECUTE ON FUNCTION iam.verified_role_lifecycle_change(text,text,text) TO matrix_iam_worker",
 			"ALTER TABLE iam.roles DROP CONSTRAINT roles_current_trust_fk",
 			"ALTER TABLE iam.roles DROP CONSTRAINT roles_security_generation_range",
 			"ALTER TABLE iam.roles ALTER COLUMN security_generation DROP NOT NULL",
@@ -31631,6 +32142,8 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 			`UPDATE iam.role_trust_versions SET content_digest=content_digest WHERE tenant_id=$1 AND role_id=$2`,
 			`UPDATE iam.role_trust_versions SET authority_evidence_digest='sha256:'||repeat('f',64) WHERE tenant_id=$1 AND role_id=$2 AND actor_principal_id IS NOT NULL`,
 			`DELETE FROM iam.role_trust_versions WHERE tenant_id=$1 AND role_id=$2`,
+			`UPDATE iam.role_lifecycle_changes SET result_document=result_document WHERE tenant_id=$1 AND role_id=$2`,
+			`DELETE FROM iam.role_lifecycle_changes WHERE tenant_id=$1 AND role_id=$2`,
 			`UPDATE iam.roles SET deleted_at=NULL,resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE tenant_id=$1 AND id=$2`,
 		} {
 			tx, err := database.Begin(ctx)
@@ -31694,6 +32207,55 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		if err := database.QueryRow(ctx, `SELECT iam.verified_role_trust_change($1,$2,$3) IS NOT NULL`,
 			member.AccountID, member.ID, "delegated-role-trust-set").Scan(&survived); err != nil || !survived {
 			t.Fatal("rolled-back Role Trust evidence damage changed the completion", err)
+		}
+		var lifecycleSurvived bool
+		if err := database.QueryRow(ctx, `SELECT iam.verified_role_lifecycle_change($1,$2,$3) IS NOT NULL`,
+			role.AccountID, actor.User.ID, "role-delete").Scan(&lifecycleSurvived); err != nil || !lifecycleSurvived {
+			t.Fatal("committed Role lifecycle evidence is unavailable", err)
+		}
+		for name, damage := range map[string]string{
+			"receipt": `ALTER TABLE iam.role_lifecycle_changes DISABLE TRIGGER lifecycle_cannot_update;
+				UPDATE iam.role_lifecycle_changes SET authority_evidence_digest='sha256:'||repeat('c',64)
+				WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3`,
+			"decision": `ALTER TABLE iam.authorization_decisions DISABLE TRIGGER authorization_decisions_are_immutable;
+				UPDATE iam.authorization_decisions SET request_id=request_id||'-tampered',
+				  document=jsonb_set(document,'{requestId}',to_jsonb((request_id||'-tampered')::text),true)
+				WHERE (tenant_id,id)=(SELECT tenant_id,decision_id FROM iam.role_lifecycle_changes
+				  WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)`,
+			"boundary evidence": `ALTER TABLE iam.authorization_decisions DISABLE TRIGGER authorization_decisions_are_immutable;
+				UPDATE iam.authorization_decisions SET boundary_evidence=jsonb_set(boundary_evidence,'{userResourceVersion}',
+				  to_jsonb((boundary_evidence->>'userResourceVersion')::bigint+1),false)
+				WHERE (tenant_id,id)=(SELECT tenant_id,decision_id FROM iam.role_lifecycle_changes
+				  WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)`,
+			"result": `ALTER TABLE iam.role_lifecycle_changes DISABLE TRIGGER lifecycle_cannot_update;
+				UPDATE iam.role_lifecycle_changes SET result_document=jsonb_set(result_document,'{name}',to_jsonb('tampered'::text),false)
+				WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3`,
+			"outbox": `UPDATE iam.audit_outbox SET event_document=jsonb_set(event_document,
+				'{authorityEvidenceDigest}',to_jsonb(('sha256:'||repeat('b',64))::text),true)
+				WHERE tenant_id=$1 AND event_document#>>'{actor,id}'=$2 AND event_document->>'requestId'=$3`,
+		} {
+			t.Run("lifecycle proof "+name+" tamper", func(t *testing.T) {
+				tx, err := database.Begin(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = tx.Exec(ctx, damage, role.AccountID, actor.User.ID, "role-delete"); err != nil {
+					_ = tx.Rollback(ctx)
+					t.Fatal("inject isolated Role lifecycle evidence damage", err)
+				}
+				var ignored []byte
+				err = tx.QueryRow(ctx, "SELECT iam.verified_role_lifecycle_change($1,$2,$3)",
+					role.AccountID, actor.User.ID, "role-delete").Scan(&ignored)
+				_ = tx.Rollback(ctx)
+				var databaseError *pgconn.PgError
+				if !errors.As(err, &databaseError) || databaseError.Code != "23514" {
+					t.Fatal("damaged Role lifecycle evidence did not fail closed", err)
+				}
+			})
+		}
+		if err := database.QueryRow(ctx, `SELECT iam.verified_role_lifecycle_change($1,$2,$3) IS NOT NULL`,
+			role.AccountID, actor.User.ID, "role-delete").Scan(&lifecycleSurvived); err != nil || !lifecycleSurvived {
+			t.Fatal("rolled-back Role lifecycle evidence damage changed the completion", err)
 		}
 		tx, err := database.Begin(ctx)
 		if err != nil {

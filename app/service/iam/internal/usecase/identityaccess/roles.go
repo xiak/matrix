@@ -515,7 +515,7 @@ func (service *Authority) RevokeRoleSession(ctx context.Context, credential iamv
 }
 
 func roleCapabilities(subject SessionCredential, role iamv1.Role, attachments []iamv1.PolicyAttachment, root, delegated bool, now time.Time) ([]iamv1.ActionCapability, error) {
-	result := make([]iamv1.ActionCapability, 0, 8+len(attachments))
+	result := make([]iamv1.ActionCapability, 0, 9+len(attachments))
 	for _, action := range []iamv1.Action{iamv1.ActionIAMRoleRead, iamv1.ActionIAMRoleUpdate, iamv1.ActionIAMRoleSetStatus,
 		iamv1.ActionIAMRoleDelete, iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate,
 		iamv1.ActionIAMRolePermissionBoundarySet, iamv1.ActionIAMRolePermissionBoundaryRemove, iamv1.ActionIAMRoleSessionList} {
@@ -523,7 +523,11 @@ func roleCapabilities(subject SessionCredential, role iamv1.Role, attachments []
 		if err != nil {
 			return nil, err
 		}
-		delegatedWrite := delegated && (action == iamv1.ActionIAMRoleTrustSet || action == iamv1.ActionIAMRolePolicyAttachmentCreate)
+		delegatedLifecycle := delegated && (action == iamv1.ActionIAMRoleUpdate ||
+			action == iamv1.ActionIAMRoleSetStatus || action == iamv1.ActionIAMRoleDelete)
+		delegatedActiveWrite := delegated && role.Status == iamv1.RoleActive &&
+			(action == iamv1.ActionIAMRoleTrustSet || action == iamv1.ActionIAMRolePolicyAttachmentCreate)
+		delegatedWrite := delegatedLifecycle || delegatedActiveWrite
 		if action != iamv1.ActionIAMRoleRead && action != iamv1.ActionIAMRoleSessionList && !root && !delegatedWrite {
 			restrictCapability(&capability, iamv1.CapabilityAuthorityRequired)
 		}
@@ -535,7 +539,7 @@ func roleCapabilities(subject SessionCredential, role iamv1.Role, attachments []
 		if err != nil {
 			return nil, err
 		}
-		if !root && !delegated {
+		if !root && (!delegated || role.Status != iamv1.RoleActive) {
 			restrictCapability(&capability, iamv1.CapabilityAuthorityRequired)
 		}
 		result = append(result, capability)
@@ -772,7 +776,7 @@ func (service *Authority) changeRolePermissionBoundary(ctx context.Context, cred
 	if err != nil {
 		return iamv1.RolePermissionBoundary{}, err
 	}
-	return withRoleMutation(service, ctx, credential, id, request.ResourceVersion, action, fact, request.RequestID, digest,
+	return withRoleMutation(service, ctx, credential, id, request.ResourceVersion, action, fact, request.RequestID, digest, true,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, mutation RoleMutation, _ time.Time) (iamv1.RolePermissionBoundary, error) {
 			boundaryID := ""
 			if request.PolicyID != "" {
@@ -868,10 +872,11 @@ func (service *Authority) CreateRole(ctx context.Context, credential iamv1.Secre
 		})
 }
 
-// Every Role write passes the same current PDP plus original-root boundary.
-// The adapter rechecks that writer's exact session under the database locks.
+// Every Role write passes the current PDP. Root-only ceiling mutations stay
+// explicit; lifecycle writes may also use the target's exact current ceiling.
+// The adapter rechecks the writer, session and authority under database locks.
 func withRoleMutation[T any](service *Authority, ctx context.Context, credential iamv1.Secret, id iamv1.RoleID, revision uint64,
-	action iamv1.Action, fact auditv1.Action, requestID, digest string,
+	action iamv1.Action, fact auditv1.Action, requestID, digest string, rootOnly bool,
 	apply func(context.Context, Transaction, SessionCredential, RoleMutation, time.Time) (T, error)) (T, error) {
 	return withAccountAuthorization(service, ctx, credential, action, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: string(id)}, requestID,
@@ -881,7 +886,7 @@ func withRoleMutation[T any](service *Authority, ctx context.Context, credential
 			if err != nil {
 				return zero, err
 			}
-			if !root {
+			if rootOnly && !root {
 				return zero, ErrForbidden
 			}
 			event, err := service.newManagementEvent(subject, fact, auditv1.TargetRole, string(id), decision.ID, digest, requestID, now)
@@ -905,7 +910,7 @@ func (service *Authority) UpdateRole(ctx context.Context, credential iamv1.Secre
 	if err != nil {
 		return iamv1.Role{}, err
 	}
-	return withRoleMutation(service, ctx, credential, id, request.ResourceVersion, iamv1.ActionIAMRoleUpdate, auditv1.ActionIAMRoleUpdated, request.RequestID, digest,
+	return withRoleMutation(service, ctx, credential, id, request.ResourceVersion, iamv1.ActionIAMRoleUpdate, auditv1.ActionIAMRoleUpdated, request.RequestID, digest, false,
 		func(ctx context.Context, tx Transaction, _ SessionCredential, mutation RoleMutation, _ time.Time) (iamv1.Role, error) {
 			return tx.UpdateRole(ctx, RoleProfileMutation{RoleMutation: mutation, Name: request.Name, Description: request.Description,
 				Tags: request.Tags, MaxSessionDurationSeconds: request.MaxSessionDurationSeconds})
@@ -927,7 +932,7 @@ func (service *Authority) SetRoleStatus(ctx context.Context, credential iamv1.Se
 	if request.Status == iamv1.RoleActive {
 		fact = auditv1.ActionIAMRoleEnabled
 	}
-	return withRoleMutation(service, ctx, credential, id, request.ResourceVersion, iamv1.ActionIAMRoleSetStatus, fact, request.RequestID, digest,
+	return withRoleMutation(service, ctx, credential, id, request.ResourceVersion, iamv1.ActionIAMRoleSetStatus, fact, request.RequestID, digest, false,
 		func(ctx context.Context, tx Transaction, _ SessionCredential, mutation RoleMutation, _ time.Time) (iamv1.Role, error) {
 			return tx.SetRoleStatus(ctx, RoleStatusMutation{RoleMutation: mutation, Status: request.Status})
 		})
@@ -979,7 +984,7 @@ func (service *Authority) DeleteRole(ctx context.Context, credential iamv1.Secre
 	if err != nil {
 		return iamv1.RoleDeletion{}, err
 	}
-	return withRoleMutation(service, ctx, credential, id, request.ResourceVersion, iamv1.ActionIAMRoleDelete, auditv1.ActionIAMRoleDeleted, request.RequestID, digest,
+	return withRoleMutation(service, ctx, credential, id, request.ResourceVersion, iamv1.ActionIAMRoleDelete, auditv1.ActionIAMRoleDeleted, request.RequestID, digest, false,
 		func(ctx context.Context, tx Transaction, _ SessionCredential, mutation RoleMutation, _ time.Time) (iamv1.RoleDeletion, error) {
 			return tx.DeleteRole(ctx, mutation)
 		})
