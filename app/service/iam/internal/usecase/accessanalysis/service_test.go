@@ -185,14 +185,45 @@ func TestScannerRetriesWholeSerializableTransactionsWithStableIntent(t *testing.
 	}
 }
 
+func TestScannerSurvivesOriginalSerializableRetryBurstWithStableCompletion(t *testing.T) {
+	snapshot := fixture(t)
+	candidate := Candidate{Type: iamv1.AccessFindingUnusedPassword,
+		Target:                iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: "user-unused"},
+		TargetResourceVersion: 2, CreatedAt: snapshot.ObservedAt.Add(-200 * 24 * time.Hour), ActivityRevision: 1}
+	snapshot.Candidates = []Candidate{candidate}
+	repository := &scannerRepository{
+		claims: []Claim{{AttemptID: "generated-1", WorkerID: "scanner-one", Fence: 3,
+			LeaseExpiresAt: snapshot.ObservedAt.Add(time.Minute), SnapshotDigest: testSnapshotDigest, Snapshot: snapshot}},
+		transactionErrors: map[int]error{2: ErrRetryableTransaction, 3: ErrRetryableTransaction, 4: ErrRetryableTransaction},
+	}
+	sequence := 0
+	scanner, err := NewScanner(repository, func(string) (string, error) {
+		sequence++
+		return fmt.Sprintf("generated-%d", sequence), nil
+	}, "scanner-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := scanner.ScanOnce(t.Context())
+	if err != nil || !result.Claimed || result.Detections != 1 || repository.calls != 5 ||
+		len(repository.claimAttemptIDs) != 1 || repository.claimAttemptIDs[0] != "generated-1" || len(repository.completions) != 1 {
+		t.Fatal("serialization burst reclaimed or changed the completed scan", result, err,
+			repository.calls, repository.claimAttemptIDs, len(repository.completions))
+	}
+}
+
 func TestScannerBoundsSerializableRetriesAndHonorsCancellation(t *testing.T) {
 	for _, scenario := range []string{"exhausted", "canceled"} {
 		t.Run(scenario, func(t *testing.T) {
 			snapshot := fixture(t)
+			transactionErrors := make(map[int]error, maxTransactionAttempts)
+			for attempt := 1; attempt <= maxTransactionAttempts; attempt++ {
+				transactionErrors[attempt] = ErrRetryableTransaction
+			}
 			repository := &scannerRepository{
 				claims: []Claim{{AttemptID: "generated-1", WorkerID: "scanner-one", Fence: 3,
 					LeaseExpiresAt: snapshot.ObservedAt.Add(time.Minute), SnapshotDigest: testSnapshotDigest, Snapshot: snapshot}},
-				transactionErrors: map[int]error{1: ErrRetryableTransaction, 2: ErrRetryableTransaction, 3: ErrRetryableTransaction},
+				transactionErrors: transactionErrors,
 			}
 			ctx := t.Context()
 			if scenario == "canceled" {

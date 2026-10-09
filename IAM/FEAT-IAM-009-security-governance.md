@@ -1471,6 +1471,8 @@ Linux权限测试修复提交`4f53122b44be26036ef27b5ec56c245d799a159e`的[Verif
 
 最终修复提交`91649497a0c53be1174d8835326a2df51fe74a55`只为上述既有备份迁移fixture提供实际`matrix_iam_access_analysis_worker_login`专用DSN，不改变公开API、OpenAPI、生产SQL或worker权限。其[Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260)已由GitHub API按精确SHA核实：`go`、`node-process`、`authority-process`汇总及十二项拆分authority门禁共十五个job全部`completed/success`，无失败、取消、超时或跳过。S4c-b后端据此接受；UX/UI的LIVE组合、自动处置和完整009发布仍分别验收，不能继承本结论。
 
+当前扫描事务继续只重试可证明已回滚的`40001/40P01`，并复用同一claim attempt、completion及处置意图；陈旧租约、权限/形状校验失败、提交未知和取消仍立即失败关闭。持续读Finding的真实副本可能连续与completion形成SSI冲突，因此生产上限为八次全新事务、带有界随机退避，总等待预算仍远小于单次90秒cycle和120秒租约；不能用无限重试、延长租约或重新claim掩盖竞争。原三次上限在本任务真实双worker门禁中连续命中三个`40001`，没有部分结果但留下待过期租约并于110.38s明确失败；不是延长等待可以接受的结果。最终单元race 3.075s证明原三次冲突后仍以同一意图提交一次、八次耗尽无结果且取消即时停止；另一全新PostgreSQL 18数据库上的独立双worker/双Account进程race 252.514s完成完整周期、后继业务与审计链，未遗留租约或重复事实。
+
 第一片最低真门禁覆盖两个Account相同对象ID、1/90/365日边界、对象年龄不足、旧谱系与恢复缺口；成功/失败密码登录、有效/坏签名/重放Key、RoleSession发行及Allow/Deny使用；归档、取消归档、活动后自动RESOLVED和后继再次闲置的新generation；策略/目标版本变更、账号或操作者停用、两个扫描副本的租约/fence及未知提交；Finding前后原User/Key/Role、Session、权限和业务资源不变。容量门禁必须证明有界分页和索引计划，不在每次请求扫描全部不可变决定；完整发布还须实跑安装恢复epoch衔接，否则只能交付观察与Finding后端候选，不能启用自动治理。
 
 闲置资格必须绑定规则修订、对象resourceVersion、真实活动修订和完整观察窗口。采集缺口、审计积压/死信、对象新建后不足阈值或仅没有浏览器登录时都不能断言User/Key闲置；程序Key和Role的真实活动必须按准确主体归因，不能忽略非浏览器使用。阈值以数据库时间和已冻结产品范围计算，不借外部地域/风险来源造结论。

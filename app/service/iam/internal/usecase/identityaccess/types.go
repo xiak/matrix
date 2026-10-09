@@ -1008,6 +1008,7 @@ type PolicyCreation struct {
 type PolicyVersionCreation struct {
 	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	Version          iamv1.PolicyVersion
 	ResourceVersion  uint64

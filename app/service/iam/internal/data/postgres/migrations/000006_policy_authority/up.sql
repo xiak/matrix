@@ -823,28 +823,92 @@ BEGIN
 END $function$;
 
 DROP FUNCTION IF EXISTS iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb);
-CREATE OR REPLACE FUNCTION iam.create_policy_version(tenant text,actor text,decision text,policy_id text,expected_version bigint,version_id text,canonical text,content_digest text,event jsonb,submitted_contract integer)
+DROP FUNCTION IF EXISTS iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer);
+CREATE OR REPLACE FUNCTION iam.create_policy_version(tenant text,actor text,decision text,policy_id text,expected_version bigint,version_id text,canonical text,content_digest text,event jsonb,submitted_contract integer,actor_session_id text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE policy iam.policies%ROWTYPE; replayed boolean; effective_now timestamptz(6):=transaction_timestamp();
+DECLARE policy iam.policies%ROWTYPE; replayed boolean; actor_is_root boolean; actor_evidence jsonb;
+    boundary_policy_id text; effective_now timestamptz(6):=transaction_timestamp();
 BEGIN
     IF submitted_contract IS DISTINCT FROM 2 THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy publication requires compiled content'; END IF;
     PERFORM iam.assert_policy_compilation(canonical,content_digest,'TENANT');
     IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990
-       OR version_id IS DISTINCT FROM 'version-'||substring(content_digest FROM 8)||'-'||(expected_version+1)::text THEN
+       OR version_id IS DISTINCT FROM 'version-'||substring(content_digest FROM 8)||'-'||(expected_version+1)::text
+       OR COALESCE(actor_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy version input is invalid';
     END IF;
-    policy:=iam.lock_customer_policy_publisher(tenant,actor,policy_id);
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy account is unavailable'; END IF;
+    PERFORM 1 FROM iam.principals WHERE tenant_id=tenant AND id=actor AND principal_type='USER'
+        AND status='ACTIVE' AND NOT must_change_password AND deleted_at IS NULL FOR NO KEY UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy actor is unavailable'; END IF;
+    PERFORM 1 FROM iam.user_credentials credential JOIN iam.sessions session
+      ON (session.tenant_id,session.principal_id)=(credential.tenant_id,credential.principal_id)
+      WHERE credential.tenant_id=tenant AND credential.principal_id=actor AND session.id=actor_session_id
+        AND session.status='ACTIVE' AND session.revoked_at IS NULL AND session.expires_at>clock_timestamp()
+        AND session.credential_version=credential.credential_version
+        AND session.last_activity_at IS NOT NULL AND session.idle_timeout_seconds IS NOT NULL
+        AND session.last_activity_at+make_interval(secs=>session.idle_timeout_seconds)>clock_timestamp()
+      FOR SHARE OF credential,session;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy publisher session is unavailable'; END IF;
+    PERFORM 1 FROM iam.account_roots WHERE account_id=tenant AND principal_id=actor FOR SHARE;
+    actor_is_root:=FOUND;
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy-version.create','POLICY',policy_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.policy-version.created','POLICY',policy_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy version decision is invalid'; END IF;
+    -- Close non-customer and foreign targets before consulting a command's
+    -- replay key. The later locked read repeats this check before any effect.
+    PERFORM 1 FROM iam.policies AS target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+      AND target.management='CUSTOMER' AND target.authority_scope='TENANT' AND target.status='ACTIVE';
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable'; END IF;
     replayed:=iam.policy_version_intent_replayed(tenant,actor,event);
     IF replayed THEN
+        SELECT * INTO policy FROM iam.policies AS target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+          AND target.management='CUSTOMER' AND target.authority_scope='TENANT' AND target.status='ACTIVE' FOR UPDATE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable'; END IF;
         IF policy.resource_version<>expected_version+1 OR NOT EXISTS(SELECT 1 FROM iam.policy_versions AS v
             WHERE v.policy_id=create_policy_version.policy_id AND v.id=version_id AND v.canonical_document=canonical AND v.content_digest=create_policy_version.content_digest AND v.retired_at IS NULL) THEN
             RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy version replay conflicts';
         END IF;
         RETURN iam.policy_version_detail(tenant,policy_id,version_id);
+    END IF;
+    IF NOT actor_is_root THEN
+        SELECT boundary.policy_id INTO boundary_policy_id FROM iam.user_permission_boundaries boundary
+          WHERE boundary.tenant_id=tenant AND boundary.user_id=actor AND boundary.revoked_at IS NULL
+          FOR NO KEY UPDATE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy publisher boundary is unavailable'; END IF;
+        PERFORM locked.id FROM iam.policies locked WHERE locked.id IN(boundary_policy_id,policy_id)
+          ORDER BY locked.id FOR UPDATE;
+        SELECT * INTO policy FROM iam.policies AS target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+          AND target.management='CUSTOMER' AND target.authority_scope='TENANT' AND target.status='ACTIVE';
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable'; END IF;
+        PERFORM 1 FROM iam.policies boundary_policy
+          WHERE boundary_policy.id=boundary_policy_id AND boundary_policy.management='CUSTOMER'
+            AND boundary_policy.owner_tenant_id=tenant AND boundary_policy.authority_scope='TENANT'
+            AND boundary_policy.status='ACTIVE';
+        IF NOT FOUND OR EXISTS(SELECT 1 FROM iam.policy_attachments attachment
+          WHERE attachment.tenant_id=tenant AND attachment.target_kind='USER' AND attachment.target_id=actor
+            AND attachment.authority_scope='INSTALLATION' AND attachment.revoked_at IS NULL) THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='delegated policy publisher is unavailable';
+        END IF;
+    ELSE
+        SELECT * INTO policy FROM iam.policies AS target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+          AND target.management='CUSTOMER' AND target.authority_scope='TENANT' AND target.status='ACTIVE' FOR UPDATE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable'; END IF;
+    END IF;
+    SELECT recorded.boundary_evidence INTO actor_evidence FROM iam.authorization_decisions recorded
+      WHERE recorded.tenant_id=tenant AND recorded.id=decision AND recorded.principal_id=actor
+        AND recorded.action_name='iam.policy-version.create' AND recorded.allowed;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy version decision is unavailable'; END IF;
+    PERFORM iam.assert_current_user_boundary_evidence(tenant,actor,'iam.policy-version.create',actor_evidence);
+    IF NOT actor_is_root AND (actor_evidence->>'state' IS DISTINCT FROM 'BOUND'
+      OR actor_evidence#>>'{version,policyId}' IS DISTINCT FROM boundary_policy_id
+      OR EXISTS(SELECT 1 FROM iam.user_permission_boundaries boundary
+          WHERE boundary.policy_id=create_policy_version.policy_id AND boundary.revoked_at IS NULL)
+      OR EXISTS(SELECT 1 FROM iam.role_permission_boundaries boundary
+          WHERE boundary.policy_id=create_policy_version.policy_id AND boundary.revoked_at IS NULL)) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='delegated policy version target is unavailable';
     END IF;
     IF policy.resource_version<>expected_version OR EXISTS(SELECT 1 FROM iam.policy_versions AS v WHERE v.policy_id=create_policy_version.policy_id AND (v.id=version_id OR (v.retired_at IS NULL AND v.content_digest=create_policy_version.content_digest)))
        OR (SELECT count(*) FROM iam.policy_versions AS v WHERE v.policy_id=create_policy_version.policy_id AND v.retired_at IS NULL)>=5 THEN
@@ -891,10 +955,10 @@ END $function$;
 
 REVOKE ALL ON FUNCTION iam.policy_version_detail(text,text,text),iam.lock_customer_policy_publisher(text,text,text),iam.policy_version_intent_replayed(text,text,jsonb),
     iam.list_policy_versions(text,text,text,text),iam.read_policy_version(text,text,text,text,text),
-    iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer),iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)
+    iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer,text),iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.list_policy_versions(text,text,text,text),iam.read_policy_version(text,text,text,text,text),
-    iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer),iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb) TO matrix_iam_api;
+    iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer,text),iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb) TO matrix_iam_api;
 
 CREATE OR REPLACE FUNCTION iam.update_policy(tenant text,actor text,decision text,policy_id text,expected_version bigint,display_name text,event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$

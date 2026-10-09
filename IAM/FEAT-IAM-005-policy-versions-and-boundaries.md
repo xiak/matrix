@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 与 Group 附件的同边界闭包已固定；当前 IAM73 候选又完成非 root 在同一封存上限内创建 CUSTOMER Policy 首版并显式关联的纵向闭环。后续版本发布/默认切换/元数据和删除的非 root 闭包、Role 闭包、当前候选独立 CI、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串/IP条件及资源/动作受限通配已有固定实现和独立CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过；受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；可信来源IP切片固定`94cc8d7f`并由累计`91649497`的完整独立CI确认。Role边界与SessionPolicy交集由006实现；CreateUser 及同一封存上限内的停复用、密码重置和删除已固定于`a146626f`。直接 USER 与 Group 附件的同边界闭包已固定；固定`927c8e0`完成非 root 在同一封存上限内创建 CUSTOMER Policy 首版并显式关联，当前 IAM74 候选进一步开放同一受控 USER 创建不可变、非默认 PolicyVersion 草稿。非 root 默认切换、版本退休、元数据/Policy 删除及 Role 闭包、当前候选独立 CI、签名发布和 LIVE UI 仍未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以 MOCK 工作区或旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -29,7 +29,7 @@
 
 ### 版本、条件与委派
 
-首个管理纵向路径为原 Account Root 创建一份 CUSTOMER/TENANT Policy 和其初始默认版本 → 查询准确策略内容 → 沿既有附件关联给 User/Group → 业务请求实际按自定义权限允许或拒绝。创建不自动关联给创建者或任何主体。非 root 的高风险发布委派在防自助提权门禁完成前保持关闭；不能仅因为能查看目录或关联系统策略就取得编辑任意权限文档的能力。这是后续完整版本/边界管理的起点，不代替其需求。
+首个管理纵向路径为原 Account Root 创建一份 CUSTOMER/TENANT Policy 和其初始默认版本 → 查询准确策略内容 → 沿既有附件关联给 User/Group → 业务请求实际按自定义权限允许或拒绝。创建不自动关联给创建者或任何主体。非 root 仅开放下述经 LANG-08 封存上限证明的 Policy 首版创建和非默认版本草稿；默认切换、退休、元数据/删除及 Role 委派继续关闭。不能仅因为能查看目录或关联系统策略就取得编辑任意权限文档的能力。这是后续完整版本/边界管理的起点，不代替其需求。
 
 - `POST /v1/policies` 使用 `iam.policy.create` / 当前 ACCOUNT；入参仅 displayName、document、requestId，Account、管理类型、scope 和 ID 不能由调用者指定。document 只能为 TENANT；平台动作、系统名称空间和服务 probe 拒绝。
 - `GET /v1/policies/{policyId}` 使用 `iam.policy.read` / 精确 POLICY，返回策略与当前默认版本；只读取本账号 CUSTOMER 或可见的 TENANT 系统策略，不因主账号关系越过平台或其他账号。
@@ -41,7 +41,7 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 #### 版本发布事务
 
-版本集合由所属 Policy 管理，不新增可脱离 Policy 授权的 version 资源命名空间。初始 CUSTOMER 版本保留已有 `version-<digest>` 身份；后续发布使用 `version-<digest>-<Policy结果修订>`，使相同内容的再次发布不复用已退休身份。内容仍不可变，ID 对客户端不透明，不能以名称/后缀推导权限。所有版本写入先经当前 PDP，再锁内检查原 root、活跃 Account/USER 与该账号 CUSTOMER Policy；SYSTEM 策略不接受这些用户写入。
+版本集合由所属 Policy 管理，不新增可脱离 Policy 授权的 version 资源命名空间。初始 CUSTOMER 版本保留已有 `version-<digest>` 身份；后续发布使用 `version-<digest>-<Policy结果修订>`，使相同内容的再次发布不复用已退休身份。内容仍不可变，ID 对客户端不透明，不能以名称/后缀推导权限。所有版本写入先经当前 PDP，再锁内检查活跃 Account/USER、当前 Session/credential generation 与该账号 CUSTOMER Policy；原 root 保留既有路径，非 root 只接受后文精确的直接 USER 封存上限闭包，SYSTEM 策略不接受这些用户写入。
 
 | 路由 | Action / 授权资源 | 行为 |
 | --- | --- | --- |
@@ -53,7 +53,7 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 同意图重放只在该命令结果仍是当前 Policy 修订时返回原结果；变体、过时 resourceVersion 或命令后已有其他修订均冲突，不能把历史命令重放成新的切换。新 requestId 重复创建管理集合中仍存在的内容，或选择当前默认版本，均冲突而不是悄悄制造新修订。退休内容再次发布是新意图、新身份，不恢复旧版本；普通精确读取和默认选择都拒绝退休版本。并发操作按同一 Policy 锁和预期修订只产生一个有效结果。
 
-发布事务不修改Principal不可变键，actor使用`FOR NO KEY UPDATE`保护身份可变状态并序列化发布者；User边界与策略附件的actor/USER目标也按稳定ID使用同一互斥方式，包括自身目标的后续读取。不能在已经记录decision、取得actor外键`KEY SHARE`之后，由两个并发写者都升级为`FOR UPDATE`。Account/root/当前PDP/实际会话检查、精确Policy锁、平台凭据保护及同修订冲突保持，不解除外键或依赖自动重试掩盖死锁。与006共享的修复必须覆盖实际策略/附件竞争、凭据/身份撤销以及runtime 40P01观测；当前候选的最终结果归006本轮组合证据，不能继承旧门禁的无死锁结论。
+发布事务不修改Principal不可变键，actor使用`FOR NO KEY UPDATE`保护身份可变状态并序列化发布者；User边界与策略附件的actor/USER目标也按稳定ID使用同一互斥方式，包括自身目标的后续读取。不能在已经记录decision、取得actor外键`KEY SHARE`之后，由两个并发写者都升级为`FOR UPDATE`。Account、root或受控直接 USER、当前PDP/实际会话、精确Policy锁、平台凭据保护及同修订冲突保持，不解除外键或依赖自动重试掩盖死锁。与006共享的修复必须覆盖实际策略/附件竞争、凭据/身份撤销以及runtime 40P01观测；当前候选的最终结果归006本轮组合证据，不能继承旧门禁的无死锁结论。
 
 成功事实分别为租户链 `iam.policy-version.created`、`iam.policy.default-version-set`，target 为所属 POLICY；原 request digest 绑定目标策略、预期修订及新 versionId/contentDigest，不记录策略正文。新增版本与 Policy 修订、历史决定、单一 outbox 同事务；切换后的新请求重读实际默认版本，已提交的旧决定仍使用其原版本证据。版本列表/精确版本读取的结果不能绕过另一次写入的当前授权与修订检查。
 
@@ -241,7 +241,11 @@ LANG-08 的“不能扩大自身许可”精确定义为：受委派管理员及
 
 首个 Policy 作者委派纵向切片只开放“创建一份 CUSTOMER/TENANT Policy 及其首个不可变默认版本”，不同时开放后续版本发布、默认版本切换、元数据修改、删除或 Role 委派。调用者必须是当前 Account 的直接 USER 会话，同时满足普通 `iam.policy.create` 决定与一个当前有效的 CUSTOMER/TENANT User permission boundary；请求不能选择或携带边界。写事务在 Account、actor USER、当前 Session/credential generation、边界关系和边界 Policy 的相容锁序下重新验证决定中封存的精确 `boundaryEvidence`，并拒绝无边界、过期或已替换边界、带任一未撤销 INSTALLATION 策略附件的 USER、Root/ServiceIdentity/RoleSession 冒充、跨 Account 及失效会话。原 Account Root 保留既有创建路径且不需要普通边界。
 
-该切片的正向闭环是：Root 封存包含作者动作、附件动作与业务读取动作的上限，为受委派作者和目标 USER 设置同一上限；作者创建策略后不会获得隐式附件，再把该策略显式关联给同上限目标，目标只能读取策略声明且仍在上限内的资源。门禁同时证明无管理策略、只有管理策略但无边界、不同/变化边界、平台绑定、并发登出或凭据/身份撤销、伪造决定及末尾 outbox 失败都不会留下 Policy、PolicyVersion、决定或成功事实的部分状态；等值重放只返回原提交结果。默认版本和后续版本接口仍由 `requirePolicyPublisher` 保持 Root-only，不能借本切片绕过。
+该切片的正向闭环是：Root 封存包含作者动作、附件动作与业务读取动作的上限，为受委派作者和目标 USER 设置同一上限；作者创建策略后不会获得隐式附件，再把该策略显式关联给同上限目标，目标只能读取策略声明且仍在上限内的资源。门禁同时证明无管理策略、只有管理策略但无边界、不同/变化边界、平台绑定、并发登出或凭据/身份撤销、伪造决定及末尾 outbox 失败都不会留下 Policy、PolicyVersion、决定或成功事实的部分状态；等值重放只返回原提交结果。该首片固定时，默认版本和后续版本接口仍由 `requirePolicyPublisher` 保持 Root-only。
+
+后继最小纵向片只开放 `iam.policy-version.create`：同一受控直接 USER 可以为 ACTIVE CUSTOMER/TENANT Policy 创建一份不可变、非默认的 PolicyVersion 草稿，但不能切换默认、退休版本、改名或删除 Policy。请求仍不携带 boundary selector；普通 PDP 必须允许精确目标 Policy，写事务必须以当前 bearer 的 Session/credential generation 重新证明 actor 当前 `BOUND` ceiling，拒绝任一未撤销 INSTALLATION 附件。目标 Policy 不能正被任何 User 或 Role permission boundary 引用；不能通过先发布候选内容、再诱导 Root 切换的方式修改受保护上限。草稿写入只增加版本库存和 Policy 修订，不改变 default pointer、当前附件或任何业务授权结果；Root 后续是否选择该版本仍是独立的高权限命令。
+
+新命令沿 Account → actor USER → 当前 Session/credential generation → actor boundary 关系 → 按稳定 ID 排序的 ceiling/目标 Policy 锁序；目标 Policy 与 ceiling 相同时直接拒绝。与 Root 设置任一 User/Role boundary 的竞争由目标 Policy 锁形成 fence：新版本只能完整发生在 Policy 成为边界之前，或在等待后观察到当前边界引用并失败关闭。等值已提交命令可以在 ceiling 后续移除后返回原不可变结果，但新 requestId、变体内容或陈旧修订必须按当前资格重新检查。门禁必须证明默认版本及真实 PaaS 权限不因草稿创建改变，Root 既有路径保留；无边界、平台绑定、修改 ceiling、并发登出、并发移除 actor ceiling、并发把目标设为边界、末尾 outbox 失败都不留下决定、Policy 修订、Version 或成功事实的部分状态。默认切换的非 root 闭包留给后继切片，并须枚举当前附件及其委派证据后再开放。
 
 **内部证据而非新 permit。** 每个非 root 成功命令在现有命令完成记录中封存 `actorBoundary` 和必要的 `targetBoundary`：Policy ID、当前 versionId/contentDigest、边界关系修订、主体修订及受控 target kind/ID。Group 附件另保存同一上限 Policy ID，完成记录使用 `GROUP_BOUND` 封存成员数量及稳定成员摘要，供以后 membership 与边界写入锁内检查。该证据不进入普通请求，不返回可复用授权令牌，也不复制 Policy 文档或成员清单；成功 Audit 事实的 content digest 绑定请求与精确委派证据。Root 命令使用封闭的 `ROOT` 证据状态，不能伪造成某个普通边界。
 
@@ -332,9 +336,11 @@ Allow/Deny/边界交集表、条件缺失/类型/大小攻击、跨账号资源�
 
 该事件级闭环先完成了直接 USER 附件在 LANG-08 中的 Audit content-digest 绑定，后继 Group 增量在本任务专属 PostgreSQL 18 证明空组封存、同 ceiling 成员、无边界/不同边界/Root/平台绑定攻击、成员边界移除/替换阻断、Root 创建附件的受限撤销，以及 attach/add-member 的确定性并发均无部分状态或隐藏 deadlock。新增反向锁环先在旧锁序确定触发一次 `40P01`，改为 actor/全部当前成员或候选组成完整 USER 集合并按稳定 ID 一次加锁后，两个合法命令各提交一次关系与事实且 deadlock 计数为零；创建与撤销的 `GROUP_BOUND` 证据和事件摘要可重算，独立进程继续保持准确链、撤权和重启/丢包完成语义。
 
-当前 IAM73 Policy 首版委派候选在新库通过聚焦 HTTP/PG race 41.416s、完整策略存储 race 303.163s、IAM HTTP race 123.318s、Audit HTTP race 4.513s和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 266.287s。Root 封存一个同时包含作者动作、同上限目标附件动作和精确 PaaS 读取动作的 CUSTOMER/TENANT ceiling；只有管理策略无边界的 USER 仍被存储拒绝，设置相同 ceiling 后可以创建一份不自动关联的 CUSTOMER Policy，再显式关联给相同 ceiling 的目标并在真实授权中只允许指定应用。决定中的 `BOUND` 证据、单一 Policy/首版/事实和零隐式附件均由数据库核对；等值 HTTP 重放保留每次授权决定但只返回原业务结果。并发登出、并发移除 ceiling、平台绑定 USER 和后续版本发布均失败关闭，决定、Policy、Version 和事实无部分状态；移除 ceiling 后对已提交 command 的精确重放仍只返回历史结果。实际固定 `9b2671c0c76ed3dc444610e0c958591c4b4f9854` 的 IAM72 executable/migrator 到 IAM73 的唯一滚动前驱门禁 146.628s 通过，双迁移、故障回滚、重启及既有 Session/MFA/恢复/策略/附件完成/Audit proof 均保留。独立 CI 仍待固定提交后确认；它不证明后续 Policy 改版/default、Role 完整闭包、签名 A/B 生命周期或 LIVE UI 验收。
+固定`927c8e016245feb2e770b5beee34be69bc9bab02`的 IAM73 Policy 首版委派在新库通过聚焦 HTTP/PG race 41.416s、完整策略存储 race 303.163s、IAM HTTP race 123.318s、Audit HTTP race 4.513s和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 266.287s。Root 封存一个同时包含作者动作、同上限目标附件动作和精确 PaaS 读取动作的 CUSTOMER/TENANT ceiling；只有管理策略无边界的 USER 仍被存储拒绝，设置相同 ceiling 后可以创建一份不自动关联的 CUSTOMER Policy，再显式关联给相同 ceiling 的目标并在真实授权中只允许指定应用。决定中的 `BOUND` 证据、单一 Policy/首版/事实和零隐式附件均由数据库核对；等值 HTTP 重放保留每次授权决定但只返回原业务结果。并发登出、并发移除 ceiling、平台绑定 USER 和后续版本发布均失败关闭，决定、Policy、Version 和事实无部分状态；移除 ceiling 后对已提交 command 的精确重放仍只返回历史结果。实际固定 `9b2671c0c76ed3dc444610e0c958591c4b4f9854` 的 IAM72 executable/migrator 到 IAM73 的唯一滚动前驱门禁 146.628s 通过，双迁移、故障回滚、重启及既有 Session/MFA/恢复/策略/附件完成/Audit proof 均保留。该固定点不证明后继 Policy 改版/default、Role 完整闭包、签名 A/B 生命周期或 LIVE UI 验收。
 
-同一 IAM73 工作树已通过全仓无缓存 race（含 architecture）、全仓 vet、模块校验、API 重新生成零差异及 Linux amd64/CGO 关闭的全仓构建；无外部 DSN 的默认 SKIP 不计真实数据库或进程证据。
+当前 IAM74 非默认版本草稿候选在本任务专属 PostgreSQL 18 新库通过聚焦委派流程 41.160s、与不可变版本回归组合 57.570s、完整策略存储 race 297.193s、IAM HTTP race 119.245s、Audit HTTP race 4.528s和最终独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 252.514s。门禁证明同 ceiling 作者可以在精确目标 Policy 上创建一份不可变草稿，默认指针、已有附件和真实 PaaS 授权不变；变体/陈旧修订、修改 ceiling、平台绑定、并发登出/移除 actor ceiling、目标成为 User boundary 及 Role boundary 引用全部失败关闭。移除 ceiling 后，已提交草稿的精确重放只返回原不可变结果，新意图不能借历史证明继续写。固定`927c8e016245feb2e770b5beee34be69bc9bab02`的 IAM73 executable/migrator 到 IAM74 的唯一滚动前驱门禁 130.579s 通过，双迁移、故障回滚、重启及既有 Session/MFA/恢复/策略/附件完成/Audit proof 均保留。
+
+同一 IAM74 工作树已通过全仓无缓存 `go test -race -count=1 -p 2 ./...`（含 architecture）、全仓 vet、模块校验、API 重新生成零差异、Linux amd64/CGO 关闭的全仓构建及 diff 检查；无外部 DSN 的默认 SKIP 不计真实数据库或进程证据。当前候选仍待固定提交后的独立 CI；它不证明非 root 默认切换/版本退休/元数据或 Policy 删除、Role 完整闭包、签名 A/B 生命周期或 LIVE UI 验收。
 
 ### User 边界后端证据
 

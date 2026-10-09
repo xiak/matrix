@@ -16,7 +16,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
-const maxTransactionAttempts = 3
+const maxTransactionAttempts = 8
 
 var (
 	ErrUnavailable          = errors.New("IAM access analysis unavailable")

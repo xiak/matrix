@@ -121,9 +121,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "9b2671c0c76ed3dc444610e0c958591c4b4f9854"
-	const sourceSchema uint64 = 72
-	const currentSchema uint64 = 73
+	const source = "927c8e016245feb2e770b5beee34be69bc9bab02"
+	const sourceSchema uint64 = 73
+	const currentSchema uint64 = 74
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -595,7 +595,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}) {
 		t.Fatalf("actual predecessor did not update its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
 	}
-	// The immediate schema-72 predecessor already owns explicit REVIEW_ONLY.
+	// The immediate schema-73 predecessor already owns explicit REVIEW_ONLY.
 	// The current schema must preserve it instead of inventing a migration
 	// default or authority.
 	migratedAccessAnalyzerExpected := retainedAccessAnalyzer
@@ -672,7 +672,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("retained database did not satisfy current IAM readiness and fail-closed defaults", err)
 	}
 	if current := attachmentContractState(); !bytes.Equal(predecessorAttachmentContract, current) {
-		t.Fatal("IAM72 attachment completions, facts or built-in policy state changed during IAM73 migration")
+		t.Fatal("IAM73 attachment completions, facts or built-in policy state changed during IAM74 migration")
 	}
 	var predecessorEvidencePreserved bool
 	if err := admin.QueryRow(ctx, `SELECT count(*)=$1
@@ -683,12 +683,12 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  WHERE outbox.event_id IS NULL
 		    OR outbox.event_document->>'authorityEvidenceDigest' IS DISTINCT FROM receipt.authority_evidence_digest)
 		FROM iam.policy_attachment_changes`, predecessorAttachmentReceiptCount).Scan(&predecessorEvidencePreserved); err != nil || !predecessorEvidencePreserved {
-		t.Fatal("IAM73 changed a retained IAM72 authority-evidence commitment", err)
+		t.Fatal("IAM74 changed a retained IAM73 authority-evidence commitment", err)
 	}
 	var predecessorGroupCeilingDefaulted bool
 	if err := admin.QueryRow(ctx, `SELECT count(*)=$1 AND bool_and(delegation_ceiling_policy_id IS NULL)
 		FROM iam.policy_attachments`, predecessorAttachmentCount).Scan(&predecessorGroupCeilingDefaulted); err != nil || !predecessorGroupCeilingDefaulted {
-		t.Fatal("IAM73 assigned a delegated Group ceiling to a retained IAM72 direct attachment", err)
+		t.Fatal("IAM74 assigned a delegated Group ceiling to a retained IAM73 direct attachment", err)
 	}
 	var attachmentChangeAuthority bool
 	if err := admin.QueryRow(ctx, `SELECT
@@ -702,7 +702,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
 		  WHERE p.id='system.platform-operator'
 		    AND action_value='iam.platform-policy-attachment-change.read')`).Scan(&attachmentChangeAuthority); err != nil || !attachmentChangeAuthority {
-		t.Fatal("IAM72 built-in attachment completion read authority was lost", err)
+		t.Fatal("IAM73 built-in attachment completion read authority was lost", err)
 	}
 	current := start(currentBinary, currentSchema)
 	for requestID, expected := range map[string]iamv1.PolicyAttachmentChange{
@@ -796,7 +796,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  ON (attachment.tenant_id,attachment.id)=(receipt.tenant_id,receipt.attachment_id)
 		WHERE receipt.attachment_id=$1 AND receipt.request_id='retained-current-viewer'`,
 		currentGrant.ID).Scan(&currentAuthorityEvidenceBound); err != nil || !currentAuthorityEvidenceBound {
-		t.Fatal("IAM73 did not bind a post-upgrade direct attachment fact without inventing a Group ceiling", err)
+		t.Fatal("IAM74 did not bind a post-upgrade direct attachment fact without inventing a Group ceiling", err)
 	}
 	predecessorReportResponse = performJSON(t, http.MethodGet,
 		endpoint+"/v1/account/security-reports/"+string(predecessorReportCreation.Metadata.ID), primary.Credential, nil)

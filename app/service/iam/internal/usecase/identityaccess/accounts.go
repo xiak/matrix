@@ -701,9 +701,6 @@ func (service *Authority) CreatePolicyVersion(ctx context.Context, credential ia
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionCreate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyVersionDetail, error) {
-			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
-				return iamv1.PolicyVersionDetail{}, err
-			}
 			if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
 				return iamv1.PolicyVersionDetail{}, err
 			}
@@ -733,7 +730,8 @@ func (service *Authority) CreatePolicyVersion(ctx context.Context, credential ia
 			version := iamv1.PolicyVersion{PolicyID: id, ID: iamv1.PolicyVersionID("version-" + digest[len("sha256:"):] + "-" + strconv.FormatUint(request.ResourceVersion+1, 10)), Document: request.Document, ContentDigest: digest,
 				ContractVersion: iamv1.PolicyVersionCompiledContract, Compilation: &compilation}
 			return tx.CreatePolicyVersion(ctx, PolicyVersionCreation{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
-				DecisionID: decision.ID, Version: version, ResourceVersion: request.ResourceVersion, AuditEvent: event})
+				ActorSessionID: subject.Subject.Session.ID, DecisionID: decision.ID,
+				Version: version, ResourceVersion: request.ResourceVersion, AuditEvent: event})
 		})
 }
 

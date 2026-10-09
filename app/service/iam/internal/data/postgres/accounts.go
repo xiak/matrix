@@ -458,8 +458,9 @@ func (value *transaction) CreatePolicyVersion(ctx context.Context, mutation iden
 	}
 	defer clear(event)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.create_policy_version($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)",
-		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.Version.PolicyID, mutation.ResourceVersion, mutation.Version.ID, canonical, digest, event, mutation.Version.ContractVersion).Scan(&encoded)
+	err = value.tx.QueryRow(ctx, "SELECT iam.create_policy_version($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)",
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.Version.PolicyID, mutation.ResourceVersion,
+		mutation.Version.ID, canonical, digest, event, mutation.Version.ContractVersion, mutation.ActorSessionID).Scan(&encoded)
 	if err != nil {
 		return iamv1.PolicyVersionDetail{}, mapAuthorizationDatabaseError("create IAM policy version", err)
 	}
