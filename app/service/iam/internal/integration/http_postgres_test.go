@@ -939,11 +939,11 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
 	}
-	// This retained-data fixture runs thirteen serial protocol flows plus the
+	// This retained-data fixture runs fifteen serial protocol flows plus the
 	// schema and immutable-evidence checks around them. Bound their aggregate
 	// separately from each flow; it is not an operation SLO. Each protocol flow
 	// retains its own two-minute deadline below.
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_policy_") {
@@ -1309,6 +1309,34 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		for _, statement := range []string{
+			`GRANT SELECT ON TABLE iam.policy_deletions TO matrix_iam_worker`,
+			`GRANT EXECUTE ON FUNCTION iam.lock_policy_deletion_delegation(text,text,text,text) TO matrix_iam_api`,
+			`GRANT EXECUTE ON FUNCTION iam.guard_policy_deletion_insert() TO matrix_iam_worker`,
+			`ALTER FUNCTION iam.delete_policy(text,text,text,text,bigint,jsonb,text) SECURITY INVOKER`,
+			`ALTER TABLE iam.policy_deletions DISABLE TRIGGER policy_deletions_cannot_be_updated`,
+			`CREATE FUNCTION public.matrix_policy_deletion_update_passthrough() RETURNS trigger
+			 LANGUAGE plpgsql AS $fixture$ BEGIN RETURN NEW; END $fixture$;
+			 DROP TRIGGER policy_deletions_cannot_be_updated ON iam.policy_deletions;
+			 CREATE TRIGGER policy_deletions_cannot_be_updated BEFORE UPDATE ON iam.policy_deletions
+			 FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_deletion_update_passthrough()`,
+		} {
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(ctx, statement); err != nil {
+				tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			if err = tx.QueryRow(ctx, `SELECT iam.policy_deletion_contract_ready()`).Scan(&ready); err != nil || ready {
+				tx.Rollback(ctx)
+				t.Fatal("readiness accepted a widened delegated policy deletion contract")
+			}
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
 		var definition string
 		if err := admin.QueryRow(ctx, `SELECT pg_get_functiondef('iam.policy_version_snapshot(iam.policy_versions)'::regprocedure)`).Scan(&definition); err != nil {
 			t.Fatal(err)
@@ -1667,6 +1695,16 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		'{"state":"BOUND","userResourceVersion":1,"boundaryId":"missing-boundary","resourceVersion":1,
 		"version":{"policyId":"missing-policy","versionId":"missing-version","contentDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"contractVersion":1}'::jsonb,
 		'missing-decision','missing-event',transaction_timestamp())`, "42501", document.Organization.ID, document.Administrator.ID)
+	assertRejected("immutable-policy-deletion-completion-update", `UPDATE iam.policy_deletions SET completed_at=completed_at`, "42501")
+	assertRejected("immutable-policy-deletion-completion-delete", `DELETE FROM iam.policy_deletions`, "42501")
+	assertRejected("immutable-policy-deletion-completion-truncate", `TRUNCATE iam.policy_deletions`, "42501")
+	assertRejected("guarded-policy-deletion-completion-insert", `INSERT INTO iam.policy_deletions(
+		tenant_id,actor_principal_id,request_id,policy_id,expected_resource_version,actor_boundary_evidence,
+		decision_id,event_id,completed_at)
+		VALUES($1,$2,'forged-policy-deletion','missing-policy',1,
+		'{"state":"BOUND","userResourceVersion":1,"boundaryId":"missing-boundary","resourceVersion":1,
+		"version":{"policyId":"missing-policy","versionId":"missing-version","contentDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"contractVersion":1}'::jsonb,
+		'missing-decision','missing-event',transaction_timestamp())`, "42501", document.Organization.ID, document.Administrator.ID)
 	assertRejected("immutable-decision-evidence", `UPDATE iam.authorization_decisions SET policy_evidence='[]'::jsonb`, "42501")
 	assertRejected("immutable-boundary-evidence", `UPDATE iam.authorization_decisions SET boundary_evidence='{}'::jsonb`, "42501")
 	for _, attack := range []struct{ name, evidence string }{
@@ -1715,6 +1753,8 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			`SELECT iam.lock_policy_version_retirement_delegation('tenant','actor','decision','policy')`,
 			`SELECT * FROM iam.policy_metadata_updates`,
 			`SELECT iam.lock_policy_metadata_update_delegation('tenant','actor','decision','policy')`,
+			`SELECT * FROM iam.policy_deletions`,
+			`SELECT iam.lock_policy_deletion_delegation('tenant','actor','decision','policy')`,
 		} {
 			tx, err := admin.Begin(ctx)
 			if err != nil {
@@ -15740,6 +15780,11 @@ func (probe managementSessionTransaction) RevokePolicyAttachment(ctx context.Con
 	return probe.Transaction.RevokePolicyAttachment(ctx, mutation)
 }
 
+func (probe managementSessionTransaction) DeletePolicy(ctx context.Context, mutation identityaccess.PolicyDeletion) (iamv1.Policy, error) {
+	mutation.ActorSessionID = probe.sessionID
+	return probe.Transaction.DeletePolicy(ctx, mutation)
+}
+
 func (probe managementSessionTransaction) CreateRole(ctx context.Context, mutation identityaccess.RoleCreation) (iamv1.Role, error) {
 	mutation.ActorSessionID = probe.sessionID
 	return probe.Transaction.CreateRole(ctx, mutation)
@@ -15858,6 +15903,62 @@ func proveManagementSessionReferences(t *testing.T, ctx context.Context, handler
 		{"other-user", otherID, 403}, {"revoked", revokedID, 403}, {"expired", "attachment-reference-expired", 403},
 		{"stale-generation", "attachment-reference-stale-generation", 403}, {"null-generation", "attachment-reference-null-generation", 403},
 		{"current", currentID, 200}}
+	policyDocument := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "private-reference", Effect: iamv1.PolicyAllow,
+			Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{
+				Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "private-reference-application",
+			}}}}}
+	var deletionTarget iamv1.PolicyDetail
+	response := performIAMRequest(handler, http.MethodPost, "/v1/policies", validBearer,
+		mustIAMJSON(t, iamv1.CreatePolicyRequest{DisplayName: "Private session deletion", Document: policyDocument,
+			RequestID: "policy-deletion-reference-seed"}))
+	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &deletionTarget) != nil {
+		t.Fatal("seed policy deletion private reference")
+	}
+	deletionPath := "/v1/policies/" + string(deletionTarget.Policy.ID)
+	for _, field := range []string{"sessionId", "actorSessionId"} {
+		response = performIAMRequest(handler, http.MethodDelete, deletionPath, validBearer,
+			mustIAMJSON(t, map[string]any{"resourceVersion": deletionTarget.Policy.ResourceVersion,
+				"requestId": "policy-deletion-session-selector-attack", field: string(currentID)}))
+		if response.Code != http.StatusBadRequest {
+			t.Fatal("northbound policy deletion accepted a private session selector")
+		}
+	}
+	for _, candidate := range candidates {
+		t.Run("policy-delete_"+candidate.name, func(t *testing.T) {
+			workflow, err := newIAMAuthorityWithTOTP(t, managementSessionProbe{repository, candidate.id}, identityaccess.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			probeHandler, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			requestID := "policy-deletion-reference-" + candidate.name
+			response := performIAMRequest(probeHandler, http.MethodDelete, deletionPath, validBearer,
+				mustIAMJSON(t, iamv1.DeletePolicyRequest{ResourceVersion: deletionTarget.Policy.ResourceVersion, RequestID: requestID}))
+			if response.Code != candidate.want {
+				t.Fatalf("substituted policy deletion session status=%d want=%d", response.Code, candidate.want)
+			}
+			var unchanged bool
+			if candidate.want == http.StatusOK {
+				if err := database.QueryRow(ctx, `SELECT status='RETIRED' AND resource_version=$3
+					AND EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4)
+					FROM iam.policies WHERE owner_tenant_id=$1 AND id=$2`, deletionTarget.Policy.AccountID,
+					deletionTarget.Policy.ID, deletionTarget.Policy.ResourceVersion+1, requestID).Scan(&unchanged); err != nil || !unchanged {
+					t.Fatal("current deletion session did not commit one terminal result", err)
+				}
+				return
+			}
+			if err := database.QueryRow(ctx, `SELECT status='ACTIVE' AND resource_version=$3
+				AND NOT EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$4)
+				AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4)
+				FROM iam.policies WHERE owner_tenant_id=$1 AND id=$2`, deletionTarget.Policy.AccountID,
+				deletionTarget.Policy.ID, deletionTarget.Policy.ResourceVersion, requestID).Scan(&unchanged); err != nil || !unchanged {
+				t.Fatal("invalid policy deletion session left partial authority", err)
+			}
+		})
+	}
 	for _, operation := range []string{"create", "revoke", "role-attach", "role-detach"} {
 		var seeded iamv1.PolicyAttachment
 		seed := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
@@ -16191,7 +16292,8 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		}
 		response := performIAMRequest(handler, method, path, bearer, encoded)
 		if response.Code != want {
-			t.Fatalf("customer policy %s %s: status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+			t.Fatalf("customer policy %s %s: status=%d want=%d request=%s body=%s", method, path,
+				response.Code, want, string(encoded), response.Body.String())
 		}
 		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
 			t.Fatal("invalid customer policy response")
@@ -16285,6 +16387,7 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 				{SID: "manage-policy-versions", Effect: iamv1.PolicyAllow,
 					Actions: []iamv1.Action{
 						iamv1.ActionIAMPolicyUpdate,
+						iamv1.ActionIAMPolicyDelete,
 						iamv1.ActionIAMPolicyVersionCreate,
 						iamv1.ActionIAMPolicyVersionDelete,
 					},
@@ -16898,6 +17001,11 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	var delegatedRetirementRaceVersion iamv1.PolicyVersionDetail
 	post("/v1/policies/"+string(delegatedRetirementRacePolicy.Policy.ID)+"/versions", bearer,
 		delegatedRetirementRaceVersionRequest, http.StatusCreated, &delegatedRetirementRaceVersion)
+	delegatedDeletionCreate := delegatedSwitchCreate
+	delegatedDeletionCreate.DisplayName = "Delegated deletion source"
+	delegatedDeletionCreate.RequestID = "customer-delegated-deletion-policy-create"
+	var delegatedDeletionPolicy iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedDeletionCreate, http.StatusCreated, &delegatedDeletionPolicy)
 
 	// A bearer that was current at HTTP authentication cannot publish after a
 	// concurrent logout. Pause the decision insert, complete the real logout,
@@ -16908,7 +17016,8 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		'customer-delegated-default-after-logout','customer-delegated-policy-after-boundary-remove',
 		'customer-delegated-version-after-boundary-remove','customer-delegated-default-after-boundary-remove',
 		'customer-delegated-retirement-after-logout','customer-delegated-retirement-after-boundary-remove',
-		'customer-delegated-metadata-after-logout','customer-delegated-metadata-concurrent-boundary-remove')
+		'customer-delegated-metadata-after-logout','customer-delegated-metadata-concurrent-boundary-remove',
+		'customer-delegated-deletion-after-logout','customer-delegated-deletion-concurrent-boundary-remove')
 		THEN PERFORM pg_advisory_xact_lock(54831,20); END IF; RETURN NEW; END $body$;
 		CREATE TRIGGER matrix_policy_publication_auth_barrier BEFORE INSERT ON iam.authorization_decisions
 		FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_publication_auth_barrier(); SELECT pg_advisory_lock(54831,20)`); err != nil {
@@ -17171,6 +17280,55 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		delegatedRetirementRaceVersion.Policy.ResourceVersion, delegatedRetirementRacePolicy.Policy.ID).
 		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("logged-out delegated metadata update left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
+
+	deletionBlockedBearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_lock(54831,20)`); err != nil {
+		t.Fatal("hold policy deletion authentication barrier", err)
+	}
+	blockedDeletionContext, cancelBlockedDeletion := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBlockedDeletion()
+	blockedDeletion := iamv1.DeletePolicyRequest{ResourceVersion: delegatedDeletionPolicy.Policy.ResourceVersion,
+		RequestID: "customer-delegated-deletion-after-logout"}
+	blockedDeletionDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		blockedDeletionDone <- performIAMRequest(handler, http.MethodDelete,
+			"/v1/policies/"+string(delegatedDeletionPolicy.Policy.ID), deletionBlockedBearer, mustIAMJSON(t, blockedDeletion))
+	}()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(blockedDeletionContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=20)`).Scan(&waiting); err != nil {
+			t.Fatal("observe policy deletion authentication barrier", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-blockedDeletionContext.Done():
+				t.Fatal("policy deletion never reached authentication barrier")
+			}
+		}
+	}
+	post("/v1/auth/logout", deletionBlockedBearer,
+		map[string]any{"requestId": "customer-delegated-deletion-logout"}, http.StatusOK, nil)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,20)`); err != nil {
+		t.Fatal("release policy deletion authentication barrier", err)
+	}
+	select {
+	case response := <-blockedDeletionDone:
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("delegated deletion survived concurrent logout: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-blockedDeletionContext.Done():
+		t.Fatal("delegated deletion did not finish after concurrent logout")
+	}
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_deletions WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT status<>'ACTIVE' OR resource_version<>$4 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$5)`,
+		member.AccountID, member.ID, blockedDeletion.RequestID, delegatedDeletionPolicy.Policy.ResourceVersion,
+		delegatedDeletionPolicy.Policy.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("logged-out delegated deletion left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
 
 	// A tenant administrator with any current installation-scoped USER binding
@@ -17485,6 +17643,58 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		delegatedRetirementRaceVersion.Policy.ResourceVersion, delegatedRetirementRacePolicy.Policy.ID).
 		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("boundary-removed delegated metadata update left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
+
+	setBoundary(member, "customer-policy-author-boundary-reset-deletion")
+	bearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	get("/v1/users/"+string(member.ID)+"/permission-boundary", root, http.StatusOK, &currentBoundary)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_lock(54831,20)`); err != nil {
+		t.Fatal("hold boundary-removal deletion barrier", err)
+	}
+	boundaryDeletionContext, cancelBoundaryDeletion := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBoundaryDeletion()
+	boundaryBlockedDeletion := iamv1.DeletePolicyRequest{ResourceVersion: delegatedDeletionPolicy.Policy.ResourceVersion,
+		RequestID: "customer-delegated-deletion-concurrent-boundary-remove"}
+	boundaryDeletionDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		boundaryDeletionDone <- performIAMRequest(handler, http.MethodDelete,
+			"/v1/policies/"+string(delegatedDeletionPolicy.Policy.ID), bearer, mustIAMJSON(t, boundaryBlockedDeletion))
+	}()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(boundaryDeletionContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=20)`).Scan(&waiting); err != nil {
+			t.Fatal("observe boundary-removal deletion barrier", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-boundaryDeletionContext.Done():
+				t.Fatal("policy deletion never reached boundary-removal barrier")
+			}
+		}
+	}
+	request(http.MethodDelete, "/v1/users/"+string(member.ID)+"/permission-boundary", root,
+		iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: currentBoundary.ResourceVersion,
+			RequestID: "customer-policy-author-boundary-remove-deletion"}, http.StatusOK, nil)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,20)`); err != nil {
+		t.Fatal("release boundary-removal deletion barrier", err)
+	}
+	select {
+	case response := <-boundaryDeletionDone:
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("delegated deletion survived concurrent boundary removal: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-boundaryDeletionContext.Done():
+		t.Fatal("delegated deletion did not finish after boundary removal")
+	}
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_deletions WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT status<>'ACTIVE' OR resource_version<>$4 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$5)`,
+		member.AccountID, member.ID, boundaryBlockedDeletion.RequestID, delegatedDeletionPolicy.Policy.ResourceVersion,
+		delegatedDeletionPolicy.Policy.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("boundary-removed delegated deletion left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
 	// The already committed draft can still return its immutable result after
 	// the ceiling is removed; the decision is not a permit for a new version.
@@ -17941,6 +18151,109 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	metadataStale.RequestID = "customer-delegated-metadata-stale"
 	request(http.MethodPatch, metadataPath, bearer, metadataStale, http.StatusConflict, nil)
 
+	// Terminal deletion uses the same current ceiling and bearer proof, but is
+	// narrower than metadata maintenance: no live attachment or boundary may
+	// still consume the target Policy.
+	deletionPath := "/v1/policies/" + string(delegatedDeletionPolicy.Policy.ID)
+	delegatedDeletion := iamv1.DeletePolicyRequest{ResourceVersion: delegatedDeletionPolicy.Policy.ResourceVersion,
+		RequestID: "customer-delegated-deletion-apply"}
+	request(http.MethodDelete, "/v1/policies/"+string(delegationCeiling.Policy.ID), bearer,
+		iamv1.DeletePolicyRequest{ResourceVersion: delegationCeiling.Policy.ResourceVersion,
+			RequestID: "customer-delegated-deletion-ceiling-rejected"}, http.StatusForbidden, nil)
+	request(http.MethodDelete, "/v1/policies/"+string(iamv1.SystemPolicyAccountAdministrator), bearer,
+		iamv1.DeletePolicyRequest{ResourceVersion: 1,
+			RequestID: "customer-delegated-deletion-system-rejected"}, http.StatusForbidden, nil)
+	request(http.MethodDelete, "/v1/policies/"+string(delegatedPolicy.Policy.ID), bearer,
+		iamv1.DeletePolicyRequest{ResourceVersion: delegatedDraft.Policy.ResourceVersion,
+			RequestID: "customer-delegated-deletion-attachment-rejected"}, http.StatusForbidden, nil)
+
+	delegatedRoleBoundaryCreate := delegatedSwitchCreate
+	delegatedRoleBoundaryCreate.DisplayName = "Delegated role boundary deletion target"
+	delegatedRoleBoundaryCreate.RequestID = "customer-delegated-deletion-role-boundary-policy-create"
+	var delegatedRoleBoundaryPolicy iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedRoleBoundaryCreate, http.StatusCreated, &delegatedRoleBoundaryPolicy)
+	var deletionBoundaryRole iamv1.Role
+	post("/v1/roles", root, iamv1.CreateRoleRequest{Name: "Delegated deletion boundary role", Tags: []iamv1.RoleTag{},
+		TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}},
+		RequestID:   "customer-delegated-deletion-boundary-role-create"}, http.StatusCreated, &deletionBoundaryRole)
+	request(http.MethodPut, "/v1/roles/"+string(deletionBoundaryRole.ID)+"/permission-boundary", root,
+		iamv1.SetRolePermissionBoundaryRequest{PolicyID: delegatedRoleBoundaryPolicy.Policy.ID,
+			PolicyResourceVersion: delegatedRoleBoundaryPolicy.Policy.ResourceVersion,
+			ResourceVersion:       deletionBoundaryRole.ResourceVersion,
+			RequestID:             "customer-delegated-deletion-role-boundary-set"}, http.StatusOK, nil)
+	request(http.MethodDelete, "/v1/policies/"+string(delegatedRoleBoundaryPolicy.Policy.ID), bearer,
+		iamv1.DeletePolicyRequest{ResourceVersion: delegatedRoleBoundaryPolicy.Policy.ResourceVersion,
+			RequestID: "customer-delegated-deletion-role-boundary-rejected"}, http.StatusForbidden, nil)
+
+	delegatedBoundaryRaceCreate := delegatedSwitchCreate
+	delegatedBoundaryRaceCreate.DisplayName = "Delegated deletion boundary race"
+	delegatedBoundaryRaceCreate.RequestID = "customer-delegated-deletion-boundary-race-policy-create"
+	var delegatedBoundaryRacePolicy iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedBoundaryRaceCreate, http.StatusCreated, &delegatedBoundaryRacePolicy)
+	var delegatedBoundaryRaceTarget iamv1.User
+	post("/v1/users", root, map[string]any{"loginName": "customer-policy-delete-boundary-race",
+		"displayName": "Policy deletion boundary race", "initialPassword": initialDeveloperPassword,
+		"permissionBoundary": nil, "requestId": "customer-delegated-deletion-boundary-race-user-create"},
+		http.StatusCreated, &delegatedBoundaryRaceTarget)
+	delegatedBoundaryRacePath := "/v1/users/" + string(delegatedBoundaryRaceTarget.ID) + "/permission-boundary"
+	var delegatedBoundaryRaceInitial iamv1.UserPermissionBoundary
+	get(delegatedBoundaryRacePath, root, http.StatusOK, &delegatedBoundaryRaceInitial)
+	startDeletionBoundaryRace := make(chan struct{})
+	deletionBoundaryResult := make(chan *httptest.ResponseRecorder, 1)
+	deletionBoundaryDeleteResult := make(chan *httptest.ResponseRecorder, 1)
+	deletionBoundarySetBody := mustIAMJSON(t, iamv1.SetUserPermissionBoundaryRequest{
+		PolicyID: delegatedBoundaryRacePolicy.Policy.ID, PolicyResourceVersion: delegatedBoundaryRacePolicy.Policy.ResourceVersion,
+		ResourceVersion: delegatedBoundaryRaceInitial.ResourceVersion,
+		RequestID:       "customer-delegated-deletion-boundary-race-set"})
+	deletionBoundaryDeleteBody := mustIAMJSON(t, iamv1.DeletePolicyRequest{
+		ResourceVersion: delegatedBoundaryRacePolicy.Policy.ResourceVersion,
+		RequestID:       "customer-delegated-deletion-boundary-race-delete"})
+	go func() {
+		<-startDeletionBoundaryRace
+		deletionBoundaryResult <- performIAMRequest(handler, http.MethodPut, delegatedBoundaryRacePath, root, deletionBoundarySetBody)
+	}()
+	go func() {
+		<-startDeletionBoundaryRace
+		deletionBoundaryDeleteResult <- performIAMRequest(handler, http.MethodDelete,
+			"/v1/policies/"+string(delegatedBoundaryRacePolicy.Policy.ID), bearer, deletionBoundaryDeleteBody)
+	}()
+	close(startDeletionBoundaryRace)
+	boundaryRaceResponse, deletionRaceResponse := <-deletionBoundaryResult, <-deletionBoundaryDeleteResult
+	deletionWonBoundaryRace := deletionRaceResponse.Code == http.StatusOK
+	if (boundaryRaceResponse.Code == http.StatusOK) == deletionWonBoundaryRace ||
+		(boundaryRaceResponse.Code != http.StatusOK && boundaryRaceResponse.Code != http.StatusConflict && boundaryRaceResponse.Code != http.StatusForbidden) ||
+		(deletionRaceResponse.Code != http.StatusOK && deletionRaceResponse.Code != http.StatusConflict && deletionRaceResponse.Code != http.StatusForbidden) {
+		t.Fatalf("delegated delete/boundary race did not have one valid winner: boundary=%d body=%s delete=%d body=%s",
+			boundaryRaceResponse.Code, boundaryRaceResponse.Body.String(), deletionRaceResponse.Code, deletionRaceResponse.Body.String())
+	}
+	var inconsistentDeletionBoundaryRace bool
+	var deletionBoundaryCompletions, deletionBoundaryFacts int
+	wantDeletionBoundaryCompletion := 0
+	if deletionWonBoundaryRace {
+		wantDeletionBoundaryCompletion = 1
+	}
+	if err := database.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.policies policy
+		JOIN iam.user_permission_boundaries boundary ON boundary.tenant_id=policy.owner_tenant_id AND boundary.policy_id=policy.id
+		WHERE policy.owner_tenant_id=$1 AND policy.id=$2 AND policy.status='RETIRED' AND boundary.revoked_at IS NULL),
+		(SELECT count(*) FROM iam.policy_deletions WHERE tenant_id=$1 AND actor_principal_id=$3
+		 AND request_id='customer-delegated-deletion-boundary-race-delete'),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.deleted'
+		 AND event_document->>'requestId'='customer-delegated-deletion-boundary-race-delete')`,
+		member.AccountID, delegatedBoundaryRacePolicy.Policy.ID, member.ID).
+		Scan(&inconsistentDeletionBoundaryRace, &deletionBoundaryCompletions, &deletionBoundaryFacts); err != nil ||
+		inconsistentDeletionBoundaryRace || deletionBoundaryCompletions != wantDeletionBoundaryCompletion ||
+		deletionBoundaryFacts != wantDeletionBoundaryCompletion {
+		t.Fatal("delegated delete/boundary race left an inconsistent terminal result", err,
+			inconsistentDeletionBoundaryRace, deletionBoundaryCompletions, deletionBoundaryFacts)
+	}
+	if !deletionWonBoundaryRace {
+		var selected iamv1.UserPermissionBoundary
+		get(delegatedBoundaryRacePath, root, http.StatusOK, &selected)
+		request(http.MethodDelete, delegatedBoundaryRacePath, root,
+			iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: selected.ResourceVersion,
+				RequestID: "customer-delegated-deletion-boundary-race-cleanup"}, http.StatusOK, nil)
+	}
+
 	var metadataPlatformBinding iamv1.PolicyAttachment
 	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
 		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
@@ -17962,10 +18275,129 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		delegatedMetadataRenamed.Policy.ID).Scan(&delegatedMetadataPartial); err != nil || delegatedMetadataPartial {
 		t.Fatalf("platform-bound delegated metadata left partial state: partial=%t err=%v", delegatedMetadataPartial, err)
 	}
+	request(http.MethodDelete, deletionPath, bearer,
+		iamv1.DeletePolicyRequest{ResourceVersion: delegatedDeletionPolicy.Policy.ResourceVersion,
+			RequestID: "customer-delegated-deletion-platform-rejected"}, http.StatusForbidden, nil)
+	var delegatedDeletionPartial bool
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_deletions WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT status<>'ACTIVE' OR resource_version<>$4 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$5)`,
+		member.AccountID, member.ID, "customer-delegated-deletion-platform-rejected",
+		delegatedDeletionPolicy.Policy.ResourceVersion, delegatedDeletionPolicy.Policy.ID).
+		Scan(&delegatedDeletionPartial); err != nil || delegatedDeletionPartial {
+		t.Fatalf("platform-bound delegated deletion left partial state: partial=%t err=%v", delegatedDeletionPartial, err)
+	}
 	post("/v1/policy-attachments/"+string(metadataPlatformBinding.ID)+":revoke", root,
 		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: metadataPlatformBinding.ResourceVersion,
 			RequestID: "customer-delegated-metadata-platform-binding-revoke"}, http.StatusOK, nil)
 	bearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_deletion_completion_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.request_id='customer-delegated-deletion-apply' THEN RAISE EXCEPTION 'injected deletion completion failure'; END IF;
+		RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_policy_deletion_completion_fault BEFORE INSERT ON iam.policy_deletions
+		FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_deletion_completion_fault()`); err != nil {
+		t.Fatal("install delegated deletion completion fault", err)
+	}
+	deletionFaultInstalled := true
+	defer func() {
+		if deletionFaultInstalled {
+			if _, err := database.Exec(context.Background(), `DROP TRIGGER IF EXISTS matrix_policy_deletion_completion_fault ON iam.policy_deletions;
+				DROP FUNCTION IF EXISTS public.matrix_policy_deletion_completion_fault()`); err != nil {
+				t.Error("remove delegated deletion completion fault", err)
+			}
+		}
+	}()
+	request(http.MethodDelete, deletionPath, bearer, delegatedDeletion, http.StatusServiceUnavailable, nil)
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_deletions WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT status<>'ACTIVE' OR resource_version<>$4 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$5)`,
+		member.AccountID, member.ID, delegatedDeletion.RequestID,
+		delegatedDeletionPolicy.Policy.ResourceVersion, delegatedDeletionPolicy.Policy.ID).
+		Scan(&delegatedDeletionPartial); err != nil || delegatedDeletionPartial {
+		t.Fatalf("failed delegated deletion completion left partial state: partial=%t err=%v", delegatedDeletionPartial, err)
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_policy_deletion_completion_fault ON iam.policy_deletions;
+		DROP FUNCTION public.matrix_policy_deletion_completion_fault()`); err != nil {
+		t.Fatal("remove delegated deletion completion fault before retry", err)
+	}
+	deletionFaultInstalled = false
+	var delegatedDeleted, delegatedDeletedReplay iamv1.Policy
+	request(http.MethodDelete, deletionPath, bearer, delegatedDeletion, http.StatusOK, &delegatedDeleted)
+	request(http.MethodDelete, deletionPath, bearer, delegatedDeletion, http.StatusOK, &delegatedDeletedReplay)
+	if delegatedDeleted.Status != iamv1.PolicyRetired ||
+		delegatedDeleted.ResourceVersion != delegatedDeletion.ResourceVersion+1 ||
+		delegatedDeleted.ID != delegatedDeletionPolicy.Policy.ID || delegatedDeleted != delegatedDeletedReplay {
+		t.Fatal("delegated policy deletion or exact replay changed its terminal result")
+	}
+	var delegatedDeletionProof bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT actor_boundary_evidence->>'state'='BOUND'
+		 AND actor_boundary_evidence#>>'{version,policyId}'=$4
+		 AND completed_at=(SELECT updated_at FROM iam.policies WHERE owner_tenant_id=$1 AND id=$5)
+		 FROM iam.policy_deletions WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		AND (SELECT count(*)=1 FROM iam.audit_outbox WHERE tenant_id=$1
+		 AND event_document->>'action'='iam.policy.deleted' AND event_document#>>'{actor,id}'=$2
+		 AND event_document->>'requestId'=$3 AND event_document#>>'{target,id}'=$5)
+		AND (SELECT status='RETIRED' AND resource_version=$6 AND default_version_id=$7
+		 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$5)`,
+		member.AccountID, member.ID, delegatedDeletion.RequestID, delegationCeiling.Policy.ID,
+		delegatedDeletionPolicy.Policy.ID, delegatedDeleted.ResourceVersion, delegatedDeletionPolicy.Version.ID).
+		Scan(&delegatedDeletionProof); err != nil || !delegatedDeletionProof {
+		t.Fatal("delegated deletion lost its ceiling, immutable completion or one-to-one fact", err)
+	}
+	deletionVariant := delegatedDeletion
+	deletionVariant.ResourceVersion++
+	request(http.MethodDelete, deletionPath, bearer, deletionVariant, http.StatusConflict, nil)
+	request(http.MethodDelete, deletionPath, bearer,
+		iamv1.DeletePolicyRequest{ResourceVersion: delegatedDeleted.ResourceVersion,
+			RequestID: "customer-delegated-deletion-again"}, http.StatusForbidden, nil)
+
+	delegatedDeletionRaceCreate := delegatedSwitchCreate
+	delegatedDeletionRaceCreate.DisplayName = "Delegated concurrent deletion"
+	delegatedDeletionRaceCreate.RequestID = "customer-delegated-deletion-race-policy-create"
+	var delegatedDeletionRacePolicy iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedDeletionRaceCreate, http.StatusCreated, &delegatedDeletionRacePolicy)
+	startDeletionRace := make(chan struct{})
+	deletionRaceResults := make(chan *httptest.ResponseRecorder, 2)
+	for _, requestID := range []string{"customer-delegated-deletion-race-a", "customer-delegated-deletion-race-b"} {
+		requestID := requestID
+		requestBody := mustIAMJSON(t, iamv1.DeletePolicyRequest{ResourceVersion: delegatedDeletionRacePolicy.Policy.ResourceVersion,
+			RequestID: requestID})
+		go func() {
+			<-startDeletionRace
+			deletionRaceResults <- performIAMRequest(handler, http.MethodDelete,
+				"/v1/policies/"+string(delegatedDeletionRacePolicy.Policy.ID), bearer, requestBody)
+		}()
+	}
+	close(startDeletionRace)
+	deletionRaceWinners := 0
+	for range 2 {
+		response := <-deletionRaceResults
+		switch response.Code {
+		case http.StatusOK:
+			deletionRaceWinners++
+		case http.StatusConflict, http.StatusForbidden:
+		default:
+			t.Fatalf("delegated concurrent deletion returned unexpected status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	var deletionRaceClosed bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*)=1 FROM iam.policy_deletions WHERE tenant_id=$1 AND actor_principal_id=$2
+		 AND request_id IN ('customer-delegated-deletion-race-a','customer-delegated-deletion-race-b'))
+		AND (SELECT count(*)=1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.deleted'
+		 AND event_document->>'requestId' IN ('customer-delegated-deletion-race-a','customer-delegated-deletion-race-b'))
+		AND (SELECT status='RETIRED' AND resource_version=$3 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$4)`,
+		member.AccountID, member.ID, delegatedDeletionRacePolicy.Policy.ResourceVersion+1,
+		delegatedDeletionRacePolicy.Policy.ID).Scan(&deletionRaceClosed); err != nil || deletionRaceWinners != 1 || !deletionRaceClosed {
+		t.Fatalf("delegated concurrent deletion did not commit exactly one complete result: winners=%d closed=%t err=%v",
+			deletionRaceWinners, deletionRaceClosed, err)
+	}
 
 	post("/v1/accounts", root, map[string]any{"id": "customer-policy-other", "displayName": "Other policy account", "rootLoginName": "customer-policy-other", "rootDisplayName": "Other root", "initialPassword": initialDeveloperPassword, "requestId": "customer-policy-other-create"}, http.StatusCreated, nil)
 	other := localRecoveryLogin(t, handler, "customer-policy-other", initialDeveloperPassword, true)
@@ -17987,6 +18419,10 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		ResourceVersion: foreign.Policy.ResourceVersion, RequestID: "customer-delegated-metadata-cross-account"}
 	request(http.MethodPatch, "/v1/policies/"+string(foreign.Policy.ID), bearer,
 		crossAccountMetadata, http.StatusForbidden, nil)
+	crossAccountDeletion := iamv1.DeletePolicyRequest{ResourceVersion: foreign.Policy.ResourceVersion,
+		RequestID: "customer-delegated-deletion-cross-account"}
+	request(http.MethodDelete, "/v1/policies/"+string(foreign.Policy.ID), bearer,
+		crossAccountDeletion, http.StatusForbidden, nil)
 	var currentActorBoundary iamv1.UserPermissionBoundary
 	get("/v1/users/"+string(member.ID)+"/permission-boundary", root, http.StatusOK, &currentActorBoundary)
 	request(http.MethodDelete, "/v1/users/"+string(member.ID)+"/permission-boundary", root,
@@ -18003,10 +18439,18 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	if !bytes.Equal(mustIAMJSON(t, historicalMetadataReplay), mustIAMJSON(t, delegatedMetadataRenamed)) {
 		t.Fatal("ceiling removal changed an exact committed metadata update result")
 	}
+	var historicalDeletionReplay iamv1.Policy
+	request(http.MethodDelete, deletionPath, bearer, delegatedDeletion, http.StatusOK, &historicalDeletionReplay)
+	if historicalDeletionReplay != delegatedDeleted {
+		t.Fatal("ceiling removal changed an exact committed policy deletion result")
+	}
 	request(http.MethodPatch, metadataPath, bearer,
 		iamv1.UpdatePolicyRequest{DisplayName: "Boundary-removed metadata rejected",
 			ResourceVersion: delegatedMetadataRenamed.Policy.ResourceVersion,
 			RequestID:       "customer-delegated-metadata-after-boundary-remove"}, http.StatusForbidden, nil)
+	boundaryRemovedDeletion := iamv1.DeletePolicyRequest{ResourceVersion: delegatedDeleted.ResourceVersion,
+		RequestID: "customer-delegated-deletion-after-boundary-remove"}
+	request(http.MethodDelete, deletionPath, bearer, boundaryRemovedDeletion, http.StatusForbidden, nil)
 	mismatchedMetadata, err := database.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -18048,16 +18492,54 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	request(http.MethodDelete, retirementPath+string(delegatedRetirementPolicy.Version.ID), bearer,
 		boundaryRemovedRetirement, http.StatusForbidden, nil)
 	if err := database.QueryRow(ctx, `SELECT
-		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id IN($3,$4))
-		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN($3,$4))
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id IN($3,$4,$9,$10))
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN($3,$4,$9,$10))
 		OR EXISTS(SELECT 1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id IN($3,$4))
+		OR EXISTS(SELECT 1 FROM iam.policy_deletions WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id IN($9,$10))
 		OR (SELECT count(*)<>1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$5)
 		OR (SELECT resource_version<>$6 OR default_version_id<>$7 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$8)`,
 		member.AccountID, member.ID, crossAccountRetirement.RequestID, boundaryRemovedRetirement.RequestID,
 		delegatedRetirement.RequestID, delegatedRetired.Policy.ResourceVersion,
-		delegatedRetirementPolicy.Version.ID, delegatedRetirementPolicy.Policy.ID).
+		delegatedRetirementPolicy.Version.ID, delegatedRetirementPolicy.Policy.ID, crossAccountDeletion.RequestID,
+		boundaryRemovedDeletion.RequestID).
 		Scan(&delegatedRetirementPartial); err != nil || delegatedRetirementPartial {
 		t.Fatalf("cross-account/new retirement or historical replay changed authority: partial=%t err=%v", delegatedRetirementPartial, err)
+	}
+	mismatchedDeletion, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mismatchedDeletion.Exec(ctx, `ALTER TABLE iam.policy_deletions
+		DISABLE TRIGGER policy_deletions_cannot_be_updated;
+		UPDATE iam.policy_deletions SET actor_boundary_evidence=jsonb_set(actor_boundary_evidence,
+		'{version,contentDigest}',to_jsonb(('sha256:'||repeat('d',64))::text))
+		WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3;
+		ALTER TABLE iam.policy_deletions ENABLE ALWAYS TRIGGER policy_deletions_cannot_be_updated`,
+		member.AccountID, member.ID, delegatedDeletion.RequestID); err != nil {
+		_ = mismatchedDeletion.Rollback(ctx)
+		t.Fatal("inject isolated mismatched delegated deletion evidence", err)
+	}
+	if err := mismatchedDeletion.Commit(ctx); err != nil {
+		t.Fatal("commit isolated mismatched delegated deletion evidence", err)
+	}
+	request(http.MethodDelete, deletionPath, bearer, delegatedDeletion, http.StatusServiceUnavailable, nil)
+	var mismatchedDeletionClosed bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.policy_deletions WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)=1
+		AND NOT EXISTS(SELECT 1 FROM iam.policy_deletions deletion
+		 JOIN iam.authorization_decisions decision ON decision.tenant_id=deletion.tenant_id
+		  AND decision.principal_id=deletion.actor_principal_id AND decision.request_id=deletion.request_id
+		  AND decision.action_name='iam.policy.delete' AND decision.allowed
+		 WHERE deletion.tenant_id=$1 AND deletion.actor_principal_id=$2 AND deletion.request_id=$3
+		  AND decision.boundary_evidence=deletion.actor_boundary_evidence)
+		AND (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.deleted'
+		 AND event_document->>'requestId'=$3)=1
+		AND (SELECT status='RETIRED' AND resource_version=$4 AND default_version_id=$5
+		 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
+		member.AccountID, member.ID, delegatedDeletion.RequestID, delegatedDeleted.ResourceVersion,
+		delegatedDeletionPolicy.Version.ID, delegatedDeletionPolicy.Policy.ID).
+		Scan(&mismatchedDeletionClosed); err != nil || !mismatchedDeletionClosed {
+		t.Fatal("mismatched delegated deletion evidence was accepted or changed authority", err)
 	}
 	mismatchedRetirement, err := database.Begin(ctx)
 	if err != nil {
@@ -19365,7 +19847,8 @@ func proveCustomerPolicyDeletion(t *testing.T, ctx context.Context, handler http
 		}
 		response := performIAMRequest(handler, method, path, bearer, encoded)
 		if response.Code != want {
-			t.Fatalf("policy deletion %s %s status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+			t.Fatalf("policy deletion %s %s status=%d want=%d request=%s body=%s", method, path,
+				response.Code, want, string(encoded), response.Body.String())
 		}
 		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
 			t.Fatal("decode policy deletion response")

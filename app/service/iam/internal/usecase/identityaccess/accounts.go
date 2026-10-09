@@ -822,14 +822,13 @@ func (service *Authority) DeletePolicy(ctx context.Context, credential iamv1.Sec
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyDelete, iamv1.AuthorizationResourceInstance, "", iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Policy, error) {
-			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
-				return iamv1.Policy{}, err
-			}
 			event, err := service.newManagementEvent(subject, auditv1.ActionIAMPolicyDeleted, auditv1.TargetPolicy, string(id), decision.ID, requestDigest, request.RequestID, now)
 			if err != nil {
 				return iamv1.Policy{}, err
 			}
-			return tx.DeletePolicy(ctx, PolicyDeletion{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, PolicyID: id, ResourceVersion: request.ResourceVersion, AuditEvent: event})
+			return tx.DeletePolicy(ctx, PolicyDeletion{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				ActorSessionID: subject.Subject.Session.ID, DecisionID: decision.ID, PolicyID: id,
+				ResourceVersion: request.ResourceVersion, AuditEvent: event})
 		})
 }
 

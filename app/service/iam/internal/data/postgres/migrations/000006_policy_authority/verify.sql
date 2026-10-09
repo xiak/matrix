@@ -88,7 +88,7 @@ END $verify_policy_authority$;
 DO $verify_customer_policy_publication$
 DECLARE function_name text;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 77::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 78::bigint THEN
         RAISE EXCEPTION 'IAM policy publication schema version is invalid';
     END IF;
     IF iam.policy_version_contract_ready() IS DISTINCT FROM true THEN
@@ -107,7 +107,7 @@ BEGIN
         'iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer,text)',
         'iam.list_policy_versions(text,text,text,text)','iam.read_policy_version(text,text,text,text,text)',
         'iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer,text)','iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb,text)',
-        'iam.update_policy(text,text,text,text,bigint,text,jsonb,text)','iam.delete_policy(text,text,text,text,bigint,jsonb)','iam.delete_policy_version(text,text,text,text,text,bigint,jsonb,text)'] LOOP
+        'iam.update_policy(text,text,text,text,bigint,text,jsonb,text)','iam.delete_policy(text,text,text,text,bigint,jsonb,text)','iam.delete_policy_version(text,text,text,text,text,bigint,jsonb,text)'] LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS entry WHERE entry.oid=to_regprocedure(function_name)
             AND entry.prorettype='jsonb'::regtype AND NOT entry.proretset AND entry.prosecdef
             AND entry.proowner='matrix_iam_owner'::regrole AND 'search_path=pg_catalog, pg_temp'=ANY(entry.proconfig))
@@ -125,7 +125,8 @@ BEGIN
         'iam.lock_customer_policy_publisher(text,text,text)','iam.policy_version_intent_replayed(text,text,jsonb)',
         'iam.lock_policy_default_selection_delegation(text,text,text,text)','iam.policy_default_version_contract_ready()',
         'iam.lock_policy_version_retirement_delegation(text,text,text,text)','iam.policy_version_retirement_contract_ready()',
-        'iam.lock_policy_metadata_update_delegation(text,text,text,text)','iam.policy_metadata_update_contract_ready()'] LOOP
+        'iam.lock_policy_metadata_update_delegation(text,text,text,text)','iam.policy_metadata_update_contract_ready()',
+        'iam.lock_policy_deletion_delegation(text,text,text,text)','iam.policy_deletion_contract_ready()'] LOOP
         IF to_regprocedure(function_name) IS NULL OR has_function_privilege('matrix_iam_api',function_name,'EXECUTE')
            OR has_function_privilege('matrix_iam_worker',function_name,'EXECUTE')
            OR has_function_privilege('matrix_iam_credential_recovery',function_name,'EXECUTE')
@@ -144,6 +145,10 @@ BEGIN
     IF iam.policy_metadata_update_contract_ready() IS DISTINCT FROM true
        OR to_regprocedure('iam.update_policy(text,text,text,text,bigint,text,jsonb)') IS NOT NULL THEN
         RAISE EXCEPTION 'IAM delegated policy metadata update contract is invalid';
+    END IF;
+    IF iam.policy_deletion_contract_ready() IS DISTINCT FROM true
+       OR to_regprocedure('iam.delete_policy(text,text,text,text,bigint,jsonb)') IS NOT NULL THEN
+        RAISE EXCEPTION 'IAM delegated policy deletion contract is invalid';
     END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_index WHERE indexrelid=to_regclass('iam.customer_policies_active_name_uq')
         AND indrelid='iam.policies'::regclass AND indisunique AND indisvalid AND indnkeyatts=2 AND indpred IS NOT NULL)

@@ -319,6 +319,83 @@ REVOKE ALL ON TABLE iam.policy_metadata_updates FROM PUBLIC,matrix_iam_api,matri
 REVOKE ALL ON FUNCTION iam.guard_policy_metadata_update_insert()
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 
+-- A delegated terminal deletion remains attributable after its Policy and the
+-- actor's current ceiling have changed. Root deletions deliberately do not
+-- synthesize this evidence: the table proves only the constrained delegation.
+CREATE TABLE IF NOT EXISTS iam.policy_deletions (
+    tenant_id text COLLATE "C" NOT NULL,
+    actor_principal_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    policy_id text COLLATE "C" NOT NULL REFERENCES iam.policies(id),
+    expected_resource_version bigint NOT NULL,
+    actor_boundary_evidence jsonb NOT NULL,
+    decision_id text COLLATE "C" NOT NULL,
+    event_id text COLLATE "C" NOT NULL,
+    completed_at timestamptz(6) NOT NULL,
+    PRIMARY KEY(tenant_id,actor_principal_id,request_id),
+    FOREIGN KEY(tenant_id,actor_principal_id) REFERENCES iam.principals(tenant_id,id),
+    FOREIGN KEY(tenant_id,decision_id) REFERENCES iam.authorization_decisions(tenant_id,id),
+    FOREIGN KEY(tenant_id,event_id) REFERENCES iam.audit_outbox(tenant_id,event_id),
+    CONSTRAINT policy_deletions_shape CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND actor_principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND policy_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND expected_resource_version BETWEEN 1 AND 9007199254740990
+        AND jsonb_typeof(actor_boundary_evidence)='object'
+        AND actor_boundary_evidence->>'state'='BOUND'
+        AND actor_boundary_evidence-ARRAY['state','userResourceVersion','boundaryId','resourceVersion','version','contractVersion','compilation']='{}'::jsonb
+        AND jsonb_typeof(actor_boundary_evidence->'userResourceVersion')='number'
+        AND jsonb_typeof(actor_boundary_evidence->'resourceVersion')='number'
+        AND COALESCE(actor_boundary_evidence->>'userResourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+        AND COALESCE(actor_boundary_evidence->>'resourceVersion','') ~ '^[1-9][0-9]{0,15}$'
+        AND COALESCE(actor_boundary_evidence->>'boundaryId','') COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND jsonb_typeof(actor_boundary_evidence->'version')='object'
+        AND (actor_boundary_evidence->'version') ?& ARRAY['policyId','versionId','contentDigest']
+        AND (actor_boundary_evidence->'version')-ARRAY['policyId','versionId','contentDigest']='{}'::jsonb
+        AND actor_boundary_evidence#>>'{version,policyId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND actor_boundary_evidence#>>'{version,versionId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND actor_boundary_evidence#>>'{version,contentDigest}' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND ((actor_boundary_evidence->'contractVersion'='1'::jsonb AND NOT actor_boundary_evidence ? 'compilation')
+          OR (actor_boundary_evidence->'contractVersion'='2'::jsonb
+            AND jsonb_typeof(actor_boundary_evidence->'compilation')='object')))
+);
+ALTER TABLE iam.policy_deletions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.policy_deletions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON iam.policy_deletions;
+CREATE POLICY tenant_isolation ON iam.policy_deletions
+    USING(tenant_id=iam.current_tenant_id()) WITH CHECK(tenant_id=iam.current_tenant_id());
+
+CREATE OR REPLACE FUNCTION iam.guard_policy_deletion_insert()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF current_setting('matrix.iam_policy_deletion',true) IS DISTINCT FROM 'trusted' THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy deletion completion insertion is forbidden';
+    END IF;
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS policy_deletion_insert_guard ON iam.policy_deletions;
+CREATE TRIGGER policy_deletion_insert_guard BEFORE INSERT ON iam.policy_deletions
+    FOR EACH ROW EXECUTE FUNCTION iam.guard_policy_deletion_insert();
+DROP TRIGGER IF EXISTS policy_deletions_cannot_be_updated ON iam.policy_deletions;
+CREATE TRIGGER policy_deletions_cannot_be_updated BEFORE UPDATE ON iam.policy_deletions
+    FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+DROP TRIGGER IF EXISTS policy_deletions_cannot_be_deleted ON iam.policy_deletions;
+CREATE TRIGGER policy_deletions_cannot_be_deleted BEFORE DELETE ON iam.policy_deletions
+    FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+DROP TRIGGER IF EXISTS policy_deletions_cannot_be_truncated ON iam.policy_deletions;
+CREATE TRIGGER policy_deletions_cannot_be_truncated BEFORE TRUNCATE ON iam.policy_deletions
+    FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.policy_deletions ENABLE ALWAYS TRIGGER policy_deletion_insert_guard;
+ALTER TABLE iam.policy_deletions ENABLE ALWAYS TRIGGER policy_deletions_cannot_be_updated;
+ALTER TABLE iam.policy_deletions ENABLE ALWAYS TRIGGER policy_deletions_cannot_be_deleted;
+ALTER TABLE iam.policy_deletions ENABLE ALWAYS TRIGGER policy_deletions_cannot_be_truncated;
+REVOKE ALL ON TABLE iam.policy_deletions FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+REVOKE ALL ON FUNCTION iam.guard_policy_deletion_insert()
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+
 CREATE OR REPLACE FUNCTION iam.current_user_boundary(tenant text,user_id text)
 RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE subject iam.principals%ROWTYPE; binding iam.user_permission_boundaries%ROWTYPE;
@@ -1688,7 +1765,13 @@ BEGIN
     END IF;
 
     IF actor_is_root THEN
-        policy:=iam.lock_customer_policy_publisher(tenant,actor,policy_id);
+        -- Preserve the original Root terminal-state semantics: a new intent
+        -- against an already retired CUSTOMER Policy is a revision conflict,
+        -- not a reclassification as an unavailable delegated target.
+        PERFORM iam.lock_policy_publisher(tenant,actor);
+        SELECT * INTO policy FROM iam.policies target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+          AND target.management='CUSTOMER' AND target.authority_scope='TENANT' FOR UPDATE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy is unavailable'; END IF;
     ELSE
         actor_evidence:=iam.lock_policy_metadata_update_delegation(tenant,actor,decision,policy_id);
         SELECT * INTO policy FROM iam.policies target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
@@ -1769,41 +1852,228 @@ REVOKE ALL ON FUNCTION iam.lock_policy_metadata_update_delegation(text,text,text
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.update_policy(text,text,text,text,bigint,text,jsonb,text) TO matrix_iam_api;
 
-CREATE OR REPLACE FUNCTION iam.delete_policy(tenant text,actor text,decision text,policy_id text,expected_version bigint,event jsonb)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE policy iam.policies%ROWTYPE; effective_now timestamptz(6):=transaction_timestamp();
+-- A delegated terminal deletion is safe only when the target has no live
+-- authorization consumer. The target and actor ceiling are locked in stable
+-- Policy order so attachment and boundary writers cannot cross the barrier.
+CREATE OR REPLACE FUNCTION iam.lock_policy_deletion_delegation(
+    tenant text,actor text,decision text,policy_id text
+)
+RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE actor_evidence jsonb; ceiling_policy_id text;
+    target_policy iam.policies%ROWTYPE; ceiling_policy iam.policies%ROWTYPE;
 BEGIN
-    IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990 THEN
-        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy revision is invalid';
+    SELECT recorded.boundary_evidence INTO actor_evidence FROM iam.authorization_decisions recorded
+      WHERE recorded.tenant_id=tenant AND recorded.id=decision AND recorded.principal_id=actor
+        AND recorded.action_name='iam.policy.delete' AND recorded.allowed;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy deletion decision is unavailable';
     END IF;
-    PERFORM iam.lock_policy_publisher(tenant,actor);
-    SELECT * INTO policy FROM iam.policies AS p WHERE p.id=policy_id AND p.owner_tenant_id=tenant
-      AND p.management='CUSTOMER' AND p.authority_scope='TENANT' FOR UPDATE;
-    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable'; END IF;
+    SELECT boundary.policy_id INTO ceiling_policy_id FROM iam.user_permission_boundaries boundary
+      WHERE boundary.tenant_id=tenant AND boundary.user_id=actor AND boundary.revoked_at IS NULL
+      FOR NO KEY UPDATE;
+    IF NOT FOUND OR actor_evidence->>'state' IS DISTINCT FROM 'BOUND'
+      OR actor_evidence#>>'{version,policyId}' IS DISTINCT FROM ceiling_policy_id
+      OR ceiling_policy_id=policy_id
+      OR EXISTS(SELECT 1 FROM iam.policy_attachments attachment
+          WHERE attachment.tenant_id=tenant AND attachment.target_kind='USER' AND attachment.target_id=actor
+            AND attachment.authority_scope='INSTALLATION' AND attachment.revoked_at IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy deletion delegation is unavailable';
+    END IF;
+
+    PERFORM locked.id FROM iam.policies locked WHERE locked.id IN(ceiling_policy_id,policy_id)
+      ORDER BY locked.id FOR UPDATE;
+    SELECT * INTO target_policy FROM iam.policies target WHERE target.id=policy_id
+      AND target.owner_tenant_id=tenant AND target.management='CUSTOMER'
+      AND target.authority_scope='TENANT' AND target.status='ACTIVE';
+    SELECT * INTO ceiling_policy FROM iam.policies ceiling WHERE ceiling.id=ceiling_policy_id
+      AND ceiling.owner_tenant_id=tenant AND ceiling.management='CUSTOMER'
+      AND ceiling.authority_scope='TENANT' AND ceiling.status='ACTIVE';
+    IF target_policy.id IS NULL OR ceiling_policy.id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy deletion target or ceiling is unavailable';
+    END IF;
+    PERFORM iam.assert_current_user_boundary_evidence(tenant,actor,'iam.policy.delete',actor_evidence);
+    IF EXISTS(SELECT 1 FROM iam.policy_attachments attachment
+          WHERE attachment.policy_id=lock_policy_deletion_delegation.policy_id AND attachment.revoked_at IS NULL)
+      OR EXISTS(SELECT 1 FROM iam.user_permission_boundaries boundary
+          WHERE boundary.policy_id=lock_policy_deletion_delegation.policy_id AND boundary.revoked_at IS NULL)
+      OR EXISTS(SELECT 1 FROM iam.role_permission_boundaries boundary
+          WHERE boundary.policy_id=lock_policy_deletion_delegation.policy_id AND boundary.revoked_at IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='delegated policy deletion target is referenced';
+    END IF;
+    RETURN actor_evidence;
+END $function$;
+
+DROP FUNCTION IF EXISTS iam.delete_policy(text,text,text,text,bigint,jsonb);
+CREATE OR REPLACE FUNCTION iam.delete_policy(tenant text,actor text,decision text,policy_id text,expected_version bigint,
+    event jsonb,actor_session_id text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE policy iam.policies%ROWTYPE; replayed boolean; actor_is_root boolean;
+    actor_evidence jsonb; completed iam.policy_deletions%ROWTYPE; prior_scope text;
+    effective_now timestamptz(6):=transaction_timestamp();
+BEGIN
+    IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990
+      OR COALESCE(actor_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy revision or publisher session is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy account is unavailable'; END IF;
+    PERFORM 1 FROM iam.principals principal WHERE principal.tenant_id=tenant AND principal.id=actor
+      AND principal.principal_type='USER' AND principal.status='ACTIVE' AND NOT principal.must_change_password
+      AND principal.deleted_at IS NULL FOR NO KEY UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy actor is unavailable'; END IF;
+    PERFORM 1 FROM iam.user_credentials credential JOIN iam.sessions session
+      ON (session.tenant_id,session.principal_id)=(credential.tenant_id,credential.principal_id)
+      WHERE credential.tenant_id=tenant AND credential.principal_id=actor AND session.id=actor_session_id
+        AND session.status='ACTIVE' AND session.revoked_at IS NULL AND session.expires_at>clock_timestamp()
+        AND session.credential_version=credential.credential_version
+        AND session.last_activity_at IS NOT NULL AND session.idle_timeout_seconds IS NOT NULL
+        AND session.last_activity_at+make_interval(secs=>session.idle_timeout_seconds)>clock_timestamp()
+      FOR SHARE OF credential,session;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy publisher session is unavailable'; END IF;
+    PERFORM 1 FROM iam.account_roots root WHERE root.account_id=tenant AND root.principal_id=actor FOR SHARE;
+    actor_is_root:=FOUND;
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.delete','POLICY',policy_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.policy.deleted','POLICY',policy_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
-    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy deletion decision is invalid'; END IF;
-    IF iam.policy_version_intent_replayed(tenant,actor,event) THEN
-        IF policy.status<>'RETIRED' OR policy.resource_version<>expected_version+1 THEN
+    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy deletion decision is invalid';
+    END IF;
+    SELECT * INTO policy FROM iam.policies target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+      AND target.management='CUSTOMER' AND target.authority_scope='TENANT'
+      AND target.status IN('ACTIVE','RETIRED');
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy is unavailable'; END IF;
+    replayed:=iam.policy_version_intent_replayed(tenant,actor,event);
+    IF NOT replayed AND actor_is_root AND policy.status='RETIRED' THEN
+        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='policy deletion revision conflicts';
+    END IF;
+    IF replayed THEN
+        SELECT * INTO policy FROM iam.policies target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+          AND target.management='CUSTOMER' AND target.authority_scope='TENANT' FOR UPDATE;
+        IF policy.id IS NULL OR policy.status<>'RETIRED' OR policy.resource_version<>expected_version+1 THEN
             RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy deletion replay conflicts';
+        END IF;
+        IF NOT actor_is_root THEN
+            SELECT * INTO completed FROM iam.policy_deletions deletion
+              WHERE (deletion.tenant_id,deletion.actor_principal_id,deletion.request_id)=
+                (tenant,actor,event->>'requestId');
+            IF NOT FOUND OR completed.policy_id IS DISTINCT FROM policy_id
+              OR completed.expected_resource_version IS DISTINCT FROM expected_version
+              OR completed.completed_at IS DISTINCT FROM policy.updated_at
+              OR NOT EXISTS(SELECT 1 FROM iam.authorization_decisions original_decision
+                JOIN iam.audit_outbox original_event
+                  ON original_event.tenant_id=original_decision.tenant_id
+                  AND original_event.event_id=completed.event_id
+                WHERE original_decision.tenant_id=tenant AND original_decision.id=completed.decision_id
+                  AND original_decision.principal_id=actor AND original_decision.allowed
+                  AND original_decision.action_name='iam.policy.delete'
+                  AND original_decision.target_kind='POLICY' AND original_decision.target_id=completed.policy_id
+                  AND original_decision.resource_mode='INSTANCE' AND original_decision.collection_usage IS NULL
+                  AND original_decision.contract_version=7 AND original_decision.subject_type='USER'
+                  AND original_decision.access_key_id IS NULL
+                  AND original_decision.request_id=completed.request_id
+                  AND original_decision.boundary_evidence=completed.actor_boundary_evidence
+                  AND original_event.event_document->>'action'='iam.policy.deleted'
+                  AND original_event.event_document#>>'{actor,id}'=actor
+                  AND original_event.event_document#>>'{target,kind}'='POLICY'
+                  AND original_event.event_document#>>'{target,id}'=completed.policy_id
+                  AND original_event.event_document->>'result'='SUCCEEDED'
+                  AND original_event.event_document->>'requestId'=completed.request_id
+                  AND original_event.event_document->>'requestDigest'=event->>'requestDigest'
+                  AND original_event.event_document->>'iamDecisionId'=completed.decision_id) THEN
+                RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='policy deletion completion is unavailable';
+            END IF;
         END IF;
         RETURN iam.lookup_policy(tenant,policy_id);
     END IF;
-    IF policy.status<>'ACTIVE' OR policy.resource_version<>expected_version OR EXISTS(
-        SELECT 1 FROM iam.policy_attachments AS a WHERE a.policy_id=delete_policy.policy_id AND a.revoked_at IS NULL)
-        OR EXISTS(SELECT 1 FROM iam.user_permission_boundaries AS b WHERE b.policy_id=delete_policy.policy_id AND b.revoked_at IS NULL)
-        OR EXISTS(SELECT 1 FROM iam.role_permission_boundaries AS b WHERE b.policy_id=delete_policy.policy_id AND b.revoked_at IS NULL) THEN
+
+    IF actor_is_root THEN
+        policy:=iam.lock_customer_policy_publisher(tenant,actor,policy_id);
+    ELSE
+        actor_evidence:=iam.lock_policy_deletion_delegation(tenant,actor,decision,policy_id);
+        SELECT * INTO policy FROM iam.policies target WHERE target.id=policy_id AND target.owner_tenant_id=tenant
+          AND target.management='CUSTOMER' AND target.authority_scope='TENANT' AND target.status='ACTIVE';
+        IF NOT FOUND OR actor_evidence IS NULL THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='policy deletion delegation is unavailable';
+        END IF;
+    END IF;
+    IF policy.resource_version<>expected_version
+      OR EXISTS(SELECT 1 FROM iam.policy_attachments attachment
+          WHERE attachment.policy_id=delete_policy.policy_id AND attachment.revoked_at IS NULL)
+      OR EXISTS(SELECT 1 FROM iam.user_permission_boundaries boundary
+          WHERE boundary.policy_id=delete_policy.policy_id AND boundary.revoked_at IS NULL)
+      OR EXISTS(SELECT 1 FROM iam.role_permission_boundaries boundary
+          WHERE boundary.policy_id=delete_policy.policy_id AND boundary.revoked_at IS NULL) THEN
         RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy revision or live reference conflicts';
     END IF;
-    UPDATE iam.policies AS p SET status='RETIRED',resource_version=resource_version+1,updated_at=effective_now WHERE p.id=policy_id;
+    UPDATE iam.policies AS target SET status='RETIRED',resource_version=resource_version+1,
+      updated_at=effective_now WHERE target.id=policy_id;
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
       VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
+    IF NOT actor_is_root THEN
+        prior_scope:=current_setting('matrix.iam_policy_deletion',true);
+        PERFORM set_config('matrix.iam_policy_deletion','trusted',true);
+        INSERT INTO iam.policy_deletions(tenant_id,actor_principal_id,request_id,policy_id,
+          expected_resource_version,actor_boundary_evidence,decision_id,event_id,completed_at)
+        VALUES(tenant,actor,event->>'requestId',policy_id,expected_version,actor_evidence,
+          decision,event->>'eventId',effective_now);
+        PERFORM set_config('matrix.iam_policy_deletion',COALESCE(prior_scope,''),true);
+    END IF;
     RETURN iam.lookup_policy(tenant,policy_id);
 END $function$;
-REVOKE ALL ON FUNCTION iam.lock_policy_publisher(text,text),iam.delete_policy(text,text,text,text,bigint,jsonb)
+
+CREATE OR REPLACE FUNCTION iam.policy_deletion_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+  SELECT EXISTS(SELECT 1 FROM pg_class relation
+      WHERE relation.oid='iam.policy_deletions'::regclass
+        AND relation.relowner='matrix_iam_owner'::regrole
+        AND relation.relrowsecurity AND relation.relforcerowsecurity
+        AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(relation.relacl,acldefault('r',relation.relowner))) privilege
+          WHERE privilege.grantee<>relation.relowner))
+    AND EXISTS(SELECT 1 FROM pg_constraint constraint_value
+      WHERE constraint_value.conrelid='iam.policy_deletions'::regclass
+        AND constraint_value.conname='policy_deletions_shape'
+        AND constraint_value.contype='c' AND constraint_value.convalidated)
+    AND (SELECT count(*)=4 FROM pg_trigger trigger_value
+      WHERE trigger_value.tgrelid='iam.policy_deletions'::regclass
+        AND NOT trigger_value.tgisinternal)
+    AND NOT EXISTS(SELECT 1 FROM (VALUES
+        ('policy_deletion_insert_guard','iam.guard_policy_deletion_insert()'::regprocedure,7::smallint),
+        ('policy_deletions_cannot_be_updated','iam.reject_policy_history_change()'::regprocedure,19::smallint),
+        ('policy_deletions_cannot_be_deleted','iam.reject_policy_history_change()'::regprocedure,11::smallint),
+        ('policy_deletions_cannot_be_truncated','iam.reject_policy_history_change()'::regprocedure,34::smallint)
+      ) expected(name,function_oid,trigger_type)
+      LEFT JOIN pg_trigger trigger_value ON trigger_value.tgrelid='iam.policy_deletions'::regclass
+        AND trigger_value.tgname=expected.name AND NOT trigger_value.tgisinternal
+      WHERE trigger_value.oid IS NULL OR trigger_value.tgenabled<>'A'
+        OR trigger_value.tgfoid<>expected.function_oid OR trigger_value.tgtype<>expected.trigger_type)
+    AND EXISTS(SELECT 1 FROM pg_proc guard
+      WHERE guard.oid='iam.guard_policy_deletion_insert()'::regprocedure
+        AND NOT guard.prosecdef AND guard.proowner='matrix_iam_owner'::regrole
+        AND guard.prorettype='trigger'::regtype AND guard.pronargs=0 AND NOT guard.proretset
+        AND 'search_path=pg_catalog, pg_temp'=ANY(guard.proconfig)
+        AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(guard.proacl,acldefault('f',guard.proowner))) privilege
+          WHERE privilege.grantee<>guard.proowner))
+    AND EXISTS(SELECT 1 FROM pg_proc entry
+      WHERE entry.oid=to_regprocedure('iam.delete_policy(text,text,text,text,bigint,jsonb,text)')
+        AND entry.prosecdef AND entry.proowner='matrix_iam_owner'::regrole
+        AND entry.prorettype='jsonb'::regtype AND NOT entry.proretset
+        AND 'search_path=pg_catalog, pg_temp'=ANY(entry.proconfig))
+    AND to_regprocedure('iam.delete_policy(text,text,text,text,bigint,jsonb)') IS NULL
+    AND EXISTS(SELECT 1 FROM pg_proc helper
+      WHERE helper.oid=to_regprocedure('iam.lock_policy_deletion_delegation(text,text,text,text)')
+        AND NOT helper.prosecdef AND helper.proowner='matrix_iam_owner'::regrole
+        AND helper.prorettype='jsonb'::regtype AND NOT helper.proretset
+        AND 'search_path=pg_catalog, pg_temp'=ANY(helper.proconfig)
+        AND NOT has_function_privilege('public',helper.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_api',helper.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_worker',helper.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_credential_recovery',helper.oid,'EXECUTE'))
+$function$;
+REVOKE ALL ON FUNCTION iam.lock_policy_publisher(text,text),iam.lock_policy_deletion_delegation(text,text,text,text),
+    iam.policy_deletion_contract_ready(),iam.delete_policy(text,text,text,text,bigint,jsonb,text)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
-GRANT EXECUTE ON FUNCTION iam.delete_policy(text,text,text,text,bigint,jsonb) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.delete_policy(text,text,text,text,bigint,jsonb,text) TO matrix_iam_api;
 
 -- A non-root author may retire only a non-default version of another CUSTOMER
 -- Policy while remaining inside one exact current User boundary. The target

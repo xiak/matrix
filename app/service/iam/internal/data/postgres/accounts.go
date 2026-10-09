@@ -531,7 +531,9 @@ func (value *transaction) UpdatePolicy(ctx context.Context, mutation identityacc
 }
 
 func (value *transaction) DeletePolicy(ctx context.Context, mutation identityaccess.PolicyDeletion) (iamv1.Policy, error) {
-	if iamv1.ValidateDeletePolicyRequest(iamv1.DeletePolicyRequest{ResourceVersion: mutation.ResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+	if iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||
+		iamv1.ValidateDeletePolicyRequest(iamv1.DeletePolicyRequest{ResourceVersion: mutation.ResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.Policy{}, identityaccess.ErrInvalidArgument
 	}
 	event, err := json.Marshal(mutation.AuditEvent)
@@ -540,7 +542,9 @@ func (value *transaction) DeletePolicy(ctx context.Context, mutation identityacc
 	}
 	defer clear(event)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.delete_policy($1,$2,$3,$4,$5,$6::jsonb)", mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PolicyID, mutation.ResourceVersion, event).Scan(&encoded)
+	err = value.tx.QueryRow(ctx, "SELECT iam.delete_policy($1,$2,$3,$4,$5,$6::jsonb,$7)", mutation.AccountID,
+		mutation.ActorPrincipalID, mutation.DecisionID, mutation.PolicyID, mutation.ResourceVersion, event,
+		mutation.ActorSessionID).Scan(&encoded)
 	if err != nil {
 		return iamv1.Policy{}, mapAuthorizationDatabaseError("delete IAM policy", err)
 	}

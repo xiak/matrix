@@ -71,6 +71,12 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 策略删除使用 `DELETE /v1/policies/{policyId}`，入参仅 resourceVersion、requestId，使用 `iam.policy.delete` / 精确 POLICY。当前 PDP 和原 root/ACTIVE Account/USER 检查后，锁定本账号 CUSTOMER Policy；SYSTEM 和跨账号拒绝。任何未撤销附件（包括停用 User 或组的附件）都使删除冲突，不能隐式解除关联。删除只把 Policy 置为不可恢复的 RETIRED，resourceVersion +1，返回终态 `Policy` 元数据；保留默认指针、全部不可变版本、已撤销附件、决定和 outbox。等值删除重放仅匹配原意图和终态修订；不同命令、错误版本、旧创建/改名/切换不得复活对象。成功事实为租户链 `iam.policy.deleted` / POLICY，与终态同事务。
 
+非 root 终态删除只开放给当前 Account 的直接 ACTIVE USER。普通 `iam.policy.delete` Allow 只是入口；受限存储事务仍须验证当前 bearer Session、credential generation、非强制改密状态，以及决定中封存并仍有效的单一 CUSTOMER/TENANT User permission boundary。目标必须是同 Account 的另一份 ACTIVE/CUSTOMER/TENANT Policy，不能是 actor ceiling、SYSTEM/跨 Account/退休 Policy；actor 带任一未撤销 INSTALLATION 附件时拒绝。目标存在任何未撤销 User/Group/Role 附件或当前 User/Role permission boundary 时拒绝，不能由删除命令隐式撤销引用。该安全性来自目标当前无授权消费者，而不是比较目标文档是否小于 ceiling。
+
+非 root 成功删除写入按 account+actor+requestId 唯一、不可更新/删除/截断的完成记录，绑定准确目标、预期修订、发生时 actor boundary evidence、原 authorization decision 与单一 Audit outbox。Policy 终态、完成记录和 `iam.policy.deleted` 同事务提交。精确已提交命令只有在目标仍为原 RETIRED 结果修订时才返回原结果；actor ceiling 后续移除不抹去历史结果，新 requestId 必须重新证明当前资格且不能操作终态。completion、decision、outbox 或 boundary evidence 缺失/篡改时失败关闭，不根据当前终态补造委派历史。Root 既有删除不倒签该完成证明。
+
+私有删除入口增加当前 actor Session 输入，公共 API 不接受 session/ceiling/force selector；旧内部函数形状在同一未发布切片删除。Account、actor USER/Session、actor boundary、ceiling/目标 Policy 与全部当前引用使用现有相容锁序。门禁必须覆盖：同 ceiling 管理员删除无引用 Policy 与精确重放；ceiling、SYSTEM、跨 Account、附件/User boundary/Role boundary 目标和平台绑定 actor 拒绝；请求通过 PDP 后并发 logout、actor ceiling 移除、目标新增附件或 boundary、改名/发布/默认切换及另一删除只有合法完整结果；完成插入或 outbox 末尾故障全回滚；完成证据篡改、旧函数/ACL/trigger/SECURITY DEFINER 漂移失败关闭；唯一滚动前驱的 Root 删除、旧 Audit canonical/proof 与全部不可变版本保留且不补造非 root 完成。
+
 普通管理目录只列 ACTIVE 策略，删除释放活跃 CUSTOMER 名额和显示名；原创建意图不能复用，但新创建意图可以使用相同显示名并得到新稳定 ID。删除后的普通内容读取、改名、发布/切换与重新关联均拒绝，历史事实按其原证据投递，不从当前目录反推历史是否存在。目录不提供未声明的回收站或历史查询 API；原始内容仍受不可变存储保护。真实门禁必须证明有超过目录预算的历史退休记录时仍能列出/创建当前策略，不能以扩大预算掩盖终生容量问题。附件创建与删除在同一 Policy 锁序列化；只有创建关联成功或策略终态成功之一，不能留下活跃的退休策略附件。
 
 #### 版本删除与再次发布
