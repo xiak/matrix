@@ -1,7 +1,7 @@
 # FEAT-IAM-006：角色、信任与 STS
 
 - 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。必须同时消费公开schema数量边界修正`0567c8b2699521b137db0f8b69f17630c59f04fb`，其本地契约及三项独立CI也已通过。服务来源RoleSession发行、回执、当前PDP、binding撤销即时失效以及严格SERVICE来源的管理员目录/读取/代撤销，已累计固定到`a464299b`并通过本地真实PG18、累计Role管理、独立进程及整仓门禁；其[Verification 36779942782](https://github.com/xiak/matrix/actions/runs/36779942782)已核对精确SHA，14项全部completed/success。UX/UI、完整容量和发布仍未完成，整体006未验收。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。
-- 当前增量：IAM-ROLE-10受限Role委派后端已通过本节记录的真库、并发、最近前驱、独立进程和全仓本地门禁；仍待固定推送、独立CI和010/UX/UI接入，不提前标记006完成。
+- 当前增量：IAM-ROLE-10受限Role委派后端已固定推送`fb5e63283bfb921e0befd8ae7a964122edaa8de4`并通过本节记录的真库、并发、最近前驱、独立进程和全仓本地门禁；其独立CI暴露同一子测试重复使用固定数据库屏障名称的夹具生命周期错误，修正已通过原完整Role真库/race门禁，仍待后继固定提交的独立CI和010/UX/UI接入，不提前标记006完成。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -115,7 +115,7 @@ Role 目标附件的完成证据继续使用现有 `actorBoundaryEvidence`/`targ
 - 唯一滚动前驱替换为固定`05525c7c03e83b9ed892e0354140b46685394101`的真实IAM78 migrator和runtime；IAM78→79门禁131.29秒（包134.710秒）通过。旧程序实际创建的Root Role、Trust、显式boundary、ROLE附件和RoleSession逐项保留，原Root receipt没有被改成`ROLE_BOUND`；当前程序再完成受限Role创建、附件和承担。该证据只支持pre-v1最近前驱，不宣称任意历史或跨不匹配release profile兼容。
 - 双IAM、Audit、PaaS和dispatcher独立进程race 257.49秒（包260.943秒）通过，保留受限运行登录、真实业务资源、RoleSession撤权、outbox历史投递、Audit链与重启。全仓普通及race、vet、模块校验、OpenAPI生成无差异和Linux amd64/CGO关闭构建通过。
 
-该证据不包含UX/UI或签名安装验收；后端固定并通过独立CI后才向010/UX/UI owner交付契约，不在本分支实现页面。独立CI终态尚待确认，不能由本地结果提前登记为完整006验收。
+该证据不包含UX/UI或签名安装验收；后端固定并通过独立CI后才向010/UX/UI owner交付契约，不在本分支实现页面。固定`fb5e63283bfb921e0befd8ae7a964122edaa8de4`的[Verification 37960193822](https://github.com/xiak/matrix/actions/runs/37960193822)不能作为验收点：`authority-roles`在第二次安装同名测试屏障时以 PostgreSQL `42723`失败，原因是夹具只在整个子测试清理而同一子测试需要多次安装，不是Role授权断言失败；同run中通过的其他任务不能覆盖该失败。当前修正让每轮并发完成后立即、幂等地释放锁并删除屏障，同时保留失败路径清理；在全新独立PostgreSQL 18的七个数据库、1 CPU/768 MiB/PIDs192下，原`TestIAMRoleAndManagementReferencesPostgres`完整`-race -p 1`重新通过501.71秒（包505.384秒），其中原失败的`delegated_bounded_role`实际通过。architecture另在0.890秒通过。后继精确提交及独立CI仍待确认，不能由本地修正结果回填原失败或登记完整006验收。
 
 ### R2发行、当前权限与历史边界
 

@@ -160,15 +160,29 @@ func holdRecordedIdentityDecisions(t *testing.T, ctx context.Context, database *
 	 FOR EACH ROW EXECUTE FUNCTION public.matrix_recorded_identity_barrier('`+first+`','`+second+`'); SELECT pg_advisory_lock(54841,26)`); err != nil {
 		t.Fatal("install recorded identity barrier", err)
 	}
-	t.Cleanup(func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if _, err := database.Exec(cleanup, `SELECT pg_advisory_unlock(54841,26);
-		 DROP TRIGGER IF EXISTS matrix_recorded_identity_barrier ON iam.audit_outbox;
-		 DROP FUNCTION IF EXISTS public.matrix_recorded_identity_barrier()`); err != nil {
-			t.Error("remove recorded identity barrier", err)
-		}
-	})
+	var released sync.Once
+	releaseLock := func() {
+		released.Do(func() {
+			cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if _, err := database.Exec(cleanup, `SELECT pg_advisory_unlock(54841,26)`); err != nil {
+				t.Error("release recorded identity barrier", err)
+			}
+		})
+	}
+	var cleaned sync.Once
+	cleanup := func() {
+		cleaned.Do(func() {
+			releaseLock()
+			cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if _, err := database.Exec(cleanup, `DROP TRIGGER IF EXISTS matrix_recorded_identity_barrier ON iam.audit_outbox;
+			 DROP FUNCTION IF EXISTS public.matrix_recorded_identity_barrier()`); err != nil {
+				t.Error("remove recorded identity barrier", err)
+			}
+		})
+	}
+	t.Cleanup(cleanup)
 	return func() {
 		t.Helper()
 		blocked, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -188,9 +202,7 @@ func holdRecordedIdentityDecisions(t *testing.T, ctx context.Context, database *
 				}
 			}
 		}
-		if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54841,26)`); err != nil {
-			t.Fatal(err)
-		}
+		cleanup()
 	}
 }
 
