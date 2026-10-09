@@ -569,7 +569,7 @@ BEGIN
             COALESCE(submitted_event->>'authorityEvidenceDigest','') COLLATE "C"
               !~ '^sha256:[0-9a-f]{64}$'
             OR action_name NOT IN (
-              'iam.policy-attachment.created','iam.policy-attachment.revoked',
+              'iam.role.trust-set','iam.policy-attachment.created','iam.policy-attachment.revoked',
               'iam.platform-policy-attachment.created','iam.platform-policy-attachment.revoked')))
        OR COALESCE(submitted_event->>'requestId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'

@@ -514,7 +514,7 @@ func (service *Authority) RevokeRoleSession(ctx context.Context, credential iamv
 		})
 }
 
-func roleCapabilities(subject SessionCredential, role iamv1.Role, attachments []iamv1.PolicyAttachment, root bool, now time.Time) ([]iamv1.ActionCapability, error) {
+func roleCapabilities(subject SessionCredential, role iamv1.Role, attachments []iamv1.PolicyAttachment, root, delegated bool, now time.Time) ([]iamv1.ActionCapability, error) {
 	result := make([]iamv1.ActionCapability, 0, 8+len(attachments))
 	for _, action := range []iamv1.Action{iamv1.ActionIAMRoleRead, iamv1.ActionIAMRoleUpdate, iamv1.ActionIAMRoleSetStatus,
 		iamv1.ActionIAMRoleDelete, iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate,
@@ -523,7 +523,8 @@ func roleCapabilities(subject SessionCredential, role iamv1.Role, attachments []
 		if err != nil {
 			return nil, err
 		}
-		if action != iamv1.ActionIAMRoleRead && action != iamv1.ActionIAMRoleSessionList && !root {
+		delegatedWrite := delegated && (action == iamv1.ActionIAMRoleTrustSet || action == iamv1.ActionIAMRolePolicyAttachmentCreate)
+		if action != iamv1.ActionIAMRoleRead && action != iamv1.ActionIAMRoleSessionList && !root && !delegatedWrite {
 			restrictCapability(&capability, iamv1.CapabilityAuthorityRequired)
 		}
 		result = append(result, capability)
@@ -534,7 +535,7 @@ func roleCapabilities(subject SessionCredential, role iamv1.Role, attachments []
 		if err != nil {
 			return nil, err
 		}
-		if !root {
+		if !root && !delegated {
 			restrictCapability(&capability, iamv1.CapabilityAuthorityRequired)
 		}
 		result = append(result, capability)
@@ -653,8 +654,21 @@ func (service *Authority) ListRoles(ctx context.Context, credential iamv1.Secret
 			if err != nil {
 				return iamv1.RoleList{}, err
 			}
+			delegated := map[iamv1.RoleID]bool{}
+			if !root && len(result.Items) != 0 {
+				roleIDs := make([]iamv1.RoleID, len(result.Items))
+				for index := range result.Items {
+					roleIDs[index] = result.Items[index].Role.ID
+				}
+				delegated, err = tx.ReadRoleDelegationEligibility(ctx, RoleDelegationRead{AccountID: subject.Subject.Organization.ID,
+					ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, RoleIDs: roleIDs})
+				if err != nil {
+					return iamv1.RoleList{}, err
+				}
+			}
 			for index := range result.Items {
-				result.Items[index].Capabilities, err = roleCapabilities(subject, result.Items[index].Role, nil, root, now)
+				role := result.Items[index].Role
+				result.Items[index].Capabilities, err = roleCapabilities(subject, role, nil, root, delegated[role.ID], now)
 				if err != nil {
 					return iamv1.RoleList{}, err
 				}
@@ -688,7 +702,16 @@ func (service *Authority) GetRole(ctx context.Context, credential iamv1.Secret, 
 			if err != nil {
 				return iamv1.RoleAccess{}, err
 			}
-			result.Capabilities, err = roleCapabilities(subject, result.Role, result.PolicyAttachments, root, now)
+			delegated := false
+			if !root {
+				eligibility, readErr := tx.ReadRoleDelegationEligibility(ctx, RoleDelegationRead{AccountID: subject.Subject.Organization.ID,
+					ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, RoleIDs: []iamv1.RoleID{id}})
+				if readErr != nil {
+					return iamv1.RoleAccess{}, readErr
+				}
+				delegated = eligibility[id]
+			}
+			result.Capabilities, err = roleCapabilities(subject, result.Role, result.PolicyAttachments, root, delegated, now)
 			if err != nil {
 				return iamv1.RoleAccess{}, err
 			}
@@ -921,8 +944,13 @@ func (service *Authority) SetRoleTrustPolicy(ctx context.Context, credential iam
 	if err != nil {
 		return iamv1.Role{}, err
 	}
-	return withRoleMutation(service, ctx, credential, id, request.ResourceVersion, iamv1.ActionIAMRoleTrustSet, auditv1.ActionIAMRoleTrustSet, request.RequestID, digest,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, mutation RoleMutation, now time.Time) (iamv1.Role, error) {
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMRoleTrustSet, iamv1.AuthorizationResourceInstance, "",
+		iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Role, error) {
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMRoleTrustSet, auditv1.TargetRole, string(id), decision.ID, digest, request.RequestID, now)
+			if err != nil {
+				return iamv1.Role{}, err
+			}
 			trustID, err := roleTrustIdentity(subject, id, request.RequestID)
 			if err != nil {
 				return iamv1.Role{}, err
@@ -931,6 +959,9 @@ func (service *Authority) SetRoleTrustPolicy(ctx context.Context, credential iam
 			if err != nil {
 				return iamv1.Role{}, ErrInvalidArgument
 			}
+			mutation := RoleMutation{AccountID: subject.Subject.Organization.ID, RoleID: id,
+				ActorPrincipalID: subject.Subject.Principal.ID, ActorSessionID: subject.Subject.Session.ID,
+				DecisionID: decision.ID, ResourceVersion: request.ResourceVersion, AuditEvent: event}
 			return tx.SetRoleTrustPolicy(ctx, RoleTrustMutation{RoleMutation: mutation, TrustVersion: iamv1.RoleTrustVersion{
 				APIVersion: iamv1.APIVersion, Kind: "RoleTrustVersion", ID: trustID, AccountID: mutation.AccountID,
 				RoleID: id, Document: request.Document, ContentDigest: digest, CreatedAt: now}})

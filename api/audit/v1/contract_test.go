@@ -34,7 +34,7 @@ func TestCanonicalEventPreservesTenantBytesAndDigest(t *testing.T) {
 	}
 }
 
-func TestCanonicalPolicyAttachmentEvidenceIsActionBound(t *testing.T) {
+func TestCanonicalAuthorityEvidenceIsActionBound(t *testing.T) {
 	event := Event{
 		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-attachment",
 		TenantID: "account-example", Actor: ActorReference{Type: ActorUser, ID: "user-example"},
@@ -58,13 +58,27 @@ func TestCanonicalPolicyAttachmentEvidenceIsActionBound(t *testing.T) {
 			changed := event
 			mutate(&changed)
 			if ValidateEventForSource(SourceIAM, changed) == nil {
-				t.Fatal("authority evidence escaped its closed attachment action")
+				t.Fatal("authority evidence escaped its closed IAM action")
 			}
 		})
 	}
 	event.AuthorityEvidenceDigest = ""
 	if _, _, err := CanonicalizeEvent(SourceIAM, event); err != nil {
 		t.Fatal("historical attachment event without new evidence no longer decodes", err)
+	}
+	roleTrust := event
+	roleTrust.EventID = "event-role-trust"
+	roleTrust.Action = ActionIAMRoleTrustSet
+	roleTrust.Target = TargetReference{Kind: TargetRole, ID: "role-example"}
+	roleTrust.AuthorityEvidenceDigest = "sha256:" + strings.Repeat("3", 64)
+	if _, _, err := CanonicalizeEvent(SourceIAM, roleTrust); err != nil {
+		t.Fatal("current Role Trust authority evidence was rejected", err)
+	}
+	// Retained predecessor facts have no authority-evidence field. Keeping
+	// their exact bytes readable does not authorize a current IAM mutation.
+	roleTrust.AuthorityEvidenceDigest = ""
+	if _, _, err := CanonicalizeEvent(SourceIAM, roleTrust); err != nil {
+		t.Fatal("historical Role Trust event without evidence no longer decodes", err)
 	}
 }
 

@@ -705,6 +705,43 @@ func (value *transaction) ReadRole(ctx context.Context, read identityaccess.Role
 	return result, nil
 }
 
+func (value *transaction) ReadRoleDelegationEligibility(ctx context.Context, read identityaccess.RoleDelegationRead) (map[iamv1.RoleID]bool, error) {
+	if len(read.RoleIDs) == 0 || len(read.RoleIDs) > iamv1.DirectoryPageSize+1 {
+		return nil, identityaccess.ErrInvalidArgument
+	}
+	seen := make(map[iamv1.RoleID]bool, len(read.RoleIDs))
+	for _, roleID := range read.RoleIDs {
+		if iamv1.ValidateID("roleId", string(roleID)) != nil || seen[roleID] {
+			return nil, identityaccess.ErrInvalidArgument
+		}
+		seen[roleID] = true
+	}
+	encodedIDs, err := json.Marshal(read.RoleIDs)
+	if err != nil {
+		return nil, identityaccess.ErrInvalidArgument
+	}
+	defer clear(encodedIDs)
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.read_role_delegation_eligibility($1,$2,$3,$4::jsonb)",
+		read.AccountID, read.ActorPrincipalID, read.DecisionID, encodedIDs).Scan(&encoded); err != nil {
+		return nil, mapAuthorizationDatabaseError("read IAM role delegation eligibility", err)
+	}
+	var eligible []iamv1.RoleID
+	if int64(len(encoded)) > iamv1.MaxRoleListBytes || json.Unmarshal(encoded, &eligible) != nil || len(eligible) > len(read.RoleIDs) {
+		return nil, identityaccess.ErrUnavailable
+	}
+	result := make(map[iamv1.RoleID]bool, len(eligible))
+	previous := ""
+	for _, roleID := range eligible {
+		if !seen[roleID] || result[roleID] || string(roleID) <= previous {
+			return nil, identityaccess.ErrUnavailable
+		}
+		result[roleID] = true
+		previous = string(roleID)
+	}
+	return result, nil
+}
+
 func (value *transaction) CreateRole(ctx context.Context, mutation identityaccess.RoleCreation) (iamv1.Role, error) {
 	role := mutation.Role
 	if iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil || iamv1.ValidateRole(role) != nil || mutation.TrustVersion.AccountID != role.AccountID || mutation.TrustVersion.RoleID != role.ID || mutation.TrustVersion.ID != role.CurrentTrustVersionID {

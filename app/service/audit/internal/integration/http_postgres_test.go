@@ -332,7 +332,7 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 	assertAuditedReadSerialization(t, ctx, admin, pool, repository, iam)
 	assertCompetingAuditEvents(t, ctx, admin, repository, iam)
 	assertIndependentAuditChainWriters(t, ctx, admin, repository, iam)
-	t.Run("policy_attachment_authority_evidence", func(t *testing.T) {
+	t.Run("iam_authority_evidence", func(t *testing.T) {
 		current := integrationEvent("event-attachment-evidence", "organization-a",
 			auditv1.ActionIAMPolicyAttachmentCreated, auditv1.TargetPolicyAttachment,
 			"attachment-evidence", iam.now.Add(time.Minute))
@@ -362,6 +362,24 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 		historical.IAMDecisionID = "decision-attachment-historical"
 		historical.AuthorityEvidenceDigest = ""
 		ingestAuditEvent(t, handler, producerCredentialA, historical, http.StatusCreated)
+		roleTrust := current
+		roleTrust.EventID = "event-role-trust-evidence"
+		roleTrust.RequestID = "request-event-role-trust-evidence"
+		roleTrust.CorrelationID = "correlation-event-role-trust-evidence"
+		roleTrust.IAMDecisionID = "decision-role-trust-evidence"
+		roleTrust.Action = auditv1.ActionIAMRoleTrustSet
+		roleTrust.Target = auditv1.TargetReference{Kind: auditv1.TargetRole, ID: "role-evidence"}
+		roleTrust.AuthorityEvidenceDigest = "sha256:" + strings.Repeat("9", 64)
+		accepted = ingestAuditEvent(t, handler, producerCredentialA, roleTrust, http.StatusCreated)
+		if accepted.Record.Event.AuthorityEvidenceDigest != roleTrust.AuthorityEvidenceDigest {
+			t.Fatal("Audit omitted current Role Trust authority evidence")
+		}
+		roleTrust.EventID = "event-role-trust-historical"
+		roleTrust.RequestID = "request-event-role-trust-historical"
+		roleTrust.CorrelationID = "correlation-event-role-trust-historical"
+		roleTrust.IAMDecisionID = "decision-role-trust-historical"
+		roleTrust.AuthorityEvidenceDigest = ""
+		ingestAuditEvent(t, handler, producerCredentialA, roleTrust, http.StatusCreated)
 
 		unrelated := historical
 		unrelated.EventID = "event-unrelated-authority-evidence"

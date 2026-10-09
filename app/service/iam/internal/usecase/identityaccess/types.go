@@ -151,6 +151,7 @@ type Transaction interface {
 	ReadGroup(context.Context, GroupRead) (iamv1.GroupAccess, error)
 	ListRoles(context.Context, AccountRead) (iamv1.RoleList, error)
 	ReadRole(context.Context, RoleRead) (iamv1.RoleAccess, error)
+	ReadRoleDelegationEligibility(context.Context, RoleDelegationRead) (map[iamv1.RoleID]bool, error)
 	ListServiceLinkedRoles(context.Context, AccountRead) (iamv1.ServiceLinkedRoleList, error)
 	ReadServiceLinkedRole(context.Context, ServiceLinkedRoleRead) (iamv1.ServiceLinkedRoleAccess, error)
 	ReadRoleDiscoveryRevision(context.Context, RoleDiscoveryRead) (authority.RoleDiscoveryRevision, error)
@@ -383,6 +384,16 @@ type GroupRead struct {
 type RoleRead struct {
 	AccountRead
 	RoleID iamv1.RoleID
+}
+
+// RoleDelegationRead is an internal, already-authorized capability projection.
+// RoleIDs come from the same transaction's Role list/detail result; they are
+// never public account or Role selectors and confer no mutation authority.
+type RoleDelegationRead struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	RoleIDs          []iamv1.RoleID
 }
 
 type ServiceLinkedRoleRead struct {

@@ -30563,10 +30563,11 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		ceilingRequest := iamv1.CreatePolicyRequest{DisplayName: "Delegated role ceiling", RequestID: "delegated-role-ceiling-create",
 			Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
 				Statements: []iamv1.PolicyStatement{
-					{SID: "create-role", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRoleCreate},
+					{SID: "create-role", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRoleCreate, iamv1.ActionIAMRoleList},
 						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(member.AccountID)}}},
 					{SID: "use-role", Effect: iamv1.PolicyAllow,
-						Actions:   []iamv1.Action{iamv1.ActionIAMRoleRead, iamv1.ActionIAMRoleAssume, iamv1.ActionIAMRolePolicyAttachmentCreate},
+						Actions: []iamv1.Action{iamv1.ActionIAMRoleRead, iamv1.ActionIAMRoleAssume,
+							iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate},
 						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceAnyInAuthority}}},
 					{SID: "revoke-role-policy", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRolePolicyAttachmentRevoke},
 						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicyAttachment, Match: iamv1.PolicyResourceAnyInAuthority}}},
@@ -30600,6 +30601,61 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 			roleBoundary.Policy.ContentDigest != ceiling.Version.ContentDigest || roleBoundary.ResourceVersion != delegatedRole.ResourceVersion {
 			t.Fatal("delegated role did not atomically inherit the actor ceiling")
 		}
+		var delegatedAccess iamv1.RoleAccess
+		get(t, rolePath, delegatedBearer, http.StatusOK, &delegatedAccess)
+		for _, action := range []iamv1.Action{iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate} {
+			capability, found := findIAMCapability(delegatedAccess.Capabilities, action, iamv1.ResourceRole, string(delegatedRole.ID))
+			if !found || !capability.Available {
+				t.Fatalf("same-ceiling Role capability %s is unavailable", action)
+			}
+		}
+		for _, action := range []iamv1.Action{iamv1.ActionIAMRoleUpdate, iamv1.ActionIAMRoleSetStatus,
+			iamv1.ActionIAMRoleDelete, iamv1.ActionIAMRolePermissionBoundarySet, iamv1.ActionIAMRolePermissionBoundaryRemove} {
+			capability, found := findIAMCapability(delegatedAccess.Capabilities, action, iamv1.ResourceRole, string(delegatedRole.ID))
+			if !found || capability.Available {
+				t.Fatalf("same-ceiling Role capability %s escaped its delegated boundary", action)
+			}
+		}
+		var delegatedDirectory iamv1.RoleList
+		get(t, "/v1/roles", delegatedBearer, http.StatusOK, &delegatedDirectory)
+		listed := false
+		for _, entry := range delegatedDirectory.Items {
+			if entry.Role.ID != delegatedRole.ID {
+				continue
+			}
+			listed = true
+			capability, found := findIAMCapability(entry.Capabilities, iamv1.ActionIAMRoleTrustSet,
+				iamv1.ResourceRole, string(delegatedRole.ID))
+			if !found || !capability.Available {
+				t.Fatal("Role directory did not project the same-ceiling Trust capability")
+			}
+		}
+		if !listed {
+			t.Fatal("Role directory omitted the delegated Role")
+		}
+		delegatedTrust := delegatedRequest.TrustPolicy
+		delegatedTrust.Statements = append([]iamv1.TrustPolicyStatement(nil), delegatedRequest.TrustPolicy.Statements...)
+		delegatedTrust.Statements[0].Principals = append([]iamv1.TrustPrincipal(nil), delegatedRequest.TrustPolicy.Statements[0].Principals...)
+		delegatedTrust.Statements[0].Principals = append(delegatedTrust.Statements[0].Principals,
+			iamv1.TrustPrincipal{Type: iamv1.PrincipalUser, ID: actor.Account.RootIdentity.PrincipalID})
+		trustRequest := iamv1.SetRoleTrustPolicyRequest{Document: delegatedTrust, ResourceVersion: delegatedRole.ResourceVersion,
+			RequestID: "delegated-role-trust-set"}
+		var delegatedTrustReplay iamv1.Role
+		call(t, http.MethodPut, rolePath+"/trust-policy", delegatedBearer, trustRequest, http.StatusOK, &delegatedRole)
+		call(t, http.MethodPut, rolePath+"/trust-policy", delegatedBearer, trustRequest, http.StatusOK, &delegatedTrustReplay)
+		if iamv1.ValidateRole(delegatedRole) != nil || delegatedRole.ResourceVersion != trustRequest.ResourceVersion+1 ||
+			delegatedRole.CurrentTrustVersionID == delegatedAccess.Role.CurrentTrustVersionID ||
+			!reflect.DeepEqual(delegatedRole, delegatedTrustReplay) {
+			t.Fatal("delegated Role Trust mutation or exact replay changed its result")
+		}
+		var trustProof bool
+		if err := database.QueryRow(ctx, `SELECT COALESCE(iam.verified_role_trust_change($1,$2,$3) IS NOT NULL,false)
+			AND EXISTS(SELECT 1 FROM iam.audit_outbox fact WHERE fact.tenant_id=$1
+			  AND fact.event_document->>'requestId'=$3 AND fact.event_document->>'action'='iam.role.trust-set'
+			  AND fact.event_document->>'authorityEvidenceDigest' ~ '^sha256:[0-9a-f]{64}$')`,
+			member.AccountID, member.ID, trustRequest.RequestID).Scan(&trustProof); err != nil || !trustProof {
+			t.Fatal("delegated Role Trust lacks immutable authority evidence", err)
+		}
 		var delegatedAttachment iamv1.PolicyAttachment
 		post(t, "/v1/policy-attachments", delegatedBearer, iamv1.CreatePolicyAttachmentRequest{
 			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(delegatedRole.ID)},
@@ -30612,6 +30668,39 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		}, http.StatusOK, &delegatedAttachmentReplay)
 		if !reflect.DeepEqual(delegatedAttachment, delegatedAttachmentReplay) {
 			t.Fatal("delegated role attachment replay changed its result")
+		}
+		get(t, rolePath, delegatedBearer, http.StatusOK, &delegatedAccess)
+		revokeCapability, found := findIAMCapability(delegatedAccess.Capabilities,
+			iamv1.ActionIAMRolePolicyAttachmentRevoke, iamv1.ResourcePolicyAttachment, string(delegatedAttachment.ID))
+		if !found || !revokeCapability.Available {
+			t.Fatal("same-ceiling Role attachment did not project its exact revoke capability")
+		}
+		var newlyTrusted iamv1.AssumeRoleResponse
+		post(t, rolePath+":assume", root, iamv1.AssumeRoleRequest{
+			ResourceVersion: delegatedRole.ResourceVersion, RequestID: "delegated-role-newly-trusted-assume",
+		}, http.StatusOK, &newlyTrusted)
+		if iamv1.ValidateAssumeRoleResponse(newlyTrusted) != nil || newlyTrusted.Outcome != "APPLIED" ||
+			newlyTrusted.Session.RoleID != delegatedRole.ID || newlyTrusted.Session.SourceUserID != actor.Account.RootIdentity.PrincipalID ||
+			!newlyTrusted.Credential.Present() {
+			t.Fatal("newly trusted USER did not receive the exact bounded RoleSession")
+		}
+		trustedBytes := newlyTrusted.Credential.CopyBytes()
+		trustedBearer := string(trustedBytes)
+		clear(trustedBytes)
+		for resourceID, want := range map[string]bool{"delegated-role-selected": true, "delegated-role-other": false} {
+			request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+				iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: resourceID},
+				iamv1.AuthorizationResourceInstance, "", "delegated-role-trusted-"+resourceID, "delegated-role-trusted-"+resourceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, trustedBearer)
+			var decision iamv1.AuthorizationDecision
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil ||
+				iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil || decision.Allowed != want {
+				t.Fatalf("newly trusted RoleSession escaped its Role ceiling: resource=%s status=%d allowed=%t want=%t",
+					resourceID, response.Code, decision.Allowed, want)
+			}
 		}
 		mismatchedCeilingRequest := ceilingRequest
 		mismatchedCeilingRequest.DisplayName = "Mismatched role ceiling"
@@ -30634,6 +30723,17 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(mismatchedRole.ID)},
 			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "delegated-role-mismatched-attach",
 		}, http.StatusForbidden, nil)
+		var mismatchedAccess iamv1.RoleAccess
+		get(t, "/v1/roles/"+string(mismatchedRole.ID), delegatedBearer, http.StatusOK, &mismatchedAccess)
+		for _, action := range []iamv1.Action{iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate} {
+			capability, found := findIAMCapability(mismatchedAccess.Capabilities, action, iamv1.ResourceRole, string(mismatchedRole.ID))
+			if !found || capability.Available {
+				t.Fatalf("mismatched-ceiling Role capability %s became available", action)
+			}
+		}
+		call(t, http.MethodPut, "/v1/roles/"+string(mismatchedRole.ID)+"/trust-policy", delegatedBearer,
+			iamv1.SetRoleTrustPolicyRequest{Document: delegatedTrust, ResourceVersion: mismatchedBoundary.ResourceVersion,
+				RequestID: "delegated-role-mismatched-trust"}, http.StatusForbidden, nil)
 		nextCeilingDocument := ceilingRequest.Document
 		nextCeilingDocument.Statements = append([]iamv1.PolicyStatement(nil), ceilingRequest.Document.Statements...)
 		nextCeilingDocument.Statements[0].SID = "create-role-v2"
@@ -30826,6 +30926,304 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 			attachmentDefaultBoundary.Policy.ContentDigest != ceiling.Version.ContentDigest {
 			t.Fatal("attachment/default competition retained a stale role ceiling")
 		}
+		freshTrustRole := func(slug, name string) (iamv1.Role, string, iamv1.SetRoleTrustPolicyRequest) {
+			t.Helper()
+			request := delegatedRequest
+			request.Name, request.RequestID = name, slug+"-create"
+			var created iamv1.Role
+			post(t, "/v1/roles", delegatedBearer, request, http.StatusCreated, &created)
+			document := delegatedTrust
+			document.Statements = append([]iamv1.TrustPolicyStatement(nil), delegatedTrust.Statements...)
+			document.Statements[0].Principals = append([]iamv1.TrustPrincipal(nil), delegatedTrust.Statements[0].Principals...)
+			document.Statements[0].SID = slug + "-trust"
+			return created, "/v1/roles/" + string(created.ID), iamv1.SetRoleTrustPolicyRequest{
+				Document: document, ResourceVersion: created.ResourceVersion, RequestID: slug + "-trust-set",
+			}
+		}
+		assertTrustArtifacts := func(role iamv1.Role, request iamv1.SetRoleTrustPolicyRequest, committed bool) {
+			t.Helper()
+			var receipts, facts int
+			if err := database.QueryRow(ctx, `SELECT
+				(SELECT count(*) FROM iam.role_trust_versions receipt WHERE receipt.tenant_id=$1
+				  AND receipt.role_id=$2 AND receipt.actor_principal_id=$3 AND receipt.request_id=$4
+				  AND receipt.authority_evidence_digest=iam.role_trust_authority_evidence_digest(
+				    receipt.input_commitment,receipt.role_id,receipt.id,receipt.content_digest,
+				    receipt.expected_role_version,receipt.actor_boundary_evidence,receipt.target_boundary_evidence)
+				  AND EXISTS(SELECT 1 FROM iam.audit_outbox fact
+				    WHERE (fact.tenant_id,fact.event_id)=(receipt.tenant_id,receipt.event_id)
+				      AND fact.event_document->>'authorityEvidenceDigest'=receipt.authority_evidence_digest)),
+				(SELECT count(*) FROM iam.audit_outbox fact WHERE fact.tenant_id=$1
+				  AND fact.event_document->>'requestId'=$4 AND fact.event_document->>'action'='iam.role.trust-set')`,
+				role.AccountID, role.ID, member.ID, request.RequestID).Scan(&receipts, &facts); err != nil {
+				t.Fatal("inspect bounded Role Trust completion", err)
+			}
+			want := 0
+			if committed {
+				want = 1
+			}
+			if receipts != want || facts != want {
+				t.Fatalf("bounded Role Trust left partial completion: receipts=%d facts=%d want=%d",
+					receipts, facts, want)
+			}
+		}
+		assertTrustCompletion := func(role iamv1.Role, request iamv1.SetRoleTrustPolicyRequest, committed bool) {
+			t.Helper()
+			assertTrustArtifacts(role, request, committed)
+			var verified bool
+			if err := database.QueryRow(ctx, `SELECT COALESCE(iam.verified_role_trust_change($1,$2,$3) IS NOT NULL,false)`,
+				role.AccountID, member.ID, request.RequestID).Scan(&verified); err != nil {
+				t.Fatal("verify bounded Role Trust completion", err)
+			}
+			if verified != committed {
+				t.Fatalf("bounded Role Trust verifier=%t want=%t", verified, committed)
+			}
+		}
+
+		// A committed Trust command is replayable only while it is still the
+		// Role's exact current revision. Later metadata cannot be mistaken for
+		// the original completion even though its immutable receipt remains.
+		replayConflictRole, replayConflictPath, replayConflictTrust := freshTrustRole(
+			"delegated-role-trust-replay-conflict", "Delegated Trust replay conflict")
+		call(t, http.MethodPut, replayConflictPath+"/trust-policy", delegatedBearer,
+			replayConflictTrust, http.StatusOK, &replayConflictRole)
+		assertTrustCompletion(replayConflictRole, replayConflictTrust, true)
+		var replayConflictUpdated iamv1.Role
+		call(t, http.MethodPatch, replayConflictPath, root, iamv1.UpdateRoleRequest{
+			Name: "Delegated Trust advanced", Tags: []iamv1.RoleTag{},
+			MaxSessionDurationSeconds: replayConflictRole.MaxSessionDurationSeconds,
+			ResourceVersion:           replayConflictRole.ResourceVersion,
+			RequestID:                 "delegated-role-trust-replay-conflict-update",
+		}, http.StatusOK, &replayConflictUpdated)
+		call(t, http.MethodPut, replayConflictPath+"/trust-policy", delegatedBearer,
+			replayConflictTrust, http.StatusConflict, nil)
+		assertTrustArtifacts(replayConflictRole, replayConflictTrust, true)
+
+		// The Trust writer and another Role revision use one target revision;
+		// exactly one may publish state and a success fact.
+		revisionRaceRole, revisionRacePath, revisionRaceTrust := freshTrustRole(
+			"delegated-role-trust-revision-race", "Delegated Trust revision race")
+		trustRevisionResult, metadataRevisionResult := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		releaseTrustRevision := holdRecordedIdentityDecisions(t, ctx, database,
+			revisionRaceTrust.RequestID, "delegated-role-trust-revision-update")
+		go func() {
+			trustRevisionResult <- performIAMRequest(handler, http.MethodPut, revisionRacePath+"/trust-policy",
+				delegatedBearer, mustIAMJSON(t, revisionRaceTrust))
+		}()
+		go func() {
+			metadataRevisionResult <- performIAMRequest(handler, http.MethodPatch, revisionRacePath, root,
+				mustIAMJSON(t, iamv1.UpdateRoleRequest{Name: "Trust revision winner", Tags: []iamv1.RoleTag{},
+					MaxSessionDurationSeconds: revisionRaceRole.MaxSessionDurationSeconds,
+					ResourceVersion:           revisionRaceRole.ResourceVersion, RequestID: "delegated-role-trust-revision-update"}))
+		}()
+		releaseTrustRevision()
+		trustRevisionResponse, metadataRevisionResponse := <-trustRevisionResult, <-metadataRevisionResult
+		if (trustRevisionResponse.Code == http.StatusOK) == (metadataRevisionResponse.Code == http.StatusOK) ||
+			(trustRevisionResponse.Code != http.StatusOK && trustRevisionResponse.Code != http.StatusConflict) ||
+			(metadataRevisionResponse.Code != http.StatusOK && metadataRevisionResponse.Code != http.StatusConflict) {
+			t.Fatalf("Trust/Role revision competition was not exclusive: trust=%d metadata=%d",
+				trustRevisionResponse.Code, metadataRevisionResponse.Code)
+		}
+		assertTrustCompletion(revisionRaceRole, revisionRaceTrust, trustRevisionResponse.Code == http.StatusOK)
+
+		// Removing the Role ceiling competes with the same Role revision. The
+		// winner determines whether the ceiling remains, with no orphan proof.
+		roleBoundaryRaceRole, roleBoundaryRacePath, roleBoundaryRaceTrust := freshTrustRole(
+			"delegated-role-trust-boundary-race", "Delegated Trust boundary race")
+		trustBoundaryResult, removeBoundaryResult := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		releaseTrustBoundary := holdRecordedIdentityDecisions(t, ctx, database,
+			roleBoundaryRaceTrust.RequestID, "delegated-role-trust-boundary-remove")
+		go func() {
+			trustBoundaryResult <- performIAMRequest(handler, http.MethodPut, roleBoundaryRacePath+"/trust-policy",
+				delegatedBearer, mustIAMJSON(t, roleBoundaryRaceTrust))
+		}()
+		go func() {
+			removeBoundaryResult <- performIAMRequest(handler, http.MethodDelete, roleBoundaryRacePath+"/permission-boundary", root,
+				mustIAMJSON(t, iamv1.RemoveRolePermissionBoundaryRequest{ResourceVersion: roleBoundaryRaceRole.ResourceVersion,
+					RequestID: "delegated-role-trust-boundary-remove"}))
+		}()
+		releaseTrustBoundary()
+		trustBoundaryResponse, removeBoundaryResponse := <-trustBoundaryResult, <-removeBoundaryResult
+		if (trustBoundaryResponse.Code == http.StatusOK) == (removeBoundaryResponse.Code == http.StatusOK) ||
+			(trustBoundaryResponse.Code != http.StatusOK && trustBoundaryResponse.Code != http.StatusForbidden && trustBoundaryResponse.Code != http.StatusConflict) ||
+			(removeBoundaryResponse.Code != http.StatusOK && removeBoundaryResponse.Code != http.StatusConflict) {
+			t.Fatalf("Trust/Role-boundary competition was not exclusive: trust=%d boundary=%d",
+				trustBoundaryResponse.Code, removeBoundaryResponse.Code)
+		}
+		assertTrustCompletion(roleBoundaryRaceRole, roleBoundaryRaceTrust, trustBoundaryResponse.Code == http.StatusOK)
+		var activeRoleBoundary int
+		if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.role_permission_boundaries
+			WHERE tenant_id=$1 AND role_id=$2 AND revoked_at IS NULL`, roleBoundaryRaceRole.AccountID,
+			roleBoundaryRaceRole.ID).Scan(&activeRoleBoundary); err != nil || activeRoleBoundary != func() int {
+			if trustBoundaryResponse.Code == http.StatusOK {
+				return 1
+			}
+			return 0
+		}() {
+			t.Fatal("Trust/Role-boundary competition retained an incoherent ceiling", err)
+		}
+
+		// A default-version switch may follow an already committed Trust write,
+		// but a Trust writer that observes the switch cannot publish stale proof.
+		fourthCeilingDocument := thirdCeilingDocument
+		fourthCeilingDocument.Statements = append([]iamv1.PolicyStatement(nil), thirdCeilingDocument.Statements...)
+		fourthCeilingDocument.Statements[0].SID = "create-role-v4"
+		var fourthCeilingVersion iamv1.PolicyVersionDetail
+		post(t, "/v1/policies/"+string(ceiling.Policy.ID)+"/versions", root, iamv1.CreatePolicyVersionRequest{
+			Document: fourthCeilingDocument, ResourceVersion: ceiling.Policy.ResourceVersion,
+			RequestID: "delegated-role-trust-ceiling-version-four-create",
+		}, http.StatusCreated, &fourthCeilingVersion)
+		defaultTrustRole, defaultTrustPath, defaultTrustRequest := freshTrustRole(
+			"delegated-role-trust-default-race", "Delegated Trust default race")
+		trustDefaultResult, switchDefaultResult := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		releaseTrustDefault := holdRecordedIdentityDecisions(t, ctx, database,
+			defaultTrustRequest.RequestID, "delegated-role-trust-default-switch")
+		go func() {
+			trustDefaultResult <- performIAMRequest(handler, http.MethodPut, defaultTrustPath+"/trust-policy",
+				delegatedBearer, mustIAMJSON(t, defaultTrustRequest))
+		}()
+		go func() {
+			switchDefaultResult <- performIAMRequest(handler, http.MethodPost,
+				"/v1/policies/"+string(ceiling.Policy.ID)+":set-default-version", root,
+				mustIAMJSON(t, iamv1.SetDefaultPolicyVersionRequest{VersionID: fourthCeilingVersion.Version.ID,
+					ResourceVersion: fourthCeilingVersion.Policy.ResourceVersion,
+					RequestID:       "delegated-role-trust-default-switch"}))
+		}()
+		releaseTrustDefault()
+		trustDefaultResponse, switchDefaultResponse := <-trustDefaultResult, <-switchDefaultResult
+		if switchDefaultResponse.Code != http.StatusOK || json.Unmarshal(switchDefaultResponse.Body.Bytes(), &ceiling) != nil ||
+			ceiling.Version.ID != fourthCeilingVersion.Version.ID {
+			t.Fatalf("Trust/default competition did not commit its Root switch: status=%d body=%s",
+				switchDefaultResponse.Code, switchDefaultResponse.Body.String())
+		}
+		if trustDefaultResponse.Code != http.StatusOK && trustDefaultResponse.Code != http.StatusForbidden &&
+			trustDefaultResponse.Code != http.StatusConflict {
+			t.Fatalf("Trust/default competition returned status=%d body=%s",
+				trustDefaultResponse.Code, trustDefaultResponse.Body.String())
+		}
+		assertTrustCompletion(defaultTrustRole, defaultTrustRequest, trustDefaultResponse.Code == http.StatusOK)
+
+		// Actor-ceiling removal may serialize after a completed Trust write, but
+		// once it wins no new Trust authority can be recorded. Restore the actor
+		// ceiling afterwards so the independent attachment tests remain scoped.
+		actorBoundaryRaceRole, actorBoundaryRacePath, actorBoundaryRaceTrust := freshTrustRole(
+			"delegated-role-trust-actor-race", "Delegated Trust actor race")
+		trustActorResult, removeActorResult := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+		releaseTrustActor := holdRecordedIdentityDecisions(t, ctx, database,
+			actorBoundaryRaceTrust.RequestID, "delegated-role-trust-actor-remove")
+		go func() {
+			trustActorResult <- performIAMRequest(handler, http.MethodPut, actorBoundaryRacePath+"/trust-policy",
+				delegatedBearer, mustIAMJSON(t, actorBoundaryRaceTrust))
+		}()
+		go func() {
+			removeActorResult <- performIAMRequest(handler, http.MethodDelete, boundaryPath, root,
+				mustIAMJSON(t, iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: userBoundary.ResourceVersion,
+					RequestID: "delegated-role-trust-actor-remove"}))
+		}()
+		releaseTrustActor()
+		trustActorResponse, removeActorResponse := <-trustActorResult, <-removeActorResult
+		if removeActorResponse.Code != http.StatusOK || json.Unmarshal(removeActorResponse.Body.Bytes(), &userBoundary) != nil ||
+			userBoundary.Policy != nil {
+			t.Fatalf("Trust/actor-boundary competition did not close the actor ceiling: status=%d body=%s",
+				removeActorResponse.Code, removeActorResponse.Body.String())
+		}
+		if trustActorResponse.Code != http.StatusOK && trustActorResponse.Code != http.StatusForbidden &&
+			trustActorResponse.Code != http.StatusConflict {
+			t.Fatalf("Trust/actor-boundary competition returned status=%d body=%s",
+				trustActorResponse.Code, trustActorResponse.Body.String())
+		}
+		assertTrustCompletion(actorBoundaryRaceRole, actorBoundaryRaceTrust, trustActorResponse.Code == http.StatusOK)
+		call(t, http.MethodPut, boundaryPath, root, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: ceiling.Policy.ID, PolicyResourceVersion: ceiling.Policy.ResourceVersion,
+			ResourceVersion: userBoundary.ResourceVersion, RequestID: "delegated-role-trust-actor-restore",
+		}, http.StatusOK, &userBoundary)
+
+		// A decision evaluated against the previous default cannot survive a
+		// committed default switch. A serializable retry may still succeed, but
+		// only after producing a new decision and completion bound to the current
+		// default on both actor and target sides.
+		fifthCeilingDocument := fourthCeilingDocument
+		fifthCeilingDocument.Statements = append([]iamv1.PolicyStatement(nil), fourthCeilingDocument.Statements...)
+		fifthCeilingDocument.Statements[0].SID = "create-role-v5"
+		var fifthCeilingVersion iamv1.PolicyVersionDetail
+		post(t, "/v1/policies/"+string(ceiling.Policy.ID)+"/versions", root, iamv1.CreatePolicyVersionRequest{
+			Document: fifthCeilingDocument, ResourceVersion: ceiling.Policy.ResourceVersion,
+			RequestID: "delegated-role-trust-ceiling-version-five-create",
+		}, http.StatusCreated, &fifthCeilingVersion)
+		staleDefaultRole, staleDefaultPath, staleDefaultTrust := freshTrustRole(
+			"delegated-role-trust-default-invalidated", "Delegated Trust default invalidated")
+		awaitStaleDefault, releaseStaleDefault := holdIAMRequest(t, ctx, database, staleDefaultTrust.RequestID, false, "")
+		staleDefaultResult := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			staleDefaultResult <- performIAMRequest(handler, http.MethodPut, staleDefaultPath+"/trust-policy",
+				delegatedBearer, mustIAMJSON(t, staleDefaultTrust))
+		}()
+		_ = awaitStaleDefault()
+		call(t, http.MethodPost, "/v1/policies/"+string(ceiling.Policy.ID)+":set-default-version", root,
+			iamv1.SetDefaultPolicyVersionRequest{VersionID: fifthCeilingVersion.Version.ID,
+				ResourceVersion: fifthCeilingVersion.Policy.ResourceVersion,
+				RequestID:       "delegated-role-trust-default-invalidated-switch"}, http.StatusOK, &ceiling)
+		releaseStaleDefault()
+		select {
+		case response := <-staleDefaultResult:
+			if response.Code != http.StatusOK {
+				t.Fatalf("Trust did not re-evaluate after the committed default switch: status=%d body=%s",
+					response.Code, response.Body.String())
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Trust did not finish after the committed default switch")
+		}
+		assertTrustCompletion(staleDefaultRole, staleDefaultTrust, true)
+		var currentDefaultProof bool
+		if err := database.QueryRow(ctx, `SELECT count(*)=1 AND bool_and(
+			decision.boundary_evidence#>>'{version,versionId}'=$5
+			AND receipt.actor_boundary_evidence#>>'{version,versionId}'=$5
+			AND receipt.target_boundary_evidence#>>'{version,versionId}'=$5)
+			FROM iam.authorization_decisions decision
+			JOIN iam.role_trust_versions receipt ON (receipt.tenant_id,receipt.decision_id)=(decision.tenant_id,decision.id)
+			WHERE receipt.tenant_id=$1 AND receipt.role_id=$2 AND receipt.actor_principal_id=$3 AND receipt.request_id=$4`,
+			staleDefaultRole.AccountID, staleDefaultRole.ID, member.ID, staleDefaultTrust.RequestID,
+			fifthCeilingVersion.Version.ID).Scan(&currentDefaultProof); err != nil || !currentDefaultProof {
+			t.Fatal("Trust retry retained stale default-version evidence", err)
+		}
+		if _, err := database.Exec(ctx, `DROP TRIGGER IF EXISTS matrix_key_linearization ON iam.authorization_decisions;
+			DROP FUNCTION IF EXISTS public.matrix_key_linearization()`); err != nil {
+			t.Fatal("remove deterministic default-switch barrier", err)
+		}
+
+		// Removing the actor ceiling after PDP evaluation but before the effect
+		// must likewise fail closed, without publishing a receipt or Audit fact.
+		staleActorRole, staleActorPath, staleActorTrust := freshTrustRole(
+			"delegated-role-trust-actor-invalidated", "Delegated Trust actor invalidated")
+		awaitStaleActor, releaseStaleActor := holdIAMRequest(t, ctx, database, staleActorTrust.RequestID, false, "")
+		staleActorResult := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			staleActorResult <- performIAMRequest(handler, http.MethodPut, staleActorPath+"/trust-policy",
+				delegatedBearer, mustIAMJSON(t, staleActorTrust))
+		}()
+		_ = awaitStaleActor()
+		call(t, http.MethodDelete, boundaryPath, root, iamv1.RemoveUserPermissionBoundaryRequest{
+			ResourceVersion: userBoundary.ResourceVersion, RequestID: "delegated-role-trust-actor-invalidated-remove",
+		}, http.StatusOK, &userBoundary)
+		releaseStaleActor()
+		select {
+		case response := <-staleActorResult:
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("Trust accepted a decision invalidated by committed actor-boundary removal: status=%d body=%s",
+					response.Code, response.Body.String())
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Trust did not close after committed actor-boundary removal")
+		}
+		assertTrustCompletion(staleActorRole, staleActorTrust, false)
+		if _, err := database.Exec(ctx, `DROP TRIGGER IF EXISTS matrix_key_linearization ON iam.authorization_decisions;
+			DROP FUNCTION IF EXISTS public.matrix_key_linearization()`); err != nil {
+			t.Fatal("remove deterministic actor-boundary barrier", err)
+		}
+		call(t, http.MethodPut, boundaryPath, root, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: ceiling.Policy.ID, PolicyResourceVersion: ceiling.Policy.ResourceVersion,
+			ResourceVersion: userBoundary.ResourceVersion, RequestID: "delegated-role-trust-actor-invalidated-restore",
+		}, http.StatusOK, &userBoundary)
+
 		concurrentRequest := delegatedRequest
 		concurrentRequest.Name = "Delegated concurrent"
 		concurrentRequest.RequestID = "delegated-role-concurrent-create"
@@ -30952,12 +31350,20 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("revoked delegated role attachment retained a usable session: status=%d body=%s", response.Code, response.Body.String())
 		}
+		response = performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, trustedBearer)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("revoked delegated role attachment retained the newly trusted RoleSession: status=%d body=%s",
+				response.Code, response.Body.String())
+		}
 		var platformAttachment iamv1.PolicyAttachment
 		post(t, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
 			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
 			PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "delegated-role-actor-platform-grant",
 		}, http.StatusOK, &platformAttachment)
 		delegatedBearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+		call(t, http.MethodPut, rolePath+"/trust-policy", delegatedBearer, iamv1.SetRoleTrustPolicyRequest{
+			Document: delegatedRequest.TrustPolicy, ResourceVersion: delegatedRole.ResourceVersion,
+			RequestID: "delegated-role-platform-trust-rejected"}, http.StatusForbidden, nil)
 		platformRejected := delegatedRequest
 		platformRejected.Name = "Platform rejected"
 		platformRejected.RequestID = "delegated-role-platform-rejected"
@@ -31038,12 +31444,16 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 			t.Fatalf("role/actor-boundary competition left partial authority: roles=%d trusts=%d boundaries=%d facts=%d won=%t",
 				boundaryRaceRoles, boundaryRaceTrusts, boundaryRaceBoundaries, boundaryRaceFacts, boundaryCreateWon)
 		}
-		post(t, "/v1/roles", delegatedBearer, delegatedRequest, http.StatusCreated, &delegatedReplay)
-		if !reflect.DeepEqual(delegatedRole, delegatedReplay) {
-			t.Fatal("removing the actor ceiling rewrote an exact committed role creation")
+		post(t, "/v1/roles", delegatedBearer, delegatedRequest, http.StatusConflict, nil)
+		call(t, http.MethodPut, rolePath+"/trust-policy", delegatedBearer, trustRequest, http.StatusOK, &delegatedTrustReplay)
+		if !reflect.DeepEqual(delegatedRole, delegatedTrustReplay) {
+			t.Fatal("removing the actor ceiling rewrote an exact committed Trust mutation")
 		}
 		delegatedRequest.Name, delegatedRequest.RequestID = "Delegated rejected", "delegated-role-create-after-boundary"
 		post(t, "/v1/roles", delegatedBearer, delegatedRequest, http.StatusForbidden, nil)
+		call(t, http.MethodPut, rolePath+"/trust-policy", delegatedBearer, iamv1.SetRoleTrustPolicyRequest{
+			Document: delegatedRequest.TrustPolicy, ResourceVersion: delegatedRole.ResourceVersion,
+			RequestID: "delegated-role-trust-after-boundary"}, http.StatusForbidden, nil)
 		var rejectedClean bool
 		if err := database.QueryRow(ctx, `SELECT
 			NOT EXISTS(SELECT 1 FROM iam.roles WHERE tenant_id=$1 AND metadata->>'name' IN ('Platform rejected','Delegated rejected'))
@@ -31052,15 +31462,17 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 			AND NOT EXISTS(SELECT 1 FROM iam.policy_attachment_changes WHERE tenant_id=$1
 			  AND request_id='delegated-role-mismatched-attach')
 			AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1
-			  AND event_document->>'requestId' IN ('delegated-role-mismatched-attach','delegated-role-platform-rejected','delegated-role-create-after-boundary')
-			  AND event_document->>'action' IN ('iam.role.created','iam.policy-attachment.created'))`,
+			  AND event_document->>'requestId' IN ('delegated-role-mismatched-attach','delegated-role-mismatched-trust',
+			    'delegated-role-platform-trust-rejected','delegated-role-platform-rejected','delegated-role-create-after-boundary',
+			    'delegated-role-trust-after-boundary')
+			  AND event_document->>'action' IN ('iam.role.created','iam.role.trust-set','iam.policy-attachment.created'))`,
 			member.AccountID, mismatchedRole.ID, iamv1.SystemPolicyPaaSViewer).Scan(&rejectedClean); err != nil || !rejectedClean {
 			t.Fatal("rejected delegated Role commands retained partial authority", err)
 		}
 		var roleCount, trustCount, boundaryCount, factCount, receiptCount int
 		var exactEvidence bool
 		if err := database.QueryRow(ctx, `SELECT
-			(SELECT count(*) FROM iam.roles WHERE tenant_id=$1 AND id=$2 AND management='CUSTOMER' AND resource_version=1),
+			(SELECT count(*) FROM iam.roles WHERE tenant_id=$1 AND id=$2 AND management='CUSTOMER' AND resource_version=2),
 			(SELECT count(*) FROM iam.role_trust_versions WHERE tenant_id=$1 AND role_id=$2 AND id=$3),
 			(SELECT count(*) FROM iam.role_permission_boundaries WHERE tenant_id=$1 AND role_id=$2 AND policy_id=$4 AND resource_version=1 AND revoked_at IS NULL),
 			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.role.created'
@@ -31146,14 +31558,16 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		var isolated, immutable, scoped bool
 		if err := database.QueryRow(ctx, `SELECT
 			(SELECT bool_and(relrowsecurity AND relforcerowsecurity AND relowner='matrix_iam_owner'::regrole) FROM pg_class WHERE oid IN ('iam.roles'::regclass,'iam.role_trust_versions'::regclass)),
-			NOT has_table_privilege('matrix_iam_api','iam.roles','INSERT,UPDATE,DELETE,TRUNCATE') AND NOT has_table_privilege('matrix_iam_worker','iam.role_trust_versions','SELECT,INSERT,UPDATE,DELETE'),
+			NOT has_table_privilege('matrix_iam_api','iam.roles','INSERT,UPDATE,DELETE,TRUNCATE')
+			AND NOT has_table_privilege('matrix_iam_api','iam.role_trust_versions','SELECT,INSERT,UPDATE,DELETE,TRUNCATE')
+			AND NOT has_table_privilege('matrix_iam_worker','iam.role_trust_versions','SELECT,INSERT,UPDATE,DELETE'),
 			to_regprocedure('iam.create_role(text,text,text,text,text,jsonb,jsonb,jsonb,text)') IS NULL
 			AND NOT has_function_privilege('matrix_iam_worker','iam.create_role(text,text,text,text,text,jsonb,jsonb,text,jsonb,text)','EXECUTE')
 			AND NOT has_function_privilege('matrix_iam_credential_recovery','iam.delete_role(text,text,text,text,bigint,jsonb,text)','EXECUTE')`).Scan(&isolated, &immutable, &scoped); err != nil || !isolated || !immutable || !scoped {
 			t.Fatal("role storage or callable permissions are overbroad", err)
 		}
 		for _, signature := range []string{
-			"iam.list_roles(text,text,text,text)", "iam.read_role(text,text,text,text)",
+			"iam.list_roles(text,text,text,text)", "iam.read_role(text,text,text,text)", "iam.read_role_delegation_eligibility(text,text,text,jsonb)",
 			"iam.read_role_permission_boundary(text,text,text,text)", "iam.change_role_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text)",
 			"iam.create_role(text,text,text,text,text,jsonb,jsonb,text,jsonb,text)", "iam.update_role(text,text,text,text,bigint,jsonb,jsonb,text)",
 			"iam.set_role_status(text,text,text,text,bigint,text,jsonb,text)", "iam.set_role_trust_policy(text,text,text,text,text,bigint,jsonb,jsonb,text)",
@@ -31182,6 +31596,10 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		for _, change := range []string{
 			"ALTER TABLE iam.roles DISABLE ROW LEVEL SECURITY",
 			"ALTER TABLE iam.role_trust_versions DISABLE TRIGGER trust_cannot_update",
+			"ALTER TABLE iam.role_trust_versions DROP CONSTRAINT role_trust_versions_change_shape",
+			"ALTER TABLE iam.role_trust_versions DROP CONSTRAINT role_trust_versions_event_fk",
+			"DROP INDEX iam.role_trust_versions_actor_request_uq",
+			"GRANT EXECUTE ON FUNCTION iam.verified_role_trust_change(text,text,text) TO matrix_iam_worker",
 			"ALTER TABLE iam.roles DROP CONSTRAINT roles_current_trust_fk",
 			"ALTER TABLE iam.roles DROP CONSTRAINT roles_security_generation_range",
 			"ALTER TABLE iam.roles ALTER COLUMN security_generation DROP NOT NULL",
@@ -31211,6 +31629,7 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		}
 		for _, statement := range []string{
 			`UPDATE iam.role_trust_versions SET content_digest=content_digest WHERE tenant_id=$1 AND role_id=$2`,
+			`UPDATE iam.role_trust_versions SET authority_evidence_digest='sha256:'||repeat('f',64) WHERE tenant_id=$1 AND role_id=$2 AND actor_principal_id IS NOT NULL`,
 			`DELETE FROM iam.role_trust_versions WHERE tenant_id=$1 AND role_id=$2`,
 			`UPDATE iam.roles SET deleted_at=NULL,resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE tenant_id=$1 AND id=$2`,
 		} {
@@ -31224,6 +31643,57 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 			if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
 				t.Fatal("terminal role/history changed", err)
 			}
+		}
+		// Owner-only damage in a rolled-back transaction must be detected by
+		// the immutable completion verifier. Neither the stored proof nor its
+		// Audit fact can be substituted independently.
+		for name, damage := range map[string]string{
+			"receipt": `ALTER TABLE iam.role_trust_versions DISABLE TRIGGER trust_cannot_update;
+				UPDATE iam.role_trust_versions SET authority_evidence_digest='sha256:'||repeat('e',64)
+				WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3`,
+			"decision": `ALTER TABLE iam.authorization_decisions DISABLE TRIGGER authorization_decisions_are_immutable;
+				UPDATE iam.authorization_decisions SET request_id=request_id||'-tampered',
+				  document=jsonb_set(document,'{requestId}',to_jsonb((request_id||'-tampered')::text),true)
+				WHERE (tenant_id,id)=(SELECT tenant_id,decision_id FROM iam.role_trust_versions
+				  WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)`,
+			"boundary evidence": `ALTER TABLE iam.authorization_decisions DISABLE TRIGGER authorization_decisions_are_immutable;
+				UPDATE iam.authorization_decisions SET boundary_evidence=jsonb_set(boundary_evidence,'{resourceVersion}',
+					to_jsonb((boundary_evidence->>'resourceVersion')::bigint+1),false)
+				WHERE (tenant_id,id)=(SELECT tenant_id,decision_id FROM iam.role_trust_versions
+				  WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)`,
+			"trust version": `ALTER TABLE iam.role_trust_versions DISABLE TRIGGER trust_cannot_update;
+				UPDATE iam.role_trust_versions SET
+				  canonical_document=jsonb_set(canonical_document::jsonb,'{statements,0,sid}',to_jsonb('tampered'::text),false)::text,
+				  content_digest='sha256:'||encode(sha256(convert_to('matrix.iam.role-trust.v1','UTF8')||decode('00','hex')||
+				    convert_to(jsonb_set(canonical_document::jsonb,'{statements,0,sid}',to_jsonb('tampered'::text),false)::text,'UTF8')),'hex')
+				WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3`,
+			"outbox": `UPDATE iam.audit_outbox SET event_document=jsonb_set(event_document,
+				'{authorityEvidenceDigest}',to_jsonb(('sha256:'||repeat('d',64))::text),true)
+				WHERE tenant_id=$1 AND event_document#>>'{actor,id}'=$2 AND event_document->>'requestId'=$3`,
+		} {
+			t.Run("trust proof "+name+" tamper", func(t *testing.T) {
+				tx, err := database.Begin(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = tx.Exec(ctx, damage, member.AccountID, member.ID, "delegated-role-trust-set"); err != nil {
+					_ = tx.Rollback(ctx)
+					t.Fatal("inject isolated Role Trust evidence damage", err)
+				}
+				var ignored []byte
+				err = tx.QueryRow(ctx, "SELECT iam.verified_role_trust_change($1,$2,$3)",
+					member.AccountID, member.ID, "delegated-role-trust-set").Scan(&ignored)
+				_ = tx.Rollback(ctx)
+				var databaseError *pgconn.PgError
+				if !errors.As(err, &databaseError) || databaseError.Code != "23514" {
+					t.Fatal("damaged Role Trust evidence did not fail closed", err)
+				}
+			})
+		}
+		var survived bool
+		if err := database.QueryRow(ctx, `SELECT iam.verified_role_trust_change($1,$2,$3) IS NOT NULL`,
+			member.AccountID, member.ID, "delegated-role-trust-set").Scan(&survived); err != nil || !survived {
+			t.Fatal("rolled-back Role Trust evidence damage changed the completion", err)
 		}
 		tx, err := database.Begin(ctx)
 		if err != nil {

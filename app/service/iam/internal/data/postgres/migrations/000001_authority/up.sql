@@ -1624,8 +1624,8 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE
     local_recovery boolean := expected_action = 'iam.installation-primary.credentials-recovered';
-    attachment_authority_evidence boolean := expected_action IN (
-        'iam.policy-attachment.created','iam.policy-attachment.revoked',
+    authority_evidence boolean := expected_action IN (
+        'iam.role.trust-set','iam.policy-attachment.created','iam.policy-attachment.revoked',
         'iam.platform-policy-attachment.created','iam.platform-policy-attachment.revoked');
     platform_lifecycle boolean := expected_action IN (
         'iam.account.created','iam.account.disabled','iam.account.enabled','iam.account-root.credentials-recovered',
@@ -1732,10 +1732,10 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_event->>'requestDigest', '') COLLATE "C"
             !~ '^sha256:[0-9a-f]{64}$'
-       OR (attachment_authority_evidence AND COALESCE(
-            submitted_event->>'authorityEvidenceDigest','') COLLATE "C"
-            !~ '^sha256:[0-9a-f]{64}$')
-       OR (NOT attachment_authority_evidence AND submitted_event ? 'authorityEvidenceDigest')
+       OR (authority_evidence AND COALESCE(
+             submitted_event->>'authorityEvidenceDigest','') COLLATE "C"
+             !~ '^sha256:[0-9a-f]{64}$')
+       OR (NOT authority_evidence AND submitted_event ? 'authorityEvidenceDigest')
        OR COALESCE(submitted_event->>'requestId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_event->>'correlationId', '') COLLATE "C"
