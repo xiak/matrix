@@ -6,7 +6,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
-const SchemaVersion uint64 = 75
+const SchemaVersion uint64 = 76
 
 // CheckSchema is startup admission before bootstrap/material registration,
 // not network readiness or permission to serve authentication requests.

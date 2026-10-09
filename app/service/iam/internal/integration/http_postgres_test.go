@@ -1253,6 +1253,34 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		for _, statement := range []string{
+			`GRANT SELECT ON TABLE iam.policy_version_retirements TO matrix_iam_worker`,
+			`GRANT EXECUTE ON FUNCTION iam.lock_policy_version_retirement_delegation(text,text,text,text) TO matrix_iam_api`,
+			`GRANT EXECUTE ON FUNCTION iam.guard_policy_version_retirement_insert() TO matrix_iam_worker`,
+			`ALTER FUNCTION iam.delete_policy_version(text,text,text,text,text,bigint,jsonb,text) SECURITY INVOKER`,
+			`ALTER TABLE iam.policy_version_retirements DISABLE TRIGGER policy_version_retirements_cannot_be_updated`,
+			`CREATE FUNCTION public.matrix_policy_version_retirement_update_passthrough() RETURNS trigger
+			 LANGUAGE plpgsql AS $fixture$ BEGIN RETURN NEW; END $fixture$;
+			 DROP TRIGGER policy_version_retirements_cannot_be_updated ON iam.policy_version_retirements;
+			 CREATE TRIGGER policy_version_retirements_cannot_be_updated BEFORE UPDATE ON iam.policy_version_retirements
+			 FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_version_retirement_update_passthrough()`,
+		} {
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(ctx, statement); err != nil {
+				tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			if err = tx.QueryRow(ctx, `SELECT iam.policy_version_retirement_contract_ready()`).Scan(&ready); err != nil || ready {
+				tx.Rollback(ctx)
+				t.Fatal("readiness accepted a widened delegated policy-version retirement contract")
+			}
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
 		var definition string
 		if err := admin.QueryRow(ctx, `SELECT pg_get_functiondef('iam.policy_version_snapshot(iam.policy_versions)'::regprocedure)`).Scan(&definition); err != nil {
 			t.Fatal(err)
@@ -1591,6 +1619,16 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		"version":{"policyId":"missing-policy","versionId":"missing-version","contentDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"contractVersion":1}'::jsonb,
 		0,'sha256:0000000000000000000000000000000000000000000000000000000000000000','missing-decision','missing-event',transaction_timestamp())`,
 		"42501", document.Organization.ID, document.Administrator.ID)
+	assertRejected("immutable-version-retirement-completion-update", `UPDATE iam.policy_version_retirements SET completed_at=completed_at`, "42501")
+	assertRejected("immutable-version-retirement-completion-delete", `DELETE FROM iam.policy_version_retirements`, "42501")
+	assertRejected("immutable-version-retirement-completion-truncate", `TRUNCATE iam.policy_version_retirements`, "42501")
+	assertRejected("guarded-version-retirement-completion-insert", `INSERT INTO iam.policy_version_retirements(
+		tenant_id,actor_principal_id,request_id,policy_id,version_id,expected_resource_version,actor_boundary_evidence,
+		decision_id,event_id,completed_at)
+		VALUES($1,$2,'forged-version-retirement','missing-policy','missing-version',1,
+		'{"state":"BOUND","userResourceVersion":1,"boundaryId":"missing-boundary","resourceVersion":1,
+		"version":{"policyId":"missing-policy","versionId":"missing-version","contentDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"contractVersion":1}'::jsonb,
+		'missing-decision','missing-event',transaction_timestamp())`, "42501", document.Organization.ID, document.Administrator.ID)
 	assertRejected("immutable-decision-evidence", `UPDATE iam.authorization_decisions SET policy_evidence='[]'::jsonb`, "42501")
 	assertRejected("immutable-boundary-evidence", `UPDATE iam.authorization_decisions SET boundary_evidence='{}'::jsonb`, "42501")
 	for _, attack := range []struct{ name, evidence string }{
@@ -1635,6 +1673,8 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			`SELECT * FROM iam.policy_versions`,
 			`SELECT * FROM iam.policy_default_version_changes`,
 			`SELECT iam.lock_policy_default_selection_delegation('tenant','actor','decision','policy')`,
+			`SELECT * FROM iam.policy_version_retirements`,
+			`SELECT iam.lock_policy_version_retirement_delegation('tenant','actor','decision','policy')`,
 		} {
 			tx, err := admin.Begin(ctx)
 			if err != nil {
@@ -1648,7 +1688,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			var databaseError *pgconn.PgError
 			if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
 				_ = tx.Rollback(ctx)
-				t.Fatalf("runtime %s acquired private policy/default authority through %q: %v", role, query, err)
+				t.Fatalf("runtime %s acquired private policy lifecycle authority through %q: %v", role, query, err)
 			}
 			if err := tx.Rollback(ctx); err != nil {
 				t.Fatal(err)
@@ -16202,7 +16242,8 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 			Statements: []iamv1.PolicyStatement{
 				{SID: "author-policy", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyCreate},
 					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(member.AccountID)}}},
-				{SID: "draft-policy-versions", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyVersionCreate},
+				{SID: "manage-policy-versions", Effect: iamv1.PolicyAllow,
+					Actions:   []iamv1.Action{iamv1.ActionIAMPolicyVersionCreate, iamv1.ActionIAMPolicyVersionDelete},
 					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicy, Match: iamv1.PolicyResourceAnyInAuthority}}},
 				{SID: "select-controlled-default", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicySetDefaultVersion},
 					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicy, Match: iamv1.PolicyResourceAnyInAuthority}}},
@@ -16802,6 +16843,18 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		t.Fatal("mismatched delegated default evidence was accepted or changed authority", err)
 	}
 
+	delegatedRetirementRaceCreate := delegatedSwitchCreate
+	delegatedRetirementRaceCreate.DisplayName = "Delegated retirement fencing"
+	delegatedRetirementRaceCreate.RequestID = "customer-delegated-retirement-race-policy-create"
+	var delegatedRetirementRacePolicy iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedRetirementRaceCreate, http.StatusCreated, &delegatedRetirementRacePolicy)
+	delegatedRetirementRaceVersionRequest := delegatedSwitchVersionRequest
+	delegatedRetirementRaceVersionRequest.ResourceVersion = delegatedRetirementRacePolicy.Policy.ResourceVersion
+	delegatedRetirementRaceVersionRequest.RequestID = "customer-delegated-retirement-race-version-create"
+	var delegatedRetirementRaceVersion iamv1.PolicyVersionDetail
+	post("/v1/policies/"+string(delegatedRetirementRacePolicy.Policy.ID)+"/versions", bearer,
+		delegatedRetirementRaceVersionRequest, http.StatusCreated, &delegatedRetirementRaceVersion)
+
 	// A bearer that was current at HTTP authentication cannot publish after a
 	// concurrent logout. Pause the decision insert, complete the real logout,
 	// then require the storage transaction to reject and roll back its decision.
@@ -16809,7 +16862,8 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_publication_auth_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
 		BEGIN IF NEW.request_id IN ('customer-delegated-policy-after-logout','customer-delegated-version-after-logout',
 		'customer-delegated-default-after-logout','customer-delegated-policy-after-boundary-remove',
-		'customer-delegated-version-after-boundary-remove','customer-delegated-default-after-boundary-remove')
+		'customer-delegated-version-after-boundary-remove','customer-delegated-default-after-boundary-remove',
+		'customer-delegated-retirement-after-logout','customer-delegated-retirement-after-boundary-remove')
 		THEN PERFORM pg_advisory_xact_lock(54831,20); END IF; RETURN NEW; END $body$;
 		CREATE TRIGGER matrix_policy_publication_auth_barrier BEFORE INSERT ON iam.authorization_decisions
 		FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_publication_auth_barrier(); SELECT pg_advisory_lock(54831,20)`); err != nil {
@@ -16972,6 +17026,57 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		t.Fatalf("logged-out delegated default selection left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
 
+	retirementBlockedBearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_lock(54831,20)`); err != nil {
+		t.Fatal("hold policy retirement authentication barrier", err)
+	}
+	blockedRetirementContext, cancelBlockedRetirement := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBlockedRetirement()
+	blockedRetirement := iamv1.DeletePolicyVersionRequest{ResourceVersion: delegatedRetirementRaceVersion.Policy.ResourceVersion,
+		RequestID: "customer-delegated-retirement-after-logout"}
+	blockedRetirementDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		blockedRetirementDone <- performIAMRequest(handler, http.MethodDelete,
+			"/v1/policies/"+string(delegatedRetirementRacePolicy.Policy.ID)+"/versions/"+string(delegatedRetirementRaceVersion.Version.ID),
+			retirementBlockedBearer, mustIAMJSON(t, blockedRetirement))
+	}()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(blockedRetirementContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=20)`).Scan(&waiting); err != nil {
+			t.Fatal("observe policy retirement authentication barrier", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-blockedRetirementContext.Done():
+				t.Fatal("policy retirement never reached authentication barrier")
+			}
+		}
+	}
+	post("/v1/auth/logout", retirementBlockedBearer, map[string]any{"requestId": "customer-delegated-retirement-logout"}, http.StatusOK, nil)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,20)`); err != nil {
+		t.Fatal("release policy retirement authentication barrier", err)
+	}
+	select {
+	case response := <-blockedRetirementDone:
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("delegated retirement survived concurrent logout: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-blockedRetirementContext.Done():
+		t.Fatal("delegated retirement did not finish after concurrent logout")
+	}
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$4 AND id=$5)
+		OR (SELECT resource_version<>$6 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$4)`,
+		member.AccountID, member.ID, blockedRetirement.RequestID, delegatedRetirementRacePolicy.Policy.ID,
+		delegatedRetirementRaceVersion.Version.ID, delegatedRetirementRaceVersion.Policy.ResourceVersion).
+		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("logged-out delegated retirement left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
+
 	// A tenant administrator with any current installation-scoped USER binding
 	// is outside the delegated tenant closure even when PDP and its ordinary
 	// boundary would otherwise allow policy creation.
@@ -16991,15 +17096,22 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	platformDefaultBlocked := iamv1.SetDefaultPolicyVersionRequest{VersionID: delegatedSwitchPolicy.Version.ID,
 		ResourceVersion: delegatedSelected.Policy.ResourceVersion, RequestID: "customer-delegated-platform-default-rejected"}
 	post(delegatedSwitchPath, bearer, platformDefaultBlocked, http.StatusForbidden, nil)
+	platformRetirementBlocked := iamv1.DeletePolicyVersionRequest{ResourceVersion: delegatedSelected.Policy.ResourceVersion,
+		RequestID: "customer-delegated-platform-retirement-rejected"}
+	request(http.MethodDelete, "/v1/policies/"+string(delegatedSwitchPolicy.Policy.ID)+"/versions/"+string(delegatedSwitchPolicy.Version.ID),
+		bearer, platformRetirementBlocked, http.StatusForbidden, nil)
 	if err := database.QueryRow(ctx, `SELECT
 		EXISTS(SELECT 1 FROM iam.policies WHERE owner_tenant_id=$1 AND display_name=$2)
-		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$3 AND request_id IN($4,$5,$6))
-		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN($4,$5,$6))
-		OR (SELECT count(*) FROM iam.policy_versions WHERE policy_id=$7)<>2
-		OR (SELECT default_version_id<>$8 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$9)`,
+		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$3 AND request_id IN($4,$5,$6,$7))
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN($4,$5,$6,$7))
+		OR EXISTS(SELECT 1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$3 AND request_id=$7)
+		OR (SELECT count(*) FROM iam.policy_versions WHERE policy_id=$8)<>2
+		OR (SELECT retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$9 AND id=$10)
+		OR (SELECT default_version_id<>$11 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$9)`,
 		member.AccountID, platformBlocked.DisplayName, member.ID, platformBlocked.RequestID,
-		platformVersionBlocked.RequestID, platformDefaultBlocked.RequestID, delegatedPolicy.Policy.ID,
-		delegatedSwitchVersion.Version.ID, delegatedSwitchPolicy.Policy.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		platformVersionBlocked.RequestID, platformDefaultBlocked.RequestID, platformRetirementBlocked.RequestID,
+		delegatedPolicy.Policy.ID, delegatedSwitchPolicy.Policy.ID, delegatedSwitchPolicy.Version.ID,
+		delegatedSwitchVersion.Version.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("platform-bound delegated publication left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
 	post("/v1/policy-attachments/"+string(platformBinding.ID)+":revoke", root,
@@ -17169,6 +17281,61 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		delegatedSelected.Policy.ResourceVersion, delegatedSwitchPolicy.Policy.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("boundary-removed delegated default selection left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
 	}
+
+	setBoundary(member, "customer-policy-author-boundary-reset-retirement")
+	bearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	get("/v1/users/"+string(member.ID)+"/permission-boundary", root, http.StatusOK, &currentBoundary)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_lock(54831,20)`); err != nil {
+		t.Fatal("hold boundary-removal retirement barrier", err)
+	}
+	boundaryRetirementContext, cancelBoundaryRetirement := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBoundaryRetirement()
+	boundaryBlockedRetirement := iamv1.DeletePolicyVersionRequest{ResourceVersion: delegatedRetirementRaceVersion.Policy.ResourceVersion,
+		RequestID: "customer-delegated-retirement-after-boundary-remove"}
+	boundaryRetirementDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		boundaryRetirementDone <- performIAMRequest(handler, http.MethodDelete,
+			"/v1/policies/"+string(delegatedRetirementRacePolicy.Policy.ID)+"/versions/"+string(delegatedRetirementRaceVersion.Version.ID),
+			bearer, mustIAMJSON(t, boundaryBlockedRetirement))
+	}()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(boundaryRetirementContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=20)`).Scan(&waiting); err != nil {
+			t.Fatal("observe boundary-removal retirement barrier", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-boundaryRetirementContext.Done():
+				t.Fatal("policy retirement never reached boundary-removal barrier")
+			}
+		}
+	}
+	request(http.MethodDelete, "/v1/users/"+string(member.ID)+"/permission-boundary", root,
+		iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: currentBoundary.ResourceVersion,
+			RequestID: "customer-policy-author-boundary-remove-retirement"}, http.StatusOK, nil)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,20)`); err != nil {
+		t.Fatal("release boundary-removal retirement barrier", err)
+	}
+	select {
+	case response := <-boundaryRetirementDone:
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("delegated retirement survived concurrent boundary removal: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-boundaryRetirementContext.Done():
+		t.Fatal("delegated retirement did not finish after boundary removal")
+	}
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$4 AND id=$5)
+		OR (SELECT resource_version<>$6 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$4)`,
+		member.AccountID, member.ID, boundaryBlockedRetirement.RequestID, delegatedRetirementRacePolicy.Policy.ID,
+		delegatedRetirementRaceVersion.Version.ID, delegatedRetirementRaceVersion.Policy.ResourceVersion).
+		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("boundary-removed delegated retirement left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
 	// The already committed draft can still return its immutable result after
 	// the ceiling is removed; the decision is not a permit for a new version.
 	var historicalDraftReplay iamv1.PolicyVersionDetail
@@ -17222,7 +17389,9 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_target_boundary_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
 		BEGIN
 		IF NEW.request_id='customer-delegated-version-target-boundary-race' THEN PERFORM pg_advisory_xact_lock(54831,21);
-		ELSIF NEW.request_id='customer-delegated-target-boundary-set' THEN PERFORM pg_advisory_xact_lock(54831,22); END IF;
+		ELSIF NEW.request_id='customer-delegated-target-boundary-set' THEN PERFORM pg_advisory_xact_lock(54831,22);
+		ELSIF NEW.request_id='customer-delegated-retirement-target-boundary-race' THEN PERFORM pg_advisory_xact_lock(54831,23);
+		ELSIF NEW.request_id='customer-delegated-retirement-target-boundary-set' THEN PERFORM pg_advisory_xact_lock(54831,24); END IF;
 		RETURN NEW; END $body$;
 		CREATE TRIGGER matrix_policy_target_boundary_barrier BEFORE INSERT ON iam.authorization_decisions
 		FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_target_boundary_barrier();
@@ -17231,6 +17400,7 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	}
 	defer func() {
 		if _, err := database.Exec(context.Background(), `SELECT pg_advisory_unlock(54831,21); SELECT pg_advisory_unlock(54831,22);
+			SELECT pg_advisory_unlock(54831,23); SELECT pg_advisory_unlock(54831,24);
 			DROP TRIGGER IF EXISTS matrix_policy_target_boundary_barrier ON iam.authorization_decisions;
 			DROP FUNCTION IF EXISTS public.matrix_policy_target_boundary_barrier()`); err != nil {
 			t.Error("remove target-boundary publication barrier")
@@ -17310,6 +17480,81 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	request(http.MethodDelete, boundaryRacePath, root,
 		iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: boundaryRaceView.ResourceVersion,
 			RequestID: "customer-delegated-target-boundary-remove"}, http.StatusOK, nil)
+	get(boundaryRacePath, root, http.StatusOK, &boundaryRaceView)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_lock(54831,23); SELECT pg_advisory_lock(54831,24)`); err != nil {
+		t.Fatal("hold target-boundary retirement barriers", err)
+	}
+	targetRetirementContext, cancelTargetRetirement := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelTargetRetirement()
+	targetBoundaryRetirement := iamv1.DeletePolicyVersionRequest{ResourceVersion: delegatedRetirementRaceVersion.Policy.ResourceVersion,
+		RequestID: "customer-delegated-retirement-target-boundary-race"}
+	targetRetirementBoundarySet := iamv1.SetUserPermissionBoundaryRequest{PolicyID: delegatedRetirementRacePolicy.Policy.ID,
+		PolicyResourceVersion: delegatedRetirementRaceVersion.Policy.ResourceVersion, ResourceVersion: boundaryRaceView.ResourceVersion,
+		RequestID: "customer-delegated-retirement-target-boundary-set"}
+	targetRetirementDone := make(chan *httptest.ResponseRecorder, 1)
+	targetRetirementBoundaryDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		targetRetirementDone <- performIAMRequest(handler, http.MethodDelete,
+			"/v1/policies/"+string(delegatedRetirementRacePolicy.Policy.ID)+"/versions/"+string(delegatedRetirementRaceVersion.Version.ID),
+			bearer, mustIAMJSON(t, targetBoundaryRetirement))
+	}()
+	go func() {
+		targetRetirementBoundaryDone <- performIAMRequest(handler, http.MethodPut, boundaryRacePath, root,
+			mustIAMJSON(t, targetRetirementBoundarySet))
+	}()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(targetRetirementContext, `SELECT count(*)>=2 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid IN(23,24)`).Scan(&waiting); err != nil {
+			t.Fatal("observe target-boundary retirement barriers", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-targetRetirementContext.Done():
+				t.Fatal("target-boundary retirement competition never reached both barriers")
+			}
+		}
+	}
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,24)`); err != nil {
+		t.Fatal("release target-boundary retirement set barrier", err)
+	}
+	select {
+	case response := <-targetRetirementBoundaryDone:
+		if response.Code != http.StatusOK {
+			t.Fatalf("target boundary for retirement did not commit first: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-targetRetirementContext.Done():
+		t.Fatal("target boundary for retirement did not finish after release")
+	}
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,23)`); err != nil {
+		t.Fatal("release target-boundary retirement request barrier", err)
+	}
+	select {
+	case response := <-targetRetirementDone:
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("delegated retirement modified a newly protected boundary: status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-targetRetirementContext.Done():
+		t.Fatal("target-boundary retirement did not finish after release")
+	}
+	get(boundaryRacePath, root, http.StatusOK, &boundaryRaceView)
+	if boundaryRaceView.Policy == nil || boundaryRaceView.Policy.PolicyID != delegatedRetirementRacePolicy.Policy.ID {
+		t.Fatal("target-boundary retirement competition lost the committed boundary")
+	}
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$4 AND id=$5)
+		OR (SELECT resource_version<>$6 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$4)`,
+		member.AccountID, member.ID, targetBoundaryRetirement.RequestID, delegatedRetirementRacePolicy.Policy.ID,
+		delegatedRetirementRaceVersion.Version.ID, delegatedRetirementRaceVersion.Policy.ResourceVersion).
+		Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		t.Fatalf("target-boundary retirement competition left partial authority: partial=%t err=%v", partialDelegatedPublication, err)
+	}
+	request(http.MethodDelete, boundaryRacePath, root,
+		iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: boundaryRaceView.ResourceVersion,
+			RequestID: "customer-delegated-retirement-target-boundary-remove"}, http.StatusOK, nil)
 	var boundaryRaceRole iamv1.Role
 	post("/v1/roles", root, iamv1.CreateRoleRequest{Name: "Policy version protected role", Tags: []iamv1.RoleTag{},
 		RequestID: "customer-delegated-version-role-create",
@@ -17328,6 +17573,10 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		ResourceVersion: delegatedDraft.Policy.ResourceVersion, RequestID: "customer-delegated-default-role-boundary-rejected"}
 	post("/v1/policies/"+string(delegatedPolicy.Policy.ID)+":set-default-version", bearer,
 		roleBoundaryDefault, http.StatusForbidden, nil)
+	roleBoundaryRetirement := iamv1.DeletePolicyVersionRequest{ResourceVersion: delegatedDraft.Policy.ResourceVersion,
+		RequestID: "customer-delegated-retirement-role-boundary-rejected"}
+	request(http.MethodDelete, "/v1/policies/"+string(delegatedPolicy.Policy.ID)+"/versions/"+string(delegatedDraft.Version.ID),
+		bearer, roleBoundaryRetirement, http.StatusForbidden, nil)
 	if boundaryRaceRoleView.Policy == nil || boundaryRaceRoleView.Policy.PolicyID != delegatedPolicy.Policy.ID {
 		t.Fatal("role boundary did not retain the protected policy")
 	}
@@ -17336,12 +17585,112 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
 		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$4)
 		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4)
-		OR (SELECT count(*) FROM iam.policy_versions WHERE policy_id=$5)<>2
-		OR (SELECT default_version_id<>$6 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$5)`,
+		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$5)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$5)
+		OR EXISTS(SELECT 1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$5)
+		OR (SELECT count(*) FROM iam.policy_versions WHERE policy_id=$6)<>2
+		OR (SELECT retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$6 AND id=$7)
+		OR (SELECT default_version_id<>$8 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)`,
 		member.AccountID, member.ID, roleBoundaryVersion.RequestID, roleBoundaryDefault.RequestID,
-		delegatedPolicy.Policy.ID, delegatedPolicy.Version.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
+		roleBoundaryRetirement.RequestID, delegatedPolicy.Policy.ID, delegatedDraft.Version.ID,
+		delegatedPolicy.Version.ID).Scan(&partialDelegatedPublication); err != nil || partialDelegatedPublication {
 		t.Fatalf("role-boundary protection left a partial delegated version: partial=%t err=%v", partialDelegatedPublication, err)
 	}
+
+	// Retiring a non-default version has no current consumers to re-authorize,
+	// but it still requires the actor's exact current ceiling and an immutable
+	// completion linked to the original decision and outbox fact.
+	delegatedRetirementCreate := delegatedSwitchCreate
+	delegatedRetirementCreate.DisplayName = "Delegated version retirement"
+	delegatedRetirementCreate.RequestID = "customer-delegated-retirement-policy-create"
+	var delegatedRetirementPolicy iamv1.PolicyDetail
+	post("/v1/policies", bearer, delegatedRetirementCreate, http.StatusCreated, &delegatedRetirementPolicy)
+	delegatedRetirementVersionRequest := delegatedSwitchVersionRequest
+	delegatedRetirementVersionRequest.ResourceVersion = delegatedRetirementPolicy.Policy.ResourceVersion
+	delegatedRetirementVersionRequest.RequestID = "customer-delegated-retirement-version-create"
+	var delegatedRetirementVersion iamv1.PolicyVersionDetail
+	post("/v1/policies/"+string(delegatedRetirementPolicy.Policy.ID)+"/versions", bearer,
+		delegatedRetirementVersionRequest, http.StatusCreated, &delegatedRetirementVersion)
+	retirementPath := "/v1/policies/" + string(delegatedRetirementPolicy.Policy.ID) + "/versions/"
+	request(http.MethodDelete, retirementPath+string(delegatedRetirementPolicy.Version.ID), bearer,
+		iamv1.DeletePolicyVersionRequest{ResourceVersion: delegatedRetirementVersion.Policy.ResourceVersion,
+			RequestID: "customer-delegated-retirement-default-rejected"}, http.StatusConflict, nil)
+	request(http.MethodDelete, "/v1/policies/"+string(delegationCeiling.Policy.ID)+"/versions/"+string(delegationCeiling.Version.ID), bearer,
+		iamv1.DeletePolicyVersionRequest{ResourceVersion: delegationCeiling.Policy.ResourceVersion,
+			RequestID: "customer-delegated-retirement-ceiling-rejected"}, http.StatusForbidden, nil)
+	request(http.MethodDelete, "/v1/policies/"+string(iamv1.SystemPolicyAccountAdministrator)+"/versions/"+string(delegatedRetirementVersion.Version.ID), bearer,
+		iamv1.DeletePolicyVersionRequest{ResourceVersion: 1,
+			RequestID: "customer-delegated-retirement-system-rejected"}, http.StatusForbidden, nil)
+
+	delegatedRetirement := iamv1.DeletePolicyVersionRequest{ResourceVersion: delegatedRetirementVersion.Policy.ResourceVersion,
+		RequestID: "customer-delegated-retirement-apply"}
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_version_retirement_completion_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.request_id='customer-delegated-retirement-apply' THEN RAISE EXCEPTION 'injected retirement completion failure'; END IF;
+		RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_policy_version_retirement_completion_fault BEFORE INSERT ON iam.policy_version_retirements
+		FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_version_retirement_completion_fault()`); err != nil {
+		t.Fatal("install delegated retirement completion fault", err)
+	}
+	defer func() {
+		if _, err := database.Exec(context.Background(), `DROP TRIGGER IF EXISTS matrix_policy_version_retirement_completion_fault ON iam.policy_version_retirements;
+			DROP FUNCTION IF EXISTS public.matrix_policy_version_retirement_completion_fault()`); err != nil {
+			t.Error("remove delegated retirement completion fault", err)
+		}
+	}()
+	request(http.MethodDelete, retirementPath+string(delegatedRetirementVersion.Version.ID), bearer,
+		delegatedRetirement, http.StatusServiceUnavailable, nil)
+	var delegatedRetirementPartial bool
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)
+		OR EXISTS(SELECT 1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		OR (SELECT retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$4 AND id=$5)
+		OR (SELECT resource_version<>$6 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$4)`,
+		member.AccountID, member.ID, delegatedRetirement.RequestID, delegatedRetirementPolicy.Policy.ID,
+		delegatedRetirementVersion.Version.ID, delegatedRetirementVersion.Policy.ResourceVersion).
+		Scan(&delegatedRetirementPartial); err != nil || delegatedRetirementPartial {
+		t.Fatalf("failed delegated retirement completion left partial authority: partial=%t err=%v", delegatedRetirementPartial, err)
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_policy_version_retirement_completion_fault ON iam.policy_version_retirements;
+		DROP FUNCTION public.matrix_policy_version_retirement_completion_fault()`); err != nil {
+		t.Fatal("remove delegated retirement completion fault before retry", err)
+	}
+	var delegatedRetired, delegatedRetiredReplay iamv1.PolicyDetail
+	request(http.MethodDelete, retirementPath+string(delegatedRetirementVersion.Version.ID), bearer,
+		delegatedRetirement, http.StatusOK, &delegatedRetired)
+	request(http.MethodDelete, retirementPath+string(delegatedRetirementVersion.Version.ID), bearer,
+		delegatedRetirement, http.StatusOK, &delegatedRetiredReplay)
+	if delegatedRetired.Policy.ResourceVersion != delegatedRetirement.ResourceVersion+1 ||
+		delegatedRetired.Version.ID != delegatedRetirementPolicy.Version.ID ||
+		!bytes.Equal(mustIAMJSON(t, delegatedRetired), mustIAMJSON(t, delegatedRetiredReplay)) {
+		t.Fatal("delegated version retirement or exact replay changed its immutable result")
+	}
+	var delegatedRetirementProof bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT actor_boundary_evidence->>'state'='BOUND'
+		 AND actor_boundary_evidence#>>'{version,policyId}'=$4
+		 AND completed_at=(SELECT retired_at FROM iam.policy_versions WHERE policy_id=$5 AND id=$6)
+		 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)
+		AND (SELECT count(*)=1 FROM iam.audit_outbox WHERE tenant_id=$1
+		 AND event_document->>'action'='iam.policy-version.deleted' AND event_document#>>'{actor,id}'=$2
+		 AND event_document->>'requestId'=$3 AND event_document#>>'{target,id}'=$5)
+		AND (SELECT resource_version=$7 AND default_version_id=$8 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$5)
+		AND (SELECT retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$5 AND id=$6)`,
+		member.AccountID, member.ID, delegatedRetirement.RequestID, delegationCeiling.Policy.ID,
+		delegatedRetirementPolicy.Policy.ID, delegatedRetirementVersion.Version.ID,
+		delegatedRetired.Policy.ResourceVersion, delegatedRetirementPolicy.Version.ID).
+		Scan(&delegatedRetirementProof); err != nil || !delegatedRetirementProof {
+		t.Fatal("delegated version retirement lost its ceiling, terminal state or one-to-one fact", err)
+	}
+	retirementVariant := delegatedRetirement
+	retirementVariant.ResourceVersion--
+	request(http.MethodDelete, retirementPath+string(delegatedRetirementVersion.Version.ID), bearer,
+		retirementVariant, http.StatusConflict, nil)
+	retirementAgain := delegatedRetirement
+	retirementAgain.ResourceVersion = delegatedRetired.Policy.ResourceVersion
+	retirementAgain.RequestID = "customer-delegated-retirement-again"
+	request(http.MethodDelete, retirementPath+string(delegatedRetirementVersion.Version.ID), bearer,
+		retirementAgain, http.StatusConflict, nil)
 
 	post("/v1/accounts", root, map[string]any{"id": "customer-policy-other", "displayName": "Other policy account", "rootLoginName": "customer-policy-other", "rootDisplayName": "Other root", "initialPassword": initialDeveloperPassword, "requestId": "customer-policy-other-create"}, http.StatusCreated, nil)
 	other := localRecoveryLogin(t, handler, "customer-policy-other", initialDeveloperPassword, true)
@@ -17355,6 +17704,74 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	get("/v1/policies/"+string(foreign.Policy.ID), root, http.StatusForbidden, nil)
 	grant.PolicyID, grant.RequestID = foreign.Policy.ID, "customer-cross-account-attach"
 	post("/v1/policy-attachments", root, grant, http.StatusForbidden, nil)
+	crossAccountRetirement := iamv1.DeletePolicyVersionRequest{ResourceVersion: foreign.Policy.ResourceVersion,
+		RequestID: "customer-delegated-retirement-cross-account"}
+	request(http.MethodDelete, "/v1/policies/"+string(foreign.Policy.ID)+"/versions/"+string(foreign.Version.ID), bearer,
+		crossAccountRetirement, http.StatusForbidden, nil)
+	var currentActorBoundary iamv1.UserPermissionBoundary
+	get("/v1/users/"+string(member.ID)+"/permission-boundary", root, http.StatusOK, &currentActorBoundary)
+	request(http.MethodDelete, "/v1/users/"+string(member.ID)+"/permission-boundary", root,
+		iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: currentActorBoundary.ResourceVersion,
+			RequestID: "customer-delegated-retirement-actor-boundary-remove"}, http.StatusOK, nil)
+	var historicalRetirementReplay iamv1.PolicyDetail
+	request(http.MethodDelete, retirementPath+string(delegatedRetirementVersion.Version.ID), bearer,
+		delegatedRetirement, http.StatusOK, &historicalRetirementReplay)
+	if !bytes.Equal(mustIAMJSON(t, historicalRetirementReplay), mustIAMJSON(t, delegatedRetired)) {
+		t.Fatal("ceiling removal changed an exact committed version retirement result")
+	}
+	boundaryRemovedRetirement := iamv1.DeletePolicyVersionRequest{ResourceVersion: delegatedRetired.Policy.ResourceVersion,
+		RequestID: "customer-delegated-retirement-after-boundary-remove"}
+	request(http.MethodDelete, retirementPath+string(delegatedRetirementPolicy.Version.ID), bearer,
+		boundaryRemovedRetirement, http.StatusForbidden, nil)
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND request_id IN($3,$4))
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN($3,$4))
+		OR EXISTS(SELECT 1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id IN($3,$4))
+		OR (SELECT count(*)<>1 FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$5)
+		OR (SELECT resource_version<>$6 OR default_version_id<>$7 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$8)`,
+		member.AccountID, member.ID, crossAccountRetirement.RequestID, boundaryRemovedRetirement.RequestID,
+		delegatedRetirement.RequestID, delegatedRetired.Policy.ResourceVersion,
+		delegatedRetirementPolicy.Version.ID, delegatedRetirementPolicy.Policy.ID).
+		Scan(&delegatedRetirementPartial); err != nil || delegatedRetirementPartial {
+		t.Fatalf("cross-account/new retirement or historical replay changed authority: partial=%t err=%v", delegatedRetirementPartial, err)
+	}
+	mismatchedRetirement, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mismatchedRetirement.Exec(ctx, `ALTER TABLE iam.policy_version_retirements
+		DISABLE TRIGGER policy_version_retirements_cannot_be_updated;
+		UPDATE iam.policy_version_retirements SET actor_boundary_evidence=jsonb_set(actor_boundary_evidence,
+		'{version,contentDigest}',to_jsonb(('sha256:'||repeat('f',64))::text))
+		WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3;
+		ALTER TABLE iam.policy_version_retirements ENABLE ALWAYS TRIGGER policy_version_retirements_cannot_be_updated`,
+		member.AccountID, member.ID, delegatedRetirement.RequestID); err != nil {
+		_ = mismatchedRetirement.Rollback(ctx)
+		t.Fatal("inject isolated mismatched delegated retirement evidence", err)
+	}
+	if err := mismatchedRetirement.Commit(ctx); err != nil {
+		t.Fatal("commit isolated mismatched delegated retirement evidence", err)
+	}
+	request(http.MethodDelete, retirementPath+string(delegatedRetirementVersion.Version.ID), bearer,
+		delegatedRetirement, http.StatusServiceUnavailable, nil)
+	var mismatchedRetirementClosed bool
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.policy_version_retirements WHERE tenant_id=$1 AND actor_principal_id=$2 AND request_id=$3)=1
+		AND NOT EXISTS(SELECT 1 FROM iam.policy_version_retirements retirement
+		 JOIN iam.authorization_decisions decision ON decision.tenant_id=retirement.tenant_id
+		  AND decision.principal_id=retirement.actor_principal_id AND decision.request_id=retirement.request_id
+		  AND decision.action_name='iam.policy-version.delete' AND decision.allowed
+		 WHERE retirement.tenant_id=$1 AND retirement.actor_principal_id=$2 AND retirement.request_id=$3
+		  AND decision.boundary_evidence=retirement.actor_boundary_evidence)
+		AND (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy-version.deleted'
+		 AND event_document->>'requestId'=$3)=1
+		AND (SELECT resource_version=$4 AND default_version_id=$5 FROM iam.policies WHERE owner_tenant_id=$1 AND id=$6)
+		AND (SELECT retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$6 AND id=$7)`,
+		member.AccountID, member.ID, delegatedRetirement.RequestID, delegatedRetired.Policy.ResourceVersion,
+		delegatedRetirementPolicy.Version.ID, delegatedRetirementPolicy.Policy.ID, delegatedRetirementVersion.Version.ID).
+		Scan(&mismatchedRetirementClosed); err != nil || !mismatchedRetirementClosed {
+		t.Fatal("mismatched delegated retirement evidence was accepted or changed authority", err)
+	}
 	var event auditv1.Event
 	var raw []byte
 	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.created' AND event_document#>>'{target,id}'=$2`, policy.Policy.AccountID, policy.Policy.ID).Scan(&raw); err != nil || json.Unmarshal(raw, &event) != nil || auditv1.ValidateEvent(event) != nil || event.IAMDecisionID == "" || bytes.Contains(raw, []byte("customer-selected-app")) {

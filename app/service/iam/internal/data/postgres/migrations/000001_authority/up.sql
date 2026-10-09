@@ -2221,7 +2221,7 @@ BEGIN
                     to_regprocedure('iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb,text)'),
                     to_regprocedure('iam.update_policy(text,text,text,text,bigint,text,jsonb)'),
                     to_regprocedure('iam.delete_policy(text,text,text,text,bigint,jsonb)'),
-                    to_regprocedure('iam.delete_policy_version(text,text,text,text,text,bigint,jsonb)'))
+                    to_regprocedure('iam.delete_policy_version(text,text,text,text,text,bigint,jsonb,text)'))
                   AND policy_entry.prorettype='jsonb'::regtype AND NOT policy_entry.proretset
                   AND policy_entry.prosecdef AND policy_entry.proowner='matrix_iam_owner'::regrole)=9
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='iam.policy_versions'::regclass
@@ -2243,6 +2243,7 @@ BEGIN
            AND iam.authorization_decision_contract_ready()
            AND iam.policy_version_contract_ready()
            AND iam.policy_default_version_contract_ready()
+           AND iam.policy_version_retirement_contract_ready()
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS lookup
                 WHERE lookup.oid=to_regprocedure('iam.lookup_session(text)')
                   AND cardinality(lookup.proallargtypes)=25 AND lookup.proargnames[23:25]=ARRAY['policies','boundary','credential_generation']

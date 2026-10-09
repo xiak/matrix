@@ -4,7 +4,7 @@ BEGIN
         OR NOT iam.root_password_recovery_contract_ready() THEN
         RAISE EXCEPTION 'IAM security settings contract is unavailable';
     END IF;
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 75::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 76::bigint THEN
         RAISE EXCEPTION 'IAM account/proof schema version is incompatible';
     END IF;
     IF NOT EXISTS (

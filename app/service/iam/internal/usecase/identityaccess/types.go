@@ -1029,6 +1029,7 @@ type PolicyDefaultSelection struct {
 type PolicyVersionDeletion struct {
 	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	PolicyID         iamv1.PolicyID
 	VersionID        iamv1.PolicyVersionID

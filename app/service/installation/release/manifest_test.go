@@ -17,8 +17,8 @@ import (
 func TestCurrentDatabaseProfile(t *testing.T) {
 	want := DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 75, Audit: 36, PaaS: 3},
-		ContractRevision: 23,
+		Authorities:      AuthoritySchemas{IAM: 76, Audit: 36, PaaS: 3},
+		ContractRevision: 24,
 	}
 	if got := CurrentDatabaseProfile(); got != want {
 		t.Fatalf("current database profile = %#v, want %#v", got, want)

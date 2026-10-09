@@ -477,7 +477,9 @@ func (value *transaction) DeletePolicyVersion(ctx context.Context, mutation iden
 	}
 	defer clear(event)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.delete_policy_version($1,$2,$3,$4,$5,$6,$7::jsonb)", mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PolicyID, mutation.VersionID, mutation.ResourceVersion, event).Scan(&encoded)
+	err = value.tx.QueryRow(ctx, "SELECT iam.delete_policy_version($1,$2,$3,$4,$5,$6,$7::jsonb,$8)",
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PolicyID, mutation.VersionID,
+		mutation.ResourceVersion, event, mutation.ActorSessionID).Scan(&encoded)
 	if err != nil {
 		return iamv1.PolicyDetail{}, mapAuthorizationDatabaseError("delete IAM policy version", err)
 	}
