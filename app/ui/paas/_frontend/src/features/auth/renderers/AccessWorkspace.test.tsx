@@ -2226,7 +2226,7 @@ describe("CAM-style access workspace", () => {
     const createMembership = vi.fn()
       .mockRejectedValueOnce(new Error("unknown outcome"))
       .mockResolvedValueOnce(chen.membership);
-    const { user } = await open("groups", { live: true, repository: {
+    const { user } = await open("groups", { live: true, users: reviewUsers, repository: {
       listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
       getGroup: vi.fn().mockResolvedValue(liveGroup),
       listGroupMemberships: listMemberships,
@@ -2243,6 +2243,8 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     const workflow = within(screen.getByRole("group", { name: "添加成员 · LiveOperators" }));
     await user.click(workflow.getByRole("checkbox", { name: "chen" }));
+    expect(workflow.getByRole("checkbox", { name: "qiao" })).toHaveProperty("disabled", true);
+    expect(workflow.getByText(/每次选择 1 项/)).toBeTruthy();
     await user.click(workflow.getByRole("button", { name: "审阅变更" }));
     await user.click(workflow.getByRole("button", { name: "确认变更" }));
     await waitFor(() => expect(createMembership).toHaveBeenCalledTimes(1));
@@ -2335,8 +2337,8 @@ describe("CAM-style access workspace", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("creates only an empty group, then adds each member and policy relationship separately", async () => {
-    const { user, repository, extension } = await open("groups");
+  it("creates only an empty group, previews a bounded multi-member change, and keeps policy changes single", async () => {
+    const { user, repository, extension } = await open("groups", { users: reviewUsers });
     await user.click(await screen.findByRole("button", { name: "新建用户组" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.type(screen.getByLabelText("名称"), "Platform Operators");
@@ -2357,13 +2359,18 @@ describe("CAM-style access workspace", () => {
     const memberWorkflow = within(screen.getByRole("group", { name: "添加成员 · Platform Operators" }));
     expect(memberWorkflow.getByRole("button", { name: "审阅变更" })).toHaveProperty("disabled", true);
     await user.click(memberWorkflow.getByRole("checkbox", { name: "lin" }));
+    await user.click(memberWorkflow.getByRole("checkbox", { name: "chen" }));
+    expect(memberWorkflow.getByText(/最多选择 30 项/)).toBeTruthy();
+    expect(memberWorkflow.getByText(/多成员选择仅用于验证未来批量命令/)).toBeTruthy();
     await user.click(memberWorkflow.getByRole("button", { name: "审阅变更" }));
-    expect(memberWorkflow.getByText(/本次变更涉及 1 位成员/)).toBeTruthy();
+    expect(memberWorkflow.getByText(/本次变更涉及 2 位成员/)).toBeTruthy();
+    expect(memberWorkflow.getByRole("heading", { name: "添加成员 (2)" })).toBeTruthy();
+    expect(memberWorkflow.getByText(/当前 LIVE 仍逐条变更关系/)).toBeTruthy();
     expect((await extension.read("preview")).groups.at(-1)?.memberIds).toEqual([]);
     await user.click(memberWorkflow.getByRole("button", { name: "确认变更" }));
-    expect(screen.getByRole("tab", { name: "成员 (1)" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "成员 (2)" })).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
-    expect((await extension.read("preview")).groups.at(-1)?.memberIds).toEqual(["principal-lin"]);
+    expect((await extension.read("preview")).groups.at(-1)?.memberIds).toEqual(["principal-lin", "principal-chen"]);
     await user.click(screen.getByRole("tab", { name: "直接关联策略 (0)" }));
     await user.click(screen.getByRole("button", { name: "关联策略" }));
     const policyWorkflow = within(screen.getByRole("group", { name: "关联策略 · Platform Operators" }));
@@ -2404,13 +2411,14 @@ describe("CAM-style access workspace", () => {
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(await extension.read("preview")).toEqual(before);
   });
-  it("keeps failed member changes editable and retries the exact delta without losing existing members", async () => {
-    const { user, repository, extension } = await open("groups", { entityId: "group-delivery" });
+  it("keeps failed multi-member changes editable and retries the exact delta without partial writes", async () => {
+    const { user, repository, extension } = await open("groups", { entityId: "group-delivery", users: reviewUsers });
     const before = await extension.read("preview");
     await user.click(await screen.findByRole("button", { name: "添加成员" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     let workflow = within(screen.getByRole("group", { name: "添加成员 · DeliveryTeam" }));
     await user.click(workflow.getByRole("checkbox", { name: "chen" }));
+    await user.click(workflow.getByRole("checkbox", { name: "qiao" }));
     await user.click(workflow.getByRole("button", { name: "审阅变更" }));
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
     await user.click(workflow.getByRole("button", { name: "确认变更" }));
@@ -2418,19 +2426,22 @@ describe("CAM-style access workspace", () => {
     expect(await extension.read("preview")).toEqual(before);
     await user.click(workflow.getByRole("button", { name: "返回选择" }));
     expect((workflow.getByRole("checkbox", { name: "chen" }) as HTMLInputElement).checked).toBe(true);
+    expect((workflow.getByRole("checkbox", { name: "qiao" }) as HTMLInputElement).checked).toBe(true);
     await user.click(workflow.getByRole("button", { name: "审阅变更" }));
     await user.click(workflow.getByRole("button", { name: "确认变更" }));
     await waitFor(() => expect(screen.queryByRole("group", { name: "添加成员 · DeliveryTeam" })).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "添加成员" }));
-    expect((await extension.read("preview")).groups[0]?.memberIds).toEqual(["principal-lin", "principal-chen"]);
+    expect((await extension.read("preview")).groups[0]?.memberIds).toEqual(["principal-lin", "principal-chen", "principal-qiao"]);
     await user.click(screen.getByRole("button", { name: "移除成员" }));
     workflow = within(screen.getByRole("group", { name: "移除成员 · DeliveryTeam" }));
     await user.click(workflow.getByRole("checkbox", { name: "chen" }));
+    await user.click(workflow.getByRole("checkbox", { name: "qiao" }));
     await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    expect(workflow.getByText(/本次变更涉及 2 位成员/)).toBeTruthy();
     expect(workflow.getByText(/不代表撤销全部访问权限/)).toBeTruthy();
     await user.click(workflow.getByRole("button", { name: "取消" }));
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "移除成员" }));
-    expect((await extension.read("preview")).groups[0]?.memberIds).toEqual(["principal-lin", "principal-chen"]);
+    expect((await extension.read("preview")).groups[0]?.memberIds).toEqual(["principal-lin", "principal-chen", "principal-qiao"]);
     expect(repository.execute).not.toHaveBeenCalled();
   });
   it("cross-links exact group, member and policy entities with named grant sources on both sides", async () => {

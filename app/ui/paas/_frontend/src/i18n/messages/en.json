@@ -3847,10 +3847,10 @@
     },
     "hints": {
       "details": "Create a group to manage team permissions together.",
-      "review": "Review the group. Configure member and policy relationships one at a time from its detail page after creation."
+      "review": "Review the group. Configure member and policy relationships separately from its detail page after creation."
     },
     "created": "Group created",
-    "createdHint": "The empty group is ready. Open its detail page to add members or direct policies one at a time.",
+    "createdHint": "The empty group is ready. Open its detail page to configure members or direct policies.",
     "mockHint": "MOCK · No backend changes",
     "liveHint": "LIVE IAM · Creates only an empty group in the current account",
     "viewGroup": "View group",
@@ -3874,6 +3874,7 @@
     "confirmChange": "Confirm changes",
     "reviewChange": "Review changes",
     "membershipHint": "Membership changes do not delete users or resources. Regular users inherit group policies; the account owner is not a group member.",
+    "multiMemberConceptHint": "MOCK · Multi-member selection validates a future batch command only. LIVE still changes one relationship at a time; a real batch must accept or reject the whole set and must not split-retry an unknown result or version conflict.",
     "policyChangeHint": "Group policy changes affect subuser members, not the primary identity's protected account-owner authority. Policies use their current default version; they are not copied to each user.",
     "impact": "This change affects {count, plural, one {# member} other {# members}}.",
     "remainingSources": "Other groups or direct policies may still grant access. Removing this source does not necessarily revoke all access.",
