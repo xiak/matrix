@@ -6,6 +6,7 @@ package migration
 import (
 	"context"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	iammigrations "github.com/xiak/matrix/app/service/iam/internal/data/postgres/migrations"
 	"github.com/xiak/matrix/app/service/internal/postgresmigration"
 )
@@ -20,6 +21,24 @@ func Up(ctx context.Context, executor postgresmigration.Executor) error {
 
 func Verify(ctx context.Context, executor postgresmigration.Executor) error {
 	return postgresmigration.Verify(ctx, executor, iammigrations.Source())
+}
+
+// BootstrapRelease applies IAM bootstrap while binding the migration to the
+// exact additional product catalog authenticated by the release owner.
+func BootstrapRelease(ctx context.Context, executor postgresmigration.Executor, catalog iamv1.AuthorizationProfileReleaseCatalog) error {
+	return postgresmigration.Bootstrap(ctx, executor, releaseSource(catalog))
+}
+
+// UpRelease applies IAM schema/data evolution and the authenticated additional
+// product catalog in IAM's existing atomic transaction.
+func UpRelease(ctx context.Context, executor postgresmigration.Executor, catalog iamv1.AuthorizationProfileReleaseCatalog) error {
+	return postgresmigration.Up(ctx, executor, releaseSource(catalog))
+}
+
+// VerifyRelease verifies the installed IAM state against the same exact
+// release catalog. It does not accept a runtime or tenant-selected registry.
+func VerifyRelease(ctx context.Context, executor postgresmigration.Executor, catalog iamv1.AuthorizationProfileReleaseCatalog) error {
+	return postgresmigration.Verify(ctx, executor, releaseSource(catalog))
 }
 
 func Apply(ctx context.Context, adminDSN, apiDSN, workerDSN string) error {
@@ -80,23 +99,34 @@ func VerifyInstalledWithAuthenticationRecovery(
 		authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN))
 }
 
-// ApplyWithAccessAnalysis provisions the scanner's purpose-only login in
-// addition to the existing API, outbox, recovery, custody and notification
-// identities. The scanner never receives any of those roles.
-func ApplyWithAccessAnalysis(
+// ApplyReleaseWithAccessAnalysis is the complete production installation
+// boundary. The release catalog changes immutable registry data only; it does
+// not alter the purpose-only database login inventory.
+func ApplyReleaseWithAccessAnalysis(
 	ctx context.Context,
 	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN string,
+	catalog iamv1.AuthorizationProfileReleaseCatalog,
 ) error {
-	return postgresmigration.Apply(ctx, adminDSN, iammigrations.Source(),
+	return postgresmigration.Apply(ctx, adminDSN, releaseSource(catalog),
 		accessAnalysisLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN))
 }
 
-func VerifyInstalledWithAccessAnalysis(
+// VerifyInstalledReleaseWithAccessAnalysis verifies the same production
+// login inventory and authenticated product registry without applying state.
+func VerifyInstalledReleaseWithAccessAnalysis(
 	ctx context.Context,
 	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN string,
+	catalog iamv1.AuthorizationProfileReleaseCatalog,
 ) error {
-	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(),
+	return postgresmigration.VerifyInstalled(ctx, adminDSN, releaseSource(catalog),
 		accessAnalysisLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN))
+}
+
+func releaseSource(catalog iamv1.AuthorizationProfileReleaseCatalog) postgresmigration.Source {
+	if _, err := iamv1.EncodeAuthorizationProfileReleaseCatalog(catalog); err != nil {
+		return postgresmigration.Source{Context: "iam"}
+	}
+	return iammigrations.SourceWithAuthorizationProfiles(catalog.Current, catalog.Historical)
 }
 
 func accessAnalysisLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN string) []postgresmigration.Login {

@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤、可信标签读写及Audit目录已有固定门禁。AccessKey产品消费已覆盖不可变资源图创建、实例读取、Deployment控制、Application声明标签和租户Audit读取，并累计到`91649497`的完整独立CI；其他签名动作、可信边缘、LIVE UI和最终发布组合仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤、可信标签读写及Audit目录已有固定门禁。AccessKey产品消费已覆盖不可变资源图创建、实例读取、Deployment控制、Application声明标签和租户Audit读取，并累计到`91649497`的完整独立CI；额外产品 Profile 已进入签名 release payload 与一次性迁移消费，其他签名动作、可信边缘、产品业务 PEP、LIVE UI和最终发布运行组合仍未完成，整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -58,9 +58,9 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 
 AccessKey 的主体解析、单项授权和签名列表授权也已切到同一事务 current Profile。HTTP 入口只做严格、有界且不代表权限的签名 envelope 解码，随后先认证当前服务凭据、安装、AccessKey MAC及数据库中精确的`{product,revision,contentDigest}`，再用该完整 Profile 校验 Action、资源形状、条件、主体载体和列表能力；响应由同一 Profile 与原 signed-request digest 逐项核对。源码产品便捷 codec 仍只认源码声明，新增产品 owner 必须显式提供其发布物中的完整 Profile，不能靠产品名或 Action 前缀让通用 codec 猜测。允许 AccessKey 的 Action 还必须声明并提交可信`request.source-ip`网络上下文，SQL evidence 会再次按同一 Profile、真实服务身份、当前key状态及来源IP关闭验证。错误摘要、未知产品、错误服务/安装、错误MAC或变造候选均不得产生决定；有效请求的nonce、决定、AccessKey evidence与Audit事实仍由一个数据库事务提交。
 
-OpenAPI 对这些可扩展请求字段只验证统一 Action/Resource 语法和有界 Policy 语言，不能把生成时的内置枚举冒充运行时注册；精确 Action、scope、资源形状、条件和 Profile 摘要仍由同一数据库事务编译/校验。已知内置动作继续保留细化的生成契约，语法通过本身不登记产品也不产生权限。目录仍是最多16项的完整快照；超过该规模必须先交付独立分页目录，当前不得截断。产品自带预置策略/服务角色模板、新 service purpose/凭据 enrollment、签名 release 文件消费和安装组合尚未切换到动态 registry，不得据此宣称任意产品已完整接入。
+OpenAPI 对这些可扩展请求字段只验证统一 Action/Resource 语法和有界 Policy 语言，不能把生成时的内置枚举冒充运行时注册；精确 Action、scope、资源形状、条件和 Profile 摘要仍由同一数据库事务编译/校验。已知内置动作继续保留细化的生成契约，语法通过本身不登记产品也不产生权限。目录仍是最多16项的完整快照；超过该规模必须先交付独立分页目录，当前不得截断。产品自带预置策略/服务角色模板、新 service purpose/凭据 enrollment及产品业务 PEP 的最终安装组合尚未切换到动态 registry，不得据此宣称任意产品已完整接入。
 
-本地合约/引擎/迁移/用例/HTTP聚焦测试通过；独占 PostgreSQL 18 `TestIAMRegisteredProductProfilePostgresHTTP` 以 `catalog.item.read` 证明 migration apply-twice、数据库目录可见、客户 Policy 编译/挂载、真实PaaS服务Allow、Audit服务Deny、LOGIN_SESSION主体解析/当前权限诊断/两项batch，以及动态 Profile 的真实AccessKey创建、MAC主体解析、单项Allow、一次签名的collection+instance决定、错误摘要无决定写入和新建IAM进程后的再次Allow。AccessKey允许决定保存规范来源IP、USER/key归因、nonce evidence与独立Audit事实；数据库仍从当前Profile导出Action/资源种类和scope，不依赖源码产品枚举。该测试使用本任务独立2 CPU、1 GiB、PIDs 256的容器/网络/卷，完成后对象计数均为零。该证据只接受上述已列授权协议，不替代完整签名发布、HA多副本、产品业务PEP或安装验收；本片没有改变SQL结构，因此不虚增schema版本。首次独立CI已暴露新增真实PG fixture未加入`authority-storage`数据库清单而被skip守卫拒绝；后继已将该数据库与唯一DSN加入原lane，不能把前一失败回填为成功。后继独立CI仍以精确提交终态为准，本地通过不能预先记作CI成功。
+本地合约/引擎/迁移/用例/HTTP聚焦测试通过；独占 PostgreSQL 18 `TestIAMRegisteredProductProfilePostgresHTTP` 以 `catalog.item.read` 证明 release-catalog migration apply-twice、数据库目录可见、客户 Policy 编译/挂载、真实PaaS服务Allow、Audit服务Deny、LOGIN_SESSION主体解析/当前权限诊断/两项batch，以及动态 Profile 的真实AccessKey创建、MAC主体解析、单项Allow、一次签名的collection+instance决定、错误摘要无决定写入和新建IAM进程后的再次Allow。AccessKey允许决定保存规范来源IP、USER/key归因、nonce evidence与独立Audit事实；数据库仍从当前Profile导出Action/资源种类和scope，不依赖源码产品枚举。发布构建把规范 `AuthorizationProfileReleaseCatalog` 作为固定 payload 纳入Ed25519签名清单；当前manifest必须包含它，安装从已重新验证的staged release只读挂载到一次性IAM migration，常驻API/worker和其他迁移均不获得该文件。篡改或缺失在provider effect前失败，migration再次校验内置产品不可覆盖、历史归属及完整seed。该真实PG测试使用本任务独立2 CPU、1 GiB、PIDs 256的容器/网络/卷，完成后对象计数均为零。上述证据只接受已列授权协议，不替代HA多副本、产品业务PEP或完整离线安装验收；本片没有改变SQL结构或已发布函数形状，因此不虚增schema版本。首次独立CI已暴露新增真实PG fixture未加入`authority-storage`数据库清单而被skip守卫拒绝；后继已将该数据库与唯一DSN加入原lane，不能把前一失败回填为成功。后继独立CI仍以精确提交终态为准，本地通过不能预先记作CI成功。
 
 ## 当前纵向切片：账号同意的服务相关角色
 

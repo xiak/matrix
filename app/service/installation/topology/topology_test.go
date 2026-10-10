@@ -504,6 +504,10 @@ func topologyManifest() release.Manifest {
 	files := []release.File{{
 		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
 		Size: 1024, SHA256: digest('1'), Executable: true,
+	}, {
+		Path:      release.IAMAuthorizationProfilesPath,
+		MediaType: release.IAMAuthorizationProfilesMediaType,
+		Size:      1024, SHA256: digest('9'),
 	}}
 	required := release.RequiredImages()
 	images := make([]release.Image, 0, len(required))

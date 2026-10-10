@@ -16,7 +16,7 @@ import (
 // Profile seeds are embedded twice in IAM's atomic migration/verification
 // source. Keep explicit headroom below the shared 4 MiB SQL executor budget;
 // a release with a larger catalog needs a non-embedded installation protocol.
-const maxAuthorizationProfileSeedBytes = 1024 * 1024
+const maxAuthorizationProfileSeedBytes = iamv1.MaxAuthorizationProfileReleaseCatalogBytes
 
 var (
 	//go:embed 000001_authority/bootstrap.sql
@@ -274,7 +274,7 @@ func authorizationProfileSeeds(profiles, historical []iamv1.AuthorizationProfile
 			iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}, canonical})
 	}
 	encoded, err := json.Marshal(seeds)
-	if err != nil || len(encoded) > maxAuthorizationProfileSeedBytes {
+	if err != nil || int64(len(encoded)) > maxAuthorizationProfileSeedBytes {
 		return "", errors.New("IAM profile registration seed exceeds its release budget")
 	}
 	return string(encoded), nil

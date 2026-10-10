@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
@@ -95,6 +96,15 @@ func writeManifests(base string, manifests []release.Manifest) ([]Fixture, error
 		for fileIndex := range manifest.Files {
 			declaration := &manifest.Files[fileIndex]
 			content := []byte("matrix-release-payload:" + declaration.Path)
+			if declaration.Path == release.IAMAuthorizationProfilesPath {
+				content, err = iamv1.EncodeAuthorizationProfileReleaseCatalog(iamv1.AuthorizationProfileReleaseCatalog{
+					APIVersion: iamv1.APIVersion, Kind: iamv1.AuthorizationProfileReleaseCatalogKind,
+					Current: []iamv1.AuthorizationProfile{}, Historical: []iamv1.AuthorizationProfile{},
+				})
+				if err != nil {
+					return nil, errors.New("encode fixture IAM authorization profile catalog failed")
+				}
+			}
 			mode := os.FileMode(0o600)
 			if declaration.Executable {
 				mode = 0o700
@@ -139,6 +149,10 @@ func Manifest() release.Manifest {
 	files := []release.File{{
 		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
 		Size: 1, SHA256: stableDigest("executable:mx"), Executable: true,
+	}, {
+		Path:      release.IAMAuthorizationProfilesPath,
+		MediaType: release.IAMAuthorizationProfilesMediaType,
+		Size:      1, SHA256: stableDigest("iam-authorization-profiles"),
 	}}
 	images := make([]release.Image, 0, len(required))
 	for _, requirement := range required {

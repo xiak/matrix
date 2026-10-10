@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	installationrelease "github.com/xiak/matrix/app/service/installation/release"
 )
 
@@ -116,6 +117,8 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repository, "go.mod"), []byte("module github.com/xiak/matrix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	writeTestIAMAuthorizationProfiles(t, repository)
+	testProduct := writeTestIAMAuthorizationProfile(t, repository)
 	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x41}, ed25519.SeedSize))
 	config := Config{
 		RepositoryRoot: repository, Output: filepath.Join(base, "bundle"),
@@ -142,6 +145,15 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 		verified.Manifest.APIVersion != installationrelease.ManifestAPIVersion ||
 		verified.Manifest.Database != installationrelease.CurrentDatabaseProfile() {
 		t.Fatal("published release differs from the signed result")
+	}
+	catalogFile, declaration, err := verified.OpenVerifiedPayload(installationrelease.IAMAuthorizationProfilesPath)
+	if err != nil || declaration.MediaType != installationrelease.IAMAuthorizationProfilesMediaType {
+		t.Fatal("signed release lacks the fixed IAM authorization profile catalog", err)
+	}
+	catalog, decodeErr := iamv1.DecodeAuthorizationProfileReleaseCatalog(catalogFile)
+	closeErr := catalogFile.Close()
+	if decodeErr != nil || closeErr != nil || len(catalog.Current) != 1 || catalog.Current[0].Product != testProduct.Product {
+		t.Fatalf("signed IAM authorization profile catalog = %#v / %v / %v", catalog, decodeErr, closeErr)
 	}
 	if len(effects.binaries) != len(binarySpecifications) ||
 		len(effects.dockerfiles) != len(imageRecipes) ||
@@ -203,6 +215,7 @@ func TestAssembleRejectsUntrustedBaseBeforeWritingOrBuilding(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(repository, "go.mod"), []byte("module github.com/xiak/matrix\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			writeTestIAMAuthorizationProfiles(t, repository)
 			effects := newFakeEffects()
 			test.prepare(effects)
 			output := filepath.Join(base, "bundle")
@@ -226,6 +239,75 @@ func TestAssembleRejectsUntrustedBaseBeforeWritingOrBuilding(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAssembleRejectsInvalidIAMAuthorizationProfileCatalogBeforeBuild(t *testing.T) {
+	base := t.TempDir()
+	repository := filepath.Join(base, "repository")
+	if err := os.Mkdir(repository, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "go.mod"), []byte("module github.com/xiak/matrix\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeTestIAMAuthorizationProfiles(t, repository)
+	catalogPath := filepath.Join(repository, "deploy", "releasebuild", "iam-authorization-profiles.json")
+	if err := os.WriteFile(catalogPath, []byte(`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthorizationProfileReleaseCatalog","current":null,"historical":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(base, "bundle")
+	effects := newFakeEffects()
+	_, err := Assemble(context.Background(), Config{
+		RepositoryRoot: repository, Output: output,
+		Version: "v0.1.0", BuildID: "release-test", SourceCommit: strings.Repeat("a", 40),
+		CreatedAt: time.Date(2026, 8, 26, 15, 30, 0, 0, time.UTC),
+		Signer: SigningMaterial{
+			KeyID:      "xiak-release-2026",
+			PrivateKey: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x43}, ed25519.SeedSize)),
+		},
+	}, effects)
+	if err == nil {
+		t.Fatal("invalid IAM authorization profile catalog was signed")
+	}
+	if _, statErr := os.Lstat(output); !os.IsNotExist(statErr) || len(effects.binaries) != 0 || len(effects.dockerfiles) != 0 {
+		t.Fatal("invalid IAM authorization profile catalog started release build effects")
+	}
+}
+
+func writeTestIAMAuthorizationProfiles(t *testing.T, repository string) {
+	t.Helper()
+	target := filepath.Join(repository, "deploy", "releasebuild", "iam-authorization-profiles.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte(`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthorizationProfileReleaseCatalog","current":[],"historical":[]}`)
+	if err := os.WriteFile(target, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeTestIAMAuthorizationProfile(t *testing.T, repository string) iamv1.AuthorizationProfile {
+	t.Helper()
+	profile := iamv1.AuthorizationProfile{
+		APIVersion: iamv1.APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 1, CallingService: iamv1.ServicePaaS,
+		Actions: []iamv1.AuthorizationProfileAction{{
+			Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
+			ResourceShapes: []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}},
+			SubjectTypes:   []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession},
+		}},
+	}
+	encoded, err := iamv1.EncodeAuthorizationProfileReleaseCatalog(iamv1.AuthorizationProfileReleaseCatalog{
+		APIVersion: iamv1.APIVersion, Kind: iamv1.AuthorizationProfileReleaseCatalogKind,
+		Current: []iamv1.AuthorizationProfile{profile}, Historical: []iamv1.AuthorizationProfile{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(repository, "deploy", "releasebuild", "iam-authorization-profiles.json")
+	if err := os.WriteFile(target, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return profile
 }
 
 func testDigest(value string) string {

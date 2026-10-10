@@ -4,6 +4,7 @@
 package releasebuild
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	installationrelease "github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
@@ -71,6 +73,10 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
+	iamAuthorizationProfiles, err := readIAMAuthorizationProfiles(config.RepositoryRoot)
+	if err != nil {
+		return Result{}, err
+	}
 	baseImages, err := verifyBaseImages(ctx, effects)
 	if err != nil {
 		return Result{}, err
@@ -87,8 +93,15 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 	bundle := filepath.Join(workspace, "bundle")
 	if err := os.Mkdir(bundle, 0o700); err != nil ||
 		os.Mkdir(filepath.Join(bundle, "bin"), 0o700) != nil ||
-		os.Mkdir(filepath.Join(bundle, "images"), 0o700) != nil {
+		os.Mkdir(filepath.Join(bundle, "images"), 0o700) != nil ||
+		os.MkdirAll(filepath.Join(bundle, "config", "iam"), 0o700) != nil {
 		return Result{}, errors.New("create release bundle workspace failed")
+	}
+	if err := writeExclusive(
+		filepath.Join(bundle, filepath.FromSlash(installationrelease.IAMAuthorizationProfilesPath)),
+		iamAuthorizationProfiles, 0o600,
+	); err != nil {
+		return Result{}, err
 	}
 
 	binaries, err := buildBinaries(ctx, config, effects, workspace)
@@ -305,7 +318,7 @@ func validImageDigest(value string) bool {
 }
 
 func inventoryPayloads(bundle string) ([]installationrelease.File, error) {
-	paths := []string{"bin/mx"}
+	paths := []string{"bin/mx", installationrelease.IAMAuthorizationProfilesPath}
 	for _, requirement := range installationrelease.RequiredImages() {
 		paths = append(paths, "images/"+requirement.Component+".tar")
 	}
@@ -324,6 +337,8 @@ func inventoryPayloads(bundle string) ([]installationrelease.File, error) {
 		if relative == "bin/mx" {
 			file.MediaType = "application/vnd.matrix.executable"
 			file.Executable = true
+		} else if relative == installationrelease.IAMAuthorizationProfilesPath {
+			file.MediaType = installationrelease.IAMAuthorizationProfilesMediaType
 		}
 		files = append(files, file)
 	}
@@ -365,6 +380,10 @@ func placeholderPayloads() ([]installationrelease.File, []installationrelease.Im
 	files := []installationrelease.File{{
 		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
 		Size: 1, SHA256: placeholderDigest("mx"), Executable: true,
+	}, {
+		Path:      installationrelease.IAMAuthorizationProfilesPath,
+		MediaType: installationrelease.IAMAuthorizationProfilesMediaType,
+		Size:      1, SHA256: placeholderDigest(installationrelease.IAMAuthorizationProfilesPath),
 	}}
 	images := make([]installationrelease.Image, 0, len(installationrelease.RequiredImages()))
 	for _, requirement := range installationrelease.RequiredImages() {
@@ -384,6 +403,39 @@ func placeholderPayloads() ([]installationrelease.File, []installationrelease.Im
 		return strings.Compare(left.Path, right.Path)
 	})
 	return files, images
+}
+
+func readIAMAuthorizationProfiles(repository string) ([]byte, error) {
+	target := filepath.Join(repository, filepath.FromSlash("deploy/releasebuild/iam-authorization-profiles.json"))
+	before, err := os.Lstat(target)
+	if err != nil || !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 ||
+		before.Size() <= 0 || before.Size() > iamv1.MaxAuthorizationProfileReleaseCatalogBytes {
+		return nil, errors.New("release IAM authorization profile catalog is unavailable")
+	}
+	file, err := os.Open(target)
+	if err != nil {
+		return nil, errors.New("open release IAM authorization profile catalog failed")
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(before, opened) {
+		return nil, errors.New("release IAM authorization profile catalog changed while opening")
+	}
+	encoded, err := io.ReadAll(io.LimitReader(file, iamv1.MaxAuthorizationProfileReleaseCatalogBytes+1))
+	after, statErr := file.Stat()
+	if err != nil || int64(len(encoded)) != opened.Size() || statErr != nil ||
+		!os.SameFile(opened, after) || opened.Size() != after.Size() || opened.ModTime() != after.ModTime() {
+		return nil, errors.New("read release IAM authorization profile catalog failed")
+	}
+	catalog, err := iamv1.DecodeAuthorizationProfileReleaseCatalog(bytes.NewReader(bytes.TrimSpace(encoded)))
+	if err != nil {
+		return nil, errors.New("release IAM authorization profile catalog is invalid")
+	}
+	canonical, err := iamv1.EncodeAuthorizationProfileReleaseCatalog(catalog)
+	if err != nil {
+		return nil, errors.New("release IAM authorization profile catalog is invalid")
+	}
+	return canonical, nil
 }
 
 func placeholderDigest(value string) string {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -8,8 +9,10 @@ import (
 	"syscall"
 
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 	"github.com/xiak/matrix/app/service/internal/migrationprocess"
+	"github.com/xiak/matrix/app/service/internal/processconfig"
 )
 
 var dsnFileEnvironments = []string{
@@ -33,13 +36,34 @@ func main() {
 }
 
 func run(ctx context.Context, arguments []string) error {
+	catalog, err := readAuthorizationProfileReleaseCatalog()
+	if err != nil {
+		return err
+	}
 	return migrationprocess.Run(ctx, arguments, migrationprocess.Configuration{
 		DSNFileEnvironments: dsnFileEnvironments,
 		Apply: func(ctx context.Context, values []string) error {
-			return iammigration.ApplyWithAccessAnalysis(ctx, values[0], values[2], values[7], values[6], values[4], values[5], values[3], values[1])
+			return iammigration.ApplyReleaseWithAccessAnalysis(ctx, values[0], values[2], values[7], values[6], values[4], values[5], values[3], values[1], catalog)
 		},
 		Verify: func(ctx context.Context, values []string) error {
-			return iammigration.VerifyInstalledWithAccessAnalysis(ctx, values[0], values[2], values[7], values[6], values[4], values[5], values[3], values[1])
+			return iammigration.VerifyInstalledReleaseWithAccessAnalysis(ctx, values[0], values[2], values[7], values[6], values[4], values[5], values[3], values[1], catalog)
 		},
 	})
+}
+
+func readAuthorizationProfileReleaseCatalog() (iamv1.AuthorizationProfileReleaseCatalog, error) {
+	path := os.Getenv(installationv1.IAMAuthorizationProfilesMigrationFileEnvironment)
+	if path == "" {
+		return iamv1.AuthorizationProfileReleaseCatalog{}, fmt.Errorf("IAM authorization profile release catalog is unavailable")
+	}
+	encoded, err := processconfig.ReadFile(path, iamv1.MaxAuthorizationProfileReleaseCatalogBytes, false)
+	if err != nil {
+		return iamv1.AuthorizationProfileReleaseCatalog{}, fmt.Errorf("IAM authorization profile release catalog is unavailable")
+	}
+	defer clear(encoded)
+	catalog, err := iamv1.DecodeAuthorizationProfileReleaseCatalog(bytes.NewReader(encoded))
+	if err != nil {
+		return iamv1.AuthorizationProfileReleaseCatalog{}, fmt.Errorf("IAM authorization profile release catalog is invalid")
+	}
+	return catalog, nil
 }

@@ -9201,6 +9201,67 @@ func TestExplicitAuthorizationProfileBindsUnfamiliarProductWithoutRegisteringIt(
 	}
 }
 
+func TestAuthorizationProfileReleaseCatalogIsCanonicalAndClosed(t *testing.T) {
+	current := AuthorizationProfile{
+		APIVersion: APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 2, CallingService: ServicePaaS,
+		Actions: []AuthorizationProfileAction{{
+			Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: AuthorityScopeTenant,
+			ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}},
+			SubjectTypes:   []SubjectType{SubjectUser}, UserAuthenticationMethods: []UserAuthenticationMethod{UserAuthenticationLoginSession},
+		}},
+	}
+	historical := CloneAuthorizationProfile(current)
+	historical.Revision = 1
+	catalog := AuthorizationProfileReleaseCatalog{
+		APIVersion: APIVersion, Kind: AuthorizationProfileReleaseCatalogKind,
+		Current: []AuthorizationProfile{current}, Historical: []AuthorizationProfile{historical},
+	}
+	encoded, err := EncodeAuthorizationProfileReleaseCatalog(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeAuthorizationProfileReleaseCatalog(bytes.NewReader(encoded))
+	if err != nil || len(decoded.Current) != 1 || len(decoded.Historical) != 1 ||
+		decoded.Current[0].Product != "catalog" || decoded.Historical[0].Revision != 1 {
+		t.Fatalf("release catalog did not round trip: %#v / %v", decoded, err)
+	}
+	decoded.Current[0].Actions[0].Action = "catalog.changed.read"
+	again, err := DecodeAuthorizationProfileReleaseCatalog(bytes.NewReader(encoded))
+	if err != nil || again.Current[0].Actions[0].Action != "catalog.item.read" {
+		t.Fatal("release catalog decode leaked mutable state")
+	}
+
+	empty, err := EncodeAuthorizationProfileReleaseCatalog(AuthorizationProfileReleaseCatalog{
+		APIVersion: APIVersion, Kind: AuthorizationProfileReleaseCatalogKind,
+		Current: []AuthorizationProfile{}, Historical: []AuthorizationProfile{},
+	})
+	if err != nil || string(empty) != `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthorizationProfileReleaseCatalog","current":[],"historical":[]}` {
+		t.Fatalf("empty release catalog = %s / %v", empty, err)
+	}
+
+	builtIn := AllAuthorizationProfiles()[0]
+	wrongHistory := CloneAuthorizationProfile(historical)
+	wrongHistory.Product = "different"
+	encodeUnchecked := func(value AuthorizationProfileReleaseCatalog) []byte {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	for name, candidate := range map[string][]byte{
+		"whitespace":       append(append([]byte(nil), encoded...), '\n'),
+		"unknown field":    bytes.Replace(encoded, []byte(`"historical":`), []byte(`"extra":true,"historical":`), 1),
+		"null current":     []byte(`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthorizationProfileReleaseCatalog","current":null,"historical":[]}`),
+		"built-in product": encodeUnchecked(AuthorizationProfileReleaseCatalog{APIVersion: APIVersion, Kind: AuthorizationProfileReleaseCatalogKind, Current: []AuthorizationProfile{builtIn}, Historical: []AuthorizationProfile{}}),
+		"orphan history":   encodeUnchecked(AuthorizationProfileReleaseCatalog{APIVersion: APIVersion, Kind: AuthorizationProfileReleaseCatalogKind, Current: []AuthorizationProfile{current}, Historical: []AuthorizationProfile{wrongHistory}}),
+	} {
+		if _, err := DecodeAuthorizationProfileReleaseCatalog(bytes.NewReader(candidate)); !errors.Is(err, ErrInvalidAuthorizationProfileReleaseCatalog) {
+			t.Fatalf("%s release catalog was accepted: %v", name, err)
+		}
+	}
+}
+
 func assertNoAuthoritySelectorHeader(t *testing.T, value any) {
 	t.Helper()
 	switch typed := value.(type) {

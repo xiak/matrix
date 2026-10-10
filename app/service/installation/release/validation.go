@@ -78,6 +78,7 @@ func ValidateManifest(manifest Manifest) error {
 		ValidateDatabaseProfile(manifest.Database),
 		validateDigest("topologyDigest", manifest.TopologyDigest),
 		validateFiles(manifest.Files),
+		validateRequiredReleaseFiles(manifest),
 		validateImages(manifest.Images, manifest.Files),
 	)
 	if manifest.MinimumFreeBytes < minimumFreeBytes || manifest.MinimumFreeBytes > maximumFreeBytes {
@@ -296,6 +297,10 @@ func validateFiles(files []File) error {
 			if file.MediaType != mediaPlainText || file.Executable || file.Size > maximumManifestBytes {
 				return errors.New("release license payload is invalid")
 			}
+		case file.Path == IAMAuthorizationProfilesPath:
+			if file.MediaType != IAMAuthorizationProfilesMediaType || file.Executable || file.Size > maximumManifestBytes {
+				return errors.New("release IAM authorization profile catalog is invalid")
+			}
 		default:
 			return errors.New("release payload kind is unsupported")
 		}
@@ -304,6 +309,18 @@ func validateFiles(files []File) error {
 		return errors.New("release mx payload is missing")
 	}
 	return nil
+}
+
+func validateRequiredReleaseFiles(manifest Manifest) error {
+	if manifest.APIVersion == LegacyManifestAPIVersion {
+		return nil
+	}
+	for _, file := range manifest.Files {
+		if file.Path == IAMAuthorizationProfilesPath && file.MediaType == IAMAuthorizationProfilesMediaType && !file.Executable {
+			return nil
+		}
+	}
+	return errors.New("release IAM authorization profile catalog is missing")
 }
 
 func validateImages(images []Image, files []File) error {

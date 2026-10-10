@@ -42,7 +42,6 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 	iampostgres "github.com/xiak/matrix/app/service/iam/internal/data/postgres"
-	iammigrations "github.com/xiak/matrix/app/service/iam/internal/data/postgres/migrations"
 	iamhttp "github.com/xiak/matrix/app/service/iam/internal/service/nethttp"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/accessanalysis"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/auditdispatch"
@@ -50,7 +49,6 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/notificationdispatch"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
-	"github.com/xiak/matrix/app/service/internal/postgresmigration"
 )
 
 const (
@@ -977,15 +975,16 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	assertIAMPostgres18(t, ctx, admin)
 	assertCleanIAMSchema(t, ctx, admin)
 	profile := registeredCatalogProfile()
-	source := iammigrations.SourceWithAuthorizationProfiles([]iamv1.AuthorizationProfile{profile}, nil)
+	releaseCatalog := iamv1.AuthorizationProfileReleaseCatalog{APIVersion: iamv1.APIVersion, Kind: iamv1.AuthorizationProfileReleaseCatalogKind,
+		Current: []iamv1.AuthorizationProfile{profile}, Historical: []iamv1.AuthorizationProfile{}}
 	for attempt := 1; attempt <= 2; attempt++ {
-		if err := postgresmigration.Bootstrap(ctx, admin, source); err != nil {
+		if err := iammigration.BootstrapRelease(ctx, admin, releaseCatalog); err != nil {
 			t.Fatalf("bootstrap registered product attempt %d: %v", attempt, err)
 		}
-		if err := postgresmigration.Up(ctx, admin, source); err != nil {
+		if err := iammigration.UpRelease(ctx, admin, releaseCatalog); err != nil {
 			t.Fatalf("apply registered product attempt %d: %v", attempt, err)
 		}
-		if err := postgresmigration.Verify(ctx, admin, source); err != nil {
+		if err := iammigration.VerifyRelease(ctx, admin, releaseCatalog); err != nil {
 			t.Fatalf("verify registered product attempt %d: %v", attempt, err)
 		}
 	}

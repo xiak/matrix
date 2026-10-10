@@ -18,6 +18,9 @@ const (
 	BuiltImageLabelComponent    = "com.xiak.matrix.component"
 	BuiltImageLabelSourceCommit = "com.xiak.matrix.source-commit"
 	BuiltImageLabelBuildID      = "com.xiak.matrix.build-id"
+
+	IAMAuthorizationProfilesPath      = "config/iam/authorization-profiles.json"
+	IAMAuthorizationProfilesMediaType = "application/vnd.matrix.iam-authorization-profile-catalog+json"
 )
 
 type Manifest struct {

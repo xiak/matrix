@@ -10,6 +10,7 @@ import (
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/release"
 )
 
 const migrationWaitSeconds = "120"
@@ -21,10 +22,18 @@ type migrationMount struct {
 }
 
 type migrationDefinition struct {
-	component  string
-	name       string
-	entrypoint string
-	mounts     []migrationMount
+	component     string
+	name          string
+	entrypoint    string
+	mounts        []migrationMount
+	releaseMounts []releaseMigrationMount
+}
+
+type releaseMigrationMount struct {
+	relative    string
+	destination string
+	environment string
+	mediaType   string
 }
 
 var platformMigrations = []migrationDefinition{
@@ -40,6 +49,11 @@ var platformMigrations = []migrationDefinition{
 			{layout.IAMNotificationWorker, "/run/matrix/iam-notification-worker-dsn", "MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE"},
 			{layout.IAMAccessAnalysisWorker, "/run/matrix/iam-access-analysis-worker-dsn", "MATRIX_MIGRATION_IAM_ACCESS_ANALYSIS_DSN_FILE"},
 		},
+		releaseMounts: []releaseMigrationMount{{
+			relative: release.IAMAuthorizationProfilesPath, destination: "/run/matrix/iam-authorization-profiles.json",
+			environment: installationv1.IAMAuthorizationProfilesMigrationFileEnvironment,
+			mediaType:   release.IAMAuthorizationProfilesMediaType,
+		}},
 	},
 	{
 		component: "audit", name: "audit", entrypoint: "/matrix/bin/matrix-audit-migrate",
@@ -186,7 +200,7 @@ func runMigrationModesOnNetwork(
 				)
 			}
 			arguments, err := migrationArguments(
-				plan, installation.topology.ProjectName, networkID, imageID, migration, mode,
+				plan, installation.bundle, installation.topology.ProjectName, networkID, imageID, migration, mode,
 			)
 			if err != nil {
 				return errors.Join(platformcommand.ErrEffectVerification, err)
@@ -254,6 +268,7 @@ func controlNetworkID(
 
 func migrationArguments(
 	plan platformcommand.InstallPlan,
+	bundle release.VerifiedBundle,
 	project string,
 	networkID string,
 	imageID string,
@@ -284,6 +299,27 @@ func migrationArguments(
 		exists, err := managedFileExists(plan.Root, filepath.FromSlash(mount.relative))
 		if err != nil || !exists {
 			return nil, errors.New("migration secret mount is unavailable")
+		}
+		arguments = append(
+			arguments,
+			"--mount", "type=bind,src="+source+",dst="+mount.destination+",readonly",
+			"--env", mount.environment+"="+mount.destination,
+		)
+	}
+	for _, mount := range migration.releaseMounts {
+		payload, declaration, err := bundle.OpenVerifiedPayload(mount.relative)
+		if err != nil || declaration.MediaType != mount.mediaType || declaration.Executable {
+			if payload != nil {
+				_ = payload.Close()
+			}
+			return nil, errors.New("migration release input is unavailable")
+		}
+		if err := payload.Close(); err != nil {
+			return nil, errors.New("migration release input cannot be closed")
+		}
+		source := filepath.Join(bundle.Root, filepath.FromSlash(mount.relative))
+		if !filepath.IsAbs(source) || strings.ContainsRune(source, ',') {
+			return nil, errors.New("migration release input path is invalid")
 		}
 		arguments = append(
 			arguments,

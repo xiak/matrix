@@ -127,6 +127,18 @@ func TestManifestRejectsUnsafeOrIncompleteInventory(t *testing.T) {
 		"payload metadata": func(value *Manifest) {
 			value.Files[0].Size = 0
 		},
+		"missing IAM authorization profiles": func(value *Manifest) {
+			value.Files = slices.DeleteFunc(value.Files, func(file File) bool {
+				return file.Path == IAMAuthorizationProfilesPath
+			})
+		},
+		"IAM authorization profile media": func(value *Manifest) {
+			for index := range value.Files {
+				if value.Files[index].Path == IAMAuthorizationProfilesPath {
+					value.Files[index].MediaType = mediaPlainText
+				}
+			}
+		},
 		"missing image": func(value *Manifest) {
 			value.Images = value.Images[:len(value.Images)-1]
 		},
@@ -305,6 +317,9 @@ func validManifest() Manifest {
 	files := []File{{
 		Path: "bin/mx", MediaType: mediaExecutable,
 		Size: 1024, SHA256: digest('1'), Executable: true,
+	}, {
+		Path: IAMAuthorizationProfilesPath, MediaType: IAMAuthorizationProfilesMediaType,
+		Size: 1024, SHA256: digest('9'),
 	}}
 	required := RequiredImages()
 	images := make([]Image, 0, len(required))

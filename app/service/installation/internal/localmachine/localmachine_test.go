@@ -669,6 +669,12 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 				t.Fatalf("migration command %d contains database credential material", index)
 			}
 		}
+		isIAM := wantEntrypoints[index] == "/matrix/bin/matrix-iam-migrate"
+		hasProfileCatalog := strings.Contains(joined, "dst=/run/matrix/iam-authorization-profiles.json,readonly") &&
+			hasArgumentPair(arguments, "--env", installationv1.IAMAuthorizationProfilesMigrationFileEnvironment+"=/run/matrix/iam-authorization-profiles.json")
+		if hasProfileCatalog != isIAM {
+			t.Fatalf("migration command %d release Profile mount=%v, IAM=%v: %q", index, hasProfileCatalog, isIAM, joined)
+		}
 	}
 	installation, err := verifiedInstallationConfiguration(plan)
 	if err != nil {
@@ -691,6 +697,39 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 		if arguments[len(arguments)-1] != "verify" {
 			t.Fatalf("migration verification applied state: %q", strings.Join(arguments, " "))
 		}
+	}
+}
+
+func TestMigrateInstallationRejectsTamperedReleaseProfileCatalogBeforeProviderEffect(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine migration effects target Linux")
+	}
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage installation: %v", err)
+	}
+	images := newImageRuntime(plan.Bundle.Manifest, true)
+	if err := configureInstallation(context.Background(), images, plan); err != nil {
+		t.Fatalf("configure installation: %v", err)
+	}
+	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+		InstallationID: plan.InstallationID, Root: plan.Root,
+		Listener: plan.Listener, Port: plan.Port, NorthboundOrigin: plan.NorthboundOrigin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeBoundary := newMigrationRuntime(plan, compiled.ProjectName)
+	relative := filepath.Join(layout.ReleaseDirectory(plan.Bundle.Manifest.Release.ID), filepath.FromSlash(release.IAMAuthorizationProfilesPath))
+	target, err := managedPath(plan.Root, relative)
+	if err != nil || os.WriteFile(target, []byte(`{"tampered":true}`), 0o600) != nil {
+		t.Fatal("tamper staged release catalog", err)
+	}
+	if err := migrateInstallation(context.Background(), runtimeBoundary, plan); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("tampered release catalog migration = %v", err)
+	}
+	if runtimeBoundary.composeCalls != 0 || len(runtimeBoundary.runs) != 0 {
+		t.Fatal("tampered release catalog reached a provider effect")
 	}
 }
 
