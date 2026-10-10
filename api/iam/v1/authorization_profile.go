@@ -90,6 +90,11 @@ const (
 	MaxAuthorizationProfileConditions                              = 8
 	MaxAuthorizationTags                                           = MaxAuthorizationProfileConditions
 	MaxAuthorizationProfileBytes      int64                        = 64 * 1024
+	// MaxAuthorizationProfileRegistryItems bounds one installation's
+	// release-owned current registry. A single compiled Policy may still
+	// depend on only MaxPolicyCompilationProfiles products.
+	MaxAuthorizationProfileRegistryItems = 256
+	MaxAuthorizationProfileArchiveItems  = 4096
 )
 
 // Prefix support belongs to the instance shape, not every use of an Action.
@@ -205,6 +210,23 @@ func DecodeAuthorizationProfile(reader io.Reader) (AuthorizationProfile, error) 
 func ValidateAuthorizationProfile(value AuthorizationProfile) error {
 	_, _, err := CanonicalizeAuthorizationProfile(value)
 	return err
+}
+
+// CheckTenantProductAuthorizationProfile applies the deliberately narrow
+// admission boundary for an additional product in the first registry slice.
+// It proves neither release authenticity nor registration: the installation
+// owner must establish those separately. Platform scopes and new service
+// purposes require their own enrollment and authority slices.
+func CheckTenantProductAuthorizationProfile(value AuthorizationProfile) error {
+	if ValidateAuthorizationProfile(value) != nil || !slices.Contains(AllServicePurposes(), value.CallingService) {
+		return ErrInvalidAuthorizationProfile
+	}
+	for _, action := range value.Actions {
+		if action.Scope != AuthorityScopeTenant {
+			return ErrInvalidAuthorizationProfile
+		}
+	}
+	return nil
 }
 
 // Product and service identifiers are syntactic namespaces here, not enums of
@@ -413,6 +435,49 @@ func cloneAuthorizationProfile(value AuthorizationProfile) AuthorizationProfile 
 		value.Actions[index].Conditions = slices.Clone(value.Actions[index].Conditions)
 	}
 	return value
+}
+
+// CloneAuthorizationProfile returns an isolated declaration value. Product
+// registries use it when handing immutable current heads across package
+// boundaries; callers cannot mutate registry state through nested slices.
+func CloneAuthorizationProfile(value AuthorizationProfile) AuthorizationProfile {
+	return cloneAuthorizationProfile(value)
+}
+
+// LookupAuthorizationProfileActionDefinition projects one capability from an
+// explicitly supplied declaration. It validates the whole declaration first;
+// callers must still establish trusted registration and current-head identity.
+func LookupAuthorizationProfileActionDefinition(profile AuthorizationProfile, action Action) (ActionDefinition, bool) {
+	if ValidateAuthorizationProfile(profile) != nil {
+		return ActionDefinition{}, false
+	}
+	for _, declared := range profile.Actions {
+		if declared.Action == action {
+			return authorizationProfileActionDefinition(profile, declared), true
+		}
+	}
+	return ActionDefinition{}, false
+}
+
+// LookupAuthorizationProfileActionConditionDefinition projects a condition
+// capability from the same exact declaration used for the request decision.
+// It does not accept a condition merely because another product declares it.
+func LookupAuthorizationProfileActionConditionDefinition(profile AuthorizationProfile, action Action, key ConditionKey) (ConditionKeyDefinition, bool) {
+	if ValidateAuthorizationProfile(profile) != nil {
+		return ConditionKeyDefinition{}, false
+	}
+	for _, declared := range profile.Actions {
+		if declared.Action != action {
+			continue
+		}
+		for _, condition := range declared.Conditions {
+			if condition.Key == key {
+				return ConditionKeyDefinition{Key: condition.Key, ValueType: condition.ValueType, Source: condition.Source}, true
+			}
+		}
+		return ConditionKeyDefinition{}, false
+	}
+	return ConditionKeyDefinition{}, false
 }
 
 // All current and immutable policy lookups project the same capability shape.
@@ -642,10 +707,24 @@ func NewAuthorizationRequest(action Action, resource ResourceReference, mode Aut
 	if !known {
 		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
 	}
+	return NewAuthorizationRequestForProfile(source.profile, action, resource, mode, usage, requestID, correlationID)
+}
+
+// NewAuthorizationRequestForProfile is the product-owner constructor for an
+// explicitly supplied immutable declaration. It proves only contract shape;
+// IAM still has to resolve the same revision and digest from its trusted
+// current registry and authenticate the calling service before evaluation.
+func NewAuthorizationRequestForProfile(profile AuthorizationProfile, action Action, resource ResourceReference,
+	mode AuthorizationResourceMode, usage AuthorizationCollectionUsage, requestID, correlationID string,
+) (AuthorizationRequest, error) {
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
 	request := AuthorizationRequest{Action: action, Resource: resource,
-		Profile:      source.reference,
+		Profile:      AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest},
 		ResourceMode: mode, CollectionUsage: usage, RequestID: requestID, CorrelationID: correlationID}
-	if err := ValidateAuthorizationRequest(request); err != nil {
+	if err := ValidateAuthorizationRequestForProfile(request, profile); err != nil {
 		return AuthorizationRequest{}, err
 	}
 	return request, nil
@@ -863,7 +942,18 @@ func BindAuthorizationSourceIP(request AuthorizationRequest, sourceIP string) (A
 // CheckAuthorizationDecisionForRequest is the shared response-binding contract
 // used by PEPs before consuming either an Allow or a Deny.
 func CheckAuthorizationDecisionForRequest(decision AuthorizationDecision, request AuthorizationRequest) error {
-	if ValidateAuthorizationRequest(request) != nil || ValidateAuthorizationDecision(decision) != nil || decision.Profile == nil ||
+	profile, known := LookupAuthorizationProfile(request.Profile.Product)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	return CheckAuthorizationDecisionForProfileAndRequest(decision, request, profile)
+}
+
+// CheckAuthorizationDecisionForProfileAndRequest is the response-binding
+// contract for a declaration resolved from a trusted registry. It neither
+// registers the Profile nor turns the response into a reusable permit.
+func CheckAuthorizationDecisionForProfileAndRequest(decision AuthorizationDecision, request AuthorizationRequest, profile AuthorizationProfile) error {
+	if ValidateAuthorizationRequestForProfile(request, profile) != nil || ValidateAuthorizationDecisionForProfile(decision, profile) != nil || decision.Profile == nil ||
 		*decision.Profile != request.Profile || decision.Action != request.Action || decision.Resource != request.Resource ||
 		decision.ResourceMode != request.ResourceMode || decision.CollectionUsage != request.CollectionUsage ||
 		!authorizationNetworkContextsEqual(decision.NetworkContext, request.NetworkContext) ||

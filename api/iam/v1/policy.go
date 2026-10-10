@@ -166,6 +166,17 @@ func ValidateCreatePolicyVersionRequest(value CreatePolicyVersionRequest) error 
 	return errors.Join(ValidateID("requestId", value.RequestID), ValidatePolicyDocument(value.Document))
 }
 
+// ValidateCreatePolicyVersionRequestSyntax checks the bounded publication
+// envelope without claiming that any product capability is registered. The
+// owning IAM transaction must compile the document against its locked current
+// registry before accepting it.
+func ValidateCreatePolicyVersionRequestSyntax(value CreatePolicyVersionRequest) error {
+	if value.Document.Scope != AuthorityScopeTenant || validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
+		return ErrInvalidPolicy
+	}
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidatePolicyDocumentSyntax(value.Document))
+}
+
 func ValidateSetDefaultPolicyVersionRequest(value SetDefaultPolicyVersionRequest) error {
 	if validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
 		return ErrInvalidPolicy
@@ -208,6 +219,16 @@ func ValidateCreatePolicyRequest(value CreatePolicyRequest) error {
 	}
 	return errors.Join(validateText("displayName", value.DisplayName, 1, 128),
 		ValidateID("requestId", value.RequestID), ValidatePolicyDocument(value.Document))
+}
+
+// ValidateCreatePolicyRequestSyntax is the transport-only counterpart used
+// before a transaction selects the authoritative current product registry.
+func ValidateCreatePolicyRequestSyntax(value CreatePolicyRequest) error {
+	if value.Document.Scope != AuthorityScopeTenant {
+		return ErrInvalidPolicy
+	}
+	return errors.Join(validateText("displayName", value.DisplayName, 1, 128),
+		ValidateID("requestId", value.RequestID), ValidatePolicyDocumentSyntax(value.Document))
 }
 
 func ValidatePolicyDetail(value PolicyDetail) error {
@@ -756,6 +777,20 @@ func ValidatePolicyDocument(document PolicyDocument) error {
 	return nil
 }
 
+// ValidatePolicyDocumentSyntax validates the shared bounded language and
+// identifier grammar without using today's executable-owned product catalog.
+// It is never sufficient for publication or evaluation by itself.
+func ValidatePolicyDocumentSyntax(document PolicyDocument) error {
+	if err := validatePolicyStructureWithCapabilities(document, policyCapabilityLookup{syntaxOnly: true}); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil || int64(len(encoded)) > MaxPolicyBytes {
+		return invalidPolicyAt(PolicyLimitExceeded, "")
+	}
+	return nil
+}
+
 func validatePolicyStructure(document PolicyDocument) error {
 	return validatePolicyStructureWithCapabilities(document, currentPolicyCapabilities)
 }
@@ -865,7 +900,9 @@ func validatePolicyStructureWithCapabilities(document PolicyDocument, capabiliti
 			var definition ActionDefinition
 			if capabilities.syntaxOnly {
 				if !authorizationActionIdentifier(action) {
-					return invalidPolicyAt(PolicyUnsupported, actionPointer)
+					if _, pattern := policyActionPatternPrefix(action); !pattern {
+						return invalidPolicyAt(PolicyUnsupported, actionPointer)
+					}
 				}
 			} else {
 				var known bool
@@ -1183,7 +1220,7 @@ func CompilePolicyDocument(document PolicyDocument, profiles []AuthorizationProf
 }
 
 func compilePolicyDocument(document PolicyDocument, profiles []AuthorizationProfile) (PolicyCompilation, []byte, error) {
-	if len(profiles) == 0 || len(profiles) > MaxPolicyCompilationProfiles {
+	if len(profiles) == 0 || len(profiles) > MaxAuthorizationProfileRegistryItems {
 		return PolicyCompilation{}, nil, invalidPolicyAt(PolicyLimitExceeded, "/profiles")
 	}
 	references := make(map[ProductID]AuthorizationProfileReference, len(profiles))
@@ -1277,6 +1314,9 @@ func compilePolicyDocument(document PolicyDocument, profiles []AuthorizationProf
 	}
 	for product := range used {
 		compilation.Profiles = append(compilation.Profiles, references[product])
+	}
+	if len(compilation.Profiles) == 0 || len(compilation.Profiles) > MaxPolicyCompilationProfiles {
+		return PolicyCompilation{}, nil, invalidPolicyAt(PolicyLimitExceeded, "/profiles")
 	}
 	slices.SortFunc(compilation.Profiles, func(left, right AuthorizationProfileReference) int { return cmp.Compare(left.Product, right.Product) })
 	slices.SortFunc(compilation.ResolvedStatements, func(left, right PolicyResolvedStatement) int { return cmp.Compare(left.SID, right.SID) })

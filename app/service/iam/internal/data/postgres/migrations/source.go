@@ -13,6 +13,11 @@ import (
 	"github.com/xiak/matrix/app/service/internal/postgresmigration"
 )
 
+// Profile seeds are embedded twice in IAM's atomic migration/verification
+// source. Keep explicit headroom below the shared 4 MiB SQL executor budget;
+// a release with a larger catalog needs a non-embedded installation protocol.
+const maxAuthorizationProfileSeedBytes = 1024 * 1024
+
 var (
 	//go:embed 000001_authority/bootstrap.sql
 	bootstrapSQL string
@@ -95,12 +100,25 @@ var (
 )
 
 func Source() postgresmigration.Source {
+	return SourceWithAuthorizationProfiles(nil, nil)
+}
+
+// SourceWithAuthorizationProfiles assembles additional release-owned product
+// declarations into IAM's immutable registry seed. Trust in these declarations
+// must be established by the signed release/installation boundary before this
+// function is called; this function validates content and registry evolution,
+// but it is not a signature verifier or a tenant-facing registration API.
+func SourceWithAuthorizationProfiles(additionalCurrent, additionalHistorical []iamv1.AuthorizationProfile) postgresmigration.Source {
+	currentProfiles, historicalProfiles, err := authorizationProfilesForSource(additionalCurrent, additionalHistorical)
+	if err != nil {
+		return postgresmigration.Source{Context: "iam"}
+	}
 	policySQL, err := systemPolicySQL()
 	if err != nil {
 		// A corrupt code-owned policy must stop bootstrap/apply, never omit a seed.
 		return postgresmigration.Source{Context: "iam"}
 	}
-	profileSeeds, err := authorizationProfileSeeds()
+	profileSeeds, err := authorizationProfileSeeds(currentProfiles, historicalProfiles)
 	const profilePlaceholder = "__AUTHORIZATION_PROFILE_SEEDS__"
 	if err != nil || strings.Count(authorityUpSQL, profilePlaceholder) != 1 || strings.Count(authorityVerifySQL, profilePlaceholder) != 1 {
 		return postgresmigration.Source{Context: "iam"}
@@ -124,6 +142,73 @@ func Source() postgresmigration.Source {
 		VerifySQL:     verification,
 		ExecutionRole: "matrix_iam_migrator",
 	}
+}
+
+func authorizationProfilesForSource(additionalCurrent, additionalHistorical []iamv1.AuthorizationProfile) ([]iamv1.AuthorizationProfile, []iamv1.AuthorizationProfile, error) {
+	current := iamv1.AllAuthorizationProfiles()
+	historical := iamv1.HistoricalAuthorizationProfiles()
+	heads := make(map[iamv1.ProductID]iamv1.AuthorizationProfile, len(current)+len(additionalCurrent))
+	additionalHeads := make(map[iamv1.ProductID]iamv1.AuthorizationProfile, len(additionalCurrent))
+	for _, profile := range current {
+		heads[profile.Product] = profile
+	}
+	for _, profile := range additionalCurrent {
+		if !supportedAdditionalAuthorizationProfile(profile) {
+			return nil, nil, errors.New("invalid additional current authorization profile")
+		}
+		if _, duplicate := heads[profile.Product]; duplicate {
+			return nil, nil, errors.New("duplicate current authorization profile product")
+		}
+		heads[profile.Product] = iamv1.CloneAuthorizationProfile(profile)
+		additionalHeads[profile.Product] = iamv1.CloneAuthorizationProfile(profile)
+		current = append(current, iamv1.CloneAuthorizationProfile(profile))
+	}
+	if len(current) == 0 || len(current) > iamv1.MaxAuthorizationProfileRegistryItems {
+		return nil, nil, errors.New("invalid current authorization profile registry size")
+	}
+	type archiveKey struct {
+		product  iamv1.ProductID
+		revision uint64
+	}
+	archive := make(map[archiveKey]struct{}, len(current)+len(historical)+len(additionalHistorical))
+	for _, profile := range current {
+		archive[archiveKey{profile.Product, profile.Revision}] = struct{}{}
+	}
+	for _, profile := range historical {
+		archive[archiveKey{profile.Product, profile.Revision}] = struct{}{}
+	}
+	for _, profile := range additionalHistorical {
+		head, known := additionalHeads[profile.Product]
+		key := archiveKey{profile.Product, profile.Revision}
+		if !known || !supportedAdditionalAuthorizationProfile(profile) || profile.Revision >= head.Revision ||
+			profile.CallingService != head.CallingService {
+			return nil, nil, errors.New("invalid additional historical authorization profile")
+		}
+		if _, duplicate := archive[key]; duplicate {
+			return nil, nil, errors.New("duplicate historical authorization profile revision")
+		}
+		archive[key] = struct{}{}
+		historical = append(historical, iamv1.CloneAuthorizationProfile(profile))
+	}
+	if len(historical)+len(current) > iamv1.MaxAuthorizationProfileArchiveItems {
+		return nil, nil, errors.New("invalid authorization profile archive size")
+	}
+	slices.SortFunc(current, func(left, right iamv1.AuthorizationProfile) int { return cmp.Compare(left.Product, right.Product) })
+	slices.SortFunc(historical, func(left, right iamv1.AuthorizationProfile) int {
+		if order := cmp.Compare(left.Product, right.Product); order != 0 {
+			return order
+		}
+		return cmp.Compare(left.Revision, right.Revision)
+	})
+	return current, historical, nil
+}
+
+// The first external-product slice is deliberately tenant-only. Installation
+// and probe scopes need their own release/admission and response-schema slice;
+// accepting them here would turn a syntactic Profile into unsupported platform
+// authority. Calling services must already exist in the sealed bootstrap.
+func supportedAdditionalAuthorizationProfile(profile iamv1.AuthorizationProfile) bool {
+	return iamv1.CheckTenantProductAuthorizationProfile(profile) == nil
 }
 
 func serviceRoleTemplateSeeds() (string, error) {
@@ -159,7 +244,7 @@ func serviceRoleTemplateSeeds() (string, error) {
 // Archive insertion and current selection are distinct release decisions.
 // Required historical declarations are archived without becoming current.
 // Never infer heads from archive order or reinterpret a stored compilation.
-func authorizationProfileSeeds() (string, error) {
+func authorizationProfileSeeds(profiles, historical []iamv1.AuthorizationProfile) (string, error) {
 	type registration struct {
 		iamv1.AuthorizationProfileReference
 		CanonicalDocument string `json:"canonicalDocument"`
@@ -168,8 +253,7 @@ func authorizationProfileSeeds() (string, error) {
 		Archive []registration                        `json:"archive"`
 		Heads   []iamv1.AuthorizationProfileReference `json:"heads"`
 	}{}
-	profiles := iamv1.AllAuthorizationProfiles()
-	if len(profiles) == 0 || len(profiles) > iamv1.MaxPolicyCompilationProfiles {
+	if len(profiles) == 0 || len(profiles) > iamv1.MaxAuthorizationProfileRegistryItems {
 		return "", errors.New("invalid IAM profile registration set")
 	}
 	for _, profile := range profiles {
@@ -181,7 +265,7 @@ func authorizationProfileSeeds() (string, error) {
 		seeds.Archive = append(seeds.Archive, registration{reference, canonical})
 		seeds.Heads = append(seeds.Heads, reference)
 	}
-	for _, profile := range iamv1.HistoricalAuthorizationProfiles() {
+	for _, profile := range historical {
 		canonical, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
 		if err != nil {
 			return "", err
@@ -190,7 +274,10 @@ func authorizationProfileSeeds() (string, error) {
 			iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}, canonical})
 	}
 	encoded, err := json.Marshal(seeds)
-	return string(encoded), err
+	if err != nil || len(encoded) > maxAuthorizationProfileSeedBytes {
+		return "", errors.New("IAM profile registration seed exceeds its release budget")
+	}
+	return string(encoded), nil
 }
 
 const policyCutoverPreflight = `SET LOCAL ROLE matrix_iam_owner;

@@ -1011,15 +1011,26 @@ func ValidateRevocation(value Revocation) error {
 }
 
 func ValidateAuthorizationRequest(value AuthorizationRequest) error {
+	profile, known := LookupAuthorizationProfile(value.Profile.Product)
+	if !known {
+		return errors.New("authorization action is invalid")
+	}
+	return ValidateAuthorizationRequestForProfile(value, profile)
+}
+
+// ValidateAuthorizationRequestForProfile validates one request against exact
+// declaration bytes already selected by a trusted registry or product owner.
+// Supplying a syntactically valid Profile does not register it or authenticate
+// its publisher, service, subject, or authority scope.
+func ValidateAuthorizationRequestForProfile(value AuthorizationRequest, profile AuthorizationProfile) error {
 	var problems []error
-	if checkSourceProfileTarget(value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil {
+	if CheckAuthorizationProfileTarget(profile, value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil {
 		problems = append(problems, errors.New("authorization action is invalid"))
 	}
 	problems = append(problems,
-		validateResourceForAction(value.Action, value.Resource),
-		validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, nil),
-		validateAuthorizationRequestTagsForAction(value.Action, value.RequestTags, nil),
-		validateAuthorizationResourceTagsForAction(value.Action, value.ResourceTags, nil),
+		validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, &profile),
+		validateAuthorizationRequestTagsForAction(value.Action, value.RequestTags, &profile),
+		validateAuthorizationResourceTagsForAction(value.Action, value.ResourceTags, &profile),
 		ValidateID("requestId", value.RequestID),
 		ValidateID("correlationId", value.CorrelationID),
 	)

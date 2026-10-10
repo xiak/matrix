@@ -288,15 +288,9 @@ func (service *Authority) Authorize(
 	subjectCredential iamv1.Secret,
 	request iamv1.AuthorizationRequest,
 ) (iamv1.AuthorizationDecision, error) {
-	if iamv1.ValidateAuthorizationRequest(request) != nil {
-		return iamv1.AuthorizationDecision{}, ErrInvalidArgument
-	}
-	requestDigest, err := digestSanitized("authorization", request)
-	if err != nil {
-		return iamv1.AuthorizationDecision{}, err
-	}
 	var decision iamv1.AuthorizationDecision
-	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+	var currentProfile iamv1.AuthorizationProfile
+	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
 		if err != nil {
 			return err
@@ -309,6 +303,18 @@ func (service *Authority) Authorize(
 		if err != nil {
 			return err
 		}
+		profile, known, err := transaction.LookupCurrentAuthorizationProfile(transactionContext, request.Profile)
+		if err != nil {
+			return err
+		}
+		if !known || iamv1.ValidateAuthorizationRequestForProfile(request, profile) != nil {
+			return ErrInvalidArgument
+		}
+		requestDigest, err := digestSanitized("authorization", request)
+		if err != nil {
+			return err
+		}
+		currentProfile = profile
 		subject, err := service.authenticateSession(
 			transactionContext,
 			transaction,
@@ -332,7 +338,7 @@ func (service *Authority) Authorize(
 					authorizationActor{organizationID: role.Subject.Session.AccountID, subject: iamv1.Subject{Type: iamv1.SubjectRole, ID: string(role.Subject.Role.ID),
 						RoleSession: &reference}},
 					func(id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
-						return authority.DecideRole(role.Subject, caller.Identity.Purpose, request, id, now)
+						return authority.DecideRoleWithProfile(role.Subject, caller.Identity.Purpose, request, profile, id, now)
 					})
 				return roleErr
 			}
@@ -350,8 +356,8 @@ func (service *Authority) Authorize(
 				subject:        iamv1.Subject{Type: iamv1.SubjectType(subject.Subject.Principal.Type), ID: string(subject.Subject.Principal.ID)},
 			},
 			func(decisionID iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
-				return authority.Decide(
-					subject.Subject, caller.Identity.Purpose, request, decisionID, now,
+				return authority.DecideWithProfile(
+					subject.Subject, caller.Identity.Purpose, request, profile, decisionID, now,
 				)
 			},
 		)
@@ -360,7 +366,7 @@ func (service *Authority) Authorize(
 	if err != nil {
 		return iamv1.AuthorizationDecision{}, err
 	}
-	if iamv1.ValidateAuthorizationDecision(decision) != nil {
+	if iamv1.ValidateAuthorizationDecisionForProfile(decision, currentProfile) != nil {
 		return iamv1.AuthorizationDecision{}, ErrUnavailable
 	}
 	return decision, nil

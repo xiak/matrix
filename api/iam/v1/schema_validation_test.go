@@ -2595,6 +2595,68 @@ func TestPolicyVersionResponseSchemaDoesNotSubstituteCurrentProductCatalog(t *te
 	}
 }
 
+func TestRegisteredTenantProductPublicationAndAuthorizationSchemasUseProfileData(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	requestSchema := compileIAMOpenAPISchema(t, api, "AuthorizationRequest")
+	decisionSchema := compileIAMOpenAPISchema(t, api, "AuthorizationDecision")
+	createSchema := compileIAMOpenAPISchema(t, api, "CreatePolicyRequest")
+	versionSchema := compileIAMOpenAPISchema(t, api, "CreatePolicyVersionRequest")
+	instance := func(value any) any {
+		t.Helper()
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decoded
+	}
+	profile := AuthorizationProfile{APIVersion: APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 1, CallingService: ServicePaaS,
+		Actions: []AuthorizationProfileAction{{Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: AuthorityScopeTenant,
+			ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}},
+			SubjectTypes:   []SubjectType{SubjectUser}, UserAuthenticationMethods: []UserAuthenticationMethod{UserAuthenticationLoginSession}}}}
+	request, err := NewAuthorizationRequestForProfile(profile, "catalog.item.read", ResourceReference{Kind: "CATALOG_ITEM", ID: "item-one"},
+		AuthorizationResourceInstance, "", "request-catalog-schema", "correlation-catalog-schema")
+	if err != nil || ValidateAuthorizationRequestForProfile(request, profile) != nil || requestSchema.Validate(instance(request)) != nil {
+		t.Fatalf("registered request syntax disagrees with exact Profile: %v", err)
+	}
+	if ValidateAuthorizationRequest(request) == nil {
+		t.Fatal("schema admission accidentally registered an unfamiliar source product")
+	}
+	decision := AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-catalog-schema",
+		Allowed: true, Reason: DecisionAllowed, TenantID: "account-one", Subject: &Subject{Type: SubjectUser, ID: "user-one"},
+		Action: request.Action, Resource: request.Resource, RequestID: request.RequestID, DecidedAt: time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC),
+		Profile: &request.Profile, ResourceMode: request.ResourceMode, CorrelationID: request.CorrelationID}
+	if CheckAuthorizationDecisionForProfileAndRequest(decision, request, profile) != nil || decisionSchema.Validate(instance(decision)) != nil {
+		t.Fatal("registered decision syntax rejected an exact tenant-bound result")
+	}
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+		Statements: []PolicyStatement{{SID: "catalog-read", Effect: PolicyAllow, Actions: []Action{"catalog.item.read"},
+			Resources: []PolicyResourceSelector{{Kind: "CATALOG_ITEM", Match: PolicyResourceAnyInAuthority}}}}}
+	create := CreatePolicyRequest{DisplayName: "Catalog reader", Document: document, RequestID: "create-catalog-policy"}
+	version := CreatePolicyVersionRequest{Document: document, ResourceVersion: 1, RequestID: "version-catalog-policy"}
+	if ValidateCreatePolicyRequestSyntax(create) != nil || ValidateCreatePolicyVersionRequestSyntax(version) != nil ||
+		createSchema.Validate(instance(create)) != nil || versionSchema.Validate(instance(version)) != nil {
+		t.Fatal("registered Policy publication syntax remained source-catalog bound")
+	}
+	if ValidateCreatePolicyRequest(create) == nil || ValidateCreatePolicyVersionRequest(version) == nil {
+		t.Fatal("syntax validation was mistaken for executable registration")
+	}
+	malformed := create
+	malformed.Document.Statements = slices.Clone(create.Document.Statements)
+	malformed.Document.Statements[0].Actions = []Action{"catalog.*.read"}
+	if ValidateCreatePolicyRequestSyntax(malformed) == nil || createSchema.Validate(instance(malformed)) == nil {
+		t.Fatal("malformed dynamic action entered the publication contract")
+	}
+	badResource := request
+	badResource.Resource.Kind = "catalog_item"
+	if ValidateAuthorizationRequestForProfile(badResource, profile) == nil || requestSchema.Validate(instance(badResource)) == nil {
+		t.Fatal("malformed dynamic resource kind entered the authorization contract")
+	}
+}
+
 func TestUserPermissionBoundarySchemaAgreesWithStrictCodec(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	for _, name := range []string{"UserPermissionBoundary", "SetUserPermissionBoundaryRequest", "RemoveUserPermissionBoundaryRequest"} {
@@ -2755,7 +2817,10 @@ func TestSourceIPPolicyAndAuthorizationSchemasMatchStrictContracts(t *testing.T)
 	unsupported.Document.Statements = slices.Clone(policy.Document.Statements)
 	unsupported.Document.Statements[0].Actions = []Action{ActionIAMUserRead}
 	unsupported.Document.Statements[0].Resources = []PolicyResourceSelector{{Kind: ResourceUser, Match: PolicyResourceAnyInAuthority}}
-	checkPolicy("unsupported action", unsupported, false, true)
+	// Publication schema validates the data-driven language shape. Exact
+	// action/condition support is resolved from the transaction's current
+	// Profile registry, so it intentionally remains a server semantic check.
+	checkPolicy("unsupported action", unsupported, false, false)
 
 	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead,
 		ResourceReference{Kind: ResourceApplication, ID: "application-one"}, AuthorizationResourceInstance, "", "network-request", "network-request")
@@ -3163,7 +3228,13 @@ func TestRetiredActionsAreHistoricalDecisionsNotRequestsOrPolicies(t *testing.T)
 			check(wrong, false)
 			wrong = decision
 			wrong.Action += ".unknown"
-			check(wrong, false)
+			if test.current && test.scope == AuthorityScopeTenant {
+				if ValidateAuthorizationDecision(wrong) == nil || decisionSchema.Validate(instance(wrong)) != nil {
+					t.Fatal("data-driven tenant decision syntax was confused with current registration")
+				}
+			} else {
+				check(wrong, false)
+			}
 			if test.scope == AuthorityScopeInstallation {
 				wrong = decision
 				wrong.Subject = &Subject{Type: SubjectServiceAccount, ID: "service-one"}

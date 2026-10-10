@@ -352,10 +352,11 @@ func (value *transaction) CreatePolicy(ctx context.Context, mutation identityacc
 		mutation.Version.ID != mutation.Policy.DefaultVersionID || mutation.Version.Document.Scope != mutation.Policy.Scope {
 		return iamv1.PolicyDetail{}, identityaccess.ErrInvalidArgument
 	}
-	if err := value.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+	profiles, err := value.CurrentAuthorizationProfiles(ctx)
+	if err != nil {
 		return iamv1.PolicyDetail{}, err
 	}
-	canonical, digest, err := iamv1.CanonicalizePolicyCompilation(mutation.Version.Document, *mutation.Version.Compilation, iamv1.AllAuthorizationProfiles())
+	canonical, digest, err := iamv1.CanonicalizePolicyCompilation(mutation.Version.Document, *mutation.Version.Compilation, profiles)
 	if err != nil || digest != mutation.Version.ContentDigest {
 		return iamv1.PolicyDetail{}, identityaccess.ErrInvalidArgument
 	}
@@ -443,12 +444,13 @@ func (value *transaction) CreatePolicyVersion(ctx context.Context, mutation iden
 	if mutation.Version.ContractVersion != iamv1.PolicyVersionCompiledContract || mutation.Version.Compilation == nil {
 		return iamv1.PolicyVersionDetail{}, identityaccess.ErrInvalidArgument
 	}
-	if err := value.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+	profiles, err := value.CurrentAuthorizationProfiles(ctx)
+	if err != nil {
 		return iamv1.PolicyVersionDetail{}, err
 	}
-	canonical, digest, err := iamv1.CanonicalizePolicyCompilation(mutation.Version.Document, *mutation.Version.Compilation, iamv1.AllAuthorizationProfiles())
+	canonical, digest, err := iamv1.CanonicalizePolicyCompilation(mutation.Version.Document, *mutation.Version.Compilation, profiles)
 	if err != nil || digest != mutation.Version.ContentDigest || iamv1.ValidatePolicyVersion(mutation.Version) != nil ||
-		iamv1.ValidateCreatePolicyVersionRequest(iamv1.CreatePolicyVersionRequest{Document: mutation.Version.Document, ResourceVersion: mutation.ResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil ||
+		iamv1.ValidateCreatePolicyVersionRequestSyntax(iamv1.CreatePolicyVersionRequest{Document: mutation.Version.Document, ResourceVersion: mutation.ResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.PolicyVersionDetail{}, identityaccess.ErrInvalidArgument
 	}

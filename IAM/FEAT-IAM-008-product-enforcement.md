@@ -48,6 +48,16 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 
 同片后继把 apphosting 的 PaaS→IAM 资源词汇翻译收敛到 port 的单一构造器，HTTP adapter不再维护第二份资源 switch，Action/资源形状、当前 Profile 引用、PAAS calling service 和可信 source IP 一次绑定。apphosting 仍保留14个路由动作的显式 PEP 子集：同一PaaS Profile中的平台主机/安装动作不能因“属于PaaS”进入应用托管。14条合法形状及同产品错PEP、其他产品、错资源/集合/source IP攻击的聚焦测试通过；同一全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，并由累计固定`a464299b`的独立CI覆盖。
 
+## 当前纵向切片：数据库驱动的产品 Profile 注册与单次授权
+
+本片替换“在线求值只能识别当前 executable 源码产品”的过渡边界，但不增加租户可写注册接口。受信发布/安装 owner 在验签并确定完整 release input 后，才可把额外 current/historical `AuthorizationProfile` 交给 IAM migration source；IAM 负责完整结构、规范字节、摘要、产品唯一当前头、历史 revision 小于当前头、同一产品历史服务归属、总量和确定排序校验，嵌入原子迁移与校验 SQL 的整份 seed 另限 1 MiB，超限必须改用尚未交付的非嵌入安装协议。额外历史只可属于同一发布输入明确新增的产品，不能给 Matrix 内置产品补造历史。当前 Matrix 内置 Profile 必须仍以源码规范字节逐项存在，不能被外部声明覆盖、删除或同 revision 换内容。额外产品登记、服务主体登记和租户授权继续是三件独立事务：首片只接受 `TENANT` action，且只允许额外 Profile 复用已经安装并已封存凭据的 calling service purpose；迁移入口和运行时数据库读取均重复验证这条边界，不签发服务凭据、不创建服务主体、不附加 Policy，也不授予任何 Account 资源权限。`INSTALLATION`/`INSTALLATION_PROBE` 的额外产品必须等待独立平台准入与响应契约切片，不能借本入口获得平台 authority。
+
+运行时以同一数据库事务中 `iam.current_authorization_profiles()` 返回的 current heads 为权威输入，并在 current head 上持有 share lock；缓存只存在于本事务，不能跨请求保留 Profile 或授权结果。请求必须绑定数据库中同一 `{product,revision,contentDigest}`，策略发布先做有界通用语法校验，再对锁定的完整 registry 编译并只封存实际参与的最多16个 Profile；registry 当前头上限为256、规范正文合计上限为4 MiB。通用编译器、条件求值器和决定绑定只读取显式 Profile，不按产品、Action 前缀、资源名或服务名增加分支。未知产品、错误 revision/digest、错误资源形状、错误 subject carrier 和未声明条件均失败关闭；正确但不匹配的 calling service只得到可审计 Deny，不能借用已注册产品的服务身份。
+
+当前纵向范围包括：可信 migration seed、当前 registry 读取/精确 lookup、客户 Policy 创建与新版本编译、`POST /v1/authorize` 的 LOGIN_SESSION/ROLE 决策与持久化、以及现有有界 `GET /v1/authorization-profiles` 返回数据库 current heads。OpenAPI 对这些可扩展请求字段只验证统一 Action/Resource 语法和有界 Policy 语言，不能把生成时的内置枚举冒充运行时注册；精确 Action、scope、资源形状、条件和 Profile 摘要仍由同一数据库事务编译/校验。已知内置动作继续保留细化的生成契约，语法通过本身不登记产品也不产生权限。目录仍是最多16项的完整快照；超过该规模必须先交付独立分页目录，当前不得截断。AccessKey、批量授权、诊断、subject resolve、产品自带预置策略/服务角色模板、新 service purpose/凭据 enrollment、签名 release 文件消费和安装组合尚未切换到动态 registry，不得据此宣称任意产品已完整接入。
+
+本地合约/引擎/迁移/用例/HTTP聚焦测试通过；独占 PostgreSQL 18 `TestIAMRegisteredProductProfilePostgresHTTP` 以 `catalog.item.read` 证明 migration apply-twice、数据库目录可见、客户 Policy 编译/挂载、真实PaaS服务Allow、Audit服务Deny、未知product/错误digest/错资源无决定写入，以及新建IAM进程后仍由保留数据库Profile与Policy授权。该测试使用本任务独立2 CPU、1 GiB、PIDs 256的容器/网络/卷，完成后已全部删除。该证据只接受上述单次授权纵向，不替代完整签名发布、HA多副本、其他授权载体或产品业务PEP验收；本片没有改变SQL结构，因此不虚增schema版本。
+
 ## 当前纵向切片：账号同意的服务相关角色
 
 下一片先完成一个真实产品、一个只读业务动作的完整协议，再扩展动作族；不先铺开任意跨账号委派或动态插件市场。

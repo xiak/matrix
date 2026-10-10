@@ -1231,9 +1231,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "AuthorizationProfileAction" {
 		switch jsonName {
 		case "action":
-			base = object{"type": "string", "pattern": `^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$`, "maxLength": 128}
+			base = openapi31.Ref("ProductAuthorizationAction")
 		case "resourceKind", "resultResourceKind":
-			base = object{"type": "string", "pattern": `^[A-Z][A-Z0-9_-]{0,63}$`, "maxLength": 64}
+			base = openapi31.Ref("ProductAuthorizationResourceKind")
 		case "resourceShapes":
 			base["minItems"], base["maxItems"] = 1, 3
 		case "subjectTypes":
@@ -1400,6 +1400,16 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["ProductAuthorizationAction"] = object{
+		"type": "string", "maxLength": 128,
+		"pattern":     `^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$`,
+		"description": "A syntactically valid product Action. Registration and permission require the exact current AuthorizationProfile.",
+	}
+	schemas["ProductAuthorizationResourceKind"] = object{
+		"type": "string", "maxLength": 64,
+		"pattern":     `^[A-Z][A-Z0-9_-]{0,63}$`,
+		"description": "A product resource-kind name whose authority is defined only by an exact current AuthorizationProfile.",
+	}
 	createUser := schemas["CreateUserRequest"].(object)
 	createUserRequired := append(createUser["required"].([]string), "permissionBoundary")
 	slices.Sort(createUserRequired)
@@ -1782,12 +1792,14 @@ func applySemanticOverlays(schemas object) {
 	versionSelector := cloneSchema(schemas["PolicyResourceSelector"])
 	delete(versionDocument, "allOf")
 	delete(versionStatement, "allOf")
-	versionSelector["properties"].(map[string]any)["kind"] = object{"type": "string", "maxLength": 64, "pattern": `^[A-Z][A-Z0-9_-]*$`}
-	exactPolicyAction := object{"type": "string", "maxLength": 128, "pattern": `^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$`}
+	versionSelector["properties"].(map[string]any)["kind"] = openapi31.Ref("ProductAuthorizationResourceKind")
+	exactPolicyAction := openapi31.Ref("ProductAuthorizationAction")
 	versionStatement["properties"].(map[string]any)["actions"].(map[string]any)["items"] = object{"anyOf": []any{exactPolicyAction,
 		object{"type": "string", "maxLength": 128, "pattern": `^[a-z][a-z0-9_-]{0,63}\.[a-z][a-z0-9_-]{0,63}\.\*$`}}}
-	versionStatement["properties"].(map[string]any)["resources"].(map[string]any)["items"] = versionSelector
-	versionDocument["properties"].(map[string]any)["statements"].(map[string]any)["items"] = versionStatement
+	schemas["ProfilePolicyResourceSelector"] = versionSelector
+	versionStatement["properties"].(map[string]any)["resources"].(map[string]any)["items"] = openapi31.Ref("ProfilePolicyResourceSelector")
+	schemas["ProfilePolicyStatement"] = versionStatement
+	versionDocument["properties"].(map[string]any)["statements"].(map[string]any)["items"] = openapi31.Ref("ProfilePolicyStatement")
 	versionDocument["allOf"] = []any{object{
 		"if": object{"properties": object{"scope": object{"not": object{"const": "TENANT"}}}},
 		"then": object{"properties": object{"statements": object{"items": object{"properties": object{
@@ -1795,6 +1807,29 @@ func applySemanticOverlays(schemas object) {
 			"resources": object{"items": object{"properties": object{"match": object{"enum": []string{"EXACT", "ANY_IN_AUTHORITY"}}}}},
 		}}}}},
 	}}
+	// The single online authorization slice accepts a release-registered
+	// tenant product that is not compiled into this executable. Known actions
+	// retain the detailed conditional overlays above; unfamiliar syntax is only
+	// structural here and still requires an exact database-current Profile.
+	registeredResource := cloneSchema(schemas["ResourceReference"])
+	registeredResource["properties"].(map[string]any)["kind"] = openapi31.Ref("ProductAuthorizationResourceKind")
+	schemas["ProductAuthorizationResourceReference"] = registeredResource
+	for _, name := range []string{"AuthorizationRequest", "AuthorizationDecision"} {
+		properties := schemas[name].(object)["properties"].(object)
+		properties["action"] = openapi31.Ref("ProductAuthorizationAction")
+		properties["resource"] = openapi31.Ref("ProductAuthorizationResourceReference")
+	}
+	// Customer publication performs exact registry compilation in the IAM
+	// transaction. Its wire schema therefore validates the bounded language,
+	// while PolicyVersion keeps the same frozen syntax for historical reads.
+	publicationDocument := cloneSchema(versionDocument)
+	publicationDocument["allOf"] = append(publicationDocument["allOf"].([]any), object{
+		"properties": object{"scope": object{"const": string(iamv1.AuthorityScopeTenant)}},
+	})
+	schemas["TenantPolicyPublicationDocument"] = publicationDocument
+	for _, name := range []string{"CreatePolicyRequest", "CreatePolicyVersionRequest"} {
+		schemas[name].(object)["properties"].(object)["document"] = openapi31.Ref("TenantPolicyPublicationDocument")
+	}
 	schemas["PolicyVersion"].(object)["properties"].(object)["document"] = versionDocument
 	boundary := schemas["UserPermissionBoundary"].(object)
 	boundary["required"] = []string{"apiVersion", "kind", "accountId", "userId", "resourceVersion", "policy"}
@@ -1855,7 +1890,7 @@ func applySemanticOverlays(schemas object) {
 	resolved := schemas["PolicyResolvedStatement"].(object)["properties"].(object)
 	resolved["sid"] = openapi31.Ref("ID")
 	resolved["actions"] = object{"type": "array", "minItems": 1, "maxItems": iamv1.MaxStatementActions, "uniqueItems": true,
-		"items": object{"type": "string", "minLength": 1, "maxLength": 128, "pattern": `^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*){1,4}$`}}
+		"items": openapi31.Ref("ProductAuthorizationAction")}
 	schemas["Policy"].(object)["oneOf"] = []any{
 		object{"properties": object{"management": object{"const": "SYSTEM"}, "accountId": false,
 			"id": object{"pattern": `^system\..+`}}},

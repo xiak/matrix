@@ -45,6 +45,8 @@ type Repository interface {
 type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
 	CheckCurrentAuthorizationProfiles(context.Context) error
+	CurrentAuthorizationProfiles(context.Context) ([]iamv1.AuthorizationProfile, error)
+	LookupCurrentAuthorizationProfile(context.Context, iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error)
 	ReadAccessKeyCustody(context.Context) (AccessKeyCustody, error)
 	RegisterTOTPKeyset(context.Context, TOTPKeysetRegistration) error
 	ReadTOTPCustody(context.Context) (TOTPCustody, error)

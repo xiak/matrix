@@ -455,11 +455,14 @@ func (service *Authority) ListAuthorizationProfiles(ctx context.Context, credent
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyList, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, requestID,
-		func(_ context.Context, _ Transaction, subject SessionCredential, _ iamv1.AuthorizationDecision, _ time.Time) (iamv1.AuthorizationProfileList, error) {
-			// managementDecision has locked and checked the COMPLETE registry
-			// against this source in the same transaction. Never expose source
-			// constants from an anonymous or registry-unavailable fast path.
-			profiles := iamv1.AllAuthorizationProfiles()
+		func(ctx context.Context, tx Transaction, subject SessionCredential, _ iamv1.AuthorizationDecision, _ time.Time) (iamv1.AuthorizationProfileList, error) {
+			// Return only transaction-locked current heads. The present endpoint
+			// remains a bounded complete snapshot; a larger release registry must
+			// use the separately planned paginated product directory.
+			profiles, err := tx.CurrentAuthorizationProfiles(ctx)
+			if err != nil {
+				return iamv1.AuthorizationProfileList{}, err
+			}
 			slices.SortFunc(profiles, func(left, right iamv1.AuthorizationProfile) int {
 				return cmp.Compare(left.Product, right.Product)
 			})
@@ -606,7 +609,7 @@ func (service *Authority) changeUserPermissionBoundary(ctx context.Context, cred
 }
 
 func (service *Authority) CreatePolicy(ctx context.Context, credential iamv1.Secret, request iamv1.CreatePolicyRequest) (iamv1.PolicyDetail, error) {
-	if iamv1.ValidateCreatePolicyRequest(request) != nil {
+	if iamv1.ValidateCreatePolicyRequestSyntax(request) != nil {
 		return iamv1.PolicyDetail{}, ErrInvalidArgument
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyCreate, iamv1.AuthorizationResourceInstance, "",
@@ -616,14 +619,15 @@ func (service *Authority) CreatePolicy(ctx context.Context, credential iamv1.Sec
 			if err != nil {
 				return iamv1.PolicyDetail{}, err
 			}
-			if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+			profiles, err := tx.CurrentAuthorizationProfiles(ctx)
+			if err != nil {
 				return iamv1.PolicyDetail{}, err
 			}
-			compilation, err := iamv1.CompilePolicyDocument(request.Document, iamv1.AllAuthorizationProfiles())
+			compilation, err := iamv1.CompilePolicyDocument(request.Document, profiles)
 			if err != nil {
 				return iamv1.PolicyDetail{}, ErrInvalidArgument
 			}
-			_, contentDigest, err := iamv1.CanonicalizePolicyCompilation(request.Document, compilation, iamv1.AllAuthorizationProfiles())
+			_, contentDigest, err := iamv1.CanonicalizePolicyCompilation(request.Document, compilation, profiles)
 			if err != nil {
 				return iamv1.PolicyDetail{}, ErrInvalidArgument
 			}
@@ -695,20 +699,21 @@ func requirePolicyPublisher(ctx context.Context, tx Transaction, subject Session
 }
 
 func (service *Authority) CreatePolicyVersion(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyID, request iamv1.CreatePolicyVersionRequest) (iamv1.PolicyVersionDetail, error) {
-	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateCreatePolicyVersionRequest(request) != nil {
+	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateCreatePolicyVersionRequestSyntax(request) != nil {
 		return iamv1.PolicyVersionDetail{}, ErrInvalidArgument
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionCreate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyVersionDetail, error) {
-			if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+			profiles, err := tx.CurrentAuthorizationProfiles(ctx)
+			if err != nil {
 				return iamv1.PolicyVersionDetail{}, err
 			}
-			compilation, err := iamv1.CompilePolicyDocument(request.Document, iamv1.AllAuthorizationProfiles())
+			compilation, err := iamv1.CompilePolicyDocument(request.Document, profiles)
 			if err != nil {
 				return iamv1.PolicyVersionDetail{}, ErrInvalidArgument
 			}
-			_, digest, err := iamv1.CanonicalizePolicyCompilation(request.Document, compilation, iamv1.AllAuthorizationProfiles())
+			_, digest, err := iamv1.CanonicalizePolicyCompilation(request.Document, compilation, profiles)
 			if err != nil {
 				return iamv1.PolicyVersionDetail{}, ErrInvalidArgument
 			}

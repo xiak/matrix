@@ -1340,7 +1340,11 @@ func TestPolicyEvaluationDoesNotInferProgramAccessFromUserSupport(t *testing.T) 
 		if bounded {
 			boundary = userBoundaryForTest(user, policyVersionForTest(t, "key-boundary", iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceAnyInAuthority, ""))
 		}
-		result, err := decide(user.Organization.ID, user.InstallationID, subject, false, user.Policies, boundary, iamv1.ServicePaaS, request, "decision-key-unsupported", now)
+		profile, known := iamv1.LookupAuthorizationProfile(request.Profile.Product)
+		if !known {
+			t.Fatal("fixture authorization profile missing")
+		}
+		result, err := decide(user.Organization.ID, user.InstallationID, subject, false, user.Policies, boundary, iamv1.ServicePaaS, request, profile, "decision-key-unsupported", now)
 		if err != nil || result.Allowed || result.Subject != nil || result.TenantID != "" || result.InstallationID != "" || result.Reason != iamv1.DecisionDenied {
 			t.Fatal("unsupported current carrier did not produce a sanitized Deny", err)
 		}
@@ -2475,6 +2479,53 @@ func TestAuthorizationFailsClosedOnInconsistentOrInactiveAuthority(t *testing.T)
 	context = authoritySubject(now, iamv1.SystemPolicyPaaSViewer, iamv1.SystemPolicyPaaSViewer)
 	if _, err := Decide(context, iamv1.ServicePaaS, request, "decision-duplicate-policy", now); !errors.Is(err, ErrAuthorityUnavailable) {
 		t.Fatalf("duplicate binding state error = %v", err)
+	}
+}
+
+func TestDecideWithRegisteredProfileDoesNotBranchOnProductNames(t *testing.T) {
+	now := authorityTestTime()
+	profile := iamv1.AuthorizationProfile{APIVersion: iamv1.APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 1, CallingService: iamv1.ServicePaaS,
+		Actions: []iamv1.AuthorizationProfileAction{{Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
+			ResourceShapes: []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}},
+			SubjectTypes:   []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession}}}}
+	request, err := iamv1.NewAuthorizationRequestForProfile(profile, "catalog.item.read", iamv1.ResourceReference{Kind: "CATALOG_ITEM", ID: "item-one"},
+		iamv1.AuthorizationResourceInstance, "", "request-catalog-read", "correlation-catalog-read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "catalog-read", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{request.Action},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: request.Resource.Kind, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+	compilation, err := iamv1.CompilePolicyDocument(document, []iamv1.AuthorizationProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := iamv1.CanonicalizePolicyCompilation(document, compilation, []iamv1.AuthorizationProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := iamv1.PolicyVersion{PolicyID: "policy-catalog-reader", ID: "version-catalog-reader", Document: document,
+		ContentDigest: digest, ContractVersion: iamv1.PolicyVersionCompiledContract, Compilation: &compilation}
+	context := authoritySubject(now)
+	context.Policies = []AttachedPolicy{{Profiles: []iamv1.AuthorizationProfile{profile}, Version: version,
+		Policy: iamv1.Policy{APIVersion: iamv1.APIVersion, Kind: "Policy", ID: version.PolicyID, Management: iamv1.PolicyCustomerManaged,
+			AccountID: context.Organization.ID, DisplayName: "Catalog reader", Scope: iamv1.AuthorityScopeTenant, Status: iamv1.PolicyActive,
+			DefaultVersionID: version.ID, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
+		Attachment: iamv1.PolicyAttachment{APIVersion: iamv1.APIVersion, Kind: "PolicyAttachment", ID: "attachment-catalog-reader",
+			AccountID: context.Organization.ID, Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(context.Principal.ID)},
+			PolicyID: version.PolicyID, Scope: iamv1.AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}}}
+	decision, err := DecideWithProfile(context, iamv1.ServicePaaS, request, profile, "decision-catalog-read", now)
+	if err != nil || !decision.Allowed || decision.TenantID != context.Organization.ID || decision.Subject == nil {
+		t.Fatalf("generic registered Profile decision=%#v err=%v", decision, err)
+	}
+	denied, err := DecideWithProfile(context, iamv1.ServiceAudit, request, profile, "decision-catalog-wrong-service", now)
+	if err != nil || denied.Allowed || denied.Subject != nil || denied.TenantID != "" {
+		t.Fatalf("wrong service did not produce a closed deny: decision=%#v err=%v", denied, err)
+	}
+	changed := iamv1.CloneAuthorizationProfile(profile)
+	changed.Revision++
+	if _, err := DecideWithProfile(context, iamv1.ServicePaaS, request, changed, "decision-catalog-forged", now); !errors.Is(err, ErrInvalidAuthorizationRequest) {
+		t.Fatalf("mismatched current Profile error=%v", err)
 	}
 }
 

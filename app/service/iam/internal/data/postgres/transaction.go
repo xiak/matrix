@@ -21,51 +21,106 @@ import (
 const authorizationDecisionContractVersion = 7
 
 type transaction struct {
-	tx               pgx.Tx
-	profilesChecked  bool
-	archivedProfiles map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile
+	tx                       pgx.Tx
+	currentProfiles          []iamv1.AuthorizationProfile
+	currentProfilesByProduct map[iamv1.ProductID]iamv1.AuthorizationProfile
+	archivedProfiles         map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile
 }
+
+const maxCurrentAuthorizationProfileBytes = 4 * 1024 * 1024
 
 // This cache is confined to one transaction, which retains share locks on the
 // current heads. It must never become an across-request catalog/permission cache.
 func (value *transaction) CheckCurrentAuthorizationProfiles(ctx context.Context) error {
-	if value.profilesChecked {
-		return nil
+	_, err := value.CurrentAuthorizationProfiles(ctx)
+	return err
+}
+
+// CurrentAuthorizationProfiles reads the complete installation registry while
+// retaining share locks on every selected head for this transaction. Matrix's
+// executable-owned declarations remain mandatory exact baselines; additional
+// release-owned products may be present without teaching the evaluator their
+// names. No registry or permission state is cached across transactions.
+func (value *transaction) CurrentAuthorizationProfiles(ctx context.Context) ([]iamv1.AuthorizationProfile, error) {
+	if value.currentProfiles != nil {
+		return cloneAuthorizationProfiles(value.currentProfiles), nil
 	}
-	profiles := iamv1.AllAuthorizationProfiles()
-	expected := make(map[iamv1.ProductID]iamv1.AuthorizationProfile, len(profiles))
-	for _, profile := range profiles {
-		expected[profile.Product] = profile
+	source := iamv1.AllAuthorizationProfiles()
+	required := make(map[iamv1.ProductID]iamv1.AuthorizationProfile, len(source))
+	for _, profile := range source {
+		required[profile.Product] = profile
 	}
 	rows, err := value.tx.Query(ctx, "SELECT * FROM iam.current_authorization_profiles()")
 	if err != nil {
-		return mapDatabaseError("read IAM current product registrations", err)
+		return nil, mapDatabaseError("read IAM current product registrations", err)
 	}
 	defer rows.Close()
+	profiles := make([]iamv1.AuthorizationProfile, 0, len(source))
+	byProduct := make(map[iamv1.ProductID]iamv1.AuthorizationProfile)
+	var previous iamv1.ProductID
+	totalBytes := 0
 	for rows.Next() {
 		var reference iamv1.AuthorizationProfileReference
 		var canonical string
 		if rows.Scan(&reference.Product, &reference.Revision, &canonical, &reference.ContentDigest) != nil {
-			return identityaccess.ErrUnavailable
+			return nil, identityaccess.ErrUnavailable
 		}
-		profile, found := expected[reference.Product]
-		if !found {
-			return identityaccess.ErrUnavailable
+		if len(profiles) == iamv1.MaxAuthorizationProfileRegistryItems || reference.Product <= previous {
+			return nil, identityaccess.ErrUnavailable
 		}
-		declared, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
-		if err != nil || profile.Revision != reference.Revision || digest != reference.ContentDigest || canonical != declared {
-			return identityaccess.ErrUnavailable
+		totalBytes += len(canonical)
+		if totalBytes > maxCurrentAuthorizationProfileBytes {
+			return nil, identityaccess.ErrUnavailable
 		}
-		delete(expected, reference.Product)
+		profile, decodeErr := iamv1.DecodeAuthorizationProfile(strings.NewReader(canonical))
+		declared, digest, canonicalErr := iamv1.CanonicalizeAuthorizationProfile(profile)
+		if decodeErr != nil || canonicalErr != nil || profile.Product != reference.Product || profile.Revision != reference.Revision ||
+			digest != reference.ContentDigest || canonical != declared {
+			return nil, identityaccess.ErrUnavailable
+		}
+		if baseline, found := required[profile.Product]; found {
+			baselineCanonical, baselineDigest, baselineErr := iamv1.CanonicalizeAuthorizationProfile(baseline)
+			if baselineErr != nil || baselineCanonical != canonical || baselineDigest != digest || baseline.Revision != profile.Revision {
+				return nil, identityaccess.ErrUnavailable
+			}
+			delete(required, profile.Product)
+		} else if iamv1.CheckTenantProductAuthorizationProfile(profile) != nil {
+			// A malformed owner write must not turn a future or corrupt
+			// installation/probe declaration into runtime platform authority.
+			return nil, identityaccess.ErrUnavailable
+		}
+		profiles = append(profiles, profile)
+		byProduct[profile.Product] = profile
+		previous = profile.Product
 	}
 	if err := rows.Err(); err != nil {
-		return mapDatabaseError("read IAM current product registrations", err)
+		return nil, mapDatabaseError("read IAM current product registrations", err)
 	}
-	if len(expected) != 0 {
-		return identityaccess.ErrUnavailable
+	if len(profiles) == 0 || len(required) != 0 {
+		return nil, identityaccess.ErrUnavailable
 	}
-	value.profilesChecked = true
-	return nil
+	value.currentProfiles = profiles
+	value.currentProfilesByProduct = byProduct
+	return cloneAuthorizationProfiles(profiles), nil
+}
+
+func (value *transaction) LookupCurrentAuthorizationProfile(ctx context.Context, reference iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error) {
+	if _, err := value.CurrentAuthorizationProfiles(ctx); err != nil {
+		return iamv1.AuthorizationProfile{}, false, err
+	}
+	profile, found := value.currentProfilesByProduct[reference.Product]
+	if !found || iamv1.CheckAuthorizationProfileReference(profile, reference) != nil {
+		return iamv1.AuthorizationProfile{}, false, nil
+	}
+	return iamv1.CloneAuthorizationProfile(profile), true, nil
+}
+
+func cloneAuthorizationProfiles(values []iamv1.AuthorizationProfile) []iamv1.AuthorizationProfile {
+	result := make([]iamv1.AuthorizationProfile, len(values))
+	for index, profile := range values {
+		result[index] = iamv1.CloneAuthorizationProfile(profile)
+	}
+	return result
 }
 
 // Historical resolution does not read or validate the current head. A changed
@@ -767,10 +822,11 @@ func (value *transaction) RecordAuthorization(
 	ctx context.Context,
 	mutation identityaccess.AuthorizationMutation,
 ) error {
-	if err := value.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+	profile, known, err := value.LookupCurrentAuthorizationProfile(ctx, mutation.Request.Profile)
+	if err != nil {
 		return err
 	}
-	if iamv1.CheckAuthorizationDecisionForRequest(mutation.Decision, mutation.Request) != nil ||
+	if !known || iamv1.CheckAuthorizationDecisionForProfileAndRequest(mutation.Decision, mutation.Request, profile) != nil ||
 		iamv1.ValidateSubject(mutation.Subject) != nil ||
 		(mutation.Subject.Type == iamv1.SubjectRole) != (mutation.RoleEvidence != nil) ||
 		(mutation.Subject.AccessKeyID != "") != (mutation.AccessKeyEvidence != nil) ||

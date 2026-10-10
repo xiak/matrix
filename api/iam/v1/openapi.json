@@ -10409,7 +10409,7 @@
         ],
         "properties": {
           "action": {
-            "$ref": "#/components/schemas/Action"
+            "$ref": "#/components/schemas/ProductAuthorizationAction"
           },
           "allowed": {
             "type": "boolean"
@@ -10457,7 +10457,7 @@
             "uniqueItems": true
           },
           "resource": {
-            "$ref": "#/components/schemas/ResourceReference"
+            "$ref": "#/components/schemas/ProductAuthorizationResourceReference"
           },
           "resourceMode": {
             "$ref": "#/components/schemas/AuthorizationResourceMode"
@@ -10727,9 +10727,7 @@
         ],
         "properties": {
           "action": {
-            "maxLength": 128,
-            "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63}){1,4}$",
-            "type": "string"
+            "$ref": "#/components/schemas/ProductAuthorizationAction"
           },
           "conditions": {
             "anyOf": [
@@ -10749,9 +10747,7 @@
             "type": "boolean"
           },
           "resourceKind": {
-            "maxLength": 64,
-            "pattern": "^[A-Z][A-Z0-9_-]{0,63}$",
-            "type": "string"
+            "$ref": "#/components/schemas/ProductAuthorizationResourceKind"
           },
           "resourceShapes": {
             "items": {
@@ -10762,9 +10758,7 @@
             "type": "array"
           },
           "resultResourceKind": {
-            "maxLength": 64,
-            "pattern": "^[A-Z][A-Z0-9_-]{0,63}$",
-            "type": "string"
+            "$ref": "#/components/schemas/ProductAuthorizationResourceKind"
           },
           "scope": {
             "$ref": "#/components/schemas/AuthorityScope"
@@ -17081,7 +17075,7 @@
         ],
         "properties": {
           "action": {
-            "$ref": "#/components/schemas/Action"
+            "$ref": "#/components/schemas/ProductAuthorizationAction"
           },
           "collectionUsage": {
             "$ref": "#/components/schemas/AuthorizationCollectionUsage"
@@ -17108,7 +17102,7 @@
             "uniqueItems": true
           },
           "resource": {
-            "$ref": "#/components/schemas/ResourceReference"
+            "$ref": "#/components/schemas/ProductAuthorizationResourceReference"
           },
           "resourceMode": {
             "$ref": "#/components/schemas/AuthorizationResourceMode"
@@ -17995,7 +17989,7 @@
             "type": "string"
           },
           "document": {
-            "$ref": "#/components/schemas/PolicyDocument"
+            "$ref": "#/components/schemas/TenantPolicyPublicationDocument"
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
@@ -18025,7 +18019,7 @@
         ],
         "properties": {
           "document": {
-            "$ref": "#/components/schemas/PolicyDocument"
+            "$ref": "#/components/schemas/TenantPolicyPublicationDocument"
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
@@ -29546,10 +29540,7 @@
         "properties": {
           "actions": {
             "items": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*){1,4}$",
-              "type": "string"
+              "$ref": "#/components/schemas/ProductAuthorizationAction"
             },
             "maxItems": 128,
             "minItems": 1,
@@ -36031,9 +36022,7 @@
                       "properties": {
                         "actions": {
                           "items": {
-                            "maxLength": 128,
-                            "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63}){1,4}$",
-                            "type": "string"
+                            "$ref": "#/components/schemas/ProductAuthorizationAction"
                           }
                         }
                       }
@@ -36087,9 +36076,7 @@
                         "properties": {
                           "actions": {
                             "items": {
-                              "maxLength": 128,
-                              "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63}){1,4}$",
-                              "type": "string"
+                              "$ref": "#/components/schemas/ProductAuthorizationAction"
                             }
                           },
                           "resources": {
@@ -36120,319 +36107,7 @@
               },
               "statements": {
                 "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "actions": {
-                      "items": {
-                        "anyOf": [
-                          {
-                            "maxLength": 128,
-                            "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63}){1,4}$",
-                            "type": "string"
-                          },
-                          {
-                            "maxLength": 128,
-                            "pattern": "^[a-z][a-z0-9_-]{0,63}\\.[a-z][a-z0-9_-]{0,63}\\.\\*$",
-                            "type": "string"
-                          }
-                        ]
-                      },
-                      "maxItems": 128,
-                      "minItems": 1,
-                      "type": "array",
-                      "uniqueItems": true
-                    },
-                    "conditions": {
-                      "allOf": [
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "iam.account-id"
-                              },
-                              "operator": {
-                                "const": "STRING_EQUALS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "iam.account-id"
-                              },
-                              "operator": {
-                                "const": "STRING_NOT_EQUALS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "iam.current-time"
-                              },
-                              "operator": {
-                                "const": "DATE_GREATER_THAN_EQUALS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "iam.current-time"
-                              },
-                              "operator": {
-                                "const": "DATE_LESS_THAN"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "iam.principal-id"
-                              },
-                              "operator": {
-                                "const": "STRING_EQUALS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "iam.principal-id"
-                              },
-                              "operator": {
-                                "const": "STRING_NOT_EQUALS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "request.source-ip"
-                              },
-                              "operator": {
-                                "const": "IP_ADDRESS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "request.source-ip"
-                              },
-                              "operator": {
-                                "const": "NOT_IP_ADDRESS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "request.tag/environment"
-                              },
-                              "operator": {
-                                "const": "STRING_EQUALS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "request.tag/environment"
-                              },
-                              "operator": {
-                                "const": "STRING_NOT_EQUALS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "resource.tag/environment"
-                              },
-                              "operator": {
-                                "const": "STRING_EQUALS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "resource.tag/environment"
-                              },
-                              "operator": {
-                                "const": "STRING_NOT_EQUALS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        }
-                      ],
-                      "items": {
-                        "$ref": "#/components/schemas/PolicyCondition"
-                      },
-                      "maxItems": 16,
-                      "minItems": 1,
-                      "type": "array",
-                      "uniqueItems": true
-                    },
-                    "effect": {
-                      "$ref": "#/components/schemas/PolicyEffect"
-                    },
-                    "resources": {
-                      "items": {
-                        "additionalProperties": false,
-                        "oneOf": [
-                          {
-                            "properties": {
-                              "match": {
-                                "enum": [
-                                  "EXACT",
-                                  "PREFIX_IN_AUTHORITY"
-                                ]
-                              }
-                            },
-                            "required": [
-                              "id"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "id": false,
-                              "match": {
-                                "const": "ANY_IN_AUTHORITY"
-                              }
-                            }
-                          }
-                        ],
-                        "properties": {
-                          "id": {
-                            "$ref": "#/components/schemas/ID"
-                          },
-                          "kind": {
-                            "maxLength": 64,
-                            "pattern": "^[A-Z][A-Z0-9_-]*$",
-                            "type": "string"
-                          },
-                          "match": {
-                            "$ref": "#/components/schemas/PolicyResourceMatch"
-                          }
-                        },
-                        "required": [
-                          "kind",
-                          "match"
-                        ],
-                        "type": "object"
-                      },
-                      "maxItems": 64,
-                      "minItems": 1,
-                      "type": "array",
-                      "uniqueItems": true
-                    },
-                    "sid": {
-                      "$ref": "#/components/schemas/ID"
-                    }
-                  },
-                  "required": [
-                    "actions",
-                    "effect",
-                    "resources",
-                    "sid"
-                  ],
-                  "type": "object"
+                  "$ref": "#/components/schemas/ProfilePolicyStatement"
                 },
                 "maxItems": 64,
                 "minItems": 1,
@@ -36659,11 +36334,353 @@
         ],
         "type": "object"
       },
+      "ProductAuthorizationAction": {
+        "description": "A syntactically valid product Action. Registration and permission require the exact current AuthorizationProfile.",
+        "maxLength": 128,
+        "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63}){1,4}$",
+        "type": "string"
+      },
+      "ProductAuthorizationResourceKind": {
+        "description": "A product resource-kind name whose authority is defined only by an exact current AuthorizationProfile.",
+        "maxLength": 64,
+        "pattern": "^[A-Z][A-Z0-9_-]{0,63}$",
+        "type": "string"
+      },
+      "ProductAuthorizationResourceReference": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProductAuthorizationResourceKind"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "type": "object"
+      },
       "ProductID": {
         "maxLength": 64,
         "minLength": 1,
         "pattern": "^[a-z][a-z0-9_-]{0,63}$",
         "type": "string"
+      },
+      "ProfilePolicyResourceSelector": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "match": {
+                "enum": [
+                  "EXACT",
+                  "PREFIX_IN_AUTHORITY"
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          {
+            "properties": {
+              "id": false,
+              "match": {
+                "const": "ANY_IN_AUTHORITY"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProductAuthorizationResourceKind"
+          },
+          "match": {
+            "$ref": "#/components/schemas/PolicyResourceMatch"
+          }
+        },
+        "required": [
+          "kind",
+          "match"
+        ],
+        "type": "object"
+      },
+      "ProfilePolicyStatement": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ProductAuthorizationAction"
+                },
+                {
+                  "maxLength": 128,
+                  "pattern": "^[a-z][a-z0-9_-]{0,63}\\.[a-z][a-z0-9_-]{0,63}\\.\\*$",
+                  "type": "string"
+                }
+              ]
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "conditions": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "iam.account-id"
+                    },
+                    "operator": {
+                      "const": "STRING_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "iam.account-id"
+                    },
+                    "operator": {
+                      "const": "STRING_NOT_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "iam.current-time"
+                    },
+                    "operator": {
+                      "const": "DATE_GREATER_THAN_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "iam.current-time"
+                    },
+                    "operator": {
+                      "const": "DATE_LESS_THAN"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "iam.principal-id"
+                    },
+                    "operator": {
+                      "const": "STRING_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "iam.principal-id"
+                    },
+                    "operator": {
+                      "const": "STRING_NOT_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "request.source-ip"
+                    },
+                    "operator": {
+                      "const": "IP_ADDRESS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "request.source-ip"
+                    },
+                    "operator": {
+                      "const": "NOT_IP_ADDRESS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "request.tag/environment"
+                    },
+                    "operator": {
+                      "const": "STRING_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "request.tag/environment"
+                    },
+                    "operator": {
+                      "const": "STRING_NOT_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "resource.tag/environment"
+                    },
+                    "operator": {
+                      "const": "STRING_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "resource.tag/environment"
+                    },
+                    "operator": {
+                      "const": "STRING_NOT_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              }
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PolicyCondition"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "effect": {
+            "$ref": "#/components/schemas/PolicyEffect"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/ProfilePolicyResourceSelector"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "sid": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "actions",
+          "effect",
+          "resources",
+          "sid"
+        ],
+        "type": "object"
       },
       "Readiness": {
         "additionalProperties": false,
@@ -40035,6 +40052,78 @@
         "required": [
           "seed",
           "uri"
+        ],
+        "type": "object"
+      },
+      "TenantPolicyPublicationDocument": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "not": {
+                    "const": "TENANT"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "statements": {
+                  "items": {
+                    "properties": {
+                      "actions": {
+                        "items": {
+                          "$ref": "#/components/schemas/ProductAuthorizationAction"
+                        }
+                      },
+                      "resources": {
+                        "items": {
+                          "properties": {
+                            "match": {
+                              "enum": [
+                                "EXACT",
+                                "ANY_IN_AUTHORITY"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "scope": {
+                "const": "TENANT"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "languageVersion": {
+            "const": "1"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AuthorityScope"
+          },
+          "statements": {
+            "items": {
+              "$ref": "#/components/schemas/ProfilePolicyStatement"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "languageVersion",
+          "scope",
+          "statements"
         ],
         "type": "object"
       },

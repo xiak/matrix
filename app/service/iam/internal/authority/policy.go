@@ -169,10 +169,11 @@ type PolicyEvaluation struct {
 // Constructed from the owner-validated snapshot, never decoded from a request.
 // Keep condition sources typed rather than admitting a caller attribute map.
 type policyEvaluationContext struct {
-	databaseTime time.Time
-	accountID    iamv1.AccountID
-	subject      iamv1.Subject
-	profiles     map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile
+	databaseTime   time.Time
+	accountID      iamv1.AccountID
+	subject        iamv1.Subject
+	currentProfile iamv1.AuthorizationProfile
+	profiles       map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile
 }
 
 func (context *policyEvaluationContext) includeProfiles(profiles []iamv1.AuthorizationProfile) error {
@@ -255,6 +256,19 @@ func (context policyEvaluationContext) policyInterpretation(version iamv1.Policy
 func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID, installationID string, subject iamv1.Subject,
 	attached []AttachedPolicy, request iamv1.AuthorizationRequest,
 ) (PolicyEvaluation, []PolicyAttachmentEvidence, error) {
+	profile, known := iamv1.LookupAuthorizationProfile(request.Profile.Product)
+	if !known {
+		return PolicyEvaluation{}, nil, ErrInvalidAuthorizationRequest
+	}
+	return EvaluateAttachedPoliciesForProfile(databaseTime, accountID, installationID, subject, attached, request, profile)
+}
+
+// EvaluateAttachedPoliciesForProfile uses one exact current registry head for
+// request capability checks while every immutable Policy version keeps its own
+// archived Profile evidence.
+func EvaluateAttachedPoliciesForProfile(databaseTime time.Time, accountID iamv1.AccountID, installationID string, subject iamv1.Subject,
+	attached []AttachedPolicy, request iamv1.AuthorizationRequest, currentProfile iamv1.AuthorizationProfile,
+) (PolicyEvaluation, []PolicyAttachmentEvidence, error) {
 	if iamv1.ValidateID("accountId", string(accountID)) != nil ||
 		iamv1.ValidateSubject(subject) != nil ||
 		(installationID != "" && iamv1.ValidateID("installationId", installationID) != nil) ||
@@ -263,7 +277,7 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 	}
 	versions := make([]iamv1.PolicyVersion, 0, len(attached))
 	context := policyEvaluationContext{databaseTime: databaseTime, accountID: accountID, subject: subject,
-		profiles: make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)}
+		currentProfile: currentProfile, profiles: make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)}
 	seen := make(map[iamv1.PolicyAttachmentID]bool, len(attached))
 	for _, row := range attached {
 		policy, attachment := row.Policy, row.Attachment
@@ -332,6 +346,7 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 	if err != nil {
 		return PolicyEvaluation{}, err
 	}
+	context.currentProfile = currentProfile
 	if len(versions) > MaxEvaluationPolicies {
 		return PolicyEvaluation{}, ErrInvalidPolicyState
 	}
@@ -395,11 +410,15 @@ func policyRequestProfile(context policyEvaluationContext, request iamv1.Authori
 	if validateAuthorityTime(context.databaseTime) != nil || iamv1.ValidateID("accountId", string(context.accountID)) != nil || iamv1.ValidateSubject(context.subject) != nil {
 		return iamv1.AuthorizationProfile{}, ErrInvalidPolicyState
 	}
-	if iamv1.ValidateAuthorizationRequest(request) != nil {
-		return iamv1.AuthorizationProfile{}, ErrInvalidAuthorizationRequest
+	profile := context.currentProfile
+	if profile.Product == "" {
+		var known bool
+		profile, known = iamv1.LookupAuthorizationProfile(request.Profile.Product)
+		if !known {
+			return iamv1.AuthorizationProfile{}, ErrInvalidAuthorizationRequest
+		}
 	}
-	profile, found := iamv1.LookupAuthorizationProfile(request.Profile.Product)
-	if !found {
+	if iamv1.ValidateAuthorizationRequestForProfile(request, profile) != nil {
 		return iamv1.AuthorizationProfile{}, ErrInvalidAuthorizationRequest
 	}
 	if iamv1.CheckAuthorizationProfileSubject(profile, request.Profile, request.Action, context.subject.Type) != nil {
@@ -422,7 +441,10 @@ func policyRequestProfile(context policyEvaluationContext, request iamv1.Authori
 // a session document does not acquire a fabricated PolicyVersion identity.
 func evaluateCompiledStatements(context policyEvaluationContext, document iamv1.PolicyDocument, compilation iamv1.PolicyCompilation, request iamv1.AuthorizationRequest) (PolicyEvaluation, error) {
 	result := PolicyEvaluation{}
-	definition, _ := iamv1.LookupActionDefinition(request.Action)
+	definition, known := iamv1.LookupAuthorizationProfileActionDefinition(context.currentProfile, request.Action)
+	if !known {
+		return PolicyEvaluation{}, ErrInvalidPolicyState
+	}
 	if document.Scope != definition.AuthorityScope {
 		return result, nil
 	}
@@ -484,7 +506,7 @@ func evaluateSessionPolicy(value *ResolvedSessionPolicy, context policyEvaluatio
 func policyConditionsMatch(conditions []iamv1.PolicyCondition, action iamv1.Action, context policyEvaluationContext, request iamv1.AuthorizationRequest) (bool, error) {
 	matched := true
 	for _, condition := range conditions {
-		definition, supported := iamv1.LookupActionConditionDefinition(action, condition.Key)
+		definition, supported := iamv1.LookupAuthorizationProfileActionConditionDefinition(context.currentProfile, action, condition.Key)
 		if !supported || (context.subject.Type != iamv1.SubjectUser && context.subject.Type != iamv1.SubjectRole) {
 			return false, ErrInvalidPolicyState
 		}

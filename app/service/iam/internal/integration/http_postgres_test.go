@@ -42,6 +42,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 	iampostgres "github.com/xiak/matrix/app/service/iam/internal/data/postgres"
+	iammigrations "github.com/xiak/matrix/app/service/iam/internal/data/postgres/migrations"
 	iamhttp "github.com/xiak/matrix/app/service/iam/internal/service/nethttp"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/accessanalysis"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/auditdispatch"
@@ -49,6 +50,7 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/notificationdispatch"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
+	"github.com/xiak/matrix/app/service/internal/postgresmigration"
 )
 
 const (
@@ -943,6 +945,141 @@ func compileIAMPolicyForStorage(document iamv1.PolicyDocument) (string, string, 
 		return "", "", err
 	}
 	return iamv1.CanonicalizePolicyCompilation(document, compilation, profiles)
+}
+
+func registeredCatalogProfile() iamv1.AuthorizationProfile {
+	return iamv1.AuthorizationProfile{APIVersion: iamv1.APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 1, CallingService: iamv1.ServicePaaS,
+		Actions: []iamv1.AuthorizationProfileAction{{Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
+			ResourceShapes: []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}},
+			SubjectTypes:   []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession}}}}
+}
+
+func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
+	const environment = "MATRIX_IAM_PRODUCT_PROFILE_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(environment)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_product_profile_") {
+		t.Fatal("registered product gate requires its own matrix_iam_product_profile_ database")
+	}
+	admin, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect registered product database")
+	}
+	defer admin.Close(context.Background())
+	assertIAMPostgres18(t, ctx, admin)
+	assertCleanIAMSchema(t, ctx, admin)
+	profile := registeredCatalogProfile()
+	source := iammigrations.SourceWithAuthorizationProfiles([]iamv1.AuthorizationProfile{profile}, nil)
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := postgresmigration.Bootstrap(ctx, admin, source); err != nil {
+			t.Fatalf("bootstrap registered product attempt %d: %v", attempt, err)
+		}
+		if err := postgresmigration.Up(ctx, admin, source); err != nil {
+			t.Fatalf("apply registered product attempt %d: %v", attempt, err)
+		}
+		if err := postgresmigration.Verify(ctx, admin, source); err != nil {
+			t.Fatalf("verify registered product attempt %d: %v", attempt, err)
+		}
+	}
+	createIAMHTTPRole(t, ctx, admin)
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, nil)
+	document := iamHTTPBootstrap(t)
+	status, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
+	if err != nil || status.State != iamv1.BootstrapReady {
+		t.Fatalf("bootstrap registered product IAM: status=%#v err=%v", status, err)
+	}
+	handler, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary := localRecoveryLogin(t, handler, "admin", adminPassword, true)
+	primary = localRecoveryChangePassword(t, handler, primary, adminPassword, changedAdminPassword)
+	profilesResponse := performIAMRequest(handler, http.MethodGet, "/v1/authorization-profiles", primary, nil)
+	var catalog iamv1.AuthorizationProfileList
+	if profilesResponse.Code != http.StatusOK || json.Unmarshal(profilesResponse.Body.Bytes(), &catalog) != nil ||
+		iamv1.ValidateAuthorizationProfileList(catalog) != nil ||
+		!slices.ContainsFunc(catalog.Items, func(entry iamv1.AuthorizationProfileEntry) bool { return entry.Profile.Product == profile.Product }) {
+		t.Fatalf("registered product metadata unavailable: status=%d body=%s", profilesResponse.Code, profilesResponse.Body.String())
+	}
+	policyRequest := iamv1.CreatePolicyRequest{DisplayName: "Catalog reader", RequestID: "registered-product-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "catalog-read", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{"catalog.item.read"},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: "CATALOG_ITEM", Match: iamv1.PolicyResourceAnyInAuthority}}}}}}
+	policyResponse := performIAMRequest(handler, http.MethodPost, "/v1/policies", primary, mustIAMJSON(t, policyRequest))
+	var policy iamv1.PolicyDetail
+	if policyResponse.Code != http.StatusCreated || json.Unmarshal(policyResponse.Body.Bytes(), &policy) != nil ||
+		iamv1.ValidatePolicyDetail(policy) != nil || policy.Version.Compilation == nil ||
+		len(policy.Version.Compilation.Profiles) != 1 || policy.Version.Compilation.Profiles[0].Product != profile.Product {
+		t.Fatalf("registered product Policy publication failed: status=%d body=%s", policyResponse.Code, policyResponse.Body.String())
+	}
+	attachmentRequest := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(document.Administrator.ID)},
+		PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion, RequestID: "registered-product-attachment"}
+	attachmentResponse := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", primary, mustIAMJSON(t, attachmentRequest))
+	if attachmentResponse.Code != http.StatusOK {
+		t.Fatalf("attach registered product Policy: status=%d body=%s", attachmentResponse.Code, attachmentResponse.Body.String())
+	}
+	request, err := iamv1.NewAuthorizationRequestForProfile(profile, "catalog.item.read", iamv1.ResourceReference{Kind: "CATALOG_ITEM", ID: "item-one"},
+		iamv1.AuthorizationResourceInstance, "", "registered-product-allow", "registered-product-allow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorize := func(t *testing.T, target http.Handler, service, subject string, value iamv1.AuthorizationRequest, wantStatus int, wantAllowed bool) {
+		t.Helper()
+		response := performIAMRequestWithSubject(target, mustIAMJSON(t, value), service, subject)
+		if response.Code != wantStatus {
+			t.Fatalf("authorize %s: status=%d want=%d body=%s", value.RequestID, response.Code, wantStatus, response.Body.String())
+		}
+		if wantStatus == http.StatusOK {
+			var decision iamv1.AuthorizationDecision
+			if json.Unmarshal(response.Body.Bytes(), &decision) != nil ||
+				iamv1.CheckAuthorizationDecisionForProfileAndRequest(decision, value, profile) != nil || decision.Allowed != wantAllowed {
+				t.Fatalf("authorize %s returned invalid decision: %s", value.RequestID, response.Body.String())
+			}
+		}
+	}
+	authorize(t, handler, paasCredential, primary, request, http.StatusOK, true)
+	wrongService := request
+	wrongService.RequestID, wrongService.CorrelationID = "registered-product-wrong-service", "registered-product-wrong-service"
+	authorize(t, handler, auditCredential, primary, wrongService, http.StatusOK, false)
+	for name, mutate := range map[string]func(*iamv1.AuthorizationRequest){
+		"unknown product": func(value *iamv1.AuthorizationRequest) { value.Profile.Product = "unknown" },
+		"wrong digest": func(value *iamv1.AuthorizationRequest) {
+			value.Profile.ContentDigest = "sha256:" + strings.Repeat("0", 64)
+		},
+		"wrong resource": func(value *iamv1.AuthorizationRequest) { value.Resource.Kind = "OTHER_ITEM" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged := request
+			forged.RequestID, forged.CorrelationID = "registered-product-forged-"+strings.ReplaceAll(name, " ", "-"), "registered-product-forged"
+			mutate(&forged)
+			authorize(t, handler, paasCredential, primary, forged, http.StatusUnprocessableEntity, false)
+		})
+	}
+	// A new process instance must resolve the same immutable registry and
+	// retained Policy; no in-memory catalog state is required for the grant.
+	restarted := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, nil)
+	restartedHandler, err := iamhttp.NewHandler(restarted, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed := request
+	replayed.RequestID, replayed.CorrelationID = "registered-product-after-restart", "registered-product-after-restart"
+	authorize(t, restartedHandler, paasCredential, primary, replayed, http.StatusOK, true)
+	var heads, versions, allows, denies, forged int
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.authorization_profile_heads WHERE product='catalog'),
+		(SELECT count(*) FROM iam.policy_versions WHERE id=$1 AND compilation#>>'{profiles,0,product}'='catalog'),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id IN ('registered-product-allow','registered-product-after-restart') AND allowed),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id='registered-product-wrong-service' AND NOT allowed),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id LIKE 'registered-product-forged-%')`, policy.Version.ID).
+		Scan(&heads, &versions, &allows, &denies, &forged); err != nil || heads != 1 || versions != 1 || allows != 2 || denies != 1 || forged != 0 {
+		t.Fatalf("registered product state split: heads=%d versions=%d allows=%d denies=%d forged=%d err=%v", heads, versions, allows, denies, forged, err)
+	}
 }
 
 func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {

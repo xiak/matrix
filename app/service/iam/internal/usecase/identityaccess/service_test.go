@@ -3538,6 +3538,7 @@ type coreTransaction struct {
 	localRecoveryPrepared            iamv1.LocalCredentialRecoveryInspection
 	onLocalRecoveryPrepare           func()
 	profileErr                       error
+	currentProfiles                  []iamv1.AuthorizationProfile
 	accessKeyCustody                 *AccessKeyCustody
 	accessKeyCustodyErr              error
 	totpCustody                      *TOTPCustody
@@ -4582,7 +4583,8 @@ func (transaction *coreTransaction) RecordAuthorization(
 	_ context.Context,
 	mutation AuthorizationMutation,
 ) error {
-	if iamv1.CheckAuthorizationDecisionForRequest(mutation.Decision, mutation.Request) != nil {
+	profile, found, err := transaction.LookupCurrentAuthorizationProfile(context.Background(), mutation.Request.Profile)
+	if err != nil || !found || iamv1.CheckAuthorizationDecisionForProfileAndRequest(mutation.Decision, mutation.Request, profile) != nil {
 		return ErrInvalidArgument
 	}
 	transaction.authorizations = append(transaction.authorizations, mutation)
@@ -4747,6 +4749,36 @@ func (transaction *coreTransaction) Readiness(context.Context) (ReadinessSnapsho
 
 func (transaction *coreTransaction) CheckCurrentAuthorizationProfiles(context.Context) error {
 	return transaction.profileErr
+}
+
+func (transaction *coreTransaction) CurrentAuthorizationProfiles(context.Context) ([]iamv1.AuthorizationProfile, error) {
+	if transaction.profileErr != nil {
+		return nil, transaction.profileErr
+	}
+	if transaction.currentProfiles != nil {
+		result := make([]iamv1.AuthorizationProfile, len(transaction.currentProfiles))
+		for index, profile := range transaction.currentProfiles {
+			result[index] = iamv1.CloneAuthorizationProfile(profile)
+		}
+		return result, nil
+	}
+	return iamv1.AllAuthorizationProfiles(), nil
+}
+
+func (transaction *coreTransaction) LookupCurrentAuthorizationProfile(_ context.Context, reference iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error) {
+	if transaction.profileErr != nil {
+		return iamv1.AuthorizationProfile{}, false, transaction.profileErr
+	}
+	profiles, err := transaction.CurrentAuthorizationProfiles(context.Background())
+	if err != nil {
+		return iamv1.AuthorizationProfile{}, false, err
+	}
+	for _, profile := range profiles {
+		if profile.Product == reference.Product && iamv1.CheckAuthorizationProfileReference(profile, reference) == nil {
+			return profile, true, nil
+		}
+	}
+	return iamv1.AuthorizationProfile{}, false, nil
 }
 
 func (*coreTransaction) LookupAuthorizationProfile(_ context.Context, reference iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error) {

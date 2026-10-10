@@ -401,6 +401,24 @@ func Decide(
 	decisionID iamv1.DecisionID,
 	databaseTime time.Time,
 ) (AuthorizationEvaluation, error) {
+	profile, known := iamv1.LookupAuthorizationProfile(request.Profile.Product)
+	if !known {
+		return AuthorizationEvaluation{}, ErrInvalidAuthorizationRequest
+	}
+	return DecideWithProfile(context, callingService, request, profile, decisionID, databaseTime)
+}
+
+// DecideWithProfile evaluates one request against the exact current Profile
+// selected by the owning IAM transaction. Supplying a Profile here does not
+// authenticate its publisher or calling service.
+func DecideWithProfile(
+	context SubjectContext,
+	callingService iamv1.ServicePurpose,
+	request iamv1.AuthorizationRequest,
+	profile iamv1.AuthorizationProfile,
+	decisionID iamv1.DecisionID,
+	databaseTime time.Time,
+) (AuthorizationEvaluation, error) {
 	if err := validateSubjectContext(context, databaseTime); err != nil {
 		return AuthorizationEvaluation{}, err
 	}
@@ -413,6 +431,7 @@ func Decide(
 		context.Boundary,
 		callingService,
 		request,
+		profile,
 		decisionID,
 		databaseTime,
 	)
@@ -424,13 +443,23 @@ func Decide(
 func DecideAccessKey(value AccessKeyContext, callingService iamv1.ServicePurpose, request iamv1.AuthorizationRequest,
 	decisionID iamv1.DecisionID, databaseTime time.Time, signedAt int64,
 ) (AuthorizationEvaluation, error) {
+	profile, known := iamv1.LookupAuthorizationProfile(request.Profile.Product)
+	if !known {
+		return AuthorizationEvaluation{}, ErrInvalidAuthorizationRequest
+	}
+	return DecideAccessKeyWithProfile(value, callingService, request, profile, decisionID, databaseTime, signedAt)
+}
+
+func DecideAccessKeyWithProfile(value AccessKeyContext, callingService iamv1.ServicePurpose, request iamv1.AuthorizationRequest,
+	profile iamv1.AuthorizationProfile, decisionID iamv1.DecisionID, databaseTime time.Time, signedAt int64,
+) (AuthorizationEvaluation, error) {
 	eligible, err := accessKeyEligibility(value, request.NetworkContext, databaseTime, signedAt)
 	if err != nil {
 		return AuthorizationEvaluation{}, err
 	}
 	return decide(value.Organization.ID, value.InstallationID,
 		iamv1.Subject{Type: iamv1.SubjectUser, ID: string(value.Principal.ID), AccessKeyID: value.Key.ID},
-		!eligible, value.Policies, value.Boundary, callingService, request, decisionID, databaseTime)
+		!eligible, value.Policies, value.Boundary, callingService, request, profile, decisionID, databaseTime)
 }
 
 // Eligibility is distinct from MAC authentication and policy permission. A
@@ -515,6 +544,21 @@ func DecideService(
 	decisionID iamv1.DecisionID,
 	databaseTime time.Time,
 ) (AuthorizationEvaluation, error) {
+	profile, known := iamv1.LookupAuthorizationProfile(request.Profile.Product)
+	if !known {
+		return AuthorizationEvaluation{}, ErrInvalidAuthorizationRequest
+	}
+	return DecideServiceWithProfile(identity, policies, request, profile, decisionID, databaseTime)
+}
+
+func DecideServiceWithProfile(
+	identity iamv1.ServiceIdentity,
+	policies []AttachedPolicy,
+	request iamv1.AuthorizationRequest,
+	profile iamv1.AuthorizationProfile,
+	decisionID iamv1.DecisionID,
+	databaseTime time.Time,
+) (AuthorizationEvaluation, error) {
 	if iamv1.ValidateServiceIdentity(identity) != nil ||
 		validateAuthorityTime(databaseTime) != nil {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
@@ -528,26 +572,37 @@ func DecideService(
 		nil,
 		identity.Purpose,
 		request,
+		profile,
 		decisionID,
 		databaseTime,
 	)
 }
 
 func DecideRole(value RoleSessionContext, callingService iamv1.ServicePurpose, request iamv1.AuthorizationRequest, decisionID iamv1.DecisionID, now time.Time) (AuthorizationEvaluation, error) {
+	profile, known := iamv1.LookupAuthorizationProfile(request.Profile.Product)
+	if !known {
+		return AuthorizationEvaluation{}, ErrInvalidAuthorizationRequest
+	}
+	return DecideRoleWithProfile(value, callingService, request, profile, decisionID, now)
+}
+
+func DecideRoleWithProfile(value RoleSessionContext, callingService iamv1.ServicePurpose, request iamv1.AuthorizationRequest,
+	profile iamv1.AuthorizationProfile, decisionID iamv1.DecisionID, now time.Time,
+) (AuthorizationEvaluation, error) {
 	if err := validateRoleSessionContext(value, now); err != nil {
 		return AuthorizationEvaluation{}, err
 	}
-	if iamv1.ValidateAuthorizationRequest(request) != nil {
+	if iamv1.ValidateAuthorizationRequestForProfile(request, profile) != nil {
 		return AuthorizationEvaluation{}, ErrInvalidAuthorizationRequest
 	}
 	if iamv1.ValidateID("decisionId", string(decisionID)) != nil || !knownServicePurpose(callingService) {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
 	if value.Service != nil {
-		return decideServiceRole(value, callingService, request, decisionID, now)
+		return decideServiceRole(value, callingService, request, profile, decisionID, now)
 	}
 	subject := iamv1.Subject{Type: iamv1.SubjectRole, ID: string(value.Role.ID), RoleSession: &iamv1.RoleSessionReference{SessionID: value.Session.ID, SourceUserID: value.Session.SourceUserID}}
-	grant, policies, err := EvaluateAttachedPolicies(now, value.Session.AccountID, "", subject, value.Policies, request)
+	grant, policies, err := EvaluateAttachedPoliciesForProfile(now, value.Session.AccountID, "", subject, value.Policies, request, profile)
 	supported := !errors.Is(err, errUnsupportedPolicySubject)
 	if err != nil && supported {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
@@ -559,7 +614,7 @@ func DecideRole(value RoleSessionContext, callingService iamv1.ServicePurpose, r
 	var boundaryEvaluation, sessionEvaluation *PolicyEvaluation
 	if supported {
 		context := policyEvaluationContext{databaseTime: now, accountID: value.Session.AccountID, subject: subject,
-			profiles: make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)}
+			currentProfile: profile, profiles: make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)}
 		if context.includeProfiles(value.Boundary.Profiles) != nil {
 			return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 		}
@@ -585,9 +640,9 @@ func DecideRole(value RoleSessionContext, callingService iamv1.ServicePurpose, r
 	if value.SessionPolicy != nil {
 		proof.SessionPolicy = &RoleSessionPolicyEvidence{ContentDigest: value.SessionPolicy.ContentDigest, Compilation: value.SessionPolicy.Compilation}
 	}
-	serviceSupported := ServiceCanRequest(callingService, request.Action)
+	serviceSupported := ServiceCanRequestProfile(callingService, profile, request.Action)
 	allowed := supported && grant.Allowed && serviceSupported
-	decision, err := authorizationDecision(value.Session.AccountID, "", subject, request, decisionID, now, allowed)
+	decision, err := authorizationDecisionForProfile(value.Session.AccountID, "", subject, request, profile, decisionID, now, allowed)
 	if err != nil {
 		return AuthorizationEvaluation{}, err
 	}
@@ -597,7 +652,7 @@ func DecideRole(value RoleSessionContext, callingService iamv1.ServicePurpose, r
 }
 
 func decideServiceRole(value RoleSessionContext, callingService iamv1.ServicePurpose, request iamv1.AuthorizationRequest,
-	decisionID iamv1.DecisionID, now time.Time,
+	profile iamv1.AuthorizationProfile, decisionID iamv1.DecisionID, now time.Time,
 ) (AuthorizationEvaluation, error) {
 	service := value.Service
 	if service == nil || callingService != service.Identity.Purpose {
@@ -607,7 +662,7 @@ func decideServiceRole(value RoleSessionContext, callingService iamv1.ServicePur
 		SessionID: value.Session.ID, SourceServicePrincipalID: value.Session.SourceServicePrincipalID,
 	}}
 	context := policyEvaluationContext{databaseTime: now, accountID: value.Session.AccountID, subject: subject,
-		profiles: make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)}
+		currentProfile: profile, profiles: make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)}
 	if context.includeProfiles(service.PermissionProfiles) != nil {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
@@ -616,10 +671,10 @@ func decideServiceRole(value RoleSessionContext, callingService iamv1.ServicePur
 	if err != nil && supported {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
-	serviceSupported := ServiceCanRequest(callingService, request.Action)
+	serviceSupported := ServiceCanRequestProfile(callingService, profile, request.Action)
 	resourceSupported := request.Resource == service.Workload
 	allowed := supported && grant.Allowed && resourceSupported && serviceSupported
-	decision, err := authorizationDecision(value.Session.AccountID, "", subject, request, decisionID, now, allowed)
+	decision, err := authorizationDecisionForProfile(value.Session.AccountID, "", subject, request, profile, decisionID, now, allowed)
 	if err != nil {
 		return AuthorizationEvaluation{}, err
 	}
@@ -645,10 +700,11 @@ func decide(
 	boundary *ResolvedUserBoundary,
 	callingService iamv1.ServicePurpose,
 	request iamv1.AuthorizationRequest,
+	profile iamv1.AuthorizationProfile,
 	decisionID iamv1.DecisionID,
 	databaseTime time.Time,
 ) (AuthorizationEvaluation, error) {
-	if iamv1.ValidateAuthorizationRequest(request) != nil {
+	if iamv1.ValidateAuthorizationRequestForProfile(request, profile) != nil {
 		return AuthorizationEvaluation{}, ErrInvalidAuthorizationRequest
 	}
 	if iamv1.ValidateID("decisionId", string(decisionID)) != nil {
@@ -657,7 +713,7 @@ func decide(
 	if !knownServicePurpose(callingService) {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
-	evaluation, evidence, err := EvaluateAttachedPolicies(databaseTime, tenantID, installationID, subject, policies, request)
+	evaluation, evidence, err := EvaluateAttachedPoliciesForProfile(databaseTime, tenantID, installationID, subject, policies, request, profile)
 	subjectSupported := !errors.Is(err, errUnsupportedPolicySubject)
 	if err != nil && subjectSupported {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
@@ -670,9 +726,12 @@ func decide(
 	policyEvaluation := evaluation
 	boundaryEvidence := UserBoundaryEvidence{State: "NOT_APPLICABLE"}
 	var boundaryEvaluation *PolicyEvaluation
-	definition, _ := iamv1.LookupActionDefinition(request.Action)
+	definition, known := iamv1.LookupAuthorizationProfileActionDefinition(profile, request.Action)
+	if !known {
+		return AuthorizationEvaluation{}, ErrInvalidAuthorizationRequest
+	}
 	if subject.Type == iamv1.SubjectUser && definition.AuthorityScope == iamv1.AuthorityScopeTenant {
-		limit, proof, err := evaluateUserBoundary(boundary, policyEvaluationContext{databaseTime: databaseTime, accountID: tenantID, subject: subject}, request)
+		limit, proof, err := evaluateUserBoundary(boundary, policyEvaluationContext{databaseTime: databaseTime, accountID: tenantID, subject: subject, currentProfile: profile}, request)
 		if err != nil && !errors.Is(err, errUnsupportedPolicySubject) {
 			return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 		}
@@ -680,14 +739,14 @@ func decide(
 		boundaryEvidence = proof
 		boundaryEvaluation = &limit
 	}
-	platform := iamv1.IsPlatformAction(request.Action)
+	platform := definition.AuthorityScope == iamv1.AuthorityScopeInstallation
 	platformContext := !platform || subject.Type == iamv1.SubjectUser && subject.AccessKeyID == "" && iamv1.ValidateID("installationId", installationID) == nil
-	probeContext := request.Action != iamv1.ActionInstallationVerify ||
+	probeContext := definition.AuthorityScope != iamv1.AuthorityScopeInstallationProbe ||
 		subject.Type == iamv1.SubjectServiceAccount && request.Resource.ID == installationID
-	serviceSupported := ServiceCanRequest(callingService, request.Action)
+	serviceSupported := ServiceCanRequestProfile(callingService, profile, request.Action)
 	resourceSupported := platformContext && probeContext
 	allowed := subjectSupported && evaluation.Allowed && !credentialRestricted && resourceSupported && serviceSupported
-	decision, err := authorizationDecision(tenantID, installationID, subject, request, decisionID, databaseTime, allowed)
+	decision, err := authorizationDecisionForProfile(tenantID, installationID, subject, request, profile, decisionID, databaseTime, allowed)
 	if err != nil {
 		return AuthorizationEvaluation{}, err
 	}
@@ -696,8 +755,11 @@ func decide(
 		SubjectSupported: subjectSupported, CallingServiceSupported: serviceSupported, ResourceContextSupported: resourceSupported}, nil
 }
 
-func authorizationDecision(tenantID iamv1.AccountID, installationID string, subject iamv1.Subject, request iamv1.AuthorizationRequest, decisionID iamv1.DecisionID, databaseTime time.Time, allowed bool) (iamv1.AuthorizationDecision, error) {
-	profile := request.Profile
+func authorizationDecisionForProfile(tenantID iamv1.AccountID, installationID string, subject iamv1.Subject,
+	request iamv1.AuthorizationRequest, profile iamv1.AuthorizationProfile, decisionID iamv1.DecisionID,
+	databaseTime time.Time, allowed bool,
+) (iamv1.AuthorizationDecision, error) {
+	profileReference := request.Profile
 	decision := iamv1.AuthorizationDecision{
 		APIVersion:      iamv1.APIVersion,
 		Kind:            "AuthorizationDecision",
@@ -708,7 +770,7 @@ func authorizationDecision(tenantID iamv1.AccountID, installationID string, subj
 		Resource:        request.Resource,
 		RequestID:       request.RequestID,
 		DecidedAt:       databaseTime,
-		Profile:         &profile,
+		Profile:         &profileReference,
 		ResourceMode:    request.ResourceMode,
 		CollectionUsage: request.CollectionUsage,
 		CorrelationID:   request.CorrelationID,
@@ -721,14 +783,18 @@ func authorizationDecision(tenantID iamv1.AccountID, installationID string, subj
 	decision.ResourceTags = slices.Clone(request.ResourceTags)
 	if allowed {
 		decision.Reason = iamv1.DecisionAllowed
-		if iamv1.IsPlatformAction(request.Action) {
+		definition, known := iamv1.LookupAuthorizationProfileActionDefinition(profile, request.Action)
+		if !known {
+			return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
+		}
+		if definition.AuthorityScope == iamv1.AuthorityScopeInstallation {
 			decision.InstallationID = installationID
 		} else {
 			decision.TenantID = tenantID
 		}
 		decision.Subject = &subject
 	}
-	if err := iamv1.CheckAuthorizationDecisionForRequest(decision, request); err != nil {
+	if err := iamv1.CheckAuthorizationDecisionForProfileAndRequest(decision, request, profile); err != nil {
 		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
 	}
 	return decision, nil
@@ -739,7 +805,19 @@ func authorizationDecision(tenantID iamv1.AccountID, installationID string, subj
 // for product authorization on another service's behalf.
 func ServiceCanRequest(purpose iamv1.ServicePurpose, action iamv1.Action) bool {
 	definition, known := iamv1.LookupActionDefinition(action)
-	return known && definition.CallingService == purpose
+	if !known {
+		return false
+	}
+	profile, known := iamv1.LookupAuthorizationProfile(definition.Product)
+	return known && ServiceCanRequestProfile(purpose, profile, action)
+}
+
+// ServiceCanRequestProfile binds the authenticated service purpose to the
+// exact current declaration. A matching product name or action prefix is not
+// sufficient.
+func ServiceCanRequestProfile(purpose iamv1.ServicePurpose, profile iamv1.AuthorizationProfile, action iamv1.Action) bool {
+	definition, known := iamv1.LookupAuthorizationProfileActionDefinition(profile, action)
+	return known && definition.CallingService == purpose && profile.CallingService == purpose
 }
 
 func validateSubjectContext(context SubjectContext, databaseTime time.Time) error {

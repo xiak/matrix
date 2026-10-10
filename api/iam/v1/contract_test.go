@@ -8967,6 +8967,55 @@ func TestAccessAnalyzerActionsAreCurrentLoginSessionCapabilities(t *testing.T) {
 	}
 }
 
+func TestExplicitAuthorizationProfileBindsUnfamiliarProductWithoutRegisteringIt(t *testing.T) {
+	profile := AuthorizationProfile{
+		APIVersion: APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 1, CallingService: ServicePaaS,
+		Actions: []AuthorizationProfileAction{{
+			Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: AuthorityScopeTenant,
+			ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}},
+			SubjectTypes:   []SubjectType{SubjectUser}, UserAuthenticationMethods: []UserAuthenticationMethod{UserAuthenticationLoginSession},
+			Conditions: []AuthorizationProfileCondition{{Key: ConditionIAMAccountID, ValueType: ConditionString, Source: ConditionIAMIdentity}},
+		}},
+	}
+	request, err := NewAuthorizationRequestForProfile(profile, "catalog.item.read", ResourceReference{Kind: "CATALOG_ITEM", ID: "item-one"},
+		AuthorizationResourceInstance, "", "request-catalog-read", "correlation-catalog-read")
+	if err != nil || ValidateAuthorizationRequestForProfile(request, profile) != nil {
+		t.Fatalf("explicit Profile request was rejected: request=%#v err=%v", request, err)
+	}
+	if ValidateAuthorizationRequest(request) == nil {
+		t.Fatal("unregistered product entered the executable-owned convenience catalog")
+	}
+	definition, known := LookupAuthorizationProfileActionDefinition(profile, request.Action)
+	condition, conditionKnown := LookupAuthorizationProfileActionConditionDefinition(profile, request.Action, ConditionIAMAccountID)
+	if !known || definition.Product != profile.Product || definition.CallingService != ServicePaaS ||
+		!conditionKnown || condition.Source != ConditionIAMIdentity {
+		t.Fatal("explicit Profile capability projection changed its declaration")
+	}
+	decision := AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-catalog-read",
+		Allowed: false, Reason: DecisionDenied, Action: request.Action, Resource: request.Resource, RequestID: request.RequestID,
+		DecidedAt: time.Date(2026, time.October, 11, 8, 0, 0, 0, time.UTC), Profile: &request.Profile,
+		ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID}
+	if err := CheckAuthorizationDecisionForProfileAndRequest(decision, request, profile); err != nil {
+		t.Fatal("explicit Profile response binding failed", err)
+	}
+	changed := CloneAuthorizationProfile(profile)
+	changed.Actions[0].ResourceKind = "OTHER_ITEM"
+	if ValidateAuthorizationRequestForProfile(request, changed) == nil ||
+		CheckAuthorizationDecisionForProfileAndRequest(decision, request, changed) == nil {
+		t.Fatal("changed Profile bytes retained request or response authority")
+	}
+	if CheckTenantProductAuthorizationProfile(profile) != nil {
+		t.Fatal("tenant product Profile was rejected by the narrow registry boundary")
+	}
+	platform := CloneAuthorizationProfile(profile)
+	platform.Actions[0].Scope = AuthorityScopeInstallation
+	unknownService := CloneAuthorizationProfile(profile)
+	unknownService.CallingService = "CATALOG"
+	if CheckTenantProductAuthorizationProfile(platform) == nil || CheckTenantProductAuthorizationProfile(unknownService) == nil {
+		t.Fatal("tenant product boundary admitted platform authority or a new service purpose")
+	}
+}
+
 func assertNoAuthoritySelectorHeader(t *testing.T, value any) {
 	t.Helper()
 	switch typed := value.(type) {
