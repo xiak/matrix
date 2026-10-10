@@ -1,6 +1,6 @@
 # FEAT-IAM-007：访问密钥与程序访问
 
-- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。实际产品消费已累计到`efe12e824b6534e7b6912c6ed9900c7f0c53e3e9`：PaaS已覆盖已列明的创建、实例读取、Deployment控制和Application声明标签，Audit覆盖精确租户记录查询、完整性验证及可信外部source IP。Account/key网络限制和不可变使用摘要固定于`472596b1`及后继Audit修正，并由累计`91649497`的完整独立CI确认；签名APISIX安装、生产入口托管/备份、LIVE UI及最终发布仍未完成，整体未验收。
+- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。实际产品消费已累计到`efe12e824b6534e7b6912c6ed9900c7f0c53e3e9`：PaaS已覆盖已列明的创建、实例读取、Deployment控制和Application声明标签，Audit覆盖精确租户记录查询、完整性验证及可信外部source IP。Account/key网络限制和不可变使用摘要固定于`472596b1`及后继Audit修正，并由累计`91649497`的完整独立CI确认；当前签名APISIX安装、受保护入口托管、同Profile升级/回滚、指定备份恢复、外层引擎重启及旧凭据永久围栏已由下述固定组合实跑。LIVE UI、跨Profile兼容及最终发布仍未完成，整体未验收。
 - 依赖：003、005；临时凭据与 006 协作。
 - Owner：IAM credential；各产品 HTTP 签名消费归其 PEP。
 
@@ -350,9 +350,9 @@ APISIX现有六条API路由与UI路由统一删除caller的`Matrix-Subject-Crede
 
 真实安装门禁在现有Phase1 owner内创建普通租户成员及显式key管理员Policy，给成员创建只允许APISIX控制网络gateway精确CIDR的AccessKey。客户端请求同时伪造公有source、标准转发头、Matrix origin/target/source、边缘断言和用户载体；只有APISIX删除并用实际origin/target/source及正确产品断言重建后，签名Application目录才返回本Account唯一资源。签错target必须401，随后停用key的新nonce必须立即403，最后删除key并撤销临时管理附件；历史事实进入原租户Audit链。升级、回滚、备份恢复和进程重启继续核对sealed origin与两份受保护断言，不能因重建配置恢复caller头、交换产品断言或复活key。
 
-本片不增加IAM/Audit/PaaS数据库schema；发布组合保持IAM67/Audit35/PaaS3，并将不可兼容的安装journal/topology/edge ABI推进到`contractRevision=15`。头部重建基线已在`GOMAXPROCS=2`下通过全仓race/p2（含architecture与authorityprocess）、vet、模块校验、API生成后零diff及Linux amd64/CGO关闭构建。后继用途隔离断言增量当前通过边缘契约、PaaS/Audit HTTP、进程配置、安装拓扑/本地效果、Phase1客户端、authorityprocess编译及architecture的聚焦race；真实进程门禁已加入“错误产品断言在IAM前401且nonce/决定/outbox/证据均不变化，原同签名换回正确断言才成功”的断言，完整全仓与真实数据库运行仍待执行。
+本切片自身不增加IAM/Audit/PaaS数据库schema；其入口契约现已随当前发布组合推进到IAM81/Audit37/PaaS3、`contractRevision=29`。固定`bcd4e3d308e51957275cf7b2b31dab73726f838a`通过全仓无缓存race/p2（含architecture与authorityprocess）、全仓vet、模块校验及diff检查。相同固定源码由唯一`matrix-release`路径组装并逐包验签为A=`matrix-v0.1.0-iam.r29.19-bcd4e3d308e5`、B=`matrix-v0.1.0-iam.r29.20-bcd4e3d308e5`；任务独立、network-none、2 CPU/4 GiB/PIDs 768的Docker27.5.1经典存储引擎在539.93秒完成安装、失败升级自动回退、B升级、显式回滚和指定备份恢复，外层引擎重启并等待所有平台容器healthy后又以71.08秒完成状态、身份与清理复验。
 
-固定APISIX 3.17.0源码确认`proxy-rewrite`在rewrite phase以priority 1008执行，而`serverless-post-function`以priority -2000执行并缓存已加载函数，因此caller头先被删除、产品断言后被覆盖；原upstream location仍使用`X-Real-IP $remote_addr`和`X-Forwarded-For $proxy_add_x_forwarded_for`。但签名A/B真实Docker安装尚未执行，因为本机Docker daemon当前不可连接。未取得真实APISIX运行结果前，本段保持“当前切片”，不能把上游源码、配置文本、unit test或进程直连门禁写成签名安装已验收。
+该真实APISIX路径使用普通租户User及显式key管理权限创建AccessKey，并通过封存origin、可信source IP和产品用途隔离的边缘断言完成签名Application访问；调用方伪造的转发、Matrix边界及断言字段不能替代网关重建值。原key在失败升级、成功升级及显式数据保留回滚后仍可签名。指定受保护备份恢复后，非秘密key元数据继续存在以供审计和显式退休，但原secret被`authentication_recovery_access_key_fences`永久围栏，签名请求返回401；外层引擎重启不复活它，最终管理员仍可禁用、删除该元数据并撤销临时custodian附件。`ENABLED`因此只表达资源状态，不能作为当前认证可用性的证明。该门禁不宣称跨Profile升级、任意历史N-1、宿主root回滚抵抗或LIVE UI已完成。
 
 ## 验收
 
