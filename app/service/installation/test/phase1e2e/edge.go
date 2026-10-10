@@ -320,7 +320,17 @@ func (client *edgeClient) notificationContact(
 }
 
 func (client *edgeClient) mutateIAM(ctx context.Context, path string, bearer []byte, body, destination any, status int) error {
-	response, err := client.json(ctx, http.MethodPost, "/api/iam/v1"+path, bearer, body, nil, status)
+	return client.writeIAM(ctx, http.MethodPost, path, bearer, body, destination, status)
+}
+
+func (client *edgeClient) writeIAM(
+	ctx context.Context,
+	method, path string,
+	bearer []byte,
+	body, destination any,
+	status int,
+) error {
+	response, err := client.json(ctx, method, "/api/iam/v1"+path, bearer, body, nil, status)
 	if err != nil {
 		return err
 	}

@@ -77,6 +77,7 @@ type tenantRetention struct {
 	Account                    iamv1.Account
 	Child                      iamv1.User
 	ChildAttachment            iamv1.PolicyAttachment
+	DelegatedAuthority         *delegatedAuthorityRetention
 	InitialPassword            []byte
 	PrimaryPassword            []byte
 	PreviousPrimaryPassword    []byte
@@ -91,6 +92,24 @@ type tenantRetention struct {
 	Operations                 []paasv1.Operation
 	Quota                      managedservicev1.QuotaEntitlement
 	AuditHashes                map[string]struct{}
+}
+
+// delegatedAuthorityRetention is the minimum durable Group and Role graph
+// that the signed lifecycle gate carries through upgrade, rollback, protected
+// backup recovery and an outer-engine restart. The credential is test-only
+// material in the owner-only fixture above; it must stop authenticating after
+// recovery invalidates its source LoginSession, while the immutable
+// RoleSession receipt remains observable.
+type delegatedAuthorityRetention struct {
+	Group                 iamv1.Group
+	Membership            iamv1.GroupMembership
+	GroupAttachment       iamv1.PolicyAttachment
+	Role                  iamv1.Role
+	TrustVersion          iamv1.RoleTrustVersion
+	RoleAttachment        iamv1.PolicyAttachment
+	RoleBoundary          iamv1.RolePermissionBoundary
+	PreRecoverySession    iamv1.RoleSession
+	PreRecoveryCredential []byte
 }
 
 type safeError struct {

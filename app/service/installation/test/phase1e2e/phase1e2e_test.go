@@ -101,6 +101,76 @@ func TestCreateUserWireCarriesExplicitRootBoundary(t *testing.T) {
 	}
 }
 
+func delegatedAuthorityFixture(t *testing.T) delegatedAuthorityRetention {
+	t.Helper()
+	now := time.Date(2026, time.October, 3, 1, 2, 3, 0, time.UTC)
+	trust := iamv1.TrustPolicyDocument{LanguageVersion: iamv1.TrustPolicyLanguageVersion, Statements: []iamv1.TrustPolicyStatement{{
+		SID: "root-source", Effect: iamv1.PolicyAllow,
+		Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: "root-user"}},
+	}}}
+	_, trustDigest, err := iamv1.CanonicalizeTrustPolicyDocument(trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := iamv1.Group{APIVersion: iamv1.APIVersion, Kind: "Group", ID: "group-retained", AccountID: "account-retained",
+		Name: "Retained group", ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+	role := iamv1.Role{APIVersion: iamv1.APIVersion, Kind: "Role", ID: "role-retained", AccountID: group.AccountID,
+		Name: "Retained role", Tags: []iamv1.RoleTag{}, Management: iamv1.RoleCustomerManaged, Status: iamv1.RoleActive,
+		MaxSessionDurationSeconds: iamv1.DefaultRoleSessionDurationSeconds, ResourceVersion: 2,
+		CurrentTrustVersionID: "trust-retained", CreatedAt: now, UpdatedAt: now.Add(time.Microsecond)}
+	attachment := func(id string, target iamv1.PolicyAttachmentTarget) iamv1.PolicyAttachment {
+		return iamv1.PolicyAttachment{APIVersion: iamv1.APIVersion, Kind: "PolicyAttachment", ID: iamv1.PolicyAttachmentID(id),
+			AccountID: group.AccountID, Target: target, PolicyID: iamv1.SystemPolicyPaaSDeveloper,
+			Scope: iamv1.AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+	}
+	return delegatedAuthorityRetention{
+		Group: group,
+		Membership: iamv1.GroupMembership{APIVersion: iamv1.APIVersion, Kind: "GroupMembership", ID: "membership-retained",
+			AccountID: group.AccountID, GroupID: group.ID, UserID: "member-user", CreatedBy: "root-user",
+			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
+		GroupAttachment: attachment("attachment-group", iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}),
+		Role:            role,
+		TrustVersion: iamv1.RoleTrustVersion{APIVersion: iamv1.APIVersion, Kind: "RoleTrustVersion", ID: role.CurrentTrustVersionID,
+			AccountID: group.AccountID, RoleID: role.ID, Document: trust, ContentDigest: trustDigest, CreatedAt: now},
+		RoleAttachment: attachment("attachment-role", iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)}),
+		RoleBoundary: iamv1.RolePermissionBoundary{APIVersion: iamv1.APIVersion, Kind: "RolePermissionBoundary", AccountID: group.AccountID,
+			RoleID: role.ID, ResourceVersion: role.ResourceVersion, Policy: &iamv1.PolicyVersionReference{PolicyID: iamv1.SystemPolicyPaaSViewer,
+				VersionID: "version-viewer", ContentDigest: "sha256:" + strings.Repeat("1", 64)}},
+		PreRecoverySession: iamv1.RoleSession{APIVersion: iamv1.APIVersion, Kind: "RoleSession", ID: "session-retained",
+			AccountID: group.AccountID, RoleID: role.ID, SourceUserID: "root-user", Status: iamv1.SessionActive,
+			IssuedAt: now.Add(2 * time.Microsecond), ExpiresAt: now.Add(time.Hour)},
+		PreRecoveryCredential: []byte("test-only-role-credential"),
+	}
+}
+
+func TestDelegatedAuthorityRetentionBindsExactAccountGraph(t *testing.T) {
+	if !validDelegatedAuthorityRetention(delegatedAuthorityFixture(t), "account-retained", "member-user", "root-user") {
+		t.Fatal("valid delegated authority fixture was rejected")
+	}
+	for name, mutate := range map[string]func(*delegatedAuthorityRetention){
+		"foreign group":          func(value *delegatedAuthorityRetention) { value.Group.AccountID = "account-other" },
+		"foreign member":         func(value *delegatedAuthorityRetention) { value.Membership.UserID = "member-other" },
+		"different group target": func(value *delegatedAuthorityRetention) { value.GroupAttachment.Target.ID = "group-other" },
+		"different role target":  func(value *delegatedAuthorityRetention) { value.RoleAttachment.Target.ID = "role-other" },
+		"wider boundary": func(value *delegatedAuthorityRetention) {
+			value.RoleBoundary.Policy.PolicyID = iamv1.SystemPolicyPaaSDeveloper
+		},
+		"different trust": func(value *delegatedAuthorityRetention) {
+			value.TrustVersion.Document.Statements[0].Principals[0].ID = "root-other"
+		},
+		"different session source": func(value *delegatedAuthorityRetention) { value.PreRecoverySession.SourceUserID = "root-other" },
+		"missing credential":       func(value *delegatedAuthorityRetention) { value.PreRecoveryCredential = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := delegatedAuthorityFixture(t)
+			mutate(&fixture)
+			if validDelegatedAuthorityRetention(fixture, "account-retained", "member-user", "root-user") {
+				t.Fatal("changed delegated authority graph was accepted")
+			}
+		})
+	}
+}
+
 func TestNotificationContactRetentionRequiresExactVerifiedState(t *testing.T) {
 	verifiedAt := time.Date(2026, time.October, 3, 1, 2, 3, 456000000, time.UTC)
 	want := iamv1.NotificationContact{

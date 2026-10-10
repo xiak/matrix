@@ -1,6 +1,6 @@
 # FEAT-IAM-004：用户组与授权委派
 
-- 状态：Group 后端、前端接口适配及签名游标已实现；当前候选进一步完成了非 root 管理员在同一封存权限边界内关联 Group、约束现有及未来成员并保存事件级委派证据的后端闭环。本地 PostgreSQL 18 及滚动前驱门禁已通过；独立 CI、组 UI 闭环与最终签名发布集成未完成，整体未验收。固定门禁证据见本文件末尾。
+- 状态：Group 后端、前端接口适配、签名游标及非 root 同上限委派闭环已实现；固定 `882b7820b1a225f1a0a8b95cb07ac139b8f3ab0b` 的独立 Verification 38014293154 已有 17 项全部成功。既有 IAM81/Audit37/PaaS3、contractRevision29 签名 A/B 只运行了平台与直属 User 生命周期，没有创建 Group/GroupMembership，不能作为组对象保留证据；当前切片已把下述 Group 路径加入原签名生命周期 owner，仍须在固定提交上实跑。组 UI 由 UX/UI owner 独立验收，整体未验收。
 - 依赖：002、003。
 - Owner：IAM Group、GroupMembership、组策略附件和组继承证据。
 
@@ -102,6 +102,8 @@ User 删除沿 003 的 User principal 锁后终态移除其所有活跃 membersh
 
 独立 IAM/Audit/PaaS + dispatcher 门禁验证组授权可创建/读取租户资源且越租户、平台动作拒绝，移组不删除资源/Operation/outbox/Audit。控制台完成组目录、详情、成员和策略管理的鼠标闭环；键盘专项按用户优先级延期，不据此宣称已验收。签名发布与完整 Profile 仍由 011/安装 owner 证明，源码/SQL 门禁不能替代。
 
+同完整 Profile 的签名门禁必须在保护备份前通过公开 API 创建 Group、准确 Membership 和 GROUP 策略附件，证明成员当前来源为该准确关系且能读取授权租户资源；故障升级自动回退、B 升级、显式回滚、指定备份恢复及外层引擎重启后逐次读取同一 Group/Membership/Attachment 并再次完成成员登录和业务授权。直属 USER 附件在备份前撤销且不得复活，GROUP 来源不得变成直属来源、跨 Account 归属或资源所有者。仅有表行、健康端点、Audit action 或通用平台生命周期通过均不能替代此路径。
+
 ## 实现与证据
 
 2026-09-14，本分支在独立 PostgreSQL 18、1 CPU/768 MiB/PID 128 数据库容器上串行验证。Go 使用 `GOMAXPROCS=2`、`-p 2`（多真实数据库包的组合命令用 `-p 1`）；没有使用其他任务的数据库、服务或远端机器。
@@ -113,7 +115,7 @@ User 删除沿 003 的 User principal 锁后终态移除其所有活跃 membersh
 - 源码和内嵌产物稳定后的全仓 Go race/vet、架构检查、模块校验、生成一致性及 Linux amd64 构建通过。
 - 前端 typecheck/lint/架构/20 组对比度、101 项测试通过；两次 2-worker 静态构建的 59 个内嵌文件一致。接口不解析游标、不与资源 ID 排序比较，拒绝原始 ID/换行/超长/重复 continuation；成员关系、目标 capability 和未知结果原意图边界继续保留。这是本地前端证据，不冒充独立前端 CI。
 
-当前 Group 委派增量在本任务专属 PostgreSQL 18 新库完成本地验证：新增反向锁环在修复前确定触发一次 `40P01`，统一 USER-ID 锁序后 `TestIAMPolicyAttachmentChangePostgres` race 28.299s 通过；它同时覆盖空组封存、同 ceiling 成员、无边界/不同边界/Root/平台绑定攻击、成员边界变更阻断、Root 创建附件的受限撤销、创建与撤销的 `GROUP_BOUND` 证据，以及两个合法反向写入各一份关系/事实且无隐藏 deadlock。完整 `TestIAMPolicyAuthorityStoragePostgres` race 311.679s、`TestIAMHTTPPostgresVerticalSlice` race 127.828s、Audit HTTP race 4.505s 和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 279.704s 继续通过。固定 IAM71 程序产生真实保留数据后升级至当前 IAM72 的 `TestIAMRetainedPredecessorProcessUpgrade` 最新 131.990s 通过，既有附件证据及 Audit 摘要保持，新增内部 ceiling 对保留行明确为 `NULL`。这些是当前工作树的本地证据；独立 CI、签名 A/B 生命周期和 UX/UI 浏览器验收仍待固定提交后完成。
+当前 Group 委派增量在本任务专属 PostgreSQL 18 新库完成本地验证：新增反向锁环在修复前确定触发一次 `40P01`，统一 USER-ID 锁序后 `TestIAMPolicyAttachmentChangePostgres` race 28.299s 通过；它同时覆盖空组封存、同 ceiling 成员、无边界/不同边界/Root/平台绑定攻击、成员边界变更阻断、Root 创建附件的受限撤销、创建与撤销的 `GROUP_BOUND` 证据，以及两个合法反向写入各一份关系/事实且无隐藏 deadlock。完整 `TestIAMPolicyAuthorityStoragePostgres` race 311.679s、`TestIAMHTTPPostgresVerticalSlice` race 127.828s、Audit HTTP race 4.505s 和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 279.704s 继续通过。固定 IAM71 程序产生真实保留数据后升级至当前 IAM72 的 `TestIAMRetainedPredecessorProcessUpgrade` 最新 131.990s 通过，既有附件证据及 Audit 摘要保持，新增内部 ceiling 对保留行明确为 `NULL`。累计固定 `882b7820b1a225f1a0a8b95cb07ac139b8f3ab0b` 的 [Verification 38014293154](https://github.com/xiak/matrix/actions/runs/38014293154) 已核对精确 SHA，17 项全部 `completed/success`；这仍不是上述新增 Group 签名生命周期的运行证据，UX/UI 浏览器验收也由独立 owner 继续执行。
 
 同一最终工作树通过全仓无缓存 `go test -race -p 2 ./...`（含 architecture）、`go vet -p 2 ./...`、模块校验、API 重新生成零差异及 Linux amd64/CGO 关闭的全仓构建；默认缺少外部 DSN 的 SKIP 不计真实运行证据。
 

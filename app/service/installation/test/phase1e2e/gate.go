@@ -203,6 +203,11 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		auditv1.ActionIAMSecurityReportDownloadStarted:    string(baselineReport.metadata.ID),
 		auditv1.ActionIAMAccessAnalyzerCreated:            string(value.retainedIAM.AccessAnalyzer.ID),
 		auditv1.ActionIAMAccessAnalyzerDispositionUpdated: string(value.retainedIAM.AccessAnalyzer.ID),
+		auditv1.ActionIAMGroupCreated:                     string(value.retainedIAM.Tenants[0].DelegatedAuthority.Group.ID),
+		auditv1.ActionIAMGroupMembershipCreated:           string(value.retainedIAM.Tenants[0].DelegatedAuthority.Membership.ID),
+		auditv1.ActionIAMRoleCreated:                      string(value.retainedIAM.Tenants[0].DelegatedAuthority.Role.ID),
+		auditv1.ActionIAMRolePermissionBoundarySet:        string(value.retainedIAM.Tenants[0].DelegatedAuthority.Role.ID),
+		auditv1.ActionIAMRoleSessionIssued:                string(value.retainedIAM.Tenants[0].DelegatedAuthority.PreRecoverySession.ID),
 	}
 	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, wantInitialAudit)
 	if err != nil || !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {
@@ -243,7 +248,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("automatic-upgrade-rollback")
-	if err := value.assertTenantRetention(ctx, true, false); err != nil {
+	if err := value.assertTenantRetention(ctx, true, false, "automatic-rollback"); err != nil {
 		return err
 	}
 
@@ -283,7 +288,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := value.assertTenantRetention(ctx, true, false); err != nil {
+	if err := value.assertTenantRetention(ctx, true, false, "upgrade"); err != nil {
 		return err
 	}
 	postUpgrade, err := value.writePostUpgradeTenantResource(ctx)
@@ -315,7 +320,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertSecurityReportSnapshot(ctx, bearer, postUpgradeReport, true); err != nil {
 		return err
 	}
-	if err := value.assertTenantRetention(ctx, true, false); err != nil {
+	if err := value.assertTenantRetention(ctx, true, false, "rollback"); err != nil {
 		return err
 	}
 	if err := value.assertPostUpgradeTenantResource(ctx, postUpgrade, true); err != nil {
@@ -375,7 +380,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.edge.securityReportMissing(ctx, bearer, postUpgradeReport.metadata.ID); err != nil {
 		return fail("security-report-recovery-boundary")
 	}
-	if err := value.assertTenantRetention(ctx, true, true); err != nil {
+	if err := value.assertTenantRetention(ctx, true, true, "recovery"); err != nil {
 		return err
 	}
 	if err := value.assertPostUpgradeTenantResource(ctx, postUpgrade, false); err != nil {
@@ -629,7 +634,7 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if err := value.readTenantRetention(state.InstallationID); err != nil {
 		return err
 	}
-	if err := value.assertTenantRetention(ctx, true, true); err != nil {
+	if err := value.assertTenantRetention(ctx, true, true, "restart"); err != nil {
 		return err
 	}
 	if err := value.assertMFARetention(ctx, true); err != nil {
@@ -800,6 +805,9 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 			if err := value.edge.logout(ctx, tenant.OldChildCredential); err != nil {
 				return fail("tenant-session-revoke")
 			}
+			if err := value.prepareDelegatedAuthorityRetention(ctx, &tenant); err != nil {
+				return err
+			}
 		} else {
 			var identity iamv1.CurrentIdentity
 			if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", tenant.OldChildCredential, &identity); err != nil || iamv1.ValidateCurrentIdentity(identity) != nil {
@@ -833,10 +841,107 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		}
 		value.retainedIAM.Tenants = append(value.retainedIAM.Tenants, tenant)
 	}
-	if err := value.assertTenantRetention(ctx, false, false); err != nil {
+	if err := value.assertTenantRetention(ctx, false, false, "baseline"); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (value *gate) prepareDelegatedAuthorityRetention(ctx context.Context, tenant *tenantRetention) error {
+	if tenant == nil || tenant.DelegatedAuthority != nil || len(tenant.RetainedPrimaryCredential) == 0 {
+		return fail("delegated-authority-fixture")
+	}
+	retained := &delegatedAuthorityRetention{}
+	if err := value.edge.mutateIAM(ctx, "/groups", tenant.RetainedPrimaryCredential,
+		iamv1.CreateGroupRequest{Name: "Offline application operators", Description: "Signed lifecycle fixture", RequestID: "phase1-group-create"},
+		&retained.Group, http.StatusCreated); err != nil || iamv1.ValidateGroup(retained.Group) != nil || retained.Group.AccountID != tenant.Account.ID {
+		return fail("delegated-group-create")
+	}
+	if err := value.edge.mutateIAM(ctx, "/groups/"+string(retained.Group.ID)+"/memberships", tenant.RetainedPrimaryCredential,
+		iamv1.CreateGroupMembershipRequest{UserID: tenant.Child.ID, RequestID: "phase1-group-membership"},
+		&retained.Membership, http.StatusOK); err != nil || iamv1.ValidateGroupMembership(retained.Membership) != nil {
+		return fail("delegated-group-membership")
+	}
+	if err := value.edge.mutateIAM(ctx, "/policy-attachments", tenant.RetainedPrimaryCredential,
+		iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(retained.Group.ID)},
+			PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: "phase1-group-policy",
+		}, &retained.GroupAttachment, http.StatusOK); err != nil || iamv1.ValidatePolicyAttachment(retained.GroupAttachment) != nil {
+		return fail("delegated-group-policy")
+	}
+	trust := iamv1.TrustPolicyDocument{LanguageVersion: iamv1.TrustPolicyLanguageVersion, Statements: []iamv1.TrustPolicyStatement{{
+		SID: "root-source", Effect: iamv1.PolicyAllow,
+		Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: tenant.Account.RootIdentity.PrincipalID}},
+	}}}
+	if err := value.edge.mutateIAM(ctx, "/roles", tenant.RetainedPrimaryCredential,
+		iamv1.CreateRoleRequest{Name: "Offline application reader", Description: "Signed lifecycle fixture", Tags: []iamv1.RoleTag{},
+			TrustPolicy: trust, RequestID: "phase1-role-create"},
+		&retained.Role, http.StatusCreated); err != nil || iamv1.ValidateRole(retained.Role) != nil || retained.Role.AccountID != tenant.Account.ID {
+		return fail("delegated-role-create")
+	}
+	if err := value.edge.mutateIAM(ctx, "/policy-attachments", tenant.RetainedPrimaryCredential,
+		iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(retained.Role.ID)},
+			PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: "phase1-role-policy",
+		}, &retained.RoleAttachment, http.StatusOK); err != nil || iamv1.ValidatePolicyAttachment(retained.RoleAttachment) != nil {
+		return fail("delegated-role-policy")
+	}
+	if err := value.edge.writeIAM(ctx, http.MethodPut, "/roles/"+string(retained.Role.ID)+"/permission-boundary", tenant.RetainedPrimaryCredential,
+		iamv1.SetRolePermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+			ResourceVersion: retained.Role.ResourceVersion, RequestID: "phase1-role-boundary"},
+		&retained.RoleBoundary, http.StatusOK); err != nil || iamv1.ValidateRolePermissionBoundary(retained.RoleBoundary) != nil || retained.RoleBoundary.Policy == nil {
+		return fail("delegated-role-boundary")
+	}
+	var access iamv1.RoleAccess
+	if _, err := value.edge.get(ctx, "/api/iam/v1/roles/"+string(retained.Role.ID), tenant.RetainedPrimaryCredential, &access); err != nil ||
+		iamv1.ValidateRoleAccess(access) != nil || len(access.PolicyAttachments) != 1 || access.PolicyAttachments[0].ID != retained.RoleAttachment.ID {
+		return fail("delegated-role-read")
+	}
+	retained.Role, retained.TrustVersion, retained.RoleAttachment = access.Role, access.TrustVersion, access.PolicyAttachments[0]
+	var issued iamv1.AssumeRoleResponse
+	if err := value.edge.mutateIAM(ctx, "/roles/"+string(retained.Role.ID)+":assume", tenant.RetainedPrimaryCredential,
+		iamv1.AssumeRoleRequest{ResourceVersion: retained.RoleBoundary.ResourceVersion, RequestID: "phase1-role-before-recovery"},
+		&issued, http.StatusOK); err != nil || iamv1.ValidateAssumeRoleResponse(issued) != nil || issued.Outcome != "APPLIED" {
+		return fail("delegated-role-assume")
+	}
+	retained.PreRecoverySession = issued.Session
+	retained.PreRecoveryCredential = issued.Credential.CopyBytes()
+	value.edge.addForbidden(retained.PreRecoveryCredential)
+	if !validDelegatedAuthorityRetention(*retained, tenant.Account.ID, tenant.Child.ID, tenant.Account.RootIdentity.PrincipalID) {
+		return fail("delegated-authority-fixture")
+	}
+	tenant.DelegatedAuthority = retained
+	return nil
+}
+
+func validDelegatedAuthorityRetention(
+	value delegatedAuthorityRetention,
+	accountID iamv1.AccountID,
+	memberID, rootID iamv1.PrincipalID,
+) bool {
+	if iamv1.ValidateGroup(value.Group) != nil || value.Group.AccountID != accountID ||
+		iamv1.ValidateGroupMembership(value.Membership) != nil || value.Membership.AccountID != accountID ||
+		value.Membership.GroupID != value.Group.ID || value.Membership.UserID != memberID || value.Membership.RemovedAt != nil ||
+		iamv1.ValidatePolicyAttachment(value.GroupAttachment) != nil || value.GroupAttachment.AccountID != accountID ||
+		value.GroupAttachment.Target != (iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(value.Group.ID)}) ||
+		value.GroupAttachment.PolicyID != iamv1.SystemPolicyPaaSDeveloper || value.GroupAttachment.RevokedAt != nil ||
+		iamv1.ValidateRole(value.Role) != nil || value.Role.AccountID != accountID || value.Role.Status != iamv1.RoleActive ||
+		iamv1.ValidateRoleTrustVersion(value.TrustVersion) != nil || value.TrustVersion.AccountID != accountID ||
+		value.TrustVersion.RoleID != value.Role.ID || value.TrustVersion.ID != value.Role.CurrentTrustVersionID ||
+		iamv1.ValidatePolicyAttachment(value.RoleAttachment) != nil || value.RoleAttachment.AccountID != accountID ||
+		value.RoleAttachment.Target != (iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(value.Role.ID)}) ||
+		value.RoleAttachment.PolicyID != iamv1.SystemPolicyPaaSDeveloper || value.RoleAttachment.RevokedAt != nil ||
+		iamv1.ValidateRolePermissionBoundary(value.RoleBoundary) != nil || value.RoleBoundary.AccountID != accountID ||
+		value.RoleBoundary.RoleID != value.Role.ID || value.RoleBoundary.ResourceVersion != value.Role.ResourceVersion ||
+		value.RoleBoundary.Policy == nil || value.RoleBoundary.Policy.PolicyID != iamv1.SystemPolicyPaaSViewer ||
+		iamv1.ValidateRoleSession(value.PreRecoverySession) != nil || value.PreRecoverySession.AccountID != accountID ||
+		value.PreRecoverySession.RoleID != value.Role.ID || value.PreRecoverySession.SourceUserID != rootID ||
+		value.PreRecoverySession.Status != iamv1.SessionActive || len(value.PreRecoveryCredential) == 0 {
+		return false
+	}
+	statements := value.TrustVersion.Document.Statements
+	return len(statements) == 1 && statements[0].Effect == iamv1.PolicyAllow && len(statements[0].Principals) == 1 &&
+		statements[0].Principals[0] == (iamv1.TrustPrincipal{Type: iamv1.PrincipalUser, ID: rootID})
 }
 
 func (value *gate) verifySignedAccessKeyEdge(
@@ -1079,7 +1184,8 @@ func (value *gate) persistTenantRetention() error {
 		iamv1.ValidateNotificationContact(value.retainedIAM.AdministratorContact) != nil ||
 		value.retainedIAM.AdministratorContact.State != "VERIFIED" || !validMFARetention(value.retainedIAM.MFA) ||
 		!validPreBackupPolicyAttachmentChanges(value.retainedIAM.PolicyChanges) ||
-		iamv1.ValidateAccessAnalyzer(value.retainedIAM.AccessAnalyzer) != nil {
+		iamv1.ValidateAccessAnalyzer(value.retainedIAM.AccessAnalyzer) != nil ||
+		!validDelegatedAuthorityFixtures(value.retainedIAM.Tenants) {
 		return fail("tenant-retention-contact")
 	}
 	encoded, err := json.Marshal(value.retainedIAM)
@@ -1114,7 +1220,7 @@ func (value *gate) readTenantRetention(installationID string) error {
 	if decodeOne(content, &retained) != nil || retained.InstallationID != installationID || len(retained.Tenants) != 2 || len(retained.AdministratorPassword) == 0 ||
 		iamv1.ValidateNotificationContact(retained.AdministratorContact) != nil || retained.AdministratorContact.State != "VERIFIED" ||
 		!validMFARetention(retained.MFA) || !validPreBackupPolicyAttachmentChanges(retained.PolicyChanges) ||
-		iamv1.ValidateAccessAnalyzer(retained.AccessAnalyzer) != nil {
+		iamv1.ValidateAccessAnalyzer(retained.AccessAnalyzer) != nil || !validDelegatedAuthorityFixtures(retained.Tenants) {
 		return fail("tenant-retention-fixture-identity")
 	}
 	value.retainedIAM = &retained
@@ -1123,14 +1229,27 @@ func (value *gate) readTenantRetention(installationID string) error {
 		value.edge.addForbidden(tenant.InitialPassword, tenant.PrimaryPassword, tenant.ChildPassword, tenant.RecoveryPassword,
 			tenant.FinalPrimaryPassword, tenant.OldChildCredential, tenant.OldPrimaryCredential, tenant.PreviousPrimaryPassword,
 			tenant.TemporaryPrimaryCredential, tenant.TemporaryChildCredential, tenant.RetainedPrimaryCredential)
+		if tenant.DelegatedAuthority != nil {
+			value.edge.addForbidden(tenant.DelegatedAuthority.PreRecoveryCredential)
+		}
 	}
 	return nil
+}
+
+func validDelegatedAuthorityFixtures(tenants []tenantRetention) bool {
+	if len(tenants) != 2 || tenants[0].DelegatedAuthority == nil || tenants[1].DelegatedAuthority != nil {
+		return false
+	}
+	first := tenants[0]
+	return validDelegatedAuthorityRetention(*first.DelegatedAuthority, first.Account.ID, first.Child.ID,
+		first.Account.RootIdentity.PrincipalID)
 }
 
 func (value *gate) assertTenantRetention(
 	ctx context.Context,
 	requireContact bool,
 	authenticationRecovered bool,
+	checkpoint string,
 ) error {
 	operator, err := value.edge.login(ctx, value.retainedIAM.AdministratorPassword, "phase1-retained-operator")
 	if err != nil {
@@ -1260,18 +1379,24 @@ func (value *gate) assertTenantRetention(
 		if !found {
 			return fail("tenant-retained-child-identity")
 		}
-		child, err := value.edge.loginNamed(ctx, "developer@"+string(id), tenant.ChildPassword, id, tenant.Child.ID, "phase1-retained-roleless-child")
+		child, err := value.edge.loginNamed(ctx, "developer@"+string(id), tenant.ChildPassword, id, tenant.Child.ID, "phase1-retained-child")
 		if err != nil || child.MustChangePassword {
 			return fail("tenant-retained-child-password")
 		}
 		childBearer := child.Credential.CopyBytes()
 		value.edge.addForbidden(childBearer)
-		response, requestErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications/"+string(tenantApplicationID), childBearer, nil, nil, http.StatusForbidden)
-		clear(response.body)
+		var requestErr error
+		if tenant.DelegatedAuthority == nil {
+			var response httpResult
+			response, requestErr = value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications/"+string(tenantApplicationID), childBearer, nil, nil, http.StatusForbidden)
+			clear(response.body)
+		} else {
+			requestErr = value.assertDelegatedAuthorityRetention(ctx, tenant, bearer, childBearer, authenticationRecovered, checkpoint)
+		}
 		logoutErr := value.edge.logout(ctx, childBearer)
 		clear(childBearer)
 		if requestErr != nil || logoutErr != nil {
-			return fail("tenant-revoked-role-admitted-resource")
+			return fail("tenant-delegated-authority-retention")
 		}
 		other := value.retainedIAM.Tenants[1-index]
 		for _, path := range []string{"/api/paas/v1/operations/" + string(other.Operations[0].ID), "/api/managed-services/v1/quota-entitlements/" + other.Quota.ID} {
@@ -1284,6 +1409,124 @@ func (value *gate) assertTenantRetention(
 		if err := value.edge.logout(ctx, bearer); err != nil {
 			return fail("tenant-retained-primary-logout")
 		}
+	}
+	return nil
+}
+
+func (value *gate) assertDelegatedAuthorityRetention(
+	ctx context.Context,
+	tenant *tenantRetention,
+	primary, member []byte,
+	authenticationRecovered bool,
+	checkpoint string,
+) error {
+	if tenant == nil || tenant.DelegatedAuthority == nil || checkpoint == "" {
+		return fail("delegated-authority-fixture")
+	}
+	want := tenant.DelegatedAuthority
+	if !validDelegatedAuthorityRetention(*want, tenant.Account.ID, tenant.Child.ID, tenant.Account.RootIdentity.PrincipalID) {
+		return fail("delegated-authority-fixture")
+	}
+	var group iamv1.GroupAccess
+	if _, err := value.edge.get(ctx, "/api/iam/v1/groups/"+string(want.Group.ID), primary, &group); err != nil ||
+		iamv1.ValidateGroupAccess(group) != nil || !equalJSON(group.Group, want.Group) || len(group.PolicyAttachments) != 1 ||
+		!equalJSON(group.PolicyAttachments[0], want.GroupAttachment) {
+		return fail("delegated-group-retention")
+	}
+	var memberships iamv1.GroupMembershipList
+	if _, err := value.edge.get(ctx, "/api/iam/v1/groups/"+string(want.Group.ID)+"/memberships", primary, &memberships); err != nil ||
+		iamv1.ValidateGroupMembershipList(memberships) != nil || len(memberships.Items) != 1 ||
+		!equalJSON(memberships.Items[0].Membership, want.Membership) {
+		return fail("delegated-membership-retention")
+	}
+	var memberIdentity iamv1.CurrentIdentity
+	if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", member, &memberIdentity); err != nil ||
+		iamv1.ValidateCurrentIdentity(memberIdentity) != nil || len(memberIdentity.PolicySources) != 1 {
+		return fail("delegated-group-source")
+	}
+	source := memberIdentity.PolicySources[0]
+	if source.Kind != iamv1.PolicyGrantGroup || source.Membership == nil ||
+		!equalJSON(source.Attachment, want.GroupAttachment) || !equalJSON(*source.Membership, want.Membership) {
+		return fail("delegated-group-source")
+	}
+	var application paasv1.Application
+	if _, err := value.edge.get(ctx, "/api/paas/v1/applications/"+string(tenantApplicationID), member, &application); err != nil ||
+		paasv1.ValidateApplication(application) != nil || application.Metadata.Scope.TenantID != paasv1.TenantID(tenant.Account.ID) {
+		return fail("delegated-group-business-access")
+	}
+	var role iamv1.RoleAccess
+	if _, err := value.edge.get(ctx, "/api/iam/v1/roles/"+string(want.Role.ID), primary, &role); err != nil ||
+		iamv1.ValidateRoleAccess(role) != nil || !equalJSON(role.Role, want.Role) || !equalJSON(role.TrustVersion, want.TrustVersion) ||
+		len(role.PolicyAttachments) != 1 || !equalJSON(role.PolicyAttachments[0], want.RoleAttachment) {
+		return fail("delegated-role-retention")
+	}
+	var boundary iamv1.RolePermissionBoundary
+	if _, err := value.edge.get(ctx, "/api/iam/v1/roles/"+string(want.Role.ID)+"/permission-boundary", primary, &boundary); err != nil ||
+		iamv1.ValidateRolePermissionBoundary(boundary) != nil || !equalJSON(boundary, want.RoleBoundary) {
+		return fail("delegated-role-boundary-retention")
+	}
+	var receipt iamv1.RoleSessionAccess
+	if _, err := value.edge.get(ctx, "/api/iam/v1/roles/"+string(want.Role.ID)+"/sessions/"+string(want.PreRecoverySession.ID), primary, &receipt); err != nil ||
+		iamv1.ValidateRoleSessionAccess(receipt) != nil || !equalJSON(receipt.Item.Session, want.PreRecoverySession) {
+		return fail("delegated-role-session-receipt")
+	}
+	if authenticationRecovered {
+		response, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/auth/role-session", want.PreRecoveryCredential, nil, nil, http.StatusUnauthorized)
+		clear(response.body)
+		if err != nil {
+			return fail("delegated-role-session-revived")
+		}
+		response, err = value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications/"+string(tenantApplicationID), want.PreRecoveryCredential, nil, nil, http.StatusUnauthorized)
+		clear(response.body)
+		if err != nil {
+			return fail("delegated-role-business-revived")
+		}
+		var issued iamv1.AssumeRoleResponse
+		if err := value.edge.mutateIAM(ctx, "/roles/"+string(want.Role.ID)+":assume", primary,
+			iamv1.AssumeRoleRequest{ResourceVersion: want.RoleBoundary.ResourceVersion, RequestID: "phase1-role-after-" + checkpoint},
+			&issued, http.StatusOK); err != nil || iamv1.ValidateAssumeRoleResponse(issued) != nil || issued.Outcome != "APPLIED" ||
+			issued.Session.SourceUserID != tenant.Account.RootIdentity.PrincipalID {
+			return fail("delegated-role-reissue")
+		}
+		credential := issued.Credential.CopyBytes()
+		defer clear(credential)
+		value.edge.addForbidden(credential)
+		return value.assertRoleCredential(ctx, tenant, primary, credential, issued.Session, checkpoint)
+	}
+	return value.assertRoleCredential(ctx, tenant, primary, want.PreRecoveryCredential, want.PreRecoverySession, checkpoint)
+}
+
+func (value *gate) assertRoleCredential(
+	ctx context.Context,
+	tenant *tenantRetention,
+	primary, credential []byte,
+	session iamv1.RoleSession,
+	checkpoint string,
+) error {
+	want := tenant.DelegatedAuthority
+	var current iamv1.CurrentRoleIdentity
+	if _, err := value.edge.get(ctx, "/api/iam/v1/auth/role-session", credential, &current); err != nil ||
+		iamv1.ValidateCurrentRoleIdentity(current) != nil || !equalJSON(current.Session, session) ||
+		current.Role.ID != want.Role.ID || current.SourceUser.ID != tenant.Account.RootIdentity.PrincipalID {
+		return fail("delegated-role-current-identity")
+	}
+	var application paasv1.Application
+	if _, err := value.edge.get(ctx, "/api/paas/v1/applications/"+string(tenantApplicationID), credential, &application); err != nil ||
+		paasv1.ValidateApplication(application) != nil || application.Metadata.Scope.TenantID != paasv1.TenantID(tenant.Account.ID) {
+		return fail("delegated-role-read")
+	}
+	deniedID := paasv1.ResourceID("phase1-role-denied-" + checkpoint)
+	response, err := value.edge.json(ctx, http.MethodPost, "/api/paas/v1/applications", credential,
+		paasv1.CreateApplicationRequest{ID: deniedID, Name: "Role boundary denial"},
+		map[string]string{"Idempotency-Key": string(deniedID)}, http.StatusForbidden)
+	clear(response.body)
+	if err != nil {
+		return fail("delegated-role-boundary-denial")
+	}
+	response, err = value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications/"+string(deniedID), primary, nil, nil, http.StatusNotFound)
+	clear(response.body)
+	if err != nil {
+		return fail("delegated-role-denied-resource-created")
 	}
 	return nil
 }
@@ -1622,6 +1865,9 @@ func (value *gate) pathLeakage() [][]byte {
 				tenant.RecoveryPassword, tenant.FinalPrimaryPassword, tenant.OldPrimaryCredential, tenant.OldChildCredential,
 				tenant.PreviousPrimaryPassword, tenant.TemporaryPrimaryCredential, tenant.TemporaryChildCredential, tenant.RetainedPrimaryCredential,
 				[]byte(string(tenant.Account.ID)+"-private-value"))
+			if tenant.DelegatedAuthority != nil {
+				result = append(result, tenant.DelegatedAuthority.PreRecoveryCredential)
+			}
 		}
 	}
 	if value.edge != nil {
