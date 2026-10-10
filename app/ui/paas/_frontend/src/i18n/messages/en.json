@@ -4569,7 +4569,9 @@
     "keyCredentialFenced": "Permanently invalid after recovery",
     "keyCredentialFencedHint": "The original Secret is permanently rejected by the recovery fence; management state cannot change that fact.",
     "keyCredentialFencedAlert": "The original key is permanently invalid after recovery. Delete the old key and create a new one. Enabling cannot clear the recovery fence and is not a repair action.",
+    "keyCredentialLegacyUnrecorded": "Not recorded by the legacy report",
     "keyCreateReplacement": "Create new key",
+    "keyCreatePendingReason": "An access-key creation intent is still unresolved, so a new creation request cannot begin.",
     "keyOperationReference": "Operation reference",
     "keyProductBoundary": "An access key proves the owning user's programmatic identity; it carries no independent permissions. Every business request is still evaluated against that user's current policies, conditions and resource scope. Enabling a key does not grant product access.",
     "keyProgrammaticTitle": "Programmatic access boundary",
@@ -5223,7 +5225,7 @@
       "detailTitle": "Account security report",
       "generate": "Generate report",
       "alreadyGenerated": "This MOCK intent is already sealed; this page will not create a second report.",
-      "download": "Download CSV v1",
+      "download": "Download CSV v2",
       "downloadUnavailable": "MOCK creates no file. CSV still requires real spreadsheet-program gates, and formal download must reauthorize iam.security-report.download.",
       "reviewTitle": "Confirm generation scope",
       "reviewHint": "The server synchronously seals a consistent IAM snapshot from the current account and database. This is not a background job and offers no user, time, or product selector.",
@@ -5238,7 +5240,7 @@
       "expiresAt": "Expires",
       "settingsVersion": "Account security settings version",
       "format": "Format version",
-      "formatV1": "CSV v1 · server canonicalized",
+      "formatValue": "CSV v{version} · server canonicalized",
       "retention": "Retention boundary",
       "retentionValue": "Retained for {days} days; at most {reports} unexpired reports per account",
       "permissions": "Exact permissions",
@@ -5264,7 +5266,7 @@
         "users": {
           "title": "USER",
           "fields": "User ID, login name, state, version, root flag, MFA eligibility, and retained password-session issuance observations. JSON detail may display displayName.",
-          "csv": "CSV v1 omits free-form displayName, labels, and descriptions so arbitrary text never enters the spreadsheet."
+          "csv": "CSV v2 appends credential lineage state while still omitting free-form displayName, labels, and descriptions so arbitrary text never enters the spreadsheet."
         },
         "accessKeys": {
           "title": "ACCESS_KEY",
@@ -5280,7 +5282,7 @@
       },
       "commitmentBoundary": "MOCK does not fabricate document digests, CSV digests, or exact byte counts. Those integrity commitments must come from a LIVE server response.",
       "beforeGenerateTitle": "Pre-generation boundary",
-      "beforeGenerateHint": "POST carries only requestId and fixed formatVersion=1. The route and media type define the API version; no account, user, time, product, or source selector is accepted.",
+      "beforeGenerateHint": "POST carries only requestId and fixed formatVersion=2. The route and media type define the API version; no account, user, time, product, or source selector is accepted.",
       "noRealtimeConclusion": "The report is not a real-time watermark, current permit, risk score, or automatic-disable authorization. Generating it changes no user, key, or policy.",
       "evidenceTitle": "Evidence coverage",
       "evidenceHint": "Coverage states identify which authoritative sources the report read. Not included never means no such activity occurred.",

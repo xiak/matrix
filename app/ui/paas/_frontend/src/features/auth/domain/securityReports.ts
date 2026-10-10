@@ -1,4 +1,5 @@
 import type { AccessKeyAuthorizationObservation, AccessKeyNetworkRestrictions } from "./accessKeyNetwork";
+import type { AccessKeyCredentialState } from "./accessKeys";
 
 export const accountSecurityReportLimits = {
   users: 1_000,
@@ -57,6 +58,8 @@ export type SecurityReportAccessKey = {
   id: string;
   userId: string;
   status: "ENABLED" | "DISABLED";
+  /** Absent only on immutable format-1 reports retained by IAM. */
+  credentialState?: AccessKeyCredentialState;
   networkRestrictions: AccessKeyNetworkRestrictions;
   resourceVersion: number;
   createdAt: string;
@@ -68,7 +71,7 @@ export type AccountSecurityReportMetadata = {
   kind: "AccountSecurityReportMetadata";
   id: string;
   accountId: string;
-  formatVersion: 1;
+  formatVersion: 1 | 2;
   observedAt: string;
   expiresAt: string;
   documentDigest: string;

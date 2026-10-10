@@ -154,7 +154,7 @@ export interface AccountRepository {
   // Security reports have no collection endpoint. The authenticated Session
   // selects the account; accountId only binds returned resources locally.
   securityReports?: {
-    create(credential: string, accountId: string, command: { formatVersion: 1; requestId: string }): Promise<AccountSecurityReportCreation>;
+    create(credential: string, accountId: string, command: { formatVersion: 2; requestId: string }): Promise<AccountSecurityReportCreation>;
     read(credential: string, accountId: string, reportId: string): Promise<AccountSecurityReport>;
     /** Re-reads metadata, then validates the exact CSV bytes before returning them. */
     download(credential: string, accountId: string, reportId: string): Promise<AccountSecurityReportDownload>;

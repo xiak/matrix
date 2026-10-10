@@ -4088,20 +4088,20 @@ describe("CAM-style access workspace", () => {
     if (created.outcome !== "COMPLETED") throw new Error("report not created");
     expect(created.report).toMatchObject({
       mode: "MOCK", accountId: "org-xiak", requestId: "request-one", reportId: "security-report-request-one",
-      formatVersion: 1, observedAt: "2026-09-09T00:00:00.000Z", expiresAt: "2026-09-16T00:00:00.000Z", immutable: true,
+      formatVersion: 2, observedAt: "2026-09-09T00:00:00.000Z", expiresAt: "2026-09-16T00:00:00.000Z", immutable: true,
       accountSecuritySettingsVersion: workspace.settings.accountRuleVersion,
       totals: { users: 3, accessKeys: workspace.keys.length, rows: 4 + workspace.keys.length }
     });
     expect(created.report.users).toHaveLength(3);
     expect(created.report.users.filter((item) => item.root)).toEqual([expect.objectContaining({ id: "admin", lastPasswordLogin: { state: "OBSERVED", observedAt: session.issuedAt } })]);
     expect(created.report.users.filter((item) => !item.root).every((item) => item.lastPasswordLogin.state === "NOT_OBSERVED_IN_RETAINED_IAM_STATE")).toBe(true);
-    expect(created.report.accessKeys).toEqual(workspace.keys.map((key) => expect.objectContaining({ id: key.id, userId: key.ownerId })));
+    expect(created.report.accessKeys).toEqual(workspace.keys.map((key) => expect.objectContaining({ id: key.id, userId: key.ownerId, credentialState: key.credentialState })));
     expect(created.report.coverage.filter((item) => item.state === "COMPLETE").map((item) => item.source)).toEqual(["IAM_ACCOUNT", "IAM_USERS", "IAM_LOGIN_SESSIONS", "IAM_ACCESS_KEYS"]);
     expect(created.report.coverage.filter((item) => item.state === "NOT_INCLUDED")).toHaveLength(5);
-    expect(buildAccountSecurityReportDirectoryPreview(workspace, scene, "2026-09-09T12:00:00Z", session).map((entry) => ({ id: entry.id, status: entry.status }))).toEqual([
-      { id: "security-report-mock-directory-recent", status: "available" },
-      { id: "security-report-mock-directory-expiring", status: "expiringSoon" },
-      { id: "security-report-mock-directory-expired", status: "expired" }
+    expect(buildAccountSecurityReportDirectoryPreview(workspace, scene, "2026-09-09T12:00:00Z", session).map((entry) => ({ id: entry.id, status: entry.status, formatVersion: entry.report.formatVersion }))).toEqual([
+      { id: "security-report-mock-directory-recent", status: "available", formatVersion: 2 },
+      { id: "security-report-mock-directory-expiring", status: "expiringSoon", formatVersion: 1 },
+      { id: "security-report-mock-directory-expired", status: "expired", formatVersion: 2 }
     ]);
     expect(() => createAccountSecurityReportPreview(workspace, { ...scene, accountId: "org-foreign" }, "2026-09-09T00:00:00Z", "request-one")).toThrow("INVALID_IAM_TENANT");
 
@@ -4204,7 +4204,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "报告已到期" })).toBeTruthy();
     expect(screen.getByText(/详情正文和下载入口均不可用/)).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "报告摘要" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "下载 CSV v1" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "下载 CSV v2" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "返回列表" }));
 
     await select(user, "保留状态", "可读取");
@@ -4512,14 +4512,14 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "生成账号安全报告" })).toBeTruthy();
     expect(screen.getByText(/只验证 AccountSecurityReport 的信息架构与操作顺序/)).toBeTruthy();
     expect(screen.getByText("org-xiak")).toBeTruthy();
-    expect(screen.getByText(/POST 只携带 requestId 和固定 formatVersion=1/)).toBeTruthy();
+    expect(screen.getByText(/POST 只携带 requestId 和固定 formatVersion=2/)).toBeTruthy();
     expect(screen.getByText(/整个生成请求失败/)).toBeTruthy();
     expect(screen.getByText("未到期报告已达 20 份")).toBeTruthy();
     expect(screen.getByText("拒绝新建")).toBeTruthy();
     expect(screen.getByText(/不会自动覆盖或删除最旧报告/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /删除.*报告|覆盖.*报告/ })).toBeNull();
     let reportActions = await openPageActionMenu(user);
-    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v1" }).getAttribute("aria-disabled")).toBe("true");
+    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v2" }).getAttribute("aria-disabled")).toBe("true");
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "生成报告" }));
     expect(screen.getByRole("heading", { name: "账号安全报告" })).toBeTruthy();
@@ -4536,10 +4536,11 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("tab", { name: "访问密钥证据 (1)" }));
     const keyEvidence = screen.getByRole("table", { name: "访问密钥证据" });
     expect(within(keyEvidence).getByText(workspace.keys[0]!.id)).toBeTruthy();
+    expect(within(keyEvidence).getByText("恢复后永久失效")).toBeTruthy();
     expect(within(keyEvidence).queryByText(/secret/i)).toBeNull();
     expect((screen.getByRole("button", { name: "生成报告" }) as HTMLButtonElement).disabled).toBe(true);
     reportActions = await openPageActionMenu(user);
-    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v1" }).getAttribute("aria-disabled")).toBe("true");
+    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v2" }).getAttribute("aria-disabled")).toBe("true");
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
   });

@@ -8,6 +8,7 @@ import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { SecurityReportClient } from "../application/AccountAccessProvider";
 import { accountSecurityReportLimits, type AccountSecurityReport, type AccountSecurityReportCreation } from "../domain/securityReports";
 import { WorkspaceCollection, WorkspaceTime } from "./AccessWorkspaceUi";
+import { AccessKeyCredentialStateBadge } from "./AccessCredentials";
 import styles from "./AccountAccessRenderer.module.css";
 
 type Operation = "create" | "read" | "download";
@@ -51,6 +52,7 @@ function saveSecurityReport(bytes: Uint8Array, filename: string) {
 function SecurityReportDocument({ report }: { report: AccountSecurityReport }) {
   const t = useTranslations("IamWorkspace.securityReportPreview");
   const live = useTranslations("IamWorkspace.securityReportLive");
+  const workspace = useTranslations("IamWorkspace");
   const users = report.users.map((user) => ({ ...user, name: user.displayName }));
   const accessKeys = report.accessKeys.map((key) => ({ ...key, name: key.id }));
   return <Tabs.Root defaultValue="overview">
@@ -94,9 +96,9 @@ function SecurityReportDocument({ report }: { report: AccountSecurityReport }) {
     </Tabs.Content>
     <Tabs.Content value="accessKeys">
       <WorkspaceCollection embedded title={t("keyEvidenceTitle")} description={t("keyEvidenceHint")} items={accessKeys}
-        columns={[t("accessKey"), t("owner"), t("status"), t("network"), t("authorizationObservation")]}
-        keywords={(key) => `${key.id} ${key.userId} ${key.status} ${key.networkRestrictions.allowedSourceCidrs.join(" ")} ${key.lastAuthorization?.product ?? ""} ${key.lastAuthorization?.action ?? ""}`}
-        row={(key) => <><td><code>{key.id}</code><small>{t("resourceVersion", { version: key.resourceVersion })} · <WorkspaceTime value={key.createdAt} /></small></td><td><code>{key.userId}</code></td><td><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(`keyStates.${key.status}`)}</Badge></td><td>{key.networkRestrictions.allowedSourceCidrs.length ? key.networkRestrictions.allowedSourceCidrs.map((cidr) => <code key={cidr}>{cidr}</code>) : t("allNetworks")}</td><td><Badge status={key.lastAuthorization ? key.lastAuthorization.allowed ? "success" : "warning" : "neutral"}>{key.lastAuthorization ? t(key.lastAuthorization.allowed ? "allowed" : "denied") : t("observations.NOT_OBSERVED_IN_RETAINED_IAM_STATE")}</Badge>{key.lastAuthorization ? <><small>{key.lastAuthorization.product} · <code>{key.lastAuthorization.action}</code></small><small>{t("sourceIp")} · <code>{key.lastAuthorization.sourceIp}</code></small><small><WorkspaceTime value={key.lastAuthorization.evaluatedAt} /></small></> : null}</td></>}
+        columns={[t("accessKey"), t("owner"), workspace("keyCredentialState"), workspace("keyManagementState"), t("network"), t("authorizationObservation")]}
+        keywords={(key) => `${key.id} ${key.userId} ${key.credentialState ?? "LEGACY_UNRECORDED"} ${key.status} ${key.networkRestrictions.allowedSourceCidrs.join(" ")} ${key.lastAuthorization?.product ?? ""} ${key.lastAuthorization?.action ?? ""}`}
+        row={(key) => <><td><code>{key.id}</code><small>{t("resourceVersion", { version: key.resourceVersion })} · <WorkspaceTime value={key.createdAt} /></small></td><td><code>{key.userId}</code></td><td><AccessKeyCredentialStateBadge value={key.credentialState} /></td><td><Badge status={key.credentialState === "CURRENT" && key.status === "ENABLED" ? "success" : "neutral"}>{t(`keyStates.${key.status}`)}</Badge></td><td>{key.networkRestrictions.allowedSourceCidrs.length ? key.networkRestrictions.allowedSourceCidrs.map((cidr) => <code key={cidr}>{cidr}</code>) : t("allNetworks")}</td><td><Badge status={key.lastAuthorization ? key.lastAuthorization.allowed ? "success" : "warning" : "neutral"}>{key.lastAuthorization ? t(key.lastAuthorization.allowed ? "allowed" : "denied") : t("observations.NOT_OBSERVED_IN_RETAINED_IAM_STATE")}</Badge>{key.lastAuthorization ? <><small>{key.lastAuthorization.product} · <code>{key.lastAuthorization.action}</code></small><small>{t("sourceIp")} · <code>{key.lastAuthorization.sourceIp}</code></small><small><WorkspaceTime value={key.lastAuthorization.evaluatedAt} /></small></> : null}</td></>}
         footerNote={t("keyEvidenceHint")} />
     </Tabs.Content>
   </Tabs.Root>;
@@ -180,7 +182,7 @@ function LiveSecurityReportGeneration({ blockedIntent, client, currentIntent, on
     if (!requestId) return;
     setBusy("create"); setFailure(null); setDownloaded(false); setReport(null);
     try {
-      const created = await client.create({ formatVersion: 1, requestId });
+      const created = await client.create({ formatVersion: 2, requestId });
       onResolved(client, requestId);
       if (!mounted.current) return;
       setCreation(created);
@@ -266,7 +268,7 @@ function LiveSecurityReportGeneration({ blockedIntent, client, currentIntent, on
           <div><dt>{preview("observedAt")}</dt><dd><WorkspaceTime value={report.metadata.observedAt} /></dd></div>
           <div><dt>{preview("expiresAt")}</dt><dd><WorkspaceTime value={report.metadata.expiresAt} /></dd></div>
           <div><dt>{preview("settingsVersion")}</dt><dd>v{report.accountSecuritySettingsVersion}</dd></div>
-          <div><dt>{preview("format")}</dt><dd>{preview("formatV1")}</dd></div>
+          <div><dt>{preview("format")}</dt><dd>{preview("formatValue", { version: report.metadata.formatVersion })}</dd></div>
           <div><dt>{t("csvBytes")}</dt><dd>{report.metadata.csvBytes.toLocaleString()} B</dd></div>
         </dl>{expired ? <Alert status="warning">{t("expiredHint")}</Alert> : null}</Card.Body>
       </Card>

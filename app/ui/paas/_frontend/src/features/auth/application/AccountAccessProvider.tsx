@@ -273,7 +273,7 @@ export type AccessAnalysisClient = {
 export type SecurityReportClient = {
   accountId: string;
   sessionRevision: number;
-  create(command: { formatVersion: 1; requestId: string }): Promise<AccountSecurityReportCreation>;
+  create(command: { formatVersion: 2; requestId: string }): Promise<AccountSecurityReportCreation>;
   read(reportId: string): Promise<AccountSecurityReport>;
   download(reportId: string): Promise<AccountSecurityReportDownload>;
 };

@@ -4569,7 +4569,9 @@
     "keyCredentialFenced": "恢复后永久失效",
     "keyCredentialFencedHint": "原 Secret 已被恢复围栏永久拒绝；管理状态不会改变这一事实。",
     "keyCredentialFencedAlert": "原密钥已因恢复永久失效，只能删除旧密钥并创建新密钥。启用不会清除恢复围栏，也不能作为修复方式。",
+    "keyCredentialLegacyUnrecorded": "旧版报告未记录",
     "keyCreateReplacement": "创建新密钥",
+    "keyCreatePendingReason": "已有访问密钥创建意图尚未完成处置，不能开始新的创建请求。",
     "keyOperationReference": "操作标识",
     "keyProductBoundary": "访问密钥只证明所属用户的程序化身份，不携带独立权限。每次业务请求仍按该用户当时有效的策略、条件和资源范围判定；启用密钥不等于获得产品权限。",
     "keyProgrammaticTitle": "编程访问边界",
@@ -5238,7 +5240,7 @@
       "detailTitle": "账号安全报告",
       "generate": "生成报告",
       "alreadyGenerated": "本次 MOCK 意图已经封存；同一页面不会生成第二份报告。",
-      "download": "下载 CSV v1",
+      "download": "下载 CSV v2",
       "downloadUnavailable": "MOCK 不生成文件；CSV 还需要通过真实表格程序门禁，且正式下载必须重新校验 iam.security-report.download。",
       "reviewTitle": "确认生成范围",
       "reviewHint": "服务端同步封存当前账号同一数据库中的 IAM 一致快照；不是后台任务，也不能选择用户、时间或产品范围。",
@@ -5253,7 +5255,7 @@
       "expiresAt": "到期时间",
       "settingsVersion": "账号安全设置版本",
       "format": "格式版本",
-      "formatV1": "CSV v1 · 服务端规范化",
+      "formatValue": "CSV v{version} · 服务端规范化",
       "retention": "保留边界",
       "retentionValue": "保留 {days} 天；每个账号最多 {reports} 份未过期报告",
       "permissions": "准确权限",
@@ -5279,7 +5281,7 @@
         "users": {
           "title": "USER",
           "fields": "用户 ID、登录名、状态、版本、Root 标记、MFA 资格及保留的密码登录会话发行观测。JSON 详情可以显示 displayName。",
-          "csv": "CSV v1 不导出自由 displayName、标签或描述，避免把任意文本带入表格。"
+          "csv": "CSV v2 追加凭据谱系状态，但仍不导出自由 displayName、标签或描述，避免把任意文本带入表格。"
         },
         "accessKeys": {
           "title": "ACCESS_KEY",
@@ -5295,7 +5297,7 @@
       },
       "commitmentBoundary": "MOCK 不伪造文档摘要、CSV 摘要或精确字节数；这些完整性承诺只能来自 LIVE 服务端响应。",
       "beforeGenerateTitle": "生成前边界",
-      "beforeGenerateHint": "POST 只携带 requestId 和固定 formatVersion=1；API 版本由路由与媒体类型确定，不携带账号、用户、时间、产品或来源选择器。",
+      "beforeGenerateHint": "POST 只携带 requestId 和固定 formatVersion=2；API 版本由路由与媒体类型确定，不携带账号、用户、时间、产品或来源选择器。",
       "noRealtimeConclusion": "报告不是实时水位、当前许可、风险评分或自动停用依据；生成报告不会改变任何用户、密钥或策略。",
       "evidenceTitle": "证据覆盖",
       "evidenceHint": "覆盖声明说明报告读取了哪些权威来源；未纳入不能解释为没有相关活动。",

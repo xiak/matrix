@@ -496,6 +496,8 @@ export type AccountSecurityReportAccessKeyPreview = {
   name: string;
   userId: string;
   status: "ENABLED" | "DISABLED";
+  /** Absent only on a retained format-1 fixture. */
+  credentialState?: AccessWorkspace["keys"][number]["credentialState"];
   resourceVersion: number;
   createdAt: string;
   allowedSourceCidrs: string[];
@@ -514,7 +516,7 @@ export type AccountSecurityReportPreview = {
   accountId: string;
   requestId: string;
   reportId: string;
-  formatVersion: 1;
+  formatVersion: 1 | 2;
   observedAt: string;
   expiresAt: string;
   immutable: true;
@@ -612,6 +614,7 @@ export function createAccountSecurityReportPreview(
     name: key.id,
     userId: key.ownerId,
     status: key.status,
+    credentialState: key.credentialState,
     resourceVersion: key.resourceVersion,
     createdAt: key.createdAt,
     allowedSourceCidrs: [...key.networkRestrictions.allowedSourceCidrs],
@@ -638,7 +641,7 @@ export function createAccountSecurityReportPreview(
       accountId: workspace.accountId,
       requestId,
       reportId: `security-report-${requestId}`,
-      formatVersion: 1,
+      formatVersion: 2,
       observedAt: generated.toISOString(),
       expiresAt,
       immutable: true,
@@ -684,10 +687,24 @@ export function buildAccountSecurityReportDirectoryPreview(
     const observedAt = new Date(reference.getTime() - ageHours * hour).toISOString();
     const created = createAccountSecurityReportPreview(workspace, scene, observedAt, requestId, currentSession);
     if (created.outcome !== "COMPLETED") return [];
-    const remaining = Date.parse(created.report.expiresAt) - reference.getTime();
+    const report = requestId === "mock-directory-expiring" ? {
+      ...created.report,
+      formatVersion: 1 as const,
+      accessKeys: created.report.accessKeys.map((key) => ({
+        id: key.id,
+        name: key.name,
+        userId: key.userId,
+        status: key.status,
+        resourceVersion: key.resourceVersion,
+        createdAt: key.createdAt,
+        allowedSourceCidrs: key.allowedSourceCidrs,
+        authorization: key.authorization
+      }))
+    } : created.report;
+    const remaining = Date.parse(report.expiresAt) - reference.getTime();
     const status: AccountSecurityReportDirectoryStatus = remaining <= 0
       ? "expired"
       : remaining <= 24 * hour ? "expiringSoon" : "available";
-    return [{ id: created.report.reportId, name: created.report.reportId, status, report: created.report }];
+    return [{ id: report.reportId, name: report.reportId, status, report }];
   });
 }

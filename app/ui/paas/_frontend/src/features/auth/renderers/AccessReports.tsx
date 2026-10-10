@@ -11,6 +11,7 @@ import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { accountSecurityReportLimits, accountSecurityReportLimitViolation, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildAccountSecurityReportDirectoryPreview, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisRulePreview, type AccessSecurityCheckState, type AccountSecurityReportDirectoryEntry, type AccountSecurityReportDirectoryStatus, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
 import { AccessAnalysisDispositionWorkflow, AccessAnalysisRulesPanel, AccessAnalysisRuleWorkflow, type AccessAnalysisRuleSavedKind } from "./AccessAnalysisRulePreview";
 import { AccessFindingRecoveryBoundary } from "./AccessRecoveryBoundary";
+import { AccessKeyCredentialStateBadge } from "./AccessCredentials";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -313,6 +314,7 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, initia
   onBack(): void;
 }) {
   const t = useTranslations("IamWorkspace.securityReportPreview");
+  const workspaceT = useTranslations("IamWorkspace");
   const failureTitle = (boundary: typeof accountSecurityReportFailureBoundaries[number]) => boundary === "retainedReportLimit"
     ? t(`failures.${boundary}.title`, { reports: accountSecurityReportLimits.retainedReports })
     : t(`failures.${boundary}.title`);
@@ -361,7 +363,7 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, initia
             <div><dt>{t("expiresAt")}</dt><dd><WorkspaceTime value={report.expiresAt} /></dd></div>
             <div><dt>{t("settingsVersion")}</dt><dd>v{report.accountSecuritySettingsVersion}</dd></div>
           </> : null}
-          <div><dt>{t("format")}</dt><dd>{t("formatV1")}</dd></div>
+          <div><dt>{t("format")}</dt><dd>{t("formatValue", { version: report?.formatVersion ?? 2 })}</dd></div>
           <div><dt>{t("retention")}</dt><dd>{t("retentionValue", { days: accountSecurityReportLimits.retainedDays, reports: accountSecurityReportLimits.retainedReports })}</dd></div>
           <div><dt>{t("permissions")}</dt><dd className={styles.reportPermissions}><code>iam.security-report.create</code><code>iam.security-report.read</code><code>iam.security-report.download</code></dd></div>
         </dl>
@@ -413,9 +415,9 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, initia
       </Tabs.Content>
       <Tabs.Content value="accessKeys">
         <WorkspaceCollection embedded title={t("keyEvidenceTitle")} description={t("keyEvidenceHint")} items={report.accessKeys}
-          columns={[t("accessKey"), t("owner"), t("status"), t("network"), t("authorizationObservation")]}
-          keywords={(key) => `${key.id} ${key.userId} ${key.status} ${key.allowedSourceCidrs.join(" ")} ${key.authorization.product ?? ""} ${key.authorization.action ?? ""}`}
-          row={(key) => <><td><code>{key.id}</code><small>{t("resourceVersion", { version: key.resourceVersion })} · <WorkspaceTime value={key.createdAt} /></small></td><td><code>{key.userId}</code></td><td><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(`keyStates.${key.status}`)}</Badge></td><td>{key.allowedSourceCidrs.length ? key.allowedSourceCidrs.map((cidr) => <code key={cidr}>{cidr}</code>) : t("allNetworks")}</td><td><Badge status={key.authorization.state === "OBSERVED" ? key.authorization.allowed ? "success" : "warning" : "neutral"}>{key.authorization.state === "OBSERVED" ? t(key.authorization.allowed ? "allowed" : "denied") : t(`observations.${key.authorization.state}`)}</Badge>{key.authorization.action ? <small>{key.authorization.product} · <code>{key.authorization.action}</code></small> : null}{key.authorization.sourceIp ? <small>{t("sourceIp")} · <code>{key.authorization.sourceIp}</code></small> : null}{key.authorization.observedAt ? <small><WorkspaceTime value={key.authorization.observedAt} /></small> : null}</td></>}
+          columns={[t("accessKey"), t("owner"), workspaceT("keyCredentialState"), workspaceT("keyManagementState"), t("network"), t("authorizationObservation")]}
+          keywords={(key) => `${key.id} ${key.userId} ${key.credentialState ?? "LEGACY_UNRECORDED"} ${key.status} ${key.allowedSourceCidrs.join(" ")} ${key.authorization.product ?? ""} ${key.authorization.action ?? ""}`}
+          row={(key) => <><td><code>{key.id}</code><small>{t("resourceVersion", { version: key.resourceVersion })} · <WorkspaceTime value={key.createdAt} /></small></td><td><code>{key.userId}</code></td><td><AccessKeyCredentialStateBadge value={key.credentialState} /></td><td><Badge status={key.credentialState === "CURRENT" && key.status === "ENABLED" ? "success" : "neutral"}>{t(`keyStates.${key.status}`)}</Badge></td><td>{key.allowedSourceCidrs.length ? key.allowedSourceCidrs.map((cidr) => <code key={cidr}>{cidr}</code>) : t("allNetworks")}</td><td><Badge status={key.authorization.state === "OBSERVED" ? key.authorization.allowed ? "success" : "warning" : "neutral"}>{key.authorization.state === "OBSERVED" ? t(key.authorization.allowed ? "allowed" : "denied") : t(`observations.${key.authorization.state}`)}</Badge>{key.authorization.action ? <small>{key.authorization.product} · <code>{key.authorization.action}</code></small> : null}{key.authorization.sourceIp ? <small>{t("sourceIp")} · <code>{key.authorization.sourceIp}</code></small> : null}{key.authorization.observedAt ? <small><WorkspaceTime value={key.authorization.observedAt} /></small> : null}</td></>}
           footerNote={t("keyEvidenceHint")} />
       </Tabs.Content>
     </Tabs.Root> : <>

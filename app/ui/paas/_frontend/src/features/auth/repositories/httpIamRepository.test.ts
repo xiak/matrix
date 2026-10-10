@@ -578,7 +578,7 @@ describe("IAM HTTP member role self-service boundary", () => {
 });
 
 const accessKey = { apiVersion, kind: "AccessKey", id: "mak1.alex-primary", accountId: account.id, userId: user.id,
-  status: "ENABLED", networkRestrictions: { allowedSourceCidrs: ["198.51.100.0/24"] }, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+  status: "ENABLED", credentialState: "CURRENT", networkRestrictions: { allowedSourceCidrs: ["198.51.100.0/24"] }, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
 function accessKeyAccess(value = accessKey) {
   return { key: value, usage: { observedAt: timestamp, lastAuthorization: {
     evaluatedAt: timestamp, allowed: false, product: "audit", action: "audit.record.read", sourceIp: "198.51.100.42"
@@ -601,7 +601,7 @@ describe("IAM HTTP access-key boundary", () => {
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/users/${user.id}/access-keys`);
     expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
     expect(result).toMatchObject({ accountId: account.id, userId: user.id, userResourceVersion: 2 });
-    expect(result.items[0]?.key).toMatchObject({ id: accessKey.id, status: "ENABLED", resourceVersion: 1 });
+    expect(result.items[0]?.key).toMatchObject({ id: accessKey.id, status: "ENABLED", credentialState: "CURRENT", resourceVersion: 1 });
   });
 
   it("accepts the one-time secret only on a first applied creation", async () => {
@@ -632,6 +632,8 @@ describe("IAM HTTP access-key boundary", () => {
     const base = accessKeyAccess();
     for (const invalid of [
       { ...base, key: { ...accessKey, networkRestrictions: undefined } },
+      { ...base, key: { ...accessKey, credentialState: undefined } },
+      { ...base, key: { ...accessKey, credentialState: "UNKNOWN" } },
       { ...base, key: { ...accessKey, networkRestrictions: { allowedSourceCidrs: ["198.51.100.1/24"] } } },
       { ...base, key: { ...accessKey, networkRestrictions: { allowedSourceCidrs: ["203.0.113.0/24", "198.51.100.0/24"] } } },
       { ...base, usage: {} },
@@ -689,11 +691,11 @@ const securityReportCoverage = [
   { source: "EXTERNAL_RISK", state: "NOT_INCLUDED" }
 ];
 
-async function securityReportFixture(csv = new TextEncoder().encode("resource_type,resource_id\nACCOUNT,account-acme\n")) {
+async function securityReportFixture(csv = new TextEncoder().encode("resource_type,resource_id\nACCOUNT,account-acme\n"), formatVersion: 1 | 2 = 2) {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", csv));
   const csvContentDigest = `sha256:${Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("")}`;
   const metadata = {
-    apiVersion, kind: "AccountSecurityReportMetadata", id: "report-one", accountId: account.id, formatVersion: 1,
+    apiVersion, kind: "AccountSecurityReportMetadata", id: "report-one", accountId: account.id, formatVersion,
     observedAt: "2026-09-11T08:00:00Z", expiresAt: "2026-09-18T08:00:00Z",
     documentDigest: `sha256:${"a".repeat(64)}`, csvContentDigest,
     userCount: 2, accessKeyCount: 1, rowCount: 4, csvBytes: csv.length
@@ -711,6 +713,7 @@ async function securityReportFixture(csv = new TextEncoder().encode("resource_ty
     }],
     accessKeys: [{
       id: "key-alex", userId: user.id, status: "ENABLED", networkRestrictions: { allowedSourceCidrs: ["10.0.0.0/24"] },
+      ...(formatVersion === 2 ? { credentialState: "CURRENT" } : {}),
       resourceVersion: 2, createdAt: "2026-03-01T00:00:00Z",
       lastAuthorization: { evaluatedAt: "2026-09-11T06:00:00Z", allowed: true, product: "paas", action: "paas.application.read", sourceIp: "10.0.0.8" }
     }]
@@ -724,9 +727,9 @@ describe("IAM HTTP account-security-report boundary", () => {
       status: 201, headers: { "Content-Type": "application/json" }
     }));
     vi.stubGlobal("fetch", fetcher);
-    const creation = await httpAccountRepository.securityReports!.create("bearer", account.id, { formatVersion: 1, requestId: "report-request-one" });
+    const creation = await httpAccountRepository.securityReports!.create("bearer", account.id, { formatVersion: 2, requestId: "report-request-one" });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/account/security-reports");
-    expect(requestBody(fetcher as ReturnType<typeof reply>)).toEqual({ formatVersion: 1, requestId: "report-request-one" });
+    expect(requestBody(fetcher as ReturnType<typeof reply>)).toEqual({ formatVersion: 2, requestId: "report-request-one" });
     expect(creation).toMatchObject({ outcome: "APPLIED", metadata: { id: "report-one", accountId: account.id } });
 
     fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(fixture.report), {
@@ -744,8 +747,31 @@ describe("IAM HTTP account-security-report boundary", () => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ outcome, metadata: fixture.report.metadata }), {
         status, headers: { "Content-Type": "application/json" }
       })));
-      await expect(httpAccountRepository.securityReports!.create("bearer", account.id, { formatVersion: 1, requestId: "report-request-one" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+      await expect(httpAccountRepository.securityReports!.create("bearer", account.id, { formatVersion: 2, requestId: "report-request-one" })).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
+  });
+
+  it("reads retained format-1 evidence as unrecorded while requiring credential state in format 2", async () => {
+    const legacy = await securityReportFixture(undefined, 1);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(legacy.report), {
+      status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }
+    })));
+    const retained = await httpAccountRepository.securityReports!.read("bearer", account.id, "report-one");
+    expect(retained).toMatchObject({ metadata: { formatVersion: 1 }, accessKeys: [{ id: "key-alex" }] });
+    expect(retained.accessKeys[0]?.credentialState).toBeUndefined();
+
+    const current = await securityReportFixture();
+    const missingState = { ...current.report, accessKeys: current.report.accessKeys.map((key) => Object.fromEntries(Object.entries(key).filter(([name]) => name !== "credentialState"))) };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(missingState), {
+      status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }
+    })));
+    await expect(httpAccountRepository.securityReports!.read("bearer", account.id, "report-one")).rejects.toThrow("INVALID_IAM_RESPONSE");
+
+    const legacyWithInventedState = { ...legacy.report, accessKeys: legacy.report.accessKeys.map((key) => ({ ...key, credentialState: "CURRENT" })) };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(legacyWithInventedState), {
+      status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }
+    })));
+    await expect(httpAccountRepository.securityReports!.read("bearer", account.id, "report-one")).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
   it("re-reads current metadata and verifies exact CSV bytes before returning a download", async () => {
