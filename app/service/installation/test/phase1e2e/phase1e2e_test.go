@@ -171,6 +171,76 @@ func TestDelegatedAuthorityRetentionBindsExactAccountGraph(t *testing.T) {
 	}
 }
 
+func TestRoleSessionReceiptRetainsIssuanceAndClosesAuthorityAfterRecovery(t *testing.T) {
+	issued := delegatedAuthorityFixture(t).PreRecoverySession
+	observedAt := issued.IssuedAt.Add(30 * time.Minute)
+	access := func(session iamv1.RoleSession, lifecycle iamv1.RoleSessionLifecycle, available bool, restriction iamv1.CapabilityRestriction) iamv1.RoleSessionAccess {
+		return iamv1.RoleSessionAccess{
+			APIVersion: iamv1.APIVersion,
+			Kind:       "RoleSessionAccess",
+			ObservedAt: observedAt,
+			Item: iamv1.RoleSessionListing{
+				Session: session,
+				Source: iamv1.RoleSessionSourceDisplay{Type: iamv1.PrincipalUser, User: &iamv1.RoleSourceUserDisplay{
+					ID: issued.SourceUserID, LoginName: "root", DisplayName: "Root user",
+				}},
+				Lifecycle: lifecycle,
+				RevokeCapability: iamv1.ActionCapability{
+					Action: iamv1.ActionIAMRoleSessionRevoke,
+					Resource: iamv1.ResourceReference{
+						Kind: iamv1.ResourceRoleSession,
+						ID:   string(issued.ID),
+					},
+					Available: available, RestrictionReason: restriction,
+				},
+			},
+		}
+	}
+	active := access(issued, iamv1.RoleSessionUnrevoked, true, "")
+	if !retainedRoleSessionReceipt(active, issued, false) {
+		t.Fatal("active role session receipt was not retained before recovery")
+	}
+	revokedAt := issued.IssuedAt.Add(10 * time.Minute)
+	revoked := issued
+	revoked.Status, revoked.RevokedAt = iamv1.SessionRevoked, &revokedAt
+	terminal := access(revoked, iamv1.RoleSessionRevoked, false, iamv1.CapabilitySessionNotRevocable)
+	if !retainedRoleSessionReceipt(terminal, issued, true) {
+		t.Fatal("terminal role session receipt lost immutable issuance after recovery")
+	}
+	for name, mutate := range map[string]func(*iamv1.RoleSessionAccess){
+		"active authority": func(value *iamv1.RoleSessionAccess) {
+			*value = active
+		},
+		"different account": func(value *iamv1.RoleSessionAccess) {
+			value.Item.Session.AccountID = "account-other"
+		},
+		"different role": func(value *iamv1.RoleSessionAccess) {
+			value.Item.Session.RoleID = "role-other"
+		},
+		"different source": func(value *iamv1.RoleSessionAccess) {
+			value.Item.Session.SourceUserID = "root-other"
+			value.Item.Source.User.ID = "root-other"
+		},
+		"different issuance": func(value *iamv1.RoleSessionAccess) {
+			value.Item.Session.IssuedAt = value.Item.Session.IssuedAt.Add(time.Microsecond)
+		},
+		"wrong terminal restriction": func(value *iamv1.RoleSessionAccess) {
+			value.Item.RevokeCapability.RestrictionReason = iamv1.CapabilityAuthorityRequired
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := terminal
+			changed.Item.Source.User = &iamv1.RoleSourceUserDisplay{
+				ID: terminal.Item.Source.User.ID, LoginName: terminal.Item.Source.User.LoginName, DisplayName: terminal.Item.Source.User.DisplayName,
+			}
+			mutate(&changed)
+			if retainedRoleSessionReceipt(changed, issued, true) {
+				t.Fatal("changed role session receipt was accepted after recovery")
+			}
+		})
+	}
+}
+
 func TestNotificationContactRetentionRequiresExactVerifiedState(t *testing.T) {
 	verifiedAt := time.Date(2026, time.October, 3, 1, 2, 3, 456000000, time.UTC)
 	want := iamv1.NotificationContact{

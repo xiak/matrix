@@ -969,6 +969,25 @@ func validDelegatedAuthorityRetention(
 		statements[0].Principals[0] == (iamv1.TrustPrincipal{Type: iamv1.PrincipalUser, ID: rootID})
 }
 
+func retainedRoleSessionReceipt(value iamv1.RoleSessionAccess, issued iamv1.RoleSession, authenticationRecovered bool) bool {
+	if iamv1.ValidateRoleSessionAccess(value) != nil || iamv1.ValidateRoleSession(issued) != nil ||
+		issued.Status != iamv1.SessionActive || issued.RevokedAt != nil {
+		return false
+	}
+	observed := value.Item.Session
+	if !authenticationRecovered {
+		return value.Item.Lifecycle == iamv1.RoleSessionUnrevoked && value.Item.RevokeCapability.Available &&
+			equalJSON(observed, issued)
+	}
+	return value.Item.Lifecycle == iamv1.RoleSessionRevoked && !value.Item.RevokeCapability.Available &&
+		value.Item.RevokeCapability.RestrictionReason == iamv1.CapabilitySessionNotRevocable &&
+		observed.Status == iamv1.SessionRevoked && observed.RevokedAt != nil &&
+		observed.APIVersion == issued.APIVersion && observed.Kind == issued.Kind && observed.ID == issued.ID &&
+		observed.AccountID == issued.AccountID && observed.RoleID == issued.RoleID &&
+		observed.SourceUserID == issued.SourceUserID && observed.SourceServicePrincipalID == issued.SourceServicePrincipalID &&
+		observed.IssuedAt.Equal(issued.IssuedAt) && observed.ExpiresAt.Equal(issued.ExpiresAt)
+}
+
 func (value *gate) verifySignedAccessKeyEdge(
 	ctx context.Context,
 	tenant *tenantRetention,
@@ -1420,8 +1439,11 @@ func (value *gate) assertTenantRetention(
 		}
 		logoutErr := value.edge.logout(ctx, childBearer)
 		clear(childBearer)
-		if requestErr != nil || logoutErr != nil {
-			return fail("tenant-delegated-authority-retention")
+		if requestErr != nil {
+			return requestErr
+		}
+		if logoutErr != nil {
+			return fail("tenant-delegated-member-logout")
 		}
 		other := value.retainedIAM.Tenants[1-index]
 		for _, path := range []string{"/api/paas/v1/operations/" + string(other.Operations[0].ID), "/api/managed-services/v1/quota-entitlements/" + other.Quota.ID} {
@@ -1492,7 +1514,7 @@ func (value *gate) assertDelegatedAuthorityRetention(
 	}
 	var receipt iamv1.RoleSessionAccess
 	if _, err := value.edge.get(ctx, "/api/iam/v1/roles/"+string(want.Role.ID)+"/sessions/"+string(want.PreRecoverySession.ID), primary, &receipt); err != nil ||
-		iamv1.ValidateRoleSessionAccess(receipt) != nil || !equalJSON(receipt.Item.Session, want.PreRecoverySession) {
+		!retainedRoleSessionReceipt(receipt, want.PreRecoverySession, authenticationRecovered) {
 		return fail("delegated-role-session-receipt")
 	}
 	if authenticationRecovered {
