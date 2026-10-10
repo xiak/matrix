@@ -500,6 +500,9 @@ func TestRetainedAccessKeyBindsCurrentCredentialAndCustodian(t *testing.T) {
 	if !validAccessKeyRetention(fixture, "account-retained", "member-user", "root-user") {
 		t.Fatal("valid retained access key was rejected")
 	}
+	if !sameAccessKeyMetadata(fixture.Key, fixture.Key) {
+		t.Fatal("identical retained access key metadata differed")
+	}
 	secretValue, err := iamv1.NewSecret(string(secret))
 	if err != nil {
 		t.Fatal(err)
@@ -509,10 +512,12 @@ func TestRetainedAccessKeyBindsCurrentCredentialAndCustodian(t *testing.T) {
 		t.Fatalf("current retained key could not sign: %v", err)
 	}
 	for name, mutate := range map[string]func(*accessKeyRetention){
-		"foreign account":   func(value *accessKeyRetention) { value.Key.AccountID = "account-other" },
-		"foreign user":      func(value *accessKeyRetention) { value.Key.UserID = "member-other" },
-		"disabled key":      func(value *accessKeyRetention) { value.Key.Status = iamv1.AccessKeyDisabled },
-		"different network": func(value *accessKeyRetention) { value.Key.NetworkRestrictions.AllowedSourceCIDRs = []string{"192.0.2.0/24"} },
+		"foreign account": func(value *accessKeyRetention) { value.Key.AccountID = "account-other" },
+		"foreign user":    func(value *accessKeyRetention) { value.Key.UserID = "member-other" },
+		"disabled key":    func(value *accessKeyRetention) { value.Key.Status = iamv1.AccessKeyDisabled },
+		"different network": func(value *accessKeyRetention) {
+			value.Key.NetworkRestrictions.AllowedSourceCIDRs = []string{"192.0.2.0/24"}
+		},
 		"missing secret":    func(value *accessKeyRetention) { value.Secret = nil },
 		"foreign custodian": func(value *accessKeyRetention) { value.CustodianGrant.Target.ID = "root-other" },
 		"revoked custodian": func(value *accessKeyRetention) {
@@ -526,6 +531,22 @@ func TestRetainedAccessKeyBindsCurrentCredentialAndCustodian(t *testing.T) {
 			mutate(&changed)
 			if validAccessKeyRetention(changed, "account-retained", "member-user", "root-user") {
 				t.Fatal("changed retained access key was accepted")
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*iamv1.AccessKey){
+		"different id":      func(value *iamv1.AccessKey) { value.ID = "key-other" },
+		"different status":  func(value *iamv1.AccessKey) { value.Status = iamv1.AccessKeyDisabled },
+		"different network": func(value *iamv1.AccessKey) { value.NetworkRestrictions.AllowedSourceCIDRs = []string{"192.0.2.0/24"} },
+		"different version": func(value *iamv1.AccessKey) { value.ResourceVersion++ },
+		"different update":  func(value *iamv1.AccessKey) { value.UpdatedAt = value.UpdatedAt.Add(time.Microsecond) },
+	} {
+		t.Run("metadata "+name, func(t *testing.T) {
+			changed := fixture.Key
+			changed.NetworkRestrictions.AllowedSourceCIDRs = append([]string(nil), fixture.Key.NetworkRestrictions.AllowedSourceCIDRs...)
+			mutate(&changed)
+			if sameAccessKeyMetadata(changed, fixture.Key) {
+				t.Fatal("changed retained access key metadata was accepted")
 			}
 		})
 	}
@@ -546,8 +567,8 @@ func TestRetainedAccessKeyDirectoryAllowsSameTenantGrowthOnly(t *testing.T) {
 		t.Fatal("valid same-tenant directory growth was rejected")
 	}
 	for name, mutate := range map[string]func(*paasv1.ApplicationList){
-		"target missing": func(value *paasv1.ApplicationList) { value.Items = value.Items[:1] },
-		"foreign tenant": func(value *paasv1.ApplicationList) { value.Items[1].Metadata.Scope.TenantID = "account-other" },
+		"target missing":  func(value *paasv1.ApplicationList) { value.Items = value.Items[:1] },
+		"foreign tenant":  func(value *paasv1.ApplicationList) { value.Items[1].Metadata.Scope.TenantID = "account-other" },
 		"incomplete page": func(value *paasv1.ApplicationList) { value.NextAfter = "pc1.more" },
 	} {
 		t.Run(name, func(t *testing.T) {

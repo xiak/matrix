@@ -378,6 +378,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertTenantRetention(ctx, true, true, "recovery"); err != nil {
 		return err
 	}
+	emit("backup-recovery-access-key-fenced")
 	if err := value.assertPostUpgradeTenantResource(ctx, postUpgrade, false); err != nil {
 		return err
 	}
@@ -1179,6 +1180,63 @@ func (value *gate) assertRetainedAccessKey(ctx context.Context, tenant *tenantRe
 	return nil
 }
 
+func (value *gate) assertRecoveredAccessKeyFenced(
+	ctx context.Context,
+	tenant *tenantRetention,
+	installationID string,
+	bearer []byte,
+) error {
+	// Supported backup recovery retains the non-secret object so an
+	// administrator can audit and retire it, but the authentication recovery
+	// barrier permanently fences every pre-recovery AccessKey secret.
+	if tenant == nil || tenant.AccessKey == nil || !validAccessKeyRetention(
+		*tenant.AccessKey, tenant.Account.ID, tenant.Child.ID, tenant.Account.RootIdentity.PrincipalID,
+	) {
+		return fail("recovered-access-key-fixture")
+	}
+	path := "/api/iam/v1/users/" + string(tenant.Child.ID) + "/access-keys"
+	var directory iamv1.AccessKeyList
+	if _, err := value.edge.get(ctx, path, bearer, &directory); err != nil ||
+		iamv1.ValidateAccessKeyList(directory) != nil || directory.AccountID != tenant.Account.ID ||
+		directory.UserID != tenant.Child.ID || len(directory.Items) != 1 ||
+		!sameAccessKeyMetadata(directory.Items[0].Key, tenant.AccessKey.Key) {
+		return fail("recovered-access-key-metadata")
+	}
+	secret, err := iamv1.NewSecret(string(tenant.AccessKey.Secret))
+	if err != nil {
+		return fail("recovered-access-key-secret")
+	}
+	authorization, err := signAccessKeyMaterial(tenant.AccessKey.Key, secret, installationID,
+		value.config.edge, "/api/paas/v1/applications")
+	if err != nil {
+		return fail("recovered-access-key-signature")
+	}
+	authorizationBytes := authorization.CopyBytes()
+	value.edge.addForbidden(authorizationBytes)
+	response, requestErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(authorizationBytes)), http.StatusUnauthorized)
+	clear(authorizationBytes)
+	clear(response.body)
+	if requestErr != nil {
+		return fail("recovered-access-key-revived")
+	}
+	var after iamv1.AccessKeyList
+	if _, err := value.edge.get(ctx, path, bearer, &after); err != nil ||
+		iamv1.ValidateAccessKeyList(after) != nil || len(after.Items) != 1 ||
+		!sameAccessKeyMetadata(after.Items[0].Key, tenant.AccessKey.Key) {
+		return fail("recovered-access-key-mutated")
+	}
+	return nil
+}
+
+func sameAccessKeyMetadata(left, right iamv1.AccessKey) bool {
+	return left.APIVersion == right.APIVersion && left.Kind == right.Kind && left.ID == right.ID &&
+		left.AccountID == right.AccountID && left.UserID == right.UserID && left.Status == right.Status &&
+		slices.Equal(left.NetworkRestrictions.AllowedSourceCIDRs, right.NetworkRestrictions.AllowedSourceCIDRs) &&
+		left.ResourceVersion == right.ResourceVersion && left.CreatedAt.Equal(right.CreatedAt) &&
+		left.UpdatedAt.Equal(right.UpdatedAt)
+}
+
 func validRetainedApplicationDirectory(applications paasv1.ApplicationList, tenantID paasv1.TenantID) bool {
 	if paasv1.ValidateApplicationList(applications) != nil || applications.NextAfter != "" {
 		return false
@@ -1234,7 +1292,7 @@ func (value *gate) retireRetainedAccessKey(ctx context.Context) error {
 	authorizationBytes := authorization.CopyBytes()
 	value.edge.addForbidden(authorizationBytes)
 	response, requestErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
-		forgedEdgeHeaders(string(authorizationBytes)), http.StatusForbidden)
+		forgedEdgeHeaders(string(authorizationBytes)), http.StatusUnauthorized)
 	clear(authorizationBytes)
 	clear(response.body)
 	if requestErr != nil {
@@ -1581,7 +1639,13 @@ func (value *gate) assertTenantRetention(
 			return err
 		}
 		if tenant.AccessKey != nil {
-			if err := value.assertRetainedAccessKey(ctx, tenant, value.retainedIAM.InstallationID); err != nil {
+			var err error
+			if authenticationRecovered {
+				err = value.assertRecoveredAccessKeyFenced(ctx, tenant, value.retainedIAM.InstallationID, bearer)
+			} else {
+				err = value.assertRetainedAccessKey(ctx, tenant, value.retainedIAM.InstallationID)
+			}
+			if err != nil {
 				return err
 			}
 		}

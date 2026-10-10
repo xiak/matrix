@@ -96,11 +96,12 @@ type tenantRetention struct {
 }
 
 // accessKeyRetention carries the one program credential that the signed
-// lifecycle gate deliberately keeps active through release replacement,
-// protected backup recovery and an outer-engine restart. Secret is stored
-// only in the owner-only fixture above, never in a release or installation
-// backup. CustodianGrant lets the final gate retire the key without granting
-// a broader built-in administrator policy.
+// lifecycle gate keeps usable through release replacement. Protected backup
+// recovery must retain its non-secret metadata while permanently fencing the
+// old secret; the outer-engine restart proves that fence before the final
+// cleanup. Secret is stored only in the owner-only fixture above, never in a
+// release or installation backup. CustodianGrant lets the final gate retire
+// the key without granting a broader built-in administrator policy.
 type accessKeyRetention struct {
 	Key            iamv1.AccessKey
 	Secret         []byte
