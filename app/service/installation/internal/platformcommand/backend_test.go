@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -521,6 +522,20 @@ func TestPublishedScalarProfileStillAllowsItsOwnReleasePair(t *testing.T) {
 	result, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRollback, Root: root})
 	if err != nil || result.ReleaseID != fixtures[0].Manifest.Release.ID {
 		t.Fatalf("rollback published profile pair: %#v / %v", result, err)
+	}
+}
+
+func TestPublishedScalarFixtureKeepsItsAuthenticatedInventory(t *testing.T) {
+	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 1, legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixtures[0].Manifest.APIVersion != release.LegacyManifestAPIVersion ||
+		slices.ContainsFunc(fixtures[0].Manifest.Files, func(file release.File) bool {
+			return file.Path == release.IAMProductAuthorizationPath
+		}) {
+		t.Fatal("published scalar fixture acquired a current-only product authorization payload")
 	}
 }
 

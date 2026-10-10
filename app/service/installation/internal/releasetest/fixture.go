@@ -51,6 +51,13 @@ func WriteSequence(base string, count int, profiles ...release.DatabaseProfile) 
 			manifest.Database = profiles[index]
 			if manifest.Database.SchemaVersion != 0 {
 				manifest.APIVersion = release.LegacyManifestAPIVersion
+				// The published v1 envelope predates the signed IAM product
+				// catalog. A compatibility fixture must preserve that exact
+				// authenticated inventory instead of adding a payload that the
+				// published executable correctly rejects as unknown.
+				manifest.Files = slices.DeleteFunc(manifest.Files, func(file release.File) bool {
+					return file.Path == release.IAMProductAuthorizationPath
+				})
 			}
 		}
 		commit := strings.Repeat(string("abcdef12"[index]), 40)
