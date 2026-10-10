@@ -92,6 +92,19 @@ type tenantRetention struct {
 	Operations                 []paasv1.Operation
 	Quota                      managedservicev1.QuotaEntitlement
 	AuditHashes                map[string]struct{}
+	AccessKey                  *accessKeyRetention
+}
+
+// accessKeyRetention carries the one program credential that the signed
+// lifecycle gate deliberately keeps active through release replacement,
+// protected backup recovery and an outer-engine restart. Secret is stored
+// only in the owner-only fixture above, never in a release or installation
+// backup. CustodianGrant lets the final gate retire the key without granting
+// a broader built-in administrator policy.
+type accessKeyRetention struct {
+	Key            iamv1.AccessKey
+	Secret         []byte
+	CustodianGrant iamv1.PolicyAttachment
 }
 
 // delegatedAuthorityRetention is the minimum durable Group and Role graph

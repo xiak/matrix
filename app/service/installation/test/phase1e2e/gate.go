@@ -632,6 +632,10 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if err := value.assertTenantRetention(ctx, true, true, "restart"); err != nil {
 		return err
 	}
+	if err := value.retireRetainedAccessKey(ctx); err != nil {
+		return err
+	}
+	emit("restart-retained-access-key-retired")
 	if err := value.assertMFARetention(ctx, true); err != nil {
 		return err
 	}
@@ -775,9 +779,11 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		}
 		clear(quota.body)
 		if index == 0 {
-			if err := value.verifySignedAccessKeyEdge(ctx, &tenant, installationID); err != nil {
+			retainedAccessKey, err := value.verifySignedAccessKeyEdge(ctx, &tenant, installationID)
+			if err != nil {
 				return err
 			}
+			tenant.AccessKey = &retainedAccessKey
 			emit("signed-access-key-through-trusted-apisix")
 		}
 		if index == 0 {
@@ -801,6 +807,9 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 				return fail("tenant-session-revoke")
 			}
 			if err := value.prepareDelegatedAuthorityRetention(ctx, &tenant); err != nil {
+				return err
+			}
+			if err := value.assertRetainedAccessKey(ctx, &tenant, installationID); err != nil {
 				return err
 			}
 		} else {
@@ -992,13 +1001,13 @@ func (value *gate) verifySignedAccessKeyEdge(
 	ctx context.Context,
 	tenant *tenantRetention,
 	installationID string,
-) error {
+) (accessKeyRetention, error) {
 	if tenant == nil {
-		return fail("signed-access-key-fixture")
+		return accessKeyRetention{}, fail("signed-access-key-fixture")
 	}
 	sourceCIDR, err := installedEdgeSourceCIDR(ctx, installationID)
 	if err != nil {
-		return fail("signed-access-key-edge-source")
+		return accessKeyRetention{}, fail("signed-access-key-edge-source")
 	}
 	rule := func(sid string, actions []iamv1.Action, kind iamv1.ResourceKind) iamv1.PolicyStatement {
 		return iamv1.PolicyStatement{SID: sid, Effect: iamv1.PolicyAllow, Actions: actions,
@@ -1014,7 +1023,7 @@ func (value *gate) verifySignedAccessKeyEdge(
 					iamv1.ActionIAMAccessKeySetNetworkRestrictions, iamv1.ActionIAMAccessKeyDelete}, iamv1.ResourceAccessKey),
 			}},
 	}, &policy, http.StatusCreated); err != nil || iamv1.ValidatePolicyDetail(policy) != nil {
-		return fail("signed-access-key-custodian-policy")
+		return accessKeyRetention{}, fail("signed-access-key-custodian-policy")
 	}
 	var grant iamv1.PolicyAttachment
 	if err := value.edge.mutateIAM(ctx, "/policy-attachments", tenant.OldPrimaryCredential,
@@ -1023,7 +1032,7 @@ func (value *gate) verifySignedAccessKeyEdge(
 			PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion,
 			RequestID: "phase1-access-key-custodian-grant",
 		}, &grant, http.StatusOK); err != nil || iamv1.ValidatePolicyAttachment(grant) != nil {
-		return fail("signed-access-key-custodian-grant")
+		return accessKeyRetention{}, fail("signed-access-key-custodian-grant")
 	}
 
 	path := "/users/" + string(tenant.Child.ID) + "/access-keys"
@@ -1032,7 +1041,7 @@ func (value *gate) verifySignedAccessKeyEdge(
 		iamv1.ValidateAccessKeyList(directory) != nil || directory.AccountID != tenant.Account.ID ||
 		directory.UserID != tenant.Child.ID || len(directory.Items) != 0 ||
 		len(directory.Capabilities) != 1 || !directory.Capabilities[0].Available {
-		return fail("signed-access-key-directory")
+		return accessKeyRetention{}, fail("signed-access-key-directory")
 	}
 	var created iamv1.CreateAccessKeyResponse
 	if err := value.edge.mutateIAM(ctx, path, tenant.OldPrimaryCredential, iamv1.CreateAccessKeyRequest{
@@ -1041,7 +1050,7 @@ func (value *gate) verifySignedAccessKeyEdge(
 		RequestID:           "phase1-access-key-create",
 	}, &created, http.StatusCreated); err != nil || iamv1.ValidateCreateAccessKeyResponse(created) != nil ||
 		created.Key.AccountID != tenant.Account.ID || created.Key.UserID != tenant.Child.ID {
-		return fail("signed-access-key-create")
+		return accessKeyRetention{}, fail("signed-access-key-create")
 	}
 	secret := created.Secret.CopyBytes()
 	defer clear(secret)
@@ -1050,7 +1059,7 @@ func (value *gate) verifySignedAccessKeyEdge(
 	wrong, err := signAccessKeyRequest(created, installationID, value.config.edge,
 		"/api/paas/v1/applications/not-the-requested-directory")
 	if err != nil {
-		return fail("signed-access-key-wrong-target-signature")
+		return accessKeyRetention{}, fail("signed-access-key-wrong-target-signature")
 	}
 	wrongBytes := wrong.CopyBytes()
 	value.edge.addForbidden(wrongBytes)
@@ -1059,12 +1068,12 @@ func (value *gate) verifySignedAccessKeyEdge(
 	clear(wrongBytes)
 	clear(wrongResponse.body)
 	if wrongErr != nil {
-		return fail("signed-access-key-target-binding")
+		return accessKeyRetention{}, fail("signed-access-key-target-binding")
 	}
 
 	authorization, err := signAccessKeyRequest(created, installationID, value.config.edge, "/api/paas/v1/applications")
 	if err != nil {
-		return fail("signed-access-key-signature")
+		return accessKeyRetention{}, fail("signed-access-key-signature")
 	}
 	authorizationBytes := authorization.CopyBytes()
 	value.edge.addForbidden(authorizationBytes)
@@ -1073,14 +1082,14 @@ func (value *gate) verifySignedAccessKeyEdge(
 	clear(authorizationBytes)
 	if requestErr != nil {
 		clear(response.body)
-		return fail("signed-access-key-edge-request")
+		return accessKeyRetention{}, fail("signed-access-key-edge-request")
 	}
 	var applications paasv1.ApplicationList
 	if decodeOne(response.body, &applications) != nil || paasv1.ValidateApplicationList(applications) != nil ||
 		len(applications.Items) != 1 || applications.Items[0].Metadata.ID != tenantApplicationID ||
 		applications.Items[0].Metadata.Scope.TenantID != paasv1.TenantID(tenant.Account.ID) || applications.NextAfter != "" {
 		clear(response.body)
-		return fail("signed-access-key-tenant-directory")
+		return accessKeyRetention{}, fail("signed-access-key-tenant-directory")
 	}
 	clear(response.body)
 
@@ -1090,11 +1099,11 @@ func (value *gate) verifySignedAccessKeyEdge(
 			Status: iamv1.AccessKeyDisabled, RequestID: "phase1-access-key-disable"},
 		&disabled, http.StatusOK); err != nil || iamv1.ValidateSetAccessKeyStatusResponse(disabled) != nil ||
 		disabled.Key.Status != iamv1.AccessKeyDisabled {
-		return fail("signed-access-key-disable")
+		return accessKeyRetention{}, fail("signed-access-key-disable")
 	}
 	disabledAuthorization, err := signAccessKeyRequest(created, installationID, value.config.edge, "/api/paas/v1/applications")
 	if err != nil {
-		return fail("signed-access-key-disabled-signature")
+		return accessKeyRetention{}, fail("signed-access-key-disabled-signature")
 	}
 	disabledBytes := disabledAuthorization.CopyBytes()
 	value.edge.addForbidden(disabledBytes)
@@ -1103,20 +1112,122 @@ func (value *gate) verifySignedAccessKeyEdge(
 	clear(disabledBytes)
 	clear(disabledResponse.body)
 	if disabledErr != nil {
-		return fail("signed-access-key-disabled-admitted")
+		return accessKeyRetention{}, fail("signed-access-key-disabled-admitted")
 	}
 
-	var deletion iamv1.DeleteAccessKeyResponse
-	if err := value.edge.mutateIAM(ctx, path+"/"+string(created.Key.ID)+":delete", tenant.OldPrimaryCredential,
-		iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: disabled.Key.ResourceVersion, RequestID: "phase1-access-key-delete"},
-		&deletion, http.StatusOK); err != nil || iamv1.ValidateDeleteAccessKeyResponse(deletion) != nil ||
-		deletion.Deletion.ID != created.Key.ID || deletion.Deletion.AccountID != tenant.Account.ID {
-		return fail("signed-access-key-delete")
+	var enabled iamv1.SetAccessKeyStatusResponse
+	if err := value.edge.mutateIAM(ctx, path+"/"+string(created.Key.ID)+":set-status", tenant.OldPrimaryCredential,
+		iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: disabled.Key.ResourceVersion,
+			Status: iamv1.AccessKeyEnabled, RequestID: "phase1-access-key-enable"},
+		&enabled, http.StatusOK); err != nil || iamv1.ValidateSetAccessKeyStatusResponse(enabled) != nil ||
+		enabled.Key.Status != iamv1.AccessKeyEnabled || enabled.Key.ID != created.Key.ID {
+		return accessKeyRetention{}, fail("signed-access-key-enable")
 	}
-	if err := value.edge.mutateIAM(ctx, "/policy-attachments/"+string(grant.ID)+":revoke", tenant.OldPrimaryCredential,
-		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: grant.ResourceVersion, RequestID: "phase1-access-key-custodian-revoke"},
-		nil, http.StatusOK); err != nil {
-		return fail("signed-access-key-custodian-revoke")
+	return accessKeyRetention{
+		Key: enabled.Key, Secret: append([]byte(nil), secret...), CustodianGrant: grant,
+	}, nil
+}
+
+func (value *gate) assertRetainedAccessKey(ctx context.Context, tenant *tenantRetention, installationID string) error {
+	if tenant == nil || tenant.AccessKey == nil || !validAccessKeyRetention(
+		*tenant.AccessKey, tenant.Account.ID, tenant.Child.ID, tenant.Account.RootIdentity.PrincipalID,
+	) {
+		return fail("retained-access-key-fixture")
+	}
+	secret, err := iamv1.NewSecret(string(tenant.AccessKey.Secret))
+	if err != nil {
+		return fail("retained-access-key-secret")
+	}
+	authorization, err := signAccessKeyMaterial(tenant.AccessKey.Key, secret, installationID, value.config.edge,
+		"/api/paas/v1/applications")
+	if err != nil {
+		return fail("retained-access-key-signature")
+	}
+	authorizationBytes := authorization.CopyBytes()
+	value.edge.addForbidden(authorizationBytes)
+	response, requestErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(authorizationBytes)), http.StatusOK)
+	clear(authorizationBytes)
+	if requestErr != nil {
+		clear(response.body)
+		return fail("retained-access-key-edge-request")
+	}
+	var applications paasv1.ApplicationList
+	if decodeOne(response.body, &applications) != nil || paasv1.ValidateApplicationList(applications) != nil ||
+		len(applications.Items) != 1 || applications.Items[0].Metadata.ID != tenantApplicationID ||
+		applications.Items[0].Metadata.Scope.TenantID != paasv1.TenantID(tenant.Account.ID) || applications.NextAfter != "" {
+		clear(response.body)
+		return fail("retained-access-key-tenant-directory")
+	}
+	clear(response.body)
+	return nil
+}
+
+func (value *gate) retireRetainedAccessKey(ctx context.Context) error {
+	if value.retainedIAM == nil || len(value.retainedIAM.Tenants) != 2 {
+		return fail("retained-access-key-retirement-fixture")
+	}
+	tenant := &value.retainedIAM.Tenants[0]
+	if tenant.AccessKey == nil || !validAccessKeyRetention(
+		*tenant.AccessKey, tenant.Account.ID, tenant.Child.ID, tenant.Account.RootIdentity.PrincipalID,
+	) {
+		return fail("retained-access-key-retirement-fixture")
+	}
+	login, err := value.edge.loginNamed(ctx, tenant.Account.RootIdentity.LoginName, tenant.PrimaryPassword,
+		tenant.Account.ID, tenant.Account.RootIdentity.PrincipalID, "phase1-retained-access-key-retirement")
+	if err != nil || login.MustChangePassword {
+		return fail("retained-access-key-retirement-login")
+	}
+	bearer := login.Credential.CopyBytes()
+	defer clear(bearer)
+	value.edge.addForbidden(bearer)
+	defer func() { _ = value.edge.logout(ctx, bearer) }()
+
+	path := "/users/" + string(tenant.Child.ID) + "/access-keys/" + string(tenant.AccessKey.Key.ID)
+	var disabled iamv1.SetAccessKeyStatusResponse
+	if err := value.edge.mutateIAM(ctx, path+":set-status", bearer,
+		iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: tenant.AccessKey.Key.ResourceVersion,
+			Status: iamv1.AccessKeyDisabled, RequestID: "phase1-retained-access-key-disable"},
+		&disabled, http.StatusOK); err != nil || iamv1.ValidateSetAccessKeyStatusResponse(disabled) != nil ||
+		disabled.Key.ID != tenant.AccessKey.Key.ID || disabled.Key.Status != iamv1.AccessKeyDisabled {
+		return fail("retained-access-key-retirement-disable")
+	}
+	secret, err := iamv1.NewSecret(string(tenant.AccessKey.Secret))
+	if err != nil {
+		return fail("retained-access-key-retirement-secret")
+	}
+	authorization, err := signAccessKeyMaterial(tenant.AccessKey.Key, secret, value.retainedIAM.InstallationID,
+		value.config.edge, "/api/paas/v1/applications")
+	if err != nil {
+		return fail("retained-access-key-retirement-signature")
+	}
+	authorizationBytes := authorization.CopyBytes()
+	value.edge.addForbidden(authorizationBytes)
+	response, requestErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(authorizationBytes)), http.StatusForbidden)
+	clear(authorizationBytes)
+	clear(response.body)
+	if requestErr != nil {
+		return fail("retained-access-key-retirement-admitted")
+	}
+	var deletion iamv1.DeleteAccessKeyResponse
+	if err := value.edge.mutateIAM(ctx, path+":delete", bearer,
+		iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: disabled.Key.ResourceVersion,
+			RequestID: "phase1-retained-access-key-delete"}, &deletion, http.StatusOK); err != nil ||
+		iamv1.ValidateDeleteAccessKeyResponse(deletion) != nil || deletion.Deletion.ID != tenant.AccessKey.Key.ID ||
+		deletion.Deletion.AccountID != tenant.Account.ID {
+		return fail("retained-access-key-retirement-delete")
+	}
+	var directory iamv1.AccessKeyList
+	if _, err := value.edge.get(ctx, "/api/iam/v1/users/"+string(tenant.Child.ID)+"/access-keys", bearer, &directory); err != nil ||
+		iamv1.ValidateAccessKeyList(directory) != nil || len(directory.Items) != 0 {
+		return fail("retained-access-key-retirement-directory")
+	}
+	grant := tenant.AccessKey.CustodianGrant
+	if err := value.edge.mutateIAM(ctx, "/policy-attachments/"+string(grant.ID)+":revoke", bearer,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: grant.ResourceVersion,
+			RequestID: "phase1-access-key-custodian-revoke"}, nil, http.StatusOK); err != nil {
+		return fail("retained-access-key-custodian-revoke")
 	}
 	return nil
 }
@@ -1153,6 +1264,17 @@ func signAccessKeyRequest(
 	if iamv1.ValidateCreateAccessKeyResponse(created) != nil {
 		return iamv1.Secret{}, errors.New("access key creation result is invalid")
 	}
+	return signAccessKeyMaterial(created.Key, created.Secret, installationID, origin, target)
+}
+
+func signAccessKeyMaterial(
+	key iamv1.AccessKey,
+	secretValue iamv1.Secret,
+	installationID, origin, target string,
+) (iamv1.Secret, error) {
+	if iamv1.ValidateAccessKey(key) != nil || key.Status != iamv1.AccessKeyEnabled || !secretValue.Present() {
+		return iamv1.Secret{}, errors.New("access key material is invalid")
+	}
 	parsed, err := url.Parse(origin)
 	if err != nil || parsed.Scheme != "http" || parsed.Host == "" || origin != parsed.Scheme+"://"+parsed.Host {
 		return iamv1.Secret{}, errors.New("signed request origin is invalid")
@@ -1173,7 +1295,7 @@ func signAccessKeyRequest(
 	}
 	empty := sha256.Sum256(nil)
 	parameters := iamv1.AccessKeySignatureParameters{
-		AccessKeyID: created.Key.ID, InstallationID: installationID, Audience: iamv1.ProductPaaS,
+		AccessKeyID: key.ID, InstallationID: installationID, Audience: iamv1.ProductPaaS,
 		SignedAt: time.Now().UTC().Unix(), Nonce: nonce,
 	}
 	httpRequest := iamv1.AccessKeyHTTPRequest{
@@ -1186,7 +1308,7 @@ func signAccessKeyRequest(
 		return iamv1.Secret{}, errors.New("signed request canonicalization failed")
 	}
 	defer clear(canonical)
-	secret := created.Secret.CopyBytes()
+	secret := secretValue.CopyBytes()
 	defer clear(secret)
 	const prefix = "mak1."
 	if !bytes.HasPrefix(secret, []byte(prefix)) {
@@ -1276,6 +1398,9 @@ func (value *gate) readTenantRetention(installationID string) error {
 		if tenant.DelegatedAuthority != nil {
 			value.edge.addForbidden(tenant.DelegatedAuthority.PreRecoveryCredential)
 		}
+		if tenant.AccessKey != nil {
+			value.edge.addForbidden(tenant.AccessKey.Secret)
+		}
 	}
 	return nil
 }
@@ -1285,8 +1410,26 @@ func validDelegatedAuthorityFixtures(tenants []tenantRetention) bool {
 		return false
 	}
 	first := tenants[0]
-	return validDelegatedAuthorityRetention(*first.DelegatedAuthority, first.Account.ID, first.Child.ID,
-		first.Account.RootIdentity.PrincipalID)
+	return first.AccessKey != nil && tenants[1].AccessKey == nil &&
+		validDelegatedAuthorityRetention(*first.DelegatedAuthority, first.Account.ID, first.Child.ID,
+			first.Account.RootIdentity.PrincipalID) &&
+		validAccessKeyRetention(*first.AccessKey, first.Account.ID, first.Child.ID,
+			first.Account.RootIdentity.PrincipalID)
+}
+
+func validAccessKeyRetention(
+	retained accessKeyRetention,
+	account iamv1.AccountID,
+	user, custodian iamv1.PrincipalID,
+) bool {
+	secret, err := iamv1.NewSecret(string(retained.Secret))
+	grant := retained.CustodianGrant
+	return err == nil && secret.Present() && iamv1.ValidateAccessKey(retained.Key) == nil &&
+		retained.Key.AccountID == account && retained.Key.UserID == user &&
+		retained.Key.Status == iamv1.AccessKeyEnabled &&
+		iamv1.ValidatePolicyAttachment(grant) == nil && grant.RevokedAt == nil &&
+		grant.AccountID == account && grant.Target.Kind == iamv1.PolicyTargetUser &&
+		grant.Target.ID == string(custodian) && grant.Scope == iamv1.AuthorityScopeTenant
 }
 
 func (value *gate) assertTenantRetention(
@@ -1405,6 +1548,11 @@ func (value *gate) assertTenantRetention(
 		}
 		if err := value.assertTenantResources(ctx, tenant, bearer, false); err != nil {
 			return err
+		}
+		if tenant.AccessKey != nil {
+			if err := value.assertRetainedAccessKey(ctx, tenant, value.retainedIAM.InstallationID); err != nil {
+				return err
+			}
 		}
 		var members iamv1.UserList
 		if _, err := value.edge.get(ctx, "/api/iam/v1/users", bearer, &members); err != nil || iamv1.ValidateUserList(members) != nil {
@@ -1914,6 +2062,9 @@ func (value *gate) pathLeakage() [][]byte {
 				[]byte(string(tenant.Account.ID)+"-private-value"))
 			if tenant.DelegatedAuthority != nil {
 				result = append(result, tenant.DelegatedAuthority.PreRecoveryCredential)
+			}
+			if tenant.AccessKey != nil {
+				result = append(result, tenant.AccessKey.Secret)
 			}
 		}
 	}

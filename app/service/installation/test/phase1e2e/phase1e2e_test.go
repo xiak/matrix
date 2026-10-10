@@ -478,6 +478,57 @@ func TestPhase1AccessKeySignerBindsExactNorthboundRequest(t *testing.T) {
 	}
 }
 
+func TestRetainedAccessKeyBindsCurrentCredentialAndCustodian(t *testing.T) {
+	now := time.Date(2026, time.October, 10, 1, 2, 3, 456000000, time.UTC)
+	secret := []byte("mak1." + base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x3a}, 32)))
+	fixture := accessKeyRetention{
+		Key: iamv1.AccessKey{
+			APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: "key-retained",
+			AccountID: "account-retained", UserID: "member-user", Status: iamv1.AccessKeyEnabled,
+			NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"172.18.0.1/32"}},
+			ResourceVersion:     3, CreatedAt: now, UpdatedAt: now.Add(time.Microsecond),
+		},
+		Secret: secret,
+		CustodianGrant: iamv1.PolicyAttachment{
+			APIVersion: iamv1.APIVersion, Kind: "PolicyAttachment", ID: "attachment-key-custodian",
+			AccountID: "account-retained", Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: "root-user"},
+			PolicyID: "policy-key-custodian", Scope: iamv1.AuthorityScopeTenant, ResourceVersion: 1,
+			CreatedAt: now, UpdatedAt: now,
+		},
+	}
+	if !validAccessKeyRetention(fixture, "account-retained", "member-user", "root-user") {
+		t.Fatal("valid retained access key was rejected")
+	}
+	secretValue, err := iamv1.NewSecret(string(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := signAccessKeyMaterial(fixture.Key, secretValue, "installation-phase1", "http://127.0.0.1:8080",
+		"/api/paas/v1/applications"); err != nil {
+		t.Fatalf("current retained key could not sign: %v", err)
+	}
+	for name, mutate := range map[string]func(*accessKeyRetention){
+		"foreign account":   func(value *accessKeyRetention) { value.Key.AccountID = "account-other" },
+		"foreign user":      func(value *accessKeyRetention) { value.Key.UserID = "member-other" },
+		"disabled key":      func(value *accessKeyRetention) { value.Key.Status = iamv1.AccessKeyDisabled },
+		"missing secret":    func(value *accessKeyRetention) { value.Secret = nil },
+		"foreign custodian": func(value *accessKeyRetention) { value.CustodianGrant.Target.ID = "root-other" },
+		"revoked custodian": func(value *accessKeyRetention) {
+			revoked := now.Add(time.Second)
+			value.CustodianGrant.RevokedAt = &revoked
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := fixture
+			changed.Secret = append([]byte(nil), fixture.Secret...)
+			mutate(&changed)
+			if validAccessKeyRetention(changed, "account-retained", "member-user", "root-user") {
+				t.Fatal("changed retained access key was accepted")
+			}
+		})
+	}
+}
+
 func optionsFromEnvironment() (options, error) {
 	phase := os.Getenv("MATRIX_PHASE1_E2E_PHASE")
 	if phase != "run" && phase != "after-restart" {
