@@ -1086,8 +1086,11 @@ describe("CAM-style access workspace", () => {
     await user.clear(userSearch);
     await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
     const keyDirectory = await screen.findByRole("table", { name: "访问密钥" });
-    expect(within(keyDirectory).getAllByRole("columnheader")).toHaveLength(4);
+    expect(within(keyDirectory).getAllByRole("columnheader")).toHaveLength(5);
     expect(within(keyDirectory).queryByText("密钥资源版本")).toBeNull();
+    expect(within(keyDirectory).getByRole("columnheader", { name: "凭据状态" })).toBeTruthy();
+    expect(within(keyDirectory).getByRole("columnheader", { name: "管理状态" })).toBeTruthy();
+    expect(within(keyDirectory).getByText("恢复后永久失效")).toBeTruthy();
     expect(within(keyDirectory).getByText("已禁用")).toBeTruthy();
     expect(within(keyDirectory).getByRole("columnheader", { name: "安全观测" })).toBeTruthy();
     expect(within(keyDirectory).getByText("账号 + 密钥")).toBeTruthy();
@@ -3142,10 +3145,43 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("尚未创建访问密钥")).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
   });
-  it("edits one key network layer inline and keeps the account layer independently visible", async () => {
-    const { user, extension } = await open("keys");
+  it("keeps recovery fencing separate from management status and never offers enable as a repair", async () => {
+    const { user, repository, extension } = await open("keys");
     await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
-    await user.click(within(await screen.findByRole("table", { name: "访问密钥" })).getByRole("button", { name: "MOCK-pipeline-key" }));
+    const directory = await screen.findByRole("table", { name: "访问密钥" });
+    expect(within(directory).getByText("恢复后永久失效")).toBeTruthy();
+    expect(within(directory).getByText("已启用")).toBeTruthy();
+    await user.click(within(directory).getByRole("button", { name: "MOCK-pipeline-key" }));
+    expect(screen.getByText(/原密钥已因恢复永久失效/)).toBeTruthy();
+    expect(screen.getByText(/管理状态不会改变这一事实/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "禁用" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "启用" })).toBeNull();
+    let actions = await openPageActionMenu(user);
+    expect(within(actions).getByRole("menuitem", { name: "创建新密钥" })).toBeTruthy();
+    expect(within(actions).getByRole("menuitem", { name: "删除" }).getAttribute("aria-disabled")).toBe("true");
+    await user.keyboard("{Escape}");
+    await invokePageAction(user, "禁用");
+    expect(screen.getByRole("heading", { name: "禁用 MOCK-pipeline-key" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "禁用 MOCK-pipeline-key" })).toBeNull());
+    const fenced = (await extension.read("preview")).keys.find((key) => key.id === "MOCK-pipeline-key")!;
+    expect(fenced).toMatchObject({ status: "DISABLED", credentialState: "RECOVERY_FENCED" });
+    expect(screen.queryByRole("button", { name: "启用" })).toBeNull();
+    expect(screen.getByRole("button", { name: "创建新密钥" })).toBeTruthy();
+    actions = await openPageActionMenu(user);
+    expect(within(actions).queryByRole("menuitem", { name: "启用" })).toBeNull();
+    expect(within(actions).getByRole("menuitem", { name: "删除" }).getAttribute("aria-disabled")).not.toBe("true");
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("edits one key network layer inline and keeps the account layer independently visible", async () => {
+    const { user, extension } = await open("keys", { seed: async (preview) => {
+      await preview.execute("preview", { kind: "create-key", ownerId: "principal-chen", ownerState: "active", userResourceVersion: 2, networkRestrictions: { allowedSourceCidrs: ["203.0.113.64/26"] }, requestId: "seed-current-key", responseMode: "success" });
+    } });
+    const current = (await extension.read("preview")).keys.find((key) => key.ownerId === "principal-chen")!;
+    await user.click(await screen.findByRole("button", { name: "管理 chen 的访问密钥" }));
+    const directory = await screen.findByRole("table", { name: "访问密钥" });
+    expect(within(directory).getByText("未被恢复围栏")).toBeTruthy();
+    await user.click(within(directory).getByRole("button", { name: current.id }));
     expect(screen.getByRole("heading", { name: "来源网络限制" })).toBeTruthy();
     expect(screen.getByText("账号层")).toBeTruthy();
     expect(screen.getByText("密钥层")).toBeTruthy();
@@ -3161,9 +3197,9 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "审阅密钥级来源变更" })).toBe(document.activeElement);
     await user.click(screen.getByRole("button", { name: "应用到 MOCK" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "来源网络限制" })).toBeTruthy());
-    const key = (await extension.read("preview")).keys.find((entry) => entry.id === "MOCK-pipeline-key")!;
+    const key = (await extension.read("preview")).keys.find((entry) => entry.id === current.id)!;
     expect(key.networkRestrictions).toEqual({ allowedSourceCidrs: ["198.51.100.0/24"] });
-    expect(key.resourceVersion).toBe(3);
+    expect(key.resourceVersion).toBe(2);
   });
   it("loads the programmatic credential boundary only on demand and does not infer product support", async () => {
     const listAuthorizationProfiles = vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: {

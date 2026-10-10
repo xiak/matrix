@@ -69,7 +69,7 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
       { id: "role-log-reviewer", name: "ProductionLogReviewRole", description: "Qiao can review production logs in a role session without inheriting personal deployment grants", trustedUserIds: ["principal-qiao"], tags: [], policyIds: ["policy-tag-logs"], boundaryPolicyId: "policy-tag-logs", sessionMinutes: 30, consoleAccess: true, createdAt: at }
     ],
     keys: [{
-      id: "MOCK-pipeline-key", ownerId: "principal-lin", status: "ENABLED", resourceVersion: 2, createdAt: at,
+      id: "MOCK-pipeline-key", ownerId: "principal-lin", status: "ENABLED", credentialState: "RECOVERY_FENCED", resourceVersion: 2, createdAt: at,
       networkRestrictions: { allowedSourceCidrs: ["203.0.113.64/26"] },
       usage: { observedAt: "2026-09-09T08:15:00Z", lastAuthorization: { evaluatedAt: "2026-09-09T08:14:58Z", allowed: false, action: "audit.record.read", product: "audit", sourceIp: "198.51.100.42" } }
     }],

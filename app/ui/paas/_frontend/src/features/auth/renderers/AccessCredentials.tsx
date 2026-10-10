@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type SyntheticEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type SyntheticEvent } from "react";
 import { useTranslations } from "next-intl";
 import { KeyRound, RotateCw } from "lucide-react";
 import { Alert, Badge, Button, Card, Checkbox, ContentPage, FormField, Select, Table, TablePagination, Typography } from "@ui/xiak";
@@ -23,6 +23,11 @@ type KeyFlow =
   | { kind: "recovered"; ownerId: string; requestId: string; keyId: string; networkRestrictions: AccessKeyNetworkRestrictions }
   | { kind: "status"; keyId: string; requestId: string; status: AccessKey["status"] }
   | { kind: "delete"; keyId: string; requestId: string };
+
+function CredentialStateBadge({ value }: { value: AccessKey["credentialState"] }) {
+  const t = useTranslations("IamWorkspace");
+  return <Badge status={value === "RECOVERY_FENCED" ? "danger" : "neutral"}>{t(value === "RECOVERY_FENCED" ? "keyCredentialFenced" : "keyCredentialCurrent")}</Badge>;
+}
 
 const previewProgrammaticBoundaries = [{
   kind: "create",
@@ -422,18 +427,28 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
     <AccessKeyNetworkEditor keyValue={selected} onClose={() => setEditingNetwork(false)} />
   </WorkspaceDetail>;
 
-  if (selected && !activeFlow) return <WorkspaceDetail embedded={embedded} title={selected.id} onBack={() => setSelectedId(null)} actions={{
-    primary: { id: "status", label: t(selected.status === "ENABLED" ? "disable" : "enable"), variant: "secondary", disabled: selected.status === "DISABLED" && owner.state !== "active", disabledReason: selected.status === "DISABLED" ? ownerDisabledReason : undefined, onSelect: () => setFlow({ kind: "status", keyId: selected.id, status: selected.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") }) },
-    secondary: [{ id: "network", label: network("configureKey"), onSelect: () => setEditingNetwork(true) }, { id: "delete", label: t("delete"), danger: true, disabled: selected.status === "ENABLED", disabledReason: selected.status === "ENABLED" ? t("errors.disableFirst") : undefined, onSelect: () => setFlow({ kind: "delete", keyId: selected.id, requestId: requestToken("ui-access-key-delete-") }) }]
-  }}>
-    <Card><Card.Body className={styles.detailBody}>
-      <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.status === "ENABLED" ? "success" : "neutral"}>{t(selected.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
-    </Card.Body></Card>
-    <AccessKeyNetworkDetail account={{ status: "ready", value: workspace.settings.accessKeyNetwork }} keyValue={selected} />
-    <AccessKeyUsagePreview usage={selected.usage} />
-    <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
-    <RotationGuide />
-  </WorkspaceDetail>;
+  if (selected && !activeFlow) {
+    const remove = { id: "delete", label: t("delete"), danger: true, disabled: selected.status === "ENABLED", disabledReason: selected.status === "ENABLED" ? t("errors.disableFirst") : undefined, onSelect: () => setFlow({ kind: "delete", keyId: selected.id, requestId: requestToken("ui-access-key-delete-") }) };
+    const replace = { id: "replace", label: t("keyCreateReplacement"), disabled: createDisabled, disabledReason: ownerDisabledReason ?? (ownerKeys.length >= 2 ? t("keyQuotaReached") : undefined), onSelect: startCreate };
+    const actions: ComponentProps<typeof WorkspaceDetail>["actions"] = selected.credentialState === "RECOVERY_FENCED"
+      ? selected.status === "ENABLED"
+        ? { primary: { id: "status", label: t("disable"), variant: "secondary", onSelect: () => setFlow({ kind: "status", keyId: selected.id, status: "DISABLED", requestId: requestToken("ui-access-key-status-") }) }, secondary: [replace, remove] }
+        : { primary: replace, secondary: [remove] }
+      : {
+          primary: { id: "status", label: t(selected.status === "ENABLED" ? "disable" : "enable"), variant: "secondary", disabled: selected.status === "DISABLED" && owner.state !== "active", disabledReason: selected.status === "DISABLED" ? ownerDisabledReason : undefined, onSelect: () => setFlow({ kind: "status", keyId: selected.id, status: selected.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") }) },
+          secondary: [{ id: "network", label: network("configureKey"), onSelect: () => setEditingNetwork(true) }, remove]
+        };
+    return <WorkspaceDetail embedded={embedded} title={selected.id} onBack={() => setSelectedId(null)} actions={actions}>
+      {selected.credentialState === "RECOVERY_FENCED" ? <Alert status="danger">{t("keyCredentialFencedAlert")}</Alert> : null}
+      <Card><Card.Body className={styles.detailBody}>
+        <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("keyCredentialState")}</dt><dd><CredentialStateBadge value={selected.credentialState} /><span>{t(selected.credentialState === "RECOVERY_FENCED" ? "keyCredentialFencedHint" : "keyCredentialCurrentHint")}</span></dd></div><div><dt>{t("keyManagementState")}</dt><dd><Badge status={selected.credentialState === "RECOVERY_FENCED" ? "neutral" : selected.status === "ENABLED" ? "success" : "neutral"}>{t(selected.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
+      </Card.Body></Card>
+      <AccessKeyNetworkDetail account={{ status: "ready", value: workspace.settings.accessKeyNetwork }} keyValue={selected} />
+      <AccessKeyUsagePreview usage={selected.usage} />
+      <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
+      <RotationGuide />
+    </WorkspaceDetail>;
+  }
 
   const body = <div className={styles.ownerBody}>
     <Alert status="info">{t("keyProductBoundary")}</Alert>
@@ -441,7 +456,7 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
     {activeFlow ? <InlineFlow flow={activeFlow} owner={owner} accountNetwork={workspace.settings.accessKeyNetwork} keyValue={flowKey} onChange={setFlow} onClose={closeFlow} onOpenKey={openKey} /> : <>
       <Card>
         <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={ownerKeys.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: ownerKeys.length })}</Badge></Card.Header>
-        <Card.Body className={styles.tableBody}>{ownerKeys.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{network("securitySignals")}</th></tr></thead><tbody>{ownerKeys.map((key) => <tr key={key.id}><td data-label={t("keyId")}><Table.PrimaryAction onClick={() => setSelectedId(key.id)}>{key.id}</Table.PrimaryAction></td><td data-label={t("state")}><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={key.createdAt} /></td><td data-label={network("securitySignals")}><AccessKeySecuritySignals account={{ status: "ready", value: workspace.settings.accessKeyNetwork }} keyValue={key} usage={key.usage} /></td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body>
+        <Card.Body className={styles.tableBody}>{ownerKeys.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("keyCredentialState")}</th><th scope="col">{t("keyManagementState")}</th><th scope="col">{t("created")}</th><th scope="col">{network("securitySignals")}</th></tr></thead><tbody>{ownerKeys.map((key) => <tr key={key.id}><td data-label={t("keyId")}><Table.PrimaryAction onClick={() => setSelectedId(key.id)}>{key.id}</Table.PrimaryAction></td><td data-label={t("keyCredentialState")}><CredentialStateBadge value={key.credentialState} /></td><td data-label={t("keyManagementState")}><Badge status={key.credentialState === "RECOVERY_FENCED" ? "neutral" : key.status === "ENABLED" ? "success" : "neutral"}>{t(key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={key.createdAt} /></td><td data-label={network("securitySignals")}><AccessKeySecuritySignals account={{ status: "ready", value: workspace.settings.accessKeyNetwork }} keyValue={key} usage={key.usage} /></td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body>
       </Card>
       <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
       <RotationGuide />

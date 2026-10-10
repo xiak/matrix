@@ -25,6 +25,7 @@ export type AccessKey = {
   id: string;
   ownerId: string;
   status: "ENABLED" | "DISABLED";
+  credentialState: "CURRENT" | "RECOVERY_FENCED";
   resourceVersion: number;
   createdAt: string;
   networkRestrictions: AccessKeyNetworkRestrictions;
@@ -404,7 +405,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       state.roles = state.roles.filter((entry) => entry.id !== id); break;
     case "create-key":
       if (state.pendingKeyCreation || command.ownerState !== "active" || !context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !accessKeyNetworkRestrictionsValid(command.networkRestrictions) || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
-      state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt, networkRestrictions: structuredClone(command.networkRestrictions), usage: { observedAt: createdAt } });
+      state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", credentialState: "CURRENT", resourceVersion: 1, createdAt, networkRestrictions: structuredClone(command.networkRestrictions), usage: { observedAt: createdAt } });
       if (command.responseMode === "response-lost") state.pendingKeyCreation = { ownerId: command.ownerId, userResourceVersion: command.userResourceVersion, networkRestrictions: structuredClone(command.networkRestrictions), requestId: command.requestId, status: "UNKNOWN" };
       target = "MOCK-" + id; break;
     case "inspect-key-creation": {

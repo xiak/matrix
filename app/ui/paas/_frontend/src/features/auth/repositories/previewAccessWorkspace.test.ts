@@ -626,7 +626,7 @@ describe("access workspace preview invariants", () => {
       expect(() => applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "principal-chen", ownerState, userResourceVersion: 2, networkRestrictions: unrestrictedKeyNetwork, requestId: `create-${ownerState}`, responseMode: "success" }, context)).toThrow("invalid");
     }
     state = applyAccessWorkspaceCommand(state, { kind: "set-key-status", id: "MOCK-pipeline-key", ownerState: "passwordChangeRequired", status: "DISABLED", resourceVersion: 2, requestId: "disable-existing" }, context);
-    expect(state.keys[0]?.status).toBe("DISABLED");
+    expect(state.keys[0]).toMatchObject({ status: "DISABLED", credentialState: "RECOVERY_FENCED" });
     expect(() => applyAccessWorkspaceCommand(state, { kind: "set-key-status", id: "MOCK-pipeline-key", ownerState: "passwordChangeRequired", status: "ENABLED", resourceVersion: 3, requestId: "enable-existing" }, context)).toThrow("invalid");
     expect(applyAccessWorkspaceCommand(state, { kind: "delete-key", id: "MOCK-pipeline-key", resourceVersion: 3, requestId: "delete-existing" }, context).keys).toEqual([]);
   });
@@ -666,6 +666,7 @@ describe("access workspace preview invariants", () => {
     const repository = createPreviewAccessWorkspace("org-xiak", () => context.userIds, context.primaryPrincipalId);
     const result = await repository.execute("mock", { kind: "create-key", ownerId: "principal-chen", ownerState: "active", userResourceVersion: 2, networkRestrictions: { allowedSourceCidrs: ["198.51.100.0/24"] }, requestId: "create-chen-key", responseMode: "success" });
     expect(result.issuedKey?.secret).toMatch(/^MOCK_NOT_A_CREDENTIAL_/);
+    expect(result.workspace.keys.find((key) => key.ownerId === "principal-chen")?.credentialState).toBe("CURRENT");
     expect(result.workspace.keys.find((key) => key.ownerId === "principal-chen")?.networkRestrictions).toEqual({ allowedSourceCidrs: ["198.51.100.0/24"] });
     expect(JSON.stringify(result.workspace)).not.toContain(result.issuedKey?.secret);
     expect(JSON.stringify(await repository.read("mock"))).not.toContain("MOCK_NOT_A_CREDENTIAL_");
