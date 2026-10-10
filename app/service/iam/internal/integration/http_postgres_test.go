@@ -31994,6 +31994,101 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 				roleCount, trustCount, boundaryCount, factCount, receiptCount, exactEvidence, err)
 		}
 	})
+	t.Run("delegated lifecycle actions stay independent", func(t *testing.T) {
+		sparseRequest := iamv1.CreatePolicyRequest{
+			DisplayName: "Delegated lifecycle update only", RequestID: "delegated-role-lifecycle-sparse-policy",
+			Document: iamv1.PolicyDocument{
+				LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{
+					{SID: "create-role", Effect: iamv1.PolicyAllow,
+						Actions: []iamv1.Action{iamv1.ActionIAMRoleCreate, iamv1.ActionIAMRoleList},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount,
+							Match: iamv1.PolicyResourceExact, ID: string(member.AccountID)}}},
+					{SID: "update-role-only", Effect: iamv1.PolicyAllow,
+						Actions: []iamv1.Action{iamv1.ActionIAMRoleRead, iamv1.ActionIAMRoleUpdate,
+							iamv1.ActionIAMRoleTrustSet},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole,
+							Match: iamv1.PolicyResourceAnyInAuthority}}},
+				},
+			},
+		}
+		var sparsePolicy iamv1.PolicyDetail
+		post(t, "/v1/policies", root, sparseRequest, http.StatusCreated, &sparsePolicy)
+		boundaryPath := "/v1/users/" + string(member.ID) + "/permission-boundary"
+		var sparseBoundary iamv1.UserPermissionBoundary
+		get(t, boundaryPath, root, http.StatusOK, &sparseBoundary)
+		call(t, http.MethodPut, boundaryPath, root, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: sparsePolicy.Policy.ID, PolicyResourceVersion: sparsePolicy.Policy.ResourceVersion,
+			ResourceVersion: sparseBoundary.ResourceVersion, RequestID: "delegated-role-lifecycle-sparse-boundary",
+		}, http.StatusOK, &sparseBoundary)
+		sparseBearer := localRecoveryLogin(t, handler,
+			member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+		createSparseRole := iamv1.CreateRoleRequest{
+			Name: "Delegated update only", Tags: []iamv1.RoleTag{}, RequestID: "delegated-role-lifecycle-sparse-create",
+			TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{
+				SID: "member", Effect: iamv1.PolicyAllow,
+				Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: member.ID}},
+			}}},
+		}
+		var sparseRole iamv1.Role
+		post(t, "/v1/roles", sparseBearer, createSparseRole, http.StatusCreated, &sparseRole)
+		sparsePath := "/v1/roles/" + string(sparseRole.ID)
+		var sparseAccess iamv1.RoleAccess
+		get(t, sparsePath, sparseBearer, http.StatusOK, &sparseAccess)
+		for action, available := range map[iamv1.Action]bool{
+			iamv1.ActionIAMRoleUpdate:    true,
+			iamv1.ActionIAMRoleSetStatus: false,
+			iamv1.ActionIAMRoleDelete:    false,
+		} {
+			capability, found := findIAMCapability(sparseAccess.Capabilities, action,
+				iamv1.ResourceRole, string(sparseRole.ID))
+			if !found || capability.Available != available {
+				t.Fatalf("sparse lifecycle capability %s available=%t found=%t want=%t",
+					action, capability.Available, found, available)
+			}
+		}
+		const statusRequestID = "delegated-role-lifecycle-sparse-status"
+		const deleteRequestID = "delegated-role-lifecycle-sparse-delete"
+		post(t, sparsePath+":set-status", sparseBearer, iamv1.SetRoleStatusRequest{
+			Status: iamv1.RoleDisabled, ResourceVersion: sparseRole.ResourceVersion,
+			RequestID: statusRequestID,
+		}, http.StatusForbidden, nil)
+		call(t, http.MethodDelete, sparsePath, sparseBearer, iamv1.DeleteRoleRequest{
+			ResourceVersion: sparseRole.ResourceVersion, RequestID: deleteRequestID,
+		}, http.StatusForbidden, nil)
+		const updateRequestID = "delegated-role-lifecycle-sparse-update"
+		update := iamv1.UpdateRoleRequest{
+			Name: "Delegated update only changed", Description: "independent action",
+			Tags:                      []iamv1.RoleTag{{Key: "authority", Value: "update-only"}},
+			MaxSessionDurationSeconds: sparseRole.MaxSessionDurationSeconds,
+			ResourceVersion:           sparseRole.ResourceVersion, RequestID: updateRequestID,
+		}
+		call(t, http.MethodPatch, sparsePath, sparseBearer, update, http.StatusOK, &sparseRole)
+		if sparseRole.ResourceVersion != update.ResourceVersion+1 || sparseRole.Name != update.Name ||
+			sparseRole.Status != iamv1.RoleActive {
+			t.Fatal("independently authorized Role update changed the wrong lifecycle state")
+		}
+		var appliedChanges, rejectedChanges, appliedFacts, rejectedFacts int
+		var verified bool
+		if err := database.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM iam.role_lifecycle_changes WHERE tenant_id=$1 AND actor_principal_id=$2
+			 AND role_id=$3 AND request_id=$4),
+			(SELECT count(*) FROM iam.role_lifecycle_changes WHERE tenant_id=$1 AND actor_principal_id=$2
+			 AND role_id=$3 AND request_id IN ($5,$6)),
+			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4
+			 AND event_document->>'action'='iam.role.updated'),
+			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId' IN ($5,$6)
+			 AND event_document->>'action' IN ('iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.deleted')),
+			COALESCE(iam.verified_role_lifecycle_change($1,$2,$4) IS NOT NULL,false)`,
+			sparseRole.AccountID, member.ID, sparseRole.ID, updateRequestID,
+			statusRequestID, deleteRequestID).Scan(&appliedChanges, &rejectedChanges, &appliedFacts, &rejectedFacts, &verified); err != nil {
+			t.Fatal("inspect independent lifecycle authority", err)
+		}
+		if appliedChanges != 1 || rejectedChanges != 0 || appliedFacts != 1 || rejectedFacts != 0 || !verified {
+			t.Fatalf("lifecycle actions shared authority: appliedChanges=%d rejectedChanges=%d appliedFacts=%d rejectedFacts=%d verified=%t",
+				appliedChanges, rejectedChanges, appliedFacts, rejectedFacts, verified)
+		}
+	})
 
 	t.Run("outbox failure rolls back role authority", func(t *testing.T) {
 		block := func() {
