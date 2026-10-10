@@ -713,12 +713,13 @@ func (client *edgeClient) allAuditRecords(
 func (client *edgeClient) waitAuditActions(
 	ctx context.Context,
 	bearer []byte,
+	tenantID iamv1.AccountID,
 	want map[auditv1.Action]string,
 ) ([]auditv1.AuditRecord, error) {
 	poll, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	for poll.Err() == nil {
-		records, err := client.allAuditRecords(poll, bearer, "organization-default", "")
+		records, err := client.allAuditRecords(poll, bearer, tenantID, "")
 		if err == nil {
 			remaining := make(map[auditv1.Action]string, len(want))
 			for action, target := range want {

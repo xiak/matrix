@@ -203,20 +203,15 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		auditv1.ActionIAMSecurityReportDownloadStarted:    string(baselineReport.metadata.ID),
 		auditv1.ActionIAMAccessAnalyzerCreated:            string(value.retainedIAM.AccessAnalyzer.ID),
 		auditv1.ActionIAMAccessAnalyzerDispositionUpdated: string(value.retainedIAM.AccessAnalyzer.ID),
-		auditv1.ActionIAMGroupCreated:                     string(value.retainedIAM.Tenants[0].DelegatedAuthority.Group.ID),
-		auditv1.ActionIAMGroupMembershipCreated:           string(value.retainedIAM.Tenants[0].DelegatedAuthority.Membership.ID),
-		auditv1.ActionIAMRoleCreated:                      string(value.retainedIAM.Tenants[0].DelegatedAuthority.Role.ID),
-		auditv1.ActionIAMRolePermissionBoundarySet:        string(value.retainedIAM.Tenants[0].DelegatedAuthority.Role.ID),
-		auditv1.ActionIAMRoleSessionIssued:                string(value.retainedIAM.Tenants[0].DelegatedAuthority.PreRecoverySession.ID),
 	}
-	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, wantInitialAudit)
+	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, "organization-default", wantInitialAudit)
 	if err != nil || !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {
 		return fail("initial-audit-delivery")
 	}
 	if _, err := value.edge.verifyAuditChain(ctx, bearer, "organization-default", ""); err != nil {
 		return fail("initial-audit-integrity")
 	}
-	recordsBeforeBackup, err = value.edge.waitAuditActions(ctx, bearer, map[auditv1.Action]string{
+	recordsBeforeBackup, err = value.edge.waitAuditActions(ctx, bearer, "organization-default", map[auditv1.Action]string{
 		auditv1.ActionAuditRecordsRead:       "",
 		auditv1.ActionAuditIntegrityVerified: "",
 	})
@@ -394,7 +389,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertWorkload(ctx, value.releases.a.Manifest, rolledBack, 3, "1", settingOne, secretDigest); err != nil {
 		return err
 	}
-	rollbackAudit, err := value.edge.waitAuditActions(ctx, bearer, map[auditv1.Action]string{
+	rollbackAudit, err := value.edge.waitAuditActions(ctx, bearer, "organization-default", map[auditv1.Action]string{
 		auditv1.ActionPaaSDeploymentRolledBack: string(deploymentID),
 	})
 	if err != nil || !containsAuditHistory(rollbackAudit, backupBaseline) {
@@ -415,7 +410,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if active, err := value.activeCapacityClaims(ctx, state.InstallationID); err != nil || active != 0 {
 		return fail("released-capacity-after-stop")
 	}
-	if _, err := value.edge.waitAuditActions(ctx, bearer, map[auditv1.Action]string{
+	if _, err := value.edge.waitAuditActions(ctx, bearer, "organization-default", map[auditv1.Action]string{
 		auditv1.ActionPaaSDeploymentStopped: string(deploymentID),
 	}); err != nil {
 		return fail("stop-audit-delivery")
@@ -844,6 +839,36 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 	if err := value.assertTenantRetention(ctx, false, false, "baseline"); err != nil {
 		return err
 	}
+	if err := value.captureDelegatedAuthorityAudit(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (value *gate) captureDelegatedAuthorityAudit(ctx context.Context) error {
+	if value.retainedIAM == nil || len(value.retainedIAM.Tenants) != 2 {
+		return fail("delegated-authority-audit-fixture")
+	}
+	tenant := &value.retainedIAM.Tenants[0]
+	if tenant.DelegatedAuthority == nil || len(tenant.RetainedPrimaryCredential) == 0 {
+		return fail("delegated-authority-audit-fixture")
+	}
+	delegated := tenant.DelegatedAuthority
+	records, err := value.edge.waitAuditActions(ctx, tenant.RetainedPrimaryCredential, tenant.Account.ID,
+		map[auditv1.Action]string{
+			auditv1.ActionIAMGroupCreated:              string(delegated.Group.ID),
+			auditv1.ActionIAMGroupMembershipCreated:    string(delegated.Membership.ID),
+			auditv1.ActionIAMRoleCreated:               string(delegated.Role.ID),
+			auditv1.ActionIAMRolePermissionBoundarySet: string(delegated.Role.ID),
+			auditv1.ActionIAMRoleSessionIssued:         string(delegated.PreRecoverySession.ID),
+		})
+	if err != nil {
+		return fail("delegated-authority-audit-delivery")
+	}
+	if _, err := value.edge.verifyAuditChain(ctx, tenant.RetainedPrimaryCredential, tenant.Account.ID, ""); err != nil {
+		return fail("delegated-authority-audit-integrity")
+	}
+	tenant.AuditHashes = auditRecordHashes(records)
 	return nil
 }
 
