@@ -1,6 +1,6 @@
 # FEAT-IAM-004：用户组与授权委派
 
-- 状态：Group 后端、前端接口适配、签名游标及非 root 同上限委派闭环已实现；固定 `882b7820b1a225f1a0a8b95cb07ac139b8f3ab0b` 的独立 Verification 38014293154 已有 17 项全部成功。既有 IAM81/Audit37/PaaS3、contractRevision29 签名 A/B 只运行了平台与直属 User 生命周期，没有创建 Group/GroupMembership，不能作为组对象保留证据；当前切片已把下述 Group 路径加入原签名生命周期 owner，仍须在固定提交上实跑。组 UI 由 UX/UI owner 独立验收，整体未验收。
+- 状态：Group 后端、前端接口适配、签名游标及非 root 同上限委派闭环已实现；固定 `882b7820b1a225f1a0a8b95cb07ac139b8f3ab0b` 的独立 Verification 38014293154 已有 17 项全部成功。固定 `c709455e472e13f765c53ef9356842bcf3fa580c` 的 IAM81/Audit37/PaaS3、contractRevision29 签名 A/B 已实跑 Group、准确 Membership、GROUP 策略来源、租户业务访问及同一租户 Audit 链，并通过升级、回滚、指定备份恢复和外层引擎重启保留。组 UI 由 UX/UI owner 独立验收，整体未验收。
 - 依赖：002、003。
 - Owner：IAM Group、GroupMembership、组策略附件和组继承证据。
 
@@ -115,12 +115,14 @@ User 删除沿 003 的 User principal 锁后终态移除其所有活跃 membersh
 - 源码和内嵌产物稳定后的全仓 Go race/vet、架构检查、模块校验、生成一致性及 Linux amd64 构建通过。
 - 前端 typecheck/lint/架构/20 组对比度、101 项测试通过；两次 2-worker 静态构建的 59 个内嵌文件一致。接口不解析游标、不与资源 ID 排序比较，拒绝原始 ID/换行/超长/重复 continuation；成员关系、目标 capability 和未知结果原意图边界继续保留。这是本地前端证据，不冒充独立前端 CI。
 
-当前 Group 委派增量在本任务专属 PostgreSQL 18 新库完成本地验证：新增反向锁环在修复前确定触发一次 `40P01`，统一 USER-ID 锁序后 `TestIAMPolicyAttachmentChangePostgres` race 28.299s 通过；它同时覆盖空组封存、同 ceiling 成员、无边界/不同边界/Root/平台绑定攻击、成员边界变更阻断、Root 创建附件的受限撤销、创建与撤销的 `GROUP_BOUND` 证据，以及两个合法反向写入各一份关系/事实且无隐藏 deadlock。完整 `TestIAMPolicyAuthorityStoragePostgres` race 311.679s、`TestIAMHTTPPostgresVerticalSlice` race 127.828s、Audit HTTP race 4.505s 和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 279.704s 继续通过。固定 IAM71 程序产生真实保留数据后升级至当前 IAM72 的 `TestIAMRetainedPredecessorProcessUpgrade` 最新 131.990s 通过，既有附件证据及 Audit 摘要保持，新增内部 ceiling 对保留行明确为 `NULL`。累计固定 `882b7820b1a225f1a0a8b95cb07ac139b8f3ab0b` 的 [Verification 38014293154](https://github.com/xiak/matrix/actions/runs/38014293154) 已核对精确 SHA，17 项全部 `completed/success`；这仍不是上述新增 Group 签名生命周期的运行证据，UX/UI 浏览器验收也由独立 owner 继续执行。
+当前 Group 委派增量在本任务专属 PostgreSQL 18 新库完成本地验证：新增反向锁环在修复前确定触发一次 `40P01`，统一 USER-ID 锁序后 `TestIAMPolicyAttachmentChangePostgres` race 28.299s 通过；它同时覆盖空组封存、同 ceiling 成员、无边界/不同边界/Root/平台绑定攻击、成员边界变更阻断、Root 创建附件的受限撤销、创建与撤销的 `GROUP_BOUND` 证据，以及两个合法反向写入各一份关系/事实且无隐藏 deadlock。完整 `TestIAMPolicyAuthorityStoragePostgres` race 311.679s、`TestIAMHTTPPostgresVerticalSlice` race 127.828s、Audit HTTP race 4.505s 和独立 IAM 双副本/Audit/PaaS/dispatcher 进程 race 279.704s 继续通过。固定 IAM71 程序产生真实保留数据后升级至当前 IAM72 的 `TestIAMRetainedPredecessorProcessUpgrade` 最新 131.990s 通过，既有附件证据及 Audit 摘要保持，新增内部 ceiling 对保留行明确为 `NULL`。累计固定 `882b7820b1a225f1a0a8b95cb07ac139b8f3ab0b` 的 [Verification 38014293154](https://github.com/xiak/matrix/actions/runs/38014293154) 已核对精确 SHA，17 项全部 `completed/success`；该独立 CI 不运行外部签名生命周期，UX/UI 浏览器验收也由独立 owner 继续执行。
+
+2026-10-10，固定源码 `c709455e472e13f765c53ef9356842bcf3fa580c` 组装签名 A=`matrix-v0.1.0-iam.r29.9-c709455e472e`、B=`matrix-v0.1.0-iam.r29.10-c709455e472e`。任务专属、外部网络关闭、2 CPU/4 GiB/PIDs 768 的 Docker 27.5.1 经典存储引擎从零镜像、零容器、零数据卷开始，490.51 秒内通过 A 安装、保护备份、失败升级回退、B 升级、显式回滚、指定备份恢复、应用停止及容量释放。门禁在保护备份前通过公开 API 创建准确 Group、Membership 和 GROUP PaaSDeveloper 附件；每个阶段都以成员新登录证明 GROUP 来源仍绑定该关系、只能读取本租户资源且不能切到另一租户，并在该租户自己的 Audit 链读取和验证 Group/成员/附件事实。只重启这一任务外层引擎后，77.64 秒门禁再次通过同一对象、成员业务权限、MFA、双租户和 status/verify；没有用默认租户链、表行存在或健康端点替代租户效果。
 
 同一最终工作树通过全仓无缓存 `go test -race -p 2 ./...`（含 architecture）、`go vet -p 2 ./...`、模块校验、API 重新生成零差异及 Linux amd64/CGO 关闭的全仓构建；默认缺少外部 DSN 的 SKIP 不计真实运行证据。
 
 当前准确 readiness、完整开发 Profile 与唯一滚动前驱由 [011](./FEAT-IAM-011-acceptance.md#未发布阶段与首版基线) 维护；本 FEAT 不复制会继续移动的版本数字。既有签名发布 profile 不会因源码 schema 数字变化自动获得升级许可，组合门禁也不把本地 SQL 可迁移解释为可发布。
 
-本片交付组 HTTP/数据库/授权、同 ceiling 委派闭包、事件证据、签名分页和前端 domain/wire/repository；未新增第二套组页面。组目录、详情、表单及真实多成员鼠标闭环由既定 UX/UI owner 消费固定提交后完成。最终安装 key 分发/签名发布组合及 011 容量/HA 门禁仍需实施验证，本 FEAT 不因此标为 Accepted。
+本片交付组 HTTP/数据库/授权、同 ceiling 委派闭包、事件证据、签名分页和前端 domain/wire/repository；未新增第二套组页面。安装 key 分发及当前完整 Profile 的签名发布组合已经上述门禁验证。组目录、详情、表单及真实多成员鼠标闭环仍由既定 UX/UI owner 消费固定提交后完成，011 的完整容量/公平性/HA 也仍有明确缺口，本 FEAT 不因此标为 Accepted。
 
 替换前已推送回滚点为 `0bd6dd9dd8166fe31c67edb8cd49cd523606a401`，精确 [Verification 34805149946](https://github.com/xiak/matrix/actions/runs/34805149946) 三项 success。签名分页固定实现为 `8117c54c112c842106d82fe934e460a280862549`；GitHub API 核实精确 [Verification 34808378047](https://github.com/xiak/matrix/actions/runs/34808378047) 的 Go、authority-process、node-process 全部 completed/success。本轮自有 PG18 容器、网络和合成测试数据卷已清理，不需要保留运行现场才能续作；未操作其他任务环境。
