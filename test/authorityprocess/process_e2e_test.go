@@ -7784,7 +7784,15 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		account := &accounts[index]
 		prefix := fmt.Sprintf("program-signature-%d", index)
 		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyPaaSDeveloper, prefix+"-grant")
-		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyManagedServiceInstallationReader, prefix+"-managedservice-grant")
+		ceiling := performJSON(t, http.MethodPost, endpoint+"/v1/policy-attachments", account.owner, iamv1.CreatePolicyAttachmentRequest{
+			Target:                iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(account.target.ID)},
+			PolicyID:              iamv1.SystemPolicyManagedServiceInstallationReader,
+			PolicyResourceVersion: 1,
+			RequestID:             prefix + "-managedservice-ceiling-direct-denied",
+		})
+		if ceiling.Status != http.StatusForbidden {
+			t.Fatalf("service-role permission ceiling direct attachment status=%d", ceiling.Status)
+		}
 		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyAuditReader, prefix+"-audit-grant")
 		var networkPolicy iamv1.PolicyDetail
 		call(endpoint, http.MethodPost, "/v1/policies", account.owner, iamv1.CreatePolicyRequest{

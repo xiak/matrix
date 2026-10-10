@@ -73,6 +73,21 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 		}
 		migrationEnvironment = append(migrationEnvironment, value.environment+"="+writeProtectedFile(t, temporary, value.environment, []byte(valueDSN)))
 	}
+	productAuthorization, err := iamv1.EncodeProductAuthorizationReleaseCatalog(iamv1.ProductAuthorizationReleaseCatalog{
+		APIVersion:           iamv1.APIVersion,
+		Kind:                 iamv1.ProductAuthorizationReleaseCatalogKind,
+		Profiles:             []iamv1.AuthorizationProfile{},
+		ProfileHistory:       []iamv1.AuthorizationProfile{},
+		ServiceRolePolicies:  []iamv1.ProductServiceRolePolicy{},
+		ServiceRoleTemplates: []iamv1.ServiceRoleTemplate{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrationEnvironment = append(migrationEnvironment,
+		installationv1.IAMProductAuthorizationMigrationFileEnvironment+"="+
+			writeProtectedFile(t, temporary, "iam-product-authorization.json", productAuthorization))
+	clear(productAuthorization)
 	for _, action := range []string{"apply", "apply", "verify"} {
 		child := startChild(t, root, migrator, migrationEnvironment, action)
 		if err := child.wait(30 * time.Second); err != nil {
