@@ -301,7 +301,7 @@ func (service *Authority) CreateWorkloadRoleBinding(
 		if err != nil {
 			return err
 		}
-		if !found || template.Status != iamv1.ServiceRoleTemplateActive {
+		if !found {
 			return ErrConflict
 		}
 		profiles, err := transaction.CurrentAuthorizationProfiles(transactionContext)
@@ -377,6 +377,14 @@ func (service *Authority) CreateWorkloadRoleBinding(
 		if !rolePassDecision.Allowed {
 			denied = true
 			return nil
+		}
+		// A known retired template is still immutable authorization context,
+		// but it cannot admit a new workload. Check current caller authority
+		// first so retirement cannot turn a revoked administrator's retry into
+		// a template-state oracle. Returning this error rolls back the allowed
+		// decisions recorded above together with the rest of the transaction.
+		if template.Status != iamv1.ServiceRoleTemplateActive {
+			return ErrConflict
 		}
 
 		emptyTrust := iamv1.TrustPolicyDocument{LanguageVersion: iamv1.TrustPolicyLanguageVersion, Statements: []iamv1.TrustPolicyStatement{}}

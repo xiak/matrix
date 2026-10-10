@@ -2280,8 +2280,11 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	}
 	tx.workloadRoleBindingCreation = nil
 	tx.workloadRoleBindingRevocation = nil
+	retiredTemplate := templates[0]
+	retiredTemplate.Status = iamv1.ServiceRoleTemplateRetired
+	tx.serviceRoleTemplates = []iamv1.ServiceRoleTemplate{retiredTemplate}
 	if _, err := service.CreateWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, request); !errors.Is(err, ErrForbidden) || tx.workloadRoleBindingCreation != nil {
-		t.Fatal("revoked service-role administration remained cached", err)
+		t.Fatal("retired template disclosed state before revoked service-role administration was enforced", err)
 	}
 	if _, err := service.ListServiceLinkedRoles(t.Context(), login.Credential, "", "binding-directory-revoked"); !errors.Is(err, ErrForbidden) {
 		t.Fatal("revoked service-role administration retained directory access", err)
