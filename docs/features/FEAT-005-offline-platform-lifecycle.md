@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted foundation; current source profile is IAM/Audit/PaaS `83/37/3+r31`. This slice has locally verified the signed product-authorization catalog transport and isolated migration mount; the full current-profile offline lifecycle and exact-source independent CI remain required
+- Status: Accepted foundation; current source profile is IAM/Audit/PaaS `83/37/3+r31`. The current signed product-authorization catalog transport, isolated migration mount, full same-profile A/B offline lifecycle, and unchanged-production test-only successor independent CI have passed
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `83/37/3` revision 31; earlier accepted slices remain historical evidence, not an alternate current profile
@@ -613,6 +613,70 @@ not a development server. FEAT-007 owns that journey and its preserved
 database observations. Its task-owned loopback network is attached only after
 the network-disabled lifecycle and restart gates; browser connectivity is not
 presented as part of their offline-network proof.
+
+### Current IAM83 product-authorization release gate
+
+On 2026-10-11, fixed production source
+`c27888fdd6f465e51fd7963e8d6ec153c21ef23f` assembled signed Release A
+`matrix-v0.1.0-iam.r31.3-c27888fdd6f4` and its immediate same-source
+successor B `matrix-v0.1.0-iam.r31.4-c27888fdd6f4`. Both carry the exact
+IAM/Audit/PaaS `83/37/3+r31` profile and the new signed
+`config/iam/product-authorization.json` payload. The repository payload is a
+canonical empty catalog because no additional product is currently shipped;
+this gate therefore proves authenticated transport, isolated one-shot
+migration consumption and replay, not a fictitious external-product launch.
+The non-empty dynamic product/Profile/ceiling/template behavior is proved by
+FEAT-IAM-008's independent PostgreSQL 18 gate.
+
+A fresh task-owned Docker 27.5.1 classic-store engine was bounded by an outer
+2 CPU, 4 GiB, 768-PID cgroup and an internal-only network. Its inner daemon
+began with zero images, containers and volumes. A separate read-only runner
+shared only the engine's purpose-specific Unix-socket volume, signed artifacts
+and installation volume; no signing key entered either runtime volume. The
+512.05-second effectful gate passed A installation, restricted runtime database
+identities, repeated status/verify, APISIX user and AccessKey authentication,
+two-Account primary/member revocation, real SMTP contact verification, TOTP
+login and security notification, access-analysis disposition, two application
+generations, tenant and installation Audit integrity, protected backup,
+injected-upgrade automatic rollback, B upgrade, explicit rollback, selected
+backup recovery, permanent AccessKey recovery fencing, application rollback
+and stop/capacity release, and bounded support leakage checks.
+
+The first fixture attempt ended before product effects because the private
+input volume root was mode 0755 rather than the required 0700. The product
+correctly rejected it, its owned resources were deleted, and the successful
+run used fresh data and installation volumes; the fixture error is not
+backfilled as product success.
+
+After the private SMTP input and mailbox fixture copy were removed, only this
+owned outer engine was restarted. Its container identity stayed fixed while
+its start timestamp changed. The 61.48-second read-only gate proved that the
+old AccessKey remained fenced, MFA required a fresh OTP login, tenant primary
+recovery and revocation remained terminal, and repeated status/verify reached
+the complete offline lifecycle. No desktop daemon, remote machine, shared
+service or unrelated Docker object was restarted or modified.
+
+The Linux-mode-preserving delivery archives were re-extracted in independent
+temporary volumes and compared path-by-path with the verified directories;
+they contain no links, keep directories and `bin/mx` at modes 0700 and other
+files at 0600, and exclude the signer private key and test installation. Their
+identities are:
+
+- `matrix-v0.1.0-iam.r31.3-c27888fdd6f4-linux-amd64.tar.gz`, 490064850 bytes,
+  SHA-256 `7bd2f28fbac8ba16f3cd8841da8d3cfce4063c3e97efa2bcb543e882f6099753`;
+- `matrix-v0.1.0-iam.r31.4-c27888fdd6f4-linux-amd64.tar.gz`, 490070926 bytes,
+  SHA-256 `c9e55568bd534e143cd8d73055307cf350050040bc5953007b7fed2ae0bbc464`;
+- public `release-trust.json`, 290 bytes, SHA-256
+  `d4fc0e0fcd4265b56f0e86fa89e3269afc23a8e75a72b43444d470ff8a503893`.
+
+This result accepts the current same-profile lifecycle only. It does not
+admit cross-profile upgrade, arbitrary historical N-1 operation, an online
+catalog mutation API, or the still-pending LIVE UI gate.
+Test-only successor `651ef0c64974d23d96e1e95417fa8627e6872e1f` leaves the
+packaged production tree unchanged while aligning the real-process gates with
+the signed catalog contract; its
+[independent Verification 38086980171](https://github.com/xiak/matrix/actions/runs/38086980171)
+completed with all 17 jobs successful.
 
 ### Gate A: release and CLI contract
 
