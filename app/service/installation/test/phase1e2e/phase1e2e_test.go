@@ -26,6 +26,7 @@ import (
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
@@ -525,6 +526,36 @@ func TestRetainedAccessKeyBindsCurrentCredentialAndCustodian(t *testing.T) {
 			mutate(&changed)
 			if validAccessKeyRetention(changed, "account-retained", "member-user", "root-user") {
 				t.Fatal("changed retained access key was accepted")
+			}
+		})
+	}
+}
+
+func TestRetainedAccessKeyDirectoryAllowsSameTenantGrowthOnly(t *testing.T) {
+	now := time.Date(2026, time.October, 10, 2, 3, 4, 567000000, time.UTC)
+	application := func(id paasv1.ResourceID, tenant paasv1.TenantID) paasv1.Application {
+		return paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application", Metadata: paasv1.ResourceMetadata{
+			ID: id, Name: string(id), Scope: paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: tenant},
+			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+		}}
+	}
+	directory := paasv1.ApplicationList{APIVersion: paasv1.APIVersion, Kind: "ApplicationList", Items: []paasv1.Application{
+		application("phase1-after-upgrade", "account-retained"), application(tenantApplicationID, "account-retained"),
+	}}
+	if !validRetainedApplicationDirectory(directory, "account-retained") {
+		t.Fatal("valid same-tenant directory growth was rejected")
+	}
+	for name, mutate := range map[string]func(*paasv1.ApplicationList){
+		"target missing": func(value *paasv1.ApplicationList) { value.Items = value.Items[:1] },
+		"foreign tenant": func(value *paasv1.ApplicationList) { value.Items[1].Metadata.Scope.TenantID = "account-other" },
+		"incomplete page": func(value *paasv1.ApplicationList) { value.NextAfter = "pc1.more" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := directory
+			changed.Items = append([]paasv1.Application(nil), directory.Items...)
+			mutate(&changed)
+			if validRetainedApplicationDirectory(changed, "account-retained") {
+				t.Fatal("invalid retained AccessKey directory was accepted")
 			}
 		})
 	}

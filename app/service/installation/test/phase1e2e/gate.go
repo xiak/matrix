@@ -1170,14 +1170,27 @@ func (value *gate) assertRetainedAccessKey(ctx context.Context, tenant *tenantRe
 		return fail("retained-access-key-edge-request")
 	}
 	var applications paasv1.ApplicationList
-	if decodeOne(response.body, &applications) != nil || paasv1.ValidateApplicationList(applications) != nil ||
-		len(applications.Items) != 1 || applications.Items[0].Metadata.ID != tenantApplicationID ||
-		applications.Items[0].Metadata.Scope.TenantID != paasv1.TenantID(tenant.Account.ID) || applications.NextAfter != "" {
+	if decodeOne(response.body, &applications) != nil ||
+		!validRetainedApplicationDirectory(applications, paasv1.TenantID(tenant.Account.ID)) {
 		clear(response.body)
 		return fail("retained-access-key-tenant-directory")
 	}
 	clear(response.body)
 	return nil
+}
+
+func validRetainedApplicationDirectory(applications paasv1.ApplicationList, tenantID paasv1.TenantID) bool {
+	if paasv1.ValidateApplicationList(applications) != nil || applications.NextAfter != "" {
+		return false
+	}
+	found := false
+	for _, application := range applications.Items {
+		if application.Metadata.Scope.TenantID != tenantID {
+			return false
+		}
+		found = found || application.Metadata.ID == tenantApplicationID
+	}
+	return found
 }
 
 func (value *gate) retireRetainedAccessKey(ctx context.Context) error {
