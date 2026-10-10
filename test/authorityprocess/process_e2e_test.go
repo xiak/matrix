@@ -121,9 +121,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "d2320f5133597bf6388a9faa5393aca2836174d1"
-	const sourceSchema uint64 = 81
-	const currentSchema uint64 = 82
+	const source = "9cf500095ae9a9cf98d322711c58a5862b899fa1"
+	const sourceSchema uint64 = 82
+	const currentSchema uint64 = 83
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -175,6 +175,16 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	} {
 		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
 	}
+	// The rolling pre-v1 gate gives each exact executable only its own signed
+	// release-input shape. Unknown environment names are inert; neither binary
+	// receives a compatibility alias inside its contract.
+	legacyCatalogPath := writeProtectedFile(t, temporary, "iam-authorization-profiles.json", []byte(
+		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthorizationProfileReleaseCatalog","current":[],"historical":[]}`))
+	currentCatalogPath := writeProtectedFile(t, temporary, "iam-product-authorization.json", []byte(
+		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"ProductAuthorizationReleaseCatalog","profiles":[],"profileHistory":[],"serviceRolePolicies":[],"serviceRoleTemplates":[]}`))
+	migrationEnvironment = append(migrationEnvironment,
+		"MATRIX_MIGRATION_IAM_AUTHORIZATION_PROFILES_FILE="+legacyCatalogPath,
+		installationv1.IAMProductAuthorizationMigrationFileEnvironment+"="+currentCatalogPath)
 	var children []*childProcess
 	sensitive := []string{initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword, processDBPassword}
 	defer func() {
@@ -810,8 +820,8 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	var retainedKeyCreation iamv1.CreateAccessKeyResponse
 	if retainedKeyResponse.Status != http.StatusCreated || json.Unmarshal(retainedKeyResponse.Body, &retainedKeyCreation) != nil ||
 		retainedKeyCreation.Outcome != "APPLIED" || retainedKeyCreation.Key.ID == "" || !retainedKeyCreation.Secret.Present() ||
-		retainedKeyCreation.Key.CredentialState != "" {
-		t.Fatalf("actual predecessor did not create its format-v1 retained AccessKey: status=%d", retainedKeyResponse.Status)
+		retainedKeyCreation.Key.CredentialState != iamv1.AccessKeyCredentialCurrent {
+		t.Fatalf("actual predecessor did not create its current-state retained AccessKey: status=%d", retainedKeyResponse.Status)
 	}
 	retainedKeySecret := retainedKeyCreation.Secret.CopyBytes()
 	sensitive = append(sensitive, string(retainedKeySecret))
@@ -828,7 +838,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	// exercised against this exact predecessor by
 	// provePredecessorAuthenticationRecovery. This local DML is deliberately
 	// only a retained-storage fixture: place an immutable fence between two
-	// real predecessor HTTP completions so schema 82 must derive each replay at
+	// real predecessor HTTP completions so schema 83 must derive each replay at
 	// its original completion time without rewriting either stored result.
 	const retainedFenceCommand = "predecessor-access-key-fence-fixture"
 	const retainedFenceDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -902,7 +912,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	var retainedKeyStatus iamv1.SetAccessKeyStatusResponse
 	if retainedKeyResponse.Status != http.StatusOK || json.Unmarshal(retainedKeyResponse.Body, &retainedKeyStatus) != nil ||
 		retainedKeyStatus.Outcome != "APPLIED" || retainedKeyStatus.Key.Status != iamv1.AccessKeyDisabled ||
-		retainedKeyStatus.Key.ResourceVersion != 2 || retainedKeyStatus.Key.CredentialState != "" {
+		retainedKeyStatus.Key.ResourceVersion != 2 || retainedKeyStatus.Key.CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
 		t.Fatal("actual predecessor did not persist its post-fence AccessKey completion")
 	}
 	var retainedKeyStatusStoredResult string
@@ -912,7 +922,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("read the predecessor post-fence AccessKey completion", err)
 	}
 	predecessorReportResponse := performJSON(t, http.MethodPost, endpoint+"/v1/account/security-reports", primary.Credential,
-		iamv1.CreateAccountSecurityReportRequest{FormatVersion: 1, RequestID: "predecessor-security-report"})
+		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "predecessor-security-report"})
 	var predecessorReportCreation iamv1.CreateAccountSecurityReportResponse
 	if predecessorReportResponse.Status != http.StatusCreated || json.Unmarshal(predecessorReportResponse.Body, &predecessorReportCreation) != nil ||
 		iamv1.ValidateCreateAccountSecurityReportResponse(predecessorReportCreation) != nil {
@@ -922,9 +932,9 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		endpoint+"/v1/account/security-reports/"+string(predecessorReportCreation.Metadata.ID), primary.Credential, nil)
 	var predecessorReport iamv1.AccountSecurityReport
 	if predecessorReportResponse.Status != http.StatusOK || json.Unmarshal(predecessorReportResponse.Body, &predecessorReport) != nil ||
-		iamv1.ValidateAccountSecurityReport(predecessorReport) != nil || predecessorReport.Metadata.FormatVersion != 1 ||
+		iamv1.ValidateAccountSecurityReport(predecessorReport) != nil || predecessorReport.Metadata.FormatVersion != iamv1.SecurityReportFormatVersion ||
 		len(predecessorReport.AccessKeys) != 1 || predecessorReport.AccessKeys[0].ID != retainedKeyCreation.Key.ID ||
-		predecessorReport.AccessKeys[0].CredentialState != "" {
+		predecessorReport.AccessKeys[0].CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
 		t.Fatal("actual predecessor did not return its security report")
 	}
 	predecessorReportCSVResponse := performJSON(t, http.MethodGet,
@@ -932,8 +942,8 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	predecessorReportCSV := bytes.Clone(predecessorReportCSVResponse.Body)
 	if predecessorReportCSVResponse.Status != http.StatusOK ||
 		iamv1.ValidateAccountSecurityReportCSV(predecessorReport.Metadata, predecessorReportCSV) != nil ||
-		bytes.Contains(predecessorReportCSV, []byte("credential_state")) {
-		t.Fatal("actual predecessor did not preserve its format-v1 security report CSV")
+		!bytes.Contains(predecessorReportCSV, []byte("credential_state")) {
+		t.Fatal("actual predecessor did not preserve its format-v2 security report CSV")
 	}
 	accessAnalyzerResponse := performJSON(t, http.MethodPost, endpoint+"/v1/account/access-analyzers", primary.Credential,
 		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "retained-access-analyzer-create"})
@@ -952,7 +962,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		retainedAccessAnalyzer.Disposition != (iamv1.AccessDispositionRule{Mode: iamv1.AccessDispositionReviewOnly}) {
 		t.Fatalf("actual predecessor did not update its supported access analyzer: status=%d", accessAnalyzerResponse.Status)
 	}
-	// The immediate schema-81 predecessor already owns explicit REVIEW_ONLY.
+	// The immediate schema-82 predecessor already owns explicit REVIEW_ONLY.
 	// The current schema must preserve it instead of inventing a migration
 	// default or authority.
 	migratedAccessAnalyzerExpected := retainedAccessAnalyzer
@@ -1029,13 +1039,13 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("retained database did not satisfy current IAM readiness and fail-closed defaults", err)
 	}
 	if current := attachmentContractState(); !bytes.Equal(predecessorAttachmentContract, current) {
-		t.Fatal("IAM81 attachment completions, facts or built-in policy state changed during IAM82 migration")
+		t.Fatal("IAM82 attachment completions, facts or built-in policy state changed during IAM83 migration")
 	}
 	if current := retainedRoleState(); !bytes.Equal(predecessorRoleState, current) {
-		t.Fatal("IAM82 changed the retained IAM81 root Role, Trust, boundary, attachment or RoleSession")
+		t.Fatal("IAM83 changed the retained IAM82 root Role, Trust, boundary, attachment or RoleSession")
 	}
 	if current := retainedLifecycleState(); !bytes.Equal(predecessorLifecycleState, current) {
-		t.Fatal("IAM82 changed retained IAM81 Root Role lifecycle state or facts")
+		t.Fatal("IAM83 changed retained IAM82 Root Role lifecycle state or facts")
 	}
 	var retainedTrustEvidence bool
 	if err := admin.QueryRow(ctx, `SELECT count(*)=2
@@ -1050,14 +1060,14 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		AND iam.verified_role_trust_change($1,$3,'retained-root-role-trust') IS NOT NULL
 		FROM iam.role_trust_versions WHERE tenant_id=$1 AND role_id=$2`,
 		primary.Session.AccountID, retainedRole.ID, primary.Session.PrincipalID).Scan(&retainedTrustEvidence); err != nil || !retainedTrustEvidence {
-		t.Fatal("IAM82 changed retained IAM81 Root Trust evidence or synthesized proof for initial Trust", err)
+		t.Fatal("IAM83 changed retained IAM82 Root Trust evidence or synthesized proof for initial Trust", err)
 	}
 	var retainedLifecycleReceipts int
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.role_lifecycle_changes WHERE tenant_id=$1 AND role_id=$2
 		OR (tenant_id=$1 AND request_id IN ('retained-root-lifecycle-update','retained-root-lifecycle-disable',
 		  'retained-root-lifecycle-enable','retained-root-lifecycle-delete'))`,
 		primary.Session.AccountID, retainedLifecycleRole.ID).Scan(&retainedLifecycleReceipts); err != nil || retainedLifecycleReceipts != 4 {
-		t.Fatal("IAM82 changed retained IAM81 Root lifecycle completions", err, retainedLifecycleReceipts)
+		t.Fatal("IAM83 changed retained IAM82 Root lifecycle completions", err, retainedLifecycleReceipts)
 	}
 	var retainedRootRoleEvidence bool
 	if err := admin.QueryRow(ctx, `SELECT
@@ -1070,10 +1080,10 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		 WHERE receipt.tenant_id=$1 AND receipt.request_id='retained-root-role-attachment'
 		   AND receipt.target_boundary_evidence->>'state'='ROLE_BOUND')`,
 		primary.Session.AccountID, retainedRole.ID).Scan(&retainedRootRoleEvidence); err != nil || !retainedRootRoleEvidence {
-		t.Fatal("IAM82 synthesized delegated Role evidence for retained root authority", err)
+		t.Fatal("IAM83 synthesized delegated Role evidence for retained root authority", err)
 	}
 	if current := retirementState(); !bytes.Equal(predecessorRetirementState, current) {
-		t.Fatal("IAM82 changed retained IAM81 root policy history")
+		t.Fatal("IAM83 changed retained IAM82 root policy history")
 	}
 	var retirementCompletions, metadataCompletions, deletionCompletions int64
 	if err := admin.QueryRow(ctx, `SELECT
@@ -1081,7 +1091,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		(SELECT count(*) FROM iam.policy_metadata_updates),
 		(SELECT count(*) FROM iam.policy_deletions)`).Scan(&retirementCompletions, &metadataCompletions, &deletionCompletions); err != nil ||
 		retirementCompletions != 0 || metadataCompletions != 0 || deletionCompletions != 0 {
-		t.Fatal("IAM82 synthesized delegated completion for retained root policy history", err,
+		t.Fatal("IAM83 synthesized delegated completion for retained root policy history", err,
 			retirementCompletions, metadataCompletions, deletionCompletions)
 	}
 	var predecessorEvidencePreserved bool
@@ -1093,12 +1103,12 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  WHERE outbox.event_id IS NULL
 		    OR outbox.event_document->>'authorityEvidenceDigest' IS DISTINCT FROM receipt.authority_evidence_digest)
 		FROM iam.policy_attachment_changes`, predecessorAttachmentReceiptCount).Scan(&predecessorEvidencePreserved); err != nil || !predecessorEvidencePreserved {
-		t.Fatal("IAM82 changed a retained IAM81 authority-evidence commitment", err)
+		t.Fatal("IAM83 changed a retained IAM82 authority-evidence commitment", err)
 	}
 	var predecessorGroupCeilingDefaulted bool
 	if err := admin.QueryRow(ctx, `SELECT count(*)=$1 AND bool_and(delegation_ceiling_policy_id IS NULL)
 		FROM iam.policy_attachments`, predecessorAttachmentCount).Scan(&predecessorGroupCeilingDefaulted); err != nil || !predecessorGroupCeilingDefaulted {
-		t.Fatal("IAM82 assigned a delegated Group ceiling to a retained IAM81 direct attachment", err)
+		t.Fatal("IAM83 assigned a delegated Group ceiling to a retained IAM82 direct attachment", err)
 	}
 	var attachmentChangeAuthority bool
 	if err := admin.QueryRow(ctx, `SELECT
@@ -1112,7 +1122,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  LATERAL jsonb_array_elements_text(statement->'actions') action_value
 		  WHERE p.id='system.platform-operator'
 		    AND action_value='iam.platform-policy-attachment-change.read')`).Scan(&attachmentChangeAuthority); err != nil || !attachmentChangeAuthority {
-		t.Fatal("IAM81 built-in attachment completion read authority was lost", err)
+		t.Fatal("IAM82 built-in attachment completion read authority was lost", err)
 	}
 	current := start(currentBinary, currentSchema)
 	roleResponse = performJSON(t, http.MethodGet, retainedRolePath, primary.Credential, nil)
@@ -1228,7 +1238,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		  ON (attachment.tenant_id,attachment.id)=(receipt.tenant_id,receipt.attachment_id)
 		WHERE receipt.attachment_id=$1 AND receipt.request_id='retained-current-viewer'`,
 		currentGrant.ID).Scan(&currentAuthorityEvidenceBound); err != nil || !currentAuthorityEvidenceBound {
-		t.Fatal("IAM82 did not bind a post-upgrade direct attachment fact without inventing a Group ceiling", err)
+		t.Fatal("IAM83 did not bind a post-upgrade direct attachment fact without inventing a Group ceiling", err)
 	}
 	delegatedUser := createIAMUser(t, endpoint, primary.Credential, "retained.delegated", "Post-upgrade delegated role",
 		initialReaderPassword, "retained-delegated-user")
@@ -1429,7 +1439,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	if retainedKeyResponse.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(retainedKeyResponse.Body), &replayedRetainedKey) != nil ||
 		iamv1.ValidateCreateAccessKeyResponse(replayedRetainedKey) != nil || replayedRetainedKey.Outcome != "EQUAL_REPLAY" ||
 		replayedRetainedKey.Secret.Present() || !reflect.DeepEqual(replayedRetainedKey.Key, expectedCreateReplay) {
-		t.Fatal("current authority changed the pre-fence IAM81 AccessKey completion or reissued its secret")
+		t.Fatal("current authority changed the pre-fence IAM82 AccessKey completion or reissued its secret")
 	}
 	retainedKeyResponse = performJSON(t, http.MethodPost,
 		retainedKeyPath+"/"+string(retainedKeyCreation.Key.ID)+":set-status", a.Credential, retainedKeyStatusRequest)
@@ -1439,7 +1449,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		replayedRetainedKeyStatus.Key.ID != retainedKeyCreation.Key.ID ||
 		replayedRetainedKeyStatus.Key.Status != iamv1.AccessKeyDisabled || replayedRetainedKeyStatus.Key.ResourceVersion != 2 ||
 		replayedRetainedKeyStatus.Key.CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
-		t.Fatal("current authority changed the post-fence IAM81 AccessKey completion")
+		t.Fatal("current authority changed the post-fence IAM82 AccessKey completion")
 	}
 	var migratedCreateStoredResult, migratedStatusStoredResult string
 	if err := admin.QueryRow(ctx, `SELECT result::text FROM iam.access_key_intents
@@ -1479,10 +1489,10 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		endpoint+"/v1/account/security-reports/"+string(predecessorReportCreation.Metadata.ID)+"/content", primary.Credential, nil)
 	if migratedPredecessorCSVResponse.Status != http.StatusOK || !bytes.Equal(migratedPredecessorCSVResponse.Body, predecessorReportCSV) ||
 		iamv1.ValidateAccountSecurityReportCSV(migratedPredecessorReport.Metadata, migratedPredecessorCSVResponse.Body) != nil {
-		t.Fatal("migration changed the predecessor format-v1 security report CSV")
+		t.Fatal("migration changed the predecessor format-v2 security report CSV")
 	}
 	predecessorReportResponse = performJSON(t, http.MethodPost, endpoint+"/v1/account/security-reports", primary.Credential,
-		iamv1.CreateAccountSecurityReportRequest{FormatVersion: 1, RequestID: "predecessor-security-report"})
+		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "predecessor-security-report"})
 	var replayedPredecessorReport iamv1.CreateAccountSecurityReportResponse
 	if predecessorReportResponse.Status != http.StatusOK || json.Unmarshal(predecessorReportResponse.Body, &replayedPredecessorReport) != nil ||
 		iamv1.ValidateCreateAccountSecurityReportResponse(replayedPredecessorReport) != nil ||

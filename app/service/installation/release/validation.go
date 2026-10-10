@@ -297,9 +297,9 @@ func validateFiles(files []File) error {
 			if file.MediaType != mediaPlainText || file.Executable || file.Size > maximumManifestBytes {
 				return errors.New("release license payload is invalid")
 			}
-		case file.Path == IAMAuthorizationProfilesPath:
-			if file.MediaType != IAMAuthorizationProfilesMediaType || file.Executable || file.Size > maximumManifestBytes {
-				return errors.New("release IAM authorization profile catalog is invalid")
+		case file.Path == IAMProductAuthorizationPath:
+			if file.MediaType != IAMProductAuthorizationMediaType || file.Executable || file.Size > maximumManifestBytes {
+				return errors.New("release IAM product authorization catalog is invalid")
 			}
 		default:
 			return errors.New("release payload kind is unsupported")
@@ -316,11 +316,11 @@ func validateRequiredReleaseFiles(manifest Manifest) error {
 		return nil
 	}
 	for _, file := range manifest.Files {
-		if file.Path == IAMAuthorizationProfilesPath && file.MediaType == IAMAuthorizationProfilesMediaType && !file.Executable {
+		if file.Path == IAMProductAuthorizationPath && file.MediaType == IAMProductAuthorizationMediaType && !file.Executable {
 			return nil
 		}
 	}
-	return errors.New("release IAM authorization profile catalog is missing")
+	return errors.New("release IAM product authorization catalog is missing")
 }
 
 func validateImages(images []Image, files []File) error {

@@ -25,19 +25,19 @@ func Verify(ctx context.Context, executor postgresmigration.Executor) error {
 
 // BootstrapRelease applies IAM bootstrap while binding the migration to the
 // exact additional product catalog authenticated by the release owner.
-func BootstrapRelease(ctx context.Context, executor postgresmigration.Executor, catalog iamv1.AuthorizationProfileReleaseCatalog) error {
+func BootstrapRelease(ctx context.Context, executor postgresmigration.Executor, catalog iamv1.ProductAuthorizationReleaseCatalog) error {
 	return postgresmigration.Bootstrap(ctx, executor, releaseSource(catalog))
 }
 
 // UpRelease applies IAM schema/data evolution and the authenticated additional
 // product catalog in IAM's existing atomic transaction.
-func UpRelease(ctx context.Context, executor postgresmigration.Executor, catalog iamv1.AuthorizationProfileReleaseCatalog) error {
+func UpRelease(ctx context.Context, executor postgresmigration.Executor, catalog iamv1.ProductAuthorizationReleaseCatalog) error {
 	return postgresmigration.Up(ctx, executor, releaseSource(catalog))
 }
 
 // VerifyRelease verifies the installed IAM state against the same exact
 // release catalog. It does not accept a runtime or tenant-selected registry.
-func VerifyRelease(ctx context.Context, executor postgresmigration.Executor, catalog iamv1.AuthorizationProfileReleaseCatalog) error {
+func VerifyRelease(ctx context.Context, executor postgresmigration.Executor, catalog iamv1.ProductAuthorizationReleaseCatalog) error {
 	return postgresmigration.Verify(ctx, executor, releaseSource(catalog))
 }
 
@@ -105,7 +105,7 @@ func VerifyInstalledWithAuthenticationRecovery(
 func ApplyReleaseWithAccessAnalysis(
 	ctx context.Context,
 	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN string,
-	catalog iamv1.AuthorizationProfileReleaseCatalog,
+	catalog iamv1.ProductAuthorizationReleaseCatalog,
 ) error {
 	return postgresmigration.Apply(ctx, adminDSN, releaseSource(catalog),
 		accessAnalysisLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN))
@@ -116,17 +116,14 @@ func ApplyReleaseWithAccessAnalysis(
 func VerifyInstalledReleaseWithAccessAnalysis(
 	ctx context.Context,
 	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN string,
-	catalog iamv1.AuthorizationProfileReleaseCatalog,
+	catalog iamv1.ProductAuthorizationReleaseCatalog,
 ) error {
 	return postgresmigration.VerifyInstalled(ctx, adminDSN, releaseSource(catalog),
 		accessAnalysisLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN))
 }
 
-func releaseSource(catalog iamv1.AuthorizationProfileReleaseCatalog) postgresmigration.Source {
-	if _, err := iamv1.EncodeAuthorizationProfileReleaseCatalog(catalog); err != nil {
-		return postgresmigration.Source{Context: "iam"}
-	}
-	return iammigrations.SourceWithAuthorizationProfiles(catalog.Current, catalog.Historical)
+func releaseSource(catalog iamv1.ProductAuthorizationReleaseCatalog) postgresmigration.Source {
+	return iammigrations.SourceWithProductAuthorization(catalog)
 }
 
 func accessAnalysisLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN, accessAnalysisDSN string) []postgresmigration.Login {

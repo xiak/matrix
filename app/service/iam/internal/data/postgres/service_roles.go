@@ -10,6 +10,53 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 )
 
+func (value *transaction) ListServiceRoleTemplates(
+	ctx context.Context,
+	read identityaccess.AccountRead,
+) (iamv1.ServiceRoleTemplateList, error) {
+	if iamv1.ValidateID("accountId", string(read.AccountID)) != nil ||
+		iamv1.ValidateID("actorPrincipalId", string(read.ActorPrincipalID)) != nil ||
+		iamv1.ValidateID("decisionId", string(read.DecisionID)) != nil || read.After != "" {
+		return iamv1.ServiceRoleTemplateList{}, identityaccess.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, `SELECT iam.list_service_role_templates($1,$2,$3)`,
+		read.AccountID, read.ActorPrincipalID, read.DecisionID).Scan(&encoded); err != nil {
+		return iamv1.ServiceRoleTemplateList{}, mapAuthorizationDatabaseError("list IAM service role templates", err)
+	}
+	defer clear(encoded)
+	var result iamv1.ServiceRoleTemplateList
+	if int64(len(encoded)) > iamv1.MaxServiceRoleTemplateListBytes || json.Unmarshal(encoded, &result) != nil ||
+		iamv1.ValidateServiceRoleTemplateList(result) != nil {
+		return iamv1.ServiceRoleTemplateList{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) ReadServiceRoleTemplate(
+	ctx context.Context,
+	reference iamv1.ServiceRoleTemplateReference,
+) (iamv1.ServiceRoleTemplate, bool, error) {
+	if iamv1.ValidateServiceRoleTemplateReference(reference) != nil {
+		return iamv1.ServiceRoleTemplate{}, false, identityaccess.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, `SELECT iam.read_service_role_template($1,$2,$3)`,
+		reference.ID, reference.Version, reference.ContentDigest).Scan(&encoded); err != nil {
+		return iamv1.ServiceRoleTemplate{}, false, mapAuthorizationDatabaseError("read IAM service role template", err)
+	}
+	defer clear(encoded)
+	if encoded == nil {
+		return iamv1.ServiceRoleTemplate{}, false, nil
+	}
+	var result iamv1.ServiceRoleTemplate
+	if int64(len(encoded)) > iamv1.MaxServiceRoleTemplateListBytes || json.Unmarshal(encoded, &result) != nil ||
+		iamv1.ValidateServiceRoleTemplate(result) != nil || result.Reference() != reference {
+		return iamv1.ServiceRoleTemplate{}, false, identityaccess.ErrUnavailable
+	}
+	return result, true, nil
+}
+
 func (value *transaction) ReadServiceRoleAssumption(
 	ctx context.Context,
 	read identityaccess.ServiceRoleAssumptionRead,

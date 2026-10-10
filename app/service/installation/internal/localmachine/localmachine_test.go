@@ -670,8 +670,8 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 			}
 		}
 		isIAM := wantEntrypoints[index] == "/matrix/bin/matrix-iam-migrate"
-		hasProfileCatalog := strings.Contains(joined, "dst=/run/matrix/iam-authorization-profiles.json,readonly") &&
-			hasArgumentPair(arguments, "--env", installationv1.IAMAuthorizationProfilesMigrationFileEnvironment+"=/run/matrix/iam-authorization-profiles.json")
+		hasProfileCatalog := strings.Contains(joined, "dst=/run/matrix/iam-product-authorization.json,readonly") &&
+			hasArgumentPair(arguments, "--env", installationv1.IAMProductAuthorizationMigrationFileEnvironment+"=/run/matrix/iam-product-authorization.json")
 		if hasProfileCatalog != isIAM {
 			t.Fatalf("migration command %d release Profile mount=%v, IAM=%v: %q", index, hasProfileCatalog, isIAM, joined)
 		}
@@ -720,7 +720,7 @@ func TestMigrateInstallationRejectsTamperedReleaseProfileCatalogBeforeProviderEf
 		t.Fatal(err)
 	}
 	runtimeBoundary := newMigrationRuntime(plan, compiled.ProjectName)
-	relative := filepath.Join(layout.ReleaseDirectory(plan.Bundle.Manifest.Release.ID), filepath.FromSlash(release.IAMAuthorizationProfilesPath))
+	relative := filepath.Join(layout.ReleaseDirectory(plan.Bundle.Manifest.Release.ID), filepath.FromSlash(release.IAMProductAuthorizationPath))
 	target, err := managedPath(plan.Root, relative)
 	if err != nil || os.WriteFile(target, []byte(`{"tampered":true}`), 0o600) != nil {
 		t.Fatal("tamper staged release catalog", err)

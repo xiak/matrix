@@ -505,8 +505,8 @@ func topologyManifest() release.Manifest {
 		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
 		Size: 1024, SHA256: digest('1'), Executable: true,
 	}, {
-		Path:      release.IAMAuthorizationProfilesPath,
-		MediaType: release.IAMAuthorizationProfilesMediaType,
+		Path:      release.IAMProductAuthorizationPath,
+		MediaType: release.IAMProductAuthorizationMediaType,
 		Size:      1024, SHA256: digest('9'),
 	}}
 	required := release.RequiredImages()

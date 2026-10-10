@@ -947,12 +947,53 @@ func compileIAMPolicyForStorage(document iamv1.PolicyDocument) (string, string, 
 
 func registeredCatalogProfile() iamv1.AuthorizationProfile {
 	return iamv1.AuthorizationProfile{APIVersion: iamv1.APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 1, CallingService: iamv1.ServicePaaS,
-		Actions: []iamv1.AuthorizationProfileAction{{Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
-			ResourceShapes:    []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}, {Mode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionList}},
-			InstanceListBatch: true,
-			Conditions: []iamv1.AuthorizationProfileCondition{{Key: iamv1.ConditionRequestSourceIP, ValueType: iamv1.ConditionIP,
-				Source: iamv1.ConditionCallingServiceNetwork}},
-			SubjectTypes: []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationAccessKey, iamv1.UserAuthenticationLoginSession}}}}
+		Actions: []iamv1.AuthorizationProfileAction{
+			{Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
+				ResourceShapes:    []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}, {Mode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionList}},
+				InstanceListBatch: true,
+				Conditions: []iamv1.AuthorizationProfileCondition{{Key: iamv1.ConditionRequestSourceIP, ValueType: iamv1.ConditionIP,
+					Source: iamv1.ConditionCallingServiceNetwork}},
+				SubjectTypes: []iamv1.SubjectType{iamv1.SubjectUser, iamv1.SubjectRole}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationAccessKey, iamv1.UserAuthenticationLoginSession}},
+			{Action: "catalog.item.role-bind", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
+				ResourceShapes: []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}},
+				SubjectTypes:   []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession}},
+			{Action: "catalog.item.role-unbind", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
+				ResourceShapes: []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}},
+				SubjectTypes:   []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession}},
+		}}
+}
+
+func registeredCatalogServiceRole(t *testing.T, profile iamv1.AuthorizationProfile) (iamv1.ProductServiceRolePolicy, iamv1.ServiceRoleTemplate) {
+	t.Helper()
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "catalog-read", Effect: iamv1.PolicyAllow,
+			Actions:   []iamv1.Action{"catalog.item.read"},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: "CATALOG_ITEM", Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+	compilation, err := iamv1.CompilePolicyDocument(document, []iamv1.AuthorizationProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := iamv1.CanonicalizePolicyCompilation(document, compilation, []iamv1.AuthorizationProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := iamv1.ProductServiceRolePolicy{Product: profile.Product, DisplayName: "CatalogItemReader",
+		Version: iamv1.PolicyVersion{PolicyID: "system.service-role.catalog.item-reader",
+			ID: iamv1.PolicyVersionID("version-" + strings.TrimPrefix(digest, "sha256:")), Document: document,
+			ContentDigest: digest, ContractVersion: iamv1.PolicyVersionCompiledContract, Compilation: &compilation}}
+	spec := iamv1.ServiceRoleTemplateSpec{Product: profile.Product, ServicePurpose: iamv1.ServicePaaS,
+		RoleName: "CatalogItemReader", RoleDescription: "Reads one explicitly bound catalog item.",
+		PolicyVersion: iamv1.PolicyVersionReference{PolicyID: policy.Version.PolicyID, VersionID: policy.Version.ID,
+			ContentDigest: policy.Version.ContentDigest},
+		Workloads: []iamv1.ServiceRoleWorkloadSpec{{ResourceKind: "CATALOG_ITEM", BindAction: "catalog.item.role-bind",
+			UnbindAction: "catalog.item.role-unbind"}}, MaxSessionDurationSeconds: 900}
+	_, templateDigest, err := iamv1.CanonicalizeServiceRoleTemplateSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := iamv1.ServiceRoleTemplate{APIVersion: iamv1.APIVersion, Kind: "ServiceRoleTemplate",
+		ID: "catalog.item-reader", Version: 1, Spec: spec, ContentDigest: templateDigest, Status: iamv1.ServiceRoleTemplateActive}
+	return policy, template
 }
 
 func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
@@ -975,8 +1016,11 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	assertIAMPostgres18(t, ctx, admin)
 	assertCleanIAMSchema(t, ctx, admin)
 	profile := registeredCatalogProfile()
-	releaseCatalog := iamv1.AuthorizationProfileReleaseCatalog{APIVersion: iamv1.APIVersion, Kind: iamv1.AuthorizationProfileReleaseCatalogKind,
-		Current: []iamv1.AuthorizationProfile{profile}, Historical: []iamv1.AuthorizationProfile{}}
+	serviceRolePolicy, serviceRoleTemplate := registeredCatalogServiceRole(t, profile)
+	releaseCatalog := iamv1.ProductAuthorizationReleaseCatalog{APIVersion: iamv1.APIVersion, Kind: iamv1.ProductAuthorizationReleaseCatalogKind,
+		Profiles: []iamv1.AuthorizationProfile{profile}, ProfileHistory: []iamv1.AuthorizationProfile{},
+		ServiceRolePolicies:  []iamv1.ProductServiceRolePolicy{serviceRolePolicy},
+		ServiceRoleTemplates: []iamv1.ServiceRoleTemplate{serviceRoleTemplate}}
 	for attempt := 1; attempt <= 2; attempt++ {
 		if err := iammigration.BootstrapRelease(ctx, admin, releaseCatalog); err != nil {
 			t.Fatalf("bootstrap registered product attempt %d: %v", attempt, err)
@@ -1011,7 +1055,8 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	}
 	policyRequest := iamv1.CreatePolicyRequest{DisplayName: "Catalog reader", RequestID: "registered-product-policy",
 		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
-			Statements: []iamv1.PolicyStatement{{SID: "catalog-read", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{"catalog.item.read"},
+			Statements: []iamv1.PolicyStatement{{SID: "catalog-access", Effect: iamv1.PolicyAllow,
+				Actions:   []iamv1.Action{"catalog.item.read", "catalog.item.role-bind", "catalog.item.role-unbind"},
 				Resources: []iamv1.PolicyResourceSelector{{Kind: "CATALOG_ITEM", Match: iamv1.PolicyResourceAnyInAuthority}}}}}}
 	policyResponse := performIAMRequest(handler, http.MethodPost, "/v1/policies", primary, mustIAMJSON(t, policyRequest))
 	var policy iamv1.PolicyDetail
@@ -1026,6 +1071,82 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	if attachmentResponse.Code != http.StatusOK {
 		t.Fatalf("attach registered product Policy: status=%d body=%s", attachmentResponse.Code, attachmentResponse.Body.String())
 	}
+	// A service-role permission ceiling is executable authority, not a normal
+	// SYSTEM policy that an Account administrator may attach directly.
+	directCeiling := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(document.Administrator.ID)},
+		PolicyID: serviceRolePolicy.Version.PolicyID, PolicyResourceVersion: 1, RequestID: "registered-product-ceiling-bypass"}
+	if response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", primary, mustIAMJSON(t, directCeiling)); response.Code != http.StatusForbidden {
+		t.Fatalf("service role ceiling was directly attachable: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var directCeilingAttachments int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachments
+		WHERE tenant_id=$1 AND policy_id=$2 AND revoked_at IS NULL`, document.Organization.ID, serviceRolePolicy.Version.PolicyID).
+		Scan(&directCeilingAttachments); err != nil || directCeilingAttachments != 0 {
+		t.Fatal("rejected service role ceiling retained an attachment", err)
+	}
+	serviceRoleAdministrator := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(document.Administrator.ID)},
+		PolicyID: iamv1.SystemPolicyServiceRoleAdministrator, PolicyResourceVersion: 1,
+		RequestID: "registered-product-service-role-administrator"}
+	if response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", primary,
+		mustIAMJSON(t, serviceRoleAdministrator)); response.Code != http.StatusOK {
+		t.Fatalf("delegate registered service role administration: status=%d body=%s", response.Code, response.Body.String())
+	}
+	templateResponse := performIAMRequest(handler, http.MethodGet, "/v1/service-role-templates", primary, nil)
+	var templateDirectory iamv1.ServiceRoleTemplateList
+	if templateResponse.Code != http.StatusOK || json.Unmarshal(templateResponse.Body.Bytes(), &templateDirectory) != nil ||
+		iamv1.ValidateServiceRoleTemplateList(templateDirectory) != nil ||
+		!slices.ContainsFunc(templateDirectory.Items, func(item iamv1.ServiceRoleTemplate) bool {
+			return item.Reference() == serviceRoleTemplate.Reference()
+		}) {
+		t.Fatalf("registered service role template unavailable: status=%d body=%s", templateResponse.Code, templateResponse.Body.String())
+	}
+	bindingCommand := serviceRoleBindingRequestForProfile(t, serviceRoleTemplate, profile,
+		"catalog-item-bound", "registered-product-service-role-bind")
+	bindingResponse := performIAMWorkloadRoleBinding(t, handler, paasCredential, primary, bindingCommand)
+	var serviceRoleAccess iamv1.ServiceLinkedRoleAccess
+	if bindingResponse.Code != http.StatusOK || json.Unmarshal(bindingResponse.Body.Bytes(), &serviceRoleAccess) != nil ||
+		iamv1.ValidateServiceLinkedRoleAccess(serviceRoleAccess) != nil || len(serviceRoleAccess.Bindings) != 1 ||
+		serviceRoleAccess.Relation.Template != serviceRoleTemplate.Reference() ||
+		serviceRoleAccess.Relation.PermissionCeiling != serviceRoleTemplate.Spec.PolicyVersion ||
+		serviceRoleAccess.Bindings[0].Workload != bindingCommand.Authorization.Resource {
+		t.Fatalf("registered service role binding failed: status=%d body=%s", bindingResponse.Code, bindingResponse.Body.String())
+	}
+	assume := iamv1.AssumeServiceRoleRequest{BindingID: serviceRoleAccess.Bindings[0].ID,
+		RequestID: "registered-product-service-role-session"}
+	assumeResponse := performIAMRequest(handler, http.MethodPost, "/v1/internal/service-role-sessions", paasCredential, mustIAMJSON(t, assume))
+	var issuedServiceRole struct {
+		Outcome    string            `json:"outcome"`
+		Session    iamv1.RoleSession `json:"session"`
+		Credential string            `json:"credential"`
+	}
+	if assumeResponse.Code != http.StatusOK || json.Unmarshal(assumeResponse.Body.Bytes(), &issuedServiceRole) != nil ||
+		issuedServiceRole.Outcome != "APPLIED" || issuedServiceRole.Credential == "" ||
+		iamv1.ValidateRoleSession(issuedServiceRole.Session) != nil {
+		t.Fatalf("registered service role session failed: status=%d body=%s", assumeResponse.Code, assumeResponse.Body.String())
+	}
+	dynamicRoleAuthorization, err := iamv1.NewAuthorizationRequestForProfile(profile, "catalog.item.read",
+		bindingCommand.Authorization.Resource, iamv1.AuthorizationResourceInstance, "",
+		"registered-product-service-role-allow", "registered-product-service-role-allow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizeDynamicRole := func(target http.Handler, value iamv1.AuthorizationRequest, want bool) {
+		t.Helper()
+		response := performIAMRequestWithSubject(target, mustIAMJSON(t, value), paasCredential, issuedServiceRole.Credential)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil ||
+			iamv1.CheckAuthorizationDecisionForProfileAndRequest(decision, value, profile) != nil || decision.Allowed != want {
+			t.Fatalf("registered service role decision invalid: status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	authorizeDynamicRole(handler, dynamicRoleAuthorization, true)
+	otherDynamicWorkload := dynamicRoleAuthorization
+	otherDynamicWorkload.Resource.ID = "catalog-item-other"
+	otherDynamicWorkload.RequestID, otherDynamicWorkload.CorrelationID =
+		"registered-product-service-role-other", "registered-product-service-role-other"
+	authorizeDynamicRole(handler, otherDynamicWorkload, false)
 	createUserResponse := performIAMRequest(handler, http.MethodPost, "/v1/users", primary, mustIAMJSON(t, map[string]any{
 		"loginName": "catalog-key-user", "displayName": "Catalog key user", "initialPassword": initialDeveloperPassword,
 		"permissionBoundary": nil, "requestId": "registered-product-key-user"}))
@@ -1268,11 +1389,44 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	restartedTemplates := performIAMRequest(restartedHandler, http.MethodGet, "/v1/service-role-templates", primary, nil)
+	var restartedTemplateDirectory iamv1.ServiceRoleTemplateList
+	if restartedTemplates.Code != http.StatusOK || json.Unmarshal(restartedTemplates.Body.Bytes(), &restartedTemplateDirectory) != nil ||
+		iamv1.ValidateServiceRoleTemplateList(restartedTemplateDirectory) != nil ||
+		!slices.ContainsFunc(restartedTemplateDirectory.Items, func(item iamv1.ServiceRoleTemplate) bool {
+			return item.Reference() == serviceRoleTemplate.Reference()
+		}) {
+		t.Fatalf("registered service role template was process-local: status=%d body=%s", restartedTemplates.Code, restartedTemplates.Body.String())
+	}
+	dynamicAfterRestart := dynamicRoleAuthorization
+	dynamicAfterRestart.RequestID, dynamicAfterRestart.CorrelationID =
+		"registered-product-service-role-after-restart", "registered-product-service-role-after-restart"
+	authorizeDynamicRole(restartedHandler, dynamicAfterRestart, true)
+	dynamicRevocation := serviceRoleRevocationRequestForProfile(t, serviceRoleAccess.Bindings[0], profile,
+		serviceRoleTemplate.Spec.Workloads[0].UnbindAction, "registered-product-service-role-unbind")
+	dynamicRevocationResponse := performIAMWorkloadRoleRevocation(t, restartedHandler, paasCredential, primary,
+		serviceRoleAccess.Bindings[0].ID, dynamicRevocation)
+	var revokedDynamicBinding iamv1.WorkloadRoleBinding
+	if dynamicRevocationResponse.Code != http.StatusOK ||
+		json.Unmarshal(dynamicRevocationResponse.Body.Bytes(), &revokedDynamicBinding) != nil ||
+		iamv1.ValidateWorkloadRoleBinding(revokedDynamicBinding) != nil ||
+		revokedDynamicBinding.Status != iamv1.WorkloadRoleBindingRevoked ||
+		revokedDynamicBinding.ID != serviceRoleAccess.Bindings[0].ID {
+		t.Fatalf("registered service role revocation failed: status=%d body=%s",
+			dynamicRevocationResponse.Code, dynamicRevocationResponse.Body.String())
+	}
+	dynamicAfterRevocation := dynamicRoleAuthorization
+	dynamicAfterRevocation.RequestID, dynamicAfterRevocation.CorrelationID =
+		"registered-product-service-role-after-revoke", "registered-product-service-role-after-revoke"
+	if response := performIAMRequestWithSubject(restartedHandler, mustIAMJSON(t, dynamicAfterRevocation),
+		paasCredential, issuedServiceRole.Credential); response.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked registered service role remained usable: status=%d body=%s", response.Code, response.Body.String())
+	}
 	replayed := request
 	replayed.RequestID, replayed.CorrelationID = "registered-product-after-restart", "registered-product-after-restart"
 	authorize(t, restartedHandler, paasCredential, primary, replayed, http.StatusOK, true)
 	authorizeCatalogKey(restartedHandler, newCatalogKeyAuthorization("registered-product-key-after-restart", "item-key-restart"), http.StatusOK, true)
-	var heads, versions, allows, denies, forged, batchAllows, keyAllows int
+	var heads, versions, allows, denies, forged, batchAllows, keyAllows, templates, ceilings, roleAllows int
 	if err := admin.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM iam.authorization_profile_heads WHERE product='catalog'),
 		(SELECT count(*) FROM iam.policy_versions WHERE id=$1 AND compilation#>>'{profiles,0,product}'='catalog'),
@@ -1280,9 +1434,54 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id='registered-product-wrong-service' AND NOT allowed),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id LIKE 'registered-product-forged-%'),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE document->>'correlationId'='registered-product-batch' AND allowed),
-		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id LIKE 'registered-product-key-%' AND document->>'action'='catalog.item.read' AND allowed)`, policy.Version.ID).
-		Scan(&heads, &versions, &allows, &denies, &forged, &batchAllows, &keyAllows); err != nil || heads != 1 || versions != 1 || allows != 2 || denies != 1 || forged != 0 || batchAllows != 2 || keyAllows != 4 {
-		t.Fatalf("registered product state split: heads=%d versions=%d allows=%d denies=%d forged=%d batch=%d key=%d err=%v", heads, versions, allows, denies, forged, batchAllows, keyAllows, err)
+		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id LIKE 'registered-product-key-%' AND document->>'action'='catalog.item.read' AND allowed),
+		(SELECT count(*) FROM iam.service_role_templates WHERE id=$2 AND version=$3 AND content_digest=$4),
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$5 AND id=$6 AND content_digest=$7
+		  AND compilation#>>'{profiles,0,product}'='catalog'),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id IN
+		  ('registered-product-service-role-allow','registered-product-service-role-after-restart') AND allowed
+		  AND subject_type='ROLE')`, policy.Version.ID, serviceRoleTemplate.ID, serviceRoleTemplate.Version,
+		serviceRoleTemplate.ContentDigest, serviceRolePolicy.Version.PolicyID, serviceRolePolicy.Version.ID,
+		serviceRolePolicy.Version.ContentDigest).
+		Scan(&heads, &versions, &allows, &denies, &forged, &batchAllows, &keyAllows, &templates, &ceilings, &roleAllows); err != nil ||
+		heads != 1 || versions != 1 || allows != 2 || denies != 1 || forged != 0 || batchAllows != 2 || keyAllows != 4 ||
+		templates != 1 || ceilings != 1 || roleAllows != 2 {
+		t.Fatalf("registered product state split: heads=%d versions=%d allows=%d denies=%d forged=%d batch=%d key=%d templates=%d ceilings=%d role=%d err=%v",
+			heads, versions, allows, denies, forged, batchAllows, keyAllows, templates, ceilings, roleAllows, err)
+	}
+	// Simulate retained pre-IAM83 data written before the product ceiling guard
+	// existed. The supported migration must fail closed; it must neither bless
+	// nor silently remove an authority grant that the signed catalog forbids.
+	_, disableErr := admin.Exec(ctx, `ALTER TABLE iam.policy_attachments DISABLE TRIGGER policy_attachments_reject_service_roles`)
+	var insertErr error
+	if disableErr == nil {
+		_, insertErr = admin.Exec(ctx, `INSERT INTO iam.policy_attachments(
+			tenant_id,id,target_id,target_kind,policy_id,authority_scope,resource_version,created_at,updated_at)
+			VALUES($1,'attachment-retained-service-role-ceiling',$2,'USER',$3,'TENANT',1,transaction_timestamp(),transaction_timestamp())`,
+			document.Organization.ID, document.Administrator.ID, serviceRolePolicy.Version.PolicyID)
+	}
+	_, enableErr := admin.Exec(ctx, `ALTER TABLE iam.policy_attachments ENABLE ALWAYS TRIGGER policy_attachments_reject_service_roles`)
+	if err := errors.Join(disableErr, insertErr, enableErr); err != nil {
+		t.Fatal("create retained direct-ceiling fixture", err)
+	}
+	conflictConnection, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect retained direct-ceiling migration fixture", err)
+	}
+	if err := iammigration.UpRelease(ctx, conflictConnection, releaseCatalog); err == nil {
+		_ = conflictConnection.Close(context.Background())
+		t.Fatal("IAM83 migration accepted a retained direct service-role ceiling attachment")
+	}
+	if err := conflictConnection.Close(context.Background()); err != nil {
+		t.Fatal("close retained direct-ceiling migration fixture", err)
+	}
+	if err := iammigration.VerifyRelease(ctx, admin, releaseCatalog); err == nil {
+		t.Fatal("IAM83 verification accepted a retained direct service-role ceiling attachment")
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachments
+		WHERE tenant_id=$1 AND id='attachment-retained-service-role-ceiling' AND policy_id=$2 AND revoked_at IS NULL`,
+		document.Organization.ID, serviceRolePolicy.Version.PolicyID).Scan(&directCeilingAttachments); err != nil || directCeilingAttachments != 1 {
+		t.Fatal("failed migration changed the retained direct-ceiling conflict", err)
 	}
 }
 
@@ -29052,7 +29251,7 @@ func proveServiceRoleTemplateDirectory(t *testing.T, ctx context.Context, handle
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &actor) != nil {
 		t.Fatal("read service template actor")
 	}
-	wanted, err := authority.ServiceRoleTemplates()
+	wanted, err := authority.BuiltInServiceRoleTemplates()
 	if err != nil || len(wanted) != 1 {
 		t.Fatal("read release service role templates", err)
 	}
@@ -29108,8 +29307,23 @@ func proveServiceRoleTemplateDirectory(t *testing.T, ctx context.Context, handle
 
 func serviceRoleBindingRequest(t *testing.T, template iamv1.ServiceRoleTemplate, workloadID, requestID string) iamv1.CreateWorkloadRoleBindingRequest {
 	t.Helper()
-	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleBind,
-		iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: workloadID},
+	profile, found := iamv1.LookupAuthorizationProfile(template.Spec.Product)
+	if !found {
+		t.Fatal("built-in service role template product is unavailable")
+	}
+	return serviceRoleBindingRequestForProfile(t, template, profile, workloadID, requestID)
+}
+
+func serviceRoleBindingRequestForProfile(t *testing.T, template iamv1.ServiceRoleTemplate, profile iamv1.AuthorizationProfile,
+	workloadID, requestID string,
+) iamv1.CreateWorkloadRoleBindingRequest {
+	t.Helper()
+	if len(template.Spec.Workloads) == 0 {
+		t.Fatal("service role template has no workload admission")
+	}
+	workload := template.Spec.Workloads[0]
+	authorization, err := iamv1.NewAuthorizationRequestForProfile(profile, workload.BindAction,
+		iamv1.ResourceReference{Kind: workload.ResourceKind, ID: workloadID},
 		iamv1.AuthorizationResourceInstance, "", requestID, requestID)
 	if err != nil {
 		t.Fatal("construct workload service role admission", err)
@@ -29132,7 +29346,19 @@ func performIAMWorkloadRoleBinding(t *testing.T, handler http.Handler, serviceCr
 
 func serviceRoleRevocationRequest(t *testing.T, binding iamv1.WorkloadRoleBinding, requestID string) iamv1.RevokeWorkloadRoleBindingRequest {
 	t.Helper()
-	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleUnbind,
+	profile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductManagedService)
+	if !found {
+		t.Fatal("built-in managedservice authorization profile is unavailable")
+	}
+	return serviceRoleRevocationRequestForProfile(t, binding, profile,
+		iamv1.ActionManagedServiceInstallationRoleUnbind, requestID)
+}
+
+func serviceRoleRevocationRequestForProfile(t *testing.T, binding iamv1.WorkloadRoleBinding,
+	profile iamv1.AuthorizationProfile, action iamv1.Action, requestID string,
+) iamv1.RevokeWorkloadRoleBindingRequest {
+	t.Helper()
+	authorization, err := iamv1.NewAuthorizationRequestForProfile(profile, action,
 		binding.Workload, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
 	if err != nil {
 		t.Fatal("construct workload service role revocation", err)

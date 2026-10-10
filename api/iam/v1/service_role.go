@@ -262,7 +262,7 @@ func ValidateServiceLinkedRoleList(value ServiceLinkedRoleList) error {
 
 func ValidateCreateWorkloadRoleBindingRequest(value CreateWorkloadRoleBindingRequest) error {
 	if ValidateServiceRoleTemplateReference(value.Template) != nil ||
-		ValidateAuthorizationRequest(value.Authorization) != nil ||
+		validateProductAuthorizationRequestShape(value.Authorization) != nil ||
 		value.Authorization.ResourceMode != AuthorizationResourceInstance ||
 		value.Authorization.CollectionUsage != "" {
 		return errors.New("workload role binding request is invalid")
@@ -271,10 +271,42 @@ func ValidateCreateWorkloadRoleBindingRequest(value CreateWorkloadRoleBindingReq
 }
 
 func ValidateRevokeWorkloadRoleBindingRequest(value RevokeWorkloadRoleBindingRequest) error {
-	if ValidateAuthorizationRequest(value.Authorization) != nil ||
+	if validateProductAuthorizationRequestShape(value.Authorization) != nil ||
 		value.Authorization.ResourceMode != AuthorizationResourceInstance ||
 		value.Authorization.CollectionUsage != "" || value.ResourceVersion != 1 {
 		return errors.New("workload role binding revocation request is invalid")
+	}
+	return nil
+}
+
+// The workload command decoder validates only the bounded product request
+// envelope. Exact Action/resource/condition authority is resolved from the
+// authenticated current Profile inside the IAM transaction; consulting the
+// executable-only catalog here would make signed products impossible to use.
+func validateProductAuthorizationRequestShape(value AuthorizationRequest) error {
+	if !profileIdentifier(string(value.Profile.Product), false) || validatePositiveVersion(value.Profile.Revision) != nil ||
+		ValidateDigest("authorization.profile.contentDigest", value.Profile.ContentDigest) != nil ||
+		!authorizationActionIdentifier(value.Action) || !profileIdentifier(string(value.Resource.Kind), true) ||
+		ValidateID("authorization.resource.id", value.Resource.ID) != nil ||
+		value.NetworkContext != nil && ValidateAuthorizationNetworkContext(*value.NetworkContext) != nil ||
+		ValidateID("authorization.requestId", value.RequestID) != nil ||
+		ValidateID("authorization.correlationId", value.CorrelationID) != nil ||
+		validateAuthorizationTagShape(value.RequestTags) != nil || validateAuthorizationTagShape(value.ResourceTags) != nil {
+		return errors.New("product authorization request is invalid")
+	}
+	return nil
+}
+
+func validateAuthorizationTagShape(values []AuthorizationTag) error {
+	if values != nil && (len(values) == 0 || len(values) > MaxAuthorizationTags) {
+		return errors.New("authorization tags are invalid")
+	}
+	previous := ""
+	for _, value := range values {
+		if ValidateAuthorizationTag(value) != nil || value.Key <= previous {
+			return errors.New("authorization tags are invalid")
+		}
+		previous = value.Key
 	}
 	return nil
 }
@@ -291,8 +323,38 @@ func ValidateServiceRoleTemplateSpec(value ServiceRoleTemplateSpec) error {
 		value.MaxSessionDurationSeconds > MaxRoleSessionDurationSeconds {
 		return errors.New("service role template spec is invalid")
 	}
-	profile, found := LookupAuthorizationProfile(value.Product)
-	if !found {
+	seen := make(map[ResourceKind]bool, len(value.Workloads))
+	for _, workload := range value.Workloads {
+		if !profileIdentifier(string(workload.ResourceKind), true) || seen[workload.ResourceKind] ||
+			!authorizationActionIdentifier(workload.BindAction) || !authorizationActionIdentifier(workload.UnbindAction) ||
+			workload.BindAction == workload.UnbindAction {
+			return errors.New("service role template workload kind is invalid")
+		}
+		seen[workload.ResourceKind] = true
+	}
+	return nil
+}
+
+// CheckServiceRoleTemplateSpec resolves the structurally valid template only
+// against declarations authenticated by its caller. Transport decoding cannot
+// substitute the executable's built-in product catalog for a signed release
+// catalog or a database registry snapshot.
+func CheckServiceRoleTemplateSpec(value ServiceRoleTemplateSpec, profiles []AuthorizationProfile) error {
+	if ValidateServiceRoleTemplateSpec(value) != nil || len(profiles) == 0 || len(profiles) > MaxAuthorizationProfileRegistryItems {
+		return errors.New("service role template spec is invalid")
+	}
+	var profile AuthorizationProfile
+	found := false
+	for _, candidate := range profiles {
+		if candidate.Product != value.Product {
+			continue
+		}
+		if found || ValidateAuthorizationProfile(candidate) != nil {
+			return errors.New("service role template product is ambiguous")
+		}
+		profile, found = CloneAuthorizationProfile(candidate), true
+	}
+	if !found || profile.CallingService != value.ServicePurpose {
 		return errors.New("service role template product is not registered")
 	}
 	_, profileDigest, err := CanonicalizeAuthorizationProfile(profile)
@@ -300,13 +362,10 @@ func ValidateServiceRoleTemplateSpec(value ServiceRoleTemplateSpec) error {
 		return errors.New("service role template product is invalid")
 	}
 	profileReference := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: profileDigest}
-	seen := make(map[ResourceKind]bool, len(value.Workloads))
 	for _, workload := range value.Workloads {
-		bind, bindFound := LookupActionDefinition(workload.BindAction)
-		unbind, unbindFound := LookupActionDefinition(workload.UnbindAction)
-		if !profileIdentifier(string(workload.ResourceKind), true) || seen[workload.ResourceKind] ||
-			!bindFound || !unbindFound || workload.BindAction == workload.UnbindAction ||
-			bind.Product != value.Product || unbind.Product != value.Product ||
+		bind, bindFound := LookupAuthorizationProfileActionDefinition(profile, workload.BindAction)
+		unbind, unbindFound := LookupAuthorizationProfileActionDefinition(profile, workload.UnbindAction)
+		if !bindFound || !unbindFound || bind.Product != value.Product || unbind.Product != value.Product ||
 			bind.CallingService != value.ServicePurpose || unbind.CallingService != value.ServicePurpose ||
 			bind.ResourceKind != workload.ResourceKind || unbind.ResourceKind != workload.ResourceKind ||
 			bind.AuthorityScope != AuthorityScopeTenant || unbind.AuthorityScope != AuthorityScopeTenant ||
@@ -318,7 +377,15 @@ func ValidateServiceRoleTemplateSpec(value ServiceRoleTemplateSpec) error {
 				ResourceReference{Kind: workload.ResourceKind, ID: "registered-workload"}, AuthorizationResourceInstance, "") != nil {
 			return errors.New("service role template workload kind is invalid")
 		}
-		seen[workload.ResourceKind] = true
+	}
+	return nil
+}
+
+// CheckServiceRoleTemplate validates the immutable commitment and then binds
+// its product/action semantics to an explicit trusted declaration set.
+func CheckServiceRoleTemplate(value ServiceRoleTemplate, profiles []AuthorizationProfile) error {
+	if ValidateServiceRoleTemplate(value) != nil || CheckServiceRoleTemplateSpec(value.Spec, profiles) != nil {
+		return errors.New("service role template is invalid")
 	}
 	return nil
 }

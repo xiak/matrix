@@ -50,9 +50,9 @@ var platformMigrations = []migrationDefinition{
 			{layout.IAMAccessAnalysisWorker, "/run/matrix/iam-access-analysis-worker-dsn", "MATRIX_MIGRATION_IAM_ACCESS_ANALYSIS_DSN_FILE"},
 		},
 		releaseMounts: []releaseMigrationMount{{
-			relative: release.IAMAuthorizationProfilesPath, destination: "/run/matrix/iam-authorization-profiles.json",
-			environment: installationv1.IAMAuthorizationProfilesMigrationFileEnvironment,
-			mediaType:   release.IAMAuthorizationProfilesMediaType,
+			relative: release.IAMProductAuthorizationPath, destination: "/run/matrix/iam-product-authorization.json",
+			environment: installationv1.IAMProductAuthorizationMigrationFileEnvironment,
+			mediaType:   release.IAMProductAuthorizationMediaType,
 		}},
 	},
 	{

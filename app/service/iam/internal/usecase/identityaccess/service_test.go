@@ -2016,7 +2016,7 @@ func TestServiceRoleTemplateDiscoveryRequiresDelegatedCurrentAuthority(t *testin
 		t.Fatal(err)
 	}
 	result, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-allowed")
-	wanted, wantedErr := authority.ServiceRoleTemplates()
+	wanted, wantedErr := authority.BuiltInServiceRoleTemplates()
 	if err != nil || wantedErr != nil || iamv1.ValidateServiceRoleTemplateList(result) != nil || !reflect.DeepEqual(result.Items, wanted) {
 		t.Fatalf("authenticated service template directory failed: result=%#v err=%v wantedErr=%v", result, err, wantedErr)
 	}
@@ -2031,6 +2031,15 @@ func TestServiceRoleTemplateDiscoveryRequiresDelegatedCurrentAuthority(t *testin
 	if err != nil || fresh.Items[0].Spec.Workloads[0].ResourceKind == "MUTATED" {
 		t.Fatal("caller mutated release-owned service template authority")
 	}
+	alternate := wanted[0]
+	alternate.ID = "managedservice.alternate-reader"
+	tx.serviceRoleTemplates = []iamv1.ServiceRoleTemplate{wanted[0], alternate}
+	dynamic, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-dynamic")
+	if err != nil || len(dynamic.Items) != 2 ||
+		!slices.ContainsFunc(dynamic.Items, func(item iamv1.ServiceRoleTemplate) bool { return item.ID == alternate.ID }) {
+		t.Fatal("database-backed template directory depended on a code-owned template name")
+	}
+	tx.serviceRoleTemplates = nil
 	before := len(tx.authorizations)
 	tx.profileErr = ErrUnavailable
 	if _, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-drift"); !errors.Is(err, ErrUnavailable) || len(tx.authorizations) != before {
@@ -2079,7 +2088,7 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	}); err != nil {
 		t.Fatal(err)
 	}
-	templates, err := authority.ServiceRoleTemplates()
+	templates, err := authority.BuiltInServiceRoleTemplates()
 	if err != nil || len(templates) != 1 {
 		t.Fatal("service role template fixture unavailable", err)
 	}
@@ -3567,6 +3576,8 @@ type coreTransaction struct {
 	serviceLinkedRoleAccess          *iamv1.ServiceLinkedRoleAccess
 	serviceLinkedRoleListRead        *AccountRead
 	serviceLinkedRoleRead            *ServiceLinkedRoleRead
+	serviceRoleTemplates             []iamv1.ServiceRoleTemplate
+	serviceRoleTemplateListRead      *AccountRead
 	serviceRoleAssumptionRead        *ServiceRoleAssumptionRead
 	serviceRoleSessionIssuance       *ServiceRoleSessionIssuance
 	serviceRoleSessionReceipts       map[string]ServiceRoleSessionReceipt
@@ -3670,7 +3681,7 @@ func (transaction *coreTransaction) ReadServiceRoleAssumption(_ context.Context,
 	if binding.ID == "" || binding.Status != iamv1.WorkloadRoleBindingActive {
 		return ServiceRoleAssumption{}, ErrForbidden
 	}
-	templates, err := authority.ServiceRoleTemplates()
+	templates, err := authority.BuiltInServiceRoleTemplates()
 	if err != nil {
 		return ServiceRoleAssumption{}, ErrUnavailable
 	}
@@ -4763,6 +4774,47 @@ func (transaction *coreTransaction) CurrentAuthorizationProfiles(context.Context
 		return result, nil
 	}
 	return iamv1.AllAuthorizationProfiles(), nil
+}
+
+func (transaction *coreTransaction) ListServiceRoleTemplates(_ context.Context, read AccountRead) (iamv1.ServiceRoleTemplateList, error) {
+	transaction.serviceRoleTemplateListRead = &read
+	templates := transaction.serviceRoleTemplates
+	if templates == nil {
+		var err error
+		templates, err = authority.BuiltInServiceRoleTemplates()
+		if err != nil {
+			return iamv1.ServiceRoleTemplateList{}, ErrUnavailable
+		}
+	}
+	items := make([]iamv1.ServiceRoleTemplate, 0, len(templates))
+	for _, template := range templates {
+		if template.Status == iamv1.ServiceRoleTemplateActive {
+			items = append(items, template)
+		}
+	}
+	slices.SortFunc(items, func(left, right iamv1.ServiceRoleTemplate) int {
+		return strings.Compare(string(left.ID), string(right.ID))
+	})
+	return iamv1.ServiceRoleTemplateList{APIVersion: iamv1.APIVersion, Kind: "ServiceRoleTemplateList", Items: items}, nil
+}
+
+func (transaction *coreTransaction) ReadServiceRoleTemplate(_ context.Context,
+	reference iamv1.ServiceRoleTemplateReference,
+) (iamv1.ServiceRoleTemplate, bool, error) {
+	templates := transaction.serviceRoleTemplates
+	if templates == nil {
+		var err error
+		templates, err = authority.BuiltInServiceRoleTemplates()
+		if err != nil {
+			return iamv1.ServiceRoleTemplate{}, false, ErrUnavailable
+		}
+	}
+	for _, template := range templates {
+		if template.Reference() == reference {
+			return template, true, nil
+		}
+	}
+	return iamv1.ServiceRoleTemplate{}, false, nil
 }
 
 func (transaction *coreTransaction) LookupCurrentAuthorizationProfile(_ context.Context, reference iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error) {

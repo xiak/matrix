@@ -17,8 +17,8 @@ import (
 func TestCurrentDatabaseProfile(t *testing.T) {
 	want := DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 82, Audit: 37, PaaS: 3},
-		ContractRevision: 30,
+		Authorities:      AuthoritySchemas{IAM: 83, Audit: 37, PaaS: 3},
+		ContractRevision: 31,
 	}
 	if got := CurrentDatabaseProfile(); got != want {
 		t.Fatalf("current database profile = %#v, want %#v", got, want)
@@ -127,14 +127,14 @@ func TestManifestRejectsUnsafeOrIncompleteInventory(t *testing.T) {
 		"payload metadata": func(value *Manifest) {
 			value.Files[0].Size = 0
 		},
-		"missing IAM authorization profiles": func(value *Manifest) {
+		"missing IAM product authorization": func(value *Manifest) {
 			value.Files = slices.DeleteFunc(value.Files, func(file File) bool {
-				return file.Path == IAMAuthorizationProfilesPath
+				return file.Path == IAMProductAuthorizationPath
 			})
 		},
-		"IAM authorization profile media": func(value *Manifest) {
+		"IAM product authorization media": func(value *Manifest) {
 			for index := range value.Files {
-				if value.Files[index].Path == IAMAuthorizationProfilesPath {
+				if value.Files[index].Path == IAMProductAuthorizationPath {
 					value.Files[index].MediaType = mediaPlainText
 				}
 			}
@@ -318,7 +318,7 @@ func validManifest() Manifest {
 		Path: "bin/mx", MediaType: mediaExecutable,
 		Size: 1024, SHA256: digest('1'), Executable: true,
 	}, {
-		Path: IAMAuthorizationProfilesPath, MediaType: IAMAuthorizationProfilesMediaType,
+		Path: IAMProductAuthorizationPath, MediaType: IAMProductAuthorizationMediaType,
 		Size: 1024, SHA256: digest('9'),
 	}}
 	required := RequiredImages()

@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted foundation; current source profile is IAM/Audit/PaaS `82/37/3+r30`. This slice has locally verified the signed additional-product Profile transport and isolated migration mount; the full current-profile offline lifecycle and exact-source independent CI remain required
+- Status: Accepted foundation; current source profile is IAM/Audit/PaaS `83/37/3+r31`. This slice has locally verified the signed product-authorization catalog transport and isolated migration mount; the full current-profile offline lifecycle and exact-source independent CI remain required
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `82/37/3` revision 30; earlier accepted slices remain historical evidence, not an alternate current profile
+- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `83/37/3` revision 31; earlier accepted slices remain historical evidence, not an alternate current profile
 
 ## Outcome
 
@@ -49,8 +49,9 @@ An accepted bundle contains the exact immutable payloads required by
 - PostgreSQL and every other approved third-party runtime image;
 - generated-at-install Compose input owned by Matrix, migration assets, and
   non-secret verification metadata;
-- the canonical IAM additional-product Profile catalog consumed only by the
-  one-shot IAM migration boundary.
+- the canonical IAM product-authorization catalog, containing additional
+  Profiles plus product-owned service-role ceilings and templates, consumed
+  only by the one-shot IAM migration boundary.
 
 This FEAT owns distribution and lifecycle integration, not the internal IAM,
 Audit, apphosting, gateway, or UI business models. Their owning contracts must
@@ -96,19 +97,22 @@ Secrets, private signing keys, credentials, database contents, and absolute
 host paths are absent from the bundle manifest.
 
 The current manifest also requires one fixed
-`config/iam/authorization-profiles.json` payload. The release builder validates
-and canonicalizes the repository-owned additional-product catalog before any
+`config/iam/product-authorization.json` payload with media type
+`application/vnd.matrix.iam.product-authorization-catalog+json`. The release
+builder validates and canonicalizes the repository-owned catalog before any
 image build, then signs its exact path, media type, length and digest with the
 rest of the bundle. Installation re-verifies the staged bundle and mounts this
 file read-only only into the one-shot IAM migration process; no resident API,
 worker, verifier or other authority receives it. The catalog cannot replace a
 Matrix built-in product, invent built-in history, register a service identity,
-attach a Policy or grant Account access. The release builder rejects
+attach a Policy, create a service-role binding, or grant Account access. Its
+service-role ceilings and templates are immutable product declarations whose
+exact Profile, PolicyVersion, action/resource, purpose and digest links are
+revalidated by IAM before database effects. The release builder rejects
 non-canonical or unsupported content before build effects; installation rejects
-a missing or changed signed payload before provider effects; the one-shot
-migration revalidates catalog semantics before database effects. The IAM FEAT
-owns declaration/evolution semantics; this FEAT owns signed transport and
-installation isolation.
+a missing or changed signed payload before provider effects. The IAM FEAT owns
+declaration/evolution semantics; this FEAT owns signed transport and installation
+isolation.
 
 ## Installation state machine
 

@@ -593,7 +593,7 @@ func TestIAMHTTPServiceRoleTemplateDirectoryRequiresUserSession(t *testing.T) {
 				var result iamv1.ServiceRoleTemplateList
 				decoder := json.NewDecoder(response.Body)
 				decoder.DisallowUnknownFields()
-				expected, err := authority.ServiceRoleTemplates()
+				expected, err := authority.BuiltInServiceRoleTemplates()
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -718,7 +718,7 @@ func TestIAMHTTPServiceLinkedRoleDirectoryRejectsInvalidWorkflowOutput(t *testin
 func TestIAMHTTPWorkloadRoleBindingRequiresExactlyTwoCredentialsAndNoSelectors(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
-	templates, err := authority.ServiceRoleTemplates()
+	templates, err := authority.BuiltInServiceRoleTemplates()
 	if err != nil || len(templates) != 1 {
 		t.Fatal(err)
 	}
@@ -2723,7 +2723,7 @@ func (value *httpWorkflow) ListAuthorizationProfiles(_ context.Context, credenti
 func (value *httpWorkflow) ListServiceRoleTemplates(_ context.Context, credential iamv1.Secret, _ string) (iamv1.ServiceRoleTemplateList, error) {
 	value.templateCalls++
 	value.templateCredential = credential
-	templates, err := authority.ServiceRoleTemplates()
+	templates, err := authority.BuiltInServiceRoleTemplates()
 	if err != nil {
 		return iamv1.ServiceRoleTemplateList{}, identityaccess.ErrUnavailable
 	}
@@ -2795,7 +2795,7 @@ func (value *httpWorkflow) GetServiceRoleSessionByRequest(_ context.Context, cre
 
 func serviceLinkedRoleAccessForHTTPTest() iamv1.ServiceLinkedRoleAccess {
 	createdAt := time.Date(2026, 9, 30, 3, 0, 0, 0, time.UTC)
-	templates, _ := authority.ServiceRoleTemplates()
+	templates, _ := authority.BuiltInServiceRoleTemplates()
 	template := templates[0]
 	role := iamv1.Role{APIVersion: iamv1.APIVersion, Kind: "Role", ID: "role-service-linked", AccountID: "account-a",
 		Name: template.Spec.RoleName, Description: template.Spec.RoleDescription, Tags: []iamv1.RoleTag{}, Management: iamv1.RoleServiceLinked,

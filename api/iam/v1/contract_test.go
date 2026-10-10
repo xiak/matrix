@@ -9201,62 +9201,160 @@ func TestExplicitAuthorizationProfileBindsUnfamiliarProductWithoutRegisteringIt(
 	}
 }
 
-func TestAuthorizationProfileReleaseCatalogIsCanonicalAndClosed(t *testing.T) {
+func TestProductAuthorizationReleaseCatalogIsCanonicalAndClosed(t *testing.T) {
 	current := AuthorizationProfile{
 		APIVersion: APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 2, CallingService: ServicePaaS,
-		Actions: []AuthorizationProfileAction{{
-			Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: AuthorityScopeTenant,
-			ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}},
-			SubjectTypes:   []SubjectType{SubjectUser}, UserAuthenticationMethods: []UserAuthenticationMethod{UserAuthenticationLoginSession},
-		}},
+		Actions: []AuthorizationProfileAction{
+			{Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: AuthorityScopeTenant,
+				ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}},
+				SubjectTypes:   []SubjectType{SubjectUser, SubjectRole}, UserAuthenticationMethods: []UserAuthenticationMethod{UserAuthenticationLoginSession}},
+			{Action: "catalog.item.role-bind", ResourceKind: "CATALOG_ITEM", Scope: AuthorityScopeTenant,
+				ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}},
+				SubjectTypes:   []SubjectType{SubjectUser}, UserAuthenticationMethods: []UserAuthenticationMethod{UserAuthenticationLoginSession}},
+			{Action: "catalog.item.role-unbind", ResourceKind: "CATALOG_ITEM", Scope: AuthorityScopeTenant,
+				ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}},
+				SubjectTypes:   []SubjectType{SubjectUser}, UserAuthenticationMethods: []UserAuthenticationMethod{UserAuthenticationLoginSession}},
+		},
 	}
 	historical := CloneAuthorizationProfile(current)
 	historical.Revision = 1
-	catalog := AuthorizationProfileReleaseCatalog{
-		APIVersion: APIVersion, Kind: AuthorizationProfileReleaseCatalogKind,
-		Current: []AuthorizationProfile{current}, Historical: []AuthorizationProfile{historical},
-	}
-	encoded, err := EncodeAuthorizationProfileReleaseCatalog(catalog)
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+		Statements: []PolicyStatement{{SID: "catalog-read", Effect: PolicyAllow,
+			Actions: []Action{"catalog.item.read"}, Resources: []PolicyResourceSelector{{Kind: "CATALOG_ITEM", Match: PolicyResourceAnyInAuthority}}}}}
+	compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{current})
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := DecodeAuthorizationProfileReleaseCatalog(bytes.NewReader(encoded))
-	if err != nil || len(decoded.Current) != 1 || len(decoded.Historical) != 1 ||
-		decoded.Current[0].Product != "catalog" || decoded.Historical[0].Revision != 1 {
+	_, policyDigest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{current})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := ProductServiceRolePolicy{Product: current.Product, DisplayName: "CatalogItemReader",
+		Version: PolicyVersion{PolicyID: "system.service-role.catalog.item-reader",
+			ID: PolicyVersionID("version-" + strings.TrimPrefix(policyDigest, "sha256:")), Document: document,
+			ContentDigest: policyDigest, ContractVersion: PolicyVersionCompiledContract, Compilation: &compilation}}
+	spec := ServiceRoleTemplateSpec{Product: current.Product, ServicePurpose: ServicePaaS,
+		RoleName: "CatalogItemReader", RoleDescription: "Reads one explicitly bound catalog item.",
+		PolicyVersion:             PolicyVersionReference{PolicyID: policy.Version.PolicyID, VersionID: policy.Version.ID, ContentDigest: policy.Version.ContentDigest},
+		Workloads:                 []ServiceRoleWorkloadSpec{{ResourceKind: "CATALOG_ITEM", BindAction: "catalog.item.role-bind", UnbindAction: "catalog.item.role-unbind"}},
+		MaxSessionDurationSeconds: 900}
+	_, templateDigest, err := CanonicalizeServiceRoleTemplateSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := ServiceRoleTemplate{APIVersion: APIVersion, Kind: "ServiceRoleTemplate", ID: "catalog.item-reader",
+		Version: 1, Spec: spec, ContentDigest: templateDigest, Status: ServiceRoleTemplateActive}
+	catalog := ProductAuthorizationReleaseCatalog{
+		APIVersion: APIVersion, Kind: ProductAuthorizationReleaseCatalogKind,
+		Profiles: []AuthorizationProfile{current}, ProfileHistory: []AuthorizationProfile{historical},
+		ServiceRolePolicies: []ProductServiceRolePolicy{policy}, ServiceRoleTemplates: []ServiceRoleTemplate{template},
+	}
+	encoded, err := EncodeProductAuthorizationReleaseCatalog(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeProductAuthorizationReleaseCatalog(bytes.NewReader(encoded))
+	if err != nil || len(decoded.Profiles) != 1 || len(decoded.ProfileHistory) != 1 ||
+		len(decoded.ServiceRolePolicies) != 1 || len(decoded.ServiceRoleTemplates) != 1 ||
+		decoded.Profiles[0].Product != "catalog" || decoded.ProfileHistory[0].Revision != 1 ||
+		decoded.ServiceRoleTemplates[0].Reference() != template.Reference() {
 		t.Fatalf("release catalog did not round trip: %#v / %v", decoded, err)
 	}
-	decoded.Current[0].Actions[0].Action = "catalog.changed.read"
-	again, err := DecodeAuthorizationProfileReleaseCatalog(bytes.NewReader(encoded))
-	if err != nil || again.Current[0].Actions[0].Action != "catalog.item.read" {
+	decoded.Profiles[0].Actions[0].Action = "catalog.changed.read"
+	decoded.ServiceRoleTemplates[0].Spec.Workloads[0].BindAction = "catalog.changed.bind"
+	again, err := DecodeProductAuthorizationReleaseCatalog(bytes.NewReader(encoded))
+	if err != nil || again.Profiles[0].Actions[0].Action != "catalog.item.read" ||
+		again.ServiceRoleTemplates[0].Spec.Workloads[0].BindAction != "catalog.item.role-bind" {
 		t.Fatal("release catalog decode leaked mutable state")
 	}
 
-	empty, err := EncodeAuthorizationProfileReleaseCatalog(AuthorizationProfileReleaseCatalog{
-		APIVersion: APIVersion, Kind: AuthorizationProfileReleaseCatalogKind,
-		Current: []AuthorizationProfile{}, Historical: []AuthorizationProfile{},
+	empty, err := EncodeProductAuthorizationReleaseCatalog(ProductAuthorizationReleaseCatalog{
+		APIVersion: APIVersion, Kind: ProductAuthorizationReleaseCatalogKind,
+		Profiles: []AuthorizationProfile{}, ProfileHistory: []AuthorizationProfile{},
+		ServiceRolePolicies: []ProductServiceRolePolicy{}, ServiceRoleTemplates: []ServiceRoleTemplate{},
 	})
-	if err != nil || string(empty) != `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthorizationProfileReleaseCatalog","current":[],"historical":[]}` {
+	if err != nil || string(empty) != `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"ProductAuthorizationReleaseCatalog","profiles":[],"profileHistory":[],"serviceRolePolicies":[],"serviceRoleTemplates":[]}` {
 		t.Fatalf("empty release catalog = %s / %v", empty, err)
 	}
 
 	builtIn := AllAuthorizationProfiles()[0]
 	wrongHistory := CloneAuthorizationProfile(historical)
 	wrongHistory.Product = "different"
-	encodeUnchecked := func(value AuthorizationProfileReleaseCatalog) []byte {
+	encodeUnchecked := func(value ProductAuthorizationReleaseCatalog) []byte {
 		encoded, err := json.Marshal(value)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return encoded
 	}
+	emptyPolicies := []ProductServiceRolePolicy{}
+	emptyTemplates := []ServiceRoleTemplate{}
+	unreferencedPolicy := catalog
+	unreferencedPolicy.ServiceRoleTemplates = emptyTemplates
+	historicalActive := catalog
+	historicalCompilation, err := CompilePolicyDocument(document, []AuthorizationProfile{historical})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, historicalDigest, err := CanonicalizePolicyCompilation(document, historicalCompilation, []AuthorizationProfile{historical})
+	if err != nil {
+		t.Fatal(err)
+	}
+	historicalActive.ServiceRolePolicies[0].Version = PolicyVersion{PolicyID: policy.Version.PolicyID,
+		ID: PolicyVersionID("version-" + strings.TrimPrefix(historicalDigest, "sha256:")), Document: document,
+		ContentDigest: historicalDigest, ContractVersion: PolicyVersionCompiledContract, Compilation: &historicalCompilation}
+	historicalActive.ServiceRoleTemplates[0].Spec.PolicyVersion = PolicyVersionReference{PolicyID: policy.Version.PolicyID,
+		VersionID: historicalActive.ServiceRolePolicies[0].Version.ID, ContentDigest: historicalDigest}
+	_, historicalActive.ServiceRoleTemplates[0].ContentDigest, err = CanonicalizeServiceRoleTemplateSpec(historicalActive.ServiceRoleTemplates[0].Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historicalRetired := historicalActive
+	historicalRetired.ServiceRoleTemplates = slices.Clone(historicalActive.ServiceRoleTemplates)
+	historicalRetired.ServiceRoleTemplates[0].Status = ServiceRoleTemplateRetired
+	if _, err := EncodeProductAuthorizationReleaseCatalog(historicalRetired); err != nil {
+		t.Fatal("retired template with a current revocation path was rejected", err)
+	}
+	missingRetiredRevocation := historicalRetired
+	currentWithoutUnbind := CloneAuthorizationProfile(current)
+	currentWithoutUnbind.Actions = slices.Clone(currentWithoutUnbind.Actions[:2])
+	missingRetiredRevocation.Profiles = []AuthorizationProfile{currentWithoutUnbind}
+	userOnlyProfile := CloneAuthorizationProfile(current)
+	userOnlyProfile.Actions[0].SubjectTypes = []SubjectType{SubjectUser}
+	userOnlyCompilation, err := CompilePolicyDocument(document, []AuthorizationProfile{userOnlyProfile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, userOnlyDigest, err := CanonicalizePolicyCompilation(document, userOnlyCompilation, []AuthorizationProfile{userOnlyProfile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	userOnlyPolicy := policy
+	userOnlyPolicy.Version = PolicyVersion{PolicyID: policy.Version.PolicyID,
+		ID: PolicyVersionID("version-" + strings.TrimPrefix(userOnlyDigest, "sha256:")), Document: document,
+		ContentDigest: userOnlyDigest, ContractVersion: PolicyVersionCompiledContract, Compilation: &userOnlyCompilation}
+	userOnlyTemplate := template
+	userOnlyTemplate.Spec.PolicyVersion = PolicyVersionReference{PolicyID: userOnlyPolicy.Version.PolicyID,
+		VersionID: userOnlyPolicy.Version.ID, ContentDigest: userOnlyPolicy.Version.ContentDigest}
+	_, userOnlyTemplate.ContentDigest, err = CanonicalizeServiceRoleTemplateSpec(userOnlyTemplate.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userOnlyCeiling := ProductAuthorizationReleaseCatalog{APIVersion: APIVersion, Kind: ProductAuthorizationReleaseCatalogKind,
+		Profiles: []AuthorizationProfile{userOnlyProfile}, ProfileHistory: []AuthorizationProfile{},
+		ServiceRolePolicies: []ProductServiceRolePolicy{userOnlyPolicy}, ServiceRoleTemplates: []ServiceRoleTemplate{userOnlyTemplate}}
 	for name, candidate := range map[string][]byte{
-		"whitespace":       append(append([]byte(nil), encoded...), '\n'),
-		"unknown field":    bytes.Replace(encoded, []byte(`"historical":`), []byte(`"extra":true,"historical":`), 1),
-		"null current":     []byte(`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthorizationProfileReleaseCatalog","current":null,"historical":[]}`),
-		"built-in product": encodeUnchecked(AuthorizationProfileReleaseCatalog{APIVersion: APIVersion, Kind: AuthorizationProfileReleaseCatalogKind, Current: []AuthorizationProfile{builtIn}, Historical: []AuthorizationProfile{}}),
-		"orphan history":   encodeUnchecked(AuthorizationProfileReleaseCatalog{APIVersion: APIVersion, Kind: AuthorizationProfileReleaseCatalogKind, Current: []AuthorizationProfile{current}, Historical: []AuthorizationProfile{wrongHistory}}),
+		"whitespace":                 append(append([]byte(nil), encoded...), '\n'),
+		"unknown field":              bytes.Replace(encoded, []byte(`"profileHistory":`), []byte(`"extra":true,"profileHistory":`), 1),
+		"null profiles":              []byte(`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"ProductAuthorizationReleaseCatalog","profiles":null,"profileHistory":[],"serviceRolePolicies":[],"serviceRoleTemplates":[]}`),
+		"built-in product":           encodeUnchecked(ProductAuthorizationReleaseCatalog{APIVersion: APIVersion, Kind: ProductAuthorizationReleaseCatalogKind, Profiles: []AuthorizationProfile{builtIn}, ProfileHistory: []AuthorizationProfile{}, ServiceRolePolicies: emptyPolicies, ServiceRoleTemplates: emptyTemplates}),
+		"orphan history":             encodeUnchecked(ProductAuthorizationReleaseCatalog{APIVersion: APIVersion, Kind: ProductAuthorizationReleaseCatalogKind, Profiles: []AuthorizationProfile{current}, ProfileHistory: []AuthorizationProfile{wrongHistory}, ServiceRolePolicies: emptyPolicies, ServiceRoleTemplates: emptyTemplates}),
+		"orphan policy":              encodeUnchecked(unreferencedPolicy),
+		"active old policy":          encodeUnchecked(historicalActive),
+		"retired revocation removed": encodeUnchecked(missingRetiredRevocation),
+		"ceiling lacks role subject": encodeUnchecked(userOnlyCeiling),
 	} {
-		if _, err := DecodeAuthorizationProfileReleaseCatalog(bytes.NewReader(candidate)); !errors.Is(err, ErrInvalidAuthorizationProfileReleaseCatalog) {
+		if _, err := DecodeProductAuthorizationReleaseCatalog(bytes.NewReader(candidate)); !errors.Is(err, ErrInvalidProductAuthorizationReleaseCatalog) {
 			t.Fatalf("%s release catalog was accepted: %v", name, err)
 		}
 	}

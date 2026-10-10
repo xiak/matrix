@@ -16,7 +16,7 @@ import (
 // Profile seeds are embedded twice in IAM's atomic migration/verification
 // source. Keep explicit headroom below the shared 4 MiB SQL executor budget;
 // a release with a larger catalog needs a non-embedded installation protocol.
-const maxAuthorizationProfileSeedBytes = iamv1.MaxAuthorizationProfileReleaseCatalogBytes
+const maxAuthorizationProfileSeedBytes = iamv1.MaxProductAuthorizationReleaseCatalogBytes
 
 var (
 	//go:embed 000001_authority/bootstrap.sql
@@ -100,20 +100,25 @@ var (
 )
 
 func Source() postgresmigration.Source {
-	return SourceWithAuthorizationProfiles(nil, nil)
+	return SourceWithProductAuthorization(iamv1.ProductAuthorizationReleaseCatalog{
+		APIVersion: iamv1.APIVersion, Kind: iamv1.ProductAuthorizationReleaseCatalogKind,
+		Profiles: []iamv1.AuthorizationProfile{}, ProfileHistory: []iamv1.AuthorizationProfile{},
+		ServiceRolePolicies: []iamv1.ProductServiceRolePolicy{}, ServiceRoleTemplates: []iamv1.ServiceRoleTemplate{},
+	})
 }
 
-// SourceWithAuthorizationProfiles assembles additional release-owned product
-// declarations into IAM's immutable registry seed. Trust in these declarations
-// must be established by the signed release/installation boundary before this
-// function is called; this function validates content and registry evolution,
-// but it is not a signature verifier or a tenant-facing registration API.
-func SourceWithAuthorizationProfiles(additionalCurrent, additionalHistorical []iamv1.AuthorizationProfile) postgresmigration.Source {
-	currentProfiles, historicalProfiles, err := authorizationProfilesForSource(additionalCurrent, additionalHistorical)
+// SourceWithProductAuthorization assembles one authenticated product catalog
+// into IAM's immutable Profile, service-role policy and template seeds. It is
+// not a signature verifier or a tenant-facing registration API.
+func SourceWithProductAuthorization(catalog iamv1.ProductAuthorizationReleaseCatalog) postgresmigration.Source {
+	if _, err := iamv1.EncodeProductAuthorizationReleaseCatalog(catalog); err != nil {
+		return postgresmigration.Source{Context: "iam"}
+	}
+	currentProfiles, historicalProfiles, err := authorizationProfilesForSource(catalog.Profiles, catalog.ProfileHistory)
 	if err != nil {
 		return postgresmigration.Source{Context: "iam"}
 	}
-	policySQL, err := systemPolicySQL()
+	policySQL, err := systemPolicySQL(catalog.ServiceRolePolicies)
 	if err != nil {
 		// A corrupt code-owned policy must stop bootstrap/apply, never omit a seed.
 		return postgresmigration.Source{Context: "iam"}
@@ -125,7 +130,7 @@ func SourceWithAuthorizationProfiles(additionalCurrent, additionalHistorical []i
 	}
 	profileLiteral := "'" + strings.ReplaceAll(profileSeeds, "'", "''") + "'::jsonb"
 	authoritySQL := strings.Replace(authorityUpSQL, profilePlaceholder, profileLiteral, 1)
-	templateSeeds, err := serviceRoleTemplateSeeds()
+	templateSeeds, err := serviceRoleTemplateSeeds(catalog.ServiceRoleTemplates)
 	const templatePlaceholder = "__SERVICE_ROLE_TEMPLATE_SEEDS__"
 	if err != nil || strings.Count(serviceRolesUpSQL, templatePlaceholder) != 1 || strings.Count(serviceRolesVerifySQL, templatePlaceholder) != 1 {
 		return postgresmigration.Source{Context: "iam"}
@@ -211,7 +216,7 @@ func supportedAdditionalAuthorizationProfile(profile iamv1.AuthorizationProfile)
 	return iamv1.CheckTenantProductAuthorizationProfile(profile) == nil
 }
 
-func serviceRoleTemplateSeeds() (string, error) {
+func serviceRoleTemplateSeeds(additional []iamv1.ServiceRoleTemplate) (string, error) {
 	type seed struct {
 		ID            iamv1.ServiceRoleTemplateID     `json:"id"`
 		Version       uint64                          `json:"version"`
@@ -219,8 +224,17 @@ func serviceRoleTemplateSeeds() (string, error) {
 		ContentDigest string                          `json:"contentDigest"`
 		Status        iamv1.ServiceRoleTemplateStatus `json:"status"`
 	}
-	templates, err := authority.ServiceRoleTemplates()
-	if err != nil || len(templates) == 0 || len(templates) > iamv1.DirectoryPageSize {
+	templates, err := authority.BuiltInServiceRoleTemplates()
+	if err != nil {
+		return "", errors.New("invalid service role template registration set")
+	}
+	for _, template := range additional {
+		if iamv1.ValidateServiceRoleTemplate(template) != nil {
+			return "", errors.New("invalid additional service role template registration")
+		}
+		templates = append(templates, template)
+	}
+	if len(templates) == 0 || len(templates) > iamv1.DirectoryPageSize {
 		return "", errors.New("invalid service role template registration set")
 	}
 	slices.SortFunc(templates, func(left, right iamv1.ServiceRoleTemplate) int {
@@ -350,7 +364,7 @@ BEGIN
     END IF;
 END $policy_preflight$;`
 
-func systemPolicySQL() (string, error) {
+func systemPolicySQL(additional []iamv1.ProductServiceRolePolicy) (string, error) {
 	type seed struct {
 		LegacyRole        string                   `json:"legacyRole"`
 		PolicyID          iamv1.PolicyID           `json:"policyId"`
@@ -391,6 +405,24 @@ func systemPolicySQL() (string, error) {
 		seeds[index].Document, seeds[index].CanonicalDocument, seeds[index].ContentDigest = content.Document, canonical, digest
 		seeds[index].Compilation = version.Compilation
 	}
+	for _, published := range additional {
+		version := published.Version
+		canonical, err := iamv1.CanonicalizePolicyVersion(version)
+		if err != nil || version.ContractVersion != iamv1.PolicyVersionCompiledContract ||
+			version.Compilation == nil || version.Document.Scope != iamv1.AuthorityScopeTenant {
+			return "", errors.New("invalid product service role policy")
+		}
+		var content struct {
+			Document json.RawMessage `json:"document"`
+		}
+		if err := json.Unmarshal([]byte(canonical), &content); err != nil {
+			return "", errors.New("invalid product service role policy")
+		}
+		seeds = append(seeds, seed{PolicyID: version.PolicyID, DisplayName: published.DisplayName,
+			VersionID: version.ID, Scope: version.Document.Scope, Document: content.Document,
+			CanonicalDocument: canonical, ContentDigest: version.ContentDigest, Compilation: version.Compilation})
+	}
+	slices.SortFunc(seeds, func(left, right seed) int { return cmp.Compare(left.PolicyID, right.PolicyID) })
 	encoded, err := json.Marshal(seeds)
 	if err != nil {
 		return "", err

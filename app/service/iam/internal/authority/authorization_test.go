@@ -172,7 +172,7 @@ func roleSessionContextForTest(now time.Time) RoleSessionContext {
 
 func serviceRoleSessionContextForTest(t *testing.T, now time.Time) RoleSessionContext {
 	t.Helper()
-	templates, err := ServiceRoleTemplates()
+	templates, err := BuiltInServiceRoleTemplates()
 	if err != nil || len(templates) != 1 {
 		t.Fatalf("load service-role template: count=%d err=%v", len(templates), err)
 	}

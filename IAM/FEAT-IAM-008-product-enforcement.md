@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤、可信标签读写及Audit目录已有固定门禁。AccessKey产品消费已覆盖不可变资源图创建、实例读取、Deployment控制、Application声明标签和租户Audit读取，并累计到`91649497`的完整独立CI；额外产品 Profile 已进入签名 release payload 与一次性迁移消费，其他签名动作、可信边缘、产品业务 PEP、LIVE UI和最终发布运行组合仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤、可信标签读写及Audit目录已有固定门禁。AccessKey产品消费已覆盖不可变资源图创建、实例读取、Deployment控制、Application声明标签和租户Audit读取，并累计到`91649497`的完整独立CI；当前候选又把额外产品 Profile、服务Role权限上限及模板收敛为一个签名产品授权目录，并已通过独立PG18动态产品闭环。可信边缘、产品业务 PEP、LIVE UI和最终签名发布运行组合仍未完成，整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -48,9 +48,11 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 
 同片后继把 apphosting 的 PaaS→IAM 资源词汇翻译收敛到 port 的单一构造器，HTTP adapter不再维护第二份资源 switch，Action/资源形状、当前 Profile 引用、PAAS calling service 和可信 source IP 一次绑定。apphosting 仍保留14个路由动作的显式 PEP 子集：同一PaaS Profile中的平台主机/安装动作不能因“属于PaaS”进入应用托管。14条合法形状及同产品错PEP、其他产品、错资源/集合/source IP攻击的聚焦测试通过；同一全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，并由累计固定`a464299b`的独立CI覆盖。
 
-## 当前纵向切片：数据库驱动的产品 Profile 注册与单次授权
+## 当前纵向切片：数据库驱动的产品授权目录与服务角色
 
-本片替换“在线求值只能识别当前 executable 源码产品”的过渡边界，但不增加租户可写注册接口。受信发布/安装 owner 在验签并确定完整 release input 后，才可把额外 current/historical `AuthorizationProfile` 交给 IAM migration source；IAM 负责完整结构、规范字节、摘要、产品唯一当前头、历史 revision 小于当前头、同一产品历史服务归属、总量和确定排序校验，嵌入原子迁移与校验 SQL 的整份 seed 另限 1 MiB，超限必须改用尚未交付的非嵌入安装协议。额外历史只可属于同一发布输入明确新增的产品，不能给 Matrix 内置产品补造历史。当前 Matrix 内置 Profile 必须仍以源码规范字节逐项存在，不能被外部声明覆盖、删除或同 revision 换内容。额外产品登记、服务主体登记和租户授权继续是三件独立事务：首片只接受 `TENANT` action，且只允许额外 Profile 复用已经安装并已封存凭据的 calling service purpose；迁移入口和运行时数据库读取均重复验证这条边界，不签发服务凭据、不创建服务主体、不附加 Policy，也不授予任何 Account 资源权限。`INSTALLATION`/`INSTALLATION_PROBE` 的额外产品必须等待独立平台准入与响应契约切片，不能借本入口获得平台 authority。
+本片替换“在线求值只能识别当前 executable 源码产品”的过渡边界，但不增加租户可写注册接口。受信发布/安装 owner 在验签并确定完整 release input 后，才可把一个 `ProductAuthorizationReleaseCatalog` 交给 IAM migration source。目录同时携带额外 current/historical `AuthorizationProfile`、产品拥有的不可变服务Role权限上限 `PolicyVersion` 和 `ServiceRoleTemplate`；IAM 对整份目录执行严格解码、规范字节、摘要、产品归属、交叉引用、总量和确定排序校验，目录上限1 MiB，超限必须改用尚未交付的非嵌入安装协议。额外历史只可属于同一发布输入明确新增的产品，不能给 Matrix 内置产品补造历史。当前 Matrix 内置 Profile 必须仍以源码规范字节逐项存在，不能被外部声明覆盖、删除或同 revision 换内容。
+
+服务Role权限上限只能引用目录中同一产品的精确 Profile 编译结果；模板再精确绑定该不可变版本、已登记的USER实例bind/unbind Action、资源种类、服务purpose和会话上限。ACTIVE模板必须引用产品当前Profile；RETIRED模板可以保留历史权限解释，但其bind/unbind词汇仍必须在当前Profile中有效，避免发布演进删除撤销动作后把既有绑定永久搁浅。迁移把 Profile、系统策略版本与模板作为一个原子seed写入并逐项验证，不能只装模板而缺失它的解释依据。该系统策略只可由对应服务Role求值，普通USER/GROUP/客户Role的策略附件入口在事务锁内拒绝直接挂载；迁移与最终verify还通过非授权的`account_roots`索引逐Account设置RLS上下文，发现任何历史有效直授即整体失败且不自动删除，不能绕过工作负载同意取得模板上限。模板发布本身不创建服务主体、Role、binding、会话或任何Account授权；额外产品登记、服务主体凭据、Account显式同意和业务PEP仍是彼此独立的证明。首片只接受`TENANT` action，且只允许额外Profile复用已经安装并已封存凭据的calling service purpose；`INSTALLATION`/`INSTALLATION_PROBE`仍等待独立平台准入与响应契约。
 
 运行时以同一数据库事务中 `iam.current_authorization_profiles()` 返回的 current heads 为权威输入，并在 current head 上持有 share lock；缓存只存在于本事务，不能跨请求保留 Profile 或授权结果。请求必须绑定数据库中同一 `{product,revision,contentDigest}`，策略发布先做有界通用语法校验，再对锁定的完整 registry 编译并只封存实际参与的最多16个 Profile；registry 当前头上限为256、规范正文合计上限为4 MiB。通用编译器、条件求值器和决定绑定只读取显式 Profile，不按产品、Action 前缀、资源名或服务名增加分支。未知产品、错误 revision/digest、错误资源形状、错误 subject carrier 和未声明条件均失败关闭；正确但不匹配的 calling service只得到可审计 Deny，不能借用已注册产品的服务身份。
 
@@ -58,9 +60,11 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 
 AccessKey 的主体解析、单项授权和签名列表授权也已切到同一事务 current Profile。HTTP 入口只做严格、有界且不代表权限的签名 envelope 解码，随后先认证当前服务凭据、安装、AccessKey MAC及数据库中精确的`{product,revision,contentDigest}`，再用该完整 Profile 校验 Action、资源形状、条件、主体载体和列表能力；响应由同一 Profile 与原 signed-request digest 逐项核对。源码产品便捷 codec 仍只认源码声明，新增产品 owner 必须显式提供其发布物中的完整 Profile，不能靠产品名或 Action 前缀让通用 codec 猜测。允许 AccessKey 的 Action 还必须声明并提交可信`request.source-ip`网络上下文，SQL evidence 会再次按同一 Profile、真实服务身份、当前key状态及来源IP关闭验证。错误摘要、未知产品、错误服务/安装、错误MAC或变造候选均不得产生决定；有效请求的nonce、决定、AccessKey evidence与Audit事实仍由一个数据库事务提交。
 
-OpenAPI 对这些可扩展请求字段只验证统一 Action/Resource 语法和有界 Policy 语言，不能把生成时的内置枚举冒充运行时注册；精确 Action、scope、资源形状、条件和 Profile 摘要仍由同一数据库事务编译/校验。已知内置动作继续保留细化的生成契约，语法通过本身不登记产品也不产生权限。目录仍是最多16项的完整快照；超过该规模必须先交付独立分页目录，当前不得截断。产品自带预置策略/服务角色模板、新 service purpose/凭据 enrollment及产品业务 PEP 的最终安装组合尚未切换到动态 registry，不得据此宣称任意产品已完整接入。
+OpenAPI 对这些可扩展请求字段只验证统一 Action/Resource 语法和有界 Policy 语言，不能把生成时的内置枚举冒充运行时注册；精确 Action、scope、资源形状、条件和 Profile 摘要仍由同一数据库事务编译/校验。已知内置动作继续保留细化的生成契约，语法通过本身不登记产品也不产生权限。Profile目录仍是最多16项的完整快照；超过该规模必须先交付独立分页目录，当前不得截断。新 service purpose/凭据 enrollment、产品业务 PEP 与最终签名安装组合尚未交付，不得据此宣称任意产品已完整接入。
 
-本地合约/引擎/迁移/用例/HTTP聚焦测试通过；独占 PostgreSQL 18 `TestIAMRegisteredProductProfilePostgresHTTP` 以 `catalog.item.read` 证明 release-catalog migration apply-twice、数据库目录可见、客户 Policy 编译/挂载、真实PaaS服务Allow、Audit服务Deny、LOGIN_SESSION主体解析/当前权限诊断/两项batch，以及动态 Profile 的真实AccessKey创建、MAC主体解析、单项Allow、一次签名的collection+instance决定、错误摘要无决定写入和新建IAM进程后的再次Allow。AccessKey允许决定保存规范来源IP、USER/key归因、nonce evidence与独立Audit事实；数据库仍从当前Profile导出Action/资源种类和scope，不依赖源码产品枚举。发布构建把规范 `AuthorizationProfileReleaseCatalog` 作为固定 payload 纳入Ed25519签名清单；当前manifest必须包含它，安装从已重新验证的staged release只读挂载到一次性IAM migration，常驻API/worker和其他迁移均不获得该文件。篡改或缺失在provider effect前失败，migration再次校验内置产品不可覆盖、历史归属及完整seed。该真实PG测试使用本任务独立2 CPU、1 GiB、PIDs 256的容器/网络/卷，完成后对象计数均为零。上述证据只接受已列授权协议，不替代HA多副本、产品业务PEP或完整离线安装验收；本片没有改变SQL结构或已发布函数形状，因此不虚增schema版本。首次独立CI已暴露新增真实PG fixture未加入`authority-storage`数据库清单而被skip守卫拒绝；后继已将该数据库与唯一DSN加入原lane，不能把前一失败回填为成功。后继独立CI仍以精确提交终态为准，本地通过不能预先记作CI成功。
+本地合约、策略引擎、迁移、用例、HTTP和发布构建聚焦测试通过；独占PostgreSQL 18的`TestIAMRegisteredProductProfilePostgresHTTP`以外部名称`catalog`证明签名目录migration apply-twice、数据库Profile/PolicyVersion/模板可见、客户Policy编译与挂载、真实PaaS服务Allow、Audit服务Deny、LOGIN_SESSION主体解析/当前权限诊断/batch及AccessKey路径。相同目录还发布`catalog.item-reader`模板和仅允许`catalog.item.read`的系统权限上限：普通附件入口拒绝直接挂载，显式委派服务Role管理员后才可把真实workload绑定给当前Account，PaaS服务随后取得短期ROLE凭据；该凭据只能读精确绑定资源，换workload拒绝，重建IAM handler后继续按数据库模板求值，解绑后的下一请求立即失效。门禁还用超管夹具构造旧schema可能遗留的有效权限上限直授，证明IAM83迁移与verify都失败关闭、冲突行不被静默改写。创建和撤销均由事务读取精确当前Profile并调用同一profile-aware求值器，通用运行时没有`catalog`名称、Action前缀或角色名分支。
+
+发布构建把规范`ProductAuthorizationReleaseCatalog`固定为`config/iam/product-authorization.json`并纳入Ed25519签名清单；安装从已重新验证的staged release只读挂载到一次性IAM migration，常驻API/worker和其他迁移均不获得该文件。篡改或缺失在provider effect前失败，migration再次校验内置产品不可覆盖、历史归属、权限上限及模板交叉引用。由于本片改变现有服务Role数据库函数/附件保护触发器和签名发布payload形状，当前源码推进为IAM schema 83、Audit 37、PaaS 3、`contractRevision=31`；产品尚未发布，仅保留当前与一个直接前驱的开发期窗口，不累积历史草稿矩阵。当前真实PG证据不替代HA多副本、产品业务PEP或完整签名离线安装；独立CI仍以精确提交终态为准，本地通过不能预先记作CI成功。
 
 ## 当前纵向切片：账号同意的服务相关角色
 

@@ -36,7 +36,7 @@ func main() {
 }
 
 func run(ctx context.Context, arguments []string) error {
-	catalog, err := readAuthorizationProfileReleaseCatalog()
+	catalog, err := readProductAuthorizationReleaseCatalog()
 	if err != nil {
 		return err
 	}
@@ -51,19 +51,19 @@ func run(ctx context.Context, arguments []string) error {
 	})
 }
 
-func readAuthorizationProfileReleaseCatalog() (iamv1.AuthorizationProfileReleaseCatalog, error) {
-	path := os.Getenv(installationv1.IAMAuthorizationProfilesMigrationFileEnvironment)
+func readProductAuthorizationReleaseCatalog() (iamv1.ProductAuthorizationReleaseCatalog, error) {
+	path := os.Getenv(installationv1.IAMProductAuthorizationMigrationFileEnvironment)
 	if path == "" {
-		return iamv1.AuthorizationProfileReleaseCatalog{}, fmt.Errorf("IAM authorization profile release catalog is unavailable")
+		return iamv1.ProductAuthorizationReleaseCatalog{}, fmt.Errorf("IAM product authorization release catalog is unavailable")
 	}
-	encoded, err := processconfig.ReadFile(path, iamv1.MaxAuthorizationProfileReleaseCatalogBytes, false)
+	encoded, err := processconfig.ReadFile(path, iamv1.MaxProductAuthorizationReleaseCatalogBytes, false)
 	if err != nil {
-		return iamv1.AuthorizationProfileReleaseCatalog{}, fmt.Errorf("IAM authorization profile release catalog is unavailable")
+		return iamv1.ProductAuthorizationReleaseCatalog{}, fmt.Errorf("IAM product authorization release catalog is unavailable")
 	}
 	defer clear(encoded)
-	catalog, err := iamv1.DecodeAuthorizationProfileReleaseCatalog(bytes.NewReader(encoded))
+	catalog, err := iamv1.DecodeProductAuthorizationReleaseCatalog(bytes.NewReader(encoded))
 	if err != nil {
-		return iamv1.AuthorizationProfileReleaseCatalog{}, fmt.Errorf("IAM authorization profile release catalog is invalid")
+		return iamv1.ProductAuthorizationReleaseCatalog{}, fmt.Errorf("IAM product authorization release catalog is invalid")
 	}
 	return catalog, nil
 }

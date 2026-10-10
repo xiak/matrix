@@ -8,10 +8,10 @@ import (
 
 const managedServiceInstallationReaderTemplateID iamv1.ServiceRoleTemplateID = "managedservice.installation-reader"
 
-// ServiceRoleTemplates returns the release-owned current template catalog.
-// A template references an immutable policy version; it never grants a
-// service identity access without a later account consent and workload bind.
-func ServiceRoleTemplates() ([]iamv1.ServiceRoleTemplate, error) {
+// BuiltInServiceRoleTemplates returns only templates owned by this executable.
+// Additional signed product templates are migration data and must be resolved
+// from IAM storage rather than from product-name branches in this package.
+func BuiltInServiceRoleTemplates() ([]iamv1.ServiceRoleTemplate, error) {
 	ceiling, err := SystemPolicyVersion(iamv1.SystemPolicyManagedServiceInstallationReader)
 	if err != nil {
 		return nil, ErrInvalidPolicyState
@@ -39,30 +39,13 @@ func ServiceRoleTemplates() ([]iamv1.ServiceRoleTemplate, error) {
 		APIVersion: iamv1.APIVersion, Kind: "ServiceRoleTemplate", ID: managedServiceInstallationReaderTemplateID,
 		Version: 1, Spec: spec, ContentDigest: digest, Status: iamv1.ServiceRoleTemplateActive,
 	}}
-	if iamv1.ValidateServiceRoleTemplateList(iamv1.ServiceRoleTemplateList{
-		APIVersion: iamv1.APIVersion, Kind: "ServiceRoleTemplateList", Items: result,
-	}) != nil {
+	if iamv1.CheckServiceRoleTemplate(result[0], iamv1.AllAuthorizationProfiles()) != nil ||
+		iamv1.ValidateServiceRoleTemplateList(iamv1.ServiceRoleTemplateList{
+			APIVersion: iamv1.APIVersion, Kind: "ServiceRoleTemplateList", Items: result,
+		}) != nil {
 		return nil, ErrInvalidPolicyState
 	}
 	return cloneServiceRoleTemplates(result), nil
-}
-
-// LookupServiceRoleTemplate resolves an exact immutable reference. Selecting
-// only an ID or a current head is deliberately not an account-consent input.
-func LookupServiceRoleTemplate(reference iamv1.ServiceRoleTemplateReference) (iamv1.ServiceRoleTemplate, bool, error) {
-	if iamv1.ValidateServiceRoleTemplateReference(reference) != nil {
-		return iamv1.ServiceRoleTemplate{}, false, ErrInvalidPolicyState
-	}
-	templates, err := ServiceRoleTemplates()
-	if err != nil {
-		return iamv1.ServiceRoleTemplate{}, false, err
-	}
-	for _, template := range templates {
-		if template.Reference() == reference {
-			return template, true, nil
-		}
-	}
-	return iamv1.ServiceRoleTemplate{}, false, nil
 }
 
 func cloneServiceRoleTemplates(values []iamv1.ServiceRoleTemplate) []iamv1.ServiceRoleTemplate {

@@ -19,8 +19,8 @@ const (
 	BuiltImageLabelSourceCommit = "com.xiak.matrix.source-commit"
 	BuiltImageLabelBuildID      = "com.xiak.matrix.build-id"
 
-	IAMAuthorizationProfilesPath      = "config/iam/authorization-profiles.json"
-	IAMAuthorizationProfilesMediaType = "application/vnd.matrix.iam-authorization-profile-catalog+json"
+	IAMProductAuthorizationPath      = "config/iam/product-authorization.json"
+	IAMProductAuthorizationMediaType = "application/vnd.matrix.iam.product-authorization-catalog+json"
 )
 
 type Manifest struct {
@@ -81,8 +81,8 @@ type AuthoritySchemas struct {
 func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 82, Audit: 37, PaaS: 3},
-		ContractRevision: 30,
+		Authorities:      AuthoritySchemas{IAM: 83, Audit: 37, PaaS: 3},
+		ContractRevision: 31,
 	}
 }
 

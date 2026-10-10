@@ -1,10 +1,8 @@
 package identityaccess
 
 import (
-	"cmp"
 	"context"
 	"reflect"
-	"slices"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
@@ -22,18 +20,20 @@ func (service *Authority) ListServiceRoleTemplates(ctx context.Context, credenti
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMServiceRoleTemplateList,
 		iamv1.AuthorizationResourceInstance, "", iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, requestID,
-		func(_ context.Context, _ Transaction, _ SessionCredential, _ iamv1.AuthorizationDecision, _ time.Time) (iamv1.ServiceRoleTemplateList, error) {
-			templates, err := authority.ServiceRoleTemplates()
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.ServiceRoleTemplateList, error) {
+			result, err := tx.ListServiceRoleTemplates(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID})
 			if err != nil {
-				return iamv1.ServiceRoleTemplateList{}, ErrUnavailable
+				return iamv1.ServiceRoleTemplateList{}, err
 			}
-			slices.SortFunc(templates, func(left, right iamv1.ServiceRoleTemplate) int {
-				return cmp.Compare(left.ID, right.ID)
-			})
-			result := iamv1.ServiceRoleTemplateList{
-				APIVersion: iamv1.APIVersion,
-				Kind:       "ServiceRoleTemplateList",
-				Items:      templates,
+			profiles, err := tx.CurrentAuthorizationProfiles(ctx)
+			if err != nil {
+				return iamv1.ServiceRoleTemplateList{}, err
+			}
+			for _, template := range result.Items {
+				if template.Status != iamv1.ServiceRoleTemplateActive || iamv1.CheckServiceRoleTemplate(template, profiles) != nil {
+					return iamv1.ServiceRoleTemplateList{}, ErrUnavailable
+				}
 			}
 			if iamv1.ValidateServiceRoleTemplateList(result) != nil {
 				return iamv1.ServiceRoleTemplateList{}, ErrUnavailable
@@ -124,7 +124,8 @@ func (service *Authority) AssumeServiceRole(
 		if err != nil {
 			return err
 		}
-		if err := transaction.CheckCurrentAuthorizationProfiles(transactionContext); err != nil {
+		profiles, err := transaction.CurrentAuthorizationProfiles(transactionContext)
+		if err != nil {
 			return err
 		}
 		read := ServiceRoleAssumptionRead{ServiceRoleSessionRead: ServiceRoleSessionRead{
@@ -134,7 +135,7 @@ func (service *Authority) AssumeServiceRole(
 		if err != nil {
 			return err
 		}
-		if validateServiceRoleAssumption(read, assumption) != nil {
+		if validateServiceRoleAssumption(read, assumption, profiles) != nil {
 			return ErrUnavailable
 		}
 		if assumption.Existing != nil {
@@ -205,10 +206,12 @@ func (service *Authority) AssumeServiceRole(
 	return response, nil
 }
 
-func validateServiceRoleAssumption(read ServiceRoleAssumptionRead, value ServiceRoleAssumption) error {
+func validateServiceRoleAssumption(read ServiceRoleAssumptionRead, value ServiceRoleAssumption,
+	profiles []iamv1.AuthorizationProfile,
+) error {
 	if iamv1.ValidateServiceIdentity(read.Identity) != nil || iamv1.ValidateDigest("serviceLookupDigest", read.ServiceLookupDigest) != nil ||
 		iamv1.ValidateServiceLinkedRole(value.Relation) != nil || iamv1.ValidateWorkloadRoleBinding(value.Binding) != nil ||
-		iamv1.ValidateServiceRoleTemplate(value.Template) != nil || value.Template.Status != iamv1.ServiceRoleTemplateActive ||
+		iamv1.CheckServiceRoleTemplate(value.Template, profiles) != nil || value.Template.Status != iamv1.ServiceRoleTemplateActive ||
 		value.SecurityGeneration == 0 || value.SecurityGeneration > 9007199254740991 ||
 		value.Relation.Role.Management != iamv1.RoleServiceLinked || value.Relation.Role.Status != iamv1.RoleActive ||
 		value.Relation.ServicePrincipal != (iamv1.ServicePrincipalReference{InstallationID: read.Identity.InstallationID,
@@ -274,23 +277,6 @@ func (service *Authority) CreateWorkloadRoleBinding(
 	if iamv1.ValidateCreateWorkloadRoleBindingRequest(request) != nil {
 		return iamv1.ServiceLinkedRoleAccess{}, ErrInvalidArgument
 	}
-	template, found, err := authority.LookupServiceRoleTemplate(request.Template)
-	if err != nil {
-		return iamv1.ServiceLinkedRoleAccess{}, ErrUnavailable
-	}
-	if !found || template.Status != iamv1.ServiceRoleTemplateActive {
-		return iamv1.ServiceLinkedRoleAccess{}, ErrConflict
-	}
-	workloadRegistered := false
-	for _, workload := range template.Spec.Workloads {
-		if workload.ResourceKind == request.Authorization.Resource.Kind && workload.BindAction == request.Authorization.Action {
-			workloadRegistered = true
-			break
-		}
-	}
-	if !workloadRegistered || request.Authorization.Profile.Product != template.Spec.Product {
-		return iamv1.ServiceLinkedRoleAccess{}, ErrInvalidArgument
-	}
 	requestDigest, err := digestSanitized("workload-role-binding-create", request)
 	if err != nil {
 		return iamv1.ServiceLinkedRoleAccess{}, err
@@ -307,13 +293,42 @@ func (service *Authority) CreateWorkloadRoleBinding(
 		if err != nil {
 			return err
 		}
+		subject, err := service.authenticateSession(transactionContext, transaction, subjectCredential, now)
+		if err != nil {
+			return err
+		}
+		template, found, err := transaction.ReadServiceRoleTemplate(transactionContext, request.Template)
+		if err != nil {
+			return err
+		}
+		if !found || template.Status != iamv1.ServiceRoleTemplateActive {
+			return ErrConflict
+		}
+		profiles, err := transaction.CurrentAuthorizationProfiles(transactionContext)
+		if err != nil || iamv1.CheckServiceRoleTemplate(template, profiles) != nil {
+			return ErrUnavailable
+		}
+		profile, found, err := transaction.LookupCurrentAuthorizationProfile(transactionContext, request.Authorization.Profile)
+		if err != nil {
+			return err
+		}
+		if !found || profile.Product != template.Spec.Product ||
+			iamv1.ValidateAuthorizationRequestForProfile(request.Authorization, profile) != nil {
+			return ErrInvalidArgument
+		}
 		if caller.Identity.Purpose != template.Spec.ServicePurpose {
 			denied = true
 			return nil
 		}
-		subject, err := service.authenticateSession(transactionContext, transaction, subjectCredential, now)
-		if err != nil {
-			return err
+		workloadRegistered := false
+		for _, workload := range template.Spec.Workloads {
+			if workload.ResourceKind == request.Authorization.Resource.Kind && workload.BindAction == request.Authorization.Action {
+				workloadRegistered = true
+				break
+			}
+		}
+		if !workloadRegistered || request.Authorization.Profile.Product != template.Spec.Product {
+			return ErrInvalidArgument
 		}
 		if err := transaction.LockWorkloadRoleBindingSources(transactionContext,
 			subject.Subject.Organization.ID, subject.Subject.Principal.ID, subject.Subject.Session.ID,
@@ -328,7 +343,7 @@ func (service *Authority) CreateWorkloadRoleBinding(
 			authorizationActor{organizationID: subject.Subject.Organization.ID,
 				subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: string(subject.Subject.Principal.ID)}},
 			func(decisionID iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
-				return authority.Decide(subject.Subject, caller.Identity.Purpose, request.Authorization, decisionID, now)
+				return authority.DecideWithProfile(subject.Subject, caller.Identity.Purpose, request.Authorization, profile, decisionID, now)
 			})
 		if err != nil {
 			return err
@@ -470,9 +485,21 @@ func (service *Authority) RevokeWorkloadRoleBinding(
 			}) {
 			return ErrForbidden
 		}
-		template, found, err := authority.LookupServiceRoleTemplate(binding.Template)
-		if err != nil || !found || iamv1.ValidateServiceRoleTemplate(template) != nil {
+		template, found, err := transaction.ReadServiceRoleTemplate(transactionContext, binding.Template)
+		if err != nil || !found {
 			return ErrUnavailable
+		}
+		profiles, err := transaction.CurrentAuthorizationProfiles(transactionContext)
+		if err != nil || iamv1.CheckServiceRoleTemplate(template, profiles) != nil {
+			return ErrUnavailable
+		}
+		profile, found, err := transaction.LookupCurrentAuthorizationProfile(transactionContext, request.Authorization.Profile)
+		if err != nil {
+			return err
+		}
+		if !found || profile.Product != template.Spec.Product ||
+			iamv1.ValidateAuthorizationRequestForProfile(request.Authorization, profile) != nil {
+			return ErrInvalidArgument
 		}
 		workloadRegistered := false
 		for _, workload := range template.Spec.Workloads {
@@ -495,7 +522,7 @@ func (service *Authority) RevokeWorkloadRoleBinding(
 			authorizationActor{organizationID: subject.Subject.Organization.ID,
 				subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: string(subject.Subject.Principal.ID)}},
 			func(decisionID iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
-				return authority.Decide(subject.Subject, caller.Identity.Purpose, request.Authorization, decisionID, now)
+				return authority.DecideWithProfile(subject.Subject, caller.Identity.Purpose, request.Authorization, profile, decisionID, now)
 			})
 		if err != nil {
 			return err

@@ -394,11 +394,32 @@ BEGIN
 END $service_role_session_history_protection$;
 
 -- Ordinary policy APIs must never attach, revoke or mutate authority on a
--- SERVICE_LINKED Role. Its immutable PolicyVersion ceiling is owned solely by
--- the release template and the service relationship below.
+-- SERVICE_LINKED Role. A release-owned service-role permission ceiling must
+-- likewise never become a direct USER/GROUP/customer-Role grant: its only
+-- admission is the exact product template and workload relationship below.
+DO $service_role_permission_ceiling_preflight$
+DECLARE tenant text; prior_tenant text:=current_setting('matrix.iam_tenant_id',true);
+BEGIN
+    FOR tenant IN SELECT root.account_id FROM iam.account_roots root ORDER BY root.account_id COLLATE "C" LOOP
+        PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+        IF EXISTS(
+          SELECT 1 FROM iam.policy_attachments attachment
+          JOIN iam.service_role_templates template
+            ON template.canonical_spec::jsonb#>>'{policyVersion,policyId}'=attachment.policy_id
+          WHERE attachment.tenant_id=tenant AND attachment.revoked_at IS NULL
+        ) THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='service role permission ceiling is directly attached';
+        END IF;
+    END LOOP;
+    PERFORM set_config('matrix.iam_tenant_id',COALESCE(prior_tenant,''),true);
+END $service_role_permission_ceiling_preflight$;
+
 CREATE OR REPLACE FUNCTION iam.guard_customer_role_policy_attachment()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
+	IF EXISTS(SELECT 1 FROM iam.service_role_templates template
+	  WHERE template.canonical_spec::jsonb#>>'{policyVersion,policyId}'=NEW.policy_id) THEN
+		RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='service role permission ceiling cannot be attached directly'; END IF;
     IF NEW.target_kind='ROLE' THEN
         PERFORM set_config('matrix.iam_tenant_id',NEW.tenant_id,true);
         IF EXISTS(SELECT 1 FROM iam.roles role_value WHERE role_value.tenant_id=NEW.tenant_id
@@ -952,6 +973,34 @@ RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $functio
       AND template.version=service_role_template_snapshot.template_version
 $function$;
 
+CREATE OR REPLACE FUNCTION iam.list_service_role_templates(tenant text,actor text,decision text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE items jsonb;
+BEGIN
+    PERFORM iam.read_account(tenant,actor);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,
+      'iam.service-role-template.list','ACCOUNT',tenant,'INSTANCE',NULL);
+    SELECT COALESCE(jsonb_agg(iam.service_role_template_snapshot(template.id,template.version)
+      ORDER BY template.id COLLATE "C"),'[]') INTO items
+    FROM iam.service_role_templates template WHERE template.status='ACTIVE';
+    IF jsonb_array_length(items)>100 THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='service role template directory exceeds its bound'; END IF;
+    RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','ServiceRoleTemplateList','items',items);
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.read_service_role_template(template_id text,template_version bigint,content_digest text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE result jsonb;
+BEGIN
+    IF COALESCE(template_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR template_version NOT BETWEEN 1 AND 9007199254740991
+      OR COALESCE(content_digest,'') COLLATE "C" !~ '^sha256:[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='service role template reference is invalid'; END IF;
+    result:=iam.service_role_template_snapshot(template_id,template_version);
+    IF result IS NULL OR result->>'contentDigest' IS DISTINCT FROM content_digest THEN RETURN NULL; END IF;
+    RETURN result;
+END $function$;
+
 -- Resolve one current physical service credential and its sealed installation
 -- provenance. The result is private evidence, never a target-Account permit.
 CREATE OR REPLACE FUNCTION iam.current_service_role_source(service_lookup_digest text)
@@ -1402,6 +1451,9 @@ REVOKE ALL ON FUNCTION iam.guard_service_role_template_change(),iam.guard_servic
   iam.service_role_authorization_evidence(text,text),iam.lookup_service_role_session_authority(text,text)
   FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
     matrix_iam_notification_worker,matrix_iam_authentication_recovery;
+REVOKE ALL ON FUNCTION iam.list_service_role_templates(text,text,text),iam.read_service_role_template(text,bigint,text)
+  FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
+    matrix_iam_notification_worker,matrix_iam_authentication_recovery;
 REVOKE ALL ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text)
   FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
     matrix_iam_notification_worker,matrix_iam_authentication_recovery;
@@ -1422,6 +1474,8 @@ REVOKE ALL ON FUNCTION iam.read_service_role_assumption(text,text,text),
   FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
     matrix_iam_notification_worker,matrix_iam_authentication_recovery;
 GRANT EXECUTE ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.list_service_role_templates(text,text,text),iam.read_service_role_template(text,bigint,text)
+  TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.create_workload_role_binding(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb)
   TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.prepare_workload_role_binding_revocation(text,text,text,text),
@@ -1716,6 +1770,24 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
         AND function_value.prorettype='boolean'::regtype AND NOT function_value.proretset
         AND function_value.proargnames=ARRAY['tenant','actor','actor_session','service_lookup_digest','service_purpose']
+        AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+        AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_credential_recovery',function_value.oid,'EXECUTE'))
+      AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
+        'iam.list_service_role_templates(text,text,text)')
+        AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
+        AND function_value.prorettype='jsonb'::regtype AND NOT function_value.proretset
+        AND function_value.proargnames=ARRAY['tenant','actor','decision']
+        AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+        AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_credential_recovery',function_value.oid,'EXECUTE'))
+      AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
+        'iam.read_service_role_template(text,bigint,text)')
+        AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
+        AND function_value.prorettype='jsonb'::regtype AND NOT function_value.proretset
+        AND function_value.proargnames=ARRAY['template_id','template_version','content_digest']
         AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
         AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')

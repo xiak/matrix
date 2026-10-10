@@ -96,13 +96,14 @@ func writeManifests(base string, manifests []release.Manifest) ([]Fixture, error
 		for fileIndex := range manifest.Files {
 			declaration := &manifest.Files[fileIndex]
 			content := []byte("matrix-release-payload:" + declaration.Path)
-			if declaration.Path == release.IAMAuthorizationProfilesPath {
-				content, err = iamv1.EncodeAuthorizationProfileReleaseCatalog(iamv1.AuthorizationProfileReleaseCatalog{
-					APIVersion: iamv1.APIVersion, Kind: iamv1.AuthorizationProfileReleaseCatalogKind,
-					Current: []iamv1.AuthorizationProfile{}, Historical: []iamv1.AuthorizationProfile{},
+			if declaration.Path == release.IAMProductAuthorizationPath {
+				content, err = iamv1.EncodeProductAuthorizationReleaseCatalog(iamv1.ProductAuthorizationReleaseCatalog{
+					APIVersion: iamv1.APIVersion, Kind: iamv1.ProductAuthorizationReleaseCatalogKind,
+					Profiles: []iamv1.AuthorizationProfile{}, ProfileHistory: []iamv1.AuthorizationProfile{},
+					ServiceRolePolicies: []iamv1.ProductServiceRolePolicy{}, ServiceRoleTemplates: []iamv1.ServiceRoleTemplate{},
 				})
 				if err != nil {
-					return nil, errors.New("encode fixture IAM authorization profile catalog failed")
+					return nil, errors.New("encode fixture IAM product authorization catalog failed")
 				}
 			}
 			mode := os.FileMode(0o600)
@@ -150,9 +151,9 @@ func Manifest() release.Manifest {
 		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
 		Size: 1, SHA256: stableDigest("executable:mx"), Executable: true,
 	}, {
-		Path:      release.IAMAuthorizationProfilesPath,
-		MediaType: release.IAMAuthorizationProfilesMediaType,
-		Size:      1, SHA256: stableDigest("iam-authorization-profiles"),
+		Path:      release.IAMProductAuthorizationPath,
+		MediaType: release.IAMProductAuthorizationMediaType,
+		Size:      1, SHA256: stableDigest("iam-product-authorization"),
 	}}
 	images := make([]release.Image, 0, len(required))
 	for _, requirement := range required {

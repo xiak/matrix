@@ -1,7 +1,7 @@
 SET LOCAL ROLE matrix_iam_owner;
 
 -- An AccessKey's management status and the supported-recovery fence are
--- independent. Historical intent rows are immutable: schema 82 accepts their
+-- independent. Historical intent rows are immutable: schema 83 accepts their
 -- old result shape for replay, derives the state at the original completion,
 -- and requires every new non-delete result to persist the explicit state.
 CREATE OR REPLACE FUNCTION iam.access_key_result_valid(action_name text,value jsonb)
@@ -230,7 +230,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $functio
 DECLARE predecessor record;
 BEGIN
     SELECT * INTO predecessor FROM iam.readiness_v81();
-    RETURN QUERY SELECT predecessor.ready AND iam.access_key_credential_state_contract_ready(),82::bigint,predecessor.checked_at;
+    RETURN QUERY SELECT predecessor.ready AND iam.access_key_credential_state_contract_ready(),83::bigint,predecessor.checked_at;
 END $function$;
 REVOKE ALL ON FUNCTION iam.readiness() FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,
   matrix_iam_backup_custody,matrix_iam_notification_worker,matrix_iam_authentication_recovery,matrix_iam_access_analysis_worker;

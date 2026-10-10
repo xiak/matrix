@@ -117,8 +117,8 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repository, "go.mod"), []byte("module github.com/xiak/matrix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	writeTestIAMAuthorizationProfiles(t, repository)
-	testProduct := writeTestIAMAuthorizationProfile(t, repository)
+	writeTestIAMProductAuthorization(t, repository)
+	testProduct, testServiceRolePolicy, testServiceRoleTemplate := writeTestIAMAuthorizationProfile(t, repository)
 	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x41}, ed25519.SeedSize))
 	config := Config{
 		RepositoryRoot: repository, Output: filepath.Join(base, "bundle"),
@@ -146,14 +146,16 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 		verified.Manifest.Database != installationrelease.CurrentDatabaseProfile() {
 		t.Fatal("published release differs from the signed result")
 	}
-	catalogFile, declaration, err := verified.OpenVerifiedPayload(installationrelease.IAMAuthorizationProfilesPath)
-	if err != nil || declaration.MediaType != installationrelease.IAMAuthorizationProfilesMediaType {
-		t.Fatal("signed release lacks the fixed IAM authorization profile catalog", err)
+	catalogFile, declaration, err := verified.OpenVerifiedPayload(installationrelease.IAMProductAuthorizationPath)
+	if err != nil || declaration.MediaType != installationrelease.IAMProductAuthorizationMediaType {
+		t.Fatal("signed release lacks the fixed IAM product authorization catalog", err)
 	}
-	catalog, decodeErr := iamv1.DecodeAuthorizationProfileReleaseCatalog(catalogFile)
+	catalog, decodeErr := iamv1.DecodeProductAuthorizationReleaseCatalog(catalogFile)
 	closeErr := catalogFile.Close()
-	if decodeErr != nil || closeErr != nil || len(catalog.Current) != 1 || catalog.Current[0].Product != testProduct.Product {
-		t.Fatalf("signed IAM authorization profile catalog = %#v / %v / %v", catalog, decodeErr, closeErr)
+	if decodeErr != nil || closeErr != nil || len(catalog.Profiles) != 1 || catalog.Profiles[0].Product != testProduct.Product ||
+		len(catalog.ServiceRolePolicies) != 1 || catalog.ServiceRolePolicies[0].Version.PolicyID != testServiceRolePolicy.Version.PolicyID ||
+		len(catalog.ServiceRoleTemplates) != 1 || catalog.ServiceRoleTemplates[0].Reference() != testServiceRoleTemplate.Reference() {
+		t.Fatalf("signed IAM product authorization catalog = %#v / %v / %v", catalog, decodeErr, closeErr)
 	}
 	if len(effects.binaries) != len(binarySpecifications) ||
 		len(effects.dockerfiles) != len(imageRecipes) ||
@@ -215,7 +217,7 @@ func TestAssembleRejectsUntrustedBaseBeforeWritingOrBuilding(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(repository, "go.mod"), []byte("module github.com/xiak/matrix\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			writeTestIAMAuthorizationProfiles(t, repository)
+			writeTestIAMProductAuthorization(t, repository)
 			effects := newFakeEffects()
 			test.prepare(effects)
 			output := filepath.Join(base, "bundle")
@@ -241,7 +243,7 @@ func TestAssembleRejectsUntrustedBaseBeforeWritingOrBuilding(t *testing.T) {
 	}
 }
 
-func TestAssembleRejectsInvalidIAMAuthorizationProfileCatalogBeforeBuild(t *testing.T) {
+func TestAssembleRejectsInvalidIAMProductAuthorizationCatalogBeforeBuild(t *testing.T) {
 	base := t.TempDir()
 	repository := filepath.Join(base, "repository")
 	if err := os.Mkdir(repository, 0o700); err != nil {
@@ -250,9 +252,9 @@ func TestAssembleRejectsInvalidIAMAuthorizationProfileCatalogBeforeBuild(t *test
 	if err := os.WriteFile(filepath.Join(repository, "go.mod"), []byte("module github.com/xiak/matrix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	writeTestIAMAuthorizationProfiles(t, repository)
-	catalogPath := filepath.Join(repository, "deploy", "releasebuild", "iam-authorization-profiles.json")
-	if err := os.WriteFile(catalogPath, []byte(`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthorizationProfileReleaseCatalog","current":null,"historical":[]}`), 0o600); err != nil {
+	writeTestIAMProductAuthorization(t, repository)
+	catalogPath := filepath.Join(repository, "deploy", "releasebuild", "iam-product-authorization.json")
+	if err := os.WriteFile(catalogPath, []byte(`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"ProductAuthorizationReleaseCatalog","profiles":null,"profileHistory":[],"serviceRolePolicies":[],"serviceRoleTemplates":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	output := filepath.Join(base, "bundle")
@@ -267,47 +269,82 @@ func TestAssembleRejectsInvalidIAMAuthorizationProfileCatalogBeforeBuild(t *test
 		},
 	}, effects)
 	if err == nil {
-		t.Fatal("invalid IAM authorization profile catalog was signed")
+		t.Fatal("invalid IAM product authorization catalog was signed")
 	}
 	if _, statErr := os.Lstat(output); !os.IsNotExist(statErr) || len(effects.binaries) != 0 || len(effects.dockerfiles) != 0 {
-		t.Fatal("invalid IAM authorization profile catalog started release build effects")
+		t.Fatal("invalid IAM product authorization catalog started release build effects")
 	}
 }
 
-func writeTestIAMAuthorizationProfiles(t *testing.T, repository string) {
+func writeTestIAMProductAuthorization(t *testing.T, repository string) {
 	t.Helper()
-	target := filepath.Join(repository, "deploy", "releasebuild", "iam-authorization-profiles.json")
+	target := filepath.Join(repository, "deploy", "releasebuild", "iam-product-authorization.json")
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	content := []byte(`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthorizationProfileReleaseCatalog","current":[],"historical":[]}`)
+	content := []byte(`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"ProductAuthorizationReleaseCatalog","profiles":[],"profileHistory":[],"serviceRolePolicies":[],"serviceRoleTemplates":[]}`)
 	if err := os.WriteFile(target, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func writeTestIAMAuthorizationProfile(t *testing.T, repository string) iamv1.AuthorizationProfile {
+func writeTestIAMAuthorizationProfile(t *testing.T, repository string) (iamv1.AuthorizationProfile, iamv1.ProductServiceRolePolicy, iamv1.ServiceRoleTemplate) {
 	t.Helper()
 	profile := iamv1.AuthorizationProfile{
 		APIVersion: iamv1.APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 1, CallingService: iamv1.ServicePaaS,
-		Actions: []iamv1.AuthorizationProfileAction{{
-			Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
-			ResourceShapes: []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}},
-			SubjectTypes:   []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession},
-		}},
+		Actions: []iamv1.AuthorizationProfileAction{
+			{Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
+				ResourceShapes: []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}},
+				SubjectTypes:   []iamv1.SubjectType{iamv1.SubjectUser, iamv1.SubjectRole}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession}},
+			{Action: "catalog.item.role-bind", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
+				ResourceShapes: []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}},
+				SubjectTypes:   []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession}},
+			{Action: "catalog.item.role-unbind", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
+				ResourceShapes: []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}},
+				SubjectTypes:   []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession}},
+		},
 	}
-	encoded, err := iamv1.EncodeAuthorizationProfileReleaseCatalog(iamv1.AuthorizationProfileReleaseCatalog{
-		APIVersion: iamv1.APIVersion, Kind: iamv1.AuthorizationProfileReleaseCatalogKind,
-		Current: []iamv1.AuthorizationProfile{profile}, Historical: []iamv1.AuthorizationProfile{},
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "catalog-read", Effect: iamv1.PolicyAllow,
+			Actions:   []iamv1.Action{"catalog.item.read"},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: "CATALOG_ITEM", Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+	compilation, err := iamv1.CompilePolicyDocument(document, []iamv1.AuthorizationProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := iamv1.CanonicalizePolicyCompilation(document, compilation, []iamv1.AuthorizationProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := iamv1.ProductServiceRolePolicy{Product: profile.Product, DisplayName: "CatalogItemReader",
+		Version: iamv1.PolicyVersion{PolicyID: "system.service-role.catalog.item-reader",
+			ID: iamv1.PolicyVersionID("version-" + strings.TrimPrefix(digest, "sha256:")), Document: document,
+			ContentDigest: digest, ContractVersion: iamv1.PolicyVersionCompiledContract, Compilation: &compilation}}
+	spec := iamv1.ServiceRoleTemplateSpec{Product: profile.Product, ServicePurpose: iamv1.ServicePaaS,
+		RoleName: "CatalogItemReader", RoleDescription: "Reads one explicitly bound catalog item.",
+		PolicyVersion: iamv1.PolicyVersionReference{PolicyID: policy.Version.PolicyID, VersionID: policy.Version.ID,
+			ContentDigest: policy.Version.ContentDigest},
+		Workloads: []iamv1.ServiceRoleWorkloadSpec{{ResourceKind: "CATALOG_ITEM", BindAction: "catalog.item.role-bind",
+			UnbindAction: "catalog.item.role-unbind"}}, MaxSessionDurationSeconds: 900}
+	_, templateDigest, err := iamv1.CanonicalizeServiceRoleTemplateSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := iamv1.ServiceRoleTemplate{APIVersion: iamv1.APIVersion, Kind: "ServiceRoleTemplate",
+		ID: "catalog.item-reader", Version: 1, Spec: spec, ContentDigest: templateDigest, Status: iamv1.ServiceRoleTemplateActive}
+	encoded, err := iamv1.EncodeProductAuthorizationReleaseCatalog(iamv1.ProductAuthorizationReleaseCatalog{
+		APIVersion: iamv1.APIVersion, Kind: iamv1.ProductAuthorizationReleaseCatalogKind,
+		Profiles: []iamv1.AuthorizationProfile{profile}, ProfileHistory: []iamv1.AuthorizationProfile{},
+		ServiceRolePolicies: []iamv1.ProductServiceRolePolicy{policy}, ServiceRoleTemplates: []iamv1.ServiceRoleTemplate{template},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(repository, "deploy", "releasebuild", "iam-authorization-profiles.json")
+	target := filepath.Join(repository, "deploy", "releasebuild", "iam-product-authorization.json")
 	if err := os.WriteFile(target, encoded, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return profile
+	return profile, policy, template
 }
 
 func testDigest(value string) string {

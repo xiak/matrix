@@ -153,6 +153,8 @@ type Transaction interface {
 	ReadGroup(context.Context, GroupRead) (iamv1.GroupAccess, error)
 	ListRoles(context.Context, AccountRead) (iamv1.RoleList, error)
 	ReadRole(context.Context, RoleRead) (iamv1.RoleAccess, error)
+	ListServiceRoleTemplates(context.Context, AccountRead) (iamv1.ServiceRoleTemplateList, error)
+	ReadServiceRoleTemplate(context.Context, iamv1.ServiceRoleTemplateReference) (iamv1.ServiceRoleTemplate, bool, error)
 	ReadRoleDelegationEligibility(context.Context, RoleDelegationRead) (map[iamv1.RoleID]bool, error)
 	ListServiceLinkedRoles(context.Context, AccountRead) (iamv1.ServiceLinkedRoleList, error)
 	ReadServiceLinkedRole(context.Context, ServiceLinkedRoleRead) (iamv1.ServiceLinkedRoleAccess, error)
