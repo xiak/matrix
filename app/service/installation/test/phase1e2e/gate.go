@@ -1132,7 +1132,7 @@ func (value *gate) verifySignedAccessKeyEdge(
 	// persistence without treating a changed bridge subnet as credential loss.
 	var retained iamv1.SetAccessKeyNetworkRestrictionsResponse
 	retainedNetwork := iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"0.0.0.0/0"}}
-	if err := value.edge.mutateIAM(ctx, path+"/"+string(created.Key.ID)+"/network-restrictions", tenant.OldPrimaryCredential,
+	if err := value.edge.writeIAM(ctx, http.MethodPut, path+"/"+string(created.Key.ID)+"/network-restrictions", tenant.OldPrimaryCredential,
 		iamv1.SetAccessKeyNetworkRestrictionsRequest{AccessKeyResourceVersion: enabled.Key.ResourceVersion,
 			NetworkRestrictions: retainedNetwork, RequestID: "phase1-access-key-retention-network"},
 		&retained, http.StatusOK); err != nil || iamv1.ValidateSetAccessKeyNetworkRestrictionsResponse(retained) != nil ||
