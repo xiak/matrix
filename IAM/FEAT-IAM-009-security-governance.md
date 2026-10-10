@@ -1372,7 +1372,7 @@ Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默�
 
 S4a不提供报告目录、共享链接、自动规则、后台停用、详细历史Deny解释或跨产品联合报告；这些仍由后继S4切片完成。首片最低真实门禁覆盖两Account同reportId攻击、创建/读取/下载逐项撤权、账号及USER停用、请求重放/变体/回包丢失、容量与正文末端失败、到期/清理/重启、旧数据UNKNOWN语义、秘密扫描、CSV攻击，以及报告生成与User/Key/Session/设置变化的双向事务次序。报告永远不是后续写操作的permit；处置继续调用现有生命周期入口并重新核对当前版本和权限。
 
-固定`644fff09`已有CurrentIdentity的直接/组PolicySources、PermissionBoundary、非权威ActionCapability，以及不可变决定与outbox；公开DecisionReason仅ALLOWED/DENIED。AccessKey元数据只有身份、状态、resourceVersion及创建/修改时间，没有lastUsed；没有安全报告、详细拒绝诊断或闲置调度实现。不能把已有目录、元数据更新时间或Audit链完整等同于这些功能完成。
+固定生产源码`147586689a9f0bcad3254f743b11c51dba35c1b5`已在现有IAM owner完成S4a：新报告只接受`formatVersion=2`，AccessKey当前状态和CSV第19列携带非秘密`credentialState`；保留的v1正文、18列CSV、摘要和完成关系保持原字节，缺失该字段只解释为旧版未记录，不能补成`CURRENT`。任务专属PostgreSQL18.6中的格式2报告race以10.877秒通过缺失/JSON `null`字段、重摘要、权限、容量、保留及旧格式攻击；实际IAM81程序到IAM82保留数据门禁以110.090秒通过，三库受支持恢复门禁以170.494秒证明恢复后新报告为`RECOVERY_FENCED`且旧Secret真实签名401，双IAM/Audit/PaaS进程门禁以253.748秒保留两Account隔离和Audit链。相同源码的IAM82/Audit37/PaaS3、`contractRevision=30`签名A/B又在全新network-none Docker27.5.1引擎以617.76秒完成安装、报告生成/下载、备份、升级、回滚和选定恢复；只重启任务引擎后的84.01秒门禁再次读取围栏状态并通过支持去敏。[Verification 38049893217](https://github.com/xiak/matrix/actions/runs/38049893217)发现的是Role分页测试和低熵扫描器的测试owner缺陷，随后由后继推送取消，不能登记为成功；仅测试提交`f25977b6f8385341d9b62fa9c62b756f9ddec83d`在PG18真实Role/五进程门禁通过后由[Verification 38055454202](https://github.com/xiak/matrix/actions/runs/38055454202)核实精确SHA，Go、console、node、PostgreSQL HA、十二项串行authority门禁及最终汇总共17项全部`completed/success`，且不改签名A/B生产字节。生产编码器的格式2 CSV 已由Microsoft Excel 16.0实际打开、另存XLSX及关闭重开，5行×19列、第19列凭据状态和0公式保持。详细拒绝诊断、闲置调度和LIVE UI组合不由S4a后端证据提前完成。
 
 #### 观测事实及完整性
 
