@@ -8972,8 +8972,9 @@ func TestExplicitAuthorizationProfileBindsUnfamiliarProductWithoutRegisteringIt(
 		APIVersion: APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 1, CallingService: ServicePaaS,
 		Actions: []AuthorizationProfileAction{{
 			Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: AuthorityScopeTenant,
-			ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}},
-			SubjectTypes:   []SubjectType{SubjectUser}, UserAuthenticationMethods: []UserAuthenticationMethod{UserAuthenticationLoginSession},
+			ResourceShapes:    []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}},
+			InstanceListBatch: true,
+			SubjectTypes:      []SubjectType{SubjectUser}, UserAuthenticationMethods: []UserAuthenticationMethod{UserAuthenticationLoginSession},
 			Conditions: []AuthorizationProfileCondition{{Key: ConditionIAMAccountID, ValueType: ConditionString, Source: ConditionIAMIdentity}},
 		}},
 	}
@@ -8998,11 +8999,46 @@ func TestExplicitAuthorizationProfileBindsUnfamiliarProductWithoutRegisteringIt(
 	if err := CheckAuthorizationDecisionForProfileAndRequest(decision, request, profile); err != nil {
 		t.Fatal("explicit Profile response binding failed", err)
 	}
+	resolveRequest := ResolveAuthorizationSubjectRequest{Profile: request.Profile}
+	subjectContext := AuthorizationSubjectContext{APIVersion: APIVersion, Kind: "AuthorizationSubjectContext", TenantID: "account-one",
+		Subject: Subject{Type: SubjectUser, ID: "user-one"}, Profile: request.Profile}
+	if CheckAuthorizationSubjectContextForProfileAndRequest(subjectContext, resolveRequest, profile) != nil ||
+		ValidateResolveAuthorizationSubjectRequest(resolveRequest) == nil || ValidateAuthorizationSubjectContext(subjectContext) == nil {
+		t.Fatal("explicit subject context was confused with source registration")
+	}
+	second, err := NewAuthorizationRequestForProfile(profile, request.Action, ResourceReference{Kind: request.Resource.Kind, ID: "item-two"},
+		AuthorizationResourceInstance, "", "request-catalog-read-two", request.CorrelationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDecision := decision
+	secondDecision.ID, secondDecision.Resource, secondDecision.RequestID = "decision-catalog-read-two", second.Resource, second.RequestID
+	batchRequest := AuthorizationBatchRequest{Requests: []AuthorizationRequest{request, second}}
+	batchDecision := AuthorizationBatchDecision{APIVersion: APIVersion, Kind: "AuthorizationBatchDecision", TenantID: "account-one",
+		Subject: Subject{Type: SubjectUser, ID: "user-one"}, Profile: request.Profile, Action: request.Action,
+		ResourceKind: request.Resource.Kind, CorrelationID: request.CorrelationID, DecidedAt: decision.DecidedAt,
+		Decisions: []AuthorizationDecision{decision, secondDecision}}
+	if CheckAuthorizationBatchDecisionForProfileAndRequest(batchDecision, batchRequest, profile) != nil ||
+		ValidateAuthorizationBatchRequest(batchRequest) == nil || ValidateAuthorizationBatchDecision(batchDecision) == nil {
+		t.Fatal("explicit batch was confused with source registration")
+	}
+	diagnosis := CurrentAccessDiagnosis{APIVersion: APIVersion, Kind: "CurrentAccessDiagnosis", Outcome: AccessDiagnosisDenied,
+		Reasons: []AccessDiagnosisReason{AccessDiagnosisNoMatchingAllow}, TenantID: "account-one", Subject: subjectContext.Subject,
+		Action: request.Action, Resource: request.Resource, Profile: request.Profile, ResourceMode: request.ResourceMode,
+		RequestID: request.RequestID, CorrelationID: request.CorrelationID, EvaluatedAt: decision.DecidedAt,
+		Sources: []AccessDiagnosisSource{}, Restrictions: []AccessDiagnosisRestriction{}, ResourceExistence: AccessDiagnosisNotEvaluated,
+		BusinessOutcome: AccessDiagnosisNotEvaluated}
+	if ValidateCurrentAccessDiagnosisForProfile(diagnosis, profile) != nil || ValidateCurrentAccessDiagnosis(diagnosis) == nil {
+		t.Fatal("explicit diagnosis was confused with source registration")
+	}
 	changed := CloneAuthorizationProfile(profile)
 	changed.Actions[0].ResourceKind = "OTHER_ITEM"
 	if ValidateAuthorizationRequestForProfile(request, changed) == nil ||
-		CheckAuthorizationDecisionForProfileAndRequest(decision, request, changed) == nil {
-		t.Fatal("changed Profile bytes retained request or response authority")
+		CheckAuthorizationDecisionForProfileAndRequest(decision, request, changed) == nil ||
+		CheckAuthorizationSubjectContextForProfileAndRequest(subjectContext, resolveRequest, changed) == nil ||
+		CheckAuthorizationBatchDecisionForProfileAndRequest(batchDecision, batchRequest, changed) == nil ||
+		ValidateCurrentAccessDiagnosisForProfile(diagnosis, changed) == nil {
+		t.Fatal("changed Profile bytes retained request, response, lookup, batch, or diagnosis authority")
 	}
 	if CheckTenantProductAuthorizationProfile(profile) != nil {
 		t.Fatal("tenant product Profile was rejected by the narrow registry boundary")

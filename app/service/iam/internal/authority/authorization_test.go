@@ -2518,6 +2518,12 @@ func TestDecideWithRegisteredProfileDoesNotBranchOnProductNames(t *testing.T) {
 	if err != nil || !decision.Allowed || decision.TenantID != context.Organization.ID || decision.Subject == nil {
 		t.Fatalf("generic registered Profile decision=%#v err=%v", decision, err)
 	}
+	diagnosis, err := CurrentAccessDiagnosisForProfile(decision, context.Organization.ID, context.InstallationID,
+		*decision.Subject, request, profile)
+	if err != nil || diagnosis.Outcome != iamv1.AccessDiagnosisAllowed ||
+		iamv1.ValidateCurrentAccessDiagnosisForProfile(diagnosis, profile) != nil {
+		t.Fatalf("generic registered Profile diagnosis=%#v err=%v", diagnosis, err)
+	}
 	denied, err := DecideWithProfile(context, iamv1.ServiceAudit, request, profile, "decision-catalog-wrong-service", now)
 	if err != nil || denied.Allowed || denied.Subject != nil || denied.TenantID != "" {
 		t.Fatalf("wrong service did not produce a closed deny: decision=%#v err=%v", denied, err)

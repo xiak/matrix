@@ -1174,17 +1174,36 @@ func validateAuthorizationTagsForAction(
 }
 
 func ValidateResolveAuthorizationSubjectRequest(value ResolveAuthorizationSubjectRequest) error {
-	source, known := sourceProfileCommitments[value.Profile.Product]
-	if !known || value.Profile != source.reference {
+	profile, known := LookupAuthorizationProfile(value.Profile.Product)
+	if !known {
+		return errors.New("authorization subject profile is invalid")
+	}
+	return ValidateResolveAuthorizationSubjectRequestForProfile(value, profile)
+}
+
+// ValidateResolveAuthorizationSubjectRequestForProfile binds a lookup-only
+// subject request to one exact current declaration. It does not authenticate
+// either bearer or register the declaration.
+func ValidateResolveAuthorizationSubjectRequestForProfile(value ResolveAuthorizationSubjectRequest, profile AuthorizationProfile) error {
+	if CheckAuthorizationProfileReference(profile, value.Profile) != nil {
 		return errors.New("authorization subject profile is invalid")
 	}
 	return nil
 }
 
 func ValidateAuthorizationSubjectContext(value AuthorizationSubjectContext) error {
-	source, known := sourceProfileCommitments[value.Profile.Product]
-	if value.APIVersion != APIVersion || value.Kind != "AuthorizationSubjectContext" || !known ||
-		value.Profile != source.reference || ValidateID("tenantId", string(value.TenantID)) != nil ||
+	profile, known := LookupAuthorizationProfile(value.Profile.Product)
+	if !known {
+		return errors.New("authorization subject context is invalid")
+	}
+	return ValidateAuthorizationSubjectContextForProfile(value, profile)
+}
+
+// ValidateAuthorizationSubjectContextForProfile validates a non-permit subject
+// projection against an exact declaration selected by IAM.
+func ValidateAuthorizationSubjectContextForProfile(value AuthorizationSubjectContext, profile AuthorizationProfile) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthorizationSubjectContext" ||
+		CheckAuthorizationProfileReference(profile, value.Profile) != nil || ValidateID("tenantId", string(value.TenantID)) != nil ||
 		ValidateSubject(value.Subject) != nil || value.Subject.AccessKeyID != "" ||
 		(value.Subject.Type != SubjectUser && value.Subject.Type != SubjectRole) {
 		return errors.New("authorization subject context is invalid")
@@ -1193,7 +1212,17 @@ func ValidateAuthorizationSubjectContext(value AuthorizationSubjectContext) erro
 }
 
 func CheckAuthorizationSubjectContextForRequest(value AuthorizationSubjectContext, request ResolveAuthorizationSubjectRequest) error {
-	if ValidateResolveAuthorizationSubjectRequest(request) != nil || ValidateAuthorizationSubjectContext(value) != nil ||
+	profile, known := LookupAuthorizationProfile(request.Profile.Product)
+	if !known {
+		return errors.New("authorization subject context does not match request")
+	}
+	return CheckAuthorizationSubjectContextForProfileAndRequest(value, request, profile)
+}
+
+// CheckAuthorizationSubjectContextForProfileAndRequest prevents a product from
+// reusing lookup context across Profile revisions or products.
+func CheckAuthorizationSubjectContextForProfileAndRequest(value AuthorizationSubjectContext, request ResolveAuthorizationSubjectRequest, profile AuthorizationProfile) error {
+	if ValidateResolveAuthorizationSubjectRequestForProfile(request, profile) != nil || ValidateAuthorizationSubjectContextForProfile(value, profile) != nil ||
 		value.Profile != request.Profile {
 		return errors.New("authorization subject context does not match request")
 	}

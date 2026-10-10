@@ -966,18 +966,32 @@ func CheckAuthorizationDecisionForProfileAndRequest(decision AuthorizationDecisi
 }
 
 func ValidateAuthorizationBatchRequest(value AuthorizationBatchRequest) error {
+	if len(value.Requests) == 0 {
+		return ErrInvalidAuthorizationProfile
+	}
+	profile, known := LookupAuthorizationProfile(value.Requests[0].Profile.Product)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	return ValidateAuthorizationBatchRequestForProfile(value, profile)
+}
+
+// ValidateAuthorizationBatchRequestForProfile validates one bounded instance
+// list against an exact current declaration. Registration and caller
+// authentication remain responsibilities of the owning IAM transaction.
+func ValidateAuthorizationBatchRequestForProfile(value AuthorizationBatchRequest, profile AuthorizationProfile) error {
 	if value.Requests == nil || len(value.Requests) < 1 || len(value.Requests) > MaxAuthorizationBatchItems {
 		return ErrInvalidAuthorizationProfile
 	}
 	first := value.Requests[0]
-	if ValidateAuthorizationRequest(first) != nil || first.ResourceMode != AuthorizationResourceInstance ||
-		first.CollectionUsage != "" || checkSourceProfileInstanceListBatch(first.Profile, first.Action, first.Resource.Kind) != nil {
+	if ValidateAuthorizationRequestForProfile(first, profile) != nil || first.ResourceMode != AuthorizationResourceInstance ||
+		first.CollectionUsage != "" || CheckAuthorizationProfileInstanceListBatch(profile, first.Profile, first.Action, first.Resource.Kind) != nil {
 		return ErrInvalidAuthorizationProfile
 	}
 	seenRequests := make(map[string]bool, len(value.Requests))
 	previousResource := ""
 	for _, request := range value.Requests {
-		if ValidateAuthorizationRequest(request) != nil || request.Profile != first.Profile || request.Action != first.Action ||
+		if ValidateAuthorizationRequestForProfile(request, profile) != nil || request.Profile != first.Profile || request.Action != first.Action ||
 			request.Resource.Kind != first.Resource.Kind || request.ResourceMode != AuthorizationResourceInstance ||
 			request.CollectionUsage != "" || request.CorrelationID != first.CorrelationID ||
 			!authorizationNetworkContextsEqual(request.NetworkContext, first.NetworkContext) ||
@@ -991,18 +1005,28 @@ func ValidateAuthorizationBatchRequest(value AuthorizationBatchRequest) error {
 }
 
 func ValidateAuthorizationBatchDecision(value AuthorizationBatchDecision) error {
+	profile, known := LookupAuthorizationProfile(value.Profile.Product)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	return ValidateAuthorizationBatchDecisionForProfile(value, profile)
+}
+
+// ValidateAuthorizationBatchDecisionForProfile checks one aggregate response
+// against the same exact current declaration used for every item.
+func ValidateAuthorizationBatchDecisionForProfile(value AuthorizationBatchDecision, profile AuthorizationProfile) error {
 	if value.APIVersion != APIVersion || value.Kind != "AuthorizationBatchDecision" ||
 		ValidateID("tenantId", string(value.TenantID)) != nil || ValidateSubject(value.Subject) != nil ||
 		(value.Subject.Type != SubjectUser && value.Subject.Type != SubjectRole) || value.Subject.AccessKeyID != "" ||
 		ValidateID("correlationId", value.CorrelationID) != nil || validateTime("decidedAt", value.DecidedAt) != nil ||
-		checkSourceProfileInstanceListBatch(value.Profile, value.Action, value.ResourceKind) != nil ||
+		CheckAuthorizationProfileInstanceListBatch(profile, value.Profile, value.Action, value.ResourceKind) != nil ||
 		value.Decisions == nil || len(value.Decisions) < 1 || len(value.Decisions) > MaxAuthorizationBatchItems {
 		return ErrInvalidAuthorizationProfile
 	}
 	previousResource := ""
 	seenRequests := make(map[string]bool, len(value.Decisions))
 	for _, decision := range value.Decisions {
-		if ValidateAuthorizationDecision(decision) != nil || decision.Profile == nil || *decision.Profile != value.Profile ||
+		if ValidateAuthorizationDecisionForProfile(decision, profile) != nil || decision.Profile == nil || *decision.Profile != value.Profile ||
 			decision.Action != value.Action || decision.Resource.Kind != value.ResourceKind ||
 			decision.ResourceMode != AuthorizationResourceInstance || decision.CollectionUsage != "" ||
 			decision.CorrelationID != value.CorrelationID || !decision.DecidedAt.Equal(value.DecidedAt) ||
@@ -1019,7 +1043,21 @@ func ValidateAuthorizationBatchDecision(value AuthorizationBatchDecision) error 
 }
 
 func CheckAuthorizationBatchDecisionForRequest(value AuthorizationBatchDecision, request AuthorizationBatchRequest) error {
-	if ValidateAuthorizationBatchRequest(request) != nil || ValidateAuthorizationBatchDecision(value) != nil ||
+	if len(request.Requests) == 0 {
+		return ErrInvalidAuthorizationProfile
+	}
+	profile, known := LookupAuthorizationProfile(request.Requests[0].Profile.Product)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	return CheckAuthorizationBatchDecisionForProfileAndRequest(value, request, profile)
+}
+
+// CheckAuthorizationBatchDecisionForProfileAndRequest binds a batch response
+// to the exact current Profile and ordered request set. It is not a reusable
+// product permit.
+func CheckAuthorizationBatchDecisionForProfileAndRequest(value AuthorizationBatchDecision, request AuthorizationBatchRequest, profile AuthorizationProfile) error {
+	if ValidateAuthorizationBatchRequestForProfile(request, profile) != nil || ValidateAuthorizationBatchDecisionForProfile(value, profile) != nil ||
 		len(value.Decisions) != len(request.Requests) {
 		return ErrInvalidAuthorizationProfile
 	}
@@ -1029,7 +1067,7 @@ func CheckAuthorizationBatchDecisionForRequest(value AuthorizationBatchDecision,
 		return ErrInvalidAuthorizationProfile
 	}
 	for index := range request.Requests {
-		if CheckAuthorizationDecisionForRequest(value.Decisions[index], request.Requests[index]) != nil {
+		if CheckAuthorizationDecisionForProfileAndRequest(value.Decisions[index], request.Requests[index], profile) != nil {
 			return ErrInvalidAuthorizationProfile
 		}
 	}

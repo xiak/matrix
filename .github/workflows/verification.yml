@@ -213,7 +213,8 @@ jobs:
               databases=(matrix_authority_ci matrix_audit_upgrade_ci matrix_audit_http_ci
                 matrix_iam_http_ci matrix_iam_directory_ci matrix_iam_policy_ci matrix_iam_attachment_ci
                 matrix_iam_attachment_change_ci
-                matrix_iam_access_keys_ci matrix_iam_security_report_ci matrix_iam_access_analyzer_ci matrix_paas_ci)
+                matrix_iam_access_keys_ci matrix_iam_security_report_ci matrix_iam_access_analyzer_ci
+                matrix_iam_product_profile_ci matrix_paas_ci)
               ;;
             authority-recovery-storage)
               databases=(matrix_iam_recovery_ci matrix_iam_auth_recovery_source_ci
@@ -287,6 +288,7 @@ jobs:
           MATRIX_IAM_ACCESS_KEY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_access_keys_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_SECURITY_REPORT_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_security_report_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_ACCESS_ANALYZER_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_access_analyzer_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_PRODUCT_PROFILE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_product_profile_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_PAAS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_paas_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
         run: |
           time go test -race -p 1 -count=1 ./app/service/audit/internal/data/postgres \

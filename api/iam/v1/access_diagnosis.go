@@ -115,6 +115,17 @@ type CurrentAccessDiagnosis struct {
 }
 
 func ValidateCurrentAccessDiagnosis(value CurrentAccessDiagnosis) error {
+	profile, known := LookupAuthorizationProfile(value.Profile.Product)
+	if !known {
+		return errors.New("current access diagnosis profile is invalid")
+	}
+	return ValidateCurrentAccessDiagnosisForProfile(value, profile)
+}
+
+// ValidateCurrentAccessDiagnosisForProfile checks one observation against the
+// exact declaration used for its private evaluation. It does not make the
+// observation an authorization decision or reusable permit.
+func ValidateCurrentAccessDiagnosisForProfile(value CurrentAccessDiagnosis, profile AuthorizationProfile) error {
 	if value.APIVersion != APIVersion || value.Kind != "CurrentAccessDiagnosis" ||
 		(value.Outcome != AccessDiagnosisAllowed && value.Outcome != AccessDiagnosisDenied) ||
 		ValidateSubject(value.Subject) != nil || validateTime("evaluatedAt", value.EvaluatedAt) != nil ||
@@ -124,10 +135,10 @@ func ValidateCurrentAccessDiagnosis(value CurrentAccessDiagnosis) error {
 	request := AuthorizationRequest{Action: value.Action, Resource: value.Resource, Profile: value.Profile,
 		ResourceMode: value.ResourceMode, CollectionUsage: value.CollectionUsage, NetworkContext: value.NetworkContext,
 		RequestTags: value.RequestTags, ResourceTags: value.ResourceTags, RequestID: value.RequestID, CorrelationID: value.CorrelationID}
-	if ValidateAuthorizationRequest(request) != nil || len(value.Reasons) > 9 || len(value.Sources) > MaxAccessDiagnosisSources || len(value.Restrictions) > 3 {
+	if ValidateAuthorizationRequestForProfile(request, profile) != nil || len(value.Reasons) > 9 || len(value.Sources) > MaxAccessDiagnosisSources || len(value.Restrictions) > 3 {
 		return errors.New("current access diagnosis binding is invalid")
 	}
-	definition, known := LookupActionDefinition(value.Action)
+	definition, known := LookupAuthorizationProfileActionDefinition(profile, value.Action)
 	if !known {
 		return errors.New("current access diagnosis action is invalid")
 	}

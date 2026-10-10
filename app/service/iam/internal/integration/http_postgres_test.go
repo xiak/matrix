@@ -950,8 +950,9 @@ func compileIAMPolicyForStorage(document iamv1.PolicyDocument) (string, string, 
 func registeredCatalogProfile() iamv1.AuthorizationProfile {
 	return iamv1.AuthorizationProfile{APIVersion: iamv1.APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 1, CallingService: iamv1.ServicePaaS,
 		Actions: []iamv1.AuthorizationProfileAction{{Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
-			ResourceShapes: []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}},
-			SubjectTypes:   []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession}}}}
+			ResourceShapes:    []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}, {Mode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionList}},
+			InstanceListBatch: true,
+			SubjectTypes:      []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession}}}}
 }
 
 func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
@@ -1046,6 +1047,46 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	wrongService := request
 	wrongService.RequestID, wrongService.CorrelationID = "registered-product-wrong-service", "registered-product-wrong-service"
 	authorize(t, handler, auditCredential, primary, wrongService, http.StatusOK, false)
+	performSubjectRequest := func(target string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		httpRequest := httptest.NewRequest(http.MethodPost, target, bytes.NewReader(mustIAMJSON(t, body)))
+		httpRequest.Header.Set("Content-Type", "application/json")
+		httpRequest.Header.Set("Authorization", "Bearer "+paasCredential)
+		httpRequest.Header.Set("Matrix-Subject-Credential", primary)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httpRequest)
+		return response
+	}
+	resolveRequest := iamv1.ResolveAuthorizationSubjectRequest{Profile: request.Profile}
+	resolveResponse := performSubjectRequest("/v1/internal/authorization-subject:resolve", resolveRequest)
+	var subjectContext iamv1.AuthorizationSubjectContext
+	if resolveResponse.Code != http.StatusOK || json.Unmarshal(resolveResponse.Body.Bytes(), &subjectContext) != nil ||
+		iamv1.CheckAuthorizationSubjectContextForProfileAndRequest(subjectContext, resolveRequest, profile) != nil ||
+		subjectContext.TenantID != document.Organization.ID || subjectContext.Subject.ID != string(document.Administrator.ID) {
+		t.Fatalf("registered product subject resolution failed: status=%d body=%s", resolveResponse.Code, resolveResponse.Body.String())
+	}
+	diagnosisResponse := performSubjectRequest("/v1/authorize:diagnose", request)
+	var diagnosis iamv1.CurrentAccessDiagnosis
+	if diagnosisResponse.Code != http.StatusOK || json.Unmarshal(diagnosisResponse.Body.Bytes(), &diagnosis) != nil ||
+		iamv1.ValidateCurrentAccessDiagnosisForProfile(diagnosis, profile) != nil || diagnosis.Outcome != iamv1.AccessDiagnosisAllowed {
+		t.Fatalf("registered product diagnosis failed: status=%d body=%s", diagnosisResponse.Code, diagnosisResponse.Body.String())
+	}
+	batch := iamv1.AuthorizationBatchRequest{Requests: make([]iamv1.AuthorizationRequest, 2)}
+	for index, id := range []string{"item-batch-a", "item-batch-b"} {
+		batch.Requests[index], err = iamv1.NewAuthorizationRequestForProfile(profile, "catalog.item.read",
+			iamv1.ResourceReference{Kind: "CATALOG_ITEM", ID: id}, iamv1.AuthorizationResourceInstance, "",
+			"registered-product-batch-"+id, "registered-product-batch")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	batchResponse := performSubjectRequest("/v1/authorize:batch", batch)
+	var batchDecision iamv1.AuthorizationBatchDecision
+	if batchResponse.Code != http.StatusOK || json.Unmarshal(batchResponse.Body.Bytes(), &batchDecision) != nil ||
+		iamv1.CheckAuthorizationBatchDecisionForProfileAndRequest(batchDecision, batch, profile) != nil ||
+		len(batchDecision.Decisions) != 2 || !batchDecision.Decisions[0].Allowed || !batchDecision.Decisions[1].Allowed {
+		t.Fatalf("registered product batch failed: status=%d body=%s", batchResponse.Code, batchResponse.Body.String())
+	}
 	for name, mutate := range map[string]func(*iamv1.AuthorizationRequest){
 		"unknown product": func(value *iamv1.AuthorizationRequest) { value.Profile.Product = "unknown" },
 		"wrong digest": func(value *iamv1.AuthorizationRequest) {
@@ -1070,15 +1111,16 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	replayed := request
 	replayed.RequestID, replayed.CorrelationID = "registered-product-after-restart", "registered-product-after-restart"
 	authorize(t, restartedHandler, paasCredential, primary, replayed, http.StatusOK, true)
-	var heads, versions, allows, denies, forged int
+	var heads, versions, allows, denies, forged, batchAllows int
 	if err := admin.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM iam.authorization_profile_heads WHERE product='catalog'),
 		(SELECT count(*) FROM iam.policy_versions WHERE id=$1 AND compilation#>>'{profiles,0,product}'='catalog'),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id IN ('registered-product-allow','registered-product-after-restart') AND allowed),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id='registered-product-wrong-service' AND NOT allowed),
-		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id LIKE 'registered-product-forged-%')`, policy.Version.ID).
-		Scan(&heads, &versions, &allows, &denies, &forged); err != nil || heads != 1 || versions != 1 || allows != 2 || denies != 1 || forged != 0 {
-		t.Fatalf("registered product state split: heads=%d versions=%d allows=%d denies=%d forged=%d err=%v", heads, versions, allows, denies, forged, err)
+		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id LIKE 'registered-product-forged-%'),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE document->>'correlationId'='registered-product-batch' AND allowed)`, policy.Version.ID).
+		Scan(&heads, &versions, &allows, &denies, &forged, &batchAllows); err != nil || heads != 1 || versions != 1 || allows != 2 || denies != 1 || forged != 0 || batchAllows != 2 {
+		t.Fatalf("registered product state split: heads=%d versions=%d allows=%d denies=%d forged=%d batch=%d err=%v", heads, versions, allows, denies, forged, batchAllows, err)
 	}
 }
 

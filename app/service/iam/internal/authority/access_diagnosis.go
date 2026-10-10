@@ -13,7 +13,20 @@ import (
 func CurrentAccessDiagnosis(evaluation AuthorizationEvaluation, tenantID iamv1.AccountID, installationID string,
 	subject iamv1.Subject, request iamv1.AuthorizationRequest,
 ) (iamv1.CurrentAccessDiagnosis, error) {
-	if iamv1.CheckAuthorizationDecisionForRequest(evaluation.AuthorizationDecision, request) != nil || iamv1.ValidateSubject(subject) != nil {
+	profile, known := iamv1.LookupAuthorizationProfile(request.Profile.Product)
+	if !known {
+		return iamv1.CurrentAccessDiagnosis{}, ErrAuthorityUnavailable
+	}
+	return CurrentAccessDiagnosisForProfile(evaluation, tenantID, installationID, subject, request, profile)
+}
+
+// CurrentAccessDiagnosisForProfile projects an evaluation that already used
+// the exact current registry declaration. It never reloads source-owned
+// product constants or reinterprets Policy evidence.
+func CurrentAccessDiagnosisForProfile(evaluation AuthorizationEvaluation, tenantID iamv1.AccountID, installationID string,
+	subject iamv1.Subject, request iamv1.AuthorizationRequest, profile iamv1.AuthorizationProfile,
+) (iamv1.CurrentAccessDiagnosis, error) {
+	if iamv1.CheckAuthorizationDecisionForProfileAndRequest(evaluation.AuthorizationDecision, request, profile) != nil || iamv1.ValidateSubject(subject) != nil {
 		return iamv1.CurrentAccessDiagnosis{}, ErrAuthorityUnavailable
 	}
 	// The evaluator's denied decision intentionally redacts its authority scope
@@ -31,7 +44,7 @@ func CurrentAccessDiagnosis(evaluation AuthorizationEvaluation, tenantID iamv1.A
 		network := *request.NetworkContext
 		result.NetworkContext = &network
 	}
-	definition, known := iamv1.LookupActionDefinition(request.Action)
+	definition, known := iamv1.LookupAuthorizationProfileActionDefinition(profile, request.Action)
 	if !known {
 		return iamv1.CurrentAccessDiagnosis{}, ErrAuthorityUnavailable
 	}
@@ -51,7 +64,7 @@ func CurrentAccessDiagnosis(evaluation AuthorizationEvaluation, tenantID iamv1.A
 	}
 	result.Sources = sources
 	result.Restrictions = diagnosisRestrictions(evaluation, subject.Type)
-	if iamv1.ValidateCurrentAccessDiagnosis(result) != nil {
+	if iamv1.ValidateCurrentAccessDiagnosisForProfile(result, profile) != nil {
 		return iamv1.CurrentAccessDiagnosis{}, ErrAuthorityUnavailable
 	}
 	return result, nil

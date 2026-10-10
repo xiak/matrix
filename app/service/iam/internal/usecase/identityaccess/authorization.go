@@ -381,10 +381,8 @@ func (service *Authority) ResolveAuthorizationSubject(
 	subjectCredential iamv1.Secret,
 	request iamv1.ResolveAuthorizationSubjectRequest,
 ) (iamv1.AuthorizationSubjectContext, error) {
-	if iamv1.ValidateResolveAuthorizationSubjectRequest(request) != nil {
-		return iamv1.AuthorizationSubjectContext{}, ErrInvalidArgument
-	}
 	var result iamv1.AuthorizationSubjectContext
+	var currentProfile iamv1.AuthorizationProfile
 	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
 		if err != nil {
@@ -394,12 +392,18 @@ func (service *Authority) ResolveAuthorizationSubject(
 		if err != nil {
 			return err
 		}
-		profile, known := iamv1.LookupAuthorizationProfile(request.Profile.Product)
-		if !known || iamv1.CheckAuthorizationProfileReference(profile, request.Profile) != nil ||
-			profile.CallingService != caller.Identity.Purpose {
+		profile, known, err := transaction.LookupCurrentAuthorizationProfile(transactionContext, request.Profile)
+		if err != nil {
+			return err
+		}
+		if !known || iamv1.ValidateResolveAuthorizationSubjectRequestForProfile(request, profile) != nil {
+			return ErrInvalidArgument
+		}
+		if profile.CallingService != caller.Identity.Purpose {
 			return ErrForbidden
 		}
-		actor, _, err := service.batchAuthorizationActor(transactionContext, transaction, caller, subjectCredential, now)
+		currentProfile = profile
+		actor, _, err := service.batchAuthorizationActor(transactionContext, transaction, caller, subjectCredential, profile, now)
 		if err != nil {
 			return err
 		}
@@ -415,7 +419,7 @@ func (service *Authority) ResolveAuthorizationSubject(
 	if err != nil {
 		return iamv1.AuthorizationSubjectContext{}, err
 	}
-	if iamv1.CheckAuthorizationSubjectContextForRequest(result, request) != nil {
+	if iamv1.CheckAuthorizationSubjectContextForProfileAndRequest(result, request, currentProfile) != nil {
 		return iamv1.AuthorizationSubjectContext{}, ErrUnavailable
 	}
 	return result, nil
@@ -429,10 +433,8 @@ func (service *Authority) DiagnoseAuthorization(
 	subjectCredential iamv1.Secret,
 	request iamv1.AuthorizationRequest,
 ) (iamv1.CurrentAccessDiagnosis, error) {
-	if iamv1.ValidateAuthorizationRequest(request) != nil {
-		return iamv1.CurrentAccessDiagnosis{}, ErrInvalidArgument
-	}
 	var result iamv1.CurrentAccessDiagnosis
+	var currentProfile iamv1.AuthorizationProfile
 	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
 		if err != nil {
@@ -442,24 +444,29 @@ func (service *Authority) DiagnoseAuthorization(
 		if err != nil {
 			return err
 		}
-		actor, decide, err := service.batchAuthorizationActor(transactionContext, transaction, caller, subjectCredential, now)
+		profile, known, err := transaction.LookupCurrentAuthorizationProfile(transactionContext, request.Profile)
 		if err != nil {
 			return err
 		}
-		if err := transaction.CheckCurrentAuthorizationProfiles(transactionContext); err != nil {
+		if !known || iamv1.ValidateAuthorizationRequestForProfile(request, profile) != nil {
+			return ErrInvalidArgument
+		}
+		currentProfile = profile
+		actor, decide, err := service.batchAuthorizationActor(transactionContext, transaction, caller, subjectCredential, profile, now)
+		if err != nil {
 			return err
 		}
 		evaluation, err := decide(request, iamv1.DecisionID("diagnosis-current-access"))
 		if err != nil {
 			return ErrUnavailable
 		}
-		result, err = authority.CurrentAccessDiagnosis(evaluation, actor.organizationID, actor.installationID, actor.subject, request)
+		result, err = authority.CurrentAccessDiagnosisForProfile(evaluation, actor.organizationID, actor.installationID, actor.subject, request, profile)
 		return err
 	})
 	if err != nil {
 		return iamv1.CurrentAccessDiagnosis{}, err
 	}
-	if iamv1.ValidateCurrentAccessDiagnosis(result) != nil {
+	if iamv1.ValidateCurrentAccessDiagnosisForProfile(result, currentProfile) != nil {
 		return iamv1.CurrentAccessDiagnosis{}, ErrUnavailable
 	}
 	return result, nil
@@ -471,19 +478,12 @@ func (service *Authority) AuthorizeBatch(
 	subjectCredential iamv1.Secret,
 	request iamv1.AuthorizationBatchRequest,
 ) (iamv1.AuthorizationBatchDecision, error) {
-	if iamv1.ValidateAuthorizationBatchRequest(request) != nil {
+	if len(request.Requests) < 1 || len(request.Requests) > iamv1.MaxAuthorizationBatchItems {
 		return iamv1.AuthorizationBatchDecision{}, ErrInvalidArgument
-	}
-	digests := make([]string, len(request.Requests))
-	for index := range request.Requests {
-		digest, err := digestSanitized("authorization", request.Requests[index])
-		if err != nil {
-			return iamv1.AuthorizationBatchDecision{}, err
-		}
-		digests[index] = digest
 	}
 	first := request.Requests[0]
 	var result iamv1.AuthorizationBatchDecision
+	var currentProfile iamv1.AuthorizationProfile
 	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
 		if err != nil {
@@ -493,8 +493,24 @@ func (service *Authority) AuthorizeBatch(
 		if err != nil {
 			return err
 		}
+		profile, known, err := transaction.LookupCurrentAuthorizationProfile(transactionContext, first.Profile)
+		if err != nil {
+			return err
+		}
+		if !known || iamv1.ValidateAuthorizationBatchRequestForProfile(request, profile) != nil {
+			return ErrInvalidArgument
+		}
+		currentProfile = profile
+		digests := make([]string, len(request.Requests))
+		for index := range request.Requests {
+			digest, err := digestSanitized("authorization", request.Requests[index])
+			if err != nil {
+				return err
+			}
+			digests[index] = digest
+		}
 		actor, decide, err := service.batchAuthorizationActor(
-			transactionContext, transaction, caller, subjectCredential, now,
+			transactionContext, transaction, caller, subjectCredential, profile, now,
 		)
 		if err != nil {
 			return err
@@ -524,7 +540,7 @@ func (service *Authority) AuthorizeBatch(
 	if err != nil {
 		return iamv1.AuthorizationBatchDecision{}, err
 	}
-	if iamv1.CheckAuthorizationBatchDecisionForRequest(result, request) != nil {
+	if iamv1.CheckAuthorizationBatchDecisionForProfileAndRequest(result, request, currentProfile) != nil {
 		return iamv1.AuthorizationBatchDecision{}, ErrUnavailable
 	}
 	return result, nil
@@ -537,6 +553,7 @@ func (service *Authority) batchAuthorizationActor(
 	transaction Transaction,
 	caller ServiceCredential,
 	credential iamv1.Secret,
+	profile iamv1.AuthorizationProfile,
 	now time.Time,
 ) (authorizationActor, batchDecider, error) {
 	subject, err := service.authenticateSession(ctx, transaction, credential, now)
@@ -547,7 +564,7 @@ func (service *Authority) batchAuthorizationActor(
 			subject:        iamv1.Subject{Type: iamv1.SubjectType(subject.Subject.Principal.Type), ID: string(subject.Subject.Principal.ID)},
 		}
 		return actor, func(request iamv1.AuthorizationRequest, id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
-			return authority.Decide(subject.Subject, caller.Identity.Purpose, request, id, now)
+			return authority.DecideWithProfile(subject.Subject, caller.Identity.Purpose, request, profile, id, now)
 		}, nil
 	}
 	if !errors.Is(err, ErrUnauthenticated) {
@@ -570,7 +587,7 @@ func (service *Authority) batchAuthorizationActor(
 		subject:        iamv1.Subject{Type: iamv1.SubjectRole, ID: string(role.Subject.Role.ID), RoleSession: &reference},
 	}
 	return actor, func(request iamv1.AuthorizationRequest, id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
-		return authority.DecideRole(role.Subject, caller.Identity.Purpose, request, id, now)
+		return authority.DecideRoleWithProfile(role.Subject, caller.Identity.Purpose, request, profile, id, now)
 	}, nil
 }
 

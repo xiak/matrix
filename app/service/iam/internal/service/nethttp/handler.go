@@ -1220,10 +1220,7 @@ func (value *handler) resolveAuthorizationSubject(response http.ResponseWriter, 
 		return
 	}
 	body, ok := decodeJSON[iamv1.ResolveAuthorizationSubjectRequest](value, response, request)
-	if !ok || iamv1.ValidateResolveAuthorizationSubjectRequest(body) != nil {
-		if ok {
-			writeProblem(response, requestID(request), http.StatusBadRequest, "iam.json.invalid", "IAM JSON invalid")
-		}
+	if !ok {
 		return
 	}
 	result, err := value.workflow.ResolveAuthorizationSubject(request.Context(), serviceCredential, subjectCredential, body)
