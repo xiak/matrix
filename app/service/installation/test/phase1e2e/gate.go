@@ -1123,8 +1123,25 @@ func (value *gate) verifySignedAccessKeyEdge(
 		enabled.Key.Status != iamv1.AccessKeyEnabled || enabled.Key.ID != created.Key.ID {
 		return accessKeyRetention{}, fail("signed-access-key-enable")
 	}
+	// The exact gateway restriction above proves that APISIX, rather than a
+	// caller-supplied forwarding header, owns the observed source. A Docker
+	// bridge gateway is deliberately not a stable client identity across a
+	// Compose replacement. Move the retained fixture through the public API to
+	// an explicit all-IPv4 rule before exercising release replacement; the
+	// lifecycle assertions below then prove credential and restriction
+	// persistence without treating a changed bridge subnet as credential loss.
+	var retained iamv1.SetAccessKeyNetworkRestrictionsResponse
+	retainedNetwork := iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"0.0.0.0/0"}}
+	if err := value.edge.mutateIAM(ctx, path+"/"+string(created.Key.ID)+"/network-restrictions", tenant.OldPrimaryCredential,
+		iamv1.SetAccessKeyNetworkRestrictionsRequest{AccessKeyResourceVersion: enabled.Key.ResourceVersion,
+			NetworkRestrictions: retainedNetwork, RequestID: "phase1-access-key-retention-network"},
+		&retained, http.StatusOK); err != nil || iamv1.ValidateSetAccessKeyNetworkRestrictionsResponse(retained) != nil ||
+		retained.Key.Status != iamv1.AccessKeyEnabled || retained.Key.ID != created.Key.ID ||
+		!slices.Equal(retained.Key.NetworkRestrictions.AllowedSourceCIDRs, retainedNetwork.AllowedSourceCIDRs) {
+		return accessKeyRetention{}, fail("signed-access-key-retention-network")
+	}
 	return accessKeyRetention{
-		Key: enabled.Key, Secret: append([]byte(nil), secret...), CustodianGrant: grant,
+		Key: retained.Key, Secret: append([]byte(nil), secret...), CustodianGrant: grant,
 	}, nil
 }
 
@@ -1427,6 +1444,7 @@ func validAccessKeyRetention(
 	return err == nil && secret.Present() && iamv1.ValidateAccessKey(retained.Key) == nil &&
 		retained.Key.AccountID == account && retained.Key.UserID == user &&
 		retained.Key.Status == iamv1.AccessKeyEnabled &&
+		slices.Equal(retained.Key.NetworkRestrictions.AllowedSourceCIDRs, []string{"0.0.0.0/0"}) &&
 		iamv1.ValidatePolicyAttachment(grant) == nil && grant.RevokedAt == nil &&
 		grant.AccountID == account && grant.Target.Kind == iamv1.PolicyTargetUser &&
 		grant.Target.ID == string(custodian) && grant.Scope == iamv1.AuthorityScopeTenant
