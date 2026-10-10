@@ -30681,19 +30681,26 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 				t.Fatalf("same-ceiling Role capability %s escaped its delegated boundary", action)
 			}
 		}
-		var delegatedDirectory iamv1.RoleList
-		get(t, "/v1/roles", delegatedBearer, http.StatusOK, &delegatedDirectory)
 		listed := false
-		for _, entry := range delegatedDirectory.Items {
-			if entry.Role.ID != delegatedRole.ID {
-				continue
+		directoryPath := "/v1/roles"
+		for pageIndex := 0; pageIndex < 16; pageIndex++ {
+			var delegatedDirectory iamv1.RoleList
+			get(t, directoryPath, delegatedBearer, http.StatusOK, &delegatedDirectory)
+			for _, entry := range delegatedDirectory.Items {
+				if entry.Role.ID != delegatedRole.ID {
+					continue
+				}
+				listed = true
+				capability, found := findIAMCapability(entry.Capabilities, iamv1.ActionIAMRoleTrustSet,
+					iamv1.ResourceRole, string(delegatedRole.ID))
+				if !found || !capability.Available {
+					t.Fatal("Role directory did not project the same-ceiling Trust capability")
+				}
 			}
-			listed = true
-			capability, found := findIAMCapability(entry.Capabilities, iamv1.ActionIAMRoleTrustSet,
-				iamv1.ResourceRole, string(delegatedRole.ID))
-			if !found || !capability.Available {
-				t.Fatal("Role directory did not project the same-ceiling Trust capability")
+			if listed || delegatedDirectory.NextAfter == "" {
+				break
 			}
+			directoryPath = "/v1/roles?after=" + url.QueryEscape(delegatedDirectory.NextAfter)
 		}
 		if !listed {
 			t.Fatal("Role directory omitted the delegated Role")

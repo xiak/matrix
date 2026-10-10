@@ -13466,6 +13466,7 @@ func assertAuthorityPlaintextAbsent(
 	if earlier.Err() != nil {
 		t.Fatal("incomplete synthetic OTP chronology")
 	}
+	managedServiceRoleSessions := readManagedServiceRoleSessionRequests(t, ctx, admin)
 	rows, err := admin.Query(ctx, `SELECT 'iam.outbox',event_document::text,''::text FROM iam.audit_outbox
 		UNION ALL SELECT 'paas.outbox',document::text,''::text FROM paas.audit_outbox
 		UNION ALL SELECT 'paas.operation',document::text,''::text FROM paas.operations
@@ -13509,6 +13510,15 @@ func assertAuthorityPlaintextAbsent(
 			t.Fatal("invalid Audit access plaintext inspection source")
 		}
 		for value := range auditStructural {
+			structuralLowEntropy[value] = struct{}{}
+		}
+		roleExitStructural, err := managedServiceRoleExitStructuralLowEntropy(
+			source, document, auditAuthorityDocument, managedServiceRoleSessions,
+		)
+		if err != nil {
+			t.Fatal("invalid managed-service RoleSession exit plaintext inspection source")
+		}
+		for value := range roleExitStructural {
 			structuralLowEntropy[value] = struct{}{}
 		}
 		location, err := authorityPlaintextLocationWithStructural(document, beforeOTP, structuralLowEntropy, plaintexts...)
@@ -13710,6 +13720,113 @@ func isServerGeneratedAuditAccessEvent(event auditv1.Event) bool {
 	}
 }
 
+func readManagedServiceRoleSessionRequests(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+) map[string]string {
+	t.Helper()
+	rows, err := admin.Query(ctx, `SELECT event_document FROM iam.audit_outbox
+		WHERE event_document->>'action'='iam.service-role-session.issued'`)
+	if err != nil {
+		t.Fatal("read managed-service RoleSession issuance facts")
+	}
+	defer rows.Close()
+	result := make(map[string]string)
+	for rows.Next() {
+		var raw []byte
+		var event auditv1.Event
+		if rows.Scan(&raw) != nil || auditv1.DecodeRequest(bytes.NewReader(raw), &event) != nil ||
+			auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
+			t.Fatal("invalid managed-service RoleSession issuance fact")
+		}
+		if event.Actor.Type != auditv1.ActorServiceAccount || event.Actor.ID != "service-paas" ||
+			event.Target.Kind != auditv1.TargetRoleSession || !isManagedServiceRoleSessionRequestID(event.RequestID) ||
+			event.CorrelationID != event.RequestID {
+			continue
+		}
+		key := string(event.TenantID) + "\x00" + event.Target.ID
+		if existing, found := result[key]; found && existing != event.RequestID {
+			t.Fatal("managed-service RoleSession has conflicting issuance identities")
+		}
+		result[key] = event.RequestID
+	}
+	if rows.Err() != nil {
+		t.Fatal("incomplete managed-service RoleSession issuance facts")
+	}
+	return result
+}
+
+func managedServiceRoleExitStructuralLowEntropy(
+	source, inspectedDocument, authorityDocument string,
+	issued map[string]string,
+) (map[string]struct{}, error) {
+	result := map[string]struct{}{}
+	authority := inspectedDocument
+	switch source {
+	case "iam.outbox":
+		if authorityDocument != "" {
+			return nil, errors.New("IAM outbox has an unexpected authority copy")
+		}
+	case "audit.document.IAM":
+		if inspectedDocument != authorityDocument {
+			return nil, errors.New("IAM Audit record document differs from its authority")
+		}
+		authority = authorityDocument
+	case "audit.canonical.IAM":
+		var event auditv1.Event
+		if auditv1.DecodeRequest(strings.NewReader(authorityDocument), &event) != nil ||
+			auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
+			return nil, errors.New("invalid IAM Audit record document")
+		}
+		canonical, _, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+		if err != nil || canonical != inspectedDocument {
+			return nil, errors.New("IAM Audit canonical document differs from its authority")
+		}
+		authority = authorityDocument
+	default:
+		return result, nil
+	}
+	var event auditv1.Event
+	if auditv1.DecodeRequest(strings.NewReader(authority), &event) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
+		return nil, errors.New("invalid IAM role exit document")
+	}
+	if event.Action != auditv1.ActionIAMRoleSessionExited || event.Actor.Type != auditv1.ActorRole ||
+		event.Actor.RoleSession == nil || event.Actor.RoleSession.SourceServicePrincipalID != "service-paas" ||
+		event.Actor.RoleSession.SourceUserID != "" || event.Target.Kind != auditv1.TargetRoleSession ||
+		event.Target.ID != event.Actor.RoleSession.SessionID {
+		return result, nil
+	}
+	issuanceRequestID, known := issued[string(event.TenantID)+"\x00"+event.Target.ID]
+	if !known || !isManagedServiceRoleSessionRequestID(issuanceRequestID) {
+		return result, nil
+	}
+	expected := managedServiceRoleExitRequestID(issuanceRequestID)
+	if event.RequestID == expected && event.CorrelationID == expected {
+		result[expected] = struct{}{}
+	}
+	return result, nil
+}
+
+func isManagedServiceRoleSessionRequestID(value string) bool {
+	const prefix = "msrs-"
+	if len(value) != len(prefix)+64 || !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	for _, character := range value[len(prefix):] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func managedServiceRoleExitRequestID(issuanceRequestID string) string {
+	digest := sha256.Sum256([]byte("matrix-managedservice-workload-role-exit-v1\x00" + issuanceRequestID))
+	return "msrs-exit-" + hex.EncodeToString(digest[:])
+}
+
 func TestAuthorityPlaintextInspection(t *testing.T) {
 	code := "123456"
 	edgeAssertion := strings.Repeat("1", 64)
@@ -13906,6 +14023,84 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 			if marshalErr != nil || scanErr != nil || structuralErr == nil && location == "" {
 				t.Fatal("caller-controlled or noncanonical Audit access identity escaped plaintext inspection")
 			}
+		}
+	})
+	t.Run("managed-service-role-exit-request-id", func(t *testing.T) {
+		var issuanceRequestID, exitRequestID, embeddedCode string
+		for index := 0; index < 100000 && embeddedCode == ""; index++ {
+			issuanceRequestID = "msrs-" + fmt.Sprintf("%064x", index)
+			exitRequestID = managedServiceRoleExitRequestID(issuanceRequestID)
+			for offset := len("msrs-exit-"); offset+6 <= len(exitRequestID); offset++ {
+				candidate := exitRequestID[offset : offset+6]
+				if strings.IndexFunc(candidate, func(character rune) bool {
+					return character < '0' || character > '9'
+				}) == -1 {
+					embeddedCode = candidate
+					break
+				}
+			}
+		}
+		if embeddedCode == "" {
+			t.Fatal("could not build deterministic managed-service RoleSession request fixture")
+		}
+		exit := auditv1.Event{
+			APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-managed-service-role-exit",
+			TenantID: "account-one", Actor: auditv1.ActorReference{Type: auditv1.ActorRole, ID: "role-managed",
+				RoleSession: &auditv1.RoleSessionReference{SessionID: "role-session-managed", SourceServicePrincipalID: "service-paas"}},
+			Action: auditv1.ActionIAMRoleSessionExited,
+			Target: auditv1.TargetReference{Kind: auditv1.TargetRoleSession, ID: "role-session-managed"},
+			Result: auditv1.ResultSucceeded, RequestDigest: "sha256:" + strings.Repeat("4", 64),
+			RequestID: exitRequestID, CorrelationID: exitRequestID,
+			OccurredAt: time.Date(2026, 10, 10, 1, 2, 3, 0, time.UTC),
+		}
+		encoded, marshalErr := json.Marshal(exit)
+		canonical, _, canonicalErr := auditv1.CanonicalizeEvent(auditv1.SourceIAM, exit)
+		if marshalErr != nil || canonicalErr != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, exit) != nil {
+			t.Fatal("invalid managed-service RoleSession exit fixture")
+		}
+		issued := map[string]string{"account-one\x00role-session-managed": issuanceRequestID}
+		for _, sample := range []struct{ source, document, authority string }{
+			{"iam.outbox", string(encoded), ""},
+			{"audit.document.IAM", string(encoded), string(encoded)},
+			{"audit.canonical.IAM", canonical, string(encoded)},
+		} {
+			structural, structuralErr := managedServiceRoleExitStructuralLowEntropy(
+				sample.source, sample.document, sample.authority, issued,
+			)
+			location, scanErr := authorityPlaintextLocationWithStructural(
+				sample.document, nil, structural, embeddedCode,
+			)
+			if structuralErr != nil || scanErr != nil || location != "" || len(structural) != 1 {
+				t.Fatal("verified managed-service RoleSession exit identity was treated as persisted OTP")
+			}
+			if location, scanErr = authorityPlaintextLocationWithStructural(
+				sample.document, nil, structural, exitRequestID,
+			); scanErr != nil || location == "" {
+				t.Fatal("structural RoleSession identity hid an exact longer credential")
+			}
+		}
+		structural, structuralErr := managedServiceRoleExitStructuralLowEntropy(
+			"iam.outbox", string(encoded), "", nil,
+		)
+		location, scanErr := authorityPlaintextLocationWithStructural(string(encoded), nil, structural, embeddedCode)
+		if structuralErr != nil || scanErr != nil || location == "" {
+			t.Fatal("unproved managed-service RoleSession exit identity escaped plaintext inspection")
+		}
+		caller := exit
+		caller.RequestID, caller.CorrelationID = "caller-"+embeddedCode, "caller-"+embeddedCode
+		callerEncoded, marshalErr := json.Marshal(caller)
+		structural, structuralErr = managedServiceRoleExitStructuralLowEntropy(
+			"iam.outbox", string(callerEncoded), "", issued,
+		)
+		location, scanErr = authorityPlaintextLocationWithStructural(string(callerEncoded), nil, structural, embeddedCode)
+		if marshalErr != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, caller) != nil ||
+			structuralErr != nil || scanErr != nil || location == "" {
+			t.Fatal("caller-controlled RoleSession exit request escaped plaintext inspection")
+		}
+		if _, err := managedServiceRoleExitStructuralLowEntropy(
+			"audit.canonical.IAM", canonical+" ", string(encoded), issued,
+		); err == nil {
+			t.Fatal("mismatched IAM canonical document obtained a structural exception")
 		}
 	})
 	t.Run("validated-low-entropy-structure", func(t *testing.T) {
