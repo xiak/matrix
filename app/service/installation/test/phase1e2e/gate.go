@@ -46,6 +46,7 @@ const (
 	tenantConfigurationID              paasv1.ResourceID = "phase1-tenant-configuration"
 	tenantConfigurationRev             paasv1.ResourceID = "phase1-tenant-configuration-r1"
 	postUpgradeApplicationID           paasv1.ResourceID = "phase1-after-upgrade"
+	delegatedGroupAttachmentRequestID                    = "phase1-group-policy"
 	preBackupAttachmentCreateRequestID                   = "phase1-grant-alpha"
 	preBackupAttachmentRevokeRequestID                   = "phase1-revoke-child-attachment"
 )
@@ -868,12 +869,31 @@ func (value *gate) captureDelegatedAuthorityAudit(ctx context.Context) error {
 		map[auditv1.Action]string{
 			auditv1.ActionIAMGroupCreated:              string(delegated.Group.ID),
 			auditv1.ActionIAMGroupMembershipCreated:    string(delegated.Membership.ID),
+			auditv1.ActionIAMPolicyAttachmentCreated:   string(delegated.GroupAttachment.ID),
 			auditv1.ActionIAMRoleCreated:               string(delegated.Role.ID),
 			auditv1.ActionIAMRolePermissionBoundarySet: string(delegated.Role.ID),
 			auditv1.ActionIAMRoleSessionIssued:         string(delegated.PreRecoverySession.ID),
 		})
 	if err != nil {
 		return fail("delegated-authority-audit-delivery")
+	}
+	groupAttachmentFacts := 0
+	for _, record := range records {
+		event := record.Event
+		if event.Action != auditv1.ActionIAMPolicyAttachmentCreated ||
+			event.Target.ID != string(delegated.GroupAttachment.ID) {
+			continue
+		}
+		if event.RequestID != delegatedGroupAttachmentRequestID || event.Actor.Type != auditv1.ActorUser ||
+			event.Actor.ID != auditv1.ActorID(tenant.Account.RootIdentity.PrincipalID) ||
+			event.Result != auditv1.ResultSucceeded || event.AuthorityEvidenceDigest == "" ||
+			auditv1.ValidateDigest("authorityEvidenceDigest", event.AuthorityEvidenceDigest) != nil {
+			return fail("delegated-group-policy-audit-evidence")
+		}
+		groupAttachmentFacts++
+	}
+	if groupAttachmentFacts != 1 {
+		return fail("delegated-group-policy-audit-evidence")
 	}
 	if _, err := value.edge.verifyAuditChain(ctx, tenant.RetainedPrimaryCredential, tenant.Account.ID, ""); err != nil {
 		return fail("delegated-authority-audit-integrity")
@@ -897,13 +917,22 @@ func (value *gate) prepareDelegatedAuthorityRetention(ctx context.Context, tenan
 		&retained.Membership, http.StatusOK); err != nil || iamv1.ValidateGroupMembership(retained.Membership) != nil {
 		return fail("delegated-group-membership")
 	}
+	groupAttachmentRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(retained.Group.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: delegatedGroupAttachmentRequestID,
+	}
 	if err := value.edge.mutateIAM(ctx, "/policy-attachments", tenant.RetainedPrimaryCredential,
-		iamv1.CreatePolicyAttachmentRequest{
-			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(retained.Group.ID)},
-			PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: "phase1-group-policy",
-		}, &retained.GroupAttachment, http.StatusOK); err != nil || iamv1.ValidatePolicyAttachment(retained.GroupAttachment) != nil {
+		groupAttachmentRequest, &retained.GroupAttachment, http.StatusOK); err != nil || iamv1.ValidatePolicyAttachment(retained.GroupAttachment) != nil {
 		return fail("delegated-group-policy")
 	}
+	groupAttachmentChange, err := value.edge.policyAttachmentChange(
+		ctx, tenant.RetainedPrimaryCredential, groupAttachmentRequest.RequestID,
+	)
+	if err != nil || !policyAttachmentCreateChangeMatches(groupAttachmentChange,
+		tenant.Account.RootIdentity.PrincipalID, retained.GroupAttachment, groupAttachmentRequest) {
+		return fail("delegated-group-policy-receipt")
+	}
+	retained.GroupAttachmentChange = groupAttachmentChange
 	trust := iamv1.TrustPolicyDocument{LanguageVersion: iamv1.TrustPolicyLanguageVersion, Statements: []iamv1.TrustPolicyStatement{{
 		SID: "root-source", Effect: iamv1.PolicyAllow,
 		Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: tenant.Account.RootIdentity.PrincipalID}},
@@ -954,12 +983,17 @@ func validDelegatedAuthorityRetention(
 	accountID iamv1.AccountID,
 	memberID, rootID iamv1.PrincipalID,
 ) bool {
+	groupAttachmentRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(value.Group.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: delegatedGroupAttachmentRequestID,
+	}
 	if iamv1.ValidateGroup(value.Group) != nil || value.Group.AccountID != accountID ||
 		iamv1.ValidateGroupMembership(value.Membership) != nil || value.Membership.AccountID != accountID ||
 		value.Membership.GroupID != value.Group.ID || value.Membership.UserID != memberID || value.Membership.RemovedAt != nil ||
 		iamv1.ValidatePolicyAttachment(value.GroupAttachment) != nil || value.GroupAttachment.AccountID != accountID ||
 		value.GroupAttachment.Target != (iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(value.Group.ID)}) ||
 		value.GroupAttachment.PolicyID != iamv1.SystemPolicyPaaSDeveloper || value.GroupAttachment.RevokedAt != nil ||
+		!policyAttachmentCreateChangeMatches(value.GroupAttachmentChange, rootID, value.GroupAttachment, groupAttachmentRequest) ||
 		iamv1.ValidateRole(value.Role) != nil || value.Role.AccountID != accountID || value.Role.Status != iamv1.RoleActive ||
 		iamv1.ValidateRoleTrustVersion(value.TrustVersion) != nil || value.TrustVersion.AccountID != accountID ||
 		value.TrustVersion.RoleID != value.Role.ID || value.TrustVersion.ID != value.Role.CurrentTrustVersionID ||
@@ -1729,6 +1763,16 @@ func (value *gate) assertDelegatedAuthorityRetention(
 		iamv1.ValidateGroupAccess(group) != nil || !equalJSON(group.Group, want.Group) || len(group.PolicyAttachments) != 1 ||
 		!equalJSON(group.PolicyAttachments[0], want.GroupAttachment) {
 		return fail("delegated-group-retention")
+	}
+	groupAttachmentRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(want.Group.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: delegatedGroupAttachmentRequestID,
+	}
+	groupAttachmentChange, err := value.edge.policyAttachmentChange(ctx, primary, groupAttachmentRequest.RequestID)
+	if err != nil || !policyAttachmentCreateChangeMatches(groupAttachmentChange,
+		tenant.Account.RootIdentity.PrincipalID, want.GroupAttachment, groupAttachmentRequest) ||
+		!equalJSON(groupAttachmentChange, want.GroupAttachmentChange) {
+		return fail("delegated-group-policy-receipt-retention")
 	}
 	var memberships iamv1.GroupMembershipList
 	if _, err := value.edge.get(ctx, "/api/iam/v1/groups/"+string(want.Group.ID)+"/memberships", primary, &memberships); err != nil ||

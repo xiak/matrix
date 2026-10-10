@@ -118,6 +118,7 @@ type delegatedAuthorityRetention struct {
 	Group                 iamv1.Group
 	Membership            iamv1.GroupMembership
 	GroupAttachment       iamv1.PolicyAttachment
+	GroupAttachmentChange iamv1.PolicyAttachmentChange
 	Role                  iamv1.Role
 	TrustVersion          iamv1.RoleTrustVersion
 	RoleAttachment        iamv1.PolicyAttachment

@@ -124,13 +124,21 @@ func delegatedAuthorityFixture(t *testing.T) delegatedAuthorityRetention {
 			AccountID: group.AccountID, Target: target, PolicyID: iamv1.SystemPolicyPaaSDeveloper,
 			Scope: iamv1.AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
 	}
+	groupTarget := iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}
+	groupAttachment := attachment("attachment-group", groupTarget)
 	return delegatedAuthorityRetention{
 		Group: group,
 		Membership: iamv1.GroupMembership{APIVersion: iamv1.APIVersion, Kind: "GroupMembership", ID: "membership-retained",
 			AccountID: group.AccountID, GroupID: group.ID, UserID: "member-user", CreatedBy: "root-user",
 			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
-		GroupAttachment: attachment("attachment-group", iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}),
-		Role:            role,
+		GroupAttachment: groupAttachment,
+		GroupAttachmentChange: iamv1.PolicyAttachmentChange{
+			APIVersion: iamv1.APIVersion, Kind: "PolicyAttachmentChange", Operation: iamv1.PolicyAttachmentChangeCreate,
+			AccountID: group.AccountID, ActorPrincipalID: "root-user", RequestID: delegatedGroupAttachmentRequestID,
+			CompletedAt: now, Target: &groupTarget, PolicyID: iamv1.SystemPolicyPaaSDeveloper,
+			PolicyResourceVersion: 1, Attachment: &groupAttachment,
+		},
+		Role: role,
 		TrustVersion: iamv1.RoleTrustVersion{APIVersion: iamv1.APIVersion, Kind: "RoleTrustVersion", ID: role.CurrentTrustVersionID,
 			AccountID: group.AccountID, RoleID: role.ID, Document: trust, ContentDigest: trustDigest, CreatedAt: now},
 		RoleAttachment: attachment("attachment-role", iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)}),
@@ -152,7 +160,13 @@ func TestDelegatedAuthorityRetentionBindsExactAccountGraph(t *testing.T) {
 		"foreign group":          func(value *delegatedAuthorityRetention) { value.Group.AccountID = "account-other" },
 		"foreign member":         func(value *delegatedAuthorityRetention) { value.Membership.UserID = "member-other" },
 		"different group target": func(value *delegatedAuthorityRetention) { value.GroupAttachment.Target.ID = "group-other" },
-		"different role target":  func(value *delegatedAuthorityRetention) { value.RoleAttachment.Target.ID = "role-other" },
+		"different group receipt actor": func(value *delegatedAuthorityRetention) {
+			value.GroupAttachmentChange.ActorPrincipalID = "root-other"
+		},
+		"missing group receipt": func(value *delegatedAuthorityRetention) {
+			value.GroupAttachmentChange = iamv1.PolicyAttachmentChange{}
+		},
+		"different role target": func(value *delegatedAuthorityRetention) { value.RoleAttachment.Target.ID = "role-other" },
 		"wider boundary": func(value *delegatedAuthorityRetention) {
 			value.RoleBoundary.Policy.PolicyID = iamv1.SystemPolicyPaaSDeveloper
 		},
