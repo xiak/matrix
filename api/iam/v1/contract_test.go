@@ -2126,6 +2126,155 @@ func TestAccessKeySubjectResolutionIsRequestBoundAndNeverASelector(t *testing.T)
 	}
 }
 
+func TestAccessKeyTransportBindsExplicitRegisteredProfile(t *testing.T) {
+	profile := AuthorizationProfile{APIVersion: APIVersion, Kind: "AuthorizationProfile", Product: "catalog", Revision: 7, CallingService: ServicePaaS,
+		Actions: []AuthorizationProfileAction{{Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: AuthorityScopeTenant,
+			ResourceShapes:    []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}},
+			InstanceListBatch: true, Conditions: []AuthorizationProfileCondition{{Key: ConditionRequestSourceIP, ValueType: ConditionIP, Source: ConditionCallingServiceNetwork}},
+			SubjectTypes:              []SubjectType{SubjectUser},
+			UserAuthenticationMethods: []UserAuthenticationMethod{UserAuthenticationAccessKey, UserAuthenticationLoginSession}}}}
+	if ValidateAuthorizationProfile(profile) != nil {
+		t.Fatal("dynamic AccessKey Profile fixture is invalid")
+	}
+	request, err := NewAuthorizationRequestForProfile(profile, "catalog.item.read", ResourceReference{Kind: "CATALOG_ITEM", ID: "item-one"},
+		AuthorizationResourceInstance, "", "dynamic-key-request", "dynamic-key-correlation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.NetworkContext = &AuthorizationNetworkContext{SourceIP: "198.51.100.10"}
+	signed := accessKeySigningFixture(t)
+	signed.Parameters.Audience = profile.Product
+	signed.HTTP.EscapedPath = "/api/catalog/v1/items/item-one"
+	value := AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: signed}
+	wire, err := EncodeAccessKeyAuthorizationRequestForProfile(value, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(wire)
+	if _, err := EncodeAccessKeyAuthorizationRequest(value); !errors.Is(err, ErrInvalidAccessKeySignature) {
+		t.Fatal("source-only encoder claimed a database-registered Product", err)
+	}
+	if decoded, err := DecodeUnresolvedAccessKeyAuthorizationRequest(bytes.NewReader(wire)); err != nil || !reflect.DeepEqual(decoded, value) {
+		t.Fatal("strict unresolved ingress changed the dynamic signed request", err)
+	}
+	if decoded, err := DecodeAccessKeyAuthorizationRequestForProfile(bytes.NewReader(wire), profile); err != nil || !reflect.DeepEqual(decoded, value) {
+		t.Fatal("exact dynamic Profile decoder changed the signed request", err)
+	}
+	if _, err := DecodeAccessKeyAuthorizationRequest(bytes.NewReader(wire)); !errors.Is(err, ErrInvalidAccessKeySignature) {
+		t.Fatal("source-only decoder claimed a database-registered Product", err)
+	}
+	changedProfile := profile
+	changedProfile.Revision++
+	if _, err := DecodeAccessKeyAuthorizationRequestForProfile(bytes.NewReader(wire), changedProfile); !errors.Is(err, ErrInvalidAccessKeySignature) {
+		t.Fatal("different Profile revision accepted the signed request", err)
+	}
+	digest, err := AccessKeySignedRequestDigest(signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
+	subject := Subject{Type: SubjectUser, ID: "user-one", AccessKeyID: signed.Parameters.AccessKeyID}
+	decisionFor := func(id DecisionID, item AuthorizationRequest) AuthorizationDecision {
+		return AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: id, Allowed: true, Reason: DecisionAllowed,
+			TenantID: "account-one", Subject: &subject, Action: item.Action, Resource: item.Resource, RequestID: item.RequestID,
+			CorrelationID: item.CorrelationID, Profile: &item.Profile, ResourceMode: item.ResourceMode,
+			CollectionUsage: item.CollectionUsage, NetworkContext: item.NetworkContext, RequestTags: item.RequestTags,
+			ResourceTags: item.ResourceTags, DecidedAt: now}
+	}
+	result := AccessKeyAuthorization{APIVersion: APIVersion, Kind: "AccessKeyAuthorization", SignedRequestDigest: digest,
+		Decision: decisionFor("dynamic-key-decision", request)}
+	if CheckAccessKeyAuthorizationForProfileAndRequest(result, value, profile) != nil {
+		t.Fatal("dynamic Profile result did not bind to its signed request")
+	}
+	resultWire, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded, err := DecodeAccessKeyAuthorizationForProfile(bytes.NewReader(resultWire), profile); err != nil || !reflect.DeepEqual(decoded, result) {
+		t.Fatal("dynamic Profile result changed on strict decode", err)
+	}
+	if ValidateAccessKeyAuthorization(result) == nil {
+		t.Fatal("source-only result validator claimed a database-registered Product")
+	}
+
+	collection, err := NewAuthorizationRequestForProfile(profile, "catalog.item.read", ResourceReference{Kind: "CATALOG_ITEM", ID: "collection"},
+		AuthorizationResourceCollection, AuthorizationCollectionList, "dynamic-list", "dynamic-list-correlation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection.NetworkContext = &AuthorizationNetworkContext{SourceIP: "198.51.100.10"}
+	instance, err := NewAuthorizationRequestForProfile(profile, "catalog.item.read", ResourceReference{Kind: "CATALOG_ITEM", ID: "item-two"},
+		AuthorizationResourceInstance, "", "dynamic-list-item", "dynamic-list-correlation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance.NetworkContext = &AuthorizationNetworkContext{SourceIP: "198.51.100.10"}
+	listRequest := AccessKeyListAuthorizationRequest{Collection: collection, Instances: []AuthorizationRequest{instance}, SignedRequest: signed}
+	listWire, err := EncodeAccessKeyListAuthorizationRequestForProfile(listRequest, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(listWire)
+	if _, err := EncodeAccessKeyListAuthorizationRequest(listRequest); !errors.Is(err, ErrInvalidAccessKeySignature) {
+		t.Fatal("source-only list encoder claimed a database-registered Product", err)
+	}
+	if decoded, err := DecodeUnresolvedAccessKeyListAuthorizationRequest(bytes.NewReader(listWire)); err != nil || !reflect.DeepEqual(decoded, listRequest) {
+		t.Fatal("strict unresolved ingress changed the dynamic signed list", err)
+	}
+	if decoded, err := DecodeAccessKeyListAuthorizationRequestForProfile(bytes.NewReader(listWire), profile); err != nil || !reflect.DeepEqual(decoded, listRequest) {
+		t.Fatal("exact dynamic Profile decoder changed the signed list", err)
+	}
+	if _, err := DecodeAccessKeyListAuthorizationRequest(bytes.NewReader(listWire)); !errors.Is(err, ErrInvalidAccessKeySignature) {
+		t.Fatal("source-only list decoder claimed a database-registered Product", err)
+	}
+	listResult := AccessKeyListAuthorization{APIVersion: APIVersion, Kind: "AccessKeyListAuthorization", SignedRequestDigest: digest,
+		Collection: decisionFor("dynamic-list-decision", collection),
+		Instances:  []AuthorizationDecision{decisionFor("dynamic-list-item-decision", instance)}}
+	if CheckAccessKeyListAuthorizationForProfileAndRequest(listResult, listRequest, profile) != nil {
+		t.Fatal("dynamic Profile list result did not bind to its signed candidate page")
+	}
+	listResultWire, err := json.Marshal(listResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded, err := DecodeAccessKeyListAuthorizationForProfile(bytes.NewReader(listResultWire), profile); err != nil || !reflect.DeepEqual(decoded, listResult) {
+		t.Fatal("dynamic Profile list result changed on strict decode", err)
+	}
+	if ValidateAccessKeyListAuthorization(listResult) == nil {
+		t.Fatal("source-only list result validator claimed a database-registered Product")
+	}
+
+	subjectRequest := ResolveAccessKeySubjectRequest{Profile: request.Profile, SignedRequest: signed}
+	subjectWire, err := EncodeResolveAccessKeySubjectRequestForProfile(subjectRequest, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(subjectWire)
+	if _, err := EncodeResolveAccessKeySubjectRequest(subjectRequest); !errors.Is(err, ErrInvalidAccessKeySignature) {
+		t.Fatal("source-only subject encoder claimed a database-registered Product", err)
+	}
+	if decoded, err := DecodeUnresolvedAccessKeySubjectRequest(bytes.NewReader(subjectWire)); err != nil || !reflect.DeepEqual(decoded, subjectRequest) {
+		t.Fatal("strict unresolved ingress changed the dynamic subject request", err)
+	}
+	if decoded, err := DecodeResolveAccessKeySubjectRequestForProfile(bytes.NewReader(subjectWire), profile); err != nil || !reflect.DeepEqual(decoded, subjectRequest) {
+		t.Fatal("exact dynamic Profile decoder changed the subject request", err)
+	}
+	if _, err := DecodeResolveAccessKeySubjectRequest(bytes.NewReader(subjectWire)); !errors.Is(err, ErrInvalidAccessKeySignature) {
+		t.Fatal("source-only subject decoder claimed a database-registered Product", err)
+	}
+	subjectResult := AccessKeySubjectContext{APIVersion: APIVersion, Kind: "AccessKeySubjectContext", TenantID: "account-one",
+		Subject: subject, Profile: request.Profile, SignedRequestDigest: digest}
+	if CheckAccessKeySubjectContextForProfileAndRequest(subjectResult, subjectRequest, profile) != nil {
+		t.Fatal("dynamic Profile subject did not bind to its signed request")
+	}
+	if ValidateAccessKeySubjectContext(subjectResult) == nil {
+		t.Fatal("source-only subject result validator claimed a database-registered Product")
+	}
+	if CheckAccessKeySubjectContextForProfileAndRequest(subjectResult, subjectRequest, changedProfile) == nil {
+		t.Fatal("different Profile revision accepted the resolved subject")
+	}
+}
+
 func accessKeySigningFixture(t testing.TB) AccessKeySignedRequest {
 	t.Helper()
 	nonce, _ := NewSecret("oKGio6SlpqeoqaqrrK2urw")

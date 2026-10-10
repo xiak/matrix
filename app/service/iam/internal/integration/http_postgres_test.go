@@ -952,7 +952,9 @@ func registeredCatalogProfile() iamv1.AuthorizationProfile {
 		Actions: []iamv1.AuthorizationProfileAction{{Action: "catalog.item.read", ResourceKind: "CATALOG_ITEM", Scope: iamv1.AuthorityScopeTenant,
 			ResourceShapes:    []iamv1.AuthorizationResourceShape{{Mode: iamv1.AuthorizationResourceInstance}, {Mode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionList}},
 			InstanceListBatch: true,
-			SubjectTypes:      []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession}}}}
+			Conditions: []iamv1.AuthorizationProfileCondition{{Key: iamv1.ConditionRequestSourceIP, ValueType: iamv1.ConditionIP,
+				Source: iamv1.ConditionCallingServiceNetwork}},
+			SubjectTypes: []iamv1.SubjectType{iamv1.SubjectUser}, UserAuthenticationMethods: []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationAccessKey, iamv1.UserAuthenticationLoginSession}}}}
 }
 
 func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
@@ -988,8 +990,9 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 		}
 	}
 	createIAMHTTPRole(t, ctx, admin)
-	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, nil)
 	document := iamHTTPBootstrap(t)
+	keyring := iamHTTPAccessKeyWrapping(t, document)
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, nil, keyring)
 	status, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
 	if err != nil || status.State != iamv1.BootstrapReady {
 		t.Fatalf("bootstrap registered product IAM: status=%#v err=%v", status, err)
@@ -1023,6 +1026,164 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	attachmentResponse := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", primary, mustIAMJSON(t, attachmentRequest))
 	if attachmentResponse.Code != http.StatusOK {
 		t.Fatalf("attach registered product Policy: status=%d body=%s", attachmentResponse.Code, attachmentResponse.Body.String())
+	}
+	createUserResponse := performIAMRequest(handler, http.MethodPost, "/v1/users", primary, mustIAMJSON(t, map[string]any{
+		"loginName": "catalog-key-user", "displayName": "Catalog key user", "initialPassword": initialDeveloperPassword,
+		"permissionBoundary": nil, "requestId": "registered-product-key-user"}))
+	var keyUser iamv1.User
+	if createUserResponse.Code != http.StatusCreated || json.Unmarshal(createUserResponse.Body.Bytes(), &keyUser) != nil || iamv1.ValidateUser(keyUser) != nil {
+		t.Fatalf("create registered product AccessKey user: status=%d body=%s", createUserResponse.Code, createUserResponse.Body.String())
+	}
+	keyUserBearer := localRecoveryLogin(t, handler, keyUser.LoginName+"@"+string(keyUser.AccountID), initialDeveloperPassword, true)
+	keyUserBearer = localRecoveryChangePassword(t, handler, keyUserBearer, initialDeveloperPassword, changedDeveloperPassword)
+	keyCatalogAttachment := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(keyUser.ID)},
+		PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion, RequestID: "registered-product-key-catalog-grant"}
+	if response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", primary, mustIAMJSON(t, keyCatalogAttachment)); response.Code != http.StatusOK {
+		t.Fatalf("attach registered product Policy to AccessKey user: status=%d body=%s", response.Code, response.Body.String())
+	}
+	keyPolicyRequest := iamv1.CreatePolicyRequest{DisplayName: "Catalog key self service", RequestID: "registered-product-key-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "key-self-service", Effect: iamv1.PolicyAllow,
+				Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyCreate, iamv1.ActionIAMAccessKeyList},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}}}}}
+	keyPolicyResponse := performIAMRequest(handler, http.MethodPost, "/v1/policies", primary, mustIAMJSON(t, keyPolicyRequest))
+	var keyPolicy iamv1.PolicyDetail
+	if keyPolicyResponse.Code != http.StatusCreated || json.Unmarshal(keyPolicyResponse.Body.Bytes(), &keyPolicy) != nil || iamv1.ValidatePolicyDetail(keyPolicy) != nil {
+		t.Fatalf("publish registered product AccessKey Policy: status=%d body=%s", keyPolicyResponse.Code, keyPolicyResponse.Body.String())
+	}
+	keyPolicyAttachment := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(keyUser.ID)},
+		PolicyID: keyPolicy.Policy.ID, PolicyResourceVersion: keyPolicy.Policy.ResourceVersion, RequestID: "registered-product-key-management-grant"}
+	if response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", primary, mustIAMJSON(t, keyPolicyAttachment)); response.Code != http.StatusOK {
+		t.Fatalf("attach registered product AccessKey management Policy: status=%d body=%s", response.Code, response.Body.String())
+	}
+	keyPath := "/v1/users/" + string(keyUser.ID) + "/access-keys"
+	keyDirectoryResponse := performIAMRequest(handler, http.MethodGet, keyPath, keyUserBearer, nil)
+	var keyDirectory iamv1.AccessKeyList
+	if keyDirectoryResponse.Code != http.StatusOK || json.Unmarshal(keyDirectoryResponse.Body.Bytes(), &keyDirectory) != nil || iamv1.ValidateAccessKeyList(keyDirectory) != nil {
+		t.Fatalf("read registered product AccessKey directory: status=%d body=%s", keyDirectoryResponse.Code, keyDirectoryResponse.Body.String())
+	}
+	createKeyRequest := iamv1.CreateAccessKeyRequest{UserResourceVersion: keyDirectory.UserResourceVersion,
+		NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: "registered-product-key-create"}
+	createKeyResponse := performIAMRequest(handler, http.MethodPost, keyPath, keyUserBearer, mustIAMJSON(t, createKeyRequest))
+	var catalogKey iamv1.CreateAccessKeyResponse
+	if createKeyResponse.Code != http.StatusCreated || json.Unmarshal(createKeyResponse.Body.Bytes(), &catalogKey) != nil || iamv1.ValidateCreateAccessKeyResponse(catalogKey) != nil {
+		t.Fatalf("create registered product AccessKey: status=%d body=%s", createKeyResponse.Code, createKeyResponse.Body.String())
+	}
+	signCatalogRequest := func(covered iamv1.AccessKeyHTTPRequest) iamv1.AccessKeySignedRequest {
+		t.Helper()
+		var now time.Time
+		if err := admin.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+			t.Fatal(err)
+		}
+		nonce := make([]byte, 16)
+		if _, err := rand.Read(nonce); err != nil {
+			t.Fatal(err)
+		}
+		signed := iamv1.AccessKeySignedRequest{Parameters: iamv1.AccessKeySignatureParameters{
+			AccessKeyID: catalogKey.Key.ID, InstallationID: document.InstallationID, Audience: profile.Product, SignedAt: now.Unix(),
+			Nonce: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(nonce))}, HTTP: covered}
+		canonical, err := iamv1.AccessKeySigningBytes(signed.Parameters, signed.HTTP)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clear(canonical)
+		secret := catalogKey.Secret.CopyBytes()
+		defer clear(secret)
+		material, err := base64.RawURLEncoding.DecodeString(string(bytes.TrimPrefix(secret, []byte("mak1."))))
+		if err != nil {
+			t.Fatal("decode registered product AccessKey material")
+		}
+		defer clear(material)
+		mac := hmac.New(sha256.New, material)
+		_, _ = mac.Write(canonical)
+		signed.Signature = iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(mac.Sum(nil)))
+		return signed
+	}
+	emptyBody := sha256.Sum256(nil)
+	newCatalogKeyAuthorization := func(requestID, resourceID string) iamv1.AccessKeyAuthorizationRequest {
+		t.Helper()
+		value, err := iamv1.NewAuthorizationRequestForProfile(profile, "catalog.item.read", iamv1.ResourceReference{Kind: "CATALOG_ITEM", ID: resourceID},
+			iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value.NetworkContext = &iamv1.AuthorizationNetworkContext{SourceIP: "198.51.100.10"}
+		return iamv1.AccessKeyAuthorizationRequest{Authorization: value, SignedRequest: signCatalogRequest(iamv1.AccessKeyHTTPRequest{
+			Method: http.MethodGet, Scheme: "https", Authority: "catalog-fixture.invalid:443", EscapedPath: "/api/catalog/v1/items/" + resourceID,
+			BodyDigest: "sha256:" + hex.EncodeToString(emptyBody[:])})}
+	}
+	authorizeCatalogKey := func(target http.Handler, signed iamv1.AccessKeyAuthorizationRequest, wantStatus int, wantAllowed bool) iamv1.AccessKeyAuthorization {
+		t.Helper()
+		encoded, err := iamv1.EncodeAccessKeyAuthorizationRequestForProfile(signed, profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clear(encoded)
+		response := performIAMRequest(target, http.MethodPost, "/v1/authorize:access-key", paasCredential, encoded)
+		if response.Code != wantStatus {
+			t.Fatalf("registered product AccessKey authorization status=%d want=%d body=%s", response.Code, wantStatus, response.Body.String())
+		}
+		if wantStatus != http.StatusOK {
+			return iamv1.AccessKeyAuthorization{}
+		}
+		result, err := iamv1.DecodeAccessKeyAuthorizationForProfile(bytes.NewReader(response.Body.Bytes()), profile)
+		if err != nil || iamv1.CheckAccessKeyAuthorizationForProfileAndRequest(result, signed, profile) != nil || result.Decision.Allowed != wantAllowed {
+			t.Fatalf("registered product AccessKey decision is invalid: body=%s err=%v", response.Body.String(), err)
+		}
+		return result
+	}
+	keyRequest := newCatalogKeyAuthorization("registered-product-key-allow", "item-key")
+	resolveKeyRequest := iamv1.ResolveAccessKeySubjectRequest{Profile: keyRequest.Authorization.Profile, SignedRequest: keyRequest.SignedRequest}
+	resolveKeyWire, err := iamv1.EncodeResolveAccessKeySubjectRequestForProfile(resolveKeyRequest, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolveKeyResponse := performIAMRequest(handler, http.MethodPost, "/v1/internal/access-key-subject:resolve", paasCredential, resolveKeyWire)
+	clear(resolveKeyWire)
+	var resolvedKeySubject iamv1.AccessKeySubjectContext
+	if resolveKeyResponse.Code != http.StatusOK || json.Unmarshal(resolveKeyResponse.Body.Bytes(), &resolvedKeySubject) != nil ||
+		iamv1.CheckAccessKeySubjectContextForProfileAndRequest(resolvedKeySubject, resolveKeyRequest, profile) != nil ||
+		resolvedKeySubject.TenantID != document.Organization.ID || resolvedKeySubject.Subject.ID != string(keyUser.ID) {
+		t.Fatalf("registered product AccessKey subject resolution failed: status=%d body=%s", resolveKeyResponse.Code, resolveKeyResponse.Body.String())
+	}
+	authorizeCatalogKey(handler, keyRequest, http.StatusOK, true)
+	forgedKeyRequest := newCatalogKeyAuthorization("registered-product-key-forged", "item-forged")
+	forgedKeyWire, err := iamv1.EncodeAccessKeyAuthorizationRequestForProfile(forgedKeyRequest, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedKeyWire = bytes.Replace(forgedKeyWire, []byte(forgedKeyRequest.Authorization.Profile.ContentDigest), []byte("sha256:"+strings.Repeat("0", 64)), 1)
+	forgedKeyResponse := performIAMRequest(handler, http.MethodPost, "/v1/authorize:access-key", paasCredential, forgedKeyWire)
+	clear(forgedKeyWire)
+	if forgedKeyResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong registered product Profile commitment status=%d body=%s", forgedKeyResponse.Code, forgedKeyResponse.Body.String())
+	}
+	listCollection, err := iamv1.NewAuthorizationRequestForProfile(profile, "catalog.item.read", iamv1.ResourceReference{Kind: "CATALOG_ITEM", ID: "collection"},
+		iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList, "registered-product-key-list", "registered-product-key-list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listCollection.NetworkContext = &iamv1.AuthorizationNetworkContext{SourceIP: "198.51.100.10"}
+	listItem, err := iamv1.NewAuthorizationRequestForProfile(profile, "catalog.item.read", iamv1.ResourceReference{Kind: "CATALOG_ITEM", ID: "item-list"},
+		iamv1.AuthorizationResourceInstance, "", "registered-product-key-list-item", "registered-product-key-list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listItem.NetworkContext = &iamv1.AuthorizationNetworkContext{SourceIP: "198.51.100.10"}
+	listKeyRequest := iamv1.AccessKeyListAuthorizationRequest{Collection: listCollection, Instances: []iamv1.AuthorizationRequest{listItem},
+		SignedRequest: signCatalogRequest(iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "catalog-fixture.invalid:443",
+			EscapedPath: "/api/catalog/v1/items", BodyDigest: "sha256:" + hex.EncodeToString(emptyBody[:])})}
+	listKeyWire, err := iamv1.EncodeAccessKeyListAuthorizationRequestForProfile(listKeyRequest, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listKeyResponse := performIAMRequest(handler, http.MethodPost, "/v1/authorize:access-key-list", paasCredential, listKeyWire)
+	clear(listKeyWire)
+	var listKeyResult iamv1.AccessKeyListAuthorization
+	if listKeyResponse.Code != http.StatusOK || json.Unmarshal(listKeyResponse.Body.Bytes(), &listKeyResult) != nil ||
+		iamv1.CheckAccessKeyListAuthorizationForProfileAndRequest(listKeyResult, listKeyRequest, profile) != nil ||
+		!listKeyResult.Collection.Allowed || len(listKeyResult.Instances) != 1 || !listKeyResult.Instances[0].Allowed {
+		t.Fatalf("registered product AccessKey list failed: status=%d body=%s", listKeyResponse.Code, listKeyResponse.Body.String())
 	}
 	request, err := iamv1.NewAuthorizationRequestForProfile(profile, "catalog.item.read", iamv1.ResourceReference{Kind: "CATALOG_ITEM", ID: "item-one"},
 		iamv1.AuthorizationResourceInstance, "", "registered-product-allow", "registered-product-allow")
@@ -1103,7 +1264,7 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	}
 	// A new process instance must resolve the same immutable registry and
 	// retained Policy; no in-memory catalog state is required for the grant.
-	restarted := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, nil)
+	restarted := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, nil, keyring)
 	restartedHandler, err := iamhttp.NewHandler(restarted, iamhttp.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -1111,16 +1272,18 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	replayed := request
 	replayed.RequestID, replayed.CorrelationID = "registered-product-after-restart", "registered-product-after-restart"
 	authorize(t, restartedHandler, paasCredential, primary, replayed, http.StatusOK, true)
-	var heads, versions, allows, denies, forged, batchAllows int
+	authorizeCatalogKey(restartedHandler, newCatalogKeyAuthorization("registered-product-key-after-restart", "item-key-restart"), http.StatusOK, true)
+	var heads, versions, allows, denies, forged, batchAllows, keyAllows int
 	if err := admin.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM iam.authorization_profile_heads WHERE product='catalog'),
 		(SELECT count(*) FROM iam.policy_versions WHERE id=$1 AND compilation#>>'{profiles,0,product}'='catalog'),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id IN ('registered-product-allow','registered-product-after-restart') AND allowed),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id='registered-product-wrong-service' AND NOT allowed),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id LIKE 'registered-product-forged-%'),
-		(SELECT count(*) FROM iam.authorization_decisions WHERE document->>'correlationId'='registered-product-batch' AND allowed)`, policy.Version.ID).
-		Scan(&heads, &versions, &allows, &denies, &forged, &batchAllows); err != nil || heads != 1 || versions != 1 || allows != 2 || denies != 1 || forged != 0 || batchAllows != 2 {
-		t.Fatalf("registered product state split: heads=%d versions=%d allows=%d denies=%d forged=%d batch=%d err=%v", heads, versions, allows, denies, forged, batchAllows, err)
+		(SELECT count(*) FROM iam.authorization_decisions WHERE document->>'correlationId'='registered-product-batch' AND allowed),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id LIKE 'registered-product-key-%' AND document->>'action'='catalog.item.read' AND allowed)`, policy.Version.ID).
+		Scan(&heads, &versions, &allows, &denies, &forged, &batchAllows, &keyAllows); err != nil || heads != 1 || versions != 1 || allows != 2 || denies != 1 || forged != 0 || batchAllows != 2 || keyAllows != 4 {
+		t.Fatalf("registered product state split: heads=%d versions=%d allows=%d denies=%d forged=%d batch=%d key=%d err=%v", heads, versions, allows, denies, forged, batchAllows, keyAllows, err)
 	}
 }
 

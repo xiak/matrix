@@ -21,6 +21,7 @@ type authorizationActor struct {
 type verifiedAccessKeyRequest struct {
 	caller       ServiceCredential
 	credential   AccessKeyCredential
+	profile      iamv1.AuthorizationProfile
 	signedDigest string
 }
 
@@ -39,15 +40,14 @@ func (service *Authority) verifyAccessKeyRequest(
 	if err != nil {
 		return verifiedAccessKeyRequest{}, err
 	}
-	profile, known := iamv1.LookupAuthorizationProfile(profileReference.Product)
+	profile, known, err := tx.LookupCurrentAuthorizationProfile(ctx, profileReference)
+	if err != nil {
+		return verifiedAccessKeyRequest{}, err
+	}
 	parameters := signed.Parameters
-	if !known || iamv1.CheckAuthorizationProfileReference(profile, profileReference) != nil ||
-		profile.CallingService != caller.Identity.Purpose || profile.Product != parameters.Audience ||
+	if !known || profile.CallingService != caller.Identity.Purpose || profile.Product != parameters.Audience ||
 		caller.Identity.InstallationID != parameters.InstallationID {
 		return verifiedAccessKeyRequest{}, ErrUnauthenticated
-	}
-	if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
-		return verifiedAccessKeyRequest{}, err
 	}
 	if err := service.checkAccessKeyCustody(ctx, tx); err != nil {
 		return verifiedAccessKeyRequest{}, err
@@ -83,19 +83,16 @@ func (service *Authority) verifyAccessKeyRequest(
 	if err != nil {
 		return verifiedAccessKeyRequest{}, ErrUnavailable
 	}
-	return verifiedAccessKeyRequest{caller: caller, credential: credential, signedDigest: signedDigest}, nil
+	return verifiedAccessKeyRequest{caller: caller, credential: credential, profile: profile, signedDigest: signedDigest}, nil
 }
 
 func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredential iamv1.Secret, request iamv1.AccessKeyAuthorizationRequest) (iamv1.AccessKeyAuthorization, error) {
-	if iamv1.ValidateAccessKeyAuthorizationRequest(request) != nil {
+	if iamv1.ValidateUnresolvedAccessKeyAuthorizationRequest(request) != nil {
 		return iamv1.AccessKeyAuthorization{}, ErrInvalidArgument
 	}
-	requestDigest, err := digestSanitized("authorization", request.Authorization)
-	if err != nil {
-		return iamv1.AccessKeyAuthorization{}, err
-	}
 	var result iamv1.AccessKeyAuthorization
-	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+	var currentProfile iamv1.AuthorizationProfile
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
 		now, err := transactionTime(ctx, tx)
 		if err != nil {
 			return err
@@ -104,9 +101,17 @@ func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredent
 		if err != nil {
 			return err
 		}
-		caller, credential := verified.caller, verified.credential
+		caller, credential, profile := verified.caller, verified.credential, verified.profile
+		if iamv1.ValidateAccessKeyAuthorizationRequestForProfile(request, profile) != nil {
+			return ErrInvalidArgument
+		}
+		requestDigest, err := digestSanitized("authorization", request.Authorization)
+		if err != nil {
+			return err
+		}
+		currentProfile = profile
 		parameters := request.SignedRequest.Parameters
-		definition, found := iamv1.LookupActionDefinition(request.Authorization.Action)
+		definition, found := iamv1.LookupAuthorizationProfileActionDefinition(profile, request.Authorization.Action)
 		if !found || definition.CallingService != caller.Identity.Purpose || definition.Product != parameters.Audience {
 			return ErrUnauthenticated
 		}
@@ -123,7 +128,7 @@ func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredent
 			authorizationActor{organizationID: credential.Subject.Organization.ID,
 				subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: string(credential.Subject.Principal.ID), AccessKeyID: credential.Subject.Key.ID}, accessKeyEvidence: evidence},
 			func(id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
-				return authority.DecideAccessKey(credential.Subject, caller.Identity.Purpose, request.Authorization, id, now, parameters.SignedAt)
+				return authority.DecideAccessKeyWithProfile(credential.Subject, caller.Identity.Purpose, request.Authorization, profile, id, now, parameters.SignedAt)
 			})
 		if err != nil {
 			return err
@@ -136,28 +141,18 @@ func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredent
 	if err != nil {
 		return iamv1.AccessKeyAuthorization{}, err
 	}
-	if iamv1.CheckAccessKeyAuthorizationForRequest(result, request) != nil {
+	if iamv1.CheckAccessKeyAuthorizationForProfileAndRequest(result, request, currentProfile) != nil {
 		return iamv1.AccessKeyAuthorization{}, ErrUnavailable
 	}
 	return result, nil
 }
 
 func (service *Authority) AuthorizeAccessKeyList(ctx context.Context, serviceCredential iamv1.Secret, request iamv1.AccessKeyListAuthorizationRequest) (iamv1.AccessKeyListAuthorization, error) {
-	if iamv1.ValidateAccessKeyListAuthorizationRequest(request) != nil {
+	if iamv1.ValidateUnresolvedAccessKeyListAuthorizationRequest(request) != nil {
 		return iamv1.AccessKeyListAuthorization{}, ErrInvalidArgument
 	}
-	requests := make([]iamv1.AuthorizationRequest, 1, len(request.Instances)+1)
-	requests[0] = request.Collection
-	requests = append(requests, request.Instances...)
-	digests := make([]string, len(requests))
-	for index := range requests {
-		digest, err := digestSanitized("authorization", requests[index])
-		if err != nil {
-			return iamv1.AccessKeyListAuthorization{}, err
-		}
-		digests[index] = digest
-	}
 	var result iamv1.AccessKeyListAuthorization
+	var currentProfile iamv1.AuthorizationProfile
 	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
 		now, err := transactionTime(ctx, tx)
 		if err != nil {
@@ -167,9 +162,24 @@ func (service *Authority) AuthorizeAccessKeyList(ctx context.Context, serviceCre
 		if err != nil {
 			return err
 		}
-		caller, credential := verified.caller, verified.credential
+		caller, credential, profile := verified.caller, verified.credential, verified.profile
+		if iamv1.ValidateAccessKeyListAuthorizationRequestForProfile(request, profile) != nil {
+			return ErrInvalidArgument
+		}
+		currentProfile = profile
+		requests := make([]iamv1.AuthorizationRequest, 1, len(request.Instances)+1)
+		requests[0] = request.Collection
+		requests = append(requests, request.Instances...)
+		digests := make([]string, len(requests))
+		for index := range requests {
+			digest, err := digestSanitized("authorization", requests[index])
+			if err != nil {
+				return err
+			}
+			digests[index] = digest
+		}
 		parameters := request.SignedRequest.Parameters
-		definition, found := iamv1.LookupActionDefinition(request.Collection.Action)
+		definition, found := iamv1.LookupAuthorizationProfileActionDefinition(profile, request.Collection.Action)
 		if !found || definition.CallingService != caller.Identity.Purpose || definition.Product != parameters.Audience {
 			return ErrUnauthenticated
 		}
@@ -188,7 +198,7 @@ func (service *Authority) AuthorizeAccessKeyList(ctx context.Context, serviceCre
 		decide := func(item iamv1.AuthorizationRequest, digest string) (iamv1.AuthorizationDecision, error) {
 			return service.decideAndRecord(ctx, tx, item, digest, now, actor,
 				func(id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
-					return authority.DecideAccessKey(credential.Subject, caller.Identity.Purpose, item, id, now, parameters.SignedAt)
+					return authority.DecideAccessKeyWithProfile(credential.Subject, caller.Identity.Purpose, item, profile, id, now, parameters.SignedAt)
 				})
 		}
 		collection, err := decide(request.Collection, digests[0])
@@ -213,7 +223,7 @@ func (service *Authority) AuthorizeAccessKeyList(ctx context.Context, serviceCre
 	if err != nil {
 		return iamv1.AccessKeyListAuthorization{}, err
 	}
-	if iamv1.CheckAccessKeyListAuthorizationForRequest(result, request) != nil {
+	if iamv1.CheckAccessKeyListAuthorizationForProfileAndRequest(result, request, currentProfile) != nil {
 		return iamv1.AccessKeyListAuthorization{}, ErrUnavailable
 	}
 	return result, nil
@@ -245,10 +255,11 @@ func (service *Authority) ResolveAccessKeySubject(
 	serviceCredential iamv1.Secret,
 	request iamv1.ResolveAccessKeySubjectRequest,
 ) (iamv1.AccessKeySubjectContext, error) {
-	if iamv1.ValidateResolveAccessKeySubjectRequest(request) != nil {
+	if iamv1.ValidateUnresolvedAccessKeySubjectRequest(request) != nil {
 		return iamv1.AccessKeySubjectContext{}, ErrInvalidArgument
 	}
 	var result iamv1.AccessKeySubjectContext
+	var currentProfile iamv1.AuthorizationProfile
 	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
 		if err != nil {
@@ -258,6 +269,10 @@ func (service *Authority) ResolveAccessKeySubject(
 		if err != nil {
 			return err
 		}
+		if iamv1.ValidateResolveAccessKeySubjectRequestForProfile(request, verified.profile) != nil {
+			return ErrInvalidArgument
+		}
+		currentProfile = verified.profile
 		if err := authority.ValidateAccessKeyLookupContext(verified.credential.Subject, now, request.SignedRequest.Parameters.SignedAt); err != nil {
 			if errors.Is(err, authority.ErrUnauthenticated) {
 				return ErrUnauthenticated
@@ -276,7 +291,7 @@ func (service *Authority) ResolveAccessKeySubject(
 	if err != nil {
 		return iamv1.AccessKeySubjectContext{}, err
 	}
-	if iamv1.CheckAccessKeySubjectContextForRequest(result, request) != nil {
+	if iamv1.CheckAccessKeySubjectContextForProfileAndRequest(result, request, currentProfile) != nil {
 		return iamv1.AccessKeySubjectContext{}, ErrUnavailable
 	}
 	return result, nil

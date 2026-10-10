@@ -1247,7 +1247,7 @@ func (value *handler) resolveAccessKeySubject(response http.ResponseWriter, requ
 		writeProblem(response, requestID(request), http.StatusUnsupportedMediaType, "iam.media.unsupported", "IAM media type unsupported")
 		return
 	}
-	body, err := iamv1.DecodeResolveAccessKeySubjectRequest(request.Body)
+	body, err := iamv1.DecodeUnresolvedAccessKeySubjectRequest(request.Body)
 	if err != nil {
 		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.json.invalid", "IAM JSON invalid")
 		return
@@ -1300,7 +1300,7 @@ func (value *handler) authorizeAccessKey(response http.ResponseWriter, request *
 		writeProblem(response, requestID(request), http.StatusUnsupportedMediaType, "iam.media.unsupported", "IAM media type unsupported")
 		return
 	}
-	body, err := iamv1.DecodeAccessKeyAuthorizationRequest(request.Body)
+	body, err := iamv1.DecodeUnresolvedAccessKeyAuthorizationRequest(request.Body)
 	if err != nil {
 		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.json.invalid", "IAM JSON invalid")
 		return
@@ -1329,7 +1329,7 @@ func (value *handler) authorizeAccessKeyList(response http.ResponseWriter, reque
 		writeProblem(response, requestID(request), http.StatusUnsupportedMediaType, "iam.media.unsupported", "IAM media type unsupported")
 		return
 	}
-	body, err := iamv1.DecodeAccessKeyListAuthorizationRequest(request.Body)
+	body, err := iamv1.DecodeUnresolvedAccessKeyListAuthorizationRequest(request.Body)
 	if err != nil {
 		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.json.invalid", "IAM JSON invalid")
 		return

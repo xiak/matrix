@@ -177,8 +177,29 @@ func (*ResolveAccessKeySubjectRequest) UnmarshalJSON([]byte) error {
 }
 
 func ValidateAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) error {
-	if ValidateAuthorizationRequest(value.Authorization) != nil || ValidateAccessKeySignedRequest(value.SignedRequest) != nil ||
+	profile, known := LookupAuthorizationProfile(value.Authorization.Profile.Product)
+	if !known {
+		return ErrInvalidAccessKeySignature
+	}
+	return ValidateAccessKeyAuthorizationRequestForProfile(value, profile)
+}
+
+// ValidateUnresolvedAccessKeyAuthorizationRequest validates only the signed
+// envelope that IAM may inspect before resolving the exact current Profile.
+// It never authorizes an action or proves product registration.
+func ValidateUnresolvedAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) error {
+	if ValidateAccessKeySignedRequest(value.SignedRequest) != nil ||
 		value.Authorization.Profile.Product != value.SignedRequest.Parameters.Audience {
+		return ErrInvalidAccessKeySignature
+	}
+	return nil
+}
+
+// ValidateAccessKeyAuthorizationRequestForProfile binds the signed envelope
+// to one exact current product declaration.
+func ValidateAccessKeyAuthorizationRequestForProfile(value AccessKeyAuthorizationRequest, profile AuthorizationProfile) error {
+	if ValidateUnresolvedAccessKeyAuthorizationRequest(value) != nil ||
+		ValidateAuthorizationRequestForProfile(value.Authorization, profile) != nil {
 		return ErrInvalidAccessKeySignature
 	}
 	// Lack of current carrier capability is a recorded Deny after MAC checking,
@@ -188,7 +209,17 @@ func ValidateAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) 
 }
 
 func EncodeAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) ([]byte, error) {
-	if ValidateAccessKeyAuthorizationRequest(value) != nil {
+	profile, known := LookupAuthorizationProfile(value.Authorization.Profile.Product)
+	if !known {
+		return nil, ErrInvalidAccessKeySignature
+	}
+	return EncodeAccessKeyAuthorizationRequestForProfile(value, profile)
+}
+
+// EncodeAccessKeyAuthorizationRequestForProfile encodes one signed request
+// against the exact Profile supplied by its product integration.
+func EncodeAccessKeyAuthorizationRequestForProfile(value AccessKeyAuthorizationRequest, profile AuthorizationProfile) ([]byte, error) {
+	if ValidateAccessKeyAuthorizationRequestForProfile(value, profile) != nil {
 		return nil, ErrInvalidAccessKeySignature
 	}
 	signed, err := EncodeAccessKeySignedRequest(value.SignedRequest)
@@ -208,6 +239,27 @@ func EncodeAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) ([
 }
 
 func DecodeAccessKeyAuthorizationRequest(reader io.Reader) (AccessKeyAuthorizationRequest, error) {
+	value, err := DecodeUnresolvedAccessKeyAuthorizationRequest(reader)
+	if err != nil || ValidateAccessKeyAuthorizationRequest(value) != nil {
+		return AccessKeyAuthorizationRequest{}, ErrInvalidAccessKeySignature
+	}
+	return value, nil
+}
+
+// DecodeAccessKeyAuthorizationRequestForProfile strictly decodes and binds one
+// signed request to the exact Profile supplied by its product integration.
+func DecodeAccessKeyAuthorizationRequestForProfile(reader io.Reader, profile AuthorizationProfile) (AccessKeyAuthorizationRequest, error) {
+	value, err := DecodeUnresolvedAccessKeyAuthorizationRequest(reader)
+	if err != nil || ValidateAccessKeyAuthorizationRequestForProfile(value, profile) != nil {
+		return AccessKeyAuthorizationRequest{}, ErrInvalidAccessKeySignature
+	}
+	return value, nil
+}
+
+// DecodeUnresolvedAccessKeyAuthorizationRequest is the strict IAM ingress
+// decoder used before transaction-local Profile resolution. Callers must not
+// evaluate or forward its AuthorizationRequest until exact validation.
+func DecodeUnresolvedAccessKeyAuthorizationRequest(reader io.Reader) (AccessKeyAuthorizationRequest, error) {
 	var wire struct {
 		Authorization AuthorizationRequest `json:"authorization"`
 		SignedRequest json.RawMessage      `json:"signedRequest"`
@@ -218,26 +270,46 @@ func DecodeAccessKeyAuthorizationRequest(reader io.Reader) (AccessKeyAuthorizati
 	defer clear(wire.SignedRequest)
 	signed, err := DecodeAccessKeySignedRequest(bytes.NewReader(wire.SignedRequest))
 	value := AccessKeyAuthorizationRequest{Authorization: wire.Authorization, SignedRequest: signed}
-	if err != nil || ValidateAccessKeyAuthorizationRequest(value) != nil {
+	if err != nil || ValidateUnresolvedAccessKeyAuthorizationRequest(value) != nil {
 		return AccessKeyAuthorizationRequest{}, ErrInvalidAccessKeySignature
 	}
 	return value, nil
 }
 
 func ValidateAccessKeyListAuthorizationRequest(value AccessKeyListAuthorizationRequest) error {
+	profile, known := LookupAuthorizationProfile(value.Collection.Profile.Product)
+	if !known {
+		return ErrInvalidAccessKeySignature
+	}
+	return ValidateAccessKeyListAuthorizationRequestForProfile(value, profile)
+}
+
+// ValidateUnresolvedAccessKeyListAuthorizationRequest validates only the
+// signed list envelope that IAM may inspect before resolving the exact current
+// Profile. It never authorizes an action or proves product registration.
+func ValidateUnresolvedAccessKeyListAuthorizationRequest(value AccessKeyListAuthorizationRequest) error {
+	if ValidateAccessKeySignedRequest(value.SignedRequest) != nil ||
+		value.Collection.Profile.Product != value.SignedRequest.Parameters.Audience ||
+		value.Instances == nil || len(value.Instances) > MaxAuthorizationBatchItems {
+		return ErrInvalidAccessKeySignature
+	}
+	return nil
+}
+
+// ValidateAccessKeyListAuthorizationRequestForProfile binds the signed list
+// envelope and every candidate to one exact current product declaration.
+func ValidateAccessKeyListAuthorizationRequestForProfile(value AccessKeyListAuthorizationRequest, profile AuthorizationProfile) error {
 	collection := value.Collection
-	if ValidateAuthorizationRequest(collection) != nil || ValidateAccessKeySignedRequest(value.SignedRequest) != nil ||
-		collection.Profile.Product != value.SignedRequest.Parameters.Audience ||
+	if ValidateUnresolvedAccessKeyListAuthorizationRequest(value) != nil || ValidateAuthorizationRequestForProfile(collection, profile) != nil ||
 		collection.ResourceMode != AuthorizationResourceCollection || collection.CollectionUsage != AuthorizationCollectionList ||
 		len(collection.ResourceTags) != 0 ||
-		checkSourceProfileInstanceListBatch(collection.Profile, collection.Action, collection.Resource.Kind) != nil ||
-		value.Instances == nil || len(value.Instances) > MaxAuthorizationBatchItems {
+		CheckAuthorizationProfileInstanceListBatch(profile, collection.Profile, collection.Action, collection.Resource.Kind) != nil {
 		return ErrInvalidAccessKeySignature
 	}
 	seenRequests := map[string]bool{collection.RequestID: true}
 	previousResource := ""
 	for _, request := range value.Instances {
-		if ValidateAuthorizationRequest(request) != nil || request.Profile != collection.Profile ||
+		if ValidateAuthorizationRequestForProfile(request, profile) != nil || request.Profile != collection.Profile ||
 			request.Action != collection.Action || request.Resource.Kind != collection.Resource.Kind ||
 			request.ResourceMode != AuthorizationResourceInstance || request.CollectionUsage != "" ||
 			request.CorrelationID != collection.CorrelationID ||
@@ -256,7 +328,17 @@ func ValidateAccessKeyListAuthorizationRequest(value AccessKeyListAuthorizationR
 }
 
 func EncodeAccessKeyListAuthorizationRequest(value AccessKeyListAuthorizationRequest) ([]byte, error) {
-	if ValidateAccessKeyListAuthorizationRequest(value) != nil {
+	profile, known := LookupAuthorizationProfile(value.Collection.Profile.Product)
+	if !known {
+		return nil, ErrInvalidAccessKeySignature
+	}
+	return EncodeAccessKeyListAuthorizationRequestForProfile(value, profile)
+}
+
+// EncodeAccessKeyListAuthorizationRequestForProfile encodes one signed list
+// request against the exact Profile supplied by its product integration.
+func EncodeAccessKeyListAuthorizationRequestForProfile(value AccessKeyListAuthorizationRequest, profile AuthorizationProfile) ([]byte, error) {
+	if ValidateAccessKeyListAuthorizationRequestForProfile(value, profile) != nil {
 		return nil, ErrInvalidAccessKeySignature
 	}
 	signed, err := EncodeAccessKeySignedRequest(value.SignedRequest)
@@ -277,6 +359,27 @@ func EncodeAccessKeyListAuthorizationRequest(value AccessKeyListAuthorizationReq
 }
 
 func DecodeAccessKeyListAuthorizationRequest(reader io.Reader) (AccessKeyListAuthorizationRequest, error) {
+	value, err := DecodeUnresolvedAccessKeyListAuthorizationRequest(reader)
+	if err != nil || ValidateAccessKeyListAuthorizationRequest(value) != nil {
+		return AccessKeyListAuthorizationRequest{}, ErrInvalidAccessKeySignature
+	}
+	return value, nil
+}
+
+// DecodeAccessKeyListAuthorizationRequestForProfile strictly decodes and
+// binds one signed list request to the exact supplied Profile.
+func DecodeAccessKeyListAuthorizationRequestForProfile(reader io.Reader, profile AuthorizationProfile) (AccessKeyListAuthorizationRequest, error) {
+	value, err := DecodeUnresolvedAccessKeyListAuthorizationRequest(reader)
+	if err != nil || ValidateAccessKeyListAuthorizationRequestForProfile(value, profile) != nil {
+		return AccessKeyListAuthorizationRequest{}, ErrInvalidAccessKeySignature
+	}
+	return value, nil
+}
+
+// DecodeUnresolvedAccessKeyListAuthorizationRequest is the strict IAM ingress
+// decoder used before transaction-local Profile resolution. Callers must not
+// evaluate its candidate page until exact validation.
+func DecodeUnresolvedAccessKeyListAuthorizationRequest(reader io.Reader) (AccessKeyListAuthorizationRequest, error) {
 	var wire struct {
 		Collection    AuthorizationRequest   `json:"collection"`
 		Instances     []AuthorizationRequest `json:"instances"`
@@ -288,23 +391,52 @@ func DecodeAccessKeyListAuthorizationRequest(reader io.Reader) (AccessKeyListAut
 	defer clear(wire.SignedRequest)
 	signed, err := DecodeAccessKeySignedRequest(bytes.NewReader(wire.SignedRequest))
 	value := AccessKeyListAuthorizationRequest{Collection: wire.Collection, Instances: wire.Instances, SignedRequest: signed}
-	if err != nil || ValidateAccessKeyListAuthorizationRequest(value) != nil {
+	if err != nil || ValidateUnresolvedAccessKeyListAuthorizationRequest(value) != nil {
 		return AccessKeyListAuthorizationRequest{}, ErrInvalidAccessKeySignature
 	}
 	return value, nil
 }
 
 func ValidateResolveAccessKeySubjectRequest(value ResolveAccessKeySubjectRequest) error {
-	source, known := sourceProfileCommitments[value.Profile.Product]
-	if !known || value.Profile != source.reference || ValidateAccessKeySignedRequest(value.SignedRequest) != nil ||
+	profile, known := LookupAuthorizationProfile(value.Profile.Product)
+	if !known {
+		return ErrInvalidAccessKeySignature
+	}
+	return ValidateResolveAccessKeySubjectRequestForProfile(value, profile)
+}
+
+// ValidateUnresolvedAccessKeySubjectRequest validates only the signed subject
+// envelope that IAM may inspect before resolving the exact current Profile. It
+// never proves product registration or returns a subject.
+func ValidateUnresolvedAccessKeySubjectRequest(value ResolveAccessKeySubjectRequest) error {
+	if ValidateAccessKeySignedRequest(value.SignedRequest) != nil ||
 		value.Profile.Product != value.SignedRequest.Parameters.Audience {
 		return ErrInvalidAccessKeySignature
 	}
 	return nil
 }
 
+// ValidateResolveAccessKeySubjectRequestForProfile binds the signed subject
+// envelope to one exact current product declaration.
+func ValidateResolveAccessKeySubjectRequestForProfile(value ResolveAccessKeySubjectRequest, profile AuthorizationProfile) error {
+	if ValidateUnresolvedAccessKeySubjectRequest(value) != nil || CheckAuthorizationProfileReference(profile, value.Profile) != nil {
+		return ErrInvalidAccessKeySignature
+	}
+	return nil
+}
+
 func EncodeResolveAccessKeySubjectRequest(value ResolveAccessKeySubjectRequest) ([]byte, error) {
-	if ValidateResolveAccessKeySubjectRequest(value) != nil {
+	profile, known := LookupAuthorizationProfile(value.Profile.Product)
+	if !known {
+		return nil, ErrInvalidAccessKeySignature
+	}
+	return EncodeResolveAccessKeySubjectRequestForProfile(value, profile)
+}
+
+// EncodeResolveAccessKeySubjectRequestForProfile encodes one signed subject
+// request against the exact Profile supplied by its product integration.
+func EncodeResolveAccessKeySubjectRequestForProfile(value ResolveAccessKeySubjectRequest, profile AuthorizationProfile) ([]byte, error) {
+	if ValidateResolveAccessKeySubjectRequestForProfile(value, profile) != nil {
 		return nil, ErrInvalidAccessKeySignature
 	}
 	signed, err := EncodeAccessKeySignedRequest(value.SignedRequest)
@@ -324,6 +456,27 @@ func EncodeResolveAccessKeySubjectRequest(value ResolveAccessKeySubjectRequest) 
 }
 
 func DecodeResolveAccessKeySubjectRequest(reader io.Reader) (ResolveAccessKeySubjectRequest, error) {
+	value, err := DecodeUnresolvedAccessKeySubjectRequest(reader)
+	if err != nil || ValidateResolveAccessKeySubjectRequest(value) != nil {
+		return ResolveAccessKeySubjectRequest{}, ErrInvalidAccessKeySignature
+	}
+	return value, nil
+}
+
+// DecodeResolveAccessKeySubjectRequestForProfile strictly decodes and binds
+// one signed subject request to the exact supplied Profile.
+func DecodeResolveAccessKeySubjectRequestForProfile(reader io.Reader, profile AuthorizationProfile) (ResolveAccessKeySubjectRequest, error) {
+	value, err := DecodeUnresolvedAccessKeySubjectRequest(reader)
+	if err != nil || ValidateResolveAccessKeySubjectRequestForProfile(value, profile) != nil {
+		return ResolveAccessKeySubjectRequest{}, ErrInvalidAccessKeySignature
+	}
+	return value, nil
+}
+
+// DecodeUnresolvedAccessKeySubjectRequest is the strict IAM ingress decoder
+// used before transaction-local Profile resolution. Callers must not resolve a
+// subject until exact validation.
+func DecodeUnresolvedAccessKeySubjectRequest(reader io.Reader) (ResolveAccessKeySubjectRequest, error) {
 	var wire struct {
 		Profile       AuthorizationProfileReference `json:"profile"`
 		SignedRequest json.RawMessage               `json:"signedRequest"`
@@ -334,16 +487,25 @@ func DecodeResolveAccessKeySubjectRequest(reader io.Reader) (ResolveAccessKeySub
 	defer clear(wire.SignedRequest)
 	signed, err := DecodeAccessKeySignedRequest(bytes.NewReader(wire.SignedRequest))
 	value := ResolveAccessKeySubjectRequest{Profile: wire.Profile, SignedRequest: signed}
-	if err != nil || ValidateResolveAccessKeySubjectRequest(value) != nil {
+	if err != nil || ValidateUnresolvedAccessKeySubjectRequest(value) != nil {
 		return ResolveAccessKeySubjectRequest{}, ErrInvalidAccessKeySignature
 	}
 	return value, nil
 }
 
 func ValidateAccessKeySubjectContext(value AccessKeySubjectContext) error {
-	source, known := sourceProfileCommitments[value.Profile.Product]
-	if value.APIVersion != APIVersion || value.Kind != "AccessKeySubjectContext" || !known ||
-		value.Profile != source.reference || ValidateID("tenantId", string(value.TenantID)) != nil ||
+	profile, known := LookupAuthorizationProfile(value.Profile.Product)
+	if !known {
+		return ErrInvalidAccessKeySignature
+	}
+	return ValidateAccessKeySubjectContextForProfile(value, profile)
+}
+
+// ValidateAccessKeySubjectContextForProfile validates a resolved AccessKey
+// subject against the exact Profile used by the authorization transaction.
+func ValidateAccessKeySubjectContextForProfile(value AccessKeySubjectContext, profile AuthorizationProfile) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKeySubjectContext" ||
+		CheckAuthorizationProfileReference(profile, value.Profile) != nil || ValidateID("tenantId", string(value.TenantID)) != nil ||
 		ValidateSubject(value.Subject) != nil || value.Subject.Type != SubjectUser || value.Subject.AccessKeyID == "" ||
 		ValidateDigest("signedRequestDigest", value.SignedRequestDigest) != nil {
 		return ErrInvalidAccessKeySignature
@@ -352,7 +514,17 @@ func ValidateAccessKeySubjectContext(value AccessKeySubjectContext) error {
 }
 
 func CheckAccessKeySubjectContextForRequest(value AccessKeySubjectContext, request ResolveAccessKeySubjectRequest) error {
-	if ValidateResolveAccessKeySubjectRequest(request) != nil || ValidateAccessKeySubjectContext(value) != nil ||
+	profile, known := LookupAuthorizationProfile(request.Profile.Product)
+	if !known {
+		return ErrInvalidAccessKeySignature
+	}
+	return CheckAccessKeySubjectContextForProfileAndRequest(value, request, profile)
+}
+
+// CheckAccessKeySubjectContextForProfileAndRequest binds a resolved subject to
+// one signed request and the exact Profile used by the transaction.
+func CheckAccessKeySubjectContextForProfileAndRequest(value AccessKeySubjectContext, request ResolveAccessKeySubjectRequest, profile AuthorizationProfile) error {
+	if ValidateResolveAccessKeySubjectRequestForProfile(request, profile) != nil || ValidateAccessKeySubjectContextForProfile(value, profile) != nil ||
 		value.Profile != request.Profile || value.Subject.AccessKeyID != request.SignedRequest.Parameters.AccessKeyID {
 		return ErrInvalidAccessKeySignature
 	}
@@ -364,7 +536,20 @@ func CheckAccessKeySubjectContextForRequest(value AccessKeySubjectContext, reque
 }
 
 func ValidateAccessKeyAuthorization(value AccessKeyAuthorization) error {
-	if value.APIVersion != APIVersion || value.Kind != "AccessKeyAuthorization" || ValidateAuthorizationDecision(value.Decision) != nil ||
+	if value.Decision.Profile == nil {
+		return ErrInvalidAccessKeySignature
+	}
+	profile, known := LookupAuthorizationProfile(value.Decision.Profile.Product)
+	if !known {
+		return ErrInvalidAccessKeySignature
+	}
+	return ValidateAccessKeyAuthorizationForProfile(value, profile)
+}
+
+// ValidateAccessKeyAuthorizationForProfile validates a signed authorization
+// result against the exact Profile used by the transaction.
+func ValidateAccessKeyAuthorizationForProfile(value AccessKeyAuthorization, profile AuthorizationProfile) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKeyAuthorization" || ValidateAuthorizationDecisionForProfile(value.Decision, profile) != nil ||
 		ValidateDigest("signedRequestDigest", value.SignedRequestDigest) != nil {
 		return ErrInvalidAccessKeySignature
 	}
@@ -383,9 +568,32 @@ func DecodeAccessKeyAuthorization(reader io.Reader) (AccessKeyAuthorization, err
 	return result, nil
 }
 
+// DecodeAccessKeyAuthorizationForProfile strictly decodes a signed result
+// against the exact Profile supplied by its product integration.
+func DecodeAccessKeyAuthorizationForProfile(reader io.Reader, profile AuthorizationProfile) (AccessKeyAuthorization, error) {
+	var result AccessKeyAuthorization
+	if contractjson.DecodeObject(reader, MaxRequestBytes, &result) != nil || ValidateAccessKeyAuthorizationForProfile(result, profile) != nil {
+		return AccessKeyAuthorization{}, ErrInvalidAccessKeySignature
+	}
+	return result, nil
+}
+
 func ValidateAccessKeyListAuthorization(value AccessKeyListAuthorization) error {
+	if value.Collection.Profile == nil {
+		return ErrInvalidAccessKeySignature
+	}
+	profile, known := LookupAuthorizationProfile(value.Collection.Profile.Product)
+	if !known {
+		return ErrInvalidAccessKeySignature
+	}
+	return ValidateAccessKeyListAuthorizationForProfile(value, profile)
+}
+
+// ValidateAccessKeyListAuthorizationForProfile validates a signed list result
+// against the exact Profile used by the transaction.
+func ValidateAccessKeyListAuthorizationForProfile(value AccessKeyListAuthorization, profile AuthorizationProfile) error {
 	if value.APIVersion != APIVersion || value.Kind != "AccessKeyListAuthorization" ||
-		ValidateAuthorizationDecision(value.Collection) != nil ||
+		ValidateAuthorizationDecisionForProfile(value.Collection, profile) != nil ||
 		ValidateDigest("signedRequestDigest", value.SignedRequestDigest) != nil ||
 		value.Instances == nil || len(value.Instances) > MaxAuthorizationBatchItems {
 		return ErrInvalidAccessKeySignature
@@ -406,7 +614,7 @@ func ValidateAccessKeyListAuthorization(value AccessKeyListAuthorization) error 
 	seenRequests := make(map[string]bool, len(value.Instances)+1)
 	seenRequests[value.Collection.RequestID] = true
 	for _, decision := range value.Instances {
-		if ValidateAuthorizationDecision(decision) != nil || decision.Profile == nil ||
+		if ValidateAuthorizationDecisionForProfile(decision, profile) != nil || decision.Profile == nil ||
 			*decision.Profile != *value.Collection.Profile || decision.Action != value.Collection.Action ||
 			decision.Resource.Kind != value.Collection.Resource.Kind || decision.ResourceMode != AuthorizationResourceInstance ||
 			decision.CollectionUsage != "" || decision.CorrelationID != value.Collection.CorrelationID ||
@@ -431,11 +639,31 @@ func DecodeAccessKeyListAuthorization(reader io.Reader) (AccessKeyListAuthorizat
 	return result, nil
 }
 
+// DecodeAccessKeyListAuthorizationForProfile strictly decodes a signed list
+// result against the exact Profile supplied by its product integration.
+func DecodeAccessKeyListAuthorizationForProfile(reader io.Reader, profile AuthorizationProfile) (AccessKeyListAuthorization, error) {
+	var result AccessKeyListAuthorization
+	if contractjson.DecodeObject(reader, MaxRequestBytes, &result) != nil || ValidateAccessKeyListAuthorizationForProfile(result, profile) != nil {
+		return AccessKeyListAuthorization{}, ErrInvalidAccessKeySignature
+	}
+	return result, nil
+}
+
 // The actual product PEP compares the once-only result to the request it sent.
 // A digest match is not permission to cache or replay this response.
 func CheckAccessKeyAuthorizationForRequest(value AccessKeyAuthorization, request AccessKeyAuthorizationRequest) error {
-	if ValidateAccessKeyAuthorizationRequest(request) != nil || ValidateAccessKeyAuthorization(value) != nil ||
-		CheckAuthorizationDecisionForRequest(value.Decision, request.Authorization) != nil {
+	profile, known := LookupAuthorizationProfile(request.Authorization.Profile.Product)
+	if !known {
+		return ErrInvalidAccessKeySignature
+	}
+	return CheckAccessKeyAuthorizationForProfileAndRequest(value, request, profile)
+}
+
+// CheckAccessKeyAuthorizationForProfileAndRequest binds a signed result to one
+// request and the exact Profile used by the transaction.
+func CheckAccessKeyAuthorizationForProfileAndRequest(value AccessKeyAuthorization, request AccessKeyAuthorizationRequest, profile AuthorizationProfile) error {
+	if ValidateAccessKeyAuthorizationRequestForProfile(request, profile) != nil || ValidateAccessKeyAuthorizationForProfile(value, profile) != nil ||
+		CheckAuthorizationDecisionForProfileAndRequest(value.Decision, request.Authorization, profile) != nil {
 		return ErrInvalidAccessKeySignature
 	}
 	digest, err := AccessKeySignedRequestDigest(request.SignedRequest)
@@ -451,8 +679,18 @@ func CheckAccessKeyAuthorizationForRequest(value AccessKeyAuthorization, request
 // collection returns no per-instance decisions and therefore reveals nothing
 // from the product-owned candidate set.
 func CheckAccessKeyListAuthorizationForRequest(value AccessKeyListAuthorization, request AccessKeyListAuthorizationRequest) error {
-	if ValidateAccessKeyListAuthorizationRequest(request) != nil || ValidateAccessKeyListAuthorization(value) != nil ||
-		CheckAuthorizationDecisionForRequest(value.Collection, request.Collection) != nil {
+	profile, known := LookupAuthorizationProfile(request.Collection.Profile.Product)
+	if !known {
+		return ErrInvalidAccessKeySignature
+	}
+	return CheckAccessKeyListAuthorizationForProfileAndRequest(value, request, profile)
+}
+
+// CheckAccessKeyListAuthorizationForProfileAndRequest binds a signed list
+// result to one candidate page and the exact Profile used by the transaction.
+func CheckAccessKeyListAuthorizationForProfileAndRequest(value AccessKeyListAuthorization, request AccessKeyListAuthorizationRequest, profile AuthorizationProfile) error {
+	if ValidateAccessKeyListAuthorizationRequestForProfile(request, profile) != nil || ValidateAccessKeyListAuthorizationForProfile(value, profile) != nil ||
+		CheckAuthorizationDecisionForProfileAndRequest(value.Collection, request.Collection, profile) != nil {
 		return ErrInvalidAccessKeySignature
 	}
 	digest, err := AccessKeySignedRequestDigest(request.SignedRequest)
@@ -467,7 +705,7 @@ func CheckAccessKeyListAuthorizationForRequest(value AccessKeyListAuthorization,
 		return ErrInvalidAccessKeySignature
 	}
 	for index := range request.Instances {
-		if CheckAuthorizationDecisionForRequest(value.Instances[index], request.Instances[index]) != nil {
+		if CheckAuthorizationDecisionForProfileAndRequest(value.Instances[index], request.Instances[index], profile) != nil {
 			return ErrInvalidAccessKeySignature
 		}
 	}
