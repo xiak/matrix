@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -2487,7 +2488,8 @@ func TestAccessKeyManagementUsesAnExplicitNewUserOnlyProfile(t *testing.T) {
 func TestAccessKeyCreationSecretIsNotAReplayOrDeletionResult(t *testing.T) {
 	now := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
 	key := AccessKey{APIVersion: APIVersion, Kind: "AccessKey", ID: "key-a", AccountID: "account-a", UserID: "user-a",
-		Status: AccessKeyEnabled, NetworkRestrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+		Status: AccessKeyEnabled, CredentialState: AccessKeyCredentialCurrent,
+		NetworkRestrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
 	secret, err := NewSecret("mak1.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
 	if err != nil {
 		t.Fatal(err)
@@ -8813,6 +8815,7 @@ func accountSecurityReportFixture() AccountSecurityReport {
 				LastPasswordLogin: SecurityReportTimeObservation{State: SecurityReportNotObservedInRetainedIAMState}},
 		},
 		AccessKeys: []SecurityReportAccessKey{{ID: "key-one", UserID: "user-one", Status: AccessKeyDisabled,
+			CredentialState:     AccessKeyCredentialCurrent,
 			NetworkRestrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"198.51.100.0/24"}}, ResourceVersion: 3,
 			CreatedAt: observed.Add(-12 * time.Hour), LastAuthorization: &AccessKeyAuthorizationObservation{EvaluatedAt: observed.Add(-time.Minute),
 				Allowed: false, Product: ProductPaaS, Action: ActionPaaSApplicationRead, SourceIP: "203.0.113.8"}}}}
@@ -8832,7 +8835,27 @@ func TestAccountSecurityReportContractIsBoundedAndExplicit(t *testing.T) {
 	csvDocument, csvDigest, err := EncodeAccountSecurityReportCSV(report)
 	if err != nil || csvDigest != report.Metadata.CSVContentDigest || bytes.Contains(csvDocument, []byte("=not exported")) ||
 		bytes.Count(csvDocument, []byte("\n")) != int(report.Metadata.RowCount)+1 {
-		t.Fatal("CSV v1 is not the exact bounded non-free-text report representation")
+		t.Fatal("CSV v2 is not the exact bounded non-free-text report representation")
+	}
+	records, err := csv.NewReader(bytes.NewReader(csvDocument)).ReadAll()
+	if err != nil || len(records) != int(report.Metadata.RowCount)+1 {
+		t.Fatal("CSV v2 cannot be parsed as its exact bounded representation")
+	}
+	credentialStateColumn := slices.Index(records[0], "credential_state")
+	if credentialStateColumn < 0 {
+		t.Fatal("CSV v2 omitted the credential-state column")
+	}
+	credentialStateFound := false
+	for _, row := range records[1:] {
+		if len(row) != len(records[0]) {
+			t.Fatal("CSV v2 row does not match its header")
+		}
+		if row[0] == "ACCESS_KEY" && row[1] == string(report.AccessKeys[0].ID) {
+			credentialStateFound = row[credentialStateColumn] == string(AccessKeyCredentialCurrent)
+		}
+	}
+	if !credentialStateFound {
+		t.Fatal("CSV v2 did not preserve the AccessKey credential state")
 	}
 	coverage := SecurityReportCoverageContract()
 	coverage[0].State = SecurityReportCoverageNotIncluded
@@ -8843,6 +8866,8 @@ func TestAccountSecurityReportContractIsBoundedAndExplicit(t *testing.T) {
 		"no root":                   func(v *AccountSecurityReport) { v.Users[0].Root = false },
 		"two roots":                 func(v *AccountSecurityReport) { v.Users[1].Root = true },
 		"cross user key":            func(v *AccountSecurityReport) { v.AccessKeys[0].UserID = "other-user" },
+		"missing credential state":  func(v *AccountSecurityReport) { v.AccessKeys[0].CredentialState = "" },
+		"unknown credential state":  func(v *AccountSecurityReport) { v.AccessKeys[0].CredentialState = "UNKNOWN" },
 		"unordered users":           func(v *AccountSecurityReport) { v.Users[0], v.Users[1] = v.Users[1], v.Users[0] },
 		"invented unknown revision": func(v *AccountSecurityReport) { v.Users[1].MFA.FactorRevision = 1 },
 		"login after snapshot": func(v *AccountSecurityReport) {
@@ -8864,9 +8889,25 @@ func TestAccountSecurityReportContractIsBoundedAndExplicit(t *testing.T) {
 			}
 		})
 	}
-	if ValidateCreateAccountSecurityReportRequest(CreateAccountSecurityReportRequest{FormatVersion: 2, RequestID: "report-request-one"}) == nil ||
+	if ValidateCreateAccountSecurityReportRequest(CreateAccountSecurityReportRequest{FormatVersion: 3, RequestID: "report-request-one"}) == nil ||
 		ValidateCreateAccountSecurityReportResponse(CreateAccountSecurityReportResponse{Outcome: "PENDING", Metadata: report.Metadata}) == nil {
 		t.Fatal("open-ended report format or async state was accepted")
+	}
+}
+
+func TestAccountSecurityReportV1RemainsReadableWithoutInventingCredentialState(t *testing.T) {
+	report := accountSecurityReportFixture()
+	report.Metadata.FormatVersion = securityReportFormatVersionV1
+	report.AccessKeys[0].CredentialState = ""
+	_, report.Metadata.DocumentDigest, _ = CanonicalizeAccountSecurityReportDocument(report)
+	csvDocument, csvDigest, err := EncodeAccountSecurityReportCSV(report)
+	report.Metadata.CSVContentDigest, report.Metadata.CSVBytes = csvDigest, uint32(len(csvDocument))
+	if err != nil || ValidateAccountSecurityReport(report) != nil || bytes.Contains(csvDocument, []byte("credential_state")) {
+		t.Fatal("retained v1 report was rewritten or rejected")
+	}
+	report.AccessKeys[0].CredentialState = AccessKeyCredentialCurrent
+	if ValidateAccountSecurityReport(report) == nil {
+		t.Fatal("v1 report invented a credential state that was never observed")
 	}
 }
 

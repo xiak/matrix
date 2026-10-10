@@ -21467,6 +21467,44 @@ func TestIAMSecurityReportPostgres(t *testing.T) {
 		(len(keySecret) > 0 && bytes.Contains(download.Body.Bytes(), keySecret)) {
 		t.Fatal("security report download contract differs or exposes secret material")
 	}
+	var storedReportValid bool
+	if err := database.QueryRow(ctx, `SELECT iam.valid_security_report(
+		report_document,canonical_document,csv_document,tenant_id,report_id)
+		FROM iam.security_report_contents WHERE tenant_id=$1 AND report_id=$2`,
+		document.Organization.ID, applied.Metadata.ID).Scan(&storedReportValid); err != nil || !storedReportValid {
+		t.Fatal("stored format-v2 security report does not satisfy its database contract", err)
+	}
+	for name, removeState := range map[string]bool{"missing": true, "json-null": false} {
+		t.Run("format-v2-report-rejects-"+name+"-credential-state", func(t *testing.T) {
+			var counterfeitAccepted bool
+			err := database.QueryRow(ctx, `WITH stored AS (
+				SELECT report_document,csv_document FROM iam.security_report_contents
+				WHERE tenant_id=$1 AND report_id=$2
+			),mutated AS (
+				SELECT CASE WHEN $3::boolean THEN report_document#-'{accessKeys,0,credentialState}'
+				  ELSE jsonb_set(report_document,'{accessKeys,0,credentialState}','null'::jsonb,false) END AS document,
+				  csv_document FROM stored
+			),canonical AS (
+				SELECT document,csv_document,jsonb_build_object(
+				  'accountId',document->'metadata'->'accountId',
+				  'formatVersion',document->'metadata'->'formatVersion',
+				  'observedAt',document->'metadata'->'observedAt',
+				  'expiresAt',document->'metadata'->'expiresAt',
+				  'accountSecuritySettingsVersion',document->'accountSecuritySettingsVersion',
+				  'coverage',document->'coverage','users',document->'users','accessKeys',document->'accessKeys')::text AS body
+				FROM mutated
+			),candidate AS (
+				SELECT jsonb_set(document,'{metadata,documentDigest}',
+				  to_jsonb(('sha256:'||encode(sha256(convert_to(body,'UTF8')),'hex'))::text),false) AS document,
+				  body,csv_document FROM canonical
+			)
+			SELECT iam.valid_security_report(document,body,csv_document,$1,$2) FROM candidate`,
+				document.Organization.ID, applied.Metadata.ID, removeState).Scan(&counterfeitAccepted)
+			if err != nil || counterfeitAccepted {
+				t.Fatal("format-v2 report accepted an absent credential state", err)
+			}
+		})
+	}
 	var currentManager iamv1.UserAccess
 	call(http.MethodGet, "/v1/users/"+string(manager.ID), root, nil, http.StatusOK, &currentManager)
 	var renamedManager iamv1.User
@@ -23758,6 +23796,32 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	disable := iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: "key-disable-first"}
 	var disabled iamv1.SetAccessKeyStatusResponse
 	call(handler, http.MethodPost, firstPath+":set-status", managerBearer, disable, http.StatusOK, &disabled)
+	for name, removeState := range map[string]bool{"missing": true, "json-null": false} {
+		t.Run("new-intent-rejects-"+name+"-credential-state", func(t *testing.T) {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal("begin counterfeit AccessKey intent", err)
+			}
+			_, rejected := tx.Exec(ctx, `INSERT INTO iam.access_key_intents(
+				tenant_id,actor_id,request_id,action_name,user_id,key_id,request_digest,result,decision_id,event_id,completed_at)
+				SELECT tenant_id,actor_id,$2,action_name,user_id,key_id,$3,
+				  CASE WHEN $4::boolean THEN result-'credentialState'
+				    ELSE jsonb_set(result,'{credentialState}','null'::jsonb,false) END,
+				  decision_id,event_id,completed_at
+				FROM iam.access_key_intents
+				WHERE tenant_id=$1 AND request_id='key-disable-first'`,
+				document.Organization.ID, "counterfeit-key-state-"+name,
+				"sha256:"+strings.Repeat("d", 64), removeState)
+			var failure *pgconn.PgError
+			if !errors.As(rejected, &failure) || failure.Code != "23514" {
+				_ = tx.Rollback(ctx)
+				t.Fatalf("counterfeit AccessKey intent result=%v want SQLSTATE 23514", rejected)
+			}
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatal("rollback counterfeit AccessKey intent", err)
+			}
+		})
+	}
 	resolvedKey = lookupSigningKey(first.Key.ID, document.InstallationID, "paas", true)
 	if resolvedKey.Subject.Key.Status != iamv1.AccessKeyDisabled || resolvedKey.Subject.Key.ResourceVersion != 2 {
 		t.Fatal("disabled key was hidden instead of available for MAC-verified Deny")

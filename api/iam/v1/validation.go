@@ -1616,6 +1616,7 @@ func ValidateUser(value User) error {
 func ValidateAccessKey(value AccessKey) error {
 	if value.APIVersion != APIVersion || value.Kind != "AccessKey" ||
 		(value.Status != AccessKeyEnabled && value.Status != AccessKeyDisabled) ||
+		(value.CredentialState != AccessKeyCredentialCurrent && value.CredentialState != AccessKeyCredentialRecoveryFenced) ||
 		(value.ResourceVersion == 1 && (value.Status != AccessKeyEnabled || !value.CreatedAt.Equal(value.UpdatedAt))) {
 		return errors.New("access key metadata is invalid")
 	}

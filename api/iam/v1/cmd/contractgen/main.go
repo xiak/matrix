@@ -579,6 +579,7 @@ func enumSchemas() map[string][]string {
 		"PasswordExpiryMode":              {string(iamv1.PasswordExpiryChange), string(iamv1.PasswordExpiryAdminReset)},
 		"RoleStatus":                      {string(iamv1.RoleActive), string(iamv1.RoleDisabled)},
 		"AccessKeyStatus":                 {string(iamv1.AccessKeyEnabled), string(iamv1.AccessKeyDisabled)},
+		"AccessKeyCredentialState":        {string(iamv1.AccessKeyCredentialCurrent), string(iamv1.AccessKeyCredentialRecoveryFenced)},
 		"SecurityReportObservationState":  {string(iamv1.SecurityReportObserved), string(iamv1.SecurityReportNotObservedInRetainedIAMState), string(iamv1.SecurityReportUnknown)},
 		"SecurityReportCoverageState":     {string(iamv1.SecurityReportCoverageComplete), string(iamv1.SecurityReportCoverageNotIncluded)},
 		"AccessAnalyzerType":              {string(iamv1.AccessAnalyzerUnusedAccess)},
@@ -934,7 +935,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		return object{"type": "integer", "minimum": 0, "maximum": uint64(9007199254740991)}
 	}
 	if (owner == "AccountSecurityReportMetadata" || owner == "CreateAccountSecurityReportRequest") && jsonName == "formatVersion" {
-		return object{"type": "integer", "const": iamv1.SecurityReportFormatVersion}
+		return object{"type": "integer", "enum": []any{1, iamv1.SecurityReportFormatVersion}}
 	}
 	if owner == "AccountSecurityReportMetadata" {
 		switch jsonName {
@@ -1465,7 +1466,18 @@ func applySemanticOverlays(schemas object) {
 	}
 	schemas["AccountSecurityReportMetadata"].(object)["description"] = "Immutable current-account IAM report identity, exact seven-day retention, bounded counts and digests. It is not a live authorization or cross-product waterline."
 	schemas["AccountSecurityReport"].(object)["description"] = "One immutable IAM-only snapshot. UNKNOWN and NOT_INCLUDED are security outcomes, not empty success or permission to disable resources."
-	schemas["CreateAccountSecurityReportRequest"].(object)["description"] = "One current-account report intent. No Account, User, product, time range, data source or storage selector is accepted."
+	schemas["AccountSecurityReport"].(object)["allOf"] = []any{object{
+		"if": object{"properties": object{"metadata": object{"properties": object{"formatVersion": object{"const": 1}}}}},
+		"then": object{"properties": object{"accessKeys": object{"items": object{
+			"properties": object{"credentialState": false},
+		}}}},
+		"else": object{"properties": object{"accessKeys": object{"items": object{
+			"required": []string{"credentialState"},
+		}}}},
+	}}
+	schemas["AccessKey"].(object)["properties"].(object)["credentialState"].(object)["description"] = "Credential lineage state. CURRENT means only that supported recovery has not fenced this key; it never proves current authorization or availability. RECOVERY_FENCED is permanent for this key, and enabling the key does not clear it."
+	schemas["SecurityReportAccessKey"].(object)["properties"].(object)["credentialState"].(object)["description"] = "Credential lineage observed by a format-2 report. Its omission from a retained format-1 report means unrecorded, never CURRENT."
+	schemas["CreateAccountSecurityReportRequest"].(object)["description"] = "One current-account report intent. Format 2 creates a new report; format 1 is accepted only for exact replay of a retained completion and never creates a new report. No Account, User, product, time range, data source or storage selector is accepted."
 	schemas["CreateAccountSecurityReportResponse"].(object)["description"] = "APPLIED or exact EQUAL_REPLAY metadata for the same immutable report; neither outcome is a fresh observation or download permit."
 	// Condition keys have a closed set of IAM-owned facts plus two disjoint,
 	// normalized namespaces. An exact key is still usable only when the owning

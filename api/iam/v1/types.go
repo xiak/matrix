@@ -681,6 +681,7 @@ type AccessKey struct {
 	AccountID           AccountID                    `json:"accountId"`
 	UserID              PrincipalID                  `json:"userId"`
 	Status              AccessKeyStatus              `json:"status"`
+	CredentialState     AccessKeyCredentialState     `json:"credentialState"`
 	NetworkRestrictions AccessKeyNetworkRestrictions `json:"networkRestrictions"`
 	ResourceVersion     uint64                       `json:"resourceVersion"`
 	CreatedAt           time.Time                    `json:"createdAt"`

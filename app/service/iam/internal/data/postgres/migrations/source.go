@@ -88,6 +88,10 @@ var (
 	accessKeyListAuthorizationUpSQL string
 	//go:embed 000022_access_key_list_authorization/verify.sql
 	accessKeyListAuthorizationVerifySQL string
+	//go:embed 000023_access_key_credential_state/up.sql
+	accessKeyCredentialStateUpSQL string
+	//go:embed 000023_access_key_credential_state/verify.sql
+	accessKeyCredentialStateVerifySQL string
 )
 
 func Source() postgresmigration.Source {
@@ -111,12 +115,12 @@ func Source() postgresmigration.Source {
 	templateLiteral := "'" + strings.ReplaceAll(templateSeeds, "'", "''") + "'::jsonb"
 	serviceRolesSQL := strings.Replace(serviceRolesUpSQL, templatePlaceholder, templateLiteral, 1)
 	serviceRolesVerification := strings.Replace(serviceRolesVerifySQL, templatePlaceholder, templateLiteral, 1)
-	verification := strings.Replace(authorityVerifySQL, profilePlaceholder, profileLiteral, 1) + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL + "\n" + groupsVerifySQL + "\n" + rolesVerifySQL + "\n" + accessKeysVerifySQL + "\n" + totpVerifySQL + "\n" + securityMailVerifySQL + "\n" + authenticationRecoveryVerifySQL + "\n" + authenticationRecoveryInspectionVerifySQL + "\n" + serviceRolesVerification + "\n" + securityReportsVerifySQL + "\n" + accessAnalyzersVerifySQL + "\n" + accessAnalysisVerifySQL + "\n" + accessDispositionVerifySQL + "\n" + policyAttachmentChangesVerifySQL + "\n" + accessKeyListAuthorizationVerifySQL
+	verification := strings.Replace(authorityVerifySQL, profilePlaceholder, profileLiteral, 1) + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL + "\n" + groupsVerifySQL + "\n" + rolesVerifySQL + "\n" + accessKeysVerifySQL + "\n" + totpVerifySQL + "\n" + securityMailVerifySQL + "\n" + authenticationRecoveryVerifySQL + "\n" + authenticationRecoveryInspectionVerifySQL + "\n" + serviceRolesVerification + "\n" + securityReportsVerifySQL + "\n" + accessAnalyzersVerifySQL + "\n" + accessAnalysisVerifySQL + "\n" + accessDispositionVerifySQL + "\n" + policyAttachmentChangesVerifySQL + "\n" + accessKeyListAuthorizationVerifySQL + "\n" + accessKeyCredentialStateVerifySQL
 	return postgresmigration.Source{
 		Context: "iam", BootstrapSQL: bootstrapSQL,
 		// IAM owns one commit boundary across schema, retained-state changes and
 		// its final invariant verification. A late failure exposes none of them.
-		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authoritySQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + rolesUpSQL + "\n" + accessKeysUpSQL + "\n" + totpUpSQL + "\n" + securityMailUpSQL + "\n" + authenticationRecoveryUpSQL + "\n" + authenticationRecoveryInspectionUpSQL + "\n" + serviceRolesSQL + "\n" + securityReportsUpSQL + "\n" + accessAnalyzersUpSQL + "\n" + accessAnalysisUpSQL + "\n" + accessDispositionUpSQL + "\n" + policyAttachmentChangesUpSQL + "\n" + accessKeyListAuthorizationUpSQL + "\n" + verification + "\nCOMMIT;",
+		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authoritySQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + rolesUpSQL + "\n" + accessKeysUpSQL + "\n" + totpUpSQL + "\n" + securityMailUpSQL + "\n" + authenticationRecoveryUpSQL + "\n" + authenticationRecoveryInspectionUpSQL + "\n" + serviceRolesSQL + "\n" + securityReportsUpSQL + "\n" + accessAnalyzersUpSQL + "\n" + accessAnalysisUpSQL + "\n" + accessDispositionUpSQL + "\n" + policyAttachmentChangesUpSQL + "\n" + accessKeyListAuthorizationUpSQL + "\n" + accessKeyCredentialStateUpSQL + "\n" + verification + "\nCOMMIT;",
 		VerifySQL:     verification,
 		ExecutionRole: "matrix_iam_migrator",
 	}

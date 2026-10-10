@@ -719,6 +719,10 @@
           "createdAt": {
             "$ref": "#/components/schemas/Timestamp"
           },
+          "credentialState": {
+            "$ref": "#/components/schemas/AccessKeyCredentialState",
+            "description": "Credential lineage state. CURRENT means only that supported recovery has not fenced this key; it never proves current authorization or availability. RECOVERY_FENCED is permanent for this key, and enabling the key does not clear it."
+          },
           "id": {
             "$ref": "#/components/schemas/ID"
           },
@@ -747,6 +751,7 @@
           "accountId",
           "apiVersion",
           "createdAt",
+          "credentialState",
           "id",
           "kind",
           "networkRestrictions",
@@ -960,6 +965,13 @@
           "signedRequest"
         ],
         "type": "object"
+      },
+      "AccessKeyCredentialState": {
+        "enum": [
+          "CURRENT",
+          "RECOVERY_FENCED"
+        ],
+        "type": "string"
       },
       "AccessKeyDeletion": {
         "additionalProperties": false,
@@ -1683,6 +1695,43 @@
       },
       "AccountSecurityReport": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "else": {
+              "properties": {
+                "accessKeys": {
+                  "items": {
+                    "required": [
+                      "credentialState"
+                    ]
+                  }
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "metadata": {
+                  "properties": {
+                    "formatVersion": {
+                      "const": 1
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "accessKeys": {
+                  "items": {
+                    "properties": {
+                      "credentialState": false
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
         "description": "One immutable IAM-only snapshot. UNKNOWN and NOT_INCLUDED are security outcomes, not empty success or permission to disable resources.",
         "properties": {
           "accessKeys": {
@@ -1846,7 +1895,10 @@
             "$ref": "#/components/schemas/Timestamp"
           },
           "formatVersion": {
-            "const": 1,
+            "enum": [
+              1,
+              2
+            ],
             "type": "integer"
           },
           "id": {
@@ -17801,10 +17853,13 @@
       },
       "CreateAccountSecurityReportRequest": {
         "additionalProperties": false,
-        "description": "One current-account report intent. No Account, User, product, time range, data source or storage selector is accepted.",
+        "description": "One current-account report intent. Format 2 creates a new report; format 1 is accepted only for exact replay of a retained completion and never creates a new report. No Account, User, product, time range, data source or storage selector is accepted.",
         "properties": {
           "formatVersion": {
-            "const": 1,
+            "enum": [
+              1,
+              2
+            ],
             "type": "integer"
           },
           "requestId": {
@@ -38053,6 +38108,10 @@
         "properties": {
           "createdAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "credentialState": {
+            "$ref": "#/components/schemas/AccessKeyCredentialState",
+            "description": "Credential lineage observed by a format-2 report. Its omission from a retained format-1 report means unrecorded, never CURRENT."
           },
           "id": {
             "$ref": "#/components/schemas/ID"

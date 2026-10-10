@@ -1199,6 +1199,7 @@ func (value *gate) assertRecoveredAccessKeyFenced(
 	if _, err := value.edge.get(ctx, path, bearer, &directory); err != nil ||
 		iamv1.ValidateAccessKeyList(directory) != nil || directory.AccountID != tenant.Account.ID ||
 		directory.UserID != tenant.Child.ID || len(directory.Items) != 1 ||
+		directory.Items[0].Key.CredentialState != iamv1.AccessKeyCredentialRecoveryFenced ||
 		!sameAccessKeyMetadata(directory.Items[0].Key, tenant.AccessKey.Key) {
 		return fail("recovered-access-key-metadata")
 	}
@@ -1223,6 +1224,7 @@ func (value *gate) assertRecoveredAccessKeyFenced(
 	var after iamv1.AccessKeyList
 	if _, err := value.edge.get(ctx, path, bearer, &after); err != nil ||
 		iamv1.ValidateAccessKeyList(after) != nil || len(after.Items) != 1 ||
+		after.Items[0].Key.CredentialState != iamv1.AccessKeyCredentialRecoveryFenced ||
 		!sameAccessKeyMetadata(after.Items[0].Key, tenant.AccessKey.Key) {
 		return fail("recovered-access-key-mutated")
 	}
@@ -1230,6 +1232,9 @@ func (value *gate) assertRecoveredAccessKeyFenced(
 }
 
 func sameAccessKeyMetadata(left, right iamv1.AccessKey) bool {
+	// CredentialState is deliberately excluded: supported recovery changes the
+	// secret lineage projection while retaining the managed AccessKey object.
+	// Callers that cross recovery must assert the expected state explicitly.
 	return left.APIVersion == right.APIVersion && left.Kind == right.Kind && left.ID == right.ID &&
 		left.AccountID == right.AccountID && left.UserID == right.UserID && left.Status == right.Status &&
 		slices.Equal(left.NetworkRestrictions.AllowedSourceCIDRs, right.NetworkRestrictions.AllowedSourceCIDRs) &&
@@ -1277,7 +1282,8 @@ func (value *gate) retireRetainedAccessKey(ctx context.Context) error {
 		iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: tenant.AccessKey.Key.ResourceVersion,
 			Status: iamv1.AccessKeyDisabled, RequestID: "phase1-retained-access-key-disable"},
 		&disabled, http.StatusOK); err != nil || iamv1.ValidateSetAccessKeyStatusResponse(disabled) != nil ||
-		disabled.Key.ID != tenant.AccessKey.Key.ID || disabled.Key.Status != iamv1.AccessKeyDisabled {
+		disabled.Key.ID != tenant.AccessKey.Key.ID || disabled.Key.Status != iamv1.AccessKeyDisabled ||
+		disabled.Key.CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
 		return fail("retained-access-key-retirement-disable")
 	}
 	secret, err := iamv1.NewSecret(string(tenant.AccessKey.Secret))
@@ -1515,6 +1521,7 @@ func validAccessKeyRetention(
 	return err == nil && secret.Present() && iamv1.ValidateAccessKey(retained.Key) == nil &&
 		retained.Key.AccountID == account && retained.Key.UserID == user &&
 		retained.Key.Status == iamv1.AccessKeyEnabled &&
+		retained.Key.CredentialState == iamv1.AccessKeyCredentialCurrent &&
 		slices.Equal(retained.Key.NetworkRestrictions.AllowedSourceCIDRs, []string{"0.0.0.0/0"}) &&
 		iamv1.ValidatePolicyAttachment(grant) == nil && grant.RevokedAt == nil &&
 		grant.AccountID == account && grant.Target.Kind == iamv1.PolicyTargetUser &&

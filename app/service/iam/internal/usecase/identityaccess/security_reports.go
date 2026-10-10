@@ -40,6 +40,9 @@ func (service *Authority) CreateAccountSecurityReport(ctx context.Context, crede
 				}
 				return response, nil
 			}
+			if request.FormatVersion != iamv1.SecurityReportFormatVersion {
+				return iamv1.CreateAccountSecurityReportResponse{}, ErrConflict
+			}
 			if reportID == "" {
 				value, err := service.config.NewID("security-report")
 				if err != nil || iamv1.ValidateID("securityReportId", value) != nil {

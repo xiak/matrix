@@ -10,6 +10,7 @@ type SubjectType string
 type PrincipalStatus string
 type SessionStatus string
 type AccessKeyStatus string
+type AccessKeyCredentialState string
 type Action string
 type ResourceKind string
 type DecisionReason string
@@ -185,10 +186,15 @@ const (
 )
 
 const (
-	AccessKeyEnabled        AccessKeyStatus = "ENABLED"
-	AccessKeyDisabled       AccessKeyStatus = "DISABLED"
-	MaxUserAccessKeys                       = 2
-	MaxAccessKeySourceCIDRs                 = 16
+	AccessKeyEnabled  AccessKeyStatus = "ENABLED"
+	AccessKeyDisabled AccessKeyStatus = "DISABLED"
+	// AccessKeyCredentialCurrent means only that the secret lineage has not
+	// been permanently fenced by a supported authentication recovery. It is
+	// never proof that the key can authenticate a current request.
+	AccessKeyCredentialCurrent        AccessKeyCredentialState = "CURRENT"
+	AccessKeyCredentialRecoveryFenced AccessKeyCredentialState = "RECOVERY_FENCED"
+	MaxUserAccessKeys                                          = 2
+	MaxAccessKeySourceCIDRs                                    = 16
 )
 
 const (

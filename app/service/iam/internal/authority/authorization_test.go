@@ -1168,7 +1168,8 @@ func TestAccessKeyContextHasNoLoginSessionAndRejectsInconsistentAuthority(t *tes
 			RootUserID: "principal-root", InstallationID: user.InstallationID, Policies: user.Policies, Boundary: user.Boundary,
 			AccountSecuritySettingsVersion: 1, AccountNetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
 			Key: iamv1.AccessKey{APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: "access-key-context", AccountID: user.Organization.ID,
-				UserID: user.Principal.ID, Status: iamv1.AccessKeyEnabled, NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, ResourceVersion: 1, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
+				UserID: user.Principal.ID, Status: iamv1.AccessKeyEnabled, CredentialState: iamv1.AccessKeyCredentialCurrent,
+				NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, ResourceVersion: 1, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
 	}
 	request := policyEvaluationRequestForTest(t, iamv1.ActionManagedServiceInstallationRead, iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-key"})
 	if eligible, err := accessKeyEligibility(fixture(), request.NetworkContext, now, now.Unix()); err != nil || !eligible {
@@ -1191,6 +1192,9 @@ func TestAccessKeyContextHasNoLoginSessionAndRejectsInconsistentAuthority(t *tes
 		"root identity":  func(v *AccessKeyContext) { v.RootUserID = v.Principal.ID },
 		"no user grant":  func(v *AccessKeyContext) { v.Policies = nil },
 		"disabled key":   func(v *AccessKeyContext) { v.Key.Status, v.Key.ResourceVersion = iamv1.AccessKeyDisabled, 2 },
+		"recovery-fenced key": func(v *AccessKeyContext) {
+			v.Key.CredentialState = iamv1.AccessKeyCredentialRecoveryFenced
+		},
 		"bounded identity": func(v *AccessKeyContext) {
 			v.Boundary = userBoundaryForTest(authoritySubject(now), policyVersionForTest(t, "key-ceiling", iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceAnyInAuthority, ""))
 		},
@@ -1263,8 +1267,9 @@ func TestAccessKeyNetworkRestrictionsRequireBothAccountAndKeyLayers(t *testing.T
 			RootUserID: "principal-root", InstallationID: user.InstallationID, Policies: user.Policies, Boundary: user.Boundary,
 			AccountSecuritySettingsVersion: 7, AccountNetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
 			Key: iamv1.AccessKey{APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: "access-key-network", AccountID: user.Organization.ID,
-				UserID: user.Principal.ID, Status: iamv1.AccessKeyEnabled, NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
-				ResourceVersion: 3, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
+				UserID: user.Principal.ID, Status: iamv1.AccessKeyEnabled, CredentialState: iamv1.AccessKeyCredentialCurrent,
+				NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+				ResourceVersion:     3, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
 	}
 	network := &iamv1.AuthorizationNetworkContext{SourceIP: "192.0.2.25"}
 	for name, mutate := range map[string]func(*AccessKeyContext){

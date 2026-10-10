@@ -14,6 +14,7 @@
 | IAM-KEY-04 | key 使用时间/结果/安全摘要，失败尝试不泄密 |
 | IAM-KEY-05 | Account 和 key 网络限制有明确组合语义和可信 source IP |
 | IAM-KEY-06 | 长期 key 与 RoleSession credential 分开，停用/删除即时生效 |
+| IAM-KEY-07 | 管理状态与凭据谱系状态分开；受支持恢复永久围栏旧 Secret，读模型和安全报告不得仍把它表示成可用凭据 |
 
 ## 详细设计
 
@@ -353,6 +354,20 @@ APISIX现有六条API路由与UI路由统一删除caller的`Matrix-Subject-Crede
 本切片自身不增加IAM/Audit/PaaS数据库schema；其入口契约现已随当前发布组合推进到IAM81/Audit37/PaaS3、`contractRevision=29`。固定`bcd4e3d308e51957275cf7b2b31dab73726f838a`通过全仓无缓存race/p2（含architecture与authorityprocess）、全仓vet、模块校验及diff检查。相同固定源码由唯一`matrix-release`路径组装并逐包验签为A=`matrix-v0.1.0-iam.r29.19-bcd4e3d308e5`、B=`matrix-v0.1.0-iam.r29.20-bcd4e3d308e5`；任务独立、network-none、2 CPU/4 GiB/PIDs 768的Docker27.5.1经典存储引擎在539.93秒完成安装、失败升级自动回退、B升级、显式回滚和指定备份恢复，外层引擎重启并等待所有平台容器healthy后又以71.08秒完成状态、身份与清理复验。
 
 该真实APISIX路径使用普通租户User及显式key管理权限创建AccessKey，并通过封存origin、可信source IP和产品用途隔离的边缘断言完成签名Application访问；调用方伪造的转发、Matrix边界及断言字段不能替代网关重建值。原key在失败升级、成功升级及显式数据保留回滚后仍可签名。指定受保护备份恢复后，非秘密key元数据继续存在以供审计和显式退休，但原secret被`authentication_recovery_access_key_fences`永久围栏，签名请求返回401；外层引擎重启不复活它，最终管理员仍可禁用、删除该元数据并撤销临时custodian附件。`ENABLED`因此只表达资源状态，不能作为当前认证可用性的证明。该门禁不宣称跨Profile升级、任意历史N-1、宿主root回滚抵抗或LIVE UI已完成。
+
+### 下一纵向切片：恢复围栏的非秘密凭据状态投影
+
+当前管理投影只返回`status=ENABLED|DISABLED`，而受支持备份恢复会永久围栏恢复前的Secret、保留AccessKey非秘密元数据。恢复后出现`ENABLED`但已不能认证的合法状态；只在文档解释这一点仍会让API消费者和UI把资源状态误当凭据可用性。本片不合并两个状态机，而是在`AccessKey`当前读模型增加必填`credentialState`：准确只有`CURRENT`与`RECOVERY_FENCED`。
+
+`CURRENT`只证明该Secret谱系没有被受支持恢复流程写入永久围栏；它不证明Account/User/key状态、forced-change、平台身份保护、网络限制、Policy/Boundary、产品Profile、nonce或业务资源允许当前请求。`RECOVERY_FENCED`证明恢复前Secret永久拒绝；禁用再启用、重启、等值迁移、普通升级/回滚或恢复旧数据库均不能清除。没有清除围栏的北向API、权限或安装旁路，也不暴露commandId、closure digest、围栏时间或其他恢复内部证据。管理员仍可禁用或删除该元数据；要重新获得程序访问，只能按当前权限创建新的AccessKey和新Secret。
+
+当前GET/list以及新完成的create/status/network结果都返回权威状态。等值命令重放继续返回**原完成快照**，不是今天的可用性查询：直接前驱中未携带该字段的不可变意图由原`completed_at`与不可变`fenced_at`在读取时推导当时状态，不改写原结果字节；调用方要判断今天的状态必须重新GET/list。删除结果仍不携带凭据状态。新写入意图必须持久化该字段，直接前驱旧行只作为有证据的只读兼容，不开放缺字段的新写入。
+
+Account安全报告的新生成格式推进到`formatVersion=2`，AccessKey行及CSV新增相同`credentialState`，报告继续是生成时不可变快照。已保存的格式1正文、摘要、CSV与完成回执保持原字节并可在原保留期内读取/下载；格式1行没有该字段，不得回填猜测或解释成`CURRENT`，新建请求只接受格式2。公开OpenAPI因此允许旧安全报告行省略该字段，但格式2验证必须要求准确枚举；普通`AccessKey`当前投影始终要求字段。
+
+最低门禁覆盖：新建key为`CURRENT`；真实恢复后同一key当前读、列表和新安全报告为`RECOVERY_FENCED`且签名401；禁用→启用仍保持围栏；旧create完成重放保持原完成时`CURRENT`，恢复后完成的status/delete前结果准确反映围栏；另一Account同key ID、伪造结果字段、旧格式1报告、格式2缺字段、CSV/JSON摘要、两IAM副本、重启、等值迁移及唯一直接前驱保留数据。围栏状态不是PDP permit，不能用纯JSON或表行断言替代真实签名拒绝。
+
+当前候选已将该状态投影落入原API、authority、PostgreSQL、恢复、报告和签名安装门禁owner，没有增加清围栏入口或第二套凭据模型。2026-10-10在任务自有PostgreSQL18.6上，`TestIAMSecurityReportPostgres`串行race以10.877秒通过格式2正文/CSV及缺失、JSON `null`状态的重摘要攻击；`TestIAMAccessKeyPostgres`以89.600秒通过新意图必填状态、双副本、加密材料、配额和并发矩阵；固定`d2320f5133597bf6388a9faa5393aca2836174d1`的实际IAM81程序到IAM82保留数据门禁以110.090秒通过，围栏前create和围栏后status完成分别安全投影为`CURRENT`/`RECOVERY_FENCED`且旧结果字节不变；三库受支持恢复门禁绑定任务自有PG18工具容器后以170.494秒通过真实签名401、当前读/列表/格式2报告、停用再启用、两authority和重启不复活。第一次恢复复跑因缺少工具容器环境在`pg_dump`启动前失败，不登记为产品门禁成功。相同源码的双IAM/Audit/PaaS/dispatcher真实进程race以253.748秒通过，保留双账号资源、程序签名、撤权、恢复、重启和Audit链；全仓无缓存race、vet、模块校验、OpenAPI稳定生成及Linux amd64/CGO关闭构建通过。当前精确SHA独立CI、格式2实际Excel、LIVE UI和IAM82同Profile签名A/B仍待各自门禁，不能继承IAM81结果或由本地通过提前验收。
 
 ## 验收
 

@@ -18,13 +18,14 @@ type SecurityReportObservationState string
 type SecurityReportCoverageState string
 
 const (
-	SecurityReportFormatVersion uint32 = 1
-	MaxSecurityReportUsers             = 1000
-	MaxSecurityReportAccessKeys        = MaxSecurityReportUsers * MaxUserAccessKeys
-	MaxSecurityReportRows              = 1 + MaxSecurityReportUsers + MaxSecurityReportAccessKeys
-	MaxSecurityReportCSVBytes          = 4 * 1024 * 1024
-	MaxActiveSecurityReports           = 20
-	SecurityReportRetention            = 7 * 24 * time.Hour
+	securityReportFormatVersionV1 uint32 = 1
+	SecurityReportFormatVersion   uint32 = 2
+	MaxSecurityReportUsers               = 1000
+	MaxSecurityReportAccessKeys          = MaxSecurityReportUsers * MaxUserAccessKeys
+	MaxSecurityReportRows                = 1 + MaxSecurityReportUsers + MaxSecurityReportAccessKeys
+	MaxSecurityReportCSVBytes            = 4 * 1024 * 1024
+	MaxActiveSecurityReports             = 20
+	SecurityReportRetention              = 7 * 24 * time.Hour
 
 	SecurityReportObserved                      SecurityReportObservationState = "OBSERVED"
 	SecurityReportNotObservedInRetainedIAMState SecurityReportObservationState = "NOT_OBSERVED_IN_RETAINED_IAM_STATE"
@@ -78,9 +79,11 @@ type SecurityReportUser struct {
 }
 
 type SecurityReportAccessKey struct {
-	ID                  AccessKeyID                        `json:"id"`
-	UserID              PrincipalID                        `json:"userId"`
-	Status              AccessKeyStatus                    `json:"status"`
+	ID     AccessKeyID     `json:"id"`
+	UserID PrincipalID     `json:"userId"`
+	Status AccessKeyStatus `json:"status"`
+	// Empty is retained only when decoding an immutable format-1 report.
+	CredentialState     AccessKeyCredentialState           `json:"credentialState,omitempty"`
 	NetworkRestrictions AccessKeyNetworkRestrictions       `json:"networkRestrictions"`
 	ResourceVersion     uint64                             `json:"resourceVersion"`
 	CreatedAt           time.Time                          `json:"createdAt"`
@@ -182,12 +185,16 @@ func ValidateSecurityReportUser(value SecurityReportUser, observedAt time.Time) 
 	return nil
 }
 
-func ValidateSecurityReportAccessKey(value SecurityReportAccessKey, observedAt time.Time) error {
+func validateSecurityReportAccessKey(value SecurityReportAccessKey, observedAt time.Time, formatVersion uint32) error {
 	if (value.Status != AccessKeyEnabled && value.Status != AccessKeyDisabled) ||
 		ValidateID("securityReport.accessKey.id", string(value.ID)) != nil || ValidateID("securityReport.accessKey.userId", string(value.UserID)) != nil ||
 		ValidateAccessKeyNetworkRestrictions(value.NetworkRestrictions) != nil || validatePositiveVersion(value.ResourceVersion) != nil ||
 		validateTime("securityReport.accessKey.createdAt", value.CreatedAt) != nil || value.CreatedAt.After(observedAt) {
 		return errors.New("security report access key is invalid")
+	}
+	if (formatVersion == securityReportFormatVersionV1 && value.CredentialState != "") ||
+		(formatVersion == SecurityReportFormatVersion && value.CredentialState != AccessKeyCredentialCurrent && value.CredentialState != AccessKeyCredentialRecoveryFenced) {
+		return errors.New("security report access key credential state is invalid")
 	}
 	if value.LastAuthorization != nil {
 		observation := AccessKeyUsageSummary{ObservedAt: observedAt, LastAuthorization: value.LastAuthorization}
@@ -198,8 +205,13 @@ func ValidateSecurityReportAccessKey(value SecurityReportAccessKey, observedAt t
 	return nil
 }
 
+func ValidateSecurityReportAccessKey(value SecurityReportAccessKey, observedAt time.Time) error {
+	return validateSecurityReportAccessKey(value, observedAt, SecurityReportFormatVersion)
+}
+
 func ValidateAccountSecurityReportMetadata(value AccountSecurityReportMetadata) error {
-	if value.APIVersion != APIVersion || value.Kind != "AccountSecurityReportMetadata" || value.FormatVersion != SecurityReportFormatVersion ||
+	if value.APIVersion != APIVersion || value.Kind != "AccountSecurityReportMetadata" ||
+		(value.FormatVersion != securityReportFormatVersionV1 && value.FormatVersion != SecurityReportFormatVersion) ||
 		ValidateID("securityReport.id", string(value.ID)) != nil || ValidateID("securityReport.accountId", string(value.AccountID)) != nil ||
 		validateTime("securityReport.observedAt", value.ObservedAt) != nil || validateTime("securityReport.expiresAt", value.ExpiresAt) != nil ||
 		!value.ExpiresAt.Equal(value.ObservedAt.Add(SecurityReportRetention)) ||
@@ -264,7 +276,7 @@ func validateAccountSecurityReportWithoutCommitments(value AccountSecurityReport
 	var previousKey AccessKeyID
 	for _, key := range value.AccessKeys {
 		_, userExists := userIDs[key.UserID]
-		if !userExists || ValidateSecurityReportAccessKey(key, value.Metadata.ObservedAt) != nil || key.ID <= previousKey {
+		if !userExists || validateSecurityReportAccessKey(key, value.Metadata.ObservedAt, value.Metadata.FormatVersion) != nil || key.ID <= previousKey {
 			return errors.New("account security report access keys are invalid")
 		}
 		previousKey = key.ID
@@ -299,11 +311,13 @@ func CanonicalizeAccountSecurityReportDocument(value AccountSecurityReport) (str
 	return string(encoded), "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
-var accountSecurityReportCSVColumns = []string{
+var accountSecurityReportCSVColumnsV1 = []string{
 	"resource_type", "resource_id", "user_id", "login_name", "status", "root", "must_change_password",
 	"resource_version", "created_at", "mfa_state", "factor_revision", "observation_state", "observed_at",
 	"allowed_source_cidrs", "authorization_allowed", "authorization_product", "authorization_action", "authorization_source_ip",
 }
+
+var accountSecurityReportCSVColumnsV2 = append(slices.Clone(accountSecurityReportCSVColumnsV1), "credential_state")
 
 func EncodeAccountSecurityReportCSV(value AccountSecurityReport) ([]byte, string, error) {
 	if err := validateAccountSecurityReportContent(value); err != nil {
@@ -312,7 +326,11 @@ func EncodeAccountSecurityReportCSV(value AccountSecurityReport) ([]byte, string
 	var output bytes.Buffer
 	writer := csv.NewWriter(&output)
 	writer.UseCRLF = false
-	if err := writer.Write(accountSecurityReportCSVColumns); err != nil {
+	columns := accountSecurityReportCSVColumnsV2
+	if value.Metadata.FormatVersion == securityReportFormatVersionV1 {
+		columns = accountSecurityReportCSVColumnsV1
+	}
+	if err := writer.Write(columns); err != nil {
 		return nil, "", err
 	}
 	write := func(fields []string) error {
@@ -324,7 +342,7 @@ func EncodeAccountSecurityReportCSV(value AccountSecurityReport) ([]byte, string
 		}
 		return writer.Write(fields)
 	}
-	empty := func() []string { return make([]string, len(accountSecurityReportCSVColumns)) }
+	empty := func() []string { return make([]string, len(columns)) }
 	account := empty()
 	account[0], account[1], account[7], account[8] = "ACCOUNT", string(value.Metadata.AccountID), strconv.FormatUint(value.AccountSecuritySettingsVersion, 10), value.Metadata.ObservedAt.Format(time.RFC3339Nano)
 	if err := write(account); err != nil {
@@ -354,6 +372,9 @@ func EncodeAccountSecurityReportCSV(value AccountSecurityReport) ([]byte, string
 			row[11], row[12] = string(SecurityReportObserved), key.LastAuthorization.EvaluatedAt.Format(time.RFC3339Nano)
 			row[14], row[15], row[16], row[17] = strconv.FormatBool(key.LastAuthorization.Allowed), string(key.LastAuthorization.Product), string(key.LastAuthorization.Action), key.LastAuthorization.SourceIP
 		}
+		if value.Metadata.FormatVersion == SecurityReportFormatVersion {
+			row[len(row)-1] = string(key.CredentialState)
+		}
 		if err := write(row); err != nil {
 			return nil, "", err
 		}
@@ -379,7 +400,10 @@ func ValidateAccountSecurityReportCSV(metadata AccountSecurityReportMetadata, do
 }
 
 func ValidateCreateAccountSecurityReportRequest(value CreateAccountSecurityReportRequest) error {
-	if value.FormatVersion != SecurityReportFormatVersion || ValidateID("requestId", value.RequestID) != nil {
+	// Format 1 is accepted only so an exact historical request can resolve its
+	// immutable completion. The use case refuses a new format-1 report.
+	if (value.FormatVersion != securityReportFormatVersionV1 && value.FormatVersion != SecurityReportFormatVersion) ||
+		ValidateID("requestId", value.RequestID) != nil {
 		return errors.New("security report creation request is invalid")
 	}
 	return nil

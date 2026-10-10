@@ -425,6 +425,7 @@ func TestPhase1AccessKeySignerBindsExactNorthboundRequest(t *testing.T) {
 		Key: iamv1.AccessKey{
 			APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: "key-phase1",
 			AccountID: "account-phase1", UserID: "user-phase1", Status: iamv1.AccessKeyEnabled,
+			CredentialState:     iamv1.AccessKeyCredentialCurrent,
 			NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"172.18.0.1/32"}},
 			ResourceVersion:     1, CreatedAt: createdAt, UpdatedAt: createdAt,
 		},
@@ -486,6 +487,7 @@ func TestRetainedAccessKeyBindsCurrentCredentialAndCustodian(t *testing.T) {
 		Key: iamv1.AccessKey{
 			APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: "key-retained",
 			AccountID: "account-retained", UserID: "member-user", Status: iamv1.AccessKeyEnabled,
+			CredentialState:     iamv1.AccessKeyCredentialCurrent,
 			NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"0.0.0.0/0"}},
 			ResourceVersion:     3, CreatedAt: now, UpdatedAt: now.Add(time.Microsecond),
 		},
@@ -515,6 +517,8 @@ func TestRetainedAccessKeyBindsCurrentCredentialAndCustodian(t *testing.T) {
 		"foreign account": func(value *accessKeyRetention) { value.Key.AccountID = "account-other" },
 		"foreign user":    func(value *accessKeyRetention) { value.Key.UserID = "member-other" },
 		"disabled key":    func(value *accessKeyRetention) { value.Key.Status = iamv1.AccessKeyDisabled },
+		"missing lineage": func(value *accessKeyRetention) { value.Key.CredentialState = "" },
+		"recovery fenced": func(value *accessKeyRetention) { value.Key.CredentialState = iamv1.AccessKeyCredentialRecoveryFenced },
 		"different network": func(value *accessKeyRetention) {
 			value.Key.NetworkRestrictions.AllowedSourceCIDRs = []string{"192.0.2.0/24"}
 		},

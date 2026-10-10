@@ -1674,7 +1674,12 @@ func TestAccountSecurityReportUsesCurrentAuthorityAndImmutableSnapshot(t *testin
 			CreatedAt: tx.now, MFA: iamv1.SecurityReportMFAState{EnrollmentState: "NEVER_BOUND", FactorRevision: 1},
 			LastPasswordLogin: iamv1.SecurityReportTimeObservation{State: iamv1.SecurityReportNotObservedInRetainedIAMState}}},
 		AccessKeys: []iamv1.SecurityReportAccessKey{}}
-	request := iamv1.CreateAccountSecurityReportRequest{RequestID: "report-create", FormatVersion: 1}
+	if _, err := service.CreateAccountSecurityReport(t.Context(), login.Credential, iamv1.CreateAccountSecurityReportRequest{
+		RequestID: "report-v1-new", FormatVersion: 1,
+	}); !errors.Is(err, ErrConflict) || len(tx.securityReportCreations) != 0 {
+		t.Fatal("a new v1 report was created instead of failing closed", err)
+	}
+	request := iamv1.CreateAccountSecurityReportRequest{RequestID: "report-create", FormatVersion: iamv1.SecurityReportFormatVersion}
 	created, err := service.CreateAccountSecurityReport(t.Context(), login.Credential, request)
 	if err != nil || created.Outcome != "APPLIED" || created.Metadata.ID != "security-report-report" || len(tx.securityReportCreations) != 1 {
 		t.Fatal("create security report", created, err)

@@ -93,6 +93,18 @@ func TestSecurityReportSchemasMatchClosedRuntimeContract(t *testing.T) {
 		}
 	}
 	checkReport(accountSecurityReportFixture(), true)
+	retainedV1 := accountSecurityReportFixture()
+	retainedV1.Metadata.FormatVersion = securityReportFormatVersionV1
+	retainedV1.AccessKeys[0].CredentialState = ""
+	_, retainedV1.Metadata.DocumentDigest, _ = CanonicalizeAccountSecurityReportDocument(retainedV1)
+	retainedV1CSV, retainedV1CSVDigest, _ := EncodeAccountSecurityReportCSV(retainedV1)
+	retainedV1.Metadata.CSVContentDigest, retainedV1.Metadata.CSVBytes = retainedV1CSVDigest, uint32(len(retainedV1CSV))
+	checkReport(retainedV1, true)
+	retainedV1.AccessKeys[0].CredentialState = AccessKeyCredentialCurrent
+	checkReport(retainedV1, false)
+	missingV2State := accountSecurityReportFixture()
+	missingV2State.AccessKeys[0].CredentialState = ""
+	checkReport(missingV2State, false)
 	for _, mutate := range []func(*AccountSecurityReport){
 		func(value *AccountSecurityReport) { value.Coverage[0].State = SecurityReportCoverageNotIncluded },
 		func(value *AccountSecurityReport) {
@@ -109,7 +121,8 @@ func TestSecurityReportSchemasMatchClosedRuntimeContract(t *testing.T) {
 		valid bool
 	}{
 		{value: CreateAccountSecurityReportRequest{FormatVersion: SecurityReportFormatVersion, RequestID: "report-request"}, valid: true},
-		{value: CreateAccountSecurityReportRequest{FormatVersion: 2, RequestID: "report-request"}},
+		{value: CreateAccountSecurityReportRequest{FormatVersion: 1, RequestID: "report-request"}, valid: true},
+		{value: CreateAccountSecurityReportRequest{FormatVersion: 3, RequestID: "report-request"}},
 		{value: CreateAccountSecurityReportRequest{FormatVersion: SecurityReportFormatVersion, RequestID: "bad selector?"}},
 	} {
 		encoded, _ := json.Marshal(sample.value)
@@ -1501,7 +1514,7 @@ func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *tes
 
 func TestAccessKeyManagementSchemasAgreeWithBoundedNonSecretContracts(t *testing.T) {
 	api := loadIAMOpenAPI(t)
-	key := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKey","id":"key-a","accountId":"account-a","userId":"user-a","status":"ENABLED","networkRestrictions":{"allowedSourceCidrs":[]},"resourceVersion":1,"createdAt":"2026-09-17T00:00:00Z","updatedAt":"2026-09-17T00:00:00Z"}`
+	key := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKey","id":"key-a","accountId":"account-a","userId":"user-a","status":"ENABLED","credentialState":"CURRENT","networkRestrictions":{"allowedSourceCidrs":[]},"resourceVersion":1,"createdAt":"2026-09-17T00:00:00Z","updatedAt":"2026-09-17T00:00:00Z"}`
 	create := `{"userResourceVersion":1,"networkRestrictions":{"allowedSourceCidrs":[]},"requestId":"key-create"}`
 	status := `{"accessKeyResourceVersion":1,"status":"DISABLED","requestId":"key-disable"}`
 	remove := `{"accessKeyResourceVersion":2,"requestId":"key-delete"}`
@@ -1553,6 +1566,8 @@ func TestAccessKeyManagementSchemasAgreeWithBoundedNonSecretContracts(t *testing
 		{"AccessKey", key, true, true},
 		{"AccessKey", strings.Replace(key, "ENABLED", "ACTIVE", 1), false, false},
 		{"AccessKey", strings.Replace(key, "ENABLED", "DISABLED", 1), false, false},
+		{"AccessKey", strings.Replace(key, `,"credentialState":"CURRENT"`, ``, 1), false, false},
+		{"AccessKey", strings.Replace(key, `"credentialState":"CURRENT"`, `"credentialState":"UNKNOWN"`, 1), false, false},
 		{"AccessKey", strings.TrimSuffix(key, "}") + `,"secret":"forged"}`, false, false},
 		{"AccessKeyAccess", access, true, true},
 		{"AccessKeyAccess", strings.Replace(access, capabilities, `[]`, 1), false, false},

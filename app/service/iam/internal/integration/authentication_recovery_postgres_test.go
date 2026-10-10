@@ -2381,11 +2381,13 @@ func authenticationRecoveryWorkflowConfig(t *testing.T, ctx context.Context, con
 }
 
 type authenticationRecoveryMFAFixture struct {
-	seed      iamv1.Secret
-	factorID  string
-	loginName string
-	login     iamv1.LoginResponse
-	proof     iamv1.StepUp
+	seed             iamv1.Secret
+	factorID         string
+	loginName        string
+	login            iamv1.LoginResponse
+	proof            iamv1.StepUp
+	accessKey        iamv1.AccessKey
+	accessKeyRequest iamv1.CreateAccessKeyRequest
 }
 
 func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, service *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument, createReplayMaterial bool) (iamv1.Secret, iamv1.SessionID, authenticationRecoveryMFAFixture) {
@@ -2433,12 +2435,20 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 			Document: iamv1.PolicyDocument{
 				LanguageVersion: "1",
 				Scope:           iamv1.AuthorityScopeTenant,
-				Statements: []iamv1.PolicyStatement{{
-					SID:       "recovery-key-fixture",
-					Effect:    iamv1.PolicyAllow,
-					Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate},
-					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}},
-				}},
+				Statements: []iamv1.PolicyStatement{
+					{SID: "recovery-key-fixture", Effect: iamv1.PolicyAllow,
+						Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}},
+					{SID: "recovery-key-management", Effect: iamv1.PolicyAllow,
+						Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccessKey, Match: iamv1.PolicyResourceAnyInAuthority}}},
+					{SID: "recovery-report-create", Effect: iamv1.PolicyAllow,
+						Actions:   []iamv1.Action{iamv1.ActionIAMSecurityReportCreate},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceAnyInAuthority}}},
+					{SID: "recovery-report-read", Effect: iamv1.PolicyAllow,
+						Actions:   []iamv1.Action{iamv1.ActionIAMSecurityReportRead},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceSecurityReport, Match: iamv1.PolicyResourceAnyInAuthority}}},
+				},
 			},
 		})
 		if err != nil {
@@ -2475,12 +2485,14 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 		if err != nil {
 			t.Fatal("list recovery fixture AccessKeys", err)
 		}
-		created, err := service.CreateAccessKey(ctx, keyLogin.Credential, keyUser.ID, iamv1.CreateAccessKeyRequest{
+		keyRequest := iamv1.CreateAccessKeyRequest{
 			UserResourceVersion: directory.UserResourceVersion,
 			NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
 			RequestID:           "auth-recovery-key-create",
-		})
-		if err != nil || created.Outcome != "APPLIED" || !created.Secret.Present() {
+		}
+		created, err := service.CreateAccessKey(ctx, keyLogin.Credential, keyUser.ID, keyRequest)
+		if err != nil || created.Outcome != "APPLIED" || !created.Secret.Present() ||
+			created.Key.CredentialState != iamv1.AccessKeyCredentialCurrent {
 			t.Fatalf("create recovery fixture AccessKey: %v", err)
 		}
 		// The group still allows create. This narrower current boundary must
@@ -2488,9 +2500,17 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 		limited, err := service.CreatePolicy(ctx, login.Credential, iamv1.CreatePolicyRequest{
 			DisplayName: "Recovery business read ceiling", RequestID: "auth-recovery-key-boundary-policy",
 			Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
-				Statements: []iamv1.PolicyStatement{{SID: "list-only", Effect: iamv1.PolicyAllow,
-					Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyList},
-					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}}}},
+				Statements: []iamv1.PolicyStatement{
+					{SID: "list-only", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMAccessKeyList},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}},
+					{SID: "manage-existing-key", Effect: iamv1.PolicyAllow,
+						Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccessKey, Match: iamv1.PolicyResourceAnyInAuthority}}},
+					{SID: "create-security-report", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMSecurityReportCreate},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceAnyInAuthority}}},
+					{SID: "read-security-report", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMSecurityReportRead},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceSecurityReport, Match: iamv1.PolicyResourceAnyInAuthority}}},
+				}},
 		})
 		if err != nil {
 			t.Fatal("create narrower recovery fixture boundary", err)
@@ -2506,6 +2526,7 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 			t.Fatal("set recovery fixture user boundary", err)
 		}
 		mfa = enrollAuthenticationRecoveryTOTP(t, ctx, service, database, document, keyLogin.Credential, keyUser.LoginName)
+		mfa.accessKey, mfa.accessKeyRequest = created.Key, keyRequest
 		mfa.login = authenticationRecoveryMFALogin(t, ctx, service, database, document, mfa, "before-close", 0)
 		state, err := service.AuthenticatorState(ctx, mfa.login.Credential)
 		if err != nil || state.EnrollmentState != "BOUND" {
@@ -2528,6 +2549,66 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 		seedAuthenticationRecoveryPendingWork(t, ctx, service, database, document, keyUser.ID)
 	}
 	return login.Credential, login.Session.ID, mfa
+}
+
+func assertAuthenticationRecoveryAccessKeyCredentialState(t *testing.T, ctx context.Context, service *identityaccess.Authority,
+	database *pgx.Conn, administrator iamv1.Secret, fixture authenticationRecoveryMFAFixture) {
+	t.Helper()
+	if fixture.accessKey.ID == "" || fixture.accessKeyRequest.RequestID == "" {
+		t.Fatal("authentication recovery AccessKey fixture is incomplete")
+	}
+	directory, err := service.ListAccessKeys(ctx, administrator, fixture.accessKey.UserID, "auth-recovery-fenced-key-list")
+	if err != nil || len(directory.Items) != 1 || directory.Items[0].Key.ID != fixture.accessKey.ID ||
+		directory.Items[0].Key.Status != iamv1.AccessKeyEnabled ||
+		directory.Items[0].Key.CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
+		t.Fatal("restored AccessKey directory did not expose the permanent recovery fence", err)
+	}
+	read, err := service.GetAccessKey(ctx, administrator, fixture.accessKey.UserID, fixture.accessKey.ID, "auth-recovery-fenced-key-read")
+	if err != nil || !reflect.DeepEqual(read.Key, directory.Items[0].Key) || read.Key.CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
+		t.Fatal("restored AccessKey read did not expose the permanent recovery fence", err)
+	}
+	disabled, err := service.SetAccessKeyStatus(ctx, administrator, fixture.accessKey.UserID, fixture.accessKey.ID, iamv1.SetAccessKeyStatusRequest{
+		AccessKeyResourceVersion: read.Key.ResourceVersion, Status: iamv1.AccessKeyDisabled, RequestID: "auth-recovery-fenced-key-disable",
+	})
+	if err != nil || disabled.Key.Status != iamv1.AccessKeyDisabled ||
+		disabled.Key.CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
+		t.Fatal("disabling a recovery-fenced AccessKey changed its credential lineage", err)
+	}
+	enabled, err := service.SetAccessKeyStatus(ctx, administrator, fixture.accessKey.UserID, fixture.accessKey.ID, iamv1.SetAccessKeyStatusRequest{
+		AccessKeyResourceVersion: disabled.Key.ResourceVersion, Status: iamv1.AccessKeyEnabled, RequestID: "auth-recovery-fenced-key-enable",
+	})
+	if err != nil || enabled.Key.Status != iamv1.AccessKeyEnabled ||
+		enabled.Key.CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
+		t.Fatal("re-enabling a recovery-fenced AccessKey falsely restored its secret", err)
+	}
+
+	var immutableReplay bool
+	if err := database.QueryRow(ctx, `SELECT i.result->>'credentialState'='CURRENT'
+		AND i.result->>'id'=$3 AND i.result->>'resourceVersion'='1'
+		AND replay.value->>'outcome'='EQUAL_REPLAY' AND NOT replay.value ? 'secret'
+		AND replay.value->'key'=i.result
+		FROM iam.access_key_intents i CROSS JOIN LATERAL (
+		  SELECT iam.access_key_intent_result(i.tenant_id,i.actor_id,i.user_id,i.key_id,
+		    i.action_name,i.request_id,i.request_digest) AS value) replay
+		WHERE i.request_id=$1 AND i.key_id=$2`, fixture.accessKeyRequest.RequestID, fixture.accessKey.ID, fixture.accessKey.ID).Scan(&immutableReplay); err != nil {
+		t.Fatal("read immutable pre-recovery AccessKey completion", err)
+	}
+	if !immutableReplay {
+		t.Fatal("pre-recovery AccessKey completion was rewritten as a current-state response")
+	}
+
+	created, err := service.CreateAccountSecurityReport(ctx, administrator, iamv1.CreateAccountSecurityReportRequest{
+		FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "auth-recovery-fenced-key-report",
+	})
+	if err != nil || created.Outcome != "APPLIED" {
+		t.Fatal("create post-recovery security report", err)
+	}
+	report, err := service.AccountSecurityReport(ctx, administrator, created.Metadata.ID, "auth-recovery-fenced-key-report-read")
+	if err != nil || len(report.AccessKeys) != 1 || report.AccessKeys[0].ID != fixture.accessKey.ID ||
+		report.AccessKeys[0].Status != iamv1.AccessKeyEnabled ||
+		report.AccessKeys[0].CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
+		t.Fatal("post-recovery security report did not preserve status and credential state as independent dimensions", err)
+	}
 }
 
 func authenticationRecoveryEmailKeyring(t *testing.T, document iamv1.BootstrapDocument) iamv1.EmailVerificationKeyring {
@@ -2777,12 +2858,15 @@ func authenticationRecoveryConcurrentMFALogin(t *testing.T, ctx context.Context,
 		login.Session.ID, mfa.factorID).Scan(&final); err != nil || !final {
 		t.Fatal("concurrent OTP login did not preserve source budget, exact Session/fact or challenge accounting", err)
 	}
+	assertAuthenticationRecoveryAccessKeyCredentialState(t, ctx, peers[0], database, login.Credential, mfa)
 	for index, peer := range peers {
 		if _, err := peer.CurrentIdentity(ctx, login.Credential); err != nil {
 			t.Fatal("winning MFA Session is not valid on both authorities", err)
 		}
 		directory, err := peer.ListAccessKeys(ctx, login.Credential, iamv1.PrincipalID(subject.UserID), fmt.Sprintf("reopened-business-key-list-%d", index))
-		if err != nil || directory.AccountID != document.Organization.ID || string(directory.UserID) != subject.UserID || len(directory.Items) != 1 {
+		if err != nil || directory.AccountID != document.Organization.ID || string(directory.UserID) != subject.UserID || len(directory.Items) != 1 ||
+			directory.Items[0].Key.Status != iamv1.AccessKeyEnabled ||
+			directory.Items[0].Key.CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
 			t.Fatal("restored group/boundary permissions did not allow the original business resource", err)
 		}
 		if result, err := peer.CreateAccessKey(ctx, login.Credential, iamv1.PrincipalID(subject.UserID), iamv1.CreateAccessKeyRequest{

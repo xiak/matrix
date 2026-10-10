@@ -457,7 +457,8 @@ func accessKeyEligibility(value AccessKeyContext, network *iamv1.AuthorizationNe
 	}
 	restricted := value.Organization.Status != iamv1.AccountActive || value.Principal.Status != iamv1.PrincipalActive ||
 		value.Principal.MustChangePassword || value.RootUserID == value.Principal.ID || value.Key.Status != iamv1.AccessKeyEnabled ||
-		value.HasUnrevokedPlatformAttachment || !accountSourceAllowed || !keySourceAllowed || ValidateAccessKeySignatureTime(signedAt, databaseTime) != nil
+		value.Key.CredentialState != iamv1.AccessKeyCredentialCurrent || value.HasUnrevokedPlatformAttachment ||
+		!accountSourceAllowed || !keySourceAllowed || ValidateAccessKeySignatureTime(signedAt, databaseTime) != nil
 	for _, row := range value.Policies {
 		if row.Attachment.Scope == iamv1.AuthorityScopeInstallation && row.Attachment.RevokedAt == nil && !value.HasUnrevokedPlatformAttachment {
 			return false, ErrAuthorityUnavailable
