@@ -1784,11 +1784,11 @@ describe("IAM HTTP account boundary", () => {
     await expect(httpIamRepository.authenticationChallenges!.verify({ challengeId: "challenge-totp", challengeCredential: "secret", code: "123456" })).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
-  it("creates a user with no implicit policy or caller-supplied account", async () => {
+  it("creates a root-managed user with an explicit null permission boundary and no caller-supplied account", async () => {
     const fetcher = reply({ ...user, mustChangePassword: true });
     const command = { kind: "create-user" as const, loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", initialRole: "PAAS_VIEWER", tenantId: "forged" };
     await httpAccountRepository.execute("transient-bearer", command);
-    expect(requestBody(fetcher)).toEqual({ loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", requestId: expect.any(String) });
+    expect(requestBody(fetcher)).toEqual({ loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", permissionBoundary: null, requestId: expect.any(String) });
     expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer transient-bearer" } });
   });
 
