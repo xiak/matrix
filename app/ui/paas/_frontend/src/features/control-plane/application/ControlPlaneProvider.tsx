@@ -81,19 +81,27 @@ type ControlPlaneCache = {
   loaded: ReadonlySet<ControlPlaneResourceKind>;
 };
 
-function resourcesFor(
+function requiredResourcesFor(
   selection: ControlPlaneRouteSelection,
   hasExperience: boolean
 ): readonly ControlPlaneResourceKind[] {
   if (selection.section === "access" || selection.section === "audit") return [];
   if (selection.section === "catalog") return ["offerings"];
   if (selection.section === "quotas") return ["offerings", "entitlements"];
-  if (selection.section === "installations") return ["offerings", "regions", "entitlements", "installations"];
+  if (selection.section === "installations") return ["installations"];
   if (selection.section === "regions") return ["regions"];
   if (selection.section === "overview") {
     return hasExperience ? ["regions"] : ["offerings", "regions", "entitlements", "installations"];
   }
   return [];
+}
+
+function enrichmentResourcesFor(
+  selection: ControlPlaneRouteSelection
+): readonly ControlPlaneResourceKind[] {
+  return selection.section === "installations"
+    ? ["offerings", "regions", "entitlements"]
+    : [];
 }
 
 function mergeResources(
@@ -205,13 +213,27 @@ export function ControlPlaneProvider({
     await Promise.all(waits);
   }, [commitResources, credential, repository]);
 
+  const readEnrichments = useCallback((
+    resources: readonly ControlPlaneResourceKind[],
+    force: boolean
+  ) => {
+    for (const resource of resources) {
+      void readResources([resource], force).catch(() => {
+        // Enrichment is deliberately fail-soft. The authoritative installation
+        // directory remains usable with stable resource IDs when display names,
+        // quota context, or region metadata are unavailable to this identity.
+      });
+    }
+  }, [readResources]);
+
   const prepare = useCallback(async (target: ControlPlaneRouteSelection) => {
     // Route chrome and preview-owned content render synchronously. Only the
     // target's server-owned data regions participate in this asynchronous read.
     await Promise.resolve();
     const revision = ++prepareRevision.current;
-    const resources = resourcesFor(target, Boolean(experience));
-    if (!credential || resources.length === 0) {
+    const resources = requiredResourcesFor(target, Boolean(experience));
+    const enrichments = enrichmentResourcesFor(target);
+    if (!credential || (resources.length === 0 && enrichments.length === 0)) {
       if (revision === prepareRevision.current) {
         setError(null);
         setLoading(false);
@@ -224,24 +246,29 @@ export function ControlPlaneProvider({
         setError(null);
         setLoading(false);
       }
+      readEnrichments(enrichments, false);
       return;
     }
     setLoading(true);
     setError(null);
     try {
       await readResources(resources, false);
-      if (revision === prepareRevision.current) setError(null);
+      if (revision === prepareRevision.current) {
+        setError(null);
+        readEnrichments(enrichments, false);
+      }
     } catch (loadError) {
       if (revision === prepareRevision.current) setError(loadMessage(loadError));
     } finally {
       if (revision === prepareRevision.current) setLoading(false);
     }
-  }, [credential, experience, readResources]);
+  }, [credential, experience, readEnrichments, readResources]);
 
   const reload = useCallback(async () => {
     const revision = ++prepareRevision.current;
-    const resources = resourcesFor(selection, Boolean(experience));
-    if (!credential || resources.length === 0) {
+    const resources = requiredResourcesFor(selection, Boolean(experience));
+    const enrichments = enrichmentResourcesFor(selection);
+    if (!credential || (resources.length === 0 && enrichments.length === 0)) {
       setError(null);
       setLoading(false);
       return;
@@ -250,13 +277,16 @@ export function ControlPlaneProvider({
     setError(null);
     try {
       await readResources(resources, true);
-      if (revision === prepareRevision.current) setError(null);
+      if (revision === prepareRevision.current) {
+        setError(null);
+        readEnrichments(enrichments, true);
+      }
     } catch (loadError) {
       if (revision === prepareRevision.current) setError(loadMessage(loadError));
     } finally {
       if (revision === prepareRevision.current) setLoading(false);
     }
-  }, [credential, experience, readResources, selection]);
+  }, [credential, experience, readEnrichments, readResources, selection]);
 
   useEffect(() => {
     if (credential && cacheRef.current?.owner === credential) return;
@@ -311,9 +341,8 @@ export function ControlPlaneProvider({
           if (!updates.some((item) => item.phase === "READY" || item.phase === "FAILED")) {
             return;
           }
-          const refreshedResources = ["entitlements", "installations"] as const;
-          const refreshed = await repository.load(credential, refreshedResources);
-          if (active) commitResources(credential, refreshedResources, refreshed);
+          await readResources(["installations"], true);
+          if (active) readEnrichments(["entitlements"], true);
         } catch (pollError: unknown) {
           if (active) setError(loadMessage(pollError));
         }
@@ -323,7 +352,7 @@ export function ControlPlaneProvider({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [commitResources, credential, ownedCache, repository, selection.section]);
+  }, [credential, ownedCache, readEnrichments, readResources, repository, selection.section]);
 
   const activateQuota = useCallback(async (command: ActivateQuotaCommand) => {
     if (!credential) return false;
@@ -531,7 +560,7 @@ export function ControlPlaneProvider({
   const projectScene = useCallback((target: ControlPlaneRouteSelection): ConsoleScene | null => {
     if (target.section === "access") return buildAccessConsoleScene(experience, target.view);
     if (target.section === "audit") return buildAuditConsoleScene(experience);
-    const resources = resourcesFor(target, Boolean(experience));
+    const resources = requiredResourcesFor(target, Boolean(experience));
     const targetCache = ownedCache;
     if (!resources.every((resource) => targetCache?.loaded.has(resource))) return null;
     return buildConsoleScene(
@@ -550,7 +579,7 @@ export function ControlPlaneProvider({
     projectScene,
     prepare,
     loading,
-    error: isAccess || resourcesFor(selection, Boolean(experience)).length === 0 ? null : error,
+    error: isAccess || requiredResourcesFor(selection, Boolean(experience)).length === 0 ? null : error,
     mutation,
     reload,
     activateQuota,

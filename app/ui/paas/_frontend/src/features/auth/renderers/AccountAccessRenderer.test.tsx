@@ -3040,7 +3040,7 @@ describe("account access", () => {
         roleName: "ManagedServiceInstallationReader",
         roleDescription: "Allows inspection of one consented installation.",
         policyVersion: { policyId: "system.managedservice-installation-reader", versionId: "version-managedservice-installation-reader-v1", contentDigest: `sha256:${"b".repeat(64)}` },
-        workloads: [{ resourceKind: "SERVICE_INSTALLATION", bindAction: "managedservice.installation.bind-service-role", unbindAction: "managedservice.installation.unbind-service-role" }],
+        workloads: [{ resourceKind: "SERVICE_INSTALLATION", bindAction: "managedservice.service-installation.service-role.bind", unbindAction: "managedservice.service-installation.service-role.unbind" }],
         maxSessionDurationSeconds: 900
       },
       contentDigest: `sha256:${"c".repeat(64)}`, status: "ACTIVE"

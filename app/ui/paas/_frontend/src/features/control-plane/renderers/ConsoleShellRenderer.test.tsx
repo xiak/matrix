@@ -566,19 +566,27 @@ describe("ConsoleShellRenderer", () => {
   });
 
   it("re-authorizes the exact live instance before presenting directory data as details", async () => {
-    const installation = {
+    const summary = {
       id: "pg-exact-read", name: "精确读取库", offeringId: "postgresql-18", engineVersion: "18",
-      quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
-      endpoint: "pg-exact-read.service.local:5432", credentialReference: null,
-      operation: { id: "operation-exact-read", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      quotaEntitlementId: "quota-primary", regionId: "summary-region", phase: "FAILED" as const,
+      endpoint: "must-not-leak-summary.service.local:5432", credentialReference: "must-not-leak-summary-credential",
+      operation: { id: "must-not-leak-summary-operation", phase: "FAILED" as const, safeFailureCode: "SUMMARY_ONLY", observedAt: "2026-08-26T12:00:00Z" },
       createdAt: "2026-08-26T12:00:00Z"
     };
-    let finishRead!: (value: typeof installation) => void;
-    const getInstallation = vi.fn(() => new Promise<typeof installation>((resolve) => { finishRead = resolve; }));
+    const detail = {
+      ...summary,
+      regionId: "local-primary",
+      phase: "READY" as const,
+      endpoint: "pg-exact-read.service.local:5432",
+      credentialReference: null,
+      operation: { id: "operation-exact-read", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:04Z" }
+    };
+    let finishRead!: (value: typeof detail) => void;
+    const getInstallation = vi.fn(() => new Promise<typeof detail>((resolve) => { finishRead = resolve; }));
     const inspectServiceAuthorization = vi.fn().mockResolvedValue({ template: liveServiceRoleTemplate, relation: null, binding: null });
     const { user } = await renderConsole({
       section: "installations",
-      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] }),
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [summary] }),
       getInstallation,
       inspectServiceAuthorization
     });
@@ -589,10 +597,17 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("status").textContent).toBe("正在重新鉴权并读取这个准确实例");
     expect(getInstallation).toHaveBeenCalledWith("renderer-test-memory-only-session", "pg-exact-read");
     expect(inspectServiceAuthorization).not.toHaveBeenCalled();
+    expect(screen.queryByText("must-not-leak-summary.service.local:5432")).toBeNull();
+    expect(screen.queryByText("must-not-leak-summary-operation")).toBeNull();
+    expect(screen.queryByText("失败")).toBeNull();
+    expect(screen.queryByRole("button", { name: /审阅并授权服务|解除实例授权/ })).toBeNull();
 
-    finishRead(installation);
+    finishRead(detail);
 
     expect(await screen.findByText("pg-exact-read.service.local:5432")).toBeTruthy();
+    expect(screen.getByText("operation-exact-read")).toBeTruthy();
+    expect(screen.queryByText("must-not-leak-summary.service.local:5432")).toBeNull();
+    expect(screen.queryByText("must-not-leak-summary-operation")).toBeNull();
     await waitFor(() => expect(inspectServiceAuthorization).toHaveBeenCalledWith(
       "renderer-test-memory-only-session",
       "organization-test",
@@ -870,7 +885,7 @@ describe("ConsoleShellRenderer", () => {
   it.each([
     { href: "/console/regions/", service: /区域与节点/, title: "区域与节点", reads: 1, marker: { role: "text", name: "本机主区域" } },
     { href: "/console/applications/", service: /应用托管/, title: "应用服务", reads: 0, marker: { role: "table", name: "当前身份可见的应用目录" } },
-    { href: "/console/installations/", service: /云数据库 PostgreSQL/, title: "数据库实例", reads: 1, marker: { role: "heading", name: "组织服务实例" } },
+    { href: "/console/installations/", service: /云数据库 PostgreSQL/, title: "数据库实例", reads: 4, marker: { role: "heading", name: "组织服务实例" } },
     { href: "/console/logs/", service: /日志服务/, title: "日志概览", reads: 0, marker: { role: "text", name: "Matrix · Log Service" } },
     { href: "/console/devops/", service: /研发效能 DevOps/, title: "交付总览", reads: 0, marker: { role: "heading", name: "最近流水线" } },
     { href: "/console/observability/", service: /云监控/, title: "监控总览", reads: 0, marker: { role: "heading", name: "服务健康" } }
@@ -956,12 +971,12 @@ describe("ConsoleShellRenderer", () => {
     expect(product.closest("[inert]")).toBeTruthy();
     expect(product.closest("[hidden]")).toBeNull();
     expect(screen.queryByText("正在打开产品规格…")).toBeNull();
-    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.load).toHaveBeenCalledTimes(4);
 
     await act(async () => { heldRoute.ready = true; release(); });
     await waitFor(() => expect(product.closest("[inert]")).toBeNull());
     expect(product.isConnected).toBe(true);
-    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.load).toHaveBeenCalledTimes(4);
   });
 
   it("renders a cached IAM destination immediately and reserves loading feedback for its data regions", async () => {
@@ -1110,7 +1125,7 @@ describe("ConsoleShellRenderer", () => {
     await act(async () => { heldRoute.ready = true; releaseRoute(); });
     expect(await screen.findByRole("button", { name: "安装服务" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 1, name: "数据库实例" })).toBeTruthy();
-    expect(load).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledTimes(4);
   });
 
   it("projects a pending IAM query into the correct content-area workflow", async () => {
@@ -1814,7 +1829,7 @@ describe("ConsoleShellRenderer", () => {
     expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe("Theme review DB");
     expect(document.getElementById(id.getAttribute("aria-describedby")!)?.textContent).toContain("2–63 characters");
     expect((screen.getByRole("button", { name: "Submit installation" }) as HTMLButtonElement).disabled).toBe(false);
-    expect(load).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledTimes(4);
   });
 
   it("uses localized capacity and validates quota quantities after a language change", async () => {
