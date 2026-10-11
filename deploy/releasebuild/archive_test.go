@@ -9,68 +9,100 @@ import (
 )
 
 func TestImageArchiveMapsContainerdSourceToPortableLoadIdentity(t *testing.T) {
-	config := []byte(`{"architecture":"amd64","os":"linux"}`)
-	configID := digestBytes(config)
-	layerID := testDigest("layer")
-	platformManifest, err := json.Marshal(ociManifest{
-		SchemaVersion: 2,
-		MediaType:     ociManifestMediaType,
-		Config: ociDescriptor{
-			MediaType: ociConfigMediaType, Digest: configID, Size: int64(len(config)),
-		},
-		Layers: []ociDescriptor{{
-			MediaType: "application/vnd.oci.image.layer.v1.tar+gzip", Digest: layerID, Size: 1,
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	platformID := digestBytes(platformManifest)
-	sourceIndex, err := json.Marshal(ociIndex{
-		SchemaVersion: 2, MediaType: ociIndexMediaType,
-		Manifests: []ociDescriptor{{
-			MediaType: ociManifestMediaType, Digest: platformID,
-			Size: int64(len(platformManifest)), Platform: &ociPlatform{OS: "linux", Architecture: "amd64"},
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sourceID := digestBytes(sourceIndex)
-	archiveIndex, err := json.Marshal(ociIndex{
-		SchemaVersion: 2, MediaType: ociIndexMediaType,
-		Manifests: []ociDescriptor{{
-			MediaType: ociIndexMediaType, Digest: sourceID, Size: int64(len(sourceIndex)),
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	dockerManifest, err := json.Marshal([]dockerArchiveManifest{{
-		Config: archiveBlobPath(configID), Layers: []string{archiveBlobPath(layerID)},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive := filepath.Join(t.TempDir(), "image.tar")
-	writeTestImageArchive(t, archive, map[string][]byte{
-		archiveBlobPath(configID):   config,
-		archiveBlobPath(platformID): platformManifest,
-		archiveBlobPath(sourceID):   sourceIndex,
-		"index.json":                archiveIndex,
-		"manifest.json":             dockerManifest,
-	})
+	for _, test := range []struct {
+		name          string
+		indexMedia    string
+		manifestMedia string
+		configMedia   string
+	}{
+		{name: "OCI", indexMedia: ociIndexMediaType, manifestMedia: ociManifestMediaType, configMedia: ociConfigMediaType},
+		{name: "Docker v2", indexMedia: dockerManifestListMediaType, manifestMedia: dockerManifestMediaType, configMedia: dockerConfigMediaType},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := []byte(`{"architecture":"amd64","os":"linux"}`)
+			configID := digestBytes(config)
+			layerID := testDigest("layer")
+			platformManifest, err := json.Marshal(ociManifest{
+				SchemaVersion: 2,
+				MediaType:     test.manifestMedia,
+				Config: ociDescriptor{
+					MediaType: test.configMedia, Digest: configID, Size: int64(len(config)),
+				},
+				Layers: []ociDescriptor{{
+					MediaType: "application/vnd.oci.image.layer.v1.tar+gzip", Digest: layerID, Size: 1,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			platformID := digestBytes(platformManifest)
+			sourceIndex, err := json.Marshal(ociIndex{
+				SchemaVersion: 2, MediaType: test.indexMedia,
+				Manifests: []ociDescriptor{{
+					MediaType: test.manifestMedia, Digest: platformID,
+					Size: int64(len(platformManifest)), Platform: &ociPlatform{OS: "linux", Architecture: "amd64"},
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceID := digestBytes(sourceIndex)
+			archiveIndex, err := json.Marshal(ociIndex{
+				SchemaVersion: 2, MediaType: ociIndexMediaType,
+				Manifests: []ociDescriptor{{
+					MediaType: test.indexMedia, Digest: sourceID, Size: int64(len(sourceIndex)),
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			dockerManifest, err := json.Marshal([]dockerArchiveManifest{{
+				Config: archiveBlobPath(configID), Layers: []string{archiveBlobPath(layerID)},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			archive := filepath.Join(t.TempDir(), "image.tar")
+			writeTestImageArchive(t, archive, map[string][]byte{
+				archiveBlobPath(configID):   config,
+				archiveBlobPath(platformID): platformManifest,
+				archiveBlobPath(sourceID):   sourceIndex,
+				"index.json":                archiveIndex,
+				"manifest.json":             dockerManifest,
+			})
 
-	identity, err := inspectImageArchive(archive, sourceID)
-	if err != nil {
-		t.Fatal(err)
+			identity, err := inspectImageArchive(archive, sourceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if identity.ID != configID || identity.ID == sourceID ||
+				identity.OS != "linux" || identity.Architecture != "amd64" {
+				t.Fatalf("portable identity = %#v", identity)
+			}
+			if _, err := inspectImageArchive(archive, testDigest("unrelated-source")); err == nil {
+				t.Fatal("archive unrelated to the inspected source identity was accepted")
+			}
+		})
 	}
-	if identity.ID != configID || identity.ID == sourceID ||
-		identity.OS != "linux" || identity.Architecture != "amd64" {
-		t.Fatalf("portable identity = %#v", identity)
+}
+
+func TestImageArchiveMediaTypeCatalogIsClosed(t *testing.T) {
+	for _, mediaType := range []string{ociIndexMediaType, dockerManifestListMediaType} {
+		if !supportedIndexMediaType(mediaType) {
+			t.Fatalf("supported index media type %q was rejected", mediaType)
+		}
 	}
-	if _, err := inspectImageArchive(archive, testDigest("unrelated-source")); err == nil {
-		t.Fatal("archive unrelated to the inspected source identity was accepted")
+	for _, mediaType := range []string{ociManifestMediaType, dockerManifestMediaType} {
+		if !supportedManifestMediaType(mediaType) {
+			t.Fatalf("supported manifest media type %q was rejected", mediaType)
+		}
+	}
+	for _, mediaType := range []string{
+		"", "application/json", "application/vnd.docker.distribution.manifest.v1+json",
+	} {
+		if supportedIndexMediaType(mediaType) || supportedManifestMediaType(mediaType) {
+			t.Fatalf("unsupported image media type %q was accepted", mediaType)
+		}
 	}
 }
 

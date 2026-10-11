@@ -16,6 +16,8 @@ const (
 	ociIndexMediaType           = "application/vnd.oci.image.index.v1+json"
 	ociManifestMediaType        = "application/vnd.oci.image.manifest.v1+json"
 	ociConfigMediaType          = "application/vnd.oci.image.config.v1+json"
+	dockerManifestListMediaType = "application/vnd.docker.distribution.manifest.list.v2+json"
+	dockerManifestMediaType     = "application/vnd.docker.distribution.manifest.v2+json"
 	dockerConfigMediaType       = "application/vnd.docker.container.image.v1+json"
 )
 
@@ -89,10 +91,10 @@ func inspectImageArchive(archive, sourceID string) (ImageMetadata, error) {
 		if err := json.Unmarshal(first["index.json"], &index); err != nil ||
 			index.SchemaVersion != 2 || index.MediaType != ociIndexMediaType ||
 			len(index.Manifests) != 1 || index.Manifests[0].Digest != sourceID {
-			return ImageMetadata{}, errors.New("Docker archive source index is invalid")
+			return ImageMetadata{}, errors.New("Docker archive source descriptor is invalid")
 		}
 		sourceDescriptor = index.Manifests[0]
-		if err := validateOCIDescriptor(sourceDescriptor); err != nil {
+		if err := validateImageDescriptor(sourceDescriptor); err != nil {
 			return ImageMetadata{}, err
 		}
 		targets[archiveBlobPath(sourceID)] = maximumArchiveMetadataBytes
@@ -122,11 +124,11 @@ func inspectImageArchive(archive, sourceID string) (ImageMetadata, error) {
 		return ImageMetadata{}, errors.New("Docker archive source descriptor is invalid")
 	}
 	switch sourceDescriptor.MediaType {
-	case ociManifestMediaType:
-		if err := verifyOCIManifest(sourceBytes, configID, int64(len(configBytes))); err != nil {
+	case ociManifestMediaType, dockerManifestMediaType:
+		if err := verifyImageManifest(sourceBytes, configID, int64(len(configBytes))); err != nil {
 			return ImageMetadata{}, err
 		}
-	case ociIndexMediaType:
+	case ociIndexMediaType, dockerManifestListMediaType:
 		platformManifest, err := selectPlatformManifest(sourceBytes)
 		if err != nil {
 			return ImageMetadata{}, err
@@ -139,7 +141,7 @@ func inspectImageArchive(archive, sourceID string) (ImageMetadata, error) {
 		}
 		manifestBytes := third[archiveBlobPath(platformManifest.Digest)]
 		if verifyDescriptorContent(platformManifest, manifestBytes) != nil ||
-			verifyOCIManifest(manifestBytes, configID, int64(len(configBytes))) != nil {
+			verifyImageManifest(manifestBytes, configID, int64(len(configBytes))) != nil {
 			return ImageMetadata{}, errors.New("Docker archive platform manifest is invalid")
 		}
 	default:
@@ -214,8 +216,8 @@ func archiveConfigIdentity(value string) (string, bool) {
 func selectPlatformManifest(content []byte) (ociDescriptor, error) {
 	var index ociIndex
 	if err := json.Unmarshal(content, &index); err != nil || index.SchemaVersion != 2 ||
-		index.MediaType != ociIndexMediaType {
-		return ociDescriptor{}, errors.New("Docker archive OCI index is invalid")
+		!supportedIndexMediaType(index.MediaType) {
+		return ociDescriptor{}, errors.New("Docker archive image index is invalid")
 	}
 	var selected ociDescriptor
 	count := 0
@@ -224,7 +226,7 @@ func selectPlatformManifest(content []byte) (ociDescriptor, error) {
 			descriptor.Platform.Architecture != "amd64" {
 			continue
 		}
-		if descriptor.MediaType != ociManifestMediaType || validateOCIDescriptor(descriptor) != nil {
+		if !supportedManifestMediaType(descriptor.MediaType) || validateImageDescriptor(descriptor) != nil {
 			return ociDescriptor{}, errors.New("Docker archive platform descriptor is invalid")
 		}
 		selected = descriptor
@@ -236,23 +238,31 @@ func selectPlatformManifest(content []byte) (ociDescriptor, error) {
 	return selected, nil
 }
 
-func verifyOCIManifest(content []byte, configID string, configSize int64) error {
+func verifyImageManifest(content []byte, configID string, configSize int64) error {
 	var manifest ociManifest
 	if err := json.Unmarshal(content, &manifest); err != nil || manifest.SchemaVersion != 2 ||
-		manifest.MediaType != ociManifestMediaType || len(manifest.Layers) == 0 ||
+		!supportedManifestMediaType(manifest.MediaType) || len(manifest.Layers) == 0 ||
 		(manifest.Config.MediaType != ociConfigMediaType && manifest.Config.MediaType != dockerConfigMediaType) ||
 		manifest.Config.Digest != configID || manifest.Config.Size != configSize {
-		return errors.New("Docker archive OCI manifest is invalid")
+		return errors.New("Docker archive image manifest is invalid")
 	}
 	return nil
 }
 
-func validateOCIDescriptor(value ociDescriptor) error {
+func validateImageDescriptor(value ociDescriptor) error {
 	if !validArchiveDigest(value.Digest) || value.Size <= 0 || value.Size > maximumArchiveMetadataBytes ||
-		(value.MediaType != ociIndexMediaType && value.MediaType != ociManifestMediaType) {
-		return errors.New("Docker archive OCI descriptor is invalid")
+		(!supportedIndexMediaType(value.MediaType) && !supportedManifestMediaType(value.MediaType)) {
+		return errors.New("Docker archive image descriptor is invalid")
 	}
 	return nil
+}
+
+func supportedIndexMediaType(value string) bool {
+	return value == ociIndexMediaType || value == dockerManifestListMediaType
+}
+
+func supportedManifestMediaType(value string) bool {
+	return value == ociManifestMediaType || value == dockerManifestMediaType
 }
 
 func verifyDescriptorContent(descriptor ociDescriptor, content []byte) error {
