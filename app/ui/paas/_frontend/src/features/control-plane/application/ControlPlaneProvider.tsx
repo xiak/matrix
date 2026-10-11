@@ -23,6 +23,8 @@ import type {
   ActivateQuotaCommand,
   ControlPlaneSnapshot,
   CreateInstallationCommand,
+  InstallationTerminationIntent,
+  InstallationTerminationMutationError,
   InstallationReadLoad
 } from "../domain/resources";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
@@ -56,6 +58,11 @@ type ControlPlaneContextValue = {
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
   createInstallation(command: CreateInstallationCommand): Promise<boolean>;
   readInstallation(installationId: string): Promise<InstallationReadLoad>;
+  installationTerminationIntent: InstallationTerminationIntent | null;
+  beginInstallationTermination(installation: InstallationTerminationIntent["installation"]): void;
+  submitInstallationTermination(): Promise<InstallationTerminationIntent["installation"] | null>;
+  closeInstallationTerminationIntent(): void;
+  reopenInstallationTerminationIntent(): void;
   readApplication(applicationId: string): Promise<ApplicationReadLoad>;
   listApplications(after?: string): Promise<ApplicationDirectoryLoad>;
   inspectServiceAuthorization(accountId: string, installationId: string): Promise<ManagedServiceAuthorizationLoad>;
@@ -81,19 +88,27 @@ type ControlPlaneCache = {
   loaded: ReadonlySet<ControlPlaneResourceKind>;
 };
 
-function resourcesFor(
+function requiredResourcesFor(
   selection: ControlPlaneRouteSelection,
   hasExperience: boolean
 ): readonly ControlPlaneResourceKind[] {
   if (selection.section === "access" || selection.section === "audit") return [];
   if (selection.section === "catalog") return ["offerings"];
   if (selection.section === "quotas") return ["offerings", "entitlements"];
-  if (selection.section === "installations") return ["offerings", "regions", "entitlements", "installations"];
+  if (selection.section === "installations") return ["installations"];
   if (selection.section === "regions") return ["regions"];
   if (selection.section === "overview") {
     return hasExperience ? ["regions"] : ["offerings", "regions", "entitlements", "installations"];
   }
   return [];
+}
+
+function enrichmentResourcesFor(
+  selection: ControlPlaneRouteSelection
+): readonly ControlPlaneResourceKind[] {
+  return selection.section === "installations"
+    ? ["offerings", "regions", "entitlements"]
+    : [];
 }
 
 function mergeResources(
@@ -130,6 +145,16 @@ function serviceAuthorizationMutationError(error: unknown): ManagedServiceAuthor
   return "unknown";
 }
 
+function installationTerminationMutationError(error: unknown): InstallationTerminationMutationError {
+  if (!(error instanceof HttpProblem)) return "unknown";
+  if (error.status === 401) return "expired";
+  if (error.status === 403) return "forbidden";
+  if (error.status === 404) return "notFound";
+  if (error.status === 409) return "conflict";
+  if ([400, 413, 415, 422].includes(error.status)) return "invalid";
+  return "unknown";
+}
+
 export function ControlPlaneProvider({
   children,
   experience,
@@ -147,9 +172,11 @@ export function ControlPlaneProvider({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ControlPlaneError | null>(null);
   const [mutation, setMutation] = useState<MutationKind>(null);
+  const [installationTerminationIntent, setInstallationTerminationIntent] = useState<InstallationTerminationIntent | null>(null);
   const [serviceAuthorizationIntent, setServiceAuthorizationIntent] = useState<ManagedServiceAuthorizationIntent | null>(null);
   const cacheRef = useRef<ControlPlaneCache | null>(null);
   const serviceAuthorizationIntentRef = useRef<ManagedServiceAuthorizationIntent | null>(null);
+  const installationTerminationIntentRef = useRef<InstallationTerminationIntent | null>(null);
   const inFlight = useRef(new Map<ControlPlaneResourceKind, { owner: string; promise: Promise<void> }>());
   const prepareRevision = useRef(0);
 
@@ -205,17 +232,32 @@ export function ControlPlaneProvider({
     await Promise.all(waits);
   }, [commitResources, credential, repository]);
 
+  const readEnrichments = useCallback((
+    resources: readonly ControlPlaneResourceKind[],
+    force: boolean
+  ) => {
+    for (const resource of resources) {
+      void readResources([resource], force).catch(() => {
+        // Enrichment is deliberately fail-soft. The authoritative installation
+        // directory remains usable with stable resource IDs when display names,
+        // quota context, or region metadata are unavailable to this identity.
+      });
+    }
+  }, [readResources]);
+
   const prepare = useCallback(async (target: ControlPlaneRouteSelection) => {
     // Route chrome and preview-owned content render synchronously. Only the
     // target's server-owned data regions participate in this asynchronous read.
     await Promise.resolve();
     const revision = ++prepareRevision.current;
-    const resources = resourcesFor(target, Boolean(experience));
-    if (!credential || resources.length === 0) {
+    const resources = requiredResourcesFor(target, Boolean(experience));
+    const enrichments = enrichmentResourcesFor(target);
+    if (!credential || (resources.length === 0 && enrichments.length === 0)) {
       if (revision === prepareRevision.current) {
         setError(null);
         setLoading(false);
       }
+      readEnrichments(enrichments, false);
       return;
     }
     const current = cacheRef.current;
@@ -230,18 +272,22 @@ export function ControlPlaneProvider({
     setError(null);
     try {
       await readResources(resources, false);
-      if (revision === prepareRevision.current) setError(null);
+      if (revision === prepareRevision.current) {
+        setError(null);
+        readEnrichments(enrichments, false);
+      }
     } catch (loadError) {
       if (revision === prepareRevision.current) setError(loadMessage(loadError));
     } finally {
       if (revision === prepareRevision.current) setLoading(false);
     }
-  }, [credential, experience, readResources]);
+  }, [credential, experience, readEnrichments, readResources]);
 
   const reload = useCallback(async () => {
     const revision = ++prepareRevision.current;
-    const resources = resourcesFor(selection, Boolean(experience));
-    if (!credential || resources.length === 0) {
+    const resources = requiredResourcesFor(selection, Boolean(experience));
+    const enrichments = enrichmentResourcesFor(selection);
+    if (!credential || (resources.length === 0 && enrichments.length === 0)) {
       setError(null);
       setLoading(false);
       return;
@@ -250,13 +296,16 @@ export function ControlPlaneProvider({
     setError(null);
     try {
       await readResources(resources, true);
-      if (revision === prepareRevision.current) setError(null);
+      if (revision === prepareRevision.current) {
+        setError(null);
+        readEnrichments(enrichments, true);
+      }
     } catch (loadError) {
       if (revision === prepareRevision.current) setError(loadMessage(loadError));
     } finally {
       if (revision === prepareRevision.current) setLoading(false);
     }
-  }, [credential, experience, readResources, selection]);
+  }, [credential, experience, readEnrichments, readResources, selection]);
 
   useEffect(() => {
     if (credential && cacheRef.current?.owner === credential) return;
@@ -268,6 +317,8 @@ export function ControlPlaneProvider({
     setLoading(false);
     serviceAuthorizationIntentRef.current = null;
     setServiceAuthorizationIntent(null);
+    installationTerminationIntentRef.current = null;
+    setInstallationTerminationIntent(null);
   }, [credential]);
 
   useEffect(() => {
@@ -282,17 +333,31 @@ export function ControlPlaneProvider({
   useEffect(() => {
     if (!credential || selection.section !== "installations") return;
     if (!ownedCache?.loaded.has("installations")) return;
-    const pending = ownedCache.snapshot.installations.filter(
-      (item) => item.phase === "PENDING" || item.phase === "PROVISIONING"
-    );
+    const pending = ownedCache.snapshot.installations.filter((item) => [
+      "PENDING", "PROVISIONING", "TERMINATION_PENDING", "TERMINATING"
+    ].includes(item.phase));
     if (pending.length === 0) return;
     let active = true;
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const updates = await Promise.all(
-            pending.map((item) => repository.getInstallation(credential, item.id))
-          );
+          const reads = await Promise.all(pending.map(async (item) => {
+            try {
+              return { installation: await repository.getInstallation(credential, item.id), missing: false };
+            } catch (pollError) {
+              const terminating = item.phase === "TERMINATION_PENDING" || item.phase === "TERMINATING";
+              if (terminating && pollError instanceof HttpProblem && pollError.status === 404) {
+                return { installation: null, missing: true };
+              }
+              throw pollError;
+            }
+          }));
+          if (reads.some((read) => read.missing)) {
+            await readResources(["installations"], true);
+            if (active) readEnrichments(["entitlements"], true);
+            return;
+          }
+          const updates = reads.flatMap((read) => read.installation ? [read.installation] : []);
           if (!active) return;
           setError(null);
           const byId = new Map(updates.map((item) => [item.id, item]));
@@ -308,12 +373,13 @@ export function ControlPlaneProvider({
             cacheRef.current = next;
             setCache(next);
           }
-          if (!updates.some((item) => item.phase === "READY" || item.phase === "FAILED")) {
+          if (!updates.some((item) => [
+            "READY", "FAILED", "ROLLBACK_FAILED", "TERMINATION_FAILED", "TERMINATED"
+          ].includes(item.phase))) {
             return;
           }
-          const refreshedResources = ["entitlements", "installations"] as const;
-          const refreshed = await repository.load(credential, refreshedResources);
-          if (active) commitResources(credential, refreshedResources, refreshed);
+          await readResources(["installations"], true);
+          if (active) readEnrichments(["entitlements"], true);
         } catch (pollError: unknown) {
           if (active) setError(loadMessage(pollError));
         }
@@ -323,7 +389,7 @@ export function ControlPlaneProvider({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [commitResources, credential, ownedCache, repository, selection.section]);
+  }, [credential, ownedCache, readEnrichments, readResources, repository, selection.section]);
 
   const activateQuota = useCallback(async (command: ActivateQuotaCommand) => {
     if (!credential) return false;
@@ -378,6 +444,85 @@ export function ControlPlaneProvider({
       setMutation(null);
     }
   }, [credential, repository]);
+
+  const commitInstallationTerminationIntent = useCallback((intent: InstallationTerminationIntent | null) => {
+    installationTerminationIntentRef.current = intent;
+    setInstallationTerminationIntent(intent);
+  }, []);
+
+  const beginInstallationTermination = useCallback((installation: InstallationTerminationIntent["installation"]) => {
+    const current = installationTerminationIntentRef.current;
+    if (current) {
+      if (current.installation.id === installation.id) {
+        commitInstallationTerminationIntent({ ...current, open: true });
+      }
+      return;
+    }
+    if (!["READY", "ROLLBACK_FAILED", "TERMINATION_FAILED"].includes(installation.phase)) return;
+    commitInstallationTerminationIntent({
+      installation,
+      requestId: requestToken("ui-installation-termination-"),
+      phase: "review",
+      error: null,
+      open: true
+    });
+  }, [commitInstallationTerminationIntent]);
+
+  const submitInstallationTermination = useCallback(async () => {
+    const intent = installationTerminationIntentRef.current;
+    if (!credential || !intent || intent.phase === "submitting" || !repository.terminateInstallation) return null;
+    commitInstallationTerminationIntent({ ...intent, phase: "submitting", error: null, open: true });
+    try {
+      const installation = await repository.terminateInstallation(
+        credential,
+        intent.installation.id,
+        intent.requestId
+      );
+      const current = cacheRef.current;
+      if (current?.owner === credential) {
+        const next = {
+          ...current,
+          snapshot: {
+            ...current.snapshot,
+            installations: current.snapshot.installations.map((item) =>
+              item.id === installation.id ? installation : item
+            )
+          }
+        };
+        cacheRef.current = next;
+        setCache(next);
+      }
+      if (installationTerminationIntentRef.current?.requestId === intent.requestId) {
+        commitInstallationTerminationIntent(null);
+      }
+      return installation;
+    } catch (terminationError) {
+      if (installationTerminationIntentRef.current?.requestId === intent.requestId) {
+        commitInstallationTerminationIntent({
+          ...intent,
+          phase: "failed",
+          error: installationTerminationMutationError(terminationError),
+          open: true
+        });
+      }
+      return null;
+    }
+  }, [commitInstallationTerminationIntent, credential, repository]);
+
+  const closeInstallationTerminationIntent = useCallback(() => {
+    const intent = installationTerminationIntentRef.current;
+    if (!intent) return;
+    if (intent.phase === "failed" && intent.error === "unknown") {
+      commitInstallationTerminationIntent({ ...intent, open: false });
+      return;
+    }
+    commitInstallationTerminationIntent(null);
+  }, [commitInstallationTerminationIntent]);
+
+  const reopenInstallationTerminationIntent = useCallback(() => {
+    const intent = installationTerminationIntentRef.current;
+    if (intent) commitInstallationTerminationIntent({ ...intent, open: true });
+  }, [commitInstallationTerminationIntent]);
 
   const readInstallation = useCallback(async (installationId: string): Promise<InstallationReadLoad> => {
     if (!credential) return { status: "expired" };
@@ -531,7 +676,7 @@ export function ControlPlaneProvider({
   const projectScene = useCallback((target: ControlPlaneRouteSelection): ConsoleScene | null => {
     if (target.section === "access") return buildAccessConsoleScene(experience, target.view);
     if (target.section === "audit") return buildAuditConsoleScene(experience);
-    const resources = resourcesFor(target, Boolean(experience));
+    const resources = requiredResourcesFor(target, Boolean(experience));
     const targetCache = ownedCache;
     if (!resources.every((resource) => targetCache?.loaded.has(resource))) return null;
     return buildConsoleScene(
@@ -550,12 +695,17 @@ export function ControlPlaneProvider({
     projectScene,
     prepare,
     loading,
-    error: isAccess || resourcesFor(selection, Boolean(experience)).length === 0 ? null : error,
+    error: isAccess || requiredResourcesFor(selection, Boolean(experience)).length === 0 ? null : error,
     mutation,
     reload,
     activateQuota,
     createInstallation,
     readInstallation,
+    installationTerminationIntent,
+    beginInstallationTermination,
+    submitInstallationTermination,
+    closeInstallationTerminationIntent,
+    reopenInstallationTerminationIntent,
     readApplication,
     listApplications,
     inspectServiceAuthorization,
@@ -564,7 +714,7 @@ export function ControlPlaneProvider({
     submitServiceAuthorization,
     closeServiceAuthorizationIntent,
     reopenServiceAuthorizationIntent
-  }), [activateQuota, beginServiceAuthorization, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, isAccess, listApplications, loading, mutation, prepare, projectScene, readApplication, readInstallation, reload, reopenServiceAuthorizationIntent, scene, selection, serviceAuthorizationIntent, submitServiceAuthorization]);
+  }), [activateQuota, beginInstallationTermination, beginServiceAuthorization, closeInstallationTerminationIntent, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, installationTerminationIntent, isAccess, listApplications, loading, mutation, prepare, projectScene, readApplication, readInstallation, reload, reopenInstallationTerminationIntent, reopenServiceAuthorizationIntent, scene, selection, serviceAuthorizationIntent, submitInstallationTermination, submitServiceAuthorization]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

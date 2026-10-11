@@ -86,6 +86,8 @@ UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PD
 ### 当前 UX owner 快照集成
 
 2026-10-11只读固定UX/UI代码`25384bb08453c1b08ecc095820e1f77952a17720`及其文档提交`11f65d72defe2aa0a7bc377ca88d3a2d9756db65`后，当前IAM分支从精确父提交`4bd8cdb79db2db9fa75672bd4136968989238290`生成集成提交`ffdedcde2f324e121f9a643b679a06530fd23a5d`。该提交只改`app/ui/paas/**`：272个路径发生变化，当前子树共662个路径，范围外差异为0；集成树和UX固定源的子树ID均为`3b3fefa710345401116a1b06b6a502321110d301`。没有导入UX分支的后端、API、SQL、安装、FEAT状态或checkpoint。
+- 当前托管产品运行时契约固定到 IAM 产品实现来源 `4dea30e79cfd6693df149ea40eaa876c113814eb`，包含 `postgresql-18`、`mysql-8.4`、`elasticsearch-8.19` 与 `rabbitmq-4.1` 四个正式 offering；其准确版本分别为 PostgreSQL 18、MySQL 8.4 LTS、Elasticsearch 8.19.23 与 RabbitMQ 4.1.8。控制台与隔离 MOCK 必须用正式产品名称、版本、规格和产品类型说明同一信息架构，不得标为示例、占位或即将上线；LIVE 目录仍只渲染产品服务实际返回的项，不能用 MOCK 补齐。实例严格读取要求 `resourceVersion` 与 `operation.kind=PROVISION|TERMINATE`，且操作阶段必须与实例阶段相同；任何缺失、未知或矛盾形状整体失败关闭。
+- 实例终止消费产品侧 `POST /managed-services/v1/service-installations/{installationId}/termination`，浏览器只发送当前 bearer 与冻结的 `Idempotency-Key`，不发送 Account、资源版本或请求体。允许从 `READY | ROLLBACK_FAILED | TERMINATION_FAILED` 发起；内容区先核对准确实例、产品、区域、观察到的资源版本和幂等请求，并要求输入实例 ID，永远不使用 Dialog。`TERMINATION_PENDING | TERMINATING` 只表示平台已接受并异步清理，不能显示为删除完成或提前归还配额；`TERMINATED` 后产品会物理删除容器、网络、持久化数据和托管凭据，并从权威目录移除实例、归还配额。网络或协议未知结果冻结原实例与幂等键，只能原样重试；401、403、404、409 与无效输入局部失败且不改写意图。轮询 404 只有在同一个正在终止的实例上才解释为需要重读权威目录，不能因另一实例正在终止而吞掉普通创建／读取错误。
 
 当前工作树执行干净`npm ci`后通过完整`npm run check`：typecheck、lint、架构、228组多主题对比度、63个测试文件共1163项测试、3项归一化、47页生产构建、45项规范化和259文件嵌入一致性全部成功；`GOMAXPROCS=2`下UI与architecture的Go test/vet也通过。本机Node 23.11.1超出项目声明的受支持范围，只作为组合回归；独立CI的`console`已在受支持Node运行时完成，但整轮CI终态由同一SHA的Verification统一判定，不能提前用单一作业代替。
 

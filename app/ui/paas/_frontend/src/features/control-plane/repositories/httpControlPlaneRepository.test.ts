@@ -66,6 +66,33 @@ describe("httpControlPlaneRepository", () => {
           engineVersion: "18",
           state: "AVAILABLE",
           quotaShapes: []
+        }, {
+          id: "mysql-8.4",
+          kind: "MYSQL",
+          displayName: "MySQL 8.4 LTS",
+          description: "Managed MySQL",
+          engineFamily: "mysql",
+          engineVersion: "8.4",
+          state: "AVAILABLE",
+          quotaShapes: []
+        }, {
+          id: "elasticsearch-8.19",
+          kind: "ELASTICSEARCH",
+          displayName: "Elasticsearch 8.19",
+          description: "Managed Elasticsearch",
+          engineFamily: "elasticsearch",
+          engineVersion: "8.19.23",
+          state: "AVAILABLE",
+          quotaShapes: []
+        }, {
+          id: "rabbitmq-4.1",
+          kind: "RABBITMQ",
+          displayName: "RabbitMQ 4.1",
+          description: "Managed RabbitMQ",
+          engineFamily: "rabbitmq",
+          engineVersion: "4.1.8",
+          state: "AVAILABLE",
+          quotaShapes: []
         }]
       });
     });
@@ -73,7 +100,12 @@ describe("httpControlPlaneRepository", () => {
 
     const result = await httpControlPlaneRepository.load("memory-only-session", ["offerings"]);
 
-    expect(result.offerings).toHaveLength(1);
+    expect(result.offerings?.map(({ id, kind }) => ({ id, kind }))).toEqual([
+      { id: "postgresql-18", kind: "POSTGRESQL" },
+      { id: "mysql-8.4", kind: "MYSQL" },
+      { id: "elasticsearch-8.19", kind: "ELASTICSEARCH" },
+      { id: "rabbitmq-4.1", kind: "RABBITMQ" }
+    ]);
     expect(result).not.toHaveProperty("regions");
     expect(result).not.toHaveProperty("entitlements");
     expect(result).not.toHaveProperty("installations");
@@ -103,9 +135,11 @@ describe("httpControlPlaneRepository", () => {
       phase: "PROVISIONING",
       endpoint: null,
       credentialReference: null,
+      resourceVersion: 2,
       createdAt: "2026-08-26T12:00:00Z",
       operation: {
         id: "operation-primary",
+        kind: "PROVISION",
         phase: "PROVISIONING",
         safeFailureCode: null,
         observedAt: "2026-08-26T12:00:04Z"
@@ -142,9 +176,11 @@ describe("httpControlPlaneRepository", () => {
       phase: "PENDING",
       endpoint: null,
       credentialReference: null,
+      resourceVersion: 1,
       createdAt: "2026-08-26T12:00:00Z",
       operation: {
         id: "operation-other",
+        kind: "PROVISION",
         phase: "PENDING",
         safeFailureCode: null,
         observedAt: "2026-08-26T12:00:00Z"
@@ -155,6 +191,106 @@ describe("httpControlPlaneRepository", () => {
       "memory-only-session",
       "postgres-primary"
     )).rejects.toThrow("INVALID_INSTALLATION_ID_RESPONSE");
+  });
+
+  it("submits and replays an installation termination with no request body and the caller's frozen idempotency key", async () => {
+    const termination = {
+      id: "postgres-primary",
+      name: "Postgres primary",
+      offeringId: "postgresql-18",
+      engineVersion: "18",
+      quotaEntitlementId: "quota-primary",
+      regionId: "local-primary",
+      phase: "TERMINATION_PENDING",
+      endpoint: "postgres-primary.service.local:5432",
+      credentialReference: "credential-postgres-primary",
+      resourceVersion: 3,
+      createdAt: "2026-08-26T12:00:00Z",
+      operation: {
+        id: "operation-terminate-primary",
+        kind: "TERMINATE",
+        phase: "TERMINATION_PENDING",
+        safeFailureCode: null,
+        observedAt: "2026-08-26T12:04:00Z"
+      }
+    };
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(termination)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.terminateInstallation!(
+      "session-secret", "postgres-primary", "terminate-postgres-primary"
+    )).resolves.toEqual(termination);
+    await expect(httpControlPlaneRepository.terminateInstallation!(
+      "session-secret", "postgres-primary", "terminate-postgres-primary"
+    )).resolves.toEqual(termination);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [path, rawInit] of fetchMock.mock.calls) {
+      const init = rawInit as RequestInit;
+      const headers = new Headers(init.headers);
+      expect(path).toBe("/api/managed-services/v1/service-installations/postgres-primary/termination");
+      expect(init.method).toBe("POST");
+      expect(init.body).toBeUndefined();
+      expect(headers.get("Authorization")).toBe("Bearer session-secret");
+      expect(headers.get("Idempotency-Key")).toBe("terminate-postgres-primary");
+      expect(headers.get("Content-Type")).toBeNull();
+    }
+  });
+
+  it("fails closed on a termination result for another resource, operation kind or phase", async () => {
+    const termination = {
+      id: "postgres-primary",
+      name: "Postgres primary",
+      offeringId: "postgresql-18",
+      engineVersion: "18",
+      quotaEntitlementId: "quota-primary",
+      regionId: "local-primary",
+      phase: "TERMINATION_PENDING",
+      endpoint: null,
+      credentialReference: null,
+      resourceVersion: 3,
+      createdAt: "2026-08-26T12:00:00Z",
+      operation: {
+        id: "operation-terminate-primary",
+        kind: "TERMINATE",
+        phase: "TERMINATION_PENDING",
+        safeFailureCode: null,
+        observedAt: "2026-08-26T12:04:00Z"
+      }
+    };
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ...termination, id: "postgres-other" }));
+    await expect(httpControlPlaneRepository.terminateInstallation!(
+      "session-secret", "postgres-primary", "terminate-postgres-primary"
+    )).rejects.toThrow("INVALID_INSTALLATION_TERMINATION_RESPONSE");
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      ...termination,
+      operation: { ...termination.operation, kind: "PROVISION" }
+    }));
+    await expect(httpControlPlaneRepository.terminateInstallation!(
+      "session-secret", "postgres-primary", "terminate-postgres-primary"
+    )).rejects.toThrow("INVALID_INSTALLATION_RESPONSE");
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      ...termination,
+      operation: { ...termination.operation, phase: "TERMINATING" }
+    }));
+    await expect(httpControlPlaneRepository.terminateInstallation!(
+      "session-secret", "postgres-primary", "terminate-postgres-primary"
+    )).rejects.toThrow("INVALID_INSTALLATION_RESPONSE");
+  });
+
+  it("rejects malformed termination locators before making a request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.terminateInstallation!(
+      "session-secret", "postgres/primary", "terminate-postgres-primary"
+    )).rejects.toThrow("INVALID_INSTALLATION_TERMINATION_REQUEST");
+    await expect(httpControlPlaneRepository.terminateInstallation!(
+      "session-secret", "postgres-primary", "terminate postgres primary"
+    )).rejects.toThrow("INVALID_INSTALLATION_TERMINATION_REQUEST");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reads one Application through the exact product route and retains its strong ETag", async () => {

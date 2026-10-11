@@ -46,6 +46,11 @@ export interface ControlPlaneRepository {
     credential: string,
     command: CreateInstallationCommand
   ): Promise<ServiceInstallation>;
+  terminateInstallation?(
+    credential: string,
+    installationId: string,
+    requestId: string
+  ): Promise<ServiceInstallation>;
   inspectServiceAuthorization?(
     credential: string,
     accountId: string,

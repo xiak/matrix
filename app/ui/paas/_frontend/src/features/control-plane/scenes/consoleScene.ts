@@ -1,6 +1,6 @@
 import type { ApplicationReadSnapshot } from "../domain/application";
 import type { ExperienceApplicationDeploymentSnapshot, ExperienceApplicationTagSnapshot, ExperienceResource, ExperienceOperation, ExperiencePipeline, ExperienceServiceHealth } from "../domain/experience";
-import type { Region, ServiceInstallation } from "../domain/resources";
+import type { Region, ServiceInstallation, ServiceOffering } from "../domain/resources";
 import type { ConsoleSection, ServiceView } from "../domain/selection";
 
 export type RailIconKind = "overview" | "database" | "devops" | "observability" | "audit" | "access";
@@ -98,6 +98,7 @@ export type GlobalSearchResultScene = {
 
 export type OfferingScene = {
   id: string;
+  kind: ServiceOffering["kind"];
   name: string;
   description: string;
   engine: string;
@@ -121,12 +122,17 @@ export type EntitlementScene = {
 export type InstallationScene = {
   id: string;
   name: string;
+  offeringId: string;
   engine: string;
   regionName: string;
   phase: ServiceInstallation["phase"];
   status: SceneStatus;
   endpoint: string | null;
   operationId: string;
+  operationKind: ServiceInstallation["operation"]["kind"];
+  safeFailureCode: string | null;
+  resourceVersion: number;
+  createdAt: string;
   observedAt: string;
 };
 

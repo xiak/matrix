@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
+import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
 import { useSearchParams } from "next/navigation";
 import { ConsoleLink as Link, useConsoleNavigation } from "../routes/ConsoleNavigation";
 import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
@@ -11,9 +11,12 @@ import {
   Database,
   HardDrive,
   MapPin,
+  MessagesSquare,
   PackageCheck,
+  Search,
   Server,
-  ShieldCheck
+  ShieldCheck,
+  Trash2
 } from "lucide-react";
 import {
   Alert,
@@ -24,6 +27,8 @@ import {
   Button,
   Card,
   ContentLayout,
+  FormField,
+  Input,
   Typography
 } from "@ui/xiak";
 import type {
@@ -47,7 +52,7 @@ import type {
   ManagedServiceAuthorizationIntent,
   ManagedServiceAuthorizationLoad
 } from "../domain/serviceAuthorization";
-import type { InstallationReadLoad, ServiceInstallation } from "../domain/resources";
+import type { InstallationReadLoad, InstallationTerminationIntent, ServiceInstallation, ServiceOffering } from "../domain/resources";
 
 type InstallationDetailLoad =
   | { status: "idle" | "loading" }
@@ -56,21 +61,32 @@ type InstallationDetailLoad =
 function installationDetailScene(summary: InstallationScene, installation: ServiceInstallation): InstallationScene {
   const status: SceneStatus = installation.phase === "READY"
     ? "success"
-    : installation.phase === "FAILED"
+    : ["FAILED", "ROLLBACK_FAILED", "TERMINATION_FAILED"].includes(installation.phase)
       ? "danger"
-      : installation.phase === "PROVISIONING"
+      : ["PROVISIONING", "TERMINATING"].includes(installation.phase)
         ? "info"
-        : "warning";
+        : installation.phase === "TERMINATED" ? "neutral" : "warning";
   return {
     ...summary,
     id: installation.id,
     name: installation.name,
+    offeringId: installation.offeringId,
     phase: installation.phase,
     status,
     endpoint: installation.endpoint,
     operationId: installation.operation.id,
+    operationKind: installation.operation.kind,
+    safeFailureCode: installation.operation.safeFailureCode,
+    resourceVersion: installation.resourceVersion,
+    createdAt: installation.createdAt,
     observedAt: installation.operation.observedAt
   };
+}
+
+function OfferingIcon({ kind }: { kind: ServiceOffering["kind"] }) {
+  if (kind === "ELASTICSEARCH") return <Search aria-hidden="true" />;
+  if (kind === "RABBITMQ") return <MessagesSquare aria-hidden="true" />;
+  return <Database aria-hidden="true" />;
 }
 
 function InstallationRows({ items, onOpen, triggerRefs }: {
@@ -135,10 +151,10 @@ function OverviewContent({ scene }: { scene: Extract<ConsoleContentScene, { kind
       <ContentLayout.Aside>
         <Card className={styles.featureCard}>
           <Card.Body className={styles.featureCardBody}>
-            <div className={styles.databaseIcon}><Database aria-hidden="true" /></div>
+            <div className={styles.databaseIcon}>{scene.offering ? <OfferingIcon kind={scene.offering.kind} /> : <Database aria-hidden="true" />}</div>
             <Typography.Eyebrow>{t("databaseEyebrow")}</Typography.Eyebrow>
             <Typography.Title as="h2" level={2}>
-              {scene.offering?.name ?? "PostgreSQL"}
+              {scene.offering?.name ?? t("managedDataServices")}
             </Typography.Title>
             <p>{scene.offering?.description ?? t("offeringUnavailable")}</p>
             <div className={styles.featureMeta}>
@@ -171,7 +187,7 @@ function CatalogContent({ scene, preview }: {
           <Card className={styles.productCard} key={offering.id}>
             <Card.Body className={styles.productCardBody}>
               <div className={styles.productTopline}>
-                <div className={styles.databaseIcon}><Database aria-hidden="true" /></div>
+                <div className={styles.databaseIcon}><OfferingIcon kind={offering.kind} /></div>
                 <Badge status={offering.available ? "success" : "neutral"}>
                   {offering.available ? t("activatable") : t("unavailable")}
                 </Badge>
@@ -363,13 +379,132 @@ function LiveServiceAuthorizationReview({ intent, onClose }: {
   </Card>;
 }
 
+function InstallationTerminationReview({
+  intent,
+  onAccepted,
+  onClose,
+  preview
+}: {
+  intent: InstallationTerminationIntent;
+  onAccepted(installation: ServiceInstallation): void;
+  onClose(): void;
+  preview: boolean;
+}) {
+  const t = useTranslations("ManagedService");
+  const format = useConsoleFormat();
+  const { submitInstallationTermination } = useControlPlane();
+  const [confirmation, setConfirmation] = useState("");
+  const confirmationId = useId();
+  const submitting = intent.phase === "submitting";
+  const showSubmit = intent.phase === "review" || submitting || intent.error === "unknown";
+  const confirmed = confirmation === intent.installation.id;
+
+  return <Card aria-label={t("terminationReview")} className={styles.authorizationCard}>
+    <Card.Header className={styles.authorizationHeading}>
+      <span><Trash2 aria-hidden="true" /></span>
+      <div>
+        <Typography.Eyebrow>{t(preview ? "terminationPreviewEyebrow" : "terminationLiveEyebrow")}</Typography.Eyebrow>
+        <Typography.Title as="h3" level={3}>{t("terminationReviewTitle", { name: intent.installation.name })}</Typography.Title>
+        <Typography.Text tone="muted">{t("terminationReviewHint")}</Typography.Text>
+      </div>
+      <Badge status="warning">{preview ? "MOCK" : "LIVE"}</Badge>
+    </Card.Header>
+    <Card.Body className={styles.authorizationBody} aria-busy={submitting}>
+      <Alert status="danger">{t(preview ? "terminationPreviewBoundary" : "terminationLiveBoundary")}</Alert>
+      <dl className={styles.authorizationFacts}>
+        <div><dt>{t("instanceId")}</dt><dd><Typography.Code>{intent.installation.id}</Typography.Code><small>{intent.installation.name}</small></dd></div>
+        <div><dt>{t("product")}</dt><dd><Typography.Code>{intent.installation.offeringId}</Typography.Code><small>{intent.installation.engineVersion}</small></dd></div>
+        <div><dt>{t("region")}</dt><dd><Typography.Code>{intent.installation.regionId}</Typography.Code></dd></div>
+        <div><dt>{t("resourceVersion")}</dt><dd>{intent.installation.resourceVersion}<small>{t("terminationVersionObservation")}</small></dd></div>
+        <div><dt>{t("authorizationRequest")}</dt><dd><Typography.Code>{intent.requestId}</Typography.Code><small>{t("idempotencyBoundary")}</small></dd></div>
+        <div><dt>{t("createdAt")}</dt><dd>{format.timestamp(intent.installation.createdAt)}</dd></div>
+      </dl>
+      <FormField id={confirmationId} label={t("terminationConfirmationLabel")} hint={t("terminationConfirmationHint", { id: intent.installation.id })}>
+        <Input
+          autoComplete="off"
+          id={confirmationId}
+          onChange={(event) => setConfirmation(event.target.value)}
+          placeholder={intent.installation.id}
+          spellCheck={false}
+          value={confirmation}
+        />
+      </FormField>
+      {intent.error ? <Alert status={intent.error === "unknown" ? "warning" : "danger"}>{t(`terminationMutationErrors.${intent.error}`)}</Alert> : null}
+      <div className={styles.authorizationActions}>
+        {showSubmit ? <Button disabled={!confirmed || submitting} variant="danger" onClick={() => {
+          void submitInstallationTermination().then((installation) => {
+            if (installation) onAccepted(installation);
+          });
+        }}>{t(submitting ? "terminationSubmitting" : intent.error === "unknown" ? "retrySameTermination" : "confirmTermination")}</Button> : null}
+        <Button disabled={submitting} variant="secondary" onClick={onClose}>{t(intent.error === "unknown" ? "returnPreservingTermination" : "cancelTermination")}</Button>
+      </div>
+    </Card.Body>
+  </Card>;
+}
+
+function InstallationLifecycleCard({
+  authorizationBusy,
+  installation,
+  preview,
+  trigger
+}: {
+  authorizationBusy: boolean;
+  installation: ServiceInstallation;
+  preview: boolean;
+  trigger: MutableRefObject<HTMLButtonElement | null>;
+}) {
+  const t = useTranslations("ManagedService");
+  const {
+    beginInstallationTermination,
+    installationTerminationIntent,
+    reopenInstallationTerminationIntent
+  } = useControlPlane();
+  const currentIntent = installationTerminationIntent?.installation.id === installation.id
+    ? installationTerminationIntent
+    : null;
+  const blockedByAnotherIntent = Boolean(installationTerminationIntent && !currentIntent);
+  const canTerminate = ["READY", "ROLLBACK_FAILED", "TERMINATION_FAILED"].includes(installation.phase);
+  const terminating = installation.phase === "TERMINATION_PENDING" || installation.phase === "TERMINATING";
+
+  return <Card aria-label={t("instanceLifecycle")} className={styles.authorizationCard}>
+    <Card.Header className={styles.authorizationHeading}>
+      <span><Trash2 aria-hidden="true" /></span>
+      <div>
+        <Typography.Eyebrow>{t(preview ? "terminationPreviewEyebrow" : "terminationLiveEyebrow")}</Typography.Eyebrow>
+        <Typography.Title as="h3" level={3}>{t("instanceLifecycle")}</Typography.Title>
+        <Typography.Text tone="muted">{t("instanceLifecycleHint")}</Typography.Text>
+      </div>
+      <Badge status={terminating ? "warning" : installation.phase === "TERMINATION_FAILED" ? "danger" : "neutral"}>{t(`installationPhases.${installation.phase}`)}</Badge>
+    </Card.Header>
+    <Card.Body className={styles.authorizationBody}>
+      {terminating ? <Alert status="warning">{t("terminationInProgress")}</Alert> : null}
+      {installation.phase === "TERMINATED" ? <Alert>{t("terminationCompleted")}</Alert> : null}
+      {currentIntent && !currentIntent.open ? <Alert status="warning">{t("terminationUnknownPreserved", { id: currentIntent.requestId })}</Alert> : null}
+      {blockedByAnotherIntent ? <Alert status="warning">{t("terminationAnotherIntent", { id: installationTerminationIntent!.installation.id })}</Alert> : null}
+      {authorizationBusy ? <Alert status="warning">{t("terminationAuthorizationBusy")}</Alert> : null}
+      {canTerminate ? <div className={styles.authorizationActions}>
+        {currentIntent && !currentIntent.open
+          ? <Button ref={trigger} onClick={reopenInstallationTerminationIntent} variant="danger">{t("resumeTermination")}</Button>
+          : <Button ref={trigger} disabled={blockedByAnotherIntent || authorizationBusy} onClick={() => beginInstallationTermination(installation)} variant="danger">{t(installation.phase === "READY" ? "reviewTermination" : "reviewTerminationAgain")}</Button>}
+      </div> : null}
+    </Card.Body>
+  </Card>;
+}
+
 function InstallationContent({ scene, preview, accountId }: {
   scene: Extract<ConsoleContentScene, { kind: "installations" }>;
   preview: boolean;
   accountId?: string;
 }) {
   const t = useTranslations("ManagedService");
-  const { closeServiceAuthorizationIntent, readInstallation, serviceAuthorizationIntent } = useControlPlane();
+  const format = useConsoleFormat();
+  const {
+    closeInstallationTerminationIntent,
+    closeServiceAuthorizationIntent,
+    installationTerminationIntent,
+    readInstallation,
+    serviceAuthorizationIntent
+  } = useControlPlane();
   const [selectedSummary, setSelectedSummary] = useState<InstallationScene | null>(null);
   const [detailLoad, setDetailLoad] = useState<InstallationDetailLoad>({ status: "idle" });
   const [review, setReview] = useState<"authorize" | "unbind" | null>(null);
@@ -380,6 +515,7 @@ function InstallationContent({ scene, preview, accountId }: {
   const heading = useRef<HTMLHeadingElement>(null);
   const authorizationTrigger = useRef<HTMLButtonElement>(null);
   const unbindTrigger = useRef<HTMLButtonElement>(null);
+  const terminationTrigger = useRef<HTMLButtonElement>(null);
   const rowTriggers = useRef(new Map<string, HTMLButtonElement>());
   const returnToList = useRef<string | null>(null);
   const detailReadRevision = useRef(0);
@@ -392,17 +528,12 @@ function InstallationContent({ scene, preview, accountId }: {
   const openInstallation = useCallback((item: InstallationScene) => {
     setSelectedSummary(item);
     setReview(null);
-    if (preview) {
-      detailReadRevision.current += 1;
-      setDetailLoad({ status: "idle" });
-      return;
-    }
     const revision = ++detailReadRevision.current;
     setDetailLoad({ status: "loading" });
     void readInstallation(item.id).then((result) => {
       if (revision === detailReadRevision.current) setDetailLoad(result);
     });
-  }, [preview, readInstallation]);
+  }, [readInstallation]);
 
   useLayoutEffect(() => {
     if (selectedId) {
@@ -417,6 +548,9 @@ function InstallationContent({ scene, preview, accountId }: {
 
   if (selected) {
     const liveIntent = !preview && detailLoad.status === "ready" && serviceAuthorizationIntent?.installationId === selected.id && serviceAuthorizationIntent.open ? serviceAuthorizationIntent : null;
+    const terminationIntent = detailLoad.status === "ready" && installationTerminationIntent?.installation.id === selected.id && installationTerminationIntent.open
+      ? installationTerminationIntent
+      : null;
     const detailError = detailLoad.status === "expired" || detailLoad.status === "forbidden" || detailLoad.status === "notFound" || detailLoad.status === "unavailable"
       ? detailLoad.status
       : null;
@@ -424,6 +558,11 @@ function InstallationContent({ scene, preview, accountId }: {
     const previewUnbound = previewUnboundIds.has(selected.id);
     const previewBindingId = `preview.workload-role-binding.${selected.id}`;
     const closeDetail = () => {
+      if (terminationIntent) {
+        closeInstallationTerminationIntent();
+        window.setTimeout(() => terminationTrigger.current?.focus({ preventScroll: true }), 0);
+        return;
+      }
       if (liveIntent) {
         closeServiceAuthorizationIntent();
         window.setTimeout(() => (liveIntent.kind === "unbind" ? unbindTrigger.current : authorizationTrigger.current)?.focus({ preventScroll: true }), 0);
@@ -442,19 +581,22 @@ function InstallationContent({ scene, preview, accountId }: {
     };
     return <section className={styles.installationDetail} aria-labelledby="managed-service-installation-detail-title">
       <div className={styles.detailHeading}>
-        <Button variant="ghost" size="small" onClick={closeDetail}><ArrowLeft aria-hidden="true" />{t(review ? "backToInstance" : "backToInstances")}</Button>
-        <div><Typography.Eyebrow>{t(review ? "authorizationEyebrow" : liveIntent ? "authorizationLiveWriteEyebrow" : "instanceEyebrow")}</Typography.Eyebrow><h2 className={styles.detailTitle} id="managed-service-installation-detail-title" ref={heading} tabIndex={-1}>{review === "authorize" ? t("authorizationTitle", { name: selected.name }) : review === "unbind" ? t("unbindTitle", { name: selected.name }) : liveIntent ? t(liveIntent.kind === "bind" ? "authorizationTitle" : "unbindTitle", { name: selected.name }) : selected.name}</h2></div>
-        <Badge status={review ? "warning" : liveIntent || detailLoad.status === "loading" || detailLoad.status === "idle" ? "info" : detailError ? "warning" : selected.status}>
-          {review ? "MOCK" : liveIntent ? "LIVE" : !preview && (detailLoad.status === "loading" || detailLoad.status === "idle") ? t("instanceDetailLoadingBadge") : !preview && detailError ? t("instanceDetailUnavailableBadge") : t(`installationPhases.${selected.phase}`)}
+        <Button variant="ghost" size="small" onClick={closeDetail}><ArrowLeft aria-hidden="true" />{t(review || terminationIntent || liveIntent ? "backToInstance" : "backToInstances")}</Button>
+        <div><Typography.Eyebrow>{t(terminationIntent ? preview ? "terminationPreviewEyebrow" : "terminationLiveEyebrow" : review ? "authorizationEyebrow" : liveIntent ? "authorizationLiveWriteEyebrow" : "instanceEyebrow")}</Typography.Eyebrow><h2 className={styles.detailTitle} id="managed-service-installation-detail-title" ref={heading} tabIndex={-1}>{terminationIntent ? t("terminationReviewTitle", { name: selected.name }) : review === "authorize" ? t("authorizationTitle", { name: selected.name }) : review === "unbind" ? t("unbindTitle", { name: selected.name }) : liveIntent ? t(liveIntent.kind === "bind" ? "authorizationTitle" : "unbindTitle", { name: selected.name }) : selected.name}</h2></div>
+        <Badge status={terminationIntent || review ? "warning" : liveIntent || detailLoad.status === "loading" || detailLoad.status === "idle" ? "info" : detailError ? "warning" : selected.status}>
+          {terminationIntent ? preview ? "MOCK" : "LIVE" : review ? "MOCK" : liveIntent ? "LIVE" : detailLoad.status === "loading" || detailLoad.status === "idle" ? t("instanceDetailLoadingBadge") : detailError ? t("instanceDetailUnavailableBadge") : t(`installationPhases.${selected.phase}`)}
         </Badge>
       </div>
 
-      {!preview && (detailLoad.status === "idle" || detailLoad.status === "loading") ? <TableSkeleton header={false} label={t("instanceDetailLoading")} rows={3} /> : !preview && detailError ? <EmptyState
+      {detailLoad.status === "idle" || detailLoad.status === "loading" ? <TableSkeleton header={false} label={t("instanceDetailLoading")} rows={3} /> : detailError ? <EmptyState
         title={t("instanceDetailUnavailable")}
         description={t(`instanceDetailErrors.${detailError}`)}
         icon={<Database />}
         action={<Button onClick={() => openInstallation(selected)} variant="secondary">{t("retryInstanceDetail")}</Button>}
-      /> : liveIntent ? <LiveServiceAuthorizationReview intent={liveIntent} onClose={closeDetail} /> : review === "authorize" && accountId ? <>
+      /> : terminationIntent ? <InstallationTerminationReview intent={terminationIntent} preview={preview} onAccepted={(installation) => {
+        setDetailLoad({ status: "ready", installation });
+        window.setTimeout(() => terminationTrigger.current?.focus({ preventScroll: true }), 0);
+      }} onClose={closeDetail} /> : liveIntent ? <LiveServiceAuthorizationReview intent={liveIntent} onClose={closeDetail} /> : review === "authorize" && accountId ? <>
         <Alert status="warning">{t("authorizationPreviewBoundary")}</Alert>
         <ServiceAuthorizationConsentReview accountId={accountId} targetResourceId={selected.id} stage={stage} onStageChange={setStage} onClose={closeDetail} onPreviewAuthorize={preview ? () => {
           setPreviewAccountAuthorized(true);
@@ -474,10 +616,14 @@ function InstallationContent({ scene, preview, accountId }: {
       </> : <>
         <dl className={styles.installationFacts}>
           <div><dt>{t("instanceId")}</dt><dd><Typography.Code>{selected.id}</Typography.Code></dd></div>
+          <div><dt>{t("product")}</dt><dd>{selected.engine}<small><Typography.Code>{selected.offeringId}</Typography.Code></small></dd></div>
           <div><dt>{t("region")}</dt><dd>{selected.regionName}</dd></div>
           <div><dt>{t("status")}</dt><dd><Badge status={selected.status}>{t(`installationPhases.${selected.phase}`)}</Badge></dd></div>
           <div><dt>{t("endpoint")}</dt><dd><Typography.Code>{selected.endpoint ?? t("unassigned")}</Typography.Code></dd></div>
-          <div><dt>{t("operationId")}</dt><dd><Typography.Code>{selected.operationId}</Typography.Code></dd></div>
+          <div><dt>{t("operationId")}</dt><dd><Typography.Code>{selected.operationId}</Typography.Code><small>{t(`operationKinds.${selected.operationKind}`)}</small></dd></div>
+          <div><dt>{t("resourceVersion")}</dt><dd>{selected.resourceVersion}</dd></div>
+          <div><dt>{t("createdAt")}</dt><dd>{format.timestamp(selected.createdAt)}</dd></div>
+          {selected.safeFailureCode ? <div><dt>{t("safeFailureCode")}</dt><dd><Typography.Code>{selected.safeFailureCode}</Typography.Code></dd></div> : null}
         </dl>
         {preview && accountId ? <Card className={styles.authorizationCard}>
           <Card.Header className={styles.authorizationHeading}><span><ShieldCheck aria-hidden="true" /></span><div><Typography.Eyebrow>{t("authorizationEyebrow")}</Typography.Eyebrow><Typography.Title as="h3" level={3}>{t("serviceAuthorization")}</Typography.Title><Typography.Text tone="muted">{t("serviceAuthorizationHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
@@ -494,7 +640,13 @@ function InstallationContent({ scene, preview, accountId }: {
               {previewBound ? <Button ref={unbindTrigger} variant="danger" onClick={() => setReview("unbind")}>{t("reviewUnbind")}</Button> : null}
             </div>
           </Card.Body>
-        </Card> : accountId ? <LiveServiceAuthorizationCard accountId={accountId} installationId={selected.id} authorizationTrigger={authorizationTrigger} unbindTrigger={unbindTrigger} /> : null}
+        </Card> : accountId && selected.phase === "READY" ? <LiveServiceAuthorizationCard accountId={accountId} installationId={selected.id} authorizationTrigger={authorizationTrigger} unbindTrigger={unbindTrigger} /> : null}
+        {detailLoad.status === "ready" ? <InstallationLifecycleCard
+          authorizationBusy={Boolean(serviceAuthorizationIntent)}
+          installation={detailLoad.installation}
+          preview={preview}
+          trigger={terminationTrigger}
+        /> : null}
       </>}
     </section>;
   }
