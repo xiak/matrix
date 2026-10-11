@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted foundation; current source profile is IAM/Audit/PaaS `83/37/3+r31`. The current signed product-authorization catalog transport, isolated migration mount, full same-profile A/B offline lifecycle, and unchanged-production test-only successor independent CI have passed
+- Status: Accepted foundation; current source profile is IAM/Audit/PaaS `83/38/5+r33`. The current signed product-authorization catalog transport, isolated migration mount, full same-profile A/B offline lifecycle, and unchanged-production test-only successor independent CI have passed; the r33 product-runtime successor still requires its exact independent CI before release acceptance
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `83/37/3` revision 31; earlier accepted slices remain historical evidence, not an alternate current profile
+- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `83/38/5` revision 33; earlier accepted slices remain historical evidence, not an alternate current profile
 
 ## Outcome
 
@@ -536,16 +536,19 @@ data-preserving rollback and selected-backup recovery. These gates remain
 separate from the accepted foundation evidence below and from FEAT-008's host
 work.
 
-The profile contract gates pass on this branch on 2026-08-28: unit/race and
+The historical profile contract gates passed on 2026-08-28: unit/race and
 architecture checks, native Linux backup/seal and every recovery-phase
-refusal, and the actual published `c88a84f` installer rejecting the new signed
-format before effects. Command and adapter boundaries reject a different
-current/target profile even with an authenticated target backup, without
-changing the journal, services, credentials, backup or data. The published v1
-seal and canonical bytes round-trip unchanged. FEAT-006 owns the actual old
-IAM binary retained-data migrations and independent restricted-login process
-gates; they are not cross-profile release compatibility evidence. Current
-implementation `5721b7b1a985f25c9730ddb9229a51f7f6c3b63a` passes all three
+refusal, and the `c88a84f` prototype installer rejecting the then-new signed
+format before effects. Matrix remains pre-v1, so active CI no longer rebuilds
+that superseded executable. The supported development window is the current
+complete profile plus the one fixed direct predecessor named by the current
+acceptance owner; Git history retains older evidence without expanding the
+test matrix. Command and adapter boundaries still reject a different
+current/target profile before changing the journal, services, credentials,
+backup or data. FEAT-006 owns old IAM binary retained-data migrations and
+independent restricted-login process gates; they are not cross-profile release
+compatibility evidence. Historical implementation
+`5721b7b1a985f25c9730ddb9229a51f7f6c3b63a` passed all three
 [independent Verification jobs](https://github.com/xiak/matrix/actions/runs/33138242923).
 
 The populated gate uses the existing `phase1e2e` owner. Before backup it opens

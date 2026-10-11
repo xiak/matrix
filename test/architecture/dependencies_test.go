@@ -355,11 +355,22 @@ func TestInstallationKeepsGoOnlyClosedLifecycleBoundaries(t *testing.T) {
 				"app/service/installation/test/postgresqlha/",
 			) && (imported == "github.com/jackc/pgx/v5" ||
 				imported == "github.com/jackc/pgx/v5/pgconn")
+			// The signed release fixture proves that the packaged managed
+			// products are usable through their native protocols. Keep these
+			// clients confined to that cross-product acceptance owner; neither
+			// installation production code nor the lifecycle adapters may import
+			// them.
+			signedManagedProductFixtureDependency := relative ==
+				"app/service/installation/test/phase1e2e/gate.go" &&
+				(imported == "github.com/go-sql-driver/mysql" ||
+					imported == "github.com/jackc/pgx/v5" ||
+					imported == "github.com/rabbitmq/amqp091-go")
 			if strings.HasPrefix(imported, "k8s.io/") {
 				t.Errorf("%s: installation command cannot import Kubernetes CLI closure %q", relative, imported)
 			}
 			if strings.Contains(strings.Split(imported, "/")[0], ".") &&
-				!strings.HasPrefix(imported, modulePath) && !postgresHAFixtureDependency {
+				!strings.HasPrefix(imported, modulePath) && !postgresHAFixtureDependency &&
+				!signedManagedProductFixtureDependency {
 				if _, allowed := allowedExternal[imported]; !allowed {
 					t.Errorf("%s: installation has unapproved external dependency %q", relative, imported)
 				}

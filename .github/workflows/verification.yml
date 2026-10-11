@@ -271,15 +271,6 @@ jobs:
           for database in "${databases[@]}"; do
             docker exec "$POSTGRES_CONTAINER_ID" createdb -U postgres "${database}_${AUTHORITY_RUN}"
           done
-      - name: Verify published installer rejects new schema format before effects
-        if: matrix.lane == 'authority-runtime'
-        run: |
-          legacy_source="$(mktemp -d "$RUNNER_TEMP/matrix-published-installer-XXXXXX")"
-          git archive c88a84f379afcf94431e2aca7332fe6ec3136dc7 | tar -x -C "$legacy_source"
-          (cd "$legacy_source" && go build -p 2 -trimpath -o "$RUNNER_TEMP/mx-phase1" ./app/service/installation/cmd/mx)
-          MATRIX_INSTALLATION_LEGACY_MX_BINARY="$RUNNER_TEMP/mx-phase1" \
-            go test -p 1 -count=1 ./app/service/installation/internal/platformcommand \
-              -run '^TestPublishedExecutableRejectsNewManifestBeforeEffects$'
       # One rolling fixed IAM predecessor proves retained current invariants,
       # not production release upgrade admission. Superseded unpublished
       # binary/schema fixtures live in Git history, not opt-in matrix entries.

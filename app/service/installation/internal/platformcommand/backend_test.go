@@ -2,16 +2,13 @@ package platformcommand
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -536,55 +533,6 @@ func TestPublishedScalarFixtureKeepsItsAuthenticatedInventory(t *testing.T) {
 			return file.Path == release.IAMProductAuthorizationPath
 		}) {
 		t.Fatal("published scalar fixture acquired a current-only product authorization payload")
-	}
-}
-
-func TestPublishedExecutableRejectsNewManifestBeforeEffects(t *testing.T) {
-	binary := os.Getenv("MATRIX_INSTALLATION_LEGACY_MX_BINARY")
-	if binary == "" {
-		t.Skip("requires the mx executable built from published commit c88a84f")
-	}
-	info, err := os.Lstat(binary)
-	if err != nil || !filepath.IsAbs(binary) || !info.Mode().IsRegular() {
-		t.Fatal("legacy mx must be an absolute regular executable")
-	}
-	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
-	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, legacy, release.CurrentDatabaseProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := filepath.Join(t.TempDir(), "not-an-installation")
-	const sentinel = "unowned file must remain intact"
-	if err := os.WriteFile(root, []byte(sentinel), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for index, fixture := range fixtures {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		command := exec.CommandContext(ctx, binary, "platform", "install", "--format", "json",
-			"--root", root, "--bundle", fixture.Root, "--trust-key", fixture.TrustPath)
-		output, runErr := command.CombinedOutput()
-		cancel()
-		var failure struct {
-			Error struct {
-				Code string `json:"code"`
-			} `json:"error"`
-		}
-		if runErr == nil || json.Unmarshal(output, &failure) != nil {
-			t.Fatalf("legacy CLI did not reject safely: %v", runErr)
-		}
-		if index == 0 {
-			// Both checks are after signature/payload authentication. Current
-			// topology need not be a supported runtime for the published mx.
-			if failure.Error.Code != "INSTALLATION_ROOT_INVALID" && failure.Error.Code != "TOPOLOGY_CONTRACT_UNSUPPORTED" {
-				t.Fatalf("legacy manifest did not authenticate: %s", failure.Error.Code)
-			}
-		} else if failure.Error.Code != "RELEASE_BUNDLE_INVALID" {
-			t.Fatalf("published mx accepted the new manifest format: %s", failure.Error.Code)
-		}
-		retained, err := os.ReadFile(root)
-		if err != nil || string(retained) != sentinel {
-			t.Fatal("legacy CLI changed the unowned root")
-		}
 	}
 }
 
