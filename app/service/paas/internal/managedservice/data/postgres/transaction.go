@@ -28,8 +28,9 @@ const installationColumns = `installation.id, installation.name,
        installation.offering_id, installation.engine_version,
        installation.quota_entitlement_id, installation.region_id,
        installation.phase, installation.endpoint,
-       installation.credential_reference, installation.created_at,
-       operation.id, operation.phase, operation.safe_failure_code,
+       installation.credential_reference, installation.resource_version,
+       installation.created_at,
+       operation.id, operation.kind, operation.phase, operation.safe_failure_code,
        operation.observed_at`
 
 func (value *transaction) ListQuotaEntitlements(
@@ -121,12 +122,41 @@ func (value *transaction) FindInstallationReplay(
 	idempotencyKey string,
 ) (managedservicev1.ServiceInstallation, string, bool, error) {
 	row := value.tx.QueryRow(ctx, `
-SELECT `+installationColumns+`, operation.request_digest
-  FROM managedservice.service_installations AS installation
+SELECT `+installationColumns+`,
+       CASE WHEN requested.kind = 'PROVISION' THEN requested.request_digest ELSE '' END
+  FROM managedservice.operations AS requested
+  JOIN managedservice.service_installations AS installation
+    ON installation.tenant_id = requested.tenant_id
+   AND installation.id = requested.installation_id
   JOIN managedservice.operations AS operation
     ON operation.tenant_id = installation.tenant_id
-   AND operation.installation_id = installation.id
- WHERE operation.idempotency_key = $1`, idempotencyKey)
+   AND operation.id = installation.current_operation_id
+ WHERE requested.idempotency_key = $1`, idempotencyKey)
+	item, digest, err := scanInstallationWithDigest(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return managedservicev1.ServiceInstallation{}, "", false, nil
+	}
+	if err != nil {
+		return managedservicev1.ServiceInstallation{}, "", false, databaseError(ctx, err)
+	}
+	return item, digest, true, nil
+}
+
+func (value *transaction) FindTerminationReplay(
+	ctx context.Context,
+	idempotencyKey string,
+) (managedservicev1.ServiceInstallation, string, bool, error) {
+	row := value.tx.QueryRow(ctx, `
+SELECT `+installationColumns+`,
+       CASE WHEN requested.kind = 'TERMINATE' THEN requested.request_digest ELSE '' END
+  FROM managedservice.operations AS requested
+  JOIN managedservice.service_installations AS installation
+    ON installation.tenant_id = requested.tenant_id
+   AND installation.id = requested.installation_id
+  JOIN managedservice.operations AS operation
+    ON operation.tenant_id = installation.tenant_id
+   AND operation.id = installation.current_operation_id
+ WHERE requested.idempotency_key = $1`, idempotencyKey)
 	item, digest, err := scanInstallationWithDigest(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return managedservicev1.ServiceInstallation{}, "", false, nil
@@ -176,26 +206,29 @@ UPDATE managedservice.quota_entitlements
 		return managedservicev1.ServiceInstallation{}, usecase.ErrQuotaExhausted
 	}
 	var createdAt, observedAt time.Time
+	var resourceVersion uint64
 	err = value.tx.QueryRow(ctx, `
 INSERT INTO managedservice.service_installations (
     tenant_id, id, name, offering_id, engine_version,
-    quota_entitlement_id, region_id
+    quota_entitlement_id, region_id, current_operation_id
 ) VALUES (
-    managedservice.current_tenant_id(), $1, $2, $3, $4, $5, $6
+    managedservice.current_tenant_id(), $1, $2, $3, $4, $5, $6, $7
 )
-RETURNING created_at, observed_at`,
+RETURNING created_at, observed_at, resource_version`,
 		draft.ID, draft.Name, draft.OfferingID, draft.EngineVersion,
-		draft.QuotaEntitlementID, draft.RegionID,
-	).Scan(&createdAt, &observedAt)
+		draft.QuotaEntitlementID, draft.RegionID, draft.OperationID,
+	).Scan(&createdAt, &observedAt, &resourceVersion)
 	if err != nil {
 		return managedservicev1.ServiceInstallation{}, databaseError(ctx, err)
 	}
 	err = value.tx.QueryRow(ctx, `
 INSERT INTO managedservice.operations (
-    tenant_id, id, installation_id, idempotency_key, request_digest,
+    tenant_id, id, installation_id, kind, quota_release,
+    idempotency_key, request_digest,
     requested_by_type, requested_by_id, iam_decision_id, request_id
 ) VALUES (
-    managedservice.current_tenant_id(), $1, $2, $3, $4, $5, $6, $7, $8
+    managedservice.current_tenant_id(), $1, $2, 'PROVISION', 'NONE',
+    $3, $4, $5, $6, $7, $8
 )
 RETURNING observed_at`,
 		draft.OperationID, draft.ID, draft.IdempotencyKey, draft.RequestDigest,
@@ -208,9 +241,10 @@ RETURNING observed_at`,
 		ID: draft.ID, Name: draft.Name, OfferingID: draft.OfferingID,
 		EngineVersion: draft.EngineVersion, QuotaEntitlementID: draft.QuotaEntitlementID,
 		RegionID: draft.RegionID, Phase: managedservicev1.InstallationPending,
-		CreatedAt: normalizeTime(createdAt),
+		ResourceVersion: resourceVersion, CreatedAt: normalizeTime(createdAt),
 		Operation: managedservicev1.InstallationOperation{
-			ID: draft.OperationID, Phase: managedservicev1.InstallationPending,
+			ID: draft.OperationID, Kind: managedservicev1.InstallationOperationProvision,
+			Phase:      managedservicev1.InstallationPending,
 			ObservedAt: normalizeTime(observedAt),
 		},
 	}
@@ -218,6 +252,21 @@ RETURNING observed_at`,
 		return managedservicev1.ServiceInstallation{}, usecase.ErrRepositoryUnavailable
 	}
 	return result, nil
+}
+
+func (value *transaction) StartTermination(
+	ctx context.Context,
+	draft usecase.TerminationDraft,
+) (managedservicev1.ServiceInstallation, error) {
+	_, err := value.tx.Exec(ctx, `
+SELECT managedservice.start_termination($1, $2, $3, $4, $5, $6, $7, $8)`,
+		draft.InstallationID, draft.OperationID, draft.IdempotencyKey,
+		draft.RequestDigest, draft.ActorType, draft.ActorID,
+		draft.IAMDecisionID, draft.RequestID)
+	if err != nil {
+		return managedservicev1.ServiceInstallation{}, databaseError(ctx, err)
+	}
+	return value.GetServiceInstallation(ctx, draft.InstallationID)
 }
 
 func (value *transaction) AppendAuditEvent(ctx context.Context, event audit.Event) error {
@@ -247,7 +296,7 @@ SELECT `+installationColumns+`
   FROM managedservice.service_installations AS installation
   JOIN managedservice.operations AS operation
     ON operation.tenant_id = installation.tenant_id
-   AND operation.installation_id = installation.id
+   AND operation.id = installation.current_operation_id
  ORDER BY installation.created_at DESC, installation.id COLLATE "C"`)
 	if err != nil {
 		return nil, databaseError(ctx, err)
@@ -276,7 +325,7 @@ SELECT `+installationColumns+`
   FROM managedservice.service_installations AS installation
   JOIN managedservice.operations AS operation
     ON operation.tenant_id = installation.tenant_id
-   AND operation.installation_id = installation.id
+   AND operation.id = installation.current_operation_id
  WHERE installation.id = $1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return managedservicev1.ServiceInstallation{}, usecase.ErrNotFound
@@ -363,8 +412,9 @@ func scanInstallationValues(
 	destinations := []any{
 		&result.ID, &result.Name, &result.OfferingID, &result.EngineVersion,
 		&result.QuotaEntitlementID, &result.RegionID, &result.Phase,
-		&result.Endpoint, &result.CredentialReference, &result.CreatedAt,
-		&result.Operation.ID, &result.Operation.Phase,
+		&result.Endpoint, &result.CredentialReference, &result.ResourceVersion,
+		&result.CreatedAt,
+		&result.Operation.ID, &result.Operation.Kind, &result.Operation.Phase,
 		&result.Operation.SafeFailureCode, &result.Operation.ObservedAt,
 	}
 	if withDigest {

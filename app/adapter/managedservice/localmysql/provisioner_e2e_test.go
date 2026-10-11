@@ -3,6 +3,8 @@ package localmysql
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
+	managedserviceadapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
 	localcontaineradapter "github.com/xiak/matrix/app/adapter/managedservice/localcontainer"
 )
@@ -101,5 +104,26 @@ func TestLocalMySQLRealRuntime(t *testing.T) {
 	if err := database.QueryRowContext(ctx, `SELECT VERSION()`).Scan(&version); err != nil ||
 		len(version) < len("8.4.") || version[:len("8.4.")] != "8.4." {
 		t.Fatalf("MySQL version=%q err=%v", version, err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal("close generated MySQL connection")
+	}
+	deprovision := managedserviceadapterv1.DeprovisionRequest{
+		TenantID: request.TenantID, InstallationID: request.InstallationID,
+		OperationID: "operation-real-delete", OfferingID: request.OfferingID,
+		EngineVersion: request.EngineVersion, RegionID: request.RegionID,
+	}
+	if err := provisioner.Delete(ctx, deprovision); err != nil {
+		t.Fatalf("delete real MySQL: %v", err)
+	}
+	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("real MySQL data or credentials remain: %v", err)
+	}
+	if connection, err := net.DialTimeout("tcp", result.Endpoint, time.Second); err == nil {
+		_ = connection.Close()
+		t.Fatal("terminated MySQL endpoint still accepts connections")
+	}
+	if err := provisioner.Delete(ctx, deprovision); err != nil {
+		t.Fatalf("equal real MySQL delete replay: %v", err)
 	}
 }

@@ -2246,6 +2246,7 @@
           "managedservice.service-installation.read",
           "managedservice.service-installation.service-role.bind",
           "managedservice.service-installation.service-role.unbind",
+          "managedservice.service-installation.terminate",
           "audit.record.read",
           "audit.integrity.verify",
           "audit.platform-record.read",
@@ -9585,9 +9586,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -9662,9 +9663,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -9728,9 +9729,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -9805,9 +9806,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -9871,9 +9872,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -9948,9 +9949,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -10005,9 +10006,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -10061,9 +10062,65 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
+                    }
+                  }
+                },
+                "resourceTags": false,
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.terminate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "product": "managedservice",
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -16382,9 +16439,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -16449,9 +16506,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -16505,9 +16562,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -16572,9 +16629,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -16628,9 +16685,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -16695,9 +16752,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -16741,9 +16798,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -16787,9 +16844,55 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
+                    }
+                  }
+                },
+                "resourceTags": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.terminate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "product": "managedservice",
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -23576,9 +23679,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -23643,9 +23746,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -23699,9 +23802,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -23766,9 +23869,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -23822,9 +23925,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -23889,9 +23992,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -23935,9 +24038,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -23981,9 +24084,55 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
                     "product": "managedservice",
-                    "revision": 4
+                    "revision": 5
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
+                    }
+                  }
+                },
+                "resourceTags": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.terminate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "product": "managedservice",
+                    "revision": 5
                   }
                 },
                 "requestTags": false,
@@ -26650,6 +26799,26 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "managedservice.service-installation.terminate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "installationId": false
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "audit.record.read"
                 }
               },
@@ -29200,6 +29369,7 @@
                             "managedservice.service-installation.read",
                             "managedservice.service-installation.service-role.bind",
                             "managedservice.service-installation.service-role.unbind",
+                            "managedservice.service-installation.terminate",
                             "paas.application-label.*",
                             "paas.application-label.delete",
                             "paas.application-label.set",
@@ -29778,6 +29948,7 @@
                       "managedservice.service-installation.read",
                       "managedservice.service-installation.service-role.bind",
                       "managedservice.service-installation.service-role.unbind",
+                      "managedservice.service-installation.terminate",
                       "paas.application-label.*",
                       "paas.application-label.delete",
                       "paas.application-label.set",
@@ -29944,6 +30115,7 @@
                       "managedservice.service-installation.read",
                       "managedservice.service-installation.service-role.bind",
                       "managedservice.service-installation.service-role.unbind",
+                      "managedservice.service-installation.terminate",
                       "paas.application-label.*",
                       "paas.application-label.delete",
                       "paas.application-label.set",
@@ -30110,6 +30282,7 @@
                       "managedservice.service-installation.read",
                       "managedservice.service-installation.service-role.bind",
                       "managedservice.service-installation.service-role.unbind",
+                      "managedservice.service-installation.terminate",
                       "paas.application-label.*",
                       "paas.application-label.delete",
                       "paas.application-label.set",
@@ -35207,7 +35380,8 @@
                         "managedservice.service-installation.create",
                         "managedservice.service-installation.read",
                         "managedservice.service-installation.service-role.bind",
-                        "managedservice.service-installation.service-role.unbind"
+                        "managedservice.service-installation.service-role.unbind",
+                        "managedservice.service-installation.terminate"
                       ]
                     }
                   }
@@ -35238,7 +35412,8 @@
                       "managedservice.service-installation.create",
                       "managedservice.service-installation.read",
                       "managedservice.service-installation.service-role.bind",
-                      "managedservice.service-installation.service-role.unbind"
+                      "managedservice.service-installation.service-role.unbind",
+                      "managedservice.service-installation.terminate"
                     ]
                   }
                 }
@@ -35305,6 +35480,33 @@
                   "contains": {
                     "enum": [
                       "managedservice.service-installation.service-role.unbind"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_INSTALLATION"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "managedservice.service-installation.terminate",
+                      "managedservice.service-installation.*"
                     ]
                   }
                 }
@@ -35702,6 +35904,7 @@
                 "managedservice.service-installation.read",
                 "managedservice.service-installation.service-role.bind",
                 "managedservice.service-installation.service-role.unbind",
+                "managedservice.service-installation.terminate",
                 "audit.record.read",
                 "audit.integrity.verify",
                 "audit.platform-record.read",

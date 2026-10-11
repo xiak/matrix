@@ -124,6 +124,8 @@
           "managedservice.quota-entitlement.activated",
           "managedservice.service-installation.created",
           "managedservice.service-installation.ready",
+          "managedservice.service-installation.termination-requested",
+          "managedservice.service-installation.terminated",
           "audit.records.read",
           "audit.integrity.verified",
           "audit.platform-records.read",
@@ -3020,6 +3022,58 @@
                   "properties": {
                     "action": {
                       "const": "managedservice.service-installation.ready"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "managedservice.service-installation.termination-requested"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "managedservice.service-installation.terminated"
                     }
                   },
                   "required": [
@@ -8331,6 +8385,106 @@
               "required": [
                 "tenantId",
                 "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.termination-requested"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
+                "installationId": false,
+                "result": {
+                  "enum": [
+                    "ACCEPTED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.terminated"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
+                "installationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId",
+                "operationId"
               ]
             }
           },

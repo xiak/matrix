@@ -9,10 +9,11 @@ import (
 func TestDefaultCatalogContainsOnlyImplementedProvidersAndIsDefensivelyCopied(t *testing.T) {
 	catalog := DefaultCatalog()
 	offerings := catalog.List()
-	if len(offerings) != 2 || offerings[0].ID != MySQLOfferingID ||
-		offerings[0].Kind != managedservicev1.OfferingMySQL ||
-		offerings[1].ID != PostgreSQLOfferingID ||
-		offerings[1].Kind != managedservicev1.OfferingPostgreSQL {
+	if len(offerings) != 4 ||
+		offerings[0].ID != ElasticsearchOfferingID || offerings[0].Kind != managedservicev1.OfferingElasticsearch ||
+		offerings[1].ID != MySQLOfferingID || offerings[1].Kind != managedservicev1.OfferingMySQL ||
+		offerings[2].ID != PostgreSQLOfferingID || offerings[2].Kind != managedservicev1.OfferingPostgreSQL ||
+		offerings[3].ID != RabbitMQOfferingID || offerings[3].Kind != managedservicev1.OfferingRabbitMQ {
 		t.Fatalf("unexpected catalog: %#v", offerings)
 	}
 	offerings[0].QuotaShapes[0].ID = "forged"

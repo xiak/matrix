@@ -198,8 +198,25 @@ CREATE INDEX IF NOT EXISTS records_chain_action_desc_idx
     ON audit.records (chain_id, (event_document->>'action'), sequence DESC);
 CREATE INDEX IF NOT EXISTS records_chain_actor_desc_idx
     ON audit.records (chain_id, (event_document#>>'{actor,id}'), sequence DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS records_paas_operation_uq
-    ON audit.records (chain_id, (event_document->>'operationId')) WHERE source = 'PAAS';
+-- One asynchronous operation can emit multiple closed lifecycle facts (for
+-- example, termination accepted and termination completed). Event identity
+-- remains globally unique, while one action may occur at most once for the
+-- same operation. Installation verification only accepts one deployment
+-- admission fact, so retain a stricter partial identity for that lookup.
+DROP INDEX IF EXISTS audit.records_paas_operation_uq;
+CREATE UNIQUE INDEX IF NOT EXISTS records_paas_operation_action_uq
+    ON audit.records (
+        chain_id,
+        (event_document->>'operationId'),
+        (event_document->>'action')
+    )
+    WHERE source = 'PAAS' AND event_document ? 'operationId';
+CREATE UNIQUE INDEX IF NOT EXISTS records_paas_verification_operation_uq
+    ON audit.records (chain_id, (event_document->>'operationId'))
+    WHERE source = 'PAAS'
+      AND event_document->>'action' IN (
+        'paas.deployment.created', 'paas.deployment.updated'
+      );
 
 ALTER TABLE audit.chain_heads ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit.chain_heads FORCE ROW LEVEL SECURITY;
@@ -427,6 +444,8 @@ BEGIN
         ('managedservice.quota-entitlement.activated', 'PAAS', 'QUOTA_ENTITLEMENT', 'SUCCEEDED', true, true, false),
         ('managedservice.service-installation.created', 'PAAS', 'SERVICE_INSTALLATION', 'ACCEPTED', true, true, true),
         ('managedservice.service-installation.ready', 'PAAS', 'SERVICE_INSTALLATION', 'SUCCEEDED', true, true, false),
+        ('managedservice.service-installation.termination-requested', 'PAAS', 'SERVICE_INSTALLATION', 'ACCEPTED', true, true, true),
+        ('managedservice.service-installation.terminated', 'PAAS', 'SERVICE_INSTALLATION', 'SUCCEEDED', true, true, true),
         ('audit.records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false),
         ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false),
         ('paas.execution-pool.created', 'PAAS', 'EXECUTION_POOL', 'SUCCEEDED', true, true, true),
@@ -642,7 +661,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        37::bigint,
+        38::bigint,
         transaction_timestamp()
 $function$;
 
@@ -979,7 +998,9 @@ BEGIN
             'paas.deployment.rolled-back',
             'managedservice.quota-entitlement.activated',
             'managedservice.service-installation.created',
-            'managedservice.service-installation.ready', 'audit.records.read',
+            'managedservice.service-installation.ready',
+            'managedservice.service-installation.termination-requested',
+            'managedservice.service-installation.terminated', 'audit.records.read',
             'audit.integrity.verified',
             'paas.execution-pool.created', 'paas.execution-target.registered',
             'paas.execution-target.drained', 'paas.execution-target.activated', 'paas.execution-target.removed',
@@ -1063,7 +1084,10 @@ BEGIN
       FROM audit.records AS record
      WHERE record.chain_id = submitted_chain_id
        AND record.source = 'PAAS'
-       AND record.event_document->>'operationId' = submitted_operation_id;
+       AND record.event_document->>'operationId' = submitted_operation_id
+       AND record.event_document->>'action' IN (
+            'paas.deployment.created', 'paas.deployment.updated'
+       );
 END
 $function$;
 

@@ -3,6 +3,8 @@ package compose
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -54,6 +56,14 @@ type Runtime interface {
 	Apply(context.Context, RuntimeProject) error
 	Observe(context.Context, RuntimeProject) ([]RuntimeContainer, error)
 	Stop(context.Context, RuntimeProject) error
+}
+
+// DataPurger is a narrower, destructive boundary used only after a managed
+// product runtime has been stopped and observed absent. It mounts only that
+// project's data directory into a fixed, network-isolated helper; credentials
+// and Compose evidence are never exposed to the helper image.
+type DataPurger interface {
+	PurgeData(context.Context, RuntimeProject, string) error
 }
 
 type LocalRuntime struct{}
@@ -114,6 +124,45 @@ func (*LocalRuntime) Stop(ctx context.Context, project RuntimeProject) error {
 		"--remove-orphans",
 		"--timeout", strconv.FormatUint(uint64(project.TimeoutSeconds), 10),
 	)
+	started, err := runDocker(ctx, nil, arguments...)
+	if err == nil {
+		return nil
+	}
+	if started {
+		return ErrEffectOutcomeUnknown
+	}
+	return ErrRuntimeUnavailable
+}
+
+func (*LocalRuntime) PurgeData(ctx context.Context, project RuntimeProject, imageID string) error {
+	if err := validateRuntimeProject(project); err != nil {
+		return err
+	}
+	digest := strings.TrimPrefix(imageID, "sha256:")
+	decoded, err := hex.DecodeString(digest)
+	if !strings.HasPrefix(imageID, "sha256:") || len(decoded) != sha256.Size || err != nil {
+		return errors.New("managed data cleanup image identity is invalid")
+	}
+	dataDirectory := filepath.Join(project.Directory, "data")
+	info, err := os.Lstat(dataDirectory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+		filepath.Dir(dataDirectory) != project.Directory || strings.Contains(dataDirectory, ",") {
+		return errors.New("managed data cleanup target is invalid")
+	}
+	arguments := []string{
+		"run", "--rm",
+		"--label", "com.xiak.matrix.managed=true",
+		"--label", "com.xiak.matrix.role=managed-storage-cleanup",
+		"--label", "com.xiak.matrix.project=" + project.Name,
+		"--network", "none", "--read-only",
+		"--cpus", "0.25", "--memory", "64m", "--memory-swap", "64m", "--pids-limit", "32",
+		"--security-opt", "no-new-privileges:true", "--cap-drop", "ALL",
+		"--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER",
+		"--user", "0:0",
+		"--mount", "type=bind,source=" + dataDirectory + ",target=/matrix-data",
+		"--entrypoint", "sh", imageID,
+		"-c", `set -eu; rm -rf -- /matrix-data/* /matrix-data/.[!.]* /matrix-data/..?*; chown 0:0 /matrix-data; chmod 700 /matrix-data; test -z "$(ls -A /matrix-data)"`,
+	}
 	started, err := runDocker(ctx, nil, arguments...)
 	if err == nil {
 		return nil

@@ -1,23 +1,29 @@
 package releasebuild
 
 const (
-	APISIXBaseReference       = "apache/apisix:3.17.0-debian"
-	APISIXBaseManifestDigest  = "sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092"
-	APISIXBasePinnedReference = APISIXBaseReference + "@" + APISIXBaseManifestDigest
-	AlpineBaseReference       = "alpine:3.24.1"
-	AlpineBaseManifestDigest  = "sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
-	AlpineBasePinnedReference = AlpineBaseReference + "@" + AlpineBaseManifestDigest
-	DockerBaseReference       = "docker:27.5.1-dind-alpine3.21"
-	DockerBaseManifestDigest  = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
-	DockerBasePinnedReference = DockerBaseReference + "@" + DockerBaseManifestDigest
-	PostgresReference         = "postgres:18"
-	PostgresManifestDigest    = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
-	PostgresPinnedReference   = PostgresReference + "@" + PostgresManifestDigest
-	MySQLReference            = "mysql:8.4"
-	MySQLManifestDigest       = "sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242"
-	MySQLPinnedReference      = MySQLReference + "@" + MySQLManifestDigest
-	minimumDockerVersion      = "27.5.1"
-	minimumComposeVersion     = "2.33.0"
+	APISIXBaseReference          = "apache/apisix:3.17.0-debian"
+	APISIXBaseManifestDigest     = "sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092"
+	APISIXBasePinnedReference    = APISIXBaseReference + "@" + APISIXBaseManifestDigest
+	AlpineBaseReference          = "alpine:3.24.1"
+	AlpineBaseManifestDigest     = "sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+	AlpineBasePinnedReference    = AlpineBaseReference + "@" + AlpineBaseManifestDigest
+	DockerBaseReference          = "docker:27.5.1-dind-alpine3.21"
+	DockerBaseManifestDigest     = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
+	DockerBasePinnedReference    = DockerBaseReference + "@" + DockerBaseManifestDigest
+	PostgresReference            = "postgres:18"
+	PostgresManifestDigest       = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
+	PostgresPinnedReference      = PostgresReference + "@" + PostgresManifestDigest
+	MySQLReference               = "mysql:8.4"
+	MySQLManifestDigest          = "sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242"
+	MySQLPinnedReference         = MySQLReference + "@" + MySQLManifestDigest
+	ElasticsearchReference       = "docker.elastic.co/elasticsearch/elasticsearch:8.19.23"
+	ElasticsearchManifestDigest  = "sha256:4d0724bb8d78d7a2330693623e26ca4d621079d062ecc8a30b3e1fc180ec14c1"
+	ElasticsearchPinnedReference = ElasticsearchReference + "@" + ElasticsearchManifestDigest
+	RabbitMQReference            = "rabbitmq:4.1.8"
+	RabbitMQManifestDigest       = "sha256:a82b5a24f4434a33cd15e1e47c444d1e07440261358e46c179539998557d4e29"
+	RabbitMQPinnedReference      = RabbitMQReference + "@" + RabbitMQManifestDigest
+	minimumDockerVersion         = "27.5.1"
+	minimumComposeVersion        = "2.33.0"
 )
 
 type baseImageSpecification struct {
@@ -32,6 +38,8 @@ var baseImageSpecifications = []baseImageSpecification{
 	{DockerBasePinnedReference, "docker", DockerBaseManifestDigest},
 	{PostgresPinnedReference, "postgres", PostgresManifestDigest},
 	{MySQLPinnedReference, "mysql", MySQLManifestDigest},
+	{ElasticsearchPinnedReference, "docker.elastic.co/elasticsearch/elasticsearch", ElasticsearchManifestDigest},
+	{RabbitMQPinnedReference, "rabbitmq", RabbitMQManifestDigest},
 }
 
 type binarySpecification struct {

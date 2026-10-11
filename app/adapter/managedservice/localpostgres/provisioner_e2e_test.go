@@ -2,6 +2,8 @@ package localpostgres
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	managedserviceadapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
 )
 
@@ -47,8 +50,10 @@ func TestLocalPostgresRealRuntime(t *testing.T) {
 	defer func() {
 		cleanup, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cleanupCancel()
-		if err := runtime.Stop(cleanup, runtimeProject); err != nil {
-			t.Errorf("stop real PostgreSQL: %v", err)
+		if _, err := os.Stat(runtimeProject.ObservationDocument); err == nil {
+			if err := runtime.Stop(cleanup, runtimeProject); err != nil {
+				t.Errorf("stop real PostgreSQL: %v", err)
+			}
 		}
 	}()
 	password, err := os.ReadFile(filepath.Join(directory, "postgres-password"))
@@ -87,5 +92,26 @@ func TestLocalPostgresRealRuntime(t *testing.T) {
 	}
 	if err := connection.QueryRow(ctx, `SELECT current_setting('server_version_num')::integer`).Scan(&version); err != nil || version < 180000 || version >= 190000 {
 		t.Fatalf("server version=%d err=%v", version, err)
+	}
+	if err := connection.Close(ctx); err != nil {
+		t.Fatal("close generated PostgreSQL connection")
+	}
+	deprovision := managedserviceadapterv1.DeprovisionRequest{
+		TenantID: request.TenantID, InstallationID: request.InstallationID,
+		OperationID: "operation-real-delete", OfferingID: request.OfferingID,
+		EngineVersion: request.EngineVersion, RegionID: request.RegionID,
+	}
+	if err := provisioner.Delete(ctx, deprovision); err != nil {
+		t.Fatalf("delete real PostgreSQL: %v", err)
+	}
+	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("real PostgreSQL data or credentials remain: %v", err)
+	}
+	if connection, err := net.DialTimeout("tcp", result.Endpoint, time.Second); err == nil {
+		_ = connection.Close()
+		t.Fatal("terminated PostgreSQL endpoint still accepts connections")
+	}
+	if err := provisioner.Delete(ctx, deprovision); err != nil {
+		t.Fatalf("equal real PostgreSQL delete replay: %v", err)
 	}
 }

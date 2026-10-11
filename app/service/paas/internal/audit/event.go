@@ -25,19 +25,21 @@ const (
 )
 
 const (
-	ApplicationCreated           = "paas.application.created"
-	ApplicationLabelUpdated      = "paas.application-label.updated"
-	ApplicationLabelDeleted      = "paas.application-label.deleted"
-	ConfigurationCreated         = "paas.configuration.created"
-	ConfigurationRevisionCreated = "paas.configuration-revision.created"
-	ApplicationRevisionCreated   = "paas.application-revision.created"
-	DeploymentCreated            = "paas.deployment.created"
-	DeploymentUpdated            = "paas.deployment.updated"
-	DeploymentStopped            = "paas.deployment.stopped"
-	DeploymentRolledBack         = "paas.deployment.rolled-back"
-	QuotaEntitlementActivated    = "managedservice.quota-entitlement.activated"
-	ServiceInstallationCreated   = "managedservice.service-installation.created"
-	ServiceInstallationReady     = "managedservice.service-installation.ready"
+	ApplicationCreated                      = "paas.application.created"
+	ApplicationLabelUpdated                 = "paas.application-label.updated"
+	ApplicationLabelDeleted                 = "paas.application-label.deleted"
+	ConfigurationCreated                    = "paas.configuration.created"
+	ConfigurationRevisionCreated            = "paas.configuration-revision.created"
+	ApplicationRevisionCreated              = "paas.application-revision.created"
+	DeploymentCreated                       = "paas.deployment.created"
+	DeploymentUpdated                       = "paas.deployment.updated"
+	DeploymentStopped                       = "paas.deployment.stopped"
+	DeploymentRolledBack                    = "paas.deployment.rolled-back"
+	QuotaEntitlementActivated               = "managedservice.quota-entitlement.activated"
+	ServiceInstallationCreated              = "managedservice.service-installation.created"
+	ServiceInstallationReady                = "managedservice.service-installation.ready"
+	ServiceInstallationTerminationRequested = "managedservice.service-installation.termination-requested"
+	ServiceInstallationTerminated           = "managedservice.service-installation.terminated"
 )
 
 const (

@@ -2587,6 +2587,8 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 		{auditv1.ActionManagedServiceQuotaEntitlementActivated, iamv1.ActionManagedServiceQuotaEntitlementActivate, "collection"},
 		{auditv1.ActionManagedServiceInstallationCreated, iamv1.ActionManagedServiceInstallationCreate, "collection"},
 		{auditv1.ActionManagedServiceInstallationReady, iamv1.ActionManagedServiceInstallationCreate, "collection"},
+		{auditv1.ActionManagedServiceInstallationTerminationRequested, iamv1.ActionManagedServiceInstallationTerminate, "resource-proof"},
+		{auditv1.ActionManagedServiceInstallationTerminated, iamv1.ActionManagedServiceInstallationTerminate, "resource-proof"},
 		{auditv1.ActionAuditRecordsRead, iamv1.ActionAuditRecordRead, "records"},
 		{auditv1.ActionAuditIntegrityVerified, iamv1.ActionAuditIntegrityVerify, "chain"},
 		{auditv1.ActionAuditPlatformRecordsRead, iamv1.ActionAuditPlatformRecordRead, "records"},

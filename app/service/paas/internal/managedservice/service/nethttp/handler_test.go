@@ -36,12 +36,15 @@ func TestListOfferingsAuthorizesCollectionAndFiltersExactCatalogInstances(t *tes
 		authorizer.request.Credential != "Bearer session-secret" {
 		t.Fatalf("authorization request=%#v", authorizer.request)
 	}
-	if len(authorizer.batchRequest.Requests) != 2 ||
-		authorizer.batchRequest.Requests[0].Resource.ID != domain.MySQLOfferingID ||
-		authorizer.batchRequest.Requests[1].Resource.ID != domain.PostgreSQLOfferingID ||
-		authorizer.batchRequest.Requests[0].ResourceMode != iamv1.AuthorizationResourceInstance ||
-		authorizer.batchRequest.Requests[1].ResourceMode != iamv1.AuthorizationResourceInstance {
+	if len(authorizer.batchRequest.Requests) != len(workflow.offerings.Items) {
 		t.Fatalf("batch authorization request=%#v", authorizer.batchRequest)
+	}
+	for index, offering := range workflow.offerings.Items {
+		candidate := authorizer.batchRequest.Requests[index]
+		if candidate.Resource.ID != offering.ID ||
+			candidate.ResourceMode != iamv1.AuthorizationResourceInstance {
+			t.Fatalf("batch authorization request=%#v", authorizer.batchRequest)
+		}
 	}
 	var result managedservicev1.ServiceOfferingList
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Kind != "ServiceOfferingList" {
@@ -167,9 +170,10 @@ func TestCreateInstallationReturnsOnlyNormalizedPendingState(t *testing.T) {
 	workflow := &stubWorkflow{installation: managedservicev1.ServiceInstallation{
 		ID: "postgres-primary", Name: "Postgres primary", OfferingID: "postgresql-18",
 		EngineVersion: "18", QuotaEntitlementID: "quota-1", RegionID: "local-primary",
-		Phase: managedservicev1.InstallationPending, CreatedAt: now,
+		Phase: managedservicev1.InstallationPending, ResourceVersion: 1, CreatedAt: now,
 		Operation: managedservicev1.InstallationOperation{
-			ID: "operation-1", Phase: managedservicev1.InstallationPending, ObservedAt: now,
+			ID: "operation-1", Kind: managedservicev1.InstallationOperationProvision,
+			Phase: managedservicev1.InstallationPending, ObservedAt: now,
 		},
 	}}
 	handler := testHandler(t, &stubAuthorizer{}, workflow)
@@ -191,11 +195,60 @@ func TestCreateInstallationReturnsOnlyNormalizedPendingState(t *testing.T) {
 	}
 }
 
+func TestTerminateInstallationAuthorizesExactResourceAndAcceptsNoSelectors(t *testing.T) {
+	now := time.Date(2026, 10, 11, 8, 0, 0, 0, time.UTC)
+	endpoint, credential := "127.0.0.1:25432", "credential-postgres-primary"
+	workflow := &stubWorkflow{installation: managedservicev1.ServiceInstallation{
+		ID: "postgres-primary", Name: "Postgres primary", OfferingID: managedservicev1.PostgreSQLOfferingID,
+		EngineVersion: "18", QuotaEntitlementID: "quota-1", RegionID: "local-primary",
+		Phase:    managedservicev1.InstallationTerminationPending,
+		Endpoint: &endpoint, CredentialReference: &credential, ResourceVersion: 3, CreatedAt: now,
+		Operation: managedservicev1.InstallationOperation{
+			ID: "operation-terminate", Kind: managedservicev1.InstallationOperationTerminate,
+			Phase: managedservicev1.InstallationPending, ObservedAt: now,
+		},
+	}}
+	authorizer := &stubAuthorizer{}
+	handler := testHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/managed-services/v1/service-installations/postgres-primary/termination",
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer session-secret")
+	request.Header.Set("Idempotency-Key", "termination-request")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || workflow.terminateCalls != 1 ||
+		authorizer.request.Action != port.AuthorizeInstallationTerminate ||
+		authorizer.request.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: "postgres-primary"}) ||
+		workflow.terminateCommand.InstallationID != "postgres-primary" ||
+		workflow.terminateCommand.IdempotencyKey != "termination-request" ||
+		response.Header().Get("Location") != "/managed-services/v1/service-installations/postgres-primary/operation" {
+		t.Fatalf("status=%d authorization=%#v command=%#v body=%s", response.Code, authorizer.request, workflow.terminateCommand, response.Body.String())
+	}
+
+	request = httptest.NewRequest(
+		http.MethodPost,
+		"/managed-services/v1/service-installations/postgres-primary/termination?tenantId=organization-other",
+		strings.NewReader(`{"installationId":"postgres-other"}`),
+	)
+	request.Header.Set("Authorization", "Bearer session-secret")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "termination-forged-selector")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || workflow.terminateCalls != 1 {
+		t.Fatalf("caller selector reached termination: status=%d calls=%d body=%s", response.Code, workflow.terminateCalls, response.Body.String())
+	}
+}
+
 func TestGetInstallationOperationAuthorizesTheExactInstallation(t *testing.T) {
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	authorizer := &stubAuthorizer{}
 	workflow := &stubWorkflow{operation: managedservicev1.InstallationOperation{
-		ID: "operation-1", Phase: managedservicev1.InstallationProvisioning, ObservedAt: now,
+		ID: "operation-1", Kind: managedservicev1.InstallationOperationProvision,
+		Phase: managedservicev1.InstallationProvisioning, ObservedAt: now,
 	}}
 	handler := testHandler(t, authorizer, workflow)
 	request := httptest.NewRequest(
@@ -428,6 +481,8 @@ type stubWorkflow struct {
 	operationReads       int
 	activateCalls        int
 	createCalls          int
+	terminateCalls       int
+	terminateCommand     usecase.TerminateInstallationCommand
 	bindCalls            int
 	bindCommand          usecase.BindServiceRoleCommand
 	roleReceipt          managedservicev1.ServiceRoleBindingReceipt
@@ -490,6 +545,15 @@ func (workflow *stubWorkflow) CreateInstallation(
 	usecase.CreateInstallationCommand,
 ) (managedservicev1.ServiceInstallation, bool, error) {
 	workflow.createCalls++
+	return workflow.installation, false, nil
+}
+
+func (workflow *stubWorkflow) TerminateInstallation(
+	_ context.Context,
+	command usecase.TerminateInstallationCommand,
+) (managedservicev1.ServiceInstallation, bool, error) {
+	workflow.terminateCalls++
+	workflow.terminateCommand = command
 	return workflow.installation, false, nil
 }
 

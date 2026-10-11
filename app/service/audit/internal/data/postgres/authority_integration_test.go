@@ -259,6 +259,7 @@ func TestPostgresAuthorityIntegration(t *testing.T) {
 		t.Fatalf("tenant B Audit record = %#v", tenantBRecord)
 	}
 	assertAuditContractCatalog(t, ctx, auditRuntime, auditMigrator)
+	assertAuditOperationLifecycleIdentity(t, ctx, auditRuntime)
 	assertStoredAuditChains(t, ctx, auditRuntime, bootstrapEvent.TenantID)
 	assertForcedTenantIsolation(
 		t, ctx, iamMigrator, auditMigrator, bootstrapEvent.TenantID,
@@ -266,6 +267,62 @@ func TestPostgresAuthorityIntegration(t *testing.T) {
 	assertAuditImmutability(t, ctx, auditMigrator, bootstrapEvent.TenantID)
 	assertIAMSessionDatabaseTime(t, ctx, admin, iamAPI, fixture)
 	assertIAMAuthorizationCatalog(t, ctx, admin, iamAPI, auditRuntime, fixture)
+}
+
+func assertAuditOperationLifecycleIdentity(
+	t *testing.T,
+	ctx context.Context,
+	runtimeConnection *pgx.Conn,
+) {
+	t.Helper()
+	tenant := auditv1.TenantID("organization-operation-lifecycle")
+	operation := auditv1.OperationID("operation-managed-termination")
+	requested := authorityAuditEvent("event-managed-termination-requested", tenant,
+		"service-installation-operation-lifecycle", auditv1.ActionManagedServiceInstallationTerminationRequested)
+	requested.OperationID = operation
+	terminated := authorityAuditEvent("event-managed-terminated", tenant,
+		requested.Target.ID, auditv1.ActionManagedServiceInstallationTerminated)
+	terminated.OperationID = operation
+	appendAcceptedAuditRecord(t, ctx, runtimeConnection, auditv1.SourcePaaS, requested)
+	appendAcceptedAuditRecord(t, ctx, runtimeConnection, auditv1.SourcePaaS, terminated)
+
+	var lifecycleFacts int
+	if err := runtimeConnection.QueryRow(ctx, `SELECT count(*) FROM audit.read_records($1,$2,10,NULL,NULL,NULL,NULL)
+		WHERE event_document->>'operationId'=$3`, string(auditauthority.TenantChain(tenant)),
+		authorityMaximumSequence+1, string(operation)).Scan(&lifecycleFacts); err != nil || lifecycleFacts != 2 {
+		t.Fatalf("one managed operation did not retain both lifecycle facts: count=%d err=%v", lifecycleFacts, err)
+	}
+	changedCompletion := terminated
+	changedCompletion.EventID = "event-managed-terminated-changed"
+	changedCompletion.RequestID = "request-managed-terminated-changed"
+	changedCompletion.CorrelationID = "correlation-managed-terminated-changed"
+	changedCompletion.RequestDigest = authorityDigest(changedCompletion.RequestID)
+	assertRejectedAuditAppend(t, ctx, runtimeConnection, auditv1.SourcePaaS, changedCompletion,
+		func(*auditSubmission) {}, "23505")
+
+	var managedVerificationFacts int
+	if err := runtimeConnection.QueryRow(ctx,
+		"SELECT count(*) FROM audit.lookup_paas_operation_record($1,$2)",
+		string(auditauthority.TenantChain(tenant)), string(operation)).Scan(&managedVerificationFacts); err != nil || managedVerificationFacts != 0 {
+		t.Fatalf("managed lifecycle operation entered deployment verification lookup: count=%d err=%v", managedVerificationFacts, err)
+	}
+
+	deploymentOperation := auditv1.OperationID("operation-deployment-verification")
+	created := authorityAuditEvent("event-deployment-created-operation", tenant,
+		"deployment-operation-lifecycle", auditv1.ActionPaaSDeploymentCreated)
+	created.OperationID = deploymentOperation
+	createdRecord, _ := appendAcceptedAuditRecord(t, ctx, runtimeConnection, auditv1.SourcePaaS, created)
+	updated := authorityAuditEvent("event-deployment-updated-operation", tenant,
+		created.Target.ID, auditv1.ActionPaaSDeploymentUpdated)
+	updated.OperationID = deploymentOperation
+	assertRejectedAuditAppend(t, ctx, runtimeConnection, auditv1.SourcePaaS, updated,
+		func(*auditSubmission) {}, "23505")
+	var selectedEvent string
+	if err := runtimeConnection.QueryRow(ctx,
+		"SELECT event_id FROM audit.lookup_paas_operation_record($1,$2)",
+		string(auditauthority.TenantChain(tenant)), string(deploymentOperation)).Scan(&selectedEvent); err != nil || selectedEvent != string(createdRecord.Event.EventID) {
+		t.Fatalf("deployment verification operation lookup is not exact: event=%q err=%v", selectedEvent, err)
+	}
 }
 
 func assertAuditContractCatalog(

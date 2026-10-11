@@ -54,6 +54,21 @@ func (registry *ProviderRegistry) Ensure(
 	return provider.Ensure(ctx, request)
 }
 
+func (registry *ProviderRegistry) Delete(
+	ctx context.Context,
+	request managedserviceadapterv1.DeprovisionRequest,
+) error {
+	if registry == nil || ctx == nil ||
+		managedserviceadapterv1.ValidateDeprovisionRequest(request) != nil {
+		return errors.New("managed-service provider deletion request is invalid")
+	}
+	provider, exists := registry.providers[request.OfferingID]
+	if !exists {
+		return errors.New("managed-service provider is not registered")
+	}
+	return provider.Delete(ctx, request)
+}
+
 func (registry *ProviderRegistry) Ready(ctx context.Context) error {
 	if registry == nil || ctx == nil {
 		return errors.New("managed-service provider registry is unavailable")

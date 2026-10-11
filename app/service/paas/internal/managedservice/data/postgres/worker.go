@@ -28,16 +28,21 @@ func (repository *Repository) Claim(
 	var fencingToken int64
 	var attempt int32
 	err = repository.pool.QueryRow(ctx, `
-SELECT tenant_id, operation_id, installation_id, installation_name,
+SELECT tenant_id, operation_id, operation_kind, installation_id, installation_name,
        offering_id, engine_version, quota_entitlement_id, region_id,
-       quota_shape_id, fencing_token, attempt, created_at, observed_at
+       installation_endpoint, installation_credential_reference,
+       quota_shape_id, fencing_token, attempt, created_at,
+       installation_resource_version, observed_at
   FROM managedservice.claim_operation($1, $2)`, workerID, leaseSeconds).Scan(
 		&result.TenantID, &result.OperationID,
+		&result.Kind,
 		&result.Installation.ID, &result.Installation.Name,
 		&result.Installation.OfferingID, &result.Installation.EngineVersion,
 		&result.Installation.QuotaEntitlementID, &result.Installation.RegionID,
+		&result.Installation.Endpoint, &result.Installation.CredentialReference,
 		&result.QuotaShapeID, &fencingToken, &attempt,
-		&result.Installation.CreatedAt, &result.Installation.Operation.ObservedAt,
+		&result.Installation.CreatedAt, &result.Installation.ResourceVersion,
+		&result.Installation.Operation.ObservedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return reconcileinstallation.WorkItem{}, false, nil
@@ -49,7 +54,11 @@ SELECT tenant_id, operation_id, installation_id, installation_name,
 	result.Attempt = uint32(attempt)
 	result.WorkerID = workerID
 	result.Installation.Phase = managedservicev1.InstallationProvisioning
+	if result.Kind == managedservicev1.InstallationOperationTerminate {
+		result.Installation.Phase = managedservicev1.InstallationTerminating
+	}
 	result.Installation.Operation.ID = result.OperationID
+	result.Installation.Operation.Kind = result.Kind
 	result.Installation.Operation.Phase = managedservicev1.InstallationProvisioning
 	result.Installation.CreatedAt = normalizeTime(result.Installation.CreatedAt)
 	result.Installation.Operation.ObservedAt = normalizeTime(result.Installation.Operation.ObservedAt)
@@ -61,12 +70,13 @@ SELECT tenant_id, operation_id, installation_id, installation_name,
 	return result, true, nil
 }
 
-func (repository *Repository) Complete(
+func (repository *Repository) CompleteProvision(
 	ctx context.Context,
 	work reconcileinstallation.WorkItem,
 	result managedserviceadapterv1.ProvisionResult,
 ) error {
 	if repository == nil || repository.pool == nil || ctx == nil || validateWork(work) != nil ||
+		work.Kind != managedservicev1.InstallationOperationProvision ||
 		managedserviceadapterv1.ValidateProvisionResult(result) != nil {
 		return reconcileinstallation.ErrQueueUnavailable
 	}
@@ -74,6 +84,24 @@ func (repository *Repository) Complete(
 SELECT managedservice.complete_operation($1, $2, $3, $4, $5, $6)`,
 		work.TenantID, work.OperationID, work.WorkerID,
 		work.FencingToken, result.Endpoint, result.CredentialReference,
+	)
+	if err != nil {
+		return reconcileinstallation.ErrQueueUnavailable
+	}
+	return nil
+}
+
+func (repository *Repository) CompleteTermination(
+	ctx context.Context,
+	work reconcileinstallation.WorkItem,
+) error {
+	if repository == nil || repository.pool == nil || ctx == nil || validateWork(work) != nil ||
+		work.Kind != managedservicev1.InstallationOperationTerminate {
+		return reconcileinstallation.ErrQueueUnavailable
+	}
+	_, err := repository.pool.Exec(ctx, `
+SELECT managedservice.complete_termination_operation($1, $2, $3, $4)`,
+		work.TenantID, work.OperationID, work.WorkerID, work.FencingToken,
 	)
 	if err != nil {
 		return reconcileinstallation.ErrQueueUnavailable
@@ -121,11 +149,37 @@ SELECT managedservice.fail_operation($1, $2, $3, $4, $5)`,
 	return nil
 }
 
+func (repository *Repository) FailCleanup(
+	ctx context.Context,
+	work reconcileinstallation.WorkItem,
+	failureCode string,
+) error {
+	if repository == nil || repository.pool == nil || ctx == nil || validateWork(work) != nil ||
+		failureCode == "" || work.Kind != managedservicev1.InstallationOperationProvision {
+		return reconcileinstallation.ErrQueueUnavailable
+	}
+	_, err := repository.pool.Exec(ctx, `
+SELECT managedservice.fail_cleanup_operation($1, $2, $3, $4, $5)`,
+		work.TenantID, work.OperationID, work.WorkerID,
+		work.FencingToken, failureCode,
+	)
+	if err != nil {
+		return reconcileinstallation.ErrQueueUnavailable
+	}
+	return nil
+}
+
 func validateWork(work reconcileinstallation.WorkItem) error {
+	var kindError error
+	if work.Kind != managedservicev1.InstallationOperationProvision &&
+		work.Kind != managedservicev1.InstallationOperationTerminate {
+		kindError = errors.New("managed-service operation kind is invalid")
+	}
 	return errors.Join(
 		managedservicev1.ValidateID("work.tenantId", work.TenantID),
 		managedservicev1.ValidateID("work.operationId", work.OperationID),
 		managedservicev1.ValidateID("work.workerId", work.WorkerID),
+		kindError,
 	)
 }
 

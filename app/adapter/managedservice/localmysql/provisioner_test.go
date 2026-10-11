@@ -3,14 +3,17 @@ package localmysql
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	managedserviceadapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	localcontaineradapter "github.com/xiak/matrix/app/adapter/managedservice/localcontainer"
 )
 
 func TestEnsureCreatesRealMySQLShapeWithoutEmbeddingCredentials(t *testing.T) {
@@ -21,8 +24,9 @@ func TestEnsureCreatesRealMySQLShapeWithoutEmbeddingCredentials(t *testing.T) {
 	}
 	secretIndex := 0
 	imageID := "sha256:" + strings.Repeat("b", 64)
+	root := t.TempDir()
 	provisioner, err := New(Config{
-		Root: t.TempDir(), ImageID: imageID, Runtime: runtime,
+		Root: root, ImageID: imageID, Runtime: runtime,
 		NewSecret: func() ([]byte, error) {
 			result := append([]byte(nil), secrets[secretIndex]...)
 			secretIndex++
@@ -90,6 +94,23 @@ func TestEnsureCreatesRealMySQLShapeWithoutEmbeddingCredentials(t *testing.T) {
 	if err != nil || second != result || runtime.applyCalls != 1 || secretIndex != 2 {
 		t.Fatalf("equal ensure=%#v err=%v applyCalls=%d secrets=%d", second, err, runtime.applyCalls, secretIndex)
 	}
+	deprovision := managedserviceadapterv1.DeprovisionRequest{
+		TenantID: request.TenantID, InstallationID: request.InstallationID,
+		OperationID: "operation-delete", OfferingID: request.OfferingID,
+		EngineVersion: request.EngineVersion, RegionID: request.RegionID,
+	}
+	if err := provisioner.Delete(context.Background(), deprovision); err != nil ||
+		runtime.stopCalls != 1 || runtime.purgeCalls != 1 {
+		t.Fatalf("delete MySQL err=%v stopCalls=%d purgeCalls=%d", err, runtime.stopCalls, runtime.purgeCalls)
+	}
+	projectDirectory := filepath.Join(root, localcontaineradapter.ProjectName(request.TenantID, request.InstallationID))
+	if _, err := os.Lstat(projectDirectory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("MySQL data and credentials still exist: %v", err)
+	}
+	if err := provisioner.Delete(context.Background(), deprovision); err != nil ||
+		runtime.stopCalls != 1 || runtime.purgeCalls != 1 {
+		t.Fatalf("equal delete replay err=%v stopCalls=%d purgeCalls=%d", err, runtime.stopCalls, runtime.purgeCalls)
+	}
 }
 
 func TestEnsureRejectsAnotherOfferingBeforeRuntime(t *testing.T) {
@@ -125,6 +146,8 @@ type fakeRuntime struct {
 	project    composeadapter.RuntimeProject
 	listener   net.Listener
 	applyCalls int
+	stopCalls  int
+	purgeCalls int
 }
 
 func (runtime *fakeRuntime) Ready(context.Context) error { return nil }
@@ -174,7 +197,21 @@ func (runtime *fakeRuntime) Observe(
 	}}, nil
 }
 
-func (runtime *fakeRuntime) Stop(context.Context, composeadapter.RuntimeProject) error { return nil }
+func (runtime *fakeRuntime) Stop(context.Context, composeadapter.RuntimeProject) error {
+	runtime.stopCalls++
+	if runtime.listener != nil {
+		if err := runtime.listener.Close(); err != nil {
+			return err
+		}
+		runtime.listener = nil
+	}
+	return nil
+}
+
+func (runtime *fakeRuntime) PurgeData(context.Context, composeadapter.RuntimeProject, string) error {
+	runtime.purgeCalls++
+	return nil
+}
 
 func (runtime *fakeRuntime) close() {
 	if runtime.listener != nil {

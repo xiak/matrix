@@ -218,6 +218,7 @@ BEGIN
        OR iam.resource_kind_for_action('managedservice.quota-entitlement.read') IS DISTINCT FROM 'QUOTA_ENTITLEMENT'
        OR iam.resource_kind_for_action('managedservice.service-installation.create') IS DISTINCT FROM 'SERVICE_INSTALLATION'
        OR iam.resource_kind_for_action('managedservice.service-installation.read') IS DISTINCT FROM 'SERVICE_INSTALLATION'
+       OR iam.resource_kind_for_action('managedservice.service-installation.terminate') IS DISTINCT FROM 'SERVICE_INSTALLATION'
        OR iam.resource_kind_for_action('paas.execution-target.register') IS DISTINCT FROM 'EXECUTION_TARGET'
        OR iam.resource_kind_for_action('paas.execution-pool.create') IS DISTINCT FROM 'EXECUTION_POOL'
        OR EXISTS (

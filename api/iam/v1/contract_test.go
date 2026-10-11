@@ -3600,7 +3600,10 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 	revisionThreeIndex := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
 		return profile.Product == ProductManagedService && profile.Revision == 3
 	})
-	if revisionOneIndex < 0 || revisionTwoIndex < 0 || revisionThreeIndex < 0 {
+	revisionFourIndex := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
+		return profile.Product == ProductManagedService && profile.Revision == 4
+	})
+	if revisionOneIndex < 0 || revisionTwoIndex < 0 || revisionThreeIndex < 0 || revisionFourIndex < 0 {
 		t.Fatal("missing retained managedservice revision")
 	}
 	_, originalDigest, err := CanonicalizeAuthorizationProfile(archives[revisionOneIndex])
@@ -3614,9 +3617,10 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 	current, found := LookupAuthorizationProfile(ProductManagedService)
 	_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
 	_, revisionThreeDigest, err := CanonicalizeAuthorizationProfile(archives[revisionThreeIndex])
-	if !found || err != nil || current.Revision != 4 || currentDigest == originalDigest ||
-		currentDigest == revisionTwoDigest || currentDigest == revisionThreeDigest {
-		t.Fatal("missing explicit managedservice list batch revision")
+	_, revisionFourDigest, err := CanonicalizeAuthorizationProfile(archives[revisionFourIndex])
+	if !found || err != nil || current.Revision != 5 || currentDigest == originalDigest ||
+		currentDigest == revisionTwoDigest || currentDigest == revisionThreeDigest || currentDigest == revisionFourDigest {
+		t.Fatal("missing explicit managedservice termination revision")
 	}
 	currentReference := AuthorizationProfileReference{Product: current.Product, Revision: current.Revision, ContentDigest: currentDigest}
 	revisionOneReference := AuthorizationProfileReference{Product: archives[revisionOneIndex].Product, Revision: archives[revisionOneIndex].Revision, ContentDigest: originalDigest}
@@ -3644,6 +3648,19 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 		batchAllowed := CheckAuthorizationProfileInstanceListBatch(current, currentReference, action.Action, action.ResourceKind) == nil
 		if batchAllowed != (action.Action == ActionManagedServiceOfferingRead) {
 			t.Fatal("instance list batch was not limited to offering read", action.Action)
+		}
+		revisionFour := archives[revisionFourIndex]
+		revisionFourReference := AuthorizationProfileReference{
+			Product: revisionFour.Product, Revision: revisionFour.Revision, ContentDigest: revisionFourDigest,
+		}
+		if (CheckAuthorizationProfileInstanceListBatch(revisionFour, revisionFourReference, action.Action, action.ResourceKind) == nil) !=
+			(action.Action == ActionManagedServiceOfferingRead) {
+			t.Fatal("retained managedservice list batch revision changed", action.Action)
+		}
+		if action.Action == ActionManagedServiceInstallationTerminate {
+			if CheckAuthorizationProfileSubject(revisionFour, revisionFourReference, action.Action, SubjectUser) == nil || roleAllowed {
+				t.Fatal("termination authority leaked into the retained revision or ROLE")
+			}
 		}
 		if CheckAuthorizationProfileInstanceListBatch(archives[revisionThreeIndex], AuthorizationProfileReference{
 			Product: archives[revisionThreeIndex].Product, Revision: archives[revisionThreeIndex].Revision, ContentDigest: revisionThreeDigest,
@@ -3804,7 +3821,7 @@ func TestInstanceListBatchTransportDoesNotGrowFrozenPolicyAuthority(t *testing.T
 		return profile.Product == ProductManagedService && profile.Revision == 3
 	})
 	current, found := LookupAuthorizationProfile(ProductManagedService)
-	if index < 0 || !found || current.Revision != 4 {
+	if index < 0 || !found || current.Revision != 5 {
 		t.Fatal("managedservice profile transition is missing")
 	}
 	frozen := archives[index]
@@ -6118,6 +6135,7 @@ func TestIAMActionDefinitionsDeclareProductServiceAndScope(t *testing.T) {
 		{ActionPaaSPlatformOperationRead, ProductPaaS, ServicePaaS, ResourceOperation, AuthorityScopeInstallation, false},
 		{ActionManagedServiceOfferingRead, ProductManagedService, ServicePaaS, ResourceServiceOffering, AuthorityScopeTenant, false},
 		{ActionManagedServiceInstallationCreate, ProductManagedService, ServicePaaS, ResourceServiceInstallation, AuthorityScopeTenant, false},
+		{ActionManagedServiceInstallationTerminate, ProductManagedService, ServicePaaS, ResourceServiceInstallation, AuthorityScopeTenant, false},
 		{ActionAuditRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeTenant, false},
 		{ActionAuditPlatformRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeInstallation, false},
 		{ActionAuditIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeTenant, false},

@@ -81,8 +81,8 @@ type AuthoritySchemas struct {
 func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 83, Audit: 37, PaaS: 4},
-		ContractRevision: 32,
+		Authorities:      AuthoritySchemas{IAM: 83, Audit: 38, PaaS: 5},
+		ContractRevision: 33,
 	}
 }
 
@@ -136,6 +136,8 @@ func RequiredImages() []ImageRequirement {
 		{Component: "paas-ui", Purpose: ImagePlatform, HealthContract: "paas-ui-ready-v1"},
 		{Component: "postgres", Purpose: ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
 		{Component: "mysql", Purpose: ImagePlatform, HealthContract: "mysql-ready-protocol-v1"},
+		{Component: "elasticsearch", Purpose: ImagePlatform, HealthContract: "elasticsearch-ready-protocol-v1"},
+		{Component: "rabbitmq", Purpose: ImagePlatform, HealthContract: "rabbitmq-ready-protocol-v1"},
 		{Component: "verification", Purpose: ImageWorkload, HealthContract: "application-probe-v1"},
 	}
 }

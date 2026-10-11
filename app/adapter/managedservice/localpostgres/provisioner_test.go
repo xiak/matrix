@@ -176,6 +176,10 @@ func (runtime *fakeRuntime) Stop(context.Context, composeadapter.RuntimeProject)
 	return nil
 }
 
+func (runtime *fakeRuntime) PurgeData(context.Context, composeadapter.RuntimeProject, string) error {
+	return nil
+}
+
 func (runtime *fakeRuntime) close() {
 	if runtime.listener != nil {
 		_ = runtime.listener.Close()

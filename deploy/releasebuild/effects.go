@@ -241,7 +241,8 @@ func allowedBinaryPackage(value string) bool {
 func allowedImageReference(value string) bool {
 	return value == APISIXBasePinnedReference || value == AlpineBasePinnedReference ||
 		value == DockerBasePinnedReference || value == PostgresPinnedReference ||
-		value == MySQLPinnedReference ||
+		value == MySQLPinnedReference || value == ElasticsearchPinnedReference ||
+		value == RabbitMQPinnedReference ||
 		buildTagPattern.MatchString(value)
 }
 

@@ -69,6 +69,18 @@ func (provisioner *Provisioner) Ensure(
 	return provisioner.provider.Ensure(ctx, request)
 }
 
+func (provisioner *Provisioner) Delete(
+	ctx context.Context,
+	request managedserviceadapterv1.DeprovisionRequest,
+) error {
+	if provisioner == nil || provisioner.provider == nil ||
+		request.OfferingID != managedservicev1.MySQLOfferingID ||
+		request.EngineVersion != "8.4" || request.RegionID != "local-primary" {
+		return errors.New("local MySQL deletion profile is invalid")
+	}
+	return provisioner.provider.Delete(ctx, request)
+}
+
 func compileDocument(input localcontaineradapter.DocumentInput) ([]byte, error) {
 	request := input.Request
 	document := map[string]any{

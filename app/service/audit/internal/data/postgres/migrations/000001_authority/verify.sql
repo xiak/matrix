@@ -2,7 +2,7 @@ DO $matrix_audit_verify$
 DECLARE
     missing text;
 BEGIN
-    IF (SELECT schema_version=37 AND ready FROM audit.readiness()) IS DISTINCT FROM true THEN
+    IF (SELECT schema_version=38 AND ready FROM audit.readiness()) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'Audit schema version is incompatible';
     END IF;
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
@@ -156,8 +156,10 @@ BEGIN
         RAISE EXCEPTION 'Audit runtime function authority is invalid';
     END IF;
 
-    IF to_regclass('audit.records_paas_operation_uq') IS NULL THEN
-        RAISE EXCEPTION 'Audit PaaS operation identity is not unique';
+    IF to_regclass('audit.records_paas_operation_uq') IS NOT NULL
+       OR to_regclass('audit.records_paas_operation_action_uq') IS NULL
+       OR to_regclass('audit.records_paas_verification_operation_uq') IS NULL THEN
+        RAISE EXCEPTION 'Audit PaaS operation lifecycle identity is invalid';
     END IF;
 
     SELECT string_agg(required.name, ', ' ORDER BY required.name)

@@ -32,10 +32,11 @@ BEGIN
             ('quota_entitlements_idempotency_uq'),
             ('quota_entitlements_catalog_valid'),
             ('service_installations_entitlement_fk'),
+            ('service_installations_current_operation_fk'),
             ('service_installations_ids_valid'),
-            ('operations_installation_uq'),
             ('operations_idempotency_uq'),
             ('operations_installation_fk'),
+            ('managedservice_operations_kind_valid'),
             ('managedservice_audit_operation_fk')
       ) AS required(name)
      WHERE NOT EXISTS (
@@ -50,8 +51,9 @@ BEGIN
       FROM (VALUES
             ('append_audit_outbox'), ('claim_audit_event'),
             ('complete_audit_event'), ('audit_outbox_snapshot'),
-            ('claim_operation'), ('complete_operation'),
-            ('retry_operation'), ('fail_operation')
+            ('start_termination'), ('claim_operation'), ('complete_operation'),
+            ('complete_termination_operation'), ('retry_operation'),
+            ('fail_operation'), ('fail_cleanup_operation')
       ) AS required(name)
      WHERE NOT EXISTS (
         SELECT 1

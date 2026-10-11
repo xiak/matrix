@@ -155,7 +155,8 @@
           "QUOTA_EXHAUSTED",
           "REGION_UNAVAILABLE",
           "INTERNAL",
-          "SERVICE_ROLE_CONFLICT"
+          "SERVICE_ROLE_CONFLICT",
+          "RESOURCE_STATE_CONFLICT"
         ],
         "type": "string"
       },
@@ -187,6 +188,9 @@
           "id": {
             "$ref": "#/components/schemas/ID"
           },
+          "kind": {
+            "$ref": "#/components/schemas/InstallationOperationKind"
+          },
           "observedAt": {
             "$ref": "#/components/schemas/Timestamp"
           },
@@ -199,17 +203,30 @@
         },
         "required": [
           "id",
+          "kind",
           "observedAt",
           "phase"
         ],
         "type": "object"
+      },
+      "InstallationOperationKind": {
+        "enum": [
+          "PROVISION",
+          "TERMINATE"
+        ],
+        "type": "string"
       },
       "InstallationPhase": {
         "enum": [
           "PENDING",
           "PROVISIONING",
           "READY",
-          "FAILED"
+          "FAILED",
+          "ROLLBACK_FAILED",
+          "TERMINATION_PENDING",
+          "TERMINATING",
+          "TERMINATION_FAILED",
+          "TERMINATED"
         ],
         "type": "string"
       },
@@ -222,7 +239,9 @@
       "OfferingKind": {
         "enum": [
           "POSTGRESQL",
-          "MYSQL"
+          "MYSQL",
+          "ELASTICSEARCH",
+          "RABBITMQ"
         ],
         "type": "string"
       },
@@ -505,6 +524,11 @@
           },
           "regionId": {
             "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "required": [
@@ -516,7 +540,8 @@
           "operation",
           "phase",
           "quotaEntitlementId",
-          "regionId"
+          "regionId",
+          "resourceVersion"
         ],
         "type": "object"
       },
@@ -1376,6 +1401,66 @@
           }
         },
         "summary": "Revoke one exact service Role binding from this installation."
+      }
+    },
+    "/v1/service-installations/{installationId}/termination": {
+      "post": {
+        "operationId": "terminateServiceInstallation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/InstallationID"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceInstallation"
+                }
+              }
+            },
+            "description": "Equal idempotent replay."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceInstallation"
+                }
+              }
+            },
+            "description": "Durable asynchronous resource transition."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Submit idempotent destruction of one installation and its protected data."
       }
     }
   },

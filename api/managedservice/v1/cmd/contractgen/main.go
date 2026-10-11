@@ -78,11 +78,21 @@ func buildDocument() object {
 			},
 		},
 		Enums: map[string][]string{
-			"OfferingKind":              {string(managedservicev1.OfferingPostgreSQL), string(managedservicev1.OfferingMySQL)},
-			"OfferingState":             {string(managedservicev1.OfferingAvailable), string(managedservicev1.OfferingUnavailable)},
-			"RegionProfile":             {string(managedservicev1.RegionLocalMachine)},
-			"RegionState":               {string(managedservicev1.RegionReady), string(managedservicev1.RegionStale), string(managedservicev1.RegionUnavailable)},
-			"InstallationPhase":         {string(managedservicev1.InstallationPending), string(managedservicev1.InstallationProvisioning), string(managedservicev1.InstallationReady), string(managedservicev1.InstallationFailed)},
+			"OfferingKind": {
+				string(managedservicev1.OfferingPostgreSQL), string(managedservicev1.OfferingMySQL),
+				string(managedservicev1.OfferingElasticsearch), string(managedservicev1.OfferingRabbitMQ),
+			},
+			"OfferingState": {string(managedservicev1.OfferingAvailable), string(managedservicev1.OfferingUnavailable)},
+			"RegionProfile": {string(managedservicev1.RegionLocalMachine)},
+			"RegionState":   {string(managedservicev1.RegionReady), string(managedservicev1.RegionStale), string(managedservicev1.RegionUnavailable)},
+			"InstallationPhase": {
+				string(managedservicev1.InstallationPending), string(managedservicev1.InstallationProvisioning),
+				string(managedservicev1.InstallationReady), string(managedservicev1.InstallationFailed),
+				string(managedservicev1.InstallationRollbackFailed), string(managedservicev1.InstallationTerminationPending),
+				string(managedservicev1.InstallationTerminating), string(managedservicev1.InstallationTerminationFailed),
+				string(managedservicev1.InstallationTerminated),
+			},
+			"InstallationOperationKind": {string(managedservicev1.InstallationOperationProvision), string(managedservicev1.InstallationOperationTerminate)},
 			"WorkloadRoleBindingStatus": {string(iamv1.WorkloadRoleBindingActive), string(iamv1.WorkloadRoleBindingRevoked)},
 			"ErrorCode": {
 				string(managedservicev1.ErrorInvalidArgument), string(managedservicev1.ErrorUnauthenticated),
@@ -91,6 +101,7 @@ func buildDocument() object {
 				string(managedservicev1.ErrorIdempotencyConflict), string(managedservicev1.ErrorQuotaExhausted),
 				string(managedservicev1.ErrorRegionUnavailable), string(managedservicev1.ErrorInternal),
 				string(managedservicev1.ErrorServiceRoleConflict),
+				string(managedservicev1.ErrorResourceStateConflict),
 			},
 		},
 		Structs: structs(), FieldOverlay: fieldOverlay, SchemaOverlay: schemaOverlay,
@@ -129,6 +140,12 @@ func paths() object {
 		},
 		"/v1/service-installations/{installationId}/operation": object{
 			"get": readResourceOperation("getInstallationOperation", "Read the current installation Operation.", "InstallationID", "InstallationOperation"),
+		},
+		"/v1/service-installations/{installationId}/termination": object{
+			"post": resourceActionOperation(
+				"terminateServiceInstallation", "Submit idempotent destruction of one installation and its protected data.",
+				"InstallationID", "ServiceInstallation",
+			),
 		},
 		"/v1/service-installations/{installationId}/service-role-bindings": object{
 			"post": resourceMutationOperation(
@@ -174,6 +191,20 @@ func mutationOperation(operationID, summary, requestSchema, responseSchema, crea
 
 func resourceMutationOperation(operationID, summary, parameter, requestSchema, responseSchema string) object {
 	return resourceMutationOperationWithParameters(operationID, summary, []string{parameter}, requestSchema, responseSchema)
+}
+
+func resourceActionOperation(operationID, summary, parameter, responseSchema string) object {
+	responses := openapi31.ProblemResponses("400", "401", "403", "404", "409", "500", "503", "504")
+	responses["200"] = openapi31.JSONResponse("Equal idempotent replay.", responseSchema)
+	responses["202"] = openapi31.JSONResponse("Durable asynchronous resource transition.", responseSchema)
+	return object{
+		"operationId": operationID, "summary": summary,
+		"parameters": []any{
+			openapi31.ComponentRef("#/components/parameters/" + parameter),
+			openapi31.ComponentRef("#/components/parameters/IdempotencyKey"),
+		},
+		"responses": responses,
+	}
 }
 
 func resourceMutationOperationWithParameters(operationID, summary string, parameters []string, requestSchema, responseSchema string) object {

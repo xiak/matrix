@@ -29,3 +29,14 @@ func ValidateProvisionResult(value ProvisionResult) error {
 	}
 	return managedservicev1.ValidateID("credentialReference", value.CredentialReference)
 }
+
+func ValidateDeprovisionRequest(value DeprovisionRequest) error {
+	return errors.Join(
+		managedservicev1.ValidateID("tenantId", value.TenantID),
+		managedservicev1.ValidateInstallationID(value.InstallationID),
+		managedservicev1.ValidateID("operationId", value.OperationID),
+		managedservicev1.ValidateID("offeringId", value.OfferingID),
+		managedservicev1.ValidateID("engineVersion", value.EngineVersion),
+		managedservicev1.ValidateID("regionId", value.RegionID),
+	)
+}

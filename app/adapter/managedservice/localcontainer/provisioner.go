@@ -67,6 +67,7 @@ type Provisioner struct {
 	credentialFiles   []CredentialFile
 	dataDirectoryMode os.FileMode
 	runtime           composeadapter.Runtime
+	dataPurger        composeadapter.DataPurger
 	validateRequest   func(managedserviceadapterv1.ProvisionRequest) error
 	compileDocument   func(DocumentInput) ([]byte, error)
 	endpoint          func(int) string
@@ -81,6 +82,10 @@ func New(config Config) (*Provisioner, error) {
 		config.Runtime == nil || config.ValidateRequest == nil ||
 		config.CompileDocument == nil || config.Endpoint == nil {
 		return nil, errors.New("local managed-service provider configuration is invalid")
+	}
+	dataPurger, ok := config.Runtime.(composeadapter.DataPurger)
+	if !ok {
+		return nil, errors.New("local managed-service provider requires a data purge boundary")
 	}
 	credentialFiles := make([]CredentialFile, len(config.CredentialFiles))
 	credentialNames := make(map[string]struct{}, len(config.CredentialFiles))
@@ -110,7 +115,7 @@ func New(config Config) (*Provisioner, error) {
 	return &Provisioner{
 		root: root, imageID: config.ImageID, serviceName: config.ServiceName,
 		credentialFiles: credentialFiles, dataDirectoryMode: dataMode,
-		runtime: config.Runtime, validateRequest: config.ValidateRequest,
+		runtime: config.Runtime, dataPurger: dataPurger, validateRequest: config.ValidateRequest,
 		compileDocument: config.CompileDocument, endpoint: config.Endpoint,
 		newSecret: config.NewSecret,
 	}, nil
@@ -167,6 +172,83 @@ func (provisioner *Provisioner) Ensure(
 	return managedserviceadapterv1.ProvisionResult{
 		Endpoint: endpoint, CredentialReference: credentialReference,
 	}, nil
+}
+
+// Delete removes exactly one authority-derived installation. The Compose
+// project identity is recomputed from tenant and installation IDs; callers
+// cannot supply paths, project names, endpoints or credential references.
+// Runtime removal is observed before the protected project directory is
+// removed, making equal retries safe after an unknown caller outcome.
+func (provisioner *Provisioner) Delete(
+	ctx context.Context,
+	request managedserviceadapterv1.DeprovisionRequest,
+) error {
+	if provisioner == nil || ctx == nil ||
+		managedserviceadapterv1.ValidateDeprovisionRequest(request) != nil ||
+		request.OfferingID == "" || request.RegionID != "local-primary" {
+		return errors.New("local managed-service deletion request is invalid")
+	}
+	projectName := ProjectName(request.TenantID, request.InstallationID)
+	lockValue, _ := provisioner.locks.LoadOrStore(projectName, &sync.Mutex{})
+	lock := lockValue.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+	directory := filepath.Join(provisioner.root, projectName)
+	info, err := os.Lstat(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+		!withinRoot(provisioner.root, directory) || filepath.Dir(directory) != provisioner.root {
+		return errors.New("local managed-service deletion target conflicts")
+	}
+	project := composeadapter.RuntimeProject{
+		Name: projectName, Directory: directory,
+		EffectDocument:      filepath.Join(directory, "compose.json"),
+		ObservationDocument: filepath.Join(directory, "observe.json"),
+		TimeoutSeconds:      120,
+	}
+	for _, document := range []string{project.EffectDocument, project.ObservationDocument} {
+		documentInfo, statErr := os.Lstat(document)
+		if statErr != nil || !documentInfo.Mode().IsRegular() || documentInfo.Mode()&os.ModeSymlink != 0 {
+			return errors.New("local managed-service deletion evidence conflicts")
+		}
+	}
+	dataDirectory := filepath.Join(directory, "data")
+	dataInfo, dataErr := os.Lstat(dataDirectory)
+	if dataErr != nil || !dataInfo.IsDir() || dataInfo.Mode()&os.ModeSymlink != 0 ||
+		!withinRoot(provisioner.root, dataDirectory) || filepath.Dir(dataDirectory) != directory {
+		return errors.New("local managed-service data target conflicts")
+	}
+	containers, err := provisioner.runtime.Observe(ctx, project)
+	if err != nil {
+		return errors.New("local managed-service deletion observation is unavailable")
+	}
+	for _, container := range containers {
+		if !provisioner.owns(container, projectName, request.InstallationID, request.OfferingID, request.RegionID) {
+			return errors.New("local managed-service deletion ownership conflicts")
+		}
+	}
+	if len(containers) > 0 {
+		if err := provisioner.runtime.Stop(ctx, project); err != nil {
+			return errors.New("local managed-service deletion effect is unavailable")
+		}
+		containers, err = provisioner.runtime.Observe(ctx, project)
+		if err != nil || len(containers) != 0 {
+			return errors.New("local managed-service deletion outcome is unknown")
+		}
+	}
+	if err := provisioner.dataPurger.PurgeData(ctx, project, provisioner.imageID); err != nil {
+		return errors.New("local managed-service data cleanup is unavailable")
+	}
+	if err := os.RemoveAll(directory); err != nil {
+		return errors.New("local managed-service data cannot be removed")
+	}
+	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("local managed-service data removal is incomplete")
+	}
+	provisioner.locks.Delete(projectName)
+	return nil
 }
 
 func (provisioner *Provisioner) prepareProject(
@@ -256,13 +338,21 @@ func (provisioner *Provisioner) ready(
 		return false
 	}
 	container := containers[0]
-	return container.Project == projectName && container.Service == provisioner.serviceName &&
+	return provisioner.owns(container, projectName, request.InstallationID, request.OfferingID, request.RegionID) &&
 		container.State == "running" && container.Health == "healthy" &&
-		!container.OneOff && container.PublishedPorts == 1 &&
+		container.PublishedPorts == 1
+}
+
+func (provisioner *Provisioner) owns(
+	container composeadapter.RuntimeContainer,
+	projectName, installationID, offeringID, regionID string,
+) bool {
+	return container.Project == projectName && container.Service == provisioner.serviceName &&
+		!container.OneOff &&
 		container.Labels["com.xiak.matrix.managed"] == "true" &&
-		container.Labels["com.xiak.matrix.managedservice.installation"] == request.InstallationID &&
-		container.Labels["com.xiak.matrix.managedservice.offering"] == request.OfferingID &&
-		container.Labels["com.xiak.matrix.managedservice.region"] == request.RegionID
+		container.Labels["com.xiak.matrix.managedservice.installation"] == installationID &&
+		container.Labels["com.xiak.matrix.managedservice.offering"] == offeringID &&
+		container.Labels["com.xiak.matrix.managedservice.region"] == regionID
 }
 
 func prepareRoot(root string) (string, error) {

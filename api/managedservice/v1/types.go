@@ -67,10 +67,11 @@ type QuotaEntitlementList struct {
 }
 
 type InstallationOperation struct {
-	ID              string            `json:"id"`
-	Phase           InstallationPhase `json:"phase"`
-	SafeFailureCode *string           `json:"safeFailureCode"`
-	ObservedAt      time.Time         `json:"observedAt"`
+	ID              string                    `json:"id"`
+	Kind            InstallationOperationKind `json:"kind"`
+	Phase           InstallationPhase         `json:"phase"`
+	SafeFailureCode *string                   `json:"safeFailureCode"`
+	ObservedAt      time.Time                 `json:"observedAt"`
 }
 
 type ServiceInstallation struct {
@@ -84,6 +85,7 @@ type ServiceInstallation struct {
 	Endpoint            *string               `json:"endpoint"`
 	CredentialReference *string               `json:"credentialReference"`
 	Operation           InstallationOperation `json:"operation"`
+	ResourceVersion     uint64                `json:"resourceVersion"`
 	CreatedAt           time.Time             `json:"createdAt"`
 }
 

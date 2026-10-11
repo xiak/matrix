@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS managedservice.quota_entitlements (
             AND quota_shape_id IN ('pg-small', 'pg-medium'))
         OR (offering_id = 'mysql-8.4'
             AND quota_shape_id IN ('mysql-small', 'mysql-medium'))
+        OR (offering_id = 'elasticsearch-8.19'
+            AND quota_shape_id IN ('elasticsearch-small', 'elasticsearch-medium'))
+        OR (offering_id = 'rabbitmq-4.1'
+            AND quota_shape_id IN ('rabbitmq-small', 'rabbitmq-medium'))
     ),
     CONSTRAINT quota_entitlements_counts_valid CHECK (
         purchased_count BETWEEN 1 AND 100
@@ -103,6 +107,7 @@ CREATE TABLE IF NOT EXISTS managedservice.service_installations (
     phase text COLLATE "C" NOT NULL DEFAULT 'PENDING',
     endpoint text,
     credential_reference text COLLATE "C",
+    current_operation_id text COLLATE "C" NOT NULL,
     resource_version bigint NOT NULL DEFAULT 1,
     created_at timestamptz(6) NOT NULL DEFAULT transaction_timestamp(),
     observed_at timestamptz(6) NOT NULL DEFAULT transaction_timestamp(),
@@ -116,6 +121,8 @@ CREATE TABLE IF NOT EXISTS managedservice.service_installations (
         AND (
             (offering_id = 'postgresql-18' AND engine_version = '18')
             OR (offering_id = 'mysql-8.4' AND engine_version = '8.4')
+            OR (offering_id = 'elasticsearch-8.19' AND engine_version = '8.19.23')
+            OR (offering_id = 'rabbitmq-4.1' AND engine_version = '4.1.8')
         )
         AND quota_entitlement_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND region_id = 'local-primary'
@@ -127,11 +134,16 @@ CREATE TABLE IF NOT EXISTS managedservice.service_installations (
         AND strpos(name, chr(10)) = 0
     ),
     CONSTRAINT service_installations_phase_valid CHECK (
-        phase IN ('PENDING', 'PROVISIONING', 'READY', 'FAILED')
+        phase IN (
+            'PENDING', 'PROVISIONING', 'READY', 'FAILED', 'ROLLBACK_FAILED',
+            'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED', 'TERMINATED'
+        )
     ),
     CONSTRAINT service_installations_result_valid CHECK (
-        (phase = 'READY' AND endpoint IS NOT NULL AND credential_reference IS NOT NULL)
-        OR (phase <> 'READY' AND endpoint IS NULL AND credential_reference IS NULL)
+        (phase IN ('READY', 'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED')
+            AND endpoint IS NOT NULL AND credential_reference IS NOT NULL)
+        OR (phase NOT IN ('READY', 'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED')
+            AND endpoint IS NULL AND credential_reference IS NULL)
     ),
     CONSTRAINT service_installations_version_valid CHECK (
         resource_version BETWEEN 1 AND 9007199254740991
@@ -151,6 +163,10 @@ ALTER TABLE managedservice.quota_entitlements
             AND quota_shape_id IN ('pg-small', 'pg-medium'))
         OR (offering_id = 'mysql-8.4'
             AND quota_shape_id IN ('mysql-small', 'mysql-medium'))
+        OR (offering_id = 'elasticsearch-8.19'
+            AND quota_shape_id IN ('elasticsearch-small', 'elasticsearch-medium'))
+        OR (offering_id = 'rabbitmq-4.1'
+            AND quota_shape_id IN ('rabbitmq-small', 'rabbitmq-medium'))
     );
 
 ALTER TABLE managedservice.service_installations
@@ -162,6 +178,8 @@ ALTER TABLE managedservice.service_installations
         AND (
             (offering_id = 'postgresql-18' AND engine_version = '18')
             OR (offering_id = 'mysql-8.4' AND engine_version = '8.4')
+            OR (offering_id = 'elasticsearch-8.19' AND engine_version = '8.19.23')
+            OR (offering_id = 'rabbitmq-4.1' AND engine_version = '4.1.8')
         )
         AND quota_entitlement_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND region_id = 'local-primary'
@@ -171,6 +189,8 @@ CREATE TABLE IF NOT EXISTS managedservice.operations (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
     installation_id text COLLATE "C" NOT NULL,
+    kind text COLLATE "C" NOT NULL,
+    quota_release text COLLATE "C" NOT NULL,
     phase text COLLATE "C" NOT NULL DEFAULT 'PENDING',
     safe_failure_code text COLLATE "C",
     idempotency_key text COLLATE "C" NOT NULL,
@@ -187,7 +207,6 @@ CREATE TABLE IF NOT EXISTS managedservice.operations (
     next_attempt_at timestamptz(6) NOT NULL DEFAULT transaction_timestamp(),
     observed_at timestamptz(6) NOT NULL DEFAULT transaction_timestamp(),
     PRIMARY KEY (tenant_id, id),
-    CONSTRAINT operations_installation_uq UNIQUE (tenant_id, installation_id),
     CONSTRAINT operations_idempotency_uq UNIQUE (tenant_id, idempotency_key),
     CONSTRAINT operations_installation_fk
         FOREIGN KEY (tenant_id, installation_id)
@@ -206,6 +225,10 @@ CREATE TABLE IF NOT EXISTS managedservice.operations (
         phase IN ('PENDING', 'PROVISIONING', 'READY', 'FAILED')
         AND ((phase = 'FAILED') = (safe_failure_code IS NOT NULL))
     ),
+    CONSTRAINT managedservice_operations_kind_valid CHECK (
+        (kind = 'PROVISION' AND quota_release = 'NONE')
+        OR (kind = 'TERMINATE' AND quota_release IN ('RESERVED', 'CONSUMED'))
+    ),
     CONSTRAINT managedservice_operations_failure_valid CHECK (
         safe_failure_code IS NULL
         OR safe_failure_code COLLATE "C" ~ '^[A-Z][A-Z0-9_]{1,63}$'
@@ -222,6 +245,145 @@ CREATE TABLE IF NOT EXISTS managedservice.operations (
         resource_version BETWEEN 1 AND 9007199254740991
     )
 );
+
+-- The only supported development predecessor has one provisioning operation
+-- per installation. Preserve it as the current operation while replacing the
+-- one-operation model with an explicit provision/terminate history.
+ALTER TABLE managedservice.operations
+    ADD COLUMN IF NOT EXISTS kind text COLLATE "C" NOT NULL DEFAULT 'PROVISION';
+ALTER TABLE managedservice.operations
+    ADD COLUMN IF NOT EXISTS quota_release text COLLATE "C" NOT NULL DEFAULT 'NONE';
+ALTER TABLE managedservice.service_installations
+    ADD COLUMN IF NOT EXISTS current_operation_id text COLLATE "C";
+UPDATE managedservice.service_installations AS installation
+   SET current_operation_id = operation.id
+  FROM managedservice.operations AS operation
+ WHERE installation.current_operation_id IS NULL
+   AND operation.tenant_id = installation.tenant_id
+   AND operation.installation_id = installation.id;
+ALTER TABLE managedservice.service_installations
+    ALTER COLUMN current_operation_id SET NOT NULL;
+
+ALTER TABLE managedservice.operations
+    DROP CONSTRAINT IF EXISTS operations_installation_uq;
+ALTER TABLE managedservice.operations
+    DROP CONSTRAINT IF EXISTS managedservice_operations_kind_valid;
+ALTER TABLE managedservice.operations
+    ADD CONSTRAINT managedservice_operations_kind_valid CHECK (
+        (kind = 'PROVISION' AND quota_release = 'NONE')
+        OR (kind = 'TERMINATE' AND quota_release IN ('RESERVED', 'CONSUMED'))
+    );
+ALTER TABLE managedservice.service_installations
+    DROP CONSTRAINT IF EXISTS service_installations_current_operation_fk;
+ALTER TABLE managedservice.service_installations
+    ADD CONSTRAINT service_installations_current_operation_fk
+        FOREIGN KEY (tenant_id, current_operation_id)
+        REFERENCES managedservice.operations (tenant_id, id)
+        DEFERRABLE INITIALLY DEFERRED;
+CREATE INDEX IF NOT EXISTS managedservice_operations_installation_idx
+    ON managedservice.operations (tenant_id, installation_id, observed_at DESC, id COLLATE "C");
+
+ALTER TABLE managedservice.service_installations
+    DROP CONSTRAINT IF EXISTS service_installations_phase_valid;
+ALTER TABLE managedservice.service_installations
+    ADD CONSTRAINT service_installations_phase_valid CHECK (
+        phase IN (
+            'PENDING', 'PROVISIONING', 'READY', 'FAILED', 'ROLLBACK_FAILED',
+            'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED', 'TERMINATED'
+        )
+    );
+ALTER TABLE managedservice.service_installations
+    DROP CONSTRAINT IF EXISTS service_installations_result_valid;
+ALTER TABLE managedservice.service_installations
+    ADD CONSTRAINT service_installations_result_valid CHECK (
+        (phase IN ('READY', 'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED')
+            AND endpoint IS NOT NULL AND credential_reference IS NOT NULL)
+        OR (phase NOT IN ('READY', 'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED')
+            AND endpoint IS NULL AND credential_reference IS NULL)
+    );
+
+CREATE OR REPLACE FUNCTION managedservice.start_termination(
+    requested_installation_id text,
+    requested_operation_id text,
+    requested_idempotency_key text,
+    requested_digest text,
+    requested_actor_type text,
+    requested_actor_id text,
+    requested_iam_decision_id text,
+    requested_request_id text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    current_phase text;
+    release_kind text;
+BEGIN
+    effective_tenant_id := managedservice.current_tenant_id();
+    IF effective_tenant_id IS NULL
+       OR requested_installation_id IS NULL
+       OR requested_installation_id COLLATE "C" !~ '^[a-z0-9][a-z0-9._-]{1,62}$'
+       OR requested_operation_id IS NULL
+       OR requested_operation_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_idempotency_key IS NULL
+       OR requested_idempotency_key COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_digest IS NULL
+       OR requested_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR requested_actor_type NOT IN ('USER', 'SERVICE_ACCOUNT')
+       OR requested_actor_id IS NULL
+       OR requested_actor_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_iam_decision_id IS NULL
+       OR requested_iam_decision_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_request_id IS NULL
+       OR requested_request_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service termination request is invalid';
+    END IF;
+    SELECT phase
+      INTO current_phase
+      FROM managedservice.service_installations
+     WHERE tenant_id = effective_tenant_id
+       AND id = requested_installation_id
+     FOR UPDATE;
+    IF current_phase IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'managed-service installation is absent';
+    END IF;
+    release_kind := CASE
+        WHEN current_phase IN ('READY', 'TERMINATION_FAILED') THEN 'CONSUMED'
+        WHEN current_phase = 'ROLLBACK_FAILED' THEN 'RESERVED'
+        ELSE NULL
+    END;
+    IF release_kind IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'managed-service installation cannot terminate from its current state';
+    END IF;
+    INSERT INTO managedservice.operations (
+        tenant_id, id, installation_id, kind, quota_release,
+        idempotency_key, request_digest, requested_by_type, requested_by_id,
+        iam_decision_id, request_id
+    ) VALUES (
+        effective_tenant_id, requested_operation_id, requested_installation_id,
+        'TERMINATE', release_kind, requested_idempotency_key, requested_digest,
+        requested_actor_type, requested_actor_id, requested_iam_decision_id,
+        requested_request_id
+    );
+    UPDATE managedservice.service_installations
+       SET phase = 'TERMINATION_PENDING',
+           current_operation_id = requested_operation_id,
+           resource_version = resource_version + 1,
+           observed_at = transaction_timestamp()
+     WHERE tenant_id = effective_tenant_id
+       AND id = requested_installation_id;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION managedservice.start_termination(
+    text, text, text, text, text, text, text, text
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION managedservice.start_termination(
+    text, text, text, text, text, text, text, text
+) TO matrix_paas_api;
 
 CREATE TABLE IF NOT EXISTS managedservice.audit_outbox (
     tenant_id text COLLATE "C" NOT NULL,
@@ -264,7 +426,9 @@ CREATE TABLE IF NOT EXISTS managedservice.audit_outbox (
         AND document->>'action' IN (
             'managedservice.quota-entitlement.activated',
             'managedservice.service-installation.created',
-            'managedservice.service-installation.ready'
+            'managedservice.service-installation.ready',
+            'managedservice.service-installation.termination-requested',
+            'managedservice.service-installation.terminated'
         )
         AND (
             (operation_id IS NULL
@@ -276,9 +440,48 @@ CREATE TABLE IF NOT EXISTS managedservice.audit_outbox (
             OR (operation_id IS NOT NULL
                 AND document->>'action' = 'managedservice.service-installation.ready'
                 AND NOT (document ? 'operationId'))
+            OR (operation_id IS NOT NULL
+                AND document->>'action' IN (
+                    'managedservice.service-installation.termination-requested',
+                    'managedservice.service-installation.terminated'
+                )
+                AND document->>'operationId' = operation_id)
         )
     )
 );
+
+ALTER TABLE managedservice.audit_outbox
+    DROP CONSTRAINT IF EXISTS managedservice_audit_document_identity;
+ALTER TABLE managedservice.audit_outbox
+    ADD CONSTRAINT managedservice_audit_document_identity CHECK (
+        document->>'schemaVersion' = 'v1'
+        AND document->>'eventId' = event_id
+        AND document->>'tenantId' = tenant_id
+        AND document->>'action' IN (
+            'managedservice.quota-entitlement.activated',
+            'managedservice.service-installation.created',
+            'managedservice.service-installation.ready',
+            'managedservice.service-installation.termination-requested',
+            'managedservice.service-installation.terminated'
+        )
+        AND (
+            (operation_id IS NULL
+                AND document->>'action' = 'managedservice.quota-entitlement.activated'
+                AND NOT (document ? 'operationId'))
+            OR (operation_id IS NOT NULL
+                AND document->>'action' = 'managedservice.service-installation.created'
+                AND document->>'operationId' = operation_id)
+            OR (operation_id IS NOT NULL
+                AND document->>'action' = 'managedservice.service-installation.ready'
+                AND NOT (document ? 'operationId'))
+            OR (operation_id IS NOT NULL
+                AND document->>'action' IN (
+                    'managedservice.service-installation.termination-requested',
+                    'managedservice.service-installation.terminated'
+                )
+                AND document->>'operationId' = operation_id)
+        )
+    );
 
 CREATE INDEX IF NOT EXISTS managedservice_audit_delivery_idx
     ON managedservice.audit_outbox (status, available_at, created_at);
@@ -416,6 +619,32 @@ BEGIN
                    AND installation.created_at = effective_now
            ) THEN
             RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'installation Audit fact is not transactionally correlated';
+        END IF;
+    ELSIF submitted_audit_event->>'action' = 'managedservice.service-installation.termination-requested' THEN
+        IF submitted_audit_event#>>'{target,kind}' <> 'ServiceInstallation'
+           OR submitted_audit_event->>'result' <> 'ACCEPTED'
+           OR COALESCE(target_operation_id, '') COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+           OR NOT EXISTS (
+                SELECT 1
+                  FROM managedservice.operations AS operation
+                  JOIN managedservice.service_installations AS installation
+                    ON installation.tenant_id = operation.tenant_id
+                   AND installation.id = operation.installation_id
+                 WHERE operation.tenant_id = effective_tenant_id
+                   AND operation.id = target_operation_id
+                   AND operation.kind = 'TERMINATE'
+                   AND operation.installation_id = target_id
+                   AND operation.request_digest = submitted_audit_event->>'requestDigest'
+                   AND operation.requested_by_type = submitted_audit_event#>>'{actor,type}'
+                   AND operation.requested_by_id = submitted_audit_event#>>'{actor,id}'
+                   AND operation.iam_decision_id = submitted_audit_event->>'iamDecisionId'
+                   AND operation.request_id = submitted_audit_event->>'requestId'
+                   AND operation.observed_at = effective_now
+                   AND installation.current_operation_id = operation.id
+                   AND installation.phase = 'TERMINATION_PENDING'
+           ) THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'termination Audit fact is not transactionally correlated';
         END IF;
     ELSE
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service API cannot append this Audit action';
@@ -585,23 +814,32 @@ $function$;
 REVOKE ALL ON FUNCTION managedservice.audit_outbox_snapshot() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION managedservice.audit_outbox_snapshot() TO matrix_paas_worker;
 
-CREATE OR REPLACE FUNCTION managedservice.claim_operation(
+-- The result row grew with operation kind, protected result references and
+-- installation version. PostgreSQL cannot replace a table-returning function
+-- whose row shape changes, so the offline profile migration drops this one
+-- worker entrypoint before recreating and re-granting it below.
+DROP FUNCTION IF EXISTS managedservice.claim_operation(text, integer);
+CREATE FUNCTION managedservice.claim_operation(
     requested_worker_id text,
     requested_lease_seconds integer
 )
 RETURNS TABLE (
     tenant_id text,
     operation_id text,
+    operation_kind text,
     installation_id text,
     installation_name text,
     offering_id text,
     engine_version text,
     quota_entitlement_id text,
     region_id text,
+    installation_endpoint text,
+    installation_credential_reference text,
     quota_shape_id text,
     fencing_token bigint,
     attempt integer,
     created_at timestamptz,
+    installation_resource_version bigint,
     observed_at timestamptz
 )
 LANGUAGE plpgsql
@@ -619,6 +857,9 @@ BEGIN
     WITH candidate AS (
         SELECT pending.tenant_id, pending.id
           FROM managedservice.operations AS pending
+          JOIN managedservice.service_installations AS installation
+            ON installation.tenant_id = pending.tenant_id
+           AND installation.current_operation_id = pending.id
          WHERE pending.phase IN ('PENDING', 'PROVISIONING')
            AND pending.attempts < 100
            AND pending.next_attempt_at <= transaction_timestamp()
@@ -642,26 +883,34 @@ BEGIN
          RETURNING operation.*
     ), marked AS (
         UPDATE managedservice.service_installations AS installation
-           SET phase = 'PROVISIONING',
+           SET phase = CASE claimed.kind
+                    WHEN 'PROVISION' THEN 'PROVISIONING'
+                    WHEN 'TERMINATE' THEN 'TERMINATING'
+                END,
                resource_version = installation.resource_version + 1,
                observed_at = transaction_timestamp()
           FROM claimed
          WHERE installation.tenant_id = claimed.tenant_id
            AND installation.id = claimed.installation_id
+           AND installation.current_operation_id = claimed.id
          RETURNING installation.*
     )
     SELECT claimed.tenant_id,
            claimed.id,
+           claimed.kind,
            marked.id,
            marked.name,
            marked.offering_id,
            marked.engine_version,
            marked.quota_entitlement_id,
            marked.region_id,
+           marked.endpoint,
+           marked.credential_reference,
            entitlement.quota_shape_id,
            claimed.fencing_token,
            claimed.attempts,
            marked.created_at,
+           marked.resource_version,
            claimed.observed_at
       FROM claimed
       JOIN marked ON marked.tenant_id = claimed.tenant_id
@@ -706,10 +955,12 @@ BEGIN
        AND entitlement.id = installation.quota_entitlement_id
      WHERE operation.tenant_id = requested_tenant_id
        AND operation.id = requested_operation_id
+       AND operation.kind = 'PROVISION'
        AND operation.phase = 'PROVISIONING'
        AND operation.lease_owner = requested_worker_id
        AND operation.fencing_token = expected_fencing_token
        AND operation.lease_expires_at > transaction_timestamp()
+       AND installation.current_operation_id = operation.id
      FOR UPDATE OF operation, installation, entitlement;
     IF target_installation_id IS NULL THEN
         RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'managed-service completion lease conflicts';
@@ -778,6 +1029,116 @@ BEGIN
 END
 $function$;
 
+CREATE OR REPLACE FUNCTION managedservice.complete_termination_operation(
+    requested_tenant_id text,
+    requested_operation_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    target_installation_id text;
+    target_entitlement_id text;
+    target_quota_release text;
+BEGIN
+    SELECT operation.installation_id, installation.quota_entitlement_id,
+           operation.quota_release
+      INTO target_installation_id, target_entitlement_id, target_quota_release
+      FROM managedservice.operations AS operation
+      JOIN managedservice.service_installations AS installation
+        ON installation.tenant_id = operation.tenant_id
+       AND installation.id = operation.installation_id
+      JOIN managedservice.quota_entitlements AS entitlement
+        ON entitlement.tenant_id = installation.tenant_id
+       AND entitlement.id = installation.quota_entitlement_id
+     WHERE operation.tenant_id = requested_tenant_id
+       AND operation.id = requested_operation_id
+       AND operation.kind = 'TERMINATE'
+       AND operation.phase = 'PROVISIONING'
+       AND operation.lease_owner = requested_worker_id
+       AND operation.fencing_token = expected_fencing_token
+       AND operation.lease_expires_at > transaction_timestamp()
+       AND installation.current_operation_id = operation.id
+     FOR UPDATE OF operation, installation, entitlement;
+    IF target_installation_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'managed-service termination lease conflicts';
+    END IF;
+    IF target_quota_release = 'CONSUMED' THEN
+        UPDATE managedservice.quota_entitlements
+           SET consumed_count = consumed_count - 1,
+               resource_version = resource_version + 1
+         WHERE tenant_id = requested_tenant_id AND id = target_entitlement_id
+           AND consumed_count > 0;
+    ELSIF target_quota_release = 'RESERVED' THEN
+        UPDATE managedservice.quota_entitlements
+           SET reserved_count = reserved_count - 1,
+               resource_version = resource_version + 1
+         WHERE tenant_id = requested_tenant_id AND id = target_entitlement_id
+           AND reserved_count > 0;
+    ELSE
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'managed-service termination quota evidence conflicts';
+    END IF;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'managed-service termination quota conflicts';
+    END IF;
+    UPDATE managedservice.service_installations
+       SET phase = 'TERMINATED', endpoint = NULL, credential_reference = NULL,
+           resource_version = resource_version + 1,
+           observed_at = transaction_timestamp()
+     WHERE tenant_id = requested_tenant_id AND id = target_installation_id;
+    UPDATE managedservice.operations
+       SET phase = 'READY', safe_failure_code = NULL,
+           lease_owner = NULL, lease_expires_at = NULL,
+           resource_version = resource_version + 1,
+           observed_at = transaction_timestamp()
+     WHERE tenant_id = requested_tenant_id AND id = requested_operation_id;
+    INSERT INTO managedservice.audit_outbox (
+        tenant_id, event_id, operation_id, status, available_at,
+        attempts, fencing_token, created_at, updated_at, document
+    )
+    SELECT operation.tenant_id,
+           'audit-' || md5('managedservice.service-installation.terminated:' || operation.id),
+           operation.id, 'PENDING', transaction_timestamp(), 0, 0,
+           transaction_timestamp(), transaction_timestamp(),
+           jsonb_build_object(
+                'schemaVersion', 'v1',
+                'eventId', 'audit-' || md5(
+                    'managedservice.service-installation.terminated:' || operation.id
+                ),
+                'tenantId', operation.tenant_id,
+                'actor', jsonb_build_object(
+                    'type', operation.requested_by_type,
+                    'id', operation.requested_by_id
+                ),
+                'iamDecisionId', operation.iam_decision_id,
+                'action', 'managedservice.service-installation.terminated',
+                'target', jsonb_build_object(
+                    'kind', 'ServiceInstallation',
+                    'id', operation.installation_id
+                ),
+                'operationId', operation.id,
+                'requestDigest', operation.request_digest,
+                'result', 'SUCCEEDED',
+                'requestId', operation.request_id,
+                'occurredAt', to_char(
+                    transaction_timestamp() AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+                )
+           )
+      FROM managedservice.operations AS operation
+     WHERE operation.tenant_id = requested_tenant_id
+       AND operation.id = requested_operation_id
+       AND operation.phase = 'READY';
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'managed-service terminated Audit fact conflicts';
+    END IF;
+END
+$function$;
+
 CREATE OR REPLACE FUNCTION managedservice.retry_operation(
     requested_tenant_id text,
     requested_operation_id text,
@@ -826,13 +1187,15 @@ AS $function$
 DECLARE
     target_installation_id text;
     target_entitlement_id text;
+    target_operation_kind text;
 BEGIN
     IF requested_failure_code IS NULL
        OR requested_failure_code COLLATE "C" !~ '^[A-Z][A-Z0-9_]{1,63}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service failure code is invalid';
     END IF;
-    SELECT operation.installation_id, installation.quota_entitlement_id
-      INTO target_installation_id, target_entitlement_id
+    SELECT operation.installation_id, installation.quota_entitlement_id,
+           operation.kind
+      INTO target_installation_id, target_entitlement_id, target_operation_kind
       FROM managedservice.operations AS operation
       JOIN managedservice.service_installations AS installation
         ON installation.tenant_id = operation.tenant_id
@@ -846,20 +1209,79 @@ BEGIN
        AND operation.lease_owner = requested_worker_id
        AND operation.fencing_token = expected_fencing_token
        AND operation.lease_expires_at > transaction_timestamp()
+       AND installation.current_operation_id = operation.id
      FOR UPDATE OF operation, installation, entitlement;
     IF target_installation_id IS NULL THEN
         RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'managed-service failure lease conflicts';
     END IF;
-    UPDATE managedservice.quota_entitlements
-       SET reserved_count = reserved_count - 1,
-           resource_version = resource_version + 1
-     WHERE tenant_id = requested_tenant_id AND id = target_entitlement_id
-       AND reserved_count > 0;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'managed-service quota failure conflicts';
+    IF target_operation_kind = 'PROVISION' THEN
+        UPDATE managedservice.quota_entitlements
+           SET reserved_count = reserved_count - 1,
+               resource_version = resource_version + 1
+         WHERE tenant_id = requested_tenant_id AND id = target_entitlement_id
+           AND reserved_count > 0;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'managed-service quota failure conflicts';
+        END IF;
     END IF;
     UPDATE managedservice.service_installations
-       SET phase = 'FAILED', endpoint = NULL, credential_reference = NULL,
+       SET phase = CASE target_operation_kind
+                WHEN 'PROVISION' THEN 'FAILED'
+                WHEN 'TERMINATE' THEN 'TERMINATION_FAILED'
+            END,
+           endpoint = CASE WHEN target_operation_kind = 'PROVISION' THEN NULL ELSE endpoint END,
+           credential_reference = CASE WHEN target_operation_kind = 'PROVISION' THEN NULL ELSE credential_reference END,
+           resource_version = resource_version + 1,
+           observed_at = transaction_timestamp()
+     WHERE tenant_id = requested_tenant_id AND id = target_installation_id;
+    UPDATE managedservice.operations
+       SET phase = 'FAILED', safe_failure_code = requested_failure_code,
+           lease_owner = NULL, lease_expires_at = NULL,
+           resource_version = resource_version + 1,
+           observed_at = transaction_timestamp()
+     WHERE tenant_id = requested_tenant_id AND id = requested_operation_id;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION managedservice.fail_cleanup_operation(
+    requested_tenant_id text,
+    requested_operation_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_failure_code text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    target_installation_id text;
+BEGIN
+    IF requested_failure_code IS NULL
+       OR requested_failure_code COLLATE "C" !~ '^[A-Z][A-Z0-9_]{1,63}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service cleanup failure code is invalid';
+    END IF;
+    SELECT operation.installation_id
+      INTO target_installation_id
+      FROM managedservice.operations AS operation
+      JOIN managedservice.service_installations AS installation
+        ON installation.tenant_id = operation.tenant_id
+       AND installation.id = operation.installation_id
+     WHERE operation.tenant_id = requested_tenant_id
+       AND operation.id = requested_operation_id
+       AND operation.kind = 'PROVISION'
+       AND operation.phase = 'PROVISIONING'
+       AND operation.lease_owner = requested_worker_id
+       AND operation.fencing_token = expected_fencing_token
+       AND operation.lease_expires_at > transaction_timestamp()
+       AND installation.current_operation_id = operation.id
+     FOR UPDATE OF operation, installation;
+    IF target_installation_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'managed-service cleanup failure lease conflicts';
+    END IF;
+    UPDATE managedservice.service_installations
+       SET phase = 'ROLLBACK_FAILED', endpoint = NULL, credential_reference = NULL,
            resource_version = resource_version + 1,
            observed_at = transaction_timestamp()
      WHERE tenant_id = requested_tenant_id AND id = target_installation_id;
@@ -874,12 +1296,16 @@ $function$;
 
 REVOKE ALL ON FUNCTION managedservice.claim_operation(text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION managedservice.complete_operation(text, text, text, bigint, text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION managedservice.complete_termination_operation(text, text, text, bigint) FROM PUBLIC;
 REVOKE ALL ON FUNCTION managedservice.retry_operation(text, text, text, bigint, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION managedservice.fail_operation(text, text, text, bigint, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION managedservice.fail_cleanup_operation(text, text, text, bigint, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION managedservice.claim_operation(text, integer) TO matrix_paas_worker;
 GRANT EXECUTE ON FUNCTION managedservice.complete_operation(text, text, text, bigint, text, text) TO matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION managedservice.complete_termination_operation(text, text, text, bigint) TO matrix_paas_worker;
 GRANT EXECUTE ON FUNCTION managedservice.retry_operation(text, text, text, bigint, integer) TO matrix_paas_worker;
 GRANT EXECUTE ON FUNCTION managedservice.fail_operation(text, text, text, bigint, text) TO matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION managedservice.fail_cleanup_operation(text, text, text, bigint, text) TO matrix_paas_worker;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA managedservice FROM PUBLIC;
 GRANT SELECT ON managedservice.quota_entitlements,
@@ -887,7 +1313,7 @@ GRANT SELECT ON managedservice.quota_entitlements,
     managedservice.operations
     TO matrix_paas_api, matrix_paas_worker;
 GRANT INSERT, UPDATE ON managedservice.quota_entitlements TO matrix_paas_api;
-GRANT INSERT ON managedservice.service_installations,
-    managedservice.operations TO matrix_paas_api;
+GRANT INSERT ON managedservice.service_installations TO matrix_paas_api;
+GRANT INSERT ON managedservice.operations TO matrix_paas_api;
 
 COMMIT;

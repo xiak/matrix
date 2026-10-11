@@ -685,6 +685,7 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 			iamv1.ActionManagedServiceOfferingRead, iamv1.ActionManagedServiceRegionRead,
 			iamv1.ActionManagedServiceQuotaEntitlementActivate, iamv1.ActionManagedServiceQuotaEntitlementRead,
 			iamv1.ActionManagedServiceInstallationCreate, iamv1.ActionManagedServiceInstallationRead,
+			iamv1.ActionManagedServiceInstallationTerminate,
 			iamv1.ActionAuditRecordRead, iamv1.ActionAuditIntegrityVerify,
 		}
 	case iamv1.SystemPolicyPlatformOperator:
@@ -715,6 +716,7 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 			iamv1.ActionManagedServiceOfferingRead, iamv1.ActionManagedServiceRegionRead,
 			iamv1.ActionManagedServiceQuotaEntitlementActivate, iamv1.ActionManagedServiceQuotaEntitlementRead,
 			iamv1.ActionManagedServiceInstallationCreate, iamv1.ActionManagedServiceInstallationRead,
+			iamv1.ActionManagedServiceInstallationTerminate,
 		}
 	case iamv1.SystemPolicyPaaSViewer:
 		actions = []iamv1.Action{

@@ -23,6 +23,7 @@ var (
 	ErrAlreadyExists         = errors.New("managed-service resource already exists")
 	ErrIdempotencyConflict   = errors.New("managed-service idempotency key conflicts")
 	ErrQuotaExhausted        = errors.New("managed-service quota is exhausted")
+	ErrInvalidState          = errors.New("managed-service resource state conflicts")
 	ErrRegionUnavailable     = errors.New("managed-service region is unavailable")
 	ErrTransactionRetry      = errors.New("managed-service transaction must retry")
 	ErrRepositoryUnavailable = errors.New("managed-service repository is unavailable")
@@ -47,8 +48,10 @@ type Transaction interface {
 	FindQuotaReplay(context.Context, string) (managedservicev1.QuotaEntitlement, string, bool, error)
 	InsertQuotaEntitlement(context.Context, QuotaDraft) (managedservicev1.QuotaEntitlement, error)
 	FindInstallationReplay(context.Context, string) (managedservicev1.ServiceInstallation, string, bool, error)
+	FindTerminationReplay(context.Context, string) (managedservicev1.ServiceInstallation, string, bool, error)
 	GetQuotaEntitlementForUpdate(context.Context, string) (managedservicev1.QuotaEntitlement, error)
 	ReserveInstallation(context.Context, InstallationDraft, uint64) (managedservicev1.ServiceInstallation, error)
+	StartTermination(context.Context, TerminationDraft) (managedservicev1.ServiceInstallation, error)
 	AppendAuditEvent(context.Context, audit.Event) error
 	Commit(context.Context) error
 	Rollback(context.Context) error
@@ -83,6 +86,17 @@ type InstallationDraft struct {
 	RequestID          string
 }
 
+type TerminationDraft struct {
+	InstallationID string
+	OperationID    string
+	IdempotencyKey string
+	RequestDigest  string
+	ActorType      port.SubjectType
+	ActorID        string
+	IAMDecisionID  string
+	RequestID      string
+}
+
 type ActivateQuotaCommand struct {
 	Authorization  port.Authorization
 	Request        managedservicev1.ActivateQuotaRequest
@@ -92,6 +106,12 @@ type ActivateQuotaCommand struct {
 type CreateInstallationCommand struct {
 	Authorization  port.Authorization
 	Request        managedservicev1.CreateInstallationRequest
+	IdempotencyKey string
+}
+
+type TerminateInstallationCommand struct {
+	Authorization  port.Authorization
+	InstallationID string
 	IdempotencyKey string
 }
 
@@ -331,6 +351,9 @@ func (service *Service) BindServiceRole(
 	}
 	if managedservicev1.ValidateServiceInstallation(installation) != nil || installation.ID != command.InstallationID {
 		return managedservicev1.ServiceRoleBindingReceipt{}, ErrRepositoryUnavailable
+	}
+	if installation.Phase != managedservicev1.InstallationReady {
+		return managedservicev1.ServiceRoleBindingReceipt{}, ErrInvalidState
 	}
 	requestID := serviceRoleBindingRequestID(command.IdempotencyKey)
 	request := port.AuthorizationRequest{
@@ -607,6 +630,67 @@ func (service *Service) CreateInstallation(
 	return result, replayed, nil
 }
 
+func (service *Service) TerminateInstallation(
+	ctx context.Context,
+	command TerminateInstallationCommand,
+) (managedservicev1.ServiceInstallation, bool, error) {
+	if ctx == nil || port.ValidateAuthorization(command.Authorization) != nil ||
+		managedservicev1.ValidateInstallationID(command.InstallationID) != nil ||
+		managedservicev1.ValidateIdempotencyKey(command.IdempotencyKey) != nil {
+		return managedservicev1.ServiceInstallation{}, false, ErrInvalidArgument
+	}
+	digest, err := requestDigest(struct {
+		InstallationID string `json:"installationId"`
+	}{InstallationID: command.InstallationID})
+	if err != nil {
+		return managedservicev1.ServiceInstallation{}, false, ErrRepositoryUnavailable
+	}
+	operationID, err := service.newOperationID()
+	if err != nil || managedservicev1.ValidateID("operation.id", operationID) != nil {
+		return managedservicev1.ServiceInstallation{}, false, ErrRepositoryUnavailable
+	}
+	var result managedservicev1.ServiceInstallation
+	replayed := false
+	err = service.withWriteRetry(ctx, command.Authorization.TenantID, func(transaction Transaction) error {
+		existing, existingDigest, exists, findErr := transaction.FindTerminationReplay(ctx, command.IdempotencyKey)
+		if findErr != nil {
+			return findErr
+		}
+		if exists {
+			if existingDigest != digest || existing.ID != command.InstallationID {
+				return ErrIdempotencyConflict
+			}
+			result, replayed = existing, true
+			return nil
+		}
+		started, startErr := transaction.StartTermination(ctx, TerminationDraft{
+			InstallationID: command.InstallationID, OperationID: operationID,
+			IdempotencyKey: command.IdempotencyKey, RequestDigest: digest,
+			ActorType: command.Authorization.SubjectType, ActorID: command.Authorization.SubjectID,
+			IAMDecisionID: command.Authorization.DecisionID, RequestID: command.Authorization.RequestID,
+		})
+		if startErr != nil {
+			return startErr
+		}
+		event, eventErr := installationTerminationAuditEvent(command.Authorization, started, digest)
+		if eventErr != nil {
+			return ErrRepositoryUnavailable
+		}
+		if appendErr := transaction.AppendAuditEvent(ctx, event); appendErr != nil {
+			return appendErr
+		}
+		result = started
+		return nil
+	})
+	if err != nil {
+		return managedservicev1.ServiceInstallation{}, false, err
+	}
+	if managedservicev1.ValidateServiceInstallation(result) != nil {
+		return managedservicev1.ServiceInstallation{}, false, ErrRepositoryUnavailable
+	}
+	return result, replayed, nil
+}
+
 func quotaAuditEvent(
 	authorization port.Authorization,
 	quota managedservicev1.QuotaEntitlement,
@@ -646,6 +730,27 @@ func installationAuditEvent(
 		OperationID:   audit.OperationID(installation.Operation.ID),
 		RequestDigest: requestDigest, Result: audit.Accepted,
 		RequestID: authorization.RequestID, OccurredAt: installation.CreatedAt,
+	}
+	return event, audit.ValidateEvent(event)
+}
+
+func installationTerminationAuditEvent(
+	authorization port.Authorization,
+	installation managedservicev1.ServiceInstallation,
+	requestDigest string,
+) (audit.Event, error) {
+	event := audit.Event{
+		SchemaVersion: "v1",
+		EventID:       managedAuditEventID(audit.ServiceInstallationTerminationRequested, installation.Operation.ID),
+		TenantID:      audit.TenantID(authorization.TenantID), Actor: auditActor(authorization),
+		IAMDecisionID: authorization.DecisionID,
+		Action:        audit.ServiceInstallationTerminationRequested,
+		Target: audit.TargetReference{
+			Kind: audit.TargetServiceInstallation, ID: audit.ResourceID(installation.ID),
+		},
+		OperationID: audit.OperationID(installation.Operation.ID), RequestDigest: requestDigest,
+		Result: audit.Accepted, RequestID: authorization.RequestID,
+		OccurredAt: installation.Operation.ObservedAt,
 	}
 	return event, audit.ValidateEvent(event)
 }

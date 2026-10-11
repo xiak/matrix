@@ -91,6 +91,75 @@ func TestConcurrentInstallationsCannotExceedQuota(t *testing.T) {
 	}
 }
 
+func TestTerminationIsAtomicIdempotentAndBoundToOneInstallation(t *testing.T) {
+	repository := newMemoryRepository()
+	service := newTestService(t, repository)
+	authorization := testAuthorization()
+	quota, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
+		Authorization: authorization, IdempotencyKey: "quota-termination",
+		Request: managedservicev1.ActivateQuotaRequest{
+			OfferingID: domain.PostgreSQLOfferingID, QuotaShapeID: "pg-small", InstanceCount: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("activate quota: %v", err)
+	}
+	installation, _, err := service.CreateInstallation(context.Background(), CreateInstallationCommand{
+		Authorization: authorization, IdempotencyKey: "installation-termination",
+		Request: managedservicev1.CreateInstallationRequest{
+			ID: "postgres-termination", Name: "Postgres termination",
+			OfferingID: domain.PostgreSQLOfferingID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create installation: %v", err)
+	}
+	beforeEvents := len(repository.events)
+	invalid := TerminateInstallationCommand{
+		Authorization: authorization, InstallationID: installation.ID,
+		IdempotencyKey: "termination-request",
+	}
+	if _, _, err := service.TerminateInstallation(context.Background(), invalid); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("pending installation termination error=%v", err)
+	}
+	if len(repository.events) != beforeEvents || repository.installations[installation.ID].Phase != managedservicev1.InstallationPending {
+		t.Fatal("rejected termination partially changed state")
+	}
+
+	endpoint, credential := "127.0.0.1:25432", "credential-postgres-termination"
+	installation.Phase = managedservicev1.InstallationReady
+	installation.Endpoint, installation.CredentialReference = &endpoint, &credential
+	installation.ResourceVersion++
+	installation.Operation.Phase = managedservicev1.InstallationReady
+	repository.installations[installation.ID] = installation
+
+	terminated, replayed, err := service.TerminateInstallation(context.Background(), invalid)
+	if err != nil || replayed || terminated.Phase != managedservicev1.InstallationTerminationPending ||
+		terminated.Operation.Kind != managedservicev1.InstallationOperationTerminate ||
+		terminated.Operation.ID != "operation-two" || terminated.Endpoint == nil || terminated.CredentialReference == nil {
+		t.Fatalf("termination=%#v replayed=%v err=%v", terminated, replayed, err)
+	}
+	if len(repository.events) != beforeEvents+1 ||
+		repository.events[len(repository.events)-1].Action != audit.ServiceInstallationTerminationRequested ||
+		repository.events[len(repository.events)-1].OperationID != audit.OperationID(terminated.Operation.ID) {
+		t.Fatalf("termination Audit events=%#v", repository.events)
+	}
+	replay, replayed, err := service.TerminateInstallation(context.Background(), invalid)
+	if err != nil || !replayed || replay != terminated || len(repository.events) != beforeEvents+1 {
+		t.Fatalf("termination replay=%#v replayed=%v err=%v", replay, replayed, err)
+	}
+	changed := invalid
+	changed.InstallationID = "postgres-other"
+	if _, _, err := service.TerminateInstallation(context.Background(), changed); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("changed termination replay error=%v", err)
+	}
+	changed = invalid
+	changed.IdempotencyKey = "installation-termination"
+	if _, _, err := service.TerminateInstallation(context.Background(), changed); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("cross-operation idempotency reuse error=%v", err)
+	}
+}
+
 func TestInstallationRejectsUnavailableRegionBeforePersistence(t *testing.T) {
 	repository := newMemoryRepository()
 	region := testRegion()
@@ -194,6 +263,12 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 	if err != nil {
 		t.Fatalf("create installation: %v", err)
 	}
+	endpoint, credential := "127.0.0.1:25432", "credential-role-binding"
+	installation.Phase = managedservicev1.InstallationReady
+	installation.Endpoint, installation.CredentialReference = &endpoint, &credential
+	installation.ResourceVersion++
+	installation.Operation.Phase = managedservicev1.InstallationReady
+	repository.installations[installation.ID] = installation
 	template := testServiceRoleTemplateReference()
 	binder.result = testServiceLinkedRoleAccess(t, authorization.TenantID, installation.ID, template)
 	command := BindServiceRoleCommand{
@@ -516,6 +591,7 @@ type memoryRepository struct {
 type memoryReplay struct {
 	id     string
 	digest string
+	kind   managedservicev1.InstallationOperationKind
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -615,6 +691,20 @@ func (transaction *memoryTransaction) FindInstallationReplay(
 	key string,
 ) (managedservicev1.ServiceInstallation, string, bool, error) {
 	replay, found := transaction.installKeys[key]
+	if replay.kind != managedservicev1.InstallationOperationProvision {
+		return transaction.installations[replay.id], "", found, nil
+	}
+	return transaction.installations[replay.id], replay.digest, found, nil
+}
+
+func (transaction *memoryTransaction) FindTerminationReplay(
+	_ context.Context,
+	key string,
+) (managedservicev1.ServiceInstallation, string, bool, error) {
+	replay, found := transaction.installKeys[key]
+	if replay.kind != managedservicev1.InstallationOperationTerminate {
+		return transaction.installations[replay.id], "", found, nil
+	}
 	return transaction.installations[replay.id], replay.digest, found, nil
 }
 
@@ -649,13 +739,44 @@ func (transaction *memoryTransaction) ReserveInstallation(
 	item := managedservicev1.ServiceInstallation{
 		ID: draft.ID, Name: draft.Name, OfferingID: draft.OfferingID,
 		EngineVersion: draft.EngineVersion, QuotaEntitlementID: draft.QuotaEntitlementID,
-		RegionID: draft.RegionID, Phase: managedservicev1.InstallationPending, CreatedAt: now,
+		RegionID: draft.RegionID, Phase: managedservicev1.InstallationPending,
+		ResourceVersion: 1, CreatedAt: now,
 		Operation: managedservicev1.InstallationOperation{
-			ID: draft.OperationID, Phase: managedservicev1.InstallationPending, ObservedAt: now,
+			ID: draft.OperationID, Kind: managedservicev1.InstallationOperationProvision,
+			Phase: managedservicev1.InstallationPending, ObservedAt: now,
 		},
 	}
 	transaction.installations[item.ID] = item
-	transaction.installKeys[draft.IdempotencyKey] = memoryReplay{id: item.ID, digest: draft.RequestDigest}
+	transaction.installKeys[draft.IdempotencyKey] = memoryReplay{
+		id: item.ID, digest: draft.RequestDigest, kind: managedservicev1.InstallationOperationProvision,
+	}
+	return item, nil
+}
+
+func (transaction *memoryTransaction) StartTermination(
+	_ context.Context,
+	draft TerminationDraft,
+) (managedservicev1.ServiceInstallation, error) {
+	item, found := transaction.installations[draft.InstallationID]
+	if !found {
+		return managedservicev1.ServiceInstallation{}, ErrNotFound
+	}
+	if item.Phase != managedservicev1.InstallationReady &&
+		item.Phase != managedservicev1.InstallationTerminationFailed &&
+		item.Phase != managedservicev1.InstallationRollbackFailed {
+		return managedservicev1.ServiceInstallation{}, ErrInvalidState
+	}
+	item.Phase = managedservicev1.InstallationTerminationPending
+	item.ResourceVersion++
+	item.Operation = managedservicev1.InstallationOperation{
+		ID: draft.OperationID, Kind: managedservicev1.InstallationOperationTerminate,
+		Phase:      managedservicev1.InstallationPending,
+		ObservedAt: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC),
+	}
+	transaction.installations[item.ID] = item
+	transaction.installKeys[draft.IdempotencyKey] = memoryReplay{
+		id: item.ID, digest: draft.RequestDigest, kind: managedservicev1.InstallationOperationTerminate,
+	}
 	return item, nil
 }
 

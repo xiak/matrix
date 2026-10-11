@@ -22,6 +22,7 @@ const (
 	AuthorizeQuotaEntitlementRead     = iamv1.ActionManagedServiceQuotaEntitlementRead
 	AuthorizeInstallationCreate       = iamv1.ActionManagedServiceInstallationCreate
 	AuthorizeInstallationRead         = iamv1.ActionManagedServiceInstallationRead
+	AuthorizeInstallationTerminate    = iamv1.ActionManagedServiceInstallationTerminate
 	AuthorizeInstallationRoleBind     = iamv1.ActionManagedServiceInstallationRoleBind
 	AuthorizeInstallationRoleUnbind   = iamv1.ActionManagedServiceInstallationRoleUnbind
 )

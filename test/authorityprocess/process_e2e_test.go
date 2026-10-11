@@ -41,6 +41,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pquerna/otp/hotp"
+	amqp "github.com/rabbitmq/amqp091-go"
 
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
@@ -81,11 +82,11 @@ const (
 	// local managed-service provider gates. They never resolve a mutable tag or
 	// pull an image while proving a product effect.
 	managedPostgresImageID = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
-	// This is the official immutable MySQL 8.4 multi-platform manifest. The
-	// real product lane resolves and passes the already-loaded linux/amd64 image
-	// ID because classic and containerd Docker stores expose different IDs.
-	managedMySQLManifestDigest = "sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242"
-	managedMySQLImageIDEnv     = "MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID"
+	// The real product lane resolves and passes already-loaded linux/amd64 image
+	// IDs because classic and containerd Docker stores expose different IDs.
+	managedMySQLImageIDEnv         = "MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID"
+	managedElasticsearchImageIDEnv = "MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID"
+	managedRabbitMQImageIDEnv      = "MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID"
 	// Windows development hosts run the production Linux worker through this
 	// fixed local Docker CLI image so its Linux-only host-storage observation is
 	// not replaced by a synthetic execution profile.
@@ -3150,10 +3151,10 @@ func TestIAMConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessBrowser)
 }
 
-// This gate provisions actual PostgreSQL 18 and MySQL 8.4 product resources
-// through the public PaaS API and the production worker. Catalog rows,
-// accepted commands, synthetic endpoints or manually completed records cannot
-// satisfy it.
+// This gate provisions actual PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19
+// and RabbitMQ 4.1 product resources through the public PaaS API and the
+// production worker. Catalog rows, accepted commands, synthetic endpoints or
+// manually completed records cannot satisfy it.
 func TestManagedProductProviderProcesses(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_MANAGED_PRODUCTS_TEST_DSN") == "" {
 		t.Skip("set MATRIX_IAM_MANAGED_PRODUCTS_TEST_DSN to a separate disposable PG18 database")
@@ -3161,7 +3162,14 @@ func TestManagedProductProviderProcesses(t *testing.T) {
 	if os.Getenv(managedMySQLImageIDEnv) == "" {
 		t.Skipf("set %s to the already-loaded immutable MySQL 8.4 image ID", managedMySQLImageIDEnv)
 	}
-	_ = managedMySQLImageID(t)
+	for _, environment := range []string{managedElasticsearchImageIDEnv, managedRabbitMQImageIDEnv} {
+		if os.Getenv(environment) == "" {
+			t.Skipf("set %s to the already-loaded immutable product image ID", environment)
+		}
+	}
+	_ = managedProductImageID(t, managedMySQLImageIDEnv)
+	_ = managedProductImageID(t, managedElasticsearchImageIDEnv)
+	_ = managedProductImageID(t, managedRabbitMQImageIDEnv)
 	testIndependentAuthorityProcesses(t, authorityProcessManagedProducts)
 }
 
@@ -3188,7 +3196,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	} else if mode == authorityProcessBrowser {
 		duration = 30 * time.Minute
 	} else if mode == authorityProcessManagedProducts {
-		duration = 12 * time.Minute
+		duration = 18 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
@@ -4920,8 +4928,30 @@ func managedMySQLFixture(t *testing.T, owner string) managedProductFixture {
 	return managedProductFixture{
 		name: "MySQL 8.4 LTS", offeringID: managedservicev1.MySQLOfferingID,
 		quotaShapeID: "mysql-small", engineVersion: "8.4",
-		installationID: newManagedProductID(t, owner, "mysql"), imageID: managedMySQLImageID(t),
+		installationID: newManagedProductID(t, owner, "mysql"), imageID: managedProductImageID(t, managedMySQLImageIDEnv),
 		runtimeDirectory: "managed-mysql", credentialFile: "mysql-password",
+	}
+}
+
+func managedElasticsearchFixture(t *testing.T, owner string) managedProductFixture {
+	t.Helper()
+	return managedProductFixture{
+		name: "Elasticsearch 8.19", offeringID: managedservicev1.ElasticsearchOfferingID,
+		quotaShapeID: "elasticsearch-small", engineVersion: "8.19.23",
+		installationID:   newManagedProductID(t, owner, "elasticsearch"),
+		imageID:          managedProductImageID(t, managedElasticsearchImageIDEnv),
+		runtimeDirectory: "managed-elasticsearch", credentialFile: "elasticsearch-password",
+	}
+}
+
+func managedRabbitMQFixture(t *testing.T, owner string) managedProductFixture {
+	t.Helper()
+	return managedProductFixture{
+		name: "RabbitMQ 4.1", offeringID: managedservicev1.RabbitMQOfferingID,
+		quotaShapeID: "rabbitmq-small", engineVersion: "4.1.8",
+		installationID:   newManagedProductID(t, owner, "rabbitmq"),
+		imageID:          managedProductImageID(t, managedRabbitMQImageIDEnv),
+		runtimeDirectory: "managed-rabbitmq", credentialFile: "rabbitmq-password",
 	}
 }
 
@@ -4940,9 +4970,12 @@ func runManagedProductProviderProcesses(
 	products := []managedProductFixture{
 		managedPostgresFixture(t, "provider"),
 		managedMySQLFixture(t, "provider"),
+		managedElasticsearchFixture(t, "provider"),
+		managedRabbitMQFixture(t, "provider"),
 	}
 	quotasByID := make(map[string]managedservicev1.QuotaEntitlement, len(products))
 	installationsByID := make(map[string]managedservicev1.ServiceInstallation, len(products))
+	projectsByID := make(map[string]string, len(products))
 	for index := range products {
 		product := &products[index]
 		defer cleanupManagedProduct(t, product.installationID)
@@ -4973,7 +5006,7 @@ func runManagedProductProviderProcesses(
 			t.Fatalf("accept real %s installation status=%d body=%s", product.name, response.Status, response.Body)
 		}
 		installation := waitManagedProductReady(t, ctx, paasEndpoint, bearer, *product)
-		assertManagedProductRuntime(t, ctx, installation, managedRuntime, *product)
+		projectsByID[product.installationID] = assertManagedProductRuntime(t, ctx, installation, managedRuntime, *product)
 		response = performJSON(t, http.MethodGet,
 			base+"/service-installations/"+product.installationID+"/operation", bearer, nil)
 		var operation managedservicev1.InstallationOperation
@@ -5001,14 +5034,14 @@ func runManagedProductProviderProcesses(
 		}
 	}
 
-	memberUser := createIAMUser(t, iamEndpoint, bearer, "provider.reader", "Managed database reader",
+	memberUser := createIAMUser(t, iamEndpoint, bearer, "provider.reader", "Managed product reader",
 		initialReaderPassword, "managed-products-provider-member")
 	member := loginIAM(t, iamEndpoint, "provider.reader@organization-process", initialReaderPassword,
 		"managed-products-provider-member-login")
 	changePasswordIAM(t, iamEndpoint, member.Credential, initialReaderPassword, changedReaderPassword,
 		"managed-products-provider-member-password")
 	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups", bearer,
-		iamv1.CreateGroupRequest{Name: "Managed database readers", RequestID: "managed-products-provider-group"})
+		iamv1.CreateGroupRequest{Name: "Managed product readers", RequestID: "managed-products-provider-group"})
 	var group iamv1.Group
 	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &group) != nil ||
 		iamv1.ValidateGroup(group) != nil || group.AccountID != "organization-process" {
@@ -5042,7 +5075,7 @@ func runManagedProductProviderProcesses(
 		}},
 	}
 	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", bearer,
-		iamv1.CreatePolicyRequest{DisplayName: "Read exact managed databases", Document: document,
+		iamv1.CreatePolicyRequest{DisplayName: "Read exact managed products", Document: document,
 			RequestID: "managed-products-provider-policy"})
 	var policy iamv1.PolicyDetail
 	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &policy) != nil ||
@@ -5118,7 +5151,7 @@ func runManagedProductProviderProcesses(
 			!reflect.DeepEqual(installation, installationsByID[product.installationID]) {
 			t.Fatalf("membership removal changed the %s resource: status=%d", product.name, response.Status)
 		}
-		assertManagedProductRuntime(t, ctx, installation, managedRuntime, product)
+		_ = assertManagedProductRuntime(t, ctx, installation, managedRuntime, product)
 	}
 
 	waitAllIAMOutboxDelivered(t, ctx, database)
@@ -5137,10 +5170,100 @@ func runManagedProductProviderProcesses(
 			t.Fatalf("%s allow decision lost its exact Group membership and attachment evidence: %v", product.name, err)
 		}
 		assertManagedProductAuthorization(t, ctx, database, auditEndpoint, bearer, memberUser.ID, product)
+	}
+
+	for _, product := range products {
+		terminationPath := base + "/service-installations/" + product.installationID + "/termination"
+		if response := performJSONWithIdempotency(t, http.MethodPost, terminationPath, member.Credential,
+			"managed-product-member-termination-"+product.runtimeDirectory, nil); response.Status != http.StatusForbidden {
+			t.Fatalf("read-only member terminated %s: status=%d body=%s", product.name, response.Status, response.Body)
+		}
+		if response := performJSONWithIdempotency(t, http.MethodPost, terminationPath, foreign.Credential,
+			"managed-product-foreign-termination-"+product.runtimeDirectory, nil); response.Status != http.StatusNotFound {
+			t.Fatalf("foreign account discovered %s termination target: status=%d body=%s", product.name, response.Status, response.Body)
+		}
+		key := "managed-product-termination-" + product.runtimeDirectory
+		response := performJSONWithIdempotency(t, http.MethodPost, terminationPath, bearer, key, nil)
+		var accepted managedservicev1.ServiceInstallation
+		if response.Status != http.StatusAccepted || json.Unmarshal(response.Body, &accepted) != nil ||
+			managedservicev1.ValidateServiceInstallation(accepted) != nil || accepted.ID != product.installationID ||
+			accepted.Phase != managedservicev1.InstallationTerminationPending ||
+			accepted.Operation.Kind != managedservicev1.InstallationOperationTerminate {
+			t.Fatalf("accept real %s termination status=%d body=%s", product.name, response.Status, response.Body)
+		}
+		terminated := waitManagedProductTerminated(t, ctx, paasEndpoint, bearer, product)
+		assertManagedProductDeleted(t, ctx, managedRuntime, product, projectsByID[product.installationID], *installationsByID[product.installationID].Endpoint)
+		response = performJSONWithIdempotency(t, http.MethodPost, terminationPath, bearer, key, nil)
+		var replayed managedservicev1.ServiceInstallation
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &replayed) != nil ||
+			!reflect.DeepEqual(replayed, terminated) {
+			t.Fatalf("replay real %s termination status=%d body=%s", product.name, response.Status, response.Body)
+		}
+		if response = performJSONWithIdempotency(t, http.MethodPost, terminationPath, bearer,
+			key+"-different", nil); response.Status != http.StatusConflict {
+			t.Fatalf("second real %s termination was not rejected: status=%d body=%s", product.name, response.Status, response.Body)
+		}
+		assertManagedProductTerminationProof(t, database, iamEndpoint, product.installationID)
+		response = performJSON(t, http.MethodGet,
+			base+"/quota-entitlements/"+installationsByID[product.installationID].QuotaEntitlementID, bearer, nil)
+		var released managedservicev1.QuotaEntitlement
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &released) != nil ||
+			managedservicev1.ValidateQuotaEntitlement(released) != nil || released.ReservedCount != 0 || released.ConsumedCount != 0 {
+			t.Fatalf("real %s quota was not returned: status=%d body=%s", product.name, response.Status, response.Body)
+		}
+	}
+	waitAllPaaSOutboxDelivered(t, ctx, database)
+	for _, product := range products {
 		assertManagedProductAudit(t, auditEndpoint, bearer, product)
 	}
-	t.Log("real PostgreSQL 18 and MySQL 8.4 providers completed create-to-READY, SQL durability, quota, Operation, exact group authorization, next-request revocation, tenant isolation and verified Audit")
+	t.Log("real PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19 and RabbitMQ 4.1 providers completed create-to-READY-to-TERMINATED, protocol read/write, data and credential deletion, quota return, Operation, exact group authorization, next-request revocation, tenant isolation and verified Audit")
 	return []string{member.Credential, foreign.Credential}
+}
+
+func assertManagedProductTerminationProof(
+	t *testing.T,
+	database *pgx.Conn,
+	iamEndpoint string,
+	installationID string,
+) {
+	t.Helper()
+	var document []byte
+	if err := database.QueryRow(t.Context(), `SELECT document FROM managedservice.audit_outbox
+		WHERE tenant_id='organization-process'
+		  AND document->>'action'=$1
+		  AND document#>>'{target,id}'=$2`,
+		auditv1.ActionManagedServiceInstallationTerminated, installationID,
+	).Scan(&document); err != nil {
+		t.Fatalf("read %s termination Audit fact: %v", installationID, err)
+	}
+	var event map[string]any
+	if json.Unmarshal(document, &event) != nil {
+		t.Fatalf("decode %s termination Audit fact", installationID)
+	}
+	delete(event, "schemaVersion")
+	event["apiVersion"], event["kind"] = auditv1.APIVersion, "AuditEvent"
+	event["correlationId"] = event["requestId"]
+	target, ok := event["target"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s termination Audit target is malformed", installationID)
+	}
+	target["kind"] = string(auditv1.TargetServiceInstallation)
+	public := func() auditv1.Event {
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("encode %s termination Audit fact: %v", installationID, err)
+		}
+		var result auditv1.Event
+		if json.Unmarshal(encoded, &result) != nil || auditv1.ValidateEventForSource(auditv1.SourcePaaS, result) != nil {
+			t.Fatalf("project %s termination Audit fact", installationID)
+		}
+		return result
+	}()
+	response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/audit-producer:resolve",
+		paasServiceCredential, iamv1.ResolveAuditProducerRequest{Event: public})
+	if response.Status != http.StatusOK {
+		t.Fatalf("resolve %s termination Audit proof: status=%d body=%s", installationID, response.Status, response.Body)
+	}
 }
 
 func runIAMConsoleBrowser(
@@ -5444,7 +5567,9 @@ func managedProductWorkerEnvironment(
 		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF=local-machine-browser-v1",
 		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS=" + workerAddress,
 		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE=" + managedPostgresImageID,
-		"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE=" + managedMySQLImageID(nil),
+		"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE=" + managedProductImageID(nil, managedMySQLImageIDEnv),
+		"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE=" + managedProductImageID(nil, managedElasticsearchImageIDEnv),
+		"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE=" + managedProductImageID(nil, managedRabbitMQImageIDEnv),
 	}
 }
 
@@ -5462,15 +5587,12 @@ func newManagedHexSuffix(t *testing.T) string {
 	return hex.EncodeToString(suffix[:])
 }
 
-func managedMySQLImageID(t *testing.T) string {
-	value := strings.TrimSpace(os.Getenv(managedMySQLImageIDEnv))
-	if value == "" {
-		value = managedMySQLManifestDigest
-	}
+func managedProductImageID(t *testing.T, environment string) string {
+	value := strings.TrimSpace(os.Getenv(environment))
 	digest, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
 	if !strings.HasPrefix(value, "sha256:") || len(digest) != sha256.Size || err != nil {
 		if t != nil {
-			t.Fatal("managed MySQL image ID is invalid")
+			t.Fatalf("managed product image ID in %s is invalid", environment)
 		}
 		return ""
 	}
@@ -5518,13 +5640,56 @@ func waitManagedProductReady(
 	return managedservicev1.ServiceInstallation{}
 }
 
+func waitManagedProductTerminated(
+	t *testing.T,
+	ctx context.Context,
+	paasEndpoint string,
+	bearer string,
+	product managedProductFixture,
+) managedservicev1.ServiceInstallation {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		response := performJSON(t, http.MethodGet,
+			paasEndpoint+"/managed-services/v1/service-installations/"+product.installationID,
+			bearer, nil)
+		if response.Status == http.StatusOK {
+			var installation managedservicev1.ServiceInstallation
+			if json.Unmarshal(response.Body, &installation) != nil ||
+				managedservicev1.ValidateServiceInstallation(installation) != nil ||
+				installation.ID != product.installationID || installation.OfferingID != product.offeringID ||
+				installation.EngineVersion != product.engineVersion {
+				t.Fatalf("provider returned an invalid terminating %s resource", product.name)
+			}
+			if installation.Phase == managedservicev1.InstallationTerminationFailed {
+				t.Fatalf("real %s termination reached TERMINATION_FAILED: %v", product.name, installation.Operation.SafeFailureCode)
+			}
+			if installation.Phase == managedservicev1.InstallationTerminated &&
+				installation.Endpoint == nil && installation.CredentialReference == nil &&
+				installation.Operation.Kind == managedservicev1.InstallationOperationTerminate &&
+				installation.Operation.Phase == managedservicev1.InstallationReady {
+				return installation
+			}
+		} else if response.Status != http.StatusServiceUnavailable {
+			t.Fatalf("read terminating %s status=%d", product.name, response.Status)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for real %s termination: %v", product.name, ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	t.Fatalf("provider did not terminate the real %s resource", product.name)
+	return managedservicev1.ServiceInstallation{}
+}
+
 func assertManagedProductRuntime(
 	t *testing.T,
 	ctx context.Context,
 	installation managedservicev1.ServiceInstallation,
 	managedRuntime managedProductRuntime,
 	product managedProductFixture,
-) {
+) string {
 	t.Helper()
 	filter := "label=com.xiak.matrix.managedservice.installation=" + installation.ID
 	list := exec.CommandContext(ctx, "docker", "container", "ls", "--all", "--filter", filter, "--format", "{{.ID}}")
@@ -5565,8 +5730,64 @@ func assertManagedProductRuntime(
 		assertManagedPostgresSQL(t, ctx, installation, password)
 	case managedservicev1.MySQLOfferingID:
 		assertManagedMySQLSQL(t, ctx, installation, password)
+	case managedservicev1.ElasticsearchOfferingID:
+		assertManagedElasticsearchHTTP(t, ctx, installation, password)
+	case managedservicev1.RabbitMQOfferingID:
+		assertManagedRabbitMQAMQP(t, ctx, installation, password)
 	default:
 		t.Fatal("managed product fixture is unsupported")
+	}
+	return project
+}
+
+func assertManagedProductDeleted(
+	t *testing.T,
+	ctx context.Context,
+	managedRuntime managedProductRuntime,
+	product managedProductFixture,
+	project string,
+	endpoint string,
+) {
+	t.Helper()
+	filter := "label=com.xiak.matrix.managedservice.installation=" + product.installationID
+	list := exec.CommandContext(ctx, "docker", "container", "ls", "--all", "--filter", filter, "--format", "{{.ID}}")
+	content, err := list.Output()
+	if err != nil || len(strings.Fields(string(content))) != 0 {
+		t.Fatalf("terminated %s still has a runtime container", product.name)
+	}
+	networks := exec.CommandContext(ctx, "docker", "network", "ls", "--filter",
+		"label=com.docker.compose.project="+project, "--format", "{{.ID}}")
+	networkContent, err := networks.Output()
+	if err != nil || len(strings.Fields(string(networkContent))) != 0 {
+		t.Fatalf("terminated %s still has an owned network", product.name)
+	}
+	if managedRuntime.volumeName == "" {
+		directory := filepath.Join(managedRuntime.bindingRoot, product.runtimeDirectory, project)
+		if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("terminated %s data or credentials remain", product.name)
+		}
+	} else {
+		path := "/runtime/bindings/" + product.runtimeDirectory + "/" + project
+		command := exec.CommandContext(ctx, "docker", "run", "--rm",
+			"--label", "matrix.task=iam-managed-product-deletion-check",
+			"--network", "none", "--read-only", "--cpus", "0.25",
+			"--memory", "64m", "--memory-swap", "64m", "--pids-limit", "32",
+			"--security-opt", "no-new-privileges:true", "--cap-drop", "ALL",
+			"--mount", "type=volume,source="+managedRuntime.volumeName+",target=/runtime,readonly",
+			"--entrypoint", "sh", managedDockerCLIImageID,
+			"-c", `test ! -e "$1"`, "sh", path)
+		if err := command.Run(); err != nil {
+			t.Fatalf("terminated %s data or credentials remain", product.name)
+		}
+	}
+	address := endpoint
+	if parsed, parseErr := url.Parse(endpoint); parseErr == nil && parsed.Host != "" {
+		address = parsed.Host
+	}
+	connection, err := net.DialTimeout("tcp", address, time.Second)
+	if err == nil {
+		_ = connection.Close()
+		t.Fatalf("terminated %s endpoint still accepts connections", product.name)
 	}
 }
 
@@ -5641,6 +5862,112 @@ func assertManagedMySQLSQL(
 		`SELECT value, VERSION() FROM matrix_iam_acceptance_probe WHERE value='preserved'`).Scan(&value, &version); err != nil ||
 		value != "preserved" || !strings.HasPrefix(version, "8.4.") {
 		t.Fatalf("managed product resource did not complete a real MySQL 8.4 SQL round trip: version=%q", version)
+	}
+}
+
+func assertManagedElasticsearchHTTP(
+	t *testing.T,
+	ctx context.Context,
+	installation managedservicev1.ServiceInstallation,
+	password []byte,
+) {
+	t.Helper()
+	client := &http.Client{Timeout: 30 * time.Second}
+	defer client.CloseIdleConnections()
+	request := func(method, path string, body []byte) []byte {
+		t.Helper()
+		httpRequest, err := http.NewRequestWithContext(ctx, method, *installation.Endpoint+path, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal("construct managed Elasticsearch request")
+		}
+		httpRequest.Header.Set("Content-Type", "application/json")
+		httpRequest.SetBasicAuth("elastic", string(password))
+		response, err := client.Do(httpRequest)
+		if err != nil {
+			t.Fatal("connect to managed Elasticsearch product endpoint")
+		}
+		defer response.Body.Close()
+		content, readErr := io.ReadAll(io.LimitReader(response.Body, 1024*1024))
+		if readErr != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
+			t.Fatalf("managed Elasticsearch request failed: status=%d", response.StatusCode)
+		}
+		return content
+	}
+	var root struct {
+		Version struct {
+			Number string `json:"number"`
+		} `json:"version"`
+	}
+	if json.Unmarshal(request(http.MethodGet, "/", nil), &root) != nil || root.Version.Number != "8.19.23" {
+		t.Fatalf("managed Elasticsearch product version=%q", root.Version.Number)
+	}
+	request(http.MethodPut, "/matrix-iam-acceptance/_doc/preserved?refresh=wait_for", []byte(`{"value":"preserved"}`))
+	var document struct {
+		Found  bool `json:"found"`
+		Source struct {
+			Value string `json:"value"`
+		} `json:"_source"`
+	}
+	if json.Unmarshal(request(http.MethodGet, "/matrix-iam-acceptance/_doc/preserved", nil), &document) != nil ||
+		!document.Found || document.Source.Value != "preserved" {
+		t.Fatal("managed product resource did not complete a real Elasticsearch HTTP write/read round trip")
+	}
+}
+
+func assertManagedRabbitMQAMQP(
+	t *testing.T,
+	ctx context.Context,
+	installation managedservicev1.ServiceInstallation,
+	password []byte,
+) {
+	t.Helper()
+	endpoint, err := url.Parse(*installation.Endpoint)
+	if err != nil || endpoint.Scheme != "amqp" || endpoint.Path != "/matrix" {
+		t.Fatal("managed RabbitMQ product endpoint is invalid")
+	}
+	endpoint.User = url.UserPassword("matrix_service", string(password))
+	connection, err := amqp.DialConfig(endpoint.String(), amqp.Config{
+		Dial: func(network, address string) (net.Conn, error) {
+			return net.DialTimeout(network, address, 5*time.Second)
+		},
+	})
+	if err != nil {
+		t.Fatal("connect to managed RabbitMQ product endpoint")
+	}
+	defer connection.Close()
+	version, _ := connection.Properties["version"].(string)
+	if version != "4.1.8" {
+		t.Fatalf("managed RabbitMQ product version=%q", version)
+	}
+	channel, err := connection.Channel()
+	if err != nil {
+		t.Fatal("open managed RabbitMQ channel")
+	}
+	defer channel.Close()
+	queue, err := channel.QueueDeclare("matrix-iam-acceptance", true, false, false, false, nil)
+	if err != nil {
+		t.Fatal("declare managed RabbitMQ durability probe")
+	}
+	if err := channel.Confirm(false); err != nil {
+		t.Fatal("enable managed RabbitMQ publisher confirms")
+	}
+	confirmations := channel.NotifyPublish(make(chan amqp.Confirmation, 1))
+	if err := channel.PublishWithContext(ctx, "", queue.Name, false, false, amqp.Publishing{
+		ContentType: "text/plain", DeliveryMode: amqp.Persistent, Body: []byte("preserved"),
+	}); err != nil {
+		t.Fatal("publish managed RabbitMQ durability probe")
+	}
+	select {
+	case confirmation := <-confirmations:
+		if !confirmation.Ack {
+			t.Fatal("managed RabbitMQ rejected the durability probe")
+		}
+	case <-ctx.Done():
+		t.Fatal("managed RabbitMQ publisher confirmation timed out")
+	}
+	delivery, found, err := channel.Get(queue.Name, true)
+	if err != nil || !found || string(delivery.Body) != "preserved" {
+		t.Fatalf("managed product resource did not complete a real RabbitMQ AMQP publish/get round trip: found=%v", found)
 	}
 }
 
@@ -5733,26 +6060,32 @@ func assertManagedProductAuthorization(
 
 func assertManagedProductAudit(t *testing.T, auditEndpoint string, bearer string, product managedProductFixture) {
 	t.Helper()
-	query := auditv1.QueryRecordsRequest{
-		PageSize: 200,
-		Action:   auditv1.ActionManagedServiceInstallationReady,
-	}
-	readyFacts := 0
-	for {
-		page := queryAudit(t, auditEndpoint, bearer, query, http.StatusOK)
-		for _, record := range page.Records {
-			if record.Source == auditv1.SourcePaaS && record.Event.Target.ID == product.installationID &&
-				record.Event.TenantID == "organization-process" {
-				readyFacts++
+	for _, action := range []auditv1.Action{
+		auditv1.ActionManagedServiceInstallationReady,
+		auditv1.ActionManagedServiceInstallationTerminationRequested,
+		auditv1.ActionManagedServiceInstallationTerminated,
+	} {
+		query := auditv1.QueryRecordsRequest{PageSize: 200, Action: action}
+		facts := 0
+		for {
+			page := queryAudit(t, auditEndpoint, bearer, query, http.StatusOK)
+			for _, record := range page.Records {
+				if record.Source == auditv1.SourcePaaS && record.Event.Target.ID == product.installationID &&
+					record.Event.TenantID == "organization-process" {
+					if action != auditv1.ActionManagedServiceInstallationReady && record.Event.OperationID == "" {
+						t.Fatalf("real %s %s fact lost its Operation", product.name, action)
+					}
+					facts++
+				}
 			}
+			if page.NextCursor == "" {
+				break
+			}
+			query.Cursor = page.NextCursor
 		}
-		if page.NextCursor == "" {
-			break
+		if facts != 1 {
+			t.Fatalf("real %s %s facts=%d, want one", product.name, action, facts)
 		}
-		query.Cursor = page.NextCursor
-	}
-	if readyFacts != 1 {
-		t.Fatalf("real %s ready facts=%d, want one", product.name, readyFacts)
 	}
 	if verification := verifyAudit(t, auditEndpoint, bearer); verification.State != auditv1.VerificationVerified {
 		t.Fatalf("%s facts failed the real Audit chain verification", product.name)

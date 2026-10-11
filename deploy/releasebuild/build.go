@@ -231,7 +231,18 @@ func buildImages(
 	if !found || validateImageMetadata(mysql) != nil {
 		return nil, nil, errors.New("fixed MySQL image identity is unavailable")
 	}
-	metadata := map[string]ImageMetadata{"postgres": postgres, "mysql": mysql}
+	elasticsearch, found := baseImages[ElasticsearchPinnedReference]
+	if !found || validateImageMetadata(elasticsearch) != nil {
+		return nil, nil, errors.New("fixed Elasticsearch image identity is unavailable")
+	}
+	rabbitmq, found := baseImages[RabbitMQPinnedReference]
+	if !found || validateImageMetadata(rabbitmq) != nil {
+		return nil, nil, errors.New("fixed RabbitMQ image identity is unavailable")
+	}
+	metadata := map[string]ImageMetadata{
+		"postgres": postgres, "mysql": mysql,
+		"elasticsearch": elasticsearch, "rabbitmq": rabbitmq,
+	}
 	tags := make([]string, 0, len(imageRecipes))
 	for _, recipe := range imageRecipes {
 		contextRoot := filepath.Join(workspace, "images", recipe.component)

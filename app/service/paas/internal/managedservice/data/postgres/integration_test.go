@@ -3,7 +3,6 @@ package postgres_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
@@ -33,7 +32,7 @@ import (
 const (
 	managedServiceIntegrationDSN = "MATRIX_MANAGEDSERVICE_POSTGRES_TEST_DSN"
 	managedServicePredecessorDSN = "MATRIX_MANAGEDSERVICE_PREDECESSOR_POSTGRES_TEST_DSN"
-	managedServicePredecessor    = "01146e7c465bbf28116d541f17ecbe28f917a4fe"
+	managedServicePredecessor    = "dc5f63a3c6dea5fa2943bb78628cd753582cb2bc"
 )
 
 func fixedPaaSPredecessorSource(t *testing.T) postgresmigration.Source {
@@ -76,14 +75,18 @@ func integrationRegion() managedservicev1.Region {
 	}
 }
 
-func TestManagedServicePredecessorCatalogUpgrade(t *testing.T) {
+func TestManagedServiceDirectPredecessorUpgradeAndTermination(t *testing.T) {
 	adminDSN := os.Getenv(managedServicePredecessorDSN)
 	if adminDSN == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", managedServicePredecessorDSN)
 	}
 	parsed, err := pgxpool.ParseConfig(adminDSN)
 	if err != nil || !strings.HasPrefix(parsed.ConnConfig.Database, "matrix_managedservice_predecessor_") {
-		t.Fatal("managed-service predecessor DSN must select a safely named disposable database")
+		database := ""
+		if parsed != nil {
+			database = parsed.ConnConfig.Database
+		}
+		t.Fatalf("managed-service predecessor DSN database=%q err=%v", database, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -97,69 +100,90 @@ func TestManagedServicePredecessorCatalogUpgrade(t *testing.T) {
 		t.Fatalf("apply fixed predecessor PaaS schema: %v", err)
 	}
 
-	var quotaSequence, operationSequence atomic.Uint32
-	newService := func(pool *pgxpool.Pool) *usecase.Service {
-		service, err := usecase.NewService(managedServiceRepository(t, pool), usecase.Config{
-			Catalog: domain.DefaultCatalog(), WorkloadRoleAuthority: integrationWorkloadRoleBinder{},
-			WorkloadRoleRuntime: integrationWorkloadRoleBinder{}, Region: integrationRegion(),
-			NewQuotaID: func() (string, error) {
-				return fmt.Sprintf("quota-predecessor-%d", quotaSequence.Add(1)), nil
-			},
-			NewOperationID: func() (string, error) {
-				return fmt.Sprintf("operation-predecessor-%d", operationSequence.Add(1)), nil
-			},
-		})
-		if err != nil {
-			t.Fatal("create predecessor managed-service use case")
-		}
-		return service
-	}
-	authorization := integrationAuthorization("organization-predecessor")
 	predecessorPool, err := pgxpool.New(ctx, apiDSN)
 	if err != nil {
 		t.Fatal("open predecessor managed-service API pool")
 	}
-	predecessorService := newService(predecessorPool)
-	postgresQuota, _, err := predecessorService.ActivateQuota(ctx, usecase.ActivateQuotaCommand{
-		Authorization: authorization, IdempotencyKey: "predecessor-postgres-quota",
-		Request: managedservicev1.ActivateQuotaRequest{
-			OfferingID: domain.PostgreSQLOfferingID, QuotaShapeID: "pg-small", InstanceCount: 1,
-		},
-	})
+	const (
+		predecessorTenant       = "organization-predecessor"
+		predecessorQuota        = "quota-predecessor-mysql"
+		predecessorInstallation = "predecessor-mysql"
+		predecessorOperation    = "operation-predecessor-provision"
+	)
+	// The fixed predecessor's own repository had already proved the create
+	// workflow at dc5f63a. This fixture persists its observable READY state
+	// using only that predecessor's released tables and worker functions; the
+	// assertions below exercise the current schema and use cases exclusively.
+	tx, err := predecessorPool.Begin(ctx)
 	if err != nil {
 		predecessorPool.Close()
-		t.Fatalf("create predecessor PostgreSQL quota: %v", err)
+		t.Fatal("begin predecessor fixture")
 	}
-	postgresInstallation, _, err := predecessorService.CreateInstallation(ctx, usecase.CreateInstallationCommand{
-		Authorization: authorization, IdempotencyKey: "predecessor-postgres-installation",
-		Request: managedservicev1.CreateInstallationRequest{
-			ID: "predecessor-postgres", Name: "Predecessor PostgreSQL",
-			OfferingID: domain.PostgreSQLOfferingID, QuotaEntitlementID: postgresQuota.ID, RegionID: "local-primary",
-		},
-	})
-	if err != nil || postgresInstallation.Phase != managedservicev1.InstallationPending {
+	if _, err = tx.Exec(ctx, "SELECT pg_catalog.set_config('matrix.tenant_id', $1, true)", predecessorTenant); err == nil {
+		_, err = tx.Exec(ctx, `
+INSERT INTO managedservice.quota_entitlements (
+    tenant_id, id, offering_id, quota_shape_id, purchased_count, reserved_count,
+    idempotency_key, request_digest, activated_by_type, activated_by_id,
+    iam_decision_id, request_id
+) VALUES (
+    managedservice.current_tenant_id(), $1, 'mysql-8.4', 'mysql-small', 1, 1,
+    'predecessor-quota-request', $2, 'USER', 'principal-predecessor',
+    'decision-predecessor', 'request-predecessor'
+)`, predecessorQuota, "sha256:"+strings.Repeat("a", 64))
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `
+INSERT INTO managedservice.service_installations (
+    tenant_id, id, name, offering_id, engine_version, quota_entitlement_id, region_id
+) VALUES (
+    managedservice.current_tenant_id(), $1, 'Predecessor MySQL',
+    'mysql-8.4', '8.4', $2, 'local-primary'
+)`, predecessorInstallation, predecessorQuota)
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `
+INSERT INTO managedservice.operations (
+    tenant_id, id, installation_id, idempotency_key, request_digest,
+    requested_by_type, requested_by_id, iam_decision_id, request_id
+) VALUES (
+    managedservice.current_tenant_id(), $1, $2,
+    'predecessor-installation-request', $3, 'USER', 'principal-predecessor',
+    'decision-predecessor', 'request-predecessor'
+)`, predecessorOperation, predecessorInstallation, "sha256:"+strings.Repeat("b", 64))
+	}
+	if err == nil {
+		err = tx.Commit(ctx)
+	} else {
+		_ = tx.Rollback(context.Background())
+	}
+	if err != nil {
 		predecessorPool.Close()
-		t.Fatalf("create predecessor PostgreSQL installation=%#v err=%v", postgresInstallation, err)
+		t.Fatalf("persist fixed predecessor READY fixture: %v", err)
 	}
-	postgresQuota, err = predecessorService.GetQuotaEntitlement(ctx, authorization, postgresQuota.ID)
-	if err != nil || postgresQuota.ReservedCount != 1 || postgresQuota.ConsumedCount != 0 {
+	predecessorWorker, err := pgxpool.New(ctx, workerDSN)
+	if err != nil {
 		predecessorPool.Close()
-		t.Fatalf("read predecessor PostgreSQL reservation=%#v err=%v", postgresQuota, err)
+		t.Fatal("open predecessor worker pool")
 	}
-	if _, _, err := predecessorService.ActivateQuota(ctx, usecase.ActivateQuotaCommand{
-		Authorization: authorization, IdempotencyKey: "predecessor-mysql-must-fail",
-		Request: managedservicev1.ActivateQuotaRequest{
-			OfferingID: domain.MySQLOfferingID, QuotaShapeID: "mysql-small", InstanceCount: 1,
-		},
-	}); err == nil {
+	var claimedOperation string
+	var fencingToken int64
+	if err := predecessorWorker.QueryRow(ctx, `
+SELECT operation_id, fencing_token
+  FROM managedservice.claim_operation('predecessor-worker', 30)`).Scan(&claimedOperation, &fencingToken); err != nil ||
+		claimedOperation != predecessorOperation || fencingToken != 1 {
+		predecessorWorker.Close()
 		predecessorPool.Close()
-		t.Fatal("PostgreSQL-only predecessor accepted a MySQL entitlement")
+		t.Fatalf("claim predecessor operation=%q fence=%d err=%v", claimedOperation, fencingToken, err)
 	}
-	quotas, err := predecessorService.ListQuotaEntitlements(ctx, authorization)
-	if err != nil || len(quotas.Items) != 1 || quotas.Items[0].ID != postgresQuota.ID {
+	if _, err := predecessorWorker.Exec(ctx, `
+SELECT managedservice.complete_operation($1, $2, 'predecessor-worker', $3, $4, $5)`,
+		predecessorTenant, predecessorOperation, fencingToken,
+		"127.0.0.1:23306", "credential-predecessor-mysql"); err != nil {
+		predecessorWorker.Close()
 		predecessorPool.Close()
-		t.Fatalf("failed predecessor MySQL attempt changed quotas=%#v err=%v", quotas, err)
+		t.Fatalf("complete predecessor operation: %v", err)
 	}
+	predecessorWorker.Close()
 	predecessorPool.Close()
 
 	for attempt := 1; attempt <= 2; attempt++ {
@@ -172,36 +196,58 @@ func TestManagedServicePredecessorCatalogUpgrade(t *testing.T) {
 		t.Fatal("open current managed-service API pool")
 	}
 	defer currentPool.Close()
-	currentService := newService(currentPool)
-	retainedQuota, err := currentService.GetQuotaEntitlement(ctx, authorization, postgresQuota.ID)
-	if err != nil || retainedQuota != postgresQuota {
-		t.Fatalf("current schema did not retain predecessor quota=%#v err=%v", retainedQuota, err)
-	}
-	retainedInstallation, err := currentService.GetServiceInstallation(ctx, authorization, postgresInstallation.ID)
-	if err != nil || !reflect.DeepEqual(retainedInstallation, postgresInstallation) {
-		t.Fatalf("current schema did not retain predecessor installation=%#v err=%v", retainedInstallation, err)
-	}
-	mysqlQuota, _, err := currentService.ActivateQuota(ctx, usecase.ActivateQuotaCommand{
-		Authorization: authorization, IdempotencyKey: "current-mysql-quota",
-		Request: managedservicev1.ActivateQuotaRequest{
-			OfferingID: domain.MySQLOfferingID, QuotaShapeID: "mysql-small", InstanceCount: 1,
-		},
+	currentService, err := usecase.NewService(managedServiceRepository(t, currentPool), usecase.Config{
+		Catalog: domain.DefaultCatalog(), WorkloadRoleAuthority: integrationWorkloadRoleBinder{},
+		WorkloadRoleRuntime: integrationWorkloadRoleBinder{}, Region: integrationRegion(),
+		NewQuotaID:     func() (string, error) { return "quota-unused", nil },
+		NewOperationID: func() (string, error) { return "operation-predecessor-termination", nil },
 	})
 	if err != nil {
-		t.Fatalf("activate current MySQL quota: %v", err)
+		t.Fatal("create current managed-service use case")
 	}
-	mysqlInstallation, _, err := currentService.CreateInstallation(ctx, usecase.CreateInstallationCommand{
-		Authorization: authorization, IdempotencyKey: "current-mysql-installation",
-		Request: managedservicev1.CreateInstallationRequest{
-			ID: "current-mysql", Name: "Current MySQL", OfferingID: domain.MySQLOfferingID,
-			QuotaEntitlementID: mysqlQuota.ID, RegionID: "local-primary",
-		},
+	authorization := integrationAuthorization(predecessorTenant)
+	retainedQuota, err := currentService.GetQuotaEntitlement(ctx, authorization, predecessorQuota)
+	if err != nil || retainedQuota.PurchasedCount != 1 || retainedQuota.ReservedCount != 0 || retainedQuota.ConsumedCount != 1 {
+		t.Fatalf("current schema did not retain predecessor quota=%#v err=%v", retainedQuota, err)
+	}
+	retainedInstallation, err := currentService.GetServiceInstallation(ctx, authorization, predecessorInstallation)
+	if err != nil || retainedInstallation.Phase != managedservicev1.InstallationReady ||
+		retainedInstallation.Operation.ID != predecessorOperation ||
+		retainedInstallation.Operation.Kind != managedservicev1.InstallationOperationProvision ||
+		retainedInstallation.Endpoint == nil || retainedInstallation.CredentialReference == nil {
+		t.Fatalf("current schema did not retain predecessor installation=%#v err=%v", retainedInstallation, err)
+	}
+	terminating, replayed, err := currentService.TerminateInstallation(ctx, usecase.TerminateInstallationCommand{
+		Authorization: authorization, InstallationID: predecessorInstallation,
+		IdempotencyKey: "predecessor-termination-request",
 	})
-	if err != nil || mysqlInstallation.EngineVersion != "8.4" || mysqlInstallation.Phase != managedservicev1.InstallationPending {
-		t.Fatalf("create current MySQL installation=%#v err=%v", mysqlInstallation, err)
+	if err != nil || replayed || terminating.Phase != managedservicev1.InstallationTerminationPending {
+		t.Fatalf("terminate retained predecessor installation=%#v replayed=%v err=%v", terminating, replayed, err)
+	}
+	currentWorker, err := pgxpool.New(ctx, workerDSN)
+	if err != nil {
+		t.Fatal("open current worker pool")
+	}
+	defer currentWorker.Close()
+	workerRepository := managedServiceRepository(t, currentWorker)
+	work, found, err := workerRepository.Claim(ctx, "current-predecessor-worker", 30*time.Second)
+	if err != nil || !found || work.Kind != managedservicev1.InstallationOperationTerminate {
+		t.Fatalf("claim retained termination=%#v found=%v err=%v", work, found, err)
+	}
+	if err := workerRepository.CompleteTermination(ctx, work); err != nil {
+		t.Fatalf("complete retained termination: %v", err)
+	}
+	terminated, err := currentService.GetServiceInstallation(ctx, authorization, predecessorInstallation)
+	if err != nil || terminated.Phase != managedservicev1.InstallationTerminated ||
+		terminated.Endpoint != nil || terminated.CredentialReference != nil {
+		t.Fatalf("retained termination result=%#v err=%v", terminated, err)
+	}
+	retainedQuota, err = currentService.GetQuotaEntitlement(ctx, authorization, predecessorQuota)
+	if err != nil || retainedQuota.ReservedCount != 0 || retainedQuota.ConsumedCount != 0 {
+		t.Fatalf("retained termination quota=%#v err=%v", retainedQuota, err)
 	}
 	var schemaVersion uint64
-	if err := currentPool.QueryRow(ctx, `SELECT schema_version FROM paas.readiness()`).Scan(&schemaVersion); err != nil || schemaVersion != 4 {
+	if err := currentPool.QueryRow(ctx, `SELECT schema_version FROM paas.readiness()`).Scan(&schemaVersion); err != nil || schemaVersion != 5 {
 		t.Fatalf("current PaaS readiness schema=%d err=%v", schemaVersion, err)
 	}
 }
@@ -213,7 +259,11 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	}
 	parsed, err := pgxpool.ParseConfig(adminDSN)
 	if err != nil || !strings.HasPrefix(parsed.ConnConfig.Database, "matrix_managedservice_") {
-		t.Fatal("managed-service integration DSN must select a safely named disposable database")
+		database := ""
+		if parsed != nil {
+			database = parsed.ConnConfig.Database
+		}
+		t.Fatalf("managed-service integration DSN database=%q err=%v", database, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -305,12 +355,12 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	if err != nil || !found || work.Installation.ID != installation.ID || work.Attempt != 1 {
 		t.Fatalf("claim installation=%#v found=%v err=%v", work, found, err)
 	}
-	if err := workerRepository.Complete(ctx, work, managedserviceadapterv1.ProvisionResult{
+	if err := workerRepository.CompleteProvision(ctx, work, managedserviceadapterv1.ProvisionResult{
 		Endpoint: "127.0.0.1:25432", CredentialReference: "credential-postgres-integration",
 	}); err != nil {
 		t.Fatalf("complete installation: %v", err)
 	}
-	if err := workerRepository.Complete(ctx, work, managedserviceadapterv1.ProvisionResult{
+	if err := workerRepository.CompleteProvision(ctx, work, managedserviceadapterv1.ProvisionResult{
 		Endpoint: "127.0.0.1:25432", CredentialReference: "credential-postgres-integration",
 	}); !errors.Is(err, reconcileinstallation.ErrQueueUnavailable) {
 		t.Fatalf("stale completion error=%v", err)
@@ -375,6 +425,69 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 		t.Fatalf("tenant A operation resource=%#v err=%v", currentOperation, err)
 	}
 	authorizationB := integrationAuthorization("organization-b")
+	terminationCommand := usecase.TerminateInstallationCommand{
+		Authorization: authorizationB, InstallationID: installation.ID,
+		IdempotencyKey: "termination-cross-tenant",
+	}
+	if _, _, err := service.TerminateInstallation(ctx, terminationCommand); !errors.Is(err, usecase.ErrNotFound) {
+		t.Fatalf("tenant B termination error=%v", err)
+	}
+	terminationCommand.Authorization = authorizationA
+	terminationCommand.IdempotencyKey = "termination-integration-request"
+	terminating, replayed, err := service.TerminateInstallation(ctx, terminationCommand)
+	if err != nil || replayed || terminating.Phase != managedservicev1.InstallationTerminationPending ||
+		terminating.Operation.Kind != managedservicev1.InstallationOperationTerminate ||
+		terminating.Endpoint == nil || terminating.CredentialReference == nil {
+		t.Fatalf("start termination=%#v replayed=%v err=%v", terminating, replayed, err)
+	}
+	replayedTermination, replayed, err := service.TerminateInstallation(ctx, terminationCommand)
+	if err != nil || !replayed || !reflect.DeepEqual(replayedTermination, terminating) {
+		t.Fatalf("termination replay=%#v replayed=%v err=%v", replayedTermination, replayed, err)
+	}
+	terminationWork, found, err := workerRepository.Claim(ctx, "managed-worker-integration", 30*time.Second)
+	if err != nil || !found || terminationWork.Kind != managedservicev1.InstallationOperationTerminate ||
+		terminationWork.Installation.Phase != managedservicev1.InstallationTerminating ||
+		terminationWork.Installation.ID != installation.ID {
+		t.Fatalf("claim termination=%#v found=%v err=%v", terminationWork, found, err)
+	}
+	if err := workerRepository.CompleteTermination(ctx, terminationWork); err != nil {
+		t.Fatalf("complete termination: %v", err)
+	}
+	if err := workerRepository.CompleteTermination(ctx, terminationWork); !errors.Is(err, reconcileinstallation.ErrQueueUnavailable) {
+		t.Fatalf("stale termination completion error=%v", err)
+	}
+	for expected := 4; expected <= 5; expected++ {
+		result, dispatchErr := dispatcher.DispatchOnce(ctx)
+		if dispatchErr != nil || !result.Claimed || !result.Delivered {
+			t.Fatalf("dispatch managed-service Audit event %d: result=%#v err=%v", expected, result, dispatchErr)
+		}
+	}
+	if result, dispatchErr := dispatcher.DispatchOnce(ctx); dispatchErr != nil || result.Claimed {
+		t.Fatalf("unexpected sixth managed-service Audit event: result=%#v err=%v", result, dispatchErr)
+	}
+	actions = map[string]int{}
+	for _, event := range ingestor.events {
+		actions[event.Action]++
+	}
+	if actions[audit.ServiceInstallationTerminationRequested] != 1 ||
+		actions[audit.ServiceInstallationTerminated] != 1 {
+		t.Fatalf("managed-service termination Audit actions=%#v", actions)
+	}
+	snapshot, err = dispatcher.Snapshot(ctx)
+	if err != nil || snapshot.Delivered != 5 || snapshot.Pending != 0 || snapshot.DeadLetter != 0 {
+		t.Fatalf("terminated PaaS Audit snapshot=%#v err=%v", snapshot, err)
+	}
+	currentQuota, err = service.GetQuotaEntitlement(ctx, authorizationA, quota.ID)
+	if err != nil || currentQuota.ConsumedCount != 0 || currentQuota.ReservedCount != 0 {
+		t.Fatalf("terminated quota resource=%#v err=%v", currentQuota, err)
+	}
+	currentInstallation, err = service.GetServiceInstallation(ctx, authorizationA, installation.ID)
+	if err != nil || currentInstallation.Phase != managedservicev1.InstallationTerminated ||
+		currentInstallation.Endpoint != nil || currentInstallation.CredentialReference != nil ||
+		currentInstallation.Operation.Kind != managedservicev1.InstallationOperationTerminate ||
+		currentInstallation.Operation.Phase != managedservicev1.InstallationReady {
+		t.Fatalf("terminated installation resource=%#v err=%v", currentInstallation, err)
+	}
 	otherQuotas, quotaErr := service.ListQuotaEntitlements(ctx, authorizationB)
 	otherInstallations, installationErr := service.ListServiceInstallations(ctx, authorizationB)
 	if quotaErr != nil || installationErr != nil || len(otherQuotas.Items) != 0 || len(otherInstallations.Items) != 0 {

@@ -71,6 +71,10 @@ func databaseError(ctx context.Context, err error) error {
 			return usecase.ErrTransactionRetry
 		case "23503":
 			return usecase.ErrNotFound
+		case "MX404":
+			return usecase.ErrNotFound
+		case "MX409":
+			return usecase.ErrInvalidState
 		case "23514", "22023":
 			return usecase.ErrInvalidArgument
 		}

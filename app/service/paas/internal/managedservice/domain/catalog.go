@@ -10,6 +10,8 @@ import (
 
 const PostgreSQLOfferingID = managedservicev1.PostgreSQLOfferingID
 const MySQLOfferingID = managedservicev1.MySQLOfferingID
+const ElasticsearchOfferingID = managedservicev1.ElasticsearchOfferingID
+const RabbitMQOfferingID = managedservicev1.RabbitMQOfferingID
 
 type Catalog struct {
 	offerings []managedservicev1.ServiceOffering
@@ -37,6 +39,28 @@ func DefaultCatalog() Catalog {
 			QuotaShapes: []managedservicev1.QuotaShape{
 				{ID: "mysql-small", DisplayName: "开发型", CPUMillicores: 500, MemoryMiB: 1024, StorageGiB: 10},
 				{ID: "mysql-medium", DisplayName: "标准型", CPUMillicores: 1000, MemoryMiB: 2048, StorageGiB: 20},
+			},
+		},
+		{
+			ID: ElasticsearchOfferingID, Kind: managedservicev1.OfferingElasticsearch,
+			DisplayName:  "Elasticsearch 8.19",
+			Description:  "由 Matrix 在本地区域安装和管理的 Elasticsearch 8.19 搜索服务。",
+			EngineFamily: "elasticsearch", EngineVersion: "8.19.23",
+			State: managedservicev1.OfferingAvailable,
+			QuotaShapes: []managedservicev1.QuotaShape{
+				{ID: "elasticsearch-small", DisplayName: "开发型", CPUMillicores: 1000, MemoryMiB: 1536, StorageGiB: 10},
+				{ID: "elasticsearch-medium", DisplayName: "标准型", CPUMillicores: 2000, MemoryMiB: 3072, StorageGiB: 20},
+			},
+		},
+		{
+			ID: RabbitMQOfferingID, Kind: managedservicev1.OfferingRabbitMQ,
+			DisplayName:  "RabbitMQ 4.1",
+			Description:  "由 Matrix 在本地区域安装和管理的 RabbitMQ 4.1 消息队列服务。",
+			EngineFamily: "rabbitmq", EngineVersion: "4.1.8",
+			State: managedservicev1.OfferingAvailable,
+			QuotaShapes: []managedservicev1.QuotaShape{
+				{ID: "rabbitmq-small", DisplayName: "开发型", CPUMillicores: 500, MemoryMiB: 768, StorageGiB: 10},
+				{ID: "rabbitmq-medium", DisplayName: "标准型", CPUMillicores: 1000, MemoryMiB: 1536, StorageGiB: 20},
 			},
 		},
 	})

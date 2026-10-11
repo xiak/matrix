@@ -183,6 +183,9 @@ func auditDecisionTarget(event auditv1.Event, decisionAction iamv1.Action, contr
 		return iamv1.ActionManagedServiceQuotaEntitlementActivate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 	case auditv1.ActionManagedServiceInstallationCreated, auditv1.ActionManagedServiceInstallationReady:
 		return iamv1.ActionManagedServiceInstallationCreate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
+	case auditv1.ActionManagedServiceInstallationTerminationRequested,
+		auditv1.ActionManagedServiceInstallationTerminated:
+		return iamv1.ActionManagedServiceInstallationTerminate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionAuditRecordsRead:
 		return iamv1.ActionAuditRecordRead, records, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList
 	case auditv1.ActionAuditIntegrityVerified:

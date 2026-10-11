@@ -53,6 +53,10 @@ func (fake *fakeEffects) InspectImage(_ context.Context, reference string) (Imag
 		return fake.baseImage("postgres", PostgresManifestDigest), nil
 	case MySQLPinnedReference:
 		return fake.baseImage("mysql", MySQLManifestDigest), nil
+	case ElasticsearchPinnedReference:
+		return fake.baseImage("docker.elastic.co/elasticsearch/elasticsearch", ElasticsearchManifestDigest), nil
+	case RabbitMQPinnedReference:
+		return fake.baseImage("rabbitmq", RabbitMQManifestDigest), nil
 	default:
 		return fake.images[reference], nil
 	}

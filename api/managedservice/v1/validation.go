@@ -91,7 +91,7 @@ func ValidateServiceOffering(value ServiceOffering) error {
 		validateID("offering.engineVersion", value.EngineVersion),
 	)
 	switch value.Kind {
-	case OfferingPostgreSQL, OfferingMySQL:
+	case OfferingPostgreSQL, OfferingMySQL, OfferingElasticsearch, OfferingRabbitMQ:
 	default:
 		problems = append(problems, errors.New("offering kind is invalid"))
 	}
@@ -173,12 +173,14 @@ func ValidateServiceInstallation(value ServiceInstallation) error {
 		validateID("serviceInstallation.regionId", value.RegionID),
 		validateInstallationPhase(value.Phase),
 		validateID("serviceInstallation.operation.id", value.Operation.ID),
+		validateInstallationOperationKind(value.Operation.Kind),
 		validateInstallationPhase(value.Operation.Phase),
+		validateResourceVersion(value.ResourceVersion),
 		validateTime("serviceInstallation.operation.observedAt", value.Operation.ObservedAt),
 		validateTime("serviceInstallation.createdAt", value.CreatedAt),
 	)
-	if value.Phase != value.Operation.Phase {
-		problems = append(problems, errors.New("installation and operation phases differ"))
+	if !installationOperationMatchesPhase(value.Operation.Kind, value.Operation.Phase, value.Phase) {
+		problems = append(problems, errors.New("installation and operation state is inconsistent"))
 	}
 	if value.Endpoint != nil {
 		problems = append(problems, validateText("serviceInstallation.endpoint", *value.Endpoint, 1, 256))
@@ -189,19 +191,59 @@ func ValidateServiceInstallation(value ServiceInstallation) error {
 	if value.Operation.SafeFailureCode != nil && !codePattern.MatchString(*value.Operation.SafeFailureCode) {
 		problems = append(problems, errors.New("installation failure code is invalid"))
 	}
-	if value.Phase == InstallationReady && (value.Endpoint == nil || value.CredentialReference == nil) {
+	retainsReadyResult := value.Phase == InstallationReady ||
+		value.Phase == InstallationTerminationPending || value.Phase == InstallationTerminating ||
+		value.Phase == InstallationTerminationFailed
+	if retainsReadyResult && (value.Endpoint == nil || value.CredentialReference == nil) {
 		problems = append(problems, errors.New("ready installation requires endpoint and credential reference"))
 	}
-	if value.Phase != InstallationReady && (value.Endpoint != nil || value.CredentialReference != nil) {
+	if !retainsReadyResult && (value.Endpoint != nil || value.CredentialReference != nil) {
 		problems = append(problems, errors.New("non-ready installation cannot expose endpoint or credential reference"))
 	}
-	if value.Phase == InstallationFailed && value.Operation.SafeFailureCode == nil {
+	failed := value.Phase == InstallationFailed || value.Phase == InstallationRollbackFailed ||
+		value.Phase == InstallationTerminationFailed
+	if failed && value.Operation.SafeFailureCode == nil {
 		problems = append(problems, errors.New("failed installation requires a safe failure code"))
 	}
-	if value.Phase != InstallationFailed && value.Operation.SafeFailureCode != nil {
+	if !failed && value.Operation.SafeFailureCode != nil {
 		problems = append(problems, errors.New("non-failed installation cannot expose a failure code"))
 	}
 	return errors.Join(problems...)
+}
+
+func validateInstallationOperationKind(value InstallationOperationKind) error {
+	if value != InstallationOperationProvision && value != InstallationOperationTerminate {
+		return errors.New("installation operation kind is invalid")
+	}
+	return nil
+}
+
+func installationOperationMatchesPhase(
+	kind InstallationOperationKind,
+	operationPhase InstallationPhase,
+	installationPhase InstallationPhase,
+) bool {
+	switch kind {
+	case InstallationOperationProvision:
+		if installationPhase == InstallationRollbackFailed {
+			return operationPhase == InstallationFailed
+		}
+		return operationPhase == installationPhase &&
+			(installationPhase == InstallationPending || installationPhase == InstallationProvisioning ||
+				installationPhase == InstallationReady || installationPhase == InstallationFailed)
+	case InstallationOperationTerminate:
+		switch installationPhase {
+		case InstallationTerminationPending:
+			return operationPhase == InstallationPending
+		case InstallationTerminating:
+			return operationPhase == InstallationProvisioning
+		case InstallationTerminationFailed:
+			return operationPhase == InstallationFailed
+		case InstallationTerminated:
+			return operationPhase == InstallationReady
+		}
+	}
+	return false
 }
 
 func ValidateProblem(value Problem) error {
@@ -280,7 +322,9 @@ func validateTime(name string, value time.Time) error {
 
 func validateInstallationPhase(value InstallationPhase) error {
 	switch value {
-	case InstallationPending, InstallationProvisioning, InstallationReady, InstallationFailed:
+	case InstallationPending, InstallationProvisioning, InstallationReady, InstallationFailed,
+		InstallationRollbackFailed, InstallationTerminationPending, InstallationTerminating,
+		InstallationTerminationFailed, InstallationTerminated:
 		return nil
 	default:
 		return errors.New("installation phase is invalid")
@@ -299,7 +343,7 @@ func validateErrorCode(value ErrorCode) error {
 	case ErrorInvalidArgument, ErrorUnauthenticated, ErrorPermissionDenied,
 		ErrorIdentityUnavailable, ErrorNotFound, ErrorAlreadyExists,
 		ErrorIdempotencyConflict, ErrorQuotaExhausted, ErrorRegionUnavailable,
-		ErrorServiceRoleConflict, ErrorInternal:
+		ErrorServiceRoleConflict, ErrorResourceStateConflict, ErrorInternal:
 		return nil
 	default:
 		return errors.New("problem code is invalid")

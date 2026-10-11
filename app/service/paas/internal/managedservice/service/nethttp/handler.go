@@ -33,6 +33,7 @@ type Workflow interface {
 	UnbindServiceRole(context.Context, usecase.UnbindServiceRoleCommand) (managedservicev1.ServiceRoleUnbindingReceipt, error)
 	ActivateQuota(context.Context, usecase.ActivateQuotaCommand) (managedservicev1.QuotaEntitlement, bool, error)
 	CreateInstallation(context.Context, usecase.CreateInstallationCommand) (managedservicev1.ServiceInstallation, bool, error)
+	TerminateInstallation(context.Context, usecase.TerminateInstallationCommand) (managedservicev1.ServiceInstallation, bool, error)
 }
 
 type Config struct {
@@ -65,6 +66,7 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	routes.HandleFunc("POST /managed-services/v1/service-installations", value.createInstallation)
 	routes.HandleFunc("GET /managed-services/v1/service-installations/{installationId}", value.getServiceInstallation)
 	routes.HandleFunc("GET /managed-services/v1/service-installations/{installationId}/operation", value.getInstallationOperation)
+	routes.HandleFunc("POST /managed-services/v1/service-installations/{installationId}/termination", value.terminateInstallation)
 	routes.HandleFunc("POST /managed-services/v1/service-installations/{installationId}/service-role-bindings", value.bindServiceRole)
 	routes.HandleFunc("DELETE /managed-services/v1/service-installations/{installationId}/service-role-bindings/{bindingId}", value.unbindServiceRole)
 	return routes, nil
@@ -288,6 +290,34 @@ func (value *handler) createInstallation(response http.ResponseWriter, request *
 	writeJSON(response, status, result)
 }
 
+func (value *handler) terminateInstallation(response http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("installationId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeInstallationTerminate,
+		port.ResourceServiceInstallation, id, iamv1.AuthorizationResourceInstance, "",
+	)
+	if !ok || !acceptsNoInput(response, request, requestID) {
+		return
+	}
+	result, replayed, err := value.workflow.TerminateInstallation(
+		request.Context(),
+		usecase.TerminateInstallationCommand{
+			Authorization: authorization, InstallationID: id,
+			IdempotencyKey: request.Header.Get("Idempotency-Key"),
+		},
+	)
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	status := http.StatusAccepted
+	if replayed {
+		status = http.StatusOK
+	}
+	response.Header().Set("Location", "/managed-services/v1/service-installations/"+result.ID+"/operation")
+	writeJSON(response, status, result)
+}
+
 func (value *handler) bindServiceRole(response http.ResponseWriter, request *http.Request) {
 	id := request.PathValue("installationId")
 	authorization, requestID, ok := value.authorizeResource(
@@ -489,6 +519,9 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 	case errors.Is(err, usecase.ErrRegionUnavailable):
 		writeProblem(response, requestID, http.StatusConflict,
 			managedservicev1.ErrorRegionUnavailable, "Region unavailable", "the selected local region is not ready", true)
+	case errors.Is(err, usecase.ErrInvalidState):
+		writeProblem(response, requestID, http.StatusConflict,
+			managedservicev1.ErrorResourceStateConflict, "Resource state conflict", "the service installation cannot perform this transition", false)
 	case errors.Is(err, context.DeadlineExceeded):
 		writeProblem(response, requestID, http.StatusGatewayTimeout,
 			managedservicev1.ErrorInternal, "Deadline exceeded", "request deadline was exceeded", true)

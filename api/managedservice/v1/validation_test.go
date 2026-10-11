@@ -32,8 +32,8 @@ func TestServiceInstallationPhaseContract(t *testing.T) {
 	value := ServiceInstallation{
 		ID: "postgres-primary", Name: "Postgres primary", OfferingID: "postgresql-18",
 		EngineVersion: "18", QuotaEntitlementID: "quota-1", RegionID: "local-primary",
-		Phase: InstallationPending, CreatedAt: now,
-		Operation: InstallationOperation{ID: "operation-1", Phase: InstallationPending, ObservedAt: now},
+		Phase: InstallationPending, ResourceVersion: 1, CreatedAt: now,
+		Operation: InstallationOperation{ID: "operation-1", Kind: InstallationOperationProvision, Phase: InstallationPending, ObservedAt: now},
 	}
 	if err := ValidateServiceInstallation(value); err != nil {
 		t.Fatalf("pending installation rejected: %v", err)

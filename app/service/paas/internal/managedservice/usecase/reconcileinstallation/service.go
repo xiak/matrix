@@ -20,17 +20,21 @@ type WorkItem struct {
 	QuotaShapeID string
 	FencingToken uint64
 	Attempt      uint32
+	Kind         managedservicev1.InstallationOperationKind
 }
 
 type Queue interface {
 	Claim(context.Context, string, time.Duration) (WorkItem, bool, error)
-	Complete(context.Context, WorkItem, managedserviceadapterv1.ProvisionResult) error
+	CompleteProvision(context.Context, WorkItem, managedserviceadapterv1.ProvisionResult) error
+	CompleteTermination(context.Context, WorkItem) error
 	Retry(context.Context, WorkItem, time.Duration) error
 	Fail(context.Context, WorkItem, string) error
+	FailCleanup(context.Context, WorkItem, string) error
 }
 
 type Provisioner interface {
 	Ensure(context.Context, managedserviceadapterv1.ProvisionRequest) (managedserviceadapterv1.ProvisionResult, error)
+	Delete(context.Context, managedserviceadapterv1.DeprovisionRequest) error
 	Ready(context.Context) error
 }
 
@@ -104,6 +108,25 @@ func (service *Service) ProcessNext(ctx context.Context, workerID string) (bool,
 		return true, nil
 	}
 	effectContext, cancel := context.WithTimeout(ctx, service.effectTimeout)
+	if work.Kind == managedservicev1.InstallationOperationTerminate {
+		effectErr := service.provisioner.Delete(effectContext, managedserviceadapterv1.DeprovisionRequest{
+			TenantID: work.TenantID, InstallationID: work.Installation.ID,
+			OperationID: work.OperationID, OfferingID: offering.ID,
+			EngineVersion: offering.EngineVersion, RegionID: work.Installation.RegionID,
+		})
+		cancel()
+		if effectErr == nil {
+			return true, service.queue.CompleteTermination(ctx, work)
+		}
+		if work.Attempt >= service.maximumAttempts {
+			return true, service.queue.Fail(ctx, work, "PROVIDER_TERMINATION_FAILED")
+		}
+		return true, service.queue.Retry(ctx, work, service.retryBackoff)
+	}
+	if work.Kind != managedservicev1.InstallationOperationProvision {
+		cancel()
+		return true, service.queue.FailCleanup(ctx, work, "OPERATION_KIND_INVALID")
+	}
 	result, effectErr := service.provisioner.Ensure(effectContext, managedserviceadapterv1.ProvisionRequest{
 		TenantID: work.TenantID, InstallationID: work.Installation.ID,
 		OperationID: work.OperationID, OfferingID: offering.ID,
@@ -112,16 +135,23 @@ func (service *Service) ProcessNext(ctx context.Context, workerID string) (bool,
 	})
 	cancel()
 	if effectErr == nil {
-		if err := service.queue.Complete(ctx, work, result); err != nil {
+		if err := service.queue.CompleteProvision(ctx, work, result); err != nil {
 			return true, err
 		}
 		return true, nil
 	}
 	if work.Attempt >= service.maximumAttempts {
-		if err := service.queue.Fail(ctx, work, "PROVIDER_PROVISIONING_FAILED"); err != nil {
-			return true, err
+		cleanupContext, cleanupCancel := context.WithTimeout(ctx, service.effectTimeout)
+		cleanupErr := service.provisioner.Delete(cleanupContext, managedserviceadapterv1.DeprovisionRequest{
+			TenantID: work.TenantID, InstallationID: work.Installation.ID,
+			OperationID: work.OperationID, OfferingID: offering.ID,
+			EngineVersion: offering.EngineVersion, RegionID: work.Installation.RegionID,
+		})
+		cleanupCancel()
+		if cleanupErr != nil {
+			return true, service.queue.FailCleanup(ctx, work, "PROVIDER_CLEANUP_FAILED")
 		}
-		return true, nil
+		return true, service.queue.Fail(ctx, work, "PROVIDER_PROVISIONING_FAILED")
 	}
 	if err := service.queue.Retry(ctx, work, service.retryBackoff); err != nil {
 		return true, err

@@ -68,6 +68,18 @@ func (provisioner *Provisioner) Ensure(
 	return provisioner.provider.Ensure(ctx, request)
 }
 
+func (provisioner *Provisioner) Delete(
+	ctx context.Context,
+	request managedserviceadapterv1.DeprovisionRequest,
+) error {
+	if provisioner == nil || provisioner.provider == nil ||
+		request.OfferingID != managedservicev1.PostgreSQLOfferingID ||
+		request.EngineVersion != "18" || request.RegionID != "local-primary" {
+		return errors.New("local PostgreSQL deletion profile is invalid")
+	}
+	return provisioner.provider.Delete(ctx, request)
+}
+
 func compileDocument(input localcontaineradapter.DocumentInput) ([]byte, error) {
 	request := input.Request
 	document := map[string]any{

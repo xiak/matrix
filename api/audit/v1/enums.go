@@ -120,24 +120,26 @@ const (
 	ActionIAMPlatformPolicyAttachmentRevoked         Action = "iam.platform-policy-attachment.revoked"
 	ActionIAMAuthorizationDecided                    Action = "iam.authorization.decided"
 
-	ActionPaaSApplicationCreated                  Action = "paas.application.created"
-	ActionPaaSApplicationLabelUpdated             Action = "paas.application-label.updated"
-	ActionPaaSApplicationLabelDeleted             Action = "paas.application-label.deleted"
-	ActionPaaSConfigurationCreated                Action = "paas.configuration.created"
-	ActionPaaSConfigurationRevisionCreated        Action = "paas.configuration-revision.created"
-	ActionPaaSApplicationRevisionCreated          Action = "paas.application-revision.created"
-	ActionPaaSDeploymentCreated                   Action = "paas.deployment.created"
-	ActionPaaSDeploymentUpdated                   Action = "paas.deployment.updated"
-	ActionPaaSDeploymentStopped                   Action = "paas.deployment.stopped"
-	ActionPaaSDeploymentRolledBack                Action = "paas.deployment.rolled-back"
-	ActionPaaSExecutionPoolCreated                Action = "paas.execution-pool.created"
-	ActionPaaSExecutionTargetRegistered           Action = "paas.execution-target.registered"
-	ActionPaaSExecutionTargetDrained              Action = "paas.execution-target.drained"
-	ActionPaaSExecutionTargetActivated            Action = "paas.execution-target.activated"
-	ActionPaaSExecutionTargetRemoved              Action = "paas.execution-target.removed"
-	ActionManagedServiceQuotaEntitlementActivated Action = "managedservice.quota-entitlement.activated"
-	ActionManagedServiceInstallationCreated       Action = "managedservice.service-installation.created"
-	ActionManagedServiceInstallationReady         Action = "managedservice.service-installation.ready"
+	ActionPaaSApplicationCreated                         Action = "paas.application.created"
+	ActionPaaSApplicationLabelUpdated                    Action = "paas.application-label.updated"
+	ActionPaaSApplicationLabelDeleted                    Action = "paas.application-label.deleted"
+	ActionPaaSConfigurationCreated                       Action = "paas.configuration.created"
+	ActionPaaSConfigurationRevisionCreated               Action = "paas.configuration-revision.created"
+	ActionPaaSApplicationRevisionCreated                 Action = "paas.application-revision.created"
+	ActionPaaSDeploymentCreated                          Action = "paas.deployment.created"
+	ActionPaaSDeploymentUpdated                          Action = "paas.deployment.updated"
+	ActionPaaSDeploymentStopped                          Action = "paas.deployment.stopped"
+	ActionPaaSDeploymentRolledBack                       Action = "paas.deployment.rolled-back"
+	ActionPaaSExecutionPoolCreated                       Action = "paas.execution-pool.created"
+	ActionPaaSExecutionTargetRegistered                  Action = "paas.execution-target.registered"
+	ActionPaaSExecutionTargetDrained                     Action = "paas.execution-target.drained"
+	ActionPaaSExecutionTargetActivated                   Action = "paas.execution-target.activated"
+	ActionPaaSExecutionTargetRemoved                     Action = "paas.execution-target.removed"
+	ActionManagedServiceQuotaEntitlementActivated        Action = "managedservice.quota-entitlement.activated"
+	ActionManagedServiceInstallationCreated              Action = "managedservice.service-installation.created"
+	ActionManagedServiceInstallationReady                Action = "managedservice.service-installation.ready"
+	ActionManagedServiceInstallationTerminationRequested Action = "managedservice.service-installation.termination-requested"
+	ActionManagedServiceInstallationTerminated           Action = "managedservice.service-installation.terminated"
 
 	ActionAuditRecordsRead               Action = "audit.records.read"
 	ActionAuditIntegrityVerified         Action = "audit.integrity.verified"
@@ -346,6 +348,8 @@ var allActions = []Action{
 	ActionManagedServiceQuotaEntitlementActivated,
 	ActionManagedServiceInstallationCreated,
 	ActionManagedServiceInstallationReady,
+	ActionManagedServiceInstallationTerminationRequested,
+	ActionManagedServiceInstallationTerminated,
 	ActionAuditRecordsRead,
 	ActionAuditIntegrityVerified,
 	ActionAuditPlatformRecordsRead,
@@ -633,6 +637,14 @@ var actionContracts = map[Action]ActionContract{
 	ActionManagedServiceInstallationReady: {
 		Source: SourcePaaS, Target: TargetServiceInstallation, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true,
+	},
+	ActionManagedServiceInstallationTerminationRequested: {
+		Source: SourcePaaS, Target: TargetServiceInstallation, Results: []Result{ResultAccepted},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionManagedServiceInstallationTerminated: {
+		Source: SourcePaaS, Target: TargetServiceInstallation, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
 	},
 	ActionAuditRecordsRead: {
 		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,

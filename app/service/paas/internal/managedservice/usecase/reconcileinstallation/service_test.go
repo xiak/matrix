@@ -44,6 +44,50 @@ func TestProcessNextRetriesSanitizedFailureThenTerminates(t *testing.T) {
 	}
 }
 
+func TestProcessNextTerminatesOnlyAfterProviderDeletion(t *testing.T) {
+	work := testWorkItem(1)
+	work.Kind = managedservicev1.InstallationOperationTerminate
+	work.Installation.Phase = managedservicev1.InstallationTerminating
+	work.Installation.Operation.Kind = managedservicev1.InstallationOperationTerminate
+	queue := &stubQueue{work: work, found: true}
+	provisioner := &stubProvisioner{}
+	service := testReconciler(t, queue, provisioner, 3)
+	processed, err := service.ProcessNext(context.Background(), "worker-test")
+	if err != nil || !processed || queue.completed != 1 || provisioner.deleteCalls != 1 || provisioner.calls != 0 {
+		t.Fatalf("processed=%v err=%v queue=%#v provisioner=%#v", processed, err, queue, provisioner)
+	}
+	if provisioner.deleteRequest.InstallationID != work.Installation.ID ||
+		provisioner.deleteRequest.OperationID != work.OperationID ||
+		provisioner.deleteRequest.OfferingID != work.Installation.OfferingID {
+		t.Fatalf("delete request=%#v", provisioner.deleteRequest)
+	}
+}
+
+func TestProcessNextRetainsQuotaWhenCleanupOrTerminationFails(t *testing.T) {
+	native := errors.New("provider detail must remain private")
+	provision := &stubProvisioner{err: native, deleteErr: native}
+	queue := &stubQueue{work: testWorkItem(3), found: true}
+	service := testReconciler(t, queue, provision, 3)
+	processed, err := service.ProcessNext(context.Background(), "worker-test")
+	if err != nil || !processed || queue.failed != 1 || queue.failureCode != "PROVIDER_CLEANUP_FAILED" ||
+		provision.deleteCalls != 1 {
+		t.Fatalf("cleanup processed=%v err=%v queue=%#v provisioner=%#v", processed, err, queue, provision)
+	}
+
+	work := testWorkItem(3)
+	work.Kind = managedservicev1.InstallationOperationTerminate
+	work.Installation.Phase = managedservicev1.InstallationTerminating
+	work.Installation.Operation.Kind = managedservicev1.InstallationOperationTerminate
+	termination := &stubProvisioner{deleteErr: native}
+	queue = &stubQueue{work: work, found: true}
+	service = testReconciler(t, queue, termination, 3)
+	processed, err = service.ProcessNext(context.Background(), "worker-test")
+	if err != nil || !processed || queue.failed != 1 || queue.failureCode != "PROVIDER_TERMINATION_FAILED" ||
+		termination.deleteCalls != 1 {
+		t.Fatalf("termination processed=%v err=%v queue=%#v provisioner=%#v", processed, err, queue, termination)
+	}
+}
+
 func TestProcessNextRejectsChangedInstallationProfileWithoutEffect(t *testing.T) {
 	work := testWorkItem(1)
 	work.Installation.EngineVersion = "19"
@@ -80,14 +124,15 @@ func testWorkItem(attempt uint32) WorkItem {
 	return WorkItem{
 		TenantID: "organization-test", WorkerID: "worker-test",
 		OperationID: "operation-test", QuotaShapeID: "pg-small",
-		FencingToken: 1, Attempt: attempt,
+		FencingToken: 1, Attempt: attempt, Kind: managedservicev1.InstallationOperationProvision,
 		Installation: managedservicev1.ServiceInstallation{
 			ID: "postgres-primary", Name: "Postgres primary",
 			OfferingID: managedservicev1.PostgreSQLOfferingID, EngineVersion: "18",
 			QuotaEntitlementID: "quota-test", RegionID: "local-primary",
-			Phase: managedservicev1.InstallationProvisioning, CreatedAt: now,
+			Phase: managedservicev1.InstallationProvisioning, ResourceVersion: 2, CreatedAt: now,
 			Operation: managedservicev1.InstallationOperation{
-				ID: "operation-test", Phase: managedservicev1.InstallationProvisioning,
+				ID: "operation-test", Kind: managedservicev1.InstallationOperationProvision,
+				Phase:      managedservicev1.InstallationProvisioning,
 				ObservedAt: now,
 			},
 		},
@@ -107,7 +152,12 @@ func (queue *stubQueue) Claim(context.Context, string, time.Duration) (WorkItem,
 	return queue.work, queue.found, nil
 }
 
-func (queue *stubQueue) Complete(context.Context, WorkItem, managedserviceadapterv1.ProvisionResult) error {
+func (queue *stubQueue) CompleteProvision(context.Context, WorkItem, managedserviceadapterv1.ProvisionResult) error {
+	queue.completed++
+	return nil
+}
+
+func (queue *stubQueue) CompleteTermination(context.Context, WorkItem) error {
 	queue.completed++
 	return nil
 }
@@ -123,11 +173,20 @@ func (queue *stubQueue) Fail(_ context.Context, _ WorkItem, code string) error {
 	return nil
 }
 
+func (queue *stubQueue) FailCleanup(_ context.Context, _ WorkItem, code string) error {
+	queue.failed++
+	queue.failureCode = code
+	return nil
+}
+
 type stubProvisioner struct {
-	request managedserviceadapterv1.ProvisionRequest
-	result  managedserviceadapterv1.ProvisionResult
-	err     error
-	calls   int
+	request       managedserviceadapterv1.ProvisionRequest
+	deleteRequest managedserviceadapterv1.DeprovisionRequest
+	result        managedserviceadapterv1.ProvisionResult
+	err           error
+	deleteErr     error
+	calls         int
+	deleteCalls   int
 }
 
 func (provisioner *stubProvisioner) Ensure(
@@ -137,6 +196,15 @@ func (provisioner *stubProvisioner) Ensure(
 	provisioner.calls++
 	provisioner.request = request
 	return provisioner.result, provisioner.err
+}
+
+func (provisioner *stubProvisioner) Delete(
+	_ context.Context,
+	request managedserviceadapterv1.DeprovisionRequest,
+) error {
+	provisioner.deleteCalls++
+	provisioner.deleteRequest = request
+	return provisioner.deleteErr
 }
 
 func (*stubProvisioner) Ready(context.Context) error { return nil }
