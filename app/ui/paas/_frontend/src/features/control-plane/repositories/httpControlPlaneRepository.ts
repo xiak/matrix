@@ -12,6 +12,8 @@ import type {
   ActivateQuotaCommand,
   ControlPlaneSnapshot,
   CreateInstallationCommand,
+  InstallationOperationKind,
+  InstallationPhase,
   QuotaEntitlement,
   QuotaShape,
   Region,
@@ -375,19 +377,51 @@ function parseEntitlement(value: unknown): QuotaEntitlement {
   };
 }
 
+const installationOperationPhaseByResourcePhase: Record<
+  InstallationOperationKind,
+  Partial<Record<InstallationPhase, InstallationPhase>>
+> = {
+  PROVISION: {
+    PENDING: "PENDING",
+    PROVISIONING: "PROVISIONING",
+    READY: "READY",
+    FAILED: "FAILED",
+    ROLLBACK_FAILED: "FAILED"
+  },
+  TERMINATE: {
+    TERMINATION_PENDING: "PENDING",
+    TERMINATING: "PROVISIONING",
+    TERMINATION_FAILED: "FAILED",
+    TERMINATED: "READY"
+  }
+};
+
+function installationOperationMatchesResourcePhase(
+  kind: InstallationOperationKind,
+  operationPhase: string,
+  resourcePhase: InstallationPhase
+): boolean {
+  return installationOperationPhaseByResourcePhase[kind][resourcePhase] === operationPhase;
+}
+
 function parseInstallation(value: unknown): ServiceInstallation {
   const wire = record(value, "service installation");
   const operation = record(wire.operation, "installation operation");
   const phase = String(wire.phase);
   const operationKind = String(operation.kind);
   const operationPhase = String(operation.phase);
-  const provisionPhase = ["PENDING", "PROVISIONING", "READY", "FAILED", "ROLLBACK_FAILED"].includes(phase);
-  const terminationPhase = ["TERMINATION_PENDING", "TERMINATING", "TERMINATION_FAILED", "TERMINATED"].includes(phase);
-  if (![
+  const installationPhases: InstallationPhase[] = [
     "PENDING", "PROVISIONING", "READY", "FAILED", "ROLLBACK_FAILED",
     "TERMINATION_PENDING", "TERMINATING", "TERMINATION_FAILED", "TERMINATED"
-  ].includes(phase) || !["PROVISION", "TERMINATE"].includes(operationKind) || operationPhase !== phase ||
-    (operationKind === "PROVISION" && !provisionPhase) || (operationKind === "TERMINATE" && !terminationPhase)) {
+  ];
+  const operationKinds: InstallationOperationKind[] = ["PROVISION", "TERMINATE"];
+  if (!installationPhases.includes(phase as InstallationPhase) ||
+    !operationKinds.includes(operationKind as InstallationOperationKind) ||
+    !installationOperationMatchesResourcePhase(
+      operationKind as InstallationOperationKind,
+      operationPhase,
+      phase as InstallationPhase
+    )) {
     throw new Error("INVALID_INSTALLATION_RESPONSE");
   }
   return {

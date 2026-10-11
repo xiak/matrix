@@ -53,7 +53,7 @@ const terminatingInstallation: ServiceInstallation = {
   operation: {
     id: "operation-terminate-primary",
     kind: "TERMINATE",
-    phase: "TERMINATION_PENDING",
+    phase: "PENDING",
     safeFailureCode: null,
     observedAt: "2026-08-26T12:04:00Z"
   }
