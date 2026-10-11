@@ -3417,6 +3417,17 @@
     "backToInstances": "Back to service instances",
     "backToInstance": "Back to instance details",
     "instanceEyebrow": "Managed service instance",
+    "instanceDetailLoading": "Re-authorizing and reading this exact instance",
+    "instanceDetailLoadingBadge": "Reading",
+    "instanceDetailUnavailable": "Instance details could not be read",
+    "instanceDetailUnavailableBadge": "Details unavailable",
+    "retryInstanceDetail": "Read instance again",
+    "instanceDetailErrors": {
+      "expired": "The current session has expired. Sign in again before reading this instance.",
+      "forbidden": "The current identity cannot read this exact instance. A previous directory entry is not proof that detail access remains allowed.",
+      "notFound": "This instance no longer exists, or the current identity cannot confirm whether it exists.",
+      "unavailable": "Instance details are temporarily unavailable. The page keeps the directory context visible and does not present the directory snapshot as a detail result."
+    },
     "instanceId": "Instance ID",
     "operationId": "Latest operation ID",
     "authorizationEyebrow": "Product-resource authorization · MOCK",

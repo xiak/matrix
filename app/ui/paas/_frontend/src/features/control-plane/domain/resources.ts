@@ -71,6 +71,10 @@ export type ServiceInstallation = {
   createdAt: string;
 };
 
+export type InstallationReadLoad =
+  | { status: "ready"; installation: ServiceInstallation }
+  | { status: "expired" | "forbidden" | "notFound" | "unavailable" };
+
 export type ControlPlaneSnapshot = {
   offerings: ServiceOffering[];
   regions: Region[];

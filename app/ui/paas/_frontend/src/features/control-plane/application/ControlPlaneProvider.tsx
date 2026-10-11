@@ -22,7 +22,8 @@ import {
 import type {
   ActivateQuotaCommand,
   ControlPlaneSnapshot,
-  CreateInstallationCommand
+  CreateInstallationCommand,
+  InstallationReadLoad
 } from "../domain/resources";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type {
@@ -54,6 +55,7 @@ type ControlPlaneContextValue = {
   reload(): Promise<void>;
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
   createInstallation(command: CreateInstallationCommand): Promise<boolean>;
+  readInstallation(installationId: string): Promise<InstallationReadLoad>;
   readApplication(applicationId: string): Promise<ApplicationReadLoad>;
   listApplications(after?: string): Promise<ApplicationDirectoryLoad>;
   inspectServiceAuthorization(accountId: string, installationId: string): Promise<ManagedServiceAuthorizationLoad>;
@@ -377,6 +379,23 @@ export function ControlPlaneProvider({
     }
   }, [credential, repository]);
 
+  const readInstallation = useCallback(async (installationId: string): Promise<InstallationReadLoad> => {
+    if (!credential) return { status: "expired" };
+    try {
+      return {
+        status: "ready",
+        installation: await repository.getInstallation(credential, installationId)
+      };
+    } catch (readError) {
+      if (readError instanceof HttpProblem) {
+        if (readError.status === 401) return { status: "expired" };
+        if (readError.status === 403) return { status: "forbidden" };
+        if (readError.status === 404) return { status: "notFound" };
+      }
+      return { status: "unavailable" };
+    }
+  }, [credential, repository]);
+
   const inspectServiceAuthorization = useCallback(async (
     accountId: string,
     installationId: string
@@ -536,6 +555,7 @@ export function ControlPlaneProvider({
     reload,
     activateQuota,
     createInstallation,
+    readInstallation,
     readApplication,
     listApplications,
     inspectServiceAuthorization,
@@ -544,7 +564,7 @@ export function ControlPlaneProvider({
     submitServiceAuthorization,
     closeServiceAuthorizationIntent,
     reopenServiceAuthorizationIntent
-  }), [activateQuota, beginServiceAuthorization, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, isAccess, listApplications, loading, mutation, prepare, projectScene, readApplication, reload, reopenServiceAuthorizationIntent, scene, selection, serviceAuthorizationIntent, submitServiceAuthorization]);
+  }), [activateQuota, beginServiceAuthorization, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, isAccess, listApplications, loading, mutation, prepare, projectScene, readApplication, readInstallation, reload, reopenServiceAuthorizationIntent, scene, selection, serviceAuthorizationIntent, submitServiceAuthorization]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

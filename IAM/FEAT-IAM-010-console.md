@@ -99,4 +99,4 @@ UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PD
 
 当前产品目录首个真实接入对象是既有 `localpostgres` provider 所拥有的 PostgreSQL 18，不创建仅供演示的 MySQL、Elasticsearch 或消息队列条目。浏览器夹具应启动实际受限 PaaS worker，并使用固定完整镜像摘要、任务私有 binding/secret 目录和唯一资源 ID 创建实例；验收同时核对实际容器健康、产品/区域标签、PostgreSQL 18 SQL 写入读取、最终 endpoint/credential reference 和唯一 ready Audit 事实。测试资源只按该资源 ID 和 Compose project 标签定向清理。
 
-普通 User 必须通过当前 Policy/Group/Role 之一取得该精确资源的读取许可并真正读取实例；撤销来源后，下一次相同业务请求必须拒绝，而实例、数据和租户归属保持不变。Allow/Deny 决定均需由同一 User、动作和真实资源 ID 关联到不可变 IAM Audit 记录，PaaS created/ready 事实进入同一租户链并通过验证。该闭环尚需 UX owner 在固定源码的受控浏览器中完成交互和观察；测试代码、目录页面或单独 provider 测试通过均不能提前把本节标为验收完成。
+普通 User 必须通过当前 Policy/Group/Role 之一取得该精确资源的读取许可并真正读取实例；目录行只提供定位摘要，进入详情后必须通过 `GET /managed-services/v1/service-installations/{installationId}` 对该实例重新鉴权。精确读取成功前不得显示旧快照中的 endpoint、阶段、状态或管理入口；拒绝、未找到和不可用只在详情数据区失败，并只能原位重试同一实例。撤销来源后，下一次相同业务请求必须拒绝，而实例、数据和租户归属保持不变。Allow/Deny 决定均需由同一 User、动作和真实资源 ID 关联到不可变 IAM Audit 记录，PaaS created/ready 事实进入同一租户链并通过验证。该闭环尚需 UX owner 在固定源码的受控浏览器中完成交互和观察；测试代码、目录页面或单独 provider 测试通过均不能提前把本节标为验收完成。

@@ -185,6 +185,7 @@ async function renderConsole({
   experience,
   openWorkspace = false,
   load = vi.fn().mockResolvedValue(snapshot),
+  getInstallation,
   inspectServiceAuthorization,
   readApplication,
   listApplications,
@@ -201,6 +202,7 @@ async function renderConsole({
   experience?: ExperienceSnapshot;
   openWorkspace?: boolean;
   load?: ControlPlaneRepository["load"];
+  getInstallation?: ControlPlaneRepository["getInstallation"];
   inspectServiceAuthorization?: ControlPlaneRepository["inspectServiceAuthorization"];
   readApplication?: ControlPlaneRepository["readApplication"];
   listApplications?: ControlPlaneRepository["listApplications"];
@@ -211,9 +213,19 @@ async function renderConsole({
   iamRepository?: IamRepository;
   heldRoute?: { href: string; ready: boolean; promise: Promise<void> };
 } = {}) {
+  const loadedInstallations = new Map<string, ControlPlaneSnapshot["installations"][number]>();
+  const trackedLoad = vi.fn<ControlPlaneRepository["load"]>(async (...args) => {
+    const result = await load(...args);
+    for (const installation of result.installations ?? []) loadedInstallations.set(installation.id, installation);
+    return result;
+  });
   const repository: ControlPlaneRepository = {
-    load,
-    getInstallation: vi.fn(),
+    load: trackedLoad,
+    getInstallation: getInstallation ?? vi.fn(async (_credential, installationId) => {
+      const installation = loadedInstallations.get(installationId);
+      if (!installation) throw new HttpProblem(404, "INSTALLATION_NOT_FOUND");
+      return installation;
+    }),
     activateQuota: vi.fn(),
     createInstallation: vi.fn(),
     readApplication,
@@ -553,6 +565,75 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText("当前实例已绑定 · MOCK")).toBeTruthy();
   });
 
+  it("re-authorizes the exact live instance before presenting directory data as details", async () => {
+    const installation = {
+      id: "pg-exact-read", name: "精确读取库", offeringId: "postgresql-18", engineVersion: "18",
+      quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+      endpoint: "pg-exact-read.service.local:5432", credentialReference: null,
+      operation: { id: "operation-exact-read", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      createdAt: "2026-08-26T12:00:00Z"
+    };
+    let finishRead!: (value: typeof installation) => void;
+    const getInstallation = vi.fn(() => new Promise<typeof installation>((resolve) => { finishRead = resolve; }));
+    const inspectServiceAuthorization = vi.fn().mockResolvedValue({ template: liveServiceRoleTemplate, relation: null, binding: null });
+    const { user } = await renderConsole({
+      section: "installations",
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] }),
+      getInstallation,
+      inspectServiceAuthorization
+    });
+
+    await user.click(await screen.findByRole("button", { name: "精确读取库" }));
+
+    expect(screen.getByRole("heading", { name: "精确读取库" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("正在重新鉴权并读取这个准确实例");
+    expect(getInstallation).toHaveBeenCalledWith("renderer-test-memory-only-session", "pg-exact-read");
+    expect(inspectServiceAuthorization).not.toHaveBeenCalled();
+
+    finishRead(installation);
+
+    expect(await screen.findByText("pg-exact-read.service.local:5432")).toBeTruthy();
+    await waitFor(() => expect(inspectServiceAuthorization).toHaveBeenCalledWith(
+      "renderer-test-memory-only-session",
+      "organization-test",
+      "pg-exact-read"
+    ));
+  });
+
+  it("keeps a denied live instance read local and retries only the same locator", async () => {
+    const installation = {
+      id: "pg-denied-read", name: "受限数据库", offeringId: "postgresql-18", engineVersion: "18",
+      quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+      endpoint: "must-not-leak.service.local:5432", credentialReference: null,
+      operation: { id: "operation-denied-read", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      createdAt: "2026-08-26T12:00:00Z"
+    };
+    const getInstallation = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(403, "INSTALLATION_READ_FORBIDDEN"))
+      .mockResolvedValueOnce(installation);
+    const inspectServiceAuthorization = vi.fn();
+    const { user } = await renderConsole({
+      section: "installations",
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] }),
+      getInstallation,
+      inspectServiceAuthorization
+    });
+
+    await user.click(await screen.findByRole("button", { name: "受限数据库" }));
+
+    expect(await screen.findByText(/目录中曾出现该实例，并不代表详情读取仍被允许/)).toBeTruthy();
+    expect(screen.getByText("详情不可用")).toBeTruthy();
+    expect(screen.queryByText("运行中")).toBeNull();
+    expect(screen.queryByText("must-not-leak.service.local:5432")).toBeNull();
+    expect(inspectServiceAuthorization).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "重新读取实例" }));
+
+    expect(await screen.findByText("must-not-leak.service.local:5432")).toBeTruthy();
+    expect(getInstallation).toHaveBeenCalledTimes(2);
+    expect(getInstallation.mock.calls.every(([, id]) => id === "pg-denied-read")).toBe(true);
+  });
+
   it("keeps live instance chrome stable while only its service-authorization region loads", async () => {
     const installation = {
       id: "pg-test", name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
@@ -577,6 +658,7 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("heading", { name: "服务访问授权" })).toBeTruthy();
     expect(screen.getByText("正在核对")).toBeTruthy();
     expect(screen.queryByText("授权服务（等待发布）")).toBeNull();
+    await waitFor(() => expect(inspectServiceAuthorization).toHaveBeenCalledTimes(1));
 
     finishInspection({
       template: {
