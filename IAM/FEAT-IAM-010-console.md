@@ -39,7 +39,7 @@
 
 ## 验收
 
-单独端口、独立 IAM/Audit/PaaS+PG18 的真实浏览器完成平台→root→管理员→成员→资源路径，涵盖授权、撤销、组继承、policy/version、role、key、TOTP、改密与多设备下线。403/401/409/503 对应页面状态，无空白/健康页代替业务。
+单独端口、独立 IAM/Audit/PaaS+PG18 的真实浏览器完成平台→root→管理员→成员→资源路径，涵盖授权、撤销、组继承、policy/version、role、key、TOTP、改密与多设备下线。资源路径必须创建当前产品目录实际支持的 PostgreSQL 18 托管实例，等待真实 worker 将其调谐到 READY 并完成 SQL 读写；目录可见、配额可见、命令进入 QUEUED/PENDING、伪造 endpoint 或仅数据库行存在都不是资源接入成功。403/401/409/503 对应页面状态，无空白/健康页代替业务。
 
 前端类型/lint/组件测试/构建、正常桌面和 360px 路径随片验证。用户已将键盘专项降优先级，记录待补但不阻塞高优先级安全和业务流程；不得据此宣称键盘已验收。不得使用其他 Phase 的固定端口或运行实例。
 
@@ -94,3 +94,9 @@ UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PD
 同一精确源码已组装并验签当前`83/37/3+r31` A/B，在本任务独立离线Docker引擎完成效果型生命周期和引擎重启后的只读复验。该运行的唯一事实与边界由[FEAT-005当前UX快照发布消费者门禁](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-ux-snapshot-release-consumer-gate)维护；这里只确认嵌入控制台是实际签名发布内容，不把安装通过写成页面业务通过。
 
 本轮未取得受支持的受控浏览器驱动通道，真实浏览器fixture在产生任何完成标记前正常停止并清理，未用另一套浏览器工具或静态页面观察冒充验收。因此当前快照的LIVE业务路径仍是明确缺口；既有窄范围User边界浏览器证据也不能替代这次完整页面树的复验。
+
+### 真实产品资源闭环候选
+
+当前产品目录首个真实接入对象是既有 `localpostgres` provider 所拥有的 PostgreSQL 18，不创建仅供演示的 MySQL、Elasticsearch 或消息队列条目。浏览器夹具应启动实际受限 PaaS worker，并使用固定完整镜像摘要、任务私有 binding/secret 目录和唯一资源 ID 创建实例；验收同时核对实际容器健康、产品/区域标签、PostgreSQL 18 SQL 写入读取、最终 endpoint/credential reference 和唯一 ready Audit 事实。测试资源只按该资源 ID 和 Compose project 标签定向清理。
+
+普通 User 必须通过当前 Policy/Group/Role 之一取得该精确资源的读取许可并真正读取实例；撤销来源后，下一次相同业务请求必须拒绝，而实例、数据和租户归属保持不变。Allow/Deny 决定均需由同一 User、动作和真实资源 ID 关联到不可变 IAM Audit 记录，PaaS created/ready 事实进入同一租户链并通过验证。该闭环尚需 UX owner 在固定源码的受控浏览器中完成交互和观察；测试代码、目录页面或单独 provider 测试通过均不能提前把本节标为验收完成。

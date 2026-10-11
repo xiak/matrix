@@ -14,7 +14,7 @@
 | IAM-AC-05 | 已提交审计/outbox、hash chain、重放、暂停和历史证据关联 | Audit 与各 source owner |
 | IAM-AC-06 | 当前基线带数据重放/重启，撤销/凭据/原 root 不复活；只有明确支持的数据保留起点才增加旧 binary 升级门禁 | 当前 IAM integration/authorityprocess；明确的历史起点另行冻结 |
 | IAM-AC-07 | 同完整 profile 签名 A/B 安装、保留升级/回滚/备份恢复；跨 profile 效果前拒绝 | 原安装 gate，与安装 owner 固定交接 |
-| IAM-AC-08 | IAM 控制台和真实授权资源的浏览器闭环 | 010 与 FEAT-007 |
+| IAM-AC-08 | IAM 控制台创建当前目录实际支持的 PostgreSQL 18 托管实例；真实 worker 调谐至 READY、SQL 读写、成员允许/撤权后下一请求拒绝、资源不销毁及 Audit 链均由同一浏览器业务闭环证明 | 010 与 FEAT-007 |
 | IAM-AC-09 | 精确 SHA 独立 CI，固定提交、采用记录、可审查变更和回滚点 | 本分支 |
 | IAM-AC-10 | 延期能力有 requirement、原因、依赖、启用条件、验收方法，没有 fake/mocks 冒充 | 012 |
 | IAM-AC-11 | 多 IAM 实例、受限容量、撤权一致性及过载/故障边界有真实证据；部署未支持的数据库 HA 单独列缺口 | authorityprocess 与原安装 owner；指标归本文件 |
@@ -41,7 +41,7 @@
 - Credential：login/logout/change/reset/recover/key/TOTP 并发；当前会话保留条件；NULL generation；禁用/删除终态。
 - Transaction：同 resourceVersion 并发只有确定赢家；失败无新密码/附件/session/success fact 部分效果。
 - Producer：事实发生时的证明与当前服务凭据分开；暂停/撤权后历史 outbox 可完成；伪造 tenant/source/purpose/digest 拒绝。
-- Resource：成员生命周期不改变工作负载、Operation、配额、审计所有者；已接受后台任务执行边界明确。
+- Resource：成员生命周期不改变工作负载、Operation、配额、审计所有者；已接受后台任务执行边界明确。目录/配额/QUEUED 或 PENDING 不是产品接入证据，至少一个当前受支持 provider 必须产生 READY 实例并完成真实协议读写。
 - Schema：当前空库安装、带数据重放、失败原子性、schema/function/readiness 实际形状与签名 profile 一致；bootstrap 不补权。历史升级只覆盖明确支持的发布/数据保留起点。
 
 ## 未发布阶段与首版基线

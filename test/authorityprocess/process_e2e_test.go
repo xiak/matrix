@@ -40,6 +40,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pquerna/otp/hotp"
 
+	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -73,6 +74,11 @@ const (
 	paasServiceCredential  = "mx1.ProcessPaaSServiceCredential0000000000000001"
 	auditServiceCredential = "mx1.ProcessAuditServiceCredential000000000000001"
 	verifierCredential     = "mx1.ProcessVerifierCredential0000000000000001"
+
+	// This exact image is the existing fixed PostgreSQL 18 fixture used by the
+	// local managed-service provider gate. The opt-in browser fixture never
+	// resolves a mutable tag or pulls an image while proving a product effect.
+	browserManagedPostgresImageID = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
 )
 
 type migrationErrorRecorder struct {
@@ -3487,7 +3493,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"request-admin-password",
 	)
 	if mode == authorityProcessBrowser {
-		runIAMConsoleBrowser(t, ctx, admin, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
+		runIAMConsoleBrowser(t, ctx, admin, root, temporary, paasWorkerDSNPath,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
 		return
 	}
 	platformDecisions := []iamv1.AuthorizationDecision{
@@ -4816,22 +4823,39 @@ type binarySet struct {
 	paasDispatcher string
 }
 
-func runIAMConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, bearer string, start func(string, []string) *childProcess) {
+func runIAMConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	paasWorkerDSNPath string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	bearer string,
+	start func(string, []string) *childProcess,
+) {
 	t.Helper()
-	var member iamv1.User
+	var member, resourceMember iamv1.User
 	for _, candidate := range []struct {
 		login, name string
 		policy      iamv1.PolicyID
 	}{
 		{"browser.admin", "Browser Administrator", iamv1.SystemPolicyAccountAdministrator},
 		{"browser.member", "Browser Member", iamv1.SystemPolicyPaaSDeveloper},
+		{"browser.resource", "Browser Resource Member", ""},
 	} {
 		user := createIAMUser(t, iamEndpoint, bearer, candidate.login, candidate.name, initialDeveloperPassword, "browser-create-"+candidate.login)
-		createIAMPolicyAttachment(t, iamEndpoint, bearer, user.ID, candidate.policy, "browser-grant-"+candidate.login)
+		if candidate.policy != "" {
+			createIAMPolicyAttachment(t, iamEndpoint, bearer, user.ID, candidate.policy, "browser-grant-"+candidate.login)
+		}
 		login := loginIAM(t, iamEndpoint, candidate.login+"@organization-process", initialDeveloperPassword, "browser-login-"+candidate.login)
 		changePasswordIAM(t, iamEndpoint, login.Credential, initialDeveloperPassword, changedDeveloperPassword, "browser-password-"+candidate.login)
 		if candidate.login == "browser.member" {
 			member = user
+		} else if candidate.login == "browser.resource" {
+			resourceMember = user
 		}
 	}
 	for _, candidate := range []struct{ name, application string }{
@@ -4850,6 +4874,46 @@ func runIAMConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn,
 			t.Fatal("browser fixture could not publish a real boundary policy")
 		}
 	}
+	installationID := newBrowserManagedPostgresID(t)
+	managedRoot := filepath.Join(temporary, "browser-managed-runtime")
+	bindingRoot := filepath.Join(managedRoot, "bindings")
+	secretRoot := filepath.Join(managedRoot, "secrets")
+	for _, directory := range []string{bindingRoot, secretRoot} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("prepare browser managed-service runtime: %v", err)
+		}
+	}
+	catalogBytes, err := apphostingv1.EncodeArtifactCatalog(apphostingv1.ArtifactCatalog{
+		APIVersion: apphostingv1.ArtifactCatalogAPIVersion,
+		Kind:       apphostingv1.ArtifactCatalogKind,
+		Entries: []apphostingv1.ArtifactCatalogEntry{{
+			ArtifactDigest: browserManagedPostgresImageID,
+			ImageID:        browserManagedPostgresImageID,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encode browser artifact catalog: %v", err)
+	}
+	catalogPath := writeProtectedFile(t, temporary, "browser-artifact-catalog.json", catalogBytes)
+	clear(catalogBytes)
+	workerAddress := freeAddress(t)
+	workerBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-worker", "./app/service/paas/cmd/matrix-paas-worker")
+	defer cleanupBrowserManagedPostgres(t, installationID)
+	worker := start(workerBinary, []string{
+		"MATRIX_PAAS_WORKER_DATABASE_DSN_FILE=" + paasWorkerDSNPath,
+		"MATRIX_PAAS_WORKER_ID=paas-worker-browser-resource",
+		"MATRIX_PAAS_WORKER_BINDING_REF=compose-browser-v1",
+		"MATRIX_PAAS_WORKER_BINDING_ROOT=" + bindingRoot,
+		"MATRIX_PAAS_WORKER_SECRET_ROOT=" + secretRoot,
+		"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE=" + catalogPath,
+		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID=organization-process",
+		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF=local-machine-browser-v1",
+		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS=" + workerAddress,
+		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE=" + browserManagedPostgresImageID,
+	})
+	defer worker.stop()
+	waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
+	assertRuntimeProcessLogin(t, ctx, database, paasWorkerLogin, 2)
 	uiAddress := freeAddress(t)
 	uiBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-ui", "./app/ui/paas/cmd/matrix-paas-ui")
 	ui := start(uiBinary, []string{"MATRIX_PAAS_UI_LISTEN_ADDRESS=" + uiAddress})
@@ -4897,7 +4961,8 @@ func runIAMConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn,
 	server.Start()
 	defer server.Close()
 	finish := filepath.Join(temporary, "browser-finished")
-	t.Logf("BROWSER_FIXTURE url=%s/console/access finish=%s member=%s; synthetic credentials are the existing changed test constants", server.URL, finish, member.ID)
+	t.Logf("BROWSER_FIXTURE url=%s/console/access finish=%s member=%s resourceMember=%s managedInstallation=%s; synthetic credentials are the existing changed test constants",
+		server.URL, finish, member.ID, resourceMember.ID, installationID)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -4919,6 +4984,8 @@ func runIAMConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn,
 		}
 	}
 finished:
+	installation := waitBrowserManagedPostgresReady(t, ctx, paasEndpoint, bearer, installationID)
+	assertBrowserManagedPostgresRuntime(t, ctx, installation, bindingRoot)
 	waitAllIAMOutboxDelivered(t, ctx, database)
 	waitAllPaaSOutboxDelivered(t, ctx, database)
 	page := queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
@@ -4942,10 +5009,255 @@ finished:
 	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &boundary) != nil || iamv1.ValidateUserPermissionBoundary(boundary) != nil || boundary.Policy != nil {
 		t.Fatal("browser removal did not leave an explicit unbound user")
 	}
+	assertBrowserManagedPostgresAuthorization(t, ctx, database, auditEndpoint, bearer, resourceMember.ID, installationID)
+	readyQuery := auditv1.QueryRecordsRequest{
+		PageSize: 200,
+		Action:   auditv1.ActionManagedServiceInstallationReady,
+	}
+	readyFacts := 0
+	for {
+		readyPage := queryAudit(t, auditEndpoint, bearer, readyQuery, http.StatusOK)
+		for _, record := range readyPage.Records {
+			if record.Source == auditv1.SourcePaaS && record.Event.Target.ID == installationID &&
+				record.Event.TenantID == "organization-process" {
+				readyFacts++
+			}
+		}
+		if readyPage.NextCursor == "" {
+			break
+		}
+		readyQuery.Cursor = readyPage.NextCursor
+	}
+	if readyFacts != 1 {
+		t.Fatalf("real managed PostgreSQL ready facts=%d, want one", readyFacts)
+	}
 	if verification := verifyAudit(t, auditEndpoint, bearer); verification.State != auditv1.VerificationVerified {
 		t.Fatal("browser facts failed the real Audit chain verification")
 	}
-	t.Log("browser fixture finished with real set/replace/remove facts; visual assertions belong to recorded browser observations")
+	t.Log("browser fixture finished with real policy/group UI changes, a provisioned PostgreSQL 18 resource, allow/revoke decisions and a verified Audit chain; visual assertions belong to recorded browser observations")
+}
+
+func newBrowserManagedPostgresID(t *testing.T) string {
+	t.Helper()
+	var suffix [6]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		t.Fatal("create browser managed-service identity")
+	}
+	return "iam-browser-pg-" + hex.EncodeToString(suffix[:])
+}
+
+func waitBrowserManagedPostgresReady(
+	t *testing.T,
+	ctx context.Context,
+	paasEndpoint string,
+	bearer string,
+	installationID string,
+) managedservicev1.ServiceInstallation {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		response := performJSON(t, http.MethodGet,
+			paasEndpoint+"/managed-services/v1/service-installations/"+installationID,
+			bearer, nil)
+		if response.Status == http.StatusOK {
+			var installation managedservicev1.ServiceInstallation
+			if json.Unmarshal(response.Body, &installation) != nil ||
+				managedservicev1.ValidateServiceInstallation(installation) != nil ||
+				installation.ID != installationID ||
+				installation.OfferingID != managedservicev1.PostgreSQLOfferingID ||
+				installation.EngineVersion != "18" {
+				t.Fatal("browser created an invalid managed PostgreSQL resource")
+			}
+			if installation.Phase == managedservicev1.InstallationFailed {
+				t.Fatal("real managed PostgreSQL provisioning reached FAILED")
+			}
+			if installation.Phase == managedservicev1.InstallationReady &&
+				installation.Endpoint != nil && installation.CredentialReference != nil {
+				return installation
+			}
+		} else if response.Status != http.StatusNotFound && response.Status != http.StatusServiceUnavailable {
+			t.Fatalf("read browser managed PostgreSQL status=%d", response.Status)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for real managed PostgreSQL: %v", ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	t.Fatal("browser did not create a READY managed PostgreSQL resource")
+	return managedservicev1.ServiceInstallation{}
+}
+
+func assertBrowserManagedPostgresRuntime(
+	t *testing.T,
+	ctx context.Context,
+	installation managedservicev1.ServiceInstallation,
+	bindingRoot string,
+) {
+	t.Helper()
+	filter := "label=com.xiak.matrix.managedservice.installation=" + installation.ID
+	list := exec.CommandContext(ctx, "docker", "container", "ls", "--all", "--filter", filter, "--format", "{{.ID}}")
+	content, err := list.Output()
+	identities := strings.Fields(string(content))
+	if err != nil || len(identities) != 1 {
+		t.Fatalf("managed PostgreSQL runtime identities=%d err=%t", len(identities), err != nil)
+	}
+	containerID := identities[0]
+	format := `{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.Image}}|{{index .Config.Labels "com.xiak.matrix.managedservice.offering"}}|{{index .Config.Labels "com.xiak.matrix.managedservice.region"}}|{{index .Config.Labels "com.docker.compose.project"}}`
+	inspect := exec.CommandContext(ctx, "docker", "container", "inspect", "--format", format, containerID)
+	state, err := inspect.Output()
+	parts := strings.Split(strings.TrimSpace(string(state)), "|")
+	want := []string{"running", "healthy", browserManagedPostgresImageID, managedservicev1.PostgreSQLOfferingID, installation.RegionID}
+	if err != nil || len(parts) != 6 || !slices.Equal(parts[:5], want) {
+		t.Fatalf("managed PostgreSQL runtime state does not match its product resource")
+	}
+	project := parts[5]
+	projectDigest := strings.TrimPrefix(project, "matrix-")
+	decodedProject, decodeErr := hex.DecodeString(projectDigest)
+	if !strings.HasPrefix(project, "matrix-") || len(decodedProject) != 12 || decodeErr != nil || filepath.Base(project) != project {
+		t.Fatal("managed PostgreSQL runtime has an invalid owned project identity")
+	}
+	password, readErr := os.ReadFile(filepath.Join(bindingRoot, "managed-postgres", project, "postgres-password"))
+	if readErr != nil || len(password) < 32 || len(password) > 256 {
+		clear(password)
+		t.Fatal("managed PostgreSQL protected credential is unavailable")
+	}
+	defer clear(password)
+	dsn := &url.URL{
+		Scheme: "postgresql", Host: *installation.Endpoint, Path: "/service",
+		User:     url.UserPassword("matrix_service", string(password)),
+		RawQuery: "sslmode=disable",
+	}
+	connection, connectErr := pgx.Connect(ctx, dsn.String())
+	if connectErr != nil {
+		t.Fatal("connect to managed PostgreSQL product endpoint")
+	}
+	defer connection.Close(context.Background())
+	if _, createErr := connection.Exec(ctx, `CREATE TABLE IF NOT EXISTS matrix_iam_acceptance_probe(value text PRIMARY KEY)`); createErr != nil {
+		t.Fatal("create managed PostgreSQL durability probe")
+	}
+	if _, writeErr := connection.Exec(ctx, `INSERT INTO matrix_iam_acceptance_probe(value) VALUES ('preserved') ON CONFLICT(value) DO NOTHING`); writeErr != nil {
+		t.Fatal("write managed PostgreSQL durability probe")
+	}
+	var result string
+	queryErr := connection.QueryRow(ctx,
+		`SELECT value||'|'||current_setting('server_version_num') FROM matrix_iam_acceptance_probe WHERE value='preserved'`).Scan(&result)
+	resultParts := strings.Split(result, "|")
+	version := 0
+	if len(resultParts) == 2 {
+		version, _ = strconv.Atoi(resultParts[1])
+	}
+	if queryErr != nil || len(resultParts) != 2 || resultParts[0] != "preserved" || version < 180000 || version >= 190000 {
+		t.Fatal("managed product resource did not complete a real PostgreSQL 18 SQL round trip")
+	}
+}
+
+func assertBrowserManagedPostgresAuthorization(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	auditEndpoint string,
+	bearer string,
+	principalID iamv1.PrincipalID,
+	installationID string,
+) {
+	t.Helper()
+	rows, err := database.Query(ctx, `SELECT id,allowed,target_id FROM iam.authorization_decisions
+		WHERE tenant_id='organization-process' AND subject_type='USER' AND principal_id=$1
+		AND action_name=$2 AND target_kind=$3 AND target_id IN ('collection',$4)
+		ORDER BY decided_at,id`, principalID, iamv1.ActionManagedServiceInstallationRead,
+		iamv1.ResourceServiceInstallation, installationID)
+	if err != nil {
+		t.Fatal("read managed PostgreSQL authorization decisions")
+	}
+	defer rows.Close()
+	decisionIDs := make(map[string]bool)
+	allowedInstance, deniedAfterRevocation := 0, 0
+	for rows.Next() {
+		var id, target string
+		var allowed bool
+		if rows.Scan(&id, &allowed, &target) != nil {
+			t.Fatal("scan managed PostgreSQL authorization decision")
+		}
+		decisionIDs[id] = true
+		if allowed && target == installationID {
+			allowedInstance++
+		} else if !allowed {
+			deniedAfterRevocation++
+		}
+	}
+	if rows.Err() != nil || allowedInstance == 0 || deniedAfterRevocation == 0 {
+		t.Fatalf("real resource decisions allow=%d deny=%d", allowedInstance, deniedAfterRevocation)
+	}
+	found := make(map[string]bool)
+	query := auditv1.QueryRecordsRequest{
+		PageSize: 200,
+		Action:   auditv1.ActionIAMAuthorizationDecided,
+		Actor: &auditv1.ActorReference{
+			Type: auditv1.ActorUser,
+			ID:   auditv1.ActorID(principalID),
+		},
+	}
+	for {
+		page := queryAudit(t, auditEndpoint, bearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			id := string(record.Event.IAMDecisionID)
+			if decisionIDs[id] && record.Source == auditv1.SourceIAM &&
+				record.Event.TenantID == "organization-process" {
+				found[id] = true
+			}
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		query.Cursor = page.NextCursor
+	}
+	if len(found) != len(decisionIDs) {
+		t.Fatalf("managed PostgreSQL authorization Audit decisions=%d want=%d", len(found), len(decisionIDs))
+	}
+}
+
+func cleanupBrowserManagedPostgres(t *testing.T, installationID string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	filter := "label=com.xiak.matrix.managedservice.installation=" + installationID
+	list := exec.CommandContext(ctx, "docker", "container", "ls", "--all", "--filter", filter, "--format", "{{.ID}}")
+	content, err := list.Output()
+	if err != nil {
+		t.Errorf("list owned browser managed PostgreSQL containers")
+		return
+	}
+	projects := make(map[string]bool)
+	for _, containerID := range strings.Fields(string(content)) {
+		inspect := exec.CommandContext(ctx, "docker", "container", "inspect", "--format",
+			`{{index .Config.Labels "com.docker.compose.project"}}`, containerID)
+		project, inspectErr := inspect.Output()
+		if inspectErr != nil || !strings.HasPrefix(strings.TrimSpace(string(project)), "matrix-") {
+			t.Errorf("inspect owned browser managed PostgreSQL container")
+			continue
+		}
+		projects[strings.TrimSpace(string(project))] = true
+		remove := exec.CommandContext(ctx, "docker", "container", "rm", "--force", containerID)
+		if remove.Run() != nil {
+			t.Errorf("remove owned browser managed PostgreSQL container")
+		}
+	}
+	for project := range projects {
+		networks := exec.CommandContext(ctx, "docker", "network", "ls", "--filter",
+			"label=com.docker.compose.project="+project, "--format", "{{.ID}}")
+		networkContent, networkErr := networks.Output()
+		if networkErr != nil {
+			t.Errorf("list owned browser managed PostgreSQL networks")
+			continue
+		}
+		for _, networkID := range strings.Fields(string(networkContent)) {
+			remove := exec.CommandContext(ctx, "docker", "network", "rm", networkID)
+			if remove.Run() != nil {
+				t.Errorf("remove owned browser managed PostgreSQL network")
+			}
+		}
+	}
 }
 
 type iamCapacityCall struct {
