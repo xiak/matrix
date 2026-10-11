@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；UX/UI固定快照已在精确绿色IAM基线上完成隔离集成、全前端/嵌入/Go及三视口MOCK门禁，UI快照固定于`74e3c0983`，当前组合源码固定于`448400628734d4c708d7859492fba1cf1b663284`并通过独立控制台及全仓CI。真实IAM进程浏览器、慢响应/故障注入、跨浏览器未知结果恢复、当前Profile签名发布及整个FEAT验收仍未完成。
+- 状态：实施中；UX/UI owner 的当前固定代码`25384bb08453c1b08ecc095820e1f77952a17720`已在当前IAM源码上按精确子树集成为`ffdedcde2f324e121f9a643b679a06530fd23a5d`，本地全前端/嵌入/Go回归、同Profile签名A/B离线生命周期、引擎重启复验及该SHA的独立CI均已通过。当前快照尚未完成受控真实浏览器业务路径、慢响应/故障注入和跨浏览器未知结果恢复，因此整个FEAT仍未验收。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -82,3 +82,15 @@ UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PD
 集成后的当前工作树重新执行`npm ci`并从头通过`npm run check`：typecheck、lint、架构、228组对比度、63/63文件共1155/1155项测试、3项归一化、47页生产构建、45项规范化和259文件嵌入一致性均成功；随后以`GOMAXPROCS=2`通过`go test -count=1 -p 2 ./...`与`go vet -p 2 ./...`。本机Node 23.11.1不在项目声明的受支持engine范围，因此这些是组合回归证据，不是正式Node运行时或release验收。当前仍未实跑完整平台→root→管理员→成员→资源的真实IAM进程浏览器路径，也未覆盖慢响应/故障注入、completion receipt、跨浏览器reload后的UNKNOWN恢复、APISIX或签名安装；这些缺口完成前，不能把MOCK三视口或组件测试标为IAM-UI-01–08整体通过。
 
 固定`448400628734d4c708d7859492fba1cf1b663284`在原Verification工作流增加独立`console`作业，使用受支持的Node 22.22.2、固定npm 11.6.4执行干净`npm ci`、完整`npm run check`，并要求源码与259个嵌入文件无生成差异；后端原串行门禁及资源预算未变。[Verification 37644376405](https://github.com/xiak/matrix/actions/runs/37644376405)首轮中`authority-replacement`和`authority-replacement-qualification`因GitHub runner连续五次获取失败而在零runner、零步骤状态结束，其余实际执行作业（包括`console`）均成功；整轮终态后仅通过官方failed-jobs入口重跑这两项及依赖汇总。attempt 2已核对精确SHA、16项全部completed/success，两个替换作业均取得runner并真实通过，最终`authority-process`成功。该证据接受受支持Node运行时上的独立控制台构建/测试门禁，不替代上述真实IAM浏览器、故障恢复、APISIX或签名发布缺口。
+
+### 当前 UX owner 快照集成
+
+2026-10-11只读固定UX/UI代码`25384bb08453c1b08ecc095820e1f77952a17720`及其文档提交`11f65d72defe2aa0a7bc377ca88d3a2d9756db65`后，当前IAM分支从精确父提交`4bd8cdb79db2db9fa75672bd4136968989238290`生成集成提交`ffdedcde2f324e121f9a643b679a06530fd23a5d`。该提交只改`app/ui/paas/**`：272个路径发生变化，当前子树共662个路径，范围外差异为0；集成树和UX固定源的子树ID均为`3b3fefa710345401116a1b06b6a502321110d301`。没有导入UX分支的后端、API、SQL、安装、FEAT状态或checkpoint。
+
+当前工作树执行干净`npm ci`后通过完整`npm run check`：typecheck、lint、架构、228组多主题对比度、63个测试文件共1163项测试、3项归一化、47页生产构建、45项规范化和259文件嵌入一致性全部成功；`GOMAXPROCS=2`下UI与architecture的Go test/vet也通过。本机Node 23.11.1超出项目声明的受支持范围，只作为组合回归；独立CI的`console`已在受支持Node运行时完成，但整轮CI终态由同一SHA的Verification统一判定，不能提前用单一作业代替。
+
+同一精确源码的[Verification 38107642768](https://github.com/xiak/matrix/actions/runs/38107642768) attempt 1没有通过：`authority-runtime`的“保留数据与真实authority进程”步骤以exit 1失败，依赖汇总随之失败，其余15项成功；匿名日志只提供退出码，不能推断业务原因。本任务随后在独立、限额PG18上以相同选择器完整复跑该lane，restricted DSN、IAM82→83保留数据、独立IAM/Audit/PaaS进程、容量归因及调度、明文检查和TOTP备份进程均通过，package为411.519秒；这份本地结果不回填attempt 1。整轮终态后只通过GitHub官方failed-jobs入口重跑失败lane和汇总，attempt 2的`authority-runtime`两段均真实执行并通过，最终17项全部`completed/success`。该独立CI接受受支持Node上的console构建和当前后端组合门禁，仍不替代下述LIVE浏览器路径。
+
+同一精确源码已组装并验签当前`83/37/3+r31` A/B，在本任务独立离线Docker引擎完成效果型生命周期和引擎重启后的只读复验。该运行的唯一事实与边界由[FEAT-005当前UX快照发布消费者门禁](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-ux-snapshot-release-consumer-gate)维护；这里只确认嵌入控制台是实际签名发布内容，不把安装通过写成页面业务通过。
+
+本轮未取得受支持的受控浏览器驱动通道，真实浏览器fixture在产生任何完成标记前正常停止并清理，未用另一套浏览器工具或静态页面观察冒充验收。因此当前快照的LIVE业务路径仍是明确缺口；既有窄范围User边界浏览器证据也不能替代这次完整页面树的复验。

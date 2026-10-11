@@ -697,6 +697,59 @@ production bits, not another package or Profile. The exact successor SHA's
 [independent Verification 38096855001](https://github.com/xiak/matrix/actions/runs/38096855001)
 completed with all 17 jobs successful.
 
+### Current UX snapshot release-consumer gate
+
+On 2026-10-11, exact integrated source
+`ffdedcde2f324e121f9a643b679a06530fd23a5d` assembled and authenticated
+Release A `matrix-v0.1.0-iam.r31.5-ffdedcde2f32` and its immediate same-source
+successor B `matrix-v0.1.0-iam.r31.6-ffdedcde2f32`. Both carry the exact
+IAM/Audit/PaaS `83/37/3+r31` profile and topology digest
+`sha256:9d1fee77ddacf890479128442e6a208dc7dc10a89da65e6610d869a778172609`.
+The public trust document has SHA-256
+`d1d9ab658900420d687fb9af0af99d47c55ed504086bb87aa72b116663e760a2`;
+the private signer did not enter the runtime volume or either signed release.
+The embedded console tree is exactly the fixed UX owner source recorded by
+FEAT-IAM-010, rather than a development server or separately copied UI.
+
+The releases ran in a fresh task-owned, network-none Docker 27.5.1
+classic-store engine constrained to 2 CPUs, 4 GiB memory and 768 PIDs. Before
+effects, the installation root was absent and the inner daemon contained zero
+images and zero containers. The 486.55-second effectful gate passed A install,
+restricted runtime database identities, APISIX user and AccessKey paths,
+two-Account primary/member revocation, real SMTP contact verification, TOTP
+login and security notification, access-analysis disposition, two application
+generations, Audit integrity, protected backup, injected-upgrade automatic
+rollback, B upgrade with retained state, explicit platform rollback, selected
+backup recovery with session reissuance and AccessKey fencing, application
+rollback and stop/capacity release, and bounded support zero-leakage checks.
+
+Only the exact task-owned outer engine was then restarted. Its container ID
+remained
+`08d047b9115be2a50a6b4322222c026fb0f209249fb250f5893c4e4407b8c8ae`,
+while its start time advanced from `2026-10-11T03:26:33.345677504Z` to
+`2026-10-11T03:37:51.767580049Z`. All eleven resident platform services
+returned healthy without a remote, desktop-daemon or shared-service restart.
+The 57.03-second read-only gate proved that the retired AccessKey stayed
+unusable, MFA required a fresh login, tenant primary recovery and revocation
+state stayed terminal, and status/verify reached the complete offline
+lifecycle.
+
+This accepts the exact same-profile signed consumer path for the integrated
+source. It does not admit a cross-profile transition, arbitrary historical
+N-1 operation, database HA, external-product launch, or browser interaction.
+FEAT-IAM-010 and FEAT-007 continue to own LIVE browser acceptance.
+
+The exact source's
+[Verification 38107642768](https://github.com/xiak/matrix/actions/runs/38107642768)
+retains its failed first attempt: `authority-runtime` exited during retained
+data and real authority processes while the other 15 jobs succeeded. After an
+independent bounded PostgreSQL 18 run of the identical selector passed, only
+the failed job and dependent summary were rerun through GitHub's failed-jobs
+endpoint. Attempt 2 executed both runtime stages and completed all 17 jobs
+successfully. The rerun accepts the fixed source's independent CI without
+rewriting the original failure or extending this signed lifecycle into LIVE
+browser acceptance.
+
 ### Gate A: release and CLI contract
 
 1. Canonical manifest/signature verification rejects byte, path, metadata,

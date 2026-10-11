@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；当前接受发布组合IAM83/Audit37/PaaS3、`contractRevision=31`新增签名产品授权目录、数据库驱动服务Role模板/权限上限及通用动态产品闭环；本地合约、真实PG18、直接前驱、同Profile签名A/B完整生命周期，以及保持生产树不变的测试专用后继`651ef0c64`与`f7d76d53`之17项独立CI均已通过；后者还以未改变的生产包关闭了GROUP附件完成回执及Audit证据摘要的签名运行缺口。先前IAM82/Audit37/PaaS3、`contractRevision=30`保留为历史接受组合，不再代表当前源码。AC-11的服务副本、受限容量测量及有界开放环过载/恢复观察已通过各自既有门禁。容量增量固定`b377d34a282e581fb8cbdbc6461e7da31c10aaf5`的[独立CI37620326080](https://github.com/xiak/matrix/actions/runs/37620326080)已核对精确SHA，15项全部completed/success；后继控制台组合固定`448400628734d4c708d7859492fba1cf1b663284`的[独立CI37644376405](https://github.com/xiak/matrix/actions/runs/37644376405)在定向恢复两项GitHub runner获取故障后，attempt 2的16项全部completed/success。它们只接受下述固定资源工作集、业务隔离、恢复及独立控制台门禁证据，不宣称通用QPS、账号公平SLO或数据库HA。原独立账号干扰测量`7f02d419`及配对首片`b6f57d01`的既有证据保持；旧失败不回填。完整容量/公平性/HA、LIVE UI及整体需求仍未验收。
+- 状态：实施中；当前接受发布组合IAM83/Audit37/PaaS3、`contractRevision=31`新增签名产品授权目录、数据库驱动服务Role模板/权限上限及通用动态产品闭环；本地合约、真实PG18、直接前驱与同Profile签名A/B完整生命周期已通过。UX/UI当前固定子树已精确集成为`ffdedcde2f324e121f9a643b679a06530fd23a5d`，本地完整前端/嵌入/Go、该源码的签名A/B生命周期、重启复验及同一SHA独立CI均已通过；LIVE浏览器仍未验收。先前IAM82/Audit37/PaaS3、`contractRevision=30`保留为历史接受组合，不再代表当前源码。AC-11的服务副本、受限容量测量及有界开放环过载/恢复观察已通过各自既有门禁；完整容量/公平性/HA、LIVE UI及整体需求仍未验收。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -18,6 +18,21 @@
 | IAM-AC-09 | 精确 SHA 独立 CI，固定提交、采用记录、可审查变更和回滚点 | 本分支 |
 | IAM-AC-10 | 延期能力有 requirement、原因、依赖、启用条件、验收方法，没有 fake/mocks 冒充 | 012 |
 | IAM-AC-11 | 多 IAM 实例、受限容量、撤权一致性及过载/故障边界有真实证据；部署未支持的数据库 HA 单独列缺口 | authorityprocess 与原安装 owner；指标归本文件 |
+
+### 总目标完成审计
+
+| 用户目标 | 权威证据 | 当前结论 |
+| --- | --- | --- |
+| 独立 IAM 目录与阅读入口 | `IAM/README.md`只提供001–012、采用记录和产品参考链接 | 已完成；没有在README复制状态或设计 |
+| 对象命名与归属逻辑 | [000对象命名与归属](FEAT-IAM-000-product-contract.md#对象命名与归属)及各对象所属FEAT | 设计已完成；Account、RootIdentity、User、Group、Policy/Version、Role/RoleSession、Credential/Session及产品授权对象边界明确 |
+| 产品需求及延期需求 | [000全量需求分解](FEAT-IAM-000-product-contract.md#全量需求分解)与[012](FEAT-IAM-012-external-integrations.md) | 已完成需求归属；SSO/外部组织等能力有启用前置与真实验收要求，未用假接口冒充实现 |
+| 总体架构、高可用与容量边界 | [000总体架构](FEAT-IAM-000-product-contract.md#总体架构)及其可用性、容量与一致性段落，跨产品边界由ADR-0002拥有 | 设计已完成；当前多IAM副本、失败关闭、受限容量与数据库切换夹具已有证据，部署尚不支持的完整数据库HA继续明确列为缺口，不虚构SLO |
+| 详细设计与API约定 | 001–010各自拥有行为、锁序、事务、API/schema及验收；000只拥有公共wire/版本/分页约定 | 已完成当前范围设计；没有新增平行模型、通用receipt框架或第二套API文档 |
+| 分解为可验收FEAT | 001–011覆盖本轮实现与组合验收，012保存满足前置后才启动的外部集成 | 已完成分解；每项有唯一owner，固定来源采用记录仍由既有adoption文件拥有 |
+| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：后端当前范围已实现，当前UX快照的完整LIVE浏览器闭环仍缺；延期的012不因此被错误改为本轮实现 |
+| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：当前源码签名A/B、重启及`ffdedcde2`独立CI已通过，IAM-AC-08仍缺受控真实浏览器证据 |
+
+只有上表两个“未完成”项均获得其owner的真实证据后，才能把000及本总目标标为Accepted。设计文件齐全、静态页面、组件测试、健康端点、另一个分支的浏览器结果或局部CI成功都不能改变这一判定。
 
 ## 高风险测试矩阵
 
@@ -246,6 +261,10 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 - `matrix-iam-local-recovery` 的 FILE/固定退出码、commandId/inputCommitment/精确历史重放、专用登录和无秘密输出；修改私有 ABI 必须一起迁移安装消费者。
 - 固定主机消费者的 node-enrollment create/read/revoke/regenerate、target register/read/drain/activate/remove、pool 与 platform-operation 均保持 platform-only。enrollment 派生的 registered 事实只能沿对应历史 enrollment 证明，直接登记仍需精确 target register 决定；不放宽为任意 create 证明。
 - 固定消费者中的 terminal-session create/close 仍是租户业务权限，不能因主机管理权限而开放；PaaSDeveloper 的已有授权、PaaSViewer/PlatformOperator 的拒绝和终端历史 actor/source 证明一并回归。
+
+当前控制台组合的事实分属既有owner：`ffdedcde2f324e121f9a643b679a06530fd23a5d`的精确UX子树、前端与嵌入回归及LIVE浏览器缺口由[010](FEAT-IAM-010-console.md#当前-ux-owner-快照集成)维护；同一源码的`83/37/3+r31`签名A/B安装、升级、回滚、指定备份恢复与引擎重启证据由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-ux-snapshot-release-consumer-gate)维护。本文件只据此接受IAM-AC-07的当前组合候选，不把它重复解释为IAM-AC-08、跨Profile兼容或总goal完成。
+
+同一源码的[Verification 38107642768](https://github.com/xiak/matrix/actions/runs/38107642768)保留两次attempt的准确边界：attempt 1中`authority-runtime`的“本人会话与锁后到期”通过，后继“保留数据与真实authority进程”以exit 1失败，最终汇总正确失败；其余15项成功。公开annotation没有测试日志，本任务独立PG18上的同选择器复跑以411.519秒全部通过，不能替代原失败。整轮终态后经GitHub官方failed-jobs入口只重跑`authority-runtime`及依赖汇总；attempt 2两段均真实执行成功，最终精确SHA、17项作业和汇总均`completed/success`。这接受IAM-AC-09的当前精确源码CI证据，不回填attempt 1，也不完成IAM-AC-08。
 
 安装 owner 的源快照和候选固定 SHA 归 adoption；其既有 host 证据不复制成本分支新版本验收。
 
