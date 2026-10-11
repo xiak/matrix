@@ -1762,6 +1762,23 @@ local loading feedback, and cannot recover the prior rows when the replacement i
 forbidden. Search and page preferences remain local operator state rather than being
 misclassified as server authorization data.
 
+The 2026-10-11 follow-up is fixed at `25384bb08`. The strict Policy reader no longer
+duplicates a finite product-resource-kind catalog in the frontend: it validates the
+public uppercase identifier grammar, while the exact current AuthorizationProfile
+directory remains the only authoring source for Action/resource compatibility. An
+unfamiliar `ml@7` / `MODEL_JOB` fixture is therefore editable only when that declaration
+is present and fails closed when it is absent. The platform-only onboarding preview now
+ends with a read-only `ProductAuthorizationReleaseCatalog` handoff instead of a disabled
+Publish button. It distinguishes the current page sample from the historical Profiles,
+service-role permission ceilings and templates required by the signed platform release,
+and exposes no browser assemble, sign or submit action. The complete gate passed 63
+frontend files/1,163 cases plus three export-normalization cases, typecheck, lint,
+architecture, 228 theme contrast pairs, 47 generated pages, 45 normalized route files,
+259 embedded files and PaaS UI Go test/vet. The maintained 4317 preview returned HTTP
+200 for the Profile, Policy and service-authorization routes. This is strict-client,
+isolated-MOCK and build evidence, not real-browser, installation or signed-release
+acceptance; exact IAM semantics remain owned by FEAT-IAM-010.
+
 The public `Table.PrimaryAction` now owns the primary object entry throughout IAM
 directories and relationship tables: User, Group, Policy, Role, security report,
 Tenant, authorization Profile, policy/trust versions, policy usage and configuration,
