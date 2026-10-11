@@ -47,6 +47,31 @@ import type {
   ManagedServiceAuthorizationIntent,
   ManagedServiceAuthorizationLoad
 } from "../domain/serviceAuthorization";
+import type { InstallationReadLoad, ServiceInstallation } from "../domain/resources";
+
+type InstallationDetailLoad =
+  | { status: "idle" | "loading" }
+  | InstallationReadLoad;
+
+function installationDetailScene(summary: InstallationScene, installation: ServiceInstallation): InstallationScene {
+  const status: SceneStatus = installation.phase === "READY"
+    ? "success"
+    : installation.phase === "FAILED"
+      ? "danger"
+      : installation.phase === "PROVISIONING"
+        ? "info"
+        : "warning";
+  return {
+    ...summary,
+    id: installation.id,
+    name: installation.name,
+    phase: installation.phase,
+    status,
+    endpoint: installation.endpoint,
+    operationId: installation.operation.id,
+    observedAt: installation.operation.observedAt
+  };
+}
 
 function InstallationRows({ items, onOpen, triggerRefs }: {
   items: InstallationScene[];
@@ -344,8 +369,9 @@ function InstallationContent({ scene, preview, accountId }: {
   accountId?: string;
 }) {
   const t = useTranslations("ManagedService");
-  const { closeServiceAuthorizationIntent, serviceAuthorizationIntent } = useControlPlane();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const { closeServiceAuthorizationIntent, readInstallation, serviceAuthorizationIntent } = useControlPlane();
+  const [selectedSummary, setSelectedSummary] = useState<InstallationScene | null>(null);
+  const [detailLoad, setDetailLoad] = useState<InstallationDetailLoad>({ status: "idle" });
   const [review, setReview] = useState<"authorize" | "unbind" | null>(null);
   const [stage, setStage] = useState(0);
   const [previewAccountAuthorized, setPreviewAccountAuthorized] = useState(false);
@@ -356,10 +382,30 @@ function InstallationContent({ scene, preview, accountId }: {
   const unbindTrigger = useRef<HTMLButtonElement>(null);
   const rowTriggers = useRef(new Map<string, HTMLButtonElement>());
   const returnToList = useRef<string | null>(null);
-  const selected = scene.installations.find((item) => item.id === selectedId) ?? null;
+  const detailReadRevision = useRef(0);
+  useEffect(() => () => { detailReadRevision.current += 1; }, []);
+  const selected = selectedSummary && detailLoad.status === "ready"
+    ? installationDetailScene(selectedSummary, detailLoad.installation)
+    : selectedSummary;
+  const selectedId = selected?.id;
+
+  const openInstallation = useCallback((item: InstallationScene) => {
+    setSelectedSummary(item);
+    setReview(null);
+    if (preview) {
+      detailReadRevision.current += 1;
+      setDetailLoad({ status: "idle" });
+      return;
+    }
+    const revision = ++detailReadRevision.current;
+    setDetailLoad({ status: "loading" });
+    void readInstallation(item.id).then((result) => {
+      if (revision === detailReadRevision.current) setDetailLoad(result);
+    });
+  }, [preview, readInstallation]);
 
   useLayoutEffect(() => {
-    if (selected) {
+    if (selectedId) {
       heading.current?.focus({ preventScroll: true });
       return;
     }
@@ -367,10 +413,13 @@ function InstallationContent({ scene, preview, accountId }: {
     const id = returnToList.current;
     returnToList.current = null;
     rowTriggers.current.get(id)?.focus({ preventScroll: true });
-  }, [review, selected]);
+  }, [review, selectedId]);
 
   if (selected) {
-    const liveIntent = !preview && serviceAuthorizationIntent?.installationId === selected.id && serviceAuthorizationIntent.open ? serviceAuthorizationIntent : null;
+    const liveIntent = !preview && detailLoad.status === "ready" && serviceAuthorizationIntent?.installationId === selected.id && serviceAuthorizationIntent.open ? serviceAuthorizationIntent : null;
+    const detailError = detailLoad.status === "expired" || detailLoad.status === "forbidden" || detailLoad.status === "notFound" || detailLoad.status === "unavailable"
+      ? detailLoad.status
+      : null;
     const previewBound = previewBoundIds.has(selected.id);
     const previewUnbound = previewUnboundIds.has(selected.id);
     const previewBindingId = `preview.workload-role-binding.${selected.id}`;
@@ -387,16 +436,25 @@ function InstallationContent({ scene, preview, accountId }: {
         return;
       }
       returnToList.current = selected.id;
-      setSelectedId(null);
+      detailReadRevision.current += 1;
+      setSelectedSummary(null);
+      setDetailLoad({ status: "idle" });
     };
     return <section className={styles.installationDetail} aria-labelledby="managed-service-installation-detail-title">
       <div className={styles.detailHeading}>
         <Button variant="ghost" size="small" onClick={closeDetail}><ArrowLeft aria-hidden="true" />{t(review ? "backToInstance" : "backToInstances")}</Button>
         <div><Typography.Eyebrow>{t(review ? "authorizationEyebrow" : liveIntent ? "authorizationLiveWriteEyebrow" : "instanceEyebrow")}</Typography.Eyebrow><h2 className={styles.detailTitle} id="managed-service-installation-detail-title" ref={heading} tabIndex={-1}>{review === "authorize" ? t("authorizationTitle", { name: selected.name }) : review === "unbind" ? t("unbindTitle", { name: selected.name }) : liveIntent ? t(liveIntent.kind === "bind" ? "authorizationTitle" : "unbindTitle", { name: selected.name }) : selected.name}</h2></div>
-        <Badge status={review ? "warning" : liveIntent ? "info" : selected.status}>{review ? "MOCK" : liveIntent ? "LIVE" : t(`installationPhases.${selected.phase}`)}</Badge>
+        <Badge status={review ? "warning" : liveIntent || detailLoad.status === "loading" || detailLoad.status === "idle" ? "info" : detailError ? "warning" : selected.status}>
+          {review ? "MOCK" : liveIntent ? "LIVE" : !preview && (detailLoad.status === "loading" || detailLoad.status === "idle") ? t("instanceDetailLoadingBadge") : !preview && detailError ? t("instanceDetailUnavailableBadge") : t(`installationPhases.${selected.phase}`)}
+        </Badge>
       </div>
 
-      {liveIntent ? <LiveServiceAuthorizationReview intent={liveIntent} onClose={closeDetail} /> : review === "authorize" && accountId ? <>
+      {!preview && (detailLoad.status === "idle" || detailLoad.status === "loading") ? <TableSkeleton header={false} label={t("instanceDetailLoading")} rows={3} /> : !preview && detailError ? <EmptyState
+        title={t("instanceDetailUnavailable")}
+        description={t(`instanceDetailErrors.${detailError}`)}
+        icon={<Database />}
+        action={<Button onClick={() => openInstallation(selected)} variant="secondary">{t("retryInstanceDetail")}</Button>}
+      /> : liveIntent ? <LiveServiceAuthorizationReview intent={liveIntent} onClose={closeDetail} /> : review === "authorize" && accountId ? <>
         <Alert status="warning">{t("authorizationPreviewBoundary")}</Alert>
         <ServiceAuthorizationConsentReview accountId={accountId} targetResourceId={selected.id} stage={stage} onStageChange={setStage} onClose={closeDetail} onPreviewAuthorize={preview ? () => {
           setPreviewAccountAuthorized(true);
@@ -455,7 +513,7 @@ function InstallationContent({ scene, preview, accountId }: {
           {t(preview ? "instanceVisibilityMockBoundary" : "instanceVisibilityBoundary")}
         </Alert>
       </Card.Body>
-      <InstallationRows items={scene.installations} onOpen={accountId ? (item) => setSelectedId(item.id) : undefined} triggerRefs={rowTriggers} />
+      <InstallationRows items={scene.installations} onOpen={accountId ? openInstallation : undefined} triggerRefs={rowTriggers} />
     </Card>
   );
 }

@@ -3417,6 +3417,17 @@
     "backToInstances": "返回服务实例",
     "backToInstance": "返回实例详情",
     "instanceEyebrow": "托管服务实例",
+    "instanceDetailLoading": "正在重新鉴权并读取这个准确实例",
+    "instanceDetailLoadingBadge": "读取中",
+    "instanceDetailUnavailable": "无法读取实例详情",
+    "instanceDetailUnavailableBadge": "详情不可用",
+    "retryInstanceDetail": "重新读取实例",
+    "instanceDetailErrors": {
+      "expired": "当前会话已失效。重新登录后才能读取这个实例。",
+      "forbidden": "当前身份不能读取这个准确实例。目录中曾出现该实例，并不代表详情读取仍被允许。",
+      "notFound": "这个实例已不存在或当前身份不能确认它是否存在。",
+      "unavailable": "实例详情暂时不可用。页面保留目录定位信息，不会把目录快照冒充详情结果。"
+    },
     "instanceId": "实例 ID",
     "operationId": "最近操作 ID",
     "authorizationEyebrow": "产品资源授权 · MOCK",
