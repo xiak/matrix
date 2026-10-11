@@ -79,6 +79,10 @@ const (
 	// local managed-service provider gate. The opt-in browser fixture never
 	// resolves a mutable tag or pulls an image while proving a product effect.
 	browserManagedPostgresImageID = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
+	// Windows development hosts run the production Linux worker through this
+	// fixed local Docker CLI image so its Linux-only host-storage observation is
+	// not replaced by a synthetic execution profile.
+	browserDockerCLIImageID = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
 )
 
 type migrationErrorRecorder struct {
@@ -3175,7 +3179,14 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	applyPlatformSchemas(t, ctx, admin)
 	createProcessLogins(t, ctx, admin)
 	assertCrossSchemaIsolation(t, ctx, adminConfig)
-	seedProcessExecutionProfile(t, ctx, adminConfig)
+	// The ordinary process gate seeds a deterministic profile because it does
+	// not start an execution worker. The browser gate does start the real
+	// worker, so preloading the synthetic machine fingerprint would correctly
+	// make its first host observation fail closed. Let that worker create the
+	// profile from the actual bounded Docker host instead.
+	if mode != authorityProcessBrowser {
+		seedProcessExecutionProfile(t, ctx, adminConfig)
+	}
 
 	temporary := t.TempDir()
 	binaries := buildAuthorityBinaries(t, ctx, root, temporary, mode == authorityProcessFull)
@@ -3354,10 +3365,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"mx1.ProcessWrongIAMCredential000000000000000001",
 		verifierCredential,
 	}
-	start := func(binary string, environment []string) *childProcess {
-		child := startChild(t, root, binary, environment)
+	startWithArguments := func(binary string, environment []string, arguments ...string) *childProcess {
+		child := startChild(t, root, binary, environment, arguments...)
 		children = append(children, child)
 		return child
+	}
+	start := func(binary string, environment []string) *childProcess {
+		return startWithArguments(binary, environment)
 	}
 	defer func() {
 		for _, child := range children {
@@ -3424,6 +3438,12 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
+	browserManagedRuntime := browserManagedRuntime{}
+	if mode == authorityProcessBrowser {
+		browserManagedRuntime = startBrowserManagedWorker(
+			t, ctx, admin, adminConfig, root, temporary, paasWorkerDSNPath, start, startWithArguments,
+		)
+	}
 	// The source authorities now form the published release composition. Prove
 	// each real process reports the exact independently versioned authority
 	// profile rather than retaining the obsolete pre-publication mismatch gate.
@@ -3493,7 +3513,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"request-admin-password",
 	)
 	if mode == authorityProcessBrowser {
-		runIAMConsoleBrowser(t, ctx, admin, root, temporary, paasWorkerDSNPath,
+		runIAMConsoleBrowser(t, ctx, admin, root, temporary, browserManagedRuntime,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
 		return
 	}
@@ -4829,7 +4849,7 @@ func runIAMConsoleBrowser(
 	database *pgx.Conn,
 	root string,
 	temporary string,
-	paasWorkerDSNPath string,
+	managedRuntime browserManagedRuntime,
 	iamEndpoint string,
 	auditEndpoint string,
 	paasEndpoint string,
@@ -4875,45 +4895,7 @@ func runIAMConsoleBrowser(
 		}
 	}
 	installationID := newBrowserManagedPostgresID(t)
-	managedRoot := filepath.Join(temporary, "browser-managed-runtime")
-	bindingRoot := filepath.Join(managedRoot, "bindings")
-	secretRoot := filepath.Join(managedRoot, "secrets")
-	for _, directory := range []string{bindingRoot, secretRoot} {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
-			t.Fatalf("prepare browser managed-service runtime: %v", err)
-		}
-	}
-	catalogBytes, err := apphostingv1.EncodeArtifactCatalog(apphostingv1.ArtifactCatalog{
-		APIVersion: apphostingv1.ArtifactCatalogAPIVersion,
-		Kind:       apphostingv1.ArtifactCatalogKind,
-		Entries: []apphostingv1.ArtifactCatalogEntry{{
-			ArtifactDigest: browserManagedPostgresImageID,
-			ImageID:        browserManagedPostgresImageID,
-		}},
-	})
-	if err != nil {
-		t.Fatalf("encode browser artifact catalog: %v", err)
-	}
-	catalogPath := writeProtectedFile(t, temporary, "browser-artifact-catalog.json", catalogBytes)
-	clear(catalogBytes)
-	workerAddress := freeAddress(t)
-	workerBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-worker", "./app/service/paas/cmd/matrix-paas-worker")
 	defer cleanupBrowserManagedPostgres(t, installationID)
-	worker := start(workerBinary, []string{
-		"MATRIX_PAAS_WORKER_DATABASE_DSN_FILE=" + paasWorkerDSNPath,
-		"MATRIX_PAAS_WORKER_ID=paas-worker-browser-resource",
-		"MATRIX_PAAS_WORKER_BINDING_REF=compose-browser-v1",
-		"MATRIX_PAAS_WORKER_BINDING_ROOT=" + bindingRoot,
-		"MATRIX_PAAS_WORKER_SECRET_ROOT=" + secretRoot,
-		"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE=" + catalogPath,
-		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID=organization-process",
-		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF=local-machine-browser-v1",
-		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS=" + workerAddress,
-		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE=" + browserManagedPostgresImageID,
-	})
-	defer worker.stop()
-	waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
-	assertRuntimeProcessLogin(t, ctx, database, paasWorkerLogin, 2)
 	uiAddress := freeAddress(t)
 	uiBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-ui", "./app/ui/paas/cmd/matrix-paas-ui")
 	ui := start(uiBinary, []string{"MATRIX_PAAS_UI_LISTEN_ADDRESS=" + uiAddress})
@@ -4985,7 +4967,7 @@ func runIAMConsoleBrowser(
 	}
 finished:
 	installation := waitBrowserManagedPostgresReady(t, ctx, paasEndpoint, bearer, installationID)
-	assertBrowserManagedPostgresRuntime(t, ctx, installation, bindingRoot)
+	assertBrowserManagedPostgresRuntime(t, ctx, installation, managedRuntime)
 	waitAllIAMOutboxDelivered(t, ctx, database)
 	waitAllPaaSOutboxDelivered(t, ctx, database)
 	page := queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
@@ -5037,13 +5019,161 @@ finished:
 	t.Log("browser fixture finished with real policy/group UI changes, a provisioned PostgreSQL 18 resource, allow/revoke decisions and a verified Audit chain; visual assertions belong to recorded browser observations")
 }
 
+type browserManagedRuntime struct {
+	bindingRoot string
+	volumeName  string
+}
+
+func startBrowserManagedWorker(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	adminConfig *pgx.ConnConfig,
+	root string,
+	temporary string,
+	paasWorkerDSNPath string,
+	start func(string, []string) *childProcess,
+	startWithArguments func(string, []string, ...string) *childProcess,
+) browserManagedRuntime {
+	t.Helper()
+	catalogBytes, err := apphostingv1.EncodeArtifactCatalog(apphostingv1.ArtifactCatalog{
+		APIVersion: apphostingv1.ArtifactCatalogAPIVersion,
+		Kind:       apphostingv1.ArtifactCatalogKind,
+		Entries: []apphostingv1.ArtifactCatalogEntry{{
+			ArtifactDigest: browserManagedPostgresImageID,
+			ImageID:        browserManagedPostgresImageID,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encode browser artifact catalog: %v", err)
+	}
+	catalogPath := writeProtectedFile(t, temporary, "browser-artifact-catalog.json", catalogBytes)
+	clear(catalogBytes)
+	workerAddress := freeAddress(t)
+	if runtime.GOOS == "linux" {
+		managedRoot := filepath.Join(temporary, "browser-managed-runtime")
+		bindingRoot := filepath.Join(managedRoot, "bindings")
+		secretRoot := filepath.Join(managedRoot, "secrets")
+		for _, directory := range []string{bindingRoot, secretRoot} {
+			if err := os.MkdirAll(directory, 0o700); err != nil {
+				t.Fatalf("prepare browser managed-service runtime: %v", err)
+			}
+		}
+		workerBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-worker", "./app/service/paas/cmd/matrix-paas-worker")
+		worker := start(workerBinary, browserManagedWorkerEnvironment(
+			paasWorkerDSNPath, bindingRoot, secretRoot, catalogPath, workerAddress,
+		))
+		waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
+		assertRuntimeProcessLogin(t, ctx, database, paasWorkerLogin, 2)
+		return browserManagedRuntime{bindingRoot: bindingRoot}
+	}
+	if runtime.GOOS != "windows" {
+		t.Fatal("real managed-service browser worker requires Linux or Docker Desktop on Windows")
+	}
+	if adminConfig.Host != "127.0.0.1" && adminConfig.Host != "localhost" {
+		t.Fatal("Docker-isolated browser worker requires a loopback PostgreSQL fixture")
+	}
+	assertExactLocalImage(t, ctx, browserDockerCLIImageID)
+	workerBinary := buildAuthorityLinuxBinary(t, ctx, root, temporary, "matrix-paas-worker-linux-amd64", "./app/service/paas/cmd/matrix-paas-worker")
+	containerDSNURL, parseErr := url.Parse(runtimeDSN(t, adminConfig, paasWorkerLogin, processDBPassword))
+	if parseErr != nil {
+		t.Fatal("parse browser managed-service worker database URL")
+	}
+	// Preserve the bounded pool and stable application_name used by the
+	// independent runtime-login gate. Only translate the loopback host across
+	// the Docker Desktop boundary; the role, database and remaining connection
+	// contract stay identical to the native process path.
+	containerDSNURL.Host = net.JoinHostPort("host.docker.internal", strconv.Itoa(int(adminConfig.Port)))
+	containerDSN := containerDSNURL.String()
+	containerDSNPath := writeProtectedFile(t, temporary, "browser-paas-worker-container-dsn", []byte(containerDSN))
+	volumeName := "matrix-iam-browser-runtime-" + newBrowserHexSuffix(t)
+	volume := exec.CommandContext(ctx, "docker", "volume", "create", "--label", "matrix.task=iam-browser-managed-worker", volumeName)
+	createdVolume, volumeErr := volume.Output()
+	if volumeErr != nil || strings.TrimSpace(string(createdVolume)) != volumeName {
+		t.Fatal("create owned browser managed-service volume")
+	}
+	workerContainer := "matrix-iam-browser-worker-" + newBrowserHexSuffix(t)
+	t.Cleanup(func() { cleanupBrowserManagedWorker(t, workerContainer, volumeName) })
+	mountpointCommand := exec.CommandContext(ctx, "docker", "volume", "inspect", "--format", "{{.Mountpoint}}", volumeName)
+	mountpointBytes, mountpointErr := mountpointCommand.Output()
+	mountpoint := strings.TrimSpace(string(mountpointBytes))
+	if mountpointErr != nil || !strings.HasPrefix(mountpoint, "/") || strings.ContainsAny(mountpoint, "\r\n\x00") {
+		t.Fatal("inspect owned browser managed-service volume")
+	}
+	bindingRoot := mountpoint + "/bindings"
+	secretRoot := mountpoint + "/secrets"
+	_, workerPort, splitErr := net.SplitHostPort(workerAddress)
+	if splitErr != nil {
+		t.Fatal("parse browser managed-service worker address")
+	}
+	containerDSNFile := "/run/matrix/paas-worker-dsn"
+	containerCatalogFile := "/run/matrix/artifact-catalog.json"
+	containerWorker := "/run/matrix/matrix-paas-worker"
+	workerEnvironment := browserManagedWorkerEnvironment(
+		containerDSNFile, bindingRoot, secretRoot, containerCatalogFile, "0.0.0.0:8080",
+	)
+	arguments := []string{
+		"run", "--rm", "--name", workerContainer,
+		"--label", "matrix.task=iam-browser-managed-worker",
+		"--cpus", "2", "--memory", "512m", "--memory-swap", "512m", "--pids-limit", "128",
+		"--add-host", "host.docker.internal:host-gateway",
+		"--publish", "127.0.0.1:" + workerPort + ":8080/tcp",
+		"--mount", "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock",
+		"--mount", "type=bind,source=" + temporary + ",target=/fixture,readonly",
+		"--mount", "type=volume,source=" + volumeName + ",target=" + mountpoint,
+		"--tmpfs", "/run/matrix:rw,exec,nosuid,nodev,size=64m,mode=0700",
+		"--security-opt", "no-new-privileges:true", "--cap-drop", "ALL",
+	}
+	for _, entry := range workerEnvironment {
+		arguments = append(arguments, "--env", entry)
+	}
+	script := "set -eu; " +
+		"mkdir -p \"$MATRIX_PAAS_WORKER_BINDING_ROOT\" \"$MATRIX_PAAS_WORKER_SECRET_ROOT\"; " +
+		"chmod 700 \"$MATRIX_PAAS_WORKER_BINDING_ROOT\" \"$MATRIX_PAAS_WORKER_SECRET_ROOT\"; " +
+		"cp /fixture/" + filepath.Base(workerBinary) + " " + containerWorker + "; " +
+		"cp /fixture/" + filepath.Base(containerDSNPath) + " " + containerDSNFile + "; " +
+		"cp /fixture/" + filepath.Base(catalogPath) + " " + containerCatalogFile + "; " +
+		"chmod 700 " + containerWorker + "; chmod 600 " + containerDSNFile + " " + containerCatalogFile + "; " +
+		"exec " + containerWorker
+	arguments = append(arguments, "--entrypoint", "sh", browserDockerCLIImageID, "-c", script)
+	worker := startWithArguments("docker", nil, arguments...)
+	waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
+	assertRuntimeProcessLogin(t, ctx, database, paasWorkerLogin, 2)
+	return browserManagedRuntime{bindingRoot: bindingRoot, volumeName: volumeName}
+}
+
+func browserManagedWorkerEnvironment(
+	dsnPath string,
+	bindingRoot string,
+	secretRoot string,
+	catalogPath string,
+	workerAddress string,
+) []string {
+	return []string{
+		"MATRIX_PAAS_WORKER_DATABASE_DSN_FILE=" + dsnPath,
+		"MATRIX_PAAS_WORKER_ID=paas-worker-browser-resource",
+		"MATRIX_PAAS_WORKER_BINDING_REF=compose-browser-v1",
+		"MATRIX_PAAS_WORKER_BINDING_ROOT=" + bindingRoot,
+		"MATRIX_PAAS_WORKER_SECRET_ROOT=" + secretRoot,
+		"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE=" + catalogPath,
+		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID=organization-process",
+		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF=local-machine-browser-v1",
+		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS=" + workerAddress,
+		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE=" + browserManagedPostgresImageID,
+	}
+}
+
 func newBrowserManagedPostgresID(t *testing.T) string {
+	return "iam-browser-pg-" + newBrowserHexSuffix(t)
+}
+
+func newBrowserHexSuffix(t *testing.T) string {
 	t.Helper()
 	var suffix [6]byte
 	if _, err := rand.Read(suffix[:]); err != nil {
-		t.Fatal("create browser managed-service identity")
+		t.Fatal("create browser managed-service suffix")
 	}
-	return "iam-browser-pg-" + hex.EncodeToString(suffix[:])
+	return hex.EncodeToString(suffix[:])
 }
 
 func waitBrowserManagedPostgresReady(
@@ -5092,7 +5222,7 @@ func assertBrowserManagedPostgresRuntime(
 	t *testing.T,
 	ctx context.Context,
 	installation managedservicev1.ServiceInstallation,
-	bindingRoot string,
+	managedRuntime browserManagedRuntime,
 ) {
 	t.Helper()
 	filter := "label=com.xiak.matrix.managedservice.installation=" + installation.ID
@@ -5117,7 +5247,13 @@ func assertBrowserManagedPostgresRuntime(
 	if !strings.HasPrefix(project, "matrix-") || len(decodedProject) != 12 || decodeErr != nil || filepath.Base(project) != project {
 		t.Fatal("managed PostgreSQL runtime has an invalid owned project identity")
 	}
-	password, readErr := os.ReadFile(filepath.Join(bindingRoot, "managed-postgres", project, "postgres-password"))
+	var password []byte
+	var readErr error
+	if managedRuntime.volumeName == "" {
+		password, readErr = os.ReadFile(filepath.Join(managedRuntime.bindingRoot, "managed-postgres", project, "postgres-password"))
+	} else {
+		password, readErr = readBrowserManagedPostgresPassword(ctx, managedRuntime.volumeName, project)
+	}
 	if readErr != nil || len(password) < 32 || len(password) > 256 {
 		clear(password)
 		t.Fatal("managed PostgreSQL protected credential is unavailable")
@@ -5150,6 +5286,27 @@ func assertBrowserManagedPostgresRuntime(
 	if queryErr != nil || len(resultParts) != 2 || resultParts[0] != "preserved" || version < 180000 || version >= 190000 {
 		t.Fatal("managed product resource did not complete a real PostgreSQL 18 SQL round trip")
 	}
+}
+
+func readBrowserManagedPostgresPassword(
+	ctx context.Context,
+	volumeName string,
+	project string,
+) ([]byte, error) {
+	path := "/runtime/bindings/managed-postgres/" + project + "/postgres-password"
+	command := exec.CommandContext(ctx, "docker", "run", "--rm",
+		"--label", "matrix.task=iam-browser-managed-credential-read",
+		"--network", "none", "--read-only", "--cpus", "0.25",
+		"--memory", "64m", "--memory-swap", "64m", "--pids-limit", "32",
+		"--security-opt", "no-new-privileges:true", "--cap-drop", "ALL",
+		"--mount", "type=volume,source="+volumeName+",target=/runtime,readonly",
+		"--entrypoint", "cat", browserDockerCLIImageID, path)
+	content, err := command.Output()
+	if err != nil {
+		clear(content)
+		return nil, errors.New("managed PostgreSQL credential cannot be read")
+	}
+	return content, nil
 }
 
 func assertBrowserManagedPostgresAuthorization(
@@ -5257,6 +5414,50 @@ func cleanupBrowserManagedPostgres(t *testing.T, installationID string) {
 				t.Errorf("remove owned browser managed PostgreSQL network")
 			}
 		}
+	}
+}
+
+func cleanupBrowserManagedWorker(t *testing.T, containerName string, volumeName string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	list := exec.CommandContext(ctx, "docker", "container", "ls", "--all", "--filter",
+		"name=^/"+containerName+"$", "--format", "{{.ID}}")
+	content, err := list.Output()
+	if err != nil {
+		t.Errorf("list owned browser managed-service worker")
+		return
+	}
+	identities := strings.Fields(string(content))
+	if len(identities) > 1 {
+		t.Errorf("browser managed-service worker identity is ambiguous")
+		return
+	}
+	if len(identities) == 1 {
+		inspect := exec.CommandContext(ctx, "docker", "container", "inspect", "--format",
+			`{{index .Config.Labels "matrix.task"}}`, identities[0])
+		label, inspectErr := inspect.Output()
+		if inspectErr != nil || strings.TrimSpace(string(label)) != "iam-browser-managed-worker" {
+			t.Errorf("browser managed-service worker ownership is invalid")
+			return
+		}
+		if exec.CommandContext(ctx, "docker", "container", "rm", "--force", identities[0]).Run() != nil {
+			t.Errorf("remove owned browser managed-service worker")
+			return
+		}
+	}
+	inspectVolume := exec.CommandContext(ctx, "docker", "volume", "inspect", "--format",
+		`{{index .Labels "matrix.task"}}`, volumeName)
+	volumeLabel, volumeErr := inspectVolume.Output()
+	if volumeErr != nil {
+		return
+	}
+	if strings.TrimSpace(string(volumeLabel)) != "iam-browser-managed-worker" {
+		t.Errorf("browser managed-service volume ownership is invalid")
+		return
+	}
+	if exec.CommandContext(ctx, "docker", "volume", "rm", volumeName).Run() != nil {
+		t.Errorf("remove owned browser managed-service volume")
 	}
 }
 
@@ -6847,6 +7048,29 @@ func buildAuthorityBinary(t *testing.T, ctx context.Context, root, temporary, na
 		t.Fatalf("build %s: %v\n%s", name, err, output)
 	}
 	return path
+}
+
+func buildAuthorityLinuxBinary(t *testing.T, ctx context.Context, root, temporary, name, packagePath string) string {
+	t.Helper()
+	path := filepath.Join(temporary, name)
+	command := exec.CommandContext(ctx, "go", "build", "-p", "2", "-o", path, packagePath)
+	command.Dir = root
+	command.Env = append(os.Environ(),
+		"GOMAXPROCS=2", "GOMEMLIMIT=512MiB", "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build Linux %s: %v\n%s", name, err, output)
+	}
+	return path
+}
+
+func assertExactLocalImage(t *testing.T, ctx context.Context, imageID string) {
+	t.Helper()
+	command := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", imageID)
+	content, err := command.Output()
+	if err != nil || strings.TrimSpace(string(content)) != imageID {
+		t.Fatalf("fixed local image %s is unavailable", imageID)
+	}
 }
 
 type childProcess struct {
