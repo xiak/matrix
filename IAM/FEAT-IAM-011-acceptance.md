@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；最近接受发布组合仍为IAM83/Audit37/PaaS3、`contractRevision=31`，其签名产品授权目录、数据库驱动服务Role模板/权限上限、通用动态产品闭环及同Profile签名A/B生命周期已有既有证据。当前源码加入真实MySQL 8.4 provider、PaaS产品目录约束和签名镜像，形状前移为IAM83/Audit37/PaaS4、`contractRevision=32`；本地双产品真实进程与固定直接前驱保留门禁已通过，但尚无该精确源码的独立CI、终止/失败回滚、签名A/B或LIVE UI结论，因此不能继承r31的发布接受状态。FEAT-010其余故障/UNKNOWN/APISIX/签名浏览器路径与IAM-UI-01–08完整范围，以及AC-11的完整容量/公平性/HA仍未验收，整体需求仍为实施中。
+- 状态：实施中；最近接受发布组合仍为IAM83/Audit37/PaaS3、`contractRevision=31`，其签名产品授权目录、数据库驱动服务Role模板/权限上限、通用动态产品闭环及同Profile签名A/B生命周期已有既有证据。当前固定源码把PostgreSQL 18、MySQL 8.4 LTS、Elasticsearch 8.19.23和RabbitMQ 4.1.8作为真实provider接入生产worker，补齐统一终止与物理销毁闭环，形状前移为IAM83/Audit38/PaaS5、`contractRevision=33`；本地四产品真实进程、固定直接前驱保留门禁及十镜像签名包组装已经通过，但尚无该精确源码的独立CI、签名包实际安装、同Profile A/B或LIVE UI结论，因此不能继承r31的发布接受状态。FEAT-010其余故障/UNKNOWN/APISIX/签名浏览器路径与IAM-UI-01–08完整范围，以及AC-11的完整容量/公平性/HA仍未验收，整体需求仍为实施中。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -50,11 +50,13 @@
 
 未发布迁移可以在风险替换前保存已验证并推送的 Git 回滚点后合并、改写或删除，不在工作树保留废弃实现作为兼容层。默认门禁是最终结构的空库安装、等值重放、带真实数据的重启/恢复、迁移失败无部分效果，以及当前版本的 RLS、受限身份、撤权和 Audit/outbox 不变量。它们不能因免除开发历史兼容而取消。
 
-开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项FEAT累积各自的旧binary/schema路径。窗口前移时在同一切片替换被淘汰的固定源码、schema断言和格式夹具，不增加兼容别名或多版本参数。当前产品目录前驱为固定`01146e7c465bbf28116d541f17ecbe28f917a4fe`的IAM83/Audit37/PaaS3、`contractRevision=31`，当前源码候选为IAM83/Audit37/PaaS4、`contractRevision=32`。实际前驱PaaS SQL先建立并保留PostgreSQL-only quota/installation，拒绝MySQL且无部分写入；当前迁移只替换受管产品约束和readiness，apply-twice后原PostgreSQL状态不变并允许真实MySQL路径。IAM83自身不变，旧IAM82→83门禁只保留为已完成组件迁移证据，不能再充当当前完整profile前驱或让测试矩阵继续向更老开发快照扩张。
+开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项FEAT累积各自的旧binary/schema路径。窗口前移时在同一切片替换被淘汰的固定源码、schema断言和格式夹具，不增加兼容别名或多版本参数。当前产品目录直接前驱为固定`dc5f63a3c6dea5fa2943bb78628cd753582cb2bc`的IAM83/Audit37/PaaS4、`contractRevision=32`，当前固定候选为IAM83/Audit38/PaaS5、`contractRevision=33`。实际前驱PaaS SQL建立并保留PostgreSQL/MySQL quota和READY installation；当前迁移只增加Elasticsearch/RabbitMQ目录约束、终止生命周期、action-aware Operation唯一性及对应readiness，apply-twice后原MySQL状态不变并能由当前公开终止事务安全销毁。IAM83自身不变，更早的PostgreSQL-only、IAM82→83等门禁只保留为已完成组件迁移证据，不能再充当当前完整profile前驱或让测试矩阵继续向更老开发快照扩张。
 
 固定前驱`9cf500095ae9a9cf98d322711c58a5862b899fa1`保留IAM82已接受的Role生命周期、服务Role、AccessKey、受支持恢复围栏、签名安装和原Audit证明，并以其实际migrator/runtime作为IAM83唯一开发期数据保留起点。该SHA的[Verification 38075029627](https://github.com/xiak/matrix/actions/runs/38075029627)已终止为`completed/cancelled`：`authority-runtime`在“已发布安装器必须于效果前拒绝新 schema 形状”步骤返回 exit 1，后续八个数据库 lane 被取消，最终汇总失败；它不能登记为独立CI成功。IAM82→83的当前保留数据运行证据由下述当前门禁独立拥有，IAM82发布准入仍由已接受固定源码`147586689a9f0bcad3254f743b11c51dba35c1b5`及其签名运行证据拥有；三者不得互相回填。
 
 2026-10-11在本任务独立PostgreSQL18.6上，实际`9cf5000` IAM82 migrator/runtime→当前IAM83 migrator/runtime的滚动门禁以108.96秒通过。前驱通过真实HTTP建立账号、Session、MFA/恢复、Role/Trust/boundary、服务Role、AccessKey围栏、格式2安全报告、访问分析及不可变Audit事实；当前迁移执行两次apply/verify并重启后保持原完成、规范字节、会话资格、撤权、围栏、Role和Audit证据，同时验证当前新写。旧、新迁移进程各自只消费自己的签名目录环境，未在生产契约中保留旧类型或路径别名。该结果只证明开发期IAM82→83保留数据与运行形状，不是IAM83同Profile签名发布或跨profile升级许可。
+
+固定`4dea30e79cfd6693df149ea40eaa876c113814eb`完成当前四产品纵向实现，固定`36fb8d20df9e0790e1e78d38d0523f3a13249e55`补齐官方Elasticsearch Docker v2 manifest list的严格归档验证；未知media type、无关source digest及内容篡改继续失败关闭。本地真实多进程门禁创建四个实例并分别完成SQL、HTTP文档和AMQP持久消息读写，随后通过公开终止入口物理删除容器、网络、数据和凭据并归还配额；精确Group授权、撤Membership后的下一请求拒绝、另一Account同ID隐藏、Operation/outbox/Audit链与终止重放/冲突同门禁通过。干净`36fb8d20d`实际组装并逐文件复验`matrix-v0.4.0-iam-products.1-36fb8d20df9e`，其IAM83/Audit38/PaaS5+r33清单包含12个文件和10个镜像；组装私钥随后清除。该结果证明真实provider和签名制品组合，不证明制品已经安装运行、同Profile A/B生命周期、HA/集群形态或LIVE UI；当前独立Verification仍须取得精确终态。
 
 固定生产源码`c27888fdd6f465e51fd7963e8d6ec153c21ef23f`的签名A=`matrix-v0.1.0-iam.r31.3-c27888fdd6f4`与直接后继B=`matrix-v0.1.0-iam.r31.4-c27888fdd6f4`，已在全新、外层限2 CPU/4 GiB/PIDs 768且无外部路由的Docker27.5.1引擎完成512.05秒效果型生命周期及仅重启该引擎后的61.48秒只读复验。A安装、受限数据库身份、真实SMTP/TOTP、双Account身份与撤权、AccessKey、访问分析、两代应用、Audit链、保护备份、失败升级自动回退、B升级、显式回滚、指定备份恢复及凭据围栏、应用回滚/停止、支持去敏和重启恢复均通过。签名目录当前为空是尚未随产品发布额外Profile/模板的真实状态，因此该运行证明目录传输和空seed，不冒充额外产品已上线；非空目录的动态Profile/ceiling/template效果由008真库门禁证明。包哈希、权限复验、无产品效果的私有输入权限fixture失败及资源清理由[FEAT-005当前IAM83发布门禁](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam83-product-authorization-release-gate)唯一维护。测试专用后继`651ef0c64974d23d96e1e95417fa8627e6872e1f`未改变生产包内容，修正了真实进程门禁对服务Role上限与签名目录输入的消费；[Verification 38086980171](https://github.com/xiak/matrix/actions/runs/38086980171)已核对精确SHA，17项全部completed/success，因此IAM83现登记为当前接受发布组合，但不扩张为额外产品、跨profile、LIVE UI或整体IAM已验收的结论。
 
