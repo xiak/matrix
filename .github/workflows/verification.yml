@@ -162,9 +162,10 @@ jobs:
             # Keep every fixture deadline unchanged and reserve bounded cleanup.
             minutes: 25
           - lane: authority-managed-products
-            # Two real provider resources: production worker, immutable PG18
-            # and MySQL 8.4 images, SQL round trips, exact IAM revoke and the
-            # tenant Audit chain. Keep the database-heavy lane serial.
+            # Four real provider resources: production worker, immutable PG18,
+            # MySQL 8.4, Elasticsearch 8.19 and RabbitMQ 4.1 images, protocol
+            # round trips, exact IAM revoke, termination and the tenant Audit
+            # chain. Keep the database-heavy lane serial.
             minutes: 20
           - lane: authority-session-idle
             minutes: 15
@@ -419,22 +420,25 @@ jobs:
             'TestManagedServiceDirectPredecessorUpgradeAndTermination' \
             -race -p 1 -count=1 ./app/service/paas/internal/managedservice/data/postgres \
             -run '^TestManagedServiceDirectPredecessorUpgradeAndTermination$'
+          postgres_image='postgres:18@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a'
           mysql_image='mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242'
           elasticsearch_image='docker.elastic.co/elasticsearch/elasticsearch:8.19.23@sha256:4d0724bb8d78d7a2330693623e26ca4d621079d062ecc8a30b3e1fc180ec14c1'
           rabbitmq_image='rabbitmq:4.1.8@sha256:a82b5a24f4434a33cd15e1e47c444d1e07440261358e46c179539998557d4e29'
+          docker pull "$postgres_image"
           docker pull "$mysql_image"
           docker pull "$elasticsearch_image"
           docker pull "$rabbitmq_image"
+          MATRIX_IAM_MANAGED_POSTGRES_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$postgres_image")"
           MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$mysql_image")"
           MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$elasticsearch_image")"
           MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$rabbitmq_image")"
-          for image_id in "$MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID" "$MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID" "$MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID"; do
+          for image_id in "$MATRIX_IAM_MANAGED_POSTGRES_IMAGE_ID" "$MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID" "$MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID" "$MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID"; do
             case "$image_id" in
               sha256:[0-9a-f][0-9a-f]*) test "${#image_id}" = 71 ;;
               *) exit 1 ;;
             esac
           done
-          export MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID
+          export MATRIX_IAM_MANAGED_POSTGRES_IMAGE_ID MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID
           time bash .github/scripts/run-go-test-selection.sh \
             'TestManagedProductProviderProcesses' \
             -race -p 1 -count=1 -timeout 18m ./test/authorityprocess \

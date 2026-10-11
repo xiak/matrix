@@ -78,12 +78,10 @@ const (
 	auditServiceCredential = "mx1.ProcessAuditServiceCredential000000000000001"
 	verifierCredential     = "mx1.ProcessVerifierCredential0000000000000001"
 
-	// This exact image is the existing fixed PostgreSQL 18 fixture used by the
-	// local managed-service provider gates. They never resolve a mutable tag or
-	// pull an image while proving a product effect.
-	managedPostgresImageID = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
-	// The real product lane resolves and passes already-loaded linux/amd64 image
-	// IDs because classic and containerd Docker stores expose different IDs.
+	// Real product lanes resolve and pass already-loaded linux/amd64 image IDs
+	// because classic and containerd Docker stores expose different IDs for the
+	// same immutable source digest.
+	managedPostgresImageIDEnv      = "MATRIX_IAM_MANAGED_POSTGRES_IMAGE_ID"
 	managedMySQLImageIDEnv         = "MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID"
 	managedElasticsearchImageIDEnv = "MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID"
 	managedRabbitMQImageIDEnv      = "MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID"
@@ -3148,6 +3146,7 @@ func TestIAMConsoleBrowser(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_CONSOLE_BROWSER") != "1" {
 		t.Skip("set MATRIX_IAM_CONSOLE_BROWSER=1 for the bounded local browser fixture")
 	}
+	_ = managedProductImagesFromEnvironment(t)
 	testIndependentAuthorityProcesses(t, authorityProcessBrowser)
 }
 
@@ -3159,17 +3158,15 @@ func TestManagedProductProviderProcesses(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_MANAGED_PRODUCTS_TEST_DSN") == "" {
 		t.Skip("set MATRIX_IAM_MANAGED_PRODUCTS_TEST_DSN to a separate disposable PG18 database")
 	}
-	if os.Getenv(managedMySQLImageIDEnv) == "" {
-		t.Skipf("set %s to the already-loaded immutable MySQL 8.4 image ID", managedMySQLImageIDEnv)
-	}
-	for _, environment := range []string{managedElasticsearchImageIDEnv, managedRabbitMQImageIDEnv} {
+	for _, environment := range []string{
+		managedPostgresImageIDEnv, managedMySQLImageIDEnv,
+		managedElasticsearchImageIDEnv, managedRabbitMQImageIDEnv,
+	} {
 		if os.Getenv(environment) == "" {
 			t.Skipf("set %s to the already-loaded immutable product image ID", environment)
 		}
 	}
-	_ = managedProductImageID(t, managedMySQLImageIDEnv)
-	_ = managedProductImageID(t, managedElasticsearchImageIDEnv)
-	_ = managedProductImageID(t, managedRabbitMQImageIDEnv)
+	_ = managedProductImagesFromEnvironment(t)
 	testIndependentAuthorityProcesses(t, authorityProcessManagedProducts)
 }
 
@@ -4913,44 +4910,51 @@ type managedProductFixture struct {
 	credentialFile   string
 }
 
-func managedPostgresFixture(t *testing.T, owner string) managedProductFixture {
+type managedProductImages struct {
+	postgres      string
+	mysql         string
+	elasticsearch string
+	rabbitmq      string
+}
+
+func managedPostgresFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
 		name: "PostgreSQL 18", offeringID: managedservicev1.PostgreSQLOfferingID,
 		quotaShapeID: "pg-small", engineVersion: "18",
-		installationID: newManagedProductID(t, owner, "pg"), imageID: managedPostgresImageID,
+		installationID: newManagedProductID(t, owner, "pg"), imageID: imageID,
 		runtimeDirectory: "managed-postgres", credentialFile: "postgres-password",
 	}
 }
 
-func managedMySQLFixture(t *testing.T, owner string) managedProductFixture {
+func managedMySQLFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
 		name: "MySQL 8.4 LTS", offeringID: managedservicev1.MySQLOfferingID,
 		quotaShapeID: "mysql-small", engineVersion: "8.4",
-		installationID: newManagedProductID(t, owner, "mysql"), imageID: managedProductImageID(t, managedMySQLImageIDEnv),
+		installationID: newManagedProductID(t, owner, "mysql"), imageID: imageID,
 		runtimeDirectory: "managed-mysql", credentialFile: "mysql-password",
 	}
 }
 
-func managedElasticsearchFixture(t *testing.T, owner string) managedProductFixture {
+func managedElasticsearchFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
 		name: "Elasticsearch 8.19", offeringID: managedservicev1.ElasticsearchOfferingID,
 		quotaShapeID: "elasticsearch-small", engineVersion: "8.19.23",
 		installationID:   newManagedProductID(t, owner, "elasticsearch"),
-		imageID:          managedProductImageID(t, managedElasticsearchImageIDEnv),
+		imageID:          imageID,
 		runtimeDirectory: "managed-elasticsearch", credentialFile: "elasticsearch-password",
 	}
 }
 
-func managedRabbitMQFixture(t *testing.T, owner string) managedProductFixture {
+func managedRabbitMQFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
 		name: "RabbitMQ 4.1", offeringID: managedservicev1.RabbitMQOfferingID,
 		quotaShapeID: "rabbitmq-small", engineVersion: "4.1.8",
 		installationID:   newManagedProductID(t, owner, "rabbitmq"),
-		imageID:          managedProductImageID(t, managedRabbitMQImageIDEnv),
+		imageID:          imageID,
 		runtimeDirectory: "managed-rabbitmq", credentialFile: "rabbitmq-password",
 	}
 }
@@ -4968,10 +4972,10 @@ func runManagedProductProviderProcesses(
 	t.Helper()
 	base := paasEndpoint + "/managed-services/v1"
 	products := []managedProductFixture{
-		managedPostgresFixture(t, "provider"),
-		managedMySQLFixture(t, "provider"),
-		managedElasticsearchFixture(t, "provider"),
-		managedRabbitMQFixture(t, "provider"),
+		managedPostgresFixture(t, "provider", managedRuntime.images.postgres),
+		managedMySQLFixture(t, "provider", managedRuntime.images.mysql),
+		managedElasticsearchFixture(t, "provider", managedRuntime.images.elasticsearch),
+		managedRabbitMQFixture(t, "provider", managedRuntime.images.rabbitmq),
 	}
 	quotasByID := make(map[string]managedservicev1.QuotaEntitlement, len(products))
 	installationsByID := make(map[string]managedservicev1.ServiceInstallation, len(products))
@@ -5317,7 +5321,7 @@ func runIAMConsoleBrowser(
 			t.Fatal("browser fixture could not publish a real boundary policy")
 		}
 	}
-	product := managedPostgresFixture(t, "browser")
+	product := managedPostgresFixture(t, "browser", managedRuntime.images.postgres)
 	installationID := product.installationID
 	defer cleanupManagedProduct(t, installationID)
 	uiAddress := freeAddress(t)
@@ -5423,6 +5427,7 @@ finished:
 type managedProductRuntime struct {
 	bindingRoot string
 	volumeName  string
+	images      managedProductImages
 }
 
 func startManagedProductWorker(
@@ -5437,12 +5442,13 @@ func startManagedProductWorker(
 	startWithArguments func(string, []string, ...string) *childProcess,
 ) managedProductRuntime {
 	t.Helper()
+	images := managedProductImagesFromEnvironment(t)
 	catalogBytes, err := apphostingv1.EncodeArtifactCatalog(apphostingv1.ArtifactCatalog{
 		APIVersion: apphostingv1.ArtifactCatalogAPIVersion,
 		Kind:       apphostingv1.ArtifactCatalogKind,
 		Entries: []apphostingv1.ArtifactCatalogEntry{{
-			ArtifactDigest: managedPostgresImageID,
-			ImageID:        managedPostgresImageID,
+			ArtifactDigest: images.postgres,
+			ImageID:        images.postgres,
 		}},
 	})
 	if err != nil {
@@ -5462,13 +5468,13 @@ func startManagedProductWorker(
 		}
 		workerBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-worker", "./app/service/paas/cmd/matrix-paas-worker")
 		worker := start(workerBinary, managedProductWorkerEnvironment(
-			paasWorkerDSNPath, bindingRoot, secretRoot, catalogPath, workerAddress,
+			paasWorkerDSNPath, bindingRoot, secretRoot, catalogPath, workerAddress, images,
 		))
 		waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
 		assertRuntimeProcessApplicationLogin(
 			t, ctx, database, paasWorkerLogin, managedProductWorkerApplicationName, 2,
 		)
-		return managedProductRuntime{bindingRoot: bindingRoot}
+		return managedProductRuntime{bindingRoot: bindingRoot, images: images}
 	}
 	if runtime.GOOS != "windows" {
 		t.Fatal("real managed-service browser worker requires Linux or Docker Desktop on Windows")
@@ -5515,7 +5521,7 @@ func startManagedProductWorker(
 	containerCatalogFile := "/run/matrix/artifact-catalog.json"
 	containerWorker := "/run/matrix/matrix-paas-worker"
 	workerEnvironment := managedProductWorkerEnvironment(
-		containerDSNFile, bindingRoot, secretRoot, containerCatalogFile, "0.0.0.0:8080",
+		containerDSNFile, bindingRoot, secretRoot, containerCatalogFile, "0.0.0.0:8080", images,
 	)
 	arguments := []string{
 		"run", "--rm", "--name", workerContainer,
@@ -5546,7 +5552,7 @@ func startManagedProductWorker(
 	assertRuntimeProcessApplicationLogin(
 		t, ctx, database, paasWorkerLogin, managedProductWorkerApplicationName, 2,
 	)
-	return managedProductRuntime{bindingRoot: bindingRoot, volumeName: volumeName}
+	return managedProductRuntime{bindingRoot: bindingRoot, volumeName: volumeName, images: images}
 }
 
 func managedProductWorkerEnvironment(
@@ -5555,6 +5561,7 @@ func managedProductWorkerEnvironment(
 	secretRoot string,
 	catalogPath string,
 	workerAddress string,
+	images managedProductImages,
 ) []string {
 	return []string{
 		"MATRIX_PAAS_WORKER_DATABASE_DSN_FILE=" + dsnPath,
@@ -5566,10 +5573,20 @@ func managedProductWorkerEnvironment(
 		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID=organization-process",
 		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF=local-machine-browser-v1",
 		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS=" + workerAddress,
-		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE=" + managedPostgresImageID,
-		"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE=" + managedProductImageID(nil, managedMySQLImageIDEnv),
-		"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE=" + managedProductImageID(nil, managedElasticsearchImageIDEnv),
-		"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE=" + managedProductImageID(nil, managedRabbitMQImageIDEnv),
+		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE=" + images.postgres,
+		"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE=" + images.mysql,
+		"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE=" + images.elasticsearch,
+		"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE=" + images.rabbitmq,
+	}
+}
+
+func managedProductImagesFromEnvironment(t *testing.T) managedProductImages {
+	t.Helper()
+	return managedProductImages{
+		postgres:      managedProductImageID(t, managedPostgresImageIDEnv),
+		mysql:         managedProductImageID(t, managedMySQLImageIDEnv),
+		elasticsearch: managedProductImageID(t, managedElasticsearchImageIDEnv),
+		rabbitmq:      managedProductImageID(t, managedRabbitMQImageIDEnv),
 	}
 }
 
@@ -5588,13 +5605,11 @@ func newManagedHexSuffix(t *testing.T) string {
 }
 
 func managedProductImageID(t *testing.T, environment string) string {
+	t.Helper()
 	value := strings.TrimSpace(os.Getenv(environment))
 	digest, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
 	if !strings.HasPrefix(value, "sha256:") || len(digest) != sha256.Size || err != nil {
-		if t != nil {
-			t.Fatalf("managed product image ID in %s is invalid", environment)
-		}
-		return ""
+		t.Fatalf("managed product image ID in %s is invalid", environment)
 	}
 	return value
 }
