@@ -37,7 +37,7 @@
 
 开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项FEAT累积各自的旧binary/schema路径。窗口前移时在同一切片替换被淘汰的固定源码、schema断言和格式夹具，不增加兼容别名或多版本参数。当前唯一窗口为固定`9cf500095ae9a9cf98d322711c58a5862b899fa1`的IAM82到当前IAM83候选，当前完整源码形状为IAM83/Audit37/PaaS3、`contractRevision=31`。IAM83在008及FEAT-005既有owner中把额外Profile、产品拥有的服务Role权限上限与模板合并为一个签名目录，并更新服务Role数据库读取函数和禁止直接挂载权限上限的触发器；IAM82旧迁移进程只收到其原签名目录，IAM83进程只收到新目录，没有运行时兼容旁路。更早IAM81入口已从滚动门禁移除，不继续累积未发布开发版本。
 
-固定前驱`9cf500095ae9a9cf98d322711c58a5862b899fa1`保留IAM82已接受的Role生命周期、服务Role、AccessKey、受支持恢复围栏、签名安装和原Audit证明，并以其实际migrator/runtime作为IAM83唯一开发期数据保留起点。该SHA的[Verification 38075029627](https://github.com/xiak/matrix/actions/runs/38075029627)当前仍为`queued`，不能预先登记为独立CI成功；IAM82发布准入仍由已接受固定源码`147586689a9f0bcad3254f743b11c51dba35c1b5`及其下述签名运行证据拥有，不能用两者互相回填。
+固定前驱`9cf500095ae9a9cf98d322711c58a5862b899fa1`保留IAM82已接受的Role生命周期、服务Role、AccessKey、受支持恢复围栏、签名安装和原Audit证明，并以其实际migrator/runtime作为IAM83唯一开发期数据保留起点。该SHA的[Verification 38075029627](https://github.com/xiak/matrix/actions/runs/38075029627)已终止为`completed/cancelled`：`authority-runtime`在“已发布安装器必须于效果前拒绝新 schema 形状”步骤返回 exit 1，后续八个数据库 lane 被取消，最终汇总失败；它不能登记为独立CI成功。IAM82→83的当前保留数据运行证据由下述当前门禁独立拥有，IAM82发布准入仍由已接受固定源码`147586689a9f0bcad3254f743b11c51dba35c1b5`及其签名运行证据拥有；三者不得互相回填。
 
 2026-10-11在本任务独立PostgreSQL18.6上，实际`9cf5000` IAM82 migrator/runtime→当前IAM83 migrator/runtime的滚动门禁以108.96秒通过。前驱通过真实HTTP建立账号、Session、MFA/恢复、Role/Trust/boundary、服务Role、AccessKey围栏、格式2安全报告、访问分析及不可变Audit事实；当前迁移执行两次apply/verify并重启后保持原完成、规范字节、会话资格、撤权、围栏、Role和Audit证据，同时验证当前新写。旧、新迁移进程各自只消费自己的签名目录环境，未在生产契约中保留旧类型或路径别名。该结果只证明开发期IAM82→83保留数据与运行形状，不是IAM83同Profile签名发布或跨profile升级许可。
 
