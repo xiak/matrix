@@ -2516,6 +2516,24 @@
     "release": {
       "title": "Review the immutable release reference and consumption boundary",
       "lead": "A trusted release identifies content with an exact product, revision, and contentDigest. Catalog visibility and permission grants remain separate concerns.",
+      "package": {
+        "title": "Signed release-package handoff",
+        "hint": "The real backend atomically carries product authorization declarations and service-role dependencies in one normalized, signed release package. This page has only the current Profile sample and cannot assemble, sign, or submit a release.",
+        "readOnly": "Read-only handoff",
+        "kind": "Release object",
+        "kindHint": "The package is a platform release input, not a tenant resource or a browser form.",
+        "currentProfile": "Current Profile",
+        "currentProfileHint": "Used only for this structural review. The page proves neither release provenance, signature, nor complete package identity.",
+        "history": "Historical Profiles",
+        "historyHint": "The package must carry historical revisions still referenced by immutable policies and templates. The tenant read-only directory does not expose that archive input.",
+        "policies": "Service-role permission ceilings",
+        "policiesHint": "Each product-owned policy version must be compiled from an exact Profile in the same package and referenced by a template.",
+        "templates": "Service-role templates",
+        "templatesHint": "Templates, permission ceilings, and Profile revisions are cross-checked inside one release boundary. ACTIVE does not mean account consent.",
+        "sample": "Page sample only",
+        "notLoaded": "Not provided",
+        "pipeline": "The trusted release runs through the platform's controlled build, signing, and deployment pipeline. The browser has no Profile publish API, publish Action, or Publish button that could replace release provenance."
+      },
       "gates": {
         "title": "Release gate status",
         "hint": "Each gate stands on its own. Seeing an earlier stage does not mean a later stage passed and grants no permission.",
@@ -2532,8 +2550,7 @@
         "noExpansion": "A higher revision does not expand existing policies automatically; policies retain their resolved capability snapshot.",
         "serviceConsent": "Cross-product operations still require a separate service identity and customer consent. Product onboarding does not unlock every tenant resource."
       },
-      "unavailable": "IAM does not yet provide AuthorizationProfile drafts, online approval, a publish API, or a matching publish Action. Final publishing is always unavailable in this prototype.",
-      "publishDisabled": "Publish revision (not connected)"
+      "unavailable": "IAM does not provide AuthorizationProfile drafts or an online approval API. Trusted publishing belongs to the platform's signed release pipeline and is not executed in the browser."
     },
     "previous": "Previous",
     "next": "Next",

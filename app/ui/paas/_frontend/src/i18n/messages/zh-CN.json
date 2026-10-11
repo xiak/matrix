@@ -2516,6 +2516,24 @@
     "release": {
       "title": "审阅不可变发布引用与消费边界",
       "lead": "受信发布必须以精确的 product、revision 与 contentDigest 标识内容；目录可见性和权限授予是两件不同的事。",
+      "package": {
+        "title": "签名发布包移交",
+        "hint": "真实后端使用一个规范化、签名的发布包原子携带产品权限声明及服务角色依赖；本页只有当前 Profile 示例，不能拼装、签名或提交发布物。",
+        "readOnly": "只读移交",
+        "kind": "发布对象",
+        "kindHint": "发布包是平台发布输入，不是租户资源，也不是浏览器表单。",
+        "currentProfile": "当前 Profile",
+        "currentProfileHint": "仅用于本次结构审阅；本页没有证明发布来源、签名或完整包身份。",
+        "history": "历史 Profile",
+        "historyHint": "发布包必须携带仍被不可变策略和模板引用的历史修订；租户只读目录不提供这份归档输入。",
+        "policies": "服务角色权限上限",
+        "policiesHint": "每份产品自有策略版本必须由同一个发布包内的精确 Profile 编译，并被模板引用。",
+        "templates": "服务角色模板",
+        "templatesHint": "模板与权限上限、Profile 修订必须在同一发布边界中交叉校验；ACTIVE 不代表账号已同意。",
+        "sample": "本页仅有示例",
+        "notLoaded": "未提供",
+        "pipeline": "真实发布由平台受控的构建、签名与部署流水线完成。浏览器没有 Profile 发布 API、发布 Action 或可替代签名来源的“发布”按钮。"
+      },
       "gates": {
         "title": "发布门禁状态",
         "hint": "每个门禁独立成立；前一步可见不代表后一步已经通过，也不能据此授予权限。",
@@ -2532,8 +2550,7 @@
         "noExpansion": "更高修订不会自动扩大既有策略，策略仍遵守其已解析的精确能力快照。",
         "serviceConsent": "跨产品代操作仍需独立的服务身份与客户授权，产品接入不等于可访问所有租户资源。"
       },
-      "unavailable": "IAM 尚未提供 AuthorizationProfile 草稿、在线审批或发布 API，也没有对应发布 Action。最终发布在此原型中始终不可用。",
-      "publishDisabled": "发布修订（未接入）"
+      "unavailable": "IAM 尚未提供 AuthorizationProfile 草稿或在线审批 API；受信发布属于平台签名发布流水线，不在浏览器中执行。"
     },
     "previous": "上一步",
     "next": "下一步",

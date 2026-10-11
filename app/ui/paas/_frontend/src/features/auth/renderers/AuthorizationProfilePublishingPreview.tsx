@@ -345,6 +345,20 @@ export function AuthorizationProfilePublishingPreview({ entry, candidate: suppli
           <div><span>{t("fields.revision")}</span><strong>{profile.revision}</strong></div>
           <div><span>{t("fields.digest")}</span><strong><code>{entry.contentDigest}</code></strong></div>
         </div>
+        <section className={styles.releasePackage} aria-labelledby="authorization-profile-release-package-title">
+          <div className={styles.releasePackageHeading}>
+            <div><h4 id="authorization-profile-release-package-title">{t("release.package.title")}</h4><p>{t("release.package.hint")}</p></div>
+            <Badge status="neutral">{t("release.package.readOnly")}</Badge>
+          </div>
+          <dl className={styles.releasePackageGrid}>
+            <div><dt>{t("release.package.kind")}</dt><dd><code>ProductAuthorizationReleaseCatalog</code><small>{t("release.package.kindHint")}</small></dd></div>
+            <div><dt>{t("release.package.currentProfile")}</dt><dd><code>{profile.product}@{profile.revision}</code><Badge status="info">{t("release.package.sample")}</Badge><small>{t("release.package.currentProfileHint")}</small></dd></div>
+            <div><dt>{t("release.package.history")}</dt><dd><Badge status="neutral">{t("release.package.notLoaded")}</Badge><small>{t("release.package.historyHint")}</small></dd></div>
+            <div><dt>{t("release.package.policies")}</dt><dd><Badge status="neutral">{t("release.package.notLoaded")}</Badge><small>{t("release.package.policiesHint")}</small></dd></div>
+            <div><dt>{t("release.package.templates")}</dt><dd><Badge status="neutral">{t("release.package.notLoaded")}</Badge><small>{t("release.package.templatesHint")}</small></dd></div>
+          </dl>
+          <Alert status="info">{t("release.package.pipeline")}</Alert>
+        </section>
         <ul className={styles.boundaries}>
           <li>{t("release.boundaries.noGrant")}</li>
           <li>{t("release.boundaries.immutable")}</li>
@@ -370,10 +384,8 @@ export function AuthorizationProfilePublishingPreview({ entry, candidate: suppli
     <div className={styles.actions}>
       {stage > 0 ? <Button variant="secondary" onClick={() => setStage((current) => current - 1)}>{t("previous")}</Button> : <span />}
       <div>
-        {stage < stageIds.length - 1 ? <Button onClick={() => setStage((current) => current + 1)}>{t("next")}</Button> : <>
-          <Button disabled title={t("release.unavailable")}>{t("release.publishDisabled")}</Button>
-          <Button variant="secondary" onClick={onClose}>{t("finish")}</Button>
-        </>}
+        {stage < stageIds.length - 1 ? <Button onClick={() => setStage((current) => current + 1)}>{t("next")}</Button> :
+          <Button onClick={onClose}>{t("finish")}</Button>}
       </div>
     </div>
   </section>;

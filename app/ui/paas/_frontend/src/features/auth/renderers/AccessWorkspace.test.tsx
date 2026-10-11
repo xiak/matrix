@@ -711,9 +711,13 @@ describe("policy creation entry and directory contract", () => {
     expect(within(releaseGates).getByText("未执行")).toBeTruthy();
     expect(within(releaseGates).getByText("未验证")).toBeTruthy();
     expect(within(releaseGates).getByText("未接入")).toBeTruthy();
-    const publish = screen.getByRole("button", { name: "发布修订（未接入）" }) as HTMLButtonElement;
-    expect(publish.disabled).toBe(true);
-    expect(screen.getByText(/没有对应发布 Action/)).toBeTruthy();
+    const releasePackage = screen.getByRole("region", { name: "签名发布包移交" });
+    expect(within(releasePackage).getByText("ProductAuthorizationReleaseCatalog", { selector: "code" })).toBeTruthy();
+    expect(within(releasePackage).getByText("paas@1", { selector: "code" })).toBeTruthy();
+    expect(within(releasePackage).getAllByText("未提供")).toHaveLength(3);
+    expect(within(releasePackage).getByText(/浏览器没有 Profile 发布 API/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /发布修订/ })).toBeNull();
+    expect(screen.getByText(/属于平台签名发布流水线/)).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
 

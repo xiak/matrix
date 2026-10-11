@@ -2091,11 +2091,10 @@ function policyDigest(value: unknown): string {
 
 const exactPolicyAction = /^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$/;
 const familyPolicyAction = /^[a-z][a-z0-9_-]{0,63}\.[a-z][a-z0-9_-]{0,63}\.\*$/;
-const policyResourceKinds = new Set([
-  "ACCOUNT", "POLICY", "INSTALLATION", "USER", "GROUP", "GROUP_MEMBERSHIP", "POLICY_ATTACHMENT", "SESSION", "ROLE", "ROLE_SESSION", "ACCESS_KEY",
-  "EXECUTION_POOL", "EXECUTION_TARGET", "NODE_ENROLLMENT", "OPERATION", "APPLICATION", "CONFIGURATION", "CONFIGURATION_REVISION", "APPLICATION_REVISION",
-  "DEPLOYMENT", "SERVICE_OFFERING", "REGION", "QUOTA_ENTITLEMENT", "SERVICE_INSTALLATION", "AUDIT_RECORD", "AUDIT_CHAIN"
-]);
+// Resource kinds belong to the exact current product AuthorizationProfile.
+// The console validates only the public wire grammar here; IAM validates the
+// referenced Action/resource pairing against its signed current directory.
+const productAuthorizationResourceKind = /^[A-Z][A-Z0-9_-]{0,63}$/;
 
 function policyTagValue(value: unknown): string {
   const text = accountText(value);
@@ -2127,7 +2126,7 @@ function parsePolicyDocument(value: unknown): AccountPolicyDocument {
       const resource = accountRecord(item);
       exactKeys(resource, ["kind", "match"], ["id"]);
       const match = accountText(resource.match);
-      if (typeof resource.kind !== "string" || !policyResourceKinds.has(resource.kind) ||
+      if (typeof resource.kind !== "string" || !productAuthorizationResourceKind.test(resource.kind) ||
           match !== "EXACT" && match !== "PREFIX_IN_AUTHORITY" && match !== "ANY_IN_AUTHORITY" ||
           match === "ANY_IN_AUTHORITY" && resource.id !== undefined ||
           match !== "ANY_IN_AUTHORITY" && resource.id === undefined) throw new Error("INVALID_IAM_RESPONSE");

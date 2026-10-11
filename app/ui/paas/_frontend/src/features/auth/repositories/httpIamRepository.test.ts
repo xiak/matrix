@@ -1954,6 +1954,14 @@ describe("IAM HTTP account boundary", () => {
     expect(detail.version.document.statements[0]?.actions).toEqual(["paas.application.read"]);
     expect(detail.version.document.statements[0]?.conditions).toEqual(document.statements[0]!.conditions);
 
+    const dynamicDocument = { languageVersion: "1", scope: "TENANT", statements: [{
+      sid: "read-model-jobs", effect: "ALLOW", actions: ["ml.jobs.read"],
+      resources: [{ kind: "MODEL_JOB", match: "ANY_IN_AUTHORITY" }]
+    }] };
+    reply({ ...body, version: { ...version, document: dynamicDocument } });
+    const dynamicDetail = await httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id);
+    expect(dynamicDetail.version.document).toEqual(dynamicDocument);
+
     for (const invalid of [
       { ...body, policy: { ...customerPolicy, accountId: "another-account" } },
       { ...body, policy: { ...customerPolicy, id: "customer.other" } },
@@ -1961,7 +1969,8 @@ describe("IAM HTTP account boundary", () => {
       { ...body, version: { ...version, versionId: "version-other" } },
       { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], actions: ["paas.application.*"] }] } } },
       { ...body, version: { ...version, contractVersion: 2 } },
-      { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], resources: [{ kind: "OTHER", match: "ANY_IN_AUTHORITY" }] }] } } },
+      { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], resources: [{ kind: "model_job", match: "ANY_IN_AUTHORITY" }] }] } } },
+      { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], resources: [{ kind: `A${"B".repeat(64)}`, match: "ANY_IN_AUTHORITY" }] }] } } },
       { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], conditions: [{ key: "request.source-ip", operator: "IP_ADDRESS", values: ["192.0.2.42/24"] }] }] } } },
       { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], conditions: [{ key: "request.tag/environment", operator: "STRING_EQUALS", values: [" production"] }] }] } } },
       { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], conditions: [{ key: "resource.tag/environment", operator: "STRING_EQUALS", values: [" production"] }] }] } } },
