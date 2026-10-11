@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤、可信标签读写及Audit目录已有固定门禁。AccessKey产品消费已覆盖不可变资源图创建、实例读取、Deployment控制、Application声明标签和租户Audit读取，并累计到`91649497`的完整独立CI；当前候选又把额外产品 Profile、服务Role权限上限及模板收敛为一个签名产品授权目录，已通过非空目录的独立PG18动态产品闭环、当前空目录的同Profile签名A/B传输、迁移和离线生命周期，以及测试专用后继`651ef0c64`的17项独立CI。当前尚未随发布物接入额外产品，可信边缘、对应产品业务 PEP及LIVE UI仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤、可信标签读写及Audit目录已有固定门禁。AccessKey产品消费已覆盖不可变资源图创建、实例读取、Deployment控制、Application声明标签和租户Audit读取，并累计到`91649497`的完整独立CI；额外产品 Profile、服务Role权限上限及模板已收敛为一个签名产品授权目录，非空目录的独立PG18动态闭环、当前空目录的同Profile签名A/B传输/迁移/离线生命周期及测试专用后继`651ef0c64`的17项独立CI均已通过，当前发布组合由011接受。尚未随发布物接入额外产品，其可信边缘、真实业务 PEP及LIVE UI仍未完成，整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
