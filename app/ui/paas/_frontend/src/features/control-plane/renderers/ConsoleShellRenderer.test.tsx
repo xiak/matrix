@@ -942,6 +942,31 @@ describe("ConsoleShellRenderer", () => {
     expect(within(menu).queryByRole("link", { name: "产品权限接入" })).toBeNull();
   });
 
+  it("exposes implemented LIVE security workspaces without exposing preview-only IAM pages", async () => {
+    const liveRepository: AccountRepository = {
+      ...previewAccountRepository,
+      workspace: undefined,
+      accessKeys: {} as NonNullable<AccountRepository["accessKeys"]>,
+      accessAnalysis: {} as NonNullable<AccountRepository["accessAnalysis"]>,
+      securityReports: {} as NonNullable<AccountRepository["securityReports"]>
+    };
+    await renderConsole({
+      accountRepository: liveRepository,
+      iamRepository: previewIamRepository,
+      section: "access",
+      view: "users"
+    });
+
+    const menu = await screen.findByRole("navigation", { name: "控制台导航" });
+    expect(within(menu).getByRole("link", { name: "访问密钥" }).getAttribute("href")).toBe("/console/access/keys/");
+    expect(within(menu).getByRole("link", { name: "访问分析" }).getAttribute("href")).toBe("/console/access/access-analysis/");
+    expect(within(menu).getByRole("link", { name: "安全报告" }).getAttribute("href")).toBe("/console/access/security-reports/");
+    expect(within(menu).queryByRole("link", { name: "角色 SSO" })).toBeNull();
+    expect(within(menu).queryByRole("link", { name: "用户 SSO" })).toBeNull();
+    expect(within(menu).queryByRole("link", { name: "跨账号协作" })).toBeNull();
+    expect(within(menu).queryByRole("link", { name: "产品权限接入" })).toBeNull();
+  });
+
   it("projects preview-owned service content immediately when navigation starts from IAM", async () => {
     let releaseRoute!: () => void;
     const load = vi.fn().mockResolvedValue(snapshot);

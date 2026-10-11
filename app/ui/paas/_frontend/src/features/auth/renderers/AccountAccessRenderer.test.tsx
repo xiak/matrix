@@ -1318,26 +1318,18 @@ describe("account access", () => {
     expect(await screen.findByRole("table", { name: "租户用户列表" })).toBeTruthy();
   });
 
-  it("separates the resource owner from subusers and defaults creation to no business grant", async () => {
+  it("separates the resource owner from subusers and does not call the superseded boundary-less LIVE create contract", async () => {
     const { user, repository, view } = await openAccess();
     await screen.findByText("Developer A");
     expect(screen.queryByRole("button", { name: "管理 admin" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "创建用户" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("form", { name: "创建子用户" })).toBeTruthy();
-    await user.type(screen.getByLabelText(/^子用户名/), "new.developer");
-    await user.type(screen.getByLabelText("用户显示名称"), "New Developer");
-    await user.type(screen.getByLabelText(/^初始密码/), "New-Child-Test-Password-49!");
-    await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByText("新用户将按默认拒绝创建，不在创建请求中捆绑权限。")).toBeTruthy();
-    expect(screen.queryByRole("combobox", { name: /^初始权限/ })).toBeNull();
+    expect(screen.queryByRole("form", { name: "创建子用户" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "安全委派创建尚未接入" })).toBeTruthy();
+    expect(screen.getByText(/用户 \+ 初始凭据 \+ 权限边界/)).toBeTruthy();
+    expect(screen.queryByLabelText(/^初始密码/)).toBeNull();
     expect(repository.execute).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.queryByDisplayValue("New-Child-Test-Password-49!")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "确认创建用户" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-user", loginName: "new.developer", displayName: "New Developer", initialPassword: "New-Child-Test-Password-49!" }));
     expect(view.container.textContent).not.toContain(credential);
-    expect(view.container.innerHTML).not.toContain("New-Child-Test-Password-49!");
   });
 
   it("sets an independent account alias with an optimistic version and shows both login forms", async () => {
@@ -3119,7 +3111,7 @@ describe("account access", () => {
     await user.type(screen.getByLabelText("描述", { exact: true }), "Temporary incident response");
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(create).not.toHaveBeenCalled();
-    expect(screen.getByText("本次命令只创建角色元数据", { exact: false })).toBeTruthy();
+    expect(screen.getByText("本次 Root 命令只创建角色元数据", { exact: false })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "新建角色" }));
     expect(await screen.findByText("创建结果尚未确认", { exact: false })).toBeTruthy();
@@ -3134,6 +3126,75 @@ describe("account access", () => {
     expect(await screen.findByRole("heading", { name: "角色已创建" })).toBeTruthy();
     expect(create).toHaveBeenCalledTimes(2);
     expect(create.mock.calls[1]?.[2]).toEqual(original);
+  });
+
+  it("explains delegated role creation without adding a client-selected permission boundary", async () => {
+    const delegatedBoundary = {
+      accountId: account.id,
+      userId: childUser.id,
+      resourceVersion: childUser.resourceVersion,
+      policy: { policyId: "policy-developer-ceiling", versionId: "v4", contentDigest: `sha256:${"c".repeat(64)}` }
+    };
+    const delegatedIdentity: AccountIdentity = {
+      ...identity,
+      user: childUser,
+      identityKind: "USER",
+      permissionBoundary: delegatedBoundary,
+      policySources: child.policyAttachments.map((item) => ({ kind: "DIRECT" as const, attachment: item })),
+      capabilities: [
+        ...identity.capabilities,
+        capability("iam.role.list", "ACCOUNT", account.id),
+        capability("iam.role.create", "ACCOUNT", account.id)
+      ]
+    };
+    const create = vi.fn().mockResolvedValue({ ...managedRole, name: "DelegatedReviewer" });
+    const repository = accounts({
+      currentIdentity: vi.fn().mockResolvedValue(delegatedIdentity),
+      roles: {
+        ...unusedLiveRoleRepositoryMutations(),
+        list: vi.fn().mockResolvedValue(managedRoleDirectory),
+        read: vi.fn().mockResolvedValue(managedRoleAccess),
+        readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: delegatedBoundary.policy }),
+        setPermissionBoundary: vi.fn().mockRejectedValue(new Error("delegated boundary management must stay closed")),
+        removePermissionBoundary: vi.fn().mockRejectedValue(new Error("delegated boundary management must stay closed")),
+        listTrustVersions: vi.fn(),
+        create,
+        listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
+        readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
+        revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke"))
+      }
+    });
+    const { user } = await openAccess(repository, iam({}, childUser.id), "roles");
+
+    await user.click(await screen.findByRole("button", { name: "新建角色" }));
+    expect(screen.getByText("受限委派创建不提供边界选择器", { exact: false })).toBeTruthy();
+    expect(screen.getByText(delegatedBoundary.policy.policyId)).toBeTruthy();
+    expect(screen.getByText(delegatedBoundary.policy.versionId)).toBeTruthy();
+    await user.click(screen.getByRole("checkbox", { name: "developer" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.type(screen.getByLabelText("名称", { exact: true }), "DelegatedReviewer");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+
+    expect(screen.getByText("请求没有边界选择器", { exact: false })).toBeTruthy();
+    expect(screen.getByText("创建时权限上限")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "新建角色" }));
+
+    expect(await screen.findByRole("heading", { name: "角色已创建" })).toBeTruthy();
+    expect(screen.getAllByText("同一事务中创建角色", { exact: false })).toHaveLength(2);
+    const submitted = create.mock.calls[0]?.[2];
+    expect(submitted).toEqual({
+      name: "DelegatedReviewer",
+      description: "",
+      tags: [],
+      maxSessionDurationSeconds: 3600,
+      trustPolicy: {
+        languageVersion: "1",
+        statements: [{ sid: "trusted-users", effect: "ALLOW", principals: [{ type: "USER", id: childUser.id }] }]
+      },
+      requestId: expect.any(String)
+    });
+    expect(submitted).not.toHaveProperty("boundaryId");
+    expect(submitted).not.toHaveProperty("permissionBoundary");
   });
 
   it("loads a fresh tenant policy directory only when inline role-boundary editing opens", async () => {

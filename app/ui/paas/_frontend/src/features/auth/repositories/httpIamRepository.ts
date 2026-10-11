@@ -439,9 +439,10 @@ function parseGroup(value: unknown): Group {
 
 function parseManagedAccessKey(value: unknown): ManagedAccessKey {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "userId", "status", "networkRestrictions", "resourceVersion", "createdAt", "updatedAt"]);
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "userId", "status", "credentialState", "networkRestrictions", "resourceVersion", "createdAt", "updatedAt"]);
   requireAccountKind(wire, "AccessKey");
   if (wire.status !== "ENABLED" && wire.status !== "DISABLED") throw new Error("INVALID_IAM_RESPONSE");
+  if (wire.credentialState !== "CURRENT" && wire.credentialState !== "RECOVERY_FENCED") throw new Error("INVALID_IAM_RESPONSE");
   const resourceVersion = accountVersion(wire.resourceVersion);
   if (resourceVersion === 1 && wire.status !== "ENABLED") throw new Error("INVALID_IAM_RESPONSE");
   return {
@@ -449,6 +450,7 @@ function parseManagedAccessKey(value: unknown): ManagedAccessKey {
     accountId: accountIdentifier(wire.accountId),
     userId: accountIdentifier(wire.userId),
     status: wire.status,
+    credentialState: wire.credentialState,
     networkRestrictions: parseAccessKeyNetworkRestrictions(wire.networkRestrictions),
     resourceVersion,
     ...chronologicalTimestamps(wire.createdAt, wire.updatedAt)
@@ -524,13 +526,13 @@ function parseAccessKeyCreation(value: unknown, accountId: string, userId: strin
     exactKeys(wire, ["outcome", "key", "secret"]);
     if (typeof wire.secret !== "string" || wire.secret.length < 1 || wire.secret.length > 16384) throw new Error("INVALID_IAM_RESPONSE");
     const key = parseManagedAccessKey(wire.key);
-    if (key.accountId !== accountId || key.userId !== userId || key.resourceVersion !== 1 || key.status !== "ENABLED") throw new Error("INVALID_IAM_RESPONSE");
+    if (key.accountId !== accountId || key.userId !== userId || key.resourceVersion !== 1 || key.status !== "ENABLED" || key.credentialState !== "CURRENT") throw new Error("INVALID_IAM_RESPONSE");
     return { outcome: "APPLIED", key, secret: wire.secret };
   }
   if (wire.outcome !== "EQUAL_REPLAY") throw new Error("INVALID_IAM_RESPONSE");
   exactKeys(wire, ["outcome", "key"]);
   const key = parseManagedAccessKey(wire.key);
-  if (key.accountId !== accountId || key.userId !== userId || key.resourceVersion !== 1 || key.status !== "ENABLED") throw new Error("INVALID_IAM_RESPONSE");
+  if (key.accountId !== accountId || key.userId !== userId || key.resourceVersion !== 1 || key.status !== "ENABLED" || key.credentialState !== "CURRENT") throw new Error("INVALID_IAM_RESPONSE");
   return { outcome: "EQUAL_REPLAY", key };
 }
 
@@ -2089,11 +2091,10 @@ function policyDigest(value: unknown): string {
 
 const exactPolicyAction = /^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$/;
 const familyPolicyAction = /^[a-z][a-z0-9_-]{0,63}\.[a-z][a-z0-9_-]{0,63}\.\*$/;
-const policyResourceKinds = new Set([
-  "ACCOUNT", "POLICY", "INSTALLATION", "USER", "GROUP", "GROUP_MEMBERSHIP", "POLICY_ATTACHMENT", "SESSION", "ROLE", "ROLE_SESSION", "ACCESS_KEY",
-  "EXECUTION_POOL", "EXECUTION_TARGET", "NODE_ENROLLMENT", "OPERATION", "APPLICATION", "CONFIGURATION", "CONFIGURATION_REVISION", "APPLICATION_REVISION",
-  "DEPLOYMENT", "SERVICE_OFFERING", "REGION", "QUOTA_ENTITLEMENT", "SERVICE_INSTALLATION", "AUDIT_RECORD", "AUDIT_CHAIN"
-]);
+// Resource kinds belong to the exact current product AuthorizationProfile.
+// The console validates only the public wire grammar here; IAM validates the
+// referenced Action/resource pairing against its signed current directory.
+const productAuthorizationResourceKind = /^[A-Z][A-Z0-9_-]{0,63}$/;
 
 function policyTagValue(value: unknown): string {
   const text = accountText(value);
@@ -2125,7 +2126,7 @@ function parsePolicyDocument(value: unknown): AccountPolicyDocument {
       const resource = accountRecord(item);
       exactKeys(resource, ["kind", "match"], ["id"]);
       const match = accountText(resource.match);
-      if (typeof resource.kind !== "string" || !policyResourceKinds.has(resource.kind) ||
+      if (typeof resource.kind !== "string" || !productAuthorizationResourceKind.test(resource.kind) ||
           match !== "EXACT" && match !== "PREFIX_IN_AUTHORITY" && match !== "ANY_IN_AUTHORITY" ||
           match === "ANY_IN_AUTHORITY" && resource.id !== undefined ||
           match !== "ANY_IN_AUTHORITY" && resource.id === undefined) throw new Error("INVALID_IAM_RESPONSE");
@@ -2529,12 +2530,13 @@ function parseAccountSecurityReportMetadata(value: unknown, expectedAccountId: s
   const accessKeyCount = securityReportCount(wire.accessKeyCount, accountSecurityReportLimits.accessKeys);
   const rowCount = securityReportCount(wire.rowCount, accountSecurityReportLimits.rows);
   const csvBytes = securityReportCount(wire.csvBytes, accountSecurityReportLimits.csvBytes);
+  const formatVersion = wire.formatVersion;
   const retentionMicros = BigInt(accountSecurityReportLimits.retainedDays * 24 * 60 * 60) * 1_000_000n;
-  if (accountId !== accountIdentifier(expectedAccountId) || expectedReportId !== undefined && id !== accountIdentifier(expectedReportId) || wire.formatVersion !== 1 ||
+  if (accountId !== accountIdentifier(expectedAccountId) || expectedReportId !== undefined && id !== accountIdentifier(expectedReportId) || formatVersion !== 1 && formatVersion !== 2 ||
       timestampMicros(expiresAt) - timestampMicros(observedAt) !== retentionMicros || rowCount !== 1 + userCount + accessKeyCount || csvBytes < 1) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
-  return { apiVersion: "iam.matrix.xiak.com/v1", kind: "AccountSecurityReportMetadata", id, accountId, formatVersion: 1,
+  return { apiVersion: "iam.matrix.xiak.com/v1", kind: "AccountSecurityReportMetadata", id, accountId, formatVersion,
     observedAt, expiresAt, documentDigest: securityReportDigest(wire.documentDigest), csvContentDigest: securityReportDigest(wire.csvContentDigest),
     userCount, accessKeyCount, rowCount, csvBytes };
 }
@@ -2581,14 +2583,16 @@ function parseSecurityReportUser(value: unknown, observedAt: string): SecurityRe
     mfa: parseSecurityReportMFA(wire.mfa), lastPasswordLogin: parseSecurityReportObservation(wire.lastPasswordLogin, createdAt, observedAt) };
 }
 
-function parseSecurityReportAccessKey(value: unknown, observedAt: string): SecurityReportAccessKey {
+function parseSecurityReportAccessKey(value: unknown, observedAt: string, formatVersion: 1 | 2): SecurityReportAccessKey {
   const wire = accountRecord(value);
-  exactKeys(wire, ["id", "userId", "status", "networkRestrictions", "resourceVersion", "createdAt"], ["lastAuthorization"]);
+  exactKeys(wire, ["id", "userId", "status", "networkRestrictions", "resourceVersion", "createdAt", ...(formatVersion === 2 ? ["credentialState"] : [])], ["lastAuthorization"]);
   const createdAt = accountTimestamp(wire.createdAt);
   if (wire.status !== "ENABLED" && wire.status !== "DISABLED" || timestampOrder(createdAt) > timestampOrder(observedAt)) throw new Error("INVALID_IAM_RESPONSE");
+  if (formatVersion === 2 && wire.credentialState !== "CURRENT" && wire.credentialState !== "RECOVERY_FENCED") throw new Error("INVALID_IAM_RESPONSE");
   const usage = parseAccessKeyUsage({ observedAt, ...(wire.lastAuthorization === undefined ? {} : { lastAuthorization: wire.lastAuthorization }) });
   if (usage.lastAuthorization && timestampOrder(usage.lastAuthorization.evaluatedAt) < timestampOrder(createdAt)) throw new Error("INVALID_IAM_RESPONSE");
   return { id: accountIdentifier(wire.id), userId: accountIdentifier(wire.userId), status: wire.status,
+    ...(formatVersion === 2 ? { credentialState: wire.credentialState as "CURRENT" | "RECOVERY_FENCED" } : {}),
     networkRestrictions: parseAccessKeyNetworkRestrictions(wire.networkRestrictions), resourceVersion: accountVersion(wire.resourceVersion), createdAt,
     ...(usage.lastAuthorization ? { lastAuthorization: usage.lastAuthorization } : {}) };
 }
@@ -2608,7 +2612,7 @@ function parseAccountSecurityReport(value: unknown, accountId: string, reportId?
     return { source: expected[0], state: expected[1] };
   });
   const users = wire.users.map((item) => parseSecurityReportUser(item, metadata.observedAt));
-  const accessKeys = wire.accessKeys.map((item) => parseSecurityReportAccessKey(item, metadata.observedAt));
+  const accessKeys = wire.accessKeys.map((item) => parseSecurityReportAccessKey(item, metadata.observedAt, metadata.formatVersion));
   if (users.length !== metadata.userCount || accessKeys.length !== metadata.accessKeyCount || users.filter((user) => user.root).length !== 1 ||
       users.some((user, index) => index > 0 && users[index - 1]!.id >= user.id) ||
       accessKeys.some((key, index) => index > 0 && accessKeys[index - 1]!.id >= key.id) ||
@@ -2620,7 +2624,9 @@ function parseAccountSecurityReportCreation(value: unknown, accountId: string, r
   const wire = accountRecord(value);
   exactKeys(wire, ["outcome", "metadata"]);
   if (wire.outcome !== "APPLIED" && wire.outcome !== "EQUAL_REPLAY" || !requestId) throw new Error("INVALID_IAM_RESPONSE");
-  return { outcome: wire.outcome, metadata: parseAccountSecurityReportMetadata(wire.metadata, accountId) };
+  const metadata = parseAccountSecurityReportMetadata(wire.metadata, accountId);
+  if (metadata.formatVersion !== 2) throw new Error("INVALID_IAM_RESPONSE");
+  return { outcome: wire.outcome, metadata };
 }
 
 async function createAccountSecurityReport(credential: string, accountId: string, requestId: string): Promise<AccountSecurityReportCreation> {
@@ -2628,7 +2634,7 @@ async function createAccountSecurityReport(credential: string, accountId: string
     method: "POST",
     cache: "no-store",
     headers: { ...accountHeaders(credential), Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({ formatVersion: 1, requestId })
+    body: JSON.stringify({ formatVersion: 2, requestId })
   });
   let body: unknown;
   try { body = await response.json(); }
@@ -2782,7 +2788,7 @@ export const httpAccountRepository: AccountRepository = {
   securityReports: {
     async create(credential, accountId, command) {
       const owner = accountIdentifier(accountId);
-      if (command.formatVersion !== 1) throw new Error("INVALID_IAM_REQUEST");
+      if (command.formatVersion !== 2) throw new Error("INVALID_IAM_REQUEST");
       const requestId = accountIdentifier(command.requestId);
       return createAccountSecurityReport(credential, owner, requestId);
     },
@@ -3495,7 +3501,7 @@ export const httpAccountRepository: AccountRepository = {
     let path: string;
     let body: object;
     switch (command.kind) {
-      case "create-user": path = "/api/iam/v1/users"; body = { loginName: command.loginName, displayName: command.displayName, initialPassword: command.initialPassword }; break;
+      case "create-user": path = "/api/iam/v1/users"; body = { loginName: command.loginName, displayName: command.displayName, initialPassword: command.initialPassword, permissionBoundary: null }; break;
       case "set-alias": path = "/api/iam/v1/account:alias"; body = { alias: command.alias, resourceVersion: command.resourceVersion }; break;
       case "update-user": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:update`; body = { displayName: command.displayName, resourceVersion: command.resourceVersion }; break;
       case "delete-user": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:delete`; body = { resourceVersion: command.resourceVersion }; break;

@@ -14,7 +14,12 @@ import styles from "./PolicyAuthoringWizard.module.css";
 
 type ValidationError = "invalidTrust" | "invalidName" | "invalidMetadata";
 
-/** Live role creation owns metadata and the initial USER trust document only. Grants and the mandatory boundary remain separate commands. */
+/**
+ * The public create command owns metadata and the initial USER trust document.
+ * IAM, not the browser, derives a delegated USER's exact permission ceiling and
+ * persists it atomically with the new Role. Root creation keeps boundary setup
+ * as a separate command. Neither path attaches grants or issues credentials.
+ */
 export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
   client: RoleAccessClient;
   scene: AccountAccessScene;
@@ -53,6 +58,10 @@ export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
   });
   const trustedUsers = scene.users.map((user) => ({ id: user.id, name: user.loginName, description: user.name }));
   const trustedDirectory = new Set(trustedUsers.map((user) => user.id));
+  const delegatedCreation = !scene.isRoot;
+  const delegatedCeiling = scene.permissionBoundary.policy;
+  const createdHint = delegatedCreation ? "liveDelegatedCreatedHint" : "liveRootCreatedHint";
+  const creationScope = delegatedCreation ? "liveDelegatedCreationScope" : "liveRootCreationScope";
 
   useLayoutEffect(() => {
     latestClient.current = client;
@@ -163,19 +172,22 @@ export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
     <Wizard label={w("createRole")} steps={steps.map((key) => ({ id: key, label: t(`liveSteps.${key}`) }))} currentStep={step}
       onStepChange={(next) => { if (!uncertain) { setValidationError(null); setLiveError(null); setStep(next); } }} completed={created} busy={busy}
       formRef={form} onSubmit={submit} title={created ? t("created") : t(`liveSteps.${currentStep}`)}
-      description={created ? t("liveCreatedHint") : t(`liveHints.${currentStep}`)} progressLabel={u("stepCount", { current: step + 1, total: 3 })}
+      description={created ? t(createdHint) : t(`liveHints.${currentStep}`)} progressLabel={u("stepCount", { current: step + 1, total: 3 })}
       hint={<><ShieldCheck aria-hidden="true" />{t("liveCreateHint")}</>}
       actions={created ? <Button onClick={() => onDone(createdId!)}>{t("viewRole")}</Button> : <>
         <Button variant="ghost" disabled={busy} onClick={cancel}>{w("cancel")}</Button>
         {step && !uncertain ? <Button variant="secondary" disabled={busy} onClick={() => { setStep(step - 1); setValidationError(null); }}>{a("previousStep")}</Button> : null}
         <Button type="submit" disabled={busy || !client.canCreate}>{busy ? t("saving") : uncertain ? t("retryOriginalRequest") : step < 2 ? t("next") : w("createRole")}</Button>
       </>}>
-      {created ? <Alert status="success">{t("liveCreatedHint")}</Alert> : <fieldset className={styles.stack} disabled={Boolean(uncertain)}>
+      {created ? <Alert status="success">{t(createdHint)}</Alert> : <fieldset className={styles.stack} disabled={Boolean(uncertain)}>
         {validationError ? <Alert status="danger" tabIndex={-1}>{t(`liveErrors.${validationError}`)}</Alert> : null}
         {uncertain ? <Alert status="warning" tabIndex={-1}>{t("createOutcomeUnknown")} <code>{uncertain.requestId}</code></Alert> : null}
         {!client.canCreate ? <Alert status="warning">{client.createRestrictionReason ?? a("errors.forbidden")}</Alert> : null}
         {step === 0 ? <div className={styles.stack}>
           <Alert>{t("liveTrustCreateHint")}</Alert>
+          <Alert>{delegatedCreation ? <>
+            {t("liveDelegatedBoundaryHint")}{delegatedCeiling ? <> <code>{delegatedCeiling.policyId}</code> · <code>{delegatedCeiling.versionId}</code></> : null}
+          </> : t("liveRootBoundaryHint")}</Alert>
           {!scene.directoryComplete ? <Alert status="warning">{t("loadedUsersOnly")}</Alert> : null}
           <WorkspaceSelection label={t("trustedUsers")} options={trustedUsers} value={trustedUserIds} limit={256}
             onChange={(ids) => changeIntent(() => setTrustedUserIds(ids))} />
@@ -195,11 +207,14 @@ export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
           <section className={styles.section}><h3>{t("tags")}</h3><RoleTags value={tags} onChange={(value) => changeIntent(() => setTags(value))} /></section>
         </div> : null}
         {step === 2 ? <div className={styles.stack}>
-          <Alert>{t("liveCreationScope")}</Alert>
+          <Alert>{t(creationScope)}</Alert>
           <dl className={styles.facts}>
             <div><dt>{w("name")}</dt><dd>{name.trim()}</dd></div>
             <div><dt>{w("description")}</dt><dd>{description.trim() || "—"}</dd></div>
             <div><dt>{t("trustedUsers")}</dt><dd>{trustedUserIds.map((userId) => scene.users.find((user) => user.id === userId)?.loginName ?? userId).join(" · ")}</dd></div>
+            <div><dt>{t("creationBoundary")}</dt><dd>{delegatedCreation
+              ? delegatedCeiling ? <><code>{delegatedCeiling.policyId}</code> · <code>{delegatedCeiling.versionId}</code></> : t("serverVerifiedBoundary")
+              : t("rootBoundarySeparate")}</dd></div>
             <div><dt>{w("sessionMinutes")}</dt><dd>{sessionMinutes}</dd></div>
             <div><dt>{t("tags")}</dt><dd>{tags.length ? tags.map((tag) => <Badge key={tag.key}>{tag.key}: {tag.value || "—"}</Badge>) : "—"}</dd></div>
           </dl>

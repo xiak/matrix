@@ -20,6 +20,7 @@ const owner = {
 } as const;
 const scene = { accountId: "account-acme", accountOwner: { id: "root-acme" }, users: [owner] } as unknown as AccountAccessScene;
 const key = { id: "mak1.alex-primary", accountId: scene.accountId, userId: owner.id, status: "ENABLED" as const, resourceVersion: 1,
+  credentialState: "CURRENT" as const,
   networkRestrictions: { allowedSourceCidrs: ["198.51.100.0/24"] },
   createdAt: "2026-09-21T08:00:00Z", updatedAt: "2026-09-21T08:00:00Z" };
 const directory = {
@@ -122,7 +123,10 @@ describe("LiveAccessCredentials", () => {
     expect(screen.queryByRole("button", { name: "管理 alex 的访问密钥" })).toBeNull();
     expect(await screen.findByRole("button", { name: key.id })).toBeTruthy();
     const table = screen.getByRole("table", { name: "访问密钥" });
-    expect(within(table).getAllByRole("columnheader")).toHaveLength(4);
+    expect(within(table).getAllByRole("columnheader")).toHaveLength(5);
+    expect(within(table).getByRole("columnheader", { name: "凭据状态" })).toBeTruthy();
+    expect(within(table).getByRole("columnheader", { name: "管理状态" })).toBeTruthy();
+    expect(within(table).getByText("未被恢复围栏")).toBeTruthy();
     expect(within(table).getByRole("columnheader", { name: "安全观测" })).toBeTruthy();
     expect(await within(table).findByText("账号 + 密钥")).toBeTruthy();
     expect(within(table).getByText("有历史观测")).toBeTruthy();
@@ -196,6 +200,27 @@ describe("LiveAccessCredentials", () => {
     await user.click(screen.getByRole("button", { name: "返回列表" }));
     expect(screen.getByRole("heading", { level: 1, name: "alex · 访问密钥" })).toBeTruthy();
     expect(screen.getByRole("button", { name: key.id })).toBeTruthy();
+  });
+
+  it("never presents enable or network editing as a repair for a recovery-fenced LIVE key", async () => {
+    const user = userEvent.setup();
+    const fencedKey = { ...key, credentialState: "RECOVERY_FENCED" as const };
+    const fencedDirectory = { ...directory, items: [{ ...directory.items[0]!, key: fencedKey }] };
+    const api = client({ list: vi.fn().mockResolvedValue(fencedDirectory), read: vi.fn().mockResolvedValue(fencedDirectory.items[0]) });
+    render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+
+    const table = await screen.findByRole("table", { name: "访问密钥" });
+    expect(within(table).getByText("恢复后永久失效")).toBeTruthy();
+    expect(within(table).getByText("已启用")).toBeTruthy();
+    await user.click(within(table).getByRole("button", { name: fencedKey.id }));
+    expect(await screen.findByText(/原密钥已因恢复永久失效/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "禁用" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "启用" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    const menu = within(screen.getByRole("menu", { name: "更多操作" }));
+    expect(menu.getByRole("menuitem", { name: "创建新密钥" })).toBeTruthy();
+    expect(menu.queryByRole("menuitem", { name: "配置来源网络" })).toBeNull();
+    expect(menu.getByRole("menuitem", { name: "删除" }).getAttribute("aria-disabled")).toBe("true");
   });
 
   it("loads only the selected user's directory and keeps fixed page content visible", async () => {

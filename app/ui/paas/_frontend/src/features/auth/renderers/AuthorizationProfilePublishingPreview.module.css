@@ -106,6 +106,19 @@
 .releaseReference { display: grid; grid-template-columns: minmax(110px, .6fr) minmax(90px, .35fr) minmax(0, 2fr); border-block: var(--xiak-border-subtle); }
 .releaseReference > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); }
 .releaseReference strong { min-width: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
+.releasePackage { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); }
+.releasePackageHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.releasePackageHeading > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.releasePackageHeading h4, .releasePackageHeading p { margin: 0; }
+.releasePackageHeading h4 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); }
+.releasePackageHeading p, .releasePackageGrid small { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.releasePackageGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; }
+.releasePackageGrid > div { display: grid; align-content: start; min-width: 0; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); }
+.releasePackageGrid > div:first-child { grid-column: 1 / -1; }
+.releasePackageGrid dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.releasePackageGrid dd { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; gap: var(--xiak-spacing-narrow); margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
+.releasePackageGrid dd small { flex-basis: 100%; }
+.releasePackageGrid code { white-space: normal; overflow-wrap: anywhere; }
 .boundaries { padding-inline-start: var(--xiak-spacing-comfortable); list-style: disc; color: var(--xiak-color-text-base); line-height: 1.65; }
 .releaseGates { display: grid; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
 .releaseGatesHeading { display: grid; gap: var(--xiak-spacing-micro); }
@@ -138,7 +151,10 @@
   .templateReferences { grid-template-columns: minmax(0, 1fr); }
   .templateChecks li { grid-template-columns: 24px minmax(0, 1fr); }
   .templateChecks li > :last-child { grid-column: 2; justify-self: start; }
-  .snapshot, .releaseReference, .releaseGateGrid { grid-template-columns: minmax(0, 1fr); }
+  .snapshot, .releaseReference, .releasePackageGrid, .releaseGateGrid { grid-template-columns: minmax(0, 1fr); }
+  .releasePackageHeading { align-items: stretch; flex-direction: column; }
+  .releasePackageHeading > :last-child { align-self: flex-start; }
+  .releasePackageGrid > div:first-child { grid-column: auto; }
   .snapshot > div + div { border-inline-start: 0; border-top: var(--xiak-border-subtle); }
   .releaseReference > div + div { border-top: var(--xiak-border-subtle); }
   .actions { align-items: stretch; flex-direction: column-reverse; }

@@ -105,6 +105,7 @@ function GroupAssociationEditor({ group, workspace, scene, change, onClose }: {
   >
     {review ? <>
       <Alert status={change.mode === "remove" ? "warning" : "info"}>
+        {change.kind === "members" ? `${t("multiMemberConceptHint")} ` : null}
         {t("impact", { count: affected.length })} {change.mode === "remove" ? t("remainingSources") : null}
       </Alert>
       <section className={styles.stack}>
@@ -127,8 +128,11 @@ function GroupAssociationEditor({ group, workspace, scene, change, onClose }: {
         </Button>
       </div>
     </> : <>
-      <Alert>{t(change.kind === "members" ? "membershipHint" : "policyChangeHint")}</Alert>
-      <WorkspaceSelection label={label} options={options} value={selection} onChange={setSelection} limit={1} />
+      <Alert>
+        {t(change.kind === "members" ? "membershipHint" : "policyChangeHint")}
+        {change.kind === "members" ? ` ${t("multiMemberConceptHint")}` : null}
+      </Alert>
+      <WorkspaceSelection label={label} options={options} value={selection} onChange={setSelection} limit={change.kind === "members" ? 30 : 1} />
     </>}
   </WorkspaceInlineForm>;
 }

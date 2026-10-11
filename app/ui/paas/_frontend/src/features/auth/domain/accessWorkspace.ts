@@ -25,6 +25,7 @@ export type AccessKey = {
   id: string;
   ownerId: string;
   status: "ENABLED" | "DISABLED";
+  credentialState: "CURRENT" | "RECOVERY_FENCED";
   resourceVersion: number;
   createdAt: string;
   networkRestrictions: AccessKeyNetworkRestrictions;
@@ -92,7 +93,7 @@ export type AccessWorkspace = {
   testRequests: { id: "path" | "duplicate" | "tags" | "deny" | "boundary" | "ungranted"; request: AccessTestRequest }[];
 };
 export type AccessWorkspaceCommand =
-  | { kind: "create-subuser"; loginName: string; displayName: string; profile: PreviewUserProfile; policyIds: string[]; groupIds: string[] }
+  | { kind: "create-subuser"; loginName: string; displayName: string; profile: PreviewUserProfile; policyIds: string[]; groupIds: string[]; boundaryPolicyId: string | null }
   | { kind: "create-group"; name: string; description: string }
   | { kind: "update-group"; id: string; name: string; description: string }
   | { kind: "change-group-members"; id: string; added: string[]; removed: string[] }
@@ -232,10 +233,12 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       if (!/^[a-z][a-z0-9._-]{2,63}$/.test(command.loginName) || !command.displayName.trim() || command.displayName.length > 128 ||
         (!profile.consoleAccess && !profile.programmaticAccess) || profile.tags.length > 10 ||
         profile.tags.some((tag) => !tag.key.trim() || tag.key.length > 64 || tag.value.length > 128 || /[<>\u0000-\u001f]/.test(tag.key + tag.value)) ||
-        new Set(profile.tags.map((tag) => tag.key.trim())).size !== profile.tags.length || command.policyIds.length > 30 || command.groupIds.length > 30) invalid();
+        new Set(profile.tags.map((tag) => tag.key.trim())).size !== profile.tags.length || command.policyIds.length > 30 || command.groupIds.length > 30 ||
+        command.boundaryPolicyId !== null && typeof command.boundaryPolicyId !== "string") invalid();
       if (principalId === context.primaryPrincipalId || context.userIds.includes(principalId) || state.userProfiles[principalId]) throw new AccessWorkspaceError("duplicate");
       const selectedPolicies = policies(command.policyIds);
       command.groupIds.forEach((group) => exists(state.groups, group));
+      if (command.boundaryPolicyId !== null) state.userBoundaries[principalId] = exists(state.policies, command.boundaryPolicyId).id;
       state.userProfiles[principalId] = { consoleAccess: profile.consoleAccess, programmaticAccess: profile.programmaticAccess, passwordResetRequired: profile.consoleAccess && profile.passwordResetRequired, loginProtection: profile.consoleAccess && profile.loginProtection, tags: profile.tags.map((tag) => ({ key: tag.key.trim(), value: tag.value.trim() })) };
       state.userPolicies[principalId] = selectedPolicies;
       for (const group of state.groups) if (command.groupIds.includes(group.id)) group.memberIds.push(principalId);
@@ -402,7 +405,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       state.roles = state.roles.filter((entry) => entry.id !== id); break;
     case "create-key":
       if (state.pendingKeyCreation || command.ownerState !== "active" || !context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !accessKeyNetworkRestrictionsValid(command.networkRestrictions) || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
-      state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt, networkRestrictions: structuredClone(command.networkRestrictions), usage: { observedAt: createdAt } });
+      state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", credentialState: "CURRENT", resourceVersion: 1, createdAt, networkRestrictions: structuredClone(command.networkRestrictions), usage: { observedAt: createdAt } });
       if (command.responseMode === "response-lost") state.pendingKeyCreation = { ownerId: command.ownerId, userResourceVersion: command.userResourceVersion, networkRestrictions: structuredClone(command.networkRestrictions), requestId: command.requestId, status: "UNKNOWN" };
       target = "MOCK-" + id; break;
     case "inspect-key-creation": {

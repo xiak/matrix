@@ -20,6 +20,21 @@ describe("lossless catalog-backed policy visual authoring", () => {
     expect(visualActionGroups(catalog).map((group) => [group.product, group.resourceKind, group.actions.length])).toEqual([["paas", "APPLICATION", 3]]);
     expect(visualDraftFromJSON(JSON.stringify(document), catalog)).toEqual({ status: "ready", document });
   });
+  it("discovers unfamiliar product resource kinds from the current Profile directory", () => {
+    const dynamicCatalog = structuredClone(catalog);
+    dynamicCatalog.items.push({ profile: { product: "ml", revision: 7, callingService: "ML", actions: [{
+      action: "ml.jobs.read", resourceKind: "MODEL_JOB", scope: "TENANT",
+      resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }]
+    }] }, contentDigest: `sha256:${"b".repeat(64)}` });
+    expect(visualActionGroups(dynamicCatalog).map((group) => [group.product, group.resourceKind, group.actions.map((action) => action.action)])).toEqual([
+      ["ml", "MODEL_JOB", ["ml.jobs.read"]],
+      ["paas", "APPLICATION", ["paas.application.delete", "paas.application.list", "paas.application.read"]]
+    ]);
+    const dynamicDocument = { languageVersion: "1", scope: "TENANT", statements: [{ sid: "read-model-job", effect: "ALLOW",
+      actions: ["ml.jobs.read"], resources: [{ kind: "MODEL_JOB", match: "EXACT", id: "job-production" }] }] };
+    expect(visualDraftFromJSON(JSON.stringify(dynamicDocument), dynamicCatalog)).toEqual({ status: "ready", document: dynamicDocument });
+    expect(visualDraftFromJSON(JSON.stringify(dynamicDocument), catalog).status).toBe("catalogMismatch");
+  });
   it("never converts unknown fields or frozen action families into a partial visual form", () => {
     expect(visualDraftFromJSON(JSON.stringify({ ...document, comment: "must not disappear" }), catalog).status).toBe("shapeInvalid");
     expect(visualDraftFromJSON(JSON.stringify({ ...document, statements: [{ ...document.statements[0], actions: ["paas.application.*"] }] }), catalog).status).toBe("catalogMismatch");

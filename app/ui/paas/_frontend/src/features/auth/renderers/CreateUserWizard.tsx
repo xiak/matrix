@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowRight, Check, CheckCircle2, Code2, ShieldCheck, UserRound } from "lucide-react";
-import { ContentPage, Alert, Badge, Button, Checkbox, FormField, Input, PasswordInput, Radio, RadioGroup, TagEditor, Wizard } from "@ui/xiak";
+import { ContentPage, Alert, Badge, Button, Checkbox, EmptyState, FormField, Input, PasswordInput, Radio, RadioGroup, Select, TagEditor, Wizard } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { PreviewUserProfile } from "../domain/accessWorkspace";
 import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
@@ -12,8 +12,8 @@ import { useAccessDraft } from "./useAccessDraft";
 import styles from "./CreateUserWizard.module.css";
 
 type Step = "type" | "identity" | "permissions" | "tags" | "review";
-type ErrorKey = "invalidLogin" | "duplicateLogin" | "requiredName" | "requiredAccess" | "invalidTags" | "passwordHint" | "reenterPassword";
-type Errors = Partial<Record<"login" | "name" | "access" | "password" | "tags", ErrorKey>>;
+type ErrorKey = "invalidLogin" | "duplicateLogin" | "requiredName" | "requiredAccess" | "requiredBoundary" | "invalidTags" | "passwordHint" | "reenterPassword";
+type Errors = Partial<Record<"login" | "name" | "access" | "password" | "boundary" | "tags", ErrorKey>>;
 
 export function CreateUserWizard({ onBack }: { onBack(): void }) {
   const access = useAccountAccess();
@@ -32,6 +32,7 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
   const [passwordMode, setPasswordMode] = useState("auto");
   const [profile, setProfile] = useState<PreviewUserProfile>({ consoleAccess: true, programmaticAccess: false, passwordResetRequired: true, loginProtection: true, tags: [] });
   const [permissions, setPermissions] = useState<UserPermissions>({ policyIds: [], groupIds: [] });
+  const [boundaryChoice, setBoundaryChoice] = useState("");
   const [errors, setErrors] = useState<Errors>({});
   const [complete, setComplete] = useState(false);
   const workspace = access.workspace;
@@ -40,13 +41,17 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
   const steps: Step[] = preview ? ["type", "identity", "permissions", "tags", "review"] : ["identity", "permissions", "review"];
   const current = steps[step] ?? "review";
   const busy = access.busy || access.loading;
-  const dirty = Boolean(login || name || password || permissions.policyIds.length || permissions.groupIds.length || profile.tags.length || persona !== "person"
+  const dirty = Boolean(login || name || password || permissions.policyIds.length || permissions.groupIds.length || boundaryChoice || profile.tags.length || persona !== "person"
     || passwordMode !== "auto" || !profile.consoleAccess || profile.programmaticAccess || !profile.passwordResetRequired || !profile.loginProtection);
   const requestLeave = useAccessDraft({ dirty: dirty && !complete, busy: access.busy, title: t("cancelTitle"), description: t("cancelHint"), form });
   useEffect(() => { if (Object.keys(errors).length) form.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(); }, [errors]);
   if (!scene) return null;
   function changeStep(next: number) { setErrors({}); setStep(next); }
   function cancel() { requestLeave(() => { setPassword(""); onBack(); }); }
+  if (!workspace) return <div className={styles.wizard}>
+    <ContentPage.Heading title={a("createUserTitle")} scrollKey="create-user-unavailable" back={{ label: t("backUsers"), parentLabel: a("usersTitle"), disabled: busy, onClick: cancel }} />
+    <EmptyState title={t("livePendingTitle")} description={t("livePendingHint")} action={<Button variant="secondary" onClick={cancel}>{t("backUsers")}</Button>} />
+  </div>;
   function validateIdentity(): Errors {
     const result: Errors = {};
     if (!/^[a-z][a-z0-9._-]{2,63}$/.test(login.trim())) result.login = "invalidLogin";
@@ -56,23 +61,27 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
     if ((!preview || (profile.consoleAccess && passwordMode === "custom")) && !withinNewPasswordProductBounds(password)) result.password = "passwordHint";
     return result;
   }
+  function validatePermissions(): Errors {
+    return boundaryChoice ? {} : { boundary: "requiredBoundary" };
+  }
   function validateTags(): Errors {
     return profile.tags.some((tag) => !tag.key.trim() || /[<>\u0000-\u001f]/.test(tag.key + tag.value)) || new Set(profile.tags.map((tag) => tag.key.trim())).size !== profile.tags.length ? { tags: "invalidTags" } : {};
   }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy || submitting.current) return;
-    const invalid = current === "identity" ? validateIdentity() : current === "tags" ? validateTags() : {};
+    const invalid = current === "identity" ? validateIdentity() : current === "permissions" ? validatePermissions() : current === "tags" ? validateTags() : {};
     if (Object.keys(invalid).length) { setErrors(invalid); return; }
     if (current !== "review") { changeStep(step + 1); return; }
     const identityErrors = validateIdentity();
     if (Object.keys(identityErrors).length) { setStep(steps.indexOf("identity")); setErrors(identityErrors); return; }
+    const permissionErrors = validatePermissions();
+    if (Object.keys(permissionErrors).length) { setStep(steps.indexOf("permissions")); setErrors(permissionErrors); return; }
     const tagErrors = validateTags();
     if (preview && Object.keys(tagErrors).length) { setStep(steps.indexOf("tags")); setErrors(tagErrors); return; }
     submitting.current = true;
-    const initialPassword = password;
     setPassword("");
-    const accepted = preview ? Boolean(await access.executeWorkspace({ kind: "create-subuser", loginName: login.trim(), displayName: name.trim(), profile, ...permissions })) : await access.execute({ kind: "create-user", loginName: login.trim(), displayName: name.trim(), initialPassword });
+    const accepted = Boolean(await access.executeWorkspace({ kind: "create-subuser", loginName: login.trim(), displayName: name.trim(), profile, ...permissions, boundaryPolicyId: boundaryChoice === "none" ? null : boundaryChoice }));
     submitting.current = false;
     if (accepted) setComplete(true);
     else { setStep(steps.indexOf("identity")); if (!preview || passwordMode === "custom") setErrors({ password: "reenterPassword" }); }
@@ -106,11 +115,22 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
                 {preview ? <div className={styles.securityOptions}><Checkbox checked={profile.passwordResetRequired} onChange={(event) => updateProfile({ passwordResetRequired: event.target.checked })}>{t("forceReset")}</Checkbox><Checkbox checked={profile.loginProtection} onChange={(event) => updateProfile({ loginProtection: event.target.checked })}>{t("loginProtection")}</Checkbox><p className={styles.muted}>{t("mockSecurity")}</p></div> : <p className={styles.muted}>{a("firstLoginHint")}</p>}
               </div> : null}
             </div> : null}
-            {current === "permissions" ? workspace ? <UserPermissionSelector workspace={workspace} scene={scene} value={permissions} onChange={setPermissions} /> : <div className={styles.livePermissions}><Alert status="info">{a("liveUserDefaultNoGrant")}</Alert><p className={styles.muted}>{a("livePolicyAfterCreateHint")}</p></div> : null}
+            {current === "permissions" ? <div className={styles.stack}>
+              <UserPermissionSelector workspace={workspace} scene={scene} value={permissions} onChange={setPermissions} />
+              <section className={styles.boundarySection} aria-labelledby={`${id}-boundary-title`}>
+                <div><h3 id={`${id}-boundary-title`}>{t("delegationCeiling")}</h3><p className={styles.muted}>{t("delegationCeilingHint")}</p></div>
+                <Alert status="info">{t("boundaryDoesNotGrant")}</Alert>
+                <FormField id={`${id}-boundary`} label={t("permissionBoundary")} hint={t("permissionBoundaryHint")} error={errorText("boundary")}>
+                  <Select id={`${id}-boundary`} aria-required="true" aria-invalid={Boolean(errors.boundary)} aria-describedby={[`${id}-boundary-hint`, errorFor("boundary")].filter(Boolean).join(" ")}
+                    value={boundaryChoice} placeholder={t("chooseBoundary")} options={[{ value: "none", label: t("explicitNoBoundary") }, ...workspace.policies.map((policy) => ({ value: policy.id, label: `${policy.name} · ${policy.id}` }))]}
+                    onValueChange={(value) => { setBoundaryChoice(value); setErrors((current) => { const next = { ...current }; delete next.boundary; return next; }); }} />
+                </FormField>
+              </section>
+            </div> : null}
             {current === "tags" ? <div className={styles.tags}><p className={styles.muted}>{t("tagHint")}</p><TagEditor value={profile.tags} onChange={(tags) => updateProfile({ tags })} error={errorText("tags")} labels={{ key: (index) => t("tagKey", { index }), value: (index) => t("tagValue", { index }), remove: (index) => t("removeTag", { index }), add: t("addTag"), empty: t("noTagsHint"), count: t("tagCount", { count: profile.tags.length }) }} /></div> : null}
             {current === "review" ? <div className={styles.review}><Alert status={elevated ? "warning" : "info"}>{elevated ? preview ? t("widePermissionWarning") : a("adminGrantWarning") : t("reviewHint")}</Alert>
               <section><div className={styles.reviewHeading}><h3>{t("basicInfo")}</h3><Button size="small" variant="ghost" onClick={() => changeStep(steps.indexOf("identity"))}>{t("editIdentity")}</Button></div><dl><div><dt>{a("userType")}</dt><dd>{a("child")}</dd></div><div><dt>{a("ownership")}</dt><dd>{scene.accountName} · {scene.accountId}</dd></div><div><dt>{a("childLogin")}</dt><dd>{login.trim()}</dd></div><div><dt>{a("displayName")}</dt><dd>{name.trim()}</dd></div><div><dt>{a("qualifiedLogin")}</dt><dd>{login.trim()}@{scene.loginAlias ?? scene.accountId}</dd></div><div><dt>{t("accessMethods")}</dt><dd>{[!preview || profile.consoleAccess ? t("consoleAccess") : "", preview && profile.programmaticAccess ? t("programmaticAccess") : ""].filter(Boolean).join(" · ")}</dd></div>{!preview || profile.consoleAccess ? <div><dt>{a("initialPassword")}</dt><dd>{preview && passwordMode === "auto" ? t("autoPassword") : a("passwordReady")}</dd></div> : null}{preview && profile.consoleAccess ? <><div><dt>{t("forceReset")}</dt><dd>{t(profile.passwordResetRequired ? "enabled" : "disabled")}</dd></div><div><dt>{t("loginProtection")}</dt><dd>{t(profile.loginProtection ? "enabled" : "disabled")}</dd></div></> : null}</dl></section>
-              <section><div className={styles.reviewHeading}><h3>{t("steps.permissions")}</h3><Button size="small" variant="ghost" onClick={() => changeStep(steps.indexOf("permissions"))}>{t("editPermissions")}</Button></div>{workspace ? <dl><div><dt>{t("direct")}</dt><dd>{workspace.policies.filter((policy) => permissions.policyIds.includes(policy.id)).map((policy) => <Badge key={policy.id}>{policy.name}</Badge>)}{!permissions.policyIds.length ? a("noGrantLabel") : null}</dd></div><div><dt>{t("joinGroups")}</dt><dd>{workspace.groups.filter((group) => permissions.groupIds.includes(group.id)).map((group) => <Badge key={group.id}>{group.name}</Badge>)}{!permissions.groupIds.length ? t("none") : null}</dd></div></dl> : <p>{a("noGrantLabel")} · {a("livePolicyAfterCreateShort")}</p>}</section>
+              <section><div className={styles.reviewHeading}><h3>{t("steps.permissions")}</h3><Button size="small" variant="ghost" onClick={() => changeStep(steps.indexOf("permissions"))}>{t("editPermissions")}</Button></div><dl><div><dt>{t("direct")}</dt><dd>{workspace.policies.filter((policy) => permissions.policyIds.includes(policy.id)).map((policy) => <Badge key={policy.id}>{policy.name}</Badge>)}{!permissions.policyIds.length ? a("noGrantLabel") : null}</dd></div><div><dt>{t("joinGroups")}</dt><dd>{workspace.groups.filter((group) => permissions.groupIds.includes(group.id)).map((group) => <Badge key={group.id}>{group.name}</Badge>)}{!permissions.groupIds.length ? t("none") : null}</dd></div><div><dt>{t("delegationCeiling")}</dt><dd>{boundaryChoice === "none" ? t("explicitNoBoundary") : workspace.policies.find((policy) => policy.id === boundaryChoice)?.name ?? boundaryChoice}</dd></div></dl><Alert status={boundaryChoice === "none" ? "warning" : "info"}>{t(boundaryChoice === "none" ? "explicitNoBoundaryReview" : "boundaryReviewHint")}</Alert></section>
               {preview ? <section><div className={styles.reviewHeading}><h3>{t("steps.tags")}</h3><Button size="small" variant="ghost" onClick={() => changeStep(steps.indexOf("tags"))}>{t("editTags")}</Button></div><div className={styles.tagActions}>{profile.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}{!profile.tags.length ? <span className={styles.muted}>{t("none")}</span> : null}</div></section> : null}
             </div> : null}
             {access.workspaceError ? <Alert status="danger">{w(`errors.${access.workspaceError}`)}</Alert> : null}{access.error ? <Alert status="danger">{a(`errors.${access.error}`)}</Alert> : null}

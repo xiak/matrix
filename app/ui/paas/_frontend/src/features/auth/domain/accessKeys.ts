@@ -2,12 +2,14 @@ import type { ActionCapability } from "./accounts";
 import type { AccessKeyNetworkRestrictions, AccessKeyUsageObservation } from "./accessKeyNetwork";
 
 export type AccessKeyStatus = "ENABLED" | "DISABLED";
+export type AccessKeyCredentialState = "CURRENT" | "RECOVERY_FENCED";
 
 export type ManagedAccessKey = {
   id: string;
   accountId: string;
   userId: string;
   status: AccessKeyStatus;
+  credentialState: AccessKeyCredentialState;
   networkRestrictions: AccessKeyNetworkRestrictions;
   resourceVersion: number;
   createdAt: string;

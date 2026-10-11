@@ -711,9 +711,13 @@ describe("policy creation entry and directory contract", () => {
     expect(within(releaseGates).getByText("未执行")).toBeTruthy();
     expect(within(releaseGates).getByText("未验证")).toBeTruthy();
     expect(within(releaseGates).getByText("未接入")).toBeTruthy();
-    const publish = screen.getByRole("button", { name: "发布修订（未接入）" }) as HTMLButtonElement;
-    expect(publish.disabled).toBe(true);
-    expect(screen.getByText(/没有对应发布 Action/)).toBeTruthy();
+    const releasePackage = screen.getByRole("region", { name: "签名发布包移交" });
+    expect(within(releasePackage).getByText("ProductAuthorizationReleaseCatalog", { selector: "code" })).toBeTruthy();
+    expect(within(releasePackage).getByText("paas@1", { selector: "code" })).toBeTruthy();
+    expect(within(releasePackage).getAllByText("未提供")).toHaveLength(3);
+    expect(within(releasePackage).getByText(/浏览器没有 Profile 发布 API/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /发布修订/ })).toBeNull();
+    expect(screen.getByText(/属于平台签名发布流水线/)).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
 
@@ -1086,8 +1090,11 @@ describe("CAM-style access workspace", () => {
     await user.clear(userSearch);
     await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
     const keyDirectory = await screen.findByRole("table", { name: "访问密钥" });
-    expect(within(keyDirectory).getAllByRole("columnheader")).toHaveLength(4);
+    expect(within(keyDirectory).getAllByRole("columnheader")).toHaveLength(5);
     expect(within(keyDirectory).queryByText("密钥资源版本")).toBeNull();
+    expect(within(keyDirectory).getByRole("columnheader", { name: "凭据状态" })).toBeTruthy();
+    expect(within(keyDirectory).getByRole("columnheader", { name: "管理状态" })).toBeTruthy();
+    expect(within(keyDirectory).getByText("恢复后永久失效")).toBeTruthy();
     expect(within(keyDirectory).getByText("已禁用")).toBeTruthy();
     expect(within(keyDirectory).getByRole("columnheader", { name: "安全观测" })).toBeTruthy();
     expect(within(keyDirectory).getByText("账号 + 密钥")).toBeTruthy();
@@ -1838,6 +1845,10 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("button", { name: "Remove MatrixReadOnlyAccess" })).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Join groups" }));
     await user.click(screen.getByRole("checkbox", { name: "DeliveryTeam" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByRole("alert").textContent).toContain("Choose a delegation ceiling");
+    await user.click(screen.getByLabelText("Permission boundary"));
+    await user.click(screen.getByRole("option", { name: /ReleaseOperatorBoundary/ }));
     await user.click(screen.getByRole("button", { name: "User information" }));
     expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe("Wizard User");
     await user.click(screen.getByRole("button", { name: "Next" }));
@@ -1850,11 +1861,13 @@ describe("CAM-style access workspace", () => {
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(screen.getByText("MatrixReadOnlyAccess")).toBeTruthy();
     expect(screen.getByText("DeliveryTeam")).toBeTruthy();
+    expect(screen.getByText("ReleaseOperatorBoundary", { exact: true })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Confirm mock user" }));
     await screen.findByRole("heading", { name: "User created" });
     const saved = await extension.read("preview");
     expect(saved.userProfiles["principal-wizard.new"]?.tags).toEqual([{ key: "team", value: "platform" }]);
     expect(saved.userPolicies["principal-wizard.new"]).toEqual(["policy-read"]);
+    expect(saved.userBoundaries["principal-wizard.new"]).toBe("policy-delivery-boundary");
     expect(repository.execute).not.toHaveBeenCalled();
     expect(sessionStorage.length).toBe(0);
   });
@@ -2220,7 +2233,7 @@ describe("CAM-style access workspace", () => {
     const createMembership = vi.fn()
       .mockRejectedValueOnce(new Error("unknown outcome"))
       .mockResolvedValueOnce(chen.membership);
-    const { user } = await open("groups", { live: true, repository: {
+    const { user } = await open("groups", { live: true, users: reviewUsers, repository: {
       listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
       getGroup: vi.fn().mockResolvedValue(liveGroup),
       listGroupMemberships: listMemberships,
@@ -2237,6 +2250,8 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     const workflow = within(screen.getByRole("group", { name: "添加成员 · LiveOperators" }));
     await user.click(workflow.getByRole("checkbox", { name: "chen" }));
+    expect(workflow.getByRole("checkbox", { name: "qiao" })).toHaveProperty("disabled", true);
+    expect(workflow.getByText(/每次选择 1 项/)).toBeTruthy();
     await user.click(workflow.getByRole("button", { name: "审阅变更" }));
     await user.click(workflow.getByRole("button", { name: "确认变更" }));
     await waitFor(() => expect(createMembership).toHaveBeenCalledTimes(1));
@@ -2329,8 +2344,8 @@ describe("CAM-style access workspace", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("creates only an empty group, then adds each member and policy relationship separately", async () => {
-    const { user, repository, extension } = await open("groups");
+  it("creates only an empty group, previews a bounded multi-member change, and keeps policy changes single", async () => {
+    const { user, repository, extension } = await open("groups", { users: reviewUsers });
     await user.click(await screen.findByRole("button", { name: "新建用户组" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.type(screen.getByLabelText("名称"), "Platform Operators");
@@ -2351,13 +2366,18 @@ describe("CAM-style access workspace", () => {
     const memberWorkflow = within(screen.getByRole("group", { name: "添加成员 · Platform Operators" }));
     expect(memberWorkflow.getByRole("button", { name: "审阅变更" })).toHaveProperty("disabled", true);
     await user.click(memberWorkflow.getByRole("checkbox", { name: "lin" }));
+    await user.click(memberWorkflow.getByRole("checkbox", { name: "chen" }));
+    expect(memberWorkflow.getByText(/最多选择 30 项/)).toBeTruthy();
+    expect(memberWorkflow.getByText(/多成员选择仅用于验证未来批量命令/)).toBeTruthy();
     await user.click(memberWorkflow.getByRole("button", { name: "审阅变更" }));
-    expect(memberWorkflow.getByText(/本次变更涉及 1 位成员/)).toBeTruthy();
+    expect(memberWorkflow.getByText(/本次变更涉及 2 位成员/)).toBeTruthy();
+    expect(memberWorkflow.getByRole("heading", { name: "添加成员 (2)" })).toBeTruthy();
+    expect(memberWorkflow.getByText(/当前 LIVE 仍逐条变更关系/)).toBeTruthy();
     expect((await extension.read("preview")).groups.at(-1)?.memberIds).toEqual([]);
     await user.click(memberWorkflow.getByRole("button", { name: "确认变更" }));
-    expect(screen.getByRole("tab", { name: "成员 (1)" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "成员 (2)" })).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
-    expect((await extension.read("preview")).groups.at(-1)?.memberIds).toEqual(["principal-lin"]);
+    expect((await extension.read("preview")).groups.at(-1)?.memberIds).toEqual(["principal-lin", "principal-chen"]);
     await user.click(screen.getByRole("tab", { name: "直接关联策略 (0)" }));
     await user.click(screen.getByRole("button", { name: "关联策略" }));
     const policyWorkflow = within(screen.getByRole("group", { name: "关联策略 · Platform Operators" }));
@@ -2398,13 +2418,14 @@ describe("CAM-style access workspace", () => {
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(await extension.read("preview")).toEqual(before);
   });
-  it("keeps failed member changes editable and retries the exact delta without losing existing members", async () => {
-    const { user, repository, extension } = await open("groups", { entityId: "group-delivery" });
+  it("keeps failed multi-member changes editable and retries the exact delta without partial writes", async () => {
+    const { user, repository, extension } = await open("groups", { entityId: "group-delivery", users: reviewUsers });
     const before = await extension.read("preview");
     await user.click(await screen.findByRole("button", { name: "添加成员" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     let workflow = within(screen.getByRole("group", { name: "添加成员 · DeliveryTeam" }));
     await user.click(workflow.getByRole("checkbox", { name: "chen" }));
+    await user.click(workflow.getByRole("checkbox", { name: "qiao" }));
     await user.click(workflow.getByRole("button", { name: "审阅变更" }));
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
     await user.click(workflow.getByRole("button", { name: "确认变更" }));
@@ -2412,19 +2433,22 @@ describe("CAM-style access workspace", () => {
     expect(await extension.read("preview")).toEqual(before);
     await user.click(workflow.getByRole("button", { name: "返回选择" }));
     expect((workflow.getByRole("checkbox", { name: "chen" }) as HTMLInputElement).checked).toBe(true);
+    expect((workflow.getByRole("checkbox", { name: "qiao" }) as HTMLInputElement).checked).toBe(true);
     await user.click(workflow.getByRole("button", { name: "审阅变更" }));
     await user.click(workflow.getByRole("button", { name: "确认变更" }));
     await waitFor(() => expect(screen.queryByRole("group", { name: "添加成员 · DeliveryTeam" })).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "添加成员" }));
-    expect((await extension.read("preview")).groups[0]?.memberIds).toEqual(["principal-lin", "principal-chen"]);
+    expect((await extension.read("preview")).groups[0]?.memberIds).toEqual(["principal-lin", "principal-chen", "principal-qiao"]);
     await user.click(screen.getByRole("button", { name: "移除成员" }));
     workflow = within(screen.getByRole("group", { name: "移除成员 · DeliveryTeam" }));
     await user.click(workflow.getByRole("checkbox", { name: "chen" }));
+    await user.click(workflow.getByRole("checkbox", { name: "qiao" }));
     await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    expect(workflow.getByText(/本次变更涉及 2 位成员/)).toBeTruthy();
     expect(workflow.getByText(/不代表撤销全部访问权限/)).toBeTruthy();
     await user.click(workflow.getByRole("button", { name: "取消" }));
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "移除成员" }));
-    expect((await extension.read("preview")).groups[0]?.memberIds).toEqual(["principal-lin", "principal-chen"]);
+    expect((await extension.read("preview")).groups[0]?.memberIds).toEqual(["principal-lin", "principal-chen", "principal-qiao"]);
     expect(repository.execute).not.toHaveBeenCalled();
   });
   it("cross-links exact group, member and policy entities with named grant sources on both sides", async () => {
@@ -3125,10 +3149,43 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("尚未创建访问密钥")).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
   });
-  it("edits one key network layer inline and keeps the account layer independently visible", async () => {
-    const { user, extension } = await open("keys");
+  it("keeps recovery fencing separate from management status and never offers enable as a repair", async () => {
+    const { user, repository, extension } = await open("keys");
     await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
-    await user.click(within(await screen.findByRole("table", { name: "访问密钥" })).getByRole("button", { name: "MOCK-pipeline-key" }));
+    const directory = await screen.findByRole("table", { name: "访问密钥" });
+    expect(within(directory).getByText("恢复后永久失效")).toBeTruthy();
+    expect(within(directory).getByText("已启用")).toBeTruthy();
+    await user.click(within(directory).getByRole("button", { name: "MOCK-pipeline-key" }));
+    expect(screen.getByText(/原密钥已因恢复永久失效/)).toBeTruthy();
+    expect(screen.getByText(/管理状态不会改变这一事实/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "禁用" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "启用" })).toBeNull();
+    let actions = await openPageActionMenu(user);
+    expect(within(actions).getByRole("menuitem", { name: "创建新密钥" })).toBeTruthy();
+    expect(within(actions).getByRole("menuitem", { name: "删除" }).getAttribute("aria-disabled")).toBe("true");
+    await user.keyboard("{Escape}");
+    await invokePageAction(user, "禁用");
+    expect(screen.getByRole("heading", { name: "禁用 MOCK-pipeline-key" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "禁用 MOCK-pipeline-key" })).toBeNull());
+    const fenced = (await extension.read("preview")).keys.find((key) => key.id === "MOCK-pipeline-key")!;
+    expect(fenced).toMatchObject({ status: "DISABLED", credentialState: "RECOVERY_FENCED" });
+    expect(screen.queryByRole("button", { name: "启用" })).toBeNull();
+    expect(screen.getByRole("button", { name: "创建新密钥" })).toBeTruthy();
+    actions = await openPageActionMenu(user);
+    expect(within(actions).queryByRole("menuitem", { name: "启用" })).toBeNull();
+    expect(within(actions).getByRole("menuitem", { name: "删除" }).getAttribute("aria-disabled")).not.toBe("true");
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("edits one key network layer inline and keeps the account layer independently visible", async () => {
+    const { user, extension } = await open("keys", { seed: async (preview) => {
+      await preview.execute("preview", { kind: "create-key", ownerId: "principal-chen", ownerState: "active", userResourceVersion: 2, networkRestrictions: { allowedSourceCidrs: ["203.0.113.64/26"] }, requestId: "seed-current-key", responseMode: "success" });
+    } });
+    const current = (await extension.read("preview")).keys.find((key) => key.ownerId === "principal-chen")!;
+    await user.click(await screen.findByRole("button", { name: "管理 chen 的访问密钥" }));
+    const directory = await screen.findByRole("table", { name: "访问密钥" });
+    expect(within(directory).getByText("未被恢复围栏")).toBeTruthy();
+    await user.click(within(directory).getByRole("button", { name: current.id }));
     expect(screen.getByRole("heading", { name: "来源网络限制" })).toBeTruthy();
     expect(screen.getByText("账号层")).toBeTruthy();
     expect(screen.getByText("密钥层")).toBeTruthy();
@@ -3144,9 +3201,9 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "审阅密钥级来源变更" })).toBe(document.activeElement);
     await user.click(screen.getByRole("button", { name: "应用到 MOCK" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "来源网络限制" })).toBeTruthy());
-    const key = (await extension.read("preview")).keys.find((entry) => entry.id === "MOCK-pipeline-key")!;
+    const key = (await extension.read("preview")).keys.find((entry) => entry.id === current.id)!;
     expect(key.networkRestrictions).toEqual({ allowedSourceCidrs: ["198.51.100.0/24"] });
-    expect(key.resourceVersion).toBe(3);
+    expect(key.resourceVersion).toBe(2);
   });
   it("loads the programmatic credential boundary only on demand and does not infer product support", async () => {
     const listAuthorizationProfiles = vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: {
@@ -4035,20 +4092,20 @@ describe("CAM-style access workspace", () => {
     if (created.outcome !== "COMPLETED") throw new Error("report not created");
     expect(created.report).toMatchObject({
       mode: "MOCK", accountId: "org-xiak", requestId: "request-one", reportId: "security-report-request-one",
-      formatVersion: 1, observedAt: "2026-09-09T00:00:00.000Z", expiresAt: "2026-09-16T00:00:00.000Z", immutable: true,
+      formatVersion: 2, observedAt: "2026-09-09T00:00:00.000Z", expiresAt: "2026-09-16T00:00:00.000Z", immutable: true,
       accountSecuritySettingsVersion: workspace.settings.accountRuleVersion,
       totals: { users: 3, accessKeys: workspace.keys.length, rows: 4 + workspace.keys.length }
     });
     expect(created.report.users).toHaveLength(3);
     expect(created.report.users.filter((item) => item.root)).toEqual([expect.objectContaining({ id: "admin", lastPasswordLogin: { state: "OBSERVED", observedAt: session.issuedAt } })]);
     expect(created.report.users.filter((item) => !item.root).every((item) => item.lastPasswordLogin.state === "NOT_OBSERVED_IN_RETAINED_IAM_STATE")).toBe(true);
-    expect(created.report.accessKeys).toEqual(workspace.keys.map((key) => expect.objectContaining({ id: key.id, userId: key.ownerId })));
+    expect(created.report.accessKeys).toEqual(workspace.keys.map((key) => expect.objectContaining({ id: key.id, userId: key.ownerId, credentialState: key.credentialState })));
     expect(created.report.coverage.filter((item) => item.state === "COMPLETE").map((item) => item.source)).toEqual(["IAM_ACCOUNT", "IAM_USERS", "IAM_LOGIN_SESSIONS", "IAM_ACCESS_KEYS"]);
     expect(created.report.coverage.filter((item) => item.state === "NOT_INCLUDED")).toHaveLength(5);
-    expect(buildAccountSecurityReportDirectoryPreview(workspace, scene, "2026-09-09T12:00:00Z", session).map((entry) => ({ id: entry.id, status: entry.status }))).toEqual([
-      { id: "security-report-mock-directory-recent", status: "available" },
-      { id: "security-report-mock-directory-expiring", status: "expiringSoon" },
-      { id: "security-report-mock-directory-expired", status: "expired" }
+    expect(buildAccountSecurityReportDirectoryPreview(workspace, scene, "2026-09-09T12:00:00Z", session).map((entry) => ({ id: entry.id, status: entry.status, formatVersion: entry.report.formatVersion }))).toEqual([
+      { id: "security-report-mock-directory-recent", status: "available", formatVersion: 2 },
+      { id: "security-report-mock-directory-expiring", status: "expiringSoon", formatVersion: 1 },
+      { id: "security-report-mock-directory-expired", status: "expired", formatVersion: 2 }
     ]);
     expect(() => createAccountSecurityReportPreview(workspace, { ...scene, accountId: "org-foreign" }, "2026-09-09T00:00:00Z", "request-one")).toThrow("INVALID_IAM_TENANT");
 
@@ -4151,7 +4208,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "报告已到期" })).toBeTruthy();
     expect(screen.getByText(/详情正文和下载入口均不可用/)).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "报告摘要" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "下载 CSV v1" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "下载 CSV v2" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "返回列表" }));
 
     await select(user, "保留状态", "可读取");
@@ -4178,9 +4235,9 @@ describe("CAM-style access workspace", () => {
     expect(repository.execute).not.toHaveBeenCalled();
   });
   it("reviews configured trust entry points and synthetic unused access without inventing effective access", async () => {
-    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const extension = createPreviewAccessWorkspace("org-xiak", () => reviewUsers.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
     const workspace = await extension.read("preview");
-    const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const scene = buildAccountAccessScene(identity, { items: reviewUsers, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
     const analysis = buildAccessAnalysisPreview(workspace, scene);
     expect(analysis.coverage).toEqual([
       { id: "IAM_PASSWORD_SESSIONS", state: "INSUFFICIENT_COVERAGE", reason: "SOURCE_NOT_READY", observedFrom: "2026-06-11T03:00:00Z", observedThrough: "2026-09-09T03:00:00Z" },
@@ -4190,6 +4247,22 @@ describe("CAM-style access workspace", () => {
       { id: "PAAS_RESULTS", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null },
       { id: "EXTERNAL_FEDERATION", state: "NOT_INCLUDED", reason: "SOURCE_NOT_IMPLEMENTED", observedFrom: null, observedThrough: null }
     ]);
+    expect(analysis.boundaryControlledIdentities).toEqual([{
+      id: "principal-qiao",
+      name: "qiao",
+      displayName: "qiao",
+      boundary: { policyId: "policy-delivery-boundary", policyName: "ReleaseOperatorBoundary", defaultVersion: 1 },
+      directPolicyIds: ["policy-tag-logs", "policy-production-guard", "policy-assume-reviewer"],
+      groupIds: ["group-operators"],
+      inheritedPolicyIds: ["policy-delivery", "policy-tag-logs"],
+      evidence: {
+        delegatedManager: "UNAVAILABLE",
+        createdBy: "UNAVAILABLE",
+        mutationClosure: "CONTRACT_PENDING",
+        runtimeEnforcement: "NOT_EVALUATED"
+      }
+    }]);
+    expect(analysis.delegationCoverage).toEqual({ boundaryReferences: 1, unresolvedReferences: 0 });
     expect(analysis.unusedFindings).toHaveLength(123);
     expect(analysis.unusedFindings.slice(0, 3).map(({ accountId, findingType, lifecycle }) => ({ accountId, findingType, lifecycle }))).toEqual([
       { accountId: "org-xiak", findingType: "unusedPassword", lifecycle: "ACTIVE" },
@@ -4231,6 +4304,10 @@ describe("CAM-style access workspace", () => {
       evidence: "SYNTHETIC_COMPLETE_WINDOW",
       disposition: { mode: "REVIEW_ONLY", findingDelayDays: 0 }
     });
+    const partialScene = buildAccountAccessScene(identity, { items: users, nextAfter: "next-users" }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const partialDelegation = buildAccessAnalysisPreview(workspace, partialScene);
+    expect(partialDelegation.boundaryControlledIdentities).toEqual([]);
+    expect(partialDelegation.delegationCoverage).toEqual({ boundaryReferences: 1, unresolvedReferences: 1 });
     expect(() => buildAccessAnalysisPreview(workspace, { ...scene, accountId: "org-foreign" })).toThrow("INVALID_IAM_TENANT");
     const onNavigate = vi.fn();
     const user = userEvent.setup();
@@ -4246,6 +4323,21 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "暂无可核验的外部入口" })).toBeTruthy();
     expect(screen.getByText(/当前没有固定的外部身份或通用服务主体信任契约/)).toBeTruthy();
     expect(onNavigate).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("tab", { name: "委派治理 (1)" }));
+    expect(screen.getByRole("heading", { name: "安全委派闭包" })).toBeTruthy();
+    expect(screen.getByText(/现有边界只证明这个身份受到一条准确策略上限约束/)).toBeTruthy();
+    expect(screen.getByText("已观察到边界的身份").closest("div")?.textContent).toContain("已解析 1 / 1 条引用");
+    expect(screen.getAllByText("证据缺失").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("契约待固定").length).toBeGreaterThan(0);
+    const delegationTable = screen.getByRole("table", { name: "边界受控身份" });
+    expect(delegationTable.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(delegationTable).getByText("ReleaseOperatorBoundary")).toBeTruthy();
+    expect(within(delegationTable).getByText("3 条直接策略")).toBeTruthy();
+    expect(within(delegationTable).getByText("1 个用户组 · 2 条去重继承策略")).toBeTruthy();
+    expect(screen.getByText(/不是 delegated-manager\/created-by 目录/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /创建委派|关联对象|替换边界|移除边界/ })).toBeNull();
+    await user.click(within(delegationTable).getByRole("button", { name: "qiao" }));
+    expect(onNavigate).toHaveBeenCalledWith("users", "principal-qiao");
     await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
     expect(screen.getByText(/当前真实数据不满足该前提/)).toBeTruthy();
     expect(screen.getByText(/123 条样例由浏览器确定性生成/)).toBeTruthy();
@@ -4335,6 +4427,10 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
     expect(screen.getByText(/配置存在不代表权限已生效/)).toBeTruthy();
     expect(screen.getByRole("heading", { name: "暂无可核验的外部入口" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "委派治理 (1)" }));
+    expect(screen.getByText("当前目录不足以解析边界身份")).toBeTruthy();
+    expect(screen.getByText(/已解析 0 \/ 1 条引用/)).toBeTruthy();
+    expect(screen.getByText(/证据覆盖不完整/)).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "未使用访问 (123)" }));
     expect(screen.getByRole("table", { name: "未使用访问发现样例" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "返回列表" })).toBeNull();
@@ -4420,14 +4516,14 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "生成账号安全报告" })).toBeTruthy();
     expect(screen.getByText(/只验证 AccountSecurityReport 的信息架构与操作顺序/)).toBeTruthy();
     expect(screen.getByText("org-xiak")).toBeTruthy();
-    expect(screen.getByText(/POST 只携带 requestId 和固定 formatVersion=1/)).toBeTruthy();
+    expect(screen.getByText(/POST 只携带 requestId 和固定 formatVersion=2/)).toBeTruthy();
     expect(screen.getByText(/整个生成请求失败/)).toBeTruthy();
     expect(screen.getByText("未到期报告已达 20 份")).toBeTruthy();
     expect(screen.getByText("拒绝新建")).toBeTruthy();
     expect(screen.getByText(/不会自动覆盖或删除最旧报告/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /删除.*报告|覆盖.*报告/ })).toBeNull();
     let reportActions = await openPageActionMenu(user);
-    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v1" }).getAttribute("aria-disabled")).toBe("true");
+    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v2" }).getAttribute("aria-disabled")).toBe("true");
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "生成报告" }));
     expect(screen.getByRole("heading", { name: "账号安全报告" })).toBeTruthy();
@@ -4444,10 +4540,11 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("tab", { name: "访问密钥证据 (1)" }));
     const keyEvidence = screen.getByRole("table", { name: "访问密钥证据" });
     expect(within(keyEvidence).getByText(workspace.keys[0]!.id)).toBeTruthy();
+    expect(within(keyEvidence).getByText("恢复后永久失效")).toBeTruthy();
     expect(within(keyEvidence).queryByText(/secret/i)).toBeNull();
     expect((screen.getByRole("button", { name: "生成报告" }) as HTMLButtonElement).disabled).toBe(true);
     reportActions = await openPageActionMenu(user);
-    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v1" }).getAttribute("aria-disabled")).toBe("true");
+    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v2" }).getAttribute("aria-disabled")).toBe("true");
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
   });

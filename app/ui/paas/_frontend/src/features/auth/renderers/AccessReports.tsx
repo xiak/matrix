@@ -11,6 +11,7 @@ import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { accountSecurityReportLimits, accountSecurityReportLimitViolation, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildAccountSecurityReportDirectoryPreview, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisRulePreview, type AccessSecurityCheckState, type AccountSecurityReportDirectoryEntry, type AccountSecurityReportDirectoryStatus, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
 import { AccessAnalysisDispositionWorkflow, AccessAnalysisRulesPanel, AccessAnalysisRuleWorkflow, type AccessAnalysisRuleSavedKind } from "./AccessAnalysisRulePreview";
 import { AccessFindingRecoveryBoundary } from "./AccessRecoveryBoundary";
+import { AccessKeyCredentialStateBadge } from "./AccessCredentials";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -78,7 +79,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
   onNavigate(view: AccountAccessView, id?: string): void;
 }) {
   const t = useTranslations("IamWorkspace.accessAnalysis");
-  const [section, setSection] = useState<"external" | "unused" | "rule">("external");
+  const [section, setSection] = useState<"external" | "delegation" | "unused" | "rule">("external");
   const [selectedUnusedFinding, setSelectedUnusedFinding] = useState<UnusedAccessFindingPreview | null>(null);
   const [editingRule, setEditingRule] = useState<AccessAnalysisRuleSavedKind | null>(null);
   const [ruleOverride, setRuleOverride] = useState<AccessAnalysisRulePreview | null>(null);
@@ -183,8 +184,8 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
   }
   const content = <>
     <Alert status="info">{t("previewBoundary")}</Alert>
-    <Tabs.Root value={section} onValueChange={(value) => setSection(value as "external" | "unused" | "rule")}>
-      <Tabs.List aria-label={t("sections")} className={styles.accessAnalysisTabs}><Tabs.Trigger value="external">{t("tabs.external")}</Tabs.Trigger><Tabs.Trigger value="unused">{t("tabs.unused")} ({unusedFindings.length})</Tabs.Trigger><Tabs.Trigger value="rule">{t("tabs.rule")}</Tabs.Trigger></Tabs.List>
+    <Tabs.Root value={section} onValueChange={(value) => setSection(value as "external" | "delegation" | "unused" | "rule")}>
+      <Tabs.List aria-label={t("sections")} className={styles.accessAnalysisTabs}><Tabs.Trigger value="external">{t("tabs.external")}</Tabs.Trigger><Tabs.Trigger value="delegation">{t("tabs.delegation")} ({analysis.delegationCoverage.boundaryReferences})</Tabs.Trigger><Tabs.Trigger value="unused">{t("tabs.unused")} ({unusedFindings.length})</Tabs.Trigger><Tabs.Trigger value="rule">{t("tabs.rule")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content className={styles.stack} value="external">
         <Card>
           <Card.Header><div><Typography.Title as="h2" level={3}>{t("external.coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("external.coverageHint")}</Typography.Text></div><Badge status="info">{t("mockConfiguration")}</Badge></Card.Header>
@@ -193,6 +194,28 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           </Card.Body>
         </Card>
         <EmptyState title={t("external.unavailableTitle")} description={t("external.unavailableHint")} />
+      </Tabs.Content>
+      <Tabs.Content className={styles.stack} value="delegation">
+        <Card>
+          <Card.Header><div><Typography.Title as="h2" level={3}>{t("delegation.title")}</Typography.Title><Typography.Text tone="muted">{t("delegation.hint")}</Typography.Text></div><Badge status="info">{t("delegation.mock")}</Badge></Card.Header>
+          <Card.Body className={styles.securityReportBody}>
+            <Alert status="info">{t("delegation.boundary")}</Alert>
+            <dl className={`${styles.securityReportSummary} ${styles.scanSummary}`} aria-label={t("delegation.summary")}>
+              <div><dt>{t("delegation.boundedIdentities")}</dt><dd>{t("delegation.boundedIdentityCoverage", { shown: analysis.boundaryControlledIdentities.length, total: analysis.delegationCoverage.boundaryReferences })}</dd></div>
+              <div><dt>{t("delegation.managerEvidence")}</dt><dd>{t("delegation.evidence.UNAVAILABLE")}</dd></div>
+              <div><dt>{t("delegation.closureEvidence")}</dt><dd>{t("delegation.evidence.CONTRACT_PENDING")}</dd></div>
+              <div><dt>{t("delegation.runtimeEvaluation")}</dt><dd>{t("delegation.evidence.NOT_EVALUATED")}</dd></div>
+            </dl>
+            {analysis.delegationCoverage.unresolvedReferences ? <Alert status="warning">{t("delegation.unresolvedReferences", { count: analysis.delegationCoverage.unresolvedReferences })}</Alert> : null}
+          </Card.Body>
+        </Card>
+        <WorkspaceCollection embedded title={t("delegation.directory")} description={t("delegation.directoryHint")} items={analysis.boundaryControlledIdentities}
+          columns={[t("delegation.identity"), t("delegation.ceiling"), t("delegation.sources"), t("delegation.lineage")]}
+          unavailable={!analysis.boundaryControlledIdentities.length && analysis.delegationCoverage.unresolvedReferences ? { title: t("delegation.unresolvedTitle"), description: t("delegation.unresolvedHint") } : undefined}
+          keywords={(item) => `${item.displayName} ${item.boundary.policyId} ${item.boundary.policyName} ${item.directPolicyIds.join(" ")} ${item.groupIds.join(" ")} ${item.inheritedPolicyIds.join(" ")}`}
+          row={(item) => <><td><Table.PrimaryAction onClick={() => onNavigate("users", item.id)}>{item.name}</Table.PrimaryAction><small>{item.displayName} · {item.id}</small></td><td><strong>{item.boundary.policyName}</strong><small>{item.boundary.policyId} · v{item.boundary.defaultVersion}</small></td><td><span>{t("delegation.directCount", { count: item.directPolicyIds.length })}</span><small>{t("delegation.groupSourceCount", { groups: item.groupIds.length, policies: item.inheritedPolicyIds.length })}</small></td><td><Badge status="warning">{t(`delegation.evidence.${item.evidence.delegatedManager}`)}</Badge><small>{t(`delegation.evidence.${item.evidence.mutationClosure}`)}</small></td></>}
+          footerNote={t("delegation.directoryHint")} />
+        <Alert status="warning">{t("delegation.noMutation")}</Alert>
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="unused">
         <Card>
@@ -291,6 +314,7 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, initia
   onBack(): void;
 }) {
   const t = useTranslations("IamWorkspace.securityReportPreview");
+  const workspaceT = useTranslations("IamWorkspace");
   const failureTitle = (boundary: typeof accountSecurityReportFailureBoundaries[number]) => boundary === "retainedReportLimit"
     ? t(`failures.${boundary}.title`, { reports: accountSecurityReportLimits.retainedReports })
     : t(`failures.${boundary}.title`);
@@ -339,7 +363,7 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, initia
             <div><dt>{t("expiresAt")}</dt><dd><WorkspaceTime value={report.expiresAt} /></dd></div>
             <div><dt>{t("settingsVersion")}</dt><dd>v{report.accountSecuritySettingsVersion}</dd></div>
           </> : null}
-          <div><dt>{t("format")}</dt><dd>{t("formatV1")}</dd></div>
+          <div><dt>{t("format")}</dt><dd>{t("formatValue", { version: report?.formatVersion ?? 2 })}</dd></div>
           <div><dt>{t("retention")}</dt><dd>{t("retentionValue", { days: accountSecurityReportLimits.retainedDays, reports: accountSecurityReportLimits.retainedReports })}</dd></div>
           <div><dt>{t("permissions")}</dt><dd className={styles.reportPermissions}><code>iam.security-report.create</code><code>iam.security-report.read</code><code>iam.security-report.download</code></dd></div>
         </dl>
@@ -391,9 +415,9 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, initia
       </Tabs.Content>
       <Tabs.Content value="accessKeys">
         <WorkspaceCollection embedded title={t("keyEvidenceTitle")} description={t("keyEvidenceHint")} items={report.accessKeys}
-          columns={[t("accessKey"), t("owner"), t("status"), t("network"), t("authorizationObservation")]}
-          keywords={(key) => `${key.id} ${key.userId} ${key.status} ${key.allowedSourceCidrs.join(" ")} ${key.authorization.product ?? ""} ${key.authorization.action ?? ""}`}
-          row={(key) => <><td><code>{key.id}</code><small>{t("resourceVersion", { version: key.resourceVersion })} · <WorkspaceTime value={key.createdAt} /></small></td><td><code>{key.userId}</code></td><td><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(`keyStates.${key.status}`)}</Badge></td><td>{key.allowedSourceCidrs.length ? key.allowedSourceCidrs.map((cidr) => <code key={cidr}>{cidr}</code>) : t("allNetworks")}</td><td><Badge status={key.authorization.state === "OBSERVED" ? key.authorization.allowed ? "success" : "warning" : "neutral"}>{key.authorization.state === "OBSERVED" ? t(key.authorization.allowed ? "allowed" : "denied") : t(`observations.${key.authorization.state}`)}</Badge>{key.authorization.action ? <small>{key.authorization.product} · <code>{key.authorization.action}</code></small> : null}{key.authorization.sourceIp ? <small>{t("sourceIp")} · <code>{key.authorization.sourceIp}</code></small> : null}{key.authorization.observedAt ? <small><WorkspaceTime value={key.authorization.observedAt} /></small> : null}</td></>}
+          columns={[t("accessKey"), t("owner"), workspaceT("keyCredentialState"), workspaceT("keyManagementState"), t("network"), t("authorizationObservation")]}
+          keywords={(key) => `${key.id} ${key.userId} ${key.credentialState ?? "LEGACY_UNRECORDED"} ${key.status} ${key.allowedSourceCidrs.join(" ")} ${key.authorization.product ?? ""} ${key.authorization.action ?? ""}`}
+          row={(key) => <><td><code>{key.id}</code><small>{t("resourceVersion", { version: key.resourceVersion })} · <WorkspaceTime value={key.createdAt} /></small></td><td><code>{key.userId}</code></td><td><AccessKeyCredentialStateBadge value={key.credentialState} /></td><td><Badge status={key.credentialState === "CURRENT" && key.status === "ENABLED" ? "success" : "neutral"}>{t(`keyStates.${key.status}`)}</Badge></td><td>{key.allowedSourceCidrs.length ? key.allowedSourceCidrs.map((cidr) => <code key={cidr}>{cidr}</code>) : t("allNetworks")}</td><td><Badge status={key.authorization.state === "OBSERVED" ? key.authorization.allowed ? "success" : "warning" : "neutral"}>{key.authorization.state === "OBSERVED" ? t(key.authorization.allowed ? "allowed" : "denied") : t(`observations.${key.authorization.state}`)}</Badge>{key.authorization.action ? <small>{key.authorization.product} · <code>{key.authorization.action}</code></small> : null}{key.authorization.sourceIp ? <small>{t("sourceIp")} · <code>{key.authorization.sourceIp}</code></small> : null}{key.authorization.observedAt ? <small><WorkspaceTime value={key.authorization.observedAt} /></small> : null}</td></>}
           footerNote={t("keyEvidenceHint")} />
       </Tabs.Content>
     </Tabs.Root> : <>
