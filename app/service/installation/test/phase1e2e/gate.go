@@ -460,6 +460,7 @@ type signedManagedProduct struct {
 	installationID   string
 	runtimeDirectory string
 	credentialFile   string
+	credentialMode   os.FileMode
 }
 
 func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
@@ -471,16 +472,16 @@ func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
 	products := []signedManagedProduct{
 		{name: "PostgreSQL 18", component: "postgres", offeringID: managedservicev1.PostgreSQLOfferingID,
 			quotaShapeID: "pg-small", engineVersion: "18", installationID: "phase1-managed-postgres",
-			runtimeDirectory: "managed-postgres", credentialFile: "postgres-password"},
+			runtimeDirectory: "managed-postgres", credentialFile: "postgres-password", credentialMode: 0o600},
 		{name: "MySQL 8.4 LTS", component: "mysql", offeringID: managedservicev1.MySQLOfferingID,
 			quotaShapeID: "mysql-small", engineVersion: "8.4", installationID: "phase1-managed-mysql",
-			runtimeDirectory: "managed-mysql", credentialFile: "mysql-password"},
+			runtimeDirectory: "managed-mysql", credentialFile: "mysql-password", credentialMode: 0o600},
 		{name: "Elasticsearch 8.19.23", component: "elasticsearch", offeringID: managedservicev1.ElasticsearchOfferingID,
 			quotaShapeID: "elasticsearch-small", engineVersion: "8.19.23", installationID: "phase1-managed-elasticsearch",
-			runtimeDirectory: "managed-elasticsearch", credentialFile: "elasticsearch-password"},
+			runtimeDirectory: "managed-elasticsearch", credentialFile: "elasticsearch-password", credentialMode: 0o640},
 		{name: "RabbitMQ 4.1.8", component: "rabbitmq", offeringID: managedservicev1.RabbitMQOfferingID,
 			quotaShapeID: "rabbitmq-small", engineVersion: "4.1.8", installationID: "phase1-managed-rabbitmq",
-			runtimeDirectory: "managed-rabbitmq", credentialFile: "rabbitmq-password"},
+			runtimeDirectory: "managed-rabbitmq", credentialFile: "rabbitmq-password", credentialMode: 0o600},
 	}
 	for index := range products {
 		if err := value.verifySignedManagedProduct(ctx, tenant, products[index]); err != nil {
@@ -719,9 +720,13 @@ func (value *gate) assertSignedManagedProductRuntime(
 	}
 	credentialPath := filepath.Join(value.config.root, filepath.FromSlash(layout.ExecutorRoot),
 		product.runtimeDirectory, project, product.credentialFile)
+	projectInfo, projectErr := os.Lstat(filepath.Dir(credentialPath))
 	info, err := os.Lstat(credentialPath)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
-		(os.PathSeparator == '/' && info.Mode().Perm() != 0o600) || info.Size() < 32 || info.Size() > 256 {
+	if projectErr != nil || !projectInfo.IsDir() || projectInfo.Mode()&os.ModeSymlink != 0 ||
+		(os.PathSeparator == '/' && projectInfo.Mode().Perm() != 0o700) ||
+		err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+		(os.PathSeparator == '/' && info.Mode().Perm() != product.credentialMode) ||
+		info.Size() < 32 || info.Size() > 256 {
 		return nil, "", fail("signed-managed-product-credential-" + product.component)
 	}
 	password, err := os.ReadFile(credentialPath)
