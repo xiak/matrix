@@ -678,6 +678,25 @@ the signed catalog contract; its
 [independent Verification 38086980171](https://github.com/xiak/matrix/actions/runs/38086980171)
 completed with all 17 jobs successful.
 
+Test-only successor `f7d76d53b988ead3e15a4fa8061376e286a999fb` also leaves the
+packaged production tree unchanged. It extends the existing signed lifecycle
+owner with the current GROUP policy-attachment completion contract: the
+original Account actor reads and validates the sealed CREATE receipt before
+backup, every retained-state checkpoint reads the identical result again, and
+the exact successful tenant Audit fact must carry a valid non-empty
+`authorityEvidenceDigest` whose record hash remains in the verified chain.
+The same authenticated A/B archives above were extracted into a second fresh,
+network-none Docker 27.5.1 classic-store engine limited to 2 CPUs, 4 GiB and
+768 PIDs. Its inner daemon began with zero images, containers, custom networks
+and volumes. The effectful lifecycle passed in 474.53 seconds; restarting only
+that task-owned outer engine was followed by a 64.85-second read-only gate that
+again proved the completion receipt, revocation, credential fencing, MFA and
+tenant state were not revived. All task-owned containers and volumes from this
+run were then removed. This is signed consumer evidence for the unchanged
+production bits, not another package or Profile. The exact successor SHA's
+[independent Verification 38096855001](https://github.com/xiak/matrix/actions/runs/38096855001)
+completed with all 17 jobs successful.
+
 ### Gate A: release and CLI contract
 
 1. Canonical manifest/signature verification rejects byte, path, metadata,
