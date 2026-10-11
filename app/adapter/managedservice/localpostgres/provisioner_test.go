@@ -16,8 +16,9 @@ import (
 func TestEnsureUsesOnlyFixedArtifactAndFileCredential(t *testing.T) {
 	runtime := &fakeRuntime{t: t}
 	secret := []byte("managed-postgres-secret-material-0000000000000000000000000000")
+	imageID := "sha256:" + strings.Repeat("a", 64)
 	provisioner, err := New(Config{
-		Root: t.TempDir(), ImageID: "sha256:" + strings.Repeat("a", 64), Runtime: runtime,
+		Root: t.TempDir(), ImageID: imageID, Runtime: runtime,
 		NewSecret: func() ([]byte, error) { return append([]byte(nil), secret...), nil },
 	})
 	if err != nil {
@@ -36,12 +37,40 @@ func TestEnsureUsesOnlyFixedArtifactAndFileCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Compose document: %v", err)
 	}
-	if strings.Contains(string(document), string(secret)) || strings.Contains(string(document), "postgres:latest") ||
-		!strings.Contains(string(document), `"pull_policy":"never"`) ||
-		!strings.Contains(string(document), `"image":"sha256:`+strings.Repeat("a", 64)+`"`) {
+	var effect struct {
+		Services map[string]struct {
+			Image       string            `json:"image"`
+			PullPolicy  string            `json:"pull_policy"`
+			Environment map[string]string `json:"environment"`
+			Volumes     []struct {
+				Type     string `json:"type"`
+				Source   string `json:"source"`
+				Target   string `json:"target"`
+				ReadOnly bool   `json:"read_only"`
+			} `json:"volumes"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(document, &effect); err != nil {
+		t.Fatalf("decode Compose document: %v", err)
+	}
+	service, exists := effect.Services[postgresServiceName]
+	if !exists || service.Image != imageID || service.PullPolicy != "never" ||
+		service.Environment["POSTGRES_PASSWORD_FILE"] != "/run/secrets/postgres-password" ||
+		strings.Contains(string(document), string(secret)) {
 		t.Fatalf("Compose document crossed the fixed artifact or credential boundary: %s", document)
 	}
 	passwordPath := strings.TrimSuffix(runtime.project.EffectDocument, "compose.json") + "postgres-password"
+	credentialMountedReadOnly := false
+	for _, volume := range service.Volumes {
+		if volume.Type == "bind" && volume.Source == passwordPath &&
+			volume.Target == "/run/secrets/postgres-password" && volume.ReadOnly {
+			credentialMountedReadOnly = true
+			break
+		}
+	}
+	if !credentialMountedReadOnly {
+		t.Fatalf("credential file is not mounted read-only at the declared password path: %#v", service.Volumes)
+	}
 	password, err := os.ReadFile(passwordPath)
 	if err != nil || string(password) != string(secret) {
 		t.Fatalf("credential file does not contain the generated secret: err=%v", err)

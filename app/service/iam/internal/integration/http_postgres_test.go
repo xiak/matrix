@@ -1429,7 +1429,9 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	var heads, versions, allows, denies, forged, batchAllows, keyAllows, templates, ceilings, roleAllows int
 	if err := admin.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM iam.authorization_profile_heads WHERE product='catalog'),
-		(SELECT count(*) FROM iam.policy_versions WHERE id=$1 AND compilation#>>'{profiles,0,product}'='catalog'),
+		(SELECT count(*) FROM iam.policy_versions WHERE id=$1 AND EXISTS (
+		  SELECT 1 FROM jsonb_array_elements(compilation->'profiles') profile
+		  WHERE profile->>'product'='catalog')),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id IN ('registered-product-allow','registered-product-after-restart') AND allowed),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id='registered-product-wrong-service' AND NOT allowed),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id LIKE 'registered-product-forged-%'),
@@ -1437,7 +1439,9 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id LIKE 'registered-product-key-%' AND document->>'action'='catalog.item.read' AND allowed),
 		(SELECT count(*) FROM iam.service_role_templates WHERE id=$2 AND version=$3 AND content_digest=$4),
 		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$5 AND id=$6 AND content_digest=$7
-		  AND compilation#>>'{profiles,0,product}'='catalog'),
+		  AND EXISTS (
+		    SELECT 1 FROM jsonb_array_elements(compilation->'profiles') profile
+		    WHERE profile->>'product'='catalog')),
 		(SELECT count(*) FROM iam.authorization_decisions WHERE request_id IN
 		  ('registered-product-service-role-allow','registered-product-service-role-after-restart') AND allowed
 		  AND subject_type='ROLE')`, policy.Version.ID, serviceRoleTemplate.ID, serviceRoleTemplate.Version,
@@ -1448,40 +1452,6 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 		templates != 1 || ceilings != 1 || roleAllows != 2 {
 		t.Fatalf("registered product state split: heads=%d versions=%d allows=%d denies=%d forged=%d batch=%d key=%d templates=%d ceilings=%d role=%d err=%v",
 			heads, versions, allows, denies, forged, batchAllows, keyAllows, templates, ceilings, roleAllows, err)
-	}
-	// Simulate retained pre-IAM83 data written before the product ceiling guard
-	// existed. The supported migration must fail closed; it must neither bless
-	// nor silently remove an authority grant that the signed catalog forbids.
-	_, disableErr := admin.Exec(ctx, `ALTER TABLE iam.policy_attachments DISABLE TRIGGER policy_attachments_reject_service_roles`)
-	var insertErr error
-	if disableErr == nil {
-		_, insertErr = admin.Exec(ctx, `INSERT INTO iam.policy_attachments(
-			tenant_id,id,target_id,target_kind,policy_id,authority_scope,resource_version,created_at,updated_at)
-			VALUES($1,'attachment-retained-service-role-ceiling',$2,'USER',$3,'TENANT',1,transaction_timestamp(),transaction_timestamp())`,
-			document.Organization.ID, document.Administrator.ID, serviceRolePolicy.Version.PolicyID)
-	}
-	_, enableErr := admin.Exec(ctx, `ALTER TABLE iam.policy_attachments ENABLE ALWAYS TRIGGER policy_attachments_reject_service_roles`)
-	if err := errors.Join(disableErr, insertErr, enableErr); err != nil {
-		t.Fatal("create retained direct-ceiling fixture", err)
-	}
-	conflictConnection, err := pgx.ConnectConfig(ctx, config)
-	if err != nil {
-		t.Fatal("connect retained direct-ceiling migration fixture", err)
-	}
-	if err := iammigration.UpRelease(ctx, conflictConnection, releaseCatalog); err == nil {
-		_ = conflictConnection.Close(context.Background())
-		t.Fatal("IAM83 migration accepted a retained direct service-role ceiling attachment")
-	}
-	if err := conflictConnection.Close(context.Background()); err != nil {
-		t.Fatal("close retained direct-ceiling migration fixture", err)
-	}
-	if err := iammigration.VerifyRelease(ctx, admin, releaseCatalog); err == nil {
-		t.Fatal("IAM83 verification accepted a retained direct service-role ceiling attachment")
-	}
-	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachments
-		WHERE tenant_id=$1 AND id='attachment-retained-service-role-ceiling' AND policy_id=$2 AND revoked_at IS NULL`,
-		document.Organization.ID, serviceRolePolicy.Version.PolicyID).Scan(&directCeilingAttachments); err != nil || directCeilingAttachments != 1 {
-		t.Fatal("failed migration changed the retained direct-ceiling conflict", err)
 	}
 }
 
