@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；UX/UI owner 的当前固定代码`25384bb08453c1b08ecc095820e1f77952a17720`已在当前IAM源码上按精确子树集成为`ffdedcde2f324e121f9a643b679a06530fd23a5d`，本地全前端/嵌入/Go回归、同Profile签名A/B离线生命周期、引擎重启复验及该SHA的独立CI均已通过。当前快照尚未完成受控真实浏览器业务路径、慢响应/故障注入和跨浏览器未知结果恢复，因此整个FEAT仍未验收。
+- 状态：实施中；UX/UI owner 的精确实例详情重新鉴权固定代码`24eedefe51a60ce2ca9805cba69901d923a6feef`已选择性集成为`0d9d0b12e9f95e9a2110697021d591916552da9a`。该源码的受控真实浏览器已完成首个实际产品资源 PostgreSQL 18 的创建、READY、SQL读写、Group授权、同会话撤权后拒绝及完整Audit链，IAM-AC-08据此通过。慢响应/故障注入、跨浏览器未知结果恢复、APISIX与签名安装浏览器路径及完整IAM-UI-01–08仍有缺口，因此整个FEAT仍未验收。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -79,7 +79,7 @@ UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PD
 
 在原 auth renderer 的 detail/note 文本容器补可断行规则，109项前端测试、type/lint/架构/20组对比度通过，两次2-worker嵌入构建逐文件匹配59项。全新数据库与重建 UI 的第二轮浏览器，在实际360×800视口完成设置 A、替换 B、移除和同一成员会话刷新；截图显示完整换行，详情边界容器 clientWidth/scrollWidth均212，自身投影均262，右边界均在视口内。fixture通过154.51s（包155.986s），实际事实和 Audit 链再次验证通过。只证明该边界交互，不包括完整策略编辑器、所有错误页面或整个010验收。
 
-集成后的当前工作树重新执行`npm ci`并从头通过`npm run check`：typecheck、lint、架构、228组对比度、63/63文件共1155/1155项测试、3项归一化、47页生产构建、45项规范化和259文件嵌入一致性均成功；随后以`GOMAXPROCS=2`通过`go test -count=1 -p 2 ./...`与`go vet -p 2 ./...`。本机Node 23.11.1不在项目声明的受支持engine范围，因此这些是组合回归证据，不是正式Node运行时或release验收。当前仍未实跑完整平台→root→管理员→成员→资源的真实IAM进程浏览器路径，也未覆盖慢响应/故障注入、completion receipt、跨浏览器reload后的UNKNOWN恢复、APISIX或签名安装；这些缺口完成前，不能把MOCK三视口或组件测试标为IAM-UI-01–08整体通过。
+集成后的工作树重新执行`npm ci`并从头通过`npm run check`：typecheck、lint、架构、228组对比度、63/63文件共1155/1155项测试、3项归一化、47页生产构建、45项规范化和259文件嵌入一致性均成功；随后以`GOMAXPROCS=2`通过`go test -count=1 -p 2 ./...`与`go vet -p 2 ./...`。本机Node 23.11.1不在项目声明的受支持engine范围，因此这些是组合回归证据，不是正式Node运行时或release验收。该快照当时尚未实跑平台→root→管理员→成员→资源的真实IAM进程浏览器路径；当前`0d9d0b12`已补足下述首个真实产品资源闭环，但慢响应/故障注入、completion receipt、跨浏览器reload后的UNKNOWN恢复、APISIX或签名安装仍未覆盖，不能把本次资源闭环扩大解释为IAM-UI-01–08整体通过。
 
 固定`448400628734d4c708d7859492fba1cf1b663284`在原Verification工作流增加独立`console`作业，使用受支持的Node 22.22.2、固定npm 11.6.4执行干净`npm ci`、完整`npm run check`，并要求源码与259个嵌入文件无生成差异；后端原串行门禁及资源预算未变。[Verification 37644376405](https://github.com/xiak/matrix/actions/runs/37644376405)首轮中`authority-replacement`和`authority-replacement-qualification`因GitHub runner连续五次获取失败而在零runner、零步骤状态结束，其余实际执行作业（包括`console`）均成功；整轮终态后仅通过官方failed-jobs入口重跑这两项及依赖汇总。attempt 2已核对精确SHA、16项全部completed/success，两个替换作业均取得runner并真实通过，最终`authority-process`成功。该证据接受受支持Node运行时上的独立控制台构建/测试门禁，不替代上述真实IAM浏览器、故障恢复、APISIX或签名发布缺口。
 
@@ -93,10 +93,14 @@ UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PD
 
 同一精确源码已组装并验签当前`83/37/3+r31` A/B，在本任务独立离线Docker引擎完成效果型生命周期和引擎重启后的只读复验。该运行的唯一事实与边界由[FEAT-005当前UX快照发布消费者门禁](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-ux-snapshot-release-consumer-gate)维护；这里只确认嵌入控制台是实际签名发布内容，不把安装通过写成页面业务通过。
 
-本轮未取得受支持的受控浏览器驱动通道，真实浏览器fixture在产生任何完成标记前正常停止并清理，未用另一套浏览器工具或静态页面观察冒充验收。因此当前快照的LIVE业务路径仍是明确缺口；既有窄范围User边界浏览器证据也不能替代这次完整页面树的复验。
+该快照集成轮次没有取得受支持的受控浏览器驱动通道，fixture在产生完成标记前停止并清理，未把静态页面观察冒充验收。后继`0d9d0b12`已用受控浏览器完成下述真实产品资源路径；该后继证据只关闭精确资源闭环，不回填此前中止的运行，也不替代其余页面、故障和恢复场景。
 
-### 真实产品资源闭环候选
+### 真实产品资源闭环
 
 当前产品目录首个真实接入对象是既有 `localpostgres` provider 所拥有的 PostgreSQL 18，不创建仅供演示的 MySQL、Elasticsearch 或消息队列条目。浏览器夹具应启动实际受限 PaaS worker，并使用固定完整镜像摘要、任务私有 binding/secret 目录和唯一资源 ID 创建实例；验收同时核对实际容器健康、产品/区域标签、PostgreSQL 18 SQL 写入读取、最终 endpoint/credential reference 和唯一 ready Audit 事实。测试资源只按该资源 ID 和 Compose project 标签定向清理。
 
-普通 User 必须通过当前 Policy/Group/Role 之一取得该精确资源的读取许可并真正读取实例；目录行只提供定位摘要，进入详情后必须通过 `GET /managed-services/v1/service-installations/{installationId}` 对该实例重新鉴权。精确读取成功前不得显示旧快照中的 endpoint、阶段、状态或管理入口；拒绝、未找到和不可用只在详情数据区失败，并只能原位重试同一实例。撤销来源后，下一次相同业务请求必须拒绝，而实例、数据和租户归属保持不变。Allow/Deny 决定均需由同一 User、动作和真实资源 ID 关联到不可变 IAM Audit 记录，PaaS created/ready 事实进入同一租户链并通过验证。该闭环尚需 UX owner 在固定源码的受控浏览器中完成交互和观察；测试代码、目录页面或单独 provider 测试通过均不能提前把本节标为验收完成。
+普通 User 必须通过当前 Policy/Group/Role 之一取得该精确资源的读取许可并真正读取实例；目录行只提供定位摘要，进入详情后必须通过 `GET /managed-services/v1/service-installations/{installationId}` 对该实例重新鉴权。精确读取成功前不得显示旧快照中的 endpoint、阶段、状态或管理入口；拒绝、未找到和不可用只在详情数据区失败，并只能原位重试同一实例。撤销来源后，下一次相同业务请求必须拒绝，而实例、数据和租户归属保持不变。Allow/Deny 决定均需由同一 User、动作和真实资源 ID 关联到不可变 IAM Audit 记录，PaaS created/ready 事实进入同一租户链并通过验证。
+
+固定`0d9d0b12e9f95e9a2110697021d591916552da9a`在全新PostgreSQL 18控制数据库上以显式浏览器入口运行`TestIAMConsoleBrowser`，package通过368.546秒，fixture为366.41秒。管理员从控制台创建真实`localpostgres`实例`iam-browser-pg-bbea9b402e4f`，实际受限Linux worker将其调谐至RUNNING/READY；浏览器读取到真实endpoint`127.0.0.1:39399`，后端在该实例完成PostgreSQL 18探测及`preserved`行写入读取，并核对固定完整镜像。普通成员仅经Group策略获得目录与精确实例读取，在第二个窗口撤销Group成员关系后，不重新登录或整页刷新便再次点击同一实例；稳定标题保留，精确GET返回无权限，旧endpoint、状态和操作入口均未泄露。两个窗口warning/error均为0；后端同时核对Allow与后继Deny决定、唯一`managedservice.service-installation.ready`事实及完整租户Audit链。结束后只按本轮标签删除控制数据库和测试资源，既有4317预览未被操作。该证据接受IAM-AC-08，不扩大为APISIX、签名安装、跨浏览器UNKNOWN恢复或整个FEAT验收。
+
+当前安装目录页仍将`installations`与offering、region、quota三类辅助上下文放入同一个阻塞读取。精确实例读取许可的成员不应为了进入资源页被迫获得三类广域集合权限；后继UI切片必须把`installations`作为必需数据独立加载，offering/region/quota在403、空结果或不可用时局部降级，保持列表与标题稳定，并继续由精确详情GET决定是否显示实例事实。不得用授予宽权限掩盖该耦合。
