@@ -77,9 +77,9 @@
         "keywords": "app application hosting paas 应用 托管 容器"
       },
       "postgresql": {
-        "name": "云数据库 PostgreSQL",
-        "description": "数据库实例、连接端点与运行状态",
-        "keywords": "pg postgres postgresql database 数据库 托管数据库"
+        "name": "托管数据服务",
+        "description": "数据库、搜索与消息队列实例",
+        "keywords": "pg postgres postgresql mysql elasticsearch rabbitmq database search mq 数据库 搜索 消息队列 托管数据"
       },
       "monitoring": {
         "name": "云监控",
@@ -141,7 +141,7 @@
     "headline": "掌控你的云。",
     "headlineAccent": "连接每一种可能。",
     "lead": "从基础设施到应用交付，让资源、服务与团队在同一平台协同。",
-    "productionLead": "集中管理服务目录、数据库实例、配额与部署区域。让每一次部署清晰可控。",
+    "productionLead": "集中管理服务目录、托管服务实例、配额与部署区域。让每一次部署清晰可控。",
     "infrastructure": "云基础设施",
     "delivery": "应用与交付",
     "observability": "全栈可观测",
@@ -919,7 +919,7 @@
         "hint": "部署资源与运行状态"
       },
       "installations": {
-        "label": "数据库实例",
+        "label": "服务实例",
         "hint": "连接端点与运行状态"
       },
       "catalog": {
@@ -3190,7 +3190,7 @@
       },
       "installations": {
         "title": "服务实例",
-        "description": "将已激活的 PostgreSQL 配额安装到一个就绪区域。"
+        "description": "将已激活的产品配额安装到一个就绪区域。"
       },
       "regions": {
         "title": "区域与基础设施",
@@ -3373,7 +3373,7 @@
   },
   "ManagedService": {
     "instancesEmpty": "还没有服务实例",
-    "instancesEmptyHint": "激活配额后，可以从服务实例页发起第一个 PostgreSQL 安装。",
+    "instancesEmptyHint": "激活产品配额后，可以从服务实例页发起第一个托管服务安装。",
     "instancesTable": "服务实例列表",
     "instance": "实例",
     "region": "区域",
@@ -3384,7 +3384,8 @@
     "recentInstances": "最近服务实例",
     "recentHint": "安装任务与运行端点",
     "viewAll": "查看全部",
-    "databaseEyebrow": "默认托管数据库",
+    "databaseEyebrow": "默认托管产品",
+    "managedDataServices": "托管数据服务",
     "offeringUnavailable": "服务目录尚未返回可用产品。",
     "fixedArtifact": "固定发布制品",
     "persistentStorage": "持久化存储",
@@ -3403,7 +3404,7 @@
     "noPayment": "配额激活不涉及付款",
     "configureQuota": "配置配额",
     "quotaEmpty": "尚未激活服务配额",
-    "quotaEmptyHint": "打开「激活配额」，选择 PostgreSQL 规格和实例数量。平台只记录额度，不模拟支付。",
+    "quotaEmptyHint": "打开「激活配额」，选择真实产品规格和实例数量。平台只记录额度，不模拟支付。",
     "activated": "已激活",
     "inUse": "使用中",
     "available": "可用",
@@ -3429,7 +3430,48 @@
       "unavailable": "实例详情暂时不可用。页面保留目录定位信息，不会把目录快照冒充详情结果。"
     },
     "instanceId": "实例 ID",
+    "product": "产品",
+    "resourceVersion": "资源版本",
+    "safeFailureCode": "安全失败码",
+    "createdAt": "创建时间",
     "operationId": "最近操作 ID",
+    "operationKinds": {
+      "PROVISION": "安装",
+      "TERMINATE": "终止"
+    },
+    "instanceLifecycle": "实例生命周期",
+    "instanceLifecycleHint": "终止由产品服务异步执行；请求受 IAM 重新鉴权并保留审计记录。",
+    "terminationLiveEyebrow": "实例终止 · LIVE",
+    "terminationPreviewEyebrow": "实例终止 · MOCK",
+    "terminationReview": "终止实例审阅",
+    "terminationReviewTitle": "终止实例 · {name}",
+    "terminationReviewHint": "这是不可逆的数据销毁操作，请先核对准确实例与影响范围。",
+    "terminationLiveBoundary": "确认后平台将异步物理删除这个实例的容器、网络、持久化数据和托管凭据；只有终止完成后才归还配额。已接受请求不等于已经删除完成。",
+    "terminationPreviewBoundary": "当前只在隔离 MOCK 内存中演练终止信息流，不调用后端，也不会删除真实容器、网络、数据或凭据。",
+    "terminationVersionObservation": "仅显示本次精确读取的版本；终止接口按资源路径和幂等键重新鉴权",
+    "terminationConfirmationLabel": "输入实例 ID 以确认",
+    "terminationConfirmationHint": "请输入 {id}",
+    "terminationSubmitting": "正在提交终止请求",
+    "confirmTermination": "确认终止实例",
+    "retrySameTermination": "使用同一请求原样重试",
+    "cancelTermination": "取消",
+    "returnPreservingTermination": "返回实例并保留原请求",
+    "reviewTermination": "审阅终止实例",
+    "reviewTerminationAgain": "审阅再次终止",
+    "resumeTermination": "继续处理未确认终止",
+    "terminationInProgress": "终止请求已被平台接受，正在异步清理运行时、网络、数据与凭据。页面会继续读取当前操作；请勿创建第二个终止意图。",
+    "terminationCompleted": "平台已完成实例终止。实例将从可见目录移除，关联配额在终态后归还。",
+    "terminationUnknownPreserved": "原终止请求 {id} 的结果尚未确认。已保留原幂等键，不会创建第二个终止意图。",
+    "terminationAnotherIntent": "实例 {id} 仍有未完成的终止请求。完成或明确处理它之前，不能发起另一个实例终止。",
+    "terminationAuthorizationBusy": "当前实例还有未完成的服务授权审阅。请先结束该信息流，再审阅终止。",
+    "terminationMutationErrors": {
+      "expired": "当前会话已失效。原请求不会换用新会话自动提交。",
+      "forbidden": "当前身份无权终止这个准确实例。",
+      "notFound": "实例已不存在，或当前身份不能确认它是否存在。请返回目录重新读取。",
+      "conflict": "实例状态已变化，当前阶段不能开始终止。请返回重新读取后再表达新意图。",
+      "invalid": "冻结的终止请求未通过服务端校验，不会自动替换输入。",
+      "unknown": "服务端结果尚未确认。不要创建新意图；只能使用下方保留的原请求和幂等键重试。"
+    },
     "authorizationEyebrow": "产品资源授权 · MOCK",
     "authorizationLiveEyebrow": "产品资源授权 · LIVE",
     "authorizationLiveWriteEyebrow": "产品资源授权 · LIVE 审阅",
@@ -3521,7 +3563,12 @@
       "PENDING": "等待处理",
       "PROVISIONING": "安装中",
       "READY": "运行中",
-      "FAILED": "失败"
+      "FAILED": "失败",
+      "ROLLBACK_FAILED": "回滚失败",
+      "TERMINATION_PENDING": "等待终止",
+      "TERMINATING": "终止中",
+      "TERMINATION_FAILED": "终止失败",
+      "TERMINATED": "已终止"
     },
     "regionStates": {
       "READY": "就绪",
@@ -3541,8 +3588,8 @@
     "activating": "正在激活…",
     "activate": "确认激活配额",
     "installEyebrow": "服务安装",
-    "installTitle": "安装 PostgreSQL",
-    "quotaEmpty": "没有可用配额。请先激活 PostgreSQL 配额，或等待现有安装释放额度。",
+    "installTitle": "安装托管服务",
+    "quotaEmpty": "没有可用配额。请先激活产品配额，或等待现有安装释放额度。",
     "regionsEmpty": "没有就绪区域。安装器必须先完成本机能力检查。",
     "instanceId": "实例 ID",
     "idHint": "2–63 个字符，以小写字母或数字开头和结尾，中间可用小写字母、数字、点、下划线或连字符。",

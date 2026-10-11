@@ -23,6 +23,8 @@ import type {
   ActivateQuotaCommand,
   ControlPlaneSnapshot,
   CreateInstallationCommand,
+  InstallationTerminationIntent,
+  InstallationTerminationMutationError,
   InstallationReadLoad
 } from "../domain/resources";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
@@ -56,6 +58,11 @@ type ControlPlaneContextValue = {
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
   createInstallation(command: CreateInstallationCommand): Promise<boolean>;
   readInstallation(installationId: string): Promise<InstallationReadLoad>;
+  installationTerminationIntent: InstallationTerminationIntent | null;
+  beginInstallationTermination(installation: InstallationTerminationIntent["installation"]): void;
+  submitInstallationTermination(): Promise<InstallationTerminationIntent["installation"] | null>;
+  closeInstallationTerminationIntent(): void;
+  reopenInstallationTerminationIntent(): void;
   readApplication(applicationId: string): Promise<ApplicationReadLoad>;
   listApplications(after?: string): Promise<ApplicationDirectoryLoad>;
   inspectServiceAuthorization(accountId: string, installationId: string): Promise<ManagedServiceAuthorizationLoad>;
@@ -138,6 +145,16 @@ function serviceAuthorizationMutationError(error: unknown): ManagedServiceAuthor
   return "unknown";
 }
 
+function installationTerminationMutationError(error: unknown): InstallationTerminationMutationError {
+  if (!(error instanceof HttpProblem)) return "unknown";
+  if (error.status === 401) return "expired";
+  if (error.status === 403) return "forbidden";
+  if (error.status === 404) return "notFound";
+  if (error.status === 409) return "conflict";
+  if ([400, 413, 415, 422].includes(error.status)) return "invalid";
+  return "unknown";
+}
+
 export function ControlPlaneProvider({
   children,
   experience,
@@ -155,9 +172,11 @@ export function ControlPlaneProvider({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ControlPlaneError | null>(null);
   const [mutation, setMutation] = useState<MutationKind>(null);
+  const [installationTerminationIntent, setInstallationTerminationIntent] = useState<InstallationTerminationIntent | null>(null);
   const [serviceAuthorizationIntent, setServiceAuthorizationIntent] = useState<ManagedServiceAuthorizationIntent | null>(null);
   const cacheRef = useRef<ControlPlaneCache | null>(null);
   const serviceAuthorizationIntentRef = useRef<ManagedServiceAuthorizationIntent | null>(null);
+  const installationTerminationIntentRef = useRef<InstallationTerminationIntent | null>(null);
   const inFlight = useRef(new Map<ControlPlaneResourceKind, { owner: string; promise: Promise<void> }>());
   const prepareRevision = useRef(0);
 
@@ -298,6 +317,8 @@ export function ControlPlaneProvider({
     setLoading(false);
     serviceAuthorizationIntentRef.current = null;
     setServiceAuthorizationIntent(null);
+    installationTerminationIntentRef.current = null;
+    setInstallationTerminationIntent(null);
   }, [credential]);
 
   useEffect(() => {
@@ -312,17 +333,31 @@ export function ControlPlaneProvider({
   useEffect(() => {
     if (!credential || selection.section !== "installations") return;
     if (!ownedCache?.loaded.has("installations")) return;
-    const pending = ownedCache.snapshot.installations.filter(
-      (item) => item.phase === "PENDING" || item.phase === "PROVISIONING"
-    );
+    const pending = ownedCache.snapshot.installations.filter((item) => [
+      "PENDING", "PROVISIONING", "TERMINATION_PENDING", "TERMINATING"
+    ].includes(item.phase));
     if (pending.length === 0) return;
     let active = true;
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const updates = await Promise.all(
-            pending.map((item) => repository.getInstallation(credential, item.id))
-          );
+          const reads = await Promise.all(pending.map(async (item) => {
+            try {
+              return { installation: await repository.getInstallation(credential, item.id), missing: false };
+            } catch (pollError) {
+              const terminating = item.phase === "TERMINATION_PENDING" || item.phase === "TERMINATING";
+              if (terminating && pollError instanceof HttpProblem && pollError.status === 404) {
+                return { installation: null, missing: true };
+              }
+              throw pollError;
+            }
+          }));
+          if (reads.some((read) => read.missing)) {
+            await readResources(["installations"], true);
+            if (active) readEnrichments(["entitlements"], true);
+            return;
+          }
+          const updates = reads.flatMap((read) => read.installation ? [read.installation] : []);
           if (!active) return;
           setError(null);
           const byId = new Map(updates.map((item) => [item.id, item]));
@@ -338,7 +373,9 @@ export function ControlPlaneProvider({
             cacheRef.current = next;
             setCache(next);
           }
-          if (!updates.some((item) => item.phase === "READY" || item.phase === "FAILED")) {
+          if (!updates.some((item) => [
+            "READY", "FAILED", "ROLLBACK_FAILED", "TERMINATION_FAILED", "TERMINATED"
+          ].includes(item.phase))) {
             return;
           }
           await readResources(["installations"], true);
@@ -407,6 +444,85 @@ export function ControlPlaneProvider({
       setMutation(null);
     }
   }, [credential, repository]);
+
+  const commitInstallationTerminationIntent = useCallback((intent: InstallationTerminationIntent | null) => {
+    installationTerminationIntentRef.current = intent;
+    setInstallationTerminationIntent(intent);
+  }, []);
+
+  const beginInstallationTermination = useCallback((installation: InstallationTerminationIntent["installation"]) => {
+    const current = installationTerminationIntentRef.current;
+    if (current) {
+      if (current.installation.id === installation.id) {
+        commitInstallationTerminationIntent({ ...current, open: true });
+      }
+      return;
+    }
+    if (!["READY", "ROLLBACK_FAILED", "TERMINATION_FAILED"].includes(installation.phase)) return;
+    commitInstallationTerminationIntent({
+      installation,
+      requestId: requestToken("ui-installation-termination-"),
+      phase: "review",
+      error: null,
+      open: true
+    });
+  }, [commitInstallationTerminationIntent]);
+
+  const submitInstallationTermination = useCallback(async () => {
+    const intent = installationTerminationIntentRef.current;
+    if (!credential || !intent || intent.phase === "submitting" || !repository.terminateInstallation) return null;
+    commitInstallationTerminationIntent({ ...intent, phase: "submitting", error: null, open: true });
+    try {
+      const installation = await repository.terminateInstallation(
+        credential,
+        intent.installation.id,
+        intent.requestId
+      );
+      const current = cacheRef.current;
+      if (current?.owner === credential) {
+        const next = {
+          ...current,
+          snapshot: {
+            ...current.snapshot,
+            installations: current.snapshot.installations.map((item) =>
+              item.id === installation.id ? installation : item
+            )
+          }
+        };
+        cacheRef.current = next;
+        setCache(next);
+      }
+      if (installationTerminationIntentRef.current?.requestId === intent.requestId) {
+        commitInstallationTerminationIntent(null);
+      }
+      return installation;
+    } catch (terminationError) {
+      if (installationTerminationIntentRef.current?.requestId === intent.requestId) {
+        commitInstallationTerminationIntent({
+          ...intent,
+          phase: "failed",
+          error: installationTerminationMutationError(terminationError),
+          open: true
+        });
+      }
+      return null;
+    }
+  }, [commitInstallationTerminationIntent, credential, repository]);
+
+  const closeInstallationTerminationIntent = useCallback(() => {
+    const intent = installationTerminationIntentRef.current;
+    if (!intent) return;
+    if (intent.phase === "failed" && intent.error === "unknown") {
+      commitInstallationTerminationIntent({ ...intent, open: false });
+      return;
+    }
+    commitInstallationTerminationIntent(null);
+  }, [commitInstallationTerminationIntent]);
+
+  const reopenInstallationTerminationIntent = useCallback(() => {
+    const intent = installationTerminationIntentRef.current;
+    if (intent) commitInstallationTerminationIntent({ ...intent, open: true });
+  }, [commitInstallationTerminationIntent]);
 
   const readInstallation = useCallback(async (installationId: string): Promise<InstallationReadLoad> => {
     if (!credential) return { status: "expired" };
@@ -585,6 +701,11 @@ export function ControlPlaneProvider({
     activateQuota,
     createInstallation,
     readInstallation,
+    installationTerminationIntent,
+    beginInstallationTermination,
+    submitInstallationTermination,
+    closeInstallationTerminationIntent,
+    reopenInstallationTerminationIntent,
     readApplication,
     listApplications,
     inspectServiceAuthorization,
@@ -593,7 +714,7 @@ export function ControlPlaneProvider({
     submitServiceAuthorization,
     closeServiceAuthorizationIntent,
     reopenServiceAuthorizationIntent
-  }), [activateQuota, beginServiceAuthorization, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, isAccess, listApplications, loading, mutation, prepare, projectScene, readApplication, readInstallation, reload, reopenServiceAuthorizationIntent, scene, selection, serviceAuthorizationIntent, submitServiceAuthorization]);
+  }), [activateQuota, beginInstallationTermination, beginServiceAuthorization, closeInstallationTerminationIntent, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, installationTerminationIntent, isAccess, listApplications, loading, mutation, prepare, projectScene, readApplication, readInstallation, reload, reopenInstallationTerminationIntent, reopenServiceAuthorizationIntent, scene, selection, serviceAuthorizationIntent, submitInstallationTermination, submitServiceAuthorization]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

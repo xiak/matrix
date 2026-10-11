@@ -122,8 +122,8 @@ function InstallationOrder({
   const instanceIdField = useId();
   const [entitlementId, setEntitlementId] = useState(scene.entitlementOptions[0]?.entitlementId ?? "");
   const [regionId, setRegionId] = useState(scene.regionOptions[0]?.id ?? "");
-  const [name, setName] = useState("postgres-primary");
-  const [id, setId] = useState("postgres-primary");
+  const [name, setName] = useState("service-primary");
+  const [id, setId] = useState("service-primary");
   const [accepted, setAccepted] = useState(false);
   const selectedEntitlement = scene.entitlementOptions.find((item) => item.entitlementId === entitlementId);
   const canSubmit = Boolean(selectedEntitlement && scene.regionOptions.some((region) => region.id === regionId) && installationIDPattern.test(id) && name.trim());

@@ -32,6 +32,7 @@ import type {
 function offeringScenes(snapshot: ControlPlaneSnapshot): OfferingScene[] {
   return snapshot.offerings.map((offering) => ({
     id: offering.id,
+    kind: offering.kind,
     name: offering.displayName,
     description: offering.description,
     engine: offering.engineFamily,
@@ -44,8 +45,9 @@ function offeringScenes(snapshot: ControlPlaneSnapshot): OfferingScene[] {
 
 function installationStatus(phase: ServiceInstallation["phase"]): SceneStatus {
   if (phase === "READY") return "success";
-  if (phase === "FAILED") return "danger";
-  if (phase === "PROVISIONING") return "info";
+  if (["FAILED", "ROLLBACK_FAILED", "TERMINATION_FAILED"].includes(phase)) return "danger";
+  if (["PROVISIONING", "TERMINATING"].includes(phase)) return "info";
+  if (phase === "TERMINATED") return "neutral";
   return "warning";
 }
 
@@ -57,12 +59,17 @@ function installationScenes(snapshot: ControlPlaneSnapshot): InstallationScene[]
     return {
       id: installation.id,
       name: installation.name,
+      offeringId: installation.offeringId,
       engine: `${offering?.engineFamily ?? "Managed service"} ${installation.engineVersion}`,
       regionName: regions.get(installation.regionId)?.displayName ?? installation.regionId,
       phase: installation.phase,
       status: installationStatus(installation.phase),
       endpoint: installation.endpoint,
       operationId: installation.operation.id,
+      operationKind: installation.operation.kind,
+      safeFailureCode: installation.operation.safeFailureCode,
+      resourceVersion: installation.resourceVersion,
+      createdAt: installation.createdAt,
       observedAt: installation.operation.observedAt
     };
   });

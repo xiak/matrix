@@ -77,9 +77,9 @@
         "keywords": "app application hosting paas 应用 托管 容器"
       },
       "postgresql": {
-        "name": "PostgreSQL database",
-        "description": "Database instances, endpoints and runtime state",
-        "keywords": "pg postgres postgresql database 数据库 托管数据库"
+        "name": "Managed data services",
+        "description": "Database, search and message-queue instances",
+        "keywords": "pg postgres postgresql mysql elasticsearch rabbitmq database search mq 数据库 搜索 消息队列 托管数据"
       },
       "monitoring": {
         "name": "Cloud Monitoring",
@@ -141,7 +141,7 @@
     "headline": "Your cloud. In control.",
     "headlineAccent": "Every possibility. Connected.",
     "lead": "From infrastructure to application delivery. Bring your resources, services and teams together in one place.",
-    "productionLead": "Manage your service catalog, databases, quotas and deployment regions. Make every deployment clear and controlled.",
+    "productionLead": "Manage your service catalog, managed-service instances, quotas and deployment regions. Make every deployment clear and controlled.",
     "infrastructure": "Infrastructure",
     "delivery": "Apps & delivery",
     "observability": "Observability",
@@ -919,7 +919,7 @@
         "hint": "Deployments and runtime"
       },
       "installations": {
-        "label": "Database instances",
+        "label": "Service instances",
         "hint": "Endpoints and runtime"
       },
       "catalog": {
@@ -3190,7 +3190,7 @@
       },
       "installations": {
         "title": "Service instances",
-        "description": "Deploy activated PostgreSQL capacity to a ready region."
+        "description": "Deploy activated product capacity to a ready region."
       },
       "regions": {
         "title": "Regions and infrastructure",
@@ -3373,7 +3373,7 @@
   },
   "ManagedService": {
     "instancesEmpty": "No service instances",
-    "instancesEmptyHint": "Activate a quota, then create your first PostgreSQL instance from the service instances page.",
+    "instancesEmptyHint": "Activate product quota, then create your first managed-service instance.",
     "instancesTable": "Service instances",
     "instance": "Instance",
     "region": "Region",
@@ -3384,7 +3384,8 @@
     "recentInstances": "Recent service instances",
     "recentHint": "Installation progress and runtime endpoints",
     "viewAll": "View all",
-    "databaseEyebrow": "Default managed database",
+    "databaseEyebrow": "Default managed product",
+    "managedDataServices": "Managed data services",
     "offeringUnavailable": "No available product has been returned by the service catalog.",
     "fixedArtifact": "Release-owned artifact",
     "persistentStorage": "Persistent storage",
@@ -3403,7 +3404,7 @@
     "noPayment": "Quota activation does not involve payment",
     "configureQuota": "Configure quota",
     "quotaEmpty": "No active service quota",
-    "quotaEmptyHint": "Open Activate quota to choose a PostgreSQL shape and instance count. The platform records entitlement only; it does not simulate payment.",
+    "quotaEmptyHint": "Open Activate quota to choose a real product shape and instance count. The platform records entitlement only; it does not simulate payment.",
     "activated": "Activated",
     "inUse": "In use",
     "available": "Available",
@@ -3429,7 +3430,48 @@
       "unavailable": "Instance details are temporarily unavailable. The page keeps the directory context visible and does not present the directory snapshot as a detail result."
     },
     "instanceId": "Instance ID",
+    "product": "Product",
+    "resourceVersion": "Resource version",
+    "safeFailureCode": "Safe failure code",
+    "createdAt": "Created",
     "operationId": "Latest operation ID",
+    "operationKinds": {
+      "PROVISION": "Provision",
+      "TERMINATE": "Terminate"
+    },
+    "instanceLifecycle": "Instance lifecycle",
+    "instanceLifecycleHint": "Termination is asynchronous, re-authorized by the product service, and retained in the audit trail.",
+    "terminationLiveEyebrow": "Instance termination · LIVE",
+    "terminationPreviewEyebrow": "Instance termination · MOCK",
+    "terminationReview": "Instance termination review",
+    "terminationReviewTitle": "Terminate instance · {name}",
+    "terminationReviewHint": "This permanently destroys data. Verify the exact instance and impact before continuing.",
+    "terminationLiveBoundary": "After confirmation, the platform asynchronously deletes this instance's container, network, persistent data and managed credential. Quota returns only after termination completes; an accepted request is not proof that deletion is complete.",
+    "terminationPreviewBoundary": "This exercises the termination flow only in isolated MOCK memory. It calls no backend and deletes no real container, network, data or credential.",
+    "terminationVersionObservation": "Displayed from the exact read only; the termination route re-authorizes by resource path and idempotency key",
+    "terminationConfirmationLabel": "Enter the instance ID to confirm",
+    "terminationConfirmationHint": "Enter {id}",
+    "terminationSubmitting": "Submitting termination",
+    "confirmTermination": "Confirm instance termination",
+    "retrySameTermination": "Retry the same request unchanged",
+    "cancelTermination": "Cancel",
+    "returnPreservingTermination": "Return and preserve original request",
+    "reviewTermination": "Review instance termination",
+    "reviewTerminationAgain": "Review termination retry",
+    "resumeTermination": "Resume unconfirmed termination",
+    "terminationInProgress": "The platform accepted the termination and is asynchronously deleting runtime, network, data and credentials. This page keeps reading the current operation; do not create a second intent.",
+    "terminationCompleted": "The platform completed termination. The instance will leave the visible directory and its quota is returned at terminal completion.",
+    "terminationUnknownPreserved": "The result of original termination request {id} is not confirmed. Its idempotency key is preserved and a second termination intent will not be created.",
+    "terminationAnotherIntent": "Instance {id} still has an unfinished termination request. Complete or explicitly handle it before terminating another instance.",
+    "terminationAuthorizationBusy": "This instance still has an unfinished service-authorization review. Finish that flow before reviewing termination.",
+    "terminationMutationErrors": {
+      "expired": "The current session expired. The original request will not be automatically submitted with a new session.",
+      "forbidden": "This identity may not terminate this exact instance.",
+      "notFound": "The instance no longer exists, or this identity cannot confirm whether it exists. Return to the directory and read it again.",
+      "conflict": "The instance state changed and cannot begin termination from its current phase. Return, read it again, and express a new intent.",
+      "invalid": "The frozen termination request failed server validation. Its input will not be silently replaced.",
+      "unknown": "The server result is not confirmed. Do not create a new intent; only retry the preserved original request and idempotency key."
+    },
     "authorizationEyebrow": "Product-resource authorization · MOCK",
     "authorizationLiveEyebrow": "Product-resource authorization · LIVE",
     "authorizationLiveWriteEyebrow": "Product-resource authorization · LIVE review",
@@ -3521,7 +3563,12 @@
       "PENDING": "Pending",
       "PROVISIONING": "Installing",
       "READY": "Running",
-      "FAILED": "Failed"
+      "FAILED": "Failed",
+      "ROLLBACK_FAILED": "Rollback failed",
+      "TERMINATION_PENDING": "Termination pending",
+      "TERMINATING": "Terminating",
+      "TERMINATION_FAILED": "Termination failed",
+      "TERMINATED": "Terminated"
     },
     "regionStates": {
       "READY": "Ready",
@@ -3541,8 +3588,8 @@
     "activating": "Activating…",
     "activate": "Confirm quota activation",
     "installEyebrow": "Install service",
-    "installTitle": "Install PostgreSQL",
-    "quotaEmpty": "No quota is available. Activate a PostgreSQL quota or wait for an existing installation to release capacity.",
+    "installTitle": "Install managed service",
+    "quotaEmpty": "No quota is available. Activate product quota or wait for an existing installation to release capacity.",
     "regionsEmpty": "No region is ready. The installer must complete local capacity inspection first.",
     "instanceId": "Instance ID",
     "idHint": "2–63 characters. Start and end with a lowercase letter or number. Lowercase letters, numbers, periods, underscores and hyphens are allowed.",

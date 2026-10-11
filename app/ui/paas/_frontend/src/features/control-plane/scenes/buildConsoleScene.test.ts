@@ -50,9 +50,11 @@ const snapshot: ControlPlaneSnapshot = {
     phase: "READY",
     endpoint: "postgres-primary.local:5432",
     credentialReference: "credential-postgres-primary",
+    resourceVersion: 2,
     createdAt: "2026-08-26T12:00:00Z",
     operation: {
       id: "operation-postgres-primary",
+      kind: "PROVISION",
       phase: "READY",
       safeFailureCode: null,
       observedAt: "2026-08-26T12:05:00Z"

@@ -23,9 +23,11 @@ const pendingInstallation: ServiceInstallation = {
   phase: "PENDING",
   endpoint: null,
   credentialReference: null,
+  resourceVersion: 1,
   createdAt: "2026-08-26T12:00:00Z",
   operation: {
     id: "operation-primary",
+    kind: "PROVISION",
     phase: "PENDING",
     safeFailureCode: null,
     observedAt: "2026-08-26T12:00:00Z"
@@ -41,6 +43,19 @@ const readyInstallation: ServiceInstallation = {
     ...pendingInstallation.operation,
     phase: "READY",
     observedAt: "2026-08-26T12:00:04Z"
+  }
+};
+
+const terminatingInstallation: ServiceInstallation = {
+  ...readyInstallation,
+  phase: "TERMINATION_PENDING",
+  resourceVersion: 2,
+  operation: {
+    id: "operation-terminate-primary",
+    kind: "TERMINATE",
+    phase: "TERMINATION_PENDING",
+    safeFailureCode: null,
+    observedAt: "2026-08-26T12:04:00Z"
   }
 };
 
@@ -325,5 +340,80 @@ describe("ControlPlaneProvider", () => {
     expect(load.mock.calls.filter(([, resources]) => resources[0] === "entitlements")).toHaveLength(2);
     expect(load.mock.calls.every(([, resources]) => resources.length === 1)).toBe(true);
     expect(screen.getByTestId("phase").textContent).toBe("READY");
+  });
+
+  it("refreshes the authoritative directory and quota only when the terminating resource itself disappears", async () => {
+    vi.useFakeTimers();
+    let installationLoads = 0;
+    const source = snapshot(terminatingInstallation, 1);
+    const load = vi.fn<ControlPlaneRepository["load"]>(async (_credential, resources) => {
+      expect(resources).toHaveLength(1);
+      if (resources[0] === "installations") {
+        installationLoads += 1;
+        return { installations: installationLoads === 1 ? [terminatingInstallation] : [] };
+      }
+      return resourceSlice(source, resources);
+    });
+    const repository: ControlPlaneRepository = {
+      load,
+      getInstallation: vi.fn().mockRejectedValue(new HttpProblem(404, "INSTALLATION_NOT_FOUND")),
+      activateQuota: vi.fn(),
+      createInstallation: vi.fn()
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider repository={repository} selection={{ section: "installations" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByText("login"));
+      for (let flush = 0; flush < 6; flush += 1) await Promise.resolve();
+    });
+    expect(screen.getByTestId("phase").textContent).toBe("TERMINATION_PENDING");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+
+    expect(load.mock.calls.filter(([, resources]) => resources[0] === "installations")).toHaveLength(2);
+    expect(load.mock.calls.filter(([, resources]) => resources[0] === "entitlements")).toHaveLength(2);
+    expect(screen.getByTestId("phase").textContent).toBe("none");
+    expect(screen.getByTestId("error").textContent).toBe("none");
+  });
+
+  it("does not misclassify a provisioning 404 as termination completion because another instance is terminating", async () => {
+    vi.useFakeTimers();
+    const provisioningOther: ServiceInstallation = {
+      ...pendingInstallation,
+      id: "mysql-still-provisioning",
+      name: "MySQL still provisioning",
+      offeringId: "mysql-8.4",
+      engineVersion: "8.4",
+      operation: { ...pendingInstallation.operation, id: "operation-mysql-provisioning" }
+    };
+    const source = { ...snapshot(terminatingInstallation, 1), installations: [terminatingInstallation, provisioningOther] };
+    const load = vi.fn<ControlPlaneRepository["load"]>(async (_credential, resources) => resourceSlice(source, resources));
+    const getInstallation = vi.fn(async (_credential: string, installationId: string) => {
+      if (installationId === provisioningOther.id) throw new HttpProblem(404, "INSTALLATION_NOT_FOUND");
+      return terminatingInstallation;
+    });
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider repository={{ load, getInstallation, activateQuota: vi.fn(), createInstallation: vi.fn() }} selection={{ section: "installations" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByText("login"));
+      for (let flush = 0; flush < 6; flush += 1) await Promise.resolve();
+    });
+    expect(screen.getByTestId("phase").textContent).toBe("TERMINATION_PENDING");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+
+    expect(getInstallation).toHaveBeenCalledTimes(2);
+    expect(load.mock.calls.filter(([, resources]) => resources[0] === "installations")).toHaveLength(1);
+    expect(screen.getByTestId("error").textContent).not.toBe("none");
   });
 });

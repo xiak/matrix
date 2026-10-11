@@ -318,8 +318,9 @@ function parseShape(value: unknown): QuotaShape {
 
 function parseOffering(value: unknown): ServiceOffering {
   const wire = record(value, "offering");
+  const kind = String(wire.kind);
   if (
-    wire.kind !== "POSTGRESQL" ||
+    !["POSTGRESQL", "MYSQL", "ELASTICSEARCH", "RABBITMQ"].includes(kind) ||
     (wire.state !== "AVAILABLE" && wire.state !== "UNAVAILABLE") ||
     !Array.isArray(wire.quotaShapes)
   ) {
@@ -327,7 +328,7 @@ function parseOffering(value: unknown): ServiceOffering {
   }
   return {
     id: text(wire.id, "offering id"),
-    kind: "POSTGRESQL",
+    kind: kind as ServiceOffering["kind"],
     displayName: text(wire.displayName, "offering display name"),
     description: text(wire.description, "offering description"),
     engineFamily: text(wire.engineFamily, "engine family"),
@@ -378,7 +379,15 @@ function parseInstallation(value: unknown): ServiceInstallation {
   const wire = record(value, "service installation");
   const operation = record(wire.operation, "installation operation");
   const phase = String(wire.phase);
-  if (!["PENDING", "PROVISIONING", "READY", "FAILED"].includes(phase)) {
+  const operationKind = String(operation.kind);
+  const operationPhase = String(operation.phase);
+  const provisionPhase = ["PENDING", "PROVISIONING", "READY", "FAILED", "ROLLBACK_FAILED"].includes(phase);
+  const terminationPhase = ["TERMINATION_PENDING", "TERMINATING", "TERMINATION_FAILED", "TERMINATED"].includes(phase);
+  if (![
+    "PENDING", "PROVISIONING", "READY", "FAILED", "ROLLBACK_FAILED",
+    "TERMINATION_PENDING", "TERMINATING", "TERMINATION_FAILED", "TERMINATED"
+  ].includes(phase) || !["PROVISION", "TERMINATE"].includes(operationKind) || operationPhase !== phase ||
+    (operationKind === "PROVISION" && !provisionPhase) || (operationKind === "TERMINATE" && !terminationPhase)) {
     throw new Error("INVALID_INSTALLATION_RESPONSE");
   }
   return {
@@ -391,10 +400,12 @@ function parseInstallation(value: unknown): ServiceInstallation {
     phase: phase as ServiceInstallation["phase"],
     endpoint: nullableText(wire.endpoint, "installation endpoint"),
     credentialReference: nullableText(wire.credentialReference, "installation credential reference"),
+    resourceVersion: integer(wire.resourceVersion, "installation version"),
     createdAt: text(wire.createdAt, "installation creation"),
     operation: {
       id: text(operation.id, "operation id"),
-      phase: phase as ServiceInstallation["phase"],
+      kind: operationKind as ServiceInstallation["operation"]["kind"],
+      phase: operationPhase as ServiceInstallation["phase"],
       safeFailureCode: nullableText(operation.safeFailureCode, "operation failure"),
       observedAt: text(operation.observedAt, "operation observation")
     }
@@ -563,6 +574,27 @@ export const httpControlPlaneRepository: ControlPlaneRepository = {
       body: JSON.stringify(command)
     });
     return parseInstallation(value);
+  },
+
+  async terminateInstallation(credential, installationId, requestId) {
+    if (!validInstallationId(installationId) || !publicIdentifierPattern.test(requestId)) {
+      throw new Error("INVALID_INSTALLATION_TERMINATION_REQUEST");
+    }
+    const value = await requestJSON<unknown>(
+      `/api/managed-services/v1/service-installations/${encodeURIComponent(installationId)}/termination`,
+      {
+        method: "POST",
+        headers: {
+          ...authorization(credential),
+          "Idempotency-Key": requestId
+        }
+      }
+    );
+    const installation = parseInstallation(value);
+    if (installation.id !== installationId || installation.operation.kind !== "TERMINATE") {
+      throw new Error("INVALID_INSTALLATION_TERMINATION_RESPONSE");
+    }
+    return installation;
   },
 
   async bindServiceRole(credential, installationId, command) {

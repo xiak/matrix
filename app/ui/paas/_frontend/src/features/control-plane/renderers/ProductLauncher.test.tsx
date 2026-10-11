@@ -41,7 +41,7 @@ describe("ProductLauncher", () => {
     expect(screen.getByRole("status").textContent).toBe("8 项服务");
     expect(document.activeElement).toBe(search);
     expect(screen.getByRole("heading", { name: /数据库/, level: 3 })).toBeTruthy();
-    expect(screen.getByRole("link", { name: /云数据库 PostgreSQL/ }).getAttribute("href")).toBe("/console/installations/");
+    expect(screen.getByRole("link", { name: /托管数据服务/ }).getAttribute("href")).toBe("/console/installations/");
     await user.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("button", { name: "关闭产品与服务" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(trigger);
@@ -50,8 +50,8 @@ describe("ProductLauncher", () => {
   });
 
   it.each([
-    [" PG ", "云数据库 PostgreSQL"],
-    ["ｐｇ", "云数据库 PostgreSQL"],
+    [" PG ", "托管数据服务"],
+    ["ｐｇ", "托管数据服务"],
     ["cI/cD", "研发效能 DevOps"],
     ["权限", "访问管理 IAM"],
     ["发布 环境", "研发效能 DevOps"]
@@ -72,7 +72,7 @@ describe("ProductLauncher", () => {
     expect(screen.getByRole("link", { name: /研发效能 DevOps/ })).toBeTruthy();
     expect(categories.getByRole("button", { name: /^全部服务/ }).getAttribute("aria-pressed")).toBe("true");
     await user.click(screen.getByRole("button", { name: "清空搜索" }));
-    expect(screen.getByRole("link", { name: /云数据库 PostgreSQL/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /托管数据服务/ })).toBeTruthy();
     expect(document.activeElement).toBe(search);
   });
 
@@ -145,13 +145,13 @@ describe("ProductLauncher", () => {
 
   it("keeps favorites across panel openings and safely removes the focused favorite", async () => {
     const { user } = await openDirectory();
-    await user.click(screen.getByRole("button", { name: "收藏 云数据库 PostgreSQL" }));
+    await user.click(screen.getByRole("button", { name: "收藏 托管数据服务" }));
     expect(navigation.navigate).not.toHaveBeenCalled();
     await user.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("button", { name: "关闭产品与服务" }));
     await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
     await user.click(screen.getByRole("button", { name: /^我的收藏/ }));
     expect(screen.getByRole("status").textContent).toBe("1 项服务");
-    const remove = screen.getByRole("button", { name: "取消收藏 云数据库 PostgreSQL" });
+    const remove = screen.getByRole("button", { name: "取消收藏 托管数据服务" });
     expect(remove.getAttribute("aria-pressed")).toBe("true");
     await user.click(remove);
     expect(screen.getByText("还没有收藏的服务")).toBeTruthy();
@@ -179,7 +179,7 @@ describe("ProductLauncher", () => {
     const search = screen.getByRole("searchbox", { name: "Search products & services" });
     await user.type(search, "数据库");
     expect(screen.getByRole("status").textContent).toBe("1 service");
-    expect(screen.getByRole("link", { name: /PostgreSQL database/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Managed data services/ })).toBeTruthy();
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close products & services" }));
     expect(screen.queryByRole("dialog")).toBeNull();
   });

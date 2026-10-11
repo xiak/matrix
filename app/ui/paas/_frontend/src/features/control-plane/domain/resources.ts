@@ -1,11 +1,18 @@
-export type OfferingKind = "POSTGRESQL";
+export type OfferingKind = "POSTGRESQL" | "MYSQL" | "ELASTICSEARCH" | "RABBITMQ";
 export type OfferingState = "AVAILABLE" | "UNAVAILABLE";
 export type RegionState = "READY" | "STALE" | "UNAVAILABLE";
 export type InstallationPhase =
   | "PENDING"
   | "PROVISIONING"
   | "READY"
-  | "FAILED";
+  | "FAILED"
+  | "ROLLBACK_FAILED"
+  | "TERMINATION_PENDING"
+  | "TERMINATING"
+  | "TERMINATION_FAILED"
+  | "TERMINATED";
+
+export type InstallationOperationKind = "PROVISION" | "TERMINATE";
 
 export type QuotaShape = {
   id: string;
@@ -52,6 +59,7 @@ export type QuotaEntitlement = {
 
 export type InstallationOperation = {
   id: string;
+  kind: InstallationOperationKind;
   phase: InstallationPhase;
   safeFailureCode: string | null;
   observedAt: string;
@@ -68,7 +76,24 @@ export type ServiceInstallation = {
   endpoint: string | null;
   credentialReference: string | null;
   operation: InstallationOperation;
+  resourceVersion: number;
   createdAt: string;
+};
+
+export type InstallationTerminationMutationError =
+  | "expired"
+  | "forbidden"
+  | "notFound"
+  | "conflict"
+  | "invalid"
+  | "unknown";
+
+export type InstallationTerminationIntent = {
+  installation: ServiceInstallation;
+  requestId: string;
+  phase: "review" | "submitting" | "failed";
+  error: InstallationTerminationMutationError | null;
+  open: boolean;
 };
 
 export type InstallationReadLoad =

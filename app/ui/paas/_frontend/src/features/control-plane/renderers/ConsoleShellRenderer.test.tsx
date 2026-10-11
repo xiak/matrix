@@ -13,7 +13,7 @@ import type {
 import { previewAccountRepository, previewIamRepository } from "@/features/auth/repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
-import type { ControlPlaneSnapshot } from "../domain/resources";
+import type { ControlPlaneSnapshot, ServiceInstallation } from "../domain/resources";
 import type { ExperienceSnapshot } from "../domain/experience";
 import type { ApplicationDirectoryPage, ApplicationReadSnapshot } from "../domain/application";
 import { consoleRouteHref, type ControlPlaneRouteSelection, type ConsoleSection, type ServiceView } from "../domain/selection";
@@ -186,6 +186,7 @@ async function renderConsole({
   openWorkspace = false,
   load = vi.fn().mockResolvedValue(snapshot),
   getInstallation,
+  terminateInstallation,
   inspectServiceAuthorization,
   readApplication,
   listApplications,
@@ -203,6 +204,7 @@ async function renderConsole({
   openWorkspace?: boolean;
   load?: ControlPlaneRepository["load"];
   getInstallation?: ControlPlaneRepository["getInstallation"];
+  terminateInstallation?: ControlPlaneRepository["terminateInstallation"];
   inspectServiceAuthorization?: ControlPlaneRepository["inspectServiceAuthorization"];
   readApplication?: ControlPlaneRepository["readApplication"];
   listApplications?: ControlPlaneRepository["listApplications"];
@@ -226,6 +228,7 @@ async function renderConsole({
       if (!installation) throw new HttpProblem(404, "INSTALLATION_NOT_FOUND");
       return installation;
     }),
+    terminateInstallation,
     activateQuota: vi.fn(),
     createInstallation: vi.fn(),
     readApplication,
@@ -357,7 +360,8 @@ describe("ConsoleShellRenderer", () => {
       id: "pg-test", name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
       quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
       endpoint: "pg-test.service.local:5432", credentialReference: null,
-      operation: { id: "operation-test", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      resourceVersion: 1,
+      operation: { id: "operation-test", kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
       createdAt: "2026-08-26T12:00:00Z"
     };
     await renderConsole({
@@ -376,7 +380,8 @@ describe("ConsoleShellRenderer", () => {
       id, name, offeringId: "postgresql-18", engineVersion: "18",
       quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
       endpoint: `${id}.service.local:5432`, credentialReference: null,
-      operation: { id: `operation-${id}`, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      resourceVersion: 1,
+      operation: { id: `operation-${id}`, kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
       createdAt: "2026-08-26T12:00:00Z"
     });
     await renderConsole({
@@ -420,7 +425,8 @@ describe("ConsoleShellRenderer", () => {
       id: "pg-test", name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
       quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
       endpoint: "pg-test.service.local:5432", credentialReference: null,
-      operation: { id: "operation-test", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      resourceVersion: 1,
+      operation: { id: "operation-test", kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
       createdAt: "2026-08-26T12:00:00Z"
     };
     const { user } = await renderConsole({
@@ -483,7 +489,8 @@ describe("ConsoleShellRenderer", () => {
       id: "pg-test", name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
       quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
       endpoint: "pg-test.service.local:5432", credentialReference: null,
-      operation: { id: "operation-test", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      resourceVersion: 1,
+      operation: { id: "operation-test", kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
       createdAt: "2026-08-26T12:00:00Z"
     };
     const { user } = await renderConsole({
@@ -527,7 +534,8 @@ describe("ConsoleShellRenderer", () => {
       id, name, offeringId: "postgresql-18", engineVersion: "18",
       quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
       endpoint: `${id}.service.local:5432`, credentialReference: null,
-      operation: { id: `operation-${id}`, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      resourceVersion: 1,
+      operation: { id: `operation-${id}`, kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
       createdAt: "2026-08-26T12:00:00Z"
     });
     const { user } = await renderConsole({
@@ -570,7 +578,8 @@ describe("ConsoleShellRenderer", () => {
       id: "pg-exact-read", name: "精确读取库", offeringId: "postgresql-18", engineVersion: "18",
       quotaEntitlementId: "quota-primary", regionId: "summary-region", phase: "FAILED" as const,
       endpoint: "must-not-leak-summary.service.local:5432", credentialReference: "must-not-leak-summary-credential",
-      operation: { id: "must-not-leak-summary-operation", phase: "FAILED" as const, safeFailureCode: "SUMMARY_ONLY", observedAt: "2026-08-26T12:00:00Z" },
+      resourceVersion: 2,
+      operation: { id: "must-not-leak-summary-operation", kind: "PROVISION" as const, phase: "FAILED" as const, safeFailureCode: "SUMMARY_ONLY", observedAt: "2026-08-26T12:00:00Z" },
       createdAt: "2026-08-26T12:00:00Z"
     };
     const detail = {
@@ -579,7 +588,8 @@ describe("ConsoleShellRenderer", () => {
       phase: "READY" as const,
       endpoint: "pg-exact-read.service.local:5432",
       credentialReference: null,
-      operation: { id: "operation-exact-read", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:04Z" }
+      resourceVersion: 3,
+      operation: { id: "operation-exact-read", kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:04Z" }
     };
     let finishRead!: (value: typeof detail) => void;
     const getInstallation = vi.fn(() => new Promise<typeof detail>((resolve) => { finishRead = resolve; }));
@@ -615,12 +625,143 @@ describe("ConsoleShellRenderer", () => {
     ));
   });
 
+  it("reviews installation termination in the content region and keeps the submit control stable", async () => {
+    const installation: ServiceInstallation = {
+      id: "pg-termination-review",
+      name: "待终止数据库",
+      offeringId: "postgresql-18",
+      engineVersion: "18",
+      quotaEntitlementId: "quota-primary",
+      regionId: "local-primary",
+      phase: "READY",
+      endpoint: "pg-termination-review.service.local:5432",
+      credentialReference: "credential-pg-termination-review",
+      resourceVersion: 4,
+      createdAt: "2026-08-26T12:00:00Z",
+      operation: {
+        id: "operation-provision-termination-review",
+        kind: "PROVISION",
+        phase: "READY",
+        safeFailureCode: null,
+        observedAt: "2026-08-26T12:00:04Z"
+      }
+    };
+    const accepted: ServiceInstallation = {
+      ...installation,
+      phase: "TERMINATION_PENDING",
+      resourceVersion: 5,
+      operation: {
+        id: "operation-terminate-review",
+        kind: "TERMINATE",
+        phase: "TERMINATION_PENDING",
+        safeFailureCode: null,
+        observedAt: "2026-08-26T12:04:00Z"
+      }
+    };
+    let acceptTermination!: (value: ServiceInstallation) => void;
+    const terminateInstallation = vi.fn(() => new Promise<ServiceInstallation>((resolve) => {
+      acceptTermination = resolve;
+    }));
+    const { user } = await renderConsole({
+      section: "installations",
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] }),
+      terminateInstallation
+    });
+
+    await user.click(await screen.findByRole("button", { name: installation.name }));
+    await user.click(await screen.findByRole("button", { name: "审阅终止实例" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 2, name: `终止实例 · ${installation.name}` })).toBeTruthy();
+    expect(screen.getByText("确认后平台将异步物理删除这个实例的容器、网络、持久化数据和托管凭据；只有终止完成后才归还配额。已接受请求不等于已经删除完成。")).toBeTruthy();
+    const submit = screen.getByRole("button", { name: "确认终止实例" }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    await user.type(screen.getByRole("textbox", { name: "输入实例 ID 以确认" }), installation.id);
+    expect(submit.disabled).toBe(false);
+    await user.click(submit);
+
+    const submitting = screen.getByRole("button", { name: "正在提交终止请求" }) as HTMLButtonElement;
+    expect(submitting.disabled).toBe(true);
+    expect(terminateInstallation).toHaveBeenCalledWith(
+      "renderer-test-memory-only-session",
+      installation.id,
+      expect.stringMatching(/^ui-installation-termination-/)
+    );
+
+    acceptTermination(accepted);
+    expect((await screen.findAllByText("等待终止")).length).toBeGreaterThan(0);
+    expect(screen.getByText(/正在异步清理运行时、网络、数据与凭据/)).toBeTruthy();
+  });
+
+  it("preserves and retries an unknown termination result with the same idempotency key", async () => {
+    const installation: ServiceInstallation = {
+      id: "pg-termination-unknown",
+      name: "终止结果待确认库",
+      offeringId: "postgresql-18",
+      engineVersion: "18",
+      quotaEntitlementId: "quota-primary",
+      regionId: "local-primary",
+      phase: "READY",
+      endpoint: "pg-termination-unknown.service.local:5432",
+      credentialReference: "credential-pg-termination-unknown",
+      resourceVersion: 3,
+      createdAt: "2026-08-26T12:00:00Z",
+      operation: {
+        id: "operation-provision-termination-unknown",
+        kind: "PROVISION",
+        phase: "READY",
+        safeFailureCode: null,
+        observedAt: "2026-08-26T12:00:04Z"
+      }
+    };
+    const accepted: ServiceInstallation = {
+      ...installation,
+      phase: "TERMINATION_PENDING",
+      resourceVersion: 4,
+      operation: {
+        id: "operation-terminate-unknown",
+        kind: "TERMINATE",
+        phase: "TERMINATION_PENDING",
+        safeFailureCode: null,
+        observedAt: "2026-08-26T12:04:00Z"
+      }
+    };
+    const terminateInstallation = vi.fn()
+      .mockRejectedValueOnce(new Error("connection ended before a response was observed"))
+      .mockResolvedValue(accepted);
+    const { user } = await renderConsole({
+      section: "installations",
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] }),
+      terminateInstallation
+    });
+
+    await user.click(await screen.findByRole("button", { name: installation.name }));
+    await user.click(await screen.findByRole("button", { name: "审阅终止实例" }));
+    await user.type(screen.getByRole("textbox", { name: "输入实例 ID 以确认" }), installation.id);
+    await user.click(screen.getByRole("button", { name: "确认终止实例" }));
+
+    expect(await screen.findByText(/服务端结果尚未确认/)).toBeTruthy();
+    const firstRequestId = terminateInstallation.mock.calls[0]![2];
+    await user.click(screen.getByRole("button", { name: "返回实例并保留原请求" }));
+    expect(await screen.findByRole("button", { name: "继续处理未确认终止" })).toBeTruthy();
+    expect(screen.getByText(new RegExp(firstRequestId))).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "继续处理未确认终止" }));
+    await user.type(screen.getByRole("textbox", { name: "输入实例 ID 以确认" }), installation.id);
+    await user.click(screen.getByRole("button", { name: "使用同一请求原样重试" }));
+
+    await waitFor(() => expect(terminateInstallation).toHaveBeenCalledTimes(2));
+    expect(terminateInstallation.mock.calls[1]![2]).toBe(firstRequestId);
+    expect((await screen.findAllByText("等待终止")).length).toBeGreaterThan(0);
+  });
+
   it("keeps a denied live instance read local and retries only the same locator", async () => {
     const installation = {
       id: "pg-denied-read", name: "受限数据库", offeringId: "postgresql-18", engineVersion: "18",
       quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
       endpoint: "must-not-leak.service.local:5432", credentialReference: null,
-      operation: { id: "operation-denied-read", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      resourceVersion: 1,
+      operation: { id: "operation-denied-read", kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
       createdAt: "2026-08-26T12:00:00Z"
     };
     const getInstallation = vi.fn()
@@ -654,7 +795,8 @@ describe("ConsoleShellRenderer", () => {
       id: "pg-test", name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
       quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
       endpoint: "pg-test.service.local:5432", credentialReference: null,
-      operation: { id: "operation-test", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      resourceVersion: 1,
+      operation: { id: "operation-test", kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
       createdAt: "2026-08-26T12:00:00Z"
     };
     let finishInspection!: (value: Awaited<ReturnType<NonNullable<ControlPlaneRepository["inspectServiceAuthorization"]>>>) => void;
@@ -703,7 +845,8 @@ describe("ConsoleShellRenderer", () => {
         id: "pg-unbound", name: "审计只读库", offeringId: "postgresql-18", engineVersion: "18",
         quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
         endpoint: "pg-unbound.service.local:5432", credentialReference: null,
-        operation: { id: "operation-unbound", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+        resourceVersion: 1,
+        operation: { id: "operation-unbound", kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
         createdAt: "2026-08-26T12:00:00Z"
       }] }),
       inspectServiceAuthorization: vi.fn().mockResolvedValue({
@@ -759,7 +902,8 @@ describe("ConsoleShellRenderer", () => {
         id: installationId, name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
         quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
         endpoint: "pg-live-bind.service.local:5432", credentialReference: null,
-        operation: { id: "operation-live-bind", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+        resourceVersion: 1,
+        operation: { id: "operation-live-bind", kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
         createdAt: "2026-08-26T12:00:00Z"
       }] }),
       inspectServiceAuthorization,
@@ -807,7 +951,8 @@ describe("ConsoleShellRenderer", () => {
         id: installationId, name: "结果待确认库", offeringId: "postgresql-18", engineVersion: "18",
         quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
         endpoint: "pg-live-unknown.service.local:5432", credentialReference: null,
-        operation: { id: "operation-live-unknown", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+        resourceVersion: 1,
+        operation: { id: "operation-live-unknown", kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
         createdAt: "2026-08-26T12:00:00Z"
       }] }),
       inspectServiceAuthorization: vi.fn().mockResolvedValue({ template: liveServiceRoleTemplate, relation: null, binding: null }),
@@ -853,7 +998,8 @@ describe("ConsoleShellRenderer", () => {
         id: installationId, name: "待解绑库", offeringId: "postgresql-18", engineVersion: "18",
         quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
         endpoint: "pg-live-unbind.service.local:5432", credentialReference: null,
-        operation: { id: "operation-live-unbind", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+        resourceVersion: 1,
+        operation: { id: "operation-live-unbind", kind: "PROVISION" as const, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
         createdAt: "2026-08-26T12:00:00Z"
       }] }),
       inspectServiceAuthorization,
@@ -885,7 +1031,7 @@ describe("ConsoleShellRenderer", () => {
   it.each([
     { href: "/console/regions/", service: /区域与节点/, title: "区域与节点", reads: 1, marker: { role: "text", name: "本机主区域" } },
     { href: "/console/applications/", service: /应用托管/, title: "应用服务", reads: 0, marker: { role: "table", name: "当前身份可见的应用目录" } },
-    { href: "/console/installations/", service: /云数据库 PostgreSQL/, title: "数据库实例", reads: 4, marker: { role: "heading", name: "组织服务实例" } },
+    { href: "/console/installations/", service: /托管数据服务/, title: "服务实例", reads: 4, marker: { role: "heading", name: "组织服务实例" } },
     { href: "/console/logs/", service: /日志服务/, title: "日志概览", reads: 0, marker: { role: "text", name: "Matrix · Log Service" } },
     { href: "/console/devops/", service: /研发效能 DevOps/, title: "交付总览", reads: 0, marker: { role: "heading", name: "最近流水线" } },
     { href: "/console/observability/", service: /云监控/, title: "监控总览", reads: 0, marker: { role: "heading", name: "服务健康" } }
@@ -1113,10 +1259,10 @@ describe("ConsoleShellRenderer", () => {
 
     await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
     expect(load).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /云数据库 PostgreSQL/ }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /托管数据服务/ }));
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
 
-    expect(screen.getByRole("heading", { level: 1, name: "数据库实例" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "服务实例" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 2, name: "组织服务实例" })).toBeTruthy();
     expect(users.closest("[hidden]")).toBeTruthy();
     expect(load).toHaveBeenCalledTimes(1);
@@ -1124,7 +1270,7 @@ describe("ConsoleShellRenderer", () => {
     await act(async () => resolveSnapshot(snapshot));
     await act(async () => { heldRoute.ready = true; releaseRoute(); });
     expect(await screen.findByRole("button", { name: "安装服务" })).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 1, name: "数据库实例" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "服务实例" })).toBeTruthy();
     expect(load).toHaveBeenCalledTimes(4);
   });
 
@@ -1163,16 +1309,16 @@ describe("ConsoleShellRenderer", () => {
     const load = vi.fn(() => new Promise<ControlPlaneSnapshot>(done => { resolve = done; }));
     await renderConsole({ section: "installations", load });
     const header = screen.getByLabelText("全局导航");
-    const title = screen.getByRole("heading", { name: "数据库实例" });
+    const title = screen.getByRole("heading", { name: "服务实例" });
     const menu = screen.getByRole("navigation", { name: "控制台导航" });
     expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
     expect(screen.getByRole("button", { name: /打开账号菜单/ })).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toContain("数据库实例");
+    expect(screen.getByRole("status").textContent).toContain("服务实例");
     await act(async () => resolve(snapshot));
     expect(screen.getByLabelText("全局导航")).toBe(header);
     expect(screen.getByRole("navigation", { name: "控制台导航" })).toBe(menu);
-    expect(screen.getByRole("heading", { name: "数据库实例" })).toBe(title);
+    expect(screen.getByRole("heading", { name: "服务实例" })).toBe(title);
     expect(screen.getByRole("button", { name: "安装服务" })).toBeTruthy();
     expect(screen.queryByRole("status")).toBeNull();
   });
