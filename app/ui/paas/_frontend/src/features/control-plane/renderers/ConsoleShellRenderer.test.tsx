@@ -653,7 +653,7 @@ describe("ConsoleShellRenderer", () => {
       operation: {
         id: "operation-terminate-review",
         kind: "TERMINATE",
-        phase: "TERMINATION_PENDING",
+        phase: "PENDING",
         safeFailureCode: null,
         observedAt: "2026-08-26T12:04:00Z"
       }
@@ -721,7 +721,7 @@ describe("ConsoleShellRenderer", () => {
       operation: {
         id: "operation-terminate-unknown",
         kind: "TERMINATE",
-        phase: "TERMINATION_PENDING",
+        phase: "PENDING",
         safeFailureCode: null,
         observedAt: "2026-08-26T12:04:00Z"
       }

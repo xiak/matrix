@@ -193,8 +193,97 @@ describe("httpControlPlaneRepository", () => {
     )).rejects.toThrow("INVALID_INSTALLATION_ID_RESPONSE");
   });
 
+  it.each([
+    ["PROVISION", "PENDING", "PENDING"],
+    ["PROVISION", "PROVISIONING", "PROVISIONING"],
+    ["PROVISION", "READY", "READY"],
+    ["PROVISION", "FAILED", "FAILED"],
+    ["PROVISION", "ROLLBACK_FAILED", "FAILED"],
+    ["TERMINATE", "TERMINATION_PENDING", "PENDING"],
+    ["TERMINATE", "TERMINATING", "PROVISIONING"],
+    ["TERMINATE", "TERMINATION_FAILED", "FAILED"],
+    ["TERMINATE", "TERMINATED", "READY"]
+  ])("accepts the %s operation mapping %s resource state to %s operation state", async (
+    operationKind,
+    resourcePhase,
+    operationPhase
+  ) => {
+    const retainsReadyResult = ["READY", "TERMINATION_PENDING", "TERMINATING", "TERMINATION_FAILED"]
+      .includes(resourcePhase);
+    const failed = ["FAILED", "ROLLBACK_FAILED", "TERMINATION_FAILED"].includes(resourcePhase);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      id: "postgres-primary",
+      name: "Postgres primary",
+      offeringId: "postgresql-18",
+      engineVersion: "18",
+      quotaEntitlementId: "quota-primary",
+      regionId: "local-primary",
+      phase: resourcePhase,
+      endpoint: retainsReadyResult ? "postgres-primary.service.local:5432" : null,
+      credentialReference: retainsReadyResult ? "credential-postgres-primary" : null,
+      resourceVersion: 4,
+      createdAt: "2026-08-26T12:00:00Z",
+      operation: {
+        id: `operation-${operationKind.toLowerCase()}-primary`,
+        kind: operationKind,
+        phase: operationPhase,
+        safeFailureCode: failed ? "SAFE_FAILURE" : null,
+        observedAt: "2026-08-26T12:05:00Z"
+      }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.getInstallation(
+      "memory-only-session",
+      "postgres-primary"
+    )).resolves.toMatchObject({
+      phase: resourcePhase,
+      operation: { kind: operationKind, phase: operationPhase }
+    });
+  });
+
+  it.each([
+    ["PROVISION", "ROLLBACK_FAILED", "ROLLBACK_FAILED"],
+    ["PROVISION", "TERMINATION_PENDING", "PENDING"],
+    ["TERMINATE", "TERMINATING", "PENDING"],
+    ["TERMINATE", "TERMINATED", "TERMINATED"]
+  ])("rejects the illegal %s operation mapping %s resource state to %s operation state", async (
+    operationKind,
+    resourcePhase,
+    operationPhase
+  ) => {
+    const retainsReadyResult = ["READY", "TERMINATION_PENDING", "TERMINATING", "TERMINATION_FAILED"]
+      .includes(resourcePhase);
+    const failed = ["FAILED", "ROLLBACK_FAILED", "TERMINATION_FAILED"].includes(resourcePhase);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      id: "postgres-primary",
+      name: "Postgres primary",
+      offeringId: "postgresql-18",
+      engineVersion: "18",
+      quotaEntitlementId: "quota-primary",
+      regionId: "local-primary",
+      phase: resourcePhase,
+      endpoint: retainsReadyResult ? "postgres-primary.service.local:5432" : null,
+      credentialReference: retainsReadyResult ? "credential-postgres-primary" : null,
+      resourceVersion: 4,
+      createdAt: "2026-08-26T12:00:00Z",
+      operation: {
+        id: `operation-${operationKind.toLowerCase()}-primary`,
+        kind: operationKind,
+        phase: operationPhase,
+        safeFailureCode: failed ? "SAFE_FAILURE" : null,
+        observedAt: "2026-08-26T12:05:00Z"
+      }
+    })));
+
+    await expect(httpControlPlaneRepository.getInstallation(
+      "memory-only-session",
+      "postgres-primary"
+    )).rejects.toThrow("INVALID_INSTALLATION_RESPONSE");
+  });
+
   it("submits and replays an installation termination with no request body and the caller's frozen idempotency key", async () => {
-    const termination = {
+    const pendingTermination = {
       id: "postgres-primary",
       name: "Postgres primary",
       offeringId: "postgresql-18",
@@ -209,20 +298,34 @@ describe("httpControlPlaneRepository", () => {
       operation: {
         id: "operation-terminate-primary",
         kind: "TERMINATE",
-        phase: "TERMINATION_PENDING",
+        phase: "PENDING",
         safeFailureCode: null,
         observedAt: "2026-08-26T12:04:00Z"
       }
     };
-    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(termination)));
+    const completedTermination = {
+      ...pendingTermination,
+      phase: "TERMINATED",
+      endpoint: null,
+      credentialReference: null,
+      resourceVersion: 4,
+      operation: {
+        ...pendingTermination.operation,
+        phase: "READY",
+        observedAt: "2026-08-26T12:05:00Z"
+      }
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(pendingTermination))
+      .mockResolvedValueOnce(jsonResponse(completedTermination));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(httpControlPlaneRepository.terminateInstallation!(
       "session-secret", "postgres-primary", "terminate-postgres-primary"
-    )).resolves.toEqual(termination);
+    )).resolves.toEqual(pendingTermination);
     await expect(httpControlPlaneRepository.terminateInstallation!(
       "session-secret", "postgres-primary", "terminate-postgres-primary"
-    )).resolves.toEqual(termination);
+    )).resolves.toEqual(completedTermination);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [path, rawInit] of fetchMock.mock.calls) {
@@ -253,7 +356,7 @@ describe("httpControlPlaneRepository", () => {
       operation: {
         id: "operation-terminate-primary",
         kind: "TERMINATE",
-        phase: "TERMINATION_PENDING",
+        phase: "PENDING",
         safeFailureCode: null,
         observedAt: "2026-08-26T12:04:00Z"
       }

@@ -176,7 +176,7 @@ export const previewControlPlaneRepository: ControlPlaneRepository = {
         endpoint: null,
         credentialReference: null,
         resourceVersion: current.resourceVersion + 1,
-        operation: { ...current.operation, phase: "TERMINATED", observedAt: currentTime() }
+        operation: { ...current.operation, phase: "READY", observedAt: currentTime() }
       };
       snapshot = {
         ...snapshot,
@@ -243,7 +243,7 @@ export const previewControlPlaneRepository: ControlPlaneRepository = {
       operation: {
         id: `operation-terminate-${installationId}`,
         kind: "TERMINATE",
-        phase: "TERMINATION_PENDING",
+        phase: "PENDING",
         safeFailureCode: null,
         observedAt: currentTime()
       }

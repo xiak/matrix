@@ -31,10 +31,16 @@ describe("previewControlPlaneRepository", () => {
     expect(terminating).toMatchObject({
       id,
       phase: "TERMINATION_PENDING",
-      operation: { kind: "TERMINATE", phase: "TERMINATION_PENDING" }
+      operation: { kind: "TERMINATE", phase: "PENDING" }
     });
     await expect(previewControlPlaneRepository.getInstallation(previewCredential, id))
-      .resolves.toMatchObject({ id, phase: "TERMINATED", endpoint: null, credentialReference: null });
+      .resolves.toMatchObject({
+        id,
+        phase: "TERMINATED",
+        endpoint: null,
+        credentialReference: null,
+        operation: { kind: "TERMINATE", phase: "READY" }
+      });
     expect((await previewControlPlaneRepository.load(previewCredential, ["installations"]))
       .installations?.some((installation) => installation.id === id)).toBe(false);
   });
