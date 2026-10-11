@@ -78,7 +78,7 @@ func buildDocument() object {
 			},
 		},
 		Enums: map[string][]string{
-			"OfferingKind":              {string(managedservicev1.OfferingPostgreSQL)},
+			"OfferingKind":              {string(managedservicev1.OfferingPostgreSQL), string(managedservicev1.OfferingMySQL)},
 			"OfferingState":             {string(managedservicev1.OfferingAvailable), string(managedservicev1.OfferingUnavailable)},
 			"RegionProfile":             {string(managedservicev1.RegionLocalMachine)},
 			"RegionState":               {string(managedservicev1.RegionReady), string(managedservicev1.RegionStale), string(managedservicev1.RegionUnavailable)},

@@ -161,10 +161,11 @@ jobs:
             # job setup/cleanup reached the old 20m orchestration ceiling.
             # Keep every fixture deadline unchanged and reserve bounded cleanup.
             minutes: 25
-          - lane: authority-managed-postgres
-            # One real provider resource: production worker, fixed PG18 image,
-            # SQL round trip, exact IAM revoke and tenant Audit chain.
-            minutes: 15
+          - lane: authority-managed-products
+            # Two real provider resources: production worker, immutable PG18
+            # and MySQL 8.4 images, SQL round trips, exact IAM revoke and the
+            # tenant Audit chain. Keep the database-heavy lane serial.
+            minutes: 20
           - lane: authority-session-idle
             minutes: 15
           - lane: authority-capacity
@@ -235,8 +236,8 @@ jobs:
                 matrix_iam_totp_backup_ci matrix_iam_totp_backup_process_ci matrix_iam_notification_ci matrix_iam_totp_enrollment_ci
                 matrix_iam_upgrade_predecessor_ci matrix_authority_process_ci)
               ;;
-            authority-managed-postgres)
-              databases=(matrix_authority_process_managed_postgres_ci)
+            authority-managed-products)
+              databases=(matrix_managedservice_predecessor_ci matrix_authority_process_managed_products_ci)
               ;;
             authority-session-idle)
               databases=(matrix_iam_session_idle_natural_ci)
@@ -408,15 +409,28 @@ jobs:
             'TestRuntimeDSNBindsLeastPrivilegeLogin,TestIAMRetainedPredecessorProcessUpgrade,TestIndependentIAMAuditAndPaaSProcesses,TestIAMCapacityDecisionAttribution,TestIAMCapacityPercentiles,TestIAMCapacityScheduling,TestAuthorityPlaintextInspection,TestIAMTOTPBackupProcesses' \
             -race -p 1 -count=1 ./test/authorityprocess
 
-      - name: Real managed PostgreSQL provider and IAM gate
-        if: matrix.lane == 'authority-managed-postgres'
+      - name: Real managed database providers and IAM gate
+        if: matrix.lane == 'authority-managed-products'
         env:
-          MATRIX_IAM_MANAGED_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_authority_process_managed_postgres_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_MANAGEDSERVICE_PREDECESSOR_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_managedservice_predecessor_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_MANAGED_PRODUCTS_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_authority_process_managed_products_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
         run: |
           time bash .github/scripts/run-go-test-selection.sh \
-            'TestManagedPostgresProviderProcesses' \
-            -race -p 1 -count=1 -timeout 10m ./test/authorityprocess \
-            -run '^TestManagedPostgresProviderProcesses$'
+            'TestManagedServicePredecessorCatalogUpgrade' \
+            -race -p 1 -count=1 ./app/service/paas/internal/managedservice/data/postgres \
+            -run '^TestManagedServicePredecessorCatalogUpgrade$'
+          mysql_image='mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242'
+          docker pull "$mysql_image"
+          MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$mysql_image")"
+          case "$MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID" in
+            sha256:[0-9a-f][0-9a-f]*) test "${#MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID}" = 71 ;;
+            *) exit 1 ;;
+          esac
+          export MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID
+          time bash .github/scripts/run-go-test-selection.sh \
+            'TestManagedProductProviderProcesses' \
+            -race -p 1 -count=1 -timeout 12m ./test/authorityprocess \
+            -run '^TestManagedProductProviderProcesses$'
 
       - name: Natural minimum session idle expiry
         if: matrix.lane == 'authority-session-idle'

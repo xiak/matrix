@@ -90,7 +90,9 @@ func ValidateServiceOffering(value ServiceOffering) error {
 		validateName("offering.engineFamily", value.EngineFamily),
 		validateID("offering.engineVersion", value.EngineVersion),
 	)
-	if value.Kind != OfferingPostgreSQL {
+	switch value.Kind {
+	case OfferingPostgreSQL, OfferingMySQL:
+	default:
 		problems = append(problems, errors.New("offering kind is invalid"))
 	}
 	if value.State != OfferingAvailable && value.State != OfferingUnavailable {

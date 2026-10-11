@@ -17,8 +17,8 @@ import (
 func TestCurrentDatabaseProfile(t *testing.T) {
 	want := DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 83, Audit: 37, PaaS: 3},
-		ContractRevision: 31,
+		Authorities:      AuthoritySchemas{IAM: 83, Audit: 37, PaaS: 4},
+		ContractRevision: 32,
 	}
 	if got := CurrentDatabaseProfile(); got != want {
 		t.Fatalf("current database profile = %#v, want %#v", got, want)
@@ -323,9 +323,9 @@ func validManifest() Manifest {
 	}}
 	required := RequiredImages()
 	images := make([]Image, 0, len(required))
-	fileDigests := "2345678"
-	imageDigests := "89abcde"
-	sourceDigests := "ef01234"
+	fileDigests := "2345678a"
+	imageDigests := "89abcdef"
+	sourceDigests := "f0123456"
 	for index, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
 		files = append(files, File{

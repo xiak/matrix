@@ -81,8 +81,8 @@ type AuthoritySchemas struct {
 func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 83, Audit: 37, PaaS: 3},
-		ContractRevision: 31,
+		Authorities:      AuthoritySchemas{IAM: 83, Audit: 37, PaaS: 4},
+		ContractRevision: 32,
 	}
 }
 
@@ -135,13 +135,14 @@ func RequiredImages() []ImageRequirement {
 		{Component: "paas", Purpose: ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
 		{Component: "paas-ui", Purpose: ImagePlatform, HealthContract: "paas-ui-ready-v1"},
 		{Component: "postgres", Purpose: ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
+		{Component: "mysql", Purpose: ImagePlatform, HealthContract: "mysql-ready-protocol-v1"},
 		{Component: "verification", Purpose: ImageWorkload, HealthContract: "application-probe-v1"},
 	}
 }
 
 // BuiltImageLabels is the authenticated build-metadata surface inherited by
-// every Matrix-built release image. The fixed upstream PostgreSQL image is not
-// Matrix-built and callers intentionally do not apply these labels to it.
+// every Matrix-built release image. Fixed upstream product images are not
+// Matrix-built and callers intentionally do not apply these labels to them.
 func BuiltImageLabels(identity ReleaseIdentity, component string) map[string]string {
 	return map[string]string{
 		BuiltImageLabelReleaseBuild: "true",

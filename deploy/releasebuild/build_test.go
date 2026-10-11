@@ -51,6 +51,8 @@ func (fake *fakeEffects) InspectImage(_ context.Context, reference string) (Imag
 		return fake.baseImage("docker", DockerBaseManifestDigest), nil
 	case PostgresPinnedReference:
 		return fake.baseImage("postgres", PostgresManifestDigest), nil
+	case MySQLPinnedReference:
+		return fake.baseImage("mysql", MySQLManifestDigest), nil
 	default:
 		return fake.images[reference], nil
 	}

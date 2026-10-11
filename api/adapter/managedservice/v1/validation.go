@@ -13,12 +13,11 @@ func ValidateProvisionRequest(value ProvisionRequest) error {
 		managedservicev1.ValidateID("tenantId", value.TenantID),
 		managedservicev1.ValidateInstallationID(value.InstallationID),
 		managedservicev1.ValidateID("operationId", value.OperationID),
+		managedservicev1.ValidateID("offeringId", value.OfferingID),
+		managedservicev1.ValidateID("engineVersion", value.EngineVersion),
+		managedservicev1.ValidateID("regionId", value.RegionID),
 		managedservicev1.ValidateQuotaShape(value.QuotaShape),
 	)
-	if value.OfferingID != managedservicev1.PostgreSQLOfferingID ||
-		value.EngineVersion != "18" || value.RegionID != "local-primary" {
-		problems = append(problems, errors.New("managed-service installation profile is invalid"))
-	}
 	return errors.Join(problems...)
 }
 

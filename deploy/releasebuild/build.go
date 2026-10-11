@@ -227,7 +227,11 @@ func buildImages(
 	if !found || validateImageMetadata(postgres) != nil {
 		return nil, nil, errors.New("fixed PostgreSQL image identity is unavailable")
 	}
-	metadata := map[string]ImageMetadata{"postgres": postgres}
+	mysql, found := baseImages[MySQLPinnedReference]
+	if !found || validateImageMetadata(mysql) != nil {
+		return nil, nil, errors.New("fixed MySQL image identity is unavailable")
+	}
+	metadata := map[string]ImageMetadata{"postgres": postgres, "mysql": mysql}
 	tags := make([]string, 0, len(imageRecipes))
 	for _, recipe := range imageRecipes {
 		contextRoot := filepath.Join(workspace, "images", recipe.component)

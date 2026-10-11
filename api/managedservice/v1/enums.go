@@ -10,6 +10,8 @@ type ErrorCode string
 const (
 	OfferingPostgreSQL   OfferingKind = "POSTGRESQL"
 	PostgreSQLOfferingID              = "postgresql-18"
+	OfferingMySQL        OfferingKind = "MYSQL"
+	MySQLOfferingID                   = "mysql-8.4"
 )
 
 const (

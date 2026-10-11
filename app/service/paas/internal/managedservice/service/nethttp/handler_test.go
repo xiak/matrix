@@ -36,8 +36,11 @@ func TestListOfferingsAuthorizesCollectionAndFiltersExactCatalogInstances(t *tes
 		authorizer.request.Credential != "Bearer session-secret" {
 		t.Fatalf("authorization request=%#v", authorizer.request)
 	}
-	if len(authorizer.batchRequest.Requests) != 1 || authorizer.batchRequest.Requests[0].Resource.ID != domain.PostgreSQLOfferingID ||
-		authorizer.batchRequest.Requests[0].ResourceMode != iamv1.AuthorizationResourceInstance {
+	if len(authorizer.batchRequest.Requests) != 2 ||
+		authorizer.batchRequest.Requests[0].Resource.ID != domain.MySQLOfferingID ||
+		authorizer.batchRequest.Requests[1].Resource.ID != domain.PostgreSQLOfferingID ||
+		authorizer.batchRequest.Requests[0].ResourceMode != iamv1.AuthorizationResourceInstance ||
+		authorizer.batchRequest.Requests[1].ResourceMode != iamv1.AuthorizationResourceInstance {
 		t.Fatalf("batch authorization request=%#v", authorizer.batchRequest)
 	}
 	var result managedservicev1.ServiceOfferingList
@@ -49,8 +52,8 @@ func TestListOfferingsAuthorizesCollectionAndFiltersExactCatalogInstances(t *tes
 func TestListOfferingsFiltersOnlyAllowedExactCandidates(t *testing.T) {
 	offerings := domain.DefaultCatalog().List()
 	second := offerings[0]
-	second.ID = "postgresql-18-enterprise"
-	second.DisplayName = "PostgreSQL 18 Enterprise"
+	second.ID = "mysql-8.4-enterprise"
+	second.DisplayName = "MySQL 8.4 Enterprise"
 	workflow := &stubWorkflow{offerings: managedservicev1.ServiceOfferingList{
 		Kind: "ServiceOfferingList", Items: []managedservicev1.ServiceOffering{second, offerings[0]},
 	}}
@@ -90,12 +93,16 @@ func TestListOfferingsFiltersOnlyAllowedExactCandidates(t *testing.T) {
 func TestListOfferingsAllDeniedReturnsAnEmptyAuthorizedList(t *testing.T) {
 	offerings := domain.DefaultCatalog().List()
 	authorizer := &stubAuthorizer{batchFunc: func(request port.AuthorizationBatchRequest) (port.AuthorizationBatch, error) {
+		items := make([]port.AuthorizationBatchItem, len(request.Requests))
+		for index, item := range request.Requests {
+			items[index] = port.AuthorizationBatchItem{
+				Resource: item.Resource, Allowed: false,
+				DecisionID: fmt.Sprintf("decision-denied-%d", index), RequestID: item.RequestID,
+			}
+		}
 		return port.AuthorizationBatch{
 			TenantID: "organization-test", SubjectType: port.SubjectUser, SubjectID: "principal-test",
-			Items: []port.AuthorizationBatchItem{{
-				Resource: request.Requests[0].Resource, Allowed: false,
-				DecisionID: "decision-denied", RequestID: request.Requests[0].RequestID,
-			}},
+			Items: items,
 		}, nil
 	}}
 	handler := testHandler(t, authorizer, &stubWorkflow{offerings: managedservicev1.ServiceOfferingList{Kind: "ServiceOfferingList", Items: offerings}})
@@ -347,8 +354,15 @@ func TestAuthorizationDenialFailsClosed(t *testing.T) {
 
 func testHandler(t *testing.T, authorizer port.Authorizer, workflow Workflow) http.Handler {
 	t.Helper()
+	sequence := 0
 	handler, err := NewHandler(authorizer, workflow, Config{
-		NewRequestID: func() (string, error) { return "request-test", nil },
+		NewRequestID: func() (string, error) {
+			sequence++
+			if sequence == 1 {
+				return "request-test", nil
+			}
+			return fmt.Sprintf("request-test-%d", sequence), nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

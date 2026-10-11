@@ -30,7 +30,9 @@ BEGIN
       INTO missing
       FROM (VALUES
             ('quota_entitlements_idempotency_uq'),
+            ('quota_entitlements_catalog_valid'),
             ('service_installations_entitlement_fk'),
+            ('service_installations_ids_valid'),
             ('operations_installation_uq'),
             ('operations_idempotency_uq'),
             ('operations_installation_fk'),

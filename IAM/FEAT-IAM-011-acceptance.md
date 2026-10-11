@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；当前接受发布组合IAM83/Audit37/PaaS3、`contractRevision=31`新增签名产品授权目录、数据库驱动服务Role模板/权限上限及通用动态产品闭环；本地合约、真实PG18、直接前驱与同Profile签名A/B完整生命周期已通过。UX/UI精确实例重新鉴权已集成为`0d9d0b12e9f95e9a2110697021d591916552da9a`，首个实际产品资源PostgreSQL 18的受控浏览器创建、READY、SQL读写、成员允许/撤权拒绝及Audit链已通过，IAM-AC-08据此接受。先前IAM82/Audit37/PaaS3、`contractRevision=30`保留为历史接受组合，不再代表当前源码。FEAT-010其余故障/UNKNOWN/APISIX/签名浏览器路径与IAM-UI-01–08完整范围，以及AC-11的完整容量/公平性/HA仍未验收，因此整体需求仍为实施中。
+- 状态：实施中；最近接受发布组合仍为IAM83/Audit37/PaaS3、`contractRevision=31`，其签名产品授权目录、数据库驱动服务Role模板/权限上限、通用动态产品闭环及同Profile签名A/B生命周期已有既有证据。当前源码加入真实MySQL 8.4 provider、PaaS产品目录约束和签名镜像，形状前移为IAM83/Audit37/PaaS4、`contractRevision=32`；本地双产品真实进程与固定直接前驱保留门禁已通过，但尚无该精确源码的独立CI、终止/失败回滚、签名A/B或LIVE UI结论，因此不能继承r31的发布接受状态。FEAT-010其余故障/UNKNOWN/APISIX/签名浏览器路径与IAM-UI-01–08完整范围，以及AC-11的完整容量/公平性/HA仍未验收，整体需求仍为实施中。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -50,7 +50,7 @@
 
 未发布迁移可以在风险替换前保存已验证并推送的 Git 回滚点后合并、改写或删除，不在工作树保留废弃实现作为兼容层。默认门禁是最终结构的空库安装、等值重放、带真实数据的重启/恢复、迁移失败无部分效果，以及当前版本的 RLS、受限身份、撤权和 Audit/outbox 不变量。它们不能因免除开发历史兼容而取消。
 
-开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项FEAT累积各自的旧binary/schema路径。窗口前移时在同一切片替换被淘汰的固定源码、schema断言和格式夹具，不增加兼容别名或多版本参数。当前唯一窗口为固定`9cf500095ae9a9cf98d322711c58a5862b899fa1`的IAM82到当前IAM83候选，当前完整源码形状为IAM83/Audit37/PaaS3、`contractRevision=31`。IAM83在008及FEAT-005既有owner中把额外Profile、产品拥有的服务Role权限上限与模板合并为一个签名目录，并更新服务Role数据库读取函数和禁止直接挂载权限上限的触发器；IAM82旧迁移进程只收到其原签名目录，IAM83进程只收到新目录，没有运行时兼容旁路。更早IAM81入口已从滚动门禁移除，不继续累积未发布开发版本。
+开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项FEAT累积各自的旧binary/schema路径。窗口前移时在同一切片替换被淘汰的固定源码、schema断言和格式夹具，不增加兼容别名或多版本参数。当前产品目录前驱为固定`01146e7c465bbf28116d541f17ecbe28f917a4fe`的IAM83/Audit37/PaaS3、`contractRevision=31`，当前源码候选为IAM83/Audit37/PaaS4、`contractRevision=32`。实际前驱PaaS SQL先建立并保留PostgreSQL-only quota/installation，拒绝MySQL且无部分写入；当前迁移只替换受管产品约束和readiness，apply-twice后原PostgreSQL状态不变并允许真实MySQL路径。IAM83自身不变，旧IAM82→83门禁只保留为已完成组件迁移证据，不能再充当当前完整profile前驱或让测试矩阵继续向更老开发快照扩张。
 
 固定前驱`9cf500095ae9a9cf98d322711c58a5862b899fa1`保留IAM82已接受的Role生命周期、服务Role、AccessKey、受支持恢复围栏、签名安装和原Audit证明，并以其实际migrator/runtime作为IAM83唯一开发期数据保留起点。该SHA的[Verification 38075029627](https://github.com/xiak/matrix/actions/runs/38075029627)已终止为`completed/cancelled`：`authority-runtime`在“已发布安装器必须于效果前拒绝新 schema 形状”步骤返回 exit 1，后续八个数据库 lane 被取消，最终汇总失败；它不能登记为独立CI成功。IAM82→83的当前保留数据运行证据由下述当前门禁独立拥有，IAM82发布准入仍由已接受固定源码`147586689a9f0bcad3254f743b11c51dba35c1b5`及其签名运行证据拥有；三者不得互相回填。
 

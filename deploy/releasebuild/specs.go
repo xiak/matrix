@@ -13,6 +13,9 @@ const (
 	PostgresReference         = "postgres:18"
 	PostgresManifestDigest    = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
 	PostgresPinnedReference   = PostgresReference + "@" + PostgresManifestDigest
+	MySQLReference            = "mysql:8.4"
+	MySQLManifestDigest       = "sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242"
+	MySQLPinnedReference      = MySQLReference + "@" + MySQLManifestDigest
 	minimumDockerVersion      = "27.5.1"
 	minimumComposeVersion     = "2.33.0"
 )
@@ -28,6 +31,7 @@ var baseImageSpecifications = []baseImageSpecification{
 	{AlpineBasePinnedReference, "alpine", AlpineBaseManifestDigest},
 	{DockerBasePinnedReference, "docker", DockerBaseManifestDigest},
 	{PostgresPinnedReference, "postgres", PostgresManifestDigest},
+	{MySQLPinnedReference, "mysql", MySQLManifestDigest},
 }
 
 type binarySpecification struct {

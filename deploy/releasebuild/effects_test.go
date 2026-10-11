@@ -44,7 +44,8 @@ func TestLocalImageInspectionAdmitsOnlyFixedBasesAndBuildTags(t *testing.T) {
 			APISIXBaseManifestDigest + `"],"Os":"linux","Architecture":"amd64"}]`), nil
 	}}
 	for _, reference := range []string{
-		APISIXBasePinnedReference, AlpineBasePinnedReference, DockerBasePinnedReference, PostgresPinnedReference,
+		APISIXBasePinnedReference, AlpineBasePinnedReference, DockerBasePinnedReference,
+		PostgresPinnedReference, MySQLPinnedReference,
 		"matrix-release-build/iam:0123456789abcdef01234567",
 	} {
 		metadata, err := effects.InspectImage(context.Background(), reference)
@@ -61,8 +62,8 @@ func TestLocalImageInspectionAdmitsOnlyFixedBasesAndBuildTags(t *testing.T) {
 			t.Fatalf("mutable or caller-selected image reference %q was admitted", rejected)
 		}
 	}
-	if called != 5 {
-		t.Fatalf("provider inspection calls = %d, want 5", called)
+	if called != 6 {
+		t.Fatalf("provider inspection calls = %d, want 6", called)
 	}
 }
 

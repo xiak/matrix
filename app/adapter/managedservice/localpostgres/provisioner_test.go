@@ -166,6 +166,8 @@ func (runtime *fakeRuntime) Observe(
 		Labels: map[string]string{
 			"com.xiak.matrix.managed":                     "true",
 			"com.xiak.matrix.managedservice.installation": "postgres-primary",
+			"com.xiak.matrix.managedservice.offering":     managedservicev1.PostgreSQLOfferingID,
+			"com.xiak.matrix.managedservice.region":       "local-primary",
 		},
 	}}, nil
 }

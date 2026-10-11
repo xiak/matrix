@@ -118,7 +118,7 @@ func (service *Service) ProcessNext(ctx context.Context, workerID string) (bool,
 		return true, nil
 	}
 	if work.Attempt >= service.maximumAttempts {
-		if err := service.queue.Fail(ctx, work, "POSTGRES_PROVISIONING_FAILED"); err != nil {
+		if err := service.queue.Fail(ctx, work, "PROVIDER_PROVISIONING_FAILED"); err != nil {
 			return true, err
 		}
 		return true, nil

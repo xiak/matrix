@@ -139,7 +139,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_WORKER_BINDING_ROOT", "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE",
 			"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID", "MATRIX_PAAS_WORKER_ID",
 			"MATRIX_PAAS_WORKER_LISTEN_ADDRESS", "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF",
-			"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE",
+			"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE", "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE",
 			"MATRIX_PAAS_WORKER_SECRET_ROOT",
 		},
 	}
@@ -511,9 +511,9 @@ func topologyManifest() release.Manifest {
 	}}
 	required := release.RequiredImages()
 	images := make([]release.Image, 0, len(required))
-	fileDigests := "2345678"
-	imageDigests := "89abcde"
-	sourceDigests := "ef01234"
+	fileDigests := "2345678a"
+	imageDigests := "89abcdef"
+	sourceDigests := "f0123456"
 	for index, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
 		files = append(files, release.File{

@@ -456,8 +456,9 @@ func compileServices(
 		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF":    "local-machine-v1",
 		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS":         "0.0.0.0:8080",
 		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE": images["postgres"],
-		"DOCKER_HOST":   "unix:///var/run/docker.sock",
-		"DOCKER_CONFIG": "/tmp/docker-config",
+		"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE":    images["mysql"],
+		"DOCKER_HOST":                               "unix:///var/run/docker.sock",
+		"DOCKER_CONFIG":                             "/tmp/docker-config",
 	}
 	paasWorker.Volumes = []mount{
 		bind(paasWorkerDSN, "/run/matrix/paas-worker-dsn", true),

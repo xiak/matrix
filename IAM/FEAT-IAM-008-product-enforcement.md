@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤、可信标签读写及Audit目录已有固定门禁。AccessKey产品消费已覆盖不可变资源图创建、实例读取、Deployment控制、Application声明标签和租户Audit读取，并累计到`91649497`的完整独立CI；额外产品 Profile、服务Role权限上限及模板已收敛为一个签名产品授权目录，非空目录的独立PG18动态闭环、当前空目录的同Profile签名A/B传输/迁移/离线生命周期及测试专用后继`651ef0c64`的17项独立CI均已通过，当前发布组合由011接受。尚未随发布物接入额外产品，其可信边缘、真实业务 PEP及LIVE UI仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤、可信标签读写及Audit目录已有固定门禁。AccessKey产品消费已覆盖不可变资源图创建、实例读取、Deployment控制、Application声明标签和租户Audit读取，并累计到`91649497`的完整独立CI；额外产品 Profile、服务Role权限上限及模板已收敛为一个签名产品授权目录。PostgreSQL 18与MySQL 8.4 LTS现有真实provider候选已在本任务独立环境完成创建到READY、协议读写、资源级授权/撤权、租户隔离与Audit，但当前候选尚待固定提交和独立CI，通用终止/失败回滚也未交付；Elasticsearch与消息队列仍未接入，因此整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -26,7 +26,7 @@ Profile 的代码/签名发行由产品 owner 管理，IAM 只注册校验与求
 
 通用 IAM 求值器和控制台不得按产品名称、服务名称、角色名称或六种旧角色枚举内置授权分支。产品新增动作/模板是相应 owner 的版本化声明；新增产品必须通过登记与契约验证，不修改求值算法或逐个扩展前端角色菜单。预置策略、服务角色模板可由可信产品发布，但内容、默认版本与同意关系分别管理；显示名改动不影响授权，新版本不能隐式扩张既有账号的授权。当前静态 Action catalog 是 001 的过渡实现，不是最终可扩展接入完成。
 
-产品授权声明与产品上线资格严格分开：Profile、Action、Policy 或控制台文案都不能单独让一个商品进入租户目录。每个目录项必须由对应产品 owner 提供真实 provider，并在同一纵向门禁中证明受信制品、创建到终态、真实协议读写、凭据保护、配额与 Operation、资源级 IAM、租户 Audit、失败回滚和明确终止语义。未完成这些门禁的 MySQL、Elasticsearch 或消息队列不得作为可购买/可创建产品返回；后续接入时复用统一目录和 IAM 协议，但分别实现并验收自己的 provider，不在 IAM 内写死产品分支。
+产品授权声明与产品上线资格严格分开：Profile、Action、Policy 或控制台文案都不能单独让一个商品进入租户目录。每个目录项必须由对应产品 owner 提供真实 provider，并在同一纵向门禁中证明受信制品、创建到终态、真实协议读写、凭据保护、配额与 Operation、资源级 IAM、租户 Audit、失败回滚和明确终止语义。MySQL当前候选已跨过真实创建、协议和权限门禁，但在终止/回滚与独立CI关闭前仍不能把本段整体要求标为完成；尚无provider的Elasticsearch或消息队列不得作为可购买/可创建产品返回。后续接入复用统一目录、provider registry和IAM协议，但分别实现并验收自己的provider，不在通用IAM求值器内按产品名写分支。
 
 PaaS 先覆盖 Application、Configuration/Revision、Deployment、Operation；managedservice 覆盖 Offering/Region/Entitlement/Installation；Audit 保持 chain/query scope。平台主机/终端由既有 Phase owner 消费确认的公共契约，本任务不重做主机实现。
 
@@ -44,7 +44,7 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 | IAM-PEP-02 | PaaS apphosting 与 managedservice 已实现 | HTTP owner 从真实 path/body 和实际 `RemoteAddr` 构造 Action、资源、集合用途及可信网络上下文；账号和主体来自当前 IAM 凭据。IAM 决定必须逐字段绑定原请求，业务事务再按数据库所属账号取数，query/body/header 不能选择另一账号。 |
 | IAM-PEP-03 | 首个无游标目录已固定并由累计 CI 覆盖，发布未完成 | 固定`a7f2e83b`使managedservice先以`COLLECTION_LIST`完成目录准入，再从受信本地catalog取得真实候选，按ID排序后通过一次1–50项批量PDP逐实例过滤。两个账号同名/同 ID/key、伪造 tenant/cursor/after、错序/遗漏/替换决定、跨账号实例、撤权后下一请求及ROLE全拒绝已有行为或真实进程门禁；该代码位于累计固定`91649497`的祖先链并由其完整独立CI覆盖。租户资源cursor、其他产品目录和最终发布组合仍未完成。 |
 | IAM-PEP-04 | 当前应用托管与 managedservice 路径已实现 | Application、Configuration、Revision、QuotaEntitlement、ServiceInstallation 的创建由封闭集合请求开始，最终资源、Operation 和 outbox 由同一业务事务建立；IAM 原决定只证明集合准入，不证明 caller 填写的最终 ID 或 payload。真实双账号门禁核对配额、Operation、幂等、拒绝无部分效果及 Audit 关联。 |
-| IAM-PEP-05 | PostgreSQL 18 为当前唯一真实产品，其他产品未接入 | 当前目录只包含固定镜像的 PostgreSQL 18，真实 worker、容器、凭据文件、SQL 读写、配额、Operation、资源授权及 Audit 已有纵向证据。MySQL、Elasticsearch 与消息队列没有 provider、运行时及协议门禁，因此不得进入目录，也不得用 fixture 或静态 JSON 冒充支持。 |
+| IAM-PEP-05 | 部分实现；PostgreSQL与MySQL已有真实运行候选，完整生命周期未关闭 | PostgreSQL 18与MySQL 8.4 LTS均使用不可变镜像、生产worker、受保护凭据文件及真实SQL协议；本地纵向门禁覆盖两个真实容器的创建到READY、数据保留、配额、Operation、精确实例授权、下一请求撤权、跨Account隐藏及Audit链。当前仍缺受支持的终止与失败回滚闭环，候选独立CI也未完成；Elasticsearch和消息队列没有provider，不能作为目录条目。 |
 | IAM-SVC-01/02 | 最小产品运行闭环及管理员管理已固定并通过累计 CI，发布未完成 | ServiceIdentity自身仍不获得目标Account权限；只有不可变模板、精确系统策略上限、当前Account同意和真实workload binding同时有效时，IAM才发行目标Account的60秒RoleSession。managedservice用该临时身份经唯一PDP读取实际`ServiceInstallation`后立即自退出；服务home Account与目标Account分开保存，SERVICE与USER来源严格互斥。当前AccountAdministrator能以独立权限查询和终止服务会话，只有服务Role绑定管理权限的USER、服务凭据及ROLE自身均不能获得管理能力。真实PG18纵向、累计Role管理及209.46秒独立进程组合覆盖双副本list/read/revoke、解绑后历史观察、等值重放、跨Account拒绝与唯一Audit事实；累计固定`a464299b`及其14项成功的独立CI覆盖该后端闭环。最终签名发布组合和LIVE UI仍未完成。 |
 | IAM-TAG-01/02 | Application创建、读取及标签写入已有固定实现，发布未完成 | PaaS Application创建从真实body构造`request.tag/environment`；读取及写入从PaaS数据库预读同一Application构造`resource.tag/environment`，设置/删除再绑定准确`request.tag/environment`。决定、资源版本、SQL效果、Operation及Audit证据精确关联，标签写入的并发CAS与跨Account隔离已有真实门禁。Role/User标签仍只是元数据；其他资源标签、LIVE UI和签名发布组合尚未实现。 |
 
@@ -68,7 +68,9 @@ OpenAPI 对这些可扩展请求字段只验证统一 Action/Resource 语法和�
 
 本地合约、策略引擎、迁移、用例、HTTP和发布构建聚焦测试通过；独占PostgreSQL 18的`TestIAMRegisteredProductProfilePostgresHTTP`以外部名称`catalog`证明签名目录migration apply-twice、数据库Profile/PolicyVersion/模板可见、客户Policy编译与挂载、真实PaaS服务Allow、Audit服务Deny、LOGIN_SESSION主体解析/当前权限诊断/batch及AccessKey路径。相同目录还发布`catalog.item-reader`模板和仅允许`catalog.item.read`的系统权限上限：普通附件入口拒绝直接挂载，显式委派服务Role管理员后才可把真实workload绑定给当前Account，PaaS服务随后取得短期ROLE凭据；该凭据只能读精确绑定资源，换workload拒绝，重建IAM handler后继续按数据库模板求值，解绑后的下一请求立即失效。当前数据库守卫与迁移验证会拒绝把服务Role权限上限直接挂到普通主体；创建和撤销均由事务读取精确当前Profile并调用同一profile-aware求值器，通用运行时没有`catalog`名称、Action前缀或角色名分支。由于产品尚未发布，不再用关闭当前守卫后直接写SQL的伪历史夹具制造未发布兼容负担；真实前一版保留数据只由固定旧可执行文件的升级门禁证明。
 
-发布构建把规范`ProductAuthorizationReleaseCatalog`固定为`config/iam/product-authorization.json`并纳入Ed25519签名清单；安装从已重新验证的staged release只读挂载到一次性IAM migration，常驻API/worker和其他迁移均不获得该文件。篡改或缺失在provider effect前失败，migration再次校验内置产品不可覆盖、历史归属、权限上限及模板交叉引用。由于本片改变现有服务Role数据库函数/附件保护触发器和签名发布payload形状，当前源码推进为IAM schema 83、Audit 37、PaaS 3、`contractRevision=31`；产品尚未发布，仅保留当前与一个直接前驱的开发期窗口，不累积历史草稿矩阵。当前真实PG证据不替代HA多副本、产品业务PEP或完整签名离线安装；独立CI仍以精确提交终态为准，本地通过不能预先记作CI成功。
+发布构建把规范`ProductAuthorizationReleaseCatalog`固定为`config/iam/product-authorization.json`并纳入Ed25519签名清单；安装从已重新验证的staged release只读挂载到一次性IAM migration，常驻API/worker和其他迁移均不获得该文件。篡改或缺失在provider effect前失败，migration再次校验内置产品不可覆盖、历史归属、权限上限及模板交叉引用。MySQL候选增加真实PaaS目录约束、provider registry、受管运行时与签名基础镜像，因此当前源码为IAM schema 83、Audit 37、PaaS 4、`contractRevision=32`；固定`01146e7c465bbf28116d541f17ecbe28f917a4fe`的PaaS3/PostgreSQL-only状态是本片唯一产品目录前驱，不为更老开发快照增加兼容路径。当前真实PG证据不替代HA多副本、终止/回滚、完整签名离线安装或独立CI。
+
+2026-10-11本地候选在任务专属PostgreSQL 18和Docker Desktop 29.6.2中以`TestManagedProductProviderProcesses`实跑52.125秒：生产IAM/Audit/PaaS/dispatcher/worker创建PostgreSQL 18与MySQL 8.4 LTS两个真实资源，两者均到READY并完成实际SQL建表、写入、重复reconcile后的读取；同一Group策略只允许两个精确实例，移除Membership后的下一请求均403，另一Account按ID探测均404，配额各消费一次、Operation终态及两个READY事实与授权决定进入并通过同一租户Audit链。独立`TestManagedServicePredecessorCatalogUpgrade`以固定`01146e7c`的真实PaaS SQL建立PostgreSQL-only状态，证明升级前MySQL失败无部分quota，当前迁移apply-twice后旧PostgreSQL quota/installation字节语义保持且MySQL新建成功，race用时3.282秒。独立`TestLocalMySQLRealRuntime`以固定官方镜像完成真实MySQL 8.4协议和幂等数据保留，race用时29.126秒。三项均是本地候选证据；精确提交、独立CI、终止/回滚和签名A/B仍待完成。
 
 ## 当前纵向切片：账号同意的服务相关角色
 

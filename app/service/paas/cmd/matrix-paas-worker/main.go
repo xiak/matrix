@@ -16,6 +16,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
 	localmachineadapter "github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
+	localmysqladapter "github.com/xiak/matrix/app/adapter/managedservice/localmysql"
 	localpostgresadapter "github.com/xiak/matrix/app/adapter/managedservice/localpostgres"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
@@ -41,6 +42,7 @@ const (
 	machineBindingEnvironment       = "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF"
 	listenAddressEnvironment        = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
 	managedPostgresImageEnvironment = "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE"
+	managedMySQLImageEnvironment    = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE"
 	pollInterval                    = 250 * time.Millisecond
 	executionTargetRefresh          = time.Minute
 	executionTargetMaximumAge       = 5 * time.Minute
@@ -65,6 +67,7 @@ type configuration struct {
 	machineBinding       string
 	listenAddress        string
 	managedPostgresImage string
+	managedMySQLImage    string
 }
 
 var localExecutionProfileIDs = refreshexecutionprofile.IDs{
@@ -151,9 +154,26 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	managedMySQL, err := localmysqladapter.New(localmysqladapter.Config{
+		Root:    filepath.Join(config.bindingRoot, "managed-mysql"),
+		ImageID: config.managedMySQLImage, Runtime: runtime,
+	})
+	if err != nil {
+		return err
+	}
+	providerRegistry, err := reconcileinstallation.NewProviderRegistry(
+		domain.DefaultCatalog(),
+		map[string]reconcileinstallation.Provisioner{
+			domain.PostgreSQLOfferingID: managedPostgres,
+			domain.MySQLOfferingID:      managedMySQL,
+		},
+	)
+	if err != nil {
+		return err
+	}
 	managedServiceWorker, err := reconcileinstallation.NewService(
 		managedServiceRepository,
-		managedPostgres,
+		providerRegistry,
 		reconcileinstallation.Config{
 			Catalog: domain.DefaultCatalog(), LeaseDuration: 3 * time.Minute,
 			EffectTimeout: 2 * time.Minute, RetryBackoff: 2 * time.Second,
@@ -373,12 +393,14 @@ func loadConfiguration() (configuration, error) {
 		machineBinding:       os.Getenv(machineBindingEnvironment),
 		listenAddress:        os.Getenv(listenAddressEnvironment),
 		managedPostgresImage: os.Getenv(managedPostgresImageEnvironment),
+		managedMySQLImage:    os.Getenv(managedMySQLImageEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.workerID == "" ||
 		config.bindingRef == "" || config.bindingRoot == "" ||
 		config.secretRoot == "" || config.artifactCatalog == "" ||
 		config.executionTenant == "" || config.machineBinding == "" ||
-		config.listenAddress == "" || config.managedPostgresImage == "" {
+		config.listenAddress == "" || config.managedPostgresImage == "" ||
+		config.managedMySQLImage == "" {
 		return configuration{}, errors.New("PaaS worker configuration is incomplete")
 	}
 	if paasv1.ValidateID("workerId", config.workerID) != nil ||

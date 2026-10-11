@@ -9,6 +9,7 @@ import (
 )
 
 const PostgreSQLOfferingID = managedservicev1.PostgreSQLOfferingID
+const MySQLOfferingID = managedservicev1.MySQLOfferingID
 
 type Catalog struct {
 	offerings []managedservicev1.ServiceOffering
@@ -27,6 +28,17 @@ func DefaultCatalog() Catalog {
 				{ID: "pg-medium", DisplayName: "标准型", CPUMillicores: 1000, MemoryMiB: 2048, StorageGiB: 20},
 			},
 		},
+		{
+			ID: MySQLOfferingID, Kind: managedservicev1.OfferingMySQL,
+			DisplayName:  "MySQL 8.4 LTS",
+			Description:  "由 Matrix 在本地区域安装和管理的 MySQL 8.4 LTS 服务。",
+			EngineFamily: "mysql", EngineVersion: "8.4",
+			State: managedservicev1.OfferingAvailable,
+			QuotaShapes: []managedservicev1.QuotaShape{
+				{ID: "mysql-small", DisplayName: "开发型", CPUMillicores: 500, MemoryMiB: 1024, StorageGiB: 10},
+				{ID: "mysql-medium", DisplayName: "标准型", CPUMillicores: 1000, MemoryMiB: 2048, StorageGiB: 20},
+			},
+		},
 	})
 	if err != nil {
 		panic(err)
@@ -35,14 +47,30 @@ func DefaultCatalog() Catalog {
 }
 
 func NewCatalog(offerings []managedservicev1.ServiceOffering) (Catalog, error) {
-	if len(offerings) != 1 || offerings[0].ID != PostgreSQLOfferingID ||
-		offerings[0].Kind != managedservicev1.OfferingPostgreSQL ||
-		offerings[0].State != managedservicev1.OfferingAvailable ||
-		managedservicev1.ValidateServiceOffering(offerings[0]) != nil {
+	if len(offerings) == 0 || len(offerings) > 32 {
 		return Catalog{}, errors.New("managed-service catalog is invalid")
 	}
 	copy := cloneOfferings(offerings)
-	slices.SortFunc(copy[0].QuotaShapes, func(left, right managedservicev1.QuotaShape) int {
+	seen := make(map[string]struct{}, len(copy))
+	for index := range copy {
+		if managedservicev1.ValidateServiceOffering(copy[index]) != nil {
+			return Catalog{}, errors.New("managed-service catalog is invalid")
+		}
+		if _, duplicate := seen[copy[index].ID]; duplicate {
+			return Catalog{}, errors.New("managed-service catalog is invalid")
+		}
+		seen[copy[index].ID] = struct{}{}
+		slices.SortFunc(copy[index].QuotaShapes, func(left, right managedservicev1.QuotaShape) int {
+			if left.ID < right.ID {
+				return -1
+			}
+			if left.ID > right.ID {
+				return 1
+			}
+			return 0
+		})
+	}
+	slices.SortFunc(copy, func(left, right managedservicev1.ServiceOffering) int {
 		if left.ID < right.ID {
 			return -1
 		}

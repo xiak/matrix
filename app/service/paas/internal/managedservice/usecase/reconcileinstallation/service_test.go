@@ -39,7 +39,7 @@ func TestProcessNextRetriesSanitizedFailureThenTerminates(t *testing.T) {
 	service = testReconciler(t, queue, &stubProvisioner{err: native}, 3)
 	processed, err = service.ProcessNext(context.Background(), "worker-test")
 	if err != nil || !processed || queue.failed != 1 ||
-		queue.failureCode != "POSTGRES_PROVISIONING_FAILED" {
+		queue.failureCode != "PROVIDER_PROVISIONING_FAILED" {
 		t.Fatalf("terminal processed=%v err=%v queue=%#v", processed, err, queue)
 	}
 }

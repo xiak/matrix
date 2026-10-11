@@ -73,8 +73,10 @@ CREATE TABLE IF NOT EXISTS managedservice.quota_entitlements (
         AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
     ),
     CONSTRAINT quota_entitlements_catalog_valid CHECK (
-        offering_id = 'postgresql-18'
-        AND quota_shape_id IN ('pg-small', 'pg-medium')
+        (offering_id = 'postgresql-18'
+            AND quota_shape_id IN ('pg-small', 'pg-medium'))
+        OR (offering_id = 'mysql-8.4'
+            AND quota_shape_id IN ('mysql-small', 'mysql-medium'))
     ),
     CONSTRAINT quota_entitlements_counts_valid CHECK (
         purchased_count BETWEEN 1 AND 100
@@ -111,8 +113,10 @@ CREATE TABLE IF NOT EXISTS managedservice.service_installations (
     CONSTRAINT service_installations_ids_valid CHECK (
         tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND id COLLATE "C" ~ '^[a-z0-9][a-z0-9._-]{1,62}$'
-        AND offering_id = 'postgresql-18'
-        AND engine_version = '18'
+        AND (
+            (offering_id = 'postgresql-18' AND engine_version = '18')
+            OR (offering_id = 'mysql-8.4' AND engine_version = '8.4')
+        )
         AND quota_entitlement_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND region_id = 'local-primary'
     ),
@@ -134,6 +138,34 @@ CREATE TABLE IF NOT EXISTS managedservice.service_installations (
     ),
     CONSTRAINT service_installations_time_valid CHECK (observed_at >= created_at)
 );
+
+-- This repository is pre-v1 and owns one replayable current schema instead of
+-- a chain of obsolete development migrations. Re-applying the current source
+-- must upgrade the immediately preceding PostgreSQL-only catalog without
+-- changing any existing row.
+ALTER TABLE managedservice.quota_entitlements
+    DROP CONSTRAINT IF EXISTS quota_entitlements_catalog_valid;
+ALTER TABLE managedservice.quota_entitlements
+    ADD CONSTRAINT quota_entitlements_catalog_valid CHECK (
+        (offering_id = 'postgresql-18'
+            AND quota_shape_id IN ('pg-small', 'pg-medium'))
+        OR (offering_id = 'mysql-8.4'
+            AND quota_shape_id IN ('mysql-small', 'mysql-medium'))
+    );
+
+ALTER TABLE managedservice.service_installations
+    DROP CONSTRAINT IF EXISTS service_installations_ids_valid;
+ALTER TABLE managedservice.service_installations
+    ADD CONSTRAINT service_installations_ids_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND id COLLATE "C" ~ '^[a-z0-9][a-z0-9._-]{1,62}$'
+        AND (
+            (offering_id = 'postgresql-18' AND engine_version = '18')
+            OR (offering_id = 'mysql-8.4' AND engine_version = '8.4')
+        )
+        AND quota_entitlement_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND region_id = 'local-primary'
+    );
 
 CREATE TABLE IF NOT EXISTS managedservice.operations (
     tenant_id text COLLATE "C" NOT NULL,
