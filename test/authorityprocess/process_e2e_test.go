@@ -83,6 +83,11 @@ const (
 	// fixed local Docker CLI image so its Linux-only host-storage observation is
 	// not replaced by a synthetic execution profile.
 	browserDockerCLIImageID = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
+	// The real managed-service worker shares the PaaS worker database role with
+	// the audit dispatcher but owns a separate bounded connection pool. Keep a
+	// distinct application identity so the process gate proves both pools
+	// independently instead of treating their aggregate as one pool.
+	browserManagedWorkerApplicationName = "matrix-authority:paas-managed-worker"
 )
 
 type migrationErrorRecorder struct {
@@ -3241,6 +3246,17 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"paas-worker-dsn",
 		[]byte(runtimeDSN(t, adminConfig, paasWorkerLogin, processDBPassword)),
 	)
+	browserPaasWorkerDSNPath := ""
+	if mode == authorityProcessBrowser {
+		browserPaasWorkerDSNPath = writeProtectedFile(
+			t,
+			temporary,
+			"paas-managed-service-worker-dsn",
+			[]byte(runtimeDSNWithApplication(
+				t, adminConfig, paasWorkerLogin, processDBPassword, browserManagedWorkerApplicationName,
+			)),
+		)
+	}
 	auditCredentialPath := writeProtectedFile(
 		t,
 		temporary,
@@ -3441,7 +3457,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	browserManagedRuntime := browserManagedRuntime{}
 	if mode == authorityProcessBrowser {
 		browserManagedRuntime = startBrowserManagedWorker(
-			t, ctx, admin, adminConfig, root, temporary, paasWorkerDSNPath, start, startWithArguments,
+			t, ctx, admin, adminConfig, root, temporary, browserPaasWorkerDSNPath, start, startWithArguments,
 		)
 	}
 	// The source authorities now form the published release composition. Prove
@@ -5064,7 +5080,9 @@ func startBrowserManagedWorker(
 			paasWorkerDSNPath, bindingRoot, secretRoot, catalogPath, workerAddress,
 		))
 		waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
-		assertRuntimeProcessLogin(t, ctx, database, paasWorkerLogin, 2)
+		assertRuntimeProcessApplicationLogin(
+			t, ctx, database, paasWorkerLogin, browserManagedWorkerApplicationName, 2,
+		)
 		return browserManagedRuntime{bindingRoot: bindingRoot}
 	}
 	if runtime.GOOS != "windows" {
@@ -5075,7 +5093,9 @@ func startBrowserManagedWorker(
 	}
 	assertExactLocalImage(t, ctx, browserDockerCLIImageID)
 	workerBinary := buildAuthorityLinuxBinary(t, ctx, root, temporary, "matrix-paas-worker-linux-amd64", "./app/service/paas/cmd/matrix-paas-worker")
-	containerDSNURL, parseErr := url.Parse(runtimeDSN(t, adminConfig, paasWorkerLogin, processDBPassword))
+	containerDSNURL, parseErr := url.Parse(runtimeDSNWithApplication(
+		t, adminConfig, paasWorkerLogin, processDBPassword, browserManagedWorkerApplicationName,
+	))
 	if parseErr != nil {
 		t.Fatal("parse browser managed-service worker database URL")
 	}
@@ -5138,7 +5158,9 @@ func startBrowserManagedWorker(
 	arguments = append(arguments, "--entrypoint", "sh", browserDockerCLIImageID, "-c", script)
 	worker := startWithArguments("docker", nil, arguments...)
 	waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
-	assertRuntimeProcessLogin(t, ctx, database, paasWorkerLogin, 2)
+	assertRuntimeProcessApplicationLogin(
+		t, ctx, database, paasWorkerLogin, browserManagedWorkerApplicationName, 2,
+	)
 	return browserManagedRuntime{bindingRoot: bindingRoot, volumeName: volumeName}
 }
 
@@ -15071,6 +15093,17 @@ func quoteLiteral(value string) string {
 
 func runtimeDSN(t *testing.T, admin *pgx.ConnConfig, user string, password string) string {
 	t.Helper()
+	return runtimeDSNWithApplication(t, admin, user, password, "matrix-authority-process:"+user)
+}
+
+func runtimeDSNWithApplication(
+	t *testing.T,
+	admin *pgx.ConnConfig,
+	user string,
+	password string,
+	applicationName string,
+) string {
+	t.Helper()
 	// ConnString returns the original parse input, not changes to Config fields.
 	value, err := url.Parse(admin.ConnString())
 	if err != nil || (value.Scheme != "postgres" && value.Scheme != "postgresql") || value.Host == "" {
@@ -15083,7 +15116,7 @@ func runtimeDSN(t *testing.T, admin *pgx.ConnConfig, user string, password strin
 	for _, selector := range []string{"user", "password", "host", "hostaddr", "port", "dbname", "database"} {
 		query.Del(selector)
 	}
-	query.Set("application_name", "matrix-authority-process:"+user)
+	query.Set("application_name", applicationName)
 	query.Set("pool_max_conns", "2")
 	value.RawQuery = query.Encode()
 	return value.String()
@@ -15097,6 +15130,18 @@ func assertRuntimeProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Co
 }
 
 func assertRuntimeProcessLogin(t *testing.T, ctx context.Context, admin *pgx.Conn, user string, maximumConnections int) {
+	t.Helper()
+	assertRuntimeProcessApplicationLogin(t, ctx, admin, user, "matrix-authority-process:"+user, maximumConnections)
+}
+
+func assertRuntimeProcessApplicationLogin(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	user string,
+	applicationName string,
+	maximumConnections int,
+) {
 	t.Helper()
 	config, err := pgxpool.ParseConfig(runtimeDSN(t, admin.Config(), user, processDBPassword))
 	if err != nil {
@@ -15122,7 +15167,7 @@ func assertRuntimeProcessLogin(t *testing.T, ctx context.Context, admin *pgx.Con
 		var confined bool
 		queryErr := admin.QueryRow(ctx, `SELECT count(*), COALESCE(bool_and(activity.usename=$2 AND NOT role.rolsuper AND NOT role.rolbypassrls),false)
             FROM pg_stat_activity AS activity JOIN pg_roles AS role ON role.rolname=activity.usename
-			WHERE activity.datname=current_database() AND activity.application_name=$1`, "matrix-authority-process:"+user, user).Scan(&connections, &confined)
+			WHERE activity.datname=current_database() AND activity.application_name=$1`, applicationName, user).Scan(&connections, &confined)
 		if queryErr == nil && connections > 0 && connections <= maximumConnections && confined {
 			return
 		}
