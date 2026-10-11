@@ -76,18 +76,18 @@ const (
 	verifierCredential     = "mx1.ProcessVerifierCredential0000000000000001"
 
 	// This exact image is the existing fixed PostgreSQL 18 fixture used by the
-	// local managed-service provider gate. The opt-in browser fixture never
-	// resolves a mutable tag or pulls an image while proving a product effect.
-	browserManagedPostgresImageID = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
+	// local managed-service provider gates. They never resolve a mutable tag or
+	// pull an image while proving a product effect.
+	managedPostgresImageID = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
 	// Windows development hosts run the production Linux worker through this
 	// fixed local Docker CLI image so its Linux-only host-storage observation is
 	// not replaced by a synthetic execution profile.
-	browserDockerCLIImageID = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
+	managedDockerCLIImageID = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
 	// The real managed-service worker shares the PaaS worker database role with
 	// the audit dispatcher but owns a separate bounded connection pool. Keep a
 	// distinct application identity so the process gate proves both pools
 	// independently instead of treating their aggregate as one pool.
-	browserManagedWorkerApplicationName = "matrix-authority:paas-managed-worker"
+	managedPostgresWorkerApplicationName = "matrix-authority:paas-managed-worker"
 )
 
 type migrationErrorRecorder struct {
@@ -3111,6 +3111,7 @@ type authorityProcessMode uint8
 const (
 	authorityProcessFull authorityProcessMode = iota
 	authorityProcessBrowser
+	authorityProcessManagedPostgres
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
 )
@@ -3142,12 +3143,24 @@ func TestIAMConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessBrowser)
 }
 
+// This gate provisions an actual PostgreSQL 18 product resource through the
+// public PaaS API and the production worker. A catalog row, accepted command,
+// synthetic endpoint or manually completed database record cannot satisfy it.
+func TestManagedPostgresProviderProcesses(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_MANAGED_POSTGRES_TEST_DSN") == "" {
+		t.Skip("set MATRIX_IAM_MANAGED_POSTGRES_TEST_DSN to a separate disposable PG18 database")
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessManagedPostgres)
+}
+
 func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) {
 	variable, prefix := authorityProcessDSN, "matrix_authority_process_"
 	if mode == authorityProcessCapacity {
 		variable, prefix = "MATRIX_IAM_CAPACITY_POSTGRES_TEST_DSN", "matrix_authority_process_capacity_"
 	} else if mode == authorityProcessPasswordCapacity {
 		variable, prefix = "MATRIX_IAM_PASSWORD_HISTORY_CAPACITY_POSTGRES_TEST_DSN", "matrix_authority_process_password_capacity_"
+	} else if mode == authorityProcessManagedPostgres {
+		variable, prefix = "MATRIX_IAM_MANAGED_POSTGRES_TEST_DSN", "matrix_authority_process_managed_postgres_"
 	}
 	dsn := os.Getenv(variable)
 	if dsn == "" {
@@ -3162,6 +3175,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		duration = 8 * time.Minute
 	} else if mode == authorityProcessBrowser {
 		duration = 30 * time.Minute
+	} else if mode == authorityProcessManagedPostgres {
+		duration = 10 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
@@ -3185,11 +3200,11 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	createProcessLogins(t, ctx, admin)
 	assertCrossSchemaIsolation(t, ctx, adminConfig)
 	// The ordinary process gate seeds a deterministic profile because it does
-	// not start an execution worker. The browser gate does start the real
-	// worker, so preloading the synthetic machine fingerprint would correctly
-	// make its first host observation fail closed. Let that worker create the
-	// profile from the actual bounded Docker host instead.
-	if mode != authorityProcessBrowser {
+	// not start an execution worker. The real provider gates do start the
+	// production worker, so preloading the synthetic machine fingerprint would
+	// correctly make its first host observation fail closed. Let that worker
+	// create the profile from the actual bounded Docker host instead.
+	if mode != authorityProcessBrowser && mode != authorityProcessManagedPostgres {
 		seedProcessExecutionProfile(t, ctx, adminConfig)
 	}
 
@@ -3246,14 +3261,14 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"paas-worker-dsn",
 		[]byte(runtimeDSN(t, adminConfig, paasWorkerLogin, processDBPassword)),
 	)
-	browserPaasWorkerDSNPath := ""
-	if mode == authorityProcessBrowser {
-		browserPaasWorkerDSNPath = writeProtectedFile(
+	managedPaasWorkerDSNPath := ""
+	if mode == authorityProcessBrowser || mode == authorityProcessManagedPostgres {
+		managedPaasWorkerDSNPath = writeProtectedFile(
 			t,
 			temporary,
 			"paas-managed-service-worker-dsn",
 			[]byte(runtimeDSNWithApplication(
-				t, adminConfig, paasWorkerLogin, processDBPassword, browserManagedWorkerApplicationName,
+				t, adminConfig, paasWorkerLogin, processDBPassword, managedPostgresWorkerApplicationName,
 			)),
 		)
 	}
@@ -3454,10 +3469,10 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
-	browserManagedRuntime := browserManagedRuntime{}
-	if mode == authorityProcessBrowser {
-		browserManagedRuntime = startBrowserManagedWorker(
-			t, ctx, admin, adminConfig, root, temporary, browserPaasWorkerDSNPath, start, startWithArguments,
+	managedRuntime := managedPostgresRuntime{}
+	if mode == authorityProcessBrowser || mode == authorityProcessManagedPostgres {
+		managedRuntime = startManagedPostgresWorker(
+			t, ctx, admin, adminConfig, root, temporary, managedPaasWorkerDSNPath, start, startWithArguments,
 		)
 	}
 	// The source authorities now form the published release composition. Prove
@@ -3529,8 +3544,16 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"request-admin-password",
 	)
 	if mode == authorityProcessBrowser {
-		runIAMConsoleBrowser(t, ctx, admin, root, temporary, browserManagedRuntime,
+		runIAMConsoleBrowser(t, ctx, admin, root, temporary, managedRuntime,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
+		return
+	}
+	if mode == authorityProcessManagedPostgres {
+		sensitive = append(sensitive, runManagedPostgresProviderProcesses(t, ctx, admin, managedRuntime,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential)...)
+		inspection, stopInspection := context.WithTimeout(context.Background(), 15*time.Second)
+		defer stopInspection()
+		assertAuthorityPlaintextAbsent(t, inspection, admin, sensitive...)
 		return
 	}
 	platformDecisions := []iamv1.AuthorizationDecision{
@@ -4859,13 +4882,200 @@ type binarySet struct {
 	paasDispatcher string
 }
 
+func runManagedPostgresProviderProcesses(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	managedRuntime managedPostgresRuntime,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	bearer string,
+) []string {
+	t.Helper()
+	base := paasEndpoint + "/managed-services/v1"
+	activation := managedservicev1.ActivateQuotaRequest{
+		OfferingID:    managedservicev1.PostgreSQLOfferingID,
+		QuotaShapeID:  "pg-small",
+		InstanceCount: 1,
+	}
+	response := performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", bearer,
+		"managed-postgres-provider-quota", activation)
+	var quota managedservicev1.QuotaEntitlement
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &quota) != nil ||
+		managedservicev1.ValidateQuotaEntitlement(quota) != nil || quota.OfferingID != activation.OfferingID ||
+		quota.QuotaShapeID != activation.QuotaShapeID || quota.PurchasedCount != 1 ||
+		quota.ReservedCount != 0 || quota.ConsumedCount != 0 {
+		t.Fatalf("activate real managed PostgreSQL quota status=%d body=%s", response.Status, response.Body)
+	}
+
+	installationID := newManagedPostgresID(t, "provider")
+	defer cleanupManagedPostgres(t, installationID)
+	command := managedservicev1.CreateInstallationRequest{
+		ID:                 installationID,
+		Name:               "Authority provider PostgreSQL",
+		OfferingID:         managedservicev1.PostgreSQLOfferingID,
+		QuotaEntitlementID: quota.ID,
+		RegionID:           "local-primary",
+	}
+	response = performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", bearer,
+		"managed-postgres-provider-installation", command)
+	var accepted managedservicev1.ServiceInstallation
+	if response.Status != http.StatusAccepted || json.Unmarshal(response.Body, &accepted) != nil ||
+		managedservicev1.ValidateServiceInstallation(accepted) != nil || accepted.ID != installationID ||
+		accepted.QuotaEntitlementID != quota.ID || accepted.Phase != managedservicev1.InstallationPending ||
+		accepted.Endpoint != nil || accepted.CredentialReference != nil {
+		t.Fatalf("accept real managed PostgreSQL installation status=%d body=%s", response.Status, response.Body)
+	}
+
+	installation := waitManagedPostgresReady(t, ctx, paasEndpoint, bearer, installationID)
+	assertManagedPostgresRuntime(t, ctx, installation, managedRuntime)
+	response = performJSON(t, http.MethodGet, base+"/quota-entitlements", bearer, nil)
+	var quotas managedservicev1.QuotaEntitlementList
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &quotas) != nil ||
+		quotas.Kind != "QuotaEntitlementList" || len(quotas.Items) != 1 ||
+		managedservicev1.ValidateQuotaEntitlement(quotas.Items[0]) != nil || quotas.Items[0].ID != quota.ID ||
+		quotas.Items[0].PurchasedCount != 1 || quotas.Items[0].ReservedCount != 0 || quotas.Items[0].ConsumedCount != 1 {
+		t.Fatalf("real managed PostgreSQL quota was not consumed exactly once: status=%d body=%s", response.Status, response.Body)
+	}
+	response = performJSON(t, http.MethodGet, base+"/service-installations/"+installationID+"/operation", bearer, nil)
+	var operation managedservicev1.InstallationOperation
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &operation) != nil ||
+		operation.ID != installation.Operation.ID || operation.Phase != managedservicev1.InstallationReady ||
+		operation.SafeFailureCode != nil || operation.ObservedAt.IsZero() {
+		t.Fatalf("real managed PostgreSQL Operation is not READY: status=%d body=%s", response.Status, response.Body)
+	}
+
+	memberUser := createIAMUser(t, iamEndpoint, bearer, "provider.reader", "Managed PostgreSQL reader",
+		initialReaderPassword, "managed-postgres-provider-member")
+	member := loginIAM(t, iamEndpoint, "provider.reader@organization-process", initialReaderPassword,
+		"managed-postgres-provider-member-login")
+	changePasswordIAM(t, iamEndpoint, member.Credential, initialReaderPassword, changedReaderPassword,
+		"managed-postgres-provider-member-password")
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups", bearer,
+		iamv1.CreateGroupRequest{Name: "Managed PostgreSQL readers", RequestID: "managed-postgres-provider-group"})
+	var group iamv1.Group
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &group) != nil ||
+		iamv1.ValidateGroup(group) != nil || group.AccountID != "organization-process" {
+		t.Fatalf("create managed PostgreSQL reader group status=%d", response.Status)
+	}
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups/"+string(group.ID)+"/memberships", bearer,
+		iamv1.CreateGroupMembershipRequest{UserID: memberUser.ID, RequestID: "managed-postgres-provider-membership"})
+	var membership iamv1.GroupMembership
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &membership) != nil ||
+		iamv1.ValidateGroupMembership(membership) != nil || membership.GroupID != group.ID ||
+		membership.UserID != memberUser.ID || membership.RemovedAt != nil {
+		t.Fatalf("create managed PostgreSQL reader membership status=%d", response.Status)
+	}
+	document := iamv1.PolicyDocument{
+		LanguageVersion: iamv1.PolicyLanguageVersion,
+		Scope:           iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{
+			SID:     "read-exact-managed-postgres",
+			Effect:  iamv1.PolicyAllow,
+			Actions: []iamv1.Action{iamv1.ActionManagedServiceInstallationRead},
+			Resources: []iamv1.PolicyResourceSelector{{
+				Kind: iamv1.ResourceServiceInstallation, Match: iamv1.PolicyResourceExact, ID: installationID,
+			}},
+		}},
+	}
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", bearer,
+		iamv1.CreatePolicyRequest{DisplayName: "Read exact managed PostgreSQL", Document: document,
+			RequestID: "managed-postgres-provider-policy"})
+	var policy iamv1.PolicyDetail
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &policy) != nil ||
+		iamv1.ValidatePolicyDetail(policy) != nil {
+		t.Fatalf("publish exact managed PostgreSQL policy status=%d", response.Status)
+	}
+	attachmentRequest := iamv1.CreatePolicyAttachmentRequest{
+		Target:                iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)},
+		PolicyID:              policy.Policy.ID,
+		PolicyResourceVersion: policy.Policy.ResourceVersion,
+		RequestID:             "managed-postgres-provider-policy-attachment",
+	}
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policy-attachments", bearer, attachmentRequest)
+	var attachment iamv1.PolicyAttachment
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &attachment) != nil ||
+		iamv1.ValidatePolicyAttachment(attachment) != nil || attachment.Target != attachmentRequest.Target ||
+		attachment.PolicyID != policy.Policy.ID {
+		t.Fatalf("attach exact managed PostgreSQL policy status=%d", response.Status)
+	}
+
+	readPath := base + "/service-installations/" + installationID
+	response = performJSON(t, http.MethodGet, readPath, member.Credential, nil)
+	var memberRead managedservicev1.ServiceInstallation
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &memberRead) != nil ||
+		managedservicev1.ValidateServiceInstallation(memberRead) != nil || memberRead.ID != installationID ||
+		memberRead.Endpoint == nil || memberRead.CredentialReference == nil {
+		t.Fatalf("group member could not read the real managed PostgreSQL instance: status=%d", response.Status)
+	}
+
+	foreignAccountID := "account-managed-" + newManagedHexSuffix(t)
+	foreignLoginName := "managed.foreign." + newManagedHexSuffix(t)
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/accounts", bearer, map[string]any{
+		"id": foreignAccountID, "displayName": "Foreign managed account", "rootLoginName": foreignLoginName,
+		"rootDisplayName": "Foreign managed owner", "initialPassword": initialDeveloperPassword,
+		"requestId": "managed-postgres-provider-foreign-account",
+	})
+	var foreignAccount iamv1.Account
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &foreignAccount) != nil ||
+		iamv1.ValidateAccount(foreignAccount) != nil || string(foreignAccount.ID) != foreignAccountID {
+		t.Fatalf("create foreign account for managed PostgreSQL isolation status=%d", response.Status)
+	}
+	foreign := loginIAM(t, iamEndpoint, foreignLoginName, initialDeveloperPassword,
+		"managed-postgres-provider-foreign-login")
+	changePasswordIAM(t, iamEndpoint, foreign.Credential, initialDeveloperPassword, changedDeveloperPassword,
+		"managed-postgres-provider-foreign-password")
+	if response := performJSON(t, http.MethodGet, readPath, foreign.Credential, nil); response.Status != http.StatusNotFound {
+		t.Fatalf("foreign account discovered managed PostgreSQL by exact ID: status=%d", response.Status)
+	}
+
+	response = performJSON(t, http.MethodPost,
+		iamEndpoint+"/v1/groups/"+string(group.ID)+"/memberships/"+string(membership.ID)+":remove", bearer,
+		iamv1.RemoveGroupMembershipRequest{ResourceVersion: membership.ResourceVersion,
+			RequestID: "managed-postgres-provider-membership-remove"})
+	var removed iamv1.GroupMembership
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &removed) != nil ||
+		iamv1.ValidateGroupMembership(removed) != nil || removed.ID != membership.ID || removed.RemovedAt == nil {
+		t.Fatalf("remove managed PostgreSQL reader membership status=%d", response.Status)
+	}
+	if response := performJSON(t, http.MethodGet, readPath, member.Credential, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("removed member retained managed PostgreSQL access: status=%d", response.Status)
+	}
+	response = performJSON(t, http.MethodGet, readPath, bearer, nil)
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &installation) != nil ||
+		installation.ID != installationID || installation.Phase != managedservicev1.InstallationReady {
+		t.Fatalf("membership removal changed the managed PostgreSQL resource: status=%d", response.Status)
+	}
+	assertManagedPostgresRuntime(t, ctx, installation, managedRuntime)
+
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	waitAllPaaSOutboxDelivered(t, ctx, database)
+	var exactGroupEvidence bool
+	if err := database.QueryRow(ctx, `SELECT count(*)=1 FROM iam.authorization_decisions decision_value
+		WHERE tenant_id='organization-process' AND subject_type='USER' AND principal_id=$1
+		AND action_name=$2 AND target_kind=$3 AND target_id=$4 AND allowed
+		AND EXISTS (SELECT 1 FROM jsonb_array_elements(decision_value.policy_evidence) evidence
+			WHERE evidence->>'membershipId'=$5 AND evidence->>'membershipResourceVersion'=$6
+			AND evidence->>'attachmentId'=$7 AND evidence->>'resourceVersion'=$8)`,
+		memberUser.ID, iamv1.ActionManagedServiceInstallationRead, iamv1.ResourceServiceInstallation,
+		installationID, membership.ID, strconv.FormatUint(membership.ResourceVersion, 10),
+		attachment.ID, strconv.FormatUint(attachment.ResourceVersion, 10)).Scan(&exactGroupEvidence); err != nil || !exactGroupEvidence {
+		t.Fatal("managed PostgreSQL allow decision lost its exact Group membership and attachment evidence", err)
+	}
+	assertManagedPostgresAuthorization(t, ctx, database, auditEndpoint, bearer, memberUser.ID, installationID)
+	assertManagedPostgresAudit(t, auditEndpoint, bearer, installationID)
+	t.Log("real managed PostgreSQL provider completed create-to-READY, SQL durability, quota, Operation, exact group authorization, next-request revocation, tenant isolation and verified Audit")
+	return []string{member.Credential, foreign.Credential}
+}
+
 func runIAMConsoleBrowser(
 	t *testing.T,
 	ctx context.Context,
 	database *pgx.Conn,
 	root string,
 	temporary string,
-	managedRuntime browserManagedRuntime,
+	managedRuntime managedPostgresRuntime,
 	iamEndpoint string,
 	auditEndpoint string,
 	paasEndpoint string,
@@ -4910,8 +5120,8 @@ func runIAMConsoleBrowser(
 			t.Fatal("browser fixture could not publish a real boundary policy")
 		}
 	}
-	installationID := newBrowserManagedPostgresID(t)
-	defer cleanupBrowserManagedPostgres(t, installationID)
+	installationID := newManagedPostgresID(t, "browser")
+	defer cleanupManagedPostgres(t, installationID)
 	uiAddress := freeAddress(t)
 	uiBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-ui", "./app/ui/paas/cmd/matrix-paas-ui")
 	ui := start(uiBinary, []string{"MATRIX_PAAS_UI_LISTEN_ADDRESS=" + uiAddress})
@@ -4982,8 +5192,8 @@ func runIAMConsoleBrowser(
 		}
 	}
 finished:
-	installation := waitBrowserManagedPostgresReady(t, ctx, paasEndpoint, bearer, installationID)
-	assertBrowserManagedPostgresRuntime(t, ctx, installation, managedRuntime)
+	installation := waitManagedPostgresReady(t, ctx, paasEndpoint, bearer, installationID)
+	assertManagedPostgresRuntime(t, ctx, installation, managedRuntime)
 	waitAllIAMOutboxDelivered(t, ctx, database)
 	waitAllPaaSOutboxDelivered(t, ctx, database)
 	page := queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
@@ -5007,40 +5217,17 @@ finished:
 	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &boundary) != nil || iamv1.ValidateUserPermissionBoundary(boundary) != nil || boundary.Policy != nil {
 		t.Fatal("browser removal did not leave an explicit unbound user")
 	}
-	assertBrowserManagedPostgresAuthorization(t, ctx, database, auditEndpoint, bearer, resourceMember.ID, installationID)
-	readyQuery := auditv1.QueryRecordsRequest{
-		PageSize: 200,
-		Action:   auditv1.ActionManagedServiceInstallationReady,
-	}
-	readyFacts := 0
-	for {
-		readyPage := queryAudit(t, auditEndpoint, bearer, readyQuery, http.StatusOK)
-		for _, record := range readyPage.Records {
-			if record.Source == auditv1.SourcePaaS && record.Event.Target.ID == installationID &&
-				record.Event.TenantID == "organization-process" {
-				readyFacts++
-			}
-		}
-		if readyPage.NextCursor == "" {
-			break
-		}
-		readyQuery.Cursor = readyPage.NextCursor
-	}
-	if readyFacts != 1 {
-		t.Fatalf("real managed PostgreSQL ready facts=%d, want one", readyFacts)
-	}
-	if verification := verifyAudit(t, auditEndpoint, bearer); verification.State != auditv1.VerificationVerified {
-		t.Fatal("browser facts failed the real Audit chain verification")
-	}
+	assertManagedPostgresAuthorization(t, ctx, database, auditEndpoint, bearer, resourceMember.ID, installationID)
+	assertManagedPostgresAudit(t, auditEndpoint, bearer, installationID)
 	t.Log("browser fixture finished with real policy/group UI changes, a provisioned PostgreSQL 18 resource, allow/revoke decisions and a verified Audit chain; visual assertions belong to recorded browser observations")
 }
 
-type browserManagedRuntime struct {
+type managedPostgresRuntime struct {
 	bindingRoot string
 	volumeName  string
 }
 
-func startBrowserManagedWorker(
+func startManagedPostgresWorker(
 	t *testing.T,
 	ctx context.Context,
 	database *pgx.Conn,
@@ -5050,14 +5237,14 @@ func startBrowserManagedWorker(
 	paasWorkerDSNPath string,
 	start func(string, []string) *childProcess,
 	startWithArguments func(string, []string, ...string) *childProcess,
-) browserManagedRuntime {
+) managedPostgresRuntime {
 	t.Helper()
 	catalogBytes, err := apphostingv1.EncodeArtifactCatalog(apphostingv1.ArtifactCatalog{
 		APIVersion: apphostingv1.ArtifactCatalogAPIVersion,
 		Kind:       apphostingv1.ArtifactCatalogKind,
 		Entries: []apphostingv1.ArtifactCatalogEntry{{
-			ArtifactDigest: browserManagedPostgresImageID,
-			ImageID:        browserManagedPostgresImageID,
+			ArtifactDigest: managedPostgresImageID,
+			ImageID:        managedPostgresImageID,
 		}},
 	})
 	if err != nil {
@@ -5072,18 +5259,18 @@ func startBrowserManagedWorker(
 		secretRoot := filepath.Join(managedRoot, "secrets")
 		for _, directory := range []string{bindingRoot, secretRoot} {
 			if err := os.MkdirAll(directory, 0o700); err != nil {
-				t.Fatalf("prepare browser managed-service runtime: %v", err)
+				t.Fatalf("prepare managed-service runtime: %v", err)
 			}
 		}
 		workerBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-worker", "./app/service/paas/cmd/matrix-paas-worker")
-		worker := start(workerBinary, browserManagedWorkerEnvironment(
+		worker := start(workerBinary, managedPostgresWorkerEnvironment(
 			paasWorkerDSNPath, bindingRoot, secretRoot, catalogPath, workerAddress,
 		))
 		waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
 		assertRuntimeProcessApplicationLogin(
-			t, ctx, database, paasWorkerLogin, browserManagedWorkerApplicationName, 2,
+			t, ctx, database, paasWorkerLogin, managedPostgresWorkerApplicationName, 2,
 		)
-		return browserManagedRuntime{bindingRoot: bindingRoot}
+		return managedPostgresRuntime{bindingRoot: bindingRoot}
 	}
 	if runtime.GOOS != "windows" {
 		t.Fatal("real managed-service browser worker requires Linux or Docker Desktop on Windows")
@@ -5091,13 +5278,13 @@ func startBrowserManagedWorker(
 	if adminConfig.Host != "127.0.0.1" && adminConfig.Host != "localhost" {
 		t.Fatal("Docker-isolated browser worker requires a loopback PostgreSQL fixture")
 	}
-	assertExactLocalImage(t, ctx, browserDockerCLIImageID)
+	assertExactLocalImage(t, ctx, managedDockerCLIImageID)
 	workerBinary := buildAuthorityLinuxBinary(t, ctx, root, temporary, "matrix-paas-worker-linux-amd64", "./app/service/paas/cmd/matrix-paas-worker")
 	containerDSNURL, parseErr := url.Parse(runtimeDSNWithApplication(
-		t, adminConfig, paasWorkerLogin, processDBPassword, browserManagedWorkerApplicationName,
+		t, adminConfig, paasWorkerLogin, processDBPassword, managedPostgresWorkerApplicationName,
 	))
 	if parseErr != nil {
-		t.Fatal("parse browser managed-service worker database URL")
+		t.Fatal("parse managed-service worker database URL")
 	}
 	// Preserve the bounded pool and stable application_name used by the
 	// independent runtime-login gate. Only translate the loopback host across
@@ -5106,35 +5293,35 @@ func startBrowserManagedWorker(
 	containerDSNURL.Host = net.JoinHostPort("host.docker.internal", strconv.Itoa(int(adminConfig.Port)))
 	containerDSN := containerDSNURL.String()
 	containerDSNPath := writeProtectedFile(t, temporary, "browser-paas-worker-container-dsn", []byte(containerDSN))
-	volumeName := "matrix-iam-browser-runtime-" + newBrowserHexSuffix(t)
-	volume := exec.CommandContext(ctx, "docker", "volume", "create", "--label", "matrix.task=iam-browser-managed-worker", volumeName)
+	volumeName := "matrix-iam-managed-postgres-runtime-" + newManagedHexSuffix(t)
+	volume := exec.CommandContext(ctx, "docker", "volume", "create", "--label", "matrix.task=iam-managed-postgres-worker", volumeName)
 	createdVolume, volumeErr := volume.Output()
 	if volumeErr != nil || strings.TrimSpace(string(createdVolume)) != volumeName {
-		t.Fatal("create owned browser managed-service volume")
+		t.Fatal("create owned managed-service volume")
 	}
-	workerContainer := "matrix-iam-browser-worker-" + newBrowserHexSuffix(t)
-	t.Cleanup(func() { cleanupBrowserManagedWorker(t, workerContainer, volumeName) })
+	workerContainer := "matrix-iam-managed-postgres-worker-" + newManagedHexSuffix(t)
+	t.Cleanup(func() { cleanupManagedPostgresWorker(t, workerContainer, volumeName) })
 	mountpointCommand := exec.CommandContext(ctx, "docker", "volume", "inspect", "--format", "{{.Mountpoint}}", volumeName)
 	mountpointBytes, mountpointErr := mountpointCommand.Output()
 	mountpoint := strings.TrimSpace(string(mountpointBytes))
 	if mountpointErr != nil || !strings.HasPrefix(mountpoint, "/") || strings.ContainsAny(mountpoint, "\r\n\x00") {
-		t.Fatal("inspect owned browser managed-service volume")
+		t.Fatal("inspect owned managed-service volume")
 	}
 	bindingRoot := mountpoint + "/bindings"
 	secretRoot := mountpoint + "/secrets"
 	_, workerPort, splitErr := net.SplitHostPort(workerAddress)
 	if splitErr != nil {
-		t.Fatal("parse browser managed-service worker address")
+		t.Fatal("parse managed-service worker address")
 	}
 	containerDSNFile := "/run/matrix/paas-worker-dsn"
 	containerCatalogFile := "/run/matrix/artifact-catalog.json"
 	containerWorker := "/run/matrix/matrix-paas-worker"
-	workerEnvironment := browserManagedWorkerEnvironment(
+	workerEnvironment := managedPostgresWorkerEnvironment(
 		containerDSNFile, bindingRoot, secretRoot, containerCatalogFile, "0.0.0.0:8080",
 	)
 	arguments := []string{
 		"run", "--rm", "--name", workerContainer,
-		"--label", "matrix.task=iam-browser-managed-worker",
+		"--label", "matrix.task=iam-managed-postgres-worker",
 		"--cpus", "2", "--memory", "512m", "--memory-swap", "512m", "--pids-limit", "128",
 		"--add-host", "host.docker.internal:host-gateway",
 		"--publish", "127.0.0.1:" + workerPort + ":8080/tcp",
@@ -5155,16 +5342,16 @@ func startBrowserManagedWorker(
 		"cp /fixture/" + filepath.Base(catalogPath) + " " + containerCatalogFile + "; " +
 		"chmod 700 " + containerWorker + "; chmod 600 " + containerDSNFile + " " + containerCatalogFile + "; " +
 		"exec " + containerWorker
-	arguments = append(arguments, "--entrypoint", "sh", browserDockerCLIImageID, "-c", script)
+	arguments = append(arguments, "--entrypoint", "sh", managedDockerCLIImageID, "-c", script)
 	worker := startWithArguments("docker", nil, arguments...)
 	waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
 	assertRuntimeProcessApplicationLogin(
-		t, ctx, database, paasWorkerLogin, browserManagedWorkerApplicationName, 2,
+		t, ctx, database, paasWorkerLogin, managedPostgresWorkerApplicationName, 2,
 	)
-	return browserManagedRuntime{bindingRoot: bindingRoot, volumeName: volumeName}
+	return managedPostgresRuntime{bindingRoot: bindingRoot, volumeName: volumeName}
 }
 
-func browserManagedWorkerEnvironment(
+func managedPostgresWorkerEnvironment(
 	dsnPath string,
 	bindingRoot string,
 	secretRoot string,
@@ -5181,24 +5368,25 @@ func browserManagedWorkerEnvironment(
 		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID=organization-process",
 		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF=local-machine-browser-v1",
 		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS=" + workerAddress,
-		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE=" + browserManagedPostgresImageID,
+		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE=" + managedPostgresImageID,
 	}
 }
 
-func newBrowserManagedPostgresID(t *testing.T) string {
-	return "iam-browser-pg-" + newBrowserHexSuffix(t)
+func newManagedPostgresID(t *testing.T, owner string) string {
+	t.Helper()
+	return "iam-" + owner + "-pg-" + newManagedHexSuffix(t)
 }
 
-func newBrowserHexSuffix(t *testing.T) string {
+func newManagedHexSuffix(t *testing.T) string {
 	t.Helper()
 	var suffix [6]byte
 	if _, err := rand.Read(suffix[:]); err != nil {
-		t.Fatal("create browser managed-service suffix")
+		t.Fatal("create managed-service suffix")
 	}
 	return hex.EncodeToString(suffix[:])
 }
 
-func waitBrowserManagedPostgresReady(
+func waitManagedPostgresReady(
 	t *testing.T,
 	ctx context.Context,
 	paasEndpoint string,
@@ -5218,7 +5406,7 @@ func waitBrowserManagedPostgresReady(
 				installation.ID != installationID ||
 				installation.OfferingID != managedservicev1.PostgreSQLOfferingID ||
 				installation.EngineVersion != "18" {
-				t.Fatal("browser created an invalid managed PostgreSQL resource")
+				t.Fatal("provider created an invalid managed PostgreSQL resource")
 			}
 			if installation.Phase == managedservicev1.InstallationFailed {
 				t.Fatal("real managed PostgreSQL provisioning reached FAILED")
@@ -5228,7 +5416,7 @@ func waitBrowserManagedPostgresReady(
 				return installation
 			}
 		} else if response.Status != http.StatusNotFound && response.Status != http.StatusServiceUnavailable {
-			t.Fatalf("read browser managed PostgreSQL status=%d", response.Status)
+			t.Fatalf("read managed PostgreSQL status=%d", response.Status)
 		}
 		select {
 		case <-ctx.Done():
@@ -5236,15 +5424,15 @@ func waitBrowserManagedPostgresReady(
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
-	t.Fatal("browser did not create a READY managed PostgreSQL resource")
+	t.Fatal("provider did not create a READY managed PostgreSQL resource")
 	return managedservicev1.ServiceInstallation{}
 }
 
-func assertBrowserManagedPostgresRuntime(
+func assertManagedPostgresRuntime(
 	t *testing.T,
 	ctx context.Context,
 	installation managedservicev1.ServiceInstallation,
-	managedRuntime browserManagedRuntime,
+	managedRuntime managedPostgresRuntime,
 ) {
 	t.Helper()
 	filter := "label=com.xiak.matrix.managedservice.installation=" + installation.ID
@@ -5259,7 +5447,7 @@ func assertBrowserManagedPostgresRuntime(
 	inspect := exec.CommandContext(ctx, "docker", "container", "inspect", "--format", format, containerID)
 	state, err := inspect.Output()
 	parts := strings.Split(strings.TrimSpace(string(state)), "|")
-	want := []string{"running", "healthy", browserManagedPostgresImageID, managedservicev1.PostgreSQLOfferingID, installation.RegionID}
+	want := []string{"running", "healthy", managedPostgresImageID, managedservicev1.PostgreSQLOfferingID, installation.RegionID}
 	if err != nil || len(parts) != 6 || !slices.Equal(parts[:5], want) {
 		t.Fatalf("managed PostgreSQL runtime state does not match its product resource")
 	}
@@ -5274,7 +5462,7 @@ func assertBrowserManagedPostgresRuntime(
 	if managedRuntime.volumeName == "" {
 		password, readErr = os.ReadFile(filepath.Join(managedRuntime.bindingRoot, "managed-postgres", project, "postgres-password"))
 	} else {
-		password, readErr = readBrowserManagedPostgresPassword(ctx, managedRuntime.volumeName, project)
+		password, readErr = readManagedPostgresPassword(ctx, managedRuntime.volumeName, project)
 	}
 	if readErr != nil || len(password) < 32 || len(password) > 256 {
 		clear(password)
@@ -5310,19 +5498,19 @@ func assertBrowserManagedPostgresRuntime(
 	}
 }
 
-func readBrowserManagedPostgresPassword(
+func readManagedPostgresPassword(
 	ctx context.Context,
 	volumeName string,
 	project string,
 ) ([]byte, error) {
 	path := "/runtime/bindings/managed-postgres/" + project + "/postgres-password"
 	command := exec.CommandContext(ctx, "docker", "run", "--rm",
-		"--label", "matrix.task=iam-browser-managed-credential-read",
+		"--label", "matrix.task=iam-managed-postgres-credential-read",
 		"--network", "none", "--read-only", "--cpus", "0.25",
 		"--memory", "64m", "--memory-swap", "64m", "--pids-limit", "32",
 		"--security-opt", "no-new-privileges:true", "--cap-drop", "ALL",
 		"--mount", "type=volume,source="+volumeName+",target=/runtime,readonly",
-		"--entrypoint", "cat", browserDockerCLIImageID, path)
+		"--entrypoint", "cat", managedDockerCLIImageID, path)
 	content, err := command.Output()
 	if err != nil {
 		clear(content)
@@ -5331,7 +5519,7 @@ func readBrowserManagedPostgresPassword(
 	return content, nil
 }
 
-func assertBrowserManagedPostgresAuthorization(
+func assertManagedPostgresAuthorization(
 	t *testing.T,
 	ctx context.Context,
 	database *pgx.Conn,
@@ -5396,7 +5584,35 @@ func assertBrowserManagedPostgresAuthorization(
 	}
 }
 
-func cleanupBrowserManagedPostgres(t *testing.T, installationID string) {
+func assertManagedPostgresAudit(t *testing.T, auditEndpoint string, bearer string, installationID string) {
+	t.Helper()
+	query := auditv1.QueryRecordsRequest{
+		PageSize: 200,
+		Action:   auditv1.ActionManagedServiceInstallationReady,
+	}
+	readyFacts := 0
+	for {
+		page := queryAudit(t, auditEndpoint, bearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			if record.Source == auditv1.SourcePaaS && record.Event.Target.ID == installationID &&
+				record.Event.TenantID == "organization-process" {
+				readyFacts++
+			}
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		query.Cursor = page.NextCursor
+	}
+	if readyFacts != 1 {
+		t.Fatalf("real managed PostgreSQL ready facts=%d, want one", readyFacts)
+	}
+	if verification := verifyAudit(t, auditEndpoint, bearer); verification.State != auditv1.VerificationVerified {
+		t.Fatal("managed PostgreSQL facts failed the real Audit chain verification")
+	}
+}
+
+func cleanupManagedPostgres(t *testing.T, installationID string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -5439,7 +5655,7 @@ func cleanupBrowserManagedPostgres(t *testing.T, installationID string) {
 	}
 }
 
-func cleanupBrowserManagedWorker(t *testing.T, containerName string, volumeName string) {
+func cleanupManagedPostgresWorker(t *testing.T, containerName string, volumeName string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -5447,24 +5663,24 @@ func cleanupBrowserManagedWorker(t *testing.T, containerName string, volumeName 
 		"name=^/"+containerName+"$", "--format", "{{.ID}}")
 	content, err := list.Output()
 	if err != nil {
-		t.Errorf("list owned browser managed-service worker")
+		t.Errorf("list owned managed-service worker")
 		return
 	}
 	identities := strings.Fields(string(content))
 	if len(identities) > 1 {
-		t.Errorf("browser managed-service worker identity is ambiguous")
+		t.Errorf("managed-service worker identity is ambiguous")
 		return
 	}
 	if len(identities) == 1 {
 		inspect := exec.CommandContext(ctx, "docker", "container", "inspect", "--format",
 			`{{index .Config.Labels "matrix.task"}}`, identities[0])
 		label, inspectErr := inspect.Output()
-		if inspectErr != nil || strings.TrimSpace(string(label)) != "iam-browser-managed-worker" {
-			t.Errorf("browser managed-service worker ownership is invalid")
+		if inspectErr != nil || strings.TrimSpace(string(label)) != "iam-managed-postgres-worker" {
+			t.Errorf("managed-service worker ownership is invalid")
 			return
 		}
 		if exec.CommandContext(ctx, "docker", "container", "rm", "--force", identities[0]).Run() != nil {
-			t.Errorf("remove owned browser managed-service worker")
+			t.Errorf("remove owned managed-service worker")
 			return
 		}
 	}
@@ -5474,12 +5690,12 @@ func cleanupBrowserManagedWorker(t *testing.T, containerName string, volumeName 
 	if volumeErr != nil {
 		return
 	}
-	if strings.TrimSpace(string(volumeLabel)) != "iam-browser-managed-worker" {
-		t.Errorf("browser managed-service volume ownership is invalid")
+	if strings.TrimSpace(string(volumeLabel)) != "iam-managed-postgres-worker" {
+		t.Errorf("managed-service volume ownership is invalid")
 		return
 	}
 	if exec.CommandContext(ctx, "docker", "volume", "rm", volumeName).Run() != nil {
-		t.Errorf("remove owned browser managed-service volume")
+		t.Errorf("remove owned managed-service volume")
 	}
 }
 
