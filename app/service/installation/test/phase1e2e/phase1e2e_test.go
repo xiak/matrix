@@ -86,6 +86,30 @@ func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
 	}
 }
 
+func TestSignedReleaseComponentImageRequiresOnePlatformIdentity(t *testing.T) {
+	manifest := release.Manifest{Images: []release.Image{
+		{Component: "postgres", Purpose: release.ImagePlatform, ImageID: "sha256:" + strings.Repeat("a", 64)},
+		{Component: "verification", Purpose: release.ImageWorkload, ImageID: "sha256:" + strings.Repeat("b", 64)},
+	}}
+	if imageID, ok := signedReleaseComponentImage(manifest, "postgres"); !ok || imageID != manifest.Images[0].ImageID {
+		t.Fatal("one signed platform image was not selected")
+	}
+	if _, ok := signedReleaseComponentImage(manifest, "mysql"); ok {
+		t.Fatal("missing signed product image was selected")
+	}
+	wrongPurpose := manifest
+	wrongPurpose.Images = append([]release.Image(nil), manifest.Images...)
+	wrongPurpose.Images[0].Purpose = release.ImageWorkload
+	if _, ok := signedReleaseComponentImage(wrongPurpose, "postgres"); ok {
+		t.Fatal("workload image was selected as a managed product")
+	}
+	duplicate := manifest
+	duplicate.Images = append(append([]release.Image(nil), manifest.Images...), manifest.Images[0])
+	if _, ok := signedReleaseComponentImage(duplicate, "postgres"); ok {
+		t.Fatal("duplicate signed product image was selected")
+	}
+}
+
 func TestCreateUserWireCarriesExplicitRootBoundary(t *testing.T) {
 	encoded, err := json.Marshal(createUserWire{
 		LoginName: "signed.fixture", DisplayName: "Signed fixture",

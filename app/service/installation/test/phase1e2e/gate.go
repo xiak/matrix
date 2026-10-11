@@ -6,11 +6,14 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -20,6 +23,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5"
+	amqp "github.com/rabbitmq/amqp091-go"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -163,6 +170,10 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	defer clear(secret)
 	value.edge.addForbidden(secret)
 	value.sensitive = [][]byte{initialPassword, newPassword, firstSession, bearer, secret}
+	if err := value.verifySignedManagedProducts(ctx); err != nil {
+		return err
+	}
+	emit("signed-managed-products-real-provider-lifecycle")
 	application, err := value.createApplication(ctx, bearer)
 	if err != nil {
 		return err
@@ -437,6 +448,522 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	emit("bounded-support-zero-leakage")
 	emit("restart-required")
+	return nil
+}
+
+type signedManagedProduct struct {
+	name             string
+	component        string
+	offeringID       string
+	quotaShapeID     string
+	engineVersion    string
+	installationID   string
+	runtimeDirectory string
+	credentialFile   string
+}
+
+func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
+	if value.retainedIAM == nil || len(value.retainedIAM.Tenants) == 0 ||
+		len(value.retainedIAM.Tenants[0].RetainedPrimaryCredential) == 0 {
+		return fail("signed-managed-products-tenant")
+	}
+	tenant := &value.retainedIAM.Tenants[0]
+	products := []signedManagedProduct{
+		{name: "PostgreSQL 18", component: "postgres", offeringID: managedservicev1.PostgreSQLOfferingID,
+			quotaShapeID: "pg-small", engineVersion: "18", installationID: "phase1-managed-postgres",
+			runtimeDirectory: "managed-postgres", credentialFile: "postgres-password"},
+		{name: "MySQL 8.4 LTS", component: "mysql", offeringID: managedservicev1.MySQLOfferingID,
+			quotaShapeID: "mysql-small", engineVersion: "8.4", installationID: "phase1-managed-mysql",
+			runtimeDirectory: "managed-mysql", credentialFile: "mysql-password"},
+		{name: "Elasticsearch 8.19.23", component: "elasticsearch", offeringID: managedservicev1.ElasticsearchOfferingID,
+			quotaShapeID: "elasticsearch-small", engineVersion: "8.19.23", installationID: "phase1-managed-elasticsearch",
+			runtimeDirectory: "managed-elasticsearch", credentialFile: "elasticsearch-password"},
+		{name: "RabbitMQ 4.1.8", component: "rabbitmq", offeringID: managedservicev1.RabbitMQOfferingID,
+			quotaShapeID: "rabbitmq-small", engineVersion: "4.1.8", installationID: "phase1-managed-rabbitmq",
+			runtimeDirectory: "managed-rabbitmq", credentialFile: "rabbitmq-password"},
+	}
+	for index := range products {
+		if err := value.verifySignedManagedProduct(ctx, tenant, products[index]); err != nil {
+			return err
+		}
+	}
+	if _, err := value.edge.verifyAuditChain(ctx, tenant.RetainedPrimaryCredential, tenant.Account.ID, ""); err != nil {
+		return fail("signed-managed-products-audit-chain")
+	}
+	return nil
+}
+
+func (value *gate) verifySignedManagedProduct(
+	ctx context.Context,
+	tenant *tenantRetention,
+	product signedManagedProduct,
+) error {
+	bearer := tenant.RetainedPrimaryCredential
+	base := "/api/managed-services/v1"
+	requestPrefix := "phase1-signed-" + product.component
+	quotaResponse, err := value.edge.json(ctx, http.MethodPost, base+"/quota-entitlements", bearer,
+		managedservicev1.ActivateQuotaRequest{
+			OfferingID: product.offeringID, QuotaShapeID: product.quotaShapeID, InstanceCount: 1,
+		}, map[string]string{"Idempotency-Key": requestPrefix + "-quota"}, http.StatusCreated)
+	if err != nil {
+		return fail("signed-managed-product-quota-" + product.component)
+	}
+	var quota managedservicev1.QuotaEntitlement
+	decodeErr := decodeOne(quotaResponse.body, &quota)
+	clear(quotaResponse.body)
+	if decodeErr != nil || managedservicev1.ValidateQuotaEntitlement(quota) != nil ||
+		quota.OfferingID != product.offeringID || quota.QuotaShapeID != product.quotaShapeID ||
+		quota.PurchasedCount != 1 || quota.ReservedCount != 0 || quota.ConsumedCount != 0 {
+		return fail("signed-managed-product-quota-" + product.component)
+	}
+
+	createResponse, err := value.edge.json(ctx, http.MethodPost, base+"/service-installations", bearer,
+		managedservicev1.CreateInstallationRequest{
+			ID: product.installationID, Name: "Signed " + product.name,
+			OfferingID: product.offeringID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+		}, map[string]string{"Idempotency-Key": requestPrefix + "-create"}, http.StatusAccepted)
+	if err != nil {
+		return fail("signed-managed-product-create-" + product.component)
+	}
+	var accepted managedservicev1.ServiceInstallation
+	decodeErr = decodeOne(createResponse.body, &accepted)
+	clear(createResponse.body)
+	if decodeErr != nil || managedservicev1.ValidateServiceInstallation(accepted) != nil ||
+		accepted.ID != product.installationID || accepted.OfferingID != product.offeringID ||
+		accepted.QuotaEntitlementID != quota.ID || accepted.Phase != managedservicev1.InstallationPending ||
+		accepted.Endpoint != nil || accepted.CredentialReference != nil ||
+		accepted.Operation.Kind != managedservicev1.InstallationOperationProvision {
+		return fail("signed-managed-product-create-" + product.component)
+	}
+	installation, err := value.waitSignedManagedProductPhase(ctx, bearer, product, managedservicev1.InstallationReady)
+	if err != nil {
+		return err
+	}
+	password, project, err := value.assertSignedManagedProductRuntime(ctx, tenant.Account.ID, installation, product)
+	if err != nil {
+		return err
+	}
+	defer clear(password)
+	value.edge.addForbidden(password)
+	value.sensitive = append(value.sensitive, bytes.Clone(password))
+	if err := assertSignedManagedProductProtocol(ctx, installation, product, password); err != nil {
+		return fail("signed-managed-product-protocol-" + product.component)
+	}
+	operationResponse, err := value.edge.json(ctx, http.MethodGet,
+		base+"/service-installations/"+product.installationID+"/operation", bearer, nil, nil, http.StatusOK)
+	if err != nil {
+		return fail("signed-managed-product-operation-" + product.component)
+	}
+	var operation managedservicev1.InstallationOperation
+	decodeErr = decodeOne(operationResponse.body, &operation)
+	clear(operationResponse.body)
+	if decodeErr != nil || operation.ID != installation.Operation.ID ||
+		operation.Kind != managedservicev1.InstallationOperationProvision ||
+		operation.Phase != managedservicev1.InstallationReady || operation.SafeFailureCode != nil || operation.ObservedAt.IsZero() {
+		return fail("signed-managed-product-operation-" + product.component)
+	}
+
+	terminationPath := base + "/service-installations/" + product.installationID + "/termination"
+	terminationKey := requestPrefix + "-terminate"
+	terminationResponse, err := value.edge.json(ctx, http.MethodPost, terminationPath, bearer, nil,
+		map[string]string{"Idempotency-Key": terminationKey}, http.StatusAccepted)
+	if err != nil {
+		return fail("signed-managed-product-termination-" + product.component)
+	}
+	var terminating managedservicev1.ServiceInstallation
+	decodeErr = decodeOne(terminationResponse.body, &terminating)
+	clear(terminationResponse.body)
+	if decodeErr != nil || managedservicev1.ValidateServiceInstallation(terminating) != nil ||
+		terminating.ID != product.installationID || terminating.Phase != managedservicev1.InstallationTerminationPending ||
+		terminating.Operation.Kind != managedservicev1.InstallationOperationTerminate {
+		return fail("signed-managed-product-termination-" + product.component)
+	}
+	terminated, err := value.waitSignedManagedProductPhase(ctx, bearer, product, managedservicev1.InstallationTerminated)
+	if err != nil {
+		return err
+	}
+	if err := value.assertSignedManagedProductDeleted(ctx, product, project, *installation.Endpoint); err != nil {
+		return err
+	}
+	replayResponse, err := value.edge.json(ctx, http.MethodPost, terminationPath, bearer, nil,
+		map[string]string{"Idempotency-Key": terminationKey}, http.StatusOK)
+	if err != nil {
+		return fail("signed-managed-product-termination-replay-" + product.component)
+	}
+	var replayed managedservicev1.ServiceInstallation
+	decodeErr = decodeOne(replayResponse.body, &replayed)
+	clear(replayResponse.body)
+	if decodeErr != nil || !equalJSON(replayed, terminated) {
+		return fail("signed-managed-product-termination-replay-" + product.component)
+	}
+	conflict, err := value.edge.json(ctx, http.MethodPost, terminationPath, bearer, nil,
+		map[string]string{"Idempotency-Key": terminationKey + "-different"}, http.StatusConflict)
+	if err != nil {
+		return fail("signed-managed-product-termination-conflict-" + product.component)
+	}
+	clear(conflict.body)
+	quotaRead, err := value.edge.json(ctx, http.MethodGet, base+"/quota-entitlements/"+quota.ID,
+		bearer, nil, nil, http.StatusOK)
+	if err != nil {
+		return fail("signed-managed-product-quota-release-" + product.component)
+	}
+	var released managedservicev1.QuotaEntitlement
+	decodeErr = decodeOne(quotaRead.body, &released)
+	clear(quotaRead.body)
+	if decodeErr != nil || managedservicev1.ValidateQuotaEntitlement(released) != nil ||
+		released.ID != quota.ID || released.ReservedCount != 0 || released.ConsumedCount != 0 {
+		return fail("signed-managed-product-quota-release-" + product.component)
+	}
+	if _, err := value.edge.waitAuditActions(ctx, bearer, tenant.Account.ID, map[auditv1.Action]string{
+		auditv1.ActionManagedServiceInstallationCreated:              product.installationID,
+		auditv1.ActionManagedServiceInstallationReady:                product.installationID,
+		auditv1.ActionManagedServiceInstallationTerminationRequested: product.installationID,
+		auditv1.ActionManagedServiceInstallationTerminated:           product.installationID,
+	}); err != nil {
+		return fail("signed-managed-product-audit-" + product.component)
+	}
+	return nil
+}
+
+func (value *gate) waitSignedManagedProductPhase(
+	ctx context.Context,
+	bearer []byte,
+	product signedManagedProduct,
+	want managedservicev1.InstallationPhase,
+) (managedservicev1.ServiceInstallation, error) {
+	deadline, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	path := "/api/managed-services/v1/service-installations/" + product.installationID
+	for deadline.Err() == nil {
+		response, err := value.edge.json(deadline, http.MethodGet, path, bearer, nil, nil,
+			http.StatusOK, http.StatusServiceUnavailable)
+		if err != nil {
+			return managedservicev1.ServiceInstallation{}, fail("signed-managed-product-observe-" + product.component)
+		}
+		if response.status == http.StatusServiceUnavailable {
+			clear(response.body)
+			if !waitPoll(deadline, 250*time.Millisecond) {
+				break
+			}
+			continue
+		}
+		var installation managedservicev1.ServiceInstallation
+		decodeErr := decodeOne(response.body, &installation)
+		clear(response.body)
+		if decodeErr != nil || managedservicev1.ValidateServiceInstallation(installation) != nil ||
+			installation.ID != product.installationID || installation.OfferingID != product.offeringID ||
+			installation.EngineVersion != product.engineVersion {
+			return managedservicev1.ServiceInstallation{}, fail("signed-managed-product-observe-" + product.component)
+		}
+		if installation.Phase == want {
+			if want == managedservicev1.InstallationReady &&
+				(installation.Endpoint == nil || installation.CredentialReference == nil ||
+					installation.Operation.Kind != managedservicev1.InstallationOperationProvision ||
+					installation.Operation.Phase != managedservicev1.InstallationReady) {
+				return managedservicev1.ServiceInstallation{}, fail("signed-managed-product-ready-" + product.component)
+			}
+			if want == managedservicev1.InstallationTerminated &&
+				(installation.Endpoint != nil || installation.CredentialReference != nil ||
+					installation.Operation.Kind != managedservicev1.InstallationOperationTerminate ||
+					installation.Operation.Phase != managedservicev1.InstallationReady) {
+				return managedservicev1.ServiceInstallation{}, fail("signed-managed-product-terminated-" + product.component)
+			}
+			return installation, nil
+		}
+		switch installation.Phase {
+		case managedservicev1.InstallationFailed, managedservicev1.InstallationRollbackFailed,
+			managedservicev1.InstallationTerminationFailed:
+			return managedservicev1.ServiceInstallation{}, fail("signed-managed-product-failed-" + product.component)
+		}
+		if !waitPoll(deadline, 250*time.Millisecond) {
+			break
+		}
+	}
+	return managedservicev1.ServiceInstallation{}, fail("signed-managed-product-timeout-" + product.component)
+}
+
+func (value *gate) assertSignedManagedProductRuntime(
+	ctx context.Context,
+	tenantID iamv1.AccountID,
+	installation managedservicev1.ServiceInstallation,
+	product signedManagedProduct,
+) ([]byte, string, error) {
+	imageID, ok := signedReleaseComponentImage(value.releases.a.Manifest, product.component)
+	if !ok {
+		return nil, "", fail("signed-managed-product-image-" + product.component)
+	}
+	ids, err := dockerLines(ctx, "container", "ls", "--all", "--quiet", "--filter",
+		"label=com.xiak.matrix.managedservice.installation="+product.installationID)
+	if err != nil || len(ids) != 1 {
+		return nil, "", fail("signed-managed-product-runtime-" + product.component)
+	}
+	inspections, err := inspectContainers(ctx, ids)
+	if err != nil || len(inspections) != 1 {
+		return nil, "", fail("signed-managed-product-runtime-" + product.component)
+	}
+	inspection := inspections[0]
+	project := inspection.Config.Labels["com.docker.compose.project"]
+	digest := sha256.Sum256([]byte(string(tenantID) + "\x00" + product.installationID))
+	wantProject := "matrix-" + hex.EncodeToString(digest[:12])
+	if !inspection.State.Running || inspection.State.Status != "running" || inspection.State.Health == nil ||
+		inspection.State.Health.Status != "healthy" || inspection.Config.Image != imageID || project != wantProject ||
+		inspection.Config.Labels["com.xiak.matrix.managedservice.offering"] != product.offeringID ||
+		inspection.Config.Labels["com.xiak.matrix.managedservice.region"] != "local-primary" ||
+		len(inspection.HostConfig.PortBindings) != 1 {
+		return nil, "", fail("signed-managed-product-runtime-" + product.component)
+	}
+	credentialDigest := sha256.Sum256([]byte(string(tenantID) + "\x00" + product.installationID + "\x00credential"))
+	if installation.CredentialReference == nil ||
+		*installation.CredentialReference != "credential-"+hex.EncodeToString(credentialDigest[:12]) {
+		return nil, "", fail("signed-managed-product-credential-reference-" + product.component)
+	}
+	credentialPath := filepath.Join(value.config.root, filepath.FromSlash(layout.ExecutorRoot),
+		product.runtimeDirectory, project, product.credentialFile)
+	info, err := os.Lstat(credentialPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+		(os.PathSeparator == '/' && info.Mode().Perm() != 0o600) || info.Size() < 32 || info.Size() > 256 {
+		return nil, "", fail("signed-managed-product-credential-" + product.component)
+	}
+	password, err := os.ReadFile(credentialPath)
+	if err != nil || len(password) < 32 || len(password) > 256 || strings.ContainsAny(string(password), "\x00\r\n") {
+		clear(password)
+		return nil, "", fail("signed-managed-product-credential-" + product.component)
+	}
+	return password, project, nil
+}
+
+func signedReleaseComponentImage(manifest release.Manifest, component string) (string, bool) {
+	var imageID string
+	for _, image := range manifest.Images {
+		if image.Component != component {
+			continue
+		}
+		if imageID != "" || image.Purpose != release.ImagePlatform {
+			return "", false
+		}
+		imageID = image.ImageID
+	}
+	return imageID, imageID != ""
+}
+
+func (value *gate) assertSignedManagedProductDeleted(
+	ctx context.Context,
+	product signedManagedProduct,
+	project string,
+	endpoint string,
+) error {
+	ids, err := dockerLines(ctx, "container", "ls", "--all", "--quiet", "--filter",
+		"label=com.xiak.matrix.managedservice.installation="+product.installationID)
+	if err != nil || len(ids) != 0 {
+		return fail("signed-managed-product-container-delete-" + product.component)
+	}
+	networks, err := dockerLines(ctx, "network", "ls", "--quiet", "--filter",
+		"label=com.docker.compose.project="+project)
+	if err != nil || len(networks) != 0 {
+		return fail("signed-managed-product-network-delete-" + product.component)
+	}
+	directory := filepath.Join(value.config.root, filepath.FromSlash(layout.ExecutorRoot),
+		product.runtimeDirectory, project)
+	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
+		return fail("signed-managed-product-data-delete-" + product.component)
+	}
+	address := endpoint
+	if parsed, parseErr := url.Parse(endpoint); parseErr == nil && parsed.Host != "" {
+		address = parsed.Host
+	}
+	connection, dialErr := net.DialTimeout("tcp", address, time.Second)
+	if connection != nil {
+		_ = connection.Close()
+	}
+	if dialErr == nil {
+		return fail("signed-managed-product-endpoint-delete-" + product.component)
+	}
+	return nil
+}
+
+func assertSignedManagedProductProtocol(
+	ctx context.Context,
+	installation managedservicev1.ServiceInstallation,
+	product signedManagedProduct,
+	password []byte,
+) error {
+	if installation.Endpoint == nil {
+		return errors.New("managed product endpoint is unavailable")
+	}
+	switch product.offeringID {
+	case managedservicev1.PostgreSQLOfferingID:
+		return probeSignedPostgreSQL(ctx, *installation.Endpoint, password)
+	case managedservicev1.MySQLOfferingID:
+		return probeSignedMySQL(ctx, *installation.Endpoint, password)
+	case managedservicev1.ElasticsearchOfferingID:
+		return probeSignedElasticsearch(ctx, *installation.Endpoint, password)
+	case managedservicev1.RabbitMQOfferingID:
+		return probeSignedRabbitMQ(ctx, *installation.Endpoint, password)
+	default:
+		return errors.New("managed product offering is unsupported")
+	}
+}
+
+func probeSignedPostgreSQL(ctx context.Context, endpoint string, password []byte) error {
+	dsn := &url.URL{Scheme: "postgresql", Host: endpoint, Path: "/service",
+		User: url.UserPassword("matrix_service", string(password)), RawQuery: "sslmode=disable"}
+	connection, err := pgx.Connect(ctx, dsn.String())
+	if err != nil {
+		return errors.New("managed PostgreSQL connection failed")
+	}
+	defer connection.Close(context.Background())
+	if _, err := connection.Exec(ctx, `CREATE TABLE IF NOT EXISTS matrix_release_acceptance(value text PRIMARY KEY)`); err != nil {
+		return errors.New("managed PostgreSQL write failed")
+	}
+	if _, err := connection.Exec(ctx, `INSERT INTO matrix_release_acceptance(value) VALUES ('signed') ON CONFLICT(value) DO NOTHING`); err != nil {
+		return errors.New("managed PostgreSQL write failed")
+	}
+	var value string
+	var version int
+	if err := connection.QueryRow(ctx,
+		`SELECT value,current_setting('server_version_num')::int FROM matrix_release_acceptance WHERE value='signed'`).Scan(&value, &version); err != nil ||
+		value != "signed" || version < 180000 || version >= 190000 {
+		return errors.New("managed PostgreSQL read failed")
+	}
+	return nil
+}
+
+func probeSignedMySQL(ctx context.Context, endpoint string, password []byte) error {
+	config := mysqldriver.NewConfig()
+	config.User, config.Passwd, config.Net, config.Addr, config.DBName =
+		"matrix_service", string(password), "tcp", endpoint, "service"
+	config.Timeout, config.ReadTimeout, config.WriteTimeout = 5*time.Second, 5*time.Second, 5*time.Second
+	database, err := sql.Open("mysql", config.FormatDSN())
+	if err != nil {
+		return errors.New("managed MySQL connection failed")
+	}
+	defer database.Close()
+	if err := database.PingContext(ctx); err != nil {
+		return errors.New("managed MySQL connection failed")
+	}
+	if _, err := database.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS matrix_release_acceptance(value varchar(64) PRIMARY KEY)`); err != nil {
+		return errors.New("managed MySQL write failed")
+	}
+	if _, err := database.ExecContext(ctx, `INSERT IGNORE INTO matrix_release_acceptance(value) VALUES ('signed')`); err != nil {
+		return errors.New("managed MySQL write failed")
+	}
+	var value, version string
+	if err := database.QueryRowContext(ctx,
+		`SELECT value,VERSION() FROM matrix_release_acceptance WHERE value='signed'`).Scan(&value, &version); err != nil ||
+		value != "signed" || !strings.HasPrefix(version, "8.4.") {
+		return errors.New("managed MySQL read failed")
+	}
+	return nil
+}
+
+func probeSignedElasticsearch(ctx context.Context, endpoint string, password []byte) error {
+	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
+		Proxy: nil, DisableCompression: true, ResponseHeaderTimeout: 20 * time.Second,
+	}}
+	defer client.CloseIdleConnections()
+	request := func(method, path string, body []byte) ([]byte, error) {
+		httpRequest, err := http.NewRequestWithContext(ctx, method, endpoint+path, bytes.NewReader(body))
+		if err != nil {
+			return nil, errors.New("managed Elasticsearch request failed")
+		}
+		httpRequest.Header.Set("Content-Type", "application/json")
+		httpRequest.SetBasicAuth("elastic", string(password))
+		response, err := client.Do(httpRequest)
+		if err != nil {
+			return nil, errors.New("managed Elasticsearch request failed")
+		}
+		content, readErr := io.ReadAll(io.LimitReader(response.Body, maximumHTTPBody+1))
+		closeErr := response.Body.Close()
+		if readErr != nil || closeErr != nil || len(content) > maximumHTTPBody ||
+			response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+			clear(content)
+			return nil, errors.New("managed Elasticsearch response failed")
+		}
+		return content, nil
+	}
+	rootBytes, err := request(http.MethodGet, "/", nil)
+	if err != nil {
+		return err
+	}
+	var root struct {
+		Version struct {
+			Number string `json:"number"`
+		} `json:"version"`
+	}
+	decodeErr := json.Unmarshal(rootBytes, &root)
+	clear(rootBytes)
+	if decodeErr != nil || root.Version.Number != "8.19.23" {
+		return errors.New("managed Elasticsearch version failed")
+	}
+	written, err := request(http.MethodPut, "/matrix-release-acceptance/_doc/signed?refresh=wait_for", []byte(`{"value":"signed"}`))
+	clear(written)
+	if err != nil {
+		return err
+	}
+	documentBytes, err := request(http.MethodGet, "/matrix-release-acceptance/_doc/signed", nil)
+	if err != nil {
+		return err
+	}
+	var document struct {
+		Found  bool `json:"found"`
+		Source struct {
+			Value string `json:"value"`
+		} `json:"_source"`
+	}
+	decodeErr = json.Unmarshal(documentBytes, &document)
+	clear(documentBytes)
+	if decodeErr != nil || !document.Found || document.Source.Value != "signed" {
+		return errors.New("managed Elasticsearch read failed")
+	}
+	return nil
+}
+
+func probeSignedRabbitMQ(ctx context.Context, endpointText string, password []byte) error {
+	endpoint, err := url.Parse(endpointText)
+	if err != nil || endpoint.Scheme != "amqp" || endpoint.Path != "/matrix" {
+		return errors.New("managed RabbitMQ endpoint failed")
+	}
+	endpoint.User = url.UserPassword("matrix_service", string(password))
+	connection, err := amqp.DialConfig(endpoint.String(), amqp.Config{
+		Dial: func(network, address string) (net.Conn, error) {
+			return net.DialTimeout(network, address, 5*time.Second)
+		},
+	})
+	if err != nil {
+		return errors.New("managed RabbitMQ connection failed")
+	}
+	defer connection.Close()
+	version, _ := connection.Properties["version"].(string)
+	if version != "4.1.8" {
+		return errors.New("managed RabbitMQ version failed")
+	}
+	channel, err := connection.Channel()
+	if err != nil {
+		return errors.New("managed RabbitMQ channel failed")
+	}
+	defer channel.Close()
+	queue, err := channel.QueueDeclare("matrix-release-acceptance", true, false, false, false, nil)
+	if err != nil || channel.Confirm(false) != nil {
+		return errors.New("managed RabbitMQ queue failed")
+	}
+	confirmations := channel.NotifyPublish(make(chan amqp.Confirmation, 1))
+	if err := channel.PublishWithContext(ctx, "", queue.Name, false, false, amqp.Publishing{
+		ContentType: "text/plain", DeliveryMode: amqp.Persistent, Body: []byte("signed"),
+	}); err != nil {
+		return errors.New("managed RabbitMQ publish failed")
+	}
+	select {
+	case confirmation := <-confirmations:
+		if !confirmation.Ack {
+			return errors.New("managed RabbitMQ confirmation failed")
+		}
+	case <-ctx.Done():
+		return errors.New("managed RabbitMQ confirmation failed")
+	}
+	delivery, found, err := channel.Get(queue.Name, true)
+	if err != nil || !found || string(delivery.Body) != "signed" {
+		return errors.New("managed RabbitMQ read failed")
+	}
 	return nil
 }
 
