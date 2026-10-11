@@ -85,11 +85,11 @@ UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PD
 
 ### 当前 UX owner 快照集成
 
-2026-10-11只读固定UX/UI代码`25384bb08453c1b08ecc095820e1f77952a17720`及其文档提交`11f65d72defe2aa0a7bc377ca88d3a2d9756db65`后，当前IAM分支从精确父提交`4bd8cdb79db2db9fa75672bd4136968989238290`生成集成提交`ffdedcde2f324e121f9a643b679a06530fd23a5d`。该提交只改`app/ui/paas/**`：272个路径发生变化，当前子树共662个路径，范围外差异为0；集成树和UX固定源的子树ID均为`3b3fefa710345401116a1b06b6a502321110d301`。没有导入UX分支的后端、API、SQL、安装、FEAT状态或checkpoint。
+2026-10-11，当前 IAM 分支选择性采用 UX/UI owner 的固定代码`76a0dcfb7912061977e3805c87d881bfdd35a0dc`，经本分支既有产品运行时与控制台源码合并后形成`0b7823265c3ec0da64976210bd47019ed43b8b0a`。采用范围仅为本 FEAT 与`app/ui/paas/**`的产品目录、实例详情、终止流程和生成资产；没有导入 UX 分支的后端、API、SQL、安装状态或 checkpoint，也没有把本分支的 UI 工作反向写入 UX/UI 工作区。
 - 当前托管产品运行时契约固定到 IAM 产品实现来源 `4dea30e79cfd6693df149ea40eaa876c113814eb`，包含 `postgresql-18`、`mysql-8.4`、`elasticsearch-8.19` 与 `rabbitmq-4.1` 四个正式 offering；其准确版本分别为 PostgreSQL 18、MySQL 8.4 LTS、Elasticsearch 8.19.23 与 RabbitMQ 4.1.8。控制台与隔离 MOCK 必须用正式产品名称、版本、规格和产品类型说明同一信息架构，不得标为示例、占位或即将上线；LIVE 目录仍只渲染产品服务实际返回的项，不能用 MOCK 补齐。实例严格读取要求 `resourceVersion` 与 `operation.kind=PROVISION|TERMINATE`，且操作阶段必须与实例阶段相同；任何缺失、未知或矛盾形状整体失败关闭。
 - 实例终止消费产品侧 `POST /managed-services/v1/service-installations/{installationId}/termination`，浏览器只发送当前 bearer 与冻结的 `Idempotency-Key`，不发送 Account、资源版本或请求体。允许从 `READY | ROLLBACK_FAILED | TERMINATION_FAILED` 发起；内容区先核对准确实例、产品、区域、观察到的资源版本和幂等请求，并要求输入实例 ID，永远不使用 Dialog。`TERMINATION_PENDING | TERMINATING` 只表示平台已接受并异步清理，不能显示为删除完成或提前归还配额；`TERMINATED` 后产品会物理删除容器、网络、持久化数据和托管凭据，并从权威目录移除实例、归还配额。网络或协议未知结果冻结原实例与幂等键，只能原样重试；401、403、404、409 与无效输入局部失败且不改写意图。轮询 404 只有在同一个正在终止的实例上才解释为需要重读权威目录，不能因另一实例正在终止而吞掉普通创建／读取错误。
 
-当前工作树执行干净`npm ci`后通过完整`npm run check`：typecheck、lint、架构、228组多主题对比度、63个测试文件共1163项测试、3项归一化、47页生产构建、45项规范化和259文件嵌入一致性全部成功；`GOMAXPROCS=2`下UI与architecture的Go test/vet也通过。本机Node 23.11.1超出项目声明的受支持范围，只作为组合回归；独立CI的`console`已在受支持Node运行时完成，但整轮CI终态由同一SHA的Verification统一判定，不能提前用单一作业代替。
+当前工作树通过完整`npm run check`：typecheck、lint、架构、228组多主题对比度、63个测试文件共1175项测试、3项归一化、47页生产构建、45项规范化和259文件嵌入一致性全部成功；`GOMAXPROCS=2`下`go test -p 2 ./app/ui/paas/...`与`go vet -p 2 ./app/ui/paas/...`也通过。本机Node 23.11.1超出项目声明的受支持范围，只作为组合回归；当前集成提交仍须等待相同精确SHA的独立CI，不能用旧快照或单一本地门禁代替。
 
 同一精确源码的[Verification 38107642768](https://github.com/xiak/matrix/actions/runs/38107642768) attempt 1没有通过：`authority-runtime`的“保留数据与真实authority进程”步骤以exit 1失败，依赖汇总随之失败，其余15项成功；匿名日志只提供退出码，不能推断业务原因。本任务随后在独立、限额PG18上以相同选择器完整复跑该lane，restricted DSN、IAM82→83保留数据、独立IAM/Audit/PaaS进程、容量归因及调度、明文检查和TOTP备份进程均通过，package为411.519秒；这份本地结果不回填attempt 1。整轮终态后只通过GitHub官方failed-jobs入口重跑失败lane和汇总，attempt 2的`authority-runtime`两段均真实执行并通过，最终17项全部`completed/success`。该独立CI接受受支持Node上的console构建和当前后端组合门禁，仍不替代下述LIVE浏览器路径。
 
@@ -99,10 +99,10 @@ UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PD
 
 ### 真实产品资源闭环
 
-当前产品目录首个真实接入对象是既有 `localpostgres` provider 所拥有的 PostgreSQL 18，不创建仅供演示的 MySQL、Elasticsearch 或消息队列条目。浏览器夹具应启动实际受限 PaaS worker，并使用固定完整镜像摘要、任务私有 binding/secret 目录和唯一资源 ID 创建实例；验收同时核对实际容器健康、产品/区域标签、PostgreSQL 18 SQL 写入读取、最终 endpoint/credential reference 和唯一 ready Audit 事实。测试资源只按该资源 ID 和 Compose project 标签定向清理。
+产品目录当前正式接入 PostgreSQL 18、MySQL 8.4 LTS、Elasticsearch 8.19.23 与 RabbitMQ 4.1.8；它们不是示例或占位数据。控制台只消费 LIVE 产品目录返回的真实 offering 和实例，不用隔离 MOCK 补齐；各产品的签名镜像、真实协议读写、凭据文件边界、生命周期销毁与配额归还证据由 [FEAT-IAM-008](FEAT-IAM-008-product-enforcement.md) 和 [FEAT-IAM-011](FEAT-IAM-011-acceptance.md) 所有。本 FEAT 验证同一套正式对象可被发现、创建、精确重读、授权和终止，且前端不写死单一数据库服务或产品数量。
 
 普通 User 必须通过当前 Policy/Group/Role 之一取得该精确资源的读取许可并真正读取实例；目录行只提供定位摘要，进入详情后必须通过 `GET /managed-services/v1/service-installations/{installationId}` 对该实例重新鉴权。精确读取成功前不得显示旧快照中的 endpoint、阶段、状态或管理入口；拒绝、未找到和不可用只在详情数据区失败，并只能原位重试同一实例。撤销来源后，下一次相同业务请求必须拒绝，而实例、数据和租户归属保持不变。Allow/Deny 决定均需由同一 User、动作和真实资源 ID 关联到不可变 IAM Audit 记录，PaaS created/ready 事实进入同一租户链并通过验证。
 
 固定`0d9d0b12e9f95e9a2110697021d591916552da9a`在全新PostgreSQL 18控制数据库上以显式浏览器入口运行`TestIAMConsoleBrowser`，package通过368.546秒，fixture为366.41秒。管理员从控制台创建真实`localpostgres`实例`iam-browser-pg-bbea9b402e4f`，实际受限Linux worker将其调谐至RUNNING/READY；浏览器读取到真实endpoint`127.0.0.1:39399`，后端在该实例完成PostgreSQL 18探测及`preserved`行写入读取，并核对固定完整镜像。普通成员仅经Group策略获得目录与精确实例读取，在第二个窗口撤销Group成员关系后，不重新登录或整页刷新便再次点击同一实例；稳定标题保留，精确GET返回无权限，旧endpoint、状态和操作入口均未泄露。两个窗口warning/error均为0；后端同时核对Allow与后继Deny决定、唯一`managedservice.service-installation.ready`事实及完整租户Audit链。结束后只按本轮标签删除控制数据库和测试资源，既有4317预览未被操作。该证据接受IAM-AC-08，不扩大为APISIX、签名安装、跨浏览器UNKNOWN恢复或整个FEAT验收。
 
-当前安装目录页仍将`installations`与offering、region、quota三类辅助上下文放入同一个阻塞读取。精确实例读取许可的成员不应为了进入资源页被迫获得三类广域集合权限；后继UI切片必须把`installations`作为必需数据独立加载，offering/region/quota在403、空结果或不可用时局部降级，保持列表与标题稳定，并继续由精确详情GET决定是否显示实例事实。不得用授予宽权限掩盖该耦合。
+`0b7823265`已把`installations`作为实例页唯一必需集合独立读取，offering、region、quota分别作为失败可降级的辅助上下文；任一辅助读取返回403、空结果或不可用时，实例目录和稳定标题仍可使用。进入详情后仍必须通过精确实例GET重新鉴权，目录摘要不能泄露 endpoint、操作状态或管理入口；不得通过授予广域目录权限掩盖身份缺权。
