@@ -1,8 +1,9 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import type { ServiceDefinitionDirectory } from "../domain/serviceActivation";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
-import { useLiveServiceActivation } from "./liveServiceActivation";
+import { useLiveServiceActivation, useLiveServiceDefinitionDirectory } from "./liveServiceActivation";
 
 const definition = {
   id: "postgresql",
@@ -46,6 +47,50 @@ function repository(changes: Partial<ControlPlaneRepository> = {}): ControlPlane
 }
 
 afterEach(cleanup);
+
+describe("useLiveServiceDefinitionDirectory", () => {
+  it("does not fetch while the directory is closed or synthesize facts without a source", () => {
+    const source = vi.fn().mockResolvedValue(directory(true));
+    const { result } = renderHook(() => useLiveServiceDefinitionDirectory(false, source));
+    expect(source).not.toHaveBeenCalled();
+    expect(result.current.directory).toBeNull();
+    const missing = renderHook(() => useLiveServiceDefinitionDirectory(true));
+    expect(missing.result.current.status).toBe("unavailable");
+    expect(missing.result.current.directory).toBeNull();
+  });
+
+  it("hides the previous identity's entries immediately and discards its late response", async () => {
+    let releaseOld!: (value: ServiceDefinitionDirectory) => void;
+    let releaseNew!: (value: ServiceDefinitionDirectory) => void;
+    const original = vi.fn().mockResolvedValueOnce(directory(true))
+      .mockReturnValueOnce(new Promise<ServiceDefinitionDirectory>((resolve) => { releaseOld = resolve; }));
+    const next = vi.fn().mockReturnValue(new Promise<ServiceDefinitionDirectory>((resolve) => { releaseNew = resolve; }));
+    const { result, rerender } = renderHook(({ source }) => useLiveServiceDefinitionDirectory(true, source), { initialProps: { source: original } });
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.directory?.services[0]?.id).toBe("postgresql");
+    act(() => result.current.retry());
+    await waitFor(() => expect(original).toHaveBeenCalledTimes(2));
+    rerender({ source: next });
+    expect(result.current.directory).toBeNull();
+    expect(result.current.status).toBe("checking");
+    await act(async () => { releaseOld(directory(true)); });
+    expect(result.current.directory).toBeNull();
+    await act(async () => { releaseNew({ ...directory(false), services: [] }); });
+    expect(result.current.status).toBe("ready");
+    expect(result.current.directory?.services).toEqual([]);
+  });
+
+  it("keeps a rejected read closed until an explicit same-source retry succeeds", async () => {
+    const source = vi.fn().mockRejectedValueOnce(new HttpProblem(403, "PERMISSION_DENIED")).mockResolvedValueOnce(directory(false));
+    const { result } = renderHook(() => useLiveServiceDefinitionDirectory(true, source));
+    await waitFor(() => expect(result.current.status).toBe("forbidden"));
+    expect(result.current.directory).toBeNull();
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(source).toHaveBeenCalledTimes(2);
+    expect(result.current.directory).toEqual(directory(false));
+  });
+});
 
 describe("useLiveServiceActivation", () => {
   it("uses only the exact server capability and leaves a readable missing activation closed", async () => {

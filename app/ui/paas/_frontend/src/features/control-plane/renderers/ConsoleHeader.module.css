@@ -18,8 +18,7 @@
 
 .navigation,
 .utilities,
-.tools,
-.productContext {
+.tools {
   display: flex;
   min-width: 0;
   flex: none;
@@ -52,15 +51,6 @@
 }
 
 .brand:focus-visible { outline: 2px solid var(--xiak-color-header-accent); outline-offset: 4px; }
-
-.productContext {
-  gap: var(--xiak-spacing-tight);
-  color: var(--xiak-color-header-muted);
-  font-size: var(--xiak-font-size-small);
-  white-space: nowrap;
-}
-.productContext svg { width: 14px; height: 14px; }
-.productContext strong { color: var(--xiak-color-header-text); }
 
 .previewChip {
   display: inline-flex;
@@ -96,7 +86,6 @@
   .header { gap: var(--xiak-spacing-tight); padding-inline: var(--xiak-spacing-default); }
   .brand { width: 40px; justify-content: center; }
   .navigation { gap: var(--xiak-spacing-tight); }
-  .productContext { overflow: hidden; text-overflow: ellipsis; }
 }
 
 @container matrix-control-shell (max-width: 620px) {

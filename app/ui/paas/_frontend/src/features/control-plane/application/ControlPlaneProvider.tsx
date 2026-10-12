@@ -15,6 +15,7 @@ import { useSession } from "@/features/auth/application/SessionProvider";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { ExperienceSnapshot } from "../domain/experience";
 import type { ManagedServiceProductId } from "../domain/managedServiceProduct";
+import type { ServiceDefinitionDirectory } from "../domain/serviceActivation";
 import {
   validApplicationCursor,
   validApplicationId,
@@ -67,6 +68,7 @@ type ControlPlaneContextValue = {
   loading: boolean;
   error: ControlPlaneError | null;
   mutation: MutationKind;
+  readServiceDefinitions(): Promise<ServiceDefinitionDirectory>;
   managedServiceCommand: ManagedServiceCommandState | null;
   retryManagedServiceCommand(): Promise<boolean>;
   clearManagedServiceCommandNotice(): void;
@@ -417,6 +419,11 @@ export function ControlPlaneProvider({
       });
     }
   }, [readResources]);
+
+  const readServiceDefinitions = useCallback(async () => {
+    if (!credential || !repository.listServiceDefinitions) throw new Error("SERVICE_DIRECTORY_UNAVAILABLE");
+    return repository.listServiceDefinitions(credential);
+  }, [credential, repository]);
 
   const prepare = useCallback(async (target: ControlPlaneRouteSelection) => {
     // Route chrome and preview-owned content render synchronously. Only the
@@ -1043,6 +1050,7 @@ export function ControlPlaneProvider({
     loading: productDataReady(selection, productAccess) && loading,
     error: isAccess || requiredResourcesFor(selection, Boolean(experience), productAccess).length === 0 ? null : error,
     mutation,
+    readServiceDefinitions,
     managedServiceCommand,
     retryManagedServiceCommand,
     clearManagedServiceCommandNotice,
@@ -1063,7 +1071,7 @@ export function ControlPlaneProvider({
     submitServiceAuthorization,
     closeServiceAuthorizationIntent,
     reopenServiceAuthorizationIntent
-  }), [activateQuota, beginInstallationTermination, beginServiceAuthorization, clearManagedServiceCommandNotice, closeInstallationTerminationIntent, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, installationTerminationIntent, isAccess, listApplications, loading, managedServiceCommand, mutation, prepare, productAccess, projectScene, readApplication, readInstallation, reload, reopenInstallationTerminationIntent, reopenServiceAuthorizationIntent, retryManagedServiceCommand, scene, selection, serviceAuthorizationIntent, submitInstallationTermination, submitServiceAuthorization]);
+  }), [activateQuota, beginInstallationTermination, beginServiceAuthorization, clearManagedServiceCommandNotice, closeInstallationTerminationIntent, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, installationTerminationIntent, isAccess, listApplications, loading, managedServiceCommand, mutation, prepare, productAccess, projectScene, readApplication, readInstallation, readServiceDefinitions, reload, reopenInstallationTerminationIntent, reopenServiceAuthorizationIntent, retryManagedServiceCommand, scene, selection, serviceAuthorizationIntent, submitInstallationTermination, submitServiceAuthorization]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

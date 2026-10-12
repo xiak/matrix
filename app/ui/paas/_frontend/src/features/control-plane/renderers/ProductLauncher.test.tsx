@@ -1,9 +1,11 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState, type ComponentPropsWithoutRef } from "react";
+import { useState, type ComponentProps, type ComponentPropsWithoutRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
+import type { ServiceDefinitionDirectory } from "../domain/serviceActivation";
 import { ProductLauncher } from "./ProductLauncher";
 
 const navigation = vi.hoisted(() => ({ navigate: vi.fn() }));
@@ -17,14 +19,25 @@ vi.mock("next/link", () => ({
   }}>{children}</a>
 }));
 
-function ProductLauncherHarness() {
-  const [open, setOpen] = useState(false);
-  return <LocaleProvider><ProductLauncher onOpenChange={setOpen} open={open} /><button type="button">后续操作</button></LocaleProvider>;
+type DirectoryProps = Pick<ComponentProps<typeof ProductLauncher>, "preview" | "readServiceDefinitions">;
+
+function liveDirectory(ids = ["mysql"]): ServiceDefinitionDirectory {
+  return {
+    services: ids.map((id) => ({ id, displayName: `后端 ${id}`, description: `${id} 服务目录描述`,
+      revision: 1, contentDigest: `sha256:${"1".repeat(64)}`, activationPrerequisite: "PERMISSION_ONLY", state: "AVAILABLE" })),
+    activationCapability: { action: "managedservice.service-activation.activate",
+      resource: { kind: "SERVICE_ACTIVATION", id: "collection" }, available: false, restrictionReason: "AUTHORITY_REQUIRED" }
+  };
 }
 
-async function openDirectory() {
+function ProductLauncherHarness(props: DirectoryProps = {}) {
+  const [open, setOpen] = useState(false);
+  return <LocaleProvider><ProductLauncher {...props} onOpenChange={setOpen} open={open} /><button type="button">后续操作</button></LocaleProvider>;
+}
+
+async function openDirectory(props: DirectoryProps = {}) {
   const user = userEvent.setup();
-  render(<ProductLauncherHarness />);
+  render(<ProductLauncherHarness {...props} />);
   const trigger = screen.getByRole("button", { name: "打开产品与服务" });
   await user.click(trigger);
   return { user, trigger, search: screen.getByRole("searchbox", { name: "搜索产品与服务" }) };
@@ -33,6 +46,58 @@ async function openDirectory() {
 afterEach(() => { cleanup(); localStorage.clear(); useConsoleUiStore.getState().resetSessionUi(); vi.clearAllMocks(); });
 
 describe("ProductLauncher", () => {
+  it("reads LIVE services only on opening and navigates backend entries without inferring activation authority", async () => {
+    const readServiceDefinitions = vi.fn().mockResolvedValue(liveDirectory());
+    useConsoleUiStore.getState().toggleFavoriteService("postgresql");
+    useConsoleUiStore.getState().visitService("postgresql");
+    const user = userEvent.setup();
+    render(<ProductLauncherHarness preview={false} readServiceDefinitions={readServiceDefinitions} />);
+    expect(readServiceDefinitions).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
+    const service = await screen.findByRole("link", { name: /后端 mysql/ });
+    expect(service.getAttribute("href")).toBe("/console/products/mysql/");
+    expect(screen.getByRole("status").textContent).toBe("1 项服务");
+    expect(screen.queryByRole("link", { name: /PostgreSQL|访问管理|DevOps/ })).toBeNull();
+    const categories = within(screen.getByRole("navigation", { name: "服务分类" }));
+    expect(categories.getByRole("button", { name: /^我的收藏/ }).textContent).toBe("我的收藏0");
+    expect(categories.getByRole("button", { name: /^最近访问/ }).textContent).toBe("最近访问0");
+    expect(screen.queryByRole("button", { name: /开通服务/ })).toBeNull();
+    await user.click(service);
+    expect(navigation.navigate).toHaveBeenCalledExactlyOnceWith("/console/products/mysql/");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(readServiceDefinitions).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows unsupported backend services honestly without inventing a destination", async () => {
+    await openDirectory({ preview: false, readServiceDefinitions: vi.fn().mockResolvedValue(liveDirectory(["redis"])) });
+    expect(await screen.findByText("后端 redis")).toBeTruthy();
+    expect(screen.getByText("当前控制台尚未接入此服务页面。")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("1 项服务");
+    expect(within(screen.getByRole("dialog")).queryAllByRole("link")).toHaveLength(0);
+  });
+
+  it.each([
+    [403, "无法读取服务目录"],
+    [401, "请重新登录后读取服务目录"],
+    [503, "服务目录暂不可用"]
+  ])("keeps LIVE %s local with no MOCK fallback and retries the same directory source", async (status, title) => {
+    const readServiceDefinitions = vi.fn().mockRejectedValueOnce(new HttpProblem(status, "unavailable")).mockResolvedValueOnce(liveDirectory());
+    const { user } = await openDirectory({ preview: false, readServiceDefinitions });
+    expect(await screen.findByRole("heading", { name: title })).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).queryAllByRole("link")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "重试读取" }));
+    expect(await screen.findByRole("link", { name: /后端 mysql/ })).toBeTruthy();
+    expect(readServiceDefinitions).toHaveBeenCalledTimes(2);
+  });
+
+  it("distinguishes an empty LIVE directory from static preview entries", async () => {
+    await openDirectory({ preview: false, readServiceDefinitions: vi.fn().mockResolvedValue(liveDirectory([])) });
+    expect(await screen.findByRole("heading", { name: "暂无可见服务" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("0 项服务");
+    expect(within(screen.getByRole("dialog")).queryAllByRole("link")).toHaveLength(0);
+  });
+
   it("opens a categorized modal directory with search focus and restores its trigger on explicit close", async () => {
     const { user, trigger, search } = await openDirectory();
     expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");

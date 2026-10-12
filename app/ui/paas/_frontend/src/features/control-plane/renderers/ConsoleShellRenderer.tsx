@@ -376,7 +376,6 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const activeService = frame.preview ? serviceForSelection(pendingSelection ?? navigation.selection) : undefined;
   const ProductContextIcon = activeService ? favoriteIcons[activeService.id] : railIcons[frame.productIcon];
   const productName = frame.productId === "console" ? t("consoleName") : directory(`services.${frame.productId}.name`);
-  const headerProductName = committedFrame.productId === "console" ? t("consoleName") : directory(`services.${committedFrame.productId}.name`);
   const selectedPage = frame.navigation.find((item) => item.selected);
   const localNavigation = frame.navigation.filter((item) => {
     if (frame.section === "access" && roleSession.mode !== "USER") return item.id === "access";
@@ -469,7 +468,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
             roleAccessHref={frame.preview || roleSession.supported ? "/console/access/role-access/" : undefined}
             roleSessionActive={roleSession.mode !== "USER"}
             scene={committedFrame}
-            productName={frame.preview ? headerProductName : productName}
+            readServiceDefinitions={controlPlane.readServiceDefinitions}
             scope={headerScope}
           />
 

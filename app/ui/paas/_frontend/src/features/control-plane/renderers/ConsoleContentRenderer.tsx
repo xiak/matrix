@@ -53,6 +53,8 @@ import type {
   ManagedServiceAuthorizationLoad
 } from "../domain/serviceAuthorization";
 import type { InstallationReadLoad, InstallationTerminationIntent, ServiceInstallation, ServiceOffering } from "../domain/resources";
+import { isManagedServiceProductId } from "../domain/managedServiceProduct";
+import { consoleRouteHref } from "../domain/selection";
 import { ManagedServiceCommandNotice } from "./ManagedServiceCommandNotice";
 
 type InstallationDetailLoad =
@@ -207,10 +209,10 @@ function CatalogContent({ scene, preview }: {
               </dl>
             </Card.Body>
             <Card.Footer className={styles.productCardFooter}>
-              <Typography.Text tone="subtle">{t("noPayment")}</Typography.Text>
-              <Button asChild><Link href="/console/quotas/">
-                {t("configureQuota")} <ArrowRight aria-hidden="true" />
-              </Link></Button>
+              <Typography.Text tone="subtle">{t("serviceEntryHint")}</Typography.Text>
+              {isManagedServiceProductId(offering.serviceId) ? <Button asChild><Link aria-label={t("openServiceNamed", { name: offering.name })} href={consoleRouteHref({ section: "catalog", product: offering.serviceId })}>
+                {t("openService")} <ArrowRight aria-hidden="true" />
+              </Link></Button> : <Typography.Text tone="subtle">{t("servicePageUnsupported")}</Typography.Text>}
             </Card.Footer>
           </Card>
         ))}
