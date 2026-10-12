@@ -2717,7 +2717,16 @@ func waitManagedProductReady(
 				t.Fatalf("provider created an invalid %s resource", product.name)
 			}
 			if installation.Phase == managedservicev1.InstallationFailed {
-				t.Fatalf("real %s provisioning reached FAILED: %v", product.name, installation.Operation.SafeFailureCode)
+				failureCode := "<missing>"
+				if installation.Operation.SafeFailureCode != nil {
+					failureCode = *installation.Operation.SafeFailureCode
+				}
+				t.Fatalf(
+					"real %s provisioning reached FAILED: operation=%s code=%s",
+					product.name,
+					installation.Operation.ID,
+					failureCode,
+				)
 			}
 			if installation.Phase == managedservicev1.InstallationReady &&
 				installation.Endpoint != nil && installation.CredentialReference != nil {
