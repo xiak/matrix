@@ -12219,6 +12219,7 @@ func assertAuthorityPlaintextAbsent(
 	}
 	managedServiceRoleSessions := readManagedServiceRoleSessionRequests(t, ctx, admin)
 	roleActors := readRoleActorReferences(t, ctx, admin)
+	paasOperations := readPaaSOperationAuthorities(t, ctx, admin)
 	rows, err := admin.Query(ctx, `SELECT 'iam.outbox',event_document::text,''::text FROM iam.audit_outbox
 		UNION ALL SELECT 'paas.outbox',document::text,''::text FROM paas.audit_outbox
 		UNION ALL SELECT 'paas.operation',document::text,''::text FROM paas.operations
@@ -12262,6 +12263,15 @@ func assertAuthorityPlaintextAbsent(
 			t.Fatal("invalid Audit access plaintext inspection source")
 		}
 		for value := range auditStructural {
+			structuralLowEntropy[value] = struct{}{}
+		}
+		paasOperationStructural, err := paasOperationStructuralLowEntropy(
+			source, document, auditAuthorityDocument, paasOperations,
+		)
+		if err != nil {
+			t.Fatalf("invalid PaaS Operation plaintext inspection source %q: %v", source, err)
+		}
+		for value := range paasOperationStructural {
 			structuralLowEntropy[value] = struct{}{}
 		}
 		roleExitStructural, err := managedServiceRoleExitStructuralLowEntropy(
@@ -12562,6 +12572,53 @@ func readRoleActorReferences(
 	return result
 }
 
+type storedPaaSOperationAuthority struct {
+	document  string
+	operation paasv1.Operation
+}
+
+func readPaaSOperationAuthorities(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+) map[string]storedPaaSOperationAuthority {
+	t.Helper()
+	rows, err := admin.Query(ctx, `SELECT document::text FROM paas.operations`)
+	if err != nil {
+		t.Fatal("read PaaS Operation authorities")
+	}
+	defer rows.Close()
+	result := make(map[string]storedPaaSOperationAuthority)
+	for rows.Next() {
+		var document string
+		if rows.Scan(&document) != nil {
+			t.Fatal("read PaaS Operation authority row")
+		}
+		var operation paasv1.Operation
+		decoder := json.NewDecoder(strings.NewReader(document))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&operation) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+			paasv1.ValidateOperation(operation) != nil {
+			t.Fatal("invalid stored PaaS Operation authority")
+		}
+		if operation.Scope.Kind != paasv1.AuthorityTenant {
+			continue
+		}
+		if _, _, appHosting := appHostingAuditContract(operation.Action); !appHosting {
+			continue
+		}
+		key := string(operation.Scope.TenantID) + "\x00" + string(operation.ID)
+		if existing, found := result[key]; found && existing.document != document {
+			t.Fatal("PaaS Operation has conflicting authority documents")
+		}
+		result[key] = storedPaaSOperationAuthority{document: document, operation: operation}
+	}
+	if rows.Err() != nil {
+		t.Fatal("incomplete PaaS Operation authorities")
+	}
+	return result
+}
+
 type storedPaaSAuditEvent struct {
 	SchemaVersion string                  `json:"schemaVersion"`
 	EventID       auditv1.EventID         `json:"eventId"`
@@ -12577,6 +12634,242 @@ type storedPaaSAuditEvent struct {
 	AuditID       string                  `json:"auditId,omitempty"`
 	TraceParent   string                  `json:"traceparent,omitempty"`
 	OccurredAt    time.Time               `json:"occurredAt"`
+}
+
+func paasOperationStructuralLowEntropy(
+	source, inspectedDocument, authorityDocument string,
+	known map[string]storedPaaSOperationAuthority,
+) (map[string]struct{}, error) {
+	result := map[string]struct{}{}
+	switch source {
+	case "paas.operation":
+		var operation paasv1.Operation
+		decoder := json.NewDecoder(strings.NewReader(inspectedDocument))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&operation); err != nil {
+			return nil, fmt.Errorf("decode PaaS Operation authority: %w", err)
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			return nil, errors.New("PaaS Operation authority contains trailing data")
+		}
+		if _, _, appHosting := appHostingAuditContract(operation.Action); !appHosting {
+			return result, nil
+		}
+		authority, ok := verifiedAppHostingOperation(operation, known)
+		if !ok || authority.document != inspectedDocument {
+			return nil, errors.New("PaaS Operation identity is not authority-derived")
+		}
+		addPaaSOperationStructuralValues(result, operation)
+		return result, nil
+	case "paas.outbox":
+		stored, err := decodeStoredPaaSAuditEvent(inspectedDocument)
+		if err != nil {
+			return nil, err
+		}
+		authority, ok := known[string(stored.TenantID)+"\x00"+string(stored.OperationID)]
+		if !ok {
+			return result, nil
+		}
+		if !storedPaaSEventMatchesOperation(stored, authority.operation) {
+			return nil, errors.New("PaaS outbox identity is not bound to its Operation authority")
+		}
+		addPaaSAuditStructuralValues(result, stored.EventID, stored.OperationID,
+			stored.RequestDigest, stored.OccurredAt)
+		return result, nil
+	case "audit.document.PAAS", "audit.canonical.PAAS":
+		var event auditv1.Event
+		if auditv1.DecodeRequest(strings.NewReader(authorityDocument), &event) != nil ||
+			auditv1.ValidateEventForSource(auditv1.SourcePaaS, event) != nil {
+			return nil, errors.New("invalid PaaS Audit authority")
+		}
+		if source == "audit.document.PAAS" {
+			if inspectedDocument != authorityDocument {
+				return nil, errors.New("PaaS Audit record document differs from its authority")
+			}
+		} else {
+			canonical, _, err := auditv1.CanonicalizeEvent(auditv1.SourcePaaS, event)
+			if err != nil || canonical != inspectedDocument {
+				return nil, errors.New("PaaS Audit canonical document differs from its authority")
+			}
+		}
+		authority, ok := known[string(event.TenantID)+"\x00"+string(event.OperationID)]
+		if !ok || !publicPaaSEventMatchesOperation(event, authority.operation) {
+			return result, nil
+		}
+		addPaaSAuditStructuralValues(result, event.EventID, event.OperationID,
+			event.RequestDigest, event.OccurredAt)
+		return result, nil
+	default:
+		return result, nil
+	}
+}
+
+func decodeStoredPaaSAuditEvent(document string) (storedPaaSAuditEvent, error) {
+	var stored storedPaaSAuditEvent
+	decoder := json.NewDecoder(strings.NewReader(document))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&stored); err != nil {
+		return storedPaaSAuditEvent{}, fmt.Errorf("decode stored PaaS Audit authority: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return storedPaaSAuditEvent{}, errors.New("stored PaaS Audit authority contains trailing data")
+	}
+	correlationID := stored.AuditID
+	if correlationID == "" {
+		correlationID = stored.RequestID
+	}
+	public := auditv1.Event{
+		APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: stored.EventID,
+		TenantID: stored.TenantID, Actor: stored.Actor, IAMDecisionID: stored.IAMDecisionID,
+		Action: stored.Action, Target: stored.Target, OperationID: stored.OperationID,
+		RequestDigest: stored.RequestDigest, Result: stored.Result, RequestID: stored.RequestID,
+		CorrelationID: correlationID, TraceParent: stored.TraceParent, OccurredAt: stored.OccurredAt,
+	}
+	if stored.SchemaVersion != "v1" || auditv1.ValidateEventForSource(auditv1.SourcePaaS, public) != nil {
+		return storedPaaSAuditEvent{}, errors.New("invalid stored PaaS Audit authority")
+	}
+	return stored, nil
+}
+
+func verifiedAppHostingOperation(
+	operation paasv1.Operation,
+	known map[string]storedPaaSOperationAuthority,
+) (storedPaaSOperationAuthority, bool) {
+	if paasv1.ValidateOperation(operation) != nil || operation.Scope.Kind != paasv1.AuthorityTenant ||
+		operation.ID != expectedAppHostingOperationID(operation.IdempotencyFingerprint) {
+		return storedPaaSOperationAuthority{}, false
+	}
+	authority, found := known[string(operation.Scope.TenantID)+"\x00"+string(operation.ID)]
+	return authority, found && authority.operation.ID == operation.ID &&
+		authority.operation.IdempotencyFingerprint == operation.IdempotencyFingerprint
+}
+
+func expectedAppHostingOperationID(fingerprint string) paasv1.OperationID {
+	digest := sha256.Sum256([]byte(fingerprint))
+	return paasv1.OperationID("operation-" + hex.EncodeToString(digest[:]))
+}
+
+func expectedAppHostingAuditEventID(operationID paasv1.OperationID) auditv1.EventID {
+	digest := sha256.Sum256([]byte("matrix-paas-audit-event-v1\x00" + string(operationID)))
+	return auditv1.EventID("audit-" + hex.EncodeToString(digest[:]))
+}
+
+func appHostingAuditContract(action paasv1.OperationAction) (auditv1.Action, auditv1.Result, bool) {
+	switch action {
+	case paasv1.OperationCreateApplication:
+		return auditv1.ActionPaaSApplicationCreated, auditv1.ResultSucceeded, true
+	case paasv1.OperationSetApplicationLabel:
+		return auditv1.ActionPaaSApplicationLabelUpdated, auditv1.ResultSucceeded, true
+	case paasv1.OperationDeleteApplicationLabel:
+		return auditv1.ActionPaaSApplicationLabelDeleted, auditv1.ResultSucceeded, true
+	case paasv1.OperationCreateConfiguration:
+		return auditv1.ActionPaaSConfigurationCreated, auditv1.ResultSucceeded, true
+	case paasv1.OperationCreateConfigurationRevision:
+		return auditv1.ActionPaaSConfigurationRevisionCreated, auditv1.ResultSucceeded, true
+	case paasv1.OperationCreateApplicationRevision:
+		return auditv1.ActionPaaSApplicationRevisionCreated, auditv1.ResultSucceeded, true
+	case paasv1.OperationDeploy:
+		return auditv1.ActionPaaSDeploymentCreated, auditv1.ResultAccepted, true
+	case paasv1.OperationUpdate:
+		return auditv1.ActionPaaSDeploymentUpdated, auditv1.ResultAccepted, true
+	case paasv1.OperationStop:
+		return auditv1.ActionPaaSDeploymentStopped, auditv1.ResultAccepted, true
+	case paasv1.OperationRollback:
+		return auditv1.ActionPaaSDeploymentRolledBack, auditv1.ResultAccepted, true
+	default:
+		return "", "", false
+	}
+}
+
+func storedPaaSEventMatchesOperation(stored storedPaaSAuditEvent, operation paasv1.Operation) bool {
+	public := auditv1.Event{
+		EventID: stored.EventID, TenantID: stored.TenantID, Actor: stored.Actor,
+		Action: stored.Action, Target: stored.Target, OperationID: stored.OperationID,
+		RequestDigest: stored.RequestDigest, Result: stored.Result, OccurredAt: stored.OccurredAt,
+	}
+	return publicPaaSEventMatchesOperation(public, operation)
+}
+
+func publicPaaSEventMatchesOperation(event auditv1.Event, operation paasv1.Operation) bool {
+	action, result, ok := appHostingAuditContract(operation.Action)
+	if !ok || operation.ID != expectedAppHostingOperationID(operation.IdempotencyFingerprint) {
+		return false
+	}
+	expectedActor, ok := paasSubjectToAuditActor(operation.RequestedBy)
+	if !ok {
+		return false
+	}
+	expectedTargetKind, ok := appHostingAuditTargetKind(operation.Target.Kind)
+	return ok && event.EventID == expectedAppHostingAuditEventID(operation.ID) &&
+		event.TenantID == auditv1.TenantID(operation.Scope.TenantID) &&
+		event.Actor.Equal(expectedActor) && event.Action == action && event.Result == result &&
+		event.Target.Kind == expectedTargetKind && event.Target.ID == string(operation.Target.ID) &&
+		event.OperationID == auditv1.OperationID(operation.ID) &&
+		event.RequestDigest == operation.RequestDigest && event.OccurredAt.Equal(operation.CreatedAt)
+}
+
+func paasSubjectToAuditActor(subject paasv1.SubjectRef) (auditv1.ActorReference, bool) {
+	actor := auditv1.ActorReference{ID: auditv1.ActorID(subject.ID), AccessKeyID: subject.AccessKeyID}
+	switch subject.Type {
+	case paasv1.SubjectUser:
+		actor.Type = auditv1.ActorUser
+	case paasv1.SubjectRole:
+		actor.Type = auditv1.ActorRole
+	case paasv1.SubjectServiceAccount:
+		actor.Type = auditv1.ActorServiceAccount
+	case paasv1.SubjectAgent, paasv1.SubjectSystemUser:
+		actor.Type = auditv1.ActorSystem
+	default:
+		return auditv1.ActorReference{}, false
+	}
+	if subject.RoleSession != nil {
+		actor.RoleSession = &auditv1.RoleSessionReference{
+			SessionID:                subject.RoleSession.SessionID,
+			SourceUserID:             auditv1.ActorID(subject.RoleSession.SourceUserID),
+			SourceServicePrincipalID: auditv1.ActorID(subject.RoleSession.SourceServicePrincipalID),
+		}
+	}
+	return actor, auditv1.ValidateActor(actor) == nil
+}
+
+func appHostingAuditTargetKind(kind string) (auditv1.TargetKind, bool) {
+	switch kind {
+	case "Application":
+		return auditv1.TargetApplication, true
+	case "Configuration":
+		return auditv1.TargetConfiguration, true
+	case "ConfigurationRevision":
+		return auditv1.TargetConfigurationRevision, true
+	case "ApplicationRevision":
+		return auditv1.TargetApplicationRevision, true
+	case "Deployment":
+		return auditv1.TargetDeployment, true
+	default:
+		return "", false
+	}
+}
+
+func addPaaSOperationStructuralValues(result map[string]struct{}, operation paasv1.Operation) {
+	for _, value := range []string{
+		string(operation.ID), operation.IdempotencyFingerprint, operation.RequestDigest,
+		operation.CreatedAt.Format(time.RFC3339Nano), operation.UpdatedAt.Format(time.RFC3339Nano),
+	} {
+		result[value] = struct{}{}
+	}
+	if operation.TerminalAt != nil {
+		result[operation.TerminalAt.Format(time.RFC3339Nano)] = struct{}{}
+	}
+}
+
+func addPaaSAuditStructuralValues(
+	result map[string]struct{}, eventID auditv1.EventID, operationID auditv1.OperationID,
+	requestDigest string, occurredAt time.Time,
+) {
+	for _, value := range []string{
+		string(eventID), string(operationID), requestDigest, occurredAt.Format(time.RFC3339Nano),
+	} {
+		result[value] = struct{}{}
+	}
 }
 
 func roleActorStructuralLowEntropy(
@@ -12900,6 +13193,136 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 		location, scanErr = authorityPlaintextLocationWithStructural(string(forgedEncoded), nil, structural, code)
 		if marshalErr != nil || err != nil || scanErr != nil || location == "" {
 			t.Fatal("forged Role actor escaped plaintext inspection")
+		}
+	})
+	t.Run("authority-derived-paas-operation-identities", func(t *testing.T) {
+		var fingerprint, embeddedCode string
+		for index := 0; index < 100000 && embeddedCode == ""; index++ {
+			fingerprint = "sha256:" + fmt.Sprintf("%064x", index)
+			operationID := string(expectedAppHostingOperationID(fingerprint))
+			for offset := len("operation-"); offset+6 <= len(operationID); offset++ {
+				candidate := operationID[offset : offset+6]
+				if strings.IndexFunc(candidate, func(character rune) bool {
+					return character < '0' || character > '9'
+				}) == -1 {
+					embeddedCode = candidate
+					break
+				}
+			}
+		}
+		if embeddedCode == "" {
+			t.Fatal("could not build deterministic PaaS Operation identity fixture")
+		}
+		now := time.Date(2026, 10, 12, 1, 2, 3, 456000000, time.UTC)
+		terminalAt := now
+		operation := paasv1.Operation{
+			APIVersion: paasv1.APIVersion, Kind: "Operation",
+			ID:                     expectedAppHostingOperationID(fingerprint),
+			Scope:                  paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "account-one"},
+			Action:                 paasv1.OperationCreateApplication,
+			Target:                 paasv1.ResourceRef{Kind: "Application", ID: "application-one"},
+			RequestedBy:            paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-one"},
+			IdempotencyFingerprint: fingerprint,
+			RequestDigest:          "sha256:" + strings.Repeat("a", 64),
+			State:                  paasv1.OperationSucceeded, Attempt: 1,
+			CreatedAt: now, UpdatedAt: now, TerminalAt: &terminalAt,
+		}
+		operationDocument, marshalErr := json.Marshal(operation)
+		actor, actorOK := paasSubjectToAuditActor(operation.RequestedBy)
+		if marshalErr != nil || !actorOK || paasv1.ValidateOperation(operation) != nil {
+			t.Fatal("invalid PaaS Operation identity fixture")
+		}
+		stored := storedPaaSAuditEvent{
+			SchemaVersion: "v1", EventID: expectedAppHostingAuditEventID(operation.ID),
+			TenantID: "account-one", Actor: actor, IAMDecisionID: "decision-operation-one",
+			Action:      auditv1.ActionPaaSApplicationCreated,
+			Target:      auditv1.TargetReference{Kind: auditv1.TargetApplication, ID: "application-one"},
+			OperationID: auditv1.OperationID(operation.ID), RequestDigest: operation.RequestDigest,
+			Result: auditv1.ResultSucceeded, RequestID: "request-operation-one",
+			AuditID: "audit-flow-operation-one", OccurredAt: now,
+		}
+		storedDocument, marshalErr := json.Marshal(stored)
+		publicEvent := auditv1.Event{
+			APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: stored.EventID,
+			TenantID: stored.TenantID, Actor: stored.Actor, IAMDecisionID: stored.IAMDecisionID,
+			Action: stored.Action, Target: stored.Target, OperationID: stored.OperationID,
+			RequestDigest: stored.RequestDigest, Result: stored.Result, RequestID: stored.RequestID,
+			CorrelationID: stored.AuditID, OccurredAt: stored.OccurredAt,
+		}
+		publicDocument, publicErr := json.Marshal(publicEvent)
+		canonical, _, canonicalErr := auditv1.CanonicalizeEvent(auditv1.SourcePaaS, publicEvent)
+		if marshalErr != nil || publicErr != nil || canonicalErr != nil ||
+			auditv1.ValidateEventForSource(auditv1.SourcePaaS, publicEvent) != nil {
+			t.Fatal("invalid PaaS Audit identity fixture")
+		}
+		known := map[string]storedPaaSOperationAuthority{
+			"account-one\x00" + string(operation.ID): {
+				document: string(operationDocument), operation: operation,
+			},
+		}
+		for _, sample := range []struct{ source, document, authority string }{
+			{"paas.operation", string(operationDocument), ""},
+			{"paas.outbox", string(storedDocument), ""},
+			{"audit.document.PAAS", string(publicDocument), string(publicDocument)},
+			{"audit.canonical.PAAS", canonical, string(publicDocument)},
+		} {
+			structural, structuralErr := paasOperationStructuralLowEntropy(
+				sample.source, sample.document, sample.authority, known,
+			)
+			location, scanErr := authorityPlaintextLocationWithStructural(
+				sample.document, nil, structural, embeddedCode,
+			)
+			if structuralErr != nil || scanErr != nil || location != "" {
+				t.Fatalf("authority-derived PaaS identity was treated as persisted OTP: source=%s", sample.source)
+			}
+			if location, scanErr = authorityPlaintextLocationWithStructural(
+				sample.document, nil, structural, string(operation.ID),
+			); scanErr != nil || location == "" {
+				t.Fatalf("PaaS structural identity hid an exact longer credential: source=%s", sample.source)
+			}
+		}
+		structural, structuralErr := paasOperationStructuralLowEntropy(
+			"paas.outbox", string(storedDocument), "", nil,
+		)
+		location, scanErr := authorityPlaintextLocationWithStructural(
+			string(storedDocument), nil, structural, embeddedCode,
+		)
+		if structuralErr != nil || scanErr != nil || location == "" {
+			t.Fatal("PaaS outbox without Operation authority escaped plaintext inspection")
+		}
+		forgedOperation := operation
+		forgedOperation.IdempotencyFingerprint = "sha256:" + strings.Repeat("b", 64)
+		forgedOperationDocument, marshalErr := json.Marshal(forgedOperation)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		if _, err := paasOperationStructuralLowEntropy(
+			"paas.operation", string(forgedOperationDocument), "", known,
+		); err == nil {
+			t.Fatal("PaaS Operation with a forged identity derivation obtained a structural exception")
+		}
+		forgedOutbox := stored
+		forgedOutbox.Target.ID = "application-other"
+		forgedOutboxDocument, marshalErr := json.Marshal(forgedOutbox)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		if _, err := paasOperationStructuralLowEntropy(
+			"paas.outbox", string(forgedOutboxDocument), "", known,
+		); err == nil {
+			t.Fatal("PaaS outbox with a forged Operation target obtained a structural exception")
+		}
+		requestDisclosure := stored
+		requestDisclosure.RequestID = "request-" + embeddedCode
+		requestDisclosureDocument, marshalErr := json.Marshal(requestDisclosure)
+		structural, structuralErr = paasOperationStructuralLowEntropy(
+			"paas.outbox", string(requestDisclosureDocument), "", known,
+		)
+		location, scanErr = authorityPlaintextLocationWithStructural(
+			string(requestDisclosureDocument), nil, structural, embeddedCode,
+		)
+		if marshalErr != nil || structuralErr != nil || scanErr != nil || location == "" {
+			t.Fatal("caller-controlled PaaS request identity escaped plaintext inspection")
 		}
 	})
 	t.Run("server-generated-audit-access-request-id", func(t *testing.T) {
