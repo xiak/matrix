@@ -75,7 +75,12 @@ func TestLocalPostgresRealRuntime(t *testing.T) {
 	if _, err := connection.Exec(ctx, `INSERT INTO durable_probe (value) VALUES ('preserved')`); err != nil {
 		t.Fatal("write durability probe")
 	}
-	connection.Close(context.Background())
+	if err := connection.Close(ctx); err != nil {
+		t.Fatal("close PostgreSQL before persistence replay")
+	}
+	if err := runtime.Stop(ctx, runtimeProject); err != nil {
+		t.Fatalf("stop PostgreSQL before persistence replay: %v", err)
+	}
 	replayed, err := provisioner.Ensure(ctx, request)
 	if err != nil || replayed != result {
 		t.Fatalf("reconcile real PostgreSQL=%#v err=%v", replayed, err)

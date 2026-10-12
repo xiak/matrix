@@ -83,7 +83,7 @@ func TestLocalMySQLRealRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal("open generated MySQL endpoint")
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	if err := database.PingContext(ctx); err != nil {
 		t.Fatal("connect generated MySQL endpoint")
 	}
@@ -93,9 +93,22 @@ func TestLocalMySQLRealRuntime(t *testing.T) {
 	if _, err := database.ExecContext(ctx, `INSERT INTO durable_probe (value) VALUES ('preserved')`); err != nil {
 		t.Fatal("write MySQL durability probe")
 	}
+	if err := database.Close(); err != nil {
+		t.Fatal("close MySQL before persistence replay")
+	}
+	if err := runtime.Stop(ctx, runtimeProject); err != nil {
+		t.Fatalf("stop MySQL before persistence replay: %v", err)
+	}
 	replayed, err := provisioner.Ensure(ctx, request)
 	if err != nil || replayed != result {
 		t.Fatalf("reconcile real MySQL=%#v err=%v", replayed, err)
+	}
+	database, err = sql.Open("mysql", config.FormatDSN())
+	if err != nil {
+		t.Fatal("reopen generated MySQL endpoint")
+	}
+	if err := database.PingContext(ctx); err != nil {
+		t.Fatal("reconnect generated MySQL endpoint")
 	}
 	var value, version string
 	if err := database.QueryRowContext(ctx, `SELECT value FROM durable_probe`).Scan(&value); err != nil || value != "preserved" {
