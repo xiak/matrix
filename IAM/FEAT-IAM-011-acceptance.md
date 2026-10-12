@@ -298,7 +298,7 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 
 ## 运行约束
 
-只使用本工作区、任务标签和唯一命名的数据库/容器/网络/卷/端口。Go 默认 GOMAXPROCS=2、-p 2；PG/引擎 CPU/内存/PID 限额。每条重型数据库门禁内部保持`-race -p 1`串行、独立runner/PG、原期限和清理边界；CI只允许最多两条彼此隔离的lane并行，避免不可压缩的自然时间窗口把其余独立门禁全部排队。不得重启任何远端机器或共享服务，不使用其他 Phase 的运行实例。未运行命令不进入 runbook。
+只使用本工作区、任务标签和唯一命名的数据库/容器/网络/卷/端口。Go 默认 GOMAXPROCS=2、-p 2；PG/引擎 CPU/内存/PID 限额。每条重型数据库门禁内部保持`-race -p 1`串行、独立runner/PG、原期限和清理边界；CI只允许最多四条彼此隔离的lane并行，避免不可压缩的自然时间窗口把其余独立门禁全部排队。失败lane一旦给出明确证据即可在其现有owner聚焦修复，不等待无关lane完成；最终候选仍以全部lane及汇总成功为准。不得重启任何远端机器或共享服务，不使用其他 Phase 的运行实例。未运行命令不进入 runbook。
 
 固定`9a030943386d693276fcea53ac706e8cc4269f1f`的[Verification36588874836](https://github.com/xiak/matrix/actions/runs/36588874836)已明确失败：`authority-runtime`的保留数据及真实进程步骤返回exit 1，不能用同run中已通过的Go、node、storage和roles覆盖。当前源码在本任务独立PG18容器（2CPU/1536MiB/PIDs256、随机loopback端口）、Go GOMAXPROCS2/GOMEMLIMIT1024MiB下重现：真实IAM45前驱首次绑定因子时，测试夹具提交上一30秒窗口的OTP，恰好跨入下一窗口后服务按生产`±1`窗口正确返回401。修正仅在真实进程测试取码器中要求上一窗口至少保留10秒再返回，不扩大生产时钟偏差、防重放或尝试预算。修正后唯一前驱门禁单独通过127.094s；另三套全新数据库执行完整`go test -v -race -p 1 -count=1 ./test/authorityprocess`通过362.275s，其中前驱105.14s、双IAM/Audit/PaaS进程214.12s、真实备份/恢复程序39.50s。容量和浏览器因使用独立入口而明确SKIP，不计本次验收；精确修复SHA及独立CI仍待确认。
 

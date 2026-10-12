@@ -142,7 +142,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Every database lane stays internally serial with its own runner, bounded
     # PostgreSQL service, -race -p 1 execution, deadline, and cleanup. At most
-    # two isolated lanes may run concurrently so an unrelated long natural-time
+    # four isolated lanes may run concurrently so an unrelated long natural-time
     # window does not queue the entire authority suite. Backup/authentication/
     # local recovery storage has a separate bounded lane; recovery exhaustion
     # separately observes two real ten-minute windows, and step-up owns OTP
@@ -150,7 +150,7 @@ jobs:
     # it, raise per-lane database concurrency, or weaken its own deadline.
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 4
       matrix:
         include:
           - lane: authority-storage
