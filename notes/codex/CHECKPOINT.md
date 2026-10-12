@@ -6,7 +6,7 @@
 - Updated: 2026-10-12
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `bb76dd809449843ff08a8485f8cdab332d5e6f2a`
+- Pushed source/embed milestone: `afc1ba4556bcc1dab83e4e34065fc5a0ce147a2e`
 
 ## Authoritative route
 
@@ -24,10 +24,14 @@
 ## Pushed milestone
 
 The four managed-product workspaces reuse the current shell, data feedback,
-navigation and Account-scoped service-enablement gate. The isolated MOCK remains
-inspectable and its first-use scenarios can be reset. Current frontend, static
-export, embedded-asset equality and PaaS UI host gates passed; exact evidence and
-the identity/capability contract are recorded in FEAT-007.
+navigation and Account-scoped service-enablement gate. Gate and data-provider
+composition now share matching-product presentation admission: first-use and
+no-resource-access pages do not pre-read resources, refresh or poll; late errors
+and polling completions cannot restore resource controls after reset. The
+isolated MOCK remains inspectable and its first-use scenarios can be reset.
+Current frontend, static export, embedded-asset equality and PaaS UI host gates
+passed; exact evidence and the identity/capability contract are recorded in
+FEAT-007.
 
 The IAM engineer's fixed-contract correction is included in the pushed source:
 frontend product route keys are presentation identifiers; the current IAM
@@ -42,8 +46,10 @@ verification remains deferred until the other UX review is accepted.
 
 There is no adopted public Account/service enrollment API in this milestone.
 Direct LIVE product-enablement routes remain non-submittable and never consume
-browser MOCK consent. The IAM engineer is developing the owning contract;
-consume only a fixed, pushed source with the required terminal evidence. Keep
+browser MOCK consent. The IAM engineer's activation design is fixed at
+`aed5845e0a9b6a22c086836b926fad60113e8832` and recorded as reference only; its
+implementation and real-runtime gates are not adopted. Consume only a fixed,
+pushed implementation with the required terminal evidence. Keep
 enablement, quota entitlement, human grants and service-role consent independent.
 Do not add a browser internal API, infer authority from identity/role names, or
 turn a MOCK result into LIVE acceptance. Remaining real IAM, managed-service,
