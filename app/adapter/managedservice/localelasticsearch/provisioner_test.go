@@ -108,6 +108,25 @@ func TestEnsureRejectsAnotherOfferingBeforeRuntime(t *testing.T) {
 	}
 }
 
+func TestElasticsearchVirtualMemoryRequirement(t *testing.T) {
+	for name, fixture := range map[string]struct {
+		value string
+		valid bool
+	}{
+		"production minimum": {value: "1048576\n", valid: true},
+		"above minimum":      {value: "1048577", valid: true},
+		"bootstrap minimum":  {value: "262144", valid: false},
+		"invalid":            {value: "unknown", valid: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validateVirtualMemoryMapCount([]byte(fixture.value))
+			if (err == nil) != fixture.valid {
+				t.Fatalf("validate vm.max_map_count=%q err=%v", fixture.value, err)
+			}
+		})
+	}
+}
+
 func testProvisionRequest() managedserviceadapterv1.ProvisionRequest {
 	return managedserviceadapterv1.ProvisionRequest{
 		TenantID: "organization-test", InstallationID: "elasticsearch-primary",

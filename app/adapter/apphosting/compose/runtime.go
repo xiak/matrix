@@ -10,7 +10,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -149,6 +151,10 @@ func (*LocalRuntime) PurgeData(ctx context.Context, project RuntimeProject, imag
 		filepath.Dir(dataDirectory) != project.Directory || strings.Contains(dataDirectory, ",") {
 		return errors.New("managed data cleanup target is invalid")
 	}
+	owner, err := dataCleanupOwner()
+	if err != nil {
+		return err
+	}
 	arguments := []string{
 		"run", "--rm",
 		"--label", "com.xiak.matrix.managed=true",
@@ -161,7 +167,8 @@ func (*LocalRuntime) PurgeData(ctx context.Context, project RuntimeProject, imag
 		"--user", "0:0",
 		"--mount", "type=bind,source=" + dataDirectory + ",target=/matrix-data",
 		"--entrypoint", "sh", imageID,
-		"-c", `set -eu; rm -rf -- /matrix-data/* /matrix-data/.[!.]* /matrix-data/..?*; chown 0:0 /matrix-data; chmod 700 /matrix-data; test -z "$(ls -A /matrix-data)"`,
+		"-c", `set -eu; rm -rf -- /matrix-data/* /matrix-data/.[!.]* /matrix-data/..?*; chown "$1" /matrix-data; chmod 700 /matrix-data; test -z "$(ls -A /matrix-data)"`,
+		"sh", owner,
 	}
 	started, err := runDocker(ctx, nil, arguments...)
 	if err == nil {
@@ -171,6 +178,25 @@ func (*LocalRuntime) PurgeData(ctx context.Context, project RuntimeProject, imag
 		return ErrEffectOutcomeUnknown
 	}
 	return ErrRuntimeUnavailable
+}
+
+func dataCleanupOwner() (string, error) {
+	if runtime.GOOS == "windows" {
+		// Docker Desktop maps container ownership through the host filesystem;
+		// keep the historical root owner inside the utility container. Windows
+		// removal is governed by the host ACL rather than this numeric owner.
+		return "0:0", nil
+	}
+	current, err := user.Current()
+	if err != nil {
+		return "", errors.New("managed data cleanup owner is unavailable")
+	}
+	uid, uidErr := strconv.ParseUint(current.Uid, 10, 32)
+	gid, gidErr := strconv.ParseUint(current.Gid, 10, 32)
+	if uidErr != nil || gidErr != nil {
+		return "", errors.New("managed data cleanup owner is invalid")
+	}
+	return strconv.FormatUint(uid, 10) + ":" + strconv.FormatUint(gid, 10), nil
 }
 
 func (*LocalRuntime) Observe(

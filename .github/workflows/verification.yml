@@ -417,6 +417,14 @@ jobs:
           mysql_image='mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242'
           elasticsearch_image='docker.elastic.co/elasticsearch/elasticsearch:8.19.23@sha256:4d0724bb8d78d7a2330693623e26ca4d621079d062ecc8a30b3e1fc180ec14c1'
           rabbitmq_image='rabbitmq:4.1.8@sha256:a82b5a24f4434a33cd15e1e47c444d1e07440261358e46c179539998557d4e29'
+          current_max_map_count="$(sysctl -n vm.max_map_count)"
+          case "$current_max_map_count" in
+            ''|*[!0-9]*) exit 1 ;;
+          esac
+          if [ "$current_max_map_count" -lt 1048576 ]; then
+            sudo sysctl -w vm.max_map_count=1048576
+          fi
+          test "$(sysctl -n vm.max_map_count)" -ge 1048576
           docker pull "$postgres_image"
           docker pull "$mysql_image"
           docker pull "$elasticsearch_image"

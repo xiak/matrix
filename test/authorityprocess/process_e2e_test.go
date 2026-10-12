@@ -49,6 +49,8 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	localcontaineradapter "github.com/xiak/matrix/app/adapter/managedservice/localcontainer"
 	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 	installationrelease "github.com/xiak/matrix/app/service/installation/release"
@@ -5106,7 +5108,7 @@ func runManagedProductProviderProcesses(
 	projectsByID := make(map[string]string, len(products))
 	for index := range products {
 		product := &products[index]
-		defer cleanupManagedProduct(t, product.installationID)
+		defer cleanupManagedProduct(t, managedRuntime, *product)
 		// Stop the reconciler before removing a failed product. Otherwise it can
 		// recreate the container between the product cleanup and the test-level
 		// worker cleanup, leaving an unowned runtime after the fixture exits.
@@ -5451,7 +5453,7 @@ func runIAMConsoleBrowser(
 	}
 	product := managedPostgresFixture(t, "browser", managedRuntime.images.postgres)
 	installationID := product.installationID
-	defer cleanupManagedProduct(t, installationID)
+	defer cleanupManagedProduct(t, managedRuntime, product)
 	defer cleanupManagedProductWorker(t, managedRuntime.workerContainer, managedRuntime.volumeName)
 	uiAddress := freeAddress(t)
 	uiBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-ui", "./app/ui/paas/cmd/matrix-paas-ui")
@@ -5808,7 +5810,7 @@ func waitManagedProductReady(
 				t.Fatalf("provider created an invalid %s resource", product.name)
 			}
 			if installation.Phase == managedservicev1.InstallationFailed {
-				t.Fatalf("real %s provisioning reached FAILED", product.name)
+				t.Fatalf("real %s provisioning reached FAILED: %v", product.name, installation.Operation.SafeFailureCode)
 			}
 			if installation.Phase == managedservicev1.InstallationReady &&
 				installation.Endpoint != nil && installation.CredentialReference != nil {
@@ -6279,23 +6281,24 @@ func assertManagedProductAudit(t *testing.T, auditEndpoint string, bearer string
 	}
 }
 
-func cleanupManagedProduct(t *testing.T, installationID string) {
+func cleanupManagedProduct(t *testing.T, managedRuntime managedProductRuntime, product managedProductFixture) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	filter := "label=com.xiak.matrix.managedservice.installation=" + installationID
+	filter := "label=com.xiak.matrix.managedservice.installation=" + product.installationID
 	list := exec.CommandContext(ctx, "docker", "container", "ls", "--all", "--filter", filter, "--format", "{{.ID}}")
 	content, err := list.Output()
 	if err != nil {
 		t.Errorf("list owned managed-product containers")
 		return
 	}
-	projects := make(map[string]bool)
+	expectedProject := localcontaineradapter.ProjectName("organization-process", product.installationID)
+	projects := map[string]bool{expectedProject: true}
 	for _, containerID := range strings.Fields(string(content)) {
 		inspect := exec.CommandContext(ctx, "docker", "container", "inspect", "--format",
 			`{{index .Config.Labels "com.docker.compose.project"}}`, containerID)
 		project, inspectErr := inspect.Output()
-		if inspectErr != nil || !strings.HasPrefix(strings.TrimSpace(string(project)), "matrix-") {
+		if inspectErr != nil || strings.TrimSpace(string(project)) != expectedProject {
 			t.Errorf("inspect owned managed-product container")
 			continue
 		}
@@ -6317,6 +6320,24 @@ func cleanupManagedProduct(t *testing.T, installationID string) {
 			remove := exec.CommandContext(ctx, "docker", "network", "rm", networkID)
 			if remove.Run() != nil {
 				t.Errorf("remove owned managed-product network")
+			}
+		}
+		if managedRuntime.volumeName == "" {
+			directory := filepath.Join(managedRuntime.bindingRoot, product.runtimeDirectory, project)
+			if info, statErr := os.Lstat(directory); statErr == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+				runtimeProject := composeadapter.RuntimeProject{
+					Name: project, Directory: directory,
+					EffectDocument:      filepath.Join(directory, "compose.json"),
+					ObservationDocument: filepath.Join(directory, "observe.json"),
+					TimeoutSeconds:      120,
+				}
+				if purgeErr := composeadapter.NewLocalRuntime().PurgeData(ctx, runtimeProject, product.imageID); purgeErr != nil {
+					t.Errorf("purge owned managed-product data")
+					continue
+				}
+				if removeErr := os.RemoveAll(directory); removeErr != nil {
+					t.Errorf("remove owned managed-product directory")
+				}
 			}
 		}
 	}

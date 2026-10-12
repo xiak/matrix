@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
+	"strings"
 
 	managedserviceadapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
@@ -18,6 +20,8 @@ import (
 )
 
 const elasticsearchServiceName = "elasticsearch"
+
+const minimumVirtualMemoryMapCount uint64 = 1048576
 
 type Config struct {
 	Root      string
@@ -58,7 +62,25 @@ func (provisioner *Provisioner) Ready(ctx context.Context) error {
 	if provisioner == nil || provisioner.provider == nil {
 		return errors.New("local Elasticsearch provisioner is unavailable")
 	}
-	return provisioner.provider.Ready(ctx)
+	if err := provisioner.provider.Ready(ctx); err != nil {
+		return err
+	}
+	if runtime.GOOS != "linux" {
+		return errors.New("local Elasticsearch host is unsupported")
+	}
+	content, err := os.ReadFile("/proc/sys/vm/max_map_count")
+	if err != nil || validateVirtualMemoryMapCount(content) != nil {
+		return errors.New("local Elasticsearch host virtual memory limit is unavailable")
+	}
+	return nil
+}
+
+func validateVirtualMemoryMapCount(content []byte) error {
+	value, err := strconv.ParseUint(strings.TrimSpace(string(content)), 10, 64)
+	if err != nil || value < minimumVirtualMemoryMapCount {
+		return errors.New("Elasticsearch virtual memory map count is too low")
+	}
+	return nil
 }
 
 func (provisioner *Provisioner) Ensure(
