@@ -644,6 +644,14 @@ func policyConditionsMatch(conditions []iamv1.PolicyCondition, action iamv1.Acti
 // follows the canonical content; adding a permitted action cannot silently
 // change the document under an existing version ID.
 func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
+	return systemPolicyVersion(id, iamv1.AllAuthorizationProfiles())
+}
+
+// systemPolicyVersion compiles one source-owned policy against an explicit
+// release declaration set. Current callers use the current heads; retained
+// service-role templates use only their exact archived product declaration so
+// a later Profile revision cannot reinterpret an immutable policy version.
+func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfile) (iamv1.PolicyVersion, error) {
 	var actions []iamv1.Action
 	scope := iamv1.AuthorityScopeTenant
 	switch id {
@@ -757,11 +765,11 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 	}
 	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: scope,
 		Statements: []iamv1.PolicyStatement{{SID: "permissions", Effect: iamv1.PolicyAllow, Actions: actions, Resources: resources}}}
-	compilation, err := iamv1.CompilePolicyDocument(document, iamv1.AllAuthorizationProfiles())
+	compilation, err := iamv1.CompilePolicyDocument(document, profiles)
 	if err != nil {
 		return iamv1.PolicyVersion{}, ErrInvalidPolicyState
 	}
-	_, digest, err := iamv1.CanonicalizePolicyCompilation(document, compilation, iamv1.AllAuthorizationProfiles())
+	_, digest, err := iamv1.CanonicalizePolicyCompilation(document, compilation, profiles)
 	if err != nil {
 		return iamv1.PolicyVersion{}, ErrInvalidPolicyState
 	}

@@ -110,7 +110,10 @@ func compileDocument(input localcontaineradapter.DocumentInput) ([]byte, error) 
 				"healthcheck": map[string]any{
 					"test": []string{
 						"CMD-SHELL",
-						"rabbitmq-diagnostics -q ping >/dev/null && rabbitmq-diagnostics -q check_port_connectivity >/dev/null",
+						// A readiness probe must not start another Erlang VM under the
+						// product's 0.5 CPU shape. The protocol gate below the provider
+						// still proves authenticated AMQP publish and consume semantics.
+						"bash -ec 'exec 3<>/dev/tcp/127.0.0.1/5672; exec 3>&-; exec 3<&-'",
 					},
 					"interval": "2s", "timeout": "5s", "retries": 60, "start_period": "20s",
 				},

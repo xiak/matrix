@@ -23,6 +23,16 @@ BEGIN
       OR has_function_privilege('public','iam.read_service_role_template(text,bigint,text)','EXECUTE') THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM service role template read boundary is unavailable'; END IF;
     FOR seed IN SELECT value FROM jsonb_array_elements(seeds) LOOP
+        IF (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(seed) key)
+             IS DISTINCT FROM ARRAY['canonicalSpec','contentDigest','id','retainedOnly','status','version']
+          OR jsonb_typeof(seed->'retainedOnly') IS DISTINCT FROM 'boolean'
+          OR seed->>'status' IS NULL OR seed->>'status' NOT IN ('ACTIVE','RETIRED') THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM service role template seed is invalid'; END IF;
+        IF (seed->>'retainedOnly')::boolean
+          AND NOT EXISTS(SELECT 1 FROM iam.service_role_templates template
+            WHERE template.id=seed->>'id' AND template.version=(seed->>'version')::bigint) THEN
+            CONTINUE;
+        END IF;
         IF NOT EXISTS(SELECT 1 FROM iam.service_role_templates template
           WHERE template.id=seed->>'id' AND template.version=(seed->>'version')::bigint
             AND template.canonical_spec=seed->>'canonicalSpec' AND template.content_digest=seed->>'contentDigest'

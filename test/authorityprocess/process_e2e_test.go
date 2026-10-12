@@ -58,13 +58,14 @@ import (
 const (
 	authorityProcessDSN = "MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN"
 
-	iamAPILogin            = "matrix_authority_process_iam_api"
-	iamWorkerLogin         = "matrix_authority_process_iam_worker"
-	iamAccessAnalysisLogin = "matrix_iam_access_analysis_worker_login"
-	auditRuntimeLogin      = "matrix_authority_process_audit_runtime"
-	paasAPILogin           = "matrix_authority_process_paas_api"
-	paasWorkerLogin        = "matrix_authority_process_paas_worker"
-	processDBPassword      = "matrix-authority-process-test-only"
+	iamAPILogin                   = "matrix_authority_process_iam_api"
+	iamWorkerLogin                = "matrix_authority_process_iam_worker"
+	iamAccessAnalysisLogin        = "matrix_iam_access_analysis_worker_login"
+	auditRuntimeLogin             = "matrix_authority_process_audit_runtime"
+	paasAPILogin                  = "matrix_authority_process_paas_api"
+	paasWorkerLogin               = "matrix_authority_process_paas_worker"
+	processDBPassword             = "matrix-authority-process-test-only"
+	retainedServiceRoleTemplateID = "managedservice.installation-reader"
 
 	initialAdminPassword     = "Initial-Process-Admin-Password-49!"
 	changedAdminPassword     = "Changed-Process-Admin-Password-73!"
@@ -221,6 +222,32 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 			t.Fatalf("actual IAM%d migrator failed: action=%s err=%v output=%q", sourceSchema, action, err, child.output())
 		}
 	}
+	serviceRoleTemplateState := func(version int64) []byte {
+		t.Helper()
+		var state []byte
+		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
+		 'template',to_jsonb(template_value),
+		 'policyVersion',to_jsonb(version_value))
+		 FROM iam.service_role_templates template_value
+		 JOIN iam.policy_versions version_value
+		   ON version_value.policy_id=template_value.canonical_spec::jsonb#>>'{policyVersion,policyId}'
+		  AND version_value.id=template_value.canonical_spec::jsonb#>>'{policyVersion,versionId}'
+		 WHERE template_value.id=$1 AND template_value.version=$2`, retainedServiceRoleTemplateID, version).Scan(&state); err != nil {
+			t.Fatalf("read retained service Role template version %d: %v", version, err)
+		}
+		return state
+	}
+	predecessorServiceRoleTemplateState := serviceRoleTemplateState(1)
+	var predecessorServiceRoleTemplateDigest string
+	var predecessorServiceRoleTemplateOnlyVersion bool
+	if err := admin.QueryRow(ctx, `SELECT
+	  min(content_digest) FILTER (WHERE version=1),
+	  count(*)=1 AND min(version)=1 AND max(version)=1
+	 FROM iam.service_role_templates WHERE id=$1`, retainedServiceRoleTemplateID).
+		Scan(&predecessorServiceRoleTemplateDigest, &predecessorServiceRoleTemplateOnlyVersion); err != nil ||
+		predecessorServiceRoleTemplateDigest == "" || !predecessorServiceRoleTemplateOnlyVersion {
+		t.Fatal("actual predecessor did not publish exactly one service Role template version", err)
+	}
 	bootstrapDocument := processBootstrap(t)
 	bootstrapDocument.InstallationID = "mxi-44504450445044504450445044504450"
 	bootstrapDocument.Administrator.Password = processSecret(t, initialAdminPassword)
@@ -347,6 +374,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	if err := admin.Close(ctx); err != nil {
 		t.Fatal("close predecessor observer before isolated database copies")
 	}
+	proveRetainedServiceRoleTemplateTamperRejected(t, ctx, config, sourceSchema)
 	provePredecessorAuthenticationRecovery(t, ctx, root, baseline, temporary, config, bootstrapDocument.InstallationID, sourceSchema, currentSchema)
 	admin, err = pgx.ConnectConfig(ctx, config)
 	if err != nil {
@@ -1067,6 +1095,24 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	}
 	if current := retainedLifecycleState(); !bytes.Equal(predecessorLifecycleState, current) {
 		t.Fatal("IAM83 changed retained IAM82 Root Role lifecycle state or facts")
+	}
+	if current := serviceRoleTemplateState(1); !bytes.Equal(predecessorServiceRoleTemplateState, current) {
+		t.Fatal("IAM83 changed the retained IAM82 service Role template or permission ceiling")
+	}
+	var serviceRoleTemplateArchiveReady bool
+	if err := admin.QueryRow(ctx, `SELECT count(*)=2
+	 AND count(*) FILTER (WHERE template_value.version=1
+	   AND template_value.content_digest=$2 AND template_value.status='ACTIVE')=1
+	 AND count(*) FILTER (WHERE template_value.version=2
+	   AND template_value.content_digest<>$2 AND template_value.status='ACTIVE')=1
+	 AND bool_and(version_value.retired_at IS NULL)
+	 FROM iam.service_role_templates template_value
+	 JOIN iam.policy_versions version_value
+	   ON version_value.policy_id=template_value.canonical_spec::jsonb#>>'{policyVersion,policyId}'
+	  AND version_value.id=template_value.canonical_spec::jsonb#>>'{policyVersion,versionId}'
+	 WHERE template_value.id=$1`, retainedServiceRoleTemplateID, predecessorServiceRoleTemplateDigest).
+		Scan(&serviceRoleTemplateArchiveReady); err != nil || !serviceRoleTemplateArchiveReady {
+		t.Fatal("IAM83 did not retain exact v1 authority while publishing distinct current v2 authority", err)
 	}
 	var retainedTrustEvidence bool
 	if err := admin.QueryRow(ctx, `SELECT count(*)=2
@@ -1932,6 +1978,81 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		migrationEnvironment, func(binary string) *childProcess { return start(binary, currentSchema) }, current, profileFact)
 	current.stop()
 	t.Logf("actual IAM%d -> IAM%d migrator/runtime retained original Session/Challenge qualification; factor removal/rebind/recovery, forced bulk reduction, shared attempts, exact replay, original receipt/canonical/proof and restart; no release compatibility claim", sourceSchema, currentSchema)
+}
+
+func proveRetainedServiceRoleTemplateTamperRejected(t *testing.T, ctx context.Context, config *pgx.ConnConfig, sourceSchema uint64) {
+	t.Helper()
+	if !strings.HasPrefix(config.Database, "matrix_iam_upgrade_predecessor_") {
+		t.Fatal("service Role template tamper gate requires the owned predecessor database")
+	}
+	controlConfig := config.Copy()
+	controlConfig.Database = "postgres"
+	control, err := pgx.ConnectConfig(ctx, controlConfig)
+	if err != nil {
+		t.Fatal("connect service Role template tamper controller", err)
+	}
+	defer control.Close(context.Background())
+	suffix := sha256.Sum256([]byte(config.Database + "-service-role-template-tamper"))
+	databaseName := "matrix_iam_template_tamper_" + hex.EncodeToString(suffix[:10])
+	if _, err := control.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{databaseName}.Sanitize()+
+		" TEMPLATE "+pgx.Identifier{config.Database}.Sanitize()); err != nil {
+		t.Fatal("copy quiescent predecessor database for service Role tamper", err)
+	}
+	copyConfig := config.Copy()
+	copyConfig.Database = databaseName
+	database, err := pgx.ConnectConfig(ctx, copyConfig)
+	if err != nil {
+		t.Fatal("connect service Role template tamper copy", err)
+	}
+	defer func() {
+		database.Close(context.Background())
+		cleanup, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if _, dropErr := control.Exec(cleanup, "DROP DATABASE "+pgx.Identifier{databaseName}.Sanitize()+" WITH (FORCE)"); dropErr != nil {
+			t.Error("remove owned service Role template tamper copy", dropErr)
+		}
+	}()
+	const templateID = "managedservice.installation-reader"
+	var originalDigest string
+	if err := database.QueryRow(ctx, `SELECT content_digest FROM iam.service_role_templates
+	 WHERE id=$1 AND version=1`, templateID).Scan(&originalDigest); err != nil {
+		t.Fatal("read predecessor service Role template commitment", err)
+	}
+	if _, err := database.Exec(ctx, `ALTER TABLE iam.service_role_templates DISABLE TRIGGER service_role_template_transitions;
+	 WITH changed AS (
+	   SELECT id,version,(canonical_spec::jsonb||jsonb_build_object('roleDescription','Tampered predecessor template'))::text AS document
+	   FROM iam.service_role_templates WHERE id=$1 AND version=1
+	 )
+	 UPDATE iam.service_role_templates target SET canonical_spec=changed.document,
+	   content_digest='sha256:'||encode(sha256(convert_to('matrix.iam.service-role-template.v1','UTF8')
+	     ||decode('00','hex')||convert_to(changed.document,'UTF8')),'hex')
+	 FROM changed WHERE (target.id,target.version)=(changed.id,changed.version);
+	 ALTER TABLE iam.service_role_templates ENABLE TRIGGER service_role_template_transitions`, templateID); err != nil {
+		t.Fatal("create valid but untrusted predecessor service Role template commitment", err)
+	}
+	var tamperedDigest string
+	if err := database.QueryRow(ctx, `SELECT content_digest FROM iam.service_role_templates
+	 WHERE id=$1 AND version=1`, templateID).Scan(&tamperedDigest); err != nil || tamperedDigest == originalDigest {
+		t.Fatal("service Role template tamper fixture did not change its immutable commitment", err)
+	}
+	err = iammigration.Up(ctx, database)
+	// The shared migrator deliberately normalizes database diagnostics at its
+	// process boundary. This clone differs from the accepted predecessor only
+	// by the valid-but-untrusted template commitment; the state assertion below
+	// proves the rejection happened before any current shape became visible.
+	if err == nil {
+		t.Fatal("current migration accepted a forged retained service Role template", err)
+	}
+	if _, rollbackErr := database.Exec(ctx, "ROLLBACK"); rollbackErr != nil {
+		t.Fatal("close rejected service Role template migration transaction", rollbackErr)
+	}
+	var unchanged bool
+	if err := database.QueryRow(ctx, `SELECT
+	 (SELECT schema_version=$1 FROM iam.readiness())
+	 AND (SELECT count(*)=1 AND bool_and(version=1 AND content_digest=$3)
+	   FROM iam.service_role_templates WHERE id=$2)`, sourceSchema, templateID, tamperedDigest).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatal("failed service Role template migration exposed a partial current schema", err)
+	}
 }
 
 func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, root, baseline, temporary string, config *pgx.ConnConfig, installationID string, sourceSchema, currentSchema uint64) {
@@ -4884,7 +5005,10 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// The flow itself retains its original six-minute deadline. Give the final
 	// read-only full-store scan its own bounded observation context so a query
 	// crossing that exact deadline is not misreported as an incomplete scan.
-	inspection, stopInspection := context.WithTimeout(context.Background(), 15*time.Second)
+	// Under the race detector, the current decision/outbox history can exceed a
+	// 15-second observation even though the scan is still making progress; keep
+	// a strict bound without turning normal full-store inspection into a race.
+	inspection, stopInspection := context.WithTimeout(context.Background(), 45*time.Second)
 	defer stopInspection()
 	assertAuthorityPlaintextAbsent(t, inspection, admin, sensitive...)
 }
@@ -4983,6 +5107,10 @@ func runManagedProductProviderProcesses(
 	for index := range products {
 		product := &products[index]
 		defer cleanupManagedProduct(t, product.installationID)
+		// Stop the reconciler before removing a failed product. Otherwise it can
+		// recreate the container between the product cleanup and the test-level
+		// worker cleanup, leaving an unowned runtime after the fixture exits.
+		defer cleanupManagedProductWorker(t, managedRuntime.workerContainer, managedRuntime.volumeName)
 		activation := managedservicev1.ActivateQuotaRequest{
 			OfferingID: product.offeringID, QuotaShapeID: product.quotaShapeID, InstanceCount: 1,
 		}
@@ -5324,6 +5452,7 @@ func runIAMConsoleBrowser(
 	product := managedPostgresFixture(t, "browser", managedRuntime.images.postgres)
 	installationID := product.installationID
 	defer cleanupManagedProduct(t, installationID)
+	defer cleanupManagedProductWorker(t, managedRuntime.workerContainer, managedRuntime.volumeName)
 	uiAddress := freeAddress(t)
 	uiBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-ui", "./app/ui/paas/cmd/matrix-paas-ui")
 	ui := start(uiBinary, []string{"MATRIX_PAAS_UI_LISTEN_ADDRESS=" + uiAddress})
@@ -5370,32 +5499,41 @@ func runIAMConsoleBrowser(
 	server.Config.IdleTimeout = 30 * time.Second
 	server.Start()
 	defer server.Close()
+	observed := filepath.Join(temporary, "browser-runtime-observed")
+	verified := filepath.Join(temporary, "browser-runtime-verified")
 	finish := filepath.Join(temporary, "browser-finished")
-	t.Logf("BROWSER_FIXTURE url=%s/console/access finish=%s member=%s resourceMember=%s managedInstallation=%s; synthetic credentials are the existing changed test constants",
-		server.URL, finish, member.ID, resourceMember.ID, installationID)
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			t.Fatal("browser observation timed out; not accepted")
-		case <-ticker.C:
-			if exited, _ := ui.poll(); exited {
-				t.Fatal("browser UI exited during observation")
-			}
-			info, err := os.Lstat(finish)
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			if err != nil || !info.Mode().IsRegular() {
-				t.Fatal("invalid browser completion marker")
-			}
-			goto finished
-		}
-	}
-finished:
+	t.Logf("BROWSER_FIXTURE url=%s/console/access observed=%s verified=%s finish=%s member=%s resourceMember=%s managedInstallation=%s; synthetic credentials are the existing changed test constants",
+		server.URL, observed, verified, finish, member.ID, resourceMember.ID, installationID)
+	waitForBrowserMarker(t, ctx, ui, observed, "managed product READY observation")
 	installation := waitManagedProductReady(t, ctx, paasEndpoint, bearer, product)
-	assertManagedProductRuntime(t, ctx, installation, managedRuntime, product)
+	project := assertManagedProductRuntime(t, ctx, installation, managedRuntime, product)
+	verification, err := os.OpenFile(verified, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("publish browser runtime verification marker: %v", err)
+	}
+	if _, err := verification.WriteString("verified\n"); err != nil {
+		verification.Close()
+		t.Fatalf("write browser runtime verification marker: %v", err)
+	}
+	if err := verification.Close(); err != nil {
+		t.Fatalf("close browser runtime verification marker: %v", err)
+	}
+	waitForBrowserMarker(t, ctx, ui, finish, "browser completion")
+	terminated := waitManagedProductTerminated(t, ctx, paasEndpoint, bearer, product)
+	assertManagedProductDeleted(t, ctx, managedRuntime, product, project, *installation.Endpoint)
+	assertManagedProductTerminationProof(t, database, iamEndpoint, product.installationID)
+	response := performJSON(t, http.MethodGet,
+		paasEndpoint+"/managed-services/v1/quota-entitlements/"+installation.QuotaEntitlementID, bearer, nil)
+	var released managedservicev1.QuotaEntitlement
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &released) != nil ||
+		managedservicev1.ValidateQuotaEntitlement(released) != nil ||
+		released.ReservedCount != 0 || released.ConsumedCount != 0 {
+		t.Fatalf("browser termination did not return the real product quota: status=%d body=%s", response.Status, response.Body)
+	}
+	if terminated.Operation.Kind != managedservicev1.InstallationOperationTerminate ||
+		terminated.Operation.Phase != managedservicev1.InstallationReady {
+		t.Fatal("browser termination did not finish its authoritative Operation")
+	}
 	waitAllIAMOutboxDelivered(t, ctx, database)
 	waitAllPaaSOutboxDelivered(t, ctx, database)
 	page := queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
@@ -5414,20 +5552,51 @@ finished:
 	if sets != 2 || removals != 1 {
 		t.Fatalf("observed boundary facts set=%d remove=%d, want set+replace+remove", sets, removals)
 	}
-	response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/users/"+string(member.ID)+"/permission-boundary", bearer, nil)
+	response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/users/"+string(member.ID)+"/permission-boundary", bearer, nil)
 	var boundary iamv1.UserPermissionBoundary
 	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &boundary) != nil || iamv1.ValidateUserPermissionBoundary(boundary) != nil || boundary.Policy != nil {
 		t.Fatal("browser removal did not leave an explicit unbound user")
 	}
 	assertManagedProductAuthorization(t, ctx, database, auditEndpoint, bearer, resourceMember.ID, product)
 	assertManagedProductAudit(t, auditEndpoint, bearer, product)
-	t.Log("browser fixture finished with real policy/group UI changes, a provisioned PostgreSQL 18 resource, allow/revoke decisions and a verified Audit chain; visual assertions belong to recorded browser observations")
+	t.Log("browser fixture finished with real policy/group UI changes and a PostgreSQL 18 resource proven READY by SQL before browser termination; physical runtime/data/credential deletion, quota return, terminal Operation, allow/revoke decisions and the verified Audit chain all passed; visual assertions belong to recorded browser observations")
+}
+
+func waitForBrowserMarker(
+	t *testing.T,
+	ctx context.Context,
+	ui *childProcess,
+	path string,
+	stage string,
+) {
+	t.Helper()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s timed out; browser acceptance not completed", stage)
+		case <-ticker.C:
+			if exited, _ := ui.poll(); exited {
+				t.Fatal("browser UI exited during observation")
+			}
+			info, err := os.Lstat(path)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil || !info.Mode().IsRegular() {
+				t.Fatalf("invalid %s marker", stage)
+			}
+			return
+		}
+	}
 }
 
 type managedProductRuntime struct {
-	bindingRoot string
-	volumeName  string
-	images      managedProductImages
+	bindingRoot     string
+	volumeName      string
+	workerContainer string
+	images          managedProductImages
 }
 
 func startManagedProductWorker(
@@ -5552,7 +5721,10 @@ func startManagedProductWorker(
 	assertRuntimeProcessApplicationLogin(
 		t, ctx, database, paasWorkerLogin, managedProductWorkerApplicationName, 2,
 	)
-	return managedProductRuntime{bindingRoot: bindingRoot, volumeName: volumeName, images: images}
+	return managedProductRuntime{
+		bindingRoot: bindingRoot, volumeName: volumeName,
+		workerContainer: workerContainer, images: images,
+	}
 }
 
 func managedProductWorkerEnvironment(
@@ -13157,6 +13329,15 @@ func proveAccountSecuritySettingsProcesses(t *testing.T, ctx context.Context, da
 
 func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, iamReplicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, customerBearer string, customerOwnerID iamv1.PrincipalID, customer loginResult) (managedservicev1.QuotaEntitlement, managedservicev1.ServiceInstallation, []string) {
 	t.Helper()
+	workerConfig := admin.Config().Copy()
+	workerConfig.User = paasWorkerLogin
+	workerConfig.Password = processDBPassword
+	workerConfig.RuntimeParams["application_name"] = "matrix-authority:paas-authority-fixture-worker"
+	worker, err := pgx.ConnectConfig(ctx, workerConfig)
+	if err != nil {
+		t.Fatal("connect least-privilege managed-service authority fixture worker", err)
+	}
+	defer worker.Close(context.Background())
 	base := paasEndpoint + "/managed-services/v1"
 	homeUser := createIAMUser(t, iamEndpoint, homeBearer, "account.user", "Home resource member", initialDeveloperPassword, "request-home-resource-member")
 	home := loginIAM(t, iamEndpoint, "account.user@organization-process", initialDeveloperPassword, "request-home-resource-login")
@@ -13191,27 +13372,39 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	assertStatus := func(response processResponse, status int, action string) {
 		t.Helper()
 		if response.Status != status {
-			t.Fatalf("managed-service %s status=%d want=%d", action, response.Status, status)
+			t.Fatalf("managed-service %s status=%d want=%d body=%s", action, response.Status, status, response.Body)
 		}
 	}
 	activation := managedservicev1.ActivateQuotaRequest{OfferingID: "postgresql-18", QuotaShapeID: "pg-small", InstanceCount: 2}
+	expectedOfferingIDs := []string{
+		managedservicev1.ElasticsearchOfferingID,
+		managedservicev1.MySQLOfferingID,
+		managedservicev1.PostgreSQLOfferingID,
+		managedservicev1.RabbitMQOfferingID,
+	}
 	for i := range tenants {
 		tenant := &tenants[i]
 		offeringResponse := performJSON(t, http.MethodGet, base+"/offerings", tenant.member, nil)
 		var offerings managedservicev1.ServiceOfferingList
 		if offeringResponse.Status != http.StatusOK || json.Unmarshal(offeringResponse.Body, &offerings) != nil ||
-			len(offerings.Items) != 1 || offerings.Items[0].ID != managedservicev1.PostgreSQLOfferingID {
+			len(offerings.Items) != len(expectedOfferingIDs) {
 			t.Fatalf("managed-service exact offering filtering status=%d body=%s", offeringResponse.Status, offeringResponse.Body)
 		}
+		for index, expectedID := range expectedOfferingIDs {
+			if offerings.Items[index].ID != expectedID {
+				t.Fatalf("managed-service offering directory is not the exact released product set: body=%s", offeringResponse.Body)
+			}
+		}
 		var exactBatch bool
-		if err := admin.QueryRow(ctx, `SELECT count(*)=2
+		if err := admin.QueryRow(ctx, `SELECT count(*)=$3+1
 			AND count(*) FILTER (WHERE target_id='collection' AND resource_mode='COLLECTION' AND collection_usage='COLLECTION_LIST')=1
-			AND count(*) FILTER (WHERE target_id=$3 AND resource_mode='INSTANCE' AND collection_usage IS NULL)=1
+			AND count(*) FILTER (WHERE target_id=ANY($4::text[]) AND resource_mode='INSTANCE' AND collection_usage IS NULL)=$3
+			AND count(DISTINCT target_id) FILTER (WHERE resource_mode='INSTANCE' AND collection_usage IS NULL)=$3
 			AND count(DISTINCT document->>'correlationId')=1 AND bool_and(allowed)
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND subject_type='USER'
-			AND action_name=$4 AND target_kind=$5`, tenant.id, tenant.memberID, managedservicev1.PostgreSQLOfferingID,
+			AND action_name=$5 AND target_kind=$6`, tenant.id, tenant.memberID, len(expectedOfferingIDs), expectedOfferingIDs,
 			string(iamv1.ActionManagedServiceOfferingRead), string(iamv1.ResourceServiceOffering)).Scan(&exactBatch); err != nil || !exactBatch {
-			t.Fatal("product list did not persist one collection admission and one exact candidate decision", err)
+			t.Fatal("product list did not persist one collection admission and one decision for every released product", err)
 		}
 		response := performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", tenant.member, "shared-tenant-quota-key", activation)
 		assertStatus(response, http.StatusCreated, "activate quota")
@@ -13247,6 +13440,25 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			}
 			command.Name = "Changed accepted installation"
 			assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", tenant.member, key, command), http.StatusConflict, "changed installation replay")
+		}
+		// This authority-process lane does not start a product provisioner. Move
+		// its two accepted fixtures through the production worker queue contract
+		// with the least-privilege worker login before testing service-role
+		// consent. The separate managed-products lane remains the owner of real
+		// Docker provisioning, native protocol I/O and physical cleanup.
+		completeManagedServiceAuthorityFixtures(t, ctx, worker, tenant.id,
+			[]string{tenant.shared.ID, tenant.unique.ID})
+		for _, target := range []*managedservicev1.ServiceInstallation{&tenant.shared, &tenant.unique} {
+			readyResponse := performJSON(t, http.MethodGet, base+"/service-installations/"+target.ID, tenant.member, nil)
+			var ready managedservicev1.ServiceInstallation
+			if readyResponse.Status != http.StatusOK || json.Unmarshal(readyResponse.Body, &ready) != nil ||
+				managedservicev1.ValidateServiceInstallation(ready) != nil || ready.ID != target.ID ||
+				ready.Phase != managedservicev1.InstallationReady || ready.Endpoint == nil || ready.CredentialReference == nil ||
+				ready.Operation.Kind != managedservicev1.InstallationOperationProvision ||
+				ready.Operation.Phase != managedservicev1.InstallationReady {
+				t.Fatalf("managed-service authority fixture did not reach READY: status=%d body=%s", readyResponse.Status, readyResponse.Body)
+			}
+			*target = ready
 		}
 		full := managedservicev1.CreateInstallationRequest{ID: "postgres-over-quota", Name: "Over quota", OfferingID: "postgresql-18", QuotaEntitlementID: tenant.quota.ID, RegionID: "local-primary"}
 		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", tenant.member, "over-quota-key", full), http.StatusConflict, "quota exhausted")
@@ -13513,7 +13725,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		}
 		response = performJSON(t, http.MethodGet, base+"/quota-entitlements", tenant.owner, nil)
 		var quotas managedservicev1.QuotaEntitlementList
-		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &quotas) != nil || len(quotas.Items) != 1 || quotas.Items[0].ID != tenant.quota.ID || quotas.Items[0].PurchasedCount != 2 || quotas.Items[0].ReservedCount != 2 || quotas.Items[0].ConsumedCount != 0 {
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &quotas) != nil || len(quotas.Items) != 1 || quotas.Items[0].ID != tenant.quota.ID || quotas.Items[0].PurchasedCount != 2 || quotas.Items[0].ReservedCount != 0 || quotas.Items[0].ConsumedCount != 2 {
 			t.Fatal("quota replay/attack left a partial reservation or exposed another tenant")
 		}
 		tenant.quota = quotas.Items[0]
@@ -13748,6 +13960,51 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		applicationValues = append(applicationValues, tenant.serviceRoleSecret)
 	}
 	return tenants[1].quota, tenants[1].shared, append(applicationValues, home.Credential, oldPlatformCredential, platform.Credential)
+}
+
+func completeManagedServiceAuthorityFixtures(
+	t *testing.T,
+	ctx context.Context,
+	worker *pgx.Conn,
+	tenantID string,
+	installationIDs []string,
+) {
+	t.Helper()
+	if worker == nil || len(installationIDs) == 0 {
+		t.Fatal("managed-service authority fixtures are unavailable")
+	}
+	pending := make(map[string]struct{}, len(installationIDs))
+	for _, installationID := range installationIDs {
+		if managedservicev1.ValidateInstallationID(installationID) != nil {
+			t.Fatal("invalid managed-service authority fixture", installationID)
+		}
+		pending[installationID] = struct{}{}
+	}
+	const workerID = "authority-process-managed-fixture"
+	for len(pending) > 0 {
+		var claimedTenant, operationID, operationKind, installationID string
+		var fence int64
+		err := worker.QueryRow(ctx, `SELECT tenant_id,operation_id,operation_kind,installation_id,fencing_token
+		 FROM managedservice.claim_operation($1,$2)`, workerID, 30).Scan(
+			&claimedTenant, &operationID, &operationKind, &installationID, &fence)
+		if err != nil {
+			t.Fatal("claim managed-service authority fixture", err)
+		}
+		if claimedTenant != tenantID || operationKind != string(managedservicev1.InstallationOperationProvision) || fence < 1 {
+			t.Fatalf("claimed an unexpected managed-service authority fixture: tenant=%s operation=%s kind=%s installation=%s fence=%d",
+				claimedTenant, operationID, operationKind, installationID, fence)
+		}
+		if _, found := pending[installationID]; !found {
+			t.Fatal("claimed an unowned managed-service authority fixture", installationID)
+		}
+		credentialDigest := sha256.Sum256([]byte(claimedTenant + "\x00" + installationID))
+		credentialReference := "credential-authority-" + hex.EncodeToString(credentialDigest[:12])
+		if _, err := worker.Exec(ctx, `SELECT managedservice.complete_operation($1,$2,$3,$4,$5,$6)`,
+			claimedTenant, operationID, workerID, fence, "127.0.0.1:25432", credentialReference); err != nil {
+			t.Fatal("complete managed-service authority fixture", err)
+		}
+		delete(pending, installationID)
+	}
 }
 
 func proveApplicationTenantProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, endpoint string,

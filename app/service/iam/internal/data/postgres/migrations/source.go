@@ -18,6 +18,11 @@ import (
 // a release with a larger catalog needs a non-embedded installation protocol.
 const maxAuthorizationProfileSeedBytes = iamv1.MaxProductAuthorizationReleaseCatalogBytes
 
+// The public directory remains capped at 100 current template heads. IAM also
+// retains exactly one built-in predecessor version so existing consent can
+// keep issuing sessions without reducing the signed product catalog budget.
+const maxServiceRoleTemplateSeedItems = iamv1.DirectoryPageSize + 1
+
 var (
 	//go:embed 000001_authority/bootstrap.sql
 	bootstrapSQL string
@@ -223,10 +228,19 @@ func serviceRoleTemplateSeeds(additional []iamv1.ServiceRoleTemplate) (string, e
 		CanonicalSpec string                          `json:"canonicalSpec"`
 		ContentDigest string                          `json:"contentDigest"`
 		Status        iamv1.ServiceRoleTemplateStatus `json:"status"`
+		RetainedOnly  bool                            `json:"retainedOnly"`
 	}
-	templates, err := authority.BuiltInServiceRoleTemplates()
-	if err != nil {
+	templates, err := authority.BuiltInServiceRoleTemplateArchive()
+	if err != nil || len(templates) != 2 {
 		return "", errors.New("invalid service role template registration set")
+	}
+	type templateKey struct {
+		id      iamv1.ServiceRoleTemplateID
+		version uint64
+	}
+	retained := make(map[templateKey]bool, len(templates)-1)
+	for _, template := range templates[:len(templates)-1] {
+		retained[templateKey{template.ID, template.Version}] = true
 	}
 	for _, template := range additional {
 		if iamv1.ValidateServiceRoleTemplate(template) != nil {
@@ -234,7 +248,7 @@ func serviceRoleTemplateSeeds(additional []iamv1.ServiceRoleTemplate) (string, e
 		}
 		templates = append(templates, template)
 	}
-	if len(templates) == 0 || len(templates) > iamv1.DirectoryPageSize {
+	if len(templates) > maxServiceRoleTemplateSeedItems {
 		return "", errors.New("invalid service role template registration set")
 	}
 	slices.SortFunc(templates, func(left, right iamv1.ServiceRoleTemplate) int {
@@ -244,12 +258,18 @@ func serviceRoleTemplateSeeds(additional []iamv1.ServiceRoleTemplate) (string, e
 		return cmp.Compare(left.Version, right.Version)
 	})
 	seeds := make([]seed, 0, len(templates))
-	for _, template := range templates {
+	var previous templateKey
+	for index, template := range templates {
+		key := templateKey{template.ID, template.Version}
+		if index > 0 && key == previous {
+			return "", errors.New("duplicate service role template registration")
+		}
 		canonical, digest, err := iamv1.CanonicalizeServiceRoleTemplateSpec(template.Spec)
 		if err != nil || digest != template.ContentDigest {
 			return "", errors.New("invalid service role template registration")
 		}
-		seeds = append(seeds, seed{template.ID, template.Version, canonical, digest, template.Status})
+		seeds = append(seeds, seed{template.ID, template.Version, canonical, digest, template.Status, retained[key]})
+		previous = key
 	}
 	encoded, err := json.Marshal(seeds)
 	return string(encoded), err

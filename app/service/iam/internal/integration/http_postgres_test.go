@@ -1426,6 +1426,8 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 	replayed.RequestID, replayed.CorrelationID = "registered-product-after-restart", "registered-product-after-restart"
 	authorize(t, restartedHandler, paasCredential, primary, replayed, http.StatusOK, true)
 	authorizeCatalogKey(restartedHandler, newCatalogKeyAuthorization("registered-product-key-after-restart", "item-key-restart"), http.StatusOK, true)
+	proveRetiredServiceRoleTemplateHeadDoesNotRepublish(t, ctx, admin, restartedHandler, primary,
+		serviceRoleTemplate, restartedTemplateDirectory)
 	var heads, versions, allows, denies, forged, batchAllows, keyAllows, templates, ceilings, roleAllows int
 	if err := admin.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM iam.authorization_profile_heads WHERE product='catalog'),
@@ -1452,6 +1454,50 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 		templates != 1 || ceilings != 1 || roleAllows != 2 {
 		t.Fatalf("registered product state split: heads=%d versions=%d allows=%d denies=%d forged=%d batch=%d key=%d templates=%d ceilings=%d role=%d err=%v",
 			heads, versions, allows, denies, forged, batchAllows, keyAllows, templates, ceilings, roleAllows, err)
+	}
+}
+
+func proveRetiredServiceRoleTemplateHeadDoesNotRepublish(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	handler http.Handler,
+	bearer string,
+	source iamv1.ServiceRoleTemplate,
+	want iamv1.ServiceRoleTemplateList,
+) {
+	t.Helper()
+	const fixtureID = "test.retired-service-role-head"
+	// Simulate immutable release history: the older version remains ACTIVE
+	// while a greater version is RETIRED. The public directory must treat the
+	// greater version as the head and must not fall back to the old version.
+	if _, err := admin.Exec(ctx, `INSERT INTO iam.service_role_templates
+		(id,version,canonical_spec,content_digest,status,retired_at)
+		SELECT $1,fixture.version,source.canonical_spec,source.content_digest,fixture.status,
+		  CASE WHEN fixture.status='RETIRED' THEN transaction_timestamp() ELSE NULL END
+		FROM iam.service_role_templates source
+		CROSS JOIN (VALUES (1::bigint,'ACTIVE'::text),(2::bigint,'RETIRED'::text)) fixture(version,status)
+		WHERE source.id=$2 AND source.version=$3`,
+		fixtureID, source.ID, source.Version); err != nil {
+		t.Fatal("create retired service Role template head fixture", err)
+	}
+	defer func() {
+		cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelCleanup()
+		result, err := admin.Exec(cleanupContext, `UPDATE iam.service_role_templates
+			SET status='RETIRED',retired_at=transaction_timestamp()
+			WHERE id=$1 AND version=1 AND status='ACTIVE'`, fixtureID)
+		if err != nil || result.RowsAffected() != 1 {
+			t.Errorf("retire service Role template directory fixture: rows=%d err=%v", result.RowsAffected(), err)
+		}
+	}()
+
+	response := performIAMRequest(handler, http.MethodGet, "/v1/service-role-templates", bearer, nil)
+	var got iamv1.ServiceRoleTemplateList
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &got) != nil ||
+		iamv1.ValidateServiceRoleTemplateList(got) != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("retiring a newer service Role template republished its historical predecessor: status=%d body=%s",
+			response.Code, response.Body.String())
 	}
 }
 

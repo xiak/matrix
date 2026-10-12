@@ -54,19 +54,30 @@ ALTER TABLE iam.service_role_templates ENABLE ALWAYS TRIGGER service_role_templa
 DO $service_role_template_registration$
 DECLARE seeds jsonb:=__SERVICE_ROLE_TEMPLATE_SEEDS__; seed jsonb;
 BEGIN
-    IF jsonb_typeof(seeds)<>'array' OR jsonb_array_length(seeds) NOT BETWEEN 1 AND 100 THEN
+    IF jsonb_typeof(seeds)<>'array' OR jsonb_array_length(seeds) NOT BETWEEN 1 AND 101 THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='service role template catalog is invalid'; END IF;
     LOCK TABLE iam.service_role_templates IN SHARE ROW EXCLUSIVE MODE;
     FOR seed IN SELECT value FROM jsonb_array_elements(seeds) ORDER BY value->>'id',(value->>'version')::bigint LOOP
         IF (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(seed) key)
-             IS DISTINCT FROM ARRAY['canonicalSpec','contentDigest','id','status','version']
-          OR seed->>'status' NOT IN ('ACTIVE','RETIRED') THEN
+             IS DISTINCT FROM ARRAY['canonicalSpec','contentDigest','id','retainedOnly','status','version']
+          OR jsonb_typeof(seed->'retainedOnly') IS DISTINCT FROM 'boolean'
+          OR seed->>'status' IS NULL OR seed->>'status' NOT IN ('ACTIVE','RETIRED') THEN
             RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='service role template seed is invalid'; END IF;
-        INSERT INTO iam.service_role_templates(id,version,canonical_spec,content_digest,status,retired_at)
-        VALUES(seed->>'id',(seed->>'version')::bigint,seed->>'canonicalSpec',seed->>'contentDigest',seed->>'status',
-          CASE WHEN seed->>'status'='RETIRED' THEN transaction_timestamp() ELSE NULL END)
-        ON CONFLICT(id,version) DO UPDATE SET status='RETIRED',retired_at=transaction_timestamp()
-          WHERE iam.service_role_templates.status='ACTIVE' AND EXCLUDED.status='RETIRED';
+        IF (seed->>'retainedOnly')::boolean THEN
+            -- The rolling predecessor is an upgrade assertion, not clean-install
+            -- publication. If retained state contains it, verify the immutable
+            -- commitment below; otherwise do not manufacture historical consent.
+            IF NOT EXISTS(SELECT 1 FROM iam.service_role_templates template
+              WHERE template.id=seed->>'id' AND template.version=(seed->>'version')::bigint) THEN
+                CONTINUE;
+            END IF;
+        ELSE
+            INSERT INTO iam.service_role_templates(id,version,canonical_spec,content_digest,status,retired_at)
+            VALUES(seed->>'id',(seed->>'version')::bigint,seed->>'canonicalSpec',seed->>'contentDigest',seed->>'status',
+              CASE WHEN seed->>'status'='RETIRED' THEN transaction_timestamp() ELSE NULL END)
+            ON CONFLICT(id,version) DO UPDATE SET status='RETIRED',retired_at=transaction_timestamp()
+              WHERE iam.service_role_templates.status='ACTIVE' AND EXCLUDED.status='RETIRED';
+        END IF;
         IF NOT EXISTS(SELECT 1 FROM iam.service_role_templates template
           WHERE template.id=seed->>'id' AND template.version=(seed->>'version')::bigint
             AND template.canonical_spec=seed->>'canonicalSpec' AND template.content_digest=seed->>'contentDigest'
@@ -982,7 +993,10 @@ BEGIN
       'iam.service-role-template.list','ACCOUNT',tenant,'INSTANCE',NULL);
     SELECT COALESCE(jsonb_agg(iam.service_role_template_snapshot(template.id,template.version)
       ORDER BY template.id COLLATE "C"),'[]') INTO items
-    FROM iam.service_role_templates template WHERE template.status='ACTIVE';
+    FROM (SELECT published.id,max(published.version) AS version
+      FROM iam.service_role_templates published GROUP BY published.id) template
+    JOIN iam.service_role_templates head
+      ON head.id=template.id AND head.version=template.version AND head.status='ACTIVE';
     IF jsonb_array_length(items)>100 THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='service role template directory exceeds its bound'; END IF;
     RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','ServiceRoleTemplateList','items',items);
