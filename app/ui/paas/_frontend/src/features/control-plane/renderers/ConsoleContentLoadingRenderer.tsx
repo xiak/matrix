@@ -3,6 +3,7 @@
 import { useTranslations } from "next-intl";
 import { Card, CardGridSkeleton, ContentLayout, LoadingFeedback, Skeleton, TableSkeleton, Typography } from "@ui/xiak";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
+import type { ManagedServiceProductId } from "../domain/managedServiceProduct";
 import styles from "./ConsoleContentLoadingRenderer.module.css";
 
 function DataPanel({ description, label, title }: { description?: string; label: string; title: string }) {
@@ -85,6 +86,25 @@ function CloudOverviewLoading({ label }: { label: string }) {
   );
 }
 
+function ManagedProductLoading({ label, product }: { label: string; product: ManagedServiceProductId }) {
+  const directory = useTranslations("ServiceDirectory");
+  const managed = useTranslations("ManagedService");
+  return (
+    <div className={styles.stack}>
+      <section className={styles.identity}>
+        <div>
+          <Typography.Eyebrow>{managed("managedCloudService")}</Typography.Eyebrow>
+          <Typography.Title as="h2" level={2}>{directory(`services.${product}.name`)}</Typography.Title>
+          <p>{directory(`services.${product}.description`)}</p>
+        </div>
+      </section>
+      <LoadingFeedback label={label} labelVisible={false}>
+        <DataPanel description={managed("productDataLoadingHint")} label={label} title={managed("productData")} />
+      </LoadingFeedback>
+    </div>
+  );
+}
+
 // Route identity and stable page chrome render synchronously. Only the region
 // whose rows/cards still depend on a provider uses delayed placeholder paint.
 export function ConsoleContentLoadingRenderer({ experience = false, label, selection }: { experience?: boolean; label: string; selection: ControlPlaneRouteSelection }) {
@@ -92,7 +112,9 @@ export function ConsoleContentLoadingRenderer({ experience = false, label, selec
   const cloud = useTranslations("CloudExperience");
   const logs = useTranslations("LogService");
   const navigation = useTranslations("ServiceNavigation");
-  const { section, view } = selection;
+  const { section, view, product } = selection;
+
+  if (product && section === "catalog") return <ManagedProductLoading label={label} product={product} />;
 
   if (section === "installations") {
     return <DataPanel description={managed("installationStateHint")} label={label} title={managed("organizationInstances")} />;

@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { SessionProvider, useSession } from "@/features/auth/application/SessionProvider";
 import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
@@ -63,7 +64,7 @@ function snapshot(installation: ServiceInstallation, consumedCount: number): Con
   return {
     offerings: [{
       id: "postgresql-18",
-      kind: "POSTGRESQL",
+      service: { id: "postgresql", revision: 1, contentDigest: `sha256:${"1".repeat(64)}` },
       displayName: "PostgreSQL 18",
       description: "Managed PostgreSQL",
       engineFamily: "postgresql",
@@ -118,19 +119,32 @@ function Probe() {
   return (
     <div>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
-      <button onClick={() => void controlPlane.prepare({ section: "access" })} type="button">prepare access</button>
       <button onClick={() => void controlPlane.prepare({ section: "catalog" })} type="button">prepare catalog</button>
       <button onClick={() => void controlPlane.prepare({ section: "regions" })} type="button">prepare regions</button>
       <button onClick={() => void controlPlane.prepare({ section: "installations" })} type="button">prepare installations</button>
+      <button onClick={() => void controlPlane.reload()} type="button">refresh current page</button>
+      <button onClick={() => void controlPlane.createInstallation({
+        id: "postgres-recovery",
+        name: "Postgres recovery",
+        offeringId: "postgresql-18",
+        quotaEntitlementId: "quota-primary",
+        regionId: "local-primary"
+      })} type="button">create recovery installation</button>
+      <button onClick={() => void controlPlane.retryManagedServiceCommand()} type="button">retry managed command</button>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
       <span data-testid="error">{controlPlane.error ?? "none"}</span>
+      <span data-testid="loading">{String(controlPlane.loading)}</span>
+      <span data-testid="command-phase">{controlPlane.managedServiceCommand?.phase ?? "none"}</span>
+      <span data-testid="command-request">{controlPlane.managedServiceCommand?.intent.requestId ?? "none"}</span>
+      <span data-testid="command-slow">{String(controlPlane.managedServiceCommand?.slow ?? false)}</span>
+      <span data-testid="command-restored">{String(controlPlane.managedServiceCommand?.restored ?? false)}</span>
       <span data-testid="projections">{JSON.stringify(projections)}</span>
     </div>
   );
 }
 
-function iamRepository(): IamRepository {
+function iamRepository(principalId = "principal-test"): IamRepository {
   return {
     async login() {
       return {
@@ -140,7 +154,7 @@ function iamRepository(): IamRepository {
         session: {
           id: "session-test",
           organizationId: "organization-test",
-          principalId: "principal-test",
+          principalId,
           status: "ACTIVE",
           issuedAt: "2026-08-26T12:00:00Z",
           expiresAt: "2099-08-26T20:00:00Z"
@@ -154,10 +168,95 @@ function iamRepository(): IamRepository {
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   vi.useRealTimers();
 });
 
 describe("ControlPlaneProvider", () => {
+  it("keeps a slow managed-service command local to its data region and preserves the caller idempotency key", async () => {
+    vi.useFakeTimers();
+    let resolveInstallation!: (installation: ServiceInstallation) => void;
+    const createInstallation = vi.fn<ControlPlaneRepository["createInstallation"]>(() => new Promise((resolve) => {
+      resolveInstallation = resolve;
+    }));
+    const repository: ControlPlaneRepository = {
+      load: vi.fn(),
+      getInstallation: vi.fn(),
+      activateQuota: vi.fn(),
+      createInstallation
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Probe /></ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    await act(async () => { fireEvent.click(screen.getByText("create recovery installation")); await Promise.resolve(); });
+
+    expect(screen.getByTestId("command-phase").textContent).toBe("submitting");
+    expect(createInstallation).toHaveBeenCalledTimes(1);
+    const [, frozenPayload, frozenRequestId] = createInstallation.mock.calls[0]!;
+    expect(frozenPayload).toMatchObject({ id: "postgres-recovery", name: "Postgres recovery" });
+    expect(frozenRequestId).toMatch(/^ui-install-/);
+    expect(localStorage.getItem("matrix.managed-service.commands.v1")).toContain(frozenRequestId);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(800); });
+    expect(screen.getByTestId("command-slow").textContent).toBe("true");
+
+    await act(async () => { resolveInstallation({ ...pendingInstallation, id: "postgres-recovery", name: "Postgres recovery" }); await Promise.resolve(); });
+    expect(screen.getByTestId("command-phase").textContent).toBe("completed");
+    expect(localStorage.getItem("matrix.managed-service.commands.v1")).toBeNull();
+  });
+
+  it("restores an unknown command only for the exact account actor and retries its frozen request unchanged", async () => {
+    const createInstallation = vi.fn<ControlPlaneRepository["createInstallation"]>()
+      .mockRejectedValueOnce(new Error("transport disconnected"))
+      .mockResolvedValueOnce({ ...pendingInstallation, id: "postgres-recovery", name: "Postgres recovery" });
+    const repository: ControlPlaneRepository = {
+      load: vi.fn(),
+      getInstallation: vi.fn(),
+      activateQuota: vi.fn(),
+      createInstallation
+    };
+    const first = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Probe /></ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(first.getByText("login")); });
+    await act(async () => { fireEvent.click(first.getByText("create recovery installation")); });
+    await waitFor(() => expect(first.getByTestId("command-phase").textContent).toBe("unknown"));
+    const originalCall = createInstallation.mock.calls[0]!;
+    const originalRequestId = String(originalCall[2]);
+    expect(localStorage.getItem("matrix.managed-service.commands.v1")).toContain(originalRequestId);
+    first.unmount();
+
+    const otherActor = render(
+      <SessionProvider repository={iamRepository("principal-other")}>
+        <ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Probe /></ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(otherActor.getByText("login")); await Promise.resolve(); });
+    expect(otherActor.getByTestId("command-phase").textContent).toBe("none");
+    otherActor.unmount();
+
+    const restored = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Probe /></ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(restored.getByText("login")); await Promise.resolve(); });
+    await waitFor(() => expect(restored.getByTestId("command-phase").textContent).toBe("unknown"));
+    expect(restored.getByTestId("command-request").textContent).toBe(originalRequestId);
+    expect(restored.getByTestId("command-restored").textContent).toBe("true");
+
+    await act(async () => { fireEvent.click(restored.getByText("retry managed command")); });
+    await waitFor(() => expect(restored.getByTestId("command-phase").textContent).toBe("completed"));
+    expect(createInstallation).toHaveBeenCalledTimes(2);
+    expect(createInstallation.mock.calls[1]).toEqual(originalCall);
+    expect(localStorage.getItem("matrix.managed-service.commands.v1")).toBeNull();
+  });
+
   it("makes the IAM shell available without calling the PaaS resource APIs", async () => {
     const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn() };
     const screen = render(<SessionProvider repository={iamRepository()}><ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Probe /></ControlPlaneProvider></SessionProvider>);
@@ -166,6 +265,56 @@ describe("ControlPlaneProvider", () => {
     expect(repository.load).not.toHaveBeenCalled();
     expect(repository.getInstallation).not.toHaveBeenCalled();
   });
+  it.each(["catalog", "quotas", "installations"] as const)("projects a closed %s product frame without resource reads or refresh", async (section) => {
+    const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn() };
+    const screen = render(<SessionProvider repository={iamRepository()}><ControlPlaneProvider repository={repository} selection={{ section, product: "postgresql" }}><Probe /></ControlPlaneProvider></SessionProvider>);
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(screen.getByTestId("section").textContent).toBe(section);
+    expect(screen.getByTestId("loading").textContent).toBe("false");
+    expect(screen.getByTestId("error").textContent).toBe("none");
+    await act(async () => { fireEvent.click(screen.getByText("refresh current page")); });
+    expect(repository.load).not.toHaveBeenCalled();
+    expect(repository.getInstallation).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse another product's data admission", async () => {
+    const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn() };
+    const screen = render(<SessionProvider repository={iamRepository()}><ControlPlaneProvider productAccess={{ product: "mysql", ready: true }} repository={repository} selection={{ section: "catalog", product: "postgresql" }}><Probe /></ControlPlaneProvider></SessionProvider>);
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(screen.getByTestId("section").textContent).toBe("catalog");
+    expect(screen.getByTestId("loading").textContent).toBe("false");
+    expect(repository.load).not.toHaveBeenCalled();
+  });
+
+  it("stops product polling and late directory refresh when resource admission closes", async () => {
+    vi.useFakeTimers();
+    const source = snapshot(terminatingInstallation, 1);
+    const load = vi.fn<ControlPlaneRepository["load"]>(async (_credential, resources) => resourceSlice(source, resources));
+    let rejectPoll!: (reason: Error) => void;
+    const getInstallation = vi.fn<ControlPlaneRepository["getInstallation"]>(() => new Promise((_resolve, reject) => { rejectPoll = reject; }));
+    const repository: ControlPlaneRepository = { load, getInstallation, activateQuota: vi.fn(), createInstallation: vi.fn() };
+    function ProductPage() {
+      const [ready, setReady] = useState(true);
+      return <>
+        <button type="button" onClick={() => setReady(false)}>close resource admission</button>
+        <ControlPlaneProvider productAccess={{ product: "postgresql", ready }} repository={repository} selection={{ section: "installations", product: "postgresql" }}><Probe /></ControlPlaneProvider>
+      </>;
+    }
+    const screen = render(<SessionProvider repository={iamRepository()}><ProductPage /></SessionProvider>);
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(load.mock.calls.map(([, resources]) => resources)).toEqual(expect.arrayContaining([["installations"], ["offerings"], ["regions"], ["entitlements"]]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+    expect(getInstallation).toHaveBeenCalledTimes(1);
+    await act(async () => { fireEvent.click(screen.getByText("close resource admission")); });
+    load.mockClear();
+    await act(async () => { rejectPoll(new HttpProblem(404, "TERMINATED")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(load).not.toHaveBeenCalled();
+    expect(getInstallation).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("error").textContent).toBe("none");
+    expect(screen.getByTestId("loading").textContent).toBe("false");
+  });
+
   it("projects the installation directory while its three enrichments load independently", async () => {
     const source = snapshot(readyInstallation, 1);
     const load = vi.fn<ControlPlaneRepository["load"]>(async (_credential, resources) => resourceSlice(source, resources));
@@ -193,56 +342,8 @@ describe("ControlPlaneProvider", () => {
     ]));
     expect(load.mock.calls.every(([, resources]) => resources.length === 1)).toBe(true);
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
-      "regions", "resources", "installations", "logs", "devops", "observability", "audit", "access"
+      "regions", "resources", "managed-product", "managed-product", "managed-product", "managed-product", "devops", "observability", "logs", "audit", "access"
     ]);
-  });
-  it("starts missing installation enrichments after the required directory is already cached", async () => {
-    const source = snapshot(readyInstallation, 1);
-    let resolveInstallation!: (value: ControlPlaneResourceSnapshot) => void;
-    const installationLoad = new Promise<ControlPlaneResourceSnapshot>((resolve) => {
-      resolveInstallation = resolve;
-    });
-    const load = vi.fn<ControlPlaneRepository["load"]>(async (_credential, resources) => {
-      if (resources[0] === "installations") return installationLoad;
-      return resourceSlice(source, resources);
-    });
-    const screen = render(
-      <SessionProvider repository={iamRepository()}>
-        <ControlPlaneProvider
-          repository={{ load, getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn() }}
-          selection={{ section: "access" }}
-        >
-          <Probe />
-        </ControlPlaneProvider>
-      </SessionProvider>
-    );
-
-    await act(async () => {
-      fireEvent.click(screen.getByText("login"));
-      await Promise.resolve();
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByText("prepare installations"));
-      await Promise.resolve();
-    });
-    expect(load).toHaveBeenCalledWith("memory-only-session", ["installations"]);
-
-    await act(async () => {
-      fireEvent.click(screen.getByText("prepare access"));
-      await Promise.resolve();
-      resolveInstallation({ installations: source.installations });
-      await Promise.resolve();
-    });
-    expect(load).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      fireEvent.click(screen.getByText("prepare installations"));
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(load).toHaveBeenCalledTimes(4));
-    expect(load.mock.calls.map(([, resources]) => resources)).toEqual(expect.arrayContaining([
-      ["installations"], ["offerings"], ["regions"], ["entitlements"]
-    ]));
   });
   it.each([
     { resource: "offerings" as const, outcome: "forbidden" as const },
@@ -295,13 +396,18 @@ describe("ControlPlaneProvider", () => {
     );
     await act(async () => { fireEvent.click(screen.getByText("login")); });
     expect(load).not.toHaveBeenCalled();
+    // Closed products can project their independent first-use frame before
+    // catalog, quota or installation data is available.
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
       "none",
       "resources",
-      "none",
-      "logs",
+      "managed-product",
+      "managed-product",
+      "managed-product",
+      "managed-product",
       "devops",
       "observability",
+      "logs",
       "audit",
       "access"
     ]);
@@ -314,10 +420,13 @@ describe("ControlPlaneProvider", () => {
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
       "none",
       "resources",
-      "none",
-      "logs",
+      "managed-product",
+      "managed-product",
+      "managed-product",
+      "managed-product",
       "devops",
       "observability",
+      "logs",
       "audit",
       "access"
     ]);
@@ -335,7 +444,7 @@ describe("ControlPlaneProvider", () => {
       await Promise.resolve();
     });
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
-      "regions", "resources", "installations", "logs", "devops", "observability", "audit", "access"
+      "regions", "resources", "managed-product", "managed-product", "managed-product", "managed-product", "devops", "observability", "logs", "audit", "access"
     ]);
     await waitFor(() => expect(load).toHaveBeenCalledTimes(4));
     expect(load.mock.calls.map(([, resources]) => resources)).toEqual(expect.arrayContaining([
@@ -368,6 +477,7 @@ describe("ControlPlaneProvider", () => {
     );
     await act(async () => {
       fireEvent.click(screen.getByText("login"));
+      await Promise.resolve();
       await Promise.resolve();
     });
     expect(load).toHaveBeenCalledTimes(4);

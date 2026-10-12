@@ -1,4 +1,5 @@
 import { serviceViews, type ControlPlaneRouteSelection, type ServiceView } from "../domain/selection";
+import { isManagedServiceProductId } from "../domain/managedServiceProduct";
 
 const known = new Set([
   "messages",
@@ -20,6 +21,14 @@ export function parseControlPlaneRoute(
   segments?: string[]
 ): ControlPlaneRouteSelection {
   const segment = segments?.[0];
+  if (segment === "products") {
+    const product = segments?.[1];
+    if (!product || !isManagedServiceProductId(product)) return { section: "overview" };
+    const page = segments?.[2];
+    if (page === "instances") return { section: "installations", product };
+    if (page === "quotas") return { section: "quotas", product };
+    return { section: "catalog", product };
+  }
   if (segment && known.has(segment)) {
     const section = segment as ControlPlaneRouteSelection["section"];
     const view = segments?.[1];

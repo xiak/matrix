@@ -98,7 +98,7 @@ export type GlobalSearchResultScene = {
 
 export type OfferingScene = {
   id: string;
-  kind: ServiceOffering["kind"];
+  serviceId: ServiceOffering["service"]["id"];
   name: string;
   description: string;
   engine: string;
@@ -193,6 +193,15 @@ export type ConsoleContentScene =
   | { kind: "operations"; operations: OperationScene[] }
   | { kind: "devops"; view?: ServiceView; metrics: MetricScene[]; pipelines: PipelineScene[] }
   | { kind: "observability"; view?: ServiceView; metrics: MetricScene[]; services: ServiceHealthScene[]; alerts: AlertScene[] }
+  | {
+      kind: "managed-product";
+      productId: import("../domain/managedServiceProduct").ManagedServiceProductId;
+      offering: OfferingScene | null;
+      purchasedQuota: number;
+      availableQuota: number;
+      instanceCount: number;
+      readyInstanceCount: number;
+    }
   | { kind: "catalog"; offerings: OfferingScene[] }
   | { kind: "quotas"; entitlements: EntitlementScene[] }
   | { kind: "installations"; installations: InstallationScene[] }

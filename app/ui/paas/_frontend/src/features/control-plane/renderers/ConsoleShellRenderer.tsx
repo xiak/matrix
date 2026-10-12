@@ -38,15 +38,17 @@ import {
   PanelRightClose,
   RefreshCcw,
   ScrollText,
+  Search,
   ServerCog,
   Settings2,
   ShieldCheck,
+  MessagesSquare,
   Users,
   Workflow,
   X
 } from "lucide-react";
 import { useSession } from "@/features/auth/application/SessionProvider";
-import { useRoleSession } from "@/features/auth/application/RoleSessionProvider";
+import { useEffectiveCredential, useRoleSession } from "@/features/auth/application/RoleSessionProvider";
 import { AccountAccessProvider, useAccountCapabilities } from "@/features/auth/application/AccountAccessProvider";
 import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
 import type { AccountRepository } from "@/features/auth/repositories/iamRepository";
@@ -64,9 +66,13 @@ import {
 } from "@ui/xiak";
 import { ControlPlaneProvider, useControlPlane } from "../application/ControlPlaneProvider";
 import { useConsoleUiStore } from "../application/consoleUiStore";
+import { useLiveServiceActivation } from "../application/liveServiceActivation";
+import { usePreviewServiceActivation } from "../application/previewServiceActivation";
 import type { ExperienceSnapshot } from "../domain/experience";
+import { serviceWorkspaceMayLoad } from "../domain/serviceActivation";
 import { consoleRouteHref, type ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
+import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
 import type {
   ConsoleWorkspaceScene,
   NavigationIconKind,
@@ -75,10 +81,11 @@ import type {
 import { ConsoleHeader } from "./ConsoleHeader";
 import { ConsoleContentLoadingRenderer } from "./ConsoleContentLoadingRenderer";
 import { ConsoleContentRenderer } from "./ConsoleContentRenderer";
+import { ManagedProductActivation } from "./ManagedProductActivation";
 import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
 import styles from "./ConsoleShellRenderer.module.css";
 import { useServiceDirectory } from "./ServiceDirectory";
-import { serviceForSection, type ServiceId } from "../scenes/serviceDirectory";
+import { serviceForSelection, type ServiceId } from "../scenes/serviceDirectory";
 import { ConsoleNavigationProvider, useConsoleNavigation } from "../routes/ConsoleNavigation";
 import { buildConsoleFrame } from "../scenes/buildConsoleScene";
 
@@ -91,7 +98,19 @@ const railIcons = {
   access: ShieldCheck
 } satisfies Record<RailIconKind, typeof Database>;
 
-const favoriteIcons = { regions: MapPin, applications: Boxes, postgresql: Database, devops: GitBranch, monitoring: ChartNoAxesCombined, logs: FileText, audit: ScrollText, iam: ShieldCheck } satisfies Record<ServiceId, typeof Database>;
+const favoriteIcons = {
+  regions: MapPin,
+  applications: Boxes,
+  postgresql: Database,
+  mysql: Database,
+  elasticsearch: Search,
+  rabbitmq: MessagesSquare,
+  devops: GitBranch,
+  monitoring: ChartNoAxesCombined,
+  logs: FileText,
+  audit: ScrollText,
+  iam: ShieldCheck
+} satisfies Record<ServiceId, typeof Database>;
 
 const navigationIcons = {
   policy: FileText,
@@ -193,7 +212,13 @@ function loopOverlayFocus(
   }
 }
 
-function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
+type ProductActivationController = ReturnType<typeof usePreviewServiceActivation> | ReturnType<typeof useLiveServiceActivation>;
+
+function ConsoleShell({ activation, activationAccountId, experience }: {
+  activation: ProductActivationController;
+  activationAccountId?: string;
+  experience?: ExperienceSnapshot;
+}) {
   const t = useTranslations("Console");
   const collection = useTranslations("Collection");
   const authErrors = useTranslations("Auth.errors");
@@ -250,6 +275,12 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const [regionId, setRegionId] = useState("all");
   const setHeaderPanel = useConsoleUiStore((state) => state.setHeaderPanel);
   const principal = session.current;
+  const product = (pendingSelection ?? navigation.selection).product;
+  const productReady = !product || Boolean(activationAccountId && serviceWorkspaceMayLoad(
+    activation.state,
+    activation.access,
+    { accountId: activationAccountId, serviceKey: product }
+  ));
   const organizationId = committedFrame.scope?.organization.id;
   const effectiveOrganizationId = organizationId ?? principal?.session.organizationId;
   const organizationName = committedFrame.scope?.organization.name;
@@ -279,7 +310,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   }, [closeWorkspace]);
 
   const workspaceKey = scene?.workspace ? `${scene.section}:${scene.workspace.kind}` : null;
-  useEffect(() => { closeWorkspace(); }, [workspaceKey, closeWorkspace]);
+  useEffect(() => { closeWorkspace(); }, [workspaceKey, closeWorkspace, productReady]);
 
   useEffect(() => {
     if (!navigation.pendingHref) return;
@@ -338,11 +369,11 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   }, [roleSession, sessionLogout, router, setHeaderPanel]);
   const headerLogout = useCallback(() => { setHeaderPanel(null); requestLeave(logout); }, [setHeaderPanel, requestLeave, logout]);
 
-  const workspaceVisible = Boolean(scene?.workspace && workspaceOpen && !navigation.pendingHref);
-  const workspaceMounted = Boolean(scene?.workspace && (workspaceVisible || activatedWorkspaceKey === workspaceKey));
-  const workspaceAction = scene?.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
+  const workspaceVisible = Boolean(productReady && scene?.workspace && workspaceOpen && !navigation.pendingHref);
+  const workspaceMounted = Boolean(productReady && scene?.workspace && (workspaceVisible || activatedWorkspaceKey === workspaceKey));
+  const workspaceAction = productReady && scene?.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
   const WorkspaceActionIcon = workspaceAction?.icon;
-  const activeService = frame.preview ? serviceForSection(frame.section) : undefined;
+  const activeService = frame.preview ? serviceForSelection(pendingSelection ?? navigation.selection) : undefined;
   const ProductContextIcon = activeService ? favoriteIcons[activeService.id] : railIcons[frame.productIcon];
   const productName = frame.productId === "console" ? t("consoleName") : directory(`services.${frame.productId}.name`);
   const headerProductName = committedFrame.productId === "console" ? t("consoleName") : directory(`services.${committedFrame.productId}.name`);
@@ -371,6 +402,14 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const accessView = frame.section === "access" ? pendingSelection?.view ?? navigation.selection.view : undefined;
   const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : frame.section === "overview" ? dashboard("title") : t(`pages.${frame.section}.title`);
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
+  const pageContent = content ? <ConsoleContentRenderer accountId={activationAccountId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={pendingSelection ?? navigation.selection} /> : null;
+  const resourceContent = <>
+    {controlPlane.error ? scene ? <Alert className={styles.feedback} status="danger">{t(`errors.${controlPlane.error}`)}</Alert> : <div role="alert"><EmptyState title={t("loadFailed")} description={t(`errors.${controlPlane.error}`)} icon={<ServerCog />} action={<div className={styles.recoveryActions}>
+      <Button onClick={() => void controlPlane.reload()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
+      <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
+    </div>} /></div> : null}
+    {pageContent}
+  </>;
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -503,11 +542,9 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
                 <ContentPage.Body inactive={Boolean(pendingContent)} transitionKey={contentTransitionKey} pending={contentTransitionPending} loading={contentTransitionPending && pendingSelection ? <div className={styles.pageCanvas}><ConsoleContentLoadingRenderer experience={Boolean(experience)} key={navigation.pendingHref} label={loadingLabel} selection={pendingSelection} /></div> : undefined}>
                   <div aria-busy={controlPlane.loading && frame.section !== "access"} className={styles.pageCanvas}>
                     {session.error ? <Alert className={styles.feedback} status="danger">{authErrors(session.error)}</Alert> : null}
-                    {controlPlane.error ? scene ? <Alert className={styles.feedback} status="danger">{t(`errors.${controlPlane.error}`)}</Alert> : <div role="alert"><EmptyState title={t("loadFailed")} description={t(`errors.${controlPlane.error}`)} icon={<ServerCog />} action={<div className={styles.recoveryActions}>
-                      <Button onClick={() => void controlPlane.reload()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
-                      <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
-                    </div>} /></div> : null}
-                    {content ? <ConsoleContentRenderer accountId={frame.scope?.organization.id ?? principal?.session.organizationId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={navigation.selection} /> : null}
+                    {product ? <ManagedProductActivation account={{ id: activationAccountId ?? "", name: frame.scope?.organization.name }} activation={activation} preview={frame.preview} product={product}>
+                      {resourceContent}
+                    </ManagedProductActivation> : resourceContent}
                   </div>
                 </ContentPage.Body>
               </ContentPage>
@@ -549,6 +586,46 @@ function ConsoleSignIn({ returnTo }: { returnTo: string }) {
   return <LoginRenderer returnTo={returnTo + (query ? "?" + query : "")} />;
 }
 
+function ConsoleProviders({ accountRepository, experience, repository, selection }: {
+  accountRepository?: AccountRepository;
+  experience?: ExperienceSnapshot;
+  repository?: ControlPlaneRepository;
+  selection: ControlPlaneRouteSelection;
+}) {
+  const navigation = useConsoleNavigation();
+  const session = useSession();
+  const roleSession = useRoleSession();
+  const credential = useEffectiveCredential();
+  const product = (navigation.pendingSelection ?? selection).product;
+  const activationAccountId = roleSession.identity?.account.id ?? experience?.organization.id ?? session.current?.session.organizationId;
+  const previewActivation = usePreviewServiceActivation({
+    accountId: activationAccountId,
+    actorId: roleSession.mode === "ROLE" ? roleSession.identity?.role.id : roleSession.mode === "USER" ? session.current?.session.principalId : undefined,
+    preview: Boolean(experience),
+    serviceKey: product
+  });
+  const effectiveRepository = repository ?? httpControlPlaneRepository;
+  const liveActivation = useLiveServiceActivation({
+    accountId: activationAccountId,
+    active: !experience && Boolean(product),
+    credential: credential ?? undefined,
+    repository: effectiveRepository,
+    serviceKey: product
+  });
+  const activation: ProductActivationController = experience ? previewActivation : liveActivation;
+  const ready = Boolean(product && activationAccountId && serviceWorkspaceMayLoad(
+    activation.state,
+    activation.access,
+    { accountId: activationAccountId, serviceKey: product }
+  ));
+  const productAccess = useMemo(() => product ? { product, ready } : null, [product, ready]);
+  return <AccountAccessProvider active={roleSession.mode === "USER" && selection.section === "access" && selection.view !== "sessions" && selection.view !== "role-access"} repository={accountRepository}>
+    <ControlPlaneProvider experience={experience} productAccess={productAccess} repository={effectiveRepository} selection={selection}>
+      <ConsoleShell activation={activation} activationAccountId={activationAccountId} experience={experience} />
+    </ControlPlaneProvider>
+  </AccountAccessProvider>;
+}
+
 export function ConsoleShellRenderer({ accountRepository, experience, repository, selection }: {
   accountRepository?: AccountRepository;
   experience?: ExperienceSnapshot;
@@ -556,17 +633,12 @@ export function ConsoleShellRenderer({ accountRepository, experience, repository
   selection: ControlPlaneRouteSelection;
 }) {
   const session = useSession();
-  const roleSession = useRoleSession();
   const t = useTranslations("Auth");
   const returnTo = consoleRouteHref(selection);
   if (!session.current || (session.phase !== "authenticated" && session.phase !== "revoking")) return <Suspense fallback={<ShellFrame><PageSkeleton label={t("welcome")} layout="access" /></ShellFrame>}><ConsoleSignIn returnTo={returnTo} /></Suspense>;
   return (
     <ConsoleNavigationProvider selection={selection}>
-      <AccountAccessProvider active={roleSession.mode === "USER" && selection.section === "access" && selection.view !== "sessions" && selection.view !== "role-access"} repository={accountRepository}>
-        <ControlPlaneProvider experience={experience} repository={repository} selection={selection}>
-          <ConsoleShell experience={experience} />
-        </ControlPlaneProvider>
-      </AccountAccessProvider>
+      <ConsoleProviders accountRepository={accountRepository} experience={experience} repository={repository} selection={selection} />
     </ConsoleNavigationProvider>
   );
 }

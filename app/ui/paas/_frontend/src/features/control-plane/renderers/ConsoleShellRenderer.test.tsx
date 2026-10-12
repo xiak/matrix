@@ -10,9 +10,10 @@ import type {
   ServiceRoleTemplate,
   WorkloadRoleBinding
 } from "@/features/auth/domain/serviceAuthorization";
-import { previewAccountRepository, previewIamRepository } from "@/features/auth/repositories/previewIamRepository";
+import { previewAccountRepository, previewCredential, previewIamRepository } from "@/features/auth/repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
+import { previewServiceActivationStorageKey, writePreviewServiceActivation } from "../application/previewServiceActivation";
 import type { ControlPlaneSnapshot, ServiceInstallation } from "../domain/resources";
 import type { ExperienceSnapshot } from "../domain/experience";
 import type { ApplicationDirectoryPage, ApplicationReadSnapshot } from "../domain/application";
@@ -56,7 +57,7 @@ vi.mock("./ConsoleContentRenderer", async (importOriginal) => {
 const snapshot: ControlPlaneSnapshot = {
   offerings: [{
     id: "postgresql-18",
-    kind: "POSTGRESQL",
+    service: { id: "postgresql", revision: 1, contentDigest: `sha256:${"1".repeat(64)}` },
     displayName: "PostgreSQL 18",
     description: "Managed PostgreSQL",
     engineFamily: "postgresql",
@@ -90,6 +91,38 @@ const snapshot: ControlPlaneSnapshot = {
   }],
   installations: []
 };
+
+const liveServiceDefinition = {
+  id: "postgresql",
+  displayName: "PostgreSQL",
+  description: "由 Matrix 管理的关系数据库服务。",
+  revision: 1,
+  contentDigest: `sha256:${"1".repeat(64)}`,
+  activationPrerequisite: "PERMISSION_ONLY" as const,
+  state: "AVAILABLE" as const
+};
+
+const liveServiceActivation = {
+  service: {
+    id: liveServiceDefinition.id,
+    revision: liveServiceDefinition.revision,
+    contentDigest: liveServiceDefinition.contentDigest
+  },
+  resourceVersion: 1,
+  activatedAt: "2026-10-12T11:00:00.123456Z"
+};
+
+function liveServiceDirectory(available: boolean) {
+  return {
+    services: [liveServiceDefinition],
+    activationCapability: {
+      action: "managedservice.service-activation.activate" as const,
+      resource: { kind: "SERVICE_ACTIVATION" as const, id: "collection" as const },
+      available,
+      ...(available ? {} : { restrictionReason: "AUTHORITY_REQUIRED" as const })
+    }
+  };
+}
 
 const liveApplicationReadSnapshot: ApplicationReadSnapshot = {
   etag: '"7"',
@@ -192,14 +225,19 @@ async function renderConsole({
   listApplications,
   bindServiceRole,
   unbindServiceRole,
+  listServiceDefinitions,
+  getServiceActivation,
+  activateService,
   logout = vi.fn().mockResolvedValue(undefined),
   accountRepository,
   iamRepository,
+  product,
   view: initialView,
   heldRoute
 }: {
   section?: ConsoleSection;
   view?: ServiceView;
+  product?: ControlPlaneRouteSelection["product"];
   experience?: ExperienceSnapshot;
   openWorkspace?: boolean;
   load?: ControlPlaneRepository["load"];
@@ -210,6 +248,9 @@ async function renderConsole({
   listApplications?: ControlPlaneRepository["listApplications"];
   bindServiceRole?: ControlPlaneRepository["bindServiceRole"];
   unbindServiceRole?: ControlPlaneRepository["unbindServiceRole"];
+  listServiceDefinitions?: ControlPlaneRepository["listServiceDefinitions"];
+  getServiceActivation?: ControlPlaneRepository["getServiceActivation"];
+  activateService?: ControlPlaneRepository["activateService"];
   logout?: IamRepository["logout"];
   accountRepository?: AccountRepository;
   iamRepository?: IamRepository;
@@ -235,7 +276,10 @@ async function renderConsole({
     listApplications,
     inspectServiceAuthorization,
     bindServiceRole,
-    unbindServiceRole
+    unbindServiceRole,
+    listServiceDefinitions,
+    getServiceActivation,
+    activateService
   };
   const iam: IamRepository = iamRepository ?? {
     async login() {
@@ -261,7 +305,7 @@ async function renderConsole({
   function RoutedPage() {
     const [activeRepository, setActiveRepository] = useState(repository);
     replaceRepository = setActiveRepository;
-    const [href, setHref] = useState(consoleRouteHref({ section, view: initialView }));
+    const [href, setHref] = useState(consoleRouteHref({ section, view: initialView, product }));
     if (heldRoute) navigation.push.mockImplementation((target: string) => {
       const url = new URL(target, "https://matrix.invalid");
       navigation.query = url.search.slice(1);
@@ -277,7 +321,7 @@ async function renderConsole({
   );
   await user.type(screen.getByLabelText("密码", { exact: true }), "renderer-test-password");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
-  if (["overview", "catalog", "quotas", "installations", "regions"].includes(section)) {
+  if (!product && ["overview", "catalog", "quotas", "installations", "regions"].includes(section)) {
     await waitFor(() => expect(load).toHaveBeenCalled());
   }
   if (openWorkspace) await user.click(await screen.findByRole("button", { name: section === "quotas" ? "激活配额" : section === "installations" ? "安装服务" : "查看平台状态" }));
@@ -407,7 +451,11 @@ describe("ConsoleShellRenderer", () => {
     await renderConsole({ section: "catalog", experience: previewExperienceSnapshot });
 
     expect(await screen.findByText(/当前已加载 1 项隔离 MOCK 本地 fixture/)).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "PostgreSQL 18" })).toBeTruthy();
+    const heading = screen.getByRole("heading", { name: "PostgreSQL 18" });
+    const productCard = heading.closest("article");
+    expect(productCard?.querySelector("header")).toBeTruthy();
+    expect(productCard?.querySelector("footer")).toBeTruthy();
+    expect(within(productCard as HTMLElement).getByRole("link", { name: /配置配额/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /批量授权/ })).toBeNull();
   });
 
@@ -744,7 +792,7 @@ describe("ConsoleShellRenderer", () => {
     const firstRequestId = terminateInstallation.mock.calls[0]![2];
     await user.click(screen.getByRole("button", { name: "返回实例并保留原请求" }));
     expect(await screen.findByRole("button", { name: "继续处理未确认终止" })).toBeTruthy();
-    expect(screen.getByText(new RegExp(firstRequestId))).toBeTruthy();
+    expect(screen.getByText(firstRequestId)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "继续处理未确认终止" }));
     await user.type(screen.getByRole("textbox", { name: "输入实例 ID 以确认" }), installation.id);
@@ -967,7 +1015,7 @@ describe("ConsoleShellRenderer", () => {
     const firstCommand = bindServiceRole.mock.calls[0]![2];
     await user.click(screen.getByRole("button", { name: "返回实例并保留原请求" }));
     expect(await screen.findByRole("button", { name: "继续处理未确认请求" })).toBeTruthy();
-    expect(screen.getByText(new RegExp(firstCommand.requestId))).toBeTruthy();
+    expect(screen.getByText(firstCommand.requestId)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "继续处理未确认请求" }));
     await user.click(screen.getByRole("button", { name: "使用同一请求原样重试" }));
@@ -1031,11 +1079,15 @@ describe("ConsoleShellRenderer", () => {
   it.each([
     { href: "/console/regions/", service: /区域与节点/, title: "区域与节点", reads: 1, marker: { role: "text", name: "本机主区域" } },
     { href: "/console/applications/", service: /应用托管/, title: "应用服务", reads: 0, marker: { role: "table", name: "当前身份可见的应用目录" } },
-    { href: "/console/installations/", service: /托管数据服务/, title: "服务实例", reads: 4, marker: { role: "heading", name: "组织服务实例" } },
+    { href: "/console/products/postgresql/", service: /云数据库 PostgreSQL/, title: "产品概览", reads: 1, marker: { role: "heading", name: "云数据库 PostgreSQL" } },
     { href: "/console/logs/", service: /日志服务/, title: "日志概览", reads: 0, marker: { role: "text", name: "Matrix · Log Service" } },
     { href: "/console/devops/", service: /研发效能 DevOps/, title: "交付总览", reads: 0, marker: { role: "heading", name: "最近流水线" } },
     { href: "/console/observability/", service: /云监控/, title: "监控总览", reads: 0, marker: { role: "heading", name: "服务健康" } }
   ] as const)("opens the $title service frame immediately while its route bundle is pending", async ({ href, marker, reads, service, title: expectedTitle }) => {
+    if (href.includes("/products/")) writePreviewServiceActivation(localStorage, {
+      accountId: previewExperienceSnapshot.organization.id, serviceKey: "postgresql", termsVersion: "mock-v1",
+      acceptedBy: "principal-test", acceptedAt: "2026-10-12T01:00:00.000Z", enabledAt: "2026-10-12T01:00:00.000Z"
+    });
     let release!: () => void;
     const heldRoute = { href, ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };
     const { user, repository } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot, heldRoute });
@@ -1053,7 +1105,8 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("navigation", { name: "控制台导航" })).toBe(menu);
     expect(screen.queryByRole("link", { name: "订单主库" })).toBeNull();
     if (reads === 0) expect(oldResource.isConnected).toBe(false);
-    else expect(oldResource.closest("[hidden]")).toBeTruthy();
+    else expect(!oldResource.isConnected || oldResource.closest("[hidden]")).toBeTruthy();
+    if (href.includes("/products/")) await screen.findByText(/对应后端能力仍是待独立验收的候选/);
     const findDestination = () => marker.role === "table"
       ? screen.findByRole("table", { name: marker.name })
       : marker.role === "heading"
@@ -1241,11 +1294,15 @@ describe("ConsoleShellRenderer", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  it("keeps the database page structure stable while destination data is still pending", async () => {
+  it("keeps the product homepage structure stable while destination data is still pending", async () => {
+    writePreviewServiceActivation(localStorage, {
+      accountId: previewExperienceSnapshot.organization.id, serviceKey: "postgresql", termsVersion: "mock-v1",
+      acceptedBy: "principal-admin", acceptedAt: "2026-10-12T01:00:00.000Z", enabledAt: "2026-10-12T01:00:00.000Z"
+    });
     let resolveSnapshot!: (value: ControlPlaneSnapshot) => void;
     let releaseRoute!: () => void;
     const load = vi.fn(() => new Promise<ControlPlaneSnapshot>((resolve) => { resolveSnapshot = resolve; }));
-    const heldRoute = { href: "/console/installations/", ready: false, promise: new Promise<void>((resolve) => { releaseRoute = resolve; }) };
+    const heldRoute = { href: "/console/products/postgresql/", ready: false, promise: new Promise<void>((resolve) => { releaseRoute = resolve; }) };
     const { user } = await renderConsole({
       accountRepository: previewAccountRepository,
       experience: previewExperienceSnapshot,
@@ -1259,19 +1316,176 @@ describe("ConsoleShellRenderer", () => {
 
     await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
     expect(load).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /托管数据服务/ }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /云数据库 PostgreSQL/ }));
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
 
-    expect(screen.getByRole("heading", { level: 1, name: "服务实例" })).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 2, name: "组织服务实例" })).toBeTruthy();
-    expect(users.closest("[hidden]")).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "产品概览" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "云数据库 PostgreSQL" })).toBeTruthy();
+    expect(!users.isConnected || users.closest("[hidden]")).toBeTruthy();
     expect(load).toHaveBeenCalledTimes(1);
 
     await act(async () => resolveSnapshot(snapshot));
     await act(async () => { heldRoute.ready = true; releaseRoute(); });
-    expect(await screen.findByRole("button", { name: "安装服务" })).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 1, name: "服务实例" })).toBeTruthy();
-    expect(load).toHaveBeenCalledTimes(4);
+    expect(await screen.findByRole("heading", { level: 2, name: "云数据库 PostgreSQL" })).toBeTruthy();
+    expect(await screen.findByRole("link", { name: /进入实例/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "产品概览" })).toBeTruthy();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["postgresql", "mysql", "elasticsearch", "rabbitmq"] as const)("requires explicit account-level MOCK enablement for the %s workspace", async (product) => {
+    const { user, repository } = await renderConsole({ section: "catalog", product, experience: previewExperienceSnapshot });
+    const enable = await screen.findByRole("button", { name: "同意并开通 · MOCK" });
+    expect((enable as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("link", { name: /进入实例/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "激活配额" })).toBeNull();
+    expect(repository.load).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", { name: /我已阅读开通说明/ }));
+    await user.click(enable);
+    expect(await screen.findByRole("link", { name: /进入实例/ })).toBeTruthy();
+    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.activateQuota).not.toHaveBeenCalled();
+    expect(repository.createInstallation).not.toHaveBeenCalled();
+    expect(repository.bindServiceRole).toBeUndefined();
+    expect(localStorage.getItem(previewServiceActivationStorageKey)).toContain('"serviceKey":"' + product + '"');
+  });
+
+  it("projects the first-use gate immediately during held service navigation without loading resources", async () => {
+    let releaseRoute!: () => void;
+    const heldRoute = { href: "/console/products/postgresql/", ready: false, promise: new Promise<void>((resolve) => { releaseRoute = resolve; }) };
+    const { user, repository } = await renderConsole({
+      accountRepository: previewAccountRepository, experience: previewExperienceSnapshot, heldRoute,
+      iamRepository: previewIamRepository, section: "access", view: "users"
+    });
+    const users = await screen.findByRole("table", { name: "租户用户列表" });
+    await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /云数据库 PostgreSQL/ }));
+    expect(screen.getByRole("heading", { level: 1, name: "产品概览" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
+    expect(!users.isConnected || users.closest("[hidden]")).toBeTruthy();
+    expect(repository.load).not.toHaveBeenCalled();
+    await act(async () => { heldRoute.ready = true; releaseRoute(); });
+    expect(screen.getByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
+    expect(repository.load).not.toHaveBeenCalled();
+  });
+
+  it("keeps a late resource failure out of the reset first-use flow", async () => {
+    let rejectLoad!: (reason: Error) => void;
+    const load = vi.fn<ControlPlaneRepository["load"]>(() => new Promise((_resolve, reject) => { rejectLoad = reject; }));
+    const { user } = await renderConsole({ section: "catalog", product: "postgresql", experience: previewExperienceSnapshot, load });
+    expect(load).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", { name: /我已阅读开通说明/ }));
+    await user.click(screen.getByRole("button", { name: "同意并开通 · MOCK" }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByText("开通场景与重置"));
+    await user.click(screen.getByRole("button", { name: "重置此服务开通" }));
+    await act(async () => { rejectLoad(new HttpProblem(503, "RESOURCE_UNAVAILABLE")); });
+    expect(screen.getByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("link", { name: /进入实例/ })).toBeNull();
+    expect((screen.getByRole("checkbox", { name: /我已阅读开通说明/ }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("shows resource failures only inside the opened product without reversing activation", async () => {
+    const load = vi.fn<ControlPlaneRepository["load"]>().mockRejectedValue(new HttpProblem(503, "RESOURCE_UNAVAILABLE"));
+    const { user } = await renderConsole({ section: "catalog", product: "postgresql", experience: previewExperienceSnapshot, load });
+    expect(load).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: /我已阅读开通说明/ }));
+    await user.click(screen.getByRole("button", { name: "同意并开通 · MOCK" }));
+    expect(await screen.findByRole("heading", { name: "控制面未能加载" })).toBeTruthy();
+    expect(localStorage.getItem(previewServiceActivationStorageKey)).toContain('"serviceKey":"postgresql"');
+    expect(screen.queryByRole("button", { name: "重试开通 · MOCK" })).toBeNull();
+    await user.click(screen.getByText("开通场景与重置"));
+    await user.click(screen.getByRole("button", { name: "重置此服务开通" }));
+    expect(screen.getByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("guards product subroutes and keeps enablement separate from IAM grants and resource authority", async () => {
+    const { user, repository } = await renderConsole({
+      section: "installations", product: "postgresql", experience: previewExperienceSnapshot,
+      accountRepository: previewAccountRepository, iamRepository: previewIamRepository
+    });
+    const before = await previewAccountRepository.workspace!.read(previewCredential);
+    expect(await screen.findByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "组织服务实例" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
+    expect(repository.load).not.toHaveBeenCalled();
+    await user.click(screen.getByText("开通场景与重置"));
+    await user.click(screen.getByRole("combobox", { name: "身份与权限场景" }));
+    await user.click(screen.getByRole("option", { name: "子用户 · 仅获开通授权" }));
+    await user.click(screen.getByRole("checkbox", { name: /我已阅读开通说明/ }));
+    await user.click(screen.getByRole("button", { name: "同意并开通 · MOCK" }));
+    expect(await screen.findByText(/尚未获得资源操作权限/)).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "组织服务实例" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
+    expect(await previewAccountRepository.workspace!.read(previewCredential)).toEqual(before);
+    expect(repository.load).not.toHaveBeenCalled();
+    expect(repository.activateQuota).not.toHaveBeenCalled();
+    expect(repository.createInstallation).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("combobox", { name: "身份与权限场景" }));
+    await user.click(screen.getByRole("option", { name: "子用户 · 仅获资源权限" }));
+    expect(await screen.findByRole("heading", { name: "组织服务实例" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "安装服务" })).toBeTruthy();
+    expect(repository.load).toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "重置此服务开通" }));
+    expect(await screen.findByText(/当前身份没有开通资格/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
+  });
+
+  it("uses the LIVE directory capability for direct permission-only activation and ignores browser MOCK consent", async () => {
+    writePreviewServiceActivation(localStorage, {
+      accountId: "organization-test", serviceKey: "postgresql", termsVersion: "mock-v1", acceptedBy: "principal-test",
+      acceptedAt: "2026-10-12T01:00:00.000Z", enabledAt: "2026-10-12T01:00:00.000Z"
+    });
+    const listServiceDefinitions = vi.fn().mockResolvedValue(liveServiceDirectory(true));
+    const getServiceActivation = vi.fn().mockRejectedValue(new HttpProblem(404, "NOT_FOUND"));
+    const activateService = vi.fn().mockResolvedValue(liveServiceActivation);
+    const { user, repository } = await renderConsole({
+      section: "catalog", product: "postgresql", listServiceDefinitions, getServiceActivation, activateService
+    });
+
+    expect(await screen.findByRole("button", { name: "开通服务" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "同意并开通 · MOCK" })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.getByText(/不会创建服务角色/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "激活配额" })).toBeNull();
+    expect(screen.queryByText("开通场景与重置")).toBeNull();
+    expect(repository.activateQuota).not.toHaveBeenCalled();
+    expect(repository.load).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "开通服务" }));
+    expect(await screen.findByRole("link", { name: /进入实例/ })).toBeTruthy();
+    expect(activateService).toHaveBeenCalledWith(
+      "renderer-test-memory-only-session",
+      liveServiceActivation.service,
+      expect.stringMatching(/^ui-service-activation-/)
+    );
+    expect(repository.load).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps activation denied when the exact LIVE capability is unavailable", async () => {
+    const { repository } = await renderConsole({
+      section: "catalog",
+      product: "postgresql",
+      listServiceDefinitions: vi.fn().mockResolvedValue(liveServiceDirectory(false)),
+      getServiceActivation: vi.fn().mockRejectedValue(new HttpProblem(404, "NOT_FOUND"))
+    });
+    expect(await screen.findByText(/当前身份没有开通资格/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "开通服务" })).toBeNull();
+    expect(repository.load).not.toHaveBeenCalled();
+  });
+
+  it("does not block an independently authorized resource page when activation reads are forbidden", async () => {
+    const { repository } = await renderConsole({
+      section: "catalog",
+      product: "postgresql",
+      listServiceDefinitions: vi.fn().mockResolvedValue(liveServiceDirectory(false)),
+      getServiceActivation: vi.fn().mockRejectedValue(new HttpProblem(403, "PERMISSION_DENIED"))
+    });
+    expect(await screen.findByRole("link", { name: /进入实例/ })).toBeTruthy();
+    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "开通服务" })).toBeNull();
   });
 
   it("projects a pending IAM query into the correct content-area workflow", async () => {
@@ -1902,7 +2116,7 @@ describe("ConsoleShellRenderer", () => {
     fireEvent.click(trigger);
 
     const directory = screen.getByRole("dialog", { name: "云产品入口" });
-    expect(within(directory).getByRole("status").textContent).toBe("8 项服务");
+    expect(within(directory).getByRole("status").textContent).toBe("11 项服务");
     expect(screen.queryByRole("button", { name: "关闭全局浮层", hidden: true })).toBeNull();
     expect(workspace.closest("[inert]")).not.toBeNull();
     expect(screen.getByRole("button", { name: /打开账号菜单/ }).closest("[inert]")).not.toBeNull();

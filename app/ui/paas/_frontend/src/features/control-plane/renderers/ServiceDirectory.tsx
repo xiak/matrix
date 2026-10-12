@@ -3,13 +3,22 @@
 import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowUpRight, Clock3, Database, Grid2X2, HardDrive, Layers3, MapPin, PackageSearch, ShieldCheck, Star, Workflow, X } from "lucide-react";
+import { ArrowUpRight, Boxes, ChartNoAxesCombined, Clock3, Database, Grid2X2, Layers3, MapPin, PackageSearch, Settings2, ShieldCheck, Star, Workflow, X } from "lucide-react";
 import { Button, EmptyState, SearchInput } from "@ui/xiak";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import { matchesService, serviceCategories, serviceDirectory, type ServiceCategory, type ServiceDirectoryItem } from "../scenes/serviceDirectory";
 import styles from "./ServiceDirectory.module.css";
 
-const categoryIcons = { infrastructure: MapPin, applications: Layers3, databases: Database, delivery: Workflow, storage: HardDrive, management: ShieldCheck };
+const categoryIcons = {
+  infrastructure: MapPin,
+  applications: Layers3,
+  databases: Database,
+  analytics: ChartNoAxesCombined,
+  middleware: Boxes,
+  delivery: Workflow,
+  security: ShieldCheck,
+  management: Settings2
+};
 type DirectoryView = "all" | "favorites" | "recent" | ServiceCategory;
 
 export function useServiceDirectory(): ServiceDirectoryItem[] {

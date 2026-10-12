@@ -61,9 +61,11 @@
       "infrastructure": "计算与基础设施",
       "applications": "容器与应用",
       "databases": "数据库",
-      "storage": "存储",
+      "analytics": "大数据与分析",
+      "middleware": "中间件",
       "delivery": "开发与运维",
-      "management": "安全与管理"
+      "security": "安全与身份",
+      "management": "管理与治理"
     },
     "services": {
       "regions": {
@@ -77,9 +79,24 @@
         "keywords": "app application hosting paas 应用 托管 容器"
       },
       "postgresql": {
-        "name": "托管数据服务",
-        "description": "数据库、搜索与消息队列实例",
-        "keywords": "pg postgres postgresql mysql elasticsearch rabbitmq database search mq 数据库 搜索 消息队列 托管数据"
+        "name": "云数据库 PostgreSQL",
+        "description": "托管 PostgreSQL 实例、配额与连接端点",
+        "keywords": "pg postgres postgresql database sql relation 数据库 关系型数据库"
+      },
+      "mysql": {
+        "name": "云数据库 MySQL",
+        "description": "托管 MySQL 8.4 LTS 实例与生命周期",
+        "keywords": "mysql database sql relation lts 数据库 关系型数据库"
+      },
+      "elasticsearch": {
+        "name": "Elasticsearch Service",
+        "description": "托管搜索、索引与分析服务",
+        "keywords": "elasticsearch elastic es search analytics index 搜索 分析 索引 大数据"
+      },
+      "rabbitmq": {
+        "name": "RabbitMQ 消息队列",
+        "description": "托管消息代理、队列与连接端点",
+        "keywords": "rabbitmq rabbit mq message queue broker 中间件 消息队列"
       },
       "monitoring": {
         "name": "云监控",
@@ -111,11 +128,13 @@
       "foundation": "云基础设施",
       "hosting": "应用平台",
       "relational": "关系型数据库",
-      "logData": "存储数据服务",
+      "searchAnalytics": "搜索与分析",
+      "messageQueue": "消息队列",
+      "logData": "日志与检索",
       "delivery": "持续交付",
       "monitoring": "监控与可观测",
-    "identity": "身份与访问",
-    "governance": "安全审计与治理"
+      "identity": "身份与访问",
+      "governance": "审计与治理"
     }
   },
   "RegionScope": {
@@ -921,6 +940,18 @@
       "installations": {
         "label": "服务实例",
         "hint": "连接端点与运行状态"
+      },
+      "product-overview": {
+        "label": "产品概览",
+        "hint": "服务能力与开始使用"
+      },
+      "product-instances": {
+        "label": "实例",
+        "hint": "实例状态与连接端点"
+      },
+      "product-quotas": {
+        "label": "配额",
+        "hint": "可用额度与使用量"
       },
       "catalog": {
         "label": "产品规格",
@@ -3371,7 +3402,84 @@
     "unknownTime": "未知时间",
     "resourcesUnavailable": "资源规格不可用"
   },
+  "ServiceActivation": {
+    "eyebrow": "开通服务",
+    "account": "开通范围 · 当前租户",
+    "scopeTitle": "为租户开通",
+    "scopeHint": "开通状态在同一租户内共享，无需每位成员重复开通。",
+    "permissionTitle": "独立分配权限",
+    "permissionHint": "开通不会给操作者或其他成员新增资源权限，访问仍取决于各自的 IAM 授权。",
+    "nextTitle": "按需使用资源",
+    "nextHint": "开通后再配置配额、创建实例。服务角色授权在具体资源中单独审阅。",
+    "termsVersion": "开通说明版本：{version}",
+    "mockConsent": "我已阅读开通说明，同意为当前租户演示开通此服务。",
+    "permissionOnlyTitle": "直接开通",
+    "permissionOnlyHint": "此服务仅检查当前身份的开通权限；不会创建服务角色，也不会给操作者或其他成员新增资源权限。",
+    "enable": "开通服务",
+    "enableWithConsent": "同意并开通",
+    "retry": "重试开通",
+    "enableMock": "同意并开通 · MOCK",
+    "retryMock": "重试开通 · MOCK",
+    "enabling": "正在开通…",
+    "checkingHint": "正在读取当前租户的开通状态。",
+    "enablingHint": "正在处理开通请求，请稍候。",
+    "noEnablePermission": "服务尚未开通。当前身份没有开通资格，请联系租户主账号或获得明确开通授权的管理员。",
+    "noUsePermission": "服务已为当前租户开通，但当前身份尚未获得资源操作权限。请联系管理员分配所需 IAM 策略。",
+    "enabledPermissionHint": "开通资格与资源权限分别管理。",
+    "contactHint": "只有获得这个服务开通资格的身份才能继续。",
+    "failedHint": "服务开通未完成，请核对当前开通状态后重试。",
+    "previewFailedHint": "本次演示开通未完成。检查场景设置或浏览器存储后，可以重新尝试。",
+    "previewUnavailableHint": "无法读取当前浏览器的演示开通状态，请确认浏览器允许本地存储后重试。",
+    "resetFailedHint": "无法重置此服务的演示记录，原开通状态仍保留。请确认浏览器允许本地存储后重试。",
+    "unavailableHint": "暂时无法读取此服务的开通状态。",
+    "liveUnavailableHint": "暂时无法读取可信服务目录或当前租户的开通状态。页面不会用 MOCK 记录补全真实状态。",
+    "unavailableFooter": "开通状态确认后才能继续。",
+    "openAccess": "查看访问管理",
+    "previewControls": "开通场景与重置",
+    "scenario": "身份与权限场景",
+    "result": "开通结果",
+    "successResult": "成功",
+    "failureResult": "失败与重试",
+    "reset": "重置此服务开通",
+    "previewHint": "仅演示开通资格与资源权限；不切换登录身份。记录保留在当前浏览器，按租户与服务隔离，不创建真实资源或修改 IAM 授权。",
+    "scenarios": {
+      "owner": "主账号 · 资源所有者",
+      "activation-admin": "子用户 · 仅获开通授权",
+      "product-user": "子用户 · 仅获资源权限",
+      "no-access": "子用户 · 无授权"
+    },
+    "states": {
+      "checking": "读取中",
+      "not-enabled": "未开通",
+      "enabling": "开通中",
+      "failed": "开通失败",
+      "enabled": "已开通",
+      "unobservable": "状态不可见",
+      "unavailable": "暂不可用"
+    }
+  },
   "ManagedService": {
+    "productMockBoundary": "这是隔离的 UX MOCK 产品工作区，不会创建真实资源。对应后端能力仍是待独立验收的候选，不能据此判断已发布、已具备高可用或可用于生产。",
+    "productLiveBoundary": "产品可用性、规格、配额与实例均来自托管服务接口，并由服务端结合当前身份执行授权；页面不会用 MOCK 数据补全不可见资源。",
+    "managedCloudService": "托管云服务",
+    "productData": "产品资源状态",
+    "productDataLoadingHint": "正在读取这个产品的可用规格、配额和实例状态。",
+    "previewCandidate": "MOCK 可体验",
+    "offeringId": "产品规格 ID",
+    "activatedQuota": "已激活配额",
+    "availableQuota": "可用配额",
+    "instances": "实例",
+    "readyInstances": "就绪实例",
+    "productOwnershipHint": "产品团队定义能力，平台受控发布，租户管理员使用目录和 IAM 授权。",
+    "openInstances": "进入实例",
+    "gettingStarted": "开始使用",
+    "gettingStartedHint": "沿用公有云产品控制台的信息流：先准备额度，再创建、连接并授权资源。",
+    "steps": {
+      "quota": { "title": "配置配额", "hint": "选择平台允许的规格与实例数量。" },
+      "instance": { "title": "创建实例", "hint": "选择区域并提交幂等安装请求。" },
+      "connect": { "title": "连接与验证", "hint": "实例就绪后读取平台返回的端点。" },
+      "authorize": { "title": "权限与审计", "hint": "用 IAM 策略控制访问并保留操作记录。" }
+    },
     "instancesEmpty": "还没有服务实例",
     "instancesEmptyHint": "激活产品配额后，可以从服务实例页发起第一个托管服务安装。",
     "instancesTable": "服务实例列表",
@@ -3554,6 +3662,29 @@
     "reviewUnbind": "解除实例授权",
     "unbindPreviewBoundary": "这是产品资源侧的精确解绑体验预览。当前 MOCK 只演练影响审阅和返回状态，不调用后端；账号关系与其他资源绑定不会被删除。",
     "authorizationPreviewBoundary": "这是产品侧发起授权的信息流预览。实例、账号与权限范围来自当前 MOCK 视图，模板与服务主体仍是示例，最终授权写入尚未接入；不会读取或写入 IAM，也不会产生授权成功状态。",
+    "commandKinds": {
+      "ACTIVATE_QUOTA": "激活配额",
+      "CREATE_INSTALLATION": "创建服务实例",
+      "TERMINATE_INSTALLATION": "终止服务实例",
+      "BIND_SERVICE_ROLE": "建立实例授权",
+      "UNBIND_SERVICE_ROLE": "解除实例授权"
+    },
+    "commandSlow": "服务仍在处理原请求。页面保持可用，请不要重复提交或创建新请求。",
+    "commandUnknown": "连接在结果返回前中断，服务端结果尚未确认。已冻结原始输入与幂等键。",
+    "commandRestoredUnknown": "已从当前浏览器恢复一个结果未确认的原请求。只能原样重试，不能改写后重新提交。",
+    "commandCompleted": "原请求已由服务确认接受；页面会继续读取资源的异步生命周期。",
+    "commandRequest": "请求",
+    "retrySameCommand": "原样重试同一请求",
+    "dismissCommandNotice": "关闭提示",
+    "commandErrors": {
+      "expired": "当前会话已失效，原请求没有自动换用新会话提交。请重新登录后重新读取资源状态。",
+      "forbidden": "当前身份无权执行这个精确操作。原请求已停止，不会自动扩大权限范围。",
+      "notFound": "目标资源已不存在，或当前身份不能确认其存在。请重新读取资源。",
+      "conflict": "资源状态已变化，冻结的原请求不能应用到当前状态。请重新读取后表达新意图。",
+      "invalid": "冻结的原请求未通过服务端校验，输入不会被静默替换。",
+      "storageUnavailable": "浏览器无法安全保存原请求，因此尚未向服务端提交。请恢复站点存储后重试。",
+      "unknown": "服务端结果尚未确认。不要创建新意图；只能使用保留的原请求与幂等键重试。"
+    },
     "regionsEmpty": "尚未配置区域",
     "regionsEmptyHint": "请先由平台安装器登记本机区域绑定。",
     "localProfile": "本机受管区域",

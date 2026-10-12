@@ -1,4 +1,4 @@
-import { serviceForSection, serviceNavigation } from "./serviceDirectory";
+import { serviceForSelection, serviceNavigation } from "./serviceDirectory";
 import { accountAccessViews, type AccountAccessView } from "@/features/auth/domain/accounts";
 import type {
   ExperienceAlert,
@@ -10,6 +10,7 @@ import type {
   ControlPlaneSnapshot,
   ServiceInstallation
 } from "../domain/resources";
+import { managedServiceProduct, type ManagedServiceProductId } from "../domain/managedServiceProduct";
 import { consoleRouteHref, type ConsoleSection, type ServiceView, type ControlPlaneRouteSelection } from "../domain/selection";
 import type {
   AlertScene,
@@ -32,7 +33,7 @@ import type {
 function offeringScenes(snapshot: ControlPlaneSnapshot): OfferingScene[] {
   return snapshot.offerings.map((offering) => ({
     id: offering.id,
-    kind: offering.kind,
+    serviceId: offering.service.id,
     name: offering.displayName,
     description: offering.description,
     engine: offering.engineFamily,
@@ -168,17 +169,24 @@ function isPaaSSection(section: ConsoleSection): boolean {
 }
 
 function navigation(
-  section: ConsoleSection,
-  experience?: ExperienceSnapshot,
-  view?: ServiceView
+  selection: ControlPlaneRouteSelection,
+  experience?: ExperienceSnapshot
 ): ConsoleNavigationItemScene[] {
-  if (!experience && section !== "access" && section !== "audit") {
+  const { section, view, product } = selection;
+  if (!experience && !product && section !== "access" && section !== "audit") {
     return [
       { id: "catalog", messageKey: "catalog", href: "/console/catalog/", icon: "catalog", selected: section === "catalog" },
       { id: "quotas", messageKey: "quotas", href: "/console/quotas/", icon: "quota", selected: section === "quotas" },
       { id: "installations", messageKey: "installations", href: "/console/installations/", icon: "installation", selected: section === "installations" },
       { id: "regions", messageKey: "regions", href: "/console/regions/", icon: "region", selected: section === "regions" },
       { id: "access", messageKey: "access", href: "/console/access/", icon: "access", selected: false }
+    ];
+  }
+  if (experience && !product && ["catalog", "quotas", "installations"].includes(section)) {
+    return [
+      { id: "installations", messageKey: "installations", href: "/console/installations/", icon: "installation", selected: section === "installations" },
+      { id: "catalog", messageKey: "catalog", href: "/console/catalog/", icon: "catalog", selected: section === "catalog" },
+      { id: "quotas", messageKey: "quotas", href: "/console/quotas/", icon: "quota", selected: section === "quotas" }
     ];
   }
   if (experience && isHomeSection(section)) {
@@ -189,7 +197,7 @@ function navigation(
       { id: "messages", messageKey: "messages", href: "/console/messages/", icon: "messages", selected: section === "messages" }
     ];
   }
-  const service = serviceForSection(section);
+  const service = serviceForSelection(selection);
   const selectedView = view === "create-user" ? "users"
     : view === "create-policy" ? "policies"
       : view === "create-group" ? "groups"
@@ -199,7 +207,9 @@ function navigation(
     id: page.id, messageKey: page.id,
     group: "group" in page ? page.group : undefined,
     href: consoleRouteHref(page), icon: page.icon,
-    selected: page.section === section && ("view" in page ? page.view : undefined) === selectedView
+    selected: page.section === section
+      && ("view" in page ? page.view : undefined) === selectedView
+      && ("product" in page ? page.product : undefined) === product
   })) : [];
 
 }
@@ -216,7 +226,9 @@ function productRail(section: ConsoleSection, experience?: ExperienceSnapshot): 
   return []; // Preview shortcuts are the user\'s favorites, not a fixed product list.
 }
 
-function productContext(section: ConsoleSection, experience?: ExperienceSnapshot): Pick<ConsoleScene, "productId" | "productIcon"> {
+function productContext(selection: ControlPlaneRouteSelection, experience?: ExperienceSnapshot): Pick<ConsoleScene, "productId" | "productIcon"> {
+  const { section, product } = selection;
+  if (product) return { productId: product, productIcon: "database" };
   if (!experience) {
     return section === "access"
       ? { productId: "iam", productIcon: "access" }
@@ -246,10 +258,11 @@ function globalSearch(experience?: ExperienceSnapshot): ConsoleScene["search"] {
   })) ?? [];
 }
 
-function baseScene(section: ConsoleSection, experience?: ExperienceSnapshot): Omit<ConsoleScene, "content" | "workspace" | "navigation"> {
+function baseScene(selection: ControlPlaneRouteSelection, experience?: ExperienceSnapshot): Omit<ConsoleScene, "content" | "workspace" | "navigation"> {
+  const { section } = selection;
   return {
     section,
-    ...productContext(section, experience),
+    ...productContext(selection, experience),
     preview: Boolean(experience),
     scope: experience ? {
       organization: experience.organization,
@@ -264,10 +277,10 @@ function baseScene(section: ConsoleSection, experience?: ExperienceSnapshot): Om
 
 // Route-known presentation is available before resource reads; it is not an
 // empty business snapshot and cannot enable a mutation workspace.
-export function buildConsoleFrame({ section, view }: ControlPlaneRouteSelection, experience?: ExperienceSnapshot): ConsoleFrameScene {
+export function buildConsoleFrame(selection: ControlPlaneRouteSelection, experience?: ExperienceSnapshot): ConsoleFrameScene {
   return {
-    ...baseScene(section, experience),
-    navigation: navigation(section, experience, view)
+    ...baseScene(selection, experience),
+    navigation: navigation(selection, experience)
   };
 }
 
@@ -290,9 +303,43 @@ export function buildAuditConsoleScene(experience?: ExperienceSnapshot): Console
   };
 }
 
-function legacyContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot): ConsoleContentScene {
+function managedProductContent(product: ManagedServiceProductId, snapshot: ControlPlaneSnapshot): ConsoleContentScene {
+  const offering = offeringScenes(snapshot).find((candidate) => candidate.id === managedServiceProduct(product).offeringId) ?? null;
+  const purchasedQuota = snapshot.entitlements.reduce((total, item) => total + item.purchasedCount, 0);
+  const availableQuota = snapshot.entitlements.reduce(
+    (total, item) => total + Math.max(0, item.purchasedCount - item.reservedCount - item.consumedCount),
+    0
+  );
+  return {
+    kind: "managed-product",
+    productId: product,
+    offering,
+    purchasedQuota,
+    availableQuota,
+    instanceCount: snapshot.installations.length,
+    readyInstanceCount: snapshot.installations.filter((item) => item.phase === "READY").length
+  };
+}
+
+function managedProductSnapshot(product: ManagedServiceProductId, snapshot: ControlPlaneSnapshot): ControlPlaneSnapshot {
+  const offerings = snapshot.offerings.filter((offering) => offering.service.id === product);
+  const offeringIds = new Set(offerings.map((offering) => offering.id));
+  const publishedOfferingId = managedServiceProduct(product).offeringId;
+  // Catalog metadata is optional for an independently authorized installation
+  // read. The route's published offering identity still scopes those resources.
+  if (!snapshot.offerings.some((offering) => offering.id === publishedOfferingId)) offeringIds.add(publishedOfferingId);
+  return {
+    offerings,
+    regions: snapshot.regions,
+    entitlements: snapshot.entitlements.filter((entitlement) => offeringIds.has(entitlement.offeringId)),
+    installations: snapshot.installations.filter((installation) => offeringIds.has(installation.offeringId))
+  };
+}
+
+function legacyContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot, product?: ManagedServiceProductId): ConsoleContentScene {
   const offerings = offeringScenes(snapshot);
   const installations = installationScenes(snapshot);
+  if (section === "catalog" && product) return managedProductContent(product, snapshot);
   if (section === "catalog") return { kind: "catalog", offerings };
   if (section === "quotas") return { kind: "quotas", entitlements: entitlementScenes(snapshot) };
   if (section === "installations") return { kind: "installations", installations };
@@ -396,18 +443,20 @@ export function buildConsoleScene(
   section: ConsoleSection,
   snapshot: ControlPlaneSnapshot,
   experience?: ExperienceSnapshot,
-  view?: ServiceView
+  view?: ServiceView,
+  product?: ManagedServiceProductId
 ): ConsoleScene {
   if (section === "access") return buildAccessConsoleScene(experience, view);
   if (section === "audit") return buildAuditConsoleScene(experience);
-  const installations = installationScenes(snapshot);
-  const activeOperations = snapshot.installations.filter(
+  const selectedSnapshot = product ? managedProductSnapshot(product, snapshot) : snapshot;
+  const installations = installationScenes(selectedSnapshot);
+  const activeOperations = selectedSnapshot.installations.filter(
     (item) => item.phase === "PENDING" || item.phase === "PROVISIONING"
   ).length;
-  const entitlementOptions = entitlementScenes(snapshot)
+  const entitlementOptions = entitlementScenes(selectedSnapshot)
     .filter((item) => item.available > 0)
     .map((item) => {
-      const source = snapshot.entitlements.find((value) => value.id === item.id);
+      const source = selectedSnapshot.entitlements.find((value) => value.id === item.id);
       return {
         entitlementId: item.id,
         offeringId: source?.offeringId ?? "",
@@ -415,16 +464,16 @@ export function buildConsoleScene(
         available: item.available
       };
     });
-  const content = (experience ? experienceContent(section, snapshot, experience) : null) ?? legacyContent(section, snapshot);
+  const content = (experience ? experienceContent(section, selectedSnapshot, experience) : null) ?? legacyContent(section, selectedSnapshot, product);
   if (content.kind === "devops" || content.kind === "observability" || content.kind === "logs") content.view = view;
 
   return {
-    ...buildConsoleFrame({ section, view }, experience),
+    ...buildConsoleFrame({ section, view, product }, experience),
     content,
     workspace: section === "quotas"
       ? {
           kind: "quota-order",
-          options: snapshot.offerings
+          options: selectedSnapshot.offerings
             .filter((item) => item.state === "AVAILABLE")
             .map((item) => ({
               offeringId: item.id,
@@ -440,14 +489,14 @@ export function buildConsoleScene(
         ? {
             kind: "installation-order",
             entitlementOptions,
-            regionOptions: snapshot.regions
+            regionOptions: selectedSnapshot.regions
               .filter((item) => item.state === "READY")
               .map((item) => ({ id: item.id, label: item.displayName }))
           }
         : !experience && section === "overview"
           ? {
               kind: "platform-status",
-              readyRegions: snapshot.regions.filter((item) => item.state === "READY").length,
+              readyRegions: selectedSnapshot.regions.filter((item) => item.state === "READY").length,
               activeOperations,
               serviceCount: installations.length
             }

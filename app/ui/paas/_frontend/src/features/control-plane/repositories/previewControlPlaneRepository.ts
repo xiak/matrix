@@ -12,7 +12,7 @@ let entitlementSequence = 3;
 let snapshot: ControlPlaneSnapshot = {
   offerings: [{
     id: "postgresql-18",
-    kind: "POSTGRESQL",
+    service: { id: "postgresql", revision: 1, contentDigest: `sha256:${"1".repeat(64)}` },
     displayName: "PostgreSQL 18",
     description: "平台托管的高可用关系数据库，制品、凭据与生命周期策略均由服务端管理。",
     engineFamily: "PostgreSQL",
@@ -24,7 +24,7 @@ let snapshot: ControlPlaneSnapshot = {
     ]
   }, {
     id: "mysql-8.4",
-    kind: "MYSQL",
+    service: { id: "mysql", revision: 1, contentDigest: `sha256:${"2".repeat(64)}` },
     displayName: "MySQL 8.4 LTS",
     description: "由 Matrix 在本地区域安装和管理的 MySQL 8.4 LTS 服务。",
     engineFamily: "MySQL",
@@ -36,7 +36,7 @@ let snapshot: ControlPlaneSnapshot = {
     ]
   }, {
     id: "elasticsearch-8.19",
-    kind: "ELASTICSEARCH",
+    service: { id: "elasticsearch", revision: 1, contentDigest: `sha256:${"3".repeat(64)}` },
     displayName: "Elasticsearch 8.19",
     description: "由 Matrix 在本地区域安装和管理的 Elasticsearch 8.19 搜索服务。",
     engineFamily: "Elasticsearch",
@@ -48,7 +48,7 @@ let snapshot: ControlPlaneSnapshot = {
     ]
   }, {
     id: "rabbitmq-4.1",
-    kind: "RABBITMQ",
+    service: { id: "rabbitmq", revision: 1, contentDigest: `sha256:${"4".repeat(64)}` },
     displayName: "RabbitMQ 4.1",
     description: "由 Matrix 在本地区域安装和管理的 RabbitMQ 4.1 消息队列服务。",
     engineFamily: "RabbitMQ",
@@ -140,8 +140,8 @@ function currentTime(): string {
 }
 
 function previewEndpoint(installation: ServiceInstallation): string {
-  const kind = snapshot.offerings.find((offering) => offering.id === installation.offeringId)?.kind;
-  const port = kind === "MYSQL" ? 3306 : kind === "ELASTICSEARCH" ? 9200 : kind === "RABBITMQ" ? 5672 : 5432;
+  const serviceId = snapshot.offerings.find((offering) => offering.id === installation.offeringId)?.service.id;
+  const port = serviceId === "mysql" ? 3306 : serviceId === "elasticsearch" ? 9200 : serviceId === "rabbitmq" ? 5672 : 5432;
   return `${installation.id}.service.local:${port}`;
 }
 

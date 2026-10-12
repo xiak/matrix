@@ -7,6 +7,30 @@ const managedServiceTemplateReference = {
   contentDigest: `sha256:${"c".repeat(64)}`
 };
 
+function serviceReference(id = "postgresql", digit = "1") {
+  return { id, revision: 1, contentDigest: `sha256:${digit.repeat(64)}` };
+}
+
+function serviceDefinition(id = "postgresql", digit = "1") {
+  return {
+    ...serviceReference(id, digit),
+    displayName: id === "postgresql" ? "PostgreSQL" : id,
+    description: `Managed ${id}`,
+    activationPrerequisite: "PERMISSION_ONLY",
+    state: "AVAILABLE"
+  };
+}
+
+function serviceActivation(id = "postgresql", digit = "1") {
+  return {
+    service: serviceReference(id, digit),
+    resourceVersion: 1,
+    activatedAt: "2026-10-12T11:00:00.123456Z"
+  };
+}
+
+const quotaShape = { id: "small", displayName: "Small", cpuMillicores: 500, memoryMiB: 1024, storageGiB: 10 };
+
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -59,40 +83,40 @@ describe("httpControlPlaneRepository", () => {
         kind: "ServiceOfferingList",
         items: [{
           id: "postgresql-18",
-          kind: "POSTGRESQL",
+          service: serviceReference("postgresql", "1"),
           displayName: "PostgreSQL 18",
           description: "Managed PostgreSQL",
-          engineFamily: "PostgreSQL",
+          engineFamily: "postgresql",
           engineVersion: "18",
           state: "AVAILABLE",
-          quotaShapes: []
+          quotaShapes: [quotaShape]
         }, {
           id: "mysql-8.4",
-          kind: "MYSQL",
+          service: serviceReference("mysql", "2"),
           displayName: "MySQL 8.4 LTS",
           description: "Managed MySQL",
           engineFamily: "mysql",
           engineVersion: "8.4",
           state: "AVAILABLE",
-          quotaShapes: []
+          quotaShapes: [quotaShape]
         }, {
           id: "elasticsearch-8.19",
-          kind: "ELASTICSEARCH",
+          service: serviceReference("elasticsearch", "3"),
           displayName: "Elasticsearch 8.19",
           description: "Managed Elasticsearch",
           engineFamily: "elasticsearch",
           engineVersion: "8.19.23",
           state: "AVAILABLE",
-          quotaShapes: []
+          quotaShapes: [quotaShape]
         }, {
           id: "rabbitmq-4.1",
-          kind: "RABBITMQ",
+          service: serviceReference("rabbitmq", "4"),
           displayName: "RabbitMQ 4.1",
           description: "Managed RabbitMQ",
           engineFamily: "rabbitmq",
           engineVersion: "4.1.8",
           state: "AVAILABLE",
-          quotaShapes: []
+          quotaShapes: [quotaShape]
         }]
       });
     });
@@ -100,11 +124,11 @@ describe("httpControlPlaneRepository", () => {
 
     const result = await httpControlPlaneRepository.load("memory-only-session", ["offerings"]);
 
-    expect(result.offerings?.map(({ id, kind }) => ({ id, kind }))).toEqual([
-      { id: "postgresql-18", kind: "POSTGRESQL" },
-      { id: "mysql-8.4", kind: "MYSQL" },
-      { id: "elasticsearch-8.19", kind: "ELASTICSEARCH" },
-      { id: "rabbitmq-4.1", kind: "RABBITMQ" }
+    expect(result.offerings?.map(({ id, service }) => ({ id, service: service.id }))).toEqual([
+      { id: "postgresql-18", service: "postgresql" },
+      { id: "mysql-8.4", service: "mysql" },
+      { id: "elasticsearch-8.19", service: "elasticsearch" },
+      { id: "rabbitmq-4.1", service: "rabbitmq" }
     ]);
     expect(result).not.toHaveProperty("regions");
     expect(result).not.toHaveProperty("entitlements");
@@ -122,6 +146,115 @@ describe("httpControlPlaneRepository", () => {
 
     await expect(httpControlPlaneRepository.load("memory-only-session", [])).resolves.toEqual({});
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the superseded kind discriminator", {
+      id: "postgresql-18", kind: "POSTGRESQL", displayName: "PostgreSQL 18", description: "Managed PostgreSQL",
+      engineFamily: "postgresql", engineVersion: "18", state: "AVAILABLE", quotaShapes: [quotaShape]
+    }],
+    ["an extra compatibility discriminator", {
+      id: "postgresql-18", service: serviceReference(), kind: "POSTGRESQL", displayName: "PostgreSQL 18",
+      description: "Managed PostgreSQL", engineFamily: "postgresql", engineVersion: "18", state: "AVAILABLE", quotaShapes: [quotaShape]
+    }],
+    ["a one-character service name rejected by the backend contract", {
+      id: "postgresql-18", service: serviceReference("p"), displayName: "PostgreSQL 18", description: "Managed PostgreSQL",
+      engineFamily: "postgresql", engineVersion: "18", state: "AVAILABLE", quotaShapes: [quotaShape]
+    }]
+  ])("rejects an offering with %s", async (_name, offering) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ kind: "ServiceOfferingList", items: [offering] })));
+
+    await expect(httpControlPlaneRepository.load("memory-only-session", ["offerings"]))
+      .rejects.toThrow("INVALID_MANAGED_SERVICE_RESPONSE");
+  });
+
+  it.each([
+    [true, undefined],
+    [false, "AUTHORITY_REQUIRED"]
+  ] as const)("reads the exact service directory and activation capability (available=%s)", async (available, restrictionReason) => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      kind: "ServiceDefinitionList",
+      items: [serviceDefinition()],
+      activationCapability: {
+        action: "managedservice.service-activation.activate",
+        resource: { kind: "SERVICE_ACTIVATION", id: "collection" },
+        available,
+        ...(restrictionReason ? { restrictionReason } : {})
+      }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const directory = await httpControlPlaneRepository.listServiceDefinitions!("memory-only-session");
+
+    expect(directory.services).toEqual([serviceDefinition()]);
+    expect(directory.activationCapability.available).toBe(available);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/managed-services/v1/services",
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer memory-only-session" }) })
+    );
+  });
+
+  it.each([
+    ["extra list field", { kind: "ServiceDefinitionList", items: [serviceDefinition()], activationCapability: { action: "managedservice.service-activation.activate", resource: { kind: "SERVICE_ACTIVATION", id: "collection" }, available: true }, extra: true }],
+    ["unknown prerequisite", { kind: "ServiceDefinitionList", items: [{ ...serviceDefinition(), activationPrerequisite: "BILLING" }], activationCapability: { action: "managedservice.service-activation.activate", resource: { kind: "SERVICE_ACTIVATION", id: "collection" }, available: true } }],
+    ["unsafe revision", { kind: "ServiceDefinitionList", items: [{ ...serviceDefinition(), revision: Number.MAX_SAFE_INTEGER + 1 }], activationCapability: { action: "managedservice.service-activation.activate", resource: { kind: "SERVICE_ACTIVATION", id: "collection" }, available: true } }],
+    ["invalid allow restriction", { kind: "ServiceDefinitionList", items: [serviceDefinition()], activationCapability: { action: "managedservice.service-activation.activate", resource: { kind: "SERVICE_ACTIVATION", id: "collection" }, available: true, restrictionReason: "AUTHORITY_REQUIRED" } }],
+    ["missing deny restriction", { kind: "ServiceDefinitionList", items: [serviceDefinition()], activationCapability: { action: "managedservice.service-activation.activate", resource: { kind: "SERVICE_ACTIVATION", id: "collection" }, available: false } }],
+    ["unsorted services", { kind: "ServiceDefinitionList", items: [serviceDefinition("postgresql", "1"), serviceDefinition("mysql", "2")], activationCapability: { action: "managedservice.service-activation.activate", resource: { kind: "SERVICE_ACTIVATION", id: "collection" }, available: true } }]
+  ])("rejects a malformed service directory: %s", async (_name, body) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body)));
+    await expect(httpControlPlaneRepository.listServiceDefinitions!("memory-only-session")).rejects.toThrow("INVALID_MANAGED_SERVICE_RESPONSE");
+  });
+
+  it("reads one activation through its service-scoped route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(serviceActivation()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.getServiceActivation!("memory-only-session", "postgresql"))
+      .resolves.toEqual(serviceActivation());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/managed-services/v1/service-activations/postgresql",
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer memory-only-session" }) })
+    );
+  });
+
+  it.each([201, 200])("submits only the exact service reference and preserves the idempotency key (%s)", async (status) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(serviceActivation()), {
+      status,
+      headers: { "Content-Type": "application/json", Location: "/managed-services/v1/service-activations/postgresql" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.activateService!(
+      "memory-only-session",
+      serviceReference(),
+      "activation-request-1"
+    )).resolves.toEqual(serviceActivation());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/managed-services/v1/service-activations",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer memory-only-session",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "activation-request-1"
+        }),
+        body: JSON.stringify({ service: serviceReference() })
+      })
+    );
+  });
+
+  it("rejects route-mismatched activation evidence and an invalid creation location", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(serviceActivation("mysql", "2"))));
+    await expect(httpControlPlaneRepository.getServiceActivation!("memory-only-session", "postgresql"))
+      .rejects.toThrow("INVALID_MANAGED_SERVICE_RESPONSE");
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(serviceActivation()), {
+      status: 201,
+      headers: { "Content-Type": "application/json", Location: "/managed-services/v1/service-activations/mysql" }
+    })));
+    await expect(httpControlPlaneRepository.activateService!("memory-only-session", serviceReference(), "activation-request-1"))
+      .rejects.toThrow("INVALID_MANAGED_SERVICE_RESPONSE");
   });
 
   it("reads one installation through its encoded resource route", async () => {
@@ -280,6 +413,89 @@ describe("httpControlPlaneRepository", () => {
       "memory-only-session",
       "postgres-primary"
     )).rejects.toThrow("INVALID_INSTALLATION_RESPONSE");
+  });
+
+  it("forwards the caller's frozen quota request and idempotency key unchanged", async () => {
+    const response = {
+      id: "quota-primary",
+      offeringId: "postgresql-18",
+      quotaShapeId: "pg-small",
+      purchasedCount: 2,
+      reservedCount: 2,
+      consumedCount: 0,
+      resourceVersion: 1,
+      activatedAt: "2026-10-12T00:00:00Z"
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+    const command = { offeringId: "postgresql-18", quotaShapeId: "pg-small", instanceCount: 2 };
+
+    await expect(httpControlPlaneRepository.activateQuota(
+      "session-secret", command, "ui-quota-frozen-request"
+    )).resolves.toEqual(response);
+
+    const [path, rawInit] = fetchMock.mock.calls[0]!;
+    const init = rawInit as RequestInit;
+    const headers = new Headers(init.headers);
+    expect(path).toBe("/api/managed-services/v1/quota-entitlements");
+    expect(headers.get("Idempotency-Key")).toBe("ui-quota-frozen-request");
+    expect(init.body).toBe(JSON.stringify(command));
+  });
+
+  it("forwards the caller's frozen installation request and idempotency key unchanged", async () => {
+    const command = {
+      id: "postgres-primary",
+      name: "Postgres primary",
+      offeringId: "postgresql-18",
+      quotaEntitlementId: "quota-primary",
+      regionId: "local-primary"
+    };
+    const response = {
+      ...command,
+      engineVersion: "18",
+      phase: "PENDING",
+      endpoint: null,
+      credentialReference: null,
+      resourceVersion: 1,
+      createdAt: "2026-10-12T00:00:00Z",
+      operation: {
+        id: "operation-provision-primary",
+        kind: "PROVISION",
+        phase: "PENDING",
+        safeFailureCode: null,
+        observedAt: "2026-10-12T00:00:00Z"
+      }
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.createInstallation(
+      "session-secret", command, "ui-install-frozen-request"
+    )).resolves.toEqual(response);
+
+    const [path, rawInit] = fetchMock.mock.calls[0]!;
+    const init = rawInit as RequestInit;
+    const headers = new Headers(init.headers);
+    expect(path).toBe("/api/managed-services/v1/service-installations");
+    expect(headers.get("Idempotency-Key")).toBe("ui-install-frozen-request");
+    expect(init.body).toBe(JSON.stringify(command));
+  });
+
+  it("rejects malformed caller request IDs before quota or installation writes", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.activateQuota(
+      "session-secret",
+      { offeringId: "postgresql-18", quotaShapeId: "pg-small", instanceCount: 1 },
+      "invalid request"
+    )).rejects.toThrow("INVALID_QUOTA_ACTIVATION_REQUEST");
+    await expect(httpControlPlaneRepository.createInstallation(
+      "session-secret",
+      { id: "postgres-primary", name: "Postgres primary", offeringId: "postgresql-18", quotaEntitlementId: "quota-primary", regionId: "local-primary" },
+      "invalid request"
+    )).rejects.toThrow("INVALID_INSTALLATION_CREATION_REQUEST");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("submits and replays an installation termination with no request body and the caller's frozen idempotency key", async () => {

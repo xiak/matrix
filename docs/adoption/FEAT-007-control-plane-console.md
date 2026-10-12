@@ -11,6 +11,7 @@
 | --- | --- | --- |
 | Complete Discord-style Next.js UI | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Sole architecture and visual-style donor; read only through Git object commands and exclude its worktree. |
 | PaaS product-design record | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Product-boundary reference only; it is not a second UI architecture or style donor. |
+| Matrix cloud-console service activation | `7bab1df8c20db151b187d3c383eded42a2c40cce` | Same-repository integration donor; inspect only the fixed Git object, never the UX worktree or its checkpoint. |
 
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
@@ -99,3 +100,11 @@ Matrix Phase 1 product.
    pixels, file counts, or incidental render order.
 
 No donor repository is a build or runtime dependency.
+
+## Current service-activation integration
+
+| Fixed slice | Decision | Rationale |
+| --- | --- | --- |
+| Product routes, service directory projection, exact activation capability, account-scoped activation state, and deferred product-resource loading at `7bab1df8...` | `ADAPT` | Use the UX owner's verified route/provider/repository/scene/renderer chain with the current FEAT-007 managed-service contract. The browser never infers activation authority from account type, role name, product ID, or a local service allow-list. |
+| LIVE unknown-result recovery and credential/account scope isolation at `7bab1df8...` | `ADAPT` | Preserve the original idempotency key, reconcile through the exact activation read, discard stale evidence immediately when the effective credential changes, and keep product-resource authorization authoritative on every request. |
+| Generated embedded assets and the donor branch's FEAT/checkpoint status | `REJECT` | Rebuild and verify assets in this branch; the donor's test result and progress record do not substitute for this branch's acceptance gates. |
