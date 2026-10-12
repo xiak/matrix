@@ -257,7 +257,6 @@ export function ControlPlaneProvider({
         setError(null);
         setLoading(false);
       }
-      readEnrichments(enrichments, false);
       return;
     }
     const current = cacheRef.current;
@@ -266,6 +265,7 @@ export function ControlPlaneProvider({
         setError(null);
         setLoading(false);
       }
+      readEnrichments(enrichments, false);
       return;
     }
     setLoading(true);

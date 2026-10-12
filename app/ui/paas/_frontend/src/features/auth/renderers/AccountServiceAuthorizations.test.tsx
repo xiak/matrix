@@ -93,8 +93,8 @@ const templates: ServiceRoleTemplateDirectory = { items: [{
     policyVersion: relation.permissionCeiling,
     workloads: [{
       resourceKind: "SERVICE_INSTALLATION",
-      bindAction: "managedservice.installation.bind-service-role",
-      unbindAction: "managedservice.installation.unbind-service-role"
+      bindAction: "managedservice.service-installation.service-role.bind",
+      unbindAction: "managedservice.service-installation.service-role.unbind"
     }],
     maxSessionDurationSeconds: 900
   },

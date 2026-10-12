@@ -118,6 +118,7 @@ function Probe() {
   return (
     <div>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
+      <button onClick={() => void controlPlane.prepare({ section: "access" })} type="button">prepare access</button>
       <button onClick={() => void controlPlane.prepare({ section: "catalog" })} type="button">prepare catalog</button>
       <button onClick={() => void controlPlane.prepare({ section: "regions" })} type="button">prepare regions</button>
       <button onClick={() => void controlPlane.prepare({ section: "installations" })} type="button">prepare installations</button>
@@ -194,6 +195,54 @@ describe("ControlPlaneProvider", () => {
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
       "regions", "resources", "installations", "logs", "devops", "observability", "audit", "access"
     ]);
+  });
+  it("starts missing installation enrichments after the required directory is already cached", async () => {
+    const source = snapshot(readyInstallation, 1);
+    let resolveInstallation!: (value: ControlPlaneResourceSnapshot) => void;
+    const installationLoad = new Promise<ControlPlaneResourceSnapshot>((resolve) => {
+      resolveInstallation = resolve;
+    });
+    const load = vi.fn<ControlPlaneRepository["load"]>(async (_credential, resources) => {
+      if (resources[0] === "installations") return installationLoad;
+      return resourceSlice(source, resources);
+    });
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider
+          repository={{ load, getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn() }}
+          selection={{ section: "access" }}
+        >
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("login"));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("prepare installations"));
+      await Promise.resolve();
+    });
+    expect(load).toHaveBeenCalledWith("memory-only-session", ["installations"]);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("prepare access"));
+      await Promise.resolve();
+      resolveInstallation({ installations: source.installations });
+      await Promise.resolve();
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("prepare installations"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(4));
+    expect(load.mock.calls.map(([, resources]) => resources)).toEqual(expect.arrayContaining([
+      ["installations"], ["offerings"], ["regions"], ["entitlements"]
+    ]));
   });
   it.each([
     { resource: "offerings" as const, outcome: "forbidden" as const },
