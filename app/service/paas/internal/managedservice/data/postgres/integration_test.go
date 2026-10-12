@@ -33,6 +33,8 @@ const (
 	managedServiceIntegrationDSN = "MATRIX_MANAGEDSERVICE_POSTGRES_TEST_DSN"
 	managedServicePredecessorDSN = "MATRIX_MANAGEDSERVICE_PREDECESSOR_POSTGRES_TEST_DSN"
 	managedServicePredecessor    = "dc5f63a3c6dea5fa2943bb78628cd753582cb2bc"
+	managedServiceAPIPassword    = "mxp1.managed-api-00000000000000000000000000000"
+	managedServiceWorkerPassword = "mxp1.managed-worker-0000000000000000000000000"
 )
 
 func fixedPaaSPredecessorSource(t *testing.T) postgresmigration.Source {
@@ -90,8 +92,8 @@ func TestManagedServiceDirectPredecessorUpgradeAndTermination(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	apiDSN := integrationRuntimeDSN(t, adminDSN, "matrix_paas_api_login", "mxp1.predecessor-api-000000000000000000000000")
-	workerDSN := integrationRuntimeDSN(t, adminDSN, "matrix_paas_worker_login", "mxp1.predecessor-worker-0000000000000000000")
+	apiDSN := integrationRuntimeDSN(t, adminDSN, "matrix_paas_api_login", managedServiceAPIPassword)
+	workerDSN := integrationRuntimeDSN(t, adminDSN, "matrix_paas_worker_login", managedServiceWorkerPassword)
 	logins := []postgresmigration.Login{
 		{Name: "matrix_paas_api_login", Group: "matrix_paas_api", DSN: apiDSN},
 		{Name: "matrix_paas_worker_login", Group: "matrix_paas_worker", DSN: workerDSN},
@@ -267,8 +269,8 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	apiDSN := integrationRuntimeDSN(t, adminDSN, "matrix_paas_api_login", "mxp1.managed-api-00000000000000000000000000000")
-	workerDSN := integrationRuntimeDSN(t, adminDSN, "matrix_paas_worker_login", "mxp1.managed-worker-0000000000000000000000000")
+	apiDSN := integrationRuntimeDSN(t, adminDSN, "matrix_paas_api_login", managedServiceAPIPassword)
+	workerDSN := integrationRuntimeDSN(t, adminDSN, "matrix_paas_worker_login", managedServiceWorkerPassword)
 	for attempt := 1; attempt <= 2; attempt++ {
 		if err := paasmigration.Apply(ctx, adminDSN, apiDSN, workerDSN); err != nil {
 			t.Fatalf("apply PaaS migration attempt %d: %v", attempt, err)
@@ -506,6 +508,152 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	if _, _, err := service.CreateInstallation(ctx, installationCommand); !errors.Is(err, usecase.ErrNotFound) {
 		t.Fatalf("cross-tenant entitlement error=%v", err)
 	}
+
+	concurrentAuthorization := integrationAuthorization("organization-concurrent")
+	concurrentQuota, replayed, err := service.ActivateQuota(ctx, usecase.ActivateQuotaCommand{
+		Authorization: concurrentAuthorization, IdempotencyKey: "quota-concurrent-request",
+		Request: managedservicev1.ActivateQuotaRequest{
+			OfferingID: domain.PostgreSQLOfferingID, QuotaShapeID: "pg-small", InstanceCount: 1,
+		},
+	})
+	if err != nil || replayed {
+		t.Fatalf("activate concurrent quota=%#v replayed=%v err=%v", concurrentQuota, replayed, err)
+	}
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	concurrentService, err := usecase.NewService(&quotaBarrierRepository{
+		Repository: repository, quotaID: concurrentQuota.ID, arrived: arrived, release: release,
+	}, usecase.Config{
+		Catalog: domain.DefaultCatalog(), WorkloadRoleAuthority: integrationWorkloadRoleBinder{},
+		WorkloadRoleRuntime: integrationWorkloadRoleBinder{}, Region: integrationRegion(),
+		NewQuotaID: func() (string, error) { return "quota-concurrent-unused", nil },
+		NewOperationID: func() (string, error) {
+			return "operation-concurrent-" + sequenceSuffix(operationSequence.Add(1)), nil
+		},
+	})
+	if err != nil {
+		t.Fatal("create concurrent managed-service use case")
+	}
+	type concurrentResult struct {
+		installation managedservicev1.ServiceInstallation
+		err          error
+	}
+	results := make(chan concurrentResult, 2)
+	for _, id := range []string{"postgres-concurrent-one", "postgres-concurrent-two"} {
+		go func(id string) {
+			created, _, createErr := concurrentService.CreateInstallation(ctx, usecase.CreateInstallationCommand{
+				Authorization: concurrentAuthorization, IdempotencyKey: "installation-" + id,
+				Request: managedservicev1.CreateInstallationRequest{
+					ID: id, Name: id, OfferingID: domain.PostgreSQLOfferingID,
+					QuotaEntitlementID: concurrentQuota.ID, RegionID: integrationRegion().ID,
+				},
+			})
+			results <- concurrentResult{installation: created, err: createErr}
+		}(id)
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		select {
+		case <-arrived:
+		case <-ctx.Done():
+			t.Fatal("concurrent reservations did not reach the PostgreSQL transaction barrier")
+		}
+	}
+	close(release)
+	var created managedservicev1.ServiceInstallation
+	var succeeded, exhausted int
+	for range 2 {
+		result := <-results
+		switch {
+		case result.err == nil:
+			created = result.installation
+			succeeded++
+		case errors.Is(result.err, usecase.ErrQuotaExhausted):
+			exhausted++
+		default:
+			t.Fatalf("concurrent reservation error=%v", result.err)
+		}
+	}
+	if succeeded != 1 || exhausted != 1 || managedservicev1.ValidateServiceInstallation(created) != nil {
+		t.Fatalf("concurrent reservation succeeded=%d exhausted=%d created=%#v", succeeded, exhausted, created)
+	}
+	retainedConcurrentQuota, err := service.GetQuotaEntitlement(ctx, concurrentAuthorization, concurrentQuota.ID)
+	if err != nil || retainedConcurrentQuota.PurchasedCount != 1 || retainedConcurrentQuota.ReservedCount != 1 ||
+		retainedConcurrentQuota.ConsumedCount != 0 || retainedConcurrentQuota.ResourceVersion != concurrentQuota.ResourceVersion+1 {
+		t.Fatalf("concurrent quota=%#v err=%v", retainedConcurrentQuota, err)
+	}
+	concurrentInstallations, err := service.ListServiceInstallations(ctx, concurrentAuthorization)
+	if err != nil || len(concurrentInstallations.Items) != 1 || concurrentInstallations.Items[0].ID != created.ID ||
+		concurrentInstallations.Items[0].Phase != managedservicev1.InstallationPending {
+		t.Fatalf("concurrent installations=%#v err=%v", concurrentInstallations, err)
+	}
+	for expected := 6; expected <= 7; expected++ {
+		result, dispatchErr := dispatcher.DispatchOnce(ctx)
+		if dispatchErr != nil || !result.Claimed || !result.Delivered {
+			t.Fatalf("dispatch concurrent managed-service Audit event %d: result=%#v err=%v", expected, result, dispatchErr)
+		}
+	}
+	if result, dispatchErr := dispatcher.DispatchOnce(ctx); dispatchErr != nil || result.Claimed {
+		t.Fatalf("unexpected concurrent loser Audit event: result=%#v err=%v", result, dispatchErr)
+	}
+	actions = map[string]int{}
+	for _, event := range ingestor.events {
+		actions[event.Action]++
+	}
+	if actions[audit.QuotaEntitlementActivated] != 2 || actions[audit.ServiceInstallationCreated] != 2 ||
+		actions[audit.ServiceInstallationReady] != 1 || actions[audit.ServiceInstallationTerminationRequested] != 1 ||
+		actions[audit.ServiceInstallationTerminated] != 1 {
+		t.Fatalf("concurrent managed-service Audit actions=%#v", actions)
+	}
+	snapshot, err = dispatcher.Snapshot(ctx)
+	if err != nil || snapshot.Delivered != 7 || snapshot.Pending != 0 || snapshot.DeadLetter != 0 {
+		t.Fatalf("concurrent managed-service Audit snapshot=%#v err=%v", snapshot, err)
+	}
+}
+
+type quotaBarrierRepository struct {
+	usecase.Repository
+	quotaID string
+	arrived chan<- struct{}
+	release <-chan struct{}
+}
+
+func (value *quotaBarrierRepository) Begin(
+	ctx context.Context,
+	tenantID string,
+	mode usecase.TransactionMode,
+) (usecase.Transaction, error) {
+	transaction, err := value.Repository.Begin(ctx, tenantID, mode)
+	if err != nil {
+		return nil, err
+	}
+	return &quotaBarrierTransaction{
+		Transaction: transaction, quotaID: value.quotaID, arrived: value.arrived, release: value.release,
+	}, nil
+}
+
+type quotaBarrierTransaction struct {
+	usecase.Transaction
+	quotaID string
+	arrived chan<- struct{}
+	release <-chan struct{}
+}
+
+func (value *quotaBarrierTransaction) GetQuotaEntitlementForUpdate(
+	ctx context.Context,
+	id string,
+) (managedservicev1.QuotaEntitlement, error) {
+	if id == value.quotaID {
+		select {
+		case value.arrived <- struct{}{}:
+		default:
+		}
+		select {
+		case <-value.release:
+		case <-ctx.Done():
+			return managedservicev1.QuotaEntitlement{}, ctx.Err()
+		}
+	}
+	return value.Transaction.GetQuotaEntitlementForUpdate(ctx, id)
 }
 
 type integrationWorkloadRoleBinder struct{}

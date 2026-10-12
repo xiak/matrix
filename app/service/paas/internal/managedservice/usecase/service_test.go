@@ -43,7 +43,7 @@ func TestQuotaActivationEqualReplayAndChangedConflict(t *testing.T) {
 	}
 }
 
-func TestConcurrentInstallationsCannotExceedQuota(t *testing.T) {
+func TestInstallationReservationHonorsQuota(t *testing.T) {
 	repository := newMemoryRepository()
 	service := newTestService(t, repository)
 	entitlement, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
@@ -55,36 +55,21 @@ func TestConcurrentInstallationsCannotExceedQuota(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activate quota: %v", err)
 	}
-	start := make(chan struct{})
-	results := make(chan error, 2)
-	for index, id := range []string{"postgres-one", "postgres-two"} {
-		go func(index int, id string) {
-			<-start
-			_, _, createErr := service.CreateInstallation(context.Background(), CreateInstallationCommand{
-				Authorization: testAuthorization(), IdempotencyKey: "install-request-" + id,
-				Request: managedservicev1.CreateInstallationRequest{
-					ID: id, Name: id, OfferingID: domain.PostgreSQLOfferingID,
-					QuotaEntitlementID: entitlement.ID, RegionID: "local-primary",
-				},
-			})
-			_ = index
-			results <- createErr
-		}(index, id)
+	create := func(id string) error {
+		_, _, createErr := service.CreateInstallation(context.Background(), CreateInstallationCommand{
+			Authorization: testAuthorization(), IdempotencyKey: "install-request-" + id,
+			Request: managedservicev1.CreateInstallationRequest{
+				ID: id, Name: id, OfferingID: domain.PostgreSQLOfferingID,
+				QuotaEntitlementID: entitlement.ID, RegionID: "local-primary",
+			},
+		})
+		return createErr
 	}
-	close(start)
-	var succeeded, exhausted int
-	for range 2 {
-		switch err := <-results; {
-		case err == nil:
-			succeeded++
-		case errors.Is(err, ErrQuotaExhausted):
-			exhausted++
-		default:
-			t.Fatalf("unexpected create error: %v", err)
-		}
+	if err := create("postgres-one"); err != nil {
+		t.Fatalf("reserve purchased quota: %v", err)
 	}
-	if succeeded != 1 || exhausted != 1 {
-		t.Fatalf("succeeded=%d exhausted=%d", succeeded, exhausted)
+	if err := create("postgres-two"); !errors.Is(err, ErrQuotaExhausted) {
+		t.Fatalf("second reservation error=%v", err)
 	}
 	if len(repository.events) != 2 || repository.events[1].Action != audit.ServiceInstallationCreated {
 		t.Fatalf("transactional Audit events = %#v", repository.events)

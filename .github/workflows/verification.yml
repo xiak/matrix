@@ -238,7 +238,8 @@ jobs:
                 matrix_iam_upgrade_predecessor_ci matrix_authority_process_ci)
               ;;
             authority-managed-products)
-              databases=(matrix_managedservice_predecessor_ci matrix_authority_process_managed_products_ci)
+              databases=(matrix_managedservice_predecessor_ci matrix_managedservice_ci
+                matrix_authority_process_managed_products_ci)
               ;;
             authority-session-idle)
               databases=(matrix_iam_session_idle_natural_ci)
@@ -405,12 +406,13 @@ jobs:
         if: matrix.lane == 'authority-managed-products'
         env:
           MATRIX_MANAGEDSERVICE_PREDECESSOR_POSTGRES_TEST_DSN: postgresql://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_managedservice_predecessor_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_MANAGEDSERVICE_POSTGRES_TEST_DSN: postgresql://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_managedservice_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_MANAGED_PRODUCTS_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_authority_process_managed_products_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
         run: |
           time bash .github/scripts/run-go-test-selection.sh \
-            'TestManagedServiceDirectPredecessorUpgradeAndTermination' \
+            'TestManagedServiceDirectPredecessorUpgradeAndTermination,TestManagedServicePostgresJourneyAndTenantIsolation' \
             -race -p 1 -count=1 ./app/service/paas/internal/managedservice/data/postgres \
-            -run '^TestManagedServiceDirectPredecessorUpgradeAndTermination$'
+            -run '^TestManagedService(DirectPredecessorUpgradeAndTermination|PostgresJourneyAndTenantIsolation)$'
           postgres_image='postgres:18@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a'
           mysql_image='mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242'
           elasticsearch_image='docker.elastic.co/elasticsearch/elasticsearch:8.19.23@sha256:4d0724bb8d78d7a2330693623e26ca4d621079d062ecc8a30b3e1fc180ec14c1'
