@@ -1,6 +1,7 @@
 package nethttp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,68 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/usecase"
 )
+
+func TestServiceCatalogAndActivationUseExactActorRelativeContracts(t *testing.T) {
+	definitions := domain.DefaultCatalog().ListServices()
+	now := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	activation := managedservicev1.ServiceActivation{
+		Service: managedservicev1.ServiceDefinitionReference{
+			ID: definitions[0].ID, Revision: definitions[0].Revision, ContentDigest: definitions[0].ContentDigest,
+		},
+		ResourceVersion: 1, ActivatedAt: now,
+	}
+	workflow := &stubWorkflow{
+		services:   managedservicev1.ServiceDefinitionList{Kind: "ServiceDefinitionList", Items: definitions},
+		activation: activation,
+	}
+	authorizer := &stubAuthorizer{}
+	handler := testHandler(t, authorizer, workflow)
+
+	list := httptest.NewRequest(http.MethodGet, "/managed-services/v1/services", nil)
+	list.Header.Set("Authorization", "Bearer session-secret")
+	listResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listResponse, list)
+	if listResponse.Code != http.StatusOK || authorizer.request.Action != port.AuthorizeServiceDefinitionRead ||
+		authorizer.request.Resource.Kind != port.ResourceServiceDefinition ||
+		len(authorizer.batchRequest.Requests) != len(definitions) {
+		t.Fatalf("catalog status=%d authorization=%#v batch=%#v body=%s",
+			listResponse.Code, authorizer.request, authorizer.batchRequest, listResponse.Body.String())
+	}
+
+	body, err := json.Marshal(managedservicev1.ActivateServiceRequest{Service: activation.Service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activate := httptest.NewRequest(http.MethodPost, "/managed-services/v1/service-activations", bytes.NewReader(body))
+	activate.Header.Set("Authorization", "Bearer session-secret")
+	activate.Header.Set("Content-Type", "application/json")
+	activate.Header.Set("Idempotency-Key", "activate-postgresql")
+	activateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(activateResponse, activate)
+	if activateResponse.Code != http.StatusCreated || workflow.serviceActivateCalls != 1 ||
+		authorizer.request.Action != port.AuthorizeServiceActivationActivate ||
+		authorizer.request.Resource.Kind != port.ResourceServiceActivation ||
+		workflow.serviceCommand.Request.Service != activation.Service ||
+		workflow.serviceCommand.Authorization.TenantID != "organization-test" ||
+		workflow.serviceCommand.IdempotencyKey != "activate-postgresql" {
+		t.Fatalf("activation status=%d command=%#v authorization=%#v body=%s",
+			activateResponse.Code, workflow.serviceCommand, authorizer.request, activateResponse.Body.String())
+	}
+	if location := activateResponse.Header().Get("Location"); location != "/managed-services/v1/service-activations/"+activation.Service.ID {
+		t.Fatalf("activation location=%q", location)
+	}
+
+	forged := httptest.NewRequest(http.MethodPost, "/managed-services/v1/service-activations",
+		strings.NewReader(string(body[:len(body)-1])+`,"accountId":"other"}`))
+	forged.Header.Set("Authorization", "Bearer session-secret")
+	forged.Header.Set("Content-Type", "application/json")
+	forged.Header.Set("Idempotency-Key", "activate-forged")
+	forgedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(forgedResponse, forged)
+	if forgedResponse.Code != http.StatusBadRequest || workflow.serviceActivateCalls != 1 {
+		t.Fatalf("forged activation status=%d calls=%d body=%s", forgedResponse.Code, workflow.serviceActivateCalls, forgedResponse.Body.String())
+	}
+}
 
 func TestListOfferingsAuthorizesCollectionAndFiltersExactCatalogInstances(t *testing.T) {
 	authorizer := &stubAuthorizer{}
@@ -474,6 +537,12 @@ func (authorizer *stubAuthorizer) Authorize(
 }
 
 type stubWorkflow struct {
+	services             managedservicev1.ServiceDefinitionList
+	activation           managedservicev1.ServiceActivation
+	serviceReads         int
+	activationReads      int
+	serviceActivateCalls int
+	serviceCommand       usecase.ActivateServiceCommand
 	offerings            managedservicev1.ServiceOfferingList
 	installation         managedservicev1.ServiceInstallation
 	operation            managedservicev1.InstallationOperation
@@ -489,6 +558,43 @@ type stubWorkflow struct {
 	unbindCalls          int
 	unbindCommand        usecase.UnbindServiceRoleCommand
 	roleUnbindingReceipt managedservicev1.ServiceRoleUnbindingReceipt
+}
+
+func (workflow *stubWorkflow) ListServices(context.Context, port.Authorization) (managedservicev1.ServiceDefinitionList, error) {
+	return workflow.services, nil
+}
+
+func (workflow *stubWorkflow) GetService(context.Context, port.Authorization, string) (managedservicev1.ServiceDefinition, error) {
+	workflow.serviceReads++
+	if len(workflow.services.Items) == 0 {
+		return managedservicev1.ServiceDefinition{}, usecase.ErrNotFound
+	}
+	return workflow.services.Items[0], nil
+}
+
+func (workflow *stubWorkflow) ListServiceActivations(context.Context, port.Authorization) (managedservicev1.ServiceActivationList, error) {
+	items := []managedservicev1.ServiceActivation{}
+	if workflow.activation.Service.ID != "" {
+		items = append(items, workflow.activation)
+	}
+	return managedservicev1.ServiceActivationList{Kind: "ServiceActivationList", Items: items}, nil
+}
+
+func (workflow *stubWorkflow) GetServiceActivation(context.Context, port.Authorization, string) (managedservicev1.ServiceActivation, error) {
+	workflow.activationReads++
+	if workflow.activation.Service.ID == "" {
+		return managedservicev1.ServiceActivation{}, usecase.ErrNotFound
+	}
+	return workflow.activation, nil
+}
+
+func (workflow *stubWorkflow) ActivateService(
+	_ context.Context,
+	command usecase.ActivateServiceCommand,
+) (managedservicev1.ServiceActivation, bool, error) {
+	workflow.serviceActivateCalls++
+	workflow.serviceCommand = command
+	return workflow.activation, false, nil
 }
 
 func (workflow *stubWorkflow) ListOfferings(context.Context, port.Authorization) (managedservicev1.ServiceOfferingList, error) {

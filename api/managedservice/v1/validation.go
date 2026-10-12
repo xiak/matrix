@@ -32,6 +32,10 @@ func ValidateServiceDefinitionReference(value ServiceDefinitionReference) error 
 	)
 }
 
+func ValidateServiceID(value string) error {
+	return validateName("service.id", value)
+}
+
 func ValidateServiceDefinition(value ServiceDefinition) error {
 	problems := []error{
 		validateText("service.displayName", value.DisplayName, 1, 128),
@@ -403,7 +407,9 @@ func validateErrorCode(value ErrorCode) error {
 	switch value {
 	case ErrorInvalidArgument, ErrorUnauthenticated, ErrorPermissionDenied,
 		ErrorIdentityUnavailable, ErrorNotFound, ErrorAlreadyExists,
-		ErrorIdempotencyConflict, ErrorQuotaExhausted, ErrorRegionUnavailable,
+		ErrorIdempotencyConflict, ErrorServiceDefinitionConflict,
+		ErrorServiceUnavailable, ErrorServiceNotActivated,
+		ErrorQuotaExhausted, ErrorRegionUnavailable,
 		ErrorServiceRoleConflict, ErrorResourceStateConflict, ErrorInternal:
 		return nil
 	default:

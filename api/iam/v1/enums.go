@@ -314,6 +314,9 @@ const (
 	ActionPaaSOperationRead               Action = "paas.operation.read"
 
 	ActionManagedServiceOfferingRead             Action = "managedservice.offering.read"
+	ActionManagedServiceDefinitionRead           Action = "managedservice.service-definition.read"
+	ActionManagedServiceActivationRead           Action = "managedservice.service-activation.read"
+	ActionManagedServiceActivationActivate       Action = "managedservice.service-activation.activate"
 	ActionManagedServiceRegionRead               Action = "managedservice.region.read"
 	ActionManagedServiceQuotaEntitlementActivate Action = "managedservice.quota-entitlement.activate"
 	ActionManagedServiceQuotaEntitlementRead     Action = "managedservice.quota-entitlement.read"
@@ -374,6 +377,8 @@ const (
 	ResourceDeployment            ResourceKind = "DEPLOYMENT"
 	ResourceOperation             ResourceKind = "OPERATION"
 	ResourceServiceOffering       ResourceKind = "SERVICE_OFFERING"
+	ResourceServiceDefinition     ResourceKind = "SERVICE_DEFINITION"
+	ResourceServiceActivation     ResourceKind = "SERVICE_ACTIVATION"
 	ResourceRegion                ResourceKind = "REGION"
 	ResourceQuotaEntitlement      ResourceKind = "QUOTA_ENTITLEMENT"
 	ResourceServiceInstallation   ResourceKind = "SERVICE_INSTALLATION"
@@ -481,7 +486,7 @@ func AllServicePurposes() []ServicePurpose {
 var authorizationProfiles = authorizationProfilesForBuild([]AuthorizationProfile{
 	iamPolicyAttachmentChangeProfile(),
 	paasProfileRevisionThirteen,
-	managedServiceProfileRevisionFive,
+	managedServiceProfileRevisionSix,
 	auditProfileRevisionFour,
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
 		declaredProfileAction(ActionInstallationVerify, ResourceInstallation, AuthorityScopeInstallationProbe, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -534,7 +539,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), iamSecurityReportProfile(), iamAccessAnalyzerProfile(), iamAccessFindingProfile(), iamAccessDispositionProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(paasProfileRevisionTwelve), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(managedServiceProfileRevisionFour), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), iamSecurityReportProfile(), iamAccessAnalyzerProfile(), iamAccessFindingProfile(), iamAccessDispositionProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(paasProfileRevisionTwelve), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(managedServiceProfileRevisionFour), cloneAuthorizationProfile(managedServiceProfileRevisionFive), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -554,6 +559,7 @@ var managedServiceProfileRevisionTwo = managedServiceInstallationRoleProfile(man
 var managedServiceProfileRevisionThree = managedServiceRoleConsentProfile(managedServiceProfileRevisionTwo)
 var managedServiceProfileRevisionFour = managedServiceOfferingListBatchProfile(managedServiceProfileRevisionThree)
 var managedServiceProfileRevisionFive = managedServiceTerminationProfile(managedServiceProfileRevisionFour)
+var managedServiceProfileRevisionSix = managedServiceActivationProfile(managedServiceProfileRevisionFive)
 
 var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
 	declaredProfileAction(ActionPaaSExecutionPoolCreate, ResourceExecutionPool, AuthorityScopeInstallation, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -827,6 +833,23 @@ func managedServiceTerminationProfile(previous AuthorizationProfile) Authorizati
 	)
 	declaration.SubjectTypes = []SubjectType{SubjectUser}
 	profile.Actions = append(profile.Actions, declaration)
+	return profile
+}
+
+func managedServiceActivationProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	for _, declaration := range []AuthorizationProfileAction{
+		declaredProfileAction(ActionManagedServiceDefinitionRead, ResourceServiceDefinition, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+		declaredProfileAction(ActionManagedServiceActivationRead, ResourceServiceActivation, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+		declaredProfileAction(ActionManagedServiceActivationActivate, ResourceServiceActivation, AuthorityScopeTenant, ResourceServiceActivation, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
+	} {
+		declaration.SubjectTypes = []SubjectType{SubjectUser}
+		if declaration.Action == ActionManagedServiceDefinitionRead {
+			declaration.InstanceListBatch = true
+		}
+		profile.Actions = append(profile.Actions, declaration)
+	}
 	return profile
 }
 

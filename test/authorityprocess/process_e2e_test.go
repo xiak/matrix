@@ -1934,6 +1934,7 @@ type binarySet struct {
 
 type managedProductFixture struct {
 	name             string
+	serviceID        string
 	offeringID       string
 	quotaShapeID     string
 	engineVersion    string
@@ -1953,7 +1954,8 @@ type managedProductImages struct {
 func managedPostgresFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
-		name: "PostgreSQL 18", offeringID: managedservicev1.PostgreSQLOfferingID,
+		name: "PostgreSQL 18", serviceID: managedservicev1.PostgreSQLServiceID,
+		offeringID:   managedservicev1.PostgreSQLOfferingID,
 		quotaShapeID: "pg-small", engineVersion: "18",
 		installationID: newManagedProductID(t, owner, "pg"), imageID: imageID,
 		runtimeDirectory: "managed-postgres", credentialFile: "postgres-password",
@@ -1963,7 +1965,8 @@ func managedPostgresFixture(t *testing.T, owner string, imageID string) managedP
 func managedMySQLFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
-		name: "MySQL 8.4 LTS", offeringID: managedservicev1.MySQLOfferingID,
+		name: "MySQL 8.4 LTS", serviceID: managedservicev1.MySQLServiceID,
+		offeringID:   managedservicev1.MySQLOfferingID,
 		quotaShapeID: "mysql-small", engineVersion: "8.4",
 		installationID: newManagedProductID(t, owner, "mysql"), imageID: imageID,
 		runtimeDirectory: "managed-mysql", credentialFile: "mysql-password",
@@ -1973,7 +1976,8 @@ func managedMySQLFixture(t *testing.T, owner string, imageID string) managedProd
 func managedElasticsearchFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
-		name: "Elasticsearch 8.19", offeringID: managedservicev1.ElasticsearchOfferingID,
+		name: "Elasticsearch 8.19", serviceID: managedservicev1.ElasticsearchServiceID,
+		offeringID:   managedservicev1.ElasticsearchOfferingID,
 		quotaShapeID: "elasticsearch-small", engineVersion: "8.19.23",
 		installationID:   newManagedProductID(t, owner, "elasticsearch"),
 		imageID:          imageID,
@@ -1984,7 +1988,8 @@ func managedElasticsearchFixture(t *testing.T, owner string, imageID string) man
 func managedRabbitMQFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
-		name: "RabbitMQ 4.1", offeringID: managedservicev1.RabbitMQOfferingID,
+		name: "RabbitMQ 4.1", serviceID: managedservicev1.RabbitMQServiceID,
+		offeringID:   managedservicev1.RabbitMQOfferingID,
 		quotaShapeID: "rabbitmq-small", engineVersion: "4.1.8",
 		installationID:   newManagedProductID(t, owner, "rabbitmq"),
 		imageID:          imageID,
@@ -2020,16 +2025,33 @@ func runManagedProductProviderProcesses(
 		// recreate the container between the product cleanup and the test-level
 		// worker cleanup, leaving an unowned runtime after the fixture exits.
 		defer cleanupManagedProductWorker(t, managedRuntime.workerContainer, managedRuntime.volumeName)
-		activation := managedservicev1.ActivateQuotaRequest{
+		definitionResponse := performJSON(t, http.MethodGet, base+"/services/"+product.serviceID, bearer, nil)
+		var definition managedservicev1.ServiceDefinition
+		if definitionResponse.Status != http.StatusOK || json.Unmarshal(definitionResponse.Body, &definition) != nil ||
+			managedservicev1.ValidateServiceDefinition(definition) != nil || definition.ID != product.serviceID ||
+			definition.State != managedservicev1.ServiceDefinitionAvailable {
+			t.Fatalf("read real %s service definition status=%d body=%s", product.name, definitionResponse.Status, definitionResponse.Body)
+		}
+		serviceRequest := managedservicev1.ActivateServiceRequest{Service: managedservicev1.ServiceDefinitionReference{
+			ID: definition.ID, Revision: definition.Revision, ContentDigest: definition.ContentDigest,
+		}}
+		requestPrefix := "managed-product-" + product.runtimeDirectory
+		response := performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", bearer,
+			requestPrefix+"-service-activation", serviceRequest)
+		var serviceActivation managedservicev1.ServiceActivation
+		if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &serviceActivation) != nil ||
+			managedservicev1.ValidateServiceActivation(serviceActivation) != nil || serviceActivation.Service != serviceRequest.Service {
+			t.Fatalf("activate real %s service status=%d body=%s", product.name, response.Status, response.Body)
+		}
+		quotaRequest := managedservicev1.ActivateQuotaRequest{
 			OfferingID: product.offeringID, QuotaShapeID: product.quotaShapeID, InstanceCount: 1,
 		}
-		requestPrefix := "managed-product-" + product.runtimeDirectory
-		response := performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", bearer,
-			requestPrefix+"-quota", activation)
+		response = performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", bearer,
+			requestPrefix+"-quota", quotaRequest)
 		var quota managedservicev1.QuotaEntitlement
 		if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &quota) != nil ||
-			managedservicev1.ValidateQuotaEntitlement(quota) != nil || quota.OfferingID != activation.OfferingID ||
-			quota.QuotaShapeID != activation.QuotaShapeID || quota.PurchasedCount != 1 ||
+			managedservicev1.ValidateQuotaEntitlement(quota) != nil || quota.OfferingID != quotaRequest.OfferingID ||
+			quota.QuotaShapeID != quotaRequest.QuotaShapeID || quota.PurchasedCount != 1 ||
 			quota.ReservedCount != 0 || quota.ConsumedCount != 0 {
 			t.Fatalf("activate real %s quota status=%d body=%s", product.name, response.Status, response.Body)
 		}
@@ -10293,6 +10315,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		id, owner, member   string
 		ownerID             iamv1.PrincipalID
 		memberID            iamv1.PrincipalID
+		serviceActivation   managedservicev1.ServiceActivation
 		quota               managedservicev1.QuotaEntitlement
 		shared, unique      managedservicev1.ServiceInstallation
 		serviceRoleGrant    iamv1.PolicyAttachment
@@ -10319,8 +10342,94 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		managedservicev1.PostgreSQLOfferingID,
 		managedservicev1.RabbitMQOfferingID,
 	}
+	expectedServiceIDs := []string{
+		managedservicev1.ElasticsearchServiceID,
+		managedservicev1.MySQLServiceID,
+		managedservicev1.PostgreSQLServiceID,
+		managedservicev1.RabbitMQServiceID,
+	}
 	for i := range tenants {
 		tenant := &tenants[i]
+		serviceResponse := performJSON(t, http.MethodGet, base+"/services", tenant.member, nil)
+		var services managedservicev1.ServiceDefinitionList
+		if serviceResponse.Status != http.StatusOK || json.Unmarshal(serviceResponse.Body, &services) != nil ||
+			services.Kind != "ServiceDefinitionList" || len(services.Items) != len(expectedServiceIDs) {
+			t.Fatalf("managed-service exact service filtering status=%d body=%s", serviceResponse.Status, serviceResponse.Body)
+		}
+		var postgresService managedservicev1.ServiceDefinition
+		for index, expectedID := range expectedServiceIDs {
+			definition := services.Items[index]
+			if definition.ID != expectedID || managedservicev1.ValidateServiceDefinition(definition) != nil ||
+				definition.State != managedservicev1.ServiceDefinitionAvailable ||
+				definition.ActivationPrerequisite != managedservicev1.ServiceActivationPermissionOnly {
+				t.Fatalf("managed-service service directory is not the exact released set: body=%s", serviceResponse.Body)
+			}
+			if definition.ID == managedservicev1.PostgreSQLServiceID {
+				postgresService = definition
+			}
+		}
+		var exactServiceBatch bool
+		if err := admin.QueryRow(ctx, `SELECT count(*)=$3+1
+			AND count(*) FILTER (WHERE target_id='collection' AND resource_mode='COLLECTION' AND collection_usage='COLLECTION_LIST')=1
+			AND count(*) FILTER (WHERE target_id=ANY($4::text[]) AND resource_mode='INSTANCE' AND collection_usage IS NULL)=$3
+			AND count(DISTINCT target_id) FILTER (WHERE resource_mode='INSTANCE' AND collection_usage IS NULL)=$3
+			AND count(DISTINCT document->>'correlationId')=1 AND bool_and(allowed)
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND subject_type='USER'
+			AND action_name=$5 AND target_kind=$6`, tenant.id, tenant.memberID, len(expectedServiceIDs), expectedServiceIDs,
+			string(iamv1.ActionManagedServiceDefinitionRead), string(iamv1.ResourceServiceDefinition)).Scan(&exactServiceBatch); err != nil || !exactServiceBatch {
+			t.Fatal("service list did not persist one collection admission and one decision for every released service", err)
+		}
+		activationListResponse := performJSON(t, http.MethodGet, base+"/service-activations", tenant.member, nil)
+		var initialActivations managedservicev1.ServiceActivationList
+		if activationListResponse.Status != http.StatusOK || json.Unmarshal(activationListResponse.Body, &initialActivations) != nil ||
+			initialActivations.Kind != "ServiceActivationList" || len(initialActivations.Items) != 0 {
+			t.Fatalf("new Account did not start with an empty service activation directory: status=%d body=%s",
+				activationListResponse.Status, activationListResponse.Body)
+		}
+		serviceRequest := managedservicev1.ActivateServiceRequest{Service: managedservicev1.ServiceDefinitionReference{
+			ID: postgresService.ID, Revision: postgresService.Revision, ContentDigest: postgresService.ContentDigest,
+		}}
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", tenant.member,
+			"pre-activation-tenant-quota-key", activation), http.StatusConflict, "quota before service activation")
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.member,
+			"shared-service-activation-key", serviceRequest), http.StatusForbidden, "developer service activation")
+		activateResponse := performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.owner,
+			"shared-service-activation-key", serviceRequest)
+		assertStatus(activateResponse, http.StatusCreated, "Account administrator service activation")
+		if activateResponse.Header.Get("Location") != "/managed-services/v1/service-activations/"+postgresService.ID ||
+			json.Unmarshal(activateResponse.Body, &tenant.serviceActivation) != nil ||
+			managedservicev1.ValidateServiceActivation(tenant.serviceActivation) != nil ||
+			tenant.serviceActivation.Service != serviceRequest.Service {
+			t.Fatalf("Account service activation changed its exact service contract: body=%s", activateResponse.Body)
+		}
+		activateReplay := performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.owner,
+			"shared-service-activation-key", serviceRequest)
+		var replayedActivation managedservicev1.ServiceActivation
+		if activateReplay.Status != http.StatusOK || json.Unmarshal(activateReplay.Body, &replayedActivation) != nil ||
+			replayedActivation != tenant.serviceActivation {
+			t.Fatalf("Account service activation replay changed its terminal result: status=%d body=%s",
+				activateReplay.Status, activateReplay.Body)
+		}
+		changedServiceRequest := serviceRequest
+		changedServiceRequest.Service.ContentDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.owner,
+			"shared-service-activation-key", changedServiceRequest), http.StatusConflict, "changed service activation replay")
+		activationResponse := performJSON(t, http.MethodGet,
+			base+"/service-activations/"+managedservicev1.PostgreSQLServiceID, tenant.member, nil)
+		var visibleActivation managedservicev1.ServiceActivation
+		if activationResponse.Status != http.StatusOK || json.Unmarshal(activationResponse.Body, &visibleActivation) != nil ||
+			visibleActivation != tenant.serviceActivation {
+			t.Fatalf("delegated product reader did not observe its Account activation: status=%d body=%s",
+				activationResponse.Status, activationResponse.Body)
+		}
+		activationListResponse = performJSON(t, http.MethodGet, base+"/service-activations", tenant.member, nil)
+		var activations managedservicev1.ServiceActivationList
+		if activationListResponse.Status != http.StatusOK || json.Unmarshal(activationListResponse.Body, &activations) != nil ||
+			activations.Kind != "ServiceActivationList" || len(activations.Items) != 1 ||
+			activations.Items[0] != tenant.serviceActivation {
+			t.Fatalf("Account activation directory is not exact: status=%d body=%s",
+				activationListResponse.Status, activationListResponse.Body)
+		}
 		offeringResponse := performJSON(t, http.MethodGet, base+"/offerings", tenant.member, nil)
 		var offerings managedservicev1.ServiceOfferingList
 		if offeringResponse.Status != http.StatusOK || json.Unmarshal(offeringResponse.Body, &offerings) != nil ||
@@ -10604,6 +10713,15 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			t.Fatal("ROLE batch did not retain two denied decisions and exact tenant Audit facts", err)
 		}
 	}
+	var independentServiceActivations bool
+	if err := admin.QueryRow(ctx, `SELECT count(*)=2 AND count(DISTINCT tenant_id)=2
+		AND count(DISTINCT activated_by_id)=2 AND bool_and(service_id=$1)
+		AND bool_and(resource_version=1)
+		FROM managedservice.service_activations
+		WHERE tenant_id=ANY($2::text[])`, managedservicev1.PostgreSQLServiceID,
+		[]string{tenants[0].id, tenants[1].id}).Scan(&independentServiceActivations); err != nil || !independentServiceActivations {
+		t.Fatal("same service activation was not persisted independently for both Accounts", err)
+	}
 	if tenants[0].quota.ID == tenants[1].quota.ID || tenants[0].shared.Operation.ID == tenants[1].shared.Operation.ID {
 		t.Fatal("cross-tenant idempotency merged independent quota or Operations")
 	}
@@ -10636,8 +10754,11 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		for _, field := range []string{"tenantId", "organizationId", "requestedBy"} {
 			body := map[string]any{"offeringId": "postgresql-18", "quotaShapeId": "pg-small", "instanceCount": 1, field: other.id}
 			assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", tenant.member, "forged-"+field, body), http.StatusBadRequest, "forged authority body")
+			serviceBody := map[string]any{"service": tenant.serviceActivation.Service, field: other.id}
+			assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.owner,
+				"forged-service-activation-"+field, serviceBody), http.StatusBadRequest, "forged service activation authority body")
 		}
-		for _, path := range []string{"/offerings", "/quota-entitlements", "/service-installations", "/service-installations/" + tenant.shared.ID + "/operation"} {
+		for _, path := range []string{"/services", "/service-activations", "/offerings", "/quota-entitlements", "/service-installations", "/service-installations/" + tenant.shared.ID + "/operation"} {
 			for _, query := range []string{"?tenantId=" + other.id, "?cursor=" + other.unique.ID, "?after=" + other.quota.ID} {
 				assertStatus(performJSON(t, http.MethodGet, base+path+query, tenant.member, nil), http.StatusBadRequest, "unsupported selector or cursor")
 			}
@@ -10814,23 +10935,37 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	}
 	applicationValues := proveApplicationTenantProcesses(t, ctx, admin, iamEndpoint, paasEndpoint,
 		home, customer, homeBearer, customerBearer, platform.Credential)
+	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", platform.Credential,
+		"platform-service-activation-attempt", managedservicev1.ActivateServiceRequest{Service: tenants[0].serviceActivation.Service}),
+		http.StatusForbidden, "platform-only service activation")
 	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", platform.Credential, "platform-quota-attempt", activation), http.StatusForbidden, "platform-only tenant write")
 	revokeIAMPolicyAttachment(t, iamEndpoint, homeBearer, developerBinding.ID, 1, "request-resource-developer-revoked")
 	viewerBinding := createIAMPolicyAttachment(t, iamEndpoint, homeBearer, homeUser.ID, iamv1.SystemPolicyPaaSViewer, "request-resource-viewer")
+	assertStatus(performJSON(t, http.MethodGet, base+"/services", home.Credential, nil), http.StatusOK, "viewer service definition filter")
+	assertStatus(performJSON(t, http.MethodGet, base+"/service-activations", home.Credential, nil), http.StatusOK, "viewer service activation read")
 	assertStatus(performJSON(t, http.MethodGet, base+"/offerings", home.Credential, nil), http.StatusOK, "viewer offering filter")
 	assertStatus(performJSON(t, http.MethodGet, base+"/service-installations", home.Credential, nil), http.StatusOK, "viewer read")
+	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", home.Credential,
+		"viewer-service-activation-attempt", managedservicev1.ActivateServiceRequest{Service: tenants[0].serviceActivation.Service}),
+		http.StatusForbidden, "viewer service activation")
 	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", home.Credential, "viewer-quota-attempt", activation), http.StatusForbidden, "viewer write")
 	getPaaSApplication(t, paasEndpoint, home.Credential, "application-shared-id", http.StatusOK)
 	createPaaSApplication(t, paasEndpoint, home.Credential, "application-viewer-denied", "viewer-denied", "viewer-application-attempt", http.StatusForbidden)
 	assertPaaSApplicationAbsent(t, ctx, admin, "application-viewer-denied")
 	revokeIAMPolicyAttachment(t, iamEndpoint, homeBearer, viewerBinding.ID, 1, "request-resource-viewer-revoked")
+	assertStatus(performJSON(t, http.MethodGet, base+"/services", home.Credential, nil), http.StatusForbidden, "next-request service definition permission revocation")
+	assertStatus(performJSON(t, http.MethodGet, base+"/service-activations", home.Credential, nil), http.StatusForbidden, "next-request service activation permission revocation")
 	assertStatus(performJSON(t, http.MethodGet, base+"/offerings", home.Credential, nil), http.StatusForbidden, "next-request offering permission revocation")
 	assertStatus(performJSON(t, http.MethodGet, base+"/service-installations", home.Credential, nil), http.StatusForbidden, "next-request role revocation")
 	getPaaSApplication(t, paasEndpoint, home.Credential, "application-shared-id", http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	waitAllPaaSOutboxDelivered(t, ctx, admin)
 	for _, tenant := range tenants {
-		for _, action := range []auditv1.Action{auditv1.ActionManagedServiceQuotaEntitlementActivated, auditv1.ActionManagedServiceInstallationCreated} {
+		for _, action := range []auditv1.Action{
+			auditv1.ActionManagedServiceServiceActivationActivated,
+			auditv1.ActionManagedServiceQuotaEntitlementActivated,
+			auditv1.ActionManagedServiceInstallationCreated,
+		} {
 			page := queryAudit(t, auditEndpoint, tenant.owner, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
 			expected := 1
 			if action == auditv1.ActionManagedServiceInstallationCreated {
@@ -10839,8 +10974,12 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			if page.TenantID != auditv1.TenantID(tenant.id) || len(page.Records) != expected {
 				t.Fatal("managed-service audit replay or tenant isolation failed")
 			}
+			expectedActor := tenant.memberID
+			if action == auditv1.ActionManagedServiceServiceActivationActivated {
+				expectedActor = tenant.ownerID
+			}
 			for _, record := range page.Records {
-				if record.Source != auditv1.SourcePaaS || record.Event.Actor.ID != auditv1.ActorID(tenant.memberID) || record.Event.IAMDecisionID == "" || record.Event.TenantID != auditv1.TenantID(tenant.id) {
+				if record.Source != auditv1.SourcePaaS || record.Event.Actor.ID != auditv1.ActorID(expectedActor) || record.Event.IAMDecisionID == "" || record.Event.TenantID != auditv1.TenantID(tenant.id) {
 					t.Fatal("managed-service fact lost its original tenant/actor/authority")
 				}
 			}

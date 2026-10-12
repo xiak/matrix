@@ -21,6 +21,9 @@ type scanner interface {
 	Scan(...any) error
 }
 
+const serviceActivationColumns = `service_id, service_revision, service_digest,
+       resource_version, activated_at`
+
 const quotaColumns = `id, offering_id, quota_shape_id, purchased_count,
        reserved_count, consumed_count, resource_version, activated_at`
 
@@ -32,6 +35,91 @@ const installationColumns = `installation.id, installation.name,
        installation.created_at,
        operation.id, operation.kind, operation.phase, operation.safe_failure_code,
        operation.observed_at`
+
+func (value *transaction) ListServiceActivations(
+	ctx context.Context,
+) ([]managedservicev1.ServiceActivation, error) {
+	rows, err := value.tx.Query(ctx, `
+SELECT `+serviceActivationColumns+`
+  FROM managedservice.service_activations
+ ORDER BY activated_at DESC, service_id COLLATE "C"`)
+	if err != nil {
+		return nil, databaseError(ctx, err)
+	}
+	defer rows.Close()
+	result := make([]managedservicev1.ServiceActivation, 0)
+	for rows.Next() {
+		item, scanErr := scanServiceActivation(rows)
+		if scanErr != nil {
+			return nil, databaseError(ctx, scanErr)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, databaseError(ctx, err)
+	}
+	return result, nil
+}
+
+func (value *transaction) GetServiceActivation(
+	ctx context.Context,
+	serviceID string,
+) (managedservicev1.ServiceActivation, error) {
+	item, err := scanServiceActivation(value.tx.QueryRow(ctx, `
+SELECT `+serviceActivationColumns+`
+  FROM managedservice.service_activations
+ WHERE service_id = $1`, serviceID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return managedservicev1.ServiceActivation{}, usecase.ErrNotFound
+	}
+	if err != nil {
+		return managedservicev1.ServiceActivation{}, databaseError(ctx, err)
+	}
+	return item, nil
+}
+
+func (value *transaction) FindServiceActivationReplay(
+	ctx context.Context,
+	idempotencyKey string,
+) (managedservicev1.ServiceActivation, string, bool, error) {
+	row := value.tx.QueryRow(ctx, `
+SELECT `+serviceActivationColumns+`, request_digest
+  FROM managedservice.service_activations
+ WHERE idempotency_key = $1`, idempotencyKey)
+	item, digest, err := scanServiceActivationWithDigest(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return managedservicev1.ServiceActivation{}, "", false, nil
+	}
+	if err != nil {
+		return managedservicev1.ServiceActivation{}, "", false, databaseError(ctx, err)
+	}
+	return item, digest, true, nil
+}
+
+func (value *transaction) InsertServiceActivation(
+	ctx context.Context,
+	draft usecase.ServiceActivationDraft,
+) (managedservicev1.ServiceActivation, error) {
+	row := value.tx.QueryRow(ctx, `
+INSERT INTO managedservice.service_activations (
+    tenant_id, service_id, service_revision, service_digest,
+    idempotency_key, request_digest, activated_by_type, activated_by_id,
+    iam_decision_id, request_id
+) VALUES (
+    managedservice.current_tenant_id(), $1, $2, $3,
+    $4, $5, $6, $7, $8, $9
+)
+RETURNING `+serviceActivationColumns,
+		draft.Service.ID, draft.Service.Revision, draft.Service.ContentDigest,
+		draft.IdempotencyKey, draft.RequestDigest, draft.ActorType, draft.ActorID,
+		draft.IAMDecisionID, draft.RequestID,
+	)
+	item, err := scanServiceActivation(row)
+	if err != nil {
+		return managedservicev1.ServiceActivation{}, databaseError(ctx, err)
+	}
+	return item, nil
+}
 
 func (value *transaction) ListQuotaEntitlements(
 	ctx context.Context,
@@ -370,6 +458,39 @@ func scanQuota(row scanner) (managedservicev1.QuotaEntitlement, error) {
 		return managedservicev1.QuotaEntitlement{}, usecase.ErrRepositoryUnavailable
 	}
 	return result, nil
+}
+
+func scanServiceActivation(row scanner) (managedservicev1.ServiceActivation, error) {
+	var result managedservicev1.ServiceActivation
+	err := row.Scan(
+		&result.Service.ID, &result.Service.Revision, &result.Service.ContentDigest,
+		&result.ResourceVersion, &result.ActivatedAt,
+	)
+	if err != nil {
+		return managedservicev1.ServiceActivation{}, err
+	}
+	result.ActivatedAt = normalizeTime(result.ActivatedAt)
+	if managedservicev1.ValidateServiceActivation(result) != nil {
+		return managedservicev1.ServiceActivation{}, usecase.ErrRepositoryUnavailable
+	}
+	return result, nil
+}
+
+func scanServiceActivationWithDigest(row scanner) (managedservicev1.ServiceActivation, string, error) {
+	var result managedservicev1.ServiceActivation
+	var digest string
+	err := row.Scan(
+		&result.Service.ID, &result.Service.Revision, &result.Service.ContentDigest,
+		&result.ResourceVersion, &result.ActivatedAt, &digest,
+	)
+	if err != nil {
+		return managedservicev1.ServiceActivation{}, "", err
+	}
+	result.ActivatedAt = normalizeTime(result.ActivatedAt)
+	if managedservicev1.ValidateServiceActivation(result) != nil {
+		return managedservicev1.ServiceActivation{}, "", usecase.ErrRepositoryUnavailable
+	}
+	return result, digest, nil
 }
 
 func scanQuotaWithDigest(row scanner) (managedservicev1.QuotaEntitlement, string, error) {

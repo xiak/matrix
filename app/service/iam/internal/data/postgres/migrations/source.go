@@ -405,6 +405,7 @@ func systemPolicySQL(additional []iamv1.ProductServiceRolePolicy) (string, error
 		{LegacyRole: "INSTALLATION_VERIFIER", PolicyID: iamv1.SystemPolicyInstallationVerifier, DisplayName: "InstallationVerifier"},
 		{PolicyID: iamv1.SystemPolicyManagedServiceInstallationReader, DisplayName: "ManagedServiceInstallationReader"},
 		{PolicyID: iamv1.SystemPolicyServiceRoleAdministrator, DisplayName: "ServiceRoleAdministrator"},
+		{PolicyID: iamv1.SystemPolicyServiceActivationAdministrator, DisplayName: "ServiceActivationAdministrator"},
 	}
 	for index := range seeds {
 		version, err := authority.SystemPolicyVersion(seeds[index].PolicyID)

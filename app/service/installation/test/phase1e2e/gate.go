@@ -454,6 +454,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 type signedManagedProduct struct {
 	name             string
 	component        string
+	serviceID        string
 	offeringID       string
 	quotaShapeID     string
 	engineVersion    string
@@ -470,16 +471,20 @@ func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
 	}
 	tenant := &value.retainedIAM.Tenants[0]
 	products := []signedManagedProduct{
-		{name: "PostgreSQL 18", component: "postgres", offeringID: managedservicev1.PostgreSQLOfferingID,
+		{name: "PostgreSQL 18", component: "postgres", serviceID: managedservicev1.PostgreSQLServiceID,
+			offeringID:   managedservicev1.PostgreSQLOfferingID,
 			quotaShapeID: "pg-small", engineVersion: "18", installationID: "phase1-managed-postgres",
 			runtimeDirectory: "managed-postgres", credentialFile: "postgres-password", credentialMode: 0o600},
-		{name: "MySQL 8.4 LTS", component: "mysql", offeringID: managedservicev1.MySQLOfferingID,
+		{name: "MySQL 8.4 LTS", component: "mysql", serviceID: managedservicev1.MySQLServiceID,
+			offeringID:   managedservicev1.MySQLOfferingID,
 			quotaShapeID: "mysql-small", engineVersion: "8.4", installationID: "phase1-managed-mysql",
 			runtimeDirectory: "managed-mysql", credentialFile: "mysql-password", credentialMode: 0o600},
-		{name: "Elasticsearch 8.19.23", component: "elasticsearch", offeringID: managedservicev1.ElasticsearchOfferingID,
+		{name: "Elasticsearch 8.19.23", component: "elasticsearch", serviceID: managedservicev1.ElasticsearchServiceID,
+			offeringID:   managedservicev1.ElasticsearchOfferingID,
 			quotaShapeID: "elasticsearch-small", engineVersion: "8.19.23", installationID: "phase1-managed-elasticsearch",
 			runtimeDirectory: "managed-elasticsearch", credentialFile: "elasticsearch-password", credentialMode: 0o640},
-		{name: "RabbitMQ 4.1.8", component: "rabbitmq", offeringID: managedservicev1.RabbitMQOfferingID,
+		{name: "RabbitMQ 4.1.8", component: "rabbitmq", serviceID: managedservicev1.RabbitMQServiceID,
+			offeringID:   managedservicev1.RabbitMQOfferingID,
 			quotaShapeID: "rabbitmq-small", engineVersion: "4.1.8", installationID: "phase1-managed-rabbitmq",
 			runtimeDirectory: "managed-rabbitmq", credentialFile: "rabbitmq-password", credentialMode: 0o600},
 	}
@@ -502,6 +507,28 @@ func (value *gate) verifySignedManagedProduct(
 	bearer := tenant.RetainedPrimaryCredential
 	base := "/api/managed-services/v1"
 	requestPrefix := "phase1-signed-" + product.component
+	var definition managedservicev1.ServiceDefinition
+	if _, err := value.edge.get(ctx, base+"/services/"+product.serviceID, bearer, &definition); err != nil ||
+		managedservicev1.ValidateServiceDefinition(definition) != nil || definition.ID != product.serviceID ||
+		definition.State != managedservicev1.ServiceDefinitionAvailable {
+		return fail("signed-managed-product-service-definition-" + product.component)
+	}
+	serviceReference := managedservicev1.ServiceDefinitionReference{
+		ID: definition.ID, Revision: definition.Revision, ContentDigest: definition.ContentDigest,
+	}
+	activationResponse, err := value.edge.json(ctx, http.MethodPost, base+"/service-activations", bearer,
+		managedservicev1.ActivateServiceRequest{Service: serviceReference},
+		map[string]string{"Idempotency-Key": requestPrefix + "-service-activation"}, http.StatusCreated)
+	if err != nil {
+		return fail("signed-managed-product-service-activation-" + product.component)
+	}
+	var activation managedservicev1.ServiceActivation
+	decodeErr := decodeOne(activationResponse.body, &activation)
+	clear(activationResponse.body)
+	if decodeErr != nil || managedservicev1.ValidateServiceActivation(activation) != nil ||
+		activation.Service != serviceReference {
+		return fail("signed-managed-product-service-activation-" + product.component)
+	}
 	quotaResponse, err := value.edge.json(ctx, http.MethodPost, base+"/quota-entitlements", bearer,
 		managedservicev1.ActivateQuotaRequest{
 			OfferingID: product.offeringID, QuotaShapeID: product.quotaShapeID, InstanceCount: 1,
@@ -510,7 +537,7 @@ func (value *gate) verifySignedManagedProduct(
 		return fail("signed-managed-product-quota-" + product.component)
 	}
 	var quota managedservicev1.QuotaEntitlement
-	decodeErr := decodeOne(quotaResponse.body, &quota)
+	decodeErr = decodeOne(quotaResponse.body, &quota)
 	clear(quotaResponse.body)
 	if decodeErr != nil || managedservicev1.ValidateQuotaEntitlement(quota) != nil ||
 		quota.OfferingID != product.offeringID || quota.QuotaShapeID != product.quotaShapeID ||
@@ -1304,6 +1331,47 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 				return fail("tenant-resource-creation-" + label)
 			}
 			tenant.Operations = append(tenant.Operations, operation)
+		}
+		serviceBase := "/api/managed-services/v1"
+		var postgresService managedservicev1.ServiceDefinition
+		if _, err := value.edge.get(ctx, serviceBase+"/services/"+managedservicev1.PostgreSQLServiceID,
+			tenant.OldChildCredential, &postgresService); err != nil ||
+			managedservicev1.ValidateServiceDefinition(postgresService) != nil ||
+			postgresService.ID != managedservicev1.PostgreSQLServiceID ||
+			postgresService.State != managedservicev1.ServiceDefinitionAvailable {
+			return fail("tenant-service-definition-" + label)
+		}
+		serviceReference := managedservicev1.ServiceDefinitionReference{
+			ID: postgresService.ID, Revision: postgresService.Revision, ContentDigest: postgresService.ContentDigest,
+		}
+		preActivationQuota, err := value.edge.json(ctx, http.MethodPost, serviceBase+"/quota-entitlements",
+			tenant.OldChildCredential,
+			managedservicev1.ActivateQuotaRequest{OfferingID: managedservicev1.PostgreSQLOfferingID,
+				QuotaShapeID: "pg-small", InstanceCount: 1},
+			map[string]string{"Idempotency-Key": "tenant-pre-activation-quota-key"}, http.StatusConflict)
+		clear(preActivationQuota.body)
+		if err != nil {
+			return fail("tenant-quota-before-service-activation-" + label)
+		}
+		deniedActivation, err := value.edge.json(ctx, http.MethodPost, serviceBase+"/service-activations",
+			tenant.OldChildCredential, managedservicev1.ActivateServiceRequest{Service: serviceReference},
+			map[string]string{"Idempotency-Key": "tenant-same-service-activation-key"}, http.StatusForbidden)
+		clear(deniedActivation.body)
+		if err != nil {
+			return fail("tenant-developer-service-activation-" + label)
+		}
+		activationResponse, err := value.edge.json(ctx, http.MethodPost, serviceBase+"/service-activations",
+			tenant.OldPrimaryCredential, managedservicev1.ActivateServiceRequest{Service: serviceReference},
+			map[string]string{"Idempotency-Key": "tenant-same-service-activation-key"}, http.StatusCreated)
+		if err != nil {
+			return fail("tenant-administrator-service-activation-" + label)
+		}
+		var serviceActivation managedservicev1.ServiceActivation
+		activationDecodeErr := decodeOne(activationResponse.body, &serviceActivation)
+		clear(activationResponse.body)
+		if activationDecodeErr != nil || managedservicev1.ValidateServiceActivation(serviceActivation) != nil ||
+			serviceActivation.Service != serviceReference {
+			return fail("tenant-administrator-service-activation-" + label)
 		}
 		quota, err := value.edge.json(ctx, http.MethodPost, "/api/managed-services/v1/quota-entitlements", tenant.OldChildCredential,
 			managedservicev1.ActivateQuotaRequest{OfferingID: "postgresql-18", QuotaShapeID: "pg-small", InstanceCount: 1},

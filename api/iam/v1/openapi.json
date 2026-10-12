@@ -2247,6 +2247,9 @@
           "managedservice.service-installation.service-role.bind",
           "managedservice.service-installation.service-role.unbind",
           "managedservice.service-installation.terminate",
+          "managedservice.service-definition.read",
+          "managedservice.service-activation.read",
+          "managedservice.service-activation.activate",
           "audit.record.read",
           "audit.integrity.verify",
           "audit.platform-record.read",
@@ -9586,9 +9589,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -9663,9 +9666,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -9729,9 +9732,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -9806,9 +9809,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -9872,9 +9875,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -9949,9 +9952,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -10006,9 +10009,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -10062,9 +10065,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -10118,9 +10121,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -10128,6 +10131,226 @@
                   "properties": {
                     "kind": {
                       "const": "SERVICE_INSTALLATION"
+                    }
+                  }
+                },
+                "resourceTags": false,
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-definition.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                },
+                {
+                  "properties": {
+                    "collectionUsage": {
+                      "const": "COLLECTION_LIST"
+                    },
+                    "resource": {
+                      "properties": {
+                        "id": {
+                          "const": "collection"
+                        }
+                      }
+                    },
+                    "resourceMode": {
+                      "const": "COLLECTION"
+                    }
+                  },
+                  "required": [
+                    "resourceMode",
+                    "collectionUsage"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "product": "managedservice",
+                    "revision": 6
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_DEFINITION"
+                    }
+                  }
+                },
+                "resourceTags": false,
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-activation.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                },
+                {
+                  "properties": {
+                    "collectionUsage": {
+                      "const": "COLLECTION_LIST"
+                    },
+                    "resource": {
+                      "properties": {
+                        "id": {
+                          "const": "collection"
+                        }
+                      }
+                    },
+                    "resourceMode": {
+                      "const": "COLLECTION"
+                    }
+                  },
+                  "required": [
+                    "resourceMode",
+                    "collectionUsage"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "product": "managedservice",
+                    "revision": 6
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_ACTIVATION"
+                    }
+                  }
+                },
+                "resourceTags": false,
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-activation.activate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": {
+                      "const": "COLLECTION_CREATE"
+                    },
+                    "resource": {
+                      "properties": {
+                        "id": {
+                          "const": "collection"
+                        }
+                      }
+                    },
+                    "resourceMode": {
+                      "const": "COLLECTION"
+                    }
+                  },
+                  "required": [
+                    "resourceMode",
+                    "collectionUsage"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "product": "managedservice",
+                    "revision": 6
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_ACTIVATION"
                     }
                   }
                 },
@@ -16439,9 +16662,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -16506,9 +16729,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -16562,9 +16785,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -16629,9 +16852,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -16685,9 +16908,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -16752,9 +16975,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -16798,9 +17021,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -16844,9 +17067,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -16890,9 +17113,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -16900,6 +17123,196 @@
                   "properties": {
                     "kind": {
                       "const": "SERVICE_INSTALLATION"
+                    }
+                  }
+                },
+                "resourceTags": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-definition.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                },
+                {
+                  "properties": {
+                    "collectionUsage": {
+                      "const": "COLLECTION_LIST"
+                    },
+                    "resource": {
+                      "properties": {
+                        "id": {
+                          "const": "collection"
+                        }
+                      }
+                    },
+                    "resourceMode": {
+                      "const": "COLLECTION"
+                    }
+                  },
+                  "required": [
+                    "resourceMode",
+                    "collectionUsage"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "product": "managedservice",
+                    "revision": 6
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_DEFINITION"
+                    }
+                  }
+                },
+                "resourceTags": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-activation.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                },
+                {
+                  "properties": {
+                    "collectionUsage": {
+                      "const": "COLLECTION_LIST"
+                    },
+                    "resource": {
+                      "properties": {
+                        "id": {
+                          "const": "collection"
+                        }
+                      }
+                    },
+                    "resourceMode": {
+                      "const": "COLLECTION"
+                    }
+                  },
+                  "required": [
+                    "resourceMode",
+                    "collectionUsage"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "product": "managedservice",
+                    "revision": 6
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_ACTIVATION"
+                    }
+                  }
+                },
+                "resourceTags": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-activation.activate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": {
+                      "const": "COLLECTION_CREATE"
+                    },
+                    "resource": {
+                      "properties": {
+                        "id": {
+                          "const": "collection"
+                        }
+                      }
+                    },
+                    "resourceMode": {
+                      "const": "COLLECTION"
+                    }
+                  },
+                  "required": [
+                    "resourceMode",
+                    "collectionUsage"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "product": "managedservice",
+                    "revision": 6
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_ACTIVATION"
                     }
                   }
                 },
@@ -23679,9 +24092,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -23746,9 +24159,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -23802,9 +24215,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -23869,9 +24282,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -23925,9 +24338,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -23992,9 +24405,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -24038,9 +24451,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -24084,9 +24497,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -24130,9 +24543,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9d43c710b24a24e4c5f6423fd3d7785083b57af2663918fd10a52fedbdb1eed7",
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
                     "product": "managedservice",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "requestTags": false,
@@ -24140,6 +24553,196 @@
                   "properties": {
                     "kind": {
                       "const": "SERVICE_INSTALLATION"
+                    }
+                  }
+                },
+                "resourceTags": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-definition.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                },
+                {
+                  "properties": {
+                    "collectionUsage": {
+                      "const": "COLLECTION_LIST"
+                    },
+                    "resource": {
+                      "properties": {
+                        "id": {
+                          "const": "collection"
+                        }
+                      }
+                    },
+                    "resourceMode": {
+                      "const": "COLLECTION"
+                    }
+                  },
+                  "required": [
+                    "resourceMode",
+                    "collectionUsage"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "product": "managedservice",
+                    "revision": 6
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_DEFINITION"
+                    }
+                  }
+                },
+                "resourceTags": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-activation.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                },
+                {
+                  "properties": {
+                    "collectionUsage": {
+                      "const": "COLLECTION_LIST"
+                    },
+                    "resource": {
+                      "properties": {
+                        "id": {
+                          "const": "collection"
+                        }
+                      }
+                    },
+                    "resourceMode": {
+                      "const": "COLLECTION"
+                    }
+                  },
+                  "required": [
+                    "resourceMode",
+                    "collectionUsage"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "product": "managedservice",
+                    "revision": 6
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_ACTIVATION"
+                    }
+                  }
+                },
+                "resourceTags": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-activation.activate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": {
+                      "const": "COLLECTION_CREATE"
+                    },
+                    "resource": {
+                      "properties": {
+                        "id": {
+                          "const": "collection"
+                        }
+                      }
+                    },
+                    "resourceMode": {
+                      "const": "COLLECTION"
+                    }
+                  },
+                  "required": [
+                    "resourceMode",
+                    "collectionUsage"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "product": "managedservice",
+                    "revision": 6
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_ACTIVATION"
                     }
                   }
                 },
@@ -26819,6 +27422,66 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "managedservice.service-definition.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "installationId": false
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-activation.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "installationId": false
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-activation.activate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "installationId": false
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "audit.record.read"
                 }
               },
@@ -29364,6 +30027,11 @@
                             "managedservice.quota-entitlement.read",
                             "managedservice.region.*",
                             "managedservice.region.read",
+                            "managedservice.service-activation.*",
+                            "managedservice.service-activation.activate",
+                            "managedservice.service-activation.read",
+                            "managedservice.service-definition.*",
+                            "managedservice.service-definition.read",
                             "managedservice.service-installation.*",
                             "managedservice.service-installation.create",
                             "managedservice.service-installation.read",
@@ -29794,6 +30462,8 @@
               "REGION",
               "QUOTA_ENTITLEMENT",
               "SERVICE_INSTALLATION",
+              "SERVICE_DEFINITION",
+              "SERVICE_ACTIVATION",
               "AUDIT_RECORD",
               "AUDIT_CHAIN"
             ]
@@ -29943,6 +30613,11 @@
                       "managedservice.quota-entitlement.read",
                       "managedservice.region.*",
                       "managedservice.region.read",
+                      "managedservice.service-activation.*",
+                      "managedservice.service-activation.activate",
+                      "managedservice.service-activation.read",
+                      "managedservice.service-definition.*",
+                      "managedservice.service-definition.read",
                       "managedservice.service-installation.*",
                       "managedservice.service-installation.create",
                       "managedservice.service-installation.read",
@@ -30110,6 +30785,11 @@
                       "managedservice.quota-entitlement.read",
                       "managedservice.region.*",
                       "managedservice.region.read",
+                      "managedservice.service-activation.*",
+                      "managedservice.service-activation.activate",
+                      "managedservice.service-activation.read",
+                      "managedservice.service-definition.*",
+                      "managedservice.service-definition.read",
                       "managedservice.service-installation.*",
                       "managedservice.service-installation.create",
                       "managedservice.service-installation.read",
@@ -30277,6 +30957,11 @@
                       "managedservice.quota-entitlement.read",
                       "managedservice.region.*",
                       "managedservice.region.read",
+                      "managedservice.service-activation.*",
+                      "managedservice.service-activation.activate",
+                      "managedservice.service-activation.read",
+                      "managedservice.service-definition.*",
+                      "managedservice.service-definition.read",
                       "managedservice.service-installation.*",
                       "managedservice.service-installation.create",
                       "managedservice.service-installation.read",
@@ -35532,6 +36217,207 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "managedservice.service-definition.read",
+                      "managedservice.service-definition.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_DEFINITION"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_DEFINITION"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "managedservice.service-definition.*",
+                        "managedservice.service-definition.read"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_DEFINITION"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "managedservice.service-definition.*",
+                      "managedservice.service-definition.read"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "managedservice.service-activation.read",
+                      "managedservice.service-activation.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_ACTIVATION"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_ACTIVATION"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "managedservice.service-activation.*",
+                        "managedservice.service-activation.activate",
+                        "managedservice.service-activation.read"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_ACTIVATION"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "managedservice.service-activation.*",
+                      "managedservice.service-activation.activate",
+                      "managedservice.service-activation.read"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "managedservice.service-activation.activate",
+                      "managedservice.service-activation.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_ACTIVATION"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
                       "audit.record.read",
                       "audit.record.*"
                     ]
@@ -35905,6 +36791,9 @@
                 "managedservice.service-installation.service-role.bind",
                 "managedservice.service-installation.service-role.unbind",
                 "managedservice.service-installation.terminate",
+                "managedservice.service-definition.read",
+                "managedservice.service-activation.read",
+                "managedservice.service-activation.activate",
                 "audit.record.read",
                 "audit.integrity.verify",
                 "audit.platform-record.read",
@@ -35936,6 +36825,8 @@
                 "managedservice.offering.*",
                 "managedservice.quota-entitlement.*",
                 "managedservice.region.*",
+                "managedservice.service-activation.*",
+                "managedservice.service-definition.*",
                 "managedservice.service-installation.*",
                 "paas.application-label.*",
                 "paas.application-revision.*",
@@ -37269,6 +38160,8 @@
           "DEPLOYMENT",
           "OPERATION",
           "SERVICE_OFFERING",
+          "SERVICE_DEFINITION",
+          "SERVICE_ACTIVATION",
           "REGION",
           "QUOTA_ENTITLEMENT",
           "SERVICE_INSTALLATION",

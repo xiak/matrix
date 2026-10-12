@@ -5,7 +5,7 @@ BEGIN
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (VALUES
-            ('quota_entitlements'), ('service_installations'),
+            ('service_activations'), ('quota_entitlements'), ('service_installations'),
             ('operations'), ('audit_outbox')
       ) AS required(name)
      WHERE to_regclass('managedservice.' || required.name) IS NULL;
@@ -19,7 +19,7 @@ BEGIN
       JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
      WHERE namespace.nspname = 'managedservice'
        AND class.relname IN (
-            'quota_entitlements', 'service_installations', 'operations', 'audit_outbox'
+            'service_activations', 'quota_entitlements', 'service_installations', 'operations', 'audit_outbox'
        )
        AND (NOT class.relrowsecurity OR NOT class.relforcerowsecurity);
     IF missing IS NOT NULL THEN
@@ -29,6 +29,7 @@ BEGIN
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (VALUES
+            ('service_activations_idempotency_uq'),
             ('quota_entitlements_idempotency_uq'),
             ('quota_entitlements_catalog_valid'),
             ('service_installations_entitlement_fk'),
@@ -75,6 +76,8 @@ BEGIN
        OR has_table_privilege('matrix_paas_worker', 'managedservice.operations', 'INSERT, UPDATE, DELETE')
        OR has_table_privilege('matrix_paas_worker', 'managedservice.service_installations', 'INSERT, UPDATE, DELETE')
        OR has_table_privilege('matrix_paas_worker', 'managedservice.quota_entitlements', 'INSERT, UPDATE, DELETE')
+       OR has_table_privilege('matrix_paas_worker', 'managedservice.service_activations', 'INSERT, UPDATE, DELETE')
+       OR has_table_privilege('matrix_paas_api', 'managedservice.service_activations', 'UPDATE, DELETE')
        OR has_table_privilege('matrix_paas_api', 'managedservice.audit_outbox', 'SELECT, INSERT, UPDATE, DELETE')
        OR has_table_privilege('matrix_paas_worker', 'managedservice.audit_outbox', 'SELECT, INSERT, UPDATE, DELETE') THEN
         RAISE EXCEPTION 'managed-service runtime roles are overprivileged';

@@ -16,19 +16,24 @@ var (
 )
 
 const (
-	AuthorizeOfferingRead             = iamv1.ActionManagedServiceOfferingRead
-	AuthorizeRegionRead               = iamv1.ActionManagedServiceRegionRead
-	AuthorizeQuotaEntitlementActivate = iamv1.ActionManagedServiceQuotaEntitlementActivate
-	AuthorizeQuotaEntitlementRead     = iamv1.ActionManagedServiceQuotaEntitlementRead
-	AuthorizeInstallationCreate       = iamv1.ActionManagedServiceInstallationCreate
-	AuthorizeInstallationRead         = iamv1.ActionManagedServiceInstallationRead
-	AuthorizeInstallationTerminate    = iamv1.ActionManagedServiceInstallationTerminate
-	AuthorizeInstallationRoleBind     = iamv1.ActionManagedServiceInstallationRoleBind
-	AuthorizeInstallationRoleUnbind   = iamv1.ActionManagedServiceInstallationRoleUnbind
+	AuthorizeOfferingRead              = iamv1.ActionManagedServiceOfferingRead
+	AuthorizeServiceDefinitionRead     = iamv1.ActionManagedServiceDefinitionRead
+	AuthorizeServiceActivationRead     = iamv1.ActionManagedServiceActivationRead
+	AuthorizeServiceActivationActivate = iamv1.ActionManagedServiceActivationActivate
+	AuthorizeRegionRead                = iamv1.ActionManagedServiceRegionRead
+	AuthorizeQuotaEntitlementActivate  = iamv1.ActionManagedServiceQuotaEntitlementActivate
+	AuthorizeQuotaEntitlementRead      = iamv1.ActionManagedServiceQuotaEntitlementRead
+	AuthorizeInstallationCreate        = iamv1.ActionManagedServiceInstallationCreate
+	AuthorizeInstallationRead          = iamv1.ActionManagedServiceInstallationRead
+	AuthorizeInstallationTerminate     = iamv1.ActionManagedServiceInstallationTerminate
+	AuthorizeInstallationRoleBind      = iamv1.ActionManagedServiceInstallationRoleBind
+	AuthorizeInstallationRoleUnbind    = iamv1.ActionManagedServiceInstallationRoleUnbind
 )
 
 const (
 	ResourceServiceOffering     = iamv1.ResourceServiceOffering
+	ResourceServiceDefinition   = iamv1.ResourceServiceDefinition
+	ResourceServiceActivation   = iamv1.ResourceServiceActivation
 	ResourceRegion              = iamv1.ResourceRegion
 	ResourceQuotaEntitlement    = iamv1.ResourceQuotaEntitlement
 	ResourceServiceInstallation = iamv1.ResourceServiceInstallation

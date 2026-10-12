@@ -122,6 +122,7 @@
           "paas.execution-target.activated",
           "paas.execution-target.removed",
           "managedservice.quota-entitlement.activated",
+          "managedservice.service-activation.activated",
           "managedservice.service-installation.created",
           "managedservice.service-installation.ready",
           "managedservice.service-installation.termination-requested",
@@ -2970,6 +2971,32 @@
                   "properties": {
                     "action": {
                       "const": "managedservice.quota-entitlement.activated"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "managedservice.service-activation.activated"
                     }
                   },
                   "required": [
@@ -8292,6 +8319,56 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "managedservice.service-activation.activated"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_ACTIVATION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "managedservice.service-installation.created"
                 }
               },
@@ -9131,6 +9208,7 @@
           "EXECUTION_POOL",
           "EXECUTION_TARGET",
           "QUOTA_ENTITLEMENT",
+          "SERVICE_ACTIVATION",
           "SERVICE_INSTALLATION",
           "AUDIT_RECORDS",
           "AUDIT_CHAIN"

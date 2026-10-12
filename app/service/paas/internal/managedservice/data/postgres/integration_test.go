@@ -310,11 +310,37 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 		t.Fatal("create managed-service use case")
 	}
 	authorizationA := integrationAuthorization("organization-a")
+	postgresService, err := service.GetService(ctx, authorizationA, managedservicev1.PostgreSQLServiceID)
+	if err != nil {
+		t.Fatalf("resolve PostgreSQL service definition: %v", err)
+	}
+	activationCommand := usecase.ActivateServiceCommand{
+		Authorization: authorizationA, IdempotencyKey: "service-activation-integration-request",
+		Request: managedservicev1.ActivateServiceRequest{Service: managedservicev1.ServiceDefinitionReference{
+			ID: postgresService.ID, Revision: postgresService.Revision, ContentDigest: postgresService.ContentDigest,
+		}},
+	}
 	quotaCommand := usecase.ActivateQuotaCommand{
 		Authorization: authorizationA, IdempotencyKey: "quota-integration-request",
 		Request: managedservicev1.ActivateQuotaRequest{
 			OfferingID: domain.PostgreSQLOfferingID, QuotaShapeID: "pg-small", InstanceCount: 1,
 		},
+	}
+	if _, _, err := service.ActivateQuota(ctx, quotaCommand); !errors.Is(err, usecase.ErrServiceNotActivated) {
+		t.Fatalf("quota before service activation error=%v", err)
+	}
+	activation, replayed, err := service.ActivateService(ctx, activationCommand)
+	if err != nil || replayed || activation.Service != activationCommand.Request.Service {
+		t.Fatalf("activate service=%#v replayed=%v err=%v", activation, replayed, err)
+	}
+	replayedActivation, replayed, err := service.ActivateService(ctx, activationCommand)
+	if err != nil || !replayed || replayedActivation != activation {
+		t.Fatalf("replay service activation=%#v replayed=%v err=%v", replayedActivation, replayed, err)
+	}
+	changedActivation := activationCommand
+	changedActivation.Request.Service.Revision++
+	if _, _, err := service.ActivateService(ctx, changedActivation); !errors.Is(err, usecase.ErrServiceDefinitionConflict) {
+		t.Fatalf("changed service activation error=%v", err)
 	}
 	quota, replayed, err := service.ActivateQuota(ctx, quotaCommand)
 	if err != nil || replayed {
@@ -381,32 +407,41 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal("create managed-service Audit dispatcher")
 	}
-	for expected := 1; expected <= 3; expected++ {
+	for expected := 1; expected <= 4; expected++ {
 		result, dispatchErr := dispatcher.DispatchOnce(ctx)
 		if dispatchErr != nil || !result.Claimed || !result.Delivered {
 			t.Fatalf("dispatch managed-service Audit event %d: result=%#v err=%v", expected, result, dispatchErr)
 		}
 	}
 	if result, dispatchErr := dispatcher.DispatchOnce(ctx); dispatchErr != nil || result.Claimed {
-		t.Fatalf("unexpected fourth managed-service Audit event: result=%#v err=%v", result, dispatchErr)
+		t.Fatalf("unexpected fifth managed-service Audit event: result=%#v err=%v", result, dispatchErr)
 	}
 	actions := map[string]int{}
 	for _, event := range ingestor.events {
 		actions[event.Action]++
 	}
-	if actions[audit.QuotaEntitlementActivated] != 1 ||
+	if actions[audit.ServiceActivationActivated] != 1 ||
+		actions[audit.QuotaEntitlementActivated] != 1 ||
 		actions[audit.ServiceInstallationCreated] != 1 ||
 		actions[audit.ServiceInstallationReady] != 1 {
 		t.Fatalf("managed-service Audit actions = %#v", actions)
 	}
 	snapshot, err := dispatcher.Snapshot(ctx)
-	if err != nil || snapshot.Delivered != 3 || snapshot.Pending != 0 || snapshot.DeadLetter != 0 {
+	if err != nil || snapshot.Delivered != 4 || snapshot.Pending != 0 || snapshot.DeadLetter != 0 {
 		t.Fatalf("combined PaaS Audit snapshot = %#v err=%v", snapshot, err)
 	}
 	quotas, err := service.ListQuotaEntitlements(ctx, authorizationA)
 	if err != nil || len(quotas.Items) != 1 || quotas.Items[0].ReservedCount != 0 ||
 		quotas.Items[0].ConsumedCount != 1 {
 		t.Fatalf("tenant A quotas=%#v err=%v", quotas, err)
+	}
+	activations, err := service.ListServiceActivations(ctx, authorizationA)
+	if err != nil || len(activations.Items) != 1 || activations.Items[0] != activation {
+		t.Fatalf("tenant A service activations=%#v err=%v", activations, err)
+	}
+	currentActivation, err := service.GetServiceActivation(ctx, authorizationA, activation.Service.ID)
+	if err != nil || currentActivation != activation {
+		t.Fatalf("tenant A service activation=%#v err=%v", currentActivation, err)
 	}
 	installations, err := service.ListServiceInstallations(ctx, authorizationA)
 	if err != nil || len(installations.Items) != 1 || installations.Items[0].ID != installation.ID ||
@@ -427,6 +462,13 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 		t.Fatalf("tenant A operation resource=%#v err=%v", currentOperation, err)
 	}
 	authorizationB := integrationAuthorization("organization-b")
+	otherActivations, activationErr := service.ListServiceActivations(ctx, authorizationB)
+	if activationErr != nil || len(otherActivations.Items) != 0 {
+		t.Fatalf("tenant B observed tenant A activation=%#v err=%v", otherActivations, activationErr)
+	}
+	if _, err := service.GetServiceActivation(ctx, authorizationB, activation.Service.ID); !errors.Is(err, usecase.ErrNotFound) {
+		t.Fatalf("tenant B service activation error=%v", err)
+	}
 	terminationCommand := usecase.TerminateInstallationCommand{
 		Authorization: authorizationB, InstallationID: installation.ID,
 		IdempotencyKey: "termination-cross-tenant",
@@ -458,14 +500,14 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	if err := workerRepository.CompleteTermination(ctx, terminationWork); !errors.Is(err, reconcileinstallation.ErrQueueUnavailable) {
 		t.Fatalf("stale termination completion error=%v", err)
 	}
-	for expected := 4; expected <= 5; expected++ {
+	for expected := 5; expected <= 6; expected++ {
 		result, dispatchErr := dispatcher.DispatchOnce(ctx)
 		if dispatchErr != nil || !result.Claimed || !result.Delivered {
 			t.Fatalf("dispatch managed-service Audit event %d: result=%#v err=%v", expected, result, dispatchErr)
 		}
 	}
 	if result, dispatchErr := dispatcher.DispatchOnce(ctx); dispatchErr != nil || result.Claimed {
-		t.Fatalf("unexpected sixth managed-service Audit event: result=%#v err=%v", result, dispatchErr)
+		t.Fatalf("unexpected seventh managed-service Audit event: result=%#v err=%v", result, dispatchErr)
 	}
 	actions = map[string]int{}
 	for _, event := range ingestor.events {
@@ -476,7 +518,7 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 		t.Fatalf("managed-service termination Audit actions=%#v", actions)
 	}
 	snapshot, err = dispatcher.Snapshot(ctx)
-	if err != nil || snapshot.Delivered != 5 || snapshot.Pending != 0 || snapshot.DeadLetter != 0 {
+	if err != nil || snapshot.Delivered != 6 || snapshot.Pending != 0 || snapshot.DeadLetter != 0 {
 		t.Fatalf("terminated PaaS Audit snapshot=%#v err=%v", snapshot, err)
 	}
 	currentQuota, err = service.GetQuotaEntitlement(ctx, authorizationA, quota.ID)
@@ -510,6 +552,13 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	}
 
 	concurrentAuthorization := integrationAuthorization("organization-concurrent")
+	concurrentActivationCommand := activationCommand
+	concurrentActivationCommand.Authorization = concurrentAuthorization
+	concurrentActivationCommand.IdempotencyKey = "service-activation-concurrent-request"
+	if createdActivation, replayed, err := service.ActivateService(ctx, concurrentActivationCommand); err != nil || replayed ||
+		createdActivation.Service != concurrentActivationCommand.Request.Service {
+		t.Fatalf("activate concurrent service=%#v replayed=%v err=%v", createdActivation, replayed, err)
+	}
 	concurrentQuota, replayed, err := service.ActivateQuota(ctx, usecase.ActivateQuotaCommand{
 		Authorization: concurrentAuthorization, IdempotencyKey: "quota-concurrent-request",
 		Request: managedservicev1.ActivateQuotaRequest{
@@ -586,7 +635,7 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 		concurrentInstallations.Items[0].Phase != managedservicev1.InstallationPending {
 		t.Fatalf("concurrent installations=%#v err=%v", concurrentInstallations, err)
 	}
-	for expected := 6; expected <= 7; expected++ {
+	for expected := 7; expected <= 9; expected++ {
 		result, dispatchErr := dispatcher.DispatchOnce(ctx)
 		if dispatchErr != nil || !result.Claimed || !result.Delivered {
 			t.Fatalf("dispatch concurrent managed-service Audit event %d: result=%#v err=%v", expected, result, dispatchErr)
@@ -599,13 +648,14 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	for _, event := range ingestor.events {
 		actions[event.Action]++
 	}
-	if actions[audit.QuotaEntitlementActivated] != 2 || actions[audit.ServiceInstallationCreated] != 2 ||
+	if actions[audit.ServiceActivationActivated] != 2 || actions[audit.QuotaEntitlementActivated] != 2 ||
+		actions[audit.ServiceInstallationCreated] != 2 ||
 		actions[audit.ServiceInstallationReady] != 1 || actions[audit.ServiceInstallationTerminationRequested] != 1 ||
 		actions[audit.ServiceInstallationTerminated] != 1 {
 		t.Fatalf("concurrent managed-service Audit actions=%#v", actions)
 	}
 	snapshot, err = dispatcher.Snapshot(ctx)
-	if err != nil || snapshot.Delivered != 7 || snapshot.Pending != 0 || snapshot.DeadLetter != 0 {
+	if err != nil || snapshot.Delivered != 9 || snapshot.Pending != 0 || snapshot.DeadLetter != 0 {
 		t.Fatalf("concurrent managed-service Audit snapshot=%#v err=%v", snapshot, err)
 	}
 }

@@ -18,15 +18,18 @@ import (
 )
 
 var (
-	ErrInvalidArgument       = errors.New("managed-service request is invalid")
-	ErrNotFound              = errors.New("managed-service resource is absent")
-	ErrAlreadyExists         = errors.New("managed-service resource already exists")
-	ErrIdempotencyConflict   = errors.New("managed-service idempotency key conflicts")
-	ErrQuotaExhausted        = errors.New("managed-service quota is exhausted")
-	ErrInvalidState          = errors.New("managed-service resource state conflicts")
-	ErrRegionUnavailable     = errors.New("managed-service region is unavailable")
-	ErrTransactionRetry      = errors.New("managed-service transaction must retry")
-	ErrRepositoryUnavailable = errors.New("managed-service repository is unavailable")
+	ErrInvalidArgument           = errors.New("managed-service request is invalid")
+	ErrNotFound                  = errors.New("managed-service resource is absent")
+	ErrAlreadyExists             = errors.New("managed-service resource already exists")
+	ErrIdempotencyConflict       = errors.New("managed-service idempotency key conflicts")
+	ErrServiceDefinitionConflict = errors.New("managed-service definition conflicts")
+	ErrServiceUnavailable        = errors.New("managed-service definition is unavailable")
+	ErrServiceNotActivated       = errors.New("managed-service is not activated")
+	ErrQuotaExhausted            = errors.New("managed-service quota is exhausted")
+	ErrInvalidState              = errors.New("managed-service resource state conflicts")
+	ErrRegionUnavailable         = errors.New("managed-service region is unavailable")
+	ErrTransactionRetry          = errors.New("managed-service transaction must retry")
+	ErrRepositoryUnavailable     = errors.New("managed-service repository is unavailable")
 )
 
 type TransactionMode uint8
@@ -41,6 +44,10 @@ type Repository interface {
 }
 
 type Transaction interface {
+	ListServiceActivations(context.Context) ([]managedservicev1.ServiceActivation, error)
+	GetServiceActivation(context.Context, string) (managedservicev1.ServiceActivation, error)
+	FindServiceActivationReplay(context.Context, string) (managedservicev1.ServiceActivation, string, bool, error)
+	InsertServiceActivation(context.Context, ServiceActivationDraft) (managedservicev1.ServiceActivation, error)
 	ListQuotaEntitlements(context.Context) ([]managedservicev1.QuotaEntitlement, error)
 	GetQuotaEntitlement(context.Context, string) (managedservicev1.QuotaEntitlement, error)
 	ListServiceInstallations(context.Context) ([]managedservicev1.ServiceInstallation, error)
@@ -55,6 +62,16 @@ type Transaction interface {
 	AppendAuditEvent(context.Context, audit.Event) error
 	Commit(context.Context) error
 	Rollback(context.Context) error
+}
+
+type ServiceActivationDraft struct {
+	Service        managedservicev1.ServiceDefinitionReference
+	IdempotencyKey string
+	RequestDigest  string
+	ActorType      port.SubjectType
+	ActorID        string
+	IAMDecisionID  string
+	RequestID      string
 }
 
 type QuotaDraft struct {
@@ -100,6 +117,12 @@ type TerminationDraft struct {
 type ActivateQuotaCommand struct {
 	Authorization  port.Authorization
 	Request        managedservicev1.ActivateQuotaRequest
+	IdempotencyKey string
+}
+
+type ActivateServiceCommand struct {
+	Authorization  port.Authorization
+	Request        managedservicev1.ActivateServiceRequest
 	IdempotencyKey string
 }
 
@@ -182,6 +205,34 @@ func NewService(repository Repository, config Config) (*Service, error) {
 	}, nil
 }
 
+func (service *Service) ListServices(
+	_ context.Context,
+	authorization port.Authorization,
+) (managedservicev1.ServiceDefinitionList, error) {
+	if port.ValidateAuthorization(authorization) != nil {
+		return managedservicev1.ServiceDefinitionList{}, ErrInvalidArgument
+	}
+	return managedservicev1.ServiceDefinitionList{
+		Kind: "ServiceDefinitionList", Items: service.catalog.ListServices(),
+	}, nil
+}
+
+func (service *Service) GetService(
+	ctx context.Context,
+	authorization port.Authorization,
+	id string,
+) (managedservicev1.ServiceDefinition, error) {
+	if ctx == nil || port.ValidateAuthorization(authorization) != nil ||
+		managedservicev1.ValidateServiceID(id) != nil {
+		return managedservicev1.ServiceDefinition{}, ErrInvalidArgument
+	}
+	definition, found := service.catalog.ResolveService(id)
+	if !found {
+		return managedservicev1.ServiceDefinition{}, ErrNotFound
+	}
+	return definition, nil
+}
+
 func (service *Service) ListOfferings(
 	_ context.Context,
 	authorization port.Authorization,
@@ -232,6 +283,46 @@ func (service *Service) GetRegion(
 		return managedservicev1.Region{}, ErrNotFound
 	}
 	return service.region, nil
+}
+
+func (service *Service) ListServiceActivations(
+	ctx context.Context,
+	authorization port.Authorization,
+) (managedservicev1.ServiceActivationList, error) {
+	if ctx == nil || port.ValidateAuthorization(authorization) != nil {
+		return managedservicev1.ServiceActivationList{}, ErrInvalidArgument
+	}
+	var items []managedservicev1.ServiceActivation
+	err := service.withTransaction(ctx, authorization.TenantID, ReadOnly, func(transaction Transaction) error {
+		var err error
+		items, err = transaction.ListServiceActivations(ctx)
+		return err
+	})
+	if err != nil {
+		return managedservicev1.ServiceActivationList{}, err
+	}
+	return managedservicev1.ServiceActivationList{Kind: "ServiceActivationList", Items: items}, nil
+}
+
+func (service *Service) GetServiceActivation(
+	ctx context.Context,
+	authorization port.Authorization,
+	serviceID string,
+) (managedservicev1.ServiceActivation, error) {
+	if ctx == nil || port.ValidateAuthorization(authorization) != nil ||
+		managedservicev1.ValidateServiceID(serviceID) != nil {
+		return managedservicev1.ServiceActivation{}, ErrInvalidArgument
+	}
+	var result managedservicev1.ServiceActivation
+	err := service.withTransaction(ctx, authorization.TenantID, ReadOnly, func(transaction Transaction) error {
+		var err error
+		result, err = transaction.GetServiceActivation(ctx, serviceID)
+		return err
+	})
+	if err != nil {
+		return managedservicev1.ServiceActivation{}, err
+	}
+	return result, nil
 }
 
 func (service *Service) ListQuotaEntitlements(
@@ -528,6 +619,16 @@ func (service *Service) ActivateQuota(
 			result, replayed = existing, true
 			return nil
 		}
+		activation, activationErr := transaction.GetServiceActivation(ctx, offering.Service.ID)
+		if errors.Is(activationErr, ErrNotFound) {
+			return ErrServiceNotActivated
+		}
+		if activationErr != nil {
+			return activationErr
+		}
+		if activation.Service != offering.Service {
+			return ErrServiceNotActivated
+		}
 		created, createErr := transaction.InsertQuotaEntitlement(ctx, draft)
 		if createErr != nil {
 			return createErr
@@ -547,6 +648,74 @@ func (service *Service) ActivateQuota(
 	}
 	if managedservicev1.ValidateQuotaEntitlement(result) != nil {
 		return managedservicev1.QuotaEntitlement{}, false, ErrRepositoryUnavailable
+	}
+	return result, replayed, nil
+}
+
+func (service *Service) ActivateService(
+	ctx context.Context,
+	command ActivateServiceCommand,
+) (managedservicev1.ServiceActivation, bool, error) {
+	if ctx == nil || port.ValidateAuthorization(command.Authorization) != nil ||
+		managedservicev1.ValidateActivateServiceRequest(command.Request) != nil ||
+		managedservicev1.ValidateIdempotencyKey(command.IdempotencyKey) != nil {
+		return managedservicev1.ServiceActivation{}, false, ErrInvalidArgument
+	}
+	definition, found := service.catalog.ResolveService(command.Request.Service.ID)
+	if !found {
+		return managedservicev1.ServiceActivation{}, false, ErrNotFound
+	}
+	expected := managedservicev1.ServiceDefinitionReference{
+		ID: definition.ID, Revision: definition.Revision, ContentDigest: definition.ContentDigest,
+	}
+	if command.Request.Service != expected {
+		return managedservicev1.ServiceActivation{}, false, ErrServiceDefinitionConflict
+	}
+	if definition.State != managedservicev1.ServiceDefinitionAvailable {
+		return managedservicev1.ServiceActivation{}, false, ErrServiceUnavailable
+	}
+	digest, err := requestDigest(command.Request)
+	if err != nil {
+		return managedservicev1.ServiceActivation{}, false, ErrRepositoryUnavailable
+	}
+	draft := ServiceActivationDraft{
+		Service: expected, IdempotencyKey: command.IdempotencyKey, RequestDigest: digest,
+		ActorType: command.Authorization.SubjectType, ActorID: command.Authorization.SubjectID,
+		IAMDecisionID: command.Authorization.DecisionID, RequestID: command.Authorization.RequestID,
+	}
+	var result managedservicev1.ServiceActivation
+	replayed := false
+	err = service.withWriteRetry(ctx, command.Authorization.TenantID, func(transaction Transaction) error {
+		existing, existingDigest, exists, findErr := transaction.FindServiceActivationReplay(ctx, command.IdempotencyKey)
+		if findErr != nil {
+			return findErr
+		}
+		if exists {
+			if existingDigest != digest || existing.Service != expected {
+				return ErrIdempotencyConflict
+			}
+			result, replayed = existing, true
+			return nil
+		}
+		created, createErr := transaction.InsertServiceActivation(ctx, draft)
+		if createErr != nil {
+			return createErr
+		}
+		event, eventErr := serviceActivationAuditEvent(command.Authorization, created, digest)
+		if eventErr != nil {
+			return ErrRepositoryUnavailable
+		}
+		if appendErr := transaction.AppendAuditEvent(ctx, event); appendErr != nil {
+			return appendErr
+		}
+		result = created
+		return nil
+	})
+	if err != nil {
+		return managedservicev1.ServiceActivation{}, false, err
+	}
+	if managedservicev1.ValidateServiceActivation(result) != nil {
+		return managedservicev1.ServiceActivation{}, false, ErrRepositoryUnavailable
 	}
 	return result, replayed, nil
 }
@@ -710,6 +879,26 @@ func quotaAuditEvent(
 	return event, audit.ValidateEvent(event)
 }
 
+func serviceActivationAuditEvent(
+	authorization port.Authorization,
+	activation managedservicev1.ServiceActivation,
+	requestDigest string,
+) (audit.Event, error) {
+	event := audit.Event{
+		SchemaVersion: "v1",
+		EventID:       serviceActivationAuditEventID(authorization.TenantID, activation.Service.ID),
+		TenantID:      audit.TenantID(authorization.TenantID),
+		Actor:         auditActor(authorization), IAMDecisionID: authorization.DecisionID,
+		Action: audit.ServiceActivationActivated,
+		Target: audit.TargetReference{
+			Kind: audit.TargetServiceActivation, ID: audit.ResourceID(activation.Service.ID),
+		},
+		RequestDigest: requestDigest, Result: audit.Succeeded,
+		RequestID: authorization.RequestID, OccurredAt: activation.ActivatedAt,
+	}
+	return event, audit.ValidateEvent(event)
+}
+
 func installationAuditEvent(
 	authorization port.Authorization,
 	installation managedservicev1.ServiceInstallation,
@@ -766,6 +955,17 @@ func auditActor(authorization port.Authorization) audit.ActorReference {
 func managedAuditEventID(action, resourceID string) string {
 	digest := sha256.Sum256([]byte(
 		"matrix-managedservice-audit-event-v1\x00" + action + "\x00" + resourceID,
+	))
+	return "audit-" + hex.EncodeToString(digest[:])
+}
+
+// A ServiceActivation ID is only unique within an Account. Include its
+// authority scope in this new event namespace so equal service names in two
+// Accounts cannot collide in Audit's global replay registry. Existing event
+// namespaces remain unchanged to preserve their historical replay identity.
+func serviceActivationAuditEventID(tenantID, serviceID string) string {
+	digest := sha256.Sum256([]byte(
+		"matrix-managedservice-service-activation-audit-event-v1\x00" + tenantID + "\x00" + serviceID,
 	))
 	return "audit-" + hex.EncodeToString(digest[:])
 }

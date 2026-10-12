@@ -690,6 +690,9 @@ func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfil
 			iamv1.ActionPaaSDeploymentCreate, iamv1.ActionPaaSDeploymentUpdate,
 			iamv1.ActionPaaSDeploymentRollback, iamv1.ActionPaaSDeploymentStop,
 			iamv1.ActionPaaSDeploymentRead, iamv1.ActionPaaSOperationRead,
+			iamv1.ActionManagedServiceDefinitionRead,
+			iamv1.ActionManagedServiceActivationRead,
+			iamv1.ActionManagedServiceActivationActivate,
 			iamv1.ActionManagedServiceOfferingRead, iamv1.ActionManagedServiceRegionRead,
 			iamv1.ActionManagedServiceQuotaEntitlementActivate, iamv1.ActionManagedServiceQuotaEntitlementRead,
 			iamv1.ActionManagedServiceInstallationCreate, iamv1.ActionManagedServiceInstallationRead,
@@ -721,6 +724,8 @@ func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfil
 			iamv1.ActionPaaSDeploymentCreate, iamv1.ActionPaaSDeploymentUpdate,
 			iamv1.ActionPaaSDeploymentRollback, iamv1.ActionPaaSDeploymentStop,
 			iamv1.ActionPaaSDeploymentRead, iamv1.ActionPaaSOperationRead,
+			iamv1.ActionManagedServiceDefinitionRead,
+			iamv1.ActionManagedServiceActivationRead,
 			iamv1.ActionManagedServiceOfferingRead, iamv1.ActionManagedServiceRegionRead,
 			iamv1.ActionManagedServiceQuotaEntitlementActivate, iamv1.ActionManagedServiceQuotaEntitlementRead,
 			iamv1.ActionManagedServiceInstallationCreate, iamv1.ActionManagedServiceInstallationRead,
@@ -731,6 +736,8 @@ func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfil
 			iamv1.ActionPaaSApplicationRead, iamv1.ActionPaaSConfigurationRead,
 			iamv1.ActionPaaSConfigurationRevisionRead, iamv1.ActionPaaSApplicationRevisionRead,
 			iamv1.ActionPaaSDeploymentRead, iamv1.ActionPaaSOperationRead,
+			iamv1.ActionManagedServiceDefinitionRead,
+			iamv1.ActionManagedServiceActivationRead,
 			iamv1.ActionManagedServiceOfferingRead, iamv1.ActionManagedServiceRegionRead,
 			iamv1.ActionManagedServiceQuotaEntitlementRead, iamv1.ActionManagedServiceInstallationRead,
 		}
@@ -747,6 +754,12 @@ func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfil
 			iamv1.ActionIAMServiceLinkedRoleRead, iamv1.ActionIAMServiceLinkedRoleCreate,
 			iamv1.ActionIAMRolePass, iamv1.ActionIAMWorkloadRoleBindingRevoke,
 			iamv1.ActionManagedServiceInstallationRoleBind, iamv1.ActionManagedServiceInstallationRoleUnbind,
+		}
+	case iamv1.SystemPolicyServiceActivationAdministrator:
+		actions = []iamv1.Action{
+			iamv1.ActionManagedServiceDefinitionRead,
+			iamv1.ActionManagedServiceActivationRead,
+			iamv1.ActionManagedServiceActivationActivate,
 		}
 	default:
 		return iamv1.PolicyVersion{}, ErrInvalidPolicyState

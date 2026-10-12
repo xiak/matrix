@@ -20,6 +20,11 @@ import (
 )
 
 type Workflow interface {
+	ListServices(context.Context, port.Authorization) (managedservicev1.ServiceDefinitionList, error)
+	GetService(context.Context, port.Authorization, string) (managedservicev1.ServiceDefinition, error)
+	ListServiceActivations(context.Context, port.Authorization) (managedservicev1.ServiceActivationList, error)
+	GetServiceActivation(context.Context, port.Authorization, string) (managedservicev1.ServiceActivation, error)
+	ActivateService(context.Context, usecase.ActivateServiceCommand) (managedservicev1.ServiceActivation, bool, error)
 	ListOfferings(context.Context, port.Authorization) (managedservicev1.ServiceOfferingList, error)
 	GetOffering(context.Context, port.Authorization, string) (managedservicev1.ServiceOffering, error)
 	ListRegions(context.Context, port.Authorization) (managedservicev1.RegionList, error)
@@ -55,6 +60,11 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	}
 	value := &handler{authorizer: authorizer, workflow: workflow, config: config}
 	routes := http.NewServeMux()
+	routes.HandleFunc("GET /managed-services/v1/services", value.listServices)
+	routes.HandleFunc("GET /managed-services/v1/services/{serviceId}", value.getService)
+	routes.HandleFunc("GET /managed-services/v1/service-activations", value.listServiceActivations)
+	routes.HandleFunc("POST /managed-services/v1/service-activations", value.activateService)
+	routes.HandleFunc("GET /managed-services/v1/service-activations/{serviceId}", value.getServiceActivation)
 	routes.HandleFunc("GET /managed-services/v1/offerings", value.listOfferings)
 	routes.HandleFunc("GET /managed-services/v1/offerings/{offeringId}", value.getOffering)
 	routes.HandleFunc("GET /managed-services/v1/regions", value.listRegions)
@@ -70,6 +80,141 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	routes.HandleFunc("POST /managed-services/v1/service-installations/{installationId}/service-role-bindings", value.bindServiceRole)
 	routes.HandleFunc("DELETE /managed-services/v1/service-installations/{installationId}/service-role-bindings/{bindingId}", value.unbindServiceRole)
 	return routes, nil
+}
+
+func (value *handler) listServices(response http.ResponseWriter, request *http.Request) {
+	authorization, requestID, ok := value.authorizeCollection(
+		response, request, port.AuthorizeServiceDefinitionRead, port.ResourceServiceDefinition, iamv1.AuthorizationCollectionList,
+	)
+	if !ok || !acceptsNoInput(response, request, requestID) {
+		return
+	}
+	result, err := value.workflow.ListServices(request.Context(), authorization)
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	filtered, err := value.filterServices(request, requestID, authorization, result)
+	if err != nil {
+		writeAuthorizationError(response, requestID, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, filtered)
+}
+
+func (value *handler) filterServices(
+	request *http.Request,
+	correlationID string,
+	collection port.Authorization,
+	result managedservicev1.ServiceDefinitionList,
+) (managedservicev1.ServiceDefinitionList, error) {
+	if request == nil || result.Kind != "ServiceDefinitionList" || len(result.Items) < 1 ||
+		len(result.Items) > iamv1.MaxAuthorizationBatchItems || port.ValidateAuthorization(collection) != nil {
+		return managedservicev1.ServiceDefinitionList{}, port.ErrAuthorizationUnavailable
+	}
+	items := append([]managedservicev1.ServiceDefinition(nil), result.Items...)
+	sort.Slice(items, func(left, right int) bool { return items[left].ID < items[right].ID })
+	batch := port.AuthorizationBatchRequest{
+		Credential: request.Header.Get("Authorization"),
+		Requests:   make([]port.AuthorizationRequest, len(items)),
+	}
+	previous := ""
+	for index, definition := range items {
+		if managedservicev1.ValidateServiceDefinition(definition) != nil || definition.ID <= previous {
+			return managedservicev1.ServiceDefinitionList{}, port.ErrAuthorizationUnavailable
+		}
+		itemRequestID, err := value.config.NewRequestID()
+		if err != nil || managedservicev1.ValidateID("requestId", itemRequestID) != nil {
+			return managedservicev1.ServiceDefinitionList{}, port.ErrAuthorizationUnavailable
+		}
+		batch.Requests[index] = port.AuthorizationRequest{
+			Credential: batch.Credential, Action: port.AuthorizeServiceDefinitionRead,
+			Resource:     port.ResourceReference{Kind: port.ResourceServiceDefinition, ID: definition.ID},
+			ResourceMode: iamv1.AuthorizationResourceInstance,
+			RequestID:    itemRequestID, CorrelationID: correlationID,
+		}
+		previous = definition.ID
+	}
+	authorization, err := value.authorizer.AuthorizeBatch(request.Context(), batch)
+	if err != nil || port.ValidateAuthorizationBatchForRequest(authorization, batch) != nil ||
+		authorization.TenantID != collection.TenantID || authorization.SubjectType != collection.SubjectType ||
+		authorization.SubjectID != collection.SubjectID {
+		if err != nil {
+			return managedservicev1.ServiceDefinitionList{}, err
+		}
+		return managedservicev1.ServiceDefinitionList{}, port.ErrAuthorizationUnavailable
+	}
+	allowed := make([]managedservicev1.ServiceDefinition, 0, len(items))
+	for index, item := range items {
+		if authorization.Items[index].Allowed {
+			allowed = append(allowed, item)
+		}
+	}
+	return managedservicev1.ServiceDefinitionList{Kind: "ServiceDefinitionList", Items: allowed}, nil
+}
+
+func (value *handler) getService(response http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("serviceId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeServiceDefinitionRead, port.ResourceServiceDefinition, id,
+		iamv1.AuthorizationResourceInstance, "",
+	)
+	if !ok || !acceptsNoInput(response, request, requestID) {
+		return
+	}
+	result, err := value.workflow.GetService(request.Context(), authorization, id)
+	writeResult(response, requestID, result, err)
+}
+
+func (value *handler) listServiceActivations(response http.ResponseWriter, request *http.Request) {
+	authorization, requestID, ok := value.authorizeCollection(
+		response, request, port.AuthorizeServiceActivationRead, port.ResourceServiceActivation, iamv1.AuthorizationCollectionList,
+	)
+	if !ok || !acceptsNoInput(response, request, requestID) {
+		return
+	}
+	result, err := value.workflow.ListServiceActivations(request.Context(), authorization)
+	writeResult(response, requestID, result, err)
+}
+
+func (value *handler) getServiceActivation(response http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("serviceId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeServiceActivationRead, port.ResourceServiceActivation, id,
+		iamv1.AuthorizationResourceInstance, "",
+	)
+	if !ok || !acceptsNoInput(response, request, requestID) {
+		return
+	}
+	result, err := value.workflow.GetServiceActivation(request.Context(), authorization, id)
+	writeResult(response, requestID, result, err)
+}
+
+func (value *handler) activateService(response http.ResponseWriter, request *http.Request) {
+	authorization, requestID, ok := value.authorizeCollection(
+		response, request, port.AuthorizeServiceActivationActivate, port.ResourceServiceActivation, iamv1.AuthorizationCollectionCreate,
+	)
+	if !ok {
+		return
+	}
+	body, ok := decodeRequest[managedservicev1.ActivateServiceRequest](response, request, requestID)
+	if !ok {
+		return
+	}
+	result, replayed, err := value.workflow.ActivateService(request.Context(), usecase.ActivateServiceCommand{
+		Authorization: authorization, Request: body,
+		IdempotencyKey: request.Header.Get("Idempotency-Key"),
+	})
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	response.Header().Set("Location", "/managed-services/v1/service-activations/"+result.Service.ID)
+	writeJSON(response, status, result)
 }
 
 func (value *handler) listOfferings(response http.ResponseWriter, request *http.Request) {
@@ -513,6 +658,15 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 	case errors.Is(err, usecase.ErrIdempotencyConflict):
 		writeProblem(response, requestID, http.StatusConflict,
 			managedservicev1.ErrorIdempotencyConflict, "Idempotency conflict", "Idempotency-Key was used for different content", false)
+	case errors.Is(err, usecase.ErrServiceDefinitionConflict):
+		writeProblem(response, requestID, http.StatusConflict,
+			managedservicev1.ErrorServiceDefinitionConflict, "Service definition conflict", "the service contract changed; reload the catalog before activating", false)
+	case errors.Is(err, usecase.ErrServiceUnavailable):
+		writeProblem(response, requestID, http.StatusConflict,
+			managedservicev1.ErrorServiceUnavailable, "Service unavailable", "the service is not currently available for activation", false)
+	case errors.Is(err, usecase.ErrServiceNotActivated):
+		writeProblem(response, requestID, http.StatusConflict,
+			managedservicev1.ErrorServiceNotActivated, "Service not activated", "activate the service for this account before allocating quota", false)
 	case errors.Is(err, usecase.ErrQuotaExhausted):
 		writeProblem(response, requestID, http.StatusConflict,
 			managedservicev1.ErrorQuotaExhausted, "Quota exhausted", "the selected entitlement has no available instances", false)

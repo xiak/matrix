@@ -181,6 +181,8 @@ func auditDecisionTarget(event auditv1.Event, decisionAction iamv1.Action, contr
 		return iamv1.ActionPaaSExecutionTargetRemove, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionManagedServiceQuotaEntitlementActivated:
 		return iamv1.ActionManagedServiceQuotaEntitlementActivate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
+	case auditv1.ActionManagedServiceServiceActivationActivated:
+		return iamv1.ActionManagedServiceActivationActivate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 	case auditv1.ActionManagedServiceInstallationCreated, auditv1.ActionManagedServiceInstallationReady:
 		return iamv1.ActionManagedServiceInstallationCreate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 	case auditv1.ActionManagedServiceInstallationTerminationRequested,

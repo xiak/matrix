@@ -508,6 +508,7 @@ const (
 	SystemPolicyInstallationVerifier             PolicyID = "system.installation-verifier"
 	SystemPolicyManagedServiceInstallationReader PolicyID = "system.managedservice-installation-reader"
 	SystemPolicyServiceRoleAdministrator         PolicyID = "system.service-role-administrator"
+	SystemPolicyServiceActivationAdministrator   PolicyID = "system.service-activation-administrator"
 )
 
 const (

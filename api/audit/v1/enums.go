@@ -136,6 +136,7 @@ const (
 	ActionPaaSExecutionTargetActivated                   Action = "paas.execution-target.activated"
 	ActionPaaSExecutionTargetRemoved                     Action = "paas.execution-target.removed"
 	ActionManagedServiceQuotaEntitlementActivated        Action = "managedservice.quota-entitlement.activated"
+	ActionManagedServiceServiceActivationActivated       Action = "managedservice.service-activation.activated"
 	ActionManagedServiceInstallationCreated              Action = "managedservice.service-installation.created"
 	ActionManagedServiceInstallationReady                Action = "managedservice.service-installation.ready"
 	ActionManagedServiceInstallationTerminationRequested Action = "managedservice.service-installation.termination-requested"
@@ -175,6 +176,7 @@ const (
 	TargetExecutionPool         TargetKind = "EXECUTION_POOL"
 	TargetExecutionTarget       TargetKind = "EXECUTION_TARGET"
 	TargetQuotaEntitlement      TargetKind = "QUOTA_ENTITLEMENT"
+	TargetServiceActivation     TargetKind = "SERVICE_ACTIVATION"
 	TargetServiceInstallation   TargetKind = "SERVICE_INSTALLATION"
 	TargetAuditRecords          TargetKind = "AUDIT_RECORDS"
 	TargetAuditChain            TargetKind = "AUDIT_CHAIN"
@@ -346,6 +348,7 @@ var allActions = []Action{
 	ActionPaaSExecutionTargetActivated,
 	ActionPaaSExecutionTargetRemoved,
 	ActionManagedServiceQuotaEntitlementActivated,
+	ActionManagedServiceServiceActivationActivated,
 	ActionManagedServiceInstallationCreated,
 	ActionManagedServiceInstallationReady,
 	ActionManagedServiceInstallationTerminationRequested,
@@ -628,6 +631,10 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionManagedServiceQuotaEntitlementActivated: {
 		Source: SourcePaaS, Target: TargetQuotaEntitlement, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true,
+	},
+	ActionManagedServiceServiceActivationActivated: {
+		Source: SourcePaaS, Target: TargetServiceActivation, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true,
 	},
 	ActionManagedServiceInstallationCreated: {

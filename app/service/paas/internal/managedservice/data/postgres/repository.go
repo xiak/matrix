@@ -65,7 +65,8 @@ func databaseError(ctx context.Context, err error) error {
 		case "40001", "40P01":
 			return usecase.ErrTransactionRetry
 		case "23505":
-			if database.ConstraintName == "service_installations_pkey" {
+			if database.ConstraintName == "service_installations_pkey" ||
+				database.ConstraintName == "service_activations_pkey" {
 				return usecase.ErrAlreadyExists
 			}
 			return usecase.ErrTransactionRetry

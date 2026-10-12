@@ -36,6 +36,7 @@ const (
 	DeploymentStopped                       = "paas.deployment.stopped"
 	DeploymentRolledBack                    = "paas.deployment.rolled-back"
 	QuotaEntitlementActivated               = "managedservice.quota-entitlement.activated"
+	ServiceActivationActivated              = "managedservice.service-activation.activated"
 	ServiceInstallationCreated              = "managedservice.service-installation.created"
 	ServiceInstallationReady                = "managedservice.service-installation.ready"
 	ServiceInstallationTerminationRequested = "managedservice.service-installation.termination-requested"
@@ -44,6 +45,7 @@ const (
 
 const (
 	TargetQuotaEntitlement    = "QuotaEntitlement"
+	TargetServiceActivation   = "ServiceActivation"
 	TargetServiceInstallation = "ServiceInstallation"
 )
 
@@ -166,6 +168,8 @@ func targetKindToV1(value string) (auditv1.TargetKind, error) {
 		return auditv1.TargetDeployment, nil
 	case TargetQuotaEntitlement:
 		return auditv1.TargetQuotaEntitlement, nil
+	case TargetServiceActivation:
+		return auditv1.TargetServiceActivation, nil
 	case TargetServiceInstallation:
 		return auditv1.TargetServiceInstallation, nil
 	default:

@@ -48,7 +48,7 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 | IAM-PEP-03 | 首个无游标目录已固定并由累计 CI 覆盖，发布未完成 | 固定`a7f2e83b`使managedservice先以`COLLECTION_LIST`完成目录准入，再从受信本地catalog取得真实候选，按ID排序后通过一次1–50项批量PDP逐实例过滤。两个账号同名/同 ID/key、伪造 tenant/cursor/after、错序/遗漏/替换决定、跨账号实例、撤权后下一请求及ROLE全拒绝已有行为或真实进程门禁；该代码位于累计固定`91649497`的祖先链并由其完整独立CI覆盖。租户资源cursor、其他产品目录和最终发布组合仍未完成。 |
 | IAM-PEP-04 | 当前应用托管与 managedservice 路径已实现 | Application、Configuration、Revision、QuotaEntitlement、ServiceInstallation 的创建由封闭集合请求开始，最终资源、Operation 和 outbox 由同一业务事务建立；IAM 原决定只证明集合准入，不证明 caller 填写的最终 ID 或 payload。真实双账号门禁核对配额、Operation、幂等、拒绝无部分效果及 Audit 关联。 |
 | IAM-PEP-05 | 四个真实产品的本地及签名离线纵向闭环已固定；HA未完成 | PostgreSQL 18、MySQL 8.4 LTS、Elasticsearch 8.19和RabbitMQ 4.1均使用固定摘要镜像、生产worker、受保护凭据文件及各自真实协议。独立进程门禁覆盖创建到READY、SQL/HTTP/AMQP读写、配额与Operation、精确实例授权、下一请求撤权、跨Account隐藏、租户Audit、终止、数据与凭据删除及配额归还；独立provider门禁逐产品停止容器、以同一受保护目录重建并经原生协议读回持久数据。固定`4dea30e79`承载产品纵向实现，固定`36fb8d20d`完成十镜像签名离线包实际组装和逐文件复验，固定`745a5c43a`的签名A/B又在全空专属Docker引擎完成实际安装、四产品同一闭环、升级/回滚/备份恢复及重启复验；当前仍缺精确后继独立CI与HA/集群形态，单节点`LOCAL_MACHINE`实现不等于HA产品形态。 |
-| IAM-PEP-06 | 设计已冻结，尚未实现 | FEAT-007拥有ServiceDefinition/ServiceActivation、公开API、Account事务与provider前置；本FEAT只拥有新Action/ResourceKind、Profile、策略与PEP不变量。当前`OfferingKind`闭枚举和直接QuotaEntitlement激活不能冒充服务开通；实现须在同一pre-v1切片删除旧枚举并证明主账号无旁路、委派管理员允许、普通/平台/服务身份拒绝及撤权下一请求生效。 |
+| IAM-PEP-06 | 后端候选已实现，LIVE UI与完整安全矩阵待收口 | managedservice拥有ServiceDefinition/ServiceActivation、公开API、Account事务、provider前置及Audit outbox；本FEAT拥有通用Action/ResourceKind、Profile、策略与PEP不变量。QuotaEntitlement现在要求同Account存在精确定义版本/摘要的ServiceActivation，旧资源仍可读取和终止但迁移不补造开通事实。真实PG18与独立IAM/Audit/PaaS进程已证明两个Account分别开通同一服务、开通前配额拒绝、Developer/Viewer/PlatformOperator边界及租户Audit链；委派AccountAdministrator、窄Policy USER/ROLE、普通USER、SERVICE、撤权/停用全矩阵和LIVE UI仍须完成后才能接受。 |
 | IAM-SVC-01/02 | 最小产品运行闭环及管理员管理已固定并通过累计 CI，发布未完成 | ServiceIdentity自身仍不获得目标Account权限；只有不可变模板、精确系统策略上限、当前Account同意和真实workload binding同时有效时，IAM才发行目标Account的60秒RoleSession。managedservice用该临时身份经唯一PDP读取实际`ServiceInstallation`后立即自退出；服务home Account与目标Account分开保存，SERVICE与USER来源严格互斥。当前AccountAdministrator能以独立权限查询和终止服务会话，只有服务Role绑定管理权限的USER、服务凭据及ROLE自身均不能获得管理能力。真实PG18纵向、累计Role管理及209.46秒独立进程组合覆盖双副本list/read/revoke、解绑后历史观察、等值重放、跨Account拒绝与唯一Audit事实；累计固定`a464299b`及其14项成功的独立CI覆盖该后端闭环。最终签名发布组合和LIVE UI仍未完成。 |
 | IAM-TAG-01/02 | Application创建、读取及标签写入已有固定实现，发布未完成 | PaaS Application创建从真实body构造`request.tag/environment`；读取及写入从PaaS数据库预读同一Application构造`resource.tag/environment`，设置/删除再绑定准确`request.tag/environment`。决定、资源版本、SQL效果、Operation及Audit证据精确关联，标签写入的并发CAS与跨Account隔离已有真实门禁。Role/User标签仍只是元数据；其他资源标签、LIVE UI和签名发布组合尚未实现。 |
 
@@ -56,7 +56,7 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 
 同片后继把 apphosting 的 PaaS→IAM 资源词汇翻译收敛到 port 的单一构造器，HTTP adapter不再维护第二份资源 switch，Action/资源形状、当前 Profile 引用、PAAS calling service 和可信 source IP 一次绑定。apphosting 仍保留14个路由动作的显式 PEP 子集：同一PaaS Profile中的平台主机/安装动作不能因“属于PaaS”进入应用托管。14条合法形状及同产品错PEP、其他产品、错资源/集合/source IP攻击的聚焦测试通过；同一全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，并由累计固定`a464299b`的独立CI覆盖。
 
-## 下一纵向切片：Account服务开通授权
+## 当前纵向切片：Account服务开通授权
 
 本片只增加managedservice当前Profile的通用动作，不为PostgreSQL、MySQL、Elasticsearch或RabbitMQ分别增加ProductID、Action或策略：
 
@@ -73,6 +73,10 @@ list先做collection决定，再对受信catalog/数据库候选执行现有批�
 产品团队接入不扩张IAM运行时求值器：稳定service ID由发布owner分配，但IAM仍只识别managedservice拥有的通用Action/ResourceKind及产品明确登记的版本化Profile。服务定义、Account开通、资源权限、配额和服务Role是五个独立事实；任一事实存在都不能补造另一个。产品的法律/计费/依赖前置只能由受信定义中的封闭规则表达，返回稳定拒绝类别，不能把`isPrimary`、管理员显示名、调用者attributes或UI判断加入PDP。产品owner提供的接入自测必须证明新service名称不需要新增求值分支，并证明撤权、错误Account、Profile/定义摘要漂移及不确定结果均在下一请求失败关闭。
 
 最低授权门禁覆盖原primary、另一个AccountAdministrator、只持窄系统Policy的子USER与ROLE、普通USER、PaaSDeveloper、PaaSViewer、PlatformOperator、SERVICE和错误Account；覆盖附件/permission boundary/Role trust/Role session/USER/Account停用或撤销后的下一请求、双IAM副本、同ID跨Account、集合与实例替换、Profile错版本/摘要、批次错序遗漏、并发等值与变体请求及Audit失败。成功服务开通不能改变任何Policy附件、QuotaEntitlement、ServiceLinkedRole、WorkloadRoleBinding或RoleSession。
+
+当前候选已落地五条HTTP路径：服务目录list/detail、Account开通目录list/detail及幂等activate。服务定义以精确`{id,revision,contentDigest}`承诺；同Account同服务唯一、同幂等键等值重放、变体冲突，开通记录与唯一Audit outbox在同一事务提交。新`managedservice.service-activation.activated`事实的事件身份包含Account范围，避免两个Account开通同名服务时碰撞，同时不改既有managedservice事件的历史重放身份。IAM producer proof只接受原`COLLECTION_CREATE`决定，Audit存储继续按封闭action/target/result契约接收。
+
+2026-10-12候选在专属PostgreSQL 18中通过managedservice migration apply-twice、固定前代保留数据、强制RLS、双Account同服务和审计outbox门禁；随后独立双IAM、Audit、PaaS与双dispatcher进程race门禁以302.008秒通过两个Account目录读取、Developer开通拒绝、Account管理员开通、配额和资源创建、Viewer只读、PlatformOperator拒绝、同名跨Account隔离及租户Audit链。该证据不替代尚未完成的完整授权矩阵、签名安装组合、独立CI或LIVE控制台闭环。
 
 ## 当前纵向切片：数据库驱动的产品授权目录与服务角色
 

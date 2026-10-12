@@ -16,6 +16,14 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 )
 
+func TestServiceActivationAuditEventIDIsAccountScoped(t *testing.T) {
+	first := serviceActivationAuditEventID("account-a", managedservicev1.PostgreSQLServiceID)
+	second := serviceActivationAuditEventID("account-b", managedservicev1.PostgreSQLServiceID)
+	if first == second || first != serviceActivationAuditEventID("account-a", managedservicev1.PostgreSQLServiceID) {
+		t.Fatal("service activation Audit replay identity is not stable and Account-scoped")
+	}
+}
+
 func TestQuotaActivationEqualReplayAndChangedConflict(t *testing.T) {
 	repository := newMemoryRepository()
 	service := newTestService(t, repository)
@@ -24,6 +32,32 @@ func TestQuotaActivationEqualReplayAndChangedConflict(t *testing.T) {
 		Request: managedservicev1.ActivateQuotaRequest{
 			OfferingID: domain.PostgreSQLOfferingID, QuotaShapeID: "pg-small", InstanceCount: 1,
 		},
+	}
+	if _, _, err := service.ActivateQuota(context.Background(), command); !errors.Is(err, ErrServiceNotActivated) ||
+		len(repository.quotas) != 0 || len(repository.events) != 0 {
+		t.Fatalf("quota before service activation err=%v quotas=%#v events=%#v", err, repository.quotas, repository.events)
+	}
+	definition, err := service.GetService(context.Background(), testAuthorization(), managedservicev1.PostgreSQLServiceID)
+	if err != nil {
+		t.Fatalf("get service definition: %v", err)
+	}
+	activationCommand := ActivateServiceCommand{
+		Authorization: testAuthorization(), IdempotencyKey: "service-request-1",
+		Request: managedservicev1.ActivateServiceRequest{Service: serviceReference(definition)},
+	}
+	activation, replayed, err := service.ActivateService(context.Background(), activationCommand)
+	if err != nil || replayed || activation.Service != activationCommand.Request.Service {
+		t.Fatalf("activate service=%#v replayed=%v err=%v", activation, replayed, err)
+	}
+	activationReplay, replayed, err := service.ActivateService(context.Background(), activationCommand)
+	if err != nil || !replayed || activationReplay != activation {
+		t.Fatalf("service replay=%#v replayed=%v err=%v", activationReplay, replayed, err)
+	}
+	stale := activationCommand
+	stale.IdempotencyKey = "service-request-stale"
+	stale.Request.Service.Revision++
+	if _, _, err := service.ActivateService(context.Background(), stale); !errors.Is(err, ErrServiceDefinitionConflict) {
+		t.Fatalf("stale service activation error=%v", err)
 	}
 	created, replayed, err := service.ActivateQuota(context.Background(), command)
 	if err != nil || replayed {
@@ -37,8 +71,10 @@ func TestQuotaActivationEqualReplayAndChangedConflict(t *testing.T) {
 	if _, _, err := service.ActivateQuota(context.Background(), command); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("changed replay error=%v", err)
 	}
-	if len(repository.events) != 1 || repository.events[0].Action != audit.QuotaEntitlementActivated ||
-		repository.events[0].Target.ID != audit.ResourceID(created.ID) {
+	if len(repository.events) != 2 || repository.events[0].Action != audit.ServiceActivationActivated ||
+		repository.events[0].Target.ID != audit.ResourceID(managedservicev1.PostgreSQLServiceID) ||
+		repository.events[1].Action != audit.QuotaEntitlementActivated ||
+		repository.events[1].Target.ID != audit.ResourceID(created.ID) {
 		t.Fatalf("quota Audit events = %#v", repository.events)
 	}
 }
@@ -46,6 +82,7 @@ func TestQuotaActivationEqualReplayAndChangedConflict(t *testing.T) {
 func TestInstallationReservationHonorsQuota(t *testing.T) {
 	repository := newMemoryRepository()
 	service := newTestService(t, repository)
+	seedServiceActivation(t, repository, managedservicev1.PostgreSQLServiceID)
 	entitlement, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
 		Authorization: testAuthorization(), IdempotencyKey: "quota-request-2",
 		Request: managedservicev1.ActivateQuotaRequest{
@@ -79,6 +116,7 @@ func TestInstallationReservationHonorsQuota(t *testing.T) {
 func TestTerminationIsAtomicIdempotentAndBoundToOneInstallation(t *testing.T) {
 	repository := newMemoryRepository()
 	service := newTestService(t, repository)
+	seedServiceActivation(t, repository, managedservicev1.PostgreSQLServiceID)
 	authorization := testAuthorization()
 	quota, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
 		Authorization: authorization, IdempotencyKey: "quota-termination",
@@ -173,6 +211,7 @@ func TestInstallationRejectsUnavailableRegionBeforePersistence(t *testing.T) {
 func TestSingleResourceReadsReturnCurrentStateAndNotFound(t *testing.T) {
 	repository := newMemoryRepository()
 	service := newTestService(t, repository)
+	seedServiceActivation(t, repository, managedservicev1.PostgreSQLServiceID)
 	authorization := testAuthorization()
 	offering, err := service.GetOffering(context.Background(), authorization, domain.PostgreSQLOfferingID)
 	if err != nil || offering.ID != domain.PostgreSQLOfferingID {
@@ -226,6 +265,7 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 	repository := newMemoryRepository()
 	binder := &stubWorkloadRoleBinder{}
 	service := newTestService(t, repository)
+	seedServiceActivation(t, repository, managedservicev1.PostgreSQLServiceID)
 	service.workloadRoleAuthority = binder
 	service.workloadRoleRuntime = binder
 	authorization := testAuthorization()
@@ -328,6 +368,7 @@ func TestUnbindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *te
 	repository := newMemoryRepository()
 	authority := &stubWorkloadRoleBinder{}
 	service := newTestService(t, repository)
+	seedServiceActivation(t, repository, managedservicev1.PostgreSQLServiceID)
 	service.workloadRoleAuthority = authority
 	authorization := testAuthorization()
 	quota, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
@@ -409,6 +450,24 @@ func newTestService(t *testing.T, repository Repository) *Service {
 		t.Fatalf("new service: %v", err)
 	}
 	return service
+}
+
+func serviceReference(value managedservicev1.ServiceDefinition) managedservicev1.ServiceDefinitionReference {
+	return managedservicev1.ServiceDefinitionReference{
+		ID: value.ID, Revision: value.Revision, ContentDigest: value.ContentDigest,
+	}
+}
+
+func seedServiceActivation(t *testing.T, repository *memoryRepository, serviceID string) {
+	t.Helper()
+	definition, found := domain.DefaultCatalog().ResolveService(serviceID)
+	if !found {
+		t.Fatalf("test service definition %q is absent", serviceID)
+	}
+	repository.activations[serviceID] = managedservicev1.ServiceActivation{
+		Service: serviceReference(definition), ResourceVersion: 1,
+		ActivatedAt: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC),
+	}
 }
 
 type stubWorkloadRoleBinder struct {
@@ -564,13 +623,15 @@ func testRegion() managedservicev1.Region {
 }
 
 type memoryRepository struct {
-	mu            sync.Mutex
-	quotas        map[string]managedservicev1.QuotaEntitlement
-	quotaKeys     map[string]memoryReplay
-	installations map[string]managedservicev1.ServiceInstallation
-	installKeys   map[string]memoryReplay
-	events        []audit.Event
-	beginTenants  []string
+	mu             sync.Mutex
+	activations    map[string]managedservicev1.ServiceActivation
+	activationKeys map[string]memoryReplay
+	quotas         map[string]managedservicev1.QuotaEntitlement
+	quotaKeys      map[string]memoryReplay
+	installations  map[string]managedservicev1.ServiceInstallation
+	installKeys    map[string]memoryReplay
+	events         []audit.Event
+	beginTenants   []string
 }
 
 type memoryReplay struct {
@@ -581,6 +642,7 @@ type memoryReplay struct {
 
 func newMemoryRepository() *memoryRepository {
 	return &memoryRepository{
+		activations: map[string]managedservicev1.ServiceActivation{}, activationKeys: map[string]memoryReplay{},
 		quotas: map[string]managedservicev1.QuotaEntitlement{}, quotaKeys: map[string]memoryReplay{},
 		installations: map[string]managedservicev1.ServiceInstallation{}, installKeys: map[string]memoryReplay{},
 	}
@@ -594,21 +656,67 @@ func (repository *memoryRepository) Begin(
 	repository.mu.Lock()
 	repository.beginTenants = append(repository.beginTenants, tenantID)
 	return &memoryTransaction{
-		repository: repository,
-		quotas:     maps.Clone(repository.quotas), quotaKeys: maps.Clone(repository.quotaKeys),
+		repository:  repository,
+		activations: maps.Clone(repository.activations), activationKeys: maps.Clone(repository.activationKeys),
+		quotas: maps.Clone(repository.quotas), quotaKeys: maps.Clone(repository.quotaKeys),
 		installations: maps.Clone(repository.installations), installKeys: maps.Clone(repository.installKeys),
 		events: append([]audit.Event(nil), repository.events...),
 	}, nil
 }
 
 type memoryTransaction struct {
-	repository    *memoryRepository
-	quotas        map[string]managedservicev1.QuotaEntitlement
-	quotaKeys     map[string]memoryReplay
-	installations map[string]managedservicev1.ServiceInstallation
-	installKeys   map[string]memoryReplay
-	events        []audit.Event
-	closed        bool
+	repository     *memoryRepository
+	activations    map[string]managedservicev1.ServiceActivation
+	activationKeys map[string]memoryReplay
+	quotas         map[string]managedservicev1.QuotaEntitlement
+	quotaKeys      map[string]memoryReplay
+	installations  map[string]managedservicev1.ServiceInstallation
+	installKeys    map[string]memoryReplay
+	events         []audit.Event
+	closed         bool
+}
+
+func (transaction *memoryTransaction) ListServiceActivations(context.Context) ([]managedservicev1.ServiceActivation, error) {
+	result := make([]managedservicev1.ServiceActivation, 0, len(transaction.activations))
+	for _, item := range transaction.activations {
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+func (transaction *memoryTransaction) GetServiceActivation(
+	_ context.Context,
+	serviceID string,
+) (managedservicev1.ServiceActivation, error) {
+	item, found := transaction.activations[serviceID]
+	if !found {
+		return managedservicev1.ServiceActivation{}, ErrNotFound
+	}
+	return item, nil
+}
+
+func (transaction *memoryTransaction) FindServiceActivationReplay(
+	_ context.Context,
+	key string,
+) (managedservicev1.ServiceActivation, string, bool, error) {
+	replay, found := transaction.activationKeys[key]
+	return transaction.activations[replay.id], replay.digest, found, nil
+}
+
+func (transaction *memoryTransaction) InsertServiceActivation(
+	_ context.Context,
+	draft ServiceActivationDraft,
+) (managedservicev1.ServiceActivation, error) {
+	if _, found := transaction.activations[draft.Service.ID]; found {
+		return managedservicev1.ServiceActivation{}, ErrAlreadyExists
+	}
+	item := managedservicev1.ServiceActivation{
+		Service: draft.Service, ResourceVersion: 1,
+		ActivatedAt: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC),
+	}
+	transaction.activations[item.Service.ID] = item
+	transaction.activationKeys[draft.IdempotencyKey] = memoryReplay{id: item.Service.ID, digest: draft.RequestDigest}
+	return item, nil
 }
 
 func (transaction *memoryTransaction) ListQuotaEntitlements(context.Context) ([]managedservicev1.QuotaEntitlement, error) {
@@ -777,6 +885,8 @@ func (transaction *memoryTransaction) Commit(context.Context) error {
 	if transaction.closed {
 		return errors.New("transaction already closed")
 	}
+	transaction.repository.activations = transaction.activations
+	transaction.repository.activationKeys = transaction.activationKeys
 	transaction.repository.quotas = transaction.quotas
 	transaction.repository.quotaKeys = transaction.quotaKeys
 	transaction.repository.installations = transaction.installations

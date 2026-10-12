@@ -621,7 +621,7 @@ func enumSchemas() map[string][]string {
 			string(iamv1.ResourceSession), string(iamv1.ResourceSecurityReport), string(iamv1.ResourceAccessAnalyzer), string(iamv1.ResourceAccessFinding), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
 			string(iamv1.ResourceConfigurationRevision), string(iamv1.ResourceApplicationRevision),
 			string(iamv1.ResourceDeployment), string(iamv1.ResourceOperation),
-			string(iamv1.ResourceServiceOffering), string(iamv1.ResourceRegion),
+			string(iamv1.ResourceServiceOffering), string(iamv1.ResourceServiceDefinition), string(iamv1.ResourceServiceActivation), string(iamv1.ResourceRegion),
 			string(iamv1.ResourceQuotaEntitlement), string(iamv1.ResourceServiceInstallation),
 			string(iamv1.ResourceAuditRecord),
 			string(iamv1.ResourceAuditChain), string(iamv1.ResourceInstallation),

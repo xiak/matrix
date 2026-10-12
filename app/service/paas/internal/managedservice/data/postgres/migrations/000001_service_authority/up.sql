@@ -42,6 +42,37 @@ REVOKE ALL ON FUNCTION managedservice.current_tenant_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION managedservice.current_tenant_id()
     TO matrix_paas_api, matrix_paas_worker;
 
+CREATE TABLE IF NOT EXISTS managedservice.service_activations (
+    tenant_id text COLLATE "C" NOT NULL,
+    service_id text COLLATE "C" NOT NULL,
+    service_revision bigint NOT NULL,
+    service_digest text COLLATE "C" NOT NULL,
+    resource_version bigint NOT NULL DEFAULT 1,
+    idempotency_key text COLLATE "C" NOT NULL,
+    request_digest text COLLATE "C" NOT NULL,
+    activated_by_type text COLLATE "C" NOT NULL,
+    activated_by_id text COLLATE "C" NOT NULL,
+    iam_decision_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    activated_at timestamptz(6) NOT NULL DEFAULT transaction_timestamp(),
+    PRIMARY KEY (tenant_id, service_id),
+    CONSTRAINT service_activations_idempotency_uq
+        UNIQUE (tenant_id, idempotency_key),
+    CONSTRAINT service_activations_identity_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND service_id COLLATE "C" ~ '^[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]$'
+        AND service_revision BETWEEN 1 AND 9007199254740991
+        AND service_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND resource_version = 1
+        AND idempotency_key COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND activated_by_type = 'USER'
+        AND activated_by_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND iam_decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    )
+);
+
 CREATE TABLE IF NOT EXISTS managedservice.quota_entitlements (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -424,6 +455,7 @@ CREATE TABLE IF NOT EXISTS managedservice.audit_outbox (
         AND document->>'eventId' = event_id
         AND document->>'tenantId' = tenant_id
         AND document->>'action' IN (
+            'managedservice.service-activation.activated',
             'managedservice.quota-entitlement.activated',
             'managedservice.service-installation.created',
             'managedservice.service-installation.ready',
@@ -432,7 +464,10 @@ CREATE TABLE IF NOT EXISTS managedservice.audit_outbox (
         )
         AND (
             (operation_id IS NULL
-                AND document->>'action' = 'managedservice.quota-entitlement.activated'
+                AND document->>'action' IN (
+                    'managedservice.service-activation.activated',
+                    'managedservice.quota-entitlement.activated'
+                )
                 AND NOT (document ? 'operationId'))
             OR (operation_id IS NOT NULL
                 AND document->>'action' = 'managedservice.service-installation.created'
@@ -458,6 +493,7 @@ ALTER TABLE managedservice.audit_outbox
         AND document->>'eventId' = event_id
         AND document->>'tenantId' = tenant_id
         AND document->>'action' IN (
+            'managedservice.service-activation.activated',
             'managedservice.quota-entitlement.activated',
             'managedservice.service-installation.created',
             'managedservice.service-installation.ready',
@@ -466,7 +502,10 @@ ALTER TABLE managedservice.audit_outbox
         )
         AND (
             (operation_id IS NULL
-                AND document->>'action' = 'managedservice.quota-entitlement.activated'
+                AND document->>'action' IN (
+                    'managedservice.service-activation.activated',
+                    'managedservice.quota-entitlement.activated'
+                )
                 AND NOT (document ? 'operationId'))
             OR (operation_id IS NOT NULL
                 AND document->>'action' = 'managedservice.service-installation.created'
@@ -486,6 +525,8 @@ ALTER TABLE managedservice.audit_outbox
 CREATE INDEX IF NOT EXISTS managedservice_audit_delivery_idx
     ON managedservice.audit_outbox (status, available_at, created_at);
 
+ALTER TABLE managedservice.service_activations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE managedservice.service_activations FORCE ROW LEVEL SECURITY;
 ALTER TABLE managedservice.quota_entitlements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE managedservice.quota_entitlements FORCE ROW LEVEL SECURITY;
 ALTER TABLE managedservice.service_installations ENABLE ROW LEVEL SECURITY;
@@ -500,7 +541,7 @@ DECLARE
     table_name text;
 BEGIN
     FOREACH table_name IN ARRAY ARRAY[
-        'quota_entitlements', 'service_installations', 'operations', 'audit_outbox'
+        'service_activations', 'quota_entitlements', 'service_installations', 'operations', 'audit_outbox'
     ]
     LOOP
         IF NOT EXISTS (
@@ -578,7 +619,26 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service Audit event identity is invalid';
     END IF;
 
-    IF submitted_audit_event->>'action' = 'managedservice.quota-entitlement.activated' THEN
+    IF submitted_audit_event->>'action' = 'managedservice.service-activation.activated' THEN
+        IF submitted_audit_event#>>'{target,kind}' <> 'ServiceActivation'
+           OR submitted_audit_event->>'result' <> 'SUCCEEDED'
+           OR submitted_audit_event ? 'operationId'
+           OR NOT EXISTS (
+                SELECT 1
+                  FROM managedservice.service_activations AS activation
+                 WHERE activation.tenant_id = effective_tenant_id
+                   AND activation.service_id = target_id
+                   AND activation.request_digest = submitted_audit_event->>'requestDigest'
+                   AND activation.activated_by_type = submitted_audit_event#>>'{actor,type}'
+                   AND activation.activated_by_id = submitted_audit_event#>>'{actor,id}'
+                   AND activation.iam_decision_id = submitted_audit_event->>'iamDecisionId'
+                   AND activation.request_id = submitted_audit_event->>'requestId'
+                   AND activation.activated_at = effective_now
+           ) THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'service activation Audit fact is not transactionally correlated';
+        END IF;
+        target_operation_id := NULL;
+    ELSIF submitted_audit_event->>'action' = 'managedservice.quota-entitlement.activated' THEN
         IF submitted_audit_event#>>'{target,kind}' <> 'QuotaEntitlement'
            OR submitted_audit_event->>'result' <> 'SUCCEEDED'
            OR submitted_audit_event ? 'operationId'
@@ -1308,10 +1368,12 @@ GRANT EXECUTE ON FUNCTION managedservice.fail_operation(text, text, text, bigint
 GRANT EXECUTE ON FUNCTION managedservice.fail_cleanup_operation(text, text, text, bigint, text) TO matrix_paas_worker;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA managedservice FROM PUBLIC;
+GRANT SELECT ON managedservice.service_activations TO matrix_paas_api;
 GRANT SELECT ON managedservice.quota_entitlements,
     managedservice.service_installations,
     managedservice.operations
     TO matrix_paas_api, matrix_paas_worker;
+GRANT INSERT ON managedservice.service_activations TO matrix_paas_api;
 GRANT INSERT, UPDATE ON managedservice.quota_entitlements TO matrix_paas_api;
 GRANT INSERT ON managedservice.service_installations TO matrix_paas_api;
 GRANT INSERT ON managedservice.operations TO matrix_paas_api;

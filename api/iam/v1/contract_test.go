@@ -3603,7 +3603,10 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 	revisionFourIndex := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
 		return profile.Product == ProductManagedService && profile.Revision == 4
 	})
-	if revisionOneIndex < 0 || revisionTwoIndex < 0 || revisionThreeIndex < 0 || revisionFourIndex < 0 {
+	revisionFiveIndex := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
+		return profile.Product == ProductManagedService && profile.Revision == 5
+	})
+	if revisionOneIndex < 0 || revisionTwoIndex < 0 || revisionThreeIndex < 0 || revisionFourIndex < 0 || revisionFiveIndex < 0 {
 		t.Fatal("missing retained managedservice revision")
 	}
 	_, originalDigest, err := CanonicalizeAuthorizationProfile(archives[revisionOneIndex])
@@ -3618,9 +3621,11 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 	_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
 	_, revisionThreeDigest, err := CanonicalizeAuthorizationProfile(archives[revisionThreeIndex])
 	_, revisionFourDigest, err := CanonicalizeAuthorizationProfile(archives[revisionFourIndex])
-	if !found || err != nil || current.Revision != 5 || currentDigest == originalDigest ||
-		currentDigest == revisionTwoDigest || currentDigest == revisionThreeDigest || currentDigest == revisionFourDigest {
-		t.Fatal("missing explicit managedservice termination revision")
+	_, revisionFiveDigest, err := CanonicalizeAuthorizationProfile(archives[revisionFiveIndex])
+	if !found || err != nil || current.Revision != 6 || currentDigest == originalDigest ||
+		currentDigest == revisionTwoDigest || currentDigest == revisionThreeDigest ||
+		currentDigest == revisionFourDigest || currentDigest == revisionFiveDigest {
+		t.Fatal("missing explicit managedservice service-activation revision")
 	}
 	currentReference := AuthorizationProfileReference{Product: current.Product, Revision: current.Revision, ContentDigest: currentDigest}
 	revisionOneReference := AuthorizationProfileReference{Product: archives[revisionOneIndex].Product, Revision: archives[revisionOneIndex].Revision, ContentDigest: originalDigest}
@@ -3646,8 +3651,8 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 			t.Fatal("retained managedservice revision gained consent authority", action.Action)
 		}
 		batchAllowed := CheckAuthorizationProfileInstanceListBatch(current, currentReference, action.Action, action.ResourceKind) == nil
-		if batchAllowed != (action.Action == ActionManagedServiceOfferingRead) {
-			t.Fatal("instance list batch was not limited to offering read", action.Action)
+		if batchAllowed != (action.Action == ActionManagedServiceOfferingRead || action.Action == ActionManagedServiceDefinitionRead) {
+			t.Fatal("instance list batch was not limited to exact catalog reads", action.Action)
 		}
 		revisionFour := archives[revisionFourIndex]
 		revisionFourReference := AuthorizationProfileReference{
@@ -3821,7 +3826,7 @@ func TestInstanceListBatchTransportDoesNotGrowFrozenPolicyAuthority(t *testing.T
 		return profile.Product == ProductManagedService && profile.Revision == 3
 	})
 	current, found := LookupAuthorizationProfile(ProductManagedService)
-	if index < 0 || !found || current.Revision != 5 {
+	if index < 0 || !found || current.Revision != 6 {
 		t.Fatal("managedservice profile transition is missing")
 	}
 	frozen := archives[index]
