@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { SessionProvider, useSession } from "@/features/auth/application/SessionProvider";
 import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
@@ -121,6 +122,7 @@ function Probe() {
       <button onClick={() => void controlPlane.prepare({ section: "catalog" })} type="button">prepare catalog</button>
       <button onClick={() => void controlPlane.prepare({ section: "regions" })} type="button">prepare regions</button>
       <button onClick={() => void controlPlane.prepare({ section: "installations" })} type="button">prepare installations</button>
+      <button onClick={() => void controlPlane.reload()} type="button">refresh current page</button>
       <button onClick={() => void controlPlane.createInstallation({
         id: "postgres-recovery",
         name: "Postgres recovery",
@@ -132,6 +134,7 @@ function Probe() {
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
       <span data-testid="error">{controlPlane.error ?? "none"}</span>
+      <span data-testid="loading">{String(controlPlane.loading)}</span>
       <span data-testid="command-phase">{controlPlane.managedServiceCommand?.phase ?? "none"}</span>
       <span data-testid="command-request">{controlPlane.managedServiceCommand?.intent.requestId ?? "none"}</span>
       <span data-testid="command-slow">{String(controlPlane.managedServiceCommand?.slow ?? false)}</span>
@@ -262,6 +265,56 @@ describe("ControlPlaneProvider", () => {
     expect(repository.load).not.toHaveBeenCalled();
     expect(repository.getInstallation).not.toHaveBeenCalled();
   });
+  it.each(["catalog", "quotas", "installations"] as const)("projects a closed %s product frame without resource reads or refresh", async (section) => {
+    const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn() };
+    const screen = render(<SessionProvider repository={iamRepository()}><ControlPlaneProvider repository={repository} selection={{ section, product: "postgresql" }}><Probe /></ControlPlaneProvider></SessionProvider>);
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(screen.getByTestId("section").textContent).toBe(section);
+    expect(screen.getByTestId("loading").textContent).toBe("false");
+    expect(screen.getByTestId("error").textContent).toBe("none");
+    await act(async () => { fireEvent.click(screen.getByText("refresh current page")); });
+    expect(repository.load).not.toHaveBeenCalled();
+    expect(repository.getInstallation).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse another product's data admission", async () => {
+    const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn() };
+    const screen = render(<SessionProvider repository={iamRepository()}><ControlPlaneProvider productAccess={{ product: "mysql", ready: true }} repository={repository} selection={{ section: "catalog", product: "postgresql" }}><Probe /></ControlPlaneProvider></SessionProvider>);
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(screen.getByTestId("section").textContent).toBe("catalog");
+    expect(screen.getByTestId("loading").textContent).toBe("false");
+    expect(repository.load).not.toHaveBeenCalled();
+  });
+
+  it("stops product polling and late directory refresh when resource admission closes", async () => {
+    vi.useFakeTimers();
+    const source = snapshot(terminatingInstallation, 1);
+    const load = vi.fn<ControlPlaneRepository["load"]>(async (_credential, resources) => resourceSlice(source, resources));
+    let rejectPoll!: (reason: Error) => void;
+    const getInstallation = vi.fn<ControlPlaneRepository["getInstallation"]>(() => new Promise((_resolve, reject) => { rejectPoll = reject; }));
+    const repository: ControlPlaneRepository = { load, getInstallation, activateQuota: vi.fn(), createInstallation: vi.fn() };
+    function ProductPage() {
+      const [ready, setReady] = useState(true);
+      return <>
+        <button type="button" onClick={() => setReady(false)}>close resource admission</button>
+        <ControlPlaneProvider productAccess={{ product: "postgresql", ready }} repository={repository} selection={{ section: "installations", product: "postgresql" }}><Probe /></ControlPlaneProvider>
+      </>;
+    }
+    const screen = render(<SessionProvider repository={iamRepository()}><ProductPage /></SessionProvider>);
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(load.mock.calls.map(([, resources]) => resources)).toEqual(expect.arrayContaining([["installations"], ["offerings"], ["regions"], ["entitlements"]]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+    expect(getInstallation).toHaveBeenCalledTimes(1);
+    await act(async () => { fireEvent.click(screen.getByText("close resource admission")); });
+    load.mockClear();
+    await act(async () => { rejectPoll(new HttpProblem(404, "TERMINATED")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(load).not.toHaveBeenCalled();
+    expect(getInstallation).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("error").textContent).toBe("none");
+    expect(screen.getByTestId("loading").textContent).toBe("false");
+  });
+
   it("projects the installation directory while its three enrichments load independently", async () => {
     const source = snapshot(readyInstallation, 1);
     const load = vi.fn<ControlPlaneRepository["load"]>(async (_credential, resources) => resourceSlice(source, resources));
@@ -343,13 +396,15 @@ describe("ControlPlaneProvider", () => {
     );
     await act(async () => { fireEvent.click(screen.getByText("login")); });
     expect(load).not.toHaveBeenCalled();
+    // Closed products can project their independent first-use frame before
+    // catalog, quota or installation data is available.
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
       "none",
       "resources",
-      "none",
-      "none",
-      "none",
-      "none",
+      "managed-product",
+      "managed-product",
+      "managed-product",
+      "managed-product",
       "devops",
       "observability",
       "logs",
@@ -365,10 +420,10 @@ describe("ControlPlaneProvider", () => {
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
       "none",
       "resources",
-      "none",
-      "none",
-      "none",
-      "none",
+      "managed-product",
+      "managed-product",
+      "managed-product",
+      "managed-product",
       "devops",
       "observability",
       "logs",

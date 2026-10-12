@@ -280,7 +280,7 @@ async function renderConsole({
   );
   await user.type(screen.getByLabelText("密码", { exact: true }), "renderer-test-password");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
-  if (["overview", "catalog", "quotas", "installations", "regions"].includes(section)) {
+  if (!product && ["overview", "catalog", "quotas", "installations", "regions"].includes(section)) {
     await waitFor(() => expect(load).toHaveBeenCalled());
   }
   if (openWorkspace) await user.click(await screen.findByRole("button", { name: section === "quotas" ? "激活配额" : section === "installations" ? "安装服务" : "查看平台状态" }));
@@ -1297,13 +1297,67 @@ describe("ConsoleShellRenderer", () => {
     expect((enable as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("link", { name: /进入实例/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "激活配额" })).toBeNull();
+    expect(repository.load).not.toHaveBeenCalled();
     await user.click(screen.getByRole("checkbox", { name: /我已阅读开通说明/ }));
     await user.click(enable);
     expect(await screen.findByRole("link", { name: /进入实例/ })).toBeTruthy();
+    expect(repository.load).toHaveBeenCalledTimes(1);
     expect(repository.activateQuota).not.toHaveBeenCalled();
     expect(repository.createInstallation).not.toHaveBeenCalled();
     expect(repository.bindServiceRole).toBeUndefined();
     expect(localStorage.getItem(previewServiceActivationStorageKey)).toContain('"serviceKey":"' + product + '"');
+  });
+
+  it("projects the first-use gate immediately during held service navigation without loading resources", async () => {
+    let releaseRoute!: () => void;
+    const heldRoute = { href: "/console/products/postgresql/", ready: false, promise: new Promise<void>((resolve) => { releaseRoute = resolve; }) };
+    const { user, repository } = await renderConsole({
+      accountRepository: previewAccountRepository, experience: previewExperienceSnapshot, heldRoute,
+      iamRepository: previewIamRepository, section: "access", view: "users"
+    });
+    const users = await screen.findByRole("table", { name: "租户用户列表" });
+    await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /云数据库 PostgreSQL/ }));
+    expect(screen.getByRole("heading", { level: 1, name: "产品概览" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
+    expect(!users.isConnected || users.closest("[hidden]")).toBeTruthy();
+    expect(repository.load).not.toHaveBeenCalled();
+    await act(async () => { heldRoute.ready = true; releaseRoute(); });
+    expect(screen.getByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
+    expect(repository.load).not.toHaveBeenCalled();
+  });
+
+  it("keeps a late resource failure out of the reset first-use flow", async () => {
+    let rejectLoad!: (reason: Error) => void;
+    const load = vi.fn<ControlPlaneRepository["load"]>(() => new Promise((_resolve, reject) => { rejectLoad = reject; }));
+    const { user } = await renderConsole({ section: "catalog", product: "postgresql", experience: previewExperienceSnapshot, load });
+    expect(load).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", { name: /我已阅读开通说明/ }));
+    await user.click(screen.getByRole("button", { name: "同意并开通 · MOCK" }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByText("开通场景与重置"));
+    await user.click(screen.getByRole("button", { name: "重置此服务开通" }));
+    await act(async () => { rejectLoad(new HttpProblem(503, "RESOURCE_UNAVAILABLE")); });
+    expect(screen.getByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("link", { name: /进入实例/ })).toBeNull();
+    expect((screen.getByRole("checkbox", { name: /我已阅读开通说明/ }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("shows resource failures only inside the opened product without reversing activation", async () => {
+    const load = vi.fn<ControlPlaneRepository["load"]>().mockRejectedValue(new HttpProblem(503, "RESOURCE_UNAVAILABLE"));
+    const { user } = await renderConsole({ section: "catalog", product: "postgresql", experience: previewExperienceSnapshot, load });
+    expect(load).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: /我已阅读开通说明/ }));
+    await user.click(screen.getByRole("button", { name: "同意并开通 · MOCK" }));
+    expect(await screen.findByRole("heading", { name: "控制面未能加载" })).toBeTruthy();
+    expect(localStorage.getItem(previewServiceActivationStorageKey)).toContain('"serviceKey":"postgresql"');
+    expect(screen.queryByRole("button", { name: "重试开通 · MOCK" })).toBeNull();
+    await user.click(screen.getByText("开通场景与重置"));
+    await user.click(screen.getByRole("button", { name: "重置此服务开通" }));
+    expect(screen.getByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("guards product subroutes and keeps enablement separate from IAM grants and resource authority", async () => {
@@ -1315,6 +1369,7 @@ describe("ConsoleShellRenderer", () => {
     expect(await screen.findByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "组织服务实例" })).toBeNull();
     expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
+    expect(repository.load).not.toHaveBeenCalled();
     await user.click(screen.getByText("开通场景与重置"));
     await user.click(screen.getByRole("combobox", { name: "身份与权限场景" }));
     await user.click(screen.getByRole("option", { name: "子用户 · 仅获开通授权" }));
@@ -1324,6 +1379,7 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("heading", { name: "组织服务实例" })).toBeNull();
     expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
     expect(await previewAccountRepository.workspace!.read(previewCredential)).toEqual(before);
+    expect(repository.load).not.toHaveBeenCalled();
     expect(repository.activateQuota).not.toHaveBeenCalled();
     expect(repository.createInstallation).not.toHaveBeenCalled();
 
@@ -1331,6 +1387,7 @@ describe("ConsoleShellRenderer", () => {
     await user.click(screen.getByRole("option", { name: "子用户 · 仅获资源权限" }));
     expect(await screen.findByRole("heading", { name: "组织服务实例" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "安装服务" })).toBeTruthy();
+    expect(repository.load).toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "重置此服务开通" }));
     expect(await screen.findByText(/当前身份没有开通资格/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
@@ -1347,6 +1404,7 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("button", { name: "激活配额" })).toBeNull();
     expect(screen.queryByText("开通场景与重置")).toBeNull();
     expect(repository.activateQuota).not.toHaveBeenCalled();
+    expect(repository.load).not.toHaveBeenCalled();
   });
 
   it("projects a pending IAM query into the correct content-area workflow", async () => {

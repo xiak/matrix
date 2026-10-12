@@ -494,6 +494,18 @@ resource-only and ungranted subuser, with failure/retry. Scenario changes do not
 switch the authenticated identity. Header/workspace installation and quota
 actions are absent until the same gate admits the product workspace.
 
+The existing data provider and product gate share matching-product presentation
+admission. A closed first-use, unavailable or no-resource-access page projects
+its fixed service frame immediately without loading quota/installation data,
+display metadata enrichment, resource refresh or installation polling. Opening
+one product cannot admit another product's reads. On reset or loss of admission,
+the product returns to its independent first-use state; late resource failures
+and terminal-poll completions cannot restore resource controls or initiate a
+directory refresh. Resource errors are rendered inside the admitted product,
+not above its opening workflow, and never reverse a confirmed opening fact.
+Authentication feedback remains independent. This controls UI side effects,
+not backend authorization, and does not implement the pending LIVE protocol.
+
 There is currently no accepted Account/service enrollment API. Direct LIVE
 product routes therefore remain non-submittable, ignore all browser preview
 consent, and state the missing capability. Existing accepted quota/installation
@@ -1807,14 +1819,20 @@ Verified through 2026-10-12 against the current all-service navigation, compact 
 shell, responsive access-analysis hierarchy, primary directory actions and the
 provider-owned product-permission onboarding boundary and service-enablement UX.
 
-The current service-enablement slice passed the complete 66-file/1,231-case
+The current service-enablement and resource-admission slice passed the complete 66-file/1,239-case
 frontend suite plus three export-normalization cases, typecheck, lint,
 architecture and 228 theme-contrast pairs. The production build generated 59
 pages and 57 normalized segment paths; its 319 generated files match the Go
 embed byte-for-byte, and the PaaS UI host passed Go test/vet. DEV browser checks
 at 1440 × 1000 and 390 × 844 exercised explicit consent, independent enablement
 and resource-access scenarios, reset and retry, first-use subroutes and product
-navigation. Light/dark compact pages matched document/body/viewport width with
+navigation. Focused integration/provider cases additionally prove zero resource
+reads before admission or for enablement-only identities, immediate first-use
+projection during a held route transition, no late failure feedback after reset,
+and no late polling refresh after resource admission closes. The follow-up
+desktop dark and compact light checks verified the first-use and opened layouts,
+explicit acknowledgement reset and the enablement-only/no-resource state.
+Light/dark compact pages matched document/body/viewport width with
 no page overflow or application console error. A Next DEV unused-preload warning
 was observed during hot updates; it is not production-build evidence. This
 accepts the documented isolated MOCK experience only; enrollment authority and

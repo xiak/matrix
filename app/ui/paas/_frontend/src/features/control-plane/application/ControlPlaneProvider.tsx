@@ -14,6 +14,7 @@ import { useRoleSession, useEffectiveCredential } from "@/features/auth/applicat
 import { useSession } from "@/features/auth/application/SessionProvider";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { ExperienceSnapshot } from "../domain/experience";
+import type { ManagedServiceProductId } from "../domain/managedServiceProduct";
 import {
   validApplicationCursor,
   validApplicationId,
@@ -103,10 +104,20 @@ type ControlPlaneCache = {
   loaded: ReadonlySet<ControlPlaneResourceKind>;
 };
 
+type ProductDataAccess = { product: ManagedServiceProductId; ready: boolean } | null;
+
+// Presentation admission avoids unrelated resource reads during first use. It
+// is not a permit: the repository and owning service still authorize requests.
+function productDataReady(selection: ControlPlaneRouteSelection, access: ProductDataAccess): boolean {
+  return !selection.product || (access?.product === selection.product && access.ready);
+}
+
 function requiredResourcesFor(
   selection: ControlPlaneRouteSelection,
-  hasExperience: boolean
+  hasExperience: boolean,
+  productAccess: ProductDataAccess
 ): readonly ControlPlaneResourceKind[] {
+  if (!productDataReady(selection, productAccess)) return [];
   if (selection.section === "access" || selection.section === "audit") return [];
   if (selection.section === "catalog") return selection.product
     ? ["offerings", "entitlements", "installations"]
@@ -121,8 +132,10 @@ function requiredResourcesFor(
 }
 
 function enrichmentResourcesFor(
-  selection: ControlPlaneRouteSelection
+  selection: ControlPlaneRouteSelection,
+  productAccess: ProductDataAccess
 ): readonly ControlPlaneResourceKind[] {
+  if (!productDataReady(selection, productAccess)) return [];
   return selection.section === "installations"
     ? ["offerings", "regions", "entitlements"]
     : [];
@@ -169,11 +182,13 @@ function managedServiceCommandError(error: unknown): ManagedServiceCommandError 
 export function ControlPlaneProvider({
   children,
   experience,
+  productAccess = null,
   repository = httpControlPlaneRepository,
   selection
 }: {
   children: ReactNode;
   experience?: ExperienceSnapshot;
+  productAccess?: ProductDataAccess;
   repository?: ControlPlaneRepository;
   selection: ControlPlaneRouteSelection;
 }) {
@@ -408,8 +423,8 @@ export function ControlPlaneProvider({
     // target's server-owned data regions participate in this asynchronous read.
     await Promise.resolve();
     const revision = ++prepareRevision.current;
-    const resources = requiredResourcesFor(target, Boolean(experience));
-    const enrichments = enrichmentResourcesFor(target);
+    const resources = requiredResourcesFor(target, Boolean(experience), productAccess);
+    const enrichments = enrichmentResourcesFor(target, productAccess);
     if (!credential || (resources.length === 0 && enrichments.length === 0)) {
       if (revision === prepareRevision.current) {
         setError(null);
@@ -439,12 +454,12 @@ export function ControlPlaneProvider({
     } finally {
       if (revision === prepareRevision.current) setLoading(false);
     }
-  }, [credential, experience, readEnrichments, readResources]);
+  }, [credential, experience, productAccess, readEnrichments, readResources]);
 
   const reload = useCallback(async () => {
     const revision = ++prepareRevision.current;
-    const resources = requiredResourcesFor(selection, Boolean(experience));
-    const enrichments = enrichmentResourcesFor(selection);
+    const resources = requiredResourcesFor(selection, Boolean(experience), productAccess);
+    const enrichments = enrichmentResourcesFor(selection, productAccess);
     if (!credential || (resources.length === 0 && enrichments.length === 0)) {
       setError(null);
       setLoading(false);
@@ -463,7 +478,7 @@ export function ControlPlaneProvider({
     } finally {
       if (revision === prepareRevision.current) setLoading(false);
     }
-  }, [credential, experience, readEnrichments, readResources, selection]);
+  }, [credential, experience, productAccess, readEnrichments, readResources, selection]);
 
   useEffect(() => {
     if (credential && cacheRef.current?.owner === credential) return;
@@ -487,9 +502,10 @@ export function ControlPlaneProvider({
   }, [prepare, selection.product, selection.section, selection.view]);
 
   const ownedCache = cache?.owner === credential ? cache : null;
+  const productResourcesReady = productDataReady(selection, productAccess);
 
   useEffect(() => {
-    if (!credential || selection.section !== "installations") return;
+    if (!credential || selection.section !== "installations" || !productResourcesReady) return;
     if (!ownedCache?.loaded.has("installations")) return;
     const pending = ownedCache.snapshot.installations.filter((item) => [
       "PENDING", "PROVISIONING", "TERMINATION_PENDING", "TERMINATING"
@@ -510,13 +526,13 @@ export function ControlPlaneProvider({
               throw pollError;
             }
           }));
+          if (!active) return;
           if (reads.some((read) => read.missing)) {
             await readResources(["installations"], true);
             if (active) readEnrichments(["entitlements"], true);
             return;
           }
           const updates = reads.flatMap((read) => read.installation ? [read.installation] : []);
-          if (!active) return;
           setError(null);
           const byId = new Map(updates.map((item) => [item.id, item]));
           const current = cacheRef.current;
@@ -547,7 +563,7 @@ export function ControlPlaneProvider({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [credential, ownedCache, readEnrichments, readResources, repository, selection.section]);
+  }, [credential, ownedCache, productResourcesReady, readEnrichments, readResources, repository, selection.product, selection.section]);
 
   const activateQuota = useCallback(async (command: ActivateQuotaCommand) => {
     if (!credential || !managedServiceCommandOwner) return false;
@@ -1000,7 +1016,12 @@ export function ControlPlaneProvider({
   const projectScene = useCallback((target: ControlPlaneRouteSelection): ConsoleScene | null => {
     if (target.section === "access") return buildAccessConsoleScene(experience, target.view);
     if (target.section === "audit") return buildAuditConsoleScene(experience);
-    const resources = requiredResourcesFor(target, Boolean(experience));
+    if (!productDataReady(target, productAccess)) {
+      // The independent first-use gate can project immediately, without cached
+      // resource counts or a resource-loading placeholder above it.
+      return buildConsoleScene(target.section, emptySnapshot, experience, target.view, target.product);
+    }
+    const resources = requiredResourcesFor(target, Boolean(experience), productAccess);
     const targetCache = ownedCache;
     if (!resources.every((resource) => targetCache?.loaded.has(resource))) return null;
     return buildConsoleScene(
@@ -1010,7 +1031,7 @@ export function ControlPlaneProvider({
       target.view,
       target.product
     );
-  }, [experience, ownedCache]);
+  }, [experience, ownedCache, productAccess]);
   const scene = useMemo(
     () => projectScene({ section: selection.section, view: selection.view, product: selection.product }),
     [projectScene, selection.product, selection.section, selection.view]
@@ -1019,8 +1040,8 @@ export function ControlPlaneProvider({
     scene,
     projectScene,
     prepare,
-    loading,
-    error: isAccess || requiredResourcesFor(selection, Boolean(experience)).length === 0 ? null : error,
+    loading: productDataReady(selection, productAccess) && loading,
+    error: isAccess || requiredResourcesFor(selection, Boolean(experience), productAccess).length === 0 ? null : error,
     mutation,
     managedServiceCommand,
     retryManagedServiceCommand,
@@ -1042,7 +1063,7 @@ export function ControlPlaneProvider({
     submitServiceAuthorization,
     closeServiceAuthorizationIntent,
     reopenServiceAuthorizationIntent
-  }), [activateQuota, beginInstallationTermination, beginServiceAuthorization, clearManagedServiceCommandNotice, closeInstallationTerminationIntent, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, installationTerminationIntent, isAccess, listApplications, loading, managedServiceCommand, mutation, prepare, projectScene, readApplication, readInstallation, reload, reopenInstallationTerminationIntent, reopenServiceAuthorizationIntent, retryManagedServiceCommand, scene, selection, serviceAuthorizationIntent, submitInstallationTermination, submitServiceAuthorization]);
+  }), [activateQuota, beginInstallationTermination, beginServiceAuthorization, clearManagedServiceCommandNotice, closeInstallationTerminationIntent, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, installationTerminationIntent, isAccess, listApplications, loading, managedServiceCommand, mutation, prepare, productAccess, projectScene, readApplication, readInstallation, reload, reopenInstallationTerminationIntent, reopenServiceAuthorizationIntent, retryManagedServiceCommand, scene, selection, serviceAuthorizationIntent, submitInstallationTermination, submitServiceAuthorization]);
 
   return (
     <ControlPlaneContext.Provider value={value}>
