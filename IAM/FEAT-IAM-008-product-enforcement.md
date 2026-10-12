@@ -13,6 +13,7 @@
 | IAM-PEP-03 | list/filter/cursor 与批量资源检查始终受当前 scope 和权限约束 |
 | IAM-PEP-04 | create collection→最终 ID、Operation、配置、配额和 outbox 有封闭映射 |
 | IAM-PEP-05 | 产品目录只发布已接入真实 provider 的产品；目录项必须能完成真实创建、协议读写、凭据、运行态、权限、审计与终止闭环，不接受示例、占位或仅有 IAM Profile 的伪接入 |
+| IAM-PEP-06 | Account 服务开通是独立、可委派的闭合 Action；它不按主/子账号类型绕过 Policy，也不隐式授予资源权限、配额或服务Role |
 | IAM-SVC-01 | 服务主体与目标 Account 中的 Role/同意分离；purpose/installation 不授任意租户权 |
 | IAM-SVC-02 | 服务角色模板、服务相关角色、PassRole、工作负载绑定与短期凭据 |
 | IAM-TAG-01 | 可信资源标签/请求标签 ABAC，创建时强制标签和标签写入本身授权 |
@@ -27,6 +28,8 @@ Profile 的代码/签名发行由产品 owner 管理，IAM 只注册校验与求
 通用 IAM 求值器和控制台不得按产品名称、服务名称、角色名称或六种旧角色枚举内置授权分支。产品新增动作/模板是相应 owner 的版本化声明；新增产品必须通过登记与契约验证，不修改求值算法或逐个扩展前端角色菜单。预置策略、服务角色模板可由可信产品发布，但内容、默认版本与同意关系分别管理；显示名改动不影响授权，新版本不能隐式扩张既有账号的授权。当前静态 Action catalog 是 001 的过渡实现，不是最终可扩展接入完成。
 
 产品授权声明与产品上线资格严格分开：Profile、Action、Policy 或控制台文案都不能单独让一个商品进入租户目录。每个目录项必须由对应产品 owner 提供真实 provider，并在同一纵向门禁中证明受信制品、创建到终态、真实协议读写、凭据保护、配额与 Operation、资源级 IAM、租户 Audit、失败回滚和明确终止语义。当前PostgreSQL、MySQL、Elasticsearch与RabbitMQ分别拥有产品适配器、不可变镜像、固定版本/规格、协议门禁和相同生命周期，不是目录样例；新增产品继续复用统一目录、provider registry和IAM协议，但必须单独实现并验收自己的provider，不在通用IAM求值器内按产品名写分支。
+
+首次使用服务不是配额购买、资源创建或服务受托的别名。managedservice拥有Account范围的`ServiceActivation`事实；IAM只声明和求值`managedservice.service-definition.read`、`managedservice.service-activation.read`、`managedservice.service-activation.activate`及对应资源形状。原primary能开通是因为其受保护的`system.account-administrator`附件包含动作，不是evaluator识别primary后放行。子USER或ROLE可通过AccountAdministrator或窄`system.service-activation-administrator`获得同一动作；普通USER、PaaSDeveloper/Viewer、PlatformOperator和SERVICE默认不能开通。当前四个私有部署服务没有计费/法律前置，采用permission-only；未来产品若确需primary同意，必须由其受信服务定义增加封闭前置并单独验收，不能把例外扩成通用主账号特权。
 
 PaaS 先覆盖 Application、Configuration/Revision、Deployment、Operation；managedservice 覆盖 Offering/Region/Entitlement/Installation；Audit 保持 chain/query scope。平台主机/终端由既有 Phase owner 消费确认的公共契约，本任务不重做主机实现。
 
@@ -45,12 +48,31 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 | IAM-PEP-03 | 首个无游标目录已固定并由累计 CI 覆盖，发布未完成 | 固定`a7f2e83b`使managedservice先以`COLLECTION_LIST`完成目录准入，再从受信本地catalog取得真实候选，按ID排序后通过一次1–50项批量PDP逐实例过滤。两个账号同名/同 ID/key、伪造 tenant/cursor/after、错序/遗漏/替换决定、跨账号实例、撤权后下一请求及ROLE全拒绝已有行为或真实进程门禁；该代码位于累计固定`91649497`的祖先链并由其完整独立CI覆盖。租户资源cursor、其他产品目录和最终发布组合仍未完成。 |
 | IAM-PEP-04 | 当前应用托管与 managedservice 路径已实现 | Application、Configuration、Revision、QuotaEntitlement、ServiceInstallation 的创建由封闭集合请求开始，最终资源、Operation 和 outbox 由同一业务事务建立；IAM 原决定只证明集合准入，不证明 caller 填写的最终 ID 或 payload。真实双账号门禁核对配额、Operation、幂等、拒绝无部分效果及 Audit 关联。 |
 | IAM-PEP-05 | 四个真实产品的本地及签名离线纵向闭环已固定；HA未完成 | PostgreSQL 18、MySQL 8.4 LTS、Elasticsearch 8.19和RabbitMQ 4.1均使用固定摘要镜像、生产worker、受保护凭据文件及各自真实协议。独立进程门禁覆盖创建到READY、SQL/HTTP/AMQP读写、配额与Operation、精确实例授权、下一请求撤权、跨Account隐藏、租户Audit、终止、数据与凭据删除及配额归还；独立provider门禁逐产品停止容器、以同一受保护目录重建并经原生协议读回持久数据。固定`4dea30e79`承载产品纵向实现，固定`36fb8d20d`完成十镜像签名离线包实际组装和逐文件复验，固定`745a5c43a`的签名A/B又在全空专属Docker引擎完成实际安装、四产品同一闭环、升级/回滚/备份恢复及重启复验；当前仍缺精确后继独立CI与HA/集群形态，单节点`LOCAL_MACHINE`实现不等于HA产品形态。 |
+| IAM-PEP-06 | 设计已冻结，尚未实现 | FEAT-007拥有ServiceDefinition/ServiceActivation、公开API、Account事务与provider前置；本FEAT只拥有新Action/ResourceKind、Profile、策略与PEP不变量。当前`OfferingKind`闭枚举和直接QuotaEntitlement激活不能冒充服务开通；实现须在同一pre-v1切片删除旧枚举并证明主账号无旁路、委派管理员允许、普通/平台/服务身份拒绝及撤权下一请求生效。 |
 | IAM-SVC-01/02 | 最小产品运行闭环及管理员管理已固定并通过累计 CI，发布未完成 | ServiceIdentity自身仍不获得目标Account权限；只有不可变模板、精确系统策略上限、当前Account同意和真实workload binding同时有效时，IAM才发行目标Account的60秒RoleSession。managedservice用该临时身份经唯一PDP读取实际`ServiceInstallation`后立即自退出；服务home Account与目标Account分开保存，SERVICE与USER来源严格互斥。当前AccountAdministrator能以独立权限查询和终止服务会话，只有服务Role绑定管理权限的USER、服务凭据及ROLE自身均不能获得管理能力。真实PG18纵向、累计Role管理及209.46秒独立进程组合覆盖双副本list/read/revoke、解绑后历史观察、等值重放、跨Account拒绝与唯一Audit事实；累计固定`a464299b`及其14项成功的独立CI覆盖该后端闭环。最终签名发布组合和LIVE UI仍未完成。 |
 | IAM-TAG-01/02 | Application创建、读取及标签写入已有固定实现，发布未完成 | PaaS Application创建从真实body构造`request.tag/environment`；读取及写入从PaaS数据库预读同一Application构造`resource.tag/environment`，设置/删除再绑定准确`request.tag/environment`。决定、资源版本、SQL效果、Operation及Audit证据精确关联，标签写入的并发CAS与跨Account隔离已有真实门禁。Role/User标签仍只是元数据；其他资源标签、LIVE UI和签名发布组合尚未实现。 |
 
 `app/service/paas/internal/managedservice/port/security.go` 原 action→resource switch 是该产品适配器的封闭边界，不是通用求值器按产品名称分叉，但它重复了 release-owned Profile。本轮候选已删除这份重复映射：port 直接使用 IAM Action/ResourceKind 类型，通过 `NewAuthorizationRequest` 和 managedservice 当前 Profile 的完整引用/calling service 核对形状；IAM HTTP adapter不再执行第二次字符串翻译。七种合法集合/实例形状及其他产品、错资源、错集合用途/ID攻击的聚焦测试通过；全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，并由累计`a464299b`的独立CI覆盖。后继产品适配器同样应消费自己编译进发布物且已由 IAM Profile 摘要认证的声明，通用 IAM 求值器仍只解释统一 Profile/Policy 语义。
 
 同片后继把 apphosting 的 PaaS→IAM 资源词汇翻译收敛到 port 的单一构造器，HTTP adapter不再维护第二份资源 switch，Action/资源形状、当前 Profile 引用、PAAS calling service 和可信 source IP 一次绑定。apphosting 仍保留14个路由动作的显式 PEP 子集：同一PaaS Profile中的平台主机/安装动作不能因“属于PaaS”进入应用托管。14条合法形状及同产品错PEP、其他产品、错资源/集合/source IP攻击的聚焦测试通过；同一全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，并由累计固定`a464299b`的独立CI覆盖。
+
+## 下一纵向切片：Account服务开通授权
+
+本片只增加managedservice当前Profile的通用动作，不为PostgreSQL、MySQL、Elasticsearch或RabbitMQ分别增加ProductID、Action或策略：
+
+| Action | ResourceKind | 形状 | 默认系统策略 |
+| --- | --- | --- | --- |
+| `managedservice.service-definition.read` | `SERVICE_DEFINITION` | collection list、instance read | AccountAdministrator、ServiceActivationAdministrator、PaaSDeveloper、PaaSViewer |
+| `managedservice.service-activation.read` | `SERVICE_ACTIVATION` | collection list、instance read | AccountAdministrator、ServiceActivationAdministrator、PaaSDeveloper、PaaSViewer |
+| `managedservice.service-activation.activate` | `SERVICE_ACTIVATION` | collection create | AccountAdministrator、ServiceActivationAdministrator |
+
+`system.service-activation-administrator`是可附加的窄系统Policy，不是新身份类型或Role；客户自定义Policy在现有编译边界内也可声明相同动作。原primary继续只通过当前有效Policy参与决定，不增加root短路。Profile首片只接受当前Account的有效USER登录会话或有效ROLE session；SERVICE、平台安装身份和probe一律不在允许主体集合。AccessKey仍按007的managedservice未开放边界拒绝，后续若开放须逐路由证明签名、nonce、body绑定与真实业务解析，不能复用浏览器bearer。
+
+list先做collection决定，再对受信catalog/数据库候选执行现有批量实例过滤；caller不能提供Account、actor、ProductID、service principal或任意attributes。activate只证明当前Account可在集合中创建，最终service ID和精确定义引用由业务owner从严格body和受信catalog校验；IAM决定不得被描述为证明产品条款、provider制品或最终payload。业务事务必须把唯一`(Account, service)`事实与单一Audit outbox同时提交，IAM/Audit不可用或决定字段漂移时无任何activation、quota、Role或资源副作用。
+
+产品团队接入不扩张IAM运行时求值器：稳定service ID由发布owner分配，但IAM仍只识别managedservice拥有的通用Action/ResourceKind及产品明确登记的版本化Profile。服务定义、Account开通、资源权限、配额和服务Role是五个独立事实；任一事实存在都不能补造另一个。产品的法律/计费/依赖前置只能由受信定义中的封闭规则表达，返回稳定拒绝类别，不能把`isPrimary`、管理员显示名、调用者attributes或UI判断加入PDP。产品owner提供的接入自测必须证明新service名称不需要新增求值分支，并证明撤权、错误Account、Profile/定义摘要漂移及不确定结果均在下一请求失败关闭。
+
+最低授权门禁覆盖原primary、另一个AccountAdministrator、只持窄系统Policy的子USER与ROLE、普通USER、PaaSDeveloper、PaaSViewer、PlatformOperator、SERVICE和错误Account；覆盖附件/permission boundary/Role trust/Role session/USER/Account停用或撤销后的下一请求、双IAM副本、同ID跨Account、集合与实例替换、Profile错版本/摘要、批次错序遗漏、并发等值与变体请求及Audit失败。成功服务开通不能改变任何Policy附件、QuotaEntitlement、ServiceLinkedRole、WorkloadRoleBinding或RoleSession。
 
 ## 当前纵向切片：数据库驱动的产品授权目录与服务角色
 

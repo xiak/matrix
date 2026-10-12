@@ -1,4 +1,4 @@
-# FEAT-007: Control-plane console and PostgreSQL service activation
+# FEAT-007: Control-plane console and managed-service activation
 
 - Status: In progress
 - Target release: Matrix PaaS Phase 2
@@ -8,17 +8,19 @@
 
 ## Outcome
 
-Deliver an authenticated browser control plane in which an organization user
-can enter with a login name and password, inspect the platform, activate a
-bounded PostgreSQL quota, and install one PostgreSQL service into an
-operator-configured local region. The same accepted release must carry the UI,
-managed-service authority, fixed PostgreSQL artifact, local provisioner, and
-real-runtime evidence; a visual mock or browser-only order is not acceptance.
+Deliver an authenticated browser control plane in which an Account user can
+inspect a release-owned service catalog, explicitly activate one service for
+that Account, obtain a bounded offering quota, and install a real managed
+service into an operator-configured local region. The same accepted release
+must carry the UI, managed-service authority, provider artifacts and real
+runtime evidence; a visual mock, catalog-only entry, or browser-only order is
+not acceptance.
 
-This is the smallest enterprise target for the requested public-cloud-style
-console. It contains one real offering and one thin infrastructure profile.
-It does not invent payment, invoices, public-cloud credentials, MySQL, ELK, or
-generic provider schemas before a real second implementation exists.
+The current real providers are PostgreSQL 18, MySQL 8.4 LTS, Elasticsearch
+8.19 and RabbitMQ 4.1. They are consumers of one generic service-definition,
+activation, offering and installation protocol rather than four hard-coded IAM
+products. Payment, invoices, tax and marketplace settlement remain outside
+the private-deployment target.
 
 ## Product journey
 
@@ -29,26 +31,31 @@ generic provider schemas before a real second implementation exists.
    password in the same memory-only session before entering the console;
    there is no organization selector, JWT, external identity provider, or
    social-login branch.
-3. The authenticated console shows an overview, service catalog, quota,
-   service installations, and local-region configuration allowed by the
-   user's fixed IAM role.
-4. The catalog exposes one available offering, `POSTGRESQL`, with server-owned
-   artifact and installation policy. MySQL and ELK are absent, not disabled
-   fake products.
-5. A user activates one allowed quota shape. This is a durable product
-   entitlement, not a simulated monetary payment. The request accepts no
-   caller price, currency, discount, invoice, or payment result.
-6. A user selects an active quota and an eligible local region, names the
+3. The authenticated console shows an overview, service catalog, Account
+   activations, quota, service installations, and local-region configuration
+   allowed by the user's current IAM permissions.
+4. The catalog exposes only release-owned service definitions whose offerings
+   have registered real providers. A new service is registered by the product
+   owner in the trusted release; an Account cannot publish or alter catalog
+   definitions.
+5. A separately authorized user explicitly activates one exact service
+   definition for the current Account. Activation does not grant resource
+   permissions, allocate quota, create a service role, or create a workload.
+6. A user activates one allowed quota shape for an offering of an already
+   activated service. This is a durable entitlement, not simulated monetary
+   payment. The request accepts no caller price, currency, discount, invoice,
+   payment result, Account selector, or product-native option.
+7. A user selects an active quota and an eligible local region, names the
    service, reviews the exact resources, and submits an idempotent installation
    command.
-7. The managed-service authority reserves quota atomically, provisions the
-   fixed PostgreSQL service asynchronously, and exposes normalized progress.
+8. The managed-service authority reserves quota atomically, provisions the
+   selected release-owned offering asynchronously, and exposes normalized progress.
    A failed installation cannot silently consume or duplicate quota.
-8. The ready result exposes a stable service endpoint and an opaque
+9. The ready result exposes a stable service endpoint and an opaque
    platform-owned credential reference. Passwords, machine credentials,
    Docker details, host paths, and provider-native errors never enter the UI
    response, Audit event, or support evidence.
-9. Logout revokes the IAM session before the browser forgets it. The bearer
+10. Logout revokes the IAM session before the browser forgets it. The bearer
    credential otherwise exists only in page memory and is never placed in a
    URL, cookie, local storage, session storage, log, or rendered DOM.
 
@@ -57,32 +64,295 @@ generic provider schemas before a real second implementation exists.
 | Concern | Owner |
 | --- | --- |
 | User, password credential, session, organization, role, authorization decision | `iam` |
-| Offering, quota entitlement, quota consumption, service installation, provisioning state | `managedservice` |
+| Service definition, Account activation, offering, quota entitlement, quota consumption, service installation, provisioning state | `managedservice` |
 | Local region registration and normalized machine capability | `managedservice` through its local-infrastructure port |
-| PostgreSQL lifecycle effect and credential-file custody | managed-service local provisioner adapter |
+| Product lifecycle effect and credential-file custody | the offering's managed-service provider adapter |
 | Application, ApplicationRevision, Deployment, application placement, and application execution | `apphosting` |
 | Browser composition, navigation, session memory, order draft, and result rendering | `app/ui/paas` |
 | Immutable accepted security and business facts | `audit` |
 | Offline artifact inventory, installation, upgrade, rollback, backup, and recovery | `installation` |
 
 `managedservice` is a distinct bounded context and API inside the Phase 2
-modular monolith. It does not add PostgreSQL, MySQL, ELK, volumes, credentials,
+modular monolith. It does not add database, search, queue, volume, credential,
 or arbitrary native specifications to the Application PaaS workload contract.
-Its use cases own transactions; its domain stays provider-independent except
-for the one code-owned PostgreSQL offering; persistence and local execution
-remain adapters.
+Its use cases own transactions; the service catalog and activation domain stay
+provider-independent, while persistence and each real product effect remain
+adapters. A separate service-catalog process is not introduced until a real
+non-managed-service consumer creates an ownership, scaling or release boundary.
 
 The UI imports only versioned public contracts. It never imports a service
 `internal` package, receives an internal service credential, proxies a user
 credential through its Go process, or calls the APISIX Admin API.
 
+### Three-party operating model
+
+The feature has three independent consumers and must remain correct for all of
+them:
+
+| Party | Owns | Must not do |
+| --- | --- | --- |
+| Matrix contract and authority owners | public schemas, catalog validation, activation lifecycle, IAM Profile protocol, provider port, transaction/outbox rules, RLS and release compatibility | encode a service name in the evaluator, fabricate product readiness, or let UI metadata become authority |
+| Service/product maintenance team | stable service definition, offerings, immutable artifacts, provider adapter, product-specific authorization declarations where needed, service-role templates where needed, native lifecycle and real-runtime/support gates | write an Account activation directly, mint IAM decisions, accept tenant/provider selectors, publish a catalog item without a real provider, or widen an accepted role template in place |
+| Account users and administrators | explicitly activate an available service, obtain delegated permissions/quota, create and operate Account-owned resources, and consent to a separate service role where required | register/modify service definitions, choose artifacts/native commands, switch Account by selector, or turn activation into ownership by the individual actor |
+
+The installation/release owner is the integration boundary between the first
+two parties. It accepts only an exact signed release input, validates every
+service definition, offering, provider and authorization declaration as one
+closed graph, and gives all replicas the same canonical catalog digest. It does
+not grant any Account activation during install, migration, bootstrap or
+replay.
+
+### Service-team onboarding and maintenance
+
+A service team onboards through the source/release contract, not a customer
+northbound registration API. Its smallest accepted contribution contains:
+
+1. one stable `ServiceDefinition` and at least one immutable
+   `ServiceOffering` that references it;
+2. one provider implementation registered for every published offering, with
+   exact artifact digests, bounded resources, readiness, reconciliation,
+   deletion/retention semantics and secret custody;
+3. use of the existing managed-service IAM actions, or a separately versioned
+   product `AuthorizationProfile` only when the service exposes genuinely new
+   business actions/resource kinds;
+4. versioned service-role templates only when the service must act on other
+   Account resources; activation alone never creates or passes the role;
+5. API/domain/security tests plus a real create, native protocol use, restart,
+   revoke, cross-Account, Audit and terminal-cleanup gate for that provider.
+
+The registry rejects duplicate service/offering IDs, missing or extra
+providers, namespace collisions, an unavailable artifact, invalid Profile
+references and nondeterministic catalog bytes before readiness. Adding a
+normal offering or service does not modify the generic IAM evaluator,
+activation use case, activation table or UI routing. A service-specific
+operation may extend only its own versioned declaration and PEP.
+
+Product namespaces are centrally allocated release identities, not display
+names chosen by a team or an Account. A service ID is lowercase, stable and
+never reassigned after publication; its owning team and source owner are
+review metadata, while the signed definition digest is the runtime authority.
+Changing a team name, UI label or repository location therefore cannot change
+an Account's activation. A product team cannot claim an existing namespace or
+publish a second definition with the same `{id, revision}` and different
+bytes.
+
+The onboarding interface is deliberately small and typed. The existing
+managed-service package will provide one definition constructor/validator,
+one offering constructor/validator, one provider registration port and one
+reusable conformance gate. A new team supplies product-owned values and a real
+adapter; it does not copy a handler, migration, authorization evaluator,
+activation table or UI page. The conformance gate runs the same registration,
+create, native-use, reconcile, revoke, cross-Account, Audit and cleanup
+protocol for an arbitrary service ID. A generated OpenAPI client and stable
+error codes are the northbound integration surface; internal Go packages,
+SQL, provider payloads and release-file layout are not an SDK.
+
+Maintenance is additive and immutable: a new engine or provider release gets a
+new offering/version and digest; existing installations continue to reference
+their accepted offering until an explicit upgrade or termination workflow
+handles them. Display-only corrections do not change activation authority. A
+security-, legal- or consent-relevant activation contract change requires a
+new definition revision and an explicit future renewal flow before it can
+invalidate or expand an existing activation. It cannot silently reinterpret an
+old Account consent.
+
+Publication and runtime compatibility use exact capabilities, not optimistic
+version comparisons. The release graph binds the catalog digest, managed-
+service contract revision, referenced IAM Profiles, service-role templates,
+provider registration and artifact digests. Every replica reports the same
+accepted graph in readiness; a rolling deployment with mixed graphs keeps the
+new definition unavailable until all serving replicas can enforce it. Before
+v1, tests retain the current graph plus only one meaningful direct predecessor;
+obsolete development schemas and synthetic compatibility paths are deleted.
+
+Service dependencies, commercial eligibility and service retirement are
+closed extension points rather than hidden activation side effects:
+
+- activating one service never recursively activates another service;
+- a genuine prerequisite must be a trusted, versioned definition rule with a
+  stable denial code and no caller-supplied result;
+- billing, legal terms, real-name checks and marketplace settlement may later
+  implement such a rule, but cannot be inferred from IAM administration;
+- `UNAVAILABLE` prevents new activation and installation while preserving
+  existing Account activations and workloads;
+- deprecation and end-of-sale require an explicit replacement and support
+  window, while deletion/data destruction remains a separate audited command.
+
+No dependency or eligibility field is added before a real product consumes
+it. The extension point is frozen here so the first consumer extends the
+trusted definition and its validator instead of adding a product-name branch
+or arbitrary attributes map.
+
+### Product-team and user experience contract
+
+The service integration is split into three planes so one team cannot
+accidentally turn publication into customer authority:
+
+| Plane | Product-team operation | Account-user operation | Authority |
+| --- | --- | --- | --- |
+| Supply | publish a signed definition, offerings, providers, artifacts and optional authorization declarations | discover only definitions admitted by the installed release | release graph and catalog validator |
+| Enrollment | declare closed prerequisites and safe lifecycle semantics | explicitly activate one exact definition when current Policy permits | IAM decision plus managed-service serializable transaction |
+| Resource | implement provider effects, reconciliation and support evidence | obtain quota, create/use/terminate resources and separately consent to roles | product PEP, Account RLS, quota/Operation/outbox and Audit |
+
+For a product team, the happy path is `allocate namespace -> implement one
+provider -> run conformance gate -> include in signed release -> become
+discoverable`. Publication fails before readiness if any declaration lacks a
+provider, action owner, real artifact or required gate. There is no manual SQL,
+bootstrap replay, UI patch or per-Account registration step.
+
+For an Account user, the API projects independent booleans and reasons for
+`discoverable`, `canActivate`, `activated`, `canAllocateQuota` and
+`canCreateResource`; the console renders those server facts and never derives
+them from primary/child/admin labels. A denial returns one bounded remediation
+class such as permission missing, prerequisite unmet, definition changed,
+service unavailable, quota missing or region ineligible. It never exposes
+Policy internals, another Account, provider errors or secret material. A
+request/correlation ID links the safe response to Operation and Audit evidence
+without making log text part of the contract.
+
+The generic authority remains horizontally scalable: API and worker replicas
+are stateless with respect to authorization; the database, IAM decision and
+exact release graph are authoritative. Unique keys, serializable transactions,
+row locks, leases/fencing, idempotency commitments and transactional outbox
+close cross-replica races. Reads may use bounded caches only for immutable
+catalog bytes; activation, revocation, quota and resource authorization are
+never accepted from a cache. Backpressure and per-Account request limits fail
+with stable retry semantics rather than unbounded queues or duplicate effects.
+
+Product observability is part of onboarding. Every accepted product exposes
+normalized readiness, bounded Operation progress, stable non-secret failure
+codes, Account-safe metrics and correlated Audit facts. Native logs and
+provider credentials stay in the product adapter/support boundary. The
+platform distinguishes request acceptance, provider progress, terminal
+success, terminal failure and unknown outcome; neither an HTTP timeout nor an
+Audit enqueue is presented as resource success.
+
+### Real-user ownership and use
+
+Service activation is one Account-level relationship, not one activation per
+sub-user. The activating USER/ROLE is retained as the Audit actor, but the
+activation, quota, installation, Operation, data and workload remain owned by
+the Account. Disabling or deleting that actor therefore does not delete or
+reassign the resources. Future requests still require another current identity
+with the appropriate resource action; activation is never a bearer permit.
+
+The normal user path is `discover service -> activate once -> allocate quota ->
+create resource -> optionally consent to a service role -> operate resource`.
+Each arrow is independently authorized and auditable. Account suspension
+blocks new protected mutations and access according to IAM, but does not
+silently destroy data or stop already running workloads. Product-native
+credentials, provider errors and internal topology remain outside catalog and
+activation responses.
+
 ## Enterprise target model
+
+### Public-cloud precedent and selected boundary
+
+The public APIs demonstrate two useful but distinct patterns:
+
+- Google Cloud exposes a consumer-scoped Service Usage resource and
+  `services.enable`, `services.disable`, `get` and `list`; enabling requires a
+  separate IAM permission and returns an Operation.
+- Azure registers a resource-provider namespace for a subscription; provider
+  registration has its own state and authorization-consent projection, and
+  resource creation may trigger registration.
+- Tencent Cloud and Alibaba Cloud commonly keep first-use activation in each
+  product API, such as `ActivateService`, `OpenService` or
+  `OpenAckService`; RAM/CAM still authorize that operation independently.
+- AWS commonly permits direct product use and creates a service-linked role on
+  first use where cross-service authority is required. Its service-linked-role
+  create/delete lifecycle is not the product-activation lifecycle.
+
+Matrix adopts a consumer-scoped generic activation resource like Google Cloud
+and Azure, while retaining the Tencent Cloud and Alibaba Cloud rule that the
+product owner publishes its own trusted service definition and provider. It
+also retains the AWS/Tencent Cloud separation between service activation and
+service-linked-role consent. The external references are the
+[Google Service Usage API](https://cloud.google.com/service-usage/docs/reference/rest),
+[Azure provider registration API](https://learn.microsoft.com/en-us/rest/api/resources/providers/register?view=rest-resources-2021-04-01),
+[Tencent Cloud ActivateService example](https://cloud.tencent.com/document/api/1729/109752),
+[Tencent Cloud service-linked-role API](https://cloud.tencent.com/document/product/598/43711),
+[Alibaba Cloud MNS OpenService](https://help.aliyun.com/zh/mns/openservice),
+[Alibaba Cloud ACK OpenAckService](https://help.aliyun.com/zh/ack/ack-managed-and-ack-dedicated/developer-reference/api-cs-2015-12-15-openackservice)
+and [AWS CreateServiceLinkedRole](https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreateServiceLinkedRole.html).
+
+### Service definition and Account activation
+
+`ServiceDefinition` is a release-owned immutable activation contract with a
+stable lowercase ID, display metadata, revision, canonical content digest and
+availability state. Its ID identifies a service family such as `postgresql`;
+it is not an IAM `ProductID`, provider image, engine version, offering or role.
+Only definitions backed by at least one registered and accepted provider may
+be `AVAILABLE`. There is no tenant-facing create/update/delete catalog API.
+
+`ServiceActivation` is owned by exactly one Account and one exact
+`ServiceDefinitionReference {id, revision, contentDigest}`. Existence means the
+service is active; the first slice has no speculative `ACTIVATING` state. It
+stores a monotonic resource version and database activation time. The current
+credential supplies Account and actor; neither is accepted from a header,
+query, path, body, cursor or provider callback.
+
+Activation is only permission to begin using that service family. It does not
+grant a USER or ROLE permission to create/read resources, allocate an offering
+quota, accept prices, create a service-linked role, or let the provider act on
+other Account resources. Those remain separate, independently authorized and
+audited relationships. `ProductManagedService` remains the IAM authorization
+namespace for this bounded context and must not be cloned into
+`managedservice.postgresql`, `managedservice.mysql`, or one ProductID per
+catalog entry.
+
+Public clouds consistently give the account/project/subscription owner this
+ability while leaving ordinary child identities empty by default. They also
+permit delegation: Google Cloud includes `serviceusage.services.enable` in
+Owner/Editor and the dedicated Service Usage Admin role; Azure includes
+`/register/action` in Owner and Contributor; Tencent Cloud and Alibaba Cloud
+document main-account or authorized administrator/CAM/RAM user flows. AWS has
+no universal activation action, but ordinary IAM users still start with no
+permissions and first-use service-linked-role creation requires an explicit
+IAM permission. Matrix therefore adopts this default policy matrix:
+
+| Current identity | Default activation authority |
+| --- | --- |
+| Original primary USER | Yes, because its protected `system.account-administrator` attachment includes the action; there is no evaluator `isPrimary` bypass |
+| Child USER or assumed ROLE with `system.account-administrator` | Yes |
+| USER or ROLE with the narrow `system.service-activation-administrator` policy | Yes |
+| `system.paas-developer` | No activation by default; it may use already activated services according to its resource actions |
+| `system.paas-viewer` or ordinary child USER | Read-only or none according to attached policy; never activate by identity type alone |
+| `system.platform-operator` | No; operating the installation does not imply access to an Account's service catalog state |
+| service identity | No; service identity cannot grant its customer an activation or act as an Account administrator |
+| AccessKey | Deferred until the managed-service programmatic PEP is explicitly admitted; no browser/session fallback |
+
+The narrow system policy is a delegable permission document, not a new account
+class or hard-coded role. A custom policy may grant the same closed action when
+the policy compiler admits it. Suspension, USER/ROLE disablement, attachment
+revocation and session revocation take effect on the next protected request.
+The opening action is Account-wide, matching the project/subscription-level
+cloud APIs; the first slice does not pretend to support per-service activation
+delegation when its create-collection authorization cannot prove that shape.
+
+Permission is necessary but does not override product-owned prerequisites.
+Some public-cloud products restrict initial legal, billing or service-role
+consent to the main account even when ordinary resource administration is
+delegable. The four current Matrix private-deployment services have no billing
+or legal prerequisite and therefore use `PERMISSION_ONLY`: either Account
+Administrator or the narrow delegated policy may activate them. A future
+product that truly requires original-primary consent must introduce a closed,
+server-validated activation prerequisite in its trusted definition and prove
+that flow before publication. The UI must never infer eligibility from an
+"administrator" label, and activation must never auto-create a service-linked
+role to satisfy such a prerequisite.
+
+The first slice deliberately has no deactivate endpoint. Product dependencies,
+existing resources, retained data, quota and service-role cleanup need an
+explicit product contract; a generic delete must not silently stop workloads
+or destroy data. A later deactivation protocol must fail closed while dependent
+resources or roles exist and must define its own audited terminal behavior.
 
 ### Service offering
 
 `ServiceOffering` is a code-owned immutable catalog entry with:
 
-- stable ID and kind;
+- stable ID and exact service-definition reference;
 - display name and bounded description;
 - engine family and supported major version;
 - allowed quota shapes;
@@ -90,22 +360,27 @@ credential through its Go process, or calls the APISIX Admin API.
 - server-owned installation profile version;
 - availability state.
 
-Phase 2 initially admits exactly one available entry: PostgreSQL. The browser
-cannot submit an image, digest, command, Compose document, port, volume,
-environment value, extension, superuser name, or provider-native option.
+The current release admits offerings for PostgreSQL 18, MySQL 8.4 LTS,
+Elasticsearch 8.19 and RabbitMQ 4.1. A fifth or later service uses the same
+definition/activation/offering/provider registry; adding it must not add a
+service-name branch to IAM, the generic use case, persistence or UI. The
+browser cannot submit an image, artifact digest, command, Compose document,
+port, volume, environment value, extension, superuser name, provider-native
+option, or arbitrary provider schema.
 
 ### Quota entitlement
 
-`QuotaEntitlement` is organization-owned and contains an immutable offering,
+`QuotaEntitlement` is Account-owned and contains an immutable offering,
 quota shape, purchased instance count, resource version, activation time, and
 current reserved/consumed counts. Allowed shapes are code-owned and use checked
 integer CPU, memory, and storage values. A request chooses a shape and instance
 count only; the server resolves all numeric resources.
 
-Activation uses `(organization, idempotencyKey)` plus a canonical request
-digest. Equal replay returns the same entitlement. Changed reuse conflicts.
-Concurrent reservations lock the entitlement and cannot exceed its purchased
-count or any capacity dimension.
+Quota activation uses `(Account, idempotencyKey)` plus a canonical request
+digest and requires an ACTIVE activation for the offering's service in the
+same transaction. Equal replay returns the same entitlement. Changed reuse
+conflicts. Concurrent reservations lock the entitlement and cannot exceed its
+purchased count or any capacity dimension.
 
 ### Local region
 
@@ -225,7 +500,9 @@ Refreshing these choices preserves the user's instance ID and display name.
 
 The managed-service API provides only the bounded routes needed by the journey:
 
-- list/get available offerings;
+- list/get available service definitions;
+- create and list/get Account service activations;
+- list/get available offerings for registered providers;
 - list/get eligible regions;
 - activate and list/get quota entitlements;
 - create and list/get service installations;
@@ -233,17 +510,96 @@ The managed-service API provides only the bounded routes needed by the journey:
 - inspect the non-secret local-machine region configuration as an organization
   administrator.
 
+The frozen service-activation surface is:
+
+```text
+GET  /managed-services/v1/services
+GET  /managed-services/v1/services/{serviceId}
+GET  /managed-services/v1/service-activations
+GET  /managed-services/v1/service-activations/{serviceId}
+POST /managed-services/v1/service-activations
+```
+
+Reading definitions, reading activation state and activating are separate IAM
+actions. `GET /services` never proves that the Account activated a service;
+`GET /service-activations*` returns only after
+`managedservice.service-activation.read` succeeds and otherwise returns a
+closed authorization response rather than leaking state. Resource list/read or
+create permission is neither required for that activation read nor implied by
+it. Conversely, a deliberately minimal custom resource Policy may operate an
+already active service without receiving activation-directory permission; its
+resource request still rechecks the Account activation server-side.
+
+Catalog access projects the existing non-authoritative `ActionCapability` for
+the exact `managedservice.service-activation.activate` action and target so the
+console can decide whether to render an activation control. `canActivate` is
+therefore an actor-relative Policy result, never an identity-class boolean.
+There is no generic `canEnterWorkspace`: entering and operating a product
+workspace uses that product's exact collection/resource read and mutation
+capabilities. Every command authenticates, authorizes and rechecks current
+state again; the projection is not a cached permit.
+
+The first slice has no activation-in-progress state. The Account fact and its
+Audit outbox either commit together or do not exist. A definite authorization
+or prerequisite denial creates no activation; an unknown result is resolved by
+repeating the same idempotency key and exact request. `UNAVAILABLE` or retired
+definitions reject new activation but do not erase an existing activation or
+stop resources. Consent-relevant definition changes use a new exact revision;
+the existing activation remains bound to its accepted revision until a future
+explicit renewal protocol is delivered. Display-only changes do not require
+renewal.
+
+Browser results are scoped to the credential generation that initiated the
+request. Login, logout, role-session replacement or Account switch invalidates
+pending projections and resource responses in the UI; a late response cannot
+restore an earlier identity's controls. This client rule improves presentation
+only—the server still treats each request independently and derives Account
+and actor from the current credential.
+
+`POST` requires `Idempotency-Key` and accepts only:
+
+```json
+{
+  "service": {
+    "id": "postgresql",
+    "revision": 1,
+    "contentDigest": "sha256:<canonical-definition-digest>"
+  }
+}
+```
+
+The exact reference prevents a stale console from consenting to a definition
+different from the one it displayed. The server resolves the current trusted
+catalog and rejects unknown, unavailable or changed references; the body never
+accepts Account, actor, ProductID, offering, quota, price, role, provider,
+artifact, callback or arbitrary attributes. First commit and exact replay
+return the same `ServiceActivation`; reuse of the idempotency key with changed
+input conflicts. A unique `(account_id, service_id)` key and one serializable
+transaction close concurrent commands from multiple API replicas.
+
+The transaction revalidates the current IAM decision and catalog reference,
+inserts the activation and its immutable Audit outbox fact atomically, and
+uses database time. PostgreSQL RLS is forced on the Account-owned activation
+table. The catalog is release-owned deterministic input: replicas with a
+different canonical catalog digest fail readiness instead of serving a mixed
+definition. Optional caches may accelerate reads but never authorize or
+survive as the activation authority.
+
 Every admitted mutation requires `Idempotency-Key`. Phase 2 has no mutable
 region endpoint. Collection queries are bounded and deterministically ordered.
 Organization, user, and role come only from IAM. Public resource IDs cannot
 select another organization, and PostgreSQL row-level security is forced on
 every organization-owned table.
 
-IAM adds closed managed-service actions and maps them to the existing
-`ORGANIZATION_ADMIN`, `PAAS_DEVELOPER`, and `PAAS_VIEWER` roles. It does not
-introduce a customer policy language or a UI-only authorization shortcut. An
-expired, revoked, malformed, or unavailable session fails closed on the next
-request.
+IAM adds the closed `managedservice.service-definition.read`,
+`managedservice.service-activation.activate` and
+`managedservice.service-activation.read` actions and the
+`SERVICE_DEFINITION`/`SERVICE_ACTIVATION` resource kinds to the managed-service
+Profile. The Account Administrator and narrow Service Activation Administrator
+system policies receive the mutation; PaaS Developer and PaaS Viewer receive
+only reads needed for already activated services. This is policy evaluation,
+not a UI-only or primary-user shortcut. An expired, revoked, malformed or
+unavailable session fails closed on the next request.
 
 ### Account access extension
 
@@ -432,21 +788,49 @@ new session contract, which is verified separately above.
 
 ### Gate B: managed-service authority
 
-1. Strict Go/OpenAPI contracts validate all resources and reject unknown,
-   duplicate, oversize, unsupported offering/shape, caller-selected tenant,
-   native provider, price/payment, credential, artifact, and machine fields.
-2. Domain tests prove catalog closure, checked quota arithmetic, concurrent
-   reservation bounds, equal replay, changed conflict, and valid installation
-   transitions.
+1. Strict Go/OpenAPI contracts validate service definitions, Account
+   activations and all existing resources; they reject unknown, duplicate,
+   oversize, stale definition references, unsupported offering/shape,
+   caller-selected Account, native provider, price/payment, credential,
+   artifact and machine fields.
+2. Domain tests prove catalog closure, definition canonicalization, activation
+   idempotency, checked quota arithmetic, concurrent reservation bounds, equal
+   replay, changed conflict and valid installation transitions. A synthetic
+   fifth service name passes the same contract/domain path without adding a
+   service-name switch; it is not published without a real provider gate.
 3. A clean PostgreSQL database applies the managed-service schema twice and
-   proves migration/runtime role separation, forced tenant isolation,
-   transactionally coupled entitlement/reservation/Operation/Audit facts, and
-   database-time behavior.
-4. Real IAM permits only the closed role/action matrix and immediately observes
-   session or role revocation. IAM or database uncertainty fails closed.
-5. The browser completes login, catalog selection, quota activation, region
-   selection, installation submit, and bounded Operation polling against the
-   real services without a mock or privileged browser path.
+   proves migration/runtime role separation, forced Account isolation, unique
+   concurrent activation, activation-before-quota, transactionally coupled
+   activation/entitlement/reservation/Operation/Audit facts and database-time
+   behavior. Only the current schema and one meaningful direct predecessor are
+   retained before v1; obsolete pre-release snapshots are replaced, not
+   multiplied into a compatibility matrix.
+4. Real IAM permits Account Administrator and the narrow Service Activation
+   Administrator to activate, denies PaaS Developer/Viewer, Platform Operator,
+   ordinary USER and service identity, and immediately observes session,
+   USER/ROLE, Account or attachment revocation. IAM, catalog or database
+   uncertainty fails closed.
+5. Two Accounts activate the same service independently; same service ID,
+   idempotency key, resource ID and cursor cannot cross Account boundaries.
+   Concurrent exact commands converge, changed replays conflict, failed
+   authorization/Audit leaves no partial activation, restart does not revive a
+   revoked identity, and quota or installation creation without a current
+   activation is rejected without side effects.
+6. The browser completes login, catalog selection, service activation, quota
+   activation, region selection, installation submit and bounded Operation
+   polling against the real services without a mock or privileged browser
+   path. UX/UI implementation remains owned and accepted on its separate
+   branch after consuming the fixed public contract.
+7. One product-team conformance fixture with an arbitrary service ID registers
+   through the same typed constructors and provider port, while duplicate
+   namespace, missing/extra provider, changed same-revision bytes, mismatched
+   Profile/artifact, nondeterministic catalog and mixed-replica digest all fail
+   before publication. The fixture is not exposed as a customer product.
+8. User-facing capability projection distinguishes discover, activate, quota
+   and resource authority. Stable remediation classes and correlation IDs are
+   safe, Account-scoped and consistent across replicas; timeout, retry and
+   unknown provider outcome never fabricate activation or installation
+   success.
 
 ### Gate C: local PostgreSQL and release consumption
 
@@ -487,16 +871,16 @@ and `git diff --check` gates must pass on the same committed worktree.
   requires final installed-release browser verification of authentication,
   route transitions, keyboard use, and 360-pixel layouts; source and component
   checks do not substitute for that acceptance.
-- Gate B authority is complete for the admitted PostgreSQL slice: the closed
-  managed-service Go/OpenAPI contract now includes collection and single-
-  resource reads for offerings, regions, quota entitlements, service
-  installations, and installation Operations. Existing-role IAM actions,
-  forced organization RLS, serializable quota reservation, idempotent replay,
-  worker leases, fencing transitions, and transactionally coupled Audit facts
-  pass unit and real PostgreSQL 18 tests. The installed `8700095` candidate
-  completed real IAM-authorized single-resource reads and returned identities
-  equal to their collection resources. The UI polls only active installation
-  resources and reloads quota truth once an Operation becomes terminal.
+- Gate B has fixed real offering/quota/installation/Operation paths for
+  PostgreSQL, MySQL, Elasticsearch and RabbitMQ, including IAM actions, forced
+  Account RLS, serializable quota reservation, idempotent replay, worker
+  leases, fencing transitions and transactionally coupled Audit facts. The
+  current public contract still uses the closed `OfferingKind` enum and treats
+  quota activation as the first-use step; it does not yet implement the
+  `ServiceDefinition`/`ServiceActivation` boundary frozen above. Therefore the
+  generic activation slice and its role matrix are not implemented or
+  accepted by the older runtime evidence. The replacement removes the enum in
+  the same pre-v1 slice rather than retaining aliases or dual catalog models.
 - Gate C execution is complete through the fixed PostgreSQL 18 image:
   server-generated file credentials, pull-never/no-build Compose, exact
   ownership labels, persistent bind data, bounded resources, normalized
@@ -522,8 +906,8 @@ converged source commit.
 ## Deferred
 
 Money movement, invoices, tax, discounts, metering-based billing, marketplace
-publishing, MySQL, ELK, Redis, arbitrary Helm/Compose templates, customer
-images, public-cloud accounts, VM/network provisioning, Kubernetes,
+publishing, additional engines beyond the four accepted providers, arbitrary
+Helm/Compose templates, customer images, public-cloud accounts, VM/network provisioning, Kubernetes,
 multi-region placement, high availability, read replicas, point-in-time
 restore, engine upgrades, deletion, external IdP, LDAP, SAML, OIDC, MFA, and
 mobile-native applications remain outside this target.
