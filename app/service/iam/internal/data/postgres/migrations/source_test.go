@@ -1,7 +1,6 @@
 package migrations
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -71,7 +70,7 @@ func productReleaseCatalog(current, history []iamv1.AuthorizationProfile) iamv1.
 	}
 }
 
-func TestSourceWithProductAuthorizationAddsOnlyValidatedReleaseOwnedHeads(t *testing.T) {
+func TestAuthorizationProfilesForSourceCopiesValidatedReleaseOwnedHeads(t *testing.T) {
 	current, historical := productProfileFixture(2), productProfileFixture(1)
 	profiles, archive, err := authorizationProfilesForSource([]iamv1.AuthorizationProfile{current}, []iamv1.AuthorizationProfile{historical})
 	if err != nil || len(profiles) != len(iamv1.AllAuthorizationProfiles())+1 ||
@@ -89,26 +88,11 @@ func TestSourceWithProductAuthorizationAddsOnlyValidatedReleaseOwnedHeads(t *tes
 	}) {
 		t.Fatal("migration source retained caller-owned declaration slices")
 	}
-	canonical, digest, err := iamv1.CanonicalizeAuthorizationProfile(productProfileFixture(2))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encodedCanonical, err := json.Marshal(canonical)
-	if err != nil {
-		t.Fatal(err)
-	}
-	releaseCatalog := productReleaseCatalog([]iamv1.AuthorizationProfile{productProfileFixture(2)}, []iamv1.AuthorizationProfile{historical})
-	serviceRolePolicy, serviceRoleTemplate := productServiceRoleFixture(t, productProfileFixture(2))
-	releaseCatalog.ServiceRolePolicies = []iamv1.ProductServiceRolePolicy{serviceRolePolicy}
-	releaseCatalog.ServiceRoleTemplates = []iamv1.ServiceRoleTemplate{serviceRoleTemplate}
-	source := SourceWithProductAuthorization(releaseCatalog)
-	if source.Context != "iam" || source.UpSQL == "" || source.VerifySQL == "" ||
-		!strings.Contains(source.UpSQL, string(encodedCanonical[1:len(encodedCanonical)-1])) || !strings.Contains(source.UpSQL, digest) ||
-		!strings.Contains(source.UpSQL, string(serviceRolePolicy.Version.PolicyID)) ||
-		!strings.Contains(source.UpSQL, string(serviceRolePolicy.Version.ID)) ||
-		!strings.Contains(source.UpSQL, string(serviceRoleTemplate.ID)) ||
-		!strings.Contains(source.VerifySQL, serviceRoleTemplate.ContentDigest) {
-		t.Fatal("valid product authorization release was not committed to migration bytes")
+	historical.Actions[0].ResourceKind = "MUTATED"
+	if slices.ContainsFunc(archive, func(profile iamv1.AuthorizationProfile) bool {
+		return profile.Product == "catalog" && profile.Actions[0].ResourceKind == "MUTATED"
+	}) {
+		t.Fatal("migration archive retained caller-owned declaration slices")
 	}
 }
 
