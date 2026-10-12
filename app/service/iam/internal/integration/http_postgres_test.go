@@ -1455,6 +1455,70 @@ func TestIAMRegisteredProductProfilePostgresHTTP(t *testing.T) {
 		t.Fatalf("registered product state split: heads=%d versions=%d allows=%d denies=%d forged=%d batch=%d key=%d templates=%d ceilings=%d role=%d err=%v",
 			heads, versions, allows, denies, forged, batchAllows, keyAllows, templates, ceilings, roleAllows, err)
 	}
+	proveRegisteredServiceRoleTemplateTamperRejected(t, ctx, admin, releaseCatalog, serviceRoleTemplate)
+}
+
+func proveRegisteredServiceRoleTemplateTamperRejected(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	release iamv1.ProductAuthorizationReleaseCatalog,
+	template iamv1.ServiceRoleTemplate,
+) {
+	t.Helper()
+	var schemaBefore uint64
+	if err := admin.QueryRow(ctx, "SELECT schema_version FROM iam.readiness()").Scan(&schemaBefore); err != nil {
+		t.Fatal("read registered product schema before template tamper", err)
+	}
+	tampered := template.Spec
+	tampered.RoleDescription = "Valid but untrusted release template"
+	tamperedDocument, tamperedDigest, err := iamv1.CanonicalizeServiceRoleTemplateSpec(tampered)
+	if err != nil || tamperedDigest == template.ContentDigest {
+		t.Fatal("construct distinct canonical service Role template tamper", err)
+	}
+	if _, err := admin.Exec(ctx, "ALTER TABLE iam.service_role_templates DISABLE TRIGGER service_role_template_transitions"); err != nil {
+		t.Fatal("disable immutable service Role template transition guard", err)
+	}
+	triggerRestored := false
+	defer func() {
+		if triggerRestored {
+			return
+		}
+		restoreContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := admin.Exec(restoreContext, "ALTER TABLE iam.service_role_templates ENABLE TRIGGER service_role_template_transitions"); err != nil {
+			t.Error("restore immutable service Role template transition guard", err)
+		}
+	}()
+	if _, err := admin.Exec(ctx, `UPDATE iam.service_role_templates
+		SET canonical_spec=$1,content_digest=$2
+		WHERE id=$3 AND version=$4`, tamperedDocument, tamperedDigest, template.ID, template.Version); err != nil {
+		t.Fatal("install canonical but untrusted service Role template commitment", err)
+	}
+	if _, err := admin.Exec(ctx, "ALTER TABLE iam.service_role_templates ENABLE TRIGGER service_role_template_transitions"); err != nil {
+		t.Fatal("restore immutable service Role template transition guard", err)
+	}
+	triggerRestored = true
+	if err := iammigration.UpRelease(ctx, admin, release); err == nil {
+		t.Fatal("release migration accepted a forged retained service Role template")
+	}
+	if _, err := admin.Exec(ctx, "ROLLBACK"); err != nil {
+		t.Fatal("close rejected service Role template migration transaction", err)
+	}
+	var schemaAfter uint64
+	var retainedDocument, retainedDigest string
+	var triggerEnabled bool
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT schema_version FROM iam.readiness()),
+		(SELECT canonical_spec FROM iam.service_role_templates WHERE id=$1 AND version=$2),
+		(SELECT content_digest FROM iam.service_role_templates WHERE id=$1 AND version=$2),
+		(SELECT tgenabled='O' FROM pg_trigger
+		 WHERE tgrelid='iam.service_role_templates'::regclass AND tgname='service_role_template_transitions')`,
+		template.ID, template.Version).Scan(&schemaAfter, &retainedDocument, &retainedDigest, &triggerEnabled); err != nil ||
+		schemaAfter != schemaBefore || retainedDocument != tamperedDocument || retainedDigest != tamperedDigest || !triggerEnabled {
+		t.Fatalf("rejected template migration changed current state: schema=%d/%d digest=%q trigger=%v err=%v",
+			schemaBefore, schemaAfter, retainedDigest, triggerEnabled, err)
+	}
 }
 
 func proveRetiredServiceRoleTemplateHeadDoesNotRepublish(

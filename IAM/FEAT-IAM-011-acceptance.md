@@ -52,9 +52,9 @@
 
 开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项FEAT累积各自的旧binary/schema路径。窗口前移时在同一切片替换被淘汰的固定源码、schema断言和格式夹具，不增加兼容别名或多版本参数。当前产品目录直接前驱为固定`dc5f63a3c6dea5fa2943bb78628cd753582cb2bc`的IAM83/Audit37/PaaS4、`contractRevision=32`，当前固定候选为IAM83/Audit38/PaaS5、`contractRevision=33`。实际前驱PaaS SQL建立并保留PostgreSQL/MySQL quota和READY installation；当前迁移只增加Elasticsearch/RabbitMQ目录约束、终止生命周期、action-aware Operation唯一性及对应readiness，apply-twice后原MySQL状态不变并能由当前公开终止事务安全销毁。IAM83自身不变，更早的PostgreSQL-only、IAM82→83等门禁只保留为已完成组件迁移证据，不能再充当当前完整profile前驱或让测试矩阵继续向更老开发快照扩张。
 
-固定前驱`9cf500095ae9a9cf98d322711c58a5862b899fa1`保留IAM82已接受的Role生命周期、服务Role、AccessKey、受支持恢复围栏、签名安装和原Audit证明，并以其实际migrator/runtime作为IAM83唯一开发期数据保留起点。该SHA的[Verification 38075029627](https://github.com/xiak/matrix/actions/runs/38075029627)已终止为`completed/cancelled`：`authority-runtime`在“已发布安装器必须于效果前拒绝新 schema 形状”步骤返回 exit 1，后续八个数据库 lane 被取消，最终汇总失败；它不能登记为独立CI成功。IAM82→83的当前保留数据运行证据由下述当前门禁独立拥有，IAM82发布准入仍由已接受固定源码`147586689a9f0bcad3254f743b11c51dba35c1b5`及其签名运行证据拥有；三者不得互相回填。
+固定前驱`9cf500095ae9a9cf98d322711c58a5862b899fa1`曾作为IAM82→IAM83开发期数据保留起点；其[Verification 38075029627](https://github.com/xiak/matrix/actions/runs/38075029627)终止为`completed/cancelled`，不能登记为独立CI成功。对应真实migrator/runtime运行结果只保留为下述历史组件证据；产品尚未发布且当前完整profile直接前驱已前移后，CI不再构建该旧源码或保留重复的密码/MFA/恢复夹具。IAM82发布准入仍只由已接受固定源码`147586689a9f0bcad3254f743b11c51dba35c1b5`及其签名运行证据拥有，不能回填当前完整profile兼容结论。
 
-2026-10-11在本任务独立PostgreSQL18.6上，实际`9cf5000` IAM82 migrator/runtime→当前IAM83 migrator/runtime的滚动门禁以108.96秒通过。前驱通过真实HTTP建立账号、Session、MFA/恢复、Role/Trust/boundary、服务Role、AccessKey围栏、格式2安全报告、访问分析及不可变Audit事实；当前迁移执行两次apply/verify并重启后保持原完成、规范字节、会话资格、撤权、围栏、Role和Audit证据，同时验证当前新写。旧、新迁移进程各自只消费自己的签名目录环境，未在生产契约中保留旧类型或路径别名。该结果只证明开发期IAM82→83保留数据与运行形状，不是IAM83同Profile签名发布或跨profile升级许可。
+2026-10-11在本任务独立PostgreSQL18.6上，实际`9cf5000` IAM82 migrator/runtime→IAM83 migrator/runtime曾以108.96秒通过，覆盖账号、Session、MFA/恢复、Role/Trust/boundary、服务Role、AccessKey围栏、格式2安全报告、访问分析及不可变Audit事实。该结果证明当时的开发期组件迁移，不是当前CI、IAM83同Profile签名发布或跨profile升级许可；其源码构建入口已由当前schema不变量门禁替换，历史细节继续由Git固定对象保存。
 
 固定`4dea30e79cfd6693df149ea40eaa876c113814eb`完成当前四产品纵向实现，固定`36fb8d20df9e0790e1e78d38d0523f3a13249e55`补齐官方Elasticsearch Docker v2 manifest list的严格归档验证；未知media type、无关source digest及内容篡改继续失败关闭。本地真实多进程门禁创建四个实例并分别完成SQL、HTTP文档和AMQP持久消息读写，随后通过公开终止入口物理删除容器、网络、数据和凭据并归还配额；精确Group授权、撤Membership后的下一请求拒绝、另一Account同ID隐藏、Operation/outbox/Audit链与终止重放/冲突同门禁通过。干净`36fb8d20d`实际组装并逐文件复验`matrix-v0.4.0-iam-products.1-36fb8d20df9e`，其IAM83/Audit38/PaaS5+r33清单包含12个文件和10个镜像；组装私钥随后清除。该结果证明真实provider和签名制品组合，不证明制品已经安装运行、同Profile A/B生命周期、HA/集群形态或LIVE UI；当前独立Verification仍须取得精确终态。
 
@@ -88,9 +88,9 @@ IAM82/Audit37/PaaS3、`contractRevision=30`的完整签名运行证据统一由[
 
 2026-09-24按用户要求在原authorityprocess owner收敛，先保存本地真库验证并推送的`09fac913`回滚点。固定`aefe4f786242d7d6816f253b6389d5c94c314a75`删除9个过时IAM升级入口及仅供它们使用的旧RoleBinding wire、schema分支和夹具；CI从7条IAM前驱路径收敛为1条，同时移除6个额外数据库及对应DSN配置。保留原受限身份、当前IAM/Audit/PaaS业务、Purpose/OTP/恢复、并发、秘密检查及所有原期限/成本，不删失败安全断言、不放宽版本/profile判断。精确源码的[Verification35972120363](https://github.com/xiak/matrix/actions/runs/35972120363)已由GitHub API核实completed/success，go、authority-process、authority-storage、authority-runtime、authority-step-up、authority-recovery-window和node-process七项全部通过；本测试窗口清理已验证，不代表后续S2c或整个IAM目标已验收。
 
-唯一`TestIAMRetainedPredecessorProcessUpgrade`在限额的原生PG18.6、Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB、串行race-p1下通过37.13s（包40.525s）。实际前驱程序创建双Account/同名User、已撤附件、正常/撤销/NULL代际Session、本人完成、待验证邮件和原MFA/恢复历史；当前版本在真实末端DDL故障时完整回滚，再双次迁移、重放、重启及原恢复完成，旧凭据/完成不复活。测试依据非事务sequence确认注入故障确已到达，不读取或透传迁移器已刻意抹除的底层错误。
+原`TestIAMRetainedPredecessorProcessUpgrade`及仅为它存在的固定源码提取、旧恢复、设置和MFA夹具已在当前替换片删除；它们证明过的开发期版本保留在Git历史，不再让当前CI重复验证已淘汰schema。仍属于当前契约的服务Role模板防篡改已迁入注册产品真库owner，Profile族演进已迁入当前schema真实进程owner；密码、Session、MFA、恢复和角色各自由现有专项真库/进程门禁继续拥有。
 
-原旧策略升级外壳中的产品声明行为移到上述当前权威阶段：构建仅改变产品声明的后继程序，实际证明新动作注册不扩大已编译策略、仅发布新版本不切默认、显式切换后才允许、旧声明/决定/producer proof保持、不兼容Deny不能因资源不匹配被忽略，以及重启/撤权有效。这不是另一个假想schema升级或生产新增PaaS接口。后继程序由明确的 acceptance-only build tag 在产品声明汇合点产生；普通及发布构建只使用恒等变换，不再读取固定源码路径、解析变量名或改写 Go AST，因此当前目录的文件布局和修订变量命名不是门禁契约。YAML及14段Bash语法校验通过，常规前驱仅一个环境入口，原四lane的串行/失败收集设置保持；独立CI按上述精确固定SHA核实，不继承其他分支结果。
+当前`TestIAMAuthorizationProfileAdvanceProcess`从当前schema和当前可执行程序建立Policy、决定及producer proof，再由明确的acceptance-only build tag只改变产品声明：新动作注册不扩大已编译策略、仅发布新版本不切默认、显式切换后才允许，旧声明/决定/proof保持，不兼容Deny不能因资源不匹配被忽略，重启与撤权继续有效。这不是假想schema升级或生产新增PaaS接口；普通及发布构建仍只使用恒等变换，测试不再读取固定旧源码、解析变量名或改写Go AST。该门禁使用独立`MATRIX_IAM_PROFILE_ADVANCE_POSTGRES_TEST_DSN`，与完整profile直接前驱和其他运行数据库彼此隔离。
 
 同一最终测试源在另一独立空白PG18.6数据库运行`TestIndependentIAMAuditAndPaaSProcesses`，143.49s（包146.678s）通过：实际受限runtime登录、IAM双副本和PaaS/Audit/dispatcher、双账号资源/Operation/outbox，绑定/强制改密/恢复/step-up提交后真正丢TCP回包、重启与原意图核对，跨副本OTP仅成功一次，停用USER后的原历史投递/重放均保持。SMTP没有在本轮实际投递，不能用联系地址/通知夹具代替；亦未重跑签名发布或浏览器。PG使用Windows Job硬限2逻辑CPU/1GiB/24进程、16连接、64MiB shared_buffers、4MiB work_mem和零并行worker，重型门禁串行；确认零其他客户端后正常停止，只保留数据，没有清理其他任务或重启共享/远端服务。
 
@@ -298,7 +298,7 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 
 ## 运行约束
 
-只使用本工作区、任务标签和唯一命名的数据库/容器/网络/卷/端口。Go 默认 GOMAXPROCS=2、-p 2；PG/引擎 CPU/内存/PID 限额；重型门禁串行。不得重启任何远端机器或共享服务，不使用其他 Phase 的运行实例。未运行命令不进入 runbook。
+只使用本工作区、任务标签和唯一命名的数据库/容器/网络/卷/端口。Go 默认 GOMAXPROCS=2、-p 2；PG/引擎 CPU/内存/PID 限额。每条重型数据库门禁内部保持`-race -p 1`串行、独立runner/PG、原期限和清理边界；CI只允许最多两条彼此隔离的lane并行，避免不可压缩的自然时间窗口把其余独立门禁全部排队。不得重启任何远端机器或共享服务，不使用其他 Phase 的运行实例。未运行命令不进入 runbook。
 
 固定`9a030943386d693276fcea53ac706e8cc4269f1f`的[Verification36588874836](https://github.com/xiak/matrix/actions/runs/36588874836)已明确失败：`authority-runtime`的保留数据及真实进程步骤返回exit 1，不能用同run中已通过的Go、node、storage和roles覆盖。当前源码在本任务独立PG18容器（2CPU/1536MiB/PIDs256、随机loopback端口）、Go GOMAXPROCS2/GOMEMLIMIT1024MiB下重现：真实IAM45前驱首次绑定因子时，测试夹具提交上一30秒窗口的OTP，恰好跨入下一窗口后服务按生产`±1`窗口正确返回401。修正仅在真实进程测试取码器中要求上一窗口至少保留10秒再返回，不扩大生产时钟偏差、防重放或尝试预算。修正后唯一前驱门禁单独通过127.094s；另三套全新数据库执行完整`go test -v -race -p 1 -count=1 ./test/authorityprocess`通过362.275s，其中前驱105.14s、双IAM/Audit/PaaS进程214.12s、真实备份/恢复程序39.50s。容量和浏览器因使用独立入口而明确SKIP，不计本次验收；精确修复SHA及独立CI仍待确认。
 
