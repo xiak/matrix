@@ -14,15 +14,49 @@ type QuotaShape struct {
 	StorageGiB    uint32 `json:"storageGiB"`
 }
 
+// ServiceDefinitionReference commits Account activation to one exact trusted
+// product contract. It is not an IAM ProductID, provider or offering.
+type ServiceDefinitionReference struct {
+	ID            string `json:"id"`
+	Revision      uint64 `json:"revision"`
+	ContentDigest string `json:"contentDigest"`
+}
+
+type ServiceDefinition struct {
+	ID                     string                        `json:"id"`
+	DisplayName            string                        `json:"displayName"`
+	Description            string                        `json:"description"`
+	Revision               uint64                        `json:"revision"`
+	ContentDigest          string                        `json:"contentDigest"`
+	ActivationPrerequisite ServiceActivationPrerequisite `json:"activationPrerequisite"`
+	State                  ServiceDefinitionState        `json:"state"`
+}
+
+type ServiceDefinitionList struct {
+	Kind  string              `json:"kind"`
+	Items []ServiceDefinition `json:"items"`
+}
+
+type ServiceActivation struct {
+	Service         ServiceDefinitionReference `json:"service"`
+	ResourceVersion uint64                     `json:"resourceVersion"`
+	ActivatedAt     time.Time                  `json:"activatedAt"`
+}
+
+type ServiceActivationList struct {
+	Kind  string              `json:"kind"`
+	Items []ServiceActivation `json:"items"`
+}
+
 type ServiceOffering struct {
-	ID            string        `json:"id"`
-	Kind          OfferingKind  `json:"kind"`
-	DisplayName   string        `json:"displayName"`
-	Description   string        `json:"description"`
-	EngineFamily  string        `json:"engineFamily"`
-	EngineVersion string        `json:"engineVersion"`
-	State         OfferingState `json:"state"`
-	QuotaShapes   []QuotaShape  `json:"quotaShapes"`
+	ID            string                     `json:"id"`
+	Service       ServiceDefinitionReference `json:"service"`
+	DisplayName   string                     `json:"displayName"`
+	Description   string                     `json:"description"`
+	EngineFamily  string                     `json:"engineFamily"`
+	EngineVersion string                     `json:"engineVersion"`
+	State         OfferingState              `json:"state"`
+	QuotaShapes   []QuotaShape               `json:"quotaShapes"`
 }
 
 type ServiceOfferingList struct {
@@ -98,6 +132,10 @@ type ActivateQuotaRequest struct {
 	OfferingID    string `json:"offeringId"`
 	QuotaShapeID  string `json:"quotaShapeId"`
 	InstanceCount uint32 `json:"instanceCount"`
+}
+
+type ActivateServiceRequest struct {
+	Service ServiceDefinitionReference `json:"service"`
 }
 
 type CreateInstallationRequest struct {

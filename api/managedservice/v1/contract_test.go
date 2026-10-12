@@ -17,7 +17,7 @@ func TestMutationSchemasAreClosedAndExcludeNativeAuthorityFields(t *testing.T) {
 	}
 	components := document["components"].(map[string]any)
 	schemas := components["schemas"].(map[string]any)
-	for _, name := range []string{"ActivateQuotaRequest", "CreateInstallationRequest", "BindServiceRoleRequest"} {
+	for _, name := range []string{"ActivateServiceRequest", "ActivateQuotaRequest", "CreateInstallationRequest", "BindServiceRoleRequest"} {
 		schema := schemas[name].(map[string]any)
 		if schema["additionalProperties"] != false {
 			t.Fatalf("%s accepts unknown fields", name)

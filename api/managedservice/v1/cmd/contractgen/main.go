@@ -44,7 +44,11 @@ func buildDocument() object {
 				"name": "Idempotency-Key", "in": "header", "required": true,
 				"schema": openapi31.Ref("ID"),
 			},
-			"OfferingID":         openapi31.PathIDParameter("offeringId"),
+			"OfferingID": openapi31.PathIDParameter("offeringId"),
+			"ServiceID": object{
+				"name": "serviceId", "in": "path", "required": true,
+				"schema": openapi31.Ref("Name"),
+			},
 			"RegionID":           openapi31.PathIDParameter("regionId"),
 			"QuotaEntitlementID": openapi31.PathIDParameter("quotaEntitlementId"),
 			"InstallationID": object{
@@ -78,13 +82,11 @@ func buildDocument() object {
 			},
 		},
 		Enums: map[string][]string{
-			"OfferingKind": {
-				string(managedservicev1.OfferingPostgreSQL), string(managedservicev1.OfferingMySQL),
-				string(managedservicev1.OfferingElasticsearch), string(managedservicev1.OfferingRabbitMQ),
-			},
-			"OfferingState": {string(managedservicev1.OfferingAvailable), string(managedservicev1.OfferingUnavailable)},
-			"RegionProfile": {string(managedservicev1.RegionLocalMachine)},
-			"RegionState":   {string(managedservicev1.RegionReady), string(managedservicev1.RegionStale), string(managedservicev1.RegionUnavailable)},
+			"ServiceDefinitionState":        {string(managedservicev1.ServiceDefinitionAvailable), string(managedservicev1.ServiceDefinitionUnavailable)},
+			"ServiceActivationPrerequisite": {string(managedservicev1.ServiceActivationPermissionOnly)},
+			"OfferingState":                 {string(managedservicev1.OfferingAvailable), string(managedservicev1.OfferingUnavailable)},
+			"RegionProfile":                 {string(managedservicev1.RegionLocalMachine)},
+			"RegionState":                   {string(managedservicev1.RegionReady), string(managedservicev1.RegionStale), string(managedservicev1.RegionUnavailable)},
 			"InstallationPhase": {
 				string(managedservicev1.InstallationPending), string(managedservicev1.InstallationProvisioning),
 				string(managedservicev1.InstallationReady), string(managedservicev1.InstallationFailed),
@@ -112,6 +114,19 @@ func buildDocument() object {
 
 func paths() object {
 	return object{
+		"/v1/services": object{
+			"get": readOperation("listServices", "List trusted service definitions.", "ServiceDefinitionList"),
+		},
+		"/v1/services/{serviceId}": object{
+			"get": readResourceOperation("getService", "Read one trusted service definition.", "ServiceID", "ServiceDefinition"),
+		},
+		"/v1/service-activations": object{
+			"get":  readOperation("listServiceActivations", "List current Account service activations.", "ServiceActivationList"),
+			"post": mutationOperation("activateService", "Activate one exact service definition for the current Account.", "ActivateServiceRequest", "ServiceActivation", "201"),
+		},
+		"/v1/service-activations/{serviceId}": object{
+			"get": readResourceOperation("getServiceActivation", "Read one current Account service activation.", "ServiceID", "ServiceActivation"),
+		},
 		"/v1/offerings": object{
 			"get": readOperation("listServiceOfferings", "List the closed service catalog.", "ServiceOfferingList"),
 		},
@@ -225,6 +240,11 @@ func resourceMutationOperationWithParameters(operationID, summary string, parame
 func structs() map[string]reflect.Type {
 	return map[string]reflect.Type{
 		"QuotaShape":                   openapi31.StructType[managedservicev1.QuotaShape](),
+		"ServiceDefinitionReference":   openapi31.StructType[managedservicev1.ServiceDefinitionReference](),
+		"ServiceDefinition":            openapi31.StructType[managedservicev1.ServiceDefinition](),
+		"ServiceDefinitionList":        openapi31.StructType[managedservicev1.ServiceDefinitionList](),
+		"ServiceActivation":            openapi31.StructType[managedservicev1.ServiceActivation](),
+		"ServiceActivationList":        openapi31.StructType[managedservicev1.ServiceActivationList](),
 		"ServiceOffering":              openapi31.StructType[managedservicev1.ServiceOffering](),
 		"ServiceOfferingList":          openapi31.StructType[managedservicev1.ServiceOfferingList](),
 		"RegionCapacity":               openapi31.StructType[managedservicev1.RegionCapacity](),
@@ -236,6 +256,7 @@ func structs() map[string]reflect.Type {
 		"ServiceInstallation":          openapi31.StructType[managedservicev1.ServiceInstallation](),
 		"ServiceInstallationList":      openapi31.StructType[managedservicev1.ServiceInstallationList](),
 		"ActivateQuotaRequest":         openapi31.StructType[managedservicev1.ActivateQuotaRequest](),
+		"ActivateServiceRequest":       openapi31.StructType[managedservicev1.ActivateServiceRequest](),
 		"CreateInstallationRequest":    openapi31.StructType[managedservicev1.CreateInstallationRequest](),
 		"ServiceRoleTemplateReference": openapi31.StructType[iamv1.ServiceRoleTemplateReference](),
 		"BindServiceRoleRequest":       openapi31.StructType[managedservicev1.BindServiceRoleRequest](),
@@ -251,16 +272,19 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if (owner == "CreateInstallationRequest" || owner == "ServiceInstallation") && field.Name == "ID" {
 		return openapi31.Ref("Name")
 	}
+	if (owner == "ServiceDefinition" || owner == "ServiceDefinitionReference") && field.Name == "ID" {
+		return openapi31.Ref("Name")
+	}
 	if jsonName == "id" || strings.HasSuffix(jsonName, "Id") || strings.HasSuffix(jsonName, "Reference") {
 		return openapi31.Ref("ID")
 	}
 	if field.Name == "ResourceVersion" {
 		base["minimum"] = 1
 	}
-	if owner == "ServiceRoleTemplateReference" && field.Name == "Version" {
+	if field.Name == "Revision" || owner == "ServiceRoleTemplateReference" && field.Name == "Version" {
 		base["minimum"] = 1
 	}
-	if owner == "ServiceRoleTemplateReference" && field.Name == "ContentDigest" {
+	if field.Name == "ContentDigest" {
 		return openapi31.Ref("Digest")
 	}
 	if strings.HasSuffix(field.Name, "Count") {
@@ -274,13 +298,14 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 
 func schemaOverlay(schemas object) {
 	for name, kind := range map[string]string{
+		"ServiceDefinitionList": "ServiceDefinitionList", "ServiceActivationList": "ServiceActivationList",
 		"ServiceOfferingList": "ServiceOfferingList", "RegionList": "RegionList",
 		"QuotaEntitlementList": "QuotaEntitlementList", "ServiceInstallationList": "ServiceInstallationList",
 	} {
 		properties := schemas[name].(object)["properties"].(object)
 		properties["kind"] = object{"const": kind}
 	}
-	for _, name := range []string{"ServiceOfferingList", "RegionList", "QuotaEntitlementList", "ServiceInstallationList"} {
+	for _, name := range []string{"ServiceDefinitionList", "ServiceActivationList", "ServiceOfferingList", "RegionList", "QuotaEntitlementList", "ServiceInstallationList"} {
 		properties := schemas[name].(object)["properties"].(object)
 		properties["items"].(object)["maxItems"] = 1000
 	}

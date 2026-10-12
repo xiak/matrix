@@ -11,12 +11,15 @@ import (
 
 func TestRequestsRejectNativeAndTenantFieldsAtDecodeBoundary(t *testing.T) {
 	for _, body := range []string{
+		`{"service":{"id":"postgresql","revision":1,"contentDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"tenantId":"forged"}`,
 		`{"offeringId":"postgresql-18","quotaShapeId":"pg-small","instanceCount":1,"price":1}`,
 		`{"id":"postgres-primary","name":"Postgres","offeringId":"postgresql-18","quotaEntitlementId":"quota-1","regionId":"local-primary","organizationId":"forged"}`,
 		`{"id":"postgres-primary","name":"Postgres","offeringId":"postgresql-18","quotaEntitlementId":"quota-1","regionId":"local-primary","image":"postgres:latest"}`,
 	} {
 		var destination any
-		if strings.Contains(body, `"instanceCount"`) {
+		if strings.Contains(body, `"service"`) {
+			destination = &ActivateServiceRequest{}
+		} else if strings.Contains(body, `"instanceCount"`) {
 			destination = &ActivateQuotaRequest{}
 		} else {
 			destination = &CreateInstallationRequest{}
@@ -24,6 +27,58 @@ func TestRequestsRejectNativeAndTenantFieldsAtDecodeBoundary(t *testing.T) {
 		if err := DecodeRequest(strings.NewReader(body), destination); err == nil {
 			t.Fatalf("unknown field was accepted: %s", body)
 		}
+	}
+}
+
+func TestServiceDefinitionCanonicalContractIgnoresDisplayAndAvailability(t *testing.T) {
+	definition := ServiceDefinition{
+		ID: "vector-search", DisplayName: "Vector search", Description: "Managed vector search.",
+		Revision: 1, ActivationPrerequisite: ServiceActivationPermissionOnly,
+		State: ServiceDefinitionAvailable,
+	}
+	document, digest, err := CanonicalizeServiceDefinition(definition)
+	if err != nil || document == "" || digest == "" {
+		t.Fatalf("canonicalize service definition: document=%q digest=%q err=%v", document, digest, err)
+	}
+	definition.ContentDigest = digest
+	if err := ValidateServiceDefinition(definition); err != nil {
+		t.Fatalf("valid service definition rejected: %v", err)
+	}
+	changedDisplay := definition
+	changedDisplay.DisplayName = "Renamed vector search"
+	changedDisplay.Description = "Updated non-authoritative display metadata."
+	changedDisplay.State = ServiceDefinitionUnavailable
+	_, changedDigest, err := CanonicalizeServiceDefinition(changedDisplay)
+	if err != nil || changedDigest != digest || ValidateServiceDefinition(changedDisplay) != nil {
+		t.Fatal("display metadata or availability reinterpreted the activation contract")
+	}
+	changedRevision := definition
+	changedRevision.Revision++
+	if _, changedDigest, err = CanonicalizeServiceDefinition(changedRevision); err != nil || changedDigest == digest {
+		t.Fatal("contract revision did not change the service definition digest")
+	}
+	unsupported := definition
+	unsupported.ActivationPrerequisite = "ROOT_ONLY"
+	if _, _, err = CanonicalizeServiceDefinition(unsupported); err == nil || ValidateServiceDefinition(unsupported) == nil {
+		t.Fatal("unsupported activation prerequisite was accepted")
+	}
+}
+
+func TestServiceActivationRequiresExactDefinitionReference(t *testing.T) {
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	activation := ServiceActivation{
+		Service: ServiceDefinitionReference{
+			ID: "postgresql", Revision: 1,
+			ContentDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		ResourceVersion: 1, ActivatedAt: now,
+	}
+	if err := ValidateServiceActivation(activation); err != nil {
+		t.Fatalf("valid service activation rejected: %v", err)
+	}
+	activation.Service.ContentDigest = ""
+	if ValidateServiceActivation(activation) == nil || ValidateActivateServiceRequest(ActivateServiceRequest{Service: activation.Service}) == nil {
+		t.Fatal("activation without an exact service definition digest was accepted")
 	}
 }
 

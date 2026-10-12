@@ -14,10 +14,48 @@ import (
 const maximumSafeInteger = uint64(9007199254740991)
 
 var (
-	idPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]$`)
-	codePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+	idPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	namePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]$`)
+	codePattern   = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+	digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
+
+func ValidateActivateServiceRequest(value ActivateServiceRequest) error {
+	return ValidateServiceDefinitionReference(value.Service)
+}
+
+func ValidateServiceDefinitionReference(value ServiceDefinitionReference) error {
+	return errors.Join(
+		validateName("service.id", value.ID),
+		validateRevision("service.revision", value.Revision),
+		validateDigest("service.contentDigest", value.ContentDigest),
+	)
+}
+
+func ValidateServiceDefinition(value ServiceDefinition) error {
+	problems := []error{
+		validateText("service.displayName", value.DisplayName, 1, 128),
+		validateText("service.description", value.Description, 1, 512),
+		validateServiceDefinitionCommitment(value.ID, value.Revision, value.ActivationPrerequisite),
+		validateDigest("service.contentDigest", value.ContentDigest),
+	}
+	if value.State != ServiceDefinitionAvailable && value.State != ServiceDefinitionUnavailable {
+		problems = append(problems, errors.New("service definition state is invalid"))
+	}
+	_, expected, err := CanonicalizeServiceDefinition(value)
+	if err != nil || expected != value.ContentDigest {
+		problems = append(problems, errors.New("service definition digest differs from its activation contract"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateServiceActivation(value ServiceActivation) error {
+	return errors.Join(
+		ValidateServiceDefinitionReference(value.Service),
+		validateResourceVersion(value.ResourceVersion),
+		validateTime("serviceActivation.activatedAt", value.ActivatedAt),
+	)
+}
 
 func ValidateActivateQuotaRequest(value ActivateQuotaRequest) error {
 	return errors.Join(
@@ -85,16 +123,12 @@ func ValidateServiceOffering(value ServiceOffering) error {
 	var problems []error
 	problems = append(problems,
 		validateID("offering.id", value.ID),
+		ValidateServiceDefinitionReference(value.Service),
 		validateText("offering.displayName", value.DisplayName, 1, 128),
 		validateText("offering.description", value.Description, 1, 512),
 		validateName("offering.engineFamily", value.EngineFamily),
 		validateID("offering.engineVersion", value.EngineVersion),
 	)
-	switch value.Kind {
-	case OfferingPostgreSQL, OfferingMySQL, OfferingElasticsearch, OfferingRabbitMQ:
-	default:
-		problems = append(problems, errors.New("offering kind is invalid"))
-	}
 	if value.State != OfferingAvailable && value.State != OfferingUnavailable {
 		problems = append(problems, errors.New("offering state is invalid"))
 	}
@@ -108,6 +142,19 @@ func ValidateServiceOffering(value ServiceOffering) error {
 		}
 		seen[shape.ID] = struct{}{}
 		problems = append(problems, ValidateQuotaShape(shape))
+	}
+	return errors.Join(problems...)
+}
+
+func validateServiceDefinitionCommitment(
+	id string,
+	revision uint64,
+	prerequisite ServiceActivationPrerequisite,
+) error {
+	var problems []error
+	problems = append(problems, validateName("service.id", id), validateRevision("service.revision", revision))
+	if prerequisite != ServiceActivationPermissionOnly {
+		problems = append(problems, errors.New("service activation prerequisite is not supported"))
 	}
 	return errors.Join(problems...)
 }
@@ -308,6 +355,20 @@ func validatePositiveCapacity(name string, value uint32) error {
 func validateResourceVersion(value uint64) error {
 	if value == 0 || value > maximumSafeInteger {
 		return errors.New("resourceVersion is invalid")
+	}
+	return nil
+}
+
+func validateRevision(name string, value uint64) error {
+	if value == 0 || value > maximumSafeInteger {
+		return fmt.Errorf("%s is invalid", name)
+	}
+	return nil
+}
+
+func validateDigest(name, value string) error {
+	if !digestPattern.MatchString(value) {
+		return fmt.Errorf("%s is invalid", name)
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package managedservicev1
 
-type OfferingKind string
+type ServiceDefinitionState string
+type ServiceActivationPrerequisite string
 type OfferingState string
 type RegionProfile string
 type RegionState string
@@ -9,15 +10,25 @@ type InstallationOperationKind string
 type ErrorCode string
 
 const (
-	OfferingPostgreSQL      OfferingKind = "POSTGRESQL"
-	PostgreSQLOfferingID                 = "postgresql-18"
-	OfferingMySQL           OfferingKind = "MYSQL"
-	MySQLOfferingID                      = "mysql-8.4"
-	OfferingElasticsearch   OfferingKind = "ELASTICSEARCH"
-	ElasticsearchOfferingID              = "elasticsearch-8.19"
-	OfferingRabbitMQ        OfferingKind = "RABBITMQ"
-	RabbitMQOfferingID                   = "rabbitmq-4.1"
+	PostgreSQLServiceID     = "postgresql"
+	PostgreSQLOfferingID    = "postgresql-18"
+	MySQLServiceID          = "mysql"
+	MySQLOfferingID         = "mysql-8.4"
+	ElasticsearchServiceID  = "elasticsearch"
+	ElasticsearchOfferingID = "elasticsearch-8.19"
+	RabbitMQServiceID       = "rabbitmq"
+	RabbitMQOfferingID      = "rabbitmq-4.1"
 )
+
+const (
+	ServiceDefinitionAvailable   ServiceDefinitionState = "AVAILABLE"
+	ServiceDefinitionUnavailable ServiceDefinitionState = "UNAVAILABLE"
+)
+
+// PermissionOnly is the only admitted first-release prerequisite. Products
+// that require billing, legal, original-root or third-party consent remain
+// unpublished until their closed server-side prerequisite is implemented.
+const ServiceActivationPermissionOnly ServiceActivationPrerequisite = "PERMISSION_ONLY"
 
 const (
 	OfferingAvailable   OfferingState = "AVAILABLE"

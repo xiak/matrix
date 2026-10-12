@@ -60,6 +60,14 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
           "type": "string"
         }
+      },
+      "ServiceID": {
+        "in": "path",
+        "name": "serviceId",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Name"
+        }
       }
     },
     "responses": {
@@ -94,6 +102,18 @@
           "instanceCount",
           "offeringId",
           "quotaShapeId"
+        ],
+        "type": "object"
+      },
+      "ActivateServiceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "$ref": "#/components/schemas/ServiceDefinitionReference"
+          }
+        },
+        "required": [
+          "service"
         ],
         "type": "object"
       },
@@ -234,15 +254,6 @@
         "maxLength": 63,
         "minLength": 2,
         "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,61}[a-z0-9])?$",
-        "type": "string"
-      },
-      "OfferingKind": {
-        "enum": [
-          "POSTGRESQL",
-          "MYSQL",
-          "ELASTICSEARCH",
-          "RABBITMQ"
-        ],
         "type": "string"
       },
       "OfferingState": {
@@ -489,6 +500,141 @@
         ],
         "type": "string"
       },
+      "ServiceActivation": {
+        "additionalProperties": false,
+        "properties": {
+          "activatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "service": {
+            "$ref": "#/components/schemas/ServiceDefinitionReference"
+          }
+        },
+        "required": [
+          "activatedAt",
+          "resourceVersion",
+          "service"
+        ],
+        "type": "object"
+      },
+      "ServiceActivationList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceActivation"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "kind": {
+            "const": "ServiceActivationList"
+          }
+        },
+        "required": [
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ServiceActivationPrerequisite": {
+        "enum": [
+          "PERMISSION_ONLY"
+        ],
+        "type": "string"
+      },
+      "ServiceDefinition": {
+        "additionalProperties": false,
+        "properties": {
+          "activationPrerequisite": {
+            "$ref": "#/components/schemas/ServiceActivationPrerequisite"
+          },
+          "contentDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "description": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ServiceDefinitionState"
+          }
+        },
+        "required": [
+          "activationPrerequisite",
+          "contentDigest",
+          "description",
+          "displayName",
+          "id",
+          "revision",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ServiceDefinitionList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceDefinition"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "kind": {
+            "const": "ServiceDefinitionList"
+          }
+        },
+        "required": [
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ServiceDefinitionReference": {
+        "additionalProperties": false,
+        "properties": {
+          "contentDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "contentDigest",
+          "id",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "ServiceDefinitionState": {
+        "enum": [
+          "AVAILABLE",
+          "UNAVAILABLE"
+        ],
+        "type": "string"
+      },
       "ServiceInstallation": {
         "additionalProperties": false,
         "properties": {
@@ -583,9 +729,6 @@
           "id": {
             "$ref": "#/components/schemas/ID"
           },
-          "kind": {
-            "$ref": "#/components/schemas/OfferingKind"
-          },
           "quotaShapes": {
             "items": {
               "$ref": "#/components/schemas/QuotaShape"
@@ -593,6 +736,9 @@
             "maxItems": 16,
             "minItems": 1,
             "type": "array"
+          },
+          "service": {
+            "$ref": "#/components/schemas/ServiceDefinitionReference"
           },
           "state": {
             "$ref": "#/components/schemas/OfferingState"
@@ -604,8 +750,8 @@
           "engineFamily",
           "engineVersion",
           "id",
-          "kind",
           "quotaShapes",
+          "service",
           "state"
         ],
         "type": "object"
@@ -1082,6 +1228,154 @@
         "summary": "Read one eligible operator-owned region."
       }
     },
+    "/v1/service-activations": {
+      "get": {
+        "operationId": "listServiceActivations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceActivationList"
+                }
+              }
+            },
+            "description": "Current organization-scoped collection."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List current Account service activations."
+      },
+      "post": {
+        "operationId": "activateService",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateServiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceActivation"
+                }
+              }
+            },
+            "description": "Equal idempotent replay."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceActivation"
+                }
+              }
+            },
+            "description": "Durable managed-service result."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Activate one exact service definition for the current Account."
+      }
+    },
+    "/v1/service-activations/{serviceId}": {
+      "get": {
+        "operationId": "getServiceActivation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServiceID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceActivation"
+                }
+              }
+            },
+            "description": "Current organization-scoped resource."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read one current Account service activation."
+      }
+    },
     "/v1/service-installations": {
       "get": {
         "operationId": "listServiceInstallations",
@@ -1461,6 +1755,86 @@
           }
         },
         "summary": "Submit idempotent destruction of one installation and its protected data."
+      }
+    },
+    "/v1/services": {
+      "get": {
+        "operationId": "listServices",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceDefinitionList"
+                }
+              }
+            },
+            "description": "Current organization-scoped collection."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List trusted service definitions."
+      }
+    },
+    "/v1/services/{serviceId}": {
+      "get": {
+        "operationId": "getService",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServiceID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceDefinition"
+                }
+              }
+            },
+            "description": "Current organization-scoped resource."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read one trusted service definition."
       }
     }
   },
