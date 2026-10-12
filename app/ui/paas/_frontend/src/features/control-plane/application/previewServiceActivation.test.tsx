@@ -48,18 +48,18 @@ describe("preview service activation", () => {
   it("demonstrates independent enablement and resource permissions without changing either capability", () => {
     const { result } = renderHook(() => usePreviewServiceActivation({ accountId: activation.accountId, actorId: activation.acceptedBy, serviceKey: activation.serviceKey, preview: true }));
     act(() => result.current.selectScenario("product-user"));
-    expect(result.current.access).toEqual({ canEnable: false, canUse: true });
+    expect(result.current.access).toEqual({ canEnable: false, mayLoadWorkspace: true });
     act(() => result.current.enable());
     expect(stored()).toBeNull();
 
     act(() => result.current.selectScenario("activation-admin"));
-    expect(result.current.access).toEqual({ canEnable: true, canUse: false });
+    expect(result.current.access).toEqual({ canEnable: true, mayLoadWorkspace: false });
     act(() => result.current.enable());
     expect(result.current.state.status).toBe("enabled");
-    expect(result.current.access).toEqual({ canEnable: true, canUse: false });
+    expect(result.current.access).toEqual({ canEnable: true, mayLoadWorkspace: false });
     act(() => result.current.selectScenario("product-user"));
     expect(result.current.state.status).toBe("enabled");
-    expect(result.current.access).toEqual({ canEnable: false, canUse: true });
+    expect(result.current.access).toEqual({ canEnable: false, mayLoadWorkspace: true });
   });
 
   it("isolates replacement tenants/services immediately and ignores stored preview activation in LIVE", () => {
@@ -72,7 +72,7 @@ describe("preview service activation", () => {
     expect(result.current.state.status).toBe("not-enabled");
     rerender({ accountId: "tenant-a", actorId: "owner-a", serviceKey: "postgresql", preview: false });
     expect(result.current.state.status).toBe("unavailable");
-    expect(result.current.access).toEqual({ canEnable: false, canUse: false });
+    expect(result.current.access).toEqual({ canEnable: false, mayLoadWorkspace: false });
     act(() => result.current.enable());
     expect(readPreviewServiceActivation(stored(), activation)).toEqual(activation);
   });

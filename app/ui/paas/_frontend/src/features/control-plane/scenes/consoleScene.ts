@@ -98,7 +98,7 @@ export type GlobalSearchResultScene = {
 
 export type OfferingScene = {
   id: string;
-  kind: ServiceOffering["kind"];
+  serviceId: ServiceOffering["service"]["id"];
   name: string;
   description: string;
   engine: string;

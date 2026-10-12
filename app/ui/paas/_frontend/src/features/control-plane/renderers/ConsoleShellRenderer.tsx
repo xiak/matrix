@@ -48,7 +48,7 @@ import {
   X
 } from "lucide-react";
 import { useSession } from "@/features/auth/application/SessionProvider";
-import { useRoleSession } from "@/features/auth/application/RoleSessionProvider";
+import { useEffectiveCredential, useRoleSession } from "@/features/auth/application/RoleSessionProvider";
 import { AccountAccessProvider, useAccountCapabilities } from "@/features/auth/application/AccountAccessProvider";
 import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
 import type { AccountRepository } from "@/features/auth/repositories/iamRepository";
@@ -66,10 +66,13 @@ import {
 } from "@ui/xiak";
 import { ControlPlaneProvider, useControlPlane } from "../application/ControlPlaneProvider";
 import { useConsoleUiStore } from "../application/consoleUiStore";
+import { useLiveServiceActivation } from "../application/liveServiceActivation";
 import { usePreviewServiceActivation } from "../application/previewServiceActivation";
 import type { ExperienceSnapshot } from "../domain/experience";
+import { serviceWorkspaceMayLoad } from "../domain/serviceActivation";
 import { consoleRouteHref, type ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
+import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
 import type {
   ConsoleWorkspaceScene,
   NavigationIconKind,
@@ -209,8 +212,10 @@ function loopOverlayFocus(
   }
 }
 
+type ProductActivationController = ReturnType<typeof usePreviewServiceActivation> | ReturnType<typeof useLiveServiceActivation>;
+
 function ConsoleShell({ activation, activationAccountId, experience }: {
-  activation: ReturnType<typeof usePreviewServiceActivation>;
+  activation: ProductActivationController;
   activationAccountId?: string;
   experience?: ExperienceSnapshot;
 }) {
@@ -271,7 +276,11 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const setHeaderPanel = useConsoleUiStore((state) => state.setHeaderPanel);
   const principal = session.current;
   const product = (pendingSelection ?? navigation.selection).product;
-  const productReady = !product || (activation.state.status === "enabled" && activation.access.canUse);
+  const productReady = !product || Boolean(activationAccountId && serviceWorkspaceMayLoad(
+    activation.state,
+    activation.access,
+    { accountId: activationAccountId, serviceKey: product }
+  ));
   const organizationId = committedFrame.scope?.organization.id;
   const effectiveOrganizationId = organizationId ?? principal?.session.organizationId;
   const organizationName = committedFrame.scope?.organization.name;
@@ -586,18 +595,32 @@ function ConsoleProviders({ accountRepository, experience, repository, selection
   const navigation = useConsoleNavigation();
   const session = useSession();
   const roleSession = useRoleSession();
+  const credential = useEffectiveCredential();
   const product = (navigation.pendingSelection ?? selection).product;
   const activationAccountId = roleSession.identity?.account.id ?? experience?.organization.id ?? session.current?.session.organizationId;
-  const activation = usePreviewServiceActivation({
+  const previewActivation = usePreviewServiceActivation({
     accountId: activationAccountId,
     actorId: roleSession.mode === "ROLE" ? roleSession.identity?.role.id : roleSession.mode === "USER" ? session.current?.session.principalId : undefined,
     preview: Boolean(experience),
     serviceKey: product
   });
-  const ready = activation.state.status === "enabled" && activation.access.canUse;
+  const effectiveRepository = repository ?? httpControlPlaneRepository;
+  const liveActivation = useLiveServiceActivation({
+    accountId: activationAccountId,
+    active: !experience && Boolean(product),
+    credential: credential ?? undefined,
+    repository: effectiveRepository,
+    serviceKey: product
+  });
+  const activation: ProductActivationController = experience ? previewActivation : liveActivation;
+  const ready = Boolean(product && activationAccountId && serviceWorkspaceMayLoad(
+    activation.state,
+    activation.access,
+    { accountId: activationAccountId, serviceKey: product }
+  ));
   const productAccess = useMemo(() => product ? { product, ready } : null, [product, ready]);
   return <AccountAccessProvider active={roleSession.mode === "USER" && selection.section === "access" && selection.view !== "sessions" && selection.view !== "role-access"} repository={accountRepository}>
-    <ControlPlaneProvider experience={experience} productAccess={productAccess} repository={repository} selection={selection}>
+    <ControlPlaneProvider experience={experience} productAccess={productAccess} repository={effectiveRepository} selection={selection}>
       <ConsoleShell activation={activation} activationAccountId={activationAccountId} experience={experience} />
     </ControlPlaneProvider>
   </AccountAccessProvider>;

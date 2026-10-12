@@ -8,7 +8,7 @@ import { consoleRouteHref, type ControlPlaneRouteSelection } from "../domain/sel
 const snapshot: ControlPlaneSnapshot = {
   offerings: [{
     id: "postgresql-18",
-    kind: "POSTGRESQL",
+    service: { id: "postgresql", revision: 1, contentDigest: `sha256:${"1".repeat(64)}` },
     displayName: "PostgreSQL 18",
     description: "托管关系数据库",
     engineFamily: "PostgreSQL",
@@ -100,7 +100,7 @@ describe("buildConsoleScene", () => {
       ...snapshot,
       offerings: [
         ...snapshot.offerings,
-        { ...snapshot.offerings[0]!, id: "mysql-8.4", kind: "MYSQL", displayName: "MySQL 8.4 LTS", engineFamily: "MySQL", engineVersion: "8.4" }
+        { ...snapshot.offerings[0]!, id: "mysql-8.4", service: { id: "mysql", revision: 1, contentDigest: `sha256:${"2".repeat(64)}` }, displayName: "MySQL 8.4 LTS", engineFamily: "MySQL", engineVersion: "8.4" }
       ],
       entitlements: [
         ...snapshot.entitlements,
@@ -147,6 +147,23 @@ describe("buildConsoleScene", () => {
     const live = buildConsoleScene("applications", snapshot);
     expect(live.content).toEqual({ kind: "resources", directory: "applications", listing: "unavailable", resources: [], readSnapshots: [], tagSnapshots: [], deploymentSnapshots: [] });
   });
+
+  it("preserves product-scoped installation reads when catalog enrichment is not authorized", () => {
+    const scene = buildConsoleScene("installations", {
+      ...snapshot,
+      offerings: [],
+      installations: [
+        ...snapshot.installations,
+        { ...snapshot.installations[0]!, id: "mysql-primary", offeringId: "mysql-8.4", engineVersion: "8.4" }
+      ]
+    }, undefined, undefined, "postgresql");
+
+    expect(scene.content).toMatchObject({
+      kind: "installations",
+      installations: [{ id: "postgres-primary", offeringId: "postgresql-18", engine: "Managed service 18" }]
+    });
+  });
+
   it("projects real resources into the complete console shell", () => {
     const scene = buildConsoleScene("overview", snapshot);
     expect(scene.rail.map((item) => item.id)).toEqual(["overview", "managed-database", "audit", "access"]);

@@ -3413,7 +3413,10 @@
     "nextHint": "开通后再配置配额、创建实例。服务角色授权在具体资源中单独审阅。",
     "termsVersion": "开通说明版本：{version}",
     "mockConsent": "我已阅读开通说明，同意为当前租户演示开通此服务。",
-    "enable": "同意并开通",
+    "permissionOnlyTitle": "直接开通",
+    "permissionOnlyHint": "此服务仅检查当前身份的开通权限；不会创建服务角色，也不会给操作者或其他成员新增资源权限。",
+    "enable": "开通服务",
+    "enableWithConsent": "同意并开通",
     "retry": "重试开通",
     "enableMock": "同意并开通 · MOCK",
     "retryMock": "重试开通 · MOCK",
@@ -3429,7 +3432,7 @@
     "previewUnavailableHint": "无法读取当前浏览器的演示开通状态，请确认浏览器允许本地存储后重试。",
     "resetFailedHint": "无法重置此服务的演示记录，原开通状态仍保留。请确认浏览器允许本地存储后重试。",
     "unavailableHint": "暂时无法读取此服务的开通状态。",
-    "liveUnavailableHint": "正式服务开通接口尚未提供。此入口当前不能执行真实开通，请从 MOCK 入口体验完整流程。",
+    "liveUnavailableHint": "暂时无法读取可信服务目录或当前租户的开通状态。页面不会用 MOCK 记录补全真实状态。",
     "unavailableFooter": "开通状态确认后才能继续。",
     "openAccess": "查看访问管理",
     "previewControls": "开通场景与重置",
@@ -3451,6 +3454,7 @@
       "enabling": "开通中",
       "failed": "开通失败",
       "enabled": "已开通",
+      "unobservable": "状态不可见",
       "unavailable": "暂不可用"
     }
   },

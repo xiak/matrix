@@ -33,7 +33,7 @@ import type {
 function offeringScenes(snapshot: ControlPlaneSnapshot): OfferingScene[] {
   return snapshot.offerings.map((offering) => ({
     id: offering.id,
-    kind: offering.kind,
+    serviceId: offering.service.id,
     name: offering.displayName,
     description: offering.description,
     engine: offering.engineFamily,
@@ -304,7 +304,7 @@ export function buildAuditConsoleScene(experience?: ExperienceSnapshot): Console
 }
 
 function managedProductContent(product: ManagedServiceProductId, snapshot: ControlPlaneSnapshot): ConsoleContentScene {
-  const offering = offeringScenes(snapshot)[0] ?? null;
+  const offering = offeringScenes(snapshot).find((candidate) => candidate.id === managedServiceProduct(product).offeringId) ?? null;
   const purchasedQuota = snapshot.entitlements.reduce((total, item) => total + item.purchasedCount, 0);
   const availableQuota = snapshot.entitlements.reduce(
     (total, item) => total + Math.max(0, item.purchasedCount - item.reservedCount - item.consumedCount),
@@ -318,6 +318,21 @@ function managedProductContent(product: ManagedServiceProductId, snapshot: Contr
     availableQuota,
     instanceCount: snapshot.installations.length,
     readyInstanceCount: snapshot.installations.filter((item) => item.phase === "READY").length
+  };
+}
+
+function managedProductSnapshot(product: ManagedServiceProductId, snapshot: ControlPlaneSnapshot): ControlPlaneSnapshot {
+  const offerings = snapshot.offerings.filter((offering) => offering.service.id === product);
+  const offeringIds = new Set(offerings.map((offering) => offering.id));
+  const publishedOfferingId = managedServiceProduct(product).offeringId;
+  // Catalog metadata is optional for an independently authorized installation
+  // read. The route's published offering identity still scopes those resources.
+  if (!snapshot.offerings.some((offering) => offering.id === publishedOfferingId)) offeringIds.add(publishedOfferingId);
+  return {
+    offerings,
+    regions: snapshot.regions,
+    entitlements: snapshot.entitlements.filter((entitlement) => offeringIds.has(entitlement.offeringId)),
+    installations: snapshot.installations.filter((installation) => offeringIds.has(installation.offeringId))
   };
 }
 
@@ -433,15 +448,7 @@ export function buildConsoleScene(
 ): ConsoleScene {
   if (section === "access") return buildAccessConsoleScene(experience, view);
   if (section === "audit") return buildAuditConsoleScene(experience);
-  const selectedSnapshot = product ? (() => {
-    const { offeringId } = managedServiceProduct(product);
-    return {
-      offerings: snapshot.offerings.filter((item) => item.id === offeringId),
-      regions: snapshot.regions,
-      entitlements: snapshot.entitlements.filter((item) => item.offeringId === offeringId),
-      installations: snapshot.installations.filter((item) => item.offeringId === offeringId)
-    };
-  })() : snapshot;
+  const selectedSnapshot = product ? managedProductSnapshot(product, snapshot) : snapshot;
   const installations = installationScenes(selectedSnapshot);
   const activeOperations = selectedSnapshot.installations.filter(
     (item) => item.phase === "PENDING" || item.phase === "PROVISIONING"

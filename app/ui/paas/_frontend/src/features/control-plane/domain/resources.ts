@@ -1,4 +1,3 @@
-export type OfferingKind = "POSTGRESQL" | "MYSQL" | "ELASTICSEARCH" | "RABBITMQ";
 export type OfferingState = "AVAILABLE" | "UNAVAILABLE";
 export type RegionState = "READY" | "STALE" | "UNAVAILABLE";
 export type InstallationPhase =
@@ -22,9 +21,18 @@ export type QuotaShape = {
   storageGiB: number;
 };
 
+// A managed-service offering is committed to one exact published service
+// definition. The service ID is a product-catalog identity, not an IAM
+// ProductID and not a presentation-only enum.
+export type ServiceDefinitionReference = {
+  id: string;
+  revision: number;
+  contentDigest: string;
+};
+
 export type ServiceOffering = {
   id: string;
-  kind: OfferingKind;
+  service: ServiceDefinitionReference;
   displayName: string;
   description: string;
   engineFamily: string;

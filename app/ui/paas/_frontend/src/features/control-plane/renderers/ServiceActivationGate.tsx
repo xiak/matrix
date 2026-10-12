@@ -4,15 +4,15 @@ import { useId, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, Checkbox, Typography } from "@ui/xiak";
 import { Building2, CheckCircle2, KeyRound, PackageCheck } from "lucide-react";
-import type { ServiceActivationAccess, ServiceActivationState } from "../domain/serviceActivation";
+import { serviceWorkspaceMayLoad, type ServiceActivationAccess, type ServiceActivationState } from "../domain/serviceActivation";
 import styles from "./ServiceActivationGate.module.css";
 
 export type ServiceActivationGateProps = {
   account: { id: string; name?: string };
-  service: { key: string; name: string; description: string; termsVersion: string; icon: ReactNode };
+  service: { key: string; name: string; description: string; noticeVersion?: string; icon: ReactNode };
   access: ServiceActivationAccess;
   state: ServiceActivationState;
-  consent: ReactNode;
+  consent?: ReactNode;
   enableLabel?: string;
   retryLabel?: string;
   unavailableHint?: ReactNode;
@@ -28,12 +28,15 @@ export function ServiceActivationGate({ account, service, access, state, consent
   const t = useTranslations("ServiceActivation");
   const titleId = useId();
   const [acknowledgement, setAcknowledgement] = useState<string | null>(null);
-  const consentKey = JSON.stringify([account.id, service.key, service.termsVersion]);
-  const accepted = acknowledgement === consentKey;
-  const validEnabled = state.status === "enabled" && state.record.accountId === account.id && state.record.serviceKey === service.key;
-  const status = state.status === "enabled" && !validEnabled ? "unavailable" : state.status;
+  const consentKey = JSON.stringify([account.id, service.key, service.noticeVersion ?? "permission-only"]);
+  const accepted = consent === undefined || acknowledgement === consentKey;
+  const validEnabled = state.status === "enabled" && state.scope.accountId === account.id && state.scope.serviceKey === service.key;
+  const validUnobservable = state.status === "unobservable" && state.scope.accountId === account.id && state.scope.serviceKey === service.key;
+  const status = (state.status === "enabled" && !validEnabled) || (state.status === "unobservable" && !validUnobservable)
+    ? "unavailable"
+    : state.status;
   const busy = status === "checking" || status === "enabling";
-  if (validEnabled && access.canUse) return <>{children}</>;
+  if (serviceWorkspaceMayLoad(state, access, { accountId: account.id, serviceKey: service.key })) return <>{children}</>;
 
   return <Card aria-labelledby={titleId} className={styles.card}>
     <Card.Header className={styles.header}>
@@ -61,8 +64,9 @@ export function ServiceActivationGate({ account, service, access, state, consent
         event.preventDefault();
         if (accepted && !busy) onEnable();
       }}>
-        <div><Checkbox checked={accepted} disabled={busy} onChange={(event) => setAcknowledgement(event.target.checked ? consentKey : null)}>{consent}</Checkbox><small>{t("termsVersion", { version: service.termsVersion })}</small></div>
-        <Button disabled={!accepted || busy} type="submit">{status === "enabling" ? t("enabling") : status === "failed" ? retryLabel ?? t("retry") : enableLabel ?? t("enable")}</Button>
+        {consent !== undefined ? <div><Checkbox checked={accepted} disabled={busy} onChange={(event) => setAcknowledgement(event.target.checked ? consentKey : null)}>{consent}</Checkbox>{service.noticeVersion ? <small>{t("termsVersion", { version: service.noticeVersion })}</small> : null}</div>
+          : <div><strong>{t("permissionOnlyTitle")}</strong><small>{t("permissionOnlyHint")}</small></div>}
+        <Button disabled={!accepted || busy} type="submit">{status === "enabling" ? t("enabling") : status === "failed" ? retryLabel ?? t("retry") : enableLabel ?? t(consent === undefined ? "enable" : "enableWithConsent")}</Button>
       </form> : <div className={styles.status} role={busy ? "status" : undefined}>
         <span>{t(busy ? status === "checking" ? "checkingHint" : "enablingHint" : status === "unavailable" ? "unavailableFooter" : validEnabled ? "enabledPermissionHint" : "contactHint")}</span>
         {status !== "unavailable" && !busy ? requestAccess : null}

@@ -6,6 +6,7 @@ import { Alert, Badge, Button, FormField, Select } from "@ui/xiak";
 import type { ReactNode } from "react";
 import type { usePreviewServiceActivation } from "../application/previewServiceActivation";
 import { previewActivationScenarios, type PreviewActivationScenario } from "../application/previewServiceActivation";
+import type { useLiveServiceActivation } from "../application/liveServiceActivation";
 import type { ManagedServiceProductId } from "../domain/managedServiceProduct";
 import { ConsoleLink } from "../routes/ConsoleNavigation";
 import { ServiceActivationGate } from "./ServiceActivationGate";
@@ -13,7 +14,7 @@ import styles from "./ServiceActivationGate.module.css";
 
 export function ManagedProductActivation({ account, activation, children, preview, product }: {
   account: { id: string; name?: string };
-  activation: ReturnType<typeof usePreviewServiceActivation>;
+  activation: ReturnType<typeof usePreviewServiceActivation> | ReturnType<typeof useLiveServiceActivation>;
   children: ReactNode;
   preview: boolean;
   product: ManagedServiceProductId;
@@ -21,8 +22,11 @@ export function ManagedProductActivation({ account, activation, children, previe
   const t = useTranslations("ServiceActivation");
   const directory = useTranslations("ServiceDirectory");
   const Icon = product === "elasticsearch" ? Search : product === "rabbitmq" ? MessagesSquare : Database;
+  const activationVersion = activation.state.status === "enabled"
+    ? "enabledAt" in activation.state.activation ? activation.state.activation.enabledAt : activation.state.activation.activatedAt
+    : "first-use";
   return <div className={styles.workspace}>
-    {preview ? <details className={styles.preview}>
+    {preview && activation.preview ? <details className={styles.preview}>
       <summary><Badge status="warning">MOCK</Badge> {t("previewControls")}</summary>
       <div className={styles.previewBody}>
         <FormField label={t("scenario")}><Select aria-label={t("scenario")} value={activation.scenario} options={previewActivationScenarios.map((value) => ({ value, label: t(`scenarios.${value}`) }))} onValueChange={(value) => activation.selectScenario(value as PreviewActivationScenario)} /></FormField>
@@ -33,17 +37,23 @@ export function ManagedProductActivation({ account, activation, children, previe
       {activation.resetFailed ? <Alert status="danger">{t("resetFailedHint")}</Alert> : null}
     </details> : null}
     <ServiceActivationGate
-      key={JSON.stringify([account.id, product, activation.scenario, activation.state.status === "enabled" ? activation.state.record.enabledAt : "first-use"])}
+      key={JSON.stringify([account.id, product, activation.preview ? activation.scenario : "live", activationVersion])}
       account={account}
-      service={{ key: product, name: directory(`services.${product}.name`), description: directory(`services.${product}.description`), termsVersion: "mock-v1", icon: <Icon aria-hidden="true" /> }}
+      service={{
+        key: product,
+        name: activation.definition?.displayName ?? directory(`services.${product}.name`),
+        description: activation.definition?.description ?? directory(`services.${product}.description`),
+        ...(activation.preview ? { noticeVersion: "mock-v1" } : {}),
+        icon: <Icon aria-hidden="true" />
+      }}
       state={activation.state}
       access={activation.access}
-      consent={t("mockConsent")}
-      enableLabel={t("enableMock")}
-      retryLabel={t("retryMock")}
+      consent={activation.preview ? t("mockConsent") : undefined}
+      enableLabel={t(activation.preview ? "enableMock" : "enable")}
+      retryLabel={t(activation.preview ? "retryMock" : "retry")}
       unavailableHint={t(preview ? "previewUnavailableHint" : "liveUnavailableHint")}
-      failureHint={t("previewFailedHint")}
-      onEnable={activation.enable}
+      failureHint={t(activation.preview ? "previewFailedHint" : "failedHint")}
+      onEnable={() => void activation.enable()}
       requestAccess={<Button asChild variant="secondary"><ConsoleLink href="/console/access/">{t("openAccess")}</ConsoleLink></Button>}
     >{children}</ServiceActivationGate>
   </div>;

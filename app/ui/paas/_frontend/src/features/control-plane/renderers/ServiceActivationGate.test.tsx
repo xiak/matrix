@@ -6,11 +6,11 @@ import { ServiceActivationGate, type ServiceActivationGateProps } from "./Servic
 
 const props: ServiceActivationGateProps = {
   account: { id: "tenant-a", name: "Team A" },
-  service: { key: "postgresql", name: "PostgreSQL", description: "A managed database", termsVersion: "mock-v1", icon: <span /> },
-  access: { canEnable: true, canUse: true }, state: { status: "not-enabled" },
+  service: { key: "postgresql", name: "PostgreSQL", description: "A managed database", noticeVersion: "mock-v1", icon: <span /> },
+  access: { canEnable: true, mayLoadWorkspace: true }, state: { status: "not-enabled" },
   consent: "同意开通说明", onEnable: vi.fn(), children: <p>Product workspace</p>
 };
-const enabled = { status: "enabled" as const, record: { accountId: "tenant-a", serviceKey: "postgresql", termsVersion: "mock-v1", acceptedBy: "owner-a", acceptedAt: "2026-10-12T01:00:00.000Z", enabledAt: "2026-10-12T01:00:00.000Z" } };
+const enabled = { status: "enabled" as const, scope: { accountId: "tenant-a", serviceKey: "postgresql" }, activation: { accountId: "tenant-a", serviceKey: "postgresql", termsVersion: "mock-v1", acceptedBy: "owner-a", acceptedAt: "2026-10-12T01:00:00.000Z", enabledAt: "2026-10-12T01:00:00.000Z" } };
 const page = (changes: Partial<ServiceActivationGateProps> = {}) => <LocaleProvider><ServiceActivationGate {...props} {...changes} /></LocaleProvider>;
 afterEach(cleanup);
 
@@ -34,23 +34,23 @@ describe("ServiceActivationGate", () => {
   });
 
   it("does not equate enablement authority with resource access", () => {
-    const { rerender } = render(page({ state: enabled, access: { canEnable: true, canUse: false } }));
+    const { rerender } = render(page({ state: enabled, access: { canEnable: true, mayLoadWorkspace: false } }));
     expect(screen.queryByText("Product workspace")).toBeNull();
     expect(screen.getByText(/尚未获得资源操作权限/)).toBeTruthy();
     expect(screen.queryByRole("checkbox")).toBeNull();
-    rerender(page({ state: enabled, access: { canEnable: false, canUse: true } }));
+    rerender(page({ state: enabled, access: { canEnable: false, mayLoadWorkspace: true } }));
     expect(screen.getByText("Product workspace")).toBeTruthy();
   });
 
   it("shows contact-admin for a member even when that member can use an already-enabled service", () => {
-    render(page({ access: { canEnable: false, canUse: true } }));
+    render(page({ access: { canEnable: false, mayLoadWorkspace: true } }));
     expect(screen.getByText(/当前身份没有开通资格/)).toBeTruthy();
     expect(screen.queryByRole("checkbox")).toBeNull();
     expect(screen.queryByRole("button", { name: "同意并开通" })).toBeNull();
   });
 
   it.each([{ accountId: "other-account", serviceKey: "postgresql" }, { accountId: "tenant-a", serviceKey: "mysql" }])("rejects another account/service's activation evidence", (scope) => {
-    render(page({ state: { ...enabled, record: { ...enabled.record, ...scope } } }));
+    render(page({ state: { ...enabled, scope } }));
     expect(screen.queryByText("Product workspace")).toBeNull();
     expect(screen.getByText("暂不可用")).toBeTruthy();
   });
@@ -61,8 +61,18 @@ describe("ServiceActivationGate", () => {
     await user.click(screen.getByRole("checkbox", { name: "同意开通说明" }));
     rerender(page({ state: { status: "failed" } }));
     expect((screen.getByRole("button", { name: "重试开通" }) as HTMLButtonElement).disabled).toBe(false);
-    rerender(page({ service: { ...props.service, termsVersion: "mock-v2" } }));
+    rerender(page({ service: { ...props.service, noticeVersion: "mock-v2" } }));
     expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
     expect((screen.getByRole("button", { name: "同意并开通" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("uses a direct permission-only action in LIVE instead of inventing legal consent", async () => {
+    const user = userEvent.setup();
+    const onEnable = vi.fn();
+    render(page({ consent: undefined, enableLabel: "开通服务", onEnable }));
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.getByText("直接开通")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "开通服务" }));
+    expect(onEnable).toHaveBeenCalledTimes(1);
   });
 });

@@ -3,8 +3,13 @@ import type {
   ControlPlaneSnapshot,
   CreateInstallationCommand,
   QuotaEntitlement,
+  ServiceDefinitionReference,
   ServiceInstallation
 } from "../domain/resources";
+import type {
+  ServiceActivation,
+  ServiceDefinitionDirectory
+} from "../domain/serviceActivation";
 import type {
   BindManagedServiceRoleCommand,
   ManagedServiceAuthorizationObservation,
@@ -30,6 +35,13 @@ export interface ControlPlaneRepository {
     resources: readonly ControlPlaneResourceKind[]
   ): Promise<ControlPlaneResourceSnapshot>;
   getInstallation(credential: string, installationId: string): Promise<ServiceInstallation>;
+  listServiceDefinitions?(credential: string): Promise<ServiceDefinitionDirectory>;
+  getServiceActivation?(credential: string, serviceId: string): Promise<ServiceActivation>;
+  activateService?(
+    credential: string,
+    service: ServiceDefinitionReference,
+    requestId: string
+  ): Promise<ServiceActivation>;
   readApplication?(
     credential: string,
     applicationId: string

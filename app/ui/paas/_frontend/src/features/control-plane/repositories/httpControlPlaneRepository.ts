@@ -17,9 +17,16 @@ import type {
   QuotaEntitlement,
   QuotaShape,
   Region,
+  ServiceDefinitionReference,
   ServiceInstallation,
   ServiceOffering
 } from "../domain/resources";
+import type {
+  ServiceActivation,
+  ServiceActivationCapability,
+  ServiceDefinition,
+  ServiceDefinitionDirectory
+} from "../domain/serviceActivation";
 import type {
   ControlPlaneRepository,
   ControlPlaneResourceKind,
@@ -76,6 +83,7 @@ function exactKeys(wire: UnknownRecord, required: string[]): void {
 
 const publicIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const installationIdentifierPattern = /^[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]$/;
+const serviceIdentifierPattern = /^[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]$/;
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const timestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
 const strongApplicationETagPattern = /^"[1-9][0-9]*"$/;
@@ -307,36 +315,146 @@ function listItems(value: unknown, expectedKind: string): unknown[] {
   return wire.items;
 }
 
-function parseShape(value: unknown): QuotaShape {
-  const wire = record(value, "quota shape");
+function managedServiceInvalid(): never {
+  throw new Error("INVALID_MANAGED_SERVICE_RESPONSE");
+}
+
+function managedServiceExactKeys(wire: UnknownRecord, required: readonly string[], optional: readonly string[] = []): void {
+  const allowed = new Set([...required, ...optional]);
+  if (required.some((key) => !(key in wire)) || Object.keys(wire).some((key) => !allowed.has(key))) managedServiceInvalid();
+}
+
+function managedServiceRecord(value: unknown): UnknownRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) managedServiceInvalid();
+  return value as UnknownRecord;
+}
+
+function managedServiceText(value: unknown, minimum: number, maximum: number): string {
+  if (typeof value !== "string") managedServiceInvalid();
+  const byteLength = new TextEncoder().encode(value).length;
+  if (byteLength < minimum || byteLength > maximum || value.trim() !== value || /[\0\r\n]/.test(value)) {
+    managedServiceInvalid();
+  }
+  return value;
+}
+
+function positiveSafeInteger(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) managedServiceInvalid();
+  return value;
+}
+
+function positiveUint32(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 4_294_967_295) managedServiceInvalid();
+  return value;
+}
+
+function managedServiceIdentifier(value: unknown): string {
+  if (typeof value !== "string" || !publicIdentifierPattern.test(value)) managedServiceInvalid();
+  return value;
+}
+
+function serviceIdentifier(value: unknown): string {
+  if (typeof value !== "string" || !serviceIdentifierPattern.test(value)) managedServiceInvalid();
+  return value;
+}
+
+function parseServiceDefinitionReference(value: unknown): ServiceDefinitionReference {
+  const wire = managedServiceRecord(value);
+  managedServiceExactKeys(wire, ["id", "revision", "contentDigest"]);
+  if (typeof wire.contentDigest !== "string" || !digestPattern.test(wire.contentDigest)) managedServiceInvalid();
   return {
-    id: text(wire.id, "quota shape id"),
-    displayName: text(wire.displayName, "quota shape display name"),
-    cpuMillicores: integer(wire.cpuMillicores, "quota cpu"),
-    memoryMiB: integer(wire.memoryMiB, "quota memory"),
-    storageGiB: integer(wire.storageGiB, "quota storage")
+    id: serviceIdentifier(wire.id),
+    revision: positiveSafeInteger(wire.revision),
+    contentDigest: wire.contentDigest
+  };
+}
+
+function parseServiceDefinition(value: unknown): ServiceDefinition {
+  const wire = managedServiceRecord(value);
+  managedServiceExactKeys(wire, ["id", "displayName", "description", "revision", "contentDigest", "activationPrerequisite", "state"]);
+  if (wire.activationPrerequisite !== "PERMISSION_ONLY" || (wire.state !== "AVAILABLE" && wire.state !== "UNAVAILABLE") ||
+      typeof wire.contentDigest !== "string" || !digestPattern.test(wire.contentDigest)) managedServiceInvalid();
+  return {
+    id: serviceIdentifier(wire.id),
+    displayName: managedServiceText(wire.displayName, 1, 128),
+    description: managedServiceText(wire.description, 1, 512),
+    revision: positiveSafeInteger(wire.revision),
+    contentDigest: wire.contentDigest,
+    activationPrerequisite: "PERMISSION_ONLY",
+    state: wire.state
+  };
+}
+
+function parseServiceActivationCapability(value: unknown): ServiceActivationCapability {
+  const wire = managedServiceRecord(value);
+  managedServiceExactKeys(wire, ["action", "resource", "available"], ["restrictionReason"]);
+  const resource = managedServiceRecord(wire.resource);
+  managedServiceExactKeys(resource, ["kind", "id"]);
+  if (wire.action !== "managedservice.service-activation.activate" || resource.kind !== "SERVICE_ACTIVATION" ||
+      resource.id !== "collection" || typeof wire.available !== "boolean" ||
+      (wire.available && "restrictionReason" in wire) || (!wire.available && wire.restrictionReason !== "AUTHORITY_REQUIRED")) {
+    managedServiceInvalid();
+  }
+  return {
+    action: "managedservice.service-activation.activate",
+    resource: { kind: "SERVICE_ACTIVATION", id: "collection" },
+    available: wire.available,
+    ...(wire.available ? {} : { restrictionReason: "AUTHORITY_REQUIRED" as const })
+  };
+}
+
+function parseServiceDefinitionDirectory(value: unknown): ServiceDefinitionDirectory {
+  const wire = managedServiceRecord(value);
+  managedServiceExactKeys(wire, ["kind", "items", "activationCapability"]);
+  if (wire.kind !== "ServiceDefinitionList" || !Array.isArray(wire.items) || wire.items.length > 50) managedServiceInvalid();
+  const services = wire.items.map(parseServiceDefinition);
+  if (services.some((item, index) => index > 0 && item.id <= services[index - 1]!.id)) managedServiceInvalid();
+  return { services, activationCapability: parseServiceActivationCapability(wire.activationCapability) };
+}
+
+function parseServiceActivation(value: unknown, expectedServiceId: string): ServiceActivation {
+  const wire = managedServiceRecord(value);
+  managedServiceExactKeys(wire, ["service", "resourceVersion", "activatedAt"]);
+  const service = parseServiceDefinitionReference(wire.service);
+  if (service.id !== expectedServiceId) managedServiceInvalid();
+  const activatedAt = managedServiceText(wire.activatedAt, 1, 40);
+  if (!timestampPattern.test(activatedAt) || Number.isNaN(Date.parse(activatedAt)) ||
+      new Date(activatedAt).toISOString().slice(0, 19) !== activatedAt.slice(0, 19)) managedServiceInvalid();
+  return { service, resourceVersion: positiveSafeInteger(wire.resourceVersion), activatedAt };
+}
+
+function parseShape(value: unknown): QuotaShape {
+  const wire = managedServiceRecord(value);
+  managedServiceExactKeys(wire, ["id", "displayName", "cpuMillicores", "memoryMiB", "storageGiB"]);
+  return {
+    id: managedServiceIdentifier(wire.id),
+    displayName: managedServiceText(wire.displayName, 1, 128),
+    cpuMillicores: positiveUint32(wire.cpuMillicores),
+    memoryMiB: positiveUint32(wire.memoryMiB),
+    storageGiB: positiveUint32(wire.storageGiB)
   };
 }
 
 function parseOffering(value: unknown): ServiceOffering {
-  const wire = record(value, "offering");
-  const kind = String(wire.kind);
+  const wire = managedServiceRecord(value);
+  managedServiceExactKeys(wire, ["id", "service", "displayName", "description", "engineFamily", "engineVersion", "state", "quotaShapes"]);
   if (
-    !["POSTGRESQL", "MYSQL", "ELASTICSEARCH", "RABBITMQ"].includes(kind) ||
     (wire.state !== "AVAILABLE" && wire.state !== "UNAVAILABLE") ||
-    !Array.isArray(wire.quotaShapes)
+    !Array.isArray(wire.quotaShapes) || wire.quotaShapes.length < 1 || wire.quotaShapes.length > 16
   ) {
-    throw new Error("INVALID_OFFERING_RESPONSE");
+    managedServiceInvalid();
   }
+  const quotaShapes = wire.quotaShapes.map(parseShape);
+  if (new Set(quotaShapes.map((shape) => shape.id)).size !== quotaShapes.length) managedServiceInvalid();
   return {
-    id: text(wire.id, "offering id"),
-    kind: kind as ServiceOffering["kind"],
-    displayName: text(wire.displayName, "offering display name"),
-    description: text(wire.description, "offering description"),
-    engineFamily: text(wire.engineFamily, "engine family"),
-    engineVersion: text(wire.engineVersion, "engine version"),
+    id: managedServiceIdentifier(wire.id),
+    service: parseServiceDefinitionReference(wire.service),
+    displayName: managedServiceText(wire.displayName, 1, 128),
+    description: managedServiceText(wire.description, 1, 512),
+    engineFamily: serviceIdentifier(wire.engineFamily),
+    engineVersion: managedServiceIdentifier(wire.engineVersion),
     state: wire.state,
-    quotaShapes: wire.quotaShapes.map(parseShape)
+    quotaShapes
   };
 }
 
@@ -552,6 +670,45 @@ export const httpControlPlaneRepository: ControlPlaneRepository = {
       [resource, await readers[resource]()] as const
     )));
     return Object.fromEntries(entries) as ControlPlaneResourceSnapshot;
+  },
+
+  async listServiceDefinitions(credential) {
+    const value = await requestJSON<unknown>("/api/managed-services/v1/services", {
+      headers: authorization(credential)
+    });
+    return parseServiceDefinitionDirectory(value);
+  },
+
+  async getServiceActivation(credential, serviceId) {
+    if (!serviceIdentifierPattern.test(serviceId)) throw new Error("INVALID_SERVICE_ACTIVATION_REQUEST");
+    const value = await requestJSON<unknown>(
+      `/api/managed-services/v1/service-activations/${encodeURIComponent(serviceId)}`,
+      { headers: authorization(credential) }
+    );
+    return parseServiceActivation(value, serviceId);
+  },
+
+  async activateService(credential, service, requestId) {
+    const parsedService = parseServiceDefinitionReference(service);
+    if (!publicIdentifierPattern.test(requestId)) throw new Error("INVALID_SERVICE_ACTIVATION_REQUEST");
+    const response = await requestJSONResponse<unknown>("/api/managed-services/v1/service-activations", {
+      method: "POST",
+      headers: {
+        ...authorization(credential),
+        "Content-Type": "application/json",
+        "Idempotency-Key": requestId
+      },
+      body: JSON.stringify({ service: parsedService })
+    });
+    const expectedLocation = `/managed-services/v1/service-activations/${parsedService.id}`;
+    if ((response.status !== 200 && response.status !== 201) || response.headers.get("Location") !== expectedLocation) {
+      managedServiceInvalid();
+    }
+    const activation = parseServiceActivation(response.body, parsedService.id);
+    if (activation.service.revision !== parsedService.revision || activation.service.contentDigest !== parsedService.contentDigest) {
+      managedServiceInvalid();
+    }
+    return activation;
   },
 
   async getInstallation(credential, installationId) {

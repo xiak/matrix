@@ -419,10 +419,12 @@ the separate one-click MOCK entry remains available meanwhile.
 First-use enablement is an Account-scoped service state, separate from quota
 entitlement, human IAM grants and resource-level service-role consent. The
 reusable `ServiceActivationGate` receives the current Account/service facts,
-independent enablement and workspace-access capabilities, the notice version
-and explicit acknowledgement. It keeps the product identity visible while
-checking, handles unavailable/failed/pending states locally, and admits resource
-content only for the matching enabled Account/service and permitted operator.
+independent enablement and workspace-access facts, and optional preview notice.
+The isolated MOCK requires its explicit acknowledgement; the accepted LIVE
+`PERMISSION_ONLY` contract is a direct action and does not invent legal consent.
+The gate keeps product identity visible while checking, handles unavailable,
+failed and pending states locally, and admits resource content only for the
+matching Account/service scope and presentation admission fact.
 Presentation admission is not a request-time IAM decision: every LIVE directory
 and mutation still depends on its owning service's authorization.
 
@@ -458,10 +460,12 @@ LIVE activation-directory reads and activation commands must be independently
 authorized. Neither a readable activation record nor permission to activate
 authorizes product-resource reads or mutations; resource-only authority likewise
 does not prove authority to read the activation directory. The preview's
-`canUse` is only a scenario input, not an adopted generic workspace permit or
-backend field. LIVE composition consumes the owning collection/resource Action
-capabilities and keeps every request subject to backend authorization. Switching
-Account or effective credentials must discard prior pending results and controls.
+workspace-admission flag is only a scenario input, not an adopted generic permit
+or backend field. LIVE composition uses the exact collection capability only for
+the activation button. A forbidden activation read permits an ordinary product
+resource probe rather than fabricating a disabled service; the product API still
+authorizes that request. Switching Account, product or effective credentials
+invalidates prior activation evidence before any resource read is admitted.
 
 Public-cloud reference confirms the separation, not one universal identity
 allowlist. Tencent's sourced identity, opening-scope and product exceptions are
@@ -511,17 +515,31 @@ and terminal-poll completions cannot restore resource controls or initiate a
 directory refresh. Resource errors are rendered inside the admitted product,
 not above its opening workflow, and never reverse a confirmed opening fact.
 Authentication feedback remains independent. This controls UI side effects,
-not backend authorization, and does not implement the pending LIVE protocol.
+not backend authorization.
 
-There is currently no accepted Account/service enrollment API. Direct LIVE
-product routes therefore remain non-submittable, ignore all browser preview
-consent, and state the missing capability. Existing accepted quota/installation
-interfaces retain their own contracts. The four frontend product route keys are
-not IAM ProductIDs: current authority has one `managedservice` ProductID, with
-exact Offering IDs `postgresql-18`, `mysql-8.4`, `elasticsearch-8.19` and
-`rabbitmq-4.1`. Product facts show the returned Offering ID. Future enrollment
-storage, service definitions, Actions, notice eligibility, idempotency and audit
-belong to the managed-service/PaaS owner and IAM contract, not this preview store.
+The strict LIVE client adapts fixed managed-service source
+`b015b07864c2fcdf85129d57a0babe8332e3356f`, whose public activation wire is
+unchanged from parent `599d994cddda5f1cb2ee1b4f53b84eafd1458e58`. It reads the
+sorted service-definition directory and exact collection
+`activationCapability`, reads one Account-scoped activation by service ID, and
+submits only `{service:{id,revision,contentDigest}}` with a caller-owned
+`Idempotency-Key`. A `404` activation read keeps first use closed; a `403` does
+not block an independently authorized resource page. Unknown write results are
+reconciled through the activation read and confirmed misses reuse the same key.
+Malformed, extra-field, route-mismatched or stale commitment evidence fails
+closed. Activation creates neither a human policy nor a service Role, and quota,
+resource access and service-role consent remain separate workflows.
+
+Existing quota/installation interfaces retain their own contracts. The four
+frontend product route keys are service-definition IDs, not IAM ProductIDs:
+current authority still has one `managedservice` ProductID, with exact Offering
+IDs `postgresql-18`, `mysql-8.4`, `elasticsearch-8.19` and `rabbitmq-4.1`.
+Offerings carry their exact service-definition commitment and product scenes
+filter offerings, entitlements and installations by that relation. When optional
+catalog enrichment is unavailable, the route's published Offering identity still
+scopes the independently authorized installation read. Browser MOCK
+state is never read by LIVE. This is strict client and regression evidence; no
+real activation POST or real-IAM browser acceptance has been performed yet.
 
 #### CAM UX replication scope and research gate
 
@@ -1844,6 +1862,20 @@ no page overflow or application console error. A Next DEV unused-preload warning
 was observed during hot updates; it is not production-build evidence. This
 accepts the documented isolated MOCK experience only; enrollment authority and
 real IAM/managed-service acceptance remain with their owning contracts.
+
+The 2026-10-12 strict LIVE-client follow-up adapts the fixed service-definition
+and Account-activation wire without replacing that MOCK. The complete frontend
+run passed 67 files and 1,263 cases plus three export-normalization cases,
+typecheck, lint, architecture and 228 theme-contrast pairs. The production build
+generated 59 pages and 57 normalized segment paths; all 319 generated files match
+the Go embed, and repository-wide Go test and vet passed. Focused cases cover
+exact capability denial, activation-read `403` resource probing, readable `404`
+first use, unknown-result reconciliation with equal idempotency replay, strict
+wire rejection, product-scoped data projection and direct LIVE enablement without
+browser MOCK consent. Credential changes immediately remove prior activation
+evidence and optional catalog-read failure does not hide authorized installations.
+No real activation POST, real IAM login, SMTP delivery or
+TOTP browser acceptance was performed by this follow-up.
 
 Current compact IAM shell evidence is fixed at `a43fd4e1e`; the current access-analysis
 delegation follow-up is fixed at `a383d3930`, and the current strict Role-delegation UX

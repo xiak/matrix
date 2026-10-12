@@ -64,7 +64,7 @@ function snapshot(installation: ServiceInstallation, consumedCount: number): Con
   return {
     offerings: [{
       id: "postgresql-18",
-      kind: "POSTGRESQL",
+      service: { id: "postgresql", revision: 1, contentDigest: `sha256:${"1".repeat(64)}` },
       displayName: "PostgreSQL 18",
       description: "Managed PostgreSQL",
       engineFamily: "postgresql",

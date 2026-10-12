@@ -57,7 +57,7 @@ vi.mock("./ConsoleContentRenderer", async (importOriginal) => {
 const snapshot: ControlPlaneSnapshot = {
   offerings: [{
     id: "postgresql-18",
-    kind: "POSTGRESQL",
+    service: { id: "postgresql", revision: 1, contentDigest: `sha256:${"1".repeat(64)}` },
     displayName: "PostgreSQL 18",
     description: "Managed PostgreSQL",
     engineFamily: "postgresql",
@@ -91,6 +91,38 @@ const snapshot: ControlPlaneSnapshot = {
   }],
   installations: []
 };
+
+const liveServiceDefinition = {
+  id: "postgresql",
+  displayName: "PostgreSQL",
+  description: "由 Matrix 管理的关系数据库服务。",
+  revision: 1,
+  contentDigest: `sha256:${"1".repeat(64)}`,
+  activationPrerequisite: "PERMISSION_ONLY" as const,
+  state: "AVAILABLE" as const
+};
+
+const liveServiceActivation = {
+  service: {
+    id: liveServiceDefinition.id,
+    revision: liveServiceDefinition.revision,
+    contentDigest: liveServiceDefinition.contentDigest
+  },
+  resourceVersion: 1,
+  activatedAt: "2026-10-12T11:00:00.123456Z"
+};
+
+function liveServiceDirectory(available: boolean) {
+  return {
+    services: [liveServiceDefinition],
+    activationCapability: {
+      action: "managedservice.service-activation.activate" as const,
+      resource: { kind: "SERVICE_ACTIVATION" as const, id: "collection" as const },
+      available,
+      ...(available ? {} : { restrictionReason: "AUTHORITY_REQUIRED" as const })
+    }
+  };
+}
 
 const liveApplicationReadSnapshot: ApplicationReadSnapshot = {
   etag: '"7"',
@@ -193,6 +225,9 @@ async function renderConsole({
   listApplications,
   bindServiceRole,
   unbindServiceRole,
+  listServiceDefinitions,
+  getServiceActivation,
+  activateService,
   logout = vi.fn().mockResolvedValue(undefined),
   accountRepository,
   iamRepository,
@@ -213,6 +248,9 @@ async function renderConsole({
   listApplications?: ControlPlaneRepository["listApplications"];
   bindServiceRole?: ControlPlaneRepository["bindServiceRole"];
   unbindServiceRole?: ControlPlaneRepository["unbindServiceRole"];
+  listServiceDefinitions?: ControlPlaneRepository["listServiceDefinitions"];
+  getServiceActivation?: ControlPlaneRepository["getServiceActivation"];
+  activateService?: ControlPlaneRepository["activateService"];
   logout?: IamRepository["logout"];
   accountRepository?: AccountRepository;
   iamRepository?: IamRepository;
@@ -238,7 +276,10 @@ async function renderConsole({
     listApplications,
     inspectServiceAuthorization,
     bindServiceRole,
-    unbindServiceRole
+    unbindServiceRole,
+    listServiceDefinitions,
+    getServiceActivation,
+    activateService
   };
   const iam: IamRepository = iamRepository ?? {
     async login() {
@@ -1393,18 +1434,58 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
   });
 
-  it("keeps direct LIVE product routes closed even when browser MOCK consent exists", async () => {
+  it("uses the LIVE directory capability for direct permission-only activation and ignores browser MOCK consent", async () => {
     writePreviewServiceActivation(localStorage, {
       accountId: "organization-test", serviceKey: "postgresql", termsVersion: "mock-v1", acceptedBy: "principal-test",
       acceptedAt: "2026-10-12T01:00:00.000Z", enabledAt: "2026-10-12T01:00:00.000Z"
     });
-    const { repository } = await renderConsole({ section: "quotas", product: "postgresql" });
-    expect(await screen.findByText(/正式服务开通接口尚未提供/)).toBeTruthy();
+    const listServiceDefinitions = vi.fn().mockResolvedValue(liveServiceDirectory(true));
+    const getServiceActivation = vi.fn().mockRejectedValue(new HttpProblem(404, "NOT_FOUND"));
+    const activateService = vi.fn().mockResolvedValue(liveServiceActivation);
+    const { user, repository } = await renderConsole({
+      section: "catalog", product: "postgresql", listServiceDefinitions, getServiceActivation, activateService
+    });
+
+    expect(await screen.findByRole("button", { name: "开通服务" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "同意并开通 · MOCK" })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.getByText(/不会创建服务角色/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "激活配额" })).toBeNull();
     expect(screen.queryByText("开通场景与重置")).toBeNull();
     expect(repository.activateQuota).not.toHaveBeenCalled();
     expect(repository.load).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "开通服务" }));
+    expect(await screen.findByRole("link", { name: /进入实例/ })).toBeTruthy();
+    expect(activateService).toHaveBeenCalledWith(
+      "renderer-test-memory-only-session",
+      liveServiceActivation.service,
+      expect.stringMatching(/^ui-service-activation-/)
+    );
+    expect(repository.load).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps activation denied when the exact LIVE capability is unavailable", async () => {
+    const { repository } = await renderConsole({
+      section: "catalog",
+      product: "postgresql",
+      listServiceDefinitions: vi.fn().mockResolvedValue(liveServiceDirectory(false)),
+      getServiceActivation: vi.fn().mockRejectedValue(new HttpProblem(404, "NOT_FOUND"))
+    });
+    expect(await screen.findByText(/当前身份没有开通资格/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "开通服务" })).toBeNull();
+    expect(repository.load).not.toHaveBeenCalled();
+  });
+
+  it("does not block an independently authorized resource page when activation reads are forbidden", async () => {
+    const { repository } = await renderConsole({
+      section: "catalog",
+      product: "postgresql",
+      listServiceDefinitions: vi.fn().mockResolvedValue(liveServiceDirectory(false)),
+      getServiceActivation: vi.fn().mockRejectedValue(new HttpProblem(403, "PERMISSION_DENIED"))
+    });
+    expect(await screen.findByRole("link", { name: /进入实例/ })).toBeTruthy();
+    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "开通服务" })).toBeNull();
   });
 
   it("projects a pending IAM query into the correct content-area workflow", async () => {

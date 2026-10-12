@@ -3413,7 +3413,10 @@
     "nextHint": "Configure quota and create instances after enabling. Review service-role authorization separately on the relevant resource.",
     "termsVersion": "Enablement notice version: {version}",
     "mockConsent": "I have read the notice and agree to demonstrate enabling this service for the current tenant.",
-    "enable": "Agree and enable",
+    "permissionOnlyTitle": "Direct enablement",
+    "permissionOnlyHint": "This service checks only the current identity's enablement authority. It creates no service role and grants no resource access to the operator or other members.",
+    "enable": "Enable service",
+    "enableWithConsent": "Agree and enable",
     "retry": "Retry enablement",
     "enableMock": "Agree and enable · MOCK",
     "retryMock": "Retry enablement · MOCK",
@@ -3429,7 +3432,7 @@
     "previewUnavailableHint": "The browser's preview state could not be read. Allow local storage and retry.",
     "resetFailedHint": "The preview record could not be reset. The original state is preserved; allow local storage and retry.",
     "unavailableHint": "The service-enablement state is temporarily unavailable.",
-    "liveUnavailableHint": "The live service-enablement API is not available yet. This entry cannot enable a real service; use the MOCK entry to inspect the complete journey.",
+    "liveUnavailableHint": "The trusted service directory or this tenant's enablement state is temporarily unavailable. MOCK records never fill a LIVE state.",
     "unavailableFooter": "Confirm the enablement state before continuing.",
     "openAccess": "Open access management",
     "previewControls": "Enablement scenarios and reset",
@@ -3451,6 +3454,7 @@
       "enabling": "Enabling",
       "failed": "Enablement failed",
       "enabled": "Enabled",
+      "unobservable": "State unavailable",
       "unavailable": "Unavailable"
     }
   },

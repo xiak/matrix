@@ -63,10 +63,10 @@ export function resetPreviewServiceActivation(storage: Storage, scope: ServiceAc
 export const previewActivationScenarios = ["owner", "activation-admin", "product-user", "no-access"] as const;
 export type PreviewActivationScenario = typeof previewActivationScenarios[number];
 const scenarioAccess: Record<PreviewActivationScenario, ServiceActivationAccess> = {
-  owner: { canEnable: true, canUse: true },
-  "activation-admin": { canEnable: true, canUse: false },
-  "product-user": { canEnable: false, canUse: true },
-  "no-access": { canEnable: false, canUse: false }
+  owner: { canEnable: true, mayLoadWorkspace: true },
+  "activation-admin": { canEnable: true, mayLoadWorkspace: false },
+  "product-user": { canEnable: false, mayLoadWorkspace: true },
+  "no-access": { canEnable: false, mayLoadWorkspace: false }
 };
 
 function subscribe(listener: () => void) {
@@ -106,10 +106,10 @@ export function usePreviewServiceActivation({ accountId, actorId, preview, servi
   }, [active]);
   const raw = useSyncExternalStore(active ? subscribe : noSubscription, snapshot, serverSnapshot);
   const record = useMemo(() => accountId && serviceKey ? readPreviewServiceActivation(raw, { accountId, serviceKey }) : null, [accountId, serviceKey, raw]);
-  const access = active ? scenarioAccess[scenario] : { canEnable: false, canUse: false };
+  const access = active ? scenarioAccess[scenario] : { canEnable: false, mayLoadWorkspace: false };
   const state: ServiceActivationState = !active || raw === unavailableSnapshot ? { status: "unavailable" }
     : raw === undefined ? { status: "checking" }
-      : record ? { status: "enabled", record }
+      : record && accountId && serviceKey ? { status: "enabled", scope: { accountId, serviceKey }, activation: record }
         : failedScope === scopeKey ? { status: "failed" } : { status: "not-enabled" };
 
   function enable() {
@@ -139,7 +139,8 @@ export function usePreviewServiceActivation({ accountId, actorId, preview, servi
   }
 
   return {
-    access, state, scenario, simulateFailure, enable, reset, resetFailed: resetFailureScope === scopeKey,
+    access, state, definition: null, preview: true as const, scenario, simulateFailure, enable, reset,
+    resetFailed: resetFailureScope === scopeKey,
     selectScenario(next: PreviewActivationScenario) { setSelection({ identityKey, scenario: next, failure: simulateFailure }); },
     selectFailure(failure: boolean) { setSelection({ identityKey, scenario, failure }); }
   };

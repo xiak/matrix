@@ -84,9 +84,9 @@ function installationDetailScene(summary: InstallationScene, installation: Servi
   };
 }
 
-function OfferingIcon({ kind }: { kind: ServiceOffering["kind"] }) {
-  if (kind === "ELASTICSEARCH") return <Search aria-hidden="true" />;
-  if (kind === "RABBITMQ") return <MessagesSquare aria-hidden="true" />;
+function OfferingIcon({ serviceId }: { serviceId: ServiceOffering["service"]["id"] }) {
+  if (serviceId === "elasticsearch") return <Search aria-hidden="true" />;
+  if (serviceId === "rabbitmq") return <MessagesSquare aria-hidden="true" />;
   return <Database aria-hidden="true" />;
 }
 
@@ -152,7 +152,7 @@ function OverviewContent({ scene }: { scene: Extract<ConsoleContentScene, { kind
       <ContentLayout.Aside>
         <Card className={styles.featureCard}>
           <Card.Body className={styles.featureCardBody}>
-            <div className={styles.databaseIcon}>{scene.offering ? <OfferingIcon kind={scene.offering.kind} /> : <Database aria-hidden="true" />}</div>
+            <div className={styles.databaseIcon}>{scene.offering ? <OfferingIcon serviceId={scene.offering.serviceId} /> : <Database aria-hidden="true" />}</div>
             <Typography.Eyebrow>{t("databaseEyebrow")}</Typography.Eyebrow>
             <Typography.Title as="h2" level={2}>
               {scene.offering?.name ?? t("managedDataServices")}
@@ -188,7 +188,7 @@ function CatalogContent({ scene, preview }: {
           <Card className={styles.productCard} key={offering.id}>
             <Card.Header className={styles.productCardHeader}>
               <div className={styles.productIdentity}>
-                <div className={styles.databaseIcon}><OfferingIcon kind={offering.kind} /></div>
+                <div className={styles.databaseIcon}><OfferingIcon serviceId={offering.serviceId} /></div>
                 <div className={styles.productHeading}>
                   <Typography.Eyebrow>{offering.engine}</Typography.Eyebrow>
                   <Typography.Title as="h2" level={3}>{offering.name}</Typography.Title>
@@ -235,7 +235,7 @@ function ManagedProductContent({ preview, scene }: {
       <Card className={styles.productOverviewCard}>
         <Card.Header className={styles.productOverviewHeader}>
           <div className={styles.productIdentity}>
-            <div className={styles.databaseIcon}>{scene.offering ? <OfferingIcon kind={scene.offering.kind} /> : <Database aria-hidden="true" />}</div>
+            <div className={styles.databaseIcon}>{scene.offering ? <OfferingIcon serviceId={scene.offering.serviceId} /> : <Database aria-hidden="true" />}</div>
             <div className={styles.productHeading}>
               <Typography.Eyebrow>{t("managedCloudService")}</Typography.Eyebrow>
               <Typography.Title as="h2" level={2}>{productName}</Typography.Title>
