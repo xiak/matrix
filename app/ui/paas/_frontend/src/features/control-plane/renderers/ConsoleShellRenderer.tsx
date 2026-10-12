@@ -66,6 +66,7 @@ import {
 } from "@ui/xiak";
 import { ControlPlaneProvider, useControlPlane } from "../application/ControlPlaneProvider";
 import { useConsoleUiStore } from "../application/consoleUiStore";
+import { usePreviewServiceActivation } from "../application/previewServiceActivation";
 import type { ExperienceSnapshot } from "../domain/experience";
 import { consoleRouteHref, type ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
@@ -77,6 +78,7 @@ import type {
 import { ConsoleHeader } from "./ConsoleHeader";
 import { ConsoleContentLoadingRenderer } from "./ConsoleContentLoadingRenderer";
 import { ConsoleContentRenderer } from "./ConsoleContentRenderer";
+import { ManagedProductActivation } from "./ManagedProductActivation";
 import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
 import styles from "./ConsoleShellRenderer.module.css";
 import { useServiceDirectory } from "./ServiceDirectory";
@@ -264,6 +266,15 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const [regionId, setRegionId] = useState("all");
   const setHeaderPanel = useConsoleUiStore((state) => state.setHeaderPanel);
   const principal = session.current;
+  const product = (pendingSelection ?? navigation.selection).product;
+  const activationAccountId = frame.scope?.organization.id ?? principal?.session.organizationId;
+  const activation = usePreviewServiceActivation({
+    accountId: activationAccountId,
+    actorId: principal?.session.principalId,
+    preview: frame.preview,
+    serviceKey: product
+  });
+  const productReady = !product || (activation.state.status === "enabled" && activation.access.canUse);
   const organizationId = committedFrame.scope?.organization.id;
   const effectiveOrganizationId = organizationId ?? principal?.session.organizationId;
   const organizationName = committedFrame.scope?.organization.name;
@@ -293,7 +304,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   }, [closeWorkspace]);
 
   const workspaceKey = scene?.workspace ? `${scene.section}:${scene.workspace.kind}` : null;
-  useEffect(() => { closeWorkspace(); }, [workspaceKey, closeWorkspace]);
+  useEffect(() => { closeWorkspace(); }, [workspaceKey, closeWorkspace, productReady]);
 
   useEffect(() => {
     if (!navigation.pendingHref) return;
@@ -352,9 +363,9 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   }, [roleSession, sessionLogout, router, setHeaderPanel]);
   const headerLogout = useCallback(() => { setHeaderPanel(null); requestLeave(logout); }, [setHeaderPanel, requestLeave, logout]);
 
-  const workspaceVisible = Boolean(scene?.workspace && workspaceOpen && !navigation.pendingHref);
-  const workspaceMounted = Boolean(scene?.workspace && (workspaceVisible || activatedWorkspaceKey === workspaceKey));
-  const workspaceAction = scene?.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
+  const workspaceVisible = Boolean(productReady && scene?.workspace && workspaceOpen && !navigation.pendingHref);
+  const workspaceMounted = Boolean(productReady && scene?.workspace && (workspaceVisible || activatedWorkspaceKey === workspaceKey));
+  const workspaceAction = productReady && scene?.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
   const WorkspaceActionIcon = workspaceAction?.icon;
   const activeService = frame.preview ? serviceForSelection(pendingSelection ?? navigation.selection) : undefined;
   const ProductContextIcon = activeService ? favoriteIcons[activeService.id] : railIcons[frame.productIcon];
@@ -385,6 +396,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const accessView = frame.section === "access" ? pendingSelection?.view ?? navigation.selection.view : undefined;
   const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : frame.section === "overview" ? dashboard("title") : t(`pages.${frame.section}.title`);
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
+  const pageContent = content ? <ConsoleContentRenderer accountId={activationAccountId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={pendingSelection ?? navigation.selection} /> : null;
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -521,7 +533,9 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
                       <Button onClick={() => void controlPlane.reload()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
                       <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
                     </div>} /></div> : null}
-                    {content ? <ConsoleContentRenderer accountId={frame.scope?.organization.id ?? principal?.session.organizationId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={navigation.selection} /> : null}
+                    {product ? <ManagedProductActivation account={{ id: activationAccountId ?? "", name: frame.scope?.organization.name }} activation={activation} preview={frame.preview} product={product}>
+                      {pageContent}
+                    </ManagedProductActivation> : pageContent}
                   </div>
                 </ContentPage.Body>
               </ContentPage>

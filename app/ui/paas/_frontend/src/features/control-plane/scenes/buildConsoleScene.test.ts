@@ -95,7 +95,7 @@ describe("buildConsoleScene", () => {
     expect(monitoring.navigation.find((item) => item.selected)?.id).toBe("alerts");
   });
 
-  it("keeps each managed product in its own workspace and authorization namespace", () => {
+  it("keeps each managed product in its own workspace with its exact offering", () => {
     const productSnapshot: ControlPlaneSnapshot = {
       ...snapshot,
       offerings: [
@@ -121,7 +121,6 @@ describe("buildConsoleScene", () => {
     expect(overview.content).toMatchObject({
       kind: "managed-product",
       productId: "mysql",
-      contractProductId: "managedservice.mysql",
       offering: { id: "mysql-8.4" },
       instanceCount: 1
     });

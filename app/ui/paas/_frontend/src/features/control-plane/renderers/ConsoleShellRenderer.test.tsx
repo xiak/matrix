@@ -10,9 +10,10 @@ import type {
   ServiceRoleTemplate,
   WorkloadRoleBinding
 } from "@/features/auth/domain/serviceAuthorization";
-import { previewAccountRepository, previewIamRepository } from "@/features/auth/repositories/previewIamRepository";
+import { previewAccountRepository, previewCredential, previewIamRepository } from "@/features/auth/repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
+import { previewServiceActivationStorageKey, writePreviewServiceActivation } from "../application/previewServiceActivation";
 import type { ControlPlaneSnapshot, ServiceInstallation } from "../domain/resources";
 import type { ExperienceSnapshot } from "../domain/experience";
 import type { ApplicationDirectoryPage, ApplicationReadSnapshot } from "../domain/application";
@@ -195,11 +196,13 @@ async function renderConsole({
   logout = vi.fn().mockResolvedValue(undefined),
   accountRepository,
   iamRepository,
+  product,
   view: initialView,
   heldRoute
 }: {
   section?: ConsoleSection;
   view?: ServiceView;
+  product?: ControlPlaneRouteSelection["product"];
   experience?: ExperienceSnapshot;
   openWorkspace?: boolean;
   load?: ControlPlaneRepository["load"];
@@ -261,7 +264,7 @@ async function renderConsole({
   function RoutedPage() {
     const [activeRepository, setActiveRepository] = useState(repository);
     replaceRepository = setActiveRepository;
-    const [href, setHref] = useState(consoleRouteHref({ section, view: initialView }));
+    const [href, setHref] = useState(consoleRouteHref({ section, view: initialView, product }));
     if (heldRoute) navigation.push.mockImplementation((target: string) => {
       const url = new URL(target, "https://matrix.invalid");
       navigation.query = url.search.slice(1);
@@ -1040,6 +1043,10 @@ describe("ConsoleShellRenderer", () => {
     { href: "/console/devops/", service: /研发效能 DevOps/, title: "交付总览", reads: 0, marker: { role: "heading", name: "最近流水线" } },
     { href: "/console/observability/", service: /云监控/, title: "监控总览", reads: 0, marker: { role: "heading", name: "服务健康" } }
   ] as const)("opens the $title service frame immediately while its route bundle is pending", async ({ href, marker, reads, service, title: expectedTitle }) => {
+    if (href.includes("/products/")) writePreviewServiceActivation(localStorage, {
+      accountId: previewExperienceSnapshot.organization.id, serviceKey: "postgresql", termsVersion: "mock-v1",
+      acceptedBy: "principal-test", acceptedAt: "2026-10-12T01:00:00.000Z", enabledAt: "2026-10-12T01:00:00.000Z"
+    });
     let release!: () => void;
     const heldRoute = { href, ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };
     const { user, repository } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot, heldRoute });
@@ -1057,7 +1064,7 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("navigation", { name: "控制台导航" })).toBe(menu);
     expect(screen.queryByRole("link", { name: "订单主库" })).toBeNull();
     if (reads === 0) expect(oldResource.isConnected).toBe(false);
-    else expect(oldResource.closest("[hidden]")).toBeTruthy();
+    else expect(!oldResource.isConnected || oldResource.closest("[hidden]")).toBeTruthy();
     if (href.includes("/products/")) await screen.findByText(/对应后端能力仍是待独立验收的候选/);
     const findDestination = () => marker.role === "table"
       ? screen.findByRole("table", { name: marker.name })
@@ -1247,6 +1254,10 @@ describe("ConsoleShellRenderer", () => {
   });
 
   it("keeps the product homepage structure stable while destination data is still pending", async () => {
+    writePreviewServiceActivation(localStorage, {
+      accountId: previewExperienceSnapshot.organization.id, serviceKey: "postgresql", termsVersion: "mock-v1",
+      acceptedBy: "principal-admin", acceptedAt: "2026-10-12T01:00:00.000Z", enabledAt: "2026-10-12T01:00:00.000Z"
+    });
     let resolveSnapshot!: (value: ControlPlaneSnapshot) => void;
     let releaseRoute!: () => void;
     const load = vi.fn(() => new Promise<ControlPlaneSnapshot>((resolve) => { resolveSnapshot = resolve; }));
@@ -1269,7 +1280,7 @@ describe("ConsoleShellRenderer", () => {
 
     expect(screen.getByRole("heading", { level: 1, name: "产品概览" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 2, name: "云数据库 PostgreSQL" })).toBeTruthy();
-    expect(users.closest("[hidden]")).toBeTruthy();
+    expect(!users.isConnected || users.closest("[hidden]")).toBeTruthy();
     expect(load).toHaveBeenCalledTimes(1);
 
     await act(async () => resolveSnapshot(snapshot));
@@ -1278,6 +1289,64 @@ describe("ConsoleShellRenderer", () => {
     expect(await screen.findByRole("link", { name: /进入实例/ })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 1, name: "产品概览" })).toBeTruthy();
     expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["postgresql", "mysql", "elasticsearch", "rabbitmq"] as const)("requires explicit account-level MOCK enablement for the %s workspace", async (product) => {
+    const { user, repository } = await renderConsole({ section: "catalog", product, experience: previewExperienceSnapshot });
+    const enable = await screen.findByRole("button", { name: "同意并开通 · MOCK" });
+    expect((enable as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("link", { name: /进入实例/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "激活配额" })).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: /我已阅读开通说明/ }));
+    await user.click(enable);
+    expect(await screen.findByRole("link", { name: /进入实例/ })).toBeTruthy();
+    expect(repository.activateQuota).not.toHaveBeenCalled();
+    expect(repository.createInstallation).not.toHaveBeenCalled();
+    expect(repository.bindServiceRole).toBeUndefined();
+    expect(localStorage.getItem(previewServiceActivationStorageKey)).toContain('"serviceKey":"' + product + '"');
+  });
+
+  it("guards product subroutes and keeps enablement separate from IAM grants and resource authority", async () => {
+    const { user, repository } = await renderConsole({
+      section: "installations", product: "postgresql", experience: previewExperienceSnapshot,
+      accountRepository: previewAccountRepository, iamRepository: previewIamRepository
+    });
+    const before = await previewAccountRepository.workspace!.read(previewCredential);
+    expect(await screen.findByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "组织服务实例" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
+    await user.click(screen.getByText("开通场景与重置"));
+    await user.click(screen.getByRole("combobox", { name: "身份与权限场景" }));
+    await user.click(screen.getByRole("option", { name: "子用户 · 仅获开通授权" }));
+    await user.click(screen.getByRole("checkbox", { name: /我已阅读开通说明/ }));
+    await user.click(screen.getByRole("button", { name: "同意并开通 · MOCK" }));
+    expect(await screen.findByText(/尚未获得资源操作权限/)).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "组织服务实例" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
+    expect(await previewAccountRepository.workspace!.read(previewCredential)).toEqual(before);
+    expect(repository.activateQuota).not.toHaveBeenCalled();
+    expect(repository.createInstallation).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("combobox", { name: "身份与权限场景" }));
+    await user.click(screen.getByRole("option", { name: "子用户 · 仅获资源权限" }));
+    expect(await screen.findByRole("heading", { name: "组织服务实例" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "安装服务" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重置此服务开通" }));
+    expect(await screen.findByText(/当前身份没有开通资格/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
+  });
+
+  it("keeps direct LIVE product routes closed even when browser MOCK consent exists", async () => {
+    writePreviewServiceActivation(localStorage, {
+      accountId: "organization-test", serviceKey: "postgresql", termsVersion: "mock-v1", acceptedBy: "principal-test",
+      acceptedAt: "2026-10-12T01:00:00.000Z", enabledAt: "2026-10-12T01:00:00.000Z"
+    });
+    const { repository } = await renderConsole({ section: "quotas", product: "postgresql" });
+    expect(await screen.findByText(/正式服务开通接口尚未提供/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "同意并开通 · MOCK" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "激活配额" })).toBeNull();
+    expect(screen.queryByText("开通场景与重置")).toBeNull();
+    expect(repository.activateQuota).not.toHaveBeenCalled();
   });
 
   it("projects a pending IAM query into the correct content-area workflow", async () => {

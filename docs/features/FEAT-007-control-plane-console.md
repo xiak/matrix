@@ -414,6 +414,71 @@ never from preview state or the presentation registry. Formal login/API
 verification remains deferred until the other UX acceptance is reviewed;
 the separate one-click MOCK entry remains available meanwhile.
 
+#### Product service-enablement experience
+
+First-use enablement is an Account-scoped service state, separate from quota
+entitlement, human IAM grants and resource-level service-role consent. The
+reusable `ServiceActivationGate` receives the current Account/service facts,
+independent enablement and workspace-access capabilities, the notice version
+and explicit acknowledgement. It keeps the product identity visible while
+checking, handles unavailable/failed/pending states locally, and admits resource
+content only for the matching enabled Account/service and permitted operator.
+Presentation admission is not a request-time IAM decision: every LIVE directory
+and mutation still depends on its owning service's authorization.
+
+The identity matrix is capability-driven rather than inferred from login names,
+policy names, a generic administrator label or the fact that the service was
+enabled:
+
+| Operator context | Enablement | Resource access after enablement |
+| --- | --- | --- |
+| Account resource owner | Subject to the service's current enablement capability and Account eligibility | Existing ownership rules remain the authority; enablement adds no user-policy attachment |
+| Subuser or customer Role delegated enablement authority | Allowed only when the exact service enables delegation and the current caller is authorized | Still needs separate resource Actions; authority to enable does not imply authority to create/read/delete resources |
+| Subuser with product-resource grants only | Cannot enable without the separate enablement capability | May use the already-enabled service within those grants |
+| Ordinary ungranted subuser or collaborator | No default enablement authority | No default resource authority; collaborator access is evaluated in the target Account context |
+| Automated service identity | Requires an explicitly supported API/capability and applicable consent rules | Uses its own service-role grants; never inherits the human operator's grants or ownership |
+
+Public-cloud reference confirms the separation, not one universal identity
+allowlist. Tencent COS documents distinct service-opening and identity-grant
+steps ([flow](https://cloud.tencent.com/document/product/436/68279)); some Tencent
+products require initial owner authorization
+([CloudBase Run](https://cloud.tencent.com/document/product/1243/78674)). GCP checks
+`serviceusage.services.enable` on the project ([Service Usage IAM](https://cloud.google.com/service-usage/docs/access-control));
+Azure provider registration checks `/register/action` on the subscription
+([registration](https://learn.microsoft.com/azure/azure-resource-manager/management/resource-providers-and-types)).
+An AWS service-linked Role belongs to the service, with separate caller authority
+for creation ([service-linked Roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create-service-linked-role.html)).
+It is not a default permission set assigned to the clicking user. Product-specific
+owner-only, billing, eligibility and organization restrictions must be supplied
+by the eventual owner contract rather than guessed by this component.
+
+Cloud identity scopes must also stay distinct: GCP's service enablement is
+project-scoped and Azure registration is subscription-scoped. An Entra tenant
+Global Administrator does not automatically hold Azure resource permissions
+([independent directory/resource authority](https://learn.microsoft.com/en-us/azure/role-based-access-control/elevate-access-global-admin)).
+The Matrix Account context therefore cannot be inferred from a vendor's generic
+tenant-administrator label.
+
+The PostgreSQL, MySQL, Elasticsearch and RabbitMQ product routes reuse this gate
+for their overview, instances and quota pages. Isolated MOCK consent is stored
+per Account and presentation service key, survives product-page navigation, and
+can be reset for repeated review. Its scope and first operator/notice/time are
+strictly parsed; records contain no bearer, credentials or user-policy data.
+Four explicit preview capability scenarios cover owner, enablement-only,
+resource-only and ungranted subuser, with failure/retry. Scenario changes do not
+switch the authenticated identity. Header/workspace installation and quota
+actions are absent until the same gate admits the product workspace.
+
+There is currently no accepted Account/service enrollment API. Direct LIVE
+product routes therefore remain non-submittable, ignore all browser preview
+consent, and state the missing capability. Existing accepted quota/installation
+interfaces retain their own contracts. The four frontend product route keys are
+not IAM ProductIDs: current authority has one `managedservice` ProductID, with
+exact Offering IDs `postgresql-18`, `mysql-8.4`, `elasticsearch-8.19` and
+`rabbitmq-4.1`. Product facts show the returned Offering ID. Future enrollment
+storage, service definitions, Actions, notice eligibility, idempotency and audit
+belong to the managed-service/PaaS owner and IAM contract, not this preview store.
+
 #### CAM UX replication scope and research gate
 
 The current CAM replication goal uses Tencent Cloud as an interaction and
@@ -1713,9 +1778,22 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-Verified through 2026-10-10 against the current all-service navigation, compact IAM
+Verified through 2026-10-12 against the current all-service navigation, compact IAM
 shell, responsive access-analysis hierarchy, primary directory actions and the
-provider-owned product-permission onboarding boundary.
+provider-owned product-permission onboarding boundary and service-enablement UX.
+
+The current service-enablement slice passed the complete 66-file/1,231-case
+frontend suite plus three export-normalization cases, typecheck, lint,
+architecture and 228 theme-contrast pairs. The production build generated 59
+pages and 57 normalized segment paths; its 319 generated files match the Go
+embed byte-for-byte, and the PaaS UI host passed Go test/vet. DEV browser checks
+at 1440 × 1000 and 390 × 844 exercised explicit consent, independent enablement
+and resource-access scenarios, reset and retry, first-use subroutes and product
+navigation. Light/dark compact pages matched document/body/viewport width with
+no page overflow or application console error. A Next DEV unused-preload warning
+was observed during hot updates; it is not production-build evidence. This
+accepts the documented isolated MOCK experience only; enrollment authority and
+real IAM/managed-service acceptance remain with their owning contracts.
 
 Current compact IAM shell evidence is fixed at `a43fd4e1e`; the current access-analysis
 delegation follow-up is fixed at `a383d3930`, and the current strict Role-delegation UX

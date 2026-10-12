@@ -196,7 +196,6 @@ export type ConsoleContentScene =
   | {
       kind: "managed-product";
       productId: import("../domain/managedServiceProduct").ManagedServiceProductId;
-      contractProductId: string;
       offering: OfferingScene | null;
       purchasedQuota: number;
       availableQuota: number;

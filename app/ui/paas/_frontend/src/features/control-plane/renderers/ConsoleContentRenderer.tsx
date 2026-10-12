@@ -248,7 +248,7 @@ function ManagedProductContent({ preview, scene }: {
         <Card.Body className={styles.productOverviewBody}>
           <p className={styles.productDescription}>{scene.offering?.description ?? t("offeringUnavailable")}</p>
           <dl className={styles.productOverviewFacts}>
-            <div><dt>{t("contractProductId")}</dt><dd><Typography.Code>{scene.contractProductId}</Typography.Code></dd></div>
+            <div><dt>{t("offeringId")}</dt><dd><Typography.Code>{scene.offering?.id ?? "—"}</Typography.Code></dd></div>
             <div><dt>{t("engineVersion")}</dt><dd>{scene.offering?.version ?? "—"}</dd></div>
             <div><dt>{t("activatedQuota")}</dt><dd>{scene.purchasedQuota}</dd></div>
             <div><dt>{t("availableQuota")}</dt><dd>{scene.availableQuota}</dd></div>

@@ -304,7 +304,6 @@ export function buildAuditConsoleScene(experience?: ExperienceSnapshot): Console
 }
 
 function managedProductContent(product: ManagedServiceProductId, snapshot: ControlPlaneSnapshot): ConsoleContentScene {
-  const definition = managedServiceProduct(product);
   const offering = offeringScenes(snapshot)[0] ?? null;
   const purchasedQuota = snapshot.entitlements.reduce((total, item) => total + item.purchasedCount, 0);
   const availableQuota = snapshot.entitlements.reduce(
@@ -314,7 +313,6 @@ function managedProductContent(product: ManagedServiceProductId, snapshot: Contr
   return {
     kind: "managed-product",
     productId: product,
-    contractProductId: definition.contractProductId,
     offering,
     purchasedQuota,
     availableQuota,

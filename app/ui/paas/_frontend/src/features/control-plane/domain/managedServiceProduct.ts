@@ -1,23 +1,19 @@
 export const managedServiceProducts = [
   {
     id: "postgresql",
-    offeringId: "postgresql-18",
-    contractProductId: "managedservice.postgresql"
+    offeringId: "postgresql-18"
   },
   {
     id: "mysql",
-    offeringId: "mysql-8.4",
-    contractProductId: "managedservice.mysql"
+    offeringId: "mysql-8.4"
   },
   {
     id: "elasticsearch",
-    offeringId: "elasticsearch-8.19",
-    contractProductId: "managedservice.elasticsearch"
+    offeringId: "elasticsearch-8.19"
   },
   {
     id: "rabbitmq",
-    offeringId: "rabbitmq-4.1",
-    contractProductId: "managedservice.rabbitmq"
+    offeringId: "rabbitmq-4.1"
   }
 ] as const;
 
