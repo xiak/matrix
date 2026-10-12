@@ -39,7 +39,10 @@ type DocumentInput struct {
 	Request         managedserviceadapterv1.ProvisionRequest
 	DataDirectory   string
 	CredentialPaths map[string]string
-	PublishedPort   int
+	// CredentialGroupIDs is populated only for group-readable protected files
+	// and always comes from the file that will be bind-mounted.
+	CredentialGroupIDs map[string]uint32
+	PublishedPort      int
 }
 
 type CredentialFile struct {
@@ -264,12 +267,22 @@ func (provisioner *Provisioner) prepareProject(
 		return composeadapter.RuntimeProject{}, "", "", err
 	}
 	credentialPaths := make(map[string]string, len(provisioner.credentialFiles))
+	credentialGroupIDs := make(map[string]uint32, len(provisioner.credentialFiles))
 	for _, credential := range provisioner.credentialFiles {
 		credentialPath := filepath.Join(directory, credential.Name)
 		if err := provisioner.ensureCredential(credentialPath, credential.Mode); err != nil {
 			return composeadapter.RuntimeProject{}, "", "", err
 		}
 		credentialPaths[credential.Name] = credentialPath
+		if credential.Mode&0o040 != 0 {
+			groupID, available, groupErr := credentialFileGroupID(credentialPath)
+			if groupErr != nil {
+				return composeadapter.RuntimeProject{}, "", "", groupErr
+			}
+			if available {
+				credentialGroupIDs[credential.Name] = groupID
+			}
+		}
 	}
 	port, err := ensurePort(provisioner.root, filepath.Join(directory, "published-port"), projectName)
 	if err != nil {
@@ -277,7 +290,8 @@ func (provisioner *Provisioner) prepareProject(
 	}
 	document, err := provisioner.compileDocument(DocumentInput{
 		ProjectName: projectName, ImageID: provisioner.imageID, Request: request,
-		DataDirectory: dataDirectory, CredentialPaths: credentialPaths, PublishedPort: port,
+		DataDirectory: dataDirectory, CredentialPaths: credentialPaths,
+		CredentialGroupIDs: credentialGroupIDs, PublishedPort: port,
 	})
 	if err != nil {
 		return composeadapter.RuntimeProject{}, "", "", err

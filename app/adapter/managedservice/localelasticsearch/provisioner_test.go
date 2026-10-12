@@ -7,6 +7,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
+	goruntime "runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -46,6 +49,7 @@ func TestEnsureCreatesRealElasticsearchShapeWithoutEmbeddingCredentials(t *testi
 		Services map[string]struct {
 			Image       string            `json:"image"`
 			PullPolicy  string            `json:"pull_policy"`
+			GroupAdd    []string          `json:"group_add"`
 			Environment map[string]string `json:"environment"`
 			Volumes     []struct {
 				Target   string `json:"target"`
@@ -65,6 +69,16 @@ func TestEnsureCreatesRealElasticsearchShapeWithoutEmbeddingCredentials(t *testi
 		!strings.HasPrefix(result.Endpoint, "http://127.0.0.1:") ||
 		!strings.HasPrefix(result.CredentialReference, "credential-") {
 		t.Fatalf("invalid Elasticsearch effect=%s result=%#v", document, result)
+	}
+	if goruntime.GOOS == "linux" {
+		credentialPath := filepath.Join(root, localcontaineradapter.ProjectName(request.TenantID, request.InstallationID), "elasticsearch-password")
+		groupID, available, groupErr := credentialFileGroupIDForTest(credentialPath)
+		if groupErr != nil || !available || len(service.GroupAdd) != 1 ||
+			service.GroupAdd[0] != strconv.FormatUint(groupID, 10) {
+			t.Fatalf("Elasticsearch credential group_add=%v group=%d available=%t err=%v", service.GroupAdd, groupID, available, groupErr)
+		}
+	} else if len(service.GroupAdd) != 0 {
+		t.Fatalf("unsupported host invented Elasticsearch supplemental groups: %v", service.GroupAdd)
 	}
 	mounted := false
 	for _, volume := range service.Volumes {
@@ -91,6 +105,27 @@ func TestEnsureCreatesRealElasticsearchShapeWithoutEmbeddingCredentials(t *testi
 	directory := filepath.Join(root, localcontaineradapter.ProjectName(request.TenantID, request.InstallationID))
 	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Elasticsearch data and credentials still exist: %v", err)
+	}
+}
+
+func credentialFileGroupIDForTest(path string) (uint64, bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return 0, false, err
+	}
+	value := reflect.Indirect(reflect.ValueOf(info.Sys()))
+	if !value.IsValid() {
+		return 0, false, nil
+	}
+	field := value.FieldByName("Gid")
+	if !field.IsValid() {
+		return 0, false, nil
+	}
+	switch field.Kind() {
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return field.Uint(), true, nil
+	default:
+		return 0, false, nil
 	}
 }
 

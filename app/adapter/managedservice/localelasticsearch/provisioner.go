@@ -107,12 +107,21 @@ func (provisioner *Provisioner) Delete(
 
 func compileDocument(input localcontaineradapter.DocumentInput) ([]byte, error) {
 	request := input.Request
+	credentialGroupID, hasCredentialGroup := input.CredentialGroupIDs["elasticsearch-password"]
+	if runtime.GOOS == "linux" && !hasCredentialGroup {
+		return nil, errors.New("local Elasticsearch credential group is unavailable")
+	}
+	groupAdd := make([]string, 0, 1)
+	if hasCredentialGroup {
+		groupAdd = []string{strconv.FormatUint(uint64(credentialGroupID), 10)}
+	}
 	document := map[string]any{
 		"name": input.ProjectName,
 		"services": map[string]any{
 			elasticsearchServiceName: map[string]any{
 				"image": input.ImageID, "pull_policy": "never", "restart": "unless-stopped",
 				"read_only": false, "init": false, "pids_limit": 384,
+				"group_add": groupAdd,
 				"environment": map[string]string{
 					"discovery.type":                                        "single-node",
 					"xpack.security.enabled":                                "true",

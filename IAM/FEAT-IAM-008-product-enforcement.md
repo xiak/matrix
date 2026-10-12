@@ -118,6 +118,8 @@ OpenAPI 对这些可扩展请求字段只验证统一 Action/Resource 语法和�
 
 Elasticsearch生产provider把宿主`vm.max_map_count >= 1048576`作为worker readiness的显式前置条件；缺失、非法或低于该值时在领取产品Operation前失败关闭，CI的临时Linux runner也必须先设置并回读同一值，不能靠增加重试掩盖宿主不兼容。四产品的数据销毁继续由受限、无网络的固定镜像容器执行；清空后必须把挂载根恢复为实际worker的数值UID/GID再由worker删除项目目录，不能遗留`root:root/0700`目录或为方便清理放宽成全局可写。失败路径只允许从确定性Account/installation项目身份清理本测试拥有的容器、网络和目录，即使产品容器已经消失也不得使用宽泛label或目录扫描。旧固定`4b820f2f`的Verification 38203212144在未建立该前置条件时真实到达Elasticsearch `FAILED`且暴露非root临时目录无法清理，不能登记为成功；修复候选在Docker Desktop 29.6.2以128.65秒重新通过四产品创建、READY、协议读写、授权撤销、租户隔离、Audit、终止与零残留，精确后继独立CI仍待证。
 
+固定`599d994cddda5f1cb2ee1b4f53b84eafd1458e58`的[Verification 38242291253](https://github.com/xiak/matrix/actions/runs/38242291253)再次在`authority-managed-products`到达Elasticsearch provisioning时失败，不能登记为完整CI通过。独立最小复现证明：CI形态的受保护源凭据为宿主`uid 1001/gid 118/0640`，官方容器仍以`uid 1000/gid 0`运行；原启动命令读取bind mount时得到`Permission denied`，仅增加实际文件组`group_add: 118`后成功，复制到tmpfs的凭据仍为0600，源文件和0700项目目录均未放宽。后继provider必须从刚创建或重放的受保护凭据文件读取真实数值GID，只把该组作为Elasticsearch固定非root容器的补充组；不得假设worker当前组、改成0644或让容器以root运行。文件类型、模式或GID观察不确定时在provider effect前失败关闭。当前候选已通过本机聚焦race/vet/architecture、Linux交叉编译，并在`network=none`、1 CPU/512 MiB/PIDs 128的临时Linux容器内证明生成的`group_add`精确等于实际凭据GID；完整四产品CI仍须由修复后的固定提交重新运行。
+
 ## 当前纵向切片：账号同意的服务相关角色
 
 下一片先完成一个真实产品、一个只读业务动作的完整协议，再扩展动作族；不先铺开任意跨账号委派或动态插件市场。
