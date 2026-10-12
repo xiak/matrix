@@ -477,6 +477,13 @@ It is not a default permission set assigned to the clicking user. Product-specif
 owner-only, billing, eligibility and organization restrictions must be supplied
 by the eventual owner contract rather than guessed by this component.
 
+Alibaba DCDN likewise documents a policy granting only `dcdn:OpenDcdnService`,
+separately from configuration modification and service-linked Role creation;
+the RAM user's activation grant must apply at Account scope, not ResourceGroup
+scope ([DCDN delegation](https://www.alibabacloud.com/help/en/edge-security-acceleration/dcdn/user-guide/examples-on-how-to-authorize-a-ram-user-to-activate-dcdn-and-modify-configurations)).
+This is a scoped product example supporting independent activation capability,
+not a universal allowlist of account types or a Matrix policy-language extension.
+
 Cloud identity scopes must also stay distinct: GCP's service enablement is
 project-scoped and Azure registration is subscription-scoped. An Entra tenant
 Global Administrator does not automatically hold Azure resource permissions
