@@ -82,6 +82,8 @@ OpenAPI 对这些可扩展请求字段只验证统一 Action/Resource 语法和�
 
 最终工作树在新的任务专属PostgreSQL 18和独立受限Docker资源上复跑同一精确选择器：直接前驱保留数据升级测试0.83秒、包3.693秒通过；四产品组合测试136.98秒、包140.479秒通过，逐项完成真实协议读写、精确Group授权、下一请求撤权、跨Account隐藏、Operation/outbox/Audit、公开终止、物理数据与凭据删除及配额归还。RabbitMQ独立真实运行在readiness修正后30.86秒通过。测试清理现先停止worker再删除产品，避免失败路径中的reconciler在清理窗口重新创建容器；结束后本片worker、产品容器、专属网络和卷均为零。此前因生产READY守卫已收紧而仍直接绑定PENDING夹具的authority进程门禁也已改为使用真实受限PaaS worker登录，经生产`claim_operation`/`complete_operation`契约把两个夹具推进READY后再建立服务Role；最终源码的该门禁测试232.02秒、package 235.508秒通过，同时保留双Account、RoleSession、撤权、AccessKey/tag攻击、MFA、恢复、Audit、重启和末端明文全库扫描回归；同一受限容器内的TOTP备份/恢复真实门禁39.95秒通过。authority夹具不启动产品容器，因此不替代上述四产品provider效果门禁。以上仍是本地候选证据，必须由后继固定提交自身的独立CI重新接受；同一旧run中另一个`authority-runtime`失败也不能由产品lane通过代替。
 
+固定`2b8dc42f9294614f9e2e0bb57b4f3ca84594704d`删除了内存仓库串行互斥下伪装成并发的配额测试；该用例现在只证明顺序预留的业务规则。真正的超售门禁进入现有PostgreSQL journey：两个独立Serializable事务在读取同一QuotaEntitlement的`FOR UPDATE`前同时到达，释放后必须恰好一个创建成功、一个得到`ErrQuotaExhausted`，最终只保留一个PENDING Installation、一次配额修订和一条创建Audit/outbox，失败意图不得留下资源或事实。协调包装只控制两条真实事务到达屏障，不实现状态或锁。当前journey与固定直接前驱测试在同一独立PostgreSQL 18集群、两个数据库及共享受限角色上以race串行选择器3.915秒通过；容器限制2 CPU、1536 MiB、256 PIDs，结束后专属容器、网络和卷均为零。`authority-managed-products`已增加该当前数据库和精确测试选择器；本地证据接受这个超售不变量，不替代独立CI、持续负载、产品集群或数据库HA。
+
 ## 当前纵向切片：账号同意的服务相关角色
 
 下一片先完成一个真实产品、一个只读业务动作的完整协议，再扩展动作族；不先铺开任意跨账号委派或动态插件市场。
