@@ -12246,16 +12246,18 @@ func assertAuthorityPlaintextAbsent(
 			// These values are contract-validated digests/timestamps. A random
 			// six-digit TOTP may occur inside them without having been persisted;
 			// exact code values and every longer secret remain forbidden.
-			for _, value := range []string{
-				operation.IdempotencyFingerprint,
-				operation.RequestDigest,
-				operation.CreatedAt.Format(time.RFC3339Nano),
-				operation.UpdatedAt.Format(time.RFC3339Nano),
+			for _, value := range []struct{ path, text string }{
+				{"$.idempotencyFingerprint", operation.IdempotencyFingerprint},
+				{"$.requestDigest", operation.RequestDigest},
+				{"$.createdAt", operation.CreatedAt.Format(time.RFC3339Nano)},
+				{"$.updatedAt", operation.UpdatedAt.Format(time.RFC3339Nano)},
 			} {
-				structuralLowEntropy[value] = struct{}{}
+				structuralLowEntropy[structuralLowEntropyPathKey(value.path, value.text)] = struct{}{}
 			}
 			if operation.TerminalAt != nil {
-				structuralLowEntropy[operation.TerminalAt.Format(time.RFC3339Nano)] = struct{}{}
+				structuralLowEntropy[structuralLowEntropyPathKey(
+					"$.terminalAt", operation.TerminalAt.Format(time.RFC3339Nano),
+				)] = struct{}{}
 			}
 		}
 		auditStructural, err := auditAccessStructuralLowEntropy(source, document, auditAuthorityDocument)
@@ -12344,10 +12346,7 @@ func authorityPlaintextLocationWithStructural(document string, beforeOTP map[str
 				continue
 			}
 			if len(plaintext) == 6 && strings.IndexFunc(plaintext, func(r rune) bool { return r < '0' || r > '9' }) == -1 {
-				_, structural := structuralLowEntropy[text]
-				if !structural {
-					_, structural = structuralLowEntropy[structuralLowEntropyPathKey(path, text)]
-				}
+				_, structural := structuralLowEntropy[structuralLowEntropyPathKey(path, text)]
 				if (unrelatedCode || structural) && text != plaintext {
 					continue
 				}
@@ -12382,8 +12381,12 @@ func authorityPlaintextLocationWithStructural(document string, beforeOTP map[str
 				field := "[member]"
 				switch key {
 				case "canonicalVersion", "source", "event",
-					"apiVersion", "kind", "eventId", "tenantId", "installationId", "actor", "type", "id", "action", "target", "result",
-					"requestDigest", "requestId", "correlationId", "occurredAt", "iamDecisionId", "operationId", "data":
+					"apiVersion", "schemaVersion", "kind", "eventId", "tenantId", "installationId",
+					"actor", "type", "id", "roleSession", "sessionId", "sourceUserId",
+					"sourceServicePrincipalId", "accessKeyId", "action", "target", "result",
+					"idempotencyFingerprint", "requestDigest", "requestId", "correlationId",
+					"auditId", "traceparent", "occurredAt", "observedAt", "createdAt", "updatedAt", "terminalAt",
+					"iamDecisionId", "operationId", "data":
 					field = key
 				}
 				// eventId and iamDecisionId are validated, server-generated structural
@@ -12478,7 +12481,13 @@ func auditAccessStructuralLowEntropy(source, inspectedDocument, authorityDocumen
 		}
 	}
 	if isServerGeneratedAuditAccessEvent(event) {
-		result[event.RequestID] = struct{}{}
+		prefix := "$."
+		if source == "audit.canonical.AUDIT" {
+			prefix = "$.event."
+		}
+		for _, path := range []string{prefix + "requestId", prefix + "correlationId"} {
+			result[structuralLowEntropyPathKey(path, event.RequestID)] = struct{}{}
+		}
 	}
 	return result, nil
 }
@@ -12943,16 +12952,14 @@ func roleActorStructuralLowEntropy(
 		if !found || !storedActor.Equal(stored.Actor) {
 			return result, nil
 		}
-		for _, identity := range []string{
-			string(stored.Actor.ID), stored.Actor.RoleSession.SessionID,
-			string(stored.Actor.RoleSession.SourceUserID),
-			string(stored.Actor.RoleSession.SourceServicePrincipalID),
-			string(stored.EventID), string(stored.IAMDecisionID), stored.RequestDigest,
-			stored.OccurredAt.Format(time.RFC3339Nano),
+		addRoleActorStructuralValues(result, "$.", stored.Actor)
+		for _, value := range []struct{ path, text string }{
+			{"$.eventId", string(stored.EventID)},
+			{"$.iamDecisionId", string(stored.IAMDecisionID)},
+			{"$.requestDigest", stored.RequestDigest},
+			{"$.occurredAt", stored.OccurredAt.Format(time.RFC3339Nano)},
 		} {
-			if identity != "" {
-				result[identity] = struct{}{}
-			}
+			result[structuralLowEntropyPathKey(value.path, value.text)] = struct{}{}
 		}
 		return result, nil
 	case strings.HasPrefix(source, "audit.document."):
@@ -12985,16 +12992,29 @@ func roleActorStructuralLowEntropy(
 	if !found || !stored.Equal(event.Actor) {
 		return result, nil
 	}
-	for _, identity := range []string{
-		string(event.Actor.ID), event.Actor.RoleSession.SessionID,
-		string(event.Actor.RoleSession.SourceUserID),
-		string(event.Actor.RoleSession.SourceServicePrincipalID),
+	prefix := "$."
+	if strings.HasPrefix(source, "audit.canonical.") {
+		prefix = "$.event."
+	}
+	addRoleActorStructuralValues(result, prefix, event.Actor)
+	return result, nil
+}
+
+func addRoleActorStructuralValues(
+	result map[string]struct{},
+	prefix string,
+	actor auditv1.ActorReference,
+) {
+	for _, value := range []struct{ path, text string }{
+		{prefix + "actor.id", string(actor.ID)},
+		{prefix + "actor.roleSession.sessionId", actor.RoleSession.SessionID},
+		{prefix + "actor.roleSession.sourceUserId", string(actor.RoleSession.SourceUserID)},
+		{prefix + "actor.roleSession.sourceServicePrincipalId", string(actor.RoleSession.SourceServicePrincipalID)},
 	} {
-		if identity != "" {
-			result[identity] = struct{}{}
+		if value.text != "" {
+			result[structuralLowEntropyPathKey(value.path, value.text)] = struct{}{}
 		}
 	}
-	return result, nil
 }
 
 func managedServiceRoleExitStructuralLowEntropy(
@@ -13044,7 +13064,13 @@ func managedServiceRoleExitStructuralLowEntropy(
 	}
 	expected := managedServiceRoleExitRequestID(issuanceRequestID)
 	if event.RequestID == expected && event.CorrelationID == expected {
-		result[expected] = struct{}{}
+		prefix := "$."
+		if source == "audit.canonical.IAM" {
+			prefix = "$.event."
+		}
+		for _, path := range []string{prefix + "requestId", prefix + "correlationId"} {
+			result[structuralLowEntropyPathKey(path, expected)] = struct{}{}
+		}
 	}
 	return result, nil
 }
@@ -13174,7 +13200,7 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 	})
 	t.Run("stored-role-actor-lineage", func(t *testing.T) {
 		roleEvent := event
-		roleEvent.EventID = "event-role-actor"
+		roleEvent.EventID = auditv1.EventID("event-" + code + "-structural")
 		roleEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorRole,
 			ID: auditv1.ActorID("role-" + code + "-structural"), RoleSession: &auditv1.RoleSessionReference{
 				SessionID: "session-" + code + "-structural", SourceUserID: "source-user-one",
@@ -13214,6 +13240,28 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 		location, scanErr = authorityPlaintextLocationWithStructural(string(forgedEncoded), nil, structural, code)
 		if marshalErr != nil || err != nil || scanErr != nil || location == "" {
 			t.Fatal("forged Role actor escaped plaintext inspection")
+		}
+		for _, disclosure := range []struct {
+			name      string
+			requestID string
+		}{
+			{"event-identity-copied-to-request", string(roleEvent.EventID)},
+			{"actor-identity-copied-to-request", string(roleEvent.Actor.ID)},
+		} {
+			t.Run(disclosure.name, func(t *testing.T) {
+				copied := storedEvent
+				copied.RequestID = disclosure.requestID
+				copiedEncoded, marshalErr := json.Marshal(copied)
+				roleStructural, roleErr := roleActorStructuralLowEntropy(
+					"managedservice.outbox", string(copiedEncoded), "", known,
+				)
+				location, scanErr := authorityPlaintextLocationWithStructural(
+					string(copiedEncoded), nil, roleStructural, code,
+				)
+				if marshalErr != nil || roleErr != nil || scanErr != nil || location == "" {
+					t.Fatal("Role structural identity copied to request escaped plaintext inspection")
+				}
+			})
 		}
 	})
 	t.Run("authority-derived-paas-operation-identities", func(t *testing.T) {
@@ -13362,6 +13410,64 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 				}
 			})
 		}
+		const roleCode = "654321"
+		roleOperation := operation
+		roleOperation.RequestedBy = paasv1.SubjectRef{
+			Type: paasv1.SubjectRole, ID: "role-" + roleCode + "-structural",
+			RoleSession: &paasv1.RoleSessionReference{
+				SessionID: "session-" + roleCode + "-structural", SourceUserID: "source-user-one",
+			},
+		}
+		roleOperationDocument, marshalErr := json.Marshal(roleOperation)
+		roleActor, actorOK := paasSubjectToAuditActor(roleOperation.RequestedBy)
+		roleStored := stored
+		roleStored.Actor = roleActor
+		roleStoredDocument, storedMarshalErr := json.Marshal(roleStored)
+		if marshalErr != nil || storedMarshalErr != nil || !actorOK ||
+			paasv1.ValidateOperation(roleOperation) != nil {
+			t.Fatal("invalid Role PaaS Operation identity fixture")
+		}
+		roleKnownOperations := map[string]storedPaaSOperationAuthority{
+			"account-one\x00" + string(roleOperation.ID): {
+				document: string(roleOperationDocument), operation: roleOperation,
+			},
+		}
+		operationStructural, operationErr := paasOperationStructuralLowEntropy(
+			"paas.outbox", string(roleStoredDocument), "", roleKnownOperations,
+		)
+		roleAuthorities := map[string]auditv1.ActorReference{
+			"account-one\x00" + roleActor.RoleSession.SessionID: roleActor,
+		}
+		roleStructural, roleErr := roleActorStructuralLowEntropy(
+			"paas.outbox", string(roleStoredDocument), "", roleAuthorities,
+		)
+		for key := range roleStructural {
+			operationStructural[key] = struct{}{}
+		}
+		location, scanErr = authorityPlaintextLocationWithStructural(
+			string(roleStoredDocument), nil, operationStructural, roleCode,
+		)
+		if operationErr != nil || roleErr != nil || scanErr != nil || location != "" {
+			t.Fatal("combined PaaS and Role authority treated exact actor lineage as persisted OTP")
+		}
+		roleCopied := roleStored
+		roleCopied.RequestID = string(roleActor.ID)
+		roleCopiedDocument, marshalErr := json.Marshal(roleCopied)
+		operationStructural, operationErr = paasOperationStructuralLowEntropy(
+			"paas.outbox", string(roleCopiedDocument), "", roleKnownOperations,
+		)
+		roleStructural, roleErr = roleActorStructuralLowEntropy(
+			"paas.outbox", string(roleCopiedDocument), "", roleAuthorities,
+		)
+		for key := range roleStructural {
+			operationStructural[key] = struct{}{}
+		}
+		location, scanErr = authorityPlaintextLocationWithStructural(
+			string(roleCopiedDocument), nil, operationStructural, roleCode,
+		)
+		if marshalErr != nil || operationErr != nil || roleErr != nil || scanErr != nil || location == "" {
+			t.Fatal("combined Role structural identity copied to request escaped plaintext inspection")
+		}
 	})
 	t.Run("server-generated-audit-access-request-id", func(t *testing.T) {
 		tests := []struct {
@@ -13501,7 +13607,7 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 			location, scanErr := authorityPlaintextLocationWithStructural(
 				sample.document, nil, structural, embeddedCode,
 			)
-			if structuralErr != nil || scanErr != nil || location != "" || len(structural) != 1 {
+			if structuralErr != nil || scanErr != nil || location != "" || len(structural) != 2 {
 				t.Fatal("verified managed-service RoleSession exit identity was treated as persisted OTP")
 			}
 			if location, scanErr = authorityPlaintextLocationWithStructural(
@@ -13538,7 +13644,10 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 		digest := "sha256:" + strings.Repeat("a", 58) + code
 		observedAt := "2026-09-30T12:34:56.123456Z"
 		document := `{"requestDigest":"` + digest + `","observedAt":"` + observedAt + `","message":"safe"}`
-		structural := map[string]struct{}{digest: {}, observedAt: {}}
+		structural := map[string]struct{}{
+			structuralLowEntropyPathKey("$.requestDigest", digest):  {},
+			structuralLowEntropyPathKey("$.observedAt", observedAt): {},
+		}
 		if location, err := authorityPlaintextLocationWithStructural(document, nil, structural, code); err != nil || location != "" {
 			t.Fatal("validated structural value was treated as a persisted OTP")
 		}
@@ -13546,7 +13655,7 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 			t.Fatal("validated structure hid an exact longer credential")
 		}
 		if location, err := authorityPlaintextLocationWithStructural(`{"value":"123456"}`, nil,
-			map[string]struct{}{code: {}}, code); err != nil || location == "" {
+			map[string]struct{}{structuralLowEntropyPathKey("$.[member]", code): {}}, code); err != nil || location == "" {
 			t.Fatal("validated structure hid an exact OTP value")
 		}
 	})
