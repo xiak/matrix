@@ -61,9 +61,11 @@
       "infrastructure": "Infrastructure",
       "applications": "Containers & apps",
       "databases": "Databases",
-      "storage": "Storage",
+      "analytics": "Analytics",
+      "middleware": "Middleware",
       "delivery": "Dev & operations",
-      "management": "Security & admin"
+      "security": "Security & identity",
+      "management": "Management & governance"
     },
     "services": {
       "regions": {
@@ -77,9 +79,24 @@
         "keywords": "app application hosting paas 应用 托管 容器"
       },
       "postgresql": {
-        "name": "Managed data services",
-        "description": "Database, search and message-queue instances",
-        "keywords": "pg postgres postgresql mysql elasticsearch rabbitmq database search mq 数据库 搜索 消息队列 托管数据"
+        "name": "Cloud PostgreSQL",
+        "description": "Managed PostgreSQL instances, quota and endpoints",
+        "keywords": "pg postgres postgresql database sql relation 数据库 关系型数据库"
+      },
+      "mysql": {
+        "name": "Cloud MySQL",
+        "description": "Managed MySQL 8.4 LTS instances and lifecycle",
+        "keywords": "mysql database sql relation lts 数据库 关系型数据库"
+      },
+      "elasticsearch": {
+        "name": "Elasticsearch Service",
+        "description": "Managed search, indexing and analytics",
+        "keywords": "elasticsearch elastic es search analytics index 搜索 分析 索引 大数据"
+      },
+      "rabbitmq": {
+        "name": "RabbitMQ Message Queue",
+        "description": "Managed message brokers, queues and endpoints",
+        "keywords": "rabbitmq rabbit mq message queue broker 中间件 消息队列"
       },
       "monitoring": {
         "name": "Cloud Monitoring",
@@ -111,11 +128,13 @@
       "foundation": "Cloud foundation",
       "hosting": "Application platform",
       "relational": "Relational databases",
-      "logData": "Log data services",
+      "searchAnalytics": "Search & analytics",
+      "messageQueue": "Message queues",
+      "logData": "Logs & search",
       "delivery": "Continuous delivery",
       "monitoring": "Monitoring & observability",
-    "identity": "Identity & access",
-    "governance": "Security audit & governance"
+      "identity": "Identity & access",
+      "governance": "Audit & governance"
     }
   },
   "RegionScope": {
@@ -921,6 +940,18 @@
       "installations": {
         "label": "Service instances",
         "hint": "Endpoints and runtime"
+      },
+      "product-overview": {
+        "label": "Product overview",
+        "hint": "Service capabilities and onboarding"
+      },
+      "product-instances": {
+        "label": "Instances",
+        "hint": "Instance state and endpoints"
+      },
+      "product-quotas": {
+        "label": "Quota",
+        "hint": "Entitlements and usage"
       },
       "catalog": {
         "label": "Engine and plans",
@@ -3372,6 +3403,27 @@
     "resourcesUnavailable": "Resource specification unavailable"
   },
   "ManagedService": {
+    "productMockBoundary": "This is an isolated UX MOCK product workspace and does not create real resources. The matching backend capability is still a candidate awaiting independent verification; this is not evidence of release, high availability, or production readiness.",
+    "productLiveBoundary": "Product availability, shapes, quota and instances come from the managed-service API and are authorized server-side for the current identity. The page never fills unavailable resources with MOCK data.",
+    "managedCloudService": "Managed cloud service",
+    "productData": "Product resource status",
+    "productDataLoadingHint": "Loading this product's available shapes, quota and instance state.",
+    "previewCandidate": "MOCK preview",
+    "contractProductId": "Authorization product ID",
+    "activatedQuota": "Activated quota",
+    "availableQuota": "Available quota",
+    "instances": "Instances",
+    "readyInstances": "Ready instances",
+    "productOwnershipHint": "Product teams define capabilities, the platform publishes them through a controlled process, and tenant administrators consume the catalog through IAM.",
+    "openInstances": "Open instances",
+    "gettingStarted": "Get started",
+    "gettingStartedHint": "Uses the public-cloud product flow: prepare entitlement, then create, connect and authorize a resource.",
+    "steps": {
+      "quota": { "title": "Configure quota", "hint": "Choose a platform-approved shape and instance count." },
+      "instance": { "title": "Create an instance", "hint": "Select a region and submit an idempotent installation request." },
+      "connect": { "title": "Connect and verify", "hint": "Read the platform endpoint after the instance is ready." },
+      "authorize": { "title": "Authorize and audit", "hint": "Use IAM policies for access and retain operation evidence." }
+    },
     "instancesEmpty": "No service instances",
     "instancesEmptyHint": "Activate product quota, then create your first managed-service instance.",
     "instancesTable": "Service instances",
@@ -3554,6 +3606,29 @@
     "reviewUnbind": "Remove instance authorization",
     "unbindPreviewBoundary": "This is the product resource's exact-unbind experience preview. The MOCK only exercises impact review and return state; it calls no backend and does not delete the account relation or other resource bindings.",
     "authorizationPreviewBoundary": "This is a product-owned authorization-flow preview. The instance, account, and permission scope come from the current MOCK view; the template and service principal remain illustrative, and the final authorization write is not integrated. It neither reads nor writes IAM and creates no successful authorization state.",
+    "commandKinds": {
+      "ACTIVATE_QUOTA": "Activate quota",
+      "CREATE_INSTALLATION": "Create service instance",
+      "TERMINATE_INSTALLATION": "Terminate service instance",
+      "BIND_SERVICE_ROLE": "Authorize service instance",
+      "UNBIND_SERVICE_ROLE": "Remove instance authorization"
+    },
+    "commandSlow": "The service is still processing the original request. The page remains usable; do not submit a duplicate or create a new request.",
+    "commandUnknown": "The connection ended before a result arrived, so the server outcome is unconfirmed. The original input and idempotency key are frozen.",
+    "commandRestoredUnknown": "An unconfirmed original request was restored from this browser. It can only be retried unchanged, not edited and resubmitted.",
+    "commandCompleted": "The service confirmed the original request. The page will continue reading the resource's asynchronous lifecycle.",
+    "commandRequest": "Request",
+    "retrySameCommand": "Retry the same request unchanged",
+    "dismissCommandNotice": "Dismiss",
+    "commandErrors": {
+      "expired": "The current session expired. The original request was not automatically submitted with a new session. Sign in again and read resource state.",
+      "forbidden": "This identity may not perform the exact operation. The request stopped and will not silently expand its permission scope.",
+      "notFound": "The target no longer exists, or this identity cannot confirm that it exists. Read the resource again.",
+      "conflict": "Resource state changed and the frozen request cannot apply to the current state. Read it again and express a new intent.",
+      "invalid": "The frozen request failed server validation. Its input will not be silently replaced.",
+      "storageUnavailable": "The browser could not safely preserve the original request, so nothing was sent to the service. Restore site storage and retry.",
+      "unknown": "The server outcome is unconfirmed. Do not create a new intent; only retry the preserved request and idempotency key."
+    },
     "regionsEmpty": "No configured regions",
     "regionsEmptyHint": "Register a local region binding with the platform installer first.",
     "localProfile": "Managed local region",

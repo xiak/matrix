@@ -53,6 +53,7 @@ import type {
   ManagedServiceAuthorizationLoad
 } from "../domain/serviceAuthorization";
 import type { InstallationReadLoad, InstallationTerminationIntent, ServiceInstallation, ServiceOffering } from "../domain/resources";
+import { ManagedServiceCommandNotice } from "./ManagedServiceCommandNotice";
 
 type InstallationDetailLoad =
   | { status: "idle" | "loading" }
@@ -185,15 +186,19 @@ function CatalogContent({ scene, preview }: {
       {scene.offerings.length === 0 ? <EmptyState title={t("catalogEmpty")} description={t("catalogEmptyHint")} /> : <div className={styles.catalogGrid}>
         {scene.offerings.map((offering) => (
           <Card className={styles.productCard} key={offering.id}>
-            <Card.Body className={styles.productCardBody}>
-              <div className={styles.productTopline}>
+            <Card.Header className={styles.productCardHeader}>
+              <div className={styles.productIdentity}>
                 <div className={styles.databaseIcon}><OfferingIcon kind={offering.kind} /></div>
-                <Badge status={offering.available ? "success" : "neutral"}>
-                  {offering.available ? t("activatable") : t("unavailable")}
-                </Badge>
+                <div className={styles.productHeading}>
+                  <Typography.Eyebrow>{offering.engine}</Typography.Eyebrow>
+                  <Typography.Title as="h2" level={3}>{offering.name}</Typography.Title>
+                </div>
               </div>
-              <Typography.Eyebrow>{offering.engine}</Typography.Eyebrow>
-              <Typography.Title as="h2" level={2}>{offering.name}</Typography.Title>
+              <Badge status={offering.available ? "success" : "neutral"}>
+                {offering.available ? t("activatable") : t("unavailable")}
+              </Badge>
+            </Card.Header>
+            <Card.Body className={styles.productCardBody}>
               <p className={styles.productDescription}>{offering.description}</p>
               <dl className={styles.productFacts}>
                 <div><dt>{t("engineVersion")}</dt><dd>{offering.version}</dd></div>
@@ -201,7 +206,7 @@ function CatalogContent({ scene, preview }: {
                 <div><dt>{t("availableShapes")}</dt><dd>{offering.shapeSummary}</dd></div>
               </dl>
             </Card.Body>
-            <Card.Footer>
+            <Card.Footer className={styles.productCardFooter}>
               <Typography.Text tone="subtle">{t("noPayment")}</Typography.Text>
               <Button asChild><Link href="/console/quotas/">
                 {t("configureQuota")} <ArrowRight aria-hidden="true" />
@@ -210,6 +215,74 @@ function CatalogContent({ scene, preview }: {
           </Card>
         ))}
       </div>}
+    </div>
+  );
+}
+
+function ManagedProductContent({ preview, scene }: {
+  preview: boolean;
+  scene: Extract<ConsoleContentScene, { kind: "managed-product" }>;
+}) {
+  const t = useTranslations("ManagedService");
+  const directory = useTranslations("ServiceDirectory");
+  const productName = directory(`services.${scene.productId}.name`);
+  const instanceHref = `/console/products/${scene.productId}/instances/`;
+  const quotaHref = `/console/products/${scene.productId}/quotas/`;
+
+  return (
+    <div className={styles.productOverview}>
+      <Alert status={preview ? "warning" : "info"}>{t(preview ? "productMockBoundary" : "productLiveBoundary")}</Alert>
+      <Card className={styles.productOverviewCard}>
+        <Card.Header className={styles.productOverviewHeader}>
+          <div className={styles.productIdentity}>
+            <div className={styles.databaseIcon}>{scene.offering ? <OfferingIcon kind={scene.offering.kind} /> : <Database aria-hidden="true" />}</div>
+            <div className={styles.productHeading}>
+              <Typography.Eyebrow>{t("managedCloudService")}</Typography.Eyebrow>
+              <Typography.Title as="h2" level={2}>{productName}</Typography.Title>
+            </div>
+          </div>
+          <Badge status={scene.offering?.available ? "success" : "neutral"}>
+            {scene.offering?.available ? t(preview ? "previewCandidate" : "activatable") : t("unavailable")}
+          </Badge>
+        </Card.Header>
+        <Card.Body className={styles.productOverviewBody}>
+          <p className={styles.productDescription}>{scene.offering?.description ?? t("offeringUnavailable")}</p>
+          <dl className={styles.productOverviewFacts}>
+            <div><dt>{t("contractProductId")}</dt><dd><Typography.Code>{scene.contractProductId}</Typography.Code></dd></div>
+            <div><dt>{t("engineVersion")}</dt><dd>{scene.offering?.version ?? "—"}</dd></div>
+            <div><dt>{t("activatedQuota")}</dt><dd>{scene.purchasedQuota}</dd></div>
+            <div><dt>{t("availableQuota")}</dt><dd>{scene.availableQuota}</dd></div>
+            <div><dt>{t("instances")}</dt><dd>{scene.instanceCount}</dd></div>
+            <div><dt>{t("readyInstances")}</dt><dd>{scene.readyInstanceCount}</dd></div>
+          </dl>
+        </Card.Body>
+        <Card.Footer className={styles.productOverviewFooter}>
+          <Typography.Text tone="subtle">{t("productOwnershipHint")}</Typography.Text>
+          <div>
+            <Button asChild variant="secondary"><Link href={quotaHref}>{t("configureQuota")}</Link></Button>
+            <Button asChild><Link href={instanceHref}>{t("openInstances")} <ArrowRight aria-hidden="true" /></Link></Button>
+          </div>
+        </Card.Footer>
+      </Card>
+
+      <Card>
+        <Card.Header>
+          <div>
+            <Typography.Title as="h2" level={3}>{t("gettingStarted")}</Typography.Title>
+            <Typography.Text tone="muted">{t("gettingStartedHint")}</Typography.Text>
+          </div>
+        </Card.Header>
+        <Card.Body>
+          <ol className={styles.productSteps}>
+            {(["quota", "instance", "connect", "authorize"] as const).map((step, index) => (
+              <li key={step}>
+                <span>{index + 1}</span>
+                <div><strong>{t(`steps.${step}.title`)}</strong><p>{t(`steps.${step}.hint`)}</p></div>
+              </li>
+            ))}
+          </ol>
+        </Card.Body>
+      </Card>
     </div>
   );
 }
@@ -588,6 +661,8 @@ function InstallationContent({ scene, preview, accountId }: {
         </Badge>
       </div>
 
+      {terminationIntent || liveIntent ? null : <ManagedServiceCommandNotice />}
+
       {detailLoad.status === "idle" || detailLoad.status === "loading" ? <TableSkeleton header={false} label={t("instanceDetailLoading")} rows={3} /> : detailError ? <EmptyState
         title={t("instanceDetailUnavailable")}
         description={t(`instanceDetailErrors.${detailError}`)}
@@ -664,6 +739,7 @@ function InstallationContent({ scene, preview, accountId }: {
         <Alert status={preview ? "warning" : "info"}>
           {t(preview ? "instanceVisibilityMockBoundary" : "instanceVisibilityBoundary")}
         </Alert>
+        <ManagedServiceCommandNotice />
       </Card.Body>
       <InstallationRows items={scene.installations} onOpen={accountId ? openInstallation : undefined} triggerRefs={rowTriggers} />
     </Card>
@@ -743,6 +819,7 @@ export function ConsoleContentRenderer({
     return <ExperienceContentRenderer scene={scene} scope={scope} />;
   }
   if (scene.kind === "overview") return <OverviewContent scene={scene} />;
+  if (scene.kind === "managed-product") return <ManagedProductContent preview={preview} scene={scene} />;
   if (scene.kind === "catalog") return <CatalogContent scene={scene} preview={preview} />;
   if (scene.kind === "quotas") return <QuotaContent scene={scene} />;
   if (scene.kind === "installations") return <InstallationContent scene={scene} preview={preview} accountId={accountId} />;

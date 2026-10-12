@@ -1,20 +1,24 @@
-import type { ConsoleSection, ServiceView } from "../domain/selection";
+import type { ManagedServiceProductId } from "../domain/managedServiceProduct";
+import type { ConsoleSection, ControlPlaneRouteSelection, ServiceView } from "../domain/selection";
 import type { ConsoleNavigationItemScene, ExperienceIconKind, NavigationIconKind } from "./consoleScene";
 
 // Categories help discovery; only services with an owned workspace are entries.
 // Features such as pipelines, alerts and log topics stay inside their service.
-export const serviceCategories = ["infrastructure", "applications", "databases", "storage", "delivery", "management"] as const;
+export const serviceCategories = ["infrastructure", "applications", "databases", "analytics", "middleware", "delivery", "security", "management"] as const;
 export type ServiceCategory = typeof serviceCategories[number];
 
 export const serviceDirectory = [
   { id: "regions", category: "infrastructure", group: "foundation", icon: "foundation", href: "/console/regions/", sections: ["regions"] },
   { id: "applications", category: "applications", group: "hosting", icon: "paas", href: "/console/applications/", sections: ["applications"] },
-  { id: "postgresql", category: "databases", group: "relational", icon: "paas", href: "/console/installations/", sections: ["catalog", "quotas", "installations"] },
-  { id: "logs", category: "storage", group: "logData", icon: "observability", href: "/console/logs/", sections: ["logs"] },
+  { id: "postgresql", category: "databases", group: "relational", icon: "paas", href: "/console/products/postgresql/", sections: ["catalog", "quotas", "installations"] },
+  { id: "mysql", category: "databases", group: "relational", icon: "paas", href: "/console/products/mysql/", sections: ["catalog", "quotas", "installations"] },
+  { id: "elasticsearch", category: "analytics", group: "searchAnalytics", icon: "observability", href: "/console/products/elasticsearch/", sections: ["catalog", "quotas", "installations"] },
+  { id: "rabbitmq", category: "middleware", group: "messageQueue", icon: "paas", href: "/console/products/rabbitmq/", sections: ["catalog", "quotas", "installations"] },
   { id: "devops", category: "delivery", group: "delivery", icon: "devops", href: "/console/devops/", sections: ["devops"] },
-  { id: "monitoring", category: "delivery", group: "monitoring", icon: "observability", href: "/console/observability/", sections: ["observability"] },
+  { id: "monitoring", category: "management", group: "monitoring", icon: "observability", href: "/console/observability/", sections: ["observability"] },
+  { id: "logs", category: "management", group: "logData", icon: "observability", href: "/console/logs/", sections: ["logs"] },
   { id: "audit", category: "management", group: "governance", icon: "security", href: "/console/audit/", sections: ["audit"] },
-  { id: "iam", category: "management", group: "identity", icon: "security", href: "/console/access/", sections: ["access"] }
+  { id: "iam", category: "security", group: "identity", icon: "security", href: "/console/access/", sections: ["access"] }
 ] as const satisfies ReadonlyArray<{ id: string; category: ServiceCategory; group: string; icon: ExperienceIconKind; href: string; sections: readonly ConsoleSection[] }>;
 
 export type ServiceId = typeof serviceDirectory[number]["id"];
@@ -26,15 +30,23 @@ export type ServiceDirectoryItem = typeof serviceDirectory[number] & {
   keywords: readonly string[];
 };
 
-type ServicePage = { id: string; section: ConsoleSection; view?: ServiceView; icon: NavigationIconKind; group?: ConsoleNavigationItemScene["group"] };
+type ServicePage = { id: string; section: ConsoleSection; view?: ServiceView; product?: ManagedServiceProductId; icon: NavigationIconKind; group?: ConsoleNavigationItemScene["group"] };
+
+function managedProductPages(product: ManagedServiceProductId) {
+  return [
+    { id: "product-overview", section: "catalog", product, icon: "overview" },
+    { id: "product-instances", section: "installations", product, icon: "installation" },
+    { id: "product-quotas", section: "quotas", product, icon: "quota" }
+  ] as const;
+}
+
 export const serviceNavigation = {
   regions: [{ id: "regions", section: "regions", icon: "region" }],
   applications: [{ id: "applications", section: "applications", icon: "resources" }],
-  postgresql: [
-    { id: "installations", section: "installations", icon: "installation" },
-    { id: "catalog", section: "catalog", icon: "catalog" },
-    { id: "quotas", section: "quotas", icon: "quota" }
-  ],
+  postgresql: managedProductPages("postgresql"),
+  mysql: managedProductPages("mysql"),
+  elasticsearch: managedProductPages("elasticsearch"),
+  rabbitmq: managedProductPages("rabbitmq"),
   devops: [
     { id: "devops", section: "devops", icon: "overview" },
     { id: "pipelines", section: "devops", view: "pipelines", icon: "pipeline" },
@@ -76,6 +88,11 @@ export type ServicePageId = typeof serviceNavigation[ServiceId][number]["id"];
 
 export function serviceForSection(section: ConsoleSection) {
   return serviceDirectory.find((service) => (service.sections as readonly ConsoleSection[]).includes(section));
+}
+
+export function serviceForSelection(selection: ControlPlaneRouteSelection) {
+  if (selection.product) return serviceDirectory.find((service) => service.id === selection.product);
+  return serviceForSection(selection.section);
 }
 
 export function matchesService(service: ServiceDirectoryItem, query: string): boolean {

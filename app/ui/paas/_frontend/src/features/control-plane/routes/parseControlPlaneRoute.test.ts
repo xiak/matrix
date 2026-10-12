@@ -4,6 +4,7 @@ import {
   parseControlPlanePathname,
   parseControlPlaneRoute
 } from "./parseControlPlaneRoute";
+import { consoleRouteHref } from "../domain/selection";
 
 describe("parseControlPlaneRoute", () => {
   it.each(accountAccessViews)("deep links to the access workspace %s", (view) => {
@@ -12,6 +13,24 @@ describe("parseControlPlaneRoute", () => {
 
   it("does not retain the superseded policy coverage route", () => {
     expect(parseControlPlanePathname("/console/access/policy-coverage/")).toEqual({ section: "access" });
+  });
+
+  it.each([
+    ["/console/products/postgresql/", { section: "catalog", product: "postgresql" }],
+    ["/console/products/mysql/instances/", { section: "installations", product: "mysql" }],
+    ["/console/products/elasticsearch/quotas/", { section: "quotas", product: "elasticsearch" }],
+    ["/console/products/rabbitmq/unknown/", { section: "catalog", product: "rabbitmq" }],
+    ["/console/products/unknown/", { section: "overview" }]
+  ] as const)("maps product pathname %s", (pathname, expected) => {
+    expect(parseControlPlanePathname(pathname)).toEqual(expected);
+  });
+
+  it.each([
+    [{ section: "catalog", product: "postgresql" }, "/console/products/postgresql/"],
+    [{ section: "installations", product: "mysql" }, "/console/products/mysql/instances/"],
+    [{ section: "quotas", product: "rabbitmq" }, "/console/products/rabbitmq/quotas/"]
+  ] as const)("builds product href %j", (selection, href) => {
+    expect(consoleRouteHref(selection)).toBe(href);
   });
   it.each([
     ["/console/logs/search/", { section: "logs", view: "search" }],

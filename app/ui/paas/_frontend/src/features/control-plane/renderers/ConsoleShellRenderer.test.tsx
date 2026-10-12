@@ -407,7 +407,11 @@ describe("ConsoleShellRenderer", () => {
     await renderConsole({ section: "catalog", experience: previewExperienceSnapshot });
 
     expect(await screen.findByText(/当前已加载 1 项隔离 MOCK 本地 fixture/)).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "PostgreSQL 18" })).toBeTruthy();
+    const heading = screen.getByRole("heading", { name: "PostgreSQL 18" });
+    const productCard = heading.closest("article");
+    expect(productCard?.querySelector("header")).toBeTruthy();
+    expect(productCard?.querySelector("footer")).toBeTruthy();
+    expect(within(productCard as HTMLElement).getByRole("link", { name: /配置配额/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /批量授权/ })).toBeNull();
   });
 
@@ -744,7 +748,7 @@ describe("ConsoleShellRenderer", () => {
     const firstRequestId = terminateInstallation.mock.calls[0]![2];
     await user.click(screen.getByRole("button", { name: "返回实例并保留原请求" }));
     expect(await screen.findByRole("button", { name: "继续处理未确认终止" })).toBeTruthy();
-    expect(screen.getByText(new RegExp(firstRequestId))).toBeTruthy();
+    expect(screen.getByText(firstRequestId)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "继续处理未确认终止" }));
     await user.type(screen.getByRole("textbox", { name: "输入实例 ID 以确认" }), installation.id);
@@ -967,7 +971,7 @@ describe("ConsoleShellRenderer", () => {
     const firstCommand = bindServiceRole.mock.calls[0]![2];
     await user.click(screen.getByRole("button", { name: "返回实例并保留原请求" }));
     expect(await screen.findByRole("button", { name: "继续处理未确认请求" })).toBeTruthy();
-    expect(screen.getByText(new RegExp(firstCommand.requestId))).toBeTruthy();
+    expect(screen.getByText(firstCommand.requestId)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "继续处理未确认请求" }));
     await user.click(screen.getByRole("button", { name: "使用同一请求原样重试" }));
@@ -1031,7 +1035,7 @@ describe("ConsoleShellRenderer", () => {
   it.each([
     { href: "/console/regions/", service: /区域与节点/, title: "区域与节点", reads: 1, marker: { role: "text", name: "本机主区域" } },
     { href: "/console/applications/", service: /应用托管/, title: "应用服务", reads: 0, marker: { role: "table", name: "当前身份可见的应用目录" } },
-    { href: "/console/installations/", service: /托管数据服务/, title: "服务实例", reads: 4, marker: { role: "heading", name: "组织服务实例" } },
+    { href: "/console/products/postgresql/", service: /云数据库 PostgreSQL/, title: "产品概览", reads: 1, marker: { role: "heading", name: "云数据库 PostgreSQL" } },
     { href: "/console/logs/", service: /日志服务/, title: "日志概览", reads: 0, marker: { role: "text", name: "Matrix · Log Service" } },
     { href: "/console/devops/", service: /研发效能 DevOps/, title: "交付总览", reads: 0, marker: { role: "heading", name: "最近流水线" } },
     { href: "/console/observability/", service: /云监控/, title: "监控总览", reads: 0, marker: { role: "heading", name: "服务健康" } }
@@ -1054,6 +1058,7 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("link", { name: "订单主库" })).toBeNull();
     if (reads === 0) expect(oldResource.isConnected).toBe(false);
     else expect(oldResource.closest("[hidden]")).toBeTruthy();
+    if (href.includes("/products/")) await screen.findByText(/对应后端能力仍是待独立验收的候选/);
     const findDestination = () => marker.role === "table"
       ? screen.findByRole("table", { name: marker.name })
       : marker.role === "heading"
@@ -1241,11 +1246,11 @@ describe("ConsoleShellRenderer", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  it("keeps the database page structure stable while destination data is still pending", async () => {
+  it("keeps the product homepage structure stable while destination data is still pending", async () => {
     let resolveSnapshot!: (value: ControlPlaneSnapshot) => void;
     let releaseRoute!: () => void;
     const load = vi.fn(() => new Promise<ControlPlaneSnapshot>((resolve) => { resolveSnapshot = resolve; }));
-    const heldRoute = { href: "/console/installations/", ready: false, promise: new Promise<void>((resolve) => { releaseRoute = resolve; }) };
+    const heldRoute = { href: "/console/products/postgresql/", ready: false, promise: new Promise<void>((resolve) => { releaseRoute = resolve; }) };
     const { user } = await renderConsole({
       accountRepository: previewAccountRepository,
       experience: previewExperienceSnapshot,
@@ -1259,19 +1264,20 @@ describe("ConsoleShellRenderer", () => {
 
     await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
     expect(load).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /托管数据服务/ }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /云数据库 PostgreSQL/ }));
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
 
-    expect(screen.getByRole("heading", { level: 1, name: "服务实例" })).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 2, name: "组织服务实例" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "产品概览" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "云数据库 PostgreSQL" })).toBeTruthy();
     expect(users.closest("[hidden]")).toBeTruthy();
     expect(load).toHaveBeenCalledTimes(1);
 
     await act(async () => resolveSnapshot(snapshot));
     await act(async () => { heldRoute.ready = true; releaseRoute(); });
-    expect(await screen.findByRole("button", { name: "安装服务" })).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 1, name: "服务实例" })).toBeTruthy();
-    expect(load).toHaveBeenCalledTimes(4);
+    expect(await screen.findByRole("heading", { level: 2, name: "云数据库 PostgreSQL" })).toBeTruthy();
+    expect(await screen.findByRole("link", { name: /进入实例/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "产品概览" })).toBeTruthy();
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it("projects a pending IAM query into the correct content-area workflow", async () => {
@@ -1902,7 +1908,7 @@ describe("ConsoleShellRenderer", () => {
     fireEvent.click(trigger);
 
     const directory = screen.getByRole("dialog", { name: "云产品入口" });
-    expect(within(directory).getByRole("status").textContent).toBe("8 项服务");
+    expect(within(directory).getByRole("status").textContent).toBe("11 项服务");
     expect(screen.queryByRole("button", { name: "关闭全局浮层", hidden: true })).toBeNull();
     expect(workspace.closest("[inert]")).not.toBeNull();
     expect(screen.getByRole("button", { name: /打开账号菜单/ }).closest("[inert]")).not.toBeNull();

@@ -38,9 +38,11 @@ import {
   PanelRightClose,
   RefreshCcw,
   ScrollText,
+  Search,
   ServerCog,
   Settings2,
   ShieldCheck,
+  MessagesSquare,
   Users,
   Workflow,
   X
@@ -78,7 +80,7 @@ import { ConsoleContentRenderer } from "./ConsoleContentRenderer";
 import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
 import styles from "./ConsoleShellRenderer.module.css";
 import { useServiceDirectory } from "./ServiceDirectory";
-import { serviceForSection, type ServiceId } from "../scenes/serviceDirectory";
+import { serviceForSelection, type ServiceId } from "../scenes/serviceDirectory";
 import { ConsoleNavigationProvider, useConsoleNavigation } from "../routes/ConsoleNavigation";
 import { buildConsoleFrame } from "../scenes/buildConsoleScene";
 
@@ -91,7 +93,19 @@ const railIcons = {
   access: ShieldCheck
 } satisfies Record<RailIconKind, typeof Database>;
 
-const favoriteIcons = { regions: MapPin, applications: Boxes, postgresql: Database, devops: GitBranch, monitoring: ChartNoAxesCombined, logs: FileText, audit: ScrollText, iam: ShieldCheck } satisfies Record<ServiceId, typeof Database>;
+const favoriteIcons = {
+  regions: MapPin,
+  applications: Boxes,
+  postgresql: Database,
+  mysql: Database,
+  elasticsearch: Search,
+  rabbitmq: MessagesSquare,
+  devops: GitBranch,
+  monitoring: ChartNoAxesCombined,
+  logs: FileText,
+  audit: ScrollText,
+  iam: ShieldCheck
+} satisfies Record<ServiceId, typeof Database>;
 
 const navigationIcons = {
   policy: FileText,
@@ -342,7 +356,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const workspaceMounted = Boolean(scene?.workspace && (workspaceVisible || activatedWorkspaceKey === workspaceKey));
   const workspaceAction = scene?.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
   const WorkspaceActionIcon = workspaceAction?.icon;
-  const activeService = frame.preview ? serviceForSection(frame.section) : undefined;
+  const activeService = frame.preview ? serviceForSelection(pendingSelection ?? navigation.selection) : undefined;
   const ProductContextIcon = activeService ? favoriteIcons[activeService.id] : railIcons[frame.productIcon];
   const productName = frame.productId === "console" ? t("consoleName") : directory(`services.${frame.productId}.name`);
   const headerProductName = committedFrame.productId === "console" ? t("consoleName") : directory(`services.${committedFrame.productId}.name`);

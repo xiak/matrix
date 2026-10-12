@@ -15,6 +15,7 @@ import type { ConsoleWorkspaceScene } from "../scenes/consoleScene";
 import styles from "./ConsoleWorkspaceRenderer.module.css";
 import { useTranslations } from "next-intl";
 import { useConsoleFormat } from "./useConsoleFormat";
+import { ManagedServiceCommandNotice } from "./ManagedServiceCommandNotice";
 
 const installationIDPatternSource = "[a-z0-9][a-z0-9._\\-]{0,61}[a-z0-9]";
 const installationIDPattern = new RegExp(`^${installationIDPatternSource}$`);
@@ -96,6 +97,7 @@ function QuotaOrder({
           <Alert>
             {t("quotaNotice")}
           </Alert>
+          <ManagedServiceCommandNotice />
           {accepted ? <Alert status="success">{t("quotaAccepted")}</Alert> : null}
           <Button
             block
@@ -185,6 +187,7 @@ function InstallationOrder({
             <MapPin aria-hidden="true" />
             <div><strong>{t("localInstall")}</strong><span>{t("serverPolicy")}</span></div>
           </div>
+          <ManagedServiceCommandNotice />
           {accepted ? <Alert status="success">{t("installAccepted")}</Alert> : null}
           <Button block disabled={!canSubmit || controlPlane.mutation === "installation"} size="large" type="submit">
             <ServerCog aria-hidden="true" />

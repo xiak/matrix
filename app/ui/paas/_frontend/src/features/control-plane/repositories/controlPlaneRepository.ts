@@ -40,11 +40,13 @@ export interface ControlPlaneRepository {
   ): Promise<ApplicationDirectoryPage>;
   activateQuota(
     credential: string,
-    command: ActivateQuotaCommand
+    command: ActivateQuotaCommand,
+    requestId: string
   ): Promise<QuotaEntitlement>;
   createInstallation(
     credential: string,
-    command: CreateInstallationCommand
+    command: CreateInstallationCommand,
+    requestId: string
   ): Promise<ServiceInstallation>;
   terminateInstallation?(
     credential: string,

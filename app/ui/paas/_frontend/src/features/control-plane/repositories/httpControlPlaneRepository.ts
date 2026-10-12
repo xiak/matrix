@@ -1,4 +1,4 @@
-import { requestJSON, requestJSONResponse, requestToken } from "@/infrastructure/http/jsonRequest";
+import { requestJSON, requestJSONResponse } from "@/infrastructure/http/jsonRequest";
 import {
   validApplicationCursor,
   validApplicationId,
@@ -584,26 +584,28 @@ export const httpControlPlaneRepository: ControlPlaneRepository = {
     return parseApplicationDirectory(value, after);
   },
 
-  async activateQuota(credential, command: ActivateQuotaCommand) {
+  async activateQuota(credential, command: ActivateQuotaCommand, requestId) {
+    if (!publicIdentifierPattern.test(requestId)) throw new Error("INVALID_QUOTA_ACTIVATION_REQUEST");
     const value = await requestJSON<unknown>("/api/managed-services/v1/quota-entitlements", {
       method: "POST",
       headers: {
         ...authorization(credential),
         "Content-Type": "application/json",
-        "Idempotency-Key": requestToken("ui-quota-")
+        "Idempotency-Key": requestId
       },
       body: JSON.stringify(command)
     });
     return parseEntitlement(value);
   },
 
-  async createInstallation(credential, command: CreateInstallationCommand) {
+  async createInstallation(credential, command: CreateInstallationCommand, requestId) {
+    if (!publicIdentifierPattern.test(requestId)) throw new Error("INVALID_INSTALLATION_CREATION_REQUEST");
     const value = await requestJSON<unknown>("/api/managed-services/v1/service-installations", {
       method: "POST",
       headers: {
         ...authorization(credential),
         "Content-Type": "application/json",
-        "Idempotency-Key": requestToken("ui-install-")
+        "Idempotency-Key": requestId
       },
       body: JSON.stringify(command)
     });

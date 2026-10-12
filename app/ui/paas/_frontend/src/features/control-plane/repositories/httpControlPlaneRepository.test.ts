@@ -282,6 +282,89 @@ describe("httpControlPlaneRepository", () => {
     )).rejects.toThrow("INVALID_INSTALLATION_RESPONSE");
   });
 
+  it("forwards the caller's frozen quota request and idempotency key unchanged", async () => {
+    const response = {
+      id: "quota-primary",
+      offeringId: "postgresql-18",
+      quotaShapeId: "pg-small",
+      purchasedCount: 2,
+      reservedCount: 2,
+      consumedCount: 0,
+      resourceVersion: 1,
+      activatedAt: "2026-10-12T00:00:00Z"
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+    const command = { offeringId: "postgresql-18", quotaShapeId: "pg-small", instanceCount: 2 };
+
+    await expect(httpControlPlaneRepository.activateQuota(
+      "session-secret", command, "ui-quota-frozen-request"
+    )).resolves.toEqual(response);
+
+    const [path, rawInit] = fetchMock.mock.calls[0]!;
+    const init = rawInit as RequestInit;
+    const headers = new Headers(init.headers);
+    expect(path).toBe("/api/managed-services/v1/quota-entitlements");
+    expect(headers.get("Idempotency-Key")).toBe("ui-quota-frozen-request");
+    expect(init.body).toBe(JSON.stringify(command));
+  });
+
+  it("forwards the caller's frozen installation request and idempotency key unchanged", async () => {
+    const command = {
+      id: "postgres-primary",
+      name: "Postgres primary",
+      offeringId: "postgresql-18",
+      quotaEntitlementId: "quota-primary",
+      regionId: "local-primary"
+    };
+    const response = {
+      ...command,
+      engineVersion: "18",
+      phase: "PENDING",
+      endpoint: null,
+      credentialReference: null,
+      resourceVersion: 1,
+      createdAt: "2026-10-12T00:00:00Z",
+      operation: {
+        id: "operation-provision-primary",
+        kind: "PROVISION",
+        phase: "PENDING",
+        safeFailureCode: null,
+        observedAt: "2026-10-12T00:00:00Z"
+      }
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.createInstallation(
+      "session-secret", command, "ui-install-frozen-request"
+    )).resolves.toEqual(response);
+
+    const [path, rawInit] = fetchMock.mock.calls[0]!;
+    const init = rawInit as RequestInit;
+    const headers = new Headers(init.headers);
+    expect(path).toBe("/api/managed-services/v1/service-installations");
+    expect(headers.get("Idempotency-Key")).toBe("ui-install-frozen-request");
+    expect(init.body).toBe(JSON.stringify(command));
+  });
+
+  it("rejects malformed caller request IDs before quota or installation writes", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.activateQuota(
+      "session-secret",
+      { offeringId: "postgresql-18", quotaShapeId: "pg-small", instanceCount: 1 },
+      "invalid request"
+    )).rejects.toThrow("INVALID_QUOTA_ACTIVATION_REQUEST");
+    await expect(httpControlPlaneRepository.createInstallation(
+      "session-secret",
+      { id: "postgres-primary", name: "Postgres primary", offeringId: "postgresql-18", quotaEntitlementId: "quota-primary", regionId: "local-primary" },
+      "invalid request"
+    )).rejects.toThrow("INVALID_INSTALLATION_CREATION_REQUEST");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("submits and replays an installation termination with no request body and the caller's frozen idempotency key", async () => {
     const pendingTermination = {
       id: "postgres-primary",

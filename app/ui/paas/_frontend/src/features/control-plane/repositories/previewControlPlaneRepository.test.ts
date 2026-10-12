@@ -19,7 +19,7 @@ describe("previewControlPlaneRepository", () => {
       offeringId: "postgresql-18",
       quotaEntitlementId: "quota-postgres-development",
       regionId: "shanghai-b"
-    });
+    }, "ui-preview-create-installation");
     expect(pending.phase).toBe("PENDING");
 
     const ready = await previewControlPlaneRepository.getInstallation(previewCredential, id);
