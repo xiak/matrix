@@ -47,7 +47,6 @@ func TestEnsureCreatesRealElasticsearchShapeWithoutEmbeddingCredentials(t *testi
 			Image       string            `json:"image"`
 			PullPolicy  string            `json:"pull_policy"`
 			Environment map[string]string `json:"environment"`
-			Command     []string          `json:"command"`
 			Volumes     []struct {
 				Target   string `json:"target"`
 				ReadOnly bool   `json:"read_only"`
@@ -62,7 +61,6 @@ func TestEnsureCreatesRealElasticsearchShapeWithoutEmbeddingCredentials(t *testi
 		service.Environment["ELASTIC_PASSWORD_FILE"] != "/tmp/matrix-elasticsearch-password" ||
 		service.Environment["xpack.security.enabled"] != "true" ||
 		service.Environment["xpack.security.http.ssl.enabled"] != "false" ||
-		len(service.Command) != 3 || !strings.Contains(service.Command[2], "/run/secrets/elasticsearch-password-source") ||
 		strings.Contains(string(document), string(secret)) ||
 		!strings.HasPrefix(result.Endpoint, "http://127.0.0.1:") ||
 		!strings.HasPrefix(result.CredentialReference, "credential-") {

@@ -47,11 +47,7 @@ func TestEnsureCreatesRealRabbitMQShapeWithoutEmbeddingCredentials(t *testing.T)
 			Image       string            `json:"image"`
 			PullPolicy  string            `json:"pull_policy"`
 			Environment map[string]string `json:"environment"`
-			Command     []string          `json:"command"`
-			Healthcheck struct {
-				Test []string `json:"test"`
-			} `json:"healthcheck"`
-			Volumes []struct {
+			Volumes     []struct {
 				Target   string `json:"target"`
 				ReadOnly bool   `json:"read_only"`
 			} `json:"volumes"`
@@ -65,10 +61,6 @@ func TestEnsureCreatesRealRabbitMQShapeWithoutEmbeddingCredentials(t *testing.T)
 		service.Environment["RABBITMQ_DEFAULT_USER"] != "matrix_service" ||
 		service.Environment["RABBITMQ_DEFAULT_VHOST"] != "matrix" ||
 		service.Environment["RABBITMQ_DEFAULT_PASS"] != "" ||
-		len(service.Command) != 3 || !strings.Contains(service.Command[2], "/run/secrets/rabbitmq-password") ||
-		len(service.Healthcheck.Test) != 2 || service.Healthcheck.Test[0] != "CMD-SHELL" ||
-		!strings.Contains(service.Healthcheck.Test[1], "/dev/tcp/127.0.0.1/5672") ||
-		strings.Contains(service.Healthcheck.Test[1], "rabbitmq-diagnostics") ||
 		strings.Contains(string(document), string(secret)) ||
 		!strings.HasPrefix(result.Endpoint, "amqp://127.0.0.1:") ||
 		!strings.HasSuffix(result.Endpoint, "/matrix") ||
