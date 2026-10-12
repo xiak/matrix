@@ -530,6 +530,21 @@ Malformed, extra-field, route-mismatched or stale commitment evidence fails
 closed. Activation creates neither a human policy nor a service Role, and quota,
 resource access and service-role consent remain separate workflows.
 
+The LIVE Header's shared product launcher lazily reads the backend service
+directory only while open. Its fixed search/category shell mounts immediately;
+only the remote entry region receives delayed loading feedback. Backend entries
+provide membership, names and descriptions; the presentation registry supplies
+only implemented destination/category/icon metadata. Missing permission, expired
+authentication, transport failure and an empty result are distinct local states,
+never a fallback to the static MOCK directory. Unknown service IDs are shown as
+not yet supported without inventing a link. Changing effective credentials hides
+the old entries immediately and discards late reads. Saved navigation preferences
+cannot make an absent backend service visible. Catalog cards enter the exact
+product route named by their backend service-definition reference rather than
+skipping first use into generic quota management. Neither entry point grants
+activation or resource authority; the existing product gate remains authoritative
+for presentation admission and every request retains its server-side checks.
+
 Existing quota/installation interfaces retain their own contracts. The four
 frontend product route keys are service-definition IDs, not IAM ProductIDs:
 current authority still has one `managedservice` ProductID, with exact Offering
@@ -1863,12 +1878,16 @@ was observed during hot updates; it is not production-build evidence. This
 accepts the documented isolated MOCK experience only; enrollment authority and
 real IAM/managed-service acceptance remain with their owning contracts.
 
-The 2026-10-12 strict LIVE-client follow-up adapts the fixed service-definition
+The strict LIVE-client and visible-entry slice adapts the fixed service-definition
 and Account-activation wire without replacing that MOCK. The complete frontend
-run passed 67 files and 1,263 cases plus three export-normalization cases,
+run passed 67 files and 1,278 cases plus three export-normalization cases,
 typecheck, lint, architecture and 228 theme-contrast pairs. The production build
 generated 59 pages and 57 normalized segment paths; all 319 generated files match
-the Go embed, and repository-wide Go test and vet passed. Focused cases cover
+the Go embed, and the PaaS UI host passed Go test and vet. The four focused
+navigation/activation suites passed 161 cases, including actual catalog-card
+and LIVE Header clicks into the product first-use gate, lazy backend membership,
+unimplemented destinations, local failure/retry and credential-scoped late reads.
+Activation cases cover
 exact capability denial, activation-read `403` resource probing, readable `404`
 first use, unknown-result reconciliation with equal idempotency replay, strict
 wire rejection, product-scoped data projection and direct LIVE enablement without

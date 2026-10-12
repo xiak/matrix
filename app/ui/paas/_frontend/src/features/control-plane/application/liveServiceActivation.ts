@@ -6,7 +6,8 @@ import type { ManagedServiceProductId } from "../domain/managedServiceProduct";
 import type {
   ServiceActivationAccess,
   ServiceActivationState,
-  ServiceDefinition
+  ServiceDefinition,
+  ServiceDefinitionDirectory
 } from "../domain/serviceActivation";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 
@@ -36,6 +37,44 @@ const unavailable: LiveActivationSnapshot = {
 
 function definitionKey(definition: ServiceDefinition): string {
   return JSON.stringify([definition.id, definition.revision, definition.contentDigest]);
+}
+
+type ServiceDirectoryRead = () => Promise<ServiceDefinitionDirectory>;
+type ServiceDirectoryObservation = {
+  source: ServiceDirectoryRead;
+  status: "checking" | "ready" | "forbidden" | "expired" | "unavailable";
+  directory: ServiceDefinitionDirectory | null;
+};
+
+// The launcher's backend read stays local to the opened data region. Its source
+// callback is credential-scoped by the provider, so changed identities cannot
+// keep another identity's service entries visible while the new read resolves.
+export function useLiveServiceDefinitionDirectory(active: boolean, source?: ServiceDirectoryRead) {
+  const [observation, setObservation] = useState<ServiceDirectoryObservation | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!active || !source) return;
+    let current = true;
+    queueMicrotask(async () => {
+      if (!current) return;
+      setObservation({ source, status: "checking", directory: null });
+      try {
+        const directory = await source();
+        if (current) setObservation({ source, status: "ready", directory });
+      } catch (failure) {
+        if (current) setObservation({ source, directory: null, status: failure instanceof HttpProblem && failure.status === 403
+          ? "forbidden" : failure instanceof HttpProblem && failure.status === 401 ? "expired" : "unavailable" });
+      }
+    });
+    return () => { current = false; };
+  }, [active, source, attempt]);
+
+  const owned = active && source && observation?.source === source ? observation : null;
+  return {
+    directory: owned?.directory ?? null,
+    status: owned?.status ?? (active && source ? "checking" : "unavailable"),
+    retry: () => setAttempt((value) => value + 1)
+  };
 }
 
 // LIVE activation is deliberately independent from the product data provider.

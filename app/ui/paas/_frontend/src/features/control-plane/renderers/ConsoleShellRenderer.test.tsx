@@ -455,7 +455,7 @@ describe("ConsoleShellRenderer", () => {
     const productCard = heading.closest("article");
     expect(productCard?.querySelector("header")).toBeTruthy();
     expect(productCard?.querySelector("footer")).toBeTruthy();
-    expect(within(productCard as HTMLElement).getByRole("link", { name: /配置配额/ })).toBeTruthy();
+    expect(within(productCard as HTMLElement).getByRole("link", { name: "进入 PostgreSQL 18 服务" }).getAttribute("href")).toBe("/console/products/postgresql/");
     expect(screen.queryByRole("button", { name: /批量授权/ })).toBeNull();
   });
 
@@ -1432,6 +1432,56 @@ describe("ConsoleShellRenderer", () => {
     await user.click(screen.getByRole("button", { name: "重置此服务开通" }));
     expect(await screen.findByText(/当前身份没有开通资格/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
+  });
+
+  it.each(["postgresql", "mysql", "elasticsearch", "rabbitmq"])("routes a catalog card using the backend %s service reference rather than its offering or engine name", async (serviceId) => {
+    await renderConsole({ section: "catalog", load: vi.fn().mockResolvedValue({ ...snapshot, offerings: [{
+      ...snapshot.offerings[0]!, service: { ...snapshot.offerings[0]!.service, id: serviceId }
+    }] }) });
+    expect((await screen.findByRole("link", { name: "进入 PostgreSQL 18 服务" })).getAttribute("href")).toBe(`/console/products/${serviceId}/`);
+  });
+
+  it("reaches the LIVE first-use gate from a catalog card before admitting product data", async () => {
+    const listServiceDefinitions = vi.fn().mockResolvedValue(liveServiceDirectory(true));
+    const getServiceActivation = vi.fn().mockRejectedValue(new HttpProblem(404, "NOT_FOUND"));
+    const activateService = vi.fn().mockResolvedValue(liveServiceActivation);
+    const { user, repository } = await renderConsole({ section: "catalog", listServiceDefinitions, getServiceActivation, activateService,
+      heldRoute: { href: "/console/products/postgresql/", ready: true, promise: Promise.resolve() }
+    });
+    const entry = await screen.findByRole("link", { name: "进入 PostgreSQL 18 服务" });
+    expect(entry.getAttribute("href")).toBe("/console/products/postgresql/");
+    expect(listServiceDefinitions).not.toHaveBeenCalled();
+    expect(repository.load).toHaveBeenCalledTimes(1);
+    await user.click(entry);
+    expect(await screen.findByRole("button", { name: "开通服务" })).toBeTruthy();
+    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(getServiceActivation).toHaveBeenCalledWith("renderer-test-memory-only-session", "postgresql");
+    await user.click(screen.getByRole("button", { name: "开通服务" }));
+    expect(await screen.findByRole("link", { name: /进入实例/ })).toBeTruthy();
+    expect(activateService).toHaveBeenCalledWith("renderer-test-memory-only-session", liveServiceActivation.service, expect.stringMatching(/^ui-service-activation-/));
+    expect(repository.load).toHaveBeenCalledTimes(2);
+  });
+
+  it("reaches a LIVE product from the Header's lazy backend directory while activation authority remains denied", async () => {
+    const listServiceDefinitions = vi.fn().mockResolvedValue(liveServiceDirectory(false));
+    const activateService = vi.fn();
+    const { user, repository } = await renderConsole({
+      section: "overview", listServiceDefinitions,
+      getServiceActivation: vi.fn().mockRejectedValue(new HttpProblem(404, "NOT_FOUND")), activateService,
+      heldRoute: { href: "/console/products/postgresql/", ready: true, promise: Promise.resolve() }
+    });
+    expect(listServiceDefinitions).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
+    const entry = await screen.findByRole("link", { name: /PostgreSQL.*由 Matrix/ });
+    expect(entry.getAttribute("href")).toBe("/console/products/postgresql/");
+    expect(listServiceDefinitions).toHaveBeenCalledExactlyOnceWith("renderer-test-memory-only-session");
+    expect(within(screen.getByRole("dialog")).queryByRole("link", { name: /云数据库 MySQL|访问管理 IAM/ })).toBeNull();
+    await user.click(entry);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByText(/当前身份没有开通资格/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "开通服务" })).toBeNull();
+    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(activateService).not.toHaveBeenCalled();
   });
 
   it("uses the LIVE directory capability for direct permission-only activation and ignores browser MOCK consent", async () => {

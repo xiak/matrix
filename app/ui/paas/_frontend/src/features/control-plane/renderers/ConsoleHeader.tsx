@@ -4,8 +4,8 @@ import { ConsoleLink as Link, useConsoleNavigation } from "../routes/ConsoleNavi
 import { memo, useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { consoleRouteHref } from "../domain/selection";
-import { ChevronRight } from "lucide-react";
 import { Brand, Layout, Progress } from "@ui/xiak";
+import type { ServiceDefinitionDirectory } from "../domain/serviceActivation";
 import type { ConsoleScene } from "../scenes/consoleScene";
 import { AccountMenu, type AccountIdentity } from "./AccountMenu";
 import { GlobalSearch } from "./GlobalSearch";
@@ -22,7 +22,7 @@ type ConsoleHeaderProps = Readonly<{
     regionId: string;
     onRegionChange(value: string): void;
   }>;
-  productName: string;
+  readServiceDefinitions?(): Promise<ServiceDefinitionDirectory>;
   identity: AccountIdentity;
   onLogout(): void;
   revoking: boolean;
@@ -47,7 +47,7 @@ function RouteProgress() {
   return <Progress className={styles.routeProgress} aria-label={t("openingPage", { name: navigation(`items.${pendingSelection.view ?? pendingSelection.section}.label`) })} />;
 }
 
-export const ConsoleHeader = memo(function ConsoleHeader({ scene, productName, scope, identity, onLogout, revoking, roleAccessHref, roleSessionActive }: ConsoleHeaderProps) {
+export const ConsoleHeader = memo(function ConsoleHeader({ scene, readServiceDefinitions, scope, identity, onLogout, revoking, roleAccessHref, roleSessionActive }: ConsoleHeaderProps) {
   const t = useTranslations("Console");
   const navigation = useTranslations("ServiceNavigation");
   const resourceKinds = useTranslations("GlobalSearch.resourceKinds");
@@ -71,9 +71,7 @@ export const ConsoleHeader = memo(function ConsoleHeader({ scene, productName, s
       <div className={styles.navigation}>
         <ConsoleBrand inactive={catalogOpen} />
         <span aria-hidden="true" className={styles.divider} />
-        {scene.preview ? (
-          <ProductLauncher onOpenChange={openPanel("products")} open={activePanel === "products"} />
-        ) : <div className={styles.productContext}><span>{t("console")}</span><ChevronRight aria-hidden="true" /><strong>{productName}</strong></div>}
+        <ProductLauncher onOpenChange={openPanel("products")} open={activePanel === "products"} preview={scene.preview} readServiceDefinitions={readServiceDefinitions} />
       </div>
 
       {scene.preview ? <GlobalSearch inactive={catalogOpen} onChoose={(id) => { const service = services.find((item) => `service-${item.id}` === id); if (service) visitService(service.id); }} onOpenChange={openPanel("search")} open={activePanel === "search"} results={searchResults} /> : null}
