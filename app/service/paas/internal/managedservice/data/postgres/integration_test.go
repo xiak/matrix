@@ -17,6 +17,7 @@ import (
 	managedserviceadapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/internal/postgresmigration"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	auditpostgres "github.com/xiak/matrix/app/service/paas/internal/audit/data/postgres"
@@ -32,7 +33,7 @@ import (
 const (
 	managedServiceIntegrationDSN = "MATRIX_MANAGEDSERVICE_POSTGRES_TEST_DSN"
 	managedServicePredecessorDSN = "MATRIX_MANAGEDSERVICE_PREDECESSOR_POSTGRES_TEST_DSN"
-	managedServicePredecessor    = "dc5f63a3c6dea5fa2943bb78628cd753582cb2bc"
+	managedServicePredecessor    = "f4ecd6cedb87aebb38dea623164c3100a9ce72b6"
 	managedServiceAPIPassword    = "mxp1.managed-api-00000000000000000000000000000"
 	managedServiceWorkerPassword = "mxp1.managed-worker-0000000000000000000000000"
 )
@@ -112,8 +113,13 @@ func TestManagedServiceDirectPredecessorUpgradeAndTermination(t *testing.T) {
 		predecessorInstallation = "predecessor-mysql"
 		predecessorOperation    = "operation-predecessor-provision"
 	)
+	predecessorService, found := domain.DefaultCatalog().ResolveService(managedservicev1.MySQLServiceID)
+	if !found {
+		predecessorPool.Close()
+		t.Fatal("fixed predecessor MySQL service definition is absent")
+	}
 	// The fixed predecessor's own repository had already proved the create
-	// workflow at dc5f63a. This fixture persists its observable READY state
+	// workflow at f4ecd6c. This fixture persists its observable READY state
 	// using only that predecessor's released tables and worker functions; the
 	// assertions below exercise the current schema and use cases exclusively.
 	tx, err := predecessorPool.Begin(ctx)
@@ -122,6 +128,17 @@ func TestManagedServiceDirectPredecessorUpgradeAndTermination(t *testing.T) {
 		t.Fatal("begin predecessor fixture")
 	}
 	if _, err = tx.Exec(ctx, "SELECT pg_catalog.set_config('matrix.tenant_id', $1, true)", predecessorTenant); err == nil {
+		_, err = tx.Exec(ctx, `
+INSERT INTO managedservice.service_activations (
+    tenant_id, service_id, service_revision, service_digest, idempotency_key,
+    request_digest, activated_by_type, activated_by_id, iam_decision_id, request_id
+) VALUES (
+    managedservice.current_tenant_id(), $1, $2, $3, 'predecessor-activation-request',
+    $4, 'USER', 'principal-predecessor', 'decision-predecessor-activation', 'request-predecessor-activation'
+)`, predecessorService.ID, predecessorService.Revision, predecessorService.ContentDigest,
+			"sha256:"+strings.Repeat("c", 64))
+	}
+	if err == nil {
 		_, err = tx.Exec(ctx, `
 INSERT INTO managedservice.quota_entitlements (
     tenant_id, id, offering_id, quota_shape_id, purchased_count, reserved_count,
@@ -136,19 +153,20 @@ INSERT INTO managedservice.quota_entitlements (
 	if err == nil {
 		_, err = tx.Exec(ctx, `
 INSERT INTO managedservice.service_installations (
-    tenant_id, id, name, offering_id, engine_version, quota_entitlement_id, region_id
+    tenant_id, id, name, offering_id, engine_version, quota_entitlement_id, region_id,
+    current_operation_id
 ) VALUES (
     managedservice.current_tenant_id(), $1, 'Predecessor MySQL',
-    'mysql-8.4', '8.4', $2, 'local-primary'
-)`, predecessorInstallation, predecessorQuota)
+    'mysql-8.4', '8.4', $2, 'local-primary', $3
+)`, predecessorInstallation, predecessorQuota, predecessorOperation)
 	}
 	if err == nil {
 		_, err = tx.Exec(ctx, `
 INSERT INTO managedservice.operations (
-    tenant_id, id, installation_id, idempotency_key, request_digest,
+    tenant_id, id, installation_id, kind, quota_release, idempotency_key, request_digest,
     requested_by_type, requested_by_id, iam_decision_id, request_id
 ) VALUES (
-    managedservice.current_tenant_id(), $1, $2,
+    managedservice.current_tenant_id(), $1, $2, 'PROVISION', 'NONE',
     'predecessor-installation-request', $3, 'USER', 'principal-predecessor',
     'decision-predecessor', 'request-predecessor'
 )`, predecessorOperation, predecessorInstallation, "sha256:"+strings.Repeat("b", 64))
@@ -208,6 +226,12 @@ SELECT managedservice.complete_operation($1, $2, 'predecessor-worker', $3, $4, $
 		t.Fatal("create current managed-service use case")
 	}
 	authorization := integrationAuthorization(predecessorTenant)
+	retainedActivation, err := currentService.GetServiceActivation(ctx, authorization, predecessorService.ID)
+	if err != nil || retainedActivation.Service != (managedservicev1.ServiceDefinitionReference{
+		ID: predecessorService.ID, Revision: predecessorService.Revision, ContentDigest: predecessorService.ContentDigest,
+	}) {
+		t.Fatalf("current schema did not retain predecessor service activation=%#v err=%v", retainedActivation, err)
+	}
 	retainedQuota, err := currentService.GetQuotaEntitlement(ctx, authorization, predecessorQuota)
 	if err != nil || retainedQuota.PurchasedCount != 1 || retainedQuota.ReservedCount != 0 || retainedQuota.ConsumedCount != 1 {
 		t.Fatalf("current schema did not retain predecessor quota=%#v err=%v", retainedQuota, err)
@@ -248,8 +272,25 @@ SELECT managedservice.complete_operation($1, $2, 'predecessor-worker', $3, $4, $
 	if err != nil || retainedQuota.ReservedCount != 0 || retainedQuota.ConsumedCount != 0 {
 		t.Fatalf("retained termination quota=%#v err=%v", retainedQuota, err)
 	}
+	roleAuthorization := authorization
+	roleAuthorization.Subject = paasv1.SubjectRef{Type: paasv1.SubjectRole, ID: "predecessor-activation-role", RoleSession: &paasv1.RoleSessionReference{
+		SessionID: "predecessor-activation-session", SourceUserID: "predecessor-activation-user",
+	}}
+	postgresService, found := domain.DefaultCatalog().ResolveService(managedservicev1.PostgreSQLServiceID)
+	if !found {
+		t.Fatal("current PostgreSQL service definition is absent")
+	}
+	roleActivation, replayed, err := currentService.ActivateService(ctx, usecase.ActivateServiceCommand{
+		Authorization: roleAuthorization, IdempotencyKey: "predecessor-role-activation-request",
+		Request: managedservicev1.ActivateServiceRequest{Service: managedservicev1.ServiceDefinitionReference{
+			ID: postgresService.ID, Revision: postgresService.Revision, ContentDigest: postgresService.ContentDigest,
+		}},
+	})
+	if err != nil || replayed || roleActivation.Service.ID != postgresService.ID {
+		t.Fatalf("upgraded predecessor rejected current ROLE activation=%#v replayed=%v err=%v", roleActivation, replayed, err)
+	}
 	var schemaVersion uint64
-	if err := currentPool.QueryRow(ctx, `SELECT schema_version FROM paas.readiness()`).Scan(&schemaVersion); err != nil || schemaVersion != 5 {
+	if err := currentPool.QueryRow(ctx, `SELECT schema_version FROM paas.readiness()`).Scan(&schemaVersion); err != nil || schemaVersion != 6 {
 		t.Fatalf("current PaaS readiness schema=%d err=%v", schemaVersion, err)
 	}
 }
@@ -314,8 +355,12 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve PostgreSQL service definition: %v", err)
 	}
+	activationAuthorization := authorizationA
+	activationAuthorization.Subject = paasv1.SubjectRef{Type: paasv1.SubjectRole, ID: "activation-role", RoleSession: &paasv1.RoleSessionReference{
+		SessionID: "activation-session", SourceUserID: "activation-user",
+	}}
 	activationCommand := usecase.ActivateServiceCommand{
-		Authorization: authorizationA, IdempotencyKey: "service-activation-integration-request",
+		Authorization: activationAuthorization, IdempotencyKey: "service-activation-integration-request",
 		Request: managedservicev1.ActivateServiceRequest{Service: managedservicev1.ServiceDefinitionReference{
 			ID: postgresService.ID, Revision: postgresService.Revision, ContentDigest: postgresService.ContentDigest,
 		}},
@@ -417,13 +462,17 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 		t.Fatalf("unexpected fifth managed-service Audit event: result=%#v err=%v", result, dispatchErr)
 	}
 	actions := map[string]int{}
+	roleActivationActor := false
 	for _, event := range ingestor.events {
 		actions[event.Action]++
+		if event.Action == audit.ServiceActivationActivated && event.Actor.Equal(activationAuthorization.Subject) {
+			roleActivationActor = true
+		}
 	}
 	if actions[audit.ServiceActivationActivated] != 1 ||
 		actions[audit.QuotaEntitlementActivated] != 1 ||
 		actions[audit.ServiceInstallationCreated] != 1 ||
-		actions[audit.ServiceInstallationReady] != 1 {
+		actions[audit.ServiceInstallationReady] != 1 || !roleActivationActor {
 		t.Fatalf("managed-service Audit actions = %#v", actions)
 	}
 	snapshot, err := dispatcher.Snapshot(ctx)
@@ -746,8 +795,7 @@ func integrationRuntimeDSN(t *testing.T, adminDSN, role, password string) string
 
 func integrationAuthorization(tenantID string) port.Authorization {
 	return port.Authorization{
-		TenantID: tenantID, SubjectType: port.SubjectUser,
-		SubjectID:  "principal-integration",
+		TenantID: tenantID, Subject: paasv1.SubjectRef{Type: port.SubjectUser, ID: "principal-integration"},
 		DecisionID: "decision-integration", RequestID: "request-integration",
 	}
 }

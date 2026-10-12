@@ -8330,14 +8330,7 @@
               "properties": {
                 "actor": {
                   "properties": {
-                    "accessKeyId": false,
-                    "type": {
-                      "enum": [
-                        "USER",
-                        "SERVICE_ACCOUNT",
-                        "SYSTEM"
-                      ]
-                    }
+                    "accessKeyId": false
                   }
                 },
                 "installationId": false,

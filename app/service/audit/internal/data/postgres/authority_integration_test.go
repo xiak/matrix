@@ -639,7 +639,7 @@ func assertAuditRepositoryIsolation(t *testing.T, ctx context.Context, adminConf
 	}
 }
 
-func TestAuditRetainedTenantPartitionUpgrade(t *testing.T) {
+func TestAuditDirectPredecessorUpgrade(t *testing.T) {
 	const variable = "MATRIX_AUDIT_UPGRADE_POSTGRES_TEST_DSN"
 	dsn := os.Getenv(variable)
 	if dsn == "" {
@@ -672,45 +672,19 @@ func TestAuditRetainedTenantPartitionUpgrade(t *testing.T) {
 	runtimeConnection := openAuthorityConnection(t, ctx, config, auditRuntimeTestRole)
 	defer func() { _ = runtimeConnection.Close(context.Background()) }()
 
-	// Git owns the superseded schema. This opt-in upgrade gate executes the
-	// accepted fixed baseline, without keeping a second DDL implementation.
+	// Git owns the superseded schema. This opt-in upgrade gate executes only
+	// the direct predecessor instead of retaining an ever-growing historical
+	// DDL matrix in the current tree.
 	baseline, err := exec.CommandContext(ctx, "git", "show",
-		"9fd45b03ea398828fa3e74bf99961d2348c68299:app/service/audit/internal/data/postgres/migrations/000001_authority/up.sql").Output()
+		"f4ecd6cedb87aebb38dea623164c3100a9ce72b6:app/service/audit/internal/data/postgres/migrations/000001_authority/up.sql").Output()
 	if err != nil {
-		t.Fatalf("read fixed pre-partition Audit migration: %v", err)
+		t.Fatalf("read fixed direct-predecessor Audit migration: %v", err)
 	}
 	if _, err := migrator.Exec(ctx, string(baseline)); err != nil {
-		t.Fatalf("apply fixed baseline: %v", err)
+		t.Fatalf("apply fixed direct predecessor: %v", err)
 	}
 	event := authorityAuditEvent("event-retained", "shared-authority", "application-retained", auditv1.ActionPaaSApplicationCreated)
-	tx, err := runtimeConnection.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	var sequence int64
-	var previousHash string
-	var ingestedAt time.Time
-	if err := tx.QueryRow(ctx, "SELECT * FROM audit.lock_tenant_head($1)", string(event.TenantID)).Scan(&sequence, &previousHash, &ingestedAt); err != nil {
-		t.Fatal(err)
-	}
-	retained, fact, err := auditauthority.AppendRecord(auditauthority.Checkpoint{
-		ChainID: auditauthority.TenantChain(event.TenantID), Sequence: uint64(sequence), RecordHash: previousHash,
-	}, uint64(sequence+1), auditv1.SourcePaaS, event, ingestedAt.UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var outcome, storedHash string
-	var storedSequence int64
-	if err := tx.QueryRow(ctx, `SELECT * FROM audit.append_record($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10)`,
-		string(retained.Source), string(event.EventID), string(event.TenantID), int64(retained.Sequence),
-		authorityJSON(t, event), fact.Document, fact.ContentDigest, retained.PreviousHash, retained.RecordHash, retained.IngestedAt,
-	).Scan(&outcome, &storedSequence, &storedHash); err != nil || outcome != "ACCEPTED" || storedHash != retained.RecordHash {
-		t.Fatalf("seed immutable retained record through old SQL API: outcome=%s err=%v", outcome, err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
+	retained, fact := appendAcceptedAuditRecord(t, ctx, runtimeConnection, auditv1.SourcePaaS, event)
 	var beforeDocument, beforeCanonical, beforeDigest, beforeHash string
 	if err := admin.QueryRow(ctx, `SELECT event_document::text, canonical_document, content_digest, record_hash
 		FROM audit.records WHERE tenant_id=$1 AND sequence=1`, string(event.TenantID)).Scan(

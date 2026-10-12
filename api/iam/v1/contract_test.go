@@ -3589,7 +3589,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 	}
 }
 
-func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
+func TestManagedServiceRoleProfileOnlyAllowsDeclaredRoleActions(t *testing.T) {
 	archives := HistoricalAuthorizationProfiles()
 	revisionOneIndex := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
 		return profile.Product == ProductManagedService && profile.Revision == 1
@@ -3606,7 +3606,10 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 	revisionFiveIndex := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
 		return profile.Product == ProductManagedService && profile.Revision == 5
 	})
-	if revisionOneIndex < 0 || revisionTwoIndex < 0 || revisionThreeIndex < 0 || revisionFourIndex < 0 || revisionFiveIndex < 0 {
+	revisionSixIndex := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
+		return profile.Product == ProductManagedService && profile.Revision == 6
+	})
+	if revisionOneIndex < 0 || revisionTwoIndex < 0 || revisionThreeIndex < 0 || revisionFourIndex < 0 || revisionFiveIndex < 0 || revisionSixIndex < 0 {
 		t.Fatal("missing retained managedservice revision")
 	}
 	_, originalDigest, err := CanonicalizeAuthorizationProfile(archives[revisionOneIndex])
@@ -3622,22 +3625,28 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 	_, revisionThreeDigest, err := CanonicalizeAuthorizationProfile(archives[revisionThreeIndex])
 	_, revisionFourDigest, err := CanonicalizeAuthorizationProfile(archives[revisionFourIndex])
 	_, revisionFiveDigest, err := CanonicalizeAuthorizationProfile(archives[revisionFiveIndex])
-	if !found || err != nil || current.Revision != 6 || currentDigest == originalDigest ||
+	_, revisionSixDigest, err := CanonicalizeAuthorizationProfile(archives[revisionSixIndex])
+	if !found || err != nil || current.Revision != 7 || revisionSixDigest != "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b" || currentDigest == originalDigest ||
 		currentDigest == revisionTwoDigest || currentDigest == revisionThreeDigest ||
-		currentDigest == revisionFourDigest || currentDigest == revisionFiveDigest {
-		t.Fatal("missing explicit managedservice service-activation revision")
+		currentDigest == revisionFourDigest || currentDigest == revisionFiveDigest || currentDigest == revisionSixDigest {
+		t.Fatal("missing explicit managedservice delegated-activation revision")
 	}
 	currentReference := AuthorizationProfileReference{Product: current.Product, Revision: current.Revision, ContentDigest: currentDigest}
 	revisionOneReference := AuthorizationProfileReference{Product: archives[revisionOneIndex].Product, Revision: archives[revisionOneIndex].Revision, ContentDigest: originalDigest}
 	revisionTwoReference := AuthorizationProfileReference{Product: archives[revisionTwoIndex].Product, Revision: archives[revisionTwoIndex].Revision, ContentDigest: revisionTwoDigest}
+	revisionSixReference := AuthorizationProfileReference{Product: archives[revisionSixIndex].Product, Revision: archives[revisionSixIndex].Revision, ContentDigest: revisionSixDigest}
 	for _, action := range current.Actions {
 		if CheckAuthorizationProfileSubject(current, currentReference, action.Action, SubjectUser) != nil ||
 			CheckAuthorizationProfileSubject(current, currentReference, action.Action, SubjectServiceAccount) == nil {
 			t.Fatal("managedservice subject boundary changed", action.Action)
 		}
 		roleAllowed := CheckAuthorizationProfileSubject(current, currentReference, action.Action, SubjectRole) == nil
-		if roleAllowed != (action.Action == ActionManagedServiceInstallationRead) {
-			t.Fatal("ROLE was not limited to managedservice installation read", action.Action)
+		roleExpected := action.Action == ActionManagedServiceInstallationRead ||
+			action.Action == ActionManagedServiceDefinitionRead ||
+			action.Action == ActionManagedServiceActivationRead ||
+			action.Action == ActionManagedServiceActivationActivate
+		if roleAllowed != roleExpected {
+			t.Fatal("ROLE was not limited to declared managedservice actions", action.Action)
 		}
 		if CheckAuthorizationProfileSubject(archives[revisionOneIndex], revisionOneReference, action.Action, SubjectRole) == nil {
 			t.Fatal("retained managedservice revision gained ROLE authority", action.Action)
@@ -3645,6 +3654,10 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 		revisionTwoRoleAllowed := CheckAuthorizationProfileSubject(archives[revisionTwoIndex], revisionTwoReference, action.Action, SubjectRole) == nil
 		if revisionTwoRoleAllowed != (action.Action == ActionManagedServiceInstallationRead) {
 			t.Fatal("retained managedservice role revision changed", action.Action)
+		}
+		revisionSixRoleAllowed := CheckAuthorizationProfileSubject(archives[revisionSixIndex], revisionSixReference, action.Action, SubjectRole) == nil
+		if revisionSixRoleAllowed != (action.Action == ActionManagedServiceInstallationRead) {
+			t.Fatal("retained service-activation revision gained delegated ROLE authority", action.Action)
 		}
 		if (action.Action == ActionManagedServiceInstallationRoleBind || action.Action == ActionManagedServiceInstallationRoleUnbind) &&
 			(CheckAuthorizationProfileSubject(archives[revisionTwoIndex], revisionTwoReference, action.Action, SubjectUser) == nil) {
@@ -3826,7 +3839,7 @@ func TestInstanceListBatchTransportDoesNotGrowFrozenPolicyAuthority(t *testing.T
 		return profile.Product == ProductManagedService && profile.Revision == 3
 	})
 	current, found := LookupAuthorizationProfile(ProductManagedService)
-	if index < 0 || !found || current.Revision != 6 {
+	if index < 0 || !found || current.Revision != 7 {
 		t.Fatal("managedservice profile transition is missing")
 	}
 	frozen := archives[index]

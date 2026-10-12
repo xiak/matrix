@@ -59,7 +59,8 @@ func TestRoleActorLineageIsStrictAndFactBound(t *testing.T) {
 	permitted := map[Action]bool{ActionIAMAuthorizationDecided: true, ActionIAMRoleSessionExited: true, ActionPaaSApplicationCreated: true, ActionPaaSConfigurationCreated: true,
 		ActionPaaSApplicationLabelUpdated: true, ActionPaaSApplicationLabelDeleted: true,
 		ActionPaaSConfigurationRevisionCreated: true, ActionPaaSApplicationRevisionCreated: true, ActionPaaSDeploymentCreated: true,
-		ActionPaaSDeploymentUpdated: true, ActionPaaSDeploymentStopped: true, ActionPaaSDeploymentRolledBack: true, ActionAuditRecordsRead: true, ActionAuditIntegrityVerified: true}
+		ActionPaaSDeploymentUpdated: true, ActionPaaSDeploymentStopped: true, ActionPaaSDeploymentRolledBack: true,
+		ActionManagedServiceServiceActivationActivated: true, ActionAuditRecordsRead: true, ActionAuditIntegrityVerified: true}
 	eventSchema := compileAuditOpenAPISchema(t, loadAuditOpenAPI(t), "Event")
 	for _, action := range AllActions() {
 		contract, _ := ContractForAction(action)
@@ -152,7 +153,8 @@ func TestAccessKeyActorIsStrictAndOnlyAdmittedByClosedFacts(t *testing.T) {
 	permitted := map[Action]bool{ActionIAMAuthorizationDecided: true, ActionPaaSApplicationCreated: true, ActionPaaSConfigurationCreated: true,
 		ActionPaaSApplicationLabelUpdated: true, ActionPaaSApplicationLabelDeleted: true,
 		ActionPaaSConfigurationRevisionCreated: true, ActionPaaSApplicationRevisionCreated: true, ActionPaaSDeploymentCreated: true,
-		ActionPaaSDeploymentUpdated: true, ActionPaaSDeploymentStopped: true, ActionPaaSDeploymentRolledBack: true, ActionAuditRecordsRead: true, ActionAuditIntegrityVerified: true}
+		ActionPaaSDeploymentUpdated: true, ActionPaaSDeploymentStopped: true, ActionPaaSDeploymentRolledBack: true,
+		ActionAuditRecordsRead: true, ActionAuditIntegrityVerified: true}
 	eventSchema := compileAuditOpenAPISchema(t, document, "Event")
 	for _, action := range AllActions() {
 		contract, _ := ContractForAction(action)

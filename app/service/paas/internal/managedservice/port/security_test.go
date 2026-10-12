@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 func TestManagedServiceAuthorizationUsesRegisteredProfile(t *testing.T) {
@@ -56,15 +57,31 @@ func TestManagedServiceAuthorizationDecisionPreservesDenyPrivacyAndBindsAllowIde
 	}
 	allowed := denied
 	allowed.Allowed, allowed.DecisionID = true, "decision-allowed"
-	allowed.TenantID, allowed.SubjectType, allowed.SubjectID = "account-one", SubjectUser, "user-one"
+	allowed.TenantID = "account-one"
+	allowed.Subject = &paasv1.SubjectRef{Type: SubjectUser, ID: "user-one"}
 	if err := ValidateAuthorizationDecisionForRequest(allowed, request); err != nil {
 		t.Fatalf("bound allowed decision rejected: %v", err)
+	}
+	role := allowed
+	role.Subject = &paasv1.SubjectRef{Type: SubjectRole, ID: "role-one", RoleSession: &paasv1.RoleSessionReference{
+		SessionID: "session-one", SourceUserID: "user-one",
+	}}
+	if err := ValidateAuthorizationDecisionForRequest(role, request); err != nil {
+		t.Fatalf("bound Role decision rejected: %v", err)
 	}
 	for name, mutate := range map[string]func(*AuthorizationDecision){
 		"resource substitution": func(value *AuthorizationDecision) { value.Resource.ID = "other" },
 		"request substitution":  func(value *AuthorizationDecision) { value.RequestID = "request-other" },
+		"unregistered subject": func(value *AuthorizationDecision) {
+			value.Allowed, value.TenantID = true, "account-one"
+			value.Subject = &paasv1.SubjectRef{Type: paasv1.SubjectAgent, ID: "agent-one"}
+		},
+		"unbound access key": func(value *AuthorizationDecision) {
+			value.Allowed, value.TenantID = true, "account-one"
+			value.Subject = &paasv1.SubjectRef{Type: SubjectUser, ID: "user-one", AccessKeyID: "key-one"}
+		},
 		"deny identity leak": func(value *AuthorizationDecision) {
-			value.TenantID, value.SubjectType, value.SubjectID = "account-one", SubjectUser, "user-one"
+			value.TenantID, value.Subject = "account-one", &paasv1.SubjectRef{Type: SubjectUser, ID: "user-one"}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -123,7 +140,7 @@ func TestManagedServiceAuthorizationBatchIsBoundToExactOrderedCandidates(t *test
 		{Credential: "Bearer subject", Action: AuthorizeOfferingRead, Resource: ResourceReference{Kind: ResourceServiceOffering, ID: "offering-a"}, ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: "request-a", CorrelationID: "correlation-list"},
 		{Credential: "Bearer subject", Action: AuthorizeOfferingRead, Resource: ResourceReference{Kind: ResourceServiceOffering, ID: "offering-b"}, ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: "request-b", CorrelationID: "correlation-list"},
 	}}
-	result := AuthorizationBatch{TenantID: "account-one", SubjectType: SubjectUser, SubjectID: "user-one", Items: []AuthorizationBatchItem{
+	result := AuthorizationBatch{TenantID: "account-one", Subject: paasv1.SubjectRef{Type: SubjectUser, ID: "user-one"}, Items: []AuthorizationBatchItem{
 		{Resource: request.Requests[0].Resource, Allowed: true, DecisionID: "decision-a", RequestID: "request-a"},
 		{Resource: request.Requests[1].Resource, Allowed: false, DecisionID: "decision-b", RequestID: "request-b"},
 	}}

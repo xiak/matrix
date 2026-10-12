@@ -2017,7 +2017,7 @@ AS $function$
              WHERE outbox.status = 'DEAD_LETTER'
                 OR outbox.attempts >= 100
         ),
-        5::bigint,
+        6::bigint,
         transaction_timestamp()
 $function$;
 
@@ -2040,7 +2040,7 @@ AS $function$
         AND to_regprocedure(
             'paas.advance_operation(text,text,bigint,text,jsonb,timestamptz,boolean)'
         ) IS NOT NULL,
-        5::bigint,
+        6::bigint,
         transaction_timestamp()
 $function$;
 

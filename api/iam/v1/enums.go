@@ -486,7 +486,7 @@ func AllServicePurposes() []ServicePurpose {
 var authorizationProfiles = authorizationProfilesForBuild([]AuthorizationProfile{
 	iamPolicyAttachmentChangeProfile(),
 	paasProfileRevisionThirteen,
-	managedServiceProfileRevisionSix,
+	managedServiceProfileRevisionSeven,
 	auditProfileRevisionFour,
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
 		declaredProfileAction(ActionInstallationVerify, ResourceInstallation, AuthorityScopeInstallationProbe, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -539,7 +539,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), iamSecurityReportProfile(), iamAccessAnalyzerProfile(), iamAccessFindingProfile(), iamAccessDispositionProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(paasProfileRevisionTwelve), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(managedServiceProfileRevisionFour), cloneAuthorizationProfile(managedServiceProfileRevisionFive), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), iamSecurityReportProfile(), iamAccessAnalyzerProfile(), iamAccessFindingProfile(), iamAccessDispositionProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(paasProfileRevisionTwelve), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(managedServiceProfileRevisionFour), cloneAuthorizationProfile(managedServiceProfileRevisionFive), cloneAuthorizationProfile(managedServiceProfileRevisionSix), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -560,6 +560,7 @@ var managedServiceProfileRevisionThree = managedServiceRoleConsentProfile(manage
 var managedServiceProfileRevisionFour = managedServiceOfferingListBatchProfile(managedServiceProfileRevisionThree)
 var managedServiceProfileRevisionFive = managedServiceTerminationProfile(managedServiceProfileRevisionFour)
 var managedServiceProfileRevisionSix = managedServiceActivationProfile(managedServiceProfileRevisionFive)
+var managedServiceProfileRevisionSeven = managedServiceActivationRoleProfile(managedServiceProfileRevisionSix)
 
 var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
 	declaredProfileAction(ActionPaaSExecutionPoolCreate, ResourceExecutionPool, AuthorityScopeInstallation, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -849,6 +850,27 @@ func managedServiceActivationProfile(previous AuthorizationProfile) Authorizatio
 			declaration.InstanceListBatch = true
 		}
 		profile.Actions = append(profile.Actions, declaration)
+	}
+	return profile
+}
+
+func managedServiceActivationRoleProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	pending := map[Action]struct{}{
+		ActionManagedServiceDefinitionRead:     {},
+		ActionManagedServiceActivationRead:     {},
+		ActionManagedServiceActivationActivate: {},
+	}
+	for index := range profile.Actions {
+		if _, expected := pending[profile.Actions[index].Action]; !expected {
+			continue
+		}
+		profile.Actions[index].SubjectTypes = []SubjectType{SubjectUser, SubjectRole}
+		delete(pending, profile.Actions[index].Action)
+	}
+	if len(pending) != 0 {
+		panic("managed-service activation declaration is missing")
 	}
 	return profile
 }

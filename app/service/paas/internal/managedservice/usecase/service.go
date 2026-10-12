@@ -425,7 +425,7 @@ func (service *Service) BindServiceRole(
 	command BindServiceRoleCommand,
 ) (managedservicev1.ServiceRoleBindingReceipt, error) {
 	if ctx == nil || port.ValidateAuthorization(command.Authorization) != nil ||
-		command.Authorization.SubjectType != port.SubjectUser || command.Credential == "" ||
+		command.Authorization.Subject.Type != port.SubjectUser || command.Credential == "" ||
 		managedservicev1.ValidateInstallationID(command.InstallationID) != nil ||
 		managedservicev1.ValidateBindServiceRoleRequest(command.Request) != nil ||
 		managedservicev1.ValidateIdempotencyKey(command.IdempotencyKey) != nil {
@@ -525,7 +525,7 @@ func (service *Service) UnbindServiceRole(
 	command UnbindServiceRoleCommand,
 ) (managedservicev1.ServiceRoleUnbindingReceipt, error) {
 	if ctx == nil || port.ValidateAuthorization(command.Authorization) != nil ||
-		command.Authorization.SubjectType != port.SubjectUser || command.Credential == "" ||
+		command.Authorization.Subject.Type != port.SubjectUser || command.Credential == "" ||
 		managedservicev1.ValidateInstallationID(command.InstallationID) != nil ||
 		iamv1.ValidateID("bindingId", string(command.BindingID)) != nil ||
 		managedservicev1.ValidateUnbindServiceRoleRequest(command.Request) != nil ||
@@ -600,8 +600,8 @@ func (service *Service) ActivateQuota(
 		ID: id, OfferingID: offering.ID, QuotaShapeID: command.Request.QuotaShapeID,
 		PurchasedCount: command.Request.InstanceCount,
 		IdempotencyKey: command.IdempotencyKey, RequestDigest: digest,
-		ActorType:     command.Authorization.SubjectType,
-		ActorID:       command.Authorization.SubjectID,
+		ActorType:     command.Authorization.Subject.Type,
+		ActorID:       command.Authorization.Subject.ID,
 		IAMDecisionID: command.Authorization.DecisionID,
 		RequestID:     command.Authorization.RequestID,
 	}
@@ -680,7 +680,7 @@ func (service *Service) ActivateService(
 	}
 	draft := ServiceActivationDraft{
 		Service: expected, IdempotencyKey: command.IdempotencyKey, RequestDigest: digest,
-		ActorType: command.Authorization.SubjectType, ActorID: command.Authorization.SubjectID,
+		ActorType: command.Authorization.Subject.Type, ActorID: command.Authorization.Subject.ID,
 		IAMDecisionID: command.Authorization.DecisionID, RequestID: command.Authorization.RequestID,
 	}
 	var result managedservicev1.ServiceActivation
@@ -772,8 +772,8 @@ func (service *Service) CreateInstallation(
 			QuotaEntitlementID: entitlement.ID, RegionID: service.region.ID,
 			OperationID: operationID, IdempotencyKey: command.IdempotencyKey,
 			RequestDigest: digest,
-			ActorType:     command.Authorization.SubjectType,
-			ActorID:       command.Authorization.SubjectID,
+			ActorType:     command.Authorization.Subject.Type,
+			ActorID:       command.Authorization.Subject.ID,
 			IAMDecisionID: command.Authorization.DecisionID,
 			RequestID:     command.Authorization.RequestID,
 		}, entitlement.ResourceVersion)
@@ -835,7 +835,7 @@ func (service *Service) TerminateInstallation(
 		started, startErr := transaction.StartTermination(ctx, TerminationDraft{
 			InstallationID: command.InstallationID, OperationID: operationID,
 			IdempotencyKey: command.IdempotencyKey, RequestDigest: digest,
-			ActorType: command.Authorization.SubjectType, ActorID: command.Authorization.SubjectID,
+			ActorType: command.Authorization.Subject.Type, ActorID: command.Authorization.Subject.ID,
 			IAMDecisionID: command.Authorization.DecisionID, RequestID: command.Authorization.RequestID,
 		})
 		if startErr != nil {
@@ -945,11 +945,7 @@ func installationTerminationAuditEvent(
 }
 
 func auditActor(authorization port.Authorization) audit.ActorReference {
-	actorType := audit.ActorUser
-	if authorization.SubjectType == port.SubjectServiceAccount {
-		actorType = audit.ActorServiceAccount
-	}
-	return audit.ActorReference{Type: actorType, ID: authorization.SubjectID}
+	return authorization.Subject
 }
 
 func managedAuditEventID(action, resourceID string) string {

@@ -14,6 +14,7 @@ import (
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/usecase"
@@ -181,7 +182,7 @@ func TestListOfferingsFiltersOnlyAllowedExactCandidates(t *testing.T) {
 			t.Fatalf("batch candidates were not exact, sorted and independently identified: %#v", request)
 		}
 		return port.AuthorizationBatch{
-			TenantID: "organization-test", SubjectType: port.SubjectUser, SubjectID: "principal-test",
+			TenantID: "organization-test", Subject: paasv1.SubjectRef{Type: port.SubjectUser, ID: "principal-test"},
 			Items: []port.AuthorizationBatchItem{
 				{Resource: request.Requests[0].Resource, Allowed: true, DecisionID: "decision-allow", RequestID: request.Requests[0].RequestID},
 				{Resource: request.Requests[1].Resource, Allowed: false, DecisionID: "decision-deny", RequestID: request.Requests[1].RequestID},
@@ -218,7 +219,7 @@ func TestListOfferingsAllDeniedReturnsAnEmptyAuthorizedList(t *testing.T) {
 			}
 		}
 		return port.AuthorizationBatch{
-			TenantID: "organization-test", SubjectType: port.SubjectUser, SubjectID: "principal-test",
+			TenantID: "organization-test", Subject: paasv1.SubjectRef{Type: port.SubjectUser, ID: "principal-test"},
 			Items: items,
 		}, nil
 	}}
@@ -237,11 +238,11 @@ func TestListOfferingsBatchMismatchAndOutageFailClosed(t *testing.T) {
 	offerings := domain.DefaultCatalog().List()
 	for name, authorizer := range map[string]*stubAuthorizer{
 		"identity substitution": {batchFunc: func(request port.AuthorizationBatchRequest) (port.AuthorizationBatch, error) {
-			return port.AuthorizationBatch{TenantID: "organization-other", SubjectType: port.SubjectUser, SubjectID: "principal-test",
+			return port.AuthorizationBatch{TenantID: "organization-other", Subject: paasv1.SubjectRef{Type: port.SubjectUser, ID: "principal-test"},
 				Items: []port.AuthorizationBatchItem{{Resource: request.Requests[0].Resource, Allowed: true, DecisionID: "decision-one", RequestID: request.Requests[0].RequestID}}}, nil
 		}},
 		"resource substitution": {batchFunc: func(request port.AuthorizationBatchRequest) (port.AuthorizationBatch, error) {
-			return port.AuthorizationBatch{TenantID: "organization-test", SubjectType: port.SubjectUser, SubjectID: "principal-test",
+			return port.AuthorizationBatch{TenantID: "organization-test", Subject: paasv1.SubjectRef{Type: port.SubjectUser, ID: "principal-test"},
 				Items: []port.AuthorizationBatchItem{{Resource: port.ResourceReference{Kind: port.ResourceServiceOffering, ID: "offering-other"}, Allowed: true, DecisionID: "decision-one", RequestID: request.Requests[0].RequestID}}}, nil
 		}},
 		"authority unavailable": {batchFunc: func(port.AuthorizationBatchRequest) (port.AuthorizationBatch, error) {
@@ -563,8 +564,8 @@ func (authorizer *stubAuthorizer) AuthorizeBatch(
 		return *authorizer.batch, nil
 	}
 	result := port.AuthorizationBatch{
-		TenantID: "organization-test", SubjectType: port.SubjectUser,
-		SubjectID: "principal-test", Items: make([]port.AuthorizationBatchItem, len(request.Requests)),
+		TenantID: "organization-test", Subject: paasv1.SubjectRef{Type: port.SubjectUser, ID: "principal-test"},
+		Items: make([]port.AuthorizationBatchItem, len(request.Requests)),
 	}
 	for index, item := range request.Requests {
 		result.Items[index] = port.AuthorizationBatchItem{
@@ -584,8 +585,7 @@ func (authorizer *stubAuthorizer) Authorize(
 		return port.Authorization{}, authorizer.err
 	}
 	return port.Authorization{
-		TenantID: "organization-test", SubjectType: port.SubjectUser,
-		SubjectID:  "principal-test",
+		TenantID: "organization-test", Subject: paasv1.SubjectRef{Type: port.SubjectUser, ID: "principal-test"},
 		DecisionID: "decision-test", RequestID: request.RequestID,
 	}, nil
 }
@@ -614,7 +614,8 @@ func testAuthorizationDecision(request port.AuthorizationRequest, allowed bool) 
 		CollectionUsage: request.CollectionUsage, RequestID: request.RequestID,
 	}
 	if allowed {
-		result.TenantID, result.SubjectType, result.SubjectID = "organization-test", port.SubjectUser, "principal-test"
+		result.TenantID = "organization-test"
+		result.Subject = &paasv1.SubjectRef{Type: port.SubjectUser, ID: "principal-test"}
 	}
 	return result
 }

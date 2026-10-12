@@ -9589,9 +9589,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -9666,9 +9666,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -9732,9 +9732,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -9809,9 +9809,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -9875,9 +9875,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -9952,9 +9952,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -10009,9 +10009,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -10065,9 +10065,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -10121,9 +10121,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -10198,9 +10198,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -10217,7 +10217,8 @@
                     "accessKeyId": false,
                     "type": {
                       "enum": [
-                        "USER"
+                        "USER",
+                        "ROLE"
                       ]
                     }
                   }
@@ -10275,9 +10276,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -10294,7 +10295,8 @@
                     "accessKeyId": false,
                     "type": {
                       "enum": [
-                        "USER"
+                        "USER",
+                        "ROLE"
                       ]
                     }
                   }
@@ -10341,9 +10343,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -10360,7 +10362,8 @@
                     "accessKeyId": false,
                     "type": {
                       "enum": [
-                        "USER"
+                        "USER",
+                        "ROLE"
                       ]
                     }
                   }
@@ -16662,9 +16665,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -16729,9 +16732,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -16785,9 +16788,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -16852,9 +16855,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -16908,9 +16911,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -16975,9 +16978,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -17021,9 +17024,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -17067,9 +17070,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -17113,9 +17116,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -17180,9 +17183,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -17247,9 +17250,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -17303,9 +17306,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24092,9 +24095,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24159,9 +24162,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24215,9 +24218,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24282,9 +24285,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24338,9 +24341,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24405,9 +24408,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24451,9 +24454,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24497,9 +24500,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24543,9 +24546,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24610,9 +24613,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24677,9 +24680,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,
@@ -24733,9 +24736,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b",
+                    "contentDigest": "sha256:0befc6985c83612b2f24c6a605885b733c27348ac6a75b3509bccfbfbfbfd84e",
                     "product": "managedservice",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "requestTags": false,

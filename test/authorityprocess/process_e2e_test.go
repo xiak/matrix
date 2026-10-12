@@ -10317,23 +10317,97 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		t.Fatal("platform protection grant left the original Session usable")
 	}
 	platform = loginIAM(t, iamEndpoint, "resource.platform@organization-process", changedDeveloperPassword, "request-resource-platform-reauthenticated")
+	roleSourceUser := createIAMUser(t, iamEndpoint, homeBearer, "activation.role.source", "Activation Role source",
+		initialDeveloperPassword, "request-activation-role-source")
+	createIAMPolicyAttachment(t, iamEndpoint, homeBearer, roleSourceUser.ID,
+		iamv1.SystemPolicyAccountAdministrator, "request-activation-role-source-administrator")
+	roleSource := loginIAM(t, iamEndpoint, "activation.role.source@organization-process", initialDeveloperPassword,
+		"request-activation-role-source-login")
+	changePasswordIAM(t, iamEndpoint, roleSource.Credential, initialDeveloperPassword, changedDeveloperPassword,
+		"request-activation-role-source-password")
+	roleTrust := iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{
+		SID: "activation-source", Effect: iamv1.PolicyAllow,
+		Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: roleSourceUser.ID}},
+	}}}
+	roleResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/roles", homeBearer, iamv1.CreateRoleRequest{
+		Name: "Service activation operator", Tags: []iamv1.RoleTag{}, TrustPolicy: roleTrust,
+		RequestID: "request-service-activation-role",
+	})
+	var activationRole iamv1.Role
+	if roleResponse.Status != http.StatusCreated || json.Unmarshal(roleResponse.Body, &activationRole) != nil ||
+		iamv1.ValidateRole(activationRole) != nil {
+		t.Fatalf("create service activation Role status=%d body=%s", roleResponse.Status, roleResponse.Body)
+	}
+	roleGrantResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policy-attachments", homeBearer,
+		iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(activationRole.ID)},
+			PolicyID: iamv1.SystemPolicyServiceActivationAdministrator, PolicyResourceVersion: 1,
+			RequestID: "request-service-activation-role-grant",
+		})
+	var activationRoleGrant iamv1.PolicyAttachment
+	if roleGrantResponse.Status != http.StatusOK || json.Unmarshal(roleGrantResponse.Body, &activationRoleGrant) != nil ||
+		iamv1.ValidatePolicyAttachment(activationRoleGrant) != nil {
+		t.Fatalf("grant service activation Role status=%d body=%s", roleGrantResponse.Status, roleGrantResponse.Body)
+	}
+	boundaryResponse := performJSON(t, http.MethodPut, iamEndpoint+"/v1/roles/"+string(activationRole.ID)+"/permission-boundary",
+		homeBearer, iamv1.SetRolePermissionBoundaryRequest{
+			PolicyID: iamv1.SystemPolicyServiceActivationAdministrator, PolicyResourceVersion: 1,
+			ResourceVersion: activationRole.ResourceVersion, RequestID: "request-service-activation-role-boundary",
+		})
+	var activationBoundary iamv1.RolePermissionBoundary
+	if boundaryResponse.Status != http.StatusOK || json.Unmarshal(boundaryResponse.Body, &activationBoundary) != nil ||
+		iamv1.ValidateRolePermissionBoundary(activationBoundary) != nil {
+		t.Fatalf("set service activation Role boundary status=%d body=%s", boundaryResponse.Status, boundaryResponse.Body)
+	}
+	assumeResponse := performJSON(t, http.MethodPost, iamReplicaEndpoint+"/v1/roles/"+string(activationRole.ID)+":assume",
+		roleSource.Credential, iamv1.AssumeRoleRequest{
+			ResourceVersion: activationBoundary.ResourceVersion, RequestID: "request-service-activation-role-assume",
+		})
+	var assumedActivationRole iamv1.AssumeRoleResponse
+	if assumeResponse.Status != http.StatusOK || json.Unmarshal(assumeResponse.Body, &assumedActivationRole) != nil ||
+		iamv1.ValidateAssumeRoleResponse(assumedActivationRole) != nil || assumedActivationRole.Outcome != "APPLIED" {
+		t.Fatalf("assume service activation Role status=%d body=%s", assumeResponse.Status, assumeResponse.Body)
+	}
+	roleCredentialBytes := assumedActivationRole.Credential.CopyBytes()
+	activationRoleCredential := string(roleCredentialBytes)
+	clear(roleCredentialBytes)
+	delegatedAdministrator := createIAMUser(t, iamEndpoint, customerBearer, "activation.admin", "Activation administrator",
+		initialDeveloperPassword, "request-delegated-activation-administrator")
+	delegatedActivationGrant := createIAMPolicyAttachment(t, iamEndpoint, customerBearer, delegatedAdministrator.ID,
+		iamv1.SystemPolicyServiceActivationAdministrator, "request-delegated-activation-administrator-grant")
+	delegatedLogin := loginIAM(t, iamEndpoint, "activation.admin@organization-process-customer", initialDeveloperPassword,
+		"request-delegated-activation-administrator-login")
+	changePasswordIAM(t, iamEndpoint, delegatedLogin.Credential, initialDeveloperPassword, changedDeveloperPassword,
+		"request-delegated-activation-administrator-password")
 	tenants := []struct {
-		id, owner, member   string
-		ownerID             iamv1.PrincipalID
-		memberID            iamv1.PrincipalID
-		serviceActivation   managedservicev1.ServiceActivation
-		quota               managedservicev1.QuotaEntitlement
-		shared, unique      managedservicev1.ServiceInstallation
-		serviceRoleGrant    iamv1.PolicyAttachment
-		serviceRoleTemplate iamv1.ServiceRoleTemplateReference
-		serviceRoleReceipt  managedservicev1.ServiceRoleBindingReceipt
-		serviceRoleRevoked  managedservicev1.ServiceRoleUnbindingReceipt
-		serviceRoleSession  iamv1.RoleSession
-		serviceRoleSecret   string
-		serviceRoleRequest  string
+		id, owner, member    string
+		ownerID              iamv1.PrincipalID
+		memberID             iamv1.PrincipalID
+		activationActor      string
+		activationAuditActor auditv1.ActorReference
+		revokedActorStatus   int
+		unopenedService      managedservicev1.ServiceDefinition
+		serviceActivation    managedservicev1.ServiceActivation
+		quota                managedservicev1.QuotaEntitlement
+		shared, unique       managedservicev1.ServiceInstallation
+		serviceRoleGrant     iamv1.PolicyAttachment
+		serviceRoleTemplate  iamv1.ServiceRoleTemplateReference
+		serviceRoleReceipt   managedservicev1.ServiceRoleBindingReceipt
+		serviceRoleRevoked   managedservicev1.ServiceRoleUnbindingReceipt
+		serviceRoleSession   iamv1.RoleSession
+		serviceRoleSecret    string
+		serviceRoleRequest   string
 	}{
-		{id: "organization-process", owner: homeBearer, member: home.Credential, ownerID: "principal-admin", memberID: homeUser.ID},
-		{id: "organization-process-customer", owner: customerBearer, member: customer.Credential, ownerID: customerOwnerID, memberID: customer.Session.PrincipalID},
+		{id: "organization-process", owner: homeBearer, member: home.Credential, ownerID: "principal-admin", memberID: homeUser.ID,
+			activationActor: activationRoleCredential, revokedActorStatus: http.StatusUnauthorized, activationAuditActor: auditv1.ActorReference{
+				Type: auditv1.ActorRole, ID: auditv1.ActorID(activationRole.ID), RoleSession: &auditv1.RoleSessionReference{
+					SessionID: string(assumedActivationRole.Session.ID), SourceUserID: auditv1.ActorID(roleSourceUser.ID),
+				},
+			}},
+		{id: "organization-process-customer", owner: customerBearer, member: customer.Credential, ownerID: customerOwnerID, memberID: customer.Session.PrincipalID,
+			activationActor: delegatedLogin.Credential, revokedActorStatus: http.StatusForbidden, activationAuditActor: auditv1.ActorReference{
+				Type: auditv1.ActorUser, ID: auditv1.ActorID(delegatedAdministrator.ID),
+			}},
 	}
 	assertStatus := func(response processResponse, status int, action string) {
 		t.Helper()
@@ -10359,8 +10433,28 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		serviceResponse := performJSON(t, http.MethodGet, base+"/services", tenant.member, nil)
 		var services managedservicev1.ServiceDefinitionList
 		if serviceResponse.Status != http.StatusOK || json.Unmarshal(serviceResponse.Body, &services) != nil ||
-			services.Kind != "ServiceDefinitionList" || len(services.Items) != len(expectedServiceIDs) {
+			managedservicev1.ValidateServiceDefinitionList(services) != nil ||
+			services.Kind != "ServiceDefinitionList" || len(services.Items) != len(expectedServiceIDs) ||
+			services.ActivationCapability.Available ||
+			services.ActivationCapability.RestrictionReason != iamv1.CapabilityAuthorityRequired {
 			t.Fatalf("managed-service exact service filtering status=%d body=%s", serviceResponse.Status, serviceResponse.Body)
+		}
+		ownerServiceResponse := performJSON(t, http.MethodGet, base+"/services", tenant.owner, nil)
+		var ownerServices managedservicev1.ServiceDefinitionList
+		if ownerServiceResponse.Status != http.StatusOK || json.Unmarshal(ownerServiceResponse.Body, &ownerServices) != nil ||
+			managedservicev1.ValidateServiceDefinitionList(ownerServices) != nil ||
+			len(ownerServices.Items) != len(expectedServiceIDs) || !ownerServices.ActivationCapability.Available ||
+			ownerServices.ActivationCapability.RestrictionReason != "" {
+			t.Fatalf("Account administrator service activation capability status=%d body=%s",
+				ownerServiceResponse.Status, ownerServiceResponse.Body)
+		}
+		actorServiceResponse := performJSON(t, http.MethodGet, base+"/services", tenant.activationActor, nil)
+		var actorServices managedservicev1.ServiceDefinitionList
+		if actorServiceResponse.Status != http.StatusOK || json.Unmarshal(actorServiceResponse.Body, &actorServices) != nil ||
+			managedservicev1.ValidateServiceDefinitionList(actorServices) != nil ||
+			len(actorServices.Items) != len(expectedServiceIDs) || !actorServices.ActivationCapability.Available {
+			t.Fatalf("delegated activation actor capability status=%d body=%s",
+				actorServiceResponse.Status, actorServiceResponse.Body)
 		}
 		var postgresService managedservicev1.ServiceDefinition
 		for index, expectedID := range expectedServiceIDs {
@@ -10372,6 +10466,9 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			}
 			if definition.ID == managedservicev1.PostgreSQLServiceID {
 				postgresService = definition
+			}
+			if definition.ID == managedservicev1.MySQLServiceID {
+				tenant.unopenedService = definition
 			}
 		}
 		var exactServiceBatch bool
@@ -10399,16 +10496,16 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			"pre-activation-tenant-quota-key", activation), http.StatusConflict, "quota before service activation")
 		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.member,
 			"shared-service-activation-key", serviceRequest), http.StatusForbidden, "developer service activation")
-		activateResponse := performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.owner,
+		activateResponse := performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.activationActor,
 			"shared-service-activation-key", serviceRequest)
-		assertStatus(activateResponse, http.StatusCreated, "Account administrator service activation")
+		assertStatus(activateResponse, http.StatusCreated, "delegated service activation")
 		if activateResponse.Header.Get("Location") != "/managed-services/v1/service-activations/"+postgresService.ID ||
 			json.Unmarshal(activateResponse.Body, &tenant.serviceActivation) != nil ||
 			managedservicev1.ValidateServiceActivation(tenant.serviceActivation) != nil ||
 			tenant.serviceActivation.Service != serviceRequest.Service {
 			t.Fatalf("Account service activation changed its exact service contract: body=%s", activateResponse.Body)
 		}
-		activateReplay := performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.owner,
+		activateReplay := performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.activationActor,
 			"shared-service-activation-key", serviceRequest)
 		var replayedActivation managedservicev1.ServiceActivation
 		if activateReplay.Status != http.StatusOK || json.Unmarshal(activateReplay.Body, &replayedActivation) != nil ||
@@ -10418,7 +10515,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		}
 		changedServiceRequest := serviceRequest
 		changedServiceRequest.Service.ContentDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.owner,
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.activationActor,
 			"shared-service-activation-key", changedServiceRequest), http.StatusConflict, "changed service activation replay")
 		activationResponse := performJSON(t, http.MethodGet,
 			base+"/service-activations/"+managedservicev1.PostgreSQLServiceID, tenant.member, nil)
@@ -10728,6 +10825,26 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		[]string{tenants[0].id, tenants[1].id}).Scan(&independentServiceActivations); err != nil || !independentServiceActivations {
 		t.Fatal("same service activation was not persisted independently for both Accounts", err)
 	}
+	revokeIAMPolicyAttachment(t, iamEndpoint, homeBearer, activationRoleGrant.ID, activationRoleGrant.ResourceVersion,
+		"request-service-activation-role-grant-revoked")
+	revokeIAMPolicyAttachment(t, iamEndpoint, customerBearer, delegatedActivationGrant.ID, delegatedActivationGrant.ResourceVersion,
+		"request-delegated-activation-administrator-grant-revoked")
+	for i := range tenants {
+		tenant := &tenants[i]
+		request := managedservicev1.ActivateServiceRequest{Service: managedservicev1.ServiceDefinitionReference{
+			ID: tenant.unopenedService.ID, Revision: tenant.unopenedService.Revision,
+			ContentDigest: tenant.unopenedService.ContentDigest,
+		}}
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", tenant.activationActor,
+			"service-activation-after-revocation", request), tenant.revokedActorStatus, "delegated service activation after revocation")
+		response := performJSON(t, http.MethodGet, base+"/service-activations", tenant.owner, nil)
+		var activations managedservicev1.ServiceActivationList
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &activations) != nil ||
+			activations.Kind != "ServiceActivationList" || len(activations.Items) != 1 ||
+			activations.Items[0] != tenant.serviceActivation {
+			t.Fatal("revoked delegated actor created a partial service activation")
+		}
+	}
 	if tenants[0].quota.ID == tenants[1].quota.ID || tenants[0].shared.Operation.ID == tenants[1].shared.Operation.ID {
 		t.Fatal("cross-tenant idempotency merged independent quota or Operations")
 	}
@@ -10947,7 +11064,13 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", platform.Credential, "platform-quota-attempt", activation), http.StatusForbidden, "platform-only tenant write")
 	revokeIAMPolicyAttachment(t, iamEndpoint, homeBearer, developerBinding.ID, 1, "request-resource-developer-revoked")
 	viewerBinding := createIAMPolicyAttachment(t, iamEndpoint, homeBearer, homeUser.ID, iamv1.SystemPolicyPaaSViewer, "request-resource-viewer")
-	assertStatus(performJSON(t, http.MethodGet, base+"/services", home.Credential, nil), http.StatusOK, "viewer service definition filter")
+	viewerServicesResponse := performJSON(t, http.MethodGet, base+"/services", home.Credential, nil)
+	var viewerServices managedservicev1.ServiceDefinitionList
+	if viewerServicesResponse.Status != http.StatusOK || json.Unmarshal(viewerServicesResponse.Body, &viewerServices) != nil ||
+		managedservicev1.ValidateServiceDefinitionList(viewerServices) != nil || viewerServices.ActivationCapability.Available ||
+		viewerServices.ActivationCapability.RestrictionReason != iamv1.CapabilityAuthorityRequired {
+		t.Fatalf("viewer service activation capability status=%d body=%s", viewerServicesResponse.Status, viewerServicesResponse.Body)
+	}
 	assertStatus(performJSON(t, http.MethodGet, base+"/service-activations", home.Credential, nil), http.StatusOK, "viewer service activation read")
 	assertStatus(performJSON(t, http.MethodGet, base+"/offerings", home.Credential, nil), http.StatusOK, "viewer offering filter")
 	assertStatus(performJSON(t, http.MethodGet, base+"/service-installations", home.Credential, nil), http.StatusOK, "viewer read")
@@ -10980,12 +11103,13 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			if page.TenantID != auditv1.TenantID(tenant.id) || len(page.Records) != expected {
 				t.Fatal("managed-service audit replay or tenant isolation failed")
 			}
-			expectedActor := tenant.memberID
+			expectedActor := auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(tenant.memberID)}
 			if action == auditv1.ActionManagedServiceServiceActivationActivated {
-				expectedActor = tenant.ownerID
+				expectedActor = tenant.activationAuditActor
 			}
 			for _, record := range page.Records {
-				if record.Source != auditv1.SourcePaaS || record.Event.Actor.ID != auditv1.ActorID(expectedActor) || record.Event.IAMDecisionID == "" || record.Event.TenantID != auditv1.TenantID(tenant.id) {
+				if record.Source != auditv1.SourcePaaS || !record.Event.Actor.Equal(expectedActor) || record.Event.IAMDecisionID == "" ||
+					record.Event.TenantID != auditv1.TenantID(tenant.id) {
 					t.Fatal("managed-service fact lost its original tenant/actor/authority")
 				}
 			}
@@ -11041,7 +11165,8 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	for _, tenant := range tenants {
 		applicationValues = append(applicationValues, tenant.serviceRoleSecret)
 	}
-	return tenants[1].quota, tenants[1].shared, append(applicationValues, home.Credential, oldPlatformCredential, platform.Credential)
+	return tenants[1].quota, tenants[1].shared, append(applicationValues, home.Credential, oldPlatformCredential,
+		platform.Credential, roleSource.Credential, activationRoleCredential, delegatedLogin.Credential)
 }
 
 func completeManagedServiceAuthorityFixtures(
@@ -12093,6 +12218,7 @@ func assertAuthorityPlaintextAbsent(
 		t.Fatal("incomplete synthetic OTP chronology")
 	}
 	managedServiceRoleSessions := readManagedServiceRoleSessionRequests(t, ctx, admin)
+	roleActors := readRoleActorReferences(t, ctx, admin)
 	rows, err := admin.Query(ctx, `SELECT 'iam.outbox',event_document::text,''::text FROM iam.audit_outbox
 		UNION ALL SELECT 'paas.outbox',document::text,''::text FROM paas.audit_outbox
 		UNION ALL SELECT 'paas.operation',document::text,''::text FROM paas.operations
@@ -12145,6 +12271,15 @@ func assertAuthorityPlaintextAbsent(
 			t.Fatal("invalid managed-service RoleSession exit plaintext inspection source")
 		}
 		for value := range roleExitStructural {
+			structuralLowEntropy[value] = struct{}{}
+		}
+		roleActorStructural, err := roleActorStructuralLowEntropy(
+			source, document, auditAuthorityDocument, roleActors,
+		)
+		if err != nil {
+			t.Fatalf("invalid Role actor plaintext inspection source %q: %v", source, err)
+		}
+		for value := range roleActorStructural {
 			structuralLowEntropy[value] = struct{}{}
 		}
 		location, err := authorityPlaintextLocationWithStructural(document, beforeOTP, structuralLowEntropy, plaintexts...)
@@ -12383,6 +12518,171 @@ func readManagedServiceRoleSessionRequests(
 	return result
 }
 
+func readRoleActorReferences(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+) map[string]auditv1.ActorReference {
+	t.Helper()
+	rows, err := admin.Query(ctx, `SELECT tenant_id,id,role_id,source_user_id,source_service_principal_id
+		FROM iam.role_sessions`)
+	if err != nil {
+		t.Fatal("read Role actor authority")
+	}
+	defer rows.Close()
+	result := make(map[string]auditv1.ActorReference)
+	for rows.Next() {
+		var tenantID, sessionID, roleID string
+		var sourceUserID, sourceServicePrincipalID sql.NullString
+		if rows.Scan(&tenantID, &sessionID, &roleID, &sourceUserID, &sourceServicePrincipalID) != nil {
+			t.Fatal("read Role actor authority row")
+		}
+		actor := auditv1.ActorReference{Type: auditv1.ActorRole, ID: auditv1.ActorID(roleID),
+			RoleSession: &auditv1.RoleSessionReference{SessionID: sessionID}}
+		if sourceUserID.Valid {
+			actor.RoleSession.SourceUserID = auditv1.ActorID(sourceUserID.String)
+		}
+		if sourceServicePrincipalID.Valid {
+			actor.RoleSession.SourceServicePrincipalID = auditv1.ActorID(sourceServicePrincipalID.String)
+		}
+		encoded, encodeErr := json.Marshal(actor)
+		var validated auditv1.ActorReference
+		if encodeErr != nil || json.Unmarshal(encoded, &validated) != nil || !validated.Equal(actor) {
+			t.Fatal("stored Role actor authority is invalid")
+		}
+		key := tenantID + "\x00" + sessionID
+		if previous, found := result[key]; found && !previous.Equal(actor) {
+			t.Fatal("RoleSession has conflicting actor authority")
+		}
+		result[key] = actor
+	}
+	if rows.Err() != nil {
+		t.Fatal("incomplete Role actor authority")
+	}
+	return result
+}
+
+type storedPaaSAuditEvent struct {
+	SchemaVersion string                  `json:"schemaVersion"`
+	EventID       auditv1.EventID         `json:"eventId"`
+	TenantID      auditv1.TenantID        `json:"tenantId"`
+	Actor         auditv1.ActorReference  `json:"actor"`
+	IAMDecisionID auditv1.DecisionID      `json:"iamDecisionId"`
+	Action        auditv1.Action          `json:"action"`
+	Target        auditv1.TargetReference `json:"target"`
+	OperationID   auditv1.OperationID     `json:"operationId,omitempty"`
+	RequestDigest string                  `json:"requestDigest"`
+	Result        auditv1.Result          `json:"result"`
+	RequestID     string                  `json:"requestId"`
+	AuditID       string                  `json:"auditId,omitempty"`
+	TraceParent   string                  `json:"traceparent,omitempty"`
+	OccurredAt    time.Time               `json:"occurredAt"`
+}
+
+func roleActorStructuralLowEntropy(
+	source, inspectedDocument, authorityDocument string,
+	known map[string]auditv1.ActorReference,
+) (map[string]struct{}, error) {
+	result := map[string]struct{}{}
+	authority := inspectedDocument
+	var eventSource auditv1.Source
+	switch {
+	case source == "iam.outbox":
+		eventSource = auditv1.SourceIAM
+	case source == "paas.outbox" || source == "managedservice.outbox":
+		// PaaS persists its deliberately smaller internal outbox fact and the
+		// dispatcher adds public Audit metadata at delivery. Decode that exact
+		// closed shape here instead of pretending the row is already a public
+		// AuditEvent. This exception still requires an IAM-authoritative Role
+		// lineage and admits only that lineage plus contract-validated digest,
+		// timestamp and authority IDs; caller-controlled fields remain scanned.
+		var stored storedPaaSAuditEvent
+		decoder := json.NewDecoder(strings.NewReader(inspectedDocument))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&stored); err != nil {
+			return nil, fmt.Errorf("decode stored PaaS Role actor authority: %w", err)
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			return nil, errors.New("stored PaaS Role actor authority contains trailing data")
+		}
+		if stored.Actor.Type != auditv1.ActorRole || stored.Actor.RoleSession == nil {
+			return result, nil
+		}
+		contract, declared := auditv1.ContractForAction(stored.Action)
+		if stored.SchemaVersion != "v1" || !declared || contract.Source != auditv1.SourcePaaS ||
+			!contract.RoleActorPermitted || auditv1.ValidateAuthority(stored.TenantID, "") != nil ||
+			auditv1.ValidateActor(stored.Actor) != nil ||
+			auditv1.ValidateID("eventId", string(stored.EventID)) != nil ||
+			auditv1.ValidateID("target.id", stored.Target.ID) != nil ||
+			auditv1.ValidateID("iamDecisionId", string(stored.IAMDecisionID)) != nil ||
+			auditv1.ValidateID("requestId", stored.RequestID) != nil ||
+			auditv1.ValidateDigest("requestDigest", stored.RequestDigest) != nil ||
+			!slices.Contains(contract.Results, stored.Result) || stored.OccurredAt.IsZero() ||
+			stored.OccurredAt.Location() != time.UTC ||
+			(contract.OperationRequired != (stored.OperationID != "")) {
+			return nil, errors.New("invalid stored PaaS Role actor authority")
+		}
+		if stored.OperationID != "" && auditv1.ValidateID("operationId", string(stored.OperationID)) != nil {
+			return nil, errors.New("invalid stored PaaS Role actor operation authority")
+		}
+		storedActor, found := known[string(stored.TenantID)+"\x00"+stored.Actor.RoleSession.SessionID]
+		if !found || !storedActor.Equal(stored.Actor) {
+			return result, nil
+		}
+		for _, identity := range []string{
+			string(stored.Actor.ID), stored.Actor.RoleSession.SessionID,
+			string(stored.Actor.RoleSession.SourceUserID),
+			string(stored.Actor.RoleSession.SourceServicePrincipalID),
+			string(stored.EventID), string(stored.IAMDecisionID), stored.RequestDigest,
+			stored.OccurredAt.Format(time.RFC3339Nano),
+		} {
+			if identity != "" {
+				result[identity] = struct{}{}
+			}
+		}
+		return result, nil
+	case strings.HasPrefix(source, "audit.document."):
+		eventSource = auditv1.Source(strings.TrimPrefix(source, "audit.document."))
+		if inspectedDocument != authorityDocument {
+			return nil, errors.New("Audit record document differs from its authority")
+		}
+		authority = authorityDocument
+	case strings.HasPrefix(source, "audit.canonical."):
+		eventSource = auditv1.Source(strings.TrimPrefix(source, "audit.canonical."))
+		authority = authorityDocument
+	default:
+		return result, nil
+	}
+	var event auditv1.Event
+	if auditv1.DecodeRequest(strings.NewReader(authority), &event) != nil ||
+		auditv1.ValidateEventForSource(eventSource, event) != nil {
+		return nil, errors.New("invalid Role actor Audit authority")
+	}
+	if strings.HasPrefix(source, "audit.canonical.") {
+		canonical, _, err := auditv1.CanonicalizeEvent(eventSource, event)
+		if err != nil || canonical != inspectedDocument {
+			return nil, errors.New("Audit canonical document differs from its authority")
+		}
+	}
+	if event.Actor.Type != auditv1.ActorRole || event.Actor.RoleSession == nil {
+		return result, nil
+	}
+	stored, found := known[string(event.TenantID)+"\x00"+event.Actor.RoleSession.SessionID]
+	if !found || !stored.Equal(event.Actor) {
+		return result, nil
+	}
+	for _, identity := range []string{
+		string(event.Actor.ID), event.Actor.RoleSession.SessionID,
+		string(event.Actor.RoleSession.SourceUserID),
+		string(event.Actor.RoleSession.SourceServicePrincipalID),
+	} {
+		if identity != "" {
+			result[identity] = struct{}{}
+		}
+	}
+	return result, nil
+}
+
 func managedServiceRoleExitStructuralLowEntropy(
 	source, inspectedDocument, authorityDocument string,
 	issued map[string]string,
@@ -12556,6 +12856,50 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 			if marshalErr != nil || auditv1.ValidateEvent(changed) != nil || scanErr != nil || location == "" {
 				t.Fatal("caller-controlled or noncanonical request identity escaped plaintext inspection")
 			}
+		}
+	})
+	t.Run("stored-role-actor-lineage", func(t *testing.T) {
+		roleEvent := event
+		roleEvent.EventID = "event-role-actor"
+		roleEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorRole,
+			ID: auditv1.ActorID("role-" + code + "-structural"), RoleSession: &auditv1.RoleSessionReference{
+				SessionID: "session-" + code + "-structural", SourceUserID: "source-user-one",
+			}}
+		roleEvent.Action = auditv1.ActionManagedServiceServiceActivationActivated
+		roleEvent.Target = auditv1.TargetReference{Kind: auditv1.TargetServiceActivation, ID: "postgresql-18"}
+		roleEvent.Result = auditv1.ResultSucceeded
+		roleEvent.IAMDecisionID = "decision-role-actor"
+		roleEvent.RequestID, roleEvent.CorrelationID = "request-role-actor", "request-role-actor"
+		storedEvent := storedPaaSAuditEvent{
+			SchemaVersion: "v1", EventID: roleEvent.EventID, TenantID: roleEvent.TenantID,
+			Actor: roleEvent.Actor, IAMDecisionID: roleEvent.IAMDecisionID,
+			Action: roleEvent.Action, Target: roleEvent.Target,
+			OperationID: roleEvent.OperationID, RequestDigest: roleEvent.RequestDigest,
+			Result: roleEvent.Result, RequestID: roleEvent.RequestID,
+			AuditID: roleEvent.CorrelationID, TraceParent: roleEvent.TraceParent,
+			OccurredAt: roleEvent.OccurredAt,
+		}
+		encoded, err := json.Marshal(storedEvent)
+		if err != nil || auditv1.ValidateEventForSource(auditv1.SourcePaaS, roleEvent) != nil {
+			t.Fatal("invalid Role actor fixture")
+		}
+		known := map[string]auditv1.ActorReference{
+			string(roleEvent.TenantID) + "\x00" + roleEvent.Actor.RoleSession.SessionID: roleEvent.Actor,
+		}
+		structural, err := roleActorStructuralLowEntropy("managedservice.outbox", string(encoded), "", known)
+		location, scanErr := authorityPlaintextLocationWithStructural(string(encoded), nil, structural, code)
+		if err != nil || scanErr != nil || location != "" {
+			t.Fatalf("exact stored Role actor was treated as persisted OTP: authority=%v scan=%v location=%q", err, scanErr, location)
+		}
+		forged := storedEvent
+		forged.Actor.RoleSession = &auditv1.RoleSessionReference{
+			SessionID: roleEvent.Actor.RoleSession.SessionID, SourceUserID: "source-user-forged",
+		}
+		forgedEncoded, marshalErr := json.Marshal(forged)
+		structural, err = roleActorStructuralLowEntropy("managedservice.outbox", string(forgedEncoded), "", known)
+		location, scanErr = authorityPlaintextLocationWithStructural(string(forgedEncoded), nil, structural, code)
+		if marshalErr != nil || err != nil || scanErr != nil || location == "" {
+			t.Fatal("forged Role actor escaped plaintext inspection")
 		}
 	})
 	t.Run("server-generated-audit-access-request-id", func(t *testing.T) {

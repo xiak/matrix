@@ -2802,6 +2802,65 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 	}
 }
 
+func TestAuditProofServiceActivationRetainsRoleSessionLineage(t *testing.T) {
+	identity, event, evidence := historicalAuditFixture(
+		auditv1.ActionManagedServiceServiceActivationActivated,
+		iamv1.ActionManagedServiceActivationActivate,
+		"collection",
+	)
+	request := coreAuthorizationRequest(t, iamv1.AuthorizationRequest{
+		Action:        iamv1.ActionManagedServiceActivationActivate,
+		Resource:      iamv1.ResourceReference{Kind: iamv1.ResourceServiceActivation, ID: "collection"},
+		RequestID:     event.RequestID,
+		CorrelationID: event.CorrelationID,
+	}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate)
+	profile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductManagedService)
+	if !found {
+		t.Fatal("managed-service authorization profile is absent")
+	}
+	roleSession := &iamv1.RoleSessionReference{
+		SessionID:    "role-session-proof",
+		SourceUserID: "principal-source",
+	}
+	decision := *evidence.Decision
+	decision.Subject = &iamv1.Subject{Type: iamv1.SubjectRole, ID: "role-service-activation", RoleSession: roleSession}
+	decision.Profile = &request.Profile
+	decision.ResourceMode = request.ResourceMode
+	decision.CollectionUsage = request.CollectionUsage
+	decision.CorrelationID = request.CorrelationID
+	evidence.Decision = &decision
+	evidence.DecisionProfile = &profile
+	evidence.DecisionContractVersion = 7
+	event.Actor = auditv1.ActorReference{Type: auditv1.ActorRole, ID: "role-service-activation", RoleSession: &auditv1.RoleSessionReference{
+		SessionID:    string(roleSession.SessionID),
+		SourceUserID: auditv1.ActorID(roleSession.SourceUserID),
+	}}
+	evidence.Event.Actor = event.Actor
+
+	_, expected, err := auditv1.CanonicalizeEvent(auditv1.SourcePaaS, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := auditContentDigest(identity, event, evidence); err != nil || got != expected {
+		t.Fatalf("role service-activation proof rejected or changed digest: digest=%q err=%v", got, err)
+	}
+
+	for name, forge := range map[string]func(*auditv1.Event){
+		"session": func(candidate *auditv1.Event) { candidate.Actor.RoleSession.SessionID = "role-session-forged" },
+		"source":  func(candidate *auditv1.Event) { candidate.Actor.RoleSession.SourceUserID = "principal-forged" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := event
+			lineage := *event.Actor.RoleSession
+			candidate.Actor.RoleSession = &lineage
+			forge(&candidate)
+			if _, err := auditContentDigest(identity, candidate, evidence); !errors.Is(err, ErrForbidden) {
+				t.Fatalf("forged role lineage was admitted: %v", err)
+			}
+		})
+	}
+}
+
 func TestAuditProofEnrollmentCannotAuthorizeAnotherMutation(t *testing.T) {
 	identity, event, evidence := historicalAuditFixture(auditv1.ActionPaaSExecutionTargetRegistered, iamv1.ActionPaaSNodeEnrollmentCreate, "collection")
 	for name, attack := range map[string]func(*auditv1.Event, *AuditEvidence){

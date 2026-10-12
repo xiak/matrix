@@ -14,6 +14,7 @@ import (
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/internal/authorityhttp"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 )
@@ -88,8 +89,11 @@ func (client *Client) Authorize(
 	if !decision.Allowed {
 		return port.Authorization{}, port.ErrPermissionDenied
 	}
+	if decision.Subject == nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
 	return port.Authorization{
-		TenantID: decision.TenantID, SubjectType: decision.SubjectType, SubjectID: decision.SubjectID,
+		TenantID: decision.TenantID, Subject: *decision.Subject,
 		DecisionID: decision.DecisionID, RequestID: decision.RequestID,
 	}, nil
 }
@@ -144,8 +148,11 @@ func (client *Client) Decide(
 		if decision.Subject == nil {
 			return port.AuthorizationDecision{}, port.ErrAuthorizationUnavailable
 		}
-		result.TenantID, result.SubjectType, result.SubjectID =
-			string(decision.TenantID), port.SubjectType(decision.Subject.Type), string(decision.Subject.ID)
+		subject, mapErr := subjectFromIAM(*decision.Subject)
+		if mapErr != nil {
+			return port.AuthorizationDecision{}, port.ErrAuthorizationUnavailable
+		}
+		result.TenantID, result.Subject = string(decision.TenantID), &subject
 	}
 	if port.ValidateAuthorizationDecisionForRequest(result, request) != nil {
 		return port.AuthorizationDecision{}, port.ErrAuthorizationUnavailable
@@ -197,9 +204,13 @@ func (client *Client) AuthorizeBatch(
 		iamv1.CheckAuthorizationBatchDecisionForRequest(decision, iamRequest) != nil {
 		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
 	}
+	subject, err := subjectFromIAM(decision.Subject)
+	if err != nil {
+		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+	}
 	result := port.AuthorizationBatch{
-		TenantID: string(decision.TenantID), SubjectType: port.SubjectType(decision.Subject.Type),
-		SubjectID: decision.Subject.ID, Items: make([]port.AuthorizationBatchItem, len(decision.Decisions)),
+		TenantID: string(decision.TenantID), Subject: subject,
+		Items: make([]port.AuthorizationBatchItem, len(decision.Decisions)),
 	}
 	for index, item := range decision.Decisions {
 		result.Items[index] = port.AuthorizationBatchItem{
@@ -508,6 +519,26 @@ func (lease *workloadRoleLease) Release(ctx context.Context) error {
 	lease.credential = iamv1.Secret{}
 	lease.released = true
 	return nil
+}
+
+func subjectFromIAM(value iamv1.Subject) (paasv1.SubjectRef, error) {
+	if iamv1.ValidateSubject(value) != nil {
+		return paasv1.SubjectRef{}, errors.New("IAM subject is invalid")
+	}
+	result := paasv1.SubjectRef{
+		Type: paasv1.SubjectType(value.Type), ID: value.ID, AccessKeyID: string(value.AccessKeyID),
+	}
+	if value.RoleSession != nil {
+		result.RoleSession = &paasv1.RoleSessionReference{
+			SessionID:                string(value.RoleSession.SessionID),
+			SourceUserID:             string(value.RoleSession.SourceUserID),
+			SourceServicePrincipalID: string(value.RoleSession.SourceServicePrincipalID),
+		}
+	}
+	if paasv1.ValidateSubjectRef(result) != nil {
+		return paasv1.SubjectRef{}, errors.New("IAM subject cannot map to PaaS")
+	}
+	return result, nil
 }
 
 func toIAMRequest(request port.AuthorizationRequest) (iamv1.AuthorizationRequest, error) {

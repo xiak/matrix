@@ -66,12 +66,34 @@ CREATE TABLE IF NOT EXISTS managedservice.service_activations (
         AND resource_version = 1
         AND idempotency_key COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-        AND activated_by_type = 'USER'
+        AND activated_by_type IN ('USER', 'ROLE')
         AND activated_by_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND iam_decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
     )
 );
+
+-- The direct predecessor admitted only USER activators. Replace its named
+-- constraint in-place so retained rows stay valid while the current Profile
+-- can persist an exact ROLE actor. Replaying this migration is equivalent.
+ALTER TABLE managedservice.service_activations
+    DROP CONSTRAINT IF EXISTS service_activations_identity_valid;
+ALTER TABLE managedservice.service_activations
+    ADD CONSTRAINT service_activations_identity_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND service_id COLLATE "C" ~ '^[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]$'
+        AND service_revision BETWEEN 1 AND 9007199254740991
+        AND service_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND resource_version = 1
+        AND idempotency_key COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND activated_by_type IN ('USER', 'ROLE')
+        AND activated_by_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND iam_decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    ) NOT VALID;
+ALTER TABLE managedservice.service_activations
+    VALIDATE CONSTRAINT service_activations_identity_valid;
 
 CREATE TABLE IF NOT EXISTS managedservice.quota_entitlements (
     tenant_id text COLLATE "C" NOT NULL,
@@ -593,7 +615,6 @@ BEGIN
             'iamDecisionId', 'action', 'target', 'operationId',
             'requestDigest', 'result', 'requestId', 'occurredAt'
        ]) <> '{}'::jsonb
-       OR ((submitted_audit_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
        OR ((submitted_audit_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service Audit event contract is invalid';
     END IF;
@@ -604,9 +625,8 @@ BEGIN
        OR COALESCE(submitted_audit_event->>'eventId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_audit_event->>'tenantId' <> effective_tenant_id
-       OR submitted_audit_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT')
-       OR COALESCE(submitted_audit_event#>>'{actor,id}', '') COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_audit_event#>>'{actor,type}' NOT IN ('USER', 'ROLE', 'SERVICE_ACCOUNT')
+       OR NOT paas.subject_reference_valid(submitted_audit_event->'actor')
        OR COALESCE(submitted_audit_event->>'iamDecisionId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(target_id, '') COLLATE "C"
@@ -622,6 +642,7 @@ BEGIN
     IF submitted_audit_event->>'action' = 'managedservice.service-activation.activated' THEN
         IF submitted_audit_event#>>'{target,kind}' <> 'ServiceActivation'
            OR submitted_audit_event->>'result' <> 'SUCCEEDED'
+           OR submitted_audit_event#>>'{actor,type}' NOT IN ('USER', 'ROLE')
            OR submitted_audit_event ? 'operationId'
            OR NOT EXISTS (
                 SELECT 1

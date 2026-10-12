@@ -635,7 +635,7 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionManagedServiceServiceActivationActivated: {
 		Source: SourcePaaS, Target: TargetServiceActivation, Results: []Result{ResultSucceeded},
-		IAMDecisionRequired: true,
+		IAMDecisionRequired: true, RoleActorPermitted: true,
 	},
 	ActionManagedServiceInstallationCreated: {
 		Source: SourcePaaS, Target: TargetServiceInstallation, Results: []Result{ResultAccepted},

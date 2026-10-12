@@ -10,6 +10,7 @@ import (
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 )
 
@@ -42,7 +43,7 @@ func TestAuthorizeBatchUsesOneCredentialBoundClosedRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := client.AuthorizeBatch(t.Context(), request)
-	if err != nil || result.TenantID != "account-one" || result.SubjectType != port.SubjectUser || result.SubjectID != "user-one" ||
+	if err != nil || result.TenantID != "account-one" || !result.Subject.Equal(paasv1.SubjectRef{Type: port.SubjectUser, ID: "user-one"}) ||
 		len(result.Items) != 2 || !result.Items[0].Allowed || result.Items[1].Allowed ||
 		result.Items[0].Resource != request.Requests[0].Resource || result.Items[1].Resource != request.Requests[1].Resource {
 		t.Fatalf("batch result=%#v err=%v", result, err)
@@ -157,12 +158,59 @@ func TestDecideReturnsBoundDenyWhileAuthorizeStillRejectsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	decision, err := client.Decide(t.Context(), request)
-	if err != nil || decision.Allowed || decision.TenantID != "" || decision.SubjectType != "" ||
-		decision.SubjectID != "" || port.ValidateAuthorizationDecisionForRequest(decision, request) != nil {
+	if err != nil || decision.Allowed || decision.TenantID != "" || decision.Subject != nil ||
+		port.ValidateAuthorizationDecisionForRequest(decision, request) != nil {
 		t.Fatalf("decision=%#v err=%v", decision, err)
 	}
 	if _, err = client.Authorize(t.Context(), request); !errors.Is(err, port.ErrPermissionDenied) {
 		t.Fatalf("authorize denied error=%v", err)
+	}
+}
+
+func TestAuthorizePreservesRoleSessionLineage(t *testing.T) {
+	request := port.AuthorizationRequest{
+		Credential: "Bearer role-session-secret", Action: port.AuthorizeServiceActivationActivate,
+		Resource:     port.ResourceReference{Kind: port.ResourceServiceActivation, ID: "collection"},
+		ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionCreate,
+		RequestID: "request-role-activation", CorrelationID: "correlation-role-activation",
+	}
+	want := paasv1.SubjectRef{Type: paasv1.SubjectRole, ID: "role-activation", RoleSession: &paasv1.RoleSessionReference{
+		SessionID: "session-role-activation", SourceUserID: "user-source",
+	}}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		var value iamv1.AuthorizationRequest
+		if httpRequest.URL.Path != "/v1/authorize" || iamv1.DecodeRequest(httpRequest.Body, &value) != nil {
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		decision := iamv1.AuthorizationDecision{
+			APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-role-activation",
+			Allowed: true, Reason: iamv1.DecisionAllowed, TenantID: "account-one",
+			Subject: &iamv1.Subject{Type: iamv1.SubjectRole, ID: want.ID, RoleSession: &iamv1.RoleSessionReference{
+				SessionID: iamv1.RoleSessionID(want.RoleSession.SessionID), SourceUserID: iamv1.PrincipalID(want.RoleSession.SourceUserID),
+			}},
+			Action: value.Action, Resource: value.Resource, RequestID: value.RequestID,
+			Profile: &value.Profile, ResourceMode: value.ResourceMode, CollectionUsage: value.CollectionUsage,
+			NetworkContext: value.NetworkContext, CorrelationID: value.CorrelationID,
+			DecidedAt: time.Date(2026, 10, 12, 9, 30, 0, 0, time.UTC),
+		}
+		if iamv1.CheckAuthorizationDecisionForRequest(decision, value) != nil {
+			response.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(decision)
+	}))
+	defer server.Close()
+	serviceCredential, _ := iamv1.NewSecret("paas-service-secret")
+	client, err := NewClient(Config{Endpoint: server.URL, ServiceCredential: serviceCredential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.Authorize(t.Context(), request)
+	if err != nil || result.TenantID != "account-one" || !result.Subject.Equal(want) ||
+		port.ValidateAuthorizationForRequest(result, request) != nil {
+		t.Fatalf("role authorization=%#v err=%v", result, err)
 	}
 }
 

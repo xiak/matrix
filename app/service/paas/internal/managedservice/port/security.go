@@ -6,6 +6,7 @@ import (
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 var (
@@ -44,12 +45,12 @@ type ResourceReference struct {
 	ID   string
 }
 
-type SubjectType string
+type SubjectType = paasv1.SubjectType
 
 const (
-	SubjectUser           SubjectType = "USER"
-	SubjectServiceAccount SubjectType = "SERVICE_ACCOUNT"
-	SubjectRole           SubjectType = "ROLE"
+	SubjectUser           = paasv1.SubjectUser
+	SubjectServiceAccount = paasv1.SubjectServiceAccount
+	SubjectRole           = paasv1.SubjectRole
 )
 
 type AuthorizationRequest struct {
@@ -63,11 +64,10 @@ type AuthorizationRequest struct {
 }
 
 type Authorization struct {
-	TenantID    string
-	SubjectType SubjectType
-	SubjectID   string
-	DecisionID  string
-	RequestID   string
+	TenantID   string
+	Subject    paasv1.SubjectRef
+	DecisionID string
+	RequestID  string
 }
 
 // AuthorizationDecision is one credential-bound IAM decision. A denied
@@ -76,8 +76,7 @@ type Authorization struct {
 type AuthorizationDecision struct {
 	Allowed         bool
 	TenantID        string
-	SubjectType     SubjectType
-	SubjectID       string
+	Subject         *paasv1.SubjectRef
 	DecisionID      string
 	Action          iamv1.Action
 	Resource        ResourceReference
@@ -105,10 +104,9 @@ type AuthorizationBatchItem struct {
 }
 
 type AuthorizationBatch struct {
-	TenantID    string
-	SubjectType SubjectType
-	SubjectID   string
-	Items       []AuthorizationBatchItem
+	TenantID string
+	Subject  paasv1.SubjectRef
+	Items    []AuthorizationBatchItem
 }
 
 // WorkloadRoleAuthority is the product-to-IAM consent boundary. Its requests
@@ -171,12 +169,13 @@ type WorkloadRoleRuntime interface {
 
 func ValidateAuthorization(value Authorization) error {
 	var problems []error
-	if value.SubjectType != SubjectUser && value.SubjectType != SubjectServiceAccount {
+	if (value.Subject.Type != SubjectUser && value.Subject.Type != SubjectRole && value.Subject.Type != SubjectServiceAccount) ||
+		value.Subject.AccessKeyID != "" {
 		problems = append(problems, errors.New("authorization subject type is invalid"))
 	}
 	problems = append(problems,
 		managedservicev1.ValidateID("authorization.tenantId", value.TenantID),
-		managedservicev1.ValidateID("authorization.subjectId", value.SubjectID),
+		paasv1.ValidateSubjectRef(value.Subject),
 		managedservicev1.ValidateID("authorization.decisionId", value.DecisionID),
 		managedservicev1.ValidateID("authorization.requestId", value.RequestID),
 	)
@@ -200,13 +199,16 @@ func ValidateAuthorizationDecisionForRequest(value AuthorizationDecision, reques
 		return errors.New("authorization decision differs")
 	}
 	if !value.Allowed {
-		if value.TenantID != "" || value.SubjectType != "" || value.SubjectID != "" {
+		if value.TenantID != "" || value.Subject != nil {
 			return errors.New("denied authorization decision disclosed authority identity")
 		}
 		return nil
 	}
+	if value.Subject == nil {
+		return errors.New("allowed authorization decision has no subject")
+	}
 	return ValidateAuthorization(Authorization{
-		TenantID: value.TenantID, SubjectType: value.SubjectType, SubjectID: value.SubjectID,
+		TenantID: value.TenantID, Subject: *value.Subject,
 		DecisionID: value.DecisionID, RequestID: value.RequestID,
 	})
 }
@@ -258,8 +260,8 @@ func ValidateAuthorizationBatchRequest(value AuthorizationBatchRequest) error {
 func ValidateAuthorizationBatchForRequest(value AuthorizationBatch, request AuthorizationBatchRequest) error {
 	if ValidateAuthorizationBatchRequest(request) != nil || value.Items == nil || len(value.Items) != len(request.Requests) ||
 		managedservicev1.ValidateID("authorization.tenantId", value.TenantID) != nil ||
-		(value.SubjectType != SubjectUser && value.SubjectType != SubjectRole) ||
-		managedservicev1.ValidateID("authorization.subjectId", value.SubjectID) != nil {
+		(value.Subject.Type != SubjectUser && value.Subject.Type != SubjectRole) ||
+		paasv1.ValidateSubjectRef(value.Subject) != nil {
 		return errors.New("authorization batch response is invalid")
 	}
 	for index, item := range value.Items {

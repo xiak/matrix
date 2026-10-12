@@ -11,6 +11,7 @@ import (
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
@@ -21,6 +22,28 @@ func TestServiceActivationAuditEventIDIsAccountScoped(t *testing.T) {
 	second := serviceActivationAuditEventID("account-b", managedservicev1.PostgreSQLServiceID)
 	if first == second || first != serviceActivationAuditEventID("account-a", managedservicev1.PostgreSQLServiceID) {
 		t.Fatal("service activation Audit replay identity is not stable and Account-scoped")
+	}
+}
+
+func TestServiceActivationRetainsRoleSessionActor(t *testing.T) {
+	repository := newMemoryRepository()
+	service := newTestService(t, repository)
+	authorization := testAuthorization()
+	authorization.Subject = paasv1.SubjectRef{Type: paasv1.SubjectRole, ID: "activation-role", RoleSession: &paasv1.RoleSessionReference{
+		SessionID: "activation-session", SourceUserID: "activation-user",
+	}}
+	definition, err := service.GetService(context.Background(), authorization, managedservicev1.PostgreSQLServiceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, replayed, err := service.ActivateService(context.Background(), ActivateServiceCommand{
+		Authorization: authorization, IdempotencyKey: "role-service-activation",
+		Request: managedservicev1.ActivateServiceRequest{Service: serviceReference(definition)},
+	})
+	if err != nil || replayed || created.Service.ID != definition.ID || len(repository.events) != 1 ||
+		!repository.events[0].Actor.Equal(authorization.Subject) ||
+		repository.events[0].Action != audit.ServiceActivationActivated {
+		t.Fatalf("role activation=%#v replayed=%v events=%#v err=%v", created, replayed, repository.events, err)
 	}
 }
 
@@ -358,7 +381,7 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 		t.Fatalf("absent resource reached IAM: calls=%d before=%d err=%v", binder.calls, before, err)
 	}
 	command.InstallationID = installation.ID
-	command.Authorization.SubjectType = port.SubjectServiceAccount
+	command.Authorization.Subject.Type = port.SubjectServiceAccount
 	if _, err := service.BindServiceRole(context.Background(), command); !errors.Is(err, ErrInvalidArgument) || binder.calls != before {
 		t.Fatalf("service subject reached USER consent: calls=%d before=%d err=%v", binder.calls, before, err)
 	}
@@ -425,7 +448,7 @@ func TestUnbindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *te
 		t.Fatalf("absent unbinding resource reached IAM: calls=%d before=%d err=%v", authority.revokeCalls, before, err)
 	}
 	command.InstallationID = installation.ID
-	command.Authorization.SubjectType = port.SubjectServiceAccount
+	command.Authorization.Subject.Type = port.SubjectServiceAccount
 	if _, err := service.UnbindServiceRole(context.Background(), command); !errors.Is(err, ErrInvalidArgument) || authority.revokeCalls != before {
 		t.Fatalf("service subject reached USER unbinding: calls=%d before=%d err=%v", authority.revokeCalls, before, err)
 	}
@@ -604,8 +627,7 @@ func testServiceLinkedRoleAccess(
 
 func testAuthorization() port.Authorization {
 	return port.Authorization{
-		TenantID: "organization-test", SubjectType: port.SubjectUser,
-		SubjectID:  "principal-test",
+		TenantID: "organization-test", Subject: paasv1.SubjectRef{Type: port.SubjectUser, ID: "principal-test"},
 		DecisionID: "decision-test", RequestID: "request-test",
 	}
 }

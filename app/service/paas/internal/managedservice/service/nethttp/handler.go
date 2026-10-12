@@ -137,8 +137,7 @@ func (value *handler) filterServices(
 	}
 	authorization, err := value.authorizer.AuthorizeBatch(request.Context(), batch)
 	if err != nil || port.ValidateAuthorizationBatchForRequest(authorization, batch) != nil ||
-		authorization.TenantID != collection.TenantID || authorization.SubjectType != collection.SubjectType ||
-		authorization.SubjectID != collection.SubjectID {
+		authorization.TenantID != collection.TenantID || !authorization.Subject.Equal(collection.Subject) {
 		if err != nil {
 			return managedservicev1.ServiceDefinitionList{}, err
 		}
@@ -164,7 +163,7 @@ func (value *handler) filterServices(
 	capabilityDecision, err := value.authorizer.Decide(request.Context(), capabilityRequest)
 	if err != nil || port.ValidateAuthorizationDecisionForRequest(capabilityDecision, capabilityRequest) != nil ||
 		capabilityDecision.Allowed && (capabilityDecision.TenantID != collection.TenantID ||
-			capabilityDecision.SubjectType != collection.SubjectType || capabilityDecision.SubjectID != collection.SubjectID) {
+			capabilityDecision.Subject == nil || !capabilityDecision.Subject.Equal(collection.Subject)) {
 		if err != nil {
 			return managedservicev1.ServiceDefinitionList{}, err
 		}
@@ -306,8 +305,7 @@ func (value *handler) filterOfferings(
 	}
 	authorization, err := value.authorizer.AuthorizeBatch(request.Context(), batch)
 	if err != nil || port.ValidateAuthorizationBatchForRequest(authorization, batch) != nil ||
-		authorization.TenantID != collection.TenantID || authorization.SubjectType != collection.SubjectType ||
-		authorization.SubjectID != collection.SubjectID {
+		authorization.TenantID != collection.TenantID || !authorization.Subject.Equal(collection.Subject) {
 		if err != nil {
 			return managedservicev1.ServiceOfferingList{}, err
 		}
