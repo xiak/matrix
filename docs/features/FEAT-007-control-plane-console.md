@@ -437,12 +437,37 @@ enabled:
 | Subuser with product-resource grants only | Cannot enable without the separate enablement capability | May use the already-enabled service within those grants |
 | Ordinary ungranted subuser or collaborator | No default enablement authority | No default resource authority; collaborator access is evaluated in the target Account context |
 | Automated service identity | Requires an explicitly supported API/capability and applicable consent rules | Uses its own service-role grants; never inherits the human operator's grants or ownership |
+| Installation/platform or external directory administrator | No default authority to enable services for customer Accounts | Product publication, directory administration and customer resource access are separate authorities |
+
+Account is the resource-owning tenant boundary, not another login identity.
+Opening a tenant Account, enabling a service for that Account, delegating a
+human's Actions and allowing a service Role to operate resources are separate
+workflows. A collaborator's ownership of its source Account does not grant
+ownership in the target Account; an administrator child remains a child. The
+UI never derives any of these abilities from the display name or identity label.
+
+The four private managed-product designs use permission-delegated activation,
+not a root-only rule. A future product requiring original-primary, human legal
+consent, verified identity, billing or third-party consent may not be published
+as available until its closed prerequisite, server validation, stable denial,
+Audit and real-runtime gates exist. The current UI does not fabricate a positive
+owner-only flow or treat MOCK acknowledgement as legally effective consent.
+Product prerequisites can narrow eligibility; they never grant resource Actions.
+
+LIVE activation-directory reads and activation commands must be independently
+authorized. Neither a readable activation record nor permission to activate
+authorizes product-resource reads or mutations; resource-only authority likewise
+does not prove authority to read the activation directory. The preview's
+`canUse` is only a scenario input, not an adopted generic workspace permit or
+backend field. LIVE composition consumes the owning collection/resource Action
+capabilities and keeps every request subject to backend authorization. Switching
+Account or effective credentials must discard prior pending results and controls.
 
 Public-cloud reference confirms the separation, not one universal identity
-allowlist. Tencent COS documents distinct service-opening and identity-grant
-steps ([flow](https://cloud.tencent.com/document/product/436/68279)); some Tencent
-products require initial owner authorization
-([CloudBase Run](https://cloud.tencent.com/document/product/1243/78674)). GCP checks
+allowlist. Tencent's sourced identity, opening-scope and product exceptions are
+owned by the [CAM identity reference](../research/tencent-cam/concepts/identities.md#账户级服务开通与用户授权)
+and [evidence limits](../research/tencent-cam/evidence/caveats.md#契约与版本差异),
+not an assumed control-plane permission rule. GCP checks
 `serviceusage.services.enable` on the project ([Service Usage IAM](https://cloud.google.com/service-usage/docs/access-control));
 Azure provider registration checks `/register/action` on the subscription
 ([registration](https://learn.microsoft.com/azure/azure-resource-manager/management/resource-providers-and-types)).
