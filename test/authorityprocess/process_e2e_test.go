@@ -12338,13 +12338,16 @@ func authorityPlaintextLocationWithStructural(document string, beforeOTP map[str
 		return "", errors.New("invalid plaintext inspection document")
 	}
 	matchKind := "credential"
-	contains := func(text string, unrelatedCode bool) bool {
+	contains := func(text string, unrelatedCode bool, path string) bool {
 		for _, plaintext := range plaintexts {
 			if !strings.Contains(text, plaintext) {
 				continue
 			}
 			if len(plaintext) == 6 && strings.IndexFunc(plaintext, func(r rune) bool { return r < '0' || r > '9' }) == -1 {
 				_, structural := structuralLowEntropy[text]
+				if !structural {
+					_, structural = structuralLowEntropy[structuralLowEntropyPathKey(path, text)]
+				}
 				if (unrelatedCode || structural) && text != plaintext {
 					continue
 				}
@@ -12373,12 +12376,13 @@ func authorityPlaintextLocationWithStructural(document string, beforeOTP map[str
 				}
 			}
 			for key, child := range item {
-				if contains(key, false) {
+				if contains(key, false, path+".[key]") {
 					return path + ".[key]"
 				}
 				field := "[member]"
 				switch key {
-				case "apiVersion", "kind", "eventId", "tenantId", "installationId", "actor", "type", "id", "action", "target", "result",
+				case "canonicalVersion", "source", "event",
+					"apiVersion", "kind", "eventId", "tenantId", "installationId", "actor", "type", "id", "action", "target", "result",
 					"requestDigest", "requestId", "correlationId", "occurredAt", "iamDecisionId", "operationId", "data":
 					field = key
 				}
@@ -12419,11 +12423,11 @@ func authorityPlaintextLocationWithStructural(document string, beforeOTP map[str
 				}
 			}
 		case string:
-			if contains(item, unrelatedCode) {
+			if contains(item, unrelatedCode, path) {
 				return path
 			}
 		case json.Number:
-			if contains(item.String(), false) {
+			if contains(item.String(), false, path) {
 				return path
 			}
 		}
@@ -12434,6 +12438,10 @@ func authorityPlaintextLocationWithStructural(document string, beforeOTP map[str
 		location += " (" + matchKind + ")"
 	}
 	return location, nil
+}
+
+func structuralLowEntropyPathKey(path, value string) string {
+	return path + "\x00" + value
 }
 
 func isGeneratedProductRequestID(value string) bool {
@@ -12673,7 +12681,7 @@ func paasOperationStructuralLowEntropy(
 		if !storedPaaSEventMatchesOperation(stored, authority.operation) {
 			return nil, errors.New("PaaS outbox identity is not bound to its Operation authority")
 		}
-		addPaaSAuditStructuralValues(result, stored.EventID, stored.OperationID,
+		addPaaSAuditStructuralValues(result, "$.", stored.EventID, stored.OperationID,
 			stored.RequestDigest, stored.OccurredAt)
 		return result, nil
 	case "audit.document.PAAS", "audit.canonical.PAAS":
@@ -12696,7 +12704,11 @@ func paasOperationStructuralLowEntropy(
 		if !ok || !publicPaaSEventMatchesOperation(event, authority.operation) {
 			return result, nil
 		}
-		addPaaSAuditStructuralValues(result, event.EventID, event.OperationID,
+		prefix := "$."
+		if source == "audit.canonical.PAAS" {
+			prefix = "$.event."
+		}
+		addPaaSAuditStructuralValues(result, prefix, event.EventID, event.OperationID,
 			event.RequestDigest, event.OccurredAt)
 		return result, nil
 	default:
@@ -12850,25 +12862,34 @@ func appHostingAuditTargetKind(kind string) (auditv1.TargetKind, bool) {
 }
 
 func addPaaSOperationStructuralValues(result map[string]struct{}, operation paasv1.Operation) {
-	for _, value := range []string{
-		string(operation.ID), operation.IdempotencyFingerprint, operation.RequestDigest,
-		operation.CreatedAt.Format(time.RFC3339Nano), operation.UpdatedAt.Format(time.RFC3339Nano),
+	for _, value := range []struct{ path, text string }{
+		{"$.id", string(operation.ID)},
+		{"$.idempotencyFingerprint", operation.IdempotencyFingerprint},
+		{"$.requestDigest", operation.RequestDigest},
+		{"$.createdAt", operation.CreatedAt.Format(time.RFC3339Nano)},
+		{"$.updatedAt", operation.UpdatedAt.Format(time.RFC3339Nano)},
 	} {
-		result[value] = struct{}{}
+		result[structuralLowEntropyPathKey(value.path, value.text)] = struct{}{}
 	}
 	if operation.TerminalAt != nil {
-		result[operation.TerminalAt.Format(time.RFC3339Nano)] = struct{}{}
+		result[structuralLowEntropyPathKey(
+			"$.terminalAt", operation.TerminalAt.Format(time.RFC3339Nano),
+		)] = struct{}{}
 	}
 }
 
 func addPaaSAuditStructuralValues(
-	result map[string]struct{}, eventID auditv1.EventID, operationID auditv1.OperationID,
+	result map[string]struct{}, pathPrefix string,
+	eventID auditv1.EventID, operationID auditv1.OperationID,
 	requestDigest string, occurredAt time.Time,
 ) {
-	for _, value := range []string{
-		string(eventID), string(operationID), requestDigest, occurredAt.Format(time.RFC3339Nano),
+	for _, value := range []struct{ path, text string }{
+		{pathPrefix + "eventId", string(eventID)},
+		{pathPrefix + "operationId", string(operationID)},
+		{pathPrefix + "requestDigest", requestDigest},
+		{pathPrefix + "occurredAt", occurredAt.Format(time.RFC3339Nano)},
 	} {
-		result[value] = struct{}{}
+		result[structuralLowEntropyPathKey(value.path, value.text)] = struct{}{}
 	}
 }
 
@@ -13312,17 +13333,34 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 		); err == nil {
 			t.Fatal("PaaS outbox with a forged Operation target obtained a structural exception")
 		}
-		requestDisclosure := stored
-		requestDisclosure.RequestID = "request-" + embeddedCode
-		requestDisclosureDocument, marshalErr := json.Marshal(requestDisclosure)
-		structural, structuralErr = paasOperationStructuralLowEntropy(
-			"paas.outbox", string(requestDisclosureDocument), "", known,
-		)
-		location, scanErr = authorityPlaintextLocationWithStructural(
-			string(requestDisclosureDocument), nil, structural, embeddedCode,
-		)
-		if marshalErr != nil || structuralErr != nil || scanErr != nil || location == "" {
-			t.Fatal("caller-controlled PaaS request identity escaped plaintext inspection")
+		for _, disclosure := range []struct {
+			name   string
+			mutate func(*storedPaaSAuditEvent)
+		}{
+			{"embedded-code-in-request", func(value *storedPaaSAuditEvent) {
+				value.RequestID = "request-" + embeddedCode
+			}},
+			{"operation-identity-copied-to-request", func(value *storedPaaSAuditEvent) {
+				value.RequestID = string(operation.ID)
+			}},
+			{"operation-identity-copied-to-audit-correlation", func(value *storedPaaSAuditEvent) {
+				value.AuditID = string(operation.ID)
+			}},
+		} {
+			t.Run(disclosure.name, func(t *testing.T) {
+				changed := stored
+				disclosure.mutate(&changed)
+				document, marshalErr := json.Marshal(changed)
+				structural, structuralErr := paasOperationStructuralLowEntropy(
+					"paas.outbox", string(document), "", known,
+				)
+				location, scanErr := authorityPlaintextLocationWithStructural(
+					string(document), nil, structural, embeddedCode,
+				)
+				if marshalErr != nil || structuralErr != nil || scanErr != nil || location == "" {
+					t.Fatal("caller-controlled PaaS identity escaped plaintext inspection")
+				}
+			})
 		}
 	})
 	t.Run("server-generated-audit-access-request-id", func(t *testing.T) {
