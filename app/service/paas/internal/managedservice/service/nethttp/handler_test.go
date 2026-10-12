@@ -45,6 +45,16 @@ func TestServiceCatalogAndActivationUseExactActorRelativeContracts(t *testing.T)
 		t.Fatalf("catalog status=%d authorization=%#v batch=%#v body=%s",
 			listResponse.Code, authorizer.request, authorizer.batchRequest, listResponse.Body.String())
 	}
+	capabilityRequest := authorizer.decisionRequest
+	var catalog managedservicev1.ServiceDefinitionList
+	if capabilityRequest.Action != port.AuthorizeServiceActivationActivate ||
+		capabilityRequest.Resource != (port.ResourceReference{Kind: port.ResourceServiceActivation, ID: "collection"}) ||
+		capabilityRequest.ResourceMode != iamv1.AuthorizationResourceCollection ||
+		capabilityRequest.CollectionUsage != iamv1.AuthorizationCollectionCreate ||
+		json.Unmarshal(listResponse.Body.Bytes(), &catalog) != nil ||
+		managedservicev1.ValidateServiceDefinitionList(catalog) != nil || !catalog.ActivationCapability.Available {
+		t.Fatalf("catalog capability request=%#v response=%s", capabilityRequest, listResponse.Body.String())
+	}
 
 	body, err := json.Marshal(managedservicev1.ActivateServiceRequest{Service: activation.Service})
 	if err != nil {
@@ -78,6 +88,47 @@ func TestServiceCatalogAndActivationUseExactActorRelativeContracts(t *testing.T)
 	handler.ServeHTTP(forgedResponse, forged)
 	if forgedResponse.Code != http.StatusBadRequest || workflow.serviceActivateCalls != 1 {
 		t.Fatalf("forged activation status=%d calls=%d body=%s", forgedResponse.Code, workflow.serviceActivateCalls, forgedResponse.Body.String())
+	}
+}
+
+func TestServiceCatalogProjectsDeniedActivationWithoutHidingReadableDefinitions(t *testing.T) {
+	definitions := domain.DefaultCatalog().ListServices()
+	workflow := &stubWorkflow{services: managedservicev1.ServiceDefinitionList{
+		Kind: "ServiceDefinitionList", Items: definitions,
+	}}
+	authorizer := &stubAuthorizer{decisionFunc: func(request port.AuthorizationRequest) (port.AuthorizationDecision, error) {
+		return testAuthorizationDecision(request, false), nil
+	}}
+	handler := testHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodGet, "/managed-services/v1/services", nil)
+	request.Header.Set("Authorization", "Bearer session-secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var catalog managedservicev1.ServiceDefinitionList
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &catalog) != nil ||
+		managedservicev1.ValidateServiceDefinitionList(catalog) != nil || len(catalog.Items) != len(definitions) ||
+		catalog.ActivationCapability.Available ||
+		catalog.ActivationCapability.RestrictionReason != iamv1.CapabilityAuthorityRequired {
+		t.Fatalf("status=%d catalog=%#v body=%s", response.Code, catalog, response.Body.String())
+	}
+}
+
+func TestServiceCatalogFailsClosedWhenCapabilityDecisionDoesNotMatchRequest(t *testing.T) {
+	definitions := domain.DefaultCatalog().ListServices()
+	authorizer := &stubAuthorizer{decisionFunc: func(request port.AuthorizationRequest) (port.AuthorizationDecision, error) {
+		result := testAuthorizationDecision(request, true)
+		result.Resource.ID = "forged-service"
+		return result, nil
+	}}
+	handler := testHandler(t, authorizer, &stubWorkflow{services: managedservicev1.ServiceDefinitionList{
+		Kind: "ServiceDefinitionList", Items: definitions,
+	}})
+	request := httptest.NewRequest(http.MethodGet, "/managed-services/v1/services", nil)
+	request.Header.Set("Authorization", "Bearer session-secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), definitions[0].ID) {
+		t.Fatalf("mismatched capability decision leaked catalog: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -487,11 +538,14 @@ func testHandler(t *testing.T, authorizer port.Authorizer, workflow Workflow) ht
 }
 
 type stubAuthorizer struct {
-	request      port.AuthorizationRequest
-	batchRequest port.AuthorizationBatchRequest
-	batch        *port.AuthorizationBatch
-	batchFunc    func(port.AuthorizationBatchRequest) (port.AuthorizationBatch, error)
-	err          error
+	request         port.AuthorizationRequest
+	decisionRequest port.AuthorizationRequest
+	decision        *port.AuthorizationDecision
+	decisionFunc    func(port.AuthorizationRequest) (port.AuthorizationDecision, error)
+	batchRequest    port.AuthorizationBatchRequest
+	batch           *port.AuthorizationBatch
+	batchFunc       func(port.AuthorizationBatchRequest) (port.AuthorizationBatch, error)
+	err             error
 }
 
 func (authorizer *stubAuthorizer) AuthorizeBatch(
@@ -534,6 +588,35 @@ func (authorizer *stubAuthorizer) Authorize(
 		SubjectID:  "principal-test",
 		DecisionID: "decision-test", RequestID: request.RequestID,
 	}, nil
+}
+
+func (authorizer *stubAuthorizer) Decide(
+	_ context.Context,
+	request port.AuthorizationRequest,
+) (port.AuthorizationDecision, error) {
+	authorizer.decisionRequest = request
+	if authorizer.err != nil {
+		return port.AuthorizationDecision{}, authorizer.err
+	}
+	if authorizer.decisionFunc != nil {
+		return authorizer.decisionFunc(request)
+	}
+	if authorizer.decision != nil {
+		return *authorizer.decision, nil
+	}
+	return testAuthorizationDecision(request, true), nil
+}
+
+func testAuthorizationDecision(request port.AuthorizationRequest, allowed bool) port.AuthorizationDecision {
+	result := port.AuthorizationDecision{
+		Allowed: allowed, DecisionID: "decision-capability", Action: request.Action,
+		Resource: request.Resource, ResourceMode: request.ResourceMode,
+		CollectionUsage: request.CollectionUsage, RequestID: request.RequestID,
+	}
+	if allowed {
+		result.TenantID, result.SubjectType, result.SubjectID = "organization-test", port.SubjectUser, "principal-test"
+	}
+	return result
 }
 
 type stubWorkflow struct {

@@ -83,6 +83,58 @@
       }
     },
     "schemas": {
+      "Action": {
+        "enum": [
+          "managedservice.service-activation.activate"
+        ],
+        "type": "string"
+      },
+      "ActionCapability": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "available": {
+                "const": true
+              },
+              "restrictionReason": false
+            }
+          },
+          {
+            "properties": {
+              "available": {
+                "const": false
+              },
+              "restrictionReason": {
+                "const": "AUTHORITY_REQUIRED"
+              }
+            },
+            "required": [
+              "restrictionReason"
+            ]
+          }
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceReference"
+          },
+          "restrictionReason": {
+            "$ref": "#/components/schemas/CapabilityRestriction"
+          }
+        },
+        "required": [
+          "action",
+          "available",
+          "resource"
+        ],
+        "type": "object"
+      },
       "ActivateQuotaRequest": {
         "additionalProperties": false,
         "properties": {
@@ -128,6 +180,12 @@
           "template"
         ],
         "type": "object"
+      },
+      "CapabilityRestriction": {
+        "enum": [
+          "AUTHORITY_REQUIRED"
+        ],
+        "type": "string"
       },
       "CreateInstallationRequest": {
         "additionalProperties": false,
@@ -500,6 +558,28 @@
         ],
         "type": "string"
       },
+      "ResourceKind": {
+        "enum": [
+          "SERVICE_ACTIVATION"
+        ],
+        "type": "string"
+      },
+      "ResourceReference": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "const": "collection"
+          },
+          "kind": {
+            "const": "SERVICE_ACTIVATION"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "type": "object"
+      },
       "ServiceActivation": {
         "additionalProperties": false,
         "properties": {
@@ -589,11 +669,14 @@
       "ServiceDefinitionList": {
         "additionalProperties": false,
         "properties": {
+          "activationCapability": {
+            "$ref": "#/components/schemas/ActionCapability"
+          },
           "items": {
             "items": {
               "$ref": "#/components/schemas/ServiceDefinition"
             },
-            "maxItems": 1000,
+            "maxItems": 50,
             "type": "array"
           },
           "kind": {
@@ -601,6 +684,7 @@
           }
         },
         "required": [
+          "activationCapability",
           "items",
           "kind"
         ],

@@ -33,8 +33,9 @@ type ServiceDefinition struct {
 }
 
 type ServiceDefinitionList struct {
-	Kind  string              `json:"kind"`
-	Items []ServiceDefinition `json:"items"`
+	Kind                 string                 `json:"kind"`
+	Items                []ServiceDefinition    `json:"items"`
+	ActivationCapability iamv1.ActionCapability `json:"activationCapability"`
 }
 
 type ServiceActivation struct {

@@ -18,6 +18,7 @@ func TestManagedServiceAuthorizationUsesRegisteredProfile(t *testing.T) {
 	}{
 		{"offering list", AuthorizeOfferingRead, ResourceServiceOffering, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList, "collection"},
 		{"offering instance", AuthorizeOfferingRead, ResourceServiceOffering, iamv1.AuthorizationResourceInstance, "", "postgresql-18"},
+		{"service activation create", AuthorizeServiceActivationActivate, ResourceServiceActivation, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"},
 		{"region list", AuthorizeRegionRead, ResourceRegion, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList, "collection"},
 		{"quota create", AuthorizeQuotaEntitlementActivate, ResourceQuotaEntitlement, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"},
 		{"quota instance", AuthorizeQuotaEntitlementRead, ResourceQuotaEntitlement, iamv1.AuthorizationResourceInstance, "", "quota-one"},
@@ -34,6 +35,43 @@ func TestManagedServiceAuthorizationUsesRegisteredProfile(t *testing.T) {
 			}
 			if err := ValidateAuthorizationRequest(request); err != nil {
 				t.Fatalf("registered request rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestManagedServiceAuthorizationDecisionPreservesDenyPrivacyAndBindsAllowIdentity(t *testing.T) {
+	request := AuthorizationRequest{
+		Credential: "Bearer subject", Action: AuthorizeServiceActivationActivate,
+		Resource:     ResourceReference{Kind: ResourceServiceActivation, ID: "collection"},
+		ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionCreate,
+		RequestID: "request-activation", CorrelationID: "correlation-catalog",
+	}
+	denied := AuthorizationDecision{
+		DecisionID: "decision-denied", Action: request.Action, Resource: request.Resource,
+		ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, RequestID: request.RequestID,
+	}
+	if err := ValidateAuthorizationDecisionForRequest(denied, request); err != nil {
+		t.Fatalf("bound denied decision rejected: %v", err)
+	}
+	allowed := denied
+	allowed.Allowed, allowed.DecisionID = true, "decision-allowed"
+	allowed.TenantID, allowed.SubjectType, allowed.SubjectID = "account-one", SubjectUser, "user-one"
+	if err := ValidateAuthorizationDecisionForRequest(allowed, request); err != nil {
+		t.Fatalf("bound allowed decision rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*AuthorizationDecision){
+		"resource substitution": func(value *AuthorizationDecision) { value.Resource.ID = "other" },
+		"request substitution":  func(value *AuthorizationDecision) { value.RequestID = "request-other" },
+		"deny identity leak": func(value *AuthorizationDecision) {
+			value.TenantID, value.SubjectType, value.SubjectID = "account-one", SubjectUser, "user-one"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := denied
+			mutate(&candidate)
+			if ValidateAuthorizationDecisionForRequest(candidate, request) == nil {
+				t.Fatal("substituted authorization decision accepted")
 			}
 		})
 	}

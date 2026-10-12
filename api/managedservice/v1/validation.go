@@ -53,6 +53,26 @@ func ValidateServiceDefinition(value ServiceDefinition) error {
 	return errors.Join(problems...)
 }
 
+func ValidateServiceDefinitionList(value ServiceDefinitionList) error {
+	if value.Kind != "ServiceDefinitionList" || value.Items == nil ||
+		len(value.Items) > iamv1.MaxAuthorizationBatchItems ||
+		iamv1.ValidateActionCapability(value.ActivationCapability) != nil ||
+		value.ActivationCapability.Action != iamv1.ActionManagedServiceActivationActivate ||
+		value.ActivationCapability.Resource != (iamv1.ResourceReference{
+			Kind: iamv1.ResourceServiceActivation, ID: "collection",
+		}) {
+		return errors.New("service definition list is invalid")
+	}
+	previous := ""
+	for _, item := range value.Items {
+		if ValidateServiceDefinition(item) != nil || item.ID <= previous {
+			return errors.New("service definition list is invalid")
+		}
+		previous = item.ID
+	}
+	return nil
+}
+
 func ValidateServiceActivation(value ServiceActivation) error {
 	return errors.Join(
 		ValidateServiceDefinitionReference(value.Service),

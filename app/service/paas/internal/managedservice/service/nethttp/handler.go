@@ -150,7 +150,41 @@ func (value *handler) filterServices(
 			allowed = append(allowed, item)
 		}
 	}
-	return managedservicev1.ServiceDefinitionList{Kind: "ServiceDefinitionList", Items: allowed}, nil
+	capabilityRequestID, err := value.config.NewRequestID()
+	if err != nil || managedservicev1.ValidateID("requestId", capabilityRequestID) != nil {
+		return managedservicev1.ServiceDefinitionList{}, port.ErrAuthorizationUnavailable
+	}
+	capabilityRequest := port.AuthorizationRequest{
+		Credential: batch.Credential, Action: port.AuthorizeServiceActivationActivate,
+		Resource:        port.ResourceReference{Kind: port.ResourceServiceActivation, ID: "collection"},
+		ResourceMode:    iamv1.AuthorizationResourceCollection,
+		CollectionUsage: iamv1.AuthorizationCollectionCreate,
+		RequestID:       capabilityRequestID, CorrelationID: correlationID,
+	}
+	capabilityDecision, err := value.authorizer.Decide(request.Context(), capabilityRequest)
+	if err != nil || port.ValidateAuthorizationDecisionForRequest(capabilityDecision, capabilityRequest) != nil ||
+		capabilityDecision.Allowed && (capabilityDecision.TenantID != collection.TenantID ||
+			capabilityDecision.SubjectType != collection.SubjectType || capabilityDecision.SubjectID != collection.SubjectID) {
+		if err != nil {
+			return managedservicev1.ServiceDefinitionList{}, err
+		}
+		return managedservicev1.ServiceDefinitionList{}, port.ErrAuthorizationUnavailable
+	}
+	capability := iamv1.ActionCapability{
+		Action:    iamv1.ActionManagedServiceActivationActivate,
+		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceServiceActivation, ID: "collection"},
+		Available: capabilityDecision.Allowed,
+	}
+	if !capability.Available {
+		capability.RestrictionReason = iamv1.CapabilityAuthorityRequired
+	}
+	filtered := managedservicev1.ServiceDefinitionList{
+		Kind: "ServiceDefinitionList", Items: allowed, ActivationCapability: capability,
+	}
+	if managedservicev1.ValidateServiceDefinitionList(filtered) != nil {
+		return managedservicev1.ServiceDefinitionList{}, port.ErrAuthorizationUnavailable
+	}
+	return filtered, nil
 }
 
 func (value *handler) getService(response http.ResponseWriter, request *http.Request) {

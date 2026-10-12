@@ -114,6 +114,58 @@ func TestAuthorizeBatchRejectsForgedIncompleteAndUnavailableResults(t *testing.T
 	}
 }
 
+func TestDecideReturnsBoundDenyWhileAuthorizeStillRejectsIt(t *testing.T) {
+	request := port.AuthorizationRequest{
+		Credential: "Bearer user-session-secret", Action: port.AuthorizeServiceActivationActivate,
+		Resource:     port.ResourceReference{Kind: port.ResourceServiceActivation, ID: "collection"},
+		ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionCreate,
+		RequestID: "request-activation", CorrelationID: "correlation-catalog",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		if httpRequest.Method != http.MethodPost || httpRequest.URL.Path != "/v1/authorize" ||
+			httpRequest.Header.Get("Authorization") != "Bearer paas-service-secret" ||
+			httpRequest.Header.Get("Matrix-Subject-Credential") != "user-session-secret" {
+			t.Errorf("unexpected decision request: method=%s path=%s headers=%v", httpRequest.Method, httpRequest.URL.Path, httpRequest.Header)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var value iamv1.AuthorizationRequest
+		if iamv1.DecodeRequest(httpRequest.Body, &value) != nil {
+			t.Error("decode IAM authorization request")
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		decision := iamv1.AuthorizationDecision{
+			APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-activation-denied",
+			Allowed: false, Reason: iamv1.DecisionDenied, Action: value.Action, Resource: value.Resource,
+			ResourceMode: value.ResourceMode, CollectionUsage: value.CollectionUsage,
+			RequestID: value.RequestID, CorrelationID: value.CorrelationID, Profile: &value.Profile,
+			DecidedAt: time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC),
+		}
+		if iamv1.CheckAuthorizationDecisionForRequest(decision, value) != nil {
+			t.Error("invalid denied IAM fixture")
+			response.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(decision)
+	}))
+	defer server.Close()
+	serviceCredential, _ := iamv1.NewSecret("paas-service-secret")
+	client, err := NewClient(Config{Endpoint: server.URL, ServiceCredential: serviceCredential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := client.Decide(t.Context(), request)
+	if err != nil || decision.Allowed || decision.TenantID != "" || decision.SubjectType != "" ||
+		decision.SubjectID != "" || port.ValidateAuthorizationDecisionForRequest(decision, request) != nil {
+		t.Fatalf("decision=%#v err=%v", decision, err)
+	}
+	if _, err = client.Authorize(t.Context(), request); !errors.Is(err, port.ErrPermissionDenied) {
+		t.Fatalf("authorize denied error=%v", err)
+	}
+}
+
 func clientTestAuthorizationBatch(t *testing.T) port.AuthorizationBatchRequest {
 	t.Helper()
 	result := port.AuthorizationBatchRequest{Credential: "Bearer user-session-secret", Requests: make([]port.AuthorizationRequest, 2)}

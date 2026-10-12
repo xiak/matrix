@@ -70,8 +70,25 @@ type Authorization struct {
 	RequestID   string
 }
 
+// AuthorizationDecision is one credential-bound IAM decision. A denied
+// decision deliberately carries no subject or tenant identity; consumers may
+// project it only within an independently authorized collection request.
+type AuthorizationDecision struct {
+	Allowed         bool
+	TenantID        string
+	SubjectType     SubjectType
+	SubjectID       string
+	DecisionID      string
+	Action          iamv1.Action
+	Resource        ResourceReference
+	ResourceMode    iamv1.AuthorizationResourceMode
+	CollectionUsage iamv1.AuthorizationCollectionUsage
+	RequestID       string
+}
+
 type Authorizer interface {
 	Authorize(context.Context, AuthorizationRequest) (Authorization, error)
+	Decide(context.Context, AuthorizationRequest) (AuthorizationDecision, error)
 	AuthorizeBatch(context.Context, AuthorizationBatchRequest) (AuthorizationBatch, error)
 }
 
@@ -172,6 +189,26 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	}
 	_, err := NewIAMAuthorizationRequest(value)
 	return err
+}
+
+func ValidateAuthorizationDecisionForRequest(value AuthorizationDecision, request AuthorizationRequest) error {
+	if ValidateAuthorizationRequest(request) != nil ||
+		managedservicev1.ValidateID("authorization.decisionId", value.DecisionID) != nil ||
+		value.Action != request.Action || value.Resource != request.Resource ||
+		value.ResourceMode != request.ResourceMode || value.CollectionUsage != request.CollectionUsage ||
+		value.RequestID != request.RequestID {
+		return errors.New("authorization decision differs")
+	}
+	if !value.Allowed {
+		if value.TenantID != "" || value.SubjectType != "" || value.SubjectID != "" {
+			return errors.New("denied authorization decision disclosed authority identity")
+		}
+		return nil
+	}
+	return ValidateAuthorization(Authorization{
+		TenantID: value.TenantID, SubjectType: value.SubjectType, SubjectID: value.SubjectID,
+		DecisionID: value.DecisionID, RequestID: value.RequestID,
+	})
 }
 
 // NewIAMAuthorizationRequest is the single managed-service vocabulary

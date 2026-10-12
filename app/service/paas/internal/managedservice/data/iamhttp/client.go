@@ -81,23 +81,40 @@ func (client *Client) Authorize(
 	ctx context.Context,
 	request port.AuthorizationRequest,
 ) (port.Authorization, error) {
+	decision, err := client.Decide(ctx, request)
+	if err != nil {
+		return port.Authorization{}, err
+	}
+	if !decision.Allowed {
+		return port.Authorization{}, port.ErrPermissionDenied
+	}
+	return port.Authorization{
+		TenantID: decision.TenantID, SubjectType: decision.SubjectType, SubjectID: decision.SubjectID,
+		DecisionID: decision.DecisionID, RequestID: decision.RequestID,
+	}, nil
+}
+
+func (client *Client) Decide(
+	ctx context.Context,
+	request port.AuthorizationRequest,
+) (port.AuthorizationDecision, error) {
 	if client == nil || client.http == nil {
-		return port.Authorization{}, port.ErrAuthorizationUnavailable
+		return port.AuthorizationDecision{}, port.ErrAuthorizationUnavailable
 	}
 	if ctx == nil || port.ValidateAuthorizationRequest(request) != nil {
-		return port.Authorization{}, port.ErrUnauthenticated
+		return port.AuthorizationDecision{}, port.ErrUnauthenticated
 	}
 	subjectCredential, err := parseBearer(request.Credential)
 	if err != nil {
-		return port.Authorization{}, port.ErrUnauthenticated
+		return port.AuthorizationDecision{}, port.ErrUnauthenticated
 	}
 	iamRequest, err := toIAMRequest(request)
 	if err != nil {
-		return port.Authorization{}, port.ErrAuthorizationUnavailable
+		return port.AuthorizationDecision{}, port.ErrAuthorizationUnavailable
 	}
 	body, err := json.Marshal(iamRequest)
 	if err != nil {
-		return port.Authorization{}, port.ErrAuthorizationUnavailable
+		return port.AuthorizationDecision{}, port.ErrAuthorizationUnavailable
 	}
 	defer clear(body)
 	response, err := client.http.Do(
@@ -105,33 +122,35 @@ func (client *Client) Authorize(
 		client.serviceCredential, subjectCredential,
 	)
 	if err != nil {
-		return port.Authorization{}, port.ErrAuthorizationUnavailable
+		return port.AuthorizationDecision{}, port.ErrAuthorizationUnavailable
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return port.Authorization{}, authorizationStatusError(response.StatusCode)
+		return port.AuthorizationDecision{}, authorizationStatusError(response.StatusCode)
 	}
 	var decision iamv1.AuthorizationDecision
 	if !authorityhttp.ResponseIsJSON(response) ||
 		iamv1.DecodeRequest(response.Body, &decision) != nil ||
 		iamv1.CheckAuthorizationDecisionForRequest(decision, iamRequest) != nil {
-		return port.Authorization{}, port.ErrAuthorizationUnavailable
+		return port.AuthorizationDecision{}, port.ErrAuthorizationUnavailable
 	}
-	if !decision.Allowed {
-		return port.Authorization{}, port.ErrPermissionDenied
+	result := port.AuthorizationDecision{
+		Allowed: decision.Allowed, DecisionID: string(decision.ID), Action: decision.Action,
+		Resource:     port.ResourceReference{Kind: decision.Resource.Kind, ID: decision.Resource.ID},
+		ResourceMode: decision.ResourceMode, CollectionUsage: decision.CollectionUsage,
+		RequestID: decision.RequestID,
 	}
-	if decision.Subject == nil {
-		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	if decision.Allowed {
+		if decision.Subject == nil {
+			return port.AuthorizationDecision{}, port.ErrAuthorizationUnavailable
+		}
+		result.TenantID, result.SubjectType, result.SubjectID =
+			string(decision.TenantID), port.SubjectType(decision.Subject.Type), string(decision.Subject.ID)
 	}
-	authorization := port.Authorization{
-		TenantID: string(decision.TenantID), SubjectType: port.SubjectType(decision.Subject.Type),
-		SubjectID:  string(decision.Subject.ID),
-		DecisionID: string(decision.ID), RequestID: decision.RequestID,
+	if port.ValidateAuthorizationDecisionForRequest(result, request) != nil {
+		return port.AuthorizationDecision{}, port.ErrAuthorizationUnavailable
 	}
-	if port.ValidateAuthorizationForRequest(authorization, request) != nil {
-		return port.Authorization{}, port.ErrAuthorizationUnavailable
-	}
-	return authorization, nil
+	return result, nil
 }
 
 func (client *Client) AuthorizeBatch(

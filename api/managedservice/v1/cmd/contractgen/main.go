@@ -82,6 +82,9 @@ func buildDocument() object {
 			},
 		},
 		Enums: map[string][]string{
+			"Action":                        {string(iamv1.ActionManagedServiceActivationActivate)},
+			"ResourceKind":                  {string(iamv1.ResourceServiceActivation)},
+			"CapabilityRestriction":         {string(iamv1.CapabilityAuthorityRequired)},
 			"ServiceDefinitionState":        {string(managedservicev1.ServiceDefinitionAvailable), string(managedservicev1.ServiceDefinitionUnavailable)},
 			"ServiceActivationPrerequisite": {string(managedservicev1.ServiceActivationPermissionOnly)},
 			"OfferingState":                 {string(managedservicev1.OfferingAvailable), string(managedservicev1.OfferingUnavailable)},
@@ -243,6 +246,8 @@ func structs() map[string]reflect.Type {
 		"ServiceDefinitionReference":   openapi31.StructType[managedservicev1.ServiceDefinitionReference](),
 		"ServiceDefinition":            openapi31.StructType[managedservicev1.ServiceDefinition](),
 		"ServiceDefinitionList":        openapi31.StructType[managedservicev1.ServiceDefinitionList](),
+		"ResourceReference":            openapi31.StructType[iamv1.ResourceReference](),
+		"ActionCapability":             openapi31.StructType[iamv1.ActionCapability](),
 		"ServiceActivation":            openapi31.StructType[managedservicev1.ServiceActivation](),
 		"ServiceActivationList":        openapi31.StructType[managedservicev1.ServiceActivationList](),
 		"ServiceOffering":              openapi31.StructType[managedservicev1.ServiceOffering](),
@@ -308,6 +313,17 @@ func schemaOverlay(schemas object) {
 	for _, name := range []string{"ServiceDefinitionList", "ServiceActivationList", "ServiceOfferingList", "RegionList", "QuotaEntitlementList", "ServiceInstallationList"} {
 		properties := schemas[name].(object)["properties"].(object)
 		properties["items"].(object)["maxItems"] = 1000
+	}
+	schemas["ServiceDefinitionList"].(object)["properties"].(object)["items"].(object)["maxItems"] = iamv1.MaxAuthorizationBatchItems
+	resource := schemas["ResourceReference"].(object)["properties"].(object)
+	resource["kind"] = object{"const": string(iamv1.ResourceServiceActivation)}
+	resource["id"] = object{"const": "collection"}
+	schemas["ActionCapability"].(object)["oneOf"] = []any{
+		object{"properties": object{"available": object{"const": true}, "restrictionReason": false}},
+		object{"required": []string{"restrictionReason"}, "properties": object{
+			"available":         object{"const": false},
+			"restrictionReason": object{"const": string(iamv1.CapabilityAuthorityRequired)},
+		}},
 	}
 	properties := schemas["ServiceOffering"].(object)["properties"].(object)
 	properties["quotaShapes"].(object)["minItems"] = 1

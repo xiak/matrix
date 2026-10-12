@@ -3187,20 +3187,26 @@ func assertManagedProductAuthorization(
 
 func assertManagedProductAudit(t *testing.T, auditEndpoint string, bearer string, product managedProductFixture) {
 	t.Helper()
-	for _, action := range []auditv1.Action{
-		auditv1.ActionManagedServiceInstallationReady,
-		auditv1.ActionManagedServiceInstallationTerminationRequested,
-		auditv1.ActionManagedServiceInstallationTerminated,
+	for _, expected := range []struct {
+		action   auditv1.Action
+		targetID string
+	}{
+		{auditv1.ActionManagedServiceServiceActivationActivated, product.serviceID},
+		{auditv1.ActionManagedServiceInstallationReady, product.installationID},
+		{auditv1.ActionManagedServiceInstallationTerminationRequested, product.installationID},
+		{auditv1.ActionManagedServiceInstallationTerminated, product.installationID},
 	} {
-		query := auditv1.QueryRecordsRequest{PageSize: 200, Action: action}
+		query := auditv1.QueryRecordsRequest{PageSize: 200, Action: expected.action}
 		facts := 0
 		for {
 			page := queryAudit(t, auditEndpoint, bearer, query, http.StatusOK)
 			for _, record := range page.Records {
-				if record.Source == auditv1.SourcePaaS && record.Event.Target.ID == product.installationID &&
+				if record.Source == auditv1.SourcePaaS && record.Event.Target.ID == expected.targetID &&
 					record.Event.TenantID == "organization-process" {
-					if action != auditv1.ActionManagedServiceInstallationReady && record.Event.OperationID == "" {
-						t.Fatalf("real %s %s fact lost its Operation", product.name, action)
+					if expected.action != auditv1.ActionManagedServiceInstallationReady &&
+						expected.action != auditv1.ActionManagedServiceServiceActivationActivated &&
+						record.Event.OperationID == "" {
+						t.Fatalf("real %s %s fact lost its Operation", product.name, expected.action)
 					}
 					facts++
 				}
@@ -3211,7 +3217,7 @@ func assertManagedProductAudit(t *testing.T, auditEndpoint string, bearer string
 			query.Cursor = page.NextCursor
 		}
 		if facts != 1 {
-			t.Fatalf("real %s %s facts=%d, want one", product.name, action, facts)
+			t.Fatalf("real %s %s facts=%d, want one", product.name, expected.action, facts)
 		}
 	}
 	if verification := verifyAudit(t, auditEndpoint, bearer); verification.State != auditv1.VerificationVerified {

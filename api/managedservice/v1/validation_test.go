@@ -64,6 +64,63 @@ func TestServiceDefinitionCanonicalContractIgnoresDisplayAndAvailability(t *test
 	}
 }
 
+func TestServiceDefinitionListRequiresExactActivationCapability(t *testing.T) {
+	definition := ServiceDefinition{
+		ID: "vector-search", DisplayName: "Vector search", Description: "Managed vector search.",
+		Revision: 1, ActivationPrerequisite: ServiceActivationPermissionOnly,
+		State: ServiceDefinitionAvailable,
+	}
+	_, definition.ContentDigest, _ = CanonicalizeServiceDefinition(definition)
+	available := ServiceDefinitionList{
+		Kind: "ServiceDefinitionList", Items: []ServiceDefinition{definition},
+		ActivationCapability: iamv1.ActionCapability{
+			Action: iamv1.ActionManagedServiceActivationActivate,
+			Resource: iamv1.ResourceReference{
+				Kind: iamv1.ResourceServiceActivation, ID: "collection",
+			},
+			Available: true,
+		},
+	}
+	if err := ValidateServiceDefinitionList(available); err != nil {
+		t.Fatalf("available service definition list rejected: %v", err)
+	}
+	unavailable := available
+	unavailable.ActivationCapability.Available = false
+	unavailable.ActivationCapability.RestrictionReason = iamv1.CapabilityAuthorityRequired
+	if err := ValidateServiceDefinitionList(unavailable); err != nil {
+		t.Fatalf("unavailable service definition list rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*ServiceDefinitionList){
+		"wrong action": func(value *ServiceDefinitionList) {
+			value.ActivationCapability.Action = iamv1.ActionManagedServiceActivationRead
+		},
+		"wrong resource": func(value *ServiceDefinitionList) {
+			value.ActivationCapability.Resource.ID = definition.ID
+		},
+		"missing denied reason": func(value *ServiceDefinitionList) {
+			value.ActivationCapability.Available = false
+		},
+		"restricted allowed capability": func(value *ServiceDefinitionList) {
+			value.ActivationCapability.RestrictionReason = iamv1.CapabilityAuthorityRequired
+		},
+		"unsorted definitions": func(value *ServiceDefinitionList) {
+			second := definition
+			second.ID = "relational-database"
+			_, second.ContentDigest, _ = CanonicalizeServiceDefinition(second)
+			value.Items = []ServiceDefinition{definition, second}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := available
+			candidate.Items = append([]ServiceDefinition(nil), available.Items...)
+			mutate(&candidate)
+			if ValidateServiceDefinitionList(candidate) == nil {
+				t.Fatal("invalid service definition list accepted")
+			}
+		})
+	}
+}
+
 func TestServiceActivationRequiresExactDefinitionReference(t *testing.T) {
 	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
 	activation := ServiceActivation{
