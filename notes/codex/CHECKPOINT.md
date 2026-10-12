@@ -6,7 +6,7 @@
 - Updated: 2026-10-12
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `afc1ba4556bcc1dab83e4e34065fc5a0ce147a2e`
+- Pushed source/embed milestone: `7bab1df8c20db151b187d3c383eded42a2c40cce`
 
 ## Authoritative route
 
@@ -23,20 +23,14 @@
 
 ## Pushed milestone
 
-The four managed-product workspaces reuse the current shell, data feedback,
-navigation and Account-scoped service-enablement gate. Gate and data-provider
-composition now share matching-product presentation admission: first-use and
-no-resource-access pages do not pre-read resources, refresh or poll; late errors
-and polling completions cannot restore resource controls after reset. The
-isolated MOCK remains inspectable and its first-use scenarios can be reset.
-Current frontend, static export, embedded-asset equality and PaaS UI host gates
-passed; exact evidence and the identity/capability contract are recorded in
-FEAT-007.
-
-The IAM engineer's fixed-contract correction is included in the pushed source:
-frontend product route keys are presentation identifiers; the current IAM
-ProductID remains `managedservice`, and product facts show the returned Offering
-ID. No frontend-generated IAM product namespace remains.
+The existing managed-product gate now composes a strict LIVE service-directory
+and Account-activation adapter alongside the isolated, inspectable MOCK. The
+adapter consumes the fixed public contract at backend
+`b015b07864c2fcdf85129d57a0babe8332e3356f`; its public wire is unchanged from
+parent `599d994cddda5f1cb2ee1b4f53b84eafd1458e58`. No backend or IAM-branch UI was
+imported. Current frontend, static export, embedded-asset equality and Go gates
+passed. Fixed donor decisions, behavior and exact evidence are owned by FEAT-007
+and its adoption record.
 
 ## Continuation boundary
 
@@ -44,13 +38,11 @@ Keep the accepted MOCK UI available and adapt its existing composition and
 repository boundaries when integrating real contracts. Formal login/API
 verification remains deferred until the other UX review is accepted.
 
-There is no adopted public Account/service enrollment API in this milestone.
-Direct LIVE product-enablement routes remain non-submittable and never consume
-browser MOCK consent. The IAM engineer's activation design is fixed at
-`aed5845e0a9b6a22c086836b926fad60113e8832` and recorded as reference only; its
-implementation and real-runtime gates are not adopted. Consume only a fixed,
-pushed implementation with the required terminal evidence. Keep
-enablement, quota entitlement, human grants and service-role consent independent.
-Do not add a browser internal API, infer authority from identity/role names, or
-turn a MOCK result into LIVE acceptance. Remaining real IAM, managed-service,
-installation and release gates stay with their authoritative FEAT owners.
+The service-activation client is ready for selective integration with the fixed
+backend, but this milestone performed no real activation POST or formal login,
+SMTP or TOTP browser acceptance. Coordinate the same-origin test environment
+and authority inputs with the IAM engineer before the real browser gate. MFA
+page coverage and remaining LIVE lifecycle gaps stay with FEAT-IAM-010; they are
+not part of this service-activation commit. Keep service enablement, quota,
+human grants and service-role consent independent. Remaining real IAM,
+managed-service, installation and release gates stay with their owning FEATs.
