@@ -152,6 +152,8 @@ const (
 	authorityProcessPasswordCapacity
 )
 
+const authorityProcessBrowserObservation = 30 * time.Minute
+
 // An opt-in bounded observation, not a production SLO or an open-loop load
 // generator. The ordinary security gate retains its entire original flow.
 func TestIAMCapacityProcesses(t *testing.T) {
@@ -175,6 +177,9 @@ func TestIAMPasswordHistoryCapacityProcesses(t *testing.T) {
 func TestIAMConsoleBrowser(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_CONSOLE_BROWSER") != "1" {
 		t.Skip("set MATRIX_IAM_CONSOLE_BROWSER=1 for the bounded local browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
 	}
 	_ = managedProductImagesFromEnvironment(t)
 	testIndependentAuthorityProcesses(t, authorityProcessBrowser)
@@ -221,7 +226,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		// deadlines remain unchanged.
 		duration = 8 * time.Minute
 	} else if mode == authorityProcessBrowser {
-		duration = 30 * time.Minute
+		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
 	}
