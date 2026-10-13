@@ -3232,7 +3232,14 @@ func startManagedProductWorker(
 	}
 	catalogPath := writeProtectedFile(t, temporary, "browser-artifact-catalog.json", catalogBytes)
 	clear(catalogBytes)
-	workerAddress := freeAddress(t)
+	// Keep the worker port owned while its binary and runtime inputs are being
+	// prepared. The managed-products lane does enough build and Docker work
+	// here for a freeAddress-style close-and-later-bind gap to be observable on
+	// a shared CI runner; another local process must not claim this endpoint and
+	// make the real worker exit before readiness.
+	workerReservation := reserveProcessAddress(t)
+	defer workerReservation.close()
+	workerAddress := workerReservation.address
 	if runtime.GOOS == "linux" {
 		managedRoot := filepath.Join(temporary, "browser-managed-runtime")
 		bindingRoot := filepath.Join(managedRoot, "bindings")
@@ -3243,6 +3250,7 @@ func startManagedProductWorker(
 			}
 		}
 		workerBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-worker", "./app/service/paas/cmd/matrix-paas-worker")
+		workerReservation.release(t)
 		worker := start(workerBinary, managedProductWorkerEnvironment(
 			paasWorkerDSNPath, bindingRoot, secretRoot, catalogPath, workerAddress, images,
 		))
@@ -3323,6 +3331,7 @@ func startManagedProductWorker(
 		"chmod 700 " + containerWorker + "; chmod 600 " + containerDSNFile + " " + containerCatalogFile + "; " +
 		"exec " + containerWorker
 	arguments = append(arguments, "--entrypoint", "sh", managedDockerCLIImageID, "-c", script)
+	workerReservation.release(t)
 	worker := startWithArguments("docker", nil, arguments...)
 	waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
 	assertRuntimeProcessApplicationLogin(
