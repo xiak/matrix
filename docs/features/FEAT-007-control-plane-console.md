@@ -858,50 +858,44 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- Gate A implementation replaces the Phase 1 page with the complete donor-
-  shaped App Router -> route -> provider -> repository -> scene -> renderer ->
-  public-component chain, seven static routes, memory-only IAM sessions,
-  deterministic Go embedding, strict CSP hashes, and a four-region shell.
-  The console layout retains its provider across child-route navigation.
-  Source gates cover the light theme, 20 semantic contrast pairs, and 31
-  frontend tests, including visible failed revocation, logout during failed
-  or pending resource loads, keyboard workspace sizing, and native instance-ID
-  validation. The installed `8700095` candidate previously proved anonymous
-  login, offline assets, and no horizontal overflow. The current source still
-  requires final installed-release browser verification of authentication,
-  route transitions, keyboard use, and 360-pixel layouts; source and component
-  checks do not substitute for that acceptance.
-- Gate B has fixed real offering/quota/installation/Operation paths for
-  PostgreSQL, MySQL, Elasticsearch and RabbitMQ, including IAM actions, forced
-  Account RLS, serializable quota reservation, idempotent replay, worker
-  leases, fencing transitions and transactionally coupled Audit facts. The
-  current public contract still uses the closed `OfferingKind` enum and treats
-  quota activation as the first-use step; it does not yet implement the
-  `ServiceDefinition`/`ServiceActivation` boundary frozen above. Therefore the
-  generic activation slice and its role matrix are not implemented or
-  accepted by the older runtime evidence. The replacement removes the enum in
-  the same pre-v1 slice rather than retaining aliases or dual catalog models.
-- Gate C execution is complete through the fixed PostgreSQL 18 image:
-  server-generated file credentials, pull-never/no-build Compose, exact
-  ownership labels, persistent bind data, bounded resources, normalized
-  endpoint/credential references, retry, terminal quota release, and
-  uncertain-create reconciliation. The `a83e271` signed release completed a
-  fresh external-network-disabled install, failed-upgrade automatic rollback,
-  successful upgrade, explicit N-1 rollback, protected backup/recovery,
-  support-evidence sanitization, whole-engine restart, negative API paths, and
-  worker-restart reconciliation. The signed `8700095` successor then upgraded
-  from it with external network count zero, passed status/verify, retained two
-  managed PostgreSQL instances, preserved both durable probe rows, and still
-  reported PostgreSQL server version `180004`.
-
-The clean pushed `8700095` source passed `go generate ./api/...`, module
-verification, full unit, vet and race suites, repeated critical packages,
-clean PostgreSQL 18 migration/tenant/Audit integration, the real fixed-image
-PostgreSQL lifecycle, Linux amd64 cross-build, all UI type/lint/architecture/
-style/test/embed gates, Markdown links, fixed-donor verification,
-donor-dependency and social-term scans, and `git diff --check`. Final
-acceptance must repeat the release and browser gates from the documentation-
-converged source commit.
+- Gate A now implements the complete App Router -> route -> provider ->
+  repository -> scene -> renderer -> public-component chain for account IAM,
+  the generic catalog, per-product activation, quota and installation routes.
+  The browser keeps the IAM bearer only in page memory and every product route
+  consumes the same public service-definition contract; no product name is a
+  UI authorization switch. Source `602dd53c89b5bd6322b5189044e1a076e58cbbf6`
+  passes 67 frontend files and 1,278 tests, type/lint/architecture checks, 228
+  contrast pairs, 59 exported pages covering 57 normalized routes, and exact
+  rebuilding of 319 embedded files. Keyboard-only and 360-pixel installed-
+  release verification remain deferred by the user's current priority; source
+  checks do not substitute for that later gate.
+- Gate B now uses the generic `ServiceDefinition`/`ServiceActivation` boundary
+  and provider registry for PostgreSQL, MySQL, Elasticsearch and RabbitMQ.
+  Account activation, quota, resource permission and service-role consent are
+  independent current facts. Product onboarding is release-owned and closed
+  by typed definitions, immutable offerings, an exact provider registry and
+  authorization declarations instead of a mutable service-name whitelist.
+  A synthetic fifth service passes the same contract/domain conformance path
+  without a new IAM or UI branch, while publication still fails closed unless
+  a real provider and its fixed artifact are present.
+- On 2026-10-13, the isolated browser-process gate from that fixed source
+  passed in 435.583 seconds against a fresh PostgreSQL 18 database and the
+  digest-pinned PostgreSQL provider. The browser performed primary login,
+  service activation, quota activation, installation and bounded polling; SQL
+  proved the real runtime before termination. It also set, replaced and
+  removed a USER permission boundary, attached `PaaSViewer`, recorded an exact
+  installation-read allow, revoked the attachment in a second primary session,
+  and observed an exact read denial from the original member session. The gate
+  then proved physical runtime/data/credential deletion, quota return, terminal
+  Operation facts and the verified Audit chain. This is a source/process gate,
+  not the still-required signed offline-release/APISIX browser acceptance.
+- GitHub Actions run
+  [38261952694](https://github.com/xiak/matrix/actions/runs/38261952694)
+  passed for the exact `602dd53c89b5bd6322b5189044e1a076e58cbbf6`
+  source: all 18 jobs completed successfully, including Go, console,
+  authority-process, managed-product and installation PostgreSQL HA gates.
+  The result belongs only to that fixed commit; this documentation update does
+  not inherit or replace the final signed-release gate.
 
 ## Deferred
 
