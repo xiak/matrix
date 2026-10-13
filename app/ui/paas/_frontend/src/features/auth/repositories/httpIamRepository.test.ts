@@ -994,7 +994,7 @@ const notificationVerification = {
 };
 const pendingEnrollment = {
   apiVersion, kind: "TOTPEnrollment", id: "enrollment-primary", requestId: "enroll-factor-1",
-  factorRevision: 1, state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z"
+  purpose: "INITIAL", factorRevision: 1, state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z"
 };
 
 describe("IAM HTTP personal-security boundary", () => {
@@ -1242,14 +1242,38 @@ describe("IAM HTTP personal-security boundary", () => {
     const applied = await httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", {
       requestId: "enroll-factor-1", password: "private-password", expectedFactorRevision: 1
     });
-    expect(applied).toMatchObject({ outcome: "APPLIED", provisioning: { seed: "SECRETBASE32" } });
+    expect(applied).toMatchObject({ outcome: "APPLIED", enrollment: { purpose: "INITIAL" }, provisioning: { seed: "SECRETBASE32" } });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/totp/enrollments");
     expect(requestBody(fetcher)).toEqual({ requestId: "enroll-factor-1", password: "private-password", expectedFactorRevision: 1 });
+
+    reply({ outcome: "EQUAL_REPLAY", enrollment: pendingEnrollment });
+    await expect(httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", {
+      requestId: "enroll-factor-1", password: "private-password", expectedFactorRevision: 1
+    })).resolves.toEqual({ outcome: "EQUAL_REPLAY", enrollment: { id: pendingEnrollment.id, requestId: pendingEnrollment.requestId,
+      purpose: "INITIAL", factorRevision: 1, state: "PENDING", createdAt: timestamp, expiresAt: pendingEnrollment.expiresAt, completedAt: null } });
 
     reply({ outcome: "EQUAL_REPLAY", enrollment: pendingEnrollment, provisioning: { seed: "leaked", uri: "leaked" } });
     await expect(httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", {
       requestId: "enroll-factor-1", password: "private-password", expectedFactorRevision: 1
     })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("reads the original INITIAL enrollment without recovering provisioning or weakening the purpose boundary", async () => {
+    const fetcher = reply(pendingEnrollment);
+    await expect(httpIamRepository.personalSecurity!.totpEnrollmentByRequest("bearer", pendingEnrollment.requestId))
+      .resolves.toMatchObject({ purpose: "INITIAL", id: pendingEnrollment.id, requestId: pendingEnrollment.requestId });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/totp/enrollments/by-request/${pendingEnrollment.requestId}`);
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    for (const patch of [{ purpose: undefined }, { purpose: null }, { purpose: "REPLACEMENT" }, { purpose: "unknown" },
+      { requestId: "other-request" }, { provisioning: { seed: "unexpected", uri: "unexpected" } }]) {
+      reply({ ...pendingEnrollment, ...patch });
+      await expect(httpIamRepository.personalSecurity!.totpEnrollmentByRequest("bearer", pendingEnrollment.requestId)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    for (const patch of [{ purpose: undefined }, { purpose: "REPLACEMENT" }]) {
+      reply({ outcome: "APPLIED", enrollment: { ...pendingEnrollment, ...patch }, provisioning: { seed: "SECRETBASE32", uri: "otpauth://totp/Matrix:alex?secret=SECRETBASE32" } });
+      await expect(httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", { requestId: pendingEnrollment.requestId,
+        password: "private-password", expectedFactorRevision: 1 })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 
   it("binds replacement to a TOTP_REPLACE proof and accepts only the original two-minute window", async () => {

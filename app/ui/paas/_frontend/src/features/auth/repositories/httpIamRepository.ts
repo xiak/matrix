@@ -913,9 +913,9 @@ function parseAuthenticatorState(value: unknown): AuthenticatorState {
   };
 }
 
-function parseTOTPEnrollment(value: unknown, expectedPurpose: "LEGACY_INITIAL" | "CHALLENGE_INITIAL" | "REPLACEMENT" = "LEGACY_INITIAL"): TOTPEnrollment {
+function parseTOTPEnrollment(value: unknown, expectedPurpose: "INITIAL" | "CHALLENGE_INITIAL" | "REPLACEMENT" = "INITIAL"): TOTPEnrollment {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "id", "requestId", ...(expectedPurpose === "LEGACY_INITIAL" ? [] : ["purpose"]), "factorRevision", "state", "createdAt", "expiresAt"], ["completedAt"]);
+  exactKeys(wire, ["apiVersion", "kind", "id", "requestId", "purpose", "factorRevision", "state", "createdAt", "expiresAt"], ["completedAt"]);
   requireAccountKind(wire, "TOTPEnrollment");
   if (wire.state !== "PENDING" && wire.state !== "CONFIRMED" && wire.state !== "CANCELLED" && wire.state !== "EXPIRED") throw new Error("INVALID_IAM_RESPONSE");
   const createdAt = accountTimestamp(wire.createdAt);
@@ -923,9 +923,10 @@ function parseTOTPEnrollment(value: unknown, expectedPurpose: "LEGACY_INITIAL" |
   const lifetime = timestampMicros(expiresAt) - timestampMicros(createdAt);
   const factorRevision = accountVersion(wire.factorRevision);
   if (factorRevision > 9_007_199_254_740_990 ||
-      expectedPurpose === "LEGACY_INITIAL" && lifetime !== 5n * 60n * 1_000_000n ||
-      expectedPurpose === "CHALLENGE_INITIAL" && (wire.purpose !== "INITIAL" || factorRevision !== 1 || lifetime <= 0n || lifetime > 5n * 60n * 1_000_000n) ||
-      expectedPurpose === "REPLACEMENT" && (wire.purpose !== "REPLACEMENT" || factorRevision < 2 || lifetime <= 0n || lifetime > 120n * 1_000_000n)) throw new Error("INVALID_IAM_RESPONSE");
+      wire.purpose !== (expectedPurpose === "REPLACEMENT" ? "REPLACEMENT" : "INITIAL") ||
+      expectedPurpose === "INITIAL" && lifetime !== 5n * 60n * 1_000_000n ||
+      expectedPurpose === "CHALLENGE_INITIAL" && (factorRevision !== 1 || lifetime <= 0n || lifetime > 5n * 60n * 1_000_000n) ||
+      expectedPurpose === "REPLACEMENT" && (factorRevision < 2 || lifetime <= 0n || lifetime > 120n * 1_000_000n)) throw new Error("INVALID_IAM_RESPONSE");
   const completedAt = wire.completedAt === undefined ? null : accountTimestamp(wire.completedAt);
   if (wire.state === "PENDING") {
     if (completedAt !== null) throw new Error("INVALID_IAM_RESPONSE");
@@ -934,7 +935,7 @@ function parseTOTPEnrollment(value: unknown, expectedPurpose: "LEGACY_INITIAL" |
   return {
     id: accountIdentifier(wire.id),
     requestId: accountIdentifier(wire.requestId),
-    ...(expectedPurpose === "REPLACEMENT" ? { purpose: "REPLACEMENT" as const } : expectedPurpose === "CHALLENGE_INITIAL" ? { purpose: "INITIAL" as const } : {}),
+    purpose: expectedPurpose === "REPLACEMENT" ? "REPLACEMENT" : "INITIAL",
     factorRevision,
     state: wire.state,
     createdAt,
@@ -943,7 +944,7 @@ function parseTOTPEnrollment(value: unknown, expectedPurpose: "LEGACY_INITIAL" |
   };
 }
 
-function parseTOTPEnrollmentStart(value: unknown, expectedPurpose: "LEGACY_INITIAL" | "CHALLENGE_INITIAL" | "REPLACEMENT" = "LEGACY_INITIAL"): TOTPEnrollmentStart {
+function parseTOTPEnrollmentStart(value: unknown, expectedPurpose: "INITIAL" | "CHALLENGE_INITIAL" | "REPLACEMENT" = "INITIAL"): TOTPEnrollmentStart {
   const wire = accountRecord(value);
   if (wire.outcome === "APPLIED") {
     exactKeys(wire, ["outcome", "enrollment", "provisioning"]);
@@ -959,7 +960,7 @@ function parseTOTPEnrollmentStart(value: unknown, expectedPurpose: "LEGACY_INITI
   return { outcome: "EQUAL_REPLAY", enrollment: parseTOTPEnrollment(wire.enrollment, expectedPurpose) };
 }
 
-function parseTOTPEnrollmentConfirmation(value: unknown, enrollmentId: string, expectedPurpose: "LEGACY_INITIAL" | "CHALLENGE_INITIAL" = "LEGACY_INITIAL"): TOTPEnrollmentConfirmation {
+function parseTOTPEnrollmentConfirmation(value: unknown, enrollmentId: string, expectedPurpose: "INITIAL" | "CHALLENGE_INITIAL" = "INITIAL"): TOTPEnrollmentConfirmation {
   const wire = accountRecord(value);
   exactKeys(wire, ["enrollment", "nextStep", "recoveryCodes"]);
   const enrollment = parseTOTPEnrollment(wire.enrollment, expectedPurpose);

@@ -85,8 +85,7 @@ export type AuthenticatorState =
 export type TOTPEnrollment = {
   id: string;
   requestId: string;
-  /** Present on challenge-initial and replacement wires; legacy Session-initial responses omit it. */
-  purpose?: "INITIAL" | "REPLACEMENT";
+  purpose: "INITIAL" | "REPLACEMENT";
   factorRevision: number;
   state: "PENDING" | "CONFIRMED" | "CANCELLED" | "EXPIRED";
   createdAt: string;

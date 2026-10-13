@@ -10,6 +10,7 @@ import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type R
 import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact, SecurityStepUp } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
+import { httpIamRepository } from "../repositories/httpIamRepository";
 import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/roles";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
@@ -387,7 +388,7 @@ async function reviewLiveNewUser(user: ReturnType<typeof userEvent.setup>) {
   expect(document.body.textContent).not.toContain("Initial-password-for-browser-1!");
 }
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); sessionStorage.clear(); });
 
 describe("qualified login", () => {
   it("returns a primary user to the originally requested console page", async () => {
@@ -2013,14 +2014,62 @@ describe("account access", () => {
     expect(security.notificationContact).toHaveBeenCalledTimes(2);
   });
 
-  it("never renders TOTP provisioning or confirmation controls for an equal replay", async () => {
+  it("shows INITIAL APPLIED provisioning once and cannot restore it from a metadata query after remount", async () => {
     const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
-    const enrollment = { id: "enrollment-one", requestId: "request-one", factorRevision: 1, state: "PENDING" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", completedAt: null };
+    const enrollment = { apiVersion: "iam.matrix.xiak.com/v1", kind: "TOTPEnrollment", id: "enrollment-applied", requestId: "", purpose: "INITIAL", factorRevision: 1, state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z" };
+    const seed = "INITIALSECRETONCE2345";
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        expect(String(input)).toBe("/api/iam/v1/auth/totp/enrollments");
+        enrollment.requestId = JSON.parse(String(init.body)).requestId;
+        return new Response(JSON.stringify({ outcome: "APPLIED", enrollment, provisioning: { seed, uri: `otpauth://totp/Matrix:admin?secret=${seed}` } }), { status: 200 });
+      }
+      expect(String(input)).toBe(`/api/iam/v1/auth/totp/enrollments/by-request/${enrollment.requestId}`);
+      return new Response(JSON.stringify(enrollment), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetcher);
     const security = {
       notificationContact: vi.fn().mockResolvedValue(verified),
       authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND" as const, factorRevision: 1, factorId: null }),
       startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
-      startTOTPEnrollment: vi.fn().mockResolvedValue({ outcome: "EQUAL_REPLAY" as const, enrollment }),
+      startTOTPEnrollment: vi.fn(httpIamRepository.personalSecurity!.startTOTPEnrollment),
+      totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(httpIamRepository.personalSecurity!.totpEnrollmentByRequest), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user, view } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    await screen.findByText("admin@example.com");
+    await user.type(screen.getByLabelText("当前密码"), "Private-Password-49!");
+    await user.click(screen.getByRole("button", { name: "开始绑定" }));
+    expect(await screen.findByText(seed, { exact: true })).toBeTruthy();
+    expect(screen.getByLabelText("6 位动态验证码")).toBeTruthy();
+    expect(screen.queryByText(/首次绑定提交结果未知/)).toBeNull();
+    expect(view.container.innerHTML).not.toContain("Private-Password-49!");
+    const command = JSON.parse(String(fetcher.mock.calls[0]![1]!.body));
+    expect(command).toEqual({ requestId: expect.stringMatching(/^ui-totp-enroll-/), password: "Private-Password-49!", expectedFactorRevision: 1 });
+    await user.click(screen.getByTestId("nav-users"));
+    await screen.findByRole("table", { name: "租户用户列表" });
+    await user.click(screen.getByTestId("nav-settings"));
+    expect(await screen.findByText(enrollment.requestId)).toBeTruthy();
+    expect(screen.queryByText(seed, { exact: true })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查询原绑定意图" }));
+    expect(await screen.findByText(/等值重放/)).toBeTruthy();
+    expect(screen.queryByText(seed, { exact: true })).toBeNull();
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
+
+  it("never renders TOTP provisioning or confirmation controls for an equal replay", async () => {
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    const enrollment = { id: "enrollment-one", requestId: "request-one", purpose: "INITIAL" as const, factorRevision: 1, state: "PENDING" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", completedAt: null };
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      enrollment.requestId = JSON.parse(String(init?.body)).requestId;
+      return new Response(JSON.stringify({ outcome: "EQUAL_REPLAY", enrollment: { apiVersion: "iam.matrix.xiak.com/v1", kind: "TOTPEnrollment", ...enrollment, completedAt: undefined } }), { status: 200 });
+    }));
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND" as const, factorRevision: 1, factorId: null }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn(httpIamRepository.personalSecurity!.startTOTPEnrollment),
       totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn().mockResolvedValue({ ...enrollment, state: "CANCELLED", completedAt: "2026-09-11T08:01:00Z" }), confirmTOTPEnrollment: vi.fn()
     };
     const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
@@ -2038,18 +2087,24 @@ describe("account access", () => {
   it("keeps an unknown first-enrollment request across content remounts and resolves only that intent", async () => {
     const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
     let originalRequestId = "";
-    const enrollment = { id: "enrollment-unknown", requestId: "", factorRevision: 1, state: "PENDING" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", completedAt: null };
+    const enrollment = { id: "enrollment-unknown", requestId: "", purpose: "INITIAL" as const, factorRevision: 1, state: "PENDING" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", completedAt: null };
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/iam/v1/auth/totp/enrollments" && init?.method === "POST") {
+        originalRequestId = JSON.parse(String(init.body)).requestId;
+        enrollment.requestId = originalRequestId;
+        throw new Error("connection lost after submit");
+      }
+      expect(String(input)).toBe(`/api/iam/v1/auth/totp/enrollments/by-request/${originalRequestId}`);
+      return new Response(JSON.stringify({ apiVersion: "iam.matrix.xiak.com/v1", kind: "TOTPEnrollment", ...enrollment, completedAt: undefined }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetcher);
     const security = {
       notificationContact: vi.fn().mockResolvedValue(verified),
       authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND" as const, factorRevision: 1, factorId: null }),
       startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
-      startTOTPEnrollment: vi.fn().mockImplementation(async (_credential: string, command: { requestId: string }) => {
-        originalRequestId = command.requestId;
-        enrollment.requestId = command.requestId;
-        throw new Error("connection lost after submit");
-      }),
+      startTOTPEnrollment: vi.fn(httpIamRepository.personalSecurity!.startTOTPEnrollment),
       totpEnrollment: vi.fn(),
-      totpEnrollmentByRequest: vi.fn().mockImplementation(async (_credential: string, requestId: string) => ({ ...enrollment, requestId })),
+      totpEnrollmentByRequest: vi.fn(httpIamRepository.personalSecurity!.totpEnrollmentByRequest),
       cancelTOTPEnrollment: vi.fn().mockImplementation(async (_credential: string, enrollmentId: string) => ({ ...enrollment, id: enrollmentId, state: "CANCELLED" as const, completedAt: "2026-09-11T08:02:00Z" })),
       confirmTOTPEnrollment: vi.fn()
     };
@@ -2074,10 +2129,12 @@ describe("account access", () => {
     expect(security.totpEnrollmentByRequest).toHaveBeenCalledWith(credential, originalRequestId);
     expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
     expect(screen.queryByText(/手动设置密钥/)).toBeNull();
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
 
     await user.click(screen.getByRole("button", { name: "取消绑定" }));
     await waitFor(() => expect(security.cancelTOTPEnrollment).toHaveBeenCalledWith(credential, "enrollment-unknown"));
     expect(await screen.findByRole("button", { name: "开始绑定" })).toBeTruthy();
+    expect(screen.getByLabelText("当前密码")).toHaveProperty("value", "");
     expect(localStorage.length + sessionStorage.length).toBe(0);
   });
 

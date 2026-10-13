@@ -171,7 +171,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
         ? "enrollmentStart"
         : "enrollmentOutcomeUnknown");
     }
-    finally { setBusy(false); }
+    finally { setFactorPassword(""); setBusy(false); }
   }
 
   async function inspectEnrollmentIntent() {
