@@ -160,6 +160,10 @@ CREATE TABLE IF NOT EXISTS iam.workload_role_bindings (
     workload_decision_id text COLLATE "C" NOT NULL,
     request_id text COLLATE "C" NOT NULL,
     request_digest text COLLATE "C" NOT NULL,
+    creation_idempotency_key text COLLATE "C",
+    creation_command_version smallint NOT NULL DEFAULT 1,
+    revocation_idempotency_key text COLLATE "C",
+    revocation_command_version smallint,
     created_at timestamptz(6) NOT NULL,
     updated_at timestamptz(6) NOT NULL,
     revoked_at timestamptz(6),
@@ -181,15 +185,82 @@ CREATE TABLE IF NOT EXISTS iam.workload_role_bindings (
         AND actor_session_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND request_digest ~ '^sha256:[0-9a-f]{64}$'
+        AND creation_command_version IN (1,2)
+        AND (creation_idempotency_key IS NULL
+          OR creation_idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (creation_command_version=1 OR creation_idempotency_key IS NOT NULL)
+        AND ((revoked_at IS NULL AND revocation_idempotency_key IS NULL
+              AND revocation_command_version IS NULL)
+          OR (revoked_at IS NOT NULL AND revocation_command_version IN (1,2)
+              AND (revocation_idempotency_key IS NULL
+                OR revocation_idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+              AND (revocation_command_version=1 OR revocation_idempotency_key IS NOT NULL)))
         AND ((status='ACTIVE' AND resource_version=1 AND revoked_at IS NULL AND updated_at=created_at)
           OR (status='REVOKED' AND resource_version=2 AND revoked_at IS NOT NULL
             AND revoked_at=updated_at AND updated_at>=created_at)))
 );
+ALTER TABLE iam.workload_role_bindings
+  ADD COLUMN IF NOT EXISTS creation_idempotency_key text COLLATE "C";
+ALTER TABLE iam.workload_role_bindings
+  ADD COLUMN IF NOT EXISTS creation_command_version smallint NOT NULL DEFAULT 1;
+ALTER TABLE iam.workload_role_bindings
+  ADD COLUMN IF NOT EXISTS revocation_idempotency_key text COLLATE "C";
+ALTER TABLE iam.workload_role_bindings
+  ADD COLUMN IF NOT EXISTS revocation_command_version smallint;
+DO $workload_role_command_upgrade_trigger$
+BEGIN
+  IF EXISTS(SELECT 1 FROM pg_trigger trigger_value
+    WHERE trigger_value.tgrelid='iam.workload_role_bindings'::regclass
+      AND trigger_value.tgname='workload_role_binding_transitions' AND NOT trigger_value.tgisinternal) THEN
+    ALTER TABLE iam.workload_role_bindings DISABLE TRIGGER workload_role_binding_transitions;
+  END IF;
+END $workload_role_command_upgrade_trigger$;
+UPDATE iam.workload_role_bindings
+  SET revocation_command_version=1
+  WHERE revoked_at IS NOT NULL AND revocation_command_version IS NULL;
+DO $workload_role_command_upgrade_trigger$
+BEGIN
+  IF EXISTS(SELECT 1 FROM pg_trigger trigger_value
+    WHERE trigger_value.tgrelid='iam.workload_role_bindings'::regclass
+      AND trigger_value.tgname='workload_role_binding_transitions' AND NOT trigger_value.tgisinternal) THEN
+    ALTER TABLE iam.workload_role_bindings ENABLE ALWAYS TRIGGER workload_role_binding_transitions;
+  END IF;
+END $workload_role_command_upgrade_trigger$;
+ALTER TABLE iam.workload_role_bindings DROP CONSTRAINT IF EXISTS workload_role_bindings_valid;
+ALTER TABLE iam.workload_role_bindings ADD CONSTRAINT workload_role_bindings_valid CHECK(
+    id ~ '^wrb-[0-9a-f]{64}$' AND role_id ~ '^slr-[0-9a-f]{64}$'
+    AND template_version BETWEEN 1 AND 9007199254740991
+    AND template_digest ~ '^sha256:[0-9a-f]{64}$'
+    AND workload_kind ~ '^[A-Z][A-Z0-9_]{0,63}$'
+    AND workload_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND actor_principal_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND actor_session_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND request_digest ~ '^sha256:[0-9a-f]{64}$'
+    AND creation_command_version IN (1,2)
+    AND (creation_idempotency_key IS NULL
+      OR creation_idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+    AND (creation_command_version=1 OR creation_idempotency_key IS NOT NULL)
+    AND ((revoked_at IS NULL AND revocation_idempotency_key IS NULL
+          AND revocation_command_version IS NULL)
+      OR (revoked_at IS NOT NULL AND revocation_command_version IN (1,2)
+          AND (revocation_idempotency_key IS NULL
+            OR revocation_idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+          AND (revocation_command_version=1 OR revocation_idempotency_key IS NOT NULL)))
+    AND ((status='ACTIVE' AND resource_version=1 AND revoked_at IS NULL AND updated_at=created_at)
+      OR (status='REVOKED' AND resource_version=2 AND revoked_at IS NOT NULL
+        AND revoked_at=updated_at AND updated_at>=created_at)));
 CREATE UNIQUE INDEX IF NOT EXISTS workload_role_bindings_active_uq
     ON iam.workload_role_bindings(tenant_id,template_id,template_version,workload_kind,workload_id)
     WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS workload_role_bindings_role_directory_idx
     ON iam.workload_role_bindings(tenant_id,role_id,id);
+CREATE UNIQUE INDEX IF NOT EXISTS workload_role_bindings_creation_idempotency_uq
+    ON iam.workload_role_bindings(tenant_id,creation_idempotency_key)
+    WHERE creation_idempotency_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS workload_role_bindings_revocation_idempotency_uq
+    ON iam.workload_role_bindings(tenant_id,revocation_idempotency_key)
+    WHERE revocation_idempotency_key IS NOT NULL;
 
 -- These two owner-only indexes resolve a caller-supplied binding ID and a
 -- service-scoped request ID without accepting a target Account selector. They
@@ -358,15 +429,34 @@ RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function
 BEGIN
     IF TG_OP='INSERT' THEN
         IF NEW.status<>'ACTIVE' OR NEW.resource_version<>1 OR NEW.revoked_at IS NOT NULL
+          OR NEW.creation_command_version<>2 OR NEW.creation_idempotency_key IS NULL
+          OR NEW.revocation_command_version IS NOT NULL OR NEW.revocation_idempotency_key IS NOT NULL
           OR NEW.created_at<>transaction_timestamp() OR NEW.updated_at<>NEW.created_at THEN
             RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='workload role binding creation is invalid'; END IF;
         RETURN NEW;
     END IF;
+	IF TG_OP='UPDATE' AND OLD.status='ACTIVE' AND NEW.status='ACTIVE'
+	  AND OLD.creation_command_version=1 AND NEW.creation_command_version=1
+	  AND OLD.creation_idempotency_key IS NULL AND NEW.creation_idempotency_key IS NOT NULL
+	  AND to_jsonb(NEW)-'creation_idempotency_key'
+	     IS NOT DISTINCT FROM to_jsonb(OLD)-'creation_idempotency_key' THEN
+		RETURN NEW;
+	END IF;
+	IF TG_OP='UPDATE' AND OLD.status='REVOKED' AND NEW.status='REVOKED'
+	  AND OLD.revocation_command_version=1 AND NEW.revocation_command_version=1
+	  AND OLD.revocation_idempotency_key IS NULL AND NEW.revocation_idempotency_key IS NOT NULL
+	  AND to_jsonb(NEW)-'revocation_idempotency_key'
+	     IS NOT DISTINCT FROM to_jsonb(OLD)-'revocation_idempotency_key' THEN
+		RETURN NEW;
+	END IF;
     IF TG_OP<>'UPDATE' OR OLD.status<>'ACTIVE' OR OLD.revoked_at IS NOT NULL
       OR NEW.status<>'REVOKED' OR NEW.resource_version<>2
+      OR NEW.revocation_command_version<>2 OR NEW.revocation_idempotency_key IS NULL
       OR NEW.revoked_at IS DISTINCT FROM transaction_timestamp() OR NEW.updated_at IS DISTINCT FROM NEW.revoked_at
-      OR to_jsonb(NEW)-ARRAY['status','resource_version','updated_at','revoked_at']
-         IS DISTINCT FROM to_jsonb(OLD)-ARRAY['status','resource_version','updated_at','revoked_at'] THEN
+      OR to_jsonb(NEW)-ARRAY['status','resource_version','revocation_idempotency_key',
+           'revocation_command_version','updated_at','revoked_at']
+         IS DISTINCT FROM to_jsonb(OLD)-ARRAY['status','resource_version','revocation_idempotency_key',
+           'revocation_command_version','updated_at','revoked_at'] THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='workload role binding history is immutable'; END IF;
     RETURN NEW;
 END $function$;
@@ -503,16 +593,20 @@ END $function$;
 
 -- This is the only write entrypoint for the first service-role consent slice.
 -- Every selector is either authenticated, release-owned or derived again here.
+DROP FUNCTION IF EXISTS iam.create_workload_role_binding(
+  text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb);
 CREATE OR REPLACE FUNCTION iam.create_workload_role_binding(
     tenant text,actor text,actor_session text,service_lookup_digest text,
-    request_document text,request_digest text,template jsonb,role_value jsonb,trust jsonb,binding jsonb,
+    request_document text,request_digest text,previous_request_document text,previous_request_digest text,
+    template jsonb,role_value jsonb,trust jsonb,binding jsonb,
     workload_decision text,role_creation_decision text,role_pass_decision text,
     role_event jsonb,binding_event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE request_value jsonb; stored_template iam.service_role_templates%ROWTYPE;
+DECLARE request_value jsonb; previous_request_value jsonb; stored_template iam.service_role_templates%ROWTYPE;
     service_index iam.service_credential_index%ROWTYPE; service_credential iam.service_credentials%ROWTYPE;
     service_account text; service_installation text; bind_action text; workload_kind text; workload_id text;
-    expected_role_id text; expected_trust_id text; expected_binding_id text; role_identity text; trust_identity text; binding_identity text;
+    expected_role_id text; expected_trust_id text; expected_binding_id text; expected_command_request_id text;
+    stored_request_digest text; role_identity text; trust_identity text; binding_identity text;
     metadata jsonb; policy_reference jsonb; existing_relation iam.service_linked_roles%ROWTYPE;
     existing_binding iam.workload_role_bindings%ROWTYPE; effective_now timestamptz(6):=transaction_timestamp();
 BEGIN
@@ -524,16 +618,31 @@ BEGIN
       OR request_document IS NULL OR octet_length(request_document)>262144
       OR NOT (request_document IS JSON OBJECT WITH UNIQUE KEYS)
       OR request_digest IS DISTINCT FROM 'sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')
-        ||convert_to('workload-role-binding-create','UTF8')||decode('00','hex')||convert_to(request_document,'UTF8')),'hex') THEN
+        ||convert_to('workload-role-binding-create','UTF8')||decode('00','hex')||convert_to(request_document,'UTF8')),'hex')
+      OR COALESCE(previous_request_digest,'') !~ '^sha256:[0-9a-f]{64}$'
+      OR previous_request_document IS NULL OR octet_length(previous_request_document)>262144
+      OR NOT (previous_request_document IS JSON OBJECT WITH UNIQUE KEYS)
+      OR previous_request_digest IS DISTINCT FROM 'sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')
+        ||convert_to('workload-role-binding-create','UTF8')||decode('00','hex')||convert_to(previous_request_document,'UTF8')),'hex') THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding command is invalid'; END IF;
     request_value:=request_document::jsonb;
+    previous_request_value:=previous_request_document::jsonb;
     IF (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(request_value) key)
+         IS DISTINCT FROM ARRAY['authorization','idempotencyKey','template']
+      OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(previous_request_value) key)
          IS DISTINCT FROM ARRAY['authorization','template']
+      OR previous_request_value IS DISTINCT FROM request_value-'idempotencyKey'
+      OR COALESCE(request_value->>'idempotencyKey','') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
       OR jsonb_typeof(request_value->'authorization')<>'object'
       OR jsonb_typeof(request_value->'template')<>'object'
       OR request_value#>>'{authorization,resourceMode}'<>'INSTANCE'
       OR request_value#>'{authorization,collectionUsage}' IS NOT NULL THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding request is invalid'; END IF;
+    expected_command_request_id:='msrb-'||encode(sha256(
+      convert_to('matrix-managedservice-service-role-binding-v1','UTF8')||decode('00','hex')
+      ||convert_to(request_value->>'idempotencyKey','UTF8')),'hex');
+    IF request_value#>>'{authorization,requestId}' IS DISTINCT FROM expected_command_request_id THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding request identity is invalid'; END IF;
 
     SELECT * INTO stored_template FROM iam.service_role_templates published
       WHERE published.id=request_value#>>'{template,id}'
@@ -671,24 +780,34 @@ BEGIN
     SELECT * INTO existing_binding FROM iam.workload_role_bindings stored
       WHERE stored.tenant_id=tenant AND stored.request_id=binding_event->>'requestId' FOR UPDATE;
     IF FOUND THEN
+        stored_request_digest:=CASE existing_binding.creation_command_version
+          WHEN 1 THEN previous_request_digest WHEN 2 THEN request_digest ELSE NULL END;
         IF ROW(existing_binding.id,existing_binding.role_id,existing_binding.template_id,existing_binding.template_version,existing_binding.template_digest,
              existing_binding.workload_kind,existing_binding.workload_id,existing_binding.status,existing_binding.resource_version,
              existing_binding.actor_principal_id,existing_binding.request_id,existing_binding.request_digest)
            IS DISTINCT FROM ROW(expected_binding_id,expected_role_id,stored_template.id,stored_template.version,stored_template.content_digest,
-             workload_kind,workload_id,'ACTIVE'::text,1::bigint,actor,binding_event->>'requestId',request_digest)
+             workload_kind,workload_id,'ACTIVE'::text,1::bigint,actor,binding_event->>'requestId',stored_request_digest)
+          OR (existing_binding.creation_idempotency_key IS NOT NULL
+            AND existing_binding.creation_idempotency_key IS DISTINCT FROM request_value->>'idempotencyKey')
+          OR (existing_binding.creation_command_version=2
+            AND existing_binding.creation_idempotency_key IS DISTINCT FROM request_value->>'idempotencyKey')
           OR NOT EXISTS(SELECT 1 FROM iam.audit_outbox fact WHERE fact.tenant_id=tenant
             AND fact.event_document->>'action'='iam.workload-role-binding.created'
             AND fact.event_document#>>'{target,id}'=expected_binding_id
             AND fact.event_document->>'requestId'=binding_event->>'requestId'
-            AND fact.event_document->>'requestDigest'=request_digest) THEN
+            AND fact.event_document->>'requestDigest'=stored_request_digest) THEN
             RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='workload role binding intent conflicts'; END IF;
+        IF existing_binding.creation_command_version=1 AND existing_binding.creation_idempotency_key IS NULL THEN
+            UPDATE iam.workload_role_bindings stored SET creation_idempotency_key=request_value->>'idempotencyKey'
+              WHERE stored.tenant_id=tenant AND stored.id=existing_binding.id;
+        END IF;
     ELSE
         INSERT INTO iam.workload_role_bindings(tenant_id,id,role_id,template_id,template_version,template_digest,
           workload_kind,workload_id,status,resource_version,actor_principal_id,actor_session_id,workload_decision_id,
-          request_id,request_digest,created_at,updated_at)
+          request_id,request_digest,creation_idempotency_key,creation_command_version,created_at,updated_at)
         VALUES(tenant,expected_binding_id,expected_role_id,stored_template.id,stored_template.version,stored_template.content_digest,
           workload_kind,workload_id,'ACTIVE',1,actor,actor_session,workload_decision,
-          binding_event->>'requestId',request_digest,effective_now,effective_now);
+          binding_event->>'requestId',request_digest,request_value->>'idempotencyKey',2,effective_now,effective_now);
         INSERT INTO iam.workload_role_binding_index(binding_id,tenant_id,role_id,service_account_id,
           service_installation_id,service_principal_id,service_purpose)
         VALUES(expected_binding_id,tenant,expected_role_id,service_account,service_installation,
@@ -761,16 +880,20 @@ END $function$;
 -- This is the only terminal binding transition. Current authorization is
 -- required even for an equal replay; the retained original outbox fact and
 -- decision trio prove that a previous success was the same immutable intent.
+DROP FUNCTION IF EXISTS iam.revoke_workload_role_binding(
+  text,text,text,text,text,text,text,text,text,text,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.revoke_workload_role_binding(
     tenant text,actor text,actor_session text,service_lookup_digest text,service_purpose text,
-    binding_id text,request_document text,request_digest text,workload_decision text,
+    binding_id text,request_document text,request_digest text,previous_request_document text,previous_request_digest text,
+    workload_decision text,
     binding_revoke_decision text,role_pass_decision text,binding_event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE request_value jsonb; service_index iam.service_credential_index%ROWTYPE;
+DECLARE request_value jsonb; previous_request_value jsonb; service_index iam.service_credential_index%ROWTYPE;
     service_credential iam.service_credentials%ROWTYPE; service_installation text;
     stored iam.workload_role_bindings%ROWTYPE; relation iam.service_linked_roles%ROWTYPE;
     template iam.service_role_templates%ROWTYPE; role_value iam.roles%ROWTYPE;
-    target_role text; unbind_action text; effective_now timestamptz(6):=transaction_timestamp();
+    target_role text; unbind_action text; expected_command_request_id text; stored_request_digest text;
+    effective_now timestamptz(6):=transaction_timestamp();
 BEGIN
     IF COALESCE(tenant,'') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
       OR COALESCE(actor,'') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -785,17 +908,32 @@ BEGIN
       OR request_document IS NULL OR octet_length(request_document)>262144
       OR NOT (request_document IS JSON OBJECT WITH UNIQUE KEYS)
       OR request_digest IS DISTINCT FROM 'sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')
-        ||convert_to('workload-role-binding-revoke:'||binding_id,'UTF8')||decode('00','hex')||convert_to(request_document,'UTF8')),'hex') THEN
+        ||convert_to('workload-role-binding-revoke:'||binding_id,'UTF8')||decode('00','hex')||convert_to(request_document,'UTF8')),'hex')
+      OR COALESCE(previous_request_digest,'') !~ '^sha256:[0-9a-f]{64}$'
+      OR previous_request_document IS NULL OR octet_length(previous_request_document)>262144
+      OR NOT (previous_request_document IS JSON OBJECT WITH UNIQUE KEYS)
+      OR previous_request_digest IS DISTINCT FROM 'sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')
+        ||convert_to('workload-role-binding-revoke:'||binding_id,'UTF8')||decode('00','hex')||convert_to(previous_request_document,'UTF8')),'hex') THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding revocation command is invalid'; END IF;
     request_value:=request_document::jsonb;
+    previous_request_value:=previous_request_document::jsonb;
     IF (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(request_value) key)
+         IS DISTINCT FROM ARRAY['authorization','idempotencyKey','resourceVersion']
+      OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(previous_request_value) key)
          IS DISTINCT FROM ARRAY['authorization','resourceVersion']
+      OR previous_request_value IS DISTINCT FROM request_value-'idempotencyKey'
+      OR COALESCE(request_value->>'idempotencyKey','') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
       OR jsonb_typeof(request_value->'authorization')<>'object'
       OR jsonb_typeof(request_value->'resourceVersion')<>'number'
       OR (request_value->>'resourceVersion')::bigint<>1
       OR request_value#>>'{authorization,resourceMode}'<>'INSTANCE'
       OR request_value#>'{authorization,collectionUsage}' IS NOT NULL THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding revocation request is invalid'; END IF;
+    expected_command_request_id:='msru-'||encode(sha256(
+      convert_to('matrix-managedservice-service-role-unbinding-v1','UTF8')||decode('00','hex')
+      ||convert_to(request_value->>'idempotencyKey','UTF8')),'hex');
+    IF request_value#>>'{authorization,requestId}' IS DISTINCT FROM expected_command_request_id THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding revocation request identity is invalid'; END IF;
 
     -- Re-acquire the complete source lock inside the write authority. Calls
     -- from the use case already hold it, while direct adapter misuse cannot
@@ -876,7 +1014,13 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role revocation audit correlation is invalid'; END IF;
 
     IF stored.revoked_at IS NOT NULL THEN
+        stored_request_digest:=CASE stored.revocation_command_version
+          WHEN 1 THEN previous_request_digest WHEN 2 THEN request_digest ELSE NULL END;
         IF stored.status<>'REVOKED' OR stored.resource_version<>(request_value->>'resourceVersion')::bigint+1
+          OR (stored.revocation_idempotency_key IS NOT NULL
+            AND stored.revocation_idempotency_key IS DISTINCT FROM request_value->>'idempotencyKey')
+          OR (stored.revocation_command_version=2
+            AND stored.revocation_idempotency_key IS DISTINCT FROM request_value->>'idempotencyKey')
           OR NOT EXISTS(SELECT 1 FROM iam.audit_outbox fact
             JOIN iam.authorization_decisions decision ON decision.tenant_id=fact.tenant_id
               AND decision.id=fact.event_document->>'iamDecisionId'
@@ -884,7 +1028,7 @@ BEGIN
               AND fact.event_document#>>'{target,kind}'='WORKLOAD_ROLE_BINDING'
               AND fact.event_document#>>'{target,id}'=stored.id
               AND fact.event_document->>'requestId'=request_value#>>'{authorization,requestId}'
-              AND fact.event_document->>'requestDigest'=request_digest
+              AND fact.event_document->>'requestDigest'=stored_request_digest
               AND fact.event_document#>>'{actor,type}'='USER' AND fact.event_document#>>'{actor,id}'=actor
               AND (fact.event_document->>'occurredAt')::timestamptz=stored.revoked_at
               AND decision.allowed AND decision.action_name='iam.workload-role-binding.revoke'
@@ -902,12 +1046,18 @@ BEGIN
               AND decision.target_id=stored.role_id AND decision.request_id=request_value#>>'{authorization,requestId}'
               AND decision.decided_at=stored.revoked_at) THEN
             RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='workload role binding revocation intent conflicts'; END IF;
+        IF stored.revocation_command_version=1 AND stored.revocation_idempotency_key IS NULL THEN
+            UPDATE iam.workload_role_bindings candidate
+              SET revocation_idempotency_key=request_value->>'idempotencyKey'
+              WHERE candidate.tenant_id=tenant AND candidate.id=stored.id;
+        END IF;
         RETURN iam.workload_role_binding_snapshot(tenant,stored.id);
     END IF;
     IF stored.status<>'ACTIVE' OR stored.resource_version<>(request_value->>'resourceVersion')::bigint
       OR role_value.security_generation=9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='workload role binding revision conflicts'; END IF;
     UPDATE iam.workload_role_bindings binding SET status='REVOKED',resource_version=stored.resource_version+1,
+      revocation_idempotency_key=request_value->>'idempotencyKey',revocation_command_version=2,
       updated_at=effective_now,revoked_at=effective_now WHERE binding.tenant_id=tenant AND binding.id=stored.id;
     UPDATE iam.roles role_update SET security_generation=role_update.security_generation+1
       WHERE role_update.tenant_id=tenant AND role_update.id=stored.role_id;
@@ -920,9 +1070,12 @@ END $function$;
 
 -- Recover only sanitized, recent completion facts for the current USER and
 -- the physically authenticated service relation. request_id is the exact
--- product idempotency key for this closed PaaS path; IAM's request digest is
--- opaque evidence, not a browser-side canonicalization contract. This is a
--- read-only reconciliation boundary, not a generic receipt store or permit.
+-- public_idempotency_key is recorded separately from the private request_id
+-- for this closed PaaS path; IAM's request digest is opaque evidence, not a
+-- browser-side canonicalization contract. Direct-predecessor rows remain
+-- hidden until an exact authorized replay safely associates the original key.
+-- This is a read-only reconciliation boundary, not a generic receipt store or
+-- permit.
 CREATE OR REPLACE FUNCTION iam.list_workload_role_command_results(
     tenant text,actor text,service_lookup_digest text,service_purpose text,
     command_type text,requested_retention_seconds bigint,requested_limit integer)
@@ -970,7 +1123,7 @@ BEGIN
           FROM (
             SELECT jsonb_build_object(
                 'apiVersion','iam.matrix.xiak.com/v1','kind','WorkloadRoleCommandResult',
-                'commandType',command_type,'idempotencyKey',binding.request_id,
+                'commandType',command_type,'idempotencyKey',binding.creation_idempotency_key,
                 'requestDigest',binding.request_digest,
                 'workload',jsonb_build_object('kind',binding.workload_kind,'id',binding.workload_id),
                 'bindingId',binding.id,
@@ -990,6 +1143,10 @@ BEGIN
                 AND fact.event_document->>'requestDigest'=binding.request_digest
                 AND (fact.event_document->>'occurredAt')::timestamptz=binding.created_at
              WHERE binding.tenant_id=tenant AND binding.actor_principal_id=actor
+               AND binding.creation_idempotency_key IS NOT NULL
+               AND binding.request_id='msrb-'||encode(sha256(
+                    convert_to('matrix-managedservice-service-role-binding-v1','UTF8')||decode('00','hex')
+                    ||convert_to(binding.creation_idempotency_key,'UTF8')),'hex')
                AND binding.workload_kind='SERVICE_INSTALLATION'
                AND binding.created_at>=transaction_timestamp()-
                     make_interval(secs=>requested_retention_seconds::double precision)
@@ -1006,7 +1163,7 @@ BEGIN
           FROM (
             SELECT jsonb_build_object(
                 'apiVersion','iam.matrix.xiak.com/v1','kind','WorkloadRoleCommandResult',
-                'commandType',command_type,'idempotencyKey',fact.event_document->>'requestId',
+                'commandType',command_type,'idempotencyKey',binding.revocation_idempotency_key,
                 'requestDigest',fact.event_document->>'requestDigest',
                 'workload',jsonb_build_object('kind',binding.workload_kind,'id',binding.workload_id),
                 'bindingId',binding.id,
@@ -1024,6 +1181,10 @@ BEGIN
                 AND fact.event_document#>>'{actor,id}'=actor
                 AND (fact.event_document->>'occurredAt')::timestamptz=binding.revoked_at
              WHERE binding.tenant_id=tenant AND binding.revoked_at IS NOT NULL
+               AND binding.revocation_idempotency_key IS NOT NULL
+               AND fact.event_document->>'requestId'='msru-'||encode(sha256(
+                    convert_to('matrix-managedservice-service-role-unbinding-v1','UTF8')||decode('00','hex')
+                    ||convert_to(binding.revocation_idempotency_key,'UTF8')),'hex')
                AND binding.workload_kind='SERVICE_INSTALLATION'
                AND binding.revoked_at>=transaction_timestamp()-
                     make_interval(secs=>requested_retention_seconds::double precision)
@@ -1594,11 +1755,11 @@ REVOKE ALL ON FUNCTION iam.list_service_role_templates(text,text,text),iam.read_
 REVOKE ALL ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text)
   FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
     matrix_iam_notification_worker,matrix_iam_authentication_recovery;
-REVOKE ALL ON FUNCTION iam.create_workload_role_binding(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb)
+REVOKE ALL ON FUNCTION iam.create_workload_role_binding(text,text,text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb)
   FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
     matrix_iam_notification_worker,matrix_iam_authentication_recovery;
 REVOKE ALL ON FUNCTION iam.prepare_workload_role_binding_revocation(text,text,text,text),
-  iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,jsonb)
+  iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,text,text,jsonb)
   FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
     matrix_iam_notification_worker,matrix_iam_authentication_recovery;
 REVOKE ALL ON FUNCTION iam.list_service_linked_roles(text,text,text,text),
@@ -1616,10 +1777,10 @@ REVOKE ALL ON FUNCTION iam.read_service_role_assumption(text,text,text),
 GRANT EXECUTE ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.list_service_role_templates(text,text,text),iam.read_service_role_template(text,bigint,text)
   TO matrix_iam_api;
-GRANT EXECUTE ON FUNCTION iam.create_workload_role_binding(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb)
+GRANT EXECUTE ON FUNCTION iam.create_workload_role_binding(text,text,text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb)
   TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.prepare_workload_role_binding_revocation(text,text,text,text),
-  iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,jsonb) TO matrix_iam_api;
+  iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,text,text,jsonb) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.list_service_linked_roles(text,text,text,text),
   iam.read_service_linked_role(text,text,text,text,text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.list_workload_role_command_results(text,text,text,text,text,bigint,integer)
@@ -1882,6 +2043,22 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
             'FOREIGN KEY (tenant_id, role_id) REFERENCES iam.service_linked_roles(tenant_id, role_id)',
             'FOREIGN KEY (template_id, template_version) REFERENCES iam.service_role_templates(id, version)',
             'FOREIGN KEY (tenant_id, workload_decision_id) REFERENCES iam.authorization_decisions(tenant_id, id)'))
+      AND EXISTS(SELECT 1 FROM pg_attribute column_value
+        WHERE column_value.attrelid='iam.workload_role_bindings'::regclass
+          AND column_value.attname='creation_idempotency_key' AND column_value.atttypid='text'::regtype
+          AND NOT column_value.attnotnull AND column_value.attnum>0 AND NOT column_value.attisdropped)
+      AND EXISTS(SELECT 1 FROM pg_attribute column_value
+        WHERE column_value.attrelid='iam.workload_role_bindings'::regclass
+          AND column_value.attname='creation_command_version' AND column_value.atttypid='int2'::regtype
+          AND column_value.attnotnull AND column_value.attnum>0 AND NOT column_value.attisdropped)
+      AND EXISTS(SELECT 1 FROM pg_attribute column_value
+        WHERE column_value.attrelid='iam.workload_role_bindings'::regclass
+          AND column_value.attname='revocation_idempotency_key' AND column_value.atttypid='text'::regtype
+          AND NOT column_value.attnotnull AND column_value.attnum>0 AND NOT column_value.attisdropped)
+      AND EXISTS(SELECT 1 FROM pg_attribute column_value
+        WHERE column_value.attrelid='iam.workload_role_bindings'::regclass
+          AND column_value.attname='revocation_command_version' AND column_value.atttypid='int2'::regtype
+          AND NOT column_value.attnotnull AND column_value.attnum>0 AND NOT column_value.attisdropped)
       AND EXISTS(SELECT 1 FROM pg_constraint constraint_value
         WHERE constraint_value.conrelid='iam.workload_role_bindings'::regclass
           AND constraint_value.conname='workload_role_bindings_valid'
@@ -1907,6 +2084,30 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
             JOIN pg_attribute column_value ON column_value.attrelid=index_value.indrelid
               AND column_value.attnum=key_value.attnum)
             =ARRAY['tenant_id','role_id','id'])
+      AND EXISTS(SELECT 1 FROM pg_index index_value
+        WHERE index_value.indexrelid=to_regclass('iam.workload_role_bindings_creation_idempotency_uq')
+          AND index_value.indrelid='iam.workload_role_bindings'::regclass
+          AND index_value.indisunique AND index_value.indisvalid AND index_value.indisready
+          AND index_value.indexprs IS NULL
+          AND index_value.indnkeyatts=2 AND index_value.indnatts=2
+          AND (SELECT array_agg(column_value.attname::text ORDER BY key_value.ordinality)
+            FROM unnest(index_value.indkey) WITH ORDINALITY AS key_value(attnum,ordinality)
+            JOIN pg_attribute column_value ON column_value.attrelid=index_value.indrelid
+              AND column_value.attnum=key_value.attnum)
+            =ARRAY['tenant_id','creation_idempotency_key']
+          AND pg_get_expr(index_value.indpred,index_value.indrelid)='(creation_idempotency_key IS NOT NULL)')
+      AND EXISTS(SELECT 1 FROM pg_index index_value
+        WHERE index_value.indexrelid=to_regclass('iam.workload_role_bindings_revocation_idempotency_uq')
+          AND index_value.indrelid='iam.workload_role_bindings'::regclass
+          AND index_value.indisunique AND index_value.indisvalid AND index_value.indisready
+          AND index_value.indexprs IS NULL
+          AND index_value.indnkeyatts=2 AND index_value.indnatts=2
+          AND (SELECT array_agg(column_value.attname::text ORDER BY key_value.ordinality)
+            FROM unnest(index_value.indkey) WITH ORDINALITY AS key_value(attnum,ordinality)
+            JOIN pg_attribute column_value ON column_value.attrelid=index_value.indrelid
+              AND column_value.attnum=key_value.attnum)
+            =ARRAY['tenant_id','revocation_idempotency_key']
+          AND pg_get_expr(index_value.indpred,index_value.indrelid)='(revocation_idempotency_key IS NOT NULL)')
       AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
         'iam.lock_workload_role_binding_sources(text,text,text,text,text)')
         AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
@@ -1935,11 +2136,12 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_credential_recovery',function_value.oid,'EXECUTE'))
       AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
-        'iam.create_workload_role_binding(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb)')
+        'iam.create_workload_role_binding(text,text,text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb)')
         AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
         AND function_value.prorettype='jsonb'::regtype AND NOT function_value.proretset
         AND function_value.proargnames=ARRAY['tenant','actor','actor_session','service_lookup_digest','request_document','request_digest',
-          'template','role_value','trust','binding','workload_decision','role_creation_decision','role_pass_decision','role_event','binding_event']
+          'previous_request_document','previous_request_digest','template','role_value','trust','binding',
+          'workload_decision','role_creation_decision','role_pass_decision','role_event','binding_event']
         AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
         AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
@@ -1957,11 +2159,12 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         AND NOT has_function_privilege('matrix_iam_notification_worker',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_authentication_recovery',function_value.oid,'EXECUTE'))
       AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
-        'iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,jsonb)')
+        'iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,text,text,jsonb)')
         AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
         AND function_value.prorettype='jsonb'::regtype AND NOT function_value.proretset
         AND function_value.proargnames=ARRAY['tenant','actor','actor_session','service_lookup_digest','service_purpose','binding_id',
-          'request_document','request_digest','workload_decision','binding_revoke_decision','role_pass_decision','binding_event']
+          'request_document','request_digest','previous_request_document','previous_request_digest',
+          'workload_decision','binding_revoke_decision','role_pass_decision','binding_event']
         AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
         AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')

@@ -2093,13 +2093,20 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	if err != nil || len(templates) != 1 {
 		t.Fatal("service role template fixture unavailable", err)
 	}
-	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleBind,
-		iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a"},
-		iamv1.AuthorizationResourceInstance, "", "binding-create", "binding-create")
+	const bindingIdempotencyKey = "binding-create"
+	bindingRequestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandBind, bindingIdempotencyKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := iamv1.CreateWorkloadRoleBindingRequest{Template: templates[0].Reference(), Authorization: authorization}
+	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleBind,
+		iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a"},
+		iamv1.AuthorizationResourceInstance, "", bindingRequestID, bindingIdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := iamv1.CreateWorkloadRoleBindingRequest{
+		IdempotencyKey: bindingIdempotencyKey, Template: templates[0].Reference(), Authorization: authorization,
+	}
 	paasCredential := coreServiceCredential(t, bootstrap, iamv1.ServicePaaS)
 	if _, err := service.CreateWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, request); !errors.Is(err, ErrForbidden) || tx.workloadRoleBindingCreation != nil {
 		t.Fatal("account administrator silently inherited service-role consent", err)
@@ -2154,7 +2161,7 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResultList",
 		Items: []iamv1.WorkloadRoleCommandResult{{
 			APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResult",
-			CommandType: iamv1.WorkloadRoleCommandBind, IdempotencyKey: mutation.Request.Authorization.RequestID,
+			CommandType: iamv1.WorkloadRoleCommandBind, IdempotencyKey: mutation.Request.IdempotencyKey,
 			RequestDigest: mutation.RequestDigest, Workload: mutation.Binding.Workload,
 			BindingID: mutation.Binding.ID, CompletedAt: mutation.Binding.CreatedAt,
 		}},
@@ -2254,12 +2261,19 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	if _, err := service.ListServiceLinkedRoles(t.Context(), paasCredential, "", "binding-directory-service"); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatal("service credential substituted for a current USER directory session", err)
 	}
-	revokeAuthorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleUnbind,
-		mutation.Binding.Workload, iamv1.AuthorizationResourceInstance, "", "binding-revoke", "binding-revoke")
+	const revokeIdempotencyKey = "binding-revoke"
+	revokeRequestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandUnbind, revokeIdempotencyKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	revokeRequest := iamv1.RevokeWorkloadRoleBindingRequest{Authorization: revokeAuthorization, ResourceVersion: 1}
+	revokeAuthorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleUnbind,
+		mutation.Binding.Workload, iamv1.AuthorizationResourceInstance, "", revokeRequestID, revokeIdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokeRequest := iamv1.RevokeWorkloadRoleBindingRequest{
+		IdempotencyKey: revokeIdempotencyKey, Authorization: revokeAuthorization, ResourceVersion: 1,
+	}
 	before = len(tx.authorizations)
 	revoked, err := service.RevokeWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, mutation.Binding.ID, revokeRequest)
 	if err != nil || iamv1.ValidateWorkloadRoleBinding(revoked) != nil || revoked.ID != mutation.Binding.ID ||

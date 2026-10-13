@@ -172,13 +172,17 @@ func digestSanitized(domain string, value any) (string, error) {
 	if err != nil {
 		return "", ErrUnavailable
 	}
+	defer clear(encoded)
+	return digestSanitizedDocument(domain, encoded), nil
+}
+
+func digestSanitizedDocument(domain string, encoded []byte) string {
 	digest := sha256.New()
 	digest.Write([]byte("matrix.iam.request.v1\x00"))
 	digest.Write([]byte(domain))
 	digest.Write([]byte{0})
 	digest.Write(encoded)
-	clear(encoded)
-	return "sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
+	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
 }
 
 func newAuditEvent(

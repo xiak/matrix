@@ -147,10 +147,10 @@ type ServiceLinkedRoleList struct {
 
 // WorkloadRoleCommandResult is a non-secret, service-scoped observation of
 // one completed consent command initiated by the current USER. IdempotencyKey
-// is the original product key carried unchanged as IAM's request identity;
-// RequestDigest remains IAM-owned evidence rather than a client correlation
-// algorithm. The result carries no Account, service-principal or credential
-// selector and is never a permit.
+// is the original product key recorded separately from IAM's private request
+// identity; RequestDigest remains IAM-owned evidence rather than a client
+// correlation algorithm. The result carries no Account, service-principal or
+// credential selector and is never a permit.
 type WorkloadRoleCommandResult struct {
 	APIVersion     string                  `json:"apiVersion"`
 	Kind           string                  `json:"kind"`
@@ -169,12 +169,14 @@ type WorkloadRoleCommandResultList struct {
 }
 
 // CreateWorkloadRoleBindingRequest carries one product PEP decision input and
-// one exact release-owned template reference. The authorization request is the
-// command identity and workload reference; duplicating Account, Role, service
-// principal or request selectors here would let the caller make them disagree.
+// one exact release-owned template reference. IdempotencyKey is the product's
+// public command identity; Authorization.RequestID is its deterministic,
+// private IAM identity. Duplicating Account, Role, service principal or
+// resource selectors here would let the caller make authority disagree.
 type CreateWorkloadRoleBindingRequest struct {
-	Template      ServiceRoleTemplateReference `json:"template"`
-	Authorization AuthorizationRequest         `json:"authorization"`
+	IdempotencyKey string                       `json:"idempotencyKey"`
+	Template       ServiceRoleTemplateReference `json:"template"`
+	Authorization  AuthorizationRequest         `json:"authorization"`
 }
 
 // RevokeWorkloadRoleBindingRequest carries only the product PEP decision for
@@ -182,6 +184,7 @@ type CreateWorkloadRoleBindingRequest struct {
 // The path binding is authoritative for Account, Role, template, service
 // principal and workload; none of those identities may be selected again.
 type RevokeWorkloadRoleBindingRequest struct {
+	IdempotencyKey  string               `json:"idempotencyKey"`
 	Authorization   AuthorizationRequest `json:"authorization"`
 	ResourceVersion uint64               `json:"resourceVersion"`
 }
@@ -333,7 +336,9 @@ func ValidateServiceLinkedRoleList(value ServiceLinkedRoleList) error {
 }
 
 func ValidateCreateWorkloadRoleBindingRequest(value CreateWorkloadRoleBindingRequest) error {
-	if ValidateServiceRoleTemplateReference(value.Template) != nil ||
+	requestID, err := WorkloadRoleCommandRequestID(WorkloadRoleCommandBind, value.IdempotencyKey)
+	if err != nil || requestID != value.Authorization.RequestID ||
+		ValidateServiceRoleTemplateReference(value.Template) != nil ||
 		validateProductAuthorizationRequestShape(value.Authorization) != nil ||
 		value.Authorization.ResourceMode != AuthorizationResourceInstance ||
 		value.Authorization.CollectionUsage != "" {
@@ -343,12 +348,54 @@ func ValidateCreateWorkloadRoleBindingRequest(value CreateWorkloadRoleBindingReq
 }
 
 func ValidateRevokeWorkloadRoleBindingRequest(value RevokeWorkloadRoleBindingRequest) error {
-	if validateProductAuthorizationRequestShape(value.Authorization) != nil ||
+	requestID, err := WorkloadRoleCommandRequestID(WorkloadRoleCommandUnbind, value.IdempotencyKey)
+	if err != nil || requestID != value.Authorization.RequestID ||
+		validateProductAuthorizationRequestShape(value.Authorization) != nil ||
 		value.Authorization.ResourceMode != AuthorizationResourceInstance ||
 		value.Authorization.CollectionUsage != "" || value.ResourceVersion != 1 {
 		return errors.New("workload role binding revocation request is invalid")
 	}
 	return nil
+}
+
+// WorkloadRoleCommandRequestID derives the private IAM request identity for a
+// public product command key. Browsers and SDK callers never need this value;
+// only the product PEP and IAM use it to preserve the direct predecessor's
+// immutable decisions, Audit facts and equal-replay identity.
+func WorkloadRoleCommandRequestID(commandType WorkloadRoleCommandType, idempotencyKey string) (string, error) {
+	if ValidateID("idempotencyKey", idempotencyKey) != nil {
+		return "", errors.New("workload Role command identity is invalid")
+	}
+	prefix, domain := "", ""
+	switch commandType {
+	case WorkloadRoleCommandBind:
+		prefix, domain = "msrb-", "matrix-managedservice-service-role-binding-v1\x00"
+	case WorkloadRoleCommandUnbind:
+		prefix, domain = "msru-", "matrix-managedservice-service-role-unbinding-v1\x00"
+	default:
+		return "", errors.New("workload Role command identity is invalid")
+	}
+	digest := sha256.Sum256([]byte(domain + idempotencyKey))
+	return prefix + hex.EncodeToString(digest[:]), nil
+}
+
+// PreviousCreateWorkloadRoleBindingDocument returns the exact direct-
+// predecessor request bytes, before the public product key was recorded in a
+// dedicated field. It exists only for one-version retained-state replay.
+func PreviousCreateWorkloadRoleBindingDocument(value CreateWorkloadRoleBindingRequest) ([]byte, error) {
+	return json.Marshal(struct {
+		Template      ServiceRoleTemplateReference `json:"template"`
+		Authorization AuthorizationRequest         `json:"authorization"`
+	}{Template: value.Template, Authorization: value.Authorization})
+}
+
+// PreviousRevokeWorkloadRoleBindingDocument is the matching retained-state
+// encoding for a direct-predecessor terminal command.
+func PreviousRevokeWorkloadRoleBindingDocument(value RevokeWorkloadRoleBindingRequest) ([]byte, error) {
+	return json.Marshal(struct {
+		Authorization   AuthorizationRequest `json:"authorization"`
+		ResourceVersion uint64               `json:"resourceVersion"`
+	}{Authorization: value.Authorization, ResourceVersion: value.ResourceVersion})
 }
 
 // The workload command decoder validates only the bounded product request

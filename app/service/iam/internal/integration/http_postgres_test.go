@@ -29385,30 +29385,81 @@ func proveServiceRoleTemplateDirectory(t *testing.T, ctx context.Context, handle
 	}
 }
 
-func serviceRoleBindingRequest(t *testing.T, template iamv1.ServiceRoleTemplate, workloadID, requestID string) iamv1.CreateWorkloadRoleBindingRequest {
+func serviceRoleBindingRequest(t *testing.T, template iamv1.ServiceRoleTemplate, workloadID, idempotencyKey string) iamv1.CreateWorkloadRoleBindingRequest {
 	t.Helper()
 	profile, found := iamv1.LookupAuthorizationProfile(template.Spec.Product)
 	if !found {
 		t.Fatal("built-in service role template product is unavailable")
 	}
-	return serviceRoleBindingRequestForProfile(t, template, profile, workloadID, requestID)
+	return serviceRoleBindingRequestForProfile(t, template, profile, workloadID, idempotencyKey)
+}
+
+func readIAMWorkloadRoleCommandResults(t *testing.T, handler http.Handler, serviceCredential, subjectCredential string,
+	commandType iamv1.WorkloadRoleCommandType,
+) iamv1.WorkloadRoleCommandResultList {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/v1/internal/workload-role-command-results/"+string(commandType), nil)
+	request.Header.Set("Authorization", "Bearer "+serviceCredential)
+	request.Header.Set("Matrix-Subject-Credential", subjectCredential)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var result iamv1.WorkloadRoleCommandResultList
+	decoder := json.NewDecoder(response.Body)
+	decoder.DisallowUnknownFields()
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" ||
+		decoder.Decode(&result) != nil || iamv1.ValidateWorkloadRoleCommandResultList(result) != nil {
+		t.Fatalf("read workload Role command results: status=%d body=%s", response.Code, response.Body.String())
+	}
+	return result
+}
+
+func assertIAMWorkloadRoleCommandResult(t *testing.T, results iamv1.WorkloadRoleCommandResultList,
+	idempotencyKey string, bindingID iamv1.WorkloadRoleBindingID,
+) {
+	t.Helper()
+	for _, item := range results.Items {
+		if item.IdempotencyKey == idempotencyKey {
+			if item.BindingID != bindingID {
+				t.Fatalf("workload Role command result %q has the wrong binding", idempotencyKey)
+			}
+			return
+		}
+	}
+	t.Fatalf("workload Role command result %q is unavailable", idempotencyKey)
+}
+
+func assertNoIAMWorkloadRoleCommandResult(t *testing.T, results iamv1.WorkloadRoleCommandResultList,
+	idempotencyKey string,
+) {
+	t.Helper()
+	for _, item := range results.Items {
+		if item.IdempotencyKey == idempotencyKey {
+			t.Fatalf("unproved direct-predecessor command %q was exposed", idempotencyKey)
+		}
+	}
 }
 
 func serviceRoleBindingRequestForProfile(t *testing.T, template iamv1.ServiceRoleTemplate, profile iamv1.AuthorizationProfile,
-	workloadID, requestID string,
+	workloadID, idempotencyKey string,
 ) iamv1.CreateWorkloadRoleBindingRequest {
 	t.Helper()
 	if len(template.Spec.Workloads) == 0 {
 		t.Fatal("service role template has no workload admission")
 	}
 	workload := template.Spec.Workloads[0]
+	requestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandBind, idempotencyKey)
+	if err != nil {
+		t.Fatal("derive private workload service role admission", err)
+	}
 	authorization, err := iamv1.NewAuthorizationRequestForProfile(profile, workload.BindAction,
 		iamv1.ResourceReference{Kind: workload.ResourceKind, ID: workloadID},
-		iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+		iamv1.AuthorizationResourceInstance, "", requestID, idempotencyKey)
 	if err != nil {
 		t.Fatal("construct workload service role admission", err)
 	}
-	return iamv1.CreateWorkloadRoleBindingRequest{Template: template.Reference(), Authorization: authorization}
+	return iamv1.CreateWorkloadRoleBindingRequest{
+		IdempotencyKey: idempotencyKey, Template: template.Reference(), Authorization: authorization,
+	}
 }
 
 func performIAMWorkloadRoleBinding(t *testing.T, handler http.Handler, serviceCredential, subjectCredential string,
@@ -29435,15 +29486,21 @@ func serviceRoleRevocationRequest(t *testing.T, binding iamv1.WorkloadRoleBindin
 }
 
 func serviceRoleRevocationRequestForProfile(t *testing.T, binding iamv1.WorkloadRoleBinding,
-	profile iamv1.AuthorizationProfile, action iamv1.Action, requestID string,
+	profile iamv1.AuthorizationProfile, action iamv1.Action, idempotencyKey string,
 ) iamv1.RevokeWorkloadRoleBindingRequest {
 	t.Helper()
+	requestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandUnbind, idempotencyKey)
+	if err != nil {
+		t.Fatal("derive private workload service role revocation", err)
+	}
 	authorization, err := iamv1.NewAuthorizationRequestForProfile(profile, action,
-		binding.Workload, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+		binding.Workload, iamv1.AuthorizationResourceInstance, "", requestID, idempotencyKey)
 	if err != nil {
 		t.Fatal("construct workload service role revocation", err)
 	}
-	return iamv1.RevokeWorkloadRoleBindingRequest{Authorization: authorization, ResourceVersion: binding.ResourceVersion}
+	return iamv1.RevokeWorkloadRoleBindingRequest{
+		IdempotencyKey: idempotencyKey, Authorization: authorization, ResourceVersion: binding.ResourceVersion,
+	}
 }
 
 func performIAMWorkloadRoleRevocation(t *testing.T, handler http.Handler, serviceCredential, subjectCredential string,
@@ -29457,6 +29514,218 @@ func performIAMWorkloadRoleRevocation(t *testing.T, handler http.Handler, servic
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
+}
+
+func predecessorWorkloadRoleRequestDigest(t *testing.T, domain string, document []byte) string {
+	t.Helper()
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("matrix.iam.request.v1\x00"))
+	_, _ = digest.Write([]byte(domain))
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write(document)
+	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
+}
+
+func retainPredecessorWorkloadRoleCommand(t *testing.T, ctx context.Context, database *pgx.Conn,
+	accountID iamv1.AccountID, bindingID iamv1.WorkloadRoleBindingID,
+	create iamv1.CreateWorkloadRoleBindingRequest, revoke *iamv1.RevokeWorkloadRoleBindingRequest,
+) (string, string) {
+	t.Helper()
+	createDocument, err := iamv1.PreviousCreateWorkloadRoleBindingDocument(create)
+	if err != nil {
+		t.Fatal("encode direct-predecessor binding command", err)
+	}
+	createDigest := predecessorWorkloadRoleRequestDigest(t, "workload-role-binding-create", createDocument)
+	revokeDigest := ""
+	if revoke != nil {
+		revokeDocument, encodeErr := iamv1.PreviousRevokeWorkloadRoleBindingDocument(*revoke)
+		if encodeErr != nil {
+			t.Fatal("encode direct-predecessor unbinding command", encodeErr)
+		}
+		revokeDigest = predecessorWorkloadRoleRequestDigest(t, "workload-role-binding-revoke:"+string(bindingID), revokeDocument)
+	}
+	tx, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal("begin direct-predecessor command fixture", err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err = tx.Exec(ctx, `ALTER TABLE iam.workload_role_bindings DISABLE TRIGGER workload_role_binding_transitions`); err != nil {
+		t.Fatal("open direct-predecessor binding fixture", err)
+	}
+	command, err := tx.Exec(ctx, `UPDATE iam.workload_role_bindings
+		SET request_digest=$3,creation_idempotency_key=NULL,creation_command_version=1,
+			revocation_idempotency_key=CASE WHEN $4='' THEN revocation_idempotency_key ELSE NULL END,
+			revocation_command_version=CASE WHEN $4='' THEN revocation_command_version ELSE 1 END
+		WHERE tenant_id=$1 AND id=$2`, accountID, bindingID, createDigest, revokeDigest)
+	if err != nil || command.RowsAffected() != 1 {
+		t.Fatal("retain direct-predecessor binding row", err)
+	}
+	command, err = tx.Exec(ctx, `UPDATE iam.audit_outbox
+		SET event_document=event_document||jsonb_build_object('requestDigest',$3::text)
+		WHERE tenant_id=$1 AND event_document->>'action'='iam.workload-role-binding.created'
+			AND event_document#>>'{target,id}'=$2`, accountID, bindingID, createDigest)
+	if err != nil || command.RowsAffected() != 1 {
+		t.Fatal("retain direct-predecessor binding fact", err)
+	}
+	if revokeDigest != "" {
+		command, err = tx.Exec(ctx, `UPDATE iam.audit_outbox
+			SET event_document=event_document||jsonb_build_object('requestDigest',$3::text)
+			WHERE tenant_id=$1 AND event_document->>'action'='iam.workload-role-binding.revoked'
+				AND event_document#>>'{target,id}'=$2`, accountID, bindingID, revokeDigest)
+		if err != nil || command.RowsAffected() != 1 {
+			t.Fatal("retain direct-predecessor unbinding fact", err)
+		}
+	}
+	if _, err = tx.Exec(ctx, `ALTER TABLE iam.workload_role_bindings ENABLE ALWAYS TRIGGER workload_role_binding_transitions`); err != nil {
+		t.Fatal("close direct-predecessor binding fixture", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal("commit direct-predecessor command fixture", err)
+	}
+	return createDigest, revokeDigest
+}
+
+func proveWorkloadRoleCommandPredecessorReplay(t *testing.T, ctx context.Context, handler http.Handler,
+	database *pgx.Conn, root string, accountID iamv1.AccountID, template iamv1.ServiceRoleTemplate,
+) {
+	t.Helper()
+	create := func(workloadID, key string) (iamv1.CreateWorkloadRoleBindingRequest, iamv1.ServiceLinkedRoleAccess) {
+		t.Helper()
+		request := serviceRoleBindingRequest(t, template, workloadID, key)
+		response := performIAMWorkloadRoleBinding(t, handler, paasCredential, root, request)
+		var access iamv1.ServiceLinkedRoleAccess
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &access) != nil ||
+			iamv1.ValidateServiceLinkedRoleAccess(access) != nil || len(access.Bindings) != 1 {
+			t.Fatalf("create predecessor replay fixture: status=%d body=%s", response.Code, response.Body.String())
+		}
+		return request, access
+	}
+	revoke := func(binding iamv1.WorkloadRoleBinding, key string) (iamv1.RevokeWorkloadRoleBindingRequest, iamv1.WorkloadRoleBinding) {
+		t.Helper()
+		request := serviceRoleRevocationRequest(t, binding, key)
+		response := performIAMWorkloadRoleRevocation(t, handler, paasCredential, root, binding.ID, request)
+		var result iamv1.WorkloadRoleBinding
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil ||
+			iamv1.ValidateWorkloadRoleBinding(result) != nil || result.Status != iamv1.WorkloadRoleBindingRevoked {
+			t.Fatalf("revoke predecessor replay fixture: status=%d body=%s", response.Code, response.Body.String())
+		}
+		return request, result
+	}
+
+	activeCreate, activeAccess := create("service-installation-predecessor-active", "service-role-predecessor-active-bind")
+	activeBinding := activeAccess.Bindings[0]
+	activeDigest, _ := retainPredecessorWorkloadRoleCommand(t, ctx, database, accountID, activeBinding.ID, activeCreate, nil)
+	assertNoIAMWorkloadRoleCommandResult(t,
+		readIAMWorkloadRoleCommandResults(t, handler, paasCredential, root, iamv1.WorkloadRoleCommandBind),
+		activeCreate.IdempotencyKey)
+	var activeFactBefore string
+	var activeFactsBefore, activeDecisionsBefore int
+	if err := database.QueryRow(ctx, `SELECT fact.event_document::text,
+		(SELECT count(*) FROM iam.audit_outbox candidate WHERE candidate.tenant_id=$1
+			AND candidate.event_document#>>'{target,id}'=$2),
+		(SELECT count(*) FROM iam.authorization_decisions decision WHERE decision.tenant_id=$1
+			AND decision.request_id=$3)
+		FROM iam.audit_outbox fact WHERE fact.tenant_id=$1
+			AND fact.event_document->>'action'='iam.workload-role-binding.created'
+			AND fact.event_document#>>'{target,id}'=$2`, accountID, activeBinding.ID,
+		activeCreate.Authorization.RequestID).Scan(&activeFactBefore, &activeFactsBefore, &activeDecisionsBefore); err != nil {
+		t.Fatal("read retained active predecessor command", err)
+	}
+	activeReplay := performIAMWorkloadRoleBinding(t, handler, paasCredential, root, activeCreate)
+	var replayedActive iamv1.ServiceLinkedRoleAccess
+	if activeReplay.Code != http.StatusOK || json.Unmarshal(activeReplay.Body.Bytes(), &replayedActive) != nil ||
+		!reflect.DeepEqual(replayedActive, activeAccess) {
+		t.Fatalf("active predecessor exact replay changed authority: status=%d body=%s", activeReplay.Code, activeReplay.Body.String())
+	}
+	assertIAMWorkloadRoleCommandResult(t,
+		readIAMWorkloadRoleCommandResults(t, handler, paasCredential, root, iamv1.WorkloadRoleCommandBind),
+		activeCreate.IdempotencyKey, activeBinding.ID)
+	var activeFactAfter, storedActiveDigest, storedActiveKey string
+	var activeVersion int
+	var activeFactsAfter, activeDecisionsAfter int
+	if err := database.QueryRow(ctx, `SELECT binding.request_digest,binding.creation_idempotency_key,
+		binding.creation_command_version,fact.event_document::text,
+		(SELECT count(*) FROM iam.audit_outbox candidate WHERE candidate.tenant_id=$1
+			AND candidate.event_document#>>'{target,id}'=$2),
+		(SELECT count(*) FROM iam.authorization_decisions decision WHERE decision.tenant_id=$1
+			AND decision.request_id=$3)
+		FROM iam.workload_role_bindings binding JOIN iam.audit_outbox fact ON fact.tenant_id=binding.tenant_id
+			AND fact.event_document->>'action'='iam.workload-role-binding.created'
+			AND fact.event_document#>>'{target,id}'=binding.id
+		WHERE binding.tenant_id=$1 AND binding.id=$2`, accountID, activeBinding.ID,
+		activeCreate.Authorization.RequestID).Scan(&storedActiveDigest, &storedActiveKey, &activeVersion,
+		&activeFactAfter, &activeFactsAfter, &activeDecisionsAfter); err != nil || storedActiveDigest != activeDigest ||
+		storedActiveKey != activeCreate.IdempotencyKey || activeVersion != 1 || activeFactAfter != activeFactBefore ||
+		activeFactsAfter != activeFactsBefore || activeDecisionsAfter != activeDecisionsBefore+3 {
+		t.Fatalf("active predecessor replay rewrote immutable command evidence: digest=%q key=%q version=%d facts=%d/%d decisions=%d/%d eventEqual=%t err=%v",
+			storedActiveDigest, storedActiveKey, activeVersion, activeFactsBefore, activeFactsAfter,
+			activeDecisionsBefore, activeDecisionsAfter, activeFactAfter == activeFactBefore, err)
+	}
+	_, _ = revoke(activeBinding, "service-role-predecessor-active-unbind")
+
+	revokedCreate, revokedAccess := create("service-installation-predecessor-revoked", "service-role-predecessor-revoked-bind")
+	revokedBinding := revokedAccess.Bindings[0]
+	revokedRequest, revokedResult := revoke(revokedBinding, "service-role-predecessor-revoked-unbind")
+	createDigest, revokeDigest := retainPredecessorWorkloadRoleCommand(t, ctx, database, accountID,
+		revokedBinding.ID, revokedCreate, &revokedRequest)
+	assertNoIAMWorkloadRoleCommandResult(t,
+		readIAMWorkloadRoleCommandResults(t, handler, paasCredential, root, iamv1.WorkloadRoleCommandBind),
+		revokedCreate.IdempotencyKey)
+	assertNoIAMWorkloadRoleCommandResult(t,
+		readIAMWorkloadRoleCommandResults(t, handler, paasCredential, root, iamv1.WorkloadRoleCommandUnbind),
+		revokedRequest.IdempotencyKey)
+	if response := performIAMWorkloadRoleBinding(t, handler, paasCredential, root, revokedCreate); response.Code != http.StatusConflict {
+		t.Fatalf("terminal predecessor bind replay claimed an active result: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var creationFactBefore, revocationFactBefore string
+	var factsBefore, decisionsBefore int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT event_document::text FROM iam.audit_outbox fact WHERE fact.tenant_id=$1
+			AND fact.event_document->>'action'='iam.workload-role-binding.created' AND fact.event_document#>>'{target,id}'=$2),
+		(SELECT event_document::text FROM iam.audit_outbox fact WHERE fact.tenant_id=$1
+			AND fact.event_document->>'action'='iam.workload-role-binding.revoked' AND fact.event_document#>>'{target,id}'=$2),
+		(SELECT count(*) FROM iam.audit_outbox fact WHERE fact.tenant_id=$1 AND fact.event_document#>>'{target,id}'=$2),
+		(SELECT count(*) FROM iam.authorization_decisions decision WHERE decision.tenant_id=$1
+			AND decision.request_id=$3)`, accountID, revokedBinding.ID,
+		revokedRequest.Authorization.RequestID).Scan(&creationFactBefore, &revocationFactBefore, &factsBefore, &decisionsBefore); err != nil {
+		t.Fatal("read retained terminal predecessor command", err)
+	}
+	revokedReplay := performIAMWorkloadRoleRevocation(t, handler, paasCredential, root, revokedBinding.ID, revokedRequest)
+	var replayedRevoked iamv1.WorkloadRoleBinding
+	if revokedReplay.Code != http.StatusOK || json.Unmarshal(revokedReplay.Body.Bytes(), &replayedRevoked) != nil ||
+		!reflect.DeepEqual(replayedRevoked, revokedResult) {
+		t.Fatalf("terminal predecessor exact replay changed authority: status=%d body=%s", revokedReplay.Code, revokedReplay.Body.String())
+	}
+	assertNoIAMWorkloadRoleCommandResult(t,
+		readIAMWorkloadRoleCommandResults(t, handler, paasCredential, root, iamv1.WorkloadRoleCommandBind),
+		revokedCreate.IdempotencyKey)
+	assertIAMWorkloadRoleCommandResult(t,
+		readIAMWorkloadRoleCommandResults(t, handler, paasCredential, root, iamv1.WorkloadRoleCommandUnbind),
+		revokedRequest.IdempotencyKey, revokedBinding.ID)
+	var storedCreateDigest, storedRevokeKey, creationFactAfter, revocationFactAfter string
+	var createVersion, revokeVersion int
+	var factsAfter, decisionsAfter int
+	if err := database.QueryRow(ctx, `SELECT binding.request_digest,binding.revocation_idempotency_key,
+		binding.creation_command_version,binding.revocation_command_version,
+		(SELECT event_document::text FROM iam.audit_outbox fact WHERE fact.tenant_id=$1
+			AND fact.event_document->>'action'='iam.workload-role-binding.created' AND fact.event_document#>>'{target,id}'=$2),
+		(SELECT event_document::text FROM iam.audit_outbox fact WHERE fact.tenant_id=$1
+			AND fact.event_document->>'action'='iam.workload-role-binding.revoked' AND fact.event_document#>>'{target,id}'=$2),
+		(SELECT count(*) FROM iam.audit_outbox fact WHERE fact.tenant_id=$1 AND fact.event_document#>>'{target,id}'=$2),
+		(SELECT count(*) FROM iam.authorization_decisions decision WHERE decision.tenant_id=$1
+			AND decision.request_id=$3)
+		FROM iam.workload_role_bindings binding WHERE binding.tenant_id=$1 AND binding.id=$2`, accountID,
+		revokedBinding.ID, revokedRequest.Authorization.RequestID).Scan(&storedCreateDigest, &storedRevokeKey,
+		&createVersion, &revokeVersion, &creationFactAfter, &revocationFactAfter, &factsAfter, &decisionsAfter); err != nil ||
+		storedCreateDigest != createDigest || storedRevokeKey != revokedRequest.IdempotencyKey ||
+		createVersion != 1 || revokeVersion != 1 || !strings.Contains(revocationFactAfter, revokeDigest) ||
+		creationFactAfter != creationFactBefore || revocationFactAfter != revocationFactBefore ||
+		factsAfter != factsBefore || decisionsAfter != decisionsBefore+3 {
+		t.Fatalf("terminal predecessor replay rewrote immutable command evidence: createDigest=%q revokeKey=%q versions=%d/%d facts=%d/%d decisions=%d/%d eventsEqual=%t/%t err=%v",
+			storedCreateDigest, storedRevokeKey, createVersion, revokeVersion, factsBefore, factsAfter,
+			decisionsBefore, decisionsAfter, creationFactAfter == creationFactBefore,
+			revocationFactAfter == revocationFactBefore, err)
+	}
 }
 
 type serviceRoleSessionRuntimeProof struct {
@@ -30164,8 +30433,7 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 
 	atomicFailure := serviceRoleBindingRequest(t, template, "service-installation-atomic-failure", "service-role-atomic-failure")
 	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_service_role_fact_failure() RETURNS trigger LANGUAGE plpgsql AS $body$
-		BEGIN IF NEW.event_document->>'requestId'='service-role-atomic-failure'
-			AND NEW.event_document->>'action'='iam.workload-role-binding.created'
+		BEGIN IF NEW.event_document->>'action'='iam.workload-role-binding.created'
 		THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='isolated service role fact failure'; END IF; RETURN NEW; END $body$;
 		CREATE TRIGGER matrix_service_role_fact_failure BEFORE INSERT ON iam.audit_outbox
 		FOR EACH ROW EXECUTE FUNCTION public.matrix_service_role_fact_failure()`); err != nil {
@@ -30195,6 +30463,8 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		created.Bindings[0].Workload != command.Authorization.Resource || created.Bindings[0].Status != iamv1.WorkloadRoleBindingActive {
 		t.Fatal("workload service role creation or exact replay lost immutable authority")
 	}
+	bindResults := readIAMWorkloadRoleCommandResults(t, handler, paasCredential, root, iamv1.WorkloadRoleCommandBind)
+	assertIAMWorkloadRoleCommandResult(t, bindResults, command.IdempotencyKey, created.Bindings[0].ID)
 	serviceSession := proveServiceRoleSessionIssuance(t, ctx, handler, database, created, "service-role")
 	proveServiceRoleSessionManagement(t, ctx, handler, database, root, created, serviceSession)
 	response = performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles", root, nil)
@@ -30297,7 +30567,7 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		t.Fatal("generic role APIs partially changed service-linked authority", err)
 	}
 
-	variant := serviceRoleBindingRequest(t, template, "service-installation-variant", command.Authorization.RequestID)
+	variant := serviceRoleBindingRequest(t, template, "service-installation-variant", command.IdempotencyKey)
 	call(paasCredential, root, variant, http.StatusConflict)
 	duplicateWorkload := serviceRoleBindingRequest(t, template, command.Authorization.Resource.ID, "service-role-bind-duplicate")
 	call(paasCredential, root, duplicateWorkload, http.StatusConflict)
@@ -30512,6 +30782,7 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 	adminRaceAccess := decode(call(paasCredential, root, adminRaceBindingCommand, http.StatusOK))
 	adminRaceSession := proveServiceRoleSessionIssuance(t, ctx, handler, database, adminRaceAccess, "service-role-admin-unbind-race")
 	proveServiceRoleSessionAdminUnbindRace(t, ctx, handler, database, root, adminRaceAccess, adminRaceSession)
+	proveWorkloadRoleCommandPredecessorReplay(t, ctx, handler, database, root, actor.Account.ID, template)
 	revocation := serviceRoleRevocationRequest(t, created.Bindings[0], "service-role-unbind")
 	foreignRevocation := serviceRoleRevocationRequest(t, foreign.Bindings[0], "service-role-unbind-foreign")
 	revoke(paasCredential, root, foreign.Bindings[0].ID, foreignRevocation, http.StatusForbidden)
@@ -30532,8 +30803,7 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 	}
 	atomicRevocation := serviceRoleRevocationRequest(t, created.Bindings[0], "service-role-unbind-atomic")
 	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_service_role_revoke_fact_failure() RETURNS trigger LANGUAGE plpgsql AS $body$
-		BEGIN IF NEW.event_document->>'requestId'='service-role-unbind-atomic'
-			AND NEW.event_document->>'action'='iam.workload-role-binding.revoked'
+		BEGIN IF NEW.event_document->>'action'='iam.workload-role-binding.revoked'
 		THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='isolated service role revoke fact failure'; END IF; RETURN NEW; END $body$;
 		CREATE TRIGGER matrix_service_role_revoke_fact_failure BEFORE INSERT ON iam.audit_outbox
 		FOR EACH ROW EXECUTE FUNCTION public.matrix_service_role_revoke_fact_failure()`); err != nil {
@@ -30567,6 +30837,8 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		revoked.Template != template.Reference() || revoked.Workload != command.Authorization.Resource {
 		t.Fatal("workload service role terminal result or equal replay lost immutable authority")
 	}
+	unbindResults := readIAMWorkloadRoleCommandResults(t, handler, paasCredential, root, iamv1.WorkloadRoleCommandUnbind)
+	assertIAMWorkloadRoleCommandResult(t, unbindResults, revocation.IdempotencyKey, revoked.ID)
 	proveServiceRoleSessionRevocation(t, ctx, handler, database, root, created, serviceSession)
 	variantRevocation := revocation
 	variantRevocation.Authorization.CorrelationID = "service-role-unbind-variant"
@@ -30607,7 +30879,7 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 	serviceRoleDirectory = iamv1.ServiceLinkedRoleList{}
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &serviceRoleDirectory) != nil ||
 		iamv1.ValidateServiceLinkedRoleList(serviceRoleDirectory) != nil || len(serviceRoleDirectory.Items) != 1 ||
-		serviceRoleDirectory.Items[0].BindingCount != 5 || serviceRoleDirectory.Items[0].ActiveBindingCount != 2 {
+		serviceRoleDirectory.Items[0].BindingCount != 7 || serviceRoleDirectory.Items[0].ActiveBindingCount != 2 {
 		t.Fatalf("service-linked role summary did not expose terminal consent: status=%d body=%s", response.Code, response.Body.String())
 	}
 	response = performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles/"+string(created.Relation.Role.ID), root, nil)
@@ -30662,6 +30934,8 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		`DROP INDEX iam.workload_role_bindings_role_directory_idx`,
 		`DROP INDEX iam.workload_role_bindings_role_directory_idx;
 		 CREATE UNIQUE INDEX workload_role_bindings_role_directory_idx ON iam.workload_role_bindings(tenant_id,id,role_id)`,
+		`DROP INDEX iam.workload_role_bindings_creation_idempotency_uq`,
+		`DROP INDEX iam.workload_role_bindings_revocation_idempotency_uq`,
 		`ALTER TABLE iam.workload_role_bindings DROP CONSTRAINT workload_role_bindings_request_uq`,
 		`ALTER TABLE iam.workload_role_bindings DROP CONSTRAINT workload_role_bindings_decision_fk`,
 		`ALTER TABLE iam.service_role_session_evidence DROP CONSTRAINT service_role_session_evidence_service_fk`,
@@ -30674,7 +30948,7 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		`ALTER FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) SECURITY INVOKER`,
 		`GRANT EXECUTE ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) TO matrix_iam_worker`,
 		`ALTER FUNCTION iam.prepare_workload_role_binding_revocation(text,text,text,text) SECURITY INVOKER`,
-		`GRANT EXECUTE ON FUNCTION iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,jsonb) TO matrix_iam_worker`,
+		`GRANT EXECUTE ON FUNCTION iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,text,text,jsonb) TO matrix_iam_worker`,
 		`ALTER FUNCTION iam.list_service_linked_roles(text,text,text,text) SECURITY INVOKER`,
 		`GRANT EXECUTE ON FUNCTION iam.read_service_linked_role(text,text,text,text,text) TO matrix_iam_worker`,
 		`ALTER FUNCTION iam.service_linked_role_snapshot(text,text) SECURITY DEFINER`,

@@ -400,9 +400,11 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 		receipt.BindingID != binder.result.Bindings[0].ID {
 		t.Fatalf("binding receipt=%#v err=%v", receipt, err)
 	}
-	if binder.calls != 1 || binder.request.Action != port.AuthorizeInstallationRoleBind ||
+	wantRequestID, requestIDErr := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandBind, command.IdempotencyKey)
+	if requestIDErr != nil || binder.calls != 1 || binder.idempotencyKey != command.IdempotencyKey ||
+		binder.request.Action != port.AuthorizeInstallationRoleBind ||
 		binder.request.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID}) ||
-		binder.request.RequestID != command.IdempotencyKey || binder.request.Credential != command.Credential {
+		binder.request.RequestID != wantRequestID || binder.request.Credential != command.Credential {
 		t.Fatalf("binding request=%#v calls=%d", binder.request, binder.calls)
 	}
 	wantAssumeRequestID := serviceRoleSessionRequestID(binder.result.Bindings[0].ID, command.Authorization.RequestID)
@@ -419,7 +421,8 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 	}
 	command.Authorization.RequestID = "request-bind-role-replay"
 	if _, err := service.BindServiceRole(context.Background(), command); err != nil ||
-		binder.request.RequestID != command.IdempotencyKey || binder.runtimeAssumeRequestID == wantAssumeRequestID {
+		binder.request.RequestID != wantRequestID || binder.idempotencyKey != command.IdempotencyKey ||
+		binder.runtimeAssumeRequestID == wantAssumeRequestID {
 		t.Fatalf("equal replay did not keep command identity: request=%#v err=%v", binder.request, err)
 	}
 	binding := binder.result.Bindings[0]
@@ -501,13 +504,16 @@ func TestUnbindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *te
 		receipt.ResourceVersion != 2 || !receipt.RevokedAt.Equal(revokedAt) {
 		t.Fatalf("unbinding receipt=%#v err=%v", receipt, err)
 	}
-	if authority.revokeCalls != 1 || authority.revokeBindingID != revoked.ID || authority.revokeVersion != 1 ||
+	wantRequestID, requestIDErr := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandUnbind, command.IdempotencyKey)
+	if requestIDErr != nil || authority.revokeCalls != 1 || authority.revokeBindingID != revoked.ID ||
+		authority.revokeVersion != 1 || authority.revokeIdempotencyKey != command.IdempotencyKey ||
 		authority.revokeRequest.Action != port.AuthorizeInstallationRoleUnbind ||
 		authority.revokeRequest.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID}) ||
-		authority.revokeRequest.RequestID != command.IdempotencyKey || authority.revokeRequest.Credential != command.Credential {
+		authority.revokeRequest.RequestID != wantRequestID || authority.revokeRequest.Credential != command.Credential {
 		t.Fatalf("unbinding request=%#v calls=%d", authority.revokeRequest, authority.revokeCalls)
 	}
-	if _, err := service.UnbindServiceRole(context.Background(), command); err != nil || authority.revokeRequest.RequestID != command.IdempotencyKey {
+	if _, err := service.UnbindServiceRole(context.Background(), command); err != nil ||
+		authority.revokeRequest.RequestID != wantRequestID || authority.revokeIdempotencyKey != command.IdempotencyKey {
 		t.Fatalf("equal unbinding replay did not keep command identity: request=%#v err=%v", authority.revokeRequest, err)
 	}
 	before := authority.revokeCalls
@@ -564,11 +570,13 @@ func seedServiceActivation(t *testing.T, repository *memoryRepository, serviceID
 type stubWorkloadRoleBinder struct {
 	calls                   int
 	template                iamv1.ServiceRoleTemplateReference
+	idempotencyKey          string
 	request                 port.AuthorizationRequest
 	result                  iamv1.ServiceLinkedRoleAccess
 	revokeCalls             int
 	revokeBindingID         iamv1.WorkloadRoleBindingID
 	revokeVersion           uint64
+	revokeIdempotencyKey    string
 	revokeRequest           port.AuthorizationRequest
 	revokeResult            iamv1.WorkloadRoleBinding
 	commandResultCalls      int
@@ -627,10 +635,12 @@ func (lease *stubWorkloadRoleLease) Release(context.Context) error {
 func (binder *stubWorkloadRoleBinder) BindWorkloadRole(
 	_ context.Context,
 	template iamv1.ServiceRoleTemplateReference,
+	idempotencyKey string,
 	request port.AuthorizationRequest,
 ) (iamv1.ServiceLinkedRoleAccess, error) {
 	binder.calls++
 	binder.template = template
+	binder.idempotencyKey = idempotencyKey
 	binder.request = request
 	return binder.result, binder.err
 }
@@ -639,10 +649,12 @@ func (binder *stubWorkloadRoleBinder) RevokeWorkloadRole(
 	_ context.Context,
 	bindingID iamv1.WorkloadRoleBindingID,
 	resourceVersion uint64,
+	idempotencyKey string,
 	request port.AuthorizationRequest,
 ) (iamv1.WorkloadRoleBinding, error) {
 	binder.revokeCalls++
-	binder.revokeBindingID, binder.revokeVersion, binder.revokeRequest = bindingID, resourceVersion, request
+	binder.revokeBindingID, binder.revokeVersion = bindingID, resourceVersion
+	binder.revokeIdempotencyKey, binder.revokeRequest = idempotencyKey, request
 	return binder.revokeResult, binder.err
 }
 

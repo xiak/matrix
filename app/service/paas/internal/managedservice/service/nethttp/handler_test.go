@@ -148,6 +148,9 @@ func TestCommandResultRouteDerivesAccountAndUsesClosedReadAuthority(t *testing.T
 		t.Fatalf("status=%d result=%#v command=%q authorization=%#v body=%s",
 			response.Code, got, workflow.commandResultType, authorizer.request, response.Body.String())
 	}
+	if workflow.commandResultCalls != 1 {
+		t.Fatalf("valid command result workflow calls=%d", workflow.commandResultCalls)
+	}
 
 	invalid := httptest.NewRequest(http.MethodGet, "/managed-services/v1/command-results/ARBITRARY", nil)
 	invalid.Header.Set("Authorization", "Bearer session-secret")
@@ -155,6 +158,16 @@ func TestCommandResultRouteDerivesAccountAndUsesClosedReadAuthority(t *testing.T
 	handler.ServeHTTP(invalidResponse, invalid)
 	if invalidResponse.Code != http.StatusBadRequest || workflow.commandResultType != managedservicev1.CommandQuotaActivate {
 		t.Fatalf("invalid command status=%d body=%s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+	chunked := httptest.NewRequest(http.MethodGet, "/managed-services/v1/command-results/QUOTA_ACTIVATE", strings.NewReader("forged"))
+	chunked.ContentLength = -1
+	chunked.TransferEncoding = []string{"chunked"}
+	chunked.Header.Set("Authorization", "Bearer session-secret")
+	chunkedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(chunkedResponse, chunked)
+	if chunkedResponse.Code != http.StatusBadRequest || workflow.commandResultCalls != 1 {
+		t.Fatalf("chunked command-result body reached workflow: status=%d calls=%d body=%s",
+			chunkedResponse.Code, workflow.commandResultCalls, chunkedResponse.Body.String())
 	}
 }
 
@@ -687,6 +700,7 @@ type stubWorkflow struct {
 	unbindCommand        usecase.UnbindServiceRoleCommand
 	roleUnbindingReceipt managedservicev1.ServiceRoleUnbindingReceipt
 	commandResults       managedservicev1.CommandResultList
+	commandResultCalls   int
 	commandResultType    managedservicev1.CommandType
 	commandResultQuery   usecase.ListCommandResultsQuery
 }
@@ -773,6 +787,7 @@ func (workflow *stubWorkflow) ListCommandResults(
 	_ context.Context,
 	query usecase.ListCommandResultsQuery,
 ) (managedservicev1.CommandResultList, error) {
+	workflow.commandResultCalls++
 	workflow.commandResultType, workflow.commandResultQuery = query.CommandType, query
 	return workflow.commandResults, nil
 }

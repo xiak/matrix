@@ -1,6 +1,7 @@
 package iamv1
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -412,13 +413,18 @@ func TestWorkloadRoleCommandResultIsClosedAndNonSecret(t *testing.T) {
 
 func TestCreateWorkloadRoleBindingRequestHasOneWorkloadAndCommandIdentity(t *testing.T) {
 	template := serviceRoleTemplateForTest(t)
+	idempotencyKey := "bind-service-installation-a"
+	requestID, err := WorkloadRoleCommandRequestID(WorkloadRoleCommandBind, idempotencyKey)
+	if err != nil || requestID != "msrb-2f4f120f225c3141b6dfbeacf8b227895b4bb1f9e8ba1630ed7fcaafe10b81e7" {
+		t.Fatalf("private workload Role binding identity=%q err=%v", requestID, err)
+	}
 	authorization, err := NewAuthorizationRequest(ActionManagedServiceInstallationRoleBind,
 		ResourceReference{Kind: ResourceServiceInstallation, ID: "service-installation-a"},
-		AuthorizationResourceInstance, "", "bind-service-installation-a", "bind-service-installation-a")
+		AuthorizationResourceInstance, "", requestID, "bind-service-installation-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := CreateWorkloadRoleBindingRequest{Template: template.Reference(), Authorization: authorization}
+	request := CreateWorkloadRoleBindingRequest{IdempotencyKey: idempotencyKey, Template: template.Reference(), Authorization: authorization}
 	if ValidateCreateWorkloadRoleBindingRequest(request) != nil {
 		t.Fatal("valid workload role binding command rejected")
 	}
@@ -429,6 +435,11 @@ func TestCreateWorkloadRoleBindingRequestHasOneWorkloadAndCommandIdentity(t *tes
 	var decoded CreateWorkloadRoleBindingRequest
 	if json.Unmarshal(encoded, &decoded) != nil || !reflect.DeepEqual(decoded, request) {
 		t.Fatal("workload role binding command did not strictly round trip")
+	}
+	previous, err := PreviousCreateWorkloadRoleBindingDocument(request)
+	if err != nil || bytes.Contains(previous, []byte(`"idempotencyKey"`)) ||
+		!bytes.Contains(previous, []byte(`"requestId":"`+requestID+`"`)) {
+		t.Fatalf("invalid direct-predecessor binding document: %s err=%v", previous, err)
 	}
 	for _, attack := range []string{
 		string(encoded[:len(encoded)-1]) + `,"accountId":"account-b"}`,
@@ -441,6 +452,7 @@ func TestCreateWorkloadRoleBindingRequestHasOneWorkloadAndCommandIdentity(t *tes
 		}
 	}
 	mutations := []func(*CreateWorkloadRoleBindingRequest){
+		func(value *CreateWorkloadRoleBindingRequest) { value.IdempotencyKey = "another-command" },
 		func(value *CreateWorkloadRoleBindingRequest) {
 			value.Authorization.ResourceMode = AuthorizationResourceCollection
 		},
@@ -459,13 +471,18 @@ func TestCreateWorkloadRoleBindingRequestHasOneWorkloadAndCommandIdentity(t *tes
 }
 
 func TestRevokeWorkloadRoleBindingRequestUsesRecordedBindingAuthority(t *testing.T) {
+	idempotencyKey := "unbind-service-installation-a"
+	requestID, err := WorkloadRoleCommandRequestID(WorkloadRoleCommandUnbind, idempotencyKey)
+	if err != nil || requestID != "msru-b1addbd43407813cb9050e3324ec02264d368c7b9b38bcc3bf0ea29f4b3704f1" {
+		t.Fatalf("private workload Role unbinding identity=%q err=%v", requestID, err)
+	}
 	authorization, err := NewAuthorizationRequest(ActionManagedServiceInstallationRoleUnbind,
 		ResourceReference{Kind: ResourceServiceInstallation, ID: "service-installation-a"},
-		AuthorizationResourceInstance, "", "unbind-service-installation-a", "unbind-service-installation-a")
+		AuthorizationResourceInstance, "", requestID, "unbind-service-installation-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := RevokeWorkloadRoleBindingRequest{Authorization: authorization, ResourceVersion: 1}
+	request := RevokeWorkloadRoleBindingRequest{IdempotencyKey: idempotencyKey, Authorization: authorization, ResourceVersion: 1}
 	if ValidateRevokeWorkloadRoleBindingRequest(request) != nil {
 		t.Fatal("valid workload role binding revocation rejected")
 	}
@@ -476,6 +493,11 @@ func TestRevokeWorkloadRoleBindingRequestUsesRecordedBindingAuthority(t *testing
 	var decoded RevokeWorkloadRoleBindingRequest
 	if json.Unmarshal(encoded, &decoded) != nil || !reflect.DeepEqual(decoded, request) {
 		t.Fatal("workload role binding revocation did not strictly round trip")
+	}
+	previous, err := PreviousRevokeWorkloadRoleBindingDocument(request)
+	if err != nil || bytes.Contains(previous, []byte(`"idempotencyKey"`)) ||
+		!bytes.Contains(previous, []byte(`"requestId":"`+requestID+`"`)) {
+		t.Fatalf("invalid direct-predecessor revocation document: %s err=%v", previous, err)
 	}
 	for _, attack := range []string{
 		string(encoded[:len(encoded)-1]) + `,"accountId":"account-b"}`,
@@ -488,6 +510,7 @@ func TestRevokeWorkloadRoleBindingRequestUsesRecordedBindingAuthority(t *testing
 		}
 	}
 	for _, mutate := range []func(*RevokeWorkloadRoleBindingRequest){
+		func(value *RevokeWorkloadRoleBindingRequest) { value.IdempotencyKey = "another-command" },
 		func(value *RevokeWorkloadRoleBindingRequest) { value.ResourceVersion = 2 },
 		func(value *RevokeWorkloadRoleBindingRequest) {
 			value.Authorization.ResourceMode = AuthorizationResourceCollection

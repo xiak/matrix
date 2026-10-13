@@ -259,6 +259,11 @@ func clientTestAuthorizationBatchDecision(t *testing.T, request iamv1.Authorizat
 
 func TestBindWorkloadRoleUsesServiceAndCurrentUserCredentials(t *testing.T) {
 	template := clientTestTemplateReference()
+	const idempotencyKey = "bind-command-one"
+	requestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandBind, idempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	access := clientTestServiceLinkedRoleAccess(t, template, "postgres-primary")
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost || request.URL.Path != "/v1/internal/workload-role-bindings" ||
@@ -274,7 +279,7 @@ func TestBindWorkloadRoleUsesServiceAndCurrentUserCredentials(t *testing.T) {
 			command.Authorization.Action != iamv1.ActionManagedServiceInstallationRoleBind ||
 			command.Authorization.Resource != (iamv1.ResourceReference{
 				Kind: iamv1.ResourceServiceInstallation, ID: "postgres-primary",
-			}) || command.Authorization.RequestID != "msrb-command-one" {
+			}) || command.IdempotencyKey != idempotencyKey || command.Authorization.RequestID != requestID {
 			t.Errorf("unexpected binding command: %#v", command)
 			response.WriteHeader(http.StatusUnprocessableEntity)
 			return
@@ -291,10 +296,10 @@ func TestBindWorkloadRoleUsesServiceAndCurrentUserCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := client.BindWorkloadRole(t.Context(), template, port.AuthorizationRequest{
+	result, err := client.BindWorkloadRole(t.Context(), template, idempotencyKey, port.AuthorizationRequest{
 		Credential: "Bearer user-session-secret", Action: port.AuthorizeInstallationRoleBind,
 		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: "postgres-primary"},
-		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: "msrb-command-one",
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: requestID,
 	})
 	if err != nil || result.Bindings[0].ID != access.Bindings[0].ID {
 		t.Fatalf("result=%#v err=%v", result, err)
@@ -303,10 +308,15 @@ func TestBindWorkloadRoleUsesServiceAndCurrentUserCredentials(t *testing.T) {
 
 func TestBindWorkloadRoleFailsClosedOnInvalidShapeStatusAndResponse(t *testing.T) {
 	template := clientTestTemplateReference()
+	const idempotencyKey = "bind-command-one"
+	requestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandBind, idempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	base := port.AuthorizationRequest{
 		Credential: "Bearer user-session-secret", Action: port.AuthorizeInstallationRoleBind,
 		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: "postgres-primary"},
-		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: "msrb-command-one",
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: requestID,
 	}
 	serviceCredential, _ := iamv1.NewSecret("paas-service-secret")
 	for name, status := range map[string]int{
@@ -324,7 +334,7 @@ func TestBindWorkloadRoleFailsClosedOnInvalidShapeStatusAndResponse(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = client.BindWorkloadRole(t.Context(), template, base)
+			_, err = client.BindWorkloadRole(t.Context(), template, idempotencyKey, base)
 			want := port.ErrAuthorizationUnavailable
 			switch status {
 			case http.StatusUnauthorized:
@@ -357,7 +367,7 @@ func TestBindWorkloadRoleFailsClosedOnInvalidShapeStatusAndResponse(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := client.BindWorkloadRole(t.Context(), template, base); !errors.Is(err, port.ErrAuthorizationUnavailable) {
+			if _, err := client.BindWorkloadRole(t.Context(), template, idempotencyKey, base); !errors.Is(err, port.ErrAuthorizationUnavailable) {
 				t.Fatalf("forged response error=%v", err)
 			}
 		})
@@ -366,19 +376,27 @@ func TestBindWorkloadRoleFailsClosedOnInvalidShapeStatusAndResponse(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.BindWorkloadRole(context.Background(), template, "", base); !errors.Is(err, port.ErrAuthorizationUnavailable) {
+		t.Fatalf("missing public idempotency key error=%v", err)
+	}
 	changed := base
 	changed.Action = port.AuthorizeInstallationRead
-	if _, err := client.BindWorkloadRole(context.Background(), template, changed); !errors.Is(err, port.ErrAuthorizationUnavailable) {
+	if _, err := client.BindWorkloadRole(context.Background(), template, idempotencyKey, changed); !errors.Is(err, port.ErrAuthorizationUnavailable) {
 		t.Fatalf("wrong product action error=%v", err)
 	}
 	changed = base
 	changed.Credential = "Basic user-session-secret"
-	if _, err := client.BindWorkloadRole(context.Background(), template, changed); !errors.Is(err, port.ErrUnauthenticated) {
+	if _, err := client.BindWorkloadRole(context.Background(), template, idempotencyKey, changed); !errors.Is(err, port.ErrUnauthenticated) {
 		t.Fatalf("non-bearer subject error=%v", err)
 	}
 }
 
 func TestRevokeWorkloadRoleUsesServiceAndCurrentUserCredentials(t *testing.T) {
+	const idempotencyKey = "unbind-command-one"
+	requestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandUnbind, idempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	binding := clientTestServiceLinkedRoleAccess(t, clientTestTemplateReference(), "postgres-primary").Bindings[0]
 	revokedAt := binding.CreatedAt.Add(time.Second)
 	binding.Status, binding.ResourceVersion, binding.UpdatedAt, binding.RevokedAt =
@@ -395,7 +413,8 @@ func TestRevokeWorkloadRoleUsesServiceAndCurrentUserCredentials(t *testing.T) {
 		var command iamv1.RevokeWorkloadRoleBindingRequest
 		if iamv1.DecodeRequest(request.Body, &command) != nil || command.ResourceVersion != 1 ||
 			command.Authorization.Action != iamv1.ActionManagedServiceInstallationRoleUnbind ||
-			command.Authorization.Resource != binding.Workload || command.Authorization.RequestID != "msru-command-one" {
+			command.Authorization.Resource != binding.Workload || command.IdempotencyKey != idempotencyKey ||
+			command.Authorization.RequestID != requestID {
 			t.Errorf("unexpected revocation command: %#v", command)
 			response.WriteHeader(http.StatusUnprocessableEntity)
 			return
@@ -412,10 +431,10 @@ func TestRevokeWorkloadRoleUsesServiceAndCurrentUserCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := client.RevokeWorkloadRole(t.Context(), binding.ID, 1, port.AuthorizationRequest{
+	result, err := client.RevokeWorkloadRole(t.Context(), binding.ID, 1, idempotencyKey, port.AuthorizationRequest{
 		Credential: "Bearer user-session-secret", Action: port.AuthorizeInstallationRoleUnbind,
 		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: "postgres-primary"},
-		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: "msru-command-one",
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: requestID,
 	})
 	if err != nil || result.ID != binding.ID || result.Status != iamv1.WorkloadRoleBindingRevoked {
 		t.Fatalf("result=%#v err=%v", result, err)
@@ -423,10 +442,15 @@ func TestRevokeWorkloadRoleUsesServiceAndCurrentUserCredentials(t *testing.T) {
 }
 
 func TestRevokeWorkloadRoleFailsClosedOnInvalidShapeStatusAndResponse(t *testing.T) {
+	const idempotencyKey = "unbind-command-one"
+	requestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandUnbind, idempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	base := port.AuthorizationRequest{
 		Credential: "Bearer user-session-secret", Action: port.AuthorizeInstallationRoleUnbind,
 		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: "postgres-primary"},
-		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: "msru-command-one",
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: requestID,
 	}
 	serviceCredential, _ := iamv1.NewSecret("paas-service-secret")
 	for name, status := range map[string]int{
@@ -440,7 +464,7 @@ func TestRevokeWorkloadRoleFailsClosedOnInvalidShapeStatusAndResponse(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = client.RevokeWorkloadRole(t.Context(), "binding-reader", 1, base)
+			_, err = client.RevokeWorkloadRole(t.Context(), "binding-reader", 1, idempotencyKey, base)
 			want := port.ErrAuthorizationUnavailable
 			switch status {
 			case http.StatusUnauthorized:
@@ -465,17 +489,17 @@ func TestRevokeWorkloadRoleFailsClosedOnInvalidShapeStatusAndResponse(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.RevokeWorkloadRole(t.Context(), active.ID, 1, base); !errors.Is(err, port.ErrAuthorizationUnavailable) {
+	if _, err := client.RevokeWorkloadRole(t.Context(), active.ID, 1, idempotencyKey, base); !errors.Is(err, port.ErrAuthorizationUnavailable) {
 		t.Fatalf("active forged response error=%v", err)
 	}
 	changed := base
 	changed.Action = port.AuthorizeInstallationRead
-	if _, err := client.RevokeWorkloadRole(context.Background(), active.ID, 1, changed); !errors.Is(err, port.ErrAuthorizationUnavailable) {
+	if _, err := client.RevokeWorkloadRole(context.Background(), active.ID, 1, idempotencyKey, changed); !errors.Is(err, port.ErrAuthorizationUnavailable) {
 		t.Fatalf("wrong product action error=%v", err)
 	}
 	changed = base
 	changed.Credential = "Basic user-session-secret"
-	if _, err := client.RevokeWorkloadRole(context.Background(), active.ID, 1, changed); !errors.Is(err, port.ErrUnauthenticated) {
+	if _, err := client.RevokeWorkloadRole(context.Background(), active.ID, 1, idempotencyKey, changed); !errors.Is(err, port.ErrUnauthenticated) {
 		t.Fatalf("non-bearer subject error=%v", err)
 	}
 }

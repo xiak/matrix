@@ -2012,13 +2012,20 @@ func TestRoleManagementRequestsKeepSelectorsAndDefaultsClosed(t *testing.T) {
 func TestServiceRoleConsentSchemasMatchClosedObjects(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	access := serviceLinkedRoleAccessForTest(t)
-	authorization, err := NewAuthorizationRequest(ActionManagedServiceInstallationRoleBind,
-		ResourceReference{Kind: ResourceServiceInstallation, ID: "service-installation-a"},
-		AuthorizationResourceInstance, "", "service-role-bind", "service-role-bind")
+	const idempotencyKey = "service-role-bind"
+	requestID, err := WorkloadRoleCommandRequestID(WorkloadRoleCommandBind, idempotencyKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := CreateWorkloadRoleBindingRequest{Template: access.Relation.Template, Authorization: authorization}
+	authorization, err := NewAuthorizationRequest(ActionManagedServiceInstallationRoleBind,
+		ResourceReference{Kind: ResourceServiceInstallation, ID: "service-installation-a"},
+		AuthorizationResourceInstance, "", requestID, idempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := CreateWorkloadRoleBindingRequest{
+		IdempotencyKey: idempotencyKey, Template: access.Relation.Template, Authorization: authorization,
+	}
 	values := map[string]any{
 		"ServiceRoleTemplate":              serviceRoleTemplateForTest(t),
 		"ServiceLinkedRole":                access.Relation,

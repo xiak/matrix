@@ -14,6 +14,7 @@ import (
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/internal/authorityhttp"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
@@ -227,12 +228,14 @@ func (client *Client) AuthorizeBatch(
 func (client *Client) BindWorkloadRole(
 	ctx context.Context,
 	template iamv1.ServiceRoleTemplateReference,
+	idempotencyKey string,
 	request port.AuthorizationRequest,
 ) (iamv1.ServiceLinkedRoleAccess, error) {
 	if client == nil || client.http == nil {
 		return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
 	}
-	if ctx == nil || iamv1.ValidateServiceRoleTemplateReference(template) != nil ||
+	if ctx == nil || managedservicev1.ValidateIdempotencyKey(idempotencyKey) != nil ||
+		iamv1.ValidateServiceRoleTemplateReference(template) != nil ||
 		port.ValidateAuthorizationRequest(request) != nil || request.Action != port.AuthorizeInstallationRoleBind ||
 		request.Resource.Kind != port.ResourceServiceInstallation ||
 		request.ResourceMode != iamv1.AuthorizationResourceInstance || request.CollectionUsage != "" {
@@ -246,7 +249,9 @@ func (client *Client) BindWorkloadRole(
 	if err != nil {
 		return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
 	}
-	command := iamv1.CreateWorkloadRoleBindingRequest{Template: template, Authorization: iamAuthorization}
+	command := iamv1.CreateWorkloadRoleBindingRequest{
+		IdempotencyKey: idempotencyKey, Template: template, Authorization: iamAuthorization,
+	}
 	if iamv1.ValidateCreateWorkloadRoleBindingRequest(command) != nil {
 		return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
 	}
@@ -281,12 +286,14 @@ func (client *Client) RevokeWorkloadRole(
 	ctx context.Context,
 	bindingID iamv1.WorkloadRoleBindingID,
 	resourceVersion uint64,
+	idempotencyKey string,
 	request port.AuthorizationRequest,
 ) (iamv1.WorkloadRoleBinding, error) {
 	if client == nil || client.http == nil {
 		return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable
 	}
 	if ctx == nil || iamv1.ValidateID("bindingId", string(bindingID)) != nil || resourceVersion != 1 ||
+		managedservicev1.ValidateIdempotencyKey(idempotencyKey) != nil ||
 		port.ValidateAuthorizationRequest(request) != nil || request.Action != port.AuthorizeInstallationRoleUnbind ||
 		request.Resource.Kind != port.ResourceServiceInstallation ||
 		request.ResourceMode != iamv1.AuthorizationResourceInstance || request.CollectionUsage != "" {
@@ -301,7 +308,7 @@ func (client *Client) RevokeWorkloadRole(
 		return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable
 	}
 	command := iamv1.RevokeWorkloadRoleBindingRequest{
-		Authorization: iamAuthorization, ResourceVersion: resourceVersion,
+		IdempotencyKey: idempotencyKey, Authorization: iamAuthorization, ResourceVersion: resourceVersion,
 	}
 	if iamv1.ValidateRevokeWorkloadRoleBindingRequest(command) != nil {
 		return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable

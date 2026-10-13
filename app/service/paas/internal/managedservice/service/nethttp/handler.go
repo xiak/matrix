@@ -651,7 +651,8 @@ func acceptsNoInput(
 	request *http.Request,
 	requestID string,
 ) bool {
-	if request.URL.RawQuery != "" || request.ContentLength > 0 {
+	if request.URL.RawQuery != "" || request.ContentLength != 0 || len(request.TransferEncoding) != 0 ||
+		(request.Body != nil && request.Body != http.NoBody) {
 		writeProblem(response, requestID, http.StatusBadRequest,
 			managedservicev1.ErrorInvalidArgument, "Invalid argument", "resource read accepts no query or body", false)
 		return false

@@ -78,11 +78,39 @@ func TestCommandResultContractIsClosedAndStateBound(t *testing.T) {
 	if err := ValidateCommandResult(role); err != nil {
 		t.Fatalf("valid role result: %v", err)
 	}
+	failureCode := "PROVIDER_UNAVAILABLE"
+	failed := base
+	failed.State, failed.CompletedAt = CommandFailed, &completed
+	failed.Operation = &InstallationOperation{
+		ID: operation.ID, Kind: operation.Kind, Phase: InstallationFailed,
+		SafeFailureCode: &failureCode, ObservedAt: completed,
+	}
+	if err := ValidateCommandResult(failed); err != nil {
+		t.Fatalf("valid failed command result: %v", err)
+	}
+	missingFailureCode := failed
+	missingFailureCode.Operation = &InstallationOperation{
+		ID: operation.ID, Kind: operation.Kind, Phase: InstallationFailed, ObservedAt: completed,
+	}
+	nonFailedWithCode := base
+	nonFailedWithCode.Operation = &InstallationOperation{
+		ID: operation.ID, Kind: operation.Kind, Phase: operation.Phase,
+		SafeFailureCode: &failureCode, ObservedAt: operation.ObservedAt,
+	}
+	invalidFailureCode := failed
+	unsafeCode := "provider: password=secret"
+	invalidFailureCode.Operation = &InstallationOperation{
+		ID: operation.ID, Kind: operation.Kind, Phase: InstallationFailed,
+		SafeFailureCode: &unsafeCode, ObservedAt: completed,
+	}
 	invalid := []CommandResult{
 		func() CommandResult { value := base; value.State = CommandSucceeded; return value }(),
 		func() CommandResult { value := quota; value.Operation = &operation; return value }(),
 		func() CommandResult { value := role; value.BindingID = nil; return value }(),
 		func() CommandResult { value := base; value.CommandType = "ARBITRARY"; return value }(),
+		missingFailureCode,
+		nonFailedWithCode,
+		invalidFailureCode,
 	}
 	for index, value := range invalid {
 		if ValidateCommandResult(value) == nil {

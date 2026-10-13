@@ -233,6 +233,7 @@ func (value *transaction) CreateWorkloadRoleBinding(
 		iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||
 		iamv1.ValidateDigest("serviceLookupDigest", mutation.ServiceLookupDigest) != nil ||
 		iamv1.ValidateDigest("requestDigest", mutation.RequestDigest) != nil ||
+		iamv1.ValidateDigest("previousRequestDigest", mutation.PreviousRequestDigest) != nil ||
 		iamv1.ValidateCreateWorkloadRoleBindingRequest(mutation.Request) != nil ||
 		mutation.Request.Template != mutation.Template.Reference() ||
 		iamv1.ValidateServiceRoleTemplate(mutation.Template) != nil ||
@@ -249,6 +250,11 @@ func (value *transaction) CreateWorkloadRoleBinding(
 		return iamv1.ServiceLinkedRoleAccess{}, identityaccess.ErrInvalidArgument
 	}
 	defer clear(requestDocument)
+	previousRequestDocument, err := iamv1.PreviousCreateWorkloadRoleBindingDocument(mutation.Request)
+	if err != nil {
+		return iamv1.ServiceLinkedRoleAccess{}, identityaccess.ErrInvalidArgument
+	}
+	defer clear(previousRequestDocument)
 	template, err := json.Marshal(mutation.Template)
 	if err != nil {
 		return iamv1.ServiceLinkedRoleAccess{}, identityaccess.ErrInvalidArgument
@@ -282,9 +288,10 @@ func (value *transaction) CreateWorkloadRoleBinding(
 
 	var encoded []byte
 	err = value.tx.QueryRow(ctx, `SELECT iam.create_workload_role_binding(
-        $1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14::jsonb,$15::jsonb)`,
+        $1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14,$15,$16::jsonb,$17::jsonb)`,
 		mutation.AccountID, mutation.ActorPrincipalID, mutation.ActorSessionID, mutation.ServiceLookupDigest,
-		string(requestDocument), mutation.RequestDigest, template, role, trust, binding,
+		string(requestDocument), mutation.RequestDigest, string(previousRequestDocument), mutation.PreviousRequestDigest,
+		template, role, trust, binding,
 		mutation.WorkloadDecisionID, mutation.RoleCreationDecisionID, mutation.RolePassDecisionID,
 		roleEvent, bindingEvent).Scan(&encoded)
 	if err != nil {
@@ -350,6 +357,7 @@ func (value *transaction) RevokeWorkloadRoleBinding(
 		iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||
 		iamv1.ValidateDigest("serviceLookupDigest", mutation.ServiceLookupDigest) != nil ||
 		iamv1.ValidateDigest("requestDigest", mutation.RequestDigest) != nil ||
+		iamv1.ValidateDigest("previousRequestDigest", mutation.PreviousRequestDigest) != nil ||
 		iamv1.ValidateRevokeWorkloadRoleBindingRequest(mutation.Request) != nil {
 		return iamv1.WorkloadRoleBinding{}, identityaccess.ErrInvalidArgument
 	}
@@ -358,6 +366,11 @@ func (value *transaction) RevokeWorkloadRoleBinding(
 		return iamv1.WorkloadRoleBinding{}, identityaccess.ErrInvalidArgument
 	}
 	defer clear(requestDocument)
+	previousRequestDocument, err := iamv1.PreviousRevokeWorkloadRoleBindingDocument(mutation.Request)
+	if err != nil {
+		return iamv1.WorkloadRoleBinding{}, identityaccess.ErrInvalidArgument
+	}
+	defer clear(previousRequestDocument)
 	event, err := marshalManagementEvent(mutation.AuditEvent)
 	if err != nil {
 		return iamv1.WorkloadRoleBinding{}, err
@@ -365,10 +378,11 @@ func (value *transaction) RevokeWorkloadRoleBinding(
 	defer clear(event)
 	var encoded []byte
 	err = value.tx.QueryRow(ctx, `SELECT iam.revoke_workload_role_binding(
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)`,
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)`,
 		mutation.AccountID, mutation.ActorPrincipalID, mutation.ActorSessionID,
 		mutation.ServiceLookupDigest, mutation.ServicePurpose, mutation.BindingID,
-		string(requestDocument), mutation.RequestDigest, mutation.WorkloadDecisionID,
+		string(requestDocument), mutation.RequestDigest, string(previousRequestDocument), mutation.PreviousRequestDigest,
+		mutation.WorkloadDecisionID,
 		mutation.BindingRevokeDecisionID, mutation.RolePassDecisionID, event).Scan(&encoded)
 	if err != nil {
 		return iamv1.WorkloadRoleBinding{}, mapAuthorizationDatabaseError("revoke IAM workload role binding", err)

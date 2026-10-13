@@ -119,12 +119,14 @@ type WorkloadRoleAuthority interface {
 	BindWorkloadRole(
 		context.Context,
 		iamv1.ServiceRoleTemplateReference,
+		string,
 		AuthorizationRequest,
 	) (iamv1.ServiceLinkedRoleAccess, error)
 	RevokeWorkloadRole(
 		context.Context,
 		iamv1.WorkloadRoleBindingID,
 		uint64,
+		string,
 		AuthorizationRequest,
 	) (iamv1.WorkloadRoleBinding, error)
 	ListWorkloadRoleCommandResults(

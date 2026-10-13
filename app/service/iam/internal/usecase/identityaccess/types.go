@@ -455,6 +455,7 @@ type WorkloadRoleBindingCreation struct {
 	RoleCreationDecisionID   iamv1.DecisionID
 	RolePassDecisionID       iamv1.DecisionID
 	RequestDigest            string
+	PreviousRequestDigest    string
 	RoleCreatedAuditEvent    auditv1.Event
 	BindingCreatedAuditEvent auditv1.Event
 }
@@ -472,6 +473,7 @@ type WorkloadRoleBindingRevocation struct {
 	ServicePurpose          iamv1.ServicePurpose
 	Request                 iamv1.RevokeWorkloadRoleBindingRequest
 	RequestDigest           string
+	PreviousRequestDigest   string
 	WorkloadDecisionID      iamv1.DecisionID
 	BindingRevokeDecisionID iamv1.DecisionID
 	RolePassDecisionID      iamv1.DecisionID

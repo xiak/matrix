@@ -18662,12 +18662,16 @@
           "authorization": {
             "$ref": "#/components/schemas/AuthorizationRequest"
           },
+          "idempotencyKey": {
+            "type": "string"
+          },
           "template": {
             "$ref": "#/components/schemas/ServiceRoleTemplateReference"
           }
         },
         "required": [
           "authorization",
+          "idempotencyKey",
           "template"
         ],
         "type": "object"
@@ -38366,12 +38370,16 @@
           "authorization": {
             "$ref": "#/components/schemas/AuthorizationRequest"
           },
+          "idempotencyKey": {
+            "type": "string"
+          },
           "resourceVersion": {
             "const": 1
           }
         },
         "required": [
           "authorization",
+          "idempotencyKey",
           "resourceVersion"
         ],
         "type": "object"

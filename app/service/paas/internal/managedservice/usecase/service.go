@@ -513,9 +513,9 @@ func (service *Service) GetInstallationOperation(
 
 // BindServiceRole proves the path resource exists in the IAM-derived Account
 // before forwarding one normalized, idempotent workload consent command. The
-// public idempotency key remains the command identity across the PaaS/IAM
-// boundary; IAM's digest and decisions remain private evidence. The caller
-// cannot select the Account, Role, service principal or purpose.
+// public idempotency key is recorded separately from the deterministic IAM
+// request identity; IAM's digest and decisions remain private evidence. The
+// caller cannot select the Account, Role, service principal or purpose.
 func (service *Service) BindServiceRole(
 	ctx context.Context,
 	command BindServiceRoleCommand,
@@ -542,12 +542,18 @@ func (service *Service) BindServiceRole(
 	if installation.Phase != managedservicev1.InstallationReady {
 		return managedservicev1.ServiceRoleBindingReceipt{}, ErrInvalidState
 	}
+	requestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandBind, command.IdempotencyKey)
+	if err != nil {
+		return managedservicev1.ServiceRoleBindingReceipt{}, ErrInvalidArgument
+	}
 	request := port.AuthorizationRequest{
 		Credential: command.Credential, Action: port.AuthorizeInstallationRoleBind,
 		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID},
-		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: command.IdempotencyKey,
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: requestID,
 	}
-	result, err := service.workloadRoleAuthority.BindWorkloadRole(ctx, command.Request.Template, request)
+	result, err := service.workloadRoleAuthority.BindWorkloadRole(
+		ctx, command.Request.Template, command.IdempotencyKey, request,
+	)
 	if err != nil {
 		return managedservicev1.ServiceRoleBindingReceipt{}, err
 	}
@@ -639,13 +645,17 @@ func (service *Service) UnbindServiceRole(
 	if managedservicev1.ValidateServiceInstallation(installation) != nil || installation.ID != command.InstallationID {
 		return managedservicev1.ServiceRoleUnbindingReceipt{}, ErrRepositoryUnavailable
 	}
+	requestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandUnbind, command.IdempotencyKey)
+	if err != nil {
+		return managedservicev1.ServiceRoleUnbindingReceipt{}, ErrInvalidArgument
+	}
 	request := port.AuthorizationRequest{
 		Credential: command.Credential, Action: port.AuthorizeInstallationRoleUnbind,
 		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID},
-		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: command.IdempotencyKey,
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: requestID,
 	}
 	binding, err := service.workloadRoleAuthority.RevokeWorkloadRole(
-		ctx, command.BindingID, command.Request.ResourceVersion, request,
+		ctx, command.BindingID, command.Request.ResourceVersion, command.IdempotencyKey, request,
 	)
 	if err != nil {
 		return managedservicev1.ServiceRoleUnbindingReceipt{}, err

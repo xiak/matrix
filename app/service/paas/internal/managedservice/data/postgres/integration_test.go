@@ -816,6 +816,7 @@ type integrationWorkloadRoleBinder struct{}
 func (integrationWorkloadRoleBinder) BindWorkloadRole(
 	context.Context,
 	iamv1.ServiceRoleTemplateReference,
+	string,
 	port.AuthorizationRequest,
 ) (iamv1.ServiceLinkedRoleAccess, error) {
 	return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
@@ -825,6 +826,7 @@ func (integrationWorkloadRoleBinder) RevokeWorkloadRole(
 	context.Context,
 	iamv1.WorkloadRoleBindingID,
 	uint64,
+	string,
 	port.AuthorizationRequest,
 ) (iamv1.WorkloadRoleBinding, error) {
 	return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable

@@ -283,6 +283,12 @@ func (service *Authority) CreateWorkloadRoleBinding(
 	if err != nil {
 		return iamv1.ServiceLinkedRoleAccess{}, err
 	}
+	previousRequestDocument, err := iamv1.PreviousCreateWorkloadRoleBindingDocument(request)
+	if err != nil {
+		return iamv1.ServiceLinkedRoleAccess{}, ErrUnavailable
+	}
+	previousRequestDigest := digestSanitizedDocument("workload-role-binding-create", previousRequestDocument)
+	clear(previousRequestDocument)
 	var result iamv1.ServiceLinkedRoleAccess
 	denied := false
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
@@ -419,6 +425,7 @@ func (service *Authority) CreateWorkloadRoleBinding(
 			ServiceLookupDigest: caller.LookupDigest, Request: request, Template: template, Role: role, TrustVersion: trust, Binding: binding,
 			WorkloadDecisionID: workloadDecision.ID, RoleCreationDecisionID: roleCreationDecision.ID,
 			RolePassDecisionID: rolePassDecision.ID, RequestDigest: requestDigest,
+			PreviousRequestDigest: previousRequestDigest,
 			RoleCreatedAuditEvent: roleEvent, BindingCreatedAuditEvent: bindingEvent,
 		})
 		return err
@@ -455,6 +462,14 @@ func (service *Authority) RevokeWorkloadRoleBinding(
 	if err != nil {
 		return iamv1.WorkloadRoleBinding{}, err
 	}
+	previousRequestDocument, err := iamv1.PreviousRevokeWorkloadRoleBindingDocument(request)
+	if err != nil {
+		return iamv1.WorkloadRoleBinding{}, ErrUnavailable
+	}
+	previousRequestDigest := digestSanitizedDocument(
+		"workload-role-binding-revoke:"+string(id), previousRequestDocument,
+	)
+	clear(previousRequestDocument)
 	var result iamv1.WorkloadRoleBinding
 	denied := false
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
@@ -573,7 +588,7 @@ func (service *Authority) RevokeWorkloadRoleBinding(
 			AccountID: subject.Subject.Organization.ID, BindingID: id,
 			ActorPrincipalID: subject.Subject.Principal.ID, ActorSessionID: subject.Subject.Session.ID,
 			ServiceLookupDigest: caller.LookupDigest, ServicePurpose: caller.Identity.Purpose,
-			Request: request, RequestDigest: requestDigest,
+			Request: request, RequestDigest: requestDigest, PreviousRequestDigest: previousRequestDigest,
 			WorkloadDecisionID: workloadDecision.ID, BindingRevokeDecisionID: bindingRevokeDecision.ID,
 			RolePassDecisionID: rolePassDecision.ID, AuditEvent: event,
 		})

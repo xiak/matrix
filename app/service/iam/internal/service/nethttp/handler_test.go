@@ -722,13 +722,20 @@ func TestIAMHTTPWorkloadRoleBindingRequiresExactlyTwoCredentialsAndNoSelectors(t
 	if err != nil || len(templates) != 1 {
 		t.Fatal(err)
 	}
-	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleBind,
-		iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a"},
-		iamv1.AuthorizationResourceInstance, "", "binding-command", "binding-command")
+	const idempotencyKey = "binding-command"
+	requestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandBind, idempotencyKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := iamv1.CreateWorkloadRoleBindingRequest{Template: templates[0].Reference(), Authorization: authorization}
+	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleBind,
+		iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a"},
+		iamv1.AuthorizationResourceInstance, "", requestID, idempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := iamv1.CreateWorkloadRoleBindingRequest{
+		IdempotencyKey: idempotencyKey, Template: templates[0].Reference(), Authorization: authorization,
+	}
 	body, err := json.Marshal(command)
 	if err != nil {
 		t.Fatal(err)
@@ -780,13 +787,20 @@ func TestIAMHTTPWorkloadRoleBindingRequiresExactlyTwoCredentialsAndNoSelectors(t
 func TestIAMHTTPWorkloadRoleBindingRevocationRequiresExactPathAndTwoCredentials(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
-	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleUnbind,
-		iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a"},
-		iamv1.AuthorizationResourceInstance, "", "binding-revoke", "binding-revoke")
+	const idempotencyKey = "binding-revoke"
+	requestID, err := iamv1.WorkloadRoleCommandRequestID(iamv1.WorkloadRoleCommandUnbind, idempotencyKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := iamv1.RevokeWorkloadRoleBindingRequest{Authorization: authorization, ResourceVersion: 1}
+	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleUnbind,
+		iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a"},
+		iamv1.AuthorizationResourceInstance, "", requestID, idempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := iamv1.RevokeWorkloadRoleBindingRequest{
+		IdempotencyKey: idempotencyKey, Authorization: authorization, ResourceVersion: 1,
+	}
 	body, err := json.Marshal(command)
 	if err != nil {
 		t.Fatal(err)

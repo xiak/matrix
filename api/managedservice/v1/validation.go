@@ -243,11 +243,8 @@ func ValidateServiceInstallation(value ServiceInstallation) error {
 		validateID("serviceInstallation.quotaEntitlementId", value.QuotaEntitlementID),
 		validateID("serviceInstallation.regionId", value.RegionID),
 		validateInstallationPhase(value.Phase),
-		validateID("serviceInstallation.operation.id", value.Operation.ID),
-		validateInstallationOperationKind(value.Operation.Kind),
-		validateInstallationPhase(value.Operation.Phase),
+		validateInstallationOperation(value.Operation),
 		validateResourceVersion(value.ResourceVersion),
-		validateTime("serviceInstallation.operation.observedAt", value.Operation.ObservedAt),
 		validateTime("serviceInstallation.createdAt", value.CreatedAt),
 	)
 	if !installationOperationMatchesPhase(value.Operation.Kind, value.Operation.Phase, value.Phase) {
@@ -259,9 +256,6 @@ func ValidateServiceInstallation(value ServiceInstallation) error {
 	if value.CredentialReference != nil {
 		problems = append(problems, validateID("serviceInstallation.credentialReference", *value.CredentialReference))
 	}
-	if value.Operation.SafeFailureCode != nil && !codePattern.MatchString(*value.Operation.SafeFailureCode) {
-		problems = append(problems, errors.New("installation failure code is invalid"))
-	}
 	retainsReadyResult := value.Phase == InstallationReady ||
 		value.Phase == InstallationTerminationPending || value.Phase == InstallationTerminating ||
 		value.Phase == InstallationTerminationFailed
@@ -270,14 +264,6 @@ func ValidateServiceInstallation(value ServiceInstallation) error {
 	}
 	if !retainsReadyResult && (value.Endpoint != nil || value.CredentialReference != nil) {
 		problems = append(problems, errors.New("non-ready installation cannot expose endpoint or credential reference"))
-	}
-	failed := value.Phase == InstallationFailed || value.Phase == InstallationRollbackFailed ||
-		value.Phase == InstallationTerminationFailed
-	if failed && value.Operation.SafeFailureCode == nil {
-		problems = append(problems, errors.New("failed installation requires a safe failure code"))
-	}
-	if !failed && value.Operation.SafeFailureCode != nil {
-		problems = append(problems, errors.New("non-failed installation cannot expose a failure code"))
 	}
 	return errors.Join(problems...)
 }
@@ -362,12 +348,24 @@ func ValidateCommandResultList(value CommandResultList) error {
 }
 
 func validateInstallationOperation(value InstallationOperation) error {
-	return errors.Join(
+	var problems []error
+	problems = append(problems,
 		validateID("operation.id", value.ID),
 		validateInstallationOperationKind(value.Kind),
 		validateInstallationPhase(value.Phase),
 		validateTime("operation.observedAt", value.ObservedAt),
 	)
+	if value.SafeFailureCode != nil && !codePattern.MatchString(*value.SafeFailureCode) {
+		problems = append(problems, errors.New("installation failure code is invalid"))
+	}
+	failed := value.Phase == InstallationFailed
+	if failed && value.SafeFailureCode == nil {
+		problems = append(problems, errors.New("failed installation requires a safe failure code"))
+	}
+	if !failed && value.SafeFailureCode != nil {
+		problems = append(problems, errors.New("non-failed installation cannot expose a failure code"))
+	}
+	return errors.Join(problems...)
 }
 
 func commandStateForOperation(value InstallationOperation) CommandState {
