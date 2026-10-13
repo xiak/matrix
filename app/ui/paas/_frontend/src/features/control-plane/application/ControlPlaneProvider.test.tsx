@@ -5,6 +5,7 @@ import { SessionProvider, useSession } from "@/features/auth/application/Session
 import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { ControlPlaneSnapshot, ServiceInstallation } from "../domain/resources";
+import { managedServiceCommandType, type ManagedServiceCommandIntent, type ManagedServiceCommandResult } from "../domain/managedServiceCommand";
 import type {
   ControlPlaneRepository,
   ControlPlaneResourceKind,
@@ -110,6 +111,7 @@ function resourceSlice(
 function Probe() {
   const session = useSession();
   const controlPlane = useControlPlane();
+  const [summary, setSummary] = useState("");
   const installation = controlPlane.scene?.content.kind === "installations"
     ? controlPlane.scene.content.installations[0]
     : null;
@@ -130,7 +132,10 @@ function Probe() {
         quotaEntitlementId: "quota-primary",
         regionId: "local-primary"
       })} type="button">create recovery installation</button>
-      <button onClick={() => void controlPlane.retryManagedServiceCommand()} type="button">retry managed command</button>
+      <button onClick={() => void session.logout()} type="button">logout</button>
+      <textarea aria-label="original summary" onChange={(event) => setSummary(event.target.value)} value={summary} />
+      <button onClick={() => { controlPlane.restoreManagedServiceCommand(summary); }} type="button">restore original command</button>
+      <button onClick={() => void controlPlane.inspectManagedServiceCommand()} type="button">inspect managed command</button>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
       <span data-testid="error">{controlPlane.error ?? "none"}</span>
@@ -139,6 +144,8 @@ function Probe() {
       <span data-testid="command-request">{controlPlane.managedServiceCommand?.intent.requestId ?? "none"}</span>
       <span data-testid="command-slow">{String(controlPlane.managedServiceCommand?.slow ?? false)}</span>
       <span data-testid="command-restored">{String(controlPlane.managedServiceCommand?.restored ?? false)}</span>
+      <span data-testid="command-error">{controlPlane.managedServiceCommand?.error ?? "none"}</span>
+      <span data-testid="command-result">{controlPlane.managedServiceCommand?.result?.target.id ?? "none"}</span>
       <span data-testid="projections">{JSON.stringify(projections)}</span>
     </div>
   );
@@ -166,6 +173,39 @@ function iamRepository(principalId = "principal-test"): IamRepository {
   };
 }
 
+function originalCommand(kind: ManagedServiceCommandIntent["kind"]): ManagedServiceCommandIntent {
+  const base = { owner: { accountId: "organization-test", actorKind: "USER" as const, actorId: "principal-test" },
+    requestId: `original-${kind}`, startedAt: "2026-10-13T10:00:00Z", targetId: "original-installation", targetLabel: "Original operation" };
+  const template = { id: "installation-reader", version: 1 as const, contentDigest: `sha256:${"c".repeat(64)}` };
+  if (kind === "ACTIVATE_QUOTA") return { ...base, kind, targetId: "original-offering", payload: { offeringId: "original-offering", quotaShapeId: "shape-small", instanceCount: 1 } };
+  if (kind === "CREATE_INSTALLATION") return { ...base, kind, payload: { id: "original-installation", name: "Original installation", offeringId: "original-offering", quotaEntitlementId: "original-quota", regionId: "local-primary" } };
+  if (kind === "TERMINATE_INSTALLATION") return { ...base, kind, payload: { installationId: "original-installation" } };
+  if (kind === "BIND_SERVICE_ROLE") return { ...base, kind, payload: { installationId: "original-installation", template } };
+  return { ...base, kind, payload: { installationId: "original-installation", bindingId: "original-binding", resourceVersion: 2, expectedTemplate: template } };
+}
+
+function originalResult(intent: ManagedServiceCommandIntent): ManagedServiceCommandResult {
+  return { idempotencyKey: intent.requestId, commandType: managedServiceCommandType(intent.kind), inputDigest: `sha256:${"d".repeat(64)}`,
+    state: "SUCCEEDED", target: { kind: intent.kind === "ACTIVATE_QUOTA" ? "QUOTA_ENTITLEMENT" : "SERVICE_INSTALLATION",
+      id: intent.kind === "ACTIVATE_QUOTA" ? "server-allocated-entitlement" : intent.targetId },
+    operation: intent.kind === "CREATE_INSTALLATION" ? readyInstallation.operation : intent.kind === "TERMINATE_INSTALLATION"
+      ? { ...readyInstallation.operation, kind: "TERMINATE" } : null,
+    bindingId: intent.kind === "BIND_SERVICE_ROLE" || intent.kind === "UNBIND_SERVICE_ROLE" ? "original-binding" : null,
+    completedAt: "2026-10-13T10:01:00Z" };
+}
+
+function recoveryView(read: NonNullable<ControlPlaneRepository["listCommandResults"]>, iam = iamRepository()) {
+  const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn(),
+    terminateInstallation: vi.fn(), bindServiceRole: vi.fn(), unbindServiceRole: vi.fn(), listCommandResults: read };
+  return { repository, ...render(<SessionProvider repository={iam}><ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Probe /></ControlPlaneProvider></SessionProvider>) };
+}
+
+async function bringOriginal(screen: ReturnType<typeof recoveryView>, intent: ManagedServiceCommandIntent) {
+  await act(async () => { fireEvent.click(screen.getByText("login")); });
+  fireEvent.change(screen.getByLabelText("original summary"), { target: { value: JSON.stringify(intent) } });
+  await act(async () => { fireEvent.click(screen.getByText("restore original command")); });
+}
+
 afterEach(() => {
   cleanup();
   localStorage.clear();
@@ -173,6 +213,84 @@ afterEach(() => {
 });
 
 describe("ControlPlaneProvider", () => {
+  it.each(["ACTIVATE_QUOTA", "CREATE_INSTALLATION", "TERMINATE_INSTALLATION", "BIND_SERVICE_ROLE", "UNBIND_SERVICE_ROLE"] as const)(
+    "recovers %s in a clean browser from the original non-secret intent without any write", async (kind) => {
+      const intent = originalCommand(kind), result = originalResult(intent), read = vi.fn(async () => [result]);
+      const screen = recoveryView(read);
+      await bringOriginal(screen, intent);
+      expect(read).not.toHaveBeenCalled();
+      await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+      expect(screen.getByTestId("command-phase").textContent).toBe("completed");
+      expect(screen.getByTestId("command-result").textContent).toBe(result.target.id);
+      expect(read).toHaveBeenCalledWith("memory-only-session", managedServiceCommandType(kind));
+      for (const write of [screen.repository.activateQuota, screen.repository.createInstallation, screen.repository.terminateInstallation, screen.repository.bindServiceRole, screen.repository.unbindServiceRole]) expect(write).not.toHaveBeenCalled();
+      expect(screen.repository.getInstallation).not.toHaveBeenCalled();
+      expect(localStorage.getItem("matrix.managed-service.commands.v1")).toBeNull();
+    });
+
+  it.each([403, 404, 409, 503, "protocol", "empty", "target", "binding", "type"])("preserves UNKNOWN after %s without permitting another create", async (failure) => {
+    const intent = originalCommand("UNBIND_SERVICE_ROLE");
+    const read = vi.fn(async () => {
+      if (typeof failure === "number") throw new HttpProblem(failure, "PRIVATE_UPSTREAM_REASON");
+      if (failure === "protocol") throw new Error("INVALID_WIRE");
+      const result = originalResult(intent);
+      if (failure === "empty") return [];
+      if (failure === "target") result.target.id = "foreign-installation";
+      if (failure === "binding") result.bindingId = "foreign-binding";
+      if (failure === "type") result.commandType = "SERVICE_ROLE_BIND";
+      return [result];
+    });
+    const screen = recoveryView(read);
+    await bringOriginal(screen, intent);
+    await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+    expect(screen.getByTestId("command-phase").textContent).toBe("unknown");
+    expect(screen.getByTestId("command-result").textContent).toBe("none");
+    expect(localStorage.getItem("matrix.managed-service.commands.v1")).toContain(intent.requestId);
+    await act(async () => { fireEvent.click(screen.getByText("create recovery installation")); });
+    expect(screen.repository.createInstallation).not.toHaveBeenCalled();
+  });
+
+  it.each(["IN_PROGRESS", "FAILED"] as const)("separates a confirmed %s result from unknown transport failure", async (state) => {
+    const intent = originalCommand("CREATE_INSTALLATION"), result = { ...originalResult(intent), state, completedAt: state === "IN_PROGRESS" ? null : "2026-10-13T10:01:00Z" };
+    const screen = recoveryView(vi.fn(async () => [result]));
+    await bringOriginal(screen, intent);
+    await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+    expect(screen.getByTestId("command-phase").textContent).toBe(state === "IN_PROGRESS" ? "inProgress" : "failed");
+    expect(screen.repository.createInstallation).not.toHaveBeenCalled();
+  });
+
+  it("rejects another actor's summary before any query and clears only the current USER session on 401", async () => {
+    const read = vi.fn(async () => { throw new HttpProblem(401, "EXPIRED"); });
+    const screen = recoveryView(read);
+    const foreign = originalCommand("CREATE_INSTALLATION");
+    foreign.owner.actorId = "foreign-user";
+    await bringOriginal(screen, foreign);
+    await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+    expect(read).not.toHaveBeenCalled();
+    const intent = originalCommand("CREATE_INSTALLATION");
+    await bringOriginal(screen, intent);
+    await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+    await waitFor(() => expect(screen.getByTestId("command-phase").textContent).toBe("none"));
+    expect(localStorage.getItem("matrix.managed-service.commands.v1")).toContain(intent.requestId);
+  });
+
+  it("ignores a late result from a replaced session and never restores the old reminder into another actor", async () => {
+    let rejectRead!: (error: unknown) => void;
+    const read = vi.fn(() => new Promise<ManagedServiceCommandResult[]>((_resolve, reject) => { rejectRead = reject; }));
+    let login = 0;
+    const iam = iamRepository();
+    const firstLogin = iam.login;
+    iam.login = async () => ({ ...await firstLogin({ loginName: "admin", password: "in-memory" }), credential: `session-${++login}` });
+    const screen = recoveryView(read, iam);
+    await bringOriginal(screen, originalCommand("CREATE_INSTALLATION"));
+    await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+    await act(async () => { fireEvent.click(screen.getByText("logout")); });
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    await act(async () => { rejectRead(new HttpProblem(401, "OLD_SESSION")); });
+    expect(screen.getByTestId("command-phase").textContent).toBe("unknown");
+    expect(screen.getByTestId("command-restored").textContent).toBe("true");
+    expect(read).toHaveBeenCalledTimes(1);
+  });
   it("keeps a slow managed-service command local to its data region and preserves the caller idempotency key", async () => {
     vi.useFakeTimers();
     let resolveInstallation!: (installation: ServiceInstallation) => void;
@@ -208,15 +326,19 @@ describe("ControlPlaneProvider", () => {
     expect(localStorage.getItem("matrix.managed-service.commands.v1")).toBeNull();
   });
 
-  it("restores an unknown command only for the exact account actor and retries its frozen request unchanged", async () => {
+  it("restores an unknown command only for the exact account actor and reads its result without repeating the write", async () => {
     const createInstallation = vi.fn<ControlPlaneRepository["createInstallation"]>()
-      .mockRejectedValueOnce(new Error("transport disconnected"))
-      .mockResolvedValueOnce({ ...pendingInstallation, id: "postgres-recovery", name: "Postgres recovery" });
+      .mockRejectedValueOnce(new Error("transport disconnected"));
     const repository: ControlPlaneRepository = {
       load: vi.fn(),
       getInstallation: vi.fn(),
       activateQuota: vi.fn(),
-      createInstallation
+      createInstallation,
+      listCommandResults: vi.fn<NonNullable<ControlPlaneRepository["listCommandResults"]>>(async (_credential, commandType) => [{
+        idempotencyKey: String(createInstallation.mock.calls[0]![2]), commandType, inputDigest: `sha256:${"9".repeat(64)}`,
+        state: "SUCCEEDED", target: { kind: "SERVICE_INSTALLATION", id: "postgres-recovery" }, operation: readyInstallation.operation,
+        bindingId: null, completedAt: "2026-10-13T12:00:00Z"
+      }])
     };
     const first = render(
       <SessionProvider repository={iamRepository()}>
@@ -250,10 +372,10 @@ describe("ControlPlaneProvider", () => {
     expect(restored.getByTestId("command-request").textContent).toBe(originalRequestId);
     expect(restored.getByTestId("command-restored").textContent).toBe("true");
 
-    await act(async () => { fireEvent.click(restored.getByText("retry managed command")); });
+    await act(async () => { fireEvent.click(restored.getByText("inspect managed command")); });
     await waitFor(() => expect(restored.getByTestId("command-phase").textContent).toBe("completed"));
-    expect(createInstallation).toHaveBeenCalledTimes(2);
-    expect(createInstallation.mock.calls[1]).toEqual(originalCall);
+    expect(createInstallation).toHaveBeenCalledTimes(1);
+    expect(repository.listCommandResults).toHaveBeenCalledWith("memory-only-session", "INSTALLATION_CREATE");
     expect(localStorage.getItem("matrix.managed-service.commands.v1")).toBeNull();
   });
 

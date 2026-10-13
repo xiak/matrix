@@ -1,3 +1,56 @@
+.recovery {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-default);
+  margin-bottom: var(--xiak-spacing-default);
+}
+
+.recovery summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--xiak-color-accent-text);
+  font-size: var(--xiak-font-size-small);
+}
+
+.recovery p {
+  margin-block: var(--xiak-spacing-narrow);
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-small);
+}
+
+.import[open] {
+  display: grid;
+  gap: var(--xiak-spacing-default);
+}
+
+.recovery summary:focus-visible {
+  outline: 2px solid var(--xiak-color-border-focus);
+  outline-offset: 3px;
+  border-radius: var(--xiak-radius-control);
+}
+
+.result {
+  display: grid;
+  margin: 0;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.result div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.result dt {
+  color: var(--xiak-color-text-subtle);
+}
+
+.result dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .notice {
   display: flex;
   min-width: 0;

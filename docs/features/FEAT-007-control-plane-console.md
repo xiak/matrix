@@ -1855,9 +1855,26 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-Verified through 2026-10-12 against the current all-service navigation, compact IAM
+Verified through 2026-10-13 against the current all-service navigation, compact IAM
 shell, responsive access-analysis hierarchy, primary directory actions and the
-provider-owned product-permission onboarding boundary and service-enablement UX.
+provider-owned product-permission onboarding boundary, service-enablement UX and
+shared product-command recovery surface.
+
+The bounded UNKNOWN-recovery slice reuses the existing product repository,
+provider, non-secret intent storage and shared notice. The content canvas and
+active workspace host one recovery entry, independent of unavailable resource
+data or first-use admission; its expanded summary form uses the existing Card
+Header/Body/Footer. Original-command inspection is read-only, and opened
+instances still perform an independently authorized detail read. Its IAM wire
+and recovery semantics are owned by FEAT-IAM-010, not by a second shared model.
+Using Node 22.22.2 and npm 11.6.4, the final source passed all 69 frontend files
+and 1,376 cases, three normalization cases, typecheck, full lint, architecture
+and 228 theme-contrast pairs. Production generated 59 pages and 57 normalized
+segments; all 319 embedded files match byte-for-byte. The PaaS UI host passed
+fresh Go test and vet with bounded concurrency. This accepts frontend behavior
+and static delivery only: IAM will compose this fixed UI with its separately
+fixed backend for the real PG/Audit and two-isolated-browser UNKNOWN gate;
+these local checks do not claim that runtime or signed-install acceptance.
 
 The current service-enablement and resource-admission slice passed the complete 66-file/1,239-case
 frontend suite plus three export-normalization cases, typecheck, lint,

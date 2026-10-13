@@ -83,6 +83,7 @@ import { ConsoleContentLoadingRenderer } from "./ConsoleContentLoadingRenderer";
 import { ConsoleContentRenderer } from "./ConsoleContentRenderer";
 import { ManagedProductActivation } from "./ManagedProductActivation";
 import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
+import { ManagedServiceCommandNotice } from "./ManagedServiceCommandNotice";
 import styles from "./ConsoleShellRenderer.module.css";
 import { useServiceDirectory } from "./ServiceDirectory";
 import { serviceForSelection, type ServiceId } from "../scenes/serviceDirectory";
@@ -541,6 +542,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
                 <ContentPage.Body inactive={Boolean(pendingContent)} transitionKey={contentTransitionKey} pending={contentTransitionPending} loading={contentTransitionPending && pendingSelection ? <div className={styles.pageCanvas}><ConsoleContentLoadingRenderer experience={Boolean(experience)} key={navigation.pendingHref} label={loadingLabel} selection={pendingSelection} /></div> : undefined}>
                   <div aria-busy={controlPlane.loading && frame.section !== "access"} className={styles.pageCanvas}>
                     {session.error ? <Alert className={styles.feedback} status="danger">{authErrors(session.error)}</Alert> : null}
+                    {["catalog", "quotas", "installations"].includes(frame.section) && !workspaceVisible ? <ManagedServiceCommandNotice /> : null}
                     {product ? <ManagedProductActivation account={{ id: activationAccountId ?? "", name: frame.scope?.organization.name }} activation={activation} preview={frame.preview} product={product}>
                       {resourceContent}
                     </ManagedProductActivation> : resourceContent}
@@ -571,7 +573,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
                 tabIndex={0}
               />
               <Button aria-label={t("closeWorkspace")} className={styles.workspaceCloseButton} onClick={closeWorkspaceAndRestoreFocus} ref={workspaceCloseButton} iconOnly size="small" variant="ghost"><X aria-hidden="true" /></Button>
-              {workspaceMounted && scene?.workspace ? <ConsoleWorkspaceRenderer scene={scene.workspace} /> : null}
+              {workspaceMounted && scene?.workspace ? <ConsoleWorkspaceRenderer scene={scene.workspace} showCommandRecovery={workspaceVisible} /> : null}
             </Layout.Workspace>
           </ServiceLayout>
         </App.Base>

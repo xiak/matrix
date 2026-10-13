@@ -1,5 +1,98 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { httpControlPlaneRepository } from "./httpControlPlaneRepository";
+import { managedServiceCommandTypes, type ManagedServiceCommandType } from "../domain/managedServiceCommand";
+
+function recoveredCommand(commandType: ManagedServiceCommandType = "INSTALLATION_CREATE", state = "SUCCEEDED") {
+  return {
+    kind: "ManagedServiceCommandResult", idempotencyKey: "ui-install-original", commandType,
+    inputDigest: `sha256:${"8".repeat(64)}`, state,
+    target: { kind: commandType === "QUOTA_ACTIVATE" ? "QUOTA_ENTITLEMENT" : "SERVICE_INSTALLATION", id: "original-resource" },
+    ...(commandType === "INSTALLATION_CREATE" || commandType === "INSTALLATION_TERMINATE" ? {
+      operation: { id: "original-operation", kind: commandType === "INSTALLATION_CREATE" ? "PROVISION" : "TERMINATE",
+        phase: state === "IN_PROGRESS" ? "PROVISIONING" : state === "FAILED" ? "FAILED" : "READY", safeFailureCode: state === "FAILED" ? "PROVISION_FAILED" : null, observedAt: "2026-10-13T10:00:00.123456Z" }
+    } : commandType === "QUOTA_ACTIVATE" ? {} : { bindingId: "original-binding" }),
+    ...(state === "IN_PROGRESS" ? {} : { completedAt: "2026-10-13T10:00:00.123456Z" })
+  };
+}
+
+function commandResponse(items: unknown[], headers: Record<string, string> = {}) {
+  return new Response(JSON.stringify({ kind: "ManagedServiceCommandResultList", items }), {
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...headers }
+  });
+}
+
+describe("bounded managed-service command recovery", () => {
+  it.each(managedServiceCommandTypes)("reads %s by current bearer only and treats the input commitment as opaque", async (commandType) => {
+    const fetch = vi.fn().mockResolvedValue(commandResponse([recoveredCommand(commandType)]));
+    vi.stubGlobal("fetch", fetch);
+    const results = await httpControlPlaneRepository.listCommandResults!("current-credential", commandType);
+    expect(results[0]).toMatchObject({ idempotencyKey: "ui-install-original", commandType, inputDigest: `sha256:${"8".repeat(64)}`, state: "SUCCEEDED" });
+    expect(fetch).toHaveBeenCalledWith(`/api/managed-services/v1/command-results/${commandType}`, {
+      cache: "no-store", headers: { Accept: "application/json", Authorization: "Bearer current-credential" }
+    });
+  });
+
+  it.each(["IN_PROGRESS", "FAILED"])("accepts the installation %s result without inventing resource state", async (state) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(commandResponse([recoveredCommand("INSTALLATION_TERMINATE", state)])));
+    expect((await httpControlPlaneRepository.listCommandResults!("credential", "INSTALLATION_TERMINATE"))[0]?.state).toBe(state);
+  });
+
+  it.each([
+    { requestId: "private-iam-key" }, { credential: "never-render" }, { accountId: "foreign-account" },
+    { actorId: "foreign-actor" }, { commandType: "UNKNOWN" }, { commandType: "INSTALLATION_TERMINATE" },
+    { state: "UNKNOWN" }, { inputDigest: "not-a-sha256-commitment" }, { idempotencyKey: "bad/key" },
+    { completedAt: null }, { completedAt: "2026-02-30T10:00:00Z" }, { target: { kind: "ROLE", id: "role-one" } },
+    { target: { kind: "SERVICE_INSTALLATION", id: "resource-one", accountId: "foreign-account" } },
+    { operation: null }, { bindingId: "unexpected-binding" }
+  ])("rejects foreign or unsupported result fields: %j", async (change) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(commandResponse([{ ...recoveredCommand(), ...change }])));
+    await expect(httpControlPlaneRepository.listCommandResults!("credential", "INSTALLATION_CREATE")).rejects.toThrow();
+  });
+
+  it.each([
+    { kind: "TERMINATE" }, { phase: "TERMINATED" }, { phase: "PENDING" }, { observedAt: "yesterday" },
+    { observedAt: "2026-02-30T10:00:00Z" }, { actorId: "unexpected" }, { id: "bad/path" }, { safeFailureCode: {} },
+    { safeFailureCode: "unexpected" }, { safeFailureCode: "PROVISION_FAILED" }, { observedAt: "2026-10-13T10:00:00.123456789Z" }
+  ])("rejects an inconsistent installation operation: %j", async (change) => {
+    const result = recoveredCommand();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(commandResponse([{ ...result, operation: { ...("operation" in result ? result.operation : {}), ...change } }])));
+    await expect(httpControlPlaneRepository.listCommandResults!("credential", "INSTALLATION_CREATE")).rejects.toThrow();
+  });
+
+  it("rejects the replaced requestId-only response rather than accepting a compatibility alias", async () => {
+    const result: Record<string, unknown> = { ...recoveredCommand() };
+    delete result.idempotencyKey;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(commandResponse([{ ...result, requestId: "old-wire" }])));
+    await expect(httpControlPlaneRepository.listCommandResults!("credential", "INSTALLATION_CREATE")).rejects.toThrow();
+  });
+
+  it.each(["QUOTA_ACTIVATE", "SERVICE_ROLE_BIND", "SERVICE_ROLE_UNBIND"] as const)("does not accept non-terminal %s", async (commandType) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(commandResponse([recoveredCommand(commandType, "IN_PROGRESS")])));
+    await expect(httpControlPlaneRepository.listCommandResults!("credential", commandType)).rejects.toThrow();
+  });
+
+  it.each(["", "public", "no-cache"])("requires the no-store response boundary (%s)", async (cacheControl) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(commandResponse([], { "Cache-Control": cacheControl })));
+    await expect(httpControlPlaneRepository.listCommandResults!("credential", "INSTALLATION_CREATE")).rejects.toThrow();
+  });
+
+  it.each(["items", "duplicate", "oversized", "selector"])("rejects an invalid list: %s", async (kind) => {
+    const items = kind === "duplicate" ? [recoveredCommand(), recoveredCommand()] : kind === "oversized"
+      ? Array.from({ length: 101 }, (_, index) => ({ ...recoveredCommand(), idempotencyKey: `key-${index}` })) : [];
+    const body = { kind: "ManagedServiceCommandResultList", items: kind === "items" ? null : items, ...(kind === "selector" ? { accountId: "foreign" } : {}) };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } })));
+    await expect(httpControlPlaneRepository.listCommandResults!("credential", "INSTALLATION_CREATE")).rejects.toThrow();
+  });
+
+  it("preserves an authoritative empty list and refuses caller-defined command names", async () => {
+    const fetch = vi.fn().mockResolvedValue(commandResponse([]));
+    vi.stubGlobal("fetch", fetch);
+    expect(await httpControlPlaneRepository.listCommandResults!("credential", "INSTALLATION_CREATE")).toEqual([]);
+    fetch.mockClear();
+    await expect(httpControlPlaneRepository.listCommandResults!("credential", "ALL?account=foreign" as ManagedServiceCommandType)).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
 
 const managedServiceTemplateReference = {
   id: "managedservice.installation-reader",
