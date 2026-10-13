@@ -458,8 +458,15 @@ export type UserPasswordResetCompletion = Readonly<{
   occurredAt: string;
 }>;
 
+export type CreateUserCommand = Readonly<{
+  loginName: string;
+  displayName: string;
+  initialPassword: string;
+  permissionBoundary: null;
+  requestId: string;
+}>;
+
 export type AccountCommand =
-  | { kind: "create-user"; loginName: string; displayName: string; initialPassword: string }
   | { kind: "create-account"; id: string; displayName: string; rootLoginName: string; rootDisplayName: string; initialPassword: string }
   | { kind: "set-account-status"; accountId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
   | { kind: "recover-root-credentials"; accountId: string; initialPassword: string; resourceVersion: number }

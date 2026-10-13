@@ -851,11 +851,12 @@ function parseNotificationVerification(value: unknown): NotificationContactVerif
 function parseNotificationVerification(value: unknown, expected: NotificationContactReplacementIntent & { requestId: string }): NotificationContactReplacementVerification;
 function parseNotificationVerification(value: unknown, expected?: NotificationContactReplacementIntent & { requestId: string }): NotificationContactVerification | NotificationContactReplacementVerification {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "userId", "requestId", ...(expected ? ["purpose", "expectedResourceVersion"] : []), "email", "state", "issuedAt", "expiresAt", "delivery"], ["completedAt"]);
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "userId", "requestId", "purpose", "expectedResourceVersion", "email", "state", "issuedAt", "expiresAt", "delivery"], ["completedAt"]);
   requireAccountKind(wire, "NotificationContactVerification");
   const requestId = accountIdentifier(wire.requestId);
   const email = securityMailAddress(wire.email);
   let replacement: { purpose: "REPLACEMENT"; expectedResourceVersion: number } | undefined;
+  if (!expected && (wire.purpose !== "FIRST_ADDRESS" || wire.expectedResourceVersion !== 0)) throw new Error("INVALID_IAM_RESPONSE");
   if (expected) {
     const expectedResourceVersion = accountVersion(wire.expectedResourceVersion);
     if (expectedResourceVersion > 9_007_199_254_740_990 || wire.purpose !== "REPLACEMENT" ||
@@ -2778,6 +2779,18 @@ async function recoverAccountRootCredentials(
 }
 
 export const httpAccountRepository: AccountRepository = {
+  async createUser(credential, accountId, command) {
+    if (command.permissionBoundary !== null || !command.requestId || !accountId) throw new Error("INVALID_IAM_REQUEST");
+    const value = await requestJSON<unknown>("/api/iam/v1/users", {
+      method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+      body: JSON.stringify({ loginName: command.loginName, displayName: command.displayName,
+        initialPassword: command.initialPassword, permissionBoundary: null, requestId: command.requestId })
+    });
+    const user = parseUser(value);
+    if (user.accountId !== accountId || user.loginName !== command.loginName || user.displayName !== command.displayName ||
+        user.status !== "ACTIVE" || !user.mustChangePassword || user.resourceVersion !== 1) throw new Error("INVALID_IAM_RESPONSE");
+    return user;
+  },
   accountLifecycle: {
     list: listAccountLifecycle,
     read: readAccountLifecycle,
@@ -3501,7 +3514,6 @@ export const httpAccountRepository: AccountRepository = {
     let path: string;
     let body: object;
     switch (command.kind) {
-      case "create-user": path = "/api/iam/v1/users"; body = { loginName: command.loginName, displayName: command.displayName, initialPassword: command.initialPassword, permissionBoundary: null }; break;
       case "set-alias": path = "/api/iam/v1/account:alias"; body = { alias: command.alias, resourceVersion: command.resourceVersion }; break;
       case "update-user": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:update`; body = { displayName: command.displayName, resourceVersion: command.resourceVersion }; break;
       case "delete-user": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:delete`; body = { resourceVersion: command.resourceVersion }; break;
@@ -3534,11 +3546,10 @@ export const httpAccountRepository: AccountRepository = {
       return;
     }
     const user = parseUser(result);
-    if (command.kind === "create-user" && user.loginName !== command.loginName) throw new Error("INVALID_IAM_RESPONSE");
-    if (command.kind !== "create-user" && (user.id !== command.userId || user.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
+    if (user.id !== command.userId || user.resourceVersion <= command.resourceVersion) throw new Error("INVALID_IAM_RESPONSE");
     if (command.kind === "update-user" && user.displayName !== command.displayName) throw new Error("INVALID_IAM_RESPONSE");
     if (command.kind === "set-status" && user.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
-    if ((command.kind === "create-user" || command.kind === "reset-password") && !user.mustChangePassword) throw new Error("INVALID_IAM_RESPONSE");
+    if (command.kind === "reset-password" && !user.mustChangePassword) throw new Error("INVALID_IAM_RESPONSE");
   }
 };
 

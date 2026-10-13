@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import { useSession, useSessionCredential } from "./SessionProvider";
+import { useLiveUserCreation, type UserCreationClient } from "./userCreation";
 import type {
   Account,
   AccountAccess as AccountAccessResource,
@@ -625,6 +626,7 @@ type AccountAccess = {
   policyCreate: PolicyCreateClient | null;
   policyVersionMutation: PolicyVersionMutationClient | null;
   accountLifecycle: AccountLifecycleClient | null;
+  userCreation: UserCreationClient | null;
   accountSecuritySettings: AccountSecuritySettingsClient | null;
   accessAnalysis: AccessAnalysisClient | null;
   securityReports: SecurityReportClient | null;
@@ -700,7 +702,6 @@ async function readWhenAuthorized<T>(read: () => Promise<T>): Promise<T | null> 
 }
 
 function accountCommandAvailable(scene: AccountAccessScene, command: AccountCommand): boolean {
-  if (command.kind === "create-user") return scene.canCreateUsers;
   if (command.kind === "create-account") return scene.canCreateAccounts;
   if (command.kind === "set-alias") return scene.canSetAlias;
   if (command.kind === "set-account-status" || command.kind === "recover-root-credentials") {
@@ -739,6 +740,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   // View context survives list/detail navigation, not account/session changes.
   // Keeping it outside React state avoids rerendering the shell on each keystroke.
   const viewSession = useMemo(() => ({ credential, tenantId, principalId, sessionRevision }), [credential, tenantId, principalId, sessionRevision]);
+  const [verifiedIdentityOwner, setVerifiedIdentityOwner] = useState<{ session: typeof viewSession; repository: AccountRepository } | null>(null);
   const currentViewSession = useRef(viewSession);
   const verifiedIdentitySession = useRef<typeof viewSession | null>(null);
   useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
@@ -986,6 +988,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     }
     read().then((loaded) => { if (mounted && currentViewSession.current === viewSession) {
       verifiedIdentitySession.current = viewSession;
+      setVerifiedIdentityOwner({ session: viewSession, repository });
       if (!repository.workspace && loaded.scene.accountId === tenantId && loaded.scene.currentUserId === principalId &&
         passwordResetUnknownRef.current?.session !== viewSession) {
         const intent = readPasswordResetUnknown(tenantId, principalId);
@@ -2074,7 +2077,24 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return true;
   }, [rememberUserPolicyChange, viewSession]);
 
+  const expireUserCreationOwner = useCallback((expectedCredential: string, expectedRevision: number) => {
+    if (expireSession(expectedCredential, expectedRevision)) {
+      setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+    }
+  }, [expireSession]);
+  const refreshCreatedUserDirectory = useCallback(() => { setLoading(true); setRevision((value) => value + 1); }, []);
+  // Route activation pauses reads, not the originating Session's frozen command.
+  // Keep that command while another service is visible; expose actions only in IAM.
+  const retainedUserCreation = useLiveUserCreation({
+    active: Boolean(!repository.workspace && scene?.isRoot && scene.canCreateUsers && scene.accountEnabled &&
+      scene.accountId === tenantId && verifiedIdentityOwner?.session === viewSession && verifiedIdentityOwner.repository === repository),
+    accountId: tenantId, credential: credential ?? undefined, rootUserId: scene?.currentUserId,
+    sessionRevision, repository, onExpired: expireUserCreationOwner, onCreated: refreshCreatedUserDirectory
+  });
+  const userCreation = active ? retainedUserCreation : null;
+
   const value = useMemo<AccountAccess>(() => ({
+    userCreation,
     supportsUserBatch: Boolean(repository.executeUserBatch),
     async executeUserBatch(command) {
       if (!active || !credential || !scene || !workspace || !repository.executeUserBatch || loading || mutationPending.current) return false;
@@ -2255,7 +2275,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountLifecycle, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountLifecycle, userCreation, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>
