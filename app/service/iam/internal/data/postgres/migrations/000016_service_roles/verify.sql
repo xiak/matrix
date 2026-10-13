@@ -5,7 +5,7 @@ DECLARE seeds jsonb:=__SERVICE_ROLE_TEMPLATE_SEEDS__; seed jsonb;
 BEGIN
     IF NOT iam.service_role_contract_ready() THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM service role storage contract is unavailable'; END IF;
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 84::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 85::bigint THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM service role schema version is unavailable'; END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc entry
         WHERE entry.oid=to_regprocedure('iam.list_service_role_templates(text,text,text)')

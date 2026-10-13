@@ -17,15 +17,20 @@ type ServiceRoleTemplateID string
 type ServiceRoleTemplateStatus string
 type WorkloadRoleBindingID string
 type WorkloadRoleBindingStatus string
+type WorkloadRoleCommandType string
 
 const (
 	ServiceRoleTemplateActive       ServiceRoleTemplateStatus = "ACTIVE"
 	ServiceRoleTemplateRetired      ServiceRoleTemplateStatus = "RETIRED"
 	WorkloadRoleBindingActive       WorkloadRoleBindingStatus = "ACTIVE"
 	WorkloadRoleBindingRevoked      WorkloadRoleBindingStatus = "REVOKED"
+	WorkloadRoleCommandBind         WorkloadRoleCommandType   = "SERVICE_ROLE_BIND"
+	WorkloadRoleCommandUnbind       WorkloadRoleCommandType   = "SERVICE_ROLE_UNBIND"
 	MaxServiceRoleTemplateWorkloads                           = 16
 	MaxServiceRoleTemplateListBytes int64                     = 256 * 1024
 	MaxServiceLinkedRoleListBytes   int64                     = 4 * 1024 * 1024
+	MaxWorkloadRoleCommandResults                             = 100
+	MaxWorkloadRoleCommandListBytes int64                     = 256 * 1024
 )
 
 // ServiceRoleWorkloadSpec is the product-owned consent surface for one
@@ -140,6 +145,26 @@ type ServiceLinkedRoleList struct {
 	NextAfter  string                     `json:"nextAfter,omitempty"`
 }
 
+// WorkloadRoleCommandResult is a non-secret, service-scoped observation of
+// one completed consent command initiated by the current USER. It carries no
+// Account, service-principal or credential selector and is never a permit.
+type WorkloadRoleCommandResult struct {
+	APIVersion    string                  `json:"apiVersion"`
+	Kind          string                  `json:"kind"`
+	CommandType   WorkloadRoleCommandType `json:"commandType"`
+	RequestID     string                  `json:"requestId"`
+	RequestDigest string                  `json:"requestDigest"`
+	Workload      ResourceReference       `json:"workload"`
+	BindingID     WorkloadRoleBindingID   `json:"bindingId"`
+	CompletedAt   time.Time               `json:"completedAt"`
+}
+
+type WorkloadRoleCommandResultList struct {
+	APIVersion string                      `json:"apiVersion"`
+	Kind       string                      `json:"kind"`
+	Items      []WorkloadRoleCommandResult `json:"items"`
+}
+
 // CreateWorkloadRoleBindingRequest carries one product PEP decision input and
 // one exact release-owned template reference. The authorization request is the
 // command identity and workload reference; duplicating Account, Role, service
@@ -211,6 +236,50 @@ func ValidateWorkloadRoleBinding(value WorkloadRoleBinding) error {
 		ValidateID("workloadRoleBinding.roleId", string(value.RoleID)),
 		ValidateID("workloadRoleBinding.workload.id", value.Workload.ID),
 		validateChronology(value.CreatedAt, value.UpdatedAt))
+}
+
+func ValidateWorkloadRoleCommandType(value WorkloadRoleCommandType) error {
+	if value != WorkloadRoleCommandBind && value != WorkloadRoleCommandUnbind {
+		return errors.New("workload Role command type is invalid")
+	}
+	return nil
+}
+
+func ValidateWorkloadRoleCommandResult(value WorkloadRoleCommandResult) error {
+	if value.APIVersion != APIVersion || value.Kind != "WorkloadRoleCommandResult" ||
+		ValidateWorkloadRoleCommandType(value.CommandType) != nil ||
+		ValidateID("workloadRoleCommand.requestId", value.RequestID) != nil ||
+		ValidateDigest("workloadRoleCommand.requestDigest", value.RequestDigest) != nil ||
+		value.Workload.Kind != ResourceServiceInstallation ||
+		ValidateID("workloadRoleCommand.workloadId", value.Workload.ID) != nil ||
+		ValidateID("workloadRoleCommand.bindingId", string(value.BindingID)) != nil ||
+		validateTime("workloadRoleCommand.completedAt", value.CompletedAt) != nil {
+		return errors.New("workload Role command result is invalid")
+	}
+	return nil
+}
+
+func ValidateWorkloadRoleCommandResultList(value WorkloadRoleCommandResultList) error {
+	if value.APIVersion != APIVersion || value.Kind != "WorkloadRoleCommandResultList" ||
+		value.Items == nil || len(value.Items) > MaxWorkloadRoleCommandResults {
+		return errors.New("workload Role command result list is invalid")
+	}
+	seen := make(map[string]struct{}, len(value.Items))
+	for _, item := range value.Items {
+		if ValidateWorkloadRoleCommandResult(item) != nil {
+			return errors.New("workload Role command result list is invalid")
+		}
+		identity := string(item.CommandType) + "\x00" + item.RequestID
+		if _, duplicate := seen[identity]; duplicate {
+			return errors.New("workload Role command result list contains duplicates")
+		}
+		seen[identity] = struct{}{}
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || int64(len(encoded)) > MaxWorkloadRoleCommandListBytes {
+		return errors.New("workload Role command result list exceeds its byte budget")
+	}
+	return nil
 }
 
 func ValidateServiceLinkedRoleAccess(value ServiceLinkedRoleAccess) error {

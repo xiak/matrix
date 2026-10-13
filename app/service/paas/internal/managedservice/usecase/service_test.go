@@ -47,6 +47,76 @@ func TestServiceActivationRetainsRoleSessionActor(t *testing.T) {
 	}
 }
 
+func TestCommandResultsAreAccountAndIdentityScoped(t *testing.T) {
+	repository := newMemoryRepository()
+	completedAt := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	repository.commandResults = []managedservicev1.CommandResult{{
+		Kind: "ManagedServiceCommandResult", RequestID: "request-quota",
+		CommandType: managedservicev1.CommandQuotaActivate,
+		InputDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		State:       managedservicev1.CommandSucceeded,
+		Target: managedservicev1.CommandTargetReference{
+			Kind: managedservicev1.CommandTargetQuotaEntitlement, ID: "quota-one",
+		},
+		CompletedAt: &completedAt,
+	}}
+	service := newTestService(t, repository)
+	authorization := testAuthorization()
+	result, err := service.ListCommandResults(context.Background(), ListCommandResultsQuery{
+		Authorization: authorization, CommandType: managedservicev1.CommandQuotaActivate,
+	})
+	if err != nil || len(result.Items) != 1 || result.Items[0].Target.ID != "quota-one" ||
+		len(repository.beginTenants) != 1 || repository.beginTenants[0] != authorization.TenantID {
+		t.Fatalf("command results=%#v tenants=%#v err=%v", result, repository.beginTenants, err)
+	}
+	if _, err := service.ListCommandResults(context.Background(), ListCommandResultsQuery{
+		Authorization: authorization, CommandType: managedservicev1.CommandServiceRoleBind,
+	}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("missing command credential error=%v", err)
+	}
+	serviceIdentity := authorization
+	serviceIdentity.Subject = paasv1.SubjectRef{Type: paasv1.SubjectServiceAccount, ID: "service-one"}
+	if _, err := service.ListCommandResults(context.Background(), ListCommandResultsQuery{
+		Authorization: serviceIdentity, CommandType: managedservicev1.CommandQuotaActivate,
+	}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("service identity command query error=%v", err)
+	}
+}
+
+func TestWorkloadRoleCommandResultsMapIAMHistory(t *testing.T) {
+	repository := newMemoryRepository()
+	completedAt := time.Date(2026, 10, 13, 12, 0, 0, 123_000, time.UTC)
+	binder := &stubWorkloadRoleBinder{commandResults: iamv1.WorkloadRoleCommandResultList{
+		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResultList",
+		Items: []iamv1.WorkloadRoleCommandResult{{
+			APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResult",
+			CommandType: iamv1.WorkloadRoleCommandBind, RequestID: "msrb-command-one",
+			RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Workload:      iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "mysql-primary"},
+			BindingID:     "wrb-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			CompletedAt:   completedAt,
+		}},
+	}}
+	service, err := NewService(repository, Config{
+		Catalog: domain.DefaultCatalog(), Region: testRegion(), WorkloadRoleAuthority: binder,
+		WorkloadRoleRuntime: binder, NewQuotaID: func() (string, error) { return "quota-unused", nil },
+		NewOperationID: func() (string, error) { return "operation-unused", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.ListCommandResults(context.Background(), ListCommandResultsQuery{
+		Authorization: testAuthorization(), Credential: "Bearer current-user",
+		CommandType: managedservicev1.CommandServiceRoleBind,
+	})
+	if err != nil || len(result.Items) != 1 || result.Items[0].Target.ID != "mysql-primary" ||
+		result.Items[0].BindingID == nil || string(*result.Items[0].BindingID) != string(binder.commandResults.Items[0].BindingID) ||
+		binder.commandResultCalls != 1 || binder.commandResultType != iamv1.WorkloadRoleCommandBind ||
+		binder.commandResultCredential != "Bearer current-user" || len(repository.beginTenants) != 0 {
+		t.Fatalf("workload Role results=%#v binder=%#v tenants=%#v err=%v", result, binder, repository.beginTenants, err)
+	}
+}
+
 func TestQuotaActivationEqualReplayAndChangedConflict(t *testing.T) {
 	repository := newMemoryRepository()
 	service := newTestService(t, repository)
@@ -494,24 +564,29 @@ func seedServiceActivation(t *testing.T, repository *memoryRepository, serviceID
 }
 
 type stubWorkloadRoleBinder struct {
-	calls                  int
-	template               iamv1.ServiceRoleTemplateReference
-	request                port.AuthorizationRequest
-	result                 iamv1.ServiceLinkedRoleAccess
-	revokeCalls            int
-	revokeBindingID        iamv1.WorkloadRoleBindingID
-	revokeVersion          uint64
-	revokeRequest          port.AuthorizationRequest
-	revokeResult           iamv1.WorkloadRoleBinding
-	err                    error
-	runtimeCalls           int
-	runtimeBindingID       iamv1.WorkloadRoleBindingID
-	runtimeAssumeRequestID string
-	runtimeRequest         port.WorkloadRoleAuthorizationRequest
-	runtimeAuthorization   port.WorkloadRoleAuthorization
-	runtimeErr             error
-	releaseCalls           int
-	releaseErr             error
+	calls                   int
+	template                iamv1.ServiceRoleTemplateReference
+	request                 port.AuthorizationRequest
+	result                  iamv1.ServiceLinkedRoleAccess
+	revokeCalls             int
+	revokeBindingID         iamv1.WorkloadRoleBindingID
+	revokeVersion           uint64
+	revokeRequest           port.AuthorizationRequest
+	revokeResult            iamv1.WorkloadRoleBinding
+	commandResultCalls      int
+	commandResultType       iamv1.WorkloadRoleCommandType
+	commandResultCredential string
+	commandResults          iamv1.WorkloadRoleCommandResultList
+	commandResultErr        error
+	err                     error
+	runtimeCalls            int
+	runtimeBindingID        iamv1.WorkloadRoleBindingID
+	runtimeAssumeRequestID  string
+	runtimeRequest          port.WorkloadRoleAuthorizationRequest
+	runtimeAuthorization    port.WorkloadRoleAuthorization
+	runtimeErr              error
+	releaseCalls            int
+	releaseErr              error
 }
 
 func (binder *stubWorkloadRoleBinder) AssumeWorkloadRole(
@@ -571,6 +646,16 @@ func (binder *stubWorkloadRoleBinder) RevokeWorkloadRole(
 	binder.revokeCalls++
 	binder.revokeBindingID, binder.revokeVersion, binder.revokeRequest = bindingID, resourceVersion, request
 	return binder.revokeResult, binder.err
+}
+
+func (binder *stubWorkloadRoleBinder) ListWorkloadRoleCommandResults(
+	_ context.Context,
+	commandType iamv1.WorkloadRoleCommandType,
+	credential string,
+) (iamv1.WorkloadRoleCommandResultList, error) {
+	binder.commandResultCalls++
+	binder.commandResultType, binder.commandResultCredential = commandType, credential
+	return binder.commandResults, binder.commandResultErr
 }
 
 func testServiceRoleTemplateReference() iamv1.ServiceRoleTemplateReference {
@@ -653,6 +738,7 @@ type memoryRepository struct {
 	installations  map[string]managedservicev1.ServiceInstallation
 	installKeys    map[string]memoryReplay
 	events         []audit.Event
+	commandResults []managedservicev1.CommandResult
 	beginTenants   []string
 }
 
@@ -682,7 +768,8 @@ func (repository *memoryRepository) Begin(
 		activations: maps.Clone(repository.activations), activationKeys: maps.Clone(repository.activationKeys),
 		quotas: maps.Clone(repository.quotas), quotaKeys: maps.Clone(repository.quotaKeys),
 		installations: maps.Clone(repository.installations), installKeys: maps.Clone(repository.installKeys),
-		events: append([]audit.Event(nil), repository.events...),
+		events:         append([]audit.Event(nil), repository.events...),
+		commandResults: append([]managedservicev1.CommandResult(nil), repository.commandResults...),
 	}, nil
 }
 
@@ -695,7 +782,21 @@ type memoryTransaction struct {
 	installations  map[string]managedservicev1.ServiceInstallation
 	installKeys    map[string]memoryReplay
 	events         []audit.Event
+	commandResults []managedservicev1.CommandResult
 	closed         bool
+}
+
+func (transaction *memoryTransaction) ListCommandResults(
+	_ context.Context,
+	read CommandResultRead,
+) ([]managedservicev1.CommandResult, error) {
+	result := make([]managedservicev1.CommandResult, 0)
+	for _, item := range transaction.commandResults {
+		if item.CommandType == read.CommandType {
+			result = append(result, item)
+		}
+	}
+	return result, nil
 }
 
 func (transaction *memoryTransaction) ListServiceActivations(context.Context) ([]managedservicev1.ServiceActivation, error) {

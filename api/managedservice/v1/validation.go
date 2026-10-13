@@ -282,6 +282,109 @@ func ValidateServiceInstallation(value ServiceInstallation) error {
 	return errors.Join(problems...)
 }
 
+func ValidateCommandType(value CommandType) error {
+	switch value {
+	case CommandQuotaActivate, CommandInstallationCreate, CommandInstallationTerminate,
+		CommandServiceRoleBind, CommandServiceRoleUnbind:
+		return nil
+	default:
+		return errors.New("managed-service command type is invalid")
+	}
+}
+
+func ValidateCommandResult(value CommandResult) error {
+	var problems []error
+	if value.Kind != "ManagedServiceCommandResult" {
+		problems = append(problems, errors.New("managed-service command result kind is invalid"))
+	}
+	problems = append(problems,
+		ValidateCommandType(value.CommandType),
+		validateID("requestId", value.RequestID),
+		validateDigest("inputDigest", value.InputDigest),
+		validateID("target.id", value.Target.ID),
+	)
+	if value.State != CommandInProgress && value.State != CommandSucceeded && value.State != CommandFailed {
+		problems = append(problems, errors.New("managed-service command state is invalid"))
+	}
+	if (value.State == CommandInProgress) != (value.CompletedAt == nil) {
+		problems = append(problems, errors.New("managed-service command completion time is inconsistent"))
+	}
+	if value.CompletedAt != nil {
+		problems = append(problems, validateTime("completedAt", *value.CompletedAt))
+	}
+
+	switch value.CommandType {
+	case CommandQuotaActivate:
+		if value.Target.Kind != CommandTargetQuotaEntitlement || value.State != CommandSucceeded ||
+			value.Operation != nil || value.BindingID != nil {
+			problems = append(problems, errors.New("quota command result shape is invalid"))
+		}
+	case CommandInstallationCreate, CommandInstallationTerminate:
+		expectedKind := InstallationOperationProvision
+		if value.CommandType == CommandInstallationTerminate {
+			expectedKind = InstallationOperationTerminate
+		}
+		if value.Target.Kind != CommandTargetServiceInstallation || value.Operation == nil ||
+			value.Operation.Kind != expectedKind || value.BindingID != nil {
+			problems = append(problems, errors.New("installation command result shape is invalid"))
+		} else {
+			problems = append(problems, validateInstallationOperation(*value.Operation))
+			if commandStateForOperation(*value.Operation) != value.State {
+				problems = append(problems, errors.New("installation command state differs from its operation"))
+			}
+		}
+	case CommandServiceRoleBind, CommandServiceRoleUnbind:
+		if value.Target.Kind != CommandTargetServiceInstallation || value.State != CommandSucceeded ||
+			value.Operation != nil || value.BindingID == nil ||
+			iamv1.ValidateID("bindingId", string(*value.BindingID)) != nil {
+			problems = append(problems, errors.New("service Role command result shape is invalid"))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateCommandResultList(value CommandResultList) error {
+	if value.Kind != "ManagedServiceCommandResultList" || value.Items == nil || len(value.Items) > MaxCommandResultItems {
+		return errors.New("managed-service command result list is invalid")
+	}
+	seen := make(map[string]struct{}, len(value.Items))
+	for _, item := range value.Items {
+		if ValidateCommandResult(item) != nil {
+			return errors.New("managed-service command result list is invalid")
+		}
+		identity := string(item.CommandType) + "\x00" + item.RequestID
+		if _, duplicate := seen[identity]; duplicate {
+			return errors.New("managed-service command result list contains duplicates")
+		}
+		seen[identity] = struct{}{}
+	}
+	return nil
+}
+
+func validateInstallationOperation(value InstallationOperation) error {
+	return errors.Join(
+		validateID("operation.id", value.ID),
+		validateInstallationOperationKind(value.Kind),
+		validateInstallationPhase(value.Phase),
+		validateTime("operation.observedAt", value.ObservedAt),
+	)
+}
+
+func commandStateForOperation(value InstallationOperation) CommandState {
+	if value.Kind != InstallationOperationProvision && value.Kind != InstallationOperationTerminate {
+		return ""
+	}
+	switch value.Phase {
+	case InstallationPending, InstallationProvisioning:
+		return CommandInProgress
+	case InstallationReady:
+		return CommandSucceeded
+	case InstallationFailed:
+		return CommandFailed
+	}
+	return ""
+}
+
 func validateInstallationOperationKind(value InstallationOperationKind) error {
 	if value != InstallationOperationProvision && value != InstallationOperationTerminate {
 		return errors.New("installation operation kind is invalid")

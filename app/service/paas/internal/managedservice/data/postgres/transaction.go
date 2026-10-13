@@ -10,6 +10,7 @@ import (
 
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
+	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/usecase"
 )
 
@@ -35,6 +36,101 @@ const installationColumns = `installation.id, installation.name,
        installation.created_at,
        operation.id, operation.kind, operation.phase, operation.safe_failure_code,
        operation.observed_at`
+
+func (value *transaction) ListCommandResults(
+	ctx context.Context,
+	read usecase.CommandResultRead,
+) ([]managedservicev1.CommandResult, error) {
+	if managedservicev1.ValidateCommandType(read.CommandType) != nil ||
+		(read.Subject.Type != port.SubjectUser && read.Subject.Type != port.SubjectRole) ||
+		read.RetentionSeconds < 1 || read.RetentionSeconds > 30*24*60*60 {
+		return nil, usecase.ErrInvalidArgument
+	}
+	sourceUser, sourceService := "", ""
+	if read.Subject.RoleSession != nil {
+		sourceUser = read.Subject.RoleSession.SourceUserID
+		sourceService = read.Subject.RoleSession.SourceServicePrincipalID
+	}
+	rows, err := value.tx.Query(ctx, `
+SELECT request_id, request_digest, target_id,
+       operation_id, operation_kind, operation_phase,
+       operation_safe_failure_code, operation_observed_at, completed_at
+  FROM managedservice.list_command_results($1, $2, $3, $4, $5, $6, $7)`,
+		read.CommandType, read.Subject.Type, read.Subject.ID, sourceUser, sourceService,
+		read.RetentionSeconds, managedservicev1.MaxCommandResultItems,
+	)
+	if err != nil {
+		return nil, databaseError(ctx, err)
+	}
+	defer rows.Close()
+	results := make([]managedservicev1.CommandResult, 0)
+	for rows.Next() {
+		var requestID, digest, targetID string
+		var operationID, operationKind, operationPhase, safeFailureCode *string
+		var operationObservedAt, completedAt *time.Time
+		if err := rows.Scan(&requestID, &digest, &targetID, &operationID, &operationKind,
+			&operationPhase, &safeFailureCode, &operationObservedAt, &completedAt); err != nil {
+			return nil, databaseError(ctx, err)
+		}
+		result := managedservicev1.CommandResult{
+			Kind: "ManagedServiceCommandResult", RequestID: requestID,
+			CommandType: read.CommandType, InputDigest: digest,
+			Target: managedservicev1.CommandTargetReference{ID: targetID},
+		}
+		if completedAt != nil {
+			normalized := normalizeTime(*completedAt)
+			result.CompletedAt = &normalized
+		}
+		switch read.CommandType {
+		case managedservicev1.CommandQuotaActivate:
+			if operationID != nil || operationKind != nil || operationPhase != nil ||
+				safeFailureCode != nil || operationObservedAt != nil || completedAt == nil {
+				return nil, usecase.ErrRepositoryUnavailable
+			}
+			result.State = managedservicev1.CommandSucceeded
+			result.Target.Kind = managedservicev1.CommandTargetQuotaEntitlement
+		case managedservicev1.CommandInstallationCreate, managedservicev1.CommandInstallationTerminate:
+			if operationID == nil || operationKind == nil || operationPhase == nil || operationObservedAt == nil {
+				return nil, usecase.ErrRepositoryUnavailable
+			}
+			operation := managedservicev1.InstallationOperation{
+				ID: *operationID, Kind: managedservicev1.InstallationOperationKind(*operationKind),
+				Phase: managedservicev1.InstallationPhase(*operationPhase), SafeFailureCode: safeFailureCode,
+				ObservedAt: normalizeTime(*operationObservedAt),
+			}
+			result.State = commandResultState(operation)
+			result.Target.Kind = managedservicev1.CommandTargetServiceInstallation
+			result.Operation = &operation
+			if (result.State == managedservicev1.CommandInProgress) != (completedAt == nil) ||
+				(completedAt != nil && !result.CompletedAt.Equal(operation.ObservedAt)) {
+				return nil, usecase.ErrRepositoryUnavailable
+			}
+		default:
+			return nil, usecase.ErrInvalidArgument
+		}
+		if managedservicev1.ValidateCommandResult(result) != nil {
+			return nil, usecase.ErrRepositoryUnavailable
+		}
+		results = append(results, result)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, databaseError(ctx, err)
+	}
+	return results, nil
+}
+
+func commandResultState(operation managedservicev1.InstallationOperation) managedservicev1.CommandState {
+	switch operation.Phase {
+	case managedservicev1.InstallationPending, managedservicev1.InstallationProvisioning:
+		return managedservicev1.CommandInProgress
+	case managedservicev1.InstallationReady:
+		return managedservicev1.CommandSucceeded
+	case managedservicev1.InstallationFailed:
+		return managedservicev1.CommandFailed
+	default:
+		return ""
+	}
+}
 
 func (value *transaction) ListServiceActivations(
 	ctx context.Context,

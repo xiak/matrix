@@ -10,6 +10,8 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
 
+const workloadRoleCommandResultRetention = 7 * 24 * time.Hour
+
 // ListServiceRoleTemplates returns release-owned template metadata only after
 // the current user is authorized in their authenticated account. An ACTIVE
 // template is not account consent and this projection contains no service
@@ -587,6 +589,56 @@ func (service *Authority) RevokeWorkloadRoleBinding(
 		result.Status != iamv1.WorkloadRoleBindingRevoked || result.ResourceVersion != request.ResourceVersion+1 ||
 		result.Workload != request.Authorization.Resource {
 		return iamv1.WorkloadRoleBinding{}, ErrUnavailable
+	}
+	return result, nil
+}
+
+// ListWorkloadRoleCommandResults recovers only recent, non-secret completion
+// facts for the current USER and the currently authenticated PaaS service
+// relation. It neither replays a command nor grants workload authority.
+func (service *Authority) ListWorkloadRoleCommandResults(
+	ctx context.Context,
+	serviceCredential iamv1.Secret,
+	subjectCredential iamv1.Secret,
+	commandType iamv1.WorkloadRoleCommandType,
+) (iamv1.WorkloadRoleCommandResultList, error) {
+	if ctx == nil || iamv1.ValidateWorkloadRoleCommandType(commandType) != nil {
+		return iamv1.WorkloadRoleCommandResultList{}, ErrInvalidArgument
+	}
+	var result iamv1.WorkloadRoleCommandResultList
+	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		now, err := transactionTime(transactionContext, transaction)
+		if err != nil {
+			return err
+		}
+		caller, err := service.authenticateService(transactionContext, transaction, serviceCredential)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(transactionContext, transaction, subjectCredential, now)
+		if err != nil {
+			return err
+		}
+		if caller.Identity.Purpose != iamv1.ServicePaaS {
+			return ErrForbidden
+		}
+		result, err = transaction.ListWorkloadRoleCommandResults(transactionContext, WorkloadRoleCommandRead{
+			AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+			ServiceLookupDigest: caller.LookupDigest, ServiceIdentity: caller.Identity,
+			CommandType: commandType, RetentionSeconds: int64(workloadRoleCommandResultRetention / time.Second),
+		})
+		return err
+	})
+	if err != nil {
+		return iamv1.WorkloadRoleCommandResultList{}, err
+	}
+	if iamv1.ValidateWorkloadRoleCommandResultList(result) != nil {
+		return iamv1.WorkloadRoleCommandResultList{}, ErrUnavailable
+	}
+	for _, item := range result.Items {
+		if item.CommandType != commandType {
+			return iamv1.WorkloadRoleCommandResultList{}, ErrUnavailable
+		}
 	}
 	return result, nil
 }

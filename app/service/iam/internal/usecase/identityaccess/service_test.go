@@ -2081,9 +2081,10 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	if err != nil {
 		t.Fatal(err)
 	}
+	changedPassword := coreSecret(t, "Binding-Changed-Password-62!")
 	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{
 		CurrentPassword: bootstrap.Administrator.Password,
-		NewPassword:     coreSecret(t, "Binding-Changed-Password-62!"),
+		NewPassword:     changedPassword,
 		RequestID:       "binding-change",
 	}); err != nil {
 		t.Fatal(err)
@@ -2149,6 +2150,51 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	if len(seen) != len(wantDecisions) {
 		t.Fatal("consent decision chain omitted required actions")
 	}
+	tx.workloadRoleCommandResults = iamv1.WorkloadRoleCommandResultList{
+		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResultList",
+		Items: []iamv1.WorkloadRoleCommandResult{{
+			APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResult",
+			CommandType: iamv1.WorkloadRoleCommandBind, RequestID: mutation.Request.Authorization.RequestID,
+			RequestDigest: mutation.RequestDigest, Workload: mutation.Binding.Workload,
+			BindingID: mutation.Binding.ID, CompletedAt: mutation.Binding.CreatedAt,
+		}},
+	}
+	freshLogin, err := service.Login(t.Context(), iamv1.LoginRequest{
+		LoginName: "admin", Password: changedPassword, RequestID: "binding-result-fresh-login",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandResults, err := service.ListWorkloadRoleCommandResults(
+		t.Context(), paasCredential, freshLogin.Credential, iamv1.WorkloadRoleCommandBind,
+	)
+	if err != nil || !reflect.DeepEqual(commandResults, tx.workloadRoleCommandResults) ||
+		tx.workloadRoleCommandRead == nil ||
+		tx.workloadRoleCommandRead.AccountID != bootstrap.Organization.ID ||
+		tx.workloadRoleCommandRead.ActorPrincipalID != bootstrap.Administrator.ID ||
+		tx.workloadRoleCommandRead.ServiceLookupDigest == "" ||
+		tx.workloadRoleCommandRead.ServiceIdentity.Purpose != iamv1.ServicePaaS ||
+		tx.workloadRoleCommandRead.CommandType != iamv1.WorkloadRoleCommandBind ||
+		tx.workloadRoleCommandRead.RetentionSeconds != 7*24*60*60 {
+		t.Fatal("workload Role command result lookup lost current credential authority", err)
+	}
+	if _, err := service.ListWorkloadRoleCommandResults(t.Context(),
+		coreServiceCredential(t, bootstrap, iamv1.ServiceAudit), freshLogin.Credential,
+		iamv1.WorkloadRoleCommandBind); !errors.Is(err, ErrForbidden) {
+		t.Fatal("non-PaaS service read workload Role command history", err)
+	}
+	if _, err := service.ListWorkloadRoleCommandResults(t.Context(), paasCredential, paasCredential,
+		iamv1.WorkloadRoleCommandBind); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("service credential substituted for current USER command-result authority", err)
+	}
+	validCommandResults := tx.workloadRoleCommandResults
+	validCommandResults.Items = append([]iamv1.WorkloadRoleCommandResult(nil), tx.workloadRoleCommandResults.Items...)
+	tx.workloadRoleCommandResults.Items[0].CommandType = iamv1.WorkloadRoleCommandUnbind
+	if _, err := service.ListWorkloadRoleCommandResults(t.Context(), paasCredential, freshLogin.Credential,
+		iamv1.WorkloadRoleCommandBind); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("mismatched workload Role command result escaped fail-closed validation", err)
+	}
+	tx.workloadRoleCommandResults = validCommandResults
 	assumeRequest := iamv1.AssumeServiceRoleRequest{BindingID: mutation.Binding.ID, RequestID: "service-role-assume"}
 	assumed, err := service.AssumeServiceRole(t.Context(), paasCredential, assumeRequest)
 	if err != nil || iamv1.ValidateAssumeRoleResponse(assumed) != nil || assumed.Outcome != "APPLIED" ||
@@ -3638,6 +3684,9 @@ type coreTransaction struct {
 	workloadRoleBindingSourcesLocked bool
 	workloadRoleBindingCreation      *WorkloadRoleBindingCreation
 	workloadRoleBindingRevocation    *WorkloadRoleBindingRevocation
+	workloadRoleCommandRead          *WorkloadRoleCommandRead
+	workloadRoleCommandResults       iamv1.WorkloadRoleCommandResultList
+	workloadRoleCommandError         error
 	serviceLinkedRoleAccess          *iamv1.ServiceLinkedRoleAccess
 	serviceLinkedRoleListRead        *AccountRead
 	serviceLinkedRoleRead            *ServiceLinkedRoleRead
@@ -3721,6 +3770,14 @@ func (transaction *coreTransaction) RevokeWorkloadRoleBinding(_ context.Context,
 		return transaction.serviceLinkedRoleAccess.Bindings[index], nil
 	}
 	return iamv1.WorkloadRoleBinding{}, ErrForbidden
+}
+
+func (transaction *coreTransaction) ListWorkloadRoleCommandResults(
+	_ context.Context,
+	read WorkloadRoleCommandRead,
+) (iamv1.WorkloadRoleCommandResultList, error) {
+	transaction.workloadRoleCommandRead = &read
+	return transaction.workloadRoleCommandResults, transaction.workloadRoleCommandError
 }
 
 func serviceRoleSessionReceiptKey(principal iamv1.PrincipalID, requestID string) string {

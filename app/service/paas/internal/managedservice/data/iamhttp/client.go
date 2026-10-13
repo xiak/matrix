@@ -332,6 +332,46 @@ func (client *Client) RevokeWorkloadRole(
 	return result, nil
 }
 
+func (client *Client) ListWorkloadRoleCommandResults(
+	ctx context.Context,
+	commandType iamv1.WorkloadRoleCommandType,
+	credential string,
+) (iamv1.WorkloadRoleCommandResultList, error) {
+	if client == nil || client.http == nil {
+		return iamv1.WorkloadRoleCommandResultList{}, port.ErrAuthorizationUnavailable
+	}
+	if ctx == nil || iamv1.ValidateWorkloadRoleCommandType(commandType) != nil {
+		return iamv1.WorkloadRoleCommandResultList{}, port.ErrAuthorizationUnavailable
+	}
+	subjectCredential, err := parseBearer(credential)
+	if err != nil {
+		return iamv1.WorkloadRoleCommandResultList{}, port.ErrUnauthenticated
+	}
+	response, err := client.http.Do(
+		ctx, http.MethodGet,
+		"/v1/internal/workload-role-command-results/"+url.PathEscape(string(commandType)),
+		nil, "", client.serviceCredential, subjectCredential,
+	)
+	if err != nil {
+		return iamv1.WorkloadRoleCommandResultList{}, port.ErrAuthorizationUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return iamv1.WorkloadRoleCommandResultList{}, authorizationStatusError(response.StatusCode)
+	}
+	var result iamv1.WorkloadRoleCommandResultList
+	if !responseIsPrivateJSON(response) || iamv1.DecodeRequest(response.Body, &result) != nil ||
+		iamv1.ValidateWorkloadRoleCommandResultList(result) != nil {
+		return iamv1.WorkloadRoleCommandResultList{}, port.ErrAuthorizationUnavailable
+	}
+	for _, item := range result.Items {
+		if item.CommandType != commandType {
+			return iamv1.WorkloadRoleCommandResultList{}, port.ErrAuthorizationUnavailable
+		}
+	}
+	return result, nil
+}
+
 // AssumeWorkloadRole exchanges the current private PaaS credential for one
 // minute of exact workload authority, evaluates the product request through
 // IAM's single PDP, and returns only a non-secret lease. Equal replay cannot be

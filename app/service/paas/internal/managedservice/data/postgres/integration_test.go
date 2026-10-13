@@ -33,7 +33,7 @@ import (
 const (
 	managedServiceIntegrationDSN = "MATRIX_MANAGEDSERVICE_POSTGRES_TEST_DSN"
 	managedServicePredecessorDSN = "MATRIX_MANAGEDSERVICE_PREDECESSOR_POSTGRES_TEST_DSN"
-	managedServicePredecessor    = "f4ecd6cedb87aebb38dea623164c3100a9ce72b6"
+	managedServicePredecessor    = "ba2ea256528349f1300092ba0fd44641d758accb"
 	managedServiceAPIPassword    = "mxp1.managed-api-00000000000000000000000000000"
 	managedServiceWorkerPassword = "mxp1.managed-worker-0000000000000000000000000"
 )
@@ -119,7 +119,7 @@ func TestManagedServiceDirectPredecessorUpgradeAndTermination(t *testing.T) {
 		t.Fatal("fixed predecessor MySQL service definition is absent")
 	}
 	// The fixed predecessor's own repository had already proved the create
-	// workflow at f4ecd6c. This fixture persists its observable READY state
+	// workflow at ba2ea25. This fixture persists its observable READY state
 	// using only that predecessor's released tables and worker functions; the
 	// assertions below exercise the current schema and use cases exclusively.
 	tx, err := predecessorPool.Begin(ctx)
@@ -290,7 +290,7 @@ SELECT managedservice.complete_operation($1, $2, 'predecessor-worker', $3, $4, $
 		t.Fatalf("upgraded predecessor rejected current ROLE activation=%#v replayed=%v err=%v", roleActivation, replayed, err)
 	}
 	var schemaVersion uint64
-	if err := currentPool.QueryRow(ctx, `SELECT schema_version FROM paas.readiness()`).Scan(&schemaVersion); err != nil || schemaVersion != 6 {
+	if err := currentPool.QueryRow(ctx, `SELECT schema_version FROM paas.readiness()`).Scan(&schemaVersion); err != nil || schemaVersion != 7 {
 		t.Fatalf("current PaaS readiness schema=%d err=%v", schemaVersion, err)
 	}
 }
@@ -415,6 +415,30 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	if err != nil || !replayed || replayedInstallation.ID != installation.ID {
 		t.Fatalf("replay installation=%#v replayed=%v err=%v", replayedInstallation, replayed, err)
 	}
+	quotaResults, err := service.ListCommandResults(ctx, usecase.ListCommandResultsQuery{
+		Authorization: authorizationA, CommandType: managedservicev1.CommandQuotaActivate,
+	})
+	if err != nil || len(quotaResults.Items) != 1 || quotaResults.Items[0].RequestID != quotaCommand.Authorization.RequestID ||
+		quotaResults.Items[0].Target.ID != quota.ID || quotaResults.Items[0].State != managedservicev1.CommandSucceeded {
+		t.Fatalf("quota command results=%#v err=%v", quotaResults, err)
+	}
+	createResults, err := service.ListCommandResults(ctx, usecase.ListCommandResultsQuery{
+		Authorization: authorizationA, CommandType: managedservicev1.CommandInstallationCreate,
+	})
+	if err != nil || len(createResults.Items) != 1 || createResults.Items[0].RequestID != installationCommand.Authorization.RequestID ||
+		createResults.Items[0].Target.ID != installation.ID || createResults.Items[0].State != managedservicev1.CommandInProgress ||
+		createResults.Items[0].CompletedAt != nil || createResults.Items[0].Operation == nil ||
+		createResults.Items[0].Operation.ID != installation.Operation.ID {
+		t.Fatalf("pending installation command results=%#v err=%v", createResults, err)
+	}
+	otherPrincipal := authorizationA
+	otherPrincipal.Subject.ID = "principal-other"
+	otherPrincipalResults, err := service.ListCommandResults(ctx, usecase.ListCommandResultsQuery{
+		Authorization: otherPrincipal, CommandType: managedservicev1.CommandInstallationCreate,
+	})
+	if err != nil || len(otherPrincipalResults.Items) != 0 {
+		t.Fatalf("other principal observed command results=%#v err=%v", otherPrincipalResults, err)
+	}
 	workerPool, err := pgxpool.New(ctx, workerDSN)
 	if err != nil {
 		t.Fatal("open managed-service worker pool")
@@ -437,6 +461,14 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 		Endpoint: "127.0.0.1:25432", CredentialReference: "credential-postgres-integration",
 	}); !errors.Is(err, reconcileinstallation.ErrQueueUnavailable) {
 		t.Fatalf("stale completion error=%v", err)
+	}
+	createResults, err = service.ListCommandResults(ctx, usecase.ListCommandResultsQuery{
+		Authorization: authorizationA, CommandType: managedservicev1.CommandInstallationCreate,
+	})
+	if err != nil || len(createResults.Items) != 1 || createResults.Items[0].State != managedservicev1.CommandSucceeded ||
+		createResults.Items[0].CompletedAt == nil || createResults.Items[0].Operation == nil ||
+		createResults.Items[0].Operation.Phase != managedservicev1.InstallationReady {
+		t.Fatalf("completed installation command results=%#v err=%v", createResults, err)
 	}
 	auditRepository, err := auditpostgres.NewAuditOutboxRepository(workerPool)
 	if err != nil {
@@ -581,11 +613,35 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 		currentInstallation.Operation.Phase != managedservicev1.InstallationReady {
 		t.Fatalf("terminated installation resource=%#v err=%v", currentInstallation, err)
 	}
+	terminationResults, err := service.ListCommandResults(ctx, usecase.ListCommandResultsQuery{
+		Authorization: authorizationA, CommandType: managedservicev1.CommandInstallationTerminate,
+	})
+	if err != nil || len(terminationResults.Items) != 1 ||
+		terminationResults.Items[0].RequestID != terminationCommand.Authorization.RequestID ||
+		terminationResults.Items[0].Target.ID != installation.ID ||
+		terminationResults.Items[0].State != managedservicev1.CommandSucceeded ||
+		terminationResults.Items[0].CompletedAt == nil || terminationResults.Items[0].Operation == nil ||
+		terminationResults.Items[0].Operation.ID != terminating.Operation.ID {
+		t.Fatalf("termination command results=%#v err=%v", terminationResults, err)
+	}
+	createResults, err = service.ListCommandResults(ctx, usecase.ListCommandResultsQuery{
+		Authorization: authorizationA, CommandType: managedservicev1.CommandInstallationCreate,
+	})
+	if err != nil || len(createResults.Items) != 1 || createResults.Items[0].State != managedservicev1.CommandSucceeded ||
+		createResults.Items[0].Operation == nil || createResults.Items[0].Operation.ID != installation.Operation.ID {
+		t.Fatalf("retained create command result=%#v err=%v", createResults, err)
+	}
 	otherQuotas, quotaErr := service.ListQuotaEntitlements(ctx, authorizationB)
 	otherInstallations, installationErr := service.ListServiceInstallations(ctx, authorizationB)
 	if quotaErr != nil || installationErr != nil || len(otherQuotas.Items) != 0 || len(otherInstallations.Items) != 0 {
 		t.Fatalf("tenant B observed tenant A state: quotas=%#v installations=%#v errors=%v/%v",
 			otherQuotas, otherInstallations, quotaErr, installationErr)
+	}
+	otherCommandResults, commandErr := service.ListCommandResults(ctx, usecase.ListCommandResultsQuery{
+		Authorization: authorizationB, CommandType: managedservicev1.CommandInstallationTerminate,
+	})
+	if commandErr != nil || len(otherCommandResults.Items) != 0 {
+		t.Fatalf("tenant B observed tenant A command results=%#v err=%v", otherCommandResults, commandErr)
 	}
 	if _, err := service.GetQuotaEntitlement(ctx, authorizationB, quota.ID); !errors.Is(err, usecase.ErrNotFound) {
 		t.Fatalf("tenant B quota resource error=%v", err)
@@ -772,6 +828,17 @@ func (integrationWorkloadRoleBinder) RevokeWorkloadRole(
 	port.AuthorizationRequest,
 ) (iamv1.WorkloadRoleBinding, error) {
 	return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable
+}
+
+func (integrationWorkloadRoleBinder) ListWorkloadRoleCommandResults(
+	context.Context,
+	iamv1.WorkloadRoleCommandType,
+	string,
+) (iamv1.WorkloadRoleCommandResultList, error) {
+	return iamv1.WorkloadRoleCommandResultList{
+		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResultList",
+		Items: []iamv1.WorkloadRoleCommandResult{},
+	}, nil
 }
 
 func (integrationWorkloadRoleBinder) AssumeWorkloadRole(

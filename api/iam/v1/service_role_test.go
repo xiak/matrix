@@ -364,6 +364,47 @@ func TestWorkloadRoleBindingTerminalStateIsExact(t *testing.T) {
 	}
 }
 
+func TestWorkloadRoleCommandResultIsClosedAndNonSecret(t *testing.T) {
+	now := time.Date(2026, 10, 13, 12, 0, 0, 123_000, time.UTC)
+	result := WorkloadRoleCommandResult{
+		APIVersion: APIVersion, Kind: "WorkloadRoleCommandResult",
+		CommandType: WorkloadRoleCommandBind, RequestID: "msrb-command-one",
+		RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Workload:      ResourceReference{Kind: ResourceServiceInstallation, ID: "mysql-primary"},
+		BindingID:     "wrb-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		CompletedAt:   now,
+	}
+	if err := ValidateWorkloadRoleCommandResult(result); err != nil {
+		t.Fatalf("valid workload Role command result: %v", err)
+	}
+	list := WorkloadRoleCommandResultList{
+		APIVersion: APIVersion, Kind: "WorkloadRoleCommandResultList",
+		Items: []WorkloadRoleCommandResult{result},
+	}
+	if err := ValidateWorkloadRoleCommandResultList(list); err != nil {
+		t.Fatalf("valid workload Role command result list: %v", err)
+	}
+	for name, mutate := range map[string]func(*WorkloadRoleCommandResult){
+		"arbitrary command": func(value *WorkloadRoleCommandResult) { value.CommandType = "ARBITRARY" },
+		"another workload":  func(value *WorkloadRoleCommandResult) { value.Workload.Kind = ResourceApplication },
+		"missing digest":    func(value *WorkloadRoleCommandResult) { value.RequestDigest = "" },
+		"missing binding":   func(value *WorkloadRoleCommandResult) { value.BindingID = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := result
+			mutate(&changed)
+			if ValidateWorkloadRoleCommandResult(changed) == nil {
+				t.Fatal("invalid workload Role command result accepted")
+			}
+		})
+	}
+	duplicate := list
+	duplicate.Items = append(append([]WorkloadRoleCommandResult{}, list.Items...), result)
+	if ValidateWorkloadRoleCommandResultList(duplicate) == nil {
+		t.Fatal("duplicate workload Role command result accepted")
+	}
+}
+
 func TestCreateWorkloadRoleBindingRequestHasOneWorkloadAndCommandIdentity(t *testing.T) {
 	template := serviceRoleTemplateForTest(t)
 	authorization, err := NewAuthorizationRequest(ActionManagedServiceInstallationRoleBind,

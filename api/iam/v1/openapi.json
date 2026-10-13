@@ -41940,6 +41940,78 @@
           "REVOKED"
         ],
         "type": "string"
+      },
+      "WorkloadRoleCommandResult": {
+        "additionalProperties": false,
+        "description": "Sanitized completion for one current-USER workload consent command under the authenticated service relation. It is not authorization and contains no credential or Account selector.",
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "bindingId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "commandType": {
+            "$ref": "#/components/schemas/WorkloadRoleCommandType"
+          },
+          "completedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "const": "WorkloadRoleCommandResult"
+          },
+          "requestDigest": {
+            "type": "string"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "workload": {
+            "$ref": "#/components/schemas/ResourceReference"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "bindingId",
+          "commandType",
+          "completedAt",
+          "kind",
+          "requestDigest",
+          "requestId",
+          "workload"
+        ],
+        "type": "object"
+      },
+      "WorkloadRoleCommandResultList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WorkloadRoleCommandResult"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "const": "WorkloadRoleCommandResultList"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "WorkloadRoleCommandType": {
+        "enum": [
+          "SERVICE_ROLE_BIND",
+          "SERVICE_ROLE_UNBIND"
+        ],
+        "type": "string"
       }
     },
     "securitySchemes": {
@@ -47117,6 +47189,52 @@
           }
         ],
         "summary": "Atomically revoke one recorded workload binding after re-evaluating the actual product resource, binding authority and PassRole; no Account, Role, template or service selector is accepted."
+      }
+    },
+    "/v1/internal/workload-role-command-results/{commandType}": {
+      "get": {
+        "operationId": "listWorkloadRoleCommandResults",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "commandType",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadRoleCommandType"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkloadRoleCommandResultList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "ServiceCredential": [],
+            "SubjectCredential": []
+          }
+        ],
+        "summary": "List recent non-secret bind or unbind results initiated by the current USER and owned by the authenticated service relation; never returns a permit or accepts Account, workload or binding selectors."
       }
     },
     "/v1/platform-policies": {

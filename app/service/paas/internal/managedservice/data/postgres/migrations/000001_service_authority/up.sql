@@ -583,6 +583,161 @@ BEGIN
 END
 $matrix_managedservice_policy$;
 
+-- Recover the sanitized outcome of a recent, closed managed-service command
+-- without granting the API role direct access to the immutable Audit outbox.
+-- The caller supplies only the already-authenticated actor lineage; tenant
+-- scope always comes from the transaction-local authority setting.
+CREATE OR REPLACE FUNCTION managedservice.list_command_results(
+    requested_command_type text,
+    requested_actor_type text,
+    requested_actor_id text,
+    requested_source_user_id text,
+    requested_source_service_principal_id text,
+    requested_retention_seconds integer,
+    requested_limit integer
+)
+RETURNS TABLE (
+    request_id text,
+    request_digest text,
+    target_id text,
+    operation_id text,
+    operation_kind text,
+    operation_phase text,
+    operation_safe_failure_code text,
+    operation_observed_at timestamptz,
+    completed_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    expected_action text;
+    expected_operation_kind text;
+BEGIN
+    effective_tenant_id := managedservice.current_tenant_id();
+    IF requested_command_type NOT IN (
+            'QUOTA_ACTIVATE', 'INSTALLATION_CREATE', 'INSTALLATION_TERMINATE'
+       )
+       OR requested_actor_type NOT IN ('USER', 'ROLE')
+       OR requested_actor_id IS NULL
+       OR requested_actor_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_retention_seconds IS NULL
+       OR requested_retention_seconds NOT BETWEEN 1 AND 604800
+       OR requested_limit IS NULL
+       OR requested_limit NOT BETWEEN 1 AND 100
+       OR (requested_actor_type = 'USER' AND (
+            COALESCE(requested_source_user_id, '') <> ''
+            OR COALESCE(requested_source_service_principal_id, '') <> ''
+       ))
+       OR (requested_actor_type = 'ROLE' AND (
+            (COALESCE(requested_source_user_id, '') = '') =
+                (COALESCE(requested_source_service_principal_id, '') = '')
+            OR (COALESCE(requested_source_user_id, '') <> '' AND
+                requested_source_user_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+            OR (COALESCE(requested_source_service_principal_id, '') <> '' AND
+                requested_source_service_principal_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+       )) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service command result parameters are invalid';
+    END IF;
+
+    IF requested_command_type = 'QUOTA_ACTIVATE' THEN
+        RETURN QUERY
+        SELECT event.document->>'requestId',
+               entitlement.request_digest,
+               entitlement.id,
+               NULL::text, NULL::text, NULL::text, NULL::text,
+               NULL::timestamptz,
+               entitlement.activated_at
+          FROM managedservice.quota_entitlements AS entitlement
+          JOIN managedservice.audit_outbox AS event
+            ON event.tenant_id = entitlement.tenant_id
+           AND event.document->>'action' = 'managedservice.quota-entitlement.activated'
+           AND event.document->>'result' = 'SUCCEEDED'
+           AND event.document#>>'{target,kind}' = 'QuotaEntitlement'
+           AND event.document#>>'{target,id}' = entitlement.id
+           AND event.document->>'requestDigest' = entitlement.request_digest
+           AND event.document->>'requestId' = entitlement.request_id
+           AND (event.document->>'occurredAt')::timestamptz = entitlement.activated_at
+         WHERE entitlement.tenant_id = effective_tenant_id
+           AND entitlement.activated_at >= transaction_timestamp() -
+                make_interval(secs => requested_retention_seconds)
+           AND event.document#>>'{actor,type}' = requested_actor_type
+           AND event.document#>>'{actor,id}' = requested_actor_id
+           AND CASE
+                WHEN requested_actor_type = 'USER' THEN
+                    NOT (event.document->'actor' ? 'accessKeyId')
+                    AND NOT (event.document->'actor' ? 'roleSession')
+                ELSE
+                    COALESCE(event.document#>>'{actor,roleSession,sourceUserId}', '') =
+                        COALESCE(requested_source_user_id, '')
+                    AND COALESCE(event.document#>>'{actor,roleSession,sourceServicePrincipalId}', '') =
+                        COALESCE(requested_source_service_principal_id, '')
+               END
+         ORDER BY entitlement.activated_at DESC, entitlement.id COLLATE "C"
+         LIMIT requested_limit;
+        RETURN;
+    END IF;
+
+    IF requested_command_type = 'INSTALLATION_CREATE' THEN
+        expected_action := 'managedservice.service-installation.created';
+        expected_operation_kind := 'PROVISION';
+    ELSE
+        expected_action := 'managedservice.service-installation.termination-requested';
+        expected_operation_kind := 'TERMINATE';
+    END IF;
+    RETURN QUERY
+    SELECT event.document->>'requestId',
+           operation.request_digest,
+           operation.installation_id,
+           operation.id,
+           operation.kind,
+           operation.phase,
+           operation.safe_failure_code,
+           operation.observed_at,
+           CASE
+                WHEN operation.phase IN ('PENDING', 'PROVISIONING') THEN NULL::timestamptz
+                ELSE operation.observed_at
+           END
+      FROM managedservice.operations AS operation
+      JOIN managedservice.audit_outbox AS event
+        ON event.tenant_id = operation.tenant_id
+       AND event.operation_id = operation.id
+       AND event.document->>'action' = expected_action
+       AND event.document->>'result' = 'ACCEPTED'
+       AND event.document#>>'{target,kind}' = 'ServiceInstallation'
+       AND event.document#>>'{target,id}' = operation.installation_id
+       AND event.document->>'operationId' = operation.id
+       AND event.document->>'requestDigest' = operation.request_digest
+       AND event.document->>'requestId' = operation.request_id
+     WHERE operation.tenant_id = effective_tenant_id
+       AND operation.kind = expected_operation_kind
+       AND event.created_at >= transaction_timestamp() -
+            make_interval(secs => requested_retention_seconds)
+       AND event.document#>>'{actor,type}' = requested_actor_type
+       AND event.document#>>'{actor,id}' = requested_actor_id
+       AND CASE
+            WHEN requested_actor_type = 'USER' THEN
+                NOT (event.document->'actor' ? 'accessKeyId')
+                AND NOT (event.document->'actor' ? 'roleSession')
+            ELSE
+                COALESCE(event.document#>>'{actor,roleSession,sourceUserId}', '') =
+                    COALESCE(requested_source_user_id, '')
+                AND COALESCE(event.document#>>'{actor,roleSession,sourceServicePrincipalId}', '') =
+                    COALESCE(requested_source_service_principal_id, '')
+           END
+     ORDER BY event.created_at DESC, operation.id COLLATE "C"
+     LIMIT requested_limit;
+END
+$function$;
+REVOKE ALL ON FUNCTION managedservice.list_command_results(
+    text, text, text, text, text, integer, integer
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION managedservice.list_command_results(
+    text, text, text, text, text, integer, integer
+) TO matrix_paas_api;
+
 CREATE OR REPLACE FUNCTION managedservice.append_audit_outbox(
     submitted_audit_event jsonb
 )

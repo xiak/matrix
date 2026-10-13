@@ -46,6 +46,7 @@ type ResourceReference struct {
 }
 
 type SubjectType = paasv1.SubjectType
+type SubjectReference = paasv1.SubjectRef
 
 const (
 	SubjectUser           = paasv1.SubjectUser
@@ -126,6 +127,11 @@ type WorkloadRoleAuthority interface {
 		uint64,
 		AuthorizationRequest,
 	) (iamv1.WorkloadRoleBinding, error)
+	ListWorkloadRoleCommandResults(
+		context.Context,
+		iamv1.WorkloadRoleCommandType,
+		string,
+	) (iamv1.WorkloadRoleCommandResultList, error)
 }
 
 // WorkloadRoleAuthorizationRequest is one product-owned business read. It has

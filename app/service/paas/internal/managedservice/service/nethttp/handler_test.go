@@ -114,6 +114,50 @@ func TestServiceCatalogProjectsDeniedActivationWithoutHidingReadableDefinitions(
 	}
 }
 
+func TestCommandResultRouteDerivesAccountAndUsesClosedReadAuthority(t *testing.T) {
+	completedAt := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	want := managedservicev1.CommandResultList{
+		Kind: "ManagedServiceCommandResultList",
+		Items: []managedservicev1.CommandResult{{
+			Kind: "ManagedServiceCommandResult", RequestID: "request-quota",
+			CommandType: managedservicev1.CommandQuotaActivate,
+			InputDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			State:       managedservicev1.CommandSucceeded,
+			Target: managedservicev1.CommandTargetReference{
+				Kind: managedservicev1.CommandTargetQuotaEntitlement, ID: "quota-one",
+			},
+			CompletedAt: &completedAt,
+		}},
+	}
+	workflow := &stubWorkflow{commandResults: want}
+	authorizer := &stubAuthorizer{}
+	handler := testHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodGet, "/managed-services/v1/command-results/QUOTA_ACTIVATE", nil)
+	request.Header.Set("Authorization", "Bearer session-secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var got managedservicev1.CommandResultList
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" ||
+		json.Unmarshal(response.Body.Bytes(), &got) != nil ||
+		managedservicev1.ValidateCommandResultList(got) != nil || workflow.commandResultType != managedservicev1.CommandQuotaActivate ||
+		workflow.commandResultQuery.Credential != "Bearer session-secret" ||
+		workflow.commandResultQuery.Authorization.TenantID != "organization-test" ||
+		authorizer.request.Action != port.AuthorizeQuotaEntitlementRead ||
+		authorizer.request.Resource != (port.ResourceReference{Kind: port.ResourceQuotaEntitlement, ID: "collection"}) ||
+		authorizer.request.CollectionUsage != iamv1.AuthorizationCollectionList {
+		t.Fatalf("status=%d result=%#v command=%q authorization=%#v body=%s",
+			response.Code, got, workflow.commandResultType, authorizer.request, response.Body.String())
+	}
+
+	invalid := httptest.NewRequest(http.MethodGet, "/managed-services/v1/command-results/ARBITRARY", nil)
+	invalid.Header.Set("Authorization", "Bearer session-secret")
+	invalidResponse := httptest.NewRecorder()
+	handler.ServeHTTP(invalidResponse, invalid)
+	if invalidResponse.Code != http.StatusBadRequest || workflow.commandResultType != managedservicev1.CommandQuotaActivate {
+		t.Fatalf("invalid command status=%d body=%s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+}
+
 func TestServiceCatalogFailsClosedWhenCapabilityDecisionDoesNotMatchRequest(t *testing.T) {
 	definitions := domain.DefaultCatalog().ListServices()
 	authorizer := &stubAuthorizer{decisionFunc: func(request port.AuthorizationRequest) (port.AuthorizationDecision, error) {
@@ -642,6 +686,9 @@ type stubWorkflow struct {
 	unbindCalls          int
 	unbindCommand        usecase.UnbindServiceRoleCommand
 	roleUnbindingReceipt managedservicev1.ServiceRoleUnbindingReceipt
+	commandResults       managedservicev1.CommandResultList
+	commandResultType    managedservicev1.CommandType
+	commandResultQuery   usecase.ListCommandResultsQuery
 }
 
 func (workflow *stubWorkflow) ListServices(context.Context, port.Authorization) (managedservicev1.ServiceDefinitionList, error) {
@@ -720,6 +767,14 @@ func (workflow *stubWorkflow) GetServiceInstallation(context.Context, port.Autho
 func (workflow *stubWorkflow) GetInstallationOperation(context.Context, port.Authorization, string) (managedservicev1.InstallationOperation, error) {
 	workflow.operationReads++
 	return workflow.operation, nil
+}
+
+func (workflow *stubWorkflow) ListCommandResults(
+	_ context.Context,
+	query usecase.ListCommandResultsQuery,
+) (managedservicev1.CommandResultList, error) {
+	workflow.commandResultType, workflow.commandResultQuery = query.CommandType, query
+	return workflow.commandResults, nil
 }
 
 func (workflow *stubWorkflow) ActivateQuota(

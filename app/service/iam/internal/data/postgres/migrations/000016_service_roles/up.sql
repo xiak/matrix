@@ -918,6 +918,127 @@ EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range OR inva
     RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding revocation command is invalid';
 END $function$;
 
+-- Recover only sanitized, recent completion facts for the current USER and
+-- the physically authenticated service relation. This is a read-only
+-- reconciliation boundary, not a generic receipt store or authorization.
+CREATE OR REPLACE FUNCTION iam.list_workload_role_command_results(
+    tenant text,actor text,service_lookup_digest text,service_purpose text,
+    command_type text,requested_retention_seconds bigint,requested_limit integer)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE service_index iam.service_credential_index%ROWTYPE;
+    service_credential iam.service_credentials%ROWTYPE; service_installation text;
+    items jsonb;
+BEGIN
+    IF COALESCE(tenant,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(actor,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(service_lookup_digest,'') COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+      OR service_purpose IS DISTINCT FROM 'PAAS'
+      OR command_type NOT IN ('SERVICE_ROLE_BIND','SERVICE_ROLE_UNBIND')
+      OR requested_retention_seconds IS NULL OR requested_retention_seconds NOT BETWEEN 1 AND 604800
+      OR requested_limit IS NULL OR requested_limit NOT BETWEEN 1 AND 100 THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload Role command result request is invalid'; END IF;
+
+    SELECT * INTO service_index FROM iam.service_credential_index indexed
+      WHERE indexed.lookup_digest=service_lookup_digest;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='workload Role command result service is unavailable'; END IF;
+    PERFORM set_config('matrix.iam_tenant_id',service_index.tenant_id,true);
+    SELECT credential.* INTO service_credential FROM iam.service_credentials credential
+      JOIN iam.accounts account ON account.id=credential.tenant_id AND account.status='ACTIVE'
+      JOIN iam.principals principal ON principal.tenant_id=credential.tenant_id
+        AND principal.id=credential.principal_id AND principal.principal_type='SERVICE_ACCOUNT'
+        AND principal.status='ACTIVE' AND principal.deleted_at IS NULL
+      WHERE credential.tenant_id=service_index.tenant_id
+        AND credential.principal_id=service_index.principal_id
+        AND credential.lookup_digest=service_lookup_digest
+        AND credential.purpose=service_purpose AND credential.revoked_at IS NULL
+      FOR SHARE OF credential,account,principal;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='workload Role command result service is unavailable'; END IF;
+    SELECT receipt.installation_id INTO service_installation FROM iam.bootstrap_receipts receipt
+      WHERE receipt.singleton AND receipt.organization_id=service_index.tenant_id FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='workload Role command result installation is unavailable'; END IF;
+
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM iam.read_account(tenant,actor);
+    IF command_type='SERVICE_ROLE_BIND' THEN
+        SELECT COALESCE(jsonb_agg(candidate.result ORDER BY candidate.completed_at DESC,candidate.binding_id),'[]'::jsonb)
+          INTO items
+          FROM (
+            SELECT jsonb_build_object(
+                'apiVersion','iam.matrix.xiak.com/v1','kind','WorkloadRoleCommandResult',
+                'commandType',command_type,'requestId',binding.request_id,
+                'requestDigest',binding.request_digest,
+                'workload',jsonb_build_object('kind',binding.workload_kind,'id',binding.workload_id),
+                'bindingId',binding.id,
+                'completedAt',to_char(binding.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+            ) AS result,binding.created_at AS completed_at,binding.id AS binding_id
+              FROM iam.workload_role_bindings binding
+              JOIN iam.workload_role_binding_index binding_index
+                ON binding_index.binding_id=binding.id AND binding_index.tenant_id=binding.tenant_id
+              JOIN iam.audit_outbox fact ON fact.tenant_id=binding.tenant_id
+                AND fact.event_document->>'action'='iam.workload-role-binding.created'
+                AND fact.event_document->>'result'='SUCCEEDED'
+                AND fact.event_document#>>'{target,kind}'='WORKLOAD_ROLE_BINDING'
+                AND fact.event_document#>>'{target,id}'=binding.id
+                AND fact.event_document#>>'{actor,type}'='USER'
+                AND fact.event_document#>>'{actor,id}'=binding.actor_principal_id
+                AND fact.event_document->>'requestId'=binding.request_id
+                AND fact.event_document->>'requestDigest'=binding.request_digest
+                AND (fact.event_document->>'occurredAt')::timestamptz=binding.created_at
+             WHERE binding.tenant_id=tenant AND binding.actor_principal_id=actor
+               AND binding.workload_kind='SERVICE_INSTALLATION'
+               AND binding.created_at>=transaction_timestamp()-
+                    make_interval(secs=>requested_retention_seconds::double precision)
+               AND binding_index.service_account_id=service_index.tenant_id
+               AND binding_index.service_installation_id=service_installation
+               AND binding_index.service_principal_id=service_credential.principal_id
+               AND binding_index.service_purpose=service_credential.purpose
+             ORDER BY binding.created_at DESC,binding.id COLLATE "C"
+             LIMIT requested_limit
+          ) candidate;
+    ELSE
+        SELECT COALESCE(jsonb_agg(candidate.result ORDER BY candidate.completed_at DESC,candidate.binding_id),'[]'::jsonb)
+          INTO items
+          FROM (
+            SELECT jsonb_build_object(
+                'apiVersion','iam.matrix.xiak.com/v1','kind','WorkloadRoleCommandResult',
+                'commandType',command_type,'requestId',fact.event_document->>'requestId',
+                'requestDigest',fact.event_document->>'requestDigest',
+                'workload',jsonb_build_object('kind',binding.workload_kind,'id',binding.workload_id),
+                'bindingId',binding.id,
+                'completedAt',to_char(binding.revoked_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+            ) AS result,binding.revoked_at AS completed_at,binding.id AS binding_id
+              FROM iam.workload_role_bindings binding
+              JOIN iam.workload_role_binding_index binding_index
+                ON binding_index.binding_id=binding.id AND binding_index.tenant_id=binding.tenant_id
+              JOIN iam.audit_outbox fact ON fact.tenant_id=binding.tenant_id
+                AND fact.event_document->>'action'='iam.workload-role-binding.revoked'
+                AND fact.event_document->>'result'='SUCCEEDED'
+                AND fact.event_document#>>'{target,kind}'='WORKLOAD_ROLE_BINDING'
+                AND fact.event_document#>>'{target,id}'=binding.id
+                AND fact.event_document#>>'{actor,type}'='USER'
+                AND fact.event_document#>>'{actor,id}'=actor
+                AND (fact.event_document->>'occurredAt')::timestamptz=binding.revoked_at
+             WHERE binding.tenant_id=tenant AND binding.revoked_at IS NOT NULL
+               AND binding.workload_kind='SERVICE_INSTALLATION'
+               AND binding.revoked_at>=transaction_timestamp()-
+                    make_interval(secs=>requested_retention_seconds::double precision)
+               AND binding_index.service_account_id=service_index.tenant_id
+               AND binding_index.service_installation_id=service_installation
+               AND binding_index.service_principal_id=service_credential.principal_id
+               AND binding_index.service_purpose=service_credential.purpose
+             ORDER BY binding.revoked_at DESC,binding.id COLLATE "C"
+             LIMIT requested_limit
+          ) candidate;
+    END IF;
+    RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1',
+      'kind','WorkloadRoleCommandResultList','items',items);
+EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range OR invalid_datetime_format OR datetime_field_overflow THEN
+    RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload Role command result request is invalid';
+END $function$;
+
 -- These read entrypoints expose only the authenticated Account's consent.
 -- They re-check the current authorization decision in the database and keep
 -- binding history separate from the bounded relation directory.
@@ -1482,6 +1603,9 @@ REVOKE ALL ON FUNCTION iam.list_service_linked_roles(text,text,text,text),
   iam.read_service_linked_role(text,text,text,text,text)
   FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
     matrix_iam_notification_worker,matrix_iam_authentication_recovery;
+REVOKE ALL ON FUNCTION iam.list_workload_role_command_results(text,text,text,text,text,bigint,integer)
+  FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
+    matrix_iam_notification_worker,matrix_iam_authentication_recovery;
 REVOKE ALL ON FUNCTION iam.read_service_role_assumption(text,text,text),
   iam.issue_service_role_session(text,text,text,jsonb,text,text,jsonb),
   iam.read_service_role_session_by_request(text,text)
@@ -1496,6 +1620,8 @@ GRANT EXECUTE ON FUNCTION iam.prepare_workload_role_binding_revocation(text,text
   iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,jsonb) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.list_service_linked_roles(text,text,text,text),
   iam.read_service_linked_role(text,text,text,text,text) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.list_workload_role_command_results(text,text,text,text,text,bigint,integer)
+  TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.read_service_role_assumption(text,text,text),
   iam.issue_service_role_session(text,text,text,jsonb,text,text,jsonb),
   iam.read_service_role_session_by_request(text,text) TO matrix_iam_api;
@@ -1836,6 +1962,20 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
           'request_document','request_digest','workload_decision','binding_revoke_decision','role_pass_decision','binding_event']
         AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
         AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_credential_recovery',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_backup_custody',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_notification_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_authentication_recovery',function_value.oid,'EXECUTE'))
+      AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
+        'iam.list_workload_role_command_results(text,text,text,text,text,bigint,integer)')
+        AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
+        AND function_value.prorettype='jsonb'::regtype AND NOT function_value.proretset
+        AND function_value.proargnames=ARRAY['tenant','actor','service_lookup_digest','service_purpose',
+          'command_type','requested_retention_seconds','requested_limit']
+        AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+        AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('public',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_credential_recovery',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_backup_custody',function_value.oid,'EXECUTE')

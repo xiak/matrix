@@ -129,6 +129,33 @@ type ServiceInstallationList struct {
 	Items []ServiceInstallation `json:"items"`
 }
 
+// CommandTargetReference identifies only the non-secret product resource
+// created or changed by one closed managed-service command.
+type CommandTargetReference struct {
+	Kind CommandTargetKind `json:"kind"`
+	ID   string            `json:"id"`
+}
+
+// CommandResult is a bounded observation of one command originally accepted
+// from the current Account identity. It is never an authorization permit and
+// deliberately excludes caller selectors, credentials and native payloads.
+type CommandResult struct {
+	Kind        string                       `json:"kind"`
+	RequestID   string                       `json:"requestId"`
+	CommandType CommandType                  `json:"commandType"`
+	InputDigest string                       `json:"inputDigest"`
+	State       CommandState                 `json:"state"`
+	Target      CommandTargetReference       `json:"target"`
+	Operation   *InstallationOperation       `json:"operation,omitempty"`
+	BindingID   *iamv1.WorkloadRoleBindingID `json:"bindingId,omitempty"`
+	CompletedAt *time.Time                   `json:"completedAt,omitempty"`
+}
+
+type CommandResultList struct {
+	Kind  string          `json:"kind"`
+	Items []CommandResult `json:"items"`
+}
+
 type ActivateQuotaRequest struct {
 	OfferingID    string `json:"offeringId"`
 	QuotaShapeID  string `json:"quotaShapeId"`

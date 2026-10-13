@@ -839,6 +839,78 @@ func TestIAMHTTPWorkloadRoleBindingRevocationRequiresExactPathAndTwoCredentials(
 	}
 }
 
+func TestIAMHTTPWorkloadRoleCommandResultsRequireExactTypeAndTwoCredentials(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	completedAt := time.Date(2026, 10, 13, 8, 0, 0, 0, time.UTC)
+	workflow.workloadCommandResult = iamv1.WorkloadRoleCommandResultList{
+		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResultList",
+		Items: []iamv1.WorkloadRoleCommandResult{{
+			APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResult",
+			CommandType: iamv1.WorkloadRoleCommandBind, RequestID: "binding-command",
+			RequestDigest: "sha256:" + strings.Repeat("a", 64),
+			Workload: iamv1.ResourceReference{
+				Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a",
+			},
+			BindingID: "binding-service-linked", CompletedAt: completedAt,
+		}},
+	}
+	handler := newTestHandler(t, workflow)
+	for _, test := range []struct {
+		name, method, target, body, service, subject string
+		status                                       int
+	}{
+		{"valid", http.MethodGet, "/v1/internal/workload-role-command-results/SERVICE_ROLE_BIND", "", "paas-service", "current-user", http.StatusOK},
+		{"missing service", http.MethodGet, "/v1/internal/workload-role-command-results/SERVICE_ROLE_BIND", "", "", "current-user", http.StatusUnauthorized},
+		{"missing subject", http.MethodGet, "/v1/internal/workload-role-command-results/SERVICE_ROLE_BIND", "", "paas-service", "", http.StatusUnauthorized},
+		{"query selector", http.MethodGet, "/v1/internal/workload-role-command-results/SERVICE_ROLE_BIND?accountId=other", "", "paas-service", "current-user", http.StatusBadRequest},
+		{"body selector", http.MethodGet, "/v1/internal/workload-role-command-results/SERVICE_ROLE_BIND", `{}`, "paas-service", "current-user", http.StatusBadRequest},
+		{"unknown type", http.MethodGet, "/v1/internal/workload-role-command-results/GENERIC_COMMAND", "", "paas-service", "current-user", http.StatusBadRequest},
+		{"nested path", http.MethodGet, "/v1/internal/workload-role-command-results/SERVICE_ROLE_BIND/other", "", "paas-service", "current-user", http.StatusNotFound},
+		{"wrong method", http.MethodPost, "/v1/internal/workload-role-command-results/SERVICE_ROLE_BIND", "", "paas-service", "current-user", http.StatusMethodNotAllowed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := workflow.workloadCommandCalls
+			request := httptest.NewRequest(test.method, test.target, strings.NewReader(test.body))
+			if test.service != "" {
+				request.Header.Set("Authorization", "Bearer "+test.service)
+			}
+			if test.subject != "" {
+				request.Header.Set("Matrix-Subject-Credential", test.subject)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("command result status=%d want=%d body=%s", response.Code, test.status, response.Body.String())
+			}
+			if test.status == http.StatusOK {
+				var result iamv1.WorkloadRoleCommandResultList
+				if response.Header().Get("Cache-Control") != "no-store" ||
+					json.Unmarshal(response.Body.Bytes(), &result) != nil ||
+					iamv1.ValidateWorkloadRoleCommandResultList(result) != nil ||
+					!reflect.DeepEqual(result, workflow.workloadCommandResult) ||
+					workflow.workloadCommandCalls != before+1 ||
+					workflow.workloadCommandType != iamv1.WorkloadRoleCommandBind ||
+					string(workflow.workloadCommandServiceCredential.CopyBytes()) != test.service ||
+					string(workflow.workloadCommandSubjectCredential.CopyBytes()) != test.subject {
+					t.Fatal("workload Role command result transport lost its exact authority")
+				}
+			} else if workflow.workloadCommandCalls != before {
+				t.Fatal("invalid workload Role command-result request reached workflow")
+			}
+		})
+	}
+	workflow.workloadCommandResult.Items[0].CommandType = iamv1.WorkloadRoleCommandUnbind
+	request := httptest.NewRequest(http.MethodGet,
+		"/v1/internal/workload-role-command-results/SERVICE_ROLE_BIND", nil)
+	request.Header.Set("Authorization", "Bearer paas-service")
+	request.Header.Set("Matrix-Subject-Credential", "current-user")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "binding-command") {
+		t.Fatalf("mismatched command result leaked: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestIAMHTTPServiceRoleSessionUsesOnlyCurrentServiceCredential(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	credential, err := iamv1.NewSecret("issued-service-role-credential")
@@ -2585,6 +2657,12 @@ type httpWorkflow struct {
 	workloadRevokeSubjectCredential  iamv1.Secret
 	workloadRevocationID             iamv1.WorkloadRoleBindingID
 	workloadRevocationRequest        iamv1.RevokeWorkloadRoleBindingRequest
+	workloadCommandCalls             int
+	workloadCommandServiceCredential iamv1.Secret
+	workloadCommandSubjectCredential iamv1.Secret
+	workloadCommandType              iamv1.WorkloadRoleCommandType
+	workloadCommandResult            iamv1.WorkloadRoleCommandResultList
+	workloadCommandError             error
 	serviceLinkedRoleListCalls       int
 	serviceLinkedRoleReadCalls       int
 	serviceLinkedRoleCredential      iamv1.Secret
@@ -2775,6 +2853,19 @@ func (value *httpWorkflow) RevokeWorkloadRoleBinding(_ context.Context, serviceC
 	binding.Status, binding.ResourceVersion, binding.UpdatedAt, binding.RevokedAt =
 		iamv1.WorkloadRoleBindingRevoked, request.ResourceVersion+1, revokedAt, &revokedAt
 	return binding, nil
+}
+
+func (value *httpWorkflow) ListWorkloadRoleCommandResults(
+	_ context.Context,
+	serviceCredential iamv1.Secret,
+	subjectCredential iamv1.Secret,
+	commandType iamv1.WorkloadRoleCommandType,
+) (iamv1.WorkloadRoleCommandResultList, error) {
+	value.workloadCommandCalls++
+	value.workloadCommandServiceCredential = serviceCredential
+	value.workloadCommandSubjectCredential = subjectCredential
+	value.workloadCommandType = commandType
+	return value.workloadCommandResult, value.workloadCommandError
 }
 
 func (value *httpWorkflow) AssumeServiceRole(_ context.Context, credential iamv1.Secret,

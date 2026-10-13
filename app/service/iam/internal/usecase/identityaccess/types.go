@@ -165,6 +165,7 @@ type Transaction interface {
 	CreateWorkloadRoleBinding(context.Context, WorkloadRoleBindingCreation) (iamv1.ServiceLinkedRoleAccess, error)
 	PrepareWorkloadRoleBindingRevocation(context.Context, iamv1.AccountID, iamv1.WorkloadRoleBindingID, string, iamv1.ServicePurpose) (iamv1.ServiceLinkedRoleAccess, error)
 	RevokeWorkloadRoleBinding(context.Context, WorkloadRoleBindingRevocation) (iamv1.WorkloadRoleBinding, error)
+	ListWorkloadRoleCommandResults(context.Context, WorkloadRoleCommandRead) (iamv1.WorkloadRoleCommandResultList, error)
 	ReadServiceRoleAssumption(context.Context, ServiceRoleAssumptionRead) (ServiceRoleAssumption, error)
 	IssueServiceRoleSession(context.Context, ServiceRoleSessionIssuance) (iamv1.RoleSession, error)
 	ReadServiceRoleSessionByRequest(context.Context, ServiceRoleSessionRead) (iamv1.RoleSession, bool, error)
@@ -475,6 +476,18 @@ type WorkloadRoleBindingRevocation struct {
 	BindingRevokeDecisionID iamv1.DecisionID
 	RolePassDecisionID      iamv1.DecisionID
 	AuditEvent              auditv1.Event
+}
+
+// WorkloadRoleCommandRead contains only authority recovered from current
+// credentials plus one closed command type. It deliberately has no Account,
+// workload, binding or service-principal selector from the HTTP request.
+type WorkloadRoleCommandRead struct {
+	AccountID           iamv1.AccountID
+	ActorPrincipalID    iamv1.PrincipalID
+	ServiceLookupDigest string
+	ServiceIdentity     iamv1.ServiceIdentity
+	CommandType         iamv1.WorkloadRoleCommandType
+	RetentionSeconds    int64
 }
 
 // ServiceRoleSessionRead is derived exclusively from the authenticated

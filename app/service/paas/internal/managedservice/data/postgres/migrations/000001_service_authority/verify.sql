@@ -52,6 +52,7 @@ BEGIN
       FROM (VALUES
             ('append_audit_outbox'), ('claim_audit_event'),
             ('complete_audit_event'), ('audit_outbox_snapshot'),
+            ('list_command_results'),
             ('start_termination'), ('claim_operation'), ('complete_operation'),
             ('complete_termination_operation'), ('retry_operation'),
             ('fail_operation'), ('fail_cleanup_operation')
@@ -66,7 +67,28 @@ BEGIN
            AND 'search_path=pg_catalog, pg_temp' = ANY(procedure.proconfig)
      );
     IF missing IS NOT NULL THEN
-        RAISE EXCEPTION 'managed-service worker functions are missing or unsafe: %', missing;
+        RAISE EXCEPTION 'managed-service functions are missing or unsafe: %', missing;
+    END IF;
+
+    IF to_regprocedure(
+            'managedservice.list_command_results(text,text,text,text,text,integer,integer)'
+       ) IS NULL
+       OR NOT has_function_privilege(
+            'matrix_paas_api',
+            'managedservice.list_command_results(text,text,text,text,text,integer,integer)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_worker',
+            'managedservice.list_command_results(text,text,text,text,text,integer,integer)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'public',
+            'managedservice.list_command_results(text,text,text,text,text,integer,integer)',
+            'EXECUTE'
+       ) THEN
+        RAISE EXCEPTION 'managed-service command result function privileges are invalid';
     END IF;
 
     IF has_schema_privilege('matrix_paas_api', 'managedservice', 'CREATE')

@@ -7,7 +7,12 @@ type RegionProfile string
 type RegionState string
 type InstallationPhase string
 type InstallationOperationKind string
+type CommandType string
+type CommandState string
+type CommandTargetKind string
 type ErrorCode string
+
+const MaxCommandResultItems = 100
 
 const (
 	PostgreSQLServiceID     = "postgresql"
@@ -58,6 +63,28 @@ const (
 const (
 	InstallationOperationProvision InstallationOperationKind = "PROVISION"
 	InstallationOperationTerminate InstallationOperationKind = "TERMINATE"
+)
+
+// Command results are a closed managed-service recovery surface. They are not
+// generic receipts and cannot be extended by callers with arbitrary command
+// names or resource kinds.
+const (
+	CommandQuotaActivate         CommandType = "QUOTA_ACTIVATE"
+	CommandInstallationCreate    CommandType = "INSTALLATION_CREATE"
+	CommandInstallationTerminate CommandType = "INSTALLATION_TERMINATE"
+	CommandServiceRoleBind       CommandType = "SERVICE_ROLE_BIND"
+	CommandServiceRoleUnbind     CommandType = "SERVICE_ROLE_UNBIND"
+)
+
+const (
+	CommandInProgress CommandState = "IN_PROGRESS"
+	CommandSucceeded  CommandState = "SUCCEEDED"
+	CommandFailed     CommandState = "FAILED"
+)
+
+const (
+	CommandTargetQuotaEntitlement    CommandTargetKind = "QUOTA_ENTITLEMENT"
+	CommandTargetServiceInstallation CommandTargetKind = "SERVICE_INSTALLATION"
 )
 
 const (

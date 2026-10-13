@@ -254,6 +254,12 @@ func buildPaths() object {
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}},
 			[]any{openapi31.PathIDParameter("bindingId")},
 		)},
+		"/v1/internal/workload-role-command-results/{commandType}": object{"get": readOperation(
+			"listWorkloadRoleCommandResults", "List recent non-secret bind or unbind results initiated by the current USER and owned by the authenticated service relation; never returns a permit or accepts Account, workload or binding selectors.",
+			"WorkloadRoleCommandResultList",
+			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}},
+			[]any{object{"name": "commandType", "in": "path", "required": true, "schema": openapi31.Ref("WorkloadRoleCommandType")}},
+		)},
 		"/v1/internal/service-role-sessions": object{"post": mutationOperation(
 			"assumeServiceRole", "Exchange the current authenticated service principal and one active workload binding for a short-lived Role credential. IAM resolves every Account, Role, installation, purpose, template and policy fact; the credential is returned only on APPLIED.",
 			"AssumeServiceRoleRequest", "AssumeRoleResponse", "200",
@@ -593,6 +599,7 @@ func enumSchemas() map[string][]string {
 		"RoleManagement":                  {string(iamv1.RoleCustomerManaged), string(iamv1.RoleServiceLinked)},
 		"ServiceRoleTemplateStatus":       {string(iamv1.ServiceRoleTemplateActive), string(iamv1.ServiceRoleTemplateRetired)},
 		"WorkloadRoleBindingStatus":       {string(iamv1.WorkloadRoleBindingActive), string(iamv1.WorkloadRoleBindingRevoked)},
+		"WorkloadRoleCommandType":         {string(iamv1.WorkloadRoleCommandBind), string(iamv1.WorkloadRoleCommandUnbind)},
 		"AccountStatus":                   {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
 		"PrincipalType":                   {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
 		"SubjectType":                     {string(iamv1.SubjectUser), string(iamv1.SubjectServiceAccount), string(iamv1.SubjectRole)},
@@ -678,6 +685,8 @@ func structContracts() map[string]reflect.Type {
 		"ServiceLinkedRoleList":                         openapi31.StructType[iamv1.ServiceLinkedRoleList](),
 		"CreateWorkloadRoleBindingRequest":              openapi31.StructType[iamv1.CreateWorkloadRoleBindingRequest](),
 		"RevokeWorkloadRoleBindingRequest":              openapi31.StructType[iamv1.RevokeWorkloadRoleBindingRequest](),
+		"WorkloadRoleCommandResult":                     openapi31.StructType[iamv1.WorkloadRoleCommandResult](),
+		"WorkloadRoleCommandResultList":                 openapi31.StructType[iamv1.WorkloadRoleCommandResultList](),
 		"AssumeServiceRoleRequest":                      openapi31.StructType[iamv1.AssumeServiceRoleRequest](),
 		"UserPermissionBoundary":                        openapi31.StructType[iamv1.UserPermissionBoundary](),
 		"SetUserPermissionBoundaryRequest":              openapi31.StructType[iamv1.SetUserPermissionBoundaryRequest](),
@@ -1527,6 +1536,10 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"revokedAt"}, "properties": object{"status": object{"const": string(iamv1.WorkloadRoleBindingRevoked)}, "resourceVersion": object{"const": 2}, "revokedAt": object{"type": "string", "format": "date-time"}}},
 	}
 	schemas["RevokeWorkloadRoleBindingRequest"].(object)["properties"].(object)["resourceVersion"] = object{"const": 1}
+	schemas["WorkloadRoleCommandResult"].(object)["description"] = "Sanitized completion for one current-USER workload consent command under the authenticated service relation. It is not authorization and contains no credential or Account selector."
+	schemas["WorkloadRoleCommandResult"].(object)["properties"].(object)["kind"] = object{"const": "WorkloadRoleCommandResult"}
+	schemas["WorkloadRoleCommandResultList"].(object)["properties"].(object)["kind"] = object{"const": "WorkloadRoleCommandResultList"}
+	schemas["WorkloadRoleCommandResultList"].(object)["properties"].(object)["items"].(object)["maxItems"] = iamv1.MaxWorkloadRoleCommandResults
 	schemas["ServiceLinkedRoleAccess"].(object)["description"] = "Non-secret Account observation of one service-linked Role and its exact workload bindings. It carries no permission, session or service secret."
 	schemas["ServiceLinkedRoleAccess"].(object)["properties"].(object)["bindings"].(object)["maxItems"] = iamv1.DirectoryPageSize
 	schemas["AssumeServiceRoleRequest"].(object)["description"] = "Service-authenticated intent selecting only an existing workload binding and bounded duration. Account, Role, installation, purpose, template and policy are resolved by IAM."

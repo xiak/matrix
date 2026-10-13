@@ -83,6 +83,7 @@ type Workflow interface {
 	GetServiceLinkedRole(context.Context, iamv1.Secret, iamv1.RoleID, string, string) (iamv1.ServiceLinkedRoleAccess, error)
 	CreateWorkloadRoleBinding(context.Context, iamv1.Secret, iamv1.Secret, iamv1.CreateWorkloadRoleBindingRequest) (iamv1.ServiceLinkedRoleAccess, error)
 	RevokeWorkloadRoleBinding(context.Context, iamv1.Secret, iamv1.Secret, iamv1.WorkloadRoleBindingID, iamv1.RevokeWorkloadRoleBindingRequest) (iamv1.WorkloadRoleBinding, error)
+	ListWorkloadRoleCommandResults(context.Context, iamv1.Secret, iamv1.Secret, iamv1.WorkloadRoleCommandType) (iamv1.WorkloadRoleCommandResultList, error)
 	AssumeServiceRole(context.Context, iamv1.Secret, iamv1.AssumeServiceRoleRequest) (iamv1.AssumeRoleResponse, error)
 	GetServiceRoleSessionByRequest(context.Context, iamv1.Secret, string) (iamv1.RoleSession, bool, error)
 	GetPolicy(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyDetail, error)
@@ -228,6 +229,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/service-linked-roles/", value.serviceLinkedRole)
 	routes.HandleFunc("/v1/internal/workload-role-bindings", value.createWorkloadRoleBinding)
 	routes.HandleFunc("/v1/internal/workload-role-bindings/", value.revokeWorkloadRoleBinding)
+	routes.HandleFunc("/v1/internal/workload-role-command-results/", value.workloadRoleCommandResults)
 	routes.HandleFunc("/v1/internal/service-role-sessions", value.assumeServiceRole)
 	routes.HandleFunc("/v1/internal/service-role-sessions/by-request/", value.serviceRoleSessionByRequest)
 	routes.HandleFunc("/v1/policies/", value.policy)
@@ -618,6 +620,47 @@ func (value *handler) revokeWorkloadRoleBinding(response http.ResponseWriter, re
 		value.writeError(response, request, identityaccess.ErrUnavailable)
 		return
 	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) workloadRoleCommandResults(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	id, ok := commandPathID(response, request, "/v1/internal/workload-role-command-results/", "", "commandType")
+	if !ok {
+		return
+	}
+	commandType := iamv1.WorkloadRoleCommandType(id)
+	if iamv1.ValidateWorkloadRoleCommandType(commandType) != nil {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.argument.invalid", "IAM argument is invalid")
+		return
+	}
+	serviceCredential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	subjectCredential, ok := subjectBearer(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.ListWorkloadRoleCommandResults(
+		request.Context(), serviceCredential, subjectCredential, commandType,
+	)
+	if err == nil {
+		err = iamv1.ValidateWorkloadRoleCommandResultList(result)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	for _, item := range result.Items {
+		if item.CommandType != commandType {
+			value.writeError(response, request, identityaccess.ErrUnavailable)
+			return
+		}
+	}
+	response.Header().Set("Cache-Control", "no-store")
 	writeJSON(response, http.StatusOK, result)
 }
 

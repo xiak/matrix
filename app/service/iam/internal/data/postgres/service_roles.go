@@ -386,6 +386,44 @@ func (value *transaction) RevokeWorkloadRoleBinding(
 	return result, nil
 }
 
+func (value *transaction) ListWorkloadRoleCommandResults(
+	ctx context.Context,
+	read identityaccess.WorkloadRoleCommandRead,
+) (iamv1.WorkloadRoleCommandResultList, error) {
+	if iamv1.ValidateID("accountId", string(read.AccountID)) != nil ||
+		iamv1.ValidateID("actorPrincipalId", string(read.ActorPrincipalID)) != nil ||
+		iamv1.ValidateDigest("serviceLookupDigest", read.ServiceLookupDigest) != nil ||
+		iamv1.ValidateServiceIdentity(read.ServiceIdentity) != nil ||
+		iamv1.ValidateWorkloadRoleCommandType(read.CommandType) != nil ||
+		read.RetentionSeconds < 1 || read.RetentionSeconds > 7*24*60*60 {
+		return iamv1.WorkloadRoleCommandResultList{}, identityaccess.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, `SELECT iam.list_workload_role_command_results($1,$2,$3,$4,$5,$6,$7)`,
+		read.AccountID, read.ActorPrincipalID, read.ServiceLookupDigest, read.ServiceIdentity.Purpose,
+		read.CommandType, read.RetentionSeconds, iamv1.MaxWorkloadRoleCommandResults).Scan(&encoded); err != nil {
+		return iamv1.WorkloadRoleCommandResultList{}, mapAuthorizationDatabaseError("list IAM workload Role command results", err)
+	}
+	defer clear(encoded)
+	if int64(len(encoded)) > iamv1.MaxWorkloadRoleCommandListBytes {
+		return iamv1.WorkloadRoleCommandResultList{}, identityaccess.ErrUnavailable
+	}
+	var result iamv1.WorkloadRoleCommandResultList
+	if json.Unmarshal(encoded, &result) != nil {
+		return iamv1.WorkloadRoleCommandResultList{}, identityaccess.ErrUnavailable
+	}
+	for index := range result.Items {
+		result.Items[index].CompletedAt = result.Items[index].CompletedAt.UTC()
+		if result.Items[index].CommandType != read.CommandType {
+			return iamv1.WorkloadRoleCommandResultList{}, identityaccess.ErrUnavailable
+		}
+	}
+	if iamv1.ValidateWorkloadRoleCommandResultList(result) != nil {
+		return iamv1.WorkloadRoleCommandResultList{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 // ListServiceLinkedRoles reads the bounded Account-owned relation directory.
 // PostgreSQL returns one look-ahead row so this adapter, rather than SQL or a
 // caller, remains the owner of public page boundaries.

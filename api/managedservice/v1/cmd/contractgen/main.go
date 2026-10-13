@@ -56,6 +56,10 @@ func buildDocument() object {
 				"schema": openapi31.Ref("Name"),
 			},
 			"BindingID": openapi31.PathIDParameter("bindingId"),
+			"CommandType": object{
+				"name": "commandType", "in": "path", "required": true,
+				"schema": openapi31.Ref("CommandType"),
+			},
 		},
 		Responses: object{
 			"ProblemResponse": object{
@@ -98,6 +102,19 @@ func buildDocument() object {
 				string(managedservicev1.InstallationTerminated),
 			},
 			"InstallationOperationKind": {string(managedservicev1.InstallationOperationProvision), string(managedservicev1.InstallationOperationTerminate)},
+			"CommandType": {
+				string(managedservicev1.CommandQuotaActivate), string(managedservicev1.CommandInstallationCreate),
+				string(managedservicev1.CommandInstallationTerminate), string(managedservicev1.CommandServiceRoleBind),
+				string(managedservicev1.CommandServiceRoleUnbind),
+			},
+			"CommandState": {
+				string(managedservicev1.CommandInProgress), string(managedservicev1.CommandSucceeded),
+				string(managedservicev1.CommandFailed),
+			},
+			"CommandTargetKind": {
+				string(managedservicev1.CommandTargetQuotaEntitlement),
+				string(managedservicev1.CommandTargetServiceInstallation),
+			},
 			"WorkloadRoleBindingStatus": {string(iamv1.WorkloadRoleBindingActive), string(iamv1.WorkloadRoleBindingRevoked)},
 			"ErrorCode": {
 				string(managedservicev1.ErrorInvalidArgument), string(managedservicev1.ErrorUnauthenticated),
@@ -175,6 +192,13 @@ func paths() object {
 			"delete": resourceMutationOperationWithParameters(
 				"unbindServiceRole", "Revoke one exact service Role binding from this installation.",
 				[]string{"InstallationID", "BindingID"}, "UnbindServiceRoleRequest", "ServiceRoleUnbindingReceipt",
+			),
+		},
+		"/v1/command-results/{commandType}": object{
+			"get": readResourceOperation(
+				"listManagedServiceCommandResults",
+				"List recent non-secret results for one closed command type and the current Account identity.",
+				"CommandType", "CommandResultList",
 			),
 		},
 	}
@@ -260,6 +284,9 @@ func structs() map[string]reflect.Type {
 		"InstallationOperation":        openapi31.StructType[managedservicev1.InstallationOperation](),
 		"ServiceInstallation":          openapi31.StructType[managedservicev1.ServiceInstallation](),
 		"ServiceInstallationList":      openapi31.StructType[managedservicev1.ServiceInstallationList](),
+		"CommandTargetReference":       openapi31.StructType[managedservicev1.CommandTargetReference](),
+		"CommandResult":                openapi31.StructType[managedservicev1.CommandResult](),
+		"CommandResultList":            openapi31.StructType[managedservicev1.CommandResultList](),
 		"ActivateQuotaRequest":         openapi31.StructType[managedservicev1.ActivateQuotaRequest](),
 		"ActivateServiceRequest":       openapi31.StructType[managedservicev1.ActivateServiceRequest](),
 		"CreateInstallationRequest":    openapi31.StructType[managedservicev1.CreateInstallationRequest](),
@@ -306,6 +333,7 @@ func schemaOverlay(schemas object) {
 		"ServiceDefinitionList": "ServiceDefinitionList", "ServiceActivationList": "ServiceActivationList",
 		"ServiceOfferingList": "ServiceOfferingList", "RegionList": "RegionList",
 		"QuotaEntitlementList": "QuotaEntitlementList", "ServiceInstallationList": "ServiceInstallationList",
+		"CommandResultList": "ManagedServiceCommandResultList",
 	} {
 		properties := schemas[name].(object)["properties"].(object)
 		properties["kind"] = object{"const": kind}
@@ -314,6 +342,10 @@ func schemaOverlay(schemas object) {
 		properties := schemas[name].(object)["properties"].(object)
 		properties["items"].(object)["maxItems"] = 1000
 	}
+	commandList := schemas["CommandResultList"].(object)["properties"].(object)
+	commandList["items"].(object)["maxItems"] = 100
+	commandResult := schemas["CommandResult"].(object)["properties"].(object)
+	commandResult["kind"] = object{"const": "ManagedServiceCommandResult"}
 	schemas["ServiceDefinitionList"].(object)["properties"].(object)["items"].(object)["maxItems"] = iamv1.MaxAuthorizationBatchItems
 	resource := schemas["ResourceReference"].(object)["properties"].(object)
 	resource["kind"] = object{"const": string(iamv1.ResourceServiceActivation)}

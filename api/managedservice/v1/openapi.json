@@ -12,6 +12,14 @@
           "type": "string"
         }
       },
+      "CommandType": {
+        "in": "path",
+        "name": "commandType",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CommandType"
+        }
+      },
       "IdempotencyKey": {
         "in": "header",
         "name": "Idempotency-Key",
@@ -184,6 +192,108 @@
       "CapabilityRestriction": {
         "enum": [
           "AUTHORITY_REQUIRED"
+        ],
+        "type": "string"
+      },
+      "CommandResult": {
+        "additionalProperties": false,
+        "properties": {
+          "bindingId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "commandType": {
+            "$ref": "#/components/schemas/CommandType"
+          },
+          "completedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "inputDigest": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "ManagedServiceCommandResult"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/InstallationOperation"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CommandState"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CommandTargetReference"
+          }
+        },
+        "required": [
+          "commandType",
+          "inputDigest",
+          "kind",
+          "requestId",
+          "state",
+          "target"
+        ],
+        "type": "object"
+      },
+      "CommandResultList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CommandResult"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "const": "ManagedServiceCommandResultList"
+          }
+        },
+        "required": [
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "CommandState": {
+        "enum": [
+          "IN_PROGRESS",
+          "SUCCEEDED",
+          "FAILED"
+        ],
+        "type": "string"
+      },
+      "CommandTargetKind": {
+        "enum": [
+          "QUOTA_ENTITLEMENT",
+          "SERVICE_INSTALLATION"
+        ],
+        "type": "string"
+      },
+      "CommandTargetReference": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CommandTargetKind"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "CommandType": {
+        "enum": [
+          "QUOTA_ACTIVATE",
+          "INSTALLATION_CREATE",
+          "INSTALLATION_TERMINATE",
+          "SERVICE_ROLE_BIND",
+          "SERVICE_ROLE_UNBIND"
         ],
         "type": "string"
       },
@@ -1004,6 +1114,50 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/command-results/{commandType}": {
+      "get": {
+        "operationId": "listManagedServiceCommandResults",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommandType"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResultList"
+                }
+              }
+            },
+            "description": "Current organization-scoped resource."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List recent non-secret results for one closed command type and the current Account identity."
+      }
+    },
     "/v1/offerings": {
       "get": {
         "operationId": "listServiceOfferings",

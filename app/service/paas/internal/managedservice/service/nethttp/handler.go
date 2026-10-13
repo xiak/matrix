@@ -34,6 +34,7 @@ type Workflow interface {
 	ListServiceInstallations(context.Context, port.Authorization) (managedservicev1.ServiceInstallationList, error)
 	GetServiceInstallation(context.Context, port.Authorization, string) (managedservicev1.ServiceInstallation, error)
 	GetInstallationOperation(context.Context, port.Authorization, string) (managedservicev1.InstallationOperation, error)
+	ListCommandResults(context.Context, usecase.ListCommandResultsQuery) (managedservicev1.CommandResultList, error)
 	BindServiceRole(context.Context, usecase.BindServiceRoleCommand) (managedservicev1.ServiceRoleBindingReceipt, error)
 	UnbindServiceRole(context.Context, usecase.UnbindServiceRoleCommand) (managedservicev1.ServiceRoleUnbindingReceipt, error)
 	ActivateQuota(context.Context, usecase.ActivateQuotaCommand) (managedservicev1.QuotaEntitlement, bool, error)
@@ -79,7 +80,32 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	routes.HandleFunc("POST /managed-services/v1/service-installations/{installationId}/termination", value.terminateInstallation)
 	routes.HandleFunc("POST /managed-services/v1/service-installations/{installationId}/service-role-bindings", value.bindServiceRole)
 	routes.HandleFunc("DELETE /managed-services/v1/service-installations/{installationId}/service-role-bindings/{bindingId}", value.unbindServiceRole)
+	routes.HandleFunc("GET /managed-services/v1/command-results/{commandType}", value.listCommandResults)
 	return routes, nil
+}
+
+func (value *handler) listCommandResults(response http.ResponseWriter, request *http.Request) {
+	commandType := managedservicev1.CommandType(request.PathValue("commandType"))
+	if managedservicev1.ValidateCommandType(commandType) != nil {
+		writeProblem(response, "request-invalid", http.StatusBadRequest,
+			managedservicev1.ErrorInvalidArgument, "Invalid argument", "command type is invalid", false)
+		return
+	}
+	action, resourceKind := port.AuthorizeInstallationRead, port.ResourceServiceInstallation
+	if commandType == managedservicev1.CommandQuotaActivate {
+		action, resourceKind = port.AuthorizeQuotaEntitlementRead, port.ResourceQuotaEntitlement
+	}
+	authorization, requestID, ok := value.authorizeCollection(
+		response, request, action, resourceKind, iamv1.AuthorizationCollectionList,
+	)
+	if !ok || !acceptsNoInput(response, request, requestID) {
+		return
+	}
+	result, err := value.workflow.ListCommandResults(request.Context(), usecase.ListCommandResultsQuery{
+		Authorization: authorization, Credential: request.Header.Get("Authorization"), CommandType: commandType,
+	})
+	response.Header().Set("Cache-Control", "no-store")
+	writeResult(response, requestID, result, err)
 }
 
 func (value *handler) listServices(response http.ResponseWriter, request *http.Request) {

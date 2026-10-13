@@ -11322,6 +11322,37 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			tenant.serviceRoleReceipt.Template != tenant.serviceRoleTemplate {
 			t.Fatal("managed-service binding did not return the exact non-secret IAM result")
 		}
+		bindResultResponse := performJSON(t, http.MethodGet,
+			base+"/command-results/SERVICE_ROLE_BIND", tenant.member, nil)
+		var bindResults managedservicev1.CommandResultList
+		if bindResultResponse.Status != http.StatusOK || bindResultResponse.Header.Get("Cache-Control") != "no-store" ||
+			json.Unmarshal(bindResultResponse.Body, &bindResults) != nil ||
+			managedservicev1.ValidateCommandResultList(bindResults) != nil || len(bindResults.Items) != 1 ||
+			bindResults.Items[0].CommandType != managedservicev1.CommandServiceRoleBind ||
+			bindResults.Items[0].State != managedservicev1.CommandSucceeded ||
+			bindResults.Items[0].Target != (managedservicev1.CommandTargetReference{
+				Kind: managedservicev1.CommandTargetServiceInstallation, ID: tenant.shared.ID,
+			}) || bindResults.Items[0].BindingID == nil ||
+			*bindResults.Items[0].BindingID != tenant.serviceRoleReceipt.BindingID ||
+			bindResults.Items[0].CompletedAt == nil {
+			t.Fatalf("current USER could not recover exact service Role bind completion: status=%d body=%s",
+				bindResultResponse.Status, bindResultResponse.Body)
+		}
+		ownerBindResponse := performJSON(t, http.MethodGet,
+			base+"/command-results/SERVICE_ROLE_BIND", tenant.owner, nil)
+		var ownerBindResults managedservicev1.CommandResultList
+		if ownerBindResponse.Status != http.StatusOK || json.Unmarshal(ownerBindResponse.Body, &ownerBindResults) != nil ||
+			managedservicev1.ValidateCommandResultList(ownerBindResults) != nil || len(ownerBindResults.Items) != 0 {
+			t.Fatalf("another USER observed service Role bind completion: status=%d body=%s",
+				ownerBindResponse.Status, ownerBindResponse.Body)
+		}
+		assertStatus(performJSONWithHeaders(t, http.MethodGet,
+			iamEndpoint+"/v1/internal/workload-role-command-results/SERVICE_ROLE_BIND",
+			auditServiceCredential, "", nil, map[string]string{"Matrix-Subject-Credential": tenant.member}),
+			http.StatusForbidden, "wrong service purpose command-result read")
+		assertStatus(performJSON(t, http.MethodGet,
+			base+"/command-results/SERVICE_ROLE_BIND?tenantId=forged", tenant.member, nil),
+			http.StatusBadRequest, "command-result tenant selector")
 		var productSessionID string
 		var productReadClosed bool
 		if err := admin.QueryRow(ctx, `SELECT session_value.id,
@@ -11619,6 +11650,32 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			tenant.serviceRoleRevoked.RoleID != tenant.serviceRoleReceipt.RoleID ||
 			tenant.serviceRoleRevoked.Template != tenant.serviceRoleTemplate {
 			t.Fatal("managed-service unbinding did not return the exact terminal IAM result")
+		}
+		unbindResultResponse := performJSON(t, http.MethodGet,
+			base+"/command-results/SERVICE_ROLE_UNBIND", tenant.member, nil)
+		var unbindResults managedservicev1.CommandResultList
+		if unbindResultResponse.Status != http.StatusOK || unbindResultResponse.Header.Get("Cache-Control") != "no-store" ||
+			json.Unmarshal(unbindResultResponse.Body, &unbindResults) != nil ||
+			managedservicev1.ValidateCommandResultList(unbindResults) != nil || len(unbindResults.Items) != 1 ||
+			unbindResults.Items[0].CommandType != managedservicev1.CommandServiceRoleUnbind ||
+			unbindResults.Items[0].State != managedservicev1.CommandSucceeded ||
+			unbindResults.Items[0].Target != (managedservicev1.CommandTargetReference{
+				Kind: managedservicev1.CommandTargetServiceInstallation, ID: tenant.shared.ID,
+			}) || unbindResults.Items[0].BindingID == nil ||
+			*unbindResults.Items[0].BindingID != tenant.serviceRoleReceipt.BindingID ||
+			unbindResults.Items[0].CompletedAt == nil {
+			t.Fatalf("current USER could not recover exact service Role unbind completion: status=%d body=%s",
+				unbindResultResponse.Status, unbindResultResponse.Body)
+		}
+		retainedBindResponse := performJSON(t, http.MethodGet,
+			base+"/command-results/SERVICE_ROLE_BIND", tenant.member, nil)
+		var retainedBindResults managedservicev1.CommandResultList
+		if retainedBindResponse.Status != http.StatusOK || json.Unmarshal(retainedBindResponse.Body, &retainedBindResults) != nil ||
+			managedservicev1.ValidateCommandResultList(retainedBindResults) != nil || len(retainedBindResults.Items) != 1 ||
+			retainedBindResults.Items[0].BindingID == nil ||
+			*retainedBindResults.Items[0].BindingID != tenant.serviceRoleReceipt.BindingID {
+			t.Fatalf("service Role unbind erased original bind completion: status=%d body=%s",
+				retainedBindResponse.Status, retainedBindResponse.Body)
 		}
 		replay := performJSONWithIdempotency(t, http.MethodDelete, path, tenant.member,
 			"shared-service-role-unbinding-key", request)

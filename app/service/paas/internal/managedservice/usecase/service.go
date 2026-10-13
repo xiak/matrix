@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
@@ -44,6 +45,7 @@ type Repository interface {
 }
 
 type Transaction interface {
+	ListCommandResults(context.Context, CommandResultRead) ([]managedservicev1.CommandResult, error)
 	ListServiceActivations(context.Context) ([]managedservicev1.ServiceActivation, error)
 	GetServiceActivation(context.Context, string) (managedservicev1.ServiceActivation, error)
 	FindServiceActivationReplay(context.Context, string) (managedservicev1.ServiceActivation, string, bool, error)
@@ -62,6 +64,20 @@ type Transaction interface {
 	AppendAuditEvent(context.Context, audit.Event) error
 	Commit(context.Context) error
 	Rollback(context.Context) error
+}
+
+const commandResultRetention = 7 * 24 * time.Hour
+
+type CommandResultRead struct {
+	CommandType      managedservicev1.CommandType
+	Subject          port.SubjectReference
+	RetentionSeconds int64
+}
+
+type ListCommandResultsQuery struct {
+	Authorization port.Authorization
+	Credential    string
+	CommandType   managedservicev1.CommandType
 }
 
 type ServiceActivationDraft struct {
@@ -302,6 +318,84 @@ func (service *Service) ListServiceActivations(
 		return managedservicev1.ServiceActivationList{}, err
 	}
 	return managedservicev1.ServiceActivationList{Kind: "ServiceActivationList", Items: items}, nil
+}
+
+// ListCommandResults returns only recent results initiated by the current
+// Account identity. A fresh RoleSession may observe an earlier command only
+// when it represents the same Role and original source principal.
+func (service *Service) ListCommandResults(
+	ctx context.Context,
+	query ListCommandResultsQuery,
+) (managedservicev1.CommandResultList, error) {
+	if ctx == nil || port.ValidateAuthorization(query.Authorization) != nil ||
+		managedservicev1.ValidateCommandType(query.CommandType) != nil ||
+		(query.Authorization.Subject.Type != port.SubjectUser && query.Authorization.Subject.Type != port.SubjectRole) ||
+		(query.Authorization.Subject.Type == port.SubjectUser && query.Authorization.Subject.AccessKeyID != "") {
+		return managedservicev1.CommandResultList{}, ErrInvalidArgument
+	}
+	if query.CommandType == managedservicev1.CommandServiceRoleBind ||
+		query.CommandType == managedservicev1.CommandServiceRoleUnbind {
+		if query.Authorization.Subject.Type != port.SubjectUser || query.Credential == "" {
+			return managedservicev1.CommandResultList{}, ErrInvalidArgument
+		}
+		roleCommandType := iamv1.WorkloadRoleCommandBind
+		if query.CommandType == managedservicev1.CommandServiceRoleUnbind {
+			roleCommandType = iamv1.WorkloadRoleCommandUnbind
+		}
+		observed, err := service.workloadRoleAuthority.ListWorkloadRoleCommandResults(
+			ctx, roleCommandType, query.Credential,
+		)
+		if err != nil {
+			return managedservicev1.CommandResultList{}, err
+		}
+		if iamv1.ValidateWorkloadRoleCommandResultList(observed) != nil {
+			return managedservicev1.CommandResultList{}, ErrRepositoryUnavailable
+		}
+		items := make([]managedservicev1.CommandResult, len(observed.Items))
+		for index, item := range observed.Items {
+			if item.CommandType != roleCommandType || item.Workload.Kind != iamv1.ResourceServiceInstallation {
+				return managedservicev1.CommandResultList{}, ErrRepositoryUnavailable
+			}
+			bindingID := item.BindingID
+			completedAt := item.CompletedAt
+			items[index] = managedservicev1.CommandResult{
+				Kind: "ManagedServiceCommandResult", RequestID: item.RequestID,
+				CommandType: query.CommandType, InputDigest: item.RequestDigest,
+				State: managedservicev1.CommandSucceeded,
+				Target: managedservicev1.CommandTargetReference{
+					Kind: managedservicev1.CommandTargetServiceInstallation, ID: item.Workload.ID,
+				},
+				BindingID: &bindingID, CompletedAt: &completedAt,
+			}
+		}
+		result := managedservicev1.CommandResultList{Kind: "ManagedServiceCommandResultList", Items: items}
+		if managedservicev1.ValidateCommandResultList(result) != nil {
+			return managedservicev1.CommandResultList{}, ErrRepositoryUnavailable
+		}
+		return result, nil
+	}
+	var items []managedservicev1.CommandResult
+	err := service.withTransaction(ctx, query.Authorization.TenantID, ReadOnly, func(transaction Transaction) error {
+		var err error
+		items, err = transaction.ListCommandResults(ctx, CommandResultRead{
+			CommandType: query.CommandType, Subject: query.Authorization.Subject,
+			RetentionSeconds: int64(commandResultRetention / time.Second),
+		})
+		return err
+	})
+	if err != nil {
+		return managedservicev1.CommandResultList{}, err
+	}
+	result := managedservicev1.CommandResultList{Kind: "ManagedServiceCommandResultList", Items: items}
+	if managedservicev1.ValidateCommandResultList(result) != nil {
+		return managedservicev1.CommandResultList{}, ErrRepositoryUnavailable
+	}
+	for _, item := range result.Items {
+		if item.CommandType != query.CommandType {
+			return managedservicev1.CommandResultList{}, ErrRepositoryUnavailable
+		}
+	}
+	return result, nil
 }
 
 func (service *Service) GetServiceActivation(

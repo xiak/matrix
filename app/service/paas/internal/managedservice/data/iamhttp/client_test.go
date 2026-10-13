@@ -480,6 +480,122 @@ func TestRevokeWorkloadRoleFailsClosedOnInvalidShapeStatusAndResponse(t *testing
 	}
 }
 
+func TestListWorkloadRoleCommandResultsUsesCurrentServiceAndUserCredentials(t *testing.T) {
+	completedAt := time.Date(2026, 10, 13, 8, 0, 0, 0, time.UTC)
+	want := iamv1.WorkloadRoleCommandResultList{
+		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResultList",
+		Items: []iamv1.WorkloadRoleCommandResult{{
+			APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResult",
+			CommandType: iamv1.WorkloadRoleCommandBind, RequestID: "binding-command",
+			RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Workload: iamv1.ResourceReference{
+				Kind: iamv1.ResourceServiceInstallation, ID: "postgres-primary",
+			},
+			BindingID: "binding-reader", CompletedAt: completedAt,
+		}},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet ||
+			request.URL.Path != "/v1/internal/workload-role-command-results/SERVICE_ROLE_BIND" ||
+			request.URL.RawQuery != "" || request.Body == nil || request.ContentLength != 0 ||
+			request.Header.Get("Authorization") != "Bearer paas-service-secret" ||
+			request.Header.Get("Matrix-Subject-Credential") != "user-session-secret" ||
+			request.Header.Get("Content-Type") != "" {
+			t.Errorf("unexpected IAM command-result request: method=%s path=%s headers=%v", request.Method, request.URL.Path, request.Header)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		response.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(response).Encode(want)
+	}))
+	defer server.Close()
+	serviceCredential, err := iamv1.NewSecret("paas-service-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(Config{Endpoint: server.URL, ServiceCredential: serviceCredential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.ListWorkloadRoleCommandResults(
+		t.Context(), iamv1.WorkloadRoleCommandBind, "Bearer user-session-secret",
+	)
+	if err != nil || len(result.Items) != 1 || result.Items[0] != want.Items[0] {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestListWorkloadRoleCommandResultsFailsClosedOnAuthorityAndShapeChanges(t *testing.T) {
+	serviceCredential, _ := iamv1.NewSecret("paas-service-secret")
+	valid := iamv1.WorkloadRoleCommandResultList{
+		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResultList",
+		Items: []iamv1.WorkloadRoleCommandResult{{
+			APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResult",
+			CommandType: iamv1.WorkloadRoleCommandBind, RequestID: "binding-command",
+			RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Workload: iamv1.ResourceReference{
+				Kind: iamv1.ResourceServiceInstallation, ID: "postgres-primary",
+			},
+			BindingID: "binding-reader", CompletedAt: time.Date(2026, 10, 13, 8, 0, 0, 0, time.UTC),
+		}},
+	}
+	for name, test := range map[string]struct {
+		status  int
+		private bool
+		mutate  func(*iamv1.WorkloadRoleCommandResultList)
+		want    error
+	}{
+		"expired user":       {status: http.StatusUnauthorized, want: port.ErrUnauthenticated},
+		"wrong tenant":       {status: http.StatusForbidden, want: port.ErrPermissionDenied},
+		"authority outage":   {status: http.StatusServiceUnavailable, want: port.ErrAuthorizationUnavailable},
+		"cacheable response": {status: http.StatusOK, private: false, want: port.ErrAuthorizationUnavailable},
+		"wrong command type": {status: http.StatusOK, private: true, mutate: func(value *iamv1.WorkloadRoleCommandResultList) {
+			value.Items[0].CommandType = iamv1.WorkloadRoleCommandUnbind
+		}, want: port.ErrAuthorizationUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				if test.status != http.StatusOK {
+					response.WriteHeader(test.status)
+					return
+				}
+				result := valid
+				result.Items = append([]iamv1.WorkloadRoleCommandResult(nil), valid.Items...)
+				if test.mutate != nil {
+					test.mutate(&result)
+				}
+				response.Header().Set("Content-Type", "application/json")
+				if test.private {
+					response.Header().Set("Cache-Control", "no-store")
+				}
+				_ = json.NewEncoder(response).Encode(result)
+			}))
+			defer server.Close()
+			client, err := NewClient(Config{Endpoint: server.URL, ServiceCredential: serviceCredential})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.ListWorkloadRoleCommandResults(
+				t.Context(), iamv1.WorkloadRoleCommandBind, "Bearer user-session-secret",
+			)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("err=%v want=%v", err, test.want)
+			}
+		})
+	}
+	client, err := NewClient(Config{Endpoint: "http://127.0.0.1:1", ServiceCredential: serviceCredential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListWorkloadRoleCommandResults(t.Context(), "GENERIC_COMMAND", "Bearer user-session-secret"); !errors.Is(err, port.ErrAuthorizationUnavailable) {
+		t.Fatalf("unknown command error=%v", err)
+	}
+	if _, err := client.ListWorkloadRoleCommandResults(t.Context(), iamv1.WorkloadRoleCommandBind, "Basic user-session-secret"); !errors.Is(err, port.ErrUnauthenticated) {
+		t.Fatalf("non-bearer subject error=%v", err)
+	}
+}
+
 func TestAssumeWorkloadRoleKeepsCredentialInsideOneMinuteLeaseAndReleasesIt(t *testing.T) {
 	session, credential := clientTestServiceRoleSession(t)
 	request := port.WorkloadRoleAuthorizationRequest{
