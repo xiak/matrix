@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；最近接受发布组合仍为IAM83/Audit37/PaaS3、`contractRevision=31`，其签名产品授权目录、数据库驱动服务Role模板/权限上限、通用动态产品闭环及同Profile签名A/B生命周期已有既有证据。当前候选把PostgreSQL 18、MySQL 8.4 LTS、Elasticsearch 8.19.23和RabbitMQ 4.1.8作为真实provider接入生产worker，并把Account服务开通委派给同一Policy体系中的USER与ROLE；完整形状前移为IAM84/Audit39/PaaS6、`contractRevision=34`，唯一直接前驱为固定`f4ecd6cedb87aebb38dea623164c3100a9ce72b6`的IAM83/Audit38/PaaS5+r33。当前候选已有本地真库及多进程证据，但尚无精确固定提交的独立CI、同Profile签名A/B或LIVE UI结论，因此不继承既有发布接受状态。FEAT-010其余故障/UNKNOWN/APISIX/签名浏览器路径与IAM-UI-01–08完整范围，以及AC-11的完整容量/公平性/HA仍未验收，整体需求仍为实施中。
+- 状态：实施中；最近接受发布组合仍为IAM83/Audit37/PaaS3、`contractRevision=31`，其签名产品授权目录、数据库驱动服务Role模板/权限上限、通用动态产品闭环及同Profile签名A/B生命周期已有既有证据。当前候选把PostgreSQL 18、MySQL 8.4 LTS、Elasticsearch 8.19.23和RabbitMQ 4.1.8作为真实provider接入生产worker，并把Account服务开通委派给同一Policy体系中的USER与ROLE；跨浏览器UNKNOWN后端恢复使完整形状前移为IAM85/Audit39/PaaS7、`contractRevision=35`，唯一直接前驱为固定`ba2ea256528349f1300092ba0fd44641d758accb`的IAM84/Audit39/PaaS6+r34。当前候选已有本地真库及多进程证据，但尚无精确文档HEAD的独立CI、同Profile签名A/B或该恢复契约的LIVE UI结论，因此不继承既有发布接受状态。FEAT-010其余故障/UNKNOWN UI/APISIX/签名浏览器路径与IAM-UI-01–08完整范围，以及AC-11的完整容量/公平性/HA仍未验收，整体需求仍为实施中。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -50,7 +50,7 @@
 
 未发布迁移可以在风险替换前保存已验证并推送的 Git 回滚点后合并、改写或删除，不在工作树保留废弃实现作为兼容层。默认门禁是最终结构的空库安装、等值重放、带真实数据的重启/恢复、迁移失败无部分效果，以及当前版本的 RLS、受限身份、撤权和 Audit/outbox 不变量。它们不能因免除开发历史兼容而取消。
 
-开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项FEAT累积各自的旧binary/schema路径。窗口前移时在同一切片替换被淘汰的固定源码、schema断言和格式夹具，不增加兼容别名或多版本参数。当前唯一直接前驱为固定`f4ecd6cedb87aebb38dea623164c3100a9ce72b6`的IAM83/Audit38/PaaS5、`contractRevision=33`，当前候选为IAM84/Audit39/PaaS6、`contractRevision=34`。直接前驱PaaS SQL中的USER Activation与READY MySQL资源在迁移后保持，当前约束再接受精确ROLE actor；Audit前驱tenant记录的event/canonical/digest/hash/chain保持，当前action catalog增加逐action主体能力；IAM前驱Profile revision 6原字节保留，revision 7只扩展三个服务开通动作的ROLE载体。更早的产品目录、IAM82→83等门禁只保留为已完成组件证据，不能再充当当前完整profile前驱或让测试矩阵继续向更老开发快照扩张。
+开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项FEAT累积各自的旧binary/schema路径。窗口前移时在同一切片替换被淘汰的固定源码、schema断言和格式夹具，不增加兼容别名或多版本参数。当前唯一直接前驱为固定`ba2ea256528349f1300092ba0fd44641d758accb`的IAM84/Audit39/PaaS6、`contractRevision=34`，当前候选为IAM85/Audit39/PaaS7、`contractRevision=35`。直接前驱已有四产品、USER/ROLE开通、完整Operation/outbox及服务Role事实；当前迁移只增加五类命令的封闭结果投影和IAM/PaaS只读入口，不新增可伪造completion行，不回填历史权限，也不改变Audit canonical。实际前驱PaaS READY资源、Operation与不可变事实在apply-twice后保持，新查询按当前Account与原主体谱系恢复；IAM新入口必须由当前有效PaaS服务凭据和当前USER共同认证。更早的IAM83完整profile及IAM82→83等门禁只保留为已完成组件证据，不能再充当当前完整profile前驱或让测试矩阵继续向更老开发快照扩张。
 
 固定前驱`9cf500095ae9a9cf98d322711c58a5862b899fa1`曾作为IAM82→IAM83开发期数据保留起点；其[Verification 38075029627](https://github.com/xiak/matrix/actions/runs/38075029627)终止为`completed/cancelled`，不能登记为独立CI成功。对应真实migrator/runtime运行结果只保留为下述历史组件证据；产品尚未发布且当前完整profile直接前驱已前移后，CI不再构建该旧源码或保留重复的密码/MFA/恢复夹具。IAM82发布准入仍只由已接受固定源码`147586689a9f0bcad3254f743b11c51dba35c1b5`及其签名运行证据拥有，不能回填当前完整profile兼容结论。
 
