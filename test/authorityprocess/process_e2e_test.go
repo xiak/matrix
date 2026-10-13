@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -74,6 +75,7 @@ const (
 	browserAccountID         = "browser-live-account"
 	browserRootLoginName     = "browser.live.root"
 	browserUserLoginName     = "browser.live.user"
+	browserSecurityEmail     = "browser.live.user@matrix.test"
 
 	iamServiceCredential   = "mx1.ProcessIAMServiceCredential00000000000000001"
 	paasServiceCredential  = "mx1.ProcessPaaSServiceCredential0000000000000001"
@@ -174,6 +176,7 @@ type authorityProcessMode uint8
 const (
 	authorityProcessFull authorityProcessMode = iota
 	authorityProcessIdentityBrowser
+	authorityProcessPersonalSecurityBrowser
 	authorityProcessBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
@@ -192,6 +195,21 @@ func TestIAMIdentityConsoleBrowser(t *testing.T) {
 		t.Fatalf("identity browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
 	}
 	testIndependentAuthorityProcesses(t, authorityProcessIdentityBrowser)
+}
+
+// This opt-in fixture starts from a real API-created Account, Root and User so
+// the browser can focus on the separate personal-security boundary: verified
+// contact, TOTP binding, two MFA sessions and next-request session revocation.
+// TestIAMIdentityConsoleBrowser remains the owner of browser Account/User
+// creation and is deliberately not weakened or repeated here.
+func TestIAMPersonalSecurityConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_PERSONAL_SECURITY_CONSOLE_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_PERSONAL_SECURITY_CONSOLE_BROWSER=1 for the bounded LIVE personal-security browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("personal-security browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessPersonalSecurityBrowser)
 }
 
 // An opt-in bounded observation, not a production SLO or an open-loop load
@@ -265,7 +283,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		// observation harness; sample count, password cost and product request
 		// deadlines remain unchanged.
 		duration = 8 * time.Minute
-	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser {
+	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser || mode == authorityProcessPersonalSecurityBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -668,6 +686,12 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	if mode == authorityProcessIdentityBrowser {
 		runIAMIdentityConsoleBrowser(t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
+		return
+	}
+	if mode == authorityProcessPersonalSecurityBrowser {
+		homeHomonym := prepareIAMPersonalSecurityBrowser(t, iamEndpoint, adminLogin.Credential)
+		runIAMPersonalSecurityConsoleBrowser(t, ctx, admin, root, temporary, bootstrap,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, homeHomonym, start)
 		return
 	}
 	if mode == authorityProcessBrowser {
@@ -2561,6 +2585,287 @@ func runIAMIdentityConsoleBrowser(
 	t.Log("identity browser fixture finished with a LIVE-created Account and immutable Root, LIVE-created ordinary User, forced password changes, realm-bound login, zero implicit grants, platform-directory isolation and a verified Account Audit chain")
 }
 
+func prepareIAMPersonalSecurityBrowser(t *testing.T, iamEndpoint, platformBearer string) iamv1.User {
+	t.Helper()
+	homeHomonym := createIAMUser(t, iamEndpoint, platformBearer, browserUserLoginName,
+		"Home Account homonym", initialDeveloperPassword, "personal-security-home-homonym-create")
+	homeLogin := loginIAM(t, iamEndpoint, browserUserLoginName+"@organization-process",
+		initialDeveloperPassword, "personal-security-home-homonym-login")
+	changePasswordIAM(t, iamEndpoint, homeLogin.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "personal-security-home-homonym-password")
+
+	response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/accounts", platformBearer, map[string]any{
+		"id": browserAccountID, "displayName": "Browser Live Account", "rootLoginName": browserRootLoginName,
+		"rootDisplayName": "Browser Live Root", "initialPassword": initialReaderPassword,
+		"requestId": "personal-security-account-create",
+	})
+	var account iamv1.Account
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &account) != nil ||
+		iamv1.ValidateAccount(account) != nil || account.ID != browserAccountID {
+		t.Fatalf("prepare personal-security Account status=%d body=%s", response.Status, response.Body)
+	}
+	rootInitial := loginIAM(t, iamEndpoint, browserRootLoginName, initialReaderPassword,
+		"personal-security-root-initial-login")
+	changePasswordIAM(t, iamEndpoint, rootInitial.Credential, initialReaderPassword,
+		changedReaderPassword, "personal-security-root-password")
+	root := loginIAM(t, iamEndpoint, browserRootLoginName, changedReaderPassword,
+		"personal-security-root-login")
+	created := createIAMUser(t, iamEndpoint, root.Credential, browserUserLoginName,
+		"Browser Live User", initialDeveloperPassword, "personal-security-user-create")
+	if created.AccountID != browserAccountID {
+		t.Fatal("personal-security User escaped its fixture Account")
+	}
+	memberInitial := loginIAM(t, iamEndpoint, browserUserLoginName+"@"+browserAccountID,
+		initialDeveloperPassword, "personal-security-user-initial-login")
+	changePasswordIAM(t, iamEndpoint, memberInitial.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "personal-security-user-password")
+	return homeHomonym
+}
+
+func runIAMPersonalSecurityConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	bootstrap iamv1.BootstrapDocument,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	platformBearer string,
+	homeHomonym iamv1.User,
+	start func(string, []string) *childProcess,
+) {
+	t.Helper()
+	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-personal-security-finished")
+	material := personalSecurityBrowserMaterial{
+		contactCodePath: filepath.Join(temporary, "browser-notification-contact-code"),
+		bindingCodePath: filepath.Join(temporary, "browser-totp-binding-code"),
+		loginCodePaths: [2]string{
+			filepath.Join(temporary, "browser-totp-login-one-code"),
+			filepath.Join(temporary, "browser-totp-login-two-code"),
+		},
+	}
+	t.Logf("PERSONAL_SECURITY_BROWSER_FIXTURE url=%s/console/access/settings/ finish=%s realm=%s@%s email=%s contactCode=%s bindingCode=%s loginOneCode=%s loginTwoCode=%s; use the changed developer password",
+		server.URL, finish, browserUserLoginName, browserAccountID,
+		browserSecurityEmail,
+		material.contactCodePath, material.bindingCodePath, material.loginCodePaths[0], material.loginCodePaths[1])
+	waitForPersonalSecurityBrowserCompletion(t, ctx, database, ui, finish, bootstrap, &material)
+	assertBrowserPersonalSecurityFlow(t, ctx, database, iamEndpoint, auditEndpoint, paasEndpoint,
+		platformBearer, homeHomonym, material.seed)
+	t.Log("personal-security browser fixture finished with a verified notification contact, bound TOTP authenticator, two MFA logins, next-request session revocation, realm isolation, zero implicit grants and a verified Account Audit chain; the protected synthetic code handoff is not SMTP or an external authenticator")
+}
+
+// personalSecurityBrowserMaterial is a test-only handoff between the real IAM
+// processes and a human-controlled browser. The files contain short-lived
+// synthetic codes under the test's private temporary directory; no code or
+// seed is logged, exposed through the UI origin, or added to a production API.
+// This proves the browser contract against a real clock and pquerna/otp, but it
+// deliberately does not claim SMTP delivery or an external authenticator.
+type personalSecurityBrowserMaterial struct {
+	contactCodePath   string
+	bindingCodePath   string
+	loginCodePaths    [2]string
+	userID            iamv1.PrincipalID
+	factorID          string
+	seed              string
+	contactWritten    bool
+	bindingWritten    bool
+	loginCodesWritten int
+	seenChallenges    map[string]struct{}
+}
+
+func waitForPersonalSecurityBrowserCompletion(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	ui *childProcess,
+	finish string,
+	bootstrap iamv1.BootstrapDocument,
+	material *personalSecurityBrowserMaterial,
+) {
+	t.Helper()
+	material.seenChallenges = make(map[string]struct{}, len(material.loginCodePaths))
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("notification, TOTP and Session browser completion timed out; browser acceptance not completed")
+		case <-ticker.C:
+			if exited, _ := ui.poll(); exited {
+				t.Fatal("browser UI exited during identity security observation")
+			}
+			observePersonalSecurityBrowserMaterial(t, ctx, database, bootstrap, material)
+			info, err := os.Lstat(finish)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil || !info.Mode().IsRegular() {
+				t.Fatal("invalid personal-security browser completion marker")
+			}
+			if !material.contactWritten || !material.bindingWritten || material.loginCodesWritten != len(material.loginCodePaths) {
+				t.Fatal("browser completion marker preceded notification, TOTP or two-login evidence")
+			}
+			return
+		}
+	}
+}
+
+func observePersonalSecurityBrowserMaterial(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	bootstrap iamv1.BootstrapDocument,
+	material *personalSecurityBrowserMaterial,
+) {
+	t.Helper()
+	if material.userID == "" {
+		err := database.QueryRow(ctx, `SELECT id FROM iam.principals
+			WHERE tenant_id=$1 AND principal_type='USER' AND login_name=$2 AND deleted_at IS NULL`,
+			browserAccountID, browserUserLoginName).Scan(&material.userID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("observe personal-security fixture User: %v", err)
+		}
+	}
+	if !material.contactWritten {
+		var verificationID string
+		err := database.QueryRow(ctx, `SELECT id FROM iam.notification_contact_verifications
+			WHERE tenant_id=$1 AND user_id=$2 AND state='PENDING'
+			ORDER BY issued_at DESC,id DESC LIMIT 1`, browserAccountID, material.userID).Scan(&verificationID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("observe browser notification verification: %v", err)
+		}
+		if err == nil {
+			code := readProcessContactCode(t, ctx, database, iamv1.NotificationContactVerification{
+				ID: verificationID, AccountID: browserAccountID, UserID: material.userID,
+			})
+			writePersonalSecurityBrowserCode(t, material.contactCodePath, code)
+			material.contactWritten = true
+		}
+	}
+	state, lastStep, found := readProcessBrowserTOTPSeed(t, ctx, database, bootstrap, material)
+	if !found {
+		return
+	}
+	if state == "PENDING" && !material.bindingWritten {
+		code, _ := processTOTPCode(t, ctx, database, material.seed, -1, true)
+		writePersonalSecurityBrowserCode(t, material.bindingCodePath, code)
+		material.bindingWritten = true
+		return
+	}
+	if state != "ACTIVE" || material.loginCodesWritten == len(material.loginCodePaths) {
+		return
+	}
+	rows, err := database.Query(ctx, `SELECT id FROM iam.authentication_challenges
+		WHERE tenant_id=$1 AND user_id=$2 AND factor_id=$3 AND purpose='LOGIN'
+		  AND next_step='TOTP' AND state='PENDING' ORDER BY created_at,id`,
+		browserAccountID, material.userID, material.factorID)
+	if err != nil {
+		t.Fatalf("observe browser TOTP login challenges: %v", err)
+	}
+	var pendingChallenges []string
+	for rows.Next() {
+		var challengeID string
+		if err := rows.Scan(&challengeID); err != nil {
+			t.Fatalf("read browser TOTP login challenge: %v", err)
+		}
+		pendingChallenges = append(pendingChallenges, challengeID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatalf("complete browser TOTP login challenge observation: %v", err)
+	}
+	rows.Close()
+	for _, challengeID := range pendingChallenges {
+		if _, seen := material.seenChallenges[challengeID]; seen {
+			continue
+		}
+		code, _ := processTOTPCode(t, ctx, database, material.seed, lastStep, false)
+		writePersonalSecurityBrowserCode(t, material.loginCodePaths[material.loginCodesWritten], code)
+		material.seenChallenges[challengeID] = struct{}{}
+		material.loginCodesWritten++
+		// The next code must use the watermark committed by this challenge,
+		// never the speculative step generated for the current one.
+		break
+	}
+}
+
+func readProcessBrowserTOTPSeed(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	bootstrap iamv1.BootstrapDocument,
+	material *personalSecurityBrowserMaterial,
+) (string, int64, bool) {
+	t.Helper()
+	var installationID, keyID, state string
+	var formatVersion int
+	var nonce, ciphertext []byte
+	var lastStep int64
+	err := database.QueryRow(ctx, `SELECT id,installation_id,key_id,format_version,nonce,ciphertext,state,last_consumed_step
+		FROM iam.totp_authenticators WHERE tenant_id=$1 AND user_id=$2 AND state IN ('PENDING','ACTIVE')
+		ORDER BY created_at DESC,id DESC LIMIT 1`, browserAccountID, material.userID).Scan(
+		&material.factorID, &installationID, &keyID, &formatVersion, &nonce, &ciphertext, &state, &lastStep,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, false
+	}
+	if err != nil {
+		t.Fatalf("read browser TOTP factor: %v", err)
+	}
+	if material.seed != "" {
+		return state, lastStep, true
+	}
+	digest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil {
+		t.Fatal("digest browser TOTP bootstrap")
+	}
+	scope := iamv1.TOTPWrappingScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest}
+	info, aad, err := iamv1.TOTPSeedContext(scope, browserAccountID, material.userID, material.factorID, keyID)
+	defer clear(info)
+	defer clear(aad)
+	if err != nil || installationID != scope.InstallationID || keyID != "process-totp" || formatVersion != 1 {
+		t.Fatal("invalid synthetic browser TOTP seed binding")
+	}
+	key, err := hkdf.Key(sha256.New, bytes.Repeat([]byte{0x74}, 32),
+		[]byte("matrix.iam.totp-seed.hkdf-sha256.v1"), string(info), 32)
+	defer clear(key)
+	if err != nil {
+		t.Fatal("derive synthetic browser TOTP seed key")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal("create synthetic browser TOTP seed cipher")
+	}
+	aead, err := cipher.NewGCMWithRandomNonce(block)
+	if err != nil {
+		t.Fatal("create synthetic browser TOTP seed AEAD")
+	}
+	protected := append(bytes.Clone(nonce), ciphertext...)
+	defer clear(protected)
+	plaintext, err := aead.Open(nil, nil, protected, aad)
+	defer clear(plaintext)
+	if err != nil || len(plaintext) != 20 {
+		t.Fatal("open synthetic browser TOTP seed")
+	}
+	material.seed = base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(plaintext)
+	return state, lastStep, true
+}
+
+func writePersonalSecurityBrowserCode(t *testing.T, path, value string) {
+	t.Helper()
+	if path == "" || value == "" {
+		t.Fatal("empty browser security handoff")
+	}
+	writeProtectedFile(t, filepath.Dir(path), filepath.Base(path), []byte(value))
+}
+
 func startIAMConsoleBrowser(
 	t *testing.T,
 	ctx context.Context,
@@ -2633,6 +2938,50 @@ func assertBrowserIdentityFlow(
 	homeHomonym iamv1.User,
 ) {
 	t.Helper()
+	assertBrowserIdentityFlowWithMemberLogin(t, ctx, database, iamEndpoint, auditEndpoint, paasEndpoint,
+		platformBearer, homeHomonym, func(_ iamv1.User) loginResult {
+			return loginIAM(t, iamEndpoint, browserUserLoginName+"@"+browserAccountID,
+				changedDeveloperPassword, "browser-user-authoritative-login")
+		})
+}
+
+func assertBrowserPersonalSecurityFlow(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	platformBearer string,
+	homeHomonym iamv1.User,
+	totpSeed string,
+) {
+	t.Helper()
+	if totpSeed == "" {
+		t.Fatal("browser TOTP seed observation is absent")
+	}
+	assertBrowserIdentityFlowWithMemberLogin(t, ctx, database, iamEndpoint, auditEndpoint, paasEndpoint,
+		platformBearer, homeHomonym, func(created iamv1.User) loginResult {
+			waitAllIAMOutboxDelivered(t, ctx, database)
+			assertBrowserMFAAndSessionRevocation(t, ctx, database, created.ID)
+			return loginIAMWithTOTP(t, ctx, database, iamEndpoint,
+				browserUserLoginName+"@"+browserAccountID, changedDeveloperPassword,
+				created.ID, totpSeed, "browser-user-authoritative-login")
+		})
+}
+
+func assertBrowserIdentityFlowWithMemberLogin(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	platformBearer string,
+	homeHomonym iamv1.User,
+	memberLogin func(iamv1.User) loginResult,
+) {
+	t.Helper()
 	response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/accounts/"+browserAccountID, platformBearer, nil)
 	var account iamv1.AccountAccess
 	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &account) != nil ||
@@ -2684,7 +3033,7 @@ func assertBrowserIdentityFlow(
 	realm := browserUserLoginName + "@" + browserAccountID
 	rejectOldPassword(realm, initialDeveloperPassword, "browser-user-old-password")
 	rejectOldPassword(browserUserLoginName, changedDeveloperPassword, "browser-user-ambiguous-realm")
-	member := loginIAM(t, iamEndpoint, realm, changedDeveloperPassword, "browser-user-authoritative-login")
+	member := memberLogin(created)
 	response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", member.Credential, nil)
 	var memberIdentity iamv1.CurrentIdentity
 	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &memberIdentity) != nil ||
@@ -2721,6 +3070,103 @@ func assertBrowserIdentityFlow(
 	if chain.TenantID != browserAccountID || chain.State != auditv1.VerificationVerified || !chain.Complete {
 		t.Fatal("browser Account identity facts broke its Audit chain")
 	}
+}
+
+func assertBrowserMFAAndSessionRevocation(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	userID iamv1.PrincipalID,
+) {
+	t.Helper()
+	var contactEmail string
+	var contactRevision int64
+	var contactVerifiedAt time.Time
+	if err := database.QueryRow(ctx, `SELECT email,resource_version,verified_at
+		FROM iam.notification_contacts WHERE tenant_id=$1 AND user_id=$2`,
+		browserAccountID, userID).Scan(&contactEmail, &contactRevision, &contactVerifiedAt); err != nil ||
+		contactEmail != browserSecurityEmail || contactRevision != 1 || contactVerifiedAt.IsZero() {
+		t.Fatalf("browser notification contact is not authoritatively verified: email=%q revision=%d verifiedAt=%s err=%v",
+			contactEmail, contactRevision, contactVerifiedAt, err)
+	}
+	var factorID string
+	var factorReady bool
+	if err := database.QueryRow(ctx, `SELECT m.factor_id,
+		m.enrollment_state='BOUND' AND m.revision=2 AND f.state='ACTIVE'
+		  AND f.bound_revision=2 AND f.last_consumed_step>=0
+		FROM iam.user_mfa_states m JOIN iam.totp_authenticators f
+		  ON f.tenant_id=m.tenant_id AND f.user_id=m.user_id AND f.id=m.factor_id
+		WHERE m.tenant_id=$1 AND m.user_id=$2`, browserAccountID, userID).Scan(&factorID, &factorReady); err != nil || !factorReady {
+		t.Fatalf("browser TOTP factor is not authoritatively bound: factor=%s err=%v", factorID, err)
+	}
+	var activeMFA, revokedMFA, allActive int
+	if err := database.QueryRow(ctx, `SELECT
+		count(*) FILTER (WHERE status='ACTIVE' AND authentication_method='PASSWORD_TOTP' AND mfa_revision=2),
+		count(*) FILTER (WHERE status='REVOKED' AND authentication_method='PASSWORD_TOTP' AND mfa_revision=2),
+		count(*) FILTER (WHERE status='ACTIVE')
+		FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2`, browserAccountID, userID).Scan(
+		&activeMFA, &revokedMFA, &allActive,
+	); err != nil || activeMFA != 1 || revokedMFA < 1 || allActive != 1 {
+		t.Fatalf("browser session revocation activeMFA=%d revokedMFA=%d allActive=%d err=%v", activeMFA, revokedMFA, allActive, err)
+	}
+	var contactFacts, factorFacts, sessionFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		count(*) FILTER (WHERE event_document->>'action'='iam.notification-contact.verified'
+		  AND event_document->>'requestId' LIKE 'ui-security-contact-confirm-%'),
+		count(*) FILTER (WHERE event_document->>'action'='iam.authenticator.bound'
+		  AND event_document->>'requestId' LIKE 'ui-totp-confirm-%'),
+		count(*) FILTER (WHERE event_document->>'action'='iam.session.others-revoked'
+		  AND event_document->>'requestId' LIKE 'ui-session-revoke-others-%')
+		FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{target,id}'=$2`,
+		browserAccountID, userID).Scan(&contactFacts, &factorFacts, &sessionFacts); err != nil ||
+		contactFacts != 1 || factorFacts != 1 || sessionFacts != 1 {
+		t.Fatalf("browser security facts contact=%d factor=%d sessions=%d err=%v", contactFacts, factorFacts, sessionFacts, err)
+	}
+}
+
+func loginIAMWithTOTP(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	endpoint string,
+	loginName string,
+	password string,
+	userID iamv1.PrincipalID,
+	seed string,
+	requestID string,
+) loginResult {
+	t.Helper()
+	response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", map[string]string{
+		"loginName": loginName, "password": password, "requestId": requestID,
+	})
+	var challenge iamv1.LoginResponse
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &challenge) != nil ||
+		iamv1.ValidateLoginResponse(challenge) != nil || challenge.Outcome != iamv1.LoginChallengeRequired ||
+		challenge.Challenge == nil || challenge.Challenge.Purpose != "LOGIN" || challenge.Challenge.NextStep != "TOTP" {
+		t.Fatalf("IAM MFA login challenge %s status=%d body=%s", loginName, response.Status, response.Body)
+	}
+	var lastStep int64
+	if err := database.QueryRow(ctx, `SELECT f.last_consumed_step FROM iam.totp_authenticators f
+		JOIN iam.user_mfa_states m ON m.tenant_id=f.tenant_id AND m.user_id=f.user_id AND m.factor_id=f.id
+		WHERE f.tenant_id=$1 AND f.user_id=$2 AND f.state='ACTIVE'`,
+		browserAccountID, userID).Scan(&lastStep); err != nil {
+		t.Fatalf("read IAM MFA login watermark: %v", err)
+	}
+	code, _ := processTOTPCode(t, ctx, database, seed, lastStep, false)
+	challengeMaterial := challenge.ChallengeCredential.CopyBytes()
+	defer clear(challengeMaterial)
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/auth/challenges/"+challenge.Challenge.ID+":verify", "", map[string]string{
+		"requestId": requestID + "-verify", "challengeCredential": string(challengeMaterial), "code": code,
+	})
+	var authenticated iamv1.LoginResponse
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &authenticated) != nil ||
+		iamv1.ValidateLoginResponse(authenticated) != nil || authenticated.Outcome != iamv1.LoginAuthenticated ||
+		authenticated.Session.ID == "" {
+		t.Fatalf("IAM MFA login verification %s status=%d body=%s", loginName, response.Status, response.Body)
+	}
+	credential := authenticated.Credential.CopyBytes()
+	defer clear(credential)
+	return loginResult{Session: authenticated.Session, Credential: string(credential)}
 }
 
 func waitForBrowserMarker(
@@ -9261,7 +9707,7 @@ func processTOTPCode(t *testing.T, ctx context.Context, admin *pgx.Conn, seed st
 	for time.Now().Before(deadline) {
 		var now time.Time
 		if err := admin.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
-			t.Fatal("read actual TOTP process clock")
+			t.Fatalf("read actual TOTP process clock: %v", err)
 		}
 		step := now.Unix() / 30
 		if initialBinding {

@@ -158,7 +158,7 @@ describe("SessionProvider", () => {
     iam.personalSecurity = {
       notificationContact: vi.fn(), startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), authenticatorState: vi.fn(), startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(),
       confirmTOTPEnrollment: vi.fn().mockResolvedValue({
-        enrollment: { id: "enrollment-one", requestId: "enroll-one", factorRevision: 1, state: "CONFIRMED", createdAt: "2026-09-21T01:00:00Z", expiresAt: "2026-09-21T01:05:00Z", completedAt: "2026-09-21T01:04:00Z" },
+        enrollment: { id: "enrollment-one", requestId: "enroll-one", purpose: "INITIAL", factorRevision: 1, state: "CONFIRMED", createdAt: "2026-09-21T01:00:00Z", expiresAt: "2026-09-21T01:05:00Z", completedAt: "2026-09-21T01:04:00Z" },
         nextStep: "REAUTHENTICATE", recoveryCodes: codes
       })
     };
