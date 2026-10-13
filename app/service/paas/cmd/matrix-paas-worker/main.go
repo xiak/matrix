@@ -76,6 +76,43 @@ type configuration struct {
 	managedRabbitMQImage      string
 }
 
+type workerFailureStage string
+
+const (
+	workerFailureConfiguration           workerFailureStage = "PAAS_WORKER_CONFIGURATION"
+	workerFailureDatabase                workerFailureStage = "PAAS_WORKER_DATABASE"
+	workerFailureExecutionProfile        workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE"
+	workerFailureArtifactRuntime         workerFailureStage = "PAAS_WORKER_ARTIFACT_RUNTIME"
+	workerFailureManagedService          workerFailureStage = "PAAS_WORKER_MANAGED_SERVICE"
+	workerFailureDeploymentWorker        workerFailureStage = "PAAS_WORKER_DEPLOYMENT_WORKER"
+	workerFailureReadiness               workerFailureStage = "PAAS_WORKER_READINESS"
+	workerFailureProcess                 workerFailureStage = "PAAS_WORKER_PROCESS"
+	workerFailureManagedServiceCycle     workerFailureStage = "PAAS_WORKER_MANAGED_SERVICE_CYCLE"
+	workerFailureDeploymentCycle         workerFailureStage = "PAAS_WORKER_DEPLOYMENT_CYCLE"
+	workerFailureExecutionProfileRefresh workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_REFRESH"
+	workerFailureUnexpected              workerFailureStage = "PAAS_WORKER_UNEXPECTED"
+)
+
+type workerFailure struct {
+	stage workerFailureStage
+}
+
+func (failure *workerFailure) Error() string {
+	return string(failure.stage)
+}
+
+func failWorker(stage workerFailureStage) error {
+	return &workerFailure{stage: stage}
+}
+
+func workerFailureCode(err error) workerFailureStage {
+	var failure *workerFailure
+	if errors.As(err, &failure) && failure != nil && failure.stage != "" {
+		return failure.stage
+	}
+	return workerFailureUnexpected
+}
+
 var localExecutionProfileIDs = refreshexecutionprofile.IDs{
 	PoolID:   "execution-pool-local",
 	TargetID: "execution-target-local",
@@ -86,16 +123,27 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "matrix PaaS worker failed")
+		_, _ = fmt.Fprintf(os.Stderr, "matrix PaaS worker failed: %s\n", workerFailureCode(err))
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
+func run(ctx context.Context) (result error) {
+	stage := workerFailureConfiguration
+	defer func() {
+		if result == nil {
+			return
+		}
+		var failure *workerFailure
+		if !errors.As(result, &failure) {
+			result = failWorker(stage)
+		}
+	}()
 	config, err := loadConfiguration()
 	if err != nil {
 		return err
 	}
+	stage = workerFailureDatabase
 	dsn, err := processconfig.ReadText(config.databaseDSNFile, 16*1024, true)
 	if err != nil {
 		return err
@@ -112,6 +160,7 @@ func run(ctx context.Context) error {
 	if err := pool.Ping(ctx); err != nil {
 		return errors.New("PaaS worker database is unavailable")
 	}
+	stage = workerFailureExecutionProfile
 	executionProfile, err := newLocalExecutionProfile(config, pool)
 	if err != nil {
 		return err
@@ -120,6 +169,7 @@ func run(ctx context.Context) error {
 		return errors.New("PaaS local execution profile cannot start")
 	}
 
+	stage = workerFailureArtifactRuntime
 	catalogContent, err := processconfig.ReadFile(
 		config.artifactCatalog,
 		maximumArtifactCatalogBytes,
@@ -149,6 +199,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	stage = workerFailureManagedService
 	managedServiceRepository, err := managedservicepostgres.NewRepository(pool)
 	if err != nil {
 		return err
@@ -206,6 +257,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	stage = workerFailureDeploymentWorker
 	queueRepository, err := paaspostgres.NewOperationQueueRepository(pool)
 	if err != nil {
 		return err
@@ -256,6 +308,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	stage = workerFailureReadiness
 	readiness := func(readinessContext context.Context) error {
 		state, checkErr := queueRepository.Readiness(readinessContext)
 		if checkErr != nil || state.State != paasv1.ReadinessReady ||
@@ -283,6 +336,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	stage = workerFailureProcess
 	return processhttp.ServeWithBackground(
 		ctx,
 		config.listenAddress,
@@ -292,18 +346,37 @@ func run(ctx context.Context) error {
 			return runWorkerLoop(
 				workerContext,
 				func(cycleContext context.Context, workerID string) (bool, error) {
+					managedFirst := preferManagedService
 					first, second := managedServiceWorker.ProcessNext, worker.ProcessNext
 					if !preferManagedService {
 						first, second = worker.ProcessNext, managedServiceWorker.ProcessNext
 					}
 					preferManagedService = !preferManagedService
 					processed, cycleErr := first(cycleContext, workerID)
-					if cycleErr != nil || processed {
-						return processed, cycleErr
+					if cycleErr != nil {
+						if managedFirst {
+							return false, failWorker(workerFailureManagedServiceCycle)
+						}
+						return false, failWorker(workerFailureDeploymentCycle)
 					}
-					return second(cycleContext, workerID)
+					if processed {
+						return true, nil
+					}
+					processed, cycleErr = second(cycleContext, workerID)
+					if cycleErr != nil {
+						if managedFirst {
+							return false, failWorker(workerFailureDeploymentCycle)
+						}
+						return false, failWorker(workerFailureManagedServiceCycle)
+					}
+					return processed, nil
 				},
-				executionProfile.Refresh,
+				func(refreshContext context.Context) error {
+					if refreshErr := executionProfile.Refresh(refreshContext); refreshErr != nil {
+						return failWorker(workerFailureExecutionProfileRefresh)
+					}
+					return nil
+				},
 				config.workerID,
 			)
 		},
@@ -378,6 +451,10 @@ func runWorkerLoop(
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
+			}
+			var failure *workerFailure
+			if errors.As(err, &failure) {
+				return failure
 			}
 			return errors.New("PaaS reconciliation cycle failed")
 		}

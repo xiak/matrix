@@ -73,3 +73,27 @@ func TestWorkerLoopNormalizesCycleFailure(t *testing.T) {
 		t.Fatalf("worker loop error = %v", err)
 	}
 }
+
+func TestWorkerLoopPreservesOnlyClosedFailureStage(t *testing.T) {
+	err := runWorkerLoop(
+		context.Background(),
+		func(context.Context, string) (bool, error) {
+			return false, failWorker(workerFailureManagedServiceCycle)
+		},
+		func(context.Context) error { return nil },
+		"worker-a",
+	)
+	if code := workerFailureCode(err); code != workerFailureManagedServiceCycle {
+		t.Fatalf("worker failure code = %q", code)
+	}
+	if err == nil || err.Error() != string(workerFailureManagedServiceCycle) {
+		t.Fatalf("worker failure = %v", err)
+	}
+}
+
+func TestWorkerFailureCodeDoesNotExposeUnexpectedError(t *testing.T) {
+	native := errors.New("database password and /host/path must not escape")
+	if code := workerFailureCode(native); code != workerFailureUnexpected {
+		t.Fatalf("unexpected worker failure code = %q", code)
+	}
+}
