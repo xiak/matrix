@@ -21,9 +21,10 @@ const installationIDPatternSource = "[a-z0-9][a-z0-9._\\-]{0,61}[a-z0-9]";
 const installationIDPattern = new RegExp(`^${installationIDPatternSource}$`);
 
 function QuotaOrder({
-  scene
+  scene, showCommandRecovery
 }: {
   scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "quota-order" }>;
+  showCommandRecovery: boolean;
 }) {
   const t = useTranslations("ServiceWorkflow");
   const format = useConsoleFormat();
@@ -58,6 +59,7 @@ function QuotaOrder({
           <Typography.Title as="h2" level={3}>{t("quotaTitle")}</Typography.Title>
         </div>
       </header>
+      {showCommandRecovery ? <ManagedServiceCommandNotice /> : null}
       {scene.options.length === 0 ? (
         <Alert>{t("catalogEmpty")}</Alert>
       ) : (
@@ -97,11 +99,10 @@ function QuotaOrder({
           <Alert>
             {t("quotaNotice")}
           </Alert>
-          <ManagedServiceCommandNotice />
           {accepted ? <Alert status="success">{t("quotaAccepted")}</Alert> : null}
           <Button
             block
-            disabled={!canSubmit || controlPlane.mutation === "quota"}
+            disabled={!canSubmit || controlPlane.mutation === "quota" || controlPlane.managedServiceCommand?.phase === "unknown" || controlPlane.managedServiceCommand?.checking}
             size="large"
             type="submit"
           >
@@ -115,9 +116,10 @@ function QuotaOrder({
 }
 
 function InstallationOrder({
-  scene
+  scene, showCommandRecovery
 }: {
   scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "installation-order" }>;
+  showCommandRecovery: boolean;
 }) {
   const t = useTranslations("ServiceWorkflow");
   const controlPlane = useControlPlane();
@@ -153,6 +155,7 @@ function InstallationOrder({
           <Typography.Title as="h2" level={3}>{t("installTitle")}</Typography.Title>
         </div>
       </header>
+      {showCommandRecovery ? <ManagedServiceCommandNotice /> : null}
       {scene.entitlementOptions.length === 0 ? (
         <Alert>{t("quotaEmpty")}</Alert>
       ) : scene.regionOptions.length === 0 ? (
@@ -187,9 +190,8 @@ function InstallationOrder({
             <MapPin aria-hidden="true" />
             <div><strong>{t("localInstall")}</strong><span>{t("serverPolicy")}</span></div>
           </div>
-          <ManagedServiceCommandNotice />
           {accepted ? <Alert status="success">{t("installAccepted")}</Alert> : null}
-          <Button block disabled={!canSubmit || controlPlane.mutation === "installation"} size="large" type="submit">
+          <Button block disabled={!canSubmit || controlPlane.mutation === "installation" || controlPlane.managedServiceCommand?.phase === "unknown" || controlPlane.managedServiceCommand?.checking} size="large" type="submit">
             <ServerCog aria-hidden="true" />
             {controlPlane.mutation === "installation" ? t("submitting") : t("install")}
           </Button>
@@ -241,11 +243,12 @@ function PlatformStatus({
 }
 
 export function ConsoleWorkspaceRenderer({
-  scene
+  scene, showCommandRecovery = true
 }: {
   scene: NonNullable<ConsoleWorkspaceScene>;
+  showCommandRecovery?: boolean;
 }) {
-  if (scene.kind === "quota-order") return <QuotaOrder scene={scene} />;
-  if (scene.kind === "installation-order") return <InstallationOrder scene={scene} />;
+  if (scene.kind === "quota-order") return <QuotaOrder scene={scene} showCommandRecovery={showCommandRecovery} />;
+  if (scene.kind === "installation-order") return <InstallationOrder scene={scene} showCommandRecovery={showCommandRecovery} />;
   return <PlatformStatus scene={scene} />;
 }

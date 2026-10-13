@@ -4,6 +4,7 @@ import {
   clearManagedServiceCommand,
   managedServiceCommandStorageKey,
   readManagedServiceCommand,
+  parseManagedServiceCommandIntent,
   writeManagedServiceCommand
 } from "./managedServiceCommandStorage";
 
@@ -32,6 +33,28 @@ const command: ManagedServiceCommandIntent = {
 afterEach(() => localStorage.clear());
 
 describe("managedServiceCommandStorage", () => {
+  it("keeps the Role and its original source User as separate exact identities", () => {
+    const roleOwner = { accountId: owner.accountId, actorKind: "ROLE" as const, actorId: "role:a", sourceUserId: "b" };
+    const roleCommand: ManagedServiceCommandIntent = { ...command, owner: roleOwner };
+    writeManagedServiceCommand(localStorage, roleCommand);
+    expect(readManagedServiceCommand(localStorage, roleCommand.owner)).toEqual(roleCommand);
+    expect(readManagedServiceCommand(localStorage, { ...roleOwner, actorId: "role", sourceUserId: "a:b" })).toBeNull();
+    expect(readManagedServiceCommand(localStorage, { ...roleOwner, sourceUserId: "other-user" })).toBeNull();
+  });
+
+  it.each([
+    { password: "never-persist" }, { payload: { ...command.payload, secret: "never-persist" } },
+    { targetId: "different-installation" }, { kind: "ARBITRARY_COMMAND" },
+    { owner: { ...owner, actorKind: "ROLE" } }
+  ])("rejects unsupported or secret-bearing portable summaries: %j", (change) => {
+    expect(parseManagedServiceCommandIntent({ ...command, ...change })).toBeNull();
+  });
+
+  it("does not accept service-role consent from a Role session", () => {
+    expect(parseManagedServiceCommandIntent({ ...command, kind: "BIND_SERVICE_ROLE",
+      owner: { ...owner, actorKind: "ROLE", sourceUserId: "source-user" },
+      payload: { installationId: command.targetId, template: { id: "template-a", version: 1, contentDigest: `sha256:${"f".repeat(64)}` } } })).toBeNull();
+  });
   it("restores only the exact owner and preserves the frozen request and payload", () => {
     writeManagedServiceCommand(localStorage, command);
 
@@ -42,7 +65,7 @@ describe("managedServiceCommandStorage", () => {
   it("keeps independent account actors and clears only the exact request", () => {
     const other: ManagedServiceCommandIntent = {
       ...command,
-      owner: { accountId: "organization-other", actorKind: "ROLE", actorId: "role-reader:principal-other" },
+      owner: { accountId: "organization-other", actorKind: "ROLE", actorId: "role-reader", sourceUserId: "principal-other" },
       requestId: "ui-install-other-request"
     };
     writeManagedServiceCommand(localStorage, command);

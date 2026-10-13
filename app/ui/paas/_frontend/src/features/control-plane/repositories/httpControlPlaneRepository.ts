@@ -50,6 +50,7 @@ import type {
   ServiceRoleTemplateReference,
   WorkloadRoleBinding
 } from "@/features/auth/domain/serviceAuthorization";
+import { managedServiceCommandTypes, type ManagedServiceCommandResult, type ManagedServiceCommandType } from "../domain/managedServiceCommand";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -568,6 +569,61 @@ function authorization(credential: string): HeadersInit {
   return { Authorization: `Bearer ${credential}` };
 }
 
+function commandResultKeys(value: UnknownRecord, required: readonly string[], optional: readonly string[] = []): void {
+  const allowed = new Set([...required, ...optional]);
+  if (required.some((key) => !(key in value)) || Object.keys(value).some((key) => !allowed.has(key))) {
+    throw new Error("INVALID_MANAGED_SERVICE_COMMAND_RESULT");
+  }
+}
+
+function commandResultTime(value: unknown): string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(value) ||
+      !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 19) !== value.slice(0, 19)) {
+    throw new Error("INVALID_MANAGED_SERVICE_COMMAND_RESULT");
+  }
+  return value;
+}
+
+function parseCommandResult(value: unknown, commandType: ManagedServiceCommandType): ManagedServiceCommandResult {
+  const wire = record(value, "managed service command result");
+  commandResultKeys(wire, ["kind", "idempotencyKey", "commandType", "inputDigest", "state", "target"], ["operation", "bindingId", "completedAt"]);
+  const target = record(wire.target, "command target");
+  commandResultKeys(target, ["kind", "id"]);
+  if (wire.kind !== "ManagedServiceCommandResult" || wire.commandType !== commandType ||
+      typeof wire.inputDigest !== "string" || !digestPattern.test(wire.inputDigest) ||
+      !["IN_PROGRESS", "SUCCEEDED", "FAILED"].includes(String(wire.state)) ||
+      (wire.state === "IN_PROGRESS") !== !("completedAt" in wire)) throw new Error("INVALID_MANAGED_SERVICE_COMMAND_RESULT");
+  const completedAt = "completedAt" in wire ? commandResultTime(wire.completedAt) : null;
+  let operation: ManagedServiceCommandResult["operation"] = null;
+  let bindingId: string | null = null;
+  if (commandType === "QUOTA_ACTIVATE") {
+    if (target.kind !== "QUOTA_ENTITLEMENT" || wire.state !== "SUCCEEDED" || "operation" in wire || "bindingId" in wire) {
+      throw new Error("INVALID_MANAGED_SERVICE_COMMAND_RESULT");
+    }
+  } else if (commandType === "INSTALLATION_CREATE" || commandType === "INSTALLATION_TERMINATE") {
+    const details = record(wire.operation, "command operation");
+    commandResultKeys(details, ["id", "kind", "phase", "safeFailureCode", "observedAt"]);
+    const expectedKind = commandType === "INSTALLATION_CREATE" ? "PROVISION" : "TERMINATE";
+    const states: Record<string, string> = { PENDING: "IN_PROGRESS", PROVISIONING: "IN_PROGRESS", READY: "SUCCEEDED", FAILED: "FAILED" };
+    if (target.kind !== "SERVICE_INSTALLATION" || "bindingId" in wire || details.kind !== expectedKind ||
+        states[String(details.phase)] !== wire.state ||
+        (details.phase === "FAILED") !== (details.safeFailureCode !== null) ||
+        (details.safeFailureCode !== null && (typeof details.safeFailureCode !== "string" || !/^[A-Z][A-Z0-9_]{1,63}$/.test(details.safeFailureCode)))) {
+      throw new Error("INVALID_MANAGED_SERVICE_COMMAND_RESULT");
+    }
+    operation = { id: publicIdentifier(details.id), kind: expectedKind, phase: details.phase as InstallationPhase,
+      safeFailureCode: details.safeFailureCode as string | null, observedAt: commandResultTime(details.observedAt) };
+  } else {
+    if (target.kind !== "SERVICE_INSTALLATION" || wire.state !== "SUCCEEDED" || "operation" in wire) {
+      throw new Error("INVALID_MANAGED_SERVICE_COMMAND_RESULT");
+    }
+    bindingId = publicIdentifier(wire.bindingId);
+  }
+  return { idempotencyKey: publicIdentifier(wire.idempotencyKey), commandType, inputDigest: wire.inputDigest,
+    state: wire.state as ManagedServiceCommandResult["state"], target: { kind: target.kind as ManagedServiceCommandResult["target"]["kind"], id: publicIdentifier(target.id) },
+    operation, bindingId, completedAt };
+}
+
 const maximumServiceAuthorizationPages = 20;
 
 async function matchingServiceRoleListings(credential: string, accountId: string, template: ServiceRoleTemplate) {
@@ -643,6 +699,20 @@ async function inspectServiceAuthorization(
 }
 
 export const httpControlPlaneRepository: ControlPlaneRepository = {
+  async listCommandResults(credential, commandType) {
+    if (!managedServiceCommandTypes.includes(commandType)) throw new Error("INVALID_MANAGED_SERVICE_COMMAND_TYPE");
+    const response = await requestJSONResponse<unknown>(`/api/managed-services/v1/command-results/${commandType}`, { headers: authorization(credential) });
+    if (response.status !== 200 || response.headers.get("Cache-Control") !== "no-store" ||
+        response.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") throw new Error("INVALID_MANAGED_SERVICE_COMMAND_RESULT");
+    const wire = record(response.body, "managed service command result list");
+    commandResultKeys(wire, ["kind", "items"]);
+    if (wire.kind !== "ManagedServiceCommandResultList" || !Array.isArray(wire.items) || wire.items.length > 100) {
+      throw new Error("INVALID_MANAGED_SERVICE_COMMAND_RESULT");
+    }
+    const items = wire.items.map((item) => parseCommandResult(item, commandType));
+    if (new Set(items.map((item) => item.idempotencyKey)).size !== items.length) throw new Error("DUPLICATE_MANAGED_SERVICE_COMMAND_RESULT");
+    return items;
+  },
   async load(
     credential: string,
     resources: readonly ControlPlaneResourceKind[]

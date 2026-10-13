@@ -80,6 +80,8 @@ function Probe() {
     <button onClick={() => void roleSession.exitRole()}>exit</button>
     <button onClick={() => void roleSession.retryExit()}>retry-exit</button>
     <button onClick={() => roleSession.clearAttempt()}>clear</button>
+    <button onClick={() => roleSession.expireCredential("role-secret")}>expire-role</button>
+    <button onClick={() => roleSession.expireCredential("old-role-secret")}>expire-old-role</button>
   </div>;
 }
 
@@ -93,6 +95,19 @@ function view(iam: IamRepository, expireSource = vi.fn(() => true)) {
 afterEach(cleanup);
 
 describe("RoleSessionProvider", () => {
+  it("expires only the exact active Role credential without expiring or silently restoring the source User", async () => {
+    const user = userEvent.setup(), iam = repository(), page = view(iam);
+    await user.click(screen.getByRole("button", { name: "discover" }));
+    await user.click(screen.getByRole("button", { name: "assume" }));
+    await waitFor(() => expect(screen.getByLabelText("stage").textContent).toBe("role-active"));
+    await user.click(screen.getByRole("button", { name: "expire-old-role" }));
+    expect(screen.getByLabelText("credential").textContent).toBe("role-secret");
+    await user.click(screen.getByRole("button", { name: "expire-role" }));
+    expect(screen.getByLabelText("stage").textContent).toBe("role-expired");
+    expect(screen.getByLabelText("credential").textContent).toBe("none");
+    expect(page.expireSource).not.toHaveBeenCalled();
+    expect(iam.roleSelfService!.revalidateSource).not.toHaveBeenCalled();
+  });
   it("activates only after CurrentRoleIdentity and revalidates the source after confirmed logout", async () => {
     const user = userEvent.setup();
     const iam = repository();

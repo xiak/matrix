@@ -228,6 +228,7 @@ async function renderConsole({
   listServiceDefinitions,
   getServiceActivation,
   activateService,
+  listCommandResults,
   logout = vi.fn().mockResolvedValue(undefined),
   accountRepository,
   iamRepository,
@@ -251,6 +252,7 @@ async function renderConsole({
   listServiceDefinitions?: ControlPlaneRepository["listServiceDefinitions"];
   getServiceActivation?: ControlPlaneRepository["getServiceActivation"];
   activateService?: ControlPlaneRepository["activateService"];
+  listCommandResults?: ControlPlaneRepository["listCommandResults"];
   logout?: IamRepository["logout"];
   accountRepository?: AccountRepository;
   iamRepository?: IamRepository;
@@ -279,7 +281,8 @@ async function renderConsole({
     unbindServiceRole,
     listServiceDefinitions,
     getServiceActivation,
-    activateService
+    activateService,
+    listCommandResults
   };
   const iam: IamRepository = iamRepository ?? {
     async login() {
@@ -741,7 +744,7 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText(/正在异步清理运行时、网络、数据与凭据/)).toBeTruthy();
   });
 
-  it("preserves and retries an unknown termination result with the same idempotency key", async () => {
+  it("confirms an unknown termination through the original public key and independently rereads the instance", async () => {
     const installation: ServiceInstallation = {
       id: "pg-termination-unknown",
       name: "终止结果待确认库",
@@ -775,12 +778,18 @@ describe("ConsoleShellRenderer", () => {
       }
     };
     const terminateInstallation = vi.fn()
-      .mockRejectedValueOnce(new Error("connection ended before a response was observed"))
-      .mockResolvedValue(accepted);
+      .mockRejectedValueOnce(new Error("connection ended before a response was observed"));
+    const listCommandResults = vi.fn<NonNullable<ControlPlaneRepository["listCommandResults"]>>(async () => [{
+      idempotencyKey: terminateInstallation.mock.calls[0]![2], commandType: "INSTALLATION_TERMINATE", inputDigest: `sha256:${"a".repeat(64)}`,
+      state: "IN_PROGRESS", target: { kind: "SERVICE_INSTALLATION", id: installation.id }, operation: accepted.operation, bindingId: null, completedAt: null
+    }]);
+    const getInstallation = vi.fn().mockResolvedValueOnce(installation).mockResolvedValue(accepted);
     const { user } = await renderConsole({
       section: "installations",
       load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] }),
-      terminateInstallation
+      terminateInstallation,
+      getInstallation,
+      listCommandResults
     });
 
     await user.click(await screen.findByRole("button", { name: installation.name }));
@@ -795,11 +804,10 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText(firstRequestId)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "继续处理未确认终止" }));
-    await user.type(screen.getByRole("textbox", { name: "输入实例 ID 以确认" }), installation.id);
-    await user.click(screen.getByRole("button", { name: "使用同一请求原样重试" }));
-
-    await waitFor(() => expect(terminateInstallation).toHaveBeenCalledTimes(2));
-    expect(terminateInstallation.mock.calls[1]![2]).toBe(firstRequestId);
+    await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
+    expect(terminateInstallation).toHaveBeenCalledTimes(1);
+    expect(listCommandResults).toHaveBeenCalledWith("renderer-test-memory-only-session", "INSTALLATION_TERMINATE");
+    await waitFor(() => expect(getInstallation).toHaveBeenCalledTimes(2));
     expect((await screen.findAllByText("等待终止")).length).toBeGreaterThan(0);
   });
 
@@ -979,20 +987,14 @@ describe("ConsoleShellRenderer", () => {
     expect(inspectServiceAuthorization).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves and retries an unknown live authorization result with the same idempotency key", async () => {
+  it("confirms an unknown live authorization by public key without another bind", async () => {
     const installationId = "pg-live-unknown";
     const bindServiceRole = vi.fn()
-      .mockRejectedValueOnce(new Error("connection ended before a response was observed"))
-      .mockResolvedValue({
-        kind: "ServiceRoleBindingReceipt",
-        serviceInstallationId: installationId,
-        bindingId: `binding-${installationId}`,
-        roleId: liveServiceRoleRelation.role.id,
-        template: liveServiceRoleRelation.template,
-        status: "ACTIVE",
-        resourceVersion: 1,
-        createdAt: "2026-08-26T12:00:00Z"
-      });
+      .mockRejectedValueOnce(new Error("connection ended before a response was observed"));
+    const listCommandResults = vi.fn<NonNullable<ControlPlaneRepository["listCommandResults"]>>(async () => [{
+      idempotencyKey: bindServiceRole.mock.calls[0]![2].requestId, commandType: "SERVICE_ROLE_BIND", inputDigest: `sha256:${"b".repeat(64)}`,
+      state: "SUCCEEDED", target: { kind: "SERVICE_INSTALLATION", id: installationId }, operation: null, bindingId: `binding-${installationId}`, completedAt: "2026-10-13T12:00:00Z"
+    }]);
     const { user } = await renderConsole({
       section: "installations",
       load: vi.fn().mockResolvedValue({ ...snapshot, installations: [{
@@ -1004,7 +1006,8 @@ describe("ConsoleShellRenderer", () => {
         createdAt: "2026-08-26T12:00:00Z"
       }] }),
       inspectServiceAuthorization: vi.fn().mockResolvedValue({ template: liveServiceRoleTemplate, relation: null, binding: null }),
-      bindServiceRole
+      bindServiceRole,
+      listCommandResults
     });
 
     await user.click(await screen.findByRole("button", { name: "结果待确认库" }));
@@ -1018,9 +1021,10 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText(firstCommand.requestId)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "继续处理未确认请求" }));
-    await user.click(screen.getByRole("button", { name: "使用同一请求原样重试" }));
-    await waitFor(() => expect(bindServiceRole).toHaveBeenCalledTimes(2));
-    expect(bindServiceRole.mock.calls[1]![2]).toEqual(firstCommand);
+    await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
+    expect(await screen.findByText(/服务端已确认匹配的原操作成功/)).toBeTruthy();
+    expect(bindServiceRole).toHaveBeenCalledTimes(1);
+    expect(listCommandResults).toHaveBeenCalledWith("renderer-test-memory-only-session", "SERVICE_ROLE_BIND");
   });
 
   it("reviews and revokes only the selected live service binding", async () => {

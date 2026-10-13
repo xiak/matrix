@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -36,11 +37,15 @@ import type {
   ManagedServiceAuthorizationLoad,
   ManagedServiceAuthorizationObservation
 } from "../domain/serviceAuthorization";
-import type {
-  ManagedServiceCommandError,
-  ManagedServiceCommandIntent,
-  ManagedServiceCommandOwner,
-  ManagedServiceCommandState
+import {
+  managedServiceCommandType,
+  matchesManagedServiceCommandResult,
+  sameManagedServiceCommandOwner,
+  type ManagedServiceCommandResult,
+  type ManagedServiceCommandError,
+  type ManagedServiceCommandIntent,
+  type ManagedServiceCommandOwner,
+  type ManagedServiceCommandState
 } from "../domain/managedServiceCommand";
 import type {
   ControlPlaneRepository,
@@ -53,6 +58,7 @@ import type { ConsoleScene } from "../scenes/consoleScene";
 import {
   clearManagedServiceCommand,
   managedServiceCommandStorageKey,
+  parseManagedServiceCommandIntent,
   readManagedServiceCommand,
   writeManagedServiceCommand
 } from "./managedServiceCommandStorage";
@@ -70,7 +76,9 @@ type ControlPlaneContextValue = {
   mutation: MutationKind;
   readServiceDefinitions(): Promise<ServiceDefinitionDirectory>;
   managedServiceCommand: ManagedServiceCommandState | null;
-  retryManagedServiceCommand(): Promise<boolean>;
+  commandRecoveryAvailable: boolean;
+  restoreManagedServiceCommand(summary: string): boolean;
+  inspectManagedServiceCommand(): Promise<boolean>;
   clearManagedServiceCommandNotice(): void;
   reload(): Promise<void>;
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
@@ -195,7 +203,7 @@ export function ControlPlaneProvider({
   selection: ControlPlaneRouteSelection;
 }) {
   const credential = useEffectiveCredential();
-  const { current } = useSession();
+  const { current, expire, sessionRevision } = useSession();
   const roleSession = useRoleSession();
   const isAccess = selection.section === "access";
   const [cache, setCache] = useState<ControlPlaneCache | null>(null);
@@ -217,7 +225,8 @@ export function ControlPlaneProvider({
       return {
         accountId: roleSession.identity.account.id,
         actorKind: "ROLE",
-        actorId: `${roleSession.identity.role.id}:${roleSession.identity.sourceUser.id}`
+        actorId: roleSession.identity.role.id,
+        sourceUserId: roleSession.identity.sourceUser.id
       };
     }
     if (roleSession.mode === "USER" && current) {
@@ -230,8 +239,12 @@ export function ControlPlaneProvider({
     return null;
   }, [current, roleSession.identity, roleSession.mode]);
   const managedServiceCommandOwnerKey = managedServiceCommandOwner
-    ? `${managedServiceCommandOwner.accountId}:${managedServiceCommandOwner.actorKind}:${managedServiceCommandOwner.actorId}`
+    ? JSON.stringify(managedServiceCommandOwner)
     : null;
+  const commandReadOwner = useRef({ credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey });
+  useLayoutEffect(() => {
+    commandReadOwner.current = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+  }, [credential, managedServiceCommandOwnerKey, repository, sessionRevision]);
 
   const commitManagedServiceCommand = useCallback((state: ManagedServiceCommandState | null) => {
     managedServiceCommandRef.current = state;
@@ -255,7 +268,7 @@ export function ControlPlaneProvider({
 
   const beginManagedServiceCommand = useCallback((intent: ManagedServiceCommandIntent): boolean => {
     const active = managedServiceCommandRef.current;
-    if (active?.phase === "submitting" || (active?.phase === "unknown" && active.intent.requestId !== intent.requestId)) return false;
+    if (active?.checking || active?.phase === "submitting" || active?.phase === "unknown") return false;
     const storage = commandStorage();
     if (!experience) {
       if (!storage) {
@@ -578,7 +591,7 @@ export function ControlPlaneProvider({
       owner: managedServiceCommandOwner,
       requestId: requestToken("ui-quota-"),
       startedAt: new Date().toISOString(),
-      targetId: `${command.offeringId}:${command.quotaShapeId}`,
+      targetId: command.offeringId,
       targetLabel: `${command.offeringId} · ${command.quotaShapeId}`,
       kind: "ACTIVATE_QUOTA",
       payload: { ...command }
@@ -722,7 +735,7 @@ export function ControlPlaneProvider({
         commitInstallationTerminationIntent({
           ...intent,
           phase: "failed",
-          error: commandError === "storageUnavailable" ? "unknown" : commandError,
+          error: commandError === "storageUnavailable" || commandError === "unavailable" || commandError === "mismatch" || commandError === "operationFailed" ? "unknown" : commandError,
           open: true
         });
       }
@@ -903,7 +916,7 @@ export function ControlPlaneProvider({
         commitServiceAuthorizationIntent({
           ...intent,
           phase: "failed",
-          error: commandError === "storageUnavailable" ? "unknown" : commandError,
+          error: commandError === "storageUnavailable" || commandError === "unavailable" || commandError === "mismatch" || commandError === "operationFailed" ? "unknown" : commandError,
           open: true
         });
       }
@@ -927,98 +940,77 @@ export function ControlPlaneProvider({
     if (intent) commitServiceAuthorizationIntent({ ...intent, open: true });
   }, [commitServiceAuthorizationIntent]);
 
-  const retryManagedServiceCommand = useCallback(async () => {
-    const state = managedServiceCommandRef.current;
-    if (!credential || !managedServiceCommandOwner || !state || state.phase !== "unknown") return false;
-    const intent = state.intent;
-    if (intent.owner.accountId !== managedServiceCommandOwner.accountId ||
-        intent.owner.actorKind !== managedServiceCommandOwner.actorKind ||
-        intent.owner.actorId !== managedServiceCommandOwner.actorId ||
-        !beginManagedServiceCommand(intent)) return false;
-    if (intent.kind === "ACTIVATE_QUOTA") setMutation("quota");
-    if (intent.kind === "CREATE_INSTALLATION") setMutation("installation");
+  const commandRecoveryAvailable = Boolean(!experience && credential && managedServiceCommandOwner && repository.listCommandResults);
+
+  const restoreManagedServiceCommand = useCallback((summary: string): boolean => {
+    if (!commandRecoveryAvailable || !managedServiceCommandOwner || summary.length > 16_384) return false;
+    let intent: ManagedServiceCommandIntent | null;
+    try { intent = parseManagedServiceCommandIntent(JSON.parse(summary)); } catch { return false; }
+    if (!intent || !sameManagedServiceCommandOwner(intent.owner, managedServiceCommandOwner)) return false;
+    const active = managedServiceCommandRef.current;
+    if (active?.checking || active?.phase === "submitting" ||
+        (active?.phase === "unknown" && JSON.stringify(active.intent) !== JSON.stringify(intent))) return false;
     try {
-      if (intent.kind === "ACTIVATE_QUOTA") {
-        const entitlement = await repository.activateQuota(credential, intent.payload, intent.requestId);
-        const currentCache = cacheRef.current;
-        if (currentCache?.owner === credential) {
-          const next = {
-            ...currentCache,
-            snapshot: {
-              ...currentCache.snapshot,
-              entitlements: [...currentCache.snapshot.entitlements.filter((item) => item.id !== entitlement.id), entitlement]
-            }
-          };
-          cacheRef.current = next;
-          setCache(next);
-        }
-      } else if (intent.kind === "CREATE_INSTALLATION") {
-        const installation = await repository.createInstallation(credential, intent.payload, intent.requestId);
-        const currentCache = cacheRef.current;
-        if (currentCache?.owner === credential) {
-          const next = {
-            ...currentCache,
-            snapshot: {
-              ...currentCache.snapshot,
-              installations: [...currentCache.snapshot.installations.filter((item) => item.id !== installation.id), installation]
-            }
-          };
-          cacheRef.current = next;
-          setCache(next);
-        }
-      } else if (intent.kind === "TERMINATE_INSTALLATION") {
-        if (!repository.terminateInstallation) throw new Error("INSTALLATION_TERMINATION_UNAVAILABLE");
-        const installation = await repository.terminateInstallation(credential, intent.payload.installationId, intent.requestId);
-        const currentCache = cacheRef.current;
-        if (currentCache?.owner === credential) {
-          const next = {
-            ...currentCache,
-            snapshot: {
-              ...currentCache.snapshot,
-              installations: currentCache.snapshot.installations.map((item) => item.id === installation.id ? installation : item)
-            }
-          };
-          cacheRef.current = next;
-          setCache(next);
-        }
-        if (installationTerminationIntentRef.current?.requestId === intent.requestId) commitInstallationTerminationIntent(null);
-      } else if (intent.kind === "BIND_SERVICE_ROLE") {
-        if (!repository.bindServiceRole) throw new Error("SERVICE_ROLE_BIND_UNAVAILABLE");
-        await repository.bindServiceRole(credential, intent.payload.installationId, {
-          template: intent.payload.template,
-          requestId: intent.requestId
-        });
-        if (serviceAuthorizationIntentRef.current?.requestId === intent.requestId) commitServiceAuthorizationIntent(null);
-      } else {
-        if (!repository.unbindServiceRole) throw new Error("SERVICE_ROLE_UNBIND_UNAVAILABLE");
-        await repository.unbindServiceRole(credential, intent.payload.installationId, {
-          bindingId: intent.payload.bindingId,
-          resourceVersion: intent.payload.resourceVersion,
-          expectedTemplate: intent.payload.expectedTemplate,
-          requestId: intent.requestId
-        });
-        if (serviceAuthorizationIntentRef.current?.requestId === intent.requestId) commitServiceAuthorizationIntent(null);
-      }
-      completeManagedServiceCommand(intent);
+      const storage = commandStorage();
+      if (!storage) return false;
+      writeManagedServiceCommand(storage, intent);
+    } catch { return false; }
+    clearManagedServiceCommandSlowTimer();
+    commitManagedServiceCommand({ intent, phase: "unknown", error: "unknown", slow: false, restored: true });
+    return true;
+  }, [clearManagedServiceCommandSlowTimer, commandRecoveryAvailable, commandStorage, commitManagedServiceCommand, managedServiceCommandOwner]);
+
+  const inspectManagedServiceCommand = useCallback(async (): Promise<boolean> => {
+    const state = managedServiceCommandRef.current;
+    if (!credential || !managedServiceCommandOwner || !repository.listCommandResults || !state || state.checking ||
+        !["unknown", "inProgress"].includes(state.phase) || !sameManagedServiceCommandOwner(state.intent.owner, managedServiceCommandOwner)) return false;
+    const intent = state.intent, owner = commandReadOwner.current;
+    const isCurrent = () => {
+      const latest = commandReadOwner.current, active = managedServiceCommandRef.current;
+      return latest.credential === owner.credential && latest.repository === owner.repository &&
+        latest.sessionRevision === owner.sessionRevision && latest.ownerKey === owner.ownerKey &&
+        active?.intent === intent;
+    };
+    const unknown = (error: ManagedServiceCommandError) => {
+      if (isCurrent()) commitManagedServiceCommand({ ...state, phase: "unknown", result: undefined, checking: false, error });
+    };
+    commitManagedServiceCommand({ ...state, checking: true, error: null });
+    try {
+      const results = await repository.listCommandResults(credential, managedServiceCommandType(intent.kind));
+      if (!isCurrent()) return false;
+      const matches = results.filter((item) => item.idempotencyKey === intent.requestId);
+      if (matches.length === 0) { unknown("notFound"); return false; }
+      const result: ManagedServiceCommandResult = matches[0]!;
+      if (matches.length !== 1 || !matchesManagedServiceCommandResult(intent, result)) { unknown("mismatch"); return false; }
+      if (result.state !== "IN_PROGRESS") clearPersistedManagedServiceCommand(intent);
+      commitManagedServiceCommand({ ...state, phase: result.state === "IN_PROGRESS" ? "inProgress" : result.state === "SUCCEEDED" ? "completed" : "failed",
+        result, error: result.state === "FAILED" ? "operationFailed" : null, checking: false, slow: false });
+      if (installationTerminationIntentRef.current?.requestId === intent.requestId) commitInstallationTerminationIntent(null);
+      if (serviceAuthorizationIntentRef.current?.requestId === intent.requestId) commitServiceAuthorizationIntent(null);
+      // A command result proves only this operation. Resource details still
+      // require their independently authorized reads; never synthesize a cache.
       return true;
-    } catch {
-      clearManagedServiceCommandSlowTimer();
-      const currentCommand = managedServiceCommandRef.current;
-      if (currentCommand?.intent.requestId === intent.requestId) {
-        commitManagedServiceCommand({ ...currentCommand, phase: "unknown", error: "unknown", slow: false, restored: state.restored });
+    } catch (failure) {
+      if (!isCurrent()) return false;
+      const reason = failure instanceof HttpProblem && failure.status === 401 ? "expired"
+        : failure instanceof HttpProblem && failure.status === 403 ? "forbidden"
+          : failure instanceof HttpProblem && failure.status === 404 ? "notFound" : "unavailable";
+      unknown(reason);
+      if (reason === "expired") {
+        if (intent.owner.actorKind === "ROLE") roleSession.expireCredential(credential);
+        else expire(credential, owner.sessionRevision);
       }
       return false;
-    } finally {
-      if (intent.kind === "ACTIVATE_QUOTA" || intent.kind === "CREATE_INSTALLATION") setMutation(null);
     }
-  }, [beginManagedServiceCommand, clearManagedServiceCommandSlowTimer, commitInstallationTerminationIntent, commitManagedServiceCommand, commitServiceAuthorizationIntent, completeManagedServiceCommand, credential, managedServiceCommandOwner, repository]);
+  }, [clearPersistedManagedServiceCommand, commitInstallationTerminationIntent, commitManagedServiceCommand, commitServiceAuthorizationIntent, credential, expire, managedServiceCommandOwner, repository, roleSession]);
 
   const clearManagedServiceCommandNotice = useCallback(() => {
     const state = managedServiceCommandRef.current;
-    if (state && (state.phase === "failed" || state.phase === "completed")) {
+    if (state && !state.checking && (state.phase === "failed" || state.phase === "completed" || state.phase === "inProgress")) {
+      clearPersistedManagedServiceCommand(state.intent);
       commitManagedServiceCommand(null);
     }
-  }, [commitManagedServiceCommand]);
+  }, [clearPersistedManagedServiceCommand, commitManagedServiceCommand]);
 
   const projectScene = useCallback((target: ControlPlaneRouteSelection): ConsoleScene | null => {
     if (target.section === "access") return buildAccessConsoleScene(experience, target.view);
@@ -1052,7 +1044,9 @@ export function ControlPlaneProvider({
     mutation,
     readServiceDefinitions,
     managedServiceCommand,
-    retryManagedServiceCommand,
+    commandRecoveryAvailable,
+    restoreManagedServiceCommand,
+    inspectManagedServiceCommand,
     clearManagedServiceCommandNotice,
     reload,
     activateQuota,
@@ -1071,7 +1065,7 @@ export function ControlPlaneProvider({
     submitServiceAuthorization,
     closeServiceAuthorizationIntent,
     reopenServiceAuthorizationIntent
-  }), [activateQuota, beginInstallationTermination, beginServiceAuthorization, clearManagedServiceCommandNotice, closeInstallationTerminationIntent, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, installationTerminationIntent, isAccess, listApplications, loading, managedServiceCommand, mutation, prepare, productAccess, projectScene, readApplication, readInstallation, readServiceDefinitions, reload, reopenInstallationTerminationIntent, reopenServiceAuthorizationIntent, retryManagedServiceCommand, scene, selection, serviceAuthorizationIntent, submitInstallationTermination, submitServiceAuthorization]);
+  }), [activateQuota, beginInstallationTermination, beginServiceAuthorization, clearManagedServiceCommandNotice, closeInstallationTerminationIntent, closeServiceAuthorizationIntent, commandRecoveryAvailable, createInstallation, error, experience, inspectManagedServiceCommand, inspectServiceAuthorization, installationTerminationIntent, isAccess, listApplications, loading, managedServiceCommand, mutation, prepare, productAccess, projectScene, readApplication, readInstallation, readServiceDefinitions, reload, reopenInstallationTerminationIntent, reopenServiceAuthorizationIntent, restoreManagedServiceCommand, scene, selection, serviceAuthorizationIntent, submitInstallationTermination, submitServiceAuthorization]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

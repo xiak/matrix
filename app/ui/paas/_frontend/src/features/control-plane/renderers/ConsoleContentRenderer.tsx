@@ -55,7 +55,6 @@ import type {
 import type { InstallationReadLoad, InstallationTerminationIntent, ServiceInstallation, ServiceOffering } from "../domain/resources";
 import { isManagedServiceProductId } from "../domain/managedServiceProduct";
 import { consoleRouteHref } from "../domain/selection";
-import { ManagedServiceCommandNotice } from "./ManagedServiceCommandNotice";
 
 type InstallationDetailLoad =
   | { status: "idle" | "loading" }
@@ -417,9 +416,9 @@ function LiveServiceAuthorizationReview({ intent, onClose }: {
   onClose(): void;
 }) {
   const t = useTranslations("ManagedService");
-  const { submitServiceAuthorization } = useControlPlane();
+  const { submitServiceAuthorization, managedServiceCommand } = useControlPlane();
   const submitting = intent.phase === "submitting";
-  const retryable = intent.phase === "review" || intent.error === "unknown";
+  const retryable = intent.phase === "review";
   const isBind = intent.kind === "bind";
   const relationActive = intent.relation?.role.status === "ACTIVE";
 
@@ -445,9 +444,10 @@ function LiveServiceAuthorizationReview({ intent, onClose }: {
         <div><dt>{t("authorizationRequest")}</dt><dd><Typography.Code>{intent.requestId}</Typography.Code><small>{t("idempotencyBoundary")}</small></dd></div>
       </dl>
       <Alert status={isBind ? "info" : "warning"}>{t(isBind ? "liveBindBoundary" : "liveUnbindBoundary")}</Alert>
-      {intent.error ? <Alert status={intent.error === "unknown" ? "warning" : "danger"}>{t(`authorizationMutationErrors.${intent.error}`)}</Alert> : null}
+      {intent.error && intent.error !== "unknown" ? <Alert status="danger">{t(`authorizationMutationErrors.${intent.error}`)}</Alert> : null}
       <div className={styles.authorizationActions}>
-        {retryable ? <Button disabled={submitting} variant={isBind ? "primary" : "danger"} onClick={() => void submitServiceAuthorization()}>{t(submitting ? "authorizationSubmitting" : intent.error === "unknown" ? "retrySameAuthorization" : isBind ? "confirmAuthorization" : "confirmUnbind")}</Button> : null}
+        {retryable ? <Button disabled={submitting || managedServiceCommand?.checking || managedServiceCommand?.phase === "unknown"}
+          variant={isBind ? "primary" : "danger"} onClick={() => void submitServiceAuthorization()}>{t(submitting ? "authorizationSubmitting" : isBind ? "confirmAuthorization" : "confirmUnbind")}</Button> : null}
         <Button disabled={submitting} variant="secondary" onClick={onClose}>{t(intent.error === "unknown" ? "returnPreservingAuthorization" : "cancelAuthorization")}</Button>
       </div>
     </Card.Body>
@@ -467,11 +467,11 @@ function InstallationTerminationReview({
 }) {
   const t = useTranslations("ManagedService");
   const format = useConsoleFormat();
-  const { submitInstallationTermination } = useControlPlane();
+  const { submitInstallationTermination, managedServiceCommand } = useControlPlane();
   const [confirmation, setConfirmation] = useState("");
   const confirmationId = useId();
   const submitting = intent.phase === "submitting";
-  const showSubmit = intent.phase === "review" || submitting || intent.error === "unknown";
+  const showSubmit = intent.phase === "review" || submitting;
   const confirmed = confirmation === intent.installation.id;
 
   return <Card aria-label={t("terminationReview")} className={styles.authorizationCard}>
@@ -504,13 +504,13 @@ function InstallationTerminationReview({
           value={confirmation}
         />
       </FormField>
-      {intent.error ? <Alert status={intent.error === "unknown" ? "warning" : "danger"}>{t(`terminationMutationErrors.${intent.error}`)}</Alert> : null}
+      {intent.error && intent.error !== "unknown" ? <Alert status="danger">{t(`terminationMutationErrors.${intent.error}`)}</Alert> : null}
       <div className={styles.authorizationActions}>
-        {showSubmit ? <Button disabled={!confirmed || submitting} variant="danger" onClick={() => {
+        {showSubmit ? <Button disabled={!confirmed || submitting || managedServiceCommand?.checking || managedServiceCommand?.phase === "unknown"} variant="danger" onClick={() => {
           void submitInstallationTermination().then((installation) => {
             if (installation) onAccepted(installation);
           });
-        }}>{t(submitting ? "terminationSubmitting" : intent.error === "unknown" ? "retrySameTermination" : "confirmTermination")}</Button> : null}
+        }}>{t(submitting ? "terminationSubmitting" : "confirmTermination")}</Button> : null}
         <Button disabled={submitting} variant="secondary" onClick={onClose}>{t(intent.error === "unknown" ? "returnPreservingTermination" : "cancelTermination")}</Button>
       </div>
     </Card.Body>
@@ -577,6 +577,7 @@ function InstallationContent({ scene, preview, accountId }: {
     closeInstallationTerminationIntent,
     closeServiceAuthorizationIntent,
     installationTerminationIntent,
+    managedServiceCommand,
     readInstallation,
     serviceAuthorizationIntent
   } = useControlPlane();
@@ -599,6 +600,15 @@ function InstallationContent({ scene, preview, accountId }: {
     ? installationDetailScene(selectedSummary, detailLoad.installation)
     : selectedSummary;
   const selectedId = selected?.id;
+  const observedCommand = managedServiceCommand?.result;
+
+  useEffect(() => {
+    if (preview || !selectedId || observedCommand?.target.kind !== "SERVICE_INSTALLATION" || observedCommand.target.id !== selectedId) return;
+    const revision = ++detailReadRevision.current;
+    queueMicrotask(() => { if (revision === detailReadRevision.current) setDetailLoad({ status: "loading" }); });
+    void readInstallation(selectedId).then((next) => { if (revision === detailReadRevision.current) setDetailLoad(next); });
+    return () => { detailReadRevision.current += 1; };
+  }, [observedCommand, preview, readInstallation, selectedId]);
 
   const openInstallation = useCallback((item: InstallationScene) => {
     setSelectedSummary(item);
@@ -663,7 +673,6 @@ function InstallationContent({ scene, preview, accountId }: {
         </Badge>
       </div>
 
-      {terminationIntent || liveIntent ? null : <ManagedServiceCommandNotice />}
 
       {detailLoad.status === "idle" || detailLoad.status === "loading" ? <TableSkeleton header={false} label={t("instanceDetailLoading")} rows={3} /> : detailError ? <EmptyState
         title={t("instanceDetailUnavailable")}
@@ -741,7 +750,6 @@ function InstallationContent({ scene, preview, accountId }: {
         <Alert status={preview ? "warning" : "info"}>
           {t(preview ? "instanceVisibilityMockBoundary" : "instanceVisibilityBoundary")}
         </Alert>
-        <ManagedServiceCommandNotice />
       </Card.Body>
       <InstallationRows items={scene.installations} onOpen={accountId ? openInstallation : undefined} triggerRefs={rowTriggers} />
     </Card>

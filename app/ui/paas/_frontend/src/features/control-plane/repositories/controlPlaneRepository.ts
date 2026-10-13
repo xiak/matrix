@@ -18,6 +18,7 @@ import type {
   UnbindManagedServiceRoleCommand
 } from "../domain/serviceAuthorization";
 import type { ApplicationDirectoryPage, ApplicationReadSnapshot } from "../domain/application";
+import type { ManagedServiceCommandResult, ManagedServiceCommandType } from "../domain/managedServiceCommand";
 
 export const controlPlaneResourceKinds = [
   "offerings",
@@ -30,6 +31,7 @@ export type ControlPlaneResourceKind = typeof controlPlaneResourceKinds[number];
 export type ControlPlaneResourceSnapshot = Partial<ControlPlaneSnapshot>;
 
 export interface ControlPlaneRepository {
+  listCommandResults?(credential: string, commandType: ManagedServiceCommandType): Promise<ManagedServiceCommandResult[]>;
   load(
     credential: string,
     resources: readonly ControlPlaneResourceKind[]

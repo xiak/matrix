@@ -32,13 +32,11 @@ function text(value: unknown, pattern: RegExp = publicId): value is string {
 
 function owner(value: unknown): ManagedServiceCommandOwner | null {
   const wire = record(value);
-  if (!wire || !exactKeys(wire, ["accountId", "actorKind", "actorId"]) ||
+  if (!wire || !exactKeys(wire, wire.actorKind === "ROLE" ? ["accountId", "actorKind", "actorId", "sourceUserId"] : ["accountId", "actorKind", "actorId"]) ||
     !text(wire.accountId) || !text(wire.actorId) || !["USER", "ROLE"].includes(String(wire.actorKind))) return null;
-  return {
-    accountId: wire.accountId,
-    actorKind: wire.actorKind as ManagedServiceCommandOwner["actorKind"],
-    actorId: wire.actorId
-  };
+  if (wire.actorKind === "ROLE") return text(wire.sourceUserId)
+    ? { accountId: wire.accountId, actorKind: "ROLE", actorId: wire.actorId, sourceUserId: wire.sourceUserId } : null;
+  return { accountId: wire.accountId, actorKind: "USER", actorId: wire.actorId };
 }
 
 function templateReference(value: unknown) {
@@ -48,7 +46,7 @@ function templateReference(value: unknown) {
   return { id: wire.id, version: 1 as const, contentDigest: wire.contentDigest };
 }
 
-function parseIntent(value: unknown): ManagedServiceCommandIntent | null {
+export function parseManagedServiceCommandIntent(value: unknown): ManagedServiceCommandIntent | null {
   const wire = record(value);
   if (!wire || !exactKeys(wire, ["owner", "requestId", "startedAt", "targetId", "targetLabel", "kind", "payload"])) return null;
   const commandOwner = owner(wire.owner);
@@ -65,7 +63,7 @@ function parseIntent(value: unknown): ManagedServiceCommandIntent | null {
     targetLabel: wire.targetLabel
   };
 
-  if (wire.kind === "ACTIVATE_QUOTA" && exactKeys(payload, ["offeringId", "quotaShapeId", "instanceCount"]) &&
+  if (wire.kind === "ACTIVATE_QUOTA" && wire.targetId === payload.offeringId && exactKeys(payload, ["offeringId", "quotaShapeId", "instanceCount"]) &&
     text(payload.offeringId) && text(payload.quotaShapeId) && Number.isSafeInteger(payload.instanceCount) &&
     Number(payload.instanceCount) >= 1 && Number(payload.instanceCount) <= 1_000) {
     return { ...base, kind: wire.kind, payload: {
@@ -74,7 +72,7 @@ function parseIntent(value: unknown): ManagedServiceCommandIntent | null {
       instanceCount: Number(payload.instanceCount)
     } };
   }
-  if (wire.kind === "CREATE_INSTALLATION" && exactKeys(payload, ["id", "name", "offeringId", "quotaEntitlementId", "regionId"]) &&
+  if (wire.kind === "CREATE_INSTALLATION" && wire.targetId === payload.id && exactKeys(payload, ["id", "name", "offeringId", "quotaEntitlementId", "regionId"]) &&
     text(payload.id, installationId) && typeof payload.name === "string" && payload.name.trim().length > 0 && payload.name.length <= 128 &&
     text(payload.offeringId) && text(payload.quotaEntitlementId) && text(payload.regionId)) {
     return { ...base, kind: wire.kind, payload: {
@@ -85,14 +83,14 @@ function parseIntent(value: unknown): ManagedServiceCommandIntent | null {
       regionId: payload.regionId
     } };
   }
-  if (wire.kind === "TERMINATE_INSTALLATION" && exactKeys(payload, ["installationId"]) && text(payload.installationId, installationId)) {
+  if (wire.kind === "TERMINATE_INSTALLATION" && wire.targetId === payload.installationId && exactKeys(payload, ["installationId"]) && text(payload.installationId, installationId)) {
     return { ...base, kind: wire.kind, payload: { installationId: payload.installationId } };
   }
-  if (wire.kind === "BIND_SERVICE_ROLE" && exactKeys(payload, ["installationId", "template"]) && text(payload.installationId, installationId)) {
+  if (wire.kind === "BIND_SERVICE_ROLE" && commandOwner.actorKind === "USER" && wire.targetId === payload.installationId && exactKeys(payload, ["installationId", "template"]) && text(payload.installationId, installationId)) {
     const template = templateReference(payload.template);
     return template ? { ...base, kind: wire.kind, payload: { installationId: payload.installationId, template } } : null;
   }
-  if (wire.kind === "UNBIND_SERVICE_ROLE" && exactKeys(payload, ["installationId", "bindingId", "resourceVersion", "expectedTemplate"]) &&
+  if (wire.kind === "UNBIND_SERVICE_ROLE" && commandOwner.actorKind === "USER" && wire.targetId === payload.installationId && exactKeys(payload, ["installationId", "bindingId", "resourceVersion", "expectedTemplate"]) &&
     text(payload.installationId, installationId) && text(payload.bindingId) && Number.isSafeInteger(payload.resourceVersion) && Number(payload.resourceVersion) >= 1) {
     const expectedTemplate = templateReference(payload.expectedTemplate);
     return expectedTemplate ? { ...base, kind: wire.kind, payload: {
@@ -113,7 +111,7 @@ function readEnvelope(storage: Storage): StoredEnvelope {
     if (!wire || !exactKeys(wire, ["version", "commands"]) || wire.version !== 1 || !Array.isArray(wire.commands) || wire.commands.length > 8) {
       throw new Error("INVALID_MANAGED_SERVICE_COMMAND_STORAGE");
     }
-    const commands = wire.commands.map(parseIntent);
+    const commands = wire.commands.map(parseManagedServiceCommandIntent);
     if (commands.some((command) => command === null)) throw new Error("INVALID_MANAGED_SERVICE_COMMAND_STORAGE");
     return { version: 1, commands: commands as ManagedServiceCommandIntent[] };
   } catch {

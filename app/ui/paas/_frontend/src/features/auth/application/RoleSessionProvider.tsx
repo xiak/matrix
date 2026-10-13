@@ -68,6 +68,7 @@ type RoleSessionContextValue = {
   revokeAndRestoreSource(): Promise<boolean>;
   restoreSource(): Promise<boolean>;
   clearAttempt(): void;
+  expireCredential(expectedCredential: string): boolean;
 };
 
 const RoleSessionContext = createContext<RoleSessionContextValue | null>(null);
@@ -182,6 +183,19 @@ export function RoleSessionProvider({
     if (credential) expireSource(credential);
     resetRole();
   }, [expireSource, resetRole]);
+
+  const expireCredential = useCallback((expectedCredential: string): boolean => {
+    if (stage !== "role-active" || roleCredential.current !== expectedCredential ||
+        sourceCredential !== sourceCredentialRef.current || activeSourceCredential !== sourceCredential) return false;
+    operationRevision.current += 1;
+    roleCredential.current = null;
+    setActiveCredential(null);
+    setActiveSourceCredential(null);
+    setBusy(null);
+    setError("expired");
+    setStage("role-expired");
+    return true;
+  }, [activeSourceCredential, sourceCredential, stage]);
 
   const validateDirectory = useCallback((page: AssumableRoleDirectory) => {
     if (!current || page.accountId !== current.session.organizationId || page.sourceUserId !== current.session.principalId) {
@@ -478,8 +492,8 @@ export function RoleSessionProvider({
   const value = useMemo<RoleSessionContextValue>(() => ({
     supported: Boolean(service), mode, stage, busy, error, directory, intent, observedSession, identity,
     discover, assume, retryAssume, locateOriginal, revokeOriginal, retryActivation,
-    exitRole: performExit, retryExit: performExit, revokeAndRestoreSource, restoreSource, clearAttempt
-  }), [assume, busy, clearAttempt, directory, discover, error, identity, intent, locateOriginal, mode, observedSession, performExit, retryActivation, retryAssume, revokeAndRestoreSource, revokeOriginal, restoreSource, service, stage]);
+    exitRole: performExit, retryExit: performExit, revokeAndRestoreSource, restoreSource, clearAttempt, expireCredential
+  }), [assume, busy, clearAttempt, directory, discover, error, expireCredential, identity, intent, locateOriginal, mode, observedSession, performExit, retryActivation, retryAssume, revokeAndRestoreSource, revokeOriginal, restoreSource, service, stage]);
 
   return <EffectiveCredentialContext.Provider value={effectiveCredential}>
     <RoleSessionContext.Provider value={value}>{children}</RoleSessionContext.Provider>
