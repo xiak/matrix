@@ -141,6 +141,30 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 	}
 }
 
+func TestReservedProcessAddressesStayDistinct(t *testing.T) {
+	first := reserveProcessAddress(t)
+	second := reserveProcessAddress(t)
+	defer first.close()
+	defer second.close()
+	if first.address == second.address {
+		t.Fatal("concurrent authority process reservations reused one address")
+	}
+	for _, reservation := range []*reservedProcessAddress{first, second} {
+		listener, err := net.Listen("tcp", reservation.address)
+		if err == nil {
+			_ = listener.Close()
+			t.Fatal("reserved authority process address was claimable")
+		}
+	}
+	firstAddress := first.address
+	first.release(t)
+	listener, err := net.Listen("tcp", firstAddress)
+	if err != nil {
+		t.Fatalf("released authority process address remained unavailable: %v", err)
+	}
+	_ = listener.Close()
+}
+
 func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessFull)
 }
@@ -380,13 +404,33 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	paasEdgeAssertionPath := writeProtectedFile(t, temporary, "paas-edge-assertion", []byte(paasEdgeAssertion))
 	auditEdgeAssertionPath := writeProtectedFile(t, temporary, "audit-edge-assertion", []byte(auditEdgeAssertion))
 
-	iamAddress := freeAddress(t)
-	auditAddress := freeAddress(t)
-	paasAddress := freeAddress(t)
-	iamDispatcherAddress := freeAddress(t)
-	iamAccessAnalysisAddressA := freeAddress(t)
-	iamAccessAnalysisAddressB := freeAddress(t)
-	paasDispatcherAddress := freeAddress(t)
+	// Keep every authority port reserved until its owning process starts. Calling
+	// freeAddress repeatedly can return the same just-released port, allowing a
+	// readiness probe for one service to observe another service (for example,
+	// Audit schema 39 at the PaaS endpoint) before the intended child is checked.
+	iamReservation := reserveProcessAddress(t)
+	auditReservation := reserveProcessAddress(t)
+	paasReservation := reserveProcessAddress(t)
+	iamDispatcherReservation := reserveProcessAddress(t)
+	iamAccessAnalysisReservationA := reserveProcessAddress(t)
+	iamAccessAnalysisReservationB := reserveProcessAddress(t)
+	paasDispatcherReservation := reserveProcessAddress(t)
+	reservations := []*reservedProcessAddress{
+		iamReservation, auditReservation, paasReservation, iamDispatcherReservation,
+		iamAccessAnalysisReservationA, iamAccessAnalysisReservationB, paasDispatcherReservation,
+	}
+	defer func() {
+		for _, reservation := range reservations {
+			reservation.close()
+		}
+	}()
+	iamAddress := iamReservation.address
+	auditAddress := auditReservation.address
+	paasAddress := paasReservation.address
+	iamDispatcherAddress := iamDispatcherReservation.address
+	iamAccessAnalysisAddressA := iamAccessAnalysisReservationA.address
+	iamAccessAnalysisAddressB := iamAccessAnalysisReservationB.address
+	paasDispatcherAddress := paasDispatcherReservation.address
 	iamEndpoint := "http://" + iamAddress
 	auditEndpoint := "http://" + auditAddress
 	paasEndpoint := "http://" + paasAddress
@@ -479,6 +523,10 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		assertProcessOutputsSanitized(t, children, sensitive...)
 	}()
 
+	// Invalid IAM startup probes must fail for their keyring contract, not
+	// because the harness still owns the listen socket. All other authority
+	// addresses remain reserved and distinct while these probes run.
+	iamReservation.release(t)
 	for _, variable := range []string{"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_TOTP_KEYRING_FILE"} {
 		for _, candidate := range []string{"", filepath.Join(temporary, "missing-keyring"),
 			writeProtectedFile(t, temporary, "invalid-keyring", []byte("{}"))} {
@@ -518,8 +566,10 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
 	assertIAMWeakLoginRejected(t, iamEndpoint)
 
+	auditReservation.release(t)
 	auditProcess := start(binaries.audit, auditEnvironment)
 	waitHTTPStatus(t, ctx, auditProcess, auditEndpoint+"/ready", http.StatusOK)
+	iamDispatcherReservation.release(t)
 	dispatcher := start(
 		binaries.dispatcher,
 		iamDispatcherEnvironment(iamCredentialPath, "iam-audit-worker-a"),
@@ -528,13 +578,16 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	assertIAMEventsStoredOnce(t, ctx, admin)
 	if mode == authorityProcessFull {
+		iamAccessAnalysisReservationA.release(t)
 		analysisWorkerA := start(binaries.accessAnalysis,
 			iamAccessAnalysisEnvironment("iam-access-analysis-a", iamAccessAnalysisAddressA))
 		waitHTTPStatus(t, ctx, analysisWorkerA, "http://"+iamAccessAnalysisAddressA+"/ready", http.StatusOK)
+		iamAccessAnalysisReservationB.release(t)
 		analysisWorkerB := start(binaries.accessAnalysis,
 			iamAccessAnalysisEnvironment("iam-access-analysis-b", iamAccessAnalysisAddressB))
 		waitHTTPStatus(t, ctx, analysisWorkerB, "http://"+iamAccessAnalysisAddressB+"/ready", http.StatusOK)
 	}
+	paasReservation.release(t)
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
 	managedRuntime := managedProductRuntime{}
@@ -564,6 +617,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 			t.Fatalf("%s runtime schema=%d does not match source shape=%d (status=%d)", authority.name, readiness.SchemaVersion, authority.version, response.Status)
 		}
 	}
+	paasDispatcherReservation.release(t)
 	paasDispatcher := start(
 		binaries.paasDispatcher,
 		paasDispatcherEnvironment(paasCredentialPath, "paas-audit-worker-a"),
@@ -14418,6 +14472,38 @@ func writeProtectedFile(
 		}
 	}
 	return path
+}
+
+type reservedProcessAddress struct {
+	address  string
+	listener net.Listener
+}
+
+func reserveProcessAddress(t *testing.T) *reservedProcessAddress {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve authority process address: %v", err)
+	}
+	return &reservedProcessAddress{address: listener.Addr().String(), listener: listener}
+}
+
+func (value *reservedProcessAddress) release(t *testing.T) {
+	t.Helper()
+	if value == nil || value.listener == nil {
+		t.Fatal("authority process address was already released")
+	}
+	if err := value.listener.Close(); err != nil {
+		t.Fatalf("release authority process address: %v", err)
+	}
+	value.listener = nil
+}
+
+func (value *reservedProcessAddress) close() {
+	if value != nil && value.listener != nil {
+		_ = value.listener.Close()
+		value.listener = nil
+	}
 }
 
 func freeAddress(t *testing.T) string {
