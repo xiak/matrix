@@ -597,7 +597,7 @@ CREATE OR REPLACE FUNCTION managedservice.list_command_results(
     requested_limit integer
 )
 RETURNS TABLE (
-    request_id text,
+    idempotency_key text,
     request_digest text,
     target_id text,
     operation_id text,
@@ -644,7 +644,7 @@ BEGIN
 
     IF requested_command_type = 'QUOTA_ACTIVATE' THEN
         RETURN QUERY
-        SELECT event.document->>'requestId',
+        SELECT entitlement.idempotency_key,
                entitlement.request_digest,
                entitlement.id,
                NULL::text, NULL::text, NULL::text, NULL::text,
@@ -688,7 +688,7 @@ BEGIN
         expected_operation_kind := 'TERMINATE';
     END IF;
     RETURN QUERY
-    SELECT event.document->>'requestId',
+    SELECT operation.idempotency_key,
            operation.request_digest,
            operation.installation_id,
            operation.id,

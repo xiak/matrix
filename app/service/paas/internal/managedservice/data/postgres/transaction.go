@@ -52,7 +52,7 @@ func (value *transaction) ListCommandResults(
 		sourceService = read.Subject.RoleSession.SourceServicePrincipalID
 	}
 	rows, err := value.tx.Query(ctx, `
-SELECT request_id, request_digest, target_id,
+SELECT idempotency_key, request_digest, target_id,
        operation_id, operation_kind, operation_phase,
        operation_safe_failure_code, operation_observed_at, completed_at
   FROM managedservice.list_command_results($1, $2, $3, $4, $5, $6, $7)`,
@@ -65,15 +65,15 @@ SELECT request_id, request_digest, target_id,
 	defer rows.Close()
 	results := make([]managedservicev1.CommandResult, 0)
 	for rows.Next() {
-		var requestID, digest, targetID string
+		var idempotencyKey, digest, targetID string
 		var operationID, operationKind, operationPhase, safeFailureCode *string
 		var operationObservedAt, completedAt *time.Time
-		if err := rows.Scan(&requestID, &digest, &targetID, &operationID, &operationKind,
+		if err := rows.Scan(&idempotencyKey, &digest, &targetID, &operationID, &operationKind,
 			&operationPhase, &safeFailureCode, &operationObservedAt, &completedAt); err != nil {
 			return nil, databaseError(ctx, err)
 		}
 		result := managedservicev1.CommandResult{
-			Kind: "ManagedServiceCommandResult", RequestID: requestID,
+			Kind: "ManagedServiceCommandResult", IdempotencyKey: idempotencyKey,
 			CommandType: read.CommandType, InputDigest: digest,
 			Target: managedservicev1.CommandTargetReference{ID: targetID},
 		}

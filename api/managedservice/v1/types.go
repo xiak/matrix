@@ -137,18 +137,22 @@ type CommandTargetReference struct {
 }
 
 // CommandResult is a bounded observation of one command originally accepted
-// from the current Account identity. It is never an authorization permit and
-// deliberately excludes caller selectors, credentials and native payloads.
+// from the current Account identity. IdempotencyKey is the exact public key
+// supplied with that command and is the only client correlation identity;
+// InputDigest is an opaque server commitment and clients need not reproduce
+// an authority owner's private canonicalization. The result is never an
+// authorization permit and excludes caller selectors, credentials and native
+// payloads.
 type CommandResult struct {
-	Kind        string                       `json:"kind"`
-	RequestID   string                       `json:"requestId"`
-	CommandType CommandType                  `json:"commandType"`
-	InputDigest string                       `json:"inputDigest"`
-	State       CommandState                 `json:"state"`
-	Target      CommandTargetReference       `json:"target"`
-	Operation   *InstallationOperation       `json:"operation,omitempty"`
-	BindingID   *iamv1.WorkloadRoleBindingID `json:"bindingId,omitempty"`
-	CompletedAt *time.Time                   `json:"completedAt,omitempty"`
+	Kind           string                       `json:"kind"`
+	IdempotencyKey string                       `json:"idempotencyKey"`
+	CommandType    CommandType                  `json:"commandType"`
+	InputDigest    string                       `json:"inputDigest"`
+	State          CommandState                 `json:"state"`
+	Target         CommandTargetReference       `json:"target"`
+	Operation      *InstallationOperation       `json:"operation,omitempty"`
+	BindingID      *iamv1.WorkloadRoleBindingID `json:"bindingId,omitempty"`
+	CompletedAt    *time.Time                   `json:"completedAt,omitempty"`
 }
 
 type CommandResultList struct {

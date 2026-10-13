@@ -41957,14 +41957,14 @@
           "completedAt": {
             "$ref": "#/components/schemas/Timestamp"
           },
+          "idempotencyKey": {
+            "type": "string"
+          },
           "kind": {
             "const": "WorkloadRoleCommandResult"
           },
           "requestDigest": {
             "type": "string"
-          },
-          "requestId": {
-            "$ref": "#/components/schemas/ID"
           },
           "workload": {
             "$ref": "#/components/schemas/ResourceReference"
@@ -41975,9 +41975,9 @@
           "bindingId",
           "commandType",
           "completedAt",
+          "idempotencyKey",
           "kind",
           "requestDigest",
-          "requestId",
           "workload"
         ],
         "type": "object"

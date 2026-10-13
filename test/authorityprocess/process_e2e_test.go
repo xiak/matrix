@@ -11329,6 +11329,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			json.Unmarshal(bindResultResponse.Body, &bindResults) != nil ||
 			managedservicev1.ValidateCommandResultList(bindResults) != nil || len(bindResults.Items) != 1 ||
 			bindResults.Items[0].CommandType != managedservicev1.CommandServiceRoleBind ||
+			bindResults.Items[0].IdempotencyKey != "shared-service-role-binding-key" ||
 			bindResults.Items[0].State != managedservicev1.CommandSucceeded ||
 			bindResults.Items[0].Target != (managedservicev1.CommandTargetReference{
 				Kind: managedservicev1.CommandTargetServiceInstallation, ID: tenant.shared.ID,
@@ -11658,6 +11659,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			json.Unmarshal(unbindResultResponse.Body, &unbindResults) != nil ||
 			managedservicev1.ValidateCommandResultList(unbindResults) != nil || len(unbindResults.Items) != 1 ||
 			unbindResults.Items[0].CommandType != managedservicev1.CommandServiceRoleUnbind ||
+			unbindResults.Items[0].IdempotencyKey != "shared-service-role-unbinding-key" ||
 			unbindResults.Items[0].State != managedservicev1.CommandSucceeded ||
 			unbindResults.Items[0].Target != (managedservicev1.CommandTargetReference{
 				Kind: managedservicev1.CommandTargetServiceInstallation, ID: tenant.shared.ID,
@@ -11672,6 +11674,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		var retainedBindResults managedservicev1.CommandResultList
 		if retainedBindResponse.Status != http.StatusOK || json.Unmarshal(retainedBindResponse.Body, &retainedBindResults) != nil ||
 			managedservicev1.ValidateCommandResultList(retainedBindResults) != nil || len(retainedBindResults.Items) != 1 ||
+			retainedBindResults.Items[0].IdempotencyKey != "shared-service-role-binding-key" ||
 			retainedBindResults.Items[0].BindingID == nil ||
 			*retainedBindResults.Items[0].BindingID != tenant.serviceRoleReceipt.BindingID {
 			t.Fatalf("service Role unbind erased original bind completion: status=%d body=%s",

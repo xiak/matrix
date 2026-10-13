@@ -359,7 +359,7 @@ func (service *Service) ListCommandResults(
 			bindingID := item.BindingID
 			completedAt := item.CompletedAt
 			items[index] = managedservicev1.CommandResult{
-				Kind: "ManagedServiceCommandResult", RequestID: item.RequestID,
+				Kind: "ManagedServiceCommandResult", IdempotencyKey: item.IdempotencyKey,
 				CommandType: query.CommandType, InputDigest: item.RequestDigest,
 				State: managedservicev1.CommandSucceeded,
 				Target: managedservicev1.CommandTargetReference{
@@ -513,7 +513,9 @@ func (service *Service) GetInstallationOperation(
 
 // BindServiceRole proves the path resource exists in the IAM-derived Account
 // before forwarding one normalized, idempotent workload consent command. The
-// caller cannot select the Account, Role, service principal or purpose.
+// public idempotency key remains the command identity across the PaaS/IAM
+// boundary; IAM's digest and decisions remain private evidence. The caller
+// cannot select the Account, Role, service principal or purpose.
 func (service *Service) BindServiceRole(
 	ctx context.Context,
 	command BindServiceRoleCommand,
@@ -540,11 +542,10 @@ func (service *Service) BindServiceRole(
 	if installation.Phase != managedservicev1.InstallationReady {
 		return managedservicev1.ServiceRoleBindingReceipt{}, ErrInvalidState
 	}
-	requestID := serviceRoleBindingRequestID(command.IdempotencyKey)
 	request := port.AuthorizationRequest{
 		Credential: command.Credential, Action: port.AuthorizeInstallationRoleBind,
 		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID},
-		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: requestID,
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: command.IdempotencyKey,
 	}
 	result, err := service.workloadRoleAuthority.BindWorkloadRole(ctx, command.Request.Template, request)
 	if err != nil {
@@ -638,11 +639,10 @@ func (service *Service) UnbindServiceRole(
 	if managedservicev1.ValidateServiceInstallation(installation) != nil || installation.ID != command.InstallationID {
 		return managedservicev1.ServiceRoleUnbindingReceipt{}, ErrRepositoryUnavailable
 	}
-	requestID := serviceRoleUnbindingRequestID(command.IdempotencyKey)
 	request := port.AuthorizationRequest{
 		Credential: command.Credential, Action: port.AuthorizeInstallationRoleUnbind,
 		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID},
-		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: requestID,
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: command.IdempotencyKey,
 	}
 	binding, err := service.workloadRoleAuthority.RevokeWorkloadRole(
 		ctx, command.BindingID, command.Request.ResourceVersion, request,
@@ -1058,20 +1058,6 @@ func serviceActivationAuditEventID(tenantID, serviceID string) string {
 		"matrix-managedservice-service-activation-audit-event-v1\x00" + tenantID + "\x00" + serviceID,
 	))
 	return "audit-" + hex.EncodeToString(digest[:])
-}
-
-func serviceRoleBindingRequestID(idempotencyKey string) string {
-	digest := sha256.Sum256([]byte(
-		"matrix-managedservice-service-role-binding-v1\x00" + idempotencyKey,
-	))
-	return "msrb-" + hex.EncodeToString(digest[:])
-}
-
-func serviceRoleUnbindingRequestID(idempotencyKey string) string {
-	digest := sha256.Sum256([]byte(
-		"matrix-managedservice-service-role-unbinding-v1\x00" + idempotencyKey,
-	))
-	return "msru-" + hex.EncodeToString(digest[:])
 }
 
 func serviceRoleSessionRequestID(bindingID iamv1.WorkloadRoleBindingID, publicRequestID string) string {

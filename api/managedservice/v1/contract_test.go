@@ -3,6 +3,7 @@ package managedservicev1
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,7 +48,7 @@ func TestCommandResultContractIsClosedAndStateBound(t *testing.T) {
 		Phase: InstallationProvisioning, ObservedAt: now,
 	}
 	base := CommandResult{
-		Kind: "ManagedServiceCommandResult", RequestID: "request-one",
+		Kind: "ManagedServiceCommandResult", IdempotencyKey: "command-one",
 		CommandType: CommandInstallationCreate,
 		InputDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		State:       CommandInProgress,
@@ -58,6 +59,11 @@ func TestCommandResultContractIsClosedAndStateBound(t *testing.T) {
 	}
 	if err := ValidateCommandResult(base); err != nil {
 		t.Fatalf("valid in-progress command result: %v", err)
+	}
+	encoded, err := json.Marshal(base)
+	if err != nil || !strings.Contains(string(encoded), `"idempotencyKey":"command-one"`) ||
+		strings.Contains(string(encoded), `"requestId"`) {
+		t.Fatalf("command result did not expose only its public idempotency identity: %s", encoded)
 	}
 	quota := base
 	quota.CommandType, quota.State = CommandQuotaActivate, CommandSucceeded

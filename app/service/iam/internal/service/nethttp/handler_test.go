@@ -846,7 +846,7 @@ func TestIAMHTTPWorkloadRoleCommandResultsRequireExactTypeAndTwoCredentials(t *t
 		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResultList",
 		Items: []iamv1.WorkloadRoleCommandResult{{
 			APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResult",
-			CommandType: iamv1.WorkloadRoleCommandBind, RequestID: "binding-command",
+			CommandType: iamv1.WorkloadRoleCommandBind, IdempotencyKey: "binding-command",
 			RequestDigest: "sha256:" + strings.Repeat("a", 64),
 			Workload: iamv1.ResourceReference{
 				Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a",

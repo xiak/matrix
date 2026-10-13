@@ -2154,7 +2154,7 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResultList",
 		Items: []iamv1.WorkloadRoleCommandResult{{
 			APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResult",
-			CommandType: iamv1.WorkloadRoleCommandBind, RequestID: mutation.Request.Authorization.RequestID,
+			CommandType: iamv1.WorkloadRoleCommandBind, IdempotencyKey: mutation.Request.Authorization.RequestID,
 			RequestDigest: mutation.RequestDigest, Workload: mutation.Binding.Workload,
 			BindingID: mutation.Binding.ID, CompletedAt: mutation.Binding.CreatedAt,
 		}},

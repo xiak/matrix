@@ -919,8 +919,10 @@ EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range OR inva
 END $function$;
 
 -- Recover only sanitized, recent completion facts for the current USER and
--- the physically authenticated service relation. This is a read-only
--- reconciliation boundary, not a generic receipt store or authorization.
+-- the physically authenticated service relation. request_id is the exact
+-- product idempotency key for this closed PaaS path; IAM's request digest is
+-- opaque evidence, not a browser-side canonicalization contract. This is a
+-- read-only reconciliation boundary, not a generic receipt store or permit.
 CREATE OR REPLACE FUNCTION iam.list_workload_role_command_results(
     tenant text,actor text,service_lookup_digest text,service_purpose text,
     command_type text,requested_retention_seconds bigint,requested_limit integer)
@@ -968,7 +970,7 @@ BEGIN
           FROM (
             SELECT jsonb_build_object(
                 'apiVersion','iam.matrix.xiak.com/v1','kind','WorkloadRoleCommandResult',
-                'commandType',command_type,'requestId',binding.request_id,
+                'commandType',command_type,'idempotencyKey',binding.request_id,
                 'requestDigest',binding.request_digest,
                 'workload',jsonb_build_object('kind',binding.workload_kind,'id',binding.workload_id),
                 'bindingId',binding.id,
@@ -1004,7 +1006,7 @@ BEGIN
           FROM (
             SELECT jsonb_build_object(
                 'apiVersion','iam.matrix.xiak.com/v1','kind','WorkloadRoleCommandResult',
-                'commandType',command_type,'requestId',fact.event_document->>'requestId',
+                'commandType',command_type,'idempotencyKey',fact.event_document->>'requestId',
                 'requestDigest',fact.event_document->>'requestDigest',
                 'workload',jsonb_build_object('kind',binding.workload_kind,'id',binding.workload_id),
                 'bindingId',binding.id,

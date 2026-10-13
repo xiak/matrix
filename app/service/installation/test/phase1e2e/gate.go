@@ -529,10 +529,11 @@ func (value *gate) verifySignedManagedProduct(
 		activation.Service != serviceReference {
 		return fail("signed-managed-product-service-activation-" + product.component)
 	}
+	quotaKey := requestPrefix + "-quota"
 	quotaResponse, err := value.edge.json(ctx, http.MethodPost, base+"/quota-entitlements", bearer,
 		managedservicev1.ActivateQuotaRequest{
 			OfferingID: product.offeringID, QuotaShapeID: product.quotaShapeID, InstanceCount: 1,
-		}, map[string]string{"Idempotency-Key": requestPrefix + "-quota"}, http.StatusCreated)
+		}, map[string]string{"Idempotency-Key": quotaKey}, http.StatusCreated)
 	if err != nil {
 		return fail("signed-managed-product-quota-" + product.component)
 	}
@@ -544,12 +545,19 @@ func (value *gate) verifySignedManagedProduct(
 		quota.PurchasedCount != 1 || quota.ReservedCount != 0 || quota.ConsumedCount != 0 {
 		return fail("signed-managed-product-quota-" + product.component)
 	}
+	if err := value.assertSignedManagedProductCommandResult(
+		ctx, bearer, managedservicev1.CommandQuotaActivate, quotaKey, quota.ID,
+		managedservicev1.CommandSucceeded, "", "",
+	); err != nil {
+		return err
+	}
 
+	createKey := requestPrefix + "-create"
 	createResponse, err := value.edge.json(ctx, http.MethodPost, base+"/service-installations", bearer,
 		managedservicev1.CreateInstallationRequest{
 			ID: product.installationID, Name: "Signed " + product.name,
 			OfferingID: product.offeringID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
-		}, map[string]string{"Idempotency-Key": requestPrefix + "-create"}, http.StatusAccepted)
+		}, map[string]string{"Idempotency-Key": createKey}, http.StatusAccepted)
 	if err != nil {
 		return fail("signed-managed-product-create-" + product.component)
 	}
@@ -590,6 +598,12 @@ func (value *gate) verifySignedManagedProduct(
 		operation.Phase != managedservicev1.InstallationReady || operation.SafeFailureCode != nil || operation.ObservedAt.IsZero() {
 		return fail("signed-managed-product-operation-" + product.component)
 	}
+	if err := value.assertSignedManagedProductCommandResult(
+		ctx, bearer, managedservicev1.CommandInstallationCreate, createKey, product.installationID,
+		managedservicev1.CommandSucceeded, operation.ID, managedservicev1.InstallationOperationProvision,
+	); err != nil {
+		return err
+	}
 
 	terminationPath := base + "/service-installations/" + product.installationID + "/termination"
 	terminationKey := requestPrefix + "-terminate"
@@ -624,6 +638,18 @@ func (value *gate) verifySignedManagedProduct(
 	if decodeErr != nil || !equalJSON(replayed, terminated) {
 		return fail("signed-managed-product-termination-replay-" + product.component)
 	}
+	if err := value.assertSignedManagedProductCommandResult(
+		ctx, bearer, managedservicev1.CommandInstallationTerminate, terminationKey, product.installationID,
+		managedservicev1.CommandSucceeded, terminating.Operation.ID, managedservicev1.InstallationOperationTerminate,
+	); err != nil {
+		return err
+	}
+	if err := value.assertSignedManagedProductCommandResult(
+		ctx, bearer, managedservicev1.CommandInstallationCreate, createKey, product.installationID,
+		managedservicev1.CommandSucceeded, operation.ID, managedservicev1.InstallationOperationProvision,
+	); err != nil {
+		return err
+	}
 	conflict, err := value.edge.json(ctx, http.MethodPost, terminationPath, bearer, nil,
 		map[string]string{"Idempotency-Key": terminationKey + "-different"}, http.StatusConflict)
 	if err != nil {
@@ -649,6 +675,63 @@ func (value *gate) verifySignedManagedProduct(
 		auditv1.ActionManagedServiceInstallationTerminated:           product.installationID,
 	}); err != nil {
 		return fail("signed-managed-product-audit-" + product.component)
+	}
+	return nil
+}
+
+func (value *gate) assertSignedManagedProductCommandResult(
+	ctx context.Context,
+	bearer []byte,
+	commandType managedservicev1.CommandType,
+	idempotencyKey string,
+	targetID string,
+	wantState managedservicev1.CommandState,
+	wantOperationID string,
+	wantOperationKind managedservicev1.InstallationOperationKind,
+) error {
+	response, err := value.edge.json(
+		ctx, http.MethodGet,
+		"/api/managed-services/v1/command-results/"+string(commandType),
+		bearer, nil, nil, http.StatusOK,
+	)
+	if err != nil {
+		return fail("signed-managed-product-command-result-request-" + string(commandType))
+	}
+	defer clear(response.body)
+	var results managedservicev1.CommandResultList
+	if response.header.Get("Cache-Control") != "no-store" ||
+		decodeOne(response.body, &results) != nil ||
+		managedservicev1.ValidateCommandResultList(results) != nil {
+		return fail("signed-managed-product-command-result-contract-" + string(commandType))
+	}
+	matched := 0
+	for _, item := range results.Items {
+		if item.Target.ID != targetID {
+			continue
+		}
+		matched++
+		if item.CommandType != commandType || item.State != wantState ||
+			item.IdempotencyKey != idempotencyKey || item.InputDigest == "" || item.CompletedAt == nil ||
+			item.BindingID != nil {
+			return fail("signed-managed-product-command-result-value-" + string(commandType))
+		}
+		if wantOperationID == "" {
+			if item.Target.Kind != managedservicev1.CommandTargetQuotaEntitlement || item.Operation != nil {
+				return fail("signed-managed-product-command-result-quota-" + string(commandType))
+			}
+			continue
+		}
+		if item.Target.Kind != managedservicev1.CommandTargetServiceInstallation ||
+			item.Operation == nil || item.Operation.ID != wantOperationID ||
+			item.Operation.Kind != wantOperationKind ||
+			item.Operation.Phase != managedservicev1.InstallationReady ||
+			item.Operation.SafeFailureCode != nil ||
+			!item.CompletedAt.Equal(item.Operation.ObservedAt) {
+			return fail("signed-managed-product-command-result-operation-" + string(commandType))
+		}
+	}
+	if matched != 1 {
+		return fail("signed-managed-product-command-result-cardinality-" + string(commandType))
 	}
 	return nil
 }

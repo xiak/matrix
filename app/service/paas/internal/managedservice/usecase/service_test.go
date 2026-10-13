@@ -51,7 +51,7 @@ func TestCommandResultsAreAccountAndIdentityScoped(t *testing.T) {
 	repository := newMemoryRepository()
 	completedAt := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
 	repository.commandResults = []managedservicev1.CommandResult{{
-		Kind: "ManagedServiceCommandResult", RequestID: "request-quota",
+		Kind: "ManagedServiceCommandResult", IdempotencyKey: "request-quota",
 		CommandType: managedservicev1.CommandQuotaActivate,
 		InputDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		State:       managedservicev1.CommandSucceeded,
@@ -90,7 +90,7 @@ func TestWorkloadRoleCommandResultsMapIAMHistory(t *testing.T) {
 		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResultList",
 		Items: []iamv1.WorkloadRoleCommandResult{{
 			APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleCommandResult",
-			CommandType: iamv1.WorkloadRoleCommandBind, RequestID: "msrb-command-one",
+			CommandType: iamv1.WorkloadRoleCommandBind, IdempotencyKey: "bind-command-one",
 			RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Workload:      iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "mysql-primary"},
 			BindingID:     "wrb-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -400,10 +400,9 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 		receipt.BindingID != binder.result.Bindings[0].ID {
 		t.Fatalf("binding receipt=%#v err=%v", receipt, err)
 	}
-	wantRequestID := serviceRoleBindingRequestID(command.IdempotencyKey)
 	if binder.calls != 1 || binder.request.Action != port.AuthorizeInstallationRoleBind ||
 		binder.request.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID}) ||
-		binder.request.RequestID != wantRequestID || binder.request.Credential != command.Credential {
+		binder.request.RequestID != command.IdempotencyKey || binder.request.Credential != command.Credential {
 		t.Fatalf("binding request=%#v calls=%d", binder.request, binder.calls)
 	}
 	wantAssumeRequestID := serviceRoleSessionRequestID(binder.result.Bindings[0].ID, command.Authorization.RequestID)
@@ -420,7 +419,7 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 	}
 	command.Authorization.RequestID = "request-bind-role-replay"
 	if _, err := service.BindServiceRole(context.Background(), command); err != nil ||
-		binder.request.RequestID != wantRequestID || binder.runtimeAssumeRequestID == wantAssumeRequestID {
+		binder.request.RequestID != command.IdempotencyKey || binder.runtimeAssumeRequestID == wantAssumeRequestID {
 		t.Fatalf("equal replay did not keep command identity: request=%#v err=%v", binder.request, err)
 	}
 	binding := binder.result.Bindings[0]
@@ -502,14 +501,13 @@ func TestUnbindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *te
 		receipt.ResourceVersion != 2 || !receipt.RevokedAt.Equal(revokedAt) {
 		t.Fatalf("unbinding receipt=%#v err=%v", receipt, err)
 	}
-	wantRequestID := serviceRoleUnbindingRequestID(command.IdempotencyKey)
 	if authority.revokeCalls != 1 || authority.revokeBindingID != revoked.ID || authority.revokeVersion != 1 ||
 		authority.revokeRequest.Action != port.AuthorizeInstallationRoleUnbind ||
 		authority.revokeRequest.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID}) ||
-		authority.revokeRequest.RequestID != wantRequestID || authority.revokeRequest.Credential != command.Credential {
+		authority.revokeRequest.RequestID != command.IdempotencyKey || authority.revokeRequest.Credential != command.Credential {
 		t.Fatalf("unbinding request=%#v calls=%d", authority.revokeRequest, authority.revokeCalls)
 	}
-	if _, err := service.UnbindServiceRole(context.Background(), command); err != nil || authority.revokeRequest.RequestID != wantRequestID {
+	if _, err := service.UnbindServiceRole(context.Background(), command); err != nil || authority.revokeRequest.RequestID != command.IdempotencyKey {
 		t.Fatalf("equal unbinding replay did not keep command identity: request=%#v err=%v", authority.revokeRequest, err)
 	}
 	before := authority.revokeCalls

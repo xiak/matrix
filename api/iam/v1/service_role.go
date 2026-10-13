@@ -146,17 +146,20 @@ type ServiceLinkedRoleList struct {
 }
 
 // WorkloadRoleCommandResult is a non-secret, service-scoped observation of
-// one completed consent command initiated by the current USER. It carries no
-// Account, service-principal or credential selector and is never a permit.
+// one completed consent command initiated by the current USER. IdempotencyKey
+// is the original product key carried unchanged as IAM's request identity;
+// RequestDigest remains IAM-owned evidence rather than a client correlation
+// algorithm. The result carries no Account, service-principal or credential
+// selector and is never a permit.
 type WorkloadRoleCommandResult struct {
-	APIVersion    string                  `json:"apiVersion"`
-	Kind          string                  `json:"kind"`
-	CommandType   WorkloadRoleCommandType `json:"commandType"`
-	RequestID     string                  `json:"requestId"`
-	RequestDigest string                  `json:"requestDigest"`
-	Workload      ResourceReference       `json:"workload"`
-	BindingID     WorkloadRoleBindingID   `json:"bindingId"`
-	CompletedAt   time.Time               `json:"completedAt"`
+	APIVersion     string                  `json:"apiVersion"`
+	Kind           string                  `json:"kind"`
+	CommandType    WorkloadRoleCommandType `json:"commandType"`
+	IdempotencyKey string                  `json:"idempotencyKey"`
+	RequestDigest  string                  `json:"requestDigest"`
+	Workload       ResourceReference       `json:"workload"`
+	BindingID      WorkloadRoleBindingID   `json:"bindingId"`
+	CompletedAt    time.Time               `json:"completedAt"`
 }
 
 type WorkloadRoleCommandResultList struct {
@@ -248,7 +251,7 @@ func ValidateWorkloadRoleCommandType(value WorkloadRoleCommandType) error {
 func ValidateWorkloadRoleCommandResult(value WorkloadRoleCommandResult) error {
 	if value.APIVersion != APIVersion || value.Kind != "WorkloadRoleCommandResult" ||
 		ValidateWorkloadRoleCommandType(value.CommandType) != nil ||
-		ValidateID("workloadRoleCommand.requestId", value.RequestID) != nil ||
+		ValidateID("workloadRoleCommand.idempotencyKey", value.IdempotencyKey) != nil ||
 		ValidateDigest("workloadRoleCommand.requestDigest", value.RequestDigest) != nil ||
 		value.Workload.Kind != ResourceServiceInstallation ||
 		ValidateID("workloadRoleCommand.workloadId", value.Workload.ID) != nil ||
@@ -269,7 +272,7 @@ func ValidateWorkloadRoleCommandResultList(value WorkloadRoleCommandResultList) 
 		if ValidateWorkloadRoleCommandResult(item) != nil {
 			return errors.New("workload Role command result list is invalid")
 		}
-		identity := string(item.CommandType) + "\x00" + item.RequestID
+		identity := string(item.CommandType) + "\x00" + item.IdempotencyKey
 		if _, duplicate := seen[identity]; duplicate {
 			return errors.New("workload Role command result list contains duplicates")
 		}

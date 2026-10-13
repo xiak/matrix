@@ -207,6 +207,9 @@
           "completedAt": {
             "$ref": "#/components/schemas/Timestamp"
           },
+          "idempotencyKey": {
+            "type": "string"
+          },
           "inputDigest": {
             "type": "string"
           },
@@ -215,9 +218,6 @@
           },
           "operation": {
             "$ref": "#/components/schemas/InstallationOperation"
-          },
-          "requestId": {
-            "$ref": "#/components/schemas/ID"
           },
           "state": {
             "$ref": "#/components/schemas/CommandState"
@@ -228,9 +228,9 @@
         },
         "required": [
           "commandType",
+          "idempotencyKey",
           "inputDigest",
           "kind",
-          "requestId",
           "state",
           "target"
         ],

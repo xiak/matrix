@@ -418,14 +418,14 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	quotaResults, err := service.ListCommandResults(ctx, usecase.ListCommandResultsQuery{
 		Authorization: authorizationA, CommandType: managedservicev1.CommandQuotaActivate,
 	})
-	if err != nil || len(quotaResults.Items) != 1 || quotaResults.Items[0].RequestID != quotaCommand.Authorization.RequestID ||
+	if err != nil || len(quotaResults.Items) != 1 || quotaResults.Items[0].IdempotencyKey != quotaCommand.IdempotencyKey ||
 		quotaResults.Items[0].Target.ID != quota.ID || quotaResults.Items[0].State != managedservicev1.CommandSucceeded {
 		t.Fatalf("quota command results=%#v err=%v", quotaResults, err)
 	}
 	createResults, err := service.ListCommandResults(ctx, usecase.ListCommandResultsQuery{
 		Authorization: authorizationA, CommandType: managedservicev1.CommandInstallationCreate,
 	})
-	if err != nil || len(createResults.Items) != 1 || createResults.Items[0].RequestID != installationCommand.Authorization.RequestID ||
+	if err != nil || len(createResults.Items) != 1 || createResults.Items[0].IdempotencyKey != installationCommand.IdempotencyKey ||
 		createResults.Items[0].Target.ID != installation.ID || createResults.Items[0].State != managedservicev1.CommandInProgress ||
 		createResults.Items[0].CompletedAt != nil || createResults.Items[0].Operation == nil ||
 		createResults.Items[0].Operation.ID != installation.Operation.ID {
@@ -617,7 +617,7 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 		Authorization: authorizationA, CommandType: managedservicev1.CommandInstallationTerminate,
 	})
 	if err != nil || len(terminationResults.Items) != 1 ||
-		terminationResults.Items[0].RequestID != terminationCommand.Authorization.RequestID ||
+		terminationResults.Items[0].IdempotencyKey != terminationCommand.IdempotencyKey ||
 		terminationResults.Items[0].Target.ID != installation.ID ||
 		terminationResults.Items[0].State != managedservicev1.CommandSucceeded ||
 		terminationResults.Items[0].CompletedAt == nil || terminationResults.Items[0].Operation == nil ||

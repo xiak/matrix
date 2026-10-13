@@ -119,7 +119,7 @@ func TestCommandResultRouteDerivesAccountAndUsesClosedReadAuthority(t *testing.T
 	want := managedservicev1.CommandResultList{
 		Kind: "ManagedServiceCommandResultList",
 		Items: []managedservicev1.CommandResult{{
-			Kind: "ManagedServiceCommandResult", RequestID: "request-quota",
+			Kind: "ManagedServiceCommandResult", IdempotencyKey: "request-quota",
 			CommandType: managedservicev1.CommandQuotaActivate,
 			InputDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			State:       managedservicev1.CommandSucceeded,

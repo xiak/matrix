@@ -299,7 +299,7 @@ func ValidateCommandResult(value CommandResult) error {
 	}
 	problems = append(problems,
 		ValidateCommandType(value.CommandType),
-		validateID("requestId", value.RequestID),
+		ValidateIdempotencyKey(value.IdempotencyKey),
 		validateDigest("inputDigest", value.InputDigest),
 		validateID("target.id", value.Target.ID),
 	)
@@ -352,7 +352,7 @@ func ValidateCommandResultList(value CommandResultList) error {
 		if ValidateCommandResult(item) != nil {
 			return errors.New("managed-service command result list is invalid")
 		}
-		identity := string(item.CommandType) + "\x00" + item.RequestID
+		identity := string(item.CommandType) + "\x00" + item.IdempotencyKey
 		if _, duplicate := seen[identity]; duplicate {
 			return errors.New("managed-service command result list contains duplicates")
 		}

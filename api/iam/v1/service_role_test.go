@@ -368,7 +368,7 @@ func TestWorkloadRoleCommandResultIsClosedAndNonSecret(t *testing.T) {
 	now := time.Date(2026, 10, 13, 12, 0, 0, 123_000, time.UTC)
 	result := WorkloadRoleCommandResult{
 		APIVersion: APIVersion, Kind: "WorkloadRoleCommandResult",
-		CommandType: WorkloadRoleCommandBind, RequestID: "msrb-command-one",
+		CommandType: WorkloadRoleCommandBind, IdempotencyKey: "bind-command-one",
 		RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Workload:      ResourceReference{Kind: ResourceServiceInstallation, ID: "mysql-primary"},
 		BindingID:     "wrb-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -376,6 +376,11 @@ func TestWorkloadRoleCommandResultIsClosedAndNonSecret(t *testing.T) {
 	}
 	if err := ValidateWorkloadRoleCommandResult(result); err != nil {
 		t.Fatalf("valid workload Role command result: %v", err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || !strings.Contains(string(encoded), `"idempotencyKey":"bind-command-one"`) ||
+		strings.Contains(string(encoded), `"requestId"`) {
+		t.Fatalf("workload Role result exposed a private request identity: %s", encoded)
 	}
 	list := WorkloadRoleCommandResultList{
 		APIVersion: APIVersion, Kind: "WorkloadRoleCommandResultList",
