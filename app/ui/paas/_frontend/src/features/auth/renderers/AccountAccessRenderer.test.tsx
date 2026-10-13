@@ -350,27 +350,41 @@ function SecuritySettingsIntentProbe() {
   </>;
 }
 
-function AuthenticatedAccess({ repository, initialView }: { repository: AccountRepository; initialView: AccountAccessView }) {
+function AuthenticatedAccess({ repository, initialView, active = true }: { repository: AccountRepository; initialView: AccountAccessView; active?: boolean }) {
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
   const [view, setView] = useState(initialView);
   const [entityId, setEntityId] = useState<string>();
-  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository}><CapabilityProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} onNavigate={(next, id) => requestLeave(() => { setView(next); setEntityId(id); })} /></AccountAccessProvider> : <LoginRenderer />;
+  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} onNavigate={(next, id) => requestLeave(() => { setView(next); setEntityId(id); })} /></AccountAccessProvider> : <LoginRenderer />;
 }
 
 async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users") {
   const user = userEvent.setup({ delay: null });
-  const tree = (activeRepository: AccountRepository) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
+  const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
   const view = render(tree(repository));
   await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
   await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledWith(credential));
-  return { user, view, repository, replaceRepository: (next: AccountRepository) => view.rerender(tree(next)) };
+  return { user, view, repository, replaceRepository: (next: AccountRepository) => view.rerender(tree(next)), setAccessActive: (active: boolean) => view.rerender(tree(repository, active)) };
 }
 
 async function invokeMoreAction(user: ReturnType<typeof userEvent.setup>, label: string) {
   await user.click(await screen.findByRole("button", { name: "更多操作" }));
   await user.click(within(await screen.findByRole("menu", { name: "更多操作" })).getByRole("menuitem", { name: label }));
+}
+
+async function reviewLiveNewUser(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: "创建用户" }));
+  await user.type(screen.getByLabelText(/^子用户名/), "live.new");
+  await user.type(screen.getByLabelText(/^用户显示名称/), "Live New User");
+  await user.type(screen.getByLabelText(/^初始密码/), "Initial-password-for-browser-1!");
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  expect(screen.queryByRole("table", { name: /策略/ })).toBeNull();
+  await user.click(screen.getByRole("combobox", { name: "权限边界" }));
+  await user.click(screen.getByRole("option", { name: "主账号显式不设置权限边界" }));
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  expect(screen.getByText(`live.new@${account.id}`)).toBeTruthy();
+  expect(document.body.textContent).not.toContain("Initial-password-for-browser-1!");
 }
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear(); });
@@ -1318,7 +1332,7 @@ describe("account access", () => {
     expect(await screen.findByRole("table", { name: "租户用户列表" })).toBeTruthy();
   });
 
-  it("separates the resource owner from subusers and does not call the superseded boundary-less LIVE create contract", async () => {
+  it("keeps unsupported LIVE creation closed rather than using the preview workspace", async () => {
     const { user, repository, view } = await openAccess();
     await screen.findByText("Developer A");
     expect(screen.queryByRole("button", { name: "管理 admin" })).toBeNull();
@@ -1326,10 +1340,97 @@ describe("account access", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("form", { name: "创建子用户" })).toBeNull();
     expect(screen.getByRole("heading", { name: "安全委派创建尚未接入" })).toBeTruthy();
-    expect(screen.getByText(/用户 \+ 初始凭据 \+ 权限边界/)).toBeTruthy();
+    expect(screen.getByText(/此处尚未接入委派创建/)).toBeTruthy();
     expect(screen.queryByLabelText(/^初始密码/)).toBeNull();
     expect(repository.execute).not.toHaveBeenCalled();
     expect(view.container.textContent).not.toContain(credential);
+  });
+
+  it("creates a LIVE child from the shared wizard, clears its password and rereads the precise identity", async () => {
+    const created: User = { ...childUser, id: "live-created-user", loginName: "live.new", displayName: "Live New User", resourceVersion: 1, mustChangePassword: true };
+    let createdAccess: UserAccess | null = null;
+    const createUser = vi.fn().mockImplementation(async () => {
+      createdAccess = { user: created, policyAttachments: [], capabilities: userCapabilities(created) };
+      return created;
+    });
+    const repository = accounts({ createUser, listUsers: vi.fn(async () => ({ items: createdAccess ? [child, createdAccess] : [child], nextAfter: null })),
+      getUser: vi.fn(async (_credential, id) => id === created.id && createdAccess ? createdAccess : child) });
+    const { user } = await openAccess(repository);
+    await reviewLiveNewUser(user);
+    await user.click(screen.getByRole("button", { name: "确认创建用户" }));
+    expect(await screen.findByText("用户创建成功")).toBeTruthy();
+    expect(screen.getByText(created.id)).toBeTruthy();
+    expect(screen.queryByText("授权配置已保存")).toBeNull();
+    expect(screen.queryByLabelText(/^初始密码/)).toBeNull();
+    expect(createUser).toHaveBeenCalledExactlyOnceWith(credential, account.id, {
+      loginName: "live.new", displayName: "Live New User", initialPassword: "Initial-password-for-browser-1!",
+      permissionBoundary: null, requestId: expect.stringMatching(/^ui-user-create-/)
+    });
+    expect(repository.getUser).toHaveBeenCalledWith(credential, created.id);
+    expect(repository.execute).not.toHaveBeenCalled();
+    const done = screen.getByRole("button", { name: "完成，返回用户列表" }) as HTMLButtonElement;
+    await waitFor(() => expect(done.disabled).toBe(false));
+    await user.click(done);
+    expect(await screen.findByText("Live New User")).toBeTruthy();
+  });
+
+  it("keeps UNKNOWN creation out of MOCK and retries only the original frozen request after route remount", async () => {
+    const created: User = { ...childUser, id: "live-created-unknown", loginName: "live.new", displayName: "Live New User", resourceVersion: 1, mustChangePassword: true };
+    const createUser = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "UNKNOWN")).mockResolvedValue(created);
+    const repository = accounts({ createUser, getUser: vi.fn().mockResolvedValue({ user: created, policyAttachments: [], capabilities: userCapabilities(created) }) });
+    const { user, setAccessActive } = await openAccess(repository);
+    await reviewLiveNewUser(user);
+    await user.click(screen.getByRole("button", { name: "确认创建用户" }));
+    expect(await screen.findByText(/原请求结果尚未确认/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "确认创建用户" })).toBeNull();
+    expect(screen.queryByLabelText(/^初始密码/)).toBeNull();
+    setAccessActive(false);
+    expect(createUser).toHaveBeenCalledTimes(1);
+    setAccessActive(true);
+    expect(await screen.findByText(/原请求结果尚未确认/)).toBeTruthy();
+    await user.click(screen.getByTestId("nav-settings"));
+    await user.click(screen.getByRole("button", { name: "放弃并离开" }));
+    await user.click(screen.getByTestId("nav-users"));
+    await user.click(await screen.findByRole("button", { name: "创建用户" }));
+    expect(screen.getByText(/原请求结果尚未确认/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "填写用户信息" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("form", { name: "创建子用户" }).getAttribute("aria-busy")).not.toBe("true");
+    await user.click(screen.getByTestId("nav-settings"));
+    expect(screen.getByRole("dialog", { name: "离开结果待确认的创建流程？" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "放弃并离开" }));
+    await user.click(screen.getByTestId("nav-users"));
+    await user.click(await screen.findByRole("button", { name: "创建用户" }));
+    await user.click(screen.getByRole("button", { name: "重试原请求" }));
+    expect(await screen.findByText("用户创建成功")).toBeTruthy();
+    expect(createUser.mock.calls[1]).toEqual(createUser.mock.calls[0]);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not expose Root's no-boundary form to an ordinary identity even if create capability is available", async () => {
+    const createUser = vi.fn();
+    const repository = accounts({ createUser, currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: childUser, identityKind: "USER",
+      permissionBoundary: { accountId: account.id, userId: childUser.id, resourceVersion: childUser.resourceVersion, policy: null } }) });
+    const { user } = await openAccess(repository, iam({}, childUser.id));
+    await user.click(await screen.findByRole("button", { name: "创建用户" }));
+    expect(screen.getByRole("heading", { name: "安全委派创建尚未接入" })).toBeTruthy();
+    expect(screen.queryByLabelText(/^初始密码/)).toBeNull();
+    expect(createUser).not.toHaveBeenCalled();
+  });
+
+  it("waits for the replacement source's verified identity instead of reusing old Root capability", async () => {
+    const { user, replaceRepository } = await openAccess(accounts({ createUser: vi.fn() }));
+    await screen.findByRole("button", { name: "创建用户" });
+    let releaseIdentity!: (value: AccountIdentity) => void;
+    const createUser = vi.fn();
+    const currentIdentity = vi.fn(() => new Promise<AccountIdentity>((resolve) => { releaseIdentity = resolve; }));
+    replaceRepository(accounts({ createUser, currentIdentity }));
+    await waitFor(() => expect(currentIdentity).toHaveBeenCalledWith(credential));
+    await user.click(screen.getByRole("button", { name: "创建用户" }));
+    expect(screen.queryByLabelText(/^初始密码/)).toBeNull();
+    expect(createUser).not.toHaveBeenCalled();
+    await act(async () => { releaseIdentity(structuredClone(identity)); });
+    expect(await screen.findByLabelText(/^初始密码/)).toBeTruthy();
+    expect(createUser).not.toHaveBeenCalled();
   });
 
   it("sets an independent account alias with an optimistic version and shows both login forms", async () => {

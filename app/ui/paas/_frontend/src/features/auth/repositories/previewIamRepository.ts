@@ -1133,15 +1133,6 @@ export const previewAccountRepository: AccountRepository = {
   async execute(credential, command: AccountCommand) {
     requirePreviewCredential(credential);
     if ((command.kind === "update-user" || command.kind === "delete-user" || command.kind === "set-status" || command.kind === "reset-password" || command.kind === "create-policy-attachment") && command.userId === account.rootIdentity.principalId) throw new HttpProblem(403, "ROOT_IDENTITY_PROTECTED");
-    if (command.kind === "create-user") {
-      if (users.some((user) => user.loginName === command.loginName) || account.rootIdentity.loginName === command.loginName) throw new HttpProblem(409, "PREVIEW_NAME_CONFLICT");
-      if (!/^[a-z][a-z0-9._-]{2,63}$/.test(command.loginName) || !command.displayName.trim() || !withinNewPasswordProductBounds(command.initialPassword)) throw new HttpProblem(422, "PREVIEW_INVALID_USER");
-      users = [...users, {
-        id: `principal-${command.loginName}`, accountId: account.id, loginName: command.loginName,
-        displayName: command.displayName, status: "ACTIVE", mustChangePassword: true, resourceVersion: 1
-      }];
-      return;
-    }
     if (command.kind === "create-account") {
       if (accounts.some((entry) => entry.id === command.id)) throw new HttpProblem(409, "PREVIEW_NAME_CONFLICT");
       accounts = [...accounts, {

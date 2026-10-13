@@ -30,3 +30,12 @@ it("disables step navigation and form fields while saving", () => {
   expect((screen.getByRole("button", { name: "First" }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByLabelText("Name").closest("fieldset")?.disabled).toBe(true);
 });
+
+it("keeps frozen-request progress read-only without pretending a settled unknown result is loading", async () => {
+  const retry = vi.fn();
+  render(<Wizard label="Create" steps={[{ id: "one", label: "Identity" }, { id: "two", label: "Review" }]} currentStep={1} title="Result unknown" onSubmit={(event) => event.preventDefault()} actions={<Button onClick={retry}>Retry original request</Button>}><p>Original input remains frozen.</p></Wizard>);
+  expect((screen.getByRole("button", { name: "Identity" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("form", { name: "Create" }).getAttribute("aria-busy")).not.toBe("true");
+  await userEvent.setup().click(screen.getByRole("button", { name: "Retry original request" }));
+  expect(retry).toHaveBeenCalledTimes(1);
+});

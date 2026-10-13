@@ -71,6 +71,9 @@ const (
 	changedReaderPassword    = "Changed-Process-Reader-Password-95!"
 	initialDeveloperPassword = "Initial-Process-Developer-Password-57!"
 	changedDeveloperPassword = "Changed-Process-Developer-Password-61!"
+	browserAccountID         = "browser-live-account"
+	browserRootLoginName     = "browser.live.root"
+	browserUserLoginName     = "browser.live.user"
 
 	iamServiceCredential   = "mx1.ProcessIAMServiceCredential00000000000000001"
 	paasServiceCredential  = "mx1.ProcessPaaSServiceCredential0000000000000001"
@@ -146,6 +149,7 @@ type authorityProcessMode uint8
 
 const (
 	authorityProcessFull authorityProcessMode = iota
+	authorityProcessIdentityBrowser
 	authorityProcessBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
@@ -153,6 +157,18 @@ const (
 )
 
 const authorityProcessBrowserObservation = 30 * time.Minute
+
+// This opt-in fixture proves the Account -> Root -> LIVE User identity path
+// without repeating the accepted managed-product provisioning gate.
+func TestIAMIdentityConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_IDENTITY_CONSOLE_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_IDENTITY_CONSOLE_BROWSER=1 for the bounded LIVE identity browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("identity browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessIdentityBrowser)
+}
 
 // An opt-in bounded observation, not a production SLO or an open-loop load
 // generator. The ordinary security gate retains its entire original flow.
@@ -225,7 +241,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		// observation harness; sample count, password cost and product request
 		// deadlines remain unchanged.
 		duration = 8 * time.Minute
-	} else if mode == authorityProcessBrowser {
+	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -595,6 +611,11 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		changedAdminPassword,
 		"request-admin-password",
 	)
+	if mode == authorityProcessIdentityBrowser {
+		runIAMIdentityConsoleBrowser(t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
+		return
+	}
 	if mode == authorityProcessBrowser {
 		runIAMConsoleBrowser(t, ctx, admin, root, temporary, managedRuntime,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
@@ -2389,52 +2410,8 @@ func runIAMConsoleBrowser(
 	installationID := product.installationID
 	defer cleanupManagedProduct(t, managedRuntime, product)
 	defer cleanupManagedProductWorker(t, managedRuntime.workerContainer, managedRuntime.volumeName)
-	uiAddress := freeAddress(t)
-	uiBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-ui", "./app/ui/paas/cmd/matrix-paas-ui")
-	ui := start(uiBinary, []string{"MATRIX_PAAS_UI_LISTEN_ADDRESS=" + uiAddress})
-	waitHTTPStatus(t, ctx, ui, "http://"+uiAddress+"/ready", http.StatusOK)
-
-	// Same-origin loopback routing only. No credentials/selectors are injected;
-	// actual services enforce every request. This is not production APISIX.
-	mux := http.NewServeMux()
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.MaxConnsPerHost = 8
-	transport.MaxIdleConnsPerHost = 8
-	transport.ResponseHeaderTimeout = 15 * time.Second
-	defer transport.CloseIdleConnections()
-	for _, route := range []struct{ prefix, strip, endpoint string }{
-		{"/api/iam/", "/api/iam", iamEndpoint},
-		{"/api/audit/", "/api/audit", auditEndpoint},
-		{"/api/managed-services/", "/api", paasEndpoint},
-		{"/", "", "http://" + uiAddress},
-	} {
-		target, err := url.Parse(route.endpoint)
-		if err != nil {
-			t.Fatal("invalid local browser upstream")
-		}
-		proxy := httputil.NewSingleHostReverseProxy(target)
-		proxy.Transport = transport
-		proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
-			http.Error(w, "upstream unavailable", http.StatusBadGateway)
-		}
-		mux.Handle(route.prefix, http.StripPrefix(route.strip, proxy))
-	}
-	requests := make(chan struct{}, 16)
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case requests <- struct{}{}:
-			defer func() { <-requests }()
-			mux.ServeHTTP(w, r)
-		default:
-			http.Error(w, "browser fixture capacity exceeded", http.StatusServiceUnavailable)
-		}
-	}))
-	server.Config.ReadHeaderTimeout = 5 * time.Second
-	server.Config.ReadTimeout = 30 * time.Second
-	server.Config.WriteTimeout = 30 * time.Second
-	server.Config.IdleTimeout = 30 * time.Second
-	server.Start()
-	defer server.Close()
+	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer closeBrowser()
 	observed := filepath.Join(temporary, "browser-runtime-observed")
 	verified := filepath.Join(temporary, "browser-runtime-verified")
 	finish := filepath.Join(temporary, "browser-finished")
@@ -2496,6 +2473,200 @@ func runIAMConsoleBrowser(
 	assertManagedProductAuthorization(t, ctx, database, auditEndpoint, bearer, resourceMember.ID, product)
 	assertManagedProductAudit(t, auditEndpoint, bearer, product)
 	t.Log("browser fixture finished with real policy/group UI changes and a PostgreSQL 18 resource proven READY by SQL before browser termination; physical runtime/data/credential deletion, quota return, terminal Operation, allow/revoke decisions and the verified Audit chain all passed; visual assertions belong to recorded browser observations")
+}
+
+func runIAMIdentityConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	platformBearer string,
+	start func(string, []string) *childProcess,
+) {
+	t.Helper()
+	// Seed only the other Account's homonym. The browser must still create the
+	// target Account and its User itself; this fixture proves the resulting
+	// login realm is not a global username alias.
+	homeHomonym := createIAMUser(t, iamEndpoint, platformBearer, browserUserLoginName,
+		"Home Account homonym", initialDeveloperPassword, "browser-home-homonym-create")
+	homeLogin := loginIAM(t, iamEndpoint, browserUserLoginName+"@organization-process",
+		initialDeveloperPassword, "browser-home-homonym-login")
+	changePasswordIAM(t, iamEndpoint, homeLogin.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "browser-home-homonym-password")
+	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-identity-finished")
+	t.Logf("IDENTITY_BROWSER_FIXTURE url=%s/console/access finish=%s account=%s root=%s user=%s; use the existing reader passwords for Root and developer passwords for User",
+		server.URL, finish, browserAccountID, browserRootLoginName, browserUserLoginName)
+	waitForBrowserMarker(t, ctx, ui, finish, "Account, Root and User browser completion")
+	assertBrowserIdentityFlow(t, ctx, database, iamEndpoint, auditEndpoint, paasEndpoint, platformBearer, homeHomonym)
+	t.Log("identity browser fixture finished with a LIVE-created Account and immutable Root, LIVE-created ordinary User, forced password changes, realm-bound login, zero implicit grants, platform-directory isolation and a verified Account Audit chain")
+}
+
+func startIAMConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	start func(string, []string) *childProcess,
+) (*httptest.Server, *childProcess, func()) {
+	t.Helper()
+	uiAddress := freeAddress(t)
+	uiBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-ui", "./app/ui/paas/cmd/matrix-paas-ui")
+	ui := start(uiBinary, []string{"MATRIX_PAAS_UI_LISTEN_ADDRESS=" + uiAddress})
+	waitHTTPStatus(t, ctx, ui, "http://"+uiAddress+"/ready", http.StatusOK)
+
+	// Same-origin loopback routing only. No credentials/selectors are injected;
+	// actual services enforce every request. This is not production APISIX.
+	mux := http.NewServeMux()
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxConnsPerHost = 8
+	transport.MaxIdleConnsPerHost = 8
+	transport.ResponseHeaderTimeout = 15 * time.Second
+	for _, route := range []struct{ prefix, strip, endpoint string }{
+		{"/api/iam/", "/api/iam", iamEndpoint},
+		{"/api/audit/", "/api/audit", auditEndpoint},
+		{"/api/managed-services/", "/api", paasEndpoint},
+		{"/", "", "http://" + uiAddress},
+	} {
+		target, err := url.Parse(route.endpoint)
+		if err != nil {
+			t.Fatal("invalid local browser upstream")
+		}
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy.Transport = transport
+		proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+			http.Error(w, "upstream unavailable", http.StatusBadGateway)
+		}
+		mux.Handle(route.prefix, http.StripPrefix(route.strip, proxy))
+	}
+	requests := make(chan struct{}, 16)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case requests <- struct{}{}:
+			defer func() { <-requests }()
+			mux.ServeHTTP(w, r)
+		default:
+			http.Error(w, "browser fixture capacity exceeded", http.StatusServiceUnavailable)
+		}
+	}))
+	server.Config.ReadHeaderTimeout = 5 * time.Second
+	server.Config.ReadTimeout = 30 * time.Second
+	server.Config.WriteTimeout = 30 * time.Second
+	server.Config.IdleTimeout = 30 * time.Second
+	server.Start()
+	return server, ui, func() {
+		server.Close()
+		transport.CloseIdleConnections()
+	}
+}
+
+func assertBrowserIdentityFlow(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	platformBearer string,
+	homeHomonym iamv1.User,
+) {
+	t.Helper()
+	response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/accounts/"+browserAccountID, platformBearer, nil)
+	var account iamv1.AccountAccess
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &account) != nil ||
+		iamv1.ValidateAccountAccess(account) != nil || account.Account.ID != browserAccountID ||
+		account.Account.Status != iamv1.AccountActive || account.Account.RootIdentity.LoginName != browserRootLoginName {
+		t.Fatalf("browser Account was not authoritatively created: status=%d body=%s", response.Status, response.Body)
+	}
+	rejectOldPassword := func(loginName, password, requestID string) {
+		t.Helper()
+		response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/auth/login", "", map[string]string{
+			"loginName": loginName, "password": password, "requestId": requestID,
+		})
+		if response.Status != http.StatusUnauthorized {
+			t.Fatalf("browser identity retained its initial password: login=%s status=%d", loginName, response.Status)
+		}
+	}
+	rejectOldPassword(browserRootLoginName, initialReaderPassword, "browser-root-old-password")
+	root := loginIAM(t, iamEndpoint, browserRootLoginName, changedReaderPassword, "browser-root-authoritative-login")
+	response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", root.Credential, nil)
+	var rootIdentity iamv1.CurrentIdentity
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &rootIdentity) != nil ||
+		iamv1.ValidateCurrentIdentity(rootIdentity) != nil || rootIdentity.Account.ID != browserAccountID ||
+		rootIdentity.User.ID != account.Account.RootIdentity.PrincipalID || rootIdentity.User.LoginName != browserRootLoginName ||
+		rootIdentity.IdentityKind != iamv1.IdentityRoot || rootIdentity.User.MustChangePassword {
+		t.Fatalf("browser Root identity is not authoritative: status=%d body=%s", response.Status, response.Body)
+	}
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/accounts", root.Credential, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("browser Root inherited platform Account directory access: status=%d", response.Status)
+	}
+	response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/users", root.Credential, nil)
+	var users iamv1.UserList
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &users) != nil || iamv1.ValidateUserList(users) != nil {
+		t.Fatalf("browser Root could not reread its User directory: status=%d body=%s", response.Status, response.Body)
+	}
+	var created iamv1.User
+	for _, candidate := range users.Items {
+		if candidate.User.LoginName == browserUserLoginName {
+			created = candidate.User
+			if len(candidate.PolicyAttachments) != 0 {
+				t.Fatal("LIVE User creation silently attached a policy")
+			}
+			break
+		}
+	}
+	if created.ID == "" || created.AccountID != browserAccountID ||
+		created.Status != iamv1.PrincipalActive || created.MustChangePassword {
+		t.Fatalf("browser-created User is absent or not post-change ACTIVE: %#v", created)
+	}
+	realm := browserUserLoginName + "@" + browserAccountID
+	rejectOldPassword(realm, initialDeveloperPassword, "browser-user-old-password")
+	rejectOldPassword(browserUserLoginName, changedDeveloperPassword, "browser-user-ambiguous-realm")
+	member := loginIAM(t, iamEndpoint, realm, changedDeveloperPassword, "browser-user-authoritative-login")
+	response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", member.Credential, nil)
+	var memberIdentity iamv1.CurrentIdentity
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &memberIdentity) != nil ||
+		iamv1.ValidateCurrentIdentity(memberIdentity) != nil || memberIdentity.Account.ID != browserAccountID ||
+		memberIdentity.User.ID != created.ID || memberIdentity.User.LoginName != browserUserLoginName ||
+		memberIdentity.IdentityKind != iamv1.IdentityUser || memberIdentity.User.MustChangePassword ||
+		len(memberIdentity.PolicySources) != 0 || memberIdentity.PermissionBoundary.Policy != nil {
+		t.Fatalf("browser-created User identity was widened or mis-scoped: status=%d body=%s", response.Status, response.Body)
+	}
+	home := loginIAM(t, iamEndpoint, browserUserLoginName+"@organization-process", changedDeveloperPassword,
+		"browser-home-homonym-authoritative-login")
+	response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", home.Credential, nil)
+	var homeIdentity iamv1.CurrentIdentity
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &homeIdentity) != nil ||
+		iamv1.ValidateCurrentIdentity(homeIdentity) != nil || homeIdentity.Account.ID != "organization-process" ||
+		homeIdentity.User.ID != homeHomonym.ID || homeIdentity.User.ID == memberIdentity.User.ID ||
+		homeIdentity.User.LoginName != memberIdentity.User.LoginName {
+		t.Fatalf("same-name User realms were not isolated: status=%d body=%s", response.Status, response.Body)
+	}
+	getPaaSApplication(t, paasEndpoint, member.Credential, "application-process", http.StatusForbidden)
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, root.Credential, auditv1.QueryRecordsRequest{
+		PageSize: 100,
+		Action:   auditv1.ActionIAMUserCreated,
+	}, http.StatusOK)
+	found := false
+	for _, record := range page.Records {
+		found = found || record.Event.TenantID == browserAccountID && record.Event.Target.ID == string(created.ID)
+	}
+	if !found {
+		t.Fatal("browser-created User has no immutable Account Audit fact")
+	}
+	chain := verifyAudit(t, auditEndpoint, root.Credential)
+	if chain.TenantID != browserAccountID || chain.State != auditv1.VerificationVerified || !chain.Complete {
+		t.Fatal("browser Account identity facts broke its Audit chain")
+	}
 }
 
 func waitForBrowserMarker(

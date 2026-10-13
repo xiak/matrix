@@ -6,7 +6,7 @@ import styles from "./Wizard.module.css";
 
 /** Page-level workflow chrome. Drafts, validation, permissions and persistence belong to the feature. */
 export function Wizard({ label, steps, currentStep, onStepChange, title, description, progressLabel, busy, completed, formRef, onSubmit, children, actions, hint }: {
-  label: string; steps: readonly { id: string; label: string }[]; currentStep: number; onStepChange(index: number): void;
+  label: string; steps: readonly { id: string; label: string }[]; currentStep: number; onStepChange?(index: number): void;
   title: string; description?: string; progressLabel?: string; busy?: boolean; completed?: boolean;
   formRef?: Ref<HTMLFormElement>; onSubmit: FormEventHandler<HTMLFormElement>;
   children: ReactNode; actions: ReactNode; hint?: ReactNode;

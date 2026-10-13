@@ -19,6 +19,7 @@ import type {
   AccountSecuritySettingsChange,
   AccountSecuritySettingsUpdate,
   CreateAccountLifecycleCommand,
+  CreateUserCommand,
   RecoverAccountRootCredentialsCommand,
   SecuritySettingsUpdateIntent,
   SetAccountLifecycleStatusCommand,
@@ -38,6 +39,7 @@ import type {
   UserPasswordResetCompletion,
   RolePolicyAttachment,
   UserAccess,
+  User,
   UserPermissionBoundary
 } from "../domain/accounts";
 import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceRoleTemplateDirectory } from "../domain/serviceAuthorization";
@@ -144,6 +146,9 @@ export interface IamRepository {
 }
 
 export interface AccountRepository {
+  // Root-only, explicit no-boundary creation. Account is a local response
+  // assertion; the caller owns the complete input and its idempotency request.
+  createUser?(credential: string, accountId: string, command: CreateUserCommand): Promise<User>;
   accountLifecycle?: {
     list(credential: string, after?: string): Promise<DirectoryPage<AccountAccess>>;
     read(credential: string, accountId: string): Promise<AccountAccess>;

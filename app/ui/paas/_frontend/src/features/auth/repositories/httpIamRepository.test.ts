@@ -988,6 +988,7 @@ const notificationContact = {
 const notificationVerification = {
   apiVersion, kind: "NotificationContactVerification", id: "verification-primary", accountId: account.id,
   userId: user.id, requestId: "verify-contact-1", email: "Admin@example.com", state: "PENDING",
+  purpose: "FIRST_ADDRESS", expectedResourceVersion: 0,
   issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z",
   delivery: { state: "PENDING", attempts: 0, updatedAt: timestamp }
 };
@@ -997,6 +998,21 @@ const pendingEnrollment = {
 };
 
 describe("IAM HTTP personal-security boundary", () => {
+  it("accepts only the mandatory first-address purpose and zero expected contact version", async () => {
+    for (const patch of [{ purpose: "REPLACEMENT" }, { purpose: "unknown" }, { expectedResourceVersion: 1 },
+      { expectedResourceVersion: "0" }, { purpose: undefined }, { expectedResourceVersion: undefined }, { extra: true }]) {
+      reply({ ...notificationVerification, ...patch });
+      await expect(httpIamRepository.personalSecurity!.notificationVerification("bearer", notificationVerification.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    reply(notificationVerification);
+    await expect(httpIamRepository.personalSecurity!.notificationVerification("bearer", notificationVerification.id)).resolves.toMatchObject({
+      id: notificationVerification.id, state: "PENDING", requestId: notificationVerification.requestId
+    });
+    reply({ ...notificationVerification, state: "VERIFIED", completedAt: "2026-09-11T08:05:00Z" });
+    await expect(httpIamRepository.personalSecurity!.confirmNotificationVerification("bearer", notificationVerification.id,
+      { code: "12345678", requestId: "confirm-first-address" })).resolves.toMatchObject({ state: "VERIFIED" });
+  });
+
   it("uses current-session resources without account or user selectors", async () => {
     let fetcher = reply(notificationContact);
     const contact = await httpIamRepository.personalSecurity!.notificationContact("bearer");
@@ -1811,11 +1827,20 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("creates a root-managed user with an explicit null permission boundary and no caller-supplied account", async () => {
-    const fetcher = reply({ ...user, mustChangePassword: true });
-    const command = { kind: "create-user" as const, loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", initialRole: "PAAS_VIEWER", tenantId: "forged" };
-    await httpAccountRepository.execute("transient-bearer", command);
-    expect(requestBody(fetcher)).toEqual({ loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", permissionBoundary: null, requestId: expect.any(String) });
+    const fetcher = reply({ ...user, mustChangePassword: true, resourceVersion: 1 });
+    const command = { loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", permissionBoundary: null, requestId: "create-user-fixed", initialRole: "PAAS_VIEWER", tenantId: "forged" } as const;
+    await httpAccountRepository.createUser!("transient-bearer", account.id, command);
+    expect(requestBody(fetcher)).toEqual({ loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", permissionBoundary: null, requestId: "create-user-fixed" });
     expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer transient-bearer" } });
+  });
+
+  it("rejects malformed or foreign created identities instead of accepting a successful-looking write", async () => {
+    const command = { loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", permissionBoundary: null, requestId: "fixed-create" } as const;
+    for (const patch of [{ accountId: "foreign" }, { loginName: "other" }, { displayName: "Other" }, { mustChangePassword: false },
+      { status: "DISABLED" }, { resourceVersion: 2 }, { extra: true }]) {
+      reply({ ...user, resourceVersion: 1, mustChangePassword: true, ...patch });
+      await expect(httpAccountRepository.createUser!("bearer", account.id, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 
   it("parses current attachments without interpreting policy names", async () => {
