@@ -605,6 +605,73 @@ func (value *gate) verifySignedManagedProduct(
 		return err
 	}
 
+	var templates iamv1.ServiceRoleTemplateList
+	if _, err := value.edge.get(ctx, "/api/iam/v1/service-role-templates", bearer, &templates); err != nil ||
+		iamv1.ValidateServiceRoleTemplateList(templates) != nil {
+		return fail("signed-managed-product-service-role-template-" + product.component)
+	}
+	templateIndex := slices.IndexFunc(templates.Items, func(candidate iamv1.ServiceRoleTemplate) bool {
+		return candidate.ID == "managedservice.installation-reader" &&
+			candidate.Status == iamv1.ServiceRoleTemplateActive
+	})
+	if templateIndex < 0 {
+		return fail("signed-managed-product-service-role-template-missing-" + product.component)
+	}
+	bindingPath := base + "/service-installations/" + product.installationID + "/service-role-bindings"
+	bindKey := requestPrefix + "-service-role-bind"
+	bindResponse, err := value.edge.json(ctx, http.MethodPost, bindingPath, bearer,
+		managedservicev1.BindServiceRoleRequest{Template: templates.Items[templateIndex].Reference()},
+		map[string]string{"Idempotency-Key": bindKey}, http.StatusOK)
+	if err != nil {
+		return fail("signed-managed-product-service-role-bind-" + product.component)
+	}
+	var binding managedservicev1.ServiceRoleBindingReceipt
+	decodeErr = decodeOne(bindResponse.body, &binding)
+	clear(bindResponse.body)
+	if decodeErr != nil || managedservicev1.ValidateServiceRoleBindingReceipt(binding) != nil ||
+		binding.ServiceInstallationID != product.installationID ||
+		binding.Template != templates.Items[templateIndex].Reference() ||
+		binding.Status != iamv1.WorkloadRoleBindingActive {
+		return fail("signed-managed-product-service-role-bind-result-" + product.component)
+	}
+	if err := value.assertSignedManagedProductRoleCommandResult(
+		ctx, bearer, managedservicev1.CommandServiceRoleBind, bindKey,
+		product.installationID, binding.BindingID,
+	); err != nil {
+		return err
+	}
+
+	unbindKey := requestPrefix + "-service-role-unbind"
+	unbindResponse, err := value.edge.json(ctx, http.MethodDelete,
+		bindingPath+"/"+string(binding.BindingID), bearer,
+		managedservicev1.UnbindServiceRoleRequest{ResourceVersion: binding.ResourceVersion},
+		map[string]string{"Idempotency-Key": unbindKey}, http.StatusOK)
+	if err != nil {
+		return fail("signed-managed-product-service-role-unbind-" + product.component)
+	}
+	var unbound managedservicev1.ServiceRoleUnbindingReceipt
+	decodeErr = decodeOne(unbindResponse.body, &unbound)
+	clear(unbindResponse.body)
+	if decodeErr != nil || managedservicev1.ValidateServiceRoleUnbindingReceipt(unbound) != nil ||
+		unbound.ServiceInstallationID != product.installationID ||
+		unbound.BindingID != binding.BindingID || unbound.RoleID != binding.RoleID ||
+		unbound.Template != binding.Template || unbound.Status != iamv1.WorkloadRoleBindingRevoked ||
+		unbound.ResourceVersion <= binding.ResourceVersion {
+		return fail("signed-managed-product-service-role-unbind-result-" + product.component)
+	}
+	if err := value.assertSignedManagedProductRoleCommandResult(
+		ctx, bearer, managedservicev1.CommandServiceRoleUnbind, unbindKey,
+		product.installationID, binding.BindingID,
+	); err != nil {
+		return err
+	}
+	if err := value.assertSignedManagedProductRoleCommandResult(
+		ctx, bearer, managedservicev1.CommandServiceRoleBind, bindKey,
+		product.installationID, binding.BindingID,
+	); err != nil {
+		return err
+	}
+
 	terminationPath := base + "/service-installations/" + product.installationID + "/termination"
 	terminationKey := requestPrefix + "-terminate"
 	terminationResponse, err := value.edge.json(ctx, http.MethodPost, terminationPath, bearer, nil,
@@ -728,6 +795,48 @@ func (value *gate) assertSignedManagedProductCommandResult(
 			item.Operation.SafeFailureCode != nil ||
 			!item.CompletedAt.Equal(item.Operation.ObservedAt) {
 			return fail("signed-managed-product-command-result-operation-" + string(commandType))
+		}
+	}
+	if matched != 1 {
+		return fail("signed-managed-product-command-result-cardinality-" + string(commandType))
+	}
+	return nil
+}
+
+func (value *gate) assertSignedManagedProductRoleCommandResult(
+	ctx context.Context,
+	bearer []byte,
+	commandType managedservicev1.CommandType,
+	idempotencyKey string,
+	installationID string,
+	bindingID iamv1.WorkloadRoleBindingID,
+) error {
+	response, err := value.edge.json(
+		ctx, http.MethodGet,
+		"/api/managed-services/v1/command-results/"+string(commandType),
+		bearer, nil, nil, http.StatusOK,
+	)
+	if err != nil {
+		return fail("signed-managed-product-command-result-request-" + string(commandType))
+	}
+	defer clear(response.body)
+	var results managedservicev1.CommandResultList
+	if response.header.Get("Cache-Control") != "no-store" ||
+		decodeOne(response.body, &results) != nil ||
+		managedservicev1.ValidateCommandResultList(results) != nil {
+		return fail("signed-managed-product-command-result-contract-" + string(commandType))
+	}
+	matched := 0
+	for _, item := range results.Items {
+		if item.Target.ID != installationID {
+			continue
+		}
+		matched++
+		if item.CommandType != commandType || item.State != managedservicev1.CommandSucceeded ||
+			item.IdempotencyKey != idempotencyKey || item.InputDigest == "" || item.CompletedAt == nil ||
+			item.Target.Kind != managedservicev1.CommandTargetServiceInstallation ||
+			item.Operation != nil || item.BindingID == nil || *item.BindingID != bindingID {
+			return fail("signed-managed-product-command-result-value-" + string(commandType))
 		}
 	}
 	if matched != 1 {
