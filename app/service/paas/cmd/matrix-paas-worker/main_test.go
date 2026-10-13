@@ -97,3 +97,27 @@ func TestWorkerFailureCodeDoesNotExposeUnexpectedError(t *testing.T) {
 		t.Fatalf("unexpected worker failure code = %q", code)
 	}
 }
+
+func TestRunClassifiesIncompleteConfiguration(t *testing.T) {
+	for _, variable := range []string{
+		databaseDSNFileEnvironment,
+		workerIDEnvironment,
+		bindingRefEnvironment,
+		bindingRootEnvironment,
+		secretRootEnvironment,
+		artifactCatalogEnvironment,
+		executionTenantEnvironment,
+		machineBindingEnvironment,
+		listenAddressEnvironment,
+		managedPostgresImageEnvironment,
+		managedMySQLImageEnvironment,
+		managedElasticsearchImageEnvironment,
+		managedRabbitMQImageEnvironment,
+	} {
+		t.Setenv(variable, "")
+	}
+	err := run(context.Background())
+	if code := workerFailureCode(err); code != workerFailureConfiguration {
+		t.Fatalf("configuration failure code = %q", code)
+	}
+}

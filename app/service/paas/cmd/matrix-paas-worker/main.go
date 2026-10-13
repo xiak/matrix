@@ -80,16 +80,24 @@ type workerFailureStage string
 
 const (
 	workerFailureConfiguration           workerFailureStage = "PAAS_WORKER_CONFIGURATION"
+	workerFailureDatabaseInput           workerFailureStage = "PAAS_WORKER_DATABASE_INPUT"
 	workerFailureDatabase                workerFailureStage = "PAAS_WORKER_DATABASE"
 	workerFailureExecutionProfile        workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE"
-	workerFailureArtifactRuntime         workerFailureStage = "PAAS_WORKER_ARTIFACT_RUNTIME"
+	workerFailureExecutionProfileRefresh workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_REFRESH"
+	workerFailureArtifactCatalog         workerFailureStage = "PAAS_WORKER_ARTIFACT_CATALOG"
+	workerFailureSecretResolver          workerFailureStage = "PAAS_WORKER_SECRET_RESOLVER"
+	workerFailureComposeRuntime          workerFailureStage = "PAAS_WORKER_COMPOSE_RUNTIME"
 	workerFailureManagedService          workerFailureStage = "PAAS_WORKER_MANAGED_SERVICE"
 	workerFailureDeploymentWorker        workerFailureStage = "PAAS_WORKER_DEPLOYMENT_WORKER"
-	workerFailureReadiness               workerFailureStage = "PAAS_WORKER_READINESS"
+	workerFailureReadinessDatabase       workerFailureStage = "PAAS_WORKER_READINESS_DATABASE"
+	workerFailureReadinessArtifact       workerFailureStage = "PAAS_WORKER_READINESS_ARTIFACT"
+	workerFailureReadinessCompose        workerFailureStage = "PAAS_WORKER_READINESS_COMPOSE"
+	workerFailureReadinessExecution      workerFailureStage = "PAAS_WORKER_READINESS_EXECUTION_PROFILE"
+	workerFailureReadinessManagedService workerFailureStage = "PAAS_WORKER_READINESS_MANAGED_SERVICE"
 	workerFailureProcess                 workerFailureStage = "PAAS_WORKER_PROCESS"
 	workerFailureManagedServiceCycle     workerFailureStage = "PAAS_WORKER_MANAGED_SERVICE_CYCLE"
 	workerFailureDeploymentCycle         workerFailureStage = "PAAS_WORKER_DEPLOYMENT_CYCLE"
-	workerFailureExecutionProfileRefresh workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_REFRESH"
+	workerFailureExecutionRefreshCycle   workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_REFRESH_CYCLE"
 	workerFailureUnexpected              workerFailureStage = "PAAS_WORKER_UNEXPECTED"
 )
 
@@ -143,11 +151,12 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
-	stage = workerFailureDatabase
+	stage = workerFailureDatabaseInput
 	dsn, err := processconfig.ReadText(config.databaseDSNFile, 16*1024, true)
 	if err != nil {
 		return err
 	}
+	stage = workerFailureDatabase
 	poolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return errors.New("PaaS worker database configuration is invalid")
@@ -165,11 +174,12 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	stage = workerFailureExecutionProfileRefresh
 	if err := executionProfile.Refresh(ctx); err != nil {
 		return errors.New("PaaS local execution profile cannot start")
 	}
 
-	stage = workerFailureArtifactRuntime
+	stage = workerFailureArtifactCatalog
 	catalogContent, err := processconfig.ReadFile(
 		config.artifactCatalog,
 		maximumArtifactCatalogBytes,
@@ -187,10 +197,12 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	stage = workerFailureSecretResolver
 	secrets, err := composeadapter.NewFileSecretResolver(config.secretRoot)
 	if err != nil {
 		return err
 	}
+	stage = workerFailureComposeRuntime
 	runtime := composeadapter.NewLocalRuntime()
 	executor, err := composeadapter.New(composeadapter.Config{
 		BindingRef: config.bindingRef, BindingRoot: config.bindingRoot,
@@ -308,24 +320,23 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
-	stage = workerFailureReadiness
 	readiness := func(readinessContext context.Context) error {
 		state, checkErr := queueRepository.Readiness(readinessContext)
 		if checkErr != nil || state.State != paasv1.ReadinessReady ||
 			paasv1.ValidateReadiness(state) != nil {
-			return errors.New("PaaS worker database readiness failed")
+			return failWorker(workerFailureReadinessDatabase)
 		}
 		if checkErr := artifacts.Ready(readinessContext); checkErr != nil {
-			return errors.New("PaaS worker artifact readiness failed")
+			return failWorker(workerFailureReadinessArtifact)
 		}
 		if checkErr := runtime.Ready(readinessContext); checkErr != nil {
-			return errors.New("PaaS worker Compose readiness failed")
+			return failWorker(workerFailureReadinessCompose)
 		}
 		if checkErr := executionProfile.Ready(readinessContext); checkErr != nil {
-			return errors.New("PaaS worker execution profile readiness failed")
+			return failWorker(workerFailureReadinessExecution)
 		}
 		if checkErr := managedServiceWorker.Ready(readinessContext); checkErr != nil {
-			return errors.New("PaaS managed-service provisioner readiness failed")
+			return failWorker(workerFailureReadinessManagedService)
 		}
 		return nil
 	}
@@ -373,7 +384,7 @@ func run(ctx context.Context) (result error) {
 				},
 				func(refreshContext context.Context) error {
 					if refreshErr := executionProfile.Refresh(refreshContext); refreshErr != nil {
-						return failWorker(workerFailureExecutionProfileRefresh)
+						return failWorker(workerFailureExecutionRefreshCycle)
 					}
 					return nil
 				},
