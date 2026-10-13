@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；最近接受发布组合仍为IAM83/Audit37/PaaS3、`contractRevision=31`，其签名产品授权目录、数据库驱动服务Role模板/权限上限、通用动态产品闭环及同Profile签名A/B生命周期已有既有证据。当前候选把PostgreSQL 18、MySQL 8.4 LTS、Elasticsearch 8.19.23和RabbitMQ 4.1.8作为真实provider接入生产worker，并把Account服务开通委派给同一Policy体系中的USER与ROLE；跨浏览器UNKNOWN后端恢复使完整形状前移为IAM85/Audit39/PaaS7、`contractRevision=35`，唯一直接前驱为固定`ba2ea256528349f1300092ba0fd44641d758accb`的IAM84/Audit39/PaaS6+r34。当前候选已有本地真库及多进程证据，但尚无精确文档HEAD的独立CI、同Profile签名A/B或该恢复契约的LIVE UI结论，因此不继承既有发布接受状态。FEAT-010其余故障/UNKNOWN UI/APISIX/签名浏览器路径与IAM-UI-01–08完整范围，以及AC-11的完整容量/公平性/HA仍未验收，整体需求仍为实施中。
+- 状态：实施中；最近接受发布组合仍为IAM83/Audit37/PaaS3、`contractRevision=31`，其签名产品授权目录、数据库驱动服务Role模板/权限上限、通用动态产品闭环及同Profile签名A/B生命周期已有既有证据。当前候选把PostgreSQL 18、MySQL 8.4 LTS、Elasticsearch 8.19.23和RabbitMQ 4.1.8作为真实provider接入生产worker，并把Account服务开通委派给同一Policy体系中的USER与ROLE；固定`9d50c02bb4613f9d9ed77bdee024ae767f15ac5d`的跨浏览器UNKNOWN后端恢复使完整形状前移为IAM85/Audit39/PaaS7、`contractRevision=35`，唯一直接前驱为固定`ba2ea256528349f1300092ba0fd44641d758accb`的IAM84/Audit39/PaaS6+r34。当前候选已有本地真库及多进程证据，但尚无精确文档HEAD的独立CI、同Profile签名A/B或该恢复契约的LIVE UI结论，因此不继承既有发布接受状态。FEAT-010其余故障/UNKNOWN UI/APISIX/签名浏览器路径与IAM-UI-01–08完整范围，以及AC-11的完整容量/公平性/HA仍未验收，整体需求仍为实施中。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
