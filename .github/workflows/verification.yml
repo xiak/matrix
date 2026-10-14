@@ -59,7 +59,12 @@ jobs:
           npm install --global npm@11.6.4 --ignore-scripts --no-audit --no-fund
           test "$(npm --version)" = 11.6.4
           npm ci --no-audit --no-fund
-          npm run check
+          npm run typecheck
+          npm run lint
+          npm run check:architecture
+          npm run check:styles
+          npm run check:embedded
+          npm run test
           git diff --exit-code -- . ../internal/web/assets
 
   installation-postgres-ha:
@@ -139,6 +144,11 @@ jobs:
 
   authority-gates:
     name: ${{ matrix.lane }}
+    # Do not allocate the long-lived PostgreSQL matrix until the repository's
+    # complete Go and console preflight gates have accepted this exact SHA.
+    # The final authority-process job remains fail-closed when either
+    # prerequisite fails and these lanes are therefore skipped.
+    needs: [go, console]
     runs-on: ubuntu-24.04
     # Every database lane stays internally serial with its own runner, bounded
     # PostgreSQL service, -race -p 1 execution, deadline, and cleanup. At most
