@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；受控真实浏览器已完成Account/Root/User、同名realm、本人TOTP与会话、正式PostgreSQL 18创建/READY/SQL读写、Group授权/撤权、页面终止、物理删除及完整Audit链，LIVE目录同时展示正式接入的MySQL、Elasticsearch和RabbitMQ。当前后端基线`c108dff3069c90bfd0c49eb868276d8d617face8`的独立CI已通过；`355815f3d992edaf4f677374d7407554bd96ec7f`又选择性采用UX/UI owner固定`3876516a902fd020d1ab1cd4be8f339f9a9034b1`，完成当前ACTIVE服务Role模板头、精确版本/摘要冻结及不同浏览器来源只读恢复，并在本地真实PG18+IAM/Audit/PaaS门禁通过。其独立CI最终为cancelled：16项业务作业成功，`authority-recovery-window`被外部取消，依赖汇总正确失败，不能记作精确SHA通过；后继`91af2972fb16d6727845fc06c9485f8ea62ca80c`的独立CI已18项全部成功。当前完整Profile的同源签名A/B、APISIX后端消费者及离线生命周期已经实跑通过；签名安装后的真实浏览器路径和完整IAM-UI-01–08仍有缺口，因此整个FEAT仍未验收。
+- 状态：实施中；受控真实浏览器已完成Account/Root/User、同名realm、本人TOTP与会话、正式PostgreSQL 18创建/READY/SQL读写、Group授权/撤权、页面终止、物理删除及完整Audit链，LIVE目录同时展示正式接入的MySQL、Elasticsearch和RabbitMQ。当前后端基线`c108dff3069c90bfd0c49eb868276d8d617face8`的独立CI已通过；`355815f3d992edaf4f677374d7407554bd96ec7f`又选择性采用UX/UI owner固定`3876516a902fd020d1ab1cd4be8f339f9a9034b1`，完成当前ACTIVE服务Role模板头、精确版本/摘要冻结及不同浏览器来源只读恢复，并在本地真实PG18+IAM/Audit/PaaS门禁通过。其独立CI最终为cancelled：16项业务作业成功，`authority-recovery-window`被外部取消，依赖汇总正确失败，不能记作精确SHA通过；后继`91af2972fb16d6727845fc06c9485f8ea62ca80c`的独立CI已18项全部成功。当前完整Profile的同源签名A/B、APISIX后端消费者及离线生命周期已经实跑通过；浏览器也已通过该签名APISIX入口完成真实登录、四产品目录/详情读取并核对三个Deferred直达路由的禁用状态。签名入口下其余非Deferred写路径和完整IAM-UI-01–08仍有缺口，因此整个FEAT仍未验收。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -27,8 +27,8 @@
 | IAM-UI-04 | 实施中；系统/自定义策略、版本、JSON/可视化编辑及User/Role边界已有LIVE客户端 | 策略、版本、默认切换、边界和错误/冲突的完整浏览器及只读结果恢复仍缺；产品AuthorizationProfile不伪装成租户策略 |
 | IAM-UI-05 | 实施中；Role/trust/AssumeRole、会话时长、原始/当前身份和返回入口已接入，成员发现→承担→返回已有真实浏览器证据 | Role写入、附件/边界、管理员撤销与Role凭据业务请求仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
 | IAM-UI-06 | 实施中且有代码缺口；AccessKey、联系人、首次TOTP、恢复码和本人Session已有LIVE页面，首次绑定/MFA登录/结束其他Session已有真实浏览器证据 | TOTP换绑与主动移除尚未挂入LIVE provider；AccessKey一次性Secret/轮换/网络治理、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；WebAuthn明确Deferred |
-| IAM-UI-07 | 实施中；真实PostgreSQL创建→READY→SQL→组授权/撤权→终止/物理删除已通过；服务Role BIND在响应半断后由另一浏览器来源只读恢复已通过 | 其余命令与401/403/409/503矩阵、四产品各自页面以及当前签名安装入口仍需验收；不支持跨主体恢复 |
-| IAM-UI-08 | 实施中；LIVE失败不回退MOCK，未接入能力已有隔离EmptyState | 企业微信/SSO、Passkey/WebAuthn等保持禁用和Deferred；所有直达路由仍须证明不能出现可提交假表单 |
+| IAM-UI-07 | 实施中；真实PostgreSQL创建→READY→SQL→组授权/撤权→终止/物理删除已通过；服务Role BIND在响应半断后由另一浏览器来源只读恢复已通过；签名APISIX入口已显示四个正式产品及各自权威详情 | 其余四类命令与401/403/409/503矩阵、四产品写入路径及签名入口下的实际结果恢复仍需验收；不支持跨主体恢复 |
+| IAM-UI-08 | 实施中；LIVE失败不回退MOCK，未接入能力已有隔离EmptyState；签名APISIX入口已证明角色SSO、用户SSO和跨账号协作直达路由无可提交表单 | 企业微信/外部IdP、Passkey/WebAuthn、跨账号与角色链保持禁用和Deferred；新增Deferred入口仍须沿同一边界验收 |
 
 ## 详细设计
 
@@ -108,7 +108,7 @@ UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PD
 - 实例终止消费产品侧 `POST /managed-services/v1/service-installations/{installationId}/termination`，浏览器只发送当前 bearer 与冻结的 `Idempotency-Key`，不发送 Account、资源版本或请求体。允许从 `READY | ROLLBACK_FAILED | TERMINATION_FAILED` 发起；内容区先核对准确实例、产品、区域、观察到的资源版本和幂等请求，并要求输入实例 ID，永远不使用 Dialog。`TERMINATION_PENDING | TERMINATING` 只表示平台已接受并异步清理，不能显示为删除完成或提前归还配额；`TERMINATED` 后产品会物理删除容器、网络、持久化数据和托管凭据，并从权威目录移除实例、归还配额。网络或协议未知结果冻结原实例与幂等键，只能原样重试；401、403、404、409 与无效输入局部失败且不改写意图。轮询 404 只有在同一个正在终止的实例上才解释为需要重读权威目录，不能因另一实例正在终止而吞掉普通创建／读取错误。
 - UNKNOWN恢复只保存经过严格解码的非秘密原意图并绑定当前Account和有效身份；同源浏览器可保留该意图，不同浏览器来源只能显式导入完整摘要，再以原公开`Idempotency-Key`读取结果，禁止重新提交写请求。固定`964d7c85d2e9249541996d22b9b2d9b9189922ab`替换未接受的早期后端候选并实现服务端能力：`GET /managed-services/v1/command-results/{commandType}`只接受`QUOTA_ACTIVATE`、实例创建/终止和服务Role绑定/解绑五类命令，结果限最近七天、最多100项，且只返回原公开`idempotencyKey`、命令类型、服务端不透明输入承诺、`IN_PROGRESS|SUCCEEDED|FAILED`、非秘密目标、可选Operation/Binding及完成时间。公开幂等键独立于按动作域确定性派生的IAM私有request ID；浏览器只按原始键关联，绝不复制私有派生算法或把私有ID当作原始键。直接前驱中的服务Role命令没有保存可证明的原始键，因此默认不出现在查询中；只有同一当前主体、动作、目标和原始键在当前授权下精确重放，且前驱document/digest完全匹配，才可在不改写旧事实、摘要或终态的条件下关联该键。查无结果不表示可用新意图重发。Account和当前USER/ROLE身份都由当前IAM凭据推导；USER不能读取同Account另一USER的结果，ROLE只能以同一Role和原始主体谱系读取前三类命令，服务Role变更仍只允许原USER。Role历史由当前PaaS服务凭据调用IAM私有入口并逐项核对安装归属、用途、binding与不可变事实；不得以caller selector、平台身份、通用命令名或404推断原命令未提交。该接口不是授权permit，也不是通用回执框架；页面消费和真实跨来源门禁由下述切片验收。
 
-- 完整Profile仍为IAM85/Audit39/PaaS7、`contractRevision=35`；本次是首版发布前对同一未接受形状的替换，不再增加schema/revision。早期候选五进程运行暴露了“把IAM私有派生ID误标成公开幂等键”的语义缺陷，不能继续作为UNKNOWN恢复验收。固定`964d7c85d2e9249541996d22b9b2d9b9189922ab`已在本任务专属PostgreSQL 18通过93.555秒完整IAM HTTP纵向门禁和55.529秒Role门禁；包含该修复的基线`c108dff3069c90bfd0c49eb868276d8d617face8`之[Verification 38406821134](https://github.com/xiak/matrix/actions/runs/38406821134)已核实18项全部成功。当前`355815f3d992edaf4f677374d7407554bd96ec7f`补齐页面和真实跨浏览器门禁，其[Verification 38504465450](https://github.com/xiak/matrix/actions/runs/38504465450)仍在运行；同Profile签名A/B、APISIX和签名安装页面尚未完成，不能提前登记发布通过。
+- 完整Profile仍为IAM85/Audit39/PaaS7、`contractRevision=35`；本次是首版发布前对同一未接受形状的替换，不再增加schema/revision。早期候选五进程运行暴露了“把IAM私有派生ID误标成公开幂等键”的语义缺陷，不能继续作为UNKNOWN恢复验收。固定`964d7c85d2e9249541996d22b9b2d9b9189922ab`已在本任务专属PostgreSQL 18通过93.555秒完整IAM HTTP纵向门禁和55.529秒Role门禁；包含该修复的基线`c108dff3069c90bfd0c49eb868276d8d617face8`之[Verification 38406821134](https://github.com/xiak/matrix/actions/runs/38406821134)已核实18项全部成功。`355815f3d992edaf4f677374d7407554bd96ec7f`补齐页面和真实跨浏览器门禁，但其[Verification 38504465450](https://github.com/xiak/matrix/actions/runs/38504465450)最终为cancelled：16项业务作业成功，`authority-recovery-window`在测试未产生PASS/FAIL前被外部取消，依赖汇总正确失败；不得登记为精确SHA整轮通过。后继`91af2972fb16d6727845fc06c9485f8ea62ca80c`的[Verification 38511351736](https://github.com/xiak/matrix/actions/runs/38511351736)已核实18项全部成功；同Profile签名A/B、APISIX后端消费者和离线生命周期也已由下述固定门禁验收，但页面只完成签名入口增量路径，不能提前登记整个FEAT发布通过。
 
 该终止修复在本分支通过完整前端门禁：typecheck、lint、架构、228组多主题对比度、63个测试文件共1188项测试、3项归一化、47页生产构建、45项规范化和259文件嵌入一致性全部成功；`GOMAXPROCS=2`下`go test -count=1 -p 2 ./app/ui/paas/...`与`go vet -p 2 ./app/ui/paas/...`也通过。本机Node 23.11.1超出项目声明的受支持范围，只作为组合回归。精确提交`a06de4c8b82ddc1ed43221bc5745bb60850d85d8`的独立`console`、`go`、`node-process`和`installation-postgres-ha`作业成功，但同一[Verification 38158014907](https://github.com/xiak/matrix/actions/runs/38158014907)中的`authority-managed-products`与`authority-runtime`失败，汇总作业随之失败并使整轮终态为cancelled；因此不能把局部成功写成精确SHA独立CI验收。后继测试证据提交仍需以自身完整独立CI收口。
 
@@ -156,7 +156,7 @@ UX/UI固定`1fa26c88469ae6f77960e381ca852fe1e7c029a7`在当前集成树上的四
 
 当前分支只从UX/UI owner固定`3876516a902fd020d1ab1cd4be8f339f9a9034b1`采用九个既有application/domain/renderer/repository源码与测试文件；固定源父提交与本分支对应九个blob逐项相同，没有覆盖双方独立修改，也没有导入对方文档或验收状态。服务Role页面不再写死模板版本：它只接受稳定模板ID、ACTIVE状态、产品/purpose/workload及bind/unbind语义完全匹配的当前头，并在原意图中冻结服务端返回的正安全整数版本和摘要。导入器拒绝错误模板、非法版本/摘要、额外秘密字段或另一个身份；UNKNOWN恢复只调用结果GET，不调用bind/unbind写接口。
 
-受支持Node 24.19上的六个相关测试文件282/282通过，typecheck、全量lint、architecture及228组主题对比度通过；59页生产导出、57项路径规范化和319项Go嵌入文件由本分支重建，并与固定UX对象逐文件一致。`app/ui/paas` Go test/vet及嵌入等价检查通过。本地默认Node 23不在项目engine范围，已停止其停滞进程且不把结果计作证据；正式Node 22结论等待当前提交的独立`console`作业。
+受支持Node 24.19上的六个相关测试文件282/282通过，typecheck、全量lint、architecture及228组主题对比度通过；59页生产导出、57项路径规范化和319项Go嵌入文件由本分支重建，并与固定UX对象逐文件一致。`app/ui/paas` Go test/vet及嵌入等价检查通过。本地默认Node 23不在项目engine范围，已停止其停滞进程且不把结果计作证据。后继`91af2972`的独立`console`作业已在受支持Node 22上通过69个文件、1391项测试、architecture及228组主题对比度；默认CI明确跳过显式opt-in浏览器fixture，故该结果仍不替代本节的真实跨来源页面证据。
 
 显式opt-in `TestIAMManagedServiceCommandRecoveryConsoleBrowser`使用全新限额PostgreSQL 18、受限IAM/Audit/PaaS、dispatcher、真实托管PostgreSQL 18 worker和嵌入控制台。浏览器A以普通USER及明确的PaaSDeveloper、ServiceRoleAdministrator授权打开真实READY实例，读取当前模板v2并提交精确实例绑定；测试代理在后端200已生成后先提交成功响应头和半段正文再关闭连接，页面必须进入UNKNOWN且不提供写重试。浏览器B使用同端口但不同`localhost`来源，登录同一身份前没有A的localStorage，只能导入非秘密摘要并按原键读取；页面显示服务端确认成功、准确Binding ID和输入承诺。后端在完成标记后断言恰好一次POST、A/B Host不同、B至少一次成功GET、公开幂等键一致、唯一ACTIVE绑定、已投递outbox、两个不可变USER Audit事实及完整租户链。全新数据库上的fixture通过150.63秒，race package通过154.344秒，结束后本任务浏览器、产品资源、控制PG、卷和网络均清理。
 
@@ -166,4 +166,12 @@ UX/UI固定`1fa26c88469ae6f77960e381ca852fe1e7c029a7`在当前集成树上的四
 
 固定生产源码`60cfc01292405cd9afd2108c3db769011d70f1fa`已经组装并验签同源Release A `matrix-v0.1.0-iam.r35.1-60cfc0129240`与B `matrix-v0.1.0-iam.r35.2-60cfc0129240`，二者均为IAM85/Audit39/PaaS7、`contractRevision=35`，且包含当前嵌入控制台和四个正式托管产品。在本任务独立、断网、限额Docker 27.5.1引擎中，效果门禁以985.02秒通过APISIX USER/AccessKey、真实SMTP/TOTP、安全通知、四产品provider、服务Role默认拒绝→显式授权→绑定/撤销、完整Audit、应用、备份、升级/回滚/恢复；只重启该任务引擎后的76.58秒只读门禁再次通过。唯一运行事实由[FEAT-005当前IAM85消费者门禁](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam85-four-product-release-consumer-gate)拥有。
 
-签名生产位保持`60cfc012`不变；后继`c624eda7`、`e51ae7d`、`8121ca6`和`91af2972`仅修正现有安装验收owner对既有activation、显式服务Role权限、完整Audit分页和RoleSession撤权顺序的错误假设。它们不把签名安装通过解释为页面业务通过。当前唯一剩余的入口组合缺口是：浏览器必须实际访问这套签名安装的APISIX入口并完成IAM-UI-01–08中所有非Deferred路径。`91af2972`的[Verification 38511351736](https://github.com/xiak/matrix/actions/runs/38511351736)已由测试owner独立核实18项全部成功；`console`在受支持Node上通过69个文件、1391项测试、architecture及228组对比度检查。默认工作流明确跳过opt-in跨浏览器及签名生命周期fixture，故该CI不替代上述页面效果证据。
+签名生产位保持`60cfc012`不变；后继`c624eda7`、`e51ae7d`、`8121ca6`和`91af2972`仅修正现有安装验收owner对既有activation、显式服务Role权限、完整Audit分页和RoleSession撤权顺序的错误假设。它们不把签名安装通过解释为页面业务通过。`91af2972`的[Verification 38511351736](https://github.com/xiak/matrix/actions/runs/38511351736)已由测试owner独立核实18项全部成功；`console`在受支持Node上通过69个文件、1391项测试、architecture及228组对比度检查。默认工作流明确跳过opt-in跨浏览器及签名生命周期fixture，故该CI不替代页面效果证据。
+
+### 当前签名 APISIX 浏览器增量证据
+
+2026-10-14，在上述`60cfc012`同源Release的保留安装上，只为本次浏览器观察增加任务私有、loopback绑定的HTTP反向代理，把浏览器请求原样送入该安装的APISIX；代理不注入凭据、Account、租户selector或授权结果，不是产品组成部分。浏览器以真实普通User从签名入口登录；该User的首次强制改密最终提交仍由同一签名入口公开IAM API完成，旧密码随后返回401，新密码重新登录且`mustChangePassword=false`。因此本轮接受“签名入口登录和改密后的会话可用”，不接受“最终改密按钮已经由纯浏览器完成”。
+
+登录后的控制台从权威LIVE接口显示四个正式产品及其准确版本：Elasticsearch 8.19.23、MySQL 8.4、PostgreSQL 18与RabbitMQ 4.1.8；逐个进入产品页均能读取稳定产品ID、版本、激活/可用配额及实例计数，页面明确不以MOCK补齐。RabbitMQ配额页读取真实配额，实例页显示原命令只读恢复入口及五类命令、七天/100项、查无结果不代表未提交等边界；本轮没有实际制造UNKNOWN或完成签名入口下的写入恢复，故不回填IAM-UI-07剩余矩阵。
+
+同一签名入口直接访问角色SSO、用户SSO与跨账号协作路由，均显示明确“尚未接入后端”的禁用状态，没有可提交表单；这关闭IAM-UI-08中这三个既有直达路由的假能力风险，不扩大为企业微信、外部IdP、Passkey/WebAuthn、跨账号授权或角色链已经交付。观察期间签名安装外层引擎的启动时间和重启计数保持不变，内部12个进程持续健康；该增量仍不替代IAM-UI-01–07剩余写路径、错误矩阵及UX/UI owner正在补齐的TOTP换绑/移除。
