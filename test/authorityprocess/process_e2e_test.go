@@ -3376,6 +3376,33 @@ func TestBrowserResponseLossTracksAllPostLossManagedServiceWrites(t *testing.T) 
 	}
 }
 
+func TestBrowserResponseLossTracksWriteRejectedByFixtureCapacity(t *testing.T) {
+	loss := &browserResponseLoss{}
+	loss.markLost()
+	requests := make(chan struct{}, 1)
+	requests <- struct{}{}
+	backendCalled := false
+	handler := iamConsoleBrowserFixtureHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		backendCalled = true
+	}), requests, loss)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost,
+		"http://browser-b.example/api/managed-services/v1/service-installations", nil))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("capacity response status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	if backendCalled {
+		t.Fatal("capacity-rejected request reached the backend")
+	}
+	observation := loss.snapshot()
+	if observation.PostLossWrites != 1 || observation.PostLossMethod != http.MethodPost ||
+		observation.PostLossPath != "/api/managed-services/v1/service-installations" ||
+		observation.PostLossHost != "browser-b.example" {
+		t.Fatalf("capacity-rejected post-loss write = %#v", observation)
+	}
+}
+
 func loseBrowserFixtureResponse(target http.ResponseWriter, source *httptest.ResponseRecorder) bool {
 	body := source.Body.Bytes()
 	if len(body) < 2 {
@@ -3472,13 +3499,30 @@ func startIAMConsoleBrowserWithResponseLoss(
 		mux.Handle(route.prefix, http.StripPrefix(route.strip, proxy))
 	}
 	requests := make(chan struct{}, 16)
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewUnstartedServer(iamConsoleBrowserFixtureHandler(mux, requests, responseLoss))
+	server.Config.ReadHeaderTimeout = 5 * time.Second
+	server.Config.ReadTimeout = 30 * time.Second
+	server.Config.WriteTimeout = 30 * time.Second
+	server.Config.IdleTimeout = 30 * time.Second
+	server.Start()
+	return server, ui, func() {
+		server.Close()
+		transport.CloseIdleConnections()
+	}
+}
+
+func iamConsoleBrowserFixtureHandler(
+	mux http.Handler,
+	requests chan struct{},
+	responseLoss *browserResponseLoss,
+) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if responseLoss != nil {
+			responseLoss.observePostLossManagedServiceWrite(r)
+		}
 		select {
 		case requests <- struct{}{}:
 			defer func() { <-requests }()
-			if responseLoss != nil {
-				responseLoss.observePostLossManagedServiceWrite(r)
-			}
 			if responseLoss != nil && responseLoss.matchesRecovery(r) {
 				captured := httptest.NewRecorder()
 				mux.ServeHTTP(captured, r)
@@ -3511,16 +3555,7 @@ func startIAMConsoleBrowserWithResponseLoss(
 		default:
 			http.Error(w, "browser fixture capacity exceeded", http.StatusServiceUnavailable)
 		}
-	}))
-	server.Config.ReadHeaderTimeout = 5 * time.Second
-	server.Config.ReadTimeout = 30 * time.Second
-	server.Config.WriteTimeout = 30 * time.Second
-	server.Config.IdleTimeout = 30 * time.Second
-	server.Start()
-	return server, ui, func() {
-		server.Close()
-		transport.CloseIdleConnections()
-	}
+	})
 }
 
 func assertBrowserIdentityFlow(
