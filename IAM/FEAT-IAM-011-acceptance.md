@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；当前未发布形状为IAM85/Audit39/PaaS7、`contractRevision=35`，唯一直接前驱是固定`ba2ea256528349f1300092ba0fd44641d758accb`的IAM84/Audit39/PaaS6+r34。后端基线`c108dff3069c90bfd0c49eb868276d8d617face8`的[Verification 38406821134](https://github.com/xiak/matrix/actions/runs/38406821134)及测试后继`91af2972fb16d6727845fc06c9485f8ea62ca80c`的[Verification 38511351736](https://github.com/xiak/matrix/actions/runs/38511351736)均已核实18项全部成功；中间`355815f3d992edaf4f677374d7407554bd96ec7f`的CI因`authority-recovery-window`外部取消而整体cancelled，仍不回填为成功。当前Profile同源签名A/B、APISIX后端消费者、四产品、完整离线生命周期及AC-11当前可兑现的双副本/过载/故障边界已经实跑通过；生产账号公平性SLO与安装级数据库HA因缺少真实部署前提明确Deferred，不作为首版已具备能力。签名APISIX浏览器已完成真实登录、四产品权威只读页面及三个Deferred路由的禁用核对；其余写路径和FEAT-010完整IAM-UI-01–08仍未验收，整体需求仍为实施中。
+- 状态：实施中；当前未发布形状为IAM85/Audit39/PaaS7、`contractRevision=35`，唯一直接前驱是固定`ba2ea256528349f1300092ba0fd44641d758accb`的IAM84/Audit39/PaaS6+r34。后端基线`c108dff3069c90bfd0c49eb868276d8d617face8`的[Verification 38406821134](https://github.com/xiak/matrix/actions/runs/38406821134)、测试后继`91af2972fb16d6727845fc06c9485f8ea62ca80c`的[Verification 38511351736](https://github.com/xiak/matrix/actions/runs/38511351736)及当前组合固定`ad83baa59a599d5b24675b4990c21590e27984eb`的[Verification 38551998246](https://github.com/xiak/matrix/actions/runs/38551998246)均已核实18项全部成功；中间`355815f3d992edaf4f677374d7407554bd96ec7f`的CI因`authority-recovery-window`外部取消而整体cancelled，仍不回填为成功。当前Profile同源签名A/B、APISIX后端消费者、四产品、完整离线生命周期及AC-11当前可兑现的双副本/过载/故障边界已经实跑通过；生产账号公平性SLO与安装级数据库HA因缺少真实部署前提明确Deferred，不作为首版已具备能力。签名APISIX浏览器已完成真实登录、四产品权威只读页面及三个Deferred路由的禁用核对；本机真实浏览器已完成五类托管服务命令的跨来源UNKNOWN只读恢复，但签名入口写路径和FEAT-010完整IAM-UI-01–08仍未验收，整体需求仍为实施中。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -29,8 +29,8 @@
 | 总体架构、高可用与容量边界 | [000总体架构](FEAT-IAM-000-product-contract.md#总体架构)及其可用性、容量与一致性段落，跨产品边界由ADR-0002拥有 | 设计已完成；当前多IAM副本、失败关闭、受限容量与数据库切换夹具已有证据，部署尚不支持的完整数据库HA继续明确列为缺口，不虚构SLO |
 | 详细设计与API约定 | 001–010各自拥有行为、锁序、事务、API/schema及验收；000只拥有公共wire/版本/分页约定 | 已完成当前范围设计；没有新增平行模型、通用receipt框架或第二套API文档 |
 | 分解为可验收FEAT | 001–011覆盖本轮实现与组合验收，012保存满足前置后才启动的外部集成 | 已完成分解；每项有唯一owner，固定来源采用记录仍由既有adoption文件拥有 |
-| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：后端当前范围、真实产品资源浏览器闭环、当前源码的配额激活与实例创建以及此前固定源码的服务Role跨浏览器UNKNOWN只读恢复、当前Profile签名/APISIX后端消费者已实现；`d02c43c`补入的TOTP换绑、主动移除和普通受限重新绑定已通过真实PG18/Audit/浏览器组合门禁，签名入口的登录、四产品只读页面与三个Deferred直达路由也已核对，但真实SMTP/外部认证器、强制MFA重新绑定、010其余命令/故障/签名写路径和完整IAM-UI-01–08仍缺验收，延期的012不因此被错误改为本轮实现 |
-| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07已由当前Profile同源签名A/B及离线生命周期通过，IAM-AC-08由真实PostgreSQL 18浏览器闭环通过，IAM-AC-11当前受限容量、失败关闭、业务隔离、恢复与受控数据库切换边界已有真实证据，最新测试后继独立CI已通过；签名入口已有只读增量证据，剩余缺口是签名页面写路径与IAM-UI-01–08非Deferred路径。生产账号公平性SLO和安装级数据库HA保持Deferred，不冒充已交付能力 |
+| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：后端当前范围、真实产品资源浏览器闭环、五类托管服务命令的跨浏览器UNKNOWN只读恢复及当前Profile签名/APISIX后端消费者已实现；`d02c43c`补入的TOTP换绑、主动移除和普通受限重新绑定已通过真实PG18/Audit/浏览器组合门禁，签名入口的登录、四产品只读页面与三个Deferred直达路由也已核对，但真实SMTP/外部认证器、强制MFA重新绑定、010其余故障/签名写路径和完整IAM-UI-01–08仍缺验收，延期的012不因此被错误改为本轮实现 |
+| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07已由当前Profile同源签名A/B及离线生命周期通过，IAM-AC-08由真实PostgreSQL 18浏览器闭环通过，IAM-AC-11当前受限容量、失败关闭、业务隔离、恢复与受控数据库切换边界已有真实证据，当前组合独立CI已通过；本机跨来源已验证五类命令的结果恢复，签名入口已有只读增量证据，剩余缺口是签名页面写路径、真实错误矩阵与IAM-UI-01–08非Deferred路径。生产账号公平性SLO和安装级数据库HA保持Deferred，不冒充已交付能力 |
 
 只有上表仍列出的未完成边界均获得其owner的真实证据后，才能把000及本总目标标为Accepted。设计文件齐全、静态页面、组件测试、健康端点、另一个分支的浏览器结果或局部CI成功都不能改变这一判定。
 
