@@ -522,6 +522,103 @@ func TestSignedManagedProductActivationReusesTheAccountActivation(t *testing.T) 
 	}
 }
 
+func TestSignedManagedProductServiceRoleAuthorityIsExplicitlyDelegated(t *testing.T) {
+	now := time.Date(2026, time.October, 14, 1, 2, 3, 456000000, time.UTC)
+	tenant := tenantRetention{
+		Account: iamv1.Account{
+			APIVersion: iamv1.APIVersion,
+			Kind:       "Account",
+			ID:         "account-product",
+			RootIdentity: iamv1.RootIdentity{
+				PrincipalID: "user-root",
+			},
+		},
+		RetainedPrimaryCredential: []byte("fixture-bearer"),
+	}
+	target := iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: "user-root"}
+	attachment := iamv1.PolicyAttachment{
+		APIVersion:      iamv1.APIVersion,
+		Kind:            "PolicyAttachment",
+		ID:              "attachment-service-role-administrator",
+		AccountID:       tenant.Account.ID,
+		Target:          target,
+		PolicyID:        iamv1.SystemPolicyServiceRoleAdministrator,
+		Scope:           iamv1.AuthorityScopeTenant,
+		ResourceVersion: 1,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	change := iamv1.PolicyAttachmentChange{
+		APIVersion:            iamv1.APIVersion,
+		Kind:                  "PolicyAttachmentChange",
+		Operation:             iamv1.PolicyAttachmentChangeCreate,
+		AccountID:             tenant.Account.ID,
+		ActorPrincipalID:      tenant.Account.RootIdentity.PrincipalID,
+		RequestID:             serviceRoleAdministratorRequestID,
+		CompletedAt:           now,
+		Target:                &target,
+		PolicyID:              attachment.PolicyID,
+		PolicyResourceVersion: 1,
+		Attachment:            &attachment,
+	}
+	var sequence atomic.Int32
+	var invalid atomic.Bool
+	reject := func(response http.ResponseWriter) {
+		invalid.Store(true)
+		response.Header().Set("Content-Type", "application/problem+json")
+		response.WriteHeader(http.StatusBadRequest)
+		_, _ = response.Write([]byte(`{}`))
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer fixture-bearer" {
+			reject(response)
+			return
+		}
+		switch sequence.Add(1) {
+		case 1:
+			if request.Method != http.MethodGet || request.URL.Path != "/api/iam/v1/service-role-templates" {
+				reject(response)
+				return
+			}
+			response.Header().Set("Content-Type", "application/problem+json")
+			response.WriteHeader(http.StatusForbidden)
+			_, _ = response.Write([]byte(`{}`))
+		case 2:
+			var body iamv1.CreatePolicyAttachmentRequest
+			if request.Method != http.MethodPost || request.URL.Path != "/api/iam/v1/policy-attachments" ||
+				json.NewDecoder(request.Body).Decode(&body) != nil || body.Target != target ||
+				body.PolicyID != iamv1.SystemPolicyServiceRoleAdministrator ||
+				body.PolicyResourceVersion != 1 || body.RequestID != serviceRoleAdministratorRequestID {
+				reject(response)
+				return
+			}
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(attachment)
+		case 3:
+			if request.Method != http.MethodGet || request.URL.Path !=
+				"/api/iam/v1/policy-attachment-changes/by-request/"+serviceRoleAdministratorRequestID {
+				reject(response)
+				return
+			}
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(change)
+		default:
+			reject(response)
+		}
+	}))
+	defer server.Close()
+
+	client := newEdgeClient(server.URL)
+	defer client.close()
+	value := gate{edge: client}
+	if err := value.delegateSignedManagedProductServiceRoleAuthority(context.Background(), &tenant); err != nil {
+		t.Fatalf("delegate service role authority: %v", err)
+	}
+	if invalid.Load() || sequence.Load() != 3 {
+		t.Fatalf("service role authority requests=%d invalid=%t", sequence.Load(), invalid.Load())
+	}
+}
+
 func TestPhase1AccessKeySignerBindsExactNorthboundRequest(t *testing.T) {
 	createdAt := time.Date(2026, time.October, 7, 1, 2, 3, 456000000, time.UTC)
 	material := bytes.Repeat([]byte{0x2a}, 32)

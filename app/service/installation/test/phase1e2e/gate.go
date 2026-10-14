@@ -54,6 +54,7 @@ const (
 	tenantConfigurationRev             paasv1.ResourceID = "phase1-tenant-configuration-r1"
 	postUpgradeApplicationID           paasv1.ResourceID = "phase1-after-upgrade"
 	delegatedGroupAttachmentRequestID                    = "phase1-group-policy"
+	serviceRoleAdministratorRequestID                    = "phase1-service-role-administrator"
 	preBackupAttachmentCreateRequestID                   = "phase1-grant-alpha"
 	preBackupAttachmentRevokeRequestID                   = "phase1-revoke-child-attachment"
 )
@@ -470,6 +471,9 @@ func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
 		return fail("signed-managed-products-tenant")
 	}
 	tenant := &value.retainedIAM.Tenants[0]
+	if err := value.delegateSignedManagedProductServiceRoleAuthority(ctx, tenant); err != nil {
+		return err
+	}
 	products := []signedManagedProduct{
 		{name: "PostgreSQL 18", component: "postgres", serviceID: managedservicev1.PostgreSQLServiceID,
 			offeringID:   managedservicev1.PostgreSQLOfferingID,
@@ -495,6 +499,51 @@ func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
 	}
 	if _, err := value.edge.verifyAuditChain(ctx, tenant.RetainedPrimaryCredential, tenant.Account.ID, ""); err != nil {
 		return fail("signed-managed-products-audit-chain")
+	}
+	return nil
+}
+
+func (value *gate) delegateSignedManagedProductServiceRoleAuthority(
+	ctx context.Context,
+	tenant *tenantRetention,
+) error {
+	if tenant == nil || len(tenant.RetainedPrimaryCredential) == 0 ||
+		tenant.Account.ID == "" || tenant.Account.RootIdentity.PrincipalID == "" {
+		return fail("signed-managed-product-service-role-authority-input")
+	}
+	bearer := tenant.RetainedPrimaryCredential
+	denied, err := value.edge.json(
+		ctx, http.MethodGet, "/api/iam/v1/service-role-templates", bearer,
+		nil, nil, http.StatusForbidden,
+	)
+	if err != nil {
+		return fail("signed-managed-product-service-role-authority-default-denial")
+	}
+	clear(denied.body)
+
+	request := iamv1.CreatePolicyAttachmentRequest{
+		Target: iamv1.PolicyAttachmentTarget{
+			Kind: iamv1.PolicyTargetUser,
+			ID:   string(tenant.Account.RootIdentity.PrincipalID),
+		},
+		PolicyID:              iamv1.SystemPolicyServiceRoleAdministrator,
+		PolicyResourceVersion: 1,
+		RequestID:             serviceRoleAdministratorRequestID,
+	}
+	var attachment iamv1.PolicyAttachment
+	if err := value.edge.mutateIAM(
+		ctx, "/policy-attachments", bearer, request, &attachment, http.StatusOK,
+	); err != nil || iamv1.ValidatePolicyAttachment(attachment) != nil ||
+		attachment.AccountID != tenant.Account.ID || attachment.Target != request.Target ||
+		attachment.PolicyID != request.PolicyID || attachment.Scope != iamv1.AuthorityScopeTenant ||
+		attachment.InstallationID != "" || attachment.ResourceVersion != 1 || attachment.RevokedAt != nil {
+		return fail("signed-managed-product-service-role-authority-delegation")
+	}
+	change, err := value.edge.policyAttachmentChange(ctx, bearer, request.RequestID)
+	if err != nil || !policyAttachmentCreateChangeMatches(
+		change, tenant.Account.RootIdentity.PrincipalID, attachment, request,
+	) {
+		return fail("signed-managed-product-service-role-authority-receipt")
 	}
 	return nil
 }
