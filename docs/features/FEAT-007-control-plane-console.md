@@ -1855,7 +1855,9 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-The current personal-factor and LIVE-entry closure keeps the shared Card,
+The current personal-factor and LIVE-entry closure is fixed in
+[`11151a06aa920438ae9d9f55252ec203a1f491d8`](https://github.com/xiak/matrix/commit/11151a06aa920438ae9d9f55252ec203a1f491d8)
+and keeps the shared Card,
 form, focus, keyed-locale and theme owners; its business and wire boundaries
 remain with [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#本人-mfa-生命周期的固定客户端接入).
 With Node 22.22.2/npm 11.6.4, the complete frontend run passed 70 files and
