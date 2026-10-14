@@ -3,10 +3,10 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-10-13
+- Updated: 2026-10-14
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `2fe2b43cddd1319c43c3d930767c07a382b06917`
+- Pushed source/embed candidate: `3876516a902fd020d1ab1cd4be8f339f9a9034b1`
 
 ## Authoritative route
 
@@ -23,16 +23,20 @@
 
 ## Pushed milestone
 
-The existing managed-product command surface now supports read-only recovery
-of original uncertain outcomes, including an explicit non-secret summary that
-can be carried to an isolated browser. The strict LIVE client consumes the
-fixed public contract at backend
-`964d7c85d2e9249541996d22b9b2d9b9189922ab`; it correlates the original public
-idempotency key, not a private IAM request identity or a client-computed digest.
-The accepted MOCK composition remains available. No backend or IAM-branch UI
-was imported. Current supported-runtime frontend, static export,
-embedded-asset equality and UI-host Go gates passed. Exact scope, donor
-decisions and acceptance evidence stay with the authoritative owners above.
+The existing managed-product authorization client now follows the trusted
+directory's ACTIVE template head by stable workload semantics instead of a
+browser-pinned version. It preserves the exact received reference in original
+commands and portable summaries, while UNKNOWN recovery remains read-only and
+correlates only the original public idempotency key. The fixed public backend
+source remains `964d7c85d2e9249541996d22b9b2d9b9189922ab`; no donor backend or UI
+was imported, and the inspectable MOCK remains available.
+
+Supported-runtime focused source checks, production export, embedded equality
+and UI-host Go gates passed. Two complete local frontend attempts were not
+green; do not replace that boundary with the focused or isolated results.
+Exact failures and outcomes stay with FEAT-007. The candidate awaits the IAM
+branch's existing independent Node 22 console job on a separately recorded,
+blob-matched integration SHA. No workflow or unrelated timeout was changed.
 
 ## Continuation boundary
 
@@ -40,7 +44,7 @@ Keep the accepted MOCK UI available and adapt its existing composition and
 repository boundaries when integrating real contracts. Do not silently enable
 mandatory authentication in the user's UX preview environment.
 
-The IAM engineer received the fixed source/embed milestone for selective
+The IAM engineer received the fixed source/embed candidate for selective
 integration and owns the separate real PG/IAM/Audit/PaaS and two-isolated-browser
 UNKNOWN gate. This UI milestone does not claim those runtime or signed-install
 results. Existing login/MFA pages and remaining LIVE lifecycle gaps stay with
