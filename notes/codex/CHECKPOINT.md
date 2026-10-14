@@ -34,11 +34,12 @@ was imported, and the inspectable MOCK remains available.
 Supported-runtime focused source checks, production export, embedded equality
 and UI-host Go gates passed. Two complete local frontend attempts were not
 green; do not replace that boundary with the focused or isolated results.
-Exact failures and outcomes stay with FEAT-007. The candidate awaits the IAM
-branch's existing independent Node 22 console job. Selected source blobs and
-the complete embedded tree have been verified against integration
-`355815f3d992edaf4f677374d7407554bd96ec7f`; exact integration and CI references
-stay with FEAT-007. No workflow or unrelated timeout was changed.
+Exact local failures and the independent CI outcome stay with FEAT-007. The
+complete frontend gate passed in the IAM branch's existing Node 22 console job
+at integration `91af2972fb16d6727845fc06c9485f8ea62ca80c`; its entire source and
+embedded trees match the fixed UI object. This does not rewrite the local
+failures or accept the separate opt-in/runtime/signed-browser gates. No
+workflow or unrelated timeout was changed.
 
 ## Continuation boundary
 

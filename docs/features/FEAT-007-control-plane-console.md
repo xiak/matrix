@@ -1890,17 +1890,27 @@ accepted as green:
   was changed, and no third complete local run was started.
 
 The fixed UI candidate `3876516a902fd020d1ab1cd4be8f339f9a9034b1` was selectively
-adapted into IAM integration `355815f3d992edaf4f677374d7407554bd96ec7f`. Read-only
-Git-object verification confirms all nine selected source/test blobs and the
-complete 319-file embedded tree are identical. Formal complete frontend
-acceptance still awaits that integration's independent Node 22 `console` job
-in [Verification 38504465450](https://github.com/xiak/matrix/actions/runs/38504465450);
-no earlier commit's green result is inherited. The UX workflow has no frontend
-Node job; its automatic Go Verification is not a substitute and no duplicate
-workflow was added. The separate real PG/Audit and two-isolated-browser UNKNOWN
-gate remains owned by [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md). Focused
-local behavior and static-delivery checks do not claim complete frontend,
-runtime or signed-install acceptance.
+adapted into IAM integration `355815f3d992edaf4f677374d7407554bd96ec7f` and is
+unchanged in the current integration `91af2972fb16d6727845fc06c9485f8ea62ca80c`.
+Read-only Git-object verification confirms the entire frontend source tree
+and complete 319-file embedded tree are identical to the owner object. The
+IAM owner and independent test reviewer verified attempt 1 of
+[Verification 38511351736](https://github.com/xiak/matrix/actions/runs/38511351736)
+at that exact integration SHA. Its supported Node 22
+[`console` job 115680675175](https://github.com/xiak/matrix/actions/runs/38511351736/job/115680675175)
+completed successfully: 69 files / 1,391 tests, architecture and 228 contrast
+pairs all passed. This closes the fixed source's complete frontend gate, not
+the earlier failed local runs; no old commit's green result is inherited.
+The UX workflow has no frontend Node job; its automatic Go Verification is
+not a substitute and no duplicate workflow was added.
+
+The independent CI explicitly skips
+`TestIAMManagedServiceCommandRecoveryConsoleBrowser` and does not run
+`phase1e2e`; therefore its success cannot replace the separate real PG/Audit,
+two-isolated-browser UNKNOWN or signed-install browser gates owned by
+[FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md). This accepts complete frontend
+regression and static delivery only, not all IAM UI paths, runtime or release
+acceptance.
 
 The current service-enablement and resource-admission slice passed the complete 66-file/1,239-case
 frontend suite plus three export-normalization cases, typecheck, lint,
