@@ -178,6 +178,7 @@ const (
 	authorityProcessIdentityBrowser
 	authorityProcessPersonalSecurityBrowser
 	authorityProcessBrowser
+	authorityProcessCommandRecoveryBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
@@ -243,6 +244,21 @@ func TestIAMConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessBrowser)
 }
 
+// This opt-in fixture proves that a browser can recover a committed managed-
+// service command after losing its response. Two isolated browser profiles are
+// required: the first exports the non-secret intent and the second imports it
+// and performs only the bounded command-result read.
+func TestIAMManagedServiceCommandRecoveryConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_COMMAND_RECOVERY_CONSOLE_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_COMMAND_RECOVERY_CONSOLE_BROWSER=1 for the bounded LIVE command-recovery browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("command-recovery browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	_ = managedProductImagesFromEnvironment(t)
+	testIndependentAuthorityProcesses(t, authorityProcessCommandRecoveryBrowser)
+}
+
 // This gate provisions actual PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19
 // and RabbitMQ 4.1 product resources through the public PaaS API and the
 // production worker. Catalog rows, accepted commands, synthetic endpoints or
@@ -283,7 +299,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		// observation harness; sample count, password cost and product request
 		// deadlines remain unchanged.
 		duration = 8 * time.Minute
-	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser || mode == authorityProcessPersonalSecurityBrowser {
+	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser ||
+		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -314,7 +331,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// production worker, so preloading the synthetic machine fingerprint would
 	// correctly make its first host observation fail closed. Let that worker
 	// create the profile from the actual bounded Docker host instead.
-	if mode != authorityProcessBrowser && mode != authorityProcessManagedProducts {
+	if mode != authorityProcessBrowser && mode != authorityProcessCommandRecoveryBrowser && mode != authorityProcessManagedProducts {
 		seedProcessExecutionProfile(t, ctx, adminConfig)
 	}
 
@@ -372,7 +389,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		[]byte(runtimeDSN(t, adminConfig, paasWorkerLogin, processDBPassword)),
 	)
 	managedPaasWorkerDSNPath := ""
-	if mode == authorityProcessBrowser || mode == authorityProcessManagedProducts {
+	if mode == authorityProcessBrowser || mode == authorityProcessCommandRecoveryBrowser || mode == authorityProcessManagedProducts {
 		managedPaasWorkerDSNPath = writeProtectedFile(
 			t,
 			temporary,
@@ -609,7 +626,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
 	managedRuntime := managedProductRuntime{}
-	if mode == authorityProcessBrowser || mode == authorityProcessManagedProducts {
+	if mode == authorityProcessBrowser || mode == authorityProcessCommandRecoveryBrowser || mode == authorityProcessManagedProducts {
 		managedRuntime = startManagedProductWorker(
 			t, ctx, admin, adminConfig, root, temporary, managedPaasWorkerDSNPath, start, startWithArguments,
 		)
@@ -697,6 +714,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	if mode == authorityProcessBrowser {
 		runIAMConsoleBrowser(t, ctx, admin, root, temporary, managedRuntime,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
+		return
+	}
+	if mode == authorityProcessCommandRecoveryBrowser {
+		sensitive = append(sensitive, runIAMManagedServiceCommandRecoveryConsoleBrowser(
+			t, ctx, admin, root, temporary, managedRuntime,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)...)
 		return
 	}
 	if mode == authorityProcessManagedProducts {
@@ -2553,6 +2577,174 @@ func runIAMConsoleBrowser(
 	t.Log("browser fixture finished with real policy/group UI changes and a PostgreSQL 18 resource proven READY by SQL before browser termination; physical runtime/data/credential deletion, quota return, terminal Operation, allow/revoke decisions and the verified Audit chain all passed; visual assertions belong to recorded browser observations")
 }
 
+func runIAMManagedServiceCommandRecoveryConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	managedRuntime managedProductRuntime,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	const loginName = "browser.command.recovery"
+	member := createIAMUser(t, iamEndpoint, ownerBearer, loginName,
+		"Browser command recovery", initialDeveloperPassword, "browser-command-recovery-user-create")
+	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, member.ID,
+		iamv1.SystemPolicyPaaSDeveloper, "browser-command-recovery-paas-grant")
+	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, member.ID,
+		iamv1.SystemPolicyServiceRoleAdministrator, "browser-command-recovery-service-role-grant")
+	initial := loginIAM(t, iamEndpoint, loginName+"@organization-process", initialDeveloperPassword,
+		"browser-command-recovery-initial-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "browser-command-recovery-password")
+	memberLogin := loginIAM(t, iamEndpoint, loginName+"@organization-process", changedDeveloperPassword,
+		"browser-command-recovery-login")
+
+	base := paasEndpoint + "/managed-services/v1"
+	product := managedPostgresFixture(t, "command-recovery", managedRuntime.images.postgres)
+	defer cleanupManagedProduct(t, managedRuntime, product)
+	defer cleanupManagedProductWorker(t, managedRuntime.workerContainer, managedRuntime.volumeName)
+	definitionResponse := performJSON(t, http.MethodGet,
+		base+"/services/"+product.serviceID, ownerBearer, nil)
+	var definition managedservicev1.ServiceDefinition
+	if definitionResponse.Status != http.StatusOK || json.Unmarshal(definitionResponse.Body, &definition) != nil ||
+		managedservicev1.ValidateServiceDefinition(definition) != nil || definition.ID != product.serviceID ||
+		definition.State != managedservicev1.ServiceDefinitionAvailable {
+		t.Fatalf("read command-recovery service definition status=%d body=%s", definitionResponse.Status, definitionResponse.Body)
+	}
+	activationRequest := managedservicev1.ActivateServiceRequest{Service: managedservicev1.ServiceDefinitionReference{
+		ID: definition.ID, Revision: definition.Revision, ContentDigest: definition.ContentDigest,
+	}}
+	activationResponse := performJSONWithIdempotency(t, http.MethodPost, base+"/service-activations", ownerBearer,
+		"browser-command-recovery-service-activation", activationRequest)
+	var activation managedservicev1.ServiceActivation
+	if activationResponse.Status != http.StatusCreated || json.Unmarshal(activationResponse.Body, &activation) != nil ||
+		managedservicev1.ValidateServiceActivation(activation) != nil || activation.Service != activationRequest.Service {
+		t.Fatalf("activate command-recovery service status=%d body=%s", activationResponse.Status, activationResponse.Body)
+	}
+	quotaRequest := managedservicev1.ActivateQuotaRequest{
+		OfferingID: product.offeringID, QuotaShapeID: product.quotaShapeID, InstanceCount: 1,
+	}
+	quotaResponse := performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", ownerBearer,
+		"browser-command-recovery-quota", quotaRequest)
+	var quota managedservicev1.QuotaEntitlement
+	if quotaResponse.Status != http.StatusCreated || json.Unmarshal(quotaResponse.Body, &quota) != nil ||
+		managedservicev1.ValidateQuotaEntitlement(quota) != nil || quota.OfferingID != product.offeringID ||
+		quota.QuotaShapeID != product.quotaShapeID || quota.PurchasedCount != 1 {
+		t.Fatalf("activate command-recovery quota status=%d body=%s", quotaResponse.Status, quotaResponse.Body)
+	}
+	createRequest := managedservicev1.CreateInstallationRequest{
+		ID: product.installationID, Name: "Response-loss PostgreSQL",
+		OfferingID: product.offeringID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+	}
+	createResponse := performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", ownerBearer,
+		"browser-command-recovery-installation", createRequest)
+	var accepted managedservicev1.ServiceInstallation
+	if createResponse.Status != http.StatusAccepted || json.Unmarshal(createResponse.Body, &accepted) != nil ||
+		managedservicev1.ValidateServiceInstallation(accepted) != nil || accepted.ID != product.installationID ||
+		accepted.QuotaEntitlementID != quota.ID || accepted.Phase != managedservicev1.InstallationPending {
+		t.Fatalf("create command-recovery installation status=%d body=%s", createResponse.Status, createResponse.Body)
+	}
+	installation := waitManagedProductReady(t, ctx, paasEndpoint, ownerBearer, product)
+	assertManagedProductRuntime(t, ctx, installation, managedRuntime, product)
+
+	loss := &browserResponseLoss{
+		method:       http.MethodPost,
+		path:         "/api/managed-services/v1/service-installations/" + product.installationID + "/service-role-bindings",
+		recoveryPath: "/api/managed-services/v1/command-results/SERVICE_ROLE_BIND",
+	}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(
+		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, loss,
+	)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-command-recovery-finished")
+	isolatedBrowserURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal("parse command-recovery browser URL")
+	}
+	_, browserPort, err := net.SplitHostPort(isolatedBrowserURL.Host)
+	if err != nil {
+		t.Fatal("read command-recovery browser port")
+	}
+	isolatedBrowserURL.Host = net.JoinHostPort("localhost", browserPort)
+	isolatedURL := isolatedBrowserURL.String()
+	t.Logf("COMMAND_RECOVERY_BROWSER_FIXTURE browserA=%s/console/installations/ browserB=%s/console/installations/ finish=%s realm=%s@organization-process installation=%s; browser A must export the UNKNOWN intent, browser B must use the distinct localhost origin and import it; use the existing changed developer password",
+		server.URL, isolatedURL, finish, loginName, product.installationID)
+	waitForBrowserMarker(t, ctx, ui, finish, "isolated-browser command recovery completion")
+
+	observation := loss.snapshot()
+	if observation.Attempts != 1 || !observation.ResponseLost || observation.BackendStatus < 200 ||
+		observation.BackendStatus >= 300 || !strings.HasPrefix(observation.IdempotencyKey, "ui-service-role-bind-") ||
+		observation.MutationHost == "" || observation.RecoveryReads < 1 || observation.RecoveryHost == "" ||
+		observation.RecoveryHost == observation.MutationHost {
+		t.Fatalf("browser response-loss boundary was not exact: %#v", observation)
+	}
+	resultResponse := performJSON(t, http.MethodGet,
+		base+"/command-results/SERVICE_ROLE_BIND", memberLogin.Credential, nil)
+	var results managedservicev1.CommandResultList
+	if resultResponse.Status != http.StatusOK || resultResponse.Header.Get("Cache-Control") != "no-store" ||
+		json.Unmarshal(resultResponse.Body, &results) != nil || managedservicev1.ValidateCommandResultList(results) != nil ||
+		len(results.Items) != 1 {
+		t.Fatalf("recover browser command result status=%d body=%s", resultResponse.Status, resultResponse.Body)
+	}
+	result := results.Items[0]
+	if result.IdempotencyKey != observation.IdempotencyKey || result.CommandType != managedservicev1.CommandServiceRoleBind ||
+		result.State != managedservicev1.CommandSucceeded || result.Target != (managedservicev1.CommandTargetReference{
+		Kind: managedservicev1.CommandTargetServiceInstallation, ID: product.installationID,
+	}) || result.Operation != nil || result.BindingID == nil || result.CompletedAt == nil {
+		t.Fatalf("browser recovered a different command result: %#v", result)
+	}
+	linkedResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles", memberLogin.Credential, nil)
+	var linked iamv1.ServiceLinkedRoleList
+	if linkedResponse.Status != http.StatusOK || json.Unmarshal(linkedResponse.Body, &linked) != nil ||
+		iamv1.ValidateServiceLinkedRoleList(linked) != nil || len(linked.Items) != 1 ||
+		linked.Items[0].BindingCount != 1 || linked.Items[0].ActiveBindingCount != 1 {
+		t.Fatalf("browser command recovery lost the active service Role: status=%d body=%s", linkedResponse.Status, linkedResponse.Body)
+	}
+	detailResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles/"+
+		string(linked.Items[0].Relation.Role.ID), memberLogin.Credential, nil)
+	var detail iamv1.ServiceLinkedRoleAccess
+	if detailResponse.Status != http.StatusOK || json.Unmarshal(detailResponse.Body, &detail) != nil ||
+		iamv1.ValidateServiceLinkedRoleAccess(detail) != nil || len(detail.Bindings) != 1 ||
+		detail.Bindings[0].ID != *result.BindingID || detail.Bindings[0].Workload.ID != product.installationID ||
+		detail.Bindings[0].Status != iamv1.WorkloadRoleBindingActive {
+		t.Fatalf("browser command recovery resolved a different workload binding: status=%d body=%s", detailResponse.Status, detailResponse.Body)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	for _, expected := range []struct {
+		action auditv1.Action
+		target string
+	}{
+		{auditv1.ActionIAMServiceLinkedRoleCreated, string(linked.Items[0].Relation.Role.ID)},
+		{auditv1.ActionIAMWorkloadRoleBindingCreated, string(*result.BindingID)},
+	} {
+		page := queryAudit(t, auditEndpoint, ownerBearer,
+			auditv1.QueryRecordsRequest{PageSize: 100, Action: expected.action}, http.StatusOK)
+		matches := 0
+		for _, record := range page.Records {
+			if record.Event.Target.ID == expected.target && record.Event.Actor.Type == auditv1.ActorUser &&
+				record.Event.Actor.ID == auditv1.ActorID(member.ID) {
+				matches++
+			}
+		}
+		if matches != 1 {
+			t.Fatalf("browser command recovery audit action=%s target=%s matches=%d", expected.action, expected.target, matches)
+		}
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID("organization-process") {
+		t.Fatalf("browser command recovery audit chain is incomplete: %#v", chain)
+	}
+	t.Log("two isolated browser profiles recovered one committed service Role bind after the client connection was closed; exactly one POST, the raw public key, authoritative binding, immutable Audit facts and the verified tenant chain all matched")
+	return []string{initial.Credential, memberLogin.Credential}
+}
+
 func runIAMIdentityConsoleBrowser(
 	t *testing.T,
 	ctx context.Context,
@@ -2866,6 +3058,123 @@ func writePersonalSecurityBrowserCode(t *testing.T, path, value string) {
 	writeProtectedFile(t, filepath.Dir(path), filepath.Base(path), []byte(value))
 }
 
+type browserResponseLoss struct {
+	method       string
+	path         string
+	recoveryPath string
+
+	mu             sync.Mutex
+	attempts       int
+	dropSelected   bool
+	responseLost   bool
+	backendStatus  int
+	idempotencyKey string
+	mutationHost   string
+	recoveryReads  int
+	recoveryHost   string
+}
+
+type browserResponseLossObservation struct {
+	Attempts       int
+	ResponseLost   bool
+	BackendStatus  int
+	IdempotencyKey string
+	MutationHost   string
+	RecoveryReads  int
+	RecoveryHost   string
+}
+
+func (value *browserResponseLoss) matches(request *http.Request) bool {
+	return value != nil && request.Method == value.method && request.URL.Path == value.path
+}
+
+func (value *browserResponseLoss) matchesRecovery(request *http.Request) bool {
+	return value != nil && request.Method == http.MethodGet && request.URL.Path == value.recoveryPath
+}
+
+func (value *browserResponseLoss) observe(request *http.Request, backendStatus int) bool {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	value.attempts++
+	if value.idempotencyKey == "" {
+		value.idempotencyKey = request.Header.Get("Idempotency-Key")
+		value.mutationHost = request.Host
+	}
+	value.backendStatus = backendStatus
+	if value.dropSelected || backendStatus < http.StatusOK || backendStatus >= http.StatusMultipleChoices {
+		return false
+	}
+	value.dropSelected = true
+	return true
+}
+
+func (value *browserResponseLoss) observeRecovery(request *http.Request, backendStatus int) {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	if !value.responseLost || value.mutationHost == "" || request.Host == value.mutationHost ||
+		backendStatus < http.StatusOK || backendStatus >= http.StatusMultipleChoices {
+		return
+	}
+	value.recoveryReads++
+	value.recoveryHost = request.Host
+}
+
+func (value *browserResponseLoss) markLost() {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	value.responseLost = true
+}
+
+func (value *browserResponseLoss) snapshot() browserResponseLossObservation {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	return browserResponseLossObservation{
+		Attempts: value.attempts, ResponseLost: value.responseLost,
+		BackendStatus: value.backendStatus, IdempotencyKey: value.idempotencyKey,
+		MutationHost: value.mutationHost, RecoveryReads: value.recoveryReads,
+		RecoveryHost: value.recoveryHost,
+	}
+}
+
+func loseBrowserFixtureResponse(target http.ResponseWriter, source *httptest.ResponseRecorder) bool {
+	body := source.Body.Bytes()
+	if len(body) < 2 {
+		return false
+	}
+	for key, values := range source.Header() {
+		target.Header()[key] = slices.Clone(values)
+	}
+	target.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	target.WriteHeader(source.Code)
+	_, _ = target.Write(body[:len(body)/2])
+	flusher, flushOK := target.(http.Flusher)
+	hijacker, hijackOK := target.(http.Hijacker)
+	if !flushOK || !hijackOK {
+		return false
+	}
+	// Commit the successful status and part of its body before closing. A
+	// pre-header close may be transparently retried by Chromium's transport,
+	// which would not be an application-level replay. The truncated committed
+	// response instead proves the UI's UNKNOWN -> read-only recovery contract.
+	flusher.Flush()
+	connection, _, err := hijacker.Hijack()
+	if err != nil {
+		return false
+	}
+	_ = connection.Close()
+	return true
+}
+
+func copyBrowserFixtureResponse(target http.ResponseWriter, source *httptest.ResponseRecorder) {
+	for key, values := range source.Header() {
+		for _, value := range values {
+			target.Header().Add(key, value)
+		}
+	}
+	target.WriteHeader(source.Code)
+	_, _ = target.Write(source.Body.Bytes())
+}
+
 func startIAMConsoleBrowser(
 	t *testing.T,
 	ctx context.Context,
@@ -2875,6 +3184,22 @@ func startIAMConsoleBrowser(
 	auditEndpoint string,
 	paasEndpoint string,
 	start func(string, []string) *childProcess,
+) (*httptest.Server, *childProcess, func()) {
+	return startIAMConsoleBrowserWithResponseLoss(
+		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, nil,
+	)
+}
+
+func startIAMConsoleBrowserWithResponseLoss(
+	t *testing.T,
+	ctx context.Context,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	start func(string, []string) *childProcess,
+	responseLoss *browserResponseLoss,
 ) (*httptest.Server, *childProcess, func()) {
 	t.Helper()
 	uiAddress := freeAddress(t)
@@ -2911,6 +3236,27 @@ func startIAMConsoleBrowser(
 		select {
 		case requests <- struct{}{}:
 			defer func() { <-requests }()
+			if responseLoss != nil && responseLoss.matchesRecovery(r) {
+				captured := httptest.NewRecorder()
+				mux.ServeHTTP(captured, r)
+				responseLoss.observeRecovery(r, captured.Code)
+				copyBrowserFixtureResponse(w, captured)
+				return
+			}
+			if responseLoss != nil && responseLoss.matches(r) {
+				captured := httptest.NewRecorder()
+				mux.ServeHTTP(captured, r)
+				if responseLoss.observe(r, captured.Code) {
+					if loseBrowserFixtureResponse(w, captured) {
+						responseLoss.markLost()
+					}
+					// The later fixture assertion treats a false return as a failed
+					// loss injection. Never expose the committed success response.
+					return
+				}
+				copyBrowserFixtureResponse(w, captured)
+				return
+			}
 			mux.ServeHTTP(w, r)
 		default:
 			http.Error(w, "browser fixture capacity exceeded", http.StatusServiceUnavailable)

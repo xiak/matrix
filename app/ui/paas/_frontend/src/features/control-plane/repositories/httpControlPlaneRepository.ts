@@ -231,7 +231,7 @@ function validBindCommand(command: BindManagedServiceRoleCommand): boolean {
   try {
     const template = parseTemplateReference(command.template);
     return command.requestId.length > 0 && publicIdentifierPattern.test(command.requestId) &&
-      template.id === managedServiceInstallationReader.id && template.version === managedServiceInstallationReader.version;
+      template.id === managedServiceInstallationReader.id;
   } catch {
     return false;
   }

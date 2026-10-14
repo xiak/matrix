@@ -6,6 +6,7 @@ import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import { ControlPlaneProvider, useControlPlane } from "../application/ControlPlaneProvider";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { ManagedServiceCommandIntent, ManagedServiceCommandResult } from "../domain/managedServiceCommand";
+import { managedServiceCommandType } from "../domain/managedServiceCommand";
 import { ManagedServiceCommandNotice } from "./ManagedServiceCommandNotice";
 
 const intent: ManagedServiceCommandIntent = {
@@ -19,30 +20,38 @@ const result: ManagedServiceCommandResult = {
   operation: { id: "operation-a", kind: "PROVISION", phase: "READY", safeFailureCode: null, observedAt: "2026-10-13T10:01:00Z" }
 };
 
-function Actions() {
+function Actions({ original }: { original: ManagedServiceCommandIntent }) {
   const session = useSession(), control = useControlPlane();
   return <><button onClick={() => void session.login("user-a@account-a", "in-memory-password")}>login</button>
-    <button onClick={() => control.restoreManagedServiceCommand(JSON.stringify(intent))}>bring original</button>
+    <button onClick={() => control.restoreManagedServiceCommand(JSON.stringify(original))}>bring original</button>
     <ManagedServiceCommandNotice /></>;
 }
 
-function view(read: NonNullable<ControlPlaneRepository["listCommandResults"]>) {
+function view(read: NonNullable<ControlPlaneRepository["listCommandResults"]>, original = intent) {
   const iam: IamRepository = { login: async () => ({ outcome: "AUTHENTICATED", credential: "never-persist-this-credential", mustChangePassword: false,
     session: { id: "login-a", principalId: "user-a", organizationId: "account-a", status: "ACTIVE", issuedAt: "2026-10-13T10:00:00Z", expiresAt: "2099-10-13T20:00:00Z" } }),
     changePassword: vi.fn(), logout: vi.fn() };
-  const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), createInstallation: vi.fn(), activateQuota: vi.fn(), listCommandResults: read };
-  return { repository, ...render(<LocaleProvider><SessionProvider repository={iam}><ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Actions /></ControlPlaneProvider></SessionProvider></LocaleProvider>) };
+  const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), createInstallation: vi.fn(), activateQuota: vi.fn(),
+    bindServiceRole: vi.fn(), unbindServiceRole: vi.fn(), listCommandResults: read };
+  return { repository, ...render(<LocaleProvider><SessionProvider repository={iam}><ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Actions original={original} /></ControlPlaneProvider></SessionProvider></LocaleProvider>) };
 }
 
 afterEach(() => { cleanup(); localStorage.clear(); });
 
 describe("original-operation recovery experience", () => {
-  it("carries only non-secret original input into a clean browser and confirms through a read-only query", async () => {
-    const read = vi.fn(async () => [result]);
-    const first = view(read);
+  it.each(["CREATE_INSTALLATION", "BIND_SERVICE_ROLE", "UNBIND_SERVICE_ROLE"] as const)("carries non-secret %s input into a clean browser and confirms through a read-only query", async (kind) => {
+    const template = { id: "managedservice.installation-reader", version: 2, contentDigest: `sha256:${"c".repeat(64)}` };
+    const original: ManagedServiceCommandIntent = kind === "CREATE_INSTALLATION" ? intent
+      : kind === "BIND_SERVICE_ROLE" ? { ...intent, kind, payload: { installationId: intent.targetId, template } }
+        : { ...intent, kind, payload: { installationId: intent.targetId, bindingId: "binding-a", resourceVersion: 1, expectedTemplate: template } };
+    const completion: ManagedServiceCommandResult = { ...result, commandType: managedServiceCommandType(kind),
+      operation: kind === "CREATE_INSTALLATION" ? result.operation : null, bindingId: kind === "CREATE_INSTALLATION" ? null : "binding-a" };
+    const read = vi.fn(async () => [completion]);
+    const first = view(read, original);
     await act(async () => { fireEvent.click(screen.getByText("login")); });
     await act(async () => { fireEvent.click(screen.getByText("bring original")); });
     const summary = (screen.getByLabelText("只读恢复摘要") as HTMLTextAreaElement).value;
+    expect(JSON.parse(summary)).toEqual(original);
     expect(summary).not.toContain("never-persist-this-credential");
     expect(summary).not.toContain("in-memory-password");
     expect(read).not.toHaveBeenCalled();
@@ -56,8 +65,10 @@ describe("original-operation recovery experience", () => {
     expect(screen.getByText(/服务端已确认匹配的原操作成功/)).toBeTruthy();
     expect(screen.getByText(result.inputDigest)).toBeTruthy();
     expect(second.repository.createInstallation).not.toHaveBeenCalled();
+    expect(second.repository.bindServiceRole).not.toHaveBeenCalled();
+    expect(second.repository.unbindServiceRole).not.toHaveBeenCalled();
     expect(second.repository.getInstallation).not.toHaveBeenCalled();
-    expect(read).toHaveBeenCalledWith("never-persist-this-credential", "INSTALLATION_CREATE");
+    expect(read).toHaveBeenCalledExactlyOnceWith("never-persist-this-credential", managedServiceCommandType(kind));
     expect(document.querySelector("[role=dialog]")).toBeNull();
   });
 
