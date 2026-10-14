@@ -44,9 +44,9 @@ export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) 
     return <div className={styles.challengeCompletion}>
       <CheckCircle2 aria-hidden="true" />
       <div className={styles.cardHeading}>
-        <h1 ref={heading} tabIndex={-1}>{t(session.reauthenticationReason === "FACTOR" ? "enrollmentCompleted" : "challengePasswordChanged")}</h1>
+        <h1 ref={heading} tabIndex={-1}>{t(session.reauthenticationReason === "FACTOR_REMOVED" ? "factorRemoved" : session.reauthenticationReason === "FACTOR" ? "enrollmentCompleted" : "challengePasswordChanged")}</h1>
         <p>{t(session.reauthenticationReason === "ENROLLMENT_PASSWORD" ? "enrollmentPasswordReauthenticateHint" :
-          session.reauthenticationReason === "FACTOR" ? "enrollmentReauthenticateHint" : "challengeReauthenticateHint")}</p>
+          session.reauthenticationReason === "FACTOR_REMOVED" ? "factorRemovedReauthenticateHint" : session.reauthenticationReason === "FACTOR" ? "enrollmentReauthenticateHint" : "challengeReauthenticateHint")}</p>
       </div>
       <Button block onClick={session.acknowledgeReauthentication} size="large">
         {t("returnToSignIn")}<ArrowRight aria-hidden="true" />

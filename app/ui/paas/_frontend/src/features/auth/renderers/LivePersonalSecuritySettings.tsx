@@ -8,6 +8,7 @@ import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import { NotificationContactPasswordRejected, usePersonalSecurity, type PersonalSecurityClient } from "../application/PersonalSecurityProvider";
 import type { AuthenticatorState, NotificationContact, NotificationContactVerification, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import { LiveRecoveryCodeRegeneration } from "./LiveRecoveryCodeRegeneration";
+import { LiveTOTPManagement } from "./LiveTOTPManagement";
 import { LiveNotificationContactReplacement } from "./LiveNotificationContactReplacement";
 import styles from "./MfaPreviewExperience.module.css";
 
@@ -213,6 +214,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
   }
 
   const verified = contact?.state === "VERIFIED";
+  const initialEligible = factor?.enrollmentState === "NEVER_BOUND" || factor?.enrollmentState === "REMOVED";
   const deliveryKey = verification ? `delivery.${verification.delivery.state}` as const : null;
 
   return <section aria-labelledby="live-personal-security" className={styles.securityRoot}>
@@ -256,14 +258,15 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
           {loadState === "loading" ? <><Skeleton /><Skeleton /></> : null}
           {loadState === "ready" && factor && client && !enrollment ? <>
             <dl className={styles.facts}><div><dt>{t("factor.method")}</dt><dd>TOTP · 6</dd></div><div><dt>{t("factor.state")}</dt><dd>{t(`factor.${factor.enrollmentState}`)}</dd></div><div><dt>{t("revision")}</dt><dd>v{factor.factorRevision}</dd></div>{factor.factorId ? <div><dt>{t("factor.id")}</dt><dd><code>{factor.factorId}</code></dd></div> : null}</dl>
-            {factor.enrollmentState === "NEVER_BOUND" && !verified ? <Alert status="warning">{t("factor.verifyContactFirst")}</Alert> : null}
-            {factor.enrollmentState === "NEVER_BOUND" && verified && client.totpEnrollmentIntent ? <div className={styles.form}>
+            {factor.enrollmentState === "REMOVED" ? <Alert status="info">{t("factor.removedHint")}</Alert> : null}
+            {initialEligible && !verified ? <Alert status="warning">{t("factor.verifyContactFirst")}</Alert> : null}
+            {initialEligible && verified && client.totpEnrollmentIntent ? <div className={styles.form}>
               <Alert status="warning">{t("factor.pendingIntent")}</Alert>
               <dl className={styles.facts}><div><dt>{t("factor.requestId")}</dt><dd><code>{client.totpEnrollmentIntent.requestId}</code></dd></div><div><dt>{t("factor.intentState")}</dt><dd>{t(`factor.intent.${client.totpEnrollmentIntent.state}`)}</dd></div></dl>
               <p className={styles.boundary}>{t("factor.pendingIntentBoundary")}</p>
               <div className={styles.flowActions}><Button disabled={busy} onClick={() => void inspectEnrollmentIntent()} type="button" variant="secondary"><RefreshCcw aria-hidden="true" />{busy ? t("factor.inspecting") : t("factor.inspect")}</Button></div>
             </div> : null}
-            {factor.enrollmentState === "NEVER_BOUND" && verified && !client.totpEnrollmentIntent ? <form className={styles.form} onSubmit={(event) => void startEnrollment(event)}><Alert>{t("factor.firstOnly")}</Alert><FormField id={passwordId} label={t("currentPassword")}><PasswordInput autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={passwordId} onChange={(event) => { setFactorPassword(event.target.value); enrollmentRequest.current = requestToken("ui-totp-enroll-"); }} required showLabel={auth("showPassword")} value={factorPassword} /></FormField><div className={styles.flowActions}><Button disabled={busy || !factorPassword} type="submit"><KeyRound aria-hidden="true" />{busy ? t("saving") : t("factor.start")}</Button></div></form> : null}
+            {initialEligible && verified && !client.totpEnrollmentIntent ? <form className={styles.form} onSubmit={(event) => void startEnrollment(event)}><Alert>{t("factor.firstOnly")}</Alert><FormField id={passwordId} label={t("currentPassword")}><PasswordInput autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={passwordId} onChange={(event) => { setFactorPassword(event.target.value); enrollmentRequest.current = requestToken("ui-totp-enroll-"); }} required showLabel={auth("showPassword")} value={factorPassword} /></FormField><div className={styles.flowActions}><Button disabled={busy || Boolean(client.totpChangeIntent) || !factorPassword} type="submit"><KeyRound aria-hidden="true" />{busy ? t("saving") : t(factor.enrollmentState === "REMOVED" ? "factor.rebind" : "factor.start")}</Button></div></form> : null}
             {factor.enrollmentState === "BOUND" ? <LiveRecoveryCodeRegeneration key={`${client.sessionId}:${client.sessionRevision}`} factor={factor} /> : null}
             {factor.enrollmentState === "RECOVERY_REQUIRED" ? <Alert status="warning">{t("factor.recoveryUnavailable")}</Alert> : null}
           </> : null}
@@ -281,6 +284,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
           </form> : null}
         </Card.Body>
       </Card>
+      {loadState === "ready" && factor ? <LiveTOTPManagement factor={factor} onCommitted={load} /> : null}
     </div>
   </section>;
 }

@@ -187,9 +187,16 @@ function AccountAccessInitialLoading({ entityId, view }: { entityId?: string; vi
 
 export function AccountAccessRenderer(props: AccountAccessRendererProps) {
   const roleSession = useRoleSession();
-  if (roleSession.mode !== "USER") return roleSession.supported ? <LiveRoleSelfService /> : <RoleSelfServicePreview />;
+  const capabilities = useAccountCapabilities();
+  const t = useTranslations("AccountAccess");
+  const w = useTranslations("IamWorkspace");
+  if (roleSession.mode !== "USER" || props.view === "role-access") {
+    if (roleSession.supported) return <LiveRoleSelfService />;
+    if (capabilities.hasPreviewWorkspace) return <RoleSelfServicePreview />;
+    return <><ContentPage.Heading title={t("roleAccessTitle")} scrollKey="role-access-unavailable" />
+      <EmptyState title={w("notConnected")} description={w("notConnectedHint")} /></>;
+  }
   if (props.view === "sessions") return <OwnSessionsPage />;
-  if (props.view === "role-access") return roleSession.supported ? <LiveRoleSelfService /> : <RoleSelfServicePreview />;
   return <ManagedAccountAccessRenderer {...props} />;
 }
 

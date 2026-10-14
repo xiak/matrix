@@ -79,13 +79,23 @@ Role、身份提供商、联合身份和企业账号均为详情优先的管理�
 
 ### 本人 MFA 生命周期的固定客户端接入
 
+合法主动移除后的状态为 `REMOVED`，保留大于等于 3 的原修订且不携带当前 factorId；它既不是 `NEVER_BOUND`，也不是因子缺行推导的恢复资格。本人安全页可沿既有 `INITIAL` 路由，以当前密码、可信通知地址和精确原修订设置一个新因子。账号后来要求 MFA 时，受限 `ENROLLMENT` 的状态、开始和确认同样保留后端证明的移除修订，不强制改写成 1，也不重启旧因子；完整资格仍由 IAM 校验。
+
 本人首次 TOTP 绑定同样消费 `f5cec0e132ad18900d9a5a5629eae04fda4817f1`。它只从当前有效的本人设置进入，必须先具有可信已验证安全通知地址，并用当前密码和当前 factor revision 发起五分钟 enrollment；因为此时不存在旧因子，界面不能要求一个不存在的旧 TOTP。首次 `APPLIED` 才能在当前内存流程显示 seed 与 provisioning URI，页面不调用外部二维码服务，也不把秘密放入 URL 或浏览器存储。
 
 `EQUAL_REPLAY` 永不包含 provisioning；页面不显示验证码确认框，只允许取消仍处于 `PENDING` 的原流程，或在终态后使用新 requestId 重新开始。若首次 `APPLIED` 的秘密已从本地内存丢失，客户端不能尝试恢复或猜测密钥，必须取消/等待过期后重新发起。新 TOTP 确认成功就是绑定提交点；IAM 返回的十条唯一恢复码只在 SessionProvider 内存中一次显示，确认已保存后清除，并要求正常重新登录，不能把恢复材料的确认误作绑定提交。
 
 已绑定因子的恢复码再生成消费固定来源 `b7a70bfa9e53f0a5f16619c60523c84613cb7b0b`。页面先用原 regeneration requestId、当前 factor revision 创建仅限 `RECOVERY_CODES_REGENERATE` 的两分钟 step-up，再以独立 verify requestId 提交当前密码和新 TOTP；证明不会延长有效期，也不授予额外 IAM 权限。只有首次 `APPLIED` 可以在当前 React 内存显示恰好十条非空且唯一的新码；`EQUAL_REPLAY` 和两个 by-request 查询永不返回秘密。开始、验证或重新生成结果未知时，客户端冻结原意图，验证未知只读 step-up，重新生成未知只读 regeneration，绝不自动重放密码、OTP 或写命令。相同 Account/User 正常重新登录后可以用新 Session 查询原非秘密结果；旧 step-up 证明不能跨 Session 继续使用。`NOT_FOUND` 不证明回滚，也不允许自动创建新意图。
 
-本人正常替换已有固定来源 `e24dbdae6b4ea420365a4527a0bd89b16e0d720f`（Verification `36033828072` completed/success）。当前 UX 分支已经包含该后端闭包和严格 HTTP 适配：首次绑定及其按原请求查询、取消和确认都必须返回 `purpose=INITIAL`，换绑必须返回 `purpose=REPLACEMENT`；缺失或错误用途失败关闭，不保留无 purpose 的旧解析路径。普通 Session 首次绑定保持五分钟期限，受限登录挑战绑定不超过原挑战剩余五分钟，换绑保持原两分钟证明的绝对截止时间。客户端分隔 `RECOVERY_CODES_REGENERATE`/`TOTP_REPLACE` 两种 proof，用原 requestId、stepUpId、factor revision 请求换绑。LIVE 本人安全 Provider 和页面尚未挂载换绑操作，因此不能把适配器存在称为可用页面。隔离 MOCK 先验证页内换绑和不确定结果处理：确认结果未知时禁止直接取消或再提交，只能显式模拟按原意图查询非秘密状态；模拟查询不代表真实 IAM 已确认。真实界面接入仍须确保同一 PASSWORD_TOTP Session、原绝对 120 秒窗口、`APPLIED` 一次性设置材料、成功后十码一次展示和重新登录；新 Session 只能读/取消旧待处理意图，不能接管旧证明。主动移除也已有固定后端契约和路由，但当前前端尚无严格 repository 适配或 LIVE 控件，因此同样保持不可操作。受限自助恢复只从已验证密码产生的 `LOGIN/TOTP` 或有准确恢复历史的 `LOGIN/RECOVER` 挑战进入，使用一条旧恢复码换取独立 `RECOVERY/ENROLLMENT` 挑战和一次性 provisioning；它不创建 Session、不改变密码，也不授予管理员代替本人重置因子的能力。任何真实失败不得进入 MOCK。
+本人正常换绑与主动移除消费固定 IAM 来源 `91af2972fb16d6727845fc06c9485f8ea62ca80c` 的公开契约；只适配客户端，不导入后端、SQL 或发布 profile。首次绑定、受限挑战绑定及正常换绑保持不同用途和期限：`INITIAL` 是普通会话五分钟或原受限挑战的剩余窗口，`REPLACEMENT` 不得越过原两分钟证明的绝对截止时间，微秒边界也不能被毫秒舍入放宽。缺失或错误用途失败关闭，不保留旧解析别名。
+
+本人安全设置以公共卡片、表单和阶段焦点规则挂载 `TOTP_REPLACE`/`TOTP_REMOVE` 页内流程，与恢复码再生成和通知地址替换互斥。Provider 在发送前冻结原 Account/User、Session、requestId、stepUpId 和 factor revision；密码、OTP、新 seed/URI 与十条恢复码只在对应当前流程的内存中持有。原意图可跨内容页和同用户正常重新登录检查，但不声明浏览器刷新或跨浏览器恢复。换绑仅首次 `APPLIED` 显示设置材料；明确验证码拒绝可清空输入后纠正，未知确认立即丢弃材料并禁止重交或取消。验证、设置、确认、取消及移除未知时只读取原请求：`PENDING` 不能解除未知验证、确认或取消的写锁，404、403、5xx 和协议错误不证明回滚。明确拒绝或取消不被较早证明查询重新开放。
+
+同用户的新 Session 只能查询非秘密状态，或显式取消已知仍待处理的换绑设置，不能接管旧证明、补取秘密或确认新因子。确认成功才通过既有 SessionProvider 一次显示十码并要求重新登录。移除首次 `APPLIED` 只结束原提交登录；`EQUAL_REPLAY` 与历史 GET 不结束观察结果的新登录，也不证明当前因子状态。结束提醒前必须权威重读当前本人安全状态。实际 PASSWORD_TOTP 资格、受保护身份和账号强制 MFA 限制由 IAM 重新校验，客户端不会从用户名、Root 标签或已有因子推导许可。完整真实浏览器及签名安装验收仍独立开放，不能由适配器或组件测试代替；显式 MOCK 保留且任何真实失败都不回退 MOCK。
+
+同一 Session/意图内的状态更新还必须匹配请求发起阶段。原请求查询已经推进到设置、完成或取消后，较早证明回包、确认拒绝和迟到 APPLIED 设置不得回退阶段或重新提供材料；不同 Session/操作者仍由原归属检查失败关闭。
+
+受限自助恢复只从已验证密码产生的 `LOGIN/TOTP` 或有准确恢复历史的 `LOGIN/RECOVER` 挑战进入，使用一条旧恢复码换取独立 `RECOVERY/ENROLLMENT` 挑战和一次性 provisioning；它不创建 Session、不改变密码，也不授予管理员代替本人重置因子的能力。
 
 恢复开始一旦提交就消费旧码、终止旧因子与旧会话，关闭页面不能撤销。开始回包未知时，客户端只在内存保留原 loginName/requestId，清除 challenge secret 与 provisioning；用户必须重新以密码取得新的 LOGIN 挑战并显式查询原 requestId。`NOT_FOUND` 不证明回滚，查询不会重发秘密或自动消费另一条码；原 `STARTED` 的一次性材料已经丢失时，页面必须明确说明并由用户选择使用另一条旧码创建新意图。确认回包未知不查询或重放十条新码，只允许使用刚绑定的新因子正常登录验证结果。所有密码、旧码、新 seed、URI、OTP、challenge credential 和新恢复码均只留当前 React 内存，不进入 URL、日志或浏览器持久存储。
 
@@ -677,13 +687,13 @@ LIVE 仍固定为 `LIVE · NOT_CONNECTED`，但接入边界不再只给空状态
 - UI 不调用外部二维码服务，只在首次 `APPLIED` 的当前内存流程显示手动 seed/URI 和六位确认框。等值重放不显示秘密或确认框，只允许取消仍待处理的原流程；终态才允许使用新 requestId 重新开始。组件用例锁定该边界。
 - 开始请求在网络、5xx 或协议结果未知前，Provider 已按当前 credential、Account、User 登记原 requestId；内容页卸载/重新挂载仍保持写锁，只保存这组非秘密归属，不保存密码、seed、URI 或 OTP。页面先按原 requestId 查询：查到 `PENDING` 只允许精确取消该 enrollment，`NOT_FOUND` 或查询不可用继续保持 UNKNOWN，不能据此开放第二次开始。查询后的 `CONFIRMED` 只要求使用新因子正常登录，不能恢复秘密或再次确认。
 - 确认成功只接受十条非空且唯一的恢复码与 `REAUTHENTICATE`。Provider 立即清除旧 credential/current/challenge，仅在内存一次显示恢复材料；用户确认已保存后清除材料并返回重新登录，不写 URL、DOM 持久态或浏览器存储。
-- `BOUND` 设置页通过固定五路由开放恢复码再生成，仍不开放因子替换或移除。严格适配器验证两分钟 step-up、operation/revision/request 关联、状态时间、regeneration 归属及一次性十码；`EQUAL_REPLAY` 携带秘密、重复码、额外字段或错配 revision 均失败关闭。验证端的通用 401 不被擅自解释为 bearer 过期；后续 bearer-only 读取才是 Session 是否仍有效的权威观察。
+- `BOUND` 设置页分隔恢复码再生成与本人换绑/移除的独立意图，复用既有公开路由。严格适配器验证两分钟 step-up、operation/revision/request 关联、状态时间、结果归属及一次性十码；`EQUAL_REPLAY` 携带秘密、额外字段、移除的重新登录指令或错配 revision 均失败关闭。验证端的通用 401 不被擅自解释为 bearer 过期；后续 bearer-only 读取才是 Session 是否仍有效的权威观察。
 - 隔离 MOCK 的主动更换验证器与首次绑定、丢失后的受限恢复分开建模。旧验证器和原恢复码在开始及取消后继续有效；非秘密意图冻结 requestId、当前账号规则版本及从操作验证打开时算起的两分钟绝对截止时间，点击开始更换不会重起计时。确认还要求原演示会话，超时、版本变化或跨会话均拒绝。只有确认后才切换演示验证码、轮换恢复码并要求重新登录；离开页面不重显新设置材料，可查看原意图并取消。首次绑定、主动更换及演示恢复码再生成所展示的批次现在与 MOCK 登录恢复实际接受的批次一致，旧批次不再接受。所有密码、验证码、材料仅为明确标注的演示数据，这些前端命令不构成真实 StepUp 或服务端鉴权契约。
 - 更换向导在准备、设置和确认阶段显示原操作验证的绝对截止时间；截止、账号规则版本改变、原意图失配或重新登录资格失效时立即停止当前视图，移除设置材料且不再开放确认。确认提交立即切到不含秘密的等待态并阻止重复提交；回包失败或结果无法证明十条唯一新恢复码时，按未知结果冻结视图并清空输入，不自动重放确认、不重显种子或十码，返回本人安全区只读取非秘密状态。成功则直接进入一次性十码页，不短暂闪出“已停止”。此 MOCK 只预演失败关闭的交互，不定义尚未固定的 LIVE 结果查询接口；已确认成功的一次性十码与重新登录路径仍保持原样。
-- 主动更换的 LIVE 入口仍关闭；后端的公开对象、路由与验收固定后再接入。当前 MOCK 不模拟开始/确认请求丢失后的权威原意图查询，因此不能据此宣称不确定结果或真实进程闭环已验收。
+- LIVE 换绑/移除的客户端行为和验收边界由上面的固定客户端接入规则拥有；MOCK 的本地意图查询不构成权威完成记录，不能据此接受真实进程闭环。
 - 该隔离预览与同步嵌入资源固定在已推送的 [`49bc9722`](https://github.com/xiak/matrix/commit/49bc9722)。完整前端 44 个测试文件、742 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、41 页生产导出、228 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。真实 DEV 在 `390 × 844` 完成旧验证码操作验证、新验证码确认及一次性恢复码显示，document/body 均无横向溢出且无新增 warning/error；该浏览器检查仍只属于 MOCK。
 - 2026-09-24 已推送 [`3b023711`](https://github.com/xiak/matrix/commit/3b023711)，收紧更换中的绝对期限、规则漂移、确认等待与未知结果视图。定向测试覆盖确认期间隐藏材料并直接进入十码、503 后不重放写入、外部规则版本变化和期限到达。完整前端 44 文件/751 条用例、三条静态归一化、类型/lint/架构/228 组主题对比、41 页导出和 228 文件嵌入等价均通过；`go test -p 2 ./...`、`go vet -p 2 ./...` 通过。DEV `390 × 844` 实走旧码操作验证、新码确认及十码一次性展示，页面无横向溢出和 warning/error；截止时间明确标注 UTC。它仍只是隔离 MOCK，不继承 IAM-009 WIP 的 LIVE 接口或真实进程验收。
-- 同一隔离预览在已推送的 [`b5231103`](https://github.com/xiak/matrix/commit/b523110329a93c14f56e6bb8ea9dbcc1e6f6f18a) 收紧未知结果文案：待处理意图不再无条件断言旧验证器仍有效；确认回包未知时也不把非秘密本地意图当作替换完成的证明，要求通过正常登录核实新因子状态。测试锁定“已停止”后不会重显设置材料或再次提交。尚无可消费的 LIVE 换绑契约，故不声称服务端恢复能力。
+- 同一隔离预览在已推送的 [`b5231103`](https://github.com/xiak/matrix/commit/b523110329a93c14f56e6bb8ea9dbcc1e6f6f18a) 收紧未知结果文案：待处理意图不再无条件断言旧验证器仍有效；确认回包未知时也不把非秘密本地意图当作替换完成的证明，要求通过正常登录核实新因子状态。测试锁定“已停止”后不会重显设置材料或再次提交。该预览不提供权威结果证据；LIVE 接入规则由上面的固定客户端边界拥有。
 - 2026-09-25 已推送 [`8c3eff62`](https://github.com/xiak/matrix/commit/8c3eff62)，补齐本人安全流程的键盘焦点：进入绑定/更换向导、步骤推进、确认等待、停止态与一次性恢复码阶段时聚焦可辨识标题；取消操作验证或向导后返回原操作按钮，按钮因状态变化禁用时回退到本人安全标题。只在可见阶段变化时移动焦点，不因验证码输入或等待态重渲染抢走输入焦点。隔离 MOCK 的混色主题实走这些阶段；本结果不构成 LIVE 更换验收。
 - Provider 在写入前登记原意图。开始未知只允许等价重试或查询，验证未知只查询原 step-up，重新生成未知只查询原 regeneration；页面不会重放密码、OTP 或生成命令。同一 User 以新 Session 登录仍可查询原非秘密 regeneration，旧 Session 的 step-up 不能继续。首次 `APPLIED` 的十码只在当前组件内存显示，确认后从 DOM 清除；by-request 完成只说明材料已丢失并要求新意图。
 - 身份认证代际同时限定迟到的一次性秘密：即使旧请求在同一 User 的新 Session 或另一 User 建立新意图后才返回 `APPLIED`，Provider 也不会将旧十码交给新视图；本人安全页面按 Session 重新挂载，恢复码组件还逐次核对当前 Session 与原 requestId。deferred-promise 用例覆盖同一 User、不同 User 和意外复用 bearer 的情况，证明新意图与 DOM、浏览器存储均不含旧码。
@@ -791,4 +801,4 @@ LIVE 仍固定为 `LIVE · NOT_CONNECTED`，但接入边界不再只给空状态
 
 公共 UI、生产导出、完整前端及 Go 回归证据只归
 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence)
-所有。共享跨服务导航、概览和 13 个 IAM 主目的地的 DEV MOCK 浅色/混色及键盘专项已由 [FEAT-007 的 Real DEV browser 证据](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 统一验收并持有；本轮在 `390 × 844` 再次确认两种主题下页面标题、稳定焦点、视口宽度、浮层清理和控制台 warning/error 均无异常，用户页公共“页面操作”菜单可用键盘打开，并在 `Escape` 后把焦点交还触发器。该结果只接受共享外壳和隔离 MOCK 交互，不替代真实 IAM。真实 PolicyVersion/授权目录作者流程的后端浏览器联调、Role/trust/policy 写入与 STS 的真实进程故障闭环、SSO、个人 MFA 的替换/移除/恢复 LIVE 适配，以及首次绑定与访问密钥的真实后端浏览器联调仍未完成。仍需与固定后端原子整合并执行相应发布门禁；本 UX 分支独立运行不等于完整 IAM 安装候选已验收。
+所有。共享跨服务导航、概览和 13 个 IAM 主目的地的 DEV MOCK 浅色/混色及键盘专项由 [FEAT-007 的 Real DEV browser 证据](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 统一持有；这些结果只接受共享外壳和隔离 MOCK 交互，不替代真实 IAM。本人的绑定、恢复、换绑、移除及合法重新设置已经按各自固定契约接入客户端，不能再归为“无 LIVE 适配”，也不能因此声称真实浏览器或签名发布通过。每个真实路径仍须与固定 IAM 来源核对其独立证据，并完成原子集成、故障浏览器闭环及签名安装组合。SSO、企业微信、Passkey/WebAuthn、跨账号/角色链及未交付平台登记功能只保留显式预览或未接入边界，LIVE 直达页不得回退可提交 MOCK。本 UX 分支独立运行不等于完整 IAM 安装候选已验收。

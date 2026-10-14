@@ -46,7 +46,7 @@ import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceRoleTe
 import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
 import type { AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
-import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
+import type { AuthenticatorRemoval, AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart, TOTPRemovalResponse } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CreateRolePolicyAttachmentCommand, CurrentRoleIdentity, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand, UserRoleSession } from "../domain/roles";
 import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
@@ -130,6 +130,15 @@ export interface IamRepository {
       verifyStepUp(credential: string, stepUpId: string, command: { requestId: string; password: string; code: string }): Promise<SecurityStepUp>;
       startEnrollment(credential: string, command: { requestId: string; stepUpId: string; expectedFactorRevision: number }): Promise<TOTPEnrollmentStart>;
       enrollmentByRequest(credential: string, requestId: string): Promise<TOTPEnrollment>;
+      cancelEnrollment(credential: string, enrollmentId: string): Promise<TOTPEnrollment>;
+      confirmEnrollment(credential: string, enrollmentId: string, command: { requestId: string; code: string }): Promise<TOTPEnrollmentConfirmation>;
+    };
+    removal?: {
+      startStepUp(credential: string, command: { requestId: string; expectedFactorRevision: number }): Promise<SecurityStepUp>;
+      stepUpByRequest(credential: string, requestId: string): Promise<SecurityStepUp>;
+      verifyStepUp(credential: string, stepUpId: string, command: { requestId: string; password: string; code: string }): Promise<SecurityStepUp>;
+      remove(credential: string, command: { requestId: string; stepUpId: string; expectedFactorRevision: number }): Promise<TOTPRemovalResponse>;
+      removalByRequest(credential: string, requestId: string): Promise<AuthenticatorRemoval>;
     };
     totpEnrollment(credential: string, enrollmentId: string): Promise<TOTPEnrollment>;
     totpEnrollmentByRequest(credential: string, requestId: string): Promise<TOTPEnrollment>;

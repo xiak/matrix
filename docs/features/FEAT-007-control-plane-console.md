@@ -1855,6 +1855,22 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
+The current personal-factor and LIVE-entry closure keeps the shared Card,
+form, focus, keyed-locale and theme owners; its business and wire boundaries
+remain with [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#本人-mfa-生命周期的固定客户端接入).
+With Node 22.22.2/npm 11.6.4, the complete frontend run passed 70 files and
+1,439 cases plus all three export-normalization cases. Typecheck, lint,
+architecture and 228 contrast pairs passed. The final safe-counter read
+boundary was additionally checked by the three REMOVED cases and a fresh
+whole-project type/lint/architecture/style run; the 160 excluded cases in that
+focused run are not extra full-suite evidence. The final production build
+generated 59 pages and 57 normalized segment files; all 319 files match the
+Go embed byte-for-byte. Fresh PaaS UI-host `go test -count=1 -p 2` and
+`go vet -p 2` passed on Go 1.26.3 with bounded concurrency. These are client/source gates,
+not a real IAM, SMTP, TOTP-device or signed-install browser acceptance. The
+previous independent CI below belongs only to its named fixed object, not
+this new candidate.
+
 Verified through 2026-10-14 against the current all-service navigation, compact IAM
 shell, responsive access-analysis hierarchy, primary directory actions and the
 provider-owned product-permission onboarding boundary, service-enablement UX and

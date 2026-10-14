@@ -74,7 +74,7 @@ import type {
   SessionSummary
 } from "../domain/session";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
-import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
+import type { AuthenticatorRemoval, AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart, TOTPRemovalResponse } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDeletion, RoleDirectory, RoleListing, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
 import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessDispositionRule, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
@@ -898,6 +898,12 @@ function parseAuthenticatorState(value: unknown): AuthenticatorState {
     if (wire.factorRevision !== 1) throw new Error("INVALID_IAM_RESPONSE");
     return { enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null };
   }
+  if (wire.enrollmentState === "REMOVED") {
+    exactKeys(wire, ["apiVersion", "kind", "enrollmentState", "factorRevision"]);
+    const factorRevision = accountVersion(wire.factorRevision);
+    if (factorRevision < 3) throw new Error("INVALID_IAM_RESPONSE");
+    return { enrollmentState: "REMOVED", factorRevision, factorId: null };
+  }
   if (wire.enrollmentState === "BOUND") {
     exactKeys(wire, ["apiVersion", "kind", "enrollmentState", "factorRevision", "factorId"]);
     const factorRevision = accountVersion(wire.factorRevision);
@@ -925,7 +931,7 @@ function parseTOTPEnrollment(value: unknown, expectedPurpose: "INITIAL" | "CHALL
   if (factorRevision > 9_007_199_254_740_990 ||
       wire.purpose !== (expectedPurpose === "REPLACEMENT" ? "REPLACEMENT" : "INITIAL") ||
       expectedPurpose === "INITIAL" && lifetime !== 5n * 60n * 1_000_000n ||
-      expectedPurpose === "CHALLENGE_INITIAL" && (factorRevision !== 1 || lifetime <= 0n || lifetime > 5n * 60n * 1_000_000n) ||
+      expectedPurpose === "CHALLENGE_INITIAL" && (factorRevision === 2 || lifetime <= 0n || lifetime > 5n * 60n * 1_000_000n) ||
       expectedPurpose === "REPLACEMENT" && (factorRevision < 2 || lifetime <= 0n || lifetime > 120n * 1_000_000n)) throw new Error("INVALID_IAM_RESPONSE");
   const completedAt = wire.completedAt === undefined ? null : accountTimestamp(wire.completedAt);
   if (wire.state === "PENDING") {
@@ -960,7 +966,7 @@ function parseTOTPEnrollmentStart(value: unknown, expectedPurpose: "INITIAL" | "
   return { outcome: "EQUAL_REPLAY", enrollment: parseTOTPEnrollment(wire.enrollment, expectedPurpose) };
 }
 
-function parseTOTPEnrollmentConfirmation(value: unknown, enrollmentId: string, expectedPurpose: "INITIAL" | "CHALLENGE_INITIAL" = "INITIAL"): TOTPEnrollmentConfirmation {
+function parseTOTPEnrollmentConfirmation(value: unknown, enrollmentId: string, expectedPurpose: "INITIAL" | "CHALLENGE_INITIAL" | "REPLACEMENT" = "INITIAL"): TOTPEnrollmentConfirmation {
   const wire = accountRecord(value);
   exactKeys(wire, ["enrollment", "nextStep", "recoveryCodes"]);
   const enrollment = parseTOTPEnrollment(wire.enrollment, expectedPurpose);
@@ -1072,6 +1078,27 @@ function parseRecoveryCodeRegeneration(value: unknown): RecoveryCodeRegeneration
     factorRevision: boundedFactorRevision(wire.factorRevision),
     createdAt: accountTimestamp(wire.createdAt)
   };
+}
+
+function parseAuthenticatorRemoval(value: unknown, requestId: string): AuthenticatorRemoval {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "requestId", "factorId", "factorRevision", "removedAt"]);
+  requireAccountKind(wire, "AuthenticatorRemoval");
+  const factorRevision = accountVersion(wire.factorRevision);
+  if (wire.requestId !== requestId || factorRevision < 3) throw new Error("INVALID_IAM_RESPONSE");
+  return { id: accountIdentifier(wire.id), requestId, factorId: accountIdentifier(wire.factorId),
+    factorRevision, removedAt: accountTimestamp(wire.removedAt) };
+}
+
+function parseTOTPRemovalResponse(value: unknown, requestId: string, expectedFactorRevision: number): TOTPRemovalResponse {
+  const wire = accountRecord(value);
+  if (wire.outcome !== "APPLIED" && wire.outcome !== "EQUAL_REPLAY") throw new Error("INVALID_IAM_RESPONSE");
+  exactKeys(wire, ["outcome", "removal", ...(wire.outcome === "APPLIED" ? ["nextStep"] : [])]);
+  const removal = parseAuthenticatorRemoval(wire.removal, requestId);
+  if (removal.factorRevision !== expectedFactorRevision + 1 || wire.outcome === "APPLIED" && wire.nextStep !== "REAUTHENTICATE") {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return wire.outcome === "APPLIED" ? { outcome: "APPLIED", removal, nextStep: "REAUTHENTICATE" } : { outcome: "EQUAL_REPLAY", removal };
 }
 
 function parseRecoveryCodeRegenerationResponse(value: unknown): RecoveryCodeRegenerationResponse {
@@ -3606,12 +3633,12 @@ function parseEnrollmentChallengeState(value: unknown, challengeId: string): Enr
   exactKeys(wire, ["challenge", "notificationContact"], ["enrollment"]);
   const notificationContact = parseNotificationContact(wire.notificationContact);
   const enrollment = wire.enrollment === undefined ? undefined : parseTOTPEnrollment(wire.enrollment, "CHALLENGE_INITIAL");
-  if (enrollment && (enrollment.state !== "PENDING" || enrollment.factorRevision !== 1 ||
+  if (enrollment && (enrollment.state !== "PENDING" ||
       timestampOrder(enrollment.expiresAt) > timestampOrder(challenge.expiresAt) || notificationContact.state !== "VERIFIED" ||
       timestampOrder(notificationContact.verifiedAt) > timestampOrder(enrollment.createdAt))) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
-  return { challenge, notificationContact, ...(enrollment ? { enrollment: { ...enrollment, purpose: "INITIAL", state: "PENDING", factorRevision: 1 } } : {}) };
+  return { challenge, notificationContact, ...(enrollment ? { enrollment: { ...enrollment, purpose: "INITIAL", state: "PENDING" } } : {}) };
 }
 
 function parseAuthenticatorRecovery(value: unknown, expectedRequestId?: string): AuthenticatorRecovery {
@@ -4144,6 +4171,7 @@ export const httpIamRepository: IamRepository = {
       },
       async verifyStepUp(credential, stepUpId, command) {
         const target = accountIdentifier(stepUpId);
+        if (!/^[0-9]{6}$/.test(command.code)) throw new Error("INVALID_IAM_RESPONSE");
         const result = parseSecurityStepUp(await requestJSON<unknown>(
           `/api/iam/v1/auth/step-up/${encodeURIComponent(target)}:verify`,
           {
@@ -4175,6 +4203,69 @@ export const httpIamRepository: IamRepository = {
         ), "REPLACEMENT");
         if (enrollment.requestId !== target) throw new Error("INVALID_IAM_RESPONSE");
         return enrollment;
+      },
+      async cancelEnrollment(credential, enrollmentId) {
+        const target = accountIdentifier(enrollmentId);
+        const enrollment = parseTOTPEnrollment(await requestJSON<unknown>(
+          `/api/iam/v1/auth/totp/enrollments/${encodeURIComponent(target)}`,
+          { method: "DELETE", headers: accountHeaders(credential) }
+        ), "REPLACEMENT");
+        if (enrollment.id !== target || enrollment.state !== "CANCELLED" && enrollment.state !== "EXPIRED") throw new Error("INVALID_IAM_RESPONSE");
+        return enrollment;
+      },
+      async confirmEnrollment(credential, enrollmentId, command) {
+        const target = accountIdentifier(enrollmentId);
+        if (!/^[0-9]{6}$/.test(command.code)) throw new Error("INVALID_IAM_RESPONSE");
+        return parseTOTPEnrollmentConfirmation(await requestJSON<unknown>(
+          `/api/iam/v1/auth/totp/enrollments/${encodeURIComponent(target)}:confirm`,
+          { method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+            body: JSON.stringify({ requestId: accountIdentifier(command.requestId), code: accountText(command.code) }) }
+        ), target, "REPLACEMENT");
+      }
+    },
+    removal: {
+      async startStepUp(credential, command) {
+        const requestId = accountIdentifier(command.requestId);
+        const expectedFactorRevision = boundedFactorRevision(command.expectedFactorRevision);
+        const proof = parseSecurityStepUp(await requestJSON<unknown>("/api/iam/v1/auth/step-up", {
+          method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId, operation: "TOTP_REMOVE", expectedFactorRevision })
+        }), "TOTP_REMOVE");
+        if (proof.requestId !== requestId || proof.expectedFactorRevision !== expectedFactorRevision || proof.state !== "PENDING") throw new Error("INVALID_IAM_RESPONSE");
+        return proof;
+      },
+      async stepUpByRequest(credential, requestId) {
+        const target = accountIdentifier(requestId);
+        const proof = parseSecurityStepUp(await requestJSON<unknown>(
+          `/api/iam/v1/auth/step-up/by-request/${encodeURIComponent(target)}`, { headers: accountHeaders(credential) }
+        ), "TOTP_REMOVE");
+        if (proof.requestId !== target) throw new Error("INVALID_IAM_RESPONSE");
+        return proof;
+      },
+      async verifyStepUp(credential, stepUpId, command) {
+        const target = accountIdentifier(stepUpId);
+        if (!/^[0-9]{6}$/.test(command.code)) throw new Error("INVALID_IAM_RESPONSE");
+        const proof = parseSecurityStepUp(await requestJSON<unknown>(
+          `/api/iam/v1/auth/step-up/${encodeURIComponent(target)}:verify`,
+          { method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+            body: JSON.stringify({ requestId: accountIdentifier(command.requestId), password: accountText(command.password), code: accountText(command.code) }) }
+        ), "TOTP_REMOVE");
+        if (proof.id !== target || proof.state !== "PROVED" && proof.state !== "EXPIRED") throw new Error("INVALID_IAM_RESPONSE");
+        return proof;
+      },
+      async remove(credential, command) {
+        const requestId = accountIdentifier(command.requestId);
+        const expectedFactorRevision = boundedFactorRevision(command.expectedFactorRevision);
+        return parseTOTPRemovalResponse(await requestJSON<unknown>("/api/iam/v1/auth/totp:remove", {
+          method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId, stepUpId: accountIdentifier(command.stepUpId), expectedFactorRevision })
+        }), requestId, expectedFactorRevision);
+      },
+      async removalByRequest(credential, requestId) {
+        const target = accountIdentifier(requestId);
+        return parseAuthenticatorRemoval(await requestJSON<unknown>(
+          `/api/iam/v1/auth/totp/removals/by-request/${encodeURIComponent(target)}`, { headers: accountHeaders(credential) }
+        ), target);
       }
     },
     async totpEnrollment(credential, enrollmentId) {

@@ -79,6 +79,7 @@ export type NotificationContactReplacementProgress = {
 
 export type AuthenticatorState =
   | { enrollmentState: "NEVER_BOUND"; factorRevision: 1; factorId: null }
+  | { enrollmentState: "REMOVED"; factorRevision: number; factorId: null }
   | { enrollmentState: "BOUND"; factorRevision: number; factorId: string }
   | { enrollmentState: "RECOVERY_REQUIRED"; factorRevision: number; factorId: string | null };
 
@@ -120,7 +121,7 @@ export type TOTPEnrollmentConfirmation = {
 export type EnrollmentChallengeState = {
   challenge: EnrollmentAuthenticationChallenge;
   notificationContact?: NotificationContact;
-  enrollment?: TOTPEnrollment & { purpose: "INITIAL"; state: "PENDING"; factorRevision: 1 };
+  enrollment?: TOTPEnrollment & { purpose: "INITIAL"; state: "PENDING" };
 };
 
 export type FirstEnrollmentProgress = {
@@ -143,7 +144,7 @@ export type SecurityStepUpState = "PENDING" | "PROVED" | "CONSUMED" | "EXPIRED";
 export type SecurityStepUp = {
   id: string;
   requestId: string;
-  operation: "RECOVERY_CODES_REGENERATE" | "TOTP_REPLACE" | "SECURITY_SETTINGS_UPDATE" | "NOTIFICATION_CONTACT_REPLACE";
+  operation: "RECOVERY_CODES_REGENERATE" | "TOTP_REPLACE" | "TOTP_REMOVE" | "SECURITY_SETTINGS_UPDATE" | "NOTIFICATION_CONTACT_REPLACE";
   expectedFactorRevision: number;
   securitySettings?: SecuritySettingsUpdateIntent;
   notificationContact?: NotificationContactReplacementIntent;
@@ -161,6 +162,40 @@ export type RecoveryCodeRegeneration = {
   factorRevision: number;
   createdAt: string;
 };
+
+/** Historical completion only; it does not prove today's factor or Session state. */
+export type AuthenticatorRemoval = {
+  id: string;
+  requestId: string;
+  factorId: string;
+  factorRevision: number;
+  removedAt: string;
+};
+
+export type TOTPRemovalResponse =
+  | { outcome: "APPLIED"; removal: AuthenticatorRemoval; nextStep: "REAUTHENTICATE" }
+  | { outcome: "EQUAL_REPLAY"; removal: AuthenticatorRemoval };
+
+/** One frozen factor-change ceremony. Password, OTP and provisioning remain outside it. */
+export type TOTPChangeIntent = {
+  operation: "TOTP_REPLACE" | "TOTP_REMOVE";
+  requestId: string;
+  proofRequestId: string;
+  confirmationRequestId: string;
+  factorId: string;
+  expectedFactorRevision: number;
+  state: "STEP_UP_UNKNOWN" | "PENDING_PROOF" | "PROOF_UNKNOWN" | "PROVED" | "ENROLLMENT_UNKNOWN"
+    | "ENROLLING" | "CONFIRM_UNKNOWN" | "CANCEL_UNKNOWN" | "REMOVAL_UNKNOWN" | "COMPLETED" | "CANCELLED" | "REJECTED" | "EXPIRED";
+  stepUp: SecurityStepUp | null;
+  enrollment: TOTPEnrollment | null;
+  removal: AuthenticatorRemoval | null;
+};
+
+/** IAM UTC timestamps retain microseconds; Date alone loses the proof boundary. */
+export function replacementEnrollmentFitsProof(enrollment: TOTPEnrollment, proof: SecurityStepUp): boolean {
+  const order = (value: string) => value.slice(0, 19) + "." + value.slice(19, -1).slice(1).padEnd(6, "0");
+  return order(enrollment.createdAt) >= order(proof.createdAt) && order(enrollment.expiresAt) <= order(proof.expiresAt);
+}
 
 export type RecoveryCodeRegenerationResponse =
   | {
