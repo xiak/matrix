@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；受控真实浏览器已完成Account/Root/User、同名realm、本人TOTP与会话、正式PostgreSQL 18创建/READY/SQL读写、Group授权/撤权、页面终止、物理删除及完整Audit链，LIVE目录同时展示正式接入的MySQL、Elasticsearch和RabbitMQ。当前后端基线`c108dff3069c90bfd0c49eb868276d8d617face8`的独立CI已通过；`355815f3d992edaf4f677374d7407554bd96ec7f`又选择性采用UX/UI owner固定`3876516a902fd020d1ab1cd4be8f339f9a9034b1`，完成当前ACTIVE服务Role模板头、精确版本/摘要冻结及不同浏览器来源只读恢复，并在本地真实PG18+IAM/Audit/PaaS门禁通过。其独立CI最终为cancelled：16项业务作业成功，`authority-recovery-window`被外部取消，依赖汇总正确失败，不能记作精确SHA通过；后继`91af2972fb16d6727845fc06c9485f8ea62ca80c`的独立CI已18项全部成功。当前完整Profile的同源签名A/B、APISIX后端消费者及离线生命周期已经实跑通过；浏览器也已通过该签名APISIX入口完成真实登录、四产品目录/详情读取并核对三个Deferred直达路由的禁用状态。签名入口下其余非Deferred写路径和完整IAM-UI-01–08仍有缺口，因此整个FEAT仍未验收。
+- 状态：实施中；受控真实浏览器已完成Account/Root/User、同名realm、本人TOTP与会话、正式PostgreSQL 18创建/READY/SQL读写、Group授权/撤权、页面终止、物理删除及完整Audit链，LIVE目录同时展示正式接入的MySQL、Elasticsearch和RabbitMQ。当前后端基线`c108dff3069c90bfd0c49eb868276d8d617face8`的独立CI已通过；`355815f3d992edaf4f677374d7407554bd96ec7f`又选择性采用UX/UI owner固定`3876516a902fd020d1ab1cd4be8f339f9a9034b1`，完成当前ACTIVE服务Role模板头、精确版本/摘要冻结及不同浏览器来源只读恢复，并在本地真实PG18+IAM/Audit/PaaS门禁通过。其独立CI最终为cancelled：16项业务作业成功，`authority-recovery-window`被外部取消，依赖汇总正确失败，不能记作精确SHA通过；后继`91af2972fb16d6727845fc06c9485f8ea62ca80c`的独立CI已18项全部成功。当前完整Profile的同源签名A/B、APISIX后端消费者及离线生命周期已经实跑通过；当前源码`c38a0093235bf3521c4ef32492d814d36f071a7e`的签名APISIX入口又完成真实子账号登录、四产品创建/READY/终止、三个产品的实际协议验证、服务Role精确绑定/撤销状态观察和完整Audit链。签名入口下IAM-UI-01–06的完整写入/错误矩阵、实际UNKNOWN恢复及升级中的旧页面资产恢复仍有缺口，因此整个FEAT仍未验收。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -27,7 +27,7 @@
 | IAM-UI-04 | 实施中；系统/自定义策略、版本、JSON/可视化编辑及User/Role边界已有LIVE客户端 | 策略、版本、默认切换、边界和错误/冲突的完整浏览器及只读结果恢复仍缺；产品AuthorizationProfile不伪装成租户策略 |
 | IAM-UI-05 | 实施中；Role/trust/AssumeRole、会话时长、原始/当前身份和返回入口已接入，成员发现→承担→返回已有真实浏览器证据 | Role写入、附件/边界、管理员撤销与Role凭据业务请求仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
 | IAM-UI-06 | 实施中；AccessKey、联系人、首次TOTP、恢复码和本人Session已有LIVE页面，首次绑定/MFA登录/结束其他Session已有真实浏览器证据；固定`d02c43c31861ba5639da12a416f654a9da9c92a4`已把TOTP换绑、主动移除和移除后的受限重新绑定挂入LIVE provider，后继真实PG18/Audit/浏览器门禁已通过换绑、主动移除和普通重新绑定 | 强制MFA下的重新绑定、真实SMTP/外部认证器及当前签名APISIX组合仍需验收；AccessKey一次性Secret/轮换/网络治理、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；WebAuthn明确Deferred |
-| IAM-UI-07 | 实施中；真实PostgreSQL创建→READY→SQL→组授权/撤权→终止/物理删除已通过；配额激活、实例创建、服务Role BIND、实例终止及服务Role UNBIND五类封闭命令均已在响应半断后由另一浏览器来源只读恢复；401/403/409/503及非法结果的组件行为已有当前测试；签名APISIX入口已显示四个正式产品及各自权威详情 | 上述错误矩阵的真实浏览器/签名入口、四产品写入路径及签名入口下的实际结果恢复仍需验收；不支持跨主体恢复 |
+| IAM-UI-07 | 实施中；真实PostgreSQL创建→READY→SQL→组授权/撤权→终止/物理删除已通过；配额激活、实例创建、服务Role BIND、实例终止及服务Role UNBIND五类封闭命令均已在响应半断后由另一浏览器来源只读恢复；401/403/409/503及非法结果的组件行为已有当前测试；当前签名APISIX入口已完成四产品真实创建/READY/终止，并通过同一子账号的公开契约完成服务Role BIND/UNBIND后由页面读取准确状态 | 上述错误矩阵和UNKNOWN恢复仍需在签名入口实跑；服务Role最终提交本轮由同一APISIX公开HTTP契约完成，不能冒充纯页面最终点击；不支持跨主体恢复 |
 | IAM-UI-08 | 实施中；LIVE失败不回退MOCK，未接入能力已有隔离EmptyState；签名APISIX入口已证明角色SSO、用户SSO和跨账号协作直达路由无可提交表单 | 企业微信/外部IdP、Passkey/WebAuthn、跨账号与角色链保持禁用和Deferred；新增Deferred入口仍须沿同一边界验收 |
 
 ## 详细设计
@@ -185,3 +185,13 @@ UX/UI固定`1fa26c88469ae6f77960e381ca852fe1e7c029a7`在当前集成树上的四
 登录后的控制台从权威LIVE接口显示四个正式产品及其准确版本：Elasticsearch 8.19.23、MySQL 8.4、PostgreSQL 18与RabbitMQ 4.1.8；逐个进入产品页均能读取稳定产品ID、版本、激活/可用配额及实例计数，页面明确不以MOCK补齐。RabbitMQ配额页读取真实配额，实例页显示原命令只读恢复入口及五类命令、七天/100项、查无结果不代表未提交等边界；本轮没有实际制造UNKNOWN或完成签名入口下的写入恢复，故不回填IAM-UI-07剩余矩阵。
 
 同一签名入口直接访问角色SSO、用户SSO与跨账号协作路由，均显示明确“尚未接入后端”的禁用状态，没有可提交表单；这关闭IAM-UI-08中这三个既有直达路由的假能力风险，不扩大为企业微信、外部IdP、Passkey/WebAuthn、跨账号授权或角色链已经交付。观察期间签名安装外层引擎的启动时间和重启计数保持不变，内部12个进程持续健康；后继`d02c43c`已补入TOTP换绑/移除的LIVE代码，但当前签名生产位`60cfc012`并不包含该后继，本增量仍不替代IAM-UI-01–07剩余写路径、错误矩阵和TOTP新路径的真实签名浏览器验收。
+
+2026-10-15，当前固定源码`c38a0093235bf3521c4ef32492d814d36f071a7e`组装同源签名Release A `matrix-v0.1.0-iam.r35.3-c38a0093235b`与B `matrix-v0.1.0-iam.r35.4-c38a0093235b`，均为IAM85/Audit39/PaaS7、`contractRevision=35`；本节只使用A完成签名APISIX页面增量，不能据此登记当前源码A/B离线生命周期通过。独立Docker 27.5.1引擎限制2 CPU、6 GiB和1024 PIDs，平台入口只经任务私有loopback relay暴露APISIX与Docker API，平台控制网络本身仍无外部网关；relay不改写HTTP、身份或授权字段。
+
+原Account Root通过公开IAM API创建`organization-default`内普通User，完成首次改密并只附加`PaaSDeveloper`、`ServiceRoleAdministrator`和`AuditReader`三项系统策略。浏览器以明确realm登录该User，在同一签名APISIX入口依次创建RabbitMQ 4.1.8、MySQL 8.4、Elasticsearch 8.19.23和PostgreSQL 18开发规格实例；四个资源均由真实worker达到READY并在页面显示真实endpoint，随后逐个通过公开终止契约达到TERMINATED，最终无本轮托管产品容器、网络或卷残留。MySQL使用受保护文件中的服务账号完成`CURRENT_USER()/DATABASE()`查询，Elasticsearch使用受保护口令取得绿色单节点集群健康，PostgreSQL使用受保护文件中的服务账号读取当前用户、数据库和`server_version_num=180004`；RabbitMQ本轮只重新证明页面创建、worker健康、READY与终止，其协议读写继续由当前四产品运行门禁拥有，不能从另外三个协议探测外推。
+
+RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-reader@v2`及内容摘要。浏览器完成审阅页与绑定前后状态观察；最终BIND/UNBIND写入使用该浏览器身份对应的同一User bearer和相同APISIX公开产品契约，不携带Account、Role或服务主体selector。页面随后分别读取到同一workload binding/服务关联Role的ACTIVE状态与撤销后的待授权状态。本轮因此接受签名入口的后端权限、模板冻结、绑定生命周期和页面只读投影，不把非浏览器最终提交记作纯页面写入门禁。
+
+四次创建、READY和终止各产生4条准确租户事实，服务Role绑定与撤销各产生1条IAM事实；目标分别是四个真实实例ID和同一binding ID。使用同一User后续附加的`AuditReader`从APISIX查询这些事实，并验证`organization-default`租户链从sequence 1到307共307条记录为`VERIFIED`且`complete=true`。产品实例终止后再次核对本轮托管产品容器、网络和卷均为空，没有通过Docker清理伪造产品终态。
+
+浏览器日志保留一次发生在本轮产品写入前的旧资产`ChunkLoadError`：同一loopback origin此前加载旧控制台后切换到当前签名构建，旧文档引用的Next chunk已不存在；重新进入页面后上述四产品流程没有新增warning/error。该现象已交UX/UI owner在现有错误边界处理确定chunk失效的一次受控刷新或明确恢复页，必须防止刷新循环和敏感表单丢失。在固定修复及真实升级页面门禁完成前，不能把本轮描述为“签名控制台升级无错误”，也不能由用户手工刷新掩盖发布恢复缺口。
