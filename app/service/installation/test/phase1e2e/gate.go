@@ -471,9 +471,6 @@ func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
 		return fail("signed-managed-products-tenant")
 	}
 	tenant := &value.retainedIAM.Tenants[0]
-	if err := value.delegateSignedManagedProductServiceRoleAuthority(ctx, tenant); err != nil {
-		return err
-	}
 	products := []signedManagedProduct{
 		{name: "PostgreSQL 18", component: "postgres", serviceID: managedservicev1.PostgreSQLServiceID,
 			offeringID:   managedservicev1.PostgreSQLOfferingID,
@@ -1685,6 +1682,9 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 			value.retainedIAM.PolicyChanges.PreBackupRevoke = change
 			if err := value.edge.logout(ctx, tenant.OldChildCredential); err != nil {
 				return fail("tenant-session-revoke")
+			}
+			if err := value.delegateSignedManagedProductServiceRoleAuthority(ctx, &tenant); err != nil {
+				return err
 			}
 			if err := value.prepareDelegatedAuthorityRetention(ctx, &tenant); err != nil {
 				return err
