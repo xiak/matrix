@@ -20,7 +20,10 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
-const maximumHTTPBody = 1024 * 1024
+const (
+	maximumHTTPBody             = 1024 * 1024
+	maximumAuditAcceptancePages = (auditv1.MaxVerifyRecords + auditv1.MaxPageSize - 1) / auditv1.MaxPageSize
+)
 
 type edgeClient struct {
 	endpoint  string
@@ -696,7 +699,7 @@ func (client *edgeClient) allAuditRecords(
 ) ([]auditv1.AuditRecord, error) {
 	request := auditv1.QueryRecordsRequest{PageSize: auditv1.MaxPageSize}
 	var records []auditv1.AuditRecord
-	for pageNumber := 0; pageNumber < 8; pageNumber++ {
+	for pageNumber := 0; pageNumber < maximumAuditAcceptancePages; pageNumber++ {
 		page, err := client.queryAudit(ctx, bearer, request, tenantID, installationID)
 		if err != nil {
 			return nil, err
