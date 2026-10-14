@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；最近接受发布组合仍为IAM83/Audit37/PaaS3、`contractRevision=31`，其签名产品授权目录、数据库驱动服务Role模板/权限上限、通用动态产品闭环及同Profile签名A/B生命周期已有既有证据。当前候选把PostgreSQL 18、MySQL 8.4 LTS、Elasticsearch 8.19.23和RabbitMQ 4.1.8作为真实provider接入生产worker，并把Account服务开通委派给同一Policy体系中的USER与ROLE；固定`964d7c85d2e9249541996d22b9b2d9b9189922ab`替换未接受的早期跨浏览器UNKNOWN后端候选，完整形状仍为IAM85/Audit39/PaaS7、`contractRevision=35`，唯一直接前驱仍是固定`ba2ea256528349f1300092ba0fd44641d758accb`的IAM84/Audit39/PaaS6+r34。当前修复已有本地真实PG18证据，独立CI仍在运行，修复后完整五进程、同Profile签名A/B及该恢复契约的LIVE UI均未完成，因此不继承既有发布接受状态。FEAT-010其余故障/UNKNOWN UI/APISIX/签名浏览器路径与IAM-UI-01–08完整范围，以及AC-11的完整容量/公平性/HA仍未验收，整体需求仍为实施中。
+- 状态：实施中；当前未发布形状为IAM85/Audit39/PaaS7、`contractRevision=35`，唯一直接前驱是固定`ba2ea256528349f1300092ba0fd44641d758accb`的IAM84/Audit39/PaaS6+r34。后端基线`c108dff3069c90bfd0c49eb868276d8d617face8`的[Verification 38406821134](https://github.com/xiak/matrix/actions/runs/38406821134)已核实18项全部成功；`355815f3d992edaf4f677374d7407554bd96ec7f`已在本地真实PG18+IAM/Audit/PaaS与两个隔离浏览器来源闭合服务Role UNKNOWN只读恢复，其独立[Verification 38504465450](https://github.com/xiak/matrix/actions/runs/38504465450)仍在运行。该组合尚未取得同Profile签名A/B、APISIX及签名安装后的LIVE浏览器证据，FEAT-010完整IAM-UI-01–08与AC-11完整容量/公平性/HA仍未验收，整体需求仍为实施中。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -29,8 +29,8 @@
 | 总体架构、高可用与容量边界 | [000总体架构](FEAT-IAM-000-product-contract.md#总体架构)及其可用性、容量与一致性段落，跨产品边界由ADR-0002拥有 | 设计已完成；当前多IAM副本、失败关闭、受限容量与数据库切换夹具已有证据，部署尚不支持的完整数据库HA继续明确列为缺口，不虚构SLO |
 | 详细设计与API约定 | 001–010各自拥有行为、锁序、事务、API/schema及验收；000只拥有公共wire/版本/分页约定 | 已完成当前范围设计；没有新增平行模型、通用receipt框架或第二套API文档 |
 | 分解为可验收FEAT | 001–011覆盖本轮实现与组合验收，012保存满足前置后才启动的外部集成 | 已完成分解；每项有唯一owner，固定来源采用记录仍由既有adoption文件拥有 |
-| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：后端当前范围及首个真实产品资源浏览器闭环已实现；010的辅助上下文局部降级、慢响应/故障、跨浏览器UNKNOWN恢复、APISIX/签名浏览器路径和完整IAM-UI-01–08仍缺，延期的012不因此被错误改为本轮实现 |
-| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-08已由`0d9d0b12`的真实PostgreSQL 18浏览器闭环通过；当前源码的其余010门禁及IAM-AC-11完整容量/公平性/HA仍缺 |
+| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：后端当前范围、真实产品资源浏览器闭环及服务Role跨浏览器UNKNOWN只读恢复已实现；010的其余故障矩阵、APISIX/签名浏览器路径和完整IAM-UI-01–08仍缺，延期的012不因此被错误改为本轮实现 |
+| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-08已由真实PostgreSQL 18浏览器闭环通过，跨浏览器恢复已有本地效果证据但精确SHA独立CI仍在运行；当前Profile签名/APISIX页面及IAM-AC-11完整容量/公平性/HA仍缺 |
 
 只有上表仍列出的未完成边界均获得其owner的真实证据后，才能把000及本总目标标为Accepted。设计文件齐全、静态页面、组件测试、健康端点、另一个分支的浏览器结果或局部CI成功都不能改变这一判定。
 
