@@ -2592,18 +2592,6 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 ) []string {
 	t.Helper()
 	const loginName = "browser.command.recovery"
-	member := createIAMUser(t, iamEndpoint, ownerBearer, loginName,
-		"Browser command recovery", initialDeveloperPassword, "browser-command-recovery-user-create")
-	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, member.ID,
-		iamv1.SystemPolicyPaaSDeveloper, "browser-command-recovery-paas-grant")
-	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, member.ID,
-		iamv1.SystemPolicyServiceRoleAdministrator, "browser-command-recovery-service-role-grant")
-	initial := loginIAM(t, iamEndpoint, loginName+"@organization-process", initialDeveloperPassword,
-		"browser-command-recovery-initial-login")
-	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword,
-		changedDeveloperPassword, "browser-command-recovery-password")
-	memberLogin := loginIAM(t, iamEndpoint, loginName+"@organization-process", changedDeveloperPassword,
-		"browser-command-recovery-login")
 	commandType := managedservicev1.CommandType(strings.TrimSpace(os.Getenv("MATRIX_IAM_COMMAND_RECOVERY_TYPE")))
 	if commandType == "" {
 		commandType = managedservicev1.CommandServiceRoleBind
@@ -2618,6 +2606,20 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 		t.Fatalf("MATRIX_IAM_COMMAND_RECOVERY_TYPE is not a closed managed-service command: %q", commandType)
 	}
 
+	member := createIAMUser(t, iamEndpoint, ownerBearer, loginName,
+		"Browser command recovery", initialDeveloperPassword, "browser-command-recovery-user-create")
+	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, member.ID,
+		iamv1.SystemPolicyPaaSDeveloper, "browser-command-recovery-paas-grant")
+	if commandType == managedservicev1.CommandServiceRoleBind || commandType == managedservicev1.CommandServiceRoleUnbind {
+		createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, member.ID,
+			iamv1.SystemPolicyServiceRoleAdministrator, "browser-command-recovery-service-role-grant")
+	}
+	initial := loginIAM(t, iamEndpoint, loginName+"@organization-process", initialDeveloperPassword,
+		"browser-command-recovery-initial-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "browser-command-recovery-password")
+	memberLogin := loginIAM(t, iamEndpoint, loginName+"@organization-process", changedDeveloperPassword,
+		"browser-command-recovery-login")
 	base := paasEndpoint + "/managed-services/v1"
 	product := managedPostgresFixture(t, "command-recovery", managedRuntime.images.postgres)
 	defer cleanupManagedProduct(t, managedRuntime, product)
@@ -2746,7 +2748,7 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 	if observation.Attempts != 1 || !observation.ResponseLost || observation.BackendStatus < 200 ||
 		observation.BackendStatus >= 300 || !strings.HasPrefix(observation.IdempotencyKey, wantPrefix) ||
 		observation.MutationHost == "" || observation.RecoveryReads < 1 || observation.RecoveryHost == "" ||
-		observation.RecoveryHost == observation.MutationHost {
+		observation.RecoveryHost == observation.MutationHost || observation.PostLossWrites != 0 {
 		t.Fatalf("browser response-loss boundary was not exact: %#v", observation)
 	}
 	if commandType == managedservicev1.CommandInstallationCreate {
@@ -2774,6 +2776,7 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 		target string
 	}
 	expectedAudits := []expectedAudit{}
+	authoritativeInputDigest := ""
 	switch commandType {
 	case managedservicev1.CommandQuotaActivate:
 		var submitted managedservicev1.ActivateQuotaRequest
@@ -2794,6 +2797,11 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 			activated.PurchasedCount != submitted.InstanceCount {
 			t.Fatalf("browser quota recovery lost the authoritative entitlement: status=%d body=%s", quotaResponse.Status, quotaResponse.Body)
 		}
+		if err := database.QueryRow(ctx, `SELECT request_digest FROM managedservice.quota_entitlements
+			WHERE tenant_id=$1 AND id=$2 AND idempotency_key=$3`,
+			member.AccountID, result.Target.ID, observation.IdempotencyKey).Scan(&authoritativeInputDigest); err != nil {
+			t.Fatalf("read authoritative quota command commitment: %v", err)
+		}
 		expectedAudits = append(expectedAudits,
 			expectedAudit{auditv1.ActionManagedServiceQuotaEntitlementActivated, result.Target.ID})
 	case managedservicev1.CommandInstallationCreate:
@@ -2804,6 +2812,12 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 			installation.ID != product.installationID {
 			t.Fatalf("browser recovered an invalid installation creation: %#v", result)
 		}
+		if err := database.QueryRow(ctx, `SELECT request_digest FROM managedservice.operations
+			WHERE tenant_id=$1 AND id=$2 AND installation_id=$3 AND idempotency_key=$4 AND kind='PROVISION'`,
+			member.AccountID, result.Operation.ID, product.installationID, observation.IdempotencyKey).
+			Scan(&authoritativeInputDigest); err != nil {
+			t.Fatalf("read authoritative installation creation commitment: %v", err)
+		}
 		expectedAudits = append(expectedAudits,
 			expectedAudit{auditv1.ActionManagedServiceInstallationCreated, product.installationID})
 	case managedservicev1.CommandInstallationTerminate:
@@ -2813,6 +2827,12 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 			result.Operation.Phase != managedservicev1.InstallationReady || result.BindingID != nil ||
 			installation.Phase != managedservicev1.InstallationTerminated {
 			t.Fatalf("browser recovered an invalid installation termination: %#v", result)
+		}
+		if err := database.QueryRow(ctx, `SELECT request_digest FROM managedservice.operations
+			WHERE tenant_id=$1 AND id=$2 AND installation_id=$3 AND idempotency_key=$4 AND kind='TERMINATE'`,
+			member.AccountID, result.Operation.ID, product.installationID, observation.IdempotencyKey).
+			Scan(&authoritativeInputDigest); err != nil {
+			t.Fatalf("read authoritative installation termination commitment: %v", err)
 		}
 		expectedAudits = append(expectedAudits,
 			expectedAudit{auditv1.ActionManagedServiceInstallationTerminationRequested, product.installationID})
@@ -2847,13 +2867,38 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 			t.Fatalf("browser command recovery resolved a different workload binding: status=%d body=%s", detailResponse.Status, detailResponse.Body)
 		}
 		if commandType == managedservicev1.CommandServiceRoleBind {
+			if err := database.QueryRow(ctx, `SELECT request_digest FROM iam.workload_role_bindings
+				WHERE tenant_id=$1 AND id=$2 AND creation_idempotency_key=$3 AND creation_command_version=2`,
+				member.AccountID, *result.BindingID, observation.IdempotencyKey).Scan(&authoritativeInputDigest); err != nil {
+				t.Fatalf("read authoritative service Role binding commitment: %v", err)
+			}
 			expectedAudits = append(expectedAudits,
 				expectedAudit{auditv1.ActionIAMServiceLinkedRoleCreated, string(linked.Items[0].Relation.Role.ID)},
 				expectedAudit{auditv1.ActionIAMWorkloadRoleBindingCreated, string(*result.BindingID)})
 		} else {
+			var authoritativeMatches int
+			if err := database.QueryRow(ctx, `SELECT count(*),COALESCE(min(fact.event_document->>'requestDigest'),'')
+				FROM iam.workload_role_bindings binding JOIN iam.audit_outbox fact
+				  ON fact.tenant_id=binding.tenant_id
+				 AND fact.event_document->>'action'='iam.workload-role-binding.revoked'
+				 AND fact.event_document->>'result'='SUCCEEDED'
+				 AND fact.event_document#>>'{target,kind}'='WORKLOAD_ROLE_BINDING'
+				 AND fact.event_document#>>'{target,id}'=binding.id
+				 AND fact.event_document#>>'{actor,type}'='USER'
+				 AND fact.event_document#>>'{actor,id}'=$4
+				 AND (fact.event_document->>'occurredAt')::timestamptz=binding.revoked_at
+				WHERE binding.tenant_id=$1 AND binding.id=$2
+				  AND binding.revocation_idempotency_key=$3 AND binding.revocation_command_version=2`,
+				member.AccountID, *result.BindingID, observation.IdempotencyKey, member.ID).
+				Scan(&authoritativeMatches, &authoritativeInputDigest); err != nil || authoritativeMatches != 1 {
+				t.Fatalf("read authoritative service Role unbinding commitment: matches=%d err=%v", authoritativeMatches, err)
+			}
 			expectedAudits = append(expectedAudits,
 				expectedAudit{auditv1.ActionIAMWorkloadRoleBindingRevoked, string(*result.BindingID)})
 		}
+	}
+	if authoritativeInputDigest == "" || result.InputDigest != authoritativeInputDigest {
+		t.Fatal("browser command result did not preserve the authoritative input commitment")
 	}
 	waitAllIAMOutboxDelivered(t, ctx, database)
 	waitAllPaaSOutboxDelivered(t, ctx, database)
@@ -3208,6 +3253,10 @@ type browserResponseLoss struct {
 	mutationHost   string
 	recoveryReads  int
 	recoveryHost   string
+	postLossWrites int
+	postLossMethod string
+	postLossPath   string
+	postLossHost   string
 }
 
 type browserResponseLossObservation struct {
@@ -3219,6 +3268,10 @@ type browserResponseLossObservation struct {
 	MutationHost   string
 	RecoveryReads  int
 	RecoveryHost   string
+	PostLossWrites int
+	PostLossMethod string
+	PostLossPath   string
+	PostLossHost   string
 }
 
 func (value *browserResponseLoss) matches(request *http.Request) bool {
@@ -3257,6 +3310,24 @@ func (value *browserResponseLoss) observeRecovery(request *http.Request, backend
 	value.recoveryHost = request.Host
 }
 
+func (value *browserResponseLoss) observePostLossManagedServiceWrite(request *http.Request) {
+	if value == nil || !strings.HasPrefix(request.URL.Path, "/api/managed-services/") ||
+		request.Method == http.MethodGet || request.Method == http.MethodHead || request.Method == http.MethodOptions {
+		return
+	}
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	if !value.responseLost {
+		return
+	}
+	value.postLossWrites++
+	if value.postLossMethod == "" {
+		value.postLossMethod = request.Method
+		value.postLossPath = request.URL.Path
+		value.postLossHost = request.Host
+	}
+}
+
 func (value *browserResponseLoss) markLost() {
 	value.mu.Lock()
 	defer value.mu.Unlock()
@@ -3271,7 +3342,37 @@ func (value *browserResponseLoss) snapshot() browserResponseLossObservation {
 		BackendStatus: value.backendStatus, IdempotencyKey: value.idempotencyKey,
 		RequestBody:  bytes.Clone(value.requestBody),
 		MutationHost: value.mutationHost, RecoveryReads: value.recoveryReads,
-		RecoveryHost: value.recoveryHost,
+		RecoveryHost: value.recoveryHost, PostLossWrites: value.postLossWrites,
+		PostLossMethod: value.postLossMethod, PostLossPath: value.postLossPath,
+		PostLossHost: value.postLossHost,
+	}
+}
+
+func TestBrowserResponseLossTracksAllPostLossManagedServiceWrites(t *testing.T) {
+	loss := &browserResponseLoss{}
+	loss.observePostLossManagedServiceWrite(httptest.NewRequest(http.MethodPost,
+		"http://browser-a.example/api/managed-services/v1/quota-entitlements", nil))
+	loss.markLost()
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodGet,
+			"http://browser-b.example/api/managed-services/v1/command-results/QUOTA_ACTIVATE", nil),
+		httptest.NewRequest(http.MethodPost,
+			"http://browser-b.example/api/iam/v1/sessions", nil),
+		httptest.NewRequest(http.MethodOptions,
+			"http://browser-b.example/api/managed-services/v1/service-installations", nil),
+	} {
+		loss.observePostLossManagedServiceWrite(request)
+	}
+	loss.observePostLossManagedServiceWrite(httptest.NewRequest(http.MethodPost,
+		"http://browser-b.example/api/managed-services/v1/service-installations", nil))
+	loss.observePostLossManagedServiceWrite(httptest.NewRequest(http.MethodDelete,
+		"http://browser-b.example/api/managed-services/v1/service-installations/install-one/service-role-bindings/binding-one", nil))
+
+	observation := loss.snapshot()
+	if observation.PostLossWrites != 2 || observation.PostLossMethod != http.MethodPost ||
+		observation.PostLossPath != "/api/managed-services/v1/service-installations" ||
+		observation.PostLossHost != "browser-b.example" {
+		t.Fatalf("post-loss managed-service writes = %#v", observation)
 	}
 }
 
@@ -3375,6 +3476,9 @@ func startIAMConsoleBrowserWithResponseLoss(
 		select {
 		case requests <- struct{}{}:
 			defer func() { <-requests }()
+			if responseLoss != nil {
+				responseLoss.observePostLossManagedServiceWrite(r)
+			}
 			if responseLoss != nil && responseLoss.matchesRecovery(r) {
 				captured := httptest.NewRecorder()
 				mux.ServeHTTP(captured, r)
