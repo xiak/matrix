@@ -125,7 +125,7 @@ export function LiveRecoveryCodeRegeneration({ factor }: { factor: BoundFactor }
     {error ? <Alert status="danger">{t(`errors.${error}`)}</Alert> : null}
     <Alert status="success">{t("ready")}</Alert>
     <p className={styles.boundary}><ShieldCheck aria-hidden="true" />{t("boundary")}</p>
-    <div className={styles.flowActions}><Button disabled={busy} onClick={() => void start()} type="button" variant="secondary"><RefreshCcw aria-hidden="true" />{busy ? t("starting") : t("start")}</Button></div>
+    <div className={styles.flowActions}><Button disabled={busy || Boolean(client.totpChangeIntent)} onClick={() => void start()} type="button" variant="secondary"><RefreshCcw aria-hidden="true" />{busy ? t("starting") : t("start")}</Button></div>
   </div>;
 
   const expiresAt = intent.stepUp?.expiresAt;

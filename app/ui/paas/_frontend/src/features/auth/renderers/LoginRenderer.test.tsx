@@ -97,7 +97,7 @@ describe("branded sign-in flows", () => {
     const { user } = open(iam);
     await user.type(screen.getByLabelText("密码", { exact: true }), "Initial-Password-49!");
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
-    expect(await screen.findByRole("heading", { name: "首次设置身份验证器" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "设置登录身份验证器" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "开始绑定身份验证器" })).toBeTruthy();
     expect(navigation.replace).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain("private-enrollment-credential");

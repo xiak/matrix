@@ -43,7 +43,7 @@ export function LiveNotificationContactReplacement({ client, contact, factor, on
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ReplacementError>(null);
   const progress = client.notificationReplacementProgress;
-  const canStart = client.notificationReplacementAvailable && factor.enrollmentState === "BOUND" && !contact.pendingVerificationId;
+  const canStart = client.notificationReplacementAvailable && factor.enrollmentState === "BOUND" && !contact.pendingVerificationId && !client.totpChangeIntent;
 
   async function finish() {
     if (!await onCommitted()) return false;
@@ -155,7 +155,7 @@ export function LiveNotificationContactReplacement({ client, contact, factor, on
     {error ? <Alert status="danger">{t(`errors.${error}`)}</Alert> : null}
     <dl className={styles.facts}><div><dt>{t("current")}</dt><dd>{contact.email}</dd></div></dl>
     <FormField id={emailId} label={t("target")} hint={t("targetHint")}><Input autoComplete="email" id={emailId} onChange={(event) => setEmail(event.target.value)} required type="email" value={email} /></FormField>
-    <div className={styles.flowActions}><Button disabled={busy} onClick={() => { setDrafting(false); setEmail(""); setError(null); }} type="button" variant="ghost">{t("back")}</Button><Button disabled={busy || !email || email.toLowerCase() === contact.email.toLowerCase()} type="submit">{busy ? t("working") : t("continue")}</Button></div>
+    <div className={styles.flowActions}><Button disabled={busy} onClick={() => { setDrafting(false); setEmail(""); setError(null); }} type="button" variant="ghost">{t("back")}</Button><Button disabled={busy || !canStart || !email || email.toLowerCase() === contact.email.toLowerCase()} type="submit">{busy ? t("working") : t("continue")}</Button></div>
   </form>;
 
   const verification = progress.verification;

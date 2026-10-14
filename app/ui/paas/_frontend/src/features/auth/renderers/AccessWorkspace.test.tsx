@@ -731,6 +731,14 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.queryByRole("button", { name: "查看内部接入流程（MOCK）" })).toBeNull();
     expect(screen.queryByRole("table", { name: "产品权限能力目录" })).toBeNull();
   });
+  it.each<AccountAccessView>(["providers", "federations", "user-sso", "authorization-profiles", "policy-language", "policy-configuration", "role-access"])
+    ("fails closed on an unsupported LIVE direct route %s without a submit-capable preview", async (view) => {
+      const { repository } = await open(view, { live: true });
+      expect(await screen.findByText("此能力尚未接入后端")).toBeTruthy();
+      expect(document.querySelector("form")).toBeNull();
+      expect(repository.execute).not.toHaveBeenCalled();
+      expect(repository.workspace).toBeUndefined();
+    });
   it("cross-checks the managed-service template without implying customer authorization", async () => {
     const { user } = await open("authorization-profiles", { repository: {
       listAuthorizationProfiles: vi.fn(() => previewAccountRepository.listAuthorizationProfiles(previewCredential))

@@ -40,7 +40,7 @@ type SessionContextValue = {
   authenticatorRecovery: PendingAuthenticatorRecovery | null;
   enrollmentRecovery: EnrollmentRecoveryMaterial | null;
   firstEnrollment: FirstEnrollmentProgress | null;
-  reauthenticationReason: "PASSWORD" | "ENROLLMENT_PASSWORD" | "FACTOR" | null;
+  reauthenticationReason: "PASSWORD" | "ENROLLMENT_PASSWORD" | "FACTOR" | "FACTOR_REMOVED" | null;
   error: SessionErrorCode | null;
   clearError(): void;
   login(loginName: string, password: string): Promise<LoginOutcome | null>;
@@ -131,7 +131,7 @@ export function SessionProvider({
   const [authenticatorRecovery, setAuthenticatorRecovery] = useState<PendingAuthenticatorRecovery | null>(null);
   const [enrollmentRecovery, setEnrollmentRecovery] = useState<EnrollmentRecoveryMaterial | null>(null);
   const [firstEnrollment, setFirstEnrollment] = useState<FirstEnrollmentProgress | null>(null);
-  const [reauthenticationReason, setReauthenticationReason] = useState<"PASSWORD" | "ENROLLMENT_PASSWORD" | "FACTOR" | null>(null);
+  const [reauthenticationReason, setReauthenticationReason] = useState<"PASSWORD" | "ENROLLMENT_PASSWORD" | "FACTOR" | "FACTOR_REMOVED" | null>(null);
   const [credential, setCredential] = useState<string | null>(null);
   const [sessionRevision, setSessionRevision] = useState(0);
   const credentialRef = useRef<string | null>(null);
@@ -737,6 +737,7 @@ export function SessionProvider({
     replaceChallenge(null);
     setError(null);
     setEnrollmentRecovery({ enrollmentId, recoveryCodes: [...recoveryCodes] });
+    setReauthenticationReason("FACTOR");
     setPhase("recovery-codes-required");
     return true;
   }, [replaceChallenge]);
@@ -747,6 +748,20 @@ export function SessionProvider({
     setError(null);
     setPhase("reauthentication-required");
   }, []);
+
+  const completeAuthenticatorRemoval = useCallback((expectedCredential: string) => {
+    if (credentialRef.current !== expectedCredential) return false;
+    authenticationRevisionRef.current += 1;
+    credentialRef.current = null;
+    setCredential(null);
+    setCurrent(null);
+    replaceChallenge(null);
+    setEnrollmentRecovery(null);
+    setError(null);
+    setReauthenticationReason("FACTOR_REMOVED");
+    setPhase("reauthentication-required");
+    return true;
+  }, [replaceChallenge]);
 
   const changePassword = useCallback(async (
     currentPassword: string,
@@ -830,7 +845,7 @@ export function SessionProvider({
   return (
     <CredentialContext.Provider value={credentialValue}>
       <SessionContext.Provider value={sessionValue}>
-        <PersonalSecurityProvider repository={repository} credential={credential} current={current} sessionRevision={sessionRevision} isCurrentSession={isCurrentSession} expire={expire} completeEnrollment={completeEnrollment}>
+        <PersonalSecurityProvider repository={repository} credential={credential} current={current} sessionRevision={sessionRevision} isCurrentSession={isCurrentSession} expire={expire} completeEnrollment={completeEnrollment} completeRemoval={completeAuthenticatorRemoval}>
           <OwnSessionsProvider repository={repository} credential={credential} current={current} expire={expire}>
             <RoleSessionProvider current={current} expireSource={expire} repository={repository} sourceCredential={credential}>
               {children}

@@ -1333,6 +1333,116 @@ describe("IAM HTTP personal-security boundary", () => {
     }
   });
 
+  it("cancels and confirms only REPLACEMENT enrollments using the existing factor routes", async () => {
+    const enrollment = { ...pendingEnrollment, purpose: "REPLACEMENT", factorRevision: 2, expiresAt: "2026-09-11T08:02:00Z" };
+    const cancelled = { ...enrollment, state: "CANCELLED", completedAt: "2026-09-11T08:01:00Z" };
+    let fetcher = reply(cancelled);
+    await expect(httpIamRepository.personalSecurity!.replacement!.cancelEnrollment("bearer", enrollment.id)).resolves.toMatchObject({ purpose: "REPLACEMENT", state: "CANCELLED" });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/totp/enrollments/${enrollment.id}`);
+    expect(firstRequest(fetcher)[1]).toMatchObject({ method: "DELETE", cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    const confirmed = { ...enrollment, state: "CONFIRMED", completedAt: "2026-09-11T08:01:00Z" };
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `replacement-code-${index}`);
+    fetcher = reply({ enrollment: confirmed, nextStep: "REAUTHENTICATE", recoveryCodes });
+    await expect(httpIamRepository.personalSecurity!.replacement!.confirmEnrollment("bearer", enrollment.id, { requestId: "replacement-confirm", code: "123456" })).resolves.toMatchObject({ recoveryCodes });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/totp/enrollments/${enrollment.id}:confirm`);
+    expect(requestBody(fetcher)).toEqual({ requestId: "replacement-confirm", code: "123456" });
+    for (const patch of [{ purpose: "INITIAL" }, { purpose: undefined }, { id: "other-enrollment" }, { state: "PENDING", completedAt: undefined }]) {
+      reply({ enrollment: { ...confirmed, ...patch }, nextStep: "REAUTHENTICATE", recoveryCodes });
+      await expect(httpIamRepository.personalSecurity!.replacement!.confirmEnrollment("bearer", enrollment.id, { requestId: "replacement-confirm", code: "123456" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    for (const patch of [{ purpose: "INITIAL" }, { id: "other-enrollment" }, { state: "PENDING", completedAt: undefined }, { provisioning: { seed: "never-read" } }]) {
+      reply({ ...cancelled, ...patch });
+      await expect(httpIamRepository.personalSecurity!.replacement!.cancelEnrollment("bearer", enrollment.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("removes through an exact TOTP_REMOVE proof and reads only the original public request", async () => {
+    const requestId = "remove-factor-1";
+    const proof = { apiVersion, kind: "StepUp", id: "remove-proof", requestId, operation: "TOTP_REMOVE", expectedFactorRevision: 2,
+      state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z" };
+    let fetcher = reply(proof);
+    await httpIamRepository.personalSecurity!.removal!.startStepUp("bearer", { requestId, expectedFactorRevision: 2 });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/step-up");
+    expect(requestBody(fetcher)).toEqual({ requestId, operation: "TOTP_REMOVE", expectedFactorRevision: 2 });
+    fetcher = reply({ ...proof, state: "PROVED", provedAt: "2026-09-11T08:00:30Z" });
+    await httpIamRepository.personalSecurity!.removal!.verifyStepUp("bearer", proof.id, { requestId: "proof-verification", password: "private-password", code: "123456" });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/step-up/${proof.id}:verify`);
+    expect(requestBody(fetcher)).toEqual({ requestId: "proof-verification", password: "private-password", code: "123456" });
+    fetcher = reply(proof);
+    await httpIamRepository.personalSecurity!.removal!.stepUpByRequest("bearer", requestId);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/step-up/by-request/${requestId}`);
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    const removal = { apiVersion, kind: "AuthenticatorRemoval", id: "factor-removal", requestId, factorId: "factor-original", factorRevision: 3, removedAt: "2026-09-11T08:01:00Z" };
+    fetcher = reply({ outcome: "APPLIED", removal, nextStep: "REAUTHENTICATE" });
+    await expect(httpIamRepository.personalSecurity!.removal!.remove("bearer", { requestId, stepUpId: proof.id, expectedFactorRevision: 2 })).resolves.toMatchObject({ outcome: "APPLIED", nextStep: "REAUTHENTICATE" });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/totp:remove");
+    expect(requestBody(fetcher)).toEqual({ requestId, stepUpId: proof.id, expectedFactorRevision: 2 });
+    fetcher = reply(removal);
+    await expect(httpIamRepository.personalSecurity!.removal!.removalByRequest("new-bearer", requestId)).resolves.toMatchObject({ id: removal.id, factorRevision: 3 });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/totp/removals/by-request/${requestId}`);
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer new-bearer" } });
+    expect(firstRequest(fetcher)[1]?.body).toBeUndefined();
+    reply({ outcome: "EQUAL_REPLAY", removal });
+    await expect(httpIamRepository.personalSecurity!.removal!.remove("new-bearer", { requestId, stepUpId: proof.id, expectedFactorRevision: 2 })).resolves.toEqual({ outcome: "EQUAL_REPLAY", removal: { id: removal.id, requestId, factorId: removal.factorId, factorRevision: 3, removedAt: removal.removedAt } });
+  });
+
+  it("fails closed on borrowed removal proofs, unsafe revisions, mismatched completions and replay reauthentication", async () => {
+    const requestId = "remove-factor-1";
+    const proof = { apiVersion, kind: "StepUp", id: "remove-proof", requestId, operation: "TOTP_REMOVE", expectedFactorRevision: 2,
+      state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z" };
+    for (const patch of [{ operation: "TOTP_REPLACE" }, { requestId: "other-request" }, { expectedFactorRevision: 1 },
+      { expiresAt: "2026-09-11T08:02:00.000001Z" }, { state: "PROVED" }, { securitySettings: {} }, { password: "unexpected" }]) {
+      reply({ ...proof, ...patch });
+      await expect(httpIamRepository.personalSecurity!.removal!.stepUpByRequest("bearer", requestId)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    const removal = { apiVersion, kind: "AuthenticatorRemoval", id: "factor-removal", requestId, factorId: "factor-original", factorRevision: 3, removedAt: "2026-09-11T08:01:00Z" };
+    for (const patch of [{ requestId: "other-request" }, { factorRevision: 2 }, { factorRevision: 4 }, { factorRevision: Number.MAX_SAFE_INTEGER + 1 },
+      { kind: "RecoveryCodeRegeneration" }, { removedAt: "invalid-time" }, { recoveryCodes: ["leak"] }, { accountId: "caller-selector" }]) {
+      reply({ outcome: "APPLIED", removal: { ...removal, ...patch }, nextStep: "REAUTHENTICATE" });
+      await expect(httpIamRepository.personalSecurity!.removal!.remove("bearer", { requestId, stepUpId: proof.id, expectedFactorRevision: 2 })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    for (const body of [{ outcome: "EQUAL_REPLAY", removal, nextStep: "REAUTHENTICATE" }, { outcome: "EQUAL_REPLAY", removal, recoveryCodes: [] },
+      { outcome: "APPLIED", removal }, { outcome: "APPLIED", removal, nextStep: "AUTHENTICATED" }]) {
+      reply(body);
+      await expect(httpIamRepository.personalSecurity!.removal!.remove("bearer", { requestId, stepUpId: proof.id, expectedFactorRevision: 2 })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    for (const patch of [{ requestId: "other-request" }, { factorRevision: 2 }, { provisioning: { seed: "leak" } }, { nextStep: "REAUTHENTICATE" }]) {
+      reply({ ...removal, ...patch });
+      await expect(httpIamRepository.personalSecurity!.removal!.removalByRequest("bearer", requestId)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("REMOVED preserves lawful removal and the exact re-enrollment revision without accepting a missing or bound factor", async () => {
+    reply({ apiVersion, kind: "AuthenticatorState", enrollmentState: "REMOVED", factorRevision: 3 });
+    await expect(httpIamRepository.personalSecurity!.authenticatorState("bearer")).resolves.toEqual({ enrollmentState: "REMOVED", factorRevision: 3, factorId: null });
+    reply({ apiVersion, kind: "AuthenticatorState", enrollmentState: "REMOVED", factorRevision: Number.MAX_SAFE_INTEGER });
+    await expect(httpIamRepository.personalSecurity!.authenticatorState("bearer")).resolves.toMatchObject({ enrollmentState: "REMOVED", factorRevision: Number.MAX_SAFE_INTEGER });
+    for (const patch of [{ factorRevision: 1 }, { factorRevision: 2 }, { factorRevision: Number.MAX_SAFE_INTEGER + 1 }, { factorId: "old-revoked-factor" }, { enrollmentState: "MISSING" }]) {
+      reply({ apiVersion, kind: "AuthenticatorState", enrollmentState: "REMOVED", factorRevision: 3, ...patch });
+      await expect(httpIamRepository.personalSecurity!.authenticatorState("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    const enrollment = { ...pendingEnrollment, factorRevision: 3 };
+    const fetcher = reply({ outcome: "APPLIED", enrollment, provisioning: { seed: "NEW-ONLY", uri: "otpauth://new" } });
+    await expect(httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", { requestId: enrollment.requestId, password: "current-password", expectedFactorRevision: 3 })).resolves.toMatchObject({ enrollment: { purpose: "INITIAL", factorRevision: 3 } });
+    expect(requestBody(fetcher)).toEqual({ requestId: enrollment.requestId, password: "current-password", expectedFactorRevision: 3 });
+    reply({ outcome: "APPLIED", enrollment: pendingEnrollment, provisioning: { seed: "BAD-REVISION", uri: "otpauth://wrong" } });
+    await expect(httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", { requestId: enrollment.requestId, password: "current-password", expectedFactorRevision: 3 })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("rejects malformed factor-change commands before sending any request or secret", async () => {
+    for (const action of [
+      () => httpIamRepository.personalSecurity!.removal!.startStepUp("bearer", { requestId: "remove-one", expectedFactorRevision: 1 }),
+      () => httpIamRepository.personalSecurity!.removal!.remove("bearer", { requestId: "remove-one", stepUpId: "proof-one", expectedFactorRevision: Number.MAX_SAFE_INTEGER }),
+      () => httpIamRepository.personalSecurity!.removal!.remove("bearer", { requestId: "", stepUpId: "proof-one", expectedFactorRevision: 2 }),
+      () => httpIamRepository.personalSecurity!.removal!.verifyStepUp("bearer", "proof-one", { requestId: "verify-one", password: "private", code: "not-a-code" }),
+      () => httpIamRepository.personalSecurity!.replacement!.confirmEnrollment("bearer", "enrollment-one", { requestId: "confirm-one", code: "12345" })
+    ]) {
+      const fetcher = reply({});
+      await expect(action()).rejects.toThrow("INVALID_IAM_RESPONSE");
+      expect(fetcher).not.toHaveBeenCalled();
+    }
+  });
+
   it("fails closed on malformed state unions, lifetimes, delivery evidence, and replay secrets", async () => {
     const invalidBodies = [
       { action: () => httpIamRepository.personalSecurity!.notificationContact("bearer"), body: { ...notificationContact, resourceVersion: 1 } },
@@ -1740,6 +1850,22 @@ describe("IAM HTTP account boundary", () => {
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/challenges/${challenge.id}:confirm-enrollment`);
     expect(requestBody(fetcher)).toEqual({ challengeCredential, requestId: "first-confirm-1", code: "123456" });
     expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+  });
+
+  it("REMOVED consumes a restricted enrollment at the proven removal revision without a bearer or synthetic revision one", async () => {
+    const challenge = { apiVersion, kind: "AuthenticationChallenge", id: "rebind-challenge", purpose: "ENROLLMENT", nextStep: "ENROLLMENT", expiresAt: "2026-09-11T08:05:00Z" };
+    const enrollment = { ...pendingEnrollment, factorRevision: 3, createdAt: "2026-09-11T08:01:00Z", expiresAt: "2026-09-11T08:04:00Z" };
+    let fetcher = reply({ challenge, notificationContact: { ...notificationContact, state: "VERIFIED", resourceVersion: 1, email: "alex@example.com", verifiedAt: timestamp }, enrollment });
+    await expect(httpIamRepository.authenticationChallenges!.inspectFirstEnrollment!({ challengeId: challenge.id, challengeCredential: "restricted-secret" })).resolves.toMatchObject({ enrollment: { factorRevision: 3, purpose: "INITIAL" } });
+    expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+    fetcher = reply({ outcome: "APPLIED", enrollment, provisioning: { seed: "NEW-ONLY", uri: "otpauth://new" } });
+    await expect(httpIamRepository.authenticationChallenges!.startFirstTOTP!({ challengeId: challenge.id, challengeCredential: "restricted-secret", requestId: enrollment.requestId })).resolves.toMatchObject({ enrollment: { factorRevision: 3 } });
+    expect(requestBody(fetcher)).toEqual({ challengeCredential: "restricted-secret", requestId: enrollment.requestId });
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `rebind-recovery-${index}`);
+    reply({ enrollment: { ...enrollment, state: "CONFIRMED", completedAt: "2026-09-11T08:02:00Z" }, nextStep: "REAUTHENTICATE", recoveryCodes });
+    await expect(httpIamRepository.authenticationChallenges!.confirmFirstTOTP!({ challengeId: challenge.id, challengeCredential: "restricted-secret", enrollmentId: enrollment.id, code: "123456", requestId: "rebind-confirm" })).resolves.toMatchObject({ enrollment: { factorRevision: 3 }, recoveryCodes });
+    reply({ outcome: "APPLIED", enrollment: { ...enrollment, factorRevision: 2 }, provisioning: { seed: "BAD", uri: "otpauth://bad" } });
+    await expect(httpIamRepository.authenticationChallenges!.startFirstTOTP!({ challengeId: challenge.id, challengeCredential: "restricted-secret", requestId: enrollment.requestId })).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
   it("rejects crossed first-enrollment phase, target or extra session data", async () => {

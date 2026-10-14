@@ -1,10 +1,12 @@
 "use client";
 
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { AuthenticatedSession } from "../domain/session";
+import { replacementEnrollmentFitsProof } from "../domain/personalSecurity";
 import type {
   AuthenticatorState,
+  AuthenticatorRemoval,
   NotificationContact,
   NotificationContactReplacementProgress,
   NotificationContactReplacementVerification,
@@ -15,7 +17,9 @@ import type {
   SecurityStepUp,
   TOTPEnrollment,
   TOTPEnrollmentIntent,
-  TOTPEnrollmentStart
+  TOTPEnrollmentStart,
+  TOTPChangeIntent,
+  TOTPRemovalResponse
 } from "../domain/personalSecurity";
 import type { IamRepository } from "../repositories/iamRepository";
 
@@ -29,6 +33,18 @@ export type PersonalSecurityClient = {
   recoveryCodeRegenerationIntent: RecoveryCodeRegenerationIntent | null;
   notificationReplacementAvailable: boolean;
   notificationReplacementProgress: NotificationContactReplacementProgress | null;
+  totpReplacementAvailable: boolean;
+  totpRemovalAvailable: boolean;
+  totpChangeIntent: TOTPChangeIntent | null;
+  totpChangePreviousSession: boolean;
+  startTOTPChange(operation: TOTPChangeIntent["operation"], factor: AuthenticatorState): Promise<void>;
+  inspectTOTPChange(): Promise<void>;
+  verifyTOTPChange(command: { password: string; code: string }): Promise<void>;
+  startReplacementEnrollment(): Promise<TOTPEnrollmentStart>;
+  confirmReplacementEnrollment(code: string): Promise<void>;
+  cancelReplacementEnrollment(): Promise<void>;
+  removeTOTP(): Promise<TOTPRemovalResponse>;
+  clearTOTPChange(): void;
   notificationContact(): Promise<NotificationContact>;
   startNotificationVerification(command: { email: string; password: string; requestId: string }): Promise<NotificationContactVerification>;
   notificationVerification(verificationId: string): Promise<NotificationContactVerification>;
@@ -73,7 +89,7 @@ export class NotificationReplacementProofRejected extends Error {
 
 const PersonalSecurityContext = createContext<PersonalSecurityClient | null>(null);
 
-export function PersonalSecurityProvider({ children, repository, credential, current, sessionRevision, isCurrentSession, expire, completeEnrollment }: {
+export function PersonalSecurityProvider({ children, repository, credential, current, sessionRevision, isCurrentSession, expire, completeEnrollment, completeRemoval }: {
   children: ReactNode;
   repository: IamRepository;
   credential: string | null;
@@ -82,7 +98,15 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
   isCurrentSession(expectedCredential: string, expectedRevision: number): boolean;
   expire(expectedCredential: string): boolean;
   completeEnrollment(expectedCredential: string, enrollmentId: string, recoveryCodes: string[]): boolean;
+  completeRemoval(expectedCredential: string): boolean;
 }) {
+  type FactorChange = { credential: string; sessionId: string; sessionRevision: number; accountId: string; userId: string; intent: TOTPChangeIntent };
+  const [factorChange, setFactorChange] = useState<FactorChange | null>(null);
+  const factorChangeRef = useRef<FactorChange | null>(null);
+  const commitFactorChange = useCallback((value: FactorChange | null) => {
+    factorChangeRef.current = value;
+    setFactorChange(value);
+  }, []);
   const [enrollmentIntent, setEnrollmentIntent] = useState<{
     credential: string;
     accountId: string;
@@ -109,6 +133,9 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
     const expectedRevision = sessionRevision;
     const accountId = current.session.organizationId;
     const userId = current.session.principalId;
+    const currentFactorChange = factorChange?.accountId === accountId && factorChange.userId === userId ? factorChange : null;
+    const previousFactorSession = Boolean(currentFactorChange && (currentFactorChange.credential !== expectedCredential ||
+      currentFactorChange.sessionId !== current.session.id || currentFactorChange.sessionRevision !== expectedRevision));
     const currentIntent = enrollmentIntent?.credential === expectedCredential &&
       enrollmentIntent.accountId === accountId && enrollmentIntent.userId === userId
       ? { requestId: enrollmentIntent.requestId, state: enrollmentIntent.state }
@@ -226,8 +253,187 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
       }
       return value;
     };
+    const requireFactorChange = (write = false) => {
+      const value = factorChangeRef.current;
+      if (!isCurrentSession(expectedCredential, expectedRevision) || !value || value.accountId !== accountId || value.userId !== userId ||
+          write && (value.credential !== expectedCredential || value.sessionId !== current.session.id || value.sessionRevision !== expectedRevision)) {
+        throw new Error("STALE_IAM_SESSION");
+      }
+      return value.intent;
+    };
+    const factorInPhase = (intent: TOTPChangeIntent, phase: TOTPChangeIntent["state"]) => {
+      const value = factorChangeRef.current;
+      if (!isCurrentSession(expectedCredential, expectedRevision) || value?.accountId !== accountId || value.userId !== userId ||
+          value.intent.requestId !== intent.requestId || value.intent.state !== phase) return null;
+      return value;
+    };
+    const changeFactor = (intent: TOTPChangeIntent, update: Partial<TOTPChangeIntent>, phase = intent.state) => {
+      const value = factorInPhase(intent, phase);
+      if (!value) return false;
+      commitFactorChange({ ...value, intent: { ...value.intent, ...update } });
+      return true;
+    };
+    const ownedFactorProof = (value: SecurityStepUp, intent: TOTPChangeIntent) => {
+      if (value.operation !== intent.operation || value.requestId !== intent.requestId || value.expectedFactorRevision !== intent.expectedFactorRevision ||
+          intent.stepUp && (value.id !== intent.stepUp.id || value.createdAt !== intent.stepUp.createdAt || value.expiresAt !== intent.stepUp.expiresAt)) throw new Error("INVALID_IAM_RESPONSE");
+      return value;
+    };
+    const ownedFactorEnrollment = (value: TOTPEnrollment, intent: TOTPChangeIntent) => {
+      if (value.purpose !== "REPLACEMENT" || value.requestId !== intent.requestId || value.factorRevision !== intent.expectedFactorRevision ||
+          intent.enrollment && (value.id !== intent.enrollment.id || value.createdAt !== intent.enrollment.createdAt || value.expiresAt !== intent.enrollment.expiresAt) ||
+          intent.stepUp && !replacementEnrollmentFitsProof(value, intent.stepUp)) throw new Error("INVALID_IAM_RESPONSE");
+      return value;
+    };
+    const ownedRemoval = (value: AuthenticatorRemoval, intent: TOTPChangeIntent) => {
+      if (value.requestId !== intent.requestId || value.factorId !== intent.factorId || value.factorRevision !== intent.expectedFactorRevision + 1 ||
+          intent.removal && (value.id !== intent.removal.id || value.removedAt !== intent.removal.removedAt)) {
+        throw new Error("INVALID_IAM_RESPONSE");
+      }
+      return value;
+    };
     return {
       accountId,
+      totpReplacementAvailable: Boolean(security.replacement),
+      totpRemovalAvailable: Boolean(security.removal),
+      totpChangeIntent: currentFactorChange?.intent ?? null,
+      totpChangePreviousSession: previousFactorSession,
+      async startTOTPChange(operation, factor) {
+        const active = factorChangeRef.current;
+        if (!isCurrentSession(expectedCredential, expectedRevision) || factor.enrollmentState !== "BOUND" ||
+            !security[operation === "TOTP_REPLACE" ? "replacement" : "removal"] ||
+            active?.accountId === accountId && active.userId === userId || currentIntent || currentRegeneration || currentNotificationReplacement) {
+          throw new Error("INVALID_IAM_STATE");
+        }
+        const intent: TOTPChangeIntent = { operation, requestId: requestToken("ui-totp-change-"),
+          proofRequestId: requestToken("ui-totp-proof-"), confirmationRequestId: requestToken("ui-totp-confirm-"),
+          factorId: factor.factorId, expectedFactorRevision: factor.factorRevision, state: "STEP_UP_UNKNOWN",
+          stepUp: null, enrollment: null, removal: null };
+        commitFactorChange({ credential: expectedCredential, sessionId: current.session.id, sessionRevision: expectedRevision, accountId, userId, intent });
+        try {
+          const api = operation === "TOTP_REPLACE" ? security.replacement! : security.removal!;
+          const proof = ownedFactorProof(await scoped(api.startStepUp(expectedCredential, {
+            requestId: intent.requestId, expectedFactorRevision: intent.expectedFactorRevision
+          })), intent);
+          if (proof.state !== "PENDING") throw new Error("INVALID_IAM_RESPONSE");
+          changeFactor(intent, { state: "PENDING_PROOF", stepUp: proof });
+        } catch (failure) {
+          if (!factorInPhase(intent, "STEP_UP_UNKNOWN")) throw new Error("STALE_IAM_PHASE");
+          if (failure instanceof HttpProblem && [400, 403, 409, 413, 415, 422, 429].includes(failure.status)) changeFactor(intent, { state: "REJECTED" });
+          throw failure;
+        }
+      },
+      async inspectTOTPChange() {
+        const intent = requireFactorChange();
+        if (["REJECTED", "CANCELLED", "EXPIRED"].includes(intent.state)) throw new Error("INVALID_IAM_STATE");
+        if (intent.operation === "TOTP_REMOVE" && ["REMOVAL_UNKNOWN", "COMPLETED"].includes(intent.state)) {
+          const removal = ownedRemoval(await scoped(security.removal!.removalByRequest(expectedCredential, intent.requestId)), intent);
+          changeFactor(intent, { state: "COMPLETED", removal });
+        } else if (intent.operation === "TOTP_REPLACE" && ["ENROLLMENT_UNKNOWN", "ENROLLING", "CONFIRM_UNKNOWN", "CANCEL_UNKNOWN", "COMPLETED"].includes(intent.state)) {
+          const enrollment = ownedFactorEnrollment(await scoped(security.replacement!.enrollmentByRequest(expectedCredential, intent.requestId)), intent);
+          // A current PENDING projection cannot disprove an in-flight confirm/cancel.
+          // Only the original terminal observation can unlock an uncertain write.
+          changeFactor(intent, { enrollment, state: enrollment.state === "CONFIRMED" ? "COMPLETED"
+            : enrollment.state === "CANCELLED" ? "CANCELLED" : enrollment.state === "EXPIRED" ? "EXPIRED"
+              : intent.state === "CONFIRM_UNKNOWN" || intent.state === "CANCEL_UNKNOWN" || intent.state === "COMPLETED" ? intent.state : "ENROLLING" });
+        } else {
+          const api = intent.operation === "TOTP_REPLACE" ? security.replacement! : security.removal!;
+          const proof = ownedFactorProof(await scoped(api.stepUpByRequest(expectedCredential, intent.requestId)), intent);
+          changeFactor(intent, { stepUp: proof, state: proof.state === "PENDING" ? intent.state === "PROOF_UNKNOWN" ? "PROOF_UNKNOWN" : "PENDING_PROOF" : proof.state === "PROVED" ? "PROVED"
+            : proof.state === "CONSUMED" ? intent.operation === "TOTP_REPLACE" ? "ENROLLMENT_UNKNOWN" : "REMOVAL_UNKNOWN" : "EXPIRED" });
+        }
+      },
+      async verifyTOTPChange(command) {
+        const intent = requireFactorChange(true);
+        if (intent.state !== "PENDING_PROOF" || !intent.stepUp || Date.now() >= Date.parse(intent.stepUp.expiresAt)) throw new Error("INVALID_IAM_STATE");
+        changeFactor(intent, { state: "PROOF_UNKNOWN" });
+        try {
+          const api = intent.operation === "TOTP_REPLACE" ? security.replacement! : security.removal!;
+          // Generic proof 401 may reject the password/OTP, not the bearer.
+          const proof = ownedFactorProof(await api.verifyStepUp(expectedCredential, intent.stepUp.id, {
+            requestId: intent.proofRequestId, password: command.password, code: command.code
+          }), intent);
+          changeFactor(intent, { state: proof.state === "PROVED" ? "PROVED" : "EXPIRED", stepUp: proof }, "PROOF_UNKNOWN");
+        } catch (failure) {
+          if (!factorInPhase(intent, "PROOF_UNKNOWN")) throw new Error("STALE_IAM_PHASE");
+          if (failure instanceof HttpProblem && [400, 401, 413, 415, 422, 429].includes(failure.status)) {
+            changeFactor(intent, { state: "PENDING_PROOF", proofRequestId: requestToken("ui-totp-proof-") }, "PROOF_UNKNOWN");
+          }
+          throw failure;
+        }
+      },
+      async startReplacementEnrollment() {
+        const intent = requireFactorChange(true);
+        if (intent.operation !== "TOTP_REPLACE" || intent.state !== "PROVED" || !intent.stepUp || Date.now() >= Date.parse(intent.stepUp.expiresAt)) throw new Error("INVALID_IAM_STATE");
+        changeFactor(intent, { state: "ENROLLMENT_UNKNOWN" });
+        let result: TOTPEnrollmentStart;
+        try {
+          result = await scoped(security.replacement!.startEnrollment(expectedCredential, {
+            requestId: intent.requestId, stepUpId: intent.stepUp.id, expectedFactorRevision: intent.expectedFactorRevision
+          }));
+        } catch (failure) {
+          if (!factorInPhase(intent, "ENROLLMENT_UNKNOWN")) throw new Error("STALE_IAM_PHASE");
+          if (failure instanceof HttpProblem && [400, 403, 409, 413, 415, 422, 429].includes(failure.status)) changeFactor(intent, { state: "REJECTED" }, "ENROLLMENT_UNKNOWN");
+          throw failure;
+        }
+        const enrollment = ownedFactorEnrollment(result.enrollment, intent);
+        if (!changeFactor(intent, { state: enrollment.state === "PENDING" ? "ENROLLING" : enrollment.state === "CONFIRMED" ? "COMPLETED"
+          : enrollment.state === "CANCELLED" ? "CANCELLED" : "EXPIRED", enrollment }, "ENROLLMENT_UNKNOWN")) throw new Error("STALE_IAM_PHASE");
+        return result;
+      },
+      async confirmReplacementEnrollment(code) {
+        const intent = requireFactorChange(true);
+        if (intent.operation !== "TOTP_REPLACE" || intent.state !== "ENROLLING" || !intent.enrollment ||
+            Date.now() >= Date.parse(intent.enrollment.expiresAt)) throw new Error("INVALID_IAM_STATE");
+        changeFactor(intent, { state: "CONFIRM_UNKNOWN" });
+        try {
+          const result = await scoped(security.replacement!.confirmEnrollment(expectedCredential, intent.enrollment.id, {
+            requestId: intent.confirmationRequestId, code
+          }));
+          const enrollment = ownedFactorEnrollment(result.enrollment, intent);
+          if (enrollment.state !== "CONFIRMED") throw new Error("INVALID_IAM_RESPONSE");
+          if (!changeFactor(intent, { state: "COMPLETED", enrollment }, "CONFIRM_UNKNOWN")) throw new Error("STALE_IAM_PHASE");
+          if (!isCurrentSession(expectedCredential, expectedRevision) ||
+              !completeEnrollment(expectedCredential, enrollment.id, result.recoveryCodes)) throw new Error("STALE_IAM_SESSION");
+        } catch (failure) {
+          if (!factorInPhase(intent, "CONFIRM_UNKNOWN")) throw new Error("STALE_IAM_PHASE");
+          if (failure instanceof HttpProblem && failure.status === 422 && failure.code === "iam.verification.rejected") {
+            changeFactor(intent, { state: "ENROLLING", confirmationRequestId: requestToken("ui-totp-confirm-") }, "CONFIRM_UNKNOWN");
+          }
+          throw failure;
+        }
+      },
+      async cancelReplacementEnrollment() {
+        const intent = requireFactorChange();
+        if (intent.operation !== "TOTP_REPLACE" || intent.state !== "ENROLLING" || !intent.enrollment || intent.enrollment.state !== "PENDING") throw new Error("INVALID_IAM_STATE");
+        changeFactor(intent, { state: "CANCEL_UNKNOWN" });
+        const enrollment = ownedFactorEnrollment(await scoped(security.replacement!.cancelEnrollment(expectedCredential, intent.enrollment.id)), intent);
+        changeFactor(intent, { state: enrollment.state === "CANCELLED" ? "CANCELLED" : "EXPIRED", enrollment }, "CANCEL_UNKNOWN");
+      },
+      async removeTOTP() {
+        const intent = requireFactorChange(true);
+        if (intent.operation !== "TOTP_REMOVE" || intent.state !== "PROVED" || !intent.stepUp || Date.now() >= Date.parse(intent.stepUp.expiresAt)) throw new Error("INVALID_IAM_STATE");
+        changeFactor(intent, { state: "REMOVAL_UNKNOWN" });
+        let result: TOTPRemovalResponse;
+        try {
+          result = await scoped(security.removal!.remove(expectedCredential, {
+            requestId: intent.requestId, stepUpId: intent.stepUp.id, expectedFactorRevision: intent.expectedFactorRevision
+          }));
+        } catch (failure) {
+          if (!factorInPhase(intent, "REMOVAL_UNKNOWN")) throw new Error("STALE_IAM_PHASE");
+          if (failure instanceof HttpProblem && [400, 403, 409, 413, 415, 422, 429].includes(failure.status)) changeFactor(intent, { state: "REJECTED" }, "REMOVAL_UNKNOWN");
+          throw failure;
+        }
+        const removal = ownedRemoval(result.removal, intent);
+        if (!changeFactor(intent, { state: "COMPLETED", removal }, "REMOVAL_UNKNOWN")) throw new Error("STALE_IAM_PHASE");
+        if (result.outcome === "APPLIED" && (!isCurrentSession(expectedCredential, expectedRevision) || !completeRemoval(expectedCredential))) {
+          throw new Error("STALE_IAM_SESSION");
+        }
+        return result;
+      },
+      clearTOTPChange() {
+        const intent = requireFactorChange();
+        if (["PENDING_PROOF", "PROVED", "COMPLETED", "REJECTED", "CANCELLED", "EXPIRED"].includes(intent.state)) commitFactorChange(null);
+      },
       userId,
       sessionId: current.session.id,
       sessionRevision: expectedRevision,
@@ -241,7 +447,7 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
       notificationVerification: async (verificationId) => ownedVerification(await scoped(security.notificationVerification(expectedCredential, verificationId))),
       confirmNotificationVerification: async (verificationId, command) => ownedVerification(await scopedAfterBearerCheck(security.confirmNotificationVerification(expectedCredential, verificationId, command))),
       async startNotificationReplacement(command) {
-        if (!replacement || currentNotificationReplacement || command.expectedResourceVersion <= 0 || command.expectedFactorRevision <= 1) {
+        if (!replacement || currentNotificationReplacement || factorChangeRef.current?.accountId === accountId && factorChangeRef.current.userId === userId || command.expectedResourceVersion <= 0 || command.expectedFactorRevision <= 1) {
           throw new Error("INVALID_IAM_STATE");
         }
         const pending: NotificationContactReplacementProgress = {
@@ -369,6 +575,7 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
       },
       authenticatorState: () => scoped(security.authenticatorState(expectedCredential)),
       async startTOTPEnrollment(command) {
+        if (factorChangeRef.current?.accountId === accountId && factorChangeRef.current.userId === userId) throw new Error("INVALID_IAM_STATE");
         const pending = { credential: expectedCredential, accountId, userId, requestId: command.requestId, state: "UNKNOWN" as const };
         setEnrollmentIntent(pending);
         try {
@@ -409,7 +616,7 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
         });
       },
       async startRecoveryCodeRegeneration(command) {
-        if (!recoveryCodes || currentRegeneration) throw new Error("INVALID_IAM_STATE");
+        if (!recoveryCodes || currentRegeneration || factorChangeRef.current?.accountId === accountId && factorChangeRef.current.userId === userId) throw new Error("INVALID_IAM_STATE");
         const pending: RecoveryCodeRegenerationIntent = {
           requestId: command.requestId,
           factorId: command.factorId,
@@ -498,7 +705,7 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
         });
       }
     };
-  }, [completeEnrollment, credential, current, enrollmentIntent, expire, isCurrentSession, notificationReplacement, regenerationIntent, repository.personalSecurity, sessionRevision]);
+  }, [commitFactorChange, completeEnrollment, completeRemoval, credential, current, enrollmentIntent, expire, factorChange, isCurrentSession, notificationReplacement, regenerationIntent, repository.personalSecurity, sessionRevision]);
 
   return <PersonalSecurityContext.Provider value={client}>{children}</PersonalSecurityContext.Provider>;
 }
