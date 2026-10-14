@@ -2604,6 +2604,19 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 		changedDeveloperPassword, "browser-command-recovery-password")
 	memberLogin := loginIAM(t, iamEndpoint, loginName+"@organization-process", changedDeveloperPassword,
 		"browser-command-recovery-login")
+	commandType := managedservicev1.CommandType(strings.TrimSpace(os.Getenv("MATRIX_IAM_COMMAND_RECOVERY_TYPE")))
+	if commandType == "" {
+		commandType = managedservicev1.CommandServiceRoleBind
+	}
+	switch commandType {
+	case managedservicev1.CommandQuotaActivate,
+		managedservicev1.CommandInstallationCreate,
+		managedservicev1.CommandInstallationTerminate,
+		managedservicev1.CommandServiceRoleBind,
+		managedservicev1.CommandServiceRoleUnbind:
+	default:
+		t.Fatalf("MATRIX_IAM_COMMAND_RECOVERY_TYPE is not a closed managed-service command: %q", commandType)
+	}
 
 	base := paasEndpoint + "/managed-services/v1"
 	product := managedPostgresFixture(t, "command-recovery", managedRuntime.images.postgres)
@@ -2627,37 +2640,89 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 		managedservicev1.ValidateServiceActivation(activation) != nil || activation.Service != activationRequest.Service {
 		t.Fatalf("activate command-recovery service status=%d body=%s", activationResponse.Status, activationResponse.Body)
 	}
-	quotaRequest := managedservicev1.ActivateQuotaRequest{
-		OfferingID: product.offeringID, QuotaShapeID: product.quotaShapeID, InstanceCount: 1,
-	}
-	quotaResponse := performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", ownerBearer,
-		"browser-command-recovery-quota", quotaRequest)
 	var quota managedservicev1.QuotaEntitlement
-	if quotaResponse.Status != http.StatusCreated || json.Unmarshal(quotaResponse.Body, &quota) != nil ||
-		managedservicev1.ValidateQuotaEntitlement(quota) != nil || quota.OfferingID != product.offeringID ||
-		quota.QuotaShapeID != product.quotaShapeID || quota.PurchasedCount != 1 {
-		t.Fatalf("activate command-recovery quota status=%d body=%s", quotaResponse.Status, quotaResponse.Body)
+	prepareQuota := func() {
+		quotaRequest := managedservicev1.ActivateQuotaRequest{
+			OfferingID: product.offeringID, QuotaShapeID: product.quotaShapeID, InstanceCount: 1,
+		}
+		quotaResponse := performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", ownerBearer,
+			"browser-command-recovery-quota", quotaRequest)
+		if quotaResponse.Status != http.StatusCreated || json.Unmarshal(quotaResponse.Body, &quota) != nil ||
+			managedservicev1.ValidateQuotaEntitlement(quota) != nil || quota.OfferingID != product.offeringID ||
+			quota.QuotaShapeID != product.quotaShapeID || quota.PurchasedCount != 1 {
+			t.Fatalf("activate command-recovery quota status=%d body=%s", quotaResponse.Status, quotaResponse.Body)
+		}
 	}
-	createRequest := managedservicev1.CreateInstallationRequest{
-		ID: product.installationID, Name: "Response-loss PostgreSQL",
-		OfferingID: product.offeringID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+	var installation managedservicev1.ServiceInstallation
+	prepareInstallation := func() {
+		createRequest := managedservicev1.CreateInstallationRequest{
+			ID: product.installationID, Name: "Response-loss PostgreSQL",
+			OfferingID: product.offeringID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+		}
+		createResponse := performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", ownerBearer,
+			"browser-command-recovery-installation", createRequest)
+		var accepted managedservicev1.ServiceInstallation
+		if createResponse.Status != http.StatusAccepted || json.Unmarshal(createResponse.Body, &accepted) != nil ||
+			managedservicev1.ValidateServiceInstallation(accepted) != nil || accepted.ID != product.installationID ||
+			accepted.QuotaEntitlementID != quota.ID || accepted.Phase != managedservicev1.InstallationPending {
+			t.Fatalf("create command-recovery installation status=%d body=%s", createResponse.Status, createResponse.Body)
+		}
+		installation = waitManagedProductReady(t, ctx, paasEndpoint, ownerBearer, product)
+		assertManagedProductRuntime(t, ctx, installation, managedRuntime, product)
 	}
-	createResponse := performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", ownerBearer,
-		"browser-command-recovery-installation", createRequest)
-	var accepted managedservicev1.ServiceInstallation
-	if createResponse.Status != http.StatusAccepted || json.Unmarshal(createResponse.Body, &accepted) != nil ||
-		managedservicev1.ValidateServiceInstallation(accepted) != nil || accepted.ID != product.installationID ||
-		accepted.QuotaEntitlementID != quota.ID || accepted.Phase != managedservicev1.InstallationPending {
-		t.Fatalf("create command-recovery installation status=%d body=%s", createResponse.Status, createResponse.Body)
+	if commandType != managedservicev1.CommandQuotaActivate {
+		prepareQuota()
 	}
-	installation := waitManagedProductReady(t, ctx, paasEndpoint, ownerBearer, product)
-	assertManagedProductRuntime(t, ctx, installation, managedRuntime, product)
+	if commandType == managedservicev1.CommandInstallationTerminate ||
+		commandType == managedservicev1.CommandServiceRoleBind ||
+		commandType == managedservicev1.CommandServiceRoleUnbind {
+		prepareInstallation()
+	}
 
-	loss := &browserResponseLoss{
-		method:       http.MethodPost,
-		path:         "/api/managed-services/v1/service-installations/" + product.installationID + "/service-role-bindings",
-		recoveryPath: "/api/managed-services/v1/command-results/SERVICE_ROLE_BIND",
+	var preparedBinding *managedservicev1.ServiceRoleBindingReceipt
+	if commandType == managedservicev1.CommandServiceRoleUnbind {
+		templateResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-role-templates", memberLogin.Credential, nil)
+		var templates iamv1.ServiceRoleTemplateList
+		if templateResponse.Status != http.StatusOK || json.Unmarshal(templateResponse.Body, &templates) != nil ||
+			iamv1.ValidateServiceRoleTemplateList(templates) != nil || len(templates.Items) != 1 {
+			t.Fatalf("prepare command-recovery service Role template status=%d body=%s", templateResponse.Status, templateResponse.Body)
+		}
+		bindingPath := base + "/service-installations/" + product.installationID + "/service-role-bindings"
+		bindingResponse := performJSONWithIdempotency(t, http.MethodPost, bindingPath, memberLogin.Credential,
+			"browser-command-recovery-prepared-binding", managedservicev1.BindServiceRoleRequest{Template: templates.Items[0].Reference()})
+		var receipt managedservicev1.ServiceRoleBindingReceipt
+		if bindingResponse.Status != http.StatusCreated || json.Unmarshal(bindingResponse.Body, &receipt) != nil ||
+			managedservicev1.ValidateServiceRoleBindingReceipt(receipt) != nil || receipt.ServiceInstallationID != product.installationID {
+			t.Fatalf("prepare command-recovery service Role binding status=%d body=%s", bindingResponse.Status, bindingResponse.Body)
+		}
+		preparedBinding = &receipt
 	}
+
+	loss := &browserResponseLoss{}
+	browserPath := "/console/installations/"
+	wantPrefix := ""
+	switch commandType {
+	case managedservicev1.CommandQuotaActivate:
+		loss.method, loss.path = http.MethodPost, "/api/managed-services/v1/quota-entitlements"
+		browserPath, wantPrefix = "/console/quotas/", "ui-quota-"
+	case managedservicev1.CommandInstallationCreate:
+		loss.method, loss.path = http.MethodPost, "/api/managed-services/v1/service-installations"
+		wantPrefix = "ui-install-"
+	case managedservicev1.CommandInstallationTerminate:
+		loss.method = http.MethodPost
+		loss.path = "/api/managed-services/v1/service-installations/" + product.installationID + "/termination"
+		wantPrefix = "ui-installation-termination-"
+	case managedservicev1.CommandServiceRoleBind:
+		loss.method = http.MethodPost
+		loss.path = "/api/managed-services/v1/service-installations/" + product.installationID + "/service-role-bindings"
+		wantPrefix = "ui-service-role-bind-"
+	case managedservicev1.CommandServiceRoleUnbind:
+		loss.method = http.MethodDelete
+		loss.path = "/api/managed-services/v1/service-installations/" + product.installationID +
+			"/service-role-bindings/" + string(preparedBinding.BindingID)
+		wantPrefix = "ui-service-role-unbind-"
+	}
+	loss.recoveryPath = "/api/managed-services/v1/command-results/" + string(commandType)
 	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(
 		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, loss,
 	)
@@ -2673,19 +2738,26 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 	}
 	isolatedBrowserURL.Host = net.JoinHostPort("localhost", browserPort)
 	isolatedURL := isolatedBrowserURL.String()
-	t.Logf("COMMAND_RECOVERY_BROWSER_FIXTURE browserA=%s/console/installations/ browserB=%s/console/installations/ finish=%s realm=%s@organization-process installation=%s; browser A must export the UNKNOWN intent, browser B must use the distinct localhost origin and import it; use the existing changed developer password",
-		server.URL, isolatedURL, finish, loginName, product.installationID)
+	t.Logf("COMMAND_RECOVERY_BROWSER_FIXTURE type=%s browserA=%s%s browserB=%s%s finish=%s realm=%s@organization-process installation=%s; browser A must submit only this command and export the UNKNOWN intent, browser B must use the distinct localhost origin and import it; use the existing changed developer password",
+		commandType, server.URL, browserPath, isolatedURL, browserPath, finish, loginName, product.installationID)
 	waitForBrowserMarker(t, ctx, ui, finish, "isolated-browser command recovery completion")
 
 	observation := loss.snapshot()
 	if observation.Attempts != 1 || !observation.ResponseLost || observation.BackendStatus < 200 ||
-		observation.BackendStatus >= 300 || !strings.HasPrefix(observation.IdempotencyKey, "ui-service-role-bind-") ||
+		observation.BackendStatus >= 300 || !strings.HasPrefix(observation.IdempotencyKey, wantPrefix) ||
 		observation.MutationHost == "" || observation.RecoveryReads < 1 || observation.RecoveryHost == "" ||
 		observation.RecoveryHost == observation.MutationHost {
 		t.Fatalf("browser response-loss boundary was not exact: %#v", observation)
 	}
+	if commandType == managedservicev1.CommandInstallationCreate {
+		installation = waitManagedProductReady(t, ctx, paasEndpoint, ownerBearer, product)
+		assertManagedProductRuntime(t, ctx, installation, managedRuntime, product)
+	}
+	if commandType == managedservicev1.CommandInstallationTerminate {
+		installation = waitManagedProductTerminated(t, ctx, paasEndpoint, ownerBearer, product)
+	}
 	resultResponse := performJSON(t, http.MethodGet,
-		base+"/command-results/SERVICE_ROLE_BIND", memberLogin.Credential, nil)
+		base+"/command-results/"+string(commandType), memberLogin.Credential, nil)
 	var results managedservicev1.CommandResultList
 	if resultResponse.Status != http.StatusOK || resultResponse.Header.Get("Cache-Control") != "no-store" ||
 		json.Unmarshal(resultResponse.Body, &results) != nil || managedservicev1.ValidateCommandResultList(results) != nil ||
@@ -2693,36 +2765,99 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 		t.Fatalf("recover browser command result status=%d body=%s", resultResponse.Status, resultResponse.Body)
 	}
 	result := results.Items[0]
-	if result.IdempotencyKey != observation.IdempotencyKey || result.CommandType != managedservicev1.CommandServiceRoleBind ||
-		result.State != managedservicev1.CommandSucceeded || result.Target != (managedservicev1.CommandTargetReference{
-		Kind: managedservicev1.CommandTargetServiceInstallation, ID: product.installationID,
-	}) || result.Operation != nil || result.BindingID == nil || result.CompletedAt == nil {
+	if result.IdempotencyKey != observation.IdempotencyKey || result.CommandType != commandType ||
+		result.State != managedservicev1.CommandSucceeded || result.CompletedAt == nil {
 		t.Fatalf("browser recovered a different command result: %#v", result)
 	}
-	linkedResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles", memberLogin.Credential, nil)
-	var linked iamv1.ServiceLinkedRoleList
-	if linkedResponse.Status != http.StatusOK || json.Unmarshal(linkedResponse.Body, &linked) != nil ||
-		iamv1.ValidateServiceLinkedRoleList(linked) != nil || len(linked.Items) != 1 ||
-		linked.Items[0].BindingCount != 1 || linked.Items[0].ActiveBindingCount != 1 {
-		t.Fatalf("browser command recovery lost the active service Role: status=%d body=%s", linkedResponse.Status, linkedResponse.Body)
-	}
-	detailResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles/"+
-		string(linked.Items[0].Relation.Role.ID), memberLogin.Credential, nil)
-	var detail iamv1.ServiceLinkedRoleAccess
-	if detailResponse.Status != http.StatusOK || json.Unmarshal(detailResponse.Body, &detail) != nil ||
-		iamv1.ValidateServiceLinkedRoleAccess(detail) != nil || len(detail.Bindings) != 1 ||
-		detail.Bindings[0].ID != *result.BindingID || detail.Bindings[0].Workload.ID != product.installationID ||
-		detail.Bindings[0].Status != iamv1.WorkloadRoleBindingActive {
-		t.Fatalf("browser command recovery resolved a different workload binding: status=%d body=%s", detailResponse.Status, detailResponse.Body)
-	}
-	waitAllIAMOutboxDelivered(t, ctx, database)
-	for _, expected := range []struct {
+	type expectedAudit struct {
 		action auditv1.Action
 		target string
-	}{
-		{auditv1.ActionIAMServiceLinkedRoleCreated, string(linked.Items[0].Relation.Role.ID)},
-		{auditv1.ActionIAMWorkloadRoleBindingCreated, string(*result.BindingID)},
-	} {
+	}
+	expectedAudits := []expectedAudit{}
+	switch commandType {
+	case managedservicev1.CommandQuotaActivate:
+		var submitted managedservicev1.ActivateQuotaRequest
+		if json.Unmarshal(observation.RequestBody, &submitted) != nil ||
+			managedservicev1.ValidateActivateQuotaRequest(submitted) != nil {
+			t.Fatalf("browser submitted an invalid quota activation: %s", observation.RequestBody)
+		}
+		if result.Target.Kind != managedservicev1.CommandTargetQuotaEntitlement || result.Target.ID == "" ||
+			result.Operation != nil || result.BindingID != nil {
+			t.Fatalf("browser recovered an invalid quota activation: %#v", result)
+		}
+		quotaResponse := performJSON(t, http.MethodGet, base+"/quota-entitlements/"+result.Target.ID,
+			memberLogin.Credential, nil)
+		var activated managedservicev1.QuotaEntitlement
+		if quotaResponse.Status != http.StatusOK || json.Unmarshal(quotaResponse.Body, &activated) != nil ||
+			managedservicev1.ValidateQuotaEntitlement(activated) != nil || activated.ID != result.Target.ID ||
+			activated.OfferingID != submitted.OfferingID || activated.QuotaShapeID != submitted.QuotaShapeID ||
+			activated.PurchasedCount != submitted.InstanceCount {
+			t.Fatalf("browser quota recovery lost the authoritative entitlement: status=%d body=%s", quotaResponse.Status, quotaResponse.Body)
+		}
+		expectedAudits = append(expectedAudits,
+			expectedAudit{auditv1.ActionManagedServiceQuotaEntitlementActivated, result.Target.ID})
+	case managedservicev1.CommandInstallationCreate:
+		if result.Target != (managedservicev1.CommandTargetReference{
+			Kind: managedservicev1.CommandTargetServiceInstallation, ID: product.installationID,
+		}) || result.Operation == nil || result.Operation.Kind != managedservicev1.InstallationOperationProvision ||
+			result.Operation.Phase != managedservicev1.InstallationReady || result.BindingID != nil ||
+			installation.ID != product.installationID {
+			t.Fatalf("browser recovered an invalid installation creation: %#v", result)
+		}
+		expectedAudits = append(expectedAudits,
+			expectedAudit{auditv1.ActionManagedServiceInstallationCreated, product.installationID})
+	case managedservicev1.CommandInstallationTerminate:
+		if result.Target != (managedservicev1.CommandTargetReference{
+			Kind: managedservicev1.CommandTargetServiceInstallation, ID: product.installationID,
+		}) || result.Operation == nil || result.Operation.Kind != managedservicev1.InstallationOperationTerminate ||
+			result.Operation.Phase != managedservicev1.InstallationReady || result.BindingID != nil ||
+			installation.Phase != managedservicev1.InstallationTerminated {
+			t.Fatalf("browser recovered an invalid installation termination: %#v", result)
+		}
+		expectedAudits = append(expectedAudits,
+			expectedAudit{auditv1.ActionManagedServiceInstallationTerminationRequested, product.installationID})
+	case managedservicev1.CommandServiceRoleBind, managedservicev1.CommandServiceRoleUnbind:
+		if result.Target != (managedservicev1.CommandTargetReference{
+			Kind: managedservicev1.CommandTargetServiceInstallation, ID: product.installationID,
+		}) || result.Operation != nil || result.BindingID == nil ||
+			(commandType == managedservicev1.CommandServiceRoleUnbind &&
+				(preparedBinding == nil || *result.BindingID != preparedBinding.BindingID)) {
+			t.Fatalf("browser recovered an invalid service Role command: %#v", result)
+		}
+		linkedResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles", memberLogin.Credential, nil)
+		var linked iamv1.ServiceLinkedRoleList
+		wantActive := uint64(1)
+		wantStatus := iamv1.WorkloadRoleBindingActive
+		if commandType == managedservicev1.CommandServiceRoleUnbind {
+			wantActive = 0
+			wantStatus = iamv1.WorkloadRoleBindingRevoked
+		}
+		if linkedResponse.Status != http.StatusOK || json.Unmarshal(linkedResponse.Body, &linked) != nil ||
+			iamv1.ValidateServiceLinkedRoleList(linked) != nil || len(linked.Items) != 1 ||
+			linked.Items[0].BindingCount != 1 || linked.Items[0].ActiveBindingCount != wantActive {
+			t.Fatalf("browser command recovery lost the service Role history: status=%d body=%s", linkedResponse.Status, linkedResponse.Body)
+		}
+		detailResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles/"+
+			string(linked.Items[0].Relation.Role.ID), memberLogin.Credential, nil)
+		var detail iamv1.ServiceLinkedRoleAccess
+		if detailResponse.Status != http.StatusOK || json.Unmarshal(detailResponse.Body, &detail) != nil ||
+			iamv1.ValidateServiceLinkedRoleAccess(detail) != nil || len(detail.Bindings) != 1 ||
+			detail.Bindings[0].ID != *result.BindingID || detail.Bindings[0].Workload.ID != product.installationID ||
+			detail.Bindings[0].Status != wantStatus {
+			t.Fatalf("browser command recovery resolved a different workload binding: status=%d body=%s", detailResponse.Status, detailResponse.Body)
+		}
+		if commandType == managedservicev1.CommandServiceRoleBind {
+			expectedAudits = append(expectedAudits,
+				expectedAudit{auditv1.ActionIAMServiceLinkedRoleCreated, string(linked.Items[0].Relation.Role.ID)},
+				expectedAudit{auditv1.ActionIAMWorkloadRoleBindingCreated, string(*result.BindingID)})
+		} else {
+			expectedAudits = append(expectedAudits,
+				expectedAudit{auditv1.ActionIAMWorkloadRoleBindingRevoked, string(*result.BindingID)})
+		}
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	waitAllPaaSOutboxDelivered(t, ctx, database)
+	for _, expected := range expectedAudits {
 		page := queryAudit(t, auditEndpoint, ownerBearer,
 			auditv1.QueryRecordsRequest{PageSize: 100, Action: expected.action}, http.StatusOK)
 		matches := 0
@@ -2741,7 +2876,7 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 		chain.TenantID != auditv1.TenantID("organization-process") {
 		t.Fatalf("browser command recovery audit chain is incomplete: %#v", chain)
 	}
-	t.Log("two isolated browser profiles recovered one committed service Role bind after the client connection was closed; exactly one POST, the raw public key, authoritative binding, immutable Audit facts and the verified tenant chain all matched")
+	t.Logf("two isolated browser profiles recovered one committed %s after the client connection was closed; exactly one mutation, the raw public key, authoritative target, immutable Audit facts and the verified tenant chain all matched", commandType)
 	return []string{initial.Credential, memberLogin.Credential}
 }
 
@@ -3069,6 +3204,7 @@ type browserResponseLoss struct {
 	responseLost   bool
 	backendStatus  int
 	idempotencyKey string
+	requestBody    []byte
 	mutationHost   string
 	recoveryReads  int
 	recoveryHost   string
@@ -3079,6 +3215,7 @@ type browserResponseLossObservation struct {
 	ResponseLost   bool
 	BackendStatus  int
 	IdempotencyKey string
+	RequestBody    []byte
 	MutationHost   string
 	RecoveryReads  int
 	RecoveryHost   string
@@ -3092,12 +3229,13 @@ func (value *browserResponseLoss) matchesRecovery(request *http.Request) bool {
 	return value != nil && request.Method == http.MethodGet && request.URL.Path == value.recoveryPath
 }
 
-func (value *browserResponseLoss) observe(request *http.Request, backendStatus int) bool {
+func (value *browserResponseLoss) observe(request *http.Request, backendStatus int, requestBody []byte) bool {
 	value.mu.Lock()
 	defer value.mu.Unlock()
 	value.attempts++
 	if value.idempotencyKey == "" {
 		value.idempotencyKey = request.Header.Get("Idempotency-Key")
+		value.requestBody = bytes.Clone(requestBody)
 		value.mutationHost = request.Host
 	}
 	value.backendStatus = backendStatus
@@ -3131,6 +3269,7 @@ func (value *browserResponseLoss) snapshot() browserResponseLossObservation {
 	return browserResponseLossObservation{
 		Attempts: value.attempts, ResponseLost: value.responseLost,
 		BackendStatus: value.backendStatus, IdempotencyKey: value.idempotencyKey,
+		RequestBody:  bytes.Clone(value.requestBody),
 		MutationHost: value.mutationHost, RecoveryReads: value.recoveryReads,
 		RecoveryHost: value.recoveryHost,
 	}
@@ -3244,9 +3383,16 @@ func startIAMConsoleBrowserWithResponseLoss(
 				return
 			}
 			if responseLoss != nil && responseLoss.matches(r) {
+				requestBody, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, "invalid browser fixture request", http.StatusBadRequest)
+					return
+				}
+				_ = r.Body.Close()
+				r.Body = io.NopCloser(bytes.NewReader(requestBody))
 				captured := httptest.NewRecorder()
 				mux.ServeHTTP(captured, r)
-				if responseLoss.observe(r, captured.Code) {
+				if responseLoss.observe(r, captured.Code, requestBody) {
 					if loseBrowserFixtureResponse(w, captured) {
 						responseLoss.markLost()
 					}
