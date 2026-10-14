@@ -2694,7 +2694,7 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 		bindingResponse := performJSONWithIdempotency(t, http.MethodPost, bindingPath, memberLogin.Credential,
 			"browser-command-recovery-prepared-binding", managedservicev1.BindServiceRoleRequest{Template: templates.Items[0].Reference()})
 		var receipt managedservicev1.ServiceRoleBindingReceipt
-		if bindingResponse.Status != http.StatusCreated || json.Unmarshal(bindingResponse.Body, &receipt) != nil ||
+		if bindingResponse.Status != http.StatusOK || json.Unmarshal(bindingResponse.Body, &receipt) != nil ||
 			managedservicev1.ValidateServiceRoleBindingReceipt(receipt) != nil || receipt.ServiceInstallationID != product.installationID {
 			t.Fatalf("prepare command-recovery service Role binding status=%d body=%s", bindingResponse.Status, bindingResponse.Body)
 		}
