@@ -516,17 +516,9 @@ func (value *gate) verifySignedManagedProduct(
 	serviceReference := managedservicev1.ServiceDefinitionReference{
 		ID: definition.ID, Revision: definition.Revision, ContentDigest: definition.ContentDigest,
 	}
-	activationResponse, err := value.edge.json(ctx, http.MethodPost, base+"/service-activations", bearer,
-		managedservicev1.ActivateServiceRequest{Service: serviceReference},
-		map[string]string{"Idempotency-Key": requestPrefix + "-service-activation"}, http.StatusCreated)
-	if err != nil {
-		return fail("signed-managed-product-service-activation-" + product.component)
-	}
-	var activation managedservicev1.ServiceActivation
-	decodeErr := decodeOne(activationResponse.body, &activation)
-	clear(activationResponse.body)
-	if decodeErr != nil || managedservicev1.ValidateServiceActivation(activation) != nil ||
-		activation.Service != serviceReference {
+	if err := value.ensureSignedManagedProductActivation(
+		ctx, bearer, base, requestPrefix, product.component, serviceReference,
+	); err != nil {
 		return fail("signed-managed-product-service-activation-" + product.component)
 	}
 	quotaKey := requestPrefix + "-quota"
@@ -538,7 +530,7 @@ func (value *gate) verifySignedManagedProduct(
 		return fail("signed-managed-product-quota-" + product.component)
 	}
 	var quota managedservicev1.QuotaEntitlement
-	decodeErr = decodeOne(quotaResponse.body, &quota)
+	decodeErr := decodeOne(quotaResponse.body, &quota)
 	clear(quotaResponse.body)
 	if decodeErr != nil || managedservicev1.ValidateQuotaEntitlement(quota) != nil ||
 		quota.OfferingID != product.offeringID || quota.QuotaShapeID != product.quotaShapeID ||
@@ -742,6 +734,51 @@ func (value *gate) verifySignedManagedProduct(
 		auditv1.ActionManagedServiceInstallationTerminated:           product.installationID,
 	}); err != nil {
 		return fail("signed-managed-product-audit-" + product.component)
+	}
+	return nil
+}
+
+func (value *gate) ensureSignedManagedProductActivation(
+	ctx context.Context,
+	bearer []byte,
+	base string,
+	requestPrefix string,
+	component string,
+	service managedservicev1.ServiceDefinitionReference,
+) error {
+	response, err := value.edge.json(
+		ctx, http.MethodGet, base+"/service-activations/"+service.ID,
+		bearer, nil, nil, http.StatusOK, http.StatusNotFound,
+	)
+	if err != nil {
+		return fail("signed-managed-product-service-activation-read-" + component)
+	}
+	if response.status == http.StatusOK {
+		var activation managedservicev1.ServiceActivation
+		decodeErr := decodeOne(response.body, &activation)
+		clear(response.body)
+		if decodeErr != nil || managedservicev1.ValidateServiceActivation(activation) != nil ||
+			activation.Service != service {
+			return fail("signed-managed-product-service-activation-existing-" + component)
+		}
+		return nil
+	}
+	clear(response.body)
+
+	created, err := value.edge.json(
+		ctx, http.MethodPost, base+"/service-activations", bearer,
+		managedservicev1.ActivateServiceRequest{Service: service},
+		map[string]string{"Idempotency-Key": requestPrefix + "-service-activation"}, http.StatusCreated,
+	)
+	if err != nil {
+		return fail("signed-managed-product-service-activation-create-" + component)
+	}
+	var activation managedservicev1.ServiceActivation
+	decodeErr := decodeOne(created.body, &activation)
+	clear(created.body)
+	if decodeErr != nil || managedservicev1.ValidateServiceActivation(activation) != nil ||
+		activation.Service != service {
+		return fail("signed-managed-product-service-activation-created-" + component)
 	}
 	return nil
 }

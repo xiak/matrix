@@ -22,10 +22,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
@@ -446,6 +448,75 @@ func TestEdgeClientChecksSuccessAndProblemMediaTypes(t *testing.T) {
 			_, err := client.json(context.Background(), http.MethodGet, "/", nil, nil, nil, check.status)
 			if (err == nil) != check.valid {
 				t.Fatalf("response contract accepted=%t, want %t", err == nil, check.valid)
+			}
+		})
+	}
+}
+
+func TestSignedManagedProductActivationReusesTheAccountActivation(t *testing.T) {
+	service := managedservicev1.ServiceDefinitionReference{
+		ID: managedservicev1.PostgreSQLServiceID, Revision: 1,
+		ContentDigest: "sha256:" + strings.Repeat("a", 64),
+	}
+	activation := managedservicev1.ServiceActivation{
+		Service: service, ResourceVersion: 1,
+		ActivatedAt: time.Date(2026, time.October, 14, 1, 2, 3, 456000000, time.UTC),
+	}
+	for _, test := range []struct {
+		name        string
+		existing    bool
+		wantCreates int32
+	}{
+		{name: "reuse existing account activation", existing: true},
+		{name: "create absent account activation", wantCreates: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var reads atomic.Int32
+			var creates atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				switch {
+				case request.Method == http.MethodGet && request.URL.Path == "/api/managed-services/v1/service-activations/postgresql":
+					reads.Add(1)
+					if !test.existing {
+						response.Header().Set("Content-Type", "application/problem+json")
+						response.WriteHeader(http.StatusNotFound)
+						_, _ = response.Write([]byte(`{}`))
+						return
+					}
+					response.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(response).Encode(activation)
+				case request.Method == http.MethodPost && request.URL.Path == "/api/managed-services/v1/service-activations":
+					creates.Add(1)
+					var body managedservicev1.ActivateServiceRequest
+					if request.Header.Get("Idempotency-Key") != "phase1-signed-postgres-service-activation" ||
+						json.NewDecoder(request.Body).Decode(&body) != nil || body.Service != service {
+						response.Header().Set("Content-Type", "application/problem+json")
+						response.WriteHeader(http.StatusBadRequest)
+						_, _ = response.Write([]byte(`{}`))
+						return
+					}
+					response.Header().Set("Content-Type", "application/json")
+					response.WriteHeader(http.StatusCreated)
+					_ = json.NewEncoder(response).Encode(activation)
+				default:
+					response.Header().Set("Content-Type", "application/problem+json")
+					response.WriteHeader(http.StatusNotFound)
+					_, _ = response.Write([]byte(`{}`))
+				}
+			}))
+			defer server.Close()
+
+			client := newEdgeClient(server.URL)
+			defer client.close()
+			value := gate{edge: client}
+			if err := value.ensureSignedManagedProductActivation(
+				context.Background(), []byte("fixture-bearer"), "/api/managed-services/v1",
+				"phase1-signed-postgres", "postgres", service,
+			); err != nil {
+				t.Fatalf("ensure account service activation: %v", err)
+			}
+			if reads.Load() != 1 || creates.Load() != test.wantCreates {
+				t.Fatalf("activation calls read=%d create=%d", reads.Load(), creates.Load())
 			}
 		})
 	}
