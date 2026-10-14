@@ -809,6 +809,72 @@ lifecycle fixture, so this CI accepts the committed successor and its unit
 owner while the 985.02/76.58-second task-owned runs above remain the actual
 signed consumer evidence.
 
+On 2026-10-15 the exact current source
+`c38a0093235bf3521c4ef32492d814d36f071a7e` assembled and authenticated
+Release A `matrix-v0.1.0-iam.r35.3-c38a0093235b` and its immediate same-source
+successor B `matrix-v0.1.0-iam.r35.4-c38a0093235b`. Both retain the exact
+`85/39/7+r35` profile, 12-file/ten-image inventory and topology digest
+`sha256:ca31ccec97d52776d61c8bdcea0be04b2d5a6fe7fc28d9d0055c4d2a3ff75c30`.
+A new network-disabled Docker 27.5.1 classic-store engine started with zero
+images, containers and volumes and was limited to 2 CPUs, 6 GiB and 1024
+PIDs. Its 731.32-second effectful gate passed the complete current owner:
+restricted database identities, APISIX USER and AccessKey paths, two-Account
+primary/member revocation, real STARTTLS/SASL SMTP contact verification,
+Maildir receipt, TOTP login and security notice, access analysis, all four
+managed-product protocol/provider lifecycles, explicit service-role authority,
+two application generations, complete Audit chains, protected backup,
+injected-upgrade automatic rollback, B upgrade, explicit platform rollback,
+selected-backup recovery with permanent AccessKey fencing, application
+rollback/stop, capacity release and bounded support leakage checks. The
+offline-loaded task fixture archive was
+`sha256:3e7956f1cff7a9fc4b70bf3398c5738c8d1efada4e0c33fdace11386d242f9f0`
+and its classic portable image identity was
+`sha256:6e6bc2d41cb0679ca2a42e02057073fb49273791d75195c402b7c562c073873b`;
+it proves only the isolated local SMTP/Maildir path.
+
+The private mail input was then removed. Only that task-owned outer engine was
+stopped and started; its container identity stayed fixed while its start time
+advanced. All eleven platform services recovered healthy, and the 84.11-second
+read-only gate proved the retired AccessKey remained unusable, MFA required a
+fresh OTP login, tenant primary recovery and revocation stayed terminal, and
+repeated status/verify completed the offline lifecycle. No desktop daemon,
+remote host, shared service or unrelated Docker object was restarted or
+modified. This current-source run supersedes the earlier signed consumer as
+runtime evidence without turning same-profile A/B into cross-profile or
+arbitrary historical N-1 compatibility.
+
+The two delivery archives were generated from the verified Linux release
+trees, streamed to the task artifact directory and re-extracted one at a time
+in fresh network-disabled ext4 volumes. Signature/content verification, the
+complete path set, no-link boundary and Unix modes passed: directories and
+`bin/mx` are `0700`, while every other file is `0600`. The resulting artifacts
+are:
+
+- A `matrix-v0.1.0-iam.r35.3-c38a0093235b-linux-amd64.tar.gz`, 1588552983
+  bytes, SHA-256
+  `81f41ec8a26594d3fd153ce420246fca3ef5f2a3cdfc22d73b14843688194745`;
+- B `matrix-v0.1.0-iam.r35.4-c38a0093235b-linux-amd64.tar.gz`, 1588552702
+  bytes, SHA-256
+  `bb51dde3f6296e6556c7377acdac7f5f4a1bf088b36c65e39036300eb7467ac4`;
+- public `release-trust.json`, 283 bytes, SHA-256
+  `827bfdf98914f4a1c3611f7ce756f48d28ab0d8e44b1c041a390365b8b53fde7`.
+
+The archives contain only the signed release directory. The trust document is
+separate; the private signing key, SMTP channel, fixture material and
+installation state are absent.
+
+The exact current source's
+[Verification 38612137181](https://github.com/xiak/matrix/actions/runs/38612137181)
+completed successfully on attempt 1 with all 18 jobs successful. Its 333
+steps ended as 165 successful and 168 non-applicable matrix steps skipped by
+design, with no failed, cancelled or incomplete step. The console job matched
+319 embedded files and passed 70 test files/1439 tests; the real authority
+runtime, Role, four-product provider, bounded-capacity and natural recovery
+window roots all executed successfully. The default workflow still skips the
+explicit browser and signed-lifecycle opt-in roots, so this independent CI
+accepts the fixed source while the 731.32/84.11-second runs above remain the
+actual signed consumer evidence.
+
 This accepts the current same-profile signed lifecycle and APISIX consumer
 paths. It does not admit a cross-profile transition, arbitrary historical
 N-1 operation, database HA or browser interaction with the installed release.
