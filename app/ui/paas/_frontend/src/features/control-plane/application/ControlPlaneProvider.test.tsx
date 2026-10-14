@@ -176,7 +176,7 @@ function iamRepository(principalId = "principal-test"): IamRepository {
 function originalCommand(kind: ManagedServiceCommandIntent["kind"]): ManagedServiceCommandIntent {
   const base = { owner: { accountId: "organization-test", actorKind: "USER" as const, actorId: "principal-test" },
     requestId: `original-${kind}`, startedAt: "2026-10-13T10:00:00Z", targetId: "original-installation", targetLabel: "Original operation" };
-  const template = { id: "installation-reader", version: 1 as const, contentDigest: `sha256:${"c".repeat(64)}` };
+  const template = { id: "managedservice.installation-reader", version: 2, contentDigest: `sha256:${"c".repeat(64)}` };
   if (kind === "ACTIVATE_QUOTA") return { ...base, kind, targetId: "original-offering", payload: { offeringId: "original-offering", quotaShapeId: "shape-small", instanceCount: 1 } };
   if (kind === "CREATE_INSTALLATION") return { ...base, kind, payload: { id: "original-installation", name: "Original installation", offeringId: "original-offering", quotaEntitlementId: "original-quota", regionId: "local-primary" } };
   if (kind === "TERMINATE_INSTALLATION") return { ...base, kind, payload: { installationId: "original-installation" } };

@@ -1855,7 +1855,7 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-Verified through 2026-10-13 against the current all-service navigation, compact IAM
+Verified through 2026-10-14 against the current all-service navigation, compact IAM
 shell, responsive access-analysis hierarchy, primary directory actions and the
 provider-owned product-permission onboarding boundary, service-enablement UX and
 shared product-command recovery surface.
@@ -1867,14 +1867,35 @@ data or first-use admission; its expanded summary form uses the existing Card
 Header/Body/Footer. Original-command inspection is read-only, and opened
 instances still perform an independently authorized detail read. Its IAM wire
 and recovery semantics are owned by FEAT-IAM-010, not by a second shared model.
-Using Node 22.22.2 and npm 11.6.4, the final source passed all 69 frontend files
-and 1,376 cases, three normalization cases, typecheck, full lint, architecture
-and 228 theme-contrast pairs. Production generated 59 pages and 57 normalized
-segments; all 319 embedded files match byte-for-byte. The PaaS UI host passed
-fresh Go test and vet with bounded concurrency. This accepts frontend behavior
-and static delivery only: IAM will compose this fixed UI with its separately
-fixed backend for the real PG/Audit and two-isolated-browser UNKNOWN gate;
-these local checks do not claim that runtime or signed-install acceptance.
+The active-template-head correction stays in those existing product owners;
+exact selection and reference semantics remain owned by FEAT-IAM-010. With
+Node 22.22.2 and npm 11.6.4, its six focused files passed all 282 cases plus
+three normalization cases, typecheck, full lint, architecture and 228
+theme-contrast pairs. Production generated 59 pages and 57 normalized segments;
+all 319 embedded files match byte-for-byte. Fresh PaaS UI-host Go test and vet
+passed with bounded concurrency. Local complete regression is not
+accepted as green:
+
+- First attempt: 69 files / 1,391 cases, 1,387 passed and four unchanged
+  `AccessWorkspace` cases exceeded the original 5,000 ms test budget. Those
+  four subsequently passed in isolation with unchanged source and timeout.
+- Second attempt: 69 files / 1,391 cases, 1,385 passed and six failed. Four
+  unchanged `AccessWorkspace` cases and one unchanged `AccountAccessRenderer`
+  reset-reminder case exceeded 5,000 ms; the adjacent explicit-reset-conflict
+  case failed because `openAccess` could not find the login button while the
+  view already showed identity loading. This sixth error is not classified as
+  a test-budget timeout. The two account cases passed separately; the
+  incompatible-conditions case still timed out in isolation. The other three
+  second-attempt cases were not retried. No timeout or unrelated source/test
+  was changed, and no third complete local run was started.
+
+The fixed UI candidate therefore awaits the IAM branch's existing independent
+Node 22 `console` job on an integration SHA whose selected UI blobs match the
+owner commit. The UX workflow has no frontend Node job; its automatic Go
+Verification is not a substitute and no duplicate workflow was added. IAM owns
+the separate real PG/Audit and two-isolated-browser UNKNOWN gate. Focused local
+behavior and static-delivery checks do not claim complete frontend, runtime or
+signed-install acceptance.
 
 The current service-enablement and resource-admission slice passed the complete 66-file/1,239-case
 frontend suite plus three export-normalization cases, typecheck, lint,

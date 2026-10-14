@@ -96,7 +96,7 @@ describe("bounded managed-service command recovery", () => {
 
 const managedServiceTemplateReference = {
   id: "managedservice.installation-reader",
-  version: 1,
+  version: 2,
   contentDigest: `sha256:${"c".repeat(64)}`
 };
 
@@ -833,7 +833,7 @@ describe("httpControlPlaneRepository", () => {
     const timestamp = "2026-09-30T08:00:00Z";
     const templateReference = {
       id: "managedservice.installation-reader",
-      version: 1,
+      version: 2,
       contentDigest: `sha256:${"c".repeat(64)}`
     };
     const policyVersion = {
@@ -887,7 +887,7 @@ describe("httpControlPlaneRepository", () => {
 
     const result = await httpControlPlaneRepository.inspectServiceAuthorization!("session-secret", "account-acme", "pg-test");
 
-    expect(result).toMatchObject({ template: { id: template.id, version: 1 }, relation: { role: { id: role.id } }, binding: { id: binding.id, status: "ACTIVE" } });
+    expect(result).toMatchObject({ template: { id: template.id, version: 2 }, relation: { role: { id: role.id } }, binding: { id: binding.id, status: "ACTIVE" } });
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
       "/api/iam/v1/service-role-templates",
       "/api/iam/v1/service-linked-roles",
@@ -896,10 +896,10 @@ describe("httpControlPlaneRepository", () => {
     expect(fetchMock.mock.calls.every(([, init]) => init.headers.Authorization === "Bearer session-secret")).toBe(true);
   });
 
-  it("does not infer account consent when no matching account relation exists", async () => {
+  it.each([2, 3])("uses the received active head without inferring absent account consent (version=%s)", async (version) => {
     const apiVersion = "iam.matrix.xiak.com/v1";
     const template = {
-      apiVersion, kind: "ServiceRoleTemplate", id: "managedservice.installation-reader", version: 1,
+      apiVersion, kind: "ServiceRoleTemplate", id: "managedservice.installation-reader", version,
       spec: {
         product: "managedservice", servicePurpose: "PAAS", roleName: "ManagedServiceInstallationReader",
         roleDescription: "Read one explicitly bound installation.",
@@ -913,20 +913,22 @@ describe("httpControlPlaneRepository", () => {
       { apiVersion, kind: "ServiceRoleTemplateList", items: [template] },
       { apiVersion, kind: "ServiceLinkedRoleList", accountId: "account-acme", items: [] }
     ];
-    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(responses.shift()), {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(responses.shift()), {
       status: 200,
       headers: { "Content-Type": "application/json" }
-    }))));
+    })));
+    vi.stubGlobal("fetch", fetchMock);
 
     await expect(httpControlPlaneRepository.inspectServiceAuthorization!("session-secret", "account-acme", "pg-test"))
-      .resolves.toMatchObject({ template: { id: template.id }, relation: null, binding: null });
+      .resolves.toMatchObject({ template: { id: template.id, version }, relation: null, binding: null });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps account consent distinct when the relation exists but the exact resource is not bound", async () => {
     const apiVersion = "iam.matrix.xiak.com/v1";
     const timestamp = "2026-09-30T08:00:00Z";
     const templateReference = {
-      id: "managedservice.installation-reader", version: 1, contentDigest: `sha256:${"c".repeat(64)}`
+      id: "managedservice.installation-reader", version: 2, contentDigest: `sha256:${"c".repeat(64)}`
     };
     const policyVersion = {
       policyId: "system.managedservice-installation-reader", versionId: "version-v1", contentDigest: `sha256:${"b".repeat(64)}`
@@ -974,13 +976,14 @@ describe("httpControlPlaneRepository", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("binds only the exact published template and binds the receipt to the requested installation", async () => {
+  it.each([2, 3])("preserves the exact published version %s and binds its receipt to the requested installation", async (version) => {
+    const template = { ...managedServiceTemplateReference, version };
     const receipt = {
       kind: "ServiceRoleBindingReceipt",
       serviceInstallationId: "postgres-primary",
       bindingId: "binding-primary",
       roleId: "role-managedservice-reader",
-      template: managedServiceTemplateReference,
+      template,
       status: "ACTIVE",
       resourceVersion: 1,
       createdAt: "2026-09-30T08:00:00.123456Z"
@@ -989,7 +992,7 @@ describe("httpControlPlaneRepository", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(httpControlPlaneRepository.bindServiceRole!("session-secret", "postgres-primary", {
-      template: managedServiceTemplateReference,
+      template,
       requestId: "bind-postgres-primary"
     })).resolves.toEqual(receipt);
 
@@ -1002,7 +1005,7 @@ describe("httpControlPlaneRepository", () => {
     expect(headers.get("Authorization")).toBe("Bearer session-secret");
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(headers.get("Idempotency-Key")).toBe("bind-postgres-primary");
-    expect(JSON.parse(String(init.body))).toEqual({ template: managedServiceTemplateReference });
+    expect(JSON.parse(String(init.body))).toEqual({ template });
   });
 
   it("replays an unbind with the caller's frozen idempotency key and no authority selectors", async () => {
@@ -1062,6 +1065,8 @@ describe("httpControlPlaneRepository", () => {
       { ...receipt, status: "REVOKED" },
       { ...receipt, resourceVersion: 2 },
       { ...receipt, template: { ...managedServiceTemplateReference, contentDigest: `sha256:${"d".repeat(64)}` } },
+      { ...receipt, template: { ...managedServiceTemplateReference, version: 1 } },
+      { ...receipt, template: { ...managedServiceTemplateReference, version: 3 } },
       { ...receipt, createdAt: "2026-09-30T08:00:00.1234567Z" }
     ];
     const fetchMock = vi.fn();
@@ -1108,6 +1113,19 @@ describe("httpControlPlaneRepository", () => {
   it("rejects malformed bind and unbind commands before making a request", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+
+    for (const template of [
+      ...[0, -1, 2.5, Number.MAX_SAFE_INTEGER + 1].map((version) => ({ ...managedServiceTemplateReference, version })),
+      { ...managedServiceTemplateReference, contentDigest: "sha256:invalid" },
+      { ...managedServiceTemplateReference, id: "managedservice.other-reader" }
+    ]) {
+      await expect(httpControlPlaneRepository.bindServiceRole!("session-secret", "postgres-primary", {
+        template, requestId: "bind-postgres-primary"
+      })).rejects.toThrow("INVALID_SERVICE_AUTHORIZATION_REQUEST");
+      await expect(httpControlPlaneRepository.unbindServiceRole!("session-secret", "postgres-primary", {
+        bindingId: "binding-primary", resourceVersion: 1, expectedTemplate: template, requestId: "unbind-postgres-primary"
+      })).rejects.toThrow("INVALID_SERVICE_AUTHORIZATION_REQUEST");
+    }
 
     await expect(httpControlPlaneRepository.bindServiceRole!("session-secret", "postgres/primary", {
       template: managedServiceTemplateReference,

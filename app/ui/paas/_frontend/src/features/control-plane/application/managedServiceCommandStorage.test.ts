@@ -30,6 +30,12 @@ const command: ManagedServiceCommandIntent = {
   }
 };
 
+const templateReference = { id: "managedservice.installation-reader", version: 2, contentDigest: `sha256:${"f".repeat(64)}` };
+const serviceRoleCommands: ManagedServiceCommandIntent[] = [
+  { ...command, kind: "BIND_SERVICE_ROLE", payload: { installationId: command.targetId, template: templateReference } },
+  { ...command, kind: "UNBIND_SERVICE_ROLE", payload: { installationId: command.targetId, bindingId: "binding-primary", resourceVersion: 1, expectedTemplate: templateReference } }
+];
+
 afterEach(() => localStorage.clear());
 
 describe("managedServiceCommandStorage", () => {
@@ -50,10 +56,32 @@ describe("managedServiceCommandStorage", () => {
     expect(parseManagedServiceCommandIntent({ ...command, ...change })).toBeNull();
   });
 
-  it("does not accept service-role consent from a Role session", () => {
-    expect(parseManagedServiceCommandIntent({ ...command, kind: "BIND_SERVICE_ROLE",
-      owner: { ...owner, actorKind: "ROLE", sourceUserId: "source-user" },
-      payload: { installationId: command.targetId, template: { id: "template-a", version: 1, contentDigest: `sha256:${"f".repeat(64)}` } } })).toBeNull();
+  it.each(serviceRoleCommands)("does not accept $kind consent from a Role session", (intent) => {
+    expect(parseManagedServiceCommandIntent({ ...intent,
+      owner: { ...owner, actorKind: "ROLE", sourceUserId: "source-user" } })).toBeNull();
+  });
+
+  it.each(serviceRoleCommands)("preserves the exact received reference for $kind across supported heads", (intent) => {
+    const field = intent.kind === "BIND_SERVICE_ROLE" ? "template" : "expectedTemplate";
+    for (const version of [1, 2, 3]) {
+      const original = { ...intent, payload: { ...intent.payload, [field]: { ...templateReference, version } } } as ManagedServiceCommandIntent;
+      writeManagedServiceCommand(localStorage, original);
+      expect(readManagedServiceCommand(localStorage, owner)).toEqual(original);
+      expect(parseManagedServiceCommandIntent(JSON.parse(JSON.stringify(original)))).toEqual(original);
+      expect(readManagedServiceCommand(localStorage, { ...owner, actorId: "other-user" })).toBeNull();
+    }
+  });
+
+  it.each(serviceRoleCommands)("rejects invalid versions, other templates or secret-bearing references for $kind", (intent) => {
+    const field = intent.kind === "BIND_SERVICE_ROLE" ? "template" : "expectedTemplate";
+    for (const reference of [
+      ...[0, -1, 2.5, Number.MAX_SAFE_INTEGER + 1, "2"].map((version) => ({ ...templateReference, version })),
+      { ...templateReference, id: "managedservice.other-reader" },
+      { ...templateReference, contentDigest: "sha256:invalid" },
+      { ...templateReference, credential: "must-not-persist" }
+    ]) {
+      expect(parseManagedServiceCommandIntent({ ...intent, payload: { ...intent.payload, [field]: reference } })).toBeNull();
+    }
   });
   it("restores only the exact owner and preserves the frozen request and payload", () => {
     writeManagedServiceCommand(localStorage, command);

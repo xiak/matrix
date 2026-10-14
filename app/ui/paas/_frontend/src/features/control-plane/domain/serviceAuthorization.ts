@@ -7,7 +7,6 @@ import type {
 
 export const managedServiceInstallationReader = {
   id: "managedservice.installation-reader",
-  version: 1,
   product: "managedservice",
   purpose: "PAAS",
   workloadKind: "SERVICE_INSTALLATION",
@@ -84,7 +83,8 @@ export type ManagedServiceAuthorizationIntent = {
 export function isManagedServiceInstallationReader(template: ServiceRoleTemplate): boolean {
   const workload = template.spec.workloads.find((item) => item.resourceKind === managedServiceInstallationReader.workloadKind);
   return template.id === managedServiceInstallationReader.id &&
-    template.version === managedServiceInstallationReader.version &&
+    Number.isSafeInteger(template.version) && template.version > 0 &&
+    /^sha256:[a-f0-9]{64}$/.test(template.contentDigest) &&
     template.status === "ACTIVE" &&
     template.spec.product === managedServiceInstallationReader.product &&
     template.spec.servicePurpose === managedServiceInstallationReader.purpose &&

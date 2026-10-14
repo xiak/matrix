@@ -3,6 +3,7 @@ import type {
   ManagedServiceCommandOwner
 } from "../domain/managedServiceCommand";
 import { sameManagedServiceCommandOwner } from "../domain/managedServiceCommand";
+import { managedServiceInstallationReader } from "../domain/serviceAuthorization";
 
 export const managedServiceCommandStorageKey = "matrix.managed-service.commands.v1";
 
@@ -41,9 +42,10 @@ function owner(value: unknown): ManagedServiceCommandOwner | null {
 
 function templateReference(value: unknown) {
   const wire = record(value);
-  if (!wire || !exactKeys(wire, ["id", "version", "contentDigest"]) || !text(wire.id) ||
-    wire.version !== 1 || typeof wire.contentDigest !== "string" || !digest.test(wire.contentDigest)) return null;
-  return { id: wire.id, version: 1 as const, contentDigest: wire.contentDigest };
+  if (!wire || !exactKeys(wire, ["id", "version", "contentDigest"]) || wire.id !== managedServiceInstallationReader.id ||
+    typeof wire.version !== "number" || !Number.isSafeInteger(wire.version) || wire.version < 1 ||
+    typeof wire.contentDigest !== "string" || !digest.test(wire.contentDigest)) return null;
+  return { id: managedServiceInstallationReader.id, version: wire.version, contentDigest: wire.contentDigest };
 }
 
 export function parseManagedServiceCommandIntent(value: unknown): ManagedServiceCommandIntent | null {

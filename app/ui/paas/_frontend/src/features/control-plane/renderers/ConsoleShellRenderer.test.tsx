@@ -148,7 +148,7 @@ const liveApplicationDirectoryPage: ApplicationDirectoryPage = {
 
 const liveServiceRoleTemplate: ServiceRoleTemplate = {
   id: "managedservice.installation-reader",
-  version: 1,
+  version: 2,
   contentDigest: `sha256:${"c".repeat(64)}`,
   status: "ACTIVE",
   spec: {
@@ -875,7 +875,7 @@ describe("ConsoleShellRenderer", () => {
 
     finishInspection({
       template: {
-        id: "managedservice.installation-reader", version: 1, contentDigest: `sha256:${"c".repeat(64)}`, status: "ACTIVE",
+        id: "managedservice.installation-reader", version: 2, contentDigest: `sha256:${"c".repeat(64)}`, status: "ACTIVE",
         spec: {
           product: "managedservice", servicePurpose: "PAAS", roleName: "ManagedServiceInstallationReader",
           roleDescription: "Read one installation.", maxSessionDurationSeconds: 900,
@@ -907,7 +907,7 @@ describe("ConsoleShellRenderer", () => {
       }] }),
       inspectServiceAuthorization: vi.fn().mockResolvedValue({
         template: {
-          id: "managedservice.installation-reader", version: 1, contentDigest: `sha256:${"c".repeat(64)}`, status: "ACTIVE",
+          id: "managedservice.installation-reader", version: 2, contentDigest: `sha256:${"c".repeat(64)}`, status: "ACTIVE",
           spec: {
             product: "managedservice", servicePurpose: "PAAS", roleName: "ManagedServiceInstallationReader",
             roleDescription: "Read one installation.", maxSessionDurationSeconds: 900,
@@ -922,7 +922,7 @@ describe("ConsoleShellRenderer", () => {
             maxSessionDurationSeconds: 900, resourceVersion: 1, currentTrustVersionId: "trust-v1",
             createdAt: "2026-08-26T12:00:00Z", updatedAt: "2026-08-26T12:00:00Z"
           },
-          template: { id: "managedservice.installation-reader", version: 1, contentDigest: `sha256:${"c".repeat(64)}` },
+          template: { id: "managedservice.installation-reader", version: 2, contentDigest: `sha256:${"c".repeat(64)}` },
           servicePrincipal: { installationId: "installation-paas", principalId: "service-paas", purpose: "PAAS" },
           permissionCeiling: { policyId: "system.managedservice-installation-reader", versionId: "version-v1", contentDigest: `sha256:${"b".repeat(64)}` }
         },
@@ -971,7 +971,7 @@ describe("ConsoleShellRenderer", () => {
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { name: "确认服务访问授权" })).toBeTruthy();
-    expect(screen.getByText(`${liveServiceRoleTemplate.id}@v1`)).toBeTruthy();
+    expect(screen.getByText(`${liveServiceRoleTemplate.id}@v2`)).toBeTruthy();
     expect(screen.getByText(installationId)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "确认授权" }));
@@ -1016,6 +1016,10 @@ describe("ConsoleShellRenderer", () => {
 
     expect(await screen.findByText(/服务端结果尚未确认/)).toBeTruthy();
     const firstCommand = bindServiceRole.mock.calls[0]![2];
+    const summary = JSON.parse((screen.getByLabelText("只读恢复摘要") as HTMLTextAreaElement).value);
+    expect(summary.requestId).toBe(firstCommand.requestId);
+    expect(summary.owner).toEqual({ accountId: "organization-test", actorKind: "USER", actorId: "principal-test" });
+    expect(summary.payload.template).toEqual({ id: "managedservice.installation-reader", version: 2, contentDigest: liveServiceRoleTemplate.contentDigest });
     await user.click(screen.getByRole("button", { name: "返回实例并保留原请求" }));
     expect(await screen.findByRole("button", { name: "继续处理未确认请求" })).toBeTruthy();
     expect(screen.getByText(firstCommand.requestId)).toBeTruthy();
