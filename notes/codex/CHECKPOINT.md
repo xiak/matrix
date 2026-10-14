@@ -35,8 +35,10 @@ Supported-runtime focused source checks, production export, embedded equality
 and UI-host Go gates passed. Two complete local frontend attempts were not
 green; do not replace that boundary with the focused or isolated results.
 Exact failures and outcomes stay with FEAT-007. The candidate awaits the IAM
-branch's existing independent Node 22 console job on a separately recorded,
-blob-matched integration SHA. No workflow or unrelated timeout was changed.
+branch's existing independent Node 22 console job. Selected source blobs and
+the complete embedded tree have been verified against integration
+`355815f3d992edaf4f677374d7407554bd96ec7f`; exact integration and CI references
+stay with FEAT-007. No workflow or unrelated timeout was changed.
 
 ## Continuation boundary
 

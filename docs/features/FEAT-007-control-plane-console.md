@@ -1889,13 +1889,18 @@ accepted as green:
   second-attempt cases were not retried. No timeout or unrelated source/test
   was changed, and no third complete local run was started.
 
-The fixed UI candidate therefore awaits the IAM branch's existing independent
-Node 22 `console` job on an integration SHA whose selected UI blobs match the
-owner commit. The UX workflow has no frontend Node job; its automatic Go
-Verification is not a substitute and no duplicate workflow was added. IAM owns
-the separate real PG/Audit and two-isolated-browser UNKNOWN gate. Focused local
-behavior and static-delivery checks do not claim complete frontend, runtime or
-signed-install acceptance.
+The fixed UI candidate `3876516a902fd020d1ab1cd4be8f339f9a9034b1` was selectively
+adapted into IAM integration `355815f3d992edaf4f677374d7407554bd96ec7f`. Read-only
+Git-object verification confirms all nine selected source/test blobs and the
+complete 319-file embedded tree are identical. Formal complete frontend
+acceptance still awaits that integration's independent Node 22 `console` job
+in [Verification 38504465450](https://github.com/xiak/matrix/actions/runs/38504465450);
+no earlier commit's green result is inherited. The UX workflow has no frontend
+Node job; its automatic Go Verification is not a substitute and no duplicate
+workflow was added. The separate real PG/Audit and two-isolated-browser UNKNOWN
+gate remains owned by [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md). Focused
+local behavior and static-delivery checks do not claim complete frontend,
+runtime or signed-install acceptance.
 
 The current service-enablement and resource-admission slice passed the complete 66-file/1,239-case
 frontend suite plus three export-normalization cases, typecheck, lint,
