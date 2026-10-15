@@ -1,4 +1,3 @@
 # Operator runbooks
 
-- [Platform installation: root recommendation, optional non-root account,
-  password policy, and command identity](platform-installation.md)
+- [平台安装：推荐 root、可选非 root 账号、密码及每条命令的执行身份](platform-installation.md)
