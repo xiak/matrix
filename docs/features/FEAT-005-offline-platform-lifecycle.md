@@ -36,6 +36,15 @@ implementation tactics only through a recorded adoption decision.
    accepted platform release. Skipping releases, arbitrary downgrade, and
    uninstall are not admitted.
 
+The current production operator profile is root on a dedicated Matrix host or
+VM. Matrix fixes the local rootful Docker socket and the PaaS worker receives
+that same socket, so a nominally non-root account in the `docker` group is
+still root-equivalent. Every lifecycle command must use the same effective UID
+that owns the `0700` installation root; root and non-root execution cannot be
+mixed. The exact host preparation, command identity and optional locked
+service-account model are owned by the verified
+[platform installation runbook](../runbooks/platform-installation.md).
+
 ## Release inventory and ownership
 
 An accepted bundle contains the exact immutable payloads required by
@@ -151,11 +160,13 @@ installation identity and retains a sanitized journal for diagnosis.
 
 The stable command tree is:
 
-- `mx platform install --bundle <path> --root <path> --trust-key <path>`;
+- `mx platform install --bundle <path> --root <path> --trust-key <path>
+  --security-mail-configuration <path> --northbound-origin <origin>`;
 - `mx platform verify --root <path>`;
 - `mx platform status --root <path>`;
 - `mx platform backup --root <path>`;
-- `mx platform upgrade --bundle <path> --root <path>`;
+- `mx platform upgrade --bundle <path> --root <path>
+  --security-mail-configuration <path>`;
 - `mx platform rollback --root <path>`;
 - `mx platform recover --root <path> --backup <id>`;
 - `mx platform support --root <path> --output <path>`.

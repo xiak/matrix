@@ -1,0 +1,169 @@
+# Platform installation and operating user
+
+This runbook answers one operational question only: which Linux identity runs
+each Matrix platform lifecycle command. The release contract and acceptance
+status remain owned by
+[FEAT-005](../features/FEAT-005-offline-platform-lifecycle.md).
+
+## Current production recommendation
+
+Use a dedicated Matrix Linux host or virtual machine with the supported
+rootful Docker Engine, and run every `mx platform` lifecycle command as OS
+`root`.
+
+This is the current release recommendation because Matrix deliberately uses
+the local `/var/run/docker.sock`, and the PaaS worker receives that same socket
+to manage product workloads. Membership in the host `docker` group grants
+root-level control of that daemon; changing only the CLI username does not
+create a privilege boundary. The current signed install, upgrade, rollback,
+backup, recovery and restart gates use the root operator profile.
+
+`--root` means the absolute Matrix installation directory. It does not mean
+the operating-system root account. Regardless of the chosen operator name,
+the following invariant applies:
+
+> The same effective UID that creates the Matrix installation root must run
+> every later `mx platform` command. Do not install as root and later operate
+> as another user, or the reverse.
+
+Matrix requires the installation root and its managed files to remain owned by
+that UID with owner-only permissions. Do not repair an identity mismatch with
+`chown -R`; use the supported backup/recovery or reinstall path instead.
+
+The prompts below identify the required identity:
+
+- `root#` means an authenticated root shell on the dedicated Matrix host.
+- `admin$` means a named human administrator with audited `sudo` access.
+- `matrix$` means a command executed as the locked `matrix` service account.
+
+## Recommended root profile
+
+The release bundle, public trust root and protected security-mail input are
+obtained through the authenticated delivery channel and staged outside the
+empty installation root. Example paths below must be replaced with the real
+staged paths and public origin.
+
+```console
+admin$ sudo -i
+root# umask 077
+root# install -d -o root -g root -m 0700 /var/lib/matrix
+root# test -S /var/run/docker.sock
+root# docker version
+root# docker compose version
+root# /usr/local/sbin/mx --format json platform install \
+  --bundle /srv/matrix-release \
+  --root /var/lib/matrix \
+  --trust-key /etc/matrix/release-trust.json \
+  --security-mail-configuration /etc/matrix/security-mail.json \
+  --northbound-origin https://matrix.example.com:443
+root# /usr/local/sbin/mx --format json platform verify --root /var/lib/matrix
+root# /usr/local/sbin/mx --format json platform status --root /var/lib/matrix
+```
+
+Keep using the same root identity for subsequent operations:
+
+```console
+root# /usr/local/sbin/mx --format json platform backup --root /var/lib/matrix
+root# /usr/local/sbin/mx --format json platform upgrade \
+  --bundle /srv/matrix-release-next \
+  --root /var/lib/matrix \
+  --security-mail-configuration /etc/matrix/security-mail.json
+root# /usr/local/sbin/mx --format json platform rollback --root /var/lib/matrix
+root# /usr/local/sbin/mx --format json platform recover \
+  --root /var/lib/matrix \
+  --backup backup-REPLACE_WITH_VERIFIED_ID
+root# /usr/local/sbin/mx --format json platform support \
+  --root /var/lib/matrix \
+  --output /var/tmp/matrix-support.json
+```
+
+Do not place the bundle, trust root, security-mail input or support output
+inside `/var/lib/matrix`. The installation root is Matrix-owned state, must be
+empty before a fresh install, and is not an operator scratch directory.
+
+## Optional non-root operator profile
+
+This profile is useful for stable file ownership and separating named human
+administrators from the Matrix lifecycle identity. With the currently fixed
+rootful Docker socket it is **not** a least-privilege boundary: the `matrix`
+account remains host-root-equivalent while it can control Docker. The full
+signed lifecycle gate for this profile has not yet been accepted, so use the
+root profile for the current production release.
+
+Create one locked, non-login service account. It should not have a password:
+
+```console
+root# groupadd --system matrix
+root# useradd --system \
+  --gid matrix \
+  --home-dir /var/lib/matrix \
+  --no-create-home \
+  --shell /usr/sbin/nologin \
+  matrix
+root# passwd -l matrix
+root# install -d -o matrix -g matrix -m 0700 /var/lib/matrix
+root# install -o root -g matrix -m 0750 ./mx /usr/local/sbin/mx
+root# usermod -aG docker matrix
+root# sudo -u matrix -- id
+root# sudo -u matrix -- docker version
+root# sudo -u matrix -- docker compose version
+```
+
+After group membership is effective, a named administrator invokes every
+lifecycle command as that same account:
+
+```console
+admin$ sudo -u matrix -- /usr/local/sbin/mx --format json platform install \
+  --bundle /srv/matrix-release \
+  --root /var/lib/matrix \
+  --trust-key /etc/matrix/release-trust.json \
+  --security-mail-configuration /etc/matrix/security-mail.json \
+  --northbound-origin https://matrix.example.com:443
+admin$ sudo -u matrix -- /usr/local/sbin/mx --format json platform verify \
+  --root /var/lib/matrix
+```
+
+The staged bundle and input files must be readable by `matrix`; the protected
+security-mail file must not be readable by group or other users. Do not give
+the shared service account an interactive password merely to run these
+commands. Human administrators should authenticate with their own accounts
+and use audited `sudo -u matrix` execution.
+
+`root# passwd matrix` would set a password hash, but the configured
+`/usr/sbin/nologin` shell would still reject interactive login. Do not turn
+this shared service identity into a human login. If an organization requires
+password-based administration, create a separately named human operator and
+delegate audited `sudo -u matrix` execution instead:
+
+```console
+root# useradd --create-home --shell /bin/bash matrix-operator
+root# passwd matrix-operator
+```
+
+SSH keys and MFA are preferred over that password fallback. The human account
+must not own `/var/lib/matrix`, and it must not invoke `mx` under its own UID.
+
+## Unsupported identity combinations
+
+- Do not alternate `sudo mx ...` and unprivileged `mx ...` commands.
+- Do not change ownership of an existing installation root to switch modes.
+- Do not point Matrix at a remote Docker daemon or caller-selected Docker
+  context. The current provider fixes the local Unix socket.
+- Do not describe the `docker` group as least privilege. Docker documents that
+  it grants root-level daemon control.
+- Rootless Docker is not the current Matrix release profile: Matrix fixes
+  `/var/run/docker.sock` in both lifecycle execution and generated topology.
+
+## Verification basis
+
+The current root profile is exercised by the signed FEAT-005 lifecycle gates.
+The account-creation commands above were also executed in an isolated Linux
+fixture: `matrix` had a locked password, the installation root was
+`0700 matrix:matrix`, the bootstrap executable was `0750 root:matrix`, and the
+same CLI returned the expected `PLATFORM_NOT_INSTALLED` precondition as both
+root and the owning non-root UID on an empty root. That lightweight check does
+not replace the missing full signed non-root lifecycle gate.
+
+Docker's security model is documented in its official
+[Linux post-installation guidance](https://docs.docker.com/engine/install/linux-postinstall/)
+and [Docker Engine security guide](https://docs.docker.com/engine/security/).
