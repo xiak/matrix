@@ -1,89 +1,88 @@
-# Platform installation and operating user
+# Matrix 平台安装与 Linux 执行用户
 
-This runbook answers one operational question only: which Linux identity runs
-each Matrix platform lifecycle command. The release contract and acceptance
-status remain owned by
-[FEAT-005](../features/FEAT-005-offline-platform-lifecycle.md).
+本 runbook 只回答一个运维问题：每条 Matrix 平台生命周期命令应由哪个
+Linux 身份执行。发布契约和验收状态仍由
+[FEAT-005](../features/FEAT-005-offline-platform-lifecycle.md) 统一拥有。
 
-## Required decision for this release
+## 先看结论
 
-**For the current production release, use the root profile.** The supported
-operator sequence is:
+**当前生产发布只推荐 root 运行模式。** 推荐操作顺序如下：
 
-1. a named human administrator logs in with their own Linux account;
-2. that administrator runs `sudo -i` once;
-3. the prompt changes to `root#`;
-4. every `mx platform install`, `verify`, `status`, `backup`, `upgrade`,
-   `rollback`, `recover`, and `support` command is run from that root shell.
+1. 运维人员使用自己的实名 Linux 账号登录主机；
+2. 在自己的终端执行一次 `sudo -i`；
+3. 确认提示符已经变成 `root#`；
+4. 主机准备命令，以及所有 `mx platform install`、`verify`、`status`、
+   `backup`、`upgrade`、`rollback`、`recover` 和 `support` 命令，都在这个
+   `root#` shell 中执行。
 
-Do not create a Linux `matrix` account for the recommended root profile. Do
-not set or enable a root password merely for Matrix, and do not enable remote
-root SSH login. The named administrator continues to authenticate with the
-host's existing SSH key, password, MFA, and `sudo` policy.
+推荐模式**不要求**创建 Linux `matrix` 用户，不要求给 `root` 设置或启用
+密码，也不要求开放 root 远程 SSH。运维人员继续使用自己的 SSH 密钥、
+密码、MFA 和主机现有的 `sudo` 策略登录，然后通过 `sudo -i` 取得本次操作
+所需的 root 身份。
 
-The optional non-root profile below is documented so its ownership contract
-is unambiguous, but it has not passed the complete signed lifecycle gate and
-is **not** the current production recommendation.
+非 root 模式目前只作为评估方案保留，尚未通过完整签名生命周期门禁，
+**不能作为当前生产部署方案**。
 
-## Who runs each command
+## 命令前缀就是执行身份
 
-The shell prompt shown at the start of each example line states the required
-identity. The prompt text itself is not part of the command to copy.
+本文每条示例命令开头的提示符明确表示执行身份；提示符本身不要复制到
+终端中。
 
-| Example prompt | Where the command is entered | Effective identity of the command | Permitted use |
+| 示例提示符 | 在哪里输入 | 命令的有效 Linux 身份 | 用途 |
 | --- | --- | --- | --- |
-| `admin$` | A named human administrator's login shell | That administrator, except for the command following `sudo` | Enter `sudo -i`, or invoke the optional profile with `sudo -u matrix --` |
-| `root#` | The root shell reached with `sudo -i`, or an already authenticated local root console | UID 0 (`root`) | All host preparation and every lifecycle command in the recommended profile |
-| `matrix$` | A non-interactive process started with `sudo -u matrix --` | Locked service account `matrix` | Optional non-root profile only; never an interactive login |
+| `admin$` | 实名运维人员自己的登录 shell | 默认是该运维人员；`sudo` 后面的命令除外 | 执行 `sudo -i`，或在非 root 评估模式中执行 `sudo -u matrix -- ...` |
+| `root#` | 执行 `sudo -i` 后得到的 shell，或已经认证的本地 root 控制台 | UID 0（`root`） | 推荐模式的全部主机准备和 Matrix 生命周期命令 |
+| `matrix-operator$` | 可选的实名人工操作员 shell | `matrix-operator`；`sudo -u matrix --` 后的命令实际以 `matrix` 执行 | 仅用于站点必须采用密码登录且选择非 root 评估模式的场景 |
 
-If a command block starts with `admin$ sudo -i`, every following `root#` line
-must be run **after** that command, in the resulting root shell. If an optional
-example starts with `admin$ sudo -u matrix --`, the human enters the command
-from their own shell but `sudo` executes `mx` as the `matrix` service account.
-Never omit that prefix in the optional profile.
+看到下面这样的命令块：
 
-Linux operating-system accounts are separate from Matrix IAM accounts. The
-password of a Matrix tenant owner, sub-user, or platform operator is never a
-Linux login password and cannot be used to run these host commands.
+```console
+admin$ sudo -i
+root# umask 077
+root# /usr/local/sbin/mx --format json platform status --root /var/lib/matrix
+```
 
-## Password and account policy
+含义是先在运维人员自己的 shell 中执行 `sudo -i`，再在得到的 root shell
+中执行后两条命令。不要把 `admin$` 或 `root#` 当成命令的一部分。
 
-| Profile | Human login | Identity that executes `mx` | Password | Current status |
+在非 root 评估模式中，运维人员仍从自己的 shell 输入命令，但每条 `mx`
+命令都必须保留 `sudo -u matrix --` 前缀；`sudo` 会让该命令以锁定的
+`matrix` 服务账号运行。不能省略此前缀，也不能直接登录 `matrix`。
+
+Linux 操作系统账号与 Matrix IAM 账号完全独立。Matrix 租户 Root、子账号
+或平台操作员的密码都不是 Linux 登录密码，也不能用来执行这些主机命令。
+
+## 用户与密码规则
+
+| 模式 | 人员如何登录 | 谁实际执行 `mx` | 是否创建密码 | 当前状态 |
 | --- | --- | --- | --- | --- |
-| Recommended root | A named administrator using `sudo -i`, or an already authenticated root console | OS `root` | Matrix creates no Linux password; the administrator uses the host's existing root or `sudo` authentication | **Use this profile for production** |
-| Optional service account | A named administrator using `sudo -u matrix -- ...` | Locked `matrix` service account | **No password**; interactive login stays disabled | Evaluation only; the full signed lifecycle gate is not accepted |
-| Password-based human fallback | A separately named human such as `matrix-operator` | Still the locked `matrix` service account through audited `sudo -u matrix -- ...` | Password belongs only to the named human; never set one on the shared `matrix` account | Optional site policy within the unaccepted non-root profile |
+| 推荐 root 模式 | 实名运维人员登录后执行 `sudo -i`，或使用已认证的本地 root 控制台 | OS `root` | Matrix 不创建 Linux 密码；继续使用主机现有的人员认证和 `sudo` 规则 | **当前生产部署使用此模式** |
+| 非 root 服务账号模式 | 实名运维人员执行 `sudo -u matrix -- ...` | 锁定的 `matrix` 服务账号 | `matrix` **不设置密码**，并保持禁止交互登录 | 仅评估；完整签名生命周期门禁尚未验收 |
+| 密码型人工账号后备方案 | 单独创建实名账号，例如 `matrix-operator` | 仍通过 `sudo -u matrix -- ...` 让 `matrix` 执行 | 密码只属于 `matrix-operator`；绝不给共享的 `matrix` 服务账号设置密码 | 仅属于未验收的非 root 评估模式 |
 
-Choosing the root profile does not require enabling remote SSH login for
-`root`. A named human administrator may authenticate with their own account,
-run `sudo -i` once, and then execute the complete lifecycle in that root shell.
-Matrix neither creates nor manages Linux login passwords.
+选择 root 模式不等于开放 root 远程登录。推荐做法始终是实名人员先登录，
+再执行一次 `sudo -i`。Matrix 本身不创建或管理 Linux 登录密码。
 
-This is the current release recommendation because Matrix deliberately uses
-the local `/var/run/docker.sock`, and the PaaS worker receives that same socket
-to manage product workloads. Membership in the host `docker` group grants
-root-level control of that daemon; changing only the CLI username does not
-create a privilege boundary. The current signed install, upgrade, rollback,
-backup, recovery and restart gates use the root operator profile.
+当前必须推荐 root 模式，是因为 Matrix 固定使用本机
+`/var/run/docker.sock`，PaaS worker 也通过同一个 socket 管理产品工作负载。
+加入主机 `docker` 组本身就具有该 Docker daemon 的 root 级控制能力，
+只把 CLI 换成非 root 用户并不能形成真正的最小权限边界。当前签名安装、
+升级、回滚、备份、恢复和重启门禁实际验收的也是 root 操作模式。
 
-`--root` means the absolute Matrix installation directory. It does not mean
-the operating-system root account. Regardless of the chosen operator name,
-the following invariant applies:
+`--root` 参数表示 Matrix 安装目录的绝对路径，并不是指操作系统的 root
+账号。无论选择哪种操作身份，都必须遵守以下不变量：
 
-> The same effective UID that creates the Matrix installation root must run
-> every later `mx platform` command. Do not install as root and later operate
-> as another user, or the reverse.
+> 创建 Matrix 安装目录的有效 UID，必须执行此后每一条 `mx platform`
+> 命令。不能先用 root 安装再换成其他用户运维，也不能反过来操作。
 
-Matrix requires the installation root and its managed files to remain owned by
-that UID with owner-only permissions. Do not repair an identity mismatch with
-`chown -R`; use the supported backup/recovery or reinstall path instead.
+Matrix 要求安装目录及其托管文件始终归该 UID 所有，并保持仅 owner 可访问
+的权限。不要用 `chown -R` 修补身份混用；应使用受支持的备份/恢复或重新安装
+路径。
 
-## Recommended root profile
+## 推荐的 root 模式
 
-The release bundle, public trust root and protected security-mail input are
-obtained through the authenticated delivery channel and staged outside the
-empty installation root. Example paths below must be replaced with the real
-staged paths and public origin.
+发布包、公开信任根和受保护的安全邮件配置应通过经过认证的交付通道取得，
+并放在空安装目录之外。下面的示例路径和公开访问地址必须替换为现场真实值。
 
 ```console
 admin$ sudo -i
@@ -102,12 +101,11 @@ root# /usr/local/sbin/mx --format json platform verify --root /var/lib/matrix
 root# /usr/local/sbin/mx --format json platform status --root /var/lib/matrix
 ```
 
-If the console is already an authenticated root shell, omit `sudo -i`. From
-`umask 077` onward, every command in this section runs as `root`; do not exit
-back to the administrator shell between lifecycle commands and then run `mx`
-without `sudo`.
+如果当前控制台已经是认证后的 root shell，可以省略 `sudo -i`。从
+`umask 077` 开始，本节所有命令都以 root 执行；不要在生命周期操作中途退出
+到普通运维人员 shell 后直接运行没有 `sudo` 的 `mx`。
 
-Keep using the same root identity for subsequent operations:
+后续操作继续使用同一个 root 身份：
 
 ```console
 root# /usr/local/sbin/mx --format json platform backup --root /var/lib/matrix
@@ -124,23 +122,20 @@ root# /usr/local/sbin/mx --format json platform support \
   --output /var/tmp/matrix-support.json
 ```
 
-Do not place the bundle, trust root, security-mail input or support output
-inside `/var/lib/matrix`. The installation root is Matrix-owned state, must be
-empty before a fresh install, and is not an operator scratch directory.
+不要把发布包、信任根、安全邮件配置或 support 输出放入
+`/var/lib/matrix`。安装目录是 Matrix 托管状态，全新安装前必须为空，不能
+作为运维人员的临时工作目录。
 
-## Optional non-root operator profile
+## 可选的非 root 操作模式
 
-This profile is useful for stable file ownership and separating named human
-administrators from the Matrix lifecycle identity. With the currently fixed
-rootful Docker socket it is **not** a least-privilege boundary: the `matrix`
-account remains host-root-equivalent while it can control Docker. The full
-signed lifecycle gate for this profile has not yet been accepted, so use the
-root profile for the current production release.
+这个模式可以固定文件 owner，并把实名运维人员与 Matrix 生命周期身份分开。
+但是在当前固定使用 rootful Docker socket 的前提下，它**不是**最小权限
+边界：只要 `matrix` 能控制 Docker，它仍等价于拥有主机 root 能力。该模式
+尚未通过完整签名生命周期门禁，因此当前生产发布仍必须使用 root 模式。
 
-All account-creation commands in this section run once at a `root#` prompt.
-Create one locked, non-login service account. It must not have a password;
-`passwd -l` locks password authentication rather than asking for a new
-password:
+本节所有账号创建命令都只执行一次，并且必须在 `root#` 提示符下执行。
+创建一个锁定、不可登录的服务账号。该账号不得设置密码；`passwd -l` 是
+锁定密码认证，不会要求创建新密码：
 
 ```console
 root# groupadd --system matrix
@@ -159,10 +154,9 @@ root# sudo -u matrix -- docker version
 root# sudo -u matrix -- docker compose version
 ```
 
-Stop here if these checks fail. After group membership is effective, a named
-administrator invokes the install and **every later** lifecycle command as
-that same service account. The administrator must never run `mx` directly
-under their own UID:
+任一检查失败都应立即停止。组成员关系生效后，实名运维人员必须让安装命令
+和**此后所有**生命周期命令都以同一个 `matrix` 服务账号执行。运维人员
+不得直接用自己的 UID 运行 `mx`：
 
 ```console
 admin$ sudo -u matrix -- /usr/local/sbin/mx --format json platform install \
@@ -175,62 +169,57 @@ admin$ sudo -u matrix -- /usr/local/sbin/mx --format json platform verify \
   --root /var/lib/matrix
 ```
 
-The staged bundle and input files must be readable by `matrix`; the protected
-security-mail file must not be readable by group or other users. Do not give
-the shared service account an interactive password merely to run these
-commands. Human administrators should authenticate with their own accounts
-and use audited `sudo -u matrix` execution.
+暂存的发布包和输入文件必须可由 `matrix` 读取；受保护的安全邮件配置不能
+允许 group 或 other 读取。不要为了执行这些命令而给共享服务账号设置交互
+密码。人工运维人员应使用自己的账号完成认证，再通过可审计的
+`sudo -u matrix` 执行。
 
-Do **not** run `passwd matrix`. That would set a password hash, while the
-configured `/usr/sbin/nologin` shell would still reject interactive login. Do
-not turn
-this shared service identity into a human login. If an organization requires
-password-based administration, create a separately named human operator and
-delegate audited `sudo -u matrix` execution instead. The following commands
-run at a `root#` prompt; only `passwd matrix-operator` prompts twice, and the
-password belongs to that human account:
+**不要**执行 `passwd matrix`。它只会写入密码哈希，而配置的
+`/usr/sbin/nologin` 仍会拒绝交互登录；不能把这个共享服务身份变成人工
+登录账号。如果组织策略要求使用密码运维，应另建一个实名人工账号，再向
+它委派可审计的 `sudo -u matrix` 权限。下面两条命令都在 `root#` 下执行；
+只有 `passwd matrix-operator` 会要求输入两次密码，且该密码只属于这个
+人工账号：
 
 ```console
 root# useradd --create-home --shell /bin/bash matrix-operator
 root# passwd matrix-operator
 ```
 
-The password does not grant Matrix access by itself. The site's administrator
-must separately authorize `matrix-operator` in the audited `sudo` policy to
-run `/usr/local/sbin/mx` as target user `matrix`, and should verify that policy
-before installation:
+仅设置密码不会自动授予 Matrix 操作权。站点管理员必须另外在可审计的
+`sudo` 策略中允许 `matrix-operator` 以目标用户 `matrix` 运行
+`/usr/local/sbin/mx`，并在安装前验证该策略：
 
 ```console
 root# sudo -l -U matrix-operator
 matrix-operator$ sudo -u matrix -- /usr/local/sbin/mx --help
 ```
 
-SSH keys and MFA are preferred over that password fallback. The human account
-must not own `/var/lib/matrix`, must not join the `docker` group, and must not
-invoke `mx` under its own UID. Do not use `su - matrix`: the service account is
-intentionally non-login, and the supported invocation is `sudo -u matrix --`.
+SSH 密钥和 MFA 优先于密码后备方案。人工账号不能拥有 `/var/lib/matrix`，
+不能加入 `docker` 组，也不能用自己的 UID 直接运行 `mx`。不要使用
+`su - matrix`：该服务账号被有意配置为不可登录，受支持的调用方式只有
+`sudo -u matrix --`。
 
-## Unsupported identity combinations
+## 不支持的身份组合
 
-- Do not alternate `sudo mx ...` and unprivileged `mx ...` commands.
-- Do not change ownership of an existing installation root to switch modes.
-- Do not point Matrix at a remote Docker daemon or caller-selected Docker
-  context. The current provider fixes the local Unix socket.
-- Do not describe the `docker` group as least privilege. Docker documents that
-  it grants root-level daemon control.
-- Rootless Docker is not the current Matrix release profile: Matrix fixes
-  `/var/run/docker.sock` in both lifecycle execution and generated topology.
+- 不要交替执行 `sudo mx ...` 和非特权 `mx ...`。
+- 不要通过修改现有安装目录的 owner 来切换 root/非 root 模式。
+- 不要让 Matrix 连接远程 Docker daemon 或调用方指定的 Docker context；
+  当前 provider 固定使用本地 Unix socket。
+- 不要把 `docker` 组描述为最小权限；Docker 官方文档明确说明它授予 daemon
+  的 root 级控制能力。
+- Rootless Docker 不属于当前 Matrix 发布 profile；生命周期执行和生成的
+  topology 都固定使用 `/var/run/docker.sock`。
 
-## Verification basis
+## 验证依据
 
-The current root profile is exercised by the signed FEAT-005 lifecycle gates.
-The account-creation commands above were also executed in an isolated Linux
-fixture: `matrix` had a locked password, the installation root was
-`0700 matrix:matrix`, the bootstrap executable was `0750 root:matrix`, and the
-same CLI returned the expected `PLATFORM_NOT_INSTALLED` precondition as both
-root and the owning non-root UID on an empty root. That lightweight check does
-not replace the missing full signed non-root lifecycle gate.
+当前 root 模式已由 FEAT-005 的签名生命周期门禁实跑。上述账号创建命令也
+在隔离 Linux fixture 中执行过：`matrix` 密码保持锁定，安装目录权限为
+`0700 matrix:matrix`，bootstrap 可执行文件权限为 `0750 root:matrix`；
+同一 CLI 分别以 root 和拥有目录的非 root UID 在空目录上运行时，均返回预期
+的 `PLATFORM_NOT_INSTALLED` 前置条件。这个轻量检查不能替代尚未完成的非
+root 完整签名生命周期门禁。
 
-Docker's security model is documented in its official
-[Linux post-installation guidance](https://docs.docker.com/engine/install/linux-postinstall/)
-and [Docker Engine security guide](https://docs.docker.com/engine/security/).
+Docker 的安全模型见官方
+[Linux 安装后配置说明](https://docs.docker.com/engine/install/linux-postinstall/)
+和 [Docker Engine 安全指南](https://docs.docker.com/engine/security/)。
