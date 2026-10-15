@@ -13,10 +13,10 @@
     "build:embedded": "npm run build && node scripts/sync-static-export.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run && node --test scripts/normalize-static-export.test.mjs",
+    "test": "vitest run && node --test scripts/normalize-static-export.test.mjs scripts/check-embedded-export.test.mjs scripts/production-export.test.mjs",
     "check:architecture": "node scripts/check-architecture.mjs",
     "check:styles": "node scripts/check-styles.mjs",
-    "check:embedded": "npm run build && node scripts/check-embedded-export.mjs",
+    "check:embedded": "node scripts/check-production-export.mjs && node scripts/check-embedded-export.mjs",
     "check": "npm run typecheck && npm run lint && npm run check:architecture && npm run check:styles && npm run test && npm run check:embedded"
   },
   "dependencies": {
