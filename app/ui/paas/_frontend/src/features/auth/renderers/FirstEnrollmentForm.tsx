@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { ArrowLeft, ArrowRight, LoaderCircle, ShieldCheck } from "lucide-react";
 import { Alert, Button, FormField, Input } from "@ui/xiak";
 import { useSession } from "../application/SessionProvider";
+import { AuthenticatorSetupMaterial } from "./AuthenticatorSetupMaterial";
 import styles from "./LoginRenderer.module.css";
 
 /** A restricted first-factor ceremony. No Session or console route is available here. */
@@ -84,7 +85,7 @@ export function FirstEnrollmentForm() {
 
     {status === "TOTP_PENDING" && progress?.provisioning ? <form className={styles.form} onSubmit={confirmFactor}>
       <Alert status="warning">{t("seedBoundary")}</Alert>
-      <div className={styles.recoverySecret}><div><span>{t("seedLabel")}</span><code>{progress.provisioning.seed}</code></div></div>
+      <AuthenticatorSetupMaterial provisioning={progress.provisioning} />
       <FormField id={`${inputId}-factor-code`} label={t("factorCodeLabel")} hint={t("factorCodeHint")}>
         <Input autoComplete="one-time-code" disabled={busy} id={`${inputId}-factor-code`} inputMode="numeric" maxLength={6}
           onChange={(event) => { setFactorCode(event.target.value.replace(/\D/g, "")); session.clearError(); }} pattern="[0-9]{6}" required value={factorCode} />

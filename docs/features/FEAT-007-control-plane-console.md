@@ -622,20 +622,15 @@ effective access or automatically apply a recommendation.
 
 #### MFA and self-session experience contract
 
-The console may prototype the security experience before the IAM HTTP surface is
-available, but it must not make an unimplemented protection look active. The
-high-fidelity MFA preview follows the fixed S2/S3 design in
-`6fa39fda:IAM/FEAT-IAM-009-security-governance.md` and the notification-address
-clarification in `04041d2d3f7ed55225a5164bc2bc05251d25a6f1`. It does not import
-those commits as a runtime dependency and does not claim that their private
-keyring work exposes a usable MFA API.
+The login challenge, restricted first enrollment, personal TOTP lifecycle,
+notification address and self-session pages have fixed LIVE clients as well
+as an explicit isolated MOCK. IAM-009/IAM-012 own their server-side rules and
+[FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md) owns the combined runtime
+acceptance. These are not future API placeholders. Existing or subsequently
+reported IAM browser evidence must not be inherited as a new UX candidate's
+independent browser, device, CI or signed-install acceptance.
 
-The accepted password-only login and self-session milestones explicitly do
-not cover MFA. Production MFA interaction remains owned by IAM-009's future
-fixed public contract and its own real-browser acceptance; an in-progress
-backend implementation or its CI status is not inherited as console evidence.
-
-- Password success enters a challenge or restricted enrollment state without
+- When IAM requires MFA, password success enters a challenge or restricted enrollment state without
   creating a normal login session. Only a fresh, unused authenticator code may
   complete login. A forced password change invalidates the old challenge and
   requires a new login attempt.
@@ -652,15 +647,28 @@ backend implementation or its CI status is not inherited as console evidence.
   short-lived and single-use. The preview must not present a reusable elevated
   session or imply additional IAM authority.
 - When IAM proves a sessionless first-enrollment state but no trusted security
-  notification address exists, the future flow must enter restricted address
-  verification before authenticator setup. With no real delivery contract the
-  step is unavailable and no session is issued. Email is security notification,
-  not an MFA or password-recovery factor; the preview contains no fake send form.
-- Demo codes, QR cells and recovery material are deliberately nonfunctional and
-  page-local. They are not persisted in browser storage, returned after their
-  one-time view, or sent to IAM. The settings page separates personal factor
-  management from the account-wide `requiredForUsers` policy and labels
-  unavailable delivery dependencies explicitly.
+  notification address exists, the existing restricted address-verification
+  client runs before authenticator setup. Failed or unavailable delivery stays
+  local and issues no Session. Email is security notification, not an MFA or
+  password-recovery factor.
+- The shared authenticator setup material renders a locally encoded SVG QR
+  from the exact provisioning URI, plus the manual seed and optional URI view.
+  Normal first binding, restricted enrollment, recovery and replacement retain
+  their original parent-owned eligibility, first-response-only custody, intent/Session
+  guards, deadlines and confirmation behavior. Rendering the QR is not factor
+  confirmation. No remote QR service, image URL, secret persistence or new IAM
+  call is introduced. The symbol has a four-module quiet zone and remains dark
+  on opaque light paper in every theme. Encoding failure removes any old symbol
+  and leaves the manual alternative with an explicit not-confirmed message.
+  Only an unambiguous `otpauth://totp` URI carrying the same setup seed can
+  produce a QR; other schemes, HOTP, duplicate/mismatched secrets and embedded
+  URI credentials do not become scannable links. No URI is canonicalized or
+  rewritten before encoding. More than 1,024 UTF-8 bytes uses manual setup
+  without invoking the encoder; this is an on-screen rendering bound, not a
+  new wire limit or factor-confirmation rule.
+- Explicit MOCK codes and recovery material remain fictional and isolated from
+  IAM. The settings page separates personal factor management from the
+  account-wide `requiredForUsers` policy; a preview does not activate real MFA.
 
 The interaction shape is consistent with Tencent CAM's documented next-login
 MFA setup and virtual-MFA protection, AWS IAM's explicit virtual-device
@@ -680,19 +688,11 @@ outcomes retain and replay the exact original intent; they never create a
 second bulk operation. Confirmation is shown inline in the content area so the
 page title and action positions remain stable on desktop and compact layouts.
 
-Acceptance evidence on 2026-09-20: 574 frontend tests and three export-
-normalization tests passed, along with type checking, lint, architecture and
-style checks (228 theme contrast pairs), 39-page production static generation,
-217-file embedded-export equivalence, and the Go UI-host tests. Browser checks
-covered the normal viewport and a 390 x 844 compact viewport for challenge,
-sessionless first setup, QR/manual setup, personal security cards, compact page
-actions and inline bulk-session confirmation. Browser warning/error inspection
-was empty. The identity-security snapshot additionally passed a `360 x 800`
-check with `clientWidth == scrollWidth == 360`; its export menu returned focus
-to the trigger on `Escape`, and the evidence links navigated directly to their
-owning IAM pages. This evidence accepts only the MOCK UX plus the fixed self-
-session adapter; it is not evidence of a usable backend MFA, credential-report
-or email-delivery API.
+Current frontend gates belong to the shared-navigation evidence below. The
+original preview's geometry and fictional QR cells are not proof that a real
+authenticator can scan new LIVE materials. The local QR contract is checked by
+independently decoding rendered vector geometry; physical-device and current
+signed-browser acceptance remain separate gates.
 
 The generator and association contracts are supported by Tencent's
 [policy generator](https://cloud.tencent.com/document/product/598/37739) and
@@ -875,6 +875,23 @@ to the [adoption review](../adoption/FEAT-007-control-plane-console.md).
 This FEAT owns the shared shell, navigation, visual system and isolated MOCK
 experience. Its UX evidence does not accept an unintegrated live IAM runtime.
 
+The UI-side review of IAM-UI-01–06 uses the delivery matrix fixed at
+`9dd117e918aadfd6b0459e591d263dc98de99090`. Remaining browser gates in that
+matrix must not be described as missing screens or replaced by fake forms:
+
+| Path | Existing UI owner | UI-side conclusion |
+| --- | --- | --- |
+| IAM-UI-01 | `LiveAccountTenants`, `AccountTenantWorkspace` | Account opening, protected lifecycle and recovery controls exist; complete lifecycle/UNKNOWN browser acceptance is distinct from a new page. |
+| IAM-UI-02 | `AccountLoginForm`, `PasswordChangeForm`, `SessionProvider`, console shell | Realm, restricted password change, logout and identity rendering exist; HTTP-assisted completion is not pure-browser completion. |
+| IAM-UI-03 | `AccountUserDirectory`, `AccountLiveGroups`, `PolicyAttachmentChangeFlow` | Individual CRUD, membership and source-aware relationships already have LIVE paths; User batch operations remain isolated MOCK, not a new live form. |
+| IAM-UI-04 | `AccountPolicyDirectory`, `LivePolicyCreationWizard`, `PermissionBoundary` | LIVE authoring, versions and boundary controls exist; full conflict/UNKNOWN browser gates do not require a second policy editor. |
+| IAM-UI-05 | `AccountLiveRoles`, `LiveRoleSelfService`, `LiveRoleSessions` | Role/trust/assume/return and session controls exist; administrator revocation and exact Role-bearer resource tests remain integration evidence. |
+| IAM-UI-06 | LIVE credentials, personal-security, recovery and session renderers | The identified setup usability gap is local scannable provisioning in the existing four ceremonies, addressed by `AuthenticatorSetupMaterial`; actual device and failure-matrix gates remain independent. |
+
+External identities, WebAuthn, cross-Account authorization and Role chaining
+remain explicitly unavailable in LIVE. No matrix item authorizes a browser
+endpoint, backend capability or successful form to be invented.
+
 #### CAM implementation slices and acceptance
 
 The scenario-driven preview uses the same pages and repository boundary as
@@ -919,12 +936,14 @@ unknown are separate states. Empty groups are not evidence of distributed
 permissions, zero active keys do not complete a security assessment, and a
 saved MOCK protection policy does not prove real MFA enrollment.
 The MOCK user directory displays and filters direct/group policy associations;
-the live directory displays only the fixed IAM contract's direct policy
-attachments. Empty-group membership and a boundary alone are not grants. A
-directory management action opens the same user detail. Role trust, sessions,
-group inheritance and effective-access explanation remain explicit preview
-workspaces until their own fixed live contracts are accepted; no live
-platform-role projection or role-name inference remains.
+LIVE directory summaries and detailed direct/group grant sources are separate
+server-owned projections, not locally inferred effective permissions.
+Empty-group membership and a boundary alone are not grants. A directory
+management action opens the same user detail. Role/trust, bounded USER
+assumption, administrator sessions and group inheritance have fixed LIVE
+counterparts. Local effective-access explanations remain explicitly preview
+or unavailable where the owning product contract is not connected; no live
+platform-role projection or role-name authority is synthesized.
 
 The MOCK user-settings page presents an isolated password-rule design flow.
 It labels proposed defaults as neither loaded nor effective account settings;
@@ -1145,7 +1164,7 @@ slice, not a replacement of FEAT-006 or a published live authorization API.
 | Group authorization | Full-page empty-group creation, separate membership/policy operations, permission provenance and cross-navigation. | Two-step group-only creation, isolated metadata updates, a bounded and explicitly future-looking multi-member MOCK review, one-item direct-policy changes, named policy sources and query-addressable user/group/policy/role details are implemented. The fixed LIVE group contract remains one relationship per request, reuses the same normalized directory/detail components, keeps group requests local to the workspace, renders group facts before the independently loaded membership relation, omits non-authoritative member totals, discloses loaded-record search scope, keeps continuation representation out of presentation semantics and retries only one unchanged uncertain command. Preview retains its explicitly complete sample count. Shared in-app unsaved-navigation protection preserves creation drafts. |
 | Role authorization | Customer-role content wizard, trust vs permission vs boundary, bounded USER temporary-session preview, plus a separate service-linked authorization boundary. | Four-step `CUSTOMER` creation, isolated metadata/trust/settings commands, reviewed policy deltas, boundary and before/after trust changes, and exact same-account `USER` trust are implemented. Generic service/provider principals are absent. Bounded preview sessions recheck USER assumption, retain immutable expiry and support individual revocation; service-linked authorization remains in its dedicated template/consent/binding workflow. Shared draft protection, unchanged/invalid trust, pending locks, cancellation and failure/retry across role commands are locally verified. |
 | End-to-end access explanation | A no-grant user, group-derived allow, explicit deny, default-version rollback, boundary intersection and role-session case all lead to reproducible resource/action decisions. | Domain and interaction tests cover direct/group grants, deny precedence, conditions, current-version rollback, user/role boundary intersection, dual trust/caller authorization and session expiry/revocation. A real local MOCK journey proves caller denial before an exact assumption grant, role-only resource access limited by a boundary, then denial after revocation. Locally functionally verified for the documented subset. |
-| Supporting workspaces | Review overview, users, provider/SSO readiness, settings and one-time MOCK keys against the documented scope without faking external activation. | Overview links and candidate guidance, source-aware user filtering, localized policy metadata, planned-state provider/SSO architecture, settings failure-retry, enterprise visibility/import and one-time MOCK keys are locally regression-verified. No provider directory, external-identity mapping or successful external session is fabricated. Scan/paid/live security flows remain skipped. |
+| Supporting workspaces | Review overview, users, provider/SSO readiness, settings and one-time MOCK keys against the documented scope without faking external activation. | Overview links and candidate guidance, source-aware user filtering, localized policy metadata, planned-state provider/SSO architecture, settings failure-retry, enterprise visibility/import and one-time MOCK keys are locally regression-verified. No provider directory, external-identity mapping or successful external session is fabricated. These MOCK checks do not accept real device scanning, payment or LIVE security enforcement. |
 
 Acceptance requires all of the following, not just screenshots:
 
@@ -1909,6 +1928,41 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
+The shared authenticator setup material is a UI candidate, not an accepted
+release. On 2026-10-15, Node 22.22.2/npm 11.6.4 passed its 67-case focused
+login/setup/replacement run, typecheck, lint, architecture and 234 theme
+contrast pairs. Ten new component cases independently decode the rendered
+vector, preserve exact UTF-8 URI bytes, replace/discard old material, retain
+manual setup for oversized input and reject unsupported/ambiguous QR payloads.
+The original ceremonies still own first-response material, Session and intent
+custody; these checks are not a physical-device or signed-browser acceptance.
+
+The final complete run covered 72 files and 1,517 cases: 1,514 passed and
+three exceeded the unchanged five-second test budget. The failures were the
+existing full-page create-user wizard and UNKNOWN notification-address
+replacement/navigation cases in `AccessWorkspace.test.tsx`, and explicit
+catalog-Action custom-policy creation in `AccountAccessRenderer.test.tsx`.
+Both files are unchanged from parent
+`dc6410238f40d1a91bdb236fa030a584d4703b0f`. Serial same-budget single-case
+replays passed policy creation but still timed out for the two workspace
+cases. Those replays do not replace a green complete run or establish that
+the remaining timeouts are harmless flakes; the complete frontend gate
+remains open. No timeout, untouched page contract or failing scenario was
+relaxed to accept this candidate.
+
+All three export-normalization cases passed separately. The production
+preview-disabled build generated 59 pages and 57 normalized segment files;
+all 324 generated files, including the offline encoding-library notice, match
+the Go embed byte-for-byte. Fresh UI-host `go test -count=1 -p 2` and
+`go vet -p 2` passed on Go 1.26.3. Installation-time npm audit reported nine
+high and one critical advisory in unchanged Next/toolchain dependencies;
+neither newly pinned QR package appears in that report. This slice neither
+silently upgrades them nor claims their applicability or release acceptance
+has been resolved. Independent CI, the failed full-suite gate, dependency
+security review, real-device scanning and signed-runtime replay remain
+separate acceptance boundaries. No Go/API/SQL/profile, IAM FEAT, checkpoint
+or shared runtime process was changed.
+
 The Audit reader consumes the optional `authorityEvidenceDigest` from public
 Audit Event at fixed IAM/Audit source
 `5effc802fa8116d14420188d9075d6fe3ab1ceaa`. A present value must match
@@ -1920,19 +1974,13 @@ that it is not a current authorization permit. It does not expose producer
 evidence, invent a digest, verify a hash chain, alter query fields or add a
 directory column.
 
-Verified on 2026-10-15 with Node 22.22.2/npm 11.6.4: the focused Audit
-repository/renderer run passed 34 cases, and the complete frontend run passed
-71 files and 1,507 cases plus all three export-normalization cases. The 23
-added cases cover valid producer facts, historical omission, malformed and
-unknown fields, strict HTTP preservation and sanitized read-only rendering.
-Typecheck, lint, architecture and 228 contrast pairs passed. The production
-build generated 59 pages and 57 normalized segment files; all 322 generated
-files match the Go embed byte-for-byte. Fresh UI-host test with
-`-count=1 -p 2` and vet with `-p 2` passed on Go 1.26.3. These are client,
-source and export gates, not this candidate's independent CI, real-IAM or
-signed-APISIX browser acceptance. The integration owner must replay the
-exact adapted source against the fixed backend; no backend, API, SQL,
-profile, IAM FEAT, checkpoint or running environment changed in this slice.
+That projection is fixed in
+[`dc6410238f40d1a91bdb236fa030a584d4703b0f`](https://github.com/xiak/matrix/commit/dc6410238f40d1a91bdb236fa030a584d4703b0f).
+Its 23 regression cases continue to cover valid producer facts, historical
+omission, malformed and unknown fields, strict HTTP preservation and sanitized
+read-only rendering. Its named earlier acceptance does not turn the current
+authenticator candidate's failed complete run into a pass or inherit a new
+signed-runtime result.
 
 The retained Role-exit and recovered-quota behavior is fixed in
 [`a661779a5a00aa731544e86fc571ad5f4dcf8e68`](https://github.com/xiak/matrix/commit/a661779a5a00aa731544e86fc571ad5f4dcf8e68).
@@ -3373,15 +3421,16 @@ unchanged platform lifecycle and recovery evidence remains owned by Gate C.
 ## Deferred
 
 Money movement, invoices, tax, discounts, metering-based billing, marketplace
-publishing, MySQL, ELK, Redis, arbitrary Helm/Compose templates, customer
+publishing, a full ELK stack, Redis, arbitrary Helm/Compose templates, customer
 images, public-cloud accounts, VM/network provisioning, Kubernetes,
 multi-region placement, high availability, read replicas, point-in-time
-restore, engine upgrades, installation deletion, live external IdP/LDAP,
-SAML/OIDC authentication, production MFA enforcement pending IAM-009's fixed
-public contract and independent browser acceptance, corporate-directory
-integration, custom-policy authorization and mobile-native applications remain outside
+restore, engine upgrades, live external IdP/LDAP,
+SAML/OIDC authentication, WebAuthn, corporate-directory
+integration and mobile-native applications remain outside
 this target. Access-management configuration previews do not implement these
-backend security capabilities. Vendor-specific collaboration invitations,
+unimplemented backend security capabilities. Existing LIVE custom policies,
+MFA clients and service termination are not Deferred merely because their
+remaining runtime gates are open. Vendor-specific collaboration invitations,
 message-only identities and batch account creation are not represented as
 supported Matrix IAM contracts.
 

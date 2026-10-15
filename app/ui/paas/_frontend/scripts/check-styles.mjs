@@ -97,6 +97,7 @@ function luminance(name, tokens) {
 }
 
 const contrastPairs = [
+  ["qr-foreground", "qr-background", 7],
   ["brand", "bg-canvas", 4.5],
   ["text-muted", "bg-control-hover", 4.5],
   ["accent-text", "bg-panel", 4.5],
@@ -136,6 +137,9 @@ const contrastPairs = [
 ];
 
 for (const [scheme, tokens] of Object.entries(themes)) {
+  if (luminance("qr-background", tokens) < 0.9 || luminance("qr-foreground", tokens) > 0.1) {
+    violations.push(`${scheme}: authenticator QR must retain dark modules on an opaque light background`);
+  }
   const darkSurface = scheme === "mixed/shell" || scheme.startsWith("dark/");
   if (tokens.get("color-scheme") !== (darkSurface ? "dark" : "light")) {
     violations.push(`${scheme}: native controls must follow the surface color scheme`);

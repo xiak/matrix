@@ -67,6 +67,8 @@
   --xiak-palette-matrix-danger-hover: #ffc1cb;
 
   --xiak-color-brand: var(--xiak-palette-cyan-700);
+  --xiak-color-qr-foreground: var(--xiak-palette-slate-900);
+  --xiak-color-qr-background: var(--xiak-palette-white);
   --xiak-color-decoration: var(--xiak-palette-slate-200);
 
   --xiak-color-header-bg: var(--xiak-palette-white);

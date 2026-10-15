@@ -92,6 +92,20 @@ architecture, package or runtime dependency.
 
 ## IAM fixed-contract integration
 
+The authenticator setup slice reviews IAM-UI-01–06 only at fixed source
+`9dd117e918aadfd6b0459e591d263dc98de99090`, against console owner
+`dc6410238f40d1a91bdb236fa030a584d4703b0f`. `REUSE` the existing four LIVE
+ceremonies, strict provisioning contract, Session/intent fences and one-time
+custody. `ADAPT` only the repeated setup-material presentation into one local
+SVG/manual-key component. `REFERENCE` the fixed delivery matrix to distinguish
+missing interaction from remaining runtime acceptance. `REJECT` new endpoints,
+fake writable forms, remote QR services, secret persistence, shared encoder
+mutation and changes to Deferred identity boundaries. The pinned zero-dependency
+`qrcode-generator` 2.0.4 is an encoding dependency, not a UI/architecture donor;
+`jsqr` 1.4.0 is an independent test-only decoder, not shipped application code.
+The existing lockfile's unrelated security advisories are not accepted or
+silently repaired by this adoption.
+
 The Audit evidence slice inspects only the public Event, validation and OpenAPI
 at fixed IAM/Audit source `5effc802fa8116d14420188d9075d6fe3ab1ceaa`.
 `REUSE` the console's exact-key reader, lowercase SHA-256 validation and

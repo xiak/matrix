@@ -7,6 +7,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { usePersonalSecurity } from "../application/PersonalSecurityProvider";
 import type { AuthenticatorState, TOTPChangeIntent, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import styles from "./MfaPreviewExperience.module.css";
+import { AuthenticatorSetupMaterial } from "./AuthenticatorSetupMaterial";
 
 /** Factor change owns its local secrets and forms; the Provider owns the frozen intent. */
 export function LiveTOTPManagement({ factor, onCommitted }: { factor: AuthenticatorState; onCommitted(): Promise<boolean> }) {
@@ -127,7 +128,7 @@ export function LiveTOTPManagement({ factor, onCommitted }: { factor: Authentica
         {state === "ENROLLING" ? <>
           {provisioning && !oldSession && !expired && provisioning.enrollment.id === intent.enrollment?.id ? <form className={styles.form} onSubmit={confirm}>
             <Alert status="warning">{t("secretOnce")}</Alert>
-            <div className={styles.manualKey}><strong>{t("seed")}</strong><code>{provisioning.provisioning.seed}</code><details><summary>{t("uri")}</summary><code>{provisioning.provisioning.uri}</code></details></div>
+            <AuthenticatorSetupMaterial provisioning={provisioning.provisioning} />
             <FormField id={`${inputId}-new-code`} label={t("newCode")}><Input disabled={busy} id={`${inputId}-new-code`} autoComplete="one-time-code" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" required value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} /></FormField>
             <Button disabled={busy || code.length !== 6} type="submit">{t("confirmReplacement")}</Button>
           </form> : <Alert status="warning">{t("materialLost")}</Alert>}

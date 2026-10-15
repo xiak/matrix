@@ -1,0 +1,13 @@
+.material { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
+.methods { display: flex; min-width: 0; flex-wrap: wrap; align-items: flex-start; gap: var(--xiak-spacing-comfortable); }
+.scan { display: grid; flex: 0 1 192px; min-width: 0; gap: var(--xiak-spacing-tight); margin: 0; }
+.scan figcaption, .manual strong { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-medium); }
+.symbol { display: block; box-sizing: border-box; width: 192px; max-width: 100%; height: auto; aspect-ratio: 1; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-qr-background); fill: var(--xiak-color-qr-foreground); }
+.paper { fill: var(--xiak-color-qr-background); }
+.manual { display: grid; flex: 1 1 200px; min-width: 0; gap: var(--xiak-spacing-tight); }
+.manual code { display: block; max-width: 100%; border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-tight); background: var(--xiak-color-bg-code); color: var(--xiak-color-text-code); font-family: var(--xiak-font-mono); white-space: normal; overflow-wrap: anywhere; }
+.manual p, .note { margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.manual details { min-width: 0; }
+.manual summary { width: fit-content; color: var(--xiak-color-accent-text); cursor: pointer; font-size: var(--xiak-font-size-small); }
+.manual summary:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 2px; }
+.manual details[open] code { margin-top: var(--xiak-spacing-tight); }
