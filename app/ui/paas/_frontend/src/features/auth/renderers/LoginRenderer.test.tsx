@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
@@ -90,7 +90,7 @@ describe("branded sign-in flows", () => {
       verify: vi.fn(), changePassword: vi.fn(),
       inspectFirstEnrollment: vi.fn().mockResolvedValue({ challenge, notificationContact: contact }),
       startFirstTOTP: vi.fn().mockImplementation(async (command: { requestId: string }) => ({ outcome: "APPLIED",
-        enrollment: { ...enrollment, requestId: command.requestId }, provisioning: { seed: "REAL-SECRET-ONCE", uri: "otpauth://totp/Matrix:user" } })),
+        enrollment: { ...enrollment, requestId: command.requestId }, provisioning: { seed: "JBSWY3DPEHPK3PXP", uri: "otpauth://totp/Matrix:user?secret=JBSWY3DPEHPK3PXP" } })),
       confirmFirstTOTP: vi.fn().mockImplementation(async () => ({ nextStep: "REAUTHENTICATE",
         enrollment: { ...enrollment, requestId: "ui-first-factor-1", state: "CONFIRMED", completedAt: "2099-09-01T00:03:00Z" }, recoveryCodes: codes }))
     };
@@ -102,12 +102,14 @@ describe("branded sign-in flows", () => {
     expect(navigation.replace).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain("private-enrollment-credential");
     await user.click(screen.getByRole("button", { name: "开始绑定身份验证器" }));
-    expect(await screen.findByText("REAL-SECRET-ONCE")).toBeTruthy();
+    expect(await screen.findByText("JBSWY3DPEHPK3PXP")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "身份验证器设置二维码" })).toBeTruthy();
     await user.type(screen.getByLabelText("身份验证器 6 位动态验证码"), "123456");
     await user.click(screen.getByRole("button", { name: "确认绑定" }));
     expect(await screen.findByRole("heading", { name: "保存一次性恢复码" })).toBeTruthy();
     expect(screen.getAllByText(/^REAL-RECOVERY-/)).toHaveLength(10);
-    expect(document.body.textContent).not.toContain("REAL-SECRET-ONCE");
+    expect(document.body.textContent).not.toContain("JBSWY3DPEHPK3PXP");
+    expect(screen.queryByRole("img", { name: "身份验证器设置二维码" })).toBeNull();
     expect(navigation.replace).not.toHaveBeenCalled();
     expect(localStorage.length + sessionStorage.length).toBe(0);
     await user.click(screen.getByRole("checkbox", { name: /安全保存/ }));
@@ -131,7 +133,8 @@ describe("branded sign-in flows", () => {
     await user.type(screen.getByLabelText("密码", { exact: true }), "Initial-Password-49!");
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
     expect(await screen.findByText(/一次性密钥已丢失/)).toBeTruthy();
-    expect(screen.queryByText("REAL-SECRET-ONCE")).toBeNull();
+    expect(screen.queryByText("JBSWY3DPEHPK3PXP")).toBeNull();
+    expect(screen.queryByRole("img", { name: "身份验证器设置二维码" })).toBeNull();
     expect(navigation.replace).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain("private-lost-credential");
   });
@@ -389,18 +392,19 @@ describe("branded sign-in flows", () => {
   });
   it("requires matching passwords on first login, then enters the requested console route", async () => {
     const { user, iam } = open(repository(true));
-    await user.type(screen.getByLabelText("密码", { exact: true }), "Initial-Password-49!");
+    // This case owns submitted values and correction. Keyboard/reveal behavior
+    // is covered separately rather than timing a hundred synthetic keystrokes.
+    fireEvent.change(screen.getByLabelText("密码", { exact: true }), { target: { value: "Initial-Password-49!" } });
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
     await screen.findByRole("heading", { name: "设置你的正式密码" });
     expect(navigation.replace).not.toHaveBeenCalled();
-    await user.type(screen.getByLabelText("当前初始密码"), "Initial-Password-49!");
-    await user.type(screen.getByLabelText("新密码", { exact: true }), "Permanent-Password-49!");
-    await user.type(screen.getByLabelText("确认新密码"), "Different-Password-49!");
+    fireEvent.change(screen.getByLabelText("当前初始密码"), { target: { value: "Initial-Password-49!" } });
+    fireEvent.change(screen.getByLabelText("新密码", { exact: true }), { target: { value: "Permanent-Password-49!" } });
+    fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "Different-Password-49!" } });
     await user.click(screen.getByRole("button", { name: "保存并进入控制台" }));
     expect(screen.getByRole("alert").textContent).toContain("不一致");
     expect(iam.changePassword).not.toHaveBeenCalled();
-    await user.clear(screen.getByLabelText("确认新密码"));
-    await user.type(screen.getByLabelText("确认新密码"), "Permanent-Password-49!");
+    fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "Permanent-Password-49!" } });
     await user.click(screen.getByRole("button", { name: "保存并进入控制台" }));
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/console/resources/", { scroll: false }));
     expect(iam.changePassword).toHaveBeenCalledWith("memory-only-token", { currentPassword: "Initial-Password-49!", newPassword: "Permanent-Password-49!" });

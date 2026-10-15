@@ -10,6 +10,7 @@ import { replacementEnrollmentFitsProof } from "../domain/personalSecurity";
 import { LiveTOTPManagement } from "./LiveTOTPManagement";
 import { LivePersonalSecuritySettings } from "./LivePersonalSecuritySettings";
 
+const setupSeed = "JBSWY3DPEHPK3PXP";
 const factor: AuthenticatorState = { enrollmentState: "BOUND", factorRevision: 2, factorId: "factor-original" };
 const codes = Array.from({ length: 10 }, (_, index) => `new-recovery-${index}`);
 type ReplacementAPI = NonNullable<NonNullable<IamRepository["personalSecurity"]>["replacement"]>;
@@ -27,7 +28,7 @@ function fixture(renderSettings = false) {
   const replacement = {
     startStepUp: start("TOTP_REPLACE"), stepUpByRequest: vi.fn(async () => proof("PROVED")),
     verifyStepUp: vi.fn(async () => proof("PROVED")),
-    startEnrollment: vi.fn(async () => ({ outcome: "APPLIED" as const, enrollment: enrollment(), provisioning: { seed: "one-time-new-seed", uri: "otpauth://totp/fake" } })),
+    startEnrollment: vi.fn(async () => ({ outcome: "APPLIED" as const, enrollment: enrollment(), provisioning: { seed: setupSeed, uri: `otpauth://totp/Matrix:synthetic?secret=${setupSeed}` } })),
     enrollmentByRequest: vi.fn(async () => enrollment()), cancelEnrollment: vi.fn<ReplacementAPI["cancelEnrollment"]>(async () => enrollment("CANCELLED")),
     confirmEnrollment: vi.fn<ReplacementAPI["confirmEnrollment"]>(async (): Promise<TOTPEnrollmentConfirmation> => ({ enrollment: enrollment("CONFIRMED"), nextStep: "REAUTHENTICATE", recoveryCodes: codes }))
   };
@@ -84,13 +85,15 @@ describe("LIVE personal factor management", () => {
   });
   it("replaces through the original proof and confirms once without persisting or replaying secrets", async () => {
     const f = fixture(); await login(); await begin("更换身份验证器"); await prove(); await begin("开始设置新验证器");
-    expect(screen.getByText("one-time-new-seed")).toBeTruthy();
+    expect(screen.getByText(setupSeed)).toBeTruthy();
+    expect(screen.getByRole("img", { name: "身份验证器设置二维码" })).toBeTruthy();
     expect(localStorage.length + sessionStorage.length).toBe(0);
     fireEvent.change(screen.getByLabelText("新验证器动态验证码"), { target: { value: "654321" } });
     await begin("确认新因子并重新登录");
     expect(screen.getByTestId("phase").textContent).toBe("recovery-codes-required");
     expect(screen.getByTestId("codes").textContent).toBe(codes.join("|"));
-    expect(screen.queryByText("one-time-new-seed")).toBeNull();
+    expect(screen.queryByText(setupSeed)).toBeNull();
+    expect(screen.queryByRole("img", { name: "身份验证器设置二维码" })).toBeNull();
     expect(f.replacement.startEnrollment).toHaveBeenCalledTimes(1);
     expect(f.replacement.confirmEnrollment).toHaveBeenCalledTimes(1);
   });
@@ -99,6 +102,7 @@ describe("LIVE personal factor management", () => {
     const f = fixture(); f.replacement.startEnrollment.mockRejectedValueOnce(new Error("response lost"));
     await login(); await begin("更换身份验证器"); await prove(); await begin("开始设置新验证器");
     expect(screen.queryByRole("button", { name: "开始设置新验证器" })).toBeNull();
+    expect(screen.queryByRole("img", { name: "身份验证器设置二维码" })).toBeNull();
     await begin("只读检查原流程");
     expect(screen.getByText(/此原流程没有可显示的设置材料/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "确认新因子并重新登录" })).toBeNull();
@@ -158,7 +162,7 @@ describe("LIVE personal factor management", () => {
     await login(); await begin("更换身份验证器"); await prove(); await begin("开始设置新验证器");
     fireEvent.change(screen.getByLabelText("新验证器动态验证码"), { target: { value: "654321" } });
     await begin("确认新因子并重新登录");
-    expect(screen.getByText("one-time-new-seed")).toBeTruthy();
+    expect(screen.getByText(setupSeed)).toBeTruthy();
     expect((screen.getByLabelText("新验证器动态验证码") as HTMLInputElement).value).toBe("");
     fireEvent.change(screen.getByLabelText("新验证器动态验证码"), { target: { value: "765432" } });
     await begin("确认新因子并重新登录");
@@ -173,7 +177,7 @@ describe("LIVE personal factor management", () => {
     await login(); await begin("更换身份验证器"); await prove(); await begin("开始设置新验证器");
     fireEvent.change(screen.getByLabelText("新验证器动态验证码"), { target: { value: "654321" } });
     await begin("确认新因子并重新登录"); await begin("只读检查原流程");
-    expect(screen.queryByText("one-time-new-seed")).toBeNull();
+    expect(screen.queryByText(setupSeed)).toBeNull();
     expect(screen.queryByRole("button", { name: "取消原待确认设置" })).toBeNull();
     expect(screen.queryByRole("button", { name: "确认新因子并重新登录" })).toBeNull();
     f.replacement.enrollmentByRequest.mockResolvedValueOnce(f.enrollment("CONFIRMED"));
@@ -268,7 +272,7 @@ describe("LIVE personal factor management", () => {
 
   it("lets a newer same-user session explicitly cancel a known pending setup, without acquiring its secrets", async () => {
     const f = fixture(); await login(); await begin("更换身份验证器"); await prove(); await begin("开始设置新验证器"); await login();
-    expect(screen.queryByText("one-time-new-seed")).toBeNull();
+    expect(screen.queryByText(setupSeed)).toBeNull();
     await begin("取消原待确认设置");
     expect(f.replacement.cancelEnrollment).toHaveBeenCalledTimes(1);
     expect(f.replacement.cancelEnrollment.mock.calls[0]![0]).toBe("private-credential-2");
@@ -293,7 +297,7 @@ describe("LIVE personal factor management", () => {
     vi.useFakeTimers();
     const f = fixture(); await login(); await begin("更换身份验证器"); await prove(); await begin("开始设置新验证器");
     await act(async () => { vi.advanceTimersByTime(120_000); });
-    expect(screen.queryByText("one-time-new-seed")).toBeNull();
+    expect(screen.queryByText(setupSeed)).toBeNull();
     expect(screen.queryByLabelText("新验证器动态验证码")).toBeNull();
     expect(screen.getByText(/原证明期限已到/)).toBeTruthy();
     expect(f.replacement.startEnrollment).toHaveBeenCalledTimes(1);
@@ -360,7 +364,7 @@ describe("LIVE personal factor management", () => {
     f.replacement.verifyStepUp.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     await prove(); await begin("remount-factor-page"); await begin("只读检查原流程"); await begin("开始设置新验证器");
     await act(async () => { finish(f.proof("PROVED")); });
-    expect(screen.getByText("one-time-new-seed")).toBeTruthy();
+    expect(screen.getByText(setupSeed)).toBeTruthy();
     expect(screen.getByRole("button", { name: "确认新因子并重新登录" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "开始设置新验证器" })).toBeNull();
     expect(f.replacement.startEnrollment).toHaveBeenCalledTimes(1);

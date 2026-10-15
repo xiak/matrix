@@ -9,6 +9,7 @@ import { NotificationContactPasswordRejected, usePersonalSecurity, type Personal
 import type { AuthenticatorState, NotificationContact, NotificationContactVerification, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import { LiveRecoveryCodeRegeneration } from "./LiveRecoveryCodeRegeneration";
 import { LiveTOTPManagement } from "./LiveTOTPManagement";
+import { AuthenticatorSetupMaterial } from "./AuthenticatorSetupMaterial";
 import { LiveNotificationContactReplacement } from "./LiveNotificationContactReplacement";
 import styles from "./MfaPreviewExperience.module.css";
 
@@ -272,7 +273,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
           </> : null}
           {loadState === "ready" && enrollment ? <form className={styles.form} onSubmit={(event) => void confirmEnrollment(event)}>
             <Alert status="warning">{t(enrollment.outcome === "APPLIED" ? "factor.secretWarning" : "factor.replay")}</Alert>
-            {enrollment.outcome === "APPLIED" ? <div className={styles.manualKey}><strong>{t("factor.manual")}</strong><code>{enrollment.provisioning.seed}</code><em>{t("factor.noExternalQr")}</em><details><summary>{t("factor.uri")}</summary><code>{enrollment.provisioning.uri}</code></details></div> : null}
+            {enrollment.outcome === "APPLIED" ? <AuthenticatorSetupMaterial provisioning={enrollment.provisioning} /> : null}
             <dl className={styles.facts}><div><dt>{t("factor.enrollmentId")}</dt><dd><code>{enrollment.enrollment.id}</code></dd></div><div><dt>{t("contact.expiresAt")}</dt><dd>{localTime(enrollment.enrollment.expiresAt, format)}</dd></div></dl>
             {enrollment.outcome === "APPLIED" ? <FormField id={totpCodeId} label={t("factor.code")} hint={t("factor.codeHint")}><Input autoComplete="one-time-code" id={totpCodeId} inputMode="numeric" maxLength={6} onChange={(event) => setTotpCode(event.target.value.replace(/\D/g, ""))} pattern="[0-9]{6}" required value={totpCode} /></FormField> : null}
             {enrollment.enrollment.state === "CONFIRMED" ? <Alert status="warning">{t("factor.confirmedElsewhere")}</Alert> : null}

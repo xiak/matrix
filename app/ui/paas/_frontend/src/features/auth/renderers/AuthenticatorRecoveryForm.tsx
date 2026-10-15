@@ -7,6 +7,7 @@ import { Alert, Button, FormField, Input } from "@ui/xiak";
 import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
 import { useSession } from "../application/SessionProvider";
 import styles from "./LoginRenderer.module.css";
+import { AuthenticatorSetupMaterial } from "./AuthenticatorSetupMaterial";
 
 const recoveryPhases = new Set([
   "recovery-code-required",
@@ -138,13 +139,11 @@ export function AuthenticatorRecoveryForm() {
       </div>
       {identity}
       <Alert status="warning">{t("recoveryIrreversibleBoundary")}</Alert>
-      <div className={styles.recoverySecret}>
-        <div><strong>{t("recoverySetupKey")}</strong><span>{t("recoverySetupKeyHint")}</span></div>
-        <code>{recovery.provisioning.seed}</code>
+      <AuthenticatorSetupMaterial provisioning={recovery.provisioning} copyAction={
         <Button disabled={confirming} onClick={() => void copySeed()} size="small" variant="secondary">
           <Copy aria-hidden="true" />{t(copied ? "recoverySetupKeyCopied" : "recoverySetupKeyCopy")}
         </Button>
-      </div>
+      } />
       <form aria-busy={confirming} className={styles.form} onSubmit={confirm}>
         <FormField id={inputId} label={t("recoveryNewVerificationCode")} hint={t("recoveryNewVerificationHint")}>
           <Input autoComplete="one-time-code" controlSize="large" disabled={confirming} id={inputId} inputMode="numeric"
